@@ -78,6 +78,7 @@
   --color-series-5: var(--oh-series-5);
   --color-series-6: var(--oh-series-6);
   --color-series-7: var(--oh-series-7);
+  --color-series-other: var(--oh-series-other);
   --radius-card: var(--oh-radius-card);
   --font-mono: var(--oh-font-mono);
 }

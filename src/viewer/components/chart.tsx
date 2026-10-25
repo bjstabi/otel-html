@@ -35,10 +35,12 @@ export interface ChartProps {
   option: Option;
   onEvents?: ChartEvents;
   height?: number;
+  /** Accessible description of what the chart shows. */
+  ariaLabel: string;
 }
 
 /** Tree-shaken ECharts wrapper; rebuilds the instance with the runtime theme when light/dark changes. */
-export function Chart({ option, onEvents, height = 240 }: ChartProps): JSX.Element {
+export function Chart({ option, onEvents, height = 240, ariaLabel }: ChartProps): JSX.Element {
   const host = useRef<HTMLDivElement>(null);
   const { resolved } = useTheme();
 
@@ -75,5 +77,5 @@ export function Chart({ option, onEvents, height = 240 }: ChartProps): JSX.Eleme
     };
   }, [option, onEvents]);
 
-  return <div ref={host} style={{ height }} role="img" aria-label="chart" />;
+  return <div ref={host} style={{ height }} role="img" aria-label={ariaLabel} />;
 }

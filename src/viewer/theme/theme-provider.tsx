@@ -5,6 +5,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useState,
 } from 'react';
@@ -61,7 +62,8 @@ export function ThemeProvider({ children }: { children: ReactNode }): JSX.Elemen
 
   const resolved: ResolvedTheme = preference === 'system' ? system : preference;
 
-  useEffect(() => {
+  // Layout effect: the attribute must flip before any child's passive effect reads CSS variables.
+  useLayoutEffect(() => {
     document.documentElement.setAttribute('data-theme', resolved);
   }, [resolved]);
 
