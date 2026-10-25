@@ -5,6 +5,7 @@
       "**",
       "!**/gen",
       "!**/*.gen.ts",
+      "!**/*.gen.terms.ts",
       "!proto",
       "!schema",
       "!**/fixtures",

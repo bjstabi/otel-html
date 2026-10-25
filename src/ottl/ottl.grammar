@@ -1,0 +1,50 @@
+// OTTL conditions subset. Generated into parser.gen.ts by `mise run gen`.
+// Precedence is encoded by stratified rules (not > and > or; * / > + -). Chains are flat
+// repetitions (not left recursion): Lezer force-reduces left-associative chains longer than
+// ~300 reductions, which breaks the parse. parse.ts folds them left. Operand kinds (value vs
+// boolean) are validated in parse.ts.
+
+@top Condition { orExpr }
+
+orExpr { Or | andExpr }
+andExpr { And | notExpr }
+notExpr { Not | cmpExpr }
+cmpExpr { Cmp | addExpr }
+addExpr { Add | mulExpr }
+mulExpr { Mul | unary }
+unary { Neg | primary }
+primary { Paren | Call | Path | Enum | String | Float | Int | True | False | Nil }
+
+Or { andExpr (@specialize[@name=or]<Ident, "or"> andExpr)+ }
+And { notExpr (@specialize[@name=and]<Ident, "and"> notExpr)+ }
+Not { @specialize[@name=not]<Ident, "not"> notExpr }
+Cmp { addExpr CmpOp addExpr }
+Add[@name=Math] { mulExpr (AddOp mulExpr)+ }
+Mul[@name=Math] { unary (MulOp unary)+ }
+Neg { AddOp unary }
+Paren { "(" orExpr ")" }
+Call { UpperName "(" commaSep<orExpr> ")" }
+Path { Ident ("." Ident)* Key* }
+Key { "[" (String | Int) "]" }
+Enum { UpperName }
+True { @specialize[@name=_true]<Ident, "true"> }
+False { @specialize[@name=_false]<Ident, "false"> }
+Nil { @specialize[@name=nil]<Ident, "nil"> }
+
+commaSep<x> { (x ("," x)*)? }
+
+@skip { space }
+
+@tokens {
+  space { $[ \t\r\n]+ }
+  Ident { $[a-z_] $[a-zA-Z0-9_]* }
+  UpperName { $[A-Z] $[a-zA-Z0-9_]* }
+  Int { $[0-9]+ }
+  Float { $[0-9]+ "." $[0-9]+ (($[eE]) ($[+\-])? $[0-9]+)? }
+  String { '"' (![\\\n"] | "\\" _)* '"' }
+  CmpOp { "==" | "!=" | "<=" | ">=" | "<" | ">" }
+  MulOp { "*" | "/" }
+  AddOp { "+" | "-" }
+  "(" ")" "[" "]" "." ","
+  @precedence { Float, Int }
+}

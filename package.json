@@ -21,6 +21,7 @@
     "@bufbuild/protoc-gen-es": "2.16.0",
     "@commitlint/cli": "21.2.4",
     "@commitlint/config-conventional": "21.2.4",
+    "@lezer/generator": "1.8.1",
     "@opentelemetry/otlp-transformer": "0.300.0",
     "@opentelemetry/resources": "2.12.0",
     "@opentelemetry/sdk-trace-base": "2.12.0",
@@ -32,6 +33,8 @@
   },
   "dependencies": {
     "@bufbuild/protobuf": "2.16.0",
+    "@lezer/common": "1.5.4",
+    "@lezer/lr": "1.4.11",
     "@opentelemetry/api": "1.10.0",
     "yaml": "2.9.1",
     "zod": "4.6.7"
