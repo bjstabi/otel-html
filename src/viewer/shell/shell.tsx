@@ -1,0 +1,126 @@
+import { Tooltip } from '@base-ui/react/tooltip';
+import { X } from 'lucide-react';
+import { type JSX, useEffect, useMemo, useState } from 'react';
+import { Redirect, Route, Router, Switch } from 'wouter';
+import { navigate } from 'wouter/use-hash-location';
+import type { DataSource } from '../data/data-source.js';
+import { bindUrl, createSelectionStore, type HistoryPort } from '../state/selection.js';
+import { SelectionProvider } from '../state/selection-context.js';
+import { parseUrlState } from '../state/url-state.js';
+import { ComingLaterPage, NotFoundPage, ServicesPage, TracesExplorerPage } from './pages.js';
+import { ShortcutHelp } from './shortcut-help.js';
+import { createShortcutHandler, SHORTCUTS, type ShortcutActions } from './shortcuts.js';
+import { Sidebar } from './sidebar.js';
+import { routeHref, useRoute } from './use-route.js';
+
+/** Pages listen for this on `window` (detail is -1 or 1) to move their row selection with `j` and `k`. */
+export const MOVE_EVENT = 'oh:move';
+
+function UrlErrors(props: { errors: readonly string[]; onDismiss: () => void }): JSX.Element | null {
+  if (props.errors.length === 0) return null;
+  return (
+    <div
+      role="alert"
+      className="flex items-start gap-3 border-b border-hairline bg-surface px-4 py-2 text-sm"
+    >
+      <div className="flex-1">
+        <p className="font-semibold text-critical">Some link parameters were invalid and have been removed</p>
+        <ul className="mt-1 list-disc pl-5 font-mono text-xs text-ink-2">
+          {props.errors.map((e) => (
+            <li key={e}>{e}</li>
+          ))}
+        </ul>
+      </div>
+      <button
+        type="button"
+        aria-label="Dismiss"
+        onClick={props.onDismiss}
+        className="rounded-full p-1 hover:bg-hairline"
+      >
+        <X size={16} aria-hidden />
+      </button>
+    </div>
+  );
+}
+
+export function Shell(props: { dataSource: DataSource; history: HistoryPort }): JSX.Element {
+  const { dataSource, history } = props;
+  const manifest = dataSource.manifest;
+  const store = useMemo(() => createSelectionStore(parseUrlState(history.read()).state), [history]);
+  const [errors, setErrors] = useState<readonly string[]>([]);
+  const [helpOpen, setHelpOpen] = useState(false);
+
+  useEffect(() => bindUrl(store, history, setErrors), [store, history]);
+
+  useEffect(() => {
+    const move = (delta: -1 | 1) => (): void => {
+      window.dispatchEvent(new CustomEvent(MOVE_EVENT, { detail: delta }));
+    };
+    const actions: ShortcutActions = {
+      goDashboards: () => navigate('/dashboards'),
+      goLogs: () => navigate('/logs'),
+      goMetrics: () => navigate('/metrics'),
+      goTraces: () => navigate('/traces'),
+      next: move(1),
+      previous: move(-1),
+      clear: () => {
+        setHelpOpen(false);
+        store.getState().clear('traceId');
+      },
+      focusQuery: () => {
+        const q = document.querySelector('[data-oh-query]');
+        if (q instanceof HTMLElement) q.focus();
+      },
+      help: () => setHelpOpen(true),
+    };
+    const handler = createShortcutHandler(SHORTCUTS, actions);
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [store]);
+
+  return (
+    <SelectionProvider store={store}>
+      <Tooltip.Provider>
+        <Router hook={useRoute} hrefs={routeHref}>
+          <div className="flex min-h-screen bg-page text-ink">
+            <Sidebar manifest={manifest} />
+            <div className="flex min-w-0 flex-1 flex-col">
+              <UrlErrors errors={errors} onDismiss={() => setErrors([])} />
+              <RoutedPage manifest={manifest} />
+            </div>
+          </div>
+          <ShortcutHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
+        </Router>
+      </Tooltip.Provider>
+    </SelectionProvider>
+  );
+}
+
+function RoutedPage({ manifest }: { manifest: DataSource['manifest'] }): JSX.Element {
+  const [route] = useRoute();
+  return (
+    <Switch>
+      <Route path="/">
+        <Redirect to="/traces" replace />
+      </Route>
+      <Route path="/traces">
+        <TracesExplorerPage manifest={manifest} />
+      </Route>
+      <Route path="/traces/services">
+        <ServicesPage manifest={manifest} />
+      </Route>
+      <Route path="/logs">
+        <ComingLaterPage page="logs" manifest={manifest} />
+      </Route>
+      <Route path="/metrics">
+        <ComingLaterPage page="metrics" manifest={manifest} />
+      </Route>
+      <Route path="/dashboards">
+        <ComingLaterPage page="dashboards" manifest={manifest} />
+      </Route>
+      <Route>
+        <NotFoundPage route={route} />
+      </Route>
+    </Switch>
+  );
+}
