@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { JsonValue } from './columns.js';
 import type { SIGNALS } from './paths.js';
+import { type TraceShard, TraceShardSchema } from './trace-shard.js';
 import { parseWith } from './validate.js';
 
 /**
@@ -29,6 +30,8 @@ export interface SessionState {
   nextChunk: Record<(typeof SIGNALS)[number], number>;
   rollups: SerializedRollups;
   dedupe: string[];
+  /** The whole trace index by shard, so a crash never leaves it ahead of the committed manifest. */
+  traceIndex: Record<string, TraceShard>;
 }
 
 const nonNegInt = z.number().int().nonnegative();
@@ -43,6 +46,7 @@ export const SessionStateSchema: z.ZodType<SessionState> = z.strictObject({
   nextChunk: z.strictObject({ spans: nonNegInt, logs: nonNegInt, metrics: nonNegInt }),
   rollups: SerializedRollupsSchema,
   dedupe: z.array(z.string()),
+  traceIndex: z.record(z.string().regex(/^[0-9a-f]{2}$/, 'two lowercase hex chars'), TraceShardSchema),
 });
 
 export function parseSessionState(input: unknown): SessionState {

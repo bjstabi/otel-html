@@ -128,10 +128,23 @@ describe('session state', () => {
     nextChunk: { spans: 1, logs: 1, metrics: 1 },
     rollups: { spans: { a: [1, 2] }, logs: {}, metrics: null },
     dedupe: ['abc'],
+    traceIndex: {
+      '5b': {
+        [TRACE_ID]: { chunks: ['chunks/spans/000000'], start: 0, end: 5, spans: 2, errors: 0, root: null },
+      },
+    },
   };
   test('valid state parses', () => {
     expect(SessionStateSchema.parse(state)).toEqual(state);
     expect(parseSessionState({ ...state, epochUnixNano: '5' }).epochUnixNano).toBe('5');
+  });
+  test('rejects a trace index entry with a bad chunk key', () => {
+    const bad = {
+      '5b': { [TRACE_ID]: { chunks: ['../x'], start: 0, end: 1, spans: 1, errors: 0, root: null } },
+    };
+    expect(failure(() => parseSessionState({ ...state, traceIndex: bad })).path).toBe(
+      `state.traceIndex.5b.${TRACE_ID}.chunks[0]`,
+    );
   });
   test('rejects with precise path', () => {
     expect(failure(() => parseSessionState({ ...state, nextChunk: { spans: 1, logs: 1 } })).path).toBe(

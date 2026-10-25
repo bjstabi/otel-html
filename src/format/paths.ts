@@ -8,6 +8,17 @@ export const MANIFEST_PATH = 'data/manifest.js';
 export const STATE_DIR = 'data/state';
 export const LOCK_PATH = 'data/state/lock.json';
 
+/**
+ * Session checkpoints alternate between two slots so that a flush interrupted before the manifest commit
+ * never destroys the last checkpoint that matches the committed manifest.
+ */
+export const STATE_SLOTS = [0, 1] as const;
+export type StateSlot = (typeof STATE_SLOTS)[number];
+
+export function statePath(slot: StateSlot): string {
+  return `${STATE_DIR}/session.${slot}.json`;
+}
+
 /** Registration keys: what each data file passes as the first argument of `__OH__.push`. */
 export const MANIFEST_KEY = 'manifest';
 
@@ -28,6 +39,10 @@ export function chunkKey(signal: Signal, n: number): string {
 
 export function traceShardPath(shard: string): string {
   return `data/traces/${shard}.js`;
+}
+
+export function traceShardKey(shard: string): string {
+  return `traces/${shard}`;
 }
 
 export function rollupPath(name: string): string {
