@@ -1,4 +1,4 @@
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { Manifest } from '../../src/format/manifest.js';
@@ -6,6 +6,7 @@ import { OtelHtmlError } from '../../src/model/errors.js';
 import { App } from '../../src/viewer/app.js';
 import type { DataSource } from '../../src/viewer/data/data-source.js';
 import { Shell } from '../../src/viewer/shell/shell.js';
+import { stepWindow } from '../../src/viewer/shell/time-range.js';
 import { createHashHistory } from '../../src/viewer/state/hash-history.js';
 import { ThemeProvider } from '../../src/viewer/theme/theme-provider.js';
 
@@ -256,5 +257,85 @@ describe('App loading', () => {
     const alert = await screen.findByRole('alert');
     expect(alert.textContent).toContain('data/rollups/spans.js');
     expect(within(alert).getByRole('heading', { name: /could not be loaded/ })).toBeTruthy();
+  });
+});
+
+const RUN = { start: 0, end: 10 * HOUR };
+const TRACE = 'a'.repeat(32);
+
+describe('stepWindow bounds (disabled, never clamped, in both directions)', () => {
+  test('returns null when the step would leave the run', () => {
+    expect(stepWindow({ start: 9 * HOUR, end: 10 * HOUR }, RUN, 1)).toBeNull();
+    expect(stepWindow({ start: 0, end: HOUR }, RUN, -1)).toBeNull();
+    expect(stepWindow({ start: 8 * HOUR, end: 9 * HOUR }, RUN, 1)).toEqual({
+      start: 9 * HOUR,
+      end: 10 * HOUR,
+    });
+    expect(stepWindow({ start: HOUR, end: 2 * HOUR }, RUN, -1)).toEqual({ start: 0, end: HOUR });
+  });
+
+  test('Next is disabled at the run end and Previous at the run start', () => {
+    renderShell(`#/traces?t=${9 * HOUR}~${10 * HOUR}`);
+    expect((screen.getByRole('button', { name: 'Next window' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Previous window' }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+    cleanup();
+    renderShell(`#/traces?t=0~${HOUR}`);
+    expect((screen.getByRole('button', { name: 'Previous window' }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    expect((screen.getByRole('button', { name: 'Next window' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+});
+
+describe('navigation carries the selection', () => {
+  const t = `t=${5 * HOUR}~${6 * HOUR}`;
+
+  test('sidebar links and g-shortcuts keep the query, and back/forward re-sync the store from the URL', async () => {
+    const user = userEvent.setup();
+    renderShell(`#/traces?${t}`);
+    const range = (): string => screen.getByLabelText('Absolute range').textContent ?? '';
+    const before = range();
+    await user.click(
+      within(screen.getByRole('region', { name: 'Logs' })).getByRole('link', { name: 'Explorer' }),
+    );
+    expect(window.location.hash).toBe(`#/logs?${t}`);
+    expect(range()).toBe(before);
+    await user.click(screen.getByRole('button', { name: '15m' }));
+    const narrowed = `t=${10 * HOUR - 900_000_000_000}~${10 * HOUR}`;
+    expect(window.location.hash).toBe(`#/logs?${narrowed}`);
+    await user.keyboard('gt');
+    expect(window.location.hash).toBe(`#/traces?${narrowed}`);
+    window.history.back();
+    await waitFor(() => expect(window.location.hash).toBe(`#/logs?${narrowed}`));
+    window.history.back();
+    await waitFor(() => expect(window.location.hash).toBe(`#/traces?${t}`));
+    await waitFor(() => expect(range()).toBe(before));
+    expect(screen.getByRole('heading', { name: 'Traces Explorer', level: 1 })).toBeTruthy();
+  });
+});
+
+describe('overlays own the keyboard', () => {
+  test('Escape that closes the Export menu does not clear the selected trace', async () => {
+    const user = userEvent.setup();
+    renderShell(`#/traces?trace=${TRACE}`);
+    await user.click(screen.getByRole('button', { name: 'Export' }));
+    await screen.findByRole('menuitem');
+    await user.keyboard('{Escape}');
+    expect(window.location.hash).toContain(`trace=${TRACE}`);
+    await waitFor(() => expect(screen.queryByRole('menuitem')).toBeNull());
+    await user.keyboard('{Escape}');
+    expect(window.location.hash).not.toContain('trace=');
+  });
+
+  test('shortcuts do not fire behind the Copy link dialog', async () => {
+    const user = userEvent.setup();
+    renderShell('#/traces');
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
+    await user.click(screen.getByRole('button', { name: 'Copy link' }));
+    await screen.findByRole('dialog', { name: 'Copy link' });
+    await user.keyboard('gl');
+    expect(window.location.hash).toBe('#/traces');
   });
 });

@@ -35,6 +35,13 @@ export const SEQUENCE_TIMEOUT_MS = 1000;
 
 const EDITABLE = 'input, textarea, select, [contenteditable=""], [contenteditable="true"]';
 
+/** An open dialog or menu owns the keyboard (its own Escape, arrows and typing), so shortcuts stay out. */
+const OVERLAY = '[role="dialog"], [role="alertdialog"], [role="menu"], [aria-modal="true"]';
+
+function overlayOpen(): boolean {
+  return document.querySelector(OVERLAY) !== null;
+}
+
 function isEditable(target: EventTarget | null): boolean {
   return target instanceof Element && target.closest(EDITABLE) !== null;
 }
@@ -58,7 +65,8 @@ export function createShortcutHandler(
     table.find((s) => s.keys.length === seq.length && s.keys.every((k, i) => seq[i] === k));
 
   return (e) => {
-    if (e.ctrlKey || e.metaKey || e.altKey || isEditable(e.target)) return;
+    if (e.defaultPrevented || e.isComposing || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (isEditable(e.target) || overlayOpen()) return;
     const k = keyName(e);
     const t = now();
     if (pending.length > 0 && t - pendingAt > SEQUENCE_TIMEOUT_MS) pending = [];

@@ -1,11 +1,13 @@
 import { BarChart3, LayoutDashboard, Moon, ScrollText, Sun, SunMoon, Waypoints } from 'lucide-react';
 import type { JSX, ReactNode } from 'react';
-import { Link } from 'wouter';
 import type { Manifest } from '../../format/manifest.js';
+import { selectionToUrlState } from '../state/selection.js';
+import { useSelection } from '../state/selection-context.js';
+import { serializeUrlState } from '../state/url-state.js';
 import { type ThemePreference, useTheme } from '../theme/theme-provider.js';
 import { RunCard } from './run-card.js';
 import { Tip } from './tip.js';
-import { useRoute } from './use-route.js';
+import { navigateRoute, routeHref, useRoute } from './use-route.js';
 
 interface NavItem {
   label: string;
@@ -59,15 +61,21 @@ const IDLE = 'text-ink-2 hover:bg-hairline';
 
 function NavLink(props: { href: string; current: string; children: ReactNode }): JSX.Element {
   const selected = props.current === props.href;
+  const search = useSelection((s) => serializeUrlState(selectionToUrlState(s)));
   return (
-    <Link
-      href={props.href}
+    <a
+      href={`${routeHref(props.href)}${search === '' ? '' : `?${search}`}`}
+      onClick={(e) => {
+        if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+        e.preventDefault();
+        navigateRoute(window, props.href, search);
+      }}
       className={`${ROW} ${selected ? SELECTED : IDLE}`}
       aria-current={selected ? 'page' : undefined}
       data-selected={selected ? 'true' : undefined}
     >
       {props.children}
-    </Link>
+    </a>
   );
 }
 

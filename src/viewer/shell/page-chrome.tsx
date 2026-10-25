@@ -49,6 +49,11 @@ function FallbackDialog({ url, onClose }: { url: string; onClose: () => void }):
 function CopyLink(): JSX.Element {
   const [fallback, setFallback] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const t = window.setTimeout(() => setCopied(false), 2000);
+    return () => window.clearTimeout(t);
+  }, [copied]);
   const copy = async (): Promise<void> => {
     const url = window.location.href;
     const clipboard: Clipboard | undefined = navigator.clipboard;
@@ -59,7 +64,6 @@ function CopyLink(): JSX.Element {
     try {
       await clipboard.writeText(url);
       setCopied(true);
-      window.setTimeout(() => setCopied(false), 2000);
     } catch {
       setFallback(url);
     }
@@ -69,8 +73,8 @@ function CopyLink(): JSX.Element {
       <button type="button" className={CONTROL} onClick={() => void copy()}>
         <Link2 size={16} aria-hidden />
         <span>Copy link</span>
-        <span role="status" className="sr-only">
-          {copied ? 'Link copied' : ''}
+        <span role="status" className={copied ? 'text-xs text-accent' : 'sr-only'}>
+          {copied ? 'Copied' : ''}
         </span>
       </button>
       {fallback !== null && <FallbackDialog url={fallback} onClose={() => setFallback(null)} />}

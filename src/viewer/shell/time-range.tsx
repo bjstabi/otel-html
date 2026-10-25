@@ -33,11 +33,11 @@ export function presetWindow(range: Range, widthNs: number | null): TimeWindow |
   return { start: range.end - widthNs, end: range.end };
 }
 
-/** Shift by exactly one window width; null when that would leave the run (so the control is disabled). */
+/** Shift by exactly one window width; null when the result would leave the run in either direction (the control is then disabled, never clamped). */
 export function stepWindow(w: TimeWindow, range: Range, dir: -1 | 1): TimeWindow | null {
   const width = w.end - w.start;
   const next = { start: w.start + dir * width, end: w.end + dir * width };
-  if (dir < 0 ? next.start < range.start : w.start >= range.end) return null;
+  if (next.start < range.start || next.end > range.end) return null;
   return next;
 }
 
@@ -59,7 +59,7 @@ const BUTTON =
   'rounded-full p-1.5 text-ink-2 hover:bg-hairline disabled:opacity-40 disabled:hover:bg-transparent';
 
 export function TimeRange({ manifest }: { manifest: Manifest }): JSX.Element {
-  const window = useSelection((s) => s.window);
+  const win = useSelection((s) => s.window);
   const setWindow = useSelection((s) => s.setWindow);
   const range = manifest.range;
   if (range === null) {
@@ -70,11 +70,11 @@ export function TimeRange({ manifest }: { manifest: Manifest }): JSX.Element {
     );
   }
   const epoch = parseUnixNanos(manifest.epochUnixNano, 'manifest.epochUnixNano');
-  const shown = window ?? range;
-  const active = activePreset(window, range);
-  const prev = window === null ? null : stepWindow(window, range, -1);
-  const next = window === null ? null : stepWindow(window, range, 1);
-  const zoomed = window === null ? null : zoomOutWindow(window, range);
+  const shown = win ?? range;
+  const active = activePreset(win, range);
+  const prev = win === null ? null : stepWindow(win, range, -1);
+  const next = win === null ? null : stepWindow(win, range, 1);
+  const zoomed = win === null ? null : zoomOutWindow(win, range);
   return (
     <fieldset className="flex flex-wrap items-center gap-2">
       <legend className="sr-only">Time range</legend>
@@ -117,8 +117,8 @@ export function TimeRange({ manifest }: { manifest: Manifest }): JSX.Element {
         <button
           type="button"
           aria-label="Zoom out"
-          disabled={window === null}
-          onClick={() => window !== null && setWindow(zoomed)}
+          disabled={win === null}
+          onClick={() => win !== null && setWindow(zoomed)}
           className={BUTTON}
         >
           <ZoomOut size={16} aria-hidden />

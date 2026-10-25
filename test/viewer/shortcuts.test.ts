@@ -102,4 +102,25 @@ describe('createShortcutHandler', () => {
     expect(calls).toEqual(['focusQuery']);
     expect(spy).toHaveBeenCalled();
   });
+
+  test('ignores prevented and composing events and anything while a dialog or menu is open', () => {
+    const { actions, calls } = actionsSpy();
+    const h = createShortcutHandler(SHORTCUTS, actions);
+    const prevented = key(document.body, 'j');
+    prevented.preventDefault();
+    h(prevented);
+    h(key(document.body, 'j', { isComposing: true }));
+    expect(calls).toEqual([]);
+    for (const role of ['dialog', 'menu']) {
+      const overlay = document.createElement('div');
+      overlay.setAttribute('role', role);
+      document.body.append(overlay);
+      h(key(document.body, 'j'));
+      h(key(overlay, 'Escape'));
+      overlay.remove();
+    }
+    expect(calls).toEqual([]);
+    h(key(document.body, 'j'));
+    expect(calls).toEqual(['next']);
+  });
 });

@@ -2,16 +2,15 @@ import { Tooltip } from '@base-ui/react/tooltip';
 import { X } from 'lucide-react';
 import { type JSX, useEffect, useMemo, useState } from 'react';
 import { Redirect, Route, Router, Switch } from 'wouter';
-import { navigate } from 'wouter/use-hash-location';
 import type { DataSource } from '../data/data-source.js';
-import { bindUrl, createSelectionStore, type HistoryPort } from '../state/selection.js';
+import { bindUrl, createSelectionStore, type HistoryPort, selectionToUrlState } from '../state/selection.js';
 import { SelectionProvider } from '../state/selection-context.js';
-import { parseUrlState } from '../state/url-state.js';
+import { parseUrlState, serializeUrlState } from '../state/url-state.js';
 import { ComingLaterPage, NotFoundPage, ServicesPage, TracesExplorerPage } from './pages.js';
 import { ShortcutHelp } from './shortcut-help.js';
 import { createShortcutHandler, SHORTCUTS, type ShortcutActions } from './shortcuts.js';
 import { Sidebar } from './sidebar.js';
-import { routeHref, useRoute } from './use-route.js';
+import { navigateRoute, useRoute } from './use-route.js';
 
 /** Pages listen for this on `window` (detail is -1 or 1) to move their row selection with `j` and `k`. */
 export const MOVE_EVENT = 'oh:move';
@@ -26,7 +25,7 @@ function UrlErrors(props: { errors: readonly string[]; onDismiss: () => void }):
       <div className="flex-1">
         <p className="font-semibold text-critical">Some link parameters were invalid and have been removed</p>
         <ul className="mt-1 list-disc pl-5 font-mono text-xs text-ink-2">
-          {props.errors.map((e) => (
+          {[...new Set(props.errors)].map((e) => (
             <li key={e}>{e}</li>
           ))}
         </ul>
@@ -56,11 +55,13 @@ export function Shell(props: { dataSource: DataSource; history: HistoryPort }): 
     const move = (delta: -1 | 1) => (): void => {
       window.dispatchEvent(new CustomEvent(MOVE_EVENT, { detail: delta }));
     };
+    const go = (route: string): void =>
+      navigateRoute(window, route, serializeUrlState(selectionToUrlState(store.getState())));
     const actions: ShortcutActions = {
-      goDashboards: () => navigate('/dashboards'),
-      goLogs: () => navigate('/logs'),
-      goMetrics: () => navigate('/metrics'),
-      goTraces: () => navigate('/traces'),
+      goDashboards: () => go('/dashboards'),
+      goLogs: () => go('/logs'),
+      goMetrics: () => go('/metrics'),
+      goTraces: () => go('/traces'),
       next: move(1),
       previous: move(-1),
       clear: () => {
@@ -81,7 +82,7 @@ export function Shell(props: { dataSource: DataSource; history: HistoryPort }): 
   return (
     <SelectionProvider store={store}>
       <Tooltip.Provider>
-        <Router hook={useRoute} hrefs={routeHref}>
+        <Router hook={useRoute}>
           <div className="flex min-h-screen bg-page text-ink">
             <Sidebar manifest={manifest} />
             <div className="flex min-w-0 flex-1 flex-col">
