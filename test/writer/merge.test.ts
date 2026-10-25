@@ -1,3 +1,4 @@
+import { resolve } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { unwrapDataFile, wrapDataFile } from '../../src/format/data-file.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
@@ -177,5 +178,48 @@ describe('mergeReports', () => {
     const e = await failure(merge(w, ['nowhere']));
     expect(e.code).toBe('usage');
     expect(e.message).toContain('nowhere');
+  });
+
+  test.each([
+    ['./a', 'a'],
+    ['a/../a', 'a'],
+    ['a//', 'a'],
+    [resolve('a'), 'a'],
+    ['a', resolve('a')],
+    ['a/sub', 'a'],
+    ['a/sub/deeper', 'a'],
+    ['x', 'x/a'],
+    ['.', 'a'],
+  ])('output %s with input %s is refused and the input is left untouched', async (out, input) => {
+    const w = createTestWriter();
+    await writeReport(w, input, [spansRequest(2)]);
+    const before = w.fs.snapshot();
+    const e = await failure(merge(w, [input], out));
+    expect(e.code).toBe('usage');
+    expect(e.message).toMatch(/input|inside|contains/);
+    expect(w.fs.snapshot()).toEqual(before);
+  });
+
+  test('sibling folders with a common name prefix are fine', async () => {
+    const w = createTestWriter();
+    await writeReport(w, 'a', [spansRequest(1)]);
+    await merge(w, ['a'], 'a-merged');
+    expect(manifestOf(w, 'a-merged').totals.spans).toBe(1);
+  });
+
+  test('a failing abort does not mask the original error', async () => {
+    const w = createTestWriter();
+    await writeReport(w, 'a', [spansRequest(2)]);
+    await w.fs.remove('a/data/chunks/spans/000000.js');
+    const fs = {
+      ...w.fs,
+      remove: async (): Promise<void> => {
+        throw new Error('disk on fire');
+      },
+    };
+    const e = await failure(
+      mergeReports({ ...w.deps, fs }, ['a'], { out: 'out', config: testConfig(), mode: 'create' }),
+    );
+    expect(e.code).toBe('invalid-report');
   });
 });

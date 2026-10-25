@@ -21,6 +21,7 @@ import {
   type WriterDeps,
   type WriterSession,
 } from '../writer/session.js';
+import { assertAssetPath } from '../writer/viewer-assets.js';
 import { createConsoleLogger, createProcessInfo, createSystemClock } from './system.js';
 import { createOtelTracer } from './telemetry.js';
 import { packageDirViewerAssets } from './viewer-dir.js';
@@ -35,18 +36,28 @@ export function defaultDeps(): WriterDeps {
     logger: createConsoleLogger(),
     tracer: createOtelTracer(trace.getTracer('otel-html', pkg.version)),
     process: createProcessInfo(),
-    viewerAssets: packageDirViewerAssets(new URL('../viewer/', import.meta.url)),
+    viewerAssets: packageDirViewerAssets([
+      new URL('./viewer/', import.meta.url), // published: dist/index.js next to dist/viewer/
+      new URL('../../dist/viewer/', import.meta.url), // development: src/api/report.ts
+    ]),
     version: pkg.version,
   };
 }
 
-export function resolveDeps(overrides: Partial<WriterDeps> | undefined): WriterDeps {
-  return { ...defaultDeps(), ...overrides };
+/**
+ * Defaults plus overrides, with the viewer assets checked up front: a missing or malformed viewer build
+ * fails here with a `usage` error, before any data is read or written.
+ */
+export async function resolveDeps(overrides: Partial<WriterDeps> | undefined): Promise<WriterDeps> {
+  const deps = { ...defaultDeps(), ...overrides };
+  for (const f of await deps.viewerAssets.files()) assertAssetPath(f.path);
+  deps.viewerAssets.entry();
+  return deps;
 }
 
 /**
- * Library configuration: an object (highest precedence) or the path of a YAML/JSON file. The environment
- * is not consulted; that is the CLI's job.
+ * Library configuration: an object (highest precedence) or the path of a YAML/JSON file. Environment
+ * variables are deliberately not read (`env: {}`); mapping them onto config is the CLI's job.
  */
 export async function resolveApiConfig(
   deps: WriterDeps,
@@ -67,7 +78,7 @@ export interface ReportOptions {
   /** The report folder. */
   out: string;
   title?: string;
-  /** A config object, or the path of an `otel-html.yaml`. */
+  /** A config object, or the path of an `otel-html.yaml`. Environment variables are not read. */
   config?: ConfigInput | string;
   /** Reopen an existing report (same otel-html version) instead of replacing it. */
   append?: boolean;
@@ -121,7 +132,7 @@ export class Report {
   }
 
   static async create(options: ReportOptions, deps?: Partial<WriterDeps>): Promise<Report> {
-    const full = resolveDeps(deps);
+    const full = await resolveDeps(deps);
     const config = await resolveApiConfig(full, options.config, options.title);
     const session = await openSession(full, {
       out: options.out,

@@ -9,6 +9,7 @@ import {
   SimpleSpanProcessor,
 } from '@opentelemetry/sdk-trace-base';
 import { describe, expect, test } from 'vitest';
+import { convert, merge } from '../../src/api/convert.js';
 import { defaultDeps, Report } from '../../src/api/report.js';
 import { createOtelTracer } from '../../src/api/telemetry.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
@@ -180,5 +181,45 @@ describe('createOtelTracer', () => {
     expect(done?.attributes).toEqual({ a: 'x', n: 2 });
     expect(done?.status.code).toBe(2);
     expect(done?.events[0]?.name).toBe('exception');
+  });
+});
+
+describe('viewer assets are validated before any data is processed', () => {
+  const broken = {
+    async files(): Promise<never> {
+      throw new OtelHtmlError('usage', { message: 'viewer assets not found' });
+    },
+    entry(): never {
+      throw new OtelHtmlError('usage', { message: 'viewer assets not found' });
+    },
+  };
+
+  test('Report.create fails with usage and writes nothing', async () => {
+    const w = createTestWriter();
+    const e = await failure(Report.create({ out: 'r' }, { ...w.deps, viewerAssets: broken }));
+    expect(e.code).toBe('usage');
+    expect(await w.fs.exists('r')).toBe(false);
+  });
+
+  test('convert and merge fail the same way, before reading inputs', async () => {
+    const w = createTestWriter();
+    const deps = { ...w.deps, viewerAssets: broken };
+    expect((await failure(convert({ input: 'missing.json', out: 'r' }, deps))).message).toContain(
+      'viewer assets',
+    );
+    expect((await failure(merge({ inputs: ['a'], out: 'm' }, deps))).message).toContain('viewer assets');
+    expect(await w.fs.exists('r')).toBe(false);
+    expect(await w.fs.exists('m')).toBe(false);
+  });
+
+  test('assets with an unsafe path are rejected up front', async () => {
+    const w = createTestWriter();
+    const evil = {
+      files: async () => [{ path: '../evil.js', contents: new Uint8Array() }],
+      entry: () => ({ script: 'assets/viewer.js', style: null }),
+    };
+    const e = await failure(Report.create({ out: 'r' }, { ...w.deps, viewerAssets: evil }));
+    expect(e.code).toBe('invalid-report');
+    expect(await w.fs.exists('r')).toBe(false);
   });
 });

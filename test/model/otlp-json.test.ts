@@ -328,6 +328,25 @@ describe('parseOtlpObject', () => {
       /^obj: resourceSpans\[0\]\.scopeSpans\[0\]\.spans\[0\]\.startTimeUnixNano: expected an exact integer/,
     );
   });
+  it('rejects a lossy number inside an int64 array', () => {
+    const json = {
+      resourceMetrics: [
+        {
+          scopeMetrics: [
+            {
+              metrics: [
+                {
+                  name: 'h',
+                  histogram: { dataPoints: [{ bucketCounts: ['1', Number('1700000000000000001')] }] },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    expect(() => parseOtlpObject(json, 'obj')).toThrowError(/bucketCounts\[1\]: expected an exact integer/);
+  });
   it('rejects non-objects and objects without a signal', () => {
     expect(() => parseOtlpObject([], 'obj')).toThrowError(/^obj: expected a JSON object, got array/);
     expect(() => parseOtlpObject({}, 'obj')).toThrowError(/^obj: expected at least one of/);
@@ -335,6 +354,24 @@ describe('parseOtlpObject', () => {
 });
 
 describe('int64 source text', () => {
+  it('only integral unsafe numbers need source text; fractions pass through', () => {
+    const original = JSON.parse;
+    const spy = vi
+      .spyOn(JSON, 'parse')
+      .mockImplementation((text: string, reviver?: unknown) =>
+        typeof reviver === 'function'
+          ? original(text, (k: string, v: unknown) => reviver(k, v))
+          : original(text),
+      );
+    try {
+      const text = JSON.stringify(
+        traceRequest([span({ attributes: [attr('f', { doubleValue: 1.5 })] })]),
+      );
+      expect(parseOtlpJson(text, 'a.json')).toHaveLength(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
   it('fails explicitly when JSON.parse gives no source text', () => {
     const original = JSON.parse;
     const spy = vi

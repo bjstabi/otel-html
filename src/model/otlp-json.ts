@@ -69,11 +69,11 @@ type RevivedContext = { readonly source?: string };
 class MissingSourceText extends Error {}
 
 function reviveNumbers(_key: string, value: unknown, context?: RevivedContext): unknown {
-  if (typeof value === 'number' && !Number.isSafeInteger(value)) {
+  if (typeof value === 'number' && Number.isInteger(value) && !Number.isSafeInteger(value)) {
     // Without the source text a large int64 would silently lose precision, so refuse to continue.
     if (context?.source === undefined) {
       throw new MissingSourceText(
-        'this JavaScript runtime does not expose JSON source text (needs Node 24+), so int64 values cannot be read exactly',
+        'integer beyond 2^53 cannot be read exactly: this JavaScript runtime does not expose JSON source text to reviver functions (Node 24+ does)',
       );
     }
     return new UnsafeNumber(value, context.source);
@@ -108,12 +108,16 @@ function convertField(key: string, value: unknown, path: string, source: string)
     return hexToBase64(value);
   }
   if (INT64_FIELDS.has(key)) {
-    if (value instanceof UnsafeNumber) return value.source;
-    if (typeof value === 'number' && Number.isInteger(value) && !Number.isSafeInteger(value)) {
-      // Only reachable for already-parsed objects: the exact digits are gone.
-      fail(source, path, 'an exact integer (pass 64-bit values as strings)', String(value));
-    }
-    if (Array.isArray(value)) return value.map((v) => (v instanceof UnsafeNumber ? v.source : v));
+    const exact = (v: unknown, at: string): unknown => {
+      if (v instanceof UnsafeNumber) return v.source;
+      if (typeof v === 'number' && Number.isInteger(v) && !Number.isSafeInteger(v)) {
+        // Only reachable for already-parsed objects: the exact digits are gone.
+        fail(source, at, 'an exact integer (pass 64-bit values as strings)', String(v));
+      }
+      return v;
+    };
+    if (Array.isArray(value)) return value.map((v, i) => exact(v, `${path}[${i}]`));
+    return exact(value, path);
   }
   return convertTree(value, path, source);
 }

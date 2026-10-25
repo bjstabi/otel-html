@@ -83,9 +83,21 @@ describe('convert', () => {
     const e = await failure(convert({ input: 'in/bad.json', out: 'r' }, w.deps));
     expect(e.code).toBe('invalid-otlp');
     expect(e.message).toContain('in/bad.json');
-    await convert({ input: [], out: 'r' }, w.deps).catch(() => undefined);
     await put(w, 'in/ok.json', JSON.stringify(spansRequest(1)));
     await convert({ input: 'in/ok.json', out: 'r' }, w.deps);
+  });
+});
+
+describe('convert of an empty request', () => {
+  test('{"resourceSpans":[]} produces a valid, empty report', async () => {
+    const w = createTestWriter();
+    await put(w, 'in/empty.json', '{"resourceSpans":[]}');
+    const summary = await convert({ input: 'in/empty.json', out: 'r' }, w.deps);
+    expect(summary.totals).toEqual({ spans: 0, logs: 0, metrics: 0 });
+    const m = manifestOf(w, 'r');
+    expect(m.complete).toBe(true);
+    expect(m.chunks).toEqual([]);
+    expect(await w.fs.exists('r/index.html')).toBe(true);
   });
 });
 

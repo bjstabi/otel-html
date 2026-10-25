@@ -10,6 +10,7 @@ export interface ConvertOptions {
   /** OTLP files: JSON, JSON lines or protobuf (`.pb` / `.binpb`). Read in the order given. */
   input: string | readonly string[];
   out: string;
+  /** A config object or the path of an `otel-html.yaml`. Environment variables are not read. */
   config?: ConfigInput | string;
   /** The signal of protobuf inputs, which do not say. */
   signal?: OtlpSignal;
@@ -19,6 +20,7 @@ export interface MergeOptions {
   /** Report folders to combine. */
   inputs: readonly string[];
   out: string;
+  /** A config object or the path of an `otel-html.yaml`. Environment variables are not read. */
   config?: ConfigInput | string;
 }
 
@@ -28,7 +30,7 @@ export async function convert(options: ConvertOptions, deps?: Partial<WriterDeps
   if (files.length === 0) {
     throw new OtelHtmlError('usage', { message: 'no input files', hint: 'pass at least one OTLP file' });
   }
-  const full = resolveDeps(deps);
+  const full = await resolveDeps(deps);
   const config = await resolveApiConfig(full, options.config, undefined);
   const session = await openSession(full, { out: options.out, config, mode: 'create' });
   try {
@@ -47,14 +49,14 @@ export async function convert(options: ConvertOptions, deps?: Partial<WriterDeps
     }
     return await session.close();
   } catch (e) {
-    await session.abort();
+    await session.abort().catch(() => undefined); // never mask the original error
     throw e;
   }
 }
 
 /** Combine finished reports into a new one, de-duplicating spans and keeping absolute times. */
 export async function merge(options: MergeOptions, deps?: Partial<WriterDeps>): Promise<ReportSummary> {
-  const full = resolveDeps(deps);
+  const full = await resolveDeps(deps);
   const config = await resolveApiConfig(full, options.config, undefined);
   return mergeReports(full, options.inputs, { out: options.out, config, mode: 'create' });
 }

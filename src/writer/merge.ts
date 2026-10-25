@@ -1,3 +1,4 @@
+import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { decodeColumns } from '../format/columns.js';
 import { reviveDataJson, unwrapDataFile } from '../format/data-file.js';
 import { type Manifest, type ManifestChunk, parseManifest } from '../format/manifest.js';
@@ -114,6 +115,29 @@ async function readChunk(fs: FileSystem, input: Input, chunk: ManifestChunk): Pr
   return batch;
 }
 
+/**
+ * The output is created (and an existing report there replaced) before inputs are read, so it must not be
+ * an input, inside one or contain one, however the paths are spelled.
+ */
+function assertDisjoint(out: string, input: string): void {
+  const inside = (rel: string): boolean =>
+    rel !== '' && rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+  const [o, i] = [resolve(out), resolve(input)];
+  if (o === i) {
+    throw new OtelHtmlError('usage', { message: `${out} is also an input; merge into a different folder` });
+  }
+  if (inside(relative(o, i))) {
+    throw new OtelHtmlError('usage', {
+      message: `output ${out} contains input ${input}; merge into a different folder`,
+    });
+  }
+  if (inside(relative(i, o))) {
+    throw new OtelHtmlError('usage', {
+      message: `output ${out} is inside input ${input}; merge into a different folder`,
+    });
+  }
+}
+
 const SIGNAL_ORDER: readonly Signal[] = ['spans', 'logs', 'metrics'];
 
 /**
@@ -131,11 +155,7 @@ export async function mergeReports(
   }
   const out = trimSlashes(options.out);
   const dirs = inputs.map(trimSlashes);
-  if (dirs.includes(out)) {
-    throw new OtelHtmlError('usage', {
-      message: `${out} is also an input; merge into a different folder`,
-    });
-  }
+  for (const dir of dirs) assertDisjoint(out, dir);
   const loaded: Input[] = [];
   for (const dir of dirs) loaded.push(await loadInput(deps.fs, dir));
   loaded.sort((a, b) => (a.epoch < b.epoch ? -1 : a.epoch > b.epoch ? 1 : 0));
@@ -161,7 +181,7 @@ export async function mergeReports(
     }
     return await session.close();
   } catch (e) {
-    await session.abort();
+    await session.abort().catch(() => undefined); // never mask the original error
     throw e;
   }
 }
