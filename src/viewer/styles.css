@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @import "./theme/tokens.css";
+@import "react-json-view-lite/dist/index.css";
 
 @keyframes oh-slide-in {
   from {
@@ -20,4 +21,24 @@
   .oh-slide-in {
     animation: none;
   }
+}
+
+/* react-json-view-lite: structure from the library, colours from the viewer tokens (text, never colour alone). */
+.oh-json {
+  font-family: var(--oh-font-mono);
+  font-size: 0.75rem;
+  color: var(--oh-ink);
+  background: transparent;
+}
+.oh-json-key {
+  color: var(--oh-ink-2);
+}
+.oh-json-str,
+.oh-json-num,
+.oh-json-other {
+  color: var(--oh-ink);
+}
+.oh-json-punct,
+.oh-json-null {
+  color: var(--oh-muted);
 }

@@ -6,7 +6,9 @@ import { extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import {
+  HOSTILE_REPORT_DIR,
   HOSTILE_SPAN_NAME,
+  HOSTILE_SUBPATH,
   HTTP_SUBPATH,
   LARGE_REPORT_DIR,
   LARGE_SPAN_COUNT,
@@ -197,14 +199,24 @@ async function buildLargeReport(): Promise<void> {
   );
 }
 
-async function serve(root: string): Promise<{ port: number; close(): Promise<void> }> {
+async function buildHostileReport(): Promise<void> {
+  const input = fileURLToPath(new URL('../fixtures/hostile.otlp.json', import.meta.url));
+  await run(
+    process.execPath,
+    [CLI, 'convert', input, '--out', fileURLToPath(HOSTILE_REPORT_DIR), '--title', 'hostile run'],
+    { maxBuffer: 64 * 1024 * 1024 },
+  );
+}
+
+async function serve(
+  mounts: readonly { prefix: string; root: string }[],
+): Promise<{ port: number; close(): Promise<void> }> {
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const rel = decodeURIComponent(url.pathname);
-    const file = rel.startsWith(`${HTTP_SUBPATH}/`)
-      ? normalize(join(root, rel.slice(HTTP_SUBPATH.length)))
-      : null;
-    if (file === null || !file.startsWith(root + sep)) {
+    const mount = mounts.find((m) => rel.startsWith(`${m.prefix}/`));
+    const file = mount === undefined ? null : normalize(join(mount.root, rel.slice(mount.prefix.length)));
+    if (mount === undefined || file === null || !file.startsWith(mount.root + sep)) {
       res.writeHead(404).end();
       return;
     }
@@ -230,7 +242,12 @@ async function serve(root: string): Promise<{ port: number; close(): Promise<voi
 export default async function globalSetup(): Promise<() => Promise<void>> {
   await buildReport();
   await buildLargeReport();
-  const server = await serve(fileURLToPath(REPORT_DIR).replace(/\/$/, ''));
+  await buildHostileReport();
+  const dir = (u: URL): string => fileURLToPath(u).replace(/\/$/, '');
+  const server = await serve([
+    { prefix: HTTP_SUBPATH, root: dir(REPORT_DIR) },
+    { prefix: HOSTILE_SUBPATH, root: dir(HOSTILE_REPORT_DIR) },
+  ]);
   process.env[PORT_ENV] = String(server.port);
   return () => server.close();
 }

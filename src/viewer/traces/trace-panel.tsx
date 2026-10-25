@@ -15,17 +15,11 @@ import { useSelection } from '../state/selection-context.js';
 import { serializeUrlState } from '../state/url-state.js';
 import { useColorAssigner } from '../theme/colors-context.js';
 import { StatusDot } from './columns.js';
+import { SpanSection, type SpanSectionProps } from './span-section.js';
 import { SplitPane } from './split-pane.js';
 import { availableTabs, isTraceTabId, type TraceTabId } from './tabs.js';
 import { traceFacts } from './trace-facts.js';
 import { ErrorsTab, ServicesTab, SpanListTab } from './trace-tabs.js';
-
-/** What the span section (Task 22) receives to render the selected span. */
-export interface SpanSectionProps {
-  detail: TraceDetail;
-  spanId: SpanId | null;
-  epoch: UnixNanos;
-}
 
 export interface TracePanelProps {
   dataSource: DataSource;
@@ -38,7 +32,7 @@ export interface TracePanelProps {
    */
   traceIds?: readonly TraceId[];
   onClose(): void;
-  /** Mount point for the span section; a labelled placeholder is shown when absent. */
+  /** Replaces the span section (tests); the default is `SpanSection`. */
   renderSpanSection?: (props: SpanSectionProps) => ReactNode;
 }
 
@@ -192,29 +186,6 @@ function Header(props: { detail: TraceDetail; dataSource: DataSource; epoch: Uni
 
 const TAB_BASE =
   'rounded-full px-3 py-1 text-sm text-ink-2 hover:bg-hairline data-[active]:bg-ink data-[active]:text-surface';
-
-/** Where Task 22's span section mounts until it exists. */
-function SpanSectionPlaceholder(props: SpanSectionProps): JSX.Element {
-  return (
-    <section
-      aria-label="Span details"
-      data-testid="span-section-slot"
-      className="m-3 rounded-card border border-dashed border-hairline p-4 text-sm text-ink-2"
-    >
-      <p className="font-semibold">Span details</p>
-      <p className="mt-1">
-        The span section is not part of this build yet.{' '}
-        {props.spanId === null ? (
-          'Select a span in the trace above.'
-        ) : (
-          <>
-            Selected span <span className="font-mono tabular-nums">{props.spanId}</span>.
-          </>
-        )}
-      </p>
-    </section>
-  );
-}
 
 /**
  * Trace panel: header, trace tabs (flame graph, waterfall, span list, services, errors), a resizable split and the
@@ -398,10 +369,11 @@ export function TracePanel(props: TracePanelProps): JSX.Element {
                   {body(load.detail, active)}
                 </Tabs.Panel>
               }
-              bottom={(props.renderSpanSection ?? ((p) => <SpanSectionPlaceholder {...p} />))({
+              bottom={(props.renderSpanSection ?? ((p) => <SpanSection {...p} />))({
                 detail: load.detail,
                 spanId: sel.spanId,
                 epoch,
+                dataSource,
               })}
             />
           </Tabs.Root>

@@ -109,7 +109,7 @@ test('trace panel: waterfall, hostile names as text, errors, services, split and
   // Selecting a span goes through the store (URL).
   await tree.getByRole('treeitem').nth(1).click();
   await expect(page).toHaveURL(/span=0502030405060708/);
-  await expect(panel.getByTestId('span-section-slot')).toContainText('0502030405060708');
+  await expect(panel.getByTestId('span-header')).toContainText('db.timeout');
 
   await panel.getByRole('tab', { name: 'Services' }).click();
   const services = panel.getByRole('table', { name: 'Services in this trace' });

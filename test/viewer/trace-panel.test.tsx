@@ -270,13 +270,13 @@ describe('TracePanel actions and layout', () => {
     vi.unstubAllGlobals();
   });
 
-  test('the span section is a labelled placeholder with a stable test id, replaceable through a prop', async () => {
+  test('the span section is mounted by default and replaceable through a prop', async () => {
     mount();
-    expect(await screen.findByTestId('span-section-slot')).toBeTruthy();
+    expect(await screen.findByRole('region', { name: 'Span details' })).toBeTruthy();
     cleanup();
     mount({ renderSpanSection: (p) => <p data-testid="task22">{p.detail.spans.length} spans</p> });
     expect((await screen.findByTestId('task22')).textContent).toBe('2 spans');
-    expect(screen.queryByTestId('span-section-slot')).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Span details' })).toBeNull();
   });
 });
 

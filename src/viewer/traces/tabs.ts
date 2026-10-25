@@ -1,3 +1,4 @@
+import type { SpanRecord } from '../../model/records.js';
 import { StatusCode } from '../../model/records.js';
 import type { TraceDetail } from '../data/data-source.js';
 
@@ -32,4 +33,29 @@ export const TRACE_TABS: readonly TraceTab[] = [
 
 export function availableTabs(detail: TraceDetail): readonly TraceTab[] {
   return TRACE_TABS.filter((t) => t.available(detail));
+}
+
+export const SPAN_TAB_IDS = ['overview', 'events', 'links', 'resource'] as const;
+export type SpanTabId = (typeof SPAN_TAB_IDS)[number];
+
+export interface SpanTab {
+  id: SpanTabId;
+  label: string;
+  available(span: SpanRecord): boolean;
+}
+
+export function isSpanTabId(s: string): s is SpanTabId {
+  return (SPAN_TAB_IDS as readonly string[]).includes(s);
+}
+
+/** The `logs` and `metrics` tabs are added in M2 and M3. */
+export const SPAN_TABS: readonly SpanTab[] = [
+  { id: 'overview', label: 'Overview', available: () => true },
+  { id: 'events', label: 'Events', available: (s) => s.events.length > 0 },
+  { id: 'links', label: 'Links', available: (s) => s.links.length > 0 },
+  { id: 'resource', label: 'Resource', available: () => true },
+];
+
+export function availableSpanTabs(span: SpanRecord): readonly SpanTab[] {
+  return SPAN_TABS.filter((t) => t.available(span));
 }

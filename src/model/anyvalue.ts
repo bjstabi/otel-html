@@ -43,6 +43,11 @@ function toJson(v: AnyValue): Json {
   }
 }
 
+/** Plain JSON for display trees (bigints beyond the safe range and non-finite doubles become strings). */
+export function anyValueToJson(v: AnyValue): unknown {
+  return toJson(v);
+}
+
 export function anyValueToDisplay(v: AnyValue): string {
   switch (v.kind) {
     case 'string':
