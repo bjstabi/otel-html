@@ -89,6 +89,14 @@ describe.each([
     expect(await f.readText(join(dir, 'lock'))).toBe('one');
   });
 
+  test('readBytes returns the exact bytes and fails with ENOENT when missing', async () => {
+    const f = fs();
+    await f.mkdirp(dir);
+    await f.writeBytes(join(dir, 'bin'), new Uint8Array([0, 255, 1]));
+    expect([...(await f.readBytes(join(dir, 'bin')))]).toEqual([0, 255, 1]);
+    expect(await code(f.readBytes(join(dir, 'missing')))).toBe('ENOENT');
+  });
+
   test('list returns sorted names; exists and remove work', async () => {
     const f = fs();
     await f.mkdirp(join(dir, 'd'));

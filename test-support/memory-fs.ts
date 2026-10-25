@@ -71,6 +71,14 @@ export function createMemoryFileSystem(): FileSystem & {
       }
       return dec.decode(b);
     },
+    async readBytes(p) {
+      const b = files.get(p);
+      if (b === undefined) {
+        if (isDir(p)) throw fsError('EISDIR', 'illegal operation on a directory, read', p);
+        throw notFound(p);
+      }
+      return b.slice();
+    },
     async writeTextAtomic(p, text) {
       requireParent(p);
       requireWritable(p);

@@ -6,6 +6,7 @@ import {
   MANIFEST_PATH,
   SIGNALS,
   type Signal,
+  STATE_DIR,
   STATE_SLOTS,
   type StateSlot,
   statePath,
@@ -59,10 +60,17 @@ function consistent(state: SessionState, manifest: Manifest): boolean {
   );
 }
 
+function versionMismatch(where: string, reportVersion: string, currentVersion: string): OtelHtmlError {
+  return new OtelHtmlError('version-mismatch', {
+    message: `${where}: the report was written by otel-html ${reportVersion}, this is ${currentVersion}`,
+    hint: `append requires the same otel-html version (${reportVersion} vs ${currentVersion}); use \`otel-html merge\``,
+  });
+}
+
 /**
  * Load the committed manifest and the state checkpoint that matches it. A flush interrupted after the
  * state write but before the manifest commit leaves the previous state in the other slot, which is the one
- * picked. Version and invalid-report handling for append beyond this is the append path's job.
+ * picked.
  */
 export async function loadCheckpoint(fs: FileSystem, out: string, version: string): Promise<Checkpoint> {
   const manifestPath = at(out, MANIFEST_PATH);
@@ -76,12 +84,7 @@ export async function loadCheckpoint(fs: FileSystem, out: string, version: strin
     reviveDataJson(unwrapDataFile(await fs.readText(manifestPath), MANIFEST_KEY)),
   );
   if (manifest.otelHtmlVersion !== version) {
-    throw new OtelHtmlError('version-mismatch', {
-      path: 'manifest.otelHtmlVersion',
-      expected: version,
-      actual: manifest.otelHtmlVersion,
-      hint: 'append needs the same otel-html version; combine the reports with `otel-html merge` instead',
-    });
+    throw versionMismatch('manifest.otelHtmlVersion', manifest.otelHtmlVersion, version);
   }
   const problems: string[] = [];
   for (const slot of STATE_SLOTS) {
@@ -95,12 +98,7 @@ export async function loadCheckpoint(fs: FileSystem, out: string, version: strin
       continue;
     }
     if (state.otelHtmlVersion !== version) {
-      throw new OtelHtmlError('version-mismatch', {
-        path: `${p} otelHtmlVersion`,
-        expected: version,
-        actual: state.otelHtmlVersion,
-        hint: 'append needs the same otel-html version; combine the reports with `otel-html merge` instead',
-      });
+      throw versionMismatch(`${p} otelHtmlVersion`, state.otelHtmlVersion, version);
     }
     if (consistent(state, manifest)) return { manifest, state, slot };
     problems.push(`${p}: does not match the committed manifest`);
@@ -109,7 +107,7 @@ export async function loadCheckpoint(fs: FileSystem, out: string, version: strin
     path: 'data/state',
     expected: 'a session checkpoint matching data/manifest.js',
     actual: problems.length === 0 ? 'no checkpoint files' : problems.join('; '),
-    hint: 'combine the reports with `otel-html merge` instead of appending',
+    hint: 'the report cannot be reopened; use `otel-html merge` to combine it with new data',
   });
 }
 
@@ -123,7 +121,8 @@ const DATA_DIRS = [
 ] as const;
 
 export async function isReportFolder(fs: FileSystem, out: string): Promise<boolean> {
-  return (await fs.exists(at(out, MANIFEST_PATH))) || (await fs.exists(at(out, LOCK_PATH)));
+  // A session that failed before its first checkpoint leaves only the state directory behind.
+  return (await fs.exists(at(out, MANIFEST_PATH))) || (await fs.exists(at(out, STATE_DIR)));
 }
 
 /** Remove a report's data so a new session can replace it. The manifest goes first, the lock stays. */

@@ -15,6 +15,7 @@
     "noUnusedParameters": true,
     "verbatimModuleSyntax": true,
     "isolatedDeclarations": true,
+    "resolveJsonModule": true,
     "isolatedModules": true,
     "declaration": true,
     "skipLibCheck": false,

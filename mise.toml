@@ -31,3 +31,10 @@ run = "bash scripts/gen-check.sh"
 
 [tasks.check]
 depends = ["lint", "typecheck", "test:unit", "knip"]
+
+[tasks."build:lib"]
+run = "pnpm exec tsdown"
+
+[tasks."check:package"]
+depends = ["build:lib"]
+run = "pnpm exec publint && pnpm exec attw --pack --profile esm-only"

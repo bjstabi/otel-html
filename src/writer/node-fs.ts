@@ -5,6 +5,9 @@ import type { FileSystem } from './ports.js';
 export function createNodeFileSystem(): FileSystem {
   return {
     readText: (p) => readFile(p, 'utf8'),
+    async readBytes(p) {
+      return new Uint8Array(await readFile(p));
+    },
     async writeTextAtomic(p, text) {
       const tmp = `${p}.tmp-${process.pid}`;
       try {

@@ -1,0 +1,126 @@
+import { describe, expect, test } from 'vitest';
+import { OtelHtmlError } from '../../src/model/errors.js';
+import { openSession, type WriterSession } from '../../src/writer/session.js';
+import { createTestWriter, otlp, type TestWriter, testConfig } from '../../test-support/writer-deps.js';
+import { allSpans, manifestOf, spansRequest } from './helpers.js';
+
+const OUT = 'r';
+const SMALL_CHUNKS = testConfig({ writer: { chunkTargetBytes: 1 } });
+
+async function failure(p: Promise<unknown>): Promise<OtelHtmlError> {
+  try {
+    await p;
+  } catch (e) {
+    if (e instanceof OtelHtmlError) return e;
+    throw e;
+  }
+  throw new Error('expected failure');
+}
+
+function open(w: TestWriter, mode: 'create' | 'append', config = SMALL_CHUNKS): Promise<WriterSession> {
+  return openSession(w.deps, { out: OUT, config, mode });
+}
+
+async function closedReportWithTwoChunks(w: TestWriter): Promise<void> {
+  const a = await open(w, 'create');
+  await a.add(otlp(spansRequest(1, 0, 0)), 'a.json');
+  await a.add(otlp(spansRequest(1, 0, 1)), 'b.json');
+  await a.close();
+}
+
+describe('append', () => {
+  test('continues chunk numbering and totals add up', async () => {
+    const w = createTestWriter();
+    await closedReportWithTwoChunks(w);
+    expect(manifestOf(w, OUT).chunks.map((c) => c.path)).toEqual([
+      'data/chunks/spans/000000.js',
+      'data/chunks/spans/000001.js',
+    ]);
+    const b = await open(w, 'append');
+    await b.add(otlp(spansRequest(1, 0, 2)), 'c.json');
+    const summary = await b.close();
+    expect(summary.totals.spans).toBe(3);
+    const m = manifestOf(w, OUT);
+    expect(m.chunks.map((c) => c.path)).toContain('data/chunks/spans/000002.js');
+    expect(m.chunks.map((c) => c.n)).toEqual([0, 1, 2]);
+    expect(m.totals.spans).toBe(3);
+    expect(allSpans(w, OUT)).toHaveLength(3);
+    expect(w.fs.snapshot().has('r/data/chunks/spans/000002.js')).toBe(true);
+  });
+
+  test('keeps the original epoch and creation time', async () => {
+    const w = createTestWriter();
+    await closedReportWithTwoChunks(w);
+    const before = manifestOf(w, OUT);
+    const b = await open(w, 'append');
+    await b.add(otlp(spansRequest(1, 5_000_000, 9)), 'later.json');
+    await b.close();
+    const after = manifestOf(w, OUT);
+    expect(after.epochUnixNano).toBe(before.epochUnixNano);
+    expect(after.createdAt).toBe(before.createdAt);
+  });
+
+  test('a version mismatch tells the user to merge, with both versions', async () => {
+    const w = createTestWriter();
+    await closedReportWithTwoChunks(w);
+    const e = await failure(
+      openSession({ ...w.deps, version: '9.9.9' }, { out: OUT, config: SMALL_CHUNKS, mode: 'append' }),
+    );
+    expect(e.code).toBe('version-mismatch');
+    expect(e.hint).toBe('append requires the same otel-html version (0.1.0 vs 9.9.9); use `otel-html merge`');
+    expect(e.message).toContain('0.1.0');
+    expect(e.message).toContain('9.9.9');
+  });
+
+  test('a state file written by another version is a version mismatch too', async () => {
+    const w = createTestWriter();
+    await closedReportWithTwoChunks(w);
+    for (const slot of [0, 1]) {
+      const p = `${OUT}/data/state/session.${slot}.json`;
+      if (!(await w.fs.exists(p))) continue;
+      const state: Record<string, unknown> = JSON.parse(await w.fs.readText(p));
+      await w.fs.writeTextAtomic(p, JSON.stringify({ ...state, otelHtmlVersion: '0.0.1' }));
+    }
+    const e = await failure(open(w, 'append'));
+    expect(e.code).toBe('version-mismatch');
+    expect(e.hint).toContain('use `otel-html merge`');
+  });
+
+  test('missing state files are an invalid report that points to merge', async () => {
+    const w = createTestWriter();
+    await closedReportWithTwoChunks(w);
+    await w.fs.remove(`${OUT}/data/state/session.0.json`);
+    await w.fs.remove(`${OUT}/data/state/session.1.json`);
+    const e = await failure(open(w, 'append'));
+    expect(e.code).toBe('invalid-report');
+    expect(e.hint).toContain('otel-html merge');
+  });
+
+  test('corrupt state files are an invalid report naming the file', async () => {
+    const w = createTestWriter();
+    await closedReportWithTwoChunks(w);
+    await w.fs.writeTextAtomic(`${OUT}/data/state/session.0.json`, '{not json');
+    await w.fs.writeTextAtomic(`${OUT}/data/state/session.1.json`, '{"formatVersion":1}');
+    const e = await failure(open(w, 'append'));
+    expect(e.code).toBe('invalid-report');
+    expect(e.message).toContain('session.0.json');
+    expect(e.message).toContain('session.1.json');
+  });
+
+  test('a corrupt manifest is an invalid report', async () => {
+    const w = createTestWriter();
+    await closedReportWithTwoChunks(w);
+    await w.fs.writeTextAtomic(`${OUT}/data/manifest.js`, '__OH__.push("manifest",{});\n');
+    const e = await failure(open(w, 'append'));
+    expect(e.code).toBe('invalid-report');
+  });
+
+  test('a lock is held while appending and released by close', async () => {
+    const w = createTestWriter();
+    await closedReportWithTwoChunks(w);
+    const b = await open(w, 'append');
+    expect((await failure(open(w, 'append'))).code).toBe('report-locked');
+    await b.close();
+    await (await open(w, 'append')).close();
+  });
+});

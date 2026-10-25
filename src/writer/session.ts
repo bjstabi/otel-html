@@ -119,6 +119,11 @@ export interface WriterSession {
   addRecords(batch: RecordBatch): Promise<AddResult>;
   flush(): Promise<void>;
   close(): Promise<ReportSummary>;
+  /**
+   * Give up: release the lock without a final checkpoint. Used when a multi-step job (merge) fails midway;
+   * whatever was committed by earlier checkpoints stays, marked incomplete.
+   */
+  abort(): Promise<void>;
 }
 
 /** Encoded chunks allowed to queue behind failing writes before `add` itself fails. */
@@ -268,6 +273,7 @@ class Session implements WriterSession {
   #shellWritten = false;
   #lastFlushMs: number;
   #closed: ReportSummary | null = null;
+  #aborted = false;
   #tail: Promise<unknown> = Promise.resolve();
 
   constructor(deps: WriterDeps, out: string, config: ResolvedConfig, drop: Drops, r: Restored) {
@@ -384,12 +390,21 @@ class Session implements WriterSession {
   close(): Promise<ReportSummary> {
     return this.#serial(async () => {
       if (this.#closed !== null) return this.#closed;
+      this.#assertOpen();
       await this.#checkpoint(false);
       await this.#writeShell();
       await this.#checkpoint(true);
       await this.#lock.release();
       this.#closed = this.#summary();
       return this.#closed;
+    });
+  }
+
+  abort(): Promise<void> {
+    return this.#serial(async () => {
+      if (this.#closed !== null || this.#aborted) return;
+      this.#aborted = true;
+      await this.#lock.release();
     });
   }
 
@@ -402,7 +417,7 @@ class Session implements WriterSession {
   }
 
   #assertOpen(): void {
-    if (this.#closed !== null) throw new Error(`session for ${this.#out} is closed`);
+    if (this.#closed !== null || this.#aborted) throw new Error(`session for ${this.#out} is closed`);
   }
 
   #summary(): ReportSummary {
