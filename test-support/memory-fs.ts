@@ -3,10 +3,24 @@ import type { FileSystem } from '../src/writer/ports.js';
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
-function notFound(p: string): Error {
-  return Object.assign(new Error(`ENOENT: no such file or directory, '${p}'`), { code: 'ENOENT' });
+function fsError(code: string, desc: string, p: string): Error {
+  return Object.assign(new Error(`${code}: ${desc}, '${p}'`), { code });
 }
 
+const notFound = (p: string): Error => fsError('ENOENT', 'no such file or directory', p);
+
+function parentOf(p: string): string | null {
+  const i = p.lastIndexOf('/');
+  if (i < 0) return null;
+  return i === 0 ? '/' : p.slice(0, i);
+}
+
+/**
+ * In-memory FileSystem that mirrors the node implementation where the writer relies on it:
+ * writing text needs an existing parent directory (writeBytes creates parents), `list` of a missing
+ * directory fails with ENOENT, directories exist implicitly for every file prefix, and `remove` refuses
+ * directories.
+ */
 export function createMemoryFileSystem(): FileSystem & {
   snapshot(): Map<string, string>;
   failNextWrite(pathSuffix: string): void;
@@ -23,27 +37,62 @@ export function createMemoryFileSystem(): FileSystem & {
     }
   };
 
+  const registerDirs = (dir: string): void => {
+    let cur: string | null = dir;
+    while (cur !== null && cur !== '' && cur !== '/' && !dirs.has(cur)) {
+      dirs.add(cur);
+      cur = parentOf(cur);
+    }
+  };
+
+  const isDir = (p: string): boolean => {
+    if (dirs.has(p)) return true;
+    const prefix = p.endsWith('/') ? p : `${p}/`;
+    for (const f of files.keys()) if (f.startsWith(prefix)) return true;
+    return false;
+  };
+
+  const requireParent = (p: string): void => {
+    const parent = parentOf(p);
+    if (parent === null || parent === '/' || isDir(parent)) return;
+    throw notFound(p);
+  };
+
+  const requireWritable = (p: string): void => {
+    if (isDir(p)) throw fsError('EISDIR', 'illegal operation on a directory', p);
+  };
+
   return {
     async readText(p) {
       const b = files.get(p);
-      if (b === undefined) throw notFound(p);
+      if (b === undefined) {
+        if (isDir(p)) throw fsError('EISDIR', 'illegal operation on a directory, read', p);
+        throw notFound(p);
+      }
       return dec.decode(b);
     },
     async writeTextAtomic(p, text) {
+      requireParent(p);
+      requireWritable(p);
       checkFail(p);
       files.set(p, enc.encode(text));
     },
     async writeBytes(p, bytes) {
+      requireWritable(p);
       checkFail(p);
+      const parent = parentOf(p);
+      if (parent !== null) registerDirs(parent);
       files.set(p, bytes.slice());
     },
     async mkdirp(p) {
-      dirs.add(p);
+      if (files.has(p)) throw fsError('EEXIST', 'file already exists', p);
+      registerDirs(p);
     },
     async exists(p) {
-      return files.has(p) || dirs.has(p);
+      return files.has(p) || isDir(p);
     },
     async list(dir) {
+      if (!isDir(dir)) throw notFound(dir);
       const prefix = dir.endsWith('/') ? dir : `${dir}/`;
       const names = new Set<string>();
       for (const p of [...files.keys(), ...dirs]) {
@@ -53,11 +102,12 @@ export function createMemoryFileSystem(): FileSystem & {
       return [...names].sort();
     },
     async remove(p) {
+      if (isDir(p)) throw fsError('ERR_FS_EISDIR', 'path is a directory', p);
       files.delete(p);
-      dirs.delete(p);
     },
     async createExclusive(p, text) {
-      if (files.has(p)) return false;
+      requireParent(p);
+      if (files.has(p) || isDir(p)) return false;
       checkFail(p);
       files.set(p, enc.encode(text));
       return true;

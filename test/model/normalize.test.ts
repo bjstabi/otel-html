@@ -3,7 +3,7 @@ import { OtelHtmlError } from '../../src/model/errors.js';
 import { parseUnixNanos } from '../../src/model/ids.js';
 import {
   createNormalizeContext,
-  firstTimestamp,
+  earliestTimestamp,
   normalizeLogs,
   normalizeMetrics,
   normalizeTraces,
@@ -195,13 +195,35 @@ describe('normalizeMetrics', () => {
   });
 });
 
-describe('firstTimestamp', () => {
-  test('returns the first non-zero timestamp per signal, null when none', () => {
-    expect(firstTimestamp(only(traceRequest([span({ startTimeUnixNano: '77' })])))).toBe(77n);
+describe('earliestTimestamp', () => {
+  test('returns the earliest non-zero timestamp per signal, null when none', () => {
+    expect(earliestTimestamp(only(traceRequest([span({ startTimeUnixNano: '77' })])))).toBe(77n);
     expect(
-      firstTimestamp(only(logsRequest([logRecord({ timeUnixNano: '0', observedTimeUnixNano: '5' })]))),
+      earliestTimestamp(only(logsRequest([logRecord({ timeUnixNano: '0', observedTimeUnixNano: '5' })]))),
     ).toBe(5n);
-    expect(firstTimestamp(only(metricsRequest([gauge('g', [{ timeUnixNano: '9', asInt: '1' }])])))).toBe(9n);
-    expect(firstTimestamp(only({ resourceSpans: [] }))).toBeNull();
+    expect(earliestTimestamp(only(metricsRequest([gauge('g', [{ timeUnixNano: '9', asInt: '1' }])])))).toBe(
+      9n,
+    );
+    expect(earliestTimestamp(only({ resourceSpans: [] }))).toBeNull();
+  });
+
+  test('is the minimum, not the first, and skips zero', () => {
+    const spans = [
+      span({ startTimeUnixNano: '0' }),
+      span({ startTimeUnixNano: '900' }),
+      span({ startTimeUnixNano: '300' }),
+      span({ startTimeUnixNano: '500' }),
+    ];
+    expect(earliestTimestamp(only(traceRequest(spans)))).toBe(300n);
+    const logs = [
+      logRecord({ timeUnixNano: '50' }),
+      logRecord({ timeUnixNano: '0', observedTimeUnixNano: '20' }),
+    ];
+    expect(earliestTimestamp(only(logsRequest(logs)))).toBe(20n);
+    const points = [
+      { timeUnixNano: '40', asInt: '1' },
+      { timeUnixNano: '10', asInt: '1' },
+    ];
+    expect(earliestTimestamp(only(metricsRequest([gauge('g', points)])))).toBe(10n);
   });
 });

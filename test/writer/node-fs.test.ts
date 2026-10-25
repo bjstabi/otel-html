@@ -21,6 +21,14 @@ describe.each([
   ['memory', () => createMemoryFileSystem()],
 ] as const)('%s file system contract', (_name, make) => {
   const fs = (): FileSystem => make();
+  const code = async (p: Promise<unknown>): Promise<unknown> => {
+    try {
+      await p;
+    } catch (e) {
+      return e instanceof Error && 'code' in e ? e.code : e;
+    }
+    return 'resolved';
+  };
 
   test('atomic write round-trips and leaves no tmp file', async () => {
     const f = fs();
@@ -31,8 +39,51 @@ describe.each([
     expect(await f.list(join(dir, 'a/b'))).toEqual(['x.txt']);
   });
 
+  test('list of a missing directory fails with ENOENT', async () => {
+    const f = fs();
+    await f.mkdirp(dir);
+    expect(await code(f.list(join(dir, 'nope')))).toBe('ENOENT');
+  });
+
+  test('writeTextAtomic and createExclusive need an existing parent; writeBytes creates parents', async () => {
+    const f = fs();
+    await f.mkdirp(dir);
+    expect(await code(f.writeTextAtomic(join(dir, 'no/such/x'), 'v'))).toBe('ENOENT');
+    expect(await code(f.createExclusive(join(dir, 'no/such/y'), 'v'))).toBe('ENOENT');
+    await f.writeBytes(join(dir, 'made/deep/z'), new Uint8Array([1]));
+    expect(await f.list(join(dir, 'made/deep'))).toEqual(['z']);
+    await f.writeTextAtomic(join(dir, 'made/ok'), 'v');
+  });
+
+  test('directories exist implicitly for the prefixes of written files', async () => {
+    const f = fs();
+    await f.mkdirp(dir);
+    await f.writeBytes(join(dir, 'a/b/c'), new Uint8Array([1]));
+    expect(await f.exists(join(dir, 'a'))).toBe(true);
+    expect(await f.exists(join(dir, 'a/b'))).toBe(true);
+    expect(await f.exists(join(dir, 'a/b/c'))).toBe(true);
+    expect(await f.exists(join(dir, 'a/b/d'))).toBe(false);
+    expect(await f.exists(join(dir, 'a/bb'))).toBe(false);
+    expect(await f.list(join(dir, 'a'))).toEqual(['b']);
+  });
+
+  test('mkdirp creates ancestors and is idempotent', async () => {
+    const f = fs();
+    await f.mkdirp(join(dir, 'p/q/r'));
+    await f.mkdirp(join(dir, 'p/q/r'));
+    expect(await f.exists(join(dir, 'p/q'))).toBe(true);
+    expect(await f.list(join(dir, 'p'))).toEqual(['q']);
+  });
+
+  test('remove of a missing path is a no-op', async () => {
+    const f = fs();
+    await f.mkdirp(dir);
+    await f.remove(join(dir, 'missing'));
+  });
+
   test('createExclusive returns false the second time', async () => {
     const f = fs();
+    await f.mkdirp(dir);
     expect(await f.createExclusive(join(dir, 'lock'), 'one')).toBe(true);
     expect(await f.createExclusive(join(dir, 'lock'), 'two')).toBe(false);
     expect(await f.readText(join(dir, 'lock'))).toBe('one');
@@ -58,6 +109,7 @@ test('node atomic write leaves no .tmp- file on disk', async () => {
 
 test('memory fs failNextWrite fails once and snapshot reflects content', async () => {
   const f = createMemoryFileSystem();
+  await f.mkdirp('/o');
   f.failNextWrite('report.json');
   await expect(f.writeTextAtomic('/o/report.json', 'x')).rejects.toThrow();
   await f.writeTextAtomic('/o/report.json', 'y');

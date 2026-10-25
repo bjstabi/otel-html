@@ -6,18 +6,21 @@ import { createMemoryFileSystem } from '../../test-support/memory-fs.js';
 describe('loadConfigFile', () => {
   test('parses YAML', async () => {
     const fs = createMemoryFileSystem();
+    await fs.mkdirp('/c');
     await fs.writeTextAtomic('/c/otel-html.yaml', 'title: hi\nviewer:\n  theme: dark\n');
     expect(await loadConfigFile(fs, '/c/otel-html.yaml')).toEqual({ title: 'hi', viewer: { theme: 'dark' } });
   });
 
   test('parses JSON', async () => {
     const fs = createMemoryFileSystem();
+    await fs.mkdirp('/c');
     await fs.writeTextAtomic('/c/x.json', '{"title":"j"}');
     expect(await loadConfigFile(fs, '/c/x.json')).toEqual({ title: 'j' });
   });
 
   test('invalid YAML is invalid-config with path', async () => {
     const fs = createMemoryFileSystem();
+    await fs.mkdirp('/c');
     await fs.writeTextAtomic('/c/bad.yaml', 'a: [1,\n');
     await expect(loadConfigFile(fs, '/c/bad.yaml')).rejects.toSatisfy(
       (e) => e instanceof OtelHtmlError && e.code === 'invalid-config' && e.message.includes('/c/bad.yaml'),
@@ -39,6 +42,7 @@ describe('findConfigPath', () => {
   });
   test('falls back to ./otel-html.yaml', async () => {
     const fs = createMemoryFileSystem();
+    await fs.mkdirp('/w');
     await fs.writeTextAtomic('/w/otel-html.yaml', 'title: t\n');
     expect(await findConfigPath(fs, '/w', {})).toBe('/w/otel-html.yaml');
   });

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { ResolvedConfig } from '../config/schema.js';
-import { SIGNALS, type Signal } from './paths.js';
+import { chunkPath, SIGNALS, type Signal } from './paths.js';
 import { parseWith } from './validate.js';
 
 export interface ManifestChunk {
@@ -33,38 +33,53 @@ export interface Manifest {
 const nonNegInt = z.number().int().nonnegative();
 const signal = z.enum(SIGNALS);
 
-export const ManifestSchema: z.ZodType<Manifest> = z.strictObject({
-  formatVersion: z.literal(1),
-  otelHtmlVersion: z.string(),
-  title: z.string(),
-  epochUnixNano: z.string().regex(/^[0-9]+$/, 'decimal nanoseconds'),
-  createdAt: z.string(),
-  updatedAt: z.string(),
-  complete: z.boolean(),
-  range: z.strictObject({ start: z.number().int(), end: z.number().int() }).nullable(),
-  totals: z.strictObject({ spans: nonNegInt, logs: nonNegInt, metrics: nonNegInt }),
-  decodedBytes: nonNegInt,
-  chunks: z.array(
-    z.strictObject({
-      signal,
-      n: nonNegInt,
-      path: z.string(),
-      start: z.number().int(),
-      end: z.number().int(),
-      count: nonNegInt,
-      bytes: nonNegInt,
+// The viewer loads these entries as script sources, so each must be exactly a layout path: relative,
+// no scheme, no `..`, no leading `_`, nothing outside `data/`.
+const CHUNK_PATH = /^data\/chunks\/(spans|logs|metrics)\/[0-9]{6,}\.js$/;
+const ROLLUP_PATH = /^data\/rollups\/[a-z][a-z0-9-]*\.js$/;
+const TRACE_SHARD_PATH = /^data\/traces\/[0-9a-f]{2}\.js$/;
+
+export const ManifestSchema: z.ZodType<Manifest> = z
+  .strictObject({
+    formatVersion: z.literal(1),
+    otelHtmlVersion: z.string(),
+    title: z.string(),
+    epochUnixNano: z.string().regex(/^[0-9]+$/, 'decimal nanoseconds'),
+    createdAt: z.string(),
+    updatedAt: z.string(),
+    complete: z.boolean(),
+    range: z.strictObject({ start: z.number().int(), end: z.number().int() }).nullable(),
+    totals: z.strictObject({ spans: nonNegInt, logs: nonNegInt, metrics: nonNegInt }),
+    decodedBytes: nonNegInt,
+    chunks: z.array(
+      z.strictObject({
+        signal,
+        n: nonNegInt,
+        path: z.string().regex(CHUNK_PATH, 'a chunk path like data/chunks/spans/000000.js'),
+        start: z.number().int(),
+        end: z.number().int(),
+        count: nonNegInt,
+        bytes: nonNegInt,
+      }),
+    ),
+    rollups: z.array(z.string().regex(ROLLUP_PATH, 'a rollup path like data/rollups/spans.js')),
+    traceShards: z.array(z.string().regex(TRACE_SHARD_PATH, 'a trace shard path like data/traces/5b.js')),
+    config: z.strictObject({
+      viewer: z.strictObject({
+        eagerBudgetBytes: z.number().int().positive(),
+        listCap: z.number().int().positive(),
+        theme: z.enum(['system', 'light', 'dark']),
+      }),
     }),
-  ),
-  rollups: z.array(z.string()),
-  traceShards: z.array(z.string().regex(/^[0-9a-f]{2}$/, 'two lowercase hex chars')),
-  config: z.strictObject({
-    viewer: z.strictObject({
-      eagerBudgetBytes: z.number().int().positive(),
-      listCap: z.number().int().positive(),
-      theme: z.enum(['system', 'light', 'dark']),
-    }),
-  }),
-});
+  })
+  .superRefine((m, ctx) => {
+    m.chunks.forEach((c, i) => {
+      const expected = chunkPath(c.signal, c.n);
+      if (c.path !== expected) {
+        ctx.addIssue({ code: 'custom', path: ['chunks', i, 'path'], message: expected });
+      }
+    });
+  });
 
 /** Validate an untrusted manifest payload; failures are `invalid-report` errors with a precise path. */
 export function parseManifest(input: unknown): Manifest {

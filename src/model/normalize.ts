@@ -392,36 +392,30 @@ export function normalizeMetrics(
   return out;
 }
 
-/** The first non-zero timestamp in the request, used to pick the report epoch. */
-export function firstTimestamp(req: OtlpRequest): UnixNanos | null {
-  const pick = (t: bigint): UnixNanos | null => (t === 0n ? null : parseUnixNanos(t, 'timestamp'));
+/**
+ * The earliest non-zero timestamp in the request (span start, log time or observed time, metric point
+ * time), used to pick the report epoch. Zero means "unset" and is ignored. Null when there is none.
+ */
+export function earliestTimestamp(req: OtlpRequest): UnixNanos | null {
+  let min: bigint | null = null;
+  const see = (t: bigint): void => {
+    if (t !== 0n && (min === null || t < min)) min = t;
+  };
   switch (req.signal) {
     case 'traces':
       for (const rs of req.request.resourceSpans)
-        for (const ss of rs.scopeSpans)
-          for (const s of ss.spans) {
-            const t = pick(s.startTimeUnixNano);
-            if (t !== null) return t;
-          }
-      return null;
+        for (const ss of rs.scopeSpans) for (const s of ss.spans) see(s.startTimeUnixNano);
+      break;
     case 'logs':
       for (const rl of req.request.resourceLogs)
         for (const sl of rl.scopeLogs)
-          for (const l of sl.logRecords) {
-            const t = pick(l.timeUnixNano) ?? pick(l.observedTimeUnixNano);
-            if (t !== null) return t;
-          }
-      return null;
+          for (const l of sl.logRecords) see(l.timeUnixNano !== 0n ? l.timeUnixNano : l.observedTimeUnixNano);
+      break;
     case 'metrics':
       for (const rm of req.request.resourceMetrics)
         for (const sm of rm.scopeMetrics)
-          for (const m of sm.metrics) {
-            const points = metricShape(m)?.points ?? [];
-            for (const dp of points) {
-              const t = pick(dp.timeUnixNano);
-              if (t !== null) return t;
-            }
-          }
-      return null;
+          for (const m of sm.metrics) for (const dp of metricShape(m)?.points ?? []) see(dp.timeUnixNano);
+      break;
   }
+  return min === null ? null : parseUnixNanos(min, 'timestamp');
 }

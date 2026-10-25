@@ -3,10 +3,17 @@ import { ATTR_HTTP_REQUEST_METHOD, ATTR_HTTP_ROUTE, ATTR_SERVICE_NAME } from './
 
 export const UNKNOWN_SERVICE = 'unknown_service';
 
-/** `service.name` of the resource, or `unknown_service` when absent or not a non-empty string. */
+const ATTR_PROCESS_EXECUTABLE_NAME = 'process.executable.name';
+
+/**
+ * `service.name` of the resource. Per the OTel resource spec, when it is absent (or not a non-empty string)
+ * the name is `unknown_service:<process.executable.name>` if that attribute is set, else `unknown_service`.
+ */
 export function serviceName(r: ResourceRecord): string {
   const v = r.attributes.get(ATTR_SERVICE_NAME);
-  return v?.kind === 'string' && v.value !== '' ? v.value : UNKNOWN_SERVICE;
+  if (v?.kind === 'string' && v.value !== '') return v.value;
+  const exe = r.attributes.get(ATTR_PROCESS_EXECUTABLE_NAME);
+  return exe?.kind === 'string' && exe.value !== '' ? `${UNKNOWN_SERVICE}:${exe.value}` : UNKNOWN_SERVICE;
 }
 
 /** The Resource column: `"<method> <route>"` when both are present, else the span name. */

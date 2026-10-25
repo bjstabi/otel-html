@@ -27,8 +27,8 @@ const manifest = (): Manifest => ({
   totals: { spans: 3, logs: 0, metrics: 0 },
   decodedBytes: 1234,
   chunks: [{ signal: 'spans', n: 1, path: chunkPath('spans', 1), start: -5, end: 10, count: 3, bytes: 900 }],
-  rollups: ['spans', 'logs', 'metrics'],
-  traceShards: ['5b'],
+  rollups: ['data/rollups/spans.js', 'data/rollups/logs.js', 'data/rollups/metrics.js'],
+  traceShards: ['data/traces/5b.js'],
   config: { viewer: { eagerBudgetBytes: 75_000_000, listCap: 10_000, theme: 'system' } },
 });
 
@@ -71,6 +71,41 @@ describe('manifest', () => {
     const e = failure(() => parseManifest({ ...manifest(), formatVersion: 2 }));
     expect(e.code).toBe('invalid-report');
     expect(e.path).toBe('manifest.formatVersion');
+  });
+  test.each([
+    [
+      'chunk path with ..',
+      { chunks: [{ ...manifest().chunks[0], path: 'data/chunks/../x.js' }] },
+      'chunks[0].path',
+    ],
+    [
+      'chunk path with scheme',
+      { chunks: [{ ...manifest().chunks[0], path: 'https://evil.test/a.js' }] },
+      'chunks[0].path',
+    ],
+    [
+      'chunk path with leading _',
+      { chunks: [{ ...manifest().chunks[0], path: '_data/chunks/spans/000001.js' }] },
+      'chunks[0].path',
+    ],
+    [
+      'chunk path absolute',
+      { chunks: [{ ...manifest().chunks[0], path: '/data/chunks/spans/000001.js' }] },
+      'chunks[0].path',
+    ],
+    [
+      'chunk path not matching signal/n',
+      { chunks: [{ ...manifest().chunks[0], path: 'data/chunks/logs/000001.js' }] },
+      'chunks[0].path',
+    ],
+    ['rollup bare name', { rollups: ['spans'] }, 'rollups[0]'],
+    ['rollup traversal', { rollups: ['data/rollups/../../x.js'] }, 'rollups[0]'],
+    ['rollup scheme', { rollups: ['javascript:alert(1)'] }, 'rollups[0]'],
+    ['shard bare id', { traceShards: ['5b'] }, 'traceShards[0]'],
+    ['shard other dir', { traceShards: ['data/rollups/5b.js'] }, 'traceShards[0]'],
+    ['shard uppercase', { traceShards: ['data/traces/5B.js'] }, 'traceShards[0]'],
+  ])('rejects %s', (_name, patch, path) => {
+    expect(failure(() => parseManifest({ ...manifest(), ...patch })).path).toBe(`manifest.${path}`);
   });
   test('rejects a bad chunk entry with an indexed path', () => {
     const m = manifest();

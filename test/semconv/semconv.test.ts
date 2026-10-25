@@ -33,6 +33,19 @@ describe('serviceName', () => {
       'unknown_service',
     );
   });
+  it('uses unknown_service:<process.executable.name> when service.name is unset', () => {
+    const { resource } = spanTarget();
+    const attributes = new Map([['process.executable.name', str('node')]]);
+    expect(serviceName({ ...resource, attributes })).toBe('unknown_service:node');
+    const empty = new Map([
+      ['service.name', str('')],
+      ['process.executable.name', str('java')],
+    ]);
+    expect(serviceName({ ...resource, attributes: empty })).toBe('unknown_service:java');
+    expect(serviceName({ ...resource, attributes: new Map([['process.executable.name', str('')]]) })).toBe(
+      'unknown_service',
+    );
+  });
 });
 
 describe('isServiceEntry', () => {
