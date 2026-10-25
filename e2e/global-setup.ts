@@ -6,19 +6,27 @@ import { extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import {
+  FIXTURE_REPORTS,
+  fixtureFile,
   HOSTILE_REPORT_DIR,
   HOSTILE_SPAN_NAME,
-  HOSTILE_SUBPATH,
-  HTTP_SUBPATH,
+  HUGE_EAGER_BUDGET_BYTES,
+  httpSubpath,
   LARGE_REPORT_DIR,
   LARGE_SPAN_COUNT,
   LARGE_TRACE_ID,
   PORT_ENV,
   REPORT_DIR,
   REPORTS_DIR,
+  type ReportName,
   RUN_TITLE,
+  reportDir,
+  SCALE_SERVICES,
+  SCALE_SPANS_PER_TRACE,
+  SCALE_TRACES,
   SERVICE_A,
   SERVICE_B,
+  scaleTraceId,
   TRACE_1,
   TRACE_2,
 } from './fixture.js';
@@ -138,8 +146,24 @@ function otlpInputs(): Record<string, unknown> {
   };
 }
 
+/** `otel-html <args>` with the built CLI. */
+async function cli(args: string[], env?: Record<string, string>): Promise<void> {
+  await run(process.execPath, [CLI, ...args], {
+    maxBuffer: 64 * 1024 * 1024,
+    ...(env === undefined ? {} : { env: { ...process.env, ...env } }),
+  });
+}
+
+async function convertTo(
+  out: URL,
+  inputs: readonly string[],
+  title: string,
+  env?: Record<string, string>,
+): Promise<void> {
+  await cli(['convert', ...inputs, '--out', fileURLToPath(out), '--title', title], env);
+}
+
 async function buildReport(): Promise<void> {
-  await rm(REPORTS_DIR, { recursive: true, force: true });
   const inputs = new URL('inputs/', REPORTS_DIR);
   await mkdir(inputs, { recursive: true });
   const files: string[] = [];
@@ -148,15 +172,7 @@ async function buildReport(): Promise<void> {
     await writeFile(path, JSON.stringify(body));
     files.push(path);
   }
-  await run(process.execPath, [
-    CLI,
-    'convert',
-    ...files,
-    '--out',
-    fileURLToPath(REPORT_DIR),
-    '--title',
-    RUN_TITLE,
-  ]);
+  await convertTo(REPORT_DIR, files, RUN_TITLE);
 }
 
 /** One trace of `LARGE_SPAN_COUNT` spans: a 4-ary tree over 5 services, children inside their parent's start. */
@@ -192,20 +208,71 @@ async function buildLargeReport(): Promise<void> {
   await mkdir(inputs, { recursive: true });
   const file = fileURLToPath(new URL('traces.json', inputs));
   await writeFile(file, JSON.stringify(largeTraceInput()));
-  await run(
-    process.execPath,
-    [CLI, 'convert', file, '--out', fileURLToPath(LARGE_REPORT_DIR), '--title', 'large trace'],
-    { maxBuffer: 64 * 1024 * 1024 },
-  );
+  await convertTo(LARGE_REPORT_DIR, [file], 'large trace');
 }
 
-async function buildHostileReport(): Promise<void> {
-  const input = fileURLToPath(new URL('../fixtures/hostile.otlp.json', import.meta.url));
-  await run(
-    process.execPath,
-    [CLI, 'convert', input, '--out', fileURLToPath(HOSTILE_REPORT_DIR), '--title', 'hostile run'],
-    { maxBuffer: 64 * 1024 * 1024 },
-  );
+/** `SCALE_TRACES` traces of `SCALE_SPANS_PER_TRACE` spans each (4-ary trees over 8 services), time-ordered, ~2% errors. */
+function scaleInput(): unknown {
+  const t0 = 1_700_000_000_000_000_000n;
+  const hex = (n: number, width: number): string => (n + 1).toString(16).padStart(width, '0');
+  const buckets: Record<string, unknown[]> = Object.fromEntries(SCALE_SERVICES.map((s) => [s, []]));
+  for (let t = 0; t < SCALE_TRACES; t++) {
+    const traceStart = t0 + BigInt(t) * 5_000_000n;
+    for (let j = 0; j < SCALE_SPANS_PER_TRACE; j++) {
+      const service = SCALE_SERVICES[j % SCALE_SERVICES.length] ?? 'edge';
+      const start = traceStart + BigInt(j) * 40_000n;
+      buckets[service]?.push({
+        traceId: scaleTraceId(t),
+        spanId: hex(t * SCALE_SPANS_PER_TRACE + j, 16),
+        ...(j === 0 ? {} : { parentSpanId: hex(t * SCALE_SPANS_PER_TRACE + Math.floor((j - 1) / 4), 16) }),
+        name: `op-${j % 23}`,
+        kind: 1 + (j % 3),
+        startTimeUnixNano: String(start),
+        endTimeUnixNano: String(start + 300_000n + BigInt(((t + j) % 11) * 50_000)),
+        attributes: [
+          str('http.request.method', j % 5 === 0 ? 'POST' : 'GET'),
+          str('http.route', `/r/${j % 9}`),
+        ],
+        ...((t * SCALE_SPANS_PER_TRACE + j) % 47 === 0 ? { status: { code: 2, message: 'boom' } } : {}),
+      });
+    }
+  }
+  return {
+    resourceSpans: SCALE_SERVICES.map((service) => ({
+      resource: { attributes: [str('service.name', service)] },
+      scopeSpans: [{ scope: { name: 'e2e-scale' }, spans: buckets[service] }],
+    })),
+  };
+}
+
+/** One 100k-span input, converted twice: `scale` with default settings (eager) and `huge` over a 5 MB eager budget. */
+async function buildScaleReports(): Promise<void> {
+  const inputs = new URL('scale-inputs/', REPORTS_DIR);
+  await mkdir(inputs, { recursive: true });
+  const file = fileURLToPath(new URL('traces.json', inputs));
+  await writeFile(file, JSON.stringify(scaleInput()));
+  await Promise.all([
+    convertTo(reportDir('scale'), [file], 'scale run'),
+    convertTo(reportDir('huge'), [file], 'huge run', {
+      OTEL_HTML_EAGER_BUDGET_BYTES: String(HUGE_EAGER_BUDGET_BYTES),
+    }),
+  ]);
+}
+
+async function buildFixtureReports(): Promise<void> {
+  await Promise.all([
+    convertTo(HOSTILE_REPORT_DIR, [fileURLToPath(fixtureFile('hostile'))], 'hostile run'),
+    ...FIXTURE_REPORTS.map((name) =>
+      convertTo(reportDir(name), [fileURLToPath(fixtureFile(name))], `${name} fixture`),
+    ),
+  ]);
+  await cli([
+    'merge',
+    fileURLToPath(reportDir('small')),
+    fileURLToPath(reportDir('orphans')),
+    '--out',
+    fileURLToPath(reportDir('merged')),
+  ]);
 }
 
 async function serve(
@@ -240,14 +307,13 @@ async function serve(
 }
 
 export default async function globalSetup(): Promise<() => Promise<void>> {
-  await buildReport();
-  await buildLargeReport();
-  await buildHostileReport();
+  await rm(REPORTS_DIR, { recursive: true, force: true });
+  await Promise.all([buildReport(), buildLargeReport(), buildFixtureReports(), buildScaleReports()]);
   const dir = (u: URL): string => fileURLToPath(u).replace(/\/$/, '');
-  const server = await serve([
-    { prefix: HTTP_SUBPATH, root: dir(REPORT_DIR) },
-    { prefix: HOSTILE_SUBPATH, root: dir(HOSTILE_REPORT_DIR) },
-  ]);
+  const mounted: ReportName[] = ['main', 'hostile', 'merged', 'scale', 'huge', ...FIXTURE_REPORTS];
+  const server = await serve(
+    mounted.map((name) => ({ prefix: httpSubpath(name), root: dir(reportDir(name)) })),
+  );
   process.env[PORT_ENV] = String(server.port);
   return () => server.close();
 }

@@ -152,27 +152,31 @@ test('trace panel: flame graph click selects a span', async ({ page, baseURL }) 
   await expect(page).toHaveURL(/span=0102030405060708/);
 });
 
-test('flame graph of a very large trace renders within the budget', async ({ page }, testInfo) => {
-  test.skip(
-    !testInfo.project.name.endsWith('-file'),
-    'the large report is only generated for file:// loading',
-  );
-  // Init scripts run before the document element exists; set the marker as soon as it does.
-  await page.addInitScript(() => {
-    const mark = (): void => document.documentElement?.setAttribute('data-perf', '');
-    mark();
-    new MutationObserver(mark).observe(document, { childList: true });
-  });
-  await page.goto(`${LARGE_REPORT_DIR.href}index.html#/traces?trace=${LARGE_TRACE_ID}`);
-  await page.waitForFunction(() => window.__OH_PERF__ !== undefined, undefined, { timeout: 60_000 });
-  const perf = await page.evaluate(() => window.__OH_PERF__);
-  testInfo.annotations.push({
-    type: 'perf',
-    description: `flame graph of ${perf?.flameBars} spans rendered in ${perf?.flameRenderMs.toFixed(0)} ms`,
-  });
-  process.stdout.write(
-    `PERF flame ${perf?.flameBars} spans: ${perf?.flameRenderMs.toFixed(1)} ms (layout ${perf?.layoutMs.toFixed(1)}, option ${perf?.optionMs.toFixed(1)}, first paint ${perf?.renderedMs.toFixed(1)})\n`,
-  );
-  expect(perf?.flameBars).toBe(LARGE_SPAN_COUNT);
-  expect(perf?.flameRenderMs ?? Number.POSITIVE_INFINITY).toBeLessThan(PERF_BUDGET_MS);
-});
+test(
+  'flame graph of a very large trace renders within the budget',
+  { tag: '@perf' },
+  async ({ page }, testInfo) => {
+    test.skip(
+      !testInfo.project.name.endsWith('-file'),
+      'the large report is only generated for file:// loading',
+    );
+    // Init scripts run before the document element exists; set the marker as soon as it does.
+    await page.addInitScript(() => {
+      const mark = (): void => document.documentElement?.setAttribute('data-perf', '');
+      mark();
+      new MutationObserver(mark).observe(document, { childList: true });
+    });
+    await page.goto(`${LARGE_REPORT_DIR.href}index.html#/traces?trace=${LARGE_TRACE_ID}`);
+    await page.waitForFunction(() => window.__OH_PERF__ !== undefined, undefined, { timeout: 60_000 });
+    const perf = await page.evaluate(() => window.__OH_PERF__);
+    testInfo.annotations.push({
+      type: 'perf',
+      description: `flame graph of ${perf?.flameBars} spans rendered in ${perf?.flameRenderMs.toFixed(0)} ms`,
+    });
+    process.stdout.write(
+      `PERF flame ${perf?.flameBars} spans: ${perf?.flameRenderMs.toFixed(1)} ms (layout ${perf?.layoutMs.toFixed(1)}, option ${perf?.optionMs.toFixed(1)}, first paint ${perf?.renderedMs.toFixed(1)})\n`,
+    );
+    expect(perf?.flameBars).toBe(LARGE_SPAN_COUNT);
+    expect(perf?.flameRenderMs ?? Number.POSITIVE_INFINITY).toBeLessThan(PERF_BUDGET_MS);
+  },
+);

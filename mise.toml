@@ -44,7 +44,13 @@ run = "mise run build:lib && mise run build:viewer"
 
 [tasks."test:e2e"]
 depends = ["build"]
-run = "pnpm exec playwright install chromium firefox webkit && pnpm exec playwright test"
+# Timing-sensitive specs (@perf) run alone afterwards, one worker, so parallel browsers do not steal their CPU.
+# Budgets scale with OTEL_HTML_PERF_FACTOR on slow machines; they are never edited.
+run = """
+pnpm exec playwright install chromium firefox webkit
+pnpm exec playwright test --grep-invert @perf
+pnpm exec playwright test --grep @perf --workers=1
+"""
 
 [tasks."check:package"]
 depends = ["build"]
@@ -53,4 +59,23 @@ run = "pnpm exec publint && pnpm exec attw --pack --profile esm-only"
 # Chromium only (file and http projects): the quick loop while iterating; `test:e2e` is the full matrix.
 [tasks."test:e2e:chromium"]
 depends = ["build"]
-run = "pnpm exec playwright install chromium && pnpm exec playwright test --project='chromium-*'"
+run = """
+pnpm exec playwright install chromium
+pnpm exec playwright test --project='chromium-*' --grep-invert @perf
+pnpm exec playwright test --project='chromium-*' --grep @perf --workers=1
+"""
+
+# Regenerates fixtures/*.otlp.json with the OTel SDK (byte-stable). hostile.otlp.json is hand-authored and left alone.
+[tasks.fixtures]
+run = "bun scripts/fixtures.ts"
+
+# Converts the `small` fixture into a report and opens it in the browser. Interactive only: refuses to run in CI.
+[tasks.demo]
+depends = ["build"]
+run = """
+if [ -n "$CI" ]; then echo 'demo opens a browser and does not run in CI' >&2; exit 1; fi
+out="${TMPDIR:-/tmp}/otel-html-demo"
+rm -rf "$out"
+node dist/cli/main.js convert fixtures/small.otlp.json --out "$out" --title 'otel-html demo'
+if command -v open >/dev/null 2>&1; then open "$out/index.html"; else xdg-open "$out/index.html"; fi
+"""
