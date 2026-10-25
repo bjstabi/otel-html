@@ -76,11 +76,17 @@ describe('facetKeyToPath', () => {
     expect(facetKeyToPath('http.method', 'span')).toBe('span.attributes["http.method"]');
   });
 
-  test('resource: prefix addresses resource attributes; core scope name maps to its path', () => {
-    expect(facetKeyToPath('resource:host.name', 'span')).toBe('resource.attributes["host.name"]');
-    expect(facetKeyToPath('resource:service.name', 'span')).toBe(SERVICE);
+  test('scopes address resource and span attributes without any in-band prefix', () => {
+    expect(facetKeyToPath('host.name', 'span', 'resource')).toBe('resource.attributes["host.name"]');
+    expect(facetKeyToPath('a"b', 'span', 'resource')).toBe('resource.attributes["a\\"b"]');
     expect(facetKeyToPath('instrumentation_scope.name', 'span')).toBe('instrumentation_scope.name');
-    expect(facetKeyToPath('resource:a"b', 'span')).toBe('resource.attributes["a\\"b"]');
-    expect(() => facetKeyToPath('resource:', 'span')).toThrow(/resource/);
+    // the same text under the attribute scope never hits a core field
+    expect(facetKeyToPath('service.name', 'span', 'attribute')).toBe('span.attributes["service.name"]');
+  });
+
+  test('an attribute literally named resource:foo stays a span attribute', () => {
+    expect(facetKeyToPath('resource:foo', 'span')).toBe('span.attributes["resource:foo"]');
+    expect(facetKeyToPath('resource:foo', 'span', 'attribute')).toBe('span.attributes["resource:foo"]');
+    expect(facetKeyToPath('resource:foo', 'span', 'resource')).toBe('resource.attributes["resource:foo"]');
   });
 });

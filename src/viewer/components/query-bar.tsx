@@ -1,5 +1,5 @@
 import { Plus, Search, X } from 'lucide-react';
-import { type JSX, useState } from 'react';
+import { type JSX, useEffect, useRef, useState } from 'react';
 import { OtelHtmlError } from '../../model/errors.js';
 import { compileCondition } from '../../ottl/compile.js';
 import { useSelection } from '../state/selection-context.js';
@@ -56,15 +56,28 @@ function coerceValue(
   return text;
 }
 
+/** Schedules `fn` after `ms`; returns a cancel function. Injectable so tests need no real timers. */
+export type Scheduler = (fn: () => void, ms: number) => () => void;
+
+const timeoutScheduler: Scheduler = (fn, ms) => {
+  const id = setTimeout(fn, ms);
+  return () => clearTimeout(id);
+};
+
+export const TEXT_DEBOUNCE_MS = 250;
+
 function TokenChip(props: {
   token: FilterToken;
-  /** `raw` token values are text from the input; the parent coerces them (and reports bad numbers). */
-  onChange(next: FilterToken): void;
+  /** Returns true when the change was accepted (the store was written). Values arrive as the typed text. */
+  onChange(next: FilterToken): boolean;
   onRemove(): void;
 }): JSX.Element {
   const { token } = props;
-  // A numeric token being retyped keeps the raw text so "1." or "" do not snap back mid-edit.
+  // The value is committed on Enter or blur, so a half-typed number never reaches the store.
   const [draft, setDraft] = useState<string | null>(null);
+  const commit = (): void => {
+    if (draft !== null && props.onChange({ ...token, value: draft })) setDraft(null);
+  };
   return (
     <li className="flex items-center gap-1 rounded-full border border-hairline bg-surface py-0.5 pr-1 pl-2">
       <span className="font-mono text-xs">{token.key}</span>
@@ -73,8 +86,7 @@ function TokenChip(props: {
         value={token.op}
         onChange={(e) => {
           const op = e.target.value;
-          if (isOp(op))
-            props.onChange({ ...token, op, value: coerceValue(op, token.value, String(token.value ?? '')) });
+          if (isOp(op)) props.onChange({ ...token, op, value: String(token.value ?? '') });
         }}
         className={FIELD}
       >
@@ -89,11 +101,11 @@ function TokenChip(props: {
           type="text"
           aria-label={`Value of ${token.key}`}
           value={draft ?? String(token.value ?? '')}
-          onChange={(e) => {
-            setDraft(e.target.value);
-            props.onChange({ ...token, value: e.target.value });
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') commit();
           }}
-          onBlur={() => setDraft(null)}
           className={`${FIELD} w-28`}
         />
       )}
@@ -109,7 +121,9 @@ function TokenChip(props: {
   );
 }
 
-function AddFilter(props: { onAdd(t: FilterToken): void }): JSX.Element {
+function AddFilter(props: {
+  onAdd(key: string, op: FilterToken['op'], value: string): boolean;
+}): JSX.Element {
   const [key, setKey] = useState('');
   const [op, setOp] = useState<FilterToken['op']>('==');
   const [value, setValue] = useState('');
@@ -118,9 +132,11 @@ function AddFilter(props: { onAdd(t: FilterToken): void }): JSX.Element {
       className="flex items-center gap-1"
       onSubmit={(e) => {
         e.preventDefault();
-        props.onAdd({ key: key.trim(), op, value: coerceValue(op, null, value) });
-        setKey('');
-        setValue('');
+        // On failure the parent shows the error and the typed input stays.
+        if (props.onAdd(key.trim(), op, value)) {
+          setKey('');
+          setValue('');
+        }
       }}
     >
       <input
@@ -165,8 +181,11 @@ function AddFilter(props: { onAdd(t: FilterToken): void }): JSX.Element {
   );
 }
 
-/** Free-text search, OTTL filter tokens, and a raw OTTL editor. Invalid input never reaches the store. */
-export function QueryBar(props: { signal: 'span' }): JSX.Element {
+/**
+ * Free-text search, OTTL filter tokens, and a raw OTTL editor. Invalid input never reaches the store, and typing
+ * does not write per keystroke: free text is debounced, tokens and raw OTTL commit on Enter or blur.
+ */
+export function QueryBar(props: { signal: 'span'; debounceMs?: number; schedule?: Scheduler }): JSX.Element {
   const condition = useSelection((s) => s.condition);
   const text = useSelection((s) => s.text);
   const setText = useSelection((s) => s.setText);
@@ -177,38 +196,78 @@ export function QueryBar(props: { signal: 'span' }): JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const raw = tokens === null || rawOpen;
 
-  const commitTokens = (next: readonly FilterToken[]): void => {
+  // Free text: local value, one store write once typing pauses (or on Enter/blur).
+  const schedule = props.schedule ?? timeoutScheduler;
+  const debounceMs = props.debounceMs ?? TEXT_DEBOUNCE_MS;
+  const [localText, setLocalText] = useState(text);
+  const cancelPending = useRef<(() => void) | null>(null);
+  const latestText = useRef(text);
+  const localTextRef = useRef(localText);
+  localTextRef.current = localText;
+  useEffect(() => {
+    // An external change (URL navigation, clear) wins over a stale local value.
+    cancelPending.current?.();
+    cancelPending.current = null;
+    latestText.current = text;
+    setLocalText(text);
+  }, [text]);
+  useEffect(
+    () => () => {
+      cancelPending.current?.();
+    },
+    [],
+  );
+  const flushText = (): void => {
+    cancelPending.current?.();
+    cancelPending.current = null;
+    if (latestText.current !== localTextRef.current) setText(localTextRef.current);
+  };
+
+  // An external condition change (facet click, back/forward) discards a stale raw draft and its error.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `condition` is the trigger, not a value read
+  useEffect(() => {
+    setDraft(null);
+    setError(null);
+  }, [condition]);
+
+  /** Applies `fn`; an OtelHtmlError becomes the inline message, anything else is a bug and propagates. */
+  const guarded = (fn: () => void): boolean => {
     try {
-      setCondition(tokensToOttl(next));
+      fn();
       setError(null);
+      return true;
     } catch (e) {
-      setError(describeOttlError(e));
+      if (e instanceof OtelHtmlError) {
+        setError(describeOttlError(e));
+        return false;
+      }
+      throw e;
+    }
+  };
+
+  const commitTokens = (next: readonly FilterToken[]): void => setCondition(tokensToOttl(next));
+  const current = tokens ?? [];
+
+  const checkRaw = (src: string): string | null => {
+    if (src.trim() === '') return null;
+    try {
+      compileCondition(src, props.signal);
+      return null;
+    } catch (e) {
+      if (e instanceof OtelHtmlError) return describeOttlError(e);
+      throw e;
     }
   };
 
   const editRaw = (src: string): void => {
     setDraft(src);
-    if (src.trim() === '') {
-      setError(null);
-      setCondition(null);
-      return;
-    }
-    try {
-      compileCondition(src, props.signal);
-    } catch (e) {
-      setError(describeOttlError(e));
-      return;
-    }
-    setError(null);
-    setCondition(src);
+    setError(checkRaw(src)); // live feedback; the store is written on commit only
   };
-
-  const guarded = (fn: () => void): void => {
-    try {
-      fn();
-    } catch (e) {
-      setError(describeOttlError(e));
-    }
+  const commitRaw = (): void => {
+    if (draft === null) return;
+    const problem = checkRaw(draft);
+    setError(problem);
+    if (problem === null) setCondition(draft.trim() === '' ? null : draft);
   };
 
   return (
@@ -221,8 +280,21 @@ export function QueryBar(props: { signal: 'span' }): JSX.Element {
             data-oh-query
             aria-label="Search"
             placeholder="Search (press / to focus)"
-            value={text}
-            onChange={(e) => setText(e.target.value)}
+            value={localText}
+            onChange={(e) => {
+              const v = e.target.value;
+              setLocalText(v);
+              localTextRef.current = v;
+              cancelPending.current?.();
+              cancelPending.current = schedule(() => {
+                cancelPending.current = null;
+                setText(v);
+              }, debounceMs);
+            }}
+            onBlur={flushText}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') flushText();
+            }}
             className="w-full bg-transparent text-sm outline-none"
           />
         </label>
@@ -239,14 +311,23 @@ export function QueryBar(props: { signal: 'span' }): JSX.Element {
         >
           OTTL
         </button>
-        <span title="second query arrives with Dashboards">
+        <span className="group relative">
           <button
             type="button"
-            disabled
+            aria-disabled="true"
+            aria-describedby="oh-add-query-hint"
+            onClick={(e) => e.preventDefault()}
             className="rounded-full border border-hairline px-3 py-1.5 text-sm text-muted opacity-60"
           >
             + Query
           </button>
+          <span
+            id="oh-add-query-hint"
+            role="tooltip"
+            className="absolute top-full left-0 z-10 mt-1 hidden whitespace-nowrap rounded-md bg-ink px-2 py-1 text-xs text-page group-focus-within:block group-hover:block"
+          >
+            second query arrives with Dashboards
+          </span>
         </span>
         {condition === null ? null : (
           <button
@@ -276,13 +357,20 @@ export function QueryBar(props: { signal: 'span' }): JSX.Element {
             rows={2}
             value={draft ?? condition ?? ''}
             onChange={(e) => editRaw(e.target.value)}
+            onBlur={commitRaw}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                commitRaw();
+              }
+            }}
             className={`${FIELD} w-full`}
           />
         </div>
       ) : (
         <div className="flex flex-wrap items-center gap-2">
-          <ul className="flex flex-wrap gap-2">
-            {(tokens ?? []).map((t, i) => (
+          <ul aria-label="Filters" className="flex flex-wrap gap-2">
+            {current.map((t, i) => (
               <TokenChip
                 // biome-ignore lint/suspicious/noArrayIndexKey: tokens have no identity; the same key may repeat
                 key={`${t.key}:${i}`}
@@ -290,7 +378,7 @@ export function QueryBar(props: { signal: 'span' }): JSX.Element {
                 onChange={(next) =>
                   guarded(() =>
                     commitTokens(
-                      (tokens ?? []).map((x, j) =>
+                      current.map((x, j) =>
                         j === i
                           ? { ...next, value: coerceValue(next.op, x.value, String(next.value ?? '')) }
                           : x,
@@ -298,11 +386,15 @@ export function QueryBar(props: { signal: 'span' }): JSX.Element {
                     ),
                   )
                 }
-                onRemove={() => commitTokens((tokens ?? []).filter((_, j) => j !== i))}
+                onRemove={() => guarded(() => commitTokens(current.filter((_, j) => j !== i)))}
               />
             ))}
           </ul>
-          <AddFilter onAdd={(t) => guarded(() => commitTokens([...(tokens ?? []), t]))} />
+          <AddFilter
+            onAdd={(key, op, value) =>
+              guarded(() => commitTokens([...current, { key, op, value: coerceValue(op, null, value) }]))
+            }
+          />
         </div>
       )}
       {error === null ? null : (

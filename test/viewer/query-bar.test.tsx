@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { afterEach, describe, expect, test } from 'vitest';
 import { QueryBar } from '../../src/viewer/components/query-bar.js';
@@ -25,7 +25,7 @@ describe('QueryBar', () => {
     expect(screen.getByText('span.attributes["n"]')).toBeTruthy();
     const value = screen.getByRole('textbox', { name: 'Value of span.attributes["n"]' });
     await user.clear(value);
-    await user.type(value, '7');
+    await user.type(value, '7{Enter}');
     expect(store.getState().condition).toBe('span.name == "a" and span.attributes["n"] >= 7');
     await user.click(screen.getByRole('button', { name: 'Remove span.name' }));
     expect(store.getState().condition).toBe('span.attributes["n"] >= 7');
@@ -55,11 +55,11 @@ describe('QueryBar', () => {
     const store = setup();
     const box = screen.getByRole('searchbox', { name: 'Search' });
     expect(box.hasAttribute('data-oh-query')).toBe(true);
-    await user.type(box, 'boom');
+    await user.type(box, 'boom{Enter}');
     expect(store.getState().text).toBe('boom');
   });
 
-  test('OTTL toggle shows the raw condition; invalid OTTL shows the column inline and does not update the store', async () => {
+  test('OTTL toggle shows the raw condition; invalid OTTL shows the column live and never reaches the store', async () => {
     const user = userEvent.setup();
     const store = setup({ q: 'span.name == "a"' });
     await user.click(screen.getByRole('button', { name: 'OTTL' }));
@@ -67,17 +67,115 @@ describe('QueryBar', () => {
     expect((raw as HTMLTextAreaElement).value).toBe('span.name == "a"');
     fireEvent.change(raw, { target: { value: 'a.bcd ==' } });
     expect(screen.getByRole('alert').textContent).toMatch(/^col 9: expected expression/);
+    fireEvent.blur(raw);
     expect(store.getState().condition).toBe('span.name == "a"');
     fireEvent.change(raw, { target: { value: 'span.name == "b" or span.name == "c"' } });
     expect(screen.queryByRole('alert')).toBeNull();
+    // valid text is not written until it is committed
+    expect(store.getState().condition).toBe('span.name == "a"');
+    fireEvent.keyDown(raw, { key: 'Enter' });
     expect(store.getState().condition).toBe('span.name == "b" or span.name == "c"');
+  });
+
+  test('typing raw OTTL char by char writes the store once, on commit', async () => {
+    const user = userEvent.setup();
+    const store = setup();
+    let writes = 0;
+    store.subscribe(() => {
+      writes++;
+    });
+    await user.click(screen.getByRole('button', { name: 'OTTL' }));
+    const raw = screen.getByRole('textbox', { name: 'OTTL condition' });
+    await user.type(raw, 'span.name == "ab"');
+    expect(writes).toBe(0);
+    await user.keyboard('{Enter}');
+    expect(writes).toBe(1);
+  });
+
+  test('a raw draft is discarded when the condition changes elsewhere', async () => {
+    const user = userEvent.setup();
+    const store = setup({ q: 'span.name == "a" or span.name == "b"' });
+    const raw = screen.getByRole('textbox', { name: 'OTTL condition' });
+    fireEvent.change(raw, { target: { value: 'broken ==' } });
+    act(() => store.getState().setCondition('span.name == "z" or span.name == "y"'));
+    expect((screen.getByRole('textbox', { name: 'OTTL condition' }) as HTMLTextAreaElement).value).toBe(
+      'span.name == "z" or span.name == "y"',
+    );
+    expect(screen.queryByRole('alert')).toBeNull();
+    void user;
+  });
+
+  test('token value edits commit on Enter, once', async () => {
+    const user = userEvent.setup();
+    const store = setup({ q: 'span.attributes["n"] >= 5' });
+    let writes = 0;
+    store.subscribe(() => {
+      writes++;
+    });
+    const value = screen.getByRole('textbox', { name: 'Value of span.attributes["n"]' });
+    await user.clear(value);
+    await user.type(value, '12');
+    expect(writes).toBe(0);
+    await user.keyboard('{Enter}');
+    expect(writes).toBe(1);
+    expect(store.getState().condition).toBe('span.attributes["n"] >= 12');
+  });
+
+  test('switching a text token to a numeric operator shows an error instead of throwing', async () => {
+    const user = userEvent.setup();
+    const store = setup({ q: 'span.attributes["a"] == "abc"' });
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Operator of span.attributes["a"]' }), '>');
+    expect(screen.getByRole('alert').textContent).toMatch(/number/);
+    expect(store.getState().condition).toBe('span.attributes["a"] == "abc"');
+  });
+
+  test('a failed add keeps the typed key and value', async () => {
+    const user = userEvent.setup();
+    const store = setup();
+    await user.type(screen.getByRole('textbox', { name: 'New filter key' }), 'span.name');
+    await user.selectOptions(screen.getByRole('combobox', { name: 'New filter operator' }), '>');
+    await user.type(screen.getByRole('textbox', { name: 'New filter value' }), 'abc');
+    await user.click(screen.getByRole('button', { name: 'Add filter' }));
+    expect(screen.getByRole('alert').textContent).toMatch(/number/);
+    expect((screen.getByRole('textbox', { name: 'New filter key' }) as HTMLInputElement).value).toBe(
+      'span.name',
+    );
+    expect((screen.getByRole('textbox', { name: 'New filter value' }) as HTMLInputElement).value).toBe('abc');
+    expect(store.getState().condition).toBeNull();
+  });
+
+  test('free text is debounced: rapid typing writes the store once', () => {
+    const pending: { fn: () => void; cancelled: boolean }[] = [];
+    const schedule = (fn: () => void): (() => void) => {
+      const p = { fn, cancelled: false };
+      pending.push(p);
+      return () => {
+        p.cancelled = true;
+      };
+    };
+    const store = createSelectionStore({});
+    let writes = 0;
+    store.subscribe(() => {
+      writes++;
+    });
+    render(
+      <SelectionProvider store={store}>
+        <QueryBar signal="span" schedule={schedule} />
+      </SelectionProvider>,
+    );
+    const box = screen.getByRole('searchbox', { name: 'Search' });
+    for (const v of ['b', 'bo', 'boo', 'boom']) fireEvent.change(box, { target: { value: v } });
+    expect(writes).toBe(0);
+    for (const p of pending) if (!p.cancelled) act(() => p.fn());
+    expect(writes).toBe(1);
+    expect(store.getState().text).toBe('boom');
   });
 
   test('a compile error that is not a parse error is also surfaced', async () => {
     const user = userEvent.setup();
     const store = setup();
     await user.click(screen.getByRole('button', { name: 'OTTL' }));
-    await user.type(screen.getByRole('textbox', { name: 'OTTL condition' }), 'nope.path == 1');
+    await user.type(screen.getByRole('textbox', { name: 'OTTL condition' }), 'nope.path == 1{Enter}');
     expect(screen.getByRole('alert').textContent).toMatch(/^col \d+:/);
     expect(store.getState().condition).toBeNull();
   });
@@ -88,11 +186,18 @@ describe('QueryBar', () => {
     expect(screen.getByText(/can.t be shown as tokens/)).toBeTruthy();
   });
 
-  test('+ Query is disabled with its explanation', () => {
-    setup();
+  test('+ Query is inert but keyboard-focusable, and its explanation is its description', async () => {
+    const user = userEvent.setup();
+    const store = setup();
     const btn = screen.getByRole('button', { name: '+ Query' });
-    expect((btn as HTMLButtonElement).disabled).toBe(true);
-    expect(btn.parentElement?.getAttribute('title')).toBe('second query arrives with Dashboards');
+    expect(btn.getAttribute('aria-disabled')).toBe('true');
+    act(() => btn.focus());
+    expect(document.activeElement).toBe(btn);
+    expect(document.getElementById(btn.getAttribute('aria-describedby') ?? '')?.textContent).toBe(
+      'second query arrives with Dashboards',
+    );
+    await user.click(btn);
+    expect(store.getState().condition).toBeNull();
   });
 
   test('renders hostile token values strictly as text', () => {

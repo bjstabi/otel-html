@@ -3,10 +3,10 @@ import { OtelHtmlError } from '../../model/errors.js';
 import type { FacetCounts } from '../../rollups/facets.js';
 import { useSelection } from '../state/selection-context.js';
 import {
+  type FacetScope,
   type FilterToken,
   facetKeyToPath,
   ottlToTokens,
-  RESOURCE_KEY_PREFIX,
   tokensToOttl,
 } from './filter-tokens.js';
 
@@ -25,23 +25,23 @@ interface FacetDef {
   /** Key in the rollup's `FacetCounts`. */
   key: string;
   label: string;
-  /** Key handed to `facetKeyToPath`; differs from `key` for resource attributes. */
-  filterKey: string;
+  /** Where the key lives in the data; passed to `facetKeyToPath` so the key text is never interpreted. */
+  scope: FacetScope;
 }
 
 const CORE: readonly FacetDef[] = [
-  { key: 'service.name', label: 'Service', filterKey: 'service.name' },
-  { key: 'span.name', label: 'Span name', filterKey: 'span.name' },
-  { key: 'span.kind', label: 'Kind', filterKey: 'span.kind' },
-  { key: 'status.code', label: 'Status', filterKey: 'status.code' },
-  { key: 'instrumentation_scope.name', label: 'Scope', filterKey: 'instrumentation_scope.name' },
+  { key: 'service.name', label: 'Service', scope: 'core' },
+  { key: 'span.name', label: 'Span name', scope: 'core' },
+  { key: 'span.kind', label: 'Kind', scope: 'core' },
+  { key: 'status.code', label: 'Status', scope: 'core' },
+  { key: 'instrumentation_scope.name', label: 'Scope', scope: 'core' },
 ];
 const RESOURCE: readonly FacetDef[] = [
-  { key: 'host.name', label: 'Host', filterKey: `${RESOURCE_KEY_PREFIX}host.name` },
+  { key: 'host.name', label: 'Host', scope: 'resource' },
   {
     key: 'deployment.environment.name',
     label: 'Environment',
-    filterKey: `${RESOURCE_KEY_PREFIX}deployment.environment.name`,
+    scope: 'resource',
   },
 ];
 /** Rollup keys that are never listed under Attributes: grouped above, or derived with no filterable path. */
@@ -53,6 +53,11 @@ const HATCH =
   'repeating-linear-gradient(45deg, var(--oh-critical) 0 3px, color-mix(in srgb, var(--oh-critical) 25%, transparent) 3px 6px)';
 const VALUES_PER_FACET = 8;
 
+/**
+ * Facet values are the rollup's display strings, so "only"/"exclude" always write string literals (`== "200"`).
+ * A numeric or boolean attribute therefore does not match through a facet click: the rollup keeps no value type to
+ * build a typed token from. Use the query bar for typed comparisons.
+ */
 const RAW_MESSAGE =
   'The condition is raw OTTL that is not a plain list of filters, so facets cannot edit it. Edit it in the query bar or clear it first.';
 
@@ -120,6 +125,18 @@ function FacetRow(props: {
   );
 }
 
+/** Every tracked value of `key` (count descending) whose text contains `search`; truncation is the caller's job. */
+function matchingValues(
+  facets: FacetCounts,
+  key: string,
+  search: string,
+): { value: string; count: number }[] {
+  const needle = search.toLowerCase();
+  return facets
+    .top(key, facets.valueCap)
+    .filter((v) => needle === '' || v.value.toLowerCase().includes(needle));
+}
+
 function FacetBlock(props: {
   def: FacetDef;
   facets: FacetCounts;
@@ -129,13 +146,12 @@ function FacetBlock(props: {
 }): JSX.Element | null {
   const { def, facets } = props;
   const total = facets.total(def.key);
-  const needle = props.search.toLowerCase();
-  const values = facets
-    .top(def.key, VALUES_PER_FACET)
-    .filter((v) => needle === '' || v.value.toLowerCase().includes(needle));
+  const matches = matchingValues(facets, def.key, props.search);
+  const values = matches.slice(0, VALUES_PER_FACET);
   if (total === 0 || values.length === 0) return null;
-  const path = facetKeyToPath(def.filterKey, 'span');
-  const other = needle === '' ? facets.other(def.key) : 0;
+  const path = facetKeyToPath(def.key, 'span', def.scope);
+  const other = facets.other(def.key);
+  const hidden = matches.length - values.length;
   return (
     <section aria-label={def.label} className="flex flex-col gap-0.5">
       <h4 className="text-xs font-medium text-muted">{def.label}</h4>
@@ -154,9 +170,15 @@ function FacetBlock(props: {
             />
           );
         })}
+        {hidden > 0 ? (
+          <li className="px-1 py-0.5 text-xs text-muted">
+            {hidden} more {hidden === 1 ? 'match' : 'matches'}
+          </li>
+        ) : null}
         {other > 0 ? (
           <li className="px-1 py-0.5 text-xs text-muted">
-            <span>other</span> <span className="font-mono tabular-nums">{other}</span>
+            <span>{props.search === '' ? 'other' : 'other (untracked, not searched)'}</span>{' '}
+            <span className="font-mono tabular-nums">{other}</span>
           </li>
         ) : null}
       </ul>
@@ -171,17 +193,20 @@ function DurationFacet(props: {
 }): JSX.Element {
   const { bins } = props;
   const last = bins.length - 1;
-  const lo = (() => {
-    const t = props.tokens?.find((x) => x.key === DURATION_KEY && x.op === '>=');
-    const i = bins.findIndex((b) => b.fromNs === t?.value);
-    return Math.max(i, 0);
-  })();
-  const hi = (() => {
-    const t = props.tokens?.find((x) => x.key === DURATION_KEY && x.op === '<=');
-    const i = bins.findIndex((b) => b.toNs === t?.value);
-    return i < 0 ? last : i;
-  })();
-  const [drag, setDrag] = useState<number | null>(null);
+  const committedLo = Math.max(
+    bins.findIndex(
+      (b) => b.fromNs === props.tokens?.find((x) => x.key === DURATION_KEY && x.op === '>=')?.value,
+    ),
+    0,
+  );
+  const hiIndex = bins.findIndex(
+    (b) => b.toNs === props.tokens?.find((x) => x.key === DURATION_KEY && x.op === '<=')?.value,
+  );
+  const committedHi = hiIndex < 0 ? last : hiIndex;
+  // A drag only previews here; the single store write happens on pointer up.
+  const [drag, setDrag] = useState<{ anchor: number; current: number } | null>(null);
+  const lo = drag === null ? committedLo : Math.min(drag.anchor, drag.current);
+  const hi = drag === null ? committedHi : Math.max(drag.anchor, drag.current);
   const max = Math.max(1, ...bins.map((b) => b.count));
   const step =
     (which: 'min' | 'max') =>
@@ -194,15 +219,19 @@ function DurationFacet(props: {
             : 0;
       if (d === 0) return;
       e.preventDefault();
-      if (which === 'min') props.onRange(Math.min(Math.max(lo + d, 0), hi), hi);
-      else props.onRange(lo, Math.max(Math.min(hi + d, last), lo));
+      if (which === 'min') props.onRange(Math.min(Math.max(committedLo + d, 0), committedHi), committedHi);
+      else props.onRange(committedLo, Math.max(Math.min(committedHi + d, last), committedLo));
     };
   return (
     <section aria-label="Duration" className="flex flex-col gap-1">
       <h4 className="text-xs font-medium text-muted">Duration</h4>
       <div
         className="flex h-12 items-end gap-px"
-        onPointerUp={() => setDrag(null)}
+        onPointerUp={() => {
+          if (drag !== null)
+            props.onRange(Math.min(drag.anchor, drag.current), Math.max(drag.anchor, drag.current));
+          setDrag(null);
+        }}
         onPointerLeave={() => setDrag(null)}
       >
         {bins.map((b, i) => (
@@ -211,10 +240,8 @@ function DurationFacet(props: {
             key={i}
             data-bin={i}
             title={`${b.fromNs}-${b.toNs} ns: ${b.count}`}
-            onPointerDown={() => setDrag(i)}
-            onPointerEnter={() => {
-              if (drag !== null) props.onRange(Math.min(drag, i), Math.max(drag, i));
-            }}
+            onPointerDown={() => setDrag({ anchor: i, current: i })}
+            onPointerEnter={() => setDrag((d) => (d === null ? d : { anchor: d.anchor, current: i }))}
             className={`flex-1 cursor-col-resize rounded-sm ${i >= lo && i <= hi ? 'bg-accent' : 'bg-hairline'}`}
             style={{ height: `${Math.max(8, (b.count / max) * 100)}%` }}
           />
@@ -254,12 +281,23 @@ function DurationFacet(props: {
 
 export interface FacetPanelProps {
   facets: FacetCounts;
-  /** Observer called after a facet action has been written to the store. */
-  onToggle?(key: string, value: string, action: FacetAction): void;
+  /** Observer called after a facet action has been written to the store, with the facet's key and scope. */
+  onToggle?(facet: { key: string; scope: FacetScope }, value: string, action: FacetAction): void;
   /** Duration distribution; the Duration facet is omitted without it. */
   durationBins?: readonly DurationBin[];
   /** Attribute keys revealed per step (default 5). */
   attributePageSize?: number;
+}
+
+/**
+ * Only `OtelHtmlError`s with a user-facing meaning become a message; anything else is a bug and propagates.
+ * `invalid-ottl` is a non-flat condition or an unaddressable key, `usage` a rejected argument.
+ */
+function facetErrorMessage(e: unknown): string {
+  if (e instanceof OtelHtmlError && (e.code === 'invalid-ottl' || e.code === 'usage')) {
+    return e.code === 'invalid-ottl' && e.path === 'condition' ? RAW_MESSAGE : e.message;
+  }
+  throw e;
 }
 
 /** Core / Resource / Attributes facets; "only" and "exclude" edit the selection's filter tokens. */
@@ -280,15 +318,16 @@ export function FacetPanel(props: FacetPanelProps): JSX.Element {
     }
     try {
       if (action === 'only') {
-        const path = facetKeyToPath(def.filterKey, 'span');
+        // setCondition validates (parses) the condition like any other write, so this respects the store's rules.
+        const path = facetKeyToPath(def.key, 'span', def.scope);
         setCondition(tokensToOttl([...tokens.filter((t) => t.key !== path), { key: path, op: '==', value }]));
       } else {
-        toggleFacet(def.filterKey, value, 'exclude');
+        toggleFacet(def.key, value, 'exclude', def.scope);
       }
       setError(null);
-      props.onToggle?.(def.filterKey, value, action);
+      props.onToggle?.({ key: def.key, scope: def.scope }, value, action);
     } catch (e) {
-      setError(e instanceof OtelHtmlError ? e.message : RAW_MESSAGE);
+      setError(facetErrorMessage(e));
     }
   };
 
@@ -307,17 +346,19 @@ export function FacetPanel(props: FacetPanelProps): JSX.Element {
       setCondition(tokensToOttl(rest));
       setError(null);
     } catch (e) {
-      setError(e instanceof OtelHtmlError ? e.message : RAW_MESSAGE);
+      setError(facetErrorMessage(e));
     }
   };
 
+  // Keys are listed only when some value matches the search, so "N of M shown" stays honest while searching.
   const attributeKeys = props.facets
     .keys()
     .filter((k) => !NOT_ATTRIBUTES.has(k))
+    .filter((k) => search === '' || matchingValues(props.facets, k, search).length > 0)
     .sort((a, b) => props.facets.total(b) - props.facets.total(a) || (a < b ? -1 : a > b ? 1 : 0));
   const attributeDefs: FacetDef[] = attributeKeys
     .slice(0, shown)
-    .map((k) => ({ key: k, label: k, filterKey: k }));
+    .map((k) => ({ key: k, label: k, scope: 'attribute' }));
 
   const block = (def: FacetDef): JSX.Element => (
     <FacetBlock

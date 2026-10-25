@@ -174,8 +174,12 @@ const CORE_SPAN_KEYS: ReadonlyMap<string, string> = new Map([
   ['instrumentation_scope.name', 'instrumentation_scope.name'],
 ]);
 
-/** Facet keys with this prefix address a resource attribute (`resource:host.name`); the rest of the key is verbatim. */
-export const RESOURCE_KEY_PREFIX = 'resource:';
+/**
+ * Where a facet key lives. `core` looks the key up in the core table and otherwise falls back to a span attribute;
+ * `resource` is always `resource.attributes[key]` and `attribute` is always `span.attributes[key]`, so a key's text
+ * can never change which field it addresses (an attribute literally named `resource:foo` stays a span attribute).
+ */
+export type FacetScope = 'core' | 'resource' | 'attribute';
 
 function attributePath(root: 'span' | 'resource', key: string): string {
   return printCondition({
@@ -184,22 +188,16 @@ function attributePath(root: 'span' | 'resource', key: string): string {
   });
 }
 
-export function facetKeyToPath(key: string, signal: 'span'): string {
+export function facetKeyToPath(key: string, signal: 'span', scope: FacetScope = 'core'): string {
   switch (signal) {
-    case 'span': {
-      const core = CORE_SPAN_KEYS.get(key);
-      if (core !== undefined) return core;
-      if (key.startsWith(RESOURCE_KEY_PREFIX)) {
-        const name = key.slice(RESOURCE_KEY_PREFIX.length);
-        if (name === '')
-          throw new OtelHtmlError('usage', {
-            path: 'facet key',
-            expected: `a resource attribute name after "${RESOURCE_KEY_PREFIX}"`,
-            actual: JSON.stringify(key),
-          });
-        return attributePath('resource', name);
+    case 'span':
+      switch (scope) {
+        case 'core':
+          return CORE_SPAN_KEYS.get(key) ?? attributePath('span', key);
+        case 'resource':
+          return attributePath('resource', key);
+        case 'attribute':
+          return attributePath('span', key);
       }
-      return attributePath('span', key);
-    }
   }
 }

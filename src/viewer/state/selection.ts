@@ -2,7 +2,13 @@ import { createStore, type StoreApi } from 'zustand/vanilla';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { SpanId, TraceId } from '../../model/ids.js';
 import { parseCondition } from '../../ottl/parse.js';
-import { type FilterToken, facetKeyToPath, ottlToTokens, tokensToOttl } from '../components/filter-tokens.js';
+import {
+  type FacetScope,
+  type FilterToken,
+  facetKeyToPath,
+  ottlToTokens,
+  tokensToOttl,
+} from '../components/filter-tokens.js';
 import type { TimeWindow } from '../data/span-query.js';
 import type { ExplorerView } from './explorer-view.js';
 import { formatWindow, parseUrlState, parseWindow, serializeUrlState, type UrlState } from './url-state.js';
@@ -32,7 +38,8 @@ export interface Selection {
   setView(v: ExplorerView): void;
   setSort(s: string | null): void;
   setTab(which: 'trace' | 'span', tab: string): void;
-  toggleFacet(key: string, value: string, op: 'include' | 'exclude'): void;
+  /** Facet values are strings (the rollups keep display text), so the token is a string literal. */
+  toggleFacet(key: string, value: string, op: 'include' | 'exclude', scope?: FacetScope): void;
   selectTrace(id: TraceId | null): void;
   selectSpan(id: SpanId | null): void;
   clear(key: ClearKey): void;
@@ -91,6 +98,7 @@ function toggleFacetCondition(
   key: string,
   value: string,
   op: 'include' | 'exclude',
+  scope: FacetScope,
 ): string | null {
   let tokens: FilterToken[] = [];
   if (condition !== null) {
@@ -104,7 +112,7 @@ function toggleFacetCondition(
     }
     tokens = parsed;
   }
-  const path = facetKeyToPath(key, 'span');
+  const path = facetKeyToPath(key, 'span', scope);
   const wanted: FilterToken['op'] = op === 'include' ? '==' : '!=';
   const same = (t: FilterToken): boolean =>
     t.key === path && t.value === value && (t.op === '==' || t.op === '!=');
@@ -157,8 +165,8 @@ export function createSelectionStore(initial: UrlState): StoreApi<Selection> {
       assertNonEmpty(`tabs.${which}`, tab);
       set({ tabs: { ...get().tabs, [which]: tab } });
     },
-    toggleFacet: (key, value, op) =>
-      set({ condition: toggleFacetCondition(get().condition, key, value, op) }),
+    toggleFacet: (key, value, op, scope = 'core') =>
+      set({ condition: toggleFacetCondition(get().condition, key, value, op, scope) }),
     selectTrace: (traceId) => set({ traceId, spanId: null }),
     selectSpan: (spanId) => set({ spanId }),
     clear: (key) => {

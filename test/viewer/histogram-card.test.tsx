@@ -35,6 +35,14 @@ describe('brushToWindow', () => {
     expect(brushToWindow(b, 1, 2)).toEqual({ start: w, end: 3 * w });
     expect(brushToWindow(b, 2, 1)).toEqual({ start: w, end: 3 * w });
   });
+
+  test('clamps the end of the last bucket to the run end', () => {
+    const b = buckets();
+    expect(brushToWindow(b, 2, 2, 2 * b.widthNs + 5)).toEqual({
+      start: 2 * b.widthNs,
+      end: 2 * b.widthNs + 5,
+    });
+  });
 });
 
 describe('HistogramCard', () => {

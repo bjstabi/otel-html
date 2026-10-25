@@ -10,10 +10,18 @@ import { Chart } from './chart.js';
 const GRID = { left: 40, right: 8, top: 24, bottom: 24 } as const;
 
 /** Inclusive bucket indexes (either order) to a half-open window in the buckets' time unit. */
-export function brushToWindow(b: TimeBuckets<SpanStatusKey>, from: number, to: number): TimeWindow {
+export function brushToWindow(
+  b: TimeBuckets<SpanStatusKey>,
+  from: number,
+  to: number,
+  /** The run's end; the last bucket is wider than the data, so the window never extends past it. */
+  rangeEnd?: number,
+): TimeWindow {
   const lo = Math.min(from, to);
   const hi = Math.max(from, to);
-  return { start: b.startNs + lo * b.widthNs, end: b.startNs + (hi + 1) * b.widthNs };
+  const end = b.startNs + (hi + 1) * b.widthNs;
+  const start = b.startNs + lo * b.widthNs;
+  return { start, end: rangeEnd === undefined ? end : Math.max(start, Math.min(end, rangeEnd)) };
 }
 
 function token(name: string, fallback: string): string {
@@ -67,7 +75,10 @@ export function buildHistogramOption(b: TimeBuckets<SpanStatusKey>) {
 }
 
 /** Stacked status histogram over time. Drag (or use the keyboard) to brush a window into the selection. */
-export function HistogramCard(props: { buckets: TimeBuckets<SpanStatusKey> }): JSX.Element {
+export function HistogramCard(props: {
+  buckets: TimeBuckets<SpanStatusKey>;
+  rangeEnd?: number;
+}): JSX.Element {
   const { buckets } = props;
   const setWindow = useSelection((s) => s.setWindow);
   const [themeTick, setThemeTick] = useState(0);
@@ -96,7 +107,7 @@ export function HistogramCard(props: { buckets: TimeBuckets<SpanStatusKey> }): J
   };
 
   const commit = (r: { anchor: number; cursor: number }): void => {
-    setWindow(brushToWindow(buckets, r.anchor, r.cursor));
+    setWindow(brushToWindow(buckets, r.anchor, r.cursor, props.rangeEnd));
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>): void => {
