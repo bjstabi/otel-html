@@ -161,19 +161,23 @@ export function ottlToTokens(src: string): FilterToken[] | null {
   return tokens;
 }
 
-const CORE_SPAN_KEYS: Readonly<Record<string, string>> = {
-  'service.name': 'resource.attributes["service.name"]',
-  'status.code': 'span.status.code',
-  'span.name': 'span.name',
-  name: 'span.name',
-  kind: 'span.kind',
-};
+/**
+ * Mapping rule: exactly these dotted keys are core fields. Every other key, including bare `name` and `kind`,
+ * is a span attribute, so attributes with those names stay addressable. A Map avoids inherited keys such as
+ * `constructor`.
+ */
+const CORE_SPAN_KEYS: ReadonlyMap<string, string> = new Map([
+  ['service.name', 'resource.attributes["service.name"]'],
+  ['status.code', 'span.status.code'],
+  ['span.name', 'span.name'],
+  ['span.kind', 'span.kind'],
+]);
 
 export function facetKeyToPath(key: string, signal: 'span'): string {
   switch (signal) {
     case 'span':
       return (
-        CORE_SPAN_KEYS[key] ??
+        CORE_SPAN_KEYS.get(key) ??
         printCondition({
           type: 'value',
           value: { type: 'path', segments: ['span', 'attributes'], keys: [key], from: 0 },

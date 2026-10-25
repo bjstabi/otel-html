@@ -1,5 +1,11 @@
 import { describe, expect, test } from 'vitest';
 import type { SpanId, TraceId } from '../../src/model/ids.js';
+import {
+  type FilterToken,
+  facetKeyToPath,
+  ottlToTokens,
+  tokensToOttl,
+} from '../../src/viewer/components/filter-tokens.js';
 import { bindUrl, createSelectionStore, type HistoryPort } from '../../src/viewer/state/selection.js';
 
 const TRACE = 'a'.repeat(32) as TraceId;
@@ -101,7 +107,7 @@ describe('bindUrl', () => {
   test('trace and span opens push, window drags replace', () => {
     const store = createSelectionStore({});
     const h = fakeHistory('');
-    bindUrl(store, h);
+    bindUrl(store, h, () => undefined);
     store.getState().selectTrace(TRACE);
     store.getState().setWindow({ start: 0, end: 10 });
     store.getState().setWindow({ start: 1, end: 11 });
@@ -117,7 +123,7 @@ describe('bindUrl', () => {
   test('external URL changes update the store without writing back', () => {
     const store = createSelectionStore({});
     const h = fakeHistory('');
-    bindUrl(store, h);
+    bindUrl(store, h, () => undefined);
     h.external(`trace=${TRACE}&t=2~4`);
     expect(store.getState().traceId).toBe(TRACE);
     expect(store.getState().window).toEqual({ start: 2, end: 4 });
@@ -130,10 +136,52 @@ describe('bindUrl', () => {
   test('unbind stops both directions', () => {
     const store = createSelectionStore({});
     const h = fakeHistory('');
-    const unbind = bindUrl(store, h);
+    const unbind = bindUrl(store, h, () => undefined);
     unbind();
     expect(h.listeners).toBe(0);
     store.getState().selectTrace(TRACE);
     expect(h.writes).toEqual([]);
+  });
+});
+
+describe('hostile input', () => {
+  const HOSTILE = '") or true or ("\\ \n"';
+
+  test('a facet value with quotes, backslashes and newlines round-trips as one token', () => {
+    const store = createSelectionStore({});
+    store.getState().toggleFacet('service.name', HOSTILE, 'include');
+    const cond = store.getState().condition ?? '';
+    expect(ottlToTokens(cond)).toEqual([
+      { key: 'resource.attributes["service.name"]', op: '==', value: HOSTILE },
+    ]);
+    expect(cond).not.toContain('\n');
+  });
+
+  test('contains values with backslash and quote round-trip', () => {
+    const tokens: FilterToken[] = [{ key: 'span.name', op: 'contains', value: 'a\\"b' }];
+    expect(ottlToTokens(tokensToOttl(tokens) ?? '')).toEqual(tokens);
+  });
+
+  test('an attribute key containing a quote stays one path', () => {
+    const key = 'we"ird\\key';
+    const path = facetKeyToPath(key, 'span');
+    const tokens: FilterToken[] = [{ key: path, op: 'exists', value: null }];
+    expect(ottlToTokens(tokensToOttl(tokens) ?? '')).toEqual(tokens);
+  });
+
+  test('inherited property names and bare name/kind are span attributes', () => {
+    for (const k of ['constructor', 'toString', 'hasOwnProperty', '__proto__', 'name', 'kind']) {
+      expect(facetKeyToPath(k, 'span')).toBe(`span.attributes["${k}"]`);
+    }
+    expect(facetKeyToPath('span.kind', 'span')).toBe('span.kind');
+  });
+});
+
+describe('setter validation and bind errors', () => {
+  test('invalid values fail fast', () => {
+    const s = createSelectionStore({}).getState();
+    expect(() => s.setCondition('a ==')).toThrow(/condition/);
+    expect(() => s.setGroupBy('')).toThrow(/groupBy/);
+    expect(() => s.setTab('trace', '')).toThrow(/tabs.trace/);
   });
 });

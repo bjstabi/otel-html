@@ -1,6 +1,7 @@
 import { createStore, type StoreApi } from 'zustand/vanilla';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { SpanId, TraceId } from '../../model/ids.js';
+import { parseCondition } from '../../ottl/parse.js';
 import { type FilterToken, facetKeyToPath, ottlToTokens, tokensToOttl } from '../components/filter-tokens.js';
 import type { TimeWindow } from '../data/span-query.js';
 import type { ExplorerView } from './explorer-view.js';
@@ -113,6 +114,23 @@ function toggleFacetCondition(
   return tokensToOttl(rest);
 }
 
+function assertNonEmpty(path: string, v: string): void {
+  if (v === '') throw new OtelHtmlError('usage', { path, expected: 'a non-empty string', actual: '""' });
+}
+
+function assertOttl(c: string): void {
+  try {
+    parseCondition(c);
+  } catch (cause) {
+    throw new OtelHtmlError('invalid-ottl', {
+      path: 'condition',
+      expected: 'a valid OTTL condition',
+      actual: JSON.stringify(c),
+      ...(cause instanceof Error ? { hint: cause.message } : {}),
+    });
+  }
+}
+
 export function createSelectionStore(initial: UrlState): StoreApi<Selection> {
   return createStore<Selection>()((set, get) => ({
     ...dataFromUrl(initial),
@@ -120,13 +138,25 @@ export function createSelectionStore(initial: UrlState): StoreApi<Selection> {
       if (w !== null) formatWindow(w); // validates
       set({ window: w });
     },
-    setCondition: (c) => set({ condition: c }),
+    setCondition: (c) => {
+      if (c !== null) assertOttl(c);
+      set({ condition: c });
+    },
     setText: (text) => set({ text }),
     setMode: (mode) => set({ mode }),
-    setGroupBy: (groupBy) => set({ groupBy }),
+    setGroupBy: (groupBy) => {
+      if (groupBy !== null) assertNonEmpty('groupBy', groupBy);
+      set({ groupBy });
+    },
     setView: (view) => set({ view }),
-    setSort: (sort) => set({ sort }),
-    setTab: (which, tab) => set({ tabs: { ...get().tabs, [which]: tab } }),
+    setSort: (sort) => {
+      if (sort !== null) assertNonEmpty('sort', sort);
+      set({ sort });
+    },
+    setTab: (which, tab) => {
+      assertNonEmpty(`tabs.${which}`, tab);
+      set({ tabs: { ...get().tabs, [which]: tab } });
+    },
     toggleFacet: (key, value, op) =>
       set({ condition: toggleFacetCondition(get().condition, key, value, op) }),
     selectTrace: (traceId) => set({ traceId, spanId: null }),
@@ -167,35 +197,37 @@ export interface HistoryPort {
 export function bindUrl(
   store: StoreApi<Selection>,
   history: HistoryPort,
-  onErrors?: (errors: string[]) => void,
+  onErrors: (errors: string[]) => void,
 ): () => void {
   const current = (): string => serializeUrlState(selectionToUrlState(store.getState()));
+  let applying = false;
+  let last = '';
 
   const applyUrl = (): void => {
     const { state, errors } = parseUrlState(history.read());
-    store.setState(dataFromUrl(state));
+    applying = true;
+    try {
+      store.setState(dataFromUrl(state));
+    } finally {
+      applying = false;
+    }
+    last = current();
     if (errors.length > 0) {
-      onErrors?.(errors);
-      history.write(current(), 'replace');
+      onErrors(errors);
+      history.write(last, 'replace');
     }
   };
   applyUrl();
 
   const unsubscribeStore = store.subscribe((next, prev) => {
+    if (applying) return;
     const search = serializeUrlState(selectionToUrlState(next));
-    if (search === serializeUrlState(parseUrlState(history.read()).state)) return;
+    if (search === last) return;
+    last = search;
     const opened = next.traceId !== prev.traceId || next.spanId !== prev.spanId;
     history.write(search, opened ? 'push' : 'replace');
   });
-  const unsubscribeHistory = history.subscribe(() => {
-    const { state, errors } = parseUrlState(history.read());
-    const incoming = dataFromUrl(state);
-    store.setState(incoming);
-    if (errors.length > 0) {
-      onErrors?.(errors);
-      history.write(current(), 'replace');
-    }
-  });
+  const unsubscribeHistory = history.subscribe(applyUrl);
   return () => {
     unsubscribeStore();
     unsubscribeHistory();

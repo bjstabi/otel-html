@@ -62,10 +62,15 @@ function isUrlKey(k: string): k is UrlKey {
   return (KEYS as readonly string[]).includes(k);
 }
 
-/** Accepts `a=1&b=2`, `?a=1`, or a whole hash such as `#/traces?a=1`. */
+/** Accepts `a=1&b=2`, `?a=1`, or a whole hash such as `#/traces?a=1` (a prefix is stripped only at the start). */
 export function parseUrlState(search: string): { state: UrlState; errors: string[] } {
-  const qi = search.indexOf('?');
-  const query = qi >= 0 ? search.slice(qi + 1) : search.startsWith('#') ? '' : search;
+  let query = search;
+  if (search.startsWith('#')) {
+    const qi = search.indexOf('?');
+    query = qi >= 0 ? search.slice(qi + 1) : '';
+  } else if (search.startsWith('?')) {
+    query = search.slice(1);
+  }
   const params = new URLSearchParams(query);
   const errors: string[] = [];
   const state: Record<string, unknown> = {};

@@ -60,6 +60,12 @@ describe('parseUrlState', () => {
   });
 });
 
+describe('prefix stripping', () => {
+  test('a ? inside a value does not truncate it', () => {
+    expect(parseUrlState('text=what%3F&group=a?b').state).toEqual({ text: 'what?', group: 'a?b' });
+  });
+});
+
 describe('serializeUrlState', () => {
   test('uses a stable key order', () => {
     expect(
