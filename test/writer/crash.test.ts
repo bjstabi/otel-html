@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
 import { TraceShardSchema } from '../../src/format/trace-shard.js';
 import { openSession } from '../../src/writer/session.js';
+import { logRecord, logsRequest } from '../../test-support/otlp-builders.js';
 import {
   createProcess,
   createTestWriter,
@@ -9,7 +10,7 @@ import {
   type TestWriter,
   testConfig,
 } from '../../test-support/writer-deps.js';
-import { allSpans, manifestOf, spansRequest } from './helpers.js';
+import { allLogs, allSpans, manifestOf, spansRequest } from './helpers.js';
 
 const OUT = 'r';
 const config = testConfig({ writer: { chunkTargetBytes: 1 } }); // one chunk per span: many chunk files
@@ -86,18 +87,45 @@ describe.each(['data/manifest.js', 'data/state/session.1.json', 'data/rollups/sp
   },
 );
 
-describe('a chunk write fails', () => {
-  test('rows stay buffered and the retry writes the same chunk', async () => {
+describe('a chunk write fails during add', () => {
+  test('the request is accepted once, the chunk is retried at flush, and nothing is double counted', async () => {
     const w = createTestWriter();
     const a = await openSession(w.deps, { out: OUT, config, mode: 'create' });
     w.fs.failNextWrite('data/chunks/spans/000001.js');
     await a.add(otlp(spansRequest(1)), 'a.json');
-    await expect(a.add(otlp(spansRequest(1, 0, 1)), 'b.json')).rejects.toThrow(/injected/);
-    await a.flush();
+    expect(await a.add(otlp(spansRequest(1, 0, 1)), 'b.json')).toMatchObject({ accepted: 1 });
+    expect(w.logs.some((l) => l.level === 'error' && l.msg.includes('chunk write failed'))).toBe(true);
     await a.close();
     const m = manifestOf(w, OUT);
     expect(m.chunks.map((c) => c.n)).toEqual([0, 1]);
+    expect(m.totals.spans).toBe(2);
     expect(allSpans(w, OUT)).toHaveLength(2);
+  });
+
+  test('after a clean flush, flush still checkpoints state so append works', async () => {
+    const w = createTestWriter();
+    const a = await openSession(w.deps, { out: OUT, config, mode: 'create' });
+    await a.add(otlp(spansRequest(2)), 'a.json');
+    await a.flush(); // clean: nothing pending
+    w.fs.failNextWrite('data/chunks/spans/000002.js');
+    await a.add(otlp(spansRequest(1, 0, 2)), 'b.json');
+    await a.flush();
+    expect(manifestOf(w, OUT).totals.spans).toBe(3);
+    w.process.alive.delete(w.process.pid);
+    const deps = { ...w.deps, process: createProcess(9001, w.process.hostname) };
+    const b = await openSession(deps, { out: OUT, config, mode: 'append' });
+    expect(await b.add(otlp(spansRequest(3)), 'again.json')).toMatchObject({ accepted: 0, duplicates: 3 });
+    expect((await b.close()).totals.spans).toBe(3);
+  });
+
+  test('logs and metrics are counted once even when their chunk writes fail', async () => {
+    const w = createTestWriter();
+    const a = await openSession(w.deps, { out: OUT, config, mode: 'create' });
+    w.fs.failNextWrite('data/chunks/logs/000000.js');
+    const logs = Array.from({ length: 3 }, () => logRecord({}));
+    expect(await a.add(otlp(logsRequest(logs)), 'l.json')).toMatchObject({ accepted: 3 });
+    expect((await a.close()).totals.logs).toBe(3);
+    expect(allLogs(w, OUT)).toHaveLength(3);
   });
 });
 

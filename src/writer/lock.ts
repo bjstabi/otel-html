@@ -52,8 +52,10 @@ export async function acquireLock(deps: LockDeps, path: string): Promise<LockHan
   for (let attempt = 0; attempt < 3; attempt++) {
     if (await fs.createExclusive(path, mine)) {
       return {
+        // Remove only our own lock: if another writer reclaimed it meanwhile, leave theirs alone.
         async release() {
-          await fs.remove(path);
+          const current = await fs.readText(path).catch(() => null);
+          if (current === mine) await fs.remove(path);
         },
       };
     }

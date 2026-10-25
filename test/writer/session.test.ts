@@ -472,7 +472,8 @@ describe('folders and locking', () => {
     const w = createTestWriter();
     const e = await failure(openSession(w.deps, { out: OUT, config: testConfig(), mode: 'append' }));
     expect(e.code).toBe('usage');
-    expect(w.fs.snapshot().has('r/data/state/lock.json')).toBe(false);
+    expect(w.fs.snapshot().size).toBe(0);
+    expect(await w.fs.exists('r')).toBe(false);
   });
 
   test('append continues a closed report', async () => {

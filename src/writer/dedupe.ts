@@ -16,6 +16,10 @@ export class DedupeSet {
     this.#capacity = capacity;
   }
 
+  has(traceId: string, spanId: string): boolean {
+    return this.#keys.has(traceId + spanId);
+  }
+
   /** Records the pair and returns whether it was already present. Seeing a pair again does not refresh it. */
   seen(traceId: string, spanId: string): boolean {
     const key = traceId + spanId;

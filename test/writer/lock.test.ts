@@ -29,6 +29,16 @@ describe('acquireLock', () => {
     await (await acquireLock(w.deps, LOCK)).release();
   });
 
+  test('release leaves a lock that another writer now holds', async () => {
+    const w = createTestWriter();
+    const mine = await acquireLock(w.deps, LOCK);
+    const theirs = JSON.stringify({ pid: 99, hostname: 'host-a', startedAt: 'later' });
+    await w.fs.remove(LOCK);
+    await w.fs.writeTextAtomic(LOCK, theirs);
+    await mine.release();
+    expect(w.fs.snapshot().get(LOCK)).toBe(theirs);
+  });
+
   test('refuses while a live process holds it, with the one-writer hint', async () => {
     const w = createTestWriter();
     await acquireLock(w.deps, LOCK);

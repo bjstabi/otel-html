@@ -3,6 +3,7 @@ import { wrapDataFile } from '../format/data-file.js';
 import type { Manifest, ManifestChunk } from '../format/manifest.js';
 import {
   LOCK_PATH,
+  MANIFEST_PATH,
   rollupKey,
   rollupPath,
   type Signal,
@@ -34,6 +35,7 @@ import type {
 } from '../model/records.js';
 import type { CompiledCondition } from '../ottl/compile.js';
 import { compileAny } from '../ottl/compile.js';
+import type { SpanTarget } from '../ottl/contexts.js';
 import {
   createRollups,
   deserializeRollups,
@@ -119,6 +121,8 @@ export interface WriterSession {
   close(): Promise<ReportSummary>;
 }
 
+/** Encoded chunks allowed to queue behind failing writes before `add` itself fails. */
+const MAX_UNWRITTEN = 8;
 const ROLLUP_NAMES = ['spans', 'logs', 'metrics'] as const;
 const DEFAULT_TITLE = 'otel-html report';
 
@@ -168,6 +172,13 @@ export async function openSession(deps: WriterDeps, options: SessionOptions): Pr
         });
       }
     }
+  }
+  if (options.mode === 'append' && !(await fs.exists(at(out, MANIFEST_PATH)))) {
+    // Checked before creating any directory or taking the lock, so a wrong folder is left untouched.
+    throw new OtelHtmlError('usage', {
+      message: `cannot append: no report found at ${out} (missing ${MANIFEST_PATH})`,
+      hint: 'use mode create to start a new report',
+    });
   }
   await fs.mkdirp(at(out, STATE_DIR));
   const lock = await acquireLock(deps, at(out, LOCK_PATH));
@@ -247,6 +258,7 @@ class Session implements WriterSession {
   #ctx: NormalizeContext | null = null;
   #committed: ManifestChunk[];
   #pending: ManifestChunk[] = [];
+  #unwritten: BuiltChunk[] = [];
   #totals: Record<Signal, number>;
   #range: { start: number; end: number } | null;
   #decodedBytes: number;
@@ -426,11 +438,18 @@ class Session implements WriterSession {
         : { start: Math.min(this.#range.start, start), end: Math.max(this.#range.end, end) };
   }
 
+  /**
+   * Accepting a request is all-or-nothing: everything that can fail (drop conditions, severity checks)
+   * runs first against staged rows; the commit that follows is synchronous. Chunk files are written after
+   * the commit; a failed write leaves the encoded chunk queued for retry, so in-memory state is never
+   * half-applied and a request is never partially counted.
+   */
   async #acceptSpans(rows: readonly SpanRecord[]): Promise<AddResult> {
     const ctx = this.#context();
-    let accepted = 0;
     let dropped = 0;
     let duplicates = 0;
+    const seenInRequest = new Set<string>();
+    const staged: { span: SpanRecord; resource: ResourceRecord; target: SpanTarget }[] = [];
     for (const span of rows) {
       const resource = ctx.resources.get(span.resource);
       const target = { span, resource, scope: ctx.scopes.get(span.scope), epoch: ctx.epoch };
@@ -438,20 +457,26 @@ class Session implements WriterSession {
         dropped++;
         continue;
       }
-      if (this.#dedupe.seen(span.traceId, span.spanId)) {
+      const key = span.traceId + span.spanId;
+      if (seenInRequest.has(key) || this.#dedupe.has(span.traceId, span.spanId)) {
         duplicates++;
         continue;
       }
+      seenInRequest.add(key);
+      staged.push({ span, resource, target });
+    }
+    for (const { span, resource, target } of staged) {
+      this.#dedupe.seen(span.traceId, span.spanId);
       this.#traceIndex.add(span, this.#spans.pendingKey, resource);
       this.#rollups.spans.add(target);
       this.#spans.push(span);
       this.#totals.spans++;
       this.#extend(span.start, Math.max(span.start, span.end));
-      accepted++;
-      if (this.#spans.isFull(this.#config.writer.chunkTargetBytes)) await this.#cut(this.#spans);
+      if (this.#spans.isFull(this.#config.writer.chunkTargetBytes)) this.#cutSync(this.#spans);
     }
-    if (accepted > 0) this.#dirty = true;
-    return { accepted, dropped, duplicates };
+    if (staged.length > 0) this.#dirty = true;
+    await this.#drainUnwritten(false);
+    return { accepted: staged.length, dropped, duplicates };
   }
 
   async #acceptLogs(rows: readonly LogRecordRecord[], source: string): Promise<AddResult> {
@@ -468,8 +493,8 @@ class Session implements WriterSession {
         });
       }
     });
-    let accepted = 0;
     let dropped = 0;
+    const staged: { log: LogRecordRecord; key: (typeof keys)[number] }[] = [];
     for (const [i, log] of rows.entries()) {
       const target = {
         log,
@@ -483,22 +508,25 @@ class Session implements WriterSession {
       }
       const key = keys[i];
       if (key === undefined) throw new Error('invariant violated: severity key missing');
+      staged.push({ log, key });
+    }
+    for (const { log, key } of staged) {
       const t = logTime(log);
       this.#rollups.logs.add(t, key);
       this.#logs.push(log);
       this.#totals.logs++;
       this.#extend(t, t);
-      accepted++;
-      if (this.#logs.isFull(this.#config.writer.chunkTargetBytes)) await this.#cut(this.#logs);
+      if (this.#logs.isFull(this.#config.writer.chunkTargetBytes)) this.#cutSync(this.#logs);
     }
-    if (accepted > 0) this.#dirty = true;
-    return { accepted, dropped, duplicates: 0 };
+    if (staged.length > 0) this.#dirty = true;
+    await this.#drainUnwritten(false);
+    return { accepted: staged.length, dropped, duplicates: 0 };
   }
 
   async #acceptPoints(rows: readonly MetricPointRecord[]): Promise<AddResult> {
     const ctx = this.#context();
-    let accepted = 0;
     let dropped = 0;
+    const staged: MetricPointRecord[] = [];
     for (const point of rows) {
       const target = {
         point,
@@ -506,34 +534,60 @@ class Session implements WriterSession {
         scope: ctx.scopes.get(point.scope),
         epoch: ctx.epoch,
       };
-      if (this.#drop.point.test(target)) {
-        dropped++;
-        continue;
-      }
+      if (this.#drop.point.test(target)) dropped++;
+      else staged.push(point);
+    }
+    for (const point of staged) {
       this.#rollups.metrics.add(point.time, 'points');
       this.#metrics.push(point);
       this.#totals.metrics++;
       this.#extend(Math.min(point.start ?? point.time, point.time), point.time);
-      accepted++;
-      if (this.#metrics.isFull(this.#config.writer.chunkTargetBytes)) await this.#cut(this.#metrics);
+      if (this.#metrics.isFull(this.#config.writer.chunkTargetBytes)) this.#cutSync(this.#metrics);
     }
-    if (accepted > 0) this.#dirty = true;
-    return { accepted, dropped, duplicates: 0 };
+    if (staged.length > 0) this.#dirty = true;
+    await this.#drainUnwritten(false);
+    return { accepted: staged.length, dropped, duplicates: 0 };
   }
 
-  /** Write the buffer as a chunk file now; it becomes visible (listed in the manifest) at the next checkpoint. */
-  async #cut<R>(buffer: ChunkBuffer<R>): Promise<boolean> {
-    if (buffer.length === 0) return false;
+  /** Encode the buffer into a chunk now (synchronously) and queue it for writing. */
+  #cutSync<R>(buffer: ChunkBuffer<R>): void {
+    if (buffer.length === 0) return;
     const ctx = this.#context();
-    const chunk: BuiltChunk | null = buffer.build(ctx.resources.entries(), ctx.scopes.entries());
-    if (chunk === null) return false;
-    await this.#deps.fs.writeBytes(at(this.#out, chunk.entry.path), chunk.bytes);
+    const chunk = buffer.build(ctx.resources.entries(), ctx.scopes.entries());
+    if (chunk === null) return;
     buffer.commit(chunk);
-    this.#pending.push(chunk.entry);
-    this.#decodedBytes += chunk.decodedBytes;
-    return true;
+    this.#unwritten.push(chunk);
+    this.#dirty = true;
   }
 
+  /**
+   * Write queued chunk files in order. They become visible (listed in the manifest) at the next checkpoint.
+   * During `add` (`strict` false) a write error is logged and the chunk stays queued for the next flush,
+   * which fails if the problem persists; only a backlog of more than MAX_UNWRITTEN chunks fails the add.
+   */
+  async #drainUnwritten(strict: boolean): Promise<void> {
+    try {
+      while (this.#unwritten.length > 0) {
+        const chunk = this.#unwritten[0];
+        if (chunk === undefined) break;
+        await this.#deps.fs.writeBytes(at(this.#out, chunk.entry.path), chunk.bytes);
+        this.#unwritten.shift();
+        this.#pending.push(chunk.entry);
+        this.#decodedBytes += chunk.decodedBytes;
+      }
+    } catch (e) {
+      if (strict || this.#unwritten.length > MAX_UNWRITTEN) throw e;
+      this.#deps.logger.error('chunk write failed; will retry at the next flush', {
+        error: e instanceof Error ? e.message : String(e),
+        queued: this.#unwritten.length,
+      });
+    }
+  }
+
+  /**
+   * Interval flushes are only evaluated here, inside `add`: an idle session never flushes by itself, so
+   * long-running callers (serve, exporters) must call `flush()` on their own timer.
+   */
   async #maybeCheckpoint(): Promise<void> {
     const { clock } = this.#deps;
     if (clock.monotonicMs() - this.#lastFlushMs >= this.#config.writer.flushIntervalMs) {
@@ -558,9 +612,10 @@ class Session implements WriterSession {
     const { fs, tracer, clock } = this.#deps;
     const span = tracer.startSpan('otel-html.flush', { complete });
     try {
-      await this.#cut(this.#spans);
-      await this.#cut(this.#logs);
-      await this.#cut(this.#metrics);
+      this.#cutSync(this.#spans);
+      this.#cutSync(this.#logs);
+      this.#cutSync(this.#metrics);
+      await this.#drainUnwritten(true);
       if (this.#dirty || !this.#everCommitted) {
         for (const shard of this.#traceIndex.dirtyShards()) {
           await fs.writeTextAtomic(
