@@ -1,0 +1,233 @@
+<h2>Trace drill-down: what opens when you click a trace</h2>
+<p class="subtitle">Screen 1 is the trace panel with a span selected, on its Overview tab. Screen 2 shows the span's Logs and Metrics tabs. Both reuse the exact components from the Log and Metrics explorers. Blue-outlined labels mark the shared components.</p>
+
+<style>
+  .oh { --bg:#f6f6f3; --sf:#ffffff; --ink:#16181d; --ink2:#454a53; --mu:#7a7f88; --ln:#e5e4df; --ln2:#efeeea;
+        --ac:#0f766e; --acs:#e3f1ee; --acx:#0b5c56; --crit:#d03b3b; --crits:#fbe9e9;
+        --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#eda100;
+        font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; color:var(--ink); background:var(--bg);
+        display:flex; min-width:1180px; border-radius:12px; overflow:hidden; box-shadow:0 0 0 1px var(--ln); position:relative; }
+  .scroll { overflow-x:auto; padding-bottom:6px; }
+  .oh * { box-sizing:border-box; }
+  .num, .oh .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-variant-numeric: tabular-nums; font-size:12px; }
+  .reuse { position:absolute; z-index:5; font: 600 10.5px/1 system-ui, sans-serif; color:#1d4ed8; background:#eef4ff; border:1px dashed #1d4ed8; border-radius:4px; padding:3px 6px; white-space:nowrap; }
+  .sd { width:8px; height:8px; border-radius:50%; flex:none; display:inline-block; }
+
+  /* compressed left context: sidebar + list */
+  .side { width:52px; flex:none; border-right:1px solid var(--ln); padding:14px 0; display:flex; flex-direction:column; align-items:center; gap:10px; color:var(--mu); }
+  .side .g { width:22px; height:22px; border-radius:7px; background:var(--ink); margin-bottom:6px; }
+  .side .on { color:var(--ac); }
+  .ctx { width:250px; flex:none; border-right:1px solid var(--ln); background:var(--sf); }
+  .ctx .h { padding:12px 14px 8px; font-weight:700; font-size:16px; }
+  .ctx .row { display:flex; gap:8px; align-items:center; padding:7px 14px; border-bottom:1px solid var(--ln2); font-size:12px; white-space:nowrap; overflow:hidden; }
+  .ctx .row.sel { background:var(--acs); box-shadow:inset 3px 0 0 var(--ac); }
+  .ctx .e { color:var(--crit); }
+
+  /* panel */
+  .pn { flex:1; min-width:0; background:var(--sf); display:flex; flex-direction:column; box-shadow:-12px 0 28px rgba(22,24,29,.10); position:relative; }
+  .ph { padding:12px 18px 10px; border-bottom:1px solid var(--ln); }
+  .bc { display:flex; align-items:center; gap:8px; font-size:15px; }
+  .bc .sep { color:#b3b6bc; }
+  .bc .tid { font-family:ui-monospace,Menlo,monospace; font-size:12.5px; color:var(--ink2); background:var(--bg); border-radius:6px; padding:1px 7px; }
+  .bc .acts { margin-left:auto; display:flex; gap:6px; }
+  .btn { font-size:12px; padding:3px 9px; border-radius:7px; box-shadow:0 0 0 1px var(--ln); color:var(--ink2); background:var(--sf); white-space:nowrap; }
+  .meta { display:flex; align-items:center; gap:10px; margin-top:8px; color:var(--ink2); font-size:12.5px; flex-wrap:wrap; }
+  .pct { font-size:11.5px; font-weight:650; padding:0 6px; border-radius:5px; background:#fff3d6; color:#8a5a00; box-shadow:inset 0 0 0 1px #f4d48b; }
+  .code { font-size:11.5px; padding:0 6px; border-radius:5px; font-family:ui-monospace,Menlo,monospace; }
+  .code.c5 { box-shadow:inset 0 0 0 1px #eba3a3; background:var(--crits); color:#a3262a; }
+  .code.c2 { box-shadow:inset 0 0 0 1px #b9e2cf; background:#eef8f2; color:#17603d; }
+  .st { display:inline-flex; align-items:center; gap:5px; font-size:12px; color:var(--crit); font-weight:600; }
+  .tabs { display:flex; align-items:center; gap:4px; padding:8px 18px 0; border-bottom:1px solid var(--ln); }
+  .tabs .lbl { color:var(--mu); font-size:12px; margin-right:6px; padding-bottom:8px; }
+  .tabs span.t { padding:4px 10px 9px; color:var(--ink2); position:relative; }
+  .tabs span.t.on { color:var(--ink); font-weight:650; }
+  .tabs span.t.on::after { content:""; position:absolute; left:8px; right:8px; bottom:-1px; height:2px; border-radius:2px; background:var(--ac); }
+  .cnt { font-size:11px; background:var(--bg); box-shadow:inset 0 0 0 1px var(--ln); border-radius:9px; padding:0 6px; margin-left:4px; color:var(--ink2); }
+  .cnt.e { background:var(--crits); box-shadow:inset 0 0 0 1px #eba3a3; color:#a3262a; }
+  .fgtool { display:flex; align-items:center; gap:10px; padding:8px 18px; }
+  .search { flex:1; max-width:440px; background:var(--sf); border-radius:8px; box-shadow:0 0 0 1px #d6d5cf; padding:4px 9px; color:#a3a7ae; }
+  .tg { display:inline-flex; align-items:center; gap:6px; color:var(--ink2); }
+  .ck { width:13px; height:13px; border-radius:4px; box-shadow:inset 0 0 0 1.5px #b3b6bc; display:inline-block; }
+  .sel { background:var(--sf); box-shadow:0 0 0 1px var(--ln); border-radius:7px; padding:2px 9px; }
+  .fgwrap { display:flex; gap:14px; padding:0 18px 10px; position:relative; }
+  .fg { flex:1; min-width:0; position:relative; }
+  .axis { position:relative; height:18px; border-bottom:1px solid #c3c2b7; color:#898781; font-size:10.5px; }
+  .axis span { position:absolute; top:0; }
+  .lane { position:relative; height:24px; margin-top:3px; }
+  .bar { position:absolute; top:0; height:22px; border-radius:6px; padding:3px 8px; font-size:12px; color:#fff; display:flex; justify-content:space-between; gap:10px; white-space:nowrap; overflow:hidden; }
+  .bar .d { font-family:ui-monospace,Menlo,monospace; font-size:10.5px; opacity:.92; }
+  .bar.err { background-image:repeating-linear-gradient(135deg, rgba(255,255,255,.0) 0 6px, rgba(255,255,255,.18) 6px 9px); box-shadow:inset 0 0 0 2px var(--crit); }
+  .bar.err .x { display:inline-flex; width:14px; height:14px; border-radius:50%; background:var(--crit); color:#fff; font-size:10px; font-weight:800; align-items:center; justify-content:center; margin-right:5px; }
+  .bar.focus { box-shadow:0 0 0 2px var(--sf), 0 0 0 4px var(--ink); }
+  .mini { position:absolute; right:6px; top:24px; width:150px; background:var(--sf); border-radius:8px; box-shadow:0 2px 10px rgba(22,24,29,.12), 0 0 0 1px var(--ln); padding:6px; }
+  .mini .w { height:34px; position:relative; border-radius:4px; background:var(--bg); overflow:hidden; }
+  .mini .w i { position:absolute; height:4px; border-radius:2px; }
+  .mini .vw { position:absolute; top:0; bottom:0; left:0; right:0; border:2px solid var(--ink); border-radius:4px; }
+  .mini .z { display:flex; gap:4px; margin-top:5px; font-size:11px; color:var(--ink2); }
+  .mini .z span { box-shadow:0 0 0 1px var(--ln); border-radius:4px; padding:0 5px; }
+  .lg { width:210px; flex:none; border-left:1px solid var(--ln2); padding-left:12px; }
+  .lg .hd { display:flex; justify-content:space-between; color:var(--mu); font-size:11.5px; margin-bottom:4px; }
+  .lg .r { display:flex; align-items:center; gap:7px; padding:4px 0; }
+  .lg .r .p { margin-left:auto; font-family:ui-monospace,Menlo,monospace; font-size:11.5px; }
+  .lg .r .m { width:40px; height:6px; border-radius:3px; background:var(--bg); position:relative; overflow:hidden; }
+  .lg .r .m i { position:absolute; inset:0 auto 0 0; background:var(--ink2); border-radius:3px; }
+  .split { height:9px; display:flex; justify-content:center; align-items:center; border-top:1px solid var(--ln); background:var(--bg); cursor:row-resize; }
+  .split i { width:36px; height:3px; border-radius:2px; background:#c9c8c1; }
+  .sh { display:flex; align-items:center; gap:10px; padding:10px 18px 0; }
+  .sh .who { display:flex; align-items:center; gap:8px; padding:3px 10px; border-radius:8px; box-shadow:0 0 0 1px var(--ln); }
+  .sh .op { color:var(--mu); font-style:italic; }
+  .sh .r { margin-left:auto; display:flex; align-items:center; gap:10px; color:var(--ink2); }
+  .share { width:120px; } .share .b { height:4px; border-radius:2px; background:var(--bg); overflow:hidden; } .share .b i { display:block; height:4px; background:var(--ac); }
+  .ov { padding:10px 18px 14px; }
+  .exc { border-radius:8px; background:#fff7f7; box-shadow:inset 0 0 0 1px #f2c7c7; padding:8px 12px; margin-bottom:10px; }
+  .exc .t { font-weight:650; color:#a3262a; }
+  .exc pre { margin:4px 0 0; font: 11.5px/1.5 ui-monospace,Menlo,monospace; color:#5b2a2c; }
+  .grp { border-top:1px solid var(--ln2); padding:8px 0; }
+  .grp .gh { display:flex; align-items:center; gap:8px; font-weight:650; }
+  .grp .gh .ns { font-family:ui-monospace,Menlo,monospace; font-size:11px; color:var(--mu); font-weight:400; }
+  .kv { display:grid; grid-template-columns: 240px 1fr; gap:3px 14px; margin:6px 0 0 18px; }
+  .kv .k { font-family:ui-monospace,Menlo,monospace; font-size:12px; color:var(--ink2); }
+  .kv .v { font-family:ui-monospace,Menlo,monospace; font-size:12px; }
+  .kv .v .hv { color:var(--mu); margin-left:8px; font-family:system-ui; font-size:11px; }
+  .pin { color:var(--ac); }
+
+  /* screen 2 grid */
+  .two { display:grid; grid-template-columns:1fr 1fr; gap:0; }
+  .two > div { padding:10px 18px 14px; min-width:0; }
+  .two > div + div { border-left:1px solid var(--ln); }
+  .lbar { display:flex; align-items:center; gap:8px; margin-bottom:6px; color:var(--ink2); font-size:12px; }
+  .tok { display:inline-flex; border-radius:6px; overflow:hidden; box-shadow:0 0 0 1px #cfe6e1; font-size:12px; }
+  .tok b { font-weight:500; background:var(--acs); color:var(--acx); padding:1px 6px; font-family:ui-monospace,Menlo,monospace; font-size:11px; }
+  .tok i { font-style:normal; color:var(--mu); padding:1px 4px; }
+  .tok u { text-decoration:none; padding:1px 6px; font-family:ui-monospace,Menlo,monospace; font-size:11px; }
+  .lr { display:grid; grid-template-columns: 92px 54px 74px 1fr; gap:8px; align-items:center; padding:5px 6px; border-bottom:1px solid var(--ln2); font-size:12px; }
+  .lr .t { font-family:ui-monospace,Menlo,monospace; font-size:11.5px; color:var(--ink2); }
+  .lv { font-size:10.5px; font-weight:700; letter-spacing:.04em; padding:0 5px; border-radius:4px; text-align:center; }
+  .lv.er { background:var(--crits); color:#a3262a; } .lv.wn { background:#fff3d6; color:#8a5a00; } .lv.in { background:var(--bg); color:var(--ink2); box-shadow:inset 0 0 0 1px var(--ln); }
+  .lr .msg { font-family:ui-monospace,Menlo,monospace; font-size:11.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .lr.hl { background:#fff7f7; }
+  .lr .sp { font-size:10.5px; color:var(--acx); }
+  .mgrid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .mc { border-radius:10px; box-shadow:0 0 0 1px var(--ln); padding:8px 10px 6px; }
+  .mc .t { font-weight:600; font-size:12.5px; display:flex; justify-content:space-between; }
+  .mc .t small { color:var(--mu); font-weight:400; font-family:ui-monospace,Menlo,monospace; font-size:10.5px; }
+  .mc svg { display:block; width:100%; height:74px; margin-top:4px; }
+  .mc .ax { display:flex; justify-content:space-between; color:#898781; font-size:10px; }
+  .notes { font-size:13px; margin-top:14px; columns:2; column-gap:28px; }
+  .notes p { margin:0 0 8px; break-inside:avoid; }
+</style>
+
+<h3>Screen 1: trace panel, span selected, Overview tab</h3>
+<div class="scroll">
+<div class="oh" style="height:930px">
+  <div class="side"><span class="g"></span><span>▦</span><span>≡</span><span>⌇</span><span class="on">⋮</span></div>
+  <div class="ctx">
+    <div class="h">Traces</div>
+    <div class="row"><span class="num">14:09:44.870</span><span class="sd" style="background:var(--s2)"></span>POST /charge <span class="e">●</span></div>
+    <div class="row sel"><span class="num">14:09:05.112</span><span class="sd" style="background:var(--s1)"></span>GET /checkout <span class="e">●</span></div>
+    <div class="row"><span class="num">14:09:04.870</span><span class="sd" style="background:var(--s1)"></span>GET /cart</div>
+    <div class="row"><span class="num">14:09:02.301</span><span class="sd" style="background:var(--s3)"></span>job.run reindex</div>
+    <div class="row"><span class="num">14:08:59.015</span><span class="sd" style="background:var(--s2)"></span>POST /refund <span class="e">●</span></div>
+    <div class="row"><span class="num">14:08:47.552</span><span class="sd" style="background:var(--s1)"></span>GET /</div>
+    <div class="row" style="color:var(--mu);border:0;font-size:11.5px">j / k  move between traces · esc closes the panel</div>
+  </div>
+
+  <div class="pn">
+    <div class="ph">
+      <div class="bc"><span class="sd" style="background:var(--s1)"></span><b>api</b><span class="sep">›</span><span class="mono" style="font-size:13.5px">GET /checkout</span><span class="sep">›</span><span class="tid">trace 9f3a41d2c07be0c1…</span>
+        <div class="acts"><span class="btn">⧉ Copy link</span><span class="btn">⤢ Full page</span><span class="btn">⤓ Export trace</span><span class="btn">✕</span></div></div>
+      <div class="meta"><span class="pct" title="Duration percentile among api · GET /checkout">p97</span><span class="num">◷ 1.84 s</span><span class="code c5">GET</span><span class="mono" style="color:var(--ink2)">https://shop.local/checkout</span><span class="code c5">502</span><span class="st">● Error</span><span style="color:var(--mu)">Oct 25 14:09:05.002 · 14 spans · 4 services · 9 logs</span></div>
+    </div>
+    <div class="tabs"><span class="lbl">Trace</span><span class="t on">Flame graph</span><span class="t">Waterfall</span><span class="t">Span list<span class="cnt">14</span></span><span class="t">Services</span><span class="t">Logs<span class="cnt">9</span></span><span class="t">Errors<span class="cnt e">2</span></span></div>
+    <div class="fgtool"><div class="search">⌕ Filter spans by attribute, e.g. db.system.name=postgresql</div><span class="tg"><span class="ck"></span>Errors only</span><span style="color:var(--mu)">Color by</span><span class="sel">Service ▾</span><span style="margin-left:auto;color:var(--acx)">Hide legend</span></div>
+    <div class="fgwrap">
+      <div class="fg">
+        <div class="axis"><span style="left:0">0</span><span style="left:20%">400 ms</span><span style="left:40%">800 ms</span><span style="left:60%">1.2 s</span><span style="left:80%">1.6 s</span></div>
+        <div class="lane"><div class="bar" style="left:0;width:100%;background:var(--s1)"><span>GET /checkout</span><span class="d">1.84 s</span></div></div>
+        <div class="lane"><div class="bar" style="left:1%;width:27%;background:var(--s1)"><span>cart.load</span><span class="d">520 ms</span></div><div class="bar err" style="left:29%;width:61%;background:var(--s2)"><span><span class="x">!</span>POST /charge</span><span class="d">1.10 s</span></div><div class="bar" style="left:91%;width:8%;background:var(--s4);color:#16181d"><span>UPDATE</span></div></div>
+        <div class="lane"><div class="bar" style="left:2%;width:24%;background:var(--s4);color:#16181d"><span>SELECT orders</span><span class="d">460 ms</span></div><div class="bar err focus" style="left:30%;width:21%;background:var(--s2)"><span><span class="x">!</span>stripe.charge</span><span class="d">382 ms</span></div><div class="bar" style="left:53%;width:35%;background:var(--s2)"><span>stripe.charge (retry)</span><span class="d">610 ms</span></div></div>
+        <div class="lane"><div class="bar err" style="left:31%;width:19%;background:var(--s3)"><span><span class="x">!</span>HTTP POST</span><span class="d">350 ms</span></div><div class="bar" style="left:54%;width:32%;background:var(--s3)"><span>HTTP POST</span><span class="d">570 ms</span></div></div>
+        <div class="lane"><div class="bar" style="left:32%;width:11%;background:var(--s3)"><span>tls</span></div><div class="bar" style="left:55%;width:9%;background:var(--s3)"><span>tls</span></div></div>
+        <div class="mini"><div class="w"><i style="left:0;width:100%;top:3px;background:var(--s1)"></i><i style="left:1%;width:27%;top:10px;background:var(--s1)"></i><i style="left:29%;width:61%;top:10px;background:var(--s2)"></i><i style="left:30%;width:21%;top:17px;background:var(--s2)"></i><i style="left:53%;width:35%;top:17px;background:var(--s2)"></i><i style="left:31%;width:19%;top:24px;background:var(--s3)"></i><div class="vw"></div></div><div class="z"><span>fit</span><span>−</span><span>+</span><span style="margin-left:auto;box-shadow:none;color:var(--mu)">scroll to zoom</span></div></div>
+      </div>
+      <div class="lg">
+        <div class="hd"><span>Service</span><span>% exec time ▾</span></div>
+        <div class="r"><span class="sd" style="background:var(--s2)"></span>payments<span class="p">48.2%</span><span class="m"><i style="width:48%"></i></span></div>
+        <div class="r"><span class="sd" style="background:var(--s3)"></span>worker<span class="p">26.0%</span><span class="m"><i style="width:26%"></i></span></div>
+        <div class="r"><span class="sd" style="background:var(--s1)"></span>api<span class="p">14.9%</span><span class="m"><i style="width:15%"></i></span></div>
+        <div class="r"><span class="sd" style="background:var(--s4)"></span>postgres<span class="p">10.9%</span><span class="m"><i style="width:11%"></i></span></div>
+      </div>
+    </div>
+    <div class="split"><i></i></div>
+    <div class="sh"><div class="who"><span class="sd" style="background:var(--s2)"></span><b>payments</b><span class="op">client</span><span class="mono">stripe.charge</span><span style="color:var(--mu)">⋮</span></div>
+      <div class="r"><span class="pct">p99+</span><span class="num">◷ 382 ms</span><div class="share"><div style="font-size:11px;color:var(--mu)">20.8% of trace</div><div class="b"><i style="width:21%"></i></div></div><span class="btn">⌃ Collapse</span></div></div>
+    <div class="tabs" style="border-bottom:1px solid var(--ln)"><span class="lbl">Span</span><span class="t on">Overview</span><span class="t">Events<span class="cnt e">1</span></span><span class="t">Logs<span class="cnt">4</span></span><span class="t">Metrics</span><span class="t">Links<span class="cnt">1</span></span><span class="t">Resource</span></div>
+    <div class="ov" style="position:relative">
+      <span class="reuse" style="right:18px;top:6px">shared: Attribute groups (also used in Log detail and Metric series detail)</span>
+      <div class="exc"><div class="t">exception · PaymentDeclined</div><pre>card declined (402)
+  at charge (payments/stripe.ts:88)
+  at withRetry (payments/retry.ts:21)</pre></div>
+      <div class="grp"><div class="gh">⌄ Pinned <span class="ns">pin any attribute with ☆</span></div>
+        <div class="kv"><span class="k"><span class="pin">★</span> retry.attempt</span><span class="v">1</span></div></div>
+      <div class="grp"><div class="gh">⌄ HTTP <span class="ns">http.* · url.* · server.*</span></div>
+        <div class="kv">
+          <span class="k">http.request.method</span><span class="v">POST <span class="hv">filter · exclude · copy</span></span>
+          <span class="k">http.response.status_code</span><span class="v"><span class="code c5">402</span></span>
+          <span class="k">url.full</span><span class="v">https://api.stripe.com/v1/charges</span>
+          <span class="k">server.address</span><span class="v">api.stripe.com</span>
+          <span class="k">server.port</span><span class="v">443</span>
+        </div></div>
+      <div class="grp"><div class="gh">› Span <span class="ns">span_id · parent · kind · status · scope</span></div></div>
+      <div class="grp"><div class="gh">› Other attributes <span class="ns">3</span></div></div>
+    </div>
+  </div>
+</div>
+</div>
+
+<h3 style="margin-top:24px">Screen 2: the same span, Logs and Metrics tabs side by side</h3>
+<div class="scroll">
+<div class="oh" style="display:block">
+  <div class="sh" style="padding-bottom:4px"><div class="who"><span class="sd" style="background:var(--s2)"></span><b>payments</b><span class="op">client</span><span class="mono">stripe.charge</span></div><div class="r"><span class="pct">p99+</span><span class="num">◷ 382 ms</span></div></div>
+  <div class="two" style="background:var(--sf)">
+    <div style="position:relative">
+      <span class="reuse" style="right:18px;top:4px">shared: Log list (same rows as the Log Explorer)</span>
+      <div class="tabs" style="padding:0 0 0 0;margin-bottom:8px"><span class="t on">Logs<span class="cnt">4</span></span></div>
+      <div class="lbar"><span class="tok"><b>trace_id</b><i>=</i><u>9f3a…c1</u></span><span class="tok"><b>span_id</b><i>=</i><u>b41c…01</u></span><span style="margin-left:auto">Scope: <b>span</b> · trace · service ±30s</span></div>
+      <div class="lr hl"><span class="t">14:09:05.402</span><span class="lv er">ERROR</span><span><span class="sd" style="background:var(--s2)"></span> payments</span><span class="msg">card declined: 402 {"decline_code":"insufficient_funds"}</span></div>
+      <div class="lr"><span class="t">14:09:05.410</span><span class="lv wn">WARN</span><span><span class="sd" style="background:var(--s2)"></span> payments</span><span class="msg">retrying charge in 200ms (attempt 1/3)</span></div>
+      <div class="lr"><span class="t">14:09:05.031</span><span class="lv in">INFO</span><span><span class="sd" style="background:var(--s2)"></span> payments</span><span class="msg">POST https://api.stripe.com/v1/charges</span></div>
+      <div class="lr"><span class="t">14:09:05.030</span><span class="lv in">DEBUG</span><span><span class="sd" style="background:var(--s2)"></span> payments</span><span class="msg">idempotency key 7c1e…</span></div>
+      <div style="margin-top:8px;color:var(--acx);font-size:12px">Open in Log Explorer with these filters →</div>
+    </div>
+    <div style="position:relative">
+      <span class="reuse" style="right:18px;top:4px">shared: Metric chart (same component as the Metrics Explorer and Dashboards)</span>
+      <div class="tabs" style="padding:0;margin-bottom:8px"><span class="t on">Metrics</span></div>
+      <div class="lbar"><span class="tok"><b>service.name</b><i>=</i><u>payments</u></span><span class="tok"><b>host.name</b><i>=</i><u>runner-7</u></span><span style="margin-left:auto">± 5 min around span</span></div>
+      <div class="mgrid">
+        <div class="mc"><div class="t">HTTP client duration <small>http.client.request.duration p95</small></div>
+          <svg viewBox="0 0 200 74" preserveAspectRatio="none"><line x1="0" y1="24" x2="200" y2="24" stroke="#e1e0d9"/><line x1="0" y1="48" x2="200" y2="48" stroke="#e1e0d9"/><rect x="96" y="0" width="10" height="74" fill="rgba(15,118,110,.10)"/><line x1="101" y1="0" x2="101" y2="74" stroke="var(--ac)" stroke-width="1.5" stroke-dasharray="3 3"/><polyline fill="none" stroke="var(--s2)" stroke-width="2" points="0,60 30,58 60,56 85,40 101,12 115,30 140,52 170,57 200,58"/><circle cx="101" cy="12" r="4" fill="var(--sf)" stroke="var(--ink)" stroke-width="2"/></svg>
+          <div class="ax"><span>14:04</span><span style="color:var(--acx)">▲ this span</span><span>14:14</span></div></div>
+        <div class="mc"><div class="t">Process CPU <small>process.cpu.utilization</small></div>
+          <svg viewBox="0 0 200 74" preserveAspectRatio="none"><line x1="0" y1="24" x2="200" y2="24" stroke="#e1e0d9"/><line x1="0" y1="48" x2="200" y2="48" stroke="#e1e0d9"/><rect x="96" y="0" width="10" height="74" fill="rgba(15,118,110,.10)"/><line x1="101" y1="0" x2="101" y2="74" stroke="var(--ac)" stroke-width="1.5" stroke-dasharray="3 3"/><polyline fill="none" stroke="var(--s1)" stroke-width="2" points="0,50 30,48 60,46 85,38 101,30 115,36 140,46 170,48 200,49"/></svg>
+          <div class="ax"><span>14:04</span><span style="color:var(--acx)">▲ this span</span><span>14:14</span></div></div>
+        <div class="mc"><div class="t">Memory <small>process.memory.usage</small></div>
+          <svg viewBox="0 0 200 74" preserveAspectRatio="none"><line x1="0" y1="24" x2="200" y2="24" stroke="#e1e0d9"/><line x1="0" y1="48" x2="200" y2="48" stroke="#e1e0d9"/><rect x="96" y="0" width="10" height="74" fill="rgba(15,118,110,.10)"/><line x1="101" y1="0" x2="101" y2="74" stroke="var(--ac)" stroke-width="1.5" stroke-dasharray="3 3"/><polyline fill="none" stroke="var(--s3)" stroke-width="2" points="0,40 40,39 80,38 101,37 140,36 200,35"/></svg>
+          <div class="ax"><span>14:04</span><span style="color:var(--acx)">▲ this span</span><span>14:14</span></div></div>
+        <div class="mc"><div class="t">Exemplars → traces <small>1 linked to this trace</small></div>
+          <svg viewBox="0 0 200 74" preserveAspectRatio="none"><line x1="0" y1="24" x2="200" y2="24" stroke="#e1e0d9"/><line x1="0" y1="48" x2="200" y2="48" stroke="#e1e0d9"/><circle cx="30" cy="56" r="4" fill="var(--s1)"/><circle cx="60" cy="50" r="4" fill="var(--s1)"/><circle cx="85" cy="40" r="4" fill="var(--s1)"/><circle cx="101" cy="12" r="5" fill="var(--sf)" stroke="var(--ink)" stroke-width="2.5"/><circle cx="130" cy="44" r="4" fill="var(--s1)"/><circle cx="170" cy="54" r="4" fill="var(--s1)"/></svg>
+          <div class="ax"><span>14:04</span><span style="color:var(--acx)">◎ this trace</span><span>14:14</span></div></div>
+      </div>
+      <div style="margin-top:8px;color:var(--acx);font-size:12px">Open in Metrics Explorer →</div>
+    </div>
+  </div>
+</div>
+</div>
+
+<div class="notes">
+  <p><b>Layout.</b> The panel slides over the list and keeps a narrow column of it visible. Click another row, or press j / k, to switch traces without closing. Esc closes the panel. "Full page" opens the trace at its own URL, and so does Copy link.</p>
+  <p><b>Header.</b> Service › resource › trace ID, then a meta line: duration percentile (among the same service and resource), duration, method and URL, status code, error state, time, and counts.</p>
+  <p><b>Trace tabs.</b> Flame graph, Waterfall, Span list and <i>Services</i> (a simple per-service table; no node map in v1). Then trace-wide <b>Logs</b> and <b>Errors</b>.</p>
+  <p><b>Flame graph.</b> Filter spans, errors only, color by service/host/scope, a minimap with fit/zoom, and an exec-time legend. Error spans get a red outline, a "!" badge and a hatch pattern, so they can't be confused with a service color. A drag handle sets the split between the graph and the span detail.</p>
+  <p><b>Span tabs, OTel only.</b> <i>Overview</i> (exceptions first, then pinned attributes and attributes grouped by semantic-convention namespace), <i>Events</i>, <i>Logs</i>, <i>Metrics</i>, <i>Links</i> (span links) and <i>Resource</i> (host.*, process.*, container.* and scope; covers infrastructure and process context). Network and Profiles are left out until OTel data can fill them.</p>
+  <p><b>Reuse rule.</b> Embedded tabs <i>are</i> the explorer components with filters already applied. The Logs tab is the Log Explorer's list with trace_id/span_id tokens and a scope switch (span · trace · service ±30s). The Metrics tab is the Metrics Explorer's chart with a "this span" marker band, and exemplars are highlighted when they point to this trace. "Open in … Explorer" carries the same filter tokens across.</p>
+</div>

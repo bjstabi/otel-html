@@ -1,0 +1,303 @@
+<h2>Log Explorer, and what opens when you click a log</h2>
+<p class="subtitle">Built from the same parts as the Trace Explorer: sidebar, query tokens, View switcher, facets, histogram, result table. Screen 2 is the log detail panel. Screen 3 is its Trace tab, which only appears when the log has a trace_id and reuses the trace panel's flame graph.</p>
+
+<style>
+  .oh { --bg:#f6f6f3; --sf:#ffffff; --ink:#16181d; --ink2:#454a53; --mu:#7a7f88; --ln:#e5e4df; --ln2:#efeeea;
+        --ac:#0f766e; --acs:#e3f1ee; --acx:#0b5c56; --crit:#d03b3b; --crits:#fbe9e9; --warn:#fab219;
+        --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#eda100;
+        --sv-fatal:#8f1d21; --sv-error:#d03b3b; --sv-warn:#fab219; --sv-info:#2a78d6; --sv-debug:#9ca3af; --sv-trace:#c9ccd1;
+        font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; color:var(--ink); background:var(--bg);
+        display:flex; min-width:1180px; border-radius:12px; overflow:hidden; box-shadow:0 0 0 1px var(--ln); position:relative; }
+  .scroll { overflow-x:auto; padding-bottom:6px; }
+  .oh * { box-sizing:border-box; }
+  .num, .oh .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-variant-numeric: tabular-nums; font-size:12px; }
+  .sd { width:8px; height:8px; border-radius:50%; flex:none; display:inline-block; }
+  .reuse { position:absolute; z-index:5; font: 600 10.5px/1 system-ui, sans-serif; color:#1d4ed8; background:#eef4ff; border:1px dashed #1d4ed8; border-radius:4px; padding:3px 6px; white-space:nowrap; }
+
+  .side { width:212px; flex:none; display:flex; flex-direction:column; padding:14px 10px; border-right:1px solid var(--ln); }
+  .brand { display:flex; align-items:center; gap:8px; padding:0 8px 14px; font-weight:700; }
+  .glyph { width:22px; height:22px; border-radius:7px; background:var(--ink); }
+  .runcard { margin:0 4px 14px; background:var(--sf); border-radius:10px; box-shadow:0 0 0 1px var(--ln); padding:9px 10px; }
+  .runcard .t { font-weight:650; } .runcard .m { color:var(--mu); font-size:11.5px; }
+  .nv { display:flex; align-items:center; gap:10px; padding:7px 10px; border-radius:8px; color:var(--ink2); }
+  .nv .ic { width:16px; text-align:center; color:var(--mu); }
+  .nv.on { color:var(--ink); font-weight:650; background:var(--sf); box-shadow:0 0 0 1px var(--ln); } .nv.on .ic { color:var(--ac); }
+  .nv .kb { margin-left:auto; font-size:10.5px; color:var(--mu); border:1px solid var(--ln); border-radius:4px; padding:0 4px; }
+  .sub { padding:4px 10px 4px 36px; color:var(--ink2); } .sub.on { color:var(--acx); font-weight:600; }
+
+  .main { flex:1; min-width:0; display:flex; flex-direction:column; }
+  .top { display:flex; align-items:center; gap:14px; padding:12px 20px 0; }
+  .top h1 { font-size:19px; margin:0; font-weight:700; letter-spacing:-.015em; }
+  .views { color:var(--ink2); padding:4px 10px; border-radius:8px; box-shadow:0 0 0 1px var(--ln); background:var(--sf); }
+  .time { margin-left:auto; display:flex; background:var(--sf); border-radius:8px; box-shadow:0 0 0 1px var(--ln); }
+  .time span { padding:4px 10px; border-right:1px solid var(--ln2); color:var(--ink2); } .time span:last-child { border-right:0; }
+  .q { margin:12px 20px 0; display:flex; align-items:center; gap:8px; background:var(--sf); border-radius:10px; box-shadow:0 0 0 1px #d6d5cf; padding:6px 8px; }
+  .tok { display:inline-flex; border-radius:6px; overflow:hidden; box-shadow:0 0 0 1px #cfe6e1; font-size:12px; }
+  .tok b { font-weight:500; background:var(--acs); color:var(--acx); padding:1px 6px; font-family:ui-monospace,Menlo,monospace; font-size:11.5px; }
+  .tok i { font-style:normal; background:#fff; color:var(--mu); padding:1px 5px; }
+  .tok u { text-decoration:none; background:#fff; padding:1px 6px; font-family:ui-monospace,Menlo,monospace; font-size:11.5px; }
+  .tok s { text-decoration:none; background:#fff; color:var(--mu); padding:1px 6px 1px 2px; }
+  .q .ph { color:#a3a7ae; }
+  .q .act { margin-left:auto; display:flex; gap:6px; color:var(--mu); } .q .act span { padding:2px 8px; border-radius:6px; box-shadow:0 0 0 1px var(--ln); }
+  .tool { display:flex; align-items:center; gap:14px; margin:10px 20px 0; color:var(--ink2); }
+  .tool .lbl { color:var(--mu); }
+  .vz { display:inline-flex; gap:2px; } .vz span { padding:3px 9px; border-radius:7px; color:var(--ink2); } .vz .on { background:var(--ink); color:#fff; }
+  .hist { margin:12px 20px 0; background:var(--sf); border-radius:10px; box-shadow:0 0 0 1px var(--ln); padding:8px 12px 6px; }
+  .hist .h { display:flex; gap:12px; align-items:center; font-size:12px; color:var(--ink2); }
+  .hist .h b { color:var(--ink); }
+  .hist .lg { margin-left:auto; display:flex; gap:10px; }
+  .hist .lg span { display:inline-flex; align-items:center; gap:5px; }
+  .hb { display:flex; align-items:flex-end; gap:2px; height:64px; margin-top:6px; border-bottom:1px solid #c3c2b7; }
+  .hb .c { flex:1; display:flex; flex-direction:column-reverse; gap:2px; }
+  .hb .c i { display:block; }
+  .hb .c i:last-child { border-radius:3px 3px 0 0; }
+  .ax { display:flex; justify-content:space-between; color:#898781; font-size:10.5px; margin-top:2px; }
+  .body { flex:1; display:flex; min-height:0; margin-top:12px; border-top:1px solid var(--ln); }
+  .fac { width:236px; flex:none; padding:10px 14px; border-right:1px solid var(--ln); overflow:hidden; }
+  .ftabs { display:flex; gap:14px; margin-bottom:8px; } .ftabs span { color:var(--mu); } .ftabs .on { color:var(--ink); font-weight:650; box-shadow:inset 0 -2px 0 var(--ac); }
+  .fs { background:var(--sf); border-radius:8px; box-shadow:0 0 0 1px var(--ln); padding:4px 8px; color:#a3a7ae; }
+  .fmeta { display:flex; justify-content:space-between; color:var(--mu); font-size:11.5px; margin:6px 0 2px; } .add { color:var(--acx); }
+  .fgrp { font-size:10.5px; letter-spacing:.08em; color:var(--mu); font-weight:650; margin:10px 0 2px; text-transform:uppercase; }
+  .ff { border-bottom:1px solid var(--ln2); padding:6px 0; }
+  .ff .fh { display:flex; align-items:center; gap:6px; font-weight:600; } .ff .fh .cv { color:var(--mu); width:10px; } .ff .fh .ct { margin-left:auto; color:var(--mu); font-weight:400; font-size:11.5px; }
+  .fvr { position:relative; display:flex; align-items:center; gap:7px; padding:3px 4px; margin-top:2px; border-radius:5px; overflow:hidden; }
+  .fvr .pb { position:absolute; left:0; top:0; bottom:0; background:#eceae4; border-radius:5px; }
+  .fvr > *:not(.pb) { position:relative; }
+  .fvr .n { margin-left:auto; color:var(--ink2); font-size:11.5px; }
+  .ck { width:13px; height:13px; border-radius:4px; box-shadow:inset 0 0 0 1.5px #b3b6bc; flex:none; }
+  .ck.on { background:var(--ac); box-shadow:none; position:relative; }
+  .ck.on::after { content:""; position:absolute; left:4px; top:1.5px; width:3px; height:7px; border:solid #fff; border-width:0 2px 2px 0; transform:rotate(45deg); }
+  .res { flex:1; min-width:0; display:flex; flex-direction:column; background:var(--sf); position:relative; }
+  .rbar { display:flex; align-items:center; gap:12px; padding:8px 14px; border-bottom:1px solid var(--ln); }
+  .rbar .r { margin-left:auto; display:flex; gap:12px; color:var(--ink2); }
+  table.rt { width:100%; border-collapse:collapse; table-layout:fixed; }
+  table.rt th { text-align:left; font-size:11.5px; font-weight:600; color:var(--mu); padding:7px 10px; border-bottom:1px solid var(--ln); white-space:nowrap; }
+  table.rt td { padding:6px 10px; border-bottom:1px solid var(--ln2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  table.rt tr.sel td { background:var(--acs); }
+  .lv { display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:700; letter-spacing:.03em; }
+  .lv i { width:7px; height:7px; border-radius:50%; }
+  .lv.er { color:#a3262a; } .lv.er i { background:var(--sv-error); }
+  .lv.wn { color:#8a5a00; } .lv.wn i { background:var(--sv-warn); }
+  .lv.in { color:var(--ink2); } .lv.in i { background:var(--sv-info); }
+  .lv.db { color:var(--mu); } .lv.db i { background:var(--sv-debug); }
+  .msg { font-family:ui-monospace,Menlo,monospace; font-size:12px; }
+  .msg .k { color:var(--acx); } .msg .s { color:#8a5a00; }
+  .tr { color:var(--acx); font-size:11px; }
+
+  /* detail panel */
+  .pn { flex:1; min-width:0; background:var(--sf); display:flex; flex-direction:column; box-shadow:-12px 0 28px rgba(22,24,29,.10); position:relative; }
+  .ctx { width:300px; flex:none; border-right:1px solid var(--ln); background:var(--sf); }
+  .ctx .h { padding:12px 14px 8px; font-weight:700; font-size:16px; }
+  .ctx .row { display:flex; gap:8px; align-items:center; padding:7px 14px; border-bottom:1px solid var(--ln2); font-size:12px; white-space:nowrap; overflow:hidden; }
+  .ctx .row.sel { background:var(--acs); box-shadow:inset 3px 0 0 var(--ac); }
+  .ph { padding:12px 18px 10px; border-bottom:1px solid var(--ln); }
+  .r1 { display:flex; align-items:center; gap:10px; }
+  .sev { font-size:11.5px; font-weight:700; padding:1px 8px; border-radius:6px; background:var(--crits); color:#a3262a; box-shadow:inset 0 0 0 1px #eba3a3; }
+  .acts { margin-left:auto; display:flex; gap:6px; }
+  .btn { font-size:12px; padding:3px 9px; border-radius:7px; box-shadow:0 0 0 1px var(--ln); color:var(--ink2); background:var(--sf); white-space:nowrap; }
+  .facts { display:grid; grid-template-columns: repeat(4, 1fr); gap:8px; margin-top:10px; }
+  .fact { border-radius:9px; background:var(--bg); padding:6px 10px; }
+  .fact .l { font-size:10.5px; letter-spacing:.06em; color:var(--mu); font-weight:650; text-transform:uppercase; }
+  .fact .v { display:flex; align-items:center; gap:6px; margin-top:1px; }
+  .fact .v a { color:var(--acx); text-decoration:none; font-family:ui-monospace,Menlo,monospace; font-size:12px; }
+  .body2 { padding:10px 18px; border-bottom:1px solid var(--ln); }
+  .body2 .l { display:flex; align-items:center; gap:8px; font-size:10.5px; letter-spacing:.06em; color:var(--mu); font-weight:650; text-transform:uppercase; }
+  .body2 .l .t { margin-left:auto; text-transform:none; letter-spacing:0; font-weight:400; display:flex; gap:4px; }
+  .seg { display:inline-flex; background:#ebebe6; border-radius:7px; padding:2px; } .seg span { padding:1px 9px; border-radius:5px; color:var(--ink2); font-size:11.5px; } .seg .on { background:var(--sf); color:var(--ink); font-weight:600; }
+  .msgbox { margin-top:6px; background:#fbfbf9; border-radius:8px; box-shadow:inset 0 0 0 1px var(--ln); padding:8px 12px; font: 12px/1.6 ui-monospace,Menlo,monospace; white-space:pre-wrap; }
+  .tabs { display:flex; align-items:center; gap:4px; padding:8px 18px 0; border-bottom:1px solid var(--ln); }
+  .tabs span.t { padding:4px 10px 9px; color:var(--ink2); position:relative; }
+  .tabs span.t.on { color:var(--ink); font-weight:650; }
+  .tabs span.t.on::after { content:""; position:absolute; left:8px; right:8px; bottom:-1px; height:2px; border-radius:2px; background:var(--ac); }
+  .tabs span.t.off { color:#b3b6bc; }
+  .cnt { font-size:11px; background:var(--bg); box-shadow:inset 0 0 0 1px var(--ln); border-radius:9px; padding:0 6px; margin-left:4px; color:var(--ink2); }
+  .ov { padding:10px 18px 14px; position:relative; }
+  .grp { border-top:1px solid var(--ln2); padding:8px 0; }
+  .grp:first-child { border-top:0; }
+  .grp .gh { display:flex; align-items:center; gap:8px; font-weight:650; }
+  .grp .gh .ns { font-family:ui-monospace,Menlo,monospace; font-size:11px; color:var(--mu); font-weight:400; }
+  .kv { display:grid; grid-template-columns: 240px 1fr; gap:3px 14px; margin:6px 0 0 18px; }
+  .kv .k { font-family:ui-monospace,Menlo,monospace; font-size:12px; color:var(--ink2); }
+  .kv .v { font-family:ui-monospace,Menlo,monospace; font-size:12px; }
+  .kv .v a { color:var(--acx); text-decoration:none; }
+  .kv .v .hv { color:var(--mu); margin-left:8px; font-family:system-ui; font-size:11px; }
+  .tree { margin:6px 0 0 18px; font: 12px/1.7 ui-monospace,Menlo,monospace; }
+  .tree .k { color:var(--ink2); } .tree .s { color:#8a5a00; } .tree .n { color:#1c5cab; }
+  .tree .in { padding-left:18px; border-left:1px solid var(--ln2); margin-left:4px; }
+
+  /* trace tab */
+  .axis { position:relative; height:18px; border-bottom:1px solid #c3c2b7; color:#898781; font-size:10.5px; }
+  .axis span { position:absolute; top:0; }
+  .lane { position:relative; height:24px; margin-top:3px; }
+  .bar { position:absolute; top:0; height:22px; border-radius:6px; padding:3px 8px; font-size:12px; color:#fff; display:flex; justify-content:space-between; gap:10px; white-space:nowrap; overflow:hidden; }
+  .bar .d { font-family:ui-monospace,Menlo,monospace; font-size:10.5px; opacity:.92; }
+  .bar.err { background-image:repeating-linear-gradient(135deg, rgba(255,255,255,0) 0 6px, rgba(255,255,255,.18) 6px 9px); box-shadow:inset 0 0 0 2px var(--crit); }
+  .bar.focus { box-shadow:0 0 0 2px var(--sf), 0 0 0 4px var(--ink); }
+  .logmark { position:absolute; top:-4px; bottom:-4px; width:0; border-left:2px dashed var(--ink); }
+  .logmark::before { content:"this log"; position:absolute; top:-16px; left:-24px; font-size:10.5px; font-weight:650; background:var(--ink); color:#fff; border-radius:4px; padding:0 5px; white-space:nowrap; }
+  .notes { font-size:13px; margin-top:14px; columns:2; column-gap:28px; }
+  .notes p { margin:0 0 8px; break-inside:avoid; }
+</style>
+
+<h3>Screen 1: Log Explorer</h3>
+<div class="scroll">
+<div class="oh" style="height:820px">
+  <div class="side">
+    <div class="brand"><span class="glyph"></span>otel-html</div>
+    <div class="runcard"><div class="t">ci-run #4821</div><div class="m">Oct 25 · 14:02:10 → 14:16:42</div></div>
+    <div class="nv"><span class="ic">▦</span>Dashboards<span class="kb">g d</span></div>
+    <div class="nv on"><span class="ic">≡</span>Logs<span class="kb">g l</span></div>
+    <div class="sub on">Explorer</div>
+    <div class="sub">Patterns</div>
+    <div class="nv"><span class="ic">⌇</span>Metrics<span class="kb">g m</span></div>
+    <div class="nv"><span class="ic">⋮</span>Traces<span class="kb">g t</span></div>
+  </div>
+  <div class="main">
+    <div class="top"><h1>Logs</h1><div class="views">☆ Views ▾</div><div class="time"><span>◀</span><span style="color:var(--ink);font-weight:550">Entire run · 14m 32s ▾</span><span>▶</span><span>⤢</span></div></div>
+    <div class="q"><span style="color:var(--mu)">⌕</span><span class="tok"><b>service.name</b><i>=</i><u>payments</u><s>✕</s></span><span class="tok"><b>severity</b><i>≥</i><u>WARN</u><s>✕</s></span><span class="ph">Search log bodies and attributes…</span><div class="act"><span>+ Query</span><span>⧉ Copy link</span></div></div>
+    <div class="tool">
+      <span class="lbl">Group into</span><span class="vz"><span class="on">Logs</span><span>Patterns</span><span>Traces</span></span>
+      <span class="lbl" style="margin-left:6px">View</span><span class="vz"><span class="on">☰ List</span><span>⌁ Timeseries</span><span>≡ Top list</span><span>▥ Bar</span><span>▦ Table</span><span>▩ Treemap</span><span>◔ Pie</span><span>∴ Scatter</span></span>
+    </div>
+    <div class="hist">
+      <div class="h"><b class="num">1,204 logs</b><span>by severity</span>
+        <div class="lg"><span><i class="sd" style="background:var(--sv-error)"></i>ERROR 122</span><span><i class="sd" style="background:var(--sv-warn)"></i>WARN 310</span><span><i class="sd" style="background:var(--sv-info)"></i>INFO 702</span><span><i class="sd" style="background:var(--sv-debug)"></i>DEBUG 70</span></div></div>
+      <div class="hb">
+        <div class="c"><i style="height:4px;background:var(--sv-debug)"></i><i style="height:10px;background:var(--sv-info)"></i><i style="height:3px;background:var(--sv-warn)"></i></div>
+        <div class="c"><i style="height:4px;background:var(--sv-debug)"></i><i style="height:14px;background:var(--sv-info)"></i><i style="height:4px;background:var(--sv-warn)"></i></div>
+        <div class="c"><i style="height:5px;background:var(--sv-debug)"></i><i style="height:18px;background:var(--sv-info)"></i><i style="height:6px;background:var(--sv-warn)"></i><i style="height:3px;background:var(--sv-error)"></i></div>
+        <div class="c"><i style="height:4px;background:var(--sv-debug)"></i><i style="height:20px;background:var(--sv-info)"></i><i style="height:10px;background:var(--sv-warn)"></i><i style="height:8px;background:var(--sv-error)"></i></div>
+        <div class="c"><i style="height:4px;background:var(--sv-debug)"></i><i style="height:22px;background:var(--sv-info)"></i><i style="height:14px;background:var(--sv-warn)"></i><i style="height:18px;background:var(--sv-error)"></i></div>
+        <div class="c"><i style="height:4px;background:var(--sv-debug)"></i><i style="height:20px;background:var(--sv-info)"></i><i style="height:12px;background:var(--sv-warn)"></i><i style="height:14px;background:var(--sv-error)"></i></div>
+        <div class="c"><i style="height:3px;background:var(--sv-debug)"></i><i style="height:16px;background:var(--sv-info)"></i><i style="height:6px;background:var(--sv-warn)"></i><i style="height:4px;background:var(--sv-error)"></i></div>
+        <div class="c"><i style="height:3px;background:var(--sv-debug)"></i><i style="height:12px;background:var(--sv-info)"></i><i style="height:4px;background:var(--sv-warn)"></i></div>
+        <div class="c"><i style="height:3px;background:var(--sv-debug)"></i><i style="height:10px;background:var(--sv-info)"></i><i style="height:3px;background:var(--sv-warn)"></i></div>
+        <div class="c"><i style="height:2px;background:var(--sv-debug)"></i><i style="height:8px;background:var(--sv-info)"></i><i style="height:2px;background:var(--sv-warn)"></i><i style="height:2px;background:var(--sv-error)"></i></div>
+        <div class="c"><i style="height:2px;background:var(--sv-debug)"></i><i style="height:8px;background:var(--sv-info)"></i></div>
+        <div class="c"><i style="height:2px;background:var(--sv-debug)"></i><i style="height:6px;background:var(--sv-info)"></i></div>
+      </div>
+      <div class="ax"><span>14:02</span><span>14:06</span><span>14:10</span><span>14:14</span></div>
+    </div>
+    <div class="body">
+      <div class="fac">
+        <div class="ftabs"><span class="on">Facets</span><span>Saved views</span></div>
+        <div class="fs">⌕ Search facets</div>
+        <div class="fmeta"><span>17 of 17 shown</span><span class="add">+ Add</span></div>
+        <div class="fgrp">Core</div>
+        <div class="ff"><div class="fh"><span class="cv">⌄</span>Severity</div>
+          <div class="fvr"><span class="pb" style="width:10%"></span><span class="ck on"></span><span class="sd" style="background:var(--sv-error)"></span>ERROR<span class="n num">122</span></div>
+          <div class="fvr"><span class="pb" style="width:26%"></span><span class="ck on"></span><span class="sd" style="background:var(--sv-warn)"></span>WARN<span class="n num">310</span></div>
+          <div class="fvr"><span class="pb" style="width:58%"></span><span class="ck"></span><span class="sd" style="background:var(--sv-info)"></span>INFO<span class="n num">702</span></div>
+          <div class="fvr"><span class="pb" style="width:6%"></span><span class="ck"></span><span class="sd" style="background:var(--sv-debug)"></span>DEBUG<span class="n num">70</span></div></div>
+        <div class="ff"><div class="fh"><span class="cv">⌄</span>Service<span class="ct">4</span></div>
+          <div class="fvr"><span class="pb" style="width:40%"></span><span class="ck on"></span><span class="sd" style="background:var(--s2)"></span>payments<span class="n num">480</span></div>
+          <div class="fvr"><span class="pb" style="width:30%"></span><span class="ck"></span><span class="sd" style="background:var(--s1)"></span>api<span class="n num">362</span></div></div>
+        <div class="ff"><div class="fh"><span class="cv">›</span>host.name<span class="ct">2</span></div></div>
+        <div class="ff"><div class="fh"><span class="cv">›</span>Scope<span class="ct">5</span></div></div>
+        <div class="ff"><div class="fh"><span class="cv">›</span>event.name<span class="ct">3</span></div></div>
+        <div class="ff"><div class="fh"><span class="cv">›</span>Has trace<span class="ct">yes / no</span></div></div>
+        <div class="fgrp">Attributes</div>
+        <div class="ff"><div class="fh"><span class="cv">›</span>log.file.path</div></div>
+        <div class="ff"><div class="fh"><span class="cv">›</span>exception.type</div></div>
+        <div class="ff"><div class="fh"><span class="cv">›</span>http.response.status_code</div></div>
+      </div>
+      <div class="res">
+        <span class="reuse" style="right:14px;top:44px">shared: Log list (also embedded in trace and span Logs tabs)</span>
+        <div class="rbar"><span style="color:var(--ink2)">◧ Hide facets</span><b class="num">432 logs</b><span style="color:var(--mu)">newest first</span>
+          <div class="r"><span>Lines: 1 ▾</span><span>⤓ Export ▾</span><span>⚙ Columns</span></div></div>
+        <table class="rt">
+          <colgroup><col style="width:118px"><col style="width:74px"><col style="width:104px"><col style="width:96px"><col><col style="width:64px"></colgroup>
+          <tr><th>Time ↓</th><th>Severity</th><th>Service</th><th>host.name</th><th>Body</th><th>Trace</th></tr>
+          <tr class="sel"><td class="num">14:09:05.402</td><td><span class="lv er"><i></i>ERROR</span></td><td><span class="sd" style="background:var(--s2)"></span> payments</td><td>runner-7</td><td class="msg">card declined: 402 <span class="k">decline_code</span>=<span class="s">"insufficient_funds"</span></td><td class="tr">⋮ trace</td></tr>
+          <tr><td class="num">14:09:05.410</td><td><span class="lv wn"><i></i>WARN</span></td><td><span class="sd" style="background:var(--s2)"></span> payments</td><td>runner-7</td><td class="msg">retrying charge in 200ms (attempt 1/3)</td><td class="tr">⋮ trace</td></tr>
+          <tr><td class="num">14:09:04.990</td><td><span class="lv wn"><i></i>WARN</span></td><td><span class="sd" style="background:var(--s2)"></span> payments</td><td>runner-7</td><td class="msg">ledger latency above 150ms threshold</td><td class="tr">⋮ trace</td></tr>
+          <tr><td class="num">14:08:59.110</td><td><span class="lv er"><i></i>ERROR</span></td><td><span class="sd" style="background:var(--s2)"></span> payments</td><td>runner-7</td><td class="msg">ledger timeout after 200ms <span class="k">exception.type</span>=<span class="s">TimeoutError</span></td><td class="tr">⋮ trace</td></tr>
+          <tr><td class="num">14:08:41.003</td><td><span class="lv wn"><i></i>WARN</span></td><td><span class="sd" style="background:var(--s2)"></span> payments</td><td>runner-7</td><td class="msg">config: STRIPE_TIMEOUT unset, using default 2s</td><td style="color:#b3b6bc">—</td></tr>
+          <tr><td class="num">14:08:05.990</td><td><span class="lv er"><i></i>ERROR</span></td><td><span class="sd" style="background:var(--s2)"></span> payments</td><td>runner-7</td><td class="msg">card declined: 402 <span class="k">decline_code</span>=<span class="s">"do_not_honor"</span></td><td class="tr">⋮ trace</td></tr>
+          <tr><td class="num">14:07:30.512</td><td><span class="lv wn"><i></i>WARN</span></td><td><span class="sd" style="background:var(--s2)"></span> payments</td><td>runner-8</td><td class="msg">slow query on ledger_entries (412ms)</td><td class="tr">⋮ trace</td></tr>
+          <tr><td class="num">14:06:12.044</td><td><span class="lv wn"><i></i>WARN</span></td><td><span class="sd" style="background:var(--s2)"></span> payments</td><td>runner-8</td><td class="msg">{"event":"deprecation","api":"charges.v1","sunset":"2027-01-01"}</td><td style="color:#b3b6bc">—</td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<h3 style="margin-top:24px">Screen 2: click a log to open the detail panel (Attributes tab)</h3>
+<div class="scroll">
+<div class="oh" style="height:760px">
+  <div class="ctx">
+    <div class="h">Logs</div>
+    <div class="row sel"><span class="num">14:09:05.402</span><span class="lv er"><i></i>ERROR</span>card declined: 402</div>
+    <div class="row"><span class="num">14:09:05.410</span><span class="lv wn"><i></i>WARN</span>retrying charge in…</div>
+    <div class="row"><span class="num">14:09:04.990</span><span class="lv wn"><i></i>WARN</span>ledger latency abo…</div>
+    <div class="row"><span class="num">14:08:59.110</span><span class="lv er"><i></i>ERROR</span>ledger timeout aft…</div>
+    <div class="row" style="color:var(--mu);border:0;font-size:11.5px">j / k  move between logs · esc closes the panel</div>
+  </div>
+  <div class="pn">
+    <div class="ph">
+      <div class="r1"><span class="sev">ERROR · 17</span><b class="num" style="font-size:13px">Oct 25 14:09:05.402</b><span style="color:var(--mu)">observed 14:09:05.406</span>
+        <div class="acts"><span class="btn">⇅ Surrounding logs</span><span class="btn">⧉ Copy link</span><span class="btn">⤓ Export</span><span class="btn">✕</span></div></div>
+      <div class="facts">
+        <div class="fact"><div class="l">Service</div><div class="v"><span class="sd" style="background:var(--s2)"></span>payments <span style="color:var(--mu);font-size:11.5px">1.8.2</span></div></div>
+        <div class="fact"><div class="l">Host</div><div class="v">runner-7</div></div>
+        <div class="fact"><div class="l">Scope</div><div class="v mono">payments.stripe</div></div>
+        <div class="fact"><div class="l">Trace</div><div class="v"><a>9f3a41d2…c1</a><span style="color:var(--mu)">›</span><a>span b41c…01</a></div></div>
+      </div>
+    </div>
+    <div class="body2">
+      <div class="l">Body <span style="text-transform:none;letter-spacing:0;font-weight:400">string</span><span class="t"><span class="seg"><span class="on">Raw</span><span>Wrapped</span></span><span class="btn" style="padding:0 8px">⧉</span></span></div>
+      <div class="msgbox">card declined: 402 {"decline_code":"insufficient_funds","charge":"ch_3Pz…","attempt":1}</div>
+    </div>
+    <div class="tabs"><span class="t on">Attributes</span><span class="t">Trace<span class="cnt">14 spans</span></span><span class="t">Metrics</span><span class="t">Surrounding logs</span><span class="t">Resource</span></div>
+    <div class="ov">
+      <span class="reuse" style="right:18px;top:6px">shared: Attribute groups (same component as span Overview)</span>
+      <div class="grp"><div class="gh">⌄ Exception <span class="ns">exception.*</span></div>
+        <div class="kv"><span class="k">exception.type</span><span class="v">PaymentDeclined <span class="hv">filter · exclude · copy</span></span>
+        <span class="k">exception.message</span><span class="v">card declined (402)</span></div></div>
+      <div class="grp"><div class="gh">⌄ HTTP <span class="ns">http.* · url.* · server.*</span></div>
+        <div class="kv"><span class="k">http.response.status_code</span><span class="v">402</span>
+        <span class="k">server.address</span><span class="v">api.stripe.com</span></div></div>
+      <div class="grp"><div class="gh">⌄ Other attributes <span class="ns">nested values shown as a tree</span></div>
+        <div class="tree">
+          <div><span class="k">payment</span> {</div>
+          <div class="in"><div><span class="k">amount</span>: <span class="n">4200</span></div><div><span class="k">currency</span>: <span class="s">"usd"</span></div><div><span class="k">card</span> {</div><div class="in"><div><span class="k">brand</span>: <span class="s">"visa"</span></div><div><span class="k">last4</span>: <span class="s">"4242"</span></div></div><div>}</div></div>
+          <div>}</div>
+        </div></div>
+      <div class="grp"><div class="gh">› Record <span class="ns">severity_number · severity_text · flags · event.name · dropped_attributes_count</span></div></div>
+    </div>
+  </div>
+</div>
+</div>
+
+<h3 style="margin-top:24px">Screen 3: the same log's Trace tab (only when the log has a trace_id)</h3>
+<div class="scroll">
+<div class="oh" style="display:block;background:var(--sf)">
+  <div class="tabs"><span class="t">Attributes</span><span class="t on">Trace<span class="cnt">14 spans</span></span><span class="t">Metrics</span><span class="t">Surrounding logs</span><span class="t">Resource</span></div>
+  <div style="padding:12px 18px;position:relative">
+    <span class="reuse" style="right:18px;top:6px">shared: Flame graph (same component as the trace panel)</span>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px"><span class="sd" style="background:var(--s1)"></span><b>api</b><span style="color:#b3b6bc">›</span><span class="mono">GET /checkout</span><span style="color:var(--mu)">1.84 s · 14 spans</span><span class="sev">Error</span>
+      <span style="margin-left:auto" class="seg"><span class="on">Flame graph</span><span>Waterfall</span></span><span class="btn">Open trace →</span></div>
+    <div style="position:relative">
+      <div class="axis"><span style="left:0">0</span><span style="left:20%">400 ms</span><span style="left:40%">800 ms</span><span style="left:60%">1.2 s</span><span style="left:80%">1.6 s</span></div>
+      <div style="position:relative">
+        <div class="logmark" style="left:41.5%"></div>
+        <div class="lane"><div class="bar" style="left:0;width:100%;background:var(--s1)"><span>GET /checkout</span><span class="d">1.84 s</span></div></div>
+        <div class="lane"><div class="bar" style="left:1%;width:27%;background:var(--s1)"><span>cart.load</span><span class="d">520 ms</span></div><div class="bar err" style="left:29%;width:61%;background:var(--s2)"><span>POST /charge</span><span class="d">1.10 s</span></div></div>
+        <div class="lane"><div class="bar" style="left:2%;width:24%;background:var(--s4);color:#16181d"><span>SELECT orders</span></div><div class="bar err focus" style="left:30%;width:21%;background:var(--s2)"><span>stripe.charge ← emitted this log</span><span class="d">382 ms</span></div><div class="bar" style="left:53%;width:35%;background:var(--s2)"><span>stripe.charge (retry)</span></div></div>
+        <div class="lane"><div class="bar err" style="left:31%;width:19%;background:var(--s3)"><span>HTTP POST</span></div><div class="bar" style="left:54%;width:32%;background:var(--s3)"><span>HTTP POST</span></div></div>
+      </div>
+    </div>
+    <div style="margin-top:10px;color:var(--ink2);font-size:12px">The span that emitted the log is outlined, and a dashed line marks the log's timestamp. Clicking a span opens the trace panel on that span. With no trace_id, the tab is hidden and the Trace card in the header reads "no trace".</div>
+  </div>
+</div>
+</div>
+
+<div class="notes">
+  <p><b>Same frame as Traces.</b> Same sidebar, query tokens, View switcher, facet column (with value bars and only/exclude), histogram card and results table, so learning one explorer teaches the other.</p>
+  <p><b>OTel-native columns and facets.</b> Severity comes from SeverityNumber, shown with its SeverityText (ERROR · 17). Service, host.name and Scope come from the resource and instrumentation scope. <b>event.name</b> and a <b>Has trace</b> facet are added. Vendor concepts like log indexes and sources don't exist in OTel and are left out.</p>
+  <p><b>Group into: Logs · Patterns · Traces.</b> Patterns groups similar bodies; the writer precomputes the clusters. Traces groups logs by trace_id. Patterns also gets its own entry in the sidebar.</p>
+  <p><b>Body.</b> Rendered according to the OTel AnyValue type. A string shows raw or wrapped, with key=value and JSON highlighting. A map or array shows as a tree. "Lines" sets how many body lines each table row shows.</p>
+  <p><b>Detail panel.</b> A header with severity, timestamp and observed timestamp, plus fact cards for service, host, scope and trace (trace and span IDs are links). Tabs: <i>Attributes</i> (shared attribute-groups component), <i>Trace</i> (when trace_id is present), <i>Metrics</i> (the shared chart, marked at this log's time), <i>Surrounding logs</i> (the shared log list: same service and host, ±N records), and <i>Resource</i>.</p>
+  <p><b>No Live Tail.</b> The report is static. If the receiver is still writing the report, a "following" badge could appear and new data would load in. That's a decision for later.</p>
+</div>

@@ -1,0 +1,257 @@
+<h2>Trace Explorer: the trace list, in our own visual design</h2>
+<p class="subtitle">The full trace-search feature set, in our own design language. This is the default view, with no trace panel open. The numbered markers ① ② … match the notes below the mockup.</p>
+
+<style>
+  .oh { --bg:#f6f6f3; --sf:#ffffff; --ink:#16181d; --ink2:#454a53; --mu:#7a7f88; --ln:#e5e4df; --ln2:#efeeea;
+        --ac:#0f766e; --acs:#e3f1ee; --acx:#0b5c56; --crit:#d03b3b; --crits:#fbe9e9; --warn:#fab219;
+        --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#eda100; --s5:#e87ba4;
+        font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; color:var(--ink); background:var(--bg);
+        display:flex; min-width:1180px; height:860px; border-radius:12px; overflow:hidden; box-shadow:0 0 0 1px var(--ln); position:relative; }
+  .scroll { overflow-x:auto; padding-bottom:6px; }
+  .oh * { box-sizing:border-box; }
+  .num, .oh .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-variant-numeric: tabular-nums; font-size:12px; }
+  .mk { display:inline-flex; align-items:center; justify-content:center; width:16px; height:16px; border-radius:50%; background:#ffd84d; color:#16181d; font-size:10px; font-weight:800; margin-left:4px; vertical-align:middle; box-shadow:0 0 0 2px #fff; }
+
+  /* sidebar */
+  .side { width:212px; flex:none; display:flex; flex-direction:column; padding:14px 10px; border-right:1px solid var(--ln); background:var(--bg); }
+  .brand { display:flex; align-items:center; gap:8px; padding:0 8px 14px; font-weight:700; letter-spacing:-.01em; }
+  .glyph { width:22px; height:22px; border-radius:7px; background:var(--ink); position:relative; }
+  .glyph::before { content:""; position:absolute; left:5px; top:5px; width:12px; height:3px; border-radius:2px; background:#5fd1c2; box-shadow:0 5px 0 #f6f6f3, 4px 10px 0 #eb6834; }
+  .runcard { margin:0 4px 14px; background:var(--sf); border-radius:10px; box-shadow:0 0 0 1px var(--ln); padding:9px 10px; }
+  .runcard .t { font-weight:650; }
+  .runcard .m { color:var(--mu); font-size:11.5px; }
+  .runcard .cts { display:flex; gap:10px; margin-top:6px; font-size:11.5px; color:var(--ink2); }
+  .nv { display:flex; align-items:center; gap:10px; padding:7px 10px; border-radius:8px; color:var(--ink2); }
+  .nv .ic { width:16px; text-align:center; color:var(--mu); }
+  .nv.on { color:var(--ink); font-weight:650; background:var(--sf); box-shadow:0 0 0 1px var(--ln); }
+  .nv.on .ic { color:var(--ac); }
+  .nv .kb { margin-left:auto; font-size:10.5px; color:var(--mu); border:1px solid var(--ln); border-radius:4px; padding:0 4px; }
+  .sub { padding:4px 10px 4px 36px; color:var(--ink2); border-radius:6px; }
+  .sub.on { color:var(--acx); font-weight:600; }
+  .sidefoot { margin-top:auto; padding:8px 10px; color:var(--mu); font-size:11.5px; display:flex; justify-content:space-between; }
+
+  /* main */
+  .main { flex:1; min-width:0; display:flex; flex-direction:column; }
+  .top { display:flex; align-items:center; gap:14px; padding:12px 20px 0; }
+  .top h1 { font-size:19px; margin:0; font-weight:700; letter-spacing:-.015em; }
+  .mtabs { display:flex; gap:2px; margin-left:8px; background:#ebebe6; border-radius:8px; padding:2px; }
+  .mtabs span { padding:3px 12px; border-radius:6px; color:var(--ink2); }
+  .mtabs .on { background:var(--sf); color:var(--ink); font-weight:600; box-shadow:0 1px 2px rgba(0,0,0,.06); }
+  .views { color:var(--ink2); display:flex; align-items:center; gap:6px; padding:4px 10px; border-radius:8px; box-shadow:0 0 0 1px var(--ln); background:var(--sf); }
+  .time { margin-left:auto; display:flex; align-items:center; gap:0; background:var(--sf); border-radius:8px; box-shadow:0 0 0 1px var(--ln); }
+  .time span { padding:4px 10px; border-right:1px solid var(--ln2); color:var(--ink2); }
+  .time span:last-child { border-right:0; }
+  .time .rng { color:var(--ink); font-weight:550; }
+  .q { margin:12px 20px 0; display:flex; align-items:center; gap:8px; background:var(--sf); border-radius:10px; box-shadow:0 0 0 1px #d6d5cf; padding:6px 8px; }
+  .q .lead { color:var(--mu); padding:0 4px; }
+  .tok { display:inline-flex; border-radius:6px; overflow:hidden; box-shadow:0 0 0 1px #cfe6e1; font-size:12px; }
+  .tok b { font-weight:500; background:var(--acs); color:var(--acx); padding:1px 6px; font-family:ui-monospace,Menlo,monospace; font-size:11.5px; }
+  .tok i { font-style:normal; background:#fff; color:var(--mu); padding:1px 5px; }
+  .tok u { text-decoration:none; background:#fff; padding:1px 6px; font-family:ui-monospace,Menlo,monospace; font-size:11.5px; }
+  .tok s { text-decoration:none; background:#fff; color:var(--mu); padding:1px 6px 1px 2px; }
+  .q .ph { color:#a3a7ae; }
+  .q .act { margin-left:auto; display:flex; gap:6px; color:var(--mu); }
+  .q .act span { padding:2px 8px; border-radius:6px; box-shadow:0 0 0 1px var(--ln); }
+  .tool { display:flex; align-items:center; gap:14px; margin:10px 20px 0; color:var(--ink2); }
+  .tool .lbl { color:var(--mu); }
+  .gb { display:inline-flex; align-items:center; gap:6px; background:var(--sf); box-shadow:0 0 0 1px var(--ln); border-radius:7px; padding:2px 9px; }
+  .vz { display:inline-flex; gap:2px; }
+  .vz span { padding:3px 9px; border-radius:7px; color:var(--ink2); }
+  .vz .on { background:var(--ink); color:#fff; }
+  .add { color:var(--acx); }
+
+  /* RED strip */
+  .red { margin:12px 20px 0; display:grid; grid-template-columns: 1fr 1fr 1.25fr; gap:10px; }
+  .card { background:var(--sf); border-radius:10px; box-shadow:0 0 0 1px var(--ln); padding:9px 12px 8px; }
+  .card .h { display:flex; align-items:baseline; gap:8px; }
+  .card .h b { font-weight:650; }
+  .card .h .v { color:var(--mu); font-size:12px; }
+  .card .h .x { margin-left:auto; color:var(--acx); font-size:12px; }
+  .bars { display:flex; align-items:flex-end; gap:2px; height:54px; margin-top:6px; border-bottom:1px solid #c3c2b7; }
+  .bars i { flex:1; border-radius:3px 3px 0 0; }
+  .ax { display:flex; justify-content:space-between; color:#898781; font-size:10.5px; margin-top:2px; }
+  .lgd { display:flex; gap:12px; font-size:11.5px; color:var(--ink2); margin-top:3px; }
+  .lgd span { display:inline-flex; align-items:center; gap:5px; }
+  .sw { width:10px; height:3px; border-radius:2px; display:inline-block; }
+
+  /* body */
+  .body { flex:1; display:flex; min-height:0; margin-top:12px; border-top:1px solid var(--ln); }
+  .fac { width:236px; flex:none; padding:10px 14px; border-right:1px solid var(--ln); overflow:hidden; background:var(--bg); }
+  .ftabs { display:flex; gap:14px; margin-bottom:8px; }
+  .ftabs span { color:var(--mu); padding-bottom:3px; }
+  .ftabs .on { color:var(--ink); font-weight:650; box-shadow:inset 0 -2px 0 var(--ac); }
+  .fs { background:var(--sf); border-radius:8px; box-shadow:0 0 0 1px var(--ln); padding:4px 8px; color:#a3a7ae; }
+  .fmeta { display:flex; justify-content:space-between; color:var(--mu); font-size:11.5px; margin:6px 0 2px; }
+  .fgrp { font-size:10.5px; letter-spacing:.08em; color:var(--mu); font-weight:650; margin:10px 0 2px; text-transform:uppercase; }
+  .ff { border-bottom:1px solid var(--ln2); padding:6px 0; }
+  .ff .fh { display:flex; align-items:center; gap:6px; font-weight:600; }
+  .ff .fh .cv { color:var(--mu); width:10px; }
+  .ff .fh .ct { margin-left:auto; color:var(--mu); font-weight:400; font-size:11.5px; }
+  .fvr { position:relative; display:flex; align-items:center; gap:7px; padding:3px 4px; margin-top:2px; border-radius:5px; overflow:hidden; }
+  .fvr .pb { position:absolute; left:0; top:0; bottom:0; background:#eceae4; z-index:0; border-radius:5px; }
+  .fvr > *:not(.pb) { position:relative; z-index:1; }
+  .fvr .n { margin-left:auto; color:var(--ink2); font-size:11.5px; }
+  .fvr .ho { display:none; }
+  .fvr.hov .ho { display:inline; color:var(--acx); font-size:11px; margin-left:auto; }
+  .fvr.hov .n { margin-left:6px; }
+  .ck { width:13px; height:13px; border-radius:4px; box-shadow:inset 0 0 0 1.5px #b3b6bc; flex:none; }
+  .ck.on { background:var(--ac); box-shadow:none; position:relative; }
+  .ck.on::after { content:""; position:absolute; left:4px; top:1.5px; width:3px; height:7px; border:solid #fff; border-width:0 2px 2px 0; transform:rotate(45deg); }
+  .sd { width:8px; height:8px; border-radius:50%; flex:none; }
+  .dh { margin-top:6px; position:relative; }
+  .dh .hb { display:flex; align-items:flex-end; gap:2px; height:28px; }
+  .dh .hb i { flex:1; background:#cde2fb; border-radius:2px 2px 0 0; }
+  .dh .hb i.in { background:#86b6ef; }
+  .dh .brush { position:absolute; top:-2px; height:32px; left:18%; width:58%; border-left:2px solid var(--ink); border-right:2px solid var(--ink); }
+  .dh .rv { display:flex; justify-content:space-between; font-size:11.5px; margin-top:3px; }
+  .dh .rv span { background:var(--sf); box-shadow:0 0 0 1px var(--ln); border-radius:5px; padding:0 6px; }
+  .fflt { margin-top:4px; background:var(--sf); border-radius:6px; box-shadow:0 0 0 1px var(--ln); padding:2px 7px; color:#a3a7ae; font-size:11.5px; }
+
+  .res { flex:1; min-width:0; display:flex; flex-direction:column; background:var(--sf); }
+  .rbar { display:flex; align-items:center; gap:12px; padding:8px 14px; border-bottom:1px solid var(--ln); }
+  .rbar b { font-weight:650; }
+  .rbar .r { margin-left:auto; display:flex; gap:12px; color:var(--ink2); }
+  .ghost { color:var(--ink2); }
+  table.rt { width:100%; border-collapse:collapse; }
+  table.rt th { text-align:left; font-size:11.5px; font-weight:600; color:var(--mu); padding:7px 10px; border-bottom:1px solid var(--ln); white-space:nowrap; position:sticky; top:0; background:var(--sf); }
+  table.rt th.so { color:var(--ink); }
+  table.rt td { padding:7px 10px; border-bottom:1px solid var(--ln2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:220px; }
+  table.rt tr:hover td { background:#fafaf8; }
+  table.rt tr.hv td { background:#f3f8f7; }
+  .st { display:inline-flex; align-items:center; gap:5px; font-size:12px; }
+  .st .g { width:7px; height:7px; border-radius:50%; background:#9ca3af; }
+  .st.e { color:var(--crit); font-weight:600; } .st.e .g { background:var(--crit); }
+  .code { font-size:11.5px; padding:0 6px; border-radius:5px; box-shadow:inset 0 0 0 1px var(--ln); font-family:ui-monospace,Menlo,monospace; }
+  .code.c4 { box-shadow:inset 0 0 0 1px #f4c26b; background:#fff8e8; }
+  .code.c5 { box-shadow:inset 0 0 0 1px #eba3a3; background:var(--crits); color:#a3262a; }
+  .code.c2 { box-shadow:inset 0 0 0 1px #b9e2cf; background:#eef8f2; }
+  .svc { display:inline-flex; align-items:center; gap:6px; }
+  .lb { display:flex; gap:2px; width:150px; height:10px; }
+  .lb i { display:block; height:10px; }
+  .lb i:first-child { border-radius:3px 0 0 3px; } .lb i:last-child { border-radius:0 3px 3px 0; } .lb i:only-child { border-radius:3px; }
+  .emsg { color:#a3262a; max-width:200px; }
+  .notes { font-size:13px; margin-top:14px; columns:2; column-gap:28px; }
+  .notes p { margin:0 0 8px; break-inside:avoid; }
+  .notes b { font-weight:650; }
+</style>
+
+<div class="scroll">
+<div class="oh">
+  <!-- sidebar -->
+  <div class="side">
+    <div class="brand"><span class="glyph"></span>otel-html</div>
+    <div class="runcard"><div class="t">ci-run #4821 <span class="mk">1</span></div><div class="m">Oct 25 · 14:02:10 → 14:16:42</div>
+      <div class="cts"><span>4,120 spans</span><span>18.9k logs</span><span>96k pts</span></div></div>
+    <div class="nv"><span class="ic">▦</span>Dashboards<span class="kb">g d</span></div>
+    <div class="nv"><span class="ic">≡</span>Logs<span class="kb">g l</span></div>
+    <div class="nv"><span class="ic">⌇</span>Metrics<span class="kb">g m</span></div>
+    <div class="nv on"><span class="ic">⋮</span>Traces<span class="kb">g t</span></div>
+    <div class="sub on">Explorer</div>
+    <div class="sub">Services</div>
+    <div class="sidefoot"><span>◐ Theme</span><span>? Shortcuts</span></div>
+  </div>
+
+  <!-- main -->
+  <div class="main">
+    <div class="top">
+      <h1>Traces</h1>
+      <div class="mtabs"><span class="on">Spans</span><span>Traces</span></div><span class="mk">2</span>
+      <div class="views">☆ Views ▾ <span class="mk" style="margin:0">3</span></div>
+      <div class="time"><span>◀</span><span class="rng">Entire run · 14m 32s ▾</span><span>▶</span><span>⤢</span></div><span class="mk">4</span>
+    </div>
+
+    <div class="q">
+      <span class="lead">⌕</span>
+      <span class="tok"><b>service.name</b><i>=</i><u>payments</u><s>✕</s></span>
+      <span class="tok"><b>deployment.environment.name</b><i>=</i><u>ci</u><s>✕</s></span>
+      <span class="tok"><b>name</b><i>~</i><u>POST /charge*</u><s>✕</s></span>
+      <span class="ph">Add a filter, or type to search all attributes…</span><span class="mk">5</span>
+      <div class="act"><span>+ Query</span><span>⧉ Copy link</span></div>
+    </div>
+
+    <div class="tool">
+      <span class="lbl">Group by</span><span class="gb">none ▾</span>
+      <span class="lbl">View</span>
+      <span class="vz"><span class="on">☰ List</span><span>⌁ Timeseries</span><span>≡ Top list</span><span>▥ Bar</span><span>▦ Table</span><span>∴ Point plot</span><span>▩ Treemap</span><span>◔ Pie</span></span><span class="mk">6</span>
+      <span style="margin-left:auto" class="add">▾ Hide summary</span>
+    </div>
+
+    <div class="red">
+      <div class="card"><div class="h"><b>Requests</b><span class="v num">1,868 · 2.1/s</span><span class="mk">7</span></div>
+        <div class="bars"><i style="height:20%;background:var(--s1)"></i><i style="height:35%;background:var(--s1)"></i><i style="height:42%;background:var(--s1)"></i><i style="height:30%;background:var(--s1)"></i><i style="height:62%;background:var(--s1)"></i><i style="height:80%;background:var(--s1)"></i><i style="height:100%;background:var(--s1)"></i><i style="height:74%;background:var(--s1)"></i><i style="height:50%;background:var(--s1)"></i><i style="height:40%;background:var(--s1)"></i><i style="height:28%;background:var(--s1)"></i><i style="height:22%;background:var(--s1)"></i><i style="height:18%;background:var(--s1)"></i><i style="height:12%;background:var(--s1)"></i></div>
+        <div class="ax"><span>14:02</span><span>14:06</span><span>14:10</span><span>14:14</span></div></div>
+      <div class="card"><div class="h"><b>Errors</b><span class="v num">122 · 6.5%</span><span class="x">Analyze →</span></div>
+        <div class="bars"><i style="height:0"></i><i style="height:6%;background:var(--crit)"></i><i style="height:0"></i><i style="height:14%;background:var(--crit)"></i><i style="height:30%;background:var(--crit)"></i><i style="height:92%;background:var(--crit)"></i><i style="height:100%;background:var(--crit)"></i><i style="height:40%;background:var(--crit)"></i><i style="height:12%;background:var(--crit)"></i><i style="height:0"></i><i style="height:8%;background:var(--crit)"></i><i style="height:0"></i><i style="height:4%;background:var(--crit)"></i><i style="height:0"></i></div>
+        <div class="ax"><span>14:02</span><span>14:06</span><span>14:10</span><span>14:14</span></div></div>
+      <div class="card"><div class="h"><b>Latency</b><span class="v num">p50 212ms · p99 1.42s</span><span class="x">Analyze →</span></div>
+        <svg viewBox="0 0 300 56" preserveAspectRatio="none" style="width:100%;height:56px;display:block;margin-top:6px;border-bottom:1px solid #c3c2b7">
+          <line x1="0" y1="18" x2="300" y2="18" stroke="#e1e0d9" stroke-width="1"/><line x1="0" y1="37" x2="300" y2="37" stroke="#e1e0d9" stroke-width="1"/>
+          <polyline fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round" points="0,48 40,47 80,46 120,44 150,40 180,42 220,46 260,47 300,47"/>
+          <polyline fill="none" stroke="var(--s2)" stroke-width="2" stroke-linejoin="round" points="0,40 40,38 80,36 120,30 150,22 180,28 220,36 260,38 300,39"/>
+          <polyline fill="none" stroke="var(--s3)" stroke-width="2" stroke-linejoin="round" points="0,28 40,24 80,20 120,12 150,4 180,10 220,22 260,26 300,27"/>
+        </svg>
+        <div class="lgd"><span><i class="sw" style="background:var(--s1)"></i>p50</span><span><i class="sw" style="background:var(--s2)"></i>p90</span><span><i class="sw" style="background:var(--s3)"></i>p99</span><span style="margin-left:auto;color:var(--mu)">+ p75 · p95 · max</span></div></div>
+    </div>
+
+    <div class="body">
+      <div class="fac">
+        <div class="ftabs"><span class="on">Facets</span><span>Saved views</span></div>
+        <div class="fs">⌕ Search facets</div>
+        <div class="fmeta"><span>30 of 40 shown <span class="mk">8</span></span><span class="add">+ Add</span></div>
+
+        <div class="fgrp">Core</div>
+        <div class="ff"><div class="fh"><span class="cv">⌄</span>Duration</div>
+          <div class="dh"><div class="hb"><i style="height:20%"></i><i class="in" style="height:50%"></i><i class="in" style="height:100%"></i><i class="in" style="height:76%"></i><i class="in" style="height:44%"></i><i class="in" style="height:30%"></i><i class="in" style="height:18%"></i><i style="height:9%"></i><i style="height:5%"></i><i style="height:3%"></i></div><div class="brush"></div>
+            <div class="rv"><span class="num">12 ms</span><span class="num">1.5 s</span></div></div></div>
+        <div class="ff"><div class="fh"><span class="cv">⌄</span>Status</div>
+          <div class="fvr"><span class="pb" style="width:94%"></span><span class="ck on"></span><span class="sd" style="background:#9ca3af"></span>Ok<span class="n num">1,746</span></div>
+          <div class="fvr hov"><span class="pb" style="width:7%"></span><span class="ck on"></span><span class="sd" style="background:var(--crit)"></span>Error<span class="ho">only · exclude</span><span class="n num">122</span></div></div>
+        <div class="ff"><div class="fh"><span class="cv">⌄</span>Service<span class="ct">4</span></div>
+          <div class="fvr"><span class="pb" style="width:44%"></span><span class="ck"></span><span class="sd" style="background:var(--s1)"></span>api<span class="n num">812</span></div>
+          <div class="fvr"><span class="pb" style="width:22%"></span><span class="ck on"></span><span class="sd" style="background:var(--s2)"></span>payments<span class="n num">412</span></div>
+          <div class="fvr"><span class="pb" style="width:20%"></span><span class="ck"></span><span class="sd" style="background:var(--s3)"></span>worker<span class="n num">382</span></div>
+          <div class="fvr"><span class="pb" style="width:14%"></span><span class="ck"></span><span class="sd" style="background:var(--s4)"></span>postgres<span class="n num">262</span></div></div>
+        <div class="ff"><div class="fh"><span class="cv">›</span>Environment<span class="ct">1</span></div></div>
+        <div class="ff"><div class="fh"><span class="cv">⌄</span>Resource<span class="ct">23</span></div>
+          <div class="fflt">⌕ Filter values</div>
+          <div class="fvr"><span class="pb" style="width:61%"></span><span class="ck"></span><span class="mono">POST /charge</span><span class="n num">251</span></div>
+          <div class="fvr"><span class="pb" style="width:24%"></span><span class="ck"></span><span class="mono">POST /refund</span><span class="n num">98</span></div></div>
+        <div class="fgrp">Attributes</div>
+        <div class="ff"><div class="fh"><span class="cv">›</span>http.response.status_code</div></div>
+        <div class="ff"><div class="fh"><span class="cv">›</span>telemetry.sdk.language</div></div>
+      </div>
+
+      <div class="res">
+        <div class="rbar"><span class="ghost">◧ Hide facets</span><b class="num">1,868 spans</b><span style="color:var(--mu)">sorted by time, newest first</span>
+          <div class="r"><span>⤓ Export ▾</span><span>⚙ Columns <span class="mk" style="margin:0">9</span></span></div></div>
+        <table class="rt">
+          <tr><th class="so">Time ↓</th><th>Status</th><th>Service</th><th>Resource</th><th style="text-align:right">Duration</th><th>Method</th><th>Code</th><th style="text-align:right">Spans</th><th>Latency by service <span class="mk">10</span></th><th>error.message</th></tr>
+          <tr class="hv"><td class="num">14:09:05.112</td><td><span class="st e"><i class="g"></i>Error</span></td><td><span class="svc"><i class="sd" style="background:var(--s1)"></i>api</span></td><td class="mono">GET /checkout</td><td class="num" style="text-align:right">1.84 s</td><td>GET</td><td><span class="code c5">502</span></td><td class="num" style="text-align:right">14</td><td><div class="lb"><i style="width:15%;background:var(--s1)"></i><i style="width:48%;background:var(--s2)"></i><i style="width:26%;background:var(--s3)"></i><i style="width:11%;background:var(--s4)"></i></div></td><td class="emsg">card declined: 402</td></tr>
+          <tr><td class="num">14:09:04.870</td><td><span class="st"><i class="g"></i>Ok</span></td><td><span class="svc"><i class="sd" style="background:var(--s1)"></i>api</span></td><td class="mono">GET /cart</td><td class="num" style="text-align:right">140 ms</td><td>GET</td><td><span class="code c2">200</span></td><td class="num" style="text-align:right">3</td><td><div class="lb"><i style="width:60%;background:var(--s1)"></i><i style="width:40%;background:var(--s4)"></i></div></td><td></td></tr>
+          <tr><td class="num">14:09:02.301</td><td><span class="st"><i class="g"></i>Ok</span></td><td><span class="svc"><i class="sd" style="background:var(--s3)"></i>worker</span></td><td class="mono">job.run reindex</td><td class="num" style="text-align:right">3 m 41 s</td><td>—</td><td></td><td class="num" style="text-align:right">212</td><td><div class="lb"><i style="width:88%;background:var(--s3)"></i><i style="width:12%;background:var(--s4)"></i></div></td><td></td></tr>
+          <tr><td class="num">14:08:59.015</td><td><span class="st e"><i class="g"></i>Error</span></td><td><span class="svc"><i class="sd" style="background:var(--s2)"></i>payments</span></td><td class="mono">POST /refund</td><td class="num" style="text-align:right">214 ms</td><td>POST</td><td><span class="code c5">500</span></td><td class="num" style="text-align:right">5</td><td><div class="lb"><i style="width:100%;background:var(--s2)"></i></div></td><td class="emsg">ledger timeout after 200ms</td></tr>
+          <tr><td class="num">14:08:47.552</td><td><span class="st"><i class="g"></i>Ok</span></td><td><span class="svc"><i class="sd" style="background:var(--s1)"></i>api</span></td><td class="mono">GET /</td><td class="num" style="text-align:right">4.43 ms</td><td>GET</td><td><span class="code c4">302</span></td><td class="num" style="text-align:right">1</td><td><div class="lb"><i style="width:100%;background:var(--s1)"></i></div></td><td></td></tr>
+          <tr><td class="num">14:08:30.400</td><td><span class="st"><i class="g"></i>Ok</span></td><td><span class="svc"><i class="sd" style="background:var(--s1)"></i>api</span></td><td class="mono">GET /quiz/{id}</td><td class="num" style="text-align:right">38.4 ms</td><td>GET</td><td><span class="code c2">200</span></td><td class="num" style="text-align:right">8</td><td><div class="lb"><i style="width:58%;background:var(--s1)"></i><i style="width:42%;background:var(--s4)"></i></div></td><td></td></tr>
+          <tr><td class="num">14:08:05.990</td><td><span class="st e"><i class="g"></i>Error</span></td><td><span class="svc"><i class="sd" style="background:var(--s2)"></i>payments</span></td><td class="mono">POST /charge</td><td class="num" style="text-align:right">941 ms</td><td>POST</td><td><span class="code c4">402</span></td><td class="num" style="text-align:right">6</td><td><div class="lb"><i style="width:70%;background:var(--s2)"></i><i style="width:30%;background:var(--s3)"></i></div></td><td class="emsg">card declined: 402</td></tr>
+          <tr><td class="num">14:07:41.207</td><td><span class="st"><i class="g"></i>Ok</span></td><td><span class="svc"><i class="sd" style="background:var(--s3)"></i>worker</span></td><td class="mono">job.run rspec</td><td class="num" style="text-align:right">3 m 49 s</td><td>—</td><td></td><td class="num" style="text-align:right">1,204</td><td><div class="lb"><i style="width:100%;background:var(--s3)"></i></div></td><td></td></tr>
+          <tr><td class="num">14:07:02.664</td><td><span class="st"><i class="g"></i>Ok</span></td><td><span class="svc"><i class="sd" style="background:var(--s4)"></i>postgres</span></td><td class="mono">SELECT orders</td><td class="num" style="text-align:right">12.9 ms</td><td>—</td><td></td><td class="num" style="text-align:right">1</td><td><div class="lb"><i style="width:100%;background:var(--s4)"></i></div></td><td></td></tr>
+          <tr><td class="num">14:06:10.012</td><td><span class="st"><i class="g"></i>Ok</span></td><td><span class="svc"><i class="sd" style="background:var(--s1)"></i>api</span></td><td class="mono">GET /favicon.ico</td><td class="num" style="text-align:right">7.72 ms</td><td>GET</td><td><span class="code c4">302</span></td><td class="num" style="text-align:right">1</td><td><div class="lb"><i style="width:100%;background:var(--s1)"></i></div></td><td></td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<div class="notes">
+  <p><b>① Run card.</b> Shows which report you're looking at, its time span, and totals for each signal. Each nav item has a keyboard shortcut (g t, g l, …).</p>
+  <p><b>② Spans / Traces.</b> Search individual spans, or whole traces.</p>
+  <p><b>③ Views.</b> Saved views. Some are defined in the writer's config (they ship inside the report), and viewers can save their own locally. Mirrored by the "Saved views" tab in the facets column.</p>
+  <p><b>④ Time.</b> Defaults to the entire run. ◀ ▶ step through the run, ⤢ zooms out, and dragging on any chart narrows the range. There's no live or pause control, because the report is static.</p>
+  <p><b>⑤ Query bar.</b> Each filter is a key / operator / value token (=, ≠, ~ wildcard, &gt;, &lt;), and free text searches every attribute. <b>+ Query</b> adds a second span query. <b>Copy link</b> puts the whole state in the URL, so a link reopens the exact view even from a local file.</p>
+  <p><b>⑥ Group by + View.</b> List, Timeseries, Top list, Bar, Table, Point plot, Treemap, Pie. No service flow map (it needs service-map data OTel doesn't provide).</p>
+  <p><b>⑦ Summary strip.</b> Requests, Errors and Latency (p50/p75/p90/p95/p99/max), with "Analyze" shortcuts for errors and slow spans. It collapses with "Hide summary".</p>
+  <p><b>⑧ Facets.</b> The list shows 30 of 40 facets; + Add brings in any attribute key present in the data. Each value has a share-of-total bar behind it and hover actions <i>only · exclude</i>. Duration is a histogram with a draggable range, not separate min/max boxes. Long value lists have a "Filter values" box.</p>
+  <p><b>⑨ Columns + Export.</b> Choose any attribute as a column (e.g. <span class="mono">error.message</span>). Export the current results as CSV, JSON, or OTLP JSON.</p>
+  <p><b>⑩ Latency by service.</b> Each trace's time split across its services, using the same service colors as the facets. Status is a labeled dot, never just a colored bar, and HTTP codes are outlined pills tinted by class (2xx, 3xx/4xx, 5xx).</p>
+</div>

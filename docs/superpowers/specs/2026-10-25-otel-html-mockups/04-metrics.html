@@ -1,0 +1,226 @@
+<h2>Metrics: Explorer (opens first), Catalog, and the embedded chart grid</h2>
+<p class="subtitle">Screen 1 is the Metrics Explorer, the default view under Metrics. Screen 2 is the catalog of every metric in the report. Screen 3 is the chart grid embedded in the log, span and trace panels. All three draw charts with the same chart card component used by Dashboards.</p>
+
+<style>
+  .oh { --bg:#f6f6f3; --sf:#ffffff; --ink:#16181d; --ink2:#454a53; --mu:#7a7f88; --ln:#e5e4df; --ln2:#efeeea;
+        --ac:#0f766e; --acs:#e3f1ee; --acx:#0b5c56; --crit:#d03b3b; --crits:#fbe9e9;
+        --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#eda100;
+        font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; color:var(--ink); background:var(--bg);
+        display:flex; min-width:1180px; border-radius:12px; overflow:hidden; box-shadow:0 0 0 1px var(--ln); position:relative; }
+  .scroll { overflow-x:auto; padding-bottom:6px; }
+  .oh * { box-sizing:border-box; }
+  .num, .oh .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-variant-numeric: tabular-nums; font-size:12px; }
+  .sd { width:8px; height:8px; border-radius:50%; flex:none; display:inline-block; }
+  .reuse { position:absolute; z-index:5; font: 600 10.5px/1 system-ui, sans-serif; color:#1d4ed8; background:#eef4ff; border:1px dashed #1d4ed8; border-radius:4px; padding:3px 6px; white-space:nowrap; }
+  .side { width:212px; flex:none; display:flex; flex-direction:column; padding:14px 10px; border-right:1px solid var(--ln); }
+  .brand { display:flex; align-items:center; gap:8px; padding:0 8px 14px; font-weight:700; }
+  .glyph { width:22px; height:22px; border-radius:7px; background:var(--ink); }
+  .runcard { margin:0 4px 14px; background:var(--sf); border-radius:10px; box-shadow:0 0 0 1px var(--ln); padding:9px 10px; }
+  .runcard .t { font-weight:650; } .runcard .m { color:var(--mu); font-size:11.5px; }
+  .nv { display:flex; align-items:center; gap:10px; padding:7px 10px; border-radius:8px; color:var(--ink2); }
+  .nv .ic { width:16px; text-align:center; color:var(--mu); }
+  .nv.on { color:var(--ink); font-weight:650; background:var(--sf); box-shadow:0 0 0 1px var(--ln); } .nv.on .ic { color:var(--ac); }
+  .nv .kb { margin-left:auto; font-size:10.5px; color:var(--mu); border:1px solid var(--ln); border-radius:4px; padding:0 4px; }
+  .sub { padding:4px 10px 4px 36px; color:var(--ink2); } .sub.on { color:var(--acx); font-weight:600; }
+  .main { flex:1; min-width:0; display:flex; flex-direction:column; padding-bottom:16px; }
+  .top { display:flex; align-items:center; gap:14px; padding:12px 20px 0; }
+  .top h1 { font-size:19px; margin:0; font-weight:700; letter-spacing:-.015em; }
+  .views { color:var(--ink2); padding:4px 10px; border-radius:8px; box-shadow:0 0 0 1px var(--ln); background:var(--sf); }
+  .time { margin-left:auto; display:flex; background:var(--sf); border-radius:8px; box-shadow:0 0 0 1px var(--ln); }
+  .time span { padding:4px 10px; border-right:1px solid var(--ln2); color:var(--ink2); } .time span:last-child { border-right:0; }
+  .btn { font-size:12px; padding:3px 9px; border-radius:7px; box-shadow:0 0 0 1px var(--ln); color:var(--ink2); background:var(--sf); white-space:nowrap; }
+  .tok { display:inline-flex; border-radius:6px; overflow:hidden; box-shadow:0 0 0 1px #cfe6e1; font-size:12px; }
+  .tok b { font-weight:500; background:var(--acs); color:var(--acx); padding:1px 6px; font-family:ui-monospace,Menlo,monospace; font-size:11.5px; }
+  .tok i { font-style:normal; background:#fff; color:var(--mu); padding:1px 5px; }
+  .tok u { text-decoration:none; background:#fff; padding:1px 6px; font-family:ui-monospace,Menlo,monospace; font-size:11.5px; }
+  /* query rows */
+  .qs { margin:12px 20px 0; background:var(--sf); border-radius:12px; box-shadow:0 0 0 1px var(--ln); padding:10px 12px; }
+  .qr { display:flex; align-items:center; gap:8px; padding:5px 0; }
+  .qr + .qr { border-top:1px dashed var(--ln2); }
+  .qid { width:22px; height:22px; border-radius:7px; display:inline-flex; align-items:center; justify-content:center; font: 700 12px ui-monospace,Menlo,monospace; color:#fff; flex:none; }
+  .fld { display:inline-flex; align-items:center; gap:6px; border-radius:8px; box-shadow:0 0 0 1px #d6d5cf; padding:3px 9px; background:#fff; white-space:nowrap; }
+  .fld .lb { color:var(--mu); font-size:11.5px; }
+  .fld.metric { min-width:270px; }
+  .fld.metric .ty { font-size:10.5px; font-weight:650; letter-spacing:.04em; padding:0 5px; border-radius:4px; background:#eef4ff; color:#1c5cab; }
+  .fld.metric .un { color:var(--mu); font-size:11.5px; margin-left:auto; }
+  .ph { color:#a3a7ae; }
+  .qr .ra { margin-left:auto; display:flex; gap:10px; color:var(--mu); }
+  .formula { font-family:ui-monospace,Menlo,monospace; font-size:12px; }
+  .qadd { display:flex; gap:8px; margin-top:8px; }
+  .qadd span { color:var(--acx); padding:2px 8px; border-radius:7px; box-shadow:0 0 0 1px var(--ln); }
+  .disp { display:flex; align-items:center; gap:16px; margin:10px 20px 0; color:var(--ink2); font-size:12.5px; }
+  .disp .lb { color:var(--mu); }
+  .vz { display:inline-flex; gap:2px; } .vz span { padding:3px 9px; border-radius:7px; color:var(--ink2); } .vz .on { background:var(--ink); color:#fff; }
+  .sw { width:26px; height:14px; border-radius:7px; background:#d6d5cf; position:relative; display:inline-block; vertical-align:middle; }
+  .sw::after { content:""; position:absolute; left:2px; top:2px; width:10px; height:10px; border-radius:50%; background:#fff; }
+  .sw.on { background:var(--ac); } .sw.on::after { left:14px; }
+  /* chart card */
+  .cc { background:var(--sf); border-radius:12px; box-shadow:0 0 0 1px var(--ln); padding:10px 14px 10px; position:relative; }
+  .cc .h { display:flex; align-items:center; gap:10px; }
+  .cc .h b { font-weight:650; }
+  .cc .h .meta { color:var(--mu); font-size:11.5px; font-family:ui-monospace,Menlo,monospace; }
+  .cc .h .ic { margin-left:auto; display:flex; gap:10px; color:var(--mu); }
+  .cc svg { display:block; width:100%; }
+  .cc .ax { display:flex; justify-content:space-between; color:#898781; font-size:10.5px; padding-left:34px; }
+  .lgd { display:flex; gap:16px; flex-wrap:wrap; margin-top:6px; font-size:12px; color:var(--ink2); }
+  .lgd span { display:inline-flex; align-items:center; gap:6px; }
+  .lgd i { width:12px; height:3px; border-radius:2px; display:inline-block; }
+  .lgd .v { font-family:ui-monospace,Menlo,monospace; font-size:11.5px; color:var(--ink); }
+  .pop { position:absolute; z-index:4; width:270px; background:var(--sf); border-radius:10px; box-shadow:0 8px 28px rgba(22,24,29,.18), 0 0 0 1px var(--ln); padding:10px 12px; font-size:12px; }
+  .pop .t { font-weight:650; margin-bottom:6px; }
+  .pop .row { display:flex; align-items:center; gap:6px; padding:2px 0; }
+  .pop .row .v { margin-left:auto; font-family:ui-monospace,Menlo,monospace; }
+  .pop hr { border:0; border-top:1px solid var(--ln2); margin:7px 0; }
+  .pop .a { color:var(--acx); padding:3px 0; display:flex; justify-content:space-between; }
+  .pop .a small { color:var(--mu); }
+  /* catalog */
+  table.ct { width:100%; border-collapse:collapse; }
+  table.ct th { text-align:left; font-size:11.5px; font-weight:600; color:var(--mu); padding:7px 10px; border-bottom:1px solid var(--ln); white-space:nowrap; }
+  table.ct td { padding:7px 10px; border-bottom:1px solid var(--ln2); white-space:nowrap; vertical-align:middle; }
+  .ty { font-size:10.5px; font-weight:650; letter-spacing:.04em; padding:0 5px; border-radius:4px; }
+  .ty.h { background:#eef4ff; color:#1c5cab; } .ty.s { background:#eef8f2; color:#17603d; } .ty.g { background:#fff3d6; color:#8a5a00; } .ty.e { background:#f3eefe; color:#4a3aa7; }
+  .spark { width:110px; height:22px; display:block; }
+  .tagk { font-family:ui-monospace,Menlo,monospace; font-size:11px; color:var(--ink2); background:var(--bg); border-radius:4px; padding:0 5px; margin-right:3px; }
+  /* embedded */
+  .emb { display:block; background:var(--sf); }
+  .embh { display:flex; align-items:center; gap:10px; padding:12px 18px 8px; }
+  .seg { display:inline-flex; background:#ebebe6; border-radius:7px; padding:2px; } .seg span { padding:1px 9px; border-radius:5px; color:var(--ink2); font-size:11.5px; } .seg .on { background:var(--sf); color:var(--ink); font-weight:600; }
+  .grid3 { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; padding:0 18px 16px; }
+  .gh { padding:4px 18px 6px; font-weight:650; display:flex; gap:10px; align-items:center; }
+  .gh small { color:var(--mu); font-weight:400; font-family:ui-monospace,Menlo,monospace; font-size:11px; }
+  .notes { font-size:13px; margin-top:14px; columns:2; column-gap:28px; }
+  .notes p { margin:0 0 8px; break-inside:avoid; }
+</style>
+
+<h3>Screen 1: Metrics Explorer (default view)</h3>
+<div class="scroll">
+<div class="oh" style="height:820px">
+  <div class="side">
+    <div class="brand"><span class="glyph"></span>otel-html</div>
+    <div class="runcard"><div class="t">ci-run #4821</div><div class="m">Oct 25 · 14:02:10 → 14:16:42</div></div>
+    <div class="nv"><span class="ic">▦</span>Dashboards<span class="kb">g d</span></div>
+    <div class="nv"><span class="ic">≡</span>Logs<span class="kb">g l</span></div>
+    <div class="nv on"><span class="ic">⌇</span>Metrics<span class="kb">g m</span></div>
+    <div class="sub on">Explorer</div>
+    <div class="sub">Catalog</div>
+    <div class="nv"><span class="ic">⋮</span>Traces<span class="kb">g t</span></div>
+  </div>
+  <div class="main">
+    <div class="top"><h1>Metrics</h1><div class="views">☆ Views ▾</div><span class="btn">⊞ Split by query</span><div class="time"><span>◀</span><span style="color:var(--ink);font-weight:550">Entire run · 14m 32s ▾</span><span>▶</span><span>⤢</span></div></div>
+    <div class="qs">
+      <div class="qr"><span class="qid" style="background:var(--s1)">a</span>
+        <span class="fld metric"><span class="ty">HIST</span><span class="mono">http.server.request.duration</span><span class="un">s</span></span>
+        <span class="fld"><span class="lb">where</span><span class="tok"><b>service.name</b><i>=</i><u>payments</u></span><span class="ph">+</span></span>
+        <span class="fld"><span class="lb">show</span>p99 ▾</span>
+        <span class="fld"><span class="lb">by</span><span class="ph">everything ▾</span></span>
+        <span class="fld"><span class="lb">ƒ</span><span class="ph">none</span></span>
+        <div class="ra"><span>👁</span><span>✎ alias</span><span>✕</span></div></div>
+      <div class="qr"><span class="qid" style="background:var(--s2)">b</span>
+        <span class="fld metric"><span class="ty">HIST</span><span class="mono">http.server.request.duration</span><span class="un">s</span></span>
+        <span class="fld"><span class="lb">where</span><span class="tok"><b>service.name</b><i>=</i><u>payments</u></span><span class="ph">+</span></span>
+        <span class="fld"><span class="lb">show</span>p95 ▾</span>
+        <span class="fld"><span class="lb">by</span><span class="ph">everything ▾</span></span>
+        <span class="fld"><span class="lb">ƒ</span><span class="ph">none</span></span>
+        <div class="ra"><span>👁</span><span>✎ alias</span><span>✕</span></div></div>
+      <div class="qr"><span class="qid" style="background:var(--s3)">c</span>
+        <span class="fld metric"><span class="ty">HIST</span><span class="mono">http.server.request.duration</span><span class="un">s</span></span>
+        <span class="fld"><span class="lb">where</span><span class="tok"><b>service.name</b><i>=</i><u>payments</u></span><span class="ph">+</span></span>
+        <span class="fld"><span class="lb">show</span>avg ▾</span>
+        <span class="fld"><span class="lb">by</span><span class="ph">everything ▾</span></span>
+        <span class="fld"><span class="lb">ƒ</span><span class="ph">none</span></span>
+        <div class="ra"><span>👁</span><span>✎ alias</span><span>✕</span></div></div>
+      <div class="qadd"><span>+ Query</span><span>+ Formula</span><span style="color:var(--mu);box-shadow:none">e.g. <span class="formula">a / c</span></span></div>
+    </div>
+    <div class="disp">
+      <span class="lb">Display</span><span class="vz"><span class="on">Lines</span><span>Area</span><span>Bars</span><span>Heatmap</span><span>Distribution</span></span>
+      <span class="lb">Y-axis</span><span>linear ▾</span>
+      <span class="lb">Exemplars</span><span class="sw on"></span>
+      <span class="lb">One chart per query</span><span class="sw"></span>
+      <span style="margin-left:auto" class="btn">⤓ Export ▾</span><span class="btn">⧉ Copy as dashboard widget</span>
+    </div>
+    <div style="margin:12px 20px 0;position:relative">
+      <span class="reuse" style="right:12px;top:-10px">shared: Chart card (Explorer · Dashboards · embedded Metrics tabs)</span>
+      <div class="cc">
+        <div class="h"><b>Request duration: avg / p95 / p99</b><span class="meta">payments · seconds</span><div class="ic"><span>⤢</span><span>⋯</span></div></div>
+        <svg viewBox="0 0 900 230" preserveAspectRatio="none" style="height:230px;margin-top:6px">
+          <g font-size="11" fill="#898781" font-family="system-ui"><text x="0" y="14">1.5 s</text><text x="0" y="84">1.0 s</text><text x="0" y="154">0.5 s</text><text x="0" y="224">0</text></g>
+          <line x1="36" y1="10" x2="900" y2="10" stroke="#e1e0d9"/><line x1="36" y1="80" x2="900" y2="80" stroke="#e1e0d9"/><line x1="36" y1="150" x2="900" y2="150" stroke="#e1e0d9"/><line x1="36" y1="220" x2="900" y2="220" stroke="#c3c2b7"/>
+          <rect x="430" y="0" width="70" height="220" fill="rgba(15,118,110,.07)"/>
+          <polyline fill="none" stroke="var(--s3)" stroke-width="2" stroke-linejoin="round" points="36,196 120,195 200,193 280,190 360,184 430,176 470,170 520,178 600,188 680,192 760,194 840,195 900,196"/>
+          <polyline fill="none" stroke="var(--s2)" stroke-width="2" stroke-linejoin="round" points="36,170 120,166 200,160 280,150 360,128 430,100 470,82 520,104 600,140 680,156 760,162 840,166 900,168"/>
+          <polyline fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round" points="36,140 120,132 200,120 280,100 360,70 430,34 470,18 520,48 600,96 680,118 760,128 840,134 900,138"/>
+          <g fill="var(--sf)" stroke="var(--ink)" stroke-width="2"><circle cx="300" cy="96" r="4"/><circle cx="455" cy="26" r="4"/><circle cx="470" cy="18" r="5.5" stroke-width="2.5"/><circle cx="610" cy="98" r="4"/></g>
+          <line x1="470" y1="0" x2="470" y2="220" stroke="var(--ink)" stroke-width="1" stroke-dasharray="3 3"/>
+        </svg>
+        <div class="ax"><span>14:02</span><span>14:05</span><span>14:08</span><span>14:11</span><span>14:14</span><span>14:16</span></div>
+        <div class="lgd"><span><i style="background:var(--s1)"></i>a · p99 <span class="v">max 1.42 s</span></span><span><i style="background:var(--s2)"></i>b · p95 <span class="v">max 0.98 s</span></span><span><i style="background:var(--s3)"></i>c · avg <span class="v">max 0.31 s</span></span><span style="color:var(--mu)">○ exemplar (links to a trace)</span></div>
+        <div class="pop" style="left:500px;top:40px">
+          <div class="t">14:09:05 <span style="color:var(--mu);font-weight:400">· click to pin</span></div>
+          <div class="row"><i class="sd" style="background:var(--s1)"></i>a · p99<span class="v">1.42 s</span></div>
+          <div class="row"><i class="sd" style="background:var(--s2)"></i>b · p95<span class="v">0.98 s</span></div>
+          <div class="row"><i class="sd" style="background:var(--s3)"></i>c · avg<span class="v">0.31 s</span></div>
+          <hr>
+          <div class="a"><span>◎ Exemplar → trace 9f3a…c1</span><small>1.84 s</small></div>
+          <div class="a"><span>⋮ Traces in this window</span><small>service.name=payments</small></div>
+          <div class="a"><span>≡ Logs in this window</span><small>same filters</small></div>
+          <div class="a"><span>⌁ Zoom time range to here</span><small></small></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<h3 style="margin-top:24px">Screen 2: Metrics Catalog (every metric in the report)</h3>
+<div class="scroll">
+<div class="oh" style="display:block;background:var(--sf)">
+  <div class="top" style="padding-bottom:10px"><h1>Catalog</h1><span style="color:var(--mu)">38 metrics · 6 scopes</span><span class="btn" style="margin-left:auto">⌕ Filter metrics, units, scopes…</span></div>
+  <table class="ct">
+    <tr><th>Metric</th><th>Type</th><th>Unit</th><th>Temporality</th><th>Scope</th><th>Attributes</th><th style="text-align:right">Series</th><th>Over the run</th><th></th></tr>
+    <tr><td class="mono">http.server.request.duration</td><td><span class="ty h">HISTOGRAM</span></td><td class="mono">s</td><td>cumulative</td><td class="mono">@opentelemetry/instrumentation-http</td><td><span class="tagk">http.route</span><span class="tagk">http.response.status_code</span><span style="color:var(--mu)">+3</span></td><td class="num" style="text-align:right">24</td><td><svg class="spark" viewBox="0 0 110 22"><polyline fill="none" stroke="var(--s1)" stroke-width="2" points="0,18 20,16 40,12 55,4 70,10 90,15 110,16"/></svg></td><td style="color:var(--acx)">Explore →</td></tr>
+    <tr><td class="mono">http.client.request.duration</td><td><span class="ty h">HISTOGRAM</span></td><td class="mono">s</td><td>cumulative</td><td class="mono">@opentelemetry/instrumentation-undici</td><td><span class="tagk">server.address</span><span style="color:var(--mu)">+2</span></td><td class="num" style="text-align:right">6</td><td><svg class="spark" viewBox="0 0 110 22"><polyline fill="none" stroke="var(--s1)" stroke-width="2" points="0,17 30,16 50,14 60,3 75,12 110,16"/></svg></td><td style="color:var(--acx)">Explore →</td></tr>
+    <tr><td class="mono">process.cpu.utilization</td><td><span class="ty g">GAUGE</span></td><td class="mono">1</td><td>—</td><td class="mono">host-metrics</td><td><span class="tagk">cpu.mode</span></td><td class="num" style="text-align:right">8</td><td><svg class="spark" viewBox="0 0 110 22"><polyline fill="none" stroke="var(--s1)" stroke-width="2" points="0,14 20,13 40,10 55,7 70,9 90,13 110,14"/></svg></td><td style="color:var(--acx)">Explore →</td></tr>
+    <tr><td class="mono">jobs.completed</td><td><span class="ty s">SUM · monotonic</span></td><td class="mono">{job}</td><td>delta</td><td class="mono">ci.worker</td><td><span class="tagk">job.name</span><span class="tagk">job.result</span></td><td class="num" style="text-align:right">31</td><td><svg class="spark" viewBox="0 0 110 22"><polyline fill="none" stroke="var(--s1)" stroke-width="2" points="0,20 20,18 40,14 60,10 80,6 110,3"/></svg></td><td style="color:var(--acx)">Explore →</td></tr>
+    <tr><td class="mono">db.client.operation.duration</td><td><span class="ty e">EXP HISTOGRAM</span></td><td class="mono">s</td><td>delta</td><td class="mono">@opentelemetry/instrumentation-pg</td><td><span class="tagk">db.operation.name</span><span style="color:var(--mu)">+1</span></td><td class="num" style="text-align:right">4</td><td><svg class="spark" viewBox="0 0 110 22"><polyline fill="none" stroke="var(--s1)" stroke-width="2" points="0,16 25,15 45,12 60,8 75,12 110,15"/></svg></td><td style="color:var(--acx)">Explore →</td></tr>
+  </table>
+</div>
+</div>
+
+<h3 style="margin-top:24px">Screen 3: embedded chart grid (here in the log detail panel's Metrics tab)</h3>
+<div class="scroll">
+<div class="oh emb" style="position:relative">
+  <span class="reuse" style="right:18px;top:12px">shared: Chart card, small size, with a "this log" marker</span>
+  <div class="embh"><b>Metrics from the same resource</b><span class="tok"><b>service.name</b><i>=</i><u>payments</u></span><span class="tok"><b>host.name</b><i>=</i><u>runner-7</u></span><span style="color:var(--mu)">± 5 min</span>
+    <span style="margin-left:auto;color:var(--mu)">Size</span><span class="seg"><span>S</span><span class="on">M</span><span>L</span></span><span class="btn" style="margin-right:240px">Open in Explorer →</span></div>
+  <div class="gh">process.* <small>host-metrics · 3 charts</small></div>
+  <div class="grid3">
+    <div class="cc"><div class="h"><b>CPU utilization</b><span class="meta">process.cpu.utilization</span><div class="ic"><span>⤢</span></div></div>
+      <svg viewBox="0 0 300 90" preserveAspectRatio="none" style="height:90px;margin-top:4px"><line x1="0" y1="30" x2="300" y2="30" stroke="#e1e0d9"/><line x1="0" y1="60" x2="300" y2="60" stroke="#e1e0d9"/><line x1="0" y1="88" x2="300" y2="88" stroke="#c3c2b7"/><line x1="160" y1="0" x2="160" y2="88" stroke="var(--ink)" stroke-dasharray="3 3"/><text x="164" y="10" font-size="10" fill="var(--ink)" font-family="system-ui" font-weight="600">this log</text><polyline fill="none" stroke="var(--s1)" stroke-width="2" points="0,70 40,68 80,64 120,52 160,34 190,44 230,62 270,68 300,70"/></svg>
+      <div class="ax" style="padding-left:0"><span>14:04</span><span>14:09</span><span>14:14</span></div></div>
+    <div class="cc"><div class="h"><b>Memory usage</b><span class="meta">process.memory.usage</span><div class="ic"><span>⤢</span></div></div>
+      <svg viewBox="0 0 300 90" preserveAspectRatio="none" style="height:90px;margin-top:4px"><line x1="0" y1="30" x2="300" y2="30" stroke="#e1e0d9"/><line x1="0" y1="60" x2="300" y2="60" stroke="#e1e0d9"/><line x1="0" y1="88" x2="300" y2="88" stroke="#c3c2b7"/><line x1="160" y1="0" x2="160" y2="88" stroke="var(--ink)" stroke-dasharray="3 3"/><polyline fill="none" stroke="var(--s1)" stroke-width="2" points="0,44 60,43 120,41 160,40 220,39 300,38"/></svg>
+      <div class="ax" style="padding-left:0"><span>14:04</span><span>14:09</span><span>14:14</span></div></div>
+    <div class="cc"><div class="h"><b>Open file descriptors</b><span class="meta">process.open_file_descriptor.count</span><div class="ic"><span>⤢</span></div></div>
+      <svg viewBox="0 0 300 90" preserveAspectRatio="none" style="height:90px;margin-top:4px"><line x1="0" y1="30" x2="300" y2="30" stroke="#e1e0d9"/><line x1="0" y1="60" x2="300" y2="60" stroke="#e1e0d9"/><line x1="0" y1="88" x2="300" y2="88" stroke="#c3c2b7"/><line x1="160" y1="0" x2="160" y2="88" stroke="var(--ink)" stroke-dasharray="3 3"/><polyline fill="none" stroke="var(--s1)" stroke-width="2" points="0,60 50,60 100,58 140,50 160,48 200,52 300,58"/></svg>
+      <div class="ax" style="padding-left:0"><span>14:04</span><span>14:09</span><span>14:14</span></div></div>
+  </div>
+  <div class="gh">http.* <small>@opentelemetry/instrumentation-http · 2 charts</small></div>
+  <div class="grid3">
+    <div class="cc"><div class="h"><b>Server duration p95</b><span class="meta">http.server.request.duration</span><div class="ic"><span>⤢</span></div></div>
+      <svg viewBox="0 0 300 90" preserveAspectRatio="none" style="height:90px;margin-top:4px"><line x1="0" y1="30" x2="300" y2="30" stroke="#e1e0d9"/><line x1="0" y1="60" x2="300" y2="60" stroke="#e1e0d9"/><line x1="0" y1="88" x2="300" y2="88" stroke="#c3c2b7"/><line x1="160" y1="0" x2="160" y2="88" stroke="var(--ink)" stroke-dasharray="3 3"/><polyline fill="none" stroke="var(--s2)" stroke-width="2" points="0,74 50,72 100,64 140,40 160,16 180,34 220,60 300,72"/><circle cx="160" cy="16" r="5" fill="var(--sf)" stroke="var(--ink)" stroke-width="2.5"/></svg>
+      <div class="ax" style="padding-left:0"><span>14:04</span><span>◎ exemplar = this log's trace</span><span>14:14</span></div></div>
+    <div class="cc"><div class="h"><b>Active requests</b><span class="meta">http.server.active_requests</span><div class="ic"><span>⤢</span></div></div>
+      <svg viewBox="0 0 300 90" preserveAspectRatio="none" style="height:90px;margin-top:4px"><line x1="0" y1="30" x2="300" y2="30" stroke="#e1e0d9"/><line x1="0" y1="60" x2="300" y2="60" stroke="#e1e0d9"/><line x1="0" y1="88" x2="300" y2="88" stroke="#c3c2b7"/><line x1="160" y1="0" x2="160" y2="88" stroke="var(--ink)" stroke-dasharray="3 3"/><polyline fill="none" stroke="var(--s1)" stroke-width="2" points="0,70 40,66 80,62 120,50 160,40 200,50 240,62 300,68"/></svg>
+      <div class="ax" style="padding-left:0"><span>14:04</span><span>14:09</span><span>14:14</span></div></div>
+  </div>
+</div>
+</div>
+
+<div class="notes">
+  <p><b>Query rows, OTel-aware.</b> Each row has a metric (type badge and unit taken from OTLP), <i>where</i> (the same filter tokens as Logs and Traces), <i>show</i>, <i>by</i> (group by any resource or data-point attribute), <i>ƒ</i> (rate, increase, rollup, top-N) and alias. The <i>show</i> choices depend on the metric type: Sum offers rate, increase or sum; Gauge offers avg, min, max or last; Histogram and exp-histogram offer p50–p99, count, sum or avg, computed from buckets; Summary offers its quantiles. Cumulative and delta temporality are handled for you.</p>
+  <p><b>+ Formula</b> combines queries (a / c, a − b). <b>Display</b> can be Lines, Area, Bars, Heatmap or Distribution; Heatmap and Distribution are for histograms. Linear or log scale, and one chart per query or all on one. Every chart uses a single y-axis.</p>
+  <p><b>Linking from a chart.</b> Hover shows a crosshair and values. Clicking pins a menu: jump to an exemplar's trace, or to traces or logs in that time window with the same filters, or zoom the time range. Exemplars appear as ringed points.</p>
+  <p><b>"Save to Dashboard" becomes "Copy as dashboard widget".</b> A static report can't save changes, so this copies the widget's config to paste into the writer's dashboard config. Views and Copy link still save explorer state in the URL.</p>
+  <p><b>Catalog (replaces Summary / Volume).</b> Lists every metric with its type, unit, temporality, instrumentation scope, attribute keys, series count and a sparkline. Clicking a row opens it in the Explorer.</p>
+  <p><b>Embedded grid.</b> One chart card component in S, M or L. Charts are grouped by semantic-convention namespace (process.*, http.*, …) and filtered to the resource of the log or span you came from. A "this log" or "this span" marker sits at that moment, exemplars that point to the related trace are highlighted, and "Open in Explorer" carries the filters over.</p>
+</div>

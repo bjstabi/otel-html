@@ -1,0 +1,250 @@
+<h2>Dashboards: the list, and the Fusion dashboard</h2>
+<p class="subtitle">Screen 1 is the dashboard list. Screen 2 is Fusion with a trace selected in its Traces widget, so the other widgets have followed that selection. Every widget is a shared explorer component placed in a resizable grid tile.</p>
+
+<style>
+  .oh { --bg:#f6f6f3; --sf:#ffffff; --ink:#16181d; --ink2:#454a53; --mu:#7a7f88; --ln:#e5e4df; --ln2:#efeeea;
+        --ac:#0f766e; --acs:#e3f1ee; --acx:#0b5c56; --crit:#d03b3b; --crits:#fbe9e9;
+        --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#eda100;
+        --sv-error:#d03b3b; --sv-warn:#fab219; --sv-info:#2a78d6; --sv-debug:#9ca3af;
+        font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; color:var(--ink); background:var(--bg);
+        display:flex; min-width:1180px; border-radius:12px; overflow:hidden; box-shadow:0 0 0 1px var(--ln); position:relative; }
+  .scroll { overflow-x:auto; padding-bottom:6px; }
+  .oh * { box-sizing:border-box; }
+  .num, .oh .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-variant-numeric: tabular-nums; font-size:12px; }
+  .sd { width:8px; height:8px; border-radius:50%; flex:none; display:inline-block; }
+  .reuse { position:absolute; z-index:5; font: 600 10.5px/1 system-ui, sans-serif; color:#1d4ed8; background:#eef4ff; border:1px dashed #1d4ed8; border-radius:4px; padding:3px 6px; white-space:nowrap; }
+  .side { width:212px; flex:none; display:flex; flex-direction:column; padding:14px 10px; border-right:1px solid var(--ln); }
+  .brand { display:flex; align-items:center; gap:8px; padding:0 8px 14px; font-weight:700; }
+  .glyph { width:22px; height:22px; border-radius:7px; background:var(--ink); }
+  .runcard { margin:0 4px 14px; background:var(--sf); border-radius:10px; box-shadow:0 0 0 1px var(--ln); padding:9px 10px; }
+  .runcard .t { font-weight:650; } .runcard .m { color:var(--mu); font-size:11.5px; }
+  .nv { display:flex; align-items:center; gap:10px; padding:7px 10px; border-radius:8px; color:var(--ink2); }
+  .nv .ic { width:16px; text-align:center; color:var(--mu); }
+  .nv.on { color:var(--ink); font-weight:650; background:var(--sf); box-shadow:0 0 0 1px var(--ln); } .nv.on .ic { color:var(--ac); }
+  .nv .kb { margin-left:auto; font-size:10.5px; color:var(--mu); border:1px solid var(--ln); border-radius:4px; padding:0 4px; }
+  .sub { padding:4px 10px 4px 36px; color:var(--ink2); } .sub.on { color:var(--acx); font-weight:600; }
+  .main { flex:1; min-width:0; display:flex; flex-direction:column; }
+  .top { display:flex; align-items:center; gap:12px; padding:12px 20px 0; }
+  .top h1 { font-size:19px; margin:0; font-weight:700; letter-spacing:-.015em; }
+  .btn { font-size:12px; padding:3px 9px; border-radius:7px; box-shadow:0 0 0 1px var(--ln); color:var(--ink2); background:var(--sf); white-space:nowrap; }
+  .time { display:flex; background:var(--sf); border-radius:8px; box-shadow:0 0 0 1px var(--ln); }
+  .time span { padding:4px 10px; border-right:1px solid var(--ln2); color:var(--ink2); } .time span:last-child { border-right:0; }
+  .tok { display:inline-flex; border-radius:6px; overflow:hidden; box-shadow:0 0 0 1px #cfe6e1; font-size:12px; }
+  .tok b { font-weight:500; background:var(--acs); color:var(--acx); padding:1px 6px; font-family:ui-monospace,Menlo,monospace; font-size:11.5px; }
+  .tok i { font-style:normal; background:#fff; color:var(--mu); padding:1px 5px; }
+  .tok u { text-decoration:none; background:#fff; padding:1px 6px; font-family:ui-monospace,Menlo,monospace; font-size:11.5px; }
+  .tok s { text-decoration:none; background:#fff; color:var(--mu); padding:1px 6px 1px 2px; }
+  .tok.selx { box-shadow:0 0 0 1.5px var(--ink); } .tok.selx b { background:var(--ink); color:#fff; }
+  .var { display:inline-flex; align-items:center; gap:6px; background:var(--sf); border-radius:8px; box-shadow:0 0 0 1px var(--ln); padding:2px 9px; }
+  .var .k { color:var(--mu); font-size:11.5px; font-family:ui-monospace,Menlo,monospace; }
+  /* list */
+  table.dl { width:100%; border-collapse:collapse; background:var(--sf); }
+  table.dl th { text-align:left; font-size:11.5px; font-weight:600; color:var(--mu); padding:8px 12px; border-bottom:1px solid var(--ln); }
+  table.dl td { padding:9px 12px; border-bottom:1px solid var(--ln2); }
+  .badge { font-size:10.5px; font-weight:650; padding:0 6px; border-radius:4px; }
+  .badge.b { background:var(--ink); color:#fff; } .badge.c { background:var(--acs); color:var(--acx); }
+  .thumb { width:90px; height:34px; display:grid; grid-template-columns:repeat(3,1fr); grid-template-rows:10px 1fr; gap:2px; }
+  .thumb i { background:#e4e3dd; border-radius:2px; } .thumb i:first-child { grid-column:1/-1; background:#cfe6e1; }
+  /* fusion */
+  .fbar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:10px 20px; border-bottom:1px solid var(--ln); background:var(--bg); }
+  .fbar .lb { color:var(--mu); font-size:12px; }
+  .grid { display:grid; grid-template-columns:repeat(12, 1fr); grid-auto-rows:20px; gap:10px; padding:12px 20px 20px; }
+  .w { background:var(--sf); border-radius:12px; box-shadow:0 0 0 1px var(--ln); padding:8px 12px; position:relative; overflow:hidden; display:flex; flex-direction:column; min-height:0; }
+  .w .wh { display:flex; align-items:center; gap:8px; margin-bottom:6px; }
+  .w .wh b { font-weight:650; }
+  .w .wh .sub2 { color:var(--mu); font-size:11.5px; }
+  .w .wh .ic { margin-left:auto; display:flex; gap:9px; color:var(--mu); font-size:12px; align-items:center; }
+  .follow { font-size:11px; font-weight:600; color:var(--acx); background:var(--acs); border-radius:5px; padding:0 6px; }
+  .follow.off { color:var(--mu); background:var(--bg); }
+  .grip { position:absolute; right:4px; bottom:2px; color:#b3b6bc; font-size:11px; cursor:nwse-resize; }
+  .drag { color:#b3b6bc; cursor:grab; }
+  /* timeline */
+  .lane { display:flex; align-items:center; gap:10px; margin:3px 0; }
+  .lane .lbl { width:128px; flex:none; display:flex; align-items:center; gap:6px; font-size:12px; }
+  .lane .lbl .n { margin-left:auto; color:var(--mu); font-family:ui-monospace,Menlo,monospace; font-size:11.5px; }
+  .trk { flex:1; position:relative; height:26px; }
+  .bars { display:flex; align-items:flex-end; gap:2px; height:100%; }
+  .bars .c { flex:1; display:flex; flex-direction:column-reverse; gap:1px; }
+  .bars .c i { display:block; }
+  .bars .c i:last-child { border-radius:2px 2px 0 0; }
+  .brush { position:absolute; top:-3px; bottom:-3px; border:2px solid var(--ink); border-radius:4px; background:rgba(22,24,29,.05); }
+  .brush::before, .brush::after { content:""; position:absolute; top:6px; width:4px; height:14px; border-radius:2px; background:var(--ink); }
+  .brush::before { left:-4px; } .brush::after { right:-4px; }
+  .tick { position:absolute; top:-2px; bottom:-2px; width:2px; background:var(--ink); }
+  .axis { display:flex; justify-content:space-between; color:#898781; font-size:10.5px; margin-left:138px; }
+  /* traces widget */
+  table.mini { width:100%; border-collapse:collapse; font-size:12px; }
+  table.mini th { text-align:left; font-size:11px; color:var(--mu); font-weight:600; padding:4px 6px; border-bottom:1px solid var(--ln); }
+  table.mini td { padding:5px 6px; border-bottom:1px solid var(--ln2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  table.mini tr.sel td { background:var(--acs); }
+  table.mini tr.sel td:first-child { box-shadow:inset 3px 0 0 var(--ac); }
+  .st { color:var(--crit); font-weight:600; font-size:11.5px; }
+  .lv { display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:700; }
+  .lv i { width:7px; height:7px; border-radius:50%; }
+  .lv.er { color:#a3262a; } .lv.er i { background:var(--sv-error); }
+  .lv.wn { color:#8a5a00; } .lv.wn i { background:var(--sv-warn); }
+  .lv.in { color:var(--ink2); } .lv.in i { background:var(--sv-info); }
+  .msg { font-family:ui-monospace,Menlo,monospace; font-size:11.5px; }
+  .ctxrow td { opacity:.4; }
+  .seg { display:inline-flex; background:#ebebe6; border-radius:7px; padding:2px; } .seg span { padding:0 8px; border-radius:5px; color:var(--ink2); font-size:11px; } .seg .on { background:var(--sf); color:var(--ink); font-weight:600; }
+  .mgrid { display:grid; grid-template-columns:1fr 1fr; gap:8px; flex:1; }
+  .mc { border-radius:9px; box-shadow:0 0 0 1px var(--ln2); padding:6px 8px; }
+  .mc .t { font-size:11.5px; font-weight:600; display:flex; justify-content:space-between; }
+  .mc .t small { color:var(--mu); font-weight:400; font-family:ui-monospace,Menlo,monospace; font-size:10px; }
+  .mc svg { display:block; width:100%; height:66px; margin-top:3px; }
+  .wf { position:relative; height:16px; margin:2px 0; }
+  .wf span { position:absolute; height:15px; border-radius:4px; font-size:10.5px; color:#fff; padding:0 5px; white-space:nowrap; overflow:hidden; line-height:15px; }
+  .wf span.err { box-shadow:inset 0 0 0 1.5px var(--crit); }
+  pre.cfg { margin:0; background:#16181d; color:#e6e6e3; border-radius:10px; padding:12px 14px; font: 12px/1.55 ui-monospace,Menlo,monospace; overflow:auto; }
+  pre.cfg .c { color:#7f8590; } pre.cfg .k { color:#5fd1c2; } pre.cfg .s { color:#f0c674; }
+  .notes { font-size:13px; margin-top:14px; columns:2; column-gap:28px; }
+  .notes p { margin:0 0 8px; break-inside:avoid; }
+</style>
+
+<h3>Screen 1: Dashboards list</h3>
+<div class="scroll">
+<div class="oh">
+  <div class="side">
+    <div class="brand"><span class="glyph"></span>otel-html</div>
+    <div class="runcard"><div class="t">ci-run #4821</div><div class="m">Oct 25 · 14:02:10 → 14:16:42</div></div>
+    <div class="nv on"><span class="ic">▦</span>Dashboards<span class="kb">g d</span></div>
+    <div class="sub on">All dashboards</div>
+    <div class="sub">★ Fusion</div>
+    <div class="nv"><span class="ic">≡</span>Logs<span class="kb">g l</span></div>
+    <div class="nv"><span class="ic">⌇</span>Metrics<span class="kb">g m</span></div>
+    <div class="nv"><span class="ic">⋮</span>Traces<span class="kb">g t</span></div>
+  </div>
+  <div class="main" style="padding-bottom:16px">
+    <div class="top" style="padding-bottom:12px"><h1>Dashboards</h1><span style="color:var(--mu)">3 dashboards</span><span class="btn" style="margin-left:auto">⌕ Filter dashboards</span></div>
+    <div style="margin:0 20px;border-radius:12px;overflow:hidden;box-shadow:0 0 0 1px var(--ln)">
+    <table class="dl">
+      <tr><th></th><th>Name</th><th>Source</th><th>Widgets</th><th>Description</th><th>Default</th></tr>
+      <tr><td><div class="thumb"><i></i><i></i><i></i><i></i></div></td><td><b>Fusion</b></td><td><span class="badge b">BUILT-IN</span></td><td class="num">4</td><td style="color:var(--ink2)">Timeline of every signal, plus linked Traces, Logs and Metrics that filter each other</td><td>★</td></tr>
+      <tr><td><div class="thumb"><i></i><i></i><i></i><i></i></div></td><td><b>Checkout service</b></td><td><span class="badge c">otel-html.yaml</span></td><td class="num">9</td><td style="color:var(--ink2)">HTTP RED metrics and error logs for payments and api</td><td></td></tr>
+      <tr><td><div class="thumb"><i></i><i></i><i></i><i></i></div></td><td><b>Test suite</b></td><td><span class="badge c">dashboards/tests.yaml</span></td><td class="num">6</td><td style="color:var(--ink2)">Slowest spans, failing tests by test.suite.name</td><td></td></tr>
+    </table>
+    </div>
+  </div>
+</div>
+</div>
+
+<h3 style="margin-top:24px">Screen 2: Fusion, with a trace selected</h3>
+<div class="scroll">
+<div class="oh" style="height:940px">
+  <div class="side">
+    <div class="brand"><span class="glyph"></span>otel-html</div>
+    <div class="runcard"><div class="t">ci-run #4821</div><div class="m">Oct 25 · 14:02:10 → 14:16:42</div></div>
+    <div class="nv on"><span class="ic">▦</span>Dashboards<span class="kb">g d</span></div>
+    <div class="sub">All dashboards</div>
+    <div class="sub on">★ Fusion</div>
+    <div class="nv"><span class="ic">≡</span>Logs<span class="kb">g l</span></div>
+    <div class="nv"><span class="ic">⌇</span>Metrics<span class="kb">g m</span></div>
+    <div class="nv"><span class="ic">⋮</span>Traces<span class="kb">g t</span></div>
+  </div>
+  <div class="main">
+    <div class="top"><h1>Fusion</h1><span class="btn">▦ Dashboards ▾</span><span style="margin-left:auto" class="btn">✎ Edit layout</span><span class="btn">⧉ Copy link</span><span class="btn">⧉ Copy config</span><div class="time"><span>◀</span><span style="color:var(--ink);font-weight:550">Entire run · 14m 32s ▾</span><span>▶</span><span>⤢</span></div></div>
+    <div class="fbar" style="margin-top:10px">
+      <span class="lb">Filter</span>
+      <span class="var"><span class="k">service.name</span>all ▾</span>
+      <span class="var"><span class="k">deployment.environment.name</span>ci ▾</span>
+      <span class="var"><span class="k">host.name</span>all ▾</span>
+      <span class="btn">+ variable</span>
+      <span style="width:1px;height:20px;background:var(--ln);margin:0 4px"></span>
+      <span class="lb">Selection</span>
+      <span class="tok selx"><b>time</b><i>∈</i><u>14:08:50 – 14:09:40</u><s>✕</s></span>
+      <span class="tok selx"><b>trace_id</b><i>=</i><u>9f3a…c1</u><s>✕</s></span>
+      <span style="color:var(--acx);font-size:12px">Clear all</span>
+    </div>
+    <div class="grid">
+      <!-- timeline -->
+      <div class="w" style="grid-column:1 / span 12; grid-row: span 6">
+        <div class="wh"><span class="drag">⠿</span><b>Timeline</b><span class="sub2">all signals · drag to select a time range</span><div class="ic"><span>⋯</span></div></div>
+        <div class="lane"><span class="lbl"><i class="sd" style="background:var(--ink2)"></i>Spans<span class="n">4,120</span></span><div class="trk"><div class="bars">
+          <div class="c"><i style="height:6px;background:#9ca3af"></i></div><div class="c"><i style="height:9px;background:#9ca3af"></i></div><div class="c"><i style="height:12px;background:#9ca3af"></i></div><div class="c"><i style="height:11px;background:#9ca3af"></i></div><div class="c"><i style="height:14px;background:#9ca3af"></i></div><div class="c"><i style="height:15px;background:#9ca3af"></i><i style="height:3px;background:var(--crit)"></i></div><div class="c"><i style="height:17px;background:#9ca3af"></i><i style="height:6px;background:var(--crit)"></i></div><div class="c"><i style="height:18px;background:#9ca3af"></i><i style="height:7px;background:var(--crit)"></i></div><div class="c"><i style="height:15px;background:#9ca3af"></i><i style="height:3px;background:var(--crit)"></i></div><div class="c"><i style="height:12px;background:#9ca3af"></i></div><div class="c"><i style="height:10px;background:#9ca3af"></i></div><div class="c"><i style="height:9px;background:#9ca3af"></i></div><div class="c"><i style="height:8px;background:#9ca3af"></i></div><div class="c"><i style="height:7px;background:#9ca3af"></i></div><div class="c"><i style="height:6px;background:#9ca3af"></i></div><div class="c"><i style="height:5px;background:#9ca3af"></i></div>
+          </div><div class="brush" style="left:43.5%;width:6%"></div><div class="tick" style="left:46%"></div></div></div>
+        <div class="lane"><span class="lbl"><i class="sd" style="background:var(--sv-info)"></i>Logs<span class="n">18,902</span></span><div class="trk"><div class="bars">
+          <div class="c"><i style="height:8px;background:var(--sv-info)"></i></div><div class="c"><i style="height:9px;background:var(--sv-info)"></i></div><div class="c"><i style="height:11px;background:var(--sv-info)"></i><i style="height:2px;background:var(--sv-warn)"></i></div><div class="c"><i style="height:10px;background:var(--sv-info)"></i><i style="height:3px;background:var(--sv-warn)"></i></div><div class="c"><i style="height:12px;background:var(--sv-info)"></i><i style="height:4px;background:var(--sv-warn)"></i></div><div class="c"><i style="height:12px;background:var(--sv-info)"></i><i style="height:5px;background:var(--sv-warn)"></i><i style="height:3px;background:var(--sv-error)"></i></div><div class="c"><i style="height:11px;background:var(--sv-info)"></i><i style="height:6px;background:var(--sv-warn)"></i><i style="height:7px;background:var(--sv-error)"></i></div><div class="c"><i style="height:11px;background:var(--sv-info)"></i><i style="height:5px;background:var(--sv-warn)"></i><i style="height:8px;background:var(--sv-error)"></i></div><div class="c"><i style="height:10px;background:var(--sv-info)"></i><i style="height:3px;background:var(--sv-warn)"></i><i style="height:2px;background:var(--sv-error)"></i></div><div class="c"><i style="height:9px;background:var(--sv-info)"></i></div><div class="c"><i style="height:8px;background:var(--sv-info)"></i></div><div class="c"><i style="height:8px;background:var(--sv-info)"></i></div><div class="c"><i style="height:7px;background:var(--sv-info)"></i></div><div class="c"><i style="height:7px;background:var(--sv-info)"></i></div><div class="c"><i style="height:6px;background:var(--sv-info)"></i></div><div class="c"><i style="height:6px;background:var(--sv-info)"></i></div>
+          </div><div class="brush" style="left:43.5%;width:6%"></div><div class="tick" style="left:46%"></div></div></div>
+        <div class="lane"><span class="lbl"><i class="sd" style="background:var(--s3)"></i>Metric points<span class="n">96,410</span></span><div class="trk"><div class="bars">
+          <div class="c"><i style="height:14px;background:#a7dcc6"></i></div><div class="c"><i style="height:14px;background:#a7dcc6"></i></div><div class="c"><i style="height:14px;background:#a7dcc6"></i></div><div class="c"><i style="height:15px;background:#a7dcc6"></i></div><div class="c"><i style="height:15px;background:#a7dcc6"></i></div><div class="c"><i style="height:15px;background:#a7dcc6"></i></div><div class="c"><i style="height:16px;background:#a7dcc6"></i></div><div class="c"><i style="height:16px;background:#a7dcc6"></i></div><div class="c"><i style="height:15px;background:#a7dcc6"></i></div><div class="c"><i style="height:15px;background:#a7dcc6"></i></div><div class="c"><i style="height:14px;background:#a7dcc6"></i></div><div class="c"><i style="height:14px;background:#a7dcc6"></i></div><div class="c"><i style="height:14px;background:#a7dcc6"></i></div><div class="c"><i style="height:14px;background:#a7dcc6"></i></div><div class="c"><i style="height:14px;background:#a7dcc6"></i></div><div class="c"><i style="height:14px;background:#a7dcc6"></i></div>
+          </div><div class="brush" style="left:43.5%;width:6%"></div><div class="tick" style="left:46%"></div></div></div>
+        <div class="axis"><span>14:02</span><span>14:05</span><span>14:08</span><span>14:11</span><span>14:14</span><span>14:16</span></div>
+        <div class="grip">◢</div>
+      </div>
+
+      <!-- traces -->
+      <div class="w" style="grid-column:1 / span 7; grid-row: span 13">
+        <span class="reuse" style="right:12px;top:30px">shared: Trace list + flame graph</span>
+        <div class="wh"><span class="drag">⠿</span><b>Traces</b><span class="sub2">38 in selected time · errors first</span><div class="ic"><span class="follow">⛓ follows selection</span><span>Open in Traces →</span><span>⋯</span></div></div>
+        <table class="mini">
+          <tr><th>Time</th><th>Service</th><th>Resource</th><th style="text-align:right">Duration</th><th>Status</th></tr>
+          <tr class="sel"><td class="num">14:09:05.112</td><td><span class="sd" style="background:var(--s1)"></span> api</td><td class="msg">GET /checkout</td><td class="num" style="text-align:right">1.84 s</td><td class="st">● Error</td></tr>
+          <tr><td class="num">14:09:44.870</td><td><span class="sd" style="background:var(--s2)"></span> payments</td><td class="msg">POST /charge</td><td class="num" style="text-align:right">982 ms</td><td class="st">● Error</td></tr>
+          <tr><td class="num">14:09:12.300</td><td><span class="sd" style="background:var(--s1)"></span> api</td><td class="msg">GET /cart</td><td class="num" style="text-align:right">140 ms</td><td style="color:var(--mu)">Ok</td></tr>
+        </table>
+        <div style="margin-top:8px;border-top:1px solid var(--ln2);padding-top:6px">
+          <div style="font-size:11.5px;color:var(--mu);margin-bottom:4px">Selected trace · 14 spans · <span style="color:var(--acx)">open trace panel →</span></div>
+          <div class="wf"><span style="left:0;width:99%;background:var(--s1)">GET /checkout</span></div>
+          <div class="wf"><span style="left:1%;width:27%;background:var(--s1)">cart.load</span><span class="err" style="left:29%;width:61%;background:var(--s2)">POST /charge</span></div>
+          <div class="wf"><span style="left:2%;width:24%;background:var(--s4);color:#16181d">SELECT orders</span><span class="err" style="left:30%;width:21%;background:var(--s2)">stripe.charge</span><span style="left:53%;width:35%;background:var(--s2)">stripe.charge</span></div>
+          <div class="wf"><span class="err" style="left:31%;width:19%;background:var(--s3)">HTTP POST</span><span style="left:54%;width:32%;background:var(--s3)">HTTP POST</span></div>
+        </div>
+        <div class="grip">◢</div>
+      </div>
+
+      <!-- logs -->
+      <div class="w" style="grid-column:8 / span 5; grid-row: span 13">
+        <span class="reuse" style="right:12px;top:30px">shared: Log list</span>
+        <div class="wh"><span class="drag">⠿</span><b>Logs</b><span class="sub2">9 for the selected trace</span><div class="ic"><span class="seg"><span class="on">Only matches</span><span>Show context</span></span><span>⋯</span></div></div>
+        <table class="mini">
+          <tr><th>Time</th><th>Sev</th><th>Body</th></tr>
+          <tr><td class="num">14:09:05.031</td><td><span class="lv in"><i></i>INFO</span></td><td class="msg">POST https://api.stripe.com/v1/charges</td></tr>
+          <tr class="sel"><td class="num">14:09:05.402</td><td><span class="lv er"><i></i>ERROR</span></td><td class="msg">card declined: 402</td></tr>
+          <tr><td class="num">14:09:05.410</td><td><span class="lv wn"><i></i>WARN</span></td><td class="msg">retrying charge in 200ms</td></tr>
+          <tr><td class="num">14:09:05.890</td><td><span class="lv in"><i></i>INFO</span></td><td class="msg">charge ok on attempt 2</td></tr>
+          <tr><td class="num">14:09:06.020</td><td><span class="lv wn"><i></i>WARN</span></td><td class="msg">ledger latency above 150ms</td></tr>
+          <tr><td class="num">14:09:06.801</td><td><span class="lv er"><i></i>ERROR</span></td><td class="msg">upstream 502 from payments</td></tr>
+          <tr><td class="num">14:09:06.840</td><td><span class="lv in"><i></i>INFO</span></td><td class="msg">checkout complete status=502</td></tr>
+        </table>
+        <div style="margin-top:auto;font-size:11.5px;color:var(--acx)">Open in Logs with these filters →</div>
+        <div class="grip">◢</div>
+      </div>
+
+      <!-- metrics -->
+      <div class="w" style="grid-column:1 / span 12; grid-row: span 7">
+        <span class="reuse" style="right:12px;top:30px">shared: Chart cards (pick metrics in the widget or in config)</span>
+        <div class="wh"><span class="drag">⠿</span><b>Metrics</b><span class="sub2">from the selected trace's resources · selected window marked</span><div class="ic"><span class="follow">⛓ follows selection</span><span>+ metric</span><span>Open in Metrics →</span><span>⋯</span></div></div>
+        <div class="mgrid" style="grid-template-columns:repeat(4,1fr)">
+          <div class="mc"><div class="t">Server duration p95 <small>http.server.request.duration</small></div><svg viewBox="0 0 200 66" preserveAspectRatio="none"><rect x="87" y="0" width="12" height="64" fill="rgba(22,24,29,.07)"/><line x1="0" y1="64" x2="200" y2="64" stroke="#c3c2b7"/><polyline fill="none" stroke="var(--s1)" stroke-width="2" points="0,54 40,52 70,40 92,12 110,30 150,48 200,52"/><circle cx="92" cy="12" r="4.5" fill="var(--sf)" stroke="var(--ink)" stroke-width="2.5"/></svg></div>
+          <div class="mc"><div class="t">Client duration p95 <small>http.client.request.duration</small></div><svg viewBox="0 0 200 66" preserveAspectRatio="none"><rect x="87" y="0" width="12" height="64" fill="rgba(22,24,29,.07)"/><line x1="0" y1="64" x2="200" y2="64" stroke="#c3c2b7"/><polyline fill="none" stroke="var(--s1)" stroke-width="2" points="0,56 40,55 70,46 92,18 110,36 150,52 200,55"/></svg></div>
+          <div class="mc"><div class="t">CPU <small>process.cpu.utilization</small></div><svg viewBox="0 0 200 66" preserveAspectRatio="none"><rect x="87" y="0" width="12" height="64" fill="rgba(22,24,29,.07)"/><line x1="0" y1="64" x2="200" y2="64" stroke="#c3c2b7"/><polyline fill="none" stroke="var(--s1)" stroke-width="2" points="0,48 40,46 70,40 92,28 110,34 150,44 200,46"/></svg></div>
+          <div class="mc"><div class="t">Jobs completed <small>jobs.completed · rate</small></div><svg viewBox="0 0 200 66" preserveAspectRatio="none"><rect x="87" y="0" width="12" height="64" fill="rgba(22,24,29,.07)"/><line x1="0" y1="64" x2="200" y2="64" stroke="#c3c2b7"/><polyline fill="none" stroke="var(--s1)" stroke-width="2" points="0,40 40,38 70,36 92,42 110,38 150,36 200,37"/></svg></div>
+        </div>
+        <div class="grip">◢</div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<h3 style="margin-top:24px">Dashboards come from config (Fusion ships with the library)</h3>
+<pre class="cfg"><span class="c"># otel-html.yaml (or passed to the API as an object)</span>
+<span class="k">dashboards</span>:
+  - <span class="k">id</span>: <span class="s">checkout</span>
+    <span class="k">title</span>: <span class="s">Checkout service</span>
+    <span class="k">variables</span>: [<span class="s">service.name</span>, <span class="s">host.name</span>]          <span class="c"># dropdowns in the filter bar</span>
+    <span class="k">widgets</span>:
+      - { <span class="k">type</span>: <span class="s">timeline</span>, <span class="k">x</span>: 0, <span class="k">y</span>: 0, <span class="k">w</span>: 12, <span class="k">h</span>: 6 }
+      - { <span class="k">type</span>: <span class="s">traces</span>, <span class="k">query</span>: <span class="s">"service.name=payments status=error"</span>, <span class="k">x</span>: 0, <span class="k">y</span>: 6, <span class="k">w</span>: 7, <span class="k">h</span>: 13 }
+      - { <span class="k">type</span>: <span class="s">logs</span>, <span class="k">query</span>: <span class="s">"severity>=WARN"</span>, <span class="k">x</span>: 7, <span class="k">y</span>: 6, <span class="k">w</span>: 5, <span class="k">h</span>: 13 }
+      - <span class="k">type</span>: <span class="s">metric</span>                                           <span class="c"># same query model as the Metrics Explorer</span>
+        <span class="k">queries</span>: [{ <span class="k">metric</span>: <span class="s">http.server.request.duration</span>, <span class="k">show</span>: <span class="s">p95</span>, <span class="k">by</span>: [<span class="s">http.route</span>] }]
+        <span class="k">x</span>: 0, <span class="k">y</span>: 19, <span class="k">w</span>: 6, <span class="k">h</span>: 7</pre>
+
+<div class="notes">
+  <p><b>Dashboards list.</b> Fusion is built in and is the default. Other dashboards come from the config file, or from objects passed to the library API, and each row shows where it came from. Making a dashboard the default means opening the report lands on it.</p>
+  <p><b>Fusion layout.</b> A 12-column grid. A full-width <i>Timeline</i> sits on top with one row each for spans (error part in red), logs (stacked by severity) and metric points, all on the same time axis. Below are the <i>Traces</i>, <i>Logs</i> and <i>Metrics</i> widgets. Drag ⠿ moves a widget, ◢ resizes it, and "Edit layout" → "Copy config" exports the layout.</p>
+  <p><b>Two kinds of filter.</b> <i>Variables</i> (service.name, environment, host.name) are template variables that apply to every widget. <i>Selection</i> chips come from interacting with widgets: dragging on the timeline or a chart adds a time range, clicking a trace adds its trace_id, and clicking an exemplar adds its trace. Each chip has ✕, and there's a Clear all.</p>
+  <p><b>Following the selection.</b> Each widget has a "⛓ follows selection" toggle, so a widget can be pinned to its own view. The Logs widget has <i>Only matches / Show context</i>: matching logs alone, or all logs in the time window with the matches highlighted. Metrics follows the resources of the selected trace and marks the selected time window.</p>
+  <p><b>Same components.</b> The widgets are the shared Trace list, flame graph, Log list and Chart card, and the config uses the same query syntax as the explorers. Every widget's "Open in …" carries both its filters and the current selection.</p>
+</div>
