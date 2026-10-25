@@ -1,0 +1,33 @@
+[tools]
+node = "24.22.1"
+bun = "1.4.4"
+pnpm = "12.15.0"
+lefthook = "2.2.2"
+claude = "latest"
+
+[tasks.setup]
+run = "pnpm install --frozen-lockfile && lefthook install"
+
+[tasks.lint]
+run = "pnpm exec biome ci ."
+
+[tasks.format]
+run = "pnpm exec biome format --write ."
+
+[tasks.typecheck]
+run = "pnpm exec tsc -p tsconfig.json --noEmit && pnpm exec tsc -p tsconfig.viewer.json --noEmit"
+
+[tasks."test:unit"]
+run = "pnpm exec vitest run"
+
+[tasks.knip]
+run = "pnpm exec knip"
+
+[tasks.gen]
+run = "echo 'no generators yet'"
+
+[tasks."gen:check"]
+run = "echo 'no generators yet'"
+
+[tasks.check]
+depends = ["lint", "typecheck", "test:unit", "knip"]

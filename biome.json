@@ -1,0 +1,53 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.6.3/schema.json",
+  "files": {
+    "includes": [
+      "**",
+      "!**/gen",
+      "!**/*.gen.ts",
+      "!proto",
+      "!**/fixtures",
+      "!pnpm-lock.yaml",
+      "!node_modules",
+      "!dist",
+      "!.superpowers",
+      "!docs",
+      "!README.md"
+    ]
+  },
+  "formatter": { "indentStyle": "space", "indentWidth": 2, "lineWidth": 110 },
+  "javascript": { "formatter": { "quoteStyle": "single" } },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "style": {
+        "noNonNullAssertion": "error",
+        "noDefaultExport": "error",
+        "useConst": "error",
+        "useImportType": "error"
+      },
+      "suspicious": { "noExplicitAny": "error", "noConsole": "error" },
+      "complexity": { "noForEach": "error", "useLiteralKeys": "error" },
+      "nursery": { "useExhaustiveSwitchCases": "error" },
+      "correctness": { "noUnusedVariables": "error", "noUnusedImports": "error" }
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["*.config.ts", "*.config.js"],
+      "linter": { "rules": { "style": { "noDefaultExport": "off" } } }
+    },
+    {
+      "includes": [
+        "src/model/**",
+        "src/format/**",
+        "src/ottl/**",
+        "src/rollups/**",
+        "src/semconv/**",
+        "src/viewer/**"
+      ],
+      "linter": { "rules": { "correctness": { "noNodejsModules": "error" } } }
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "types": [],
+    "isolatedDeclarations": false
+  },
+  "include": [
+    "src/viewer/**/*",
+    "src/model/**/*",
+    "src/format/**/*",
+    "src/semconv/**/*",
+    "src/rollups/**/*",
+    "src/ottl/**/*"
+  ]
+}
