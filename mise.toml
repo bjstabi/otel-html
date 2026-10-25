@@ -24,10 +24,10 @@ run = "pnpm exec vitest run"
 run = "pnpm exec knip"
 
 [tasks.gen]
-run = "echo 'no generators yet'"
+run = "pnpm exec buf generate"
 
 [tasks."gen:check"]
-run = "echo 'no generators yet'"
+run = "bash scripts/gen-check.sh"
 
 [tasks.check]
 depends = ["lint", "typecheck", "test:unit", "knip"]
