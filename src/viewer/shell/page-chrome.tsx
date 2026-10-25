@@ -1,9 +1,9 @@
 import { Dialog } from '@base-ui/react/dialog';
 import { Menu } from '@base-ui/react/menu';
-import { Download, Link2, Search } from 'lucide-react';
+import { Download, Link2 } from 'lucide-react';
 import { type JSX, type ReactNode, useEffect, useRef, useState } from 'react';
 import type { Manifest } from '../../format/manifest.js';
-import { useSelection } from '../state/selection-context.js';
+import { QueryBar } from '../components/query-bar.js';
 import { TimeRange } from './time-range.js';
 
 export interface ExportItem {
@@ -114,25 +114,6 @@ function ExportMenu({ items }: { items: readonly ExportItem[] }): JSX.Element {
   );
 }
 
-function QueryBar(): JSX.Element {
-  const text = useSelection((s) => s.text);
-  const setText = useSelection((s) => s.setText);
-  return (
-    <label className="flex min-w-48 flex-1 items-center gap-2 rounded-full border border-hairline bg-surface px-3 py-1.5">
-      <Search size={16} aria-hidden className="text-muted" />
-      <input
-        type="search"
-        data-oh-query
-        aria-label="Search"
-        placeholder="Search (press / to focus)"
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        className="w-full bg-transparent text-sm outline-none"
-      />
-    </label>
-  );
-}
-
 /** Title, query bar, time range, Copy link and the Export menu; `exportItems` is filled per page. */
 export function PageChrome(props: {
   title: string;
@@ -149,7 +130,7 @@ export function PageChrome(props: {
           <ExportMenu items={props.exportItems ?? []} />
         </div>
         <div className="flex flex-wrap items-center gap-3">
-          <QueryBar />
+          <QueryBar signal="span" />
           <TimeRange manifest={props.manifest} />
         </div>
       </header>

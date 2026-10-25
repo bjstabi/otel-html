@@ -171,17 +171,35 @@ const CORE_SPAN_KEYS: ReadonlyMap<string, string> = new Map([
   ['status.code', 'span.status.code'],
   ['span.name', 'span.name'],
   ['span.kind', 'span.kind'],
+  ['instrumentation_scope.name', 'instrumentation_scope.name'],
 ]);
+
+/** Facet keys with this prefix address a resource attribute (`resource:host.name`); the rest of the key is verbatim. */
+export const RESOURCE_KEY_PREFIX = 'resource:';
+
+function attributePath(root: 'span' | 'resource', key: string): string {
+  return printCondition({
+    type: 'value',
+    value: { type: 'path', segments: [root, 'attributes'], keys: [key], from: 0 },
+  });
+}
 
 export function facetKeyToPath(key: string, signal: 'span'): string {
   switch (signal) {
-    case 'span':
-      return (
-        CORE_SPAN_KEYS.get(key) ??
-        printCondition({
-          type: 'value',
-          value: { type: 'path', segments: ['span', 'attributes'], keys: [key], from: 0 },
-        })
-      );
+    case 'span': {
+      const core = CORE_SPAN_KEYS.get(key);
+      if (core !== undefined) return core;
+      if (key.startsWith(RESOURCE_KEY_PREFIX)) {
+        const name = key.slice(RESOURCE_KEY_PREFIX.length);
+        if (name === '')
+          throw new OtelHtmlError('usage', {
+            path: 'facet key',
+            expected: `a resource attribute name after "${RESOURCE_KEY_PREFIX}"`,
+            actual: JSON.stringify(key),
+          });
+        return attributePath('resource', name);
+      }
+      return attributePath('span', key);
+    }
   }
 }

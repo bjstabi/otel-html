@@ -75,4 +75,12 @@ describe('facetKeyToPath', () => {
     expect(facetKeyToPath('status.code', 'span')).toBe('span.status.code');
     expect(facetKeyToPath('http.method', 'span')).toBe('span.attributes["http.method"]');
   });
+
+  test('resource: prefix addresses resource attributes; core scope name maps to its path', () => {
+    expect(facetKeyToPath('resource:host.name', 'span')).toBe('resource.attributes["host.name"]');
+    expect(facetKeyToPath('resource:service.name', 'span')).toBe(SERVICE);
+    expect(facetKeyToPath('instrumentation_scope.name', 'span')).toBe('instrumentation_scope.name');
+    expect(facetKeyToPath('resource:a"b', 'span')).toBe('resource.attributes["a\\"b"]');
+    expect(() => facetKeyToPath('resource:', 'span')).toThrow(/resource/);
+  });
 });
