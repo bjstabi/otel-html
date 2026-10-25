@@ -49,3 +49,8 @@ run = "pnpm exec playwright install chromium firefox webkit && pnpm exec playwri
 [tasks."check:package"]
 depends = ["build"]
 run = "pnpm exec publint && pnpm exec attw --pack --profile esm-only"
+
+# Chromium only (file and http projects): the quick loop while iterating; `test:e2e` is the full matrix.
+[tasks."test:e2e:chromium"]
+depends = ["build"]
+run = "pnpm exec playwright install chromium && pnpm exec playwright test --project='chromium-*'"

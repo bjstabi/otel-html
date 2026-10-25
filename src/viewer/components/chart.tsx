@@ -1,4 +1,4 @@
-import { BarChart, LineChart } from 'echarts/charts';
+import { BarChart, LineChart, PieChart, ScatterChart, TreemapChart } from 'echarts/charts';
 import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components';
 import { type EChartsType, init, use } from 'echarts/core';
 import { CanvasRenderer } from 'echarts/renderers';
@@ -6,7 +6,17 @@ import { type JSX, useEffect, useRef } from 'react';
 import { buildEchartsTheme } from '../theme/echarts-theme.js';
 import { useTheme } from '../theme/theme-provider.js';
 
-use([LineChart, BarChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer]);
+use([
+  LineChart,
+  BarChart,
+  PieChart,
+  ScatterChart,
+  TreemapChart,
+  GridComponent,
+  TooltipComponent,
+  LegendComponent,
+  CanvasRenderer,
+]);
 
 const TOKEN_NAMES: readonly string[] = [
   '--oh-ink',

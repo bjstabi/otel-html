@@ -5,7 +5,16 @@ import { createServer } from 'node:http';
 import { extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { HOSTILE_SPAN_NAME, HTTP_SUBPATH, PORT_ENV, REPORT_DIR, REPORTS_DIR, RUN_TITLE } from './fixture.js';
+import {
+  HOSTILE_SPAN_NAME,
+  HTTP_SUBPATH,
+  PORT_ENV,
+  REPORT_DIR,
+  REPORTS_DIR,
+  RUN_TITLE,
+  SERVICE_A,
+  SERVICE_B,
+} from './fixture.js';
 
 const run = promisify(execFile);
 const CLI = fileURLToPath(new URL('../dist/cli/main.js', import.meta.url));
@@ -20,10 +29,17 @@ const str = (key: string, value: string): { key: string; value: { stringValue: s
   value: { stringValue: value },
 });
 
-/** A tiny OTLP/JSON input: two traces, a hostile span name, one log, one metric. */
+/** A tiny OTLP/JSON input: two traces over two services, 6 spans of which 2 error, a hostile span name, one log, one metric. */
 function otlpInputs(): Record<string, unknown> {
   const t0 = 1_700_000_000_000_000_000n;
-  const span = (traceId: string, spanId: string, name: string, offsetMs: number, parent?: string) => ({
+  const span = (
+    traceId: string,
+    spanId: string,
+    name: string,
+    offsetMs: number,
+    parent?: string,
+    error = false,
+  ) => ({
     traceId,
     spanId,
     ...(parent === undefined ? {} : { parentSpanId: parent }),
@@ -31,8 +47,10 @@ function otlpInputs(): Record<string, unknown> {
     kind: 2,
     startTimeUnixNano: String(t0 + BigInt(offsetMs) * 1_000_000n),
     endTimeUnixNano: String(t0 + BigInt(offsetMs + 40) * 1_000_000n),
+    ...(error ? { status: { code: 2, message: 'boom' } } : {}),
   });
-  const resource = { attributes: [str('service.name', 'e2e-service')] };
+  const resource = { attributes: [str('service.name', SERVICE_A)] };
+  const dbResource = { attributes: [str('service.name', SERVICE_B)] };
   const scope = { name: 'e2e' };
   const trace1 = '0102030405060708090a0b0c0d0e0f10';
   const trace2 = '1102030405060708090a0b0c0d0e0f10';
@@ -46,8 +64,21 @@ function otlpInputs(): Record<string, unknown> {
               scope,
               spans: [
                 span(trace1, '0102030405060708', 'GET /root', 0),
-                span(trace1, '0202030405060708', 'db.query', 5, '0102030405060708'),
                 span(trace2, '0302030405060708', HOSTILE_SPAN_NAME, 100),
+                span(trace2, '0602030405060708', 'GET /health', 200),
+              ],
+            },
+          ],
+        },
+        {
+          resource: dbResource,
+          scopeSpans: [
+            {
+              scope,
+              spans: [
+                span(trace1, '0202030405060708', 'db.query', 5, '0102030405060708', true),
+                span(trace1, '0402030405060708', 'db.commit', 20, '0102030405060708'),
+                span(trace2, '0502030405060708', 'db.timeout', 110, '0302030405060708', true),
               ],
             },
           ],

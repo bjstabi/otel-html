@@ -3,12 +3,18 @@ import { userEvent } from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { Manifest } from '../../src/format/manifest.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
+import { FacetCounts } from '../../src/rollups/facets.js';
+import { RedSeries } from '../../src/rollups/red.js';
+import { TimeBuckets } from '../../src/rollups/time-buckets.js';
 import { App } from '../../src/viewer/app.js';
-import type { DataSource } from '../../src/viewer/data/data-source.js';
+import type { DataSource, SpanQueryResult } from '../../src/viewer/data/data-source.js';
 import { Shell } from '../../src/viewer/shell/shell.js';
 import { stepWindow } from '../../src/viewer/shell/time-range.js';
 import { createHashHistory } from '../../src/viewer/state/hash-history.js';
 import { ThemeProvider } from '../../src/viewer/theme/theme-provider.js';
+
+// jsdom has no layout or ResizeObserver, which ECharts needs; the explorer's charts are covered by e2e.
+vi.mock('../../src/viewer/components/chart.js', () => ({ Chart: (): null => null }));
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -31,13 +37,27 @@ const manifest: Manifest = {
 };
 
 function unused(): never {
-  throw new Error('the shell must not query data yet');
+  throw new Error('this test must not reach that part of the data source');
 }
+const emptyResult = (): SpanQueryResult => ({
+  rows: [],
+  total: 0,
+  facets: new FacetCounts(10, 10),
+  buckets: new TimeBuckets(['ok', 'error', 'unset'], 8),
+  red: new RedSeries(8),
+  partial: null,
+});
 const dataSource: DataSource = {
   manifest,
   strategy: 'eager',
-  landing: unused,
-  querySpans: unused,
+  landing: () =>
+    Promise.resolve({
+      facets: new FacetCounts(10, 10),
+      buckets: new TimeBuckets(['ok', 'error', 'unset'], 8),
+      red: new RedSeries(8),
+      durations: new Map(),
+    }),
+  querySpans: () => Promise.resolve(emptyResult()),
   getTrace: unused,
   percentileOf: unused,
 };
@@ -205,9 +225,17 @@ describe('chrome', () => {
     expect((within(dialog).getByRole('textbox') as HTMLInputElement).value).toBe(window.location.href);
   });
 
-  test('the Export menu opens with a disabled slot to be filled per page', async () => {
+  test('the Export menu opens with a disabled slot on pages without exports and the formats on Traces', async () => {
     const user = userEvent.setup();
     renderShell('#/traces');
+    await user.click(screen.getByRole('button', { name: 'Export' }));
+    expect((await screen.findAllByRole('menuitem')).map((i) => i.textContent)).toEqual([
+      'Export CSV',
+      'Export JSON',
+      'Export OTLP JSON',
+    ]);
+    cleanup();
+    renderShell('#/logs');
     await user.click(screen.getByRole('button', { name: 'Export' }));
     const item = await screen.findByRole('menuitem', { name: /Nothing to export on this page/ });
     expect(item.getAttribute('aria-disabled')).toBe('true');
@@ -321,10 +349,10 @@ describe('overlays own the keyboard', () => {
     const user = userEvent.setup();
     renderShell(`#/traces?trace=${TRACE}`);
     await user.click(screen.getByRole('button', { name: 'Export' }));
-    await screen.findByRole('menuitem');
+    await screen.findAllByRole('menuitem');
     await user.keyboard('{Escape}');
     expect(window.location.hash).toContain(`trace=${TRACE}`);
-    await waitFor(() => expect(screen.queryByRole('menuitem')).toBeNull());
+    await waitFor(() => expect(screen.queryAllByRole('menuitem')).toHaveLength(0));
     await user.keyboard('{Escape}');
     expect(window.location.hash).not.toContain('trace=');
   });

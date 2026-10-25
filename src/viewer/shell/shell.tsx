@@ -6,14 +6,14 @@ import type { DataSource } from '../data/data-source.js';
 import { bindUrl, createSelectionStore, type HistoryPort, selectionToUrlState } from '../state/selection.js';
 import { SelectionProvider } from '../state/selection-context.js';
 import { parseUrlState, serializeUrlState } from '../state/url-state.js';
-import { ComingLaterPage, NotFoundPage, ServicesPage, TracesExplorerPage } from './pages.js';
+import { TracesExplorer } from '../traces/explorer.js';
+import { ServicesPage } from '../traces/services-page.js';
+import { MOVE_EVENT } from './move-event.js';
+import { ComingLaterPage, NotFoundPage } from './pages.js';
 import { ShortcutHelp } from './shortcut-help.js';
 import { createShortcutHandler, SHORTCUTS, type ShortcutActions } from './shortcuts.js';
 import { Sidebar } from './sidebar.js';
 import { navigateRoute, useRoute } from './use-route.js';
-
-/** Pages listen for this on `window` (detail is -1 or 1) to move their row selection with `j` and `k`. */
-export const MOVE_EVENT = 'oh:move';
 
 function UrlErrors(props: { errors: readonly string[]; onDismiss: () => void }): JSX.Element | null {
   if (props.errors.length === 0) return null;
@@ -87,7 +87,7 @@ export function Shell(props: { dataSource: DataSource; history: HistoryPort }): 
             <Sidebar manifest={manifest} />
             <div className="flex min-w-0 flex-1 flex-col">
               <UrlErrors errors={errors} onDismiss={() => setErrors([])} />
-              <RoutedPage manifest={manifest} />
+              <RoutedPage dataSource={dataSource} />
             </div>
           </div>
           <ShortcutHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
@@ -97,7 +97,8 @@ export function Shell(props: { dataSource: DataSource; history: HistoryPort }): 
   );
 }
 
-function RoutedPage({ manifest }: { manifest: DataSource['manifest'] }): JSX.Element {
+function RoutedPage({ dataSource }: { dataSource: DataSource }): JSX.Element {
+  const manifest = dataSource.manifest;
   const [route] = useRoute();
   return (
     <Switch>
@@ -105,10 +106,10 @@ function RoutedPage({ manifest }: { manifest: DataSource['manifest'] }): JSX.Ele
         <Redirect to="/traces" replace />
       </Route>
       <Route path="/traces">
-        <TracesExplorerPage manifest={manifest} />
+        <TracesExplorer dataSource={dataSource} />
       </Route>
       <Route path="/traces/services">
-        <ServicesPage manifest={manifest} />
+        <ServicesPage dataSource={dataSource} />
       </Route>
       <Route path="/logs">
         <ComingLaterPage page="logs" manifest={manifest} />

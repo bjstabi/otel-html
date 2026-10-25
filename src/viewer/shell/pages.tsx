@@ -5,34 +5,6 @@ import { PageChrome } from './page-chrome.js';
 
 const CARD = 'rounded-card border border-hairline bg-surface p-6 max-w-xl';
 
-export function TracesExplorerPage({ manifest }: { manifest: Manifest }): JSX.Element {
-  return (
-    <PageChrome title="Traces Explorer" manifest={manifest}>
-      <section className={CARD}>
-        <h2 className="text-base font-semibold">Placeholder page</h2>
-        <p className="mt-1 text-sm text-ink-2">
-          The span and trace explorer is built in a following task. This run holds{' '}
-          <output aria-label="Spans in this run" className="font-mono tabular-nums">
-            {manifest.totals.spans}
-          </output>{' '}
-          spans.
-        </p>
-      </section>
-    </PageChrome>
-  );
-}
-
-export function ServicesPage({ manifest }: { manifest: Manifest }): JSX.Element {
-  return (
-    <PageChrome title="Services" manifest={manifest}>
-      <section className={CARD}>
-        <h2 className="text-base font-semibold">Placeholder page</h2>
-        <p className="mt-1 text-sm text-ink-2">The services table is built in a following task.</p>
-      </section>
-    </PageChrome>
-  );
-}
-
 const LATER: Record<'logs' | 'metrics' | 'dashboards', { title: string; signal: Signal; noun: string }> = {
   logs: { title: 'Logs', signal: 'logs', noun: 'Log records in this run' },
   metrics: { title: 'Metrics', signal: 'metrics', noun: 'Metric data points in this run' },
