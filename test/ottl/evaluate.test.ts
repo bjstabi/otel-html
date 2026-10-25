@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest';
+import type { RelNanos } from '../../src/model/ids.js';
 import { compileCondition } from '../../src/ottl/compile.js';
 import { spanTarget } from './fixtures.js';
 
@@ -107,7 +108,7 @@ describe('comparison semantics', () => {
     expect(run('0.0 / 0.0 > 1')).toBe(false);
   });
   test('nanosecond precision survives subtraction and comparison', () => {
-    const t = spanTarget({ start: 1 as never, end: 2 as never });
+    const t = spanTarget({ start: 1 as RelNanos, end: 2 as RelNanos });
     expect(run('end_time_unix_nano - start_time_unix_nano == 1', t)).toBe(true);
     expect(run('start_time_unix_nano == 1700000000000000001', t)).toBe(true);
   });

@@ -4,7 +4,7 @@ import { parseCondition, printCondition } from '../../src/ottl/parse.js';
 
 function roundTrip(src: string) {
   const e = parseCondition(src);
-  expect(parseCondition(printCondition(e))).toEqual(e);
+  expect(printCondition(parseCondition(printCondition(e)))).toBe(printCondition(e));
   return e;
 }
 
@@ -28,7 +28,7 @@ describe('parseCondition', () => {
   ])('parses %s', (src, top) => {
     const e = parseCondition(src);
     expect(e.type).toBe(top);
-    expect(parseCondition(printCondition(e))).toEqual(e); // print is a fixpoint
+    expect(printCondition(parseCondition(printCondition(e)))).toBe(printCondition(e)); // print is a fixpoint
   });
 
   test('string escapes', () => {

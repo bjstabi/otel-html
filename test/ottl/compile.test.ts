@@ -46,6 +46,16 @@ describe('compile-time failures', () => {
   test('keys on a non-map path', () => {
     expect(() => compileCondition('name["x"] == "y"', 'span')).toThrowError(/does not take keys/);
   });
+  test('enum column is its own position', () => {
+    expect(() => compileCondition('name == "x" and status.code == STATUS_CODE_NOPE', 'span')).toThrowError(
+      /^col 32: expected a known enum/,
+    );
+  });
+  test('boolean-expression error column', () => {
+    expect(() => compileCondition('name == "x" and Len(name)', 'span')).toThrowError(
+      /^col 17: expected a boolean expression/,
+    );
+  });
   test('non-boolean top-level expression', () => {
     expect(() => compileCondition('name', 'span')).toThrowError(/expected a boolean expression/);
     expect(() => compileCondition('Len(name)', 'span')).toThrowError(/expected a boolean expression/);
@@ -61,14 +71,21 @@ describe('compile-time failures', () => {
   test('regex pattern must be a string literal', () => {
     expect(() => compileCondition('IsMatch(name, name)', 'span')).toThrowError(/string literal/);
   });
-  test.each(['(a+)+$', '(a*)*', '(.*a){1,}b*(x+y)+', '(a|b+)*', '(a)\\1', '(?=a)a', '(?<!a)b'])(
-    'rejects backtracking-prone or non-RE2 regex %s',
-    (p) => {
-      expect(() => compileCondition(`IsMatch(name, ${JSON.stringify(p)})`, 'span')).toThrowError(
-        /invalid-?|regular expression/i,
-      );
-    },
-  );
+  test.each([
+    '(a+)+$',
+    '(a*)*',
+    '(.*a){1,}b*(x+y)+',
+    '(a|b+)*',
+    '(a)\\1',
+    '(?=a)a',
+    '(?<!a)b',
+    '[^](a+)+$',
+    '[](a+)+$',
+  ])('rejects backtracking-prone or non-RE2 regex %s', (p) => {
+    expect(() => compileCondition(`IsMatch(name, ${JSON.stringify(p)})`, 'span')).toThrowError(
+      /invalid-?|regular expression/i,
+    );
+  });
   test.each(['^GET /api/[a-z]+$', '(ab)+c', '(a+)?b', '(a|b){2,5}', '[(+*]+', '\\(a+\\)+', '(?i)get'])(
     'accepts %s',
     (p) => {

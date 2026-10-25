@@ -46,7 +46,7 @@ function regexProblem(p: string): string | undefined {
     if (c === '[') {
       i++;
       if (p.charAt(i) === '^') i++;
-      if (p.charAt(i) === ']') i++;
+      // JS semantics: a ']' right after '[' or '[^' closes the class ([] is empty, [^] is any).
       while (i < p.length && p.charAt(i) !== ']') i += p.charAt(i) === '\\' ? 2 : 1;
       lastAtomUnboundedGroup = false;
       i++;

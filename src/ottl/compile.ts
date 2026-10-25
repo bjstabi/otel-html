@@ -98,7 +98,7 @@ class Compiler<C extends OttlContextName> {
         const n = ENUMS.get(v.name);
         if (n === undefined)
           throw new OtelHtmlError('invalid-ottl', {
-            path: `col ${col}`,
+            path: `col ${v.from + 1}`,
             expected: 'a known enum',
             actual: JSON.stringify(v.name),
           });
@@ -181,7 +181,7 @@ class Compiler<C extends OttlContextName> {
 }
 
 function valueCol(v: Value): number {
-  return v.type === 'path' || v.type === 'call' ? v.from + 1 : 1;
+  return v.type === 'path' || v.type === 'call' || v.type === 'enum' ? v.from + 1 : 1;
 }
 
 export function compileCondition<C extends OttlContextName>(src: string, context: C): CompiledCondition<C> {
@@ -200,7 +200,13 @@ export function compileAny<C extends OttlContextName>(
       return compileCondition(src, context);
     } catch (e) {
       if (e instanceof OtelHtmlError)
-        throw new OtelHtmlError(e.code, { message: `conditions[${i}] ${e.message}` });
+        throw new OtelHtmlError(e.code, {
+          ...(e.path === undefined ? {} : { path: `conditions[${i}] ${e.path}` }),
+          ...(e.expected === undefined ? {} : { expected: e.expected }),
+          ...(e.actual === undefined ? {} : { actual: e.actual }),
+          ...(e.hint === undefined ? {} : { hint: e.hint }),
+          ...(e.path === undefined ? { message: `conditions[${i}] ${e.message}` } : {}),
+        });
       throw e;
     }
   });

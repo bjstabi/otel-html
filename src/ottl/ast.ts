@@ -10,6 +10,6 @@ export type Expr =
 export type Value =
   | { type: 'path'; segments: readonly string[]; keys: readonly (string | number)[]; from: number }
   | { type: 'literal'; value: string | bigint | number | boolean | null }
-  | { type: 'enum'; name: string }
+  | { type: 'enum'; name: string; from: number }
   | { type: 'call'; name: string; args: readonly Value[]; from: number }
   | { type: 'math'; op: MathOp; left: Value; right: Value };

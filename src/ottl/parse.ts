@@ -262,7 +262,7 @@ class Lowerer {
         const name = this.text(n);
         if (!isEnumName(name))
           return fail(n.from + 1, 'enum (UPPER_SNAKE_CASE) or converter call', `'${name}'`);
-        return val({ type: 'enum', name }, 'enum');
+        return val({ type: 'enum', name, from: n.from }, 'enum');
       }
       case 'String':
         return val({ type: 'literal', value: this.string(n) }, 'string');
