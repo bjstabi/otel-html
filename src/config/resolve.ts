@@ -18,6 +18,8 @@ export interface ResolveResult {
 
 type Tree = { [key: string]: unknown };
 
+const FORBIDDEN_KEYS: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype']);
+
 function isTree(v: unknown): v is Tree {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
@@ -26,6 +28,12 @@ function isTree(v: unknown): v is Tree {
 function leaves(v: unknown, prefix: string, out: Map<string, unknown>): void {
   if (isTree(v)) {
     for (const [k, child] of Object.entries(v)) {
+      if (FORBIDDEN_KEYS.has(k)) {
+        throw new OtelHtmlError('invalid-config', {
+          path: prefix === '' ? k : `${prefix}.${k}`,
+          message: `${prefix === '' ? k : `${prefix}.${k}`}: unrecognized key`,
+        });
+      }
       if (child !== undefined) leaves(child, prefix === '' ? k : `${prefix}.${k}`, out);
     }
   } else if (prefix !== '') {
@@ -37,7 +45,7 @@ function setPath(root: Tree, path: string, value: unknown): void {
   const parts = path.split('.');
   let cur = root;
   for (const part of parts.slice(0, -1)) {
-    const next = cur[part];
+    const next = Object.hasOwn(cur, part) ? cur[part] : undefined;
     if (isTree(next)) cur = next;
     else {
       const created: Tree = {};
@@ -55,7 +63,7 @@ function envLayer(env: Readonly<Record<string, string | undefined>>): Tree {
     const raw = env[b.env];
     if (raw === undefined) continue;
     if (b.parse === 'int') {
-      if (!/^-?\d+$/.test(raw.trim())) {
+      if (!/^\d+$/.test(raw.trim())) {
         throw new OtelHtmlError('invalid-config', {
           path: b.env,
           expected: `integer (for ${b.path})`,

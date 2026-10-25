@@ -91,3 +91,18 @@ describe('JSON Schema', () => {
     expect(committed).toBe(writeJsonSchema());
   });
 });
+
+describe('prototype pollution', () => {
+  const polluted = (): boolean => Object.hasOwn(Object.prototype, 'polluted');
+  test.each([
+    ['file', (o: unknown) => ({ file: o, env: {} })],
+    ['flags', (o: unknown) => ({ flags: o as never, env: {} })],
+  ])('%s layer with __proto__ key is rejected and does not pollute', (_name, build) => {
+    for (const json of ['{"__proto__":{"polluted":1}}', '{"writer":{"__proto__":{"polluted":1}}}']) {
+      const e = failure(() => resolveConfig(build(JSON.parse(json))));
+      expect(e.code).toBe('invalid-config');
+      expect(e.message).toContain('__proto__');
+      expect(polluted()).toBe(false);
+    }
+  });
+});
