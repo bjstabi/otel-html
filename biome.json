@@ -48,6 +48,23 @@
         "src/viewer/**"
       ],
       "linter": { "rules": { "correctness": { "noNodejsModules": "error" } } }
+    },
+    {
+      "includes": ["src/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "paths": {
+                  "@opentelemetry/otlp-transformer": "Internal-use upstream package; test oracle only."
+                }
+              }
+            }
+          }
+        }
+      }
     }
   ]
 }
