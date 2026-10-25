@@ -155,7 +155,7 @@ export function ResultsTable<R>(props: ResultsTableProps<R>): JSX.Element {
 
   return (
     <div
-      role="table"
+      role="grid"
       aria-label="Results"
       aria-rowcount={rows.length + 1}
       className="overflow-hidden rounded-card border border-hairline bg-surface"
@@ -236,7 +236,7 @@ export function ResultsTable<R>(props: ResultsTableProps<R>): JSX.Element {
                 {columns.map((c) => (
                   <div
                     key={c.id}
-                    role="cell"
+                    role="gridcell"
                     className={`min-w-0 truncate ${c.mono === true ? 'font-mono text-xs tabular-nums' : ''}`}
                   >
                     {c.cell(row, ctx)}

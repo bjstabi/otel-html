@@ -1,4 +1,4 @@
-import { type JSX, useEffect, useMemo, useState } from 'react';
+import { type JSX, useEffect, useState } from 'react';
 import type { Manifest } from '../../format/manifest.js';
 import { ExpHistogram } from '../../rollups/exp-histogram.js';
 import type { FacetCounts } from '../../rollups/facets.js';
@@ -6,14 +6,15 @@ import type { SpanStatusKey } from '../../rollups/span-rollups.js';
 import type { TimeBuckets } from '../../rollups/time-buckets.js';
 import { formatDuration } from '../../semconv/formatters.js';
 import { facetKeyToPath, tokensToOttl } from '../components/filter-tokens.js';
-import type { DataSource, Landing, SpanQuery } from '../data/data-source.js';
+import type { DataSource, Landing, SpanQuery, SpanQueryResult } from '../data/data-source.js';
 import { PageChrome } from '../shell/page-chrome.js';
 import { navigateRoute } from '../shell/use-route.js';
 import { selectionToUrlState } from '../state/selection.js';
 import { useSelection } from '../state/selection-context.js';
 import { serializeUrlState } from '../state/url-state.js';
-import { createColorAssigner } from '../theme/palette.js';
+import { useColorAssigner } from '../theme/colors-context.js';
 import { ServiceChip } from './columns.js';
+import { PartialNote, ZeroSpans } from './explorer.js';
 import { Sparkline } from './sparkline.js';
 
 const SERVICE_KEY = 'service.name';
@@ -75,11 +76,13 @@ const serviceCondition = (service: string): string | null =>
 interface Loaded {
   stats: ServiceStats[];
   series: Map<string, readonly number[]>;
+  /** Set when any of the page's queries scanned only some chunks: errors and sparklines are then lower bounds. */
+  partial: NonNullable<SpanQueryResult['partial']> | null;
 }
 
 type Load = { status: 'loading' } | { status: 'ready'; data: Loaded } | { status: 'error'; message: string };
 
-function useServices(dataSource: DataSource): Load {
+function useServices(dataSource: DataSource, scanAll: boolean): Load {
   const [load, setLoad] = useState<Load>({ status: 'loading' });
   useEffect(() => {
     const controller = new AbortController();
@@ -87,7 +90,7 @@ function useServices(dataSource: DataSource): Load {
     (async (): Promise<void> => {
       const landing = await dataSource.landing();
       const errorsQuery = await dataSource.querySpans(
-        baseQuery({ condition: 'status.code == STATUS_CODE_ERROR' }),
+        baseQuery({ condition: 'status.code == STATUS_CODE_ERROR', scanAll }),
         undefined,
         signal,
       );
@@ -97,23 +100,25 @@ function useServices(dataSource: DataSource): Load {
       const stats = serviceStats(landing.facets, landing.durations, errors);
       if (signal.aborted) return;
       const series = new Map<string, readonly number[]>();
-      setLoad({ status: 'ready', data: { stats, series } });
+      let partial = errorsQuery.partial;
+      setLoad({ status: 'ready', data: { stats, series, partial } });
       for (const s of stats) {
         const r = await dataSource.querySpans(
-          baseQuery({ condition: serviceCondition(s.service) }),
+          baseQuery({ condition: serviceCondition(s.service), scanAll }),
           undefined,
           signal,
         );
         if (signal.aborted) return;
         series.set(s.service, sumKeys(r.buckets));
-        setLoad({ status: 'ready', data: { stats, series: new Map(series) } });
+        partial = partial ?? r.partial;
+        setLoad({ status: 'ready', data: { stats, series: new Map(series), partial } });
       }
     })().catch((e: unknown) => {
       if (signal.aborted || (e instanceof DOMException && e.name === 'AbortError')) return;
       setLoad({ status: 'error', message: e instanceof Error ? e.message : String(e) });
     });
     return () => controller.abort();
-  }, [dataSource]);
+  }, [dataSource, scanAll]);
   return load;
 }
 
@@ -121,15 +126,21 @@ function sumKeys(b: TimeBuckets<SpanStatusKey>): number[] {
   return Array.from({ length: b.length }, (_, i) => b.keys.reduce((a, k) => a + (b.counts(k)[i] ?? 0), 0));
 }
 
+function PartialTag(): JSX.Element {
+  return <span className="ml-1 font-sans text-xs text-muted">partial</span>;
+}
+
 const TH = 'py-2 text-left text-xs font-semibold text-ink-2';
 const NUM = 'py-2 text-right font-mono text-sm tabular-nums';
 
 /** Per-service table from the rollups. Clicking a row opens the explorer filtered on that service. */
 export function ServicesPage(props: { dataSource: DataSource }): JSX.Element {
-  const load = useServices(props.dataSource);
+  const [scanAll, setScanAll] = useState(false);
+  const load = useServices(props.dataSource, scanAll);
   const selection = useSelection((s) => s);
-  const colors = useMemo(() => createColorAssigner(), []);
+  const colors = useColorAssigner();
   const manifest: Manifest = props.dataSource.manifest;
+  const partial = load.status === 'ready' && load.data.partial !== null;
 
   const open = (service: string): void => {
     const condition = serviceCondition(service);
@@ -150,8 +161,15 @@ export function ServicesPage(props: { dataSource: DataSource }): JSX.Element {
           <p className="mt-1 font-mono text-xs break-words text-ink-2">{load.message}</p>
         </div>
       )}
-      {load.status === 'ready' && load.data.stats.length === 0 && (
-        <p className="rounded-card border border-hairline bg-surface p-4 text-sm">This report has no spans</p>
+      {load.status === 'ready' && load.data.stats.length === 0 && <ZeroSpans manifest={manifest} />}
+      {load.status === 'ready' && load.data.partial !== null && (
+        <div className="mb-3">
+          <PartialNote partial={load.data.partial} onScanAll={() => setScanAll(true)} />
+          <p className="mt-1 text-xs text-muted">
+            Errors, error rate and the time lines cover only the scanned chunks and are marked partial until
+            the whole run is scanned. Requests and percentiles are exact.
+          </p>
+        </div>
       )}
       {load.status === 'ready' && load.data.stats.length > 0 && (
         <table className="w-full rounded-card border border-hairline bg-surface text-sm">
@@ -184,15 +202,20 @@ export function ServicesPage(props: { dataSource: DataSource }): JSX.Element {
                   </button>
                 </th>
                 <td className={NUM}>{s.requests}</td>
-                <td className={`${NUM} ${s.errors > 0 ? 'text-critical' : ''}`}>{s.errors}</td>
                 <td className={`${NUM} ${s.errors > 0 ? 'text-critical' : ''}`}>
-                  {(s.errorRate * 100).toFixed(1)}%
+                  {partial ? `≥ ${s.errors}` : s.errors}
+                  {partial && <PartialTag />}
+                </td>
+                <td className={`${NUM} ${s.errors > 0 ? 'text-critical' : ''}`}>
+                  {partial ? '≥ ' : ''}
+                  {(s.errorRate * 100).toFixed(1)}%{partial && <PartialTag />}
                 </td>
                 <td className={NUM}>{formatDuration(s.p50)}</td>
                 <td className={NUM}>{formatDuration(s.p95)}</td>
                 <td className={NUM}>{formatDuration(s.p99)}</td>
                 <td className="py-2 pl-6 pr-3">
                   <Sparkline values={load.data.series.get(s.service) ?? []} />
+                  {partial && <PartialTag />}
                 </td>
               </tr>
             ))}

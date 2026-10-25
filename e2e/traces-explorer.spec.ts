@@ -14,7 +14,7 @@ test('Traces explorer: OTTL filter, facets, URL state, hostile text', async ({ p
     void d.dismiss();
   });
 
-  const rows = page.getByRole('table', { name: 'Results' }).getByRole('row');
+  const rows = page.getByRole('grid', { name: 'Results' }).getByRole('row');
   const count = page.getByRole('main').locator('output', { hasText: /\bspans\b/ });
 
   await page.goto(`${baseURL ?? ''}/index.html#/traces`);
@@ -24,7 +24,7 @@ test('Traces explorer: OTTL filter, facets, URL state, hostile text', async ({ p
 
   // The hostile span name is text, not markup.
   await expect(
-    page.getByRole('table', { name: 'Results' }).getByText(HOSTILE_SPAN_NAME).first(),
+    page.getByRole('grid', { name: 'Results' }).getByText(HOSTILE_SPAN_NAME).first(),
   ).toBeVisible();
   expect(await page.locator('img[src="x"]').count()).toBe(0);
 
@@ -76,10 +76,16 @@ test('every view and the Services page render without errors', async ({ page, ba
   await expect(view).toBeVisible();
   for (const label of ['Timeseries', 'Top list', 'Bar', 'Table', 'Point plot', 'Treemap', 'Pie', 'List']) {
     await view.selectOption({ label });
-    if (label === 'Table') await expect(page.getByRole('table', { name: /grouped by/ })).toBeVisible();
-    else if (label !== 'List')
+    if (label === 'Table') {
+      await expect(page.getByRole('table', { name: /grouped by/ })).toBeVisible();
+      const groupBy = page.getByRole('combobox', { name: 'Group by' });
+      await expect(groupBy).toBeEnabled();
+      await groupBy.selectOption('span.name');
+      await expect(page.getByRole('table', { name: 'Spans grouped by span.name' })).toBeVisible();
+      await groupBy.selectOption({ label: 'Service (default)' });
+    } else if (label !== 'List')
       await expect(page.getByRole('img', { name: new RegExp(`^${label} of`) })).toBeVisible();
-    else await expect(page.getByRole('table', { name: 'Results' })).toBeVisible();
+    else await expect(page.getByRole('grid', { name: 'Results' })).toBeVisible();
   }
 
   await page.goto(`${baseURL ?? ''}/index.html#/traces/services`);

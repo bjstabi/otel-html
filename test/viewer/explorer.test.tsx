@@ -153,7 +153,7 @@ describe('TracesExplorer', () => {
 
   test('hostile names render as text only', async () => {
     setup(() => Promise.resolve(resultOf([row(HOSTILE, HOSTILE, 5, 's1')])));
-    await screen.findByRole('table', { name: 'Results' });
+    await screen.findByRole('grid', { name: 'Results' });
     expect(document.querySelector('img')).toBeNull();
     expect(document.body.textContent).toContain(HOSTILE);
   });

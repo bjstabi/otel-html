@@ -46,8 +46,9 @@ function statusName(code: StatusCode): string {
   }
 }
 
+/** Times are nanoseconds relative to the run's epoch, and the column names say so. */
 const SPAN_HEADER = [
-  'time_ns',
+  'time_rel_ns',
   'trace_id',
   'span_id',
   'service',
@@ -56,7 +57,15 @@ const SPAN_HEADER = [
   'duration_ns',
   'status',
 ] as const;
-const TRACE_HEADER = ['start_ns', 'trace_id', 'root_service', 'root_name', 'duration_ns', 'spans', 'errors'];
+const TRACE_HEADER = [
+  'start_rel_ns',
+  'trace_id',
+  'root_service',
+  'root_name',
+  'duration_ns',
+  'spans',
+  'errors',
+];
 
 export function isSpanRow(r: SpanRow | TraceRow): r is SpanRow {
   return 'span' in r;

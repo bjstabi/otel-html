@@ -6,6 +6,7 @@ import type { DataSource } from '../data/data-source.js';
 import { bindUrl, createSelectionStore, type HistoryPort, selectionToUrlState } from '../state/selection.js';
 import { SelectionProvider } from '../state/selection-context.js';
 import { parseUrlState, serializeUrlState } from '../state/url-state.js';
+import { ColorsProvider } from '../theme/colors-context.js';
 import { TracesExplorer } from '../traces/explorer.js';
 import { ServicesPage } from '../traces/services-page.js';
 import { MOVE_EVENT } from './move-event.js';
@@ -81,18 +82,20 @@ export function Shell(props: { dataSource: DataSource; history: HistoryPort }): 
 
   return (
     <SelectionProvider store={store}>
-      <Tooltip.Provider>
-        <Router hook={useRoute}>
-          <div className="flex min-h-screen bg-page text-ink">
-            <Sidebar manifest={manifest} />
-            <div className="flex min-w-0 flex-1 flex-col">
-              <UrlErrors errors={errors} onDismiss={() => setErrors([])} />
-              <RoutedPage dataSource={dataSource} />
+      <ColorsProvider>
+        <Tooltip.Provider>
+          <Router hook={useRoute}>
+            <div className="flex min-h-screen bg-page text-ink">
+              <Sidebar manifest={manifest} />
+              <div className="flex min-w-0 flex-1 flex-col">
+                <UrlErrors errors={errors} onDismiss={() => setErrors([])} />
+                <RoutedPage dataSource={dataSource} />
+              </div>
             </div>
-          </div>
-          <ShortcutHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
-        </Router>
-      </Tooltip.Provider>
+            <ShortcutHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
+          </Router>
+        </Tooltip.Provider>
+      </ColorsProvider>
     </SelectionProvider>
   );
 }

@@ -94,7 +94,7 @@ describe('every chart view builds', () => {
   });
 
   test('only the grouped views use the group-by key', () => {
-    expect([...GROUPED_VIEWS].sort()).toEqual(['bar', 'pie', 'toplist', 'treemap']);
+    expect([...GROUPED_VIEWS].sort()).toEqual(['bar', 'pie', 'table', 'toplist', 'treemap']);
   });
 
   test('pointplot plots the returned spans by start and duration, errors with their own series', () => {

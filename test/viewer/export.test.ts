@@ -49,7 +49,7 @@ describe('exportRows', () => {
     const blob = exportRows([spanRow({ name: '=HYPERLINK("http://x","y")' })], 'csv');
     expect(blob.type).toBe('text/csv;charset=utf-8');
     const lines = (await text(blob)).split('\r\n');
-    expect(lines[0]).toBe('time_ns,trace_id,span_id,service,name,resource,duration_ns,status');
+    expect(lines[0]).toBe('time_rel_ns,trace_id,span_id,service,name,resource,duration_ns,status');
     expect(lines[1]).toBe('1000,ab,cd,web,"\'=HYPERLINK(""http://x"",""y"")",GET /,2000,error');
   });
 
@@ -66,7 +66,7 @@ describe('exportRows', () => {
       serviceShare: [],
     } satisfies TraceRow;
     const out = (await text(exportRows([row], 'csv'))).split('\r\n');
-    expect(out[0]).toBe('start_ns,trace_id,root_service,root_name,duration_ns,spans,errors');
+    expect(out[0]).toBe('start_rel_ns,trace_id,root_service,root_name,duration_ns,spans,errors');
     expect(out[1]).toBe('5,ab,web,GET /,9,3,1');
   });
 

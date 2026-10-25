@@ -33,7 +33,7 @@ export function redSummary(red: RedSeries): RedSummary {
     p50: q(0.5),
     p95: q(0.95),
     p99: q(0.99),
-    max: merged.max,
+    max: merged.count === 0 ? 0 : merged.max,
   };
 }
 

@@ -10,7 +10,8 @@ import type { DataSource, SpanQuery, SpanQueryResult, SpanRow, TraceRow } from '
 import { PageChrome } from '../shell/page-chrome.js';
 import { EXPLORER_VIEWS, type ExplorerView } from '../state/explorer-view.js';
 import { useSelection } from '../state/selection-context.js';
-import { createColorAssigner } from '../theme/palette.js';
+import { useColorAssigner } from '../theme/colors-context.js';
+import type { ColorAssigner } from '../theme/palette.js';
 import { useTheme } from '../theme/theme-provider.js';
 import { attributeColumn, type ColumnUi, SPAN_COLUMNS_UI, TRACE_COLUMNS_UI } from './columns.js';
 import { RedStrip } from './red-strip.js';
@@ -62,7 +63,8 @@ function download(blob: Blob, filename: string): void {
   a.href = url;
   a.download = filename;
   a.click();
-  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  // Long enough for slow downloads to start; the URL is only a handle to an in-memory blob.
+  window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
 function ErrorCard(props: { title: string; message: string }): JSX.Element {
@@ -74,7 +76,7 @@ function ErrorCard(props: { title: string; message: string }): JSX.Element {
   );
 }
 
-function ZeroSpans({ manifest }: { manifest: Manifest }): JSX.Element {
+export function ZeroSpans({ manifest }: { manifest: Manifest }): JSX.Element {
   return (
     <section className="max-w-xl rounded-card border border-hairline bg-surface p-6">
       <h2 className="text-base font-semibold">This report has no spans</h2>
@@ -86,8 +88,11 @@ function ZeroSpans({ manifest }: { manifest: Manifest }): JSX.Element {
   );
 }
 
-function PartialNote(props: { result: SpanQueryResult; onScanAll(): void }): JSX.Element | null {
-  const { partial } = props.result;
+export function PartialNote(props: {
+  partial: SpanQueryResult['partial'];
+  onScanAll(): void;
+}): JSX.Element | null {
+  const { partial } = props;
   if (partial === null) return null;
   return (
     <p role="status" aria-label="Partial results" className="text-sm text-ink-2">
@@ -109,7 +114,7 @@ function PartialNote(props: { result: SpanQueryResult; onScanAll(): void }): JSX
 function GroupTable(props: {
   result: SpanQueryResult;
   groupBy: string | null;
-  colors: ReturnType<typeof createColorAssigner>;
+  colors: ColorAssigner;
 }): JSX.Element {
   const key = props.groupBy ?? DEFAULT_GROUP_KEY;
   const slices = groupSlices(props.result.facets, key, props.colors);
@@ -168,7 +173,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
   const manifest = dataSource.manifest;
   const sel = useSelection((s) => s);
   const { resolved } = useTheme();
-  const colors = useMemo(() => createColorAssigner(), []);
+  const colors = useColorAssigner();
   const epoch = useMemo(() => parseUnixNanos(manifest.epochUnixNano, 'manifest.epochUnixNano'), [manifest]);
   const [measure, setMeasure] = useState<Measure>('requests');
   const [extraColumns, setExtraColumns] = useState<readonly string[]>([]);
@@ -215,11 +220,16 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
   const runExport = async (format: ExportFormat): Promise<void> => {
     try {
       setExportError(null);
-      const all = result?.rows ?? [];
+      // Only a finished query is exported; the previous result shown while loading is stale.
+      if (state.status !== 'ready') {
+        throw new Error('Export is unavailable while a query is running. Try again when it finishes.');
+      }
+      const all = state.result.rows;
+      const exportedSpans = all.filter(isSpanRow);
       let ctx: Parameters<typeof exportRows>[2];
       if (format === 'otlp-json') {
         const ids = new Set(all.map((r) => (isSpanRow(r) ? r.span.traceId : r.traceId)));
-        const spanIds = new Set<SpanId>(spanRows.map((r) => r.span.spanId));
+        const spanIds = new Set<SpanId>(exportedSpans.map((r) => r.span.spanId));
         const groups: OtlpSpanGroup[] = [];
         for (const id of ids) {
           const detail = await dataSource.getTrace(id as TraceId);
@@ -234,7 +244,13 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
         ctx = { epoch, groups };
       }
       const ext = format === 'csv' ? 'csv' : 'json';
-      download(exportRows(all, format, ctx), `${sel.mode}.${format === 'otlp-json' ? 'otlp.' : ''}${ext}`);
+      const { total } = state.result;
+      // A truncated export says so in its file name: the file holds the first N of M.
+      const scope = total > all.length ? `first-${all.length}-of-${total}` : `${total}`;
+      download(
+        exportRows(all, format, ctx),
+        `${sel.mode}-${scope}.${format === 'otlp-json' ? 'otlp.' : ''}${ext}`,
+      );
     } catch (e) {
       setExportError(e instanceof Error ? e.message : String(e));
     }
@@ -275,6 +291,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
   };
   const onTraceClick = (row: TraceRow): void => sel.selectTrace(row.traceId);
 
+  const truncated = result !== null && result.total > result.rows.length;
   const bins = useMemo(() => durationBins(result?.rows ?? [], DURATION_BIN_COUNT), [result]);
 
   return (
@@ -319,7 +336,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
           </label>
           {!grouped && (
             <span id="group-by-note" className="text-xs text-muted">
-              Group by applies to Top list, Bar, Pie, Treemap and Table
+              Group by applies to Top list, Bar, Pie, Treemap and Table; it is not used by the current view
             </span>
           )}
           <label className="flex items-center gap-2 text-sm text-ink-2">
@@ -344,7 +361,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
             </output>
           )}
         </div>
-        {result !== null && <PartialNote result={result} onScanAll={scanAll} />}
+        {result !== null && <PartialNote partial={result.partial} onScanAll={scanAll} />}
         {state.status === 'loading' && (
           <p role="status" className="text-sm text-muted">
             {state.progress === null
@@ -372,7 +389,20 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
                 {...(manifest.range === null ? {} : { rangeEnd: manifest.range.end })}
               />
               <div className="grid grid-cols-1 gap-4 lg:grid-cols-[16rem_minmax(0,1fr)]">
-                <FacetPanel facets={result.facets} durationBins={bins} />
+                <div className="flex min-w-0 flex-col gap-2">
+                  {truncated && (
+                    <p
+                      data-testid="duration-bins-note"
+                      className="rounded-md bg-page px-2 py-1 text-xs text-muted"
+                    >
+                      Duration distribution is from the first{' '}
+                      <span className="font-mono tabular-nums">{result.rows.length}</span> of{' '}
+                      <span className="font-mono tabular-nums">{result.total}</span>{' '}
+                      {sel.mode === 'spans' ? 'spans' : 'traces'}
+                    </p>
+                  )}
+                  <FacetPanel facets={result.facets} durationBins={bins} />
+                </div>
                 <div className="min-w-0">
                   {result.total === 0 ? (
                     <section className="rounded-card border border-hairline bg-surface p-6">

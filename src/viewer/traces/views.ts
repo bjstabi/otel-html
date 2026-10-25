@@ -24,6 +24,7 @@ export interface ViewContext {
 
 /** Views that are drawn from a facet's top values; the others ignore the group-by key. */
 export const GROUPED_VIEWS: ReadonlySet<ExplorerView> = new Set<ExplorerView>([
+  'table',
   'toplist',
   'bar',
   'pie',
@@ -46,7 +47,8 @@ export interface Slice {
 export function groupSlices(facets: FacetCounts, key: string, colors: ColorAssigner): Slice[] {
   const top = facets.top(key, MAX_GROUPS);
   const slices: Slice[] = top.map((t) => ({
-    name: t.value,
+    // A real group literally named "Other" must not collide with the remainder slice.
+    name: t.value === OTHER_LABEL ? `${OTHER_LABEL} (value)` : t.value,
     value: t.count,
     other: false,
     color: seriesVar(colors.colorFor(t.value)),
