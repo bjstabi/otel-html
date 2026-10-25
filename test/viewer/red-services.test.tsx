@@ -28,6 +28,18 @@ describe('RedStrip', () => {
     expect(s.p99).toBeGreaterThanOrEqual(s.p50);
   });
 
+  test('an empty series summarises to zeros without reading an empty histogram', () => {
+    expect(redSummary(new RedSeries(16))).toEqual({
+      requests: 0,
+      errors: 0,
+      errorRate: 0,
+      p50: 0,
+      p95: 0,
+      p99: 0,
+      max: 0,
+    });
+  });
+
   test('Analyze buttons report the matching measure; the strip collapses', async () => {
     const user = userEvent.setup();
     const onAnalyze = vi.fn();

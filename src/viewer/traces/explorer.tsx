@@ -137,7 +137,10 @@ function GroupTable(props: {
       </thead>
       <tbody>
         {slices.map((s) => (
-          <tr key={s.name} className="border-b border-hairline last:border-0">
+          <tr
+            key={`${s.other ? 'rest' : 'value'}:${s.key}`}
+            className="border-b border-hairline last:border-0"
+          >
             <td className="p-2 font-mono text-xs">{s.name}</td>
             <td className="p-2 text-right font-mono tabular-nums">{s.value}</td>
             <td className="p-2 text-right font-mono tabular-nums">
@@ -222,7 +225,11 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
       setExportError(null);
       // Only a finished query is exported; the previous result shown while loading is stale.
       if (state.status !== 'ready') {
-        throw new Error('Export is unavailable while a query is running. Try again when it finishes.');
+        throw new Error(
+          state.status === 'loading'
+            ? 'Export is unavailable while a query is running. Try again when it finishes.'
+            : `Export is unavailable because the last query failed: ${state.message}`,
+        );
       }
       const all = state.result.rows;
       const exportedSpans = all.filter(isSpanRow);

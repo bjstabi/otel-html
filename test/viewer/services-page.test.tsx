@@ -110,6 +110,22 @@ describe('ServicesPage', () => {
     expect(calls.filter((q) => q.scanAll).every((q) => q.groupBy === null)).toBe(true);
   });
 
+  test('unmounting aborts the in-flight queries of the page', async () => {
+    const signals: (AbortSignal | undefined)[] = [];
+    const { ds } = windowed();
+    const slow = {
+      ...ds,
+      querySpans: (_q: SpanQuery, _p?: unknown, signal?: AbortSignal) => {
+        signals.push(signal);
+        return new Promise<SpanQueryResult>(() => undefined);
+      },
+    } as unknown as DataSource;
+    mount(slow);
+    await waitFor(() => expect(signals).toHaveLength(1));
+    cleanup();
+    expect(signals[0]?.aborted).toBe(true);
+  });
+
   test('a zero-span report shows the explorer empty state with the other signal counts', async () => {
     const { ds } = windowed(0);
     const empty = {

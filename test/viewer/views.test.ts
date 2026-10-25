@@ -79,6 +79,22 @@ describe('VIEW_BUILDERS.toplist', () => {
 });
 
 describe('groupSlices', () => {
+  test('a real group literally named Other is shown as "Other (value)" but keeps its real key and colour', () => {
+    const facets = new FacetCounts(100, 50, ['service.name']);
+    for (const [name, n] of [
+      ['Other', 5],
+      ['b', 4],
+    ] as const)
+      for (let i = 0; i < n; i++) facets.add('service.name', name);
+    const colors = createColorAssigner();
+    const slices = groupSlices(facets, 'service.name', colors);
+    expect(slices.map((s) => [s.name, s.key, s.other])).toEqual([
+      ['Other (value)', 'Other', false],
+      ['b', 'b', false],
+    ]);
+    expect(slices[0]?.color).toBe(`var(--oh-series-${colors.colorFor('Other') + 1})`);
+  });
+
   test('Other is everything not in the top 7 and is omitted when zero', () => {
     const colors = createColorAssigner();
     expect(groupSlices(result(7).facets, 'service.name', colors).map((s) => s.name)).not.toContain('Other');

@@ -151,6 +151,62 @@ describe('TracesExplorer', () => {
     expect(select.getAttribute('title')).toMatch(/List view/);
   });
 
+  test('Group by is enabled in the Table view and its title no longer says the view does not use it', async () => {
+    setup(() => Promise.resolve(resultOf([row('a', 's', 5, 's1')])), 10, { view: 'table' });
+    const select = (await screen.findByLabelText('Group by')) as HTMLSelectElement;
+    expect(select.disabled).toBe(false);
+    expect(select.getAttribute('title')).toBeNull();
+    expect(screen.queryByText(/not used by the current view/)).toBeNull();
+  });
+
+  test('Group by in the Table view changes the grouping key of the table', async () => {
+    const user = userEvent.setup();
+    const r = resultOf([row('a', 'svc-1', 5, 's1'), row('b', 'svc-2', 6, 's2')]);
+    r.facets.add('host.name', 'host-x');
+    r.facets.add('host.name', 'host-y');
+    setup(() => Promise.resolve(r), 10, { view: 'table' });
+    const select = (await screen.findByLabelText('Group by')) as HTMLSelectElement;
+    expect(screen.getByRole('table', { name: 'Spans grouped by service.name' })).toBeTruthy();
+    await user.selectOptions(select, 'host.name');
+    const table = screen.getByRole('table', { name: 'Spans grouped by host.name' });
+    expect(within(table).getByText('host-x')).toBeTruthy();
+    expect(within(table).queryByText('svc-1')).toBeNull();
+  });
+
+  test('the Table view keeps a real group named Other apart from the remainder', async () => {
+    const r = resultOf([]);
+    for (let i = 0; i < 3; i++) r.facets.add('service.name', 'Other');
+    r.facets.add('service.name', 'b');
+    setup(() => Promise.resolve({ ...r, rows: [row('a', 'Other', 5, 's1')], total: 4 }), 10, {
+      view: 'table',
+    });
+    const table = await screen.findByRole('table', { name: 'Spans grouped by service.name' });
+    expect(within(table).getByText('Other (value)')).toBeTruthy();
+  });
+
+  test('the duration distribution is labelled with N and M when the rows are the first N of M', async () => {
+    const rows = [row('a', 's', 5, 's1'), row('b', 's', 50, 's2')];
+    setup(() => Promise.resolve({ ...resultOf(rows), total: 40 }));
+    const note = await screen.findByTestId('duration-bins-note');
+    expect(note.textContent).toBe('Duration distribution is from the first 2 of 40 spans');
+  });
+
+  test('a complete result carries no duration caveat', async () => {
+    setup(() => Promise.resolve(resultOf([row('a', 's', 5, 's1')])));
+    await screen.findByRole('grid', { name: 'Results' });
+    expect(screen.queryByTestId('duration-bins-note')).toBeNull();
+  });
+
+  test('export after a failed query says the query failed, not that one is running', async () => {
+    const user = userEvent.setup();
+    setup(() => Promise.reject(new Error('boom: chunk 3')));
+    await screen.findByText('The query could not run');
+    await user.click(screen.getByRole('button', { name: 'Export' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Export CSV' }));
+    const alert = await screen.findByText('The export failed');
+    expect(alert.parentElement?.textContent).toContain('the last query failed: boom: chunk 3');
+  });
+
   test('hostile names render as text only', async () => {
     setup(() => Promise.resolve(resultOf([row(HOSTILE, HOSTILE, 5, 's1')])));
     await screen.findByRole('grid', { name: 'Results' });

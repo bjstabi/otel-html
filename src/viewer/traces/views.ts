@@ -37,6 +37,8 @@ function seriesVar(index: number): string {
 }
 
 export interface Slice {
+  /** The real facet value (Other for the remainder slice is `other: true`); `name` is display only. */
+  key: string;
   name: string;
   value: number;
   other: boolean;
@@ -47,6 +49,7 @@ export interface Slice {
 export function groupSlices(facets: FacetCounts, key: string, colors: ColorAssigner): Slice[] {
   const top = facets.top(key, MAX_GROUPS);
   const slices: Slice[] = top.map((t) => ({
+    key: t.value,
     // A real group literally named "Other" must not collide with the remainder slice.
     name: t.value === OTHER_LABEL ? `${OTHER_LABEL} (value)` : t.value,
     value: t.count,
@@ -54,7 +57,14 @@ export function groupSlices(facets: FacetCounts, key: string, colors: ColorAssig
     color: seriesVar(colors.colorFor(t.value)),
   }));
   const rest = facets.total(key) - top.reduce((a, t) => a + t.count, 0);
-  if (rest > 0) slices.push({ name: OTHER_LABEL, value: rest, other: true, color: seriesVar(OTHER_INDEX) });
+  if (rest > 0)
+    slices.push({
+      key: OTHER_LABEL,
+      name: OTHER_LABEL,
+      value: rest,
+      other: true,
+      color: seriesVar(OTHER_INDEX),
+    });
   return slices;
 }
 
