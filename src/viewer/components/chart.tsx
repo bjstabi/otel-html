@@ -1,5 +1,5 @@
-import { BarChart, LineChart, PieChart, ScatterChart, TreemapChart } from 'echarts/charts';
-import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components';
+import { BarChart, CustomChart, LineChart, PieChart, ScatterChart, TreemapChart } from 'echarts/charts';
+import { DataZoomComponent, GridComponent, LegendComponent, TooltipComponent } from 'echarts/components';
 import { type EChartsType, init, use } from 'echarts/core';
 import { CanvasRenderer } from 'echarts/renderers';
 import { type JSX, useEffect, useRef } from 'react';
@@ -12,6 +12,8 @@ use([
   PieChart,
   ScatterChart,
   TreemapChart,
+  CustomChart,
+  DataZoomComponent,
   GridComponent,
   TooltipComponent,
   LegendComponent,
@@ -47,14 +49,20 @@ export interface ChartProps {
   height?: number;
   /** Accessible description of what the chart shows. */
   ariaLabel: string;
+  /** Called with the live instance after mount and with null on unmount (for imperative sync such as linked zoom). */
+  onInstance?: (chart: EChartsType | null) => void;
 }
 
+export type { EChartsType };
+
 /** Tree-shaken ECharts wrapper; rebuilds the instance with the runtime theme when light/dark changes. */
-export function Chart({ option, onEvents, height = 240, ariaLabel }: ChartProps): JSX.Element {
+export function Chart({ option, onEvents, height = 240, ariaLabel, onInstance }: ChartProps): JSX.Element {
   const host = useRef<HTMLDivElement>(null);
   const { resolved } = useTheme();
 
   const chartRef = useRef<EChartsType | null>(null);
+  const instanceCb = useRef(onInstance);
+  instanceCb.current = onInstance;
 
   // One instance per mount; the theme is swapped in place with setTheme.
   useEffect(() => {
@@ -62,10 +70,12 @@ export function Chart({ option, onEvents, height = 240, ariaLabel }: ChartProps)
     if (el === null) return;
     const chart = init(el, buildEchartsTheme(readTokens()));
     chartRef.current = chart;
+    instanceCb.current?.(chart);
     const ro = new ResizeObserver(() => chart.resize());
     ro.observe(el);
     return () => {
       ro.disconnect();
+      instanceCb.current?.(null);
       chart.dispose();
       chartRef.current = null;
     };

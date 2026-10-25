@@ -9,12 +9,15 @@ import { parseUrlState, serializeUrlState } from '../state/url-state.js';
 import { ColorsProvider } from '../theme/colors-context.js';
 import { TracesExplorer } from '../traces/explorer.js';
 import { ServicesPage } from '../traces/services-page.js';
+import { leaveTracePage, TracePage } from '../traces/trace-page.js';
 import { MOVE_EVENT } from './move-event.js';
 import { ComingLaterPage, NotFoundPage } from './pages.js';
 import { ShortcutHelp } from './shortcut-help.js';
 import { createShortcutHandler, SHORTCUTS, type ShortcutActions } from './shortcuts.js';
 import { Sidebar } from './sidebar.js';
 import { navigateRoute, useRoute } from './use-route.js';
+
+const TRACE_PAGE_HASH = '#/traces/trace/';
 
 function UrlErrors(props: { errors: readonly string[]; onDismiss: () => void }): JSX.Element | null {
   if (props.errors.length === 0) return null;
@@ -67,7 +70,8 @@ export function Shell(props: { dataSource: DataSource; history: HistoryPort }): 
       previous: move(-1),
       clear: () => {
         setHelpOpen(false);
-        store.getState().clear('traceId');
+        if (window.location.hash.startsWith(TRACE_PAGE_HASH)) leaveTracePage(window, store.getState());
+        else store.getState().clear('traceId');
       },
       focusQuery: () => {
         const q = document.querySelector('[data-oh-query]');
@@ -110,6 +114,9 @@ function RoutedPage({ dataSource }: { dataSource: DataSource }): JSX.Element {
       </Route>
       <Route path="/traces">
         <TracesExplorer dataSource={dataSource} />
+      </Route>
+      <Route path="/traces/trace/:id">
+        {(params) => <TracePage dataSource={dataSource} id={params.id} />}
       </Route>
       <Route path="/traces/services">
         <ServicesPage dataSource={dataSource} />

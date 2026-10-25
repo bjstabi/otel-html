@@ -10,10 +10,11 @@ import {
   tokensToOttl,
 } from '../components/filter-tokens.js';
 import type { TimeWindow } from '../data/span-query.js';
+import { isTraceTabId, TRACE_TAB_IDS, type TraceTabId } from '../traces/tabs.js';
 import type { ExplorerView } from './explorer-view.js';
 import { formatWindow, parseUrlState, parseWindow, serializeUrlState, type UrlState } from './url-state.js';
 
-export const DEFAULT_TRACE_TAB = 'waterfall';
+export const DEFAULT_TRACE_TAB: TraceTabId = 'flame';
 export const DEFAULT_SPAN_TAB = 'overview';
 
 export type SelectionMode = 'spans' | 'traces';
@@ -87,7 +88,7 @@ export function selectionToUrlState(s: SelectionData): UrlState {
   if (s.view !== 'list') u.view = s.view;
   if (s.traceId !== null) u.trace = s.traceId;
   if (s.spanId !== null) u.span = s.spanId;
-  if (s.tabs.trace !== DEFAULT_TRACE_TAB) u.tab = s.tabs.trace;
+  if (s.tabs.trace !== DEFAULT_TRACE_TAB && isTraceTabId(s.tabs.trace)) u.tab = s.tabs.trace;
   if (s.tabs.span !== DEFAULT_SPAN_TAB) u.stab = s.tabs.span;
   if (s.sort !== null) u.sort = s.sort;
   return u;
@@ -163,6 +164,13 @@ export function createSelectionStore(initial: UrlState): StoreApi<Selection> {
     },
     setTab: (which, tab) => {
       assertNonEmpty(`tabs.${which}`, tab);
+      if (which === 'trace' && !isTraceTabId(tab)) {
+        throw new OtelHtmlError('usage', {
+          path: 'tabs.trace',
+          expected: `one of ${TRACE_TAB_IDS.join(', ')}`,
+          actual: JSON.stringify(tab),
+        });
+      }
       set({ tabs: { ...get().tabs, [which]: tab } });
     },
     toggleFacet: (key, value, op, scope = 'core') =>

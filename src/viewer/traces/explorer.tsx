@@ -2,7 +2,13 @@ import { type JSX, useMemo, useState } from 'react';
 import type { Manifest } from '../../format/manifest.js';
 import { parseUnixNanos, type SpanId, type TraceId } from '../../model/ids.js';
 import { Chart } from '../components/chart.js';
-import { type ExportFormat, exportRows, isSpanRow, type OtlpSpanGroup } from '../components/export.js';
+import {
+  downloadBlob,
+  type ExportFormat,
+  exportRows,
+  isSpanRow,
+  type OtlpSpanGroup,
+} from '../components/export.js';
 import { FacetPanel } from '../components/facet-panel.js';
 import { HistogramCard } from '../components/histogram-card.js';
 import { ResultsTable, type SortState } from '../components/results-table.js';
@@ -15,6 +21,7 @@ import type { ColorAssigner } from '../theme/palette.js';
 import { useTheme } from '../theme/theme-provider.js';
 import { attributeColumn, type ColumnUi, SPAN_COLUMNS_UI, TRACE_COLUMNS_UI } from './columns.js';
 import { RedStrip } from './red-strip.js';
+import { TracePanel } from './trace-panel.js';
 import { useSpanQuery } from './use-span-query.js';
 import {
   type ChartView,
@@ -55,16 +62,6 @@ export function parseSort(raw: string | null, sortable: readonly string[]): Sort
 
 function sortableOf(columns: readonly ColumnUi<never>[]): string[] {
   return columns.flatMap((c) => (c.sort === undefined ? [] : [c.sort]));
-}
-
-function download(blob: Blob, filename: string): void {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  a.click();
-  // Long enough for slow downloads to start; the URL is only a handle to an in-memory blob.
-  window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
 function ErrorCard(props: { title: string; message: string }): JSX.Element {
@@ -254,7 +251,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
       const { total } = state.result;
       // A truncated export says so in its file name: the file holds the first N of M.
       const scope = total > all.length ? `first-${all.length}-of-${total}` : `${total}`;
-      download(
+      downloadBlob(
         exportRows(all, format, ctx),
         `${sel.mode}-${scope}.${format === 'otlp-json' ? 'otlp.' : ''}${ext}`,
       );
@@ -297,6 +294,13 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
     sel.selectSpan(row.span.spanId);
   };
   const onTraceClick = (row: TraceRow): void => sel.selectTrace(row.traceId);
+
+  // Distinct traces in result order: what j/k step through while the panel is open.
+  const traceIds = useMemo<readonly TraceId[]>(() => {
+    if (result === null) return [];
+    const ids = result.rows.map((r) => (isSpanRow(r) ? r.span.traceId : r.traceId));
+    return [...new Set(ids)];
+  }, [result]);
 
   const truncated = result !== null && result.total > result.rows.length;
   const bins = useMemo(() => durationBins(result?.rows ?? [], DURATION_BIN_COUNT), [result]);
@@ -455,6 +459,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
                           sort={sort}
                           onSort={(s) => sel.setSort(`${s.column}:${s.dir}`)}
                           onRowClick={onSpanClick}
+                          moveEnabled={sel.traceId === null}
                           selectedId={sel.spanId}
                           epoch={epoch}
                           colors={colors}
@@ -467,6 +472,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
                           sort={sort}
                           onSort={(s) => sel.setSort(`${s.column}:${s.dir}`)}
                           onRowClick={onTraceClick}
+                          moveEnabled={sel.traceId === null}
                           selectedId={sel.traceId}
                           epoch={epoch}
                           colors={colors}
@@ -480,6 +486,15 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
           </div>
         )}
       </div>
+      {sel.traceId !== null && (
+        <TracePanel
+          dataSource={dataSource}
+          traceId={sel.traceId}
+          layout="overlay"
+          traceIds={traceIds}
+          onClose={() => sel.clear('traceId')}
+        />
+      )}
     </PageChrome>
   );
 }

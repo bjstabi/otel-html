@@ -25,8 +25,14 @@ vi.mock('echarts/charts', () => ({
   PieChart: {},
   ScatterChart: {},
   TreemapChart: {},
+  CustomChart: {},
 }));
-vi.mock('echarts/components', () => ({ GridComponent: {}, TooltipComponent: {}, LegendComponent: {} }));
+vi.mock('echarts/components', () => ({
+  DataZoomComponent: {},
+  GridComponent: {},
+  TooltipComponent: {},
+  LegendComponent: {},
+}));
 vi.mock('echarts/renderers', () => ({ CanvasRenderer: {} }));
 
 import { Chart } from '../../src/viewer/components/chart.js';

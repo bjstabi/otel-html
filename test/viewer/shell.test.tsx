@@ -12,6 +12,7 @@ import { Shell } from '../../src/viewer/shell/shell.js';
 import { stepWindow } from '../../src/viewer/shell/time-range.js';
 import { createHashHistory } from '../../src/viewer/state/hash-history.js';
 import { ThemeProvider } from '../../src/viewer/theme/theme-provider.js';
+import { detailOf, TRACE_ID, traceRow } from './trace-rows.js';
 
 // jsdom has no layout or ResizeObserver, which ECharts needs; the explorer's charts are covered by e2e.
 vi.mock('../../src/viewer/components/chart.js', () => ({ Chart: (): null => null }));
@@ -62,11 +63,11 @@ const dataSource: DataSource = {
   percentileOf: unused,
 };
 
-function renderShell(hash: string): void {
+function renderShell(hash: string, ds: DataSource = dataSource): void {
   window.location.hash = hash;
   render(
     <ThemeProvider>
-      <Shell dataSource={dataSource} history={createHashHistory(window)} />
+      <Shell dataSource={ds} history={createHashHistory(window)} />
     </ThemeProvider>,
   );
 }
@@ -365,5 +366,48 @@ describe('overlays own the keyboard', () => {
     await screen.findByRole('dialog', { name: 'Copy link' });
     await user.keyboard('gl');
     expect(window.location.hash).toBe('#/traces');
+  });
+});
+
+describe('full-page trace route', () => {
+  const traceDs = (): DataSource => ({
+    ...dataSource,
+    getTrace: () =>
+      Promise.resolve(detailOf([traceRow(1, null, 0, 1000, { service: 'checkout', name: 'GET /' })])),
+    percentileOf: () => 91,
+  });
+
+  test('#/traces/trace/<id> shows the same panel full width, with the header facts', async () => {
+    renderShell(`#/traces/trace/${TRACE_ID}`, traceDs());
+    const panel = await screen.findByTestId('trace-panel');
+    expect(panel.getAttribute('data-layout')).toBe('page');
+    const header = await within(panel).findByTestId('trace-header');
+    expect(header.textContent).toContain('checkout');
+    expect(header.textContent).toContain(TRACE_ID);
+    expect(within(header).getByText('p91')).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'Full page' })).toBeNull();
+  });
+
+  test('an invalid id in the route is a designed error naming the problem', async () => {
+    renderShell('#/traces/trace/not-a-trace', traceDs());
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('Invalid trace link');
+    expect(alert.textContent).toContain('route trace id');
+  });
+
+  test('Escape leaves the page for the explorer, and Close does the same', async () => {
+    const user = userEvent.setup();
+    renderShell(`#/traces/trace/${TRACE_ID}?text=abc`, traceDs());
+    await screen.findByTestId('trace-header');
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(window.location.hash).toBe('#/traces?text=abc'));
+  });
+
+  test('the overlay Full page link opens the route and keeps the filters', async () => {
+    const user = userEvent.setup();
+    renderShell(`#/traces?text=abc&trace=${TRACE_ID}`, traceDs());
+    await user.click(await screen.findByRole('link', { name: 'Full page' }));
+    await waitFor(() => expect(window.location.hash).toBe(`#/traces/trace/${TRACE_ID}?text=abc`));
+    expect((await screen.findByTestId('trace-panel')).getAttribute('data-layout')).toBe('page');
   });
 });

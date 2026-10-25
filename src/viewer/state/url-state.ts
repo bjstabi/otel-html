@@ -3,6 +3,7 @@ import { OtelHtmlError } from '../../model/errors.js';
 import { parseSpanId, parseTraceId, type SpanId, type TraceId } from '../../model/ids.js';
 import { parseCondition } from '../../ottl/parse.js';
 import type { TimeWindow } from '../data/span-query.js';
+import { TRACE_TAB_IDS } from '../traces/tabs.js';
 import { EXPLORER_VIEWS } from './explorer-view.js';
 
 const T_FORMAT = /^(\d+)~(\d+)$/;
@@ -47,7 +48,7 @@ export const UrlStateSchema = z.object({
     .regex(/^[0-9a-f]{16}$/, '16 lowercase hex chars')
     .refine((s) => !/^0+$/.test(s), 'a non-zero span id')
     .transform((s): SpanId => parseSpanId(s, 'span')),
-  tab: nonEmpty,
+  tab: z.enum(TRACE_TAB_IDS, `one of ${TRACE_TAB_IDS.join(', ')}`),
   stab: nonEmpty,
   sort: nonEmpty,
 });

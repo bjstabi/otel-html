@@ -1,2 +1,23 @@
 @import "tailwindcss";
 @import "./theme/tokens.css";
+
+@keyframes oh-slide-in {
+  from {
+    transform: translateX(24px);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+.oh-slide-in {
+  animation: oh-slide-in 160ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .oh-slide-in {
+    animation: none;
+  }
+}

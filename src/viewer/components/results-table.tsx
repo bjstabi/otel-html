@@ -26,6 +26,11 @@ export interface ResultsTableProps<R> {
   colors?: ColorAssigner;
   /** Scroll viewport height in px (default 480). */
   height?: number;
+  /**
+   * Whether this table acts on the shell's j/k move event (default true). Exactly one consumer may act per press:
+   * the explorer disables it while the trace panel is open, and embedded tables never consume it.
+   */
+  moveEnabled?: boolean;
 }
 
 const ROW_HEIGHT = 36;
@@ -37,7 +42,7 @@ interface Entry<R> {
 }
 
 /** A hidden or not-yet-laid-out scroller reports 0; render a window of rows instead of none. */
-function rectWithFallback(fallback: number): typeof observeElementRect {
+export function rectWithFallback(fallback: number): typeof observeElementRect {
   return (instance, cb) =>
     observeElementRect(instance, (r) => cb(r.height === 0 ? { width: r.width, height: fallback } : r));
 }
@@ -97,9 +102,19 @@ export function ResultsTable<R>(props: ResultsTableProps<R>): JSX.Element {
     }
   });
 
+  const moveEnabled = props.moveEnabled ?? true;
+
+  // Keep the selected row in view when the selection changes from elsewhere (the trace panel's j/k).
+  const selectedAt = selectedId === null ? -1 : rows.findIndex((r) => props.rowId(r) === selectedId);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: scroll only when the selected row changes
+  useEffect(() => {
+    if (selectedAt >= 0) virtual.scrollToIndex(selectedAt);
+  }, [selectedId]);
+
   // j/k from the shell: move the selection one row, keeping keyboard focus where it was.
   // biome-ignore lint/correctness/useExhaustiveDependencies: the handler reads everything through `latest`
   useEffect(() => {
+    if (!moveEnabled) return;
     const onMove = (e: Event): void => {
       if (!(e instanceof CustomEvent)) return;
       const delta: unknown = e.detail;
@@ -120,7 +135,7 @@ export function ResultsTable<R>(props: ResultsTableProps<R>): JSX.Element {
     };
     window.addEventListener(MOVE_EVENT, onMove);
     return () => window.removeEventListener(MOVE_EVENT, onMove);
-  }, []);
+  }, [moveEnabled]);
 
   const onRowKey = (e: KeyboardEvent<HTMLDivElement>, index: number): void => {
     const row = rows[index];

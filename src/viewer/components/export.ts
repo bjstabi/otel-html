@@ -147,6 +147,21 @@ function toOtlp(ctx: ExportContext | undefined): string {
   return JSON.stringify({ resourceSpans });
 }
 
+/** OTLP JSON of the context's spans (through the report's own exporter) as a download blob. */
+export function otlpBlob(ctx: ExportContext): Blob {
+  return new Blob([toOtlp(ctx)], { type: 'application/json' });
+}
+
+/** Start a browser download of `blob`; the object URL is revoked once the download has had time to begin. */
+export function downloadBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
 /** The rows as a download. `otlp-json` goes through the report's own exporter and needs `ctx`. */
 export function exportRows(
   rows: readonly (SpanRow | TraceRow)[],

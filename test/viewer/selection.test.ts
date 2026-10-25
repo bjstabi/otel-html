@@ -6,7 +6,12 @@ import {
   ottlToTokens,
   tokensToOttl,
 } from '../../src/viewer/components/filter-tokens.js';
-import { bindUrl, createSelectionStore, type HistoryPort } from '../../src/viewer/state/selection.js';
+import {
+  bindUrl,
+  createSelectionStore,
+  type HistoryPort,
+  selectionToUrlState,
+} from '../../src/viewer/state/selection.js';
 
 const TRACE = 'a'.repeat(32) as TraceId;
 const SPAN = 'b'.repeat(16) as SpanId;
@@ -80,6 +85,14 @@ describe('store state', () => {
     const s = store.getState();
     expect(s.window).toEqual({ start: 0, end: 5000000 });
     expect([s.traceId, s.spanId, s.mode, s.tabs.trace]).toEqual([TRACE, SPAN, 'traces', 'flame']);
+  });
+
+  test('the default trace tab is the flame graph and is omitted from the URL; other tabs round-trip', () => {
+    const store = createSelectionStore({});
+    expect(store.getState().tabs.trace).toBe('flame');
+    expect(selectionToUrlState(store.getState())).toEqual({});
+    store.getState().setTab('trace', 'waterfall');
+    expect(selectionToUrlState(store.getState())).toEqual({ tab: 'waterfall' });
   });
 
   test('selecting a trace resets the span; clearing the trace clears both', () => {
@@ -183,5 +196,6 @@ describe('setter validation and bind errors', () => {
     expect(() => s.setCondition('a ==')).toThrow(/condition/);
     expect(() => s.setGroupBy('')).toThrow(/groupBy/);
     expect(() => s.setTab('trace', '')).toThrow(/tabs.trace/);
+    expect(() => s.setTab('trace', 'logs')).toThrow(/tabs.trace[\s\S]*one of flame/);
   });
 });

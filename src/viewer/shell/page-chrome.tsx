@@ -11,9 +11,9 @@ export interface ExportItem {
   onSelect(): void;
 }
 
-const CONTROL =
+export const CONTROL =
   'flex items-center gap-1.5 rounded-full border border-hairline bg-surface px-3 py-1.5 text-sm text-ink hover:bg-hairline';
-const POPUP = 'rounded-card border border-hairline bg-surface p-1 shadow-lg';
+export const POPUP = 'rounded-card border border-hairline bg-surface p-1 shadow-lg';
 
 function FallbackDialog({ url, onClose }: { url: string; onClose: () => void }): JSX.Element {
   const input = useRef<HTMLInputElement>(null);
@@ -46,7 +46,7 @@ function FallbackDialog({ url, onClose }: { url: string; onClose: () => void }):
   );
 }
 
-function CopyLink(): JSX.Element {
+export function CopyLink(props: { className?: string }): JSX.Element {
   const [fallback, setFallback] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   useEffect(() => {
@@ -70,7 +70,7 @@ function CopyLink(): JSX.Element {
   };
   return (
     <>
-      <button type="button" className={CONTROL} onClick={() => void copy()}>
+      <button type="button" className={props.className ?? CONTROL} onClick={() => void copy()}>
         <Link2 size={16} aria-hidden />
         <span>Copy link</span>
         <span role="status" className={copied ? 'text-xs text-accent' : 'sr-only'}>

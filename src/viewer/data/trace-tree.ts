@@ -71,24 +71,29 @@ export function buildTraceTree(spans: readonly SpanRow[]): TraceTree {
   return { roots, byId };
 }
 
-/** Exclusive time per service: each span's duration minus the time covered by its children (clipped to the span). */
+/** A span's own time: its duration minus the time covered by its children (clipped to the span, overlaps counted once). */
+export function exclusiveNs(n: TraceNode): number {
+  const { start, end } = n.row.span;
+  let covered = 0;
+  let cursor: number = start;
+  for (const c of n.children) {
+    const from = Math.max(c.row.span.start, cursor);
+    const to = Math.min(c.row.span.end, end);
+    if (to > from) {
+      covered += to - from;
+      cursor = to;
+    }
+  }
+  return Math.max(0, n.row.durationNs - covered);
+}
+
+/** Exclusive time per service, largest first. */
 export function exclusiveTimeByService(tree: TraceTree): { service: string; ns: number }[] {
   const totals = new Map<string, number>();
   const stack = [...tree.roots];
   for (let n = stack.pop(); n !== undefined; n = stack.pop()) {
-    const { start, end } = n.row.span;
-    let covered = 0;
-    let cursor: number = start;
-    for (const c of n.children) {
-      const from = Math.max(c.row.span.start, cursor);
-      const to = Math.min(c.row.span.end, end);
-      if (to > from) {
-        covered += to - from;
-        cursor = to;
-      }
-      stack.push(c);
-    }
-    totals.set(n.row.service, (totals.get(n.row.service) ?? 0) + Math.max(0, n.row.durationNs - covered));
+    for (const c of n.children) stack.push(c);
+    totals.set(n.row.service, (totals.get(n.row.service) ?? 0) + exclusiveNs(n));
   }
   return [...totals]
     .map(([service, ns]) => ({ service, ns }))

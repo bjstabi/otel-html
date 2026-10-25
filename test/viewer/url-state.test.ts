@@ -50,9 +50,17 @@ describe('parseUrlState', () => {
     expect(r.errors[0]).toBe('mode: expected spans or traces, got x');
   });
 
+  test('reports an unknown trace tab id and keeps none of it', () => {
+    const r = parseUrlState('tab=overview');
+    expect(r.state).toEqual({});
+    expect(r.errors).toEqual([
+      'tab: expected one of flame, waterfall, spans, services, errors, got overview',
+    ]);
+  });
+
   test('reports unknown and duplicate params, keeping none of the duplicates', () => {
-    const r = parseUrlState('foo=1&text=a&text=b&tab=x');
-    expect(r.state).toEqual({ tab: 'x' });
+    const r = parseUrlState('foo=1&text=a&text=b&tab=waterfall');
+    expect(r.state).toEqual({ tab: 'waterfall' });
     expect(r.errors).toEqual([
       'foo: unknown parameter, got 1',
       'text: expected a single value, got 2 values: a, b',

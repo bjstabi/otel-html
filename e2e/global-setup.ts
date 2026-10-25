@@ -8,12 +8,17 @@ import { promisify } from 'node:util';
 import {
   HOSTILE_SPAN_NAME,
   HTTP_SUBPATH,
+  LARGE_REPORT_DIR,
+  LARGE_SPAN_COUNT,
+  LARGE_TRACE_ID,
   PORT_ENV,
   REPORT_DIR,
   REPORTS_DIR,
   RUN_TITLE,
   SERVICE_A,
   SERVICE_B,
+  TRACE_1,
+  TRACE_2,
 } from './fixture.js';
 
 const run = promisify(execFile);
@@ -52,8 +57,8 @@ function otlpInputs(): Record<string, unknown> {
   const resource = { attributes: [str('service.name', SERVICE_A)] };
   const dbResource = { attributes: [str('service.name', SERVICE_B)] };
   const scope = { name: 'e2e' };
-  const trace1 = '0102030405060708090a0b0c0d0e0f10';
-  const trace2 = '1102030405060708090a0b0c0d0e0f10';
+  const trace1 = TRACE_1;
+  const trace2 = TRACE_2;
   return {
     'traces.json': {
       resourceSpans: [
@@ -152,6 +157,46 @@ async function buildReport(): Promise<void> {
   ]);
 }
 
+/** One trace of `LARGE_SPAN_COUNT` spans: a 4-ary tree over 5 services, children inside their parent's start. */
+function largeTraceInput(): unknown {
+  const t0 = 1_700_000_000_000_000_000n;
+  const hex = (n: number, width: number): string => (n + 1).toString(16).padStart(width, '0');
+  const services = ['edge', 'api', 'auth', 'db', 'cache'];
+  const buckets: Record<string, unknown[]> = Object.fromEntries(services.map((s) => [s, []]));
+  for (let i = 0; i < LARGE_SPAN_COUNT; i++) {
+    const start = t0 + BigInt(i) * 20_000n;
+    const service = services[i % services.length] ?? 'edge';
+    buckets[service]?.push({
+      traceId: LARGE_TRACE_ID,
+      spanId: hex(i, 16),
+      ...(i === 0 ? {} : { parentSpanId: hex(Math.floor((i - 1) / 4), 16) }),
+      name: `op-${i % 97}`,
+      kind: 1,
+      startTimeUnixNano: String(start),
+      endTimeUnixNano: String(start + 1_000_000n + BigInt((i % 7) * 100_000)),
+      ...(i % 211 === 0 ? { status: { code: 2, message: 'boom' } } : {}),
+    });
+  }
+  return {
+    resourceSpans: services.map((service) => ({
+      resource: { attributes: [str('service.name', service)] },
+      scopeSpans: [{ scope: { name: 'e2e-large' }, spans: buckets[service] }],
+    })),
+  };
+}
+
+async function buildLargeReport(): Promise<void> {
+  const inputs = new URL('large-inputs/', REPORTS_DIR);
+  await mkdir(inputs, { recursive: true });
+  const file = fileURLToPath(new URL('traces.json', inputs));
+  await writeFile(file, JSON.stringify(largeTraceInput()));
+  await run(
+    process.execPath,
+    [CLI, 'convert', file, '--out', fileURLToPath(LARGE_REPORT_DIR), '--title', 'large trace'],
+    { maxBuffer: 64 * 1024 * 1024 },
+  );
+}
+
 async function serve(root: string): Promise<{ port: number; close(): Promise<void> }> {
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
@@ -184,6 +229,7 @@ async function serve(root: string): Promise<{ port: number; close(): Promise<voi
 
 export default async function globalSetup(): Promise<() => Promise<void>> {
   await buildReport();
+  await buildLargeReport();
   const server = await serve(fileURLToPath(REPORT_DIR).replace(/\/$/, ''));
   process.env[PORT_ENV] = String(server.port);
   return () => server.close();
