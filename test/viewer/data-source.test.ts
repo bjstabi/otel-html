@@ -9,7 +9,14 @@ import {
 } from '../../src/viewer/data/data-source.js';
 import { CHUNK_LRU_SIZE } from '../../src/viewer/data/windowed.js';
 import { createScriptedLoader } from '../../test-support/scripted-loader.js';
-import { buildReport, type Fixture, STEP_NS, traceIdOf, withShard } from './report-fixture.js';
+import {
+  buildReport,
+  buildSpreadReport,
+  type Fixture,
+  STEP_NS,
+  traceIdOf,
+  withShard,
+} from './report-fixture.js';
 
 const query = (over: Partial<SpanQuery> = {}): SpanQuery => ({
   condition: null,
@@ -191,6 +198,9 @@ describe('windowed strategy', () => {
     expect(r.total).toBe(six.manifest.totals.spans);
     expect(r.partial).toEqual({ scanned: 2, total: 6 });
     expect(loader.calls).toEqual([chunkPath(0), chunkPath(1)]);
+    // aggregates are the run's own, consistent with the manifest total, not the scanned head
+    expect(r.facets.total('service.name')).toBe(six.manifest.totals.spans);
+    expect(r.buckets.total('error')).toBe(2);
   });
 
   test('keeps at most 8 chunks decoded, least recently used first', async () => {
@@ -246,5 +256,67 @@ describe('windowed strategy', () => {
   test('a trace the shard does not know is reported precisely', async () => {
     const { ds } = await windowed();
     await expect(ds.getTrace(traceIdOf(77) as TraceId)).rejects.toThrow(/not found/);
+  });
+});
+
+describe('windowed traces mode', () => {
+  const traceQuery = (over: Partial<SpanQuery>): SpanQuery => query({ mode: 'traces', ...over });
+
+  test('rows of a trace spread over chunks carry whole-trace figures and say when the share is incomplete', async () => {
+    const spread = await buildSpreadReport();
+    const loader = createScriptedLoader(spread.files);
+    const ds = await createDataSource(loader, spread.manifest, 1);
+    const c2 = spread.manifest.chunks[2];
+    const partialRun = await ds.querySpans(
+      traceQuery({ condition: 'name == "db.query"', window: { start: c2?.start ?? 0, end: c2?.end ?? 0 } }),
+    );
+    const [row] = asTraces(partialRun.rows);
+    // chunk 0 (the root) overlaps the window too; chunk 3 (the erroring child) does not
+    expect(partialRun.partial).toEqual({ scanned: 2, total: 4 });
+    expect(row).toMatchObject({
+      traceId: traceIdOf(0),
+      spans: 3,
+      errors: 1,
+      start: 0,
+      durationNs: 1000,
+      rootSummary: { service: 'web', name: 'GET /', resource: 'GET /' },
+      shareComplete: false,
+      serviceShare: [],
+    });
+
+    expect(row?.root?.service).toBe('web');
+
+    const whole = await ds.querySpans(traceQuery({ condition: 'name == "db.query"', scanAll: true }));
+    const [full] = asTraces(whole.rows);
+    expect(whole.partial).toBeNull();
+    expect(full).toMatchObject({ spans: 3, errors: 1, start: 0, durationNs: 1000, shareComplete: true });
+    expect(full?.root?.service).toBe('web');
+    expect(full?.serviceShare).toEqual([
+      { service: 'db', ns: 600 },
+      { service: 'web', ns: 400 },
+    ]);
+  });
+
+  test('the list cap counts traces, not matched spans, and limit counts traces', async () => {
+    const capped = { ...six.manifest, config: { viewer: { ...six.manifest.config.viewer, listCap: 2 } } };
+    const loader = createScriptedLoader(six.files);
+    const ds = await createDataSource(loader, capped, 1);
+    loader.reset();
+    const r = await ds.querySpans(traceQuery({ condition: 'name == "db.query"' }));
+    expect(asTraces(r.rows).map((t) => t.traceId)).toEqual([traceIdOf(0), traceIdOf(1)]);
+    expect(r.total).toBe(2);
+    expect(r.partial).toEqual({ scanned: 2, total: 6 });
+    expect(asTraces(r.rows).every((t) => t.shareComplete && t.spans === 3)).toBe(true);
+    const limited = await ds.querySpans(traceQuery({ condition: 'name == "db.query"', limit: 1 }));
+    expect(limited.rows).toHaveLength(1);
+  });
+});
+
+describe('groupBy', () => {
+  test('fails fast until it is implemented', async () => {
+    const ds = await createDataSource(createScriptedLoader(six.files), six.manifest, SMALL);
+    await expect(ds.querySpans(query({ groupBy: 'service.name' }))).rejects.toThrow(
+      /query\.groupBy.*not implemented/,
+    );
   });
 });

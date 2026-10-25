@@ -82,7 +82,9 @@ export async function createDataSource(
 ): Promise<DataSource> {
   const rollups = await loadSpanRollups(loader, manifest);
   const eager = manifest.decodedBytes <= budgetBytes;
-  const strategy = eager ? await createEagerSource(loader, manifest) : createWindowedSource(loader, manifest);
+  const strategy = eager
+    ? await createEagerSource(loader, manifest)
+    : createWindowedSource(loader, manifest, rollups);
   return {
     manifest,
     strategy: eager ? 'eager' : 'windowed',

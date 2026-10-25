@@ -41,11 +41,20 @@ export interface SpanRow {
 
 export interface TraceRow {
   traceId: TraceId;
+  /** The root span when it was seen; null when its chunk was not scanned (windowed) or the trace has none. */
   root: SpanRow | null;
+  /** The root's service, span name and resource, from the trace index when available (windowed) or the root row. */
+  rootSummary: { service: string; name: string; resource: string } | null;
   start: number;
   durationNs: number;
   spans: number;
   errors: number;
+  /**
+   * True when `serviceShare` and `root` were computed from every span of the trace. `spans`, `errors`, `start` and
+   * `durationNs` are always whole-trace values (windowed reads them from the trace index). When false,
+   * `serviceShare` is empty rather than an approximation from the chunks that happened to be scanned.
+   */
+  shareComplete: boolean;
   /** Exclusive time per service, largest first. */
   serviceShare: readonly { service: string; ns: number }[];
 }
@@ -70,6 +79,17 @@ export interface SpanEntry {
   readonly row: SpanRow;
   readonly target: SpanTarget;
   readonly chunk: LoadedChunk;
+}
+
+/** Whole-trace figures from the trace index, used instead of recomputing from a subset of the trace. */
+export interface TraceFacts {
+  start: number;
+  end: number;
+  spans: number;
+  errors: number;
+  root: { service: string; name: string; resource: string } | null;
+  /** Whether every span of the trace is among the rows the query saw. */
+  complete: boolean;
 }
 
 /** Facet caps used when rebuilding facets for a filtered set (the writer's defaults). */
@@ -145,8 +165,24 @@ function sortFor<T>(table: Readonly<Record<string, T>>, column: string, mode: st
   return fn;
 }
 
-function traceRow(traceId: TraceId, rows: readonly SpanRow[]): TraceRow {
+function traceRow(traceId: TraceId, rows: readonly SpanRow[], facts?: TraceFacts): TraceRow {
   const tree = buildTraceTree(rows);
+  const root = tree.roots.find((n) => n.row.span.parentSpanId === null)?.row ?? null;
+  const rootSummary =
+    root === null ? null : { service: root.service, name: root.span.name, resource: root.resource };
+  if (facts !== undefined) {
+    return {
+      traceId,
+      root,
+      rootSummary: facts.root ?? rootSummary,
+      start: facts.start,
+      durationNs: Math.max(0, facts.end - facts.start),
+      spans: facts.spans,
+      errors: facts.errors,
+      shareComplete: facts.complete,
+      serviceShare: facts.complete ? exclusiveTimeByService(tree) : [],
+    };
+  }
   let start = Number.POSITIVE_INFINITY;
   let end = Number.NEGATIVE_INFINITY;
   let errors = 0;
@@ -157,11 +193,13 @@ function traceRow(traceId: TraceId, rows: readonly SpanRow[]): TraceRow {
   }
   return {
     traceId,
-    root: tree.roots.find((n) => n.row.span.parentSpanId === null)?.row ?? null,
+    root,
+    rootSummary,
     start,
     durationNs: Math.max(0, end - start),
     spans: rows.length,
     errors,
+    shareComplete: true,
     serviceShare: exclusiveTimeByService(tree),
   };
 }
@@ -182,8 +220,16 @@ export class SpanQueryRun {
   readonly #traceCompare: ((a: TraceRow, b: TraceRow) => number) | null;
   readonly #window: TimeWindow | null;
   #visited = 0;
+  #hitTraces = 0;
 
   constructor(q: SpanQuery, signal?: AbortSignal) {
+    if (q.groupBy !== null) {
+      throw new OtelHtmlError('usage', {
+        path: 'query.groupBy',
+        expected: 'null (grouping is not implemented by the data layer yet)',
+        actual: JSON.stringify(q.groupBy),
+      });
+    }
     if (!Number.isInteger(q.limit) || q.limit < 0) {
       throw new OtelHtmlError('usage', {
         path: 'query.limit',
@@ -201,9 +247,19 @@ export class SpanQueryRun {
     throwIfAborted(signal);
   }
 
-  /** Matched entries so far (spans, even in traces mode). */
-  get matches(): number {
-    return this.#matched.length;
+  /** What a scan's cap counts: matched spans, or matched traces in traces mode. */
+  get units(): number {
+    return this.#q.mode === 'traces' ? this.#hitTraces : this.#matched.length;
+  }
+
+  /** Ids of traces with a matching span (traces mode), in first-seen order. */
+  hitTraceIds(): TraceId[] {
+    return [...this.#traces].filter(([, g]) => g.hit).map(([id]) => id);
+  }
+
+  /** The rows seen so far for a trace (traces mode). */
+  seenRows(id: TraceId): readonly SpanRow[] {
+    return this.#traces.get(id)?.rows ?? [];
   }
 
   visit(e: SpanEntry): void {
@@ -224,11 +280,17 @@ export class SpanQueryRun {
     if (this.#condition !== null && !this.#condition.test(e.target)) return;
     if (this.#q.text !== '' && !matchesText(this.#q.text, spanTextFields(e.target))) return;
     this.#matched.push(e);
-    if (group !== undefined) group.hit = true;
+    if (group !== undefined) {
+      if (!group.hit) this.#hitTraces++;
+      group.hit = true;
+    }
     this.#rollups.add(e.target);
   }
 
-  finish(partial: SpanQueryResult['partial']): SpanQueryResult {
+  finish(
+    partial: SpanQueryResult['partial'],
+    factsOf?: (id: TraceId) => TraceFacts | undefined,
+  ): SpanQueryResult {
     throwIfAborted(this.#signal);
     const sign = this.#q.sort.dir === 'asc' ? 1 : -1;
     let rows: (SpanRow | TraceRow)[];
@@ -242,7 +304,9 @@ export class SpanQueryRun {
       total = this.#matched.length;
     } else {
       const compare = this.#traceCompare;
-      const hits = [...this.#traces].filter(([, g]) => g.hit).map(([id, g]) => traceRow(id, g.rows));
+      const hits = [...this.#traces]
+        .filter(([, g]) => g.hit)
+        .map(([id, g]) => traceRow(id, g.rows, factsOf?.(id)));
       if (compare !== null) hits.sort((a, b) => sign * compare(a, b) || a.start - b.start);
       rows = hits.slice(0, this.#q.limit);
       total = hits.length;

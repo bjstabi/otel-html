@@ -10,7 +10,7 @@ import {
   traceShardPath,
 } from '../../format/paths.js';
 import { SPAN_COLUMNS } from '../../format/specs.js';
-import { type TraceEntry, TraceShardSchema } from '../../format/trace-shard.js';
+import { type TraceEntry, type TraceShard, TraceShardSchema } from '../../format/trace-shard.js';
 import { parseWith } from '../../format/validate.js';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { TraceId, UnixNanos } from '../../model/ids.js';
@@ -58,17 +58,23 @@ export async function loadSpanRollups(loader: ScriptLoader, manifest: Manifest):
 }
 
 /**
- * The trace's index entry, or null when the manifest lists no shard for it or the shard has no such trace.
- * The shard may be newer than the manifest after a crash, so its chunk refs are filtered by the caller.
+ * One trace-index shard, or null when the manifest lists none for it. The shard may be newer than the
+ * manifest after a crash, so callers filter its chunk refs against the manifest.
  */
+export async function loadTraceShard(
+  loader: ScriptLoader,
+  manifest: Manifest,
+  shard: string,
+): Promise<TraceShard | null> {
+  const path = traceShardPath(shard);
+  if (!manifest.traceShards.includes(path)) return null;
+  return parseWith(TraceShardSchema, reviveDataJson(await loader.load(path, traceShardKey(shard))), path);
+}
+
 export async function loadTraceEntry(
   loader: ScriptLoader,
   manifest: Manifest,
   traceId: TraceId,
 ): Promise<TraceEntry | null> {
-  const shard = shardOf(traceId);
-  const path = traceShardPath(shard);
-  if (!manifest.traceShards.includes(path)) return null;
-  const payload = reviveDataJson(await loader.load(path, traceShardKey(shard)));
-  return parseWith(TraceShardSchema, payload, path)[traceId] ?? null;
+  return (await loadTraceShard(loader, manifest, shardOf(traceId)))?.[traceId] ?? null;
 }

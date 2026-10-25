@@ -94,3 +94,56 @@ export function withShard(
   edit(entries);
   return new Map(files).set(path, wrapDataFile(`traces/${shard}`, entries));
 }
+
+/**
+ * Trace `traceIdOf(0)` spread over four chunks: root (web) in chunk 0, filler traces in chunks 1 and 3, a db child in
+ * chunk 2 and an erroring db child in chunk 3. Root is [0, 1000] ns, children [100, 400] and [500, 800].
+ */
+export async function buildSpreadReport(): Promise<Fixture> {
+  const w = createTestWriter();
+  const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'create' });
+  const base = BigInt(EPOCH_NS);
+  const one = (
+    service: string,
+    trace: number,
+    id: number,
+    parent: number | null,
+    at: bigint,
+    len: bigint,
+    error = false,
+  ): JsonObject => ({
+    resourceSpans: [
+      {
+        resource: { attributes: [attr('service.name', { stringValue: service })] },
+        scopeSpans: [
+          {
+            scope: { name: 'test-scope' },
+            spans: [
+              span({
+                traceId: traceIdOf(trace),
+                spanId: spanId(trace, id),
+                ...(parent === null ? {} : { parentSpanId: spanId(trace, parent) }),
+                name: parent === null ? 'GET /' : 'db.query',
+                startTimeUnixNano: String(base + at),
+                endTimeUnixNano: String(base + at + len),
+                ...(error ? { status: { code: 2, message: 'boom' } } : {}),
+              }),
+            ],
+          },
+        ],
+      },
+    ],
+  });
+  const chunks: JsonObject[][] = [
+    [one('web', 0, 0, null, 0n, 1000n)],
+    [one('web', 1, 0, null, STEP_NS, 1000n)],
+    [one('db', 0, 1, 0, 100n, 300n)],
+    [one('db', 0, 2, 0, 500n, 300n, true), one('web', 2, 0, null, 3n * STEP_NS, 1000n)],
+  ];
+  for (const requests of chunks) {
+    for (const r of requests) await session.add(otlp(r), 'spread');
+    await session.flush();
+  }
+  await session.close();
+  return { files: reportFilesFromSnapshot(w.fs.snapshot(), OUT), manifest: manifestOf(w, OUT) };
+}
