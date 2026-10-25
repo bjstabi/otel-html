@@ -1,4 +1,4 @@
-import { type JSX, type ReactNode, useEffect, useState } from 'react';
+import { type JSX, type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import type { RelNanos, SpanId, TraceId } from '../../model/ids.js';
 import type {
   ResourceRecord,
@@ -29,7 +29,7 @@ export function formatOffset(from: RelNanos, to: RelNanos): string {
   return d < 0 ? `-${formatDuration(-d)}` : `+${formatDuration(d)}`;
 }
 
-export function EventsTab(props: { span: SpanRecord; actions: AttributeActions }): JSX.Element {
+export function EventsTab(props: { span: SpanRecord }): JSX.Element {
   return (
     <ol className="flex flex-col gap-3" aria-label="Span events">
       {props.span.events.map((e: SpanEventRecord, i) => (
@@ -42,7 +42,7 @@ export function EventsTab(props: { span: SpanRecord; actions: AttributeActions }
             </span>
             <span className="min-w-0 font-semibold break-words">{e.name}</span>
           </p>
-          <AttributeGroups attributes={e.attributes} pinned={[]} {...props.actions} />
+          <AttributeGroups attributes={e.attributes} pinned={[]} />
           {e.droppedAttributesCount > 0 && <Muted>{e.droppedAttributesCount} attributes dropped</Muted>}
         </li>
       ))}
@@ -50,37 +50,40 @@ export function EventsTab(props: { span: SpanRecord; actions: AttributeActions }
   );
 }
 
-type Presence = 'checking' | 'present' | 'absent';
+type Presence = 'checking' | 'present' | 'absent' | 'unknown';
 
-/** Whether another trace is in the report, asked of the data source (a missing trace rejects). */
-function useTracePresence(dataSource: DataSource, traceId: TraceId, skip: boolean): Presence {
+/** Whether another trace is in the report: an index lookup, remembered per trace id while the links are shown. */
+function useTracePresence(
+  probe: (id: TraceId) => Promise<boolean>,
+  traceId: TraceId,
+  skip: boolean,
+): Presence {
   const [state, setState] = useState<{ traceId: TraceId; presence: Presence } | null>(null);
   useEffect(() => {
     if (skip) return;
     let live = true;
-    Promise.resolve()
-      .then(() => dataSource.getTrace(traceId))
-      .then(
-        () => live && setState({ traceId, presence: 'present' }),
-        () => live && setState({ traceId, presence: 'absent' }),
-      );
+    probe(traceId).then(
+      (found) => live && setState({ traceId, presence: found ? 'present' : 'absent' }),
+      // A failed lookup says nothing about the report's contents.
+      () => live && setState({ traceId, presence: 'unknown' }),
+    );
     return () => {
       live = false;
     };
-  }, [dataSource, traceId, skip]);
+  }, [probe, traceId, skip]);
   return state !== null && state.traceId === traceId ? state.presence : 'checking';
 }
 
 function LinkTarget(props: {
   link: SpanLinkRecord;
   currentTrace: TraceId;
-  dataSource: DataSource;
+  probe: (id: TraceId) => Promise<boolean>;
   onSelectSpan(id: SpanId): void;
 }): JSX.Element {
   const { link } = props;
   const sel = useSelection((s) => s);
   const same = link.traceId === props.currentTrace;
-  const presence = useTracePresence(props.dataSource, link.traceId, same);
+  const presence = useTracePresence(props.probe, link.traceId, same);
   if (same) {
     return (
       <button
@@ -93,6 +96,7 @@ function LinkTarget(props: {
     );
   }
   if (presence === 'absent') return <span className="text-sm text-muted">not in this report</span>;
+  if (presence === 'unknown') return <span className="text-sm text-muted">could not check</span>;
   if (presence === 'checking') return <span className="text-sm text-muted">checking...</span>;
   const search = serializeUrlState(selectionToUrlState({ ...sel, traceId: null, spanId: link.spanId }));
   const route = `/traces/trace/${link.traceId}`;
@@ -115,8 +119,22 @@ export function LinksTab(props: {
   span: SpanRecord;
   dataSource: DataSource;
   onSelectSpan(id: SpanId): void;
-  actions: AttributeActions;
 }): JSX.Element {
+  const cache = useRef(new Map<TraceId, Promise<boolean>>());
+  const { dataSource } = props;
+  const probe = useCallback(
+    (id: TraceId): Promise<boolean> => {
+      let p = cache.current.get(id);
+      if (p === undefined) {
+        p = Promise.resolve().then(() => dataSource.hasTrace(id));
+        cache.current.set(id, p);
+        // A failure is not remembered, so a later visit can retry.
+        p.catch(() => cache.current.delete(id));
+      }
+      return p;
+    },
+    [dataSource],
+  );
   return (
     <ul className="flex flex-col gap-3" aria-label="Span links">
       {props.span.links.map((l, i) => (
@@ -138,11 +156,11 @@ export function LinksTab(props: {
             <LinkTarget
               link={l}
               currentTrace={props.span.traceId}
-              dataSource={props.dataSource}
+              probe={probe}
               onSelectSpan={props.onSelectSpan}
             />
           </div>
-          <AttributeGroups attributes={l.attributes} pinned={[]} {...props.actions} />
+          <AttributeGroups attributes={l.attributes} pinned={[]} />
           {l.droppedAttributesCount > 0 && <Muted>{l.droppedAttributesCount} attributes dropped</Muted>}
         </li>
       ))}

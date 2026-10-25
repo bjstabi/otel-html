@@ -129,6 +129,10 @@ export function createWindowedSource(
         : { ...result, ...aggregates, total: manifest.totals.spans };
     },
 
+    async hasTrace(traceId: TraceId) {
+      return (await loadTraceEntry(loader, manifest, traceId)) !== null;
+    },
+
     async getTrace(traceId: TraceId) {
       const entry = await loadTraceEntry(loader, manifest, traceId);
       if (entry === null) throw traceNotFound(traceId);

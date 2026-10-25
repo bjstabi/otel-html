@@ -159,10 +159,6 @@ export function SpanSection(props: SpanSectionProps): JSX.Element {
     onExclude: filter('attribute', '!='),
     onTogglePin: togglePin,
   };
-  const eventActions: AttributeActions = {
-    onFilter: filter('attribute', '=='),
-    onExclude: filter('attribute', '!='),
-  };
   const resourceActions: AttributeActions = {
     onFilter: filter('resource', '=='),
     onExclude: filter('resource', '!='),
@@ -236,14 +232,9 @@ export function SpanSection(props: SpanSectionProps): JSX.Element {
               )}
             </>
           )}
-          {active === 'events' && <EventsTab span={span} actions={eventActions} />}
+          {active === 'events' && <EventsTab span={span} />}
           {active === 'links' && (
-            <LinksTab
-              span={span}
-              dataSource={dataSource}
-              onSelectSpan={(id) => sel.selectSpan(id)}
-              actions={eventActions}
-            />
+            <LinksTab span={span} dataSource={dataSource} onSelectSpan={(id) => sel.selectSpan(id)} />
           )}
           {active === 'resource' && (
             <ResourceTab

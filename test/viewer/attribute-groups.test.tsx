@@ -6,13 +6,15 @@ import type { Manifest } from '../../src/format/manifest.js';
 import type { AnyValue, Attributes } from '../../src/model/anyvalue.js';
 import type { RelNanos, SpanId, TraceId } from '../../src/model/ids.js';
 import type { SpanLinkRecord } from '../../src/model/records.js';
+import { addAttributeFilter } from '../../src/viewer/components/attribute-filter.js';
 import { AttributeGroups, PINS_STORAGE_KEY } from '../../src/viewer/components/attribute-groups.js';
+import { ottlToTokens } from '../../src/viewer/components/filter-tokens.js';
 import type { DataSource, TraceDetail } from '../../src/viewer/data/data-source.js';
 import { createSelectionStore } from '../../src/viewer/state/selection.js';
 import { SelectionProvider } from '../../src/viewer/state/selection-context.js';
 import { ThemeProvider } from '../../src/viewer/theme/theme-provider.js';
 import { SpanSection } from '../../src/viewer/traces/span-section.js';
-import { detailOf, spanIdOf, str, TRACE_ID, traceRow } from './trace-rows.js';
+import { detailOf, spanIdOf, str, traceRow } from './trace-rows.js';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -123,6 +125,7 @@ function source(over: Partial<DataSource> = {}): DataSource {
     manifest,
     strategy: 'eager',
     getTrace: () => Promise.reject(new Error('not found')),
+    hasTrace: () => Promise.resolve(false),
     percentileOf: () => 90,
     ...over,
   } as DataSource;
@@ -260,8 +263,8 @@ describe('SpanSection', () => {
       flags: 0,
     });
     const ds = source({
-      getTrace: (t: TraceId) =>
-        t === other ? Promise.resolve(detailOf([])) : Promise.reject(new Error('nf')),
+      hasTrace: (t: TraceId) => Promise.resolve(t === other),
+      getTrace: () => Promise.reject(new Error('links must not load whole traces')),
     });
     mountSection(withSpan({ links: [mk(other), mk(missing)] }), spanIdOf(1), ds);
     await user.click(screen.getByRole('tab', { name: 'Links' }));
@@ -302,4 +305,98 @@ describe('SpanSection', () => {
   });
 });
 
-void TRACE_ID;
+describe('event and link attributes', () => {
+  test('are copy-only: a span-attribute filter would match the wrong thing', async () => {
+    const user = userEvent.setup();
+    const ev = {
+      time: 1_000 as RelNanos,
+      name: 'e',
+      attributes: attrs({ 'exception.type': str('Boom') }),
+      droppedAttributesCount: 0,
+    };
+    const link: SpanLinkRecord = {
+      traceId: 'b'.repeat(32) as TraceId,
+      spanId: spanIdOf(9),
+      traceState: '',
+      attributes: attrs({ 'link.note': str('n') }),
+      droppedAttributesCount: 0,
+      flags: 0,
+    };
+    mountSection(withSpan({ events: [ev], links: [link] }), spanIdOf(1));
+    await user.click(screen.getByRole('tab', { name: 'Events' }));
+    expect(screen.getByRole('button', { name: 'Copy value of exception.type' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /^Filter|^Exclude/ })).toBeNull();
+    await user.click(screen.getByRole('tab', { name: 'Links' }));
+    expect(screen.getByRole('button', { name: 'Copy value of link.note' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /^Filter|^Exclude/ })).toBeNull();
+  });
+
+  test('a failing presence check says could not check, and is probed once per trace', async () => {
+    const user = userEvent.setup();
+    const t = 'd'.repeat(32) as TraceId;
+    const mk = (n: number): SpanLinkRecord => ({
+      traceId: t,
+      spanId: spanIdOf(n),
+      traceState: '',
+      attributes: new Map(),
+      droppedAttributesCount: 0,
+      flags: 0,
+    });
+    const hasTrace = vi.fn(() => Promise.reject(new Error('chunk load failed')));
+    mountSection(withSpan({ links: [mk(8), mk(9)] }), spanIdOf(1), source({ hasTrace }));
+    await user.click(screen.getByRole('tab', { name: 'Links' }));
+    await waitFor(() => expect(screen.getAllByText('could not check')).toHaveLength(2));
+    expect(screen.queryByText('not in this report')).toBeNull();
+    expect(hasTrace).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('addAttributeFilter', () => {
+  const add = (v: AnyValue, op: '==' | '!=' = '=='): string | null =>
+    addAttributeFilter(null, 'attribute', 'k', v, op);
+
+  test('keeps int, bool and double typed', () => {
+    expect(add({ kind: 'int', value: 42n })).toBe('span.attributes["k"] == 42');
+    expect(add({ kind: 'bool', value: true })).toBe('span.attributes["k"] == true');
+    expect(add({ kind: 'double', value: 1.5 }, '!=')).toBe('span.attributes["k"] != 1.5');
+  });
+
+  test('escapes quotes, backslashes, newlines and U+2028, and the result round-trips', () => {
+    for (const raw of ['a"b', 'a\\b', 'a\nb', 'a\u2028b']) {
+      const out = add(str(raw));
+      expect(out).not.toBeNull();
+      expect(ottlToTokens(out ?? '')).toEqual([{ key: 'span.attributes["k"]', op: '==', value: raw }]);
+    }
+  });
+
+  test('resource scope uses resource.attributes', () => {
+    expect(addAttributeFilter(null, 'resource', 'service.name', str('web'), '==')).toBe(
+      'resource.attributes["service.name"] == "web"',
+    );
+  });
+
+  test('a non-flat condition throws instead of being overwritten', () => {
+    expect(() => addAttributeFilter('a == 1 or b == 2', 'attribute', 'k', str('v'), '==')).toThrow(
+      /flat `and`/,
+    );
+  });
+
+  test('non-scalar values are not filterable and leave the condition alone', () => {
+    expect(addAttributeFilter('x == 1', 'attribute', 'k', { kind: 'array', values: [] }, '==')).toBe(
+      'x == 1',
+    );
+  });
+});
+
+describe('SpanSection filter errors', () => {
+  test('a non-flat existing condition shows an alert and is kept', async () => {
+    const user = userEvent.setup();
+    const store = mountSection(withSpan({}, attrs({ 'http.route': str('/r') })), spanIdOf(1), source(), {
+      q: 'attributes["a"] == "1" or attributes["b"] == "2"',
+    });
+    const before = store.getState().condition;
+    await user.click(screen.getByRole('button', { name: 'Filter http.route to /r' }));
+    expect((await screen.findByRole('alert')).textContent).toMatch(/flat/);
+    expect(store.getState().condition).toBe(before);
+  });
+});

@@ -43,12 +43,14 @@ export interface DataSource {
     signal?: AbortSignal,
   ): Promise<SpanQueryResult>;
   getTrace(traceId: TraceId): Promise<TraceDetail>;
+  /** Whether the report holds the trace. An index lookup only: no span chunk is loaded. Rejects on load failures. */
+  hasTrace(traceId: TraceId): Promise<boolean>;
   /** Percentile (0-100) of `durationNs` within the unfiltered rollup of that service and resource, or null if unknown. */
   percentileOf(service: string, resource: string, durationNs: number): number | null;
 }
 
 /** What each strategy provides; `createDataSource` adds the shared landing and percentile parts. */
-export type StrategySource = Pick<DataSource, 'querySpans' | 'getTrace'>;
+export type StrategySource = Pick<DataSource, 'querySpans' | 'getTrace' | 'hasTrace'>;
 
 const DURATION_KEY_SEP = '\u0000';
 
@@ -91,6 +93,7 @@ export async function createDataSource(
     landing: () => Promise.resolve(landingOf(rollups)),
     querySpans: strategy.querySpans,
     getTrace: strategy.getTrace,
+    hasTrace: strategy.hasTrace,
     percentileOf(service, resource, durationNs) {
       const h = rollups.durations.get(`${service}${DURATION_KEY_SEP}${resource}`);
       return h === undefined ? null : percentile(h, durationNs);

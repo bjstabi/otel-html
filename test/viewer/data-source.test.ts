@@ -122,6 +122,12 @@ describe('eager strategy', () => {
     await expect(ds.getTrace(traceIdOf(99) as TraceId)).rejects.toBeInstanceOf(OtelHtmlError);
   });
 
+  test('hasTrace answers from memory', async () => {
+    const ds = await createDataSource(createScriptedLoader(six.files), six.manifest, SMALL);
+    expect(await ds.hasTrace(traceIdOf(4) as TraceId)).toBe(true);
+    expect(await ds.hasTrace(traceIdOf(99) as TraceId)).toBe(false);
+  });
+
   test('rejects with AbortError on an aborted signal', async () => {
     const ds = await createDataSource(createScriptedLoader(six.files), six.manifest, SMALL);
     const ac = new AbortController();
@@ -240,6 +246,14 @@ describe('windowed strategy', () => {
     const t = await ds.getTrace(id as TraceId);
     expect(t.spans).toHaveLength(3);
     expect(loader.calls).toEqual([`data/traces/${id.slice(0, 2)}.js`, chunkPath(3)]);
+  });
+
+  test('hasTrace reads only the shard file, never a span chunk', async () => {
+    const { ds, loader } = await windowed();
+    const id = traceIdOf(3);
+    expect(await ds.hasTrace(id as TraceId)).toBe(true);
+    expect(await ds.hasTrace(traceIdOf(77) as TraceId)).toBe(false);
+    expect(loader.calls.every((c) => c.startsWith('data/traces/'))).toBe(true);
   });
 
   test('ignores shard chunk refs the manifest does not list (shard ahead of the manifest)', async () => {

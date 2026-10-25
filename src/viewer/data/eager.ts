@@ -27,6 +27,9 @@ export async function createEagerSource(loader: ScriptLoader, manifest: Manifest
         return Promise.reject(e);
       }
     },
+    hasTrace(traceId) {
+      return Promise.resolve(byTrace.has(traceId));
+    },
     getTrace(traceId) {
       try {
         return Promise.resolve(assembleTrace(traceId, byTrace.get(traceId) ?? []));

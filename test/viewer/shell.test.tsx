@@ -60,6 +60,7 @@ const dataSource: DataSource = {
     }),
   querySpans: () => Promise.resolve(emptyResult()),
   getTrace: unused,
+  hasTrace: unused,
   percentileOf: unused,
 };
 
