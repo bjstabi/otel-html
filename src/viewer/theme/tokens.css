@@ -1,0 +1,89 @@
+:root {
+  color-scheme: light;
+  --oh-page: #f6f6f3;
+  --oh-surface: #ffffff;
+  --oh-ink: #16181d;
+  --oh-ink-2: #3d4149;
+  --oh-muted: #6b6f78;
+  --oh-hairline: #e4e4de;
+  --oh-accent: #0f766e;
+  --oh-critical: #d03b3b;
+  --oh-warning: #fab219;
+  --oh-series-1: #2a78d6;
+  --oh-series-2: #eb6834;
+  --oh-series-3: #1baf7a;
+  --oh-series-4: #eda100;
+  --oh-series-5: #e87ba4;
+  --oh-series-6: #008300;
+  --oh-series-7: #6250d6;
+  --oh-series-other: #9a9da5;
+  --oh-radius-card: 12px;
+  --oh-font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --oh-page: #121314;
+    --oh-surface: #1a1a19;
+    --oh-ink: #f0efec;
+    --oh-ink-2: #c3c2b7;
+    --oh-muted: #96958c;
+    --oh-hairline: #2e2e2b;
+    --oh-accent: #2dd4bf;
+    --oh-series-1: #3987e5;
+    --oh-series-2: #d95926;
+    --oh-series-3: #199e70;
+    --oh-series-4: #c98500;
+    --oh-series-5: #d55181;
+    --oh-series-6: #008300;
+    --oh-series-7: #9085e9;
+    --oh-series-other: #6f7279;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --oh-page: #121314;
+  --oh-surface: #1a1a19;
+  --oh-ink: #f0efec;
+  --oh-ink-2: #c3c2b7;
+  --oh-muted: #96958c;
+  --oh-hairline: #2e2e2b;
+  --oh-accent: #2dd4bf;
+  --oh-series-1: #3987e5;
+  --oh-series-2: #d95926;
+  --oh-series-3: #199e70;
+  --oh-series-4: #c98500;
+  --oh-series-5: #d55181;
+  --oh-series-6: #008300;
+  --oh-series-7: #9085e9;
+  --oh-series-other: #6f7279;
+}
+
+@theme inline {
+  --color-page: var(--oh-page);
+  --color-surface: var(--oh-surface);
+  --color-ink: var(--oh-ink);
+  --color-ink-2: var(--oh-ink-2);
+  --color-muted: var(--oh-muted);
+  --color-hairline: var(--oh-hairline);
+  --color-accent: var(--oh-accent);
+  --color-critical: var(--oh-critical);
+  --color-warning: var(--oh-warning);
+  --color-series-1: var(--oh-series-1);
+  --color-series-2: var(--oh-series-2);
+  --color-series-3: var(--oh-series-3);
+  --color-series-4: var(--oh-series-4);
+  --color-series-5: var(--oh-series-5);
+  --color-series-6: var(--oh-series-6);
+  --color-series-7: var(--oh-series-7);
+  --radius-card: var(--oh-radius-card);
+  --font-mono: var(--oh-font-mono);
+}
+
+body {
+  background: var(--oh-page);
+  color: var(--oh-ink);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
