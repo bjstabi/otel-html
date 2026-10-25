@@ -145,7 +145,7 @@ export function readableSpansToRequest(spans: readonly ReadableSpan[]): ExportTr
       byResource.set(s.resource, scopes);
     }
     const sc = s.instrumentationScope;
-    const key = `${sc.name}@${sc.version ?? ''}:${sc.schemaUrl ?? ''}`;
+    const key = JSON.stringify([sc.name, sc.version ?? '', sc.schemaUrl ?? '']);
     const list = scopes.get(key);
     if (list) list.push(s);
     else scopes.set(key, [s]);

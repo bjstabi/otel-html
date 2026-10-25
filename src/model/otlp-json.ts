@@ -66,8 +66,16 @@ class UnsafeNumber {
 
 type RevivedContext = { readonly source?: string };
 
+class MissingSourceText extends Error {}
+
 function reviveNumbers(_key: string, value: unknown, context?: RevivedContext): unknown {
-  if (typeof value === 'number' && !Number.isSafeInteger(value) && context?.source !== undefined) {
+  if (typeof value === 'number' && !Number.isSafeInteger(value)) {
+    // Without the source text a large int64 would silently lose precision, so refuse to continue.
+    if (context?.source === undefined) {
+      throw new MissingSourceText(
+        'this JavaScript runtime does not expose JSON source text (needs Node 24+), so int64 values cannot be read exactly',
+      );
+    }
     return new UnsafeNumber(value, context.source);
   }
   return value;
@@ -101,6 +109,10 @@ function convertField(key: string, value: unknown, path: string, source: string)
   }
   if (INT64_FIELDS.has(key)) {
     if (value instanceof UnsafeNumber) return value.source;
+    if (typeof value === 'number' && Number.isInteger(value) && !Number.isSafeInteger(value)) {
+      // Only reachable for already-parsed objects: the exact digits are gone.
+      fail(source, path, 'an exact integer (pass 64-bit values as strings)', String(value));
+    }
     if (Array.isArray(value)) return value.map((v) => (v instanceof UnsafeNumber ? v.source : v));
   }
   return convertTree(value, path, source);
@@ -127,13 +139,20 @@ function parseJsonText(text: string, source: string): unknown {
     return JSON.parse(text, reviveNumbers);
   } catch (e) {
     throw new OtelHtmlError('invalid-otlp', {
-      message: `${source}: invalid JSON: ${e instanceof Error ? e.message : String(e)}`,
+      message: `${source}: ${e instanceof MissingSourceText ? e.message : `invalid JSON: ${e instanceof Error ? e.message : String(e)}`}`,
     });
   }
 }
 
 export function parseOtlpJson(text: string, source: string): OtlpRequest[] {
-  const root = parseJsonText(text, source);
+  return parseOtlpObject(parseJsonText(text, source), source);
+}
+
+/**
+ * Reads an already-parsed OTLP-JSON object. Same rules as `parseOtlpJson`, except that numbers beyond 2^53
+ * in int64 fields are rejected (their digits are already lost); pass such values as strings.
+ */
+export function parseOtlpObject(root: unknown, source: string): OtlpRequest[] {
   if (typeof root !== 'object' || root === null || Array.isArray(root)) {
     throw new OtelHtmlError('invalid-otlp', {
       message: `${source}: expected a JSON object, got ${describe(root)}`,

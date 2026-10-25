@@ -1,5 +1,5 @@
 import { create, toBinary } from '@bufbuild/protobuf';
-import { describe, expect, it, test } from 'vitest';
+import { describe, expect, it, test, vi } from 'vitest';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import {
   type ExportLogsServiceRequest,
@@ -15,7 +15,7 @@ import {
   normalizeMetrics,
   normalizeTraces,
 } from '../../src/model/normalize.js';
-import { type OtlpRequest, parseOtlpJson } from '../../src/model/otlp-json.js';
+import { type OtlpRequest, parseOtlpJson, parseOtlpObject } from '../../src/model/otlp-json.js';
 import { parseOtlpProtobuf } from '../../src/model/otlp-proto.js';
 import { SpanKind } from '../../src/model/records.js';
 import {
@@ -307,5 +307,48 @@ describe('parseOtlpProtobuf', () => {
     expect(() => parseOtlpProtobuf(new Uint8Array([0xff, 0xff, 0xff]), 'traces', 'a.pb')).toThrowError(
       /^a\.pb: invalid OTLP protobuf \(traces\)/,
     );
+  });
+});
+
+describe('parseOtlpObject', () => {
+  it('accepts a parsed object and yields the same requests as the text path', () => {
+    const json = traceRequest([span()], [attr('service.name', { stringValue: 'svc' })]);
+    expect(parseOtlpObject(json, 'obj')).toEqual(parseOtlpJson(JSON.stringify(json), 'obj'));
+  });
+  it('keeps int64 strings exact', () => {
+    const json = traceRequest([span({ startTimeUnixNano: '1700000000000000001' })]);
+    const [req] = parseOtlpObject(json, 'obj');
+    expect(traces(req).resourceSpans[0]?.scopeSpans[0]?.spans[0]?.startTimeUnixNano).toBe(
+      1700000000000000001n,
+    );
+  });
+  it('rejects a lossy number in an int64 field instead of silently rounding', () => {
+    const json = traceRequest([span({ startTimeUnixNano: Number('1700000000000000001') })]);
+    expect(() => parseOtlpObject(json, 'obj')).toThrowError(
+      /^obj: resourceSpans\[0\]\.scopeSpans\[0\]\.spans\[0\]\.startTimeUnixNano: expected an exact integer/,
+    );
+  });
+  it('rejects non-objects and objects without a signal', () => {
+    expect(() => parseOtlpObject([], 'obj')).toThrowError(/^obj: expected a JSON object, got array/);
+    expect(() => parseOtlpObject({}, 'obj')).toThrowError(/^obj: expected at least one of/);
+  });
+});
+
+describe('int64 source text', () => {
+  it('fails explicitly when JSON.parse gives no source text', () => {
+    const original = JSON.parse;
+    const spy = vi
+      .spyOn(JSON, 'parse')
+      .mockImplementation((text: string, reviver?: unknown) =>
+        typeof reviver === 'function'
+          ? original(text, (k: string, v: unknown) => reviver(k, v))
+          : original(text),
+      );
+    try {
+      const text = `{"resourceSpans":[{"scopeSpans":[{"spans":[{"startTimeUnixNano":1700000000000000001}]}]}]}`;
+      expect(() => parseOtlpJson(text, 'a.json')).toThrowError(/a\.json: .*source text/);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

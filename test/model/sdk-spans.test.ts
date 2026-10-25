@@ -96,4 +96,25 @@ describe('readableSpansToRequest', () => {
   it('returns an empty request for no spans', () => {
     expect(readableSpansToRequest([]).resourceSpans).toEqual([]);
   });
+
+  it('keeps scopes apart when name, version and schema url only differ across separators', () => {
+    const exporter = new InMemorySpanExporter();
+    const provider = new BasicTracerProvider({
+      resource: resourceFromAttributes({ 'service.name': 'svc' }),
+      spanProcessors: [new SimpleSpanProcessor(exporter)],
+    });
+    // The SDK's own tracer cache has the same key collision, so the scopes are assigned after the fact.
+    provider.getTracer('x1').startSpan('one').end();
+    provider.getTracer('x2').startSpan('two').end();
+    const [one, two] = exporter.getFinishedSpans();
+    if (one === undefined || two === undefined) throw new Error('no spans');
+    const withScope = (span: ReadableSpan, instrumentationScope: ReadableSpan['instrumentationScope']) =>
+      Object.create(span, { instrumentationScope: { value: instrumentationScope } }) as ReadableSpan;
+    const spans = [
+      withScope(one, { name: 'a', version: 'b:c' }),
+      withScope(two, { name: 'a', version: 'b', schemaUrl: 'c:' }),
+    ];
+    const scopes = readableSpansToRequest(spans).resourceSpans.flatMap((r) => r.scopeSpans);
+    expect(scopes.map((x) => x.spans.map((y) => y.name))).toEqual([['one'], ['two']]);
+  });
 });
