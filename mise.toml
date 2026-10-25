@@ -9,7 +9,7 @@ claude = "latest"
 run = "pnpm install --frozen-lockfile && lefthook install"
 
 [tasks.lint]
-run = "pnpm exec biome ci ."
+run = "pnpm exec biome ci --error-on-warnings ."
 
 [tasks.format]
 run = "pnpm exec biome format --write ."
