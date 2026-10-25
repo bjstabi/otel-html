@@ -1,0 +1,43 @@
+import { Command, CommanderError } from 'commander';
+import { OtelHtmlError } from '../model/errors.js';
+import type { WriterDeps } from '../writer/session.js';
+import { addConfigCommand } from './commands/config-print.js';
+import { addConvertCommand } from './commands/convert.js';
+import { addMergeCommand } from './commands/merge.js';
+import type { CliIo } from './io.js';
+
+export type { CliIo };
+
+/** Commander parse failures never exit the process: they throw, and `runCli` maps them. */
+export function buildProgram(io: CliIo, deps: Partial<WriterDeps>): Command {
+  const program = new Command('otel-html')
+    .description('turn OpenTelemetry data into a self-contained HTML report')
+    .exitOverride()
+    .configureOutput({ writeOut: io.stdout, writeErr: io.stderr });
+  addConvertCommand(program, io, deps);
+  addMergeCommand(program, io, deps);
+  addConfigCommand(program, io, deps.fs);
+  return program;
+}
+
+function exitCodeOf(e: OtelHtmlError): 1 | 2 {
+  return e.code === 'usage' || e.code.startsWith('invalid-') ? 2 : 1;
+}
+
+/** Parse and run `argv` (without node and script), returning the process exit code. */
+export async function runCli(argv: readonly string[], io: CliIo, deps: Partial<WriterDeps>): Promise<number> {
+  try {
+    await buildProgram(io, deps).parseAsync(argv, { from: 'user' });
+    return 0;
+  } catch (e) {
+    if (e instanceof CommanderError) {
+      // Commander has already printed its message; help and version are successes.
+      return e.exitCode === 0 ? 0 : 2;
+    }
+    const { OTEL_HTML_DEBUG: debugFlag } = io.env;
+    const debug = debugFlag === '1';
+    const text = e instanceof Error ? (debug && e.stack !== undefined ? e.stack : e.message) : String(e);
+    io.stderr(`error: ${text}\n`);
+    return e instanceof OtelHtmlError ? exitCodeOf(e) : 1;
+  }
+}

@@ -14,6 +14,8 @@ export interface ConvertOptions {
   config?: ConfigInput | string;
   /** The signal of protobuf inputs, which do not say. */
   signal?: OtlpSignal;
+  /** Reopen an existing report (same otel-html version) and add to it instead of replacing it. */
+  append?: boolean;
 }
 
 export interface MergeOptions {
@@ -32,7 +34,11 @@ export async function convert(options: ConvertOptions, deps?: Partial<WriterDeps
   }
   const full = await resolveDeps(deps);
   const config = await resolveApiConfig(full, options.config, undefined);
-  const session = await openSession(full, { out: options.out, config, mode: 'create' });
+  const session = await openSession(full, {
+    out: options.out,
+    config,
+    mode: options.append === true ? 'append' : 'create',
+  });
   try {
     for (const file of files) {
       let bytes: Uint8Array;
