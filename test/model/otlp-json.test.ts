@@ -364,9 +364,7 @@ describe('int64 source text', () => {
           : original(text),
       );
     try {
-      const text = JSON.stringify(
-        traceRequest([span({ attributes: [attr('f', { doubleValue: 1.5 })] })]),
-      );
+      const text = JSON.stringify(traceRequest([span({ attributes: [attr('f', { doubleValue: 1.5 })] })]));
       expect(parseOtlpJson(text, 'a.json')).toHaveLength(1);
     } finally {
       spy.mockRestore();
