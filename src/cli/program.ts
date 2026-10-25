@@ -1,4 +1,5 @@
 import { Command, CommanderError } from 'commander';
+import pkg from '../../package.json' with { type: 'json' };
 import { OtelHtmlError } from '../model/errors.js';
 import type { WriterDeps } from '../writer/session.js';
 import { addConfigCommand } from './commands/config-print.js';
@@ -12,6 +13,7 @@ export type { CliIo };
 export function buildProgram(io: CliIo, deps: Partial<WriterDeps>): Command {
   const program = new Command('otel-html')
     .description('turn OpenTelemetry data into a self-contained HTML report')
+    .version(pkg.version)
     .exitOverride()
     .configureOutput({ writeOut: io.stdout, writeErr: io.stderr });
   addConvertCommand(program, io, deps);

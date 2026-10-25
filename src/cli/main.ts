@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { bunEmbeddedViewerAssets, hasBunEmbeddedFiles } from '../writer/viewer-assets.js';
 import { runCli } from './program.js';
 
 // The composition root of the CLI: the only place that touches process io and exits.
@@ -10,5 +11,6 @@ process.exitCode = await runCli(
     env: process.env,
     cwd: process.cwd(),
   },
-  {},
+  // Inside a `bun build --compile` binary the viewer ships embedded; under Node it is read from the package.
+  hasBunEmbeddedFiles() ? { viewerAssets: bunEmbeddedViewerAssets() } : {},
 );

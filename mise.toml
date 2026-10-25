@@ -57,6 +57,15 @@ pnpm exec playwright test --grep-invert @perf "$@"
 pnpm exec playwright test --grep @perf --workers=1 "$@"
 """
 
+# Compiles standalone binaries into dist/bin/ (needs `mise run build` first). All five targets by default;
+# `mise run build:binaries -- --target darwin-arm64` builds one and merges its line into SHA256SUMS.
+[tasks."build:binaries"]
+usage = 'arg "[args]" var=#true'
+run = """
+eval "set -- $usage_args"
+bun scripts/build-binaries.ts "$@"
+"""
+
 [tasks."check:package"]
 depends = ["build"]
 run = "pnpm exec publint && pnpm exec attw --pack --profile esm-only"
