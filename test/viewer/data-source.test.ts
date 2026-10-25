@@ -1,0 +1,250 @@
+import { beforeAll, describe, expect, test } from 'vitest';
+import { OtelHtmlError } from '../../src/model/errors.js';
+import type { TraceId } from '../../src/model/ids.js';
+import {
+  createDataSource,
+  type SpanQuery,
+  type SpanRow,
+  type TraceRow,
+} from '../../src/viewer/data/data-source.js';
+import { CHUNK_LRU_SIZE } from '../../src/viewer/data/windowed.js';
+import { createScriptedLoader } from '../../test-support/scripted-loader.js';
+import { buildReport, type Fixture, STEP_NS, traceIdOf, withShard } from './report-fixture.js';
+
+const query = (over: Partial<SpanQuery> = {}): SpanQuery => ({
+  condition: null,
+  text: '',
+  window: null,
+  mode: 'spans',
+  sort: { column: 'start', dir: 'asc' },
+  limit: 1000,
+  groupBy: null,
+  scanAll: false,
+  ...over,
+});
+
+const ERRORS = 'status.code == STATUS_CODE_ERROR';
+const asSpans = (rows: readonly (SpanRow | TraceRow)[]): SpanRow[] => rows as SpanRow[];
+const asTraces = (rows: readonly (SpanRow | TraceRow)[]): TraceRow[] => rows as TraceRow[];
+const chunkPath = (n: number): string => `data/chunks/spans/${String(n).padStart(6, '0')}.js`;
+const SMALL = 10_000_000;
+
+let six: Fixture;
+beforeAll(async () => {
+  six = await buildReport(6, [1, 3]);
+});
+
+describe('eager strategy', () => {
+  test('is chosen within the budget, loads every chunk once, and answers from memory', async () => {
+    const loader = createScriptedLoader(six.files);
+    const ds = await createDataSource(loader, six.manifest, SMALL);
+    expect(ds.strategy).toBe('eager');
+    const loaded = [...loader.calls];
+    expect(loaded.filter((p) => p.includes('/chunks/spans/')).sort()).toEqual(
+      [0, 1, 2, 3, 4, 5].map(chunkPath),
+    );
+    await ds.querySpans(query({ condition: ERRORS }));
+    await ds.getTrace(traceIdOf(2) as TraceId);
+    expect(loader.calls).toEqual(loaded);
+  });
+
+  test('filters to exactly the error spans, with facets over the filtered set and no partial flag', async () => {
+    const ds = await createDataSource(createScriptedLoader(six.files), six.manifest, SMALL);
+    const r = await ds.querySpans(query({ condition: ERRORS }));
+    expect(asSpans(r.rows).map((s) => s.span.traceId)).toEqual([traceIdOf(1), traceIdOf(3)]);
+    expect(r.total).toBe(2);
+    expect(r.partial).toBeNull();
+    expect(r.facets.top('service.name', 3)).toEqual([{ value: 'db', count: 2 }]);
+    expect(r.buckets.total('error')).toBe(2);
+    expect(r.red.counts.reduce((a, b) => a + b, 0)).toBe(2);
+  });
+
+  test('free text, window, sort and limit apply', async () => {
+    const ds = await createDataSource(createScriptedLoader(six.files), six.manifest, SMALL);
+    const web = await ds.querySpans(query({ text: 'GET /' }));
+    expect(web.total).toBe(6);
+    const w = await ds.querySpans(
+      query({ window: { start: 2 * Number(STEP_NS), end: 3 * Number(STEP_NS) + 1000 } }),
+    );
+    expect(w.total).toBe(6);
+    const top = await ds.querySpans(query({ sort: { column: 'duration', dir: 'desc' }, limit: 2 }));
+    expect(asSpans(top.rows).map((s) => s.durationNs)).toEqual([1000, 1000]);
+    expect(top.total).toBe(18);
+  });
+
+  test('traces mode returns one row per trace with serviceShare summing to the root duration', async () => {
+    const ds = await createDataSource(createScriptedLoader(six.files), six.manifest, SMALL);
+    const r = await ds.querySpans(query({ mode: 'traces' }));
+    const rows = asTraces(r.rows);
+    expect(rows).toHaveLength(6);
+    expect(r.total).toBe(6);
+    for (const t of rows) {
+      expect(t.spans).toBe(3);
+      expect(t.root?.service).toBe('web');
+      expect(t.durationNs).toBe(1000);
+      expect(t.serviceShare).toEqual([
+        { service: 'db', ns: 600 },
+        { service: 'web', ns: 400 },
+      ]);
+      expect(t.serviceShare.reduce((n, s) => n + s.ns, 0)).toBe(t.root?.durationNs);
+    }
+    expect(rows.filter((t) => t.errors > 0).map((t) => t.traceId)).toEqual([traceIdOf(1), traceIdOf(3)]);
+    const onlyErrors = await ds.querySpans(query({ mode: 'traces', condition: ERRORS }));
+    expect(asTraces(onlyErrors.rows).map((t) => t.traceId)).toEqual([traceIdOf(1), traceIdOf(3)]);
+    expect(asTraces(onlyErrors.rows)[0]?.spans).toBe(3);
+  });
+
+  test('landing and percentileOf come from the unfiltered rollup', async () => {
+    const ds = await createDataSource(createScriptedLoader(six.files), six.manifest, SMALL);
+    const l = await ds.landing();
+    expect(l.facets.total('service.name')).toBe(18);
+    expect(l.buckets.total('error')).toBe(2);
+    expect(ds.percentileOf('web', 'GET /', 1000)).toBe(100);
+    expect(ds.percentileOf('db', 'db.query', 1)).toBeLessThan(5);
+    expect(ds.percentileOf('nope', 'x', 1)).toBeNull();
+  });
+
+  test('getTrace rebases refs onto one resource table and builds the tree', async () => {
+    const ds = await createDataSource(createScriptedLoader(six.files), six.manifest, SMALL);
+    const t = await ds.getTrace(traceIdOf(4) as TraceId);
+    expect(t.spans).toHaveLength(3);
+    expect(t.tree.roots).toHaveLength(1);
+    expect(t.tree.roots[0]?.children).toHaveLength(2);
+    for (const s of t.spans)
+      expect(t.resources(s.span.resource).attributes.get('service.name')).toMatchObject({ value: s.service });
+    await expect(ds.getTrace(traceIdOf(99) as TraceId)).rejects.toBeInstanceOf(OtelHtmlError);
+  });
+
+  test('rejects with AbortError on an aborted signal', async () => {
+    const ds = await createDataSource(createScriptedLoader(six.files), six.manifest, SMALL);
+    const ac = new AbortController();
+    ac.abort();
+    await expect(ds.querySpans(query(), undefined, ac.signal)).rejects.toMatchObject({ name: 'AbortError' });
+    expect((await ds.querySpans(query())).total).toBe(18);
+  });
+
+  test('an unknown sort column fails fast', async () => {
+    const ds = await createDataSource(createScriptedLoader(six.files), six.manifest, SMALL);
+    await expect(ds.querySpans(query({ sort: { column: 'nope', dir: 'asc' } }))).rejects.toThrow(
+      /query\.sort\.column/,
+    );
+  });
+});
+
+describe('windowed strategy', () => {
+  async function windowed(files = six.files): Promise<{
+    ds: Awaited<ReturnType<typeof createDataSource>>;
+    loader: ReturnType<typeof createScriptedLoader>;
+  }> {
+    const loader = createScriptedLoader(files);
+    const ds = await createDataSource(loader, six.manifest, 1);
+    loader.reset();
+    return { ds, loader };
+  }
+
+  test('is chosen above the budget; the landing page needs no chunks', async () => {
+    const loader = createScriptedLoader(six.files);
+    const ds = await createDataSource(loader, six.manifest, 1);
+    expect(ds.strategy).toBe('windowed');
+    expect(loader.calls).toEqual(['data/rollups/spans.js']);
+    expect((await ds.landing()).facets.total('service.name')).toBe(18);
+  });
+
+  test('a filtered query over a window loads exactly the overlapping chunks and reports partial', async () => {
+    const { ds, loader } = await windowed();
+    const m = six.manifest.chunks;
+    const progress: [number, number][] = [];
+    const r = await ds.querySpans(
+      query({
+        condition: 'name == "db.query"',
+        window: { start: m[2]?.start ?? 0, end: m[3]?.end ?? 0 },
+      }),
+      (s, t) => progress.push([s, t]),
+    );
+    expect(loader.calls).toEqual([chunkPath(2), chunkPath(3)]);
+    expect(r.partial).toEqual({ scanned: 2, total: 6 });
+    expect(r.total).toBe(4);
+    expect(progress).toEqual([
+      [1, 6],
+      [2, 6],
+    ]);
+  });
+
+  test('scanAll ignores the window and an exhaustive scan is exact', async () => {
+    const { ds, loader } = await windowed();
+    const r = await ds.querySpans(query({ condition: ERRORS, window: { start: 0, end: 1 }, scanAll: true }));
+    expect(loader.calls).toEqual([0, 1, 2, 3, 4, 5].map(chunkPath));
+    expect(r.total).toBe(2);
+    expect(r.partial).toBeNull();
+  });
+
+  test('without condition, text or window it returns the head of the run and trusts the manifest total', async () => {
+    const small: Fixture = {
+      files: six.files,
+      manifest: { ...six.manifest, config: { viewer: { ...six.manifest.config.viewer, listCap: 4 } } },
+    };
+    const loader = createScriptedLoader(small.files);
+    const ds = await createDataSource(loader, small.manifest, 1);
+    loader.reset();
+    const r = await ds.querySpans(query());
+    expect(r.rows).toHaveLength(4);
+    expect(r.total).toBe(six.manifest.totals.spans);
+    expect(r.partial).toEqual({ scanned: 2, total: 6 });
+    expect(loader.calls).toEqual([chunkPath(0), chunkPath(1)]);
+  });
+
+  test('keeps at most 8 chunks decoded, least recently used first', async () => {
+    const big = await buildReport(CHUNK_LRU_SIZE + 2);
+    const loader = createScriptedLoader(big.files);
+    const ds = await createDataSource(loader, big.manifest, 1);
+    await ds.querySpans(query({ condition: ERRORS, scanAll: true }));
+    loader.reset();
+    const last = big.manifest.chunks[CHUNK_LRU_SIZE + 1];
+    const first = big.manifest.chunks[0];
+    await ds.querySpans(
+      query({ condition: ERRORS, window: { start: last?.start ?? 0, end: last?.end ?? 0 } }),
+    );
+    expect(loader.calls).toEqual([]);
+    await ds.querySpans(
+      query({ condition: ERRORS, window: { start: first?.start ?? 0, end: first?.end ?? 0 } }),
+    );
+    expect(loader.calls).toEqual([chunkPath(0)]);
+  });
+
+  test('an abort mid-scan rejects with AbortError and leaves the cache usable', async () => {
+    const { ds, loader } = await windowed();
+    const ac = new AbortController();
+    await expect(
+      ds.querySpans(query({ condition: ERRORS, scanAll: true }), () => ac.abort(), ac.signal),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    expect(loader.calls).toEqual([chunkPath(0)]);
+    loader.reset();
+    const r = await ds.querySpans(query({ condition: ERRORS, scanAll: true }));
+    expect(r.total).toBe(2);
+    expect(loader.calls).toEqual([1, 2, 3, 4, 5].map(chunkPath));
+  });
+
+  test('getTrace loads one shard file and only the chunks listed for that trace', async () => {
+    const { ds, loader } = await windowed();
+    const id = traceIdOf(3);
+    const t = await ds.getTrace(id as TraceId);
+    expect(t.spans).toHaveLength(3);
+    expect(loader.calls).toEqual([`data/traces/${id.slice(0, 2)}.js`, chunkPath(3)]);
+  });
+
+  test('ignores shard chunk refs the manifest does not list (shard ahead of the manifest)', async () => {
+    const id = traceIdOf(3);
+    const ahead = withShard(six.files, id.slice(0, 2), (e) => {
+      e[id]?.chunks.push('chunks/spans/000099');
+    });
+    const { ds, loader } = await windowed(ahead);
+    const t = await ds.getTrace(id as TraceId);
+    expect(t.spans).toHaveLength(3);
+    expect(loader.calls).toEqual([`data/traces/${id.slice(0, 2)}.js`, chunkPath(3)]);
+  });
+
+  test('a trace the shard does not know is reported precisely', async () => {
+    const { ds } = await windowed();
+    await expect(ds.getTrace(traceIdOf(77) as TraceId)).rejects.toThrow(/not found/);
+  });
+});

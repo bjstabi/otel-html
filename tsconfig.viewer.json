@@ -10,6 +10,7 @@
   "include": [
     "src/viewer/**/*",
     "test/viewer/**/*",
+    "test-support/scripted-loader.ts",
     "src/model/**/*",
     "src/format/**/*",
     "src/semconv/**/*",
