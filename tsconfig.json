@@ -7,6 +7,7 @@
     "test-support/**/*",
     "scripts/**/*",
     "vitest.config.ts",
+    "vite.config.ts",
     "commitlint.config.js"
   ],
   "exclude": ["src/viewer/**", "test/viewer/**"]

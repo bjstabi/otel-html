@@ -43,7 +43,7 @@ export function renderIndexHtml(entry: ViewerEntry, title: string): string {
 ${style}</head>
 <body>
 <div id="root"></div>
-<script>window.__OH__=window.__OH__||[];</script>
+<script>window.__OH__={q:[],push(k,p){this.q.push([k,p])}}</script>
 <script src="data/manifest.js"></script>
 <script src="${assetUrl(entry.script, 'script')}"></script>
 </body>

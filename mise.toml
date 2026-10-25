@@ -15,7 +15,7 @@ run = "pnpm exec biome ci --error-on-warnings ."
 run = "pnpm exec biome format --write ."
 
 [tasks.typecheck]
-run = "pnpm exec tsc -p tsconfig.json --noEmit && pnpm exec tsc -p tsconfig.viewer.json --noEmit"
+run = "pnpm exec tsc -p tsconfig.json --noEmit && pnpm exec tsc -p tsconfig.viewer.json --noEmit && pnpm exec tsc -p tsconfig.e2e.json --noEmit"
 
 [tasks."test:unit"]
 run = "pnpm exec vitest run"
@@ -35,6 +35,17 @@ depends = ["lint", "typecheck", "test:unit", "knip"]
 [tasks."build:lib"]
 run = "pnpm exec tsdown"
 
+[tasks."build:viewer"]
+run = "pnpm exec vite build"
+
+# The lib build cleans dist/, so it runs first; the viewer build then adds dist/viewer/.
+[tasks.build]
+run = "mise run build:lib && mise run build:viewer"
+
+[tasks."test:e2e"]
+depends = ["build"]
+run = "pnpm exec playwright install chromium firefox webkit && pnpm exec playwright test"
+
 [tasks."check:package"]
-depends = ["build:lib"]
+depends = ["build"]
 run = "pnpm exec publint && pnpm exec attw --pack --profile esm-only"

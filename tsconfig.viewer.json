@@ -8,6 +8,7 @@
   },
   "include": [
     "src/viewer/**/*",
+    "test/viewer/**/*",
     "src/model/**/*",
     "src/format/**/*",
     "src/semconv/**/*",

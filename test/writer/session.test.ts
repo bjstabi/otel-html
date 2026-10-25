@@ -106,6 +106,7 @@ describe('create -> add -> close', () => {
     expect(html).toContain('<title>&lt;/title&gt;&lt;script&gt;alert(1)&lt;/script&gt;</title>');
     expect(html).not.toContain('<script>alert(1)');
     expect(html).not.toContain('type="module"');
+    expect(html).toContain('<script>window.__OH__={q:[],push(k,p){this.q.push([k,p])}}</script>');
     expect(html.indexOf('window.__OH__')).toBeLessThan(html.indexOf('data/manifest.js'));
     expect(html.indexOf('data/manifest.js')).toBeLessThan(html.indexOf('assets/viewer.abc123.js'));
     expect(manifestOf(w, OUT).title).toBe('</title><script>alert(1)</script>');

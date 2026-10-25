@@ -12,6 +12,8 @@
       "!pnpm-lock.yaml",
       "!node_modules",
       "!dist",
+      "!e2e/.reports",
+      "!test-results",
       "!.superpowers",
       "!docs",
       "!README.md"
@@ -21,6 +23,7 @@
   "javascript": { "formatter": { "quoteStyle": "single" } },
   "linter": {
     "enabled": true,
+    "domains": { "playwright": "none" },
     "rules": {
       "preset": "recommended",
       "style": {
@@ -37,7 +40,7 @@
   },
   "overrides": [
     {
-      "includes": ["*.config.ts", "*.config.js"],
+      "includes": ["*.config.ts", "*.config.js", "e2e/global-setup.ts"],
       "linter": { "rules": { "style": { "noDefaultExport": "off" } } }
     },
     {
