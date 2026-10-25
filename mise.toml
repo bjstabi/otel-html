@@ -24,7 +24,7 @@ run = "pnpm exec vitest run"
 run = "pnpm exec knip"
 
 [tasks.gen]
-run = "pnpm exec buf generate"
+run = "pnpm exec buf generate && bun scripts/gen-schema.ts"
 
 [tasks."gen:check"]
 run = "bash scripts/gen-check.sh"

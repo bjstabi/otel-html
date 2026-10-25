@@ -6,6 +6,7 @@
       "!**/gen",
       "!**/*.gen.ts",
       "!proto",
+      "!schema",
       "!**/fixtures",
       "!pnpm-lock.yaml",
       "!node_modules",
