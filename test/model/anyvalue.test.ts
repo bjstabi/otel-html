@@ -53,3 +53,49 @@ describe('canonicalAttributesKey', () => {
     expect(canonicalAttributesKey(m1)).not.toBe(canonicalAttributesKey(new Map([['a', x]])));
   });
 });
+
+describe('edge cases', () => {
+  const big = 9007199254740993n;
+  it('keeps ints beyond 2^53 exact in display and JSON', () => {
+    expect(anyValueToDisplay({ kind: 'int', value: big })).toBe('9007199254740993');
+    expect(anyValueToDisplay({ kind: 'array', values: [{ kind: 'int', value: big }] })).toBe(
+      '["9007199254740993"]',
+    );
+    expect(
+      anyValueToDisplay({ kind: 'kvlist', values: new Map([['n', { kind: 'int', value: -big }]]) }),
+    ).toBe('{"n":"-9007199254740993"}');
+  });
+  it('renders nested kvlist/array with bytes', () => {
+    const v: AnyValue = {
+      kind: 'kvlist',
+      values: new Map<string, AnyValue>([
+        ['b', { kind: 'bytes', value: new Uint8Array([1, 2, 3]) }],
+        [
+          'arr',
+          {
+            kind: 'array',
+            values: [
+              { kind: 'bytes', value: new Uint8Array([255]) },
+              { kind: 'kvlist', values: new Map() },
+            ],
+          },
+        ],
+      ]),
+    };
+    expect(anyValueToDisplay(v)).toBe('{"b":"AQID","arr":["/w==",{}]}');
+  });
+  it('renders empty array and kvlist', () => {
+    expect(anyValueToDisplay({ kind: 'array', values: [] })).toBe('[]');
+    expect(anyValueToDisplay({ kind: 'kvlist', values: new Map() })).toBe('{}');
+    expect(anyValueEquals({ kind: 'array', values: [] }, { kind: 'array', values: [] })).toBe(true);
+    expect(anyValueEquals({ kind: 'array', values: [] }, { kind: 'kvlist', values: new Map() })).toBe(false);
+  });
+  it('canonicalAttributesKey distinguishes int 1, string "1" and double 1', () => {
+    const keys = [
+      canonicalAttributesKey(new Map<string, AnyValue>([['k', { kind: 'int', value: 1n }]])),
+      canonicalAttributesKey(new Map<string, AnyValue>([['k', { kind: 'string', value: '1' }]])),
+      canonicalAttributesKey(new Map<string, AnyValue>([['k', { kind: 'double', value: 1 }]])),
+    ];
+    expect(new Set(keys).size).toBe(3);
+  });
+});
