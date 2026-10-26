@@ -71,7 +71,11 @@ export function Chart({ option, onEvents, height = 240, ariaLabel, onInstance }:
     const chart = init(el, buildEchartsTheme(readTokens()));
     chartRef.current = chart;
     instanceCb.current?.(chart);
-    const ro = new ResizeObserver(() => chart.resize());
+    // ResizeObserver reports the initial size on observe; re-laying out at an unchanged size re-renders every series.
+    const ro = new ResizeObserver(() => {
+      if (el.clientWidth === chart.getWidth() && el.clientHeight === chart.getHeight()) return;
+      chart.resize();
+    });
     ro.observe(el);
     return () => {
       ro.disconnect();
@@ -89,9 +93,10 @@ export function Chart({ option, onEvents, height = 240, ariaLabel, onInstance }:
   useEffect(() => {
     const chart = chartRef.current;
     if (chart === null) return;
-    chart.setOption(option, true);
+    // Subscribe first: a render's `rendered`/`finished` events can fire during setOption itself.
     const entries = Object.entries(onEvents ?? {});
     for (const [name, handler] of entries) chart.on(name, handler);
+    chart.setOption(option, true);
     return () => {
       for (const [name, handler] of entries) chart.off(name, handler);
     };

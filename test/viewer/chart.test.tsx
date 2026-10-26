@@ -3,6 +3,10 @@ import { createRoot } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const setTheme = vi.fn<(theme: unknown) => void>();
+const resize = vi.fn<() => void>();
+const chartSize = { width: 0, height: 0 };
+// Mirrors ECharts: a synchronous setOption render emits `finished` before setOption returns.
+const handlers = new Map<string, () => void>();
 const initThemes: unknown[] = [];
 
 vi.mock('echarts/core', () => ({
@@ -11,10 +15,12 @@ vi.mock('echarts/core', () => ({
     initThemes.push(theme);
     return {
       setTheme,
-      setOption: () => undefined,
-      on: () => undefined,
-      off: () => undefined,
-      resize: () => undefined,
+      setOption: () => handlers.get('finished')?.(),
+      on: (name: string, h: () => void) => handlers.set(name, h),
+      off: (name: string) => handlers.delete(name),
+      resize,
+      getWidth: () => chartSize.width,
+      getHeight: () => chartSize.height,
       dispose: () => undefined,
     };
   },
@@ -72,6 +78,8 @@ afterEach(() => {
   window.localStorage.clear();
   document.documentElement.removeAttribute('data-theme');
   setTheme.mockClear();
+  resize.mockClear();
+  handlers.clear();
   initThemes.length = 0;
 });
 
@@ -100,5 +108,77 @@ describe('Chart theming', () => {
     expect(firstColor(setTheme.mock.calls.at(-1)?.[0])).toBe('#2a78d6');
     await act(async () => setter?.('dark'));
     expect(firstColor(setTheme.mock.calls.at(-1)?.[0])).toBe('#3987e5');
+  });
+});
+
+describe('Chart sizing', () => {
+  it('resizes only when the host size differs from what the chart already laid out', async () => {
+    const observer = { fire: (): void => undefined };
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(cb: () => void) {
+          observer.fire = cb;
+        }
+        observe(): void {}
+        disconnect(): void {}
+      },
+    );
+    vi.stubGlobal('matchMedia', () => ({
+      matches: false,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    }));
+    installTokens();
+    const host = document.createElement('div');
+    await act(async () => {
+      createRoot(host).render(
+        <ThemeProvider>
+          <Chart option={{}} ariaLabel="Latency over time" />
+        </ThemeProvider>,
+      );
+    });
+    const el = host.querySelector<HTMLElement>('[role="img"]');
+    if (el === null) throw new Error('chart host not rendered');
+    let width = 640;
+    let height = 240;
+    vi.spyOn(el, 'clientWidth', 'get').mockImplementation(() => width);
+    vi.spyOn(el, 'clientHeight', 'get').mockImplementation(() => height);
+    chartSize.width = 640;
+    chartSize.height = 240;
+
+    // ResizeObserver reports the initial size once on observe; the chart was just laid out at that size.
+    observer.fire();
+    expect(resize).not.toHaveBeenCalled();
+
+    width = 800;
+    observer.fire();
+    expect(resize).toHaveBeenCalledTimes(1);
+    height = 300;
+    chartSize.width = 800;
+    observer.fire();
+    expect(resize).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('Chart events', () => {
+  it('subscribes before setOption, so the first render reports finished', async () => {
+    vi.stubGlobal('ResizeObserver', FakeResizeObserver);
+    vi.stubGlobal('matchMedia', () => ({
+      matches: false,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    }));
+    installTokens();
+    const finished = vi.fn<() => void>();
+    const host = document.createElement('div');
+    await act(async () => {
+      createRoot(host).render(
+        <ThemeProvider>
+          <Chart option={{}} onEvents={{ finished }} ariaLabel="Flame graph" />
+        </ThemeProvider>,
+      );
+    });
+    expect(finished).toHaveBeenCalledTimes(1);
   });
 });
