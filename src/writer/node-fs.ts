@@ -1,4 +1,4 @@
-import { mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, open, readdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import type { FileSystem } from './ports.js';
 
@@ -34,6 +34,7 @@ export function createNodeFileSystem(): FileSystem {
         throw e;
       }
     },
+    realpath: (p) => realpath(p),
     async list(dir) {
       return (await readdir(dir)).sort();
     },

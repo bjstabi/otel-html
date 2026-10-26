@@ -7,6 +7,8 @@ export interface FileSystem {
   writeBytes(p: string, bytes: Uint8Array): Promise<void>;
   mkdirp(p: string): Promise<void>;
   exists(p: string): Promise<boolean>;
+  /** Canonical form of an existing path (symlinks resolved, on-disk case); rejects when it does not exist. */
+  realpath(p: string): Promise<string>;
   list(dir: string): Promise<string[]>;
   remove(p: string): Promise<void>;
   /** Resolves false if the file already exists. */

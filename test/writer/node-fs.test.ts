@@ -67,6 +67,12 @@ describe.each([
     expect(await f.list(join(dir, 'a'))).toEqual(['b']);
   });
 
+  test('realpath of an existing path is a path that still exists', async () => {
+    const f = fs();
+    await f.mkdirp(join(dir, 'rp'));
+    expect(await f.exists(await f.realpath(join(dir, 'rp')))).toBe(true);
+  });
+
   test('mkdirp creates ancestors and is idempotent', async () => {
     const f = fs();
     await f.mkdirp(join(dir, 'p/q/r'));

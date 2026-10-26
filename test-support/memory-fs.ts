@@ -113,6 +113,9 @@ export function createMemoryFileSystem(): FileSystem & {
       if (isDir(p)) throw fsError('ERR_FS_EISDIR', 'path is a directory', p);
       files.delete(p);
     },
+    async realpath(p) {
+      return p;
+    },
     async createExclusive(p, text) {
       requireParent(p);
       if (files.has(p) || isDir(p)) return false;

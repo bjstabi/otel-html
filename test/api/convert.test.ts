@@ -6,7 +6,7 @@ import { OtelHtmlError } from '../../src/model/errors.js';
 import { ExportLogsServiceRequestSchema } from '../../src/model/gen/opentelemetry/proto/collector/logs/v1/logs_service_pb.js';
 import { logRecord, logsRequest } from '../../test-support/otlp-builders.js';
 import { createTestWriter, type TestWriter } from '../../test-support/writer-deps.js';
-import { manifestOf, spansRequest } from '../writer/helpers.js';
+import { allSpans, manifestOf, spansRequest } from '../writer/helpers.js';
 
 async function failure(p: Promise<unknown>): Promise<OtelHtmlError> {
   try {
@@ -111,5 +111,37 @@ describe('merge (public)', () => {
     const summary = await merge({ inputs: ['a', 'b'], out: 'm', config: { title: 'merged' } }, w.deps);
     expect(summary.totals.spans).toBe(4);
     expect(manifestOf(w, 'm').title).toBe('merged');
+  });
+
+  describe('a failed convert leaves the existing report in place', () => {
+    async function existing(w: TestWriter): Promise<void> {
+      await put(w, 'in/good.json', JSON.stringify(spansRequest(3)));
+      await convert({ input: 'in/good.json', out: 'r' }, w.deps);
+    }
+
+    test('a missing input file', async () => {
+      const w = createTestWriter();
+      await existing(w);
+      const before = w.fs.snapshot();
+      const e = await failure(convert({ input: 'in/typo.json', out: 'r' }, w.deps));
+      expect(e.code).toBe('usage');
+      expect(manifestOf(w, 'r').totals.spans).toBe(3);
+      expect(allSpans(w, 'r')).toHaveLength(3);
+      // Only the writer's lock file may differ.
+      const after = w.fs.snapshot();
+      for (const [path, text] of before) {
+        if (!path.endsWith('.lock')) expect(after.get(path), path).toBe(text);
+      }
+    });
+
+    test('a malformed input file after a readable one', async () => {
+      const w = createTestWriter();
+      await existing(w);
+      await put(w, 'in/other.json', JSON.stringify(spansRequest(2, 0, 50)));
+      await put(w, 'in/bad.json', '{ not json');
+      await failure(convert({ input: ['in/other.json', 'in/bad.json'], out: 'r' }, w.deps));
+      expect(manifestOf(w, 'r').totals.spans).toBe(3);
+      expect(allSpans(w, 'r')).toHaveLength(3);
+    });
   });
 });

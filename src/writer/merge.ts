@@ -1,4 +1,4 @@
-import { isAbsolute, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { decodeColumns } from '../format/columns.js';
 import { reviveDataJson, unwrapDataFile } from '../format/data-file.js';
 import { type Manifest, type ManifestChunk, parseManifest } from '../format/manifest.js';
@@ -119,10 +119,9 @@ async function readChunk(fs: FileSystem, input: Input, chunk: ManifestChunk): Pr
  * The output is created (and an existing report there replaced) before inputs are read, so it must not be
  * an input, inside one or contain one, however the paths are spelled.
  */
-function assertDisjoint(out: string, input: string): void {
+function assertDisjointPaths(out: string, input: string, o: string, i: string): void {
   const inside = (rel: string): boolean =>
     rel !== '' && rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
-  const [o, i] = [resolve(out), resolve(input)];
   if (o === i) {
     throw new OtelHtmlError('usage', { message: `${out} is also an input; merge into a different folder` });
   }
@@ -136,6 +135,25 @@ function assertDisjoint(out: string, input: string): void {
       message: `output ${out} is inside input ${input}; merge into a different folder`,
     });
   }
+}
+
+/** `p` with its longest existing prefix canonicalised (symlinks, on-disk case) and the rest appended as written. */
+async function canonical(fs: FileSystem, p: string): Promise<string> {
+  const missing: string[] = [];
+  let cur = p;
+  for (;;) {
+    if (await fs.exists(cur)) return resolve(await fs.realpath(cur), ...missing);
+    const parent = dirname(cur);
+    if (parent === cur) return resolve(p);
+    missing.unshift(basename(cur));
+    cur = parent;
+  }
+}
+
+/** Refuses an output that is, contains or sits inside an input, by spelling and by real location. */
+async function assertDisjoint(fs: FileSystem, out: string, input: string): Promise<void> {
+  assertDisjointPaths(out, input, resolve(out), resolve(input));
+  assertDisjointPaths(out, input, await canonical(fs, out), await canonical(fs, input));
 }
 
 const SIGNAL_ORDER: readonly Signal[] = ['spans', 'logs', 'metrics'];
@@ -155,7 +173,7 @@ export async function mergeReports(
   }
   const out = trimSlashes(options.out);
   const dirs = inputs.map(trimSlashes);
-  for (const dir of dirs) assertDisjoint(out, dir);
+  for (const dir of dirs) await assertDisjoint(deps.fs, out, dir);
   const loaded: Input[] = [];
   for (const dir of dirs) loaded.push(await loadInput(deps.fs, dir));
   loaded.sort((a, b) => (a.epoch < b.epoch ? -1 : a.epoch > b.epoch ? 1 : 0));

@@ -147,6 +147,11 @@ interface Restored {
   slot: StateSlot;
   /** Output files on disk may be ahead of the committed manifest (resumed after a crash). */
   resumed: boolean;
+  /**
+   * An existing report is being replaced. Its data is removed just before this session first writes, not at open,
+   * so a job that fails while reading its inputs leaves the old report intact.
+   */
+  replacing: boolean;
 }
 
 function iso(clock: Clock): string {
@@ -190,7 +195,6 @@ export async function openSession(deps: WriterDeps, options: SessionOptions): Pr
   try {
     let restored: Restored;
     if (options.mode === 'create') {
-      if (preexisting) await wipeReportData(fs, out);
       restored = {
         lock,
         epoch: null,
@@ -206,6 +210,7 @@ export async function openSession(deps: WriterDeps, options: SessionOptions): Pr
         title: config.title ?? DEFAULT_TITLE,
         slot: 1, // the first checkpoint goes to slot 0
         resumed: false,
+        replacing: preexisting,
       };
     } else {
       const cp = await loadCheckpoint(fs, out, deps.version);
@@ -227,6 +232,7 @@ export async function openSession(deps: WriterDeps, options: SessionOptions): Pr
         title: config.title ?? cp.manifest.title,
         slot: cp.slot,
         resumed: true,
+        replacing: false,
       };
     }
     for (const d of ['chunks/spans', 'chunks/logs', 'chunks/metrics', 'traces', 'rollups']) {
@@ -274,6 +280,7 @@ class Session implements WriterSession {
   #lastFlushMs: number;
   #closed: ReportSummary | null = null;
   #aborted = false;
+  #replacing: boolean;
   #tail: Promise<unknown> = Promise.resolve();
 
   constructor(deps: WriterDeps, out: string, config: ResolvedConfig, drop: Drops, r: Restored) {
@@ -298,6 +305,7 @@ class Session implements WriterSession {
     this.#decodedBytes = r.decodedBytes;
     this.#slot = r.slot;
     this.#dirty = r.resumed;
+    this.#replacing = r.replacing;
     this.#everCommitted = r.resumed;
     this.#lastFlushMs = deps.clock.monotonicMs();
   }
@@ -582,6 +590,7 @@ class Session implements WriterSession {
    */
   async #drainUnwritten(strict: boolean): Promise<void> {
     try {
+      if (this.#unwritten.length > 0) await this.#wipeReplaced();
       while (this.#unwritten.length > 0) {
         const chunk = this.#unwritten[0];
         if (chunk === undefined) break;
@@ -610,6 +619,13 @@ class Session implements WriterSession {
     }
   }
 
+  /** Remove the replaced report's data, once, immediately before this session's first write. */
+  async #wipeReplaced(): Promise<void> {
+    if (!this.#replacing) return;
+    await wipeReportData(this.#deps.fs, this.#out);
+    this.#replacing = false;
+  }
+
   async #writeShell(): Promise<void> {
     const { fs, viewerAssets } = this.#deps;
     await writeViewerAssets(fs, this.#out, viewerAssets);
@@ -627,6 +643,7 @@ class Session implements WriterSession {
     const { fs, tracer, clock } = this.#deps;
     const span = tracer.startSpan('otel-html.flush', { complete });
     try {
+      await this.#wipeReplaced();
       this.#cutSync(this.#spans);
       this.#cutSync(this.#logs);
       this.#cutSync(this.#metrics);

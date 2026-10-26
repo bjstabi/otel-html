@@ -200,6 +200,20 @@ describe('mergeReports', () => {
     expect(w.fs.snapshot()).toEqual(before);
   });
 
+  test('an output that is the same folder as an input under another spelling (case, symlink) is refused', async () => {
+    const w = createTestWriter();
+    await writeReport(w, 'Job', [spansRequest(2)]);
+    const before = w.fs.snapshot();
+    // A filesystem where `job` and `Job` are one folder, as on case-insensitive macOS or through a symlink.
+    const fs = { ...w.fs, realpath: async (p: string): Promise<string> => p.toLowerCase() };
+    const e = await failure(
+      mergeReports({ ...w.deps, fs }, ['Job'], { out: 'job', config: testConfig(), mode: 'create' }),
+    );
+    expect(e.code).toBe('usage');
+    expect(e.message).toMatch(/input|inside|contains/);
+    expect(w.fs.snapshot()).toEqual(before);
+  });
+
   test('sibling folders with a common name prefix are fine', async () => {
     const w = createTestWriter();
     await writeReport(w, 'a', [spansRequest(1)]);
