@@ -27,7 +27,7 @@ export const PORT_ENV = 'OTEL_HTML_E2E_PORT';
 export const FIXTURE_REPORTS = ['small', 'orphans', 'logs-only', 'empty'] as const;
 export type FixtureReport = (typeof FIXTURE_REPORTS)[number];
 /** `merged` is `otel-html merge` of `small` and `orphans`; `scale` and `huge` come from one generated 100k-span input. */
-export type ReportName = 'main' | 'hostile' | FixtureReport | 'merged' | 'scale' | 'huge';
+export type ReportName = 'main' | 'hostile' | FixtureReport | 'merged' | 'scale' | 'huge' | 'no-manifest';
 
 export function reportDir(name: ReportName): URL {
   return new URL(`${name}/`, REPORTS_DIR);

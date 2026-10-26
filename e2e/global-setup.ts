@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { createReadStream } from 'node:fs';
-import { mkdir, rm, stat, writeFile } from 'node:fs/promises';
+import { cp, mkdir, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -173,6 +173,11 @@ async function buildReport(): Promise<void> {
     files.push(path);
   }
   await convertTo(REPORT_DIR, files, RUN_TITLE);
+  // A copy of the main report whose manifest is really gone: request interception does not reach
+  // file:// loads in every browser, so the load-failure spec needs the file absent on disk.
+  const noManifest = reportDir('no-manifest');
+  await cp(REPORT_DIR, noManifest, { recursive: true });
+  await rm(new URL('data/manifest.js', noManifest));
 }
 
 /** One trace of `LARGE_SPAN_COUNT` spans: a 4-ary tree over 5 services, children inside their parent's start. */
@@ -310,7 +315,15 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   await rm(REPORTS_DIR, { recursive: true, force: true });
   await Promise.all([buildReport(), buildLargeReport(), buildFixtureReports(), buildScaleReports()]);
   const dir = (u: URL): string => fileURLToPath(u).replace(/\/$/, '');
-  const mounted: ReportName[] = ['main', 'hostile', 'merged', 'scale', 'huge', ...FIXTURE_REPORTS];
+  const mounted: ReportName[] = [
+    'main',
+    'hostile',
+    'merged',
+    'scale',
+    'huge',
+    'no-manifest',
+    ...FIXTURE_REPORTS,
+  ];
   const server = await serve(
     mounted.map((name) => ({ prefix: httpSubpath(name), root: dir(reportDir(name)) })),
   );
