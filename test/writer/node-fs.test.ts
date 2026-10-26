@@ -130,6 +130,16 @@ test('memory fs failNextWrite fails once and snapshot reflects content', async (
   expect(f.snapshot().get('/o/report.json')).toBe('y');
 });
 
+// The contract tests build paths with node:path, which uses backslashes on Windows.
+test('memory fs treats backslash as a separator, like node on Windows', async () => {
+  const f = createMemoryFileSystem();
+  await f.mkdirp('C:\\r\\a');
+  await f.writeTextAtomic('C:\\r\\a\\x.txt', 'v');
+  expect(await f.list('C:\\r\\a')).toEqual(['x.txt']);
+  expect(await f.exists('C:/r/a/x.txt')).toBe(true);
+  expect(await f.readText('C:/r/a\\x.txt')).toBe('v');
+});
+
 test('fixed clock advances', () => {
   const c = createFixedClock(parseUnixNanos(10n, 'p'));
   c.advance(5n);

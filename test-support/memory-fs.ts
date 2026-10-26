@@ -9,6 +9,9 @@ function fsError(code: string, desc: string, p: string): Error {
 
 const notFound = (p: string): Error => fsError('ENOENT', 'no such file or directory', p);
 
+/** Node on Windows accepts both separators; paths built with node:path there use backslashes. */
+const norm = (p: string): string => p.replaceAll('\\', '/');
+
 function parentOf(p: string): string | null {
   const i = p.lastIndexOf('/');
   if (i < 0) return null;
@@ -63,7 +66,8 @@ export function createMemoryFileSystem(): FileSystem & {
   };
 
   return {
-    async readText(p) {
+    async readText(rawP) {
+      const p = norm(rawP);
       const b = files.get(p);
       if (b === undefined) {
         if (isDir(p)) throw fsError('EISDIR', 'illegal operation on a directory, read', p);
@@ -71,7 +75,8 @@ export function createMemoryFileSystem(): FileSystem & {
       }
       return dec.decode(b);
     },
-    async readBytes(p) {
+    async readBytes(rawP) {
+      const p = norm(rawP);
       const b = files.get(p);
       if (b === undefined) {
         if (isDir(p)) throw fsError('EISDIR', 'illegal operation on a directory, read', p);
@@ -79,27 +84,32 @@ export function createMemoryFileSystem(): FileSystem & {
       }
       return b.slice();
     },
-    async writeTextAtomic(p, text) {
+    async writeTextAtomic(rawP, text) {
+      const p = norm(rawP);
       requireParent(p);
       requireWritable(p);
       checkFail(p);
       files.set(p, enc.encode(text));
     },
-    async writeBytes(p, bytes) {
+    async writeBytes(rawP, bytes) {
+      const p = norm(rawP);
       requireWritable(p);
       checkFail(p);
       const parent = parentOf(p);
       if (parent !== null) registerDirs(parent);
       files.set(p, bytes.slice());
     },
-    async mkdirp(p) {
+    async mkdirp(rawP) {
+      const p = norm(rawP);
       if (files.has(p)) throw fsError('EEXIST', 'file already exists', p);
       registerDirs(p);
     },
-    async exists(p) {
+    async exists(rawP) {
+      const p = norm(rawP);
       return files.has(p) || isDir(p);
     },
-    async list(dir) {
+    async list(rawDir) {
+      const dir = norm(rawDir);
       if (!isDir(dir)) throw notFound(dir);
       const prefix = dir.endsWith('/') ? dir : `${dir}/`;
       const names = new Set<string>();
@@ -109,14 +119,17 @@ export function createMemoryFileSystem(): FileSystem & {
       names.delete('');
       return [...names].sort();
     },
-    async remove(p) {
+    async remove(rawP) {
+      const p = norm(rawP);
       if (isDir(p)) throw fsError('ERR_FS_EISDIR', 'path is a directory', p);
       files.delete(p);
     },
-    async realpath(p) {
+    async realpath(rawP) {
+      const p = norm(rawP);
       return p;
     },
-    async createExclusive(p, text) {
+    async createExclusive(rawP, text) {
+      const p = norm(rawP);
       requireParent(p);
       if (files.has(p) || isDir(p)) return false;
       checkFail(p);
@@ -127,7 +140,7 @@ export function createMemoryFileSystem(): FileSystem & {
       return new Map([...files].map(([k, v]) => [k, dec.decode(v)]));
     },
     failNextWrite(pathSuffix) {
-      failures.push(pathSuffix);
+      failures.push(norm(pathSuffix));
     },
   };
 }
