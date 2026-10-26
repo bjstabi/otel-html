@@ -9,9 +9,53 @@ import { Chart } from './chart.js';
 /** Plot insets in px; the brush overlay uses the same values so pointer x maps onto bucket columns. */
 const GRID = { left: 40, right: 8, top: 24, bottom: 24 } as const;
 
+/**
+ * Most columns the histogram draws. Rollups keep up to 4096 buckets, far more than the card is wide, and every
+ * drawn bar costs layout and paint on each filter change.
+ */
+export const HISTOGRAM_MAX_COLUMNS = 300;
+
+/** What the card reads from a bucket set; `TimeBuckets` and its coarsened views both satisfy it. */
+export interface BucketView<K extends string> {
+  readonly keys: readonly K[];
+  readonly startNs: number;
+  readonly widthNs: number;
+  readonly length: number;
+  counts(key: K): readonly number[];
+  total(key: K): number;
+}
+
+/** Sum runs of neighbouring buckets so at most `maxColumns` remain; columns stay aligned to `startNs`. */
+export function coarsenBuckets<K extends string>(
+  b: BucketView<K>,
+  maxColumns = HISTOGRAM_MAX_COLUMNS,
+): BucketView<K> {
+  const f = Math.ceil(b.length / maxColumns);
+  if (f <= 1) return b;
+  const length = Math.ceil(b.length / f);
+  const sums = new Map<K, number[]>();
+  for (const k of b.keys) {
+    const src = b.counts(k);
+    const out = new Array<number>(length).fill(0);
+    for (let i = 0; i < b.length; i++) {
+      const j = Math.floor(i / f);
+      out[j] = (out[j] ?? 0) + (src[i] ?? 0);
+    }
+    sums.set(k, out);
+  }
+  return {
+    keys: b.keys,
+    startNs: b.startNs,
+    widthNs: b.widthNs * f,
+    length,
+    counts: (k) => sums.get(k) ?? [],
+    total: (k) => b.total(k),
+  };
+}
+
 /** Inclusive bucket indexes (either order) to a half-open window in the buckets' time unit. */
 export function brushToWindow(
-  b: TimeBuckets<SpanStatusKey>,
+  b: BucketView<SpanStatusKey>,
   from: number,
   to: number,
   /** The run's end; the last bucket is wider than the data, so the window never extends past it. */
@@ -37,7 +81,7 @@ function sum(xs: readonly number[]): number {
   return xs.reduce((a, b) => a + b, 0);
 }
 
-export function buildHistogramOption(b: TimeBuckets<SpanStatusKey>) {
+export function buildHistogramOption(b: BucketView<SpanStatusKey>) {
   const colors: Record<SpanStatusKey, string> = {
     ok: token('--oh-series-1', '#2a78d6'),
     error: token('--oh-critical', STATUS.critical),
@@ -79,7 +123,7 @@ export function HistogramCard(props: {
   buckets: TimeBuckets<SpanStatusKey>;
   rangeEnd?: number;
 }): JSX.Element {
-  const { buckets } = props;
+  const buckets = useMemo(() => coarsenBuckets(props.buckets), [props.buckets]);
   const setWindow = useSelection((s) => s.setWindow);
   const [themeTick, setThemeTick] = useState(0);
   const [range, setRange] = useState<{ anchor: number; cursor: number } | null>(null);

@@ -11,7 +11,12 @@ vi.mock('../../src/viewer/components/chart.js', () => ({
   ),
 }));
 
-import { brushToWindow, HistogramCard } from '../../src/viewer/components/histogram-card.js';
+import {
+  brushToWindow,
+  coarsenBuckets,
+  HISTOGRAM_MAX_COLUMNS,
+  HistogramCard,
+} from '../../src/viewer/components/histogram-card.js';
 import { createSelectionStore } from '../../src/viewer/state/selection.js';
 import { SelectionProvider } from '../../src/viewer/state/selection-context.js';
 
@@ -27,6 +32,46 @@ function buckets(): TimeBuckets<SpanStatusKey> {
   b.add(at(2), 'ok', 1);
   return b;
 }
+
+/** One ok span per bucket, an error in every 7th: `n` buckets wide. */
+function wide(n: number): TimeBuckets<SpanStatusKey> {
+  const b = new TimeBuckets<SpanStatusKey>(['ok', 'error', 'unset']);
+  const w = b.widthNs;
+  for (let i = 0; i < n; i++) {
+    b.add((i * w) as RelNanos, 'ok');
+    if (i % 7 === 0) b.add((i * w) as RelNanos, 'error');
+  }
+  return b;
+}
+
+describe('coarsenBuckets', () => {
+  test('leaves a histogram that already fits untouched', () => {
+    const b = buckets();
+    expect(coarsenBuckets(b)).toBe(b);
+  });
+
+  test('sums neighbouring buckets into at most the column cap, keeping totals and the time extent', () => {
+    const b = wide(2500);
+    const v = coarsenBuckets(b);
+    const f = Math.ceil(2500 / HISTOGRAM_MAX_COLUMNS);
+    expect(v.length).toBeLessThanOrEqual(HISTOGRAM_MAX_COLUMNS);
+    expect(v.length).toBe(Math.ceil(2500 / f));
+    expect(v.widthNs).toBe(b.widthNs * f);
+    expect(v.startNs).toBe(b.startNs);
+    for (const k of b.keys) {
+      expect(v.counts(k).reduce((a, x) => a + x, 0)).toBe(b.total(k));
+      expect(v.total(k)).toBe(b.total(k));
+    }
+    expect(v.counts('ok')[0]).toBe(f);
+    expect(v.counts('ok').at(-1)).toBe(2500 - (v.length - 1) * f);
+  });
+
+  test('a brush over coarse columns selects the whole time of the buckets they merged', () => {
+    const b = wide(2500);
+    const v = coarsenBuckets(b);
+    expect(brushToWindow(v, 1, 2)).toEqual({ start: b.startNs + v.widthNs, end: b.startNs + 3 * v.widthNs });
+  });
+});
 
 describe('brushToWindow', () => {
   test('maps an inclusive bucket range to a half-open time window in either order', () => {
@@ -62,6 +107,22 @@ describe('HistogramCard', () => {
     expect(opt.series[0]?.itemStyle.decal).toBeUndefined();
     expect(screen.getByText('3 errors')).toBeTruthy();
     expect(img.getAttribute('aria-label')).toMatch(/11 spans/);
+  });
+
+  test('draws a wide histogram at most HISTOGRAM_MAX_COLUMNS columns wide', () => {
+    render(
+      <SelectionProvider store={createSelectionStore({})}>
+        <HistogramCard buckets={wide(2500)} />
+      </SelectionProvider>,
+    );
+    const img = screen.getByRole('img');
+    const opt = JSON.parse(img.getAttribute('data-option') ?? '{}') as {
+      xAxis: { data: string[] };
+      series: { data: number[] }[];
+    };
+    expect(opt.xAxis.data.length).toBeLessThanOrEqual(HISTOGRAM_MAX_COLUMNS);
+    for (const s of opt.series) expect(s.data.length).toBe(opt.xAxis.data.length);
+    expect(img.getAttribute('aria-label')).toMatch(/2858 spans/);
   });
 
   test('keyboard brush: arrows move, shift extends, Enter applies setWindow, Escape clears', async () => {
