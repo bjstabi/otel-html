@@ -21,7 +21,7 @@ Binaries: download from the GitHub Releases page. Each release has one standalon
 | Windows x64 | `otel-html-windows-x64.exe` |
 
 ```sh
-sha256sum --check --ignore-missing SHA256SUMS
+shasum -a 256 -c --ignore-missing SHA256SUMS
 ```
 
 The binaries are built by `.github/workflows/release.yml` when a release is created. From source, Node 24 or newer is required.
@@ -46,7 +46,7 @@ Turns OTLP files into a report. Inputs can be OTLP JSON, JSON lines (such as Col
 
 ### `merge <reports...>`
 
-Combines report folders into a new one, for example the reports of parallel CI jobs. It reads each report's data chunks, so it works across otel-html versions.
+Combines report folders into a new one, for example the reports of parallel CI jobs. It reads each report's data chunks, so it works across otel-html versions that share the report format version.
 
 ```sh
 otel-html merge ./job-1 ./job-2 -o ./combined
@@ -131,7 +131,7 @@ Config is a YAML or JSON file (`otel-html.yaml` by default), or an object passed
 | `writer.drop.metrics.datapoint` | `[]` | Same, for metric data points. |
 | `viewer.eagerBudgetBytes` | 75000000 | Decoded size under which the viewer loads everything up front. Env: `OTEL_HTML_EAGER_BUDGET_BYTES`. |
 | `viewer.listCap` | 10000 | Maximum rows in result lists. |
-| `viewer.theme` | `system` | `system`, `light` or `dark`. |
+| `viewer.theme` | `system` | `system`, `light` or `dark`. The theme a report opens in; a theme the viewer picks themselves is remembered and wins. |
 
 `OTEL_HTML_CONFIG` selects the config file. `OTEL_HTML_DEBUG=1` makes the CLI print stack traces on errors.
 
