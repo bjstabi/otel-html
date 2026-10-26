@@ -17,7 +17,7 @@ const history = createHashHistory(window);
 
 // The manifest is validated at the boundary; its viewer config picks the eager or windowed strategy.
 async function load(): ReturnType<typeof createDataSource> {
-  const manifest = parseManifest(await registry.take('manifest'));
+  const manifest = parseManifest(registry.takeStatic('manifest', 'data/manifest.js'));
   return createDataSource(loader, manifest, manifest.config.viewer.eagerBudgetBytes);
 }
 

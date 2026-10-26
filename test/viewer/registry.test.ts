@@ -46,3 +46,23 @@ describe('installRegistry', () => {
     expect(() => installRegistry(win)).toThrow(/__OH__/);
   });
 });
+
+describe('takeStatic', () => {
+  test('returns a payload pushed by an earlier static script, once', () => {
+    const win = withBootstrap();
+    win.__OH__?.push('manifest', { title: 't' });
+    const registry = installRegistry(win);
+    expect(registry.takeStatic('manifest', 'data/manifest.js')).toEqual({ title: 't' });
+    expect(() => registry.takeStatic('manifest', 'data/manifest.js')).toThrow(/data\/manifest\.js/);
+  });
+
+  test('a static script that never registered fails fast naming the file, instead of waiting forever', () => {
+    const registry = installRegistry(withBootstrap());
+    expect(() => registry.takeStatic('manifest', 'data/manifest.js')).toThrow(
+      expect.objectContaining({
+        code: 'invalid-report',
+        message: expect.stringContaining('data/manifest.js'),
+      }),
+    );
+  });
+});

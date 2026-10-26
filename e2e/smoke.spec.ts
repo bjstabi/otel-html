@@ -18,3 +18,13 @@ test('the report loads cleanly as classic scripts and shows the run title', asyn
   expect(await page.evaluate(() => document.querySelectorAll('script[type=module]').length)).toBe(0);
   expect(problems).toEqual([]);
 });
+
+test('a report whose data/manifest.js is missing shows a load failure naming it', async ({
+  page,
+  baseURL,
+}) => {
+  await page.route('**/data/manifest.js', (route) => route.fulfill({ status: 404, body: 'not found' }));
+  await page.goto(`${baseURL ?? ''}/index.html`);
+  await expect(page.getByRole('heading', { name: 'This report could not be loaded' })).toBeVisible();
+  await expect(page.getByText('data/manifest.js').first()).toBeVisible();
+});

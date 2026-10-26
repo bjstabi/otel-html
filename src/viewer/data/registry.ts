@@ -16,6 +16,12 @@ declare global {
 export interface Registry {
   /** Resolves with the payload registered under `key` (now or later) and forgets it. */
   take(key: string): Promise<unknown>;
+  /**
+   * The payload of a data file loaded by a static `<script>` that precedes the viewer script (the manifest).
+   * Classic scripts run in order, so by now it has either registered or failed (missing file, load error, script
+   * error); waiting would hang forever, so a missing payload throws naming `file`.
+   */
+  takeStatic(key: string, file: string): unknown;
 }
 
 /**
@@ -48,6 +54,19 @@ export function installRegistry(win: Window): Registry {
   win.__OH__ = { q: [], push };
 
   return {
+    takeStatic(key, file) {
+      if (!values.has(key)) {
+        throw new OtelHtmlError('invalid-report', {
+          path: file,
+          expected: `${file} to load and register "${key}" before the viewer starts`,
+          actual: 'nothing registered (the file is missing, was not uploaded, or failed to run)',
+          hint: 'check that the data/ folder sits next to index.html and was copied completely',
+        });
+      }
+      const payload = values.get(key);
+      values.delete(key);
+      return payload;
+    },
     take(key) {
       if (values.has(key)) {
         const payload = values.get(key);
