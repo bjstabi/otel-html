@@ -13,13 +13,15 @@ import { expect, test } from './test.js';
 /** Fixed budgets; `OTEL_HTML_PERF_FACTOR` scales them for slow machines, the constants are never loosened. */
 const INTERACTIVE_BUDGET_MS = 3000;
 const FACET_BUDGET_MS = 150;
+/** Timed toggles after one untimed warm-up; the median is compared with the budget. */
+const FACET_SAMPLES = 7;
 
 const SERVICE = SCALE_SERVICES[0];
 /** Span `j` of a trace belongs to service `j % 8`, so the first service owns spans 0, 8, ..., 48 of each trace. */
 const PER_SERVICE = SCALE_TRACES * Math.ceil(SCALE_SPANS_PER_TRACE / SCALE_SERVICES.length);
 
 test(
-  '100k spans: the explorer is interactive within 3 s and a facet toggle repaints within 150 ms',
+  '100k spans: the explorer is interactive within 3 s and a facet toggle repaints within 150 ms (median)',
   { tag: '@perf' },
   async ({ page, reportUrl, browserName }, testInfo) => {
     const factor = perfFactor();
@@ -35,35 +37,55 @@ test(
     const interactiveMs = performance.now() - t0;
     await expect(count).toHaveText(new RegExp(`^${SCALE_SPAN_COUNT} spans`));
 
-    // Toggle a facet and time from the click to the next frame after the result count changed.
-    const facetMs = await page.evaluate(async (service) => {
-      const row = document.querySelector(`[data-testid="facet-row:service.name:${service}"]`);
-      const only = row?.querySelector<HTMLButtonElement>('button[aria-label^="Only "]');
-      const out = [...document.querySelectorAll('main output')].find((o) =>
-        /\bspans\b/.test(o.textContent ?? ''),
-      );
-      if (!only || !out) throw new Error('facet row or count output not found');
-      const before = out.textContent;
-      const t = performance.now();
-      return await new Promise<number>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error('the count never changed')), 10_000);
-        const obs = new MutationObserver(() => {
-          if (out.textContent === before) return;
-          obs.disconnect();
-          clearTimeout(timer);
-          requestAnimationFrame(() => resolve(performance.now() - t));
+    // A facet toggle is timed from the click to the next frame after the result count changed. The first toggle
+    // pays for JIT warm-up, the first OTTL compile and the first chart build, so it is untimed; the budget applies to
+    // the median of the toggles after it.
+    const toggleMs = (service: string): Promise<number> =>
+      page.evaluate(async (svc) => {
+        const row = document.querySelector(`[data-testid="facet-row:service.name:${svc}"]`);
+        const only = row?.querySelector<HTMLButtonElement>('button[aria-label^="Only "]');
+        const out = [...document.querySelectorAll('main output')].find((o) =>
+          /\bspans\b/.test(o.textContent ?? ''),
+        );
+        if (!only || !out) throw new Error('facet row or count output not found');
+        const before = out.textContent;
+        const t = performance.now();
+        return await new Promise<number>((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error('the count never changed')), 10_000);
+          const obs = new MutationObserver(() => {
+            if (out.textContent === before) return;
+            obs.disconnect();
+            clearTimeout(timer);
+            requestAnimationFrame(() => resolve(performance.now() - t));
+          });
+          obs.observe(out, { subtree: true, childList: true, characterData: true });
+          only.click();
         });
-        obs.observe(out, { subtree: true, childList: true, characterData: true });
-        only.click();
-      });
-    }, SERVICE);
-    await expect(count).toHaveText(new RegExp(`^${PER_SERVICE} spans`));
+      }, service);
+    const clearFilters = async (): Promise<void> => {
+      await page.getByRole('button', { name: 'Clear filters' }).click();
+      await expect(count).toHaveText(new RegExp(`^${SCALE_SPAN_COUNT} spans`));
+    };
 
-    const line = `PERF scale ${testInfo.project.name} (${browserName}): interactive ${interactiveMs.toFixed(0)} ms (budget ${INTERACTIVE_BUDGET_MS * factor}), facet repaint ${facetMs.toFixed(0)} ms (budget ${FACET_BUDGET_MS * factor}), factor ${factor}\n`;
+    await toggleMs(SERVICE);
+    await expect(count).toHaveText(new RegExp(`^${PER_SERVICE} spans`));
+    await clearFilters();
+
+    const samples: number[] = [];
+    for (let i = 0; i < FACET_SAMPLES; i++) {
+      samples.push(await toggleMs(SCALE_SERVICES[i % 2] ?? SERVICE));
+      await clearFilters();
+    }
+    const sorted = [...samples].sort((a, b) => a - b);
+    const facetMs = sorted[Math.floor(sorted.length / 2)] ?? Number.POSITIVE_INFINITY;
+    const worstMs = sorted[sorted.length - 1] ?? Number.POSITIVE_INFINITY;
+
+    const line = `PERF scale ${testInfo.project.name} (${browserName}): interactive ${interactiveMs.toFixed(0)} ms (budget ${INTERACTIVE_BUDGET_MS * factor}), facet repaint median ${facetMs.toFixed(0)} ms, max ${worstMs.toFixed(0)} ms, samples [${samples.map((x) => x.toFixed(0)).join(', ')}] (budget ${FACET_BUDGET_MS * factor}), factor ${factor}\n`;
     process.stdout.write(line);
     testInfo.annotations.push({ type: 'perf', description: line.trim() });
     expect(interactiveMs).toBeLessThan(INTERACTIVE_BUDGET_MS * factor);
     expect(facetMs).toBeLessThan(FACET_BUDGET_MS * factor);
+    expect(worstMs).toBeLessThan(2 * FACET_BUDGET_MS * factor);
   },
 );
 

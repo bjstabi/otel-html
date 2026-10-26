@@ -3,8 +3,8 @@ import { parseManifest } from '../format/manifest.js';
 import { createDataSource } from './data/data-source.js';
 import { installRegistry } from './data/registry.js';
 import { createDomScriptLoader } from './data/script-loader.js';
-import { createHashHistory } from './state/hash-history.js';
 import { Root } from './root.js';
+import { createHashHistory } from './state/hash-history.js';
 import './styles.css';
 
 const root = document.getElementById('root');
