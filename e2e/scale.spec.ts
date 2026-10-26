@@ -65,6 +65,23 @@ test(
     const clearFilters = async (): Promise<void> => {
       await page.getByRole('button', { name: 'Clear filters' }).click();
       await expect(count).toHaveText(new RegExp(`^${SCALE_SPAN_COUNT} spans`));
+      // The cleared view keeps rendering (100k-row query, grid, charts) after its count changes. Wait until the main
+      // thread is quiet, so the next timed toggle measures its own latency and not the tail of this one.
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            const deadline = performance.now() + 5_000;
+            let last = performance.now();
+            let quiet = 0;
+            const tick = (now: number): void => {
+              quiet = now - last < 25 ? quiet + 1 : 0;
+              last = now;
+              if (quiet >= 3 || now > deadline) resolve();
+              else requestAnimationFrame(tick);
+            };
+            requestAnimationFrame(tick);
+          }),
+      );
     };
 
     await toggleMs(SERVICE);
