@@ -19,12 +19,13 @@ function isPreference(v: unknown): v is ThemePreference {
   return v === 'system' || v === 'light' || v === 'dark';
 }
 
-function readStored(): ThemePreference {
+/** The viewer's own saved choice, or null when it never made one (the report's default then applies). */
+function readStored(): ThemePreference | null {
   try {
     const v: unknown = window.localStorage.getItem(STORAGE_KEY);
-    return isPreference(v) ? v : 'system';
+    return isPreference(v) ? v : null;
   } catch {
-    return 'system';
+    return null;
   }
 }
 
@@ -44,8 +45,17 @@ export interface ThemeContextValue {
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
-export function ThemeProvider({ children }: { children: ReactNode }): JSX.Element {
-  const [preference, setPref] = useState<ThemePreference>(readStored);
+/**
+ * `defaultPreference` is the report's `viewer.theme` setting. It applies until the viewer picks a theme themselves
+ * (the saved choice wins), and follows the prop once it arrives with the manifest.
+ */
+export function ThemeProvider(props: {
+  children: ReactNode;
+  defaultPreference?: ThemePreference;
+}): JSX.Element {
+  const { children, defaultPreference = 'system' } = props;
+  const [chosen, setChosen] = useState<ThemePreference | null>(readStored);
+  const preference = chosen ?? defaultPreference;
   const [system, setSystem] = useState<ResolvedTheme>(systemTheme);
 
   useEffect(() => {
@@ -68,7 +78,7 @@ export function ThemeProvider({ children }: { children: ReactNode }): JSX.Elemen
   }, [resolved]);
 
   const setPreference = useCallback((next: ThemePreference): void => {
-    setPref(next);
+    setChosen(next);
     try {
       window.localStorage.setItem(STORAGE_KEY, next);
     } catch {

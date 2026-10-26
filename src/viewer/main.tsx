@@ -1,11 +1,10 @@
 import { createRoot } from 'react-dom/client';
 import { parseManifest } from '../format/manifest.js';
-import { App } from './app.js';
 import { createDataSource } from './data/data-source.js';
 import { installRegistry } from './data/registry.js';
 import { createDomScriptLoader } from './data/script-loader.js';
 import { createHashHistory } from './state/hash-history.js';
-import { ThemeProvider } from './theme/theme-provider.js';
+import { Root } from './root.js';
 import './styles.css';
 
 const root = document.getElementById('root');
@@ -21,8 +20,4 @@ async function load(): ReturnType<typeof createDataSource> {
   return createDataSource(loader, manifest, manifest.config.viewer.eagerBudgetBytes);
 }
 
-createRoot(root).render(
-  <ThemeProvider>
-    <App load={load} history={history} />
-  </ThemeProvider>,
-);
+createRoot(root).render(<Root load={load} history={history} />);
