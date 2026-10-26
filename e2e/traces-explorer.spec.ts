@@ -61,6 +61,14 @@ test('Traces explorer: OTTL filter, facets, URL state, hostile text', async ({ p
   await expect(count).toHaveText(/^3 spans/);
   await expect(rows).toHaveCount(4);
 
+  // The Status facet's "only error" matches exactly the error spans (the facet value maps to the OTTL enum).
+  await page.getByRole('button', { name: 'Clear filters' }).click();
+  await expect(count).toHaveText(new RegExp(`^${SPAN_COUNT} spans`));
+  await page.getByTestId('facet-row:status.code:error').hover();
+  await page.getByRole('button', { name: 'Only error' }).click();
+  await expect(count).toHaveText(new RegExp(`^${ERROR_SPAN_COUNT} spans`));
+  await expect(rows).toHaveCount(ERROR_SPAN_COUNT + 1);
+
   expect(problems).toEqual([]);
 });
 

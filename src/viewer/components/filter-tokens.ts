@@ -7,6 +7,8 @@ export type FilterToken = {
   key: string;
   op: '==' | '!=' | '>' | '>=' | '<' | '<=' | 'contains' | 'exists' | 'not exists';
   value: string | number | boolean | null;
+  /** When true, `value` is an OTTL enum name (`STATUS_CODE_ERROR`) written bare, not a string literal. */
+  enum?: true;
 };
 
 const REGEX_META = /[.*+?^${}()|[\]\\]/g;
@@ -84,7 +86,12 @@ function tokenExpr(t: FilterToken): Expr {
     case '>=':
     case '<':
     case '<=':
-      return { type: 'cmp', op: t.op, left, right: literal(t.value) };
+      return {
+        type: 'cmp',
+        op: t.op,
+        left,
+        right: t.enum === true ? { type: 'enum', name: String(t.value), from: 0 } : literal(t.value),
+      };
   }
 }
 
@@ -118,7 +125,11 @@ function isKeyPart(v: Value): boolean {
 function termToToken(e: Expr): FilterToken | null {
   if (e.type === 'cmp') {
     const key = keyOf(e.left);
-    if (key === null || e.right.type !== 'literal') return null;
+    if (key === null) return null;
+    if (e.right.type === 'enum') {
+      return e.op === '==' || e.op === '!=' ? { key, op: e.op, value: e.right.name, enum: true } : null;
+    }
+    if (e.right.type !== 'literal') return null;
     const v = e.right.value;
     if (v === null) {
       if (e.op === '!=') return { key, op: 'exists', value: null };
@@ -199,5 +210,83 @@ export function facetKeyToPath(key: string, signal: 'span', scope: FacetScope = 
         case 'attribute':
           return attributePath('span', key);
       }
+  }
+}
+
+/** Rollup display value to OTTL enum name, for the core facets whose OTTL field is an enum-typed int. */
+const CORE_ENUM_VALUES: ReadonlyMap<string, ReadonlyMap<string, string>> = new Map([
+  [
+    'status.code',
+    new Map([
+      ['unset', 'STATUS_CODE_UNSET'],
+      ['ok', 'STATUS_CODE_OK'],
+      ['error', 'STATUS_CODE_ERROR'],
+    ]),
+  ],
+  [
+    'span.kind',
+    new Map([
+      ['unspecified', 'SPAN_KIND_UNSPECIFIED'],
+      ['internal', 'SPAN_KIND_INTERNAL'],
+      ['server', 'SPAN_KIND_SERVER'],
+      ['client', 'SPAN_KIND_CLIENT'],
+      ['producer', 'SPAN_KIND_PRODUCER'],
+      ['consumer', 'SPAN_KIND_CONSUMER'],
+    ]),
+  ],
+]);
+
+/** Value type recorded by the rollup for a facet key (`FacetCounts.kind`). */
+export type FacetValueKind = 'string' | 'int' | 'double' | 'bool' | 'mixed';
+
+/** Whether "only"/"exclude" can build a correctly typed filter for a key with this value type. */
+export function facetFilterable(kind: FacetValueKind | undefined): boolean {
+  return kind !== 'mixed';
+}
+
+/**
+ * The filter token for a facet value, typed to match the data: core enum facets become enum values, numeric and
+ * boolean attributes become numeric and boolean literals. Fails fast when no exact filter exists (a `mixed` key,
+ * a value that does not parse as its recorded type, an unknown core enum value).
+ */
+export function facetToken(
+  key: string,
+  scope: FacetScope,
+  value: string,
+  op: '==' | '!=',
+  kind: FacetValueKind = 'string',
+): FilterToken {
+  const path = facetKeyToPath(key, 'span', scope);
+  const fail = (expected: string): never => {
+    throw new OtelHtmlError('usage', {
+      path: `facet ${key}`,
+      expected,
+      actual: JSON.stringify(value),
+    });
+  };
+  const enums = scope === 'core' ? CORE_ENUM_VALUES.get(key) : undefined;
+  if (enums !== undefined) {
+    const name = enums.get(value);
+    if (name === undefined) return fail(`one of ${[...enums.keys()].join(', ')}`);
+    return { key: path, op, value: name, enum: true };
+  }
+  switch (kind) {
+    case 'string':
+      return { key: path, op, value };
+    case 'mixed':
+      return fail('a facet key with a single value type; this key holds more than one, so use the query bar');
+    case 'bool':
+      if (value !== 'true' && value !== 'false') return fail('true or false');
+      return { key: path, op, value: value === 'true' };
+    case 'int': {
+      const n = Number(value);
+      if (!/^-?\d+$/.test(value) || !Number.isSafeInteger(n)) return fail('a safe integer');
+      return { key: path, op, value: n };
+    }
+    case 'double': {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return fail('a finite number');
+      return { key: path, op, value: n };
+    }
   }
 }

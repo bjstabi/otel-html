@@ -132,7 +132,7 @@ export class SpanRollups {
     for (const [k, v] of span.attributes) {
       if (CORE_KEYS.has(k)) continue;
       if (v.kind === 'array' || v.kind === 'kvlist' || v.kind === 'bytes' || v.kind === 'empty') continue;
-      this.#facet(k, anyValueToDisplay(v));
+      this.#facet(k, anyValueToDisplay(v), v.kind);
     }
 
     const dk = `${serviceName(t.resource)}${DURATION_KEY_SEP}${resourceName(span)}`;
@@ -148,10 +148,11 @@ export class SpanRollups {
     h.record(duration);
   }
 
-  #facet(key: string, value: string): void {
+  #facet(key: string, value: string, kind: 'string' | 'int' | 'double' | 'bool' = 'string'): void {
     this.facets.add(
       key,
       value.length > MAX_FACET_VALUE_LENGTH ? value.slice(0, MAX_FACET_VALUE_LENGTH) : value,
+      kind,
     );
   }
 

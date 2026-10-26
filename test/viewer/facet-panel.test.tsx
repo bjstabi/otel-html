@@ -165,10 +165,10 @@ describe('FacetPanel', () => {
     expect(calls).toEqual([[{ key: 'resource:foo', scope: 'attribute' }, 'v', 'only']]);
   });
 
-  test('a numeric attribute is filtered as its display string (documented limitation)', async () => {
+  test('a numeric attribute is filtered with an int literal', async () => {
     const user = userEvent.setup();
     const f = new FacetCounts(100, 50, ['service.name']);
-    f.add('http.status_code', '200');
+    f.add('http.status_code', '200', 'int');
     const store = createSelectionStore({});
     render(
       <SelectionProvider store={store}>
@@ -176,7 +176,22 @@ describe('FacetPanel', () => {
       </SelectionProvider>,
     );
     await user.click(screen.getByRole('button', { name: 'Only 200' }));
-    expect(store.getState().condition).toBe('span.attributes["http.status_code"] == "200"');
+    expect(store.getState().condition).toBe('span.attributes["http.status_code"] == 200');
+  });
+
+  test('a key holding more than one value type has disabled only/exclude with a reason', () => {
+    const f = new FacetCounts(100, 50, ['service.name']);
+    f.add('code', '200', 'int');
+    f.add('code', 'x', 'string');
+    const store = createSelectionStore({});
+    render(
+      <SelectionProvider store={store}>
+        <FacetPanel facets={f} />
+      </SelectionProvider>,
+    );
+    const only = screen.getByRole('button', { name: 'Only 200' }) as HTMLButtonElement;
+    expect(only.disabled).toBe(true);
+    expect(only.title).toMatch(/more than one type/);
   });
 
   test('an unexpected error from the store is rethrown, not shown as a raw-OTTL message', async () => {

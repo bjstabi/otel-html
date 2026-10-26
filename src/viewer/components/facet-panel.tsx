@@ -4,8 +4,10 @@ import type { FacetCounts } from '../../rollups/facets.js';
 import { useSelection } from '../state/selection-context.js';
 import {
   type FacetScope,
+  type FacetValueKind,
   type FilterToken,
-  facetKeyToPath,
+  facetFilterable,
+  facetToken,
   ottlToTokens,
   tokensToOttl,
 } from './filter-tokens.js';
@@ -53,11 +55,9 @@ const HATCH =
   'repeating-linear-gradient(45deg, var(--oh-critical) 0 3px, color-mix(in srgb, var(--oh-critical) 25%, transparent) 3px 6px)';
 const VALUES_PER_FACET = 8;
 
-/**
- * Facet values are the rollup's display strings, so "only"/"exclude" always write string literals (`== "200"`).
- * A numeric or boolean attribute therefore does not match through a facet click: the rollup keeps no value type to
- * build a typed token from. Use the query bar for typed comparisons.
- */
+const MIXED_MESSAGE =
+  'This key holds values of more than one type, so facets cannot filter it. Use the query bar.';
+
 const RAW_MESSAGE =
   'The condition is raw OTTL that is not a plain list of filters, so facets cannot edit it. Edit it in the query bar or clear it first.';
 
@@ -67,6 +67,8 @@ function FacetRow(props: {
   count: number;
   total: number;
   state: 'include' | 'exclude' | null;
+  /** False when no exact filter exists for the key (mixed value types); the buttons are disabled. */
+  filterable: boolean;
   onAction(a: FacetAction): void;
 }): JSX.Element {
   const share = props.total === 0 ? 0 : props.count / props.total;
@@ -107,6 +109,8 @@ function FacetRow(props: {
         <button
           type="button"
           aria-label={`Only ${props.value}`}
+          disabled={!props.filterable}
+          title={props.filterable ? undefined : MIXED_MESSAGE}
           onClick={() => props.onAction('only')}
           className="rounded-full border border-hairline bg-surface px-1.5 hover:bg-hairline"
         >
@@ -115,6 +119,8 @@ function FacetRow(props: {
         <button
           type="button"
           aria-label={`Exclude ${props.value}`}
+          disabled={!props.filterable}
+          title={props.filterable ? undefined : MIXED_MESSAGE}
           onClick={() => props.onAction('exclude')}
           className="rounded-full border border-hairline bg-surface px-1.5 hover:bg-hairline"
         >
@@ -137,6 +143,16 @@ function matchingValues(
     .filter((v) => needle === '' || v.value.toLowerCase().includes(needle));
 }
 
+/** The token a row stands for, or null when none can be built (the row then shows no include/exclude state). */
+function displayToken(def: FacetDef, value: string, kind: FacetValueKind | undefined): FilterToken | null {
+  try {
+    return facetToken(def.key, def.scope, value, '==', kind);
+  } catch (e) {
+    if (e instanceof OtelHtmlError && e.code === 'usage') return null;
+    throw e;
+  }
+}
+
 function FacetBlock(props: {
   def: FacetDef;
   facets: FacetCounts;
@@ -149,7 +165,8 @@ function FacetBlock(props: {
   const matches = matchingValues(facets, def.key, props.search);
   const values = matches.slice(0, VALUES_PER_FACET);
   if (total === 0 || values.length === 0) return null;
-  const path = facetKeyToPath(def.key, 'span', def.scope);
+  const kind = facets.kind(def.key);
+  const filterable = facetFilterable(kind);
   const other = facets.other(def.key);
   const hidden = matches.length - values.length;
   return (
@@ -157,7 +174,13 @@ function FacetBlock(props: {
       <h4 className="text-xs font-medium text-muted">{def.label}</h4>
       <ul className="flex flex-col">
         {values.map((v) => {
-          const t = props.tokens?.find((x) => x.key === path && x.value === v.value);
+          const want = filterable ? displayToken(def, v.value, kind) : null;
+          const t =
+            want === null
+              ? undefined
+              : props.tokens?.find(
+                  (x) => x.key === want.key && x.value === want.value && x.enum === want.enum,
+                );
           return (
             <FacetRow
               key={v.value}
@@ -165,6 +188,7 @@ function FacetBlock(props: {
               value={v.value}
               count={v.count}
               total={total}
+              filterable={filterable}
               state={t?.op === '==' ? 'include' : t?.op === '!=' ? 'exclude' : null}
               onAction={(a) => props.onAction(def, v.value, a)}
             />
@@ -312,6 +336,7 @@ export function FacetPanel(props: FacetPanelProps): JSX.Element {
   const tokens = condition === null ? [] : ottlToTokens(condition);
 
   const act = (def: FacetDef, value: string, action: FacetAction): void => {
+    const kind = props.facets.kind(def.key);
     if (tokens === null) {
       setError(RAW_MESSAGE);
       return;
@@ -319,10 +344,10 @@ export function FacetPanel(props: FacetPanelProps): JSX.Element {
     try {
       if (action === 'only') {
         // setCondition validates (parses) the condition like any other write, so this respects the store's rules.
-        const path = facetKeyToPath(def.key, 'span', def.scope);
-        setCondition(tokensToOttl([...tokens.filter((t) => t.key !== path), { key: path, op: '==', value }]));
+        const want = facetToken(def.key, def.scope, value, '==', kind);
+        setCondition(tokensToOttl([...tokens.filter((t) => t.key !== want.key), want]));
       } else {
-        toggleFacet(def.key, value, 'exclude', def.scope);
+        toggleFacet(def.key, value, 'exclude', def.scope, kind);
       }
       setError(null);
       props.onToggle?.({ key: def.key, scope: def.scope }, value, action);

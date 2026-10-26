@@ -58,9 +58,9 @@ describe('toggleFacet', () => {
 
   test('repeating the same facet removes it; other tokens stay', () => {
     const store = createSelectionStore({ q: 'span.name == "x"' });
-    store.getState().toggleFacet('status.code', 'STATUS_CODE_ERROR', 'include');
-    expect(store.getState().condition).toBe('span.name == "x" and span.status.code == "STATUS_CODE_ERROR"');
-    store.getState().toggleFacet('status.code', 'STATUS_CODE_ERROR', 'include');
+    store.getState().toggleFacet('status.code', 'error', 'include');
+    expect(store.getState().condition).toBe('span.name == "x" and span.status.code == STATUS_CODE_ERROR');
+    store.getState().toggleFacet('status.code', 'error', 'include');
     expect(store.getState().condition).toBe('span.name == "x"');
     store.getState().toggleFacet('x', 'y', 'include');
     store.getState().clear('condition');

@@ -52,3 +52,22 @@ describe('FacetCounts', () => {
     expect(() => FacetCounts.from({ ...j, keys: [{ ...first, total: 99 }] })).toThrow(/total/);
   });
 });
+
+describe('FacetCounts kind', () => {
+  it('tracks one value type per key, becomes mixed on a second type, and round-trips', () => {
+    const f = new FacetCounts(5, 5);
+    f.add('a', '1', 'int');
+    f.add('a', '2', 'int');
+    f.add('b', 'x');
+    f.add('c', '1', 'int');
+    f.add('c', 'x', 'string');
+    expect([f.kind('a'), f.kind('b'), f.kind('c'), f.kind('zz')]).toEqual([
+      'int',
+      'string',
+      'mixed',
+      undefined,
+    ]);
+    const back = FacetCounts.from(JSON.parse(JSON.stringify(f.toJSON())));
+    expect([back.kind('a'), back.kind('b'), back.kind('c')]).toEqual(['int', 'string', 'mixed']);
+  });
+});

@@ -90,3 +90,14 @@ describe('facetKeyToPath', () => {
     expect(facetKeyToPath('resource:foo', 'span', 'resource')).toBe('resource.attributes["resource:foo"]');
   });
 });
+
+describe('enum right-hand sides', () => {
+  test('round-trip between OTTL and tokens', () => {
+    const tokens = ottlToTokens('span.status.code != STATUS_CODE_ERROR and span.name == "x"');
+    expect(tokens).toEqual([
+      { key: 'span.status.code', op: '!=', value: 'STATUS_CODE_ERROR', enum: true },
+      { key: 'span.name', op: '==', value: 'x' },
+    ]);
+    expect(tokensToOttl(tokens ?? [])).toBe('span.status.code != STATUS_CODE_ERROR and span.name == "x"');
+  });
+});
