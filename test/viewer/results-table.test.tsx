@@ -132,4 +132,17 @@ describe('ResultsTable', () => {
     expect(screen.getByText('partial')).toBeTruthy();
     expect(screen.getByText('GET /')).toBeTruthy();
   });
+
+  test('rowHeight sizes every row and the virtualizer total', () => {
+    mount({ rowHeight: 76 });
+    const total = document.querySelector<HTMLElement>('[role="rowgroup"] > div.relative');
+    expect(total?.style.height).toBe(`${rows.length * 76}px`);
+    expect(screen.getAllByRole('row')[1]?.style.height).toBe('76px');
+  });
+
+  test('rows default to 36px', () => {
+    mount();
+    const total = document.querySelector<HTMLElement>('[role="rowgroup"] > div.relative');
+    expect(total?.style.height).toBe(`${rows.length * 36}px`);
+  });
 });

@@ -21,6 +21,28 @@ export const CATEGORICAL_DARK: readonly string[] = [
 
 export const STATUS = { critical: '#d03b3b', warning: '#fab219' } as const;
 
+/**
+ * Log severity colours per mode (mirrored by the `--oh-sev-*` tokens in tokens.css; a test keeps them in sync).
+ * `unspecified` is the muted ink token in both modes, so it is not listed.
+ */
+export const SEVERITY_LIGHT = {
+  fatal: '#8f1d21',
+  error: '#d03b3b',
+  warn: '#fab219',
+  info: '#2a78d6',
+  debug: '#9ca3af',
+  trace: '#c9ccd1',
+} as const;
+
+export const SEVERITY_DARK = {
+  fatal: '#ef6b6e',
+  error: '#e5605f',
+  warn: '#fab219',
+  info: '#3987e5',
+  debug: '#9ca3af',
+  trace: '#6f7681',
+} as const;
+
 /** Index used for every entity past the seventh: the neutral "Other" gray. */
 export const OTHER_INDEX = 7;
 

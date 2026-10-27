@@ -2,6 +2,7 @@ import { type JSX, useMemo, useState } from 'react';
 import type { Manifest } from '../../format/manifest.js';
 import { parseUnixNanos, type SpanId, type TraceId } from '../../model/ids.js';
 import { Chart } from '../components/chart.js';
+import { ColumnPicker } from '../components/column-picker.js';
 import {
   downloadBlob,
   type ExportFormat,
@@ -10,7 +11,7 @@ import {
   type OtlpSpanGroup,
 } from '../components/export.js';
 import { FacetPanel } from '../components/facet-panel.js';
-import { HistogramCard } from '../components/histogram-card.js';
+import { HistogramCard, SPAN_STATUS_SERIES } from '../components/histogram-card.js';
 import { ResultsTable, type SortState } from '../components/results-table.js';
 import type { DataSource, SpanQuery, SpanQueryResult, SpanRow, TraceRow } from '../data/data-source.js';
 import { PageChrome } from '../shell/page-chrome.js';
@@ -401,6 +402,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
               />
               <HistogramCard
                 buckets={result.buckets}
+                series={SPAN_STATUS_SERIES}
                 {...(manifest.range === null ? {} : { rangeEnd: manifest.range.end })}
               />
               <div className="grid grid-cols-1 gap-4 lg:grid-cols-[16rem_minmax(0,1fr)]">
@@ -500,44 +502,5 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
         />
       )}
     </PageChrome>
-  );
-}
-
-function ColumnPicker(props: {
-  keys: readonly string[];
-  chosen: readonly string[];
-  onAdd(k: string): void;
-  onRemove(k: string): void;
-}): JSX.Element {
-  return (
-    <div className="flex flex-wrap items-center gap-2 text-sm">
-      <label className="flex items-center gap-2 text-ink-2">
-        Columns
-        <select
-          className={FIELD}
-          value=""
-          aria-label="Add column"
-          onChange={(e) => e.target.value !== '' && props.onAdd(e.target.value)}
-        >
-          <option value="">Add attribute column</option>
-          {props.keys.map((k) => (
-            <option key={k} value={k}>
-              {k}
-            </option>
-          ))}
-        </select>
-      </label>
-      {props.chosen.map((k) => (
-        <button
-          key={k}
-          type="button"
-          onClick={() => props.onRemove(k)}
-          aria-label={`Remove column ${k}`}
-          className="rounded-full border border-hairline px-2 py-0.5 font-mono text-xs hover:bg-hairline"
-        >
-          {k} <span aria-hidden>×</span>
-        </button>
-      ))}
-    </div>
   );
 }

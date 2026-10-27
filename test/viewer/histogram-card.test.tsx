@@ -2,6 +2,7 @@ import { cleanup, render, screen } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import type { RelNanos } from '../../src/model/ids.js';
+import { LOG_SEVERITY_KEYS, type LogSeverityKey } from '../../src/rollups/signal-counts.js';
 import type { SpanStatusKey } from '../../src/rollups/span-rollups.js';
 import { TimeBuckets } from '../../src/rollups/time-buckets.js';
 
@@ -16,6 +17,8 @@ import {
   coarsenBuckets,
   HISTOGRAM_MAX_COLUMNS,
   HistogramCard,
+  SEVERITY_SERIES,
+  SPAN_STATUS_SERIES,
 } from '../../src/viewer/components/histogram-card.js';
 import { createSelectionStore } from '../../src/viewer/state/selection.js';
 import { SelectionProvider } from '../../src/viewer/state/selection-context.js';
@@ -94,7 +97,7 @@ describe('HistogramCard', () => {
   test('stacks status series, error with a critical colour and a hatch decal, with labelled totals', () => {
     render(
       <SelectionProvider store={createSelectionStore({})}>
-        <HistogramCard buckets={buckets()} />
+        <HistogramCard buckets={buckets()} series={SPAN_STATUS_SERIES} />
       </SelectionProvider>,
     );
     const img = screen.getByRole('img');
@@ -112,7 +115,7 @@ describe('HistogramCard', () => {
   test('draws a wide histogram at most HISTOGRAM_MAX_COLUMNS columns wide', () => {
     render(
       <SelectionProvider store={createSelectionStore({})}>
-        <HistogramCard buckets={wide(2500)} />
+        <HistogramCard buckets={wide(2500)} series={SPAN_STATUS_SERIES} />
       </SelectionProvider>,
     );
     const img = screen.getByRole('img');
@@ -131,7 +134,7 @@ describe('HistogramCard', () => {
     const b = buckets();
     render(
       <SelectionProvider store={store}>
-        <HistogramCard buckets={b} />
+        <HistogramCard buckets={b} series={SPAN_STATUS_SERIES} />
       </SelectionProvider>,
     );
     const brush = screen.getByRole('group', { name: 'Time brush' });
@@ -140,5 +143,33 @@ describe('HistogramCard', () => {
     expect(store.getState().window).toEqual({ start: b.widthNs, end: 3 * b.widthNs });
     await user.keyboard('{Escape}');
     expect(store.getState().window).toBeNull();
+  });
+});
+
+describe('HistogramCard with log severities', () => {
+  test('one legend entry per severity, labelled, fatal on top of the stack, with a custom title', () => {
+    const b = new TimeBuckets<LogSeverityKey>(LOG_SEVERITY_KEYS);
+    b.add(0 as RelNanos, 'error', 2);
+    b.add(0 as RelNanos, 'info', 5);
+    render(
+      <SelectionProvider store={createSelectionStore({})}>
+        <HistogramCard buckets={b} series={SEVERITY_SERIES} title="Logs over time" topFirst />
+      </SelectionProvider>,
+    );
+    const img = screen.getByRole('img');
+    const opt = JSON.parse(img.getAttribute('data-option') ?? '{}') as {
+      legend: { data: string[] };
+      series: { name: string; itemStyle: { color: string } }[];
+    };
+    expect(opt.legend.data).toEqual(['FATAL', 'ERROR', 'WARN', 'INFO', 'DEBUG', 'TRACE', 'UNSPECIFIED']);
+    // ECharts stacks the first series at the bottom, so fatal is emitted last.
+    expect(opt.series.map((s) => s.name)).toEqual([...opt.legend.data].reverse());
+    expect(screen.getByRole('region', { name: 'Logs over time' })).toBeTruthy();
+    expect(screen.getByText('7 logs')).toBeTruthy();
+    expect(img.getAttribute('aria-label')).toMatch(/Logs over time: 7 logs/);
+  });
+
+  test('severity tokens are css variables', () => {
+    for (const s of SEVERITY_SERIES) expect(s.color).toBe(`var(--oh-sev-${s.key})`);
   });
 });
