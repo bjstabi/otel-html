@@ -1,4 +1,5 @@
 import { describe, expect, test, vi } from 'vitest';
+import type { RelNanos } from '../../src/model/ids.js';
 import { detailOf, traceRow } from './trace-rows.js';
 
 vi.mock('../../src/viewer/components/chart.js', () => ({ Chart: (): null => null }));
@@ -70,6 +71,48 @@ describe('flameOption', () => {
     expect(failing.some((c) => c.style?.stroke === THEME.ink)).toBe(true);
     // The error label is prefixed so colour is never the only cue.
     expect(String(failing.find((c) => c.type === 'text')?.style?.text ?? '✕')).toContain('✕');
+  });
+
+  test('outlineSpanId draws a 2px accent outline and a label tail on that bar only; narrow outlined bars stay unmerged', () => {
+    const o = flameOption(bars, THEME, { ...view, selectedSpanId: null, outlineSpanId: spanIdOf(2) });
+    const s = Array.isArray(o.series) ? o.series[0] : o.series;
+    const renderItem = (s as { renderItem: (p: unknown, a: unknown) => { children: Shape[] } }).renderItem;
+    const api = (i: number) => ({
+      value: (d: number) => [bars[i]?.depth ?? 0, bars[i]?.start ?? 0, bars[i]?.end ?? 0, i][d],
+      coord: ([x, y]: [number, number]) => [x, y * 18],
+    });
+    const cs = { coordSys: { x: 0, y: 0, width: 600, height: 100 } };
+    const hit = renderItem(cs, api(1)).children;
+    const ring = hit.find((c) => c.style?.stroke === THEME.accent);
+    expect(ring?.style).toMatchObject({ stroke: THEME.accent, lineWidth: 2 });
+    expect(hit.find((c) => c.type === 'text')?.style?.text).toContain('← emitted this log');
+    const other = renderItem(cs, api(0)).children;
+    expect(other.some((c) => c.style?.stroke === THEME.accent)).toBe(false);
+    expect(
+      buildFlameItems(bars, 10_000, null, spanIdOf(2)).some((i) => i.kind === 'bar' && i.index === 1),
+    ).toBe(true);
+  });
+
+  test('markers become dashed accent markLines at the marker time', () => {
+    const o = flameOption(bars, THEME, {
+      ...view,
+      markers: [{ time: 250 as RelNanos, label: 'this log' }],
+    });
+    const s = Array.isArray(o.series) ? o.series[0] : o.series;
+    const line = (
+      s as {
+        markLine?: {
+          data: { xAxis: number; label: { formatter: string } }[];
+          lineStyle: { color: string; type: string };
+        };
+      }
+    ).markLine;
+    expect(line?.data).toHaveLength(1);
+    expect(line?.data[0]?.xAxis).toBe(250);
+    expect(line?.data[0]?.label.formatter).toBe('this log');
+    expect(line?.lineStyle).toMatchObject({ color: THEME.accent, type: 'dashed' });
+    const plain = Array.isArray(series) ? series[0] : series;
+    expect((plain as { markLine?: unknown }).markLine).toBeUndefined();
   });
 
   test('the minimap is a second custom series with a slider bound to the same zoom', () => {

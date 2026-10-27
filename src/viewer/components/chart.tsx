@@ -1,5 +1,11 @@
 import { BarChart, CustomChart, LineChart, PieChart, ScatterChart, TreemapChart } from 'echarts/charts';
-import { DataZoomComponent, GridComponent, LegendComponent, TooltipComponent } from 'echarts/components';
+import {
+  DataZoomComponent,
+  GridComponent,
+  LegendComponent,
+  MarkLineComponent,
+  TooltipComponent,
+} from 'echarts/components';
 import { type EChartsType, init, use } from 'echarts/core';
 import { CanvasRenderer } from 'echarts/renderers';
 import { type JSX, useEffect, useRef } from 'react';
@@ -17,6 +23,7 @@ use([
   GridComponent,
   TooltipComponent,
   LegendComponent,
+  MarkLineComponent,
   CanvasRenderer,
 ]);
 

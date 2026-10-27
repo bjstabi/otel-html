@@ -10,11 +10,15 @@ import { formatBytes } from '../../src/semconv/formatters.js';
 import type { DataSource } from '../../src/viewer/data/data-source.js';
 import { type LogRef, type LogRow, logRef } from '../../src/viewer/data/log-query.js';
 import { LogPanel } from '../../src/viewer/logs/log-panel.js';
+import { GoToContext } from '../../src/viewer/shell/go-to.js';
 import { MOVE_EVENT } from '../../src/viewer/shell/move-event.js';
 import { createSelectionStore } from '../../src/viewer/state/selection.js';
 import { SelectionProvider } from '../../src/viewer/state/selection-context.js';
+import { ThemeProvider } from '../../src/viewer/theme/theme-provider.js';
+import { detailOf, spanIdOf, traceRow } from './trace-rows.js';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+vi.mock('../../src/viewer/components/chart.js', () => ({ Chart: (): null => null }));
 afterEach(cleanup);
 
 const TRACE = '5134a3f57d52d9e9822e617916d38b35' as TraceId;
@@ -84,10 +88,12 @@ const ROWS = [
   row(2, { traceId: ORPHAN }),
   row(3, { body: '<img src=x onerror=alert(1)>' }),
 ];
+/** A log whose span is in the mocked trace; kept out of ROWS so the list-order tests are unchanged. */
+const LINKED_ROW = row(4, { traceId: TRACE, spanId: spanIdOf(2) });
 
 function source(): DataSource {
   const byRef = (ref: LogRef): LogRow => {
-    const r = ROWS.find((x) => x.ref === ref);
+    const r = [...ROWS, LINKED_ROW].find((x) => x.ref === ref);
     if (r === undefined)
       throw new OtelHtmlError('usage', {
         path: `log ${ref}`,
@@ -100,6 +106,13 @@ function source(): DataSource {
     manifest,
     getLog: (ref: LogRef) => Promise.resolve().then(() => byRef(ref)),
     hasTrace: (id: TraceId) => Promise.resolve(id === TRACE),
+    getTrace: () =>
+      Promise.resolve(
+        detailOf([
+          traceRow(1, null, 0, 10_000_000, { service: 'web', name: 'GET /pay', error: true }),
+          traceRow(2, 1, 1_000_000, 6_000_000, { service: 'payments', name: 'Charge' }),
+        ]),
+      ),
     surroundingLogs: (ref: LogRef) => {
       const at = ROWS.findIndex((x) => x.ref === ref);
       return Promise.resolve({
@@ -115,19 +128,24 @@ function source(): DataSource {
 function mount(ref: string, initial: Parameters<typeof createSelectionStore>[0] = {}) {
   const store = createSelectionStore({ log: ref as LogRef, ...initial });
   const onClose = vi.fn();
+  const goTo = vi.fn();
   render(
-    <SelectionProvider store={store}>
-      <Tooltip.Provider>
-        <LogPanel
-          dataSource={source()}
-          logRef={ref as LogRef}
-          logRefs={ROWS.map((r) => r.ref)}
-          onClose={onClose}
-        />
-      </Tooltip.Provider>
-    </SelectionProvider>,
+    <ThemeProvider>
+      <GoToContext.Provider value={goTo}>
+        <SelectionProvider store={store}>
+          <Tooltip.Provider>
+            <LogPanel
+              dataSource={source()}
+              logRef={ref as LogRef}
+              logRefs={ROWS.map((r) => r.ref)}
+              onClose={onClose}
+            />
+          </Tooltip.Provider>
+        </SelectionProvider>
+      </GoToContext.Provider>
+    </ThemeProvider>,
   );
-  return { store, onClose };
+  return { store, onClose, goTo };
 }
 
 describe('LogPanel', () => {
@@ -273,5 +291,41 @@ describe('LogPanel', () => {
     expect(within(panel).getByRole('button', { name: 'Wrapped' }).getAttribute('aria-pressed')).toBe('false');
     await user.click(within(panel).getByRole('button', { name: 'Close log' }));
     expect(onClose).toHaveBeenCalled();
+  });
+
+  describe('Trace tab', () => {
+    test('shows the trace header, the flame graph with the emitting span outlined and Open trace', async () => {
+      const user = userEvent.setup();
+      const { goTo } = mount('0.4', { ltab: 'trace' });
+      const panel = await screen.findByTestId('log-panel');
+      const tab = await within(panel).findByTestId('log-trace-tab');
+      expect((await within(tab).findAllByRole('heading', { level: 3 }))[0]?.textContent).toContain('web');
+      expect(within(tab).getAllByText(/2 spans/)).toBeTruthy();
+      expect(within(tab).getByText('Error')).toBeTruthy();
+      expect(within(tab).getByTestId('flame-graph')).toBeTruthy();
+      const outline = within(tab).getByTestId('flame-outline');
+      expect(outline.textContent).toContain('payments · Charge');
+      expect(outline.textContent).toContain('emitted this log');
+      await user.click(within(tab).getByRole('button', { name: /Open trace/ }));
+      expect(goTo).toHaveBeenCalledWith('traces', `/traces/trace/${TRACE}`, { span: spanIdOf(2) });
+    });
+
+    test('clicking a span in the Waterfall opens the trace overlay and closes the log', async () => {
+      const user = userEvent.setup();
+      const { store } = mount('0.4', { ltab: 'trace' });
+      const tab = await within(await screen.findByTestId('log-panel')).findByTestId('log-trace-tab');
+      await user.click(await within(tab).findByRole('button', { name: 'Waterfall' }));
+      await user.click(within(tab).getByText(/payments/));
+      expect(store.getState().logRef).toBeNull();
+      expect(store.getState().traceId).toBe(TRACE);
+      expect(store.getState().spanId).toBe(spanIdOf(2));
+    });
+
+    test('a span_id that is not in the trace gives a muted note and no outline', async () => {
+      mount('0.1', { ltab: 'trace' });
+      const tab = await within(await screen.findByTestId('log-panel')).findByTestId('log-trace-tab');
+      expect((await within(tab).findByRole('note')).textContent).toBe(`span ${SPAN} is not in this trace`);
+      expect(within(tab).queryByTestId('flame-outline')).toBeNull();
+    });
   });
 });

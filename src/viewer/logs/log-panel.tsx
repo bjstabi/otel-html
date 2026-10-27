@@ -14,7 +14,7 @@ import { type LogRef, type LogRow, refParts } from '../data/log-query.js';
 import { MOVE_EVENT } from '../shell/move-event.js';
 import { CONTROL, CopyLink } from '../shell/page-chrome.js';
 import { useSelection } from '../state/selection-context.js';
-import { AttributesTab, LogResourceTab, SurroundingTab, TraceTab } from './log-tabs.js';
+import { AttributesTab, LogResourceTab, LogTraceTab, SurroundingTab } from './log-tabs.js';
 import { availableLogTabs, isLogTabId, type LogTabId } from './tabs.js';
 
 export interface LogPanelProps {
@@ -265,7 +265,7 @@ export function LogPanel(props: LogPanelProps): JSX.Element {
       case 'attributes':
         return <AttributesTab row={r} />;
       case 'trace':
-        return <TraceTab />;
+        return <LogTraceTab dataSource={dataSource} row={r} />;
       case 'surrounding':
         return <SurroundingTab dataSource={dataSource} row={r} epoch={epoch} />;
       case 'resource':
