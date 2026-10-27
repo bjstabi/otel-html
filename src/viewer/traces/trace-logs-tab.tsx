@@ -31,6 +31,8 @@ export function logScopeQuery(scope: { traceId: TraceId; spanId?: SpanId }): str
   return scope.spanId === undefined ? trace : `${trace} and span_id.string == "${scope.spanId}"`;
 }
 
+const DEFAULT_SORT: SortState = { column: 'time', dir: 'asc' };
+
 function sorted(rows: readonly LogRow[], sort: SortState): readonly LogRow[] {
   const by = LOG_SORTS[sort.column] ?? LOG_SORTS.time;
   const sign = sort.dir === 'asc' ? 1 : -1;
@@ -45,7 +47,10 @@ export function TraceLogsTab(props: {
 }): JSX.Element {
   const { rows, scope, epoch } = props;
   const goTo = useGoTo();
-  const [sort, setSort] = useState<SortState>({ column: 'time', dir: 'asc' });
+  // The sort belongs to the trace or span it was chosen on: opening another one starts from time ascending.
+  const scopeKey = 'spanId' in scope ? `${scope.traceId}/${scope.spanId}` : scope.traceId;
+  const [chosen, setChosen] = useState<{ scopeKey: string; sort: SortState } | null>(null);
+  const sort = chosen !== null && chosen.scopeKey === scopeKey ? chosen.sort : DEFAULT_SORT;
   const shown = useMemo(() => sorted(rows, sort), [rows, sort]);
   const q = logScopeQuery(scope);
   const testId = 'spanId' in scope ? 'span-logs-tab' : 'trace-logs-tab';
@@ -63,7 +68,7 @@ export function TraceLogsTab(props: {
       <LogList
         rows={shown}
         sort={sort}
-        onSort={setSort}
+        onSort={(next) => setChosen({ scopeKey, sort: next })}
         onRowClick={(r) => goTo('logs', '/logs', { q, log: r.ref, ltab: 'attributes' })}
         selectedRef={null}
         epoch={epoch}
