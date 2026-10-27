@@ -6,6 +6,7 @@ import { parseUnixNanos, type RelNanos } from '../../src/model/ids.js';
 import type { ResourceRecord, ScopeRecord } from '../../src/model/records.js';
 import { LogList } from '../../src/viewer/components/log-list.js';
 import { type LogRow, logRef } from '../../src/viewer/data/log-query.js';
+import { LOG_COLUMNS_UI } from '../../src/viewer/logs/columns.js';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 afterEach(cleanup);
@@ -105,6 +106,25 @@ describe('LogList', () => {
     expect(rowEl().style.height).toBe('76px');
     await userEvent.setup().selectOptions(select, '10');
     expect(rowEl().style.height).toBe('216px');
+  });
+
+  test('the lines option clamps the body cell to that many lines', async () => {
+    mount([row(0)]);
+    const clamp = (): string => {
+      const el = screen.getByText('body 0');
+      return el.style.getPropertyValue('-webkit-line-clamp') || el.style.webkitLineClamp;
+    };
+    expect(clamp()).toBe('1');
+    await userEvent.setup().selectOptions(screen.getByRole('combobox', { name: 'Lines' }), '3');
+    expect(clamp()).toBe('3');
+  });
+
+  test('its columns are the ones LOG_COLUMNS_UI names, in order, so the explorer sorts what the list shows', () => {
+    mount([row(0)]);
+    const shown = screen.getAllByRole('columnheader').map((h) => h.textContent?.replace(/[^A-Za-z]/g, ''));
+    expect(shown).toEqual(LOG_COLUMNS_UI.map((c) => c.header));
+    const sortable = screen.getAllByRole('columnheader').filter((h) => h.hasAttribute('aria-sort'));
+    expect(sortable).toHaveLength(LOG_COLUMNS_UI.filter((c) => c.sort !== undefined).length);
   });
 
   test('clicking a row reports it; sort headers report the sort column', async () => {
