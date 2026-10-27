@@ -45,6 +45,7 @@ run = "pnpm exec vite build"
 run = "mise run build:lib && mise run build:viewer"
 
 [tasks."test:e2e"]
+shell = "bash -c"
 depends = ["build"]
 usage = 'arg "[args]" var=#true'
 # Timing-sensitive specs (@perf) run alone afterwards, one worker, so parallel browsers do not steal their CPU.
@@ -60,6 +61,7 @@ pnpm exec playwright test --grep @perf --workers=1 "$@"
 # Compiles standalone binaries into dist/bin/ (needs `mise run build` first). All five targets by default;
 # `mise run build:binaries -- --target darwin-arm64` builds one and merges its line into SHA256SUMS.
 [tasks."build:binaries"]
+shell = "bash -c"
 usage = 'arg "[args]" var=#true'
 run = """
 eval "set -- $usage_args"
@@ -72,6 +74,7 @@ run = "pnpm exec publint && pnpm exec attw --pack --profile esm-only"
 
 # Chromium only (file and http projects): the quick loop while iterating; `test:e2e` is the full matrix.
 [tasks."test:e2e:chromium"]
+shell = "bash -c"
 depends = ["build"]
 run = """
 pnpm exec playwright install chromium
@@ -85,6 +88,7 @@ run = "bun scripts/fixtures.ts"
 
 # Converts the `small` fixture into a report and opens it in the browser. Interactive only: refuses to run in CI.
 [tasks.demo]
+shell = "bash -c"
 depends = ["build"]
 run = """
 if [ -n "$CI" ]; then echo 'demo opens a browser and does not run in CI' >&2; exit 1; fi
