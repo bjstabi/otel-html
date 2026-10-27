@@ -114,13 +114,20 @@ export interface LogTraceRow {
 export type LogQueryResult = {
   /** Matched logs; patterns in patterns mode; traces in traces mode. */
   total: number;
+  /** Logs that matched the filter, in every mode (`total` counts patterns or traces in those modes). */
+  matched: number;
   facets: FacetCounts;
   buckets: TimeBuckets<LogSeverityKey>;
   /** Chunks scanned of all chunks; null when the result is exact. */
   partial: { scanned: number; total: number } | null;
 } & (
   | { mode: 'logs'; rows: readonly LogRow[] }
-  | { mode: 'patterns'; rows: readonly PatternRow[] }
+  | {
+      mode: 'patterns';
+      rows: readonly PatternRow[];
+      /** Matched logs Drain could not cluster (cluster cap reached); they are in `matched` but in no pattern. */
+      unclustered: number;
+    }
   | { mode: 'traces'; rows: readonly LogTraceRow[] }
 );
 
@@ -209,7 +216,7 @@ export class LogQueryRun {
   readonly #ticker: AbortTicker;
   readonly #condition: CompiledCondition<'log_record'> | null;
   readonly #window: TimeWindow | null;
-  readonly #rollups = new LogRollups(QUERY_FACET_CAPS);
+  readonly #rollups: LogRollups;
   readonly #matched: LogRow[] = [];
   readonly #traces = new Map<TraceId, TraceGroup>();
   readonly #logCompare: ((a: LogRow, b: LogRow) => number) | null;
@@ -220,6 +227,8 @@ export class LogQueryRun {
   constructor(q: LogQuery, signal?: AbortSignal) {
     checkLimit(q.limit);
     this.#q = q;
+    // Drain is the costly part of the rollups; only patterns mode reads it.
+    this.#rollups = new LogRollups(QUERY_FACET_CAPS, { cluster: q.mode === 'patterns' });
     // "Scan entire run" means the whole run, whatever window the view had.
     this.#window = q.scanAll ? null : q.window;
     this.#signal = signal;
@@ -279,7 +288,12 @@ export class LogQueryRun {
   finish(partial: LogQueryResult['partial']): LogQueryResult {
     throwIfAborted(this.#signal);
     const { limit, sort, mode } = this.#q;
-    const common = { facets: this.#rollups.facets, buckets: this.#rollups.buckets, partial };
+    const common = {
+      matched: this.#count,
+      facets: this.#rollups.facets,
+      buckets: this.#rollups.buckets,
+      partial,
+    };
     switch (mode) {
       case 'logs': {
         const compare = this.#logCompare ?? this.#unreachable();
@@ -294,7 +308,13 @@ export class LogQueryRun {
           limit,
           ordered(sort.dir, compare, (a, b) => a.id - b.id),
         );
-        return { ...common, mode, rows, total: all.length };
+        return {
+          ...common,
+          mode,
+          rows,
+          total: all.length,
+          unclustered: this.#rollups.patterns.unclustered,
+        };
       }
       case 'traces': {
         const compare = this.#traceCompare ?? this.#unreachable();

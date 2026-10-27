@@ -281,14 +281,45 @@ describe('queryLogEntries', () => {
 
   test('facets and buckets describe the matched set', () => {
     const r = queryLogEntries(entries, base);
-    const sev = r.facets.toJSON();
-    expect(JSON.stringify(sev)).toContain('"error"');
+    expect(r.matched).toBe(13);
+    const counts = (key: string) => Object.fromEntries(r.facets.top(key, 10).map((v) => [v.value, v.count]));
+    expect(counts('severity')).toEqual({ error: 6, info: 4, warn: 2, debug: 1 });
+    expect(counts('service.name')).toEqual({ payments: 6, api: 7 });
     expect(r.buckets.total('error')).toBe(6);
     expect(r.buckets.total('warn')).toBe(2);
     expect(r.buckets.total('info')).toBe(4);
     const filtered = queryLogEntries(entries, { ...base, text: 'declined' });
-    expect(filtered.buckets.total('error')).toBe(6);
+    expect(filtered.matched).toBe(6);
+    expect(filtered.facets.top('severity', 10)).toEqual([{ value: 'error', count: 6 }]);
     expect(filtered.buckets.total('info')).toBe(0);
+  });
+
+  test('traces mode facets and buckets cover only logs that carry a trace_id', () => {
+    const r = queryLogEntries(entries, { ...base, mode: 'traces', sort: { column: 'first', dir: 'asc' } });
+    expect(r.matched).toBe(7);
+    const counts = Object.fromEntries(r.facets.top('severity', 10).map((v) => [v.value, v.count]));
+    expect(counts).toEqual({ error: 3, info: 2, warn: 2 });
+    expect(r.facets.top('trace.present', 5)).toEqual([{ value: 'yes', count: 7 }]);
+    expect(r.buckets.total('debug')).toBe(0);
+  });
+
+  const word = (n: number): string =>
+    [n % 26, Math.floor(n / 26) % 26, Math.floor(n / 676)].map((d) => String.fromCharCode(97 + d)).join('');
+
+  test('patterns mode reports unclustered logs once the cluster cap is hit', () => {
+    const logs = Array.from({ length: 4000 }, (_, i) =>
+      log({ body: str([0, 1, 2, 3].map((k) => word(i * 4 + k)).join(' ')) }),
+    );
+    const r = queryLogEntries(entriesOf(logs), {
+      ...base,
+      mode: 'patterns',
+      sort: { column: 'count', dir: 'desc' },
+      limit: 5000,
+    });
+    if (r.mode !== 'patterns') throw new Error('mode');
+    expect(r.matched).toBe(4000);
+    expect(r.unclustered).toBeGreaterThan(0);
+    expect(r.rows.reduce((n, p) => n + p.count, 0) + r.unclustered).toBe(4000);
   });
 
   test('units are matched logs, or matched traces in traces mode', () => {
@@ -310,7 +341,7 @@ describe('queryLogEntries', () => {
     );
   });
 
-  test('filters 200k logs in memory under 150 ms (median)', () => {
+  describe('perf (200k logs)', () => {
     const n = 200_000;
     const logs: LogRecordRecord[] = new Array<LogRecordRecord>(n);
     const bodies = Array.from({ length: 50 }, (_, k) => str(`op${k % 10} finished in step ${k}`));
@@ -323,10 +354,20 @@ describe('queryLogEntries', () => {
       });
     }
     const big = entriesOf(logs);
-    const q: LogQuery = { ...base, condition: 'log.severity_number >= SEVERITY_NUMBER_ERROR' };
-    const { result: r, ms } = medianMs(() => queryLogEntries(big, q));
-    expect(r.total).toBe(4000);
-    expect(ms).toBeLessThan(150 * PERF_FACTOR);
+
+    test('narrow filter (2% match) under 150 ms (median)', () => {
+      const q: LogQuery = { ...base, condition: 'log.severity_number >= SEVERITY_NUMBER_ERROR' };
+      const { result: r, ms } = medianMs(() => queryLogEntries(big, q));
+      expect(r.total).toBe(4000);
+      expect(ms).toBeLessThan(150 * PERF_FACTOR);
+    });
+
+    test('broad filter (98% match) under 150 ms (median)', () => {
+      const q: LogQuery = { ...base, condition: 'log.severity_number < SEVERITY_NUMBER_ERROR' };
+      const { result: r, ms } = medianMs(() => queryLogEntries(big, q));
+      expect(r.total).toBe(196_000);
+      expect(ms).toBeLessThan(150 * PERF_FACTOR);
+    });
   });
 });
 

@@ -57,7 +57,11 @@ export class LogRollups {
   facets: FacetCounts;
   patterns: Drain = new Drain();
 
-  constructor(opts: SpanRollupOptions) {
+  readonly #cluster: boolean;
+
+  /** `cluster: false` skips Drain (the `patterns` stay empty) for callers that never read them. */
+  constructor(opts: SpanRollupOptions, { cluster = true }: { cluster?: boolean } = {}) {
+    this.#cluster = cluster;
     this.facets = new FacetCounts(
       opts.facetValueCap,
       opts.facetKeyCap,
@@ -75,7 +79,7 @@ export class LogRollups {
       if (v !== undefined) this.#facet(f.key, v);
     }
     for (const a of facetableAttributes(log.attributes, CORE_KEYS)) this.#facet(a.key, a.value, a.kind);
-    this.patterns.add(anyValueToDisplay(log.body), severity, time);
+    if (this.#cluster) this.patterns.add(anyValueToDisplay(log.body), severity, time);
   }
 
   #facet(key: string, value: string, kind: 'string' | 'int' | 'double' | 'bool' = 'string'): void {
