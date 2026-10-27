@@ -260,9 +260,11 @@ for (const name of ['scale', 'huge'] as const) {
       const samples = await logsReadyMs(page, `${reportUrl(name)}/index.html#/logs`, true);
       const ms = median(samples);
       // Windowed: the landing shows the newest chunk(s), and says so, instead of reading all of them.
-      await expect(page.getByRole('status', { name: 'Partial results' })).toContainText(
-        new RegExp(`from \\d+ of ${logChunks} chunks`),
-      );
+      const note = page.getByRole('status', { name: 'Partial results' });
+      await expect(note).toContainText(new RegExp(`from \\d+ of ${logChunks} chunks`));
+      const [, read] = /from (\d+) of \d+ chunks/.exec((await note.textContent()) ?? '') ?? [];
+      expect(Number(read)).toBeGreaterThan(0);
+      expect(Number(read)).toBeLessThan(logChunks);
       await expect(page.getByRole('main').locator('output', { hasText: /\blogs\b/ })).toHaveText(
         new RegExp(`^${SCALE_LOGS} logs`),
       );
