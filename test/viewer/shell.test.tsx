@@ -172,6 +172,12 @@ describe('sidebar', () => {
     await waitFor(() => expect(window.location.hash).toBe('#/logs?t=1~2&mode=patterns'));
   });
 
+  test('the patterns redirect keeps an invalid mode so its error is reported', async () => {
+    renderShell('#/logs/patterns?mode=bogus');
+    expect((await screen.findByRole('alert')).textContent).toContain('mode');
+    expect(window.location.hash).not.toContain('mode=patterns');
+  });
+
   test('from patterns mode, Logs > Explorer leaves the mode and becomes current', async () => {
     const user = userEvent.setup();
     renderShell('#/logs?text=a&mode=patterns');
