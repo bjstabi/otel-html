@@ -30,7 +30,6 @@ test('Log panel Trace tab: the emitting span is outlined, and Open trace lands o
 
   // The Trace tab straight from the URL.
   await page.goto(`${base}#/logs?log=${ref}&ltab=trace`);
-  await page.reload();
   const panel = page.getByTestId('log-panel');
   const tab = panel.getByTestId('log-trace-tab');
   await expect(tab).toBeVisible();

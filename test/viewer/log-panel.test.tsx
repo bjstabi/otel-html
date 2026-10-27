@@ -18,7 +18,13 @@ import { ThemeProvider } from '../../src/viewer/theme/theme-provider.js';
 import { detailOf, spanIdOf, traceRow } from './trace-rows.js';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-vi.mock('../../src/viewer/components/chart.js', () => ({ Chart: (): null => null }));
+const charts = vi.hoisted((): unknown[] => []);
+vi.mock('../../src/viewer/components/chart.js', () => ({
+  Chart: (p: { option: unknown }): null => {
+    charts.push(p.option);
+    return null;
+  },
+}));
 afterEach(cleanup);
 
 const TRACE = '5134a3f57d52d9e9822e617916d38b35' as TraceId;
@@ -90,10 +96,14 @@ const ROWS = [
 ];
 /** A log whose span is in the mocked trace; kept out of ROWS so the list-order tests are unchanged. */
 const LINKED_ROW = row(4, { traceId: TRACE, spanId: spanIdOf(2) });
+const UNTIMED_ROW = {
+  ...row(5, { traceId: TRACE, spanId: spanIdOf(2), time: null, observed: false }),
+  ref: logRef(0, 5),
+};
 
 function source(): DataSource {
   const byRef = (ref: LogRef): LogRow => {
-    const r = [...ROWS, LINKED_ROW].find((x) => x.ref === ref);
+    const r = [...ROWS, LINKED_ROW, UNTIMED_ROW].find((x) => x.ref === ref);
     if (r === undefined)
       throw new OtelHtmlError('usage', {
         path: `log ${ref}`,
@@ -319,6 +329,23 @@ describe('LogPanel', () => {
       expect(store.getState().logRef).toBeNull();
       expect(store.getState().traceId).toBe(TRACE);
       expect(store.getState().spanId).toBe(spanIdOf(2));
+    });
+
+    test('the this-log marker is drawn at the log time, and not for a log without any time', async () => {
+      const markLineOf = (): unknown => {
+        const opts = charts as { series?: { markLine?: unknown }[] }[];
+        return opts.find((o) => o.series?.[0]?.markLine !== undefined)?.series?.[0]?.markLine;
+      };
+      charts.length = 0;
+      mount('0.4', { ltab: 'trace' });
+      await screen.findByTestId('flame-outline');
+      expect(markLineOf()).toBeDefined();
+      cleanup();
+      charts.length = 0;
+      mount('0.5', { ltab: 'trace' });
+      await screen.findByTestId('flame-outline');
+      expect(charts.length).toBeGreaterThan(0);
+      expect(markLineOf()).toBeUndefined();
     });
 
     test('a span_id that is not in the trace gives a muted note and no outline', async () => {

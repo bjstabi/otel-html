@@ -269,4 +269,12 @@ describe('logs selection', () => {
       { s: 'ltab=surrounding', mode: 'push' },
     ]);
   });
+
+  test('openSpanFromLog is one push: trace and span set, log and ltab dropped', () => {
+    const store = createSelectionStore({ log: parseLogRef('3.4', 'log'), ltab: 'trace' });
+    const h = fakeHistory('log=3.4&ltab=trace');
+    bindUrl(store, h, () => undefined);
+    store.getState().openSpanFromLog(TRACE, SPAN);
+    expect(h.writes).toEqual([{ s: `trace=${TRACE}&span=${SPAN}`, mode: 'push' }]);
+  });
 });

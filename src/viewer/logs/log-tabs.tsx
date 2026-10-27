@@ -99,7 +99,7 @@ const VIEW_BTN = 'rounded-full px-3 py-0.5 text-sm';
  */
 export function LogTraceTab(props: { dataSource: DataSource; row: LogRow }): JSX.Element {
   const { dataSource, row } = props;
-  const sel = useSelection((s) => s);
+  const openSpanFromLog = useSelection((s) => s.openSpanFromLog);
   const goTo = useGoTo();
   const colors = useColorAssigner();
   const [view, setView] = useState<'flame' | 'waterfall'>('flame');
@@ -140,9 +140,7 @@ export function LogTraceTab(props: { dataSource: DataSource; row: LogRow }): JSX
   const facts = traceFacts(detail);
   const inTrace = spanId !== null && detail.tree.byId.has(spanId);
   const select = (id: SpanId): void => {
-    sel.selectLog(null);
-    sel.selectTrace(traceId);
-    sel.selectSpan(id);
+    openSpanFromLog(traceId, id);
   };
   return (
     <div data-testid="log-trace-tab" className="flex flex-col gap-3">

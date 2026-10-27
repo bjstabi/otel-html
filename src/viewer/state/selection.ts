@@ -71,6 +71,8 @@ export interface Selection {
   selectTrace(id: TraceId | null): void;
   selectSpan(id: SpanId | null): void;
   selectLog(ref: LogRef | null): void;
+  /** The log panel's Trace tab opens a span: closes the log, opens the trace and span, resets the log tab, as one history entry. */
+  openSpanFromLog(traceId: TraceId, spanId: SpanId): void;
   clear(key: ClearKey): void;
 }
 
@@ -89,6 +91,7 @@ export type SelectionData = Omit<
   | 'selectTrace'
   | 'selectSpan'
   | 'selectLog'
+  | 'openSpanFromLog'
   | 'clear'
 >;
 
@@ -241,6 +244,8 @@ export function createSelectionStore(initial: UrlState): StoreApi<Selection> {
     selectTrace: (traceId) => set({ traceId, spanId: null }),
     selectSpan: (spanId) => set({ spanId }),
     selectLog: (logRef) => set({ logRef }),
+    openSpanFromLog: (traceId, spanId) =>
+      set({ logRef: null, traceId, spanId, tabs: { ...get().tabs, log: DEFAULT_LOG_TAB } }),
     clear: (key) => {
       switch (key) {
         case 'window':
