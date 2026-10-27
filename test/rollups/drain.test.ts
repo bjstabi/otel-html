@@ -128,6 +128,16 @@ describe('Drain', () => {
     expect(a.unclustered).toBe(6);
   });
 
+  it('bodies rejected at the cluster cap leave the routing tree untouched', () => {
+    const d = new Drain();
+    d.add('a1 b1 tail one', 'info', t(0));
+    for (let i = 0; d.clusters().length < DRAIN_PARAMS.maxClusters; i++) d.add(letters(i), 'info', t(0));
+    // Rejected: its first token must not become a routing child (it would hide the wildcard cluster).
+    expect(d.add('zed q1 other word', 'info', t(1))).toBe(-1);
+    expect(d.add('zed b1 tail one', 'info', t(2))).toBe(0);
+    expect(first(d).count).toBe(2);
+  });
+
   it('does not split a surrogate pair when cutting the sample', () => {
     const c = clusterOf(`${'x'.repeat(255)}\u{1F600}tail`);
     expect(c.sample).toBe('x'.repeat(255));
