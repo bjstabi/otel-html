@@ -166,6 +166,25 @@ describe('session state', () => {
       `state.traceIndex.5b.${TRACE_ID}.chunks[0]`,
     );
   });
+  test('rejects a trace index entry with a bad log chunk key', () => {
+    const bad = {
+      '5b': {
+        [TRACE_ID]: {
+          chunks: [],
+          logChunks: ['chunks/logs/000000', 'chunks/spans/000000'],
+          start: 0,
+          end: 1,
+          spans: 0,
+          logs: 1,
+          errors: 0,
+          root: null,
+        },
+      },
+    };
+    expect(failure(() => parseSessionState({ ...state, traceIndex: bad })).path).toBe(
+      `state.traceIndex.5b.${TRACE_ID}.logChunks[1]`,
+    );
+  });
   test('rejects with precise path', () => {
     expect(failure(() => parseSessionState({ ...state, nextChunk: { spans: 1, logs: 1 } })).path).toBe(
       'state.nextChunk.metrics',
