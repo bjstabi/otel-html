@@ -177,7 +177,42 @@ export function patternRowsOf(d: Drain): PatternRow[] {
   }));
 }
 
-const byTimeThenRef = (a: LogRow, b: LogRow): number => a.time - b.time || compareRefs(a.ref, b.ref);
+/** Time order with the ref as tiebreak: the order of a trace's logs and of Surrounding logs. */
+export const byTimeThenRef = (a: LogRow, b: LogRow): number => a.time - b.time || compareRefs(a.ref, b.ref);
+
+/** Logs from the same stream as `target`: same service and same host. */
+export function sameStream(target: LogRow, row: LogRow): boolean {
+  return row.service === target.service && row.host === target.host;
+}
+
+/**
+ * The `n` same-stream logs on each side of `target` among `rows` (any order; `target` itself may be among them),
+ * in time order with the ref as tiebreak.
+ */
+export function surroundingIn(
+  target: LogRow,
+  rows: readonly LogRow[],
+  n: number,
+): { before: LogRow[]; after: LogRow[] } {
+  if (!Number.isInteger(n) || n < 0) {
+    throw new OtelHtmlError('usage', {
+      path: 'surrounding.n',
+      expected: 'a non-negative integer',
+      actual: String(n),
+    });
+  }
+  const before: LogRow[] = [];
+  const after: LogRow[] = [];
+  for (const r of rows) {
+    if (!sameStream(target, r)) continue;
+    const c = byTimeThenRef(r, target);
+    if (c < 0) before.push(r);
+    else if (c > 0) after.push(r);
+  }
+  before.sort(byTimeThenRef);
+  after.sort(byTimeThenRef);
+  return { before: n === 0 ? [] : before.slice(-n), after: after.slice(0, n) };
+}
 
 const LOG_SORTS: Readonly<Record<string, (a: LogRow, b: LogRow) => number>> = {
   time: (a, b) => a.time - b.time,
@@ -285,6 +320,18 @@ export class LogQueryRun {
     });
   }
 
+  /** Patterns-mode rows of `d` in this query's sort and limit (the run's own clusters, or the writer's rollup). */
+  patternsOf(d: Drain): { mode: 'patterns'; rows: PatternRow[]; total: number; unclustered: number } {
+    const compare = this.#patternCompare ?? this.#unreachable();
+    const all = patternRowsOf(d);
+    const rows = topK(
+      all,
+      this.#q.limit,
+      ordered(this.#q.sort.dir, compare, (a, b) => a.id - b.id),
+    );
+    return { mode: 'patterns', rows, total: all.length, unclustered: d.unclustered };
+  }
+
   finish(partial: LogQueryResult['partial']): LogQueryResult {
     throwIfAborted(this.#signal);
     const { limit, sort, mode } = this.#q;
@@ -300,22 +347,8 @@ export class LogQueryRun {
         const rows = topK(this.#matched, limit, ordered(sort.dir, compare, byTimeThenRef));
         return { ...common, mode, rows, total: this.#matched.length };
       }
-      case 'patterns': {
-        const compare = this.#patternCompare ?? this.#unreachable();
-        const all = patternRowsOf(this.#rollups.patterns);
-        const rows = topK(
-          all,
-          limit,
-          ordered(sort.dir, compare, (a, b) => a.id - b.id),
-        );
-        return {
-          ...common,
-          mode,
-          rows,
-          total: all.length,
-          unclustered: this.#rollups.patterns.unclustered,
-        };
-      }
+      case 'patterns':
+        return { ...common, ...this.patternsOf(this.#rollups.patterns) };
       case 'traces': {
         const compare = this.#traceCompare ?? this.#unreachable();
         const all: LogTraceRow[] = [...this.#traces].map(([traceId, g]) => ({

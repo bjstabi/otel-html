@@ -2,7 +2,7 @@ import { wrapDataFile } from '../../src/format/data-file.js';
 import type { Manifest } from '../../src/format/manifest.js';
 import { openSession } from '../../src/writer/session.js';
 import type { JsonObject } from '../../test-support/otlp-builders.js';
-import { attr, span } from '../../test-support/otlp-builders.js';
+import { attr, logRecord, span } from '../../test-support/otlp-builders.js';
 import { reportFilesFromSnapshot } from '../../test-support/scripted-loader.js';
 import { createTestWriter, EPOCH_NS, otlp, testConfig } from '../../test-support/writer-deps.js';
 import { manifestOf } from '../writer/helpers.js';
@@ -142,6 +142,77 @@ export async function buildSpreadReport(): Promise<Fixture> {
   ];
   for (const requests of chunks) {
     for (const r of requests) await session.add(otlp(r), 'spread');
+    await session.flush();
+  }
+  await session.close();
+  return { files: reportFilesFromSnapshot(w.fs.snapshot(), OUT), manifest: manifestOf(w, OUT) };
+}
+
+/** Log chunks in `buildLogReport`, one per flush. */
+export const LOG_CHUNK_COUNT = 10;
+/** A trace with spans (span chunk 0) whose logs all sit in log chunk 2. */
+export const LOG_TRACE = traceIdOf(0);
+/** The root span of `LOG_TRACE`. */
+export const LOG_TRACE_ROOT_SPAN = spanId(0, 0);
+/** A trace that only has logs (log chunk 3); its one log carries `LOG_TRACE_ROOT_SPAN`, a span not in its trace. */
+export const ORPHAN_LOG_TRACE = traceIdOf(5);
+/** Log stream (service `api`, host `h1`) bodies: `tick <chunk>.<j>`, `j` in 0..1. */
+const TICKS_PER_CHUNK = 2;
+
+/**
+ * Spans of `traceRequest(0)` in span chunk 0, then `LOG_CHUNK_COUNT` log chunks. Log chunk `k` starts `k` steps
+ * after the epoch and holds the `api`/`h1` ticks at +0 and +100 ns and an ERROR `noise <k>` log from `web`/`h2` at
+ * +50 ns. Chunk 2 adds two `LOG_TRACE` logs on its root span and one on span `deadbeefdeadbeef` (not in the trace);
+ * chunk 3 adds the `ORPHAN_LOG_TRACE` log.
+ */
+export async function buildLogReport(): Promise<Fixture> {
+  const w = createTestWriter();
+  const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'create' });
+  await session.add(otlp(traceRequest(0, new Set())), 'spans');
+  await session.flush();
+  const base = BigInt(EPOCH_NS);
+  const at = (k: number, ns: number): string => String(base + BigInt(k) * STEP_NS + BigInt(ns));
+  const resourceLogs = (service: string, host: string, logRecords: JsonObject[]): JsonObject => ({
+    resource: {
+      attributes: [attr('service.name', { stringValue: service }), attr('host.name', { stringValue: host })],
+    },
+    scopeLogs: [{ scope: { name: 'test-scope' }, logRecords }],
+  });
+  for (let k = 0; k < LOG_CHUNK_COUNT; k++) {
+    const ticks = Array.from({ length: TICKS_PER_CHUNK }, (_, j) =>
+      logRecord({ timeUnixNano: at(k, j * 100), body: { stringValue: `tick ${k}.${j}` } }),
+    );
+    const web = [
+      logRecord({
+        timeUnixNano: at(k, 50),
+        severityNumber: 17,
+        severityText: 'ERROR',
+        body: { stringValue: `noise ${k}` },
+      }),
+    ];
+    if (k === 2) {
+      const inTrace = (ns: number, span: string, body: string): JsonObject =>
+        logRecord({ timeUnixNano: at(k, ns), traceId: LOG_TRACE, spanId: span, body: { stringValue: body } });
+      web.push(
+        inTrace(20, LOG_TRACE_ROOT_SPAN, 'trace log b'),
+        inTrace(10, LOG_TRACE_ROOT_SPAN, 'trace log a'),
+        inTrace(30, 'deadbeefdeadbeef', 'trace log on a missing span'),
+      );
+    }
+    if (k === 3) {
+      web.push(
+        logRecord({
+          timeUnixNano: at(k, 60),
+          traceId: ORPHAN_LOG_TRACE,
+          spanId: LOG_TRACE_ROOT_SPAN,
+          body: { stringValue: 'orphan log' },
+        }),
+      );
+    }
+    await session.add(
+      otlp({ resourceLogs: [resourceLogs('api', 'h1', ticks), resourceLogs('web', 'h2', web)] }),
+      `logs${k}`,
+    );
     await session.flush();
   }
   await session.close();

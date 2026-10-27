@@ -85,5 +85,6 @@ export function detailOf(spans: readonly SpanRow[]): TraceDetail {
     tree: buildTraceTree(spans),
     resources: () => RESOURCE,
     scopes: () => SCOPE,
+    logCount: 0,
   };
 }

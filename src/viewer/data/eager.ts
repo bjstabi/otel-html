@@ -1,13 +1,13 @@
 import type { Manifest } from '../../format/manifest.js';
 import type { TraceId } from '../../model/ids.js';
-import type { StrategySource } from './data-source.js';
+import type { SpanStrategy } from './data-source.js';
 import { epochOf, loadSpanChunk } from './load.js';
 import type { ScriptLoader } from './script-loader.js';
 import { querySpanEntries, type SpanEntry } from './span-query.js';
 import { assembleTrace } from './trace-detail.js';
 
 /** Load every span chunk listed in the manifest once; queries then filter in memory and are exact. */
-export async function createEagerSource(loader: ScriptLoader, manifest: Manifest): Promise<StrategySource> {
+export async function createEagerSource(loader: ScriptLoader, manifest: Manifest): Promise<SpanStrategy> {
   const epoch = epochOf(manifest);
   const loaded = await Promise.all(
     manifest.chunks.filter((c) => c.signal === 'spans').map((c) => loadSpanChunk(loader, c, epoch)),

@@ -1,7 +1,7 @@
 import { OtelHtmlError } from '../../model/errors.js';
 import type { TraceId } from '../../model/ids.js';
 import type { ResourceRecord, ResourceRef, ScopeRecord, ScopeRef } from '../../model/records.js';
-import type { TraceDetail } from './data-source.js';
+import type { SpanTrace } from './data-source.js';
 import type { LoadedChunk, SpanEntry, SpanRow } from './span-query.js';
 import { buildTraceTree } from './trace-tree.js';
 
@@ -14,7 +14,7 @@ export function traceNotFound(traceId: TraceId): OtelHtmlError {
 }
 
 /** Assemble a trace from entries of any number of chunks, rebasing chunk-local refs onto shared tables. */
-export function assembleTrace(traceId: TraceId, entries: readonly SpanEntry[]): TraceDetail {
+export function assembleTrace(traceId: TraceId, entries: readonly SpanEntry[]): SpanTrace {
   if (entries.length === 0) throw traceNotFound(traceId);
   const offsets = new Map<LoadedChunk, { resource: number; scope: number }>();
   const resources: ResourceRecord[] = [];

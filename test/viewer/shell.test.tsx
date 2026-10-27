@@ -62,6 +62,12 @@ const dataSource: DataSource = {
   getTrace: unused,
   hasTrace: unused,
   percentileOf: unused,
+  logStrategy: 'eager',
+  logLanding: unused,
+  queryLogs: unused,
+  getLog: unused,
+  traceLogs: unused,
+  surroundingLogs: unused,
 };
 
 function renderShell(hash: string, ds: DataSource = dataSource): void {
