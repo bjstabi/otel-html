@@ -109,7 +109,33 @@ export function unwrapDataFile(text: string, expectedKey: string): unknown {
 
 /** Turn `{"$i":"…"}` into bigint and `{"$b":"…"}` into Uint8Array, anywhere in a parsed payload. */
 export function reviveDataJson(v: unknown, path = '(root)'): unknown {
-  if (Array.isArray(v)) return v.map((x, i) => reviveDataJson(x, `${path}[${i}]`));
+  // Chunks hold millions of cells: walk without building a path per node, and only on a malformed tag walk
+  // again with paths so the error names where it is.
+  try {
+    return reviveFast(v);
+  } catch (e) {
+    if (!(e instanceof OtelHtmlError)) throw e;
+    return reviveWithPaths(v, path);
+  }
+}
+
+function reviveFast(v: unknown): unknown {
+  if (Array.isArray(v)) {
+    const out = new Array<unknown>(v.length);
+    for (let i = 0; i < v.length; i++) out[i] = reviveFast(v[i]);
+    return out;
+  }
+  if (typeof v !== 'object' || v === null) return v;
+  const keys = Object.keys(v);
+  const rec = v as Record<string, unknown>;
+  if (keys.length === 1 && (keys[0] === '$i' || keys[0] === '$b')) return reviveWithPaths(v, '');
+  const out: Record<string, unknown> = {};
+  for (const k of keys) out[k] = reviveFast(rec[k]);
+  return out;
+}
+
+function reviveWithPaths(v: unknown, path: string): unknown {
+  if (Array.isArray(v)) return v.map((x, i) => reviveWithPaths(x, `${path}[${i}]`));
   if (typeof v !== 'object' || v === null) return v;
   const entries = Object.entries(v);
   const only = entries.length === 1 ? entries[0] : undefined;
@@ -134,6 +160,6 @@ export function reviveDataJson(v: unknown, path = '(root)'): unknown {
     return base64ToBytes(only[1], path);
   }
   const out: Record<string, unknown> = {};
-  for (const [k, x] of entries) out[k] = reviveDataJson(x, path === '(root)' ? k : `${path}.${k}`);
+  for (const [k, x] of entries) out[k] = reviveWithPaths(x, path === '(root)' ? k : `${path}.${k}`);
   return out;
 }

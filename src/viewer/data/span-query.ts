@@ -10,6 +10,7 @@ import type { RedSeries } from '../../rollups/red.js';
 import { SpanRollups, type SpanStatusKey } from '../../rollups/span-rollups.js';
 import type { TimeBuckets } from '../../rollups/time-buckets.js';
 import { resourceName, serviceName } from '../../semconv/resource-name.js';
+import { topK } from './top-k.js';
 import { buildTraceTree, exclusiveTimeByService } from './trace-tree.js';
 
 /** Nanoseconds relative to the report epoch (same unit and range as `SpanRecord.start`). */
@@ -297,18 +298,21 @@ export class SpanQueryRun {
     let total: number;
     if (this.#compare !== null) {
       const compare = this.#compare;
-      rows = this.#matched
-        .map((e) => e.row)
-        .sort((a, b) => sign * compare(a, b) || a.span.start - b.span.start)
-        .slice(0, this.#q.limit);
+      rows = topK(
+        this.#matched.map((e) => e.row),
+        this.#q.limit,
+        (a, b) => sign * compare(a, b) || a.span.start - b.span.start,
+      );
       total = this.#matched.length;
     } else {
       const compare = this.#traceCompare;
       const hits = [...this.#traces]
         .filter(([, g]) => g.hit)
         .map(([id, g]) => traceRow(id, g.rows, factsOf?.(id)));
-      if (compare !== null) hits.sort((a, b) => sign * compare(a, b) || a.start - b.start);
-      rows = hits.slice(0, this.#q.limit);
+      rows =
+        compare === null
+          ? hits.slice(0, this.#q.limit)
+          : topK(hits, this.#q.limit, (a, b) => sign * compare(a, b) || a.start - b.start);
       total = hits.length;
     }
     return {

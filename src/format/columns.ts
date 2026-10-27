@@ -66,6 +66,15 @@ export interface DecodedColumns<R> {
 // Shared helpers
 // ---------------------------------------------------------------------------------------------
 
+function withPathPrefix(e: OtelHtmlError, prefix: string): OtelHtmlError {
+  return new OtelHtmlError(e.code, {
+    path: `${prefix}${e.path ?? ''}`,
+    ...(e.expected === undefined ? {} : { expected: e.expected }),
+    ...(e.actual === undefined ? {} : { actual: e.actual }),
+    ...(e.hint === undefined ? {} : { hint: e.hint }),
+  });
+}
+
 function bad(path: string, expected: string, actual: unknown): OtelHtmlError {
   const shown = actual === undefined ? 'nothing (missing)' : (JSON.stringify(actual) ?? String(actual));
   return new OtelHtmlError('invalid-report', {
@@ -616,7 +625,15 @@ export function decodeColumns<R>(spec: ColumnSpec<R>, payload: unknown): Decoded
     if (cells === undefined) throw bad(`cols.${col.name}`, 'a column array', undefined);
     if (cells.length !== p.n) throw bad(`cols.${col.name}`, `${p.n} cells (n)`, `${cells.length} cells`);
     const ctx: DecodeContext = { dict: p.dict, resources, scopes, prev: p.base };
-    return { name: col.name, values: cells.map((c, i) => decodeCell(col, c, `cols.${col.name}[${i}]`, ctx)) };
+    // Cells decode against an empty path; only a failing cell pays for building its `cols.<name>[i]` prefix.
+    const values = cells.map((c, i) => {
+      try {
+        return decodeCell(col, c, '', ctx);
+      } catch (e) {
+        throw e instanceof OtelHtmlError ? withPathPrefix(e, `cols.${col.name}[${i}]`) : e;
+      }
+    });
+    return { name: col.name, values };
   });
   const rows: R[] = [];
   for (let i = 0; i < p.n; i++) {

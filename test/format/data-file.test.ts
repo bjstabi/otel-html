@@ -67,6 +67,17 @@ describe('data files', () => {
     expect(() => reviveDataJson({ $i: 'abc' })).toThrowError(OtelHtmlError);
     expect(() => reviveDataJson({ $b: 5 })).toThrowError(OtelHtmlError);
     expect(reviveDataJson([{ $i: '5' }, 'x'])).toEqual([5n, 'x']);
+    const at = (v: unknown): unknown => {
+      try {
+        reviveDataJson(v);
+      } catch (e) {
+        return e instanceof OtelHtmlError ? e.path : e;
+      }
+      return 'revived';
+    };
+    expect(at({ cols: { start: [1, 2, { $i: 'x' }] } })).toBe('cols.start[2]');
+    expect(at([0, [{ ok: { $b: 5 } }]])).toBe('(root)[1][0].ok');
+    expect(at({ $i: 'abc' })).toBe('(root)');
   });
 
   test('wrapDataFile rejects values JSON cannot carry', () => {
