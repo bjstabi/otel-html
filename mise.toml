@@ -1,0 +1,95 @@
+[tools]
+node = "24.22.1"
+bun = "1.4.4"
+pnpm = "12.15.0"
+lefthook = "2.2.2"
+actionlint = "1.7.12"
+shellcheck = "0.11.0"
+claude = "latest"
+
+[tasks.setup]
+run = "pnpm install --frozen-lockfile && lefthook install"
+
+[tasks.lint]
+run = "pnpm exec biome ci --error-on-warnings . && actionlint .github/workflows/*.yml"
+
+[tasks.format]
+run = "pnpm exec biome format --write ."
+
+[tasks.typecheck]
+run = "pnpm exec tsc -p tsconfig.json --noEmit && pnpm exec tsc -p tsconfig.viewer.json --noEmit && pnpm exec tsc -p tsconfig.e2e.json --noEmit"
+
+[tasks."test:unit"]
+run = "pnpm exec vitest run"
+
+[tasks.knip]
+run = "pnpm exec knip"
+
+[tasks.gen]
+run = "pnpm exec buf generate && bun scripts/gen-schema.ts && bun scripts/gen-ottl.ts"
+
+[tasks."gen:check"]
+run = "bash scripts/gen-check.sh"
+
+[tasks.check]
+depends = ["lint", "typecheck", "test:unit", "knip"]
+
+[tasks."build:lib"]
+run = "pnpm exec tsdown"
+
+[tasks."build:viewer"]
+run = "pnpm exec vite build"
+
+# The lib build cleans dist/, so it runs first; the viewer build then adds dist/viewer/.
+[tasks.build]
+run = "mise run build:lib && mise run build:viewer"
+
+[tasks."test:e2e"]
+depends = ["build"]
+usage = 'arg "[args]" var=#true'
+# Timing-sensitive specs (@perf) run alone afterwards, one worker, so parallel browsers do not steal their CPU.
+# Budgets scale with OTEL_HTML_PERF_FACTOR on slow machines; they are never edited.
+# Extra playwright args (`mise run test:e2e -- --project 'firefox-*'`) are passed to both passes.
+run = """
+eval "set -- $usage_args"
+pnpm exec playwright install chromium firefox webkit
+pnpm exec playwright test --grep-invert @perf "$@"
+pnpm exec playwright test --grep @perf --workers=1 "$@"
+"""
+
+# Compiles standalone binaries into dist/bin/ (needs `mise run build` first). All five targets by default;
+# `mise run build:binaries -- --target darwin-arm64` builds one and merges its line into SHA256SUMS.
+[tasks."build:binaries"]
+usage = 'arg "[args]" var=#true'
+run = """
+eval "set -- $usage_args"
+bun scripts/build-binaries.ts "$@"
+"""
+
+[tasks."check:package"]
+depends = ["build"]
+run = "pnpm exec publint && pnpm exec attw --pack --profile esm-only"
+
+# Chromium only (file and http projects): the quick loop while iterating; `test:e2e` is the full matrix.
+[tasks."test:e2e:chromium"]
+depends = ["build"]
+run = """
+pnpm exec playwright install chromium
+pnpm exec playwright test --project='chromium-*' --grep-invert @perf
+pnpm exec playwright test --project='chromium-*' --grep @perf --workers=1
+"""
+
+# Regenerates fixtures/*.otlp.json with the OTel SDK (byte-stable). hostile.otlp.json is hand-authored and left alone.
+[tasks.fixtures]
+run = "bun scripts/fixtures.ts"
+
+# Converts the `small` fixture into a report and opens it in the browser. Interactive only: refuses to run in CI.
+[tasks.demo]
+depends = ["build"]
+run = """
+if [ -n "$CI" ]; then echo 'demo opens a browser and does not run in CI' >&2; exit 1; fi
+out="${TMPDIR:-/tmp}/otel-html-demo"
+rm -rf "$out"
+node dist/cli/main.js convert fixtures/small.otlp.json --out "$out" --title 'otel-html demo'
+if command -v open >/dev/null 2>&1; then open "$out/index.html"; else xdg-open "$out/index.html"; fi
+"""

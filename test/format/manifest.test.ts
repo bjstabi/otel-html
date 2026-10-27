@@ -1,0 +1,155 @@
+import { describe, expect, test } from 'vitest';
+import { type Manifest, ManifestSchema, parseManifest } from '../../src/format/manifest.js';
+import {
+  chunkPath,
+  LOCK_PATH,
+  MANIFEST_PATH,
+  rollupPath,
+  STATE_DIR,
+  shardOf,
+  traceShardPath,
+} from '../../src/format/paths.js';
+import { parseSessionState, SessionStateSchema } from '../../src/format/state.js';
+import { FORMAT_VERSION, REGISTRATION_GLOBAL } from '../../src/format/version.js';
+import { OtelHtmlError } from '../../src/model/errors.js';
+import { parseTraceId } from '../../src/model/ids.js';
+import { TRACE_ID } from '../../test-support/otlp-builders.js';
+
+const manifest = (): Manifest => ({
+  formatVersion: 1,
+  otelHtmlVersion: '0.1.0',
+  title: 't',
+  epochUnixNano: '1700000000000000000',
+  createdAt: '2026-10-25T00:00:00.000Z',
+  updatedAt: '2026-10-25T00:00:01.000Z',
+  complete: false,
+  range: { start: -5, end: 10 },
+  totals: { spans: 3, logs: 0, metrics: 0 },
+  decodedBytes: 1234,
+  chunks: [{ signal: 'spans', n: 1, path: chunkPath('spans', 1), start: -5, end: 10, count: 3, bytes: 900 }],
+  rollups: ['data/rollups/spans.js', 'data/rollups/logs.js', 'data/rollups/metrics.js'],
+  traceShards: ['data/traces/5b.js'],
+  config: { viewer: { eagerBudgetBytes: 75_000_000, listCap: 10_000, theme: 'system' } },
+});
+
+function failure(fn: () => unknown): OtelHtmlError {
+  try {
+    fn();
+  } catch (e) {
+    if (e instanceof OtelHtmlError) return e;
+    throw e;
+  }
+  throw new Error('expected failure');
+}
+
+describe('paths', () => {
+  test('constants and helpers', () => {
+    expect(FORMAT_VERSION).toBe(1);
+    expect(REGISTRATION_GLOBAL).toBe('__OH__');
+    expect(chunkPath('spans', 12)).toBe('data/chunks/spans/000012.js');
+    expect(chunkPath('metrics', 1234567)).toBe('data/chunks/metrics/1234567.js');
+    expect(traceShardPath('5b')).toBe('data/traces/5b.js');
+    expect(rollupPath('logs')).toBe('data/rollups/logs.js');
+    expect(MANIFEST_PATH).toBe('data/manifest.js');
+    expect(STATE_DIR).toBe('data/state');
+    expect(LOCK_PATH).toBe('data/state/lock.json');
+    expect(shardOf(parseTraceId(TRACE_ID, 't'))).toBe('5b');
+  });
+  test('chunkPath rejects a bad chunk number', () => {
+    expect(() => chunkPath('spans', -1)).toThrowError(/chunk number/);
+    expect(() => chunkPath('spans', 1.5)).toThrowError(/chunk number/);
+  });
+});
+
+describe('manifest', () => {
+  test('valid manifest parses', () => {
+    expect(ManifestSchema.parse(manifest())).toEqual(manifest());
+    expect(parseManifest(manifest())).toEqual(manifest());
+    expect(parseManifest({ ...manifest(), range: null })).toEqual({ ...manifest(), range: null });
+  });
+  test('rejects wrong format version with a precise path', () => {
+    const e = failure(() => parseManifest({ ...manifest(), formatVersion: 2 }));
+    expect(e.code).toBe('invalid-report');
+    expect(e.path).toBe('manifest.formatVersion');
+  });
+  test.each([
+    [
+      'chunk path with ..',
+      { chunks: [{ ...manifest().chunks[0], path: 'data/chunks/../x.js' }] },
+      'chunks[0].path',
+    ],
+    [
+      'chunk path with scheme',
+      { chunks: [{ ...manifest().chunks[0], path: 'https://evil.test/a.js' }] },
+      'chunks[0].path',
+    ],
+    [
+      'chunk path with leading _',
+      { chunks: [{ ...manifest().chunks[0], path: '_data/chunks/spans/000001.js' }] },
+      'chunks[0].path',
+    ],
+    [
+      'chunk path absolute',
+      { chunks: [{ ...manifest().chunks[0], path: '/data/chunks/spans/000001.js' }] },
+      'chunks[0].path',
+    ],
+    [
+      'chunk path not matching signal/n',
+      { chunks: [{ ...manifest().chunks[0], path: 'data/chunks/logs/000001.js' }] },
+      'chunks[0].path',
+    ],
+    ['rollup bare name', { rollups: ['spans'] }, 'rollups[0]'],
+    ['rollup traversal', { rollups: ['data/rollups/../../x.js'] }, 'rollups[0]'],
+    ['rollup scheme', { rollups: ['javascript:alert(1)'] }, 'rollups[0]'],
+    ['shard bare id', { traceShards: ['5b'] }, 'traceShards[0]'],
+    ['shard other dir', { traceShards: ['data/rollups/5b.js'] }, 'traceShards[0]'],
+    ['shard uppercase', { traceShards: ['data/traces/5B.js'] }, 'traceShards[0]'],
+  ])('rejects %s', (_name, patch, path) => {
+    expect(failure(() => parseManifest({ ...manifest(), ...patch })).path).toBe(`manifest.${path}`);
+  });
+  test('rejects a bad chunk entry with an indexed path', () => {
+    const m = manifest();
+    const e = failure(() => parseManifest({ ...m, chunks: [{ ...m.chunks[0], signal: 'traces' }] }));
+    expect(e.path).toBe('manifest.chunks[0].signal');
+  });
+  test('rejects unknown keys and bad epoch', () => {
+    expect(failure(() => parseManifest({ ...manifest(), extra: 1 })).path).toBe('manifest');
+    expect(failure(() => parseManifest({ ...manifest(), epochUnixNano: '12x' })).path).toBe(
+      'manifest.epochUnixNano',
+    );
+  });
+});
+
+describe('session state', () => {
+  const state = {
+    formatVersion: 1,
+    otelHtmlVersion: '0.1.0',
+    epochUnixNano: null,
+    nextChunk: { spans: 1, logs: 1, metrics: 1 },
+    rollups: { spans: { a: [1, 2] }, logs: {}, metrics: null },
+    dedupe: ['abc'],
+    traceIndex: {
+      '5b': {
+        [TRACE_ID]: { chunks: ['chunks/spans/000000'], start: 0, end: 5, spans: 2, errors: 0, root: null },
+      },
+    },
+  };
+  test('valid state parses', () => {
+    expect(SessionStateSchema.parse(state)).toEqual(state);
+    expect(parseSessionState({ ...state, epochUnixNano: '5' }).epochUnixNano).toBe('5');
+  });
+  test('rejects a trace index entry with a bad chunk key', () => {
+    const bad = {
+      '5b': { [TRACE_ID]: { chunks: ['../x'], start: 0, end: 1, spans: 1, errors: 0, root: null } },
+    };
+    expect(failure(() => parseSessionState({ ...state, traceIndex: bad })).path).toBe(
+      `state.traceIndex.5b.${TRACE_ID}.chunks[0]`,
+    );
+  });
+  test('rejects with precise path', () => {
+    expect(failure(() => parseSessionState({ ...state, nextChunk: { spans: 1, logs: 1 } })).path).toBe(
+      'state.nextChunk.metrics',
+    );
+    expect(failure(() => parseSessionState({ ...state, formatVersion: 3 })).code).toBe('invalid-report');
+  });
+});

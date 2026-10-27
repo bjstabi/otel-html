@@ -1,0 +1,105 @@
+import { describe, expect, test } from 'vitest';
+import { TraceShardSchema } from '../../src/format/trace-shard.js';
+import { parseSpanId, parseTraceId, type RelNanos } from '../../src/model/ids.js';
+import type { SpanRecord, StatusCode } from '../../src/model/records.js';
+import { DedupeSet } from '../../src/writer/dedupe.js';
+import { TraceIndex } from '../../src/writer/trace-index.js';
+import { realisticSpans } from '../../test-support/otlp-builders.js';
+
+const fixture = realisticSpans(1);
+const resource =
+  fixture.resources[0] ??
+  (() => {
+    throw new Error('no resource');
+  })();
+const base =
+  fixture.spans[0] ??
+  (() => {
+    throw new Error('no span');
+  })();
+
+const TRACE = parseTraceId('5b8efff798038103d269b633813fc60c', 't');
+const mk = (id: number, over: Partial<SpanRecord> = {}): SpanRecord => ({
+  ...base,
+  traceId: TRACE,
+  spanId: parseSpanId(id.toString(16).padStart(16, '0'), 's'),
+  parentSpanId: id === 1 ? null : parseSpanId('0000000000000001', 'p'),
+  name: id === 1 ? 'GET /cart' : `child-${id}`,
+  attributes: new Map(),
+  start: 100 as RelNanos,
+  end: 200 as RelNanos,
+  status: { code: 0 as StatusCode, message: '' },
+  ...over,
+});
+
+describe('TraceIndex', () => {
+  test('a root-less (orphan) trace has root null and grows as spans arrive', () => {
+    const idx = new TraceIndex();
+    idx.add(mk(2, { start: 50 as RelNanos }), 'chunks/spans/000000', resource);
+    expect(idx.shardPayload('5b')[TRACE]).toEqual({
+      chunks: ['chunks/spans/000000'],
+      start: 50,
+      end: 200,
+      spans: 1,
+      errors: 0,
+      root: null,
+    });
+  });
+
+  test('a split trace lists every chunk once; the root fills in when it arrives', () => {
+    const idx = new TraceIndex();
+    idx.add(mk(2), 'chunks/spans/000000', resource);
+    idx.add(mk(3), 'chunks/spans/000000', resource);
+    idx.add(
+      mk(4, { status: { code: 2 as StatusCode, message: 'x' }, end: 900 as RelNanos }),
+      'chunks/spans/000007',
+      resource,
+    );
+    idx.add(mk(1), 'chunks/spans/000009', resource);
+    const e = idx.shardPayload('5b')[TRACE];
+    expect(e?.chunks).toEqual(['chunks/spans/000000', 'chunks/spans/000007', 'chunks/spans/000009']);
+    expect(e).toMatchObject({ spans: 4, errors: 1, start: 100, end: 900 });
+    expect(e?.root).toEqual({ service: 'frontend', name: 'GET /cart', resource: 'GET /cart' });
+  });
+
+  test('dirty tracking, shard listing and a validated JSON round-trip', () => {
+    const idx = new TraceIndex();
+    idx.add(mk(1), 'chunks/spans/000000', resource);
+    expect(idx.dirtyShards()).toEqual(['5b']);
+    idx.clearDirty();
+    expect(idx.dirtyShards()).toEqual([]);
+    const json = idx.toJSON();
+    expect(TraceShardSchema.parse(json['5b'])).toEqual(json['5b']);
+    const loaded = TraceIndex.load(json);
+    expect(loaded.shards()).toEqual(['5b']);
+    expect(loaded.dirtyShards()).toEqual(['5b']);
+    expect(loaded.toJSON()).toEqual(json);
+  });
+});
+
+describe('DedupeSet', () => {
+  test('records and reports prior presence', () => {
+    const d = new DedupeSet(10);
+    expect(d.seen('a', 'b')).toBe(false);
+    expect(d.seen('a', 'b')).toBe(true);
+    expect(d.seen('a', 'c')).toBe(false);
+  });
+  test('evicts first-in-first-out at capacity', () => {
+    const d = new DedupeSet(2);
+    d.seen('t', '1');
+    d.seen('t', '2');
+    d.seen('t', '1'); // seeing again does not refresh
+    d.seen('t', '3'); // evicts 1
+    expect(d.size).toBe(2);
+    expect(d.seen('t', '1')).toBe(false);
+  });
+  test('round-trips in eviction order and trims to capacity', () => {
+    const d = new DedupeSet(3);
+    for (const s of ['1', '2', '3']) d.seen('t', s);
+    expect(DedupeSet.from(d.toJSON(), 3).toJSON()).toEqual(d.toJSON());
+    expect(DedupeSet.from(d.toJSON(), 2).toJSON()).toEqual(['t2', 't3']);
+  });
+  test('rejects a non-positive capacity', () => {
+    expect(() => new DedupeSet(0)).toThrow(/dedupeCapacity/);
+  });
+});

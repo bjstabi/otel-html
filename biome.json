@@ -1,0 +1,76 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.6.3/schema.json",
+  "files": {
+    "includes": [
+      "**",
+      "!**/gen",
+      "!**/*.gen.ts",
+      "!**/*.gen.terms.ts",
+      "!proto",
+      "!schema",
+      "!**/fixtures",
+      "!pnpm-lock.yaml",
+      "!node_modules",
+      "!dist",
+      "!e2e/.reports",
+      "!test-results",
+      "!.superpowers",
+      "!docs",
+      "!README.md"
+    ]
+  },
+  "formatter": { "indentStyle": "space", "indentWidth": 2, "lineWidth": 110 },
+  "javascript": { "formatter": { "quoteStyle": "single" } },
+  "css": { "parser": { "tailwindDirectives": true } },
+  "linter": {
+    "enabled": true,
+    "domains": { "playwright": "none" },
+    "rules": {
+      "preset": "recommended",
+      "style": {
+        "noNonNullAssertion": "error",
+        "noDefaultExport": "error",
+        "useConst": "error",
+        "useImportType": "error"
+      },
+      "suspicious": { "noExplicitAny": "error", "noConsole": "error" },
+      "complexity": { "noForEach": "error", "useLiteralKeys": "error" },
+      "nursery": { "useExhaustiveSwitchCases": "error" },
+      "correctness": { "noUnusedVariables": "error", "noUnusedImports": "error" }
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["*.config.ts", "*.config.js", "e2e/global-setup.ts"],
+      "linter": { "rules": { "style": { "noDefaultExport": "off" } } }
+    },
+    {
+      "includes": [
+        "src/model/**",
+        "src/format/**",
+        "src/ottl/**",
+        "src/rollups/**",
+        "src/semconv/**",
+        "src/viewer/**"
+      ],
+      "linter": { "rules": { "correctness": { "noNodejsModules": "error" } } }
+    },
+    {
+      "includes": ["src/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "paths": {
+                  "@opentelemetry/otlp-transformer": "Internal-use upstream package; test oracle only."
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

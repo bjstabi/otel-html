@@ -1,0 +1,27 @@
+import { useHashLocation } from 'wouter/use-hash-location';
+
+type HashLocation = ReturnType<typeof useHashLocation>;
+
+/** The hash route without its query: `#/traces?t=1~2` is the route `/traces`; the query belongs to the selection store. */
+export function useRoute(): HashLocation {
+  const [location, navigate] = useHashLocation();
+  const q = location.indexOf('?');
+  return [q >= 0 ? location.slice(0, q) : location, navigate];
+}
+
+/**
+ * Go to `route`, carrying the current selection query so the URL stays the single source of truth for the
+ * shared selection (window, text, condition...). Pushes a history entry and notifies hash listeners.
+ */
+export function navigateRoute(win: Window, route: string, search: string): void {
+  const oldURL = win.location.href;
+  const hash = `#${route}${search === '' ? '' : `?${search}`}`;
+  if (hash === win.location.hash) return;
+  win.history.pushState(null, '', hash);
+  win.dispatchEvent(new HashChangeEvent('hashchange', { oldURL, newURL: win.location.href }));
+}
+
+/** Hash links: `/logs` becomes `#/logs`. */
+export function routeHref(href: string): string {
+  return `#${href}`;
+}

@@ -1,0 +1,20 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "types": [],
+    "isolatedDeclarations": false,
+    "skipLibCheck": true
+  },
+  "include": [
+    "src/viewer/**/*",
+    "test/viewer/**/*",
+    "test-support/scripted-loader.ts",
+    "src/model/**/*",
+    "src/format/**/*",
+    "src/semconv/**/*",
+    "src/rollups/**/*",
+    "src/ottl/**/*"
+  ]
+}

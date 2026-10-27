@@ -1,0 +1,7 @@
+export type { ConfigInput } from '../config/schema.js';
+export { type ErrorCode, OtelHtmlError } from '../model/errors.js';
+export type { OtlpSignal } from '../model/otlp-json.js';
+export type { Clock, FileSystem, Logger } from '../writer/ports.js';
+export type { AddResult, ReportSummary, WriterDeps } from '../writer/session.js';
+export { type ConvertOptions, convert, type MergeOptions, merge } from './convert.js';
+export { Report, type ReportOptions } from './report.js';

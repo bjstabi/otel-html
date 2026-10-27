@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": { "types": ["node"] },
+  "include": [
+    "src/**/*",
+    "test/**/*",
+    "test-support/**/*",
+    "scripts/**/*",
+    "vitest.config.ts",
+    "vite.config.ts",
+    "commitlint.config.js"
+  ],
+  "exclude": ["src/viewer/**", "test/viewer/**", "test-support/scripted-loader.ts"]
+}

@@ -1,0 +1,688 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ECharts Spike</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@6.1.0/dist/echarts.min.js"></script>
+<style>
+  :root {
+    color-scheme: light;
+    --bg:#f6f6f3; --sf:#ffffff; --ink:#16181d; --ink2:#454a53; --mu:#7a7f88; --ln:#e5e4df; --ln2:#efeeea;
+    --grid:#e1e0d9; --axis:#c3c2b7; --tick:#898781;
+    --ac:#0f766e; --acs:#e3f1ee; --acx:#0b5c56; --crit:#d03b3b; --crits:#fbe9e9;
+    --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#eda100; --s5:#e87ba4; --s6:#008300; --s7:#6250d6;
+    --on-s4:#0b0b0b; --sel-tint:rgba(22,24,29,.07);
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg:#0d0d0d; --sf:#1a1a19; --ink:#f0efec; --ink2:#c3c2b7; --mu:#898781; --ln:#2c2c2a; --ln2:#232321;
+    --grid:#2c2c2a; --axis:#383835; --tick:#898781;
+    --ac:#2bb3a3; --acs:#12302c; --acx:#5fd1c2; --crit:#e05555; --crits:#3a1a1a;
+    --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --s5:#d55181; --s6:#008300; --s7:#9085e9;
+    --on-s4:#0b0b0b; --sel-tint:rgba(240,239,236,.08);
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .mono, .num { font-family:ui-monospace, "SF Mono", Menlo, monospace; font-variant-numeric:tabular-nums; font-size:12px; }
+  header { position:sticky; top:0; z-index:20; display:flex; flex-wrap:wrap; align-items:center; gap:12px; padding:10px 16px; background:var(--bg); border-bottom:1px solid var(--ln); }
+  header h1 { font-size:15px; margin:0; font-weight:700; }
+  header .tag { font-size:11px; color:var(--mu); border:1px dashed var(--mu); border-radius:4px; padding:0 6px; }
+  label.ctl { display:inline-flex; align-items:center; gap:6px; color:var(--ink2); }
+  select, button { font:inherit; color:var(--ink); background:var(--sf); border:1px solid var(--ln); border-radius:7px; padding:3px 8px; }
+  button { cursor:pointer; }
+  #stats { margin-left:auto; color:var(--mu); font-size:12px; }
+  #stats b { color:var(--ink); font-weight:600; }
+  .selbar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:8px 16px; border-bottom:1px solid var(--ln); min-height:38px; }
+  .selbar .lb { color:var(--mu); font-size:12px; }
+  .chip { display:inline-flex; border-radius:6px; overflow:hidden; box-shadow:0 0 0 1.5px var(--ink); font-size:12px; }
+  .chip b { font-weight:500; background:var(--ink); color:var(--sf); padding:1px 6px; font-family:ui-monospace,Menlo,monospace; font-size:11.5px; }
+  .chip u { text-decoration:none; background:var(--sf); padding:1px 6px; font-family:ui-monospace,Menlo,monospace; font-size:11.5px; }
+  .chip s { text-decoration:none; background:var(--sf); color:var(--mu); padding:1px 6px; cursor:pointer; }
+  main { padding:14px 16px 40px; display:grid; gap:14px; max-width:1400px; }
+  .card { background:var(--sf); border-radius:12px; box-shadow:0 0 0 1px var(--ln); padding:10px 14px 12px; min-width:0; }
+  .card .h { display:flex; align-items:center; gap:10px; margin-bottom:6px; flex-wrap:wrap; }
+  .card .h b { font-weight:650; }
+  .card .h .meta { color:var(--mu); font-size:11.5px; }
+  .card .h .r { margin-left:auto; display:flex; gap:10px; align-items:center; color:var(--mu); font-size:12px; }
+  .fgrow { display:flex; gap:14px; }
+  .fgmain { flex:1; min-width:0; }
+  #fgMini { height:44px; border-radius:6px; background:var(--bg); margin-bottom:6px; }
+  #fgScroll { max-height:460px; overflow-y:auto; overflow-x:hidden; }
+  .legend { width:220px; flex:none; border-left:1px solid var(--ln2); padding-left:12px; font-size:12px; }
+  .legend .hd { display:flex; justify-content:space-between; color:var(--mu); font-size:11.5px; margin-bottom:4px; }
+  .legend .row { display:flex; align-items:center; gap:7px; padding:3px 0; }
+  .legend .row .p { margin-left:auto; }
+  .legend .row .m { width:40px; height:6px; border-radius:3px; background:var(--bg); overflow:hidden; }
+  .legend .row .m i { display:block; height:6px; background:var(--ink2); border-radius:3px; }
+  .sd { width:8px; height:8px; border-radius:50%; display:inline-block; flex:none; }
+  .lgd { display:flex; gap:16px; flex-wrap:wrap; margin-top:4px; font-size:12px; color:var(--ink2); }
+  .lgd span { display:inline-flex; align-items:center; gap:6px; }
+  .lgd i { width:12px; height:3px; border-radius:2px; display:inline-block; }
+  /* tooltip + popover share one look */
+  .tip { background:var(--sf); color:var(--ink); border-radius:10px; box-shadow:0 8px 28px rgba(0,0,0,.18), 0 0 0 1px var(--ln); padding:8px 11px; font-size:12px; min-width:180px; }
+  .tip .t { font-weight:650; margin-bottom:4px; }
+  .tip .row { display:flex; align-items:center; gap:6px; padding:1px 0; }
+  .tip .row .v { margin-left:auto; font-family:ui-monospace,Menlo,monospace; padding-left:14px; }
+  .tip .err { color:var(--crit); font-weight:600; }
+  .tip hr { border:0; border-top:1px solid var(--ln2); margin:6px 0; }
+  .tip .a { color:var(--acx); padding:3px 0; cursor:pointer; display:flex; justify-content:space-between; gap:10px; }
+  .tip .a small { color:var(--mu); }
+  #pop { position:absolute; z-index:30; display:none; }
+  /* waterfall */
+  .wfhead { display:flex; color:var(--mu); font-size:11.5px; border-bottom:1px solid var(--axis); padding-bottom:3px; }
+  .wfhead .nm { width:340px; flex:none; }
+  .wfhead .tl { flex:1; position:relative; height:16px; }
+  .wfhead .tl span { position:absolute; top:0; transform:translateX(-50%); }
+  #wf { height:380px; overflow:auto; position:relative; }
+  #wfInner { position:relative; }
+  .wr { position:absolute; left:0; right:0; height:24px; display:flex; align-items:center; cursor:pointer; border-bottom:1px solid var(--ln2); }
+  .wr:hover { background:var(--sel-tint); }
+  .wr.sel { background:var(--acs); box-shadow:inset 3px 0 0 var(--ac); }
+  .wr .nm { width:340px; flex:none; display:flex; align-items:center; gap:6px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding-right:8px; font-size:12px; }
+  .wr .nm .cv { color:var(--mu); width:10px; flex:none; }
+  .wr .tl { flex:1; position:relative; height:100%; }
+  .wr .bar { position:absolute; top:5px; height:14px; border-radius:4px; min-width:2px; }
+  .wr .bar.err { box-shadow:inset 0 0 0 1.5px var(--crit); background-image:repeating-linear-gradient(135deg, rgba(255,255,255,0) 0 5px, rgba(255,255,255,.28) 5px 7px); }
+  .wr .dur { position:absolute; top:4px; font-family:ui-monospace,Menlo,monospace; font-size:10.5px; color:var(--ink2); white-space:nowrap; }
+  .wr .ex { color:var(--crit); font-weight:800; }
+  .note { color:var(--mu); font-size:12px; margin-top:6px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Spike: ECharts in our design language</h1><span class="tag">throwaway</span>
+  <label class="ctl">Spans <select id="nSpans"><option>300</option><option selected>5000</option><option>50000</option></select></label>
+  <label class="ctl">Points per series <select id="nPoints"><option>2000</option><option selected>200000</option><option>1000000</option></select></label>
+  <button id="theme">◐ Dark</button>
+  <div id="stats">rendering…</div>
+</header>
+<div class="selbar" id="selbar"><span class="lb">Selection</span><span class="lb" id="selEmpty">none: click a span or exemplar, or drag across the chart or timeline</span></div>
+<main>
+  <section class="card">
+    <div class="h"><b>Flame graph</b><span class="meta" id="fgMeta"></span><div class="r">scroll to zoom · drag to pan · click a span to select it · double-click to reset</div></div>
+    <div class="fgrow">
+      <div class="fgmain">
+        <div id="fgMini"></div>
+        <div id="fgScroll"><div id="fg"></div></div>
+      </div>
+      <div class="legend" id="legend"></div>
+    </div>
+  </section>
+
+  <section class="card" style="position:relative">
+    <div class="h"><b>Request duration: avg / p95 / p99</b><span class="meta mono">http.server.request.duration · seconds</span><div class="r">hover for crosshair · drag to select a time range · click to pin a menu · ringed dots are exemplars</div></div>
+    <div id="cc" style="height:260px"></div>
+    <div class="lgd" id="ccLegend"></div>
+    <div id="pop" class="tip"></div>
+  </section>
+
+  <section class="card">
+    <div class="h"><b>Timeline</b><span class="meta">spans · logs · metric points, with one shared brush</span></div>
+    <div id="tl" style="height:190px"></div>
+  </section>
+
+  <section class="card">
+    <div class="h"><b>Waterfall</b><span class="meta">HTML, virtualized: only visible rows are in the DOM</span><span class="meta" id="wfMeta"></span></div>
+    <div class="wfhead"><div class="nm">Span</div><div class="tl" id="wfAxis"></div></div>
+    <div id="wf"><div id="wfInner"></div></div>
+    <div class="note">Expand/collapse, span filtering and scrolling to a span selected elsewhere are left out of this spike.</div>
+  </section>
+</main>
+
+<script>
+(() => {
+  // ---------- tokens ----------
+  const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+  const SVC = ['api', 'payments', 'worker', 'postgres', 'cache', 'auth', 'search'];
+  const svcColor = i => css('--s' + (i + 1));
+  const onSvc = i => (i === 3 ? css('--on-s4') : '#ffffff');
+  const FONT = 'system-ui, -apple-system, "Segoe UI", sans-serif';
+  const MONO = 'ui-monospace, "SF Mono", Menlo, monospace';
+
+  const fmtDur = ms => {
+    if (ms < 1) return (ms * 1000).toFixed(0) + ' µs';
+    if (ms < 10) return ms.toFixed(2) + ' ms';
+    if (ms < 1000) return ms.toFixed(ms < 100 ? 1 : 0) + ' ms';
+    if (ms < 60000) return (ms / 1000).toFixed(2) + ' s';
+    return Math.floor(ms / 60000) + ' m ' + Math.round((ms % 60000) / 1000) + ' s';
+  };
+  const fmtClock = t => new Date(t).toISOString().slice(11, 19);
+
+  // ---------- shared selection store ----------
+  const store = {
+    state: { time: null, span: null, trace: null },
+    subs: [],
+    set(patch, source) { Object.assign(this.state, patch); this.subs.forEach(f => f(this.state, source)); },
+    sub(f) { this.subs.push(f); }
+  };
+
+  // ---------- deterministic data ----------
+  let seed = 7;
+  const rnd = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296;
+  const RUN_START = Date.UTC(2026, 9, 25, 14, 2, 10);
+  const RUN_END = RUN_START + 14.5 * 60 * 1000;
+  const TRACE_START = RUN_START + 7 * 60 * 1000 - 5000;
+
+  const NAMES = {
+    api: ['GET /checkout', 'cart.load', 'render', 'auth.verify', 'GET /cart'],
+    payments: ['POST /charge', 'stripe.charge', 'ledger.post', 'fraud.check', 'retry'],
+    worker: ['HTTP POST', 'job.run', 'queue.poll', 'tls.connect', 'serialize'],
+    postgres: ['SELECT orders', 'UPDATE ledger', 'INSERT event', 'BEGIN', 'COMMIT'],
+    cache: ['GET session', 'SET cart', 'MGET prices'],
+    auth: ['token.verify', 'jwks.fetch'],
+    search: ['query products', 'rank']
+  };
+
+  function genTrace(n) {
+    seed = 7;
+    const total = n <= 500 ? 1840 : n <= 6000 ? 18400 : 61000;
+    const root = { i: 0, p: -1, d: 0, s: 0, e: total, svc: 0, name: 'GET /checkout', err: true, next: total * 0.004, kids: [] };
+    const spans = [root];
+    const open = [root];
+    let maxD = 0, guard = 0;
+    while (spans.length < n && open.length && guard++ < n * 40) {
+      const k = open.length - 1 - Math.floor(Math.pow(rnd(), 1.3) * open.length);
+      const p = open[k];
+      const rem = p.e - p.next;
+      if (rem < (p.e - p.s) * 0.03 || p.d >= 28) { open.splice(k, 1); continue; }
+      const gap = rem * rnd() * 0.03;
+      const s = p.next + gap;
+      const dur = (rem - gap) * (0.3 + rnd() * 0.65);
+      const svc = rnd() < 0.3 ? Math.floor(rnd() * SVC.length) : p.svc;
+      const names = NAMES[SVC[svc]];
+      const c = { i: spans.length, p: p.i, d: p.d + 1, s, e: s + dur, svc, name: names[Math.floor(rnd() * names.length)], err: rnd() < 0.012, next: s + dur * 0.01, kids: [] };
+      p.next = c.e + (p.e - p.s) * 0.004;
+      p.kids.push(c.i);
+      spans.push(c);
+      open.push(c);
+      if (c.d > maxD) maxD = c.d;
+    }
+    // self time per service for the legend
+    const self = new Array(SVC.length).fill(0);
+    for (const sp of spans) {
+      let kidT = 0; for (const k of sp.kids) kidT += spans[k].e - spans[k].s;
+      self[sp.svc] += Math.max(0, sp.e - sp.s - kidT);
+    }
+    return { spans, maxD, total, self };
+  }
+
+  function genSeries(nPts) {
+    seed = 99;
+    const step = (RUN_END - RUN_START) / nPts;
+    const mk = (base, amp, noise) => {
+      const out = new Array(nPts);
+      let v = base;
+      for (let i = 0; i < nPts; i++) {
+        const t = RUN_START + i * step;
+        const bump = Math.exp(-Math.pow((t - (TRACE_START + 4000)) / 60000, 2)) * amp;
+        v = v * 0.985 + (base + (rnd() - 0.5) * noise) * 0.015;
+        out[i] = [t, Math.max(0.005, v + bump)];
+      }
+      return out;
+    };
+    const p99 = mk(0.45, 1.0, 0.5), p95 = mk(0.28, 0.65, 0.3), avg = mk(0.11, 0.2, 0.08);
+    const ex = [];
+    for (let i = 0; i < 42; i++) {
+      const t = RUN_START + rnd() * (RUN_END - RUN_START);
+      const bump = Math.exp(-Math.pow((t - (TRACE_START + 4000)) / 60000, 2));
+      ex.push({ value: [t, 0.15 + rnd() * 0.4 + bump * 0.9], trace: (rnd().toString(16).slice(2, 10)) + '…' });
+    }
+    ex.push({ value: [TRACE_START + 4000, 1.42], trace: '9f3a41d2…', hero: true });
+    return { p99, p95, avg, ex };
+  }
+
+  function genTimeline() {
+    seed = 3;
+    const B = 58, step = (RUN_END - RUN_START) / B;
+    const t = [], ok = [], er = [], li = [], lw = [], le = [], pts = [];
+    for (let i = 0; i < B; i++) {
+      const c = RUN_START + (i + 0.5) * step;
+      const bump = Math.exp(-Math.pow((c - (TRACE_START + 4000)) / 90000, 2));
+      t.push(c);
+      ok.push(Math.round(40 + rnd() * 30 + bump * 50));
+      er.push(Math.round(bump * 18 + (rnd() < 0.1 ? 2 : 0)));
+      li.push(Math.round(220 + rnd() * 90 + bump * 80));
+      lw.push(Math.round(20 + rnd() * 20 + bump * 60));
+      le.push(Math.round(bump * 40 + (rnd() < 0.1 ? 3 : 0)));
+      pts.push(Math.round(1600 + rnd() * 120));
+    }
+    return { t, ok, er, li, lw, le, pts, step };
+  }
+
+  // ---------- theme for ECharts (axis, text, tooltip defaults) ----------
+  function makeTheme() {
+    return {
+      backgroundColor: 'transparent',
+      textStyle: { fontFamily: FONT, color: css('--ink2') },
+      color: [1, 2, 3, 4, 5, 6, 7].map(i => css('--s' + i))
+    };
+  }
+  const themeName = () => (document.documentElement.dataset.theme === 'dark' ? 'oh-dark' : 'oh-light');
+  function registerThemes() {
+    echarts.registerTheme(themeName(), makeTheme());
+  }
+
+  const axisCommon = () => ({
+    axisLine: { lineStyle: { color: css('--axis') } },
+    axisTick: { show: false },
+    axisLabel: { color: css('--tick'), fontSize: 10.5, fontFamily: FONT },
+    splitLine: { lineStyle: { color: css('--grid'), width: 1 } }
+  });
+  const tooltipBase = () => ({
+    backgroundColor: 'transparent', borderWidth: 0, padding: 0, extraCssText: 'box-shadow:none;',
+    className: 'tip-host', confine: true, transitionDuration: 0
+  });
+
+  // ---------- hatch pattern for error spans ----------
+  let hatch = null;
+  function hatchPattern() {
+    if (hatch) return hatch;
+    const c = document.createElement('canvas'); c.width = 8; c.height = 8;
+    const g = c.getContext('2d');
+    g.strokeStyle = 'rgba(255,255,255,0.32)'; g.lineWidth = 2;
+    g.beginPath(); g.moveTo(-2, 10); g.lineTo(10, -2); g.moveTo(-2, 2); g.lineTo(2, -2); g.moveTo(6, 10); g.lineTo(10, 6); g.stroke();
+    hatch = { image: c, repeat: 'repeat' };
+    return hatch;
+  }
+
+  // ---------- state ----------
+  let T = null, S = null, TL = null;
+  const charts = {};
+  const stats = {};
+  let syncing = false;
+
+  // ---------- flame graph ----------
+  const ROW = 24;
+  function flameOption(mini) {
+    const data = T.spans.map(sp => [sp.s, sp.e, sp.d, sp.i]);
+    const ink = css('--ink'), crit = css('--crit'), sf = css('--sf');
+    const colors = SVC.map((_, i) => svcColor(i));
+    const textOn = SVC.map((_, i) => onSvc(i));
+    const pat = hatchPattern();
+    const selected = store.state.span;
+    return {
+      animation: false,
+      grid: mini ? { left: 2, right: 2, top: 2, bottom: 2 } : { left: 0, right: 0, top: 22, bottom: 4 },
+      xAxis: {
+        type: 'value', min: 0, max: T.total, position: 'top',
+        ...axisCommon(),
+        axisLine: { show: !mini, lineStyle: { color: css('--axis') } },
+        axisLabel: { show: !mini, color: css('--tick'), fontSize: 10.5, formatter: v => fmtDur(v) },
+        splitLine: { show: !mini, lineStyle: { color: css('--grid') } }
+      },
+      yAxis: { type: 'value', inverse: true, min: -0.5, max: T.maxD + 0.5, show: false },
+      dataZoom: mini
+        ? [{ type: 'slider', xAxisIndex: 0, filterMode: 'weakFilter', top: 0, bottom: 0, left: 0, right: 0, height: 'auto',
+             showDetail: false, showDataShadow: false, brushSelect: false, borderColor: 'transparent', backgroundColor: 'transparent',
+             fillerColor: 'rgba(15,118,110,0.10)', handleSize: '100%', handleStyle: { color: ink, borderColor: ink },
+             moveHandleSize: 0, dataBackground: { lineStyle: { opacity: 0 }, areaStyle: { opacity: 0 } } }]
+        : [{ type: 'inside', xAxisIndex: 0, filterMode: 'weakFilter', zoomOnMouseWheel: true, moveOnMouseMove: true, minValueSpan: 0.01 }],
+      tooltip: mini ? { show: false } : {
+        ...tooltipBase(), trigger: 'item',
+        formatter: p => {
+          const sp = T.spans[p.value[3]];
+          return `<div class="tip"><div class="t"><span class="sd" style="background:${colors[sp.svc]}"></span> ${SVC[sp.svc]} · <span class="mono">${sp.name}</span></div>
+            <div class="row">duration<span class="v">${fmtDur(sp.e - sp.s)}</span></div>
+            <div class="row">start<span class="v">+${fmtDur(sp.s)}</span></div>
+            <div class="row">depth<span class="v">${sp.d}</span></div>
+            ${sp.err ? '<div class="row err">● status ERROR</div>' : ''}</div>`;
+        }
+      },
+      series: [{
+        id: 'fg', type: 'custom', data, encode: { x: [0, 1], y: 2 }, clip: true,
+        progressive: 0,
+        renderItem(params, api) {
+          const idx = api.value(3);
+          const sp = T.spans[idx];
+          const a = api.coord([api.value(0), api.value(2)]);
+          const b = api.coord([api.value(1), api.value(2)]);
+          const rowH = Math.abs(api.size([0, 1])[1]);
+          const cs = params.coordSys;
+          let x0 = Math.max(a[0], cs.x), x1 = Math.min(b[0], cs.x + cs.width);
+          if (x1 < cs.x || x0 > cs.x + cs.width) return null;
+          let w = x1 - x0;
+          if (w < 0.6) return null;          // cull sub-pixel spans
+          const gapY = mini ? 0.5 : 2;
+          const y = a[1] - rowH / 2 + gapY / 2, h = Math.max(1, rowH - gapY);
+          const isSel = !mini && selected === idx;
+          const kids = [{
+            type: 'rect', shape: { x: x0, y, width: Math.max(w - (mini ? 0 : 1), 0.6), height: h, r: mini ? 0 : Math.min(5, w / 2) },
+            style: { fill: colors[sp.svc], stroke: sp.err ? crit : (isSel ? ink : null), lineWidth: sp.err ? 1.5 : 2 }
+          }];
+          if (!mini && sp.err && w > 6) {
+            kids.push({ type: 'rect', silent: true, shape: { x: x0, y, width: w - 1, height: h, r: Math.min(5, w / 2) }, style: { fill: pat } });
+          }
+          if (isSel) {
+            kids.push({ type: 'rect', silent: true, shape: { x: x0 - 3, y: y - 3, width: w + 5, height: h + 6, r: 7 }, style: { fill: 'none', stroke: ink, lineWidth: 2 } });
+          }
+          if (!mini && w > 36) {
+            const showDur = w > 150;
+            const label = (sp.err ? '! ' : '') + sp.name;
+            kids.push({ type: 'text', silent: true, style: {
+              text: label, x: x0 + 7, y: y + h / 2, verticalAlign: 'middle', fill: textOn[sp.svc],
+              font: `500 12px ${FONT}`, width: Math.max(0, w - 14 - (showDur ? 62 : 0)), overflow: 'truncate', ellipsis: '…' } });
+            if (showDur) kids.push({ type: 'text', silent: true, style: {
+              text: fmtDur(sp.e - sp.s), x: x0 + w - 8, y: y + h / 2, align: 'right', verticalAlign: 'middle',
+              fill: textOn[sp.svc], opacity: 0.92, font: `10.5px ${MONO}` } });
+          }
+          return { type: 'group', children: kids };
+        }
+      }]
+    };
+  }
+
+  function renderLegend() {
+    const tot = T.self.reduce((a, b) => a + b, 0) || 1;
+    const rows = SVC.map((n, i) => ({ n, i, p: T.self[i] / tot })).filter(r => r.p > 0).sort((a, b) => b.p - a.p);
+    document.getElementById('legend').innerHTML = `<div class="hd"><span>Service</span><span>% exec time</span></div>` +
+      rows.map(r => `<div class="row"><span class="sd" style="background:${svcColor(r.i)}"></span>${r.n}<span class="p num">${(r.p * 100).toFixed(1)}%</span><span class="m"><i style="width:${Math.max(2, r.p * 100)}%"></i></span></div>`).join('');
+  }
+
+  function renderFlame() {
+    const el = document.getElementById('fg');
+    el.style.height = Math.max(200, (T.maxD + 1) * ROW + 28) + 'px';
+    for (const k of ['fg', 'fgMini']) if (charts[k]) charts[k].dispose();
+    const t0 = performance.now();
+    charts.fg = echarts.init(el, themeName(), { renderer: 'canvas' });
+    charts.fg.setOption(flameOption(false));
+    stats.flame = performance.now() - t0;
+    const t1 = performance.now();
+    charts.fgMini = echarts.init(document.getElementById('fgMini'), themeName());
+    charts.fgMini.setOption(flameOption(true));
+    stats.mini = performance.now() - t1;
+    document.getElementById('fgMeta').textContent = `${T.spans.length.toLocaleString()} spans · depth ${T.maxD} · ${fmtDur(T.total)}`;
+
+    // minimap <-> main zoom sync
+    const syncZoom = (from, to) => from.on('datazoom', () => {
+      if (syncing) return;
+      const dz = from.getOption().dataZoom[0];
+      syncing = true;
+      to.dispatchAction({ type: 'dataZoom', start: dz.start, end: dz.end });
+      syncing = false;
+    });
+    syncZoom(charts.fg, charts.fgMini);
+    syncZoom(charts.fgMini, charts.fg);
+
+    charts.fg.on('click', p => {
+      const sp = T.spans[p.value[3]];
+      store.set({ span: sp.i, trace: '9f3a41d2…c1' }, 'flame');
+    });
+    charts.fg.getZr().on('dblclick', () => charts.fg.dispatchAction({ type: 'dataZoom', start: 0, end: 100 }));
+    renderLegend();
+  }
+
+  function refreshFlameSelection() {
+    if (!charts.fg) return;
+    const t0 = performance.now();
+    charts.fg.setOption({ series: [{ id: 'fg', data: T.spans.map(sp => [sp.s, sp.e, sp.d, sp.i]) }] });
+    stats.reselect = performance.now() - t0;
+    showStats();
+  }
+
+  // ---------- chart card ----------
+  function ccOption() {
+    const ink = css('--ink'), sf = css('--sf');
+    const sel = store.state.span != null ? T.spans[store.state.span] : null;
+    const marker = sel ? TRACE_START + sel.s * (1840 / T.total) : null;
+    const line = (name, color, data) => ({
+      name, type: 'line', data, showSymbol: false, sampling: 'lttb', large: true,
+      lineStyle: { width: 2, color }, itemStyle: { color }, emphasis: { disabled: true }, z: 2
+    });
+    return {
+      animation: false,
+      grid: { left: 44, right: 12, top: 10, bottom: 24 },
+      xAxis: { type: 'time', min: RUN_START, max: RUN_END, ...axisCommon(), splitLine: { show: false },
+        axisLabel: { color: css('--tick'), fontSize: 10.5, formatter: v => fmtClock(v).slice(0, 5) } },
+      yAxis: { type: 'value', ...axisCommon(), axisLine: { show: false }, splitNumber: 3,
+        axisLabel: { color: css('--tick'), fontSize: 10.5, formatter: v => v + ' s' } },
+      tooltip: {
+        ...tooltipBase(), trigger: 'axis',
+        axisPointer: { type: 'line', lineStyle: { color: ink, width: 1, type: 'dashed' }, animation: false },
+        formatter: ps => {
+          const lines = ps.filter(p => p.seriesType === 'line');
+          if (!lines.length) return '';
+          return `<div class="tip"><div class="t">${fmtClock(lines[0].value[0])}</div>` +
+            lines.map(p => `<div class="row"><span class="sd" style="background:${p.color}"></span>${p.seriesName}<span class="v">${p.value[1].toFixed(3)} s</span></div>`).join('') + '</div>';
+        }
+      },
+      brush: { xAxisIndex: 0, brushType: 'lineX', brushMode: 'single', transformable: true, throttleType: 'debounce', throttleDelay: 120,
+        brushStyle: { borderWidth: 2, color: 'rgba(22,24,29,0.06)', borderColor: ink }, outOfBrush: { colorAlpha: 0.35 } },
+      toolbox: { show: false },
+      series: [
+        line('p99', css('--s1'), S.p99),
+        line('p95', css('--s2'), S.p95),
+        line('avg', css('--s3'), S.avg),
+        { name: 'exemplars', type: 'scatter', data: S.ex, symbolSize: d => 9, z: 5,
+          itemStyle: { color: sf, borderColor: ink, borderWidth: 2 },
+          emphasis: { scale: 1.5 } },
+        { name: 'marker', type: 'line', data: [], markLine: marker ? { silent: true, symbol: 'none',
+            lineStyle: { color: ink, type: 'dashed', width: 1.5 }, label: { formatter: 'this span', color: ink, fontWeight: 600, fontSize: 10.5, position: 'insideEndTop' },
+            data: [{ xAxis: marker }] } : undefined }
+      ]
+    };
+  }
+
+  function renderChartCard() {
+    if (charts.cc) charts.cc.dispose();
+    const t0 = performance.now();
+    charts.cc = echarts.init(document.getElementById('cc'), themeName());
+    charts.cc.setOption(ccOption());
+    stats.chart = performance.now() - t0;
+    document.getElementById('ccLegend').innerHTML =
+      [['p99', '--s1'], ['p95', '--s2'], ['avg', '--s3']].map(([n, v]) => `<span><i style="background:${css(v)}"></i>${n}</span>`).join('') +
+      `<span style="color:var(--mu)">○ exemplar → trace</span><span style="color:var(--mu)">${(S.p99.length * 3).toLocaleString()} points (LTTB-sampled for display)</span>`;
+    charts.cc.dispatchAction({ type: 'takeGlobalCursor', key: 'brush', brushOption: { brushType: 'lineX', brushMode: 'single' } });
+    charts.cc.on('brushEnd', e => onBrush(e, 'cc'));
+    charts.cc.on('click', p => {
+      if (p.seriesName === 'exemplars') { hidePop(); store.set({ trace: p.data.trace, span: p.data.hero ? 0 : store.state.span }, 'cc'); }
+    });
+    charts.cc.getZr().on('click', e => {
+      if (e.target) return;
+      const [t] = charts.cc.convertFromPixel({ gridIndex: 0 }, [e.offsetX, e.offsetY]);
+      if (!(t >= RUN_START && t <= RUN_END)) return;
+      showPop(e.offsetX, e.offsetY, t);
+    });
+  }
+
+  const pop = document.getElementById('pop');
+  function showPop(x, y, t) {
+    const near = (arr) => { let lo = 0, hi = arr.length - 1; while (lo < hi) { const m = (lo + hi) >> 1; if (arr[m][0] < t) lo = m + 1; else hi = m; } return arr[lo][1]; };
+    pop.innerHTML = `<div class="t">${fmtClock(t)} <span style="color:var(--mu);font-weight:400">· pinned</span></div>
+      <div class="row"><span class="sd" style="background:${css('--s1')}"></span>p99<span class="v">${near(S.p99).toFixed(3)} s</span></div>
+      <div class="row"><span class="sd" style="background:${css('--s2')}"></span>p95<span class="v">${near(S.p95).toFixed(3)} s</span></div>
+      <div class="row"><span class="sd" style="background:${css('--s3')}"></span>avg<span class="v">${near(S.avg).toFixed(3)} s</span></div><hr>
+      <div class="a" data-act="traces">⋮ Traces in this minute <small>same filters</small></div>
+      <div class="a" data-act="logs">≡ Logs in this minute <small>same filters</small></div>
+      <div class="a" data-act="zoom">⌁ Select ±1 min <small>adds a time chip</small></div>`;
+    pop.style.display = 'block';
+    pop.style.left = Math.min(x + 20, pop.parentElement.clientWidth - 260) + 'px';
+    pop.style.top = (y + 30) + 'px';
+    pop.onclick = ev => {
+      const a = ev.target.closest('[data-act]'); if (!a) return;
+      store.set({ time: [t - 60000, t + 60000] }, 'pop');
+      hidePop();
+    };
+  }
+  function hidePop() { pop.style.display = 'none'; }
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') hidePop(); });
+
+  // ---------- timeline ----------
+  function tlOption() {
+    const ink = css('--ink');
+    const grids = [{ left: 92, right: 12, top: 8, height: 40 }, { left: 92, right: 12, top: 62, height: 40 }, { left: 92, right: 12, top: 116, height: 40 }];
+    const xa = i => ({ type: 'category', gridIndex: i, data: TL.t, ...axisCommon(), axisLabel: { show: i === 2, color: css('--tick'), fontSize: 10.5, interval: 9, formatter: v => fmtClock(+v).slice(0, 5) }, axisLine: { lineStyle: { color: css('--axis') } }, splitLine: { show: false } });
+    const ya = (i, name) => ({ type: 'value', gridIndex: i, splitNumber: 1, axisLabel: { show: false }, splitLine: { show: false }, axisLine: { show: false },
+      name, nameLocation: 'middle', nameRotate: 0, nameGap: 84, nameTextStyle: { color: css('--ink'), fontSize: 12, align: 'left' } });
+    const bar = (name, xi, data, color, top) => ({ name, type: 'bar', xAxisIndex: xi, yAxisIndex: xi, stack: 'g' + xi, data, barCategoryGap: '18%',
+      itemStyle: { color, borderRadius: top ? [3, 3, 0, 0] : 0 }, emphasis: { disabled: true } });
+    return {
+      animation: false, grid: grids,
+      xAxis: [xa(0), xa(1), xa(2)],
+      yAxis: [ya(0, 'Spans'), ya(1, 'Logs'), ya(2, 'Points')],
+      tooltip: { ...tooltipBase(), trigger: 'axis', axisPointer: { type: 'shadow' },
+        formatter: ps => `<div class="tip"><div class="t">${fmtClock(+ps[0].axisValue)}</div>` + ps.map(p => `<div class="row"><span class="sd" style="background:${p.color}"></span>${p.seriesName}<span class="v">${p.value}</span></div>`).join('') + '</div>' },
+      brush: { xAxisIndex: 'all', brushLink: 'all', brushType: 'lineX', brushMode: 'single', throttleType: 'debounce', throttleDelay: 120,
+        brushStyle: { borderWidth: 2, color: 'rgba(22,24,29,0.06)', borderColor: ink }, outOfBrush: { colorAlpha: 0.35 } },
+      toolbox: { show: false },
+      series: [
+        bar('spans ok', 0, TL.ok, '#9ca3af', false), bar('spans error', 0, TL.er, css('--crit'), true),
+        bar('INFO', 1, TL.li, css('--s1'), false), bar('WARN', 1, TL.lw, '#fab219', false), bar('ERROR', 1, TL.le, css('--crit'), true),
+        bar('metric points', 2, TL.pts, css('--s3'), true)
+      ]
+    };
+  }
+  function renderTimeline() {
+    if (charts.tl) charts.tl.dispose();
+    const t0 = performance.now();
+    charts.tl = echarts.init(document.getElementById('tl'), themeName());
+    charts.tl.setOption(tlOption());
+    stats.timeline = performance.now() - t0;
+    charts.tl.dispatchAction({ type: 'takeGlobalCursor', key: 'brush', brushOption: { brushType: 'lineX', brushMode: 'single' } });
+    charts.tl.on('brushEnd', e => onBrush(e, 'tl'));
+  }
+
+  // ---------- brush <-> store ----------
+  function onBrush(e, src) {
+    if (syncing) return;
+    const a = e.areas && e.areas[0];
+    if (!a) { store.set({ time: null }, src); return; }
+    let range;
+    if (src === 'cc') range = a.coordRange;
+    else { const r = a.coordRange; range = [TL.t[Math.max(0, r[0])] - TL.step / 2, TL.t[Math.min(TL.t.length - 1, r[1])] + TL.step / 2]; }
+    store.set({ time: range }, src);
+  }
+  function pushBrush(state, source) {
+    syncing = true;
+    if (source !== 'cc' && charts.cc) charts.cc.dispatchAction({ type: 'brush', areas: state.time ? [{ brushType: 'lineX', xAxisIndex: 0, coordRange: state.time }] : [] });
+    if (source !== 'tl' && charts.tl) {
+      let areas = [];
+      if (state.time) {
+        const i0 = TL.t.findIndex(c => c + TL.step / 2 >= state.time[0]);
+        let i1 = TL.t.findIndex(c => c - TL.step / 2 > state.time[1]); if (i1 < 0) i1 = TL.t.length; i1 -= 1;
+        areas = [{ brushType: 'lineX', xAxisIndex: 0, coordRange: [Math.max(0, i0), Math.max(i0, i1)] }];
+      }
+      charts.tl.dispatchAction({ type: 'brush', areas });
+    }
+    syncing = false;
+  }
+
+  // ---------- waterfall (HTML, virtualized) ----------
+  let wfOrder = [];
+  function renderWaterfall() {
+    const t0 = performance.now();
+    wfOrder = [];
+    const stack = [0];
+    while (stack.length) { const i = stack.pop(); wfOrder.push(i); const k = T.spans[i].kids; for (let j = k.length - 1; j >= 0; j--) stack.push(k[j]); }
+    const inner = document.getElementById('wfInner');
+    inner.style.height = (wfOrder.length * 24) + 'px';
+    document.getElementById('wfAxis').innerHTML = [0, 0.25, 0.5, 0.75, 1].map(f => `<span style="left:${f * 100}%;transform:translateX(${f === 0 ? '0' : f === 1 ? '-100%' : '-50%'})">${fmtDur(T.total * f)}</span>`).join('');
+    drawWaterfall();
+    stats.waterfall = performance.now() - t0;
+    document.getElementById('wfMeta').textContent = `· ${wfOrder.length.toLocaleString()} rows`;
+  }
+  function drawWaterfall() {
+    const box = document.getElementById('wf'), inner = document.getElementById('wfInner');
+    const first = Math.max(0, Math.floor(box.scrollTop / 24) - 6);
+    const last = Math.min(wfOrder.length, Math.ceil((box.scrollTop + box.clientHeight) / 24) + 6);
+    let html = '';
+    for (let r = first; r < last; r++) {
+      const sp = T.spans[wfOrder[r]];
+      const l = sp.s / T.total * 100, w = Math.max(0.15, (sp.e - sp.s) / T.total * 100);
+      const right = l + w > 82;
+      html += `<div class="wr${store.state.span === sp.i ? ' sel' : ''}" data-i="${sp.i}" style="top:${r * 24}px">
+        <div class="nm" style="padding-left:${Math.min(sp.d, 22) * 12}px"><span class="cv">${sp.kids.length ? '⌄' : ''}</span><span class="sd" style="background:${svcColor(sp.svc)}"></span>${sp.err ? '<span class="ex">!</span>' : ''}<span class="mono">${sp.name}</span><span style="color:var(--mu)">${SVC[sp.svc]}</span></div>
+        <div class="tl"><div class="bar${sp.err ? ' err' : ''}" style="left:${l}%;width:${w}%;background:${svcColor(sp.svc)}"></div>
+        <span class="dur" style="${right ? `right:${100 - l + 0.5}%` : `left:${l + w + 0.5}%`}">${fmtDur(sp.e - sp.s)}</span></div></div>`;
+    }
+    inner.innerHTML = html;
+  }
+  document.getElementById('wf').addEventListener('scroll', () => requestAnimationFrame(drawWaterfall), { passive: true });
+  document.getElementById('wfInner').addEventListener('click', e => {
+    const row = e.target.closest('.wr'); if (!row) return;
+    store.set({ span: +row.dataset.i, trace: '9f3a41d2…c1' }, 'wf');
+  });
+
+  // ---------- selection chips ----------
+  function renderChips(st) {
+    const bar = document.getElementById('selbar');
+    bar.querySelectorAll('.chip').forEach(c => c.remove());
+    const add = (k, v, clear) => {
+      const c = document.createElement('span'); c.className = 'chip';
+      c.innerHTML = `<b>${k}</b><u>${v}</u><s>✕</s>`;
+      c.querySelector('s').onclick = clear;
+      bar.appendChild(c);
+    };
+    if (st.time) add('time', `${fmtClock(st.time[0])} – ${fmtClock(st.time[1])}`, () => store.set({ time: null }, 'chip'));
+    if (st.trace) add('trace_id', st.trace, () => store.set({ trace: null, span: null }, 'chip'));
+    if (st.span != null && T.spans[st.span]) add('span', `${SVC[T.spans[st.span].svc]} · ${T.spans[st.span].name}`, () => store.set({ span: null }, 'chip'));
+    document.getElementById('selEmpty').style.display = (st.time || st.trace || st.span != null) ? 'none' : '';
+  }
+
+  let lastSpan = null;
+  store.sub((st, src) => {
+    renderChips(st);
+    pushBrush(st, src);
+    if (st.span !== lastSpan) {
+      lastSpan = st.span;
+      refreshFlameSelection();
+      charts.cc && charts.cc.setOption(ccOption());
+      drawWaterfall();
+    }
+  });
+
+  // ---------- stats ----------
+  function showStats() {
+    const f = v => v == null ? '—' : v < 1 ? '<1 ms' : Math.round(v) + ' ms';
+    document.getElementById('stats').innerHTML =
+      `data <b>${f(stats.gen)}</b> · flame <b>${f(stats.flame)}</b> · minimap <b>${f(stats.mini)}</b> · reselect <b>${f(stats.reselect)}</b> · chart <b>${f(stats.chart)}</b> · timeline <b>${f(stats.timeline)}</b> · waterfall <b>${f(stats.waterfall)}</b>`;
+  }
+
+  // ---------- boot ----------
+  function buildAll() {
+    const n = +document.getElementById('nSpans').value, np = +document.getElementById('nPoints').value;
+    const t0 = performance.now();
+    T = genTrace(n); S = genSeries(np); TL = genTimeline();
+    stats.gen = performance.now() - t0;
+    store.state.span = null; lastSpan = null;
+    registerThemes();
+    renderFlame(); renderChartCard(); renderTimeline(); renderWaterfall();
+    renderChips(store.state); pushBrush(store.state, null);
+    // measure the frame cost after first paint
+    requestAnimationFrame(() => requestAnimationFrame(showStats));
+  }
+  const qs = new URLSearchParams(location.search);
+  if (qs.get('spans')) document.getElementById('nSpans').value = qs.get('spans');
+  if (qs.get('points')) document.getElementById('nPoints').value = qs.get('points');
+  document.getElementById('nSpans').onchange = buildAll;
+  document.getElementById('nPoints').onchange = buildAll;
+  document.getElementById('theme').onclick = () => {
+    const dark = document.documentElement.dataset.theme !== 'dark';
+    document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+    document.getElementById('theme').textContent = dark ? '◐ Light' : '◐ Dark';
+    registerThemes();
+    // runtime theme switch (ECharts 6 setTheme) + re-apply token-driven options
+    const t0 = performance.now();
+    for (const [k, c] of Object.entries(charts)) {
+      try { c.setTheme(themeName()); } catch (e) { /* fallback handled by full re-render below */ }
+    }
+    hatch = null;
+    charts.fg.setOption(flameOption(false), true);
+    charts.fgMini.setOption(flameOption(true), true);
+    charts.cc.setOption(ccOption(), true);
+    charts.tl.setOption(tlOption(), true);
+    charts.cc.dispatchAction({ type: 'takeGlobalCursor', key: 'brush', brushOption: { brushType: 'lineX', brushMode: 'single' } });
+    charts.tl.dispatchAction({ type: 'takeGlobalCursor', key: 'brush', brushOption: { brushType: 'lineX', brushMode: 'single' } });
+    pushBrush(store.state, null);
+    renderLegend(); drawWaterfall();
+    stats.theme = performance.now() - t0;
+    showStats();
+  };
+  window.addEventListener('resize', () => Object.values(charts).forEach(c => c.resize()));
+  buildAll();
+  if (qs.get('theme') === 'dark') document.getElementById('theme').click();
+  if (qs.get('select')) store.set({ span: +qs.get('select'), trace: '9f3a41d2…c1', time: [TRACE_START - 60000, TRACE_START + 90000] }, 'url');
+})();
+</script>
+</body>
+</html>
