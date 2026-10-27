@@ -35,7 +35,7 @@ import type {
 } from '../model/records.js';
 import type { CompiledCondition } from '../ottl/compile.js';
 import { compileAny } from '../ottl/compile.js';
-import type { SpanTarget } from '../ottl/contexts.js';
+import type { LogTarget, SpanTarget } from '../ottl/contexts.js';
 import {
   createRollups,
   deserializeRollups,
@@ -505,9 +505,9 @@ class Session implements WriterSession {
   async #acceptLogs(rows: readonly LogRecordRecord[], source: string): Promise<AddResult> {
     const ctx = this.#context();
     // Validate every severity first so a bad record rejects the whole request before anything is stored.
-    const keys = rows.map((l, i) => {
+    rows.forEach((l, i) => {
       try {
-        return severityKey(l.severityNumber);
+        severityKey(l.severityNumber);
       } catch {
         throw new OtelHtmlError('invalid-otlp', {
           path: `${source}: logRecords[${i}].severityNumber`,
@@ -517,8 +517,8 @@ class Session implements WriterSession {
       }
     });
     let dropped = 0;
-    const staged: { log: LogRecordRecord; key: (typeof keys)[number] }[] = [];
-    for (const [i, log] of rows.entries()) {
+    const staged: { log: LogRecordRecord; target: LogTarget }[] = [];
+    for (const log of rows) {
       const target = {
         log,
         resource: ctx.resources.get(log.resource),
@@ -529,13 +529,11 @@ class Session implements WriterSession {
         dropped++;
         continue;
       }
-      const key = keys[i];
-      if (key === undefined) throw new Error('invariant violated: severity key missing');
-      staged.push({ log, key });
+      staged.push({ log, target });
     }
-    for (const { log, key } of staged) {
+    for (const { log, target } of staged) {
       const t = logTime(log);
-      this.#rollups.logs.add(t, key);
+      this.#rollups.logs.add(target);
       this.#logs.push(log);
       this.#totals.logs++;
       this.#extend(t, t);

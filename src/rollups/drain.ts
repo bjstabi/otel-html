@@ -24,7 +24,7 @@ export const DRAIN_MASKS: readonly RegExp[] = [
   /^(\d{1,3}\.){3}\d{1,3}(:\d+)?$/,
 ];
 
-export interface DrainCluster {
+export type DrainCluster = {
   id: number;
   tokens: string[];
   truncated: boolean;
@@ -33,13 +33,13 @@ export interface DrainCluster {
   first: number;
   last: number;
   sample: string;
-}
+};
 
-export interface SerializedDrain {
+export type SerializedDrain = {
   params: typeof DRAIN_PARAMS;
   unclustered: number;
   clusters: DrainCluster[];
-}
+};
 
 /** Split on whitespace runs, mask variable tokens, and keep the first `maxTokens`. */
 export function tokenize(body: string): { tokens: string[]; truncated: boolean } {

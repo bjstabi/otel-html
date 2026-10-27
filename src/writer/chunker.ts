@@ -5,13 +5,13 @@ import type { ManifestChunk } from '../format/manifest.js';
 import { chunkKey, chunkPath, type Signal } from '../format/paths.js';
 import { LOG_COLUMNS, METRIC_COLUMNS, SPAN_COLUMNS } from '../format/specs.js';
 import type { AnyValue, Attributes } from '../model/anyvalue.js';
-import type { RelNanos } from '../model/ids.js';
-import type {
-  LogRecordRecord,
-  MetricPointRecord,
-  ResourceRecord,
-  ScopeRecord,
-  SpanRecord,
+import {
+  type LogRecordRecord,
+  logTime,
+  type MetricPointRecord,
+  type ResourceRecord,
+  type ScopeRecord,
+  type SpanRecord,
 } from '../model/records.js';
 
 const encoder = new TextEncoder();
@@ -80,10 +80,7 @@ export const SPAN_SIGNAL: SignalSpec<SpanRecord> = {
   estimate: estimateSpanBytes,
 };
 
-/** Logs without any timestamp are placed at the epoch. */
-export function logTime(l: LogRecordRecord): RelNanos {
-  return l.time ?? l.observedTime ?? (0 as RelNanos);
-}
+export { logTime };
 
 export const LOG_SIGNAL: SignalSpec<LogRecordRecord> = {
   signal: 'logs',

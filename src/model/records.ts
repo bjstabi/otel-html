@@ -82,6 +82,11 @@ export interface LogRecordRecord {
   readonly scope: ScopeRef;
 }
 
+/** A log's position on the timeline: `time`, else `observedTime`, else the epoch. */
+export function logTime(l: LogRecordRecord): RelNanos {
+  return l.time ?? l.observedTime ?? (0 as RelNanos);
+}
+
 export interface MetricPointRecord {
   readonly name: string;
   readonly description: string;

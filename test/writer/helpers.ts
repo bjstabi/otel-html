@@ -1,9 +1,10 @@
 import { decodeColumns } from '../../src/format/columns.js';
 import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
 import { type Manifest, parseManifest } from '../../src/format/manifest.js';
-import { chunkKey, MANIFEST_KEY, type Signal } from '../../src/format/paths.js';
+import { chunkKey, MANIFEST_KEY, rollupKey, type Signal } from '../../src/format/paths.js';
 import { LOG_COLUMNS, METRIC_COLUMNS, SPAN_COLUMNS } from '../../src/format/specs.js';
 import type { LogRecordRecord, MetricPointRecord, SpanRecord } from '../../src/model/records.js';
+import { LogRollups } from '../../src/rollups/log-rollups.js';
 import type { JsonObject } from '../../test-support/otlp-builders.js';
 import { span, traceRequest } from '../../test-support/otlp-builders.js';
 import type { TestWriter } from '../../test-support/writer-deps.js';
@@ -58,4 +59,14 @@ export function spansRequest(count: number, offsetNs = 0, firstIndex = 0): JsonO
     }),
   );
   return traceRequest(spans, [{ key: 'service.name', value: { stringValue: 'svc' } }]);
+}
+
+/** The report's `data/rollups/logs.js`, decoded the way the viewer will. */
+export function logRollupsOf(w: TestWriter, out: string): LogRollups {
+  const text = w.fs.snapshot().get(`${out}/data/rollups/logs.js`);
+  if (text === undefined) throw new Error('no log rollups');
+  return LogRollups.from(reviveDataJson(unwrapDataFile(text, rollupKey('logs'))), {
+    facetValueCap: 100,
+    facetKeyCap: 100,
+  });
 }
