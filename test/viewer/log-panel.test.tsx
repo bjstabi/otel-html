@@ -286,6 +286,43 @@ describe('LogPanel', () => {
     expect(store.getState().logRef).toBe('0.1');
   });
 
+  test('moving to the next log keeps the open one on screen until the next loads: no skeleton, no remount', async () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const base = source();
+    const ds = {
+      ...base,
+      getLog: (ref: LogRef) => (ref === ROWS[1]?.ref ? gate.then(() => base.getLog(ref)) : base.getLog(ref)),
+    } as DataSource;
+    const store = createSelectionStore({ log: '0.0' as LogRef });
+    const panelFor = (ref: string) => (
+      <ThemeProvider>
+        <GoToContext.Provider value={vi.fn()}>
+          <SelectionProvider store={store}>
+            <Tooltip.Provider>
+              <LogPanel dataSource={ds} logRef={ref as LogRef} onClose={vi.fn()} />
+            </Tooltip.Provider>
+          </SelectionProvider>
+        </GoToContext.Provider>
+      </ThemeProvider>
+    );
+    const { rerender } = render(panelFor('0.0'));
+    const section = await screen.findByRole('region', { name: 'Body' });
+    expect(section.textContent).toContain('body 0');
+    rerender(panelFor('0.1'));
+    expect(screen.queryByRole('status', { name: 'Loading log' })).toBeNull();
+    expect(screen.getByRole('region', { name: 'Body' })).toBe(section);
+    expect(section.textContent).toContain('body 0');
+    await act(async () => {
+      release();
+      await gate;
+    });
+    await waitFor(() => expect(section.textContent).toContain('body 1'));
+    expect(screen.getByRole('region', { name: 'Body' })).toBe(section);
+  });
+
   test('two presses before a re-render move two logs (the current log is read at event time)', async () => {
     const { store } = mount('0.0');
     await screen.findByTestId('log-panel');

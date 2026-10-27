@@ -174,7 +174,12 @@ export function LogPanel(props: LogPanelProps): JSX.Element {
   const { dataSource, logRef, logRefs, onClose } = props;
   const sel = useSelection((s) => s);
   const load = useLog(dataSource, logRef);
-  const row = load.status === 'ready' ? load.value : null;
+  // While the next log loads (j/k), the open one stays on screen: no skeleton flash, and the content is not remounted.
+  const lastReady = useRef<LogRow | null>(null);
+  if (load.status === 'ready') lastReady.current = load.value;
+  else if (load.status === 'error') lastReady.current = null;
+  const row = load.status === 'ready' ? load.value : load.status === 'loading' ? lastReady.current : null;
+  const stale = load.status === 'loading' && row !== null;
   const epoch = useMemo(
     () => parseUnixNanos(dataSource.manifest.epochUnixNano, 'manifest.epochUnixNano'),
     [dataSource],
@@ -287,8 +292,8 @@ export function LogPanel(props: LogPanelProps): JSX.Element {
         <button
           type="button"
           className={CONTROL}
-          disabled={row === null}
-          onClick={() => row !== null && exportLog(row)}
+          disabled={row === null || stale}
+          onClick={() => row !== null && !stale && exportLog(row)}
         >
           <Download size={16} aria-hidden />
           Export
@@ -304,7 +309,7 @@ export function LogPanel(props: LogPanelProps): JSX.Element {
           The export failed: <span className="font-mono text-xs">{exportError}</span>
         </p>
       )}
-      {load.status === 'loading' && (
+      {load.status === 'loading' && !stale && (
         <div role="status" aria-busy="true" aria-label="Loading log" className="flex flex-col gap-3 p-4">
           <p className="font-mono text-xs tabular-nums text-muted">{logRef}</p>
           <div className="h-6 w-2/3 animate-pulse rounded-md bg-hairline" />
@@ -318,7 +323,7 @@ export function LogPanel(props: LogPanelProps): JSX.Element {
         </div>
       )}
       {row !== null && active !== null && (
-        <div className="flex flex-col gap-3 p-4">
+        <div className="flex flex-col gap-3 p-4" aria-busy={stale}>
           <dl className="grid grid-cols-2 gap-2 md:grid-cols-4">
             <Fact label="Service">
               {row.service}
