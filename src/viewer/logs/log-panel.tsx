@@ -2,7 +2,7 @@ import { Tabs } from '@base-ui/react/tabs';
 import { CircleAlert, Copy, Download, ListTree, X } from 'lucide-react';
 import { type JSX, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { logsToOtlpJson } from '../../format/otlp-export.js';
-import { anyValueToDisplay } from '../../model/anyvalue.js';
+import { type AnyValue, anyValueToDisplay } from '../../model/anyvalue.js';
 import type { SpanId, TraceId } from '../../model/ids.js';
 import { parseUnixNanos } from '../../model/ids.js';
 import { formatTime } from '../../semconv/formatters.js';
@@ -136,13 +136,13 @@ function TraceFact(props: {
   );
 }
 
-function CopyBody(props: { text: string }): JSX.Element {
+function CopyBody(props: { body: AnyValue }): JSX.Element {
   const [note, setNote] = useState('');
   const copy = async (): Promise<void> => {
     const clipboard: Clipboard | undefined = navigator.clipboard;
     try {
       if (clipboard === undefined) throw new Error('clipboard unavailable');
-      await clipboard.writeText(props.text);
+      await clipboard.writeText(anyValueToDisplay(props.body));
       setNote('Copied');
     } catch {
       setNote('Copy failed: select the text and copy it');
@@ -209,7 +209,8 @@ export function LogPanel(props: LogPanelProps): JSX.Element {
   // j/k: with the panel open it owns the move event, so the next/previous log in the visible order opens.
   const latest = useRef({ logRef, logRefs, select: sel.selectLog });
   latest.current = { logRef, logRefs, select: sel.selectLog };
-  const movable = logRefs !== undefined;
+  // With a trace overlay open too, the trace panel owns j/k.
+  const movable = logRefs !== undefined && sel.traceId === null;
   useEffect(() => {
     if (!movable) return;
     const onMove = (e: Event): void => {
@@ -374,7 +375,7 @@ export function LogPanel(props: LogPanelProps): JSX.Element {
                   </button>
                 ))}
               </fieldset>
-              <CopyBody text={anyValueToDisplay(row.log.body)} />
+              <CopyBody body={row.log.body} />
             </div>
             <LogBody body={row.log.body} mode={bodyMode} lines={1000} />
           </section>

@@ -6,6 +6,7 @@ import type { Manifest } from '../../src/format/manifest.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import type { RelNanos, SpanId, TraceId } from '../../src/model/ids.js';
 import type { ResourceRecord, ScopeRecord } from '../../src/model/records.js';
+import { formatBytes } from '../../src/semconv/formatters.js';
 import type { DataSource } from '../../src/viewer/data/data-source.js';
 import { type LogRef, type LogRow, logRef } from '../../src/viewer/data/log-query.js';
 import { LogPanel } from '../../src/viewer/logs/log-panel.js';
@@ -130,6 +131,32 @@ function mount(ref: string, initial: Parameters<typeof createSelectionStore>[0] 
 }
 
 describe('LogPanel', () => {
+  test('a body over 16 384 characters shows the head and a Show all button sized by formatBytes', async () => {
+    const user = userEvent.setup();
+    const big = 'x'.repeat(1_048_576);
+    ROWS[0] = row(0, { body: big });
+    mount('0.0');
+    const panel = await screen.findByTestId('log-panel');
+    const button = await within(panel).findByRole('button', { name: `Show all (${formatBytes(1_048_576)})` });
+    expect(button.textContent).toBe('Show all (1 MiB)');
+    const section = within(panel).getByRole('region', { name: 'Body' });
+    expect((section.textContent ?? '').length).toBeLessThan(20_000);
+    await user.click(button);
+    expect((within(panel).getByRole('region', { name: 'Body' }).textContent ?? '').length).toBeGreaterThan(
+      1_000_000,
+    );
+    ROWS[0] = row(0);
+  });
+
+  test('j does nothing while a trace is also open (the trace panel owns it)', async () => {
+    const { store } = mount('0.0', { trace: TRACE });
+    await screen.findByTestId('log-panel');
+    act(() => {
+      window.dispatchEvent(new CustomEvent(MOVE_EVENT, { detail: 1 }));
+    });
+    expect(store.getState().logRef).toBe('0.0');
+  });
+
   test('the header shows the severity badge and the observed time', async () => {
     mount('0.0');
     const panel = await screen.findByTestId('log-panel');

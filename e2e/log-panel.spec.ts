@@ -5,7 +5,6 @@ const refOf = (url: string): string => /[?&]log=(\d+\.\d+)/.exec(url)?.[1] ?? ''
 
 test('Log panel: open from a row, reload, j/k, Copy link, Esc, and hostile content', async ({
   page,
-  context,
   reportUrl,
 }) => {
   const problems: string[] = [];
@@ -17,7 +16,19 @@ test('Log panel: open from a row, reload, j/k, Copy link, Esc, and hostile conte
     problems.push(`unexpected dialog: ${d.message()}`);
     void d.dismiss();
   });
-  await context.grantPermissions(['clipboard-read', 'clipboard-write']).catch(() => undefined);
+  // A stub clipboard records what CopyLink writes, so the assertion is the same under file: and http:.
+  await page.addInitScript(() => {
+    const w: Window & { __copied?: string } = window;
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: (t: string): Promise<void> => {
+          w.__copied = t;
+          return Promise.resolve();
+        },
+      },
+    });
+  });
 
   await page.goto(`${reportUrl('linked')}/index.html#/logs`);
   const rows = page.getByRole('grid', { name: 'Results' }).getByRole('row');
@@ -48,11 +59,9 @@ test('Log panel: open from a row, reload, j/k, Copy link, Esc, and hostile conte
   await expect(page).toHaveURL(/ltab=surrounding/);
   await expect(panel.getByRole('grid', { name: 'Results' })).toBeVisible();
   await panel.getByRole('button', { name: 'Copy link' }).click();
-  const copied = await page.evaluate(() => navigator.clipboard.readText()).catch(() => null);
-  if (copied !== null) {
-    expect(copied).toContain('log=');
-    expect(copied).toContain('ltab=surrounding');
-  }
+  await expect
+    .poll(() => page.evaluate(() => (window as Window & { __copied?: string }).__copied ?? ''))
+    .toMatch(/log=\d+\.\d+.*ltab=surrounding|ltab=surrounding.*log=\d+\.\d+/);
 
   // Esc closes the panel and clears log= only.
   await page.keyboard.press('Escape');
