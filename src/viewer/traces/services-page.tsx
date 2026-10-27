@@ -149,7 +149,7 @@ export function ServicesPage(props: { dataSource: DataSource }): JSX.Element {
   };
 
   return (
-    <PageChrome title="Services" manifest={manifest}>
+    <PageChrome title="Services" signal="span" manifest={manifest}>
       {load.status === 'loading' && (
         <p role="status" className="text-sm text-muted">
           Loading services

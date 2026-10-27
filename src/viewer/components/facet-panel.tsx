@@ -1,14 +1,18 @@
 import { type JSX, useState } from 'react';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { FacetCounts } from '../../rollups/facets.js';
+import { LOG_SEVERITY_KEYS, type LogSeverityKey } from '../../rollups/signal-counts.js';
 import { useSelection } from '../state/selection-context.js';
 import {
   type FacetScope,
+  type FacetSignal,
   type FacetValueKind,
   type FilterToken,
   facetFilterable,
   facetToken,
   ottlToTokens,
+  SEVERITY_BOUNDS,
+  SEVERITY_PATH,
   tokensToOttl,
 } from './filter-tokens.js';
 
@@ -23,6 +27,14 @@ export const DURATION_KEY = 'span.end_time_unix_nano - span.start_time_unix_nano
 
 export type FacetAction = 'only' | 'exclude';
 
+const SEVERITY_FACET = 'severity';
+const SEVERITY_EXCLUDE_MESSAGE =
+  'Excluding a severity needs "or", which facets cannot write. Use the query bar.';
+
+function isSeverityKey(v: string): v is LogSeverityKey {
+  return LOG_SEVERITY_KEYS.some((k) => k === v);
+}
+
 interface FacetDef {
   /** Key in the rollup's `FacetCounts`. */
   key: string;
@@ -31,25 +43,39 @@ interface FacetDef {
   scope: FacetScope;
 }
 
-const CORE: readonly FacetDef[] = [
-  { key: 'service.name', label: 'Service', scope: 'core' },
-  { key: 'span.name', label: 'Span name', scope: 'core' },
-  { key: 'span.kind', label: 'Kind', scope: 'core' },
-  { key: 'status.code', label: 'Status', scope: 'core' },
-  { key: 'instrumentation_scope.name', label: 'Scope', scope: 'core' },
-];
-const RESOURCE: readonly FacetDef[] = [
-  { key: 'host.name', label: 'Host', scope: 'resource' },
-  {
-    key: 'deployment.environment.name',
-    label: 'Environment',
-    scope: 'resource',
+/** Per-signal facet groups, in display order. Log facets are one flat list (Host sits between Service and Scope). */
+const FACET_DEFS: Record<FacetSignal, { core: readonly FacetDef[]; resource: readonly FacetDef[] }> = {
+  span: {
+    core: [
+      { key: 'service.name', label: 'Service', scope: 'core' },
+      { key: 'span.name', label: 'Span name', scope: 'core' },
+      { key: 'span.kind', label: 'Kind', scope: 'core' },
+      { key: 'status.code', label: 'Status', scope: 'core' },
+      { key: 'instrumentation_scope.name', label: 'Scope', scope: 'core' },
+    ],
+    resource: [
+      { key: 'host.name', label: 'Host', scope: 'resource' },
+      { key: 'deployment.environment.name', label: 'Environment', scope: 'resource' },
+    ],
   },
-];
+  log: {
+    core: [
+      { key: SEVERITY_FACET, label: 'Severity', scope: 'core' },
+      { key: 'service.name', label: 'Service', scope: 'core' },
+      { key: 'host.name', label: 'Host', scope: 'resource' },
+      { key: 'instrumentation_scope.name', label: 'Scope', scope: 'core' },
+      { key: 'event.name', label: 'Event name', scope: 'core' },
+      { key: 'trace.present', label: 'Has trace', scope: 'core' },
+    ],
+    resource: [],
+  },
+};
+
 /** Rollup keys that are never listed under Attributes: grouped above, or derived with no filterable path. */
-const NOT_ATTRIBUTES: ReadonlySet<string> = new Set(
-  [...CORE, ...RESOURCE].map((d) => d.key).concat('resource'),
-);
+function notAttributes(signal: FacetSignal): ReadonlySet<string> {
+  const { core, resource } = FACET_DEFS[signal];
+  return new Set([...core, ...resource].map((d) => d.key).concat('resource'));
+}
 
 const HATCH =
   'repeating-linear-gradient(45deg, var(--oh-critical) 0 3px, color-mix(in srgb, var(--oh-critical) 25%, transparent) 3px 6px)';
@@ -70,6 +96,8 @@ function FacetRow(props: {
   /** False when no exact filter exists for the key (mixed value types); the buttons are disabled. */
   filterable: boolean;
   onAction(a: FacetAction): void;
+  /** Severity rows replace Only/Exclude with Only / And above / a disabled Exclude. */
+  onAndAbove?(): void;
 }): JSX.Element {
   const share = props.total === 0 ? 0 : props.count / props.total;
   const isError = props.def.key === 'status.code' && props.value === 'error';
@@ -116,11 +144,27 @@ function FacetRow(props: {
         >
           only
         </button>
+        {props.onAndAbove === undefined ? null : (
+          <button
+            type="button"
+            aria-label={`And above ${props.value}`}
+            onClick={props.onAndAbove}
+            className="rounded-full border border-hairline bg-surface px-1.5 hover:bg-hairline"
+          >
+            and above
+          </button>
+        )}
         <button
           type="button"
           aria-label={`Exclude ${props.value}`}
-          disabled={!props.filterable}
-          title={props.filterable ? undefined : MIXED_MESSAGE}
+          disabled={!props.filterable || props.onAndAbove !== undefined}
+          title={
+            props.onAndAbove !== undefined
+              ? SEVERITY_EXCLUDE_MESSAGE
+              : props.filterable
+                ? undefined
+                : MIXED_MESSAGE
+          }
           onClick={() => props.onAction('exclude')}
           className="rounded-full border border-hairline bg-surface px-1.5 hover:bg-hairline"
         >
@@ -144,21 +188,37 @@ function matchingValues(
 }
 
 /** The token a row stands for, or null when none can be built (the row then shows no include/exclude state). */
-function displayToken(def: FacetDef, value: string, kind: FacetValueKind | undefined): FilterToken | null {
+function displayToken(
+  def: FacetDef,
+  value: string,
+  kind: FacetValueKind | undefined,
+  signal: FacetSignal,
+  op: '==' | '!=',
+): FilterToken | null {
   try {
-    return facetToken(def.key, def.scope, value, '==', kind);
+    return facetToken(def.key, def.scope, value, op, kind, signal);
   } catch (e) {
     if (e instanceof OtelHtmlError && e.code === 'usage') return null;
     throw e;
   }
 }
 
+/** A severity row is included when the condition is exactly that band's `>= first and <= last` pair. */
+function severityIncluded(tokens: readonly FilterToken[] | null, band: LogSeverityKey): boolean {
+  const { first, last } = SEVERITY_BOUNDS[band];
+  const has = (op: '>=' | '<=', value: string): boolean =>
+    tokens?.some((t) => t.key === SEVERITY_PATH && t.op === op && t.value === value) ?? false;
+  return has('>=', first) && has('<=', last);
+}
+
 function FacetBlock(props: {
+  signal: FacetSignal;
   def: FacetDef;
   facets: FacetCounts;
   search: string;
   tokens: readonly FilterToken[] | null;
   onAction(def: FacetDef, value: string, a: FacetAction): void;
+  onSeverity(min: LogSeverityKey, max: LogSeverityKey | null): void;
 }): JSX.Element | null {
   const { def, facets } = props;
   const total = facets.total(def.key);
@@ -174,13 +234,31 @@ function FacetBlock(props: {
       <h4 className="text-xs font-medium text-muted">{def.label}</h4>
       <ul className="flex flex-col">
         {values.map((v) => {
-          const want = filterable ? displayToken(def, v.value, kind) : null;
-          const t =
-            want === null
-              ? undefined
-              : props.tokens?.find(
-                  (x) => x.key === want.key && x.value === want.value && x.enum === want.enum,
-                );
+          const band =
+            props.signal === 'log' && def.key === SEVERITY_FACET && isSeverityKey(v.value) ? v.value : null;
+          if (band !== null) {
+            return (
+              <FacetRow
+                key={v.value}
+                def={def}
+                value={v.value}
+                count={v.count}
+                total={total}
+                filterable
+                state={severityIncluded(props.tokens, band) ? 'include' : null}
+                onAction={() => props.onSeverity(band, band)}
+                onAndAbove={() => props.onSeverity(band, null)}
+              />
+            );
+          }
+          const has = (t: FilterToken | null): boolean =>
+            t !== null &&
+            (props.tokens?.some(
+              (x) => x.key === t.key && x.op === t.op && x.value === t.value && x.enum === t.enum,
+            ) ??
+              false);
+          const included = filterable && has(displayToken(def, v.value, kind, props.signal, '=='));
+          const excluded = filterable && has(displayToken(def, v.value, kind, props.signal, '!='));
           return (
             <FacetRow
               key={v.value}
@@ -189,7 +267,7 @@ function FacetBlock(props: {
               count={v.count}
               total={total}
               filterable={filterable}
-              state={t?.op === '==' ? 'include' : t?.op === '!=' ? 'exclude' : null}
+              state={included ? 'include' : excluded ? 'exclude' : null}
               onAction={(a) => props.onAction(def, v.value, a)}
             />
           );
@@ -304,6 +382,7 @@ function DurationFacet(props: {
 }
 
 export interface FacetPanelProps {
+  signal: FacetSignal;
   facets: FacetCounts;
   /** Observer called after a facet action has been written to the store, with the facet's key and scope. */
   onToggle?(facet: { key: string; scope: FacetScope }, value: string, action: FacetAction): void;
@@ -329,6 +408,8 @@ export function FacetPanel(props: FacetPanelProps): JSX.Element {
   const condition = useSelection((s) => s.condition);
   const setCondition = useSelection((s) => s.setCondition);
   const toggleFacet = useSelection((s) => s.toggleFacet);
+  const setSeverityRange = useSelection((s) => s.setSeverityRange);
+  const defs = FACET_DEFS[props.signal];
   const pageSize = props.attributePageSize ?? 5;
   const [search, setSearch] = useState('');
   const [shown, setShown] = useState(pageSize);
@@ -344,13 +425,22 @@ export function FacetPanel(props: FacetPanelProps): JSX.Element {
     try {
       if (action === 'only') {
         // setCondition validates (parses) the condition like any other write, so this respects the store's rules.
-        const want = facetToken(def.key, def.scope, value, '==', kind);
+        const want = facetToken(def.key, def.scope, value, '==', kind, props.signal);
         setCondition(tokensToOttl([...tokens.filter((t) => t.key !== want.key), want]));
       } else {
-        toggleFacet(def.key, value, 'exclude', def.scope, kind);
+        toggleFacet(def.key, value, 'exclude', def.scope, kind, props.signal);
       }
       setError(null);
       props.onToggle?.({ key: def.key, scope: def.scope }, value, action);
+    } catch (e) {
+      setError(facetErrorMessage(e));
+    }
+  };
+
+  const severity = (min: LogSeverityKey, max: LogSeverityKey | null): void => {
+    try {
+      setSeverityRange(min, max);
+      setError(null);
     } catch (e) {
       setError(facetErrorMessage(e));
     }
@@ -376,9 +466,10 @@ export function FacetPanel(props: FacetPanelProps): JSX.Element {
   };
 
   // Keys are listed only when some value matches the search, so "N of M shown" stays honest while searching.
+  const excluded = notAttributes(props.signal);
   const attributeKeys = props.facets
     .keys()
-    .filter((k) => !NOT_ATTRIBUTES.has(k))
+    .filter((k) => !excluded.has(k))
     .filter((k) => search === '' || matchingValues(props.facets, k, search).length > 0)
     .sort((a, b) => props.facets.total(b) - props.facets.total(a) || (a < b ? -1 : a > b ? 1 : 0));
   const attributeDefs: FacetDef[] = attributeKeys
@@ -388,11 +479,13 @@ export function FacetPanel(props: FacetPanelProps): JSX.Element {
   const block = (def: FacetDef): JSX.Element => (
     <FacetBlock
       key={def.key}
+      signal={props.signal}
       def={def}
       facets={props.facets}
       search={search}
       tokens={tokens}
       onAction={act}
+      onSeverity={severity}
     />
   );
 
@@ -416,15 +509,17 @@ export function FacetPanel(props: FacetPanelProps): JSX.Element {
       )}
       <div className="flex flex-col gap-2">
         <h3 className="text-sm font-semibold">Core</h3>
-        {CORE.map(block)}
+        {defs.core.map(block)}
         {props.durationBins === undefined || props.durationBins.length === 0 ? null : (
           <DurationFacet bins={props.durationBins} tokens={tokens} onRange={setRange} />
         )}
       </div>
-      <div className="flex flex-col gap-2">
-        <h3 className="text-sm font-semibold">Resource</h3>
-        {RESOURCE.map(block)}
-      </div>
+      {defs.resource.length === 0 ? null : (
+        <div className="flex flex-col gap-2">
+          <h3 className="text-sm font-semibold">Resource</h3>
+          {defs.resource.map(block)}
+        </div>
+      )}
       <div className="flex flex-col gap-2">
         <div className="flex items-center justify-between">
           <h3 className="text-sm font-semibold">Attributes</h3>

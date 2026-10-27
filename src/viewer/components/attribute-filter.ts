@@ -1,6 +1,12 @@
 import { type AnyValue, anyValueToDisplay } from '../../model/anyvalue.js';
 import { OtelHtmlError } from '../../model/errors.js';
-import { type FilterToken, facetKeyToPath, ottlToTokens, tokensToOttl } from './filter-tokens.js';
+import {
+  type FacetSignal,
+  type FilterToken,
+  facetKeyToPath,
+  ottlToTokens,
+  tokensToOttl,
+} from './filter-tokens.js';
 
 /** The token literal for a scalar attribute value; null for values a filter cannot express (array, kvlist, bytes, empty). */
 export function tokenValue(v: AnyValue): FilterToken['value'] | undefined {
@@ -33,6 +39,7 @@ export function addAttributeFilter(
   key: string,
   value: AnyValue,
   op: '==' | '!=',
+  signal: FacetSignal = 'span',
 ): string | null {
   const literal = tokenValue(value);
   if (literal === undefined) return condition;
@@ -48,7 +55,7 @@ export function addAttributeFilter(
     }
     tokens = parsed;
   }
-  const path = facetKeyToPath(key, 'span', scope);
+  const path = facetKeyToPath(key, signal, scope);
   const rest = tokens.filter(
     (t) => !(t.key === path && t.value === literal && (t.op === '==' || t.op === '!=')),
   );

@@ -2,7 +2,9 @@ import { describe, expect, test } from 'vitest';
 import {
   type FilterToken,
   facetKeyToPath,
+  facetToken,
   ottlToTokens,
+  severityRangeTokens,
   tokensToOttl,
 } from '../../src/viewer/components/filter-tokens.js';
 
@@ -59,7 +61,9 @@ describe('ottlToTokens', () => {
     expect(ottlToTokens('a == 1 or b == 2')).toBeNull();
     expect(ottlToTokens('not (a == 1)')).toBeNull();
     expect(ottlToTokens('a == ')).toBeNull();
-    expect(ottlToTokens('IsMatch(span.name, "a.*")')).toBeNull();
+    expect(ottlToTokens('IsMatch(span.name, "a.*")')).toEqual([
+      { key: 'span.name', op: 'matches', value: 'a.*' },
+    ]);
   });
 
   test('duration expression keys round-trip', () => {
@@ -110,5 +114,58 @@ describe('enum right-hand sides', () => {
       { key: 'log.severity_number', op: '<=', value: 'SEVERITY_NUMBER_WARN4', enum: true },
     ]);
     expect(tokensToOttl(tokens ?? [])).toBe(src);
+  });
+});
+
+describe('log facets', () => {
+  test('log facet tokens', () => {
+    expect(tokensToOttl([facetToken('event.name', 'core', 'checkout.done', '==', 'string', 'log')])).toBe(
+      'log.event_name == "checkout.done"',
+    );
+    expect(tokensToOttl([facetToken('trace.present', 'core', 'yes', '==', 'string', 'log')])).toBe(
+      'log.trace_id.string != ""',
+    );
+    expect(tokensToOttl([facetToken('trace.present', 'core', 'yes', '!=', 'string', 'log')])).toBe(
+      'log.trace_id.string == ""',
+    );
+    expect(tokensToOttl([facetToken('trace.present', 'core', 'no', '==', 'string', 'log')])).toBe(
+      'log.trace_id.string == ""',
+    );
+    expect(tokensToOttl([facetToken('trace.present', 'core', 'no', '!=', 'string', 'log')])).toBe(
+      'log.trace_id.string != ""',
+    );
+    expect(tokensToOttl([facetToken('http.method', 'attribute', 'GET', '==', 'string', 'log')])).toBe(
+      'log.attributes["http.method"] == "GET"',
+    );
+  });
+
+  test('log paths', () => {
+    expect(facetKeyToPath('service.name', 'log')).toBe(SERVICE);
+    expect(facetKeyToPath('instrumentation_scope.name', 'log')).toBe('instrumentation_scope.name');
+    expect(facetKeyToPath('foo', 'log')).toBe('log.attributes["foo"]');
+    expect(facetKeyToPath('host.name', 'log', 'resource')).toBe('resource.attributes["host.name"]');
+  });
+
+  test('severityRangeTokens', () => {
+    expect(severityRangeTokens('warn', 'warn')).toEqual([
+      { key: 'log.severity_number', op: '>=', value: 'SEVERITY_NUMBER_WARN', enum: true },
+      { key: 'log.severity_number', op: '<=', value: 'SEVERITY_NUMBER_WARN4', enum: true },
+    ]);
+    expect(severityRangeTokens('error', null)).toHaveLength(1);
+    expect(severityRangeTokens(null, null)).toEqual([]);
+  });
+});
+
+describe('matches tokens', () => {
+  test('matches tokens round-trip', () => {
+    const src = 'IsMatch(log.body.string, "^card declined: \\\\S+$")';
+    expect(ottlToTokens(src)).toEqual([
+      { key: 'log.body.string', op: 'matches', value: '^card declined: \\S+$' },
+    ]);
+    expect(tokensToOttl(ottlToTokens(src) ?? [])).toBe(src);
+  });
+  test('template regexes are matches, escaped literals stay contains', () => {
+    expect(ottlToTokens('IsMatch(log.body.string, "card\\\\s+declined")')?.[0]?.op).toBe('matches');
+    expect(ottlToTokens('IsMatch(log.body.string, "a\\\\.b")')?.[0]?.op).toBe('contains');
   });
 });

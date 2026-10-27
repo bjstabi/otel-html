@@ -3,7 +3,7 @@ import { type JSX, useEffect, useRef, useState } from 'react';
 import { OtelHtmlError } from '../../model/errors.js';
 import { compileCondition } from '../../ottl/compile.js';
 import { useSelection } from '../state/selection-context.js';
-import { type FilterToken, ottlToTokens, tokensToOttl } from './filter-tokens.js';
+import { type FacetSignal, type FilterToken, ottlToTokens, tokensToOttl } from './filter-tokens.js';
 
 const OPS: readonly FilterToken['op'][] = [
   '==',
@@ -13,6 +13,7 @@ const OPS: readonly FilterToken['op'][] = [
   '<',
   '<=',
   'contains',
+  'matches',
   'exists',
   'not exists',
 ];
@@ -139,6 +140,7 @@ function TokenChip(props: {
 }
 
 function AddFilter(props: {
+  signal: FacetSignal;
   onAdd(key: string, op: FilterToken['op'], value: string): boolean;
 }): JSX.Element {
   const [key, setKey] = useState('');
@@ -159,7 +161,7 @@ function AddFilter(props: {
       <input
         type="text"
         aria-label="New filter key"
-        placeholder='span.attributes["key"]'
+        placeholder={props.signal === 'log' ? 'log.attributes["key"]' : 'span.attributes["key"]'}
         value={key}
         onChange={(e) => setKey(e.target.value)}
         className={`${FIELD} w-44`}
@@ -202,7 +204,11 @@ function AddFilter(props: {
  * Free-text search, OTTL filter tokens, and a raw OTTL editor. Invalid input never reaches the store, and typing
  * does not write per keystroke: free text is debounced, tokens and raw OTTL commit on Enter or blur.
  */
-export function QueryBar(props: { signal: 'span'; debounceMs?: number; schedule?: Scheduler }): JSX.Element {
+export function QueryBar(props: {
+  signal: FacetSignal;
+  debounceMs?: number;
+  schedule?: Scheduler;
+}): JSX.Element {
   const condition = useSelection((s) => s.condition);
   const text = useSelection((s) => s.text);
   const setText = useSelection((s) => s.setText);
@@ -268,7 +274,7 @@ export function QueryBar(props: { signal: 'span'; debounceMs?: number; schedule?
   const checkRaw = (src: string): string | null => {
     if (src.trim() === '') return null;
     try {
-      compileCondition(src, props.signal);
+      compileCondition(src, props.signal === 'log' ? 'log_record' : 'span');
       return null;
     } catch (e) {
       if (e instanceof OtelHtmlError) return describeOttlError(e);
@@ -400,6 +406,7 @@ export function QueryBar(props: { signal: 'span'; debounceMs?: number; schedule?
             ))}
           </ul>
           <AddFilter
+            signal={props.signal}
             onAdd={(key, op, value) =>
               guarded(() => commitTokens([...current, { key, op, value: coerceValue(op, null, value) }]))
             }

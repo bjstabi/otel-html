@@ -15,7 +15,7 @@ export function ComingLaterPage(props: { page: keyof typeof LATER; manifest: Man
   const { title, signal, noun } = LATER[props.page];
   const count = props.manifest.totals[signal];
   return (
-    <PageChrome title={title} manifest={props.manifest}>
+    <PageChrome title={title} signal="span" manifest={props.manifest}>
       <section className={CARD}>
         <h2 className="text-base font-semibold">Coming in a later release</h2>
         <p className="mt-1 text-sm text-ink-2">

@@ -8,11 +8,11 @@ import { SelectionProvider } from '../../src/viewer/state/selection-context.js';
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 afterEach(cleanup);
 
-function setup(initial: { q?: string; text?: string } = {}) {
+function setup(initial: { q?: string; text?: string } = {}, signal: 'span' | 'log' = 'span') {
   const store = createSelectionStore(initial);
   render(
     <SelectionProvider store={store}>
-      <QueryBar signal="span" />
+      <QueryBar signal={signal} />
     </SelectionProvider>,
   );
   return store;
@@ -232,5 +232,25 @@ describe('QueryBar', () => {
     expect(
       (screen.getByRole('textbox', { name: 'Value of span.attributes["k"]' }) as HTMLInputElement).value,
     ).toBe(hostile);
+  });
+
+  test('log signal compiles in log_record context: span paths are rejected and the condition is kept', async () => {
+    const user = userEvent.setup();
+    const store = setup({ q: 'log.severity_number >= 9' }, 'log');
+    await user.click(screen.getByRole('button', { name: 'OTTL' }));
+    const area = screen.getByRole('textbox', { name: 'OTTL condition' });
+    await user.clear(area);
+    await user.type(area, 'span.name == "x"');
+    await user.tab();
+    expect(screen.getByRole('alert').textContent).toMatch(/span\.name/);
+    expect(store.getState().condition).toBe('log.severity_number >= 9');
+  });
+
+  test('matches tokens show as editable chips', () => {
+    setup({ q: 'IsMatch(log.body.string, "a.*")' }, 'log');
+    expect(screen.getByRole('combobox', { name: 'Operator of log.body.string' })).toHaveProperty(
+      'value',
+      'matches',
+    );
   });
 });

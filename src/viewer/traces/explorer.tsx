@@ -164,7 +164,7 @@ export function TracesExplorer(props: { dataSource: DataSource }): JSX.Element {
   const { manifest } = props.dataSource;
   if (manifest.totals.spans === 0) {
     return (
-      <PageChrome title="Traces Explorer" manifest={manifest}>
+      <PageChrome title="Traces Explorer" signal="span" manifest={manifest}>
         <ZeroSpans manifest={manifest} />
       </PageChrome>
     );
@@ -308,7 +308,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
   const bins = useMemo(() => durationBins(result?.rows ?? [], DURATION_BIN_COUNT), [result]);
 
   return (
-    <PageChrome title="Traces Explorer" manifest={manifest} exportItems={exportItems}>
+    <PageChrome title="Traces Explorer" signal="span" manifest={manifest} exportItems={exportItems}>
       <div className="flex flex-col gap-4">
         <PageOptionNotice message={invalidMode} onReset={() => sel.setMode(null)} />
         <PageOptionNotice message={invalidView} onReset={() => sel.setView('list')} />
@@ -416,7 +416,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
                       {mode === 'spans' ? 'spans' : 'traces'}
                     </p>
                   )}
-                  <FacetPanel facets={result.facets} durationBins={bins} />
+                  <FacetPanel signal="span" facets={result.facets} durationBins={bins} />
                 </div>
                 <div className="min-w-0">
                   {result.total === 0 ? (

@@ -1,11 +1,12 @@
 import { OtelHtmlError } from '../../model/errors.js';
 import type { CmpOp, Expr, Value } from '../../ottl/ast.js';
 import { parseCondition, printCondition } from '../../ottl/parse.js';
+import type { LogSeverityKey } from '../../rollups/signal-counts.js';
 
 export type FilterToken = {
   /** Canonical OTTL path (or a path-only arithmetic expression such as a duration). */
   key: string;
-  op: '==' | '!=' | '>' | '>=' | '<' | '<=' | 'contains' | 'exists' | 'not exists';
+  op: '==' | '!=' | '>' | '>=' | '<' | '<=' | 'contains' | 'matches' | 'exists' | 'not exists';
   value: string | number | boolean | null;
   /** When true, `value` is an OTTL enum name (`STATUS_CODE_ERROR`) written bare, not a string literal. */
   enum?: true;
@@ -80,6 +81,11 @@ function tokenExpr(t: FilterToken): Expr {
           from: 0,
         },
       };
+    case 'matches':
+      return {
+        type: 'value',
+        value: { type: 'call', name: 'IsMatch', args: [left, literal(String(t.value))], from: 0 },
+      };
     case '==':
     case '!=':
     case '>':
@@ -146,7 +152,9 @@ function termToToken(e: Expr): FilterToken | null {
     const key = keyOf(target);
     if (key === null || pattern.type !== 'literal' || typeof pattern.value !== 'string') return null;
     const plain = unescapeRegex(pattern.value);
-    return plain === null ? null : { key, op: 'contains', value: plain };
+    return plain === null
+      ? { key, op: 'matches', value: pattern.value }
+      : { key, op: 'contains', value: plain };
   }
   return null;
 }
@@ -190,25 +198,52 @@ const CORE_SPAN_KEYS: ReadonlyMap<string, string> = new Map([
  */
 export type FacetScope = 'core' | 'resource' | 'attribute';
 
-function attributePath(root: 'span' | 'resource', key: string): string {
+const CORE_LOG_KEYS: ReadonlyMap<string, string> = new Map([
+  ['service.name', 'resource.attributes["service.name"]'],
+  ['instrumentation_scope.name', 'instrumentation_scope.name'],
+  ['event.name', 'log.event_name'],
+  ['trace.present', 'log.trace_id.string'],
+]);
+
+export type FacetSignal = 'span' | 'log';
+
+function attributePath(root: 'span' | 'log' | 'resource', key: string): string {
   return printCondition({
     type: 'value',
     value: { type: 'path', segments: [root, 'attributes'], keys: [key], from: 0 },
   });
 }
 
-export function facetKeyToPath(key: string, signal: 'span', scope: FacetScope = 'core'): string {
-  switch (signal) {
-    case 'span':
-      switch (scope) {
-        case 'core':
-          return CORE_SPAN_KEYS.get(key) ?? attributePath('span', key);
-        case 'resource':
-          return attributePath('resource', key);
-        case 'attribute':
-          return attributePath('span', key);
-      }
+export function facetKeyToPath(key: string, signal: FacetSignal, scope: FacetScope = 'core'): string {
+  switch (scope) {
+    case 'resource':
+      return attributePath('resource', key);
+    case 'attribute':
+      return attributePath(signal, key);
+    case 'core':
+      return (signal === 'span' ? CORE_SPAN_KEYS : CORE_LOG_KEYS).get(key) ?? attributePath(signal, key);
   }
+}
+
+export const SEVERITY_PATH = 'log.severity_number';
+
+/** First and last OTTL severity enum of each band (`severityKey` ranges): a band is `>= first and <= last`. */
+export const SEVERITY_BOUNDS: Record<LogSeverityKey, { first: string; last: string }> = {
+  unspecified: { first: 'SEVERITY_NUMBER_UNSPECIFIED', last: 'SEVERITY_NUMBER_UNSPECIFIED' },
+  trace: { first: 'SEVERITY_NUMBER_TRACE', last: 'SEVERITY_NUMBER_TRACE4' },
+  debug: { first: 'SEVERITY_NUMBER_DEBUG', last: 'SEVERITY_NUMBER_DEBUG4' },
+  info: { first: 'SEVERITY_NUMBER_INFO', last: 'SEVERITY_NUMBER_INFO4' },
+  warn: { first: 'SEVERITY_NUMBER_WARN', last: 'SEVERITY_NUMBER_WARN4' },
+  error: { first: 'SEVERITY_NUMBER_ERROR', last: 'SEVERITY_NUMBER_ERROR4' },
+  fatal: { first: 'SEVERITY_NUMBER_FATAL', last: 'SEVERITY_NUMBER_FATAL4' },
+};
+
+/** The tokens for `min` ... `max` bands (null drops that side): the single source for severity range writes. */
+export function severityRangeTokens(min: LogSeverityKey | null, max: LogSeverityKey | null): FilterToken[] {
+  const out: FilterToken[] = [];
+  if (min !== null) out.push({ key: SEVERITY_PATH, op: '>=', value: SEVERITY_BOUNDS[min].first, enum: true });
+  if (max !== null) out.push({ key: SEVERITY_PATH, op: '<=', value: SEVERITY_BOUNDS[max].last, enum: true });
+  return out;
 }
 
 /** Rollup display value to OTTL enum name, for the core facets whose OTTL field is an enum-typed int. */
@@ -253,8 +288,9 @@ export function facetToken(
   value: string,
   op: '==' | '!=',
   kind: FacetValueKind = 'string',
+  signal: FacetSignal = 'span',
 ): FilterToken {
-  const path = facetKeyToPath(key, 'span', scope);
+  const path = facetKeyToPath(key, signal, scope);
   const fail = (expected: string): never => {
     throw new OtelHtmlError('usage', {
       path: `facet ${key}`,
@@ -262,7 +298,13 @@ export function facetToken(
       actual: JSON.stringify(value),
     });
   };
-  const enums = scope === 'core' ? CORE_ENUM_VALUES.get(key) : undefined;
+  if (signal === 'log' && scope === 'core' && key === 'trace.present') {
+    if (value !== 'yes' && value !== 'no') return fail('yes or no');
+    // `yes` means a non-empty trace id: `!= ""`; `no` is the inverse, and `!=` flips either.
+    const present = (value === 'yes') === (op === '==');
+    return { key: path, op: present ? '!=' : '==', value: '' };
+  }
+  const enums = scope === 'core' && signal === 'span' ? CORE_ENUM_VALUES.get(key) : undefined;
   if (enums !== undefined) {
     const name = enums.get(value);
     if (name === undefined) return fail(`one of ${[...enums.keys()].join(', ')}`);

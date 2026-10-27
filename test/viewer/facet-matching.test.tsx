@@ -89,7 +89,7 @@ async function clickOnly(key: string, value: string, label = `Only ${value}`): P
   const store = createSelectionStore({});
   render(
     <SelectionProvider store={store}>
-      <FacetPanel facets={f} />
+      <FacetPanel signal="span" facets={f} />
     </SelectionProvider>,
   );
   // attribute keys are paged; reveal everything
@@ -122,7 +122,7 @@ describe('facet clicks write conditions that match the facet value', () => {
     store.getState().toggleFacet('status.code', 'error', 'include');
     render(
       <SelectionProvider store={store}>
-        <FacetPanel facets={rollups().facets} />
+        <FacetPanel signal="span" facets={rollups().facets} />
       </SelectionProvider>,
     );
     expect(screen.getByTestId('facet-row:status.code:error').getAttribute('data-state')).toBe('include');
@@ -145,7 +145,7 @@ describe('facet clicks write conditions that match the facet value', () => {
     const store = createSelectionStore({});
     render(
       <SelectionProvider store={store}>
-        <FacetPanel facets={f} attributePageSize={10} />
+        <FacetPanel signal="span" facets={f} attributePageSize={10} />
       </SelectionProvider>,
     );
     await userEvent.click(screen.getByRole('button', { name: 'Only 200' }));

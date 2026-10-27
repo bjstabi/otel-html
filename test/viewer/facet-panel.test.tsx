@@ -31,7 +31,7 @@ function setup(q?: string, props: Partial<Parameters<typeof FacetPanel>[0]> = {}
   const store = createSelectionStore(q === undefined ? {} : { q });
   const utils = render(
     <SelectionProvider store={store}>
-      <FacetPanel facets={facets()} {...props} />
+      <FacetPanel signal="span" facets={facets()} {...props} />
     </SelectionProvider>,
   );
   return { store, ...utils };
@@ -95,7 +95,7 @@ describe('FacetPanel', () => {
     const store = createSelectionStore({});
     render(
       <SelectionProvider store={store}>
-        <FacetPanel facets={f} attributePageSize={3} />
+        <FacetPanel signal="span" facets={f} attributePageSize={3} />
       </SelectionProvider>,
     );
     expect(screen.getByText('3 of 7 shown')).toBeTruthy();
@@ -139,7 +139,7 @@ describe('FacetPanel', () => {
     const store = createSelectionStore({});
     render(
       <SelectionProvider store={store}>
-        <FacetPanel facets={f} />
+        <FacetPanel signal="span" facets={f} />
       </SelectionProvider>,
     );
     expect(screen.queryByTestId('facet-row:service.name:svc-11')).toBeNull();
@@ -157,7 +157,11 @@ describe('FacetPanel', () => {
     const store = createSelectionStore({});
     render(
       <SelectionProvider store={store}>
-        <FacetPanel facets={f} onToggle={(facet, value, action) => calls.push([facet, value, action])} />
+        <FacetPanel
+          signal="span"
+          facets={f}
+          onToggle={(facet, value, action) => calls.push([facet, value, action])}
+        />
       </SelectionProvider>,
     );
     await user.click(screen.getByRole('button', { name: 'Only v' }));
@@ -172,7 +176,7 @@ describe('FacetPanel', () => {
     const store = createSelectionStore({});
     render(
       <SelectionProvider store={store}>
-        <FacetPanel facets={f} />
+        <FacetPanel signal="span" facets={f} />
       </SelectionProvider>,
     );
     await user.click(screen.getByRole('button', { name: 'Only 200' }));
@@ -186,7 +190,7 @@ describe('FacetPanel', () => {
     const store = createSelectionStore({});
     render(
       <SelectionProvider store={store}>
-        <FacetPanel facets={f} />
+        <FacetPanel signal="span" facets={f} />
       </SelectionProvider>,
     );
     const only = screen.getByRole('button', { name: 'Only 200' }) as HTMLButtonElement;
@@ -204,7 +208,7 @@ describe('FacetPanel', () => {
     });
     render(
       <SelectionProvider store={store}>
-        <FacetPanel facets={facets()} />
+        <FacetPanel signal="span" facets={facets()} />
       </SelectionProvider>,
     );
     const seen: unknown[] = [];
@@ -239,5 +243,84 @@ describe('FacetPanel', () => {
     fireEvent.pointerUp(bin(3));
     expect(writes).toBe(1);
     expect(store.getState().condition).toBe('span.end_time_unix_nano - span.start_time_unix_nano >= 1000');
+  });
+});
+
+describe('FacetPanel (logs)', () => {
+  function logFacets(): FacetCounts {
+    const f = new FacetCounts(100, 50, [
+      'severity',
+      'service.name',
+      'host.name',
+      'event.name',
+      'trace.present',
+    ]);
+    for (const [k, v, n] of [
+      ['severity', 'warn', 3],
+      ['severity', 'error', 2],
+      ['service.name', 'checkout', 4],
+      ['instrumentation_scope.name', 'lib', 1],
+      ['event.name', 'checkout.done', 2],
+      ['trace.present', 'yes', 3],
+      ['trace.present', 'no', 2],
+    ] as const) {
+      for (let i = 0; i < n; i++) f.add(k, v);
+    }
+    return f;
+  }
+  function setupLog(q?: string) {
+    const store = createSelectionStore(q === undefined ? {} : { q });
+    render(
+      <SelectionProvider store={store}>
+        <FacetPanel signal="log" facets={logFacets()} />
+      </SelectionProvider>,
+    );
+    return store;
+  }
+
+  test('Only on a severity writes the range pair; And above writes one >= token', async () => {
+    const user = userEvent.setup();
+    const store = setupLog('resource.attributes["service.name"] == "a"');
+    await user.click(screen.getByRole('button', { name: 'Only warn' }));
+    expect(store.getState().condition).toBe(
+      'resource.attributes["service.name"] == "a" and log.severity_number >= SEVERITY_NUMBER_WARN and log.severity_number <= SEVERITY_NUMBER_WARN4',
+    );
+    await user.click(screen.getByRole('button', { name: 'And above warn' }));
+    expect(store.getState().condition).toBe(
+      'resource.attributes["service.name"] == "a" and log.severity_number >= SEVERITY_NUMBER_WARN',
+    );
+  });
+
+  test('Exclude is disabled on severity rows with the query-bar hint', () => {
+    setupLog();
+    const btn = screen.getByRole('button', { name: 'Exclude warn' });
+    expect(btn).toHaveProperty('disabled', true);
+    expect(btn.getAttribute('title')).toBe(
+      'Excluding a severity needs "or", which facets cannot write. Use the query bar.',
+    );
+  });
+
+  test('log facets use log paths', async () => {
+    const user = userEvent.setup();
+    const store = setupLog();
+    await user.click(screen.getByRole('button', { name: 'Only checkout.done' }));
+    await user.click(screen.getByRole('button', { name: 'Exclude yes' }));
+    expect(store.getState().condition).toBe(
+      'log.event_name == "checkout.done" and log.trace_id.string == ""',
+    );
+  });
+
+  test('has-trace rows show include and exclude state from the inverted path ops', async () => {
+    const user = userEvent.setup();
+    setupLog();
+    await user.click(screen.getByRole('button', { name: 'Exclude yes' }));
+    expect(screen.getByTestId('facet-row:trace.present:yes').getAttribute('data-state')).toBe('exclude');
+    expect(screen.getByTestId('facet-row:trace.present:no').getAttribute('data-state')).toBe('include');
+  });
+
+  test('log order and headings', () => {
+    setupLog();
+    const names = screen.getAllByRole('region').map((r) => r.getAttribute('aria-label'));
+    expect(names.slice(0, 5)).toEqual(['Severity', 'Service', 'Scope', 'Event name', 'Has trace']);
   });
 });

@@ -5,10 +5,13 @@ import { parseCondition } from '../../ottl/parse.js';
 import type { LogSeverityKey } from '../../rollups/signal-counts.js';
 import {
   type FacetScope,
+  type FacetSignal,
   type FacetValueKind,
   type FilterToken,
   facetToken,
   ottlToTokens,
+  SEVERITY_PATH,
+  severityRangeTokens,
   tokensToOttl,
 } from '../components/filter-tokens.js';
 import type { LogRef } from '../data/log-query.js';
@@ -32,19 +35,6 @@ export const DEFAULT_LOG_TAB: LogTabId = 'attributes';
 /** Every explorer's groupings; `PAGE_OPTIONS` says which ones each page accepts. */
 export type SelectionMode = (typeof SELECTION_MODES)[number];
 export type ClearKey = 'window' | 'condition' | 'text' | 'traceId' | 'spanId' | 'logRef' | 'groupBy' | 'sort';
-
-const SEVERITY_PATH = 'log.severity_number';
-
-/** First and last OTTL severity enum of each band (`severityKey` ranges): a band is `>= first and <= last`. */
-const SEVERITY_BOUNDS: Record<LogSeverityKey, { first: string; last: string }> = {
-  unspecified: { first: 'SEVERITY_NUMBER_UNSPECIFIED', last: 'SEVERITY_NUMBER_UNSPECIFIED' },
-  trace: { first: 'SEVERITY_NUMBER_TRACE', last: 'SEVERITY_NUMBER_TRACE4' },
-  debug: { first: 'SEVERITY_NUMBER_DEBUG', last: 'SEVERITY_NUMBER_DEBUG4' },
-  info: { first: 'SEVERITY_NUMBER_INFO', last: 'SEVERITY_NUMBER_INFO4' },
-  warn: { first: 'SEVERITY_NUMBER_WARN', last: 'SEVERITY_NUMBER_WARN4' },
-  error: { first: 'SEVERITY_NUMBER_ERROR', last: 'SEVERITY_NUMBER_ERROR4' },
-  fatal: { first: 'SEVERITY_NUMBER_FATAL', last: 'SEVERITY_NUMBER_FATAL4' },
-};
 
 export interface Selection {
   window: TimeWindow | null;
@@ -74,6 +64,7 @@ export interface Selection {
     op: 'include' | 'exclude',
     scope?: FacetScope,
     kind?: FacetValueKind,
+    signal?: FacetSignal,
   ): void;
   /** Replaces every `log.severity_number >=`/`<=` token with the bands' bounds (null drops that side); keeps the rest. */
   setSeverityRange(min: LogSeverityKey | null, max: LogSeverityKey | null): void;
@@ -161,10 +152,7 @@ function severityRangeCondition(
   const rest = conditionTokens(condition, 'set a severity range').filter(
     (t) => !(t.key === SEVERITY_PATH && (t.op === '>=' || t.op === '<=')),
   );
-  if (min !== null)
-    rest.push({ key: SEVERITY_PATH, op: '>=', value: SEVERITY_BOUNDS[min].first, enum: true });
-  if (max !== null) rest.push({ key: SEVERITY_PATH, op: '<=', value: SEVERITY_BOUNDS[max].last, enum: true });
-  return tokensToOttl(rest);
+  return tokensToOttl([...rest, ...severityRangeTokens(min, max)]);
 }
 
 function toggleFacetCondition(
@@ -174,10 +162,11 @@ function toggleFacetCondition(
   op: 'include' | 'exclude',
   scope: FacetScope,
   kind: FacetValueKind,
+  signal: FacetSignal,
 ): string | null {
   const tokens = conditionTokens(condition, 'toggle a facet');
-  const wanted: FilterToken['op'] = op === 'include' ? '==' : '!=';
-  const target = facetToken(key, scope, value, '==', kind);
+  // Built per operator, not flipped afterwards: some facets (a log's `trace.present`) map `!=` to a different path op.
+  const target = facetToken(key, scope, value, op === 'include' ? '==' : '!=', kind, signal);
   const same = (t: FilterToken): boolean =>
     t.key === target.key &&
     t.value === target.value &&
@@ -185,7 +174,7 @@ function toggleFacetCondition(
     (t.op === '==' || t.op === '!=');
   const existing = tokens.find(same);
   const rest = tokens.filter((t) => !same(t));
-  if (existing?.op !== wanted) rest.push({ ...target, op: wanted });
+  if (existing?.op !== target.op) rest.push(target);
   return tokensToOttl(rest);
 }
 
@@ -246,8 +235,8 @@ export function createSelectionStore(initial: UrlState): StoreApi<Selection> {
       }
       set({ tabs: { ...get().tabs, [which]: tab } });
     },
-    toggleFacet: (key, value, op, scope = 'core', kind = 'string') =>
-      set({ condition: toggleFacetCondition(get().condition, key, value, op, scope, kind) }),
+    toggleFacet: (key, value, op, scope = 'core', kind = 'string', signal = 'span') =>
+      set({ condition: toggleFacetCondition(get().condition, key, value, op, scope, kind, signal) }),
     setSeverityRange: (min, max) => set({ condition: severityRangeCondition(get().condition, min, max) }),
     selectTrace: (traceId) => set({ traceId, spanId: null }),
     selectSpan: (spanId) => set({ spanId }),
