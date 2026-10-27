@@ -109,6 +109,58 @@ describe('signalBudgets', () => {
   });
 });
 
+describe('eager logs load on first log use', () => {
+  const isLogChunk = (p: string): boolean => p.includes('/chunks/logs/');
+  const logChunkCount = (): number => rep.manifest.chunks.filter((c) => c.signal === 'logs').length;
+
+  test('opening the report and querying spans loads no log chunk', async () => {
+    const { ds, loader } = await open(SMALL);
+    expect(ds.logStrategy).toBe('eager');
+    expect(ds.strategy).toBe('eager');
+    await ds.landing();
+    await ds.querySpans({
+      condition: null,
+      text: '',
+      window: null,
+      mode: 'spans',
+      sort: { column: 'start', dir: 'asc' },
+      limit: 1000,
+      groupBy: null,
+      scanAll: false,
+    });
+    expect(loader.calls.filter(isLogChunk)).toEqual([]);
+  });
+
+  test('the first log call loads every log chunk once; later calls reuse them', async () => {
+    const { ds, loader } = await open(SMALL);
+    const [all] = await Promise.all([ds.queryLogs(query()), ds.queryLogs(query({ text: 'tick' }))]);
+    expect(loader.calls.filter(isLogChunk)).toHaveLength(logChunkCount());
+    const first = asLogs(all)[0];
+    if (first === undefined) throw new Error('no logs');
+    await ds.getLog(first.ref);
+    await ds.traceLogs(LOG_TRACE as TraceId);
+    expect(loader.calls.filter(isLogChunk)).toHaveLength(logChunkCount());
+  });
+
+  test('a failed load is retried on the next log call', async () => {
+    const inner = createScriptedLoader(rep.files);
+    let failed = false;
+    const loader = {
+      load: (path: string, key: string): Promise<unknown> => {
+        if (!failed && isLogChunk(path)) {
+          failed = true;
+          return Promise.reject(new Error(`${path}: failed to load`));
+        }
+        return inner.load(path, key);
+      },
+    };
+    const ds = await createDataSource(loader, rep.manifest, SMALL);
+    await expect(ds.queryLogs(query())).rejects.toThrow(/failed to load/);
+    const r = await ds.queryLogs(query());
+    expect(r.matched).toBe(rep.manifest.totals.logs);
+  });
+});
+
 describe.each([
   ['eager', SMALL],
   ['windowed', 1],

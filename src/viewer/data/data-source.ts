@@ -13,6 +13,7 @@ import { createTraceIndex, loadSpanRollups } from './load.js';
 import { createEagerLogSource } from './log-eager.js';
 import { loadLogRollups } from './log-load.js';
 import {
+  checkSurroundingCount,
   type LogQuery,
   type LogQueryResult,
   type LogRef,
@@ -145,9 +146,35 @@ export function signalBudgets(manifest: Manifest, budgetBytes: number): Record<'
 }
 
 /**
+ * A strategy built on its first call, so a page that never touches logs (the Traces explorer) does not wait for
+ * them. Concurrent calls share the build; a failed build is retried on the next call.
+ */
+function lazyLogStrategy(build: () => Promise<LogStrategy>): LogStrategy {
+  let built: Promise<LogStrategy> | undefined;
+  const get = (): Promise<LogStrategy> => {
+    built ??= build().catch((e: unknown) => {
+      built = undefined;
+      throw e;
+    });
+    return built;
+  };
+  return {
+    queryLogs: async (q, onProgress, signal) => (await get()).queryLogs(q, onProgress, signal),
+    getLog: async (ref) => (await get()).getLog(ref),
+    traceLogs: async (traceId, signal) => (await get()).traceLogs(traceId, signal),
+    surroundingLogs: async (ref, n) => {
+      checkSurroundingCount(n); // a bad count fails before any chunk loads
+      return (await get()).surroundingLogs(ref, n);
+    },
+    logCount: async (traceId) => (await get()).logCount(traceId),
+  };
+}
+
+/**
  * Pick each signal's strategy with `signalBudgets`: within budget every chunk of the signal is loaded once and
  * queries are exact; above it chunks are scanned on demand. Landing data and percentiles come from the
- * unfiltered rollup files in both cases (the log rollup is loaded on first use).
+ * unfiltered rollup files in both cases (the log rollup is loaded on first use). Eager log chunks are likewise
+ * loaded on the first log call, not before the first page renders.
  */
 export async function createDataSource(
   loader: ScriptLoader,
@@ -164,12 +191,13 @@ export async function createDataSource(
     });
     return logRollups;
   };
-  const [rollups, spans, logs] = await Promise.all([
+  const logs =
+    budgets.logs === 'eager'
+      ? lazyLogStrategy(() => createEagerLogSource(loader, manifest))
+      : createWindowedLogSource(loader, manifest, getLogRollups, index);
+  const [rollups, spans] = await Promise.all([
     loadSpanRollups(loader, manifest),
     budgets.spans === 'eager' ? createEagerSource(loader, manifest) : null,
-    budgets.logs === 'eager'
-      ? createEagerLogSource(loader, manifest)
-      : createWindowedLogSource(loader, manifest, getLogRollups, index),
   ]);
   const spanStrategy = spans ?? createWindowedSource(loader, manifest, rollups, index);
   return {
