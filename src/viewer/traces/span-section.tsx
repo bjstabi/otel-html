@@ -8,18 +8,12 @@ import { type SpanEventRecord, SpanKind, type SpanRecord, StatusCode } from '../
 import { formatDuration, formatTime } from '../../semconv/formatters.js';
 import { addAttributeFilter } from '../components/attribute-filter.js';
 import { AttributeGroups, loadPins, savePins } from '../components/attribute-groups.js';
+import { type AttributeActions, ResourceTab } from '../components/resource-tab.js';
 import type { DataSource, TraceDetail } from '../data/data-source.js';
 import { useSelection } from '../state/selection-context.js';
 import { useColorAssigner } from '../theme/colors-context.js';
 import { ServiceChip, StatusDot } from './columns.js';
-import {
-  type AttributeActions,
-  EventsTab,
-  formatOffset,
-  LinksTab,
-  Muted,
-  ResourceTab,
-} from './span-detail-tabs.js';
+import { EventsTab, formatOffset, LinksTab, Muted } from './span-detail-tabs.js';
 import { availableSpanTabs, isSpanTabId, type SpanTabId } from './tabs.js';
 import { traceFacts } from './trace-facts.js';
 
@@ -238,7 +232,11 @@ export function SpanSection(props: SpanSectionProps): JSX.Element {
           )}
           {active === 'resource' && (
             <ResourceTab
-              span={span}
+              counts={[
+                ['Span attributes', span.droppedAttributesCount],
+                ['Events', span.droppedEventsCount],
+                ['Links', span.droppedLinksCount],
+              ]}
               resource={detail.resources(span.resource)}
               scope={detail.scopes(span.scope)}
               resourceActions={resourceActions}

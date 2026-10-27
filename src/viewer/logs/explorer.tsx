@@ -21,7 +21,7 @@ import { HistogramCard, SEVERITY_SERIES } from '../components/histogram-card.js'
 import { LogList } from '../components/log-list.js';
 import { ResultsTable, type SortState } from '../components/results-table.js';
 import type { DataSource } from '../data/data-source.js';
-import type { LogMode, LogQuery, LogRow, LogTraceRow, PatternRow } from '../data/log-query.js';
+import type { LogMode, LogQuery, LogRef, LogRow, LogTraceRow, PatternRow } from '../data/log-query.js';
 import { PageChrome } from '../shell/page-chrome.js';
 import { PageOptionNotice } from '../shell/page-option-notice.js';
 import { PAGE_OPTIONS, type PageView, resolvePageMode, resolvePageView } from '../state/page-options.js';
@@ -31,6 +31,7 @@ import { useTheme } from '../theme/theme-provider.js';
 import { TracePanel } from '../traces/trace-panel.js';
 import { cssTokenReader, GROUPED_VIEWS, resolveCssVars } from '../traces/views.js';
 import { LOG_COLUMNS_UI, LOG_TRACE_COLUMNS_UI } from './columns.js';
+import { LogPanel } from './log-panel.js';
 import { PATTERN_COLUMNS_UI, PatternsTable } from './patterns-table.js';
 import { useLogQuery } from './use-log-query.js';
 import { LOG_VIEW_BUILDERS, type LogChartView } from './views.js';
@@ -238,6 +239,12 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
     return [];
   }, [result]);
 
+  // The visible rows' refs in order: what j/k step through while the log panel is open.
+  const logRefs = useMemo<readonly LogRef[]>(
+    () => (result?.mode === 'logs' ? result.rows.map((r) => r.ref) : []),
+    [result],
+  );
+
   const results = (): JSX.Element | null => {
     if (result === null) return null;
     if (result.total === 0) return <NoMatch noun={noun} onClear={clearFilters} />;
@@ -254,7 +261,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
     }
     if (view === 'table')
       return <GroupTable result={result} groupBy={sel.groupBy} colors={colors} noun="Logs" />;
-    const moveEnabled = sel.traceId === null;
+    const moveEnabled = sel.logRef === null && sel.traceId === null;
     switch (result.mode) {
       case 'logs':
         return (
@@ -411,6 +418,14 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
           </div>
         )}
       </div>
+      {sel.logRef !== null && (
+        <LogPanel
+          dataSource={dataSource}
+          logRef={sel.logRef}
+          logRefs={logRefs}
+          onClose={() => sel.clear('logRef')}
+        />
+      )}
       {sel.traceId !== null && (
         <TracePanel
           dataSource={dataSource}

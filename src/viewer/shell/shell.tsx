@@ -146,6 +146,7 @@ export function Shell(props: { dataSource: DataSource; history: HistoryPort }): 
       clear: () => {
         setHelpOpen(false);
         if (window.location.hash.startsWith(TRACE_PAGE_HASH)) leaveTracePage(window, store.getState());
+        else if (store.getState().logRef !== null) store.getState().clear('logRef');
         else store.getState().clear('traceId');
       },
       focusQuery: () => {
