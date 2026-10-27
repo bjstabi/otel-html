@@ -5,7 +5,7 @@ import type { SpanId, TraceId, UnixNanos } from '../../model/ids.js';
 import { LogList } from '../components/log-list.js';
 import type { SortState } from '../components/results-table.js';
 import type { DataSource } from '../data/data-source.js';
-import { byTimeThenRef, type LogRow } from '../data/log-query.js';
+import { byTimeThenRef, LOG_SORTS, type LogRow } from '../data/log-query.js';
 import { useGoTo } from '../shell/go-to.js';
 import { CONTROL } from '../shell/page-chrome.js';
 
@@ -45,16 +45,8 @@ export function logScopeQuery(scope: { traceId: TraceId; spanId?: SpanId }): str
   return scope.spanId === undefined ? trace : `${trace} and span_id.string == "${scope.spanId}"`;
 }
 
-const byTime = (a: LogRow, b: LogRow): number => a.time - b.time;
-
-const COMPARE: Readonly<Record<string, (a: LogRow, b: LogRow) => number>> = {
-  time: byTime,
-  severity: (a, b) => a.log.severityNumber - b.log.severityNumber,
-  service: (a, b) => (a.service < b.service ? -1 : a.service > b.service ? 1 : 0),
-};
-
 function sorted(rows: readonly LogRow[], sort: SortState): readonly LogRow[] {
-  const by = COMPARE[sort.column] ?? byTime;
+  const by = LOG_SORTS[sort.column] ?? LOG_SORTS.time;
   const sign = sort.dir === 'asc' ? 1 : -1;
   return [...rows].sort((a, b) => sign * by(a, b) || byTimeThenRef(a, b));
 }

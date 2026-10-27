@@ -2,7 +2,7 @@ import { createStore, type StoreApi } from 'zustand/vanilla';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { SpanId, TraceId } from '../../model/ids.js';
 import { parseCondition } from '../../ottl/parse.js';
-import type { LogSeverityKey } from '../../rollups/signal-counts.js';
+import type { LogSeverityKey } from '../../semconv/severity.js';
 import {
   type FacetScope,
   type FacetSignal,

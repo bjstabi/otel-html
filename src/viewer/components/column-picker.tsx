@@ -1,6 +1,5 @@
 import type { JSX } from 'react';
-
-const FIELD = 'rounded-full border border-hairline bg-surface px-3 py-1 text-sm';
+import { FIELD } from './field.js';
 
 export function ColumnPicker(props: {
   keys: readonly string[];

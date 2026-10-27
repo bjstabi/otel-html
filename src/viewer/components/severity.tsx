@@ -1,5 +1,5 @@
 import type { JSX } from 'react';
-import { type LogSeverityKey, severityKey } from '../../rollups/signal-counts.js';
+import { type LogSeverityKey, severityKey } from '../../semconv/severity.js';
 
 /** The band's name and its colour token; the colour only repeats what the label says. */
 export function SeverityLabel(props: { band: LogSeverityKey }): JSX.Element {

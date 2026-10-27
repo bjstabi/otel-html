@@ -19,7 +19,7 @@ import { ComingLaterPage, NotFoundPage } from './pages.js';
 import { ShortcutHelp } from './shortcut-help.js';
 import { createShortcutHandler, SHORTCUTS, type ShortcutActions } from './shortcuts.js';
 import { Sidebar } from './sidebar.js';
-import { currentRoute, navigateRoute, replaceRoute, useRoute } from './use-route.js';
+import { currentRoute, navigateRoute, useRoute } from './use-route.js';
 
 const TRACE_PAGE_HASH = '#/traces/trace/';
 
@@ -94,7 +94,7 @@ function PatternsRedirect(): null {
     const qi = hash.indexOf('?');
     const params = new URLSearchParams(qi >= 0 ? hash.slice(qi + 1) : '');
     params.set('mode', 'patterns');
-    replaceRoute(window, '/logs', params.toString().replace(/%7E/g, '~'));
+    navigateRoute(window, '/logs', params.toString().replace(/%7E/g, '~'), true);
   }, []);
   return null;
 }

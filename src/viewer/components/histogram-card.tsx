@@ -1,7 +1,7 @@
 import { type JSX, type KeyboardEvent, type PointerEvent, useEffect, useMemo, useRef, useState } from 'react';
-import type { LogSeverityKey } from '../../rollups/signal-counts.js';
 import type { SpanStatusKey } from '../../rollups/span-rollups.js';
 import type { TimeBuckets } from '../../rollups/time-buckets.js';
+import { LOG_SEVERITY_KEYS, type LogSeverityKey, SEVERITY_BANDS } from '../../semconv/severity.js';
 import type { TimeWindow } from '../data/span-query.js';
 import { useSelection } from '../state/selection-context.js';
 import { Chart } from './chart.js';
@@ -57,20 +57,20 @@ export const SPAN_STATUS_SERIES: HistogramSeriesSet<SpanStatusKey> = {
   ],
 };
 
-/** Log severity series in legend order, most severe first; fatal stacks on top. */
+/** Severities that stand out by pattern as well as colour. */
+const HATCHED_SEVERITIES: ReadonlySet<LogSeverityKey> = new Set(['fatal', 'error']);
+
+/** Log severity series in legend order, most severe first; fatal stacks on top. Derived from `SEVERITY_BANDS`. */
 export const SEVERITY_SERIES: HistogramSeriesSet<LogSeverityKey> = {
   noun: 'logs',
   topFirst: true,
   countLegend: 'Severity counts',
-  series: [
-    { key: 'fatal', label: 'FATAL', color: 'var(--oh-sev-fatal)', hatch: true },
-    { key: 'error', label: 'ERROR', color: 'var(--oh-sev-error)', hatch: true },
-    { key: 'warn', label: 'WARN', color: 'var(--oh-sev-warn)' },
-    { key: 'info', label: 'INFO', color: 'var(--oh-sev-info)' },
-    { key: 'debug', label: 'DEBUG', color: 'var(--oh-sev-debug)' },
-    { key: 'trace', label: 'TRACE', color: 'var(--oh-sev-trace)' },
-    { key: 'unspecified', label: 'UNSPECIFIED', color: 'var(--oh-sev-unspecified)' },
-  ],
+  series: [...LOG_SEVERITY_KEYS].reverse().map((key) => ({
+    key,
+    label: SEVERITY_BANDS[key].label,
+    color: `var(--oh-sev-${key})`,
+    ...(HATCHED_SEVERITIES.has(key) ? { hatch: true } : {}),
+  })),
 };
 
 /** Sum runs of neighbouring buckets so at most `maxColumns` remain; columns stay aligned to `startNs`. */

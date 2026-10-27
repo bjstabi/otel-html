@@ -43,7 +43,7 @@ import {
   type ReportRollups,
   serializeRollups,
 } from '../rollups/report-rollups.js';
-import { severityKey } from '../rollups/signal-counts.js';
+import { severityKey } from '../semconv/severity.js';
 import {
   at,
   isReportFolder,

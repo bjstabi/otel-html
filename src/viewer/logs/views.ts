@@ -1,5 +1,5 @@
 import type { EChartsOption } from 'echarts';
-import { severityKey } from '../../rollups/signal-counts.js';
+import { severityKey } from '../../semconv/severity.js';
 import { bar, type FacetViewContext, pie, toplist, treemap } from '../components/facet-views.js';
 import { SEVERITY_SERIES } from '../components/histogram-card.js';
 import type { LogQueryResult } from '../data/log-query.js';

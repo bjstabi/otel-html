@@ -1,7 +1,7 @@
 import { OtelHtmlError } from '../../model/errors.js';
 import type { CmpOp, Expr, Value } from '../../ottl/ast.js';
 import { parseCondition, printCondition } from '../../ottl/parse.js';
-import type { LogSeverityKey } from '../../rollups/signal-counts.js';
+import { type LogSeverityKey, SEVERITY_BANDS, severityEnumName } from '../../semconv/severity.js';
 
 export type FilterToken = {
   /** Canonical OTTL path (or a path-only arithmetic expression such as a duration). */
@@ -228,21 +228,16 @@ export function facetKeyToPath(key: string, signal: FacetSignal, scope: FacetSco
 export const SEVERITY_PATH = 'log.severity_number';
 
 /** First and last OTTL severity enum of each band (`severityKey` ranges): a band is `>= first and <= last`. */
-export const SEVERITY_BOUNDS: Record<LogSeverityKey, { first: string; last: string }> = {
-  unspecified: { first: 'SEVERITY_NUMBER_UNSPECIFIED', last: 'SEVERITY_NUMBER_UNSPECIFIED' },
-  trace: { first: 'SEVERITY_NUMBER_TRACE', last: 'SEVERITY_NUMBER_TRACE4' },
-  debug: { first: 'SEVERITY_NUMBER_DEBUG', last: 'SEVERITY_NUMBER_DEBUG4' },
-  info: { first: 'SEVERITY_NUMBER_INFO', last: 'SEVERITY_NUMBER_INFO4' },
-  warn: { first: 'SEVERITY_NUMBER_WARN', last: 'SEVERITY_NUMBER_WARN4' },
-  error: { first: 'SEVERITY_NUMBER_ERROR', last: 'SEVERITY_NUMBER_ERROR4' },
-  fatal: { first: 'SEVERITY_NUMBER_FATAL', last: 'SEVERITY_NUMBER_FATAL4' },
-};
+export function severityBounds(band: LogSeverityKey): { first: string; last: string } {
+  const { min, max } = SEVERITY_BANDS[band];
+  return { first: severityEnumName(band, min), last: severityEnumName(band, max) };
+}
 
 /** The tokens for `min` ... `max` bands (null drops that side): the single source for severity range writes. */
 export function severityRangeTokens(min: LogSeverityKey | null, max: LogSeverityKey | null): FilterToken[] {
   const out: FilterToken[] = [];
-  if (min !== null) out.push({ key: SEVERITY_PATH, op: '>=', value: SEVERITY_BOUNDS[min].first, enum: true });
-  if (max !== null) out.push({ key: SEVERITY_PATH, op: '<=', value: SEVERITY_BOUNDS[max].last, enum: true });
+  if (min !== null) out.push({ key: SEVERITY_PATH, op: '>=', value: severityBounds(min).first, enum: true });
+  if (max !== null) out.push({ key: SEVERITY_PATH, op: '<=', value: severityBounds(max).last, enum: true });
   return out;
 }
 

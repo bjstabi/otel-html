@@ -19,22 +19,15 @@ export function currentRoute(win: Window): string {
 
 /**
  * Go to `route`, carrying the current selection query so the URL stays the single source of truth for the
- * shared selection (window, text, condition...). Pushes a history entry and notifies hash listeners.
+ * shared selection (window, text, condition...). Pushes a history entry (or, with `replace`, swaps the current one:
+ * redirects) and notifies hash listeners.
  */
-export function navigateRoute(win: Window, route: string, search: string): void {
+export function navigateRoute(win: Window, route: string, search: string, replace = false): void {
   const oldURL = win.location.href;
   const hash = `#${route}${search === '' ? '' : `?${search}`}`;
   if (hash === win.location.hash) return;
-  win.history.pushState(null, '', hash);
-  win.dispatchEvent(new HashChangeEvent('hashchange', { oldURL, newURL: win.location.href }));
-}
-
-/** Like `navigateRoute` but replaces the current history entry (redirects). */
-export function replaceRoute(win: Window, route: string, search: string): void {
-  const oldURL = win.location.href;
-  const hash = `#${route}${search === '' ? '' : `?${search}`}`;
-  if (hash === win.location.hash) return;
-  win.history.replaceState(null, '', hash);
+  if (replace) win.history.replaceState(null, '', hash);
+  else win.history.pushState(null, '', hash);
   win.dispatchEvent(new HashChangeEvent('hashchange', { oldURL, newURL: win.location.href }));
 }
 

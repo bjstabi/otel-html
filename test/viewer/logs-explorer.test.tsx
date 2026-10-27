@@ -7,8 +7,8 @@ import { parseUnixNanos, type RelNanos, type TraceId } from '../../src/model/ids
 import { createNormalizeContext, normalizeLogs } from '../../src/model/normalize.js';
 import { parseOtlpJson } from '../../src/model/otlp-json.js';
 import { LogRollups } from '../../src/rollups/log-rollups.js';
-import { LOG_SEVERITY_KEYS, type LogSeverityKey } from '../../src/rollups/signal-counts.js';
 import { TimeBuckets } from '../../src/rollups/time-buckets.js';
+import { LOG_SEVERITY_KEYS, type LogSeverityKey } from '../../src/semconv/severity.js';
 import { tokensToOttl } from '../../src/viewer/components/filter-tokens.js';
 import type { DataSource } from '../../src/viewer/data/data-source.js';
 import {

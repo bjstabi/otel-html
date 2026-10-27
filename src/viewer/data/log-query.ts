@@ -8,10 +8,10 @@ import { logTextFields, matchesText } from '../../ottl/text.js';
 import { type Drain, type DrainCluster, template, templateToRegex } from '../../rollups/drain.js';
 import type { FacetCounts } from '../../rollups/facets.js';
 import { LogRollups } from '../../rollups/log-rollups.js';
-import type { LogSeverityKey } from '../../rollups/signal-counts.js';
 import type { TimeBuckets } from '../../rollups/time-buckets.js';
 import { ATTR_HOST_NAME } from '../../semconv/attributes.js';
 import { serviceName } from '../../semconv/resource-name.js';
+import type { LogSeverityKey } from '../../semconv/severity.js';
 import {
   AbortTicker,
   checkLimit,
@@ -222,7 +222,10 @@ export function surroundingIn(
   return { before: n === 0 ? [] : before.slice(-n), after: after.slice(0, n) };
 }
 
-const LOG_SORTS: Readonly<Record<string, (a: LogRow, b: LogRow) => number>> = {
+/** Log comparators by sort column (the Logs Explorer's and the trace Logs tab's). */
+export const LOG_SORTS: Readonly<Record<string, (a: LogRow, b: LogRow) => number>> & {
+  readonly time: (a: LogRow, b: LogRow) => number;
+} = {
   time: (a, b) => a.time - b.time,
   severity: (a, b) => a.log.severityNumber - b.log.severityNumber,
   service: (a, b) => cmp(a.service, b.service),

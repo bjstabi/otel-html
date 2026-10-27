@@ -2,9 +2,9 @@ import { cleanup, render, screen } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import type { RelNanos } from '../../src/model/ids.js';
-import { LOG_SEVERITY_KEYS, type LogSeverityKey } from '../../src/rollups/signal-counts.js';
 import type { SpanStatusKey } from '../../src/rollups/span-rollups.js';
 import { TimeBuckets } from '../../src/rollups/time-buckets.js';
+import { LOG_SEVERITY_KEYS, type LogSeverityKey } from '../../src/semconv/severity.js';
 
 vi.mock('../../src/viewer/components/chart.js', () => ({
   Chart: (p: { ariaLabel: string; option: unknown }): React.JSX.Element => (

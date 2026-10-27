@@ -15,6 +15,7 @@ import {
 } from '../components/explorer-states.js';
 import { downloadBlob, type ExportFormat, exportFileName, exportLogs } from '../components/export.js';
 import { FacetPanel } from '../components/facet-panel.js';
+import { FIELD } from '../components/field.js';
 import { type FilterToken, ottlToTokens, tokensToOttl } from '../components/filter-tokens.js';
 import { GroupTable } from '../components/group-table.js';
 import { HistogramCard, SEVERITY_SERIES } from '../components/histogram-card.js';
@@ -74,7 +75,6 @@ const VIEW_LABEL: Record<PageView<'logs'>, string> = {
   scatter: 'Scatter',
 };
 
-const FIELD = 'rounded-full border border-hairline bg-surface px-3 py-1 text-sm';
 const BODY_PATH = 'log.body.string';
 /** Unprefixed, as the trace panel's Logs tab writes it: compiles in span and log_record contexts, so `g t` carries it. */
 const TRACE_ID_PATH = 'trace_id.string';

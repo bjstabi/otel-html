@@ -21,6 +21,7 @@ import {
   type OtlpSpanGroup,
 } from '../components/export.js';
 import { FacetPanel } from '../components/facet-panel.js';
+import { FIELD } from '../components/field.js';
 import { GroupTable } from '../components/group-table.js';
 import { HistogramCard, SPAN_STATUS_SERIES } from '../components/histogram-card.js';
 import { ResultsTable, type SortState } from '../components/results-table.js';
@@ -62,7 +63,6 @@ const VIEW_LABEL: Record<PageView<'traces'>, string> = {
 
 const DEFAULT_SORT: SortState = { column: 'start', dir: 'desc' };
 const DURATION_BIN_COUNT = 24;
-const FIELD = 'rounded-full border border-hairline bg-surface px-3 py-1 text-sm';
 
 function OpenLogs(): JSX.Element {
   const goTo = useGoTo();

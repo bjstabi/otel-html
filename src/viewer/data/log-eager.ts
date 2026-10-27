@@ -14,6 +14,15 @@ import {
 } from './log-query.js';
 import type { ScriptLoader } from './script-loader.js';
 
+/** Runs `fn` in memory and reports a throw as a rejection, as the windowed strategy's async reads do. */
+function attempt<T>(fn: () => T): Promise<T> {
+  try {
+    return Promise.resolve(fn());
+  } catch (e) {
+    return Promise.reject(e);
+  }
+}
+
 /** Load every log chunk listed in the manifest once; queries then filter in memory and are exact. */
 export async function createEagerLogSource(loader: ScriptLoader, manifest: Manifest): Promise<LogStrategy> {
   const epoch = epochOf(manifest);
@@ -42,30 +51,20 @@ export async function createEagerLogSource(loader: ScriptLoader, manifest: Manif
 
   return {
     queryLogs(q, _onProgress, signal) {
-      try {
-        return Promise.resolve(queryLogEntries(entries, q, signal));
-      } catch (e) {
-        return Promise.reject(e);
-      }
+      return attempt(() => queryLogEntries(entries, q, signal));
     },
     getLog(ref) {
-      try {
-        return Promise.resolve(find(ref));
-      } catch (e) {
-        return Promise.reject(e);
-      }
+      return attempt(() => find(ref));
     },
     traceLogs(traceId) {
       return Promise.resolve(byTrace.get(traceId) ?? []);
     },
     surroundingLogs(ref, n) {
-      try {
+      return attempt(() => {
         checkSurroundingCount(n);
         const log = find(ref);
-        return Promise.resolve({ ...surroundingIn(log, rows, n), log, partial: false });
-      } catch (e) {
-        return Promise.reject(e);
-      }
+        return { ...surroundingIn(log, rows, n), log, partial: false };
+      });
     },
   };
 }

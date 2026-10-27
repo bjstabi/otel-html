@@ -9,6 +9,7 @@ import type { SpanRow } from '../data/span-query.js';
 import { type ColorAssigner, OTHER_INDEX } from '../theme/palette.js';
 import { useTheme } from '../theme/theme-provider.js';
 import { Chart, type EChartsType } from './chart.js';
+import { FIELD } from './field.js';
 import { type FlameBar, type FlameColorBy, type FlameLegendEntry, layoutFlame } from './flame-layout.js';
 
 /** Resolved colours (canvas cannot read CSS variables). `series` holds the 7 categorical colours then Other. */
@@ -554,7 +555,6 @@ function perfEnabled(): boolean {
 
 const SWATCH = (i: number): string =>
   i >= OTHER_INDEX ? 'var(--oh-series-other)' : `var(--oh-series-${i + 1})`;
-const FIELD = 'rounded-full border border-hairline bg-surface px-3 py-1 text-sm';
 const ICON_BTN = 'rounded-full border border-hairline bg-surface p-1.5 hover:bg-hairline';
 
 function hostOf(detail: TraceDetail, row: SpanRow): string {
