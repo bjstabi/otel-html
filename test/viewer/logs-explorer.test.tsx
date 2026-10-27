@@ -198,13 +198,16 @@ function setup(
 }
 
 describe('LogsExplorer', () => {
-  test('the landing shows the run total and the severity legend counts of the landing rollup', async () => {
+  test('the landing reads each number from its own source: matched, the buckets, the result total', async () => {
     const rows = logRows(['a', 'b']);
+    // Every source differs on purpose: a number read from the wrong one would show up as the wrong figure.
+    // The manifest total (5000) is only the zero-logs check and must not be shown.
     setup({
+      logs: 5000,
       queryLogs: () =>
-        Promise.resolve({ ...logsResult(rows, 1204), buckets: landingBuckets(), matched: 1204 }),
+        Promise.resolve({ ...logsResult(rows, 1100), buckets: landingBuckets(), matched: 1300 }),
     });
-    const histogram = await screen.findByRole('region', { name: '1204 logs by severity' });
+    const histogram = await screen.findByRole('region', { name: '1300 logs by severity' });
     expect(histogram.textContent).toContain('1204 logs');
     const legend = within(histogram).getByRole('list', { name: 'Severity counts' });
     expect(
@@ -212,7 +215,8 @@ describe('LogsExplorer', () => {
         .getAllByRole('listitem')
         .map((li) => li.textContent),
     ).toEqual(['ERROR 122', 'WARN 310', 'INFO 702', 'DEBUG 70']);
-    expect(screen.getByText(/^1204 logs · showing 2$/)).toBeTruthy();
+    expect(screen.getByText(/^1100 logs · showing 2$/)).toBeTruthy();
+    expect(document.body.textContent).not.toContain('5000');
   });
 
   test('the default query is logs mode, newest first', async () => {
