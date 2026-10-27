@@ -69,6 +69,20 @@ describe('toggleFacet', () => {
     expect(store.getState().condition).toBeNull();
   });
 
+  test('a matches token survives a facet click, include and exclude, and toggling the facet off', () => {
+    const q = 'IsMatch(log.body.string, "^card declined: \\\\S+$")';
+    const store = createSelectionStore({ q });
+    expect(ottlToTokens(q)?.[0]?.op).toBe('matches');
+    store.getState().toggleFacet('severity', 'error', 'include', 'core', 'string', 'log');
+    const kept = (): FilterToken[] =>
+      (ottlToTokens(store.getState().condition ?? '') ?? []).filter((t) => t.op === 'matches');
+    expect(kept()).toEqual([{ key: 'log.body.string', op: 'matches', value: '^card declined: \\S+$' }]);
+    store.getState().toggleFacet('severity', 'error', 'exclude', 'core', 'string', 'log');
+    expect(kept()).toHaveLength(1);
+    store.getState().toggleFacet('severity', 'error', 'exclude', 'core', 'string', 'log');
+    expect(store.getState().condition).toBe(q);
+  });
+
   test('a condition that is not a flat and of tokens fails fast', () => {
     const store = createSelectionStore({ q: 'a == 1 or b == 2' });
     expect(() => store.getState().toggleFacet('x', 'y', 'include')).toThrow(/condition/);
