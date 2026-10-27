@@ -148,8 +148,9 @@ export function Shell(props: { dataSource: DataSource; history: HistoryPort }): 
       clear: () => {
         setHelpOpen(false);
         if (window.location.hash.startsWith(TRACE_PAGE_HASH)) leaveTracePage(window, store.getState());
-        else if (store.getState().logRef !== null) store.getState().clear('logRef');
-        else store.getState().clear('traceId');
+        // A trace opened from a log panel sits on top of it, so the trace closes first; a lone log closes next.
+        else if (store.getState().traceId !== null) store.getState().clear('traceId');
+        else store.getState().clear('logRef');
       },
       focusQuery: () => {
         const q = document.querySelector('[data-oh-query]');

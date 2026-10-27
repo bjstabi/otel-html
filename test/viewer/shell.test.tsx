@@ -488,14 +488,21 @@ describe('overlays own the keyboard', () => {
     expect(window.location.hash).not.toContain('trace=');
   });
 
-  test('Escape clears the open log before the trace', async () => {
+  test('with a log and a trace open, Escape closes the trace (on top) first, then the log', async () => {
     const user = userEvent.setup();
-    renderShell(`#/traces?trace=${TRACE}&log=0.1`);
-    await user.keyboard('{Escape}');
-    expect(window.location.hash).not.toContain('log=');
-    expect(window.location.hash).toContain(`trace=${TRACE}`);
+    renderShell(`#/logs?trace=${TRACE}&log=0.1`);
     await user.keyboard('{Escape}');
     expect(window.location.hash).not.toContain('trace=');
+    expect(window.location.hash).toContain('log=0.1');
+    await user.keyboard('{Escape}');
+    expect(window.location.hash).not.toContain('log=');
+  });
+
+  test('with only a log open, Escape closes it', async () => {
+    const user = userEvent.setup();
+    renderShell('#/logs?log=0.1');
+    await user.keyboard('{Escape}');
+    expect(window.location.hash).not.toContain('log=');
   });
 
   test('shortcuts do not fire behind the Copy link dialog', async () => {
