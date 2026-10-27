@@ -4,18 +4,17 @@ import { parseUnixNanos, type TraceId } from '../../model/ids.js';
 import { DEFAULT_LOG_FACETS } from '../../rollups/log-rollups.js';
 import { Chart } from '../components/chart.js';
 import { ColumnPicker } from '../components/column-picker.js';
+import { ExplorerControls } from '../components/explorer-controls.js';
 import {
   ErrorCard,
   LoadingNote,
   NoMatch,
   PartialNote,
-  PILL,
   parseSort,
   sortableOf,
 } from '../components/explorer-states.js';
 import { downloadBlob, type ExportFormat, exportFileName, exportLogs } from '../components/export.js';
 import { FacetPanel } from '../components/facet-panel.js';
-import { FIELD } from '../components/field.js';
 import { type FilterToken, ottlToTokens, tokensToOttl } from '../components/filter-tokens.js';
 import { GroupTable } from '../components/group-table.js';
 import { HistogramCard, SEVERITY_SERIES } from '../components/histogram-card.js';
@@ -25,7 +24,13 @@ import type { DataSource } from '../data/data-source.js';
 import type { LogMode, LogQuery, LogRef, LogRow, LogTraceRow, PatternRow } from '../data/log-query.js';
 import { PageChrome } from '../shell/page-chrome.js';
 import { PageOptionNotice } from '../shell/page-option-notice.js';
-import { PAGE_OPTIONS, type PageView, resolvePageMode, resolvePageView } from '../state/page-options.js';
+import {
+  PAGE_OPTIONS,
+  type PageMode,
+  type PageView,
+  resolvePageMode,
+  resolvePageView,
+} from '../state/page-options.js';
 import { useSelection } from '../state/selection-context.js';
 import { useColorAssigner } from '../theme/colors-context.js';
 import { useTheme } from '../theme/theme-provider.js';
@@ -209,10 +214,6 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
       : [];
 
   const grouped = GROUPED_VIEWS.has(view);
-  const groupKeys = useMemo(() => {
-    const keys = result?.facets.keys().sort() ?? [];
-    return sel.groupBy !== null && !keys.includes(sel.groupBy) ? [sel.groupBy, ...keys] : keys;
-  }, [result, sel.groupBy]);
   const attributeKeys = useMemo(
     () =>
       (result?.facets.keys() ?? [])
@@ -274,12 +275,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
       case 'logs':
         return (
           <div className="flex flex-col gap-2">
-            <ColumnPicker
-              keys={attributeKeys}
-              chosen={extraColumns}
-              onAdd={(k) => setExtraColumns([...extraColumns, k])}
-              onRemove={(k) => setExtraColumns(extraColumns.filter((c) => c !== k))}
-            />
+            <ColumnPicker keys={attributeKeys} chosen={extraColumns} onChange={setExtraColumns} />
             <LogList
               rows={result.rows}
               sort={sort}
@@ -338,70 +334,30 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
       <div className="flex flex-col gap-4">
         <PageOptionNotice message={invalidMode} onReset={() => sel.setMode(null)} />
         <PageOptionNotice message={invalidView} onReset={() => sel.setView('list')} />
-        <div className="flex flex-wrap items-center gap-3">
-          <fieldset className="flex items-center gap-1 rounded-full border border-hairline bg-surface p-0.5">
-            <legend className="sr-only">Group into</legend>
-            <span aria-hidden className="px-2 text-sm text-ink-2">
-              Group into
-            </span>
-            {LOGS.modes.map((m) => (
-              <button
-                key={m}
-                type="button"
-                aria-pressed={mode === m}
-                data-selected={mode === m ? 'true' : undefined}
-                onClick={() => sel.setMode(m === DEFAULT_MODE ? null : m)}
-                className={`${PILL} ${mode === m ? 'bg-ink text-surface' : 'text-ink-2 hover:bg-hairline'}`}
-              >
-                {MODES[m].label}
-              </button>
-            ))}
-          </fieldset>
-          <label className="flex items-center gap-2 text-sm text-ink-2">
-            Group by
-            <select
-              aria-label="Group by"
-              className={FIELD}
-              value={sel.groupBy ?? ''}
-              disabled={!grouped}
-              title={grouped ? undefined : `Not used by the ${VIEW_LABEL[view]} view`}
-              onChange={(e) =>
-                e.target.value === '' ? sel.clear('groupBy') : sel.setGroupBy(e.target.value)
-              }
-            >
-              <option value="">Service (default)</option>
-              {groupKeys.map((k) => (
-                <option key={k} value={k}>
-                  {k}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="flex items-center gap-2 text-sm text-ink-2">
-            View
-            <select
-              aria-label="View"
-              className={FIELD}
-              value={view}
-              onChange={(e) => {
-                const next = LOGS.views.find((x) => x === e.target.value);
-                if (next !== undefined) sel.setView(next);
-              }}
-            >
-              {LOGS.views.map((v) => (
-                <option key={v} value={v}>
-                  {VIEW_LABEL[v]}
-                </option>
-              ))}
-            </select>
-          </label>
+        <ExplorerControls<PageMode<'logs'>, PageView<'logs'>>
+          modeLegend="Group into"
+          modePrefix="Group into"
+          modes={LOGS.modes}
+          mode={mode}
+          modeLabel={(m) => MODES[m].label}
+          onMode={(m) => sel.setMode(m === DEFAULT_MODE ? null : m)}
+          views={LOGS.views}
+          view={view}
+          viewLabel={(v) => VIEW_LABEL[v]}
+          onView={sel.setView}
+          groupBy={sel.groupBy}
+          onGroupBy={(k) => (k === null ? sel.clear('groupBy') : sel.setGroupBy(k))}
+          facetKeys={result?.facets.keys() ?? []}
+          grouped={grouped}
+          groupByTitle={`Not used by the ${VIEW_LABEL[view]} view`}
+        >
           {result !== null && (
             <output className="ml-auto font-mono text-xs tabular-nums text-muted">
               {result.total} {noun}
               {result.total > result.rows.length ? ` · showing ${result.rows.length}` : ''}
             </output>
           )}
-        </div>
+        </ExplorerControls>
         {result !== null && <PartialNote partial={result.partial} onScanAll={scanAll} />}
         {state.status === 'loading' && <LoadingNote progress={state.progress} />}
         {actionError !== null && <ErrorCard title={actionError.title} message={actionError.message} />}

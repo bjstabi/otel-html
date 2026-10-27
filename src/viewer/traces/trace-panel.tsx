@@ -1,7 +1,6 @@
 import { Tabs } from '@base-ui/react/tabs';
 import { CircleAlert, Copy, Download, Maximize2, X } from 'lucide-react';
-import { type JSX, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
-import { OtelHtmlError } from '../../model/errors.js';
+import { type JSX, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { parseUnixNanos, type RelNanos, type SpanId, type TraceId, type UnixNanos } from '../../model/ids.js';
 import { formatDuration, formatTime } from '../../semconv/formatters.js';
 import { downloadBlob, otlpBlob } from '../components/export.js';
@@ -13,6 +12,7 @@ import { CONTROL, CopyLink } from '../shell/page-chrome.js';
 import { selectionToUrlState } from '../state/selection.js';
 import { useSelection, useSelectionStore } from '../state/selection-context.js';
 import { serializeUrlState } from '../state/url-state.js';
+import { type KeyedState, useKeyedAsync } from '../state/use-keyed-async.js';
 import { useColorAssigner } from '../theme/colors-context.js';
 import { StatusDot } from './columns.js';
 import { SpanSection, type SpanSectionProps } from './span-section.js';
@@ -37,36 +37,9 @@ export interface TracePanelProps {
   renderSpanSection?: (props: SpanSectionProps) => ReactNode;
 }
 
-type LoadState =
-  | { status: 'loading' }
-  | { status: 'ready'; detail: TraceDetail }
-  | { status: 'error'; message: string };
-
-function useTraceDetail(dataSource: DataSource, traceId: TraceId): LoadState {
-  const [state, setState] = useState<{ traceId: TraceId; load: LoadState } | null>(null);
-  useEffect(() => {
-    let live = true;
-    // `getTrace` is async, but a source that throws synchronously must still land in the error card.
-    Promise.resolve()
-      .then(() => dataSource.getTrace(traceId))
-      .then(
-        (detail) => live && setState({ traceId, load: { status: 'ready', detail } }),
-        (e: unknown) =>
-          live &&
-          setState({
-            traceId,
-            load: {
-              status: 'error',
-              message: e instanceof OtelHtmlError ? e.message : e instanceof Error ? e.message : String(e),
-            },
-          }),
-      );
-    return () => {
-      live = false;
-    };
-  }, [dataSource, traceId]);
-  // A result for another trace is stale (the user moved on): show the skeleton until the right one lands.
-  return state !== null && state.traceId === traceId ? state.load : { status: 'loading' };
+function useTraceDetail(dataSource: DataSource, traceId: TraceId): KeyedState<TraceDetail> {
+  const load = useCallback((id: TraceId) => dataSource.getTrace(id), [dataSource]);
+  return useKeyedAsync(traceId, load);
 }
 
 function Skeleton(props: { traceId: TraceId }): JSX.Element {
@@ -202,7 +175,7 @@ export function TracePanel(props: TracePanelProps): JSX.Element {
     [dataSource],
   );
   const [exportError, setExportError] = useState<string | null>(null);
-  const logCount = load.status === 'ready' ? load.detail.logCount : 0;
+  const logCount = load.status === 'ready' ? load.value.logCount : 0;
   const logs = useTraceLogs(dataSource, traceId, logCount > 0);
 
   // j/k: with the panel open it owns the move event, so the next/previous trace in the result order opens.
@@ -249,7 +222,7 @@ export function TracePanel(props: TracePanelProps): JSX.Element {
     [layout],
   );
 
-  const tabs = load.status === 'ready' ? availableTabs(load.detail) : [];
+  const tabs = load.status === 'ready' ? availableTabs(load.value) : [];
   const wanted = sel.tabs.trace;
   const active: TraceTabId | null =
     tabs.length === 0 ? null : (tabs.find((t) => t.id === wanted)?.id ?? tabs[0]?.id ?? null);
@@ -342,7 +315,7 @@ export function TracePanel(props: TracePanelProps): JSX.Element {
           type="button"
           className={CONTROL}
           disabled={load.status !== 'ready'}
-          onClick={() => load.status === 'ready' && exportTrace(load.detail)}
+          onClick={() => load.status === 'ready' && exportTrace(load.value)}
         >
           <Download size={16} aria-hidden />
           Export trace
@@ -363,7 +336,7 @@ export function TracePanel(props: TracePanelProps): JSX.Element {
       {load.status === 'ready' && active !== null && (
         <div className="flex min-h-0 flex-1 flex-col gap-3 p-4">
           <div className="rounded-card border border-hairline bg-surface p-4">
-            <Header detail={load.detail} dataSource={dataSource} epoch={epoch} />
+            <Header detail={load.value} dataSource={dataSource} epoch={epoch} />
           </div>
           <Tabs.Root
             value={active}
@@ -383,11 +356,11 @@ export function TracePanel(props: TracePanelProps): JSX.Element {
               label="Resize trace and span sections"
               top={
                 <Tabs.Panel value={active} className="p-1 outline-none">
-                  {body(load.detail, active)}
+                  {body(load.value, active)}
                 </Tabs.Panel>
               }
               bottom={(props.renderSpanSection ?? ((p) => <SpanSection {...p} />))({
-                detail: load.detail,
+                detail: load.value,
                 spanId: sel.spanId,
                 epoch,
                 dataSource,

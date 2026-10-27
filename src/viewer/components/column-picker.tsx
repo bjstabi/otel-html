@@ -4,8 +4,7 @@ import { FIELD } from './field.js';
 export function ColumnPicker(props: {
   keys: readonly string[];
   chosen: readonly string[];
-  onAdd(k: string): void;
-  onRemove(k: string): void;
+  onChange(chosen: readonly string[]): void;
 }): JSX.Element {
   return (
     <div className="flex flex-wrap items-center gap-2 text-sm">
@@ -15,7 +14,7 @@ export function ColumnPicker(props: {
           className={FIELD}
           value=""
           aria-label="Add column"
-          onChange={(e) => e.target.value !== '' && props.onAdd(e.target.value)}
+          onChange={(e) => e.target.value !== '' && props.onChange([...props.chosen, e.target.value])}
         >
           <option value="">Add attribute column</option>
           {props.keys.map((k) => (
@@ -29,7 +28,7 @@ export function ColumnPicker(props: {
         <button
           key={k}
           type="button"
-          onClick={() => props.onRemove(k)}
+          onClick={() => props.onChange(props.chosen.filter((c) => c !== k))}
           aria-label={`Remove column ${k}`}
           className="rounded-full border border-hairline px-2 py-0.5 font-mono text-xs hover:bg-hairline"
         >

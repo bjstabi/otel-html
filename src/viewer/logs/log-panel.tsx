@@ -1,6 +1,6 @@
 import { Tabs } from '@base-ui/react/tabs';
 import { CircleAlert, Copy, Download, ListTree, X } from 'lucide-react';
-import { type JSX, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import { type JSX, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { logsToOtlpJson } from '../../format/otlp-export.js';
 import { type AnyValue, anyValueToDisplay } from '../../model/anyvalue.js';
 import type { SpanId, TraceId } from '../../model/ids.js';
@@ -14,6 +14,7 @@ import { type LogRef, type LogRow, refParts } from '../data/log-query.js';
 import { MOVE_EVENT } from '../shell/move-event.js';
 import { CONTROL, CopyLink } from '../shell/page-chrome.js';
 import { useSelection, useSelectionStore } from '../state/selection-context.js';
+import { type KeyedState, useKeyedAsync } from '../state/use-keyed-async.js';
 import { AttributesTab, LogResourceTab, LogTraceTab, SurroundingTab } from './log-tabs.js';
 import { availableLogTabs, isLogTabId, type LogTabId } from './tabs.js';
 
@@ -25,33 +26,9 @@ export interface LogPanelProps {
   onClose(): void;
 }
 
-type LoadState =
-  | { status: 'loading' }
-  | { status: 'ready'; row: LogRow }
-  | { status: 'error'; message: string };
-
-function useLog(dataSource: DataSource, logRef: LogRef): LoadState {
-  const [state, setState] = useState<{ ref: LogRef; load: LoadState } | null>(null);
-  useEffect(() => {
-    let live = true;
-    // `getLog` is async, but a source that throws synchronously must still land in the error card.
-    Promise.resolve()
-      .then(() => dataSource.getLog(logRef))
-      .then(
-        (row) => live && setState({ ref: logRef, load: { status: 'ready', row } }),
-        (e: unknown) =>
-          live &&
-          setState({
-            ref: logRef,
-            load: { status: 'error', message: e instanceof Error ? e.message : String(e) },
-          }),
-      );
-    return () => {
-      live = false;
-    };
-  }, [dataSource, logRef]);
-  // A result for another log is stale (the user moved on): show the skeleton until the right one lands.
-  return state !== null && state.ref === logRef ? state.load : { status: 'loading' };
+function useLog(dataSource: DataSource, logRef: LogRef): KeyedState<LogRow> {
+  const load = useCallback((ref: LogRef) => dataSource.getLog(ref), [dataSource]);
+  return useKeyedAsync(logRef, load);
 }
 
 type Presence = 'checking' | 'present' | 'absent' | 'unknown';
@@ -197,7 +174,7 @@ export function LogPanel(props: LogPanelProps): JSX.Element {
   const { dataSource, logRef, logRefs, onClose } = props;
   const sel = useSelection((s) => s);
   const load = useLog(dataSource, logRef);
-  const row = load.status === 'ready' ? load.row : null;
+  const row = load.status === 'ready' ? load.value : null;
   const epoch = useMemo(
     () => parseUnixNanos(dataSource.manifest.epochUnixNano, 'manifest.epochUnixNano'),
     [dataSource],
