@@ -126,18 +126,17 @@ export function SpanSection(props: SpanSectionProps): JSX.Element {
   const filterActions = useFilterActions('span');
   const row = useMemo(() => detail.spans.find((r) => r.span.spanId === spanId) ?? null, [detail, spanId]);
   const facts = useMemo(() => traceFacts(detail), [detail]);
-  // Only logs of this trace and with a span id are indexed, so another trace's logs can never appear here.
+  // `logs` are this trace's (the loader is keyed by trace id and drops a late result for another one), so no
+  // per-row trace check is needed.
   const logSpanIds = useMemo(() => {
     if (logs === null) return null;
     const ids = new Set<SpanId>();
-    for (const l of logs)
-      if (l.log.traceId === detail.traceId && l.log.spanId !== null) ids.add(l.log.spanId);
+    for (const l of logs) if (l.log.spanId !== null) ids.add(l.log.spanId);
     return ids;
-  }, [logs, detail.traceId]);
+  }, [logs]);
   const spanLogs = useMemo(
-    () =>
-      logs === null ? [] : logs.filter((l) => l.log.traceId === detail.traceId && l.log.spanId === spanId),
-    [logs, detail.traceId, spanId],
+    () => (logs === null ? [] : logs.filter((l) => l.log.spanId === spanId)),
+    [logs, spanId],
   );
 
   if (row === null) {

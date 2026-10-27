@@ -535,6 +535,41 @@ describe('TracePanel Logs tabs', () => {
     expect(traceLogs.mock.calls[1]?.[0]).toBe(other);
   });
 
+  test('a late logs result for the trace the user moved away from is dropped', async () => {
+    const other = 'b'.repeat(32) as TraceId;
+    let releaseFirst: (rows: readonly LogRow[]) => void = () => undefined;
+    const first = new Promise<readonly LogRow[]>((r) => {
+      releaseFirst = r;
+    });
+    const ds = source({
+      getTrace: () => Promise.resolve({ ...okDetail(), logCount: 1 }),
+      traceLogs: (id: TraceId) =>
+        id === TRACE_ID ? first : Promise.resolve([logRow(7, 10, null, 'from the new trace', other)]),
+    });
+    const store = createSelectionStore({ tab: 'logs' });
+    const view = (traceId: TraceId) => (
+      <ThemeProvider>
+        <GoToContext.Provider value={() => undefined}>
+          <SelectionProvider store={store}>
+            <Tooltip.Provider>
+              <TracePanel dataSource={ds} traceId={traceId} layout="overlay" onClose={() => undefined} />
+            </Tooltip.Provider>
+          </SelectionProvider>
+        </GoToContext.Provider>
+      </ThemeProvider>
+    );
+    const { rerender } = render(view(TRACE_ID));
+    await screen.findByText('Loading logs…');
+    rerender(view(other));
+    expect(await screen.findByText('from the new trace')).toBeTruthy();
+    await act(async () => {
+      releaseFirst([logRow(8, 10, null, 'from the old trace')]);
+      await first;
+    });
+    expect(screen.getByText('from the new trace')).toBeTruthy();
+    expect(screen.queryByText('from the old trace')).toBeNull();
+  });
+
   test('a failed logs load shows an alert in the trace Logs tab and in the span Logs tab', async () => {
     const user = userEvent.setup();
     const ds = source({
