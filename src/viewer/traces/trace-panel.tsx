@@ -11,7 +11,7 @@ import type { DataSource, TraceDetail } from '../data/data-source.js';
 import { MOVE_EVENT } from '../shell/move-event.js';
 import { CONTROL, CopyLink } from '../shell/page-chrome.js';
 import { selectionToUrlState } from '../state/selection.js';
-import { useSelection } from '../state/selection-context.js';
+import { useSelection, useSelectionStore } from '../state/selection-context.js';
 import { serializeUrlState } from '../state/url-state.js';
 import { useColorAssigner } from '../theme/colors-context.js';
 import { StatusDot } from './columns.js';
@@ -19,6 +19,7 @@ import { SpanSection, type SpanSectionProps } from './span-section.js';
 import { SplitPane } from './split-pane.js';
 import { availableTabs, isTraceTabId, type TraceTabId } from './tabs.js';
 import { traceFacts } from './trace-facts.js';
+import { TraceLogsTab, useTraceLogs } from './trace-logs-tab.js';
 import { ErrorsTab, ServicesTab, SpanListTab } from './trace-tabs.js';
 
 export interface TracePanelProps {
@@ -201,10 +202,14 @@ export function TracePanel(props: TracePanelProps): JSX.Element {
     [dataSource],
   );
   const [exportError, setExportError] = useState<string | null>(null);
+  const logCount = load.status === 'ready' ? load.detail.logCount : 0;
+  const logs = useTraceLogs(dataSource, traceId, logCount > 0);
 
   // j/k: with the panel open it owns the move event, so the next/previous trace in the result order opens.
-  const latest = useRef({ traceId, traceIds, select: sel.selectTrace });
-  latest.current = { traceId, traceIds, select: sel.selectTrace };
+  // The open trace is read from the store at event time, so presses faster than a re-render still chain.
+  const store = useSelectionStore();
+  const latest = useRef(traceIds);
+  latest.current = traceIds;
   const movable = layout === 'overlay' && traceIds !== undefined;
   useEffect(() => {
     if (!movable) return;
@@ -212,8 +217,9 @@ export function TracePanel(props: TracePanelProps): JSX.Element {
       if (!(e instanceof CustomEvent)) return;
       const delta: unknown = e.detail;
       if (delta !== 1 && delta !== -1) return;
-      const { traceId: current, traceIds: ids, select } = latest.current;
-      if (ids === undefined || ids.length === 0) return;
+      const ids = latest.current;
+      const { traceId: current, selectTrace: select } = store.getState();
+      if (current === null || ids === undefined || ids.length === 0) return;
       const at = ids.indexOf(current);
       const next =
         at === -1 ? (delta === 1 ? 0 : ids.length - 1) : Math.min(ids.length - 1, Math.max(0, at + delta));
@@ -222,7 +228,7 @@ export function TracePanel(props: TracePanelProps): JSX.Element {
     };
     window.addEventListener(MOVE_EVENT, onMove);
     return () => window.removeEventListener(MOVE_EVENT, onMove);
-  }, [movable]);
+  }, [movable, store]);
 
   // Closing returns focus to the row the panel was opened from (the selected row of the results grid).
   const origin = useRef<HTMLElement | null>(null);
@@ -297,6 +303,17 @@ export function TracePanel(props: TracePanelProps): JSX.Element {
       case 'errors':
         return (
           <ErrorsTab detail={detail} selectedSpanId={sel.spanId} onSelect={selectSpan} colors={colors} />
+        );
+      case 'logs':
+        return logs.rows === null ? (
+          <p
+            role={logs.error === null ? 'status' : 'alert'}
+            className={logs.error === null ? 'p-3 text-sm text-ink-2' : 'p-3 text-sm text-critical'}
+          >
+            {logs.error === null ? 'Loading logs…' : `The logs could not be loaded: ${logs.error}`}
+          </p>
+        ) : (
+          <TraceLogsTab rows={logs.rows} scope={{ traceId: detail.traceId }} epoch={epoch} />
         );
       default: {
         const never: never = tab;
@@ -374,6 +391,7 @@ export function TracePanel(props: TracePanelProps): JSX.Element {
                 spanId: sel.spanId,
                 epoch,
                 dataSource,
+                logs: logs.rows,
               })}
             />
           </Tabs.Root>

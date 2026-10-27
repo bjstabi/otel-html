@@ -3,9 +3,28 @@ import { availableTabs, isTraceTabId, TRACE_TAB_IDS, TRACE_TABS } from '../../sr
 import { detailOf, traceRow } from './trace-rows.js';
 
 describe('TRACE_TABS', () => {
-  test('lists the tabs in order, with no logs tab in M1', () => {
-    expect(TRACE_TABS.map((t) => t.id)).toEqual(['flame', 'waterfall', 'spans', 'services', 'errors']);
-    expect(TRACE_TAB_IDS).toEqual(TRACE_TABS.map((t) => t.id));
+  test('lists the tabs in order, logs before errors', () => {
+    expect(TRACE_TABS.map((t) => t.id)).toEqual([
+      'flame',
+      'waterfall',
+      'spans',
+      'services',
+      'logs',
+      'errors',
+    ]);
+    expect([...TRACE_TAB_IDS].sort()).toEqual(TRACE_TABS.map((t) => t.id).sort());
+  });
+
+  test('logs shows only when the trace has logs', () => {
+    const d = detailOf([traceRow(1, null, 0, 10)]);
+    expect(availableTabs(d).map((t) => t.id)).not.toContain('logs');
+    expect(availableTabs({ ...d, logCount: 3 }).map((t) => t.id)).toEqual([
+      'flame',
+      'waterfall',
+      'spans',
+      'services',
+      'logs',
+    ]);
   });
 
   test('errors is hidden for an error-free trace', () => {
@@ -24,7 +43,8 @@ describe('TRACE_TABS', () => {
 
   test('isTraceTabId accepts known ids only', () => {
     expect(isTraceTabId('waterfall')).toBe(true);
-    expect(isTraceTabId('logs')).toBe(false);
+    expect(isTraceTabId('logs')).toBe(true);
+    expect(isTraceTabId('bogus')).toBe(false);
     expect(isTraceTabId('overview')).toBe(false);
   });
 });

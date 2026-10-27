@@ -1,4 +1,4 @@
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { act, cleanup, render, screen, within } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { parseUnixNanos } from '../../src/model/ids.js';
@@ -105,6 +105,15 @@ describe('ResultsTable', () => {
     expect(onRowClick).not.toHaveBeenCalled();
   });
 
+  test('two moves before a re-render chain from the row the first one selected', () => {
+    const { onRowClick } = mount({ selectedId: 's1' });
+    act(() => {
+      window.dispatchEvent(new CustomEvent('oh:move', { detail: 1 }));
+      window.dispatchEvent(new CustomEvent('oh:move', { detail: 1 }));
+    });
+    expect(onRowClick.mock.calls.map((c) => c[0])).toEqual([rows[1], rows[2]]);
+  });
+
   test('hostile span names render as text only', () => {
     mount({ rows: [row('s1', HOSTILE, 5)] });
     expect(document.querySelector('img')).toBeNull();
@@ -131,5 +140,18 @@ describe('ResultsTable', () => {
     mount({ rows: [t], columns: TRACE_COLUMNS_UI });
     expect(screen.getByText('partial')).toBeTruthy();
     expect(screen.getByText('GET /')).toBeTruthy();
+  });
+
+  test('rowHeight sizes every row and the virtualizer total', () => {
+    mount({ rowHeight: 76 });
+    const total = document.querySelector<HTMLElement>('[role="rowgroup"] > div.relative');
+    expect(total?.style.height).toBe(`${rows.length * 76}px`);
+    expect(screen.getAllByRole('row')[1]?.style.height).toBe('76px');
+  });
+
+  test('rows default to 36px', () => {
+    mount();
+    const total = document.querySelector<HTMLElement>('[role="rowgroup"] > div.relative');
+    expect(total?.style.height).toBe(`${rows.length * 36}px`);
   });
 });

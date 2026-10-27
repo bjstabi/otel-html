@@ -10,7 +10,8 @@ export function SelectionProvider(props: { store: StoreApi<Selection>; children:
   return <SelectionContext.Provider value={props.store}>{props.children}</SelectionContext.Provider>;
 }
 
-export function useSelection<T>(selector: (s: Selection) => T): T {
+/** The store itself, for event handlers that must read the selection as it is now, not as of the last render. */
+export function useSelectionStore(): StoreApi<Selection> {
   const store = useContext(SelectionContext);
   if (store === null)
     throw new OtelHtmlError('usage', {
@@ -18,5 +19,9 @@ export function useSelection<T>(selector: (s: Selection) => T): T {
       expected: 'a <SelectionProvider> ancestor',
       actual: 'no provider',
     });
-  return useStore(store, selector);
+  return store;
+}
+
+export function useSelection<T>(selector: (s: Selection) => T): T {
+  return useStore(useSelectionStore(), selector);
 }

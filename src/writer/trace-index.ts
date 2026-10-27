@@ -1,7 +1,8 @@
 import { shardOf } from '../format/paths.js';
 import type { TraceEntry, TraceShard } from '../format/trace-shard.js';
-import type { ResourceRecord, SpanRecord } from '../model/records.js';
-import { StatusCode } from '../model/records.js';
+import type { TraceId } from '../model/ids.js';
+import type { LogRecordRecord, ResourceRecord, SpanRecord } from '../model/records.js';
+import { logTime, StatusCode } from '../model/records.js';
 import { resourceName, serviceName } from '../semconv/resource-name.js';
 
 /** The registration key of the chunk a span was written to (`chunks/spans/000012`). */
@@ -16,27 +17,72 @@ export class TraceIndex {
   readonly #shards = new Map<string, Map<string, TraceEntry>>();
   readonly #dirty = new Set<string>();
 
-  add(span: SpanRecord, chunk: ChunkRef, resource: ResourceRecord): void {
-    const shard = shardOf(span.traceId);
+  #entry(traceId: TraceId): TraceEntry | undefined {
+    return this.#shards.get(shardOf(traceId))?.get(traceId);
+  }
+
+  #create(traceId: TraceId, entry: TraceEntry): TraceEntry {
+    const shard = shardOf(traceId);
     let traces = this.#shards.get(shard);
     if (traces === undefined) {
       traces = new Map();
       this.#shards.set(shard, traces);
     }
-    let e = traces.get(span.traceId);
-    if (e === undefined) {
-      e = { chunks: [], start: span.start, end: span.end, spans: 0, errors: 0, root: null };
-      traces.set(span.traceId, e);
-    }
+    traces.set(traceId, entry);
+    return entry;
+  }
+
+  add(span: SpanRecord, chunk: ChunkRef, resource: ResourceRecord): void {
+    const e =
+      this.#entry(span.traceId) ??
+      this.#create(span.traceId, {
+        chunks: [],
+        logChunks: [],
+        start: span.start,
+        end: span.end,
+        spans: 0,
+        logs: 0,
+        errors: 0,
+        root: null,
+      });
     if (e.chunks[e.chunks.length - 1] !== chunk) e.chunks.push(chunk);
-    e.start = Math.min(e.start, span.start);
-    e.end = Math.max(e.end, span.end);
+    // Timing is span-defined: an entry that so far only knew logs takes the first span's extent outright.
+    e.start = e.spans === 0 ? span.start : Math.min(e.start, span.start);
+    e.end = e.spans === 0 ? span.end : Math.max(e.end, span.end);
     e.spans++;
     if (span.status.code === StatusCode.ERROR) e.errors++;
     if (span.parentSpanId === null && e.root === null) {
       e.root = { service: serviceName(resource), name: span.name, resource: resourceName(span) };
     }
-    this.#dirty.add(shard);
+    this.#dirty.add(shardOf(span.traceId));
+  }
+
+  /**
+   * Record a log that carries a trace id. The entry is created when missing (a log can precede, or never
+   * have, spans); its timing only follows logs while no span has been seen.
+   */
+  addLog(log: LogRecordRecord, chunk: ChunkRef): void {
+    if (log.traceId === null) return;
+    const t = logTime(log);
+    const e =
+      this.#entry(log.traceId) ??
+      this.#create(log.traceId, {
+        chunks: [],
+        logChunks: [],
+        start: t,
+        end: t,
+        spans: 0,
+        logs: 0,
+        errors: 0,
+        root: null,
+      });
+    if (e.logChunks[e.logChunks.length - 1] !== chunk) e.logChunks.push(chunk);
+    if (e.spans === 0) {
+      e.start = Math.min(e.start, t);
+      e.end = Math.max(e.end, t);
+    }
+    e.logs++;
+    this.#dirty.add(shardOf(log.traceId));
   }
 
   /** Shards changed since the last `clearDirty`, sorted. */
@@ -59,7 +105,8 @@ export class TraceIndex {
 
   shardPayload(shard: string): TraceShard {
     const out: TraceShard = {};
-    for (const [id, e] of this.#shards.get(shard) ?? []) out[id] = { ...e, chunks: [...e.chunks] };
+    for (const [id, e] of this.#shards.get(shard) ?? [])
+      out[id] = { ...e, chunks: [...e.chunks], logChunks: [...e.logChunks] };
     return out;
   }
 
@@ -72,7 +119,8 @@ export class TraceIndex {
     const idx = new TraceIndex();
     for (const [shard, entries] of Object.entries(shards)) {
       const traces = new Map<string, TraceEntry>();
-      for (const [id, e] of Object.entries(entries)) traces.set(id, { ...e, chunks: [...e.chunks] });
+      for (const [id, e] of Object.entries(entries))
+        traces.set(id, { ...e, chunks: [...e.chunks], logChunks: [...e.logChunks] });
       idx.#shards.set(shard, traces);
     }
     idx.markAllDirty();

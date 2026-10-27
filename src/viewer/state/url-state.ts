@@ -2,11 +2,18 @@ import { z } from 'zod';
 import { OtelHtmlError } from '../../model/errors.js';
 import { parseSpanId, parseTraceId, type SpanId, type TraceId } from '../../model/ids.js';
 import { parseCondition } from '../../ottl/parse.js';
+import { type LogRef, parseLogRef } from '../data/log-query.js';
 import type { TimeWindow } from '../data/span-query.js';
+import { LOG_TAB_IDS } from '../logs/tabs.js';
 import { TRACE_TAB_IDS } from '../traces/tabs.js';
 import { EXPLORER_VIEWS } from './explorer-view.js';
 
+/** Every grouping any explorer offers; which ones a page accepts is `PAGE_OPTIONS` (page-options.ts). */
+export const SELECTION_MODES = ['spans', 'traces', 'logs', 'patterns'] as const;
+
 const T_FORMAT = /^(\d+)~(\d+)$/;
+const LOG_FORMAT = /^\d+\.\d+$/;
+const LOG_CANONICAL = /^(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
 const nonEmpty = z.string().min(1, 'a non-empty value');
 
@@ -35,7 +42,7 @@ export const UrlStateSchema = z.object({
     .string()
     .regex(T_FORMAT, '<start>~<end> in nanoseconds')
     .refine(tRange, `<start>~<end> with start <= end and values <= ${Number.MAX_SAFE_INTEGER}`),
-  mode: z.enum(['spans', 'traces'], 'spans or traces'),
+  mode: z.enum(SELECTION_MODES, `one of ${SELECTION_MODES.join(', ')}`),
   group: nonEmpty,
   view: z.enum(EXPLORER_VIEWS, `one of ${EXPLORER_VIEWS.join(', ')}`),
   trace: z
@@ -51,16 +58,36 @@ export const UrlStateSchema = z.object({
   tab: z.enum(TRACE_TAB_IDS, `one of ${TRACE_TAB_IDS.join(', ')}`),
   stab: nonEmpty,
   sort: nonEmpty,
+  log: z
+    .string()
+    .regex(LOG_FORMAT, '<chunk>.<row>')
+    .refine((s) => !LOG_FORMAT.test(s) || LOG_CANONICAL.test(s), '<chunk>.<row> without leading zeros')
+    .transform((s): LogRef => parseLogRef(s, 'log')),
+  ltab: z.enum(LOG_TAB_IDS, `one of ${LOG_TAB_IDS.join(', ')}`),
 });
 
 const UrlStatePartial = UrlStateSchema.partial();
 export type UrlState = z.output<typeof UrlStatePartial>;
 
-const KEYS = ['q', 'text', 't', 'mode', 'group', 'view', 'trace', 'span', 'tab', 'stab', 'sort'] as const;
-type UrlKey = (typeof KEYS)[number];
+export const URL_KEYS = [
+  'q',
+  'text',
+  't',
+  'mode',
+  'group',
+  'view',
+  'trace',
+  'span',
+  'tab',
+  'stab',
+  'sort',
+  'log',
+  'ltab',
+] as const;
+export type UrlKey = (typeof URL_KEYS)[number];
 
 function isUrlKey(k: string): k is UrlKey {
-  return (KEYS as readonly string[]).includes(k);
+  return (URL_KEYS as readonly string[]).includes(k);
 }
 
 /** Accepts `a=1&b=2`, `?a=1`, or a whole hash such as `#/traces?a=1` (a prefix is stripped only at the start). */
@@ -95,7 +122,7 @@ export function parseUrlState(search: string): { state: UrlState; errors: string
 
 export function serializeUrlState(s: UrlState): string {
   const p = new URLSearchParams();
-  for (const k of KEYS) {
+  for (const k of URL_KEYS) {
     const v = s[k];
     if (v !== undefined) p.set(k, v);
   }

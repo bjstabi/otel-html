@@ -31,8 +31,11 @@ export interface ResultsTableProps<R> {
    * the explorer disables it while the trace panel is open, and embedded tables never consume it.
    */
   moveEnabled?: boolean;
+  /** Row height in px (default 36); taller rows suit multi-line cells such as log bodies. */
+  rowHeight?: number;
 }
 
+/** Default row height in px. */
 const ROW_HEIGHT = 36;
 const features = tableFeatures({});
 
@@ -59,6 +62,7 @@ function nextDir(sort: SortState | null, column: string): SortState['dir'] {
 export function ResultsTable<R>(props: ResultsTableProps<R>): JSX.Element {
   const { rows, columns, sort, selectedId } = props;
   const height = props.height ?? 480;
+  const rowHeight = props.rowHeight ?? ROW_HEIGHT;
   const fallbackColors = useMemo(() => createColorAssigner(), []);
   const ctx = { epoch: props.epoch, colors: props.colors ?? fallbackColors };
   const scroller = useRef<HTMLDivElement>(null);
@@ -76,7 +80,7 @@ export function ResultsTable<R>(props: ResultsTableProps<R>): JSX.Element {
   const virtual = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scroller.current,
-    estimateSize: () => ROW_HEIGHT,
+    estimateSize: () => rowHeight,
     overscan: 12,
     initialRect: { width: 0, height },
     observeElementRect: rectWithFallback(height),
@@ -130,6 +134,8 @@ export function ResultsTable<R>(props: ResultsTableProps<R>): JSX.Element {
       if (target === undefined) return;
       const hadFocus = scroller.current?.contains(document.activeElement) === true;
       p.onRowClick(target);
+      // Until the parent re-renders with the new selection, the next press moves on from this row.
+      latest.current = { ...latest.current, selectedId: p.rowId(target) };
       if (hadFocus) focusIndex(next);
       else virtual.scrollToIndex(next);
     };
@@ -243,7 +249,7 @@ export function ResultsTable<R>(props: ResultsTableProps<R>): JSX.Element {
                 }`}
                 style={{
                   top: 0,
-                  height: ROW_HEIGHT,
+                  height: rowHeight,
                   transform: `translateY(${v.start}px)`,
                   gridTemplateColumns: template,
                 }}

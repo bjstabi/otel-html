@@ -1,9 +1,9 @@
 import { type JSX, type KeyboardEvent, type PointerEvent, useEffect, useMemo, useRef, useState } from 'react';
+import type { LogSeverityKey } from '../../rollups/signal-counts.js';
 import type { SpanStatusKey } from '../../rollups/span-rollups.js';
 import type { TimeBuckets } from '../../rollups/time-buckets.js';
 import type { TimeWindow } from '../data/span-query.js';
 import { useSelection } from '../state/selection-context.js';
-import { STATUS } from '../theme/palette.js';
 import { Chart } from './chart.js';
 
 /** Plot insets in px; the brush overlay uses the same values so pointer x maps onto bucket columns. */
@@ -24,6 +24,54 @@ export interface BucketView<K extends string> {
   counts(key: K): readonly number[];
   total(key: K): number;
 }
+
+/** One stacked series of a histogram: its bucket key, legend label, and a `var(--oh-…)` colour token. */
+export interface HistogramSeries<K extends string> {
+  key: K;
+  label: string;
+  color: string;
+  /** Repeat the colour with a hatch pattern (error-like series); also counted in the "errors" total. */
+  hatch?: boolean;
+}
+
+/** A histogram's series with how the card words and stacks them. */
+export interface HistogramSeriesSet<K extends string> {
+  /** In legend order. */
+  series: readonly HistogramSeries<K>[];
+  /** Plural noun for the totals line ("spans", "logs"). */
+  noun: string;
+  /** Stack the first series on top (legend order then matches the stack, top to bottom). */
+  topFirst: boolean;
+  /** When set, the card header lists each non-empty series with its count, under this accessible name. */
+  countLegend?: string;
+}
+
+/** Span status series, bottom of the stack first; errors keep their hatch. */
+export const SPAN_STATUS_SERIES: HistogramSeriesSet<SpanStatusKey> = {
+  noun: 'spans',
+  topFirst: false,
+  series: [
+    { key: 'ok', label: 'ok', color: 'var(--oh-series-1)' },
+    { key: 'error', label: 'error', color: 'var(--oh-critical)', hatch: true },
+    { key: 'unset', label: 'unset', color: 'var(--oh-series-other)' },
+  ],
+};
+
+/** Log severity series in legend order, most severe first; fatal stacks on top. */
+export const SEVERITY_SERIES: HistogramSeriesSet<LogSeverityKey> = {
+  noun: 'logs',
+  topFirst: true,
+  countLegend: 'Severity counts',
+  series: [
+    { key: 'fatal', label: 'FATAL', color: 'var(--oh-sev-fatal)', hatch: true },
+    { key: 'error', label: 'ERROR', color: 'var(--oh-sev-error)', hatch: true },
+    { key: 'warn', label: 'WARN', color: 'var(--oh-sev-warn)' },
+    { key: 'info', label: 'INFO', color: 'var(--oh-sev-info)' },
+    { key: 'debug', label: 'DEBUG', color: 'var(--oh-sev-debug)' },
+    { key: 'trace', label: 'TRACE', color: 'var(--oh-sev-trace)' },
+    { key: 'unspecified', label: 'UNSPECIFIED', color: 'var(--oh-sev-unspecified)' },
+  ],
+};
 
 /** Sum runs of neighbouring buckets so at most `maxColumns` remain; columns stay aligned to `startNs`. */
 export function coarsenBuckets<K extends string>(
@@ -54,8 +102,8 @@ export function coarsenBuckets<K extends string>(
 }
 
 /** Inclusive bucket indexes (either order) to a half-open window in the buckets' time unit. */
-export function brushToWindow(
-  b: BucketView<SpanStatusKey>,
+export function brushToWindow<K extends string>(
+  b: BucketView<K>,
   from: number,
   to: number,
   /** The run's end; the last bucket is wider than the data, so the window never extends past it. */
@@ -68,9 +116,14 @@ export function brushToWindow(
   return { start, end: rangeEnd === undefined ? end : Math.max(start, Math.min(end, rangeEnd)) };
 }
 
-function token(name: string, fallback: string): string {
+const VAR_RE = /^var\((--[a-z0-9-]+)\)$/;
+
+/** Resolve a `var(--token)` reference against the live theme; anything else (or an unset token) is returned as is. */
+function resolveColor(color: string): string {
+  const name = VAR_RE.exec(color)?.[1];
+  if (name === undefined) return color;
   const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-  return v === '' ? fallback : v;
+  return v === '' ? color : v;
 }
 
 function seconds(ns: number): string {
@@ -81,29 +134,22 @@ function sum(xs: readonly number[]): number {
   return xs.reduce((a, b) => a + b, 0);
 }
 
-export function buildHistogramOption(b: BucketView<SpanStatusKey>) {
-  const colors: Record<SpanStatusKey, string> = {
-    ok: token('--oh-series-1', '#2a78d6'),
-    error: token('--oh-critical', STATUS.critical),
-    unset: token('--oh-series-other', '#9aa0a6'),
-  };
+export function buildHistogramOption<K extends string>(
+  b: BucketView<K>,
+  { series, topFirst }: Pick<HistogramSeriesSet<K>, 'series' | 'topFirst'>,
+) {
   const x = Array.from({ length: b.length }, (_, i) => seconds(b.startNs + i * b.widthNs));
-  return {
-    animation: false,
-    grid: { ...GRID, containLabel: false },
-    legend: { top: 0, left: GRID.left },
-    tooltip: { trigger: 'axis' },
-    xAxis: { type: 'category', data: x, axisTick: { show: false } },
-    yAxis: { type: 'value', minInterval: 1 },
-    series: b.keys.map((k) => ({
-      name: k,
+  const bars = series.map((s) => {
+    const color = resolveColor(s.color);
+    return {
+      name: s.label,
       type: 'bar',
-      stack: 'status',
-      data: Array.from({ length: b.length }, (_, i) => b.counts(k)[i] ?? 0),
+      stack: 'total',
+      data: Array.from({ length: b.length }, (_, i) => b.counts(s.key)[i] ?? 0),
       itemStyle:
-        k === 'error'
+        s.hatch === true
           ? {
-              color: colors[k],
+              color,
               // Colour is never the only encoding for errors: a hatch pattern repeats it.
               decal: {
                 symbol: 'rect',
@@ -113,15 +159,28 @@ export function buildHistogramOption(b: BucketView<SpanStatusKey>) {
                 color: 'rgba(255,255,255,0.6)',
               },
             }
-          : { color: colors[k] },
-    })),
+          : { color },
+    };
+  });
+  return {
+    animation: false,
+    grid: { ...GRID, containLabel: false },
+    legend: { top: 0, left: GRID.left, data: series.map((s) => s.label) },
+    tooltip: { trigger: 'axis' },
+    xAxis: { type: 'category', data: x, axisTick: { show: false } },
+    yAxis: { type: 'value', minInterval: 1 },
+    // ECharts stacks the first series at the bottom.
+    series: topFirst ? bars.reverse() : bars,
   };
 }
 
-/** Stacked status histogram over time. Drag (or use the keyboard) to brush a window into the selection. */
-export function HistogramCard(props: {
-  buckets: TimeBuckets<SpanStatusKey>;
+/** Stacked histogram over time. Drag (or use the keyboard) to brush a window into the selection. */
+export function HistogramCard<K extends string>(props: {
+  buckets: TimeBuckets<K>;
+  series: HistogramSeriesSet<K>;
   rangeEnd?: number;
+  /** Card heading ("Spans over time" by default). */
+  title?: string;
 }): JSX.Element {
   const buckets = useMemo(() => coarsenBuckets(props.buckets), [props.buckets]);
   const setWindow = useSelection((s) => s.setWindow);
@@ -137,9 +196,16 @@ export function HistogramCard(props: {
   }, []);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: themeTick re-reads the CSS colour tokens
-  const option = useMemo(() => buildHistogramOption(buckets), [buckets, themeTick]);
+  const option = useMemo(
+    () => buildHistogramOption(buckets, props.series),
+    [buckets, props.series, themeTick],
+  );
   const total = sum(buckets.keys.map((k) => buckets.total(k)));
-  const errors = buckets.total('error');
+  const title = props.title ?? 'Spans over time';
+  const noun = props.series.noun;
+  // Hatched series are the error-like ones; their counts add up to the "errors" total.
+  const hatched = props.series.series.filter((x) => x.hatch === true);
+  const errors = hatched.length === 0 ? null : sum(hatched.map((x) => buckets.total(x.key)));
   const last = Math.max(0, buckets.length - 1);
 
   const indexAt = (e: PointerEvent<HTMLDivElement>): number => {
@@ -177,10 +243,29 @@ export function HistogramCard(props: {
   const col = 100 / Math.max(1, buckets.length);
 
   return (
-    <section aria-label="Spans over time" className="rounded-card border border-hairline bg-surface p-3">
+    <section aria-label={title} className="rounded-card border border-hairline bg-surface p-3">
       <div className="mb-1 flex items-baseline gap-3 text-sm">
-        <span className="font-mono tabular-nums">{total} spans</span>
-        <span className="font-mono tabular-nums text-critical">{errors} errors</span>
+        <span className="font-mono tabular-nums">
+          {total} {noun}
+        </span>
+        {errors !== null && <span className="font-mono tabular-nums text-critical">{errors} errors</span>}
+        {props.series.countLegend === undefined ? null : (
+          <ul aria-label={props.series.countLegend} className="flex flex-wrap gap-3 text-xs">
+            {props.series.series
+              .filter((x) => buckets.total(x.key) > 0)
+              .map((x) => (
+                <li key={x.key} className="inline-flex items-center gap-1.5">
+                  <span
+                    aria-hidden
+                    className="inline-block size-2 rounded-full"
+                    style={{ background: x.color }}
+                  />
+                  <span>{x.label}</span>{' '}
+                  <span className="font-mono tabular-nums">{buckets.total(x.key)}</span>
+                </li>
+              ))}
+          </ul>
+        )}
         <span className="ml-auto text-xs text-muted">
           Drag to select a time range; arrow keys and Enter also work
         </span>
@@ -189,7 +274,7 @@ export function HistogramCard(props: {
         <Chart
           option={option}
           height={160}
-          ariaLabel={`Spans over time by status: ${total} spans, ${errors} errors`}
+          ariaLabel={`${title}: ${total} ${noun}${errors === null ? '' : `, ${errors} errors`}`}
         />
         {/* biome-ignore lint/a11y/useSemanticElements: a custom brush widget, not a form field group */}
         <div

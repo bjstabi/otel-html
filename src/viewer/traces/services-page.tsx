@@ -5,6 +5,7 @@ import type { FacetCounts } from '../../rollups/facets.js';
 import type { SpanStatusKey } from '../../rollups/span-rollups.js';
 import type { TimeBuckets } from '../../rollups/time-buckets.js';
 import { formatDuration } from '../../semconv/formatters.js';
+import { PartialNote } from '../components/explorer-states.js';
 import { facetKeyToPath, tokensToOttl } from '../components/filter-tokens.js';
 import type { DataSource, Landing, SpanQuery, SpanQueryResult } from '../data/data-source.js';
 import { PageChrome } from '../shell/page-chrome.js';
@@ -14,7 +15,7 @@ import { useSelection } from '../state/selection-context.js';
 import { serializeUrlState } from '../state/url-state.js';
 import { useColorAssigner } from '../theme/colors-context.js';
 import { ServiceChip } from './columns.js';
-import { PartialNote, ZeroSpans } from './explorer.js';
+import { ZeroSpans } from './explorer.js';
 import { Sparkline } from './sparkline.js';
 
 const SERVICE_KEY = 'service.name';
@@ -149,7 +150,7 @@ export function ServicesPage(props: { dataSource: DataSource }): JSX.Element {
   };
 
   return (
-    <PageChrome title="Services" manifest={manifest}>
+    <PageChrome title="Services" signal="span" manifest={manifest}>
       {load.status === 'loading' && (
         <p role="status" className="text-sm text-muted">
           Loading services

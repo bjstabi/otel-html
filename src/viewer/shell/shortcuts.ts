@@ -23,7 +23,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { keys: ['g', 't'], action: 'goTraces', label: 'Go to Traces' },
   { keys: ['j'], action: 'next', label: 'Next row' },
   { keys: ['k'], action: 'previous', label: 'Previous row' },
-  { keys: ['Esc'], action: 'clear', label: 'Close the open trace or span' },
+  { keys: ['Esc'], action: 'clear', label: 'Close the open log, trace or span' },
   { keys: ['/'], action: 'focusQuery', label: 'Focus the query bar' },
   { keys: ['?'], action: 'help', label: 'Show keyboard shortcuts' },
 ];

@@ -3,7 +3,8 @@ import { act, cleanup, render, screen, waitFor, within } from '@testing-library/
 import { userEvent } from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { Manifest } from '../../src/format/manifest.js';
-import type { TraceId } from '../../src/model/ids.js';
+import type { RelNanos, TraceId } from '../../src/model/ids.js';
+import { compileCondition } from '../../src/ottl/compile.js';
 import { FacetCounts } from '../../src/rollups/facets.js';
 import { RedSeries } from '../../src/rollups/red.js';
 import { TimeBuckets } from '../../src/rollups/time-buckets.js';
@@ -13,14 +14,18 @@ import type {
   TraceDetail,
   TraceRow,
 } from '../../src/viewer/data/data-source.js';
+import { type LogRow, logRef } from '../../src/viewer/data/log-query.js';
+import { type GoTo, GoToContext } from '../../src/viewer/shell/go-to.js';
 import { MOVE_EVENT } from '../../src/viewer/shell/move-event.js';
+import { applyPatch, carryTo } from '../../src/viewer/state/carry.js';
 import { createSelectionStore } from '../../src/viewer/state/selection.js';
 import { SelectionProvider } from '../../src/viewer/state/selection-context.js';
+import { serializeUrlState } from '../../src/viewer/state/url-state.js';
 import { ThemeProvider } from '../../src/viewer/theme/theme-provider.js';
 import { TracesExplorer } from '../../src/viewer/traces/explorer.js';
 import { SPLIT_STORAGE_KEY } from '../../src/viewer/traces/split-pane.js';
 import { TracePanel, type TracePanelProps } from '../../src/viewer/traces/trace-panel.js';
-import { detailOf, str, TRACE_ID, traceRow } from './trace-rows.js';
+import { detailOf, spanIdOf, str, TRACE_ID, traceRow } from './trace-rows.js';
 
 vi.mock('../../src/viewer/components/chart.js', () => ({ Chart: (): null => null }));
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -392,6 +397,19 @@ describe('j/k ownership', () => {
     await waitFor(() => expect(screen.getByTestId('trace-header')).toBeTruthy());
   });
 
+  test('two presses before a re-render move two traces (the open trace is read at event time)', async () => {
+    const store = setup();
+    await screen.findAllByRole('row');
+    press(1);
+    await screen.findByTestId('trace-panel');
+    act(() => {
+      window.dispatchEvent(new CustomEvent(MOVE_EVENT, { detail: 1 }));
+      window.dispatchEvent(new CustomEvent(MOVE_EVENT, { detail: 1 }));
+    });
+    expect(store.getState().traceId).toBe(ids[2]);
+    await waitFor(() => expect(screen.getByTestId('trace-header')).toBeTruthy());
+  });
+
   test('clicking a row opens the panel with the root resource; closing restores focus to the row', async () => {
     const user = userEvent.setup();
     const store = setup();
@@ -404,5 +422,232 @@ describe('j/k ownership', () => {
     await user.click(within(panel).getByRole('button', { name: 'Close trace' }));
     await waitFor(() => expect(screen.queryByTestId('trace-panel')).toBeNull());
     await waitFor(() => expect(document.activeElement?.getAttribute('role')).toBe('row'));
+  });
+});
+
+describe('TracePanel Logs tabs', () => {
+  const logRow = (i: number, ns: number, spanId: string | null, body: string, traceId = TRACE_ID): LogRow =>
+    ({
+      ref: logRef(0, i),
+      log: {
+        time: ns as RelNanos,
+        observedTime: null,
+        severityNumber: 9,
+        severityText: 'INFO',
+        body: { kind: 'string', value: body },
+        attributes: new Map(),
+        droppedAttributesCount: 0,
+        flags: 0,
+        traceId,
+        spanId,
+        eventName: '',
+      },
+      resource: {},
+      scope: {},
+      time: ns as RelNanos,
+      timeSource: 'time',
+      service: 'web',
+      host: 'h1',
+    }) as unknown as LogRow;
+  // Time-ascending as `traceLogs` returns them: two on span 2, one on span 1 and one on a span not in the trace.
+  const LOGS = [
+    logRow(0, 10, spanIdOf(2).toString(), 'first'),
+    logRow(1, 20, spanIdOf(1).toString(), 'second'),
+    logRow(2, 30, spanIdOf(2).toString(), 'third'),
+    logRow(3, 40, 'deadbeefdeadbeef', 'dangling'),
+  ];
+  const withLogs = (logs: readonly LogRow[]): DataSource =>
+    source({
+      getTrace: () => Promise.resolve({ ...okDetail(), logCount: logs.length }),
+      traceLogs: () => Promise.resolve(logs),
+    });
+
+  function mountLogs(
+    initial: Parameters<typeof createSelectionStore>[0] = {},
+    renderSpan = false,
+    logs: readonly LogRow[] = LOGS,
+    traceIds?: readonly TraceId[],
+  ) {
+    const store = createSelectionStore(initial);
+    const jumps: string[] = [];
+    const goTo: GoTo = (page, route, extra = {}) => {
+      const { url } = carryTo(store.getState(), 'traces', page);
+      jumps.push(`#${route}?${serializeUrlState(applyPatch(url, extra))}`);
+    };
+    render(
+      <ThemeProvider>
+        <GoToContext.Provider value={goTo}>
+          <SelectionProvider store={store}>
+            <Tooltip.Provider>
+              <TracePanel
+                dataSource={withLogs(logs)}
+                traceId={TRACE_ID}
+                layout="overlay"
+                onClose={() => undefined}
+                {...(traceIds === undefined ? {} : { traceIds })}
+                {...(renderSpan ? {} : { renderSpanSection: () => null })}
+              />
+            </Tooltip.Provider>
+          </SelectionProvider>
+        </GoToContext.Provider>
+      </ThemeProvider>,
+    );
+    return { store, jumps };
+  }
+  const decodedQuery = (hash: string | undefined): string | null =>
+    new URLSearchParams((hash ?? '').split('?')[1] ?? '').get('q');
+
+  test('logs load once for both tabs, and a trace change aborts and drops the stale load', async () => {
+    const user = userEvent.setup();
+    const signals: AbortSignal[] = [];
+    const traceLogs = vi.fn((_id: TraceId, signal?: AbortSignal) => {
+      if (signal !== undefined) signals.push(signal);
+      return Promise.resolve(LOGS);
+    });
+    const ds = source({
+      getTrace: () => Promise.resolve({ ...okDetail(), logCount: LOGS.length }),
+      traceLogs,
+    });
+    const store = createSelectionStore({ span: spanIdOf(2) });
+    const view = (traceId: TraceId) => (
+      <ThemeProvider>
+        <GoToContext.Provider value={() => undefined}>
+          <SelectionProvider store={store}>
+            <Tooltip.Provider>
+              <TracePanel dataSource={ds} traceId={traceId} layout="overlay" onClose={() => undefined} />
+            </Tooltip.Provider>
+          </SelectionProvider>
+        </GoToContext.Provider>
+      </ThemeProvider>
+    );
+    const { rerender } = render(view(TRACE_ID));
+    await user.click(await screen.findByRole('tab', { name: 'Logs' }));
+    await screen.findByTestId('trace-logs-tab');
+    await user.click(
+      await within(screen.getByRole('tablist', { name: 'Span views' })).findByRole('tab', { name: 'Logs' }),
+    );
+    await screen.findByTestId('span-logs-tab');
+    expect(traceLogs).toHaveBeenCalledTimes(1);
+    const other = 'b'.repeat(32) as TraceId;
+    rerender(view(other));
+    expect(signals[0]?.aborted).toBe(true);
+    await waitFor(() => expect(traceLogs).toHaveBeenCalledTimes(2));
+    expect(traceLogs.mock.calls[1]?.[0]).toBe(other);
+  });
+
+  test('a failed logs load shows an alert in the trace Logs tab and hides the span Logs tab', async () => {
+    const user = userEvent.setup();
+    const ds = source({
+      getTrace: () => Promise.resolve({ ...okDetail(), logCount: 2 }),
+      traceLogs: () => Promise.reject(new Error('shard 4 is corrupt')),
+    });
+    const store = createSelectionStore({ span: spanIdOf(2) });
+    render(
+      <ThemeProvider>
+        <GoToContext.Provider value={() => undefined}>
+          <SelectionProvider store={store}>
+            <Tooltip.Provider>
+              <TracePanel dataSource={ds} traceId={TRACE_ID} layout="overlay" onClose={() => undefined} />
+            </Tooltip.Provider>
+          </SelectionProvider>
+        </GoToContext.Provider>
+      </ThemeProvider>,
+    );
+    await user.click(await screen.findByRole('tab', { name: 'Logs' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('The logs could not be loaded: shard 4 is corrupt');
+    expect(
+      within(screen.getByRole('tablist', { name: 'Span views' })).queryByRole('tab', { name: 'Logs' }),
+    ).toBeNull();
+  });
+
+  test('a move event with focus inside the embedded list is left to the trace panel', async () => {
+    const user = userEvent.setup();
+    const ids = [TRACE_ID, 'b'.repeat(32) as TraceId];
+    const { store } = mountLogs({ trace: TRACE_ID }, false, LOGS, ids);
+    await user.click(await screen.findByRole('tab', { name: 'Logs' }));
+    const tab = await screen.findByTestId('trace-logs-tab');
+    within(tab).getAllByRole('row')[1]?.focus();
+    act(() => {
+      window.dispatchEvent(new CustomEvent(MOVE_EVENT, { detail: 1 }));
+    });
+    expect(store.getState().traceId).toBe(ids[1]);
+  });
+
+  test('the trace Logs tab lists the trace logs in time order and the compiled query is valid', async () => {
+    const user = userEvent.setup();
+    mountLogs();
+    await user.click(await screen.findByRole('tab', { name: 'Logs' }));
+    const tab = await screen.findByTestId('trace-logs-tab');
+    const bodies = within(tab)
+      .getAllByRole('row')
+      .slice(1)
+      .map((r) => r.textContent ?? '');
+    expect(
+      bodies.map((b) => ['first', 'second', 'third', 'dangling'].findIndex((w) => b.includes(w))),
+    ).toEqual([0, 1, 2, 3]);
+    expect(within(tab).getByText('4 logs')).toBeTruthy();
+    expect(() =>
+      compileCondition(
+        `trace_id.string == "${TRACE_ID}" and span_id.string == "${spanIdOf(2)}"`,
+        'log_record',
+      ),
+    ).not.toThrow();
+  });
+
+  test('Open in Logs Explorer writes the trace query and carries the window', async () => {
+    const user = userEvent.setup();
+    const { jumps } = mountLogs({ t: '0~1000' });
+    await user.click(await screen.findByRole('tab', { name: 'Logs' }));
+    await user.click(await screen.findByRole('button', { name: 'Open in Logs Explorer' }));
+    expect(jumps[0]?.startsWith('#/logs?')).toBe(true);
+    expect(decodedQuery(jumps[0])).toBe(`trace_id.string == "${TRACE_ID}"`);
+    expect(new URLSearchParams(jumps[0]?.split('?')[1]).get('t')).toBe('0~1000');
+  });
+
+  test('a row click opens that log in the Logs Explorer with its Attributes tab', async () => {
+    const user = userEvent.setup();
+    const { jumps } = mountLogs();
+    await user.click(await screen.findByRole('tab', { name: 'Logs' }));
+    await user.click(await screen.findByText('second'));
+    const params = new URLSearchParams(jumps[0]?.split('?')[1]);
+    expect(params.get('log')).toBe('0.1');
+    expect(params.get('ltab')).toBe('attributes');
+    expect(params.get('q')).toBe(`trace_id.string == "${TRACE_ID}"`);
+  });
+
+  test('the embedded list sorts locally', async () => {
+    const user = userEvent.setup();
+    mountLogs();
+    await user.click(await screen.findByRole('tab', { name: 'Logs' }));
+    const tab = await screen.findByTestId('trace-logs-tab');
+    await user.click(within(within(tab).getByRole('columnheader', { name: /Time/ })).getByRole('button'));
+    const first = within(tab).getAllByRole('row')[1];
+    expect(first?.textContent).toContain('dangling');
+  });
+
+  test('the span Logs tab lists only the span logs; a dangling span id never shows another span or trace', async () => {
+    const user = userEvent.setup();
+    const { jumps } = mountLogs({ span: spanIdOf(2) }, true);
+    const spanTabs = await screen.findByRole('tablist', { name: 'Span views' });
+    await user.click(await within(spanTabs).findByRole('tab', { name: 'Logs' }));
+    const list = await screen.findByTestId('span-logs-tab');
+    const text = list.textContent ?? '';
+    expect(text).toContain('first');
+    expect(text).toContain('third');
+    expect(text).not.toContain('second');
+    expect(text).not.toContain('dangling');
+    await user.click(within(list).getByRole('button', { name: 'Open in Logs Explorer' }));
+    expect(decodedQuery(jumps[0])).toBe(
+      `trace_id.string == "${TRACE_ID}" and span_id.string == "${spanIdOf(2)}"`,
+    );
+  });
+
+  test('a span with no logs has no Logs tab', async () => {
+    mountLogs({ span: spanIdOf(1) }, true, [LOGS[0] as LogRow]);
+    await screen.findByRole('tablist', { name: 'Span views' });
+    expect(
+      within(screen.getByRole('tablist', { name: 'Span views' })).queryByRole('tab', { name: 'Logs' }),
+    ).toBeNull();
   });
 });

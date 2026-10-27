@@ -1,0 +1,113 @@
+import { cleanup, render, screen, within } from '@testing-library/react';
+import { userEvent } from '@testing-library/user-event';
+import { afterEach, describe, expect, test, vi } from 'vitest';
+import type { AnyValue } from '../../src/model/anyvalue.js';
+import { parseUnixNanos, type RelNanos } from '../../src/model/ids.js';
+import type { ResourceRecord, ScopeRecord } from '../../src/model/records.js';
+import { LogList } from '../../src/viewer/components/log-list.js';
+import { type LogRow, logRef } from '../../src/viewer/data/log-query.js';
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+afterEach(cleanup);
+
+const epoch = parseUnixNanos('1700000000000000000', 'epoch');
+
+function row(
+  i: number,
+  over: Partial<LogRow> & { traceId?: string | null; attrs?: [string, AnyValue][]; sev?: number } = {},
+): LogRow {
+  return {
+    ref: logRef(0, i),
+    log: {
+      time: 1_000_000 as RelNanos,
+      observedTime: null,
+      severityNumber: over.sev ?? 17,
+      severityText: 'ERROR',
+      body: { kind: 'string', value: `body ${i}` },
+      attributes: new Map(over.attrs ?? []),
+      droppedAttributesCount: 0,
+      flags: 0,
+      traceId: over.traceId ?? null,
+      spanId: null,
+      eventName: '',
+    },
+    resource: {} as ResourceRecord,
+    scope: {} as ScopeRecord,
+    time: 1_000_000 as RelNanos,
+    timeSource: over.timeSource ?? 'time',
+    service: 'web',
+    host: 'h1',
+  } as unknown as LogRow;
+}
+
+function mount(rows: readonly LogRow[], extra: Partial<Parameters<typeof LogList>[0]> = {}) {
+  const onSort = vi.fn();
+  const onRowClick = vi.fn();
+  render(
+    <LogList
+      rows={rows}
+      sort={{ column: 'time', dir: 'desc' }}
+      onSort={onSort}
+      onRowClick={onRowClick}
+      selectedRef={null}
+      epoch={epoch}
+      {...extra}
+    />,
+  );
+  return { onSort, onRowClick };
+}
+
+describe('LogList', () => {
+  test('renders the six columns with severity, service and body', () => {
+    mount([row(0, { traceId: 'abc' })]);
+    for (const h of ['Time', 'Severity', 'Service', 'Host', 'Body', 'Trace'])
+      expect(screen.getByRole('columnheader', { name: new RegExp(h) })).toBeTruthy();
+    expect(screen.getByText('ERROR · 17')).toBeTruthy();
+    expect(screen.getByText('body 0')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'trace' }).getAttribute('href')).toBe('#/traces/trace/abc');
+  });
+
+  test('a log without a trace shows a dash, not a link', () => {
+    mount([row(0)]);
+    expect(screen.queryByRole('link', { name: 'trace' })).toBeNull();
+  });
+
+  test('observed and missing timestamps are marked', () => {
+    mount([row(0, { timeSource: 'observed' }), row(1, { timeSource: 'none' })]);
+    expect(screen.getByText('observed')).toBeTruthy();
+    expect(screen.getByText('no timestamp')).toBeTruthy();
+  });
+
+  test('lines option changes row height (20 x lines + 16)', async () => {
+    mount([row(0)]);
+    const rowEl = (): HTMLElement => screen.getAllByRole('row')[1] as HTMLElement;
+    expect(rowEl().style.height).toBe('36px');
+    const select = screen.getByRole('combobox', { name: 'Lines' });
+    await userEvent.setup().selectOptions(select, '3');
+    expect(rowEl().style.height).toBe('76px');
+    await userEvent.setup().selectOptions(select, '10');
+    expect(rowEl().style.height).toBe('216px');
+  });
+
+  test('clicking a row reports it; sort headers report the sort column', async () => {
+    const { onSort, onRowClick } = mount([row(0)]);
+    const user = userEvent.setup();
+    await user.click(screen.getByText('body 0'));
+    expect(onRowClick).toHaveBeenCalledOnce();
+    await user.click(within(screen.getByRole('columnheader', { name: /Severity/ })).getByRole('button'));
+    expect(onSort).toHaveBeenCalledWith({ column: 'severity', dir: 'desc' });
+  });
+
+  test('extra attribute columns show the attribute value', () => {
+    mount([row(0, { attrs: [['user.id', { kind: 'string', value: 'u-7' }]] })], {
+      extraColumns: ['user.id'],
+    });
+    expect(screen.getByRole('columnheader', { name: 'user.id' })).toBeTruthy();
+    expect(screen.getByText('u-7')).toBeTruthy();
+  });
+
+  test('shows how many of the total are loaded', () => {
+    mount([row(0)], { total: 5 });
+    expect(screen.getByText(/1 of 5/)).toBeTruthy();
+  });
+});

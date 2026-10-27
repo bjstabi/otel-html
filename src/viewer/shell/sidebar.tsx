@@ -1,74 +1,112 @@
 import { BarChart3, LayoutDashboard, Moon, ScrollText, Sun, SunMoon, Waypoints } from 'lucide-react';
 import type { JSX, ReactNode } from 'react';
 import type { Manifest } from '../../format/manifest.js';
-import { selectionToUrlState } from '../state/selection.js';
+import { applyPatch, carryTo, type UrlPatch } from '../state/carry.js';
+import { type Page, pageOfRoute } from '../state/page-options.js';
+import type { SelectionMode } from '../state/selection.js';
 import { useSelection } from '../state/selection-context.js';
 import { serializeUrlState } from '../state/url-state.js';
 import { type ThemePreference, useTheme } from '../theme/theme-provider.js';
+import { useGoTo } from './go-to.js';
 import { RunCard } from './run-card.js';
 import { Tip } from './tip.js';
-import { navigateRoute, routeHref, useRoute } from './use-route.js';
+import { routeHref, useRoute } from './use-route.js';
 
+interface NavTarget {
+  page: Page;
+  route: string;
+  /**
+   * Set when the item is a mode of another route (Patterns is `/logs` in patterns mode): it is current there,
+   * and the plain item for that route is not.
+   */
+  currentAt?: { route: string; mode: SelectionMode };
+  /** Applied on top of the carried state, so the link always lands on the item (Explorer leaves Patterns mode). */
+  patch?: UrlPatch;
+}
 interface NavItem {
   label: string;
-  /** Items without a route are announced as coming later, never rendered as dead links. */
-  route: string | null;
+  /** Items without a target are announced as coming later, never rendered as dead links. */
+  target: NavTarget | null;
 }
 interface NavSection {
   title: string;
   icon: ReactNode;
   /** Set when the section heading itself is the destination. */
-  route: string | null;
+  target: NavTarget | null;
   items: readonly NavItem[];
 }
 
 const ICON = { size: 16, 'aria-hidden': true } as const;
 
 const SECTIONS: readonly NavSection[] = [
-  { title: 'Dashboards', icon: <LayoutDashboard {...ICON} />, route: '/dashboards', items: [] },
+  {
+    title: 'Dashboards',
+    icon: <LayoutDashboard {...ICON} />,
+    target: { page: 'dashboards', route: '/dashboards' },
+    items: [],
+  },
   {
     title: 'Logs',
     icon: <ScrollText {...ICON} />,
-    route: null,
+    target: null,
     items: [
-      { label: 'Explorer', route: '/logs' },
-      { label: 'Patterns', route: null },
+      { label: 'Explorer', target: { page: 'logs', route: '/logs', patch: { mode: null } } },
+      {
+        label: 'Patterns',
+        target: { page: 'logs', route: '/logs/patterns', currentAt: { route: '/logs', mode: 'patterns' } },
+      },
     ],
   },
   {
     title: 'Metrics',
     icon: <BarChart3 {...ICON} />,
-    route: null,
+    target: null,
     items: [
-      { label: 'Explorer', route: '/metrics' },
-      { label: 'Catalog', route: null },
+      { label: 'Explorer', target: { page: 'metrics', route: '/metrics' } },
+      { label: 'Catalog', target: null },
     ],
   },
   {
     title: 'Traces',
     icon: <Waypoints {...ICON} />,
-    route: null,
+    target: null,
     items: [
-      { label: 'Explorer', route: '/traces' },
-      { label: 'Services', route: '/traces/services' },
+      { label: 'Explorer', target: { page: 'traces', route: '/traces' } },
+      { label: 'Services', target: { page: 'traces', route: '/traces/services' } },
     ],
   },
 ];
+
+const TARGETS: readonly NavTarget[] = SECTIONS.flatMap((s) => [
+  ...(s.target === null ? [] : [s.target]),
+  ...s.items.flatMap((i) => (i.target === null ? [] : [i.target])),
+]);
+
+/** Exactly one target is current: a `currentAt` match wins over the plain item for the same route. */
+function isCurrent(t: NavTarget, route: string, mode: SelectionMode | null): boolean {
+  const at = (x: NavTarget): boolean => x.currentAt?.route === route && x.currentAt.mode === mode;
+  if (t.currentAt !== undefined) return at(t);
+  return t.route === route && !TARGETS.some(at);
+}
 
 const ROW = 'flex items-center gap-2 rounded-full px-3 py-1.5 text-sm';
 const SELECTED = 'bg-ink text-page font-medium';
 const IDLE = 'text-ink-2 hover:bg-hairline';
 
-function NavLink(props: { href: string; current: string; children: ReactNode }): JSX.Element {
-  const selected = props.current === props.href;
-  const search = useSelection((s) => serializeUrlState(selectionToUrlState(s)));
+function NavLink(props: { target: NavTarget; current: string; children: ReactNode }): JSX.Element {
+  const { target, current } = props;
+  const selected = useSelection((s) => isCurrent(target, current, s.mode));
+  const search = useSelection((s) =>
+    serializeUrlState(applyPatch(carryTo(s, pageOfRoute(current), target.page).url, target.patch ?? {})),
+  );
+  const goTo = useGoTo();
   return (
     <a
-      href={`${routeHref(props.href)}${search === '' ? '' : `?${search}`}`}
+      href={`${routeHref(target.route)}${search === '' ? '' : `?${search}`}`}
       onClick={(e) => {
         if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
         e.preventDefault();
-        navigateRoute(window, props.href, search);
+        goTo(target.page, target.route, target.patch);
       }}
       className={`${ROW} ${selected ? SELECTED : IDLE}`}
       aria-current={selected ? 'page' : undefined}
@@ -118,30 +156,30 @@ export function Sidebar({ manifest }: { manifest: Manifest }): JSX.Element {
             <h2
               id={`nav-${s.title}`}
               className={
-                s.route === null ? 'text-xs font-semibold uppercase tracking-wide text-muted' : 'text-sm'
+                s.target === null ? 'text-xs font-semibold uppercase tracking-wide text-muted' : 'text-sm'
               }
             >
-              {s.route === null ? (
+              {s.target === null ? (
                 <span className="flex items-center gap-2 px-3 py-1">
                   {s.icon}
                   {s.title}
                 </span>
               ) : (
-                <NavLink href={s.route} current={current}>
+                <NavLink target={s.target} current={current}>
                   {s.icon}
                   {s.title}
                 </NavLink>
               )}
             </h2>
             {s.items.map((item) =>
-              item.route === null ? (
+              item.target === null ? (
                 <span key={item.label} aria-disabled="true" className={`${ROW} ml-4 text-muted`}>
                   <span>{item.label}</span>
                   <span className="text-xs">Soon</span>
                 </span>
               ) : (
                 <div key={item.label} className="ml-4 flex flex-col">
-                  <NavLink href={item.route} current={current}>
+                  <NavLink target={item.target} current={current}>
                     {item.label}
                   </NavLink>
                 </div>

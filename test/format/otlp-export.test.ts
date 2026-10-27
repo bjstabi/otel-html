@@ -1,9 +1,18 @@
 import { expect, test } from 'vitest';
-import { spansToOtlpJson } from '../../src/format/otlp-export.js';
+import { logsToOtlpJson, spansToOtlpJson } from '../../src/format/otlp-export.js';
 import { parseUnixNanos } from '../../src/model/ids.js';
-import { createNormalizeContext, normalizeTraces } from '../../src/model/normalize.js';
+import { createNormalizeContext, normalizeLogs, normalizeTraces } from '../../src/model/normalize.js';
 import { parseOtlpJson } from '../../src/model/otlp-json.js';
-import { attr, SPAN_ID, span, T0, TRACE_ID, traceRequest } from '../../test-support/otlp-builders.js';
+import {
+  attr,
+  logRecord,
+  logsRequest,
+  SPAN_ID,
+  span,
+  T0,
+  TRACE_ID,
+  traceRequest,
+} from '../../test-support/otlp-builders.js';
 
 const epoch = parseUnixNanos(T0, 'epoch');
 
@@ -113,4 +122,75 @@ test('empty input exports an empty request', () => {
       epoch,
     ),
   ).toEqual({ resourceSpans: [] });
+});
+
+function normalizeLogJson(json: unknown) {
+  const ctx = createNormalizeContext(epoch);
+  const logs = parseOtlpJson(JSON.stringify(json), 'in.json').flatMap((r) =>
+    r.signal === 'logs' ? normalizeLogs(r.request, ctx, 'in.json') : [],
+  );
+  return { ctx, logs };
+}
+
+/** The `resourceLogs` entries of one builder request. */
+const resourceLogsOf = (req: unknown): unknown[] => (req as { resourceLogs: unknown[] }).resourceLogs;
+
+const logInput = {
+  resourceLogs: [
+    ...resourceLogsOf(
+      logsRequest(
+        [
+          logRecord({
+            severityNumber: 17,
+            severityText: 'ERROR',
+            body: { kvlistValue: { values: [attr('k', { arrayValue: { values: [{ intValue: '-3' }] } })] } },
+            attributes: [attr('s', { stringValue: '</script>' })],
+            traceId: TRACE_ID,
+            spanId: SPAN_ID,
+            flags: 1,
+            eventName: 'ev',
+            droppedAttributesCount: 2,
+          }),
+          // Observed time only, and no timestamp at all.
+          logRecord({ timeUnixNano: '0', body: { stringValue: 'observed only' } }),
+          logRecord({ timeUnixNano: '0', observedTimeUnixNano: '0', body: { bytesValue: 'AP8=' } }),
+        ],
+        [attr('service.name', { stringValue: 'a' })],
+      ),
+    ),
+    ...resourceLogsOf(
+      logsRequest(
+        [logRecord({ body: { stringValue: 'other resource' } })],
+        [attr('service.name', { stringValue: 'b' })],
+      ),
+    ),
+  ],
+};
+
+test('logsToOtlpJson parses back through normalizeLogs to the same records', () => {
+  const { ctx, logs } = normalizeLogJson(logInput);
+  expect(logs).toHaveLength(4);
+  const rows = logs.map((log) => ({
+    log,
+    resource: ctx.resources.get(log.resource),
+    scope: ctx.scopes.get(log.scope),
+  }));
+  const out = logsToOtlpJson(rows, epoch) as { resourceLogs: unknown[] };
+  expect(out.resourceLogs).toHaveLength(2);
+  const again = normalizeLogJson(out);
+  expect(again.logs).toEqual(logs);
+  expect(again.ctx.resources.entries()).toEqual(ctx.resources.entries());
+  expect(again.ctx.scopes.entries()).toEqual(ctx.scopes.entries());
+});
+
+test('logs of one resource and scope object share one entry', () => {
+  const { ctx, logs } = normalizeLogJson(logInput);
+  const rows = logs.map((log) => ({
+    log,
+    resource: ctx.resources.get(log.resource),
+    scope: ctx.scopes.get(log.scope),
+  }));
+  const out = logsToOtlpJson(rows, epoch) as { resourceLogs: { scopeLogs: { logRecords: unknown[] }[] }[] };
+  expect(out.resourceLogs.map((r) => r.scopeLogs.map((s) => s.logRecords.length))).toEqual([[3], [1]]);
+  expect(logsToOtlpJson([], epoch)).toEqual({ resourceLogs: [] });
 });

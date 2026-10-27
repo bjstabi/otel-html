@@ -2,7 +2,7 @@ import type { CustomSeriesRenderItem, EChartsOption } from 'echarts';
 import { Minus, Plus, RotateCcw } from 'lucide-react';
 import { type JSX, useCallback, useMemo, useRef, useState } from 'react';
 import { anyValueToDisplay } from '../../model/anyvalue.js';
-import type { SpanId } from '../../model/ids.js';
+import type { RelNanos, SpanId } from '../../model/ids.js';
 import { formatDuration } from '../../semconv/formatters.js';
 import type { TraceDetail } from '../data/data-source.js';
 import type { SpanRow } from '../data/span-query.js';
@@ -34,7 +34,20 @@ export interface FlameView {
    * bar on its own. Big traces need this: one chart element per bar costs about 10 ms per 1000 spans.
    */
   minBarNs?: number;
+  /** The span to outline in the accent colour (the one that emitted a log), labelled when the bar is wide enough. */
+  outlineSpanId?: SpanId | null;
+  /** Dashed vertical lines in the accent colour, each at a time on the bars' axis. */
+  markers?: readonly FlameMarker[];
 }
+
+export interface FlameMarker {
+  time: RelNanos;
+  label: string;
+}
+
+/** The label tail on the outlined bar, and a rough width per character of the 11px mono label. */
+export const OUTLINE_TAIL = '← emitted this log';
+const CHAR_PX = 6.6;
 
 /** Traces with at most this many spans always draw every bar on its own. */
 export const BATCH_ABOVE_BARS = 2000;
@@ -50,12 +63,13 @@ export function buildFlameItems(
   bars: readonly FlameBar[],
   minBarNs: number,
   selectedSpanId: SpanId | null,
+  outlineSpanId: SpanId | null = null,
 ): FlameItem[] {
   if (minBarNs <= 0) return bars.map((_, index) => ({ kind: 'bar', index }));
   const items: FlameItem[] = [];
   const batches = new Map<string, Extract<FlameItem, { kind: 'batch' }>>();
   bars.forEach((b, index) => {
-    if (b.end - b.start >= minBarNs || b.spanId === selectedSpanId) {
+    if (b.end - b.start >= minBarNs || b.spanId === selectedSpanId || b.spanId === outlineSpanId) {
       items.push({ kind: 'bar', index });
       return;
     }
@@ -272,7 +286,9 @@ function renderBatch(
 export function flameOption(bars: readonly FlameBar[], theme: FlameTheme, view: FlameView): EChartsOption {
   const { min, max } = extentOf(bars);
   const rows = Math.min(bars.reduce((d, b) => Math.max(d, b.depth), 0) + 1, view.maxRows);
-  const items = buildFlameItems(bars, view.minBarNs ?? 0, view.selectedSpanId);
+  const markers = view.markers ?? [];
+  const outlineId = view.outlineSpanId ?? null;
+  const items = buildFlameItems(bars, view.minBarNs ?? 0, view.selectedSpanId, outlineId);
   const renderItem: RenderItem = (params, api) => {
     const item = items[Number(api.value(3))];
     const cs: unknown = params.coordSys;
@@ -294,7 +310,8 @@ export function flameOption(bars: readonly FlameBar[], theme: FlameTheme, view: 
     const shape = { x: x0, y, width: x1 - x0, height: h, r: x1 - x0 > 8 ? 3 : 0 };
     const base = { type: 'rect', shape, style: { fill, opacity } };
     // The common bar is one flat rect: at 50k spans a group per bar would double the element count.
-    const plain = !bar.error && bar.spanId !== view.selectedSpanId && x1 - x0 < 36;
+    const outlined = bar.spanId === outlineId;
+    const plain = !bar.error && bar.spanId !== view.selectedSpanId && !outlined && x1 - x0 < 36;
     if (plain) return base as ReturnType<RenderItem>;
     const children: object[] = [base];
     if (bar.error) {
@@ -306,6 +323,13 @@ export function flameOption(bars: readonly FlameBar[], theme: FlameTheme, view: 
         style: { fill: 'none', stroke: theme.critical, lineWidth: 2, opacity },
       });
     }
+    if (outlined) {
+      children.push({
+        type: 'rect',
+        shape: { x: x0 - 1, y: y - 1, width: x1 - x0 + 2, height: h + 2, r: 4 },
+        style: { fill: 'none', stroke: theme.accent, lineWidth: 2 },
+      });
+    }
     if (bar.spanId === view.selectedSpanId) {
       children.push({
         type: 'rect',
@@ -314,10 +338,12 @@ export function flameOption(bars: readonly FlameBar[], theme: FlameTheme, view: 
       });
     }
     if (x1 - x0 >= 36 && h >= 10) {
+      const name = bar.error ? `✕ ${bar.label}` : bar.label;
+      const tailed = outlined && (name.length + OUTLINE_TAIL.length + 2) * CHAR_PX <= x1 - x0 - 8;
       children.push({
         type: 'text',
         style: {
-          text: bar.error ? `✕ ${bar.label}` : bar.label,
+          text: tailed ? `${name}  ${OUTLINE_TAIL}` : name,
           x: x0 + 4,
           y: y + h / 2,
           width: x1 - x0 - 8,
@@ -376,6 +402,18 @@ export function flameOption(bars: readonly FlameBar[], theme: FlameTheme, view: 
         // One synchronous pass: progressive chunks of a few hundred items take one frame each (seconds at 50k).
         progressive: 0,
         animation: false,
+        ...(markers.length === 0
+          ? {}
+          : {
+              markLine: {
+                silent: true,
+                symbol: 'none',
+                animation: false,
+                lineStyle: { color: theme.accent, type: 'dashed', width: 1.5 },
+                label: { show: true, position: 'insideEndTop', color: theme.accent, fontFamily: theme.font },
+                data: markers.map((m) => ({ xAxis: m.time, label: { formatter: m.label } })),
+              },
+            }),
       },
     ],
   };
@@ -529,11 +567,15 @@ export interface FlameGraphProps {
   selectedSpanId: SpanId | null;
   onSelect(spanId: SpanId): void;
   colors: ColorAssigner;
+  /** Outline this span in the accent colour (the span that emitted a log). */
+  outlineSpanId?: SpanId | null;
+  /** Dashed accent lines at times on the trace's axis. */
+  markers?: readonly FlameMarker[];
 }
 
 /** Flame graph card: filter, errors-only, colour-by, zoom controls, minimap and the % execution-time legend. */
 export function FlameGraph(props: FlameGraphProps): JSX.Element {
-  const { detail, selectedSpanId, onSelect, colors } = props;
+  const { detail, selectedSpanId, onSelect, colors, outlineSpanId = null, markers } = props;
   const { resolved } = useTheme();
   const [colorBy, setColorBy] = useState<FlameColorBy>('service');
   const [filter, setFilter] = useState('');
@@ -585,10 +627,12 @@ export function FlameGraph(props: FlameGraphProps): JSX.Element {
       zoom: zoom.current,
       maxRows: FLAME_MAX_ROWS,
       minBarNs,
+      outlineSpanId,
+      ...(markers === undefined ? {} : { markers }),
     });
     if (perfEnabled() && started.current !== 0) stages.current.optionMs = performance.now() - t;
     return o;
-  }, [bars, theme, selectedSpanId, zoomLevel]);
+  }, [bars, theme, selectedSpanId, zoomLevel, outlineSpanId, markers]);
   const miniOption = useMemo(() => minimapOption(bars, theme, zoom.current), [bars, theme]);
 
   const sync = useCallback((to: 'main' | 'mini') => {
@@ -669,6 +713,7 @@ export function FlameGraph(props: FlameGraphProps): JSX.Element {
   const clipped = maxDepth + 1 > FLAME_MAX_ROWS;
   const errorCount = bars.filter((b) => b.error).length;
   const dimmed = bars.filter((b) => b.dimmed).length;
+  const outlined = outlineSpanId === null ? undefined : bars.find((b) => b.spanId === outlineSpanId);
 
   return (
     <div data-testid="flame-graph" className="flex flex-col gap-3">
@@ -746,6 +791,11 @@ export function FlameGraph(props: FlameGraphProps): JSX.Element {
           Showing the first <span className="font-mono tabular-nums">{FLAME_MAX_ROWS}</span> of{' '}
           <span className="font-mono tabular-nums">{maxDepth + 1}</span> depth levels. The Waterfall lists
           every span.
+        </p>
+      )}
+      {outlined !== undefined && (
+        <p data-testid="flame-outline" className="font-mono text-xs break-words text-accent">
+          {outlined.label} {OUTLINE_TAIL}
         </p>
       )}
       <output aria-label="Hovered span" className="min-h-5 font-mono text-xs break-words text-ink-2">

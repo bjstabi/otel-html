@@ -95,6 +95,6 @@ run = """
 if [ -n "$CI" ]; then echo 'demo opens a browser and does not run in CI' >&2; exit 1; fi
 out="${TMPDIR:-/tmp}/otel-html-demo"
 rm -rf "$out"
-node dist/cli/main.js convert fixtures/small.otlp.json --out "$out" --title 'otel-html demo'
+node dist/cli/main.js convert fixtures/small.otlp.json fixtures/linked-traces.otlp.json fixtures/linked-logs.otlp.json --out "$out" --title 'otel-html demo'
 if command -v open >/dev/null 2>&1; then open "$out/index.html"; else xdg-open "$out/index.html"; fi
 """

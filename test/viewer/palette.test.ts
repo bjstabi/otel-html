@@ -1,8 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, test } from 'vitest';
 import {
   CATEGORICAL_DARK,
   CATEGORICAL_LIGHT,
   createColorAssigner,
+  SEVERITY_DARK,
+  SEVERITY_LIGHT,
   STATUS,
 } from '../../src/viewer/theme/palette.js';
 
@@ -37,5 +39,43 @@ describe('palette', () => {
     expect(a.colorFor('e7')).toBe(7);
     expect(a.colorFor('e8')).toBe(7);
     expect(a.colorFor('e0')).toBe(0);
+  });
+});
+
+function luminance(hex: string): number {
+  const ch = (i: number): number => {
+    const c = Number.parseInt(hex.slice(1 + i * 2, 3 + i * 2), 16) / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * ch(0) + 0.7152 * ch(1) + 0.0722 * ch(2);
+}
+
+/** WCAG contrast ratio between two `#rrggbb` colours. */
+function contrast(a: string, b: string): number {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return ((hi ?? 0) + 0.05) / ((lo ?? 0) + 0.05);
+}
+
+describe('severity colours', () => {
+  const SURFACE = { light: '#ffffff', dark: '#1a1a19' } as const;
+  const MUTED = { light: '#6b6f78', dark: '#96958c' } as const;
+  const KEYS = ['fatal', 'error', 'warn', 'info', 'debug', 'trace'] as const;
+  /**
+   * Light values come from the mockup and are fixed. These three are pale on white (below 3:1); they are
+   * never the only encoding (every severity carries its label), so they are held to a 1.5:1 floor instead.
+   */
+  const PALE_LIGHT: ReadonlySet<string> = new Set(['warn', 'debug', 'trace']);
+
+  test.each(KEYS)('%s clears non-text contrast against the dark surface (3:1)', (k) => {
+    expect(contrast(SEVERITY_DARK[k], SURFACE.dark)).toBeGreaterThanOrEqual(3);
+  });
+
+  test.each(KEYS)('%s clears its contrast floor against the light surface', (k) => {
+    expect(contrast(SEVERITY_LIGHT[k], SURFACE.light)).toBeGreaterThanOrEqual(PALE_LIGHT.has(k) ? 1.5 : 3);
+  });
+
+  test('unspecified (the muted token) clears text contrast (4.5:1) in both modes', () => {
+    expect(contrast(MUTED.light, SURFACE.light)).toBeGreaterThanOrEqual(4.5);
+    expect(contrast(MUTED.dark, SURFACE.dark)).toBeGreaterThanOrEqual(4.5);
   });
 });

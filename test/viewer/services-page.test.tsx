@@ -8,6 +8,7 @@ import { FacetCounts } from '../../src/rollups/facets.js';
 import { RedSeries } from '../../src/rollups/red.js';
 import { TimeBuckets } from '../../src/rollups/time-buckets.js';
 import type { DataSource, SpanQuery, SpanQueryResult } from '../../src/viewer/data/data-source.js';
+import { GoToContext } from '../../src/viewer/shell/go-to.js';
 import { createSelectionStore } from '../../src/viewer/state/selection.js';
 import { SelectionProvider } from '../../src/viewer/state/selection-context.js';
 import { ThemeProvider } from '../../src/viewer/theme/theme-provider.js';
@@ -75,9 +76,11 @@ function mount(ds: DataSource): void {
   render(
     <ThemeProvider>
       <SelectionProvider store={createSelectionStore({})}>
-        <Tooltip.Provider>
-          <ServicesPage dataSource={ds} />
-        </Tooltip.Provider>
+        <GoToContext.Provider value={() => {}}>
+          <Tooltip.Provider>
+            <ServicesPage dataSource={ds} />
+          </Tooltip.Provider>
+        </GoToContext.Provider>
       </SelectionProvider>
     </ThemeProvider>,
   );

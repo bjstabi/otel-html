@@ -1,24 +1,19 @@
 import type { SerializedRollups } from '../format/state.js';
 import { OtelHtmlError } from '../model/errors.js';
-import {
-  LOG_SEVERITY_KEYS,
-  type LogSeverityKey,
-  METRIC_KEYS,
-  type MetricKey,
-  SignalCounts,
-} from './signal-counts.js';
+import { LogRollups } from './log-rollups.js';
+import { METRIC_KEYS, type MetricKey, SignalCounts } from './signal-counts.js';
 import { type SpanRollupOptions, SpanRollups } from './span-rollups.js';
 
 export type ReportRollups = {
   spans: SpanRollups;
-  logs: SignalCounts<LogSeverityKey>;
+  logs: LogRollups;
   metrics: SignalCounts<MetricKey>;
 };
 
 export function createRollups(opts: SpanRollupOptions): ReportRollups {
   return {
     spans: new SpanRollups(opts),
-    logs: new SignalCounts(LOG_SEVERITY_KEYS),
+    logs: new LogRollups(opts),
     metrics: new SignalCounts(METRIC_KEYS),
   };
 }
@@ -41,7 +36,7 @@ export function deserializeRollups(s: SerializedRollups, opts: SpanRollupOptions
   const { spans, logs, metrics } = s;
   return {
     spans: SpanRollups.from(spans, opts, 'rollups.spans'),
-    logs: SignalCounts.from(logs, LOG_SEVERITY_KEYS, 'rollups.logs'),
+    logs: LogRollups.from(logs, opts, 'rollups.logs'),
     metrics: SignalCounts.from(metrics, METRIC_KEYS, 'rollups.metrics'),
   };
 }

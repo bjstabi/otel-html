@@ -7,6 +7,7 @@ import { FacetCounts } from '../../src/rollups/facets.js';
 import { RedSeries } from '../../src/rollups/red.js';
 import { TimeBuckets } from '../../src/rollups/time-buckets.js';
 import type { DataSource, SpanQuery, SpanQueryResult, SpanRow } from '../../src/viewer/data/data-source.js';
+import { type GoTo, GoToContext } from '../../src/viewer/shell/go-to.js';
 import { createSelectionStore } from '../../src/viewer/state/selection.js';
 import { SelectionProvider } from '../../src/viewer/state/selection-context.js';
 import { ThemeProvider } from '../../src/viewer/theme/theme-provider.js';
@@ -74,16 +75,19 @@ function setup(
 ) {
   const ds = { manifest: manifest(spans), strategy: 'eager', querySpans } as DataSource;
   const store = createSelectionStore(initial);
+  const goTo = vi.fn<GoTo>();
   render(
     <ThemeProvider>
       <SelectionProvider store={store}>
-        <Tooltip.Provider>
-          <TracesExplorer dataSource={ds} />
-        </Tooltip.Provider>
+        <GoToContext.Provider value={goTo}>
+          <Tooltip.Provider>
+            <TracesExplorer dataSource={ds} />
+          </Tooltip.Provider>
+        </GoToContext.Provider>
       </SelectionProvider>
     </ThemeProvider>,
   );
-  return { store };
+  return { store, goTo };
 }
 
 describe('TracesExplorer', () => {
@@ -94,6 +98,13 @@ describe('TracesExplorer', () => {
     expect(screen.getByText('56')).toBeTruthy();
     expect(screen.getByText('7')).toBeTruthy();
     expect(querySpans).not.toHaveBeenCalled();
+  });
+
+  test('a zero-span report with logs links to the Logs Explorer through the carry-over rule', async () => {
+    const user = userEvent.setup();
+    const { goTo } = setup(vi.fn(), 0);
+    await user.click(screen.getByRole('button', { name: 'Open the Logs Explorer' }));
+    expect(goTo).toHaveBeenCalledWith('logs', '/logs');
   });
 
   test('no match shows "No spans match" and Clear filters clears condition, text and window', async () => {

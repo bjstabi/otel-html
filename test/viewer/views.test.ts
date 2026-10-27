@@ -2,6 +2,13 @@ import { describe, expect, test } from 'vitest';
 import { FacetCounts } from '../../src/rollups/facets.js';
 import { RedSeries } from '../../src/rollups/red.js';
 import { TimeBuckets } from '../../src/rollups/time-buckets.js';
+import {
+  bar,
+  groupSlices as groupSlicesShared,
+  pie,
+  toplist,
+  treemap,
+} from '../../src/viewer/components/facet-views.js';
 import type { SpanQueryResult, SpanRow } from '../../src/viewer/data/span-query.js';
 import { createColorAssigner } from '../../src/viewer/theme/palette.js';
 import {
@@ -157,4 +164,24 @@ describe('durationBins', () => {
     const one = durationBins([row(7), row(7)], 4);
     expect(one.reduce((a, b) => a + b.count, 0)).toBe(2);
   });
+});
+
+describe('facet views over a log facet set', () => {
+  test('toplist, bar, pie and treemap work with only { facets }', () => {
+    const facets = new FacetCounts(100, 50, ['severity']);
+    for (let i = 0; i < 3; i++) facets.add('severity', 'ERROR');
+    facets.add('severity', 'INFO');
+    const ctx = { groupBy: 'severity', colors: createColorAssigner() };
+    const names = (o: unknown): string[] =>
+      (o as { series: { data: { name: string }[] }[] }).series[0]?.data.map((d) => d.name) ?? [];
+    expect((toplist({ facets }, ctx) as { yAxis: { data: string[] } }).yAxis.data).toEqual(['ERROR', 'INFO']);
+    expect(names(bar({ facets }, ctx))).toEqual(['ERROR', 'INFO']);
+    expect(names(pie({ facets }, ctx))).toEqual(['ERROR', 'INFO']);
+    expect(names(treemap({ facets }, ctx))).toEqual(['ERROR', 'INFO']);
+    expect(groupSlices(facets, 'severity', ctx.colors)).toHaveLength(2);
+  });
+});
+
+test('views re-exports the shared groupSlices', () => {
+  expect(groupSlices).toBe(groupSlicesShared);
 });

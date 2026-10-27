@@ -3,7 +3,8 @@ import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
 import { SessionStateSchema } from '../../src/format/state.js';
 import { TraceShardSchema } from '../../src/format/trace-shard.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
-import { parseUnixNanos } from '../../src/model/ids.js';
+import { parseUnixNanos, type RelNanos } from '../../src/model/ids.js';
+import { Drain } from '../../src/rollups/drain.js';
 import { openSession, type RecordBatch, type WriterSession } from '../../src/writer/session.js';
 import {
   gauge,
@@ -26,6 +27,7 @@ import {
   allLogs,
   allPoints,
   allSpans,
+  logRollupsOf,
   manifestOf,
   readChunk,
   spanIdOf,
@@ -147,6 +149,29 @@ describe('create -> add -> close', () => {
     expect(m.epochUnixNano).toBe(String(BigInt(EPOCH_NS) + 10n));
     expect(allLogs(w, OUT).map((l) => l.time)).toEqual([0, 10, null]);
     expect(m.range).toEqual({ start: 0, end: 20 });
+  });
+
+  test('log rollups hold severity buckets, facets and patterns in arrival order', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    const bodies = ['user 1 logged in', 'user 2 logged in', 'disk full on /dev/sda', 'user 3 logged in'];
+    const logs = bodies.map((body, i) =>
+      logRecord({
+        body: { stringValue: body },
+        severityNumber: i === 2 ? 17 : 9,
+        timeUnixNano: String(BigInt(EPOCH_NS) + BigInt(i * 10)),
+      }),
+    );
+    await s.add(otlp(logsRequest(logs)), 'l.json');
+    await s.close();
+    const r = logRollupsOf(w, OUT);
+    expect(r.buckets.total('error')).toBe(1);
+    expect(r.buckets.total('info')).toBe(3);
+    const fresh = new Drain();
+    for (const [i, body] of bodies.entries())
+      fresh.add(body, i === 2 ? 'error' : 'info', (i * 10) as RelNanos);
+    expect(r.patterns.toJSON()).toEqual(fresh.toJSON());
+    expect(r.patterns.clusters()).toHaveLength(2);
   });
 
   test('metrics points are stored and counted', async () => {

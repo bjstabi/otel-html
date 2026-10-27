@@ -117,6 +117,7 @@ describe('eager strategy', () => {
     expect(t.spans).toHaveLength(3);
     expect(t.tree.roots).toHaveLength(1);
     expect(t.tree.roots[0]?.children).toHaveLength(2);
+    expect(t.logCount).toBe(0);
     for (const s of t.spans)
       expect(t.resources(s.span.resource).attributes.get('service.name')).toMatchObject({ value: s.service });
     await expect(ds.getTrace(traceIdOf(99) as TraceId)).rejects.toBeInstanceOf(OtelHtmlError);
@@ -245,6 +246,7 @@ describe('windowed strategy', () => {
     const id = traceIdOf(3);
     const t = await ds.getTrace(id as TraceId);
     expect(t.spans).toHaveLength(3);
+    expect(t.logCount).toBe(0);
     expect(loader.calls).toEqual([`data/traces/${id.slice(0, 2)}.js`, chunkPath(3)]);
   });
 
@@ -265,6 +267,25 @@ describe('windowed strategy', () => {
     const t = await ds.getTrace(id as TraceId);
     expect(t.spans).toHaveLength(3);
     expect(loader.calls).toEqual([`data/traces/${id.slice(0, 2)}.js`, chunkPath(3)]);
+  });
+
+  test('a trace with logs but no spans is not a trace: hasTrace is false and getTrace rejects', async () => {
+    const id = traceIdOf(77);
+    const files = withShard(six.files, id.slice(0, 2), (e) => {
+      e[id] = {
+        chunks: [],
+        logChunks: ['chunks/logs/000000'],
+        start: 5,
+        end: 5,
+        spans: 0,
+        logs: 1,
+        errors: 0,
+        root: null,
+      } as never;
+    });
+    const { ds } = await windowed(files);
+    expect(await ds.hasTrace(id as TraceId)).toBe(false);
+    await expect(ds.getTrace(id as TraceId)).rejects.toThrow(/not found/);
   });
 
   test('a trace the shard does not know is reported precisely', async () => {

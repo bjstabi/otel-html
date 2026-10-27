@@ -15,8 +15,10 @@ import { parseWith } from '../../format/validate.js';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { TraceId, UnixNanos } from '../../model/ids.js';
 import { SpanRollups } from '../../rollups/span-rollups.js';
+import { Lru } from './chunk-window.js';
+import { QUERY_FACET_CAPS } from './query-common.js';
 import type { ScriptLoader } from './script-loader.js';
-import { type LoadedChunk, QUERY_FACET_CAPS, type SpanEntry, toEntries } from './span-query.js';
+import { type LoadedChunk, type SpanEntry, toEntries } from './span-query.js';
 
 export function epochOf(manifest: Manifest): UnixNanos {
   return BigInt(manifest.epochUnixNano) as UnixNanos;
@@ -71,10 +73,24 @@ export async function loadTraceShard(
   return parseWith(TraceShardSchema, reviveDataJson(await loader.load(path, traceShardKey(shard))), path);
 }
 
-export async function loadTraceEntry(
-  loader: ScriptLoader,
-  manifest: Manifest,
-  traceId: TraceId,
-): Promise<TraceEntry | null> {
-  return (await loadTraceShard(loader, manifest, shardOf(traceId)))?.[traceId] ?? null;
+/** Trace-index shards kept decoded, shared by the windowed span and log strategies. */
+export const TRACE_SHARD_LRU_SIZE = 16;
+
+export interface TraceIndex {
+  shard(name: string): Promise<TraceShard | null>;
+  /** The trace's entry, or null when no manifest-listed shard has it. */
+  entry(traceId: TraceId): Promise<TraceEntry | null>;
+}
+
+/** Trace-index lookups through one small shard cache, so a trace opened for spans and logs loads its shard once. */
+export function createTraceIndex(loader: ScriptLoader, manifest: Manifest): TraceIndex {
+  const shards = new Lru<string, TraceShard | null>(TRACE_SHARD_LRU_SIZE);
+  const shard = (name: string): Promise<TraceShard | null> =>
+    shards.get(name, () => loadTraceShard(loader, manifest, name));
+  return {
+    shard,
+    async entry(traceId) {
+      return (await shard(shardOf(traceId)))?.[traceId] ?? null;
+    },
+  };
 }

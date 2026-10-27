@@ -8,11 +8,11 @@ import { SelectionProvider } from '../../src/viewer/state/selection-context.js';
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 afterEach(cleanup);
 
-function setup(initial: { q?: string; text?: string } = {}) {
+function setup(initial: { q?: string; text?: string } = {}, signal: 'span' | 'log' = 'span') {
   const store = createSelectionStore(initial);
   render(
     <SelectionProvider store={store}>
-      <QueryBar signal="span" />
+      <QueryBar signal={signal} />
     </SelectionProvider>,
   );
   return store;
@@ -129,6 +129,25 @@ describe('QueryBar', () => {
     expect(store.getState().condition).toBe('span.attributes["a"] == "abc"');
   });
 
+  test('a severity range chip edits as an enum name, and a typed number makes it numeric', async () => {
+    const user = userEvent.setup();
+    const store = createSelectionStore({ q: 'log.severity_number >= SEVERITY_NUMBER_WARN' });
+    render(
+      <SelectionProvider store={store}>
+        <QueryBar signal="log" />
+      </SelectionProvider>,
+    );
+    const value = screen.getByRole('textbox', { name: 'Value of log.severity_number' });
+    expect((value as HTMLInputElement).value).toBe('SEVERITY_NUMBER_WARN');
+    await user.clear(value);
+    await user.type(value, 'SEVERITY_NUMBER_ERROR{Enter}');
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(store.getState().condition).toBe('log.severity_number >= SEVERITY_NUMBER_ERROR');
+    await user.clear(value);
+    await user.type(value, '13{Enter}');
+    expect(store.getState().condition).toBe('log.severity_number >= 13');
+  });
+
   test('a failed add keeps the typed key and value', async () => {
     const user = userEvent.setup();
     const store = setup();
@@ -213,5 +232,45 @@ describe('QueryBar', () => {
     expect(
       (screen.getByRole('textbox', { name: 'Value of span.attributes["k"]' }) as HTMLInputElement).value,
     ).toBe(hostile);
+  });
+
+  test('log signal compiles in log_record context: span paths are rejected and the condition is kept', async () => {
+    const user = userEvent.setup();
+    const store = setup({ q: 'log.severity_number >= 9' }, 'log');
+    await user.click(screen.getByRole('button', { name: 'OTTL' }));
+    const area = screen.getByRole('textbox', { name: 'OTTL condition' });
+    await user.clear(area);
+    await user.type(area, 'span.name == "x"');
+    await user.tab();
+    expect(screen.getByRole('alert').textContent).toMatch(/span\.name/);
+    expect(store.getState().condition).toBe('log.severity_number >= 9');
+  });
+
+  test('matches tokens show as editable chips', () => {
+    setup({ q: 'IsMatch(log.body.string, "a.*")' }, 'log');
+    expect(screen.getByRole('combobox', { name: 'Operator of log.body.string' })).toHaveProperty(
+      'value',
+      'matches',
+    );
+  });
+
+  test('an invalid regex in a matches chip is rejected and not stored', async () => {
+    const user = userEvent.setup();
+    const store = setup({ q: 'IsMatch(log.body.string, "a.*")' }, 'log');
+    const value = screen.getByRole('textbox', { name: 'Value of log.body.string' });
+    await user.clear(value);
+    await user.type(value, '(unclosed{Enter}');
+    expect(screen.getByRole('alert')).toBeTruthy();
+    expect(store.getState().condition).toBe('IsMatch(log.body.string, "a.*")');
+  });
+
+  test('adding a span path in log mode is rejected', async () => {
+    const user = userEvent.setup();
+    const store = setup({}, 'log');
+    await user.type(screen.getByRole('textbox', { name: 'New filter key' }), 'span.name');
+    await user.type(screen.getByRole('textbox', { name: 'New filter value' }), 'x');
+    await user.click(screen.getByRole('button', { name: 'Add filter' }));
+    expect(screen.getByRole('alert').textContent).toMatch(/span\.name/);
+    expect(store.getState().condition).toBeNull();
   });
 });

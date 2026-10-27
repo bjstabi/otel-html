@@ -12,8 +12,22 @@ import {
   logsRequest,
   metricsRequest,
 } from '../../test-support/otlp-builders.js';
-import { createTestWriter, otlp, type TestWriter, testConfig } from '../../test-support/writer-deps.js';
-import { allLogs, allPoints, allSpans, manifestOf, spansRequest, traceIdOf } from './helpers.js';
+import {
+  createTestWriter,
+  EPOCH_NS,
+  otlp,
+  type TestWriter,
+  testConfig,
+} from '../../test-support/writer-deps.js';
+import {
+  allLogs,
+  allPoints,
+  allSpans,
+  logRollupsOf,
+  manifestOf,
+  spansRequest,
+  traceIdOf,
+} from './helpers.js';
 
 async function failure(p: Promise<unknown>): Promise<OtelHtmlError> {
   try {
@@ -92,6 +106,27 @@ describe('mergeReports', () => {
     expect(summary.totals).toEqual({ spans: 1, logs: 2, metrics: 1 });
     expect(allLogs(w, 'out')).toHaveLength(2);
     expect(allPoints(w, 'out')).toHaveLength(1);
+  });
+
+  test('log rollups equal converting both inputs at once (re-ingest invariant)', async () => {
+    const w = createTestWriter();
+    const req = (bodies: readonly string[], offset: number): JsonObject =>
+      logsRequest(
+        bodies.map((body, i) =>
+          logRecord({
+            body: { stringValue: body },
+            severityNumber: body.startsWith('disk') ? 17 : 9,
+            timeUnixNano: String(BigInt(EPOCH_NS) + BigInt(offset + i * 1000)),
+          }),
+        ),
+      );
+    const first = req(['user 1 logged in', 'disk 5 full', 'user 2 logged in'], 0);
+    const second = req(['user 9 logged in', 'cache miss for key 7', 'disk 6 full'], 10_000);
+    await writeReport(w, 'a', [first]);
+    await writeReport(w, 'b', [second]);
+    await merge(w, ['a', 'b']);
+    await writeReport(w, 'both', [first, second]);
+    expect(logRollupsOf(w, 'out').toJSON()).toEqual(logRollupsOf(w, 'both').toJSON());
   });
 
   test('rejects an unsupported formatVersion precisely', async () => {

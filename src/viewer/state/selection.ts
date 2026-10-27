@@ -2,24 +2,39 @@ import { createStore, type StoreApi } from 'zustand/vanilla';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { SpanId, TraceId } from '../../model/ids.js';
 import { parseCondition } from '../../ottl/parse.js';
+import type { LogSeverityKey } from '../../rollups/signal-counts.js';
 import {
   type FacetScope,
+  type FacetSignal,
   type FacetValueKind,
   type FilterToken,
   facetToken,
   ottlToTokens,
+  SEVERITY_PATH,
+  severityRangeTokens,
   tokensToOttl,
 } from '../components/filter-tokens.js';
+import type { LogRef } from '../data/log-query.js';
 import type { TimeWindow } from '../data/span-query.js';
+import { isLogTabId, LOG_TAB_IDS, type LogTabId } from '../logs/tabs.js';
 import { isTraceTabId, TRACE_TAB_IDS, type TraceTabId } from '../traces/tabs.js';
 import type { ExplorerView } from './explorer-view.js';
-import { formatWindow, parseUrlState, parseWindow, serializeUrlState, type UrlState } from './url-state.js';
+import {
+  formatWindow,
+  parseUrlState,
+  parseWindow,
+  type SELECTION_MODES,
+  serializeUrlState,
+  type UrlState,
+} from './url-state.js';
 
 export const DEFAULT_TRACE_TAB: TraceTabId = 'flame';
 export const DEFAULT_SPAN_TAB = 'overview';
+export const DEFAULT_LOG_TAB: LogTabId = 'attributes';
 
-export type SelectionMode = 'spans' | 'traces';
-export type ClearKey = 'window' | 'condition' | 'text' | 'traceId' | 'spanId' | 'groupBy' | 'sort';
+/** Every explorer's groupings; `PAGE_OPTIONS` says which ones each page accepts. */
+export type SelectionMode = (typeof SELECTION_MODES)[number];
+export type ClearKey = 'window' | 'condition' | 'text' | 'traceId' | 'spanId' | 'logRef' | 'groupBy' | 'sort';
 
 export interface Selection {
   window: TimeWindow | null;
@@ -27,19 +42,21 @@ export interface Selection {
   text: string;
   traceId: TraceId | null;
   spanId: SpanId | null;
-  mode: SelectionMode;
+  logRef: LogRef | null;
+  /** Null is the page's default mode (`PAGE_OPTIONS`); it is omitted from the URL. */
+  mode: SelectionMode | null;
   groupBy: string | null;
   view: ExplorerView;
   sort: string | null;
-  tabs: { trace: string; span: string };
+  tabs: { trace: string; span: string; log: string };
   setWindow(w: TimeWindow | null): void;
   setCondition(c: string | null): void;
   setText(t: string): void;
-  setMode(m: SelectionMode): void;
+  setMode(m: SelectionMode | null): void;
   setGroupBy(g: string | null): void;
   setView(v: ExplorerView): void;
   setSort(s: string | null): void;
-  setTab(which: 'trace' | 'span', tab: string): void;
+  setTab(which: 'trace' | 'span' | 'log', tab: string): void;
   /** Facet values are strings (the rollups keep display text), so the token is a string literal. */
   toggleFacet(
     key: string,
@@ -47,13 +64,19 @@ export interface Selection {
     op: 'include' | 'exclude',
     scope?: FacetScope,
     kind?: FacetValueKind,
+    signal?: FacetSignal,
   ): void;
+  /** Replaces every `log.severity_number >=`/`<=` token with the bands' bounds (null drops that side); keeps the rest. */
+  setSeverityRange(min: LogSeverityKey | null, max: LogSeverityKey | null): void;
   selectTrace(id: TraceId | null): void;
   selectSpan(id: SpanId | null): void;
+  selectLog(ref: LogRef | null): void;
+  /** The log panel's Trace tab opens a span: closes the log, opens the trace and span, resets the log tab, as one history entry. */
+  openSpanFromLog(traceId: TraceId, spanId: SpanId): void;
   clear(key: ClearKey): void;
 }
 
-type SelectionData = Omit<
+export type SelectionData = Omit<
   Selection,
   | 'setWindow'
   | 'setCondition'
@@ -64,8 +87,11 @@ type SelectionData = Omit<
   | 'setSort'
   | 'setTab'
   | 'toggleFacet'
+  | 'setSeverityRange'
   | 'selectTrace'
   | 'selectSpan'
+  | 'selectLog'
+  | 'openSpanFromLog'
   | 'clear'
 >;
 
@@ -76,11 +102,16 @@ function dataFromUrl(u: UrlState): SelectionData {
     text: u.text ?? '',
     traceId: u.trace ?? null,
     spanId: u.span ?? null,
-    mode: u.mode ?? 'spans',
+    logRef: u.log ?? null,
+    mode: u.mode ?? null,
     groupBy: u.group ?? null,
     view: u.view ?? 'list',
     sort: u.sort ?? null,
-    tabs: { trace: u.tab ?? DEFAULT_TRACE_TAB, span: u.stab ?? DEFAULT_SPAN_TAB },
+    tabs: {
+      trace: u.tab ?? DEFAULT_TRACE_TAB,
+      span: u.stab ?? DEFAULT_SPAN_TAB,
+      log: u.ltab ?? DEFAULT_LOG_TAB,
+    },
   };
 }
 
@@ -90,7 +121,7 @@ export function selectionToUrlState(s: SelectionData): UrlState {
   if (s.condition !== null) u.q = s.condition;
   if (s.text !== '') u.text = s.text;
   if (s.window !== null) u.t = formatWindow(s.window);
-  if (s.mode !== 'spans') u.mode = s.mode;
+  if (s.mode !== null) u.mode = s.mode;
   if (s.groupBy !== null) u.group = s.groupBy;
   if (s.view !== 'list') u.view = s.view;
   if (s.traceId !== null) u.trace = s.traceId;
@@ -98,7 +129,33 @@ export function selectionToUrlState(s: SelectionData): UrlState {
   if (s.tabs.trace !== DEFAULT_TRACE_TAB && isTraceTabId(s.tabs.trace)) u.tab = s.tabs.trace;
   if (s.tabs.span !== DEFAULT_SPAN_TAB) u.stab = s.tabs.span;
   if (s.sort !== null) u.sort = s.sort;
+  if (s.logRef !== null) u.log = s.logRef;
+  if (s.tabs.log !== DEFAULT_LOG_TAB && isLogTabId(s.tabs.log)) u.ltab = s.tabs.log;
   return u;
+}
+
+function conditionTokens(condition: string | null, purpose: string): FilterToken[] {
+  if (condition === null) return [];
+  const parsed = ottlToTokens(condition);
+  if (parsed === null) {
+    throw new OtelHtmlError('invalid-ottl', {
+      path: 'condition',
+      expected: `a flat \`and\` of filter tokens to ${purpose}`,
+      actual: JSON.stringify(condition),
+    });
+  }
+  return parsed;
+}
+
+function severityRangeCondition(
+  condition: string | null,
+  min: LogSeverityKey | null,
+  max: LogSeverityKey | null,
+): string | null {
+  const rest = conditionTokens(condition, 'set a severity range').filter(
+    (t) => !(t.key === SEVERITY_PATH && (t.op === '>=' || t.op === '<=')),
+  );
+  return tokensToOttl([...rest, ...severityRangeTokens(min, max)]);
 }
 
 function toggleFacetCondition(
@@ -108,21 +165,11 @@ function toggleFacetCondition(
   op: 'include' | 'exclude',
   scope: FacetScope,
   kind: FacetValueKind,
+  signal: FacetSignal,
 ): string | null {
-  let tokens: FilterToken[] = [];
-  if (condition !== null) {
-    const parsed = ottlToTokens(condition);
-    if (parsed === null) {
-      throw new OtelHtmlError('invalid-ottl', {
-        path: 'condition',
-        expected: 'a flat `and` of filter tokens to toggle a facet',
-        actual: JSON.stringify(condition),
-      });
-    }
-    tokens = parsed;
-  }
-  const wanted: FilterToken['op'] = op === 'include' ? '==' : '!=';
-  const target = facetToken(key, scope, value, '==', kind);
+  const tokens = conditionTokens(condition, 'toggle a facet');
+  // Built per operator, not flipped afterwards: some facets (a log's `trace.present`) map `!=` to a different path op.
+  const target = facetToken(key, scope, value, op === 'include' ? '==' : '!=', kind, signal);
   const same = (t: FilterToken): boolean =>
     t.key === target.key &&
     t.value === target.value &&
@@ -130,7 +177,7 @@ function toggleFacetCondition(
     (t.op === '==' || t.op === '!=');
   const existing = tokens.find(same);
   const rest = tokens.filter((t) => !same(t));
-  if (existing?.op !== wanted) rest.push({ ...target, op: wanted });
+  if (existing?.op !== target.op) rest.push(target);
   return tokensToOttl(rest);
 }
 
@@ -182,12 +229,23 @@ export function createSelectionStore(initial: UrlState): StoreApi<Selection> {
           actual: JSON.stringify(tab),
         });
       }
+      if (which === 'log' && !isLogTabId(tab)) {
+        throw new OtelHtmlError('usage', {
+          path: 'tabs.log',
+          expected: `one of ${LOG_TAB_IDS.join(', ')}`,
+          actual: JSON.stringify(tab),
+        });
+      }
       set({ tabs: { ...get().tabs, [which]: tab } });
     },
-    toggleFacet: (key, value, op, scope = 'core', kind = 'string') =>
-      set({ condition: toggleFacetCondition(get().condition, key, value, op, scope, kind) }),
+    toggleFacet: (key, value, op, scope = 'core', kind = 'string', signal = 'span') =>
+      set({ condition: toggleFacetCondition(get().condition, key, value, op, scope, kind, signal) }),
+    setSeverityRange: (min, max) => set({ condition: severityRangeCondition(get().condition, min, max) }),
     selectTrace: (traceId) => set({ traceId, spanId: null }),
     selectSpan: (spanId) => set({ spanId }),
+    selectLog: (logRef) => set({ logRef }),
+    openSpanFromLog: (traceId, spanId) =>
+      set({ logRef: null, traceId, spanId, tabs: { ...get().tabs, log: DEFAULT_LOG_TAB } }),
     clear: (key) => {
       switch (key) {
         case 'window':
@@ -200,6 +258,8 @@ export function createSelectionStore(initial: UrlState): StoreApi<Selection> {
           return set({ traceId: null, spanId: null });
         case 'spanId':
           return set({ spanId: null });
+        case 'logRef':
+          return set({ logRef: null });
         case 'groupBy':
           return set({ groupBy: null });
         case 'sort':
@@ -218,7 +278,7 @@ export interface HistoryPort {
 }
 
 /**
- * Two-way binding. Trace/span opens push history entries; every other change replaces. Returns an unbind function.
+ * Two-way binding. Trace/span/log opens push history entries; every other change replaces. Returns an unbind function.
  * Invalid URL params are passed to `onErrors` and rewritten out of the URL.
  */
 export function bindUrl(
@@ -251,7 +311,8 @@ export function bindUrl(
     const search = serializeUrlState(selectionToUrlState(next));
     if (search === last) return;
     last = search;
-    const opened = next.traceId !== prev.traceId || next.spanId !== prev.spanId;
+    const opened =
+      next.traceId !== prev.traceId || next.spanId !== prev.spanId || next.logRef !== prev.logRef;
     history.write(search, opened ? 'push' : 'replace');
   });
   const unsubscribeHistory = history.subscribe(applyUrl);

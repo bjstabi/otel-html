@@ -10,6 +10,15 @@ import type { RedSeries } from '../../rollups/red.js';
 import { SpanRollups, type SpanStatusKey } from '../../rollups/span-rollups.js';
 import type { TimeBuckets } from '../../rollups/time-buckets.js';
 import { resourceName, serviceName } from '../../semconv/resource-name.js';
+import {
+  AbortTicker,
+  checkLimit,
+  cmp,
+  ordered,
+  QUERY_FACET_CAPS,
+  sortFor,
+  throwIfAborted,
+} from './query-common.js';
 import { topK } from './top-k.js';
 import { buildTraceTree, exclusiveTimeByService } from './trace-tree.js';
 
@@ -93,16 +102,6 @@ export interface TraceFacts {
   complete: boolean;
 }
 
-/** Facet caps used when rebuilding facets for a filtered set (the writer's defaults). */
-export const QUERY_FACET_CAPS = { facetValueCap: 1_000, facetKeyCap: 500 } as const;
-
-const ABORT_CHECK_EVERY = 4096;
-
-/** Queries reject with a `DOMException` named `AbortError` (the platform's own abort convention). */
-export function throwIfAborted(signal: AbortSignal | undefined): void {
-  if (signal?.aborted === true) throw new DOMException('The span query was aborted', 'AbortError');
-}
-
 export function toEntries(
   chunk: LoadedChunk,
   spans: readonly SpanRecord[],
@@ -134,8 +133,6 @@ export function toEntries(
 
 type Compare = (a: SpanRow, b: SpanRow) => number;
 
-const cmp = <T extends string | number>(a: T, b: T): number => (a < b ? -1 : a > b ? 1 : 0);
-
 const SPAN_SORTS: Readonly<Record<string, Compare>> = {
   start: (a, b) => a.span.start - b.span.start,
   duration: (a, b) => a.durationNs - b.durationNs,
@@ -153,18 +150,6 @@ const TRACE_SORTS: Readonly<Record<string, (a: TraceRow, b: TraceRow) => number>
   resource: (a, b) => cmp(a.root?.resource ?? '', b.root?.resource ?? ''),
   service: (a, b) => cmp(a.root?.service ?? '', b.root?.service ?? ''),
 };
-
-function sortFor<T>(table: Readonly<Record<string, T>>, column: string, mode: string): T {
-  const fn = Object.hasOwn(table, column) ? table[column] : undefined;
-  if (fn === undefined) {
-    throw new OtelHtmlError('usage', {
-      path: 'query.sort.column',
-      expected: `one of ${Object.keys(table).join(', ')} (mode ${mode})`,
-      actual: JSON.stringify(column),
-    });
-  }
-  return fn;
-}
 
 function traceRow(traceId: TraceId, rows: readonly SpanRow[], facts?: TraceFacts): TraceRow {
   const tree = buildTraceTree(rows);
@@ -220,7 +205,7 @@ export class SpanQueryRun {
   readonly #compare: Compare | null;
   readonly #traceCompare: ((a: TraceRow, b: TraceRow) => number) | null;
   readonly #window: TimeWindow | null;
-  #visited = 0;
+  readonly #ticker: AbortTicker;
   #hitTraces = 0;
 
   constructor(q: SpanQuery, signal?: AbortSignal) {
@@ -231,17 +216,12 @@ export class SpanQueryRun {
         actual: JSON.stringify(q.groupBy),
       });
     }
-    if (!Number.isInteger(q.limit) || q.limit < 0) {
-      throw new OtelHtmlError('usage', {
-        path: 'query.limit',
-        expected: 'a non-negative integer',
-        actual: String(q.limit),
-      });
-    }
+    checkLimit(q.limit);
     this.#q = q;
     // "Scan entire run" means the whole run, whatever window the view had.
     this.#window = q.scanAll ? null : q.window;
     this.#signal = signal;
+    this.#ticker = new AbortTicker(signal);
     this.#condition = q.condition === null ? null : compileCondition(q.condition, 'span');
     this.#compare = q.mode === 'spans' ? sortFor(SPAN_SORTS, q.sort.column, q.mode) : null;
     this.#traceCompare = q.mode === 'traces' ? sortFor(TRACE_SORTS, q.sort.column, q.mode) : null;
@@ -264,7 +244,7 @@ export class SpanQueryRun {
   }
 
   visit(e: SpanEntry): void {
-    if (++this.#visited % ABORT_CHECK_EVERY === 0) throwIfAborted(this.#signal);
+    this.#ticker.tick();
     const window = this.#window;
     const { span } = e.row;
     const traces = this.#traces;
@@ -293,7 +273,6 @@ export class SpanQueryRun {
     factsOf?: (id: TraceId) => TraceFacts | undefined,
   ): SpanQueryResult {
     throwIfAborted(this.#signal);
-    const sign = this.#q.sort.dir === 'asc' ? 1 : -1;
     let rows: (SpanRow | TraceRow)[];
     let total: number;
     if (this.#compare !== null) {
@@ -301,7 +280,7 @@ export class SpanQueryRun {
       rows = topK(
         this.#matched.map((e) => e.row),
         this.#q.limit,
-        (a, b) => sign * compare(a, b) || a.span.start - b.span.start,
+        ordered(this.#q.sort.dir, compare, (a, b) => a.span.start - b.span.start),
       );
       total = this.#matched.length;
     } else {
@@ -312,7 +291,11 @@ export class SpanQueryRun {
       rows =
         compare === null
           ? hits.slice(0, this.#q.limit)
-          : topK(hits, this.#q.limit, (a, b) => sign * compare(a, b) || a.start - b.start);
+          : topK(
+              hits,
+              this.#q.limit,
+              ordered(this.#q.sort.dir, compare, (a, b) => a.start - b.start),
+            );
       total = hits.length;
     }
     return {

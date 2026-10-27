@@ -1,16 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { RelNanos } from '../../src/model/ids.js';
 import { SpanKind, StatusCode } from '../../src/model/records.js';
+import { LogRollups } from '../../src/rollups/log-rollups.js';
 import { RedSeries } from '../../src/rollups/red.js';
 import { deserializeRollups, serializeRollups } from '../../src/rollups/report-rollups.js';
-import {
-  LOG_SEVERITY_KEYS,
-  METRIC_KEYS,
-  SignalCounts,
-  severityKey,
-} from '../../src/rollups/signal-counts.js';
+import { METRIC_KEYS, SignalCounts, severityKey } from '../../src/rollups/signal-counts.js';
 import { DEFAULT_SPAN_FACETS, SpanRollups } from '../../src/rollups/span-rollups.js';
-import { spanTarget } from '../ottl/fixtures.js';
+import { logTarget, spanTarget } from '../ottl/fixtures.js';
 
 const t = (n: number): RelNanos => n as RelNanos;
 const opts = { facetValueCap: 4, facetKeyCap: 50 };
@@ -96,8 +92,8 @@ describe('SpanRollups', () => {
       return s;
     };
     expect(mk().toJSON()).toEqual(mk().toJSON());
-    const logs = new SignalCounts(LOG_SEVERITY_KEYS);
-    logs.add(t(3_000_000), 'error', 4);
+    const logs = new LogRollups(opts);
+    logs.add(logTarget({ time: t(3_000_000) }));
     const rollups = { spans: mk(), logs, metrics: new SignalCounts(METRIC_KEYS) };
     const ser = serializeRollups(rollups);
     const back = deserializeRollups(JSON.parse(JSON.stringify(ser)), opts);

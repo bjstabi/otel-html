@@ -3,7 +3,7 @@ import { type JSX, useEffect, useRef, useState } from 'react';
 import { OtelHtmlError } from '../../model/errors.js';
 import { compileCondition } from '../../ottl/compile.js';
 import { useSelection } from '../state/selection-context.js';
-import { type FilterToken, ottlToTokens, tokensToOttl } from './filter-tokens.js';
+import { type FacetSignal, type FilterToken, ottlToTokens, tokensToOttl } from './filter-tokens.js';
 
 const OPS: readonly FilterToken['op'][] = [
   '==',
@@ -13,6 +13,7 @@ const OPS: readonly FilterToken['op'][] = [
   '<',
   '<=',
   'contains',
+  'matches',
   'exists',
   'not exists',
 ];
@@ -54,6 +55,23 @@ function coerceValue(
       });
   }
   return text;
+}
+
+const ENUM_NAME = /^[A-Z][A-Z0-9_]*$/;
+
+/**
+ * The edited chip as a token. An enum chip (`>= SEVERITY_NUMBER_WARN`) keeps an edited enum name as an enum and
+ * turns an edited number into a plain number; anything else is coerced like any other value.
+ */
+function editedToken(next: FilterToken, previous: FilterToken): FilterToken {
+  const text = String(next.value ?? '').trim();
+  const base = { key: next.key, op: next.op };
+  if (previous.enum === true && !NO_VALUE_OPS.has(next.op)) {
+    const n = Number(text);
+    if (text !== '' && Number.isFinite(n)) return { ...base, value: n };
+    if (ENUM_NAME.test(text)) return { ...base, value: text, enum: true };
+  }
+  return { ...base, value: coerceValue(next.op, previous.value, String(next.value ?? '')) };
 }
 
 /** Schedules `fn` after `ms`; returns a cancel function. Injectable so tests need no real timers. */
@@ -122,6 +140,7 @@ function TokenChip(props: {
 }
 
 function AddFilter(props: {
+  signal: FacetSignal;
   onAdd(key: string, op: FilterToken['op'], value: string): boolean;
 }): JSX.Element {
   const [key, setKey] = useState('');
@@ -142,7 +161,7 @@ function AddFilter(props: {
       <input
         type="text"
         aria-label="New filter key"
-        placeholder='span.attributes["key"]'
+        placeholder={props.signal === 'log' ? 'log.attributes["key"]' : 'span.attributes["key"]'}
         value={key}
         onChange={(e) => setKey(e.target.value)}
         className={`${FIELD} w-44`}
@@ -185,7 +204,11 @@ function AddFilter(props: {
  * Free-text search, OTTL filter tokens, and a raw OTTL editor. Invalid input never reaches the store, and typing
  * does not write per keystroke: free text is debounced, tokens and raw OTTL commit on Enter or blur.
  */
-export function QueryBar(props: { signal: 'span'; debounceMs?: number; schedule?: Scheduler }): JSX.Element {
+export function QueryBar(props: {
+  signal: FacetSignal;
+  debounceMs?: number;
+  schedule?: Scheduler;
+}): JSX.Element {
   const condition = useSelection((s) => s.condition);
   const text = useSelection((s) => s.text);
   const setText = useSelection((s) => s.setText);
@@ -245,13 +268,18 @@ export function QueryBar(props: { signal: 'span'; debounceMs?: number; schedule?
     }
   };
 
-  const commitTokens = (next: readonly FilterToken[]): void => setCondition(tokensToOttl(next));
+  const commitTokens = (next: readonly FilterToken[]): void => {
+    const src = tokensToOttl(next);
+    // Compile first so an invalid regex or a path from the other signal never reaches the store.
+    if (src !== null) compileCondition(src, props.signal === 'log' ? 'log_record' : 'span');
+    setCondition(src);
+  };
   const current = tokens ?? [];
 
   const checkRaw = (src: string): string | null => {
     if (src.trim() === '') return null;
     try {
-      compileCondition(src, props.signal);
+      compileCondition(src, props.signal === 'log' ? 'log_record' : 'span');
       return null;
     } catch (e) {
       if (e instanceof OtelHtmlError) return describeOttlError(e);
@@ -376,21 +404,14 @@ export function QueryBar(props: { signal: 'span'; debounceMs?: number; schedule?
                 key={`${t.key}:${i}`}
                 token={t}
                 onChange={(next) =>
-                  guarded(() =>
-                    commitTokens(
-                      current.map((x, j) =>
-                        j === i
-                          ? { ...next, value: coerceValue(next.op, x.value, String(next.value ?? '')) }
-                          : x,
-                      ),
-                    ),
-                  )
+                  guarded(() => commitTokens(current.map((x, j) => (j === i ? editedToken(next, x) : x))))
                 }
                 onRemove={() => guarded(() => commitTokens(current.filter((_, j) => j !== i)))}
               />
             ))}
           </ul>
           <AddFilter
+            signal={props.signal}
             onAdd={(key, op, value) =>
               guarded(() => commitTokens([...current, { key, op, value: coerceValue(op, null, value) }]))
             }

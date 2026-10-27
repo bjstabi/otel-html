@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { TraceShardSchema } from '../../src/format/trace-shard.js';
 import { parseSpanId, parseTraceId, type RelNanos } from '../../src/model/ids.js';
-import type { SpanRecord, StatusCode } from '../../src/model/records.js';
+import type { LogRecordRecord, SpanRecord, StatusCode } from '../../src/model/records.js';
 import { DedupeSet } from '../../src/writer/dedupe.js';
 import { TraceIndex } from '../../src/writer/trace-index.js';
 import { realisticSpans } from '../../test-support/otlp-builders.js';
@@ -32,15 +32,95 @@ const mk = (id: number, over: Partial<SpanRecord> = {}): SpanRecord => ({
   ...over,
 });
 
+const baseLog: LogRecordRecord = {
+  time: 0 as RelNanos,
+  observedTime: 0 as RelNanos,
+  severityNumber: 9,
+  severityText: 'INFO',
+  body: { kind: 'string', value: 'hello' },
+  attributes: new Map(),
+  droppedAttributesCount: 0,
+  flags: 0,
+  traceId: null,
+  spanId: null,
+  eventName: '',
+  resource: base.resource,
+  scope: base.scope,
+};
+const mkLog = (over: Partial<LogRecordRecord> = {}): LogRecordRecord => ({
+  ...baseLog,
+  traceId: TRACE,
+  spanId: null,
+  time: 300 as RelNanos,
+  observedTime: 300 as RelNanos,
+  ...over,
+});
+
+describe('TraceIndex logs', () => {
+  test('a log alone creates a span-less entry', () => {
+    const idx = new TraceIndex();
+    idx.addLog(mkLog(), 'chunks/logs/000000');
+    expect(idx.shardPayload('5b')[TRACE]).toEqual({
+      chunks: [],
+      logChunks: ['chunks/logs/000000'],
+      start: 300,
+      end: 300,
+      spans: 0,
+      logs: 1,
+      errors: 0,
+      root: null,
+    });
+  });
+
+  test('a span arriving later sets the timing; later logs no longer move it', () => {
+    const idx = new TraceIndex();
+    idx.addLog(mkLog({ time: 5 as RelNanos, observedTime: 5 as RelNanos }), 'chunks/logs/000000');
+    idx.add(mk(1), 'chunks/spans/000000', resource);
+    idx.addLog(mkLog({ time: 9999 as RelNanos, observedTime: 9999 as RelNanos }), 'chunks/logs/000001');
+    const e = idx.shardPayload('5b')[TRACE];
+    expect(e).toMatchObject({ start: 100, end: 200, spans: 1, logs: 2 });
+    expect(e?.logChunks).toEqual(['chunks/logs/000000', 'chunks/logs/000001']);
+  });
+
+  test('logs widen timing while there are no spans; same-chunk logs are listed once', () => {
+    const idx = new TraceIndex();
+    idx.addLog(mkLog({ time: 50 as RelNanos, observedTime: 50 as RelNanos }), 'chunks/logs/000000');
+    idx.addLog(mkLog({ time: 80 as RelNanos, observedTime: 80 as RelNanos }), 'chunks/logs/000000');
+    expect(idx.shardPayload('5b')[TRACE]).toMatchObject({
+      logChunks: ['chunks/logs/000000'],
+      start: 50,
+      end: 80,
+      logs: 2,
+    });
+  });
+
+  test('a log without a trace id is not indexed; a span id outside the trace is harmless', () => {
+    const idx = new TraceIndex();
+    idx.addLog(mkLog({ traceId: null, spanId: parseSpanId('00000000000000ff', 's') }), 'chunks/logs/000000');
+    expect(idx.shards()).toEqual([]);
+    idx.addLog(mkLog({ spanId: parseSpanId('00000000000000ff', 's') }), 'chunks/logs/000000');
+    expect(idx.shardPayload('5b')[TRACE]?.spans).toBe(0);
+  });
+
+  test('round-trips through load with the schema', () => {
+    const idx = new TraceIndex();
+    idx.addLog(mkLog(), 'chunks/logs/000000');
+    const back = TraceIndex.load({ '5b': TraceShardSchema.parse(idx.shardPayload('5b')) });
+    expect(back.toJSON()).toEqual(idx.toJSON());
+  });
+});
+
 describe('TraceIndex', () => {
   test('a root-less (orphan) trace has root null and grows as spans arrive', () => {
     const idx = new TraceIndex();
     idx.add(mk(2, { start: 50 as RelNanos }), 'chunks/spans/000000', resource);
     expect(idx.shardPayload('5b')[TRACE]).toEqual({
       chunks: ['chunks/spans/000000'],
+      logChunks: [],
       start: 50,
       end: 200,
       spans: 1,
+      logs: 0,
       errors: 0,
       root: null,
     });

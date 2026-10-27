@@ -1,12 +1,27 @@
+import { readFileSync } from 'node:fs';
 import { create, toBinary } from '@bufbuild/protobuf';
 import { describe, expect, test } from 'vitest';
+import {
+  DANGLING_SPAN_LOG_TEXT,
+  HOSTILE_LOG_TEXT,
+  LINKED_DECLINED_COUNT,
+  LINKED_LOG_COUNT,
+  LINKED_SEVERITY_COUNTS,
+  LINKED_SPAN,
+  LINKED_TRACE,
+  LINKED_WARN_PLUS_COUNT,
+  ORPHAN_LOG_TRACE,
+} from '../../e2e/fixture.js';
 import { convert } from '../../src/api/convert.js';
 import { merge } from '../../src/api/index.js';
+import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
+import { traceShardKey, traceShardPath } from '../../src/format/paths.js';
+import { TraceShardSchema } from '../../src/format/trace-shard.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { ExportLogsServiceRequestSchema } from '../../src/model/gen/opentelemetry/proto/collector/logs/v1/logs_service_pb.js';
 import { logRecord, logsRequest } from '../../test-support/otlp-builders.js';
 import { createTestWriter, type TestWriter } from '../../test-support/writer-deps.js';
-import { allSpans, manifestOf, spansRequest } from '../writer/helpers.js';
+import { allLogs, allSpans, manifestOf, spansRequest } from '../writer/helpers.js';
 
 async function failure(p: Promise<unknown>): Promise<OtelHtmlError> {
   try {
@@ -143,5 +158,60 @@ describe('merge (public)', () => {
       expect(manifestOf(w, 'r').totals.spans).toBe(3);
       expect(allSpans(w, 'r')).toHaveLength(3);
     });
+  });
+});
+
+describe('the linked fixture', () => {
+  async function convertLinked(): Promise<TestWriter> {
+    const w = createTestWriter();
+    const files = ['linked-traces', 'linked-logs'].map((name) => `in/${name}.otlp.json`);
+    for (const f of files) {
+      await put(w, f, readFileSync(new URL(`../../fixtures/${f.slice('in/'.length)}`, import.meta.url)));
+    }
+    const summary = await convert({ input: files, out: 'r' }, w.deps);
+    expect(summary.totals.logs).toBe(LINKED_LOG_COUNT);
+    return w;
+  }
+
+  test('converts to 40 logs, and its linked trace indexes its log chunks', async () => {
+    const w = await convertLinked();
+    const shard = LINKED_TRACE.slice(0, 2);
+    const text = w.fs.snapshot().get(`r/${traceShardPath(shard)}`) ?? '';
+    const entry = TraceShardSchema.parse(reviveDataJson(unwrapDataFile(text, traceShardKey(shard))))[
+      LINKED_TRACE
+    ];
+    expect(entry?.logs).toBeGreaterThan(0);
+    expect(entry?.logChunks.length).toBeGreaterThan(0);
+  });
+
+  test('the e2e constants describe the fixture', async () => {
+    const w = await convertLinked();
+    const logs = allLogs(w, 'r');
+    const spans = allSpans(w, 'r');
+    const text = (l: (typeof logs)[number]): string => JSON.stringify(l.body);
+    const bySeverity: Record<number, number> = {};
+    for (const l of logs) bySeverity[l.severityNumber] = (bySeverity[l.severityNumber] ?? 0) + 1;
+    expect(bySeverity).toEqual(LINKED_SEVERITY_COUNTS);
+    expect(logs.filter((l) => l.severityNumber >= 13)).toHaveLength(LINKED_WARN_PLUS_COUNT);
+    expect(logs.filter((l) => text(l).toLowerCase().includes('declined'))).toHaveLength(
+      LINKED_DECLINED_COUNT,
+    );
+    expect(new Set(spans.map((sp) => sp.traceId)).size).toBe(3);
+    expect(spans.some((sp) => sp.traceId === LINKED_TRACE && sp.spanId === LINKED_SPAN)).toBe(true);
+    expect(logs.filter((l) => l.spanId === LINKED_SPAN).length).toBeGreaterThanOrEqual(3);
+    // 1 orphan trace id, 5 without context, 1 span_id outside its trace.
+    expect(logs.filter((l) => l.traceId === ORPHAN_LOG_TRACE)).toHaveLength(1);
+    expect(spans.some((sp) => sp.traceId === ORPHAN_LOG_TRACE)).toBe(false);
+    expect(logs.filter((l) => l.traceId === null)).toHaveLength(5);
+    const dangling = logs.filter((l) => text(l).includes(DANGLING_SPAN_LOG_TEXT));
+    expect(dangling).toHaveLength(1);
+    expect(dangling[0]?.traceId).toBe(LINKED_TRACE);
+    expect(spans.some((sp) => sp.spanId === dangling[0]?.spanId)).toBe(false);
+    expect(logs.filter((l) => text(l).includes(JSON.stringify(HOSTILE_LOG_TEXT).slice(1, -1)))).toHaveLength(
+      1,
+    );
+    expect(logs.filter((l) => l.eventName !== '')).toHaveLength(2);
+    expect(logs.filter((l) => l.time === null && l.observedTime !== null)).toHaveLength(1);
+    expect(logs.filter((l) => l.spanId !== null && l.traceId !== null)).toHaveLength(35);
   });
 });

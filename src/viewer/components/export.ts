@@ -1,8 +1,10 @@
-import { spansToOtlpJson } from '../../format/otlp-export.js';
+import { logsToOtlpJson, spansToOtlpJson } from '../../format/otlp-export.js';
+import { anyValueToDisplay } from '../../model/anyvalue.js';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { UnixNanos } from '../../model/ids.js';
 import type { ResourceRecord, ResourceRef, ScopeRecord, ScopeRef, SpanRecord } from '../../model/records.js';
 import { StatusCode } from '../../model/records.js';
+import type { LogRow } from '../data/log-query.js';
 import type { SpanRow, TraceRow } from '../data/span-query.js';
 
 export type ExportFormat = 'csv' | 'json' | 'otlp-json';
@@ -180,4 +182,77 @@ export function exportRows(
       throw new Error(`unhandled export format ${String(never)}`);
     }
   }
+}
+
+/** Log times are nanoseconds relative to the run's epoch (`logTime`), like the span exports. */
+const LOG_HEADER = [
+  'time_rel_ns',
+  'time_source',
+  'severity_number',
+  'severity_text',
+  'service',
+  'host',
+  'trace_id',
+  'span_id',
+  'event_name',
+  'body',
+] as const;
+
+/** Plain JSON for a log row: the body and attribute values as display text, so it always serialises. */
+function jsonLog(r: LogRow): Record<string, unknown> {
+  return {
+    ref: r.ref,
+    time: r.time,
+    timeSource: r.timeSource,
+    severityNumber: r.log.severityNumber,
+    severityText: r.log.severityText,
+    service: r.service,
+    host: r.host,
+    traceId: r.log.traceId,
+    spanId: r.log.spanId,
+    eventName: r.log.eventName,
+    body: anyValueToDisplay(r.log.body),
+    attributes: Object.fromEntries([...r.log.attributes].map(([k, v]) => [k, anyValueToDisplay(v)])),
+  };
+}
+
+/** The log rows as a download; `otlp-json` goes through the report's own exporter. */
+export function exportLogs(rows: readonly LogRow[], format: ExportFormat, epoch: UnixNanos): Blob {
+  switch (format) {
+    case 'csv':
+      return new Blob(
+        [
+          csv(
+            LOG_HEADER,
+            rows.map((r) => [
+              r.time,
+              r.timeSource,
+              r.log.severityNumber,
+              r.log.severityText,
+              r.service,
+              r.host ?? '',
+              r.log.traceId ?? '',
+              r.log.spanId ?? '',
+              r.log.eventName,
+              anyValueToDisplay(r.log.body),
+            ]),
+          ),
+        ],
+        { type: 'text/csv;charset=utf-8' },
+      );
+    case 'json':
+      return new Blob([JSON.stringify(rows.map(jsonLog))], { type: 'application/json' });
+    case 'otlp-json':
+      return new Blob([JSON.stringify(logsToOtlpJson(rows, epoch))], { type: 'application/json' });
+    default: {
+      const never: never = format;
+      throw new Error(`unhandled export format ${String(never)}`);
+    }
+  }
+}
+
+/** A truncated export says so in its file name: `logs-first-N-of-M.csv`, else `logs-M.csv`. */
+export function exportFileName(noun: string, shown: number, total: number, format: ExportFormat): string {
+  const scope = total > shown ? `first-${shown}-of-${total}` : `${total}`;
+  return `${noun}-${scope}.${format === 'otlp-json' ? 'otlp.json' : format}`;
 }

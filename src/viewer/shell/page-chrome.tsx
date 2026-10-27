@@ -3,6 +3,7 @@ import { Menu } from '@base-ui/react/menu';
 import { Download, Link2 } from 'lucide-react';
 import { type JSX, type ReactNode, useEffect, useRef, useState } from 'react';
 import type { Manifest } from '../../format/manifest.js';
+import type { FacetSignal } from '../components/filter-tokens.js';
 import { QueryBar } from '../components/query-bar.js';
 import { TimeRange } from './time-range.js';
 
@@ -117,6 +118,8 @@ function ExportMenu({ items }: { items: readonly ExportItem[] }): JSX.Element {
 /** Title, query bar, time range, Copy link and the Export menu; `exportItems` is filled per page. */
 export function PageChrome(props: {
   title: string;
+  /** Which OTTL context the query bar compiles in; spans or log records. */
+  signal: FacetSignal;
   manifest: Manifest;
   exportItems?: readonly ExportItem[];
   children?: ReactNode;
@@ -130,7 +133,7 @@ export function PageChrome(props: {
           <ExportMenu items={props.exportItems ?? []} />
         </div>
         <div className="flex flex-wrap items-center gap-3">
-          <QueryBar signal="span" />
+          <QueryBar signal={props.signal} />
           <TimeRange manifest={props.manifest} />
         </div>
       </header>

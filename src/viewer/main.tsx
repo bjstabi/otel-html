@@ -14,7 +14,7 @@ const registry = installRegistry(window);
 const loader = createDomScriptLoader(document, registry);
 const history = createHashHistory(window);
 
-// The manifest is validated at the boundary; its viewer config picks the eager or windowed strategy.
+// The manifest is validated at the boundary; its viewer budget picks the eager or windowed strategy per signal.
 async function load(): ReturnType<typeof createDataSource> {
   const manifest = parseManifest(registry.takeStatic('manifest', 'data/manifest.js'));
   return createDataSource(loader, manifest, manifest.config.viewer.eagerBudgetBytes);

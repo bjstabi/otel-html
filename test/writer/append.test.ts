@@ -1,8 +1,9 @@
 import { describe, expect, test } from 'vitest';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { openSession, type WriterSession } from '../../src/writer/session.js';
+import { logRecord, logsRequest } from '../../test-support/otlp-builders.js';
 import { createTestWriter, otlp, type TestWriter, testConfig } from '../../test-support/writer-deps.js';
-import { allSpans, manifestOf, spansRequest } from './helpers.js';
+import { allSpans, logRollupsOf, manifestOf, spansRequest } from './helpers.js';
 
 const OUT = 'r';
 const SMALL_CHUNKS = testConfig({ writer: { chunkTargetBytes: 1 } });
@@ -46,6 +47,26 @@ describe('append', () => {
     expect(m.totals.spans).toBe(3);
     expect(allSpans(w, OUT)).toHaveLength(3);
     expect(w.fs.snapshot().has('r/data/chunks/spans/000002.js')).toBe(true);
+  });
+
+  test('continues log pattern ids from the checkpoint', async () => {
+    const w = createTestWriter();
+    const logs = (bodies: readonly string[]): ReturnType<typeof logsRequest> =>
+      logsRequest(bodies.map((body) => logRecord({ body: { stringValue: body } })));
+    const a = await open(w, 'create');
+    await a.add(otlp(logs(['user 1 logged in', 'disk full on /dev/sda'])), 'a.json');
+    await a.close();
+    const before = logRollupsOf(w, OUT).patterns.clusters();
+    expect(before.map((c) => c.id)).toEqual([0, 1]);
+    const b = await open(w, 'append');
+    await b.add(otlp(logs(['user 2 logged in', 'brand new shape of message here'])), 'b.json');
+    await b.close();
+    const after = logRollupsOf(w, OUT).patterns.clusters();
+    expect(after.map((c) => [c.id, c.count])).toEqual([
+      [0, 2],
+      [1, 1],
+      [2, 1],
+    ]);
   });
 
   test('keeps the original epoch and creation time', async () => {
