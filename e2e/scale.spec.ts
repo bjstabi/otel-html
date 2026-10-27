@@ -29,12 +29,28 @@ test(
     const rows = page.getByRole('grid', { name: 'Results' }).getByRole('row');
     const count = page.getByRole('main').locator('output', { hasText: /\bspans\b/ });
 
-    const t0 = performance.now();
+    // Timed in the page, from navigation start to the frame that paints the first result row. Timing it from the
+    // test would add Playwright's assertion polling (retries 100 ms, 250 ms, 500 ms, 1 s apart) to the result.
+    await page.addInitScript(() => {
+      const mo = new MutationObserver(() => {
+        const grid = document.querySelector('[role="grid"][aria-label="Results"]');
+        if (grid === null || grid.querySelectorAll('[role="row"]').length < 2) return;
+        mo.disconnect();
+        requestAnimationFrame(() => {
+          (window as { __OH_ROWS_PAINTED__?: number }).__OH_ROWS_PAINTED__ = performance.now();
+        });
+      });
+      mo.observe(document, { childList: true, subtree: true });
+    });
     await page.goto(`${reportUrl('scale')}/index.html#/traces`, { waitUntil: 'commit' });
     await expect(rows.nth(1)).toBeVisible({ timeout: 30_000 });
     await search.focus();
     await expect(search).toBeFocused();
-    const interactiveMs = performance.now() - t0;
+    const interactiveMs = Number(
+      await (
+        await page.waitForFunction(() => (window as { __OH_ROWS_PAINTED__?: number }).__OH_ROWS_PAINTED__)
+      ).jsonValue(),
+    );
     await expect(count).toHaveText(new RegExp(`^${SCALE_SPAN_COUNT} spans`));
 
     // A facet toggle is timed from the click to the next frame after the result count changed. The first toggle
