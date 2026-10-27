@@ -114,7 +114,10 @@ export interface LogTraceRow {
 export type LogQueryResult = {
   /** Matched logs; patterns in patterns mode; traces in traces mode. */
   total: number;
-  /** Logs that matched the filter, in every mode (`total` counts patterns or traces in those modes). */
+  /**
+   * Logs that matched the filter (`total` counts patterns or traces in those modes). In traces mode it counts only
+   * matching logs that carry a trace id; logs without one are not grouped and not counted.
+   */
   matched: number;
   facets: FacetCounts;
   buckets: TimeBuckets<LogSeverityKey>;
