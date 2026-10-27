@@ -118,12 +118,18 @@ export function brushToWindow<K extends string>(
 
 const VAR_RE = /^var\((--[a-z0-9-]+)\)$/;
 
-/** Resolve a `var(--token)` reference against the live theme; anything else (or an unset token) is returned as is. */
+/**
+ * Neutral grey for a theme token that is not set: ECharts paints on a canvas, which cannot read `var(--token)`.
+ * Colour is never the only encoding (labels, hatching), so a grey bar loses no meaning.
+ */
+const UNRESOLVED_COLOR = '#6b6f78';
+
+/** Resolve a `var(--token)` reference against the live theme (an unset token gives `UNRESOLVED_COLOR`); other colours pass through. */
 function resolveColor(color: string): string {
   const name = VAR_RE.exec(color)?.[1];
   if (name === undefined) return color;
   const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-  return v === '' ? color : v;
+  return v === '' ? UNRESOLVED_COLOR : v;
 }
 
 function seconds(ns: number): string {

@@ -112,6 +112,26 @@ describe('HistogramCard', () => {
     expect(img.getAttribute('aria-label')).toMatch(/11 spans/);
   });
 
+  test('bar colours are resolved theme values, and an unset token falls back to a hex colour the canvas can paint', () => {
+    document.documentElement.style.setProperty('--oh-series-1', '#123456');
+    try {
+      render(
+        <SelectionProvider store={createSelectionStore({})}>
+          <HistogramCard buckets={buckets()} series={SPAN_STATUS_SERIES} />
+        </SelectionProvider>,
+      );
+      const opt = JSON.parse(screen.getByRole('img').getAttribute('data-option') ?? '{}') as {
+        series: { name: string; itemStyle: { color: string } }[];
+      };
+      const colors = Object.fromEntries(opt.series.map((s) => [s.name, s.itemStyle.color]));
+      expect(colors.ok).toBe('#123456');
+      // --oh-critical and --oh-series-other are not set in jsdom: never a raw var() reference.
+      for (const c of Object.values(colors)) expect(c).toMatch(/^#[0-9a-f]{6}$/i);
+    } finally {
+      document.documentElement.style.removeProperty('--oh-series-1');
+    }
+  });
+
   test('draws a wide histogram at most HISTOGRAM_MAX_COLUMNS columns wide', () => {
     render(
       <SelectionProvider store={createSelectionStore({})}>
