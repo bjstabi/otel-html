@@ -283,13 +283,14 @@ describe('the linked fixture', () => {
     for (const f of files) {
       await put(w, f, readFileSync(new URL(`../../fixtures/${f.slice('in/'.length)}`, import.meta.url)));
     }
-    const summary = await convert({ input: files, out: 'r' }, w.deps);
-    expect(summary.totals.logs).toBe(LINKED_LOG_COUNT);
+    await convert({ input: files, out: 'r' }, w.deps);
     return w;
   }
 
   test('converts to 40 logs, and its linked trace indexes its log chunks', async () => {
     const w = await convertLinked();
+    expect(manifestOf(w, 'r').totals.logs).toBe(LINKED_LOG_COUNT);
+    expect(allLogs(w, 'r')).toHaveLength(LINKED_LOG_COUNT);
     const shard = LINKED_TRACE.slice(0, 2);
     const text = w.fs.snapshot().get(`r/${traceShardPath(shard)}`) ?? '';
     const entry = TraceShardSchema.parse(reviveDataJson(unwrapDataFile(text, traceShardKey(shard))))[
