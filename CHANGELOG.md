@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/bjstabi/otel-html/compare/otel-html-v0.1.0...otel-html-v0.1.1) (2026-10-27)
+
+
+### Bug fixes
+
+* **build:** run bash-syntax mise tasks under bash on every OS ([b4eb6a6](https://github.com/bjstabi/otel-html/commit/b4eb6a668127310ed2afdca048140badaa608b09))
+
 ## 0.1.0 (2026-10-27)
 
 
