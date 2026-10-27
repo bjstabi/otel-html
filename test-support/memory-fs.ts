@@ -1,6 +1,8 @@
 import type { FileSystem } from '../src/writer/ports.js';
 
 const enc = new TextEncoder();
+/** `readChunks` piece size: small and odd, so readers meet piece boundaries everywhere (mid-string, mid-character). */
+const CHUNK_BYTES = 61;
 const dec = new TextDecoder();
 
 function fsError(code: string, desc: string, p: string): Error {
@@ -83,6 +85,15 @@ export function createMemoryFileSystem(): FileSystem & {
         throw notFound(p);
       }
       return b.slice();
+    },
+    async *readChunks(rawP) {
+      const p = norm(rawP);
+      const b = files.get(p);
+      if (b === undefined) {
+        if (isDir(p)) throw fsError('EISDIR', 'illegal operation on a directory, read', p);
+        throw notFound(p);
+      }
+      for (let at = 0; at < b.length; at += CHUNK_BYTES) yield b.slice(at, at + CHUNK_BYTES);
     },
     async writeTextAtomic(rawP, text) {
       const p = norm(rawP);

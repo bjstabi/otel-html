@@ -77,6 +77,17 @@ describe('convert', () => {
     expect(summary.totals).toEqual({ spans: 4, logs: 1, metrics: 0 });
   });
 
+  test('a file system without readChunks is read whole with readBytes', async () => {
+    const w = createTestWriter();
+    await put(w, 'in/logs.json', JSON.stringify(logsRequest([logRecord(), logRecord()])));
+    const { readChunks: _, ...whole } = w.fs;
+    const summary = await convert({ input: 'in/logs.json', out: 'r' }, { ...w.deps, fs: whole });
+    expect(summary.totals.logs).toBe(2);
+    const e = await failure(convert({ input: 'in/missing.json', out: 'r2' }, { ...w.deps, fs: whole }));
+    expect(e.code).toBe('usage');
+    expect(e.message).toContain('cannot read input file in/missing.json');
+  });
+
   test('protobuf without a signal hint is a usage error naming the file', async () => {
     const w = createTestWriter();
     await put(w, 'in/c.pb', new Uint8Array([]));

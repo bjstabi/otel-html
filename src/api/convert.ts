@@ -3,6 +3,7 @@ import { readOtlpFile } from '../model/detect.js';
 import { OtelHtmlError } from '../model/errors.js';
 import type { OtlpSignal } from '../model/otlp-json.js';
 import { mergeReports } from '../writer/merge.js';
+import type { FileSystem } from '../writer/ports.js';
 import { openSession, type ReportSummary, type WriterDeps } from '../writer/session.js';
 import { resolveApiConfig, resolveDeps } from './report.js';
 
@@ -41,15 +42,7 @@ export async function convert(options: ConvertOptions, deps?: Partial<WriterDeps
   });
   try {
     for (const file of files) {
-      let bytes: Uint8Array;
-      try {
-        bytes = await full.fs.readBytes(file);
-      } catch (e) {
-        throw new OtelHtmlError('usage', {
-          message: `cannot read input file ${file}: ${e instanceof Error ? e.message : String(e)}`,
-        });
-      }
-      for (const request of readOtlpFile(bytes, file, options.signal)) {
+      for await (const request of readOtlpFile(inputPieces(full.fs, file), file, options.signal)) {
         await session.add(request, file);
       }
     }
@@ -57,6 +50,18 @@ export async function convert(options: ConvertOptions, deps?: Partial<WriterDeps
   } catch (e) {
     await session.abort().catch(() => undefined); // never mask the original error
     throw e;
+  }
+}
+
+/** A file's bytes in pieces; a failed read is a usage error naming the file. */
+async function* inputPieces(fs: FileSystem, file: string): AsyncGenerator<Uint8Array, void, undefined> {
+  try {
+    if (fs.readChunks === undefined) yield await fs.readBytes(file);
+    else yield* fs.readChunks(file);
+  } catch (e) {
+    throw new OtelHtmlError('usage', {
+      message: `cannot read input file ${file}: ${e instanceof Error ? e.message : String(e)}`,
+    });
   }
 }
 
