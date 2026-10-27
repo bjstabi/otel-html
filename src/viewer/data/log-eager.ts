@@ -5,6 +5,7 @@ import { epochOf } from './load.js';
 import { loadLogChunk, logNotFound } from './log-load.js';
 import {
   byTimeThenRef,
+  checkSurroundingCount,
   type LogEntry,
   type LogRow,
   queryLogEntries,
@@ -62,6 +63,7 @@ export async function createEagerLogSource(loader: ScriptLoader, manifest: Manif
     },
     surroundingLogs(ref, n) {
       try {
+        checkSurroundingCount(n);
         const log = find(ref);
         return Promise.resolve({ ...surroundingIn(log, rows, n), log, partial: false });
       } catch (e) {

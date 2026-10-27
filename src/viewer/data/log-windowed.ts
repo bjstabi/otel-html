@@ -7,7 +7,9 @@ import { epochOf, type TraceIndex } from './load.js';
 import { loadLogChunk, logNotFound } from './log-load.js';
 import {
   byTimeThenRef,
+  checkSurroundingCount,
   type LogEntry,
+  type LogQuery,
   LogQueryRun,
   type LogRef,
   type LogRow,
@@ -20,6 +22,14 @@ import type { ScriptLoader } from './script-loader.js';
 
 /** Neighbor chunks (by start time) Surrounding logs reads on each side of the log's own chunk before it says partial. */
 export const SURROUNDING_CHUNKS_PER_SIDE = 4;
+
+/**
+ * Newest first (the Logs Explorer default) visits chunks by end time descending, each one whole, so a scan cut
+ * short by the cap lists the newest logs rather than the oldest ones reversed.
+ */
+function newestFirst(q: LogQuery): boolean {
+  return q.sort.column === 'time' && q.sort.dir === 'desc';
+}
 
 /** Scan log chunks on demand, never holding more than `CHUNK_LRU_SIZE` decoded chunks (an LRU of its own). */
 export function createWindowedLogSource(
@@ -51,7 +61,8 @@ export function createWindowedLogSource(
     async queryLogs(q, onProgress, signal) {
       const run = new LogQueryRun(q, signal);
       const { targets, unfiltered } = chunks.targets(q);
-      const landing = unfiltered ? await rollups() : null;
+      // Traces-mode aggregates cover trace-bearing logs only, so the all-logs rollup does not stand in for them.
+      const landing = unfiltered && q.mode !== 'traces' ? await rollups() : null;
       if (landing !== null && q.mode === 'patterns') {
         // The writer clustered every log: the unfiltered patterns are exact without a scan.
         throwIfAborted(signal);
@@ -63,19 +74,20 @@ export function createWindowedLogSource(
           partial: null,
         };
       }
+      const newest = newestFirst(q);
       const { partial } = await scanChunks({
-        targets,
+        targets: newest ? [...targets].sort((a, b) => b.end - a.end || b.n - a.n) : targets,
         total: chunks.ordered.length,
         entries: chunkEntries,
         run,
         cap,
-        // Traces mode finishes the chunk it is in, so the traces it matched are seen whole within it.
-        finishChunk: q.mode === 'traces',
+        // Traces mode finishes the chunk it is in, so the traces it matched are seen whole within it; newest first
+        // does too, because rows within a chunk are not in time order and the newest may come last.
+        finishChunk: q.mode === 'traces' || newest,
         onProgress,
         signal,
       });
       const result = run.finish(partial);
-      // Traces-mode aggregates cover trace-bearing logs only, so the all-logs rollup does not stand in for them.
       if (landing === null || result.mode !== 'logs') return result;
       // With nothing to filter on, the list is the head of the whole run; the aggregates and the size are the run's own.
       return {
@@ -107,6 +119,7 @@ export function createWindowedLogSource(
     },
 
     async surroundingLogs(ref, n) {
+      checkSurroundingCount(n);
       const { chunk, entries, log } = await locate(ref);
       const at = chunks.ordered.indexOf(chunk);
       const rows = entries.map((e) => e.row);

@@ -185,6 +185,17 @@ export function sameStream(target: LogRow, row: LogRow): boolean {
   return row.service === target.service && row.host === target.host;
 }
 
+/** Surrounding logs per side: a non-negative integer (NaN, negative and fractional counts are usage errors). */
+export function checkSurroundingCount(n: number): void {
+  if (!Number.isInteger(n) || n < 0) {
+    throw new OtelHtmlError('usage', {
+      path: 'surrounding.n',
+      expected: 'a non-negative integer',
+      actual: String(n),
+    });
+  }
+}
+
 /**
  * The `n` same-stream logs on each side of `target` among `rows` (any order; `target` itself may be among them),
  * in time order with the ref as tiebreak.
@@ -194,13 +205,7 @@ export function surroundingIn(
   rows: readonly LogRow[],
   n: number,
 ): { before: LogRow[]; after: LogRow[] } {
-  if (!Number.isInteger(n) || n < 0) {
-    throw new OtelHtmlError('usage', {
-      path: 'surrounding.n',
-      expected: 'a non-negative integer',
-      actual: String(n),
-    });
-  }
+  checkSurroundingCount(n);
   const before: LogRow[] = [];
   const after: LogRow[] = [];
   for (const r of rows) {

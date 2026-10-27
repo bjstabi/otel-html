@@ -156,6 +156,8 @@ export const LOG_TRACE = traceIdOf(0);
 export const LOG_TRACE_ROOT_SPAN = spanId(0, 0);
 /** A trace that only has logs (log chunk 3); its one log carries `LOG_TRACE_ROOT_SPAN`, a span not in its trace. */
 export const ORPHAN_LOG_TRACE = traceIdOf(5);
+/** Body of the log with a span id and no trace id. */
+export const SPAN_WITHOUT_TRACE_TEXT = 'span without trace';
 /** Log stream (service `api`, host `h1`) bodies: `tick <chunk>.<j>`, `j` in 0..1. */
 const TICKS_PER_CHUNK = 2;
 
@@ -163,7 +165,7 @@ const TICKS_PER_CHUNK = 2;
  * Spans of `traceRequest(0)` in span chunk 0, then `LOG_CHUNK_COUNT` log chunks. Log chunk `k` starts `k` steps
  * after the epoch and holds the `api`/`h1` ticks at +0 and +100 ns and an ERROR `noise <k>` log from `web`/`h2` at
  * +50 ns. Chunk 2 adds two `LOG_TRACE` logs on its root span and one on span `deadbeefdeadbeef` (not in the trace);
- * chunk 3 adds the `ORPHAN_LOG_TRACE` log.
+ * chunk 2 also has a log carrying `LOG_TRACE_ROOT_SPAN` but no trace id; chunk 3 adds the `ORPHAN_LOG_TRACE` log.
  */
 export async function buildLogReport(): Promise<Fixture> {
   const w = createTestWriter();
@@ -197,6 +199,11 @@ export async function buildLogReport(): Promise<Fixture> {
         inTrace(20, LOG_TRACE_ROOT_SPAN, 'trace log b'),
         inTrace(10, LOG_TRACE_ROOT_SPAN, 'trace log a'),
         inTrace(30, 'deadbeefdeadbeef', 'trace log on a missing span'),
+        logRecord({
+          timeUnixNano: at(k, 40),
+          spanId: LOG_TRACE_ROOT_SPAN,
+          body: { stringValue: SPAN_WITHOUT_TRACE_TEXT },
+        }),
       );
     }
     if (k === 3) {

@@ -14,6 +14,7 @@ import {
   LOG_TRACE,
   LOG_TRACE_ROOT_SPAN,
   ORPHAN_LOG_TRACE,
+  SPAN_WITHOUT_TRACE_TEXT,
 } from './report-fixture.js';
 
 const SMALL = 10_000_000;
@@ -164,6 +165,29 @@ describe.each([
     expect(onRoot.every((r) => r.log.traceId === LOG_TRACE)).toBe(true);
   });
 
+  test('a log with a span id but no trace id is in no trace and not counted', async () => {
+    const ref = await refOf(SPAN_WITHOUT_TRACE_TEXT);
+    const { ds } = await open(budget);
+    expect((await ds.getLog(ref)).log).toMatchObject({ traceId: null, spanId: LOG_TRACE_ROOT_SPAN });
+    for (const id of [LOG_TRACE, ORPHAN_LOG_TRACE]) {
+      expect(bodies(await ds.traceLogs(id as TraceId))).not.toContain(SPAN_WITHOUT_TRACE_TEXT);
+    }
+    expect((await ds.getTrace(LOG_TRACE as TraceId)).logCount).toBe(3);
+  });
+
+  test('surroundingLogs rejects a NaN, negative or fractional n as a usage error', async () => {
+    const ref = await refOf('tick 5.0');
+    const { ds, loader } = await open(budget);
+    loader.reset();
+    for (const n of [Number.NaN, -1, 1.5]) {
+      await expect(ds.surroundingLogs(ref, n)).rejects.toMatchObject({
+        code: 'usage',
+        path: 'surrounding.n',
+      });
+    }
+    expect(loader.calls).toEqual([]);
+  });
+
   test('getTrace carries the trace log count', async () => {
     const { ds } = await open(budget);
     expect((await ds.getTrace(LOG_TRACE as TraceId)).logCount).toBe(3);
@@ -285,6 +309,32 @@ describe('windowed logs', () => {
     expect(r.partial).toEqual({ scanned: 2, total: LOG_CHUNK_COUNT });
     expect(r.facets.total('service.name')).toBe(rep.manifest.totals.logs);
     expect(loader.calls).toEqual(['data/rollups/logs.js', logChunk(0), logChunk(1)]);
+  });
+
+  test('above the cap, unfiltered time desc lists the newest logs, scanning chunks newest first', async () => {
+    const capped: Manifest = {
+      ...rep.manifest,
+      config: { viewer: { ...rep.manifest.config.viewer, listCap: 4 } },
+    };
+    const desc = query({ sort: { column: 'time', dir: 'desc' }, limit: 4 });
+    const exact = asLogs(await (await open(SMALL)).ds.queryLogs(desc));
+    const loader = createScriptedLoader(rep.files);
+    const ds = await createDataSource(loader, capped, 1);
+    loader.reset();
+    const r = await ds.queryLogs(desc);
+    expect(bodies(asLogs(r))).toEqual(bodies(exact));
+    expect(bodies(asLogs(r))[0]).toBe('tick 9.1');
+    expect(r.partial).toEqual({ scanned: 2, total: LOG_CHUNK_COUNT });
+    expect(loader.calls).toEqual(['data/rollups/logs.js', logChunk(9), logChunk(8)]);
+  });
+
+  test('an unfiltered traces-mode query does not load the landing rollup', async () => {
+    const loader = createScriptedLoader(rep.files);
+    const ds = await createDataSource(loader, rep.manifest, 1);
+    loader.reset();
+    const r = await ds.queryLogs(query({ mode: 'traces', sort: { column: 'first', dir: 'asc' } }));
+    expect(r.mode).toBe('traces');
+    expect(loader.calls.some((p) => p.includes('/rollups/'))).toBe(false);
   });
 
   test('unfiltered patterns are the writer patterns from the rollup, with no chunk scanned', async () => {
