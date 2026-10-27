@@ -2,7 +2,7 @@
 
 otel-html turns OpenTelemetry data into a static, self-contained HTML report. You give it OTLP files (or feed it spans from your own code) and it writes a folder you can open from disk, attach to a CI run, or publish on any static host. No server and no network access are needed to view it.
 
-Milestone 1 covers traces: a Traces explorer with a trace panel (flame graph, waterfall, span list, services, span details). Logs and metrics are accepted and stored, but their explorers are not built yet (see [Roadmap](#roadmap)).
+Milestone 1 covers traces: a Traces explorer with a trace panel (flame graph, waterfall, span list, services, span details). Milestone 2 adds logs: a Logs explorer with log patterns and a log panel, linked to traces both ways. Metrics are accepted and stored, but their explorer is not built yet (see [Roadmap](#roadmap)).
 
 > otel-html is not an official OpenTelemetry project. It is not affiliated with or endorsed by the OpenTelemetry project or the CNCF.
 
@@ -90,6 +90,20 @@ console.log(summary.totals); // { spans: 1, logs: 0, metrics: 0 }
 
 `Report` also has `addLogs`, `addMetrics` (OTLP request objects, JSON or protobuf-es messages) and `flush()`. `addSpans` accepts SDK `ReadableSpan` arrays, OTLP trace requests, or OTLP JSON objects. `config` takes an object or the path of a YAML/JSON file. Environment variables are not read by the library.
 
+## Viewing logs
+
+Open a report and choose Logs in the sidebar (or press `g l`). The Logs explorer is built like the Traces explorer: a query bar, a severity histogram, facets on the left and results on the right. Everything you set lives in the URL, so a link reproduces the view.
+
+- **Filters.** Type free text or an OTTL condition over the log record (for example `log.severity_number >= SEVERITY_NUMBER_WARN`), or use the facets: Severity, Service, `host.name`, Scope, `event.name`, Has trace, and any attribute. Severity rows offer Only and "And above". Brushing the histogram sets the time window.
+- **Group into.** Logs lists records. Patterns groups them by message template. Traces groups them by trace, so you can see which traces are noisy. Group by and the chart views (time series, top list, bar, table, treemap, pie and a severity scatter) work as in the Traces explorer.
+- **Patterns.** The writer clusters every log message with an in-house Drain implementation (numbers, IDs and similar tokens are masked into placeholders) and stores the clusters in `data/rollups/logs.js`. The unfiltered Patterns view is therefore exact. With a filter or free text, the viewer runs the same clustering over the matching logs. Choosing a pattern adds a filter token that matches its template with `IsMatch(log.body.string, ...)`, which stays editable in the query bar.
+- **Log panel.** Click a log to open its panel. Attributes shows the body (rendered by type: text, JSON-like maps and lists, bytes) and the log's attributes. Trace shows the trace's flame graph with the span that emitted the log outlined. It is hidden when the log's trace is not in the report. Surrounding logs lists the logs before and after it from the same stream. Resource shows the resource and scope. A very long body shows its first 16,384 characters with a control to show all.
+- **Cross-links.** A span or trace panel has a Logs tab that lists its logs, and "Open in Logs Explorer" jumps to the Logs explorer with the matching `trace_id` or `span_id` condition. A log with trace context links back to its trace and span. The Traces explorer's "Open in ... Explorer" links work the other way.
+
+### What carries between explorers
+
+When you move between explorers (the sidebar, `g l` and `g t`, or an "Open in ... Explorer" link), only the time window (`t`), the free text (`text`) and a query (`q`) that compiles in the target explorer's OTTL context come along. Everything else resets: group, view, sort, selected trace, span or log, and panel tabs. A query that does not compile there (such as `span.name == "x"` carried to Logs) is dropped, and the page shows a dismissible notice naming it. Inside one explorer everything is kept.
+
 ## Report layout and hosting
 
 ```
@@ -129,7 +143,7 @@ Config is a YAML or JSON file (`otel-html.yaml` by default), or an object passed
 | `writer.drop.traces.span` | `[]` | OTTL conditions; matching spans are dropped at write time. |
 | `writer.drop.logs.log_record` | `[]` | Same, for log records. |
 | `writer.drop.metrics.datapoint` | `[]` | Same, for metric data points. |
-| `viewer.eagerBudgetBytes` | 75000000 | Decoded size under which the viewer loads everything up front. Env: `OTEL_HTML_EAGER_BUDGET_BYTES`. |
+| `viewer.eagerBudgetBytes` | 75000000 | Decoded size under which the viewer loads everything up front. Applies to each signal on its own: the viewer estimates the decoded size of the spans and of the logs separately, so a report can have eager spans and windowed logs. Env: `OTEL_HTML_EAGER_BUDGET_BYTES`. |
 | `viewer.listCap` | 10000 | Maximum rows in result lists. |
 | `viewer.theme` | `system` | `system`, `light` or `dark`. The theme a report opens in; a theme the viewer picks themselves is remembered and wins. |
 
@@ -139,7 +153,9 @@ Config is a YAML or JSON file (`otel-html.yaml` by default), or an object passed
 
 - Timestamps are JavaScript numbers, exact to 2^53 ns. That is about 104 days of relative time span within one report.
 - The viewer is for static reports that open from `file://`. It does not follow a report that is still being written.
-- When a report is larger than `viewer.eagerBudgetBytes`, windowed Services numbers are partial (the viewer labels them) until you run a scan.
+- When a signal is larger than `viewer.eagerBudgetBytes`, the viewer reads its chunks on demand. Services numbers, filtered log results and filtered patterns are then partial (the viewer says "from N of M chunks") until you choose "Scan entire run". Opening a trace or its Logs tab reads only the chunks the trace index lists for it.
+- Log pattern clustering stops creating clusters at 2,000. A message that fits no existing cluster after that stays unclustered, and the Patterns view reports how many.
+- The design target for logs is 1,000,000 records in about 200 bytes each on disk. The end-to-end suite builds a 100k-span, 1M-log report to check the landing and a one-window filtered scan.
 - The flame graph merges very narrow bars in traces above 2000 spans and clips anything deeper than 200 levels.
 
 ## Development
@@ -160,7 +176,7 @@ Other tasks: `lint`, `format`, `typecheck`, `test:unit`, `knip`, `gen`, `gen:che
 
 ## Roadmap
 
-- M2: Logs explorer and log panel, with log and trace cross-linking.
+- M2 (done): Logs explorer, log patterns and log panel, with log and trace cross-linking.
 - M3: Metrics explorer and catalog, with embedded metric charts in all panels.
 - M4: Dashboards, including the built-in Fusion dashboard, and dashboard config.
 - M5: OTLP receiver (HTTP, then gRPC), `serve` and `run` commands, SDK exporters and load tests.
