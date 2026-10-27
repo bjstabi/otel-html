@@ -30,8 +30,9 @@ jobs:
     needs: check
     strategy:
       fail-fast: true
+      # No macOS runners (cost); Linux runs the unit tests in `check`.
       matrix:
-        os: [macos-latest, windows-latest]
+        os: [windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

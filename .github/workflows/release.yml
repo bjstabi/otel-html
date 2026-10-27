@@ -42,12 +42,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest, target: linux-x64, ext: "" }
-          - { os: ubuntu-24.04-arm, target: linux-arm64, ext: "" }
-          # macos-13 is retired; macos-15-intel is the remaining Intel macOS runner.
-          - { os: macos-15-intel, target: darwin-x64, ext: "" }
-          - { os: macos-latest, target: darwin-arm64, ext: "" }
-          - { os: windows-latest, target: windows-x64, ext: ".exe" }
+          - { os: ubuntu-latest, target: linux-x64, ext: "", smoke: true }
+          - { os: ubuntu-24.04-arm, target: linux-arm64, ext: "", smoke: true }
+          # No macOS runners (cost): bun cross-compiles the darwin binaries on Linux (ad-hoc signed, so they run
+          # on Apple silicon), but a Linux runner cannot execute them, so they skip the binary smoke test.
+          - { os: ubuntu-latest, target: darwin-x64, ext: "", smoke: false }
+          - { os: ubuntu-latest, target: darwin-arm64, ext: "", smoke: false }
+          - { os: windows-latest, target: windows-x64, ext: ".exe", smoke: true }
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -65,6 +66,7 @@ jobs:
       - run: mise run build
       - run: mise run build:binaries -- --target "$TARGET"
       - name: Test the binary
+        if: matrix.smoke
         env:
           OTEL_HTML_BINARY: dist/bin/otel-html-${{ matrix.target }}${{ matrix.ext }}
         run: pnpm exec vitest run test/cli/binary.test.ts
