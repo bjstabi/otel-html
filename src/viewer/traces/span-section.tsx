@@ -10,12 +10,14 @@ import { addAttributeFilter } from '../components/attribute-filter.js';
 import { AttributeGroups, loadPins, savePins } from '../components/attribute-groups.js';
 import { type AttributeActions, ResourceTab } from '../components/resource-tab.js';
 import type { DataSource, TraceDetail } from '../data/data-source.js';
+import type { LogRow } from '../data/log-query.js';
 import { useSelection } from '../state/selection-context.js';
 import { useColorAssigner } from '../theme/colors-context.js';
 import { ServiceChip, StatusDot } from './columns.js';
 import { EventsTab, formatOffset, LinksTab, Muted } from './span-detail-tabs.js';
 import { availableSpanTabs, isSpanTabId, type SpanTabId } from './tabs.js';
 import { traceFacts } from './trace-facts.js';
+import { TraceLogsTab } from './trace-logs-tab.js';
 
 /** What the span section receives to render the selected span. */
 export interface SpanSectionProps {
@@ -23,6 +25,8 @@ export interface SpanSectionProps {
   spanId: SpanId | null;
   epoch: UnixNanos;
   dataSource: DataSource;
+  /** The trace's logs (time-ascending), or null while they load or when the trace has none. */
+  logs?: readonly LogRow[] | null;
 }
 
 const TAB_BASE =
@@ -113,12 +117,26 @@ function CoreFacts(props: { row: { span: SpanRecord }; epoch: UnixNanos; traceSt
  */
 export function SpanSection(props: SpanSectionProps): JSX.Element {
   const { detail, spanId, epoch, dataSource } = props;
+  const logs = props.logs ?? null;
   const sel = useSelection((s) => s);
   const colors = useColorAssigner();
   const [pins, setPins] = useState<string[]>(loadPins);
   const [error, setError] = useState<string | null>(null);
   const row = useMemo(() => detail.spans.find((r) => r.span.spanId === spanId) ?? null, [detail, spanId]);
   const facts = useMemo(() => traceFacts(detail), [detail]);
+  // Only logs of this trace and with a span id are indexed, so another trace's logs can never appear here.
+  const logSpanIds = useMemo(() => {
+    if (logs === null) return null;
+    const ids = new Set<SpanId>();
+    for (const l of logs)
+      if (l.log.traceId === detail.traceId && l.log.spanId !== null) ids.add(l.log.spanId);
+    return ids;
+  }, [logs, detail.traceId]);
+  const spanLogs = useMemo(
+    () =>
+      logs === null ? [] : logs.filter((l) => l.log.traceId === detail.traceId && l.log.spanId === spanId),
+    [logs, detail.traceId, spanId],
+  );
 
   if (row === null) {
     return (
@@ -158,7 +176,7 @@ export function SpanSection(props: SpanSectionProps): JSX.Element {
     onExclude: filter('resource', '!='),
   };
 
-  const tabs = availableSpanTabs(span);
+  const tabs = availableSpanTabs(span, { logSpanIds });
   const wanted = sel.tabs.span;
   const active: SpanTabId = tabs.find((t) => t.id === wanted)?.id ?? 'overview';
   const percentile = dataSource.percentileOf(row.service, row.resource, row.durationNs);
@@ -227,6 +245,13 @@ export function SpanSection(props: SpanSectionProps): JSX.Element {
             </>
           )}
           {active === 'events' && <EventsTab span={span} />}
+          {active === 'logs' && (
+            <TraceLogsTab
+              rows={spanLogs}
+              scope={{ traceId: detail.traceId, spanId: span.spanId }}
+              epoch={epoch}
+            />
+          )}
           {active === 'links' && (
             <LinksTab span={span} dataSource={dataSource} onSelectSpan={(id) => sel.selectSpan(id)} />
           )}

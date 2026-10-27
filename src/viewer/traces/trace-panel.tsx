@@ -19,6 +19,7 @@ import { SpanSection, type SpanSectionProps } from './span-section.js';
 import { SplitPane } from './split-pane.js';
 import { availableTabs, isTraceTabId, type TraceTabId } from './tabs.js';
 import { traceFacts } from './trace-facts.js';
+import { TraceLogsTab, useTraceLogs } from './trace-logs-tab.js';
 import { ErrorsTab, ServicesTab, SpanListTab } from './trace-tabs.js';
 
 export interface TracePanelProps {
@@ -201,6 +202,8 @@ export function TracePanel(props: TracePanelProps): JSX.Element {
     [dataSource],
   );
   const [exportError, setExportError] = useState<string | null>(null);
+  const logCount = load.status === 'ready' ? load.detail.logCount : 0;
+  const logs = useTraceLogs(dataSource, traceId, logCount > 0);
 
   // j/k: with the panel open it owns the move event, so the next/previous trace in the result order opens.
   const latest = useRef({ traceId, traceIds, select: sel.selectTrace });
@@ -299,8 +302,16 @@ export function TracePanel(props: TracePanelProps): JSX.Element {
           <ErrorsTab detail={detail} selectedSpanId={sel.spanId} onSelect={selectSpan} colors={colors} />
         );
       case 'logs':
-        // Built in M2 Task 14; its `available()` is false until then, so it is never the active tab.
-        throw new Error('invariant violated: the trace Logs tab is not available yet');
+        return logs.rows === null ? (
+          <p
+            role={logs.error === null ? 'status' : 'alert'}
+            className={logs.error === null ? 'p-3 text-sm text-ink-2' : 'p-3 text-sm text-critical'}
+          >
+            {logs.error === null ? 'Loading logs…' : `The logs could not be loaded: ${logs.error}`}
+          </p>
+        ) : (
+          <TraceLogsTab rows={logs.rows} scope={{ traceId: detail.traceId }} epoch={epoch} />
+        );
       default: {
         const never: never = tab;
         throw new Error(`unhandled trace tab ${String(never)}`);
@@ -377,6 +388,7 @@ export function TracePanel(props: TracePanelProps): JSX.Element {
                 spanId: sel.spanId,
                 epoch,
                 dataSource,
+                logs: logs.rows,
               })}
             />
           </Tabs.Root>

@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest';
+import type { SpanId } from '../../src/model/ids.js';
 import type { SpanLinkRecord, SpanRecord } from '../../src/model/records.js';
 import { availableSpanTabs, isSpanTabId, SPAN_TAB_IDS, SPAN_TABS } from '../../src/viewer/traces/tabs.js';
 import { traceRow } from './trace-rows.js';
@@ -13,12 +14,14 @@ const link: SpanLinkRecord = {
   flags: 0,
 };
 const event = { time: base.start, name: 'e', attributes: new Map(), droppedAttributesCount: 0 };
-const ids = (s: SpanRecord): string[] => availableSpanTabs(s).map((t) => t.id);
+const none = { logSpanIds: null };
+const ids = (s: SpanRecord, ctx: { logSpanIds: ReadonlySet<SpanId> | null } = none): string[] =>
+  availableSpanTabs(s, ctx).map((t) => t.id);
 
 describe('SPAN_TABS', () => {
-  test('lists overview, events, links, resource, logs in order; logs is never available until M2 builds it', () => {
-    expect(SPAN_TABS.map((t) => t.id)).toEqual(['overview', 'events', 'links', 'resource', 'logs']);
-    expect(SPAN_TAB_IDS).toEqual(SPAN_TABS.map((t) => t.id));
+  test('lists overview, events, logs, links, resource in order', () => {
+    expect(SPAN_TABS.map((t) => t.id)).toEqual(['overview', 'events', 'logs', 'links', 'resource']);
+    expect([...SPAN_TAB_IDS].sort()).toEqual(SPAN_TABS.map((t) => t.id).sort());
   });
 
   test('links and events are omitted when empty', () => {
@@ -28,6 +31,13 @@ describe('SPAN_TABS', () => {
   test('links shows with links, events shows with events', () => {
     expect(ids({ ...base, links: [link] })).toEqual(['overview', 'links', 'resource']);
     expect(ids({ ...base, events: [event] })).toEqual(['overview', 'events', 'resource']);
+  });
+
+  test('logs shows only when the span emitted a log; null (still loading) hides it', () => {
+    const withLog = { logSpanIds: new Set([base.spanId]) };
+    expect(ids(base, withLog)).toEqual(['overview', 'logs', 'resource']);
+    expect(ids(base, { logSpanIds: new Set<SpanId>() })).toEqual(['overview', 'resource']);
+    expect(ids(base, none)).toEqual(['overview', 'resource']);
   });
 
   test('isSpanTabId accepts known ids only', () => {
