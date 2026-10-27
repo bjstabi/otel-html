@@ -15,7 +15,7 @@ import {
   type SpanRow,
   toEntries,
 } from '../../src/viewer/data/span-query.js';
-import { medianMs } from './median-ms.js';
+import { medianMs } from '../../test-support/median-ms.js';
 
 declare const process: { env: { OTEL_HTML_PERF_FACTOR?: string } }; // provided by vitest; the viewer project has no node types
 

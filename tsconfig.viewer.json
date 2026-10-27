@@ -11,6 +11,7 @@
     "src/viewer/**/*",
     "test/viewer/**/*",
     "test-support/scripted-loader.ts",
+    "test-support/median-ms.ts",
     "src/model/**/*",
     "src/format/**/*",
     "src/semconv/**/*",

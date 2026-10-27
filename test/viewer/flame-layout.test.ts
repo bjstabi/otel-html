@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { layoutFlame } from '../../src/viewer/components/flame-layout.js';
-import { medianMs } from './median-ms.js';
+import { medianMs } from '../../test-support/median-ms.js';
 import { detailOf, spanIdOf, traceRow } from './trace-rows.js';
 
 const OPTS = { colorBy: 'service', filter: '', errorsOnly: false } as const;
