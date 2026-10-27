@@ -12,8 +12,7 @@ import {
   facetFilterable,
   facetToken,
   ottlToTokens,
-  SEVERITY_PATH,
-  severityBounds,
+  severityRangeIncludes,
   tokensToOttl,
 } from './filter-tokens.js';
 import { SeverityLabel } from './severity.js';
@@ -200,14 +199,6 @@ function displayToken(
   }
 }
 
-/** A severity row is included when the condition is exactly that band's `>= first and <= last` pair. */
-function severityIncluded(tokens: readonly FilterToken[] | null, band: LogSeverityKey): boolean {
-  const { first, last } = severityBounds(band);
-  const has = (op: '>=' | '<=', value: string): boolean =>
-    tokens?.some((t) => t.key === SEVERITY_PATH && t.op === op && t.value === value) ?? false;
-  return has('>=', first) && has('<=', last);
-}
-
 function FacetBlock(props: {
   signal: FacetSignal;
   def: FacetDef;
@@ -246,7 +237,7 @@ function FacetBlock(props: {
                 count={v.count}
                 total={total}
                 filterable
-                state={severityIncluded(props.tokens, band) ? 'include' : null}
+                state={severityRangeIncludes(props.tokens, band) ? 'include' : null}
                 onAction={() => props.onSeverity(band, band)}
                 onAndAbove={() => props.onSeverity(band, null)}
               />

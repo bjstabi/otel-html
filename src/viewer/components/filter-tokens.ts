@@ -1,7 +1,12 @@
 import { OtelHtmlError } from '../../model/errors.js';
 import type { CmpOp, Expr, Value } from '../../ottl/ast.js';
 import { parseCondition, printCondition } from '../../ottl/parse.js';
-import { LOG_SEVERITY_KEYS, type LogSeverityKey, SEVERITY_BANDS, severityEnumName } from '../../semconv/severity.js';
+import {
+  LOG_SEVERITY_KEYS,
+  type LogSeverityKey,
+  SEVERITY_BANDS,
+  severityEnumName,
+} from '../../semconv/severity.js';
 
 export type FilterToken = {
   /** Canonical OTTL path (or a path-only arithmetic expression such as a duration). */
@@ -246,6 +251,34 @@ export function severityRangeTokens(min: LogSeverityKey | null, max: LogSeverity
   if (min !== null) out.push({ key: SEVERITY_PATH, op: '>=', value: severityBounds(min).first, enum: true });
   if (max !== null) out.push({ key: SEVERITY_PATH, op: '<=', value: severityBounds(max).last, enum: true });
   return out;
+}
+
+/** Severity number of each OTTL enum name (`SEVERITY_NUMBER_WARN2` is 14), built once from `SEVERITY_BANDS`. */
+const SEVERITY_NUMBER_OF_ENUM: ReadonlyMap<string, number> = new Map(
+  LOG_SEVERITY_KEYS.flatMap((band) => {
+    const { min, max } = SEVERITY_BANDS[band];
+    return Array.from({ length: max - min + 1 }, (_, i): [string, number] => [
+      severityEnumName(band, min + i),
+      min + i,
+    ]);
+  }),
+);
+
+/**
+ * Whether the `>=` / `<=` severity tokens in `tokens` cover every number of `band`. A missing side is open, and no
+ * severity token at all includes nothing. Tokens written by hand work too: an enum name or a plain number.
+ */
+export function severityRangeIncludes(tokens: readonly FilterToken[] | null, band: LogSeverityKey): boolean {
+  const bound = (op: '>=' | '<='): number | null | undefined => {
+    const t = tokens?.find((x) => x.key === SEVERITY_PATH && x.op === op);
+    if (t === undefined) return null;
+    return typeof t.value === 'number' ? t.value : SEVERITY_NUMBER_OF_ENUM.get(String(t.value));
+  };
+  const lo = bound('>=');
+  const hi = bound('<=');
+  if (lo === undefined || hi === undefined || (lo === null && hi === null)) return false;
+  const { min, max } = SEVERITY_BANDS[band];
+  return (lo === null || lo <= min) && (hi === null || hi >= max);
 }
 
 /** Rollup display value to OTTL enum name, for the core facets whose OTTL field is an enum-typed int. */
