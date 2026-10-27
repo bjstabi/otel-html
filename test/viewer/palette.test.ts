@@ -60,18 +60,33 @@ describe('severity colours', () => {
   const SURFACE = { light: '#ffffff', dark: '#1a1a19' } as const;
   const MUTED = { light: '#6b6f78', dark: '#96958c' } as const;
   const KEYS = ['fatal', 'error', 'warn', 'info', 'debug', 'trace'] as const;
-  /**
-   * Light values come from the mockup and are fixed. These three are pale on white (below 3:1); they are
-   * never the only encoding (every severity carries its label), so they are held to a 1.5:1 floor instead.
-   */
-  const PALE_LIGHT: ReadonlySet<string> = new Set(['warn', 'debug', 'trace']);
-
   test.each(KEYS)('%s clears non-text contrast against the dark surface (3:1)', (k) => {
     expect(contrast(SEVERITY_DARK[k], SURFACE.dark)).toBeGreaterThanOrEqual(3);
   });
 
-  test.each(KEYS)('%s clears its contrast floor against the light surface', (k) => {
-    expect(contrast(SEVERITY_LIGHT[k], SURFACE.light)).toBeGreaterThanOrEqual(PALE_LIGHT.has(k) ? 1.5 : 3);
+  test.each(KEYS)('%s clears non-text contrast against the light surface (3:1)', (k) => {
+    expect(contrast(SEVERITY_LIGHT[k], SURFACE.light)).toBeGreaterThanOrEqual(3);
+  });
+
+  test('light scale runs from lightest trace to darkest fatal', () => {
+    const order = ['trace', 'debug', 'info', 'warn', 'error', 'fatal'] as const;
+    const ratios = order.map((k) => contrast(SEVERITY_LIGHT[k], SURFACE.light));
+    expect(ratios[0]).toBeLessThan(ratios[1] ?? 0);
+    expect(ratios[0]).toBeLessThan(ratios[5] ?? 0);
+    expect(Math.max(...ratios)).toBe(ratios[5]);
+  });
+
+  test('dark fatal and error differ clearly in hue', () => {
+    const hue = (hex: string): number => {
+      const [r = 0, g = 0, b = 0] = [1, 3, 5].map((i) => Number.parseInt(hex.slice(i, i + 2), 16) / 255);
+      const max = Math.max(r, g, b);
+      const d = max - Math.min(r, g, b);
+      if (d === 0) return 0;
+      const h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+      return (h * 60 + 360) % 360;
+    };
+    const diff = Math.abs(hue(SEVERITY_DARK.fatal) - hue(SEVERITY_DARK.error));
+    expect(Math.min(diff, 360 - diff)).toBeGreaterThanOrEqual(15);
   });
 
   test('unspecified (the muted token) clears text contrast (4.5:1) in both modes', () => {
