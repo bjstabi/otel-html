@@ -1,4 +1,5 @@
 import type { Manifest } from '../../format/manifest.js';
+import { chunkKey } from '../../format/paths.js';
 import type { TraceId } from '../../model/ids.js';
 import type { ResourceRecord, ResourceRef, ScopeRecord, ScopeRef } from '../../model/records.js';
 import type { ExpHistogram } from '../../rollups/exp-histogram.js';
@@ -178,6 +179,9 @@ export async function createDataSource(
 ): Promise<DataSource> {
   const budgets = signalBudgets(manifest, budgetBytes);
   const index = createTraceIndex(loader, manifest);
+  const listedLogChunks = new Set(
+    manifest.chunks.flatMap((c) => (c.signal === 'logs' ? [chunkKey('logs', c.n)] : [])),
+  );
   let logRollups: Promise<LogRollups> | undefined;
   const getLogRollups = (): Promise<LogRollups> => {
     logRollups ??= loadLogRollups(loader, manifest).catch((e: unknown) => {
@@ -208,7 +212,11 @@ export async function createDataSource(
     async getTrace(traceId) {
       // The count comes from the trace index, so opening a trace never waits on (or fails with) the log load.
       const [trace, entry] = await Promise.all([spanStrategy.getTrace(traceId), index.entry(traceId)]);
-      return { ...trace, logCount: entry?.logs ?? 0 };
+      if (entry === null || entry.logs === 0) return { ...trace, logCount: 0 };
+      if (entry.logChunks.every((k) => listedLogChunks.has(k))) return { ...trace, logCount: entry.logs };
+      // A crash between a flush's shard write and its manifest commit leaves the shard counting logs in chunks the
+      // manifest never listed: count the committed rows instead.
+      return { ...trace, logCount: (await logs.traceLogs(traceId)).length };
     },
     hasTrace: spanStrategy.hasTrace,
     percentileOf(service, resource, durationNs) {

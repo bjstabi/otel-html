@@ -15,6 +15,7 @@ import {
   LOG_TRACE_ROOT_SPAN,
   ORPHAN_LOG_TRACE,
   SPAN_WITHOUT_TRACE_TEXT,
+  withShard,
 } from './report-fixture.js';
 
 const SMALL = 10_000_000;
@@ -57,6 +58,26 @@ async function refOf(body: string): Promise<LogRef> {
   if (row === undefined) throw new Error(`no log ${body}`);
   return row.ref;
 }
+
+describe('getTrace logCount after a crash', () => {
+  // A flush writes trace shards before the manifest: a crash between them leaves a shard counting logs in
+  // chunks the manifest never listed.
+  const ahead = (): Map<string, string> =>
+    withShard(rep.files, LOG_TRACE.slice(0, 2), (e) => {
+      const entry = e[LOG_TRACE];
+      if (entry === undefined) throw new Error('no LOG_TRACE entry');
+      entry.logChunks.push(logChunk(99).slice('data/'.length, -'.js'.length));
+      entry.logs += 4;
+    });
+
+  test.each([
+    ['eager', SMALL],
+    ['windowed', 1],
+  ])('counts only the logs in listed chunks (%s logs)', async (_name, budget) => {
+    const ds = await createDataSource(createScriptedLoader(ahead()), rep.manifest, budget);
+    expect((await ds.getTrace(LOG_TRACE as TraceId)).logCount).toBe(3);
+  });
+});
 
 describe('signalBudgets', () => {
   const chunk = (signal: ManifestChunk['signal'], n: number, bytes: number): ManifestChunk => ({

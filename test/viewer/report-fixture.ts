@@ -1,5 +1,6 @@
 import { wrapDataFile } from '../../src/format/data-file.js';
 import type { Manifest } from '../../src/format/manifest.js';
+import type { TraceEntry } from '../../src/format/trace-shard.js';
 import { openSession } from '../../src/writer/session.js';
 import type { JsonObject } from '../../test-support/otlp-builders.js';
 import { attr, logRecord, span } from '../../test-support/otlp-builders.js';
@@ -85,12 +86,12 @@ export async function buildReport(traces: number, errorTraces: readonly number[]
 export function withShard(
   files: ReadonlyMap<string, string>,
   shard: string,
-  edit: (entries: Record<string, { chunks: string[] }>) => void,
+  edit: (entries: Record<string, TraceEntry>) => void,
 ): Map<string, string> {
   const path = `data/traces/${shard}.js`;
   const text = files.get(path) ?? '';
   const body = text.slice(text.indexOf(',') + 1, -3);
-  const entries: Record<string, { chunks: string[] }> = JSON.parse(body);
+  const entries: Record<string, TraceEntry> = JSON.parse(body);
   edit(entries);
   return new Map(files).set(path, wrapDataFile(`traces/${shard}`, entries));
 }
