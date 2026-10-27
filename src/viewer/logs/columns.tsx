@@ -7,7 +7,7 @@ import type { LogRow } from '../data/log-query.js';
 import { absoluteTime } from '../shell/time-range.js';
 import { type ColumnUi, ServiceChip } from '../traces/columns.js';
 
-const dash = <span className="text-muted">-</span>;
+const dash = <span className="text-muted">—</span>;
 
 function TraceLink(props: { row: LogRow }): JSX.Element {
   const id = props.row.log.traceId;

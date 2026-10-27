@@ -1,4 +1,4 @@
-import { type JSX, type ReactNode, useState } from 'react';
+import { type JSX, type ReactNode, useMemo, useState } from 'react';
 import { type AnyValue, anyValueToDisplay, anyValueToJson } from '../../model/anyvalue.js';
 import { formatBytes } from '../../semconv/formatters.js';
 import { JsonTree } from './json-tree.js';
@@ -8,14 +8,22 @@ export type BodySegment =
   | { type: 'kv'; key: string; value: string }
   | { type: 'json'; raw: string; value: unknown };
 
-const KV = /([A-Za-z_][\w.-]*)=("(?:[^"\\]|\\.)*"|[^\s"]+)/y;
+const KV = /([A-Za-z_][\w.-]*)=("(?:[^"\\\n]|\\.){0,1024}"|[^\s"]{1,4096})/y;
 const WORD = /[\w.-]/;
 /** Longest embedded JSON worth parsing; also bounds the cost of rescanning from every opener. */
 const MAX_JSON = 16_384;
+/** Total characters all JSON candidate scans of one call may read; a hostile body of openers cannot exceed it. */
+const SCAN_BUDGET = 2_000_000;
+/** Only this much of a body is segmented; the rest is plain text, so even "Show all" stays bounded. */
+const MAX_SEGMENTED = 262_144;
+
+const isHigh = (c: number): boolean => c >= 0xd800 && c <= 0xdbff;
 
 /** The end (exclusive) of the balanced `{…}` / `[…]` starting at `start`, or -1. Strings and escapes are honoured. */
-function balancedEnd(s: string, start: number): number {
-  const stop = Math.min(s.length, start + MAX_JSON);
+function balancedEnd(s: string, start: number, budget: { left: number }): number {
+  if (budget.left <= 0) return -1;
+  const stop = Math.min(s.length, start + MAX_JSON, start + budget.left);
+  budget.left -= stop - start;
   let depth = 0;
   let inStr = false;
   for (let i = start; i < stop; i++) {
@@ -43,7 +51,16 @@ function tryJson(raw: string): { ok: true; value: unknown } | { ok: false } {
 }
 
 /** Split a log line into plain text, `key=value` pairs and embedded JSON; the segments rejoin to `s` exactly. */
-export function segmentBody(s: string): BodySegment[] {
+export function segmentBody(input: string): BodySegment[] {
+  const budget = { left: SCAN_BUDGET };
+  let s = input;
+  let tail = '';
+  if (s.length > MAX_SEGMENTED) {
+    let at = MAX_SEGMENTED;
+    if (isHigh(s.charCodeAt(at - 1))) at--;
+    tail = s.slice(at);
+    s = s.slice(0, at);
+  }
   const out: BodySegment[] = [];
   let text = '';
   const flush = (): void => {
@@ -54,7 +71,7 @@ export function segmentBody(s: string): BodySegment[] {
   while (i < s.length) {
     const c = s.charAt(i);
     if (c === '{' || c === '[') {
-      const end = balancedEnd(s, i);
+      const end = balancedEnd(s, i, budget);
       if (end > 0) {
         const raw = s.slice(i, end);
         const parsed = tryJson(raw);
@@ -78,6 +95,7 @@ export function segmentBody(s: string): BodySegment[] {
     text += c;
     i++;
   }
+  text += tail;
   flush();
   return out;
 }
@@ -128,9 +146,10 @@ function JsonText(props: { raw: string }): JSX.Element {
 }
 
 function Segments(props: { text: string }): JSX.Element {
+  const segments = useMemo(() => segmentBody(props.text), [props.text]);
   return (
     <>
-      {segmentBody(props.text).map((g, i) => {
+      {segments.map((g, i) => {
         const key = `s${i}`;
         if (g.type === 'text') return g.text;
         if (g.type === 'kv') {
@@ -164,8 +183,13 @@ export function LogBody(props: {
   const { body } = props;
   const wrapped = props.mode === 'wrapped';
   const lines = props.lines ?? 1;
+  const tree = body.kind === 'kvlist' || body.kind === 'array';
+  const full = tree ? '' : anyValueToDisplay(body);
+  const max = props.maxChars ?? DEFAULT_MAX_CHARS;
+  const cut = !tree && !all && full.length > max;
+  const size = useMemo(() => (cut ? formatBytes(new TextEncoder().encode(full).length) : ''), [cut, full]);
 
-  if (body.kind === 'kvlist' || body.kind === 'array') {
+  if (tree) {
     return (
       <div className="overflow-hidden" style={wrapped ? { maxHeight: lines * 20 } : undefined}>
         <JsonTree data={anyValueToJson(body)} label="Log body" />
@@ -173,10 +197,7 @@ export function LogBody(props: {
     );
   }
 
-  const full = anyValueToDisplay(body);
-  const max = props.maxChars ?? DEFAULT_MAX_CHARS;
-  const cut = !all && full.length > max;
-  const shown = cut ? full.slice(0, max) : full;
+  const shown = cut ? (isHigh(full.charCodeAt(max - 1)) ? full.slice(0, max - 1) : full.slice(0, max)) : full;
   const style = wrapped
     ? {
         display: '-webkit-box',
@@ -202,7 +223,7 @@ export function LogBody(props: {
             }}
             className="rounded-full border border-hairline bg-surface px-2 text-ink hover:bg-hairline"
           >
-            {`Show all (${formatBytes(new TextEncoder().encode(full).length)})`}
+            {`Show all (${size})`}
           </button>
         </>
       ) : null}

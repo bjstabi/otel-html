@@ -42,6 +42,41 @@ describe('segmentBody', () => {
   });
 });
 
+declare const process: { env: { OTEL_HTML_PERF_FACTOR?: string } }; // provided by vitest; the viewer project has no node types
+const PERF_FACTOR = Number(process.env.OTEL_HTML_PERF_FACTOR ?? '1');
+const join = (s: string): string =>
+  segmentBody(s)
+    .map((g) => (g.type === 'kv' ? `${g.key}=${g.value}` : g.type === 'json' ? g.raw : g.text))
+    .join('');
+
+describe('segmentBody cost', () => {
+  test.each([
+    ['{'.repeat(100_000)],
+    ['['.repeat(16_384)],
+    ['a="'.repeat(50_000)],
+    ['{"a":'.repeat(40_000)],
+    ['x'.repeat(1024 * 1024)],
+  ])('hostile input of %#, length %d stays fast and lossless', (s) => {
+    const t = performance.now();
+    const out = join(s);
+    expect(performance.now() - t).toBeLessThan(500 * PERF_FACTOR);
+    expect(out).toBe(s);
+  });
+});
+
+describe('LogBody extras', () => {
+  test('a JSON-looking but invalid string body renders as text', () => {
+    const { container } = render(<LogBody body={str('{"a": nope}')} mode="raw" />);
+    expect(container.textContent).toBe('{"a": nope}');
+    expect(container.querySelector('.oh-json-num')).toBeNull();
+  });
+
+  test('the cut does not split a surrogate pair', () => {
+    const { container } = render(<LogBody body={str('ab\u{1F600}cd')} mode="raw" maxChars={3} />);
+    expect(container.textContent?.startsWith('ab… ')).toBe(true);
+  });
+});
+
 describe('LogBody', () => {
   test('hostile bodies render as text', () => {
     const { container } = render(<LogBody body={str('</script><img src=x onerror=alert(1)> ')} mode="raw" />);
