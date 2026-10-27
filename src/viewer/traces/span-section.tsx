@@ -1,14 +1,13 @@
 import { Tabs } from '@base-ui/react/tabs';
 import { ChevronRight } from 'lucide-react';
 import { type JSX, useMemo, useState } from 'react';
-import { type AnyValue, anyValueToDisplay } from '../../model/anyvalue.js';
-import { OtelHtmlError } from '../../model/errors.js';
+import { anyValueToDisplay } from '../../model/anyvalue.js';
 import type { SpanId, UnixNanos } from '../../model/ids.js';
 import { type SpanEventRecord, SpanKind, type SpanRecord, StatusCode } from '../../model/records.js';
 import { formatDuration, formatTime } from '../../semconv/formatters.js';
-import { addAttributeFilter } from '../components/attribute-filter.js';
 import { AttributeGroups, loadPins, savePins } from '../components/attribute-groups.js';
 import { type AttributeActions, ResourceTab } from '../components/resource-tab.js';
+import { useFilterActions } from '../components/use-filter-actions.js';
 import type { DataSource, TraceDetail } from '../data/data-source.js';
 import type { LogRow } from '../data/log-query.js';
 import { useSelection } from '../state/selection-context.js';
@@ -124,7 +123,7 @@ export function SpanSection(props: SpanSectionProps): JSX.Element {
   const sel = useSelection((s) => s);
   const colors = useColorAssigner();
   const [pins, setPins] = useState<string[]>(loadPins);
-  const [error, setError] = useState<string | null>(null);
+  const filterActions = useFilterActions('span');
   const row = useMemo(() => detail.spans.find((r) => r.span.spanId === spanId) ?? null, [detail, spanId]);
   const facts = useMemo(() => traceFacts(detail), [detail]);
   // Only logs of this trace and with a span id are indexed, so another trace's logs can never appear here.
@@ -159,25 +158,8 @@ export function SpanSection(props: SpanSectionProps): JSX.Element {
     setPins(next);
     savePins(next);
   };
-  const filter =
-    (scope: 'attribute' | 'resource', op: '==' | '!=') =>
-    (key: string, value: AnyValue): void => {
-      try {
-        setError(null);
-        sel.setCondition(addAttributeFilter(sel.condition, scope, key, value, op));
-      } catch (e) {
-        setError(e instanceof OtelHtmlError ? e.message : String(e));
-      }
-    };
-  const spanActions: AttributeActions = {
-    onFilter: filter('attribute', '=='),
-    onExclude: filter('attribute', '!='),
-    onTogglePin: togglePin,
-  };
-  const resourceActions: AttributeActions = {
-    onFilter: filter('resource', '=='),
-    onExclude: filter('resource', '!='),
-  };
+  const spanActions: AttributeActions = { ...filterActions.attribute, onTogglePin: togglePin };
+  const resourceActions: AttributeActions = filterActions.resource;
 
   const tabs = availableSpanTabs(span, { logSpanIds, logsError });
   const wanted = sel.tabs.span;
@@ -207,9 +189,9 @@ export function SpanSection(props: SpanSectionProps): JSX.Element {
           )}
         </p>
       </div>
-      {error !== null && (
+      {filterActions.error !== null && (
         <p role="alert" className="text-sm text-critical">
-          {error}
+          {filterActions.error}
         </p>
       )}
       <Tabs.Root

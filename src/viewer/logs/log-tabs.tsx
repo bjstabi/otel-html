@@ -1,13 +1,11 @@
 import { type JSX, useCallback, useMemo, useState } from 'react';
-import type { AnyValue } from '../../model/anyvalue.js';
-import { OtelHtmlError } from '../../model/errors.js';
 import type { SpanId, TraceId, UnixNanos } from '../../model/ids.js';
 import { formatDuration } from '../../semconv/formatters.js';
-import { addAttributeFilter } from '../components/attribute-filter.js';
 import { AttributeGroups } from '../components/attribute-groups.js';
 import { FlameGraph } from '../components/flame-graph.js';
 import { LogList } from '../components/log-list.js';
-import { type AttributeActions, ResourceTab } from '../components/resource-tab.js';
+import { ResourceTab } from '../components/resource-tab.js';
+import { useFilterActions } from '../components/use-filter-actions.js';
 import { Waterfall } from '../components/waterfall.js';
 import type { DataSource } from '../data/data-source.js';
 import type { LogRef, LogRow } from '../data/log-query.js';
@@ -21,31 +19,15 @@ import { traceFacts } from '../traces/trace-facts.js';
 /** Neighbors requested on each side of the log in Surrounding logs. */
 export const SURROUNDING_N = 10;
 
-/** Filter / exclude actions that write into the explorer's condition; a condition they cannot extend shows its error. */
-function useFilterActions(): {
-  attribute: AttributeActions;
-  resource: AttributeActions;
-  error: JSX.Element | null;
-} {
-  const sel = useSelection((s) => s);
-  const [error, setError] = useState<string | null>(null);
-  const filter =
-    (scope: 'attribute' | 'resource', op: '==' | '!=') =>
-    (key: string, value: AnyValue): void => {
-      try {
-        setError(null);
-        sel.setCondition(addAttributeFilter(sel.condition, scope, key, value, op, 'log'));
-      } catch (e) {
-        setError(e instanceof OtelHtmlError ? e.message : String(e));
-      }
-    };
+/** The shared log filter actions, with the error they raise rendered as a card above the tab. */
+function useLogFilterActions(): ReturnType<typeof useFilterActions> & { errorNote: JSX.Element | null } {
+  const actions = useFilterActions('log');
   return {
-    attribute: { onFilter: filter('attribute', '=='), onExclude: filter('attribute', '!=') },
-    resource: { onFilter: filter('resource', '=='), onExclude: filter('resource', '!=') },
-    error:
-      error === null ? null : (
+    ...actions,
+    errorNote:
+      actions.error === null ? null : (
         <p role="alert" className="mb-2 font-mono text-xs break-words whitespace-pre-wrap text-critical">
-          {error}
+          {actions.error}
         </p>
       ),
   };
@@ -64,10 +46,10 @@ function recordFields(row: LogRow): readonly (readonly [string, string])[] {
 
 export function AttributesTab(props: { row: LogRow }): JSX.Element {
   const { row } = props;
-  const actions = useFilterActions();
+  const actions = useLogFilterActions();
   return (
     <div>
-      {actions.error}
+      {actions.errorNote}
       {row.log.attributes.size === 0 ? (
         <p className="text-sm text-muted">This log has no attributes.</p>
       ) : (
@@ -191,10 +173,10 @@ export function LogTraceTab(props: { dataSource: DataSource; row: LogRow }): JSX
 
 export function LogResourceTab(props: { row: LogRow }): JSX.Element {
   const { row } = props;
-  const actions = useFilterActions();
+  const actions = useLogFilterActions();
   return (
     <div>
-      {actions.error}
+      {actions.errorNote}
       <ResourceTab
         counts={[['Log attributes', row.log.droppedAttributesCount]]}
         resource={row.resource}
