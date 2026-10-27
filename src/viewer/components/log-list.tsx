@@ -1,10 +1,28 @@
 import { type JSX, useMemo, useState } from 'react';
-import type { UnixNanos } from '../../model/ids.js';
+import type { TraceId, UnixNanos } from '../../model/ids.js';
 import type { LogRef, LogRow } from '../data/log-query.js';
-import { logAttributeColumn, logColumns } from '../logs/columns.js';
+import { logAttributeColumn, logColumns, type TraceCheck } from '../logs/columns.js';
 import { ResultsTable, type SortState } from './results-table.js';
 
 const LINE_OPTIONS = [1, 3, 10] as const;
+
+/** One lookup per trace id for the list's lifetime; a failed lookup is dropped so a later render retries it. */
+function cachedCheck(check: TraceCheck): TraceCheck {
+  const seen = new Map<TraceId, Promise<boolean>>();
+  return (id) => {
+    let p = seen.get(id);
+    if (p === undefined) {
+      p = Promise.resolve()
+        .then(() => check(id))
+        .catch((e: unknown) => {
+          seen.delete(id);
+          throw e;
+        });
+      seen.set(id, p);
+    }
+    return p;
+  };
+}
 
 /** The one log list: Explorer, Surrounding logs and the trace and span Logs tabs all render this. */
 export function LogList(props: {
@@ -18,12 +36,15 @@ export function LogList(props: {
   extraColumns?: readonly string[];
   moveEnabled?: boolean;
   height?: number;
+  /** Whether the report holds a trace; with it, a trace id the report lacks is shown as text, not a link. */
+  hasTrace?: TraceCheck;
 }): JSX.Element {
   const [lines, setLines] = useState<number>(1);
-  const extra = props.extraColumns;
+  const { extraColumns: extra, hasTrace } = props;
+  const check = useMemo(() => (hasTrace === undefined ? undefined : cachedCheck(hasTrace)), [hasTrace]);
   const columns = useMemo(
-    () => [...logColumns(lines), ...(extra ?? []).map(logAttributeColumn)],
-    [lines, extra],
+    () => [...logColumns(lines, check), ...(extra ?? []).map(logAttributeColumn)],
+    [lines, check, extra],
   );
   return (
     <div className="flex flex-col gap-2">

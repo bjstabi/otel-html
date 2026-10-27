@@ -67,6 +67,24 @@ describe('LogList', () => {
     expect(screen.getByRole('link', { name: 'trace' }).getAttribute('href')).toBe('#/traces/trace/abc');
   });
 
+  test('a trace id the report does not hold is plain text, not a link to a missing trace page', async () => {
+    const hasTrace = vi.fn((id: string) => Promise.resolve(id === 'abc'));
+    mount([row(0, { traceId: 'abc' }), row(1, { traceId: 'f00d' })], { hasTrace });
+    expect((await screen.findByRole('link', { name: 'trace' })).getAttribute('href')).toBe(
+      '#/traces/trace/abc',
+    );
+    const orphan = await screen.findByTitle('trace not in this report');
+    expect(orphan.textContent).toBe('f00d');
+    expect(orphan.closest('a')).toBeNull();
+    expect(screen.getAllByRole('link', { name: 'trace' })).toHaveLength(1);
+  });
+
+  test('a failed trace lookup leaves the id as text and says so', async () => {
+    mount([row(0, { traceId: 'abc' })], { hasTrace: () => Promise.reject(new Error('shard failed')) });
+    expect((await screen.findByTitle('could not check the trace')).textContent).toBe('abc');
+    expect(screen.queryByRole('link', { name: 'trace' })).toBeNull();
+  });
+
   test('a log without a trace shows a dash, not a link', () => {
     mount([row(0)]);
     expect(screen.queryByRole('link', { name: 'trace' })).toBeNull();

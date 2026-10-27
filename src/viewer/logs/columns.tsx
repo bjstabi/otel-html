@@ -1,32 +1,68 @@
 import { Link2 } from 'lucide-react';
 import type { JSX } from 'react';
 import { anyValueToDisplay } from '../../model/anyvalue.js';
+import type { TraceId } from '../../model/ids.js';
 import { LogBody } from '../components/log-body.js';
 import { SeverityBadge } from '../components/severity.js';
 import type { LogRow, LogTraceRow } from '../data/log-query.js';
 import { absoluteTime } from '../shell/time-range.js';
+import { useKeyedAsync } from '../state/use-keyed-async.js';
 import { type ColumnUi, ServiceChip } from '../traces/columns.js';
 
 const dash = <span className="text-muted">—</span>;
 
-function TraceLink(props: { row: LogRow }): JSX.Element {
-  const id = props.row.log.traceId;
-  if (id === null) return dash;
+/** Whether the report holds a trace (spans in it); the trace column links only to traces it holds. */
+export type TraceCheck = (traceId: TraceId) => Promise<boolean>;
+
+const LINK_CLASS = 'inline-flex rounded-full p-1 text-ink-2 hover:bg-hairline';
+
+function TraceLinkIcon(props: { id: TraceId }): JSX.Element {
   return (
     <a
-      href={`#/traces/trace/${id}`}
+      href={`#/traces/trace/${props.id}`}
       aria-label="trace"
       title="Open trace"
       onClick={(e) => e.stopPropagation()}
-      className="inline-flex rounded-full p-1 text-ink-2 hover:bg-hairline"
+      className={LINK_CLASS}
     >
       <Link2 size={14} aria-hidden />
     </a>
   );
 }
 
-/** The log columns for a body clamped to `lines` lines. */
-export function logColumns(lines: number): readonly ColumnUi<LogRow>[] {
+/** The id as text while its presence is unknown, or with a note when the report does not hold the trace. */
+function TraceIdText(props: { id: TraceId; note?: string }): JSX.Element {
+  return (
+    <span className="block truncate font-mono text-xs text-ink-2" title={props.note}>
+      {props.id}
+    </span>
+  );
+}
+
+function CheckedTraceLink(props: { id: TraceId; check: TraceCheck }): JSX.Element {
+  const state = useKeyedAsync(props.id, props.check);
+  if (state.status === 'loading') return <TraceIdText id={props.id} />;
+  if (state.status === 'error') return <TraceIdText id={props.id} note="could not check the trace" />;
+  return state.value ? (
+    <TraceLinkIcon id={props.id} />
+  ) : (
+    <TraceIdText id={props.id} note="trace not in this report" />
+  );
+}
+
+/** Without `check` every trace id links (the list is inside an open trace, so its trace is present). */
+function TraceLink(props: { row: LogRow; check: TraceCheck | undefined }): JSX.Element {
+  const id = props.row.log.traceId;
+  if (id === null) return dash;
+  return props.check === undefined ? (
+    <TraceLinkIcon id={id} />
+  ) : (
+    <CheckedTraceLink id={id} check={props.check} />
+  );
+}
+
+/** The log columns for a body clamped to `lines` lines; `check` decides whether a trace id links. */
+export function logColumns(lines: number, check?: TraceCheck): readonly ColumnUi<LogRow>[] {
   return [
     {
       id: 'time',
@@ -67,7 +103,7 @@ export function logColumns(lines: number): readonly ColumnUi<LogRow>[] {
       width: 480,
       cell: (r) => <LogBody body={r.log.body} mode="wrapped" lines={lines} />,
     },
-    { id: 'trace', header: 'Trace', width: 60, cell: (r) => <TraceLink row={r} /> },
+    { id: 'trace', header: 'Trace', width: 60, cell: (r) => <TraceLink row={r} check={check} /> },
   ];
 }
 

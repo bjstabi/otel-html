@@ -233,6 +233,7 @@ export function SurroundingTab(props: {
         epoch={epoch}
         moveEnabled={false}
         height={360}
+        hasTrace={dataSource.hasTrace}
       />
     </div>
   );

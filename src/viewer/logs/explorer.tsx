@@ -296,6 +296,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
               epoch={epoch}
               extraColumns={extraColumns}
               moveEnabled={moveEnabled}
+              hasTrace={dataSource.hasTrace}
             />
           </div>
         );
