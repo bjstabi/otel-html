@@ -100,4 +100,15 @@ describe('enum right-hand sides', () => {
     ]);
     expect(tokensToOttl(tokens ?? [])).toBe('span.status.code != STATUS_CODE_ERROR and span.name == "x"');
   });
+
+  test('ordering comparisons against an enum name are tokens too', () => {
+    const src =
+      'log.severity_number >= SEVERITY_NUMBER_WARN and log.severity_number <= SEVERITY_NUMBER_WARN4';
+    const tokens = ottlToTokens(src);
+    expect(tokens).toEqual([
+      { key: 'log.severity_number', op: '>=', value: 'SEVERITY_NUMBER_WARN', enum: true },
+      { key: 'log.severity_number', op: '<=', value: 'SEVERITY_NUMBER_WARN4', enum: true },
+    ]);
+    expect(tokensToOttl(tokens ?? [])).toBe(src);
+  });
 });

@@ -56,6 +56,23 @@ function coerceValue(
   return text;
 }
 
+const ENUM_NAME = /^[A-Z][A-Z0-9_]*$/;
+
+/**
+ * The edited chip as a token. An enum chip (`>= SEVERITY_NUMBER_WARN`) keeps an edited enum name as an enum and
+ * turns an edited number into a plain number; anything else is coerced like any other value.
+ */
+function editedToken(next: FilterToken, previous: FilterToken): FilterToken {
+  const text = String(next.value ?? '').trim();
+  const base = { key: next.key, op: next.op };
+  if (previous.enum === true && !NO_VALUE_OPS.has(next.op)) {
+    const n = Number(text);
+    if (text !== '' && Number.isFinite(n)) return { ...base, value: n };
+    if (ENUM_NAME.test(text)) return { ...base, value: text, enum: true };
+  }
+  return { ...base, value: coerceValue(next.op, previous.value, String(next.value ?? '')) };
+}
+
 /** Schedules `fn` after `ms`; returns a cancel function. Injectable so tests need no real timers. */
 export type Scheduler = (fn: () => void, ms: number) => () => void;
 
@@ -376,15 +393,7 @@ export function QueryBar(props: { signal: 'span'; debounceMs?: number; schedule?
                 key={`${t.key}:${i}`}
                 token={t}
                 onChange={(next) =>
-                  guarded(() =>
-                    commitTokens(
-                      current.map((x, j) =>
-                        j === i
-                          ? { ...next, value: coerceValue(next.op, x.value, String(next.value ?? '')) }
-                          : x,
-                      ),
-                    ),
-                  )
+                  guarded(() => commitTokens(current.map((x, j) => (j === i ? editedToken(next, x) : x))))
                 }
                 onRemove={() => guarded(() => commitTokens(current.filter((_, j) => j !== i)))}
               />

@@ -3,7 +3,7 @@ import { X } from 'lucide-react';
 import { type JSX, useCallback, useEffect, useMemo, useState } from 'react';
 import { Redirect, Route, Router, Switch } from 'wouter';
 import type { DataSource } from '../data/data-source.js';
-import { carryTo, type DroppedParam } from '../state/carry.js';
+import { applyPatch, carryTo, type DroppedParam } from '../state/carry.js';
 import { PAGE_TITLES, type Page, pageOfRoute } from '../state/page-options.js';
 import { bindUrl, createSelectionStore, type HistoryPort } from '../state/selection.js';
 import { SelectionProvider } from '../state/selection-context.js';
@@ -83,11 +83,17 @@ function CarryNotice(props: { carried: Carried | null; onDismiss: () => void }):
   );
 }
 
-/** `/logs/patterns` is the Logs explorer in patterns mode: replace it with `/logs?mode=patterns` and the carried query. */
+/**
+ * `/logs/patterns` is the Logs explorer in patterns mode: replace it with `/logs?<query>&mode=patterns`. The raw query
+ * is rewritten (not parsed), so invalid params still reach `bindUrl` and are reported.
+ */
 function PatternsRedirect(): null {
   useEffect(() => {
-    const { state } = parseUrlState(window.location.hash);
-    replaceRoute(window, '/logs', serializeUrlState({ ...state, mode: 'patterns' }));
+    const hash = window.location.hash;
+    const qi = hash.indexOf('?');
+    const params = new URLSearchParams(qi >= 0 ? hash.slice(qi + 1) : '');
+    params.set('mode', 'patterns');
+    replaceRoute(window, '/logs', params.toString().replace(/%7E/g, '~'));
   }, []);
   return null;
 }
@@ -105,11 +111,25 @@ export function Shell(props: { dataSource: DataSource; history: HistoryPort }): 
   const goTo = useCallback<GoTo>(
     (page, route, extra = {}) => {
       const { url, dropped } = carryTo(store.getState(), pageOfRoute(currentRoute(window)), page);
-      navigateRoute(window, route, serializeUrlState({ ...url, ...extra }));
+      navigateRoute(window, route, serializeUrlState(applyPatch(url, extra)));
       setCarried(dropped.length === 0 ? null : { to: page, dropped });
     },
     [store],
   );
+
+  // The notice belongs to the page it was raised for: leaving that page (Back after `g l`) clears it.
+  useEffect(() => {
+    const onHash = (): void => {
+      const page = pageOfRoute(currentRoute(window));
+      setCarried((c) => (c !== null && c.to !== page ? null : c));
+    };
+    window.addEventListener('hashchange', onHash);
+    window.addEventListener('popstate', onHash);
+    return () => {
+      window.removeEventListener('hashchange', onHash);
+      window.removeEventListener('popstate', onHash);
+    };
+  }, []);
 
   useEffect(() => {
     const move = (delta: -1 | 1) => (): void => {

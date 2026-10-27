@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import type { SpanId, TraceId } from '../../src/model/ids.js';
 import { parseLogRef } from '../../src/viewer/data/log-query.js';
-import { carryTo } from '../../src/viewer/state/carry.js';
+import { applyPatch, carryTo } from '../../src/viewer/state/carry.js';
 import {
   PAGE_OPTIONS,
   pageOfRoute,
@@ -80,6 +80,16 @@ describe('carryTo', () => {
     const s = data({ condition: 'span.name == "x"', mode: 'traces', text: 'a' });
     expect(carryTo(s, 'traces', 'metrics')).toEqual({ url: selectionToUrlState(s), dropped: [] });
     expect(carryTo(s, 'traces', 'dashboards')).toEqual({ url: selectionToUrlState(s), dropped: [] });
+  });
+});
+
+describe('applyPatch', () => {
+  test('sets keys and removes the ones patched to null', () => {
+    expect(applyPatch({ text: 'a', mode: 'patterns' }, { mode: null, q: 'x == 1' })).toEqual({
+      text: 'a',
+      q: 'x == 1',
+    });
+    expect(applyPatch({ text: 'a' }, {})).toEqual({ text: 'a' });
   });
 });
 

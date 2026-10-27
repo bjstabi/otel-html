@@ -129,6 +129,25 @@ describe('QueryBar', () => {
     expect(store.getState().condition).toBe('span.attributes["a"] == "abc"');
   });
 
+  test('a severity range chip edits as an enum name, and a typed number makes it numeric', async () => {
+    const user = userEvent.setup();
+    const store = createSelectionStore({ q: 'log.severity_number >= SEVERITY_NUMBER_WARN' });
+    render(
+      <SelectionProvider store={store}>
+        <QueryBar signal="span" />
+      </SelectionProvider>,
+    );
+    const value = screen.getByRole('textbox', { name: 'Value of log.severity_number' });
+    expect((value as HTMLInputElement).value).toBe('SEVERITY_NUMBER_WARN');
+    await user.clear(value);
+    await user.type(value, 'SEVERITY_NUMBER_ERROR{Enter}');
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(store.getState().condition).toBe('log.severity_number >= SEVERITY_NUMBER_ERROR');
+    await user.clear(value);
+    await user.type(value, '13{Enter}');
+    expect(store.getState().condition).toBe('log.severity_number >= 13');
+  });
+
   test('a failed add keeps the typed key and value', async () => {
     const user = userEvent.setup();
     const store = setup();

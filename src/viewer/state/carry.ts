@@ -1,7 +1,8 @@
+import { OtelHtmlError } from '../../model/errors.js';
 import { compileCondition } from '../../ottl/compile.js';
 import { PAGE_OPTIONS, type Page } from './page-options.js';
 import { type SelectionData, selectionToUrlState } from './selection.js';
-import { formatWindow, type UrlState } from './url-state.js';
+import { formatWindow, URL_KEYS, type UrlKey, type UrlState } from './url-state.js';
 
 export interface DroppedParam {
   key: 'q';
@@ -36,10 +37,25 @@ export function carryTo(
           compileCondition(s.condition, PAGE_OPTIONS[to].context);
           url.q = s.condition;
         } catch (e) {
-          dropped.push({ key: 'q', value: s.condition, reason: e instanceof Error ? e.message : String(e) });
+          if (!(e instanceof OtelHtmlError && e.code === 'invalid-ottl')) throw e;
+          dropped.push({ key: 'q', value: s.condition, reason: e.message });
         }
       }
       return { url, dropped };
     }
   }
+}
+
+/** URL changes applied on top of a carried state: a value sets the key, `null` removes it. */
+export type UrlPatch = { [K in keyof UrlState]?: UrlState[K] | null };
+
+function patchKey<K extends UrlKey>(out: UrlState, k: K, v: UrlState[K] | null | undefined): void {
+  if (v === null) delete out[k];
+  else if (v !== undefined) out[k] = v;
+}
+
+export function applyPatch(url: UrlState, patch: UrlPatch): UrlState {
+  const out: UrlState = { ...url };
+  for (const k of URL_KEYS) patchKey(out, k, patch[k]);
+  return out;
 }

@@ -69,7 +69,7 @@ export const UrlStateSchema = z.object({
 const UrlStatePartial = UrlStateSchema.partial();
 export type UrlState = z.output<typeof UrlStatePartial>;
 
-const KEYS = [
+export const URL_KEYS = [
   'q',
   'text',
   't',
@@ -84,10 +84,10 @@ const KEYS = [
   'log',
   'ltab',
 ] as const;
-type UrlKey = (typeof KEYS)[number];
+export type UrlKey = (typeof URL_KEYS)[number];
 
 function isUrlKey(k: string): k is UrlKey {
-  return (KEYS as readonly string[]).includes(k);
+  return (URL_KEYS as readonly string[]).includes(k);
 }
 
 /** Accepts `a=1&b=2`, `?a=1`, or a whole hash such as `#/traces?a=1` (a prefix is stripped only at the start). */
@@ -122,7 +122,7 @@ export function parseUrlState(search: string): { state: UrlState; errors: string
 
 export function serializeUrlState(s: UrlState): string {
   const p = new URLSearchParams();
-  for (const k of KEYS) {
+  for (const k of URL_KEYS) {
     const v = s[k];
     if (v !== undefined) p.set(k, v);
   }

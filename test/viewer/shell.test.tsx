@@ -142,8 +142,37 @@ describe('sidebar', () => {
   });
 
   test('opening /logs/patterns directly redirects with replace', async () => {
+    window.location.hash = '#/traces';
+    const length = window.history.length;
+    const replace = vi.spyOn(window.history, 'replaceState');
+    const push = vi.spyOn(window.history, 'pushState');
+    window.history.pushState(null, '', '#/logs/patterns?t=1~2');
+    push.mockClear();
     renderShell('#/logs/patterns?t=1~2');
     await waitFor(() => expect(window.location.hash).toBe('#/logs?t=1~2&mode=patterns'));
+    expect(replace).toHaveBeenCalledWith(null, '', '#/logs?t=1~2&mode=patterns');
+    expect(push).not.toHaveBeenCalled();
+    expect(window.history.length).toBe(length + 1);
+  });
+
+  test('the patterns redirect keeps invalid params for the URL error banner', async () => {
+    renderShell('#/logs/patterns?t=1~2&foo=1');
+    expect((await screen.findByRole('alert')).textContent).toContain('foo: unknown parameter, got 1');
+    await waitFor(() => expect(window.location.hash).toBe('#/logs?t=1~2&mode=patterns'));
+  });
+
+  test('from patterns mode, Logs > Explorer leaves the mode and becomes current', async () => {
+    const user = userEvent.setup();
+    renderShell('#/logs?text=a&mode=patterns');
+    const logs = within(screen.getByRole('region', { name: 'Logs' }));
+    const explorer = logs.getByRole('link', { name: 'Explorer' });
+    expect(explorer.getAttribute('href')).toBe('#/logs?text=a');
+    await user.click(explorer);
+    expect(window.location.hash).toBe('#/logs?text=a');
+    await waitFor(() =>
+      expect(logs.getByRole('link', { name: 'Explorer' }).getAttribute('aria-current')).toBe('page'),
+    );
+    expect(logs.getByRole('link', { name: 'Patterns' }).getAttribute('aria-current')).toBeNull();
   });
 
   test('sidebar hrefs are computed with the carry-over rule', () => {
@@ -205,6 +234,16 @@ describe('shortcuts in the shell', () => {
     expect(within(notice).getByText('span.name == "x"').tagName).toBe('CODE');
     await user.click(within(notice).getByRole('button', { name: 'Dismiss' }));
     expect(screen.queryByRole('status', { name: 'Filter not carried over' })).toBeNull();
+  });
+
+  test('the carry-over notice clears when Back leaves the page it was raised for', async () => {
+    const user = userEvent.setup();
+    renderShell(`#/traces?q=${encodeURIComponent('span.name == "x"')}`);
+    await user.keyboard('gl');
+    expect(await screen.findByRole('status', { name: 'Filter not carried over' })).toBeTruthy();
+    window.history.back();
+    await waitFor(() => expect(window.location.hash.startsWith('#/traces')).toBe(true));
+    await waitFor(() => expect(screen.queryByRole('status', { name: 'Filter not carried over' })).toBeNull());
   });
 
   test('typing g inside the query input does nothing', async () => {

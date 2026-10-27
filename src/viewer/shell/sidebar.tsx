@@ -1,7 +1,7 @@
 import { BarChart3, LayoutDashboard, Moon, ScrollText, Sun, SunMoon, Waypoints } from 'lucide-react';
 import type { JSX, ReactNode } from 'react';
 import type { Manifest } from '../../format/manifest.js';
-import { carryTo } from '../state/carry.js';
+import { applyPatch, carryTo, type UrlPatch } from '../state/carry.js';
 import { type Page, pageOfRoute } from '../state/page-options.js';
 import type { SelectionMode } from '../state/selection.js';
 import { useSelection } from '../state/selection-context.js';
@@ -20,6 +20,8 @@ interface NavTarget {
    * and the plain item for that route is not.
    */
   currentAt?: { route: string; mode: SelectionMode };
+  /** Applied on top of the carried state, so the link always lands on the item (Explorer leaves Patterns mode). */
+  patch?: UrlPatch;
 }
 interface NavItem {
   label: string;
@@ -48,7 +50,7 @@ const SECTIONS: readonly NavSection[] = [
     icon: <ScrollText {...ICON} />,
     target: null,
     items: [
-      { label: 'Explorer', target: { page: 'logs', route: '/logs' } },
+      { label: 'Explorer', target: { page: 'logs', route: '/logs', patch: { mode: null } } },
       {
         label: 'Patterns',
         target: { page: 'logs', route: '/logs/patterns', currentAt: { route: '/logs', mode: 'patterns' } },
@@ -94,7 +96,9 @@ const IDLE = 'text-ink-2 hover:bg-hairline';
 function NavLink(props: { target: NavTarget; current: string; children: ReactNode }): JSX.Element {
   const { target, current } = props;
   const selected = useSelection((s) => isCurrent(target, current, s.mode));
-  const search = useSelection((s) => serializeUrlState(carryTo(s, pageOfRoute(current), target.page).url));
+  const search = useSelection((s) =>
+    serializeUrlState(applyPatch(carryTo(s, pageOfRoute(current), target.page).url, target.patch ?? {})),
+  );
   const goTo = useGoTo();
   return (
     <a
@@ -102,7 +106,7 @@ function NavLink(props: { target: NavTarget; current: string; children: ReactNod
       onClick={(e) => {
         if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
         e.preventDefault();
-        goTo(target.page, target.route);
+        goTo(target.page, target.route, target.patch);
       }}
       className={`${ROW} ${selected ? SELECTED : IDLE}`}
       aria-current={selected ? 'page' : undefined}
