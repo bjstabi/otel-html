@@ -87,6 +87,11 @@ export function logTime(l: LogRecordRecord): RelNanos {
   return l.time ?? l.observedTime ?? (0 as RelNanos);
 }
 
+/** Where `logTime` took its value from: `time`, `observedTime` (`observed`), or neither (`none`, the epoch). */
+export function logTimeSource(l: LogRecordRecord): 'time' | 'observed' | 'none' {
+  return l.time !== null ? 'time' : l.observedTime !== null ? 'observed' : 'none';
+}
+
 export interface MetricPointRecord {
   readonly name: string;
   readonly description: string;
