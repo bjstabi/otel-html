@@ -268,7 +268,12 @@ export function QueryBar(props: {
     }
   };
 
-  const commitTokens = (next: readonly FilterToken[]): void => setCondition(tokensToOttl(next));
+  const commitTokens = (next: readonly FilterToken[]): void => {
+    const src = tokensToOttl(next);
+    // Compile first so an invalid regex or a path from the other signal never reaches the store.
+    if (src !== null) compileCondition(src, props.signal === 'log' ? 'log_record' : 'span');
+    setCondition(src);
+  };
   const current = tokens ?? [];
 
   const checkRaw = (src: string): string | null => {

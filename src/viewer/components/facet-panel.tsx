@@ -222,7 +222,10 @@ function FacetBlock(props: {
 }): JSX.Element | null {
   const { def, facets } = props;
   const total = facets.total(def.key);
-  const matches = matchingValues(facets, def.key, props.search);
+  // A severity value outside the band names is bad rollup data; skip it rather than filter `log.attributes["severity"]`.
+  const matches = matchingValues(facets, def.key, props.search).filter(
+    (v) => !(props.signal === 'log' && def.key === SEVERITY_FACET) || isSeverityKey(v.value),
+  );
   const values = matches.slice(0, VALUES_PER_FACET);
   if (total === 0 || values.length === 0) return null;
   const kind = facets.kind(def.key);

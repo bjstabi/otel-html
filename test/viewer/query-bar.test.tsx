@@ -134,7 +134,7 @@ describe('QueryBar', () => {
     const store = createSelectionStore({ q: 'log.severity_number >= SEVERITY_NUMBER_WARN' });
     render(
       <SelectionProvider store={store}>
-        <QueryBar signal="span" />
+        <QueryBar signal="log" />
       </SelectionProvider>,
     );
     const value = screen.getByRole('textbox', { name: 'Value of log.severity_number' });
@@ -252,5 +252,25 @@ describe('QueryBar', () => {
       'value',
       'matches',
     );
+  });
+
+  test('an invalid regex in a matches chip is rejected and not stored', async () => {
+    const user = userEvent.setup();
+    const store = setup({ q: 'IsMatch(log.body.string, "a.*")' }, 'log');
+    const value = screen.getByRole('textbox', { name: 'Value of log.body.string' });
+    await user.clear(value);
+    await user.type(value, '(unclosed{Enter}');
+    expect(screen.getByRole('alert')).toBeTruthy();
+    expect(store.getState().condition).toBe('IsMatch(log.body.string, "a.*")');
+  });
+
+  test('adding a span path in log mode is rejected', async () => {
+    const user = userEvent.setup();
+    const store = setup({}, 'log');
+    await user.type(screen.getByRole('textbox', { name: 'New filter key' }), 'span.name');
+    await user.type(screen.getByRole('textbox', { name: 'New filter value' }), 'x');
+    await user.click(screen.getByRole('button', { name: 'Add filter' }));
+    expect(screen.getByRole('alert').textContent).toMatch(/span\.name/);
+    expect(store.getState().condition).toBeNull();
   });
 });

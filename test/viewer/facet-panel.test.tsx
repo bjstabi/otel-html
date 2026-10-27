@@ -258,7 +258,9 @@ describe('FacetPanel (logs)', () => {
     for (const [k, v, n] of [
       ['severity', 'warn', 3],
       ['severity', 'error', 2],
+      ['severity', 'bogus', 1],
       ['service.name', 'checkout', 4],
+      ['host.name', 'h1', 1],
       ['instrumentation_scope.name', 'lib', 1],
       ['event.name', 'checkout.done', 2],
       ['trace.present', 'yes', 3],
@@ -318,9 +320,15 @@ describe('FacetPanel (logs)', () => {
     expect(screen.getByTestId('facet-row:trace.present:no').getAttribute('data-state')).toBe('include');
   });
 
+  test('a severity value that is not a band is skipped', () => {
+    setupLog();
+    expect(screen.queryByTestId('facet-row:severity:bogus')).toBeNull();
+    expect(screen.getByTestId('facet-row:severity:warn')).toBeTruthy();
+  });
+
   test('log order and headings', () => {
     setupLog();
     const names = screen.getAllByRole('region').map((r) => r.getAttribute('aria-label'));
-    expect(names.slice(0, 5)).toEqual(['Severity', 'Service', 'Scope', 'Event name', 'Has trace']);
+    expect(names.slice(0, 6)).toEqual(['Severity', 'Service', 'Host', 'Scope', 'Event name', 'Has trace']);
   });
 });
