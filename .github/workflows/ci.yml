@@ -21,8 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: jdx/mise-action@82a612c5ab8bcda7cc5db6b7e81a8e7584c3dc6e # v5.2.3
-      - run: mise run setup
+      - uses: ./.github/actions/setup
       - run: mise run gen:check
       - run: mise run check
 
@@ -36,8 +35,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: jdx/mise-action@82a612c5ab8bcda7cc5db6b7e81a8e7584c3dc6e # v5.2.3
-      - run: mise run setup
+      - uses: ./.github/actions/setup
       - run: mise run test:unit
 
   build:
@@ -45,8 +43,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: jdx/mise-action@82a612c5ab8bcda7cc5db6b7e81a8e7584c3dc6e # v5.2.3
-      - run: mise run setup
+      - uses: ./.github/actions/setup
       # `check:package` (publint + attw) depends on `build`, so this one task builds and then checks the package.
       - run: mise run check:package
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -68,17 +65,23 @@ jobs:
           - project: webkit
             perf_factor: 6
     runs-on: ubuntu-latest
+    # The official image ships all three browsers and their OS libraries, matching @playwright/test (keep this tag
+    # in step with package.json). `playwright install --with-deps webkit` spent ~9 of 10 minutes in apt fetching
+    # ~190 packages. Non-root (the runner's uid) because Firefox refuses to run as root; HOME is /github/home.
+    container:
+      image: mcr.microsoft.com/playwright:v1.64.1-noble@sha256:47b510dd9230bf0b9bfc9b20102241e577ea7a99334ab4c3ca19f19770e9b8ea
+      options: --user 1001 --ipc=host
     env:
       OTEL_HTML_PERF_FACTOR: ${{ matrix.perf_factor || 1 }}
+      # The image already has the browsers; test:e2e would otherwise run `playwright install` for all three.
+      OTEL_HTML_SKIP_BROWSER_INSTALL: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: jdx/mise-action@82a612c5ab8bcda7cc5db6b7e81a8e7584c3dc6e # v5.2.3
-      - run: mise run setup
+      - uses: ./.github/actions/setup
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: dist
           path: dist/
-      - run: pnpm exec playwright install --with-deps ${{ matrix.project }}
       # --skip-deps: use the dist/ built and package-checked by the build job instead of rebuilding.
       # Playwright projects are named `<browser>-file` and `<browser>-http`.
       - run: mise run --skip-deps test:e2e -- --project '${{ matrix.project }}-*'

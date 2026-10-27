@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { layoutFlame } from '../../src/viewer/components/flame-layout.js';
+import { medianMs } from './median-ms.js';
 import { detailOf, spanIdOf, traceRow } from './trace-rows.js';
 
 const OPTS = { colorBy: 'service', filter: '', errorsOnly: false } as const;
@@ -109,9 +110,8 @@ describe('layoutFlame', () => {
       rows.push(traceRow(i, parent, i * 100, i * 100 + 50, { service: `s${i % 5}` }));
     }
     const { tree } = detailOf(rows);
-    const t0 = performance.now();
-    const { bars } = layoutFlame(tree, OPTS);
-    const ms = performance.now() - t0;
+    const { result, ms } = medianMs(() => layoutFlame(tree, OPTS));
+    const { bars } = result;
     expect(bars).toHaveLength(50_000);
     expect(ms).toBeLessThan(1500 * perfFactor);
   });

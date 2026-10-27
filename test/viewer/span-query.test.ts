@@ -15,6 +15,7 @@ import {
   type SpanRow,
   toEntries,
 } from '../../src/viewer/data/span-query.js';
+import { medianMs } from './median-ms.js';
 
 declare const process: { env: { OTEL_HTML_PERF_FACTOR?: string } }; // provided by vitest; the viewer project has no node types
 
@@ -73,12 +74,10 @@ const query = (over: Partial<SpanQuery>): SpanQuery => ({
 });
 
 describe('querySpanEntries', () => {
-  test('filters 100k spans in memory under 150 ms', () => {
+  test('filters 100k spans in memory under 150 ms (median)', () => {
     const entries = synthetic(100_000);
     const q = query({ condition: 'status.code == STATUS_CODE_ERROR' });
-    const t0 = performance.now();
-    const r = querySpanEntries(entries, q);
-    const ms = performance.now() - t0;
+    const { result: r, ms } = medianMs(() => querySpanEntries(entries, q));
     expect(r.total).toBe(2000);
     expect(r.rows).toHaveLength(100);
     expect(r.facets.total('service.name')).toBe(2000);
