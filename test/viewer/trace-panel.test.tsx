@@ -453,6 +453,7 @@ describe('TracePanel Logs tabs', () => {
     initial: Parameters<typeof createSelectionStore>[0] = {},
     renderSpan = false,
     logs: readonly LogRow[] = LOGS,
+    traceIds?: readonly TraceId[],
   ) {
     const store = createSelectionStore(initial);
     const jumps: string[] = [];
@@ -470,6 +471,7 @@ describe('TracePanel Logs tabs', () => {
                 traceId={TRACE_ID}
                 layout="overlay"
                 onClose={() => undefined}
+                {...(traceIds === undefined ? {} : { traceIds })}
                 {...(renderSpan ? {} : { renderSpanSection: () => null })}
               />
             </Tooltip.Provider>
@@ -481,6 +483,83 @@ describe('TracePanel Logs tabs', () => {
   }
   const decodedQuery = (hash: string | undefined): string | null =>
     new URLSearchParams((hash ?? '').split('?')[1] ?? '').get('q');
+
+  test('logs load once for both tabs, and a trace change aborts and drops the stale load', async () => {
+    const user = userEvent.setup();
+    const signals: AbortSignal[] = [];
+    const traceLogs = vi.fn((_id: TraceId, signal?: AbortSignal) => {
+      if (signal !== undefined) signals.push(signal);
+      return Promise.resolve(LOGS);
+    });
+    const ds = source({
+      getTrace: () => Promise.resolve({ ...okDetail(), logCount: LOGS.length }),
+      traceLogs,
+    });
+    const store = createSelectionStore({ span: spanIdOf(2) });
+    const view = (traceId: TraceId) => (
+      <ThemeProvider>
+        <GoToContext.Provider value={() => undefined}>
+          <SelectionProvider store={store}>
+            <Tooltip.Provider>
+              <TracePanel dataSource={ds} traceId={traceId} layout="overlay" onClose={() => undefined} />
+            </Tooltip.Provider>
+          </SelectionProvider>
+        </GoToContext.Provider>
+      </ThemeProvider>
+    );
+    const { rerender } = render(view(TRACE_ID));
+    await user.click(await screen.findByRole('tab', { name: 'Logs' }));
+    await screen.findByTestId('trace-logs-tab');
+    await user.click(
+      await within(screen.getByRole('tablist', { name: 'Span views' })).findByRole('tab', { name: 'Logs' }),
+    );
+    await screen.findByTestId('span-logs-tab');
+    expect(traceLogs).toHaveBeenCalledTimes(1);
+    const other = 'b'.repeat(32) as TraceId;
+    rerender(view(other));
+    expect(signals[0]?.aborted).toBe(true);
+    await waitFor(() => expect(traceLogs).toHaveBeenCalledTimes(2));
+    expect(traceLogs.mock.calls[1]?.[0]).toBe(other);
+  });
+
+  test('a failed logs load shows an alert in the trace Logs tab and hides the span Logs tab', async () => {
+    const user = userEvent.setup();
+    const ds = source({
+      getTrace: () => Promise.resolve({ ...okDetail(), logCount: 2 }),
+      traceLogs: () => Promise.reject(new Error('shard 4 is corrupt')),
+    });
+    const store = createSelectionStore({ span: spanIdOf(2) });
+    render(
+      <ThemeProvider>
+        <GoToContext.Provider value={() => undefined}>
+          <SelectionProvider store={store}>
+            <Tooltip.Provider>
+              <TracePanel dataSource={ds} traceId={TRACE_ID} layout="overlay" onClose={() => undefined} />
+            </Tooltip.Provider>
+          </SelectionProvider>
+        </GoToContext.Provider>
+      </ThemeProvider>,
+    );
+    await user.click(await screen.findByRole('tab', { name: 'Logs' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('The logs could not be loaded: shard 4 is corrupt');
+    expect(
+      within(screen.getByRole('tablist', { name: 'Span views' })).queryByRole('tab', { name: 'Logs' }),
+    ).toBeNull();
+  });
+
+  test('a move event with focus inside the embedded list is left to the trace panel', async () => {
+    const user = userEvent.setup();
+    const ids = [TRACE_ID, 'b'.repeat(32) as TraceId];
+    const { store } = mountLogs({ trace: TRACE_ID }, false, LOGS, ids);
+    await user.click(await screen.findByRole('tab', { name: 'Logs' }));
+    const tab = await screen.findByTestId('trace-logs-tab');
+    within(tab).getAllByRole('row')[1]?.focus();
+    act(() => {
+      window.dispatchEvent(new CustomEvent(MOVE_EVENT, { detail: 1 }));
+    });
+    expect(store.getState().traceId).toBe(ids[1]);
+  });
 
   test('the trace Logs tab lists the trace logs in time order and the compiled query is valid', async () => {
     const user = userEvent.setup();

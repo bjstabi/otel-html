@@ -9,7 +9,7 @@ import { LOG_SEVERITY_KEYS } from '../../src/rollups/signal-counts.js';
 import { TimeBuckets } from '../../src/rollups/time-buckets.js';
 import { App } from '../../src/viewer/app.js';
 import type { DataSource, SpanQueryResult } from '../../src/viewer/data/data-source.js';
-import type { LogQueryResult } from '../../src/viewer/data/log-query.js';
+import type { LogQueryResult, LogRow } from '../../src/viewer/data/log-query.js';
 import { Shell } from '../../src/viewer/shell/shell.js';
 import { stepWindow } from '../../src/viewer/shell/time-range.js';
 import { createHashHistory } from '../../src/viewer/state/hash-history.js';
@@ -526,6 +526,26 @@ describe('full-page trace route', () => {
     expect(header.textContent).toContain(TRACE_ID);
     expect(within(header).getByText('p91')).toBeTruthy();
     expect(screen.queryByRole('link', { name: 'Full page' })).toBeNull();
+  });
+
+  test('Open in Logs Explorer replaces a span-only filter and raises no dropped-filter notice', async () => {
+    const user = userEvent.setup();
+    const ds: DataSource = {
+      ...traceDs(),
+      getTrace: () =>
+        Promise.resolve({
+          ...detailOf([traceRow(1, null, 0, 1000, { service: 'checkout', name: 'GET /' })]),
+          logCount: 1,
+        }),
+      traceLogs: () => Promise.resolve([] as readonly LogRow[]),
+    };
+    renderShell(`#/traces/trace/${TRACE_ID}?tab=logs&q=${encodeURIComponent('span.name == "x"')}`, ds);
+    await user.click(await screen.findByRole('button', { name: 'Open in Logs Explorer' }));
+    await waitFor(() => expect(window.location.hash.startsWith('#/logs?')).toBe(true));
+    expect(new URLSearchParams(window.location.hash.split('?')[1]).get('q')).toBe(
+      `trace_id.string == "${TRACE_ID}"`,
+    );
+    expect(screen.queryByRole('status', { name: 'Filter not carried over' })).toBeNull();
   });
 
   test('an invalid id in the route is a designed error naming the problem', async () => {

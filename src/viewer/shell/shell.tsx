@@ -113,7 +113,9 @@ export function Shell(props: { dataSource: DataSource; history: HistoryPort }): 
     (page, route, extra = {}) => {
       const { url, dropped } = carryTo(store.getState(), pageOfRoute(currentRoute(window)), page);
       navigateRoute(window, route, serializeUrlState(applyPatch(url, extra)));
-      setCarried(dropped.length === 0 ? null : { to: page, dropped });
+      // A patch that sets `q` (or clears it) replaces the carried filter, so nothing was dropped from the user's view.
+      const lost = extra.q === undefined ? dropped : [];
+      setCarried(lost.length === 0 ? null : { to: page, dropped: lost });
     },
     [store],
   );
