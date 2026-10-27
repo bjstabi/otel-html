@@ -80,8 +80,6 @@ export const LINKED_WARN_PLUS_COUNT = 19;
 /** Logs whose body contains "declined" (case-insensitive): the `card declined: 402 decline_code=<x>` lines. */
 export const LINKED_DECLINED_COUNT = 6;
 
-const SCALE_LOG_TRACE_INDEX = 1014;
-
 /** The generated scale input: `SCALE_TRACES` traces of `SCALE_SPANS_PER_TRACE` spans each. */
 export const SCALE_TRACES = 2000;
 export const SCALE_SPANS_PER_TRACE = 50;
@@ -99,9 +97,6 @@ export const SCALE_LOGS = 1_000_000;
 export const SCALE_LOG_FILES = 10;
 /** Logs and spans share a clock origin; log `i` is at origin + `i` x `LOG_STEP_NS` (10 ms), so the logs span about 2.8 hours. */
 const SCALE_EPOCH_NS = 1_700_000_000_000_000_000n;
-/** A scale trace with 20 or more logs spread over two or more log chunks. */
-export const SCALE_LOG_TRACE: string = scaleTraceId(SCALE_LOG_TRACE_INDEX);
-
 export const SCALE_LOG_IDS: ScaleLogIds = {
   services: SCALE_SERVICES,
   hosts: ['host-0', 'host-1', 'host-2', 'host-3'],

@@ -5,7 +5,6 @@ import { LOG_STEP_NS } from '../test-support/scale-logs.js';
 import {
   perfFactor,
   reportDir,
-  SCALE_LOG_TRACE,
   SCALE_LOGS,
   SCALE_SERVICES,
   SCALE_SPAN_COUNT,
@@ -312,14 +311,19 @@ test("1M logs: a trace Logs tab loads only that trace's log chunks", { tag: '@pe
 }) => {
   const dir = fileURLToPath(reportDir('scale'));
   const allLogChunks = readdirSync(`${dir}data/chunks/logs`).filter((f) => f.endsWith('.js'));
-  const shard = SCALE_LOG_TRACE.slice(0, 2);
-  const body = readFileSync(`${dir}data/traces/${shard}.js`, 'utf8');
-  const payload = body.slice(body.indexOf(',') + 1, body.lastIndexOf(')'));
-  const entry = (JSON.parse(payload) as Record<string, { logs: number; logChunks: string[] }>)[
-    SCALE_LOG_TRACE
-  ];
-  expect(entry?.logs).toBeGreaterThanOrEqual(20);
-  expect(entry?.logChunks.length).toBeGreaterThanOrEqual(2);
+  // Interval flushes cut log chunks too, so which traces straddle a chunk boundary depends on machine speed: the
+  // trace is picked from the report's own index, the first (by id) with 20+ logs over two or more chunks.
+  const candidates = readdirSync(`${dir}data/traces`)
+    .filter((f) => f.endsWith('.js'))
+    .flatMap((f) => {
+      const body = readFileSync(`${dir}data/traces/${f}`, 'utf8');
+      const payload = body.slice(body.indexOf(',') + 1, body.lastIndexOf(')'));
+      return Object.entries(JSON.parse(payload) as Record<string, { logs?: number; logChunks?: string[] }>);
+    })
+    .filter(([, e]) => (e.logs ?? 0) >= 20 && (e.logChunks?.length ?? 0) >= 2)
+    .sort(([a], [b]) => (a < b ? -1 : 1));
+  const [traceId, entry] = candidates[0] ?? [];
+  expect(traceId).toBeDefined();
 
   // Playwright's request events miss file:// script loads in Firefox, and resource timing can miss them elsewhere;
   // an init script also records every <script src> the viewer inserts, and the witnesses are merged.
@@ -332,7 +336,7 @@ test("1M logs: a trace Logs tab loads only that trace's log chunks", { tag: '@pe
           if (n instanceof HTMLScriptElement && n.src !== '') w.__ohScripts.push(n.src);
     }).observe(document, { childList: true, subtree: true });
   });
-  await page.goto(`${reportUrl('scale')}/index.html#/traces?trace=${SCALE_LOG_TRACE}&tab=logs`);
+  await page.goto(`${reportUrl('scale')}/index.html#/traces?trace=${traceId}&tab=logs`);
   const tab = page.getByTestId('trace-logs-tab');
   await expect(tab.getByRole('row').nth(1)).toBeVisible({ timeout: 30_000 });
   await expect(tab).toContainText(`${entry?.logs} logs`);
