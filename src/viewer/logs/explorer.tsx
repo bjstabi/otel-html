@@ -15,7 +15,7 @@ import {
 } from '../components/explorer-states.js';
 import { downloadBlob, type ExportFormat, exportFileName, exportLogs } from '../components/export.js';
 import { FacetPanel } from '../components/facet-panel.js';
-import { type FilterToken, ottlToTokens, tokensToOttl } from '../components/filter-tokens.js';
+import { withToken } from '../components/filter-tokens.js';
 import { GroupTable } from '../components/group-table.js';
 import { HistogramCard, SEVERITY_SERIES } from '../components/histogram-card.js';
 import { LogList } from '../components/log-list.js';
@@ -31,7 +31,7 @@ import {
   resolvePageMode,
   resolvePageView,
 } from '../state/page-options.js';
-import { useSelection } from '../state/selection-context.js';
+import { useSelection, useSelectionStore } from '../state/selection-context.js';
 import { useColorAssigner } from '../theme/colors-context.js';
 import { useTheme } from '../theme/theme-provider.js';
 import { TracePanel } from '../traces/trace-panel.js';
@@ -85,14 +85,6 @@ const BODY_PATH = 'log.body.string';
 const TRACE_ID_PATH = 'trace_id.string';
 const CORE_FACET_KEYS: ReadonlySet<string> = new Set(DEFAULT_LOG_FACETS.map((f) => f.key));
 
-/** `token` added to `condition`, replacing a token on the same key with the same operator. */
-function withToken(condition: string | null, token: FilterToken): string | null {
-  const tokens = condition === null ? [] : ottlToTokens(condition);
-  // A condition the token model cannot hold (raw OTTL) is kept whole and and-ed with the token.
-  if (tokens === null) return `(${condition}) and ${tokensToOttl([token])}`;
-  return tokensToOttl([...tokens.filter((t) => !(t.key === token.key && t.op === token.op)), token]);
-}
-
 export function ZeroLogs({ manifest }: { manifest: Manifest }): JSX.Element {
   return (
     <section className="max-w-xl rounded-card border border-hairline bg-surface p-6">
@@ -105,13 +97,29 @@ export function ZeroLogs({ manifest }: { manifest: Manifest }): JSX.Element {
   );
 }
 
+/** The notices for a `mode` or `view` in the URL that Logs does not offer; shown with or without logs. */
+function OptionNotices(): JSX.Element {
+  const sel = useSelection((s) => s);
+  const { invalid: invalidMode } = resolvePageMode('logs', sel.mode);
+  const { invalid: invalidView } = resolvePageView('logs', sel.view);
+  return (
+    <>
+      <PageOptionNotice message={invalidMode} onReset={() => sel.setMode(null)} />
+      <PageOptionNotice message={invalidView} onReset={() => sel.setView('list')} />
+    </>
+  );
+}
+
 /** Mockup 03, screen 1: Group into / View controls, severity histogram, facets left and results right. */
 export function LogsExplorer(props: { dataSource: DataSource }): JSX.Element {
   const { manifest } = props.dataSource;
   if (manifest.totals.logs === 0) {
     return (
       <PageChrome title="Logs" signal="log" manifest={manifest}>
-        <ZeroLogs manifest={manifest} />
+        <div className="flex flex-col gap-4">
+          <OptionNotices />
+          <ZeroLogs manifest={manifest} />
+        </div>
       </PageChrome>
     );
   }
@@ -122,8 +130,9 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
   const { dataSource } = props;
   const manifest = dataSource.manifest;
   const sel = useSelection((s) => s);
-  const { mode, invalid: invalidMode } = resolvePageMode('logs', sel.mode);
-  const { view, invalid: invalidView } = resolvePageView('logs', sel.view);
+  const store = useSelectionStore();
+  const { mode } = resolvePageMode('logs', sel.mode);
+  const { view } = resolvePageView('logs', sel.view);
   const { resolved } = useTheme();
   const colors = useColorAssigner();
   const epoch = useMemo(() => parseUnixNanos(manifest.epochUnixNano, 'manifest.epochUnixNano'), [manifest]);
@@ -174,12 +183,14 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
     dataSource.hasTrace(row.traceId).then(
       (spans) => {
         setActionError(null);
+        // The filter may have changed while the lookup ran: read the selection as it is now, not as rendered.
+        const now = store.getState();
         if (spans) {
-          sel.selectTrace(row.traceId);
-          sel.setTab('trace', 'logs');
+          now.selectTrace(row.traceId);
+          now.setTab('trace', 'logs');
         } else {
-          sel.setCondition(withToken(sel.condition, { key: TRACE_ID_PATH, op: '==', value: row.traceId }));
-          sel.setMode(null);
+          now.setCondition(withToken(now.condition, { key: TRACE_ID_PATH, op: '==', value: row.traceId }));
+          now.setMode(null);
         }
       },
       (e: unknown) => fail('The trace could not be opened', e),
@@ -332,8 +343,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
   return (
     <PageChrome title="Logs" signal="log" manifest={manifest} exportItems={exportItems}>
       <div className="flex flex-col gap-4">
-        <PageOptionNotice message={invalidMode} onReset={() => sel.setMode(null)} />
-        <PageOptionNotice message={invalidView} onReset={() => sel.setView('list')} />
+        <OptionNotices />
         <ExplorerControls<PageMode<'logs'>, PageView<'logs'>>
           modeLegend="Group into"
           modePrefix="Group into"

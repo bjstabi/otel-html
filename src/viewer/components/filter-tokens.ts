@@ -365,3 +365,29 @@ export function facetToken(
     }
   }
 }
+
+/**
+ * `token` added to `condition`, replacing a token on the same key with the same operator. A condition the token model
+ * cannot hold (raw OTTL) is kept whole and and-ed with the token; a token this function added last time is replaced,
+ * so repeating the call never stacks wrappers.
+ */
+export function withToken(condition: string | null, token: FilterToken): string | null {
+  const tokens = condition === null ? [] : ottlToTokens(condition);
+  if (tokens !== null) {
+    return tokensToOttl([...tokens.filter((t) => !(t.key === token.key && t.op === token.op)), token]);
+  }
+  const added = tokensToOttl([token]);
+  let kept = `(${condition})`;
+  try {
+    const e = parseCondition(condition ?? '');
+    if (e.type === 'and') {
+      const last = termToToken(e.right);
+      if (last !== null && last.key === token.key && last.op === token.op) {
+        kept = `(${printCondition(e.left)})`;
+      }
+    }
+  } catch {
+    // Unparseable text is wrapped as it is; the store's own validation reports it.
+  }
+  return `${kept} and ${added}`;
+}

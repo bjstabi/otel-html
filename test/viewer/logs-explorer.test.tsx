@@ -256,6 +256,37 @@ describe('LogsExplorer', () => {
     );
   });
 
+  test('clicking a pattern again with a raw OTTL query does not stack IsMatch wrappers', async () => {
+    const user = userEvent.setup();
+    const { store } = setup({
+      initial: { mode: 'patterns', q: 'log.severity_number > 3 or log.body.string == "x"' },
+    });
+    await user.click(await screen.findByText('card declined: <*> <*>'));
+    const once = store.getState().condition;
+    expect(once).toMatch(/^\(.*\) and IsMatch\(/);
+    await user.click(screen.getByRole('button', { name: 'Patterns' }));
+    await user.click(await screen.findByText('card declined: <*> <*>'));
+    expect(store.getState().condition).toBe(once);
+  });
+
+  test('a trace without spans filters on the condition as it is after the lookup, not before', async () => {
+    const user = userEvent.setup();
+    let settle: (spans: boolean) => void = () => {};
+    const { store } = setup({
+      initial: { mode: 'traces' },
+      hasTrace: () =>
+        new Promise<boolean>((resolve) => {
+          settle = resolve;
+        }),
+    });
+    await user.click(await screen.findByText(TRACE));
+    act(() => store.getState().setCondition('log.body.string == "edited meanwhile"'));
+    await act(async () => settle(false));
+    expect(store.getState().condition).toBe(
+      `log.body.string == "edited meanwhile" and trace_id.string == "${TRACE}"`,
+    );
+  });
+
   test('Traces mode lists a trace row; a trace with spans opens the trace panel on its Logs tab', async () => {
     const user = userEvent.setup();
     const { store } = setup({ initial: { mode: 'traces' } });
@@ -402,6 +433,13 @@ describe('LogsExplorer', () => {
     if (card === null) throw new Error('the zero state is a section');
     expect(card.textContent).toContain('12 spans and 7 metric data points');
     expect(queryLogs).not.toHaveBeenCalled();
+  });
+
+  test('a zero-log report still shows the invalid mode notice', () => {
+    setup({ logs: 0, initial: { mode: 'spans', view: 'pointplot' } });
+    const alerts = screen.getAllByRole('alert').map((a) => a.textContent);
+    expect(alerts.some((t) => t?.includes('mode=spans is not a Logs grouping'))).toBe(true);
+    expect(alerts.some((t) => t?.includes('view=pointplot is not a Logs view'))).toBe(true);
   });
 
   test('a failing query renders a designed error with its message', async () => {
