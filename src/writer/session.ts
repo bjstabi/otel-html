@@ -535,6 +535,7 @@ class Session implements WriterSession {
       const t = logTime(log);
       this.#rollups.logs.add(target);
       this.#logs.push(log);
+      if (log.traceId !== null) this.#traceIndex.addLog(log, this.#logs.pendingKey);
       this.#totals.logs++;
       this.#extend(t, t);
       if (this.#logs.isFull(this.#config.writer.chunkTargetBytes)) this.#cutSync(this.#logs);

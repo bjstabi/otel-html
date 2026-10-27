@@ -130,12 +130,13 @@ export function createWindowedSource(
     },
 
     async hasTrace(traceId: TraceId) {
-      return (await loadTraceEntry(loader, manifest, traceId)) !== null;
+      const entry = await loadTraceEntry(loader, manifest, traceId);
+      return entry !== null && entry.spans > 0;
     },
 
     async getTrace(traceId: TraceId) {
       const entry = await loadTraceEntry(loader, manifest, traceId);
-      if (entry === null) throw traceNotFound(traceId);
+      if (entry === null || entry.spans === 0) throw traceNotFound(traceId);
       // After a crash the shard can reference chunks the manifest does not list yet: ignore those.
       const chunks = [...new Set(entry.chunks)].flatMap((key) => {
         const c = byKey.get(key);

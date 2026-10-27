@@ -3,7 +3,7 @@ import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
 import { type TraceEntry, TraceShardSchema } from '../../src/format/trace-shard.js';
 import { mergeReports } from '../../src/writer/merge.js';
 import { openSession } from '../../src/writer/session.js';
-import { span, TRACE_ID, traceRequest } from '../../test-support/otlp-builders.js';
+import { logRecord, logsRequest, span, TRACE_ID, traceRequest } from '../../test-support/otlp-builders.js';
 import {
   createProcess,
   createTestWriter,
@@ -106,5 +106,22 @@ describe('kill mid-flush, then append', () => {
     expect(summary.totals.spans).toBe(3);
     expect(manifestOf(w, 'r').complete).toBe(true);
     expectComplete(w, 'r', 3);
+  });
+});
+
+describe('a trace with logs in several log chunks', () => {
+  test('the index lists each log chunk, and a span-less trace still gets an entry', async () => {
+    const w = createTestWriter();
+    const s = await openSession(w.deps, { out: 'r', config, mode: 'create' });
+    const log = (traceId: string, spanId?: string): ReturnType<typeof logRecord> =>
+      logRecord({ traceId, ...(spanId === undefined ? {} : { spanId }) });
+    await s.add(otlp(logsRequest([log(TRACE_ID), logRecord()])), 'l1.json');
+    await s.add(otlp(logsRequest([log(TRACE_ID, spanIdOf(9))])), 'l2.json');
+    await s.close();
+    const entry = entryOf(w, 'r');
+    expect(entry).toMatchObject({ chunks: [], spans: 0, logs: 2, root: null });
+    expect(entry.logChunks).toHaveLength(2);
+    expect(new Set(entry.logChunks).size).toBe(2);
+    for (const key of entry.logChunks) expect(key).toMatch(/^chunks\/logs\/[0-9]{6}$/);
   });
 });

@@ -267,6 +267,25 @@ describe('windowed strategy', () => {
     expect(loader.calls).toEqual([`data/traces/${id.slice(0, 2)}.js`, chunkPath(3)]);
   });
 
+  test('a trace with logs but no spans is not a trace: hasTrace is false and getTrace rejects', async () => {
+    const id = traceIdOf(77);
+    const files = withShard(six.files, id.slice(0, 2), (e) => {
+      e[id] = {
+        chunks: [],
+        logChunks: ['chunks/logs/000000'],
+        start: 5,
+        end: 5,
+        spans: 0,
+        logs: 1,
+        errors: 0,
+        root: null,
+      } as never;
+    });
+    const { ds } = await windowed(files);
+    expect(await ds.hasTrace(id as TraceId)).toBe(false);
+    await expect(ds.getTrace(id as TraceId)).rejects.toThrow(/not found/);
+  });
+
   test('a trace the shard does not know is reported precisely', async () => {
     const { ds } = await windowed();
     await expect(ds.getTrace(traceIdOf(77) as TraceId)).rejects.toThrow(/not found/);

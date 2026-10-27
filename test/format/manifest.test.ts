@@ -130,7 +130,16 @@ describe('session state', () => {
     dedupe: ['abc'],
     traceIndex: {
       '5b': {
-        [TRACE_ID]: { chunks: ['chunks/spans/000000'], start: 0, end: 5, spans: 2, errors: 0, root: null },
+        [TRACE_ID]: {
+          chunks: ['chunks/spans/000000'],
+          logChunks: [],
+          start: 0,
+          end: 5,
+          spans: 2,
+          logs: 0,
+          errors: 0,
+          root: null,
+        },
       },
     },
   };
@@ -140,7 +149,18 @@ describe('session state', () => {
   });
   test('rejects a trace index entry with a bad chunk key', () => {
     const bad = {
-      '5b': { [TRACE_ID]: { chunks: ['../x'], start: 0, end: 1, spans: 1, errors: 0, root: null } },
+      '5b': {
+        [TRACE_ID]: {
+          chunks: ['../x'],
+          logChunks: [],
+          start: 0,
+          end: 1,
+          spans: 1,
+          logs: 0,
+          errors: 0,
+          root: null,
+        },
+      },
     };
     expect(failure(() => parseSessionState({ ...state, traceIndex: bad })).path).toBe(
       `state.traceIndex.5b.${TRACE_ID}.chunks[0]`,
