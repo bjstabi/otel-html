@@ -268,10 +268,11 @@ export function QueryBar(props: {
     }
   };
 
-  const commitTokens = (next: readonly FilterToken[]): void => {
+  const commitTokens = (next: readonly FilterToken[], compile = true): void => {
     const src = tokensToOttl(next);
-    // Compile first so an invalid regex or a path from the other signal never reaches the store.
-    if (src !== null) compileCondition(src, props.signal === 'log' ? 'log_record' : 'span');
+    // Compile first so an invalid regex or a path from the other signal never reaches the store. A removal skips
+    // it: it adds nothing, and must work on a condition that already does not compile.
+    if (compile && src !== null) compileCondition(src, props.signal === 'log' ? 'log_record' : 'span');
     setCondition(src);
   };
   const current = tokens ?? [];
@@ -406,7 +407,14 @@ export function QueryBar(props: {
                 onChange={(next) =>
                   guarded(() => commitTokens(current.map((x, j) => (j === i ? editedToken(next, x) : x))))
                 }
-                onRemove={() => guarded(() => commitTokens(current.filter((_, j) => j !== i)))}
+                onRemove={() =>
+                  guarded(() =>
+                    commitTokens(
+                      current.filter((_, j) => j !== i),
+                      false,
+                    ),
+                  )
+                }
               />
             ))}
           </ul>
