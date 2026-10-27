@@ -2,11 +2,14 @@ import type { AnyValue, Attributes } from '../model/anyvalue.js';
 import { anyValueToDisplay } from '../model/anyvalue.js';
 import type { FacetCounts } from './facets.js';
 
-/** Facet values are truncated to this many UTF-16 units. */
+/** Facet values are truncated to at most this many UTF-16 units (never splitting a surrogate pair). */
 export const MAX_FACET_VALUE_LENGTH = 256;
 
 export function truncateFacetValue(v: string): string {
-  return v.length > MAX_FACET_VALUE_LENGTH ? v.slice(0, MAX_FACET_VALUE_LENGTH) : v;
+  if (v.length <= MAX_FACET_VALUE_LENGTH) return v;
+  const cut = v.charCodeAt(MAX_FACET_VALUE_LENGTH - 1);
+  const splitsPair = cut >= 0xd800 && cut <= 0xdbff;
+  return v.slice(0, splitsPair ? MAX_FACET_VALUE_LENGTH - 1 : MAX_FACET_VALUE_LENGTH);
 }
 
 type ScalarKind = 'string' | 'int' | 'double' | 'bool';

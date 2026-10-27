@@ -8,6 +8,10 @@ import { resourceName, serviceName } from '../semconv/resource-name.js';
 /** The registration key of the chunk a span was written to (`chunks/spans/000012`). */
 export type ChunkRef = string;
 
+function emptyEntry(start: number, end: number): TraceEntry {
+  return { chunks: [], logChunks: [], start, end, spans: 0, logs: 0, errors: 0, root: null };
+}
+
 /**
  * trace_id to chunk refs plus a small summary, sharded by the first two hex characters of the id. Spans of
  * one trace may arrive far apart, in different chunks or sessions: entries only ever grow, and the root is
@@ -35,16 +39,7 @@ export class TraceIndex {
   add(span: SpanRecord, chunk: ChunkRef, resource: ResourceRecord): void {
     const e =
       this.#entry(span.traceId) ??
-      this.#create(span.traceId, {
-        chunks: [],
-        logChunks: [],
-        start: span.start,
-        end: span.end,
-        spans: 0,
-        logs: 0,
-        errors: 0,
-        root: null,
-      });
+      this.#create(span.traceId, emptyEntry(span.start, span.end));
     if (e.chunks[e.chunks.length - 1] !== chunk) e.chunks.push(chunk);
     // Timing is span-defined: an entry that so far only knew logs takes the first span's extent outright.
     e.start = e.spans === 0 ? span.start : Math.min(e.start, span.start);
@@ -66,16 +61,7 @@ export class TraceIndex {
     const t = logTime(log);
     const e =
       this.#entry(log.traceId) ??
-      this.#create(log.traceId, {
-        chunks: [],
-        logChunks: [],
-        start: t,
-        end: t,
-        spans: 0,
-        logs: 0,
-        errors: 0,
-        root: null,
-      });
+      this.#create(log.traceId, emptyEntry(t, t));
     if (e.logChunks[e.logChunks.length - 1] !== chunk) e.logChunks.push(chunk);
     if (e.spans === 0) {
       e.start = Math.min(e.start, t);

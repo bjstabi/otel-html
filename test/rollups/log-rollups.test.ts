@@ -69,6 +69,12 @@ describe('LogRollups', () => {
     r.add(logTarget({ attributes: attrs({ big: str('x'.repeat(1000)) }) }));
     expect(r.facets.top('big', 5)).toEqual([{ value: 'x'.repeat(MAX_FACET_VALUE_LENGTH), count: 1 }]);
   });
+  it('truncation never splits a surrogate pair', () => {
+    const r = new LogRollups(opts);
+    // The emoji's high surrogate lands on the last kept unit.
+    r.add(logTarget({ attributes: attrs({ big: str(`${'x'.repeat(MAX_FACET_VALUE_LENGTH - 1)}\u{1F600}tail`) }) }));
+    expect(r.facets.top('big', 5)).toEqual([{ value: 'x'.repeat(MAX_FACET_VALUE_LENGTH - 1), count: 1 }]);
+  });
   it('clusters the body', () => {
     const r = fill();
     expect(r.patterns.clusters().reduce((n, c) => n + c.count, 0)).toBe(3);
