@@ -153,7 +153,7 @@ describe('HistogramCard with log severities', () => {
     b.add(0 as RelNanos, 'info', 5);
     render(
       <SelectionProvider store={createSelectionStore({})}>
-        <HistogramCard buckets={b} series={SEVERITY_SERIES} title="Logs over time" topFirst />
+        <HistogramCard buckets={b} series={SEVERITY_SERIES} title="Logs over time" />
       </SelectionProvider>,
     );
     const img = screen.getByRole('img');
@@ -170,6 +170,25 @@ describe('HistogramCard with log severities', () => {
   });
 
   test('severity tokens are css variables', () => {
-    for (const s of SEVERITY_SERIES) expect(s.color).toBe(`var(--oh-sev-${s.key})`);
+    for (const s of SEVERITY_SERIES.series) expect(s.color).toBe(`var(--oh-sev-${s.key})`);
+  });
+
+  test('the noun and error total come from the series set, not the title', () => {
+    const b = new TimeBuckets<LogSeverityKey>(LOG_SEVERITY_KEYS);
+    b.add(0 as RelNanos, 'fatal', 1);
+    b.add(0 as RelNanos, 'error', 2);
+    b.add(0 as RelNanos, 'info', 37);
+    render(
+      <SelectionProvider store={createSelectionStore({})}>
+        <HistogramCard buckets={b} series={SEVERITY_SERIES} title="40 logs by severity" />
+      </SelectionProvider>,
+    );
+    expect(screen.getByText('40 logs')).toBeTruthy();
+    expect(screen.getByText('3 errors')).toBeTruthy();
+    const opt = JSON.parse(screen.getByRole('img').getAttribute('data-option') ?? '{}') as {
+      series: { name: string; itemStyle: { decal?: unknown } }[];
+    };
+    const hatched = opt.series.filter((x) => x.itemStyle.decal !== undefined).map((x) => x.name);
+    expect(hatched.sort()).toEqual(['ERROR', 'FATAL']);
   });
 });

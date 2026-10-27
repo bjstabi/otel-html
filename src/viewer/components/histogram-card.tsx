@@ -30,25 +30,45 @@ export interface HistogramSeries<K extends string> {
   key: K;
   label: string;
   color: string;
+  /** Repeat the colour with a hatch pattern (error-like series); also counted in the "errors" total. */
+  hatch?: boolean;
+}
+
+/** A histogram's series with how the card words and stacks them. */
+export interface HistogramSeriesSet<K extends string> {
+  /** In legend order. */
+  series: readonly HistogramSeries<K>[];
+  /** Plural noun for the totals line ("spans", "logs"). */
+  noun: string;
+  /** Stack the first series on top (legend order then matches the stack, top to bottom). */
+  topFirst: boolean;
 }
 
 /** Span status series, bottom of the stack first; errors keep their hatch. */
-export const SPAN_STATUS_SERIES: readonly HistogramSeries<SpanStatusKey>[] = [
-  { key: 'ok', label: 'ok', color: 'var(--oh-series-1)' },
-  { key: 'error', label: 'error', color: 'var(--oh-critical)' },
-  { key: 'unset', label: 'unset', color: 'var(--oh-series-other)' },
-];
+export const SPAN_STATUS_SERIES: HistogramSeriesSet<SpanStatusKey> = {
+  noun: 'spans',
+  topFirst: false,
+  series: [
+    { key: 'ok', label: 'ok', color: 'var(--oh-series-1)' },
+    { key: 'error', label: 'error', color: 'var(--oh-critical)', hatch: true },
+    { key: 'unset', label: 'unset', color: 'var(--oh-series-other)' },
+  ],
+};
 
-/** Log severity series in legend order, most severe first (pass `topFirst` so fatal stacks on top). */
-export const SEVERITY_SERIES: readonly HistogramSeries<LogSeverityKey>[] = [
-  { key: 'fatal', label: 'FATAL', color: 'var(--oh-sev-fatal)' },
-  { key: 'error', label: 'ERROR', color: 'var(--oh-sev-error)' },
-  { key: 'warn', label: 'WARN', color: 'var(--oh-sev-warn)' },
-  { key: 'info', label: 'INFO', color: 'var(--oh-sev-info)' },
-  { key: 'debug', label: 'DEBUG', color: 'var(--oh-sev-debug)' },
-  { key: 'trace', label: 'TRACE', color: 'var(--oh-sev-trace)' },
-  { key: 'unspecified', label: 'UNSPECIFIED', color: 'var(--oh-sev-unspecified)' },
-];
+/** Log severity series in legend order, most severe first; fatal stacks on top. */
+export const SEVERITY_SERIES: HistogramSeriesSet<LogSeverityKey> = {
+  noun: 'logs',
+  topFirst: true,
+  series: [
+    { key: 'fatal', label: 'FATAL', color: 'var(--oh-sev-fatal)', hatch: true },
+    { key: 'error', label: 'ERROR', color: 'var(--oh-sev-error)', hatch: true },
+    { key: 'warn', label: 'WARN', color: 'var(--oh-sev-warn)' },
+    { key: 'info', label: 'INFO', color: 'var(--oh-sev-info)' },
+    { key: 'debug', label: 'DEBUG', color: 'var(--oh-sev-debug)' },
+    { key: 'trace', label: 'TRACE', color: 'var(--oh-sev-trace)' },
+    { key: 'unspecified', label: 'UNSPECIFIED', color: 'var(--oh-sev-unspecified)' },
+  ],
+};
 
 /** Sum runs of neighbouring buckets so at most `maxColumns` remain; columns stay aligned to `startNs`. */
 export function coarsenBuckets<K extends string>(
@@ -113,9 +133,7 @@ function sum(xs: readonly number[]): number {
 
 export function buildHistogramOption<K extends string>(
   b: BucketView<K>,
-  series: readonly HistogramSeries<K>[],
-  /** Stack the first series on top (legend order matches the stack, top to bottom). */
-  topFirst = false,
+  { series, topFirst }: Pick<HistogramSeriesSet<K>, 'series' | 'topFirst'>,
 ) {
   const x = Array.from({ length: b.length }, (_, i) => seconds(b.startNs + i * b.widthNs));
   const bars = series.map((s) => {
@@ -126,7 +144,7 @@ export function buildHistogramOption<K extends string>(
       stack: 'total',
       data: Array.from({ length: b.length }, (_, i) => b.counts(s.key)[i] ?? 0),
       itemStyle:
-        s.key === 'error'
+        s.hatch === true
           ? {
               color,
               // Colour is never the only encoding for errors: a hatch pattern repeats it.
@@ -156,12 +174,10 @@ export function buildHistogramOption<K extends string>(
 /** Stacked histogram over time. Drag (or use the keyboard) to brush a window into the selection. */
 export function HistogramCard<K extends string>(props: {
   buckets: TimeBuckets<K>;
-  series: readonly HistogramSeries<K>[];
+  series: HistogramSeriesSet<K>;
   rangeEnd?: number;
-  /** Card heading and noun for the totals: "Spans over time" by default, e.g. "Logs over time". */
+  /** Card heading ("Spans over time" by default). */
   title?: string;
-  /** Stack the first series on top (severity: fatal). */
-  topFirst?: boolean;
 }): JSX.Element {
   const buckets = useMemo(() => coarsenBuckets(props.buckets), [props.buckets]);
   const setWindow = useSelection((s) => s.setWindow);
@@ -178,15 +194,15 @@ export function HistogramCard<K extends string>(props: {
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: themeTick re-reads the CSS colour tokens
   const option = useMemo(
-    () => buildHistogramOption(buckets, props.series, props.topFirst),
-    [buckets, props.series, props.topFirst, themeTick],
+    () => buildHistogramOption(buckets, props.series),
+    [buckets, props.series, themeTick],
   );
   const total = sum(buckets.keys.map((k) => buckets.total(k)));
   const title = props.title ?? 'Spans over time';
-  const noun = (title.split(' ')[0] ?? 'spans').toLowerCase();
-  // The series keyed `error` (span status or log severity) gets its own count beside the total.
-  const errorSeries = props.series.find((s) => s.key === 'error');
-  const errors = errorSeries === undefined ? null : buckets.total(errorSeries.key);
+  const noun = props.series.noun;
+  // Hatched series are the error-like ones; their counts add up to the "errors" total.
+  const hatched = props.series.series.filter((x) => x.hatch === true);
+  const errors = hatched.length === 0 ? null : sum(hatched.map((x) => buckets.total(x.key)));
   const last = Math.max(0, buckets.length - 1);
 
   const indexAt = (e: PointerEvent<HTMLDivElement>): number => {
@@ -229,11 +245,7 @@ export function HistogramCard<K extends string>(props: {
         <span className="font-mono tabular-nums">
           {total} {noun}
         </span>
-        {errorSeries !== undefined && (
-          <span className="font-mono tabular-nums text-critical">
-            {errors} {errorSeries.label.toLowerCase()}s
-          </span>
-        )}
+        {errors !== null && <span className="font-mono tabular-nums text-critical">{errors} errors</span>}
         <span className="ml-auto text-xs text-muted">
           Drag to select a time range; arrow keys and Enter also work
         </span>
@@ -242,7 +254,7 @@ export function HistogramCard<K extends string>(props: {
         <Chart
           option={option}
           height={160}
-          ariaLabel={`${title}: ${total} ${noun}${errorSeries === undefined ? '' : `, ${errors} ${errorSeries.label.toLowerCase()}s`}`}
+          ariaLabel={`${title}: ${total} ${noun}${errors === null ? '' : `, ${errors} errors`}`}
         />
         {/* biome-ignore lint/a11y/useSemanticElements: a custom brush widget, not a form field group */}
         <div
