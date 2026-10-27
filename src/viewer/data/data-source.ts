@@ -210,13 +210,19 @@ export async function createDataSource(
     },
     querySpans: spanStrategy.querySpans,
     async getTrace(traceId) {
-      // The count comes from the trace index, so opening a trace never waits on (or fails with) the log load.
+      // The count comes from the trace index, so opening a trace never waits on the log load, with one exception
+      // below, and never fails with it.
       const [trace, entry] = await Promise.all([spanStrategy.getTrace(traceId), index.entry(traceId)]);
       if (entry === null || entry.logs === 0) return { ...trace, logCount: 0 };
       if (entry.logChunks.every((k) => listedLogChunks.has(k))) return { ...trace, logCount: entry.logs };
-      // A crash between a flush's shard write and its manifest commit leaves the shard counting logs in chunks the
-      // manifest never listed: count the committed rows instead.
-      return { ...trace, logCount: (await logs.traceLogs(traceId)).length };
+      // Crash only: a crash between a flush's shard write and its manifest commit leaves the shard counting logs in
+      // chunks the manifest never listed. Count the committed rows instead; this waits on the log load, and if that
+      // load fails the index count stands, so the trace still opens.
+      const logCount = await logs.traceLogs(traceId).then(
+        (rows) => rows.length,
+        () => entry.logs,
+      );
+      return { ...trace, logCount };
     },
     hasTrace: spanStrategy.hasTrace,
     percentileOf(service, resource, durationNs) {

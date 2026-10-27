@@ -8,6 +8,7 @@ import { type LogQuery, type LogRef, type LogRow, parseLogRef } from '../../src/
 import { SURROUNDING_CHUNKS_PER_SIDE } from '../../src/viewer/data/log-windowed.js';
 import { createScriptedLoader, type ScriptedLoader } from '../../test-support/scripted-loader.js';
 import {
+  buildLogChunksReport,
   buildLogReport,
   buildOverlappingLogReport,
   type Fixture,
@@ -78,6 +79,28 @@ describe('getTrace logCount after a crash', () => {
     const ds = await createDataSource(createScriptedLoader(ahead()), rep.manifest, budget);
     expect((await ds.getTrace(LOG_TRACE as TraceId)).logCount).toBe(3);
   });
+
+  test.each([
+    ['eager', SMALL],
+    ['windowed', 1],
+  ])(
+    'a failed log load falls back to the index count, never failing the trace (%s logs)',
+    async (_name, budget) => {
+      const base = createScriptedLoader(ahead());
+      const loader: ScriptedLoader = {
+        get calls() {
+          return base.calls;
+        },
+        reset: () => base.reset(),
+        load: (path, key) =>
+          path.startsWith('data/chunks/logs/')
+            ? Promise.reject(new Error('log chunk is corrupt'))
+            : base.load(path, key),
+      };
+      const ds = await createDataSource(loader, rep.manifest, budget);
+      expect((await ds.getTrace(LOG_TRACE as TraceId)).logCount).toBe(7);
+    },
+  );
 });
 
 describe('windowed surroundingLogs over chunks that overlap in time', () => {
@@ -92,6 +115,25 @@ describe('windowed surroundingLogs over chunks that overlap in time', () => {
     expect(bodies(s.before)).toEqual(['inner 50']);
     expect(bodies(s.after)).toEqual(['wide 1000']);
     expect(s.partial).toBe(false);
+  });
+
+  test('a burst of short chunks before the log leaves the after side its own chunk reads', async () => {
+    // The log alone in its chunk at 1000 ns; nine one-log chunks just before it; two far chunks after it.
+    const report = await buildLogChunksReport([
+      [[1000, 'target']],
+      ...Array.from({ length: 9 }, (_, k): [number, string][] => [[990 + k, `before ${990 + k}`]]),
+      [[2000, 'after 2000']],
+      [[3000, 'after 3000']],
+    ]);
+    const eager = await createDataSource(createScriptedLoader(report.files), report.manifest, SMALL);
+    const target = asLogs(await eager.queryLogs(query({ text: 'target' })))[0];
+    if (target === undefined) throw new Error('no target');
+    const ds = await createDataSource(createScriptedLoader(report.files), report.manifest, 1);
+    const s = await ds.surroundingLogs(target.ref, 20);
+    expect(bodies(s.after)).toEqual(['after 2000', 'after 3000']);
+    // The before side reads its 4 nearest chunks and says partial: 5 more could hold logs.
+    expect(bodies(s.before)).toEqual([995, 996, 997, 998].map((t) => `before ${t}`));
+    expect(s.partial).toBe(true);
   });
 });
 
