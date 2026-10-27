@@ -46,9 +46,21 @@ export interface FlameMarker {
   label: string;
 }
 
-/** The label tail on the outlined bar, and a rough width per character of the 11px mono label. */
+/** The label tail on the outlined bar. */
 export const OUTLINE_TAIL = '← emitted this log';
+/** Rough width per character of the 11px mono label, used only where no canvas can measure text (jsdom). */
 const CHAR_PX = 6.6;
+
+/** The shared measuring context: created on first use; null when the environment has no 2D canvas. */
+let measurer: CanvasRenderingContext2D | null | undefined;
+
+/** Width in px of `text` drawn in `font` (a CSS font string), measured on a cached canvas. */
+export function labelWidth(text: string, font: string): number {
+  measurer ??= document.createElement('canvas').getContext('2d');
+  if (measurer === null) return text.length * CHAR_PX;
+  measurer.font = font;
+  return measurer.measureText(text).width;
+}
 
 /** Traces with at most this many spans always draw every bar on its own. */
 export const BATCH_ABOVE_BARS = 2000;
@@ -340,11 +352,13 @@ export function flameOption(bars: readonly FlameBar[], theme: FlameTheme, view: 
     }
     if (x1 - x0 >= 36 && h >= 10) {
       const name = bar.error ? `✕ ${bar.label}` : bar.label;
-      const tailed = outlined && (name.length + OUTLINE_TAIL.length + 2) * CHAR_PX <= x1 - x0 - 8;
+      const font = `11px ${theme.font}`;
+      const withTail = `${name}  ${OUTLINE_TAIL}`;
+      const tailed = outlined && labelWidth(withTail, font) <= x1 - x0 - 8;
       children.push({
         type: 'text',
         style: {
-          text: tailed ? `${name}  ${OUTLINE_TAIL}` : name,
+          text: tailed ? withTail : name,
           x: x0 + 4,
           y: y + h / 2,
           width: x1 - x0 - 8,
@@ -352,7 +366,7 @@ export function flameOption(bars: readonly FlameBar[], theme: FlameTheme, view: 
           ellipsis: '…',
           verticalAlign: 'middle',
           fill: labelColorOn(fill, theme),
-          font: `11px ${theme.font}`,
+          font,
           opacity,
         },
         silent: true,
