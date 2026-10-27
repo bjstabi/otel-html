@@ -226,3 +226,48 @@ export async function buildLogReport(): Promise<Fixture> {
   await session.close();
   return { files: reportFilesFromSnapshot(w.fs.snapshot(), OUT), manifest: manifestOf(w, OUT) };
 }
+
+/**
+ * Two log chunks of one `api`/`h1` stream whose time ranges overlap: chunk 0 holds `wide 0`, `wide 100` and
+ * `wide 1000` (ns after the epoch), chunk 1 holds `inner 50`, which sits between the first two.
+ */
+export async function buildOverlappingLogReport(): Promise<Fixture> {
+  const w = createTestWriter();
+  const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'create' });
+  const base = BigInt(EPOCH_NS);
+  const logs = (bodies: readonly [number, string][]): JsonObject => ({
+    resourceLogs: [
+      {
+        resource: {
+          attributes: [
+            attr('service.name', { stringValue: 'api' }),
+            attr('host.name', { stringValue: 'h1' }),
+          ],
+        },
+        scopeLogs: [
+          {
+            scope: { name: 'test-scope' },
+            logRecords: bodies.map(([ns, body]) =>
+              logRecord({ timeUnixNano: String(base + BigInt(ns)), body: { stringValue: body } }),
+            ),
+          },
+        ],
+      },
+    ],
+  });
+  await session.add(
+    otlp(
+      logs([
+        [0, 'wide 0'],
+        [100, 'wide 100'],
+        [1000, 'wide 1000'],
+      ]),
+    ),
+    'wide',
+  );
+  await session.flush();
+  await session.add(otlp(logs([[50, 'inner 50']])), 'inner');
+  await session.flush();
+  await session.close();
+  return { files: reportFilesFromSnapshot(w.fs.snapshot(), OUT), manifest: manifestOf(w, OUT) };
+}

@@ -9,6 +9,7 @@ import { SURROUNDING_CHUNKS_PER_SIDE } from '../../src/viewer/data/log-windowed.
 import { createScriptedLoader, type ScriptedLoader } from '../../test-support/scripted-loader.js';
 import {
   buildLogReport,
+  buildOverlappingLogReport,
   type Fixture,
   LOG_CHUNK_COUNT,
   LOG_TRACE,
@@ -76,6 +77,21 @@ describe('getTrace logCount after a crash', () => {
   ])('counts only the logs in listed chunks (%s logs)', async (_name, budget) => {
     const ds = await createDataSource(createScriptedLoader(ahead()), rep.manifest, budget);
     expect((await ds.getTrace(LOG_TRACE as TraceId)).logCount).toBe(3);
+  });
+});
+
+describe('windowed surroundingLogs over chunks that overlap in time', () => {
+  test('finds the nearest neighbor even in a chunk that starts after the log chunk', async () => {
+    const over = await buildOverlappingLogReport();
+    const eager = await createDataSource(createScriptedLoader(over.files), over.manifest, SMALL);
+    const target = asLogs(await eager.queryLogs(query({ text: 'wide 100' })))[0];
+    if (target === undefined) throw new Error('no wide 100');
+    const ds = await createDataSource(createScriptedLoader(over.files), over.manifest, 1);
+    expect(ds.logStrategy).toBe('windowed');
+    const s = await ds.surroundingLogs(target.ref, 1);
+    expect(bodies(s.before)).toEqual(['inner 50']);
+    expect(bodies(s.after)).toEqual(['wide 1000']);
+    expect(s.partial).toBe(false);
   });
 });
 

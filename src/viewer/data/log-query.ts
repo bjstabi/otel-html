@@ -184,7 +184,7 @@ export function patternRowsOf(d: Drain): PatternRow[] {
 export const byTimeThenRef = (a: LogRow, b: LogRow): number => a.time - b.time || compareRefs(a.ref, b.ref);
 
 /** Logs from the same stream as `target`: same service and same host. */
-export function sameStream(target: LogRow, row: LogRow): boolean {
+function sameStream(target: LogRow, row: LogRow): boolean {
   return row.service === target.service && row.host === target.host;
 }
 

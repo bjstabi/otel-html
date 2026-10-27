@@ -14,14 +14,15 @@ import {
   type LogRef,
   type LogRow,
   refParts,
-  sameStream,
   surroundingIn,
 } from './log-query.js';
 import { throwIfAborted } from './query-common.js';
 import type { ScriptLoader } from './script-loader.js';
 
-/** Neighbor chunks (by start time) Surrounding logs reads on each side of the log's own chunk before it says partial. */
+/** Neighbor chunks Surrounding logs reads per side, on average, before it says partial. */
 export const SURROUNDING_CHUNKS_PER_SIDE = 4;
+/** Chunks Surrounding logs reads in all, the log's own included. */
+const SURROUNDING_CHUNK_BUDGET = 1 + 2 * SURROUNDING_CHUNKS_PER_SIDE;
 
 /**
  * Newest first (the Logs Explorer default) visits chunks by end time descending, each one whole, so a scan cut
@@ -117,23 +118,30 @@ export function createWindowedLogSource(
     async surroundingLogs(ref, n) {
       checkSurroundingCount(n);
       const { chunk, entries, log } = await locate(ref);
-      const at = chunks.ordered.indexOf(chunk);
+      const loaded = new Set([chunk.n]);
       const rows = entries.map((e) => e.row);
-      const found = (side: -1 | 1): number =>
-        rows.filter((r) => sameStream(log, r) && Math.sign(byTimeThenRef(r, log)) === side).length;
-      /** Reads neighbor chunks on one side until it holds `n` there; true when it stopped at the cap with more left. */
-      const extend = async (side: -1 | 1): Promise<boolean> => {
-        for (let k = 1; k <= SURROUNDING_CHUNKS_PER_SIDE; k++) {
-          if (found(side) >= n) return false;
-          const c = chunks.ordered[at + side * k];
-          if (c === undefined) return false;
-          for (const e of await chunkEntries(c)) rows.push(e.row);
-        }
-        return found(side) < n && chunks.ordered[at + side * (SURROUNDING_CHUNKS_PER_SIDE + 1)] !== undefined;
+      const gap = (c: ManifestChunk): number =>
+        c.end < log.time ? log.time - c.end : c.start > log.time ? c.start - log.time : 0;
+      /** Unread chunks that could hold a log nearer than the `n` found so far on a side, nearest to the log first. */
+      const pending = (): ManifestChunk[] => {
+        if (n === 0) return [];
+        const { before, after } = surroundingIn(log, rows, n);
+        // A side holding `n` reaches only as far as its farthest one; a side short of `n` reaches without bound.
+        const lo = before.length >= n ? (before[0]?.time ?? -Infinity) : -Infinity;
+        const hi = after.length >= n ? (after[after.length - 1]?.time ?? Infinity) : Infinity;
+        return chunks.ordered
+          .filter((c) => !loaded.has(c.n) && c.end >= lo && c.start <= hi)
+          .sort((a, b) => gap(a) - gap(b));
       };
-      const partialBefore = await extend(-1);
-      const partialAfter = await extend(1);
-      return { ...surroundingIn(log, rows, n), log, partial: partialBefore || partialAfter };
+      // Chunks can overlap in time, so the next chunks by start time are not enough: read every chunk that could
+      // still hold a nearer log, up to the budget. Past it the answer may be inexact, and it says partial.
+      let next = pending()[0];
+      while (next !== undefined && loaded.size < SURROUNDING_CHUNK_BUDGET) {
+        loaded.add(next.n);
+        for (const e of await chunkEntries(next)) rows.push(e.row);
+        next = pending()[0];
+      }
+      return { ...surroundingIn(log, rows, n), log, partial: pending().length > 0 };
     },
   };
 }

@@ -64,7 +64,7 @@ export interface SurroundingLogs {
   before: readonly LogRow[];
   log: LogRow;
   after: readonly LogRow[];
-  /** True when the windowed scan stopped at its neighbor-chunk cap before finding `n` on a side. */
+  /** True when the windowed scan stopped at its chunk budget with unread chunks that could hold nearer logs. */
   partial: boolean;
 }
 
