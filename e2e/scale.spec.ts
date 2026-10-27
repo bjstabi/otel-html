@@ -1,8 +1,12 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import type { Page } from '@playwright/test';
+import { LOG_STEP_NS } from '../test-support/scale-logs.js';
 import {
   perfFactor,
   reportDir,
+  SCALE_LOG_TRACE,
+  SCALE_LOGS,
   SCALE_SERVICES,
   SCALE_SPAN_COUNT,
   SCALE_SPANS_PER_TRACE,
@@ -15,6 +19,10 @@ const INTERACTIVE_BUDGET_MS = 3000;
 const FACET_BUDGET_MS = 150;
 /** Timed toggles after one untimed warm-up; the median is compared with the budget. */
 const FACET_SAMPLES = 7;
+
+const SCAN_BUDGET_MS = 5000;
+/** Timed loads after one untimed warm-up load; the median is compared with the budget. */
+const LOAD_SAMPLES = 3;
 
 const SERVICE = SCALE_SERVICES[0];
 /** Span `j` of a trace belongs to service `j % 8`, so the first service owns spans 0, 8, ..., 48 of each trace. */
@@ -185,4 +193,158 @@ test('a report over the eager budget filters by chunk window and opens a trace t
   expect(requested).toContain(`traces/${shard}.js`);
   for (const key of entry?.chunks ?? []) expect(requested).toContain(`${key}.js`);
   expect([...requested].filter((f) => f.startsWith('chunks/')).length).toBeLessThan(spanChunks.length);
+});
+
+const LOGS_GRID = '[role="grid"][aria-label="Results"]';
+const PARTIAL_NOTE = '[role="status"][aria-label="Partial results"]';
+/** Warn and above, as the facet's "And above" writes it. */
+const WARN_UP = 'log.severity_number >= SEVERITY_NUMBER_WARN';
+
+/**
+ * Median milliseconds from navigation start to the frame in which the log grid has rows and, when `partial` is set,
+ * the partial-results note is up. Timed in the page for the reason the span test does; the first load is untimed.
+ */
+async function logsReadyMs(page: Page, url: string, partial: boolean): Promise<number[]> {
+  await page.addInitScript(
+    ({ grid, note, needNote }) => {
+      const w = window as { __OH_LOGS_READY__?: number };
+      const mo = new MutationObserver(() => {
+        const g = document.querySelector(grid);
+        if (g === null || g.querySelectorAll('[role="row"]').length < 2) return;
+        if (needNote && document.querySelector(note) === null) return;
+        mo.disconnect();
+        requestAnimationFrame(() => {
+          w.__OH_LOGS_READY__ = performance.now();
+        });
+      });
+      mo.observe(document, { childList: true, subtree: true });
+    },
+    { grid: LOGS_GRID, note: PARTIAL_NOTE, needNote: partial },
+  );
+  const samples: number[] = [];
+  for (let i = 0; i <= LOAD_SAMPLES; i++) {
+    if (i === 0) await page.goto(url, { waitUntil: 'commit' });
+    else await page.reload({ waitUntil: 'commit' });
+    const ms = Number(
+      await (
+        await page.waitForFunction(() => (window as { __OH_LOGS_READY__?: number }).__OH_LOGS_READY__, null, {
+          timeout: 60_000,
+        })
+      ).jsonValue(),
+    );
+    if (i > 0) samples.push(ms);
+  }
+  return samples;
+}
+
+function median(xs: readonly number[]): number {
+  const sorted = [...xs].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)] ?? Number.POSITIVE_INFINITY;
+}
+
+function report(testInfo: { annotations: { type: string; description?: string }[] }, line: string): void {
+  process.stdout.write(`${line}\n`);
+  testInfo.annotations.push({ type: 'perf', description: line });
+}
+
+for (const name of ['scale', 'huge'] as const) {
+  test(
+    `1M logs (${name}): the Logs landing is windowed and interactive within 3 s (median)`,
+    { tag: '@perf' },
+    async ({ page, reportUrl, browserName }, testInfo) => {
+      const factor = perfFactor();
+      const dir = fileURLToPath(reportDir(name));
+      const logChunks = readdirSync(`${dir}data/chunks/logs`).filter((f) => f.endsWith('.js')).length;
+      expect(logChunks).toBeGreaterThan(10);
+
+      const samples = await logsReadyMs(page, `${reportUrl(name)}/index.html#/logs`, true);
+      const ms = median(samples);
+      // Windowed: the landing shows the newest chunk(s), and says so, instead of reading all of them.
+      await expect(page.getByRole('status', { name: 'Partial results' })).toContainText(
+        new RegExp(`from \\d+ of ${logChunks} chunks`),
+      );
+      await expect(page.getByRole('main').locator('output', { hasText: /\blogs\b/ })).toHaveText(
+        new RegExp(`^${SCALE_LOGS} logs`),
+      );
+      report(
+        testInfo,
+        `PERF ${name} logs landing ${testInfo.project.name} (${browserName}): median ${ms.toFixed(0)} ms, samples [${samples.map((x) => x.toFixed(0)).join(', ')}] (budget ${INTERACTIVE_BUDGET_MS * factor}), factor ${factor}`,
+      );
+      expect(ms).toBeLessThan(INTERACTIVE_BUDGET_MS * factor);
+    },
+  );
+}
+
+test(
+  '1M logs: a one-minute window of warn-and-above logs scans within 5 s and says which chunks it read (median)',
+  { tag: '@perf' },
+  async ({ page, reportUrl, browserName }, testInfo) => {
+    const factor = perfFactor();
+    const logChunks = readdirSync(`${fileURLToPath(reportDir('scale'))}data/chunks/logs`).filter((f) =>
+      f.endsWith('.js'),
+    ).length;
+    // `t` is nanoseconds from the run's first record; a minute of logs sits mid-run, inside one or two chunks.
+    const start = 3000n * 1_000_000_000n;
+    const end = start + 60n * 1_000_000_000n;
+    expect(end / LOG_STEP_NS).toBeLessThan(BigInt(SCALE_LOGS));
+    const hash = `#/logs?q=${encodeURIComponent(WARN_UP)}&t=${start}~${end}`;
+
+    const samples = await logsReadyMs(page, `${reportUrl('scale')}/index.html${hash}`, true);
+    const ms = median(samples);
+    const note = (await page.getByRole('status', { name: 'Partial results' }).textContent()) ?? '';
+    const [, scanned, total] = /from (\d+) of (\d+) chunks/.exec(note) ?? [];
+    expect(Number(total)).toBe(logChunks);
+    expect(Number(scanned)).toBeGreaterThan(0);
+    expect(Number(scanned)).toBeLessThan(5);
+    report(
+      testInfo,
+      `PERF scale log window scan ${testInfo.project.name} (${browserName}): median ${ms.toFixed(0)} ms, ${scanned} of ${total} chunks, samples [${samples.map((x) => x.toFixed(0)).join(', ')}] (budget ${SCAN_BUDGET_MS * factor}), factor ${factor}`,
+    );
+    expect(ms).toBeLessThan(SCAN_BUDGET_MS * factor);
+  },
+);
+
+test("1M logs: a trace Logs tab loads only that trace's log chunks", { tag: '@perf' }, async ({
+  page,
+  reportUrl,
+}) => {
+  const dir = fileURLToPath(reportDir('scale'));
+  const allLogChunks = readdirSync(`${dir}data/chunks/logs`).filter((f) => f.endsWith('.js'));
+  const shard = SCALE_LOG_TRACE.slice(0, 2);
+  const body = readFileSync(`${dir}data/traces/${shard}.js`, 'utf8');
+  const payload = body.slice(body.indexOf(',') + 1, body.lastIndexOf(')'));
+  const entry = (JSON.parse(payload) as Record<string, { logs: number; logChunks: string[] }>)[
+    SCALE_LOG_TRACE
+  ];
+  expect(entry?.logs).toBeGreaterThanOrEqual(20);
+  expect(entry?.logChunks.length).toBeGreaterThanOrEqual(2);
+
+  // Playwright's request events miss file:// script loads in Firefox, and resource timing can miss them elsewhere;
+  // an init script also records every <script src> the viewer inserts, and the witnesses are merged.
+  await page.addInitScript(() => {
+    const w = window as unknown as { __ohScripts: string[] };
+    w.__ohScripts = [];
+    new MutationObserver((records) => {
+      for (const r of records)
+        for (const n of r.addedNodes)
+          if (n instanceof HTMLScriptElement && n.src !== '') w.__ohScripts.push(n.src);
+    }).observe(document, { childList: true, subtree: true });
+  });
+  await page.goto(`${reportUrl('scale')}/index.html#/traces?trace=${SCALE_LOG_TRACE}&tab=logs`);
+  const tab = page.getByTestId('trace-logs-tab');
+  await expect(tab.getByRole('row').nth(1)).toBeVisible({ timeout: 30_000 });
+  await expect(tab).toContainText(`${entry?.logs} logs`);
+
+  const names = await page.evaluate(() => [
+    ...performance.getEntriesByType('resource').map((e) => e.name),
+    ...(window as unknown as { __ohScripts: string[] }).__ohScripts,
+  ]);
+  const loaded = new Set(
+    names.flatMap((url) => {
+      const m = /\/data\/(chunks\/logs\/[^/?#]+)\.js(?:[?#].*)?$/.exec(url);
+      return m?.[1] === undefined ? [] : [m[1]];
+    }),
+  );
+  expect([...loaded].sort()).toEqual([...(entry?.logChunks ?? [])].sort());
+  expect(loaded.size).toBeLessThan(allLogChunks.length);
 });

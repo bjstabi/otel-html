@@ -5,6 +5,7 @@ import { createServer } from 'node:http';
 import { extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { scaleLogsRequest } from '../test-support/scale-logs.js';
 import {
   FIXTURE_REPORTS,
   fixtureFiles,
@@ -21,6 +22,9 @@ import {
   type ReportName,
   RUN_TITLE,
   reportDir,
+  SCALE_LOG_FILES,
+  SCALE_LOG_IDS,
+  SCALE_LOGS,
   SCALE_SERVICES,
   SCALE_SPANS_PER_TRACE,
   SCALE_TRACES,
@@ -250,15 +254,31 @@ function scaleInput(): unknown {
   };
 }
 
-/** One 100k-span input, converted twice: `scale` with default settings (eager) and `huge` over a 5 MB eager budget. */
+/** The scale logs as `SCALE_LOG_FILES` files, each generated and written on its own so memory stays at one file. */
+async function writeScaleLogFiles(dir: URL): Promise<string[]> {
+  const per = SCALE_LOGS / SCALE_LOG_FILES;
+  const files: string[] = [];
+  for (let f = 0; f < SCALE_LOG_FILES; f++) {
+    const file = fileURLToPath(new URL(`logs-${f}.json`, dir));
+    await writeFile(file, JSON.stringify(scaleLogsRequest(f * per, per, SCALE_LOG_IDS)));
+    files.push(file);
+  }
+  return files;
+}
+
+/**
+ * One input of 100k spans and 1M logs (10 files), converted twice: `scale` with default settings (spans eager, logs
+ * windowed) and `huge` over a 5 MB eager budget (both windowed).
+ */
 async function buildScaleReports(): Promise<void> {
   const inputs = new URL('scale-inputs/', REPORTS_DIR);
   await mkdir(inputs, { recursive: true });
   const file = fileURLToPath(new URL('traces.json', inputs));
   await writeFile(file, JSON.stringify(scaleInput()));
+  const all = [file, ...(await writeScaleLogFiles(inputs))];
   await Promise.all([
-    convertTo(reportDir('scale'), [file], 'scale run'),
-    convertTo(reportDir('huge'), [file], 'huge run', {
+    convertTo(reportDir('scale'), all, 'scale run'),
+    convertTo(reportDir('huge'), all, 'huge run', {
       OTEL_HTML_EAGER_BUDGET_BYTES: String(HUGE_EAGER_BUDGET_BYTES),
     }),
   ]);
