@@ -123,10 +123,9 @@ describe('HistogramCard', () => {
       const opt = JSON.parse(screen.getByRole('img').getAttribute('data-option') ?? '{}') as {
         series: { name: string; itemStyle: { color: string } }[];
       };
-      const colors = Object.fromEntries(opt.series.map((s) => [s.name, s.itemStyle.color]));
-      expect(colors.ok).toBe('#123456');
+      expect(opt.series.find((s) => s.name === 'ok')?.itemStyle.color).toBe('#123456');
       // --oh-critical and --oh-series-other are not set in jsdom: never a raw var() reference.
-      for (const c of Object.values(colors)) expect(c).toMatch(/^#[0-9a-f]{6}$/i);
+      for (const s of opt.series) expect(s.itemStyle.color).toMatch(/^#[0-9a-f]{6}$/i);
     } finally {
       document.documentElement.style.removeProperty('--oh-series-1');
     }
