@@ -1,4 +1,4 @@
-import { type JSX, useState } from 'react';
+import { type JSX, type ReactNode, useState } from 'react';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { FacetCounts } from '../../rollups/facets.js';
 import { LOG_SEVERITY_KEYS, type LogSeverityKey } from '../../rollups/signal-counts.js';
@@ -15,6 +15,7 @@ import {
   SEVERITY_PATH,
   tokensToOttl,
 } from './filter-tokens.js';
+import { SeverityLabel } from './severity.js';
 
 /** One duration bin: `[fromNs, toNs)` with the span count inside it. */
 export interface DurationBin {
@@ -90,6 +91,8 @@ const RAW_MESSAGE =
 function FacetRow(props: {
   def: FacetDef;
   value: string;
+  /** What to show instead of the raw value (severity rows show the coloured band). */
+  label?: ReactNode;
   count: number;
   total: number;
   state: 'include' | 'exclude' | null;
@@ -126,7 +129,7 @@ function FacetRow(props: {
         }`}
         title={props.value}
       >
-        {props.value}
+        {props.label ?? props.value}
       </span>
       {props.state === 'exclude' ? <span className="relative text-muted">excluded</span> : null}
       <span className="relative ml-auto font-mono tabular-nums">{props.count}</span>
@@ -245,6 +248,7 @@ function FacetBlock(props: {
                 key={v.value}
                 def={def}
                 value={v.value}
+                label={<SeverityLabel band={band} />}
                 count={v.count}
                 total={total}
                 filterable
