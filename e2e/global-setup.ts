@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import {
   FIXTURE_REPORTS,
-  fixtureFile,
+  fixtureFiles,
   HOSTILE_REPORT_DIR,
   HOSTILE_SPAN_NAME,
   HUGE_EAGER_BUDGET_BYTES,
@@ -266,9 +266,17 @@ async function buildScaleReports(): Promise<void> {
 
 async function buildFixtureReports(): Promise<void> {
   await Promise.all([
-    convertTo(HOSTILE_REPORT_DIR, [fileURLToPath(fixtureFile('hostile'))], 'hostile run'),
+    convertTo(
+      HOSTILE_REPORT_DIR,
+      fixtureFiles('hostile').map((f) => fileURLToPath(f)),
+      'hostile run',
+    ),
     ...FIXTURE_REPORTS.map((name) =>
-      convertTo(reportDir(name), [fileURLToPath(fixtureFile(name))], `${name} fixture`),
+      convertTo(
+        reportDir(name),
+        fixtureFiles(name).map((f) => fileURLToPath(f)),
+        `${name} fixture`,
+      ),
     ),
   ]);
   await cli([

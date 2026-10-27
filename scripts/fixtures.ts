@@ -2,7 +2,15 @@
 // Output is byte-stable: seeded PRNG and ID generator, fixed start time, no wall-clock reads.
 // fixtures/hostile.otlp.json is hand-authored and is only checked for presence here, never rewritten.
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { type HrTime, ROOT_CONTEXT, type Span, SpanKind, SpanStatusCode, trace } from '@opentelemetry/api';
+import {
+  type AnyValue,
+  type HrTime,
+  ROOT_CONTEXT,
+  type Span,
+  SpanKind,
+  SpanStatusCode,
+  trace,
+} from '@opentelemetry/api';
 import { JsonLogsSerializer, JsonTraceSerializer } from '@opentelemetry/otlp-transformer';
 import { resourceFromAttributes } from '@opentelemetry/resources';
 import { InMemoryLogRecordExporter, LoggerProvider, SimpleLogRecordProcessor } from '@opentelemetry/sdk-logs';
@@ -338,9 +346,366 @@ async function buildLogsOnly(): Promise<string> {
   return new TextDecoder().decode(bytes);
 }
 
+const LINKED_SEED = 0x11ced;
+
+type LogContext = { span: Span } | 'none' | 'orphan' | 'dangling';
+interface LinkedLog {
+  service: 'checkout' | 'payments';
+  ctx: LogContext;
+  n: number;
+  text: string;
+  body: AnyValue;
+  attrs?: Record<string, string | number | boolean>;
+  eventName?: string;
+  /** Emit with only `observedTimestamp`. */
+  observedOnly?: boolean;
+}
+
+interface OtlpLogsFile {
+  resourceLogs: {
+    scopeLogs: { logRecords: { timeUnixNano?: string; body?: { stringValue?: string } }[] }[];
+  }[];
+}
+
+/** The SDK stamps a missing `timestamp` with the wall clock; drop it again so the record carries only `observedTimeUnixNano`. */
+function stripWallClockTimestamps(json: string, bodies: ReadonlySet<AnyValue>): string {
+  const file = JSON.parse(json) as OtlpLogsFile;
+  for (const rl of file.resourceLogs)
+    for (const sl of rl.scopeLogs)
+      for (const record of sl.logRecords)
+        if (bodies.has(record.body?.stringValue ?? null)) delete record.timeUnixNano;
+  return JSON.stringify(file);
+}
+
+/** Three traces over `checkout` (runner-7) and `payments` (runner-8), and 40 logs linked to them in the ways the logs explorer must handle. */
+async function buildLinked(): Promise<{ traces: string; logs: string }> {
+  const rand = prng(LINKED_SEED);
+  const ids = seededIds(rand);
+  const spanExporter = new InMemorySpanExporter();
+  const strayExporter = new InMemorySpanExporter();
+  const resourceOf = (service: string, host: string) =>
+    resourceFromAttributes({
+      'service.name': service,
+      'service.version': '3.1.0',
+      'host.name': host,
+      'deployment.environment.name': 'production',
+    });
+  const resources = {
+    checkout: resourceOf('checkout', 'runner-7'),
+    payments: resourceOf('payments', 'runner-8'),
+  } as const;
+  const tracer = (service: keyof typeof resources, exporter: InMemorySpanExporter) =>
+    new BasicTracerProvider({
+      idGenerator: ids,
+      resource: resources[service],
+      spanProcessors: [new SimpleSpanProcessor(exporter)],
+    }).getTracer(`${service}.instrumentation`, '1.0.0');
+  const checkout = tracer('checkout', spanExporter);
+  const payments = tracer('payments', spanExporter);
+  const stray = tracer('payments', strayExporter);
+
+  const open = (
+    t: ReturnType<typeof tracer>,
+    name: string,
+    kind: SpanKind,
+    parent: Span | undefined,
+    startMs: number,
+    endMs: number,
+    fail = false,
+  ): { span: Span; end(): void } => {
+    const ctx = parent === undefined ? ROOT_CONTEXT : trace.setSpan(ROOT_CONTEXT, parent);
+    const span = t.startSpan(name, { kind, startTime: hr(startMs * 1e6) }, ctx);
+    return {
+      span,
+      end: () => {
+        if (fail) span.setStatus({ code: SpanStatusCode.ERROR, message: 'upstream failure' });
+        span.end(hr(endMs * 1e6));
+      },
+    };
+  };
+
+  // Trace 1 (LINKED_TRACE): a successful-looking checkout whose payments span retries a declined card.
+  const c1 = open(checkout, 'POST /checkout', SpanKind.SERVER, undefined, 0, 900);
+  const c2 = open(checkout, 'inventory reserve', SpanKind.INTERNAL, c1.span, 20, 90);
+  const p1 = open(payments, 'payments.Charge', SpanKind.SERVER, c1.span, 100, 800);
+  const p2 = open(payments, 'INSERT charges', SpanKind.CLIENT, p1.span, 150, 200);
+  // Trace 2: a cart read.
+  const c3 = open(checkout, 'GET /cart', SpanKind.SERVER, undefined, 2000, 2300);
+  const c4 = open(checkout, 'cart.load', SpanKind.INTERNAL, c3.span, 2010, 2100);
+  const p3 = open(payments, 'payments.Quote', SpanKind.SERVER, c3.span, 2110, 2250);
+  // Trace 3: a checkout that fails after retries.
+  const c5 = open(checkout, 'POST /checkout', SpanKind.SERVER, undefined, 4000, 5200, true);
+  const p4 = open(payments, 'payments.Charge', SpanKind.SERVER, c5.span, 4100, 5100, true);
+  const p5 = open(payments, 'INSERT charges', SpanKind.CLIENT, p4.span, 4150, 4300, true);
+  // A fourth trace that is never exported: its logs are the orphan.
+  const lost = open(stray, 'payments.Callback', SpanKind.SERVER, undefined, 6000, 6100);
+
+  const danglingContext = trace.setSpanContext(ROOT_CONTEXT, {
+    traceId: c1.span.spanContext().traceId,
+    spanId: 'deadbeefdeadbeef',
+    traceFlags: 1,
+  });
+
+  const declined = (code: string): string => `card declined: 402 decline_code=${code}`;
+  const retry = (ms: number, k: number): string => `retrying charge in ${ms}ms (attempt ${k}/3)`;
+  const entries: [number, LinkedLog][] = [];
+  const at = (ms: number, log: LinkedLog): void => void entries.push([ms, log]);
+
+  // No trace context (5).
+  at(1, { service: 'checkout', ctx: 'none', n: 1, text: 'TRACE', body: 'gc pause 3ms' });
+  at(2, {
+    service: 'checkout',
+    ctx: 'none',
+    n: 5,
+    text: 'DEBUG',
+    body: 'config reloaded from /etc/checkout.yaml',
+  });
+  at(3, { service: 'payments', ctx: 'none', n: 9, text: 'INFO', body: 'worker heartbeat' });
+  at(4, { service: 'payments', ctx: 'none', n: 13, text: 'WARN', body: 'disk usage at 91%' });
+  at(5, { service: 'checkout', ctx: 'none', n: 0, text: '', body: 'unclassified startup banner' });
+  // Trace id absent from the traces file (1), and a span_id that is not in its trace (1).
+  at(6100, {
+    service: 'payments',
+    ctx: 'orphan',
+    n: 17,
+    text: 'ERROR',
+    body: 'late callback for unknown trace',
+  });
+  at(850, {
+    service: 'checkout',
+    ctx: 'dangling',
+    n: 13,
+    text: 'WARN',
+    body: 'span context lost: parent span unknown',
+  });
+  // Trace 1.
+  at(5, {
+    service: 'checkout',
+    ctx: { span: c1.span },
+    n: 9,
+    text: 'INFO',
+    body: { payment: { amount: 4200, currency: 'usd', card: { brand: 'visa', last4: '4242' } } },
+  });
+  at(8, {
+    service: 'checkout',
+    ctx: { span: c1.span },
+    n: 9,
+    text: 'INFO',
+    body: 'charge result={"ok":false,"retryable":true} order_id=ord-1001 user=u-77 duration_ms=213',
+  });
+  at(10, {
+    service: 'checkout',
+    ctx: { span: c1.span },
+    n: 5,
+    text: 'DEBUG',
+    body: 'cache miss key=cart:77',
+  });
+  at(11, { service: 'checkout', ctx: { span: c1.span }, n: 1, text: 'TRACE', body: 'entering handler' });
+  at(12, {
+    service: 'checkout',
+    ctx: { span: c1.span },
+    n: 9,
+    text: 'INFO',
+    body: 'checkout started',
+    eventName: 'checkout.started',
+  });
+  at(14, {
+    service: 'checkout',
+    ctx: { span: c1.span },
+    n: 9,
+    text: 'INFO',
+    body: 'request accepted',
+    observedOnly: true,
+  });
+  at(30, {
+    service: 'checkout',
+    ctx: { span: c2.span },
+    n: 5,
+    text: 'DEBUG',
+    body: 'reserve sku=sku-1 qty=2',
+  });
+  at(40, {
+    service: 'checkout',
+    ctx: { span: c2.span },
+    n: 5,
+    text: 'DEBUG',
+    body: 'reserve sku=sku-2 qty=1',
+  });
+  at(110, {
+    service: 'payments',
+    ctx: { span: p1.span },
+    n: 9,
+    text: 'INFO',
+    body: 'charge started order_id=ord-1001',
+  });
+  at(210, {
+    service: 'payments',
+    ctx: { span: p1.span },
+    n: 13,
+    text: 'WARN',
+    body: declined('insufficient_funds'),
+  });
+  at(260, { service: 'payments', ctx: { span: p1.span }, n: 13, text: 'WARN', body: retry(200, 1) });
+  at(470, {
+    service: 'payments',
+    ctx: { span: p1.span },
+    n: 13,
+    text: 'WARN',
+    body: declined('do_not_honor'),
+  });
+  at(520, { service: 'payments', ctx: { span: p1.span }, n: 13, text: 'WARN', body: retry(400, 2) });
+  at(930, {
+    service: 'payments',
+    ctx: { span: p1.span },
+    n: 17,
+    text: 'ERROR',
+    body: declined('expired_card'),
+  });
+  at(940, { service: 'payments', ctx: { span: p1.span }, n: 13, text: 'WARN', body: retry(800, 3) });
+  at(160, {
+    service: 'payments',
+    ctx: { span: p2.span },
+    n: 5,
+    text: 'DEBUG',
+    body: 'INSERT charges rows=1',
+  });
+  // Trace 2.
+  at(2005, {
+    service: 'checkout',
+    ctx: { span: c3.span },
+    n: 9,
+    text: 'INFO',
+    body: 'cart requested user=u-12',
+  });
+  at(2006, {
+    service: 'checkout',
+    ctx: { span: c3.span },
+    n: 13,
+    text: 'WARN',
+    body: '</script><img src=x onerror=alert(1)> tail',
+  });
+  at(2020, { service: 'checkout', ctx: { span: c4.span }, n: 5, text: 'DEBUG', body: 'cart.load items=3' });
+  at(2030, { service: 'checkout', ctx: { span: c4.span }, n: 5, text: 'DEBUG', body: 'cart.load cache hit' });
+  at(2120, {
+    service: 'payments',
+    ctx: { span: p3.span },
+    n: 9,
+    text: 'INFO',
+    body: 'quote computed total=1999',
+  });
+  at(2130, {
+    service: 'payments',
+    ctx: { span: p3.span },
+    n: 9,
+    text: 'INFO',
+    body: 'quote computed',
+    eventName: 'quote.computed',
+  });
+  // Trace 3.
+  at(4005, {
+    service: 'checkout',
+    ctx: { span: c5.span },
+    n: 9,
+    text: 'INFO',
+    body: 'checkout retry flow begin',
+  });
+  at(5190, {
+    service: 'checkout',
+    ctx: { span: c5.span },
+    n: 17,
+    text: 'ERROR',
+    body: 'checkout failed: upstream error',
+  });
+  at(5195, {
+    service: 'checkout',
+    ctx: { span: c5.span },
+    n: 21,
+    text: 'FATAL',
+    body: 'payments unavailable, giving up',
+  });
+  at(4200, {
+    service: 'payments',
+    ctx: { span: p4.span },
+    n: 17,
+    text: 'ERROR',
+    body: declined('insufficient_funds'),
+  });
+  at(4400, { service: 'payments', ctx: { span: p4.span }, n: 13, text: 'WARN', body: retry(250, 1) });
+  at(4700, {
+    service: 'payments',
+    ctx: { span: p4.span },
+    n: 17,
+    text: 'ERROR',
+    body: declined('do_not_honor'),
+  });
+  at(4800, { service: 'payments', ctx: { span: p4.span }, n: 13, text: 'WARN', body: retry(500, 2) });
+  at(5000, {
+    service: 'payments',
+    ctx: { span: p4.span },
+    n: 17,
+    text: 'ERROR',
+    body: declined('expired_card'),
+  });
+  at(5050, {
+    service: 'payments',
+    ctx: { span: p4.span },
+    n: 17,
+    text: 'ERROR',
+    body: 'charge aborted after 3 attempts',
+  });
+  at(4160, {
+    service: 'payments',
+    ctx: { span: p5.span },
+    n: 17,
+    text: 'ERROR',
+    body: 'db insert failed: connection reset',
+  });
+  at(4170, { service: 'payments', ctx: { span: p5.span }, n: 5, text: 'DEBUG', body: 'reconnecting' });
+
+  for (const e of [c2, p2, p1, c1, c4, p3, c3, p5, p4, c5, lost]) e.end();
+
+  const logExporter = new InMemoryLogRecordExporter();
+  const loggerOf = (service: keyof typeof resources) =>
+    new LoggerProvider({
+      resource: resources[service],
+      processors: [new SimpleLogRecordProcessor({ exporter: logExporter })],
+    }).getLogger(`${service}.logger`, '1.0.0');
+  const loggers = { checkout: loggerOf('checkout'), payments: loggerOf('payments') };
+  const contextFor = (c: LogContext) => {
+    if (c === 'none') return ROOT_CONTEXT;
+    if (c === 'orphan') return trace.setSpan(ROOT_CONTEXT, lost.span);
+    if (c === 'dangling') return danglingContext;
+    return trace.setSpan(ROOT_CONTEXT, c.span);
+  };
+  const observedOnlyBodies = new Set(entries.flatMap(([, l]) => (l.observedOnly === true ? [l.body] : [])));
+  entries.sort((a, b) => a[0] - b[0]);
+  for (const [ms, log] of entries) {
+    const when = hr(ms * 1e6);
+    loggers[log.service].emit({
+      ...(log.observedOnly === true ? {} : { timestamp: when }),
+      observedTimestamp: when,
+      context: contextFor(log.ctx),
+      severityNumber: log.n,
+      ...(log.text === '' ? {} : { severityText: log.text }),
+      body: log.body,
+      ...(log.eventName === undefined ? {} : { eventName: log.eventName }),
+      attributes: { 'log.source': log.service, ...log.attrs },
+    });
+  }
+  const logBytes = JsonLogsSerializer.serializeRequest(logExporter.getFinishedLogRecords());
+  if (logBytes === undefined) throw new Error('JsonLogsSerializer returned nothing');
+  return {
+    traces: serializeSpans(spanExporter.getFinishedSpans()),
+    logs: stripWallClockTimestamps(new TextDecoder().decode(logBytes), observedOnlyBodies),
+  };
+}
+
 write('small', buildSmall());
 write('orphans', buildOrphans());
 write('logs-only', await buildLogsOnly());
+const linked = await buildLinked();
+write('linked-traces', linked.traces);
+write('linked-logs', linked.logs);
 write('empty', '{"resourceSpans":[]}\n');
 if (!existsSync(new URL('hostile.otlp.json', OUT)))
   throw new Error('fixtures/hostile.otlp.json is hand-authored and missing; restore it from git');
