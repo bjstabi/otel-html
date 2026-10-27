@@ -171,7 +171,7 @@ Tasks are defined in `mise.toml`; CI runs the same ones.
 | `mise run test:e2e` | Build, then run the Playwright suite in Chromium, Firefox and WebKit. |
 | `mise run build:binaries` | Compile standalone binaries into `dist/bin/` (after `build`). |
 | `mise run fixtures` | Regenerate `fixtures/*.otlp.json` with the OpenTelemetry SDK. |
-| `mise run demo` | Convert `fixtures/small.otlp.json` and open it in a browser. Not for CI. |
+| `mise run demo` | Convert the `small` and `linked-*` fixtures (traces and logs) and open the report in a browser. Not for CI. |
 
 Other tasks: `lint`, `format`, `typecheck`, `test:unit`, `knip`, `gen`, `gen:check`, `check:package`, `test:e2e:chromium`.
 

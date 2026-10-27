@@ -96,6 +96,6 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: sample-report-${{ matrix.project }}
-          path: e2e/.reports/small
+          path: e2e/.reports/sample
           include-hidden-files: true
           if-no-files-found: ignore

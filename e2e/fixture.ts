@@ -25,11 +25,13 @@ export const HOSTILE_ROOT_SPAN = '1111111111111111';
 export const PORT_ENV = 'OTEL_HTML_E2E_PORT';
 
 /** Reports built from the committed SDK fixtures (`fixtures/<name>.otlp.json`) and served beside the main one. */
-export const FIXTURE_REPORTS = ['small', 'orphans', 'logs-only', 'empty', 'linked'] as const;
+export const FIXTURE_REPORTS = ['small', 'orphans', 'logs-only', 'empty', 'linked', 'sample'] as const;
 export type FixtureReport = (typeof FIXTURE_REPORTS)[number];
 /** Fixture files of the reports that are not just `fixtures/<name>.otlp.json`. */
 const FIXTURE_FILES: Partial<Record<FixtureReport, readonly string[]>> = {
   linked: ['linked-traces', 'linked-logs'],
+  /** Traces and logs together: what `mise run demo` converts and CI uploads as the sample report. */
+  sample: ['small', 'linked-traces', 'linked-logs'],
 };
 /** `merged` is `otel-html merge` of `small` and `orphans`; `scale` and `huge` come from one generated 100k-span input. */
 export type ReportName = 'main' | 'hostile' | FixtureReport | 'merged' | 'scale' | 'huge' | 'no-manifest';
