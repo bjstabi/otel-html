@@ -42,6 +42,8 @@ export interface HistogramSeriesSet<K extends string> {
   noun: string;
   /** Stack the first series on top (legend order then matches the stack, top to bottom). */
   topFirst: boolean;
+  /** When set, the card header lists each non-empty series with its count, under this accessible name. */
+  countLegend?: string;
 }
 
 /** Span status series, bottom of the stack first; errors keep their hatch. */
@@ -59,6 +61,7 @@ export const SPAN_STATUS_SERIES: HistogramSeriesSet<SpanStatusKey> = {
 export const SEVERITY_SERIES: HistogramSeriesSet<LogSeverityKey> = {
   noun: 'logs',
   topFirst: true,
+  countLegend: 'Severity counts',
   series: [
     { key: 'fatal', label: 'FATAL', color: 'var(--oh-sev-fatal)', hatch: true },
     { key: 'error', label: 'ERROR', color: 'var(--oh-sev-error)', hatch: true },
@@ -246,6 +249,23 @@ export function HistogramCard<K extends string>(props: {
           {total} {noun}
         </span>
         {errors !== null && <span className="font-mono tabular-nums text-critical">{errors} errors</span>}
+        {props.series.countLegend === undefined ? null : (
+          <ul aria-label={props.series.countLegend} className="flex flex-wrap gap-3 text-xs">
+            {props.series.series
+              .filter((x) => buckets.total(x.key) > 0)
+              .map((x) => (
+                <li key={x.key} className="inline-flex items-center gap-1.5">
+                  <span
+                    aria-hidden
+                    className="inline-block size-2 rounded-full"
+                    style={{ background: x.color }}
+                  />
+                  <span>{x.label}</span>{' '}
+                  <span className="font-mono tabular-nums">{buckets.total(x.key)}</span>
+                </li>
+              ))}
+          </ul>
+        )}
         <span className="ml-auto text-xs text-muted">
           Drag to select a time range; arrow keys and Enter also work
         </span>

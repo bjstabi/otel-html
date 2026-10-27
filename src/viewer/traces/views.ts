@@ -171,6 +171,12 @@ export function resolveCssVars<T>(value: T, resolve: (name: string) => string): 
   return walk(value) as T;
 }
 
+/** Reads theme tokens from the document's computed style (the resolver `resolveCssVars` takes in the viewer). */
+export function cssTokenReader(): (name: string) => string {
+  const style = getComputedStyle(document.documentElement);
+  return (name) => style.getPropertyValue(name).trim();
+}
+
 /**
  * Log-spaced duration bins over the durations of the returned rows (the filtered set when `total` fits the list
  * limit, the leading rows of it otherwise), `[from, to)` with contiguous edges; every row lands in exactly one bin.

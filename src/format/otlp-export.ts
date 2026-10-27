@@ -2,6 +2,7 @@ import type { AnyValue, Attributes } from '../model/anyvalue.js';
 import { OtelHtmlError } from '../model/errors.js';
 import { type RelNanos, toUnixNanos, type UnixNanos } from '../model/ids.js';
 import type {
+  LogRecordRecord,
   ResourceRecord,
   ResourceRef,
   ScopeRecord,
@@ -125,21 +126,87 @@ export function spansToOtlpJson(
     for (const [sref, list] of byScope) {
       const sc = scopes(sref);
       scopeSpans.push({
-        scope: {
-          name: sc.name,
-          version: sc.version,
-          attributes: keyValues(sc.attributes),
-          droppedAttributesCount: sc.droppedAttributesCount,
-        },
+        scope: scopeJson(sc),
         spans: list,
         schemaUrl: sc.schemaUrl,
       });
     }
     resourceSpans.push({
-      resource: { attributes: keyValues(r.attributes), droppedAttributesCount: r.droppedAttributesCount },
+      resource: resourceJson(r),
       scopeSpans,
       schemaUrl: r.schemaUrl,
     });
   }
   return { resourceSpans };
+}
+
+function resourceJson(r: ResourceRecord): JsonValue {
+  return { attributes: keyValues(r.attributes), droppedAttributesCount: r.droppedAttributesCount };
+}
+
+function scopeJson(sc: ScopeRecord): JsonValue {
+  return {
+    name: sc.name,
+    version: sc.version,
+    attributes: keyValues(sc.attributes),
+    droppedAttributesCount: sc.droppedAttributesCount,
+  };
+}
+
+/** An unset time is OTLP's 0. */
+function nanosOrZero(t: RelNanos | null, epoch: UnixNanos, path: string): string {
+  return t === null ? '0' : nanos(t, epoch, path);
+}
+
+function logJson(l: LogRecordRecord, epoch: UnixNanos, path: string): JsonValue {
+  return {
+    timeUnixNano: nanosOrZero(l.time, epoch, `${path}.time`),
+    observedTimeUnixNano: nanosOrZero(l.observedTime, epoch, `${path}.observedTime`),
+    severityNumber: l.severityNumber,
+    severityText: l.severityText,
+    ...(l.body.kind === 'empty' ? {} : { body: anyValueJson(l.body) }),
+    attributes: keyValues(l.attributes),
+    droppedAttributesCount: l.droppedAttributesCount,
+    flags: l.flags,
+    ...(l.traceId === null ? {} : { traceId: l.traceId }),
+    ...(l.spanId === null ? {} : { spanId: l.spanId }),
+    eventName: l.eventName,
+  };
+}
+
+/** A log with the resource and scope records it belongs to (a `LogRow`, for example). */
+export interface OtlpLogInput {
+  readonly log: LogRecordRecord;
+  readonly resource: ResourceRecord;
+  readonly scope: ScopeRecord;
+}
+
+/**
+ * Valid OTLP JSON (`ExportLogsServiceRequest`) for `rows`, grouped by resource then scope. Rows are grouped by
+ * record object identity: one decoded chunk shares its resource and scope objects across its logs.
+ */
+export function logsToOtlpJson(rows: readonly OtlpLogInput[], epoch: UnixNanos): unknown {
+  const byResource = new Map<ResourceRecord, Map<ScopeRecord, JsonValue[]>>();
+  for (const [i, r] of rows.entries()) {
+    let byScope = byResource.get(r.resource);
+    if (byScope === undefined) {
+      byScope = new Map();
+      byResource.set(r.resource, byScope);
+    }
+    let list = byScope.get(r.scope);
+    if (list === undefined) {
+      list = [];
+      byScope.set(r.scope, list);
+    }
+    list.push(logJson(r.log, epoch, `logs[${i}]`));
+  }
+  const resourceLogs: JsonValue[] = [];
+  for (const [resource, byScope] of byResource) {
+    const scopeLogs: JsonValue[] = [];
+    for (const [scope, logRecords] of byScope) {
+      scopeLogs.push({ scope: scopeJson(scope), logRecords, schemaUrl: scope.schemaUrl });
+    }
+    resourceLogs.push({ resource: resourceJson(resource), scopeLogs, schemaUrl: resource.schemaUrl });
+  }
+  return { resourceLogs };
 }

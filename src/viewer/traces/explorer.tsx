@@ -4,33 +4,43 @@ import { parseUnixNanos, type SpanId, type TraceId } from '../../model/ids.js';
 import { Chart } from '../components/chart.js';
 import { ColumnPicker } from '../components/column-picker.js';
 import {
+  ErrorCard,
+  LoadingNote,
+  NoMatch,
+  PartialNote,
+  PILL,
+  parseSort,
+  sortableOf,
+} from '../components/explorer-states.js';
+import {
   downloadBlob,
   type ExportFormat,
+  exportFileName,
   exportRows,
   isSpanRow,
   type OtlpSpanGroup,
 } from '../components/export.js';
 import { FacetPanel } from '../components/facet-panel.js';
+import { GroupTable } from '../components/group-table.js';
 import { HistogramCard, SPAN_STATUS_SERIES } from '../components/histogram-card.js';
 import { ResultsTable, type SortState } from '../components/results-table.js';
-import type { DataSource, SpanQuery, SpanQueryResult, SpanRow, TraceRow } from '../data/data-source.js';
+import type { DataSource, SpanQuery, SpanRow, TraceRow } from '../data/data-source.js';
+import { useGoTo } from '../shell/go-to.js';
 import { PageChrome } from '../shell/page-chrome.js';
 import { PageOptionNotice } from '../shell/page-option-notice.js';
 import { PAGE_OPTIONS, type PageView, resolvePageMode, resolvePageView } from '../state/page-options.js';
 import { useSelection } from '../state/selection-context.js';
 import { useColorAssigner } from '../theme/colors-context.js';
-import type { ColorAssigner } from '../theme/palette.js';
 import { useTheme } from '../theme/theme-provider.js';
-import { attributeColumn, type ColumnUi, SPAN_COLUMNS_UI, TRACE_COLUMNS_UI } from './columns.js';
+import { attributeColumn, SPAN_COLUMNS_UI, TRACE_COLUMNS_UI } from './columns.js';
 import { RedStrip } from './red-strip.js';
 import { TracePanel } from './trace-panel.js';
 import { useSpanQuery } from './use-span-query.js';
 import {
   type ChartView,
-  DEFAULT_GROUP_KEY,
+  cssTokenReader,
   durationBins,
   GROUPED_VIEWS,
-  groupSlices,
   type Measure,
   resolveCssVars,
   VIEW_BUILDERS,
@@ -52,29 +62,18 @@ const VIEW_LABEL: Record<PageView<'traces'>, string> = {
 
 const DEFAULT_SORT: SortState = { column: 'start', dir: 'desc' };
 const DURATION_BIN_COUNT = 24;
-const PILL = 'rounded-full px-3 py-1 text-sm';
 const FIELD = 'rounded-full border border-hairline bg-surface px-3 py-1 text-sm';
 
-/** `column:dir`, as stored in the selection; anything that is not a sortable column of this mode is the default. */
-export function parseSort(raw: string | null, sortable: readonly string[]): SortState {
-  if (raw === null) return DEFAULT_SORT;
-  const at = raw.lastIndexOf(':');
-  const column = raw.slice(0, at);
-  const dir = raw.slice(at + 1);
-  if (at <= 0 || (dir !== 'asc' && dir !== 'desc') || !sortable.includes(column)) return DEFAULT_SORT;
-  return { column, dir };
-}
-
-function sortableOf(columns: readonly ColumnUi<never>[]): string[] {
-  return columns.flatMap((c) => (c.sort === undefined ? [] : [c.sort]));
-}
-
-function ErrorCard(props: { title: string; message: string }): JSX.Element {
+function OpenLogs(): JSX.Element {
+  const goTo = useGoTo();
   return (
-    <div role="alert" className="rounded-card border border-hairline bg-surface p-4">
-      <p className="font-semibold text-critical">{props.title}</p>
-      <p className="mt-1 font-mono text-xs break-words whitespace-pre-wrap text-ink-2">{props.message}</p>
-    </div>
+    <button
+      type="button"
+      onClick={() => goTo('logs', '/logs')}
+      className={`${PILL} mt-3 bg-ink text-surface`}
+    >
+      Open the Logs Explorer
+    </button>
   );
 }
 
@@ -86,78 +85,9 @@ export function ZeroSpans({ manifest }: { manifest: Manifest }): JSX.Element {
         It does hold <span className="font-mono tabular-nums">{manifest.totals.logs}</span> log records and{' '}
         <span className="font-mono tabular-nums">{manifest.totals.metrics}</span> metric data points.
       </p>
+      {manifest.totals.logs > 0 && <OpenLogs />}
     </section>
   );
-}
-
-export function PartialNote(props: {
-  partial: SpanQueryResult['partial'];
-  onScanAll(): void;
-}): JSX.Element | null {
-  const { partial } = props;
-  if (partial === null) return null;
-  return (
-    <p role="status" aria-label="Partial results" className="text-sm text-ink-2">
-      <span className="font-mono tabular-nums">
-        from {partial.scanned} of {partial.total} chunks
-      </span>{' '}
-      <span aria-hidden>·</span>{' '}
-      <button
-        type="button"
-        onClick={props.onScanAll}
-        className="rounded-full px-2 py-0.5 text-accent underline"
-      >
-        Scan entire run
-      </button>
-    </p>
-  );
-}
-
-function GroupTable(props: {
-  result: SpanQueryResult;
-  groupBy: string | null;
-  colors: ColorAssigner;
-}): JSX.Element {
-  const key = props.groupBy ?? DEFAULT_GROUP_KEY;
-  const slices = groupSlices(props.result.facets, key, props.colors);
-  const total = slices.reduce((a, s) => a + s.value, 0);
-  return (
-    <table className="w-full rounded-card border border-hairline bg-surface text-sm">
-      <caption className="sr-only">Spans grouped by {key}</caption>
-      <thead>
-        <tr className="border-b border-hairline text-left text-xs text-ink-2">
-          <th scope="col" className="p-2">
-            {key}
-          </th>
-          <th scope="col" className="p-2 text-right">
-            Spans
-          </th>
-          <th scope="col" className="p-2 text-right">
-            Share
-          </th>
-        </tr>
-      </thead>
-      <tbody>
-        {slices.map((s) => (
-          <tr
-            key={`${s.other ? 'rest' : 'value'}:${s.key}`}
-            className="border-b border-hairline last:border-0"
-          >
-            <td className="p-2 font-mono text-xs">{s.name}</td>
-            <td className="p-2 text-right font-mono tabular-nums">{s.value}</td>
-            <td className="p-2 text-right font-mono tabular-nums">
-              {total === 0 ? '0' : Math.round((s.value / total) * 100)}%
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  );
-}
-
-function tokenReader(): (name: string) => string {
-  const style = getComputedStyle(document.documentElement);
-  return (name) => style.getPropertyValue(name).trim();
 }
 
 /** Mockup 01: query bar, mode / group-by / view controls, RED strip, histogram, facets left and results right. */
@@ -191,7 +121,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
     [extraColumns],
   );
   const sortable = mode === 'spans' ? sortableOf(SPAN_COLUMNS_UI) : sortableOf(TRACE_COLUMNS_UI);
-  const sort = parseSort(sel.sort, sortable);
+  const sort = parseSort(sel.sort, sortable, DEFAULT_SORT);
 
   const query = useMemo<SpanQuery>(
     () => ({
@@ -252,13 +182,9 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
         }
         ctx = { epoch, groups };
       }
-      const ext = format === 'csv' ? 'csv' : 'json';
-      const { total } = state.result;
-      // A truncated export says so in its file name: the file holds the first N of M.
-      const scope = total > all.length ? `first-${all.length}-of-${total}` : `${total}`;
       downloadBlob(
         exportRows(all, format, ctx),
-        `${mode}-${scope}.${format === 'otlp-json' ? 'otlp.' : ''}${ext}`,
+        exportFileName(mode, all.length, state.result.total, format),
       );
     } catch (e) {
       setExportError(e instanceof Error ? e.message : String(e));
@@ -288,7 +214,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
     void resolved;
     return resolveCssVars(
       VIEW_BUILDERS[chart](result, { groupBy: sel.groupBy, colors, measure }),
-      tokenReader(),
+      cssTokenReader(),
     );
   }, [result, view, sel.groupBy, colors, measure, resolved]);
 
@@ -378,13 +304,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
           )}
         </div>
         {result !== null && <PartialNote partial={result.partial} onScanAll={scanAll} />}
-        {state.status === 'loading' && (
-          <p role="status" className="text-sm text-muted">
-            {state.progress === null
-              ? 'Loading'
-              : `Scanning ${state.progress.scanned} of ${state.progress.total} chunks`}
-          </p>
-        )}
+        {state.status === 'loading' && <LoadingNote progress={state.progress} />}
         {exportError !== null && <ErrorCard title="The export failed" message={exportError} />}
         {state.status === 'error' && <ErrorCard title="The query could not run" message={state.message} />}
         {result !== null && (
@@ -422,21 +342,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
                 </div>
                 <div className="min-w-0">
                   {result.total === 0 ? (
-                    <section className="rounded-card border border-hairline bg-surface p-6">
-                      <h2 className="text-base font-semibold">
-                        No {mode === 'spans' ? 'spans' : 'traces'} match
-                      </h2>
-                      <p className="mt-1 text-sm text-ink-2">
-                        Nothing in this run matches the current filters.
-                      </p>
-                      <button
-                        type="button"
-                        onClick={clearFilters}
-                        className={`${PILL} mt-3 bg-ink text-surface`}
-                      >
-                        Clear filters
-                      </button>
-                    </section>
+                    <NoMatch noun={mode === 'spans' ? 'spans' : 'traces'} onClear={clearFilters} />
                   ) : chartOption !== null ? (
                     <div className="rounded-card border border-hairline bg-surface p-3">
                       <Chart
@@ -446,7 +352,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
                       />
                     </div>
                   ) : view === 'table' ? (
-                    <GroupTable result={result} groupBy={sel.groupBy} colors={colors} />
+                    <GroupTable result={result} groupBy={sel.groupBy} colors={colors} noun="Spans" />
                   ) : (
                     <div className="flex flex-col gap-2">
                       {mode === 'spans' && (

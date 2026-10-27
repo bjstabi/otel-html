@@ -190,5 +190,20 @@ describe('HistogramCard with log severities', () => {
     };
     const hatched = opt.series.filter((x) => x.itemStyle.decal !== undefined).map((x) => x.name);
     expect(hatched.sort()).toEqual(['ERROR', 'FATAL']);
+    const legend = screen.getByRole('list', { name: 'Severity counts' });
+    expect([...legend.querySelectorAll('li')].map((li) => li.textContent)).toEqual([
+      'FATAL 1',
+      'ERROR 2',
+      'INFO 37',
+    ]);
+  });
+
+  test('span status sets carry no count legend', () => {
+    render(
+      <SelectionProvider store={createSelectionStore({})}>
+        <HistogramCard buckets={new TimeBuckets(['ok', 'error', 'unset'])} series={SPAN_STATUS_SERIES} />
+      </SelectionProvider>,
+    );
+    expect(screen.queryByRole('list')).toBeNull();
   });
 });

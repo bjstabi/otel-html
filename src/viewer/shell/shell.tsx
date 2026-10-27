@@ -3,6 +3,7 @@ import { X } from 'lucide-react';
 import { type JSX, useCallback, useEffect, useMemo, useState } from 'react';
 import { Redirect, Route, Router, Switch } from 'wouter';
 import type { DataSource } from '../data/data-source.js';
+import { LogsExplorer } from '../logs/explorer.js';
 import { applyPatch, carryTo, type DroppedParam } from '../state/carry.js';
 import { PAGE_TITLES, type Page, pageOfRoute } from '../state/page-options.js';
 import { bindUrl, createSelectionStore, type HistoryPort } from '../state/selection.js';
@@ -202,7 +203,7 @@ function RoutedPage({ dataSource }: { dataSource: DataSource }): JSX.Element {
         <PatternsRedirect />
       </Route>
       <Route path="/logs">
-        <ComingLaterPage page="logs" manifest={manifest} />
+        <LogsExplorer dataSource={dataSource} />
       </Route>
       <Route path="/metrics">
         <ComingLaterPage page="metrics" manifest={manifest} />

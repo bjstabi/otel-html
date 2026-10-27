@@ -3,7 +3,7 @@ import type { JSX } from 'react';
 import { anyValueToDisplay } from '../../model/anyvalue.js';
 import { LogBody } from '../components/log-body.js';
 import { SeverityBadge } from '../components/severity.js';
-import type { LogRow } from '../data/log-query.js';
+import type { LogRow, LogTraceRow } from '../data/log-query.js';
 import { absoluteTime } from '../shell/time-range.js';
 import { type ColumnUi, ServiceChip } from '../traces/columns.js';
 
@@ -86,3 +86,36 @@ export function logAttributeColumn(key: string): ColumnUi<LogRow> {
     },
   };
 }
+
+/** Traces mode: one row per trace among the matched logs. */
+export const LOG_TRACE_COLUMNS_UI: readonly ColumnUi<LogTraceRow>[] = [
+  { id: 'trace', header: 'Trace', width: 280, mono: true, cell: (r) => r.traceId },
+  { id: 'logs', header: 'Logs', sort: 'logs', width: 80, mono: true, cell: (r) => r.logs },
+  {
+    id: 'severity',
+    header: 'Max severity',
+    sort: 'severity',
+    width: 130,
+    cell: (r) => <SeverityBadge number={r.maxSeverity} text="" />,
+  },
+  {
+    id: 'services',
+    header: 'Services',
+    width: 220,
+    cell: (r, c) => (
+      <span className="flex min-w-0 flex-wrap gap-x-3">
+        {r.services.map((s) => (
+          <ServiceChip key={s} service={s} colors={c.colors} />
+        ))}
+      </span>
+    ),
+  },
+  {
+    id: 'first',
+    header: 'First',
+    sort: 'first',
+    width: 190,
+    mono: true,
+    cell: (r, c) => absoluteTime(r.first, c.epoch),
+  },
+];

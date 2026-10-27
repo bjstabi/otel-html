@@ -5,9 +5,11 @@ import type { Manifest } from '../../src/format/manifest.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { FacetCounts } from '../../src/rollups/facets.js';
 import { RedSeries } from '../../src/rollups/red.js';
+import { LOG_SEVERITY_KEYS } from '../../src/rollups/signal-counts.js';
 import { TimeBuckets } from '../../src/rollups/time-buckets.js';
 import { App } from '../../src/viewer/app.js';
 import type { DataSource, SpanQueryResult } from '../../src/viewer/data/data-source.js';
+import type { LogQueryResult } from '../../src/viewer/data/log-query.js';
 import { Shell } from '../../src/viewer/shell/shell.js';
 import { stepWindow } from '../../src/viewer/shell/time-range.js';
 import { createHashHistory } from '../../src/viewer/state/hash-history.js';
@@ -48,6 +50,15 @@ const emptyResult = (): SpanQueryResult => ({
   red: new RedSeries(8),
   partial: null,
 });
+const emptyLogs = (): LogQueryResult => ({
+  mode: 'logs',
+  rows: [],
+  total: 0,
+  matched: 0,
+  facets: new FacetCounts(10, 10),
+  buckets: new TimeBuckets(LOG_SEVERITY_KEYS, 8),
+  partial: null,
+});
 const dataSource: DataSource = {
   manifest,
   strategy: 'eager',
@@ -64,7 +75,7 @@ const dataSource: DataSource = {
   percentileOf: unused,
   logStrategy: 'eager',
   logLanding: unused,
-  queryLogs: unused,
+  queryLogs: () => Promise.resolve(emptyLogs()),
   getLog: unused,
   traceLogs: unused,
   surroundingLogs: unused,
@@ -187,13 +198,16 @@ describe('sidebar', () => {
 });
 
 describe('routes', () => {
-  test('logs, metrics and dashboards show a labelled count from the manifest totals', () => {
+  test('logs is the Logs Explorer', async () => {
     renderShell('#/logs');
     expect(screen.getByRole('heading', { name: 'Logs', level: 1 })).toBeTruthy();
-    expect(screen.getByText('Coming in a later release')).toBeTruthy();
-    expect(screen.getByLabelText('Log records in this run').textContent).toBe('56');
-    cleanup();
+    expect(await screen.findByText('No logs match')).toBeTruthy();
+    expect(screen.queryByText('Coming in a later release')).toBeNull();
+  });
+
+  test('metrics and dashboards show a labelled count from the manifest totals', () => {
     renderShell('#/metrics');
+    expect(screen.getByText('Coming in a later release')).toBeTruthy();
     expect(screen.getByLabelText('Metric data points in this run').textContent).toBe('7');
     cleanup();
     renderShell('#/dashboards');
@@ -325,7 +339,7 @@ describe('chrome', () => {
       'Export OTLP JSON',
     ]);
     cleanup();
-    renderShell('#/logs');
+    renderShell('#/metrics');
     await user.click(screen.getByRole('button', { name: 'Export' }));
     const item = await screen.findByRole('menuitem', { name: /Nothing to export on this page/ });
     expect(item.getAttribute('aria-disabled')).toBe('true');
