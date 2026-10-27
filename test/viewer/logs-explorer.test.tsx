@@ -296,6 +296,20 @@ describe('LogsExplorer', () => {
     expect(store.getState().view).toBe('list');
   });
 
+  test('Scatter outside logs mode says it plots individual logs instead of drawing an empty chart', async () => {
+    setup({ initial: { mode: 'patterns', view: 'scatter' } });
+    expect(
+      await screen.findByText('Scatter plots individual logs; switch Group into back to Logs.'),
+    ).toBeTruthy();
+    expect(screen.queryByRole('img', { name: /Scatter/ })).toBeNull();
+  });
+
+  test('Scatter in logs mode draws the chart and shows no note', async () => {
+    setup({ initial: { view: 'scatter' } });
+    await screen.findByRole('region', { name: /logs by severity/ });
+    expect(screen.queryByText(/Scatter plots individual logs/)).toBeNull();
+  });
+
   test('the View select offers exactly the Logs views', async () => {
     setup();
     const select = (await screen.findByLabelText('View')) as HTMLSelectElement;

@@ -43,7 +43,10 @@ export function timeseries(result: LogQueryResult): EChartsOption {
   };
 }
 
-/** Severity number against log time for the returned rows (logs mode only), one series per band. */
+/**
+ * Severity number against log time for the returned rows, one series per band. Logs mode only: the explorer shows a
+ * note in the other modes.
+ */
 export function scatter(result: LogQueryResult, ctx: LogViewContext): EChartsOption {
   const rows = result.mode === 'logs' ? result.rows.slice(0, ctx.listCap) : [];
   const series = SEVERITY_SERIES.series.map((s) => ({

@@ -222,6 +222,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
 
   const chartOption = useMemo(() => {
     if (result === null || view === 'list' || view === 'table') return null;
+    if (view === 'scatter' && result.mode !== 'logs') return null;
     const chart: LogChartView = view;
     // `resolved` re-reads the theme tokens when light/dark changes.
     void resolved;
@@ -248,6 +249,12 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
   const results = (): JSX.Element | null => {
     if (result === null) return null;
     if (result.total === 0) return <NoMatch noun={noun} onClear={clearFilters} />;
+    if (view === 'scatter' && result.mode !== 'logs')
+      return (
+        <p className="rounded-card border border-hairline bg-surface p-3 text-sm text-muted">
+          Scatter plots individual logs; switch Group into back to Logs.
+        </p>
+      );
     if (chartOption !== null) {
       return (
         <div className="rounded-card border border-hairline bg-surface p-3">
