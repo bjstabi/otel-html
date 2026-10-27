@@ -121,10 +121,39 @@ describe('sidebar', () => {
     expect(within(card).getByText('7')).toBeTruthy();
   });
 
-  test('Patterns and Catalog are labelled, non-link items', () => {
+  test('Catalog is a labelled, non-link item', () => {
     renderShell('#/logs');
-    expect(screen.queryByRole('link', { name: /Patterns/ })).toBeNull();
-    expect(screen.getByText('Patterns').closest('[aria-disabled="true"]')).not.toBeNull();
+    expect(screen.queryByRole('link', { name: /Catalog/ })).toBeNull();
+    expect(screen.getByText('Catalog').closest('[aria-disabled="true"]')).not.toBeNull();
+  });
+
+  test('Logs > Patterns links to /logs/patterns, which redirects to /logs?mode=patterns and is current there', async () => {
+    const user = userEvent.setup();
+    renderShell('#/traces?text=boom&mode=traces');
+    const logs = within(screen.getByRole('region', { name: 'Logs' }));
+    const patterns = logs.getByRole('link', { name: 'Patterns' });
+    expect(patterns.getAttribute('href')).toBe('#/logs/patterns?text=boom');
+    await user.click(patterns);
+    await waitFor(() => expect(window.location.hash).toBe('#/logs?text=boom&mode=patterns'));
+    await waitFor(() =>
+      expect(logs.getByRole('link', { name: 'Patterns' }).getAttribute('aria-current')).toBe('page'),
+    );
+    expect(logs.getByRole('link', { name: 'Explorer' }).getAttribute('aria-current')).toBeNull();
+  });
+
+  test('opening /logs/patterns directly redirects with replace', async () => {
+    renderShell('#/logs/patterns?t=1~2');
+    await waitFor(() => expect(window.location.hash).toBe('#/logs?t=1~2&mode=patterns'));
+  });
+
+  test('sidebar hrefs are computed with the carry-over rule', () => {
+    renderShell(`#/traces?q=${encodeURIComponent('span.name == "x"')}&text=boom&mode=traces`);
+    const logs = within(screen.getByRole('region', { name: 'Logs' }));
+    expect(logs.getByRole('link', { name: 'Explorer' }).getAttribute('href')).toBe('#/logs?text=boom');
+    const traces = within(screen.getByRole('region', { name: 'Traces' }));
+    expect(traces.getByRole('link', { name: 'Services' }).getAttribute('href')).toBe(
+      '#/traces/services?q=span.name+%3D%3D+%22x%22&text=boom&mode=traces',
+    );
   });
 });
 
@@ -162,6 +191,20 @@ describe('shortcuts in the shell', () => {
     renderShell('#/traces');
     await user.keyboard('gl');
     expect(window.location.hash).toBe('#/logs');
+  });
+
+  test('g l with a span-only filter lands on #/logs without it and names the dropped filter', async () => {
+    const user = userEvent.setup();
+    renderShell(`#/traces?q=${encodeURIComponent('span.name == "x"')}&t=1~2&mode=traces`);
+    await user.keyboard('gl');
+    expect(window.location.hash).toBe('#/logs?t=1~2');
+    const notice = await screen.findByRole('status', { name: 'Filter not carried over' });
+    expect(notice.textContent).toContain(
+      'The filter span.name == "x" does not apply to Logs and was not carried over.',
+    );
+    expect(within(notice).getByText('span.name == "x"').tagName).toBe('CODE');
+    await user.click(within(notice).getByRole('button', { name: 'Dismiss' }));
+    expect(screen.queryByRole('status', { name: 'Filter not carried over' })).toBeNull();
   });
 
   test('typing g inside the query input does nothing', async () => {
@@ -349,6 +392,33 @@ describe('navigation carries the selection', () => {
     await waitFor(() => expect(window.location.hash).toBe(`#/traces?${t}`));
     await waitFor(() => expect(range()).toBe(before));
     expect(screen.getByRole('heading', { name: 'Traces Explorer', level: 1 })).toBeTruthy();
+  });
+});
+
+describe('invalid page options', () => {
+  test('a foreign mode or view on the traces explorer shows a notice with Reset that clears the key', async () => {
+    const user = userEvent.setup();
+    renderShell('#/traces?mode=patterns&view=scatter&text=a');
+    const alerts = await screen.findAllByRole('alert');
+    const mode = alerts.find((a) => a.textContent?.includes('mode=patterns') === true);
+    const view = alerts.find((a) => a.textContent?.includes('view=scatter') === true);
+    expect(mode?.textContent).toContain('mode=patterns is not a Traces grouping: expected spans or traces');
+    expect(view?.textContent).toContain('view=scatter is not a Traces view');
+    expect(screen.getByRole('button', { name: 'Spans' }).getAttribute('aria-pressed')).toBe('true');
+    if (mode === undefined || view === undefined) throw new Error('notices missing');
+    await user.click(within(mode).getByRole('button', { name: 'Reset' }));
+    expect(window.location.hash).toBe('#/traces?text=a&view=scatter');
+    await user.click(within(view).getByRole('button', { name: 'Reset' }));
+    expect(window.location.hash).toBe('#/traces?text=a');
+  });
+
+  test('choosing the default mode keeps a pristine URL', async () => {
+    const user = userEvent.setup();
+    renderShell('#/traces');
+    await user.click(screen.getByRole('button', { name: 'Traces' }));
+    expect(window.location.hash).toBe('#/traces?mode=traces');
+    await user.click(screen.getByRole('button', { name: 'Spans' }));
+    expect(window.location.hash).toBe('#/traces');
   });
 });
 

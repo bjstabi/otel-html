@@ -47,14 +47,14 @@ describe('parseUrlState', () => {
     const r = parseUrlState(`mode=x&view=pie2&trace=zz&span=${TRACE}&q=${encodeURIComponent('a ==')}&group=`);
     expect(r.state).toEqual({});
     expect(r.errors.map((e) => e.split(':')[0])).toEqual(['mode', 'view', 'trace', 'span', 'q', 'group']);
-    expect(r.errors[0]).toBe('mode: expected spans or traces, got x');
+    expect(r.errors[0]).toBe('mode: expected one of spans, traces, logs, patterns, got x');
   });
 
   test('reports an unknown trace tab id and keeps none of it', () => {
     const r = parseUrlState('tab=overview');
     expect(r.state).toEqual({});
     expect(r.errors).toEqual([
-      'tab: expected one of flame, waterfall, spans, services, errors, got overview',
+      'tab: expected one of flame, waterfall, spans, services, errors, logs, got overview',
     ]);
   });
 
@@ -103,5 +103,26 @@ describe('window helpers', () => {
     expect(() => formatWindow({ start: 0, end: 2 ** 53 })).toThrow(/window/);
     expect(() => formatWindow({ start: -1, end: 4 })).toThrow(/window/);
     expect(() => parseWindow('x')).toThrow(/window/);
+  });
+});
+
+describe('logs keys', () => {
+  test('url-state parses log refs and log tabs, rejects bad ones', () => {
+    expect(parseUrlState('log=12.345&ltab=trace').state).toMatchObject({ log: '12.345', ltab: 'trace' });
+    expect(parseUrlState('log=12').errors).toEqual(['log: expected <chunk>.<row>, got 12']);
+    expect(parseUrlState('log=01.2').errors).toEqual([
+      'log: expected <chunk>.<row> without leading zeros, got 01.2',
+    ]);
+    expect(parseUrlState('ltab=flame').errors).toEqual([
+      'ltab: expected one of attributes, trace, surrounding, resource, got flame',
+    ]);
+  });
+
+  test('widened enums: logs modes, the scatter view and the logs trace tab', () => {
+    expect(parseUrlState('mode=patterns&view=scatter&tab=logs').state).toEqual({
+      mode: 'patterns',
+      view: 'scatter',
+      tab: 'logs',
+    });
   });
 });

@@ -4,6 +4,7 @@ import { formatDuration } from '../../semconv/formatters.js';
 import type { DurationBin } from '../components/facet-panel.js';
 import type { SpanQueryResult, SpanRow, TraceRow } from '../data/span-query.js';
 import type { ExplorerView } from '../state/explorer-view.js';
+import type { PageView } from '../state/page-options.js';
 import { type ColorAssigner, OTHER_INDEX } from '../theme/palette.js';
 
 /** Most groups drawn before the rest collapse into one neutral "Other" slice. */
@@ -12,7 +13,7 @@ export const OTHER_LABEL = 'Other';
 /** The grouping key used when none is chosen. */
 export const DEFAULT_GROUP_KEY = 'service.name';
 
-export type ChartView = Exclude<ExplorerView, 'list' | 'table'>;
+export type ChartView = Exclude<PageView<'traces'>, 'list' | 'table'>;
 export type Measure = 'requests' | 'errors' | 'latency';
 
 export interface ViewContext {

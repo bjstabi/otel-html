@@ -298,6 +298,9 @@ export function TracePanel(props: TracePanelProps): JSX.Element {
         return (
           <ErrorsTab detail={detail} selectedSpanId={sel.spanId} onSelect={selectSpan} colors={colors} />
         );
+      case 'logs':
+        // Built in M2 Task 14; its `available()` is false until then, so it is never the active tab.
+        throw new Error('invariant violated: the trace Logs tab is not available yet');
       default: {
         const never: never = tab;
         throw new Error(`unhandled trace tab ${String(never)}`);

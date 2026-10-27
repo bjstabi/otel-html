@@ -126,9 +126,7 @@ function termToToken(e: Expr): FilterToken | null {
   if (e.type === 'cmp') {
     const key = keyOf(e.left);
     if (key === null) return null;
-    if (e.right.type === 'enum') {
-      return e.op === '==' || e.op === '!=' ? { key, op: e.op, value: e.right.name, enum: true } : null;
-    }
+    if (e.right.type === 'enum') return { key, op: e.op, value: e.right.name, enum: true };
     if (e.right.type !== 'literal') return null;
     const v = e.right.value;
     if (v === null) {

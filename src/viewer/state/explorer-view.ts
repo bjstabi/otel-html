@@ -7,6 +7,7 @@ export const EXPLORER_VIEWS = [
   'pointplot',
   'treemap',
   'pie',
+  'scatter',
 ] as const;
 
 export type ExplorerView = (typeof EXPLORER_VIEWS)[number];

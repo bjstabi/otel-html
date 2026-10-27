@@ -3,8 +3,15 @@ import { availableTabs, isTraceTabId, TRACE_TAB_IDS, TRACE_TABS } from '../../sr
 import { detailOf, traceRow } from './trace-rows.js';
 
 describe('TRACE_TABS', () => {
-  test('lists the tabs in order, with no logs tab in M1', () => {
-    expect(TRACE_TABS.map((t) => t.id)).toEqual(['flame', 'waterfall', 'spans', 'services', 'errors']);
+  test('lists the tabs in order; the logs id parses but the tab is not available yet', () => {
+    expect(TRACE_TABS.map((t) => t.id)).toEqual([
+      'flame',
+      'waterfall',
+      'spans',
+      'services',
+      'errors',
+      'logs',
+    ]);
     expect(TRACE_TAB_IDS).toEqual(TRACE_TABS.map((t) => t.id));
   });
 
@@ -24,7 +31,8 @@ describe('TRACE_TABS', () => {
 
   test('isTraceTabId accepts known ids only', () => {
     expect(isTraceTabId('waterfall')).toBe(true);
-    expect(isTraceTabId('logs')).toBe(false);
+    expect(isTraceTabId('logs')).toBe(true);
+    expect(isTraceTabId('bogus')).toBe(false);
     expect(isTraceTabId('overview')).toBe(false);
   });
 });

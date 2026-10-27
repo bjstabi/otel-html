@@ -14,7 +14,8 @@ import { HistogramCard } from '../components/histogram-card.js';
 import { ResultsTable, type SortState } from '../components/results-table.js';
 import type { DataSource, SpanQuery, SpanQueryResult, SpanRow, TraceRow } from '../data/data-source.js';
 import { PageChrome } from '../shell/page-chrome.js';
-import { EXPLORER_VIEWS, type ExplorerView } from '../state/explorer-view.js';
+import { PageOptionNotice } from '../shell/page-option-notice.js';
+import { PAGE_OPTIONS, type PageView, resolvePageMode, resolvePageView } from '../state/page-options.js';
 import { useSelection } from '../state/selection-context.js';
 import { useColorAssigner } from '../theme/colors-context.js';
 import type { ColorAssigner } from '../theme/palette.js';
@@ -34,7 +35,10 @@ import {
   VIEW_BUILDERS,
 } from './views.js';
 
-const VIEW_LABEL: Record<ExplorerView, string> = {
+const TRACES = PAGE_OPTIONS.traces;
+const DEFAULT_MODE = TRACES.modes[0];
+
+const VIEW_LABEL: Record<PageView<'traces'>, string> = {
   list: 'List',
   timeseries: 'Timeseries',
   toplist: 'Top list',
@@ -172,6 +176,8 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
   const { dataSource } = props;
   const manifest = dataSource.manifest;
   const sel = useSelection((s) => s);
+  const { mode, invalid: invalidMode } = resolvePageMode('traces', sel.mode);
+  const { view, invalid: invalidView } = resolvePageView('traces', sel.view);
   const { resolved } = useTheme();
   const colors = useColorAssigner();
   const epoch = useMemo(() => parseUnixNanos(manifest.epochUnixNano, 'manifest.epochUnixNano'), [manifest]);
@@ -183,7 +189,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
     () => [...SPAN_COLUMNS_UI, ...extraColumns.map(attributeColumn)],
     [extraColumns],
   );
-  const sortable = sel.mode === 'spans' ? sortableOf(SPAN_COLUMNS_UI) : sortableOf(TRACE_COLUMNS_UI);
+  const sortable = mode === 'spans' ? sortableOf(SPAN_COLUMNS_UI) : sortableOf(TRACE_COLUMNS_UI);
   const sort = parseSort(sel.sort, sortable);
 
   const query = useMemo<SpanQuery>(
@@ -191,21 +197,21 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
       condition: sel.condition,
       text: sel.text,
       window: sel.window,
-      mode: sel.mode,
+      mode,
       sort: { column: sort.column, dir: sort.dir },
       limit: manifest.config.viewer.listCap,
       // Grouping is a presentation concern in M1: group-by views are built from the result's facets.
       groupBy: null,
       scanAll: false,
     }),
-    [sel.condition, sel.text, sel.window, sel.mode, sort.column, sort.dir, manifest.config.viewer.listCap],
+    [sel.condition, sel.text, sel.window, mode, sort.column, sort.dir, manifest.config.viewer.listCap],
   );
   const { state, scanAll } = useSpanQuery(dataSource, query);
   const result = state.status === 'ready' ? state.result : state.status === 'loading' ? state.previous : null;
 
   function setView(v: string): void {
-    const view = EXPLORER_VIEWS.find((x) => x === v);
-    if (view !== undefined) sel.setView(view);
+    const next = TRACES.views.find((x) => x === v);
+    if (next !== undefined) sel.setView(next);
   }
 
   const clearFilters = (): void => {
@@ -238,9 +244,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
         for (const id of ids) {
           const detail = await dataSource.getTrace(id as TraceId);
           groups.push({
-            spans: detail.spans
-              .map((r) => r.span)
-              .filter((s) => sel.mode === 'traces' || spanIds.has(s.spanId)),
+            spans: detail.spans.map((r) => r.span).filter((s) => mode === 'traces' || spanIds.has(s.spanId)),
             resources: detail.resources,
             scopes: detail.scopes,
           });
@@ -253,7 +257,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
       const scope = total > all.length ? `first-${all.length}-of-${total}` : `${total}`;
       downloadBlob(
         exportRows(all, format, ctx),
-        `${sel.mode}-${scope}.${format === 'otlp-json' ? 'otlp.' : ''}${ext}`,
+        `${mode}-${scope}.${format === 'otlp-json' ? 'otlp.' : ''}${ext}`,
       );
     } catch (e) {
       setExportError(e instanceof Error ? e.message : String(e));
@@ -263,12 +267,10 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
   const exportItems = [
     { label: 'Export CSV', onSelect: () => void runExport('csv') },
     { label: 'Export JSON', onSelect: () => void runExport('json') },
-    ...(sel.mode === 'spans'
-      ? [{ label: 'Export OTLP JSON', onSelect: () => void runExport('otlp-json') }]
-      : []),
+    ...(mode === 'spans' ? [{ label: 'Export OTLP JSON', onSelect: () => void runExport('otlp-json') }] : []),
   ];
 
-  const grouped = GROUPED_VIEWS.has(sel.view);
+  const grouped = GROUPED_VIEWS.has(view);
   const groupKeys = useMemo(() => {
     const keys = result?.facets.keys().sort() ?? [];
     return sel.groupBy !== null && !keys.includes(sel.groupBy) ? [sel.groupBy, ...keys] : keys;
@@ -279,15 +281,15 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
   );
 
   const chartOption = useMemo(() => {
-    if (result === null || sel.view === 'list' || sel.view === 'table') return null;
-    const view: ChartView = sel.view;
+    if (result === null || view === 'list' || view === 'table') return null;
+    const chart: ChartView = view;
     // `resolved` re-reads the theme tokens when light/dark changes.
     void resolved;
     return resolveCssVars(
-      VIEW_BUILDERS[view](result, { groupBy: sel.groupBy, colors, measure }),
+      VIEW_BUILDERS[chart](result, { groupBy: sel.groupBy, colors, measure }),
       tokenReader(),
     );
-  }, [result, sel.view, sel.groupBy, colors, measure, resolved]);
+  }, [result, view, sel.groupBy, colors, measure, resolved]);
 
   const onSpanClick = (row: SpanRow): void => {
     sel.selectTrace(row.span.traceId);
@@ -308,17 +310,19 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
   return (
     <PageChrome title="Traces Explorer" manifest={manifest} exportItems={exportItems}>
       <div className="flex flex-col gap-4">
+        <PageOptionNotice message={invalidMode} onReset={() => sel.setMode(null)} />
+        <PageOptionNotice message={invalidView} onReset={() => sel.setView('list')} />
         <div className="flex flex-wrap items-center gap-3">
           <fieldset className="flex gap-1 rounded-full border border-hairline bg-surface p-0.5">
             <legend className="sr-only">Show</legend>
-            {(['spans', 'traces'] as const).map((m) => (
+            {TRACES.modes.map((m) => (
               <button
                 key={m}
                 type="button"
-                aria-pressed={sel.mode === m}
-                data-selected={sel.mode === m ? 'true' : undefined}
-                onClick={() => sel.setMode(m)}
-                className={`${PILL} ${sel.mode === m ? 'bg-ink text-surface' : 'text-ink-2 hover:bg-hairline'}`}
+                aria-pressed={mode === m}
+                data-selected={mode === m ? 'true' : undefined}
+                onClick={() => sel.setMode(m === DEFAULT_MODE ? null : m)}
+                className={`${PILL} ${mode === m ? 'bg-ink text-surface' : 'text-ink-2 hover:bg-hairline'}`}
               >
                 {m === 'spans' ? 'Spans' : 'Traces'}
               </button>
@@ -331,7 +335,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
               className={FIELD}
               value={sel.groupBy ?? ''}
               disabled={!grouped}
-              title={grouped ? undefined : `Not used by the ${VIEW_LABEL[sel.view]} view in this release`}
+              title={grouped ? undefined : `Not used by the ${VIEW_LABEL[view]} view in this release`}
               aria-describedby={grouped ? undefined : 'group-by-note'}
               onChange={(e) =>
                 e.target.value === '' ? sel.clear('groupBy') : sel.setGroupBy(e.target.value)
@@ -355,10 +359,10 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
             <select
               aria-label="View"
               className={FIELD}
-              value={sel.view}
+              value={view}
               onChange={(e) => setView(e.target.value)}
             >
-              {EXPLORER_VIEWS.map((v) => (
+              {TRACES.views.map((v) => (
                 <option key={v} value={v}>
                   {VIEW_LABEL[v]}
                 </option>
@@ -367,7 +371,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
           </label>
           {result !== null && (
             <output className="ml-auto font-mono text-xs tabular-nums text-muted">
-              {result.total} {sel.mode === 'spans' ? 'spans' : 'traces'}
+              {result.total} {mode === 'spans' ? 'spans' : 'traces'}
               {result.total > result.rows.length ? ` · showing ${result.rows.length}` : ''}
             </output>
           )}
@@ -409,7 +413,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
                       Duration distribution is from the first{' '}
                       <span className="font-mono tabular-nums">{result.rows.length}</span> of{' '}
                       <span className="font-mono tabular-nums">{result.total}</span>{' '}
-                      {sel.mode === 'spans' ? 'spans' : 'traces'}
+                      {mode === 'spans' ? 'spans' : 'traces'}
                     </p>
                   )}
                   <FacetPanel facets={result.facets} durationBins={bins} />
@@ -418,7 +422,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
                   {result.total === 0 ? (
                     <section className="rounded-card border border-hairline bg-surface p-6">
                       <h2 className="text-base font-semibold">
-                        No {sel.mode === 'spans' ? 'spans' : 'traces'} match
+                        No {mode === 'spans' ? 'spans' : 'traces'} match
                       </h2>
                       <p className="mt-1 text-sm text-ink-2">
                         Nothing in this run matches the current filters.
@@ -436,14 +440,14 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
                       <Chart
                         option={chartOption}
                         height={320}
-                        ariaLabel={`${VIEW_LABEL[sel.view]} of ${result.total} ${sel.mode}`}
+                        ariaLabel={`${VIEW_LABEL[view]} of ${result.total} ${mode}`}
                       />
                     </div>
-                  ) : sel.view === 'table' ? (
+                  ) : view === 'table' ? (
                     <GroupTable result={result} groupBy={sel.groupBy} colors={colors} />
                   ) : (
                     <div className="flex flex-col gap-2">
-                      {sel.mode === 'spans' && (
+                      {mode === 'spans' && (
                         <ColumnPicker
                           keys={attributeKeys}
                           chosen={extraColumns}
@@ -451,7 +455,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
                           onRemove={(k) => setExtraColumns(extraColumns.filter((c) => c !== k))}
                         />
                       )}
-                      {sel.mode === 'spans' ? (
+                      {mode === 'spans' ? (
                         <ResultsTable
                           rows={spanRows}
                           columns={spanColumns}

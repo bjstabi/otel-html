@@ -6,6 +6,7 @@ import {
   ottlToTokens,
   tokensToOttl,
 } from '../../src/viewer/components/filter-tokens.js';
+import { parseLogRef } from '../../src/viewer/data/log-query.js';
 import {
   bindUrl,
   createSelectionStore,
@@ -196,6 +197,76 @@ describe('setter validation and bind errors', () => {
     expect(() => s.setCondition('a ==')).toThrow(/condition/);
     expect(() => s.setGroupBy('')).toThrow(/groupBy/);
     expect(() => s.setTab('trace', '')).toThrow(/tabs.trace/);
-    expect(() => s.setTab('trace', 'logs')).toThrow(/tabs.trace[\s\S]*one of flame/);
+    expect(() => s.setTab('trace', 'bogus')).toThrow(/tabs.trace[\s\S]*one of flame/);
+    expect(() => s.setTab('log', 'flame')).toThrow(/tabs.log[\s\S]*one of attributes/);
+  });
+});
+
+describe('logs selection', () => {
+  test('mode defaults to null (the page default) and stays out of the URL', () => {
+    const store = createSelectionStore({});
+    expect(store.getState().mode).toBeNull();
+    store.getState().setMode('patterns');
+    expect(selectionToUrlState(store.getState())).toEqual({ mode: 'patterns' });
+    store.getState().setMode(null);
+    expect(selectionToUrlState(store.getState())).toEqual({});
+  });
+
+  test('log ref and log tab come from the URL and round-trip; the default tab is attributes', () => {
+    const store = createSelectionStore({ log: parseLogRef('12.345', 'log'), ltab: 'trace' });
+    expect(store.getState().logRef).toBe('12.345');
+    expect(store.getState().tabs.log).toBe('trace');
+    expect(selectionToUrlState(store.getState())).toEqual({ log: '12.345', ltab: 'trace' });
+    store.getState().setTab('log', 'attributes');
+    store.getState().clear('logRef');
+    expect(selectionToUrlState(store.getState())).toEqual({});
+  });
+
+  test('setSeverityRange replaces only severity tokens', () => {
+    const store = createSelectionStore({});
+    const s = (): ReturnType<typeof store.getState> => store.getState();
+    s().setCondition(
+      'resource.attributes["service.name"] == "a" and log.severity_number >= SEVERITY_NUMBER_INFO',
+    );
+    s().setSeverityRange('warn', 'warn');
+    expect(s().condition).toBe(
+      'resource.attributes["service.name"] == "a" and log.severity_number >= SEVERITY_NUMBER_WARN and log.severity_number <= SEVERITY_NUMBER_WARN4',
+    );
+    s().setSeverityRange('error', null);
+    expect(s().condition).toBe(
+      'resource.attributes["service.name"] == "a" and log.severity_number >= SEVERITY_NUMBER_ERROR',
+    );
+    s().setSeverityRange(null, 'unspecified');
+    expect(s().condition).toBe(
+      'resource.attributes["service.name"] == "a" and log.severity_number <= SEVERITY_NUMBER_UNSPECIFIED',
+    );
+    s().setSeverityRange(null, null);
+    expect(s().condition).toBe('resource.attributes["service.name"] == "a"');
+    s().setCondition('log.severity_number >= 9 and log.severity_number <= 12');
+    s().setSeverityRange(null, null);
+    expect(s().condition).toBeNull();
+    s().setSeverityRange('trace', 'fatal');
+    expect(s().condition).toBe(
+      'log.severity_number >= SEVERITY_NUMBER_TRACE and log.severity_number <= SEVERITY_NUMBER_FATAL4',
+    );
+  });
+
+  test('setSeverityRange on a condition that is not a flat and fails fast', () => {
+    const store = createSelectionStore({ q: 'a == 1 or b == 2' });
+    expect(() => store.getState().setSeverityRange('warn', null)).toThrow(/condition/);
+  });
+
+  test('selectLog pushes a history entry', () => {
+    const store = createSelectionStore({});
+    const h = fakeHistory('');
+    bindUrl(store, h, () => undefined);
+    store.getState().selectLog(parseLogRef('3.4', 'log'));
+    store.getState().setTab('log', 'surrounding');
+    store.getState().selectLog(null);
+    expect(h.writes).toEqual([
+      { s: 'log=3.4', mode: 'push' },
+      { s: 'log=3.4&ltab=surrounding', mode: 'replace' },
+      { s: 'ltab=surrounding', mode: 'push' },
+    ]);
   });
 });

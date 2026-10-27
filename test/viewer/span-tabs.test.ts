@@ -16,8 +16,8 @@ const event = { time: base.start, name: 'e', attributes: new Map(), droppedAttri
 const ids = (s: SpanRecord): string[] => availableSpanTabs(s).map((t) => t.id);
 
 describe('SPAN_TABS', () => {
-  test('lists overview, events, links, resource in order', () => {
-    expect(SPAN_TABS.map((t) => t.id)).toEqual(['overview', 'events', 'links', 'resource']);
+  test('lists overview, events, links, resource, logs in order; logs is never available until M2 builds it', () => {
+    expect(SPAN_TABS.map((t) => t.id)).toEqual(['overview', 'events', 'links', 'resource', 'logs']);
     expect(SPAN_TAB_IDS).toEqual(SPAN_TABS.map((t) => t.id));
   });
 
@@ -32,7 +32,8 @@ describe('SPAN_TABS', () => {
 
   test('isSpanTabId accepts known ids only', () => {
     expect(isSpanTabId('links')).toBe(true);
-    expect(isSpanTabId('logs')).toBe(false);
+    expect(isSpanTabId('logs')).toBe(true);
+    expect(isSpanTabId('bogus')).toBe(false);
     expect(isSpanTabId('flame')).toBe(false);
   });
 });
