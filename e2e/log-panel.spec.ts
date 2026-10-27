@@ -43,14 +43,21 @@ test('Log panel: open from a row, reload, j/k, Copy link, Esc, and hostile conte
   expect(ref1).not.toBe('');
   await expect(panel.getByRole('tab', { name: 'Attributes' })).toBeVisible();
 
+  // The panel renders from log= before the query delivers rows; j/k need the rows, so wait for the selected row.
+  const selectedRow = page
+    .getByRole('grid', { name: 'Results' })
+    .locator('[role="row"][data-selected="true"]');
+
   // Reload restores the panel.
   await page.reload();
   await expect(page.getByTestId('log-panel')).toBeVisible();
   expect(refOf(page.url())).toBe(ref1);
+  await expect(selectedRow).toBeVisible();
 
   // j / k move through the visible rows.
   await page.keyboard.press('j');
   await expect.poll(() => refOf(page.url())).not.toBe(ref1);
+  await expect(selectedRow).toBeVisible();
   await page.keyboard.press('k');
   await expect.poll(() => refOf(page.url())).toBe(ref1);
 
