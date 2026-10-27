@@ -80,8 +80,6 @@ export const SPAN_SIGNAL: SignalSpec<SpanRecord> = {
   estimate: estimateSpanBytes,
 };
 
-export { logTime };
-
 export const LOG_SIGNAL: SignalSpec<LogRecordRecord> = {
   signal: 'logs',
   columns: LOG_COLUMNS,

@@ -24,14 +24,15 @@ import {
   normalizeTraces,
 } from '../model/normalize.js';
 import type { OtlpRequest } from '../model/otlp-json.js';
-import type {
-  LogRecordRecord,
-  MetricPointRecord,
-  ResourceRecord,
-  ResourceRef,
-  ScopeRecord,
-  ScopeRef,
-  SpanRecord,
+import {
+  type LogRecordRecord,
+  logTime,
+  type MetricPointRecord,
+  type ResourceRecord,
+  type ResourceRef,
+  type ScopeRecord,
+  type ScopeRef,
+  type SpanRecord,
 } from '../model/records.js';
 import type { CompiledCondition } from '../ottl/compile.js';
 import { compileAny } from '../ottl/compile.js';
@@ -51,7 +52,7 @@ import {
   writeManifest,
   writeStateSlot,
 } from './checkpoint.js';
-import { type BuiltChunk, ChunkBuffer, LOG_SIGNAL, logTime, METRIC_SIGNAL, SPAN_SIGNAL } from './chunker.js';
+import { type BuiltChunk, ChunkBuffer, LOG_SIGNAL, METRIC_SIGNAL, SPAN_SIGNAL } from './chunker.js';
 import { DedupeSet } from './dedupe.js';
 import { renderIndexHtml } from './html.js';
 import { acquireLock, type LockHandle } from './lock.js';
