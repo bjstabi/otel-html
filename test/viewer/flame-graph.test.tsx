@@ -115,6 +115,19 @@ describe('flameOption', () => {
     expect((plain as { markLine?: unknown }).markLine).toBeUndefined();
   });
 
+  test('markers outside the trace extent are left out, so no line is drawn beyond the plot', () => {
+    const markLineOf = (times: number[]): { data: { xAxis: number }[] } | undefined => {
+      const o = flameOption(bars, THEME, {
+        ...view,
+        markers: times.map((t) => ({ time: t as RelNanos, label: 'this log' })),
+      });
+      const s = Array.isArray(o.series) ? o.series[0] : o.series;
+      return (s as { markLine?: { data: { xAxis: number }[] } }).markLine;
+    };
+    expect(markLineOf([-1, 0, 500, 1000, 1001])?.data.map((d) => d.xAxis)).toEqual([0, 500, 1000]);
+    expect(markLineOf([-1, 1001])).toBeUndefined();
+  });
+
   test('the minimap is a second custom series with a slider bound to the same zoom', () => {
     const mini = minimapOption(bars, THEME, { start: 10, end: 40 });
     const dz = Array.isArray(mini.dataZoom) ? mini.dataZoom[0] : mini.dataZoom;

@@ -299,7 +299,8 @@ function renderBatch(
 export function flameOption(bars: readonly FlameBar[], theme: FlameTheme, view: FlameView): EChartsOption {
   const { min, max } = extentOf(bars);
   const rows = Math.min(bars.reduce((d, b) => Math.max(d, b.depth), 0) + 1, view.maxRows);
-  const markers = view.markers ?? [];
+  // ECharts does not clip a markLine to the plot: a time outside the trace extent would draw past the axis.
+  const markers = (view.markers ?? []).filter((m) => m.time >= min && m.time <= max);
   const outlineId = view.outlineSpanId ?? null;
   const items = buildFlameItems(bars, view.minBarNs ?? 0, view.selectedSpanId, outlineId);
   const renderItem: RenderItem = (params, api) => {
