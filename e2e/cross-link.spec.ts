@@ -28,14 +28,24 @@ test('Log panel Trace tab: the emitting span is outlined, and Open trace lands o
   const ref = refOf(page.url());
   expect(ref).not.toBe('');
 
-  // The Trace tab straight from the URL.
+  // The Trace tab from a cold load of the URL (the reload makes the hash-only goto a real load).
   await page.goto(`${base}#/logs?log=${ref}&ltab=trace`);
+  await page.reload();
   const panel = page.getByTestId('log-panel');
   const tab = panel.getByTestId('log-trace-tab');
   await expect(tab).toBeVisible();
   await expect(tab.getByTestId('flame-graph')).toBeVisible();
   await expect(tab.getByTestId('flame-outline')).toContainText('payments');
   await expect(tab.getByTestId('flame-outline')).toContainText('emitted this log');
+
+  // Clicking a span is one history entry: Back returns to the log panel.
+  await tab.getByRole('button', { name: 'Waterfall' }).click();
+  await tab.getByRole('treeitem').filter({ hasText: 'payments' }).first().click();
+  await expect(page).toHaveURL(/[?&]trace=/);
+  await expect(page).not.toHaveURL(/[?&]log=/);
+  await page.goBack();
+  await expect(page).toHaveURL(/[?&]log=\d+\.\d+/);
+  await expect(page.getByTestId('log-trace-tab')).toBeVisible();
 
   // Open trace goes to the trace page with the span selected.
   await tab.getByRole('button', { name: /Open trace/ }).click();
