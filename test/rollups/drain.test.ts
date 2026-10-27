@@ -101,6 +101,38 @@ describe('Drain', () => {
     expect(b.toJSON()).toEqual(a.toJSON());
   });
 
+  it('round-trips merged leading wildcards and maxChildren overflow', () => {
+    const a = new Drain();
+    a.add('a1 b1 tail one', 'info', t(1));
+    a.add('a2 b2 tail one', 'info', t(2));
+    for (let i = 0; i < 130; i++) a.add(`${letters(i)} stable word here`, 'info', t(3));
+    const b = Drain.from(JSON.parse(JSON.stringify(a)), 'p');
+    expect(b.toJSON()).toEqual(a.toJSON());
+    for (const d of [a, b]) {
+      d.add('a3 b3 tail one', 'warn', t(4));
+      d.add(`${letters(500)} stable word here`, 'info', t(5));
+      d.add(`${letters(5)} stable word here`, 'error', t(6));
+    }
+    expect(b.toJSON()).toEqual(a.toJSON());
+  });
+
+  it('round-trips at the cluster cap without drifting', () => {
+    const a = new Drain();
+    for (let i = 0; i < DRAIN_PARAMS.maxClusters + 5; i++) a.add(letters(i), 'info', t(i));
+    const b = Drain.from(JSON.parse(JSON.stringify(a)), 'p');
+    for (const d of [a, b]) {
+      d.add(letters(3), 'info', t(9));
+      d.add('zzzz qqqq new shape', 'info', t(9));
+    }
+    expect(b.toJSON()).toEqual(a.toJSON());
+    expect(a.unclustered).toBe(6);
+  });
+
+  it('does not split a surrogate pair when cutting the sample', () => {
+    const c = clusterOf(`${'x'.repeat(255)}\u{1F600}tail`);
+    expect(c.sample).toBe('x'.repeat(255));
+  });
+
   it('from rejects malformed state with an invalid-report path', () => {
     expect(() => Drain.from({ clusters: 'x' }, 'rollups.logs.patterns')).toThrowError(
       /rollups\.logs\.patterns/,

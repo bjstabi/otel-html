@@ -57,6 +57,14 @@ export function template(c: DrainCluster): string {
   return c.truncated ? `${c.tokens.join(' ')} …` : c.tokens.join(' ');
 }
 
+/** The first body seen, cut to `SAMPLE_CHARS` without splitting a surrogate pair. */
+function cutSample(body: string): string {
+  let end = SAMPLE_CHARS;
+  const last = body.charCodeAt(end - 1);
+  if (body.length > end && last >= 0xd800 && last <= 0xdbff) end--;
+  return body.slice(0, end);
+}
+
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\/-]/g, '\\$&');
 }
@@ -126,10 +134,11 @@ export class Drain {
   /** Cluster `body`; returns its cluster id, or -1 once `maxClusters` is reached and no cluster fits. */
   add(body: string, severity: LogSeverityKey, time: RelNanos): number {
     const { tokens, truncated } = tokenize(body);
-    const leaf = this.#leaf(tokens);
+    const atCap = this.#clusters.length >= DRAIN_PARAMS.maxClusters;
+    const leaf = this.#leaf(tokens, !atCap);
     let best: DrainCluster | undefined;
     let bestSim = -1;
-    for (const c of leaf.clusters) {
+    for (const c of leaf?.clusters ?? []) {
       const s = similarity(c.tokens, tokens);
       if (s > bestSim) {
         best = c;
@@ -143,7 +152,7 @@ export class Drain {
       target.first = Math.min(target.first, time);
       target.last = Math.max(target.last, time);
     } else {
-      if (this.#clusters.length >= DRAIN_PARAMS.maxClusters) {
+      if (leaf === undefined || atCap) {
         this.unclustered++;
         return -1;
       }
@@ -155,7 +164,7 @@ export class Drain {
         severities: zeroSeverities(),
         first: time,
         last: time,
-        sample: body.slice(0, SAMPLE_CHARS),
+        sample: cutSample(body),
       };
       this.#clusters.push(target);
       leaf.clusters.push(target);
@@ -169,9 +178,13 @@ export class Drain {
     return this.#clusters;
   }
 
-  #leaf(tokens: readonly string[]): Node {
+  /** The leaf for `tokens`; without `create` the tree is left untouched and a missing path falls back to `<*>`. */
+  #leaf(tokens: readonly string[], create: true): Node;
+  #leaf(tokens: readonly string[], create: boolean): Node | undefined;
+  #leaf(tokens: readonly string[], create: boolean): Node | undefined {
     let node = this.#roots.get(tokens.length);
     if (node === undefined) {
+      if (!create) return undefined;
       node = newNode();
       this.#roots.set(tokens.length, node);
     }
@@ -183,7 +196,9 @@ export class Drain {
         key = WILDCARD;
       }
       let next = node.children.get(key);
+      if (next === undefined && !create) next = node.children.get(WILDCARD);
       if (next === undefined) {
+        if (!create) return undefined;
         next = newNode();
         node.children.set(key, next);
       }
@@ -208,7 +223,7 @@ export class Drain {
     for (const c of s.clusters) {
       const copy: DrainCluster = { ...c, tokens: [...c.tokens], severities: { ...c.severities } };
       d.#clusters.push(copy);
-      d.#leaf(copy.tokens).clusters.push(copy);
+      d.#leaf(copy.tokens, true).clusters.push(copy);
     }
     return d;
   }
