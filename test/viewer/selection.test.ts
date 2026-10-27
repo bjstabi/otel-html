@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest';
+import { OtelHtmlError } from '../../src/model/errors.js';
 import type { SpanId, TraceId } from '../../src/model/ids.js';
 import {
   type FilterToken,
@@ -254,6 +255,13 @@ describe('logs selection', () => {
   test('setSeverityRange on a condition that is not a flat and fails fast', () => {
     const store = createSelectionStore({ q: 'a == 1 or b == 2' });
     expect(() => store.getState().setSeverityRange('warn', null)).toThrow(/condition/);
+  });
+
+  test('setSeverityRange with min above max is a usage error and leaves the condition alone', () => {
+    const store = createSelectionStore({ q: 'log.severity_number >= SEVERITY_NUMBER_INFO' });
+    expect(() => store.getState().setSeverityRange('error', 'warn')).toThrow(OtelHtmlError);
+    expect(() => store.getState().setSeverityRange('error', 'warn')).toThrow(/severity range/);
+    expect(store.getState().condition).toBe('log.severity_number >= SEVERITY_NUMBER_INFO');
   });
 
   test('selectLog pushes a history entry', () => {

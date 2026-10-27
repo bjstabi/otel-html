@@ -1,7 +1,7 @@
 import { OtelHtmlError } from '../../model/errors.js';
 import type { CmpOp, Expr, Value } from '../../ottl/ast.js';
 import { parseCondition, printCondition } from '../../ottl/parse.js';
-import { type LogSeverityKey, SEVERITY_BANDS, severityEnumName } from '../../semconv/severity.js';
+import { LOG_SEVERITY_KEYS, type LogSeverityKey, SEVERITY_BANDS, severityEnumName } from '../../semconv/severity.js';
 
 export type FilterToken = {
   /** Canonical OTTL path (or a path-only arithmetic expression such as a duration). */
@@ -233,8 +233,15 @@ export function severityBounds(band: LogSeverityKey): { first: string; last: str
   return { first: severityEnumName(band, min), last: severityEnumName(band, max) };
 }
 
-/** The tokens for `min` ... `max` bands (null drops that side): the single source for severity range writes. */
+/** The tokens for `min` ... `max` bands (null drops that side): the single source for severity range writes. Throws a usage error when `min` is above `max`. */
 export function severityRangeTokens(min: LogSeverityKey | null, max: LogSeverityKey | null): FilterToken[] {
+  if (min !== null && max !== null && LOG_SEVERITY_KEYS.indexOf(min) > LOG_SEVERITY_KEYS.indexOf(max)) {
+    throw new OtelHtmlError('usage', {
+      path: 'severity range',
+      expected: `a minimum at or below the maximum (${max})`,
+      actual: min,
+    });
+  }
   const out: FilterToken[] = [];
   if (min !== null) out.push({ key: SEVERITY_PATH, op: '>=', value: severityBounds(min).first, enum: true });
   if (max !== null) out.push({ key: SEVERITY_PATH, op: '<=', value: severityBounds(max).last, enum: true });
