@@ -13,10 +13,14 @@ import {
   ExportTraceServiceRequestSchema,
 } from './gen/opentelemetry/proto/collector/trace/v1/trace_service_pb.js';
 
-export type OtlpRequest =
+export type OtlpRequest = (
   | { readonly signal: 'traces'; readonly request: ExportTraceServiceRequest }
   | { readonly signal: 'logs'; readonly request: ExportLogsServiceRequest }
-  | { readonly signal: 'metrics'; readonly request: ExportMetricsServiceRequest };
+  | { readonly signal: 'metrics'; readonly request: ExportMetricsServiceRequest }
+) & {
+  /** Index of the request's first resource entry in its file's resource array, for error paths; 0 if omitted. */
+  readonly first?: number;
+};
 
 export type OtlpSignal = OtlpRequest['signal'];
 
@@ -199,7 +203,7 @@ export function requestOf(
     const request: MessageShape<typeof schema> = fromJson(schema, { [key]: resources } as JsonValue, {
       ignoreUnknownFields: true,
     });
-    return { signal, request } as OtlpRequest;
+    return { signal, request, first } as OtlpRequest;
   } catch (e) {
     throw new OtelHtmlError('invalid-otlp', {
       message: `${source}: ${at}${e instanceof Error ? e.message : String(e)}`,

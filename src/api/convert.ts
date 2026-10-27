@@ -43,8 +43,9 @@ export async function convert(options: ConvertOptions, deps?: Partial<WriterDeps
   try {
     for (const file of files) {
       for await (const request of readOtlpFile(inputPieces(full.fs, file), file, options.signal)) {
-        await session.add(request, file);
+        await session.add(request, file, { partial: true });
       }
+      await session.endInput();
     }
     return await session.close();
   } catch (e) {

@@ -59,8 +59,8 @@ export function* streamOtlpProtobuf(
       throw invalid(e, signal, source);
     }
     if (entry !== null) {
+      yield { ...parseOtlpProtobuf(entry, signal, source), first: entries };
       entries++;
-      yield parseOtlpProtobuf(entry, signal, source);
     }
   }
   if (entries === 0) yield parseOtlpProtobuf(new Uint8Array(), signal, source);

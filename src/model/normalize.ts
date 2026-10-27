@@ -154,10 +154,11 @@ export function normalizeTraces(
   req: ExportTraceServiceRequest,
   ctx: NormalizeContext,
   source: string,
+  first = 0,
 ): SpanRecord[] {
   const out: SpanRecord[] = [];
   for (const [ri, rs] of req.resourceSpans.entries()) {
-    const rp = `resourceSpans[${ri}]`;
+    const rp = `resourceSpans[${first + ri}]`;
     const resource = internResource(rs.resource, rs.schemaUrl, ctx, `${source}: ${rp}`);
     for (const [si, ss] of rs.scopeSpans.entries()) {
       const sp = `${rp}.scopeSpans[${si}]`;
@@ -208,10 +209,11 @@ export function normalizeLogs(
   req: ExportLogsServiceRequest,
   ctx: NormalizeContext,
   source: string,
+  first = 0,
 ): LogRecordRecord[] {
   const out: LogRecordRecord[] = [];
   for (const [ri, rl] of req.resourceLogs.entries()) {
-    const rp = `resourceLogs[${ri}]`;
+    const rp = `resourceLogs[${first + ri}]`;
     const resource = internResource(rl.resource, rl.schemaUrl, ctx, `${source}: ${rp}`);
     for (const [si, sl] of rl.scopeLogs.entries()) {
       const sp = `${rp}.scopeLogs[${si}]`;
@@ -357,10 +359,11 @@ export function normalizeMetrics(
   req: ExportMetricsServiceRequest,
   ctx: NormalizeContext,
   source: string,
+  first = 0,
 ): MetricPointRecord[] {
   const out: MetricPointRecord[] = [];
   for (const [ri, rm] of req.resourceMetrics.entries()) {
-    const rp = `resourceMetrics[${ri}]`;
+    const rp = `resourceMetrics[${first + ri}]`;
     const resource = internResource(rm.resource, rm.schemaUrl, ctx, `${source}: ${rp}`);
     for (const [si, sm] of rm.scopeMetrics.entries()) {
       const sp = `${rp}.scopeMetrics[${si}]`;
