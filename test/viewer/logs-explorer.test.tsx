@@ -271,7 +271,7 @@ describe('LogsExplorer', () => {
     const user = userEvent.setup();
     const { store } = setup({ initial: { mode: 'traces' }, hasTrace: () => Promise.resolve(false) });
     await user.click(await screen.findByText(TRACE));
-    await waitFor(() => expect(store.getState().condition).toBe(`log.trace_id.string == "${TRACE}"`));
+    await waitFor(() => expect(store.getState().condition).toBe(`trace_id.string == "${TRACE}"`));
     expect(store.getState().mode).toBeNull();
     expect(store.getState().traceId).toBeNull();
   });

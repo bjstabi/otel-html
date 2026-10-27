@@ -76,7 +76,8 @@ const VIEW_LABEL: Record<PageView<'logs'>, string> = {
 
 const FIELD = 'rounded-full border border-hairline bg-surface px-3 py-1 text-sm';
 const BODY_PATH = 'log.body.string';
-const TRACE_ID_PATH = 'log.trace_id.string';
+/** Unprefixed, as the trace panel's Logs tab writes it: compiles in span and log_record contexts, so `g t` carries it. */
+const TRACE_ID_PATH = 'trace_id.string';
 const CORE_FACET_KEYS: ReadonlySet<string> = new Set(DEFAULT_LOG_FACETS.map((f) => f.key));
 
 /** `token` added to `condition`, replacing a token on the same key with the same operator. */
