@@ -37,9 +37,7 @@ export class TraceIndex {
   }
 
   add(span: SpanRecord, chunk: ChunkRef, resource: ResourceRecord): void {
-    const e =
-      this.#entry(span.traceId) ??
-      this.#create(span.traceId, emptyEntry(span.start, span.end));
+    const e = this.#entry(span.traceId) ?? this.#create(span.traceId, emptyEntry(span.start, span.end));
     if (e.chunks[e.chunks.length - 1] !== chunk) e.chunks.push(chunk);
     // Timing is span-defined: an entry that so far only knew logs takes the first span's extent outright.
     e.start = e.spans === 0 ? span.start : Math.min(e.start, span.start);
@@ -59,9 +57,7 @@ export class TraceIndex {
   addLog(log: LogRecordRecord, chunk: ChunkRef): void {
     if (log.traceId === null) return;
     const t = logTime(log);
-    const e =
-      this.#entry(log.traceId) ??
-      this.#create(log.traceId, emptyEntry(t, t));
+    const e = this.#entry(log.traceId) ?? this.#create(log.traceId, emptyEntry(t, t));
     if (e.logChunks[e.logChunks.length - 1] !== chunk) e.logChunks.push(chunk);
     if (e.spans === 0) {
       e.start = Math.min(e.start, t);

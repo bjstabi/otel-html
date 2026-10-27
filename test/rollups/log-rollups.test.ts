@@ -72,7 +72,11 @@ describe('LogRollups', () => {
   it('truncation never splits a surrogate pair', () => {
     const r = new LogRollups(opts);
     // The emoji's high surrogate lands on the last kept unit.
-    r.add(logTarget({ attributes: attrs({ big: str(`${'x'.repeat(MAX_FACET_VALUE_LENGTH - 1)}\u{1F600}tail`) }) }));
+    r.add(
+      logTarget({
+        attributes: attrs({ big: str(`${'x'.repeat(MAX_FACET_VALUE_LENGTH - 1)}\u{1F600}tail`) }),
+      }),
+    );
     expect(r.facets.top('big', 5)).toEqual([{ value: 'x'.repeat(MAX_FACET_VALUE_LENGTH - 1), count: 1 }]);
   });
   it('clusters the body', () => {

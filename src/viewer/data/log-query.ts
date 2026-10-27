@@ -1,7 +1,13 @@
 import { anyValueToDisplay } from '../../model/anyvalue.js';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { RelNanos, TraceId, UnixNanos } from '../../model/ids.js';
-import { type LogRecordRecord, logTime, logTimeSource, type ResourceRecord, type ScopeRecord } from '../../model/records.js';
+import {
+  type LogRecordRecord,
+  logTime,
+  logTimeSource,
+  type ResourceRecord,
+  type ScopeRecord,
+} from '../../model/records.js';
 import { type CompiledCondition, compileCondition } from '../../ottl/compile.js';
 import type { LogTarget } from '../../ottl/contexts.js';
 import { logTextFields, matchesText } from '../../ottl/text.js';

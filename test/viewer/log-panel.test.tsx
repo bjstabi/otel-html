@@ -364,7 +364,10 @@ describe('LogPanel', () => {
   });
 
   test('a failed trace lookup says the trace could not be checked and hides the Trace tab', async () => {
-    const ds = { ...source(), hasTrace: () => Promise.reject(new Error('shard failed')) } as unknown as DataSource;
+    const ds = {
+      ...source(),
+      hasTrace: () => Promise.reject(new Error('shard failed')),
+    } as unknown as DataSource;
     mount('0.1', {}, ds);
     const panel = await screen.findByTestId('log-panel');
     expect(await within(panel).findByText('could not check the trace')).toBeTruthy();

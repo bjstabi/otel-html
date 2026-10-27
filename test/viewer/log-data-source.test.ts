@@ -531,7 +531,9 @@ describe('windowed logs', () => {
   test('reports progress once per scanned chunk', async () => {
     const { ds } = await windowed();
     const seen: Array<[number, number]> = [];
-    await ds.queryLogs(query({ text: 'tick', scanAll: true }), (scanned, total) => seen.push([scanned, total]));
+    await ds.queryLogs(query({ text: 'tick', scanAll: true }), (scanned, total) =>
+      seen.push([scanned, total]),
+    );
     expect(seen).toEqual(Array.from({ length: LOG_CHUNK_COUNT }, (_, i) => [i + 1, LOG_CHUNK_COUNT]));
   });
 
