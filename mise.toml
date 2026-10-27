@@ -50,10 +50,11 @@ depends = ["build"]
 usage = 'arg "[args]" var=#true'
 # Timing-sensitive specs (@perf) run alone afterwards, one worker, so parallel browsers do not steal their CPU.
 # Budgets scale with OTEL_HTML_PERF_FACTOR on slow machines; they are never edited.
+# CI runs in the official Playwright image and sets OTEL_HTML_SKIP_BROWSER_INSTALL to skip the browser download.
 # Extra playwright args (`mise run test:e2e -- --project 'firefox-*'`) are passed to both passes.
 run = """
 eval "set -- $usage_args"
-pnpm exec playwright install chromium firefox webkit
+[ -n "$OTEL_HTML_SKIP_BROWSER_INSTALL" ] || pnpm exec playwright install chromium firefox webkit
 pnpm exec playwright test --grep-invert @perf "$@"
 pnpm exec playwright test --grep @perf --workers=1 "$@"
 """

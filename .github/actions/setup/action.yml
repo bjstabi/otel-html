@@ -1,0 +1,22 @@
+name: setup
+description: Installs the mise tools, restores the pnpm store cache, and runs `mise run setup`.
+
+runs:
+  using: composite
+  steps:
+    # Restores ~/.local/share/mise (tool installs) keyed on the mise config; on by default, explicit here.
+    - uses: jdx/mise-action@82a612c5ab8bcda7cc5db6b7e81a8e7584c3dc6e # v5.2.3
+      with:
+        cache: true
+    - id: store
+      shell: bash
+      run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+    # The store is content-addressed, so a stale cache can only miss files, never serve wrong ones; the lockfile
+    # hash keeps it exact and the prefix fallback warm-starts after a dependency bump.
+    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.store.outputs.path }}
+        key: pnpm-store-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
+        restore-keys: pnpm-store-${{ runner.os }}-${{ runner.arch }}-
+    - run: mise run setup
+      shell: bash
