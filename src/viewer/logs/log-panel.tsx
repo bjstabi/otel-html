@@ -13,7 +13,7 @@ import type { DataSource } from '../data/data-source.js';
 import { type LogRef, type LogRow, refParts } from '../data/log-query.js';
 import { MOVE_EVENT } from '../shell/move-event.js';
 import { CONTROL, CopyLink } from '../shell/page-chrome.js';
-import { useSelection } from '../state/selection-context.js';
+import { useSelection, useSelectionStore } from '../state/selection-context.js';
 import { AttributesTab, LogResourceTab, LogTraceTab, SurroundingTab } from './log-tabs.js';
 import { availableLogTabs, isLogTabId, type LogTabId } from './tabs.js';
 
@@ -207,8 +207,10 @@ export function LogPanel(props: LogPanelProps): JSX.Element {
   const [exportError, setExportError] = useState<string | null>(null);
 
   // j/k: with the panel open it owns the move event, so the next/previous log in the visible order opens.
-  const latest = useRef({ logRef, logRefs, select: sel.selectLog });
-  latest.current = { logRef, logRefs, select: sel.selectLog };
+  // The open log is read from the store at event time, so presses faster than a re-render still chain.
+  const store = useSelectionStore();
+  const latest = useRef(logRefs);
+  latest.current = logRefs;
   // With a trace overlay open too, the trace panel owns j/k.
   const movable = logRefs !== undefined && sel.traceId === null;
   useEffect(() => {
@@ -217,8 +219,9 @@ export function LogPanel(props: LogPanelProps): JSX.Element {
       if (!(e instanceof CustomEvent)) return;
       const delta: unknown = e.detail;
       if (delta !== 1 && delta !== -1) return;
-      const { logRef: current, logRefs: refs, select } = latest.current;
-      if (refs === undefined || refs.length === 0) return;
+      const refs = latest.current;
+      const { logRef: current, selectLog: select } = store.getState();
+      if (current === null || refs === undefined || refs.length === 0) return;
       const at = refs.indexOf(current);
       const next =
         at === -1 ? (delta === 1 ? 0 : refs.length - 1) : Math.min(refs.length - 1, Math.max(0, at + delta));
@@ -227,7 +230,7 @@ export function LogPanel(props: LogPanelProps): JSX.Element {
     };
     window.addEventListener(MOVE_EVENT, onMove);
     return () => window.removeEventListener(MOVE_EVENT, onMove);
-  }, [movable]);
+  }, [movable, store]);
 
   // Closing returns focus to the row the panel was opened from, or the grid's focusable row.
   const origin = useRef<HTMLElement | null>(null);

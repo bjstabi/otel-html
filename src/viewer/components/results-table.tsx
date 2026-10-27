@@ -134,6 +134,8 @@ export function ResultsTable<R>(props: ResultsTableProps<R>): JSX.Element {
       if (target === undefined) return;
       const hadFocus = scroller.current?.contains(document.activeElement) === true;
       p.onRowClick(target);
+      // Until the parent re-renders with the new selection, the next press moves on from this row.
+      latest.current = { ...latest.current, selectedId: p.rowId(target) };
       if (hadFocus) focusIndex(next);
       else virtual.scrollToIndex(next);
     };

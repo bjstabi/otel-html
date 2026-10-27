@@ -397,6 +397,19 @@ describe('j/k ownership', () => {
     await waitFor(() => expect(screen.getByTestId('trace-header')).toBeTruthy());
   });
 
+  test('two presses before a re-render move two traces (the open trace is read at event time)', async () => {
+    const store = setup();
+    await screen.findAllByRole('row');
+    press(1);
+    await screen.findByTestId('trace-panel');
+    act(() => {
+      window.dispatchEvent(new CustomEvent(MOVE_EVENT, { detail: 1 }));
+      window.dispatchEvent(new CustomEvent(MOVE_EVENT, { detail: 1 }));
+    });
+    expect(store.getState().traceId).toBe(ids[2]);
+    await waitFor(() => expect(screen.getByTestId('trace-header')).toBeTruthy());
+  });
+
   test('clicking a row opens the panel with the root resource; closing restores focus to the row', async () => {
     const user = userEvent.setup();
     const store = setup();

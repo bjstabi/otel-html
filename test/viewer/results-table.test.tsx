@@ -1,4 +1,4 @@
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { act, cleanup, render, screen, within } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { parseUnixNanos } from '../../src/model/ids.js';
@@ -103,6 +103,15 @@ describe('ResultsTable', () => {
     onRowClick.mockClear();
     window.dispatchEvent(new CustomEvent('oh:move', { detail: 1 }));
     expect(onRowClick).not.toHaveBeenCalled();
+  });
+
+  test('two moves before a re-render chain from the row the first one selected', () => {
+    const { onRowClick } = mount({ selectedId: 's1' });
+    act(() => {
+      window.dispatchEvent(new CustomEvent('oh:move', { detail: 1 }));
+      window.dispatchEvent(new CustomEvent('oh:move', { detail: 1 }));
+    });
+    expect(onRowClick.mock.calls.map((c) => c[0])).toEqual([rows[1], rows[2]]);
   });
 
   test('hostile span names render as text only', () => {

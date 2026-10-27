@@ -241,7 +241,8 @@ describe('LogPanel', () => {
   test('a log without a trace says no trace', async () => {
     mount('0.0');
     const panel = await screen.findByTestId('log-panel');
-    expect(within(panel).getByText('no trace')).toBeTruthy();
+    // The panel mounts before the log loads; wait for its facts.
+    expect(await within(panel).findByText('no trace')).toBeTruthy();
   });
 
   test('a span id without a trace id does not throw', async () => {
@@ -249,7 +250,8 @@ describe('LogPanel', () => {
     ROWS[0] = odd;
     mount('0.0');
     const panel = await screen.findByTestId('log-panel');
-    expect(within(panel).getByText('no trace')).toBeTruthy();
+    // The panel mounts before the log loads; wait for its facts.
+    expect(await within(panel).findByText('no trace')).toBeTruthy();
     expect(within(panel).getByText(`span ${SPAN}`)).toBeTruthy();
     ROWS[0] = row(0);
   });
@@ -282,6 +284,16 @@ describe('LogPanel', () => {
       window.dispatchEvent(new CustomEvent(MOVE_EVENT, { detail: 1 }));
     });
     expect(store.getState().logRef).toBe('0.1');
+  });
+
+  test('two presses before a re-render move two logs (the current log is read at event time)', async () => {
+    const { store } = mount('0.0');
+    await screen.findByTestId('log-panel');
+    act(() => {
+      window.dispatchEvent(new CustomEvent(MOVE_EVENT, { detail: 1 }));
+      window.dispatchEvent(new CustomEvent(MOVE_EVENT, { detail: 1 }));
+    });
+    expect(store.getState().logRef).toBe('0.2');
   });
 
   test('a hostile body renders as text and creates no img element', async () => {

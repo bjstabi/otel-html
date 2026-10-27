@@ -1,5 +1,5 @@
 import { Tooltip } from '@base-ui/react/tooltip';
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import type { Manifest } from '../../src/format/manifest.js';
@@ -14,6 +14,7 @@ import type { DataSource } from '../../src/viewer/data/data-source.js';
 import {
   type LogQuery,
   type LogQueryResult,
+  type LogRef,
   type LogRow,
   type LogTraceRow,
   type PatternRow,
@@ -21,6 +22,7 @@ import {
 } from '../../src/viewer/data/log-query.js';
 import { QUERY_FACET_CAPS } from '../../src/viewer/data/query-common.js';
 import { LogsExplorer } from '../../src/viewer/logs/explorer.js';
+import { MOVE_EVENT } from '../../src/viewer/shell/move-event.js';
 import { createSelectionStore } from '../../src/viewer/state/selection.js';
 import { SelectionProvider } from '../../src/viewer/state/selection-context.js';
 import { ThemeProvider } from '../../src/viewer/theme/theme-provider.js';
@@ -179,6 +181,8 @@ function setup(
     hasTrace: opts.hasTrace ?? (() => Promise.resolve(true)),
     // The trace panel opens on a trace click; its load never settles in these tests.
     getTrace: () => new Promise(() => {}),
+    // The log panel opens on log=; its load never settles in these tests.
+    getLog: () => new Promise(() => {}),
   } as unknown as DataSource;
   const store = createSelectionStore(opts.initial ?? {});
   render(
@@ -344,6 +348,28 @@ describe('LogsExplorer', () => {
     await waitFor(() =>
       expect(within(grid).getByText('retrying charge').closest('[aria-selected="true"]')).not.toBeNull(),
     );
+  });
+
+  test('with log= open and the query still pending, j is a no-op; once the rows arrive j moves', async () => {
+    let resolve: (r: LogQueryResult) => void = () => {};
+    const pending = new Promise<LogQueryResult>((r) => {
+      resolve = r;
+    });
+    const { store } = setup({ queryLogs: () => pending, initial: { log: '0.0' as LogRef } });
+    await screen.findByTestId('log-panel');
+    const press = (): void =>
+      act(() => {
+        window.dispatchEvent(new CustomEvent(MOVE_EVENT, { detail: 1 }));
+      });
+    press();
+    expect(store.getState().logRef).toBe('0.0');
+    await act(async () => {
+      resolve(scripted({ mode: 'logs' } as LogQuery));
+      await pending;
+    });
+    await screen.findByRole('grid', { name: 'Results' });
+    press();
+    expect(store.getState().logRef).toBe('0.1');
   });
 
   test('no match shows "No logs match" and Clear filters clears the condition and text', async () => {
