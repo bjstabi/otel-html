@@ -5,8 +5,9 @@ import type { TraceId } from '../../model/ids.js';
 import type { SpanRollups } from '../../rollups/span-rollups.js';
 import type { StrategySource } from './data-source.js';
 import { epochOf, loadSpanChunk, loadTraceEntry, loadTraceShard } from './load.js';
+import { throwIfAborted } from './query-common.js';
 import type { ScriptLoader } from './script-loader.js';
-import { type SpanEntry, SpanQueryRun, type TraceFacts, throwIfAborted } from './span-query.js';
+import { type SpanEntry, SpanQueryRun, type TraceFacts } from './span-query.js';
 import { assembleTrace, traceNotFound } from './trace-detail.js';
 
 /** Decoded span chunks kept in memory by the windowed strategy (least recently used are dropped). */

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
-import { matchesText, spanTextFields } from '../../src/ottl/text.js';
-import { spanTarget } from './fixtures.js';
+import { logTextFields, matchesText, spanTextFields } from '../../src/ottl/text.js';
+import { logTarget, spanTarget } from './fixtures.js';
 
 describe('free text', () => {
   const target = spanTarget();
@@ -22,5 +22,20 @@ describe('free text', () => {
   });
   test('empty haystack', () => {
     expect(matchesText('x', [])).toBe(false);
+  });
+});
+
+describe('log free text', () => {
+  const target = logTarget({ eventName: 'payment.failed' });
+  test.each([
+    ['DECLINED', true], // body
+    ['error', true], // severity text
+    ['payment.FAILED', true], // event name
+    ['42', true], // log attribute value
+    ['checkout', true], // resource attribute value
+    ['code', false], // keys are not searched
+    ['nope', false],
+  ])('%s -> %s', (q, expected) => {
+    expect(matchesText(q, logTextFields(target))).toBe(expected);
   });
 });

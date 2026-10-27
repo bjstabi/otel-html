@@ -15,8 +15,9 @@ import { parseWith } from '../../format/validate.js';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { TraceId, UnixNanos } from '../../model/ids.js';
 import { SpanRollups } from '../../rollups/span-rollups.js';
+import { QUERY_FACET_CAPS } from './query-common.js';
 import type { ScriptLoader } from './script-loader.js';
-import { type LoadedChunk, QUERY_FACET_CAPS, type SpanEntry, toEntries } from './span-query.js';
+import { type LoadedChunk, type SpanEntry, toEntries } from './span-query.js';
 
 export function epochOf(manifest: Manifest): UnixNanos {
   return BigInt(manifest.epochUnixNano) as UnixNanos;
