@@ -1,6 +1,7 @@
 import { Tabs } from '@base-ui/react/tabs';
 import { CircleAlert, Copy, Download, Maximize2, X } from 'lucide-react';
 import { type JSX, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { assertNever, OtelHtmlError } from '../../model/errors.js';
 import { parseUnixNanos, type RelNanos, type SpanId, type TraceId, type UnixNanos } from '../../model/ids.js';
 import { formatDuration, formatTime } from '../../semconv/formatters.js';
 import { downloadBlob, otlpBlob } from '../components/export.js';
@@ -78,7 +79,12 @@ function CopyId(props: { id: string }): JSX.Element {
   const copy = async (): Promise<void> => {
     const clipboard: Clipboard | undefined = navigator.clipboard;
     try {
-      if (clipboard === undefined) throw new Error('clipboard unavailable');
+      if (clipboard === undefined)
+        throw new OtelHtmlError('usage', {
+          path: 'clipboard',
+          expected: 'navigator.clipboard',
+          actual: 'unavailable',
+        });
       await clipboard.writeText(props.id);
       setNote('Copied');
     } catch {
@@ -288,10 +294,8 @@ export function TracePanel(props: TracePanelProps): JSX.Element {
         ) : (
           <TraceLogsTab rows={logs.rows} scope={{ traceId: detail.traceId }} epoch={epoch} />
         );
-      default: {
-        const never: never = tab;
-        throw new Error(`unhandled trace tab ${String(never)}`);
-      }
+      default:
+        return assertNever(tab, 'trace tab');
     }
   };
 
