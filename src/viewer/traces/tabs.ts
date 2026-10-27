@@ -40,9 +40,13 @@ export function availableTabs(detail: TraceDetail): readonly TraceTab[] {
 export const SPAN_TAB_IDS = ['overview', 'events', 'logs', 'links', 'resource'] as const;
 export type SpanTabId = (typeof SPAN_TAB_IDS)[number];
 
-/** What a span tab may depend on besides the span: the ids of spans that emitted logs (null while they load). */
+/**
+ * What a span tab may depend on besides the span: the ids of spans that emitted logs (null while they load or
+ * after a failed load) and the load error, if any.
+ */
 export interface SpanTabContext {
   logSpanIds: ReadonlySet<SpanId> | null;
+  logsError: string | null;
 }
 
 export interface SpanTab {
@@ -59,7 +63,11 @@ export function isSpanTabId(s: string): s is SpanTabId {
 export const SPAN_TABS: readonly SpanTab[] = [
   { id: 'overview', label: 'Overview', available: () => true },
   { id: 'events', label: 'Events', available: (s) => s.events.length > 0 },
-  { id: 'logs', label: 'Logs', available: (s, ctx) => ctx.logSpanIds?.has(s.spanId) === true },
+  {
+    id: 'logs',
+    label: 'Logs',
+    available: (s, ctx) => ctx.logsError !== null || ctx.logSpanIds?.has(s.spanId) === true,
+  },
   { id: 'links', label: 'Links', available: (s) => s.links.length > 0 },
   { id: 'resource', label: 'Resource', available: () => true },
 ];

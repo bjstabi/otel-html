@@ -52,7 +52,8 @@ describe('eager strategy', () => {
     );
     await ds.querySpans(query({ condition: ERRORS }));
     await ds.getTrace(traceIdOf(2) as TraceId);
-    expect(loader.calls).toEqual(loaded);
+    // Spans stay in memory; only the trace's index shard (for its log count) is read.
+    expect(loader.calls).toEqual([...loaded, `data/traces/${traceIdOf(2).slice(0, 2)}.js`]);
   });
 
   test('filters to exactly the error spans, with facets over the filtered set and no partial flag', async () => {

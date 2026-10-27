@@ -105,11 +105,7 @@ export interface SpanStrategy extends Pick<DataSource, 'querySpans' | 'hasTrace'
 }
 
 /** What each log strategy provides; `createDataSource` adds the landing. */
-export interface LogStrategy
-  extends Pick<DataSource, 'queryLogs' | 'getLog' | 'traceLogs' | 'surroundingLogs'> {
-  /** Log records carrying the trace id (for `TraceDetail.logCount`). */
-  logCount(traceId: TraceId): Promise<number>;
-}
+export type LogStrategy = Pick<DataSource, 'queryLogs' | 'getLog' | 'traceLogs' | 'surroundingLogs'>;
 
 const DURATION_KEY_SEP = '\u0000';
 
@@ -166,7 +162,6 @@ function lazyLogStrategy(build: () => Promise<LogStrategy>): LogStrategy {
       checkSurroundingCount(n); // a bad count fails before any chunk loads
       return (await get()).surroundingLogs(ref, n);
     },
-    logCount: async (traceId) => (await get()).logCount(traceId),
   };
 }
 
@@ -211,8 +206,9 @@ export async function createDataSource(
     },
     querySpans: spanStrategy.querySpans,
     async getTrace(traceId) {
-      const [trace, logCount] = await Promise.all([spanStrategy.getTrace(traceId), logs.logCount(traceId)]);
-      return { ...trace, logCount };
+      // The count comes from the trace index, so opening a trace never waits on (or fails with) the log load.
+      const [trace, entry] = await Promise.all([spanStrategy.getTrace(traceId), index.entry(traceId)]);
+      return { ...trace, logCount: entry?.logs ?? 0 };
     },
     hasTrace: spanStrategy.hasTrace,
     percentileOf(service, resource, durationNs) {

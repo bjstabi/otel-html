@@ -27,6 +27,8 @@ export interface SpanSectionProps {
   dataSource: DataSource;
   /** The trace's logs (time-ascending), or null while they load or when the trace has none. */
   logs?: readonly LogRow[] | null;
+  /** Why the trace's logs failed to load; the Logs tab then stays visible and shows it. */
+  logsError?: string | null;
 }
 
 const TAB_BASE =
@@ -118,6 +120,7 @@ function CoreFacts(props: { row: { span: SpanRecord }; epoch: UnixNanos; traceSt
 export function SpanSection(props: SpanSectionProps): JSX.Element {
   const { detail, spanId, epoch, dataSource } = props;
   const logs = props.logs ?? null;
+  const logsError = props.logsError ?? null;
   const sel = useSelection((s) => s);
   const colors = useColorAssigner();
   const [pins, setPins] = useState<string[]>(loadPins);
@@ -176,7 +179,7 @@ export function SpanSection(props: SpanSectionProps): JSX.Element {
     onExclude: filter('resource', '!='),
   };
 
-  const tabs = availableSpanTabs(span, { logSpanIds });
+  const tabs = availableSpanTabs(span, { logSpanIds, logsError });
   const wanted = sel.tabs.span;
   const active: SpanTabId = tabs.find((t) => t.id === wanted)?.id ?? 'overview';
   const percentile = dataSource.percentileOf(row.service, row.resource, row.durationNs);
@@ -245,7 +248,12 @@ export function SpanSection(props: SpanSectionProps): JSX.Element {
             </>
           )}
           {active === 'events' && <EventsTab span={span} />}
-          {active === 'logs' && (
+          {active === 'logs' && logsError !== null && (
+            <p data-testid="span-logs-error" role="alert" className="p-3 text-sm text-critical">
+              The logs could not be loaded: {logsError}
+            </p>
+          )}
+          {active === 'logs' && logsError === null && (
             <TraceLogsTab
               rows={spanLogs}
               scope={{ traceId: detail.traceId, spanId: span.spanId }}

@@ -392,6 +392,7 @@ export function TracePanel(props: TracePanelProps): JSX.Element {
                 epoch,
                 dataSource,
                 logs: logs.rows,
+                logsError: logs.error,
               })}
             />
           </Tabs.Root>

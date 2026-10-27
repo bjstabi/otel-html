@@ -245,6 +245,38 @@ describe.each([
     expect((await ds.getTrace(LOG_TRACE as TraceId)).logCount).toBe(3);
   });
 
+  test('getTrace resolves with the indexed log count without waiting on the log load', async () => {
+    const base = createScriptedLoader(rep.files);
+    const loader: ScriptedLoader = {
+      get calls() {
+        return base.calls;
+      },
+      reset: () => base.reset(),
+      // The eager log load never finishes (or fails): opening a trace must not depend on it.
+      load: (path, key) =>
+        path.startsWith('data/chunks/logs/') ? new Promise<never>(() => undefined) : base.load(path, key),
+    };
+    const ds = await createDataSource(loader, rep.manifest, budget);
+    expect((await ds.getTrace(LOG_TRACE as TraceId)).logCount).toBe(3);
+    expect(base.calls.some((c) => c.startsWith('data/chunks/logs/'))).toBe(false);
+  });
+
+  test('getTrace resolves when the log load rejects', async () => {
+    const base = createScriptedLoader(rep.files);
+    const loader: ScriptedLoader = {
+      get calls() {
+        return base.calls;
+      },
+      reset: () => base.reset(),
+      load: (path, key) =>
+        path.startsWith('data/chunks/logs/')
+          ? Promise.reject(new Error('log chunk is corrupt'))
+          : base.load(path, key),
+    };
+    const ds = await createDataSource(loader, rep.manifest, budget);
+    expect((await ds.getTrace(LOG_TRACE as TraceId)).logCount).toBe(3);
+  });
+
   test('surroundingLogs keeps to the same service and host and crosses a chunk boundary', async () => {
     const ref = await refOf('tick 5.0');
     const { ds } = await open(budget);

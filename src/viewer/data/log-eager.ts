@@ -58,9 +58,6 @@ export async function createEagerLogSource(loader: ScriptLoader, manifest: Manif
     traceLogs(traceId) {
       return Promise.resolve(byTrace.get(traceId) ?? []);
     },
-    logCount(traceId) {
-      return Promise.resolve(byTrace.get(traceId)?.length ?? 0);
-    },
     surroundingLogs(ref, n) {
       try {
         checkSurroundingCount(n);

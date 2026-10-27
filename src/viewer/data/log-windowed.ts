@@ -114,10 +114,6 @@ export function createWindowedLogSource(
         .sort(byTimeThenRef);
     },
 
-    async logCount(traceId: TraceId) {
-      return (await index.entry(traceId))?.logs ?? 0;
-    },
-
     async surroundingLogs(ref, n) {
       checkSurroundingCount(n);
       const { chunk, entries, log } = await locate(ref);

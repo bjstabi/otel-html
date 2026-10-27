@@ -535,7 +535,7 @@ describe('TracePanel Logs tabs', () => {
     expect(traceLogs.mock.calls[1]?.[0]).toBe(other);
   });
 
-  test('a failed logs load shows an alert in the trace Logs tab and hides the span Logs tab', async () => {
+  test('a failed logs load shows an alert in the trace Logs tab and in the span Logs tab', async () => {
     const user = userEvent.setup();
     const ds = source({
       getTrace: () => Promise.resolve({ ...okDetail(), logCount: 2 }),
@@ -556,9 +556,10 @@ describe('TracePanel Logs tabs', () => {
     await user.click(await screen.findByRole('tab', { name: 'Logs' }));
     const alert = await screen.findByRole('alert');
     expect(alert.textContent).toContain('The logs could not be loaded: shard 4 is corrupt');
-    expect(
-      within(screen.getByRole('tablist', { name: 'Span views' })).queryByRole('tab', { name: 'Logs' }),
-    ).toBeNull();
+    await user.click(
+      await within(screen.getByRole('tablist', { name: 'Span views' })).findByRole('tab', { name: 'Logs' }),
+    );
+    expect((await screen.findByTestId('span-logs-error')).textContent).toContain('shard 4 is corrupt');
   });
 
   test('a move event with focus inside the embedded list is left to the trace panel', async () => {
