@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { AnyValue, Attributes } from '../../src/model/anyvalue.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import type { RelNanos, TraceId } from '../../src/model/ids.js';
+import { MAX_FACET_VALUE_LENGTH } from '../../src/rollups/facet-values.js';
 import { DEFAULT_LOG_FACETS, LogRollups } from '../../src/rollups/log-rollups.js';
 import { logTarget } from '../ottl/fixtures.js';
 
@@ -56,6 +57,17 @@ describe('LogRollups', () => {
     expect(r.facets.top('code', 5)).toEqual([{ value: '42', count: 1 }]);
     expect(r.facets.top('plain', 5)).toEqual([{ value: 'x', count: 1 }]);
     expect(r.facets.keys()).not.toContain('nested');
+  });
+  it('skips attributes named like a core key', () => {
+    const r = new LogRollups(opts);
+    r.add(logTarget({ attributes: attrs({ 'service.name': str('spoof'), 'host.name': str('h') }) }));
+    expect(r.facets.top('service.name', 5)).toEqual([{ value: 'checkout', count: 1 }]);
+    expect(r.facets.top('host.name', 5)).toEqual([]);
+  });
+  it('truncates long values to the cap', () => {
+    const r = new LogRollups(opts);
+    r.add(logTarget({ attributes: attrs({ big: str('x'.repeat(1000)) }) }));
+    expect(r.facets.top('big', 5)).toEqual([{ value: 'x'.repeat(MAX_FACET_VALUE_LENGTH), count: 1 }]);
   });
   it('clusters the body', () => {
     const r = fill();

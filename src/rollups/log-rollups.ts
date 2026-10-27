@@ -7,9 +7,10 @@ import type { LogTarget } from '../ottl/contexts.js';
 import { ATTR_HOST_NAME, ATTR_SERVICE_NAME } from '../semconv/attributes.js';
 import { serviceName } from '../semconv/resource-name.js';
 import { Drain, type SerializedDrain } from './drain.js';
+import { addFacet, facetableAttributes } from './facet-values.js';
 import { FacetCounts } from './facets.js';
 import { LOG_SEVERITY_KEYS, type LogSeverityKey, severityKey } from './signal-counts.js';
-import { MAX_FACET_VALUE_LENGTH, type SpanRollupOptions } from './span-rollups.js';
+import type { SpanRollupOptions } from './span-rollups.js';
 import { TimeBuckets } from './time-buckets.js';
 
 export interface LogCoreFacet {
@@ -73,20 +74,12 @@ export class LogRollups {
       const v = f.value(t);
       if (v !== undefined) this.#facet(f.key, v);
     }
-    for (const [k, v] of log.attributes) {
-      if (CORE_KEYS.has(k)) continue;
-      if (v.kind === 'array' || v.kind === 'kvlist' || v.kind === 'bytes' || v.kind === 'empty') continue;
-      this.#facet(k, anyValueToDisplay(v), v.kind);
-    }
+    for (const a of facetableAttributes(log.attributes, CORE_KEYS)) this.#facet(a.key, a.value, a.kind);
     this.patterns.add(anyValueToDisplay(log.body), severity, time);
   }
 
   #facet(key: string, value: string, kind: 'string' | 'int' | 'double' | 'bool' = 'string'): void {
-    this.facets.add(
-      key,
-      value.length > MAX_FACET_VALUE_LENGTH ? value.slice(0, MAX_FACET_VALUE_LENGTH) : value,
-      kind,
-    );
+    addFacet(this.facets, key, value, kind);
   }
 
   toJSON(): SerializedLogRollups {
