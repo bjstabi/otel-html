@@ -3,6 +3,7 @@ import {
   LARGE_REPORT_DIR,
   LARGE_SPAN_COUNT,
   LARGE_TRACE_ID,
+  perfFactor,
   SERVICE_A,
   SERVICE_B,
   TRACE_1,
@@ -10,6 +11,7 @@ import {
 } from './fixture.js';
 import { expect, test } from './test.js';
 
+/** Fixed budget; `OTEL_HTML_PERF_FACTOR` scales it for slow machines, the constant is never loosened. */
 const PERF_BUDGET_MS = 500;
 
 interface PerfProbe {
@@ -177,6 +179,6 @@ test(
       `PERF flame ${perf?.flameBars} spans: ${perf?.flameRenderMs.toFixed(1)} ms (layout ${perf?.layoutMs.toFixed(1)}, option ${perf?.optionMs.toFixed(1)}, first paint ${perf?.renderedMs.toFixed(1)})\n`,
     );
     expect(perf?.flameBars).toBe(LARGE_SPAN_COUNT);
-    expect(perf?.flameRenderMs ?? Number.POSITIVE_INFINITY).toBeLessThan(PERF_BUDGET_MS);
+    expect(perf?.flameRenderMs ?? Number.POSITIVE_INFINITY).toBeLessThan(PERF_BUDGET_MS * perfFactor());
   },
 );
