@@ -39,6 +39,21 @@ describe.each([
     expect(await f.list(join(dir, 'a/b'))).toEqual(['x.txt']);
   });
 
+  test('readChunks yields the file in pieces that join to its bytes; a missing file fails with ENOENT', async () => {
+    const f = fs();
+    const bytes = new Uint8Array(200_000).map((_, i) => i % 251);
+    await f.writeBytes(join(dir, 'big.bin'), bytes);
+    const read = async (p: string): Promise<Uint8Array[]> => {
+      const out: Uint8Array[] = [];
+      for await (const piece of f.readChunks?.(p) ?? []) out.push(piece);
+      return out;
+    };
+    const pieces = await read(join(dir, 'big.bin'));
+    expect(pieces.length).toBeGreaterThan(1);
+    expect(Buffer.concat(pieces).equals(bytes)).toBe(true);
+    expect(await code(read(join(dir, 'nope.bin')))).toBe('ENOENT');
+  });
+
   test('list of a missing directory fails with ENOENT', async () => {
     const f = fs();
     await f.mkdirp(dir);

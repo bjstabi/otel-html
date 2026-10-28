@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { parseWith } from '../format/validate.js';
 import type { RelNanos } from '../model/ids.js';
-import { LOG_SEVERITY_KEYS, type LogSeverityKey } from './signal-counts.js';
+import { LOG_SEVERITY_KEYS, type LogSeverityKey } from '../semconv/severity.js';
 
 /** Drain parameters; they are stored with the clusters so a change can never silently mix clusterings. */
 export const DRAIN_PARAMS = {

@@ -1,5 +1,6 @@
 import { wrapDataFile } from '../../src/format/data-file.js';
 import type { Manifest } from '../../src/format/manifest.js';
+import type { TraceEntry } from '../../src/format/trace-shard.js';
 import { openSession } from '../../src/writer/session.js';
 import type { JsonObject } from '../../test-support/otlp-builders.js';
 import { attr, logRecord, span } from '../../test-support/otlp-builders.js';
@@ -85,12 +86,12 @@ export async function buildReport(traces: number, errorTraces: readonly number[]
 export function withShard(
   files: ReadonlyMap<string, string>,
   shard: string,
-  edit: (entries: Record<string, { chunks: string[] }>) => void,
+  edit: (entries: Record<string, TraceEntry>) => void,
 ): Map<string, string> {
   const path = `data/traces/${shard}.js`;
   const text = files.get(path) ?? '';
   const body = text.slice(text.indexOf(',') + 1, -3);
-  const entries: Record<string, { chunks: string[] }> = JSON.parse(body);
+  const entries: Record<string, TraceEntry> = JSON.parse(body);
   edit(entries);
   return new Map(files).set(path, wrapDataFile(`traces/${shard}`, entries));
 }
@@ -224,4 +225,56 @@ export async function buildLogReport(): Promise<Fixture> {
   }
   await session.close();
   return { files: reportFilesFromSnapshot(w.fs.snapshot(), OUT), manifest: manifestOf(w, OUT) };
+}
+
+/** One log chunk per entry of `chunks`, all of one `api`/`h1` stream: each log is `[ns after the epoch, body]`. */
+export async function buildLogChunksReport(
+  chunks: readonly (readonly [number, string])[][],
+): Promise<Fixture> {
+  const w = createTestWriter();
+  const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'create' });
+  const base = BigInt(EPOCH_NS);
+  for (const [k, bodies] of chunks.entries()) {
+    await session.add(
+      otlp({
+        resourceLogs: [
+          {
+            resource: {
+              attributes: [
+                attr('service.name', { stringValue: 'api' }),
+                attr('host.name', { stringValue: 'h1' }),
+              ],
+            },
+            scopeLogs: [
+              {
+                scope: { name: 'test-scope' },
+                logRecords: bodies.map(([ns, body]) =>
+                  logRecord({ timeUnixNano: String(base + BigInt(ns)), body: { stringValue: body } }),
+                ),
+              },
+            ],
+          },
+        ],
+      }),
+      `chunk${k}`,
+    );
+    await session.flush();
+  }
+  await session.close();
+  return { files: reportFilesFromSnapshot(w.fs.snapshot(), OUT), manifest: manifestOf(w, OUT) };
+}
+
+/**
+ * Two log chunks whose time ranges overlap: chunk 0 holds `wide 0`, `wide 100` and `wide 1000` (ns after the
+ * epoch), chunk 1 holds `inner 50`, which sits between the first two.
+ */
+export function buildOverlappingLogReport(): Promise<Fixture> {
+  return buildLogChunksReport([
+    [
+      [0, 'wide 0'],
+      [100, 'wide 100'],
+      [1000, 'wide 1000'],
+    ],
+    [[50, 'inner 50']],
+  ]);
 }

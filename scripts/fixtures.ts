@@ -361,19 +361,30 @@ interface LinkedLog {
   observedOnly?: boolean;
 }
 
+/** Marks a record to emit with only `observedTimestamp`; removed again when the SDK output is post-processed. */
+const OBSERVED_ONLY_MARK = 'otel_html.fixture.observed_only';
+
 interface OtlpLogsFile {
   resourceLogs: {
-    scopeLogs: { logRecords: { timeUnixNano?: string; body?: { stringValue?: string } }[] }[];
+    scopeLogs: { logRecords: { timeUnixNano?: string; attributes?: { key: string }[] }[] }[];
   }[];
 }
 
-/** The SDK stamps a missing `timestamp` with the wall clock; drop it again so the record carries only `observedTimeUnixNano`. */
-function stripWallClockTimestamps(json: string, bodies: ReadonlySet<AnyValue>): string {
+/**
+ * The SDK stamps a missing `timestamp` with the wall clock; drop it again on the marked records so they carry only
+ * `observedTimeUnixNano`, and drop the mark. Keyed by the mark, not the body, so another log with the same body keeps
+ * its time.
+ */
+function stripWallClockTimestamps(json: string): string {
   const file = JSON.parse(json) as OtlpLogsFile;
   for (const rl of file.resourceLogs)
     for (const sl of rl.scopeLogs)
-      for (const record of sl.logRecords)
-        if (bodies.has(record.body?.stringValue ?? null)) delete record.timeUnixNano;
+      for (const record of sl.logRecords) {
+        const attrs = record.attributes ?? [];
+        if (!attrs.some((a) => a.key === OBSERVED_ONLY_MARK)) continue;
+        delete record.timeUnixNano;
+        record.attributes = attrs.filter((a) => a.key !== OBSERVED_ONLY_MARK);
+      }
   return JSON.stringify(file);
 }
 
@@ -677,7 +688,6 @@ async function buildLinked(): Promise<{ traces: string; logs: string }> {
     if (c === 'dangling') return danglingContext;
     return trace.setSpan(ROOT_CONTEXT, c.span);
   };
-  const observedOnlyBodies = new Set(entries.flatMap(([, l]) => (l.observedOnly === true ? [l.body] : [])));
   entries.sort((a, b) => a[0] - b[0]);
   for (const [ms, log] of entries) {
     const when = hr(ms * 1e6);
@@ -689,14 +699,18 @@ async function buildLinked(): Promise<{ traces: string; logs: string }> {
       ...(log.text === '' ? {} : { severityText: log.text }),
       body: log.body,
       ...(log.eventName === undefined ? {} : { eventName: log.eventName }),
-      attributes: { 'log.source': log.service, ...log.attrs },
+      attributes: {
+        'log.source': log.service,
+        ...log.attrs,
+        ...(log.observedOnly === true ? { [OBSERVED_ONLY_MARK]: true } : {}),
+      },
     });
   }
   const logBytes = JsonLogsSerializer.serializeRequest(logExporter.getFinishedLogRecords());
   if (logBytes === undefined) throw new Error('JsonLogsSerializer returned nothing');
   return {
     traces: serializeSpans(spanExporter.getFinishedSpans()),
-    logs: stripWallClockTimestamps(new TextDecoder().decode(logBytes), observedOnlyBodies),
+    logs: stripWallClockTimestamps(new TextDecoder().decode(logBytes)),
   };
 }
 

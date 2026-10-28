@@ -1,14 +1,13 @@
 import { Tabs } from '@base-ui/react/tabs';
 import { ChevronRight } from 'lucide-react';
 import { type JSX, useMemo, useState } from 'react';
-import { type AnyValue, anyValueToDisplay } from '../../model/anyvalue.js';
-import { OtelHtmlError } from '../../model/errors.js';
+import { anyValueToDisplay } from '../../model/anyvalue.js';
 import type { SpanId, UnixNanos } from '../../model/ids.js';
 import { type SpanEventRecord, SpanKind, type SpanRecord, StatusCode } from '../../model/records.js';
 import { formatDuration, formatTime } from '../../semconv/formatters.js';
-import { addAttributeFilter } from '../components/attribute-filter.js';
 import { AttributeGroups, loadPins, savePins } from '../components/attribute-groups.js';
 import { type AttributeActions, ResourceTab } from '../components/resource-tab.js';
+import { useFilterActions } from '../components/use-filter-actions.js';
 import type { DataSource, TraceDetail } from '../data/data-source.js';
 import type { LogRow } from '../data/log-query.js';
 import { useSelection } from '../state/selection-context.js';
@@ -27,6 +26,8 @@ export interface SpanSectionProps {
   dataSource: DataSource;
   /** The trace's logs (time-ascending), or null while they load or when the trace has none. */
   logs?: readonly LogRow[] | null;
+  /** Why the trace's logs failed to load; the Logs tab then stays visible and shows it. */
+  logsError?: string | null;
 }
 
 const TAB_BASE =
@@ -118,24 +119,24 @@ function CoreFacts(props: { row: { span: SpanRecord }; epoch: UnixNanos; traceSt
 export function SpanSection(props: SpanSectionProps): JSX.Element {
   const { detail, spanId, epoch, dataSource } = props;
   const logs = props.logs ?? null;
+  const logsError = props.logsError ?? null;
   const sel = useSelection((s) => s);
   const colors = useColorAssigner();
   const [pins, setPins] = useState<string[]>(loadPins);
-  const [error, setError] = useState<string | null>(null);
+  const filterActions = useFilterActions('span');
   const row = useMemo(() => detail.spans.find((r) => r.span.spanId === spanId) ?? null, [detail, spanId]);
   const facts = useMemo(() => traceFacts(detail), [detail]);
-  // Only logs of this trace and with a span id are indexed, so another trace's logs can never appear here.
+  // `logs` are this trace's (the loader is keyed by trace id and drops a late result for another one), so no
+  // per-row trace check is needed.
   const logSpanIds = useMemo(() => {
     if (logs === null) return null;
     const ids = new Set<SpanId>();
-    for (const l of logs)
-      if (l.log.traceId === detail.traceId && l.log.spanId !== null) ids.add(l.log.spanId);
+    for (const l of logs) if (l.log.spanId !== null) ids.add(l.log.spanId);
     return ids;
-  }, [logs, detail.traceId]);
+  }, [logs]);
   const spanLogs = useMemo(
-    () =>
-      logs === null ? [] : logs.filter((l) => l.log.traceId === detail.traceId && l.log.spanId === spanId),
-    [logs, detail.traceId, spanId],
+    () => (logs === null ? [] : logs.filter((l) => l.log.spanId === spanId)),
+    [logs, spanId],
   );
 
   if (row === null) {
@@ -156,27 +157,10 @@ export function SpanSection(props: SpanSectionProps): JSX.Element {
     setPins(next);
     savePins(next);
   };
-  const filter =
-    (scope: 'attribute' | 'resource', op: '==' | '!=') =>
-    (key: string, value: AnyValue): void => {
-      try {
-        setError(null);
-        sel.setCondition(addAttributeFilter(sel.condition, scope, key, value, op));
-      } catch (e) {
-        setError(e instanceof OtelHtmlError ? e.message : String(e));
-      }
-    };
-  const spanActions: AttributeActions = {
-    onFilter: filter('attribute', '=='),
-    onExclude: filter('attribute', '!='),
-    onTogglePin: togglePin,
-  };
-  const resourceActions: AttributeActions = {
-    onFilter: filter('resource', '=='),
-    onExclude: filter('resource', '!='),
-  };
+  const spanActions: AttributeActions = { ...filterActions.attribute, onTogglePin: togglePin };
+  const resourceActions: AttributeActions = filterActions.resource;
 
-  const tabs = availableSpanTabs(span, { logSpanIds });
+  const tabs = availableSpanTabs(span, { logSpanIds, logsError });
   const wanted = sel.tabs.span;
   const active: SpanTabId = tabs.find((t) => t.id === wanted)?.id ?? 'overview';
   const percentile = dataSource.percentileOf(row.service, row.resource, row.durationNs);
@@ -204,9 +188,9 @@ export function SpanSection(props: SpanSectionProps): JSX.Element {
           )}
         </p>
       </div>
-      {error !== null && (
+      {filterActions.error !== null && (
         <p role="alert" className="text-sm text-critical">
-          {error}
+          {filterActions.error}
         </p>
       )}
       <Tabs.Root
@@ -245,7 +229,12 @@ export function SpanSection(props: SpanSectionProps): JSX.Element {
             </>
           )}
           {active === 'events' && <EventsTab span={span} />}
-          {active === 'logs' && (
+          {active === 'logs' && logsError !== null && (
+            <p data-testid="span-logs-error" role="alert" className="p-3 text-sm text-critical">
+              The logs could not be loaded: {logsError}
+            </p>
+          )}
+          {active === 'logs' && logsError === null && (
             <TraceLogsTab
               rows={spanLogs}
               scope={{ traceId: detail.traceId, spanId: span.spanId }}

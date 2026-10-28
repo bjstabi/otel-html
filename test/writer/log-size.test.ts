@@ -35,11 +35,10 @@ describe('log chunk size', () => {
     expect(perLog).toBeLessThanOrEqual(MAX_BYTES_PER_LOG);
   });
 
-  // KNOWN FAILING under OTEL_HTML_LOAD=1: measured 1127 MB peak RSS against the 512 MB target (spec §16). The gap is
-  // open and awaits a user decision; whole-file JSON.parse of the 25 MB inputs dominates (about 600 MB on its own).
   // The real pipeline: 10 OTLP files of 100k logs converted by the built library in a child process, whose own
-  // high-water resident set size (process.resourceUsage().maxRSS, kilobytes) is the figure. Run with OTEL_HTML_LOAD=1
-  // after `mise run build`.
+  // high-water resident set size (process.resourceUsage().maxRSS, kilobytes) is the figure. Input is read in pieces
+  // and parsed one resource entry at a time (OtlpJsonStream); measured about 300-320 MB on an Apple M-series Mac.
+  // Run with OTEL_HTML_LOAD=1 after `mise run build`.
   test.skipIf(process.env[LOAD_ENV] !== '1')(
     'converting 1M logs from 10 files keeps peak RSS under 512 MB',
     { timeout: 900_000 },

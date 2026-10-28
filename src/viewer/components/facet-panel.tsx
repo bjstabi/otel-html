@@ -1,7 +1,8 @@
 import { type JSX, type ReactNode, useState } from 'react';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { FacetCounts } from '../../rollups/facets.js';
-import { LOG_SEVERITY_KEYS, type LogSeverityKey } from '../../rollups/signal-counts.js';
+import { DEFAULT_LOG_FACETS } from '../../rollups/log-rollups.js';
+import { LOG_SEVERITY_KEYS, type LogSeverityKey } from '../../semconv/severity.js';
 import { useSelection } from '../state/selection-context.js';
 import {
   type FacetScope,
@@ -11,8 +12,7 @@ import {
   facetFilterable,
   facetToken,
   ottlToTokens,
-  SEVERITY_BOUNDS,
-  SEVERITY_PATH,
+  severityRangeIncludes,
   tokensToOttl,
 } from './filter-tokens.js';
 import { SeverityLabel } from './severity.js';
@@ -44,7 +44,7 @@ interface FacetDef {
   scope: FacetScope;
 }
 
-/** Per-signal facet groups, in display order. Log facets are one flat list (Host sits between Service and Scope). */
+/** Per-signal facet groups, in display order. Log facets come from `DEFAULT_LOG_FACETS` (one flat list: Host sits between Service and Scope). */
 const FACET_DEFS: Record<FacetSignal, { core: readonly FacetDef[]; resource: readonly FacetDef[] }> = {
   span: {
     core: [
@@ -60,14 +60,7 @@ const FACET_DEFS: Record<FacetSignal, { core: readonly FacetDef[]; resource: rea
     ],
   },
   log: {
-    core: [
-      { key: SEVERITY_FACET, label: 'Severity', scope: 'core' },
-      { key: 'service.name', label: 'Service', scope: 'core' },
-      { key: 'host.name', label: 'Host', scope: 'resource' },
-      { key: 'instrumentation_scope.name', label: 'Scope', scope: 'core' },
-      { key: 'event.name', label: 'Event name', scope: 'core' },
-      { key: 'trace.present', label: 'Has trace', scope: 'core' },
-    ],
+    core: DEFAULT_LOG_FACETS.map(({ key, label, scope }) => ({ key, label, scope })),
     resource: [],
   },
 };
@@ -206,14 +199,6 @@ function displayToken(
   }
 }
 
-/** A severity row is included when the condition is exactly that band's `>= first and <= last` pair. */
-function severityIncluded(tokens: readonly FilterToken[] | null, band: LogSeverityKey): boolean {
-  const { first, last } = SEVERITY_BOUNDS[band];
-  const has = (op: '>=' | '<=', value: string): boolean =>
-    tokens?.some((t) => t.key === SEVERITY_PATH && t.op === op && t.value === value) ?? false;
-  return has('>=', first) && has('<=', last);
-}
-
 function FacetBlock(props: {
   signal: FacetSignal;
   def: FacetDef;
@@ -252,7 +237,7 @@ function FacetBlock(props: {
                 count={v.count}
                 total={total}
                 filterable
-                state={severityIncluded(props.tokens, band) ? 'include' : null}
+                state={severityRangeIncludes(props.tokens, band) ? 'include' : null}
                 onAction={() => props.onSeverity(band, band)}
                 onAndAbove={() => props.onSeverity(band, null)}
               />

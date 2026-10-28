@@ -7,6 +7,7 @@ import type {
   ScopeRecord,
   SpanRecord,
 } from '../model/records.js';
+import { LOG_SEVERITY_KEYS, SEVERITY_BANDS, severityEnumName } from '../semconv/severity.js';
 
 export type OttlContextName = 'span' | 'log_record' | 'datapoint';
 
@@ -220,15 +221,13 @@ export const CONTEXTS: { readonly [C in OttlContextName]: ContextSpec<C> } = {
 // Enums (OTLP numeric values)
 // ---------------------------------------------------------------------------
 
-const SEVERITY_BANDS = ['TRACE', 'DEBUG', 'INFO', 'WARN', 'ERROR', 'FATAL'] as const;
-
 function severityEnums(): [string, bigint][] {
-  const out: [string, bigint][] = [['SEVERITY_NUMBER_UNSPECIFIED', 0n]];
-  SEVERITY_BANDS.forEach((band, i) => {
-    for (let n = 0; n < 4; n++) {
-      out.push([`SEVERITY_NUMBER_${band}${n === 0 ? '' : n + 1}`, BigInt(i * 4 + n + 1)]);
+  const out: [string, bigint][] = [];
+  for (const band of LOG_SEVERITY_KEYS) {
+    for (let n = SEVERITY_BANDS[band].min; n <= SEVERITY_BANDS[band].max; n++) {
+      out.push([severityEnumName(band, n), BigInt(n)]);
     }
-  });
+  }
   return out;
 }
 

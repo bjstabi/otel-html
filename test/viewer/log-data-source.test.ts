@@ -8,13 +8,16 @@ import { type LogQuery, type LogRef, type LogRow, parseLogRef } from '../../src/
 import { SURROUNDING_CHUNKS_PER_SIDE } from '../../src/viewer/data/log-windowed.js';
 import { createScriptedLoader, type ScriptedLoader } from '../../test-support/scripted-loader.js';
 import {
+  buildLogChunksReport,
   buildLogReport,
+  buildOverlappingLogReport,
   type Fixture,
   LOG_CHUNK_COUNT,
   LOG_TRACE,
   LOG_TRACE_ROOT_SPAN,
   ORPHAN_LOG_TRACE,
   SPAN_WITHOUT_TRACE_TEXT,
+  withShard,
 } from './report-fixture.js';
 
 const SMALL = 10_000_000;
@@ -57,6 +60,82 @@ async function refOf(body: string): Promise<LogRef> {
   if (row === undefined) throw new Error(`no log ${body}`);
   return row.ref;
 }
+
+describe('getTrace logCount after a crash', () => {
+  // A flush writes trace shards before the manifest: a crash between them leaves a shard counting logs in
+  // chunks the manifest never listed.
+  const ahead = (): Map<string, string> =>
+    withShard(rep.files, LOG_TRACE.slice(0, 2), (e) => {
+      const entry = e[LOG_TRACE];
+      if (entry === undefined) throw new Error('no LOG_TRACE entry');
+      entry.logChunks.push(logChunk(99).slice('data/'.length, -'.js'.length));
+      entry.logs += 4;
+    });
+
+  test.each([
+    ['eager', SMALL],
+    ['windowed', 1],
+  ])('counts only the logs in listed chunks (%s logs)', async (_name, budget) => {
+    const ds = await createDataSource(createScriptedLoader(ahead()), rep.manifest, budget);
+    expect((await ds.getTrace(LOG_TRACE as TraceId)).logCount).toBe(3);
+  });
+
+  test.each([
+    ['eager', SMALL],
+    ['windowed', 1],
+  ])(
+    'a failed log load falls back to the index count, never failing the trace (%s logs)',
+    async (_name, budget) => {
+      const base = createScriptedLoader(ahead());
+      const loader: ScriptedLoader = {
+        get calls() {
+          return base.calls;
+        },
+        reset: () => base.reset(),
+        load: (path, key) =>
+          path.startsWith('data/chunks/logs/')
+            ? Promise.reject(new Error('log chunk is corrupt'))
+            : base.load(path, key),
+      };
+      const ds = await createDataSource(loader, rep.manifest, budget);
+      expect((await ds.getTrace(LOG_TRACE as TraceId)).logCount).toBe(7);
+    },
+  );
+});
+
+describe('windowed surroundingLogs over chunks that overlap in time', () => {
+  test('finds the nearest neighbor even in a chunk that starts after the log chunk', async () => {
+    const over = await buildOverlappingLogReport();
+    const eager = await createDataSource(createScriptedLoader(over.files), over.manifest, SMALL);
+    const target = asLogs(await eager.queryLogs(query({ text: 'wide 100' })))[0];
+    if (target === undefined) throw new Error('no wide 100');
+    const ds = await createDataSource(createScriptedLoader(over.files), over.manifest, 1);
+    expect(ds.logStrategy).toBe('windowed');
+    const s = await ds.surroundingLogs(target.ref, 1);
+    expect(bodies(s.before)).toEqual(['inner 50']);
+    expect(bodies(s.after)).toEqual(['wide 1000']);
+    expect(s.partial).toBe(false);
+  });
+
+  test('a burst of short chunks before the log leaves the after side its own chunk reads', async () => {
+    // The log alone in its chunk at 1000 ns; nine one-log chunks just before it; two far chunks after it.
+    const report = await buildLogChunksReport([
+      [[1000, 'target']],
+      ...Array.from({ length: 9 }, (_, k): [number, string][] => [[990 + k, `before ${990 + k}`]]),
+      [[2000, 'after 2000']],
+      [[3000, 'after 3000']],
+    ]);
+    const eager = await createDataSource(createScriptedLoader(report.files), report.manifest, SMALL);
+    const target = asLogs(await eager.queryLogs(query({ text: 'target' })))[0];
+    if (target === undefined) throw new Error('no target');
+    const ds = await createDataSource(createScriptedLoader(report.files), report.manifest, 1);
+    const s = await ds.surroundingLogs(target.ref, 20);
+    expect(bodies(s.after)).toEqual(['after 2000', 'after 3000']);
+    // The before side reads its 4 nearest chunks and says partial: 5 more could hold logs.
+    expect(bodies(s.before)).toEqual([995, 996, 997, 998].map((t) => `before ${t}`));
+    expect(s.partial).toBe(true);
+  });
+});
 
 describe('signalBudgets', () => {
   const chunk = (signal: ManifestChunk['signal'], n: number, bytes: number): ManifestChunk => ({
@@ -245,6 +324,38 @@ describe.each([
     expect((await ds.getTrace(LOG_TRACE as TraceId)).logCount).toBe(3);
   });
 
+  test('getTrace resolves with the indexed log count without waiting on the log load', async () => {
+    const base = createScriptedLoader(rep.files);
+    const loader: ScriptedLoader = {
+      get calls() {
+        return base.calls;
+      },
+      reset: () => base.reset(),
+      // The eager log load never finishes (or fails): opening a trace must not depend on it.
+      load: (path, key) =>
+        path.startsWith('data/chunks/logs/') ? new Promise<never>(() => undefined) : base.load(path, key),
+    };
+    const ds = await createDataSource(loader, rep.manifest, budget);
+    expect((await ds.getTrace(LOG_TRACE as TraceId)).logCount).toBe(3);
+    expect(base.calls.some((c) => c.startsWith('data/chunks/logs/'))).toBe(false);
+  });
+
+  test('getTrace resolves when the log load rejects', async () => {
+    const base = createScriptedLoader(rep.files);
+    const loader: ScriptedLoader = {
+      get calls() {
+        return base.calls;
+      },
+      reset: () => base.reset(),
+      load: (path, key) =>
+        path.startsWith('data/chunks/logs/')
+          ? Promise.reject(new Error('log chunk is corrupt'))
+          : base.load(path, key),
+    };
+    const ds = await createDataSource(loader, rep.manifest, budget);
+    expect((await ds.getTrace(LOG_TRACE as TraceId)).logCount).toBe(3);
+  });
+
   test('surroundingLogs keeps to the same service and host and crosses a chunk boundary', async () => {
     const ref = await refOf('tick 5.0');
     const { ds } = await open(budget);
@@ -398,6 +509,44 @@ describe('windowed logs', () => {
     expect(r.partial).toBeNull();
     expect(r.matched).toBe(rep.manifest.totals.logs);
     expect(loader.calls).toEqual([]);
+  });
+
+  describe('scanAll ignores the window in every mode', () => {
+    const none = { start: 0, end: 0 };
+    test.each([
+      ['patterns', { column: 'count', dir: 'desc' }, 'tick'],
+      ['traces', { column: 'first', dir: 'asc' }, ''],
+    ] as const)('%s', async (mode, sort, text) => {
+      const { ds, loader } = await windowed();
+      const q = query({ mode, sort, text, condition: 'log.severity_number >= 0', window: none });
+      const windowedRun = await ds.queryLogs(q);
+      expect(windowedRun.partial).not.toBeNull();
+      loader.reset();
+      const all = await ds.queryLogs({ ...q, scanAll: true });
+      expect(all.partial).toBeNull();
+      expect(all.matched).toBeGreaterThan(windowedRun.matched);
+    });
+  });
+
+  test('reports progress once per scanned chunk', async () => {
+    const { ds } = await windowed();
+    const seen: Array<[number, number]> = [];
+    await ds.queryLogs(query({ text: 'tick', scanAll: true }), (scanned, total) =>
+      seen.push([scanned, total]),
+    );
+    expect(seen).toEqual(Array.from({ length: LOG_CHUNK_COUNT }, (_, i) => [i + 1, LOG_CHUNK_COUNT]));
+  });
+
+  test('an abort mid-scan rejects with AbortError and leaves the cache usable', async () => {
+    const { ds, loader } = await windowed();
+    const ac = new AbortController();
+    await expect(
+      ds.queryLogs(query({ text: 'tick', scanAll: true }), () => ac.abort(), ac.signal),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    expect(loader.calls).toEqual([logChunk(0)]);
+    const r = await ds.queryLogs(query({ text: 'tick', scanAll: true }));
+    expect(r.partial).toBeNull();
+    expect(r.total).toBe((await (await open(SMALL)).ds.queryLogs(query({ text: 'tick' }))).total);
   });
 
   test('keeps its own LRU of decoded log chunks', async () => {

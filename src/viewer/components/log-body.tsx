@@ -8,13 +8,18 @@ export type BodySegment =
   | { type: 'kv'; key: string; value: string }
   | { type: 'json'; raw: string; value: unknown };
 
-const KV = /([A-Za-z_][\w.-]*)=("(?:[^"\\\n]|\\.){0,1024}"|[^\s"]{1,4096})/y;
+/** A quoted value may span lines: a raw newline inside the quotes is part of the value. */
+const KV = /([A-Za-z_][\w.-]*)=("(?:[^"\\]|\\[\s\S]){0,1024}"|[^\s"]{1,4096})/y;
 const WORD = /[\w.-]/;
 /** Longest embedded JSON worth parsing; also bounds the cost of rescanning from every opener. */
 const MAX_JSON = 16_384;
 /** Total characters all JSON candidate scans of one call may read; a hostile body of openers cannot exceed it. */
 const SCAN_BUDGET = 2_000_000;
-/** Only this much of a body is segmented; the rest is plain text, so even "Show all" stays bounded. */
+/**
+ * Segments start only in a body's first 256 KiB (characters); everything after the last one is a single plain-text
+ * segment, so even "Show all" on a huge body stays bounded and no text is dropped. A pair or JSON value that starts
+ * before the cap is matched whole even when it runs past it.
+ */
 const MAX_SEGMENTED = 262_144;
 
 const isHigh = (c: number): boolean => c >= 0xd800 && c <= 0xdbff;
@@ -53,14 +58,9 @@ function tryJson(raw: string): { ok: true; value: unknown } | { ok: false } {
 /** Split a log line into plain text, `key=value` pairs and embedded JSON; the segments rejoin to `s` exactly. */
 export function segmentBody(input: string): BodySegment[] {
   const budget = { left: SCAN_BUDGET };
-  let s = input;
-  let tail = '';
-  if (s.length > MAX_SEGMENTED) {
-    let at = MAX_SEGMENTED;
-    if (isHigh(s.charCodeAt(at - 1))) at--;
-    tail = s.slice(at);
-    s = s.slice(0, at);
-  }
+  const s = input;
+  let limit = Math.min(s.length, MAX_SEGMENTED);
+  if (limit < s.length && isHigh(s.charCodeAt(limit - 1))) limit--;
   const out: BodySegment[] = [];
   let text = '';
   const flush = (): void => {
@@ -68,7 +68,7 @@ export function segmentBody(input: string): BodySegment[] {
     text = '';
   };
   let i = 0;
-  while (i < s.length) {
+  while (i < limit) {
     const c = s.charAt(i);
     if (c === '{' || c === '[') {
       const end = balancedEnd(s, i, budget);
@@ -95,8 +95,8 @@ export function segmentBody(input: string): BodySegment[] {
     text += c;
     i++;
   }
-  text += tail;
   flush();
+  if (i < s.length) out.push({ type: 'text', text: s.slice(i) });
   return out;
 }
 

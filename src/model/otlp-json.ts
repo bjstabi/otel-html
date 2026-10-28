@@ -13,10 +13,14 @@ import {
   ExportTraceServiceRequestSchema,
 } from './gen/opentelemetry/proto/collector/trace/v1/trace_service_pb.js';
 
-export type OtlpRequest =
+export type OtlpRequest = (
   | { readonly signal: 'traces'; readonly request: ExportTraceServiceRequest }
   | { readonly signal: 'logs'; readonly request: ExportLogsServiceRequest }
-  | { readonly signal: 'metrics'; readonly request: ExportMetricsServiceRequest };
+  | { readonly signal: 'metrics'; readonly request: ExportMetricsServiceRequest }
+) & {
+  /** Index of the request's first resource entry in its file's resource array, for error paths; 0 if omitted. */
+  readonly first?: number;
+};
 
 export type OtlpSignal = OtlpRequest['signal'];
 
@@ -44,15 +48,22 @@ const ID_FIELD_LENGTHS: ReadonlyMap<string, number> = new Map([
   ['parentSpanId', 16],
 ]);
 
-const SIGNALS: readonly {
+export interface SignalEntry {
   readonly signal: OtlpSignal;
   readonly key: string;
   readonly schema: DescMessage;
-}[] = [
+}
+
+const SIGNALS: readonly SignalEntry[] = [
   { signal: 'traces', key: 'resourceSpans', schema: ExportTraceServiceRequestSchema },
   { signal: 'logs', key: 'resourceLogs', schema: ExportLogsServiceRequestSchema },
   { signal: 'metrics', key: 'resourceMetrics', schema: ExportMetricsServiceRequestSchema },
 ];
+
+/** The signal whose resource array a top-level OTLP-JSON key holds, if any. */
+export function signalEntry(key: string): SignalEntry | undefined {
+  return SIGNALS.find((s) => s.key === key);
+}
 
 /** A JSON number that is not a safe integer, kept with its exact source text. */
 class UnsafeNumber {
@@ -88,13 +99,13 @@ function hexToBase64(hex: string): string {
   return btoa(bin);
 }
 
-function describe(v: unknown): string {
+export function describe(v: unknown): string {
   if (v === null) return 'null';
   if (Array.isArray(v)) return 'array';
   return typeof v;
 }
 
-function fail(source: string, path: string, expected: string, actual: string): never {
+export function fail(source: string, path: string, expected: string, actual: string): never {
   throw new OtelHtmlError('invalid-otlp', { path: `${source}: ${path}`, expected, actual });
 }
 
@@ -138,12 +149,13 @@ function convertTree(value: unknown, path: string, source: string): unknown {
   return value;
 }
 
-function parseJsonText(text: string, source: string): unknown {
+/** `where` (optional) follows "invalid JSON" in the message, to place a slice of a larger text. */
+export function parseJsonText(text: string, source: string, where = ''): unknown {
   try {
     return JSON.parse(text, reviveNumbers);
   } catch (e) {
     throw new OtelHtmlError('invalid-otlp', {
-      message: `${source}: ${e instanceof MissingSourceText ? e.message : `invalid JSON: ${e instanceof Error ? e.message : String(e)}`}`,
+      message: `${source}: ${e instanceof MissingSourceText ? e.message : `invalid JSON${where}: ${e instanceof Error ? e.message : String(e)}`}`,
     });
   }
 }
@@ -163,27 +175,44 @@ export function parseOtlpObject(root: unknown, source: string): OtlpRequest[] {
     });
   }
   const out: OtlpRequest[] = [];
-  for (const { signal, key, schema } of SIGNALS) {
-    if (!Object.hasOwn(root, key)) continue;
+  for (const entry of SIGNALS) {
+    if (!Object.hasOwn(root, entry.key)) continue;
     const entries = new Map(Object.entries(root));
-    const raw = entries.get(key);
-    if (!Array.isArray(raw)) fail(source, key, 'array', describe(raw));
-    const tree = { [key]: convertTree(raw, key, source) };
-    try {
-      const request: MessageShape<typeof schema> = fromJson(schema, tree as JsonValue, {
-        ignoreUnknownFields: true,
-      });
-      out.push({ signal, request } as OtlpRequest);
-    } catch (e) {
-      throw new OtelHtmlError('invalid-otlp', {
-        message: `${source}: ${e instanceof Error ? e.message : String(e)}`,
-      });
-    }
+    const raw = entries.get(entry.key);
+    if (!Array.isArray(raw)) fail(source, entry.key, 'array', describe(raw));
+    out.push(requestOf(entry, raw, 0, source));
   }
-  if (out.length === 0) {
+  if (out.length === 0) throw noSignal(source);
+  return out;
+}
+
+/**
+ * The request of one signal holding the parsed resource entries `items`, the first of which is element `first` of
+ * the signal's array in its file (for error paths). A lone entry's path also prefixes protobuf-es errors.
+ */
+export function requestOf(
+  entry: SignalEntry,
+  items: readonly unknown[],
+  first: number,
+  source: string,
+): OtlpRequest {
+  const { signal, key, schema } = entry;
+  const resources = items.map((v, i) => convertTree(v, `${key}[${first + i}]`, source));
+  const at = items.length === 1 ? `${key}[${first}]: ` : '';
+  try {
+    const request: MessageShape<typeof schema> = fromJson(schema, { [key]: resources } as JsonValue, {
+      ignoreUnknownFields: true,
+    });
+    return { signal, request, first } as OtlpRequest;
+  } catch (e) {
     throw new OtelHtmlError('invalid-otlp', {
-      message: `${source}: expected at least one of resourceSpans, resourceLogs or resourceMetrics`,
+      message: `${source}: ${at}${e instanceof Error ? e.message : String(e)}`,
     });
   }
-  return out;
+}
+
+export function noSignal(source: string): OtelHtmlError {
+  return new OtelHtmlError('invalid-otlp', {
+    message: `${source}: expected at least one of resourceSpans, resourceLogs or resourceMetrics`,
+  });
 }

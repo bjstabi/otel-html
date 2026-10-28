@@ -4,18 +4,18 @@ import { parseUnixNanos, type TraceId } from '../../model/ids.js';
 import { DEFAULT_LOG_FACETS } from '../../rollups/log-rollups.js';
 import { Chart } from '../components/chart.js';
 import { ColumnPicker } from '../components/column-picker.js';
+import { ExplorerControls } from '../components/explorer-controls.js';
 import {
   ErrorCard,
   LoadingNote,
   NoMatch,
   PartialNote,
-  PILL,
   parseSort,
   sortableOf,
 } from '../components/explorer-states.js';
 import { downloadBlob, type ExportFormat, exportFileName, exportLogs } from '../components/export.js';
 import { FacetPanel } from '../components/facet-panel.js';
-import { type FilterToken, ottlToTokens, tokensToOttl } from '../components/filter-tokens.js';
+import { withToken } from '../components/filter-tokens.js';
 import { GroupTable } from '../components/group-table.js';
 import { HistogramCard, SEVERITY_SERIES } from '../components/histogram-card.js';
 import { LogList } from '../components/log-list.js';
@@ -24,8 +24,14 @@ import type { DataSource } from '../data/data-source.js';
 import type { LogMode, LogQuery, LogRef, LogRow, LogTraceRow, PatternRow } from '../data/log-query.js';
 import { PageChrome } from '../shell/page-chrome.js';
 import { PageOptionNotice } from '../shell/page-option-notice.js';
-import { PAGE_OPTIONS, type PageView, resolvePageMode, resolvePageView } from '../state/page-options.js';
-import { useSelection } from '../state/selection-context.js';
+import {
+  PAGE_OPTIONS,
+  type PageMode,
+  type PageView,
+  resolvePageMode,
+  resolvePageView,
+} from '../state/page-options.js';
+import { useSelection, useSelectionStore } from '../state/selection-context.js';
 import { useColorAssigner } from '../theme/colors-context.js';
 import { useTheme } from '../theme/theme-provider.js';
 import { TracePanel } from '../traces/trace-panel.js';
@@ -74,19 +80,10 @@ const VIEW_LABEL: Record<PageView<'logs'>, string> = {
   scatter: 'Scatter',
 };
 
-const FIELD = 'rounded-full border border-hairline bg-surface px-3 py-1 text-sm';
 const BODY_PATH = 'log.body.string';
 /** Unprefixed, as the trace panel's Logs tab writes it: compiles in span and log_record contexts, so `g t` carries it. */
 const TRACE_ID_PATH = 'trace_id.string';
 const CORE_FACET_KEYS: ReadonlySet<string> = new Set(DEFAULT_LOG_FACETS.map((f) => f.key));
-
-/** `token` added to `condition`, replacing a token on the same key with the same operator. */
-function withToken(condition: string | null, token: FilterToken): string | null {
-  const tokens = condition === null ? [] : ottlToTokens(condition);
-  // A condition the token model cannot hold (raw OTTL) is kept whole and and-ed with the token.
-  if (tokens === null) return `(${condition}) and ${tokensToOttl([token])}`;
-  return tokensToOttl([...tokens.filter((t) => !(t.key === token.key && t.op === token.op)), token]);
-}
 
 export function ZeroLogs({ manifest }: { manifest: Manifest }): JSX.Element {
   return (
@@ -100,13 +97,29 @@ export function ZeroLogs({ manifest }: { manifest: Manifest }): JSX.Element {
   );
 }
 
+/** The notices for a `mode` or `view` in the URL that Logs does not offer; shown with or without logs. */
+function OptionNotices(): JSX.Element {
+  const sel = useSelection((s) => s);
+  const { invalid: invalidMode } = resolvePageMode('logs', sel.mode);
+  const { invalid: invalidView } = resolvePageView('logs', sel.view);
+  return (
+    <>
+      <PageOptionNotice message={invalidMode} onReset={() => sel.setMode(null)} />
+      <PageOptionNotice message={invalidView} onReset={() => sel.setView('list')} />
+    </>
+  );
+}
+
 /** Mockup 03, screen 1: Group into / View controls, severity histogram, facets left and results right. */
 export function LogsExplorer(props: { dataSource: DataSource }): JSX.Element {
   const { manifest } = props.dataSource;
   if (manifest.totals.logs === 0) {
     return (
       <PageChrome title="Logs" signal="log" manifest={manifest}>
-        <ZeroLogs manifest={manifest} />
+        <div className="flex flex-col gap-4">
+          <OptionNotices />
+          <ZeroLogs manifest={manifest} />
+        </div>
       </PageChrome>
     );
   }
@@ -117,8 +130,9 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
   const { dataSource } = props;
   const manifest = dataSource.manifest;
   const sel = useSelection((s) => s);
-  const { mode, invalid: invalidMode } = resolvePageMode('logs', sel.mode);
-  const { view, invalid: invalidView } = resolvePageView('logs', sel.view);
+  const store = useSelectionStore();
+  const { mode } = resolvePageMode('logs', sel.mode);
+  const { view } = resolvePageView('logs', sel.view);
   const { resolved } = useTheme();
   const colors = useColorAssigner();
   const epoch = useMemo(() => parseUnixNanos(manifest.epochUnixNano, 'manifest.epochUnixNano'), [manifest]);
@@ -169,12 +183,14 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
     dataSource.hasTrace(row.traceId).then(
       (spans) => {
         setActionError(null);
+        // The filter may have changed while the lookup ran: read the selection as it is now, not as rendered.
+        const now = store.getState();
         if (spans) {
-          sel.selectTrace(row.traceId);
-          sel.setTab('trace', 'logs');
+          now.selectTrace(row.traceId);
+          now.setTab('trace', 'logs');
         } else {
-          sel.setCondition(withToken(sel.condition, { key: TRACE_ID_PATH, op: '==', value: row.traceId }));
-          sel.setMode(null);
+          now.setCondition(withToken(now.condition, { key: TRACE_ID_PATH, op: '==', value: row.traceId }));
+          now.setMode(null);
         }
       },
       (e: unknown) => fail('The trace could not be opened', e),
@@ -209,10 +225,6 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
       : [];
 
   const grouped = GROUPED_VIEWS.has(view);
-  const groupKeys = useMemo(() => {
-    const keys = result?.facets.keys().sort() ?? [];
-    return sel.groupBy !== null && !keys.includes(sel.groupBy) ? [sel.groupBy, ...keys] : keys;
-  }, [result, sel.groupBy]);
   const attributeKeys = useMemo(
     () =>
       (result?.facets.keys() ?? [])
@@ -274,12 +286,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
       case 'logs':
         return (
           <div className="flex flex-col gap-2">
-            <ColumnPicker
-              keys={attributeKeys}
-              chosen={extraColumns}
-              onAdd={(k) => setExtraColumns([...extraColumns, k])}
-              onRemove={(k) => setExtraColumns(extraColumns.filter((c) => c !== k))}
-            />
+            <ColumnPicker keys={attributeKeys} chosen={extraColumns} onChange={setExtraColumns} />
             <LogList
               rows={result.rows}
               sort={sort}
@@ -289,6 +296,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
               epoch={epoch}
               extraColumns={extraColumns}
               moveEnabled={moveEnabled}
+              hasTrace={dataSource.hasTrace}
             />
           </div>
         );
@@ -336,72 +344,31 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
   return (
     <PageChrome title="Logs" signal="log" manifest={manifest} exportItems={exportItems}>
       <div className="flex flex-col gap-4">
-        <PageOptionNotice message={invalidMode} onReset={() => sel.setMode(null)} />
-        <PageOptionNotice message={invalidView} onReset={() => sel.setView('list')} />
-        <div className="flex flex-wrap items-center gap-3">
-          <fieldset className="flex items-center gap-1 rounded-full border border-hairline bg-surface p-0.5">
-            <legend className="sr-only">Group into</legend>
-            <span aria-hidden className="px-2 text-sm text-ink-2">
-              Group into
-            </span>
-            {LOGS.modes.map((m) => (
-              <button
-                key={m}
-                type="button"
-                aria-pressed={mode === m}
-                data-selected={mode === m ? 'true' : undefined}
-                onClick={() => sel.setMode(m === DEFAULT_MODE ? null : m)}
-                className={`${PILL} ${mode === m ? 'bg-ink text-surface' : 'text-ink-2 hover:bg-hairline'}`}
-              >
-                {MODES[m].label}
-              </button>
-            ))}
-          </fieldset>
-          <label className="flex items-center gap-2 text-sm text-ink-2">
-            Group by
-            <select
-              aria-label="Group by"
-              className={FIELD}
-              value={sel.groupBy ?? ''}
-              disabled={!grouped}
-              title={grouped ? undefined : `Not used by the ${VIEW_LABEL[view]} view`}
-              onChange={(e) =>
-                e.target.value === '' ? sel.clear('groupBy') : sel.setGroupBy(e.target.value)
-              }
-            >
-              <option value="">Service (default)</option>
-              {groupKeys.map((k) => (
-                <option key={k} value={k}>
-                  {k}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="flex items-center gap-2 text-sm text-ink-2">
-            View
-            <select
-              aria-label="View"
-              className={FIELD}
-              value={view}
-              onChange={(e) => {
-                const next = LOGS.views.find((x) => x === e.target.value);
-                if (next !== undefined) sel.setView(next);
-              }}
-            >
-              {LOGS.views.map((v) => (
-                <option key={v} value={v}>
-                  {VIEW_LABEL[v]}
-                </option>
-              ))}
-            </select>
-          </label>
+        <OptionNotices />
+        <ExplorerControls<PageMode<'logs'>, PageView<'logs'>>
+          modeLegend="Group into"
+          modePrefix="Group into"
+          modes={LOGS.modes}
+          mode={mode}
+          modeLabel={(m) => MODES[m].label}
+          onMode={(m) => sel.setMode(m === DEFAULT_MODE ? null : m)}
+          views={LOGS.views}
+          view={view}
+          viewLabel={(v) => VIEW_LABEL[v]}
+          onView={sel.setView}
+          groupBy={sel.groupBy}
+          onGroupBy={(k) => (k === null ? sel.clear('groupBy') : sel.setGroupBy(k))}
+          facetKeys={result?.facets.keys() ?? []}
+          grouped={grouped}
+          groupByTitle={`Not used by the ${VIEW_LABEL[view]} view`}
+        >
           {result !== null && (
             <output className="ml-auto font-mono text-xs tabular-nums text-muted">
               {result.total} {noun}
               {result.total > result.rows.length ? ` · showing ${result.rows.length}` : ''}
             </output>
           )}
-        </div>
+        </ExplorerControls>
         {result !== null && <PartialNote partial={result.partial} onScanAll={scanAll} />}
         {state.status === 'loading' && <LoadingNote progress={state.progress} />}
         {actionError !== null && <ErrorCard title={actionError.title} message={actionError.message} />}

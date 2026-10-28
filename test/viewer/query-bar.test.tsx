@@ -31,6 +31,14 @@ describe('QueryBar', () => {
     expect(store.getState().condition).toBe('span.attributes["n"] >= 7');
   });
 
+  test('removing a chip works even when the remaining condition does not compile for this signal', async () => {
+    const user = userEvent.setup();
+    const store = setup({ q: 'span.name == "a" and span.attributes["n"] >= 5' }, 'log');
+    await user.click(screen.getByRole('button', { name: 'Remove span.name' }));
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(store.getState().condition).toBe('span.attributes["n"] >= 5');
+  });
+
   test('adds a token from the add form', async () => {
     const user = userEvent.setup();
     const store = setup();

@@ -25,7 +25,21 @@ vi.mock('../../src/viewer/components/chart.js', () => ({
     return null;
   },
 }));
-afterEach(cleanup);
+const downloads: { blob: Blob; name: string }[] = [];
+let exportFails = false;
+vi.mock('../../src/viewer/components/export.js', async (importActual) => ({
+  ...(await importActual<typeof import('../../src/viewer/components/export.js')>()),
+  downloadBlob: (blob: Blob, name: string) => {
+    if (exportFails) throw new Error('disk full');
+    downloads.push({ blob, name });
+  },
+}));
+afterEach(() => {
+  cleanup();
+  downloads.length = 0;
+  exportFails = false;
+  vi.unstubAllGlobals();
+});
 
 const TRACE = '5134a3f57d52d9e9822e617916d38b35' as TraceId;
 const ORPHAN = 'ea30c7b71377a677cb3ce2b5f8f4abb9' as TraceId;
@@ -135,7 +149,7 @@ function source(): DataSource {
   } as unknown as DataSource;
 }
 
-function mount(ref: string, initial: Parameters<typeof createSelectionStore>[0] = {}) {
+function mount(ref: string, initial: Parameters<typeof createSelectionStore>[0] = {}, ds = source()) {
   const store = createSelectionStore({ log: ref as LogRef, ...initial });
   const onClose = vi.fn();
   const goTo = vi.fn();
@@ -145,7 +159,7 @@ function mount(ref: string, initial: Parameters<typeof createSelectionStore>[0] 
         <SelectionProvider store={store}>
           <Tooltip.Provider>
             <LogPanel
-              dataSource={source()}
+              dataSource={ds}
               logRef={ref as LogRef}
               logRefs={ROWS.map((r) => r.ref)}
               onClose={onClose}
@@ -286,6 +300,43 @@ describe('LogPanel', () => {
     expect(store.getState().logRef).toBe('0.1');
   });
 
+  test('moving to the next log keeps the open one on screen until the next loads: no skeleton, no remount', async () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const base = source();
+    const ds = {
+      ...base,
+      getLog: (ref: LogRef) => (ref === ROWS[1]?.ref ? gate.then(() => base.getLog(ref)) : base.getLog(ref)),
+    } as DataSource;
+    const store = createSelectionStore({ log: '0.0' as LogRef });
+    const panelFor = (ref: string) => (
+      <ThemeProvider>
+        <GoToContext.Provider value={vi.fn()}>
+          <SelectionProvider store={store}>
+            <Tooltip.Provider>
+              <LogPanel dataSource={ds} logRef={ref as LogRef} onClose={vi.fn()} />
+            </Tooltip.Provider>
+          </SelectionProvider>
+        </GoToContext.Provider>
+      </ThemeProvider>
+    );
+    const { rerender } = render(panelFor('0.0'));
+    const section = await screen.findByRole('region', { name: 'Body' });
+    expect(section.textContent).toContain('body 0');
+    rerender(panelFor('0.1'));
+    expect(screen.queryByRole('status', { name: 'Loading log' })).toBeNull();
+    expect(screen.getByRole('region', { name: 'Body' })).toBe(section);
+    expect(section.textContent).toContain('body 0');
+    await act(async () => {
+      release();
+      await gate;
+    });
+    await waitFor(() => expect(section.textContent).toContain('body 1'));
+    expect(screen.getByRole('region', { name: 'Body' })).toBe(section);
+  });
+
   test('two presses before a re-render move two logs (the current log is read at event time)', async () => {
     const { store } = mount('0.0');
     await screen.findByTestId('log-panel');
@@ -301,6 +352,91 @@ describe('LogPanel', () => {
     const panel = await screen.findByTestId('log-panel');
     await waitFor(() => expect(panel.textContent).toContain('<img src=x onerror=alert(1)>'));
     expect(panel.querySelector('img')).toBeNull();
+  });
+
+  test('while the first log loads there is a skeleton, and Export and Surrounding logs are disabled', async () => {
+    const ds = { ...source(), getLog: () => new Promise<LogRow>(() => {}) } as unknown as DataSource;
+    mount('0.0', {}, ds);
+    const status = await screen.findByRole('status', { name: 'Loading log' });
+    expect(status.textContent).toContain('0.0');
+    for (const name of ['Export', 'Surrounding logs'])
+      expect((screen.getByRole('button', { name }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  test('a failed trace lookup says the trace could not be checked and hides the Trace tab', async () => {
+    const ds = {
+      ...source(),
+      hasTrace: () => Promise.reject(new Error('shard failed')),
+    } as unknown as DataSource;
+    mount('0.1', {}, ds);
+    const panel = await screen.findByTestId('log-panel');
+    expect(await within(panel).findByText('could not check the trace')).toBeTruthy();
+    expect(within(panel).queryByRole('tab', { name: 'Trace' })).toBeNull();
+  });
+
+  test('a tab the log does not offer falls back to the first one', async () => {
+    mount('0.0', { ltab: 'trace' });
+    const panel = await screen.findByTestId('log-panel');
+    const tabs = within(panel).getAllByRole('tab');
+    expect(within(panel).queryByRole('tab', { name: 'Trace' })).toBeNull();
+    expect(tabs[0]?.getAttribute('aria-selected')).toBe('true');
+  });
+
+  test('the Surrounding logs button opens that tab', async () => {
+    const user = userEvent.setup();
+    const { store } = mount('0.1');
+    const panel = await screen.findByTestId('log-panel');
+    await user.click(within(panel).getByRole('button', { name: 'Surrounding logs' }));
+    expect(store.getState().tabs.log).toBe('surrounding');
+  });
+
+  test('k at the first log and j at the last stay where they are', async () => {
+    const { store } = mount('0.0');
+    await screen.findByTestId('log-panel');
+    act(() => {
+      window.dispatchEvent(new CustomEvent(MOVE_EVENT, { detail: -1 }));
+    });
+    expect(store.getState().logRef).toBe('0.0');
+    act(() => {
+      for (let i = 0; i < 6; i++) window.dispatchEvent(new CustomEvent(MOVE_EVENT, { detail: 1 }));
+    });
+    expect(store.getState().logRef).toBe('0.3');
+  });
+
+  test('Copy body copies the displayed body and says so; without a clipboard it says the copy failed', async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn(() => Promise.resolve());
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+    mount('0.0');
+    const panel = await screen.findByTestId('log-panel');
+    await user.click(within(panel).getByRole('button', { name: 'Copy body' }));
+    expect(writeText).toHaveBeenCalledWith('body 0');
+    expect(await within(panel).findByText('Copied')).toBeTruthy();
+    vi.stubGlobal('navigator', { ...navigator, clipboard: undefined });
+    await user.click(within(panel).getByRole('button', { name: 'Copy body' }));
+    expect(await within(panel).findByText(/Copy failed/)).toBeTruthy();
+  });
+
+  test('Export downloads the log as OTLP JSON named by its ref', async () => {
+    const user = userEvent.setup();
+    mount('0.1');
+    const panel = await screen.findByTestId('log-panel');
+    await user.click(await within(panel).findByRole('button', { name: 'Export' }));
+    expect(downloads.map((d) => d.name)).toEqual(['log-0.1.otlp.json']);
+    expect(await downloads[0]?.blob.text()).toContain('body 1');
+  });
+
+  test('a failing export shows the reason in an alert and the next attempt clears it', async () => {
+    const user = userEvent.setup();
+    mount('0.1');
+    const panel = await screen.findByTestId('log-panel');
+    const exportButton = await within(panel).findByRole('button', { name: 'Export' });
+    exportFails = true;
+    await user.click(exportButton);
+    expect((await within(panel).findByRole('alert')).textContent).toContain('disk full');
+    exportFails = false;
+    await user.click(exportButton);
+    expect(within(panel).queryByRole('alert')).toBeNull();
   });
 
   test('the Raw / Wrapped toggle switches and Close calls onClose', async () => {

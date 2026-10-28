@@ -1,15 +1,15 @@
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { Manifest } from '../../src/format/manifest.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { FacetCounts } from '../../src/rollups/facets.js';
 import { RedSeries } from '../../src/rollups/red.js';
-import { LOG_SEVERITY_KEYS } from '../../src/rollups/signal-counts.js';
 import { TimeBuckets } from '../../src/rollups/time-buckets.js';
+import { LOG_SEVERITY_KEYS } from '../../src/semconv/severity.js';
 import { App } from '../../src/viewer/app.js';
 import type { DataSource, SpanQueryResult } from '../../src/viewer/data/data-source.js';
-import type { LogQueryResult, LogRow } from '../../src/viewer/data/log-query.js';
+import { type LogQueryResult, type LogRow, logRef } from '../../src/viewer/data/log-query.js';
 import { Shell } from '../../src/viewer/shell/shell.js';
 import { stepWindow } from '../../src/viewer/shell/time-range.js';
 import { createHashHistory } from '../../src/viewer/state/hash-history.js';
@@ -172,6 +172,12 @@ describe('sidebar', () => {
     await waitFor(() => expect(window.location.hash).toBe('#/logs?t=1~2&mode=patterns'));
   });
 
+  test('the patterns redirect keeps an invalid mode so its error is reported', async () => {
+    renderShell('#/logs/patterns?mode=bogus');
+    expect((await screen.findByRole('alert')).textContent).toContain('mode');
+    expect(window.location.hash).not.toContain('mode=patterns');
+  });
+
   test('from patterns mode, Logs > Explorer leaves the mode and becomes current', async () => {
     const user = userEvent.setup();
     renderShell('#/logs?text=a&mode=patterns');
@@ -184,6 +190,22 @@ describe('sidebar', () => {
       expect(logs.getByRole('link', { name: 'Explorer' }).getAttribute('aria-current')).toBe('page'),
     );
     expect(logs.getByRole('link', { name: 'Patterns' }).getAttribute('aria-current')).toBeNull();
+  });
+
+  test.each([
+    ['ctrl', { ctrlKey: true }],
+    ['meta', { metaKey: true }],
+    ['shift', { shiftKey: true }],
+    ['alt', { altKey: true }],
+    ['middle button', { button: 1 }],
+  ])('a %s-click on a sidebar link is left to the browser', (_name, init) => {
+    renderShell('#/traces?text=boom');
+    const link = within(screen.getByRole('region', { name: 'Logs' })).getByRole('link', { name: 'Explorer' });
+    // fireEvent returns false when a handler called preventDefault.
+    expect(fireEvent.click(link, init)).toBe(true);
+    expect(window.location.hash).toBe('#/traces?text=boom');
+    expect(fireEvent.click(link)).toBe(false);
+    expect(window.location.hash).toBe('#/logs?text=boom');
   });
 
   test('sidebar hrefs are computed with the carry-over rule', () => {
@@ -553,6 +575,51 @@ describe('full-page trace route', () => {
       `trace_id.string == "${TRACE_ID}"`,
     );
     expect(screen.queryByRole('status', { name: 'Filter not carried over' })).toBeNull();
+  });
+
+  test('a trace log row opens the Logs Explorer with q, log and ltab merged onto the carried filter', async () => {
+    const user = userEvent.setup();
+    const logRow = {
+      ref: logRef(0, 3),
+      log: {
+        time: 1000,
+        observedTime: null,
+        severityNumber: 9,
+        severityText: 'INFO',
+        body: { kind: 'string', value: 'row body' },
+        attributes: new Map(),
+        droppedAttributesCount: 0,
+        flags: 0,
+        traceId: TRACE_ID,
+        spanId: null,
+        eventName: '',
+      },
+      resource: {},
+      scope: {},
+      time: 1000,
+      timeSource: 'time',
+      service: 'checkout',
+      host: null,
+    } as unknown as LogRow;
+    const ds: DataSource = {
+      ...traceDs(),
+      getTrace: () =>
+        Promise.resolve({
+          ...detailOf([traceRow(1, null, 0, 1000, { service: 'checkout', name: 'GET /' })]),
+          logCount: 1,
+        }),
+      traceLogs: () => Promise.resolve([logRow]),
+    };
+    renderShell(`#/traces/trace/${TRACE_ID}?tab=logs&text=boom`, ds);
+    await user.click(await screen.findByText('row body'));
+    await waitFor(() => expect(window.location.hash.startsWith('#/logs?')).toBe(true));
+    const params = new URLSearchParams(window.location.hash.split('?')[1]);
+    expect(Object.fromEntries(params)).toEqual({
+      text: 'boom',
+      q: `trace_id.string == "${TRACE_ID}"`,
+      log: '0.3',
+      ltab: 'attributes',
+    });
   });
 
   test('an invalid id in the route is a designed error naming the problem', async () => {

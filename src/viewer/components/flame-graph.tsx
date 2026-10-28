@@ -9,6 +9,7 @@ import type { SpanRow } from '../data/span-query.js';
 import { type ColorAssigner, OTHER_INDEX } from '../theme/palette.js';
 import { useTheme } from '../theme/theme-provider.js';
 import { Chart, type EChartsType } from './chart.js';
+import { FIELD } from './field.js';
 import { type FlameBar, type FlameColorBy, type FlameLegendEntry, layoutFlame } from './flame-layout.js';
 
 /** Resolved colours (canvas cannot read CSS variables). `series` holds the 7 categorical colours then Other. */
@@ -45,9 +46,21 @@ export interface FlameMarker {
   label: string;
 }
 
-/** The label tail on the outlined bar, and a rough width per character of the 11px mono label. */
+/** The label tail on the outlined bar. */
 export const OUTLINE_TAIL = '← emitted this log';
+/** Rough width per character of the 11px mono label, used only where no canvas can measure text (jsdom). */
 const CHAR_PX = 6.6;
+
+/** The shared measuring context: created on first use; null when the environment has no 2D canvas. */
+let measurer: CanvasRenderingContext2D | null | undefined;
+
+/** Width in px of `text` drawn in `font` (a CSS font string), measured on a cached canvas. */
+export function labelWidth(text: string, font: string): number {
+  measurer ??= document.createElement('canvas').getContext('2d');
+  if (measurer === null) return text.length * CHAR_PX;
+  measurer.font = font;
+  return measurer.measureText(text).width;
+}
 
 /** Traces with at most this many spans always draw every bar on its own. */
 export const BATCH_ABOVE_BARS = 2000;
@@ -286,7 +299,8 @@ function renderBatch(
 export function flameOption(bars: readonly FlameBar[], theme: FlameTheme, view: FlameView): EChartsOption {
   const { min, max } = extentOf(bars);
   const rows = Math.min(bars.reduce((d, b) => Math.max(d, b.depth), 0) + 1, view.maxRows);
-  const markers = view.markers ?? [];
+  // ECharts does not clip a markLine to the plot: a time outside the trace extent would draw past the axis.
+  const markers = (view.markers ?? []).filter((m) => m.time >= min && m.time <= max);
   const outlineId = view.outlineSpanId ?? null;
   const items = buildFlameItems(bars, view.minBarNs ?? 0, view.selectedSpanId, outlineId);
   const renderItem: RenderItem = (params, api) => {
@@ -339,11 +353,13 @@ export function flameOption(bars: readonly FlameBar[], theme: FlameTheme, view: 
     }
     if (x1 - x0 >= 36 && h >= 10) {
       const name = bar.error ? `✕ ${bar.label}` : bar.label;
-      const tailed = outlined && (name.length + OUTLINE_TAIL.length + 2) * CHAR_PX <= x1 - x0 - 8;
+      const font = `11px ${theme.font}`;
+      const withTail = `${name}  ${OUTLINE_TAIL}`;
+      const tailed = outlined && labelWidth(withTail, font) <= x1 - x0 - 8;
       children.push({
         type: 'text',
         style: {
-          text: tailed ? `${name}  ${OUTLINE_TAIL}` : name,
+          text: tailed ? withTail : name,
           x: x0 + 4,
           y: y + h / 2,
           width: x1 - x0 - 8,
@@ -351,7 +367,7 @@ export function flameOption(bars: readonly FlameBar[], theme: FlameTheme, view: 
           ellipsis: '…',
           verticalAlign: 'middle',
           fill: labelColorOn(fill, theme),
-          font: `11px ${theme.font}`,
+          font,
           opacity,
         },
         silent: true,
@@ -554,7 +570,6 @@ function perfEnabled(): boolean {
 
 const SWATCH = (i: number): string =>
   i >= OTHER_INDEX ? 'var(--oh-series-other)' : `var(--oh-series-${i + 1})`;
-const FIELD = 'rounded-full border border-hairline bg-surface px-3 py-1 text-sm';
 const ICON_BTN = 'rounded-full border border-hairline bg-surface p-1.5 hover:bg-hairline';
 
 function hostOf(detail: TraceDetail, row: SpanRow): string {

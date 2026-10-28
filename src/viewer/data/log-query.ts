@@ -1,17 +1,23 @@
 import { anyValueToDisplay } from '../../model/anyvalue.js';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { RelNanos, TraceId, UnixNanos } from '../../model/ids.js';
-import { type LogRecordRecord, logTime, type ResourceRecord, type ScopeRecord } from '../../model/records.js';
+import {
+  type LogRecordRecord,
+  logTime,
+  logTimeSource,
+  type ResourceRecord,
+  type ScopeRecord,
+} from '../../model/records.js';
 import { type CompiledCondition, compileCondition } from '../../ottl/compile.js';
 import type { LogTarget } from '../../ottl/contexts.js';
 import { logTextFields, matchesText } from '../../ottl/text.js';
 import { type Drain, type DrainCluster, template, templateToRegex } from '../../rollups/drain.js';
 import type { FacetCounts } from '../../rollups/facets.js';
 import { LogRollups } from '../../rollups/log-rollups.js';
-import type { LogSeverityKey } from '../../rollups/signal-counts.js';
 import type { TimeBuckets } from '../../rollups/time-buckets.js';
 import { ATTR_HOST_NAME } from '../../semconv/attributes.js';
 import { serviceName } from '../../semconv/resource-name.js';
+import type { LogSeverityKey } from '../../semconv/severity.js';
 import {
   AbortTicker,
   checkLimit,
@@ -158,7 +164,7 @@ export function toLogEntries(
         resource,
         scope,
         time: logTime(log),
-        timeSource: log.time !== null ? 'time' : log.observedTime !== null ? 'observed' : 'none',
+        timeSource: logTimeSource(log),
         service: serviceName(resource),
         host: hostValue === undefined ? null : anyValueToDisplay(hostValue),
       },
@@ -184,7 +190,7 @@ export function patternRowsOf(d: Drain): PatternRow[] {
 export const byTimeThenRef = (a: LogRow, b: LogRow): number => a.time - b.time || compareRefs(a.ref, b.ref);
 
 /** Logs from the same stream as `target`: same service and same host. */
-export function sameStream(target: LogRow, row: LogRow): boolean {
+function sameStream(target: LogRow, row: LogRow): boolean {
   return row.service === target.service && row.host === target.host;
 }
 
@@ -222,7 +228,10 @@ export function surroundingIn(
   return { before: n === 0 ? [] : before.slice(-n), after: after.slice(0, n) };
 }
 
-const LOG_SORTS: Readonly<Record<string, (a: LogRow, b: LogRow) => number>> = {
+/** Log comparators by sort column (the Logs Explorer's and the trace Logs tab's). */
+export const LOG_SORTS: Readonly<Record<string, (a: LogRow, b: LogRow) => number>> & {
+  readonly time: (a: LogRow, b: LogRow) => number;
+} = {
   time: (a, b) => a.time - b.time,
   severity: (a, b) => a.log.severityNumber - b.log.severityNumber,
   service: (a, b) => cmp(a.service, b.service),
@@ -239,6 +248,31 @@ const TRACE_SORTS: Readonly<Record<string, (a: LogTraceRow, b: LogTraceRow) => n
   logs: (a, b) => a.logs - b.logs,
   severity: (a, b) => a.maxSeverity - b.maxSeverity,
 };
+
+/** The sort comparator of the query's mode, tagged by that mode (a column is validated per mode). */
+type ModeSort =
+  | { readonly mode: 'logs'; readonly compare: (a: LogRow, b: LogRow) => number }
+  | { readonly mode: 'patterns'; readonly compare: (a: PatternRow, b: PatternRow) => number }
+  | { readonly mode: 'traces'; readonly compare: (a: LogTraceRow, b: LogTraceRow) => number };
+
+function modeSort({ mode, sort }: LogQuery): ModeSort {
+  switch (mode) {
+    case 'logs':
+      return { mode, compare: sortFor(LOG_SORTS, sort.column, mode) };
+    case 'patterns':
+      return { mode, compare: sortFor(PATTERN_SORTS, sort.column, mode) };
+    case 'traces':
+      return { mode, compare: sortFor(TRACE_SORTS, sort.column, mode) };
+    default: {
+      const never: never = mode;
+      throw new OtelHtmlError('usage', {
+        path: 'query.mode',
+        expected: 'logs, patterns or traces',
+        actual: String(never),
+      });
+    }
+  }
+}
 
 interface TraceGroup {
   logs: number;
@@ -262,9 +296,7 @@ export class LogQueryRun {
   readonly #rollups: LogRollups;
   readonly #matched: LogRow[] = [];
   readonly #traces = new Map<TraceId, TraceGroup>();
-  readonly #logCompare: ((a: LogRow, b: LogRow) => number) | null;
-  readonly #patternCompare: ((a: PatternRow, b: PatternRow) => number) | null;
-  readonly #traceCompare: ((a: LogTraceRow, b: LogTraceRow) => number) | null;
+  readonly #sort: ModeSort;
   #count = 0;
 
   constructor(q: LogQuery, signal?: AbortSignal) {
@@ -277,9 +309,7 @@ export class LogQueryRun {
     this.#signal = signal;
     this.#ticker = new AbortTicker(signal);
     this.#condition = q.condition === null ? null : compileCondition(q.condition, 'log_record');
-    this.#logCompare = q.mode === 'logs' ? sortFor(LOG_SORTS, q.sort.column, q.mode) : null;
-    this.#patternCompare = q.mode === 'patterns' ? sortFor(PATTERN_SORTS, q.sort.column, q.mode) : null;
-    this.#traceCompare = q.mode === 'traces' ? sortFor(TRACE_SORTS, q.sort.column, q.mode) : null;
+    this.#sort = modeSort(q);
     throwIfAborted(signal);
   }
 
@@ -319,46 +349,39 @@ export class LogQueryRun {
     g.services.add(row.service);
   }
 
-  /** The comparator for the active mode is set in the constructor; this guards the other modes' branches. */
-  #unreachable(): never {
-    throw new OtelHtmlError('usage', {
-      path: 'query.mode',
-      expected: 'a mode with a sort table',
-      actual: this.#q.mode,
-    });
-  }
-
   /** Patterns-mode rows of `d` in this query's sort and limit (the run's own clusters, or the writer's rollup). */
   patternsOf(d: Drain): { mode: 'patterns'; rows: PatternRow[]; total: number; unclustered: number } {
-    const compare = this.#patternCompare ?? this.#unreachable();
+    const sort = this.#sort;
+    if (sort.mode !== 'patterns') {
+      throw new OtelHtmlError('usage', { path: 'query.mode', expected: 'patterns', actual: sort.mode });
+    }
     const all = patternRowsOf(d);
     const rows = topK(
       all,
       this.#q.limit,
-      ordered(this.#q.sort.dir, compare, (a, b) => a.id - b.id),
+      ordered(this.#q.sort.dir, sort.compare, (a, b) => a.id - b.id),
     );
     return { mode: 'patterns', rows, total: all.length, unclustered: d.unclustered };
   }
 
   finish(partial: LogQueryResult['partial']): LogQueryResult {
     throwIfAborted(this.#signal);
-    const { limit, sort, mode } = this.#q;
+    const { limit, sort: order } = this.#q;
+    const sort = this.#sort;
     const common = {
       matched: this.#count,
       facets: this.#rollups.facets,
       buckets: this.#rollups.buckets,
       partial,
     };
-    switch (mode) {
+    switch (sort.mode) {
       case 'logs': {
-        const compare = this.#logCompare ?? this.#unreachable();
-        const rows = topK(this.#matched, limit, ordered(sort.dir, compare, byTimeThenRef));
-        return { ...common, mode, rows, total: this.#matched.length };
+        const rows = topK(this.#matched, limit, ordered(order.dir, sort.compare, byTimeThenRef));
+        return { ...common, mode: sort.mode, rows, total: this.#matched.length };
       }
       case 'patterns':
         return { ...common, ...this.patternsOf(this.#rollups.patterns) };
       case 'traces': {
-        const compare = this.#traceCompare ?? this.#unreachable();
         const all: LogTraceRow[] = [...this.#traces].map(([traceId, g]) => ({
           traceId,
           logs: g.logs,
@@ -370,16 +393,16 @@ export class LogQueryRun {
         const rows = topK(
           all,
           limit,
-          ordered(sort.dir, compare, (a, b) => a.first - b.first || cmp(a.traceId, b.traceId)),
+          ordered(order.dir, sort.compare, (a, b) => a.first - b.first || cmp(a.traceId, b.traceId)),
         );
-        return { ...common, mode, rows, total: all.length };
+        return { ...common, mode: sort.mode, rows, total: all.length };
       }
       default: {
-        const never: never = mode;
+        const never: never = sort;
         throw new OtelHtmlError('usage', {
           path: 'query.mode',
           expected: 'logs, patterns or traces',
-          actual: String(never),
+          actual: JSON.stringify(never),
         });
       }
     }

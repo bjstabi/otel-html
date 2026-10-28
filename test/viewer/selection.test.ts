@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest';
+import { OtelHtmlError } from '../../src/model/errors.js';
 import type { SpanId, TraceId } from '../../src/model/ids.js';
 import {
   type FilterToken,
@@ -66,6 +67,20 @@ describe('toggleFacet', () => {
     store.getState().toggleFacet('x', 'y', 'include');
     store.getState().clear('condition');
     expect(store.getState().condition).toBeNull();
+  });
+
+  test('a matches token survives a facet click, include and exclude, and toggling the facet off', () => {
+    const q = 'IsMatch(log.body.string, "^card declined: \\\\S+$")';
+    const store = createSelectionStore({ q });
+    expect(ottlToTokens(q)?.[0]?.op).toBe('matches');
+    store.getState().toggleFacet('severity', 'error', 'include', 'core', 'string', 'log');
+    const kept = (): FilterToken[] =>
+      (ottlToTokens(store.getState().condition ?? '') ?? []).filter((t) => t.op === 'matches');
+    expect(kept()).toEqual([{ key: 'log.body.string', op: 'matches', value: '^card declined: \\S+$' }]);
+    store.getState().toggleFacet('severity', 'error', 'exclude', 'core', 'string', 'log');
+    expect(kept()).toHaveLength(1);
+    store.getState().toggleFacet('severity', 'error', 'exclude', 'core', 'string', 'log');
+    expect(store.getState().condition).toBe(q);
   });
 
   test('a condition that is not a flat and of tokens fails fast', () => {
@@ -254,6 +269,13 @@ describe('logs selection', () => {
   test('setSeverityRange on a condition that is not a flat and fails fast', () => {
     const store = createSelectionStore({ q: 'a == 1 or b == 2' });
     expect(() => store.getState().setSeverityRange('warn', null)).toThrow(/condition/);
+  });
+
+  test('setSeverityRange with min above max is a usage error and leaves the condition alone', () => {
+    const store = createSelectionStore({ q: 'log.severity_number >= SEVERITY_NUMBER_INFO' });
+    expect(() => store.getState().setSeverityRange('error', 'warn')).toThrow(OtelHtmlError);
+    expect(() => store.getState().setSeverityRange('error', 'warn')).toThrow(/severity range/);
+    expect(store.getState().condition).toBe('log.severity_number >= SEVERITY_NUMBER_INFO');
   });
 
   test('selectLog pushes a history entry', () => {

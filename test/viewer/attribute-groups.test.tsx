@@ -375,6 +375,17 @@ describe('addAttributeFilter', () => {
     );
   });
 
+  test('the log signal scopes attributes to log.attributes, and resource attributes stay on the resource', () => {
+    const v = str('v');
+    expect(addAttributeFilter(null, 'attribute', 'k', v, '==', 'log')).toBe('log.attributes["k"] == "v"');
+    expect(addAttributeFilter('log.attributes["k"] == "v"', 'attribute', 'k', v, '!=', 'log')).toBe(
+      'log.attributes["k"] != "v"',
+    );
+    expect(addAttributeFilter(null, 'resource', 'host.name', v, '==', 'log')).toBe(
+      'resource.attributes["host.name"] == "v"',
+    );
+  });
+
   test('a non-flat condition throws instead of being overwritten', () => {
     expect(() => addAttributeFilter('a == 1 or b == 2', 'attribute', 'k', str('v'), '==')).toThrow(
       /flat `and`/,

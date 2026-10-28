@@ -1,13 +1,14 @@
 import type { Manifest } from '../../format/manifest.js';
+import { chunkKey } from '../../format/paths.js';
 import type { TraceId } from '../../model/ids.js';
 import type { ResourceRecord, ResourceRef, ScopeRecord, ScopeRef } from '../../model/records.js';
 import type { ExpHistogram } from '../../rollups/exp-histogram.js';
 import type { FacetCounts } from '../../rollups/facets.js';
 import type { LogRollups } from '../../rollups/log-rollups.js';
 import type { RedSeries } from '../../rollups/red.js';
-import type { LogSeverityKey } from '../../rollups/signal-counts.js';
 import type { SpanRollups } from '../../rollups/span-rollups.js';
 import type { TimeBuckets } from '../../rollups/time-buckets.js';
+import type { LogSeverityKey } from '../../semconv/severity.js';
 import { createEagerSource } from './eager.js';
 import { createTraceIndex, loadSpanRollups } from './load.js';
 import { createEagerLogSource } from './log-eager.js';
@@ -63,7 +64,7 @@ export interface SurroundingLogs {
   before: readonly LogRow[];
   log: LogRow;
   after: readonly LogRow[];
-  /** True when the windowed scan stopped at its neighbor-chunk cap before finding `n` on a side. */
+  /** True when the windowed scan stopped at its chunk budget with unread chunks that could hold nearer logs. */
   partial: boolean;
 }
 
@@ -105,11 +106,7 @@ export interface SpanStrategy extends Pick<DataSource, 'querySpans' | 'hasTrace'
 }
 
 /** What each log strategy provides; `createDataSource` adds the landing. */
-export interface LogStrategy
-  extends Pick<DataSource, 'queryLogs' | 'getLog' | 'traceLogs' | 'surroundingLogs'> {
-  /** Log records carrying the trace id (for `TraceDetail.logCount`). */
-  logCount(traceId: TraceId): Promise<number>;
-}
+export type LogStrategy = Pick<DataSource, 'queryLogs' | 'getLog' | 'traceLogs' | 'surroundingLogs'>;
 
 const DURATION_KEY_SEP = '\u0000';
 
@@ -166,7 +163,6 @@ function lazyLogStrategy(build: () => Promise<LogStrategy>): LogStrategy {
       checkSurroundingCount(n); // a bad count fails before any chunk loads
       return (await get()).surroundingLogs(ref, n);
     },
-    logCount: async (traceId) => (await get()).logCount(traceId),
   };
 }
 
@@ -183,6 +179,9 @@ export async function createDataSource(
 ): Promise<DataSource> {
   const budgets = signalBudgets(manifest, budgetBytes);
   const index = createTraceIndex(loader, manifest);
+  const listedLogChunks = new Set(
+    manifest.chunks.flatMap((c) => (c.signal === 'logs' ? [chunkKey('logs', c.n)] : [])),
+  );
   let logRollups: Promise<LogRollups> | undefined;
   const getLogRollups = (): Promise<LogRollups> => {
     logRollups ??= loadLogRollups(loader, manifest).catch((e: unknown) => {
@@ -211,7 +210,23 @@ export async function createDataSource(
     },
     querySpans: spanStrategy.querySpans,
     async getTrace(traceId) {
-      const [trace, logCount] = await Promise.all([spanStrategy.getTrace(traceId), logs.logCount(traceId)]);
+      // The count comes from the trace index, so opening a trace never waits on the log load, with one exception
+      // below, and never fails with it.
+      // Under the eager span strategy the spans are already in memory, so a shard that fails to load costs only the
+      // log count (0); under the windowed strategy getTrace needs the same shard, so its failure stands.
+      const [trace, entry] = await Promise.all([
+        spanStrategy.getTrace(traceId),
+        budgets.spans === 'eager' ? index.entry(traceId).catch(() => null) : index.entry(traceId),
+      ]);
+      if (entry === null || entry.logs === 0) return { ...trace, logCount: 0 };
+      if (entry.logChunks.every((k) => listedLogChunks.has(k))) return { ...trace, logCount: entry.logs };
+      // Crash only: a crash between a flush's shard write and its manifest commit leaves the shard counting logs in
+      // chunks the manifest never listed. Count the committed rows instead; this waits on the log load, and if that
+      // load fails the index count stands, so the trace still opens.
+      const logCount = await logs.traceLogs(traceId).then(
+        (rows) => rows.length,
+        () => entry.logs,
+      );
       return { ...trace, logCount };
     },
     hasTrace: spanStrategy.hasTrace,

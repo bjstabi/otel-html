@@ -43,7 +43,7 @@ import {
   type ReportRollups,
   serializeRollups,
 } from '../rollups/report-rollups.js';
-import { severityKey } from '../rollups/signal-counts.js';
+import { severityKey } from '../semconv/severity.js';
 import {
   at,
   isReportFolder,
@@ -108,6 +108,16 @@ export type RecordBatch =
       epoch: UnixNanos;
     };
 
+export interface AddOptions {
+  /**
+   * More of the same input follows (a file read one resource entry at a time). Until `endInput`, no periodic
+   * checkpoint runs and a report being replaced is not wiped, so a bad entry later in the input leaves the
+   * committed report as it was. In append and fresh-create mode, chunks written before a failing entry stay on disk
+   * outside the manifest: harmless, never read, and overwritten by the next append.
+   */
+  readonly partial?: boolean;
+}
+
 export interface ReportSummary {
   out: string;
   totals: Record<Signal, number>;
@@ -116,7 +126,9 @@ export interface ReportSummary {
 }
 
 export interface WriterSession {
-  add(input: OtlpRequest, source: string): Promise<AddResult>;
+  add(input: OtlpRequest, source: string, options?: AddOptions): Promise<AddResult>;
+  /** The input fed through `partial` adds is complete: write held chunks and checkpoint if one is due. */
+  endInput(): Promise<void>;
   addRecords(batch: RecordBatch): Promise<AddResult>;
   flush(): Promise<void>;
   close(): Promise<ReportSummary>;
@@ -282,6 +294,8 @@ class Session implements WriterSession {
   #closed: ReportSummary | null = null;
   #aborted = false;
   #replacing: boolean;
+  /** Inside a `partial` input: see AddOptions. */
+  #partial = false;
   #tail: Promise<unknown> = Promise.resolve();
 
   constructor(deps: WriterDeps, out: string, config: ResolvedConfig, drop: Drops, r: Restored) {
@@ -313,30 +327,51 @@ class Session implements WriterSession {
 
   // -- public API ------------------------------------------------------------------------------
 
-  add(input: OtlpRequest, source: string): Promise<AddResult> {
+  add(input: OtlpRequest, source: string, options?: AddOptions): Promise<AddResult> {
     return this.#serial(async () => {
       this.#assertOpen();
+      this.#partial = options?.partial === true;
       const ctx = this.#ensureEpoch(earliestTimestamp(input));
+      const first = input.first ?? 0;
       let result: AddResult;
       switch (input.signal) {
-        case 'traces':
-          result = await this.#acceptSpans(normalizeTraces(input.request, ctx, source));
+        case 'traces': {
+          const rows = normalizeTraces(input.request, ctx, source, first);
+          this.#settleEpoch(rows.length);
+          result = await this.#acceptSpans(rows);
           break;
-        case 'logs':
-          result = await this.#acceptLogs(normalizeLogs(input.request, ctx, source), source);
+        }
+        case 'logs': {
+          const rows = normalizeLogs(input.request, ctx, source, first);
+          this.#settleEpoch(rows.length);
+          result = await this.#acceptLogs(rows, source);
           break;
-        case 'metrics':
-          result = await this.#acceptPoints(normalizeMetrics(input.request, ctx, source));
+        }
+        case 'metrics': {
+          const rows = normalizeMetrics(input.request, ctx, source, first);
+          this.#settleEpoch(rows.length);
+          result = await this.#acceptPoints(rows);
           break;
+        }
       }
-      await this.#maybeCheckpoint();
+      if (!this.#partial) await this.#maybeCheckpoint();
       return result;
+    });
+  }
+
+  endInput(): Promise<void> {
+    return this.#serial(async () => {
+      this.#assertOpen();
+      this.#partial = false;
+      await this.#drainUnwritten(false);
+      await this.#maybeCheckpoint();
     });
   }
 
   addRecords(batch: RecordBatch): Promise<AddResult> {
     return this.#serial(async () => {
       this.#assertOpen();
+      this.#partial = false;
       if (batch.rows.length === 0) return { accepted: 0, dropped: 0, duplicates: 0 };
       const ctx = this.#ensureEpoch(batch.epoch);
       const shift = batch.epoch - ctx.epoch;
@@ -439,15 +474,31 @@ class Session implements WriterSession {
     };
   }
 
-  /** The epoch is the earliest timestamp of the first data seen and never changes afterwards. */
+  /**
+   * The epoch is the earliest timestamp of the first data that has one, and never changes afterwards. A request
+   * without any timestamp gets a provisional context anchored at the wall clock, and the epoch stays unset unless
+   * it holds records (`#settleEpoch`): an empty resource entry first in a file must not pin the epoch to now. The
+   * provisional resource and scope tables carry over once the epoch is fixed.
+   */
   #ensureEpoch(candidate: UnixNanos | null): NormalizeContext {
-    if (this.#ctx === null || this.#epoch === null) {
-      const epoch = candidate ?? this.#deps.clock.nowUnixNano();
-      this.#epoch = epoch;
-      this.#ctx = createNormalizeContext(epoch);
-      this.#dirty = true;
+    if (this.#epoch !== null && this.#ctx !== null) return this.#ctx;
+    if (candidate === null) {
+      this.#ctx ??= createNormalizeContext(this.#deps.clock.nowUnixNano());
+      return this.#ctx;
     }
+    const fresh = createNormalizeContext(candidate);
+    this.#epoch = candidate;
+    this.#ctx =
+      this.#ctx === null ? fresh : { ...fresh, resources: this.#ctx.resources, scopes: this.#ctx.scopes };
+    this.#dirty = true;
     return this.#ctx;
+  }
+
+  /** Records normalized against a provisional context fix its wall-clock epoch for good. */
+  #settleEpoch(records: number): void {
+    if (records === 0 || this.#epoch !== null || this.#ctx === null) return;
+    this.#epoch = this.#ctx.epoch;
+    this.#dirty = true;
   }
 
   #context(): NormalizeContext {
@@ -499,7 +550,7 @@ class Session implements WriterSession {
       if (this.#spans.isFull(this.#config.writer.chunkTargetBytes)) this.#cutSync(this.#spans);
     }
     if (staged.length > 0) this.#dirty = true;
-    await this.#drainUnwritten(false);
+    await this.#drainAccepted();
     return { accepted: staged.length, dropped, duplicates };
   }
 
@@ -542,7 +593,7 @@ class Session implements WriterSession {
       if (this.#logs.isFull(this.#config.writer.chunkTargetBytes)) this.#cutSync(this.#logs);
     }
     if (staged.length > 0) this.#dirty = true;
-    await this.#drainUnwritten(false);
+    await this.#drainAccepted();
     return { accepted: staged.length, dropped, duplicates: 0 };
   }
 
@@ -568,7 +619,7 @@ class Session implements WriterSession {
       if (this.#metrics.isFull(this.#config.writer.chunkTargetBytes)) this.#cutSync(this.#metrics);
     }
     if (staged.length > 0) this.#dirty = true;
-    await this.#drainUnwritten(false);
+    await this.#drainAccepted();
     return { accepted: staged.length, dropped, duplicates: 0 };
   }
 
@@ -606,6 +657,12 @@ class Session implements WriterSession {
         queued: this.#unwritten.length,
       });
     }
+  }
+
+  /** Write chunks cut while accepting rows, except into a report still to be wiped during a partial input. */
+  async #drainAccepted(): Promise<void> {
+    if (this.#partial && this.#replacing) return;
+    await this.#drainUnwritten(false);
   }
 
   /**

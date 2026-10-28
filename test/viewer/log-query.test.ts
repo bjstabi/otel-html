@@ -341,6 +341,23 @@ describe('queryLogEntries', () => {
     );
   });
 
+  test('a signal aborted during a long scan stops it', () => {
+    const logs = Array.from({ length: 20_000 }, (_, i) => log({ time: i as RelNanos, body: str(`op ${i}`) }));
+    const ac = new AbortController();
+    let seen = 0;
+    const spy = entriesOf(logs).map((e) => ({
+      ...e,
+      get target() {
+        if (++seen === 5000) ac.abort();
+        return e.target;
+      },
+    }));
+    expect(() => queryLogEntries(spy, { ...base, condition: 'body == "none"' }, ac.signal)).toThrowError(
+      expect.objectContaining({ name: 'AbortError' }),
+    );
+    expect(seen).toBeLessThan(10_000);
+  });
+
   describe('perf (200k logs)', () => {
     const n = 200_000;
     const logs: LogRecordRecord[] = new Array<LogRecordRecord>(n);

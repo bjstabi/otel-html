@@ -40,6 +40,28 @@ describe('segmentBody', () => {
     ]);
     expect(segmentBody('==x').every((g) => g.type === 'text')).toBe(true);
   });
+
+  test('a quoted value may hold a raw newline; its inner key=value is not split out', () => {
+    const s = 'msg="line one\nb=c" next=1';
+    const segs = segmentBody(s);
+    expect(segs.flatMap((g) => (g.type === 'kv' ? [[g.key, g.value]] : []))).toEqual([
+      ['msg', '"line one\nb=c"'],
+      ['next', '1'],
+    ]);
+  });
+
+  test('past the first 256 KiB the rest is one plain-text segment; a pair straddling the cap stays whole', () => {
+    const cap = 262_144;
+    const s = `${'a'.repeat(cap - 4)} key=value tail k2=v2 {"x":1}`;
+    const segs = segmentBody(s);
+    expect(
+      segs
+        .map((g) => (g.type === 'kv' ? `${g.key}=${g.value}` : g.type === 'json' ? g.raw : g.text))
+        .join(''),
+    ).toBe(s);
+    expect(segs.flatMap((g) => (g.type === 'kv' ? [g.key] : []))).toEqual(['key']);
+    expect(segs.at(-1)).toEqual({ type: 'text', text: ' tail k2=v2 {"x":1}' });
+  });
 });
 
 declare const process: { env: { OTEL_HTML_PERF_FACTOR?: string } }; // provided by vitest; the viewer project has no node types

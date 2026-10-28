@@ -8,7 +8,7 @@ import { applyPatch, carryTo, type DroppedParam } from '../state/carry.js';
 import { PAGE_TITLES, type Page, pageOfRoute } from '../state/page-options.js';
 import { bindUrl, createSelectionStore, type HistoryPort } from '../state/selection.js';
 import { SelectionProvider } from '../state/selection-context.js';
-import { parseUrlState, serializeUrlState } from '../state/url-state.js';
+import { parseUrlState, SELECTION_MODES, serializeUrlState } from '../state/url-state.js';
 import { ColorsProvider } from '../theme/colors-context.js';
 import { TracesExplorer } from '../traces/explorer.js';
 import { ServicesPage } from '../traces/services-page.js';
@@ -19,7 +19,7 @@ import { ComingLaterPage, NotFoundPage } from './pages.js';
 import { ShortcutHelp } from './shortcut-help.js';
 import { createShortcutHandler, SHORTCUTS, type ShortcutActions } from './shortcuts.js';
 import { Sidebar } from './sidebar.js';
-import { currentRoute, navigateRoute, replaceRoute, useRoute } from './use-route.js';
+import { currentRoute, navigateRoute, useRoute } from './use-route.js';
 
 const TRACE_PAGE_HASH = '#/traces/trace/';
 
@@ -93,8 +93,10 @@ function PatternsRedirect(): null {
     const hash = window.location.hash;
     const qi = hash.indexOf('?');
     const params = new URLSearchParams(qi >= 0 ? hash.slice(qi + 1) : '');
-    params.set('mode', 'patterns');
-    replaceRoute(window, '/logs', params.toString().replace(/%7E/g, '~'));
+    // An invalid `mode` stays so `bindUrl` reports it; only a missing or valid one becomes `patterns`.
+    const given = params.get('mode');
+    if (given === null || SELECTION_MODES.some((m) => m === given)) params.set('mode', 'patterns');
+    navigateRoute(window, '/logs', params.toString().replace(/%7E/g, '~'), true);
   }, []);
   return null;
 }

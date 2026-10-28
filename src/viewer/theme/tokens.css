@@ -19,10 +19,10 @@
   --oh-series-other: #9a9da5;
   --oh-sev-fatal: #8f1d21;
   --oh-sev-error: #d03b3b;
-  --oh-sev-warn: #fab219;
+  --oh-sev-warn: #b87a00;
   --oh-sev-info: #2a78d6;
-  --oh-sev-debug: #9ca3af;
-  --oh-sev-trace: #c9ccd1;
+  --oh-sev-debug: #7a818c;
+  --oh-sev-trace: #898e98;
   --oh-sev-unspecified: var(--oh-muted);
   --oh-radius-card: 12px;
   --oh-font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -46,7 +46,7 @@
     --oh-series-6: #008300;
     --oh-series-7: #9085e9;
     --oh-series-other: #6f7279;
-    --oh-sev-fatal: #ef6b6e;
+    --oh-sev-fatal: #f0709a;
     --oh-sev-error: #e5605f;
     --oh-sev-warn: #fab219;
     --oh-sev-info: #3987e5;
@@ -73,7 +73,7 @@
   --oh-series-6: #008300;
   --oh-series-7: #9085e9;
   --oh-series-other: #6f7279;
-  --oh-sev-fatal: #ef6b6e;
+  --oh-sev-fatal: #f0709a;
   --oh-sev-error: #e5605f;
   --oh-sev-warn: #fab219;
   --oh-sev-info: #3987e5;

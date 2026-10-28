@@ -52,7 +52,19 @@ describe('eager strategy', () => {
     );
     await ds.querySpans(query({ condition: ERRORS }));
     await ds.getTrace(traceIdOf(2) as TraceId);
-    expect(loader.calls).toEqual(loaded);
+    // Spans stay in memory; only the trace's index shard (for its log count) is read.
+    expect(loader.calls).toEqual([...loaded, `data/traces/${traceIdOf(2).slice(0, 2)}.js`]);
+  });
+
+  test('a trace still opens, with no log count, when its index shard fails to load', async () => {
+    const id = traceIdOf(2);
+    const files = new Map(six.files);
+    files.delete(`data/traces/${id.slice(0, 2)}.js`);
+    const ds = await createDataSource(createScriptedLoader(files), six.manifest, SMALL);
+    expect(ds.strategy).toBe('eager');
+    const t = await ds.getTrace(id as TraceId);
+    expect(t.spans).toHaveLength(3);
+    expect(t.logCount).toBe(0);
   });
 
   test('filters to exactly the error spans, with facets over the filtered set and no partial flag', async () => {

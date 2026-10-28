@@ -1,3 +1,4 @@
+import { createReadStream } from 'node:fs';
 import { mkdir, open, readdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import type { FileSystem } from './ports.js';
@@ -8,6 +9,7 @@ export function createNodeFileSystem(): FileSystem {
     async readBytes(p) {
       return new Uint8Array(await readFile(p));
     },
+    readChunks: (p) => createReadStream(p), // 64 KiB pieces
     async writeTextAtomic(p, text) {
       const tmp = `${p}.tmp-${process.pid}`;
       try {

@@ -2,9 +2,9 @@ import { cleanup, render, screen } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import type { RelNanos } from '../../src/model/ids.js';
-import { LOG_SEVERITY_KEYS, type LogSeverityKey } from '../../src/rollups/signal-counts.js';
 import type { SpanStatusKey } from '../../src/rollups/span-rollups.js';
 import { TimeBuckets } from '../../src/rollups/time-buckets.js';
+import { LOG_SEVERITY_KEYS, type LogSeverityKey } from '../../src/semconv/severity.js';
 
 vi.mock('../../src/viewer/components/chart.js', () => ({
   Chart: (p: { ariaLabel: string; option: unknown }): React.JSX.Element => (
@@ -110,6 +110,25 @@ describe('HistogramCard', () => {
     expect(opt.series[0]?.itemStyle.decal).toBeUndefined();
     expect(screen.getByText('3 errors')).toBeTruthy();
     expect(img.getAttribute('aria-label')).toMatch(/11 spans/);
+  });
+
+  test('bar colours are resolved theme values, and an unset token falls back to a hex colour the canvas can paint', () => {
+    document.documentElement.style.setProperty('--oh-series-1', '#123456');
+    try {
+      render(
+        <SelectionProvider store={createSelectionStore({})}>
+          <HistogramCard buckets={buckets()} series={SPAN_STATUS_SERIES} />
+        </SelectionProvider>,
+      );
+      const opt = JSON.parse(screen.getByRole('img').getAttribute('data-option') ?? '{}') as {
+        series: { name: string; itemStyle: { color: string } }[];
+      };
+      expect(opt.series.find((s) => s.name === 'ok')?.itemStyle.color).toBe('#123456');
+      // --oh-critical and --oh-series-other are not set in jsdom: never a raw var() reference.
+      for (const s of opt.series) expect(s.itemStyle.color).toMatch(/^#[0-9a-f]{6}$/i);
+    } finally {
+      document.documentElement.style.removeProperty('--oh-series-1');
+    }
   });
 
   test('draws a wide histogram at most HISTOGRAM_MAX_COLUMNS columns wide', () => {

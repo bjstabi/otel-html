@@ -19,6 +19,7 @@ import { traceShardKey, traceShardPath } from '../../src/format/paths.js';
 import { TraceShardSchema } from '../../src/format/trace-shard.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { ExportLogsServiceRequestSchema } from '../../src/model/gen/opentelemetry/proto/collector/logs/v1/logs_service_pb.js';
+import type { FileSystem } from '../../src/writer/ports.js';
 import { logRecord, logsRequest } from '../../test-support/otlp-builders.js';
 import { createTestWriter, type TestWriter } from '../../test-support/writer-deps.js';
 import { allLogs, allSpans, manifestOf, spansRequest } from '../writer/helpers.js';
@@ -77,6 +78,17 @@ describe('convert', () => {
     expect(summary.totals).toEqual({ spans: 4, logs: 1, metrics: 0 });
   });
 
+  test('a file system without readChunks is read whole with readBytes', async () => {
+    const w = createTestWriter();
+    await put(w, 'in/logs.json', JSON.stringify(logsRequest([logRecord(), logRecord()])));
+    const { readChunks: _, ...whole } = w.fs;
+    const summary = await convert({ input: 'in/logs.json', out: 'r' }, { ...w.deps, fs: whole });
+    expect(summary.totals.logs).toBe(2);
+    const e = await failure(convert({ input: 'in/missing.json', out: 'r2' }, { ...w.deps, fs: whole }));
+    expect(e.code).toBe('usage');
+    expect(e.message).toContain('cannot read input file in/missing.json');
+  });
+
   test('protobuf without a signal hint is a usage error naming the file', async () => {
     const w = createTestWriter();
     await put(w, 'in/c.pb', new Uint8Array([]));
@@ -100,6 +112,109 @@ describe('convert', () => {
     expect(e.message).toContain('in/bad.json');
     await put(w, 'in/ok.json', JSON.stringify(spansRequest(1)));
     await convert({ input: 'in/ok.json', out: 'r' }, w.deps);
+  });
+});
+
+describe('convert streams a file one resource entry at a time', () => {
+  /** A resource entry of `n` logs at `time`; `n` 0 gives an entry without records. */
+  function entry(n: number, time = '1600000000000000000', extra: Record<string, unknown> = {}): unknown {
+    return {
+      resource: { attributes: [{ key: 'service.name', value: { stringValue: `svc-${n}` } }] },
+      scopeLogs:
+        n === 0
+          ? []
+          : [
+              {
+                logRecords: Array.from({ length: n }, () =>
+                  logRecord({ timeUnixNano: time, observedTimeUnixNano: time, ...extra }),
+                ),
+              },
+            ],
+    };
+  }
+
+  test('an empty first entry does not fix the epoch: data far from the wall clock still converts', async () => {
+    const w = createTestWriter(); // wall clock 1700000000000000000, over three years later
+    await put(w, 'in/old.json', JSON.stringify({ resourceLogs: [entry(0), entry(2)] }));
+    const summary = await convert({ input: 'in/old.json', out: 'r' }, w.deps);
+    expect(summary.totals.logs).toBe(2);
+    expect(manifestOf(w, 'r').epochUnixNano).toBe('1600000000000000000');
+  });
+
+  test('normalize errors name the real resource entry, for JSON and protobuf', async () => {
+    const w = createTestWriter();
+    const bad = { resource: { attributes: [{ key: 'k', value: { stringValueStrindex: 1 } }] } };
+    await put(
+      w,
+      'in/bad.json',
+      JSON.stringify({ resourceLogs: [entry(1), entry(1), { ...bad, scopeLogs: [] }] }),
+    );
+    const e = await failure(convert({ input: 'in/bad.json', out: 'r' }, w.deps));
+    expect(e.path).toMatch(/^in\/bad\.json: resourceLogs\[2\]\.resource\./);
+    const bin = toBinary(
+      ExportLogsServiceRequestSchema,
+      create(ExportLogsServiceRequestSchema, {
+        resourceLogs: [
+          {},
+          {
+            resource: {
+              attributes: [{ key: 'k', value: { value: { case: 'stringValueStrindex', value: 1 } } }],
+            },
+          },
+        ],
+      }),
+    );
+    await put(w, 'in/bad.pb', bin);
+    const p = await failure(convert({ input: 'in/bad.pb', out: 'r2', signal: 'logs' }, w.deps));
+    expect(p.path).toMatch(/^in\/bad\.pb: resourceLogs\[1\]\.resource\./);
+  });
+
+  describe('a periodic flush never lands inside a file', () => {
+    /** The file system, with the clock moved past the flush interval after the first piece of each read. */
+    function clockJumping(w: TestWriter): FileSystem {
+      return {
+        ...w.fs,
+        async *readChunks(p: string) {
+          let first = true;
+          for await (const piece of w.fs.readChunks?.(p) ?? []) {
+            yield piece;
+            if (first) w.clock.advance(60_000_000_000n);
+            first = false;
+          }
+        },
+      };
+    }
+    const late = (): string =>
+      JSON.stringify({
+        resourceLogs: [
+          ...Array.from({ length: 20 }, () => entry(5, '1700000000000000000')),
+          entry(1, '1700000000000000000', { traceId: 'zz' }),
+        ],
+      });
+
+    test('create: a bad entry late in a file leaves the report being replaced untouched', async () => {
+      const w = createTestWriter();
+      await put(w, 'in/good.json', JSON.stringify(spansRequest(3)));
+      await convert({ input: 'in/good.json', out: 'r' }, w.deps);
+      await put(w, 'in/late.json', late());
+      const before = w.fs.snapshot();
+      await failure(convert({ input: 'in/late.json', out: 'r' }, { ...w.deps, fs: clockJumping(w) }));
+      const after = w.fs.snapshot();
+      for (const [path, text] of before) {
+        if (!path.endsWith('.lock')) expect(after.get(path), path).toBe(text);
+      }
+    });
+
+    test('append: a bad entry late in a file commits none of it', async () => {
+      const w = createTestWriter();
+      await put(w, 'in/good.json', JSON.stringify(spansRequest(3)));
+      await convert({ input: 'in/good.json', out: 'r' }, w.deps);
+      await put(w, 'in/late.json', late());
+      await failure(
+        convert({ input: 'in/late.json', out: 'r', append: true }, { ...w.deps, fs: clockJumping(w) }),
+      );
+      expect(manifestOf(w, 'r').totals).toEqual({ spans: 3, logs: 0, metrics: 0 });
+    });
   });
 });
 
@@ -168,13 +283,14 @@ describe('the linked fixture', () => {
     for (const f of files) {
       await put(w, f, readFileSync(new URL(`../../fixtures/${f.slice('in/'.length)}`, import.meta.url)));
     }
-    const summary = await convert({ input: files, out: 'r' }, w.deps);
-    expect(summary.totals.logs).toBe(LINKED_LOG_COUNT);
+    await convert({ input: files, out: 'r' }, w.deps);
     return w;
   }
 
   test('converts to 40 logs, and its linked trace indexes its log chunks', async () => {
     const w = await convertLinked();
+    expect(manifestOf(w, 'r').totals.logs).toBe(LINKED_LOG_COUNT);
+    expect(allLogs(w, 'r')).toHaveLength(LINKED_LOG_COUNT);
     const shard = LINKED_TRACE.slice(0, 2);
     const text = w.fs.snapshot().get(`r/${traceShardPath(shard)}`) ?? '';
     const entry = TraceShardSchema.parse(reviveDataJson(unwrapDataFile(text, traceShardKey(shard))))[

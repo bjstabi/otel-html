@@ -3,6 +3,7 @@ import type { Manifest } from '../../format/manifest.js';
 import { parseUnixNanos, type SpanId, type TraceId } from '../../model/ids.js';
 import { Chart } from '../components/chart.js';
 import { ColumnPicker } from '../components/column-picker.js';
+import { ExplorerControls } from '../components/explorer-controls.js';
 import {
   ErrorCard,
   LoadingNote,
@@ -28,7 +29,13 @@ import type { DataSource, SpanQuery, SpanRow, TraceRow } from '../data/data-sour
 import { useGoTo } from '../shell/go-to.js';
 import { PageChrome } from '../shell/page-chrome.js';
 import { PageOptionNotice } from '../shell/page-option-notice.js';
-import { PAGE_OPTIONS, type PageView, resolvePageMode, resolvePageView } from '../state/page-options.js';
+import {
+  PAGE_OPTIONS,
+  type PageMode,
+  type PageView,
+  resolvePageMode,
+  resolvePageView,
+} from '../state/page-options.js';
 import { useSelection } from '../state/selection-context.js';
 import { useColorAssigner } from '../theme/colors-context.js';
 import { useTheme } from '../theme/theme-provider.js';
@@ -62,7 +69,6 @@ const VIEW_LABEL: Record<PageView<'traces'>, string> = {
 
 const DEFAULT_SORT: SortState = { column: 'start', dir: 'desc' };
 const DURATION_BIN_COUNT = 24;
-const FIELD = 'rounded-full border border-hairline bg-surface px-3 py-1 text-sm';
 
 function OpenLogs(): JSX.Element {
   const goTo = useGoTo();
@@ -140,11 +146,6 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
   const { state, scanAll } = useSpanQuery(dataSource, query);
   const result = state.status === 'ready' ? state.result : state.status === 'loading' ? state.previous : null;
 
-  function setView(v: string): void {
-    const next = TRACES.views.find((x) => x === v);
-    if (next !== undefined) sel.setView(next);
-  }
-
   const clearFilters = (): void => {
     sel.clear('condition');
     sel.clear('text');
@@ -198,10 +199,6 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
   ];
 
   const grouped = GROUPED_VIEWS.has(view);
-  const groupKeys = useMemo(() => {
-    const keys = result?.facets.keys().sort() ?? [];
-    return sel.groupBy !== null && !keys.includes(sel.groupBy) ? [sel.groupBy, ...keys] : keys;
-  }, [result, sel.groupBy]);
   const attributeKeys = useMemo(
     () => (result?.facets.keys() ?? []).filter((k) => k.includes('.') && !extraColumns.includes(k)).sort(),
     [result, extraColumns],
@@ -239,70 +236,35 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
       <div className="flex flex-col gap-4">
         <PageOptionNotice message={invalidMode} onReset={() => sel.setMode(null)} />
         <PageOptionNotice message={invalidView} onReset={() => sel.setView('list')} />
-        <div className="flex flex-wrap items-center gap-3">
-          <fieldset className="flex gap-1 rounded-full border border-hairline bg-surface p-0.5">
-            <legend className="sr-only">Show</legend>
-            {TRACES.modes.map((m) => (
-              <button
-                key={m}
-                type="button"
-                aria-pressed={mode === m}
-                data-selected={mode === m ? 'true' : undefined}
-                onClick={() => sel.setMode(m === DEFAULT_MODE ? null : m)}
-                className={`${PILL} ${mode === m ? 'bg-ink text-surface' : 'text-ink-2 hover:bg-hairline'}`}
-              >
-                {m === 'spans' ? 'Spans' : 'Traces'}
-              </button>
-            ))}
-          </fieldset>
-          <label className="flex items-center gap-2 text-sm text-ink-2">
-            Group by
-            <select
-              aria-label="Group by"
-              className={FIELD}
-              value={sel.groupBy ?? ''}
-              disabled={!grouped}
-              title={grouped ? undefined : `Not used by the ${VIEW_LABEL[view]} view in this release`}
-              aria-describedby={grouped ? undefined : 'group-by-note'}
-              onChange={(e) =>
-                e.target.value === '' ? sel.clear('groupBy') : sel.setGroupBy(e.target.value)
-              }
-            >
-              <option value="">Service (default)</option>
-              {groupKeys.map((k) => (
-                <option key={k} value={k}>
-                  {k}
-                </option>
-              ))}
-            </select>
-          </label>
-          {!grouped && (
+        <ExplorerControls<PageMode<'traces'>, PageView<'traces'>>
+          modeLegend="Show"
+          modes={TRACES.modes}
+          mode={mode}
+          modeLabel={(m) => (m === 'spans' ? 'Spans' : 'Traces')}
+          onMode={(m) => sel.setMode(m === DEFAULT_MODE ? null : m)}
+          views={TRACES.views}
+          view={view}
+          viewLabel={(v) => VIEW_LABEL[v]}
+          onView={sel.setView}
+          groupBy={sel.groupBy}
+          onGroupBy={(k) => (k === null ? sel.clear('groupBy') : sel.setGroupBy(k))}
+          facetKeys={result?.facets.keys() ?? []}
+          grouped={grouped}
+          groupByTitle={`Not used by the ${VIEW_LABEL[view]} view in this release`}
+          groupByNoteId="group-by-note"
+          groupByNote={
             <span id="group-by-note" className="text-xs text-muted">
               Group by applies to Top list, Bar, Pie, Treemap and Table; it is not used by the current view
             </span>
-          )}
-          <label className="flex items-center gap-2 text-sm text-ink-2">
-            View
-            <select
-              aria-label="View"
-              className={FIELD}
-              value={view}
-              onChange={(e) => setView(e.target.value)}
-            >
-              {TRACES.views.map((v) => (
-                <option key={v} value={v}>
-                  {VIEW_LABEL[v]}
-                </option>
-              ))}
-            </select>
-          </label>
+          }
+        >
           {result !== null && (
             <output className="ml-auto font-mono text-xs tabular-nums text-muted">
               {result.total} {mode === 'spans' ? 'spans' : 'traces'}
               {result.total > result.rows.length ? ` · showing ${result.rows.length}` : ''}
             </output>
           )}
-        </div>
+        </ExplorerControls>
         {result !== null && <PartialNote partial={result.partial} onScanAll={scanAll} />}
         {state.status === 'loading' && <LoadingNote progress={state.progress} />}
         {exportError !== null && <ErrorCard title="The export failed" message={exportError} />}
@@ -356,12 +318,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
                   ) : (
                     <div className="flex flex-col gap-2">
                       {mode === 'spans' && (
-                        <ColumnPicker
-                          keys={attributeKeys}
-                          chosen={extraColumns}
-                          onAdd={(k) => setExtraColumns([...extraColumns, k])}
-                          onRemove={(k) => setExtraColumns(extraColumns.filter((c) => c !== k))}
-                        />
+                        <ColumnPicker keys={attributeKeys} chosen={extraColumns} onChange={setExtraColumns} />
                       )}
                       {mode === 'spans' ? (
                         <ResultsTable

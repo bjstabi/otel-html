@@ -7,8 +7,8 @@ import { parseUnixNanos, type RelNanos, type TraceId } from '../../src/model/ids
 import { createNormalizeContext, normalizeLogs } from '../../src/model/normalize.js';
 import { parseOtlpJson } from '../../src/model/otlp-json.js';
 import { LogRollups } from '../../src/rollups/log-rollups.js';
-import { LOG_SEVERITY_KEYS, type LogSeverityKey } from '../../src/rollups/signal-counts.js';
 import { TimeBuckets } from '../../src/rollups/time-buckets.js';
+import { LOG_SEVERITY_KEYS, type LogSeverityKey } from '../../src/semconv/severity.js';
 import { tokensToOttl } from '../../src/viewer/components/filter-tokens.js';
 import type { DataSource } from '../../src/viewer/data/data-source.js';
 import {
@@ -198,13 +198,16 @@ function setup(
 }
 
 describe('LogsExplorer', () => {
-  test('the landing shows the run total and the severity legend counts of the landing rollup', async () => {
+  test('the landing reads each number from its own source: matched, the buckets, the result total', async () => {
     const rows = logRows(['a', 'b']);
+    // Every source differs on purpose: a number read from the wrong one would show up as the wrong figure.
+    // The manifest total (5000) is only the zero-logs check and must not be shown.
     setup({
+      logs: 5000,
       queryLogs: () =>
-        Promise.resolve({ ...logsResult(rows, 1204), buckets: landingBuckets(), matched: 1204 }),
+        Promise.resolve({ ...logsResult(rows, 1100), buckets: landingBuckets(), matched: 1300 }),
     });
-    const histogram = await screen.findByRole('region', { name: '1204 logs by severity' });
+    const histogram = await screen.findByRole('region', { name: '1300 logs by severity' });
     expect(histogram.textContent).toContain('1204 logs');
     const legend = within(histogram).getByRole('list', { name: 'Severity counts' });
     expect(
@@ -212,7 +215,8 @@ describe('LogsExplorer', () => {
         .getAllByRole('listitem')
         .map((li) => li.textContent),
     ).toEqual(['ERROR 122', 'WARN 310', 'INFO 702', 'DEBUG 70']);
-    expect(screen.getByText(/^1204 logs · showing 2$/)).toBeTruthy();
+    expect(screen.getByText(/^1100 logs · showing 2$/)).toBeTruthy();
+    expect(document.body.textContent).not.toContain('5000');
   });
 
   test('the default query is logs mode, newest first', async () => {
@@ -253,6 +257,37 @@ describe('LogsExplorer', () => {
         { key: 'resource.attributes["service.name"]', op: '==', value: 'payments' },
         { key: 'log.body.string', op: 'matches', value: DECLINED.regex },
       ]),
+    );
+  });
+
+  test('clicking a pattern again with a raw OTTL query does not stack IsMatch wrappers', async () => {
+    const user = userEvent.setup();
+    const { store } = setup({
+      initial: { mode: 'patterns', q: 'log.severity_number > 3 or log.body.string == "x"' },
+    });
+    await user.click(await screen.findByText('card declined: <*> <*>'));
+    const once = store.getState().condition;
+    expect(once).toMatch(/^\(.*\) and IsMatch\(/);
+    await user.click(screen.getByRole('button', { name: 'Patterns' }));
+    await user.click(await screen.findByText('card declined: <*> <*>'));
+    expect(store.getState().condition).toBe(once);
+  });
+
+  test('a trace without spans filters on the condition as it is after the lookup, not before', async () => {
+    const user = userEvent.setup();
+    let settle: (spans: boolean) => void = () => {};
+    const { store } = setup({
+      initial: { mode: 'traces' },
+      hasTrace: () =>
+        new Promise<boolean>((resolve) => {
+          settle = resolve;
+        }),
+    });
+    await user.click(await screen.findByText(TRACE));
+    act(() => store.getState().setCondition('log.body.string == "edited meanwhile"'));
+    await act(async () => settle(false));
+    expect(store.getState().condition).toBe(
+      `log.body.string == "edited meanwhile" and trace_id.string == "${TRACE}"`,
     );
   });
 
@@ -402,6 +437,13 @@ describe('LogsExplorer', () => {
     if (card === null) throw new Error('the zero state is a section');
     expect(card.textContent).toContain('12 spans and 7 metric data points');
     expect(queryLogs).not.toHaveBeenCalled();
+  });
+
+  test('a zero-log report still shows the invalid mode notice', () => {
+    setup({ logs: 0, initial: { mode: 'spans', view: 'pointplot' } });
+    const alerts = screen.getAllByRole('alert').map((a) => a.textContent);
+    expect(alerts.some((t) => t?.includes('mode=spans is not a Logs grouping'))).toBe(true);
+    expect(alerts.some((t) => t?.includes('view=pointplot is not a Logs view'))).toBe(true);
   });
 
   test('a failing query renders a designed error with its message', async () => {

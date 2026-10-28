@@ -1,50 +1,33 @@
-import { type JSX, useEffect, useMemo, useState } from 'react';
-import type { AnyValue } from '../../model/anyvalue.js';
-import { OtelHtmlError } from '../../model/errors.js';
+import { type JSX, useCallback, useMemo, useState } from 'react';
 import type { SpanId, TraceId, UnixNanos } from '../../model/ids.js';
 import { formatDuration } from '../../semconv/formatters.js';
-import { addAttributeFilter } from '../components/attribute-filter.js';
 import { AttributeGroups } from '../components/attribute-groups.js';
 import { FlameGraph } from '../components/flame-graph.js';
 import { LogList } from '../components/log-list.js';
-import { type AttributeActions, ResourceTab } from '../components/resource-tab.js';
+import { ResourceTab } from '../components/resource-tab.js';
+import { useFilterActions } from '../components/use-filter-actions.js';
 import { Waterfall } from '../components/waterfall.js';
-import type { DataSource, SurroundingLogs, TraceDetail } from '../data/data-source.js';
-import type { LogRow } from '../data/log-query.js';
+import type { DataSource } from '../data/data-source.js';
+import type { LogRef, LogRow } from '../data/log-query.js';
 import { useGoTo } from '../shell/go-to.js';
 import { CONTROL } from '../shell/page-chrome.js';
 import { useSelection } from '../state/selection-context.js';
+import { useKeyedAsync } from '../state/use-keyed-async.js';
 import { useColorAssigner } from '../theme/colors-context.js';
 import { traceFacts } from '../traces/trace-facts.js';
 
 /** Neighbors requested on each side of the log in Surrounding logs. */
 export const SURROUNDING_N = 10;
 
-/** Filter / exclude actions that write into the explorer's condition; a condition they cannot extend shows its error. */
-function useFilterActions(): {
-  attribute: AttributeActions;
-  resource: AttributeActions;
-  error: JSX.Element | null;
-} {
-  const sel = useSelection((s) => s);
-  const [error, setError] = useState<string | null>(null);
-  const filter =
-    (scope: 'attribute' | 'resource', op: '==' | '!=') =>
-    (key: string, value: AnyValue): void => {
-      try {
-        setError(null);
-        sel.setCondition(addAttributeFilter(sel.condition, scope, key, value, op, 'log'));
-      } catch (e) {
-        setError(e instanceof OtelHtmlError ? e.message : String(e));
-      }
-    };
+/** The shared log filter actions, with the error they raise rendered as a card above the tab. */
+function useLogFilterActions(): ReturnType<typeof useFilterActions> & { errorNote: JSX.Element | null } {
+  const actions = useFilterActions('log');
   return {
-    attribute: { onFilter: filter('attribute', '=='), onExclude: filter('attribute', '!=') },
-    resource: { onFilter: filter('resource', '=='), onExclude: filter('resource', '!=') },
-    error:
-      error === null ? null : (
+    ...actions,
+    errorNote:
+      actions.error === null ? null : (
         <p role="alert" className="mb-2 font-mono text-xs break-words whitespace-pre-wrap text-critical">
-          {error}
+          {actions.error}
         </p>
       ),
   };
@@ -63,10 +46,10 @@ function recordFields(row: LogRow): readonly (readonly [string, string])[] {
 
 export function AttributesTab(props: { row: LogRow }): JSX.Element {
   const { row } = props;
-  const actions = useFilterActions();
+  const actions = useLogFilterActions();
   return (
     <div>
-      {actions.error}
+      {actions.errorNote}
       {row.log.attributes.size === 0 ? (
         <p className="text-sm text-muted">This log has no attributes.</p>
       ) : (
@@ -87,10 +70,6 @@ export function AttributesTab(props: { row: LogRow }): JSX.Element {
   );
 }
 
-type TraceState =
-  | { status: 'ready'; traceId: TraceId; detail: TraceDetail }
-  | { status: 'error'; traceId: TraceId; message: string };
-
 const VIEW_BTN = 'rounded-full px-3 py-0.5 text-sm';
 
 /**
@@ -103,32 +82,18 @@ export function LogTraceTab(props: { dataSource: DataSource; row: LogRow }): JSX
   const goTo = useGoTo();
   const colors = useColorAssigner();
   const [view, setView] = useState<'flame' | 'waterfall'>('flame');
-  const [state, setState] = useState<TraceState | null>(null);
   const traceId = row.log.traceId;
   const spanId = row.log.spanId;
-  useEffect(() => {
-    if (traceId === null) return;
-    let live = true;
-    Promise.resolve()
-      .then(() => dataSource.getTrace(traceId))
-      .then(
-        (detail) => live && setState({ status: 'ready', traceId, detail }),
-        (e: unknown) =>
-          live && setState({ status: 'error', traceId, message: e instanceof Error ? e.message : String(e) }),
-      );
-    return () => {
-      live = false;
-    };
-  }, [dataSource, traceId]);
+  const loadTrace = useCallback((id: TraceId) => dataSource.getTrace(id), [dataSource]);
+  const current = useKeyedAsync(traceId, loadTrace);
   const time = row.time;
   const timeSource = row.timeSource;
   const markers = useMemo(
     () => (timeSource === 'none' ? [] : [{ time, label: 'this log' }]),
     [time, timeSource],
   );
-  const current = state !== null && state.traceId === traceId ? state : null;
   if (traceId === null) return <p className="text-sm text-muted">This log has no trace.</p>;
-  if (current === null) return <p className="text-sm text-muted">Loading trace...</p>;
+  if (current.status === 'loading') return <p className="text-sm text-muted">Loading trace...</p>;
   if (current.status === 'error') {
     return (
       <p role="alert" className="font-mono text-xs break-words whitespace-pre-wrap text-critical">
@@ -136,7 +101,7 @@ export function LogTraceTab(props: { dataSource: DataSource; row: LogRow }): JSX
       </p>
     );
   }
-  const { detail } = current;
+  const detail = current.value;
   const facts = traceFacts(detail);
   const inTrace = spanId !== null && detail.tree.byId.has(spanId);
   const select = (id: SpanId): void => {
@@ -208,10 +173,10 @@ export function LogTraceTab(props: { dataSource: DataSource; row: LogRow }): JSX
 
 export function LogResourceTab(props: { row: LogRow }): JSX.Element {
   const { row } = props;
-  const actions = useFilterActions();
+  const actions = useLogFilterActions();
   return (
     <div>
-      {actions.error}
+      {actions.errorNote}
       <ResourceTab
         counts={[['Log attributes', row.log.droppedAttributesCount]]}
         resource={row.resource}
@@ -222,10 +187,6 @@ export function LogResourceTab(props: { row: LogRow }): JSX.Element {
   );
 }
 
-type SurroundingState =
-  | { status: 'ready'; ref: string; data: SurroundingLogs }
-  | { status: 'error'; ref: string; message: string };
-
 export function SurroundingTab(props: {
   dataSource: DataSource;
   row: LogRow;
@@ -233,28 +194,18 @@ export function SurroundingTab(props: {
 }): JSX.Element {
   const { dataSource, row, epoch } = props;
   const sel = useSelection((s) => s);
-  const [state, setState] = useState<SurroundingState | null>(null);
   const ref = row.ref;
-  useEffect(() => {
-    let live = true;
-    Promise.resolve()
-      .then(() => dataSource.surroundingLogs(ref, SURROUNDING_N))
-      .then(
-        (data) => live && setState({ status: 'ready', ref, data }),
-        (e: unknown) =>
-          live && setState({ status: 'error', ref, message: e instanceof Error ? e.message : String(e) }),
-      );
-    return () => {
-      live = false;
-    };
-  }, [dataSource, ref]);
-  const current = state !== null && state.ref === ref ? state : null;
+  const loadSurrounding = useCallback(
+    (r: LogRef) => dataSource.surroundingLogs(r, SURROUNDING_N),
+    [dataSource],
+  );
+  const current = useKeyedAsync(ref, loadSurrounding);
   const rows = useMemo(
     () =>
-      current?.status === 'ready' ? [...current.data.before, current.data.log, ...current.data.after] : [],
+      current.status === 'ready' ? [...current.value.before, current.value.log, ...current.value.after] : [],
     [current],
   );
-  if (current === null) return <p className="text-sm text-muted">Loading surrounding logs...</p>;
+  if (current.status === 'loading') return <p className="text-sm text-muted">Loading surrounding logs...</p>;
   if (current.status === 'error') {
     return (
       <p role="alert" className="font-mono text-xs break-words whitespace-pre-wrap text-critical">
@@ -268,7 +219,7 @@ export function SurroundingTab(props: {
         Logs from {row.service}
         {row.host === null ? '' : ` on ${row.host}`} around this one, in time order.
       </p>
-      {current.data.partial && (
+      {current.value.partial && (
         <p className="text-xs text-ink-2">
           Partial: the scan stopped at its neighbor-chunk limit, so there may be more logs on a side.
         </p>
@@ -282,6 +233,7 @@ export function SurroundingTab(props: {
         epoch={epoch}
         moveEnabled={false}
         height={360}
+        hasTrace={dataSource.hasTrace}
       />
     </div>
   );

@@ -1,13 +1,13 @@
 import { ExternalLink } from 'lucide-react';
-import { type JSX, useEffect, useMemo, useState } from 'react';
-import { OtelHtmlError } from '../../model/errors.js';
+import { type JSX, useCallback, useMemo, useState } from 'react';
 import type { SpanId, TraceId, UnixNanos } from '../../model/ids.js';
 import { LogList } from '../components/log-list.js';
 import type { SortState } from '../components/results-table.js';
 import type { DataSource } from '../data/data-source.js';
-import { byTimeThenRef, type LogRow } from '../data/log-query.js';
+import { byTimeThenRef, LOG_SORTS, type LogRow } from '../data/log-query.js';
 import { useGoTo } from '../shell/go-to.js';
 import { CONTROL } from '../shell/page-chrome.js';
+import { useKeyedAsync } from '../state/use-keyed-async.js';
 
 export type TraceLogsState = { rows: readonly LogRow[]; error: null } | { rows: null; error: string | null };
 
@@ -16,27 +16,13 @@ export type TraceLogsState = { rows: readonly LogRow[]; error: null } | { rows: 
  * and the span Logs tab. `rows` is null while loading or after a failed load (then `error` is set).
  */
 export function useTraceLogs(dataSource: DataSource, traceId: TraceId, enabled: boolean): TraceLogsState {
-  const [state, setState] = useState<{ traceId: TraceId; value: TraceLogsState } | null>(null);
-  useEffect(() => {
-    if (!enabled) return;
-    const ctl = new AbortController();
-    Promise.resolve()
-      .then(() => dataSource.traceLogs(traceId, ctl.signal))
-      .then(
-        (rows) => ctl.signal.aborted || setState({ traceId, value: { rows, error: null } }),
-        (e: unknown) =>
-          ctl.signal.aborted ||
-          setState({
-            traceId,
-            value: {
-              rows: null,
-              error: e instanceof OtelHtmlError ? e.message : e instanceof Error ? e.message : String(e),
-            },
-          }),
-      );
-    return () => ctl.abort();
-  }, [dataSource, traceId, enabled]);
-  return enabled && state !== null && state.traceId === traceId ? state.value : { rows: null, error: null };
+  const load = useCallback(
+    (id: TraceId, signal: AbortSignal) => dataSource.traceLogs(id, signal),
+    [dataSource],
+  );
+  const state = useKeyedAsync(enabled ? traceId : null, load);
+  if (state.status === 'ready') return { rows: state.value, error: null };
+  return { rows: null, error: state.status === 'error' ? state.message : null };
 }
 
 /** The `trace_id` (and `span_id`) condition that selects exactly these logs in the Logs Explorer. */
@@ -45,16 +31,10 @@ export function logScopeQuery(scope: { traceId: TraceId; spanId?: SpanId }): str
   return scope.spanId === undefined ? trace : `${trace} and span_id.string == "${scope.spanId}"`;
 }
 
-const byTime = (a: LogRow, b: LogRow): number => a.time - b.time;
-
-const COMPARE: Readonly<Record<string, (a: LogRow, b: LogRow) => number>> = {
-  time: byTime,
-  severity: (a, b) => a.log.severityNumber - b.log.severityNumber,
-  service: (a, b) => (a.service < b.service ? -1 : a.service > b.service ? 1 : 0),
-};
+const DEFAULT_SORT: SortState = { column: 'time', dir: 'asc' };
 
 function sorted(rows: readonly LogRow[], sort: SortState): readonly LogRow[] {
-  const by = COMPARE[sort.column] ?? byTime;
+  const by = LOG_SORTS[sort.column] ?? LOG_SORTS.time;
   const sign = sort.dir === 'asc' ? 1 : -1;
   return [...rows].sort((a, b) => sign * by(a, b) || byTimeThenRef(a, b));
 }
@@ -67,7 +47,10 @@ export function TraceLogsTab(props: {
 }): JSX.Element {
   const { rows, scope, epoch } = props;
   const goTo = useGoTo();
-  const [sort, setSort] = useState<SortState>({ column: 'time', dir: 'asc' });
+  // The sort belongs to the trace or span it was chosen on: opening another one starts from time ascending.
+  const scopeKey = 'spanId' in scope ? `${scope.traceId}/${scope.spanId}` : scope.traceId;
+  const [chosen, setChosen] = useState<{ scopeKey: string; sort: SortState } | null>(null);
+  const sort = chosen !== null && chosen.scopeKey === scopeKey ? chosen.sort : DEFAULT_SORT;
   const shown = useMemo(() => sorted(rows, sort), [rows, sort]);
   const q = logScopeQuery(scope);
   const testId = 'spanId' in scope ? 'span-logs-tab' : 'trace-logs-tab';
@@ -85,7 +68,7 @@ export function TraceLogsTab(props: {
       <LogList
         rows={shown}
         sort={sort}
-        onSort={setSort}
+        onSort={(next) => setChosen({ scopeKey, sort: next })}
         onRowClick={(r) => goTo('logs', '/logs', { q, log: r.ref, ltab: 'attributes' })}
         selectedRef={null}
         epoch={epoch}

@@ -1,7 +1,12 @@
 import { OtelHtmlError } from '../../model/errors.js';
 import type { CmpOp, Expr, Value } from '../../ottl/ast.js';
 import { parseCondition, printCondition } from '../../ottl/parse.js';
-import type { LogSeverityKey } from '../../rollups/signal-counts.js';
+import {
+  LOG_SEVERITY_KEYS,
+  type LogSeverityKey,
+  SEVERITY_BANDS,
+  severityEnumName,
+} from '../../semconv/severity.js';
 
 export type FilterToken = {
   /** Canonical OTTL path (or a path-only arithmetic expression such as a duration). */
@@ -228,22 +233,52 @@ export function facetKeyToPath(key: string, signal: FacetSignal, scope: FacetSco
 export const SEVERITY_PATH = 'log.severity_number';
 
 /** First and last OTTL severity enum of each band (`severityKey` ranges): a band is `>= first and <= last`. */
-export const SEVERITY_BOUNDS: Record<LogSeverityKey, { first: string; last: string }> = {
-  unspecified: { first: 'SEVERITY_NUMBER_UNSPECIFIED', last: 'SEVERITY_NUMBER_UNSPECIFIED' },
-  trace: { first: 'SEVERITY_NUMBER_TRACE', last: 'SEVERITY_NUMBER_TRACE4' },
-  debug: { first: 'SEVERITY_NUMBER_DEBUG', last: 'SEVERITY_NUMBER_DEBUG4' },
-  info: { first: 'SEVERITY_NUMBER_INFO', last: 'SEVERITY_NUMBER_INFO4' },
-  warn: { first: 'SEVERITY_NUMBER_WARN', last: 'SEVERITY_NUMBER_WARN4' },
-  error: { first: 'SEVERITY_NUMBER_ERROR', last: 'SEVERITY_NUMBER_ERROR4' },
-  fatal: { first: 'SEVERITY_NUMBER_FATAL', last: 'SEVERITY_NUMBER_FATAL4' },
-};
+export function severityBounds(band: LogSeverityKey): { first: string; last: string } {
+  const { min, max } = SEVERITY_BANDS[band];
+  return { first: severityEnumName(band, min), last: severityEnumName(band, max) };
+}
 
-/** The tokens for `min` ... `max` bands (null drops that side): the single source for severity range writes. */
+/** The tokens for `min` ... `max` bands (null drops that side): the single source for severity range writes. Throws a usage error when `min` is above `max`. */
 export function severityRangeTokens(min: LogSeverityKey | null, max: LogSeverityKey | null): FilterToken[] {
+  if (min !== null && max !== null && LOG_SEVERITY_KEYS.indexOf(min) > LOG_SEVERITY_KEYS.indexOf(max)) {
+    throw new OtelHtmlError('usage', {
+      path: 'severity range',
+      expected: `a minimum at or below the maximum (${max})`,
+      actual: min,
+    });
+  }
   const out: FilterToken[] = [];
-  if (min !== null) out.push({ key: SEVERITY_PATH, op: '>=', value: SEVERITY_BOUNDS[min].first, enum: true });
-  if (max !== null) out.push({ key: SEVERITY_PATH, op: '<=', value: SEVERITY_BOUNDS[max].last, enum: true });
+  if (min !== null) out.push({ key: SEVERITY_PATH, op: '>=', value: severityBounds(min).first, enum: true });
+  if (max !== null) out.push({ key: SEVERITY_PATH, op: '<=', value: severityBounds(max).last, enum: true });
   return out;
+}
+
+/** Severity number of each OTTL enum name (`SEVERITY_NUMBER_WARN2` is 14), built once from `SEVERITY_BANDS`. */
+const SEVERITY_NUMBER_OF_ENUM: ReadonlyMap<string, number> = new Map(
+  LOG_SEVERITY_KEYS.flatMap((band) => {
+    const { min, max } = SEVERITY_BANDS[band];
+    return Array.from({ length: max - min + 1 }, (_, i): [string, number] => [
+      severityEnumName(band, min + i),
+      min + i,
+    ]);
+  }),
+);
+
+/**
+ * Whether the `>=` / `<=` severity tokens in `tokens` cover every number of `band`. A missing side is open, and no
+ * severity token at all includes nothing. Tokens written by hand work too: an enum name or a plain number.
+ */
+export function severityRangeIncludes(tokens: readonly FilterToken[] | null, band: LogSeverityKey): boolean {
+  const bound = (op: '>=' | '<='): number | null | undefined => {
+    const t = tokens?.find((x) => x.key === SEVERITY_PATH && x.op === op);
+    if (t === undefined) return null;
+    return typeof t.value === 'number' ? t.value : SEVERITY_NUMBER_OF_ENUM.get(String(t.value));
+  };
+  const lo = bound('>=');
+  const hi = bound('<=');
+  if (lo === undefined || hi === undefined || (lo === null && hi === null)) return false;
+  const { min, max } = SEVERITY_BANDS[band];
+  return (lo === null || lo <= min) && (hi === null || hi >= max);
 }
 
 /** Rollup display value to OTTL enum name, for the core facets whose OTTL field is an enum-typed int. */
@@ -329,4 +364,30 @@ export function facetToken(
       return { key: path, op, value: n };
     }
   }
+}
+
+/**
+ * `token` added to `condition`, replacing a token on the same key with the same operator. A condition the token model
+ * cannot hold (raw OTTL) is kept whole and and-ed with the token; if its last and-ed term is a token with the same
+ * key and operator, that term is replaced instead, so repeating the call never stacks wrappers.
+ */
+export function withToken(condition: string | null, token: FilterToken): string | null {
+  const tokens = condition === null ? [] : ottlToTokens(condition);
+  if (tokens !== null) {
+    return tokensToOttl([...tokens.filter((t) => !(t.key === token.key && t.op === token.op)), token]);
+  }
+  const added = tokensToOttl([token]);
+  let kept = `(${condition})`;
+  try {
+    const e = parseCondition(condition ?? '');
+    if (e.type === 'and') {
+      const last = termToToken(e.right);
+      if (last !== null && last.key === token.key && last.op === token.op) {
+        kept = `(${printCondition(e.left)})`;
+      }
+    }
+  } catch {
+    // Unparseable text is wrapped as it is; the store's own validation reports it.
+  }
+  return `${kept} and ${added}`;
 }

@@ -293,6 +293,24 @@ describe('FacetPanel (logs)', () => {
     );
   });
 
+  test('every severity band inside the filtered range shows as included, not only an exact band', () => {
+    setupLog('log.severity_number >= SEVERITY_NUMBER_WARN and log.severity_number <= SEVERITY_NUMBER_FATAL4');
+    expect(screen.getByTestId('facet-row:severity:warn').getAttribute('data-state')).toBe('include');
+    expect(screen.getByTestId('facet-row:severity:error').getAttribute('data-state')).toBe('include');
+  });
+
+  test('a one-sided severity filter includes the bands on that side only', () => {
+    setupLog('log.severity_number >= SEVERITY_NUMBER_ERROR');
+    expect(screen.getByTestId('facet-row:severity:error').getAttribute('data-state')).toBe('include');
+    expect(screen.getByTestId('facet-row:severity:warn').getAttribute('data-state')).toBeNull();
+  });
+
+  test('a band only partly inside the severity range is not included', () => {
+    setupLog('log.severity_number >= SEVERITY_NUMBER_WARN2');
+    expect(screen.getByTestId('facet-row:severity:warn').getAttribute('data-state')).toBeNull();
+    expect(screen.getByTestId('facet-row:severity:error').getAttribute('data-state')).toBe('include');
+  });
+
   test('Exclude is disabled on severity rows with the query-bar hint', () => {
     setupLog();
     const btn = screen.getByRole('button', { name: 'Exclude warn' });

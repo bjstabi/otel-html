@@ -3,6 +3,8 @@ import type { UnixNanos } from '../model/ids.js';
 export interface FileSystem {
   readText(p: string): Promise<string>;
   readBytes(p: string): Promise<Uint8Array>;
+  /** The file's bytes in pieces, so a large file need not be held whole. Without it, `readBytes` is used. */
+  readChunks?(p: string): AsyncIterable<Uint8Array>;
   writeTextAtomic(p: string, text: string): Promise<void>;
   writeBytes(p: string, bytes: Uint8Array): Promise<void>;
   mkdirp(p: string): Promise<void>;

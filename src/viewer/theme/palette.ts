@@ -28,14 +28,14 @@ export const STATUS = { critical: '#d03b3b', warning: '#fab219' } as const;
 export const SEVERITY_LIGHT = {
   fatal: '#8f1d21',
   error: '#d03b3b',
-  warn: '#fab219',
+  warn: '#b87a00',
   info: '#2a78d6',
-  debug: '#9ca3af',
-  trace: '#c9ccd1',
+  debug: '#7a818c',
+  trace: '#898e98',
 } as const;
 
 export const SEVERITY_DARK = {
-  fatal: '#ef6b6e',
+  fatal: '#f0709a',
   error: '#e5605f',
   warn: '#fab219',
   info: '#3987e5',
