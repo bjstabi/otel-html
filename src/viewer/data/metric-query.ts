@@ -141,10 +141,13 @@ export function pickLevel(
   );
 }
 
-/** The level at `widthNs`, else the finest level coarser than it, else the coarsest present (formula re-runs). */
+/**
+ * The coarsest level no wider than `widthNs` (so `coarsenedTo` can merge it up to exactly that width), else the
+ * finest level present (formula re-runs).
+ */
 function levelAtWidth(levels: readonly LevelData[], widthNs: number): LevelData | null {
   const byWidth = [...levels].sort((a, b) => a.widthNs - b.widthNs);
-  return byWidth.find((l) => l.widthNs >= widthNs) ?? byWidth[byWidth.length - 1] ?? null;
+  return byWidth.filter((l) => l.widthNs <= widthNs).at(-1) ?? byWidth[0] ?? null;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -371,6 +374,7 @@ function coarsenedTo(level: LevelData, widthNs: number): LevelData {
     s.t.forEach((b, i) => {
       const agg = s.a[i];
       if (agg === undefined) return;
+      // By bucket start time, as `rollup` assigns points: widths need not divide each other.
       const nb = Math.floor((b * level.widthNs) / widthNs);
       const last = a[a.length - 1];
       if (t[t.length - 1] === nb && last !== undefined) a[a.length - 1] = mergeAgg(last, agg, `series ${id}`);

@@ -501,6 +501,27 @@ describe('review fixes', () => {
     expect(by.series).toHaveLength(1);
   });
 
+  test('counter sum by group: pre-window-only groups are not drawn, pre-window members join their group', () => {
+    const m = metric(ctr, [
+      { attributes: { k: 'x' }, buckets: [[0, counter(100)]] },
+      { attributes: { k: 'y' }, buckets: [[1, counter(10)]] },
+      {
+        attributes: { k: 'y' },
+        buckets: [
+          [0, counter(1)],
+          [3, counter(2)],
+        ],
+      },
+    ]);
+    const r = runMetricQuery(
+      m,
+      query({ show: 'sum', by: ['attributes["k"]'] }),
+      { start: 30 * S, end: 39 * S },
+      600,
+    );
+    expect(r.series.map((x) => [x.label, values({ series: [x] })])).toEqual([['y', [13]]]);
+  });
+
   test('a formula over a rolled-up operand re-runs the other at the rollup width', () => {
     const g = metric(entry({ type: 'gauge' }), [
       { buckets: Array.from({ length: 12 }, (_, i): [number, BucketAgg] => [i, gauge(i + 1)]) },
@@ -534,6 +555,59 @@ describe('review fixes', () => {
       'f',
     );
     expect(values(f)).toEqual([1, 1]);
+  });
+
+  test('a formula over a rollup re-runs at 60 s from the real ladder (coarsest level no wider)', () => {
+    const e = entry({ type: 'gauge' });
+    const window = { start: 0, end: 120 * S };
+    const at = (level: number, n: number, v: (i: number) => number): LevelData => {
+      const widthNs = 1.024e9 * 8 ** level;
+      const lm = metric(
+        e,
+        [{ buckets: Array.from({ length: n }, (_, i): [number, BucketAgg] => [i, gauge(v(i))]) }],
+        widthNs,
+        level,
+      );
+      const [l] = lm.levels;
+      if (l === undefined) throw new Error('level');
+      return l;
+    };
+    // Levels 0 and 2 hold junk: a wrong level pick shows in the values.
+    const levels = [at(0, 118, () => 1000), at(1, 15, (i) => i), at(2, 2, () => 1000)];
+    const m: LoadedMetric = { ...metric(e, [{ buckets: [] }]), levels };
+    const a = runMetricQuery(
+      m,
+      query({ id: 'a', show: 'max', fn: [{ op: 'rollup', agg: 'max', intervalMs: 60_000 }] }),
+      window,
+      20,
+    );
+    expect(a.widthNs).toBe(60 * S);
+    expect(values(a)).toEqual([7, 14]);
+    const plain = runMetricQuery(m, query({ id: 'b', show: 'max' }), window, 20);
+    const width = formulaWidth(
+      parseFormula('a - b'),
+      new Map([
+        ['a', a],
+        ['b', plain],
+      ]),
+    );
+    expect(width).toBe(60 * S);
+    // 8.192 s buckets 0–7 start before 60 s, 8–14 after: assigned by start time, as rollup does.
+    const b = runMetricQueryAtWidth(m, query({ id: 'b', show: 'max' }), window, width);
+    expect(b.widthNs).toBe(60 * S);
+    expect(values(b)).toEqual([7, 14]);
+    const f = evaluateFormula(
+      parseFormula('a - b + 1'),
+      new Map([
+        ['a', a],
+        ['b', b],
+      ]),
+      'f',
+    );
+    expect(f.series[0]?.points).toEqual([
+      [0, 1],
+      [60 * S, 1],
+    ]);
   });
 
   test('group keys are typed and name their paths; "other" and "(none)" values stay apart', () => {
