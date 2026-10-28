@@ -22,7 +22,7 @@
   --oh-sev-warn: #b87a00;
   --oh-sev-info: #2a78d6;
   --oh-sev-debug: #7a818c;
-  --oh-sev-trace: #8d929b;
+  --oh-sev-trace: #898e98;
   --oh-sev-unspecified: var(--oh-muted);
   --oh-radius-card: 12px;
   --oh-font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;

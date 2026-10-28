@@ -31,7 +31,7 @@ export const SEVERITY_LIGHT = {
   warn: '#b87a00',
   info: '#2a78d6',
   debug: '#7a818c',
-  trace: '#8d929b',
+  trace: '#898e98',
 } as const;
 
 export const SEVERITY_DARK = {

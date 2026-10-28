@@ -59,6 +59,7 @@ function contrast(a: string, b: string): number {
 describe('severity colours', () => {
   const SURFACE = { light: '#ffffff', dark: '#1a1a19' } as const;
   const MUTED = { light: '#6b6f78', dark: '#96958c' } as const;
+  const PAGE = { light: '#f6f6f3', dark: '#121314' } as const;
   const KEYS = ['fatal', 'error', 'warn', 'info', 'debug', 'trace'] as const;
   test.each(KEYS)('%s clears non-text contrast against the dark surface (3:1)', (k) => {
     expect(contrast(SEVERITY_DARK[k], SURFACE.dark)).toBeGreaterThanOrEqual(3);
@@ -66,6 +67,14 @@ describe('severity colours', () => {
 
   test.each(KEYS)('%s clears non-text contrast against the light surface (3:1)', (k) => {
     expect(contrast(SEVERITY_LIGHT[k], SURFACE.light)).toBeGreaterThanOrEqual(3);
+  });
+
+  test.each(KEYS)('%s clears non-text contrast against the light page background (3:1)', (k) => {
+    expect(contrast(SEVERITY_LIGHT[k], PAGE.light)).toBeGreaterThanOrEqual(3);
+  });
+
+  test.each(KEYS)('%s clears non-text contrast against the dark page background (3:1)', (k) => {
+    expect(contrast(SEVERITY_DARK[k], PAGE.dark)).toBeGreaterThanOrEqual(3);
   });
 
   test('light scale runs from lightest trace to darkest fatal', () => {
