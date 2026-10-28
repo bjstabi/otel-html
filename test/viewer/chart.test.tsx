@@ -32,6 +32,7 @@ vi.mock('echarts/charts', () => ({
   ScatterChart: {},
   TreemapChart: {},
   CustomChart: {},
+  HeatmapChart: {},
 }));
 vi.mock('echarts/components', () => ({
   DataZoomComponent: {},
@@ -39,6 +40,7 @@ vi.mock('echarts/components', () => ({
   TooltipComponent: {},
   LegendComponent: {},
   MarkLineComponent: {},
+  VisualMapContinuousComponent: {},
 }));
 vi.mock('echarts/renderers', () => ({ CanvasRenderer: {} }));
 

@@ -1,10 +1,19 @@
-import { BarChart, CustomChart, LineChart, PieChart, ScatterChart, TreemapChart } from 'echarts/charts';
+import {
+  BarChart,
+  CustomChart,
+  HeatmapChart,
+  LineChart,
+  PieChart,
+  ScatterChart,
+  TreemapChart,
+} from 'echarts/charts';
 import {
   DataZoomComponent,
   GridComponent,
   LegendComponent,
   MarkLineComponent,
   TooltipComponent,
+  VisualMapContinuousComponent,
 } from 'echarts/components';
 import { type EChartsType, init, use } from 'echarts/core';
 import { CanvasRenderer } from 'echarts/renderers';
@@ -19,6 +28,8 @@ use([
   ScatterChart,
   TreemapChart,
   CustomChart,
+  HeatmapChart,
+  VisualMapContinuousComponent,
   DataZoomComponent,
   GridComponent,
   TooltipComponent,
