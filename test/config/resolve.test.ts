@@ -23,6 +23,15 @@ describe('resolveConfig', () => {
     expect(sources.get('viewer.theme')).toBe('default');
   });
 
+  test('metric writer defaults and validation', () => {
+    const { config } = resolveConfig({ env: {} });
+    expect(config.writer.metricSeriesCap).toBe(1_000);
+    expect(config.writer.metricExemplars).toBe(4);
+    const e = failure(() => resolveConfig({ file: { writer: { metricSeriesCap: 0 } }, env: {} }));
+    expect(e.code).toBe('invalid-config');
+    expect(e.message).toContain('writer.metricSeriesCap');
+  });
+
   test('flag > env > file > default', () => {
     const r = resolveConfig({
       file: { title: 'a' },

@@ -180,7 +180,11 @@ export async function openSession(deps: WriterDeps, options: SessionOptions): Pr
     log: compileAny(config.writer.drop.logs.log_record, 'log_record'),
     point: compileAny(config.writer.drop.metrics.datapoint, 'datapoint'),
   };
-  const rollupOpts = { facetValueCap: config.writer.facetValueCap, facetKeyCap: config.writer.facetKeyCap };
+  const rollupOpts = {
+    facetValueCap: config.writer.facetValueCap,
+    facetKeyCap: config.writer.facetKeyCap,
+    metricSeriesCap: config.writer.metricSeriesCap,
+  };
   const { fs } = deps;
 
   let preexisting = false;
@@ -612,7 +616,7 @@ class Session implements WriterSession {
       else staged.push(point);
     }
     for (const point of staged) {
-      this.#rollups.metrics.add(point.time, 'points');
+      this.#rollups.metrics.buckets.add(point.time, 'points');
       this.#metrics.push(point);
       this.#totals.metrics++;
       this.#extend(Math.min(point.start ?? point.time, point.time), point.time);

@@ -20,6 +20,8 @@ interface WriterOut {
   dedupeCapacity: number;
   facetValueCap: number;
   facetKeyCap: number;
+  metricSeriesCap: number;
+  metricExemplars: number;
   drop: DropOut;
 }
 interface WriterIn {
@@ -28,6 +30,8 @@ interface WriterIn {
   dedupeCapacity?: number | undefined;
   facetValueCap?: number | undefined;
   facetKeyCap?: number | undefined;
+  metricSeriesCap?: number | undefined;
+  metricExemplars?: number | undefined;
   drop?: DropIn | undefined;
 }
 interface ViewerOut {
@@ -69,6 +73,8 @@ const WriterSchema = z
     dedupeCapacity: posInt.default(200_000),
     facetValueCap: posInt.default(1_000),
     facetKeyCap: posInt.default(500),
+    metricSeriesCap: posInt.default(1_000),
+    metricExemplars: posInt.default(4),
     drop: DropSchema,
   })
   .prefault({});
