@@ -1,6 +1,7 @@
 import { ArrowUpRight, GripVertical, Link2 } from 'lucide-react';
-import { type JSX, type ReactNode, useId } from 'react';
+import { Component, type JSX, type ReactNode, useId } from 'react';
 import type { Widget, WidgetType } from '../../dashboards/schema.js';
+import { ErrorCard } from '../components/explorer-states.js';
 
 const TYPE_TITLES: Record<WidgetType, string> = {
   timeline: 'Timeline',
@@ -16,7 +17,37 @@ export function widgetTitle(w: Widget): string {
   return w.title ?? TYPE_TITLES[w.type];
 }
 
+/** Keeps a widget that throws while rendering inside its frame; a change of `resetKey` (its inputs) tries again. */
+class WidgetBoundary extends Component<
+  { resetKey: string; children: ReactNode },
+  { error: Error | null; resetKey: string }
+> {
+  override state: { error: Error | null; resetKey: string } = { error: null, resetKey: this.props.resetKey };
+
+  static getDerivedStateFromError(error: unknown): { error: Error } {
+    return { error: error instanceof Error ? error : new Error(String(error)) };
+  }
+
+  static getDerivedStateFromProps(
+    props: { resetKey: string },
+    state: { error: Error | null; resetKey: string },
+  ): { error: Error | null; resetKey: string } | null {
+    return props.resetKey === state.resetKey ? null : { error: null, resetKey: props.resetKey };
+  }
+
+  override render(): ReactNode {
+    const { error } = this.state;
+    return error === null ? (
+      this.props.children
+    ) : (
+      <ErrorCard title="This widget failed to render" message={error.message} />
+    );
+  }
+}
+
 export interface WidgetFrameProps {
+  /** Identifies the widget's inputs: when it changes, a failed widget is rendered again. */
+  resetKey: string;
   widget: Widget;
   subtitle: string;
   /** Whether the widget follows the selection; null hides the toggle (the timeline never follows). */
@@ -75,7 +106,9 @@ export function WidgetFrame(props: WidgetFrameProps): JSX.Element {
           </button>
         )}
       </header>
-      <div className="min-h-0 flex-1 overflow-auto p-2">{props.children}</div>
+      <div className="min-h-0 flex-1 overflow-auto p-2">
+        <WidgetBoundary resetKey={props.resetKey}>{props.children}</WidgetBoundary>
+      </div>
     </section>
   );
 }

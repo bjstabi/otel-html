@@ -86,6 +86,60 @@ describe('dashboardToYaml', () => {
   });
 });
 
+describe('round trip', () => {
+  test('a rich config dashboard survives dashboardToYaml, parse and the config schema unchanged', () => {
+    const rich = DashboardSchema.parse({
+      id: 'rich',
+      title: 'Rich',
+      description: 'Everything set',
+      variables: [{ key: 'service.name', label: 'Service', default: 'web' }, 'host.name'],
+      widgets: [
+        { type: 'timeline', id: 'tl', title: 'All signals', x: 0, y: 0, w: 12, h: 6 },
+        {
+          type: 'traces',
+          x: 0,
+          y: 6,
+          w: 6,
+          h: 10,
+          mode: 'spans',
+          text: 'checkout',
+          query: 'name == "GET /"',
+        },
+        { type: 'logs', x: 6, y: 6, w: 6, h: 10, context: true, follow: false },
+        {
+          type: 'metric',
+          x: 0,
+          y: 16,
+          w: 12,
+          h: 8,
+          follow: false,
+          queries: [
+            { id: 'a', metric: 'http.server.request.duration', show: 'p95', by: ['http.route'] },
+            { id: 'b', metric: 'http.server.request.duration', show: 'count', alias: 'n' },
+          ],
+          formulas: [{ id: 'f1', expr: 'a / b', alias: 'ratio' }],
+          display: 'area',
+          scale: 'log',
+          exemplars: false,
+          echarts: { grid: { top: 10 } },
+        },
+        {
+          type: 'toplist',
+          x: 0,
+          y: 24,
+          w: 6,
+          h: 8,
+          signal: 'logs',
+          groupBy: 'service.name',
+          echarts: { color: ['#123456'] },
+        },
+        { type: 'table', x: 6, y: 24, w: 6, h: 8, signal: 'spans', groupBy: 'http.route', title: 'Routes' },
+      ],
+    });
+    expect(reparse(dashboardToYaml(rich, layoutOf(rich)))).toEqual(rich);
+  });
+});
+
 describe('widgetToYaml', () => {
   test('wraps one widget under widgets', () => {
     const w = { type: 'logs', x: 0, y: 0, w: 6, h: 8 } as const;

@@ -18,8 +18,8 @@ import { formatWindow, parseWindow } from '../state/url-state.js';
 import { type KeyedState, useKeyedAsync } from '../state/use-keyed-async.js';
 import { TracePanel } from '../traces/trace-panel.js';
 import { dashboardToYaml } from './copy-config.js';
+import { DashboardLink } from './dashboard-link.js';
 import { DashboardGrid, useStacked } from './grid.js';
-import { DashboardLink } from './list-page.js';
 import { type DashboardEntry, dashboardsOf, findDashboard } from './registry.js';
 import { bindings, following, scopeFor, type WidgetScope } from './scope.js';
 import { SelectionChips } from './selection-chips.js';
@@ -242,6 +242,7 @@ function DashboardView(props: {
     return (
       <WidgetFrame
         widget={w}
+        resetKey={JSON.stringify([w, scope])}
         subtitle={windowText(scope.window, epoch)}
         following={w.type === 'timeline' ? null : known.following}
         onFollow={(v) => change((s) => ({ ...s, follow: { ...s.follow, [w.id]: v } }))}

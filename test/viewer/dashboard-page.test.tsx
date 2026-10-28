@@ -2,8 +2,10 @@ import { cleanup, screen, waitFor, within } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { FUSION } from '../../src/dashboards/fusion.js';
+import { DashboardSchema } from '../../src/dashboards/schema.js';
 import type { TraceId } from '../../src/model/ids.js';
 import { dashboardToYaml } from '../../src/viewer/dashboards/copy-config.js';
+import { WIDGETS } from '../../src/viewer/dashboards/dashboard-page.js';
 import { widgetHeightPx } from '../../src/viewer/dashboards/grid.js';
 import {
   baseManifest,
@@ -218,15 +220,45 @@ describe('Open in and narrow screens', () => {
       addEventListener: () => undefined,
       removeEventListener: () => undefined,
     }));
-    renderShell('#/dashboards/fusion', dataSourceOf(baseManifest, VALUES));
-    await waitFor(() => expect(main().getAllByRole('region')).toHaveLength(4));
+    // Listed out of reading order on purpose.
+    const shuffled = DashboardSchema.parse({
+      id: 'shuffled',
+      title: 'Shuffled',
+      widgets: [
+        { type: 'logs', x: 6, y: 6, w: 6, h: 8 },
+        { type: 'traces', x: 0, y: 6, w: 6, h: 8 },
+        { type: 'timeline', x: 0, y: 0, w: 12, h: 6 },
+      ],
+    });
+    renderShell('#/dashboards/shuffled', dataSourceOf(manifestWith([shuffled]), VALUES));
+    await waitFor(() => expect(main().getAllByRole('region')).toHaveLength(3));
     expect(
       main()
         .getAllByRole('heading', { level: 2 })
         .map((h) => h.textContent),
-    ).toEqual(['Timeline', 'Traces', 'Logs', 'Metrics']);
+    ).toEqual(['Timeline', 'Traces', 'Logs']);
     expect((screen.getByRole('button', { name: 'Edit layout' }) as HTMLButtonElement).disabled).toBe(true);
     vi.unstubAllGlobals();
+  });
+});
+
+describe('a failing widget', () => {
+  test('shows the error inside its frame while the other frames still render', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const original = WIDGETS.logs;
+    WIDGETS.logs = () => {
+      throw new Error('boom from logs');
+    };
+    try {
+      renderShell('#/dashboards/fusion', dataSourceOf(baseManifest, VALUES));
+      await waitFor(() => expect(main().getAllByRole('region')).toHaveLength(4));
+      const logs = within(main().getByRole('region', { name: 'Logs' }));
+      expect(logs.getByRole('alert').textContent).toContain('boom from logs');
+      expect(within(main().getByRole('region', { name: 'Traces' })).getByText('traces widget')).toBeTruthy();
+      expect(screen.getByRole('heading', { name: 'Fusion', level: 1 })).toBeTruthy();
+    } finally {
+      WIDGETS.logs = original;
+    }
   });
 });
 

@@ -1,32 +1,12 @@
 import { Search, Star } from 'lucide-react';
-import { type JSX, type ReactNode, useMemo, useState } from 'react';
+import { type JSX, useMemo, useState } from 'react';
 import type { Manifest } from '../../format/manifest.js';
-import { useGoTo } from '../shell/go-to.js';
 import { PageChrome } from '../shell/page-chrome.js';
-import { routeHref } from '../shell/use-route.js';
+import { DashboardLink } from './dashboard-link.js';
 import { type DashboardEntry, dashboardsOf } from './registry.js';
 
 const TH = 'px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted';
 const TD = 'px-3 py-2 align-top';
-
-/** A link to the list or a dashboard; it drops the previous dashboard's `d` state. */
-export function DashboardLink(props: { to: string; className?: string; children: ReactNode }): JSX.Element {
-  const goTo = useGoTo();
-  const route = props.to;
-  return (
-    <a
-      href={routeHref(route)}
-      {...(props.className === undefined ? {} : { className: props.className })}
-      onClick={(e) => {
-        if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-        e.preventDefault();
-        goTo('dashboards', route, { d: null });
-      }}
-    >
-      {props.children}
-    </a>
-  );
-}
 
 function matches(e: DashboardEntry, needle: string): boolean {
   const { title, description } = e.dashboard;
