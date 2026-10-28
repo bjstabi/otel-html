@@ -378,6 +378,7 @@ describe('chrome', () => {
       'Export CSV',
       'Export JSON',
       'Export OTLP JSON',
+      'Copy as dashboard widget',
     ]);
     cleanup();
     renderShell('#/dashboards');

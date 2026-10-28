@@ -20,9 +20,10 @@ import { GroupTable } from '../components/group-table.js';
 import { HistogramCard, SEVERITY_SERIES } from '../components/histogram-card.js';
 import { LogList } from '../components/log-list.js';
 import { ResultsTable, type SortState } from '../components/results-table.js';
+import { copyWidgetItem } from '../dashboards/copy-widget.js';
 import type { DataSource } from '../data/data-source.js';
 import type { LogMode, LogQuery, LogRef, LogRow, LogTraceRow, PatternRow } from '../data/log-query.js';
-import { PageChrome } from '../shell/page-chrome.js';
+import { PageChrome, useClipboardCopy } from '../shell/page-chrome.js';
 import { PageOptionNotice } from '../shell/page-option-notice.js';
 import {
   PAGE_OPTIONS,
@@ -215,14 +216,17 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
       fail('The export failed', e);
     }
   };
-  const exportItems =
-    mode === 'logs'
+  const widgetCopy = useClipboardCopy({ title: 'Copy as dashboard widget', label: 'Widget YAML' });
+  const exportItems = [
+    ...(mode === 'logs'
       ? [
           { label: 'Export CSV', onSelect: () => runExport('csv') },
           { label: 'Export JSON', onSelect: () => runExport('json') },
           { label: 'Export OTLP JSON', onSelect: () => runExport('otlp-json') },
         ]
-      : [];
+      : []),
+    copyWidgetItem('logs', sel, widgetCopy.copy),
+  ];
 
   const grouped = GROUPED_VIEWS.has(view);
   const attributeKeys = useMemo(
@@ -410,6 +414,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
           onClose={() => sel.clear('traceId')}
         />
       )}
+      {widgetCopy.dialog}
     </PageChrome>
   );
 }

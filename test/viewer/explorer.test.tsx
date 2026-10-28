@@ -242,4 +242,30 @@ describe('TracesExplorer', () => {
     await user.click(await screen.findByRole('button', { name: /Duration/ }));
     expect(store.getState().sort).toBe('duration:desc');
   });
+
+  describe('Copy as dashboard widget', () => {
+    test('copies the view as YAML', async () => {
+      const user = userEvent.setup();
+      const writeText = vi.fn(() => Promise.resolve());
+      Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+      setup(() => Promise.resolve(resultOf([row('a', 's', 5, 's1')])), 10, { q: 'status.code == 2' });
+      await screen.findByRole('grid', { name: 'Results' });
+      await user.click(screen.getByRole('button', { name: 'Export' }));
+      await user.click(await screen.findByRole('menuitem', { name: /Copy as dashboard widget/ }));
+      await waitFor(() => expect(writeText).toHaveBeenCalledOnce());
+      const yaml = String((writeText.mock.calls[0] as unknown[])[0]);
+      expect(yaml).toContain('type: traces');
+      expect(yaml).toContain('query: status.code == 2');
+      expect(yaml).toContain('w: 7');
+    });
+
+    test('is disabled in the Pie view, with the reason', async () => {
+      const user = userEvent.setup();
+      setup(() => Promise.resolve(resultOf([])), 10, { view: 'pie' });
+      await user.click(screen.getByRole('button', { name: 'Export' }));
+      const item = await screen.findByRole('menuitem', { name: /Copy as dashboard widget/ });
+      expect(item.getAttribute('aria-disabled')).toBe('true');
+      expect(item.textContent).toContain('Only the List, Top list and Table views can become widgets');
+    });
+  });
 });

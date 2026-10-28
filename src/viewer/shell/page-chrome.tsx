@@ -10,6 +10,8 @@ import { TimeRange } from './time-range.js';
 export interface ExportItem {
   label: string;
   onSelect(): void;
+  /** Why the item is unavailable; the item is then disabled and shows this as its description. */
+  disabled?: string;
 }
 
 export const CONTROL =
@@ -55,6 +57,41 @@ export function CopyTextDialog(props: {
   );
 }
 
+/**
+ * Copies text to the clipboard. Without a clipboard (or when it refuses) `dialog` is the `CopyTextDialog` to render
+ * so the text can be copied by hand; otherwise it is null.
+ */
+export function useClipboardCopy(dialogText: { title: string; label: string }): {
+  copy: (text: string) => Promise<boolean>;
+  dialog: JSX.Element | null;
+} {
+  const [fallback, setFallback] = useState<string | null>(null);
+  const copy = async (text: string): Promise<boolean> => {
+    const clipboard: Clipboard | undefined = navigator.clipboard;
+    if (clipboard === undefined) {
+      setFallback(text);
+      return false;
+    }
+    try {
+      await clipboard.writeText(text);
+      return true;
+    } catch {
+      setFallback(text);
+      return false;
+    }
+  };
+  const dialog =
+    fallback === null ? null : (
+      <CopyTextDialog
+        title={dialogText.title}
+        label={dialogText.label}
+        text={fallback}
+        onClose={() => setFallback(null)}
+      />
+    );
+  return { copy, dialog };
+}
+
 /** A button that copies `text()` and says "Copied"; without a clipboard (or when it refuses) it opens `CopyTextDialog`. */
 export function CopyButton(props: {
   label: string;
@@ -64,44 +101,27 @@ export function CopyButton(props: {
   dialog: { title: string; label: string };
   className?: string;
 }): JSX.Element {
-  const [fallback, setFallback] = useState<string | null>(null);
+  const { copy, dialog } = useClipboardCopy(props.dialog);
   const [copied, setCopied] = useState(false);
   useEffect(() => {
     if (!copied) return;
     const t = window.setTimeout(() => setCopied(false), 2000);
     return () => window.clearTimeout(t);
   }, [copied]);
-  const copy = async (): Promise<void> => {
-    const text = props.text();
-    const clipboard: Clipboard | undefined = navigator.clipboard;
-    if (clipboard === undefined) {
-      setFallback(text);
-      return;
-    }
-    try {
-      await clipboard.writeText(text);
-      setCopied(true);
-    } catch {
-      setFallback(text);
-    }
-  };
   return (
     <>
-      <button type="button" className={props.className ?? CONTROL} onClick={() => void copy()}>
+      <button
+        type="button"
+        className={props.className ?? CONTROL}
+        onClick={() => void copy(props.text()).then((ok) => setCopied(ok))}
+      >
         {props.icon}
         <span>{props.label}</span>
         <span role="status" className={copied ? 'text-xs text-accent' : 'sr-only'}>
           {copied ? 'Copied' : ''}
         </span>
       </button>
-      {fallback !== null && (
-        <CopyTextDialog
-          title={props.dialog.title}
-          label={props.dialog.label}
-          text={fallback}
-          onClose={() => setFallback(null)}
-        />
-      )}
+      {dialog}
     </>
   );
 }
@@ -137,9 +157,13 @@ function ExportMenu({ items }: { items: readonly ExportItem[] }): JSX.Element {
                 <Menu.Item
                   key={i.label}
                   onClick={i.onSelect}
-                  className="rounded-md px-3 py-1.5 text-sm hover:bg-hairline"
+                  disabled={i.disabled !== undefined}
+                  className="rounded-md px-3 py-1.5 text-sm hover:bg-hairline data-[disabled]:text-muted data-[disabled]:hover:bg-transparent"
                 >
                   {i.label}
+                  {i.disabled === undefined ? null : (
+                    <span className="block max-w-64 text-xs text-muted">{i.disabled}</span>
+                  )}
                 </Menu.Item>
               ))
             )}

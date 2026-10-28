@@ -30,6 +30,16 @@ export const WIDGET_DEFAULTS: Record<WidgetType, Readonly<Record<string, unknown
   table: { title: null, follow: true, query: null, text: '' },
 };
 
+/** The grid size (columns × rows) a widget of each type gets when copied out of an explorer. */
+export const WIDGET_DEFAULT_SIZE: Record<WidgetType, { w: number; h: number }> = {
+  timeline: { w: 12, h: 6 },
+  traces: { w: 7, h: 13 },
+  logs: { w: 5, h: 13 },
+  metric: { w: 6, h: 8 },
+  toplist: { w: 4, h: 8 },
+  table: { w: 4, h: 8 },
+};
+
 /** Fields written first, in this order, so the YAML reads type, title, position, then the rest. */
 const LEAD = ['type', 'id', 'title', 'x', 'y', 'w', 'h'] as const;
 

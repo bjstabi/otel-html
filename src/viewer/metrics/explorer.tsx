@@ -5,11 +5,12 @@ import type { MetricCatalog, MetricEntry } from '../../rollups/metric-catalog.js
 import { ErrorCard, LoadingNote, PILL } from '../components/explorer-states.js';
 import { downloadBlob } from '../components/export.js';
 import { type ChartPick, MetricChartCard } from '../components/metric-chart-card.js';
+import { copyWidgetItem } from '../dashboards/copy-widget.js';
 import type { DataSource } from '../data/data-source.js';
 import { defaultShow, kindOf, type MetricQuery, resolveMetric, SHOW_BY_KIND } from '../data/metric-query.js';
 import type { TimeWindow } from '../data/span-query.js';
 import { useGoTo } from '../shell/go-to.js';
-import { PageChrome } from '../shell/page-chrome.js';
+import { PageChrome, useClipboardCopy } from '../shell/page-chrome.js';
 import { defaultMetricState } from '../state/metric-state.js';
 import { useSelection, useSelectionStore } from '../state/selection-context.js';
 import { useKeyedAsync } from '../state/use-keyed-async.js';
@@ -164,9 +165,11 @@ function ExplorerBody(props: { dataSource: DataSource; range: TimeWindow }): JSX
       fail('The export failed', e);
     }
   };
+  const widgetCopy = useClipboardCopy({ title: 'Copy as dashboard widget', label: 'Widget YAML' });
   const exportItems = [
     { label: 'Export CSV', onSelect: () => runExport('csv') },
     { label: 'Export JSON', onSelect: () => runExport('json') },
+    copyWidgetItem('metrics', { ...sel, metrics: state }, widgetCopy.copy),
   ];
 
   const ids = new Set(state.queries.map((q) => q.id));
@@ -329,6 +332,7 @@ function ExplorerBody(props: { dataSource: DataSource; range: TimeWindow }): JSX
           ))}
         </div>
       </div>
+      {widgetCopy.dialog}
     </PageChrome>
   );
 }
