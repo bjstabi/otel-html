@@ -72,11 +72,21 @@ describe('useKeyedAsync', () => {
     await h.render('b');
     expect(h.state()).toEqual({ status: 'loading' });
     expect(h.calls[0]?.signal.aborted).toBe(true);
-    // The first load settles late: it must not replace the second key's state.
-    await act(async () => h.calls[0]?.resolve('A-late'));
-    expect(h.state()).toEqual({ status: 'loading' });
     await act(async () => h.calls[1]?.resolve('B'));
     expect(h.state()).toEqual({ status: 'ready', value: 'B' });
+  });
+
+  test('a load of a key left and re-entered does not answer for the new visit', async () => {
+    const h = setup();
+    await h.render('a');
+    await h.render('b');
+    await h.render('a');
+    expect(h.calls.map((c) => c.key)).toEqual(['a', 'b', 'a']);
+    // The first visit to A settles late; its key matches again, so only the aborted guard rejects it.
+    await act(async () => h.calls[0]?.resolve('stale'));
+    expect(h.state()).toEqual({ status: 'loading' });
+    await act(async () => h.calls[2]?.resolve('fresh'));
+    expect(h.state()).toEqual({ status: 'ready', value: 'fresh' });
   });
 
   test('a stale rejection is dropped too', async () => {
