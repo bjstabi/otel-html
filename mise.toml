@@ -28,14 +28,17 @@ run = ["mise run test:unit:main", "mise run test:unit:perf"]
 [tasks."test:unit:main"]
 run = "pnpm exec vitest run"
 
+# Env vars go in `env`, not a `VAR=1 cmd` prefix: Windows cmd (the unit-os CI job) can't run that.
 [tasks."test:unit:perf"]
-run = "OTEL_HTML_PERF_PASS=1 pnpm exec vitest run"
+env = { OTEL_HTML_PERF_PASS = "1" }
+run = "pnpm exec vitest run"
 
 # Slow load tests (writer peak memory), skipped by `test:unit` and `check` unless OTEL_HTML_LOAD=1. The 1M-log
 # test runs the built library, hence the build.
 [tasks."test:load"]
 depends = ["build"]
-run = "OTEL_HTML_LOAD=1 pnpm exec vitest run test/writer/metric-memory.test.ts test/writer/log-size.test.ts"
+env = { OTEL_HTML_LOAD = "1" }
+run = "pnpm exec vitest run test/writer/metric-memory.test.ts test/writer/log-size.test.ts"
 
 [tasks.knip]
 run = "pnpm exec knip"
