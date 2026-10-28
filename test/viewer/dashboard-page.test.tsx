@@ -256,7 +256,7 @@ describe('a failing widget', () => {
       const logs = within(main().getByRole('region', { name: 'Logs' }));
       expect(logs.getByRole('alert').textContent).toContain('boom from logs');
       expect(
-        within(main().getByRole('region', { name: 'Traces' })).getByText('No traces match'),
+        await within(main().getByRole('region', { name: 'Traces' })).findByText('No traces match'),
       ).toBeTruthy();
       expect(screen.getByRole('heading', { name: 'Fusion', level: 1 })).toBeTruthy();
     } finally {
