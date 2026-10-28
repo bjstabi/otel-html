@@ -78,6 +78,18 @@ describe('dashboards', () => {
     expect(m.dashboards.map((d) => d.dashboard.id)).toEqual(['ops']);
     expect(m.viewer.defaultDashboard).toBe('ops');
   });
+  test('merge keeps the first input views when the config gives none', async () => {
+    const w = createTestWriter();
+    const s = await openSession(w.deps, {
+      out: 'a',
+      config: testConfig({ views: [{ id: 'v', title: 'V', page: 'traces' }] }),
+      mode: 'create',
+    });
+    await s.add(otlp(spansRequest(1)), 'in.json');
+    await s.close();
+    await mergeReports(w.deps, ['a'], { out: 'out', config: testConfig(dash('mine')), mode: 'create' });
+    expect(manifestOf(w, 'out').config.views.map((v) => v.id)).toEqual(['v']);
+  });
   test('merge with a config uses its dashboards', async () => {
     const w = createTestWriter();
     await reportWith(w, 'a', 'ops');

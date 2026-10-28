@@ -98,6 +98,14 @@ describe('append', () => {
       expect(m.views).toHaveLength(1);
       expect(m.viewer.defaultDashboard).toBe('ops');
     });
+    test('append that replaces only dashboards keeps the views', async () => {
+      const w = createTestWriter();
+      await (await open(w, 'create', testConfig(ops))).close();
+      await (await open(w, 'append', testConfig(other))).close();
+      const m = manifestOf(w, OUT).config;
+      expect(m.dashboards.map((d) => d.dashboard.id)).toEqual(['other']);
+      expect(m.views.map((v) => v.id)).toEqual(['v']);
+    });
     test('append with another config replaces them', async () => {
       const w = createTestWriter();
       await (await open(w, 'create', testConfig({ ...ops, viewer: { defaultDashboard: 'ops' } }))).close();
