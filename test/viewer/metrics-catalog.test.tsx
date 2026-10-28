@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
 
@@ -85,14 +85,21 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
-async function renderCatalog(report: Fixture): Promise<void> {
+async function renderCatalog(report: Fixture): Promise<{ catalogLoads: () => number }> {
   const ds = await createDataSource(createScriptedLoader(report.files), report.manifest, 10_000_000);
+  let loads = 0;
+  const metricCatalog = ds.metricCatalog.bind(ds);
+  ds.metricCatalog = () => {
+    loads++;
+    return metricCatalog();
+  };
   window.location.hash = '#/metrics/catalog';
   render(
     <ThemeProvider>
       <Shell dataSource={ds} history={createHashHistory(window)} />
     </ThemeProvider>,
   );
+  return { catalogLoads: () => loads };
 }
 
 const rowsOf = (): HTMLElement[] =>
@@ -106,6 +113,13 @@ describe('Metrics Catalog', () => {
     );
     expect(rowsOf()).toHaveLength(EXPLORER_DEFINITIONS);
     expect(screen.getByRole('link', { name: 'Catalog' }).getAttribute('aria-current')).toBe('page');
+  });
+
+  test('the catalog loads once: a settled load does not start another', async () => {
+    const { catalogLoads } = await renderCatalog(explorer);
+    await screen.findByRole('grid');
+    for (let i = 0; i < 5; i++) await act(() => new Promise((r) => setTimeout(r, 0)));
+    expect(catalogLoads()).toBe(1);
   });
 
   test('filtering by http. leaves the two http metrics', async () => {
