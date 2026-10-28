@@ -399,151 +399,19 @@ function hexId(v: unknown, re: RegExp, what: string, path: Path): string {
   return v;
 }
 
-type PassResult = Omit<ColumnarPayload, 'dict'>;
-
-function encodePass<R>(
-  spec: ColumnSpec<R>,
-  rows: readonly R[],
-  resources: readonly ResourceRecord[],
-  scopes: readonly ScopeRecord[],
-  d: Intern,
-): PassResult {
-  // base for delta-encoded times: the smallest time anywhere in the chunk
-  let base = Number.POSITIVE_INFINITY;
-  for (const col of spec.columns) {
-    if (!isRelKind(col.kind)) continue;
-    for (let i = 0; i < rows.length; i++) {
-      const v = cellOf(rows[i], col.name);
-      if (v === null && col.kind === 'nullableRelnanos') continue;
-      if (typeof v !== 'number' || !Number.isSafeInteger(v))
-        throw bad(`rows[${i}].${col.name}`, 'a safe integer', v);
-      if (v < base) base = v;
-    }
-  }
-  if (!Number.isFinite(base)) base = 0;
-
-  const used: Record<RefTarget, Map<number, number>> = { resource: new Map(), scope: new Map() };
-  const tables: Record<RefTarget, readonly unknown[]> = { resource: resources, scope: scopes };
-  const cols: Record<string, unknown[]> = {};
-  for (const col of spec.columns) {
-    const out: unknown[] = [];
-    let prev = base;
-    let i = 0;
-    // one path builder per column, read only when a cell is rejected (immediately, while `i` is that cell's)
-    const path = (): string => `rows[${i}].${col.name}`;
-    for (; i < rows.length; i++) {
-      const v = cellOf(rows[i], col.name);
-      switch (col.kind) {
-        case 'traceId':
-          out.push(d(hexId(v, TRACE_ID_RE, '32 lowercase hex chars', path)));
-          break;
-        case 'nullableTraceId':
-          out.push(v === null ? null : d(hexId(v, TRACE_ID_RE, '32 lowercase hex chars or null', path)));
-          break;
-        case 'spanId':
-          out.push(hexId(v, SPAN_ID_RE, '16 lowercase hex chars', path));
-          break;
-        case 'nullableSpanId':
-          out.push(v === null ? null : hexId(v, SPAN_ID_RE, '16 lowercase hex chars or null', path));
-          break;
-        case 'dict': {
-          if (typeof v !== 'string') throw bad(path, 'a string', v);
-          if (col.oneOf !== undefined && !col.oneOf.includes(v)) {
-            throw bad(path, col.oneOf.map((x) => JSON.stringify(x)).join(' | '), v);
-          }
-          out.push(d(v));
-          break;
-        }
-        case 'relnanos':
-        case 'nullableRelnanos': {
-          if (v === null && col.kind === 'nullableRelnanos') {
-            out.push(null);
-            break;
-          }
-          const t = safeInt(v, path);
-          const delta = t - prev;
-          out.push(Number.isSafeInteger(delta) ? delta : { $i: (BigInt(t) - BigInt(prev)).toString() });
-          prev = t;
-          break;
-        }
-        case 'int':
-          out.push(safeInt(v, path));
-          break;
-        case 'bool':
-          if (typeof v !== 'boolean') throw bad(path, 'a boolean', v);
-          out.push(v);
-          break;
-        case 'anyvalue':
-          out.push(encodeAny(v as AnyValue, d, path));
-          break;
-        case 'attrs':
-          if (!(v instanceof Map)) throw bad(path, 'an attribute map', v);
-          out.push(encodeAttrs(v as Attributes, d, path));
-          break;
-        case 'json':
-          out.push(d(JSON.stringify(encodeJson(v, path))));
-          break;
-        case 'ref': {
-          const target = refTarget(col.name);
-          const ref = safeInt(v, path);
-          const table = tables[target];
-          if (ref < 0 || ref >= table.length) throw bad(path, `a ${target} ref in [0, ${table.length})`, ref);
-          const map = used[target];
-          let local = map.get(ref);
-          if (local === undefined) {
-            local = map.size;
-            map.set(ref, local);
-          }
-          out.push(local);
-          break;
-        }
-        default:
-          return assertNever(col.kind, path());
-      }
-    }
-    cols[col.name] = out;
-  }
-
-  const pick = <T>(target: RefTarget, table: readonly T[]): T[] =>
-    [...used[target].keys()].map((ref) => {
-      const item = table[ref];
-      if (item === undefined) throw bad(`${target}s[${ref}]`, 'an existing table entry', ref);
-      return item;
-    });
-  return {
-    v: 1,
-    n: rows.length,
-    base,
-    cols,
-    resources: pick('resource', resources).map((r, i) => encodeResource(r, d, `resources[${i}]`)),
-    scopes: pick('scope', scopes).map((s, i) => encodeScope(s, d, `scopes[${i}]`)),
-  };
-}
-
+/**
+ * Encodes a chunk's rows. The dictionary is ordered by use count (ties by first use, column by column, then the
+ * tables) so the hottest strings get the shortest indexes; `ColumnEncoder` does the work, one row at a time.
+ */
 export function encodeColumns<R>(
   spec: ColumnSpec<R>,
   rows: readonly R[],
   resources: readonly ResourceRecord[],
   scopes: readonly ScopeRecord[],
 ): ColumnarPayload {
-  // Pass 1 counts uses; the dictionary is then ordered by use count (ties by first use) so the hottest
-  // strings get the shortest indexes. Pass 2 encodes against the final order.
-  const counts = new Map<string, number>();
-  encodePass(spec, rows, resources, scopes, (s) => {
-    counts.set(s, (counts.get(s) ?? 0) + 1);
-    return 0;
-  });
-  const dict = [...counts.keys()]
-    .map((s, first) => ({ s, first, uses: counts.get(s) ?? 0 }))
-    .sort((a, b) => b.uses - a.uses || a.first - b.first)
-    .map((e) => e.s);
-  const index = new Map(dict.map((s, i) => [s, i] as const));
-  const out = encodePass(spec, rows, resources, scopes, (s) => {
-    const i = index.get(s);
-    if (i === undefined) throw new Error(`invariant violated: string missing from dictionary: ${s}`);
-    return i;
-  });
-  return { ...out, dict };
+  const encoder = new ColumnEncoder(spec);
+  for (const row of rows) encoder.push(row);
+  return encoder.finish(resources, scopes);
 }
 
 /** A provisional dictionary id's final index (`remapAny` walks encoded AnyValues: bare numbers are dict ids). */
@@ -567,8 +435,8 @@ function remapAttrs(a: JsonValue[], perm: Int32Array): JsonValue[] {
 
 /**
  * Encodes rows as they arrive, strings against a provisional dictionary, so a buffered chunk holds compact cells
- * instead of row objects. `finish` returns exactly what `encodeColumns` returns for the same rows: the dictionary
- * is ordered by use count, ties by first use in `encodeColumns`' order (column by column, then the tables).
+ * instead of row objects. `finish` orders the dictionary by use count, ties by first use column by column (all rows
+ * of a column before the next column), then the tables, and remaps the cells to it.
  */
 export class ColumnEncoder<R> {
   readonly #spec: ColumnSpec<R>;
@@ -687,7 +555,7 @@ export class ColumnEncoder<R> {
     const pickedResources = pick('resource', resources);
     const pickedScopes = pick('scope', scopes);
 
-    // The tables' strings, counted after every column (as encodeColumns' first pass does)
+    // The tables' strings, counted after every column
     const strings = this.#strings.slice();
     const uses = this.#uses.slice();
     const firstCol = this.#firstCol.slice();
@@ -790,7 +658,7 @@ export class ColumnEncoder<R> {
   }
 }
 
-/** One cell as `encodePass` encodes it, except that `ref`s stay global and times stay absolute. */
+/** One cell as `push` buffers it: strings as provisional dictionary ids, `ref`s global, times absolute. */
 function encodeCell<R>(col: ColumnDef<R>, v: unknown, d: Intern, path: () => string): unknown {
   switch (col.kind) {
     case 'traceId':

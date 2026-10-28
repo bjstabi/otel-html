@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { describe, expect, test } from 'vitest';
 import {
   type ColumnarPayload,
@@ -256,6 +257,21 @@ function incrementally<R>(
   return enc.finish(resources, scopes);
 }
 
+/** A payload's serialized bytes, as a data file holds them, by digest. */
+const digest = (payload: ColumnarPayload): string =>
+  createHash('sha256').update(JSON.stringify(payload)).digest('hex').slice(0, 16);
+
+/**
+ * Golden digests of the payloads below, recorded from the two-pass encoder `encodeColumns` used before it became a
+ * wrapper over `ColumnEncoder`: chunk bytes (dictionary order included) must not change.
+ */
+const GOLDEN = {
+  sample300: 'f51b2c484b81ee70',
+  realistic2000: '52edf129ff389a88',
+  metrics: '1391734b95abc559',
+  logs: 'c97b609ed6415c33',
+} as const;
+
 describe('incremental column encoder', () => {
   const str = (value: string): AnyValue => ({ kind: 'string', value });
   const resources: ResourceRecord[] = [
@@ -280,15 +296,17 @@ describe('incremental column encoder', () => {
     },
   ];
 
-  test('span payloads equal encodeColumns, dictionary order included', () => {
-    for (const f of [sampleSpans(300), realisticSpans(2000)]) {
-      expect(incrementally(SPAN_COLUMNS, f.spans, f.resources, f.scopes)).toEqual(
-        encodeColumns(SPAN_COLUMNS, f.spans, f.resources, f.scopes),
-      );
+  test('span payloads keep their golden bytes, dictionary order included', () => {
+    for (const [f, golden] of [
+      [sampleSpans(300), GOLDEN.sample300],
+      [realisticSpans(2000), GOLDEN.realistic2000],
+    ] as const) {
+      expect(digest(encodeColumns(SPAN_COLUMNS, f.spans, f.resources, f.scopes))).toBe(golden);
+      expect(digest(incrementally(SPAN_COLUMNS, f.spans, f.resources, f.scopes))).toBe(golden);
     }
   });
 
-  test('metric and log payloads equal encodeColumns', () => {
+  test('metric and log payloads keep their golden bytes', () => {
     const points: MetricPointRecord[] = Array.from({ length: 200 }, (_, i) => ({
       name: `m${i % 7}`,
       description: i % 3 === 0 ? 'u1' : '',
@@ -312,9 +330,8 @@ describe('incremental column encoder', () => {
       resource: (i % 2) as ResourceRef,
       scope: ((i + 1) % 2) as ScopeRef,
     }));
-    expect(incrementally(METRIC_COLUMNS, points, resources, scopes)).toEqual(
-      encodeColumns(METRIC_COLUMNS, points, resources, scopes),
-    );
+    expect(digest(encodeColumns(METRIC_COLUMNS, points, resources, scopes))).toBe(GOLDEN.metrics);
+    expect(digest(incrementally(METRIC_COLUMNS, points, resources, scopes))).toBe(GOLDEN.metrics);
     const logs: LogRecordRecord[] = Array.from({ length: 120 }, (_, i) => ({
       time: i % 3 === 0 ? null : ((i * 7) as RelNanos),
       observedTime: (i * 5) as RelNanos,
@@ -330,9 +347,8 @@ describe('incremental column encoder', () => {
       resource: (1 - (i % 2)) as ResourceRef,
       scope: 0 as ScopeRef,
     }));
-    expect(incrementally(LOG_COLUMNS, logs, resources, scopes)).toEqual(
-      encodeColumns(LOG_COLUMNS, logs, resources, scopes),
-    );
+    expect(digest(encodeColumns(LOG_COLUMNS, logs, resources, scopes))).toBe(GOLDEN.logs);
+    expect(digest(incrementally(LOG_COLUMNS, logs, resources, scopes))).toBe(GOLDEN.logs);
   });
 
   test('finish leaves the encoder unchanged; a rejected row changes nothing', () => {
