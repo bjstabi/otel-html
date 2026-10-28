@@ -112,7 +112,8 @@ export interface AddOptions {
   /**
    * More of the same input follows (a file read one resource entry at a time). Until `endInput`, no periodic
    * checkpoint runs and a report being replaced is not wiped, so a bad entry later in the input leaves the
-   * committed report as it was.
+   * committed report as it was. In append and fresh-create mode, chunks written before a failing entry stay on disk
+   * outside the manifest: harmless, never read, and overwritten by the next append.
    */
   readonly partial?: boolean;
 }
