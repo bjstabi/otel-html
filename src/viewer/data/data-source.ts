@@ -212,7 +212,12 @@ export async function createDataSource(
     async getTrace(traceId) {
       // The count comes from the trace index, so opening a trace never waits on the log load, with one exception
       // below, and never fails with it.
-      const [trace, entry] = await Promise.all([spanStrategy.getTrace(traceId), index.entry(traceId)]);
+      // Under the eager span strategy the spans are already in memory, so a shard that fails to load costs only the
+      // log count (0); under the windowed strategy getTrace needs the same shard, so its failure stands.
+      const [trace, entry] = await Promise.all([
+        spanStrategy.getTrace(traceId),
+        budgets.spans === 'eager' ? index.entry(traceId).catch(() => null) : index.entry(traceId),
+      ]);
       if (entry === null || entry.logs === 0) return { ...trace, logCount: 0 };
       if (entry.logChunks.every((k) => listedLogChunks.has(k))) return { ...trace, logCount: entry.logs };
       // Crash only: a crash between a flush's shard write and its manifest commit leaves the shard counting logs in
