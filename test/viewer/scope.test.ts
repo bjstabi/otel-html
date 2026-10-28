@@ -240,29 +240,60 @@ describe('bindings', () => {
   const dashboard = DashboardSchema.parse({
     id: 'd',
     title: 'D',
-    variables: [{ key: 'service.name', default: 'checkout' }, 'host.name'],
+    variables: [{ key: 'service.name', default: 'checkout' }, 'host.name', 'process.pid', 'mix'],
     widgets: [{ type: 'timeline', x: 0, y: 0, w: 12, h: 6 }],
   });
-  const values = { 'service.name': { kind: 'string' as const } };
+  const values = {
+    'service.name': { values: ['checkout', 'payments'], kind: 'string' as const },
+    'host.name': { values: ['h1'], kind: 'string' as const },
+    'process.pid': { values: ['7'], kind: 'int' as const },
+    mix: { values: ['1', 'a'], kind: 'mixed' as const },
+  };
+  const withVars = (vars: Record<string, string | null>) => ({ ...EMPTY_DASHBOARD_STATE, vars });
 
   test('the default applies, with the facet kind', () => {
-    expect(bindings(dashboard, EMPTY_DASHBOARD_STATE, values)).toEqual([
+    expect(bindings(dashboard, EMPTY_DASHBOARD_STATE, values).bindings).toEqual([
       { key: 'service.name', value: 'checkout', kind: 'string' },
     ]);
   });
 
   test('a URL value wins; null means all', () => {
-    const vars = { 'service.name': 'payments', 'host.name': 'h1' };
-    expect(bindings(dashboard, { ...EMPTY_DASHBOARD_STATE, vars }, values).map((b) => b.value)).toEqual([
-      'payments',
-      'h1',
+    const r = bindings(dashboard, withVars({ 'service.name': 'payments', 'host.name': 'h1' }), values);
+    expect(r.bindings.map((b) => b.value)).toEqual(['payments', 'h1']);
+    expect(bindings(dashboard, withVars({ 'service.name': null }), values).bindings).toEqual([]);
+  });
+
+  test('a key with no values in the report is hidden and its default is not applied', () => {
+    const r = bindings(dashboard, EMPTY_DASHBOARD_STATE, {
+      ...values,
+      'service.name': { values: [], kind: 'string' },
+    });
+    expect(r.bindings).toEqual([]);
+    expect(r.hidden).toEqual(['service.name']);
+    expect(bindings(dashboard, EMPTY_DASHBOARD_STATE, {}).hidden).toEqual([
+      'service.name',
+      'host.name',
+      'process.pid',
+      'mix',
     ]);
-    expect(bindings(dashboard, { ...EMPTY_DASHBOARD_STATE, vars: { 'service.name': null } }, values)).toEqual(
-      [],
-    );
+  });
+
+  test('a mixed key compares as a string', () => {
+    const r = bindings(dashboard, withVars({ 'service.name': null, mix: 'a' }), values);
+    expect(r.bindings).toEqual([{ key: 'mix', value: 'a', kind: 'string' }]);
+    expect(variableCondition(r.bindings, 'log')).toBe('resource.attributes["mix"] == "a"');
+  });
+
+  test('an unparseable typed value is unusable, and scopeFor never throws on the result', () => {
+    const r = bindings(dashboard, withVars({ 'process.pid': 'abc', mix: '1' }), values);
+    expect(r.unusable).toEqual([{ key: 'process.pid', value: 'abc', reason: expect.any(String) }]);
+    expect(r.bindings.map((b) => b.key)).toContain('mix');
+    for (const widget of Object.values(WIDGETS)) {
+      expect(() => scopeFor(widget, ctx({ vars: r.bindings }))).not.toThrow();
+    }
   });
 
   test('Fusion has no defaults', () => {
-    expect(bindings(FUSION, EMPTY_DASHBOARD_STATE, {})).toEqual([]);
+    expect(bindings(FUSION, EMPTY_DASHBOARD_STATE, {}).bindings).toEqual([]);
   });
 });

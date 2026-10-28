@@ -1,5 +1,6 @@
 import { andConditions, traceCondition } from '../../dashboards/conditions.js';
 import type { Dashboard, Widget, WidgetType } from '../../dashboards/schema.js';
+import { OtelHtmlError } from '../../model/errors.js';
 import type { TraceId } from '../../model/ids.js';
 import {
   type FacetSignal,
@@ -34,7 +35,7 @@ export interface WidgetScope {
   band: TimeWindow | null;
   /** The trace whose records the widget is narrowed to (its condition carries it). */
   traceFilter: TraceId | null;
-  /** The trace the widget highlights (rows, exemplars) without narrowing records. */
+  /** The trace the widget highlights (a row, exemplars). The metric widget also narrows to the trace's resources. */
   highlightTrace: TraceId | null;
   /** The widget's own query, the variables and the trace filter, joined with `and`. */
   condition: string | null;
@@ -61,17 +62,58 @@ export function following(widget: Widget, state: DashboardPageState): boolean {
   return state.follow[widget.id] ?? widget.follow;
 }
 
-/** Each variable's value: the URL's (`null` is all), else the config default; unset and all are left out. */
+export interface UnusableVariable {
+  key: string;
+  value: string;
+  reason: string;
+}
+
+export interface VariableBindings {
+  bindings: VariableBinding[];
+  /** Set but not expressible as a filter (a value that does not parse as the key's recorded type). */
+  unusable: UnusableVariable[];
+  /** Keys with no values in this report: not bound, and their config default is not applied. */
+  hidden: string[];
+}
+
+/**
+ * Each variable's value: the URL's (`null` is all), else the config default; unset and all are left out.
+ * A key with no values in `values` is hidden and never bound. A `mixed` key is compared as a string (the facets
+ * keep display text), which matches string-valued records only. A value that does not parse as the key's int,
+ * double or bool kind is reported as unusable instead of throwing later in `scopeFor`.
+ */
 export function bindings(
   dashboard: Dashboard,
   state: DashboardPageState,
-  values: Readonly<Record<string, { kind: FacetValueKind }>>,
-): VariableBinding[] {
-  return dashboard.variables.flatMap((v) => {
+  values: Readonly<Record<string, { values: readonly string[]; kind: FacetValueKind }>>,
+): VariableBindings {
+  const out: VariableBindings = { bindings: [], unusable: [], hidden: [] };
+  for (const v of dashboard.variables) {
+    const known = values[v.key];
+    if (known === undefined || known.values.length === 0) {
+      out.hidden.push(v.key);
+      continue;
+    }
     const value = Object.hasOwn(state.vars, v.key) ? state.vars[v.key] : v.default;
-    if (value === null || value === undefined) return [];
-    return [{ key: v.key, value, kind: values[v.key]?.kind ?? 'string' }];
-  });
+    if (value === null || value === undefined) continue;
+    const binding: VariableBinding = {
+      key: v.key,
+      value,
+      kind: known.kind === 'mixed' ? 'string' : known.kind,
+    };
+    try {
+      variableCondition([binding], 'span');
+      out.bindings.push(binding);
+    } catch (e) {
+      if (!(e instanceof OtelHtmlError)) throw e;
+      out.unusable.push({
+        key: v.key,
+        value,
+        reason: `expected ${e.expected ?? "a value of the key's type"}`,
+      });
+    }
+  }
+  return out;
 }
 
 function intersect(a: TimeWindow | null, b: TimeWindow | null): TimeWindow | null | 'empty' {
