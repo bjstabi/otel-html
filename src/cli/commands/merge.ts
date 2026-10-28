@@ -1,6 +1,6 @@
 import type { Command } from 'commander';
-import { merge } from '../../api/convert.js';
-import { configInputOfResolved } from '../../config/resolve.js';
+import { mergeResolved } from '../../api/convert.js';
+import { resolveDeps } from '../../api/report.js';
 import { createNodeFileSystem } from '../../writer/node-fs.js';
 import type { WriterDeps } from '../../writer/session.js';
 import type { CliIo, ConfigFlags } from '../io.js';
@@ -23,7 +23,7 @@ export function addMergeCommand(program: Command, io: CliIo, deps: Partial<Write
       const { config } = await resolveCliConfig(io, fs, flags);
       io.stdout(
         describeSummary(
-          await merge({ inputs: reports, out: flags.out, config: configInputOfResolved(config) }, deps),
+          await mergeResolved({ inputs: reports, out: flags.out, config }, await resolveDeps(deps)),
         ),
       );
     });

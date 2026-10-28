@@ -1,4 +1,4 @@
-import type { ConfigInput } from '../config/schema.js';
+import type { ConfigInput, ResolvedConfig } from '../config/schema.js';
 import { readOtlpFile } from '../model/detect.js';
 import { OtelHtmlError } from '../model/errors.js';
 import type { OtlpSignal } from '../model/otlp-json.js';
@@ -29,12 +29,21 @@ export interface MergeOptions {
 
 /** Build a report from OTLP files. */
 export async function convert(options: ConvertOptions, deps?: Partial<WriterDeps>): Promise<ReportSummary> {
+  const full = await resolveDeps(deps);
+  const config = await resolveApiConfig(full, options.config, undefined);
+  return convertResolved({ ...options, config }, full);
+}
+
+/** Internal (the CLI): like `convert`, with config already resolved so dashboard sources are kept. */
+export async function convertResolved(
+  options: Omit<ConvertOptions, 'config'> & { config: ResolvedConfig },
+  full: WriterDeps,
+): Promise<ReportSummary> {
+  const config = options.config;
   const files = typeof options.input === 'string' ? [options.input] : options.input;
   if (files.length === 0) {
     throw new OtelHtmlError('usage', { message: 'no input files', hint: 'pass at least one OTLP file' });
   }
-  const full = await resolveDeps(deps);
-  const config = await resolveApiConfig(full, options.config, undefined);
   const session = await openSession(full, {
     out: options.out,
     config,
@@ -70,5 +79,13 @@ async function* inputPieces(fs: FileSystem, file: string): AsyncGenerator<Uint8A
 export async function merge(options: MergeOptions, deps?: Partial<WriterDeps>): Promise<ReportSummary> {
   const full = await resolveDeps(deps);
   const config = await resolveApiConfig(full, options.config, undefined);
-  return mergeReports(full, options.inputs, { out: options.out, config, mode: 'create' });
+  return mergeResolved({ ...options, config }, full);
+}
+
+/** Internal (the CLI): like `merge`, with config already resolved so dashboard sources are kept. */
+export async function mergeResolved(
+  options: Omit<MergeOptions, 'config'> & { config: ResolvedConfig },
+  full: WriterDeps,
+): Promise<ReportSummary> {
+  return mergeReports(full, options.inputs, { out: options.out, config: options.config, mode: 'create' });
 }

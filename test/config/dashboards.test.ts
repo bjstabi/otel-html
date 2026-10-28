@@ -1,8 +1,10 @@
 import { describe, expect, test } from 'vitest';
+import { resolveApiConfig } from '../../src/api/report.js';
 import { writeJsonSchema } from '../../src/config/json-schema.js';
 import { formatConfig, resolveConfig } from '../../src/config/resolve.js';
 import type { ConfigInput } from '../../src/config/schema.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
+import { createTestWriter } from '../../test-support/writer-deps.js';
 
 const dash = {
   id: 'ops',
@@ -51,6 +53,7 @@ describe('dashboards in config', () => {
   test('defaultDashboard must name fusion or a configured dashboard', () => {
     const e = failure(() => resolveConfig({ file: { viewer: { defaultDashboard: 'nope' } }, env: {} }));
     expect(e.message).toContain('viewer.defaultDashboard');
+    expect(e.message).toContain('the id of a dashboard (fusion or one in dashboards)');
     const ok = resolveConfig({
       file: { dashboards: [dash], viewer: { defaultDashboard: 'ops', home: 'dashboards' } },
       env: {},
@@ -74,7 +77,7 @@ describe('dashboards in config', () => {
 
   test('hostile text survives resolution unchanged', () => {
     const title = '</script><img src=x onerror=alert(1)>';
-    const description = 'a b';
+    const description = 'a\u2028b';
     const r = resolveConfig({ file: { dashboards: [{ ...dash, title, description }] }, env: {} });
     expect(r.config.dashboards[0]?.dashboard.title).toBe(title);
     expect(r.config.dashboards[0]?.dashboard.description).toBe(description);
@@ -84,5 +87,16 @@ describe('dashboards in config', () => {
     const json = writeJsonSchema();
     expect(json).toContain('"dashboards"');
     expect(json).toContain('Unstable');
+  });
+
+  test('resolveApiConfig labels file dashboards with the file name, and object ones as library API', async () => {
+    const w = createTestWriter();
+    const yaml =
+      'dashboards:\n  - id: ops\n    title: Ops\n    widgets: [{type: traces, x: 0, y: 0, w: 6, h: 6}]\n';
+    await w.fs.writeBytes('/tmp/run/otel-html.yaml', new TextEncoder().encode(yaml));
+    const fromPath = await resolveApiConfig(w.deps, '/tmp/run/otel-html.yaml', undefined);
+    expect(fromPath.dashboards[0]?.source).toBe('otel-html.yaml');
+    const fromObject = await resolveApiConfig(w.deps, { dashboards: [dash] }, undefined);
+    expect(fromObject.dashboards[0]?.source).toBe('library API');
   });
 });

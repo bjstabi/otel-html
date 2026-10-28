@@ -154,11 +154,3 @@ export function formatConfig(resolved: ResolveResult): string {
   annotate(doc.contents, '');
   return stringify(doc);
 }
-
-/**
- * A resolved config as input again, for handing the CLI's result to the library. Dashboards lose their
- * `source` (the library labels them `library API`).
- */
-export function configInputOfResolved(config: ResolvedConfig): ConfigInput {
-  return { ...config, dashboards: config.dashboards.map((d) => d.dashboard) };
-}
