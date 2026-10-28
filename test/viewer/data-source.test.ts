@@ -11,6 +11,7 @@ import {
 import { CHUNK_LRU_SIZE } from '../../src/viewer/data/windowed.js';
 import { createScriptedLoader } from '../../test-support/scripted-loader.js';
 import {
+  buildEmbeddedMetricsReport,
   buildMetricReports,
   buildReport,
   buildSpreadReport,
@@ -407,5 +408,24 @@ describe('metrics', () => {
     const count = (path: string): number => loader.calls.filter((p) => p === path).length;
     expect(count('data/metrics/000000/series.js')).toBe(1);
     expect(count('data/rollups/metrics.js')).toBe(1);
+  });
+});
+
+describe('resourceValues', () => {
+  test('unions the facets and the metric catalog, sorted, uncapped', async () => {
+    const linked = await buildEmbeddedMetricsReport();
+    const ds = await createDataSource(createScriptedLoader(linked.files), linked.manifest, SMALL);
+    expect(await ds.resourceValues('service.name')).toEqual({
+      values: ['checkout', 'payments', 'web'],
+      kind: 'string',
+      capped: false,
+    });
+  });
+
+  test('a key only the metric catalog knows is typed by its values; an unknown key is empty', async () => {
+    const linked = await buildEmbeddedMetricsReport();
+    const ds = await createDataSource(createScriptedLoader(linked.files), linked.manifest, SMALL);
+    expect(await ds.resourceValues('process.pid')).toEqual({ values: ['7'], kind: 'int', capped: false });
+    expect(await ds.resourceValues('nope')).toEqual({ values: [], kind: 'string', capped: false });
   });
 });

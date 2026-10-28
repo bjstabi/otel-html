@@ -93,6 +93,7 @@ const dataSource: DataSource = {
   metricCatalog: unused,
   metric: unused,
   metricsForResources: unused,
+  resourceValues: unused,
 };
 
 function renderShell(hash: string, ds: DataSource = dataSource): void {
