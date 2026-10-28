@@ -325,6 +325,16 @@ describe('StreamNormalizer', () => {
     expect(foldedSeriesKey(3, long)).not.toBe(foldedSeriesKey(4, long));
   });
 
+  it('a new stream after a point of another merged report is not a reset', () => {
+    const s = new StreamNormalizer();
+    expect(deltaOf(s.prepare(sum(9, 20, { start: rel(0) }))({ series: 0, origin: 0 })).reset).toBe(false);
+    const next = s.prepare(sum(3, 110, { start: rel(100) }))({ series: 0, origin: 1 });
+    expect(deltaOf(next)).toEqual({ delta: 3, resets: 0, reset: false });
+    // A restart inside one report still is.
+    const restart = s.prepare(sum(1, 210, { start: rel(200) }))({ series: 0, origin: 1 });
+    expect(deltaOf(restart)).toEqual({ delta: 1, resets: 1, reset: true });
+  });
+
   it('prepare parses without touching streams; its step applies the point', () => {
     const s = new StreamNormalizer();
     const steps = [sum(5, 1), sum(8, 2)].map((p) => s.prepare(p));

@@ -25,9 +25,11 @@ import {
   allPoints,
   allSpans,
   counterRequest,
+  cumulativeRequest,
   levelsOf,
   logRollupsOf,
   manifestOf,
+  metricCatalogOf,
   readDataFile,
   spansRequest,
   traceIdOf,
@@ -185,6 +187,38 @@ describe('mergeReports', () => {
     expect(
       parseExemplarFile(readDataFile(w, 'out', 'data/metrics/000000/ex.js'), 'ex').exemplars,
     ).toHaveLength(2);
+  });
+
+  test('sequential runs of one cumulative series are separate streams, not resets (spec §5.2)', async () => {
+    const w = createTestWriter();
+    // Run 1 starts at 0 s; run 2, a later process with the same series identity, starts at 100 s.
+    const run1 = cumulativeRequest('c', [
+      [10, 4, 0],
+      [20, 9, 0],
+    ]);
+    const run2 = cumulativeRequest('c', [
+      [110, 3, 100],
+      [120, 7, 100],
+    ]);
+    await writeReport(w, 'a', [run1]);
+    await writeReport(w, 'b', [run2]);
+    await merge(w, ['a', 'b']);
+    const s = levelsOf(w, 'out', 0)[0]?.series[0];
+    const deltas = (s?.t ?? []).map((t, i) => {
+      const a = s?.a[i];
+      return a?.k === 'counter' ? [t, a.delta, a.resets] : [t, Number.NaN, 0];
+    });
+    // The numbers are each run's own: run 2's first point counts in full from its start.
+    expect(deltas.map(([, d, r]) => [d, r])).toEqual([
+      [4, 0],
+      [5, 0],
+      [3, 0],
+      [4, 0],
+    ]);
+    expect(metricCatalogOf(w, 'out').entries()[0]).toMatchObject({ resets: 0, points: 4 });
+    // Within one report, the same data is a process restart and counts as one.
+    await writeReport(w, 'one', [run1, run2]);
+    expect(metricCatalogOf(w, 'one').entries()[0]).toMatchObject({ resets: 1, points: 4 });
   });
 
   test('rejects an unsupported formatVersion precisely', async () => {

@@ -189,11 +189,11 @@ export async function mergeReports(
       : options.config;
   const session = await openSession(deps, { ...options, out, config });
   try {
-    for (const input of loaded) {
+    for (const [origin, input] of loaded.entries()) {
       for (const signal of SIGNAL_ORDER) {
         for (const chunk of input.manifest.chunks) {
           if (chunk.signal !== signal) continue;
-          await session.addRecords(await readChunk(deps.fs, input, chunk));
+          await session.addRecords({ ...(await readChunk(deps.fs, input, chunk)), origin });
         }
       }
     }

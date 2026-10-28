@@ -46,7 +46,7 @@ Turns OTLP files into a report. Inputs can be OTLP JSON, JSON lines (such as Col
 
 ### `merge <reports...>`
 
-Combines report folders into a new one, for example the reports of parallel CI jobs. It reads each report's data chunks, so it works across otel-html versions that share the report format version.
+Combines report folders into a new one, for example the reports of parallel CI jobs. It reads each report's data chunks, so it works across otel-html versions that share the report format version. A cumulative metric series that appears in two reports is two runs: the second report's stream starts from its own start time and is not counted as a counter reset.
 
 ```sh
 otel-html merge ./job-1 ./job-2 -o ./combined

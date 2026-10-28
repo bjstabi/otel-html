@@ -30,6 +30,11 @@ export interface StreamTarget {
    * are not capped by the catalog, so the normalizer keeps only the most recently used `foldedPerMetric` of them.
    */
   foldedIn?: number;
+  /**
+   * The input report, when a merge replays several one after another. A new stream is a reset only after a point
+   * of the same report: the next report's streams are separate runs, not restarts (spec §5.2).
+   */
+  origin?: number | undefined;
 }
 
 /** A 32-bit xor-multiply hash of `s` (FNV-1a when given FNV's basis and prime), as 8 hex chars. */
@@ -401,6 +406,8 @@ export class StreamNormalizer {
   readonly #streams = new Map<string, Stream>();
   /** Time of each series' latest cumulative point, over all its streams: tells a restart from a second producer. */
   readonly #latest = new Map<string, number>();
+  /** The input report of each series' latest point, for points that name one (merge only; never checkpointed). */
+  readonly #latestOrigin = new Map<string, number>();
   /** Per metric, its folded series (least recently used first) and the stream keys of each. */
   readonly #folded = new Map<number, Map<string, Set<string>>>();
   readonly #foldedPerMetric: number;
@@ -459,7 +466,8 @@ export class StreamNormalizer {
    * `diff` returns null for a reset, in which case the point's own value counts. The first point of a stream
    * counts in full when the stream has a start time, and is only a baseline otherwise. A new stream that starts
    * after the series' latest point is a restart and counts as a reset; one that starts earlier is another
-   * producer sharing the series identity (or a report replayed by merge) and is not.
+   * producer sharing the series identity (or a report replayed by merge) and is not, and neither is one after the
+   * latest point of an earlier report in a merge (`StreamTarget.origin`): that is the next run.
    */
   #cumulative<T extends number | HistAgg | ExpAgg>(
     target: SeriesKey | StreamTarget,
@@ -476,11 +484,18 @@ export class StreamNormalizer {
     if (prev !== undefined && p.time <= prev.time) return { kind: 'skip', reason: 'out-of-order' };
     const evicted = t.foldedIn === undefined ? false : this.#touchFolded(t.foldedIn, owner, key);
     const latest = this.#latest.get(owner);
-    if (latest === undefined || p.time > latest) this.#latest.set(owner, p.time);
+    const sameOrigin = this.#latestOrigin.get(owner) === t.origin;
+    if (latest === undefined || p.time > latest) {
+      this.#latest.set(owner, p.time);
+      if (t.origin === undefined) this.#latestOrigin.delete(owner);
+      else this.#latestOrigin.set(owner, t.origin);
+    }
     if (prev === undefined) {
       this.#streams.set(key, { time: p.time, last: cur });
       const first =
-        p.start === null ? wrap(zero(cur), false) : wrap(cur, latest !== undefined && p.start > latest);
+        p.start === null
+          ? wrap(zero(cur), false)
+          : wrap(cur, latest !== undefined && sameOrigin && p.start > latest);
       return evicted && first.kind === 'ok' ? { ...first, evicted: true } : first;
     }
     const before = recall(prev.last);
@@ -512,6 +527,7 @@ export class StreamNormalizer {
       if (lru.size < this.#foldedPerMetric) break;
       lru.delete(old);
       this.#latest.delete(old);
+      this.#latestOrigin.delete(old);
       for (const k of oldKeys) this.#streams.delete(k);
       evicted = true;
     }

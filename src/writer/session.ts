@@ -89,8 +89,12 @@ export interface AddResult {
   duplicates: number;
 }
 
-/** Normalized rows with their own resource/scope tables and epoch, as read from another report. */
-export type RecordBatch =
+/**
+ * Normalized rows with their own resource/scope tables and epoch, as read from another report. `origin` numbers
+ * the report when a merge replays several, so a cumulative series' streams in the next report are not counted as
+ * restarts of the previous report's.
+ */
+export type RecordBatch = (
   | {
       signal: 'spans';
       rows: readonly SpanRecord[];
@@ -111,7 +115,8 @@ export type RecordBatch =
       resources: readonly ResourceRecord[];
       scopes: readonly ScopeRecord[];
       epoch: UnixNanos;
-    };
+    }
+) & { origin?: number };
 
 export interface AddOptions {
   /**
@@ -399,7 +404,7 @@ class Session implements WriterSession {
         case 'metrics': {
           // Generated twice (checked, then applied) rather than held: a request can carry many points.
           const rows = (): Iterable<MetricPointRecord> => metricPointsOf(input, ctx, source);
-          result = await this.#acceptPoints(rows, (n) => this.#settleEpoch(n));
+          result = await this.#acceptPoints(rows, { checked: (n) => this.#settleEpoch(n) });
           break;
         }
       }
@@ -461,11 +466,14 @@ class Session implements WriterSession {
           );
           break;
         case 'metrics':
-          result = await this.#acceptPoints(function* () {
-            for (const [i, p] of batch.rows.entries()) {
-              yield rebasePoint(p, shift, refsOf(p.resource, p.scope, `rows[${i}]`), `rows[${i}]`);
-            }
-          });
+          result = await this.#acceptPoints(
+            function* () {
+              for (const [i, p] of batch.rows.entries()) {
+                yield rebasePoint(p, shift, refsOf(p.resource, p.scope, `rows[${i}]`), `rows[${i}]`);
+              }
+            },
+            { origin: batch.origin },
+          );
           break;
       }
       await this.#maybeCheckpoint();
@@ -656,8 +664,9 @@ class Session implements WriterSession {
    */
   async #acceptPoints(
     rows: () => Iterable<MetricPointRecord>,
-    checked?: (records: number) => void,
+    opts: { checked?: (records: number) => void; origin?: number | undefined } = {},
   ): Promise<AddResult> {
+    const { checked, origin } = opts;
     let dropped = 0;
     let accepted = 0;
     for (const point of rows()) {
@@ -673,11 +682,11 @@ class Session implements WriterSession {
       if (this.#dropped(point)) continue;
       slice.push(this.#stage(point));
       if (slice.length === POINT_SLICE) {
-        this.#applyPoints(slice);
+        this.#applyPoints(slice, origin);
         slice = [];
       }
     }
-    this.#applyPoints(slice);
+    this.#applyPoints(slice, origin);
     if (accepted > 0) this.#dirty = true;
     await this.#drainAccepted();
     await this.#spillSeries();
@@ -705,7 +714,8 @@ class Session implements WriterSession {
     };
   }
 
-  #applyPoints(staged: readonly StagedPoint[]): void {
+  /** `origin`: the input report of a merge, for the stream rule (see `StreamTarget.origin`). */
+  #applyPoints(staged: readonly StagedPoint[], origin: number | undefined): void {
     const ctx = this.#context();
     const catalog = this.#rollups.metrics.catalog;
     for (const { point, normalize, exemplars } of staged) {
@@ -720,8 +730,8 @@ class Session implements WriterSession {
       // series); its deltas go into `other`.
       const n = normalize(
         series.foldKey === null
-          ? { series: `${def.id}/${series.id}` }
-          : { series: foldedSeriesKey(def.id, series.foldKey), foldedIn: def.id },
+          ? { series: `${def.id}/${series.id}`, origin }
+          : { series: foldedSeriesKey(def.id, series.foldKey), foldedIn: def.id, origin },
       );
       catalog.note(def.id, n, point.time);
       if (n.kind === 'ok') {
