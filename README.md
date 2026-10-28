@@ -2,7 +2,7 @@
 
 otel-html turns OpenTelemetry data into a static, self-contained HTML report. You give it OTLP files (or feed it spans from your own code) and it writes a folder you can open from disk, attach to a CI run, or publish on any static host. No server and no network access are needed to view it.
 
-Milestone 1 covers traces: a Traces explorer with a trace panel (flame graph, waterfall, span list, services, span details). Milestone 2 adds logs: a Logs explorer with log patterns and a log panel, linked to traces both ways. Milestone 3 adds metrics: a Metrics explorer with exemplars, a metrics catalog, and metric charts in the log, span and trace panels.
+Milestone 1 covers traces: a Traces explorer with a trace panel (flame graph, waterfall, span list, services, span details). Milestone 2 adds logs: a Logs explorer with log patterns and a log panel, linked to traces both ways. Milestone 3 adds metrics: a Metrics explorer with exemplars, a metrics catalog, and metric charts in the log, span and trace panels. Milestone 4 adds dashboards: the built-in Fusion dashboard, which puts every signal on one timeline, and dashboards you define in config.
 
 > otel-html is not an official OpenTelemetry project. It is not affiliated with or endorsed by the OpenTelemetry project or the CNCF.
 
@@ -115,6 +115,68 @@ Choose Metrics → Explorer in the sidebar (or press `g m`). Like the other expl
 - **Never silently wrong.** A chart says so in a note when its numbers need a caveat: series folded into "other" by the series cap, counter resets, summary quantiles at a coarse resolution, a name with several definitions, histograms with different bucket bounds, or a chart built from an unfinished report's segments. The click menu says when an exemplar's trace is not in the report.
 - **Unfinished reports.** The writer adds each metric's buckets to a segment file at every flush and compacts the segments into resolution levels at close. A report whose writer was killed, or one opened before `close`, has segments only; its charts are built from the segments, more slowly on very long runs.
 
+## Viewing dashboards
+
+Choose Dashboards in the sidebar (or press `g d`, which opens the default dashboard). The list shows every dashboard in the report: **Fusion** (built in) and the ones from config, with the default marked ★. A dashboard lives at `#/dashboards/<id>`, and everything you set on it is in the URL (the `d` key), so a link reproduces the view.
+
+- **Fusion.** A timeline of spans, logs and metric points, with Traces, Logs and Metrics below it. They follow what you select: brushing the timeline narrows the Traces and Logs lists to that time ("in selected time"), and clicking a trace narrows Logs to its logs ("for the selected trace") and Metrics to the metrics of the trace's resources. Its variables are `service.name`, `deployment.environment.name` and `host.name`.
+- **Variables.** Each variable is a dropdown of the values of a resource attribute. A choice filters every widget (`resource.attributes["k"] == "v"`) and a config dashboard can set a default. A variable with no values in the report is hidden, and the bar counts the hidden ones.
+- **Selection chips.** The time window and the trace you selected show as removable chips (`time ∈ …`, `trace_id = …`) with Clear all. The page's own time range stays separate from the selection.
+- **Follow.** Each widget except the timeline has a "follows selection" toggle (⛓). Turned off, the widget ignores the selection and lists everything in the page's time range.
+- **Show context.** The Logs widget has Only matches and Show context. Show context lists every log in the window (variables still apply) and marks the ones that match.
+- **Open in …** A widget's "Open in Traces / Logs / Metrics" jumps to the explorer with the widget's effective filter and window.
+- **Edit layout → Copy config.** Edit layout lets you drag and resize widgets. Copy config copies the dashboard as YAML with its current layout, ready to paste into a config file. Copying Fusion gives `id: fusion-copy` and `title: Fusion (copy)`, because `fusion` is reserved. Where the clipboard is not available, the text opens in a dialog.
+- **Views ▾.** The Traces, Logs and Metrics explorers have a Views menu. It lists the `views` from config and the views you saved in this browser, and "Save current view…" stores the current query, grouping and view (not the time range) in `localStorage`. Applying a view keeps the time range.
+- **Copy as dashboard widget.** The explorers' Export menu copies the current List, Top list, Table or metric chart as YAML for one dashboard widget, ready to paste into a dashboard's `widgets`. Views that cannot become a widget (Patterns, the Distribution display) say why.
+
+A config dashboard looks like this:
+
+```yaml
+viewer:
+  defaultDashboard: checkout
+  home: dashboards
+
+dashboards:
+  - id: checkout
+    title: Checkout
+    variables:
+      - service.name
+      - key: deployment.environment.name
+        label: environment
+        default: production
+    widgets:
+      - type: timeline
+        x: 0
+        y: 0
+        w: 12
+        h: 6
+      - type: traces
+        x: 0
+        y: 6
+        w: 6
+        h: 10
+      - type: logs
+        x: 6
+        y: 6
+        w: 6
+        h: 10
+        query: severity_number >= 13
+      - type: metric
+        x: 0
+        y: 16
+        w: 12
+        h: 8
+        queries:
+          - id: a
+            metric: http.server.request.duration
+            show: p95
+        echarts:
+          legend:
+            show: false
+```
+
+The grid has 12 columns. A widget is `timeline`, `traces`, `logs`, `metric`, `toplist` or `table`; `toplist` and `table` take `signal` (`spans` or `logs`) and `groupBy`. A `metric` widget without `queries` is a grid of the metrics of the selected trace's resources. [`fixtures/dashboards.otel-html.yaml`](fixtures/dashboards.otel-html.yaml) has one widget of each type.
+
 ## Report layout and hosting
 
 ```
@@ -160,6 +222,10 @@ Config is a YAML or JSON file (`otel-html.yaml` by default), or an object passed
 | `writer.drop.metrics.datapoint` | `[]` | Same, for metric data points. |
 | `viewer.eagerBudgetBytes` | 75000000 | Decoded size under which the viewer loads everything up front. Applies to each signal on its own: the viewer estimates the decoded size of the spans and of the logs separately, so a report can have eager spans and windowed logs. Env: `OTEL_HTML_EAGER_BUDGET_BYTES`. |
 | `viewer.listCap` | 10000 | Maximum rows in result lists. |
+| `viewer.defaultDashboard` | `fusion` | The dashboard `g d` and the sidebar's ★ item open. Must be `fusion` or the id of a dashboard in `dashboards`. |
+| `viewer.home` | `traces` | Where the report opens: `traces`, `logs`, `metrics` or `dashboards` (the default dashboard). |
+| `dashboards` | `[]` | Dashboards: `{ id, title, description?, variables?, widgets }`. `variables` are resource attribute keys, or `{ key, label?, default? }`. Each widget has `type`, `x`, `y`, `w`, `h` on a 12-column grid, plus `id?`, `title?` and `follow?`, and the fields of its type. An `echarts` object on a `metric` or `toplist` widget is merged over the chart option otel-html builds. **It is unstable:** it is passed to ECharts as is, so its compatibility is ECharts', not otel-html's. Ids are lowercase letters, digits and dashes; `fusion` is reserved. Checked when the config loads, with errors at their path (`dashboards[0].widgets[2].query`). A config without `dashboards` keeps the ones of the report it is appended to. |
+| `views` | `[]` | Saved views for the explorers' Views menu: `{ id, title, page, query?, text?, mode?, groupBy?, view?, sort?, metrics? }`, where `page` is `traces`, `logs` or `metrics`. |
 | `viewer.theme` | `system` | `system`, `light` or `dark`. The theme a report opens in; a theme the viewer picks themselves is remembered and wins. |
 
 `OTEL_HTML_CONFIG` selects the config file. `OTEL_HTML_DEBUG=1` makes the CLI print stack traces on errors.
@@ -169,6 +235,8 @@ Config is a YAML or JSON file (`otel-html.yaml` by default), or an object passed
 - Timestamps are JavaScript numbers, exact to 2^53 ns. That is about 104 days of relative time span within one report.
 - The viewer is for static reports that open from `file://`. It does not follow a report that is still being written.
 - When a signal is larger than `viewer.eagerBudgetBytes`, the viewer reads its chunks on demand. Services numbers, filtered log results and filtered patterns are then partial (the viewer says "from N of M chunks") until you choose "Scan entire run". Opening a trace or its Logs tab reads only the chunks the trace index lists for it.
+- Dashboard layout edits are not saved: Edit layout changes the page until you reload. Use Copy config and paste the result into your config file.
+- The Fusion timeline's metric lane comes from the run-wide rollup, so it ignores variables and says "all resources" when one is set.
 - Log pattern clustering stops creating clusters at 2,000. A message that fits no existing cluster after that stays unclustered, and the Patterns view reports how many.
 - The design target for logs is 1,000,000 records in about 200 bytes each on disk. The end-to-end suite builds a 100k-span, 1M-log report to check the landing and a one-window filtered scan.
 - Input files are read in pieces and parsed one resource entry (one element of `resourceSpans`, `resourceLogs` or `resourceMetrics`) at a time, so memory does not grow with file size. Converting 1M logs from 10 files peaks at about 320 MB of resident memory, against a design target of 512 MB. A single resource entry is still parsed whole, and a protobuf file is read whole before it is decoded, so peak memory still scales with the largest resource entry and with protobuf file size. If one OTLP JSON object repeats a signal key (two `resourceLogs`, say), both arrays are imported.
@@ -187,7 +255,7 @@ Tasks are defined in `mise.toml`; CI runs the same ones.
 | `mise run test:e2e` | Build, then run the Playwright suite in Chromium, Firefox and WebKit. Extra arguments go to Playwright (`mise run test:e2e -- e2e/merge.spec.ts`). The metrics scale check runs only with `OTEL_HTML_METRICS_SCALE=1` (CI runs it in its own Chromium job): it writes a 200 metrics × 1,000 series × 1 h report the first time (about 15 minutes and 12 GB) and keeps it in `e2e/.cache/` until the writer sources change. |
 | `mise run build:binaries` | Compile standalone binaries into `dist/bin/` (after `build`). |
 | `mise run fixtures` | Regenerate `fixtures/*.otlp.json` with the OpenTelemetry SDK. |
-| `mise run demo` | Convert the `small`, `linked-*` and `metrics` fixtures (traces, logs and metrics) and open the report in a browser. Not for CI. |
+| `mise run demo` | Convert the `small`, `linked-*` and `metrics` fixtures (traces, logs and metrics) with `fixtures/dashboards.otel-html.yaml` and open the report in a browser, on the Checkout dashboard. Not for CI. |
 
 Other tasks: `lint`, `format`, `typecheck`, `test:unit`, `knip`, `gen`, `gen:check`, `check:package`, `test:e2e:chromium`.
 
@@ -195,7 +263,7 @@ Other tasks: `lint`, `format`, `typecheck`, `test:unit`, `knip`, `gen`, `gen:che
 
 - M2 (done): Logs explorer, log patterns and log panel, with log and trace cross-linking.
 - M3 (done): Metrics explorer and catalog, with embedded metric charts in all panels.
-- M4: Dashboards, including the built-in Fusion dashboard, and dashboard config.
+- M4 (done): Dashboards, including the built-in Fusion dashboard, and dashboard config.
 - M5: OTLP receiver (HTTP, then gRPC), `serve` and `run` commands, SDK exporters and load tests.
 
 The design is in [`docs/superpowers/specs/2026-10-25-otel-html-design.md`](docs/superpowers/specs/2026-10-25-otel-html-design.md).

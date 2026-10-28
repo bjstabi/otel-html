@@ -1,7 +1,7 @@
 import { type JSX, useMemo, useState } from 'react';
 import { andConditions } from '../../../dashboards/conditions.js';
 import { OtelHtmlError } from '../../../model/errors.js';
-import { parseUnixNanos } from '../../../model/ids.js';
+import { parseUnixNanos, type TraceId } from '../../../model/ids.js';
 import { ErrorCard, LoadingNote, NoMatch, PartialNote } from '../../components/explorer-states.js';
 import { LogList } from '../../components/log-list.js';
 import type { SortState } from '../../components/results-table.js';
@@ -65,8 +65,10 @@ function logQuery(
   condition: string | null,
   text: string,
   sort: SortState,
+  traceId: TraceId | null,
 ): LogQuery {
   return {
+    traceId,
     condition,
     text,
     window,
@@ -168,11 +170,11 @@ export const LogsWidget: WidgetRenderer = ({
   const [sort, setSort] = useState<SortState>({ column: 'time', dir: 'desc' });
   const contextCondition = useMemo(() => andConditions(variableCondition(variables, 'log')), [variables]);
   const matches = useMemo(
-    () => logQuery(scope.window, scope.condition, text, sort),
-    [scope.window, scope.condition, text, sort],
+    () => logQuery(scope.window, scope.condition, text, sort, scope.traceFilter),
+    [scope.window, scope.condition, text, sort, scope.traceFilter],
   );
   const context = useMemo(
-    () => logQuery(scope.window, contextCondition, '', sort),
+    () => logQuery(scope.window, contextCondition, '', sort, null),
     [scope.window, contextCondition, sort],
   );
   const handle = useLogQuery(dataSource, matches);

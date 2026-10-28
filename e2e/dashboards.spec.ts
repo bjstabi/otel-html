@@ -1,0 +1,194 @@
+import type { Locator, Page } from '@playwright/test';
+import { copied, stubClipboard } from './clipboard.js';
+import { DASHBOARDS_ENV_DEFAULT } from './fixture.js';
+import { watchProblems } from './metric-chart.js';
+import { expect, test } from './test.js';
+
+const widget = (page: Page, id: string): Locator => page.locator(`[data-widget="${id}"]`);
+
+/** Drags across a widget's timeline brush, from `from` to `to` as fractions of its width. */
+async function brush(page: Page, timeline: Locator, from: number, to: number): Promise<void> {
+  const box = await timeline.getByRole('group', { name: 'Time brush' }).boundingBox();
+  if (box === null) throw new Error('the brush is laid out');
+  await page.mouse.move(box.x + box.width * from, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width * to, box.y + box.height / 2, { steps: 6 });
+  await page.mouse.up();
+}
+
+test('the list shows Fusion (built-in) and Checkout (its file, starred)', async ({ page, reportUrl }) => {
+  const problems = watchProblems(page);
+  await page.goto(`${reportUrl('dashboards')}/index.html#/dashboards`);
+  const rows = page.getByRole('table').getByRole('row');
+  await expect(rows).toHaveCount(3);
+  await expect(rows.nth(1)).toContainText('Fusion');
+  await expect(rows.nth(1)).toContainText('BUILT-IN');
+  await expect(rows.nth(2)).toContainText('Checkout');
+  await expect(rows.nth(2)).toContainText('dashboards.otel-html.yaml');
+  await expect(rows.nth(2).getByRole('img', { name: 'Default dashboard' })).toBeVisible();
+  await expect(rows.nth(1).getByRole('img', { name: 'Default dashboard' })).toHaveCount(0);
+
+  // `g d` and the home route (`viewer.home: dashboards`) both open the configured default.
+  await page.goto(`${reportUrl('dashboards')}/index.html#/`);
+  await expect(page).toHaveURL(/#\/dashboards\/checkout/);
+  await page.goto(`${reportUrl('dashboards')}/index.html#/dashboards/fusion`);
+  await expect(page.getByRole('heading', { level: 1, name: 'Fusion' })).toBeVisible();
+  await page.keyboard.press('g');
+  await page.keyboard.press('d');
+  await expect(page).toHaveURL(/#\/dashboards\/checkout/);
+  await expect(page.getByRole('heading', { level: 1, name: 'Checkout' })).toBeVisible();
+  expect(problems).toEqual([]);
+});
+
+test('Fusion: a brush, a trace click, ⛓ off and Show context', async ({ page, reportUrl }) => {
+  const problems = watchProblems(page);
+  await page.goto(`${reportUrl('dashboards')}/index.html#/dashboards/fusion`);
+  const timeline = widget(page, 'timeline');
+  const traces = widget(page, 'traces');
+  const logs = widget(page, 'logs');
+  const metrics = widget(page, 'metrics');
+  await expect(traces.getByRole('grid', { name: 'Results' }).getByRole('row').nth(1)).toBeVisible();
+  await expect(traces).toContainText(/\d+ traces?/);
+  await expect(metrics).toContainText('all resources');
+
+  // Brushing the timeline adds a time chip; the Traces widget follows it.
+  await brush(page, timeline, 0.05, 0.95);
+  const chips = page.getByRole('list', { name: 'Selection' });
+  await expect(chips).toContainText('time');
+  await expect(traces).toContainText('in selected time');
+  await expect(page).toHaveURL(/[?&]d=/);
+
+  // A trace click adds the trace chip; Logs narrows to it and Metrics to its resources.
+  await traces.getByRole('grid', { name: 'Results' }).getByRole('row').nth(1).click();
+  await expect(chips).toContainText('trace_id');
+  await expect(logs).toContainText('for the selected trace');
+  await expect(metrics).toContainText("from the selected trace's resources");
+  await expect(metrics.getByTestId('metric-grid')).toContainText('Metrics from the same resource');
+  await expect(metrics.getByTestId('metric-grid')).not.toContainText('Loading metrics');
+
+  // The trace's flame graph opens under the list.
+  await expect(traces.getByRole('button', { name: 'open trace panel →' })).toBeVisible();
+
+  // ⛓ off on Logs lists all logs of the window again.
+  const follows = logs.getByRole('button', { name: 'follows selection' });
+  await expect(follows).toHaveAttribute('aria-pressed', 'true');
+  await follows.click();
+  await expect(follows).toHaveAttribute('aria-pressed', 'false');
+  await expect(logs).not.toContainText('for the selected trace');
+  await expect(logs).toContainText(/\d+ logs?/);
+
+  // Show context lists every log of the window and marks the matches.
+  await follows.click();
+  await expect(logs).toContainText('for the selected trace');
+  await logs.getByRole('button', { name: 'Show context' }).click();
+  await expect(logs.getByRole('button', { name: 'Show context' })).toHaveAttribute('aria-pressed', 'true');
+  const rows = logs.getByRole('grid', { name: 'Results' }).getByRole('row');
+  await expect(rows.nth(1)).toBeVisible();
+  await expect(logs.locator('[data-match="true"]').first()).toBeVisible();
+  await expect(logs.locator('[data-muted="true"]').first()).toBeVisible();
+
+  // Clear all removes the selection.
+  await page.getByRole('button', { name: 'Clear all' }).click();
+  await expect(chips).toHaveCount(0);
+  expect(problems).toEqual([]);
+});
+
+test('Fusion: a variable value narrows the Logs widget and the URL carries it', async ({
+  page,
+  reportUrl,
+}) => {
+  const problems = watchProblems(page);
+  await page.goto(`${reportUrl('dashboards')}/index.html#/dashboards/fusion`);
+  const logs = widget(page, 'logs');
+  await expect(logs).toContainText('40 logs');
+  const service = page.getByRole('combobox', { name: 'service.name' });
+  await service.click();
+  await page.getByRole('option', { name: 'checkout', exact: true }).click();
+  await expect(service).toContainText('checkout');
+  await expect(page).toHaveURL(/service\.name/);
+  await expect(logs).toContainText(/\d+ logs?/);
+  await expect(logs).not.toContainText('40 logs');
+  await expect(widget(page, 'traces')).toContainText(/\d+ traces?/);
+  expect(problems).toEqual([]);
+});
+
+test('Checkout: the environment default narrows everything until it is changed', async ({
+  page,
+  reportUrl,
+}) => {
+  const problems = watchProblems(page);
+  await page.goto(`${reportUrl('dashboards')}/index.html#/dashboards/checkout`);
+  const env = page.getByRole('combobox', { name: 'environment' });
+  await expect(env).toContainText(DASHBOARDS_ENV_DEFAULT);
+  // The default names no environment of this report, so the list is empty.
+  await expect(widget(page, 'w2')).toContainText('No traces match');
+  await env.click();
+  await page.getByRole('option', { name: 'production' }).click();
+  await expect(
+    widget(page, 'w2').getByRole('grid', { name: 'Results' }).getByRole('row').nth(1),
+  ).toBeVisible();
+  // All six widget types are on the page.
+  for (const id of ['w1', 'w2', 'w3', 'w4', 'w5', 'w6']) await expect(widget(page, id)).toBeVisible();
+  await expect(widget(page, 'w4').getByRole('heading', { name: 'Request latency' })).toBeVisible();
+  await expect(widget(page, 'w4').getByRole('img', { name: /: [1-9]\d* series$/ })).toBeVisible();
+  expect(problems).toEqual([]);
+});
+
+test('Edit layout: drag Logs, then Copy config holds the new position', async ({ page, reportUrl }) => {
+  const problems = watchProblems(page);
+  await stubClipboard(page);
+  await page.setViewportSize({ width: 1400, height: 1600 });
+  await page.goto(`${reportUrl('dashboards')}/index.html#/dashboards/fusion`);
+  const logs = widget(page, 'logs');
+  await expect(logs).toBeVisible();
+  await page.getByRole('button', { name: 'Edit layout' }).click();
+  const handle = logs.getByRole('button', { name: 'Move Logs' });
+  const box = await handle.boundingBox();
+  if (box === null) throw new Error('the drag handle is laid out');
+  // Below the Metrics widget, the only free place.
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2, box.y + 700, { steps: 12 });
+  await page.mouse.up();
+  await page.getByRole('button', { name: 'Copy config' }).click();
+  await expect.poll(() => copied(page)).toContain('id: fusion-copy');
+  const yaml = await copied(page);
+  expect(yaml).toContain('title: Fusion (copy)');
+  const block = /- type: logs\n((?:\s+.*\n)+?)\s*- type:|- type: logs\n((?:\s+.*\n?)+)/.exec(yaml);
+  const logsBlock = block?.[1] ?? block?.[2] ?? '';
+  expect(logsBlock).toContain('id: logs');
+  const y = Number(/\by: (\d+)/.exec(logsBlock)?.[1]);
+  expect(y).toBeGreaterThan(6);
+  expect(Number(/\bx: (\d+)/.exec(logsBlock)?.[1] ?? 0)).toBeGreaterThanOrEqual(0);
+  expect(problems).toEqual([]);
+});
+
+test('Open in Logs from a widget lands on Logs with the widget condition', async ({ page, reportUrl }) => {
+  const problems = watchProblems(page);
+  await page.goto(`${reportUrl('dashboards')}/index.html#/dashboards/checkout`);
+  await page.getByRole('combobox', { name: 'environment' }).click();
+  await page.getByRole('option', { name: 'production' }).click();
+  await expect(page).toHaveURL(/production/);
+  await widget(page, 'w3')
+    .getByRole('button', { name: /Open in Logs/ })
+    .click();
+  await expect(page).toHaveURL(/#\/logs\?/);
+  await expect(page).toHaveURL(/[?&]q=/);
+  // The widget's condition travels with the variable: its query and the environment, joined with `and`.
+  const q = new URL(page.url().replace('#', '')).search;
+  expect(decodeURIComponent(q.replace(/\+/g, ' '))).toContain('severity_number >= 13');
+  expect(decodeURIComponent(q.replace(/\+/g, ' '))).toContain('deployment.environment.name');
+  await expect(page.getByRole('main')).toContainText('19 logs');
+  await expect(page.getByRole('grid', { name: 'Results' }).getByRole('row').nth(1)).toBeVisible();
+  expect(problems).toEqual([]);
+});
+
+test('Copy config on Checkout copies YAML of the dashboard', async ({ page, reportUrl }) => {
+  await stubClipboard(page);
+  await page.goto(`${reportUrl('dashboards')}/index.html#/dashboards/checkout`);
+  await page.getByRole('button', { name: 'Copy config' }).click();
+  await expect.poll(() => copied(page)).toContain('id: checkout');
+  const yaml = await copied(page);
+  expect(yaml).toContain('http.server.request.duration');
+  expect(yaml).toContain('show: false');
+});

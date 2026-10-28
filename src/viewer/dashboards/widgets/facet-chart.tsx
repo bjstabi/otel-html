@@ -118,8 +118,13 @@ export const FacetChartWidget: WidgetRenderer = ({ widget, scope, height, dataSo
     [condition, scope.window, text],
   );
   const logs = useMemo<LogQuery>(
-    () => ({ ...queryOf(condition, text, scope.window), mode: 'logs', sort: SORT.logs }),
-    [condition, scope.window, text],
+    () => ({
+      ...queryOf(condition, text, scope.window),
+      mode: 'logs',
+      sort: SORT.logs,
+      traceId: scope.traceFilter,
+    }),
+    [condition, scope.window, scope.traceFilter, text],
   );
   const shared: Shared = {
     widgetType: widget.type,

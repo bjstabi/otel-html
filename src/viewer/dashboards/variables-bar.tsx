@@ -16,10 +16,15 @@ interface Option {
   disabled?: boolean;
 }
 
-/** "all" first, then the values (the current value too when the report no longer lists it), then the cap note. */
-function optionsOf(known: ResourceValues, current: string | null): Option[] {
-  const values =
-    current === null || known.values.includes(current) ? known.values : [current, ...known.values];
+/**
+ * "all" first, then the values, then the cap note. The current value and the config's default are listed even when
+ * the report has no such value: an option that disappears on selection makes the Select report "all" right after.
+ */
+function optionsOf(known: ResourceValues, current: string | null, fallback: string | null): Option[] {
+  const extra = [current, fallback].filter(
+    (v, i, all): v is string => v !== null && all.indexOf(v) === i && !known.values.includes(v),
+  );
+  const values = [...extra, ...known.values];
   return [
     { label: 'all', value: null },
     ...values.map((value) => ({ label: value, value })),
@@ -37,7 +42,7 @@ function VariableSelect(props: {
   const current = Object.hasOwn(state.vars, variable.key)
     ? (state.vars[variable.key] ?? null)
     : variable.default;
-  const options = optionsOf(known, current);
+  const options = optionsOf(known, current, variable.default);
   const choose = (value: string | null): void => {
     const { [variable.key]: _dropped, ...rest } = state.vars;
     // A choice equal to the config's default is no override at all.

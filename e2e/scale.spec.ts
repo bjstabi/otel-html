@@ -4,6 +4,8 @@ import type { Page } from '@playwright/test';
 import { LOG_STEP_NS } from '../test-support/scale-logs.js';
 import { scaleMetricName } from '../test-support/scale-metrics.js';
 import {
+  FUSION_INTERACTIVE_BUDGET_MS,
+  FUSION_SELECTION_BUDGET_MS,
   perfFactor,
   reportDir,
   SCALE_LOGS,
@@ -467,3 +469,101 @@ test.describe(`metrics scale: ${SCALE_METRICS} metrics × ${SCALE_METRIC_SERIES}
     },
   );
 });
+
+/**
+ * Fusion on `scale`: interactive when all four frames are past loading (the lists hold rows, the timeline has drawn,
+ * no frame shows a status), timed in the page from navigation start. Then one trace click is timed to the frame
+ * where Logs and Metrics both show the trace's scope and neither is loading.
+ */
+test(
+  '100k spans, 1M logs: Fusion is interactive within 3 s and a trace click updates Logs and Metrics within 1 s',
+  { tag: '@perf' },
+  async ({ page, reportUrl, browserName }, testInfo) => {
+    const factor = perfFactor();
+    await page.addInitScript(() => {
+      // A frame is loading while it shows a "Loading…" or "Scanning N of M chunks" status; the partial-result note
+      // ("from 1 of 60 chunks") is a status too, but a finished state.
+      const loading = (f: Element | null | undefined): boolean =>
+        [...(f?.querySelectorAll('[role="status"]') ?? [])].some((s) =>
+          /^(Loading|Scanning)/.test(s.textContent ?? ''),
+        );
+      const settled = (): boolean => {
+        const frames = ['timeline', 'traces', 'logs', 'metrics'].map((id) =>
+          document.querySelector(`[data-widget="${id}"]`),
+        );
+        if (frames.some((f) => f === null)) return false;
+        const [timeline, traces, logs] = frames;
+        const rows = (f: Element | null | undefined): number =>
+          f?.querySelectorAll('[role="row"]').length ?? 0;
+        return (
+          frames.every((f) => !loading(f)) &&
+          timeline?.querySelector('canvas') !== null &&
+          rows(traces) >= 2 &&
+          rows(logs) >= 2
+        );
+      };
+      const mo = new MutationObserver(() => {
+        if (!settled()) return;
+        mo.disconnect();
+        requestAnimationFrame(() => {
+          (window as { __OH_FUSION_READY__?: number }).__OH_FUSION_READY__ = performance.now();
+        });
+      });
+      mo.observe(document, { childList: true, subtree: true });
+    });
+    await page.goto(`${reportUrl('scale')}/index.html#/dashboards/fusion`, { waitUntil: 'commit' });
+    const interactiveMs = Number(
+      await (
+        await page.waitForFunction(
+          () => (window as { __OH_FUSION_READY__?: number }).__OH_FUSION_READY__,
+          null,
+          {
+            timeout: 30_000,
+          },
+        )
+      ).jsonValue(),
+    );
+
+    // From the click to the frame after Logs says "for the selected trace", Metrics says "from the selected trace's
+    // resources" and neither frame is loading.
+    const selectionMs = await page.evaluate(
+      () =>
+        new Promise<number>((resolve, reject) => {
+          const row = document
+            .querySelector('[data-widget="traces"]')
+            ?.querySelectorAll<HTMLElement>('[role="row"]')[1];
+          const logs = document.querySelector('[data-widget="logs"]');
+          const metrics = document.querySelector('[data-widget="metrics"]');
+          if (!row || !logs || !metrics) throw new Error('Fusion frames not found');
+          const loading = (f: Element): boolean =>
+            [...f.querySelectorAll('[role="status"]')].some((s) =>
+              /^(Loading|Scanning)/.test(s.textContent ?? ''),
+            );
+          const done = (): boolean =>
+            /for the selected trace/.test(logs.textContent ?? '') &&
+            /selected trace's resources/.test(metrics.textContent ?? '') &&
+            !loading(logs) &&
+            !loading(metrics);
+          const timer = setTimeout(
+            () => reject(new Error('Logs and Metrics never followed the trace')),
+            15_000,
+          );
+          const t = performance.now();
+          const mo = new MutationObserver(() => {
+            if (!done()) return;
+            mo.disconnect();
+            clearTimeout(timer);
+            requestAnimationFrame(() => resolve(performance.now() - t));
+          });
+          mo.observe(document.body, { subtree: true, childList: true, characterData: true });
+          row.click();
+        }),
+    );
+
+    const line = `PERF fusion ${testInfo.project.name} (${browserName}): interactive ${interactiveMs.toFixed(0)} ms (budget ${FUSION_INTERACTIVE_BUDGET_MS * factor}), trace click to Logs and Metrics ${selectionMs.toFixed(0)} ms (budget ${FUSION_SELECTION_BUDGET_MS * factor}), factor ${factor}\n`;
+    process.stdout.write(line);
+    testInfo.annotations.push({ type: 'perf', description: line.trim() });
+    expect(interactiveMs).toBeLessThan(FUSION_INTERACTIVE_BUDGET_MS * factor);
+    expect(selectionMs).toBeLessThan(FUSION_SELECTION_BUDGET_MS * factor);
+  },
+);

@@ -457,6 +457,31 @@ describe('windowed logs', () => {
     expect(r.total).toBe(4);
   });
 
+  test('a query restricted to a trace reads only the trace log chunks and is not partial', async () => {
+    const { ds, loader } = await windowed();
+    const r = await ds.queryLogs(
+      query({ condition: `trace_id.string == "${LOG_TRACE}"`, traceId: LOG_TRACE as TraceId }),
+    );
+    expect(loader.calls).toEqual([`data/traces/${LOG_TRACE.slice(0, 2)}.js`, logChunk(2)]);
+    expect(r.partial).toBeNull();
+    expect(r.total).toBe(3);
+    // The same condition without the hint scans every chunk of the run.
+    loader.reset();
+    const all = await ds.queryLogs(query({ condition: `trace_id.string == "${LOG_TRACE}"` }));
+    expect(loader.calls.filter((c) => c.startsWith('data/chunks/logs/')).length).toBeGreaterThan(5);
+    expect(all.total).toBe(3);
+  });
+
+  test('a trace-restricted query for a trace without logs reads no log chunk', async () => {
+    const { ds, loader } = await windowed();
+    const ghost = 'f'.repeat(32);
+    const r = await ds.queryLogs(
+      query({ condition: `trace_id.string == "${ghost}"`, traceId: ghost as TraceId }),
+    );
+    expect(loader.calls.filter((c) => c.startsWith('data/chunks/logs/'))).toEqual([]);
+    expect(r.total).toBe(0);
+  });
+
   test('an unfiltered query returns the head of the run with the rollup aggregates and the manifest total', async () => {
     const capped: Manifest = {
       ...rep.manifest,

@@ -63,7 +63,15 @@ export function createWindowedLogSource(
   return {
     async queryLogs(q, onProgress, signal) {
       const run = new LogQueryRun(q, signal);
-      const { targets, unfiltered } = chunks.targets(q);
+      const found = chunks.targets(q);
+      const { unfiltered } = found;
+      // A query restricted to one trace reads that trace's chunks (the index lists them all), not the whole window.
+      const traceChunks =
+        q.traceId == null ? null : chunks.listed((await index.entry(q.traceId))?.logChunks ?? []);
+      const targets =
+        traceChunks === null
+          ? found.targets
+          : found.targets.filter((c) => traceChunks.some((t) => t.n === c.n));
       // Traces-mode aggregates cover trace-bearing logs only, so the all-logs rollup does not stand in for them.
       const landing = unfiltered && q.mode !== 'traces' ? await rollups() : null;
       if (landing !== null && q.mode === 'patterns') {
@@ -80,7 +88,7 @@ export function createWindowedLogSource(
       const newest = newestFirst(q);
       const { partial } = await scanChunks({
         targets: newest ? [...targets].sort((a, b) => b.end - a.end || b.n - a.n) : targets,
-        total: chunks.ordered.length,
+        total: traceChunks === null ? chunks.ordered.length : traceChunks.length,
         entries: chunkEntries,
         run,
         cap,
