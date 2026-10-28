@@ -6,6 +6,8 @@ export interface FileSystem {
   /** The file's bytes in pieces, so a large file need not be held whole. Without it, `readBytes` is used. */
   readChunks?(p: string): AsyncIterable<Uint8Array>;
   writeTextAtomic(p: string, text: string): Promise<void>;
+  /** `writeTextAtomic` of the pieces joined, written as they come. Without it, the joined text is written. */
+  writePiecesAtomic?(p: string, pieces: Iterable<string>): Promise<void>;
   writeBytes(p: string, bytes: Uint8Array): Promise<void>;
   mkdirp(p: string): Promise<void>;
   exists(p: string): Promise<boolean>;

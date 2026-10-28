@@ -14,15 +14,22 @@ const link: SpanLinkRecord = {
   flags: 0,
 };
 const event = { time: base.start, name: 'e', attributes: new Map(), droppedAttributesCount: 0 };
-const none = { logSpanIds: null, logsError: null };
+const none = { logSpanIds: null, logsError: null, hasMetrics: false };
 const ids = (
   s: SpanRecord,
-  ctx: { logSpanIds: ReadonlySet<SpanId> | null; logsError: string | null } = none,
+  ctx: { logSpanIds: ReadonlySet<SpanId> | null; logsError: string | null; hasMetrics: boolean } = none,
 ): string[] => availableSpanTabs(s, ctx).map((t) => t.id);
 
 describe('SPAN_TABS', () => {
-  test('lists overview, events, logs, links, resource in order', () => {
-    expect(SPAN_TABS.map((t) => t.id)).toEqual(['overview', 'events', 'logs', 'links', 'resource']);
+  test('lists overview, events, logs, metrics, links, resource in order', () => {
+    expect(SPAN_TABS.map((t) => t.id)).toEqual([
+      'overview',
+      'events',
+      'logs',
+      'metrics',
+      'links',
+      'resource',
+    ]);
     expect([...SPAN_TAB_IDS].sort()).toEqual(SPAN_TABS.map((t) => t.id).sort());
   });
 
@@ -36,17 +43,29 @@ describe('SPAN_TABS', () => {
   });
 
   test('logs shows only when the span emitted a log; null (still loading) hides it', () => {
-    const withLog = { logSpanIds: new Set([base.spanId]), logsError: null };
+    const withLog = { logSpanIds: new Set([base.spanId]), logsError: null, hasMetrics: false };
     expect(ids(base, withLog)).toEqual(['overview', 'logs', 'resource']);
-    expect(ids(base, { logSpanIds: new Set<SpanId>(), logsError: null })).toEqual(['overview', 'resource']);
+    expect(ids(base, { logSpanIds: new Set<SpanId>(), logsError: null, hasMetrics: false })).toEqual([
+      'overview',
+      'resource',
+    ]);
     expect(ids(base, none)).toEqual(['overview', 'resource']);
   });
 
   test('logs stays visible when the log load failed, so the error has a place to show', () => {
-    expect(ids(base, { logSpanIds: null, logsError: 'boom' })).toEqual(['overview', 'logs', 'resource']);
+    expect(ids(base, { logSpanIds: null, logsError: 'boom', hasMetrics: false })).toEqual([
+      'overview',
+      'logs',
+      'resource',
+    ]);
+  });
+
+  test('metrics shows only when the span resource has metrics', () => {
+    expect(ids(base, { ...none, hasMetrics: true })).toEqual(['overview', 'metrics', 'resource']);
   });
 
   test('isSpanTabId accepts known ids only', () => {
+    expect(isSpanTabId('metrics')).toBe(true);
     expect(isSpanTabId('links')).toBe(true);
     expect(isSpanTabId('logs')).toBe(true);
     expect(isSpanTabId('bogus')).toBe(false);

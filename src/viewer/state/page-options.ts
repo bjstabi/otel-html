@@ -34,6 +34,7 @@ export const PAGE_OPTIONS = {
     modes: ['logs', 'patterns', 'traces'],
     views: ['list', 'timeseries', 'toplist', 'bar', 'table', 'treemap', 'pie', 'scatter'],
   },
+  metrics: { context: 'datapoint', modes: [], views: [] },
 } as const satisfies Record<string, PageOption>;
 
 export type ExplorerPage = keyof typeof PAGE_OPTIONS;

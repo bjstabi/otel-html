@@ -9,6 +9,7 @@ import { useFilterActions } from '../components/use-filter-actions.js';
 import { Waterfall } from '../components/waterfall.js';
 import type { DataSource } from '../data/data-source.js';
 import type { LogRef, LogRow } from '../data/log-query.js';
+import { gridWindow, MetricGrid, type MetricGridOrigin } from '../metrics/metric-grid.js';
 import { useGoTo } from '../shell/go-to.js';
 import { CONTROL } from '../shell/page-chrome.js';
 import { useSelection } from '../state/selection-context.js';
@@ -169,6 +170,23 @@ export function LogTraceTab(props: { dataSource: DataSource; row: LogRow }): JSX
       )}
     </div>
   );
+}
+
+/** The embedded metric grid on the log's resource, around the log's time (the whole run for a log without one). */
+export function LogMetricsTab(props: { dataSource: DataSource; row: LogRow }): JSX.Element {
+  const { dataSource, row } = props;
+  const range = dataSource.manifest.range;
+  const origin = useMemo((): MetricGridOrigin => {
+    const at = row.timeSource === 'none' ? null : row.time;
+    return {
+      kind: 'log',
+      resources: [row.resource],
+      at,
+      window: gridWindow(at === null ? (range ?? { start: 0, end: 0 }) : { start: at, end: at }, range),
+      traceId: row.log.traceId,
+    };
+  }, [row, range]);
+  return <MetricGrid key={row.ref} dataSource={dataSource} origin={origin} />;
 }
 
 export function LogResourceTab(props: { row: LogRow }): JSX.Element {

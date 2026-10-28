@@ -71,7 +71,7 @@ const join = (s: string): string =>
     .map((g) => (g.type === 'kv' ? `${g.key}=${g.value}` : g.type === 'json' ? g.raw : g.text))
     .join('');
 
-describe('segmentBody cost', () => {
+describe('@perf segmentBody cost', () => {
   test.each([
     ['{'.repeat(100_000)],
     ['['.repeat(16_384)],

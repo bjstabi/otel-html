@@ -54,7 +54,7 @@ describe('parseUrlState', () => {
     const r = parseUrlState('tab=overview');
     expect(r.state).toEqual({});
     expect(r.errors).toEqual([
-      'tab: expected one of flame, waterfall, spans, services, logs, errors, got overview',
+      'tab: expected one of flame, waterfall, spans, services, logs, metrics, errors, got overview',
     ]);
   });
 
@@ -114,7 +114,7 @@ describe('logs keys', () => {
       'log: expected <chunk>.<row> without leading zeros, got 01.2',
     ]);
     expect(parseUrlState('ltab=flame').errors).toEqual([
-      'ltab: expected one of attributes, trace, surrounding, resource, got flame',
+      'ltab: expected one of attributes, trace, metrics, surrounding, resource, got flame',
     ]);
   });
 
@@ -124,5 +124,52 @@ describe('logs keys', () => {
       view: 'scatter',
       tab: 'logs',
     });
+  });
+});
+
+describe('metrics key m', () => {
+  const q = (id: string, metric: string) => ({
+    id,
+    metric,
+    kind: null,
+    unit: null,
+    show: 'rate',
+    by: ['resource.attributes["service.name"]'],
+    where: null,
+    fn: [{ op: 'rollup', agg: 'avg', intervalMs: 1000 }],
+    alias: null,
+    hidden: false,
+  });
+  const state = {
+    queries: [q('a', 'req.count'), q('b', 'req.errors')],
+    formulas: [{ id: 'f1', expr: 'b / a', alias: 'error rate', hidden: false }],
+    display: 'area',
+    scale: 'log',
+    split: true,
+    exemplars: false,
+  } as const;
+
+  test('round-trips a two-query state through the URL', () => {
+    const url = serializeUrlState({ m: structuredClone(state) as never });
+    const r = parseUrlState(`#/metrics?${url}`);
+    expect(r.errors).toEqual([]);
+    expect(r.state.m).toEqual(state);
+  });
+
+  test('an invalid where names its path in the error', () => {
+    const bad = { queries: [{ ...q('a', 'x'), where: 'span.name == "x"' }] };
+    const r = parseUrlState(`m=${encodeURIComponent(JSON.stringify(bad))}`);
+    expect(r.state).toEqual({});
+    expect(r.errors).toHaveLength(1);
+    expect(r.errors[0]).toMatch(/^m\.queries\[0\]\.where: expected .*, got /);
+  });
+
+  test('garbage is an error, never a throw', () => {
+    for (const raw of ['{', 'null', '[]', '{"queries":5}', '{"queries":[{"id":"a"}]}']) {
+      const r = parseUrlState(`m=${encodeURIComponent(raw)}`);
+      expect(r.state).toEqual({});
+      expect(r.errors).toHaveLength(1);
+      expect(r.errors[0]).toMatch(/^m(\.|:)/);
+    }
   });
 });

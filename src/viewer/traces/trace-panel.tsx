@@ -8,6 +8,7 @@ import { downloadBlob, otlpBlob } from '../components/export.js';
 import { FlameGraph } from '../components/flame-graph.js';
 import { Waterfall } from '../components/waterfall.js';
 import type { DataSource, TraceDetail } from '../data/data-source.js';
+import { useHasMetrics } from '../metrics/metric-grid.js';
 import { MOVE_EVENT } from '../shell/move-event.js';
 import { CONTROL, CopyLink } from '../shell/page-chrome.js';
 import { selectionToUrlState } from '../state/selection.js';
@@ -21,7 +22,7 @@ import { SplitPane } from './split-pane.js';
 import { availableTabs, isTraceTabId, type TraceTabId } from './tabs.js';
 import { traceFacts } from './trace-facts.js';
 import { TraceLogsTab, useTraceLogs } from './trace-logs-tab.js';
-import { ErrorsTab, ServicesTab, SpanListTab } from './trace-tabs.js';
+import { ErrorsTab, ServicesTab, SpanListTab, TraceMetricsTab, traceResources } from './trace-tabs.js';
 
 export interface TracePanelProps {
   dataSource: DataSource;
@@ -168,7 +169,7 @@ const TAB_BASE =
   'rounded-full px-3 py-1 text-sm text-ink-2 hover:bg-hairline data-[active]:bg-ink data-[active]:text-surface';
 
 /**
- * Trace panel: header, trace tabs (flame graph, waterfall, span list, services, errors), a resizable split and the
+ * Trace panel: header, trace tabs (flame graph, waterfall, span list, services, logs, metrics, errors), a resizable split and the
  * span section slot. It is a complementary region, not a dialog, so the shell's keyboard shortcuts keep working.
  */
 export function TracePanel(props: TracePanelProps): JSX.Element {
@@ -183,6 +184,8 @@ export function TracePanel(props: TracePanelProps): JSX.Element {
   const [exportError, setExportError] = useState<string | null>(null);
   const logCount = load.status === 'ready' ? load.value.logCount : 0;
   const logs = useTraceLogs(dataSource, traceId, logCount > 0);
+  const resources = useMemo(() => (load.status === 'ready' ? traceResources(load.value) : null), [load]);
+  const hasMetrics = useHasMetrics(dataSource, resources);
 
   // j/k: with the panel open it owns the move event, so the next/previous trace in the result order opens.
   // The open trace is read from the store at event time, so presses faster than a re-render still chain.
@@ -228,7 +231,7 @@ export function TracePanel(props: TracePanelProps): JSX.Element {
     [layout],
   );
 
-  const tabs = load.status === 'ready' ? availableTabs(load.value) : [];
+  const tabs = load.status === 'ready' ? availableTabs(load.value, { hasMetrics }) : [];
   const wanted = sel.tabs.trace;
   const active: TraceTabId | null =
     tabs.length === 0 ? null : (tabs.find((t) => t.id === wanted)?.id ?? tabs[0]?.id ?? null);
@@ -294,6 +297,8 @@ export function TracePanel(props: TracePanelProps): JSX.Element {
         ) : (
           <TraceLogsTab rows={logs.rows} scope={{ traceId: detail.traceId }} epoch={epoch} />
         );
+      case 'metrics':
+        return <TraceMetricsTab detail={detail} resources={resources ?? []} dataSource={dataSource} />;
       default:
         return assertNever(tab, 'trace tab');
     }

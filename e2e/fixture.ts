@@ -29,15 +29,38 @@ export const FIXTURE_REPORTS = ['small', 'orphans', 'logs-only', 'empty', 'linke
 export type FixtureReport = (typeof FIXTURE_REPORTS)[number];
 /** Fixture files of the reports that are not just `fixtures/<name>.otlp.json`. */
 const FIXTURE_FILES: Partial<Record<FixtureReport, readonly string[]>> = {
-  linked: ['linked-traces', 'linked-logs'],
+  linked: ['linked-traces', 'linked-logs', 'metrics'],
   /** Traces and logs together: what `mise run demo` converts and CI uploads as the sample report. */
   sample: ['small', 'linked-traces', 'linked-logs'],
 };
-/** `merged` is `otel-html merge` of `small` and `orphans`; `scale` and `huge` come from one generated 100k-span input. */
-export type ReportName = 'main' | 'hostile' | FixtureReport | 'merged' | 'scale' | 'huge' | 'no-manifest';
+/**
+ * `merged` is `otel-html merge` of `small` and `orphans`; `scale` and `huge` come from one generated 100k-span input.
+ * `metrics-merged` merges two reports of the `metrics` fixture's first and last five collections, `metrics-single`
+ * converts the fixture at once. `unfinished` holds the `linked` inputs, flushed but never closed. `metrics-scale` is
+ * the metrics scale report (`e2e/metrics-scale.ts`), kept outside `REPORTS_DIR` between runs.
+ */
+export type ReportName =
+  | 'main'
+  | 'hostile'
+  | FixtureReport
+  | 'merged'
+  | 'scale'
+  | 'huge'
+  | 'no-manifest'
+  | 'metrics-merged'
+  | 'metrics-single'
+  | 'unfinished'
+  | 'metrics-scale';
+
+/** The metrics scale report's folder: generating it takes minutes, so it outlives `REPORTS_DIR`'s rebuilds. */
+export const METRICS_SCALE_DIR: URL = new URL('./.cache/metrics-scale/', import.meta.url);
+/** The metrics scale workload: 200 metrics × 1,000 series × 360 points (1 h at a 10 s interval). */
+export const SCALE_METRICS = 200;
+export const SCALE_METRIC_SERIES = 1_000;
+export const SCALE_METRIC_POINTS = 360;
 
 export function reportDir(name: ReportName): URL {
-  return new URL(`${name}/`, REPORTS_DIR);
+  return name === 'metrics-scale' ? METRICS_SCALE_DIR : new URL(`${name}/`, REPORTS_DIR);
 }
 
 /** The committed OTLP/JSON files a fixture report is built from. */
@@ -63,7 +86,8 @@ export function fixtureSpanCount(name: FixtureReport | 'hostile'): number {
 export const LOGS_ONLY_LOG_COUNT = 12;
 
 /**
- * The `linked` report: `linked-traces` (3 traces over `checkout` on runner-7 and `payments` on runner-8) plus `linked-logs`.
+ * The `linked` report: `linked-traces` (3 traces over `checkout` on runner-7 and `payments` on runner-8) plus `linked-logs`
+ * and `metrics`.
  * Of its 40 logs: 33 sit inside a span of an exported trace, 1 carries a span_id that is not in its trace (it belongs to
  * `LINKED_TRACE`), 1 carries a trace id that is not in the traces file, and 5 carry no trace context.
  */
@@ -81,6 +105,20 @@ export const LINKED_SEVERITY_COUNTS = { 0: 1, 1: 2, 5: 8, 9: 10, 13: 10, 17: 8, 
 export const LINKED_WARN_PLUS_COUNT = 19;
 /** Logs whose body contains "declined" (case-insensitive): the `card declined: 402 decline_code=<x>` lines. */
 export const LINKED_DECLINED_COUNT = 6;
+
+/**
+ * The `linked` report also converts `metrics` (generated with the OTel SDK, then augmented): 10 collections 10 s apart over
+ * the same two resources, as `METRICS_COUNT` metric definitions.
+ */
+export const METRICS_COUNT = 10;
+export const METRIC_HIST = 'http.server.request.duration';
+/** The trace id of the one exemplar on `METRIC_HIST` that points at a trace absent from the traces file. */
+export const ORPHAN_EXEMPLAR_TRACE = '9c1f0e5ab27d4c3388e0f6a1b5d2c47e';
+export const HOSTILE_METRIC_NAME = '</script><img src=x onerror=alert(1)>';
+/** The hostile metric's unit and the value of its one attribute, `HOSTILE_METRIC_ATTR`: markup that reaches the tooltip. */
+export const HOSTILE_METRIC_UNIT = '<img src=x onerror=alert(1)>';
+export const HOSTILE_METRIC_ATTR = 'hostile.attr';
+export const HOSTILE_METRIC_ATTR_VALUE = '"><img src=x onerror=alert(1)>';
 
 /** The generated scale input: `SCALE_TRACES` traces of `SCALE_SPANS_PER_TRACE` spans each. */
 export const SCALE_TRACES = 2000;

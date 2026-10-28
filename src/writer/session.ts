@@ -20,10 +20,12 @@ import {
   earliestTimestamp,
   type NormalizeContext,
   normalizeLogs,
-  normalizeMetrics,
   normalizeTraces,
+  type PointExemplar,
+  pointExemplars,
 } from '../model/normalize.js';
 import type { OtlpRequest } from '../model/otlp-json.js';
+import { metricPointsOf } from '../model/otlp-json-metrics.js';
 import {
   type LogRecordRecord,
   logTime,
@@ -37,6 +39,8 @@ import {
 import type { CompiledCondition } from '../ottl/compile.js';
 import { compileAny } from '../ottl/compile.js';
 import type { LogTarget, SpanTarget } from '../ottl/contexts.js';
+import type { Normalized, StreamTarget } from '../rollups/metric-streams.js';
+import { foldedSeriesKey, StreamNormalizer } from '../rollups/metric-streams.js';
 import {
   createRollups,
   deserializeRollups,
@@ -56,6 +60,7 @@ import { type BuiltChunk, ChunkBuffer, LOG_SIGNAL, METRIC_SIGNAL, SPAN_SIGNAL } 
 import { DedupeSet } from './dedupe.js';
 import { renderIndexHtml } from './html.js';
 import { acquireLock, type LockHandle } from './lock.js';
+import { MetricSeriesWriter, restoreCatalogSeries } from './metric-series-writer.js';
 import type { Clock, FileSystem, Logger, ProcessInfo, Tracer } from './ports.js';
 import { type Refs, rebaseLog, rebasePoint, rebaseSpan } from './rebase.js';
 import { TraceIndex } from './trace-index.js';
@@ -70,6 +75,11 @@ export interface WriterDeps {
   viewerAssets: ViewerAssets;
   /** The otel-html version recorded in the report; append requires the same one. */
   version: string;
+  /**
+   * Called once, before the session takes its first metric points: the CLI tunes V8 for the long, steady
+   * allocation of a large metrics run there, so trace and log conversions are not slowed down by it.
+   */
+  beforeMetrics?: () => void;
 }
 
 export interface SessionOptions {
@@ -84,8 +94,12 @@ export interface AddResult {
   duplicates: number;
 }
 
-/** Normalized rows with their own resource/scope tables and epoch, as read from another report. */
-export type RecordBatch =
+/**
+ * Normalized rows with their own resource/scope tables and epoch, as read from another report. `origin` numbers
+ * the report when a merge replays several, so a cumulative series' streams in the next report are not counted as
+ * restarts of the previous report's.
+ */
+export type RecordBatch = (
   | {
       signal: 'spans';
       rows: readonly SpanRecord[];
@@ -106,7 +120,8 @@ export type RecordBatch =
       resources: readonly ResourceRecord[];
       scopes: readonly ScopeRecord[];
       epoch: UnixNanos;
-    };
+    }
+) & { origin?: number };
 
 export interface AddOptions {
   /**
@@ -141,6 +156,19 @@ export interface WriterSession {
 
 /** Encoded chunks allowed to queue behind failing writes before `add` itself fails. */
 const MAX_UNWRITTEN = 8;
+/**
+ * The folded series per metric whose cumulative streams are kept, as a multiple of `writer.metricSeriesCap`: enough
+ * that series churning past the cap rarely evict each other, while the state stays bounded.
+ */
+const FOLDED_STREAMS_PER_SERIES_CAP = 10;
+/** Points applied at a time: a slice's records and parse results die young instead of a whole request's. */
+const POINT_SLICE = 128;
+
+interface StagedPoint {
+  point: MetricPointRecord;
+  normalize: (target: StreamTarget) => Normalized;
+  exemplars: readonly PointExemplar[];
+}
 const ROLLUP_NAMES = ['spans', 'logs', 'metrics'] as const;
 const DEFAULT_TITLE = 'otel-html report';
 
@@ -148,9 +176,12 @@ interface Restored {
   lock: LockHandle;
   epoch: UnixNanos | null;
   rollups: ReportRollups;
+  normalizer: StreamNormalizer;
   dedupe: DedupeSet;
   traceIndex: TraceIndex;
   nextChunk: Record<Signal, number>;
+  nextSegment: Map<number, number>;
+  metricFiles: string[];
   committed: ManifestChunk[];
   totals: Record<Signal, number>;
   range: { start: number; end: number } | null;
@@ -180,7 +211,13 @@ export async function openSession(deps: WriterDeps, options: SessionOptions): Pr
     log: compileAny(config.writer.drop.logs.log_record, 'log_record'),
     point: compileAny(config.writer.drop.metrics.datapoint, 'datapoint'),
   };
-  const rollupOpts = { facetValueCap: config.writer.facetValueCap, facetKeyCap: config.writer.facetKeyCap };
+  const rollupOpts = {
+    facetValueCap: config.writer.facetValueCap,
+    facetKeyCap: config.writer.facetKeyCap,
+    metricSeriesCap: config.writer.metricSeriesCap,
+  };
+  // Folded series are not capped by the catalog; their cumulative streams are, per metric.
+  const normalizerOpts = { foldedPerMetric: FOLDED_STREAMS_PER_SERIES_CAP * config.writer.metricSeriesCap };
   const { fs } = deps;
 
   let preexisting = false;
@@ -212,9 +249,12 @@ export async function openSession(deps: WriterDeps, options: SessionOptions): Pr
         lock,
         epoch: null,
         rollups: createRollups(rollupOpts),
+        normalizer: new StreamNormalizer(normalizerOpts),
         dedupe: new DedupeSet(config.writer.dedupeCapacity),
         traceIndex: new TraceIndex(),
         nextChunk: { spans: 0, logs: 0, metrics: 0 },
+        nextSegment: new Map(),
+        metricFiles: [],
         committed: [],
         totals: { spans: 0, logs: 0, metrics: 0 },
         range: null,
@@ -234,9 +274,12 @@ export async function openSession(deps: WriterDeps, options: SessionOptions): Pr
             ? null
             : parseUnixNanos(cp.state.epochUnixNano, 'state.epochUnixNano'),
         rollups: deserializeRollups(cp.state.rollups, rollupOpts),
+        normalizer: StreamNormalizer.from(cp.state.metricStreams, 'state.metricStreams', normalizerOpts),
         dedupe: DedupeSet.from(cp.state.dedupe, config.writer.dedupeCapacity),
         traceIndex: TraceIndex.load(cp.state.traceIndex),
         nextChunk: { ...cp.state.nextChunk },
+        nextSegment: new Map(Object.entries(cp.state.nextSegment).map(([id, n]) => [Number(id), n])),
+        metricFiles: [...cp.manifest.metricFiles],
         committed: [...cp.manifest.chunks],
         totals: { ...cp.manifest.totals },
         range: cp.manifest.range,
@@ -248,7 +291,10 @@ export async function openSession(deps: WriterDeps, options: SessionOptions): Pr
         replacing: false,
       };
     }
-    for (const d of ['chunks/spans', 'chunks/logs', 'chunks/metrics', 'traces', 'rollups']) {
+    if (options.mode === 'append') {
+      await restoreCatalogSeries(fs, out, restored.rollups.metrics.catalog, restored.metricFiles);
+    }
+    for (const d of ['chunks/spans', 'chunks/logs', 'chunks/metrics', 'traces', 'rollups', 'metrics']) {
       await fs.mkdirp(at(out, `data/${d}`));
     }
     return new Session(deps, out, config, drop, restored);
@@ -271,6 +317,8 @@ class Session implements WriterSession {
   readonly #drop: Drops;
   readonly #lock: LockHandle;
   readonly #rollups: ReportRollups;
+  readonly #normalizer: StreamNormalizer;
+  readonly #series: MetricSeriesWriter;
   readonly #dedupe: DedupeSet;
   readonly #traceIndex: TraceIndex;
   readonly #spans: ChunkBuffer<SpanRecord>;
@@ -288,12 +336,16 @@ class Session implements WriterSession {
   #decodedBytes: number;
   #slot: StateSlot;
   #dirty: boolean;
+  /** Whether `deps.beforeMetrics` has run. */
+  #metricsSeen = false;
   #everCommitted: boolean;
   #shellWritten = false;
   #lastFlushMs: number;
   #closed: ReportSummary | null = null;
   #aborted = false;
   #replacing: boolean;
+  /** Resumed: metric files on disk that the committed manifest does not list are removed before the first write. */
+  #pruneMetrics: boolean;
   /** Inside a `partial` input: see AddOptions. */
   #partial = false;
   #tail: Promise<unknown> = Promise.resolve();
@@ -305,6 +357,14 @@ class Session implements WriterSession {
     this.#drop = drop;
     this.#lock = r.lock;
     this.#rollups = r.rollups;
+    this.#normalizer = r.normalizer;
+    this.#series = new MetricSeriesWriter(
+      deps.fs,
+      out,
+      { exemplars: config.writer.metricExemplars },
+      r.nextSegment,
+      r.metricFiles,
+    );
     this.#dedupe = r.dedupe;
     this.#traceIndex = r.traceIndex;
     this.#spans = new ChunkBuffer(SPAN_SIGNAL, r.nextChunk.spans);
@@ -321,6 +381,7 @@ class Session implements WriterSession {
     this.#slot = r.slot;
     this.#dirty = r.resumed;
     this.#replacing = r.replacing;
+    this.#pruneMetrics = r.resumed;
     this.#everCommitted = r.resumed;
     this.#lastFlushMs = deps.clock.monotonicMs();
   }
@@ -348,9 +409,9 @@ class Session implements WriterSession {
           break;
         }
         case 'metrics': {
-          const rows = normalizeMetrics(input.request, ctx, source, first);
-          this.#settleEpoch(rows.length);
-          result = await this.#acceptPoints(rows);
+          // Generated twice (checked, then applied) rather than held: a request can carry many points.
+          const rows = (): Iterable<MetricPointRecord> => metricPointsOf(input, ctx, source);
+          result = await this.#acceptPoints(rows, { checked: (n) => this.#settleEpoch(n) });
           break;
         }
       }
@@ -413,9 +474,12 @@ class Session implements WriterSession {
           break;
         case 'metrics':
           result = await this.#acceptPoints(
-            batch.rows.map((p, i) =>
-              rebasePoint(p, shift, refsOf(p.resource, p.scope, `rows[${i}]`), `rows[${i}]`),
-            ),
+            function* () {
+              for (const [i, p] of batch.rows.entries()) {
+                yield rebasePoint(p, shift, refsOf(p.resource, p.scope, `rows[${i}]`), `rows[${i}]`);
+              }
+            },
+            { origin: batch.origin },
           );
           break;
       }
@@ -436,8 +500,11 @@ class Session implements WriterSession {
       if (this.#closed !== null) return this.#closed;
       this.#assertOpen();
       await this.#checkpoint(false);
+      // Level files are written under paths the committed manifest does not list (segments, or demoted levels).
+      await this.#series.compact(this.#rollups.metrics.catalog);
       await this.#writeShell();
       await this.#checkpoint(true);
+      await this.#series.prune();
       await this.#lock.release();
       this.#closed = this.#summary();
       return this.#closed;
@@ -597,30 +664,113 @@ class Session implements WriterSession {
     return { accepted: staged.length, dropped, duplicates: 0 };
   }
 
-  async #acceptPoints(rows: readonly MetricPointRecord[]): Promise<AddResult> {
-    const ctx = this.#context();
-    let dropped = 0;
-    const staged: MetricPointRecord[] = [];
-    for (const point of rows) {
-      const target = {
-        point,
-        resource: ctx.resources.get(point.resource),
-        scope: ctx.scopes.get(point.scope),
-        epoch: ctx.epoch,
-      };
-      if (this.#drop.point.test(target)) dropped++;
-      else staged.push(point);
+  /**
+   * Accepts a request's points all or nothing, without holding them all: a first pass checks every point
+   * (parse errors reject the request before any state changes) and keeps nothing; the second applies the points
+   * POINT_SLICE at a time. `rows` yields the same points each time it is called.
+   */
+  async #acceptPoints(
+    rows: () => Iterable<MetricPointRecord>,
+    opts: { checked?: (records: number) => void; origin?: number | undefined } = {},
+  ): Promise<AddResult> {
+    const { checked, origin } = opts;
+    if (!this.#metricsSeen) {
+      this.#metricsSeen = true;
+      this.#deps.beforeMetrics?.();
     }
-    for (const point of staged) {
-      this.#rollups.metrics.add(point.time, 'points');
+    let dropped = 0;
+    let accepted = 0;
+    for (const point of rows()) {
+      if (this.#dropped(point)) dropped++;
+      else {
+        this.#stage(point);
+        accepted++;
+      }
+    }
+    checked?.(accepted + dropped);
+    let slice: StagedPoint[] = [];
+    for (const point of rows()) {
+      if (this.#dropped(point)) continue;
+      slice.push(this.#stage(point));
+      if (slice.length === POINT_SLICE) {
+        this.#applyPoints(slice, origin);
+        slice = [];
+      }
+    }
+    this.#applyPoints(slice, origin);
+    if (accepted > 0) this.#dirty = true;
+    await this.#drainAccepted();
+    await this.#spillSeries();
+    return { accepted, dropped, duplicates: 0 };
+  }
+
+  #dropped(point: MetricPointRecord): boolean {
+    const ctx = this.#context();
+    const resource = ctx.resources.get(point.resource);
+    const scope = ctx.scopes.get(point.scope);
+    return this.#drop.point.test({ point, resource, scope, epoch: ctx.epoch });
+  }
+
+  /** Parses a point (throwing when it is malformed) without changing any state. */
+  #stage(point: MetricPointRecord): StagedPoint {
+    const ctx = this.#context();
+    return {
+      point,
+      normalize: this.#normalizer.prepare(point),
+      exemplars: pointExemplars(
+        point,
+        ctx.epoch,
+        () => `metric ${JSON.stringify(point.name)}.point.exemplars`,
+      ),
+    };
+  }
+
+  /** `origin`: the input report of a merge, for the stream rule (see `StreamTarget.origin`). */
+  #applyPoints(staged: readonly StagedPoint[], origin: number | undefined): void {
+    const ctx = this.#context();
+    const catalog = this.#rollups.metrics.catalog;
+    for (const { point, normalize, exemplars } of staged) {
+      const def = catalog.defOf(point);
+      const series = catalog.seriesOf(
+        def,
+        point,
+        ctx.resources.get(point.resource),
+        ctx.scopes.get(point.scope),
+      );
+      // A folded series keeps its own cumulative stream (while it is among the metric's most recently used folded
+      // series); its deltas go into `other`.
+      const n = normalize(
+        series.foldKey === null
+          ? { series: `${def.id}/${series.id}`, origin }
+          : { series: foldedSeriesKey(def.id, series.foldKey), foldedIn: def.id, origin },
+      );
+      catalog.note(def.id, n, point.time);
+      if (n.kind === 'ok') {
+        const stored = exemplars.length === 0 ? [] : exemplars.map((e) => ({ ...e, series: series.id }));
+        this.#series.add(def, series, point.time, n.agg, stored);
+      }
+      this.#rollups.metrics.buckets.add(point.time, 'points');
       this.#metrics.push(point);
       this.#totals.metrics++;
       this.#extend(Math.min(point.start ?? point.time, point.time), point.time);
       if (this.#metrics.isFull(this.#config.writer.chunkTargetBytes)) this.#cutSync(this.#metrics);
     }
-    if (staged.length > 0) this.#dirty = true;
-    await this.#drainAccepted();
-    return { accepted: staged.length, dropped, duplicates: 0 };
+  }
+
+  /**
+   * Write buffered metric buckets out as segments ahead of the flush once the buffer is full, so memory stays
+   * bounded. Like chunk writes during `add`, a failure is logged and the buckets stay buffered for the flush.
+   */
+  async #spillSeries(): Promise<void> {
+    if (!this.#series.full() || (this.#partial && this.#replacing)) return;
+    try {
+      await this.#wipeReplaced();
+      await this.#series.spill(this.#rollups.metrics.catalog);
+    } catch (e) {
+      this.#deps.logger.error('metric segment write failed; will retry at the next flush', {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
   }
 
   /** Encode the buffer into a chunk now (synchronously) and queue it for writing. */
@@ -678,9 +828,15 @@ class Session implements WriterSession {
 
   /** Remove the replaced report's data, once, immediately before this session's first write. */
   async #wipeReplaced(): Promise<void> {
-    if (!this.#replacing) return;
-    await wipeReportData(this.#deps.fs, this.#out);
-    this.#replacing = false;
+    if (this.#replacing) {
+      await wipeReportData(this.#deps.fs, this.#out);
+      this.#replacing = false;
+    }
+    if (this.#pruneMetrics) {
+      // An interrupted flush may have left metric files the committed manifest does not list.
+      await this.#series.prune();
+      this.#pruneMetrics = false;
+    }
   }
 
   async #writeShell(): Promise<void> {
@@ -705,6 +861,9 @@ class Session implements WriterSession {
       this.#cutSync(this.#logs);
       this.#cutSync(this.#metrics);
       await this.#drainUnwritten(true);
+      const metricFiles = await this.#series.flush(this.#rollups.metrics.catalog);
+      // New segment numbers must reach the state, or a resumed session would overwrite listed segments.
+      if (metricFiles.length > 0) this.#dirty = true;
       if (this.#dirty || !this.#everCommitted) {
         for (const shard of this.#traceIndex.dirtyShards()) {
           await fs.writeTextAtomic(
@@ -730,6 +889,7 @@ class Session implements WriterSession {
         chunks: this.#pending.length,
         records: this.#totals.spans + this.#totals.logs + this.#totals.metrics,
         shards: this.#traceIndex.dirtyShards().length,
+        metricFiles: metricFiles.length,
       });
       this.#pending = [];
       this.#traceIndex.clearDirty();
@@ -761,6 +921,8 @@ class Session implements WriterSession {
       rollups,
       dedupe: this.#dedupe.toJSON(),
       traceIndex: this.#traceIndex.toJSON(),
+      metricStreams: this.#normalizer.toJSON(),
+      nextSegment: Object.fromEntries([...this.#series.nextSegments()].map(([id, n]) => [String(id), n])),
     };
   }
 
@@ -781,6 +943,7 @@ class Session implements WriterSession {
       chunks: [...this.#committed, ...this.#pending],
       rollups: ROLLUP_NAMES.map((n) => rollupPath(n)),
       traceShards: shards.map((s) => traceShardPath(s)),
+      metricFiles: this.#series.listed(),
       config: { viewer: this.#config.viewer },
     };
   }

@@ -4,6 +4,8 @@ import { type JSX, useCallback, useEffect, useMemo, useState } from 'react';
 import { Redirect, Route, Router, Switch } from 'wouter';
 import type { DataSource } from '../data/data-source.js';
 import { LogsExplorer } from '../logs/explorer.js';
+import { MetricsCatalog } from '../metrics/catalog.js';
+import { MetricsExplorer } from '../metrics/explorer.js';
 import { applyPatch, carryTo, type DroppedParam } from '../state/carry.js';
 import { PAGE_TITLES, type Page, pageOfRoute } from '../state/page-options.js';
 import { bindUrl, createSelectionStore, type HistoryPort } from '../state/selection.js';
@@ -112,11 +114,11 @@ export function Shell(props: { dataSource: DataSource; history: HistoryPort }): 
   useEffect(() => bindUrl(store, history, setErrors), [store, history]);
 
   const goTo = useCallback<GoTo>(
-    (page, route, extra = {}) => {
+    (page, route, extra = {}, alsoDropped = []) => {
       const { url, dropped } = carryTo(store.getState(), pageOfRoute(currentRoute(window)), page);
       navigateRoute(window, route, serializeUrlState(applyPatch(url, extra)));
       // A patch that sets `q` (or clears it) replaces the carried filter, so nothing was dropped from the user's view.
-      const lost = extra.q === undefined ? dropped : [];
+      const lost = [...(extra.q === undefined ? dropped : []), ...alsoDropped];
       setCarried(lost.length === 0 ? null : { to: page, dropped: lost });
     },
     [store],
@@ -211,8 +213,11 @@ function RoutedPage({ dataSource }: { dataSource: DataSource }): JSX.Element {
       <Route path="/logs">
         <LogsExplorer dataSource={dataSource} />
       </Route>
+      <Route path="/metrics/catalog">
+        <MetricsCatalog dataSource={dataSource} />
+      </Route>
       <Route path="/metrics">
-        <ComingLaterPage page="metrics" manifest={manifest} />
+        <MetricsExplorer dataSource={dataSource} />
       </Route>
       <Route path="/dashboards">
         <ComingLaterPage page="dashboards" manifest={manifest} />

@@ -29,6 +29,7 @@ const manifest = (): Manifest => ({
   chunks: [{ signal: 'spans', n: 1, path: chunkPath('spans', 1), start: -5, end: 10, count: 3, bytes: 900 }],
   rollups: ['data/rollups/spans.js', 'data/rollups/logs.js', 'data/rollups/metrics.js'],
   traceShards: ['data/traces/5b.js'],
+  metricFiles: ['data/metrics/000000/series.js', 'data/metrics/000000/seg-000003.js'],
   config: { viewer: { eagerBudgetBytes: 75_000_000, listCap: 10_000, theme: 'system' } },
 });
 
@@ -67,6 +68,10 @@ describe('manifest', () => {
     expect(parseManifest(manifest())).toEqual(manifest());
     expect(parseManifest({ ...manifest(), range: null })).toEqual({ ...manifest(), range: null });
   });
+  test('a manifest written before metric files (M2) parses with none', () => {
+    const { metricFiles: _, ...old } = manifest();
+    expect(parseManifest(old).metricFiles).toEqual([]);
+  });
   test('rejects wrong format version with a precise path', () => {
     const e = failure(() => parseManifest({ ...manifest(), formatVersion: 2 }));
     expect(e.code).toBe('invalid-report');
@@ -104,6 +109,9 @@ describe('manifest', () => {
     ['shard bare id', { traceShards: ['5b'] }, 'traceShards[0]'],
     ['shard other dir', { traceShards: ['data/rollups/5b.js'] }, 'traceShards[0]'],
     ['shard uppercase', { traceShards: ['data/traces/5B.js'] }, 'traceShards[0]'],
+    ['metric file by name', { metricFiles: ['data/metrics/requests/l0.js'] }, 'metricFiles[0]'],
+    ['metric file traversal', { metricFiles: ['data/metrics/000000/../../x.js'] }, 'metricFiles[0]'],
+    ['metric level beyond 6', { metricFiles: ['data/metrics/000000/l7.js'] }, 'metricFiles[0]'],
   ])('rejects %s', (_name, patch, path) => {
     expect(failure(() => parseManifest({ ...manifest(), ...patch })).path).toBe(`manifest.${path}`);
   });
@@ -142,9 +150,17 @@ describe('session state', () => {
         },
       },
     },
+    metricStreams: { streams: [] },
+    nextSegment: { '0': 2 },
   };
   test('valid state parses', () => {
     expect(SessionStateSchema.parse(state)).toEqual(state);
+    const { metricStreams: _, nextSegment: __, ...old } = state;
+    expect(parseSessionState(old)).toMatchObject({
+      metricStreams: { keys: [], times: [], lasts: [], seriesKeys: [], seriesTimes: [] },
+      nextSegment: {},
+    });
+    expect(failure(() => parseSessionState({ ...state, nextSegment: { x: 1 } })).code).toBe('invalid-report');
     expect(parseSessionState({ ...state, epochUnixNano: '5' }).epochUnixNano).toBe('5');
   });
   test('rejects a trace index entry with a bad chunk key', () => {

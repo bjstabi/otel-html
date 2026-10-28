@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'vitest';
 import type { SpanId, TraceId } from '../../src/model/ids.js';
 import { parseLogRef } from '../../src/viewer/data/log-query.js';
-import { applyPatch, carryTo } from '../../src/viewer/state/carry.js';
+import type { MetricQuery } from '../../src/viewer/data/metric-query.js';
+import { applyPatch, carryTo, metricWindowLink } from '../../src/viewer/state/carry.js';
 import {
   PAGE_OPTIONS,
   pageOfRoute,
@@ -76,9 +77,8 @@ describe('carryTo', () => {
     expect(carryTo(s, 'traces', 'traces')).toEqual({ url: selectionToUrlState(s), dropped: [] });
   });
 
-  test('metrics and dashboards targets keep everything', () => {
+  test('the dashboards target keeps everything', () => {
     const s = data({ condition: 'span.name == "x"', mode: 'traces', text: 'a' });
-    expect(carryTo(s, 'traces', 'metrics')).toEqual({ url: selectionToUrlState(s), dropped: [] });
     expect(carryTo(s, 'traces', 'dashboards')).toEqual({ url: selectionToUrlState(s), dropped: [] });
   });
 });
@@ -137,5 +137,73 @@ describe('page options', () => {
     expect(resolvePageView('traces', 'scatter').invalid).toMatch(/^view=scatter is not a Traces view/);
     expect(resolvePageView('traces', 'pie')).toEqual({ view: 'pie', invalid: null });
     expect(resolvePageView('logs', null)).toEqual({ view: 'list', invalid: null });
+  });
+});
+
+describe('carry to and from metrics', () => {
+  const SERVICE = 'resource.attributes["service.name"] == "payments"';
+
+  test('logs to metrics seeds the first query where from a q that compiles in datapoint', () => {
+    const { url, dropped } = carryTo(
+      data({ condition: SERVICE, window: { start: 1, end: 2 }, text: 'x' }),
+      'logs',
+      'metrics',
+    );
+    expect(dropped).toEqual([]);
+    expect(url.t).toBe('1~2');
+    expect(url.q).toBeUndefined();
+    expect(url.text).toBeUndefined();
+    expect(url.m?.queries[0]?.where).toBe(SERVICE);
+  });
+
+  test('a q that does not compile in datapoint is dropped with a reason', () => {
+    const { url, dropped } = carryTo(data({ condition: 'log.body == "x"' }), 'logs', 'metrics');
+    expect(url).toEqual({});
+    expect(dropped).toEqual([{ key: 'q', value: 'log.body == "x"', reason: expect.any(String) }]);
+    expect(dropped[0]?.reason).not.toBe('');
+  });
+
+  test('without a q there is no m', () => {
+    expect(carryTo(data({ window: { start: 1, end: 2 } }), 'traces', 'metrics').url).toEqual({ t: '1~2' });
+  });
+});
+
+describe('metricWindowLink', () => {
+  const q = (where: string | null): MetricQuery => ({
+    id: 'a',
+    metric: 'x',
+    kind: null,
+    unit: null,
+    show: 'rate',
+    by: [],
+    where,
+    fn: [],
+    alias: null,
+    hidden: false,
+  });
+  const w = { start: 10, end: 20 };
+
+  test('keeps a resource-only where', () => {
+    const where = 'resource.attributes["service.name"] == "payments"';
+    expect(metricWindowLink(q(where), w, 'logs')).toEqual({ url: { t: '10~20', q: where }, dropped: [] });
+    expect(metricWindowLink(q(where), w, 'traces').url.q).toBe(where);
+  });
+
+  test('drops a data point attribute where, with the reason', () => {
+    const where = 'attributes["http.route"] == "/pay"';
+    const r = metricWindowLink(q(where), w, 'logs');
+    expect(r.url).toEqual({ t: '10~20' });
+    expect(r.dropped).toEqual([
+      { key: 'q', value: where, reason: "data point attributes don't apply to logs" },
+    ]);
+  });
+
+  test('drops a where that mixes resource and point attributes', () => {
+    const where = 'resource.attributes["a"] == "b" and attributes["c"] == "d"';
+    expect(metricWindowLink(q(where), w, 'traces').dropped).toHaveLength(1);
+  });
+
+  test('no where carries only the window', () => {
+    expect(metricWindowLink(q(null), w, 'logs')).toEqual({ url: { t: '10~20' }, dropped: [] });
   });
 });

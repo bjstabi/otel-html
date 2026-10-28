@@ -11,15 +11,37 @@ import {
   SpanStatusCode,
   trace,
 } from '@opentelemetry/api';
-import { JsonLogsSerializer, JsonTraceSerializer } from '@opentelemetry/otlp-transformer';
+import {
+  JsonLogsSerializer,
+  JsonMetricsSerializer,
+  JsonTraceSerializer,
+} from '@opentelemetry/otlp-transformer';
 import { resourceFromAttributes } from '@opentelemetry/resources';
 import { InMemoryLogRecordExporter, LoggerProvider, SimpleLogRecordProcessor } from '@opentelemetry/sdk-logs';
+import {
+  AggregationTemporality,
+  AggregationType,
+  InMemoryMetricExporter,
+  MeterProvider,
+  PeriodicExportingMetricReader,
+  type ResourceMetrics,
+} from '@opentelemetry/sdk-metrics';
 import {
   BasicTracerProvider,
   InMemorySpanExporter,
   type ReadableSpan,
   SimpleSpanProcessor,
 } from '@opentelemetry/sdk-trace-base';
+import {
+  HOSTILE_METRIC_ATTR,
+  HOSTILE_METRIC_ATTR_VALUE,
+  HOSTILE_METRIC_NAME,
+  HOSTILE_METRIC_UNIT,
+  LINKED_SPAN,
+  LINKED_TRACE,
+  METRIC_HIST,
+  ORPHAN_EXEMPLAR_TRACE,
+} from '../e2e/fixture.js';
 
 const OUT = new URL('../fixtures/', import.meta.url);
 /** 2023-11-14T22:13:20Z, the same fixed instant the e2e inputs use. */
@@ -714,12 +736,357 @@ async function buildLinked(): Promise<{ traces: string; logs: string }> {
   };
 }
 
+const METRICS_SEED = 0x3e7c5;
+const COLLECTIONS = 10;
+const COLLECTION_STEP_S = 10;
+const ROUTES = ['/checkout', '/cart', '/health'] as const;
+const NS_PER_S = 1_000_000_000n;
+const START_NS = BigInt(T0_SECONDS) * NS_PER_S;
+/** The collection that restarts `jobs.completed.cumulative` (a process restart), counting from 0. */
+const RESET_AT = 6;
+/** The restarted process starts 2 s after the last point of the previous one: a reset needs a start time after it. */
+const RESTART_AFTER_NS = 2n * NS_PER_S;
+const STRING = (value: string): { stringValue: string } => ({ stringValue: value });
+
+interface OtlpKeyValue {
+  key: string;
+  value: { stringValue: string };
+}
+interface OtlpExemplar {
+  timeUnixNano: string;
+  asDouble: number;
+  traceId: string;
+  spanId: string;
+  filteredAttributes?: OtlpKeyValue[];
+}
+interface OtlpPoint {
+  startTimeUnixNano?: string;
+  timeUnixNano?: string;
+  attributes?: OtlpKeyValue[];
+  asInt?: string;
+  asDouble?: number | string;
+  exemplars?: OtlpExemplar[];
+  count?: string;
+  sum?: number;
+  quantileValues?: { quantile: number; value: number }[];
+}
+interface OtlpMetric {
+  name: string;
+  description?: string;
+  unit?: string;
+  sum?: { aggregationTemporality: number; isMonotonic: boolean; dataPoints: OtlpPoint[] };
+  gauge?: { dataPoints: OtlpPoint[] };
+  histogram?: { aggregationTemporality: number; dataPoints: OtlpPoint[] };
+  exponentialHistogram?: { aggregationTemporality: number; dataPoints: OtlpPoint[] };
+  summary?: { dataPoints: OtlpPoint[] };
+}
+interface OtlpResourceMetrics {
+  resource: { attributes: { key: string; value: { stringValue?: string } }[] };
+  scopeMetrics: { scope: { name: string; version?: string }; metrics: OtlpMetric[] }[];
+}
+
+function pointsOf(m: OtlpMetric): OtlpPoint[] {
+  return (m.sum ?? m.gauge ?? m.histogram ?? m.exponentialHistogram ?? m.summary)?.dataPoints ?? [];
+}
+
+function serviceOf(rm: OtlpResourceMetrics): string | undefined {
+  return rm.resource.attributes.find((a) => a.key === 'service.name')?.value.stringValue;
+}
+
+/** The SDK side of the metrics fixture: what one service does during one collection interval. */
+interface Interval {
+  /** Request durations (s) per route. */
+  durations: Record<(typeof ROUTES)[number], number[]>;
+  dbDurations: number[];
+  jobs: number;
+  activeDelta: number;
+  cpu: { user: number; system: number };
+  memory: number;
+  fds: number;
+}
+
+function planIntervals(rand: () => number, scale: number): Interval[] {
+  const duration = (): number => Math.round((0.005 + rand() * rand() * 0.9 * scale) * 1000) / 1000;
+  return Array.from({ length: COLLECTIONS }, () => ({
+    durations: {
+      '/checkout': Array.from({ length: 6 + Math.floor(rand() * 6) }, duration),
+      '/cart': Array.from({ length: 4 + Math.floor(rand() * 5) }, duration),
+      '/health': Array.from({ length: 8 }, () => Math.round((0.001 + rand() * 0.004) * 1000) / 1000),
+    },
+    dbDurations: Array.from({ length: 5 + Math.floor(rand() * 5) }, duration),
+    jobs: 3 + Math.floor(rand() * 5),
+    activeDelta: Math.floor(rand() * 5) - 2,
+    cpu: {
+      user: Math.round((0.2 + rand() * 0.3) * 100) / 100,
+      system: Math.round((0.05 + rand() * 0.1) * 100) / 100,
+    },
+    memory: Math.round(180e6 + rand() * 40e6),
+    fds: 40 + Math.floor(rand() * 20),
+  }));
+}
+
+/** The SDK instruments of one service, collected through a cumulative and a delta reader. */
+function instrument(
+  service: 'checkout' | 'payments',
+  host: string,
+  intervals: readonly Interval[],
+  cumulative: InMemoryMetricExporter,
+  delta: InMemoryMetricExporter,
+): { record(k: number): void; flush(): Promise<void>; shutdown(): Promise<void> } {
+  const reader = (exporter: InMemoryMetricExporter): PeriodicExportingMetricReader =>
+    // The interval never fires: `flush` collects on demand, one collection at a time.
+    new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 3_600_000 });
+  const provider = new MeterProvider({
+    resource: resourceFromAttributes({
+      'service.name': service,
+      'service.version': '3.1.0',
+      'host.name': host,
+      'deployment.environment.name': 'production',
+    }),
+    readers: [reader(cumulative), reader(delta)],
+    views: [
+      {
+        instrumentName: 'db.client.operation.duration',
+        aggregation: { type: AggregationType.EXPONENTIAL_HISTOGRAM, options: { maxSize: 32 } },
+      },
+    ],
+  });
+  const meter = provider.getMeter(`${service}.instrumentation`, '1.0.0');
+  const requests = meter.createHistogram(METRIC_HIST, { unit: 's' });
+  const dbOps = meter.createHistogram('db.client.operation.duration', { unit: 's' });
+  const jobs = meter.createCounter('jobs.completed', { unit: '{job}' });
+  const active = meter.createUpDownCounter('http.server.active_requests', { unit: '{request}' });
+  let now = 0;
+  const at = (k: number): Interval => intervals[k] ?? intervals[0] ?? fail('no intervals');
+  meter.createObservableGauge('process.cpu.utilization', { unit: '1' }).addCallback((r) => {
+    r.observe(at(now).cpu.user, { 'cpu.mode': 'user' });
+    r.observe(at(now).cpu.system, { 'cpu.mode': 'system' });
+  });
+  meter
+    .createObservableGauge('process.memory.usage', { unit: 'By' })
+    .addCallback((r) => r.observe(at(now).memory));
+  meter
+    .createObservableGauge('process.open_file_descriptor.count', { unit: '{file}' })
+    .addCallback((r) => r.observe(at(now).fds));
+  return {
+    record(k) {
+      now = k;
+      const step = at(k);
+      for (const route of ROUTES)
+        for (const d of step.durations[route]) requests.record(d, { 'http.route': route });
+      for (const d of step.dbDurations) dbOps.record(d, { 'db.system.name': 'postgresql' });
+      jobs.add(step.jobs);
+      active.add(step.activeDelta);
+    },
+    flush: () => provider.forceFlush(),
+    shutdown: () => provider.shutdown(),
+  };
+}
+
+function fail(message: string): never {
+  throw new Error(message);
+}
+
+/** The delta reader keeps these two; the cumulative reader keeps everything else. */
+const DELTA_METRICS: ReadonlySet<string> = new Set(['db.client.operation.duration', 'jobs.completed']);
+
+function serializeMetrics(rm: ResourceMetrics, keep: (name: string) => boolean): OtlpResourceMetrics {
+  const filtered: ResourceMetrics = {
+    resource: rm.resource,
+    scopeMetrics: rm.scopeMetrics.map((sm) => ({
+      scope: sm.scope,
+      metrics: sm.metrics.filter((m) => keep(m.descriptor.name)),
+    })),
+  };
+  const bytes = JsonMetricsSerializer.serializeRequest(filtered);
+  if (bytes === undefined) throw new Error('JsonMetricsSerializer returned nothing');
+  const parsed = JSON.parse(new TextDecoder().decode(bytes)) as { resourceMetrics: OtlpResourceMetrics[] };
+  const [only] = parsed.resourceMetrics;
+  if (only === undefined) throw new Error('JsonMetricsSerializer returned no resourceMetrics');
+  return only;
+}
+
+/** The SDK stamps points with the wall clock; replace it with collection `k`'s deterministic window. */
+function restamp(rm: OtlpResourceMetrics, k: number): void {
+  const end = START_NS + BigInt((k + 1) * COLLECTION_STEP_S) * NS_PER_S;
+  const previous = k === 0 ? START_NS : end - BigInt(COLLECTION_STEP_S) * NS_PER_S;
+  for (const sm of rm.scopeMetrics)
+    for (const m of sm.metrics) {
+      const temporality = (m.sum ?? m.histogram ?? m.exponentialHistogram)?.aggregationTemporality;
+      for (const p of pointsOf(m)) {
+        p.startTimeUnixNano = String(temporality === 1 ? previous : START_NS);
+        p.timeUnixNano = String(end);
+      }
+    }
+}
+
+/**
+ * The metrics fixture: 10 collections, 10 s apart, over `checkout` (runner-7) and `payments` (runner-8). The OTel SDK
+ * produces the seven metrics below (histograms and `http.server.active_requests` cumulative, `db.client.operation.duration`
+ * and `jobs.completed` delta); `augment` adds what it cannot.
+ */
+async function buildMetrics(): Promise<string> {
+  const rand = prng(METRICS_SEED);
+  const cumulative = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+  const delta = new InMemoryMetricExporter(AggregationTemporality.DELTA);
+  const services = [
+    { service: 'checkout', host: 'runner-7', scale: 1 },
+    { service: 'payments', host: 'runner-8', scale: 1.6 },
+  ] as const;
+  const instruments = services.map((s) => ({
+    ...instrument(s.service, s.host, planIntervals(rand, s.scale), cumulative, delta),
+  }));
+  const collections: OtlpResourceMetrics[][] = [];
+  for (let k = 0; k < COLLECTIONS; k++) {
+    for (const i of instruments) {
+      i.record(k);
+      await i.flush();
+    }
+    const fromCumulative = cumulative
+      .getMetrics()
+      .map((rm) => serializeMetrics(rm, (n) => !DELTA_METRICS.has(n)));
+    const fromDelta = delta.getMetrics().map((rm) => serializeMetrics(rm, (n) => DELTA_METRICS.has(n)));
+    cumulative.reset();
+    delta.reset();
+    const merged: OtlpResourceMetrics[] = [];
+    for (const { service } of services) {
+      const parts = [...fromCumulative, ...fromDelta].filter((rm) => serviceOf(rm) === service);
+      const [first] = parts;
+      if (first === undefined) throw new Error(`no metrics for ${service} in collection ${k}`);
+      const rm: OtlpResourceMetrics = {
+        resource: first.resource,
+        scopeMetrics: parts.flatMap((p) => p.scopeMetrics).filter((sm) => sm.metrics.length > 0),
+      };
+      restamp(rm, k);
+      merged.push(rm);
+    }
+    collections.push(merged);
+  }
+  await Promise.all(instruments.map((i) => i.shutdown()));
+  augment(collections);
+  return JSON.stringify({ resourceMetrics: collections.flat() });
+}
+
+/**
+ * Adds to the SDK's output what the SDK cannot produce, each item for a reader the explorer must handle:
+ *
+ * - `legacy.request.latency`: a summary metric (quantiles 0.5/0.9/0.99). The SDK has no summary aggregation, and summaries
+ *   cannot be merged across series or re-bucketed, so the explorer must show them as they are and say so.
+ * - `jobs.completed.cumulative`: a cumulative copy of `jobs.completed` that restarts at collection `RESET_AT`. The SDK
+ *   never resets a cumulative stream, and the writer must count the reset and the chart must mark it.
+ * - Two exemplars on `http.server.request.duration` (`/checkout`, `checkout`): one pointing at `LINKED_TRACE` /
+ *   `LINKED_SPAN` (a trace in the same report, so the exemplar links to it), one at `ORPHAN_EXEMPLAR_TRACE` (a trace
+ *   that is not, so the explorer must say the trace is missing). The SDK's exemplar reservoirs are off by default and
+ *   cannot be pointed at a chosen trace.
+ * - One NaN point on `process.open_file_descriptor.count` (`payments`, collection 4): a gauge with no usable value, which
+ *   the writer counts as `noValue` and the chart must skip. The SDK would not record NaN.
+ * - `HOSTILE_METRIC_NAME`: a gauge named with markup, with a markup unit (`HOSTILE_METRIC_UNIT`) and a markup attribute
+ *   value (`HOSTILE_METRIC_ATTR_VALUE`), to show names, units and values are never interpreted as HTML. The SDK rejects
+ *   the name as invalid.
+ */
+function augment(collections: readonly OtlpResourceMetrics[][]): void {
+  const find = (k: number, service: string): OtlpResourceMetrics =>
+    collections[k]?.find((rm) => serviceOf(rm) === service) ?? fail(`no ${service} metrics at ${k}`);
+  const metricOf = (rm: OtlpResourceMetrics, name: string): OtlpMetric =>
+    rm.scopeMetrics.flatMap((sm) => sm.metrics).find((m) => m.name === name) ?? fail(`no metric ${name}`);
+  const end = (k: number): bigint => START_NS + BigInt((k + 1) * COLLECTION_STEP_S) * NS_PER_S;
+  let jobsTotal = 0;
+  for (let k = 0; k < COLLECTIONS; k++) {
+    const rm = find(k, 'checkout');
+    const scope = rm.scopeMetrics[0] ?? fail('no scope');
+    const stamp = { startTimeUnixNano: String(START_NS), timeUnixNano: String(end(k)) };
+
+    scope.metrics.push({
+      name: 'legacy.request.latency',
+      description: 'Request latency from a client library that reports summaries',
+      unit: 's',
+      summary: {
+        dataPoints: [
+          {
+            ...stamp,
+            count: String(100 * (k + 1)),
+            sum: 4.2 * (k + 1),
+            quantileValues: [
+              { quantile: 0.5, value: 0.03 + 0.001 * k },
+              { quantile: 0.9, value: 0.11 + 0.004 * k },
+              { quantile: 0.99, value: 0.42 + 0.01 * k },
+            ],
+          },
+        ],
+      },
+    });
+
+    const jobs = pointsOf(metricOf(rm, 'jobs.completed'))[0] ?? fail('no jobs point');
+    const added = Number(jobs.asInt ?? jobs.asDouble);
+    jobsTotal = k === RESET_AT ? added : jobsTotal + added;
+    scope.metrics.push({
+      name: 'jobs.completed.cumulative',
+      description: 'jobs.completed as a cumulative sum, restarted at collection 6',
+      unit: '{job}',
+      sum: {
+        aggregationTemporality: 2,
+        isMonotonic: true,
+        dataPoints: [
+          {
+            ...stamp,
+            startTimeUnixNano: String(k < RESET_AT ? START_NS : end(RESET_AT - 1) + RESTART_AFTER_NS),
+            asInt: String(jobsTotal),
+          },
+        ],
+      },
+    });
+
+    scope.metrics.push({
+      name: HOSTILE_METRIC_NAME,
+      unit: HOSTILE_METRIC_UNIT,
+      gauge: {
+        dataPoints: [
+          {
+            ...stamp,
+            asDouble: 0.5,
+            attributes: [{ key: HOSTILE_METRIC_ATTR, value: STRING(HOSTILE_METRIC_ATTR_VALUE) }],
+          },
+        ],
+      },
+    });
+  }
+
+  const checkoutRoute = (k: number): OtlpPoint =>
+    pointsOf(metricOf(find(k, 'checkout'), METRIC_HIST)).find((p) =>
+      p.attributes?.some((a) => a.value.stringValue === '/checkout'),
+    ) ?? fail('no /checkout point');
+  // The linked exemplar sits inside the first window, where `LINKED_TRACE` happened (0 to 900 ms after the start).
+  checkoutRoute(0).exemplars = [
+    {
+      timeUnixNano: String(START_NS + 500_000_000n),
+      asDouble: 0.9,
+      traceId: LINKED_TRACE,
+      spanId: LINKED_SPAN,
+      filteredAttributes: [{ key: 'http.request.method', value: STRING('POST') }],
+    },
+  ];
+  checkoutRoute(4).exemplars = [
+    {
+      timeUnixNano: String(end(4) - 3n * NS_PER_S),
+      asDouble: 1.3,
+      traceId: ORPHAN_EXEMPLAR_TRACE,
+      spanId: '7a1b2c3d4e5f6071',
+    },
+  ];
+
+  const nan =
+    pointsOf(metricOf(find(4, 'payments'), 'process.open_file_descriptor.count'))[0] ?? fail('no fd point');
+  delete nan.asInt;
+  nan.asDouble = 'NaN';
+}
+
 write('small', buildSmall());
 write('orphans', buildOrphans());
 write('logs-only', await buildLogsOnly());
 const linked = await buildLinked();
 write('linked-traces', linked.traces);
 write('linked-logs', linked.logs);
+write('metrics', await buildMetrics());
 write('empty', '{"resourceSpans":[]}\n');
 if (!existsSync(new URL('hostile.otlp.json', OUT)))
   throw new Error('fixtures/hostile.otlp.json is hand-authored and missing; restore it from git');

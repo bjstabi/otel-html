@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
+import { parseExemplarFile } from '../../src/format/metric-files.js';
 import { SessionStateSchema } from '../../src/format/state.js';
 import { TraceShardSchema } from '../../src/format/trace-shard.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
@@ -27,9 +28,15 @@ import {
   allLogs,
   allPoints,
   allSpans,
+  counterRequest,
+  cumulativeRequest,
+  levelsOf,
   logRollupsOf,
   manifestOf,
+  metricCatalogOf,
+  metricFilesOnDisk,
   readChunk,
+  readDataFile,
   spanIdOf,
   spansRequest,
   traceIdOf,
@@ -494,6 +501,19 @@ describe('folders and locking', () => {
     expect(chunkFiles).toEqual(['r/data/chunks/spans/000000.js']);
   });
 
+  test('create replaces a report whose data/metrics holds a stray file (e.g. .DS_Store)', async () => {
+    const w = createTestWriter();
+    await (await open(w)).close();
+    await w.fs.mkdirp('r/data/metrics');
+    await w.fs.writeTextAtomic('r/data/metrics/.DS_Store', 'finder');
+    const b = await open(w);
+    await b.add(otlp(spansRequest(2)), 'b.json');
+    await b.close();
+    expect(manifestOf(w, OUT).totals.spans).toBe(2);
+    // Not a metric directory: left alone, like any other file the writer does not own.
+    expect(w.fs.snapshot().has('r/data/metrics/.DS_Store')).toBe(true);
+  });
+
   test('append refuses a folder without a report', async () => {
     const w = createTestWriter();
     const e = await failure(openSession(w.deps, { out: OUT, config: testConfig(), mode: 'append' }));
@@ -527,4 +547,324 @@ describe('folders and locking', () => {
     expect(e.code).toBe('version-mismatch');
     expect(e.hint).toContain('merge');
   });
+});
+
+describe('metric series files', () => {
+  test('beforeMetrics runs once, when the first metric points arrive, and never for spans or logs', async () => {
+    const w = createTestWriter();
+    let calls = 0;
+    const s = await openSession(
+      { ...w.deps, beforeMetrics: () => calls++ },
+      { out: OUT, config: testConfig(), mode: 'create' },
+    );
+    await s.add(otlp(spansRequest(3)), 'spans.json');
+    expect(calls).toBe(0);
+    await s.add(otlp(counterRequest('requests', [[0, 1]])), 'a.json');
+    await s.add(otlp(counterRequest('requests', [[10, 3]])), 'b.json');
+    expect(calls).toBe(1);
+    await s.close();
+  });
+
+  const files = ['data/metrics/000000/ex.js', 'data/metrics/000000/l0.js', 'data/metrics/000000/series.js'];
+
+  test('a cumulative counter becomes level-0 deltas and ex.js at close, with no segments left', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    await s.add(
+      otlp(
+        counterRequest('requests', [
+          [0, 1],
+          [10, 3],
+          [20, 6],
+        ]),
+      ),
+      'm.json',
+    );
+    await s.close();
+    expect(metricFilesOnDisk(w, OUT)).toEqual(files);
+    expect(manifestOf(w, OUT).metricFiles).toEqual(files);
+    const [l0, ...rest] = levelsOf(w, OUT, 0);
+    expect(rest).toEqual([]);
+    expect(l0?.series).toEqual([
+      {
+        id: 0,
+        t: [0, 9, 19],
+        a: [1, 2, 3].map((delta) => ({ k: 'counter', delta, resets: 0 })),
+      },
+    ]);
+    expect(parseExemplarFile(readDataFile(w, OUT, files[0] ?? ''), 'ex')).toEqual({
+      metric: 0,
+      exemplars: [],
+    });
+    const catalog = metricCatalogOf(w, OUT);
+    expect(catalog.entries()).toHaveLength(1);
+    expect(catalog.entries()[0]).toMatchObject({ name: 'requests', series: 1, points: 3 });
+  });
+
+  test('each flush lists a new segment; state carries stream state and segment numbers', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    await s.add(otlp(counterRequest('requests', [[0, 1]])), 'a.json');
+    await s.flush();
+    await s.add(otlp(counterRequest('requests', [[10, 3]])), 'b.json');
+    await s.flush();
+    expect(manifestOf(w, OUT).metricFiles).toEqual([
+      'data/metrics/000000/seg-000000.js',
+      'data/metrics/000000/seg-000001.js',
+      'data/metrics/000000/series.js',
+    ]);
+    const state = SessionStateSchema.parse(
+      JSON.parse(w.fs.snapshot().get('r/data/state/session.1.json') ?? ''),
+    );
+    expect(state.nextSegment).toEqual({ '0': 2 });
+    expect(state.metricStreams).toMatchObject({ keys: ['0/0:0'], times: [10_000_000_000] });
+    await s.close();
+  });
+
+  test('exemplars on points are kept with their trace ids', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    const json = JSON.parse(JSON.stringify(counterRequest('requests', [[5, 2]])));
+    json.resourceMetrics[0].scopeMetrics[0].metrics[0].sum.dataPoints[0].exemplars = [
+      {
+        timeUnixNano: String(BigInt(EPOCH_NS) + 4_000_000_000n),
+        asDouble: 0.25,
+        traceId: traceIdOf(1),
+        spanId: spanIdOf(1),
+        filteredAttributes: [{ key: 'user', value: { stringValue: 'u1' } }],
+      },
+    ];
+    await s.add(otlp(json), 'ex.json');
+    await s.close();
+    const ex = parseExemplarFile(readDataFile(w, OUT, 'data/metrics/000000/ex.js'), 'ex');
+    expect(ex.exemplars).toEqual([
+      {
+        series: 0,
+        time: -1_000_000_000, // the epoch is the point's time, 1 s after the exemplar
+        value: 0.25,
+        traceId: traceIdOf(1),
+        spanId: spanIdOf(1),
+        attributes: new Map([['user', { kind: 'string', value: 'u1' }]]),
+      },
+    ]);
+  });
+
+  test('a hostile metric name never reaches a path and its files read back', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    const name = '</script><img src=x onerror=alert(1)>';
+    await s.add(otlp(counterRequest(name, [[0, 1]], [{ key: 'k', value: { stringValue: name } }])), 'h.json');
+    await s.close();
+    const listed = manifestOf(w, OUT).metricFiles;
+    expect(listed.length).toBeGreaterThan(0);
+    for (const p of listed) {
+      expect(p.startsWith('data/metrics/000000/'), p).toBe(true);
+      expect(() => readDataFile(w, OUT, p)).not.toThrow();
+      expect(w.fs.snapshot().get(`r/${p}`)).not.toContain('</script>');
+    }
+    expect(metricCatalogOf(w, OUT).entries()[0]?.name).toBe(name);
+  });
+
+  test('a malformed point rejects the whole request and leaves metric state untouched', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    const bad = JSON.parse(
+      JSON.stringify(
+        counterRequest('requests', [
+          [0, 1],
+          [10, 3],
+        ]),
+      ),
+    );
+    bad.resourceMetrics[0].scopeMetrics[0].metrics.push({
+      name: 'h',
+      histogram: {
+        aggregationTemporality: 1,
+        dataPoints: [{ timeUnixNano: EPOCH_NS, count: '2', bucketCounts: ['1'] }],
+      },
+    });
+    await expect(s.add(otlp(bad), 'bad.json')).rejects.toThrow(OtelHtmlError);
+    await s.add(
+      otlp(
+        counterRequest('requests', [
+          [0, 1],
+          [10, 3],
+        ]),
+      ),
+      'good.json',
+    );
+    await s.close();
+    expect(levelsOf(w, OUT, 0)[0]?.series[0]?.a).toEqual(
+      [1, 2].map((delta) => ({ k: 'counter', delta, resets: 0 })),
+    );
+    expect(metricCatalogOf(w, OUT).entries()[0]).toMatchObject({ points: 2, series: 1 });
+  });
+
+  test('a request longer than one apply slice is still all or nothing', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    const points = Array.from({ length: 300 }, (_, i): [number, number] => [i * 2, i]);
+    const bad = JSON.parse(JSON.stringify(counterRequest('requests', points)));
+    // the malformed point comes after two full slices of good ones
+    bad.resourceMetrics[0].scopeMetrics[0].metrics.push({
+      name: 'h',
+      histogram: {
+        aggregationTemporality: 1,
+        dataPoints: [{ timeUnixNano: EPOCH_NS, count: '2', bucketCounts: ['1'] }],
+      },
+    });
+    await expect(s.add(otlp(bad), 'bad.json')).rejects.toThrow(OtelHtmlError);
+    expect(await s.add(otlp(counterRequest('requests', points)), 'good.json')).toMatchObject({
+      accepted: 300,
+    });
+    await s.close();
+    expect(metricCatalogOf(w, OUT).entries()[0]).toMatchObject({ points: 300, series: 1 });
+    expect(levelsOf(w, OUT, 0)[0]?.series[0]?.t).toHaveLength(300);
+  });
+
+  const deltas = (w: TestWriter, id = 0, series = 0): [number, number, number][] => {
+    const s = levelsOf(w, OUT, id)[0]?.series.find((x) => x.id === series);
+    return (s?.t ?? []).map((t, i) => {
+      const a = s?.a[i];
+      return a?.k === 'counter' ? [t, a.delta, a.resets] : [t, Number.NaN, 0];
+    });
+  };
+
+  test('a restart and a second producer sharing the series: no negative or double-counted deltas', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    // producer 1 starts at 0 s; producer 2 (same series identity) at 5 s; producer 1 restarts at 30 s
+    await s.add(
+      otlp(
+        cumulativeRequest('c', [
+          [0, 1, 0],
+          [10, 3, 0],
+          [15, 100, 5],
+        ]),
+      ),
+      'a.json',
+    );
+    await s.flush();
+    await s.add(
+      otlp(
+        cumulativeRequest('c', [
+          [20, 6, 0],
+          [25, 150, 5],
+          [40, 2, 30],
+        ]),
+      ),
+      'b.json',
+    );
+    await s.close();
+    const b = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'append' });
+    await b.add(
+      otlp(
+        cumulativeRequest('c', [
+          [35, 160, 5],
+          [50, 5, 30],
+        ]),
+      ),
+      'c.json',
+    );
+    await b.close();
+    expect(deltas(w)).toEqual([
+      [0, 1, 0],
+      [9, 2, 0],
+      [14, 100, 0],
+      [19, 3, 0],
+      [24, 50, 0],
+      [34, 10, 0],
+      [39, 2, 1],
+      [48, 3, 0],
+    ]);
+    expect(metricCatalogOf(w, OUT).entries()[0]).toMatchObject({ resets: 1, series: 1, points: 8 });
+  });
+
+  test('cumulative series folded into other keep their own streams', async () => {
+    const w = createTestWriter();
+    const s = await open(w, testConfig({ writer: { metricSeriesCap: 1 } }));
+    const host = (h: string) => [{ key: 'host', value: { stringValue: h } }];
+    for (const [t, i] of [
+      [0, 0],
+      [10, 1],
+      [20, 2],
+    ] as const) {
+      await s.add(otlp(cumulativeRequest('c', [[t, 1 + i, 0]], host('h1'))), 'h1.json');
+      await s.add(otlp(cumulativeRequest('c', [[t, 10 * (i + 1), 0]], host('h2'))), 'h2.json');
+      await s.add(otlp(cumulativeRequest('c', [[t, 100 + 10 * i, 0]], host('h3'))), 'h3.json');
+    }
+    await s.close();
+    expect(deltas(w, 0, 0)).toEqual([
+      [0, 1, 0],
+      [9, 1, 0],
+      [19, 1, 0],
+    ]);
+    expect(deltas(w, 0, 1)).toEqual([
+      [0, 110, 0],
+      [9, 20, 0],
+      [19, 20, 0],
+    ]); // `other`: h2 + h3
+    expect(metricCatalogOf(w, OUT).entries()[0]).toMatchObject({ resets: 0, series: 2 });
+  });
+
+  test('folded cumulative streams stay within 10 × the series cap across checkpoints, evictions counted', async () => {
+    const w = createTestWriter();
+    const config = testConfig({ writer: { metricSeriesCap: 1 } });
+    const s = await open(w, config);
+    const host = (h: string) => [{ key: 'host', value: { stringValue: `h${h}`.padEnd(200, '.') } }];
+    const folded = (state: unknown): string[] => {
+      const streams = SessionStateSchema.parse(state).metricStreams as { keys: string[] };
+      return streams.keys.filter((k) => k.includes('~'));
+    };
+    // h0 is the one real series; h1..h30 fold, each with two points, over three checkpoints.
+    for (const round of [0, 1, 2]) {
+      for (let h = 0; h <= 30; h++) {
+        for (const t of [round * 100 + h, round * 100 + 50 + h]) {
+          await s.add(otlp(cumulativeRequest('c', [[t, t + 1, 0]], host(String(h)))), `${h}.json`);
+        }
+      }
+      await s.flush();
+      const states = [...w.fs.snapshot()].filter(([p]) => p.startsWith('r/data/state/session.'));
+      expect(states.length).toBeGreaterThan(0);
+      for (const [, text] of states) {
+        const keys = folded(JSON.parse(text));
+        expect(keys.length).toBeLessThanOrEqual(10);
+        // short keys: the 200-char attribute value is hashed away
+        for (const k of keys) expect(k.length).toBeLessThan(40);
+      }
+    }
+    await s.close();
+    // The real series keeps exact deltas.
+    expect(deltas(w, 0, 0).map(([, d]) => d)).toEqual([1, 50, 50, 50, 50, 50]);
+    // 30 folded series through 10 slots: every series past the 10th, in each round, evicted one.
+    const e = metricCatalogOf(w, OUT).entries()[0];
+    expect(e?.foldedEvicted).toBe(30 * 3 - 10);
+  });
+
+  test.each(['data/metrics/000000/l1.js', 'data/metrics/000000/ex.js'])(
+    'a close that fails writing %s is retried without double counting',
+    async (failing) => {
+      const w = createTestWriter();
+      const s = await open(w);
+      await s.add(
+        otlp(
+          counterRequest('requests', [
+            [0, 1],
+            [3000, 5],
+          ]),
+        ),
+        'm.json',
+      );
+      w.fs.failNextWrite(failing);
+      await expect(s.close()).rejects.toThrow(/injected/);
+      expect(manifestOf(w, OUT).metricFiles.filter((p) => /\/l\d\.js$/.test(p))).toEqual([]);
+      await s.close();
+      expect(levelsOf(w, OUT, 0).map((l) => l.level)).toEqual([0, 1]);
+      expect(deltas(w)).toEqual([
+        [0, 1, 0],
+        [2929, 4, 0],
+      ]);
+      expect(metricFilesOnDisk(w, OUT)).toEqual(manifestOf(w, OUT).metricFiles);
+    },
+  );
 });

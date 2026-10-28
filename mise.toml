@@ -19,8 +19,26 @@ run = "pnpm exec biome format --write ."
 [tasks.typecheck]
 run = "pnpm exec tsc -p tsconfig.json --noEmit && pnpm exec tsc -p tsconfig.viewer.json --noEmit && pnpm exec tsc -p tsconfig.e2e.json --noEmit"
 
+# Unit tests in two passes: everything but the timing-sensitive `@perf` tests in parallel, then the `@perf` tests
+# alone, one file at a time (vitest.config.ts), so other work does not steal their CPU. Budgets scale with
+# OTEL_HTML_PERF_FACTOR on slow machines; they are never edited.
 [tasks."test:unit"]
+run = ["mise run test:unit:main", "mise run test:unit:perf"]
+
+[tasks."test:unit:main"]
 run = "pnpm exec vitest run"
+
+# Env vars go in `env`, not a `VAR=1 cmd` prefix: Windows cmd (the unit-os CI job) can't run that.
+[tasks."test:unit:perf"]
+env = { OTEL_HTML_PERF_PASS = "1" }
+run = "pnpm exec vitest run"
+
+# Slow load tests (writer peak memory), skipped by `test:unit` and `check` unless OTEL_HTML_LOAD=1. The 1M-log
+# test runs the built library, hence the build.
+[tasks."test:load"]
+depends = ["build"]
+env = { OTEL_HTML_LOAD = "1" }
+run = "pnpm exec vitest run test/writer/metric-memory.test.ts test/writer/log-size.test.ts"
 
 [tasks.knip]
 run = "pnpm exec knip"
@@ -31,8 +49,10 @@ run = "pnpm exec buf generate && bun scripts/gen-schema.ts && bun scripts/gen-ot
 [tasks."gen:check"]
 run = "bash scripts/gen-check.sh"
 
+# The `@perf` unit tests run after the parallel steps finish, not alongside them.
 [tasks.check]
-depends = ["lint", "typecheck", "test:unit", "knip"]
+depends = ["lint", "typecheck", "test:unit:main", "knip"]
+run = "mise run test:unit:perf"
 
 [tasks."build:lib"]
 run = "pnpm exec tsdown"
@@ -52,11 +72,16 @@ usage = 'arg "[args]" var=#true'
 # Budgets scale with OTEL_HTML_PERF_FACTOR on slow machines; they are never edited.
 # CI runs in the official Playwright image and sets OTEL_HTML_SKIP_BROWSER_INSTALL to skip the browser download.
 # Extra playwright args (`mise run test:e2e -- --project 'firefox-*'`) are passed to both passes.
+# The metrics scale check runs only with OTEL_HTML_METRICS_SCALE=1 (its report: ~15 minutes and ~12 GB the first time,
+# then kept in e2e/.cache/): `OTEL_HTML_METRICS_SCALE=1 mise run test:e2e:chromium -- e2e/scale.spec.ts`.
 run = """
 eval "set -- $usage_args"
+# Both passes run; the task fails if either does. Only the @perf pass may match no tests (a spec with none).
+rc=0
 [ -n "$OTEL_HTML_SKIP_BROWSER_INSTALL" ] || pnpm exec playwright install chromium firefox webkit
-pnpm exec playwright test --grep-invert @perf "$@"
-pnpm exec playwright test --grep @perf --workers=1 "$@"
+pnpm exec playwright test --grep-invert @perf "$@" || rc=1
+pnpm exec playwright test --grep @perf --workers=1 --pass-with-no-tests "$@" || rc=1
+exit $rc
 """
 
 # Compiles standalone binaries into dist/bin/ (needs `mise run build` first). All five targets by default;
@@ -74,13 +99,19 @@ depends = ["build"]
 run = "pnpm exec publint && pnpm exec attw --pack --profile esm-only"
 
 # Chromium only (file and http projects): the quick loop while iterating; `test:e2e` is the full matrix.
+# Extra playwright args (`mise run test:e2e:chromium -- e2e/metrics-explorer.spec.ts`) are passed to both passes.
 [tasks."test:e2e:chromium"]
 shell = "bash -c"
 depends = ["build"]
+usage = 'arg "[args]" var=#true'
 run = """
-pnpm exec playwright install chromium
-pnpm exec playwright test --project='chromium-*' --grep-invert @perf
-pnpm exec playwright test --project='chromium-*' --grep @perf --workers=1
+eval "set -- $usage_args"
+# Both passes run; the task fails if either does. Only the @perf pass may match no tests (a spec with none).
+rc=0
+[ -n "$OTEL_HTML_SKIP_BROWSER_INSTALL" ] || pnpm exec playwright install chromium
+pnpm exec playwright test --project='chromium-*' --grep-invert @perf "$@" || rc=1
+pnpm exec playwright test --project='chromium-*' --grep @perf --workers=1 --pass-with-no-tests "$@" || rc=1
+exit $rc
 """
 
 # Regenerates fixtures/*.otlp.json with the OTel SDK (byte-stable). hostile.otlp.json is hand-authored and left alone.

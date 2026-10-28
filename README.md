@@ -2,7 +2,7 @@
 
 otel-html turns OpenTelemetry data into a static, self-contained HTML report. You give it OTLP files (or feed it spans from your own code) and it writes a folder you can open from disk, attach to a CI run, or publish on any static host. No server and no network access are needed to view it.
 
-Milestone 1 covers traces: a Traces explorer with a trace panel (flame graph, waterfall, span list, services, span details). Milestone 2 adds logs: a Logs explorer with log patterns and a log panel, linked to traces both ways. Metrics are accepted and stored, but their explorer is not built yet (see [Roadmap](#roadmap)).
+Milestone 1 covers traces: a Traces explorer with a trace panel (flame graph, waterfall, span list, services, span details). Milestone 2 adds logs: a Logs explorer with log patterns and a log panel, linked to traces both ways. Milestone 3 adds metrics: a Metrics explorer with exemplars, a metrics catalog, and metric charts in the log, span and trace panels.
 
 > otel-html is not an official OpenTelemetry project. It is not affiliated with or endorsed by the OpenTelemetry project or the CNCF.
 
@@ -46,7 +46,7 @@ Turns OTLP files into a report. Inputs can be OTLP JSON, JSON lines (such as Col
 
 ### `merge <reports...>`
 
-Combines report folders into a new one, for example the reports of parallel CI jobs. It reads each report's data chunks, so it works across otel-html versions that share the report format version.
+Combines report folders into a new one, for example the reports of parallel CI jobs. It reads each report's data chunks, so it works across otel-html versions that share the report format version. A cumulative metric series that appears in two reports is two runs: the second report's stream starts from its own start time and is not counted as a counter reset.
 
 ```sh
 otel-html merge ./job-1 ./job-2 -o ./combined
@@ -104,6 +104,17 @@ Open a report and choose Logs in the sidebar (or press `g l`). The Logs explorer
 
 When you move between explorers (the sidebar, `g l` and `g t`, or an "Open in ... Explorer" link), only the time window (`t`), the free text (`text`) and a query (`q`) that compiles in the target explorer's OTTL context come along. Everything else resets: group, view, sort, selected trace, span or log, and panel tabs. A query that does not compile there (such as `span.name == "x"` carried to Logs) is dropped, and the page shows a dismissible notice naming it. Inside one explorer everything is kept.
 
+## Viewing metrics
+
+Choose Metrics → Explorer in the sidebar (or press `g m`). Like the other explorers, everything you set lives in the URL.
+
+- **Explorer.** Each query row picks a metric (with its type badge and unit), a `where` filter (an OTTL condition over the data point: `resource.attributes[...]`, `attributes[...]`, `metric.name`), what to show, a `by` grouping and functions (`ƒ`: rate, increase, rollup, top/bottom N). What you can show depends on the type: a monotonic sum shows rate, increase or sum; a gauge or other sum shows avg, min, max or last; a histogram shows p50 to p99, count, sum or avg; a summary shows its quantiles, count or sum. Series inside one group are combined by type: counters add, histograms merge their buckets, and gauges use the chosen aggregation (`last` adds the series' last values, so `process.memory.usage` by everything is the total). Up to 10 queries, plus formulas over them (`a / b`). Displays: Lines, Area, Bars, and for histograms Heatmap and Distribution, on a linear or log y-axis. A chart shows one unit; queries with different units are split into one chart per query. Export writes the charted series as CSV or JSON.
+- **Exemplars and the click menu.** With Exemplars on, the exemplars stored with the series are drawn as rings. Clicking a chart opens a menu: open the exemplar's trace (or say that the report does not hold it), Traces or Logs in this window (the clicked bucket's time window, with the query's `where` carried as between explorers), or zoom. Dragging across a chart zooms to that span.
+- **Catalog.** Metrics → Catalog lists every metric definition: type, unit, temporality, scope, attribute keys, series count and a sparkline over the run. A text filter matches name, unit and scope. Clicking a row opens the metric in the Explorer with its type's default display.
+- **Metrics tabs.** The log panel, the span section and the trace panel have a Metrics tab when the log's, span's or trace's resources report metrics. It charts every metric of those resources over the moment ± 5 minutes, grouped by namespace (`process.*`, `http.*`, ...). Only the first group starts expanded, and charts render as they scroll into view. A dashed line marks the log, the span or the trace start, and exemplars of the same trace are highlighted. Size S/M/L changes the chart height, and "Open in Explorer →" opens the expanded group's metrics with the same resource filter and window.
+- **Never silently wrong.** A chart says so in a note when its numbers need a caveat: series folded into "other" by the series cap, counter resets, summary quantiles at a coarse resolution, a name with several definitions, histograms with different bucket bounds, or a chart built from an unfinished report's segments. The click menu says when an exemplar's trace is not in the report.
+- **Unfinished reports.** The writer adds each metric's buckets to a segment file at every flush and compacts the segments into resolution levels at close. A report whose writer was killed, or one opened before `close`, has segments only; its charts are built from the segments, more slowly on very long runs.
+
 ## Report layout and hosting
 
 ```
@@ -115,6 +126,8 @@ report/
     manifest.js         run metadata and chunk list
     rollups/            spans.js, logs.js, metrics.js
     chunks/             spans/, logs/, metrics/  (000000.js, ...)
+    metrics/            per metric (<id6>/): series.js, l<k>.js resolution levels and ex.js exemplars,
+                        or seg-<n6>.js segments until the writer closes
     traces/             trace index shards (<xx>.js)
     state/              writer checkpoint (session.<n>.json)
 ```
@@ -140,6 +153,8 @@ Config is a YAML or JSON file (`otel-html.yaml` by default), or an object passed
 | `writer.dedupeCapacity` | 200000 | Recent span IDs remembered for de-duplication. |
 | `writer.facetValueCap` | 1000 | Distinct values kept per facet key. |
 | `writer.facetKeyCap` | 500 | Facet keys kept. |
+| `writer.metricSeriesCap` | 1000 | Series kept per metric. Further series fold into one "other" series, and charts that would need to split it say they are partial. |
+| `writer.metricExemplars` | 4 | Exemplars kept per series per finest time bucket (those with a trace id first, then the most extreme values). |
 | `writer.drop.traces.span` | `[]` | OTTL conditions; matching spans are dropped at write time. |
 | `writer.drop.logs.log_record` | `[]` | Same, for log records. |
 | `writer.drop.metrics.datapoint` | `[]` | Same, for metric data points. |
@@ -157,6 +172,7 @@ Config is a YAML or JSON file (`otel-html.yaml` by default), or an object passed
 - Log pattern clustering stops creating clusters at 2,000. A message that fits no existing cluster after that stays unclustered, and the Patterns view reports how many.
 - The design target for logs is 1,000,000 records in about 200 bytes each on disk. The end-to-end suite builds a 100k-span, 1M-log report to check the landing and a one-window filtered scan.
 - Input files are read in pieces and parsed one resource entry (one element of `resourceSpans`, `resourceLogs` or `resourceMetrics`) at a time, so memory does not grow with file size. Converting 1M logs from 10 files peaks at about 320 MB of resident memory, against a design target of 512 MB. A single resource entry is still parsed whole, and a protobuf file is read whole before it is decoded, so peak memory still scales with the largest resource entry and with protobuf file size. If one OTLP JSON object repeats a signal key (two `resourceLogs`, say), both arrays are imported.
+- Metrics: `otel-html convert` turns 200 metrics × 1,000 series × 360 points (72M points, OTLP JSON) into a report with a peak of about 450 MB of resident memory. When a conversion or merge takes metric points, the CLI under Node switches V8 to `--optimize-for-size` as the first ones arrive, which costs about 40% in conversion time; trace and log conversions are not affected. The library sets no V8 flags, so the same workload fed to `Report.addMetrics` peaks at about 770 MB: V8 grows its heap to several times the live data (about 100 MB here) when allocation is this steady. To get the CLI's figure in your own process, start Node with `--optimize-for-size`, or call `v8.setFlagsFromString('--optimize-for-size')` before converting. Gauges and sums in OTLP JSON are read without building protobuf-es messages. Other metric types, and points that carry exemplars, are decoded through protobuf-es and allocate more per point. The 512 MB target is for that workload (cumulative counters and gauges). For every metric type the buckets the writer holds before writing them out are bounded by their estimated size (about 40 MB; a histogram bucket weighs as much as its bucket counts), but the state kept per series is not: each cumulative stream keeps its previous point, which for a histogram is its bucket counts (roughly half a kilobyte at 16 buckets), so memory grows with the number of cumulative histogram series. Series folded into `other` keep their streams for at most 10 × `writer.metricSeriesCap` series per metric.
 - The flame graph merges very narrow bars in traces above 2000 spans and clips anything deeper than 200 levels.
 
 ## Development
@@ -166,9 +182,9 @@ Tasks are defined in `mise.toml`; CI runs the same ones.
 | Task | Does |
 |---|---|
 | `mise run setup` | Install dependencies and git hooks. |
-| `mise run check` | Fast gate: lint, typecheck, unit tests, knip. |
+| `mise run check` | Fast gate: lint, typecheck, unit tests, knip. Unit tests with a time budget (named `@perf`) run afterwards, alone and one file at a time; `OTEL_HTML_PERF_FACTOR` scales their budgets on a slow machine. |
 | `mise run build` | Build the library, then the viewer, into `dist/`. |
-| `mise run test:e2e` | Build, then run the Playwright suite in Chromium, Firefox and WebKit. |
+| `mise run test:e2e` | Build, then run the Playwright suite in Chromium, Firefox and WebKit. Extra arguments go to Playwright (`mise run test:e2e -- e2e/merge.spec.ts`). The metrics scale check runs only with `OTEL_HTML_METRICS_SCALE=1` (CI runs it in its own Chromium job): it writes a 200 metrics × 1,000 series × 1 h report the first time (about 15 minutes and 12 GB) and keeps it in `e2e/.cache/` until the writer sources change. |
 | `mise run build:binaries` | Compile standalone binaries into `dist/bin/` (after `build`). |
 | `mise run fixtures` | Regenerate `fixtures/*.otlp.json` with the OpenTelemetry SDK. |
 | `mise run demo` | Convert the `small` and `linked-*` fixtures (traces and logs) and open the report in a browser. Not for CI. |
@@ -178,7 +194,7 @@ Other tasks: `lint`, `format`, `typecheck`, `test:unit`, `knip`, `gen`, `gen:che
 ## Roadmap
 
 - M2 (done): Logs explorer, log patterns and log panel, with log and trace cross-linking.
-- M3: Metrics explorer and catalog, with embedded metric charts in all panels.
+- M3 (done): Metrics explorer and catalog, with embedded metric charts in all panels.
 - M4: Dashboards, including the built-in Fusion dashboard, and dashboard config.
 - M5: OTLP receiver (HTTP, then gRPC), `serve` and `run` commands, SDK exporters and load tests.
 

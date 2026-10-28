@@ -1,4 +1,4 @@
-import { type DescMessage, type JsonObject, type JsonValue, toJson } from '@bufbuild/protobuf';
+import { type DescMessage, fromJson, type JsonObject, type JsonValue, toJson } from '@bufbuild/protobuf';
 import type { AnyValue, Attributes } from './anyvalue.js';
 import { OtelHtmlError } from './errors.js';
 import type { ExportLogsServiceRequest } from './gen/opentelemetry/proto/collector/logs/v1/logs_service_pb.js';
@@ -11,6 +11,7 @@ import type {
 } from './gen/opentelemetry/proto/common/v1/common_pb.js';
 import {
   AggregationTemporality,
+  ExemplarSchema,
   ExponentialHistogramDataPointSchema,
   HistogramDataPointSchema,
   type Metric,
@@ -19,6 +20,8 @@ import {
 } from './gen/opentelemetry/proto/metrics/v1/metrics_pb.js';
 import type { Resource } from './gen/opentelemetry/proto/resource/v1/resource_pb.js';
 import {
+  parseSpanId,
+  parseTraceId,
   parseUnixNanos,
   type RelNanos,
   type SpanId,
@@ -62,7 +65,11 @@ export function createNormalizeContext(epoch: UnixNanos): NormalizeContext {
   };
 }
 
-function convertAnyValue(v: ProtoAnyValue, path: string): AnyValue {
+/** A field path, or a function building it only for an error (per-point paths are costly at volume). */
+export type Path = string | (() => string);
+const pathText = (p: Path): string => (typeof p === 'string' ? p : p());
+
+function convertAnyValue(v: ProtoAnyValue, path: Path): AnyValue {
   const inner = v.value;
   switch (inner.case) {
     case 'stringValue':
@@ -76,26 +83,38 @@ function convertAnyValue(v: ProtoAnyValue, path: string): AnyValue {
     case 'bytesValue':
       return { kind: 'bytes', value: inner.value };
     case 'arrayValue':
-      return { kind: 'array', values: inner.value.values.map((x, i) => convertAnyValue(x, `${path}[${i}]`)) };
+      return {
+        kind: 'array',
+        values: inner.value.values.map((x, i) => convertAnyValue(x, () => `${pathText(path)}[${i}]`)),
+      };
     case 'kvlistValue':
       return { kind: 'kvlist', values: convertAttributes(inner.value.values, path) };
     case undefined:
       return { kind: 'empty' };
     case 'stringValueStrindex':
       throw new OtelHtmlError('invalid-otlp', {
-        path,
+        path: pathText(path),
         expected: 'an inline AnyValue',
         actual: 'string table index (profiles-only encoding)',
       });
   }
 }
 
-function convertAttributes(kvs: readonly KeyValue[], path: string): Attributes {
+/** A value whose conversion cannot fail and needs no path (no child path is built for it). */
+function isScalarValue(v: ProtoAnyValue): boolean {
+  const c = v.value.case;
+  return c !== 'arrayValue' && c !== 'kvlistValue' && c !== 'stringValueStrindex';
+}
+
+function convertAttributes(kvs: readonly KeyValue[], path: Path): Attributes {
   const out = new Map<string, AnyValue>();
-  for (const [i, kv] of kvs.entries()) {
+  for (let i = 0; i < kvs.length; i++) {
+    const kv = kvs[i] as KeyValue;
     out.set(
       kv.key,
-      kv.value === undefined ? { kind: 'empty' } : convertAnyValue(kv.value, `${path}[${i}].value`),
+      kv.value === undefined
+        ? { kind: 'empty' }
+        : convertAnyValue(kv.value, isScalarValue(kv.value) ? path : () => `${pathText(path)}[${i}].value`),
     );
   }
   return out;
@@ -113,12 +132,17 @@ function spanIdOrNull(b: Uint8Array, path: string): SpanId | null {
   return isAbsentId(b) ? null : spanIdFromBytes(b, path);
 }
 
-function rel(t: bigint, ctx: NormalizeContext, path: string): RelNanos {
-  return toRelNanos(parseUnixNanos(t, path), ctx.epoch, path);
+const MAX_REL = BigInt(Number.MAX_SAFE_INTEGER);
+
+export function rel(t: bigint, ctx: NormalizeContext, path: Path): RelNanos {
+  const d = t - ctx.epoch;
+  if (t >= 0n && d <= MAX_REL && d >= -MAX_REL) return Number(d) as RelNanos;
+  const at = pathText(path);
+  return toRelNanos(parseUnixNanos(t, at), ctx.epoch, at);
 }
 
 /** Zero means "unset" for optional timestamps. */
-function relOrNull(t: bigint, ctx: NormalizeContext, path: string): RelNanos | null {
+export function relOrNull(t: bigint, ctx: NormalizeContext, path: Path): RelNanos | null {
   return t === 0n ? null : rel(t, ctx, path);
 }
 
@@ -361,7 +385,16 @@ export function normalizeMetrics(
   source: string,
   first = 0,
 ): MetricPointRecord[] {
-  const out: MetricPointRecord[] = [];
+  return [...metricRecords(req, ctx, source, first)];
+}
+
+/** `normalizeMetrics` one point at a time: each call walks the request again and yields equal records. */
+export function* metricRecords(
+  req: ExportMetricsServiceRequest,
+  ctx: NormalizeContext,
+  source: string,
+  first = 0,
+): Generator<MetricPointRecord, void, void> {
   for (const [ri, rm] of req.resourceMetrics.entries()) {
     const rp = `resourceMetrics[${first + ri}]`;
     const resource = internResource(rm.resource, rm.schemaUrl, ctx, `${source}: ${rp}`);
@@ -371,28 +404,33 @@ export function normalizeMetrics(
       for (const [mi, m] of sm.metrics.entries()) {
         const shape = metricShape(m);
         if (shape === null) continue;
-        for (const [di, dp] of shape.points.entries()) {
-          const p = `${source}: ${sp}.metrics[${mi}].${m.data.case}.dataPoints[${di}]`;
-          out.push({
+        // Path builders made once per metric and read only for an error, while `di` is the failing point's.
+        let di = 0;
+        const p = (): string => `${source}: ${sp}.metrics[${mi}].${m.data.case}.dataPoints[${di}]`;
+        const startPath = (): string => `${p()}.startTimeUnixNano`;
+        const timePath = (): string => `${p()}.timeUnixNano`;
+        const attributesPath = (): string => `${p()}.attributes`;
+        for (; di < shape.points.length; di++) {
+          const dp = shape.points[di] as (typeof shape.points)[number];
+          yield {
             name: m.name,
             description: m.description,
             unit: m.unit,
             type: shape.type,
             temporality: shape.temporality,
             monotonic: shape.monotonic,
-            start: relOrNull(dp.startTimeUnixNano, ctx, `${p}.startTimeUnixNano`),
-            time: rel(dp.timeUnixNano, ctx, `${p}.timeUnixNano`),
-            attributes: convertAttributes(dp.attributes, `${p}.attributes`),
+            start: relOrNull(dp.startTimeUnixNano, ctx, startPath),
+            time: rel(dp.timeUnixNano, ctx, timePath),
+            attributes: convertAttributes(dp.attributes, attributesPath),
             flags: dp.flags,
             point: pointJson(shape.schema, dp),
             resource,
             scope,
-          });
+          };
         }
       }
     }
   }
-  return out;
 }
 
 /**
@@ -415,10 +453,81 @@ export function earliestTimestamp(req: OtlpRequest): UnixNanos | null {
           for (const l of sl.logRecords) see(l.timeUnixNano !== 0n ? l.timeUnixNano : l.observedTimeUnixNano);
       break;
     case 'metrics':
+      if (req.plain !== undefined) {
+        if (req.plain.earliest !== null) see(req.plain.earliest);
+        break;
+      }
       for (const rm of req.request.resourceMetrics)
         for (const sm of rm.scopeMetrics)
           for (const m of sm.metrics) for (const dp of metricShape(m)?.points ?? []) see(dp.timeUnixNano);
       break;
   }
   return min === null ? null : parseUnixNanos(min, 'timestamp');
+}
+
+/** An exemplar of a metric point, decoded from the point JSON kept on the record. */
+export interface PointExemplar {
+  readonly time: RelNanos;
+  readonly value: number;
+  readonly traceId: TraceId | null;
+  readonly spanId: SpanId | null;
+  readonly attributes: Attributes;
+}
+
+function hexIdOrNull<T>(v: unknown, parse: (hex: string, path: string) => T, path: string): T | null {
+  if (v === undefined || v === '') return null;
+  if (typeof v !== 'string') {
+    throw new OtelHtmlError('invalid-otlp', { path, expected: 'a hex id', actual: JSON.stringify(v) });
+  }
+  return /^0+$/.test(v) ? null : parse(v, path);
+}
+
+/**
+ * The exemplars of a point (`point.exemplars`, OTLP JSON with hex ids). An exemplar without a finite value is
+ * left out; one without a time takes the point's. Times are relative to `epoch`.
+ */
+export function pointExemplars(p: MetricPointRecord, epoch: UnixNanos, at: Path): PointExemplar[] {
+  const raw: unknown =
+    typeof p.point === 'object' && p.point !== null ? Reflect.get(p.point, 'exemplars') : undefined;
+  if (raw === undefined) return [];
+  const path = pathText(at);
+  if (!Array.isArray(raw)) {
+    throw new OtelHtmlError('invalid-otlp', { path, expected: 'a list of exemplars', actual: typeof raw });
+  }
+  return raw.flatMap((e: unknown, i): PointExemplar[] => {
+    const ep = `${path}[${i}]`;
+    if (typeof e !== 'object' || e === null || Array.isArray(e)) {
+      throw new OtelHtmlError('invalid-otlp', {
+        path: ep,
+        expected: 'an exemplar object',
+        actual: JSON.stringify(e),
+      });
+    }
+    const { traceId, spanId, ...rest } = e as Record<string, unknown>;
+    let msg: ReturnType<typeof fromJson<typeof ExemplarSchema>>;
+    try {
+      msg = fromJson(ExemplarSchema, rest as JsonValue);
+    } catch (err) {
+      throw new OtelHtmlError('invalid-otlp', {
+        path: ep,
+        expected: 'an OTLP exemplar',
+        actual: err instanceof Error ? err.message : String(err),
+      });
+    }
+    const v = msg.value;
+    const value = v.case === 'asDouble' ? v.value : v.case === 'asInt' ? Number(v.value) : null;
+    if (value === null || !Number.isFinite(value)) return [];
+    return [
+      {
+        time:
+          msg.timeUnixNano === 0n
+            ? p.time
+            : toRelNanos(parseUnixNanos(msg.timeUnixNano, `${ep}.timeUnixNano`), epoch, `${ep}.timeUnixNano`),
+        value,
+        traceId: hexIdOrNull(traceId, parseTraceId, `${ep}.traceId`),
+        spanId: hexIdOrNull(spanId, parseSpanId, `${ep}.spanId`),
+        attributes: convertAttributes(msg.filteredAttributes, `${ep}.filteredAttributes`),
+      },
+    ];
+  });
 }

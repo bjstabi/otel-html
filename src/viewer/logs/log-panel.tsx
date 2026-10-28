@@ -11,11 +11,12 @@ import { LogBody } from '../components/log-body.js';
 import { SeverityBadge } from '../components/severity.js';
 import type { DataSource } from '../data/data-source.js';
 import { type LogRef, type LogRow, refParts } from '../data/log-query.js';
+import { useHasMetrics } from '../metrics/metric-grid.js';
 import { MOVE_EVENT } from '../shell/move-event.js';
 import { CONTROL, CopyLink } from '../shell/page-chrome.js';
 import { useSelection, useSelectionStore } from '../state/selection-context.js';
 import { type KeyedState, useKeyedAsync } from '../state/use-keyed-async.js';
-import { AttributesTab, LogResourceTab, LogTraceTab, SurroundingTab } from './log-tabs.js';
+import { AttributesTab, LogMetricsTab, LogResourceTab, LogTraceTab, SurroundingTab } from './log-tabs.js';
 import { availableLogTabs, isLogTabId, type LogTabId } from './tabs.js';
 
 export interface LogPanelProps {
@@ -185,6 +186,8 @@ export function LogPanel(props: LogPanelProps): JSX.Element {
     [dataSource],
   );
   const presence = useTracePresence(dataSource, row?.log.traceId ?? null);
+  const metricResources = useMemo(() => (row === null ? null : [row.resource]), [row]);
+  const hasMetrics = useHasMetrics(dataSource, metricResources);
   const [bodyMode, setBodyMode] = useState<'raw' | 'wrapped'>('wrapped');
   const [exportError, setExportError] = useState<string | null>(null);
 
@@ -227,7 +230,7 @@ export function LogPanel(props: LogPanelProps): JSX.Element {
     };
   }, []);
 
-  const tabs = row === null ? [] : availableLogTabs(row, { hasTrace: presence === 'present' });
+  const tabs = row === null ? [] : availableLogTabs(row, { hasTrace: presence === 'present', hasMetrics });
   const wanted = sel.tabs.log;
   const active: LogTabId | null =
     tabs.length === 0 ? null : (tabs.find((t) => t.id === wanted)?.id ?? tabs[0]?.id ?? null);
@@ -251,6 +254,8 @@ export function LogPanel(props: LogPanelProps): JSX.Element {
         return <AttributesTab row={r} />;
       case 'trace':
         return <LogTraceTab dataSource={dataSource} row={r} />;
+      case 'metrics':
+        return <LogMetricsTab dataSource={dataSource} row={r} />;
       case 'surrounding':
         return <SurroundingTab dataSource={dataSource} row={r} epoch={epoch} />;
       case 'resource':

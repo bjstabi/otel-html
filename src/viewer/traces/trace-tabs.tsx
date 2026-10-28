@@ -1,15 +1,17 @@
 import { CircleAlert } from 'lucide-react';
 import { type JSX, useMemo, useState } from 'react';
 import { anyValueToDisplay } from '../../model/anyvalue.js';
-import type { SpanId, UnixNanos } from '../../model/ids.js';
-import { StatusCode } from '../../model/records.js';
+import type { RelNanos, SpanId, UnixNanos } from '../../model/ids.js';
+import { type ResourceRecord, StatusCode } from '../../model/records.js';
 import { formatDuration } from '../../semconv/formatters.js';
 import { ResultsTable, type SortState } from '../components/results-table.js';
-import type { TraceDetail } from '../data/data-source.js';
+import type { DataSource, TraceDetail } from '../data/data-source.js';
 import type { SpanRow } from '../data/span-query.js';
 import { exclusiveTimeByService } from '../data/trace-tree.js';
+import { gridWindow, MetricGrid, type MetricGridOrigin } from '../metrics/metric-grid.js';
 import type { ColorAssigner } from '../theme/palette.js';
 import { ServiceChip, SPAN_COLUMNS_UI } from './columns.js';
+import { traceFacts } from './trace-facts.js';
 
 const TH = 'p-2 text-left text-xs font-semibold text-ink-2';
 
@@ -193,4 +195,31 @@ export function SpanListTab(props: {
       moveEnabled={false}
     />
   );
+}
+
+/** The resources of a trace's spans, one record per distinct ref. */
+export function traceResources(detail: TraceDetail): ResourceRecord[] {
+  const refs = [...new Set(detail.spans.map((r) => r.span.resource))];
+  return refs.map((r) => detail.resources(r));
+}
+
+/** The embedded metric grid on the trace's resources (one line per resource), over the trace ± 5 min. */
+export function TraceMetricsTab(props: {
+  detail: TraceDetail;
+  resources: readonly ResourceRecord[];
+  dataSource: DataSource;
+}): JSX.Element {
+  const { detail, resources, dataSource } = props;
+  const range = dataSource.manifest.range;
+  const origin = useMemo((): MetricGridOrigin => {
+    const f = traceFacts(detail);
+    return {
+      kind: 'trace',
+      resources,
+      at: f.start as RelNanos,
+      window: gridWindow({ start: f.start, end: f.end }, range),
+      traceId: detail.traceId,
+    };
+  }, [detail, resources, range]);
+  return <MetricGrid key={detail.traceId} dataSource={dataSource} origin={origin} />;
 }

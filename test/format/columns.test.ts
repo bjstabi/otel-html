@@ -1,16 +1,26 @@
+import { createHash } from 'node:crypto';
 import { describe, expect, test } from 'vitest';
 import {
   type ColumnarPayload,
+  ColumnEncoder,
   type ColumnSpec,
   decodeColumns,
   encodeColumns,
 } from '../../src/format/columns.js';
 import { wrapDataFile } from '../../src/format/data-file.js';
-import { SPAN_COLUMNS } from '../../src/format/specs.js';
+import { LOG_COLUMNS, METRIC_COLUMNS, SPAN_COLUMNS } from '../../src/format/specs.js';
 import type { AnyValue } from '../../src/model/anyvalue.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
-import type { parseSpanId, RelNanos } from '../../src/model/ids.js';
-import type { ResourceRef, ScopeRef, SpanRecord } from '../../src/model/records.js';
+import type { parseSpanId, RelNanos, TraceId } from '../../src/model/ids.js';
+import type {
+  LogRecordRecord,
+  MetricPointRecord,
+  ResourceRecord,
+  ResourceRef,
+  ScopeRecord,
+  ScopeRef,
+  SpanRecord,
+} from '../../src/model/records.js';
 import { realisticSpans, sampleSpans } from '../../test-support/otlp-builders.js';
 
 function viaJson(payload: unknown): unknown {
@@ -233,5 +243,131 @@ describe('spec is data', () => {
       { a: 'x', b: -2, c: false },
     ];
     expect(decodeColumns(spec, viaJson(encodeColumns(spec, rows, [], []))).rows).toEqual(rows);
+  });
+});
+
+function incrementally<R>(
+  spec: ColumnSpec<R>,
+  rows: readonly R[],
+  resources: readonly ResourceRecord[],
+  scopes: readonly ScopeRecord[],
+): ColumnarPayload {
+  const enc = new ColumnEncoder(spec);
+  for (const r of rows) enc.push(r);
+  return enc.finish(resources, scopes);
+}
+
+/** A payload's serialized bytes, as a data file holds them, by digest. */
+const digest = (payload: ColumnarPayload): string =>
+  createHash('sha256').update(JSON.stringify(payload)).digest('hex').slice(0, 16);
+
+/**
+ * Golden digests of the payloads below, recorded from the two-pass encoder `encodeColumns` used before it became a
+ * wrapper over `ColumnEncoder`: chunk bytes (dictionary order included) must not change.
+ */
+const GOLDEN = {
+  sample300: 'f51b2c484b81ee70',
+  realistic2000: '52edf129ff389a88',
+  metrics: '1391734b95abc559',
+  logs: 'c97b609ed6415c33',
+} as const;
+
+describe('incremental column encoder', () => {
+  const str = (value: string): AnyValue => ({ kind: 'string', value });
+  const resources: ResourceRecord[] = [
+    { attributes: new Map([['service.name', str('a')]]), droppedAttributesCount: 0, schemaUrl: '' },
+    {
+      attributes: new Map([
+        ['service.name', str('b')],
+        ['n', str('u0')],
+      ]),
+      droppedAttributesCount: 1,
+      schemaUrl: 's',
+    },
+  ];
+  const scopes: ScopeRecord[] = [
+    { name: 'lib', version: '1', attributes: new Map(), droppedAttributesCount: 0, schemaUrl: '' },
+    {
+      name: 'u1',
+      version: '2',
+      attributes: new Map([['k', str('lib')]]),
+      droppedAttributesCount: 0,
+      schemaUrl: '',
+    },
+  ];
+
+  test('span payloads keep their golden bytes, dictionary order included', () => {
+    for (const [f, golden] of [
+      [sampleSpans(300), GOLDEN.sample300],
+      [realisticSpans(2000), GOLDEN.realistic2000],
+    ] as const) {
+      expect(digest(encodeColumns(SPAN_COLUMNS, f.spans, f.resources, f.scopes))).toBe(golden);
+      expect(digest(incrementally(SPAN_COLUMNS, f.spans, f.resources, f.scopes))).toBe(golden);
+    }
+  });
+
+  test('metric and log payloads keep their golden bytes', () => {
+    const points: MetricPointRecord[] = Array.from({ length: 200 }, (_, i) => ({
+      name: `m${i % 7}`,
+      description: i % 3 === 0 ? 'u1' : '',
+      unit: 'ms',
+      type: i % 5 === 0 ? 'histogram' : 'sum',
+      temporality: i % 2 === 0 ? 'cumulative' : 'delta',
+      monotonic: i % 2 === 0,
+      start: i % 4 === 0 ? null : ((i * 3) as RelNanos),
+      time: ((i % 11) * 1000 - 500) as RelNanos,
+      attributes: new Map<string, AnyValue>([
+        ['route', str(`/r${i % 13}`)],
+        ['n', { kind: 'int', value: BigInt(i) }],
+        ['list', { kind: 'array', values: [str('u0'), { kind: 'double', value: i / 3 }] }],
+        ['kv', { kind: 'kvlist', values: new Map([['inner', str(`m${i % 2}`)]]) }],
+      ]),
+      flags: i % 2,
+      point:
+        i % 5 === 0
+          ? { count: String(i), bucketCounts: ['1', '2'], explicitBounds: [1] }
+          : { asInt: String(i % 9) },
+      resource: (i % 2) as ResourceRef,
+      scope: ((i + 1) % 2) as ScopeRef,
+    }));
+    expect(digest(encodeColumns(METRIC_COLUMNS, points, resources, scopes))).toBe(GOLDEN.metrics);
+    expect(digest(incrementally(METRIC_COLUMNS, points, resources, scopes))).toBe(GOLDEN.metrics);
+    const logs: LogRecordRecord[] = Array.from({ length: 120 }, (_, i) => ({
+      time: i % 3 === 0 ? null : ((i * 7) as RelNanos),
+      observedTime: (i * 5) as RelNanos,
+      severityNumber: i % 24,
+      severityText: i % 2 === 0 ? 'INFO' : 'u1',
+      body: i % 4 === 0 ? { kind: 'kvlist', values: new Map([['msg', str(`b${i % 5}`)]]) } : str(`b${i % 6}`),
+      attributes: new Map([['k', str(`v${i % 3}`)]]),
+      droppedAttributesCount: 0,
+      flags: 0,
+      traceId: i % 2 === 0 ? null : (`${'0'.repeat(30)}${String(i % 50).padStart(2, '0')}` as TraceId),
+      spanId: null,
+      eventName: '',
+      resource: (1 - (i % 2)) as ResourceRef,
+      scope: 0 as ScopeRef,
+    }));
+    expect(digest(encodeColumns(LOG_COLUMNS, logs, resources, scopes))).toBe(GOLDEN.logs);
+    expect(digest(incrementally(LOG_COLUMNS, logs, resources, scopes))).toBe(GOLDEN.logs);
+  });
+
+  test('finish leaves the encoder unchanged; a rejected row changes nothing', () => {
+    const { spans, resources: rs, scopes: ss } = sampleSpans(20);
+    const enc = new ColumnEncoder(SPAN_COLUMNS);
+    for (const s of spans.slice(0, 10)) enc.push(s);
+    const first = enc.finish(rs, ss);
+    expect(enc.finish(rs, ss)).toEqual(first);
+    const bad = { ...spans[10], traceId: 'nope' } as unknown as SpanRecord;
+    expect(() => enc.push(bad)).toThrowError(/rows\[10\]\.traceId/);
+    expect(enc.length).toBe(10);
+    for (const s of spans.slice(10)) enc.push(s);
+    expect(enc.finish(rs, ss)).toEqual(encodeColumns(SPAN_COLUMNS, spans, rs, ss));
+  });
+
+  test('an out-of-range ref is rejected at finish, naming the row', () => {
+    const { spans, resources: rs, scopes: ss } = sampleSpans(5);
+    const enc = new ColumnEncoder(SPAN_COLUMNS);
+    for (const s of spans) enc.push(s);
+    expect(() => enc.finish(rs.slice(0, 0), ss)).toThrowError(/rows\[0\]\.resource/);
   });
 });

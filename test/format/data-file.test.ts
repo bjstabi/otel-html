@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'vitest';
-import { reviveDataJson, unwrapDataFile, wrapDataFile } from '../../src/format/data-file.js';
+import {
+  reviveDataJson,
+  unwrapDataFile,
+  wrapDataFile,
+  wrapDataFilePieces,
+} from '../../src/format/data-file.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 
 const HOSTILE = '</script><img src=x onerror=alert(1)> \u2028\u2029';
@@ -83,5 +88,15 @@ describe('data files', () => {
   test('wrapDataFile rejects values JSON cannot carry', () => {
     expect(() => wrapDataFile('k', { x: Number.NaN })).toThrowError(/finite/);
     expect(() => wrapDataFile('k', { x: () => 1 })).toThrowError(OtelHtmlError);
+  });
+
+  test('wrapDataFilePieces joins to exactly wrapDataFile of the whole payload', () => {
+    const items = [{ id: 0, s: HOSTILE }, { id: 1, n: 2n ** 70n, b: new Uint8Array([1, 2]) }, { id: 2 }];
+    const head = { metric: 3, level: 1, widthNs: 8 };
+    const pieces = [...wrapDataFilePieces('k<', head, 'series', items)];
+    expect(pieces.length).toBeGreaterThan(items.length);
+    expect(pieces.join('')).toBe(wrapDataFile('k<', { ...head, series: items }));
+    expect([...wrapDataFilePieces('k', {}, 'series', [])].join('')).toBe(wrapDataFile('k', { series: [] }));
+    expect(() => [...wrapDataFilePieces('k', head, 'series', [{ x: Number.NaN }])]).toThrow(OtelHtmlError);
   });
 });

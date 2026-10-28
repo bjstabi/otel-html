@@ -103,7 +103,7 @@ describe('layoutFlame', () => {
     expect(layoutFlame(tree, OPTS).bars[0]?.label).toBe('s · </script><img onerror=x> ');
   });
 
-  test('lays out 50k spans within the budget', () => {
+  test('@perf lays out 50k spans within the budget', () => {
     const rows = [traceRow(1, null, 0, 50_000_000)];
     for (let i = 2; i <= 50_000; i++) {
       const parent = Math.max(1, Math.floor(i / 4));

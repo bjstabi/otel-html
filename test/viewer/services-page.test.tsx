@@ -31,6 +31,7 @@ const manifest = (spans: number): Manifest => ({
   chunks: [],
   rollups: [],
   traceShards: [],
+  metricFiles: [],
   config: { viewer: { eagerBudgetBytes: 1, listCap: 100, theme: 'system' } },
 });
 

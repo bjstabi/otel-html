@@ -358,7 +358,7 @@ describe('queryLogEntries', () => {
     expect(seen).toBeLessThan(10_000);
   });
 
-  describe('perf (200k logs)', () => {
+  describe('@perf 200k logs', () => {
     const n = 200_000;
     const logs: LogRecordRecord[] = new Array<LogRecordRecord>(n);
     const bodies = Array.from({ length: 50 }, (_, k) => str(`op${k % 10} finished in step ${k}`));

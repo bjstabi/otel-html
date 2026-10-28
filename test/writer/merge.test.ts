@@ -1,6 +1,7 @@
 import { resolve } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { unwrapDataFile, wrapDataFile } from '../../src/format/data-file.js';
+import { parseExemplarFile, parseSeriesFile } from '../../src/format/metric-files.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { parseUnixNanos, toUnixNanos } from '../../src/model/ids.js';
 import { mergeReports } from '../../src/writer/merge.js';
@@ -23,10 +24,16 @@ import {
   allLogs,
   allPoints,
   allSpans,
+  counterRequest,
+  cumulativeRequest,
+  levelsOf,
   logRollupsOf,
   manifestOf,
+  metricCatalogOf,
+  readDataFile,
   spansRequest,
   traceIdOf,
+  withExemplars,
 } from './helpers.js';
 
 async function failure(p: Promise<unknown>): Promise<OtelHtmlError> {
@@ -127,6 +134,91 @@ describe('mergeReports', () => {
     await merge(w, ['a', 'b']);
     await writeReport(w, 'both', [first, second]);
     expect(logRollupsOf(w, 'out').toJSON()).toEqual(logRollupsOf(w, 'both').toJSON());
+  });
+
+  test('metric level files equal converting both inputs at once', async () => {
+    const w = createTestWriter();
+    const host = (h: string): JsonObject[] => [{ key: 'host', value: { stringValue: h } }];
+    const ex = (sec: number, v: number, n: number): JsonObject => ({
+      timeUnixNano: String(BigInt(EPOCH_NS) + BigInt(sec) * 1_000_000_000n),
+      asDouble: v,
+      traceId: traceIdOf(n),
+      filteredAttributes: [{ key: 'user', value: { stringValue: `u${n}` } }],
+    });
+    const points = (xs: [number, number][]): [number, number][] => xs;
+    const first = withExemplars(
+      counterRequest(
+        'requests',
+        points([
+          [0, 1],
+          [10, 3],
+          [2500, 9],
+        ]),
+        host('a'),
+      ),
+      1,
+      [ex(9, 0.5, 1)],
+    );
+    const second = withExemplars(
+      counterRequest(
+        'requests',
+        points([
+          [5, 2],
+          [15, 5],
+        ]),
+        host('b'),
+      ),
+      0,
+      [ex(4, 2.5, 2)],
+    );
+    await writeReport(w, 'a', [first]);
+    await writeReport(w, 'b', [second]);
+    await merge(w, ['a', 'b']);
+    await writeReport(w, 'both', [first, second]);
+    const merged = levelsOf(w, 'out', 0);
+    expect(merged.map((l) => l.level)).toEqual([0, 1]);
+    expect(merged[0]?.series.map((s) => s.id)).toEqual([0, 1]);
+    expect(merged).toEqual(levelsOf(w, 'both', 0));
+    for (const file of ['data/metrics/000000/ex.js', 'data/metrics/000000/series.js']) {
+      const parse = file.endsWith('ex.js') ? parseExemplarFile : parseSeriesFile;
+      const out = parse(readDataFile(w, 'out', file), file);
+      expect(out).toEqual(parse(readDataFile(w, 'both', file), file));
+    }
+    expect(
+      parseExemplarFile(readDataFile(w, 'out', 'data/metrics/000000/ex.js'), 'ex').exemplars,
+    ).toHaveLength(2);
+  });
+
+  test('sequential runs of one cumulative series are separate streams, not resets (spec §5.2)', async () => {
+    const w = createTestWriter();
+    // Run 1 starts at 0 s; run 2, a later process with the same series identity, starts at 100 s.
+    const run1 = cumulativeRequest('c', [
+      [10, 4, 0],
+      [20, 9, 0],
+    ]);
+    const run2 = cumulativeRequest('c', [
+      [110, 3, 100],
+      [120, 7, 100],
+    ]);
+    await writeReport(w, 'a', [run1]);
+    await writeReport(w, 'b', [run2]);
+    await merge(w, ['a', 'b']);
+    const s = levelsOf(w, 'out', 0)[0]?.series[0];
+    const deltas = (s?.t ?? []).map((t, i) => {
+      const a = s?.a[i];
+      return a?.k === 'counter' ? [t, a.delta, a.resets] : [t, Number.NaN, 0];
+    });
+    // The numbers are each run's own: run 2's first point counts in full from its start.
+    expect(deltas.map(([, d, r]) => [d, r])).toEqual([
+      [4, 0],
+      [5, 0],
+      [3, 0],
+      [4, 0],
+    ]);
+    expect(metricCatalogOf(w, 'out').entries()[0]).toMatchObject({ resets: 0, points: 4 });
+    // Within one report, the same data is a process restart and counts as one.
+    await writeReport(w, 'one', [run1, run2]);
+    expect(metricCatalogOf(w, 'one').entries()[0]).toMatchObject({ resets: 1, points: 4 });
   });
 
   test('rejects an unsupported formatVersion precisely', async () => {

@@ -1,10 +1,11 @@
 import { execFile } from 'node:child_process';
 import { createReadStream } from 'node:fs';
-import { cp, mkdir, rm, stat, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { Report } from '../src/api/index.js';
 import { scaleLogsRequest } from '../test-support/scale-logs.js';
 import {
   FIXTURE_REPORTS,
@@ -308,6 +309,59 @@ async function buildFixtureReports(): Promise<void> {
   ]);
 }
 
+const readJson = async (file: URL): Promise<{ resourceMetrics?: unknown[] }> =>
+  JSON.parse(await readFile(file, 'utf8')) as { resourceMetrics?: unknown[] };
+
+/**
+ * The `metrics` fixture split in two by collection (its `resourceMetrics` are in time order, one per resource per
+ * collection), each half converted on its own and the two reports merged: `metrics-merged`. `metrics-single` converts
+ * the fixture in one go, for comparison.
+ */
+async function buildMetricsMergeReports(): Promise<void> {
+  const fixture = new URL('../fixtures/metrics.otlp.json', import.meta.url);
+  const all = (await readJson(fixture)).resourceMetrics ?? [];
+  const inputs = new URL('metrics-inputs/', REPORTS_DIR);
+  await mkdir(inputs, { recursive: true });
+  const half = Math.ceil(all.length / 2);
+  const parts = ['first', 'last'] as const;
+  await Promise.all(
+    parts.map(async (part, i) => {
+      const file = fileURLToPath(new URL(`${part}.json`, inputs));
+      await writeFile(file, JSON.stringify({ resourceMetrics: all.slice(i * half, (i + 1) * half) }));
+      await convertTo(new URL(`metrics-${part}/`, REPORTS_DIR), [file], `metrics ${part} half`);
+    }),
+  );
+  await Promise.all([
+    cli([
+      'merge',
+      ...parts.map((part) => fileURLToPath(new URL(`metrics-${part}/`, REPORTS_DIR))),
+      '--out',
+      fileURLToPath(reportDir('metrics-merged')),
+    ]),
+    convertTo(reportDir('metrics-single'), [fileURLToPath(fixture)], 'metrics fixture'),
+  ]);
+}
+
+/**
+ * The `linked` inputs written through the library API and flushed twice (metrics split around the first flush), but
+ * never closed: the report a killed or still-running writer leaves, its metrics only in per-flush segments.
+ */
+async function buildUnfinishedReport(): Promise<void> {
+  const [traces, logs, metrics] = await Promise.all(fixtureFiles('linked').map(readJson));
+  const collections = metrics?.resourceMetrics ?? [];
+  const half = Math.ceil(collections.length / 2);
+  const report = await Report.create({
+    out: fileURLToPath(reportDir('unfinished')),
+    title: 'unfinished run',
+  });
+  await report.addSpans(traces ?? {});
+  await report.addLogs(logs ?? {});
+  await report.addMetrics({ resourceMetrics: collections.slice(0, half) });
+  await report.flush();
+  await report.addMetrics({ resourceMetrics: collections.slice(half) });
+  await report.flush();
+}
+
 async function serve(
   mounts: readonly { prefix: string; root: string }[],
 ): Promise<{ port: number; close(): Promise<void> }> {
@@ -341,8 +395,16 @@ async function serve(
 
 export default async function globalSetup(): Promise<() => Promise<void>> {
   await rm(REPORTS_DIR, { recursive: true, force: true });
-  await Promise.all([buildReport(), buildLargeReport(), buildFixtureReports(), buildScaleReports()]);
+  await Promise.all([
+    buildReport(),
+    buildLargeReport(),
+    buildFixtureReports(),
+    buildScaleReports(),
+    buildMetricsMergeReports(),
+    buildUnfinishedReport(),
+  ]);
   const dir = (u: URL): string => fileURLToPath(u).replace(/\/$/, '');
+  // `metrics-scale` is built on demand by the specs that need it (e2e/metrics-scale.ts); its mount may be empty.
   const mounted: ReportName[] = [
     'main',
     'hostile',
@@ -350,6 +412,10 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     'scale',
     'huge',
     'no-manifest',
+    'metrics-merged',
+    'metrics-single',
+    'unfinished',
+    'metrics-scale',
     ...FIXTURE_REPORTS,
   ];
   const server = await serve(
