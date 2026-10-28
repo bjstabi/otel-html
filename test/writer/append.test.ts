@@ -77,6 +77,37 @@ describe('append', () => {
     ]);
   });
 
+  describe('dashboards', () => {
+    const ops = {
+      dashboards: [
+        { id: 'ops', title: 'Ops', widgets: [{ type: 'traces' as const, x: 0, y: 0, w: 6, h: 6 }] },
+      ],
+      views: [{ id: 'v', title: 'V', page: 'traces' as const }],
+    };
+    const other = {
+      dashboards: [
+        { id: 'other', title: 'Other', widgets: [{ type: 'logs' as const, x: 0, y: 0, w: 6, h: 6 }] },
+      ],
+    };
+    test('append without config keeps them, and the default dashboard', async () => {
+      const w = createTestWriter();
+      await (await open(w, 'create', testConfig({ ...ops, viewer: { defaultDashboard: 'ops' } }))).close();
+      await (await open(w, 'append', testConfig())).close();
+      const m = manifestOf(w, OUT).config;
+      expect(m.dashboards.map((d) => d.dashboard.id)).toEqual(['ops']);
+      expect(m.views).toHaveLength(1);
+      expect(m.viewer.defaultDashboard).toBe('ops');
+    });
+    test('append with another config replaces them', async () => {
+      const w = createTestWriter();
+      await (await open(w, 'create', testConfig({ ...ops, viewer: { defaultDashboard: 'ops' } }))).close();
+      await (await open(w, 'append', testConfig(other))).close();
+      const m = manifestOf(w, OUT).config;
+      expect(m.dashboards.map((d) => d.dashboard.id)).toEqual(['other']);
+      expect(m.viewer.defaultDashboard).toBe('fusion');
+    });
+  });
+
   test('keeps the original epoch and creation time', async () => {
     const w = createTestWriter();
     await closedReportWithTwoChunks(w);

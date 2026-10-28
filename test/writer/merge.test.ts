@@ -56,6 +56,38 @@ async function writeReport(w: TestWriter, out: string, requests: readonly JsonOb
   await s.close();
 }
 
+describe('dashboards', () => {
+  const dash = (id: string) => ({
+    dashboards: [{ id, title: id, widgets: [{ type: 'traces' as const, x: 0, y: 0, w: 6, h: 6 }] }],
+  });
+  async function reportWith(w: TestWriter, out: string, id: string): Promise<void> {
+    const s = await openSession(w.deps, {
+      out,
+      config: testConfig({ ...dash(id), viewer: { defaultDashboard: id } }),
+      mode: 'create',
+    });
+    await s.add(otlp(spansRequest(1)), 'in.json');
+    await s.close();
+  }
+  test('merge without config keeps the first report dashboards and default', async () => {
+    const w = createTestWriter();
+    await reportWith(w, 'a', 'ops');
+    await reportWith(w, 'b', 'other');
+    await merge(w, ['a', 'b']);
+    const m = manifestOf(w, 'out').config;
+    expect(m.dashboards.map((d) => d.dashboard.id)).toEqual(['ops']);
+    expect(m.viewer.defaultDashboard).toBe('ops');
+  });
+  test('merge with a config uses its dashboards', async () => {
+    const w = createTestWriter();
+    await reportWith(w, 'a', 'ops');
+    await mergeReports(w.deps, ['a'], { out: 'out', config: testConfig(dash('mine')), mode: 'create' });
+    const m = manifestOf(w, 'out').config;
+    expect(m.dashboards.map((d) => d.dashboard.id)).toEqual(['mine']);
+    expect(m.viewer.defaultDashboard).toBe('fusion');
+  });
+});
+
 function merge(w: TestWriter, inputs: string[], out = 'out') {
   return mergeReports(w.deps, inputs, { out, config: testConfig(), mode: 'create' });
 }

@@ -50,6 +50,16 @@ describe('convert', () => {
     expect(await w.fs.exists('r')).toBe(false);
   });
 
+  test('a config dashboard reaches the manifest with the library API as its source', async () => {
+    const w = createTestWriter();
+    await put(w, 'in/a.json', JSON.stringify(spansRequest(1)));
+    const dashboards = [
+      { id: 'ops', title: 'Ops', widgets: [{ type: 'traces' as const, x: 0, y: 0, w: 6, h: 6 }] },
+    ];
+    await convert({ input: 'in/a.json', out: 'r', config: { dashboards } }, w.deps);
+    expect(manifestOf(w, 'r').config.dashboards[0]?.source).toBe('library API');
+  });
+
   test('a logs-only file succeeds with no spans', async () => {
     const w = createTestWriter();
     await put(w, 'in/logs.otlp.json', JSON.stringify(logsRequest([logRecord(), logRecord()])));

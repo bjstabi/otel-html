@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import type { ResolvedConfig } from '../config/schema.js';
+import type { ResolvedConfig, ResolvedDashboard } from '../config/schema.js';
+import { DashboardSchema, type View, ViewSchema } from '../dashboards/schema.js';
 import { METRIC_FILE_PATH } from './metric-files.js';
 import { chunkPath, SIGNALS, type Signal } from './paths.js';
 import { parseWith } from './validate.js';
@@ -30,7 +31,7 @@ export interface Manifest {
   traceShards: string[];
   /** Series files under `data/metrics/` (series, segments, levels, exemplars); absent before M3. */
   metricFiles: string[];
-  config: { viewer: Omit<ResolvedConfig['viewer'], 'defaultDashboard' | 'home'> };
+  config: { viewer: ResolvedConfig['viewer']; dashboards: ResolvedDashboard[]; views: View[] };
 }
 
 const nonNegInt = z.number().int().nonnegative();
@@ -75,10 +76,22 @@ export const ManifestSchema: z.ZodType<Manifest> = z
         eagerBudgetBytes: z.number().int().positive(),
         listCap: z.number().int().positive(),
         theme: z.enum(['system', 'light', 'dark']),
+        defaultDashboard: z.string().default('fusion'),
+        home: z.enum(['traces', 'logs', 'metrics', 'dashboards']).default('traces'),
       }),
+      dashboards: z.array(z.strictObject({ source: z.string(), dashboard: DashboardSchema })).default([]),
+      views: z.array(ViewSchema).default([]),
     }),
   })
   .superRefine((m, ctx) => {
+    const def = m.config.viewer.defaultDashboard;
+    if (def !== 'fusion' && !m.config.dashboards.some((d) => d.dashboard.id === def)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['config', 'viewer', 'defaultDashboard'],
+        message: 'the id of a dashboard (fusion or one in config.dashboards)',
+      });
+    }
     m.chunks.forEach((c, i) => {
       const expected = chunkPath(c.signal, c.n);
       if (c.path !== expected) {

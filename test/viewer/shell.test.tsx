@@ -37,7 +37,17 @@ const manifest: Manifest = {
   rollups: [],
   traceShards: [],
   metricFiles: [],
-  config: { viewer: { eagerBudgetBytes: 75_000_000, listCap: 10_000, theme: 'system' } },
+  config: {
+    viewer: {
+      eagerBudgetBytes: 75_000_000,
+      listCap: 10_000,
+      theme: 'system',
+      defaultDashboard: 'fusion',
+      home: 'traces',
+    },
+    dashboards: [],
+    views: [],
+  },
 };
 
 function unused(): never {

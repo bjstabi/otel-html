@@ -197,5 +197,6 @@ describe('cli', () => {
     await put(w, 'in/a.json', JSON.stringify(spansRequest(1)));
     const r = await run(w, ['convert', 'in/a.json', '-o', 'out', '--config', '/work/custom.yaml']);
     expect(r.code).toBe(0);
+    expect(manifestOf(w, 'out').config.dashboards[0]?.source).toBe('custom.yaml');
   });
 });

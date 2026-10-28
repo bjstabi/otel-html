@@ -53,7 +53,17 @@ const manifest: Manifest = {
   rollups: [],
   traceShards: [],
   metricFiles: [],
-  config: { viewer: { eagerBudgetBytes: 1, listCap: 100, theme: 'system' } },
+  config: {
+    viewer: {
+      eagerBudgetBytes: 1,
+      listCap: 100,
+      theme: 'system',
+      defaultDashboard: 'fusion',
+      home: 'traces',
+    },
+    dashboards: [],
+    views: [],
+  },
 };
 
 const okDetail = (): TraceDetail =>

@@ -121,6 +121,21 @@ describe('create -> add -> close', () => {
     expect(manifestOf(w, OUT).title).toBe('</title><script>alert(1)</script>');
   });
 
+  test('dashboards, views and the viewer keys reach the manifest', async () => {
+    const w = createTestWriter();
+    const cfg = testConfig({
+      dashboards: [{ id: 'ops', title: 'Ops', widgets: [{ type: 'traces', x: 0, y: 0, w: 6, h: 6 }] }],
+      viewer: { defaultDashboard: 'ops', home: 'dashboards' },
+    });
+    const s = await open(w, cfg);
+    await s.close();
+    const m = manifestOf(w, OUT);
+    expect(m.config.dashboards[0]?.source).toBe('config file');
+    expect(m.config.dashboards[0]?.dashboard.id).toBe('ops');
+    expect(m.config.viewer.defaultDashboard).toBe('ops');
+    expect(m.config.viewer.home).toBe('dashboards');
+  });
+
   test('empty input is a valid complete report', async () => {
     const w = createTestWriter();
     const s = await open(w);

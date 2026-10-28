@@ -460,7 +460,7 @@ describe('windowed logs', () => {
   test('an unfiltered query returns the head of the run with the rollup aggregates and the manifest total', async () => {
     const capped: Manifest = {
       ...rep.manifest,
-      config: { viewer: { ...rep.manifest.config.viewer, listCap: 4 } },
+      config: { ...rep.manifest.config, viewer: { ...rep.manifest.config.viewer, listCap: 4 } },
     };
     const loader = createScriptedLoader(rep.files);
     const ds = await createDataSource(loader, capped, 1);
@@ -477,7 +477,7 @@ describe('windowed logs', () => {
   test('above the cap, unfiltered time desc lists the newest logs, scanning chunks newest first', async () => {
     const capped: Manifest = {
       ...rep.manifest,
-      config: { viewer: { ...rep.manifest.config.viewer, listCap: 4 } },
+      config: { ...rep.manifest.config, viewer: { ...rep.manifest.config.viewer, listCap: 4 } },
     };
     const desc = query({ sort: { column: 'time', dir: 'desc' }, limit: 4 });
     const exact = asLogs(await (await open(SMALL)).ds.queryLogs(desc));

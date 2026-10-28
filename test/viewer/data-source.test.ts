@@ -209,7 +209,10 @@ describe('windowed strategy', () => {
   test('without condition, text or window it returns the head of the run and trusts the manifest total', async () => {
     const small: Fixture = {
       files: six.files,
-      manifest: { ...six.manifest, config: { viewer: { ...six.manifest.config.viewer, listCap: 4 } } },
+      manifest: {
+        ...six.manifest,
+        config: { ...six.manifest.config, viewer: { ...six.manifest.config.viewer, listCap: 4 } },
+      },
     };
     const loader = createScriptedLoader(small.files);
     const ds = await createDataSource(loader, small.manifest, 1);
@@ -347,7 +350,10 @@ describe('windowed traces mode', () => {
   });
 
   test('the list cap counts traces, not matched spans, and limit counts traces', async () => {
-    const capped = { ...six.manifest, config: { viewer: { ...six.manifest.config.viewer, listCap: 2 } } };
+    const capped = {
+      ...six.manifest,
+      config: { ...six.manifest.config, viewer: { ...six.manifest.config.viewer, listCap: 2 } },
+    };
     const loader = createScriptedLoader(six.files);
     const ds = await createDataSource(loader, capped, 1);
     loader.reset();

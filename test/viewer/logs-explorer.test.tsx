@@ -58,7 +58,17 @@ const manifest = (logs: number): Manifest => ({
   rollups: [],
   traceShards: [],
   metricFiles: [],
-  config: { viewer: { eagerBudgetBytes: 1, listCap: 100, theme: 'system' } },
+  config: {
+    viewer: {
+      eagerBudgetBytes: 1,
+      listCap: 100,
+      theme: 'system',
+      defaultDashboard: 'fusion',
+      home: 'traces',
+    },
+    dashboards: [],
+    views: [],
+  },
 });
 
 /** Real log rows: OTLP JSON through `normalizeLogs`, so the export can be read back the same way. */
