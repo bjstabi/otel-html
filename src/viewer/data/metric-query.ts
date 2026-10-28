@@ -1,3 +1,4 @@
+import { LEVEL_FACTOR } from '../../format/metric-files.js';
 import { anyValueToDisplay } from '../../model/anyvalue.js';
 import { assertNever, OtelHtmlError } from '../../model/errors.js';
 import type { MetricPointRecord, ResourceRecord } from '../../model/records.js';
@@ -132,13 +133,63 @@ export function defaultShow(m: LoadedMetric): string {
 const bucketsOver = (w: TimeWindow, widthNs: number): number =>
   Math.floor(w.end / widthNs) - Math.floor(w.start / widthNs) + 1;
 
-/** The finest level with at most `maxPoints` buckets over the window, else the coarsest level present. */
+/** Series and gaps per series sampled for the point interval: enough for a stable median, cheap at any size. */
+const INTERVAL_SAMPLE_SERIES = 64;
+const INTERVAL_SAMPLE_GAPS = 32;
+/** Fewer sampled gaps than this leave the level pick unconstrained. */
+const INTERVAL_MIN_GAPS = 8;
+
+/**
+ * The median time between consecutive points of the series a query charts (those its `where` keeps), in ns, from
+ * the finest level; 0 when fewer than `INTERVAL_MIN_GAPS` gaps are found. A sample: up to `INTERVAL_SAMPLE_SERIES` series spread over the
+ * matching ones, the first `INTERVAL_SAMPLE_GAPS` gaps of each.
+ */
+export function pointIntervalNs(m: LoadedMetric, where: string | null): number {
+  const finest = [...m.levels].sort((a, b) => a.widthNs - b.widthNs)[0];
+  if (finest === undefined) return 0;
+  const sel = compileSelector(where, []);
+  const matching = m.series.filter((s) => sel.test === null || s.def.other || sel.test(targetOf(m.entry, s)));
+  const step = Math.max(1, Math.floor(matching.length / INTERVAL_SAMPLE_SERIES));
+  const gaps: number[] = [];
+  for (
+    let i = 0;
+    i < matching.length && gaps.length < INTERVAL_SAMPLE_SERIES * INTERVAL_SAMPLE_GAPS;
+    i += step
+  ) {
+    const id = matching[i]?.def.id;
+    const t = id === undefined ? undefined : finest.series.get(id)?.t;
+    if (t === undefined) continue;
+    for (let j = 1; j < t.length && j <= INTERVAL_SAMPLE_GAPS; j++) gaps.push((t[j] ?? 0) - (t[j - 1] ?? 0));
+  }
+  // Too few gaps say nothing about a scrape interval (two points around one outage would read as a slow scrape).
+  if (gaps.length < INTERVAL_MIN_GAPS) return 0;
+  gaps.sort((a, b) => a - b);
+  // The lower median: an even sample never rounds up to a gap.
+  return (gaps[Math.floor((gaps.length - 1) / 2)] ?? 0) * finest.widthNs;
+}
+
+/**
+ * The levels a chart may use: none finer than the points' interval (spec §5.3), since buckets narrower than the
+ * scrape interval leave every point between empty buckets, which draws no line. All levels when none is that wide.
+ */
+function usableLevels(levels: readonly LevelData[], minWidthNs: number): LevelData[] {
+  const byWidth = [...levels].sort((a, b) => a.widthNs - b.widthNs);
+  const wide = byWidth.filter((l) => l.widthNs >= minWidthNs);
+  const coarsest = byWidth.at(-1);
+  return wide.length > 0 ? wide : coarsest === undefined ? [] : [coarsest];
+}
+
+/**
+ * The finest level with at most `maxPoints` buckets over the window, else the coarsest level present; levels finer
+ * than `minWidthNs` (the points' interval, `pointIntervalNs`) are not used.
+ */
 export function pickLevel(
   levels: readonly LevelData[],
   window: TimeWindow,
   maxPoints: number,
+  minWidthNs = 0,
 ): LevelData | null {
-  const byWidth = [...levels].sort((a, b) => a.widthNs - b.widthNs);
+  const byWidth = usableLevels(levels, minWidthNs);
   return (
     byWidth.find((l) => bucketsOver(window, l.widthNs) <= maxPoints) ?? byWidth[byWidth.length - 1] ?? null
   );
@@ -146,10 +197,10 @@ export function pickLevel(
 
 /**
  * The coarsest level no wider than `widthNs` (so `coarsenedTo` can merge it up to exactly that width), else the
- * finest level present (formula re-runs).
+ * finest level present (formula re-runs); levels finer than `minWidthNs` are not used.
  */
-function levelAtWidth(levels: readonly LevelData[], widthNs: number): LevelData | null {
-  const byWidth = [...levels].sort((a, b) => a.widthNs - b.widthNs);
+function levelAtWidth(levels: readonly LevelData[], widthNs: number, minWidthNs: number): LevelData | null {
+  const byWidth = usableLevels(levels, minWidthNs);
   return byWidth.filter((l) => l.widthNs <= widthNs).at(-1) ?? byWidth[0] ?? null;
 }
 
@@ -341,7 +392,11 @@ function topQuantile(members: readonly Member[]): number | null {
 // The engine
 // ---------------------------------------------------------------------------------------------
 
-/** Runs `q` at the level picked for `maxPoints` buckets over the window (finest level that fits). */
+/**
+ * Runs `q` at the level picked for `maxPoints` buckets over the window: the finest level that fits, and never finer
+ * than its points' interval. A report too short to have a level that wide (levels stop at the one covering the run)
+ * has its coarsest level merged up the ladder (×8 at a time) to the first width at least that interval.
+ */
 export function runMetricQuery(
   m: LoadedMetric,
   q: MetricQuery,
@@ -349,7 +404,16 @@ export function runMetricQuery(
   maxPoints: number,
   signal?: AbortSignal,
 ): MetricQueryResult {
-  return runAtLevel(m, q, window, pickLevel(m.levels, window, maxPoints), signal);
+  const interval = pointIntervalNs(m, q.where);
+  const level = pickLevel(m.levels, window, maxPoints, interval);
+  return runAtLevel(m, q, window, level === null ? null : atLeastWidth(level, interval), signal);
+}
+
+/** `level`, or it merged to the first ladder width (`LEVEL_FACTOR`× steps) of at least `minWidthNs`. */
+function atLeastWidth(level: LevelData, minWidthNs: number): LevelData {
+  let widthNs = level.widthNs;
+  while (widthNs < minWidthNs) widthNs *= LEVEL_FACTOR;
+  return coarsenedTo(level, widthNs);
 }
 
 /** Runs `q` at a given bucket width, for formulas whose operands must share one (`formulaWidth`). */
@@ -360,7 +424,7 @@ export function runMetricQueryAtWidth(
   widthNs: number,
   signal?: AbortSignal,
 ): MetricQueryResult {
-  const level = levelAtWidth(m.levels, widthNs);
+  const level = levelAtWidth(m.levels, widthNs, pointIntervalNs(m, q.where));
   return runAtLevel(m, q, window, level === null ? null : coarsenedTo(level, widthNs), signal);
 }
 

@@ -114,6 +114,23 @@ function logSafe(scale: 'linear' | 'log', v: number | null): number | null {
 }
 
 const GRID = { left: 56, right: 12, bottom: 24 } as const;
+/** Diameter in px of the dot drawn for a point with no neighbour to join (wider than the 2px line). */
+const ISOLATED_DOT_PX = 6;
+
+type LinePoint = (number | null)[];
+
+/**
+ * A line joins a point only to non-null neighbours, so a point between two gaps (or a gap and the series end) would
+ * draw nothing: it gets a dot. Every other point stays a plain `[time, value]`.
+ */
+function withIsolatedDots(
+  data: readonly LinePoint[],
+): (LinePoint | { value: LinePoint; symbol: string; symbolSize: number })[] {
+  const has = (i: number): boolean => data[i]?.[1] != null;
+  return data.map((p, i) =>
+    has(i) && !has(i - 1) && !has(i + 1) ? { value: p, symbol: 'circle', symbolSize: ISOLATED_DOT_PX } : p,
+  );
+}
 
 /** Pure ECharts option for a metric card. Hostile strings only ever reach the canvas or escaped tooltip HTML. */
 export function buildMetricChartOption(input: MetricChartInput): MetricChartOptionResult {
@@ -157,8 +174,13 @@ export function buildMetricChartOption(input: MetricChartInput): MetricChartOpti
     return {
       ...common,
       ...mark,
+      data: withIsolatedDots(data),
       type: 'line' as const,
-      showSymbol: false,
+      // Only the dots of isolated points are drawn (per item); the line itself has no symbols, and none react to the
+      // pointer, so a click on the plot is a click on a bucket or an exemplar ring.
+      showSymbol: true,
+      symbol: 'none',
+      silent: true,
       connectNulls: false,
       lineStyle: { width: 2, color },
       ...(display === 'area' ? { stack: 'total', areaStyle: { color, opacity: 0.25 } } : {}),

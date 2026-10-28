@@ -2,7 +2,7 @@ import { readdir } from 'node:fs/promises';
 import { sep } from 'node:path';
 import type { Page } from '@playwright/test';
 import { LINKED_SPAN, LINKED_TRACE, METRIC_HIST, reportDir } from './fixture.js';
-import { exemplarRings, menuAt, watchProblems } from './metric-chart.js';
+import { exemplarRings, LINE_MIN_PX, lineRunPx, menuAt, watchProblems } from './metric-chart.js';
 import { expect, test } from './test.js';
 
 /** In the Explorer: query `a` charts the p99 of `METRIC_HIST` by `http.route`, exemplars on. */
@@ -37,6 +37,7 @@ test('g m opens the Explorer; p99 by http.route draws 3 series; an exemplar open
   await p99ByRoute(page);
   const chart = p99Chart(page);
   await expect(chart).toBeVisible();
+  await expect.poll(() => lineRunPx(chart)).toBeGreaterThan(LINE_MIN_PX);
   const json = await page.evaluate(() => decodeURIComponent(location.hash));
   expect(json).toContain('"show":"p99"');
   expect(json).toContain('"by":["attributes[\\"http.route\\"]"]');

@@ -13,6 +13,7 @@ import {
   kindOf,
   type MetricQuery,
   pickLevel,
+  pointIntervalNs,
   resolveMetric,
   runMetricQuery,
   runMetricQueryAtWidth,
@@ -372,6 +373,120 @@ describe('runMetricQuery', () => {
     expect(pickLevel(levels, { start: 0, end: 3600 * S }, 2)?.level).toBe(3);
     expect(pickLevel(levels.slice(2), { start: 0, end: 10 * S }, 600)?.level).toBe(2);
     expect(pickLevel([], { start: 0, end: 10 * S }, 600)).toBeNull();
+  });
+
+  describe("level pick never goes finer than the points' interval", () => {
+    const L0 = 1.024e9;
+    /** A gauge (value 1) with points every `everyS` seconds over an hour, at levels 0-3 of the 1.024 s × 8^k ladder. */
+    const ladderSeries = (everyS: number): Map<number, number[]> => {
+      const t0: number[] = [];
+      for (let s = 0; s < 3600; s += everyS) t0.push(Math.floor((s * S) / L0));
+      return new Map([0, 1, 2, 3].map((k) => [k, [...new Set(t0.map((t) => Math.floor(t / 8 ** k)))]]));
+    };
+    const ladder = (specs: { everyS: number; route: string }[]): LoadedMetric => {
+      const base = metric(
+        entry({ type: 'gauge' }),
+        specs.map((x) => ({ attributes: { route: x.route }, buckets: [] })),
+      );
+      const perSeries = specs.map((x) => ladderSeries(x.everyS));
+      const levels: LevelData[] = [0, 1, 2, 3].map((level) => ({
+        level,
+        widthNs: L0 * 8 ** level,
+        series: new Map(
+          perSeries.map((byLevel, id) => {
+            const t = byLevel.get(level) ?? [];
+            return [id, { t, a: t.map(() => gauge(1)) }];
+          }),
+        ),
+      }));
+      return { ...base, levels };
+    };
+    const hour = { start: 0, end: 3600 * S };
+
+    test('10 s points: the median interval is 10 level-0 buckets (10.24 s)', () => {
+      expect(pointIntervalNs(ladder([{ everyS: 10, route: '/a' }]), null)).toBe(10 * L0);
+    });
+
+    test('10 s points over 1 h at 1100 points: level 2 (65.536 s), not level 1 (8.192 s, finer than 10 s)', () => {
+      const levels = ladder([{ everyS: 10, route: '/a' }]).levels;
+      expect(pickLevel(levels, hour, 1100)?.level).toBe(1);
+      expect(pickLevel(levels, hour, 1100, 10 * L0)?.level).toBe(2);
+      // Too wide for every level: the coarsest, as before.
+      expect(pickLevel(levels, hour, 1100, 1e15)?.level).toBe(3);
+    });
+
+    test('runMetricQuery charts a line: consecutive buckets all hold a value', () => {
+      const r = runMetricQuery(ladder([{ everyS: 10, route: '/a' }]), query({ show: 'avg' }), hour, 1100);
+      expect(r.widthNs).toBe(L0 * 64);
+      const values = r.series[0]?.points.map((p) => p[1]) ?? [];
+      expect(values.length).toBeGreaterThan(50);
+      expect(values.every((v) => v === 1)).toBe(true);
+    });
+
+    test('a run too short for a level that wide merges its coarsest level up the ladder (100 s of 10 s points)', () => {
+      const short = ladder([{ everyS: 10, route: '/a' }]);
+      const levels = short.levels.slice(0, 1).map((l) => ({
+        ...l,
+        series: new Map(
+          [...l.series].map(([id, x]) => [
+            id,
+            { t: x.t.filter((t) => t * L0 < 100 * S), a: x.a.filter((_, i) => (x.t[i] ?? 0) * L0 < 100 * S) },
+          ]),
+        ),
+      }));
+      const r = runMetricQuery(
+        { ...short, levels },
+        query({ show: 'avg' }),
+        { start: 0, end: 100 * S },
+        1100,
+      );
+      expect(r.widthNs).toBe(L0 * 64);
+      expect(r.series[0]?.points).toEqual([
+        [0, 1],
+        [L0 * 64, 1],
+      ]);
+    });
+
+    test('a few points say nothing about the interval: under 8 gaps the pick is unconstrained', () => {
+      const m = metric(entry({ type: 'gauge' }), [
+        { buckets: [0, 30, 60, 90, 120, 150, 180, 210].map((t): [number, BucketAgg] => [t, gauge(1)]) },
+      ]);
+      expect(pointIntervalNs(m, null)).toBe(0);
+      const nine = metric(entry({ type: 'gauge' }), [
+        { buckets: [0, 3, 6, 9, 12, 15, 18, 21, 24].map((t): [number, BucketAgg] => [t, gauge(1)]) },
+      ]);
+      expect(pointIntervalNs(nine, null)).toBe(30 * S);
+    });
+
+    test('the interval comes from the series the where keeps', () => {
+      const m = ladder([
+        { everyS: 1, route: '/dense' },
+        { everyS: 10, route: '/sparse' },
+      ]);
+      expect(pointIntervalNs(m, 'attributes["route"] == "/sparse"')).toBe(10 * L0);
+      expect(pointIntervalNs(m, 'attributes["route"] == "/dense"')).toBe(L0);
+      const sparse = runMetricQuery(
+        m,
+        query({ show: 'avg', where: 'attributes["route"] == "/sparse"' }),
+        hour,
+        1100,
+      );
+      const dense = runMetricQuery(
+        m,
+        query({ show: 'avg', where: 'attributes["route"] == "/dense"' }),
+        hour,
+        1100,
+      );
+      expect(sparse.widthNs).toBe(L0 * 64);
+      expect(dense.widthNs).toBe(L0 * 8);
+    });
+
+    test('a formula re-run at a width keeps the floor too', () => {
+      const m = ladder([{ everyS: 10, route: '/a' }]);
+      // 8.192 s is finer than the 10 s points: the re-run uses level 2 (65.536 s), the finest usable level.
+      expect(runMetricQueryAtWidth(m, query({ show: 'avg' }), hour, L0 * 8).widthNs).toBe(L0 * 64);
+      expect(runMetricQueryAtWidth(m, query({ show: 'avg' }), hour, L0 * 64).widthNs).toBe(L0 * 64);
+    });
   });
 
   test('folded series plus an attribute where give the partial note', () => {

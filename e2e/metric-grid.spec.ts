@@ -1,6 +1,6 @@
 import type { Locator } from '@playwright/test';
 import { LINKED_SPAN, LINKED_TRACE } from './fixture.js';
-import { watchProblems } from './metric-chart.js';
+import { LINE_MIN_PX, lineRunPx, watchProblems } from './metric-chart.js';
 import { expect, test } from './test.js';
 
 /** The grid's first (expanded) group draws its chart cards, each with one or more series, once scrolled into view. */
@@ -11,6 +11,8 @@ async function expectCharts(grid: Locator): Promise<void> {
   const charts = grid.getByRole('img', { name: /: [1-9]\d* series$/ });
   await expect(charts.first()).toBeVisible();
   expect(await charts.count()).toBeGreaterThan(0);
+  // A line, not just a legend: the points sit in consecutive buckets.
+  await expect.poll(() => lineRunPx(charts.first())).toBeGreaterThan(LINE_MIN_PX);
   await expect(grid.getByRole('alert')).toHaveCount(0);
 }
 

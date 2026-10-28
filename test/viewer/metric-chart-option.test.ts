@@ -13,6 +13,9 @@ interface Opt {
     name?: string;
     stack?: string;
     lineStyle?: { width: number };
+    showSymbol?: boolean;
+    symbol?: string;
+    silent?: boolean;
     data: unknown[];
     markLine?: { data: { xAxis: number }[] };
     itemStyle?: { borderColor?: string };
@@ -20,6 +23,10 @@ interface Opt {
 }
 
 const S = 1e9;
+
+/** A line item is `[time, value]`, or `{ value: [time, value], symbol }` when it is drawn as a dot. */
+const pointOf = (p: unknown): (number | null)[] =>
+  (Array.isArray(p) ? p : (p as { value: (number | null)[] }).value) as (number | null)[];
 
 function series(
   key: string,
@@ -91,8 +98,29 @@ describe('buildMetricChartOption', () => {
   test('log scale uses a log axis and turns non-positive values into null', () => {
     const o = build({ results: [result({ series: [series('a', [0, 5, -1])] })], scale: 'log' });
     expect(o.yAxis.type).toBe('log');
-    const data = (o.series[0]?.data ?? []) as [number, number | null][];
-    expect(data.map((p) => p[1])).toEqual([null, 5, null]);
+    expect((o.series[0]?.data ?? []).map((p) => pointOf(p)[1])).toEqual([null, 5, null]);
+  });
+
+  test('a line point with no non-null neighbour gets a dot; joined points and bars do not', () => {
+    const o = build({ results: [result({ series: [series('a', [1, null, 2, 3, null, 4])] })] });
+    const line = o.series[0];
+    expect(line).toMatchObject({ type: 'line', showSymbol: true, symbol: 'none', silent: true });
+    expect(line?.lineStyle?.width).toBe(2);
+    const dotted = (line?.data ?? []).map((p) =>
+      Array.isArray(p) ? null : (p as { symbol: string }).symbol,
+    );
+    // 1 (series start, gap after) and 4 (gap before, series end) are isolated; 2-3 join; gaps stay null.
+    expect(dotted).toEqual(['circle', null, null, null, null, 'circle']);
+    expect((line?.data ?? []).map((p) => pointOf(p)[1])).toEqual([1, null, 2, 3, null, 4]);
+    expect(build({ results: [result({ series: [series('a', [7])] })] }).series[0]?.data).toEqual([
+      { value: [0, 7], symbol: 'circle', symbolSize: 6 },
+    ]);
+    const bars = build({ results: [result({ series: [series('a', [1, null, 2])] })], display: 'bars' });
+    expect(bars.series[0]?.data).toEqual([
+      [0, 1],
+      [10 * S, null],
+      [20 * S, 2],
+    ]);
   });
 
   test('the x range follows the window, not the data', () => {

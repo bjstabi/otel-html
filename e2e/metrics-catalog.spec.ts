@@ -1,5 +1,5 @@
 import { METRIC_HIST, METRICS_COUNT } from './fixture.js';
-import { watchProblems } from './metric-chart.js';
+import { LINE_MIN_PX, lineRunPx, watchProblems } from './metric-chart.js';
 import { expect, test } from './test.js';
 
 test('the Catalog lists every metric, filters by text, and a row click opens it in the Explorer', async ({
@@ -27,8 +27,9 @@ test('the Catalog lists every metric, filters by text, and a row click opens it 
   await expect(page.getByRole('button', { name: 'Metric of a' })).toContainText(METRIC_HIST);
   // The kind's default show: a histogram's p95.
   await expect(page.getByRole('combobox', { name: 'Show of a' })).toHaveValue('p95');
-  await expect(
-    page.getByRole('img', { name: new RegExp(`^${METRIC_HIST} · p95: [1-9]\\d* series$`) }),
-  ).toBeVisible();
+  const chart = page.getByRole('img', { name: new RegExp(`^${METRIC_HIST} · p95: [1-9]\\d* series$`) });
+  await expect(chart).toBeVisible();
+  // A line, not just a legend: the points sit in consecutive buckets.
+  await expect.poll(() => lineRunPx(chart)).toBeGreaterThan(LINE_MIN_PX);
   expect(problems).toEqual([]);
 });

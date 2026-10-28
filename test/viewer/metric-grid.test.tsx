@@ -75,12 +75,16 @@ async function metricLookupSettled(): Promise<void> {
   });
 }
 
+/** A line item is `[time, value]`, or `{ value: [time, value] }` for an isolated point drawn as a dot. */
+type LineItem = [number, number | null] | { value: [number, number | null] };
+
 function lineValues(option: unknown): number[] {
-  const series = (option as { series?: { type?: string; data?: [number, number | null][] }[] }).series ?? [];
+  const series = (option as { series?: { type?: string; data?: LineItem[] }[] }).series ?? [];
   return series
     .filter((x) => x.type === 'line')
     .flatMap((x) => x.data ?? [])
-    .flatMap((p) => (p[1] === null ? [] : [p[1]]));
+    .map((p) => (Array.isArray(p) ? p : p.value)[1])
+    .flatMap((v) => (v === null ? [] : [v]));
 }
 
 interface ScatterItem {
