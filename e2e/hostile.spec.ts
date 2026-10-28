@@ -1,5 +1,6 @@
-import { HOSTILE_ROOT_SPAN, HOSTILE_TRACE_ID } from './fixture.js';
-import { expect, hostileTest as test } from './test.js';
+import { HOSTILE_METRIC_NAME, HOSTILE_ROOT_SPAN, HOSTILE_TRACE_ID } from './fixture.js';
+import { watchProblems } from './metric-chart.js';
+import { expect, test as linkedTest, hostileTest as test } from './test.js';
 
 declare global {
   interface Window {
@@ -56,3 +57,28 @@ test('hostile content renders as text: explorer, panel and span section', async 
   expect(await page.evaluate(() => window.__pwned)).toBeUndefined();
   expect(problems).toEqual([]);
 });
+
+linkedTest(
+  'a hostile metric name renders as text: Catalog, Explorer picker and chart card',
+  async ({ page, reportUrl }) => {
+    const problems = watchProblems(page);
+    await page.goto(`${reportUrl('linked')}/index.html#/metrics/catalog`);
+    await page.getByRole('searchbox', { name: 'Filter metrics' }).fill('</script>');
+    const rows = page.getByRole('grid', { name: 'Results' }).getByRole('row');
+    await expect(rows).toHaveCount(2);
+    await expect(rows.nth(1)).toContainText(HOSTILE_METRIC_NAME);
+
+    await rows.nth(1).click();
+    await expect(page.getByRole('button', { name: 'Metric of a' })).toContainText(HOSTILE_METRIC_NAME);
+    // A gauge: the card is titled with its default show, avg.
+    const card = page.getByRole('region', { name: `${HOSTILE_METRIC_NAME} · avg` });
+    await expect(card.getByRole('heading')).toContainText(HOSTILE_METRIC_NAME);
+    await expect(card.getByRole('img', { name: /: [1-9]\d* series$/ })).toBeVisible();
+    // Hovering the chart shows its HTML tooltip (the one place chart text reaches the DOM).
+    await card.getByRole('img').hover();
+
+    expect(await page.locator('img[src="x"]').count()).toBe(0);
+    expect(await page.evaluate(() => window.__pwned)).toBeUndefined();
+    expect(problems).toEqual([]);
+  },
+);

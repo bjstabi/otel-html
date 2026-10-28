@@ -61,12 +61,14 @@ test('trace panel: open from a row, j moves to the next trace, Esc closes and re
   const viewport = page.viewportSize();
   expect(box !== null && viewport !== null && box.x > 200).toBe(true);
 
-  // The tabs: flame graph first, Errors present because spans errored.
+  // The tabs: flame graph first, Metrics because the trace's resources report the `requests` metric, Errors present
+  // because spans errored.
   await expect(panel.getByRole('tab')).toHaveText([
     'Flame graph',
     'Waterfall',
     'Span list',
     'Services',
+    'Metrics',
     'Errors',
   ]);
   await expect(panel.getByRole('img', { name: /^Flame graph of 3 spans/ })).toBeVisible();

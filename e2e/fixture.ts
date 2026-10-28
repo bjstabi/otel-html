@@ -33,11 +33,34 @@ const FIXTURE_FILES: Partial<Record<FixtureReport, readonly string[]>> = {
   /** Traces and logs together: what `mise run demo` converts and CI uploads as the sample report. */
   sample: ['small', 'linked-traces', 'linked-logs'],
 };
-/** `merged` is `otel-html merge` of `small` and `orphans`; `scale` and `huge` come from one generated 100k-span input. */
-export type ReportName = 'main' | 'hostile' | FixtureReport | 'merged' | 'scale' | 'huge' | 'no-manifest';
+/**
+ * `merged` is `otel-html merge` of `small` and `orphans`; `scale` and `huge` come from one generated 100k-span input.
+ * `metrics-merged` merges two reports of the `metrics` fixture's first and last five collections, `metrics-single`
+ * converts the fixture at once. `unfinished` holds the `linked` inputs, flushed but never closed. `metrics-scale` is
+ * the metrics scale report (`e2e/metrics-scale.ts`), kept outside `REPORTS_DIR` between runs.
+ */
+export type ReportName =
+  | 'main'
+  | 'hostile'
+  | FixtureReport
+  | 'merged'
+  | 'scale'
+  | 'huge'
+  | 'no-manifest'
+  | 'metrics-merged'
+  | 'metrics-single'
+  | 'unfinished'
+  | 'metrics-scale';
+
+/** The metrics scale report's folder: generating it takes minutes, so it outlives `REPORTS_DIR`'s rebuilds. */
+export const METRICS_SCALE_DIR: URL = new URL('./.cache/metrics-scale/', import.meta.url);
+/** The metrics scale workload: 200 metrics × 1,000 series × 360 points (1 h at a 10 s interval). */
+export const SCALE_METRICS = 200;
+export const SCALE_METRIC_SERIES = 1_000;
+export const SCALE_METRIC_POINTS = 360;
 
 export function reportDir(name: ReportName): URL {
-  return new URL(`${name}/`, REPORTS_DIR);
+  return name === 'metrics-scale' ? METRICS_SCALE_DIR : new URL(`${name}/`, REPORTS_DIR);
 }
 
 /** The committed OTLP/JSON files a fixture report is built from. */

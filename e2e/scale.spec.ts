@@ -2,15 +2,19 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { Page } from '@playwright/test';
 import { LOG_STEP_NS } from '../test-support/scale-logs.js';
+import { scaleMetricName } from '../test-support/scale-metrics.js';
 import {
   perfFactor,
   reportDir,
   SCALE_LOGS,
+  SCALE_METRIC_SERIES,
+  SCALE_METRICS,
   SCALE_SERVICES,
   SCALE_SPAN_COUNT,
   SCALE_SPANS_PER_TRACE,
   SCALE_TRACES,
 } from './fixture.js';
+import { ensureMetricsScaleReport } from './metrics-scale.js';
 import { expect, test } from './test.js';
 
 /** Fixed budgets; `OTEL_HTML_PERF_FACTOR` scales them for slow machines, the constants are never loosened. */
@@ -353,4 +357,105 @@ test("1M logs: a trace Logs tab loads only that trace's log chunks", { tag: '@pe
   );
   expect([...loaded].sort()).toEqual([...(entry?.logChunks ?? [])].sort());
   expect(loaded.size).toBeLessThan(allLogChunks.length);
+});
+
+/** Metrics targets (spec §7): the Explorer draws its first chart within 2 s, the Catalog opens within 1 s. */
+const METRICS_EXPLORER_BUDGET_MS = 2000;
+const METRICS_CATALOG_BUDGET_MS = 1000;
+/** Generating the metrics scale report the first time takes about 15 minutes; later runs reuse it. */
+const METRICS_SCALE_SETUP_MS = 30 * 60 * 1000;
+
+/**
+ * Median milliseconds from navigation start to the frame after an element matching `selector` (and, when given,
+ * whose `aria-label` matches `label`) appears, over `LOAD_SAMPLES` loads after an untimed first one.
+ */
+async function paintedMs(page: Page, url: string, selector: string, label: string | null): Promise<number[]> {
+  await page.addInitScript(
+    ({ sel, pattern }) => {
+      const w = window as { __OH_PAINTED__?: number };
+      const re = pattern === null ? null : new RegExp(pattern);
+      const mo = new MutationObserver(() => {
+        const hit = [...document.querySelectorAll(sel)].some(
+          (el) => re === null || re.test(el.getAttribute('aria-label') ?? ''),
+        );
+        if (!hit) return;
+        mo.disconnect();
+        requestAnimationFrame(() => {
+          w.__OH_PAINTED__ = performance.now();
+        });
+      });
+      mo.observe(document, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['aria-label'],
+      });
+    },
+    { sel: selector, pattern: label },
+  );
+  const samples: number[] = [];
+  for (let i = 0; i <= LOAD_SAMPLES; i++) {
+    if (i === 0) await page.goto(url, { waitUntil: 'commit' });
+    else await page.reload({ waitUntil: 'commit' });
+    const ms = Number(
+      await (
+        await page.waitForFunction(() => (window as { __OH_PAINTED__?: number }).__OH_PAINTED__, null, {
+          timeout: 60_000,
+        })
+      ).jsonValue(),
+    );
+    if (i > 0) samples.push(ms);
+  }
+  return samples;
+}
+
+test.describe(`metrics scale: ${SCALE_METRICS} metrics × ${SCALE_METRIC_SERIES} series × 1 h at 10 s`, () => {
+  test.beforeAll(async () => {
+    test.setTimeout(METRICS_SCALE_SETUP_MS);
+    await ensureMetricsScaleReport();
+  });
+
+  test(
+    'the Metrics Explorer draws its first chart within 2 s (median)',
+    { tag: '@perf' },
+    async ({ page, reportUrl, browserName }, testInfo) => {
+      const factor = perfFactor();
+      // An empty Explorer charts the first metric of the catalog.
+      const samples = await paintedMs(
+        page,
+        `${reportUrl('metrics-scale')}/index.html#/metrics`,
+        'main [role="img"]',
+        ': [1-9]\\d* series$',
+      );
+      const ms = median(samples);
+      // The first metric is a counter: its rate, all series summed into one line.
+      await expect(page.getByRole('img', { name: `${scaleMetricName(0)} · rate: 1 series` })).toBeVisible();
+      report(
+        testInfo,
+        `PERF metrics explorer ${testInfo.project.name} (${browserName}): median ${ms.toFixed(0)} ms, samples [${samples.map((x) => x.toFixed(0)).join(', ')}] (budget ${METRICS_EXPLORER_BUDGET_MS * factor}), factor ${factor}`,
+      );
+      expect(ms).toBeLessThan(METRICS_EXPLORER_BUDGET_MS * factor);
+    },
+  );
+
+  test(
+    'the Metrics Catalog opens within 1 s (median)',
+    { tag: '@perf' },
+    async ({ page, reportUrl, browserName }, testInfo) => {
+      const factor = perfFactor();
+      const samples = await paintedMs(
+        page,
+        `${reportUrl('metrics-scale')}/index.html#/metrics/catalog`,
+        '[role="grid"][aria-label="Results"] [role="row"][data-row-index]',
+        null,
+      );
+      const ms = median(samples);
+      await expect(page.getByRole('main')).toContainText(`${SCALE_METRICS} metrics ·`);
+      report(
+        testInfo,
+        `PERF metrics catalog ${testInfo.project.name} (${browserName}): median ${ms.toFixed(0)} ms, samples [${samples.map((x) => x.toFixed(0)).join(', ')}] (budget ${METRICS_CATALOG_BUDGET_MS * factor}), factor ${factor}`,
+      );
+      expect(ms).toBeLessThan(METRICS_CATALOG_BUDGET_MS * factor);
+    },
+  );
 });
