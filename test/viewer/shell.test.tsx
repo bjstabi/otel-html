@@ -80,6 +80,9 @@ const dataSource: DataSource = {
   getLog: unused,
   traceLogs: unused,
   surroundingLogs: unused,
+  metricCatalog: unused,
+  metric: unused,
+  metricsForResources: unused,
 };
 
 function renderShell(hash: string, ds: DataSource = dataSource): void {

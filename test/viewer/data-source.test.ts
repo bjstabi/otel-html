@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, test } from 'vitest';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import type { TraceId } from '../../src/model/ids.js';
+import type { ResourceRecord } from '../../src/model/records.js';
 import {
   createDataSource,
   type SpanQuery,
@@ -10,6 +11,7 @@ import {
 import { CHUNK_LRU_SIZE } from '../../src/viewer/data/windowed.js';
 import { createScriptedLoader } from '../../test-support/scripted-loader.js';
 import {
+  buildMetricReports,
   buildReport,
   buildSpreadReport,
   type Fixture,
@@ -365,5 +367,39 @@ describe('groupBy', () => {
     await expect(ds.querySpans(query({ groupBy: 'service.name' }))).rejects.toThrow(
       /query\.groupBy.*not implemented/,
     );
+  });
+});
+
+describe('metrics', () => {
+  let metrics: Fixture;
+  beforeAll(async () => {
+    metrics = (await buildMetricReports()).compacted;
+  });
+  const resourceOf = (service: string): ResourceRecord => ({
+    attributes: new Map([['service.name', { kind: 'string', value: service }]]),
+    droppedAttributesCount: 0,
+    schemaUrl: '',
+  });
+
+  test('metricsForResources lists only metrics with series on those resources', async () => {
+    const ds = await createDataSource(createScriptedLoader(metrics.files), metrics.manifest, SMALL);
+    const names = async (...services: string[]) =>
+      (await ds.metricsForResources(services.map(resourceOf))).map((e) => e.name);
+    expect(await names('checkout')).toEqual(['http.server.requests', 'checkout.queue.depth']);
+    expect(await names('payments')).toEqual(['http.server.requests', 'payments.balance']);
+    expect(await names('checkout', 'payments')).toHaveLength(3);
+    expect(await names('web')).toEqual([]);
+  });
+
+  test('a metric loads once for repeated and concurrent calls; the catalog loads once', async () => {
+    const loader = createScriptedLoader(metrics.files);
+    const ds = await createDataSource(loader, metrics.manifest, SMALL);
+    const [a, b] = await Promise.all([ds.metric(0), ds.metric(0)]);
+    expect(await ds.metric(0)).toBe(a);
+    expect(b).toBe(a);
+    await ds.metricsForResources([resourceOf('checkout')]);
+    const count = (path: string): number => loader.calls.filter((p) => p === path).length;
+    expect(count('data/metrics/000000/series.js')).toBe(1);
+    expect(count('data/rollups/metrics.js')).toBe(1);
   });
 });

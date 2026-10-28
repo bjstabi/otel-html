@@ -278,3 +278,70 @@ export function buildOverlappingLogReport(): Promise<Fixture> {
     [[50, 'inner 50']],
   ]);
 }
+
+/** Seconds after the epoch of the metric points: level-0 buckets 0, 976 and 4882, so there are levels 0 and 1. */
+const METRIC_POINT_SECONDS = [0, 1000, 5000] as const;
+
+/**
+ * Metrics (ids in first-seen order):
+ * - 0 `http.server.requests` (delta sum): `checkout` series `/a` (1, 2, 3) and `/b` (10, 20, 30), `payments` series `/a` (5, 5, 5);
+ * - 1 `checkout.queue.depth` (gauge): `checkout` only, 4, 8, 6;
+ * - 2 `payments.balance` (gauge): `payments` only, 100, 90, 80.
+ * Every point has a one-second window, at `METRIC_POINT_SECONDS`.
+ */
+function metricRequest(): JsonObject[] {
+  const base = BigInt(EPOCH_NS);
+  const at = (s: number): string => String(base + BigInt(s) * 1_000_000_000n);
+  const points = (values: readonly number[], attrs: JsonObject[] = []): JsonObject[] =>
+    values.map((v, i) => ({
+      startTimeUnixNano: at((METRIC_POINT_SECONDS[i] ?? 0) - 1),
+      timeUnixNano: at(METRIC_POINT_SECONDS[i] ?? 0),
+      asInt: String(v),
+      attributes: attrs,
+    }));
+  const route = (r: string): JsonObject[] => [attr('http.route', { stringValue: r })];
+  const sum = (dataPoints: JsonObject[]): JsonObject => ({
+    name: 'http.server.requests',
+    unit: '1',
+    sum: { aggregationTemporality: 1, isMonotonic: true, dataPoints },
+  });
+  const gaugeOf = (name: string, values: readonly number[]): JsonObject => ({
+    name,
+    unit: '1',
+    gauge: { dataPoints: points(values) },
+  });
+  const resource = (service: string, metrics: JsonObject[]): JsonObject => ({
+    resource: { attributes: [attr('service.name', { stringValue: service })] },
+    scopeMetrics: [{ scope: { name: 'test-scope' }, metrics }],
+  });
+  return [
+    {
+      resourceMetrics: [
+        resource('checkout', [
+          sum([...points([1, 2, 3], route('/a')), ...points([10, 20, 30], route('/b'))]),
+          gaugeOf('checkout.queue.depth', [4, 8, 6]),
+        ]),
+        resource('payments', [
+          sum(points([5, 5, 5], route('/a'))),
+          gaugeOf('payments.balance', [100, 90, 80]),
+        ]),
+      ],
+    },
+  ];
+}
+
+/**
+ * The same metrics as a finished report (compacted into level and exemplar files) and as an unfinished one (one
+ * flush, so only series and segment files), each written by its own session. See `metricRequest` for the data.
+ */
+export async function buildMetricReports(): Promise<{ compacted: Fixture; segments: Fixture }> {
+  const build = async (finish: boolean): Promise<Fixture> => {
+    const w = createTestWriter();
+    const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'create' });
+    for (const r of metricRequest()) await session.add(otlp(r), 'metrics');
+    if (finish) await session.close();
+    else await session.flush();
+    return { files: reportFilesFromSnapshot(w.fs.snapshot(), OUT), manifest: manifestOf(w, OUT) };
+  };
+  return { compacted: await build(true), segments: await build(false) };
+}

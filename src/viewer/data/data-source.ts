@@ -5,10 +5,12 @@ import type { ResourceRecord, ResourceRef, ScopeRecord, ScopeRef } from '../../m
 import type { ExpHistogram } from '../../rollups/exp-histogram.js';
 import type { FacetCounts } from '../../rollups/facets.js';
 import type { LogRollups } from '../../rollups/log-rollups.js';
+import type { MetricCatalog, MetricEntry } from '../../rollups/metric-catalog.js';
 import type { RedSeries } from '../../rollups/red.js';
 import type { SpanRollups } from '../../rollups/span-rollups.js';
 import type { TimeBuckets } from '../../rollups/time-buckets.js';
 import type { LogSeverityKey } from '../../semconv/severity.js';
+import { Lru } from './chunk-window.js';
 import { createEagerSource } from './eager.js';
 import { createTraceIndex, loadSpanRollups } from './load.js';
 import { createEagerLogSource } from './log-eager.js';
@@ -23,6 +25,7 @@ import {
   patternRowsOf,
 } from './log-query.js';
 import { createWindowedLogSource } from './log-windowed.js';
+import { type LoadedMetric, loadMetric, loadMetricCatalog, metricsOnResources } from './metric-load.js';
 import type { ScriptLoader } from './script-loader.js';
 import type { SpanQuery, SpanQueryResult, SpanRow } from './span-query.js';
 import type { TraceTree } from './trace-tree.js';
@@ -98,6 +101,12 @@ export interface DataSource {
   traceLogs(traceId: TraceId, signal?: AbortSignal): Promise<readonly LogRow[]>;
   /** Up to `n` logs on each side of `ref` from the same service and host, in time order with the ref tiebreak. */
   surroundingLogs(ref: LogRef, n: number): Promise<SurroundingLogs>;
+  /** The metric catalog, loaded on first use. */
+  metricCatalog(): Promise<MetricCatalog>;
+  /** One metric's series and levels, loaded on demand (the 32 most recent are kept). */
+  metric(id: number): Promise<LoadedMetric>;
+  /** Metrics with a series on one of `resources`, matched by canonical resource equality. */
+  metricsForResources(resources: readonly ResourceRecord[]): Promise<readonly MetricEntry[]>;
 }
 
 /** What each span strategy provides; `createDataSource` adds the landing, percentile and log-count parts. */
@@ -107,6 +116,9 @@ export interface SpanStrategy extends Pick<DataSource, 'querySpans' | 'hasTrace'
 
 /** What each log strategy provides; `createDataSource` adds the landing. */
 export type LogStrategy = Pick<DataSource, 'queryLogs' | 'getLog' | 'traceLogs' | 'surroundingLogs'>;
+
+/** Metrics kept decoded in memory. */
+export const METRIC_LRU_SIZE = 32;
 
 const DURATION_KEY_SEP = '\u0000';
 
@@ -194,6 +206,15 @@ export async function createDataSource(
     budgets.logs === 'eager'
       ? lazyLogStrategy(() => createEagerLogSource(loader, manifest))
       : createWindowedLogSource(loader, manifest, getLogRollups, index);
+  let metricCatalog: Promise<MetricCatalog> | undefined;
+  const getMetricCatalog = (): Promise<MetricCatalog> => {
+    metricCatalog ??= loadMetricCatalog(loader, manifest).catch((e: unknown) => {
+      metricCatalog = undefined; // a failed load is retried on the next use
+      throw e;
+    });
+    return metricCatalog;
+  };
+  const metrics = new Lru<number, LoadedMetric>(METRIC_LRU_SIZE);
   const [rollups, spans] = await Promise.all([
     loadSpanRollups(loader, manifest),
     budgets.spans === 'eager' ? createEagerSource(loader, manifest) : null,
@@ -238,5 +259,8 @@ export async function createDataSource(
     getLog: logs.getLog,
     traceLogs: logs.traceLogs,
     surroundingLogs: logs.surroundingLogs,
+    metricCatalog: getMetricCatalog,
+    metric: (id) => metrics.get(id, async () => loadMetric(loader, manifest, id, await getMetricCatalog())),
+    metricsForResources: async (resources) => metricsOnResources(await getMetricCatalog(), resources),
   };
 }
