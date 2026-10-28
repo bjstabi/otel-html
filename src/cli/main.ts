@@ -5,10 +5,14 @@ import { runCli } from './program.js';
 
 // The composition root of the CLI: the only place that touches process io and exits.
 
-// Under Node, V8 sizes its heap at several times the live data when allocation is as steady as a large convert's
-// (one record per point); favouring size keeps a 72M-point metrics run under 512 MB resident instead of about 800 MB,
-// for a slower run. V8 reads this flag as it goes, so setting it here takes effect. The library sets no flags.
-if (!('bun' in process.versions)) v8.setFlagsFromString('--optimize-for-size');
+// Under Node, V8 sizes its heap at several times the live data when allocation is as steady as a large metrics
+// convert's (one record per point); favouring size keeps a 72M-point metrics run under 512 MB resident instead of
+// about 800 MB, for a run about 40% slower. So the flag is set when the first metric points arrive, and trace and log
+// conversions keep full speed. V8 reads this flag as it goes, so setting it mid-run takes effect. The library sets no
+// flags.
+const beforeMetrics = (): void => {
+  if (!('bun' in process.versions)) v8.setFlagsFromString('--optimize-for-size');
+};
 
 process.exitCode = await runCli(
   process.argv.slice(2),
@@ -19,5 +23,5 @@ process.exitCode = await runCli(
     cwd: process.cwd(),
   },
   // Inside a `bun build --compile` binary the viewer ships embedded; under Node it is read from the package.
-  hasBunEmbeddedFiles() ? { viewerAssets: bunEmbeddedViewerAssets() } : {},
+  hasBunEmbeddedFiles() ? { viewerAssets: bunEmbeddedViewerAssets(), beforeMetrics } : { beforeMetrics },
 );

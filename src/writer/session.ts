@@ -75,6 +75,11 @@ export interface WriterDeps {
   viewerAssets: ViewerAssets;
   /** The otel-html version recorded in the report; append requires the same one. */
   version: string;
+  /**
+   * Called once, before the session takes its first metric points: the CLI tunes V8 for the long, steady
+   * allocation of a large metrics run there, so trace and log conversions are not slowed down by it.
+   */
+  beforeMetrics?: () => void;
 }
 
 export interface SessionOptions {
@@ -331,6 +336,8 @@ class Session implements WriterSession {
   #decodedBytes: number;
   #slot: StateSlot;
   #dirty: boolean;
+  /** Whether `deps.beforeMetrics` has run. */
+  #metricsSeen = false;
   #everCommitted: boolean;
   #shellWritten = false;
   #lastFlushMs: number;
@@ -667,6 +674,10 @@ class Session implements WriterSession {
     opts: { checked?: (records: number) => void; origin?: number | undefined } = {},
   ): Promise<AddResult> {
     const { checked, origin } = opts;
+    if (!this.#metricsSeen) {
+      this.#metricsSeen = true;
+      this.#deps.beforeMetrics?.();
+    }
     let dropped = 0;
     let accepted = 0;
     for (const point of rows()) {

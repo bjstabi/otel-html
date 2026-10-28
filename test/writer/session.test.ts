@@ -550,6 +550,21 @@ describe('folders and locking', () => {
 });
 
 describe('metric series files', () => {
+  test('beforeMetrics runs once, when the first metric points arrive, and never for spans or logs', async () => {
+    const w = createTestWriter();
+    let calls = 0;
+    const s = await openSession(
+      { ...w.deps, beforeMetrics: () => calls++ },
+      { out: OUT, config: testConfig(), mode: 'create' },
+    );
+    await s.add(otlp(spansRequest(3)), 'spans.json');
+    expect(calls).toBe(0);
+    await s.add(otlp(counterRequest('requests', [[0, 1]])), 'a.json');
+    await s.add(otlp(counterRequest('requests', [[10, 3]])), 'b.json');
+    expect(calls).toBe(1);
+    await s.close();
+  });
+
   const files = ['data/metrics/000000/ex.js', 'data/metrics/000000/l0.js', 'data/metrics/000000/series.js'];
 
   test('a cumulative counter becomes level-0 deltas and ex.js at close, with no segments left', async () => {
