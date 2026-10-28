@@ -13,6 +13,7 @@ import type {
 import {
   bindings,
   following,
+  resourcesMatching,
   scopeFor,
   type VariableBinding,
   variableCondition,
@@ -295,5 +296,31 @@ describe('bindings', () => {
 
   test('Fusion has no defaults', () => {
     expect(bindings(FUSION, EMPTY_DASHBOARD_STATE, {}).bindings).toEqual([]);
+  });
+});
+
+describe('resourcesMatching', () => {
+  const res = (attrs: Record<string, string>): ResourceRecord =>
+    ({
+      attributes: new Map(Object.entries(attrs).map(([k, v]) => [k, { kind: 'string', value: v }])),
+      droppedAttributesCount: 0,
+      schemaUrl: '',
+    }) satisfies ResourceRecord;
+  const a = res({ 'service.name': 'checkout', 'host.name': 'h1' });
+  const b = res({ 'service.name': 'payments', 'host.name': 'h1' });
+  const c = res({ 'host.name': 'h2' });
+  const bind = (key: string, value: string): VariableBinding => ({ key, value, kind: 'string' });
+
+  test('no bindings keeps every resource', () => {
+    expect(resourcesMatching([a, b, c], [])).toEqual([a, b, c]);
+  });
+
+  test('keeps the resources that equal every binding; a missing key never matches', () => {
+    expect(resourcesMatching([a, b, c], [bind('service.name', 'checkout')])).toEqual([a]);
+    expect(resourcesMatching([a, b, c], [bind('host.name', 'h1')])).toEqual([a, b]);
+    expect(resourcesMatching([a, b, c], [bind('host.name', 'h1'), bind('service.name', 'payments')])).toEqual(
+      [b],
+    );
+    expect(resourcesMatching([a, b, c], [bind('service.name', 'nope')])).toEqual([]);
   });
 });

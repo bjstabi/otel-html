@@ -307,6 +307,27 @@ describe('the Metrics widget without queries', () => {
     await waitFor(() => expect(seen.lookups.at(-1)).toBe(2));
   });
 
+  test('the variables narrow the grid resources and the subtitle says so', async () => {
+    const { ds, seen } = await fusion();
+    const { actions } = mount(ds, {
+      widget: { queries: null },
+      variables: [{ key: 'service.name', value: 'checkout', kind: 'string' }],
+    });
+    await screen.findByTestId('metric-grid');
+    await waitFor(() => expect(seen.lookups.length).toBeGreaterThan(0));
+    expect(Math.max(...seen.lookups)).toBe(1);
+    expect(actions.setSubtitle).toHaveBeenCalledWith('all resources, where service.name = checkout');
+  });
+
+  test('variables matching no resource say so', async () => {
+    const { ds } = await fusion();
+    mount(ds, {
+      widget: { queries: null },
+      variables: [{ key: 'service.name', value: 'nope', kind: 'string' }],
+    });
+    expect(await screen.findByText('No matching resources')).toBeTruthy();
+  });
+
   test('the grid body scrolls inside the widget height', async () => {
     renderShell('#/dashboards/fusion', await linked());
     const grid = await screen.findByTestId('metric-grid');

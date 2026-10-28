@@ -1,7 +1,9 @@
 import { andConditions, traceCondition } from '../../dashboards/conditions.js';
 import type { Dashboard, Widget, WidgetType } from '../../dashboards/schema.js';
+import { anyValueToDisplay } from '../../model/anyvalue.js';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { TraceId } from '../../model/ids.js';
+import type { ResourceRecord } from '../../model/records.js';
 import {
   type FacetSignal,
   type FacetValueKind,
@@ -27,6 +29,22 @@ export function variableCondition(
 ): string | null {
   const facetSignal: FacetSignal = signal === 'datapoint' ? 'span' : signal;
   return tokensToOttl(bindings.map((b) => facetToken(b.key, 'resource', b.value, '==', b.kind, facetSignal)));
+}
+
+/**
+ * The resources whose attribute display text equals every binding (the facets, and so the bindings, keep display
+ * text). A resource without the key never matches. No bindings keeps them all.
+ */
+export function resourcesMatching(
+  resources: readonly ResourceRecord[],
+  bound: readonly VariableBinding[],
+): ResourceRecord[] {
+  return resources.filter((r) =>
+    bound.every((b) => {
+      const v = r.attributes.get(b.key);
+      return v !== undefined && anyValueToDisplay(v) === b.value;
+    }),
+  );
 }
 
 export interface WidgetScope {

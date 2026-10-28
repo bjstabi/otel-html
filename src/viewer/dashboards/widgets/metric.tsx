@@ -19,7 +19,7 @@ import { useGoTo } from '../../shell/go-to.js';
 import { useKeyedAsync } from '../../state/use-keyed-async.js';
 import { traceResources } from '../../traces/trace-tabs.js';
 import type { WidgetRenderer } from '../dashboard-page.js';
-import { variableCondition } from '../scope.js';
+import { resourcesMatching, variableCondition } from '../scope.js';
 import { useSubtitle } from './subtitle.js';
 
 /** Card header, padding and border around the body. */
@@ -214,7 +214,7 @@ const QueriesBody: Body = ({ widget, scope, height, dataSource, actions, variabl
 };
 
 /** Fusion's Metrics widget: the metric grid of the selected trace's resources, else of every resource. */
-const GridBody: Body = ({ scope, height, dataSource, actions }) => {
+const GridBody: Body = ({ scope, height, dataSource, actions, variables }) => {
   const narrowing = useNarrowing(dataSource, scope.highlightTrace);
   const catalog = useKeyedAsync(dataSource, loadCatalog);
   const run = dataSource.manifest.range;
@@ -223,7 +223,8 @@ const GridBody: Body = ({ scope, height, dataSource, actions }) => {
   const resources = narrowing.status === 'ready' ? narrowing.resources : null;
   const all = catalog.status === 'ready' ? catalog.value.resources() : null;
   const origin = useMemo((): MetricGridOrigin | null => {
-    const rs = resources ?? (narrowing.status === 'off' ? all : null);
+    const wide = resources ?? (narrowing.status === 'off' ? all : null);
+    const rs = wide === null ? null : resourcesMatching(wide, variables);
     if (rs === null || start === undefined || end === undefined) return null;
     return {
       kind: 'dashboard',
@@ -232,10 +233,13 @@ const GridBody: Body = ({ scope, height, dataSource, actions }) => {
       window: { start, end },
       traceId: scope.highlightTrace,
     };
-  }, [resources, all, narrowing.status, start, end, scope.highlightTrace]);
+  }, [resources, all, narrowing.status, variables, start, end, scope.highlightTrace]);
+  const base = scope.highlightTrace === null ? 'all resources' : "from the selected trace's resources";
   useSubtitle(
     actions,
-    scope.highlightTrace === null ? 'all resources' : "from the selected trace's resources",
+    variables.length === 0
+      ? base
+      : `${base}, where ${variables.map((v) => `${v.key} = ${v.value}`).join(' and ')}`,
   );
 
   if (run === null) return <Empty title="This report has no metrics" message="There is nothing to chart." />;
@@ -244,6 +248,9 @@ const GridBody: Body = ({ scope, height, dataSource, actions }) => {
   if (catalog.status === 'error')
     return <ErrorCard title="The metric catalog could not be loaded" message={catalog.message} />;
   if (origin === null) return <LoadingNote progress={null} />;
+  if (origin.resources.length === 0) {
+    return <Empty title="No matching resources" message="No resource matches the chosen variables." />;
+  }
   return (
     <div style={{ height: height - FRAME_CHROME_PX }} className="overflow-auto">
       <MetricGrid
