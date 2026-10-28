@@ -77,6 +77,8 @@ function setup(over: {
   notes?: string[];
   display?: 'lines' | 'heatmap' | 'distribution';
   result?: MetricQueryResult;
+  results?: MetricQueryResult[];
+  queryLabels?: Record<string, string>;
 }): { picks: ChartPick[]; zooms: { start: number; end: number }[] } {
   const picks: ChartPick[] = [];
   const zooms: { start: number; end: number }[] = [];
@@ -84,7 +86,8 @@ function setup(over: {
     <MetricChartCard
       title={over.title ?? 'cpu'}
       subtitle="sub"
-      results={[over.result ?? result(over.exemplar === true)]}
+      results={over.results ?? [over.result ?? result(over.exemplar === true)]}
+      {...(over.queryLabels === undefined ? {} : { queryLabels: over.queryLabels })}
       display={over.display ?? 'lines'}
       scale="linear"
       size="M"
@@ -99,9 +102,9 @@ function setup(over: {
   return { picks, zooms };
 }
 
-async function clickAt(x: number): Promise<void> {
+async function clickAt(x: number, y = 0): Promise<void> {
   await act(async () => {
-    zrHandlers.get('click')?.({ offsetX: x, offsetY: 0, event: { clientX: x, clientY: 0 } });
+    zrHandlers.get('click')?.({ offsetX: x, offsetY: y, event: { clientX: x, clientY: y } });
   });
 }
 
@@ -123,6 +126,61 @@ const HEAT: MetricQueryResult = {
     ],
   },
 };
+
+/** Query `id` with one series of `values` at 0 s and 10 s (the fake chart maps a value to that many px in y). */
+function queryResult(id: string, values: [number, number]): MetricQueryResult {
+  const base = result(false, id);
+  return {
+    ...base,
+    queryId: id,
+    series: base.series.map((s) => ({
+      ...s,
+      key: id,
+      points: [
+        [0, values[0]],
+        [10 * S, values[1]],
+      ],
+    })),
+  };
+}
+
+describe('MetricChartCard with several queries', () => {
+  const TWO = [queryResult('a', [1, 2]), queryResult('b', [50, 60])];
+
+  test("Traces/Logs carry the query whose line is nearest the click, not the first query's", async () => {
+    const { picks } = setup({ results: TWO });
+    await clickAt(12, 58);
+    const items = await screen.findAllByRole('menuitem');
+    expect(items.map((i) => i.textContent)).toEqual([
+      'Traces in this window',
+      'Logs in this window',
+      'Zoom to this window',
+    ]);
+    await act(async () => items[0]?.click());
+    expect(picks).toEqual([{ kind: 'traces', window: { start: 10 * S, end: 20 * S }, queryId: 'b' }]);
+    cleanup();
+    zrHandlers.clear();
+    const near = setup({ results: TWO });
+    await clickAt(12, 3);
+    await act(async () => (await screen.findAllByRole('menuitem'))[1]?.click());
+    expect(near.picks).toEqual([{ kind: 'logs', window: { start: 10 * S, end: 20 * S }, queryId: 'a' }]);
+  });
+
+  test('with no value in the clicked bucket the menu offers one Traces and Logs entry per query', async () => {
+    const { picks } = setup({ results: TWO, queryLabels: { a: 'a', b: 'errors' } });
+    await clickAt(25, 58);
+    const items = await screen.findAllByRole('menuitem');
+    expect(items.map((i) => i.textContent)).toEqual([
+      'Traces in this window (a)',
+      'Traces in this window (errors)',
+      'Logs in this window (a)',
+      'Logs in this window (errors)',
+      'Zoom to this window',
+    ]);
+    await act(async () => items[3]?.click());
+    expect(picks).toEqual([{ kind: 'logs', window: { start: 20 * S, end: 30 * S }, queryId: 'b' }]);
+  });
+});
 
 describe('MetricChartCard', () => {
   test('a click over a bucket opens a menu with three items', async () => {

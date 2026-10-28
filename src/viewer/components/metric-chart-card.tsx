@@ -31,6 +31,8 @@ export interface MetricChartCardProps {
   notes: string[];
   /** The x range of the chart; series only cover the buckets that hold data. */
   window: TimeWindow;
+  /** How the click menu names a query when it offers one Traces/Logs entry per query (default: its id). */
+  queryLabels?: Readonly<Record<string, string>>;
   /** Whether the report holds a trace; embedded callers pass an explicit resolver. */
   hasTrace: (traceId: string) => Promise<boolean>;
   onPick(pick: ChartPick): void;
@@ -54,8 +56,46 @@ interface PinnedMenu {
   x: number;
   y: number;
   window: TimeWindow;
-  queryId: string;
+  /** The query the click is about; several when no series has a value there to tell them apart. */
+  queryIds: string[];
   trace: Trace | null;
+}
+
+interface PixelChart {
+  convertToPixel(finder: { gridIndex: number }, value: [number, number]): unknown;
+}
+
+/**
+ * The query whose series passes nearest the click (by y at the clicked bucket, in pixels), so a combined chart's
+ * Traces/Logs links carry that query's `where`. Every query when none has a value in that bucket: the menu then
+ * offers one entry per query rather than guessing.
+ */
+function queriesAt(
+  chart: PixelChart,
+  results: readonly MetricQueryResult[],
+  display: MetricChartCardProps['display'],
+  scale: MetricChartCardProps['scale'],
+  t: number,
+  y: number,
+): string[] {
+  const ids = [...new Set(results.map((r) => r.queryId))];
+  if (ids.length <= 1 || display === 'heatmap' || display === 'distribution') return ids.slice(0, 1);
+  let best: { id: string; d: number } | null = null;
+  // Area lines are stacked in series order, as the chart draws them.
+  let stack = 0;
+  for (const r of results) {
+    const start = Math.floor(t / r.widthNs) * r.widthNs;
+    for (const s of r.series) {
+      const v = s.points.find((p) => p[0] === start)?.[1] ?? null;
+      if (v === null || (scale === 'log' && v <= 0)) continue;
+      if (display === 'area') stack += v;
+      const p = chart.convertToPixel({ gridIndex: 0 }, [start, display === 'area' ? stack : v]);
+      if (!Array.isArray(p)) continue;
+      const d = Math.abs(Number(p[1]) - y);
+      if (Number.isFinite(d) && (best === null || d < best.d)) best = { id: r.queryId, d };
+    }
+  }
+  return best === null ? ids : [best.id];
 }
 
 const ITEM = 'rounded-md px-3 py-1.5 text-sm hover:bg-hairline data-[disabled]:text-muted';
@@ -107,8 +147,22 @@ export function MetricChartCard(props: MetricChartCardProps): JSX.Element {
   );
 
   // Latest values for the zrender handlers, which are bound once per chart instance.
-  const live = useRef({ results, display: props.display, exemplars: props.exemplars, hasTrace, onZoom });
-  live.current = { results, display: props.display, exemplars: props.exemplars, hasTrace, onZoom };
+  const live = useRef({
+    results,
+    display: props.display,
+    scale: props.scale,
+    exemplars: props.exemplars,
+    hasTrace,
+    onZoom,
+  });
+  live.current = {
+    results,
+    display: props.display,
+    scale: props.scale,
+    exemplars: props.exemplars,
+    hasTrace,
+    onZoom,
+  };
   const seq = useRef(0);
 
   useEffect(() => {
@@ -148,7 +202,7 @@ export function MetricChartCard(props: MetricChartCardProps): JSX.Element {
     };
     const onClick = (e: ZrEvent): void => {
       if (down !== null) return;
-      const { results: rs, display, exemplars, hasTrace: check } = live.current;
+      const { results: rs, display, scale, exemplars, hasTrace: check } = live.current;
       const t = timeAt(e);
       const first = rs[0];
       if (t === null || first === undefined) return;
@@ -178,7 +232,7 @@ export function MetricChartCard(props: MetricChartCardProps): JSX.Element {
           x: e.event.clientX,
           y: e.event.clientY,
           window,
-          queryId: hit?.queryId ?? first.queryId,
+          queryIds: hit === null ? queriesAt(chart, rs, display, scale, t, e.offsetY) : [hit.queryId],
           trace,
         });
       };
@@ -274,18 +328,18 @@ export function MetricChartCard(props: MetricChartCardProps): JSX.Element {
                     {menu.trace.state === 'absent' ? 'trace not in this report' : 'trace lookup failed'}
                   </Menu.Item>
                 ))}
-              <Menu.Item
-                className={ITEM}
-                onClick={() => menu && pick({ kind: 'traces', window: menu.window, queryId: menu.queryId })}
-              >
-                Traces in this window
-              </Menu.Item>
-              <Menu.Item
-                className={ITEM}
-                onClick={() => menu && pick({ kind: 'logs', window: menu.window, queryId: menu.queryId })}
-              >
-                Logs in this window
-              </Menu.Item>
+              {(['traces', 'logs'] as const).flatMap((kind) =>
+                (menu?.queryIds ?? []).map((queryId, _, ids) => (
+                  <Menu.Item
+                    key={`${kind}:${queryId}`}
+                    className={ITEM}
+                    onClick={() => menu && pick({ kind, window: menu.window, queryId })}
+                  >
+                    {kind === 'traces' ? 'Traces' : 'Logs'} in this window
+                    {ids.length > 1 ? ` (${props.queryLabels?.[queryId] ?? queryId})` : ''}
+                  </Menu.Item>
+                )),
+              )}
               <Menu.Item className={ITEM} onClick={() => menu && pick({ kind: 'zoom', window: menu.window })}>
                 Zoom to this window
               </Menu.Item>

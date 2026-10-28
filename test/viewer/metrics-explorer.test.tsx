@@ -214,6 +214,33 @@ describe('Metrics Explorer', () => {
     expect(parseUrlState(window.location.hash).state.q).toBe(where);
   });
 
+  test("in a combined chart the click menu carries the where of the query whose line is nearest, not a's", async () => {
+    const user = userEvent.setup();
+    const seed = defaultMetricState(null).queries[0];
+    const on = (id: string, service: string): MetricPageState['queries'][number] =>
+      ({
+        ...seed,
+        id,
+        metric: 'http.server.requests',
+        show: 'increase',
+        where: `resource.attributes["service.name"] == "${service}"`,
+      }) as MetricPageState['queries'][number];
+    // At 1000 s, a (checkout: /a + /b) increases by 22 and b (payments) by 5; the fake chart maps a value to y px.
+    const m: MetricPageState = {
+      ...defaultMetricState(null),
+      queries: [on('a', 'checkout'), on('b', 'payments')],
+    };
+    await renderAt(`#/metrics?${serializeUrlState({ m })}`);
+    await screen.findByRole('img', { name: /: 2 series$/ });
+    await waitFor(() => expect(zrHandlers.has('click')).toBe(true));
+    act(() => zrHandlers.get('click')?.({ offsetX: 1000, offsetY: 6, event: { clientX: 10, clientY: 10 } }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Traces in this window' }));
+    await waitFor(() => expect(window.location.hash.startsWith('#/traces')).toBe(true));
+    expect(parseUrlState(window.location.hash).state.q).toBe(
+      'resource.attributes["service.name"] == "payments"',
+    );
+  });
+
   test('an unknown metric in the URL says so on its row', async () => {
     await renderAt(metricsHash({ metric: 'no.such.metric', show: 'avg' }));
     expect(await screen.findByText('no metric named no.such.metric in this report')).toBeTruthy();

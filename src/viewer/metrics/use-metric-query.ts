@@ -144,8 +144,10 @@ export function useMetricQueries(
   );
   const keyed = useKeyedAsync(key, load);
   const last = useRef<Outcome>(EMPTY);
+  // After a failed run nothing from before it is shown again, not even while the next run loads.
   if (keyed.status === 'ready') last.current = keyed.value;
-  const shown = keyed.status === 'error' ? EMPTY : last.current;
+  if (keyed.status === 'error') last.current = EMPTY;
+  const shown = last.current;
   return {
     ...shown,
     loading: keyed.status === 'loading',

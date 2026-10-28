@@ -126,6 +126,15 @@ function ExplorerBody(props: { dataSource: DataSource; range: TimeWindow }): JSX
   const plots = useMemo(() => buildPlots(state, { results, entries: resolved }), [state, results, resolved]);
   const { display, histogramDisplay, mixedUnits, histogramVisible, cards } = layoutCharts(plots, state);
 
+  const queryLabels = useMemo(
+    () =>
+      Object.fromEntries([
+        ...state.queries.map((q) => [q.id, q.alias ?? q.id]),
+        ...state.formulas.map((f) => [f.id, f.alias ?? f.id]),
+      ]),
+    [state],
+  );
+
   const hasTrace = useCallback(
     async (traceId: string): Promise<boolean> =>
       dataSource.hasTrace(parseTraceId(traceId, 'exemplar.traceId')),
@@ -341,6 +350,7 @@ function ExplorerBody(props: { dataSource: DataSource; range: TimeWindow }): JSX
               exemplars={state.exemplars}
               notes={[...new Set(card.flatMap((p) => p.result.notes))]}
               window={timeWindow}
+              queryLabels={queryLabels}
               hasTrace={hasTrace}
               onPick={onPick}
               onZoom={(w) => sel.setWindow(w)}
