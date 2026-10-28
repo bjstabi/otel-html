@@ -672,6 +672,28 @@ describe('metric series files', () => {
     expect(metricCatalogOf(w, OUT).entries()[0]).toMatchObject({ points: 2, series: 1 });
   });
 
+  test('a request longer than one apply slice is still all or nothing', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    const points = Array.from({ length: 300 }, (_, i): [number, number] => [i * 2, i]);
+    const bad = JSON.parse(JSON.stringify(counterRequest('requests', points)));
+    // the malformed point comes after two full slices of good ones
+    bad.resourceMetrics[0].scopeMetrics[0].metrics.push({
+      name: 'h',
+      histogram: {
+        aggregationTemporality: 1,
+        dataPoints: [{ timeUnixNano: EPOCH_NS, count: '2', bucketCounts: ['1'] }],
+      },
+    });
+    await expect(s.add(otlp(bad), 'bad.json')).rejects.toThrow(OtelHtmlError);
+    expect(await s.add(otlp(counterRequest('requests', points)), 'good.json')).toMatchObject({
+      accepted: 300,
+    });
+    await s.close();
+    expect(metricCatalogOf(w, OUT).entries()[0]).toMatchObject({ points: 300, series: 1 });
+    expect(levelsOf(w, OUT, 0)[0]?.series[0]?.t).toHaveLength(300);
+  });
+
   const deltas = (w: TestWriter, id = 0, series = 0): [number, number, number][] => {
     const s = levelsOf(w, OUT, id)[0]?.series.find((x) => x.id === series);
     return (s?.t ?? []).map((t, i) => {

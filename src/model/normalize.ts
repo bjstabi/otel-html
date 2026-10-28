@@ -379,7 +379,16 @@ export function normalizeMetrics(
   source: string,
   first = 0,
 ): MetricPointRecord[] {
-  const out: MetricPointRecord[] = [];
+  return [...metricRecords(req, ctx, source, first)];
+}
+
+/** `normalizeMetrics` one point at a time: each call walks the request again and yields equal records. */
+export function* metricRecords(
+  req: ExportMetricsServiceRequest,
+  ctx: NormalizeContext,
+  source: string,
+  first = 0,
+): Generator<MetricPointRecord, void, void> {
   for (const [ri, rm] of req.resourceMetrics.entries()) {
     const rp = `resourceMetrics[${first + ri}]`;
     const resource = internResource(rm.resource, rm.schemaUrl, ctx, `${source}: ${rp}`);
@@ -391,7 +400,7 @@ export function normalizeMetrics(
         if (shape === null) continue;
         for (const [di, dp] of shape.points.entries()) {
           const p = (): string => `${source}: ${sp}.metrics[${mi}].${m.data.case}.dataPoints[${di}]`;
-          out.push({
+          yield {
             name: m.name,
             description: m.description,
             unit: m.unit,
@@ -405,12 +414,11 @@ export function normalizeMetrics(
             point: pointJson(shape.schema, dp),
             resource,
             scope,
-          });
+          };
         }
       }
     }
   }
-  return out;
 }
 
 /**

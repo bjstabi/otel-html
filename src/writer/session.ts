@@ -18,9 +18,9 @@ import { parseUnixNanos, type UnixNanos } from '../model/ids.js';
 import {
   createNormalizeContext,
   earliestTimestamp,
+  metricRecords,
   type NormalizeContext,
   normalizeLogs,
-  normalizeMetrics,
   normalizeTraces,
   type PointExemplar,
   pointExemplars,
@@ -146,6 +146,14 @@ export interface WriterSession {
 
 /** Encoded chunks allowed to queue behind failing writes before `add` itself fails. */
 const MAX_UNWRITTEN = 8;
+/** Points applied at a time: a slice's records and parse results die young instead of a whole request's. */
+const POINT_SLICE = 128;
+
+interface StagedPoint {
+  point: MetricPointRecord;
+  normalize: (series: SeriesKey) => Normalized;
+  exemplars: readonly PointExemplar[];
+}
 const ROLLUP_NAMES = ['spans', 'logs', 'metrics'] as const;
 const DEFAULT_TITLE = 'otel-html report';
 
@@ -382,9 +390,9 @@ class Session implements WriterSession {
           break;
         }
         case 'metrics': {
-          const rows = normalizeMetrics(input.request, ctx, source, first);
-          this.#settleEpoch(rows.length);
-          result = await this.#acceptPoints(rows);
+          // Generated twice (checked, then applied) rather than held: a request can carry many points.
+          const rows = (): Iterable<MetricPointRecord> => metricRecords(input.request, ctx, source, first);
+          result = await this.#acceptPoints(rows, (n) => this.#settleEpoch(n));
           break;
         }
       }
@@ -446,11 +454,11 @@ class Session implements WriterSession {
           );
           break;
         case 'metrics':
-          result = await this.#acceptPoints(
-            batch.rows.map((p, i) =>
-              rebasePoint(p, shift, refsOf(p.resource, p.scope, `rows[${i}]`), `rows[${i}]`),
-            ),
-          );
+          result = await this.#acceptPoints(function* () {
+            for (const [i, p] of batch.rows.entries()) {
+              yield rebasePoint(p, shift, refsOf(p.resource, p.scope, `rows[${i}]`), `rows[${i}]`);
+            }
+          });
           break;
       }
       await this.#maybeCheckpoint();
@@ -634,40 +642,73 @@ class Session implements WriterSession {
     return { accepted: staged.length, dropped, duplicates: 0 };
   }
 
-  async #acceptPoints(rows: readonly MetricPointRecord[]): Promise<AddResult> {
+  /**
+   * Accepts a request's points all or nothing, without holding them all: a first pass checks every point
+   * (parse errors reject the request before any state changes) and keeps nothing; the second applies the points
+   * POINT_SLICE at a time. `rows` yields the same points each time it is called.
+   */
+  async #acceptPoints(
+    rows: () => Iterable<MetricPointRecord>,
+    checked?: (records: number) => void,
+  ): Promise<AddResult> {
+    let dropped = 0;
+    let accepted = 0;
+    for (const point of rows()) {
+      if (this.#dropped(point)) dropped++;
+      else {
+        this.#stage(point);
+        accepted++;
+      }
+    }
+    checked?.(accepted + dropped);
+    let slice: StagedPoint[] = [];
+    for (const point of rows()) {
+      if (this.#dropped(point)) continue;
+      slice.push(this.#stage(point));
+      if (slice.length === POINT_SLICE) {
+        this.#applyPoints(slice);
+        slice = [];
+      }
+    }
+    this.#applyPoints(slice);
+    if (accepted > 0) this.#dirty = true;
+    await this.#drainAccepted();
+    await this.#spillSeries();
+    return { accepted, dropped, duplicates: 0 };
+  }
+
+  #dropped(point: MetricPointRecord): boolean {
+    const ctx = this.#context();
+    const resource = ctx.resources.get(point.resource);
+    const scope = ctx.scopes.get(point.scope);
+    return this.#drop.point.test({ point, resource, scope, epoch: ctx.epoch });
+  }
+
+  /** Parses a point (throwing when it is malformed) without changing any state. */
+  #stage(point: MetricPointRecord): StagedPoint {
+    const ctx = this.#context();
+    return {
+      point,
+      normalize: this.#normalizer.prepare(point),
+      exemplars: pointExemplars(
+        point,
+        ctx.epoch,
+        () => `metric ${JSON.stringify(point.name)}.point.exemplars`,
+      ),
+    };
+  }
+
+  #applyPoints(staged: readonly StagedPoint[]): void {
     const ctx = this.#context();
     const catalog = this.#rollups.metrics.catalog;
-    let dropped = 0;
-    const staged: {
-      point: MetricPointRecord;
-      resource: ResourceRecord;
-      scope: ScopeRecord;
-      normalize: (series: SeriesKey) => Normalized;
-      exemplars: readonly PointExemplar[];
-    }[] = [];
-    for (const point of rows) {
-      const resource = ctx.resources.get(point.resource);
-      const scope = ctx.scopes.get(point.scope);
-      if (this.#drop.point.test({ point, resource, scope, epoch: ctx.epoch })) {
-        dropped++;
-        continue;
-      }
-      // Parsed before anything is stored: a malformed point or exemplar rejects the whole request.
-      staged.push({
-        point,
-        resource,
-        scope,
-        normalize: this.#normalizer.prepare(point),
-        exemplars: pointExemplars(
-          point,
-          ctx.epoch,
-          () => `metric ${JSON.stringify(point.name)}.point.exemplars`,
-        ),
-      });
-    }
-    for (const { point, resource, scope, normalize, exemplars } of staged) {
+    for (const { point, normalize, exemplars } of staged) {
       const def = catalog.defOf(point);
-      const series = catalog.seriesOf(def, point, resource, scope);
+      const series = catalog.seriesOf(
+        def,
+        point,
+        ctx.resources.get(point.resource),
+        ctx.scopes.get(point.scope),
+      );
       // A folded series keeps its own cumulative stream; its deltas go into `other`.
       const n = normalize(
         series.foldKey === null ? `${def.id}/${series.id}` : `${def.id}/~${series.foldKey}`,
@@ -683,10 +724,6 @@ class Session implements WriterSession {
       this.#extend(Math.min(point.start ?? point.time, point.time), point.time);
       if (this.#metrics.isFull(this.#config.writer.chunkTargetBytes)) this.#cutSync(this.#metrics);
     }
-    if (staged.length > 0) this.#dirty = true;
-    await this.#drainAccepted();
-    await this.#spillSeries();
-    return { accepted: staged.length, dropped, duplicates: 0 };
   }
 
   /**
