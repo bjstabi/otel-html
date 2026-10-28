@@ -2,15 +2,13 @@ import { z } from 'zod';
 import { OtelHtmlError } from '../../model/errors.js';
 import { parseSpanId, parseTraceId, type SpanId, type TraceId } from '../../model/ids.js';
 import { parseCondition } from '../../ottl/parse.js';
+import { MetricPageStateSchema } from '../../query/metric-query.js';
+import { EXPLORER_VIEWS, SELECTION_MODES } from '../../query/pages.js';
 import { type LogRef, parseLogRef } from '../data/log-query.js';
 import type { TimeWindow } from '../data/span-query.js';
 import { LOG_TAB_IDS } from '../logs/tabs.js';
 import { TRACE_TAB_IDS } from '../traces/tabs.js';
-import { EXPLORER_VIEWS } from './explorer-view.js';
-import { MetricPageStateSchema, parseMetricParam } from './metric-state.js';
-
-/** Every grouping any explorer offers; which ones a page accepts is `PAGE_OPTIONS` (page-options.ts). */
-export const SELECTION_MODES = ['spans', 'traces', 'logs', 'patterns'] as const;
+import { parseMetricParam } from './metric-state.js';
 
 const T_FORMAT = /^(\d+)~(\d+)$/;
 const LOG_FORMAT = /^\d+\.\d+$/;

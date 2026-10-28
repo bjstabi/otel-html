@@ -1,5 +1,5 @@
 import type { JSX } from 'react';
-import { METRIC_DISPLAYS, METRIC_SCALES, type MetricPageState } from '../state/metric-state.js';
+import { METRIC_DISPLAYS, METRIC_SCALES, type MetricPageState } from '../../query/metric-query.js';
 
 type Display = MetricPageState['display'];
 type Scale = MetricPageState['scale'];

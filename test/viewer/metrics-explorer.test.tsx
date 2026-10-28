@@ -28,10 +28,11 @@ vi.mock('../../src/viewer/components/chart.js', async () => {
   };
 });
 
+import type { MetricPageState } from '../../src/query/metric-query.js';
 import { createDataSource } from '../../src/viewer/data/data-source.js';
 import { Shell } from '../../src/viewer/shell/shell.js';
 import { createHashHistory } from '../../src/viewer/state/hash-history.js';
-import { defaultMetricState, type MetricPageState } from '../../src/viewer/state/metric-state.js';
+import { defaultMetricState } from '../../src/viewer/state/metric-state.js';
 import { parseUrlState, serializeUrlState } from '../../src/viewer/state/url-state.js';
 import { ThemeProvider } from '../../src/viewer/theme/theme-provider.js';
 import { createScriptedLoader } from '../../test-support/scripted-loader.js';

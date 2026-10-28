@@ -2,11 +2,11 @@ import { Menu } from '@base-ui/react/menu';
 import { Popover } from '@base-ui/react/popover';
 import { ChevronDown, Eye, EyeOff, Pencil, X } from 'lucide-react';
 import { type JSX, type ReactNode, useEffect, useState } from 'react';
+import { parseFormula } from '../../query/metric-formula.js';
+import type { MetricFormula } from '../../query/metric-query.js';
 import type { MetricEntry } from '../../rollups/metric-catalog.js';
 import { ConditionEditor } from '../components/query-bar.js';
-import { parseFormula } from '../data/metric-formula.js';
 import type { MetricFn, MetricQuery } from '../data/metric-query.js';
-import type { MetricFormula } from '../state/metric-state.js';
 import { DefinitionPicker, FIELD, MetricPicker } from './metric-picker.js';
 
 const POPUP = 'rounded-card border border-hairline bg-surface p-1 shadow-lg';

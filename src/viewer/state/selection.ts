@@ -2,6 +2,8 @@ import { createStore, type StoreApi } from 'zustand/vanilla';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { SpanId, TraceId } from '../../model/ids.js';
 import { parseCondition } from '../../ottl/parse.js';
+import type { MetricPageState } from '../../query/metric-query.js';
+import type { SELECTION_MODES } from '../../query/pages.js';
 import type { LogSeverityKey } from '../../semconv/severity.js';
 import {
   type FacetScope,
@@ -19,15 +21,7 @@ import type { TimeWindow } from '../data/span-query.js';
 import { isLogTabId, LOG_TAB_IDS, type LogTabId } from '../logs/tabs.js';
 import { isTraceTabId, TRACE_TAB_IDS, type TraceTabId } from '../traces/tabs.js';
 import type { ExplorerView } from './explorer-view.js';
-import type { MetricPageState } from './metric-state.js';
-import {
-  formatWindow,
-  parseUrlState,
-  parseWindow,
-  type SELECTION_MODES,
-  serializeUrlState,
-  type UrlState,
-} from './url-state.js';
+import { formatWindow, parseUrlState, parseWindow, serializeUrlState, type UrlState } from './url-state.js';
 
 export const DEFAULT_TRACE_TAB: TraceTabId = 'flame';
 export const DEFAULT_SPAN_TAB = 'overview';

@@ -1,5 +1,6 @@
 import { type JSX, useCallback, useEffect, useMemo, useState } from 'react';
 import type { Manifest } from '../../format/manifest.js';
+import { MAX_METRIC_QUERIES, type MetricPageState } from '../../query/metric-query.js';
 import type { MetricCatalog, MetricEntry } from '../../rollups/metric-catalog.js';
 import { ErrorCard, LoadingNote, PILL } from '../components/explorer-states.js';
 import { downloadBlob } from '../components/export.js';
@@ -9,7 +10,7 @@ import { defaultShow, kindOf, type MetricQuery, resolveMetric, SHOW_BY_KIND } fr
 import type { TimeWindow } from '../data/span-query.js';
 import { useGoTo } from '../shell/go-to.js';
 import { PageChrome } from '../shell/page-chrome.js';
-import { defaultMetricState, MAX_METRIC_QUERIES, type MetricPageState } from '../state/metric-state.js';
+import { defaultMetricState } from '../state/metric-state.js';
 import { useSelection, useSelectionStore } from '../state/selection-context.js';
 import { useKeyedAsync } from '../state/use-keyed-async.js';
 import { useColorAssigner } from '../theme/colors-context.js';

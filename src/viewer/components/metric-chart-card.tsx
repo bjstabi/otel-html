@@ -1,9 +1,9 @@
 import { Menu } from '@base-ui/react/menu';
 import { Info } from 'lucide-react';
 import { type JSX, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { METRIC_DISPLAYS, METRIC_SCALES } from '../../query/metric-query.js';
 import type { MetricQueryResult } from '../data/metric-query.js';
 import type { TimeWindow } from '../data/span-query.js';
-import type { METRIC_DISPLAYS, METRIC_SCALES } from '../state/metric-state.js';
 import { useColorAssigner } from '../theme/colors-context.js';
 import { Chart, type EChartsType } from './chart.js';
 import {

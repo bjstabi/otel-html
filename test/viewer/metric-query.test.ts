@@ -2,10 +2,11 @@ import { describe, expect, test } from 'vitest';
 import type { AnyValue, Attributes } from '../../src/model/anyvalue.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import type { MetricPointRecord, ResourceRecord } from '../../src/model/records.js';
+import { parseFormula } from '../../src/query/metric-formula.js';
 import { type BucketAgg, type HistAgg, mergeAgg, quantileOf } from '../../src/rollups/metric-agg.js';
 import type { MetricEntry, SeriesDef } from '../../src/rollups/metric-catalog.js';
 import { ValueBuckets } from '../../src/rollups/value-buckets.js';
-import { evaluateFormula, formulaWidth, parseFormula } from '../../src/viewer/data/metric-formula.js';
+import { evaluateFormula, formulaWidth } from '../../src/viewer/data/metric-formula.js';
 import type { LevelData, LoadedMetric, LoadedSeries } from '../../src/viewer/data/metric-load.js';
 import {
   chartWidthNs,

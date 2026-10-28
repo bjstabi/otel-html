@@ -3,6 +3,7 @@ import { type JSX, useCallback, useMemo, useState } from 'react';
 import { anyValueToDisplay } from '../../model/anyvalue.js';
 import type { RelNanos, TraceId } from '../../model/ids.js';
 import type { ResourceRecord } from '../../model/records.js';
+import { MAX_METRIC_QUERIES, type MetricPageState } from '../../query/metric-query.js';
 import type { MetricCatalog, MetricEntry } from '../../rollups/metric-catalog.js';
 import { compareNamespaces, metricNamespace } from '../../semconv/metric-namespaces.js';
 import { tokenValue } from '../components/attribute-filter.js';
@@ -20,7 +21,6 @@ import {
 import type { TimeWindow } from '../data/span-query.js';
 import { useGoTo } from '../shell/go-to.js';
 import { CONTROL } from '../shell/page-chrome.js';
-import { MAX_METRIC_QUERIES, type MetricPageState } from '../state/metric-state.js';
 import { formatWindow } from '../state/url-state.js';
 import { useKeyedAsync } from '../state/use-keyed-async.js';
 import { exemplarTraceLookup, openChartPick } from './chart-pick.js';

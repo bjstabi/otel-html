@@ -1,6 +1,6 @@
-import { formulaRefs, parseFormula } from '../data/metric-formula.js';
+import { formulaRefs, parseFormula } from '../../query/metric-formula.js';
+import type { MetricFormula, MetricPageState } from '../../query/metric-query.js';
 import { kindOf, type MetricQuery, type MetricQueryResult } from '../data/metric-query.js';
-import type { MetricFormula, MetricPageState } from '../state/metric-state.js';
 import type { MetricQueries } from './use-metric-query.js';
 
 /**

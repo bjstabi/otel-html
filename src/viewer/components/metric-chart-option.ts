@@ -1,7 +1,7 @@
+import type { METRIC_DISPLAYS, METRIC_SCALES } from '../../query/metric-query.js';
 import { formatBytes, formatDuration } from '../../semconv/formatters.js';
 import type { MetricQueryResult, SeriesPoints } from '../data/metric-query.js';
 import type { TimeWindow } from '../data/span-query.js';
-import type { METRIC_DISPLAYS, METRIC_SCALES } from '../state/metric-state.js';
 import { type ColorAssigner, OTHER_INDEX } from '../theme/palette.js';
 import type { ChartProps } from './chart.js';
 

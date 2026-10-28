@@ -1,13 +1,3 @@
-export const EXPLORER_VIEWS = [
-  'list',
-  'timeseries',
-  'toplist',
-  'bar',
-  'table',
-  'pointplot',
-  'treemap',
-  'pie',
-  'scatter',
-] as const;
+import type { EXPLORER_VIEWS } from '../../query/pages.js';
 
 export type ExplorerView = (typeof EXPLORER_VIEWS)[number];

@@ -1,7 +1,9 @@
 import { useCallback, useMemo, useRef } from 'react';
+import { formulaRefs, parseFormula } from '../../query/metric-formula.js';
+import type { MetricFormula, MetricPageState } from '../../query/metric-query.js';
 import type { MetricEntry } from '../../rollups/metric-catalog.js';
 import type { DataSource } from '../data/data-source.js';
-import { evaluateFormula, formulaRefs, formulaWidth, parseFormula } from '../data/metric-formula.js';
+import { evaluateFormula, formulaWidth } from '../data/metric-formula.js';
 import type { LoadedMetric } from '../data/metric-load.js';
 import {
   type MetricQuery,
@@ -12,7 +14,6 @@ import {
   showOptions,
 } from '../data/metric-query.js';
 import type { TimeWindow } from '../data/span-query.js';
-import type { MetricFormula, MetricPageState } from '../state/metric-state.js';
 import { useKeyedAsync } from '../state/use-keyed-async.js';
 
 /** Buckets per chart when the card has not been measured (no layout, as in tests). */

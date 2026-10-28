@@ -1,6 +1,7 @@
 import { anyValueToDisplay } from '../../model/anyvalue.js';
 import { assertNever, OtelHtmlError } from '../../model/errors.js';
-import type { MetricPointRecord, ResourceRecord } from '../../model/records.js';
+import type { ResourceRecord } from '../../model/records.js';
+import type { MetricFn, MetricQuery } from '../../query/metric-query.js';
 import { type BucketAgg, type ExpAgg, type HistAgg, mergeAgg, quantileOf } from '../../rollups/metric-agg.js';
 import type { MetricEntry } from '../../rollups/metric-catalog.js';
 import { applyFns } from './metric-fn.js';
@@ -36,30 +37,11 @@ export {
   SHOW_BY_KIND,
   SUMMARY_TOP_QUANTILE,
 } from './metric-tables.js';
+export type { MetricFn, MetricQuery };
 
 // ---------------------------------------------------------------------------------------------
 // Query and result shapes
 // ---------------------------------------------------------------------------------------------
-
-export type MetricFn =
-  | { op: 'rate' }
-  | { op: 'increase' }
-  | { op: 'rollup'; agg: 'avg' | 'min' | 'max' | 'sum'; intervalMs: number }
-  | { op: 'top' | 'bottom'; n: number; by: 'avg' | 'max' | 'last' };
-
-export interface MetricQuery {
-  id: string;
-  metric: string;
-  kind: MetricPointRecord['type'] | null;
-  unit: string | null;
-  show: string;
-  /** OTTL paths: `resource.attributes["…"]`, `attributes["…"]`. */
-  by: string[];
-  where: string | null;
-  fn: MetricFn[];
-  alias: string | null;
-  hidden: boolean;
-}
 
 export interface SeriesPoints {
   key: string;
