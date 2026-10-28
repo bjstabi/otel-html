@@ -25,6 +25,7 @@ import { bindings, following, scopeFor, type VariableBinding, type WidgetScope }
 import { SelectionChips } from './selection-chips.js';
 import { VariablesBar } from './variables-bar.js';
 import { WidgetFrame } from './widget-frame.js';
+import { FacetChartWidget } from './widgets/facet-chart.js';
 import { LogsWidget } from './widgets/logs.js';
 import { effectiveQueries, MetricWidget, type Narrowing, useNarrowing } from './widgets/metric.js';
 import { TimelineWidget } from './widgets/timeline.js';
@@ -53,19 +54,14 @@ export type WidgetRenderer = (props: {
   state: DashboardPageState;
 }) => JSX.Element;
 
-/** Stands in for a widget type whose component has not been written yet. */
-const PendingWidget: WidgetRenderer = ({ widget }) => (
-  <p className="p-2 text-sm text-muted">{widget.type} widget</p>
-);
-
 /** One renderer per widget type: the page draws every widget through this table. */
 export const WIDGETS: Record<WidgetType, WidgetRenderer> = {
   timeline: TimelineWidget,
   traces: TracesWidget,
   logs: LogsWidget,
   metric: MetricWidget,
-  toplist: PendingWidget,
-  table: PendingWidget,
+  toplist: FacetChartWidget,
+  table: FacetChartWidget,
 };
 
 const CARD = 'max-w-xl rounded-card border border-hairline bg-surface p-6';
@@ -149,6 +145,9 @@ function openInOf(
           text: widget.text === '' ? null : widget.text,
           // The Traces page opens in spans mode; a Traces widget in spans mode needs no `mode` key.
           ...(widget.type === 'traces' ? { mode: widget.mode === 'spans' ? null : widget.mode } : {}),
+          ...(widget.type === 'toplist' || widget.type === 'table'
+            ? { view: widget.type, group: widget.groupBy }
+            : {}),
         },
       };
     }
