@@ -473,6 +473,8 @@ function runAtLevel(
   if (e.conflicting) note(NOTES.conflicting(e));
   if (m.fromSegments) note(NOTES.fromSegments);
   if (e.folded > 0 && sel.readsIdentity) note(NOTES.partial(e.folded));
+  // A folded series' stream state can be dropped (bounded per metric); its next point is a new stream's.
+  if (e.foldedEvicted > 0) note(NOTES.foldedEvicted(e.foldedEvicted));
   if (e.noValue > 0) note(NOTES.noValue(e.noValue));
 
   const widthNs = level?.widthNs ?? 0;

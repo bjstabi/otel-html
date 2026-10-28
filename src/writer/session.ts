@@ -39,8 +39,8 @@ import {
 import type { CompiledCondition } from '../ottl/compile.js';
 import { compileAny } from '../ottl/compile.js';
 import type { LogTarget, SpanTarget } from '../ottl/contexts.js';
-import type { Normalized, SeriesKey } from '../rollups/metric-streams.js';
-import { StreamNormalizer } from '../rollups/metric-streams.js';
+import type { Normalized, StreamTarget } from '../rollups/metric-streams.js';
+import { foldedSeriesKey, StreamNormalizer } from '../rollups/metric-streams.js';
 import {
   createRollups,
   deserializeRollups,
@@ -146,12 +146,17 @@ export interface WriterSession {
 
 /** Encoded chunks allowed to queue behind failing writes before `add` itself fails. */
 const MAX_UNWRITTEN = 8;
+/**
+ * The folded series per metric whose cumulative streams are kept, as a multiple of `writer.metricSeriesCap`: enough
+ * that series churning past the cap rarely evict each other, while the state stays bounded.
+ */
+const FOLDED_STREAMS_PER_SERIES_CAP = 10;
 /** Points applied at a time: a slice's records and parse results die young instead of a whole request's. */
 const POINT_SLICE = 128;
 
 interface StagedPoint {
   point: MetricPointRecord;
-  normalize: (series: SeriesKey) => Normalized;
+  normalize: (target: StreamTarget) => Normalized;
   exemplars: readonly PointExemplar[];
 }
 const ROLLUP_NAMES = ['spans', 'logs', 'metrics'] as const;
@@ -201,6 +206,8 @@ export async function openSession(deps: WriterDeps, options: SessionOptions): Pr
     facetKeyCap: config.writer.facetKeyCap,
     metricSeriesCap: config.writer.metricSeriesCap,
   };
+  // Folded series are not capped by the catalog; their cumulative streams are, per metric.
+  const normalizerOpts = { foldedPerMetric: FOLDED_STREAMS_PER_SERIES_CAP * config.writer.metricSeriesCap };
   const { fs } = deps;
 
   let preexisting = false;
@@ -232,7 +239,7 @@ export async function openSession(deps: WriterDeps, options: SessionOptions): Pr
         lock,
         epoch: null,
         rollups: createRollups(rollupOpts),
-        normalizer: new StreamNormalizer(),
+        normalizer: new StreamNormalizer(normalizerOpts),
         dedupe: new DedupeSet(config.writer.dedupeCapacity),
         traceIndex: new TraceIndex(),
         nextChunk: { spans: 0, logs: 0, metrics: 0 },
@@ -257,7 +264,7 @@ export async function openSession(deps: WriterDeps, options: SessionOptions): Pr
             ? null
             : parseUnixNanos(cp.state.epochUnixNano, 'state.epochUnixNano'),
         rollups: deserializeRollups(cp.state.rollups, rollupOpts),
-        normalizer: StreamNormalizer.from(cp.state.metricStreams, 'state.metricStreams'),
+        normalizer: StreamNormalizer.from(cp.state.metricStreams, 'state.metricStreams', normalizerOpts),
         dedupe: DedupeSet.from(cp.state.dedupe, config.writer.dedupeCapacity),
         traceIndex: TraceIndex.load(cp.state.traceIndex),
         nextChunk: { ...cp.state.nextChunk },
@@ -709,9 +716,12 @@ class Session implements WriterSession {
         ctx.resources.get(point.resource),
         ctx.scopes.get(point.scope),
       );
-      // A folded series keeps its own cumulative stream; its deltas go into `other`.
+      // A folded series keeps its own cumulative stream (while it is among the metric's most recently used folded
+      // series); its deltas go into `other`.
       const n = normalize(
-        series.foldKey === null ? `${def.id}/${series.id}` : `${def.id}/~${series.foldKey}`,
+        series.foldKey === null
+          ? { series: `${def.id}/${series.id}` }
+          : { series: foldedSeriesKey(def.id, series.foldKey), foldedIn: def.id },
       );
       catalog.note(def.id, n, point.time);
       if (n.kind === 'ok') {

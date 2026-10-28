@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import type { RelNanos } from '../../src/model/ids.js';
 import type { MetricPointRecord, ResourceRef, ScopeRef } from '../../src/model/records.js';
-import { StreamNormalizer } from '../../src/rollups/metric-streams.js';
+import { foldedSeriesKey, StreamNormalizer } from '../../src/rollups/metric-streams.js';
 
 const rel = (n: number): RelNanos => n as RelNanos;
 
@@ -291,10 +291,51 @@ describe('StreamNormalizer', () => {
     }
   });
 
+  it('keeps at most `foldedPerMetric` folded series per metric, least recently used out first', () => {
+    const s = new StreamNormalizer({ foldedPerMetric: 2 });
+    const folded = (key: string) => ({ series: foldedSeriesKey(7, key), foldedIn: 7 });
+    const step = (key: string, v: number, t: number) => s.prepare(sum(v, t))(folded(key));
+    expect(deltaOf(step('a', 5, 1)).delta).toBe(5);
+    expect(deltaOf(step('b', 10, 2)).delta).toBe(10);
+    expect(deltaOf(step('a', 8, 3)).delta).toBe(3); // a is now the most recent
+    const c = step('c', 1, 4); // evicts b, the least recently used
+    expect(c).toMatchObject({ kind: 'ok', evicted: true });
+    expect(deltaOf(step('a', 9, 5)).delta).toBe(1); // a retained: its numbers are unchanged
+    // b comes back as a new stream: its first point follows the first-point rule (start set: full value).
+    expect(deltaOf(step('b', 12, 6))).toEqual({ delta: 12, resets: 0, reset: false });
+    // Another metric has its own bound; unfolded series are not bounded.
+    s.prepare(sum(1, 7))({ series: foldedSeriesKey(8, 'a'), foldedIn: 8 });
+    for (let i = 0; i < 10; i++) s.normalize(`7/${i}`, sum(1, 1));
+    const state = s.toJSON();
+    expect(state.seriesKeys.filter((k) => k.includes('~'))).toHaveLength(3);
+    expect(state.keys.filter((k) => k.includes('~'))).toHaveLength(3);
+    expect(state.seriesKeys).toHaveLength(13);
+    // The bound and the order survive a checkpoint.
+    const r = StreamNormalizer.from(JSON.parse(JSON.stringify(state)), 'streams', { foldedPerMetric: 2 });
+    expect(r.prepare(sum(2, 9))(folded('d'))).toMatchObject({ evicted: true }); // evicts a, not b
+    expect(deltaOf(r.prepare(sum(13, 10))(folded('b'))).delta).toBe(1);
+    expect(r.prepare(sum(9, 11))(folded('a'))).toMatchObject({ evicted: true });
+  });
+
+  it('folded series keys are short and stable', () => {
+    const long = JSON.stringify({ attrs: 'x'.repeat(500) });
+    expect(foldedSeriesKey(3, long)).toBe(foldedSeriesKey(3, long));
+    expect(foldedSeriesKey(3, long).length).toBeLessThan(24);
+    expect(foldedSeriesKey(3, long)).not.toBe(foldedSeriesKey(3, `${long} `));
+    expect(foldedSeriesKey(3, long)).not.toBe(foldedSeriesKey(4, long));
+  });
+
   it('prepare parses without touching streams; its step applies the point', () => {
     const s = new StreamNormalizer();
     const steps = [sum(5, 1), sum(8, 2)].map((p) => s.prepare(p));
-    expect(s.toJSON()).toEqual({ keys: [], times: [], lasts: [], seriesKeys: [], seriesTimes: [] });
+    expect(s.toJSON()).toEqual({
+      keys: [],
+      times: [],
+      lasts: [],
+      seriesKeys: [],
+      seriesTimes: [],
+      folded: [],
+    });
     expect(() => s.prepare(pt({ type: 'gauge', point: { asDouble: 'abc' } }))).toThrow(OtelHtmlError);
     expect(steps.map((step) => deltaOf(step('0/0')).delta)).toEqual([5, 3]);
     // string keys tell apart equal series ids of different metrics

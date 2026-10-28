@@ -79,6 +79,8 @@ export const NOTES = {
   summaryCoarse: 'summary quantiles from the last point per bucket',
   fromSegments: 'report unfinished: series merged from flush segments',
   partial: (n: number) => `partial: ${n} points folded into other`,
+  foldedEvicted: (n: number) =>
+    `other is approximate: ${n} folded series restarted from a baseline (too many to track)`,
   resets: (n: number) => `${n} counter reset${n === 1 ? '' : 's'} in range`,
   noValue: (n: number) => `${n} point${n === 1 ? '' : 's'} had no value`,
   conflicting: (e: MetricEntry) =>

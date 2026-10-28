@@ -46,6 +46,8 @@ export interface MetricEntry extends MetricDef {
   resources: number[];
   series: number;
   folded: number;
+  /** Folded series whose cumulative stream state was dropped (bounded per metric): each restarted from a baseline. */
+  foldedEvicted: number;
   resets: number;
   outOfOrder: number;
   noValue: number;
@@ -185,6 +187,7 @@ type SerializedMetric = {
   attributeKeys: string[];
   resources: number[];
   folded: number;
+  foldedEvicted: number;
   resets: number;
   outOfOrder: number;
   noValue: number;
@@ -227,6 +230,7 @@ const MetricSchema: z.ZodType<SerializedMetric> = z.strictObject({
   attributeKeys: z.array(z.string()).refine(sortedUnique, 'sorted and unique'),
   resources: z.array(nonNegInt).refine(sortedUnique, 'sorted and unique'),
   folded: nonNegInt,
+  foldedEvicted: nonNegInt,
   resets: nonNegInt,
   outOfOrder: nonNegInt,
   noValue: nonNegInt,
@@ -425,6 +429,7 @@ export class MetricCatalog {
       resources: [],
       series: 0,
       folded: 0,
+      foldedEvicted: 0,
       resets: 0,
       outOfOrder: 0,
       noValue: 0,
@@ -475,6 +480,7 @@ export class MetricCatalog {
       return;
     }
     if (n.reset) e.resets++;
+    if (n.evicted === true) e.foldedEvicted++;
     const v = sparkValue(n.agg);
     if (Number.isFinite(v)) e.spark.add(t, v);
   }
@@ -645,6 +651,7 @@ export class MetricCatalog {
         attributeKeys: [...e.attributeKeys],
         resources: [...e.resources],
         folded: e.folded,
+        foldedEvicted: e.foldedEvicted,
         resets: e.resets,
         outOfOrder: e.outOfOrder,
         noValue: e.noValue,
@@ -706,6 +713,7 @@ export class MetricCatalog {
       resources: [...m.resources],
       series: m.series,
       folded: m.folded,
+      foldedEvicted: m.foldedEvicted,
       resets: m.resets,
       outOfOrder: m.outOfOrder,
       noValue: m.noValue,

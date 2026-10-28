@@ -792,6 +792,40 @@ describe('metric series files', () => {
     expect(metricCatalogOf(w, OUT).entries()[0]).toMatchObject({ resets: 0, series: 2 });
   });
 
+  test('folded cumulative streams stay within 10 × the series cap across checkpoints, evictions counted', async () => {
+    const w = createTestWriter();
+    const config = testConfig({ writer: { metricSeriesCap: 1 } });
+    const s = await open(w, config);
+    const host = (h: string) => [{ key: 'host', value: { stringValue: `h${h}`.padEnd(200, '.') } }];
+    const folded = (state: unknown): string[] => {
+      const streams = SessionStateSchema.parse(state).metricStreams as { keys: string[] };
+      return streams.keys.filter((k) => k.includes('~'));
+    };
+    // h0 is the one real series; h1..h30 fold, each with two points, over three checkpoints.
+    for (const round of [0, 1, 2]) {
+      for (let h = 0; h <= 30; h++) {
+        for (const t of [round * 100 + h, round * 100 + 50 + h]) {
+          await s.add(otlp(cumulativeRequest('c', [[t, t + 1, 0]], host(String(h)))), `${h}.json`);
+        }
+      }
+      await s.flush();
+      const states = [...w.fs.snapshot()].filter(([p]) => p.startsWith('r/data/state/session.'));
+      expect(states.length).toBeGreaterThan(0);
+      for (const [, text] of states) {
+        const keys = folded(JSON.parse(text));
+        expect(keys.length).toBeLessThanOrEqual(10);
+        // short keys: the 200-char attribute value is hashed away
+        for (const k of keys) expect(k.length).toBeLessThan(40);
+      }
+    }
+    await s.close();
+    // The real series keeps exact deltas.
+    expect(deltas(w, 0, 0).map(([, d]) => d)).toEqual([1, 50, 50, 50, 50, 50]);
+    // 30 folded series through 10 slots: every series past the 10th, in each round, evicted one.
+    const e = metricCatalogOf(w, OUT).entries()[0];
+    expect(e?.foldedEvicted).toBe(30 * 3 - 10);
+  });
+
   test.each(['data/metrics/000000/l1.js', 'data/metrics/000000/ex.js'])(
     'a close that fails writing %s is retried without double counting',
     async (failing) => {

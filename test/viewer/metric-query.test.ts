@@ -51,6 +51,7 @@ function entry(over: Partial<MetricEntry> & Pick<MetricEntry, 'type'>): MetricEn
     resources: [0],
     series: 0,
     folded: 0,
+    foldedEvicted: 0,
     resets: 0,
     outOfOrder: 0,
     noValue: 0,
@@ -527,6 +528,20 @@ describe('runMetricQuery', () => {
       expect(fv.length).toBe(180);
       expect(fv.every((v) => v === 1)).toBe(true);
     });
+  });
+
+  test('folded series that lost their stream state give a note on any query', () => {
+    const m = metric(entry({ ...ctr, folded: 500, foldedEvicted: 3 }), [
+      { attributes: { 'http.route': '/pay' }, buckets: [[0, counter(10)]] },
+      { other: true, buckets: [[0, counter(30)]] },
+    ]);
+    const r = runMetricQuery(m, query({ show: 'increase' }), { start: 0, end: 9 * S }, 600);
+    expect(r.notes).toContain(
+      'other is approximate: 3 folded series restarted from a baseline (too many to track)',
+    );
+    const none = metric(entry({ ...ctr, folded: 500 }), [{ other: true, buckets: [[0, counter(30)]] }]);
+    const quiet = runMetricQuery(none, query({ show: 'increase' }), { start: 0, end: 9 * S }, 600);
+    expect(quiet.notes.some((n) => n.includes('baseline'))).toBe(false);
   });
 
   test('folded series plus an attribute where give the partial note', () => {

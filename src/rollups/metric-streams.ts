@@ -15,11 +15,41 @@ import {
 } from './metric-agg.js';
 
 export type Normalized =
-  | { kind: 'ok'; agg: BucketAgg; reset: boolean }
+  /** `evicted`: making room for this point's folded series dropped another's stream state (see `foldedPerMetric`). */
+  | { kind: 'ok'; agg: BucketAgg; reset: boolean; evicted?: true }
   | { kind: 'skip'; reason: 'out-of-order' | 'no-value' };
 
 /** A series' identity for stream state: unique across the report, e.g. `<metric id>/<series id>`. */
 export type SeriesKey = string | number;
+
+/** Where a point's stream state lives, when a plain `SeriesKey` is not enough. */
+export interface StreamTarget {
+  series: SeriesKey;
+  /**
+   * The metric id, for a series folded into the metric's `other` series (keyed by `foldedSeriesKey`): such series
+   * are not capped by the catalog, so the normalizer keeps only the most recently used `foldedPerMetric` of them.
+   */
+  foldedIn?: number;
+}
+
+/** A 32-bit xor-multiply hash of `s` (FNV-1a when given FNV's basis and prime), as 8 hex chars. */
+function hash32(s: string, basis: number, prime: number): string {
+  let h = basis >>> 0;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, prime) >>> 0;
+  }
+  return h.toString(16).padStart(8, '0');
+}
+
+/**
+ * The stream key of a series folded into `other`: its catalog identity (`foldKey`, the full series key) hashed to
+ * 64 bits, so the state a folded series costs does not grow with its attributes.
+ */
+export function foldedSeriesKey(metricId: number, foldKey: string): string {
+  // Two different multipliers, so the halves collide independently.
+  return `${metricId}/~${hash32(foldKey, 0x811c9dc5, 0x01000193)}${hash32(foldKey, 0x9747b28c, 0x5bd1e995)}`;
+}
 
 /** Flag bit 1 of an OTLP data point: the point records that no value was observed. */
 const NO_RECORDED_VALUE = 1;
@@ -331,6 +361,8 @@ export interface SerializedStreams {
   lasts: (number | BucketAgg)[];
   seriesKeys: string[];
   seriesTimes: number[];
+  /** Per metric with folded series: their series keys, least recently used first. */
+  folded: [number, string[]][];
 }
 
 const SerializedStreamsSchema: z.ZodType<SerializedStreams> = z
@@ -340,6 +372,7 @@ const SerializedStreamsSchema: z.ZodType<SerializedStreams> = z
     lasts: z.array(z.union([z.number().finite(), BucketAggSchema])),
     seriesKeys: z.array(z.string()),
     seriesTimes: z.array(z.number().finite()),
+    folded: z.array(z.tuple([z.number().int().nonnegative(), z.array(z.string())])).default([]),
   })
   .refine((s) => s.times.length === s.keys.length && s.lasts.length === s.keys.length, {
     message: 'one time and one last value per stream key',
@@ -355,6 +388,11 @@ interface Stream {
   last: number | BucketAgg;
 }
 
+export interface StreamNormalizerOptions {
+  /** Most folded series (`StreamTarget.foldedIn`) whose streams are kept per metric; the default is unbounded. */
+  foldedPerMetric?: number;
+}
+
 /**
  * Turns each metric point into a mergeable delta. Cumulative streams (a series plus its start time) remember
  * their previous point; everything else is stateless.
@@ -363,9 +401,16 @@ export class StreamNormalizer {
   readonly #streams = new Map<string, Stream>();
   /** Time of each series' latest cumulative point, over all its streams: tells a restart from a second producer. */
   readonly #latest = new Map<string, number>();
+  /** Per metric, its folded series (least recently used first) and the stream keys of each. */
+  readonly #folded = new Map<number, Map<string, Set<string>>>();
+  readonly #foldedPerMetric: number;
+
+  constructor(opts: StreamNormalizerOptions = {}) {
+    this.#foldedPerMetric = opts.foldedPerMetric ?? Number.POSITIVE_INFINITY;
+  }
 
   /** `series` identifies the point's series across the whole report (series ids alone repeat per metric). */
-  normalize(series: SeriesKey, p: MetricPointRecord): Normalized {
+  normalize(series: SeriesKey | StreamTarget, p: MetricPointRecord): Normalized {
     return this.prepare(p)(series);
   }
 
@@ -374,7 +419,7 @@ export class StreamNormalizer {
    * normalizes it for a series (updating the stream of a cumulative point) and never throws, so a caller can
    * check a whole request before applying any of it.
    */
-  prepare(p: MetricPointRecord): (series: SeriesKey) => Normalized {
+  prepare(p: MetricPointRecord): (series: SeriesKey | StreamTarget) => Normalized {
     if ((p.flags & NO_RECORDED_VALUE) !== 0) return () => SKIP_NO_VALUE;
     const rule = ruleFor(p);
     switch (rule.agg) {
@@ -417,23 +462,26 @@ export class StreamNormalizer {
    * producer sharing the series identity (or a report replayed by merge) and is not.
    */
   #cumulative<T extends number | HistAgg | ExpAgg>(
-    series: SeriesKey,
+    target: SeriesKey | StreamTarget,
     p: MetricPointRecord,
     cur: T,
     diff: (cur: T, prev: T) => T | null,
     recall: (last: number | BucketAgg) => T | null,
     zero: (cur: T) => T,
   ): Normalized {
-    const key = `${series}:${p.start ?? 'none'}`;
+    const t: StreamTarget = typeof target === 'object' ? target : { series: target };
+    const owner = String(t.series);
+    const key = `${owner}:${p.start ?? 'none'}`;
     const prev = this.#streams.get(key);
     if (prev !== undefined && p.time <= prev.time) return { kind: 'skip', reason: 'out-of-order' };
-    const owner = String(series);
+    const evicted = t.foldedIn === undefined ? false : this.#touchFolded(t.foldedIn, owner, key);
     const latest = this.#latest.get(owner);
     if (latest === undefined || p.time > latest) this.#latest.set(owner, p.time);
     if (prev === undefined) {
       this.#streams.set(key, { time: p.time, last: cur });
-      if (p.start === null) return wrap(zero(cur), false);
-      return wrap(cur, latest !== undefined && p.start > latest);
+      const first =
+        p.start === null ? wrap(zero(cur), false) : wrap(cur, latest !== undefined && p.start > latest);
+      return evicted && first.kind === 'ok' ? { ...first, evicted: true } : first;
     }
     const before = recall(prev.last);
     prev.time = p.time;
@@ -442,8 +490,44 @@ export class StreamNormalizer {
     return delta === null ? wrap(cur, true) : wrap(delta, false);
   }
 
+  /**
+   * Marks folded series `owner` of metric `metric` most recently used, with stream `key`. A series new to the metric
+   * beyond `foldedPerMetric` drops the least recently used one's state (returns true): that series' next point is
+   * a new stream again, counted by the first-point rule.
+   */
+  #touchFolded(metric: number, owner: string, key: string): boolean {
+    let lru = this.#folded.get(metric);
+    if (lru === undefined) {
+      lru = new Map();
+      this.#folded.set(metric, lru);
+    }
+    const keys = lru.get(owner);
+    if (keys !== undefined) {
+      lru.delete(owner);
+      lru.set(owner, keys.add(key));
+      return false;
+    }
+    let evicted = false;
+    for (const [old, oldKeys] of lru) {
+      if (lru.size < this.#foldedPerMetric) break;
+      lru.delete(old);
+      this.#latest.delete(old);
+      for (const k of oldKeys) this.#streams.delete(k);
+      evicted = true;
+    }
+    lru.set(owner, new Set([key]));
+    return evicted;
+  }
+
   toJSON(): SerializedStreams {
-    const out: SerializedStreams = { keys: [], times: [], lasts: [], seriesKeys: [], seriesTimes: [] };
+    const out: SerializedStreams = {
+      keys: [],
+      times: [],
+      lasts: [],
+      seriesKeys: [],
+      seriesTimes: [],
+      folded: [...this.#folded].map(([metric, lru]) => [metric, [...lru.keys()]]),
+    };
     for (const [key, s] of this.#streams) {
       out.keys.push(key);
       out.times.push(s.time);
@@ -456,9 +540,19 @@ export class StreamNormalizer {
     return out;
   }
 
-  static from(input: unknown, root: string): StreamNormalizer {
+  static from(input: unknown, root: string, opts: StreamNormalizerOptions = {}): StreamNormalizer {
     const s = parseWith(SerializedStreamsSchema, input, root);
-    const n = new StreamNormalizer();
+    const n = new StreamNormalizer(opts);
+    // A folded series' streams are the stream keys `<series key>:<start>`.
+    const streamsOf = new Map<string, Set<string>>();
+    for (const [, series] of s.folded) for (const owner of series) streamsOf.set(owner, new Set());
+    for (const key of s.keys) streamsOf.get(key.slice(0, key.lastIndexOf(':')))?.add(key);
+    for (const [metric, series] of s.folded) {
+      n.#folded.set(
+        metric,
+        new Map(series.map((owner) => [owner, streamsOf.get(owner) ?? new Set<string>()])),
+      );
+    }
     s.keys.forEach((key, i) => {
       const time = s.times[i];
       const last = s.lasts[i];

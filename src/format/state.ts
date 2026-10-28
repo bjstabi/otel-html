@@ -51,7 +51,9 @@ export const SessionStateSchema: z.ZodType<SessionState> = z.strictObject({
   rollups: SerializedRollupsSchema,
   dedupe: z.array(z.string()),
   traceIndex: z.record(z.string().regex(/^[0-9a-f]{2}$/, 'two lowercase hex chars'), TraceShardSchema),
-  metricStreams: z.unknown().default({ keys: [], times: [], lasts: [], seriesKeys: [], seriesTimes: [] }),
+  metricStreams: z
+    .unknown()
+    .default({ keys: [], times: [], lasts: [], seriesKeys: [], seriesTimes: [], folded: [] }),
   nextSegment: z.record(z.string().regex(/^(0|[1-9][0-9]*)$/, 'a metric id'), nonNegInt).default({}),
 });
 
