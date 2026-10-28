@@ -31,6 +31,7 @@ const NOT_VIEW = 'Only the List, Top list and Table views can become widgets';
 const NO_PATTERNS = "Patterns can't become a widget yet";
 const NO_DISTRIBUTION = "The Distribution display can't become a widget";
 const NO_METRIC = 'Choose a metric first';
+const NO_SHOW = 'Choose what to show first';
 const NO_LOG_TRACES = "Logs grouped into traces can't become a widget yet";
 
 const no = (reason: string): WidgetFromPage => ({ ok: false, reason });
@@ -51,6 +52,7 @@ export function widgetFromPage(page: ExplorerPage, s: SelectionData): WidgetFrom
     const { display } = m;
     if (display === 'distribution') return no(NO_DISTRIBUTION);
     if (m.queries.length === 0 || m.queries.some((q) => q.metric === '')) return no(NO_METRIC);
+    if (m.queries.some((q) => q.show === '')) return no(NO_SHOW);
     return {
       ok: true,
       widget: {

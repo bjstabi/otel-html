@@ -81,7 +81,11 @@ function FacetBody<R extends Facets>(props: Shared & { handle: QueryHandle<R> })
             No <span className="font-mono">{groupBy}</span> values in this window
           </p>
         ) : option !== null ? (
-          <Chart option={option} height={chartPx} ariaLabel={`Top ${groupBy} of ${result.total} ${unit}s`} />
+          <Chart
+            option={option}
+            height={chartPx}
+            ariaLabel={`Top ${groupBy} of ${count(result.total, unit)}`}
+          />
         ) : (
           <div className="overflow-auto" style={{ maxHeight: chartPx }}>
             <GroupTable result={result} groupBy={groupBy} colors={colors} noun={props.noun} />

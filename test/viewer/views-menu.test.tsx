@@ -179,6 +179,27 @@ describe('ViewsMenu', () => {
     expect(readLocalViews(window.localStorage)).toEqual([]);
   });
 
+  test('saving and deleting keep a view another tab saved after this one loaded', async () => {
+    const user = userEvent.setup();
+    mount('logs');
+    const other = { id: 'other', title: 'Other tab', page: 'logs', search: 'q=a' } as const;
+    window.localStorage.setItem(LOCAL_VIEWS_KEY, JSON.stringify([other]));
+    await user.click(screen.getByRole('button', { name: /Views/ }));
+    await user.click(await screen.findByRole('menuitem', { name: /Save current view/ }));
+    await user.type(screen.getByRole('textbox', { name: 'View title' }), 'Mine');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    expect(readLocalViews(window.localStorage).map((v) => v.title)).toEqual(['Other tab', 'Mine']);
+
+    const third = { id: 'third', title: 'Third tab', page: 'logs', search: 'q=b' } as const;
+    window.localStorage.setItem(
+      LOCAL_VIEWS_KEY,
+      JSON.stringify([...readLocalViews(window.localStorage), third]),
+    );
+    await user.click(screen.getByRole('button', { name: /Views/ }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Delete view Mine' }));
+    expect(readLocalViews(window.localStorage).map((v) => v.title)).toEqual(['Other tab', 'Third tab']);
+  });
+
   test('a stored "{bad" lists no local views and does not throw', async () => {
     window.localStorage.setItem(LOCAL_VIEWS_KEY, '{bad');
     const user = userEvent.setup();

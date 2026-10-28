@@ -124,7 +124,9 @@ export function ViewsMenu(props: { page: ExplorerPage; manifest: Manifest }): JS
     const keepT = currentParams().get('t') ?? undefined;
     navigateRoute(window, `/${page}`, serializeUrlState(viewToUrl(v, keepT)));
   };
-  const commit = (next: LocalView[]): boolean => {
+  // Re-read before writing: another tab may have saved or deleted a view since this one loaded.
+  const commit = (change: (current: LocalView[]) => LocalView[]): boolean => {
+    const next = change(readLocalViews(storage));
     if (!writeLocalViews(storage, next)) return false;
     setAll(next);
     return true;
@@ -141,7 +143,7 @@ export function ViewsMenu(props: { page: ExplorerPage; manifest: Manifest }): JS
       page,
       search: params.toString().replace(/%7E/g, '~'),
     };
-    if (commit([...all, view])) {
+    if (commit((current) => [...current, view])) {
       setSaving(false);
       setTitle('');
       setFailed(false);
@@ -181,7 +183,7 @@ export function ViewsMenu(props: { page: ExplorerPage; manifest: Manifest }): JS
                     </Menu.Item>
                     <Menu.Item
                       aria-label={`Delete view ${v.title}`}
-                      onClick={() => commit(all.filter((x) => x.id !== v.id))}
+                      onClick={() => commit((current) => current.filter((x) => x.id !== v.id))}
                       className="rounded-full p-1.5 text-ink-2 hover:bg-hairline"
                     >
                       <Trash2 size={14} aria-hidden />

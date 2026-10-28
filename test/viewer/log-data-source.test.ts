@@ -472,6 +472,14 @@ describe('windowed logs', () => {
     expect(all.total).toBe(3);
   });
 
+  test('a trace hint with a null condition still counts only that trace and skips the whole-run rollup', async () => {
+    const { ds, loader } = await windowed();
+    const r = await ds.queryLogs(query({ traceId: LOG_TRACE as TraceId }));
+    expect(loader.calls).not.toContain('data/rollups/logs.js');
+    expect(r.total).toBeLessThan(rep.manifest.totals.logs);
+    expect(r.partial).toBeNull();
+  });
+
   test('a trace-restricted query for a trace without logs reads no log chunk', async () => {
     const { ds, loader } = await windowed();
     const ghost = 'f'.repeat(32);

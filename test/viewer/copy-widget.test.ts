@@ -71,6 +71,15 @@ describe('widgetFromPage', () => {
     expect(widgetFromPage('metrics', data({}))).toEqual({ ok: false, reason: 'Choose a metric first' });
   });
 
+  test('Metrics with an empty show says to choose what to show', () => {
+    const seed = defaultMetricState(null);
+    const queries = seed.queries.map((q) => ({ ...q, metric: 'http.server.requests', show: '' }));
+    expect(widgetFromPage('metrics', { ...data({}), metrics: { ...seed, queries } })).toEqual({
+      ok: false,
+      reason: 'Choose what to show first',
+    });
+  });
+
   test('Metrics state becomes a metric widget with the same queries, omitting defaults', () => {
     const seed = defaultMetricState(null);
     const queries = seed.queries.map((q) => ({ ...q, metric: 'http.server.requests', show: 'rate' }));

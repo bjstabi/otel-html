@@ -64,7 +64,8 @@ export function createWindowedLogSource(
     async queryLogs(q, onProgress, signal) {
       const run = new LogQueryRun(q, signal);
       const found = chunks.targets(q);
-      const { unfiltered } = found;
+      // A trace restriction is a filter even when the condition is null: the whole-run rollup cannot stand in.
+      const unfiltered = found.unfiltered && q.traceId == null;
       // A query restricted to one trace reads that trace's chunks (the index lists them all), not the whole window.
       const traceChunks =
         q.traceId == null ? null : chunks.listed((await index.entry(q.traceId))?.logChunks ?? []);
