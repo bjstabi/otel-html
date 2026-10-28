@@ -119,7 +119,7 @@ describe('FusionTimeline', () => {
     expect(onBrush).toHaveBeenLastCalledWith({ start: 1_500_500, end: 9_500_500 });
     // Columns 2-3 are 3 ms to 5 ms, inside the window, so they pass through whole.
     fireEvent.pointerDown(brush, { clientX: 230, pointerId: 1 });
-    fireEvent.pointerUp(brush, { clientX: 450, pointerId: 1 });
+    fireEvent.pointerUp(brush, { clientX: 390, pointerId: 1 });
     expect(onBrush).toHaveBeenLastCalledWith({ start: 3 * MS, end: 5 * MS });
   });
 
