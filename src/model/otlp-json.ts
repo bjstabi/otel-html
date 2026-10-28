@@ -12,11 +12,18 @@ import {
   type ExportTraceServiceRequest,
   ExportTraceServiceRequestSchema,
 } from './gen/opentelemetry/proto/collector/trace/v1/trace_service_pb.js';
+import { type PlainMetrics, plainMetrics } from './otlp-json-metrics.js';
+import { UnsafeNumber } from './unsafe-number.js';
 
 export type OtlpRequest = (
   | { readonly signal: 'traces'; readonly request: ExportTraceServiceRequest }
   | { readonly signal: 'logs'; readonly request: ExportLogsServiceRequest }
-  | { readonly signal: 'metrics'; readonly request: ExportMetricsServiceRequest }
+  | {
+      readonly signal: 'metrics';
+      readonly request: ExportMetricsServiceRequest;
+      /** Set when the request came from OTLP JSON `plainMetrics` reads: its records come from it, not `request`. */
+      readonly plain?: PlainMetrics;
+    }
 ) & {
   /** Index of the request's first resource entry in its file's resource array, for error paths; 0 if omitted. */
   readonly first?: number;
@@ -63,16 +70,6 @@ const SIGNALS: readonly SignalEntry[] = [
 /** The signal whose resource array a top-level OTLP-JSON key holds, if any. */
 export function signalEntry(key: string): SignalEntry | undefined {
   return SIGNALS.find((s) => s.key === key);
-}
-
-/** A JSON number that is not a safe integer, kept with its exact source text. */
-class UnsafeNumber {
-  readonly value: number;
-  readonly source: string;
-  constructor(value: number, source: string) {
-    this.value = value;
-    this.source = source;
-  }
 }
 
 type RevivedContext = { readonly source?: string };
@@ -242,8 +239,41 @@ export function parseOtlpObject(root: unknown, source: string): OtlpRequest[] {
 /**
  * The request of one signal holding the parsed resource entries `items`, the first of which is element `first` of
  * the signal's array in its file (for error paths). A lone entry's path also prefixes protobuf-es errors.
+ *
+ * Metrics that `plainMetrics` reads are kept as JSON (`plain`); their protobuf-es message is decoded only if
+ * `request` is read.
  */
 export function requestOf(
+  entry: SignalEntry,
+  items: readonly unknown[],
+  first: number,
+  source: string,
+): OtlpRequest {
+  if (entry.signal === 'metrics') {
+    const plain = plainMetrics(items);
+    if (plain !== null) {
+      let decoded: ExportMetricsServiceRequest | undefined;
+      return {
+        signal: 'metrics',
+        first,
+        plain,
+        get request(): ExportMetricsServiceRequest {
+          if (decoded === undefined) {
+            const r = decodeRequest(entry, items, first, source);
+            if (r.signal !== 'metrics')
+              throw new Error('invariant violated: metrics decoded as another signal');
+            decoded = r.request;
+          }
+          return decoded;
+        },
+      };
+    }
+  }
+  return decodeRequest(entry, items, first, source);
+}
+
+/** `requestOf` through protobuf-es. */
+export function decodeRequest(
   entry: SignalEntry,
   items: readonly unknown[],
   first: number,

@@ -161,6 +161,10 @@ export class Report {
     return this.#addAll(requestsOf('addLogs', 'logs', input), 'addLogs');
   }
 
+  /**
+   * A protobuf-es `ExportMetricsServiceRequest` or an OTLP-JSON object. OTLP JSON is read in place, not copied:
+   * leave it unchanged until the returned promise settles.
+   */
   async addMetrics(input: ExportMetricsServiceRequest | object): Promise<AddResult> {
     if (isMessage(input, ExportMetricsServiceRequestSchema.typeName)) {
       return this.#session.add(

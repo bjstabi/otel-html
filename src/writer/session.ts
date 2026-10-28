@@ -18,7 +18,6 @@ import { parseUnixNanos, type UnixNanos } from '../model/ids.js';
 import {
   createNormalizeContext,
   earliestTimestamp,
-  metricRecords,
   type NormalizeContext,
   normalizeLogs,
   normalizeTraces,
@@ -26,6 +25,7 @@ import {
   pointExemplars,
 } from '../model/normalize.js';
 import type { OtlpRequest } from '../model/otlp-json.js';
+import { metricPointsOf } from '../model/otlp-json-metrics.js';
 import {
   type LogRecordRecord,
   logTime,
@@ -391,7 +391,7 @@ class Session implements WriterSession {
         }
         case 'metrics': {
           // Generated twice (checked, then applied) rather than held: a request can carry many points.
-          const rows = (): Iterable<MetricPointRecord> => metricRecords(input.request, ctx, source, first);
+          const rows = (): Iterable<MetricPointRecord> => metricPointsOf(input, ctx, source);
           result = await this.#acceptPoints(rows, (n) => this.#settleEpoch(n));
           break;
         }

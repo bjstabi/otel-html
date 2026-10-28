@@ -66,7 +66,7 @@ export function createNormalizeContext(epoch: UnixNanos): NormalizeContext {
 }
 
 /** A field path, or a function building it only for an error (per-point paths are costly at volume). */
-type Path = string | (() => string);
+export type Path = string | (() => string);
 const pathText = (p: Path): string => (typeof p === 'string' ? p : p());
 
 function convertAnyValue(v: ProtoAnyValue, path: Path): AnyValue {
@@ -134,7 +134,7 @@ function spanIdOrNull(b: Uint8Array, path: string): SpanId | null {
 
 const MAX_REL = BigInt(Number.MAX_SAFE_INTEGER);
 
-function rel(t: bigint, ctx: NormalizeContext, path: Path): RelNanos {
+export function rel(t: bigint, ctx: NormalizeContext, path: Path): RelNanos {
   const d = t - ctx.epoch;
   if (t >= 0n && d <= MAX_REL && d >= -MAX_REL) return Number(d) as RelNanos;
   const at = pathText(path);
@@ -142,7 +142,7 @@ function rel(t: bigint, ctx: NormalizeContext, path: Path): RelNanos {
 }
 
 /** Zero means "unset" for optional timestamps. */
-function relOrNull(t: bigint, ctx: NormalizeContext, path: Path): RelNanos | null {
+export function relOrNull(t: bigint, ctx: NormalizeContext, path: Path): RelNanos | null {
   return t === 0n ? null : rel(t, ctx, path);
 }
 
@@ -453,6 +453,10 @@ export function earliestTimestamp(req: OtlpRequest): UnixNanos | null {
           for (const l of sl.logRecords) see(l.timeUnixNano !== 0n ? l.timeUnixNano : l.observedTimeUnixNano);
       break;
     case 'metrics':
+      if (req.plain !== undefined) {
+        if (req.plain.earliest !== null) see(req.plain.earliest);
+        break;
+      }
       for (const rm of req.request.resourceMetrics)
         for (const sm of rm.scopeMetrics)
           for (const m of sm.metrics) for (const dp of metricShape(m)?.points ?? []) see(dp.timeUnixNano);
