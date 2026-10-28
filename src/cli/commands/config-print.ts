@@ -1,3 +1,4 @@
+import { basename } from 'node:path';
 import type { Command } from 'commander';
 import { findConfigPath, loadConfigFile } from '../../config/load.js';
 import { formatConfig, type ResolveResult, resolveConfig } from '../../config/resolve.js';
@@ -14,7 +15,7 @@ export async function resolveCliConfig(
   const path = flags.config ?? (await findConfigPath(fs, io.cwd, io.env));
   const file = path === null ? undefined : await loadConfigFile(fs, path);
   return resolveConfig({
-    ...(file === undefined ? {} : { file }),
+    ...(file === undefined || path === null ? {} : { file, fileLabel: basename(path) }),
     env: io.env,
     flags: configInputOf(flags),
   });

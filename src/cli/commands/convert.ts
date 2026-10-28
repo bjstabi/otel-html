@@ -1,5 +1,6 @@
 import { type Command, Option } from 'commander';
 import { convert } from '../../api/convert.js';
+import { configInputOfResolved } from '../../config/resolve.js';
 import type { OtlpSignal } from '../../model/otlp-json.js';
 import { createNodeFileSystem } from '../../writer/node-fs.js';
 import type { ReportSummary, WriterDeps } from '../../writer/session.js';
@@ -39,7 +40,7 @@ export function addConvertCommand(program: Command, io: CliIo, deps: Partial<Wri
         {
           input: files,
           out: flags.out,
-          config,
+          config: configInputOfResolved(config),
           ...(flags.append === true ? { append: true } : {}),
           ...(flags.signal === undefined ? {} : { signal: flags.signal }),
         },

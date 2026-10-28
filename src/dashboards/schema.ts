@@ -192,7 +192,9 @@ const dashboardId = z
   .regex(/^[a-z0-9][a-z0-9-]{0,63}$/, 'an id of lowercase letters, digits and dashes');
 const widgetId = z.string().regex(/^[a-z][a-z0-9-]{0,31}$/, 'an id starting with a lowercase letter');
 const nullableString = z.string().nullable().default(null);
-const echarts = z.record(z.string(), z.unknown()).nullable().default(null);
+const echarts = z.record(z.string(), z.unknown()).nullable().default(null).meta({
+  description: "Unstable: passed through to ECharts as is; compatibility is ECharts', not otel-html's.",
+});
 
 const layout = {
   id: widgetId.optional(),

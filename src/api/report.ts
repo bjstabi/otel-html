@@ -1,3 +1,4 @@
+import { basename } from 'node:path';
 import { trace } from '@opentelemetry/api';
 import type { ReadableSpan } from '@opentelemetry/sdk-trace-base';
 import pkg from '../../package.json' with { type: 'json' };
@@ -68,7 +69,7 @@ export async function resolveApiConfig(
   const object = typeof config === 'string' ? undefined : config;
   const flags: ConfigInput | undefined = title === undefined ? object : { ...object, title };
   return resolveConfig({
-    ...(file === undefined ? {} : { file }),
+    ...(file === undefined || typeof config !== 'string' ? {} : { file, fileLabel: basename(config) }),
     env: {},
     ...(flags === undefined ? {} : { flags }),
   }).config;

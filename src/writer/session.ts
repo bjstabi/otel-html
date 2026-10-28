@@ -944,7 +944,14 @@ class Session implements WriterSession {
       rollups: ROLLUP_NAMES.map((n) => rollupPath(n)),
       traceShards: shards.map((s) => traceShardPath(s)),
       metricFiles: this.#series.listed(),
-      config: { viewer: this.#config.viewer },
+      // Dashboards and the new viewer keys reach the manifest in the next change; until then only the old keys go in.
+      config: {
+        viewer: {
+          eagerBudgetBytes: this.#config.viewer.eagerBudgetBytes,
+          listCap: this.#config.viewer.listCap,
+          theme: this.#config.viewer.theme,
+        },
+      },
     };
   }
 }

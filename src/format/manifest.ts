@@ -30,7 +30,7 @@ export interface Manifest {
   traceShards: string[];
   /** Series files under `data/metrics/` (series, segments, levels, exemplars); absent before M3. */
   metricFiles: string[];
-  config: { viewer: ResolvedConfig['viewer'] };
+  config: { viewer: Omit<ResolvedConfig['viewer'], 'defaultDashboard' | 'home'> };
 }
 
 const nonNegInt = z.number().int().nonnegative();
