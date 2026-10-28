@@ -240,6 +240,14 @@ describe('MetricChartCard', () => {
     expect(zooms).toEqual([{ start: 3 * S, end: 15 * S }]);
   });
 
+  test('a drag-zoom window is whole nanoseconds: ECharts maps pixels to fractional values', async () => {
+    const { zooms } = setup({});
+    plot.scale = S / 3;
+    await drag(16, 4);
+    expect(zooms).toEqual([{ start: Math.round((4 * S) / 3), end: Math.round((16 * S) / 3) }]);
+    for (const w of zooms) expect(Number.isSafeInteger(w.start) && Number.isSafeInteger(w.end)).toBe(true);
+  });
+
   test('a click outside the plot grid opens nothing', async () => {
     setup({});
     plot.inside = false;

@@ -169,7 +169,8 @@ export function MetricChartCard(props: MetricChartCardProps): JSX.Element {
     if (chart === null) return;
     const zr = chart.getZr();
     let down: { x: number; t: number } | null = null;
-    // Time under the pointer, or null off the plot, on a distribution (no time axis) or when unconvertible.
+    // Time under the pointer in whole nanoseconds (ECharts maps pixels to fractional values, and a window must be
+    // integers), or null off the plot, on a distribution (no time axis) or when unconvertible.
     // A heatmap's x axis is a category index, mapped back to its bucket's time.
     const timeAt = (e: ZrEvent): number | null => {
       const { display, results: rs } = live.current;
@@ -177,7 +178,7 @@ export function MetricChartCard(props: MetricChartCardProps): JSX.Element {
       const v = chart.convertFromPixel({ gridIndex: 0 }, [e.offsetX, e.offsetY]);
       const x = Array.isArray(v) ? Number(v[0]) : Number.NaN;
       if (!Number.isFinite(x)) return null;
-      if (display !== 'heatmap') return x;
+      if (display !== 'heatmap') return Math.round(x);
       const { t0, width } = heatAxis(rs);
       return t0 + Math.round(x) * width;
     };
