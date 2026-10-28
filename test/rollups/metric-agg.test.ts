@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { OtelHtmlError } from '../../src/model/errors.js';
 import {
   type BucketAgg,
   BucketAggSchema,
@@ -112,6 +113,23 @@ describe('downscaleExp', () => {
   it('rejects upscaling', () => {
     expect(() => downscaleExp(exp({ scale: 1 }), 2)).toThrow();
   });
+  it('rejects a scale below -10 or a shift beyond 30 bits, where `>>` would wrap', () => {
+    expect(() => downscaleExp(exp({ scale: -10 }), -11)).toThrow(OtelHtmlError);
+    expect(() => downscaleExp(exp({ scale: 21 }), -10)).toThrow(OtelHtmlError);
+    expect(
+      downscaleExp(exp({ scale: 20, positive: { offset: 2 ** 30, counts: [1] }, count: 1 }), -10).positive,
+    ).toEqual({
+      offset: 1,
+      counts: [1],
+    });
+  });
+  it('merges far-apart exp aggs without going below scale -10', () => {
+    const lo = exp({ count: 1, scale: 20, positive: { offset: -1075 * 2 ** 20, counts: [1] } });
+    const hi = exp({ count: 1, scale: 20, positive: { offset: 1024 * 2 ** 20 - 1, counts: [1] } });
+    const m = mergeAgg(lo, hi, 'p');
+    expect(m.k === 'exp' && m.scale).toBeGreaterThanOrEqual(-10);
+    expect(m.k === 'exp' && m.count).toBe(2);
+  });
 });
 
 describe('quantileOf', () => {
@@ -141,6 +159,12 @@ describe('quantileOf', () => {
 describe('BucketAggSchema', () => {
   it('rejects NaN sums and bounds/counts mismatches', () => {
     expect(BucketAggSchema.safeParse(hist({ sum: Number.NaN })).success).toBe(false);
+    expect(BucketAggSchema.safeParse(exp({ scale: 21 })).success).toBe(false);
+    expect(BucketAggSchema.safeParse(exp({ scale: -11 })).success).toBe(false);
+    expect(
+      BucketAggSchema.safeParse(exp({ count: 1, positive: { offset: 2 ** 31, counts: [1] } })).success,
+    ).toBe(false);
+    expect(BucketAggSchema.safeParse(exp({ scale: 20 })).success).toBe(true);
     expect(BucketAggSchema.safeParse(hist({ counts: [1, 2, 3] })).success).toBe(false);
     expect(BucketAggSchema.safeParse(hist({ count: 11 })).success).toBe(false);
   });

@@ -8,7 +8,10 @@ import {
   downscaleExp,
   type ExpAgg,
   type ExpSide,
+  expIndexRange,
   type HistAgg,
+  MAX_EXP_SCALE,
+  MIN_EXP_SCALE,
 } from './metric-agg.js';
 
 export type Normalized =
@@ -161,10 +164,22 @@ function expOf(p: MetricPointRecord): ExpAgg | null {
     ['positive', d.positive],
     ['negative', d.negative],
   ] as const;
+  if (d.scale < MIN_EXP_SCALE || d.scale > MAX_EXP_SCALE) {
+    throw malformed(p, 'point.scale', `an integer in [${MIN_EXP_SCALE}, ${MAX_EXP_SCALE}]`, String(d.scale));
+  }
+  // A bucket no double falls in is malformed, and bounding the indexes keeps every bucket shift exact.
+  const range = expIndexRange(d.scale);
   for (const [name, s] of sides) {
     checkCounts(p, `point.${name}.bucketCounts`, s.bucketCounts);
-    if (!Number.isSafeInteger(s.offset))
-      throw malformed(p, `point.${name}.offset`, 'an integer', String(s.offset));
+    const last = s.offset + Math.max(0, s.bucketCounts.length - 1);
+    if (!Number.isSafeInteger(s.offset) || s.offset < range.min || last > range.max) {
+      throw malformed(
+        p,
+        `point.${name}.offset`,
+        `bucket indexes in [${range.min}, ${range.max}] at scale ${d.scale}`,
+        `${s.offset}..${last}`,
+      );
+    }
   }
   checkCounts(p, 'point.zeroCount', [d.zeroCount]);
   checkCounts(p, 'point.count', [d.count]);

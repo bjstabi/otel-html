@@ -4,6 +4,18 @@ import { OtelHtmlError } from '../model/errors.js';
 /** Most buckets one side (positive or negative) of an `ExpAgg` keeps after a merge. */
 const MAX_EXP_BUCKETS = 160;
 
+/** The scales OTLP allows (the spec's MinScale and MaxScale): every finite double has a bucket index in int32. */
+export const MIN_EXP_SCALE = -10;
+export const MAX_EXP_SCALE = 20;
+
+/**
+ * The bucket indexes a double can reach at `scale`: bucket `i` holds (2^(i/2^s), 2^((i+1)/2^s)], and finite doubles
+ * (subnormals included) lie in [2^-1075, 2^1024). At scale 20 this is within int32, so `>>` on an index never wraps.
+ */
+export function expIndexRange(scale: number): { min: number; max: number } {
+  return { min: Math.floor(-1075 * 2 ** scale), max: Math.ceil(1024 * 2 ** scale) - 1 };
+}
+
 export interface NumberAgg {
   k: 'number';
   count: number;
@@ -79,8 +91,13 @@ function downscaleSide(side: ExpSide, d: number): ExpSide {
 /** Merges neighbouring buckets so the aggregate sits at `scale` (which must not exceed its current scale). */
 export function downscaleExp(e: ExpAgg, scale: number): ExpAgg {
   const d = e.scale - scale;
-  if (!Number.isInteger(d) || d < 0) {
-    throw invariantError('downscaleExp', `integer scale <= ${e.scale}`, String(scale));
+  // Within [MIN_EXP_SCALE, MAX_EXP_SCALE] the shift is at most 30 bits; `>>` takes it mod 32.
+  if (!Number.isInteger(d) || d < 0 || scale < MIN_EXP_SCALE || d > MAX_EXP_SCALE - MIN_EXP_SCALE) {
+    throw invariantError(
+      'downscaleExp',
+      `integer scale in [${MIN_EXP_SCALE}, ${Math.min(e.scale, MAX_EXP_SCALE)}]`,
+      `${scale} (from ${e.scale})`,
+    );
   }
   return {
     ...e,
@@ -299,7 +316,14 @@ const HistAggSchema = z
   })
   .refine((h) => h.counts.length === h.bounds.length + 1, { message: 'counts.length === bounds.length + 1' })
   .refine((h) => sumOf(h.counts) === h.count, { message: 'count equal to sum(counts)' });
-const ExpSideSchema = z.strictObject({ offset: z.number().int(), counts: z.array(nonNegInt) });
+const ExpSideSchema = z.strictObject({
+  offset: z
+    .number()
+    .int()
+    .min(-(2 ** 31))
+    .max(2 ** 31 - 1),
+  counts: z.array(nonNegInt),
+});
 const ExpAggSchema = z
   .strictObject({
     k: z.literal('exp'),
@@ -307,7 +331,7 @@ const ExpAggSchema = z
     sum: finite,
     min: nullableFinite,
     max: nullableFinite,
-    scale: z.number().int(),
+    scale: z.number().int().min(MIN_EXP_SCALE).max(MAX_EXP_SCALE),
     zeroCount: nonNegInt,
     zeroThreshold: finite.nonnegative(),
     positive: ExpSideSchema,

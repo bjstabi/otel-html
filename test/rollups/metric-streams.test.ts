@@ -247,6 +247,50 @@ describe('StreamNormalizer', () => {
     expect(() => s.normalize(0, badCount)).toThrow(expect.objectContaining({ code: 'invalid-otlp' }));
   });
 
+  it('rejects an exponential histogram scale outside [-10, 20] or a bucket index a double cannot reach', () => {
+    const e = (scale: number, offset: number, counts = ['1']): MetricPointRecord =>
+      pt({
+        type: 'exponentialHistogram',
+        temporality: 'delta',
+        point: { count: String(counts.length), scale, positive: { offset, bucketCounts: counts } },
+      });
+    const s = new StreamNormalizer();
+    for (const [scale, path] of [
+      [21, 'point.scale'],
+      [-11, 'point.scale'],
+      [32, 'point.scale'],
+    ] as const) {
+      expect(() => s.normalize(0, e(scale, 0))).toThrow(
+        expect.objectContaining({ code: 'invalid-otlp', path: `metric "m".${path}` }),
+      );
+    }
+    // Outside int32 (where `>>` would wrap), and inside int32 but beyond any double at that scale.
+    for (const [scale, offset] of [
+      [0, 2 ** 31],
+      [0, -(2 ** 31) - 1],
+      [20, 2 ** 31 - 1],
+      [-10, 3],
+      [0, 1200],
+    ] as const) {
+      expect(() => s.normalize(0, e(scale, offset))).toThrow(
+        expect.objectContaining({ code: 'invalid-otlp', path: 'metric "m".point.positive.offset' }),
+      );
+    }
+    // The last bucket counts too, not only the offset.
+    expect(() => s.normalize(0, e(-10, 1, ['1', '1']))).toThrow(
+      expect.objectContaining({ code: 'invalid-otlp', path: 'metric "m".point.positive.offset' }),
+    );
+    // The extremes a double can reach are fine.
+    for (const [scale, offset] of [
+      [20, 1024 * 2 ** 20 - 1],
+      [20, -1075 * 2 ** 20],
+      [-10, -2],
+      [-10, 0],
+    ] as const) {
+      expect(s.normalize(0, e(scale, offset)).kind).toBe('ok');
+    }
+  });
+
   it('prepare parses without touching streams; its step applies the point', () => {
     const s = new StreamNormalizer();
     const steps = [sum(5, 1), sum(8, 2)].map((p) => s.prepare(p));
