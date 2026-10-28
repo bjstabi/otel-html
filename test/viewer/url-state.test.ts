@@ -54,7 +54,7 @@ describe('parseUrlState', () => {
     const r = parseUrlState('tab=overview');
     expect(r.state).toEqual({});
     expect(r.errors).toEqual([
-      'tab: expected one of flame, waterfall, spans, services, logs, errors, got overview',
+      'tab: expected one of flame, waterfall, spans, services, logs, metrics, errors, got overview',
     ]);
   });
 
@@ -114,7 +114,7 @@ describe('logs keys', () => {
       'log: expected <chunk>.<row> without leading zeros, got 01.2',
     ]);
     expect(parseUrlState('ltab=flame').errors).toEqual([
-      'ltab: expected one of attributes, trace, surrounding, resource, got flame',
+      'ltab: expected one of attributes, trace, metrics, surrounding, resource, got flame',
     ]);
   });
 

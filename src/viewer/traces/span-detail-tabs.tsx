@@ -1,9 +1,10 @@
-import { type JSX, type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
+import { type JSX, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { RelNanos, SpanId, TraceId } from '../../model/ids.js';
-import type { SpanEventRecord, SpanLinkRecord, SpanRecord } from '../../model/records.js';
+import type { ResourceRecord, SpanEventRecord, SpanLinkRecord, SpanRecord } from '../../model/records.js';
 import { formatDuration } from '../../semconv/formatters.js';
 import { AttributeGroups } from '../components/attribute-groups.js';
 import type { DataSource } from '../data/data-source.js';
+import { gridWindow, MetricGrid, type MetricGridOrigin } from '../metrics/metric-grid.js';
 import { navigateRoute } from '../shell/use-route.js';
 import { selectionToUrlState } from '../state/selection.js';
 import { useSelection } from '../state/selection-context.js';
@@ -158,4 +159,25 @@ export function LinksTab(props: {
       ))}
     </ul>
   );
+}
+
+/** The embedded metric grid on the span's resource, over the span ± 5 min. */
+export function SpanMetricsTab(props: {
+  span: SpanRecord;
+  resource: ResourceRecord;
+  dataSource: DataSource;
+}): JSX.Element {
+  const { span, resource, dataSource } = props;
+  const range = dataSource.manifest.range;
+  const origin = useMemo(
+    (): MetricGridOrigin => ({
+      kind: 'span',
+      resources: [resource],
+      at: span.start,
+      window: gridWindow({ start: span.start, end: span.end }, range),
+      traceId: span.traceId,
+    }),
+    [span, resource, range],
+  );
+  return <MetricGrid key={span.spanId} dataSource={dataSource} origin={origin} />;
 }

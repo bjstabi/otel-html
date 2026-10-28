@@ -203,7 +203,8 @@ export async function loadMetric(
   return { entry, series, levels, exemplars, fromSegments: true };
 }
 
-const resourceKey = (r: ResourceRecord): string =>
+/** Canonical identity of a resource: what `metricsOnResources` matches on. */
+export const resourceKey = (r: ResourceRecord): string =>
   JSON.stringify([r.schemaUrl, r.droppedAttributesCount, canonicalAttributesKey(r.attributes)]);
 
 /** Catalog entries with a series on one of `resources`, matched by canonical resource equality. */

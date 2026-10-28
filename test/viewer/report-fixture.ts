@@ -394,3 +394,160 @@ async function buildMetrics(finish: boolean, extras: boolean): Promise<Fixture> 
   else await session.flush();
   return { files: reportFilesFromSnapshot(w.fs.snapshot(), OUT), manifest: manifestOf(w, OUT) };
 }
+
+/** The trace of `buildEmbeddedMetricsReport`: a `checkout` root over a `payments` child. */
+export const LINKED_TRACE = 'a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1';
+/** The `payments` span of `LINKED_TRACE` (the child). */
+export const LINKED_PAYMENTS_SPAN = 'b2b2b2b2b2b2b2b2';
+/** A log on `payments`, on `LINKED_PAYMENTS_SPAN`. */
+export const PAYMENTS_LOG = '0.0';
+/** A log on `web`, a resource with no metrics. */
+export const NO_METRICS_LOG = '1.0';
+
+/**
+ * Spans, logs and metrics on shared resources (`service.name` + `host.name`): `checkout`/`runner-1`,
+ * `payments`/`runner-7` and `web`/`runner-2`. `LINKED_TRACE` runs at 60 s: root `GET /checkout` on `checkout`
+ * (60.0-60.5 s) over `charge` on `payments` (60.1-60.3 s). Logs: `PAYMENTS_LOG` (60.2 s, on the `charge` span) and
+ * `NO_METRICS_LOG` (61 s, `web`). Metrics (written first, so the epoch is 0 s) on `checkout` and `payments`, points
+ * every 30 s from 0 to 120 s (the histogram's cover [s, s + 1]):
+ * `process.cpu.utilization` and `process.memory.usage` (gauges), `http.server.active_requests` (gauge) and
+ * `http.server.request.duration` (delta histogram, unit `s`) whose 60 s point on `payments` carries an exemplar on
+ * `LINKED_TRACE`; `checkout`'s carries one on another trace.
+ */
+export async function buildEmbeddedMetricsReport(): Promise<Fixture> {
+  const w = createTestWriter();
+  const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'create' });
+  const base = BigInt(EPOCH_NS);
+  const sec = (s: number): string => String(base + BigInt(Math.round(s * 1000)) * 1_000_000n);
+  const res = (service: string, host: string): JsonObject => ({
+    attributes: [attr('service.name', { stringValue: service }), attr('host.name', { stringValue: host })],
+  });
+  const RES = {
+    checkout: res('checkout', 'runner-1'),
+    payments: res('payments', 'runner-7'),
+    web: res('web', 'runner-2'),
+  };
+  const scope = { name: 'test-scope' };
+  const times = [0, 30, 60, 90, 120];
+  const gauge = (name: string, unit: string, v: (s: number) => number): JsonObject => ({
+    name,
+    unit,
+    gauge: {
+      dataPoints: times.map((s) => ({ timeUnixNano: sec(s), asDouble: v(s) })),
+    },
+  });
+  const duration = (exemplarTrace: string, exemplarSpan: string): JsonObject => ({
+    name: 'http.server.request.duration',
+    unit: 's',
+    histogram: {
+      aggregationTemporality: 1,
+      dataPoints: times.map((s) => ({
+        startTimeUnixNano: sec(s),
+        timeUnixNano: sec(s + 1),
+        count: '3',
+        sum: 0.9,
+        bucketCounts: ['1', '1', '1'],
+        explicitBounds: [0.1, 1],
+        ...(s === 60
+          ? {
+              exemplars: [
+                { timeUnixNano: sec(s + 0.5), asDouble: 0.5, traceId: exemplarTrace, spanId: exemplarSpan },
+              ],
+            }
+          : {}),
+      })),
+    },
+  });
+  const metricsOf = (resource: JsonObject, k: number, exemplar: [string, string]): JsonObject => ({
+    resource,
+    scopeMetrics: [
+      {
+        scope,
+        metrics: [
+          gauge('process.cpu.utilization', '1', (s) => 0.1 * k + s / 1000),
+          gauge('process.memory.usage', 'By', (s) => 1e6 * k + s),
+          gauge('http.server.active_requests', '{request}', (s) => k + s / 30),
+          duration(...exemplar),
+        ],
+      },
+    ],
+  });
+  await session.add(
+    otlp({
+      resourceMetrics: [
+        metricsOf(RES.checkout, 1, ['d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4', 'e5e5e5e5e5e5e5e5']),
+        metricsOf(RES.payments, 2, [LINKED_TRACE, LINKED_PAYMENTS_SPAN]),
+      ],
+    }),
+    'metrics',
+  );
+  await session.flush();
+  await session.add(
+    otlp({
+      resourceSpans: [
+        {
+          resource: RES.checkout,
+          scopeSpans: [
+            {
+              scope,
+              spans: [
+                span({
+                  traceId: LINKED_TRACE,
+                  spanId: 'c3c3c3c3c3c3c3c3',
+                  name: 'GET /checkout',
+                  startTimeUnixNano: sec(60),
+                  endTimeUnixNano: sec(60.5),
+                }),
+              ],
+            },
+          ],
+        },
+        {
+          resource: RES.payments,
+          scopeSpans: [
+            {
+              scope,
+              spans: [
+                span({
+                  traceId: LINKED_TRACE,
+                  spanId: LINKED_PAYMENTS_SPAN,
+                  parentSpanId: 'c3c3c3c3c3c3c3c3',
+                  name: 'charge',
+                  startTimeUnixNano: sec(60.1),
+                  endTimeUnixNano: sec(60.3),
+                }),
+              ],
+            },
+          ],
+        },
+      ],
+    }),
+    'spans',
+  );
+  await session.flush();
+  const logOn = (resource: JsonObject, record: JsonObject): JsonObject => ({
+    resourceLogs: [{ resource, scopeLogs: [{ scope, logRecords: [record] }] }],
+  });
+  await session.add(
+    otlp(
+      logOn(
+        RES.payments,
+        logRecord({
+          timeUnixNano: sec(60.2),
+          traceId: LINKED_TRACE,
+          spanId: LINKED_PAYMENTS_SPAN,
+          body: { stringValue: 'charge declined' },
+        }),
+      ),
+    ),
+    'logs0',
+  );
+  await session.flush();
+  await session.add(
+    otlp(logOn(RES.web, logRecord({ timeUnixNano: sec(61), body: { stringValue: 'web log' } }))),
+    'logs1',
+  );
+  await session.flush();
+  await session.close();
+  return { files: reportFilesFromSnapshot(w.fs.snapshot(), OUT), manifest: manifestOf(w, OUT) };
+}

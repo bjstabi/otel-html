@@ -1,6 +1,5 @@
 import { type JSX, useCallback, useEffect, useMemo, useState } from 'react';
 import type { Manifest } from '../../format/manifest.js';
-import { parseSpanId, parseTraceId } from '../../model/ids.js';
 import type { MetricCatalog, MetricEntry } from '../../rollups/metric-catalog.js';
 import { ErrorCard, LoadingNote, PILL } from '../components/explorer-states.js';
 import { downloadBlob } from '../components/export.js';
@@ -10,13 +9,12 @@ import { defaultShow, kindOf, type MetricQuery, resolveMetric, SHOW_BY_KIND } fr
 import type { TimeWindow } from '../data/span-query.js';
 import { useGoTo } from '../shell/go-to.js';
 import { PageChrome } from '../shell/page-chrome.js';
-import { metricWindowLink } from '../state/carry.js';
 import { defaultMetricState, MAX_METRIC_QUERIES, type MetricPageState } from '../state/metric-state.js';
 import { useSelection, useSelectionStore } from '../state/selection-context.js';
-import { formatWindow } from '../state/url-state.js';
 import { useKeyedAsync } from '../state/use-keyed-async.js';
 import { useColorAssigner } from '../theme/colors-context.js';
 import { OTHER_INDEX } from '../theme/palette.js';
+import { exemplarTraceLookup, openChartPick } from './chart-pick.js';
 import { DisplayBar } from './display-bar.js';
 import { exportMetricCsv, exportMetricJson } from './export.js';
 import { buildPlots, formulaPrefix, layoutCharts, queryPrefix } from './plots.js';
@@ -135,44 +133,16 @@ function ExplorerBody(props: { dataSource: DataSource; range: TimeWindow }): JSX
     [state],
   );
 
-  const hasTrace = useCallback(
-    async (traceId: string): Promise<boolean> =>
-      dataSource.hasTrace(parseTraceId(traceId, 'exemplar.traceId')),
-    [dataSource],
-  );
+  const hasTrace = useMemo(() => exemplarTraceLookup(dataSource), [dataSource]);
 
   const onPick = (pick: ChartPick): void => {
     try {
       setActionError(null);
-      switch (pick.kind) {
-        case 'exemplar':
-          goTo('traces', '/traces', {
-            trace: parseTraceId(pick.traceId, 'exemplar.traceId'),
-            span: pick.spanId === null ? null : parseSpanId(pick.spanId, 'exemplar.spanId'),
-            t: null,
-            q: null,
-            text: null,
-          });
-          return;
-        case 'traces':
-        case 'logs': {
-          const q = state.queries.find((x) => x.id === pick.queryId);
-          // A formula has no `where` of its own: only the window carries.
-          const { url, dropped } =
-            q === undefined
-              ? { url: { t: formatWindow(pick.window) }, dropped: [] }
-              : metricWindowLink(q, pick.window, pick.kind);
-          goTo(pick.kind, `/${pick.kind}`, { t: url.t ?? null, q: url.q ?? null, text: null }, dropped);
-          return;
-        }
-        case 'zoom':
-          sel.setWindow(pick.window);
-          return;
-        default: {
-          const never: never = pick;
-          throw new Error(`unhandled chart pick ${JSON.stringify(never)}`);
-        }
-      }
+      openChartPick(pick, {
+        goTo,
+        queryOf: (id) => state.queries.find((x) => x.id === id),
+        zoom: (w) => sel.setWindow(w),
+      });
     } catch (e) {
       fail('The link could not be opened', e);
     }
