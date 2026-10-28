@@ -187,7 +187,7 @@ Tasks are defined in `mise.toml`; CI runs the same ones.
 | `mise run test:e2e` | Build, then run the Playwright suite in Chromium, Firefox and WebKit. Extra arguments go to Playwright (`mise run test:e2e -- e2e/merge.spec.ts`). The metrics scale check runs only with `OTEL_HTML_METRICS_SCALE=1` (CI runs it in its own Chromium job): it writes a 200 metrics × 1,000 series × 1 h report the first time (about 15 minutes and 12 GB) and keeps it in `e2e/.cache/` until the writer sources change. |
 | `mise run build:binaries` | Compile standalone binaries into `dist/bin/` (after `build`). |
 | `mise run fixtures` | Regenerate `fixtures/*.otlp.json` with the OpenTelemetry SDK. |
-| `mise run demo` | Convert the `small` and `linked-*` fixtures (traces and logs) and open the report in a browser. Not for CI. |
+| `mise run demo` | Convert the `small`, `linked-*` and `metrics` fixtures (traces, logs and metrics) and open the report in a browser. Not for CI. |
 
 Other tasks: `lint`, `format`, `typecheck`, `test:unit`, `knip`, `gen`, `gen:check`, `check:package`, `test:e2e:chromium`.
 
