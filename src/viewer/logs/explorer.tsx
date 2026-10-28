@@ -346,7 +346,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
   };
 
   return (
-    <PageChrome title="Logs" signal="log" manifest={manifest} exportItems={exportItems}>
+    <PageChrome title="Logs" signal="log" manifest={manifest} page="logs" exportItems={exportItems}>
       <div className="flex flex-col gap-4">
         <OptionNotices />
         <ExplorerControls<PageMode<'logs'>, PageView<'logs'>>

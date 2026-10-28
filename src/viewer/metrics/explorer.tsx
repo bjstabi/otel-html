@@ -217,7 +217,7 @@ function ExplorerBody(props: { dataSource: DataSource; range: TimeWindow }): JSX
   const noData = !run.loading && plots.length > 0 && plots.every((p) => p.result.series.length === 0);
 
   return (
-    <PageChrome title="Metrics" manifest={manifest} exportItems={exportItems}>
+    <PageChrome title="Metrics" manifest={manifest} page="metrics" exportItems={exportItems}>
       <div className="flex flex-col gap-4">
         <section aria-label="Queries" className="rounded-card border border-hairline bg-surface px-3 py-2">
           <ul className="flex flex-col divide-y divide-dashed divide-hairline">

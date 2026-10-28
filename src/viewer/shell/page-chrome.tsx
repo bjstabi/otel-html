@@ -3,9 +3,11 @@ import { Menu } from '@base-ui/react/menu';
 import { Download, Link2 } from 'lucide-react';
 import { type JSX, type ReactNode, useEffect, useRef, useState } from 'react';
 import type { Manifest } from '../../format/manifest.js';
+import type { ExplorerPage } from '../../query/pages.js';
 import type { FacetSignal } from '../components/filter-tokens.js';
 import { QueryBar } from '../components/query-bar.js';
 import { TimeRange } from './time-range.js';
+import { ViewsMenu } from './views-menu.js';
 
 export interface ExportItem {
   label: string;
@@ -180,6 +182,8 @@ export function PageChrome(props: {
   /** Which OTTL context the query bar compiles in; spans or log records. Without one there is no query bar (Metrics filters per query). */
   signal?: FacetSignal;
   manifest: Manifest;
+  /** An explorer page: shows its Views menu. */
+  page?: ExplorerPage;
   exportItems?: readonly ExportItem[];
   /** Extra header controls (a page's own buttons), between the title and Copy link. */
   actions?: ReactNode;
@@ -190,6 +194,7 @@ export function PageChrome(props: {
       <header className="flex flex-col gap-3 border-b border-hairline p-4">
         <div className="flex flex-wrap items-center gap-3">
           <h1 className="mr-auto text-xl font-semibold">{props.title}</h1>
+          {props.page === undefined ? null : <ViewsMenu page={props.page} manifest={props.manifest} />}
           {props.actions}
           <CopyLink />
           <ExportMenu items={props.exportItems ?? []} />

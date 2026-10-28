@@ -235,7 +235,13 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
   const bins = useMemo(() => durationBins(result?.rows ?? [], DURATION_BIN_COUNT), [result]);
 
   return (
-    <PageChrome title="Traces Explorer" signal="span" manifest={manifest} exportItems={exportItems}>
+    <PageChrome
+      title="Traces Explorer"
+      signal="span"
+      manifest={manifest}
+      page="traces"
+      exportItems={exportItems}
+    >
       <div className="flex flex-col gap-4">
         <PageOptionNotice message={invalidMode} onReset={() => sel.setMode(null)} />
         <PageOptionNotice message={invalidView} onReset={() => sel.setView('list')} />
