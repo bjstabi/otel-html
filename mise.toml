@@ -60,9 +60,12 @@ usage = 'arg "[args]" var=#true'
 # Extra playwright args (`mise run test:e2e -- --project 'firefox-*'`) are passed to both passes.
 run = """
 eval "set -- $usage_args"
+# Both passes run; the task fails if either does.
+rc=0
 [ -n "$OTEL_HTML_SKIP_BROWSER_INSTALL" ] || pnpm exec playwright install chromium firefox webkit
-pnpm exec playwright test --grep-invert @perf --pass-with-no-tests "$@"
-pnpm exec playwright test --grep @perf --workers=1 --pass-with-no-tests "$@"
+pnpm exec playwright test --grep-invert @perf --pass-with-no-tests "$@" || rc=1
+pnpm exec playwright test --grep @perf --workers=1 --pass-with-no-tests "$@" || rc=1
+exit $rc
 """
 
 # Compiles standalone binaries into dist/bin/ (needs `mise run build` first). All five targets by default;
@@ -87,9 +90,12 @@ depends = ["build"]
 usage = 'arg "[args]" var=#true'
 run = """
 eval "set -- $usage_args"
+# Both passes run; the task fails if either does.
+rc=0
 [ -n "$OTEL_HTML_SKIP_BROWSER_INSTALL" ] || pnpm exec playwright install chromium
-pnpm exec playwright test --project='chromium-*' --grep-invert @perf --pass-with-no-tests "$@"
-pnpm exec playwright test --project='chromium-*' --grep @perf --workers=1 --pass-with-no-tests "$@"
+pnpm exec playwright test --project='chromium-*' --grep-invert @perf --pass-with-no-tests "$@" || rc=1
+pnpm exec playwright test --project='chromium-*' --grep @perf --workers=1 --pass-with-no-tests "$@" || rc=1
+exit $rc
 """
 
 # Regenerates fixtures/*.otlp.json with the OTel SDK (byte-stable). hostile.otlp.json is hand-authored and left alone.
