@@ -19,6 +19,7 @@ import type { TimeWindow } from '../data/span-query.js';
 import { isLogTabId, LOG_TAB_IDS, type LogTabId } from '../logs/tabs.js';
 import { isTraceTabId, TRACE_TAB_IDS, type TraceTabId } from '../traces/tabs.js';
 import type { ExplorerView } from './explorer-view.js';
+import type { MetricPageState } from './metric-state.js';
 import {
   formatWindow,
   parseUrlState,
@@ -49,6 +50,8 @@ export interface Selection {
   view: ExplorerView;
   sort: string | null;
   tabs: { trace: string; span: string; log: string };
+  /** The Metrics page's state (URL key `m`); null until the page is first used. */
+  metrics: MetricPageState | null;
   setWindow(w: TimeWindow | null): void;
   setCondition(c: string | null): void;
   setText(t: string): void;
@@ -57,6 +60,7 @@ export interface Selection {
   setView(v: ExplorerView): void;
   setSort(s: string | null): void;
   setTab(which: 'trace' | 'span' | 'log', tab: string): void;
+  setMetrics(m: MetricPageState | null): void;
   /** Facet values are strings (the rollups keep display text), so the token is a string literal. */
   toggleFacet(
     key: string,
@@ -86,6 +90,7 @@ export type SelectionData = Omit<
   | 'setView'
   | 'setSort'
   | 'setTab'
+  | 'setMetrics'
   | 'toggleFacet'
   | 'setSeverityRange'
   | 'selectTrace'
@@ -112,6 +117,7 @@ function dataFromUrl(u: UrlState): SelectionData {
       span: u.stab ?? DEFAULT_SPAN_TAB,
       log: u.ltab ?? DEFAULT_LOG_TAB,
     },
+    metrics: u.m ?? null,
   };
 }
 
@@ -131,6 +137,7 @@ export function selectionToUrlState(s: SelectionData): UrlState {
   if (s.sort !== null) u.sort = s.sort;
   if (s.logRef !== null) u.log = s.logRef;
   if (s.tabs.log !== DEFAULT_LOG_TAB && isLogTabId(s.tabs.log)) u.ltab = s.tabs.log;
+  if (s.metrics !== null) u.m = s.metrics;
   return u;
 }
 
@@ -238,6 +245,7 @@ export function createSelectionStore(initial: UrlState): StoreApi<Selection> {
       }
       set({ tabs: { ...get().tabs, [which]: tab } });
     },
+    setMetrics: (metrics) => set({ metrics }),
     toggleFacet: (key, value, op, scope = 'core', kind = 'string', signal = 'span') =>
       set({ condition: toggleFacetCondition(get().condition, key, value, op, scope, kind, signal) }),
     setSeverityRange: (min, max) => set({ condition: severityRangeCondition(get().condition, min, max) }),

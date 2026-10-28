@@ -7,6 +7,7 @@ import type { TimeWindow } from '../data/span-query.js';
 import { LOG_TAB_IDS } from '../logs/tabs.js';
 import { TRACE_TAB_IDS } from '../traces/tabs.js';
 import { EXPLORER_VIEWS } from './explorer-view.js';
+import { MetricPageStateSchema, parseMetricParam } from './metric-state.js';
 
 /** Every grouping any explorer offers; which ones a page accepts is `PAGE_OPTIONS` (page-options.ts). */
 export const SELECTION_MODES = ['spans', 'traces', 'logs', 'patterns'] as const;
@@ -64,6 +65,8 @@ export const UrlStateSchema = z.object({
     .refine((s) => !LOG_FORMAT.test(s) || LOG_CANONICAL.test(s), '<chunk>.<row> without leading zeros')
     .transform((s): LogRef => parseLogRef(s, 'log')),
   ltab: z.enum(LOG_TAB_IDS, `one of ${LOG_TAB_IDS.join(', ')}`),
+  // Arrives as JSON text, which `parseUrlState` decodes with `parseMetricParam`; this is the decoded shape.
+  m: MetricPageStateSchema,
 });
 
 const UrlStatePartial = UrlStateSchema.partial();
@@ -83,6 +86,7 @@ export const URL_KEYS = [
   'sort',
   'log',
   'ltab',
+  'm',
 ] as const;
 export type UrlKey = (typeof URL_KEYS)[number];
 
@@ -113,6 +117,12 @@ export function parseUrlState(search: string): { state: UrlState; errors: string
       continue;
     }
     const raw = values[0] ?? '';
+    if (key === 'm') {
+      const m = parseMetricParam(raw);
+      if (m.ok) state[key] = m.state;
+      else errors.push(m.error);
+      continue;
+    }
     const r = UrlStateSchema.shape[key].safeParse(raw);
     if (r.success) state[key] = r.data;
     else errors.push(`${key}: expected ${r.error.issues[0]?.message ?? 'a valid value'}, got ${raw}`);
@@ -124,7 +134,8 @@ export function serializeUrlState(s: UrlState): string {
   const p = new URLSearchParams();
   for (const k of URL_KEYS) {
     const v = s[k];
-    if (v !== undefined) p.set(k, v);
+    if (v === undefined) continue;
+    p.set(k, typeof v === 'string' ? v : JSON.stringify(v));
   }
   // `~` is a legal query character and keeps windows readable.
   return p.toString().replace(/%7E/g, '~');
