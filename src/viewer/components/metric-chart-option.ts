@@ -214,6 +214,19 @@ function exemplarSeries(input: MetricChartInput, accent: string, surface: string
   return data.length === 0 ? [] : [{ name: 'exemplars', type: 'scatter', z: 5, data }];
 }
 
+/** The heatmap's x categories: `count` buckets of `width` ns from `t0`. The card maps a category index back to time with it. */
+export function heatAxis(results: readonly MetricQueryResult[]): {
+  t0: number;
+  width: number;
+  count: number;
+} {
+  const cells = results.find((r) => r.heat !== null)?.heat?.cells ?? [];
+  const width = results[0]?.widthNs ?? 1;
+  const t0 = cells.length === 0 ? 0 : Math.min(...cells.map((x) => x[0]));
+  const t1 = cells.length === 0 ? 0 : Math.max(...cells.map((x) => x[0]));
+  return { t0, width, count: Math.round((t1 - t0) / width) + 1 };
+}
+
 function categoryOption(
   input: MetricChartInput,
   base: object,
@@ -244,11 +257,9 @@ function categoryOption(
     };
   }
   const h = results.find((r) => r.heat !== null)?.heat ?? null;
-  const width = results[0]?.widthNs ?? 1;
   const cells = h?.cells ?? [];
-  const t0 = cells.length === 0 ? 0 : Math.min(...cells.map((x) => x[0]));
-  const t1 = cells.length === 0 ? 0 : Math.max(...cells.map((x) => x[0]));
-  const xs = Array.from({ length: Math.round((t1 - t0) / width) + 1 }, (_, i) => t0 + i * width);
+  const { t0, width, count } = heatAxis(results);
+  const xs = Array.from({ length: count }, (_, i) => t0 + i * width);
   const bounds = h?.bounds ?? [];
   const ys = [...bounds.map((b) => `≤ ${edge(b)}`), `> ${edge(bounds[bounds.length - 1] ?? 0)}`];
   const max = Math.max(1, ...cells.map((x) => x[2]));

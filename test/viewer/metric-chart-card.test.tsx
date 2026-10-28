@@ -6,10 +6,12 @@ interface Zr {
   off: () => void;
 }
 const zrHandlers = new Map<string, (e: unknown) => void>();
+const plot = { inside: true, scale: 1e9 };
 const fakeChart = {
+  containPixel: (): boolean => plot.inside,
   getZr: (): Zr => ({ on: (n, h) => zrHandlers.set(n, h), off: () => undefined }),
   // 1 px per second on x; y is ignored.
-  convertFromPixel: (_f: unknown, p: [number, number]): [number, number] => [p[0] * 1e9, p[1]],
+  convertFromPixel: (_f: unknown, p: [number, number]): [number, number] => [p[0] * plot.scale, p[1]],
   convertToPixel: (_f: unknown, p: [number, number]): [number, number] => [p[0] / 1e9, p[1]],
 };
 
@@ -36,6 +38,8 @@ import type { MetricQueryResult } from '../../src/viewer/data/metric-query.js';
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 afterEach(() => {
   cleanup();
+  plot.inside = true;
+  plot.scale = 1e9;
   zrHandlers.clear();
 });
 
@@ -71,25 +75,28 @@ function setup(over: {
   hasTrace?: (id: string) => Promise<boolean>;
   title?: string;
   notes?: string[];
-}): { picks: ChartPick[] } {
+  display?: 'lines' | 'heatmap' | 'distribution';
+  result?: MetricQueryResult;
+}): { picks: ChartPick[]; zooms: { start: number; end: number }[] } {
   const picks: ChartPick[] = [];
+  const zooms: { start: number; end: number }[] = [];
   render(
     <MetricChartCard
       title={over.title ?? 'cpu'}
       subtitle="sub"
-      results={[result(over.exemplar === true)]}
-      display="lines"
+      results={[over.result ?? result(over.exemplar === true)]}
+      display={over.display ?? 'lines'}
       scale="linear"
       size="M"
       exemplars={over.exemplar === true}
       notes={over.notes ?? []}
       window={{ start: 0, end: 20 * S }}
-      {...(over.hasTrace === undefined ? {} : { hasTrace: over.hasTrace })}
+      hasTrace={over.hasTrace ?? (() => Promise.resolve(true))}
       onPick={(p) => picks.push(p)}
-      onZoom={() => undefined}
+      onZoom={(w) => zooms.push(w)}
     />,
   );
-  return { picks };
+  return { picks, zooms };
 }
 
 async function clickAt(x: number): Promise<void> {
@@ -97,6 +104,25 @@ async function clickAt(x: number): Promise<void> {
     zrHandlers.get('click')?.({ offsetX: x, offsetY: 0, event: { clientX: x, clientY: 0 } });
   });
 }
+
+async function drag(from: number, to: number): Promise<void> {
+  const at = (x: number): unknown => ({ offsetX: x, offsetY: 0, event: { clientX: x, clientY: 0 } });
+  await act(async () => {
+    zrHandlers.get('mousedown')?.(at(from));
+    zrHandlers.get('mouseup')?.(at(to));
+  });
+}
+
+const HEAT: MetricQueryResult = {
+  ...result(false),
+  heat: {
+    bounds: [1],
+    cells: [
+      [20 * S, 0, 1],
+      [40 * S, 1, 2],
+    ],
+  },
+};
 
 describe('MetricChartCard', () => {
   test('a click over a bucket opens a menu with three items', async () => {
@@ -140,5 +166,58 @@ describe('MetricChartCard', () => {
     expect(document.querySelector('img')).toBeNull();
     expect(screen.getByRole('heading', { level: 3 }).textContent).toBe(HOSTILE);
     expect(screen.getByRole('list', { name: 'Notes' }).textContent).toBe(HOSTILE);
+  });
+
+  test('a lookup that rejects shows a disabled "trace lookup failed" item', async () => {
+    setup({ exemplar: true, hasTrace: () => Promise.reject(new Error('boom')) });
+    await clickAt(5);
+    const items = await screen.findAllByRole('menuitem');
+    expect(items[0]?.textContent).toBe('trace lookup failed');
+    expect(items[0]?.getAttribute('aria-disabled')).toBe('true');
+  });
+
+  test('dragging over the plot calls onZoom with the dragged span', async () => {
+    const { zooms } = setup({});
+    await drag(15, 3);
+    expect(zooms).toEqual([{ start: 3 * S, end: 15 * S }]);
+  });
+
+  test('a click outside the plot grid opens nothing', async () => {
+    setup({});
+    plot.inside = false;
+    await clickAt(12);
+    expect(screen.queryAllByRole('menuitem')).toHaveLength(0);
+  });
+
+  test('a slow lookup from an earlier click does not replace a later menu', async () => {
+    let release: (ok: boolean) => void = () => undefined;
+    const slow = new Promise<boolean>((r) => {
+      release = r;
+    });
+    let calls = 0;
+    setup({ exemplar: true, hasTrace: () => (calls++ === 0 ? slow : Promise.resolve(false)) });
+    await clickAt(5); // slow: pending
+    await clickAt(5); // fast: absent
+    await screen.findAllByRole('menuitem');
+    await act(async () => release(true));
+    const items = await screen.findAllByRole('menuitem');
+    expect(items[0]?.textContent).toBe('trace not in this report');
+  });
+
+  test('a heatmap click maps the category index back to its bucket time', async () => {
+    const { picks } = setup({ display: 'heatmap', result: HEAT });
+    plot.scale = 1; // pixel x is the category index
+    await clickAt(1);
+    const items = await screen.findAllByRole('menuitem');
+    await act(async () => items[0]?.click());
+    expect(picks).toEqual([{ kind: 'traces', queryId: 'q1', window: { start: 30 * S, end: 40 * S } }]);
+  });
+
+  test('a distribution has no time axis: no menu and no drag-zoom', async () => {
+    const { zooms } = setup({ display: 'distribution' });
+    await clickAt(12);
+    await drag(15, 3);
+    expect(screen.queryAllByRole('menuitem')).toHaveLength(0);
+    expect(zooms).toEqual([]);
   });
 });

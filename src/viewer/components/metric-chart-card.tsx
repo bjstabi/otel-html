@@ -6,7 +6,12 @@ import type { TimeWindow } from '../data/span-query.js';
 import type { METRIC_DISPLAYS, METRIC_SCALES } from '../state/metric-state.js';
 import { useColorAssigner } from '../theme/colors-context.js';
 import { Chart, type EChartsType } from './chart.js';
-import { buildMetricChartOption, METRIC_CHART_HEIGHT, type MetricSize } from './metric-chart-option.js';
+import {
+  buildMetricChartOption,
+  heatAxis,
+  METRIC_CHART_HEIGHT,
+  type MetricSize,
+} from './metric-chart-option.js';
 
 export type ChartPick =
   | { kind: 'exemplar'; traceId: string; spanId: string | null }
@@ -25,9 +30,9 @@ export interface MetricChartCardProps {
   exemplars: boolean;
   notes: string[];
   /** The x range of the chart; series only cover the buckets that hold data. */
-  window?: TimeWindow | null;
-  /** Whether the report holds a trace; without it every exemplar trace is assumed present. */
-  hasTrace?: (traceId: string) => Promise<boolean>;
+  window: TimeWindow;
+  /** Whether the report holds a trace; embedded callers pass an explicit resolver. */
+  hasTrace: (traceId: string) => Promise<boolean>;
   onPick(pick: ChartPick): void;
   onZoom(w: TimeWindow): void;
 }
@@ -84,7 +89,7 @@ export function MetricChartCard(props: MetricChartCardProps): JSX.Element {
         highlightTrace: props.highlightTrace ?? null,
         exemplars: props.exemplars,
         size: props.size,
-        window: props.window ?? null,
+        window: props.window,
       }),
     [
       results,
@@ -102,19 +107,29 @@ export function MetricChartCard(props: MetricChartCardProps): JSX.Element {
   );
 
   // Latest values for the zrender handlers, which are bound once per chart instance.
-  const live = useRef({ results, exemplars: props.exemplars, hasTrace, onZoom });
-  live.current = { results, exemplars: props.exemplars, hasTrace, onZoom };
+  const live = useRef({ results, display: props.display, exemplars: props.exemplars, hasTrace, onZoom });
+  live.current = { results, display: props.display, exemplars: props.exemplars, hasTrace, onZoom };
+  const seq = useRef(0);
 
   useEffect(() => {
     if (chart === null) return;
     const zr = chart.getZr();
-    let down: { x: number; y: number; t: number } | null = null;
-    const timeAt = (e: ZrEvent): number => {
+    let down: { x: number; t: number } | null = null;
+    // Time under the pointer, or null off the plot, on a distribution (no time axis) or when unconvertible.
+    // A heatmap's x axis is a category index, mapped back to its bucket's time.
+    const timeAt = (e: ZrEvent): number | null => {
+      const { display, results: rs } = live.current;
+      if (display === 'distribution' || !chart.containPixel('grid', [e.offsetX, e.offsetY])) return null;
       const v = chart.convertFromPixel({ gridIndex: 0 }, [e.offsetX, e.offsetY]);
-      return Array.isArray(v) ? Number(v[0]) : 0;
+      const x = Array.isArray(v) ? Number(v[0]) : Number.NaN;
+      if (!Number.isFinite(x)) return null;
+      if (display !== 'heatmap') return x;
+      const { t0, width } = heatAxis(rs);
+      return t0 + Math.round(x) * width;
     };
     const onDown = (e: ZrEvent): void => {
-      down = { x: e.offsetX, y: e.offsetY, t: timeAt(e) };
+      const t = timeAt(e);
+      down = t === null ? null : { x: e.offsetX, t };
     };
     const onUp = (e: ZrEvent): void => {
       const d = down;
@@ -122,20 +137,28 @@ export function MetricChartCard(props: MetricChartCardProps): JSX.Element {
       if (d === null || Math.abs(e.offsetX - d.x) < DRAG_PX) return;
       const a = d.t;
       const b = timeAt(e);
+      if (b === null) return;
+      const { display, results: rs } = live.current;
+      // A heatmap column spans its whole bucket.
+      if (display === 'heatmap') {
+        live.current.onZoom({ start: Math.min(a, b), end: Math.max(a, b) + heatAxis(rs).width });
+        return;
+      }
       live.current.onZoom({ start: Math.min(a, b), end: Math.max(a, b) });
     };
     const onClick = (e: ZrEvent): void => {
       if (down !== null) return;
-      const { results: rs, exemplars, hasTrace: check } = live.current;
+      const { results: rs, display, exemplars, hasTrace: check } = live.current;
       const t = timeAt(e);
       const first = rs[0];
-      if (first === undefined) return;
+      if (t === null || first === undefined) return;
       const width = first.widthNs;
       const start = Math.floor(t / width) * width;
+      const mine = ++seq.current;
       const window = { start, end: start + width };
       let hit: { traceId: string; spanId: string | null; queryId: string } | null = null;
       let best = HIT_PX;
-      if (exemplars) {
+      if (exemplars && display !== 'heatmap') {
         for (const r of rs)
           for (const x of r.exemplars) {
             if (x.traceId === null) continue;
@@ -148,7 +171,9 @@ export function MetricChartCard(props: MetricChartCardProps): JSX.Element {
             }
           }
       }
-      const open = (trace: Trace | null): void =>
+      const open = (trace: Trace | null): void => {
+        // A slower lookup from an earlier click must not replace a later one.
+        if (mine !== seq.current) return;
         setMenu({
           x: e.event.clientX,
           y: e.event.clientY,
@@ -156,15 +181,12 @@ export function MetricChartCard(props: MetricChartCardProps): JSX.Element {
           queryId: hit?.queryId ?? first.queryId,
           trace,
         });
+      };
       if (hit === null) {
         open(null);
         return;
       }
       const { traceId, spanId } = hit;
-      if (check === undefined) {
-        open({ traceId, spanId, state: 'present' });
-        return;
-      }
       // The menu opens once the lookup settles, so its trace item is never wrong.
       check(traceId).then(
         (ok) => open({ traceId, spanId, state: ok ? 'present' : 'absent' }),
