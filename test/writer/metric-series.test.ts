@@ -1,3 +1,5 @@
+import { setFlagsFromString } from 'node:v8';
+import { runInNewContext } from 'node:vm';
 import { describe, expect, test } from 'vitest';
 import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
 import {
@@ -23,12 +25,23 @@ import type {
 import type { BucketAgg } from '../../src/rollups/metric-agg.js';
 import { MetricCatalog } from '../../src/rollups/metric-catalog.js';
 import { MetricSeriesWriter } from '../../src/writer/metric-series-writer.js';
+import type { FileSystem } from '../../src/writer/ports.js';
 import { createMemoryFileSystem } from '../../test-support/memory-fs.js';
 
 const OUT = 'r';
 const S = 1_000_000_000;
 const rel = (n: number): RelNanos => n as RelNanos;
 const counter = (delta: number): BucketAgg => ({ k: 'counter', delta, resets: 0 });
+/** A delta histogram of one point with 15 bounds, its bounds array its own (as a parsed point's is). */
+const hist16 = (): BucketAgg => ({
+  k: 'hist',
+  count: 16,
+  sum: 16,
+  min: null,
+  max: null,
+  bounds: [0, 5, 10, 25, 50, 75, 100, 250, 500, 750, 1000, 2500, 5000, 7500, 10000],
+  counts: Array.from({ length: 16 }, () => 1),
+});
 const resource: ResourceRecord = { attributes: new Map(), droppedAttributesCount: 0, schemaUrl: '' };
 const scope: ScopeRecord = {
   name: 'lib',
@@ -187,7 +200,7 @@ describe('MetricSeriesWriter', () => {
   test('buffers spill to segments once the bucket budget is reached', async () => {
     const fs = createMemoryFileSystem();
     const catalog = new MetricCatalog({ seriesCap: 10 });
-    const writer = new MetricSeriesWriter(fs, OUT, { exemplars: 2, maxBufferedBuckets: 3 }, new Map(), []);
+    const writer = new MetricSeriesWriter(fs, OUT, { exemplars: 2, bufferBudget: 3 }, new Map(), []);
     const p = pt('a', 'h');
     const def = catalog.defOf(p);
     const series = catalog.seriesOf(def, p, resource, scope);
@@ -200,9 +213,52 @@ describe('MetricSeriesWriter', () => {
     expect(writer.full()).toBe(false);
   });
 
+  test('histogram buckets weigh their size in the budget, not one bucket each', async () => {
+    const fs = createMemoryFileSystem();
+    const catalog = new MetricCatalog({ seriesCap: 10 });
+    // A 16-bucket histogram bucket weighs 8 units (about 40 bytes each): 3 fit in 30, the 4th fills it.
+    const writer = new MetricSeriesWriter(fs, OUT, { exemplars: 2, bufferBudget: 30 }, new Map(), []);
+    const p = pt('h', 'h');
+    const def = catalog.defOf(p);
+    const series = catalog.seriesOf(def, p, resource, scope);
+    for (let i = 0; i < 3; i++) writer.add(def, series, rel(i * 2 * S), hist16(), []);
+    expect(writer.full()).toBe(false);
+    writer.add(def, series, rel(6 * 2 * S), hist16(), []);
+    expect(writer.full()).toBe(true);
+  });
+
+  test('a histogram-heavy buffer spills at a bounded heap (default budget)', async () => {
+    setFlagsFromString('--expose-gc');
+    const gc = runInNewContext('gc') as () => void;
+    const live = (): number => {
+      gc();
+      return process.memoryUsage().heapUsed;
+    };
+    // Segment writes are dropped, so the heap holds only the buffer.
+    const sink: FileSystem = { ...createMemoryFileSystem(), writeTextAtomic: async () => {} };
+    const catalog = new MetricCatalog({ seriesCap: 1000 });
+    const writer = new MetricSeriesWriter(sink, OUT, { exemplars: 2 }, new Map(), []);
+    const all = Array.from({ length: 1000 }, (_, j) => {
+      const p = pt('h', `host-${j}`);
+      const def = catalog.defOf(p);
+      return { def, series: catalog.seriesOf(def, p, resource, scope) };
+    });
+    const base = live();
+    let peak = 0;
+    // 500k histogram buckets (1,000 series × 500 s), each with its own bounds array as the normalizer makes them.
+    for (let t = 0; t < 500; t++) {
+      for (const { def, series } of all) writer.add(def, series, rel(t * 2 * S), hist16(), []);
+      if (writer.full() || t % 50 === 49) peak = Math.max(peak, live() - base);
+      if (writer.full()) await writer.spill(catalog);
+    }
+    // Held to here, so the buffer is live at every measurement.
+    await writer.flush(catalog);
+    expect(peak).toBeLessThan(100 * 1024 * 1024);
+  });
+
   test('spill writes the largest buffers first, down to half the budget', async () => {
     const { fs, catalog, series } = setup();
-    const writer = new MetricSeriesWriter(fs, OUT, { exemplars: 2, maxBufferedBuckets: 6 }, new Map(), []);
+    const writer = new MetricSeriesWriter(fs, OUT, { exemplars: 2, bufferBudget: 6 }, new Map(), []);
     const a = series('a', 'h');
     const b = series('b', 'h');
     for (let i = 0; i < 4; i++) writer.add(a.def, a.series, rel(i * 2 * S), counter(1), []);

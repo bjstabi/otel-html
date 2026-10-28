@@ -32,15 +32,18 @@ import { MetricBuffer } from './metric-buffer.js';
 import type { FileSystem } from './ports.js';
 
 /**
- * Buckets held in memory across all metrics before the largest buffers are written out as segments ahead of the
- * next flush, down to half of it. Counter and number buckets are columnar (about 30-60 bytes each).
+ * What the buckets held in memory across all metrics may cost before the largest buffers are written out as
+ * segments ahead of the next flush, down to half of it: in units of one counter or number bucket (columnar, about
+ * 40 bytes), so about 40 MB. A histogram, exponential or summary bucket weighs its estimated size in these units
+ * (`MetricBuffer.weight`; a 16-bucket histogram weighs 8).
  */
-const DEFAULT_MAX_BUFFERED_BUCKETS = 1_000_000;
+const DEFAULT_BUFFER_BUDGET = 1_000_000;
 
 export interface SeriesWriterOptions {
   /** Exemplars kept per series per EXEMPLAR_WIDTH_NS bucket (`writer.metricExemplars`). */
   exemplars: number;
-  maxBufferedBuckets?: number;
+  /** The buffer budget, in columnar-bucket units (see DEFAULT_BUFFER_BUDGET). */
+  bufferBudget?: number;
 }
 
 interface MetricPaths {
@@ -139,7 +142,7 @@ export class MetricSeriesWriter {
     this.#fs = fs;
     this.#out = out;
     this.#exemplars = opts.exemplars;
-    this.#maxBuffered = opts.maxBufferedBuckets ?? DEFAULT_MAX_BUFFERED_BUCKETS;
+    this.#maxBuffered = opts.bufferBudget ?? DEFAULT_BUFFER_BUDGET;
     this.#nextSegment = nextSegment;
     this.#listed = new Set(listed);
     this.#toDemote = new Set([...byMetric(listed)].filter(([, p]) => p.levels.length > 0).map(([id]) => id));
@@ -173,9 +176,9 @@ export class MetricSeriesWriter {
       buf = new MetricBuffer(this.#exemplars);
       this.#buffers.set(def.id, buf);
     }
-    const before = buf.buckets;
+    const before = buf.weight;
     buf.add(series.id, bucketIndex(time, LEVEL0_WIDTH_NS), agg, `metric ${def.id}`);
-    this.#buffered += buf.buckets - before;
+    this.#buffered += buf.weight - before;
     if (exemplars.length > 0) buf.addExemplars(exemplars);
   }
 
@@ -196,7 +199,7 @@ export class MetricSeriesWriter {
    */
   async spill(catalog: MetricCatalog): Promise<void> {
     await this.#writeSeriesFiles(catalog);
-    const bySize = [...this.#buffers].sort(([a, x], [b, y]) => y.buckets - x.buckets || a - b);
+    const bySize = [...this.#buffers].sort(([a, x], [b, y]) => y.weight - x.weight || a - b);
     for (const [id] of bySize) {
       if (this.#buffered <= this.#maxBuffered / 2) break;
       await this.#writeBuffer(id);
@@ -219,7 +222,7 @@ export class MetricSeriesWriter {
     const buf = this.#buffers.get(id);
     if (buf === undefined) return;
     if (!buf.empty) await this.#writeSegment(id, buf.series(metricDir(id)), buf.exemplars());
-    this.#buffered -= buf.buckets;
+    this.#buffered -= buf.weight;
     this.#buffers.delete(id);
   }
 

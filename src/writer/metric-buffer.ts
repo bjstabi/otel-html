@@ -6,6 +6,7 @@ import {
   type StoredExemplar,
   selectExemplars,
 } from '../format/metric-files.js';
+import { assertNever } from '../model/errors.js';
 import { type BucketAgg, type CounterAgg, mergeAgg, type NumberAgg } from '../rollups/metric-agg.js';
 
 /** Fields per bucket of the columnar kinds. */
@@ -16,6 +17,41 @@ const INITIAL_ROWS = 256;
 interface SeriesBuffer {
   t: number[];
   a: BucketAgg[];
+  /** The series' explicit histogram bounds: every buffered bucket with the same bounds shares this array. */
+  bounds: number[] | null;
+}
+
+/** About what one counter or number bucket costs in `Columns`: the unit `MetricBuffer.weight` counts in. */
+const UNIT_BYTES = 40;
+
+/**
+ * Estimated heap bytes of an object bucket (the object, its arrays, its slots in the series' `t` and `a`), in
+ * `UNIT_BYTES` units. A histogram's bounds are shared per series and not counted.
+ */
+function objectWeight(a: BucketAgg): number {
+  let bytes: number;
+  switch (a.k) {
+    case 'hist':
+      bytes = 160 + 8 * a.counts.length;
+      break;
+    case 'exp':
+      bytes = 240 + 8 * (a.positive.counts.length + a.negative.counts.length);
+      break;
+    case 'summary':
+      bytes = 120 + 48 * a.quantiles.length;
+      break;
+    case 'counter':
+    case 'number':
+      bytes = 120;
+      break;
+    default:
+      return assertNever(a, 'metric buffer bucket');
+  }
+  return Math.ceil(bytes / UNIT_BYTES);
+}
+
+function sameBounds(a: readonly number[], b: readonly number[]): boolean {
+  return a.length === b.length && a.every((v, i) => v === b[i]);
 }
 
 /**
@@ -144,15 +180,20 @@ export class MetricBuffer {
   /** Histogram, exponential and summary buckets, and points older than their series' latest bucket. */
   readonly #objects = new Map<number, SeriesBuffer>();
   readonly #exemplars = new Map<string, StoredExemplar[]>();
+  /** Buckets held (an upper bound: an old bucket kept apart may share its index with a columnar one). */
   #buckets = 0;
+  #weight = 0;
 
   constructor(exemplarCap: number) {
     this.#exemplarCap = exemplarCap;
   }
 
-  /** Buckets held (an upper bound: an old bucket kept apart may share its index with a columnar one). */
-  get buckets(): number {
-    return this.#buckets;
+  /**
+   * What the buckets held cost, in units of one columnar (counter or number) bucket, about 40 bytes: a histogram,
+   * exponential or summary bucket is an object and weighs its estimated size.
+   */
+  get weight(): number {
+    return this.#weight;
   }
 
   get empty(): boolean {
@@ -164,7 +205,10 @@ export class MetricBuffer {
       this.#columns ??= new Columns(agg.k);
       if (this.#columns.kind === agg.k) {
         const r = this.#columns.add(series, idx, agg);
-        if (r === 'appended') this.#buckets++;
+        if (r === 'appended') {
+          this.#buckets++;
+          this.#weight++;
+        }
         if (r !== 'older') return;
       }
     }
@@ -174,7 +218,7 @@ export class MetricBuffer {
   #addObject(series: number, idx: number, agg: BucketAgg, path: string): void {
     let buf = this.#objects.get(series);
     if (buf === undefined) {
-      buf = { t: [], a: [] };
+      buf = { t: [], a: [], bounds: agg.k === 'hist' ? agg.bounds : null };
       this.#objects.set(series, buf);
     }
     let i = buf.t.length;
@@ -182,12 +226,23 @@ export class MetricBuffer {
     const j = i - 1;
     const prev = buf.a[j];
     if (j >= 0 && buf.t[j] === idx && prev !== undefined) {
-      buf.a[j] = mergeAgg(prev, agg, path);
+      const merged = this.#shareBounds(buf, mergeAgg(prev, agg, path));
+      buf.a[j] = merged;
+      this.#weight += objectWeight(merged) - objectWeight(prev);
       return;
     }
+    const kept = this.#shareBounds(buf, agg);
     buf.t.splice(i, 0, idx);
-    buf.a.splice(i, 0, agg);
+    buf.a.splice(i, 0, kept);
     this.#buckets++;
+    this.#weight += objectWeight(kept);
+  }
+
+  /** `a`, with the series' bounds array in place of an equal copy (bounds are never mutated). */
+  #shareBounds(buf: SeriesBuffer, a: BucketAgg): BucketAgg {
+    if (a.k !== 'hist') return a;
+    if (buf.bounds === null) buf.bounds = a.bounds;
+    return a.bounds === buf.bounds || !sameBounds(a.bounds, buf.bounds) ? a : { ...a, bounds: buf.bounds };
   }
 
   addExemplars(list: readonly StoredExemplar[]): void {
