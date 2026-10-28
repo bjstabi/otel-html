@@ -115,6 +115,10 @@ export const METRIC_HIST = 'http.server.request.duration';
 /** The trace id of the one exemplar on `METRIC_HIST` that points at a trace absent from the traces file. */
 export const ORPHAN_EXEMPLAR_TRACE = '9c1f0e5ab27d4c3388e0f6a1b5d2c47e';
 export const HOSTILE_METRIC_NAME = '</script><img src=x onerror=alert(1)>';
+/** The hostile metric's unit and the value of its one attribute, `HOSTILE_METRIC_ATTR`: markup that reaches the tooltip. */
+export const HOSTILE_METRIC_UNIT = '<img src=x onerror=alert(1)>';
+export const HOSTILE_METRIC_ATTR = 'hostile.attr';
+export const HOSTILE_METRIC_ATTR_VALUE = '"><img src=x onerror=alert(1)>';
 
 /** The generated scale input: `SCALE_TRACES` traces of `SCALE_SPANS_PER_TRACE` spans each. */
 export const SCALE_TRACES = 2000;

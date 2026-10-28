@@ -94,10 +94,14 @@ interface TipParam {
   data?: unknown;
 }
 
+/**
+ * One tooltip line. ECharts sets the formatter's output as innerHTML, so every data-derived part (series name, trace
+ * id, and the value, which carries the metric's unit verbatim) is escaped; only ECharts' own marker HTML is not.
+ */
 function tipLine(p: TipParam, unit: string): string {
   const v = Array.isArray(p.value) ? p.value : [];
   const last = v[v.length - 1];
-  const num = typeof last === 'number' ? formatMetricValue(unit, last) : '–';
+  const num = escapeHtml(typeof last === 'number' ? formatMetricValue(unit, last) : '–');
   const name = escapeHtml(p.seriesName ?? '');
   const data = p.data as { traceId?: unknown } | undefined;
   if (p.seriesType === 'scatter' && typeof data?.traceId === 'string')

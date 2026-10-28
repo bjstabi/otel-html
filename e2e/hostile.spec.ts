@@ -1,4 +1,11 @@
-import { HOSTILE_METRIC_NAME, HOSTILE_ROOT_SPAN, HOSTILE_TRACE_ID } from './fixture.js';
+import {
+  HOSTILE_METRIC_ATTR,
+  HOSTILE_METRIC_ATTR_VALUE,
+  HOSTILE_METRIC_NAME,
+  HOSTILE_METRIC_UNIT,
+  HOSTILE_ROOT_SPAN,
+  HOSTILE_TRACE_ID,
+} from './fixture.js';
 import { watchProblems } from './metric-chart.js';
 import { expect, test as linkedTest, hostileTest as test } from './test.js';
 
@@ -70,12 +77,23 @@ linkedTest(
 
     await rows.nth(1).click();
     await expect(page.getByRole('button', { name: 'Metric of a' })).toContainText(HOSTILE_METRIC_NAME);
+    // Split by the markup attribute, so its value names the line.
+    await page.getByRole('button', { name: 'By of a' }).click();
+    await page.getByRole('checkbox', { name: `attributes["${HOSTILE_METRIC_ATTR}"]` }).check();
+    await page.keyboard.press('Escape');
     // A gauge: the card is titled with its default show, avg.
     const card = page.getByRole('region', { name: `${HOSTILE_METRIC_NAME} · avg` });
     await expect(card.getByRole('heading')).toContainText(HOSTILE_METRIC_NAME);
-    await expect(card.getByRole('img', { name: /: [1-9]\d* series$/ })).toBeVisible();
-    // Hovering the chart shows its HTML tooltip (the one place chart text reaches the DOM).
-    await card.getByRole('img').hover();
+    const chart = card.getByRole('img', { name: /: 1 series$/ });
+    await expect(chart).toBeVisible();
+    // Hovering the chart shows its HTML tooltip (the one place chart text reaches the DOM): the markup in the series
+    // name and in the unit after the value is text, never an element.
+    await chart.hover();
+    const tooltip = card.getByText(`a · avg · ${HOSTILE_METRIC_ATTR_VALUE}: 0.5 ${HOSTILE_METRIC_UNIT}`, {
+      exact: true,
+    });
+    await expect(tooltip).toBeVisible();
+    expect(await card.locator('img').count()).toBe(0);
 
     expect(await page.locator('img[src="x"]').count()).toBe(0);
     expect(await page.evaluate(() => window.__pwned)).toBeUndefined();

@@ -33,7 +33,10 @@ import {
   SimpleSpanProcessor,
 } from '@opentelemetry/sdk-trace-base';
 import {
+  HOSTILE_METRIC_ATTR,
+  HOSTILE_METRIC_ATTR_VALUE,
   HOSTILE_METRIC_NAME,
+  HOSTILE_METRIC_UNIT,
   LINKED_SPAN,
   LINKED_TRACE,
   METRIC_HIST,
@@ -977,8 +980,9 @@ async function buildMetrics(): Promise<string> {
  *   cannot be pointed at a chosen trace.
  * - One NaN point on `process.open_file_descriptor.count` (`payments`, collection 4): a gauge with no usable value, which
  *   the writer counts as `noValue` and the chart must skip. The SDK would not record NaN.
- * - `HOSTILE_METRIC_NAME`: a gauge named with markup, to show names are never interpreted as HTML. The SDK rejects the
- *   name as invalid.
+ * - `HOSTILE_METRIC_NAME`: a gauge named with markup, with a markup unit (`HOSTILE_METRIC_UNIT`) and a markup attribute
+ *   value (`HOSTILE_METRIC_ATTR_VALUE`), to show names, units and values are never interpreted as HTML. The SDK rejects
+ *   the name as invalid.
  */
 function augment(collections: readonly OtlpResourceMetrics[][]): void {
   const find = (k: number, service: string): OtlpResourceMetrics =>
@@ -1034,8 +1038,16 @@ function augment(collections: readonly OtlpResourceMetrics[][]): void {
 
     scope.metrics.push({
       name: HOSTILE_METRIC_NAME,
-      unit: '1',
-      gauge: { dataPoints: [{ ...stamp, asDouble: 0.5 }] },
+      unit: HOSTILE_METRIC_UNIT,
+      gauge: {
+        dataPoints: [
+          {
+            ...stamp,
+            asDouble: 0.5,
+            attributes: [{ key: HOSTILE_METRIC_ATTR, value: STRING(HOSTILE_METRIC_ATTR_VALUE) }],
+          },
+        ],
+      },
     });
   }
 

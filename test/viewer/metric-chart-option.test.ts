@@ -173,6 +173,26 @@ describe('buildMetricChartOption', () => {
     expect(html).toContain('&lt;b&gt;');
   });
 
+  test('tooltip escapes a markup unit, a rate unit and an exemplar line', () => {
+    const unit = '<img src=x onerror=alert(1)>';
+    for (const u of [unit, `${unit}/s`]) {
+      const o = build({ unit: u, results: [result({ series: [series('a', [2], u)] })] });
+      const html = o.tooltip.formatter([
+        { seriesName: 'a', seriesType: 'line', value: [0, 2], marker: '', data: [0, 2] },
+        {
+          seriesName: 'exemplars',
+          seriesType: 'scatter',
+          value: [0, 2],
+          marker: '',
+          data: { traceId: 'abcdef0123456789' },
+        },
+      ]);
+      expect(html).not.toContain('<img');
+      expect(html).toContain('2 &lt;img src=x onerror=alert(1)&gt;');
+      expect(html).toContain('exemplar abcdef01: 2 &lt;img');
+    }
+  });
+
   test('heatmap and distribution use their data', () => {
     const heat = build({
       display: 'heatmap',
