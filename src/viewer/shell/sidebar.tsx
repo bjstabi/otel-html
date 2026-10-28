@@ -63,7 +63,7 @@ const SECTIONS: readonly NavSection[] = [
     target: null,
     items: [
       { label: 'Explorer', target: { page: 'metrics', route: '/metrics' } },
-      { label: 'Catalog', target: null },
+      { label: 'Catalog', target: { page: 'metrics', route: '/metrics/catalog' } },
     ],
   },
   {

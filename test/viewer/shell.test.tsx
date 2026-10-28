@@ -136,10 +136,9 @@ describe('sidebar', () => {
     expect(within(card).getByText('7')).toBeTruthy();
   });
 
-  test('Catalog is a labelled, non-link item', () => {
+  test('Metrics > Catalog links to /metrics/catalog', () => {
     renderShell('#/logs');
-    expect(screen.queryByRole('link', { name: /Catalog/ })).toBeNull();
-    expect(screen.getByText('Catalog').closest('[aria-disabled="true"]')).not.toBeNull();
+    expect(screen.getByRole('link', { name: 'Catalog' }).getAttribute('href')).toBe('#/metrics/catalog');
   });
 
   test('Logs > Patterns links to /logs/patterns, which redirects to /logs?mode=patterns and is current there', async () => {

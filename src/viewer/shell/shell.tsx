@@ -4,6 +4,7 @@ import { type JSX, useCallback, useEffect, useMemo, useState } from 'react';
 import { Redirect, Route, Router, Switch } from 'wouter';
 import type { DataSource } from '../data/data-source.js';
 import { LogsExplorer } from '../logs/explorer.js';
+import { MetricsCatalog } from '../metrics/catalog.js';
 import { MetricsExplorer } from '../metrics/explorer.js';
 import { applyPatch, carryTo, type DroppedParam } from '../state/carry.js';
 import { PAGE_TITLES, type Page, pageOfRoute } from '../state/page-options.js';
@@ -211,6 +212,9 @@ function RoutedPage({ dataSource }: { dataSource: DataSource }): JSX.Element {
       </Route>
       <Route path="/logs">
         <LogsExplorer dataSource={dataSource} />
+      </Route>
+      <Route path="/metrics/catalog">
+        <MetricsCatalog dataSource={dataSource} />
       </Route>
       <Route path="/metrics">
         <MetricsExplorer dataSource={dataSource} />
