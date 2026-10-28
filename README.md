@@ -182,7 +182,7 @@ Tasks are defined in `mise.toml`; CI runs the same ones.
 | Task | Does |
 |---|---|
 | `mise run setup` | Install dependencies and git hooks. |
-| `mise run check` | Fast gate: lint, typecheck, unit tests, knip. |
+| `mise run check` | Fast gate: lint, typecheck, unit tests, knip. Unit tests with a time budget (named `@perf`) run afterwards, alone and one file at a time; `OTEL_HTML_PERF_FACTOR` scales their budgets on a slow machine. |
 | `mise run build` | Build the library, then the viewer, into `dist/`. |
 | `mise run test:e2e` | Build, then run the Playwright suite in Chromium, Firefox and WebKit. Extra arguments go to Playwright (`mise run test:e2e -- e2e/merge.spec.ts`). The metrics scale check runs only with `OTEL_HTML_METRICS_SCALE=1` (CI runs it in its own Chromium job): it writes a 200 metrics × 1,000 series × 1 h report the first time (about 15 minutes and 12 GB) and keeps it in `e2e/.cache/` until the writer sources change. |
 | `mise run build:binaries` | Compile standalone binaries into `dist/bin/` (after `build`). |
