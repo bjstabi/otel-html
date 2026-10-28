@@ -100,3 +100,19 @@ export function checkShow(kind: MetricKind, show: string): void {
     });
   }
 }
+
+/** The badge a metric definition shows (picker, Catalog): its point type, a monotonic sum told apart. */
+export type MetricTypeBadge = MetricDef['type'] | 'monotonicSum';
+
+export const METRIC_TYPE_LABELS: Record<MetricTypeBadge, string> = {
+  histogram: 'HIST',
+  exponentialHistogram: 'EXP HIST',
+  sum: 'SUM',
+  monotonicSum: 'SUM · monotonic',
+  gauge: 'GAUGE',
+  summary: 'SUMMARY',
+};
+
+export function metricTypeLabel(d: Pick<MetricDef, 'type' | 'monotonic'>): string {
+  return METRIC_TYPE_LABELS[d.type === 'sum' && d.monotonic ? 'monotonicSum' : d.type];
+}

@@ -231,12 +231,15 @@ describe('routes', () => {
     expect(screen.queryByText('Coming in a later release')).toBeNull();
   });
 
-  test('metrics and dashboards show a labelled count from the manifest totals', () => {
+  test('metrics is the Metrics Explorer', () => {
     renderShell('#/metrics');
-    expect(screen.getByText('Coming in a later release')).toBeTruthy();
-    expect(screen.getByLabelText('Metric data points in this run').textContent).toBe('7');
-    cleanup();
+    expect(screen.getByRole('heading', { name: 'Metrics', level: 1 })).toBeTruthy();
+    expect(screen.queryByText('Coming in a later release')).toBeNull();
+  });
+
+  test('dashboards shows a labelled count from the manifest totals', () => {
     renderShell('#/dashboards');
+    expect(screen.getByText('Coming in a later release')).toBeTruthy();
     expect(screen.getByLabelText('Spans in this run').textContent).toBe('1234');
   });
 
@@ -365,7 +368,7 @@ describe('chrome', () => {
       'Export OTLP JSON',
     ]);
     cleanup();
-    renderShell('#/metrics');
+    renderShell('#/dashboards');
     await user.click(screen.getByRole('button', { name: 'Export' }));
     const item = await screen.findByRole('menuitem', { name: /Nothing to export on this page/ });
     expect(item.getAttribute('aria-disabled')).toBe('true');

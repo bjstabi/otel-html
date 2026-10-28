@@ -2,6 +2,7 @@ import { Plus, Search, X } from 'lucide-react';
 import { type JSX, useEffect, useRef, useState } from 'react';
 import { OtelHtmlError } from '../../model/errors.js';
 import { compileCondition } from '../../ottl/compile.js';
+import type { OttlContextName } from '../../ottl/contexts.js';
 import { useSelection } from '../state/selection-context.js';
 import { type FacetSignal, type FilterToken, ottlToTokens, tokensToOttl } from './filter-tokens.js';
 
@@ -140,9 +141,11 @@ function TokenChip(props: {
 }
 
 function AddFilter(props: {
-  signal: FacetSignal;
+  keyPlaceholder: string;
+  labelSuffix: string;
   onAdd(key: string, op: FilterToken['op'], value: string): boolean;
 }): JSX.Element {
+  const sfx = props.labelSuffix;
   const [key, setKey] = useState('');
   const [op, setOp] = useState<FilterToken['op']>('==');
   const [value, setValue] = useState('');
@@ -160,14 +163,14 @@ function AddFilter(props: {
     >
       <input
         type="text"
-        aria-label="New filter key"
-        placeholder={props.signal === 'log' ? 'log.attributes["key"]' : 'span.attributes["key"]'}
+        aria-label={`New filter key${sfx}`}
+        placeholder={props.keyPlaceholder}
         value={key}
         onChange={(e) => setKey(e.target.value)}
         className={`${FIELD} w-44`}
       />
       <select
-        aria-label="New filter operator"
+        aria-label={`New filter operator${sfx}`}
         value={op}
         onChange={(e) => {
           if (isOp(e.target.value)) setOp(e.target.value);
@@ -182,7 +185,7 @@ function AddFilter(props: {
       </select>
       <input
         type="text"
-        aria-label="New filter value"
+        aria-label={`New filter value${sfx}`}
         value={value}
         onChange={(e) => setValue(e.target.value)}
         disabled={NO_VALUE_OPS.has(op)}
@@ -190,13 +193,154 @@ function AddFilter(props: {
       />
       <button
         type="submit"
-        aria-label="Add filter"
+        aria-label={`Add filter${sfx}`}
         disabled={key.trim() === ''}
         className="rounded-full border border-hairline bg-surface p-1 hover:bg-hairline disabled:opacity-50"
       >
         <Plus size={14} aria-hidden />
       </button>
     </form>
+  );
+}
+
+/**
+ * OTTL filter tokens over one condition, or a raw OTTL editor when `rawOpen` (or when the condition is not a flat
+ * `and` of tokens). Nothing reaches `onChange` that does not compile in `context`; edits commit on Enter or blur.
+ * The page query bar and each Metrics query row's `where` use it.
+ */
+export function ConditionEditor(props: {
+  condition: string | null;
+  onChange(condition: string | null): void;
+  context: OttlContextName;
+  rawOpen: boolean;
+  keyPlaceholder: string;
+  /** Appended to the controls' accessible names when a page holds several editors (` of a`). */
+  labelSuffix?: string;
+}): JSX.Element {
+  const { condition, onChange, context, rawOpen } = props;
+  const sfx = props.labelSuffix ?? '';
+  const tokens = condition === null ? [] : ottlToTokens(condition);
+  const [draft, setDraft] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const raw = tokens === null || rawOpen;
+
+  // An external condition change (facet click, back/forward, clear) or switching editors discards a stale raw
+  // draft and its error.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `condition` and `rawOpen` are triggers, not values read
+  useEffect(() => {
+    setDraft(null);
+    setError(null);
+  }, [condition, rawOpen]);
+
+  /** Applies `fn`; an OtelHtmlError becomes the inline message, anything else is a bug and propagates. */
+  const guarded = (fn: () => void): boolean => {
+    try {
+      fn();
+      setError(null);
+      return true;
+    } catch (e) {
+      if (e instanceof OtelHtmlError) {
+        setError(describeOttlError(e));
+        return false;
+      }
+      throw e;
+    }
+  };
+
+  const commitTokens = (next: readonly FilterToken[], compile = true): void => {
+    const src = tokensToOttl(next);
+    // Compile first so an invalid regex or a path from another signal never reaches the store. A removal skips
+    // it: it adds nothing, and must work on a condition that already does not compile.
+    if (compile && src !== null) compileCondition(src, context);
+    onChange(src);
+  };
+  const current = tokens ?? [];
+
+  const checkRaw = (src: string): string | null => {
+    if (src.trim() === '') return null;
+    try {
+      compileCondition(src, context);
+      return null;
+    } catch (e) {
+      if (e instanceof OtelHtmlError) return describeOttlError(e);
+      throw e;
+    }
+  };
+
+  const editRaw = (src: string): void => {
+    setDraft(src);
+    setError(checkRaw(src)); // live feedback; the store is written on commit only
+  };
+  const commitRaw = (): void => {
+    if (draft === null) return;
+    const problem = checkRaw(draft);
+    setError(problem);
+    if (problem === null) onChange(draft.trim() === '' ? null : draft);
+  };
+
+  return (
+    <>
+      {raw ? (
+        <div className="flex flex-col gap-1">
+          {tokens === null ? (
+            <p className="text-xs text-muted">
+              This condition can't be shown as tokens; edit the OTTL directly or clear it.
+            </p>
+          ) : null}
+          <textarea
+            aria-label={`OTTL condition${sfx}`}
+            aria-invalid={error !== null}
+            spellCheck={false}
+            rows={2}
+            value={draft ?? condition ?? ''}
+            onChange={(e) => editRaw(e.target.value)}
+            onBlur={commitRaw}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                commitRaw();
+              }
+            }}
+            className={`${FIELD} w-full`}
+          />
+        </div>
+      ) : (
+        <div className="flex flex-wrap items-center gap-2">
+          <ul aria-label={`Filters${sfx}`} className="flex flex-wrap gap-2">
+            {current.map((t, i) => (
+              <TokenChip
+                // biome-ignore lint/suspicious/noArrayIndexKey: tokens have no identity; the same key may repeat
+                key={`${t.key}:${i}`}
+                token={t}
+                onChange={(next) =>
+                  guarded(() => commitTokens(current.map((x, j) => (j === i ? editedToken(next, x) : x))))
+                }
+                onRemove={() =>
+                  guarded(() =>
+                    commitTokens(
+                      current.filter((_, j) => j !== i),
+                      false,
+                    ),
+                  )
+                }
+              />
+            ))}
+          </ul>
+          <AddFilter
+            keyPlaceholder={props.keyPlaceholder}
+            labelSuffix={sfx}
+            onAdd={(key, op, value) =>
+              guarded(() => commitTokens([...current, { key, op, value: coerceValue(op, null, value) }]))
+            }
+          />
+        </div>
+      )}
+      {error === null ? null : (
+        <p role="alert" className="font-mono text-xs text-critical">
+          {error}
+        </p>
+      )}
+    </>
   );
 }
 
@@ -215,8 +359,6 @@ export function QueryBar(props: {
   const setCondition = useSelection((s) => s.setCondition);
   const tokens = condition === null ? [] : ottlToTokens(condition);
   const [rawOpen, setRawOpen] = useState(false);
-  const [draft, setDraft] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const raw = tokens === null || rawOpen;
 
   // Free text: local value, one store write once typing pauses (or on Enter/blur).
@@ -244,59 +386,6 @@ export function QueryBar(props: {
     cancelPending.current?.();
     cancelPending.current = null;
     if (latestText.current !== localTextRef.current) setText(localTextRef.current);
-  };
-
-  // An external condition change (facet click, back/forward) discards a stale raw draft and its error.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `condition` is the trigger, not a value read
-  useEffect(() => {
-    setDraft(null);
-    setError(null);
-  }, [condition]);
-
-  /** Applies `fn`; an OtelHtmlError becomes the inline message, anything else is a bug and propagates. */
-  const guarded = (fn: () => void): boolean => {
-    try {
-      fn();
-      setError(null);
-      return true;
-    } catch (e) {
-      if (e instanceof OtelHtmlError) {
-        setError(describeOttlError(e));
-        return false;
-      }
-      throw e;
-    }
-  };
-
-  const commitTokens = (next: readonly FilterToken[], compile = true): void => {
-    const src = tokensToOttl(next);
-    // Compile first so an invalid regex or a path from the other signal never reaches the store. A removal skips
-    // it: it adds nothing, and must work on a condition that already does not compile.
-    if (compile && src !== null) compileCondition(src, props.signal === 'log' ? 'log_record' : 'span');
-    setCondition(src);
-  };
-  const current = tokens ?? [];
-
-  const checkRaw = (src: string): string | null => {
-    if (src.trim() === '') return null;
-    try {
-      compileCondition(src, props.signal === 'log' ? 'log_record' : 'span');
-      return null;
-    } catch (e) {
-      if (e instanceof OtelHtmlError) return describeOttlError(e);
-      throw e;
-    }
-  };
-
-  const editRaw = (src: string): void => {
-    setDraft(src);
-    setError(checkRaw(src)); // live feedback; the store is written on commit only
-  };
-  const commitRaw = (): void => {
-    if (draft === null) return;
-    const problem = checkRaw(draft);
-    setError(problem);
-    if (problem === null) setCondition(draft.trim() === '' ? null : draft);
   };
 
   return (
@@ -331,11 +420,7 @@ export function QueryBar(props: {
           type="button"
           aria-pressed={raw}
           disabled={tokens === null}
-          onClick={() => {
-            setRawOpen(!rawOpen);
-            setDraft(null);
-            setError(null);
-          }}
+          onClick={() => setRawOpen(!rawOpen)}
           className="rounded-full border border-hairline px-3 py-1.5 text-sm aria-pressed:bg-ink aria-pressed:text-page"
         >
           OTTL
@@ -361,76 +446,20 @@ export function QueryBar(props: {
         {condition === null ? null : (
           <button
             type="button"
-            onClick={() => {
-              setCondition(null);
-              setDraft(null);
-              setError(null);
-            }}
+            onClick={() => setCondition(null)}
             className="rounded-full px-3 py-1.5 text-sm text-muted hover:bg-hairline"
           >
             Clear filters
           </button>
         )}
       </div>
-      {raw ? (
-        <div className="flex flex-col gap-1">
-          {tokens === null ? (
-            <p className="text-xs text-muted">
-              This condition can't be shown as tokens; edit the OTTL directly or clear it.
-            </p>
-          ) : null}
-          <textarea
-            aria-label="OTTL condition"
-            aria-invalid={error !== null}
-            spellCheck={false}
-            rows={2}
-            value={draft ?? condition ?? ''}
-            onChange={(e) => editRaw(e.target.value)}
-            onBlur={commitRaw}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                commitRaw();
-              }
-            }}
-            className={`${FIELD} w-full`}
-          />
-        </div>
-      ) : (
-        <div className="flex flex-wrap items-center gap-2">
-          <ul aria-label="Filters" className="flex flex-wrap gap-2">
-            {current.map((t, i) => (
-              <TokenChip
-                // biome-ignore lint/suspicious/noArrayIndexKey: tokens have no identity; the same key may repeat
-                key={`${t.key}:${i}`}
-                token={t}
-                onChange={(next) =>
-                  guarded(() => commitTokens(current.map((x, j) => (j === i ? editedToken(next, x) : x))))
-                }
-                onRemove={() =>
-                  guarded(() =>
-                    commitTokens(
-                      current.filter((_, j) => j !== i),
-                      false,
-                    ),
-                  )
-                }
-              />
-            ))}
-          </ul>
-          <AddFilter
-            signal={props.signal}
-            onAdd={(key, op, value) =>
-              guarded(() => commitTokens([...current, { key, op, value: coerceValue(op, null, value) }]))
-            }
-          />
-        </div>
-      )}
-      {error === null ? null : (
-        <p role="alert" className="font-mono text-xs text-critical">
-          {error}
-        </p>
-      )}
+      <ConditionEditor
+        condition={condition}
+        onChange={setCondition}
+        context={props.signal === 'log' ? 'log_record' : 'span'}
+        rawOpen={rawOpen}
+        keyPlaceholder={props.signal === 'log' ? 'log.attributes["key"]' : 'span.attributes["key"]'}
+      />
     </div>
   );
 }

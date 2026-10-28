@@ -5,8 +5,7 @@ import { PageChrome } from './page-chrome.js';
 
 const CARD = 'rounded-card border border-hairline bg-surface p-6 max-w-xl';
 
-const LATER: Record<'metrics' | 'dashboards', { title: string; signal: Signal; noun: string }> = {
-  metrics: { title: 'Metrics', signal: 'metrics', noun: 'Metric data points in this run' },
+const LATER: Record<'dashboards', { title: string; signal: Signal; noun: string }> = {
   dashboards: { title: 'Dashboards', signal: 'spans', noun: 'Spans in this run' },
 };
 

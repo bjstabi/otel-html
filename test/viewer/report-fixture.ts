@@ -289,7 +289,7 @@ const METRIC_POINT_SECONDS = [0, 1000, 5000] as const;
  * - 2 `payments.balance` (gauge): `payments` only, 100, 90, 80.
  * Every point has a one-second window, at `METRIC_POINT_SECONDS`.
  */
-function metricRequest(): JsonObject[] {
+function metricRequest(extras = false): JsonObject[] {
   const base = BigInt(EPOCH_NS);
   const at = (s: number): string => String(base + BigInt(s) * 1_000_000_000n);
   const points = (values: readonly number[], attrs: JsonObject[] = []): JsonObject[] =>
@@ -327,7 +327,50 @@ function metricRequest(): JsonObject[] {
         ]),
       ],
     },
+    ...(extras ? [explorerExtras(points)] : []),
   ];
+}
+
+/**
+ * `buildMetricExplorerReport` adds, after the three metrics above (so their ids stay 0-2):
+ * - 3 `http.server.request.duration` (delta histogram, unit `s`, bounds [0.1, 1]) on `checkout`;
+ * - 4 and 5 `jobs.active`: a gauge (unit `1`) on `checkout` and a delta sum (unit `{job}`) on `payments`, so the
+ *   name has conflicting definitions.
+ */
+function explorerExtras(points: (values: readonly number[]) => JsonObject[]): JsonObject {
+  const resource = (service: string, metrics: JsonObject[]): JsonObject => ({
+    resource: { attributes: [attr('service.name', { stringValue: service })] },
+    scopeMetrics: [{ scope: { name: 'test-scope' }, metrics }],
+  });
+  const histPoints = points([0, 0, 0]).map((p, i) => {
+    const { asInt: _, ...rest } = p;
+    return {
+      ...rest,
+      count: '3',
+      sum: 0.5 * (i + 1),
+      bucketCounts: ['1', '1', '1'],
+      explicitBounds: [0.1, 1],
+    };
+  });
+  return {
+    resourceMetrics: [
+      resource('checkout', [
+        {
+          name: 'http.server.request.duration',
+          unit: 's',
+          histogram: { aggregationTemporality: 1, dataPoints: histPoints },
+        },
+        { name: 'jobs.active', unit: '1', gauge: { dataPoints: points([1, 2, 3]) } },
+      ]),
+      resource('payments', [
+        {
+          name: 'jobs.active',
+          unit: '{job}',
+          sum: { aggregationTemporality: 1, isMonotonic: false, dataPoints: points([4, 5, 6]) },
+        },
+      ]),
+    ],
+  };
 }
 
 /**
@@ -335,13 +378,19 @@ function metricRequest(): JsonObject[] {
  * flush, so only series and segment files), each written by its own session. See `metricRequest` for the data.
  */
 export async function buildMetricReports(): Promise<{ compacted: Fixture; segments: Fixture }> {
-  const build = async (finish: boolean): Promise<Fixture> => {
-    const w = createTestWriter();
-    const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'create' });
-    for (const r of metricRequest()) await session.add(otlp(r), 'metrics');
-    if (finish) await session.close();
-    else await session.flush();
-    return { files: reportFilesFromSnapshot(w.fs.snapshot(), OUT), manifest: manifestOf(w, OUT) };
-  };
-  return { compacted: await build(true), segments: await build(false) };
+  return { compacted: await buildMetrics(true, false), segments: await buildMetrics(false, false) };
+}
+
+/** A finished report with `buildMetricReports`' metrics plus a histogram and a conflicting name (`explorerExtras`). */
+export function buildMetricExplorerReport(): Promise<Fixture> {
+  return buildMetrics(true, true);
+}
+
+async function buildMetrics(finish: boolean, extras: boolean): Promise<Fixture> {
+  const w = createTestWriter();
+  const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'create' });
+  for (const r of metricRequest(extras)) await session.add(otlp(r), 'metrics');
+  if (finish) await session.close();
+  else await session.flush();
+  return { files: reportFilesFromSnapshot(w.fs.snapshot(), OUT), manifest: manifestOf(w, OUT) };
 }

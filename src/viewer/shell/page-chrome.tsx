@@ -118,8 +118,8 @@ function ExportMenu({ items }: { items: readonly ExportItem[] }): JSX.Element {
 /** Title, query bar, time range, Copy link and the Export menu; `exportItems` is filled per page. */
 export function PageChrome(props: {
   title: string;
-  /** Which OTTL context the query bar compiles in; spans or log records. */
-  signal: FacetSignal;
+  /** Which OTTL context the query bar compiles in; spans or log records. Without one there is no query bar (Metrics filters per query). */
+  signal?: FacetSignal;
   manifest: Manifest;
   exportItems?: readonly ExportItem[];
   children?: ReactNode;
@@ -133,7 +133,7 @@ export function PageChrome(props: {
           <ExportMenu items={props.exportItems ?? []} />
         </div>
         <div className="flex flex-wrap items-center gap-3">
-          <QueryBar signal={props.signal} />
+          {props.signal === undefined ? null : <QueryBar signal={props.signal} />}
           <TimeRange manifest={props.manifest} />
         </div>
       </header>
