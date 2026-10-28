@@ -12,7 +12,7 @@ import { useSelection, useSelectionStore } from '../../state/selection-context.j
 import type { QueryHandle } from '../../state/use-query.js';
 import type { WidgetRenderer } from '../dashboard-page.js';
 import { variableCondition } from '../scope.js';
-import { useSubtitle } from './subtitle.js';
+import { count, useSubtitle } from './subtitle.js';
 
 /** Card header, padding and border, then the view toggle and the list's own control row. */
 const FRAME_CHROME_PX = 52;
@@ -26,8 +26,8 @@ const ROWS = 200;
 type LogsResult = Extract<LogQueryResult, { mode: 'logs' }>;
 
 function logsOf(h: QueryHandle<LogQueryResult>): LogsResult | null {
-  const r =
-    h.state.status === 'ready' ? h.state.result : h.state.status === 'loading' ? h.state.previous : null;
+  // Only a finished result: rows of the previous inputs are never shown as if they were current.
+  const r = h.state.status === 'ready' ? h.state.result : null;
   return r !== null && r.mode === 'logs' ? r : null;
 }
 
@@ -185,7 +185,7 @@ export const LogsWidget: WidgetRenderer = ({
         ? `${matched.total} for the selected trace`
         : scope.narrowed
           ? `${matched.total} in selected time`
-          : `${matched.total} logs`,
+          : count(matched.total, 'log'),
   );
   const listPx =
     Math.max(MIN_PX, height - FRAME_CHROME_PX - TOGGLE_PX - LIST_CONTROLS_PX - NOTE_PX) - TABLE_HEADER_PX;
@@ -193,6 +193,9 @@ export const LogsWidget: WidgetRenderer = ({
   return (
     <div className="flex flex-col gap-1">
       <ViewToggle view={view} onChange={actions.setLogView} />
+      {view === 'context' && handle.state.status === 'error' && (
+        <ErrorCard title="The matching logs could not be found" message={handle.state.message} />
+      )}
       {view === 'context' ? (
         <ContextView {...list} context={context} matched={matched} />
       ) : (

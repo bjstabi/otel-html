@@ -12,7 +12,7 @@ import { useColorAssigner } from '../../theme/colors-context.js';
 import { SPAN_COLUMNS_UI, TRACE_COLUMNS_UI } from '../../traces/columns.js';
 import { useSpanQuery } from '../../traces/use-span-query.js';
 import type { WidgetRenderer } from '../dashboard-page.js';
-import { useSubtitle } from './subtitle.js';
+import { count, useSubtitle } from './subtitle.js';
 
 /** Card header, padding and border around the body (as in the timeline widget). */
 const FRAME_CHROME_PX = 52;
@@ -89,12 +89,17 @@ export const TracesWidget: WidgetRenderer = ({ widget, scope, height, dataSource
     [scope.condition, scope.window, text, mode, sort],
   );
   const { state, scanAll } = useSpanQuery(dataSource, query);
-  const result = state.status === 'ready' ? state.result : state.status === 'loading' ? state.previous : null;
+  // Only a finished result: rows of the previous inputs are never shown as if they were current.
+  const result = state.status === 'ready' ? state.result : null;
 
   const noun = mode === 'spans' ? 'spans' : 'traces';
   useSubtitle(
     actions,
-    result === null ? null : scope.narrowed ? `${result.total} in selected time` : `${result.total} ${noun}`,
+    result === null
+      ? null
+      : scope.narrowed
+        ? `${result.total} in selected time`
+        : count(result.total, mode === 'spans' ? 'span' : 'trace'),
   );
 
   const spanRows: SpanRow[] = result?.rows.filter(isSpanRow) ?? [];
@@ -111,7 +116,6 @@ export const TracesWidget: WidgetRenderer = ({ widget, scope, height, dataSource
   );
   const listPx = followed === null ? body : Math.round(body * LIST_SHARE);
   const tableHeight = Math.max(MIN_PX - TABLE_HEADER_PX, listPx - TABLE_HEADER_PX);
-  const onSort = setSort;
 
   return (
     <div className="flex flex-col gap-1">
@@ -127,7 +131,7 @@ export const TracesWidget: WidgetRenderer = ({ widget, scope, height, dataSource
             columns={SPAN_COLUMNS_UI}
             rowId={(r) => r.span.spanId}
             sort={sort}
-            onSort={onSort}
+            onSort={setSort}
             onRowClick={(r) => actions.selectTrace(r.span.traceId)}
             moveEnabled={false}
             selectedId={spanRows.find((r) => r.span.traceId === followed)?.span.spanId ?? null}
@@ -141,7 +145,7 @@ export const TracesWidget: WidgetRenderer = ({ widget, scope, height, dataSource
             columns={TRACE_COLUMNS_UI}
             rowId={(r) => r.traceId}
             sort={sort}
-            onSort={onSort}
+            onSort={setSort}
             onRowClick={(r) => actions.selectTrace(r.traceId)}
             moveEnabled={false}
             selectedId={followed}

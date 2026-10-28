@@ -11,3 +11,8 @@ export function useSubtitle(actions: WidgetActions, text: string | null): void {
     return () => set.current(null);
   }, [text]);
 }
+
+/** `1 trace`, `2 traces`. */
+export function count(n: number, noun: string): string {
+  return `${n} ${n === 1 ? noun : `${noun}s`}`;
+}
