@@ -23,6 +23,8 @@ import {
   allLogs,
   allPoints,
   allSpans,
+  counterRequest,
+  levelsOf,
   logRollupsOf,
   manifestOf,
   spansRequest,
@@ -127,6 +129,36 @@ describe('mergeReports', () => {
     await merge(w, ['a', 'b']);
     await writeReport(w, 'both', [first, second]);
     expect(logRollupsOf(w, 'out').toJSON()).toEqual(logRollupsOf(w, 'both').toJSON());
+  });
+
+  test('metric level files equal converting both inputs at once', async () => {
+    const w = createTestWriter();
+    const host = (h: string): JsonObject[] => [{ key: 'host', value: { stringValue: h } }];
+    const first = counterRequest(
+      'requests',
+      [
+        [0, 1],
+        [10, 3],
+        [2500, 9],
+      ],
+      host('a'),
+    );
+    const second = counterRequest(
+      'requests',
+      [
+        [5, 2],
+        [15, 5],
+      ],
+      host('b'),
+    );
+    await writeReport(w, 'a', [first]);
+    await writeReport(w, 'b', [second]);
+    await merge(w, ['a', 'b']);
+    await writeReport(w, 'both', [first, second]);
+    const merged = levelsOf(w, 'out', 0);
+    expect(merged.map((l) => l.level)).toEqual([0, 1]);
+    expect(merged[0]?.series.map((s) => s.id)).toEqual([0, 1]);
+    expect(merged).toEqual(levelsOf(w, 'both', 0));
   });
 
   test('rejects an unsupported formatVersion precisely', async () => {

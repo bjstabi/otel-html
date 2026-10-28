@@ -22,6 +22,12 @@ run = "pnpm exec tsc -p tsconfig.json --noEmit && pnpm exec tsc -p tsconfig.view
 [tasks."test:unit"]
 run = "pnpm exec vitest run"
 
+# Slow load tests (writer peak memory), skipped by `test:unit` and `check` unless OTEL_HTML_LOAD=1. The 1M-log
+# test runs the built library, hence the build.
+[tasks."test:load"]
+depends = ["build"]
+run = "OTEL_HTML_LOAD=1 pnpm exec vitest run test/writer/metric-memory.test.ts test/writer/log-size.test.ts"
+
 [tasks.knip]
 run = "pnpm exec knip"
 

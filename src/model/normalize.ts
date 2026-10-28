@@ -1,4 +1,4 @@
-import { type DescMessage, type JsonObject, type JsonValue, toJson } from '@bufbuild/protobuf';
+import { type DescMessage, fromJson, type JsonObject, type JsonValue, toJson } from '@bufbuild/protobuf';
 import type { AnyValue, Attributes } from './anyvalue.js';
 import { OtelHtmlError } from './errors.js';
 import type { ExportLogsServiceRequest } from './gen/opentelemetry/proto/collector/logs/v1/logs_service_pb.js';
@@ -11,6 +11,7 @@ import type {
 } from './gen/opentelemetry/proto/common/v1/common_pb.js';
 import {
   AggregationTemporality,
+  ExemplarSchema,
   ExponentialHistogramDataPointSchema,
   HistogramDataPointSchema,
   type Metric,
@@ -19,6 +20,8 @@ import {
 } from './gen/opentelemetry/proto/metrics/v1/metrics_pb.js';
 import type { Resource } from './gen/opentelemetry/proto/resource/v1/resource_pb.js';
 import {
+  parseSpanId,
+  parseTraceId,
   parseUnixNanos,
   type RelNanos,
   type SpanId,
@@ -421,4 +424,70 @@ export function earliestTimestamp(req: OtlpRequest): UnixNanos | null {
       break;
   }
   return min === null ? null : parseUnixNanos(min, 'timestamp');
+}
+
+/** An exemplar of a metric point, decoded from the point JSON kept on the record. */
+export interface PointExemplar {
+  readonly time: RelNanos;
+  readonly value: number;
+  readonly traceId: TraceId | null;
+  readonly spanId: SpanId | null;
+  readonly attributes: Attributes;
+}
+
+function hexIdOrNull<T>(v: unknown, parse: (hex: string, path: string) => T, path: string): T | null {
+  if (v === undefined || v === '') return null;
+  if (typeof v !== 'string') {
+    throw new OtelHtmlError('invalid-otlp', { path, expected: 'a hex id', actual: JSON.stringify(v) });
+  }
+  return /^0+$/.test(v) ? null : parse(v, path);
+}
+
+/**
+ * The exemplars of a point (`point.exemplars`, OTLP JSON with hex ids). An exemplar without a finite value is
+ * left out; one without a time takes the point's. Times are relative to `epoch`.
+ */
+export function pointExemplars(p: MetricPointRecord, epoch: UnixNanos, path: string): PointExemplar[] {
+  const raw: unknown =
+    typeof p.point === 'object' && p.point !== null ? Reflect.get(p.point, 'exemplars') : undefined;
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) {
+    throw new OtelHtmlError('invalid-otlp', { path, expected: 'a list of exemplars', actual: typeof raw });
+  }
+  return raw.flatMap((e: unknown, i): PointExemplar[] => {
+    const ep = `${path}[${i}]`;
+    if (typeof e !== 'object' || e === null || Array.isArray(e)) {
+      throw new OtelHtmlError('invalid-otlp', {
+        path: ep,
+        expected: 'an exemplar object',
+        actual: JSON.stringify(e),
+      });
+    }
+    const { traceId, spanId, ...rest } = e as Record<string, unknown>;
+    let msg: ReturnType<typeof fromJson<typeof ExemplarSchema>>;
+    try {
+      msg = fromJson(ExemplarSchema, rest as JsonValue);
+    } catch (err) {
+      throw new OtelHtmlError('invalid-otlp', {
+        path: ep,
+        expected: 'an OTLP exemplar',
+        actual: err instanceof Error ? err.message : String(err),
+      });
+    }
+    const v = msg.value;
+    const value = v.case === 'asDouble' ? v.value : v.case === 'asInt' ? Number(v.value) : null;
+    if (value === null || !Number.isFinite(value)) return [];
+    return [
+      {
+        time:
+          msg.timeUnixNano === 0n
+            ? p.time
+            : toRelNanos(parseUnixNanos(msg.timeUnixNano, `${ep}.timeUnixNano`), epoch, `${ep}.timeUnixNano`),
+        value,
+        traceId: hexIdOrNull(traceId, parseTraceId, `${ep}.traceId`),
+        spanId: hexIdOrNull(spanId, parseSpanId, `${ep}.spanId`),
+        attributes: convertAttributes(msg.filteredAttributes, `${ep}.filteredAttributes`),
+      },
+    ];
+  });
 }

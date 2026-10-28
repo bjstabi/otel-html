@@ -32,6 +32,10 @@ export interface SessionState {
   dedupe: string[];
   /** The whole trace index by shard, so a crash never leaves it ahead of the committed manifest. */
   traceIndex: Record<string, TraceShard>;
+  /** The metric stream normalizer's state (cumulative streams); its owner validates the shape. */
+  metricStreams: unknown;
+  /** Next segment number per metric id. */
+  nextSegment: Record<string, number>;
 }
 
 const nonNegInt = z.number().int().nonnegative();
@@ -47,6 +51,8 @@ export const SessionStateSchema: z.ZodType<SessionState> = z.strictObject({
   rollups: SerializedRollupsSchema,
   dedupe: z.array(z.string()),
   traceIndex: z.record(z.string().regex(/^[0-9a-f]{2}$/, 'two lowercase hex chars'), TraceShardSchema),
+  metricStreams: z.unknown().default({ streams: [] }),
+  nextSegment: z.record(z.string().regex(/^(0|[1-9][0-9]*)$/, 'a metric id'), nonNegInt).default({}),
 });
 
 export function parseSessionState(input: unknown): SessionState {

@@ -246,4 +246,14 @@ describe('StreamNormalizer', () => {
     });
     expect(() => s.normalize(0, badCount)).toThrow(expect.objectContaining({ code: 'invalid-otlp' }));
   });
+
+  it('prepare parses without touching streams; its step applies the point', () => {
+    const s = new StreamNormalizer();
+    const steps = [sum(5, 1), sum(8, 2)].map((p) => s.prepare(p));
+    expect(s.toJSON()).toEqual({ streams: [] });
+    expect(() => s.prepare(pt({ type: 'gauge', point: { asDouble: 'abc' } }))).toThrow(OtelHtmlError);
+    expect(steps.map((step) => deltaOf(step('0/0')).delta)).toEqual([5, 3]);
+    // string keys tell apart equal series ids of different metrics
+    expect(deltaOf(s.normalize('1/0', sum(2, 3))).delta).toBe(2);
+  });
 });

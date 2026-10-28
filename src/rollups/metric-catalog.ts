@@ -47,7 +47,7 @@ export interface MetricEntry extends MetricDef {
 // Lossless JSON for attributes (strings and bools are bare, everything else is tagged)
 // ---------------------------------------------------------------------------------------------
 
-type JsonAny = null | boolean | number | string | JsonAny[] | { [k: string]: JsonAny };
+export type JsonAny = null | boolean | number | string | JsonAny[] | { [k: string]: JsonAny };
 
 function bytesToBase64(b: Uint8Array): string {
   let bin = '';
@@ -75,7 +75,7 @@ function encodeValue(v: AnyValue): JsonAny {
   }
 }
 
-function encodeAttributes(a: Attributes): JsonAny[] {
+export function encodeAttributes(a: Attributes): JsonAny[] {
   return [...a].map(([k, v]) => [k, encodeValue(v)]);
 }
 
@@ -87,7 +87,7 @@ const SPECIAL_DOUBLES: ReadonlyMap<string, number> = new Map([
 ]);
 const INT64 = /^-?\d{1,19}$/;
 
-const JsonAnySchema: z.ZodType<JsonAny> = z.lazy(() =>
+export const JsonAnySchema: z.ZodType<JsonAny> = z.lazy(() =>
   z.union([
     z.null(),
     z.boolean(),
@@ -143,7 +143,7 @@ function decodeValue(v: JsonAny, path: string): AnyValue {
   throw invalid(path, 'an encoded attribute value', v);
 }
 
-function decodeAttributes(v: JsonAny, path: string): Attributes {
+export function decodeAttributes(v: JsonAny, path: string): Attributes {
   if (!Array.isArray(v)) throw invalid(path, 'a list of [key, value] pairs', v);
   const out = new Map<string, AnyValue>();
   v.forEach((e, i) => {
@@ -314,6 +314,11 @@ export class MetricCatalog {
   readonly #scopes = new Interner<ScopeRecord>(scopeKey);
   readonly #slots: Slot[] = [];
   readonly #defIds = new Map<string, number>();
+  /** Definitions by name, so the per-point lookup in `defOf` builds no key. */
+  readonly #byName = new Map<string, MetricEntry[]>();
+  /** Interned refs by record identity: the session hands the same record objects for every point. */
+  readonly #resourceRefs = new WeakMap<ResourceRecord, number>();
+  readonly #scopeRefs = new WeakMap<ScopeRecord, number>();
   readonly #dirty = new Set<number>();
 
   constructor(opts: { seriesCap: number }) {
@@ -325,6 +330,15 @@ export class MetricCatalog {
 
   /** Interns the definition `(name, unit, type, temporality, monotonic)`; the first description wins. */
   defOf(p: MetricPointRecord): MetricDef {
+    for (const e of this.#byName.get(p.name) ?? []) {
+      if (
+        e.unit === p.unit &&
+        e.type === p.type &&
+        e.temporality === p.temporality &&
+        e.monotonic === p.monotonic
+      )
+        return e;
+    }
     const key = defKey(p);
     const known = this.#defIds.get(key);
     if (known !== undefined) return this.#slot(known).entry;
@@ -362,8 +376,8 @@ export class MetricCatalog {
     scope: ScopeRecord,
   ): { series: SeriesDef; isNew: boolean } {
     const slot = this.#slot(def.id);
-    const r = this.#resources.intern(resource);
-    const s = this.#scopes.intern(scope);
+    const r = this.#resourceRef(resource);
+    const s = this.#scopeRef(scope);
     const bounds = boundsOf(p);
     const key = seriesKey(r, s, p.attributes, bounds);
     const known = slot.byKey.get(key);
@@ -435,6 +449,24 @@ export class MetricCatalog {
     this.#dirty.clear();
   }
 
+  #resourceRef(resource: ResourceRecord): number {
+    let r = this.#resourceRefs.get(resource);
+    if (r === undefined) {
+      r = this.#resources.intern(resource);
+      this.#resourceRefs.set(resource, r);
+    }
+    return r;
+  }
+
+  #scopeRef(scope: ScopeRecord): number {
+    let s = this.#scopeRefs.get(scope);
+    if (s === undefined) {
+      s = this.#scopes.intern(scope);
+      this.#scopeRefs.set(scope, s);
+    }
+    return s;
+  }
+
   #slot(id: number): Slot {
     const s = this.#slots[id];
     if (s === undefined) throw new RangeError(`unknown metric id ${id}`);
@@ -453,6 +485,9 @@ export class MetricCatalog {
     };
     this.#slots.push(slot);
     this.#defIds.set(defKey(entry), entry.id);
+    const named = this.#byName.get(entry.name);
+    if (named === undefined) this.#byName.set(entry.name, [entry]);
+    else named.push(entry);
     return slot;
   }
 

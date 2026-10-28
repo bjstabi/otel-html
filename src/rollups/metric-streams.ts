@@ -15,6 +15,9 @@ export type Normalized =
   | { kind: 'ok'; agg: BucketAgg; reset: boolean }
   | { kind: 'skip'; reason: 'out-of-order' | 'no-value' };
 
+/** A series' identity for stream state: unique across the report, e.g. `<metric id>/<series id>`. */
+export type SeriesKey = string | number;
+
 /** Flag bit 1 of an OTLP data point: the point records that no value was observed. */
 const NO_RECORDED_VALUE = 1;
 
@@ -186,7 +189,25 @@ function expOf(p: MetricPointRecord): ExpAgg | null {
   };
 }
 
+const INT_TEXT = /^-?\d+$/;
+
+/** `asDouble`/`asInt` read without Zod (most points); undefined when a field needs the full parse. */
+function plainValue(raw: unknown, text: RegExp): number | undefined | null {
+  if (raw === undefined) return null;
+  if (typeof raw === 'number') return raw;
+  return typeof raw === 'string' && text.test(raw) ? Number(raw) : undefined;
+}
+
 function numberValueOf(p: MetricPointRecord): number | null {
+  // Fast path for the common shapes; anything else goes through the schema, which also reports the error.
+  if (typeof p.point === 'object' && p.point !== null) {
+    const dbl = plainValue(Reflect.get(p.point, 'asDouble'), NUMBER_TEXT);
+    const int = plainValue(Reflect.get(p.point, 'asInt'), INT_TEXT);
+    if (dbl !== undefined && int !== undefined) {
+      const v = dbl ?? int;
+      return v !== null && Number.isFinite(v) ? v : null;
+    }
+  }
   const d = parsePoint(ValuePointSchema, p);
   const v = d.asDouble ?? d.asInt;
   return v !== undefined && Number.isFinite(v) ? v : null;
@@ -311,43 +332,58 @@ interface Stream {
 export class StreamNormalizer {
   readonly #streams = new Map<string, Stream>();
 
-  normalize(seriesId: number, p: MetricPointRecord): Normalized {
-    if ((p.flags & NO_RECORDED_VALUE) !== 0) return { kind: 'skip', reason: 'no-value' };
+  /** `series` identifies the point's series across the whole report (series ids alone repeat per metric). */
+  normalize(series: SeriesKey, p: MetricPointRecord): Normalized {
+    return this.prepare(p)(series);
+  }
+
+  /**
+   * Parses `p`, throwing `invalid-otlp` when it is malformed, without touching any stream. The returned step
+   * normalizes it for a series (updating the stream of a cumulative point) and never throws, so a caller can
+   * check a whole request before applying any of it.
+   */
+  prepare(p: MetricPointRecord): (series: SeriesKey) => Normalized {
+    if ((p.flags & NO_RECORDED_VALUE) !== 0) return () => SKIP_NO_VALUE;
     const rule = ruleFor(p);
+    const done =
+      (n: Normalized): (() => Normalized) =>
+      () =>
+        n;
     switch (rule.agg) {
       case 'number': {
         const v = numberValueOf(p);
-        if (v === null) return SKIP_NO_VALUE;
-        return ok({ k: 'number', count: 1, sum: v, min: v, max: v, last: v, lastTime: p.time });
+        if (v === null) return done(SKIP_NO_VALUE);
+        return done(ok({ k: 'number', count: 1, sum: v, min: v, max: v, last: v, lastTime: p.time }));
       }
       case 'summary': {
         const agg = summaryOf(p);
-        return agg === null ? SKIP_NO_VALUE : ok(agg);
+        return done(agg === null ? SKIP_NO_VALUE : ok(agg));
       }
       case 'counter': {
         const v = numberValueOf(p);
-        if (v === null) return SKIP_NO_VALUE;
-        if (!rule.cumulative) return ok({ k: 'counter', delta: v, resets: 0 });
-        return this.#cumulative(
-          seriesId,
-          p,
-          v,
-          (cur, prev) => (cur < prev ? null : cur - prev),
-          asCounter,
-          () => 0,
-        );
+        if (v === null) return done(SKIP_NO_VALUE);
+        if (!rule.cumulative) return done(ok({ k: 'counter', delta: v, resets: 0 }));
+        return (series) =>
+          this.#cumulative(
+            series,
+            p,
+            v,
+            (cur, prev) => (cur < prev ? null : cur - prev),
+            asCounter,
+            () => 0,
+          );
       }
       case 'hist': {
         const h = histOf(p);
-        if (h === null) return SKIP_NO_VALUE;
-        if (!rule.cumulative) return h.count === 0 ? SKIP_NO_VALUE : ok(h);
-        return this.#cumulative(seriesId, p, h, diffHist, asHist, emptyHist);
+        if (h === null) return done(SKIP_NO_VALUE);
+        if (!rule.cumulative) return done(h.count === 0 ? SKIP_NO_VALUE : ok(h));
+        return (series) => this.#cumulative(series, p, h, diffHist, asHist, emptyHist);
       }
       case 'exp': {
         const e = expOf(p);
-        if (e === null) return SKIP_NO_VALUE;
-        if (!rule.cumulative) return e.count === 0 ? SKIP_NO_VALUE : ok(e);
-        return this.#cumulative(seriesId, p, e, diffExp, asExp, emptyExp);
+        if (e === null) return done(SKIP_NO_VALUE);
+        if (!rule.cumulative) return done(e.count === 0 ? SKIP_NO_VALUE : ok(e));
+        return (series) => this.#cumulative(series, p, e, diffExp, asExp, emptyExp);
       }
       default:
         return assertNeverKind(rule.agg);
@@ -359,14 +395,14 @@ export class StreamNormalizer {
    * counts in full when the stream has a start time, and is only a baseline otherwise.
    */
   #cumulative<T extends number | HistAgg | ExpAgg>(
-    seriesId: number,
+    series: SeriesKey,
     p: MetricPointRecord,
     cur: T,
     diff: (cur: T, prev: T) => T | null,
     recall: (last: number | BucketAgg) => T | null,
     zero: (cur: T) => T,
   ): Normalized {
-    const key = `${seriesId}:${p.start ?? 'none'}`;
+    const key = `${series}:${p.start ?? 'none'}`;
     const prev = this.#streams.get(key);
     if (prev !== undefined && p.time <= prev.time) return { kind: 'skip', reason: 'out-of-order' };
     this.#streams.set(key, { time: p.time, last: cur });

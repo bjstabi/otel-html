@@ -22,6 +22,8 @@ import {
   normalizeLogs,
   normalizeMetrics,
   normalizeTraces,
+  type PointExemplar,
+  pointExemplars,
 } from '../model/normalize.js';
 import type { OtlpRequest } from '../model/otlp-json.js';
 import {
@@ -37,6 +39,8 @@ import {
 import type { CompiledCondition } from '../ottl/compile.js';
 import { compileAny } from '../ottl/compile.js';
 import type { LogTarget, SpanTarget } from '../ottl/contexts.js';
+import type { Normalized, SeriesKey } from '../rollups/metric-streams.js';
+import { StreamNormalizer } from '../rollups/metric-streams.js';
 import {
   createRollups,
   deserializeRollups,
@@ -56,6 +60,7 @@ import { type BuiltChunk, ChunkBuffer, LOG_SIGNAL, METRIC_SIGNAL, SPAN_SIGNAL } 
 import { DedupeSet } from './dedupe.js';
 import { renderIndexHtml } from './html.js';
 import { acquireLock, type LockHandle } from './lock.js';
+import { MetricSeriesWriter } from './metric-series-writer.js';
 import type { Clock, FileSystem, Logger, ProcessInfo, Tracer } from './ports.js';
 import { type Refs, rebaseLog, rebasePoint, rebaseSpan } from './rebase.js';
 import { TraceIndex } from './trace-index.js';
@@ -148,9 +153,12 @@ interface Restored {
   lock: LockHandle;
   epoch: UnixNanos | null;
   rollups: ReportRollups;
+  normalizer: StreamNormalizer;
   dedupe: DedupeSet;
   traceIndex: TraceIndex;
   nextChunk: Record<Signal, number>;
+  nextSegment: Map<number, number>;
+  metricFiles: string[];
   committed: ManifestChunk[];
   totals: Record<Signal, number>;
   range: { start: number; end: number } | null;
@@ -216,9 +224,12 @@ export async function openSession(deps: WriterDeps, options: SessionOptions): Pr
         lock,
         epoch: null,
         rollups: createRollups(rollupOpts),
+        normalizer: new StreamNormalizer(),
         dedupe: new DedupeSet(config.writer.dedupeCapacity),
         traceIndex: new TraceIndex(),
         nextChunk: { spans: 0, logs: 0, metrics: 0 },
+        nextSegment: new Map(),
+        metricFiles: [],
         committed: [],
         totals: { spans: 0, logs: 0, metrics: 0 },
         range: null,
@@ -238,9 +249,12 @@ export async function openSession(deps: WriterDeps, options: SessionOptions): Pr
             ? null
             : parseUnixNanos(cp.state.epochUnixNano, 'state.epochUnixNano'),
         rollups: deserializeRollups(cp.state.rollups, rollupOpts),
+        normalizer: StreamNormalizer.from(cp.state.metricStreams, 'state.metricStreams'),
         dedupe: DedupeSet.from(cp.state.dedupe, config.writer.dedupeCapacity),
         traceIndex: TraceIndex.load(cp.state.traceIndex),
         nextChunk: { ...cp.state.nextChunk },
+        nextSegment: new Map(Object.entries(cp.state.nextSegment).map(([id, n]) => [Number(id), n])),
+        metricFiles: [...cp.manifest.metricFiles],
         committed: [...cp.manifest.chunks],
         totals: { ...cp.manifest.totals },
         range: cp.manifest.range,
@@ -252,7 +266,7 @@ export async function openSession(deps: WriterDeps, options: SessionOptions): Pr
         replacing: false,
       };
     }
-    for (const d of ['chunks/spans', 'chunks/logs', 'chunks/metrics', 'traces', 'rollups']) {
+    for (const d of ['chunks/spans', 'chunks/logs', 'chunks/metrics', 'traces', 'rollups', 'metrics']) {
       await fs.mkdirp(at(out, `data/${d}`));
     }
     return new Session(deps, out, config, drop, restored);
@@ -275,6 +289,8 @@ class Session implements WriterSession {
   readonly #drop: Drops;
   readonly #lock: LockHandle;
   readonly #rollups: ReportRollups;
+  readonly #normalizer: StreamNormalizer;
+  readonly #series: MetricSeriesWriter;
   readonly #dedupe: DedupeSet;
   readonly #traceIndex: TraceIndex;
   readonly #spans: ChunkBuffer<SpanRecord>;
@@ -298,6 +314,8 @@ class Session implements WriterSession {
   #closed: ReportSummary | null = null;
   #aborted = false;
   #replacing: boolean;
+  /** Resumed: metric files on disk that the committed manifest does not list are removed before the first write. */
+  #pruneMetrics: boolean;
   /** Inside a `partial` input: see AddOptions. */
   #partial = false;
   #tail: Promise<unknown> = Promise.resolve();
@@ -309,6 +327,14 @@ class Session implements WriterSession {
     this.#drop = drop;
     this.#lock = r.lock;
     this.#rollups = r.rollups;
+    this.#normalizer = r.normalizer;
+    this.#series = new MetricSeriesWriter(
+      deps.fs,
+      out,
+      { exemplars: config.writer.metricExemplars },
+      r.nextSegment,
+      r.metricFiles,
+    );
     this.#dedupe = r.dedupe;
     this.#traceIndex = r.traceIndex;
     this.#spans = new ChunkBuffer(SPAN_SIGNAL, r.nextChunk.spans);
@@ -325,6 +351,7 @@ class Session implements WriterSession {
     this.#slot = r.slot;
     this.#dirty = r.resumed;
     this.#replacing = r.replacing;
+    this.#pruneMetrics = r.resumed;
     this.#everCommitted = r.resumed;
     this.#lastFlushMs = deps.clock.monotonicMs();
   }
@@ -440,8 +467,11 @@ class Session implements WriterSession {
       if (this.#closed !== null) return this.#closed;
       this.#assertOpen();
       await this.#checkpoint(false);
+      // Level files are written under paths the committed manifest does not list (segments, or demoted levels).
+      await this.#series.compact(this.#rollups.metrics.catalog);
       await this.#writeShell();
       await this.#checkpoint(true);
+      await this.#series.prune();
       await this.#lock.release();
       this.#closed = this.#summary();
       return this.#closed;
@@ -603,19 +633,41 @@ class Session implements WriterSession {
 
   async #acceptPoints(rows: readonly MetricPointRecord[]): Promise<AddResult> {
     const ctx = this.#context();
+    const catalog = this.#rollups.metrics.catalog;
     let dropped = 0;
-    const staged: MetricPointRecord[] = [];
+    const staged: {
+      point: MetricPointRecord;
+      resource: ResourceRecord;
+      scope: ScopeRecord;
+      normalize: (series: SeriesKey) => Normalized;
+      exemplars: readonly PointExemplar[];
+    }[] = [];
     for (const point of rows) {
-      const target = {
+      const resource = ctx.resources.get(point.resource);
+      const scope = ctx.scopes.get(point.scope);
+      if (this.#drop.point.test({ point, resource, scope, epoch: ctx.epoch })) {
+        dropped++;
+        continue;
+      }
+      // Parsed before anything is stored: a malformed point or exemplar rejects the whole request.
+      const where = `metric ${JSON.stringify(point.name)}.point.exemplars`;
+      staged.push({
         point,
-        resource: ctx.resources.get(point.resource),
-        scope: ctx.scopes.get(point.scope),
-        epoch: ctx.epoch,
-      };
-      if (this.#drop.point.test(target)) dropped++;
-      else staged.push(point);
+        resource,
+        scope,
+        normalize: this.#normalizer.prepare(point),
+        exemplars: pointExemplars(point, ctx.epoch, where),
+      });
     }
-    for (const point of staged) {
+    for (const { point, resource, scope, normalize, exemplars } of staged) {
+      const def = catalog.defOf(point);
+      const { series } = catalog.seriesOf(def, point, resource, scope);
+      const n = normalize(`${def.id}/${series.id}`);
+      catalog.note(def.id, n, point.time);
+      if (n.kind === 'ok') {
+        const stored = exemplars.map((e) => ({ ...e, series: series.id }));
+        this.#series.add(def, series, point.time, n.agg, stored);
+      }
       this.#rollups.metrics.buckets.add(point.time, 'points');
       this.#metrics.push(point);
       this.#totals.metrics++;
@@ -624,7 +676,24 @@ class Session implements WriterSession {
     }
     if (staged.length > 0) this.#dirty = true;
     await this.#drainAccepted();
+    await this.#spillSeries();
     return { accepted: staged.length, dropped, duplicates: 0 };
+  }
+
+  /**
+   * Write buffered metric buckets out as segments ahead of the flush once the buffer is full, so memory stays
+   * bounded. Like chunk writes during `add`, a failure is logged and the buckets stay buffered for the flush.
+   */
+  async #spillSeries(): Promise<void> {
+    if (!this.#series.full() || (this.#partial && this.#replacing)) return;
+    try {
+      await this.#wipeReplaced();
+      await this.#series.flush(this.#rollups.metrics.catalog);
+    } catch (e) {
+      this.#deps.logger.error('metric segment write failed; will retry at the next flush', {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
   }
 
   /** Encode the buffer into a chunk now (synchronously) and queue it for writing. */
@@ -682,9 +751,15 @@ class Session implements WriterSession {
 
   /** Remove the replaced report's data, once, immediately before this session's first write. */
   async #wipeReplaced(): Promise<void> {
-    if (!this.#replacing) return;
-    await wipeReportData(this.#deps.fs, this.#out);
-    this.#replacing = false;
+    if (this.#replacing) {
+      await wipeReportData(this.#deps.fs, this.#out);
+      this.#replacing = false;
+    }
+    if (this.#pruneMetrics) {
+      // An interrupted flush may have left metric files the committed manifest does not list.
+      await this.#series.prune();
+      this.#pruneMetrics = false;
+    }
   }
 
   async #writeShell(): Promise<void> {
@@ -709,6 +784,9 @@ class Session implements WriterSession {
       this.#cutSync(this.#logs);
       this.#cutSync(this.#metrics);
       await this.#drainUnwritten(true);
+      const metricFiles = await this.#series.flush(this.#rollups.metrics.catalog);
+      // New segment numbers must reach the state, or a resumed session would overwrite listed segments.
+      if (metricFiles.length > 0) this.#dirty = true;
       if (this.#dirty || !this.#everCommitted) {
         for (const shard of this.#traceIndex.dirtyShards()) {
           await fs.writeTextAtomic(
@@ -734,6 +812,7 @@ class Session implements WriterSession {
         chunks: this.#pending.length,
         records: this.#totals.spans + this.#totals.logs + this.#totals.metrics,
         shards: this.#traceIndex.dirtyShards().length,
+        metricFiles: metricFiles.length,
       });
       this.#pending = [];
       this.#traceIndex.clearDirty();
@@ -765,6 +844,8 @@ class Session implements WriterSession {
       rollups,
       dedupe: this.#dedupe.toJSON(),
       traceIndex: this.#traceIndex.toJSON(),
+      metricStreams: this.#normalizer.toJSON(),
+      nextSegment: Object.fromEntries([...this.#series.nextSegments()].map(([id, n]) => [String(id), n])),
     };
   }
 
@@ -785,6 +866,7 @@ class Session implements WriterSession {
       chunks: [...this.#committed, ...this.#pending],
       rollups: ROLLUP_NAMES.map((n) => rollupPath(n)),
       traceShards: shards.map((s) => traceShardPath(s)),
+      metricFiles: this.#series.listed(),
       config: { viewer: this.#config.viewer },
     };
   }

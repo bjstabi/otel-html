@@ -77,6 +77,9 @@ export class ValueBuckets {
   /** Grow (and coarsen if needed, never below `minWidth`) so that `[lo, hi]` has buckets. */
   #fit(loT: number, hiT: number, minWidth: number): void {
     const empty = this.#counts.length === 0;
+    // Already covered at a fine enough width: the rebuild below would reproduce the same buckets.
+    const end = this.#start + this.#counts.length * this.#width;
+    if (!empty && minWidth <= this.#width && loT >= this.#start && hiT < end) return;
     let w = Math.max(this.#width, minWidth);
     let lo = empty ? loT : Math.min(this.#start, loT);
     let hi = empty ? hiT : Math.max(this.#start + (this.#counts.length - 1) * this.#width, hiT);

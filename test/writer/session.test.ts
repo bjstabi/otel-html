@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
+import { parseExemplarFile } from '../../src/format/metric-files.js';
 import { SessionStateSchema } from '../../src/format/state.js';
 import { TraceShardSchema } from '../../src/format/trace-shard.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
@@ -27,9 +28,14 @@ import {
   allLogs,
   allPoints,
   allSpans,
+  counterRequest,
+  levelsOf,
   logRollupsOf,
   manifestOf,
+  metricCatalogOf,
+  metricFilesOnDisk,
   readChunk,
+  readDataFile,
   spanIdOf,
   spansRequest,
   traceIdOf,
@@ -526,5 +532,142 @@ describe('folders and locking', () => {
     );
     expect(e.code).toBe('version-mismatch');
     expect(e.hint).toContain('merge');
+  });
+});
+
+describe('metric series files', () => {
+  const files = ['data/metrics/000000/ex.js', 'data/metrics/000000/l0.js', 'data/metrics/000000/series.js'];
+
+  test('a cumulative counter becomes level-0 deltas and ex.js at close, with no segments left', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    await s.add(
+      otlp(
+        counterRequest('requests', [
+          [0, 1],
+          [10, 3],
+          [20, 6],
+        ]),
+      ),
+      'm.json',
+    );
+    await s.close();
+    expect(metricFilesOnDisk(w, OUT)).toEqual(files);
+    expect(manifestOf(w, OUT).metricFiles).toEqual(files);
+    const [l0, ...rest] = levelsOf(w, OUT, 0);
+    expect(rest).toEqual([]);
+    expect(l0?.series).toEqual([
+      {
+        id: 0,
+        t: [0, 9, 19],
+        a: [1, 2, 3].map((delta) => ({ k: 'counter', delta, resets: 0 })),
+      },
+    ]);
+    expect(parseExemplarFile(readDataFile(w, OUT, files[0] ?? ''), 'ex')).toEqual({
+      metric: 0,
+      exemplars: [],
+    });
+    const catalog = metricCatalogOf(w, OUT);
+    expect(catalog.entries()).toHaveLength(1);
+    expect(catalog.entries()[0]).toMatchObject({ name: 'requests', series: 1, points: 3 });
+  });
+
+  test('each flush lists a new segment; state carries stream state and segment numbers', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    await s.add(otlp(counterRequest('requests', [[0, 1]])), 'a.json');
+    await s.flush();
+    await s.add(otlp(counterRequest('requests', [[10, 3]])), 'b.json');
+    await s.flush();
+    expect(manifestOf(w, OUT).metricFiles).toEqual([
+      'data/metrics/000000/seg-000000.js',
+      'data/metrics/000000/seg-000001.js',
+      'data/metrics/000000/series.js',
+    ]);
+    const state = SessionStateSchema.parse(
+      JSON.parse(w.fs.snapshot().get('r/data/state/session.1.json') ?? ''),
+    );
+    expect(state.nextSegment).toEqual({ '0': 2 });
+    expect(state.metricStreams).toMatchObject({ streams: [{ time: 10_000_000_000 }] });
+    await s.close();
+  });
+
+  test('exemplars on points are kept with their trace ids', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    const json = JSON.parse(JSON.stringify(counterRequest('requests', [[5, 2]])));
+    json.resourceMetrics[0].scopeMetrics[0].metrics[0].sum.dataPoints[0].exemplars = [
+      {
+        timeUnixNano: String(BigInt(EPOCH_NS) + 4_000_000_000n),
+        asDouble: 0.25,
+        traceId: traceIdOf(1),
+        spanId: spanIdOf(1),
+        filteredAttributes: [{ key: 'user', value: { stringValue: 'u1' } }],
+      },
+    ];
+    await s.add(otlp(json), 'ex.json');
+    await s.close();
+    const ex = parseExemplarFile(readDataFile(w, OUT, 'data/metrics/000000/ex.js'), 'ex');
+    expect(ex.exemplars).toEqual([
+      {
+        series: 0,
+        time: -1_000_000_000, // the epoch is the point's time, 1 s after the exemplar
+        value: 0.25,
+        traceId: traceIdOf(1),
+        spanId: spanIdOf(1),
+        attributes: new Map([['user', { kind: 'string', value: 'u1' }]]),
+      },
+    ]);
+  });
+
+  test('a hostile metric name never reaches a path and its files read back', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    const name = '</script><img src=x onerror=alert(1)>';
+    await s.add(otlp(counterRequest(name, [[0, 1]], [{ key: 'k', value: { stringValue: name } }])), 'h.json');
+    await s.close();
+    const listed = manifestOf(w, OUT).metricFiles;
+    expect(listed.length).toBeGreaterThan(0);
+    for (const p of listed) {
+      expect(p.startsWith('data/metrics/000000/'), p).toBe(true);
+      expect(() => readDataFile(w, OUT, p)).not.toThrow();
+      expect(w.fs.snapshot().get(`r/${p}`)).not.toContain('</script>');
+    }
+    expect(metricCatalogOf(w, OUT).entries()[0]?.name).toBe(name);
+  });
+
+  test('a malformed point rejects the whole request and leaves metric state untouched', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    const bad = JSON.parse(
+      JSON.stringify(
+        counterRequest('requests', [
+          [0, 1],
+          [10, 3],
+        ]),
+      ),
+    );
+    bad.resourceMetrics[0].scopeMetrics[0].metrics.push({
+      name: 'h',
+      histogram: {
+        aggregationTemporality: 1,
+        dataPoints: [{ timeUnixNano: EPOCH_NS, count: '2', bucketCounts: ['1'] }],
+      },
+    });
+    await expect(s.add(otlp(bad), 'bad.json')).rejects.toThrow(OtelHtmlError);
+    await s.add(
+      otlp(
+        counterRequest('requests', [
+          [0, 1],
+          [10, 3],
+        ]),
+      ),
+      'good.json',
+    );
+    await s.close();
+    expect(levelsOf(w, OUT, 0)[0]?.series[0]?.a).toEqual(
+      [1, 2].map((delta) => ({ k: 'counter', delta, resets: 0 })),
+    );
+    expect(metricCatalogOf(w, OUT).entries()[0]).toMatchObject({ points: 2, series: 1 });
   });
 });

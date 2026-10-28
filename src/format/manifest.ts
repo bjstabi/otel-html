@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { ResolvedConfig } from '../config/schema.js';
+import { METRIC_FILE_PATH } from './metric-files.js';
 import { chunkPath, SIGNALS, type Signal } from './paths.js';
 import { parseWith } from './validate.js';
 
@@ -27,6 +28,8 @@ export interface Manifest {
   chunks: ManifestChunk[];
   rollups: string[];
   traceShards: string[];
+  /** Series files under `data/metrics/` (series, segments, levels, exemplars); absent before M3. */
+  metricFiles: string[];
   config: { viewer: ResolvedConfig['viewer'] };
 }
 
@@ -64,6 +67,9 @@ export const ManifestSchema: z.ZodType<Manifest> = z
     ),
     rollups: z.array(z.string().regex(ROLLUP_PATH, 'a rollup path like data/rollups/spans.js')),
     traceShards: z.array(z.string().regex(TRACE_SHARD_PATH, 'a trace shard path like data/traces/5b.js')),
+    metricFiles: z
+      .array(z.string().regex(METRIC_FILE_PATH, 'a metric file path like data/metrics/000000/l0.js'))
+      .default([]),
     config: z.strictObject({
       viewer: z.strictObject({
         eagerBudgetBytes: z.number().int().positive(),

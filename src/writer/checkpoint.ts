@@ -120,6 +120,9 @@ const DATA_DIRS = [
   'data/state',
 ] as const;
 
+/** Holds one directory per metric (`data/metrics/<id6>/`). */
+const METRICS_DIR = 'data/metrics';
+
 export async function isReportFolder(fs: FileSystem, out: string): Promise<boolean> {
   // A session that failed before its first checkpoint leaves only the state directory behind.
   return (await fs.exists(at(out, MANIFEST_PATH))) || (await fs.exists(at(out, STATE_DIR)));
@@ -134,6 +137,12 @@ export async function wipeReportData(fs: FileSystem, out: string): Promise<void>
       const rel = `${dir}/${name}`;
       if (rel === LOCK_PATH) continue;
       await fs.remove(at(out, rel));
+    }
+  }
+  if (!(await fs.exists(at(out, METRICS_DIR)))) return;
+  for (const dir of await fs.list(at(out, METRICS_DIR))) {
+    for (const name of await fs.list(at(out, `${METRICS_DIR}/${dir}`))) {
+      await fs.remove(at(out, `${METRICS_DIR}/${dir}/${name}`));
     }
   }
 }

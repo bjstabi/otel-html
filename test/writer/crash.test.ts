@@ -10,7 +10,15 @@ import {
   type TestWriter,
   testConfig,
 } from '../../test-support/writer-deps.js';
-import { allLogs, allSpans, manifestOf, spansRequest } from './helpers.js';
+import {
+  allLogs,
+  allSpans,
+  counterRequest,
+  levelsOf,
+  manifestOf,
+  metricFilesOnDisk,
+  spansRequest,
+} from './helpers.js';
 
 const OUT = 'r';
 const config = testConfig({ writer: { chunkTargetBytes: 1 } }); // one chunk per span: many chunk files
@@ -142,5 +150,68 @@ describe('a failed flush on a live session', () => {
     expect(m).toMatchObject({ complete: true, totals: { spans: 6 } });
     expect(m.chunks).toHaveLength(6);
     expect(allSpans(w, OUT)).toHaveLength(6);
+  });
+});
+
+describe('writer killed between flushes with metrics', () => {
+  const reqs = [
+    [counterRequest('a', [[0, 1]]), counterRequest('b', [[0, 5]])],
+    [counterRequest('a', [[10, 3]]), counterRequest('b', [[10, 7]])],
+  ];
+
+  async function killedAfterTwoFlushes(): Promise<TestWriter> {
+    const w = createTestWriter();
+    const s = await openSession(w.deps, { out: OUT, config, mode: 'create' });
+    for (const batch of reqs) {
+      for (const r of batch) await s.add(otlp(r), 'm.json');
+      await s.flush();
+    }
+    w.process.alive.delete(w.process.pid);
+    return w;
+  }
+
+  test('the manifest lists two segments per metric and no levels', async () => {
+    const w = await killedAfterTwoFlushes();
+    const listed = manifestOf(w, OUT).metricFiles;
+    for (const id of ['000000', '000001']) {
+      expect(listed.filter((p) => p.startsWith(`data/metrics/${id}/`))).toEqual([
+        `data/metrics/${id}/seg-000000.js`,
+        `data/metrics/${id}/seg-000001.js`,
+        `data/metrics/${id}/series.js`,
+      ]);
+    }
+    expect(listed.some((p) => /\/l[0-6]\.js$/.test(p))).toBe(false);
+  });
+
+  test('reopening and closing compacts the segments', async () => {
+    const w = await killedAfterTwoFlushes();
+    const deps = { ...w.deps, process: createProcess(9001, w.process.hostname) };
+    const b = await openSession(deps, { out: OUT, config, mode: 'append' });
+    await b.close();
+    const counter = (delta: number) => ({ k: 'counter', delta, resets: 0 });
+    expect(levelsOf(w, OUT, 0)[0]?.series).toEqual([{ id: 0, t: [0, 9], a: [counter(1), counter(2)] }]);
+    expect(levelsOf(w, OUT, 1)[0]?.series).toEqual([{ id: 0, t: [0, 9], a: [counter(5), counter(2)] }]);
+    expect(metricFilesOnDisk(w, OUT)).toEqual(manifestOf(w, OUT).metricFiles);
+    expect(metricFilesOnDisk(w, OUT).some((p) => p.includes('/seg-'))).toBe(false);
+  });
+
+  test('files an interrupted flush wrote outside the manifest are removed on reopen', async () => {
+    const w = await killedAfterTwoFlushes();
+    const deps = { ...w.deps, process: createProcess(9001, w.process.hostname) };
+    // A flush that died before its manifest: a new metric's files and a segment beyond the committed ones
+    const s = await openSession(deps, { out: OUT, config, mode: 'append' });
+    await s.add(otlp(counterRequest('c', [[20, 1]])), 'c.json');
+    w.fs.failNextWrite('data/manifest.js');
+    await expect(s.flush()).rejects.toThrow(/injected/);
+    deps.process.alive.delete(9001);
+    expect(metricFilesOnDisk(w, OUT)).toContain('data/metrics/000002/series.js');
+    const again = await openSession(
+      { ...w.deps, process: createProcess(9002, w.process.hostname) },
+      { out: OUT, config, mode: 'append' },
+    );
+    await again.add(otlp(counterRequest('a', [[20, 6]])), 'a.json');
+    await again.close();
+    expect(metricFilesOnDisk(w, OUT)).toEqual(manifestOf(w, OUT).metricFiles);
+    expect(metricFilesOnDisk(w, OUT).some((p) => p.startsWith('data/metrics/000002/'))).toBe(false);
   });
 });

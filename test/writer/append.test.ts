@@ -3,7 +3,15 @@ import { OtelHtmlError } from '../../src/model/errors.js';
 import { openSession, type WriterSession } from '../../src/writer/session.js';
 import { logRecord, logsRequest } from '../../test-support/otlp-builders.js';
 import { createTestWriter, otlp, type TestWriter, testConfig } from '../../test-support/writer-deps.js';
-import { allSpans, logRollupsOf, manifestOf, spansRequest } from './helpers.js';
+import {
+  allSpans,
+  counterRequest,
+  levelsOf,
+  logRollupsOf,
+  manifestOf,
+  metricFilesOnDisk,
+  spansRequest,
+} from './helpers.js';
 
 const OUT = 'r';
 const SMALL_CHUNKS = testConfig({ writer: { chunkTargetBytes: 1 } });
@@ -143,5 +151,37 @@ describe('append', () => {
     expect((await failure(open(w, 'append'))).code).toBe('report-locked');
     await b.close();
     await (await open(w, 'append')).close();
+  });
+});
+
+describe('append with metrics', () => {
+  const first = counterRequest('requests', [
+    [0, 1],
+    [10, 3],
+  ]);
+  const second = counterRequest('requests', [
+    [20, 6],
+    [3000, 10],
+  ]);
+
+  test('the new level files equal converting all inputs at once', async () => {
+    const w = createTestWriter();
+    const a = await open(w, 'create');
+    await a.add(otlp(first), 'a.json');
+    await a.close();
+    const b = await open(w, 'append');
+    await b.add(otlp(second), 'b.json');
+    await b.close();
+
+    const once = await openSession(w.deps, { out: 'once', config: SMALL_CHUNKS, mode: 'create' });
+    await once.add(otlp(first), 'a.json');
+    await once.add(otlp(second), 'b.json');
+    await once.close();
+
+    const levels = levelsOf(w, OUT, 0);
+    expect(levels.map((l) => l.level)).toEqual([0, 1]);
+    expect(levels).toEqual(levelsOf(w, 'once', 0));
+    expect(levels[0]?.series[0]?.a.map((x) => (x.k === 'counter' ? x.delta : null))).toEqual([1, 2, 3, 4]);
+    expect(metricFilesOnDisk(w, OUT)).toEqual(manifestOf(w, OUT).metricFiles);
   });
 });
