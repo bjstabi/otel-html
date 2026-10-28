@@ -1,10 +1,16 @@
 import ReactGridLayout, { useContainerWidth } from 'react-grid-layout';
-import { getCompactor } from 'react-grid-layout/core';
+import { getCompactor, type LayoutItem } from 'react-grid-layout/core';
 import 'react-grid-layout/css/styles.css';
 import { type JSX, useEffect, useState } from 'react';
-import type { Widget, WidgetLayout } from '../../dashboards/schema.js';
+import {
+  GRID_COLUMNS,
+  WIDGET_MAX_H,
+  WIDGET_MIN_H,
+  WIDGET_MIN_W,
+  type Widget,
+  type WidgetLayout,
+} from '../../dashboards/schema.js';
 
-const COLUMNS = 12;
 const ROW_PX = 20;
 const GAP_PX = 10;
 /** Below this width the widgets stack in one column. */
@@ -38,6 +44,22 @@ export function useStacked(): boolean {
 /** Reading order: top to bottom, then left to right. */
 function byPosition(a: WidgetLayout, b: WidgetLayout): number {
   return a.y - b.y || a.x - b.x;
+}
+
+/** One grid item: the widget's place and the bounds that keep a resized layout valid for the config schema. */
+export function layoutItem(id: string, at: WidgetLayout, editing: boolean): LayoutItem {
+  return {
+    i: id,
+    x: at.x,
+    y: at.y,
+    w: at.w,
+    h: at.h,
+    minW: WIDGET_MIN_W,
+    maxW: GRID_COLUMNS,
+    minH: WIDGET_MIN_H,
+    maxH: WIDGET_MAX_H,
+    static: !editing,
+  };
 }
 
 export interface DashboardGridProps {
@@ -76,16 +98,9 @@ export function DashboardGrid(props: DashboardGridProps): JSX.Element {
       {mounted && (
         <ReactGridLayout
           width={width}
-          layout={placed.map(({ widget, at }) => ({
-            i: widget.id,
-            x: at.x,
-            y: at.y,
-            w: at.w,
-            h: at.h,
-            static: !editing,
-          }))}
+          layout={placed.map(({ widget, at }) => layoutItem(widget.id, at, editing))}
           gridConfig={{
-            cols: COLUMNS,
+            cols: GRID_COLUMNS,
             rowHeight: ROW_PX,
             margin: [GAP_PX, GAP_PX],
             containerPadding: [0, 0],

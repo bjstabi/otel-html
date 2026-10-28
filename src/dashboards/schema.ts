@@ -168,7 +168,11 @@ export const RESERVED_DASHBOARD_IDS: readonly ['fusion'] = ['fusion'];
 
 const MAX_VARIABLES = 8;
 const MAX_WIDGETS = 50;
-const GRID_COLUMNS = 12;
+/** The grid's width in columns, and the size bounds a widget layout must keep (the viewer's edit mode shares them). */
+export const GRID_COLUMNS = 12;
+export const WIDGET_MIN_W = 1;
+export const WIDGET_MIN_H = 2;
+export const WIDGET_MAX_H = 40;
 
 const CONTEXT_NOUN: Record<OttlContextName, string> = {
   span: 'spans',
@@ -201,8 +205,8 @@ const layout = {
   title: nullableString,
   x: z.number().int().min(0),
   y: z.number().int().min(0),
-  w: z.number().int().min(1),
-  h: z.number().int().min(2).max(40),
+  w: z.number().int().min(WIDGET_MIN_W),
+  h: z.number().int().min(WIDGET_MIN_H).max(WIDGET_MAX_H),
 };
 const follow = { follow: z.boolean().default(true) };
 const signalBase = {
