@@ -105,7 +105,10 @@ test.describe('Logs tabs in the trace and span panels', () => {
     await page.goto(`${url}#/logs?q=${q}`);
     const rows = page.getByRole('grid', { name: 'Results' }).getByRole('row');
     await expect(rows.nth(1)).toBeVisible();
-    const original = ((await rows.nth(1).textContent()) ?? '').trim();
+    // Time, severity, service, host and body. The Trace cell is left out: the Explorer shows the id as text while it
+    // checks the report holds the trace, the span tab (inside the open trace) a link icon.
+    const cells = await rows.nth(1).getByRole('gridcell').allTextContents();
+    const original = cells.slice(0, -1).join('').trim();
     expect(original).not.toBe('');
     await rows.nth(1).click();
     await expect(page).toHaveURL(/[?&]log=\d+\.\d+/);

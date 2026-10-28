@@ -61,8 +61,8 @@ usage = 'arg "[args]" var=#true'
 run = """
 eval "set -- $usage_args"
 [ -n "$OTEL_HTML_SKIP_BROWSER_INSTALL" ] || pnpm exec playwright install chromium firefox webkit
-pnpm exec playwright test --grep-invert @perf "$@"
-pnpm exec playwright test --grep @perf --workers=1 "$@"
+pnpm exec playwright test --grep-invert @perf --pass-with-no-tests "$@"
+pnpm exec playwright test --grep @perf --workers=1 --pass-with-no-tests "$@"
 """
 
 # Compiles standalone binaries into dist/bin/ (needs `mise run build` first). All five targets by default;
@@ -80,13 +80,16 @@ depends = ["build"]
 run = "pnpm exec publint && pnpm exec attw --pack --profile esm-only"
 
 # Chromium only (file and http projects): the quick loop while iterating; `test:e2e` is the full matrix.
+# Extra playwright args (`mise run test:e2e:chromium -- e2e/metrics-explorer.spec.ts`) are passed to both passes.
 [tasks."test:e2e:chromium"]
 shell = "bash -c"
 depends = ["build"]
+usage = 'arg "[args]" var=#true'
 run = """
-pnpm exec playwright install chromium
-pnpm exec playwright test --project='chromium-*' --grep-invert @perf
-pnpm exec playwright test --project='chromium-*' --grep @perf --workers=1
+eval "set -- $usage_args"
+[ -n "$OTEL_HTML_SKIP_BROWSER_INSTALL" ] || pnpm exec playwright install chromium
+pnpm exec playwright test --project='chromium-*' --grep-invert @perf --pass-with-no-tests "$@"
+pnpm exec playwright test --project='chromium-*' --grep @perf --workers=1 --pass-with-no-tests "$@"
 """
 
 # Regenerates fixtures/*.otlp.json with the OTel SDK (byte-stable). hostile.otlp.json is hand-authored and left alone.
