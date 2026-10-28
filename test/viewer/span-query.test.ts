@@ -74,7 +74,7 @@ const query = (over: Partial<SpanQuery>): SpanQuery => ({
 });
 
 describe('querySpanEntries', () => {
-  test('filters 100k spans in memory under 150 ms (median)', () => {
+  test('@perf filters 100k spans in memory under 150 ms (median)', () => {
     const entries = synthetic(100_000);
     const q = query({ condition: 'status.code == STATUS_CODE_ERROR' });
     const { result: r, ms } = medianMs(() => querySpanEntries(entries, q));

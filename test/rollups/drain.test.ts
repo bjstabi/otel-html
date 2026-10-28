@@ -151,7 +151,7 @@ describe('Drain', () => {
     expect(() => Drain.from(bad, 'rollups.logs.patterns')).toThrowError(/params\.similarity/);
   });
 
-  it('clusters 200k bodies of 50 shapes within budget', () => {
+  it('@perf clusters 200k bodies of 50 shapes within budget', () => {
     const shapes = Array.from(
       { length: 50 },
       (_, s) => `service s${s} handled request ${'k'.repeat(s + 1)} in`,

@@ -19,8 +19,17 @@ run = "pnpm exec biome format --write ."
 [tasks.typecheck]
 run = "pnpm exec tsc -p tsconfig.json --noEmit && pnpm exec tsc -p tsconfig.viewer.json --noEmit && pnpm exec tsc -p tsconfig.e2e.json --noEmit"
 
+# Unit tests in two passes: everything but the timing-sensitive `@perf` tests in parallel, then the `@perf` tests
+# alone, one file at a time (vitest.config.ts), so other work does not steal their CPU. Budgets scale with
+# OTEL_HTML_PERF_FACTOR on slow machines; they are never edited.
 [tasks."test:unit"]
+run = ["mise run test:unit:main", "mise run test:unit:perf"]
+
+[tasks."test:unit:main"]
 run = "pnpm exec vitest run"
+
+[tasks."test:unit:perf"]
+run = "OTEL_HTML_PERF_PASS=1 pnpm exec vitest run"
 
 # Slow load tests (writer peak memory), skipped by `test:unit` and `check` unless OTEL_HTML_LOAD=1. The 1M-log
 # test runs the built library, hence the build.
@@ -37,8 +46,10 @@ run = "pnpm exec buf generate && bun scripts/gen-schema.ts && bun scripts/gen-ot
 [tasks."gen:check"]
 run = "bash scripts/gen-check.sh"
 
+# The `@perf` unit tests run after the parallel steps finish, not alongside them.
 [tasks.check]
-depends = ["lint", "typecheck", "test:unit", "knip"]
+depends = ["lint", "typecheck", "test:unit:main", "knip"]
+run = "mise run test:unit:perf"
 
 [tasks."build:lib"]
 run = "pnpm exec tsdown"

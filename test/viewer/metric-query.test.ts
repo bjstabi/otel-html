@@ -608,7 +608,7 @@ describe('runMetricQuery', () => {
     ]);
   });
 
-  test('perf: 1,000 series × 450 buckets, query change under 150 ms median', () => {
+  test('@perf 1,000 series × 450 buckets, query change under 150 ms median', () => {
     const specs: SeriesSpec[] = Array.from({ length: 1000 }, (_, i) => ({
       service: `svc-${i % 10}`,
       attributes: { 'http.route': `/r${i % 20}` },
