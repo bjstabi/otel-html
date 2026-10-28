@@ -64,6 +64,8 @@ const MARKER_LABEL: Readonly<Record<MetricGridOrigin['kind'], string>> = {
   trace: 'trace start',
 };
 const QUERY_IDS = 'abcdefghijklmnopqrstuvwxyz';
+export const OTHER_LEFT_OUT =
+  'partial: series beyond the cap are folded into "other", which spans resources and is left out here (see the Explorer)';
 const SERVICE_PATH = 'resource.attributes["service.name"]';
 
 const resourcePath = (key: string): string => `resource.attributes[${JSON.stringify(key)}]`;
@@ -273,8 +275,16 @@ function GridChart(props: {
       const m = await dataSource.metric(k.entry.id);
       signal.throwIfAborted();
       const query = { ...k.query, show: defaultShow(m) };
-      const mine = seriesOnResources(m, k.resourceKeys);
-      return { query, result: runMetricQuery(mine, query, k.window, k.maxPoints, signal) };
+      const result = runMetricQuery(
+        seriesOnResources(m, k.resourceKeys),
+        query,
+        k.window,
+        k.maxPoints,
+        signal,
+      );
+      // The cap-folded `other` series belongs to no single resource, so it cannot be charted here.
+      if (m.series.some((x) => x.def.other)) result.notes.push(OTHER_LEFT_OUT);
+      return { query, result };
     },
     [dataSource],
   );

@@ -12,8 +12,8 @@ vi.mock('../../src/viewer/components/chart.js', () => ({
 
 import type { AnyValue } from '../../src/model/anyvalue.js';
 import type { ResourceRecord } from '../../src/model/records.js';
-import { createDataSource } from '../../src/viewer/data/data-source.js';
-import { explorerFilter } from '../../src/viewer/metrics/metric-grid.js';
+import { createDataSource, type DataSource } from '../../src/viewer/data/data-source.js';
+import { explorerFilter, OTHER_LEFT_OUT } from '../../src/viewer/metrics/metric-grid.js';
 import { Shell } from '../../src/viewer/shell/shell.js';
 import { createHashHistory } from '../../src/viewer/state/hash-history.js';
 import { parseUrlState } from '../../src/viewer/state/url-state.js';
@@ -47,11 +47,12 @@ afterEach(() => {
 /** Every `metricsForResources` lookup the panels started, so a test can wait for them to settle. */
 let lookups: Promise<unknown>[] = [];
 
-async function renderAt(hash: string): Promise<void> {
+async function renderAt(hash: string, over: Partial<DataSource> = {}): Promise<void> {
   const real = await createDataSource(createScriptedLoader(report.files), report.manifest, 10_000_000);
   lookups = [];
-  const ds = {
+  const ds: DataSource = {
     ...real,
+    ...over,
     metricsForResources: (rs: Parameters<typeof real.metricsForResources>[0]) => {
       const p = real.metricsForResources(rs);
       lookups.push(p);
@@ -199,6 +200,24 @@ describe('MetricGrid', () => {
     expect(values.length).toBeGreaterThan(0);
     expect(values.every((v) => v < 1)).toBe(true);
     expect(values).not.toContain(SUPERSET_CPU);
+  });
+
+  test('a metric with a cap-folded other series says it is left out', async () => {
+    const real = await createDataSource(createScriptedLoader(report.files), report.manifest, 10_000_000);
+    const metric: DataSource['metric'] = async (id) => {
+      const m = await real.metric(id);
+      const [first] = m.series;
+      if (first === undefined) return m;
+      return {
+        ...m,
+        series: [...m.series, { def: { ...first.def, id: 9999, other: true }, resource: null, scope: null }],
+      };
+    };
+    await renderAt(`#/logs?log=${PAYMENTS_LOG}&ltab=metrics`, { metric });
+    const grid = await screen.findByTestId('metric-grid');
+    await within(grid).findByRole('img', { name: 'process.cpu.utilization: 1 series' });
+    const card = within(grid).getByRole('region', { name: 'process.cpu.utilization' });
+    expect(within(card).getByRole('list', { name: 'Notes' }).textContent).toContain(OTHER_LEFT_OUT);
   });
 
   test('Open in Explorer says it takes only the first 10 metrics of a larger group', async () => {
