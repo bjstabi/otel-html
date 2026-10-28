@@ -3,14 +3,14 @@ import { type JSX, useCallback, useMemo, useState } from 'react';
 import { anyValueToDisplay } from '../../model/anyvalue.js';
 import type { RelNanos, TraceId } from '../../model/ids.js';
 import type { ResourceRecord } from '../../model/records.js';
-import type { MetricEntry } from '../../rollups/metric-catalog.js';
+import type { MetricCatalog, MetricEntry } from '../../rollups/metric-catalog.js';
 import { compareNamespaces, metricNamespace } from '../../semconv/metric-namespaces.js';
 import { tokenValue } from '../components/attribute-filter.js';
 import { ErrorCard, PILL } from '../components/explorer-states.js';
 import { type ChartPick, MetricChartCard } from '../components/metric-chart-card.js';
 import { METRIC_CHART_HEIGHT, type MetricSize } from '../components/metric-chart-option.js';
 import type { DataSource } from '../data/data-source.js';
-import { resourceKey } from '../data/metric-load.js';
+import { type LoadedMetric, resourceKey } from '../data/metric-load.js';
 import {
   defaultShow,
   type MetricQuery,
@@ -78,25 +78,22 @@ function literal(v: Parameters<typeof tokenValue>[0]): string | undefined {
   return typeof t === 'string' ? JSON.stringify(t) : String(t);
 }
 
-function resourceClause(r: ResourceRecord): string {
-  const parts: string[] = [];
+/** The OTTL equality per scalar attribute of `r`, keyed by attribute. */
+function literalAttributes(r: ResourceRecord): Map<string, string> {
+  const out = new Map<string, string>();
   for (const [k, v] of r.attributes) {
     const lit = literal(v);
-    if (lit !== undefined) parts.push(`${resourcePath(k)} == ${lit}`);
+    if (lit !== undefined) out.set(k, lit);
   }
-  // A resource with no filterable attribute: match series whose resource has no service either.
-  return parts.length === 0 ? `${SERVICE_PATH} == nil` : parts.join(' and ');
+  return out;
 }
 
 /**
- * The series filter of the grid: a `where` with one clause per resource attribute (several resources are `or`ed), and
- * with several resources, `by` the service plus every attribute whose value differs between them, so each resource
- * draws its own line (colored by its service).
+ * With several resources, one line per resource: `by` the service plus every attribute whose value differs between
+ * them, so two resources of one service still draw apart (lines take the service color).
  */
-export function resourceFilter(resources: readonly ResourceRecord[]): Pick<MetricQuery, 'where' | 'by'> {
-  const [only] = resources;
-  if (only === undefined) return { where: null, by: [] };
-  if (resources.length === 1) return { where: resourceClause(only), by: [] };
+export function resourceLines(resources: readonly ResourceRecord[]): string[] {
+  if (resources.length < 2) return [];
   const keys = new Set(resources.flatMap((r) => [...r.attributes.keys()]));
   keys.delete('service.name');
   const differing = [...keys]
@@ -108,10 +105,51 @@ export function resourceFilter(resources: readonly ResourceRecord[]): Pick<Metri
       return new Set(shown).size > 1;
     })
     .sort();
-  return {
-    where: resources.map((r) => `(${resourceClause(r)})`).join(' or '),
-    by: [SERVICE_PATH, ...differing.map(resourcePath)],
-  };
+  return [SERVICE_PATH, ...differing.map(resourcePath)];
+}
+
+/** `m` with only the series on one of `keys` (canonical `resourceKey`s): the grid charts exactly the origin's resources. */
+export function seriesOnResources(m: LoadedMetric, keys: ReadonlySet<string>): LoadedMetric {
+  return { ...m, series: m.series.filter((s) => s.resource !== null && keys.has(resourceKey(s.resource))) };
+}
+
+export interface ExplorerFilter extends Pick<MetricQuery, 'where' | 'by'> {
+  /** Other resources the `where` also matches and cannot exclude (they differ only in non-literal attributes). */
+  unexcluded: number;
+}
+
+/**
+ * The Explorer link's filter, which has only OTTL to name resources: per origin resource, one equality per scalar
+ * attribute, and for every other resource in `others` that those equalities also match, `== nil` on one of its extra
+ * attributes. Several origin resources are `or`ed and drawn one line each (`resourceLines`).
+ */
+export function explorerFilter(
+  resources: readonly ResourceRecord[],
+  others: readonly ResourceRecord[],
+): ExplorerFilter {
+  const origin = new Set(resources.map(resourceKey));
+  const rest = others.filter((o) => !origin.has(resourceKey(o)));
+  let unexcluded = 0;
+  const clauses = resources.map((r) => {
+    const lits = literalAttributes(r);
+    const parts = [...lits].map(([k, lit]) => `${resourcePath(k)} == ${lit}`);
+    for (const o of rest) {
+      const ol = literalAttributes(o);
+      const matched = [...lits].every(([k, lit]) => ol.get(k) === lit);
+      if (!matched) continue;
+      const extra = [...o.attributes.keys()].filter((k) => !r.attributes.has(k)).sort()[0];
+      if (extra === undefined) unexcluded++;
+      else parts.push(`${resourcePath(extra)} == nil`);
+    }
+    return parts;
+  });
+  // A clause with no parts matches every resource, so the whole filter does.
+  const where = clauses.some((c) => c.length === 0)
+    ? null
+    : clauses.length === 1
+      ? (clauses[0] ?? []).join(' and ')
+      : clauses.map((c) => `(${c.join(' and ')})`).join(' or ');
+  return { where, by: resourceLines(resources), unexcluded };
 }
 
 function distinctResources(resources: readonly ResourceRecord[]): ResourceRecord[] {
@@ -138,6 +176,8 @@ interface Group {
   entries: MetricEntry[];
 }
 
+const groupLabel = (g: Group): string => (g.namespace === 'other' ? 'other' : `${g.namespace}.*`);
+
 function groupByNamespace(entries: readonly MetricEntry[]): Group[] {
   const by = new Map<string, MetricEntry[]>();
   for (const e of entries) {
@@ -152,7 +192,7 @@ function groupByNamespace(entries: readonly MetricEntry[]): Group[] {
     }));
 }
 
-/** The grid's query on one metric: `show` is filled in once the metric is loaded (`defaultShow`). */
+/** A query on one metric: `show` is filled in once the metric is loaded (`defaultShow`). */
 function gridQuery(e: MetricEntry, filter: Pick<MetricQuery, 'where' | 'by'>, id: string): MetricQuery {
   return {
     id,
@@ -192,6 +232,7 @@ function useInView(): [(el: HTMLElement | null) => (() => void) | undefined, boo
 interface ChartKey {
   entry: MetricEntry;
   query: MetricQuery;
+  resourceKeys: ReadonlySet<string>;
   window: TimeWindow;
   maxPoints: number;
 }
@@ -204,7 +245,12 @@ interface ChartRun {
 function GridChart(props: {
   dataSource: DataSource;
   entry: MetricEntry;
-  filter: Pick<MetricQuery, 'where' | 'by'>;
+  /** The origin's resources (canonical keys): only their series are charted. */
+  resourceKeys: ReadonlySet<string>;
+  /** One line per resource (`resourceLines`). */
+  by: string[];
+  /** The filter the click menu's Traces/Logs links carry (`explorerFilter`). */
+  linkWhere: string | null;
   window: TimeWindow;
   size: MetricSize;
   origin: MetricGridOrigin;
@@ -212,19 +258,23 @@ function GridChart(props: {
   onPick(pick: ChartPick, query: MetricQuery): void;
   onZoom(w: TimeWindow): void;
 }): JSX.Element {
-  const { dataSource, entry, filter, window, size } = props;
+  const { dataSource, entry, resourceKeys, by, window, size } = props;
   const [ref, inView] = useInView();
   const maxPoints = GRID_MAX_POINTS[size];
   const key = useMemo<ChartKey | null>(
-    () => (inView ? { entry, query: gridQuery(entry, filter, 'a'), window, maxPoints } : null),
-    [inView, entry, filter, window, maxPoints],
+    () =>
+      inView
+        ? { entry, query: gridQuery(entry, { where: null, by }, 'a'), resourceKeys, window, maxPoints }
+        : null,
+    [inView, entry, by, resourceKeys, window, maxPoints],
   );
   const load = useCallback(
     async (k: ChartKey, signal: AbortSignal): Promise<ChartRun> => {
       const m = await dataSource.metric(k.entry.id);
       signal.throwIfAborted();
       const query = { ...k.query, show: defaultShow(m) };
-      return { query, result: runMetricQuery(m, query, k.window, k.maxPoints, signal) };
+      const mine = seriesOnResources(m, k.resourceKeys);
+      return { query, result: runMetricQuery(mine, query, k.window, k.maxPoints, signal) };
     },
     [dataSource],
   );
@@ -246,7 +296,7 @@ function GridChart(props: {
         notes={result.notes}
         window={window}
         hasTrace={props.hasTrace}
-        onPick={(p) => props.onPick(p, query)}
+        onPick={(p) => props.onPick(p, { ...query, where: props.linkWhere })}
         onZoom={props.onZoom}
       />
     );
@@ -302,6 +352,8 @@ function ResourceFacts(props: { resources: readonly ResourceRecord[] }): JSX.Ele
 
 const SEG = 'rounded-full px-2 py-0.5 text-xs';
 
+const loadCatalog = (ds: DataSource): Promise<MetricCatalog> => ds.metricCatalog();
+
 /**
  * Mockup 04, screen 3: every metric of the origin's resources as Explorer chart cards, grouped by semconv namespace
  * (only the first group starts expanded; charts render as they scroll into view), over the origin's moment ± 5 min.
@@ -310,13 +362,25 @@ export function MetricGrid(props: { dataSource: DataSource; origin: MetricGridOr
   const { dataSource, origin } = props;
   const goTo = useGoTo();
   const resources = useMemo(() => distinctResources(origin.resources), [origin.resources]);
-  const filter = useMemo(() => resourceFilter(resources), [resources]);
+  const resourceKeys = useMemo(() => new Set(resources.map(resourceKey)), [resources]);
+  const by = useMemo(() => resourceLines(resources), [resources]);
+  const catalogState = useKeyedAsync(dataSource, loadCatalog);
   const loadEntries = useCallback(
     (rs: readonly ResourceRecord[]) => dataSource.metricsForResources(rs),
     [dataSource],
   );
   const listed = useKeyedAsync(resources, loadEntries);
   const groups = useMemo(() => (listed.status === 'ready' ? groupByNamespace(listed.value) : []), [listed]);
+  // Every resource that reports one of the grid's metrics: the link's `where` must not match the others.
+  const linkFilter = useMemo((): ExplorerFilter | null => {
+    if (catalogState.status !== 'ready' || listed.status !== 'ready') return null;
+    const all = catalogState.value.resources();
+    const refs = new Set(listed.value.flatMap((e) => e.resources));
+    return explorerFilter(
+      resources,
+      [...refs].flatMap((r) => (all[r] === undefined ? [] : [all[r]])),
+    );
+  }, [catalogState, listed, resources]);
   const [size, setSize] = useState<MetricSize>('S');
   const [expandedState, setExpanded] = useState<ReadonlySet<string> | null>(null);
   const [zoom, setZoom] = useState<TimeWindow | null>(null);
@@ -344,10 +408,13 @@ export function MetricGrid(props: { dataSource: DataSource; origin: MetricGridOr
     }
   };
 
+  const linkGroup = groups.find((g) => expanded.has(g.namespace)) ?? groups[0];
+  const linkCount = linkGroup?.entries.length ?? 0;
+
   const openInExplorer = (): void => {
-    const group = groups.find((g) => expanded.has(g.namespace)) ?? groups[0];
-    if (group === undefined) return;
-    const entries = group.entries.slice(0, MAX_METRIC_QUERIES);
+    if (linkGroup === undefined || linkFilter === null) return;
+    const filter = linkFilter;
+    const entries = linkGroup.entries.slice(0, MAX_METRIC_QUERIES);
     setActionError(null);
     Promise.all(entries.map((e) => dataSource.metric(e.id))).then(
       (loaded) => {
@@ -409,10 +476,29 @@ export function MetricGrid(props: { dataSource: DataSource; origin: MetricGridOr
             </button>
           ))}
         </fieldset>
-        <button type="button" className={CONTROL} disabled={groups.length === 0} onClick={openInExplorer}>
+        <button
+          type="button"
+          className={CONTROL}
+          disabled={linkGroup === undefined || linkFilter === null}
+          onClick={openInExplorer}
+        >
           Open in Explorer →
         </button>
       </div>
+      {linkGroup !== undefined && linkCount > MAX_METRIC_QUERIES && (
+        <p role="note" className="text-xs text-muted">
+          Open in Explorer takes the first {MAX_METRIC_QUERIES} of the {linkCount} {groupLabel(linkGroup)}{' '}
+          metrics (the Explorer holds at most {MAX_METRIC_QUERIES} queries).
+        </p>
+      )}
+      {linkFilter !== null && linkFilter.unexcluded > 0 && (
+        <p role="note" className="text-xs text-muted">
+          In the Explorer the filter also matches {linkFilter.unexcluded} other{' '}
+          {linkFilter.unexcluded === 1 ? 'resource' : 'resources'} that differ from this one only in
+          attributes a filter cannot compare; the charts here show only{' '}
+          {resources.length > 1 ? 'these resources' : 'this resource'}.
+        </p>
+      )}
       {actionError !== null && <ErrorCard title="The link could not be opened" message={actionError} />}
       {listed.status === 'loading' && (
         <p role="status" className="text-sm text-muted">
@@ -433,7 +519,7 @@ export function MetricGrid(props: { dataSource: DataSource; origin: MetricGridOr
               className="flex items-center gap-2 self-start rounded-full px-2 py-0.5 text-sm font-semibold hover:bg-hairline"
             >
               <ChevronRight size={14} aria-hidden className={open ? 'rotate-90' : ''} />
-              {g.namespace === 'other' ? 'other' : `${g.namespace}.*`}
+              {groupLabel(g)}
               <span className="font-mono text-xs font-normal text-muted">
                 {g.entries.length} {g.entries.length === 1 ? 'chart' : 'charts'}
               </span>
@@ -445,7 +531,9 @@ export function MetricGrid(props: { dataSource: DataSource; origin: MetricGridOr
                     key={e.id}
                     dataSource={dataSource}
                     entry={e}
-                    filter={filter}
+                    resourceKeys={resourceKeys}
+                    by={by}
+                    linkWhere={linkFilter?.where ?? null}
                     window={shown}
                     size={size}
                     origin={origin}

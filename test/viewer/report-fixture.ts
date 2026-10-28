@@ -403,6 +403,10 @@ export const LINKED_PAYMENTS_SPAN = 'b2b2b2b2b2b2b2b2';
 export const PAYMENTS_LOG = '0.0';
 /** A log on `web`, a resource with no metrics. */
 export const NO_METRICS_LOG = '1.0';
+/** `process.cpu.utilization` of the resource that is `payments` plus `process.pid`. */
+export const SUPERSET_CPU = 1000;
+/** `rpc.*` gauges on `payments`: more than the Explorer's query limit. */
+export const RPC_METRICS = 11;
 
 /**
  * Spans, logs and metrics on shared resources (`service.name` + `host.name`): `checkout`/`runner-1`,
@@ -412,7 +416,8 @@ export const NO_METRICS_LOG = '1.0';
  * every 30 s from 0 to 120 s (the histogram's cover [s, s + 1]):
  * `process.cpu.utilization` and `process.memory.usage` (gauges), `http.server.active_requests` (gauge) and
  * `http.server.request.duration` (delta histogram, unit `s`) whose 60 s point on `payments` carries an exemplar on
- * `LINKED_TRACE`; `checkout`'s carries one on another trace.
+ * `LINKED_TRACE`; `checkout`'s carries one on another trace. `payments` also has `RPC_METRICS` gauges `rpc.m01`…,
+ * and a resource that is `payments` plus `process.pid` = 7 reports `process.cpu.utilization` = `SUPERSET_CPU`.
  */
 export async function buildEmbeddedMetricsReport(): Promise<Fixture> {
   const w = createTestWriter();
@@ -472,11 +477,34 @@ export async function buildEmbeddedMetricsReport(): Promise<Fixture> {
       },
     ],
   });
+  // A superset of `payments` (one more attribute): it must stay out of payments' charts and Explorer link.
+  const paymentsWorker: JsonObject = {
+    attributes: [
+      attr('service.name', { stringValue: 'payments' }),
+      attr('host.name', { stringValue: 'runner-7' }),
+      attr('process.pid', { intValue: '7' }),
+    ],
+  };
   await session.add(
     otlp({
       resourceMetrics: [
         metricsOf(RES.checkout, 1, ['d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4', 'e5e5e5e5e5e5e5e5']),
         metricsOf(RES.payments, 2, [LINKED_TRACE, LINKED_PAYMENTS_SPAN]),
+        {
+          resource: paymentsWorker,
+          scopeMetrics: [{ scope, metrics: [gauge('process.cpu.utilization', '1', () => SUPERSET_CPU)] }],
+        },
+        {
+          resource: RES.payments,
+          scopeMetrics: [
+            {
+              scope,
+              metrics: Array.from({ length: RPC_METRICS }, (_, i) =>
+                gauge(`rpc.m${String(i + 1).padStart(2, '0')}`, '1', () => i),
+              ),
+            },
+          ],
+        },
       ],
     }),
     'metrics',

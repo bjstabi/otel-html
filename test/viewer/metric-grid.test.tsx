@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
 
@@ -10,7 +10,10 @@ vi.mock('../../src/viewer/components/chart.js', () => ({
   },
 }));
 
+import type { AnyValue } from '../../src/model/anyvalue.js';
+import type { ResourceRecord } from '../../src/model/records.js';
 import { createDataSource } from '../../src/viewer/data/data-source.js';
+import { explorerFilter } from '../../src/viewer/metrics/metric-grid.js';
 import { Shell } from '../../src/viewer/shell/shell.js';
 import { createHashHistory } from '../../src/viewer/state/hash-history.js';
 import { parseUrlState } from '../../src/viewer/state/url-state.js';
@@ -23,6 +26,8 @@ import {
   LINKED_TRACE,
   NO_METRICS_LOG,
   PAYMENTS_LOG,
+  RPC_METRICS,
+  SUPERSET_CPU,
 } from './report-fixture.js';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -39,14 +44,42 @@ afterEach(() => {
   cleanup();
 });
 
+/** Every `metricsForResources` lookup the panels started, so a test can wait for them to settle. */
+let lookups: Promise<unknown>[] = [];
+
 async function renderAt(hash: string): Promise<void> {
-  const ds = await createDataSource(createScriptedLoader(report.files), report.manifest, 10_000_000);
+  const real = await createDataSource(createScriptedLoader(report.files), report.manifest, 10_000_000);
+  lookups = [];
+  const ds = {
+    ...real,
+    metricsForResources: (rs: Parameters<typeof real.metricsForResources>[0]) => {
+      const p = real.metricsForResources(rs);
+      lookups.push(p);
+      return p;
+    },
+  };
   window.location.hash = hash;
   render(
     <ThemeProvider>
       <Shell dataSource={ds} history={createHashHistory(window)} />
     </ThemeProvider>,
   );
+}
+
+/** Waits until the metric lookup has been started and has settled, so the tab set is decided. */
+async function metricLookupSettled(): Promise<void> {
+  await waitFor(() => expect(lookups.length).toBeGreaterThan(0));
+  await act(async () => {
+    await Promise.allSettled(lookups);
+  });
+}
+
+function lineValues(option: unknown): number[] {
+  const series = (option as { series?: { type?: string; data?: [number, number | null][] }[] }).series ?? [];
+  return series
+    .filter((x) => x.type === 'line')
+    .flatMap((x) => x.data ?? [])
+    .flatMap((p) => (p[1] === null ? [] : [p[1]]));
 }
 
 interface ScatterItem {
@@ -77,7 +110,7 @@ describe('MetricGrid', () => {
     expect(group('http').getAttribute('aria-expanded')).toBe('false');
     // Namespace order: process before http.
     const groups = [...grid.querySelectorAll('button[aria-expanded]')].map((b) => b.textContent ?? '');
-    expect(groups).toEqual(['process.*2 charts', 'http.*2 charts']);
+    expect(groups).toEqual(['process.*2 charts', 'http.*2 charts', `rpc.*${RPC_METRICS} charts`]);
     expect(await within(grid).findByRole('img', { name: 'process.cpu.utilization: 1 series' })).toBeTruthy();
     expect(within(grid).getByRole('img', { name: 'process.memory.usage: 1 series' })).toBeTruthy();
     expect(within(grid).queryByRole('img', { name: /http\.server\.request\.duration/ })).toBeNull();
@@ -119,8 +152,7 @@ describe('MetricGrid', () => {
     await renderAt(`#/logs?log=${NO_METRICS_LOG}`);
     const panel = await screen.findByTestId('log-panel');
     await within(panel).findByRole('tab', { name: 'Attributes' });
-    // Give the metric lookup time to land.
-    await new Promise((r) => setTimeout(r, 50));
+    await metricLookupSettled();
     expect(within(panel).queryByRole('tab', { name: 'Metrics' })).toBeNull();
   });
 
@@ -128,7 +160,7 @@ describe('MetricGrid', () => {
     await renderAt(`#/logs?log=${NO_METRICS_LOG}&ltab=metrics`);
     const panel = await screen.findByTestId('log-panel');
     const first = await within(panel).findByRole('tab', { name: 'Attributes' });
-    await new Promise((r) => setTimeout(r, 50));
+    await metricLookupSettled();
     expect(first.getAttribute('aria-selected')).toBe('true');
     expect(within(panel).queryByTestId('metric-grid')).toBeNull();
     expect(screen.queryByText(/ltab:/)).toBeNull();
@@ -146,13 +178,82 @@ describe('MetricGrid', () => {
     expect(m?.queries.map((q) => q.metric)).toEqual(['process.cpu.utilization', 'process.memory.usage']);
     expect(m?.queries.map((q) => q.id)).toEqual(['a', 'b']);
     for (const q of m?.queries ?? []) {
+      // The superset resource (payments + process.pid) also reports a process metric: the link excludes it.
       expect(q.where).toBe(
-        'resource.attributes["service.name"] == "payments" and resource.attributes["host.name"] == "runner-7"',
+        'resource.attributes["service.name"] == "payments" and resource.attributes["host.name"] == "runner-7"' +
+          ' and resource.attributes["process.pid"] == nil',
       );
       expect(q.show).toBe('avg');
     }
     expect(m?.split).toBe(true);
     // ± 5 min around 60.2 s, clamped to the run (0 s .. 121 s).
     expect(state.t).toBe(`0~${121_000_000_000}`);
+  });
+
+  test('a payments chart holds only payments series, not those of a resource with more attributes', async () => {
+    await renderAt(`#/logs?log=${PAYMENTS_LOG}&ltab=metrics`);
+    const grid = await screen.findByTestId('metric-grid');
+    await within(grid).findByRole('img', { name: 'process.cpu.utilization: 1 series' });
+    const cpu = charts.filter((c) => c.label.startsWith('process.cpu.utilization')).at(-1);
+    const values = lineValues(cpu?.option);
+    expect(values.length).toBeGreaterThan(0);
+    expect(values.every((v) => v < 1)).toBe(true);
+    expect(values).not.toContain(SUPERSET_CPU);
+  });
+
+  test('Open in Explorer says it takes only the first 10 metrics of a larger group', async () => {
+    const user = userEvent.setup();
+    await renderAt(`#/logs?log=${PAYMENTS_LOG}&ltab=metrics`);
+    const grid = await screen.findByTestId('metric-grid');
+    await user.click(group('process'));
+    await user.click(group('rpc'));
+    expect(within(grid).getByRole('note').textContent).toContain(
+      `first 10 of the ${RPC_METRICS} rpc.* metrics`,
+    );
+    await user.click(within(grid).getByRole('button', { name: 'Open in Explorer →' }));
+    await waitFor(() => expect(window.location.hash.startsWith('#/metrics?')).toBe(true));
+    const m = parseUrlState(window.location.hash).state.m;
+    expect(m?.queries.map((q) => q.metric)).toEqual(
+      Array.from({ length: 10 }, (_, i) => `rpc.m${String(i + 1).padStart(2, '0')}`),
+    );
+  });
+});
+
+describe('explorerFilter', () => {
+  const str = (value: string): AnyValue => ({ kind: 'string', value });
+  const res = (attrs: [string, AnyValue][]): ResourceRecord => ({
+    attributes: new Map(attrs),
+    droppedAttributesCount: 0,
+    schemaUrl: '',
+  });
+  const svc: [string, AnyValue] = ['service.name', str('a')];
+
+  test('excludes a matching resource by one of its extra attributes, and leaves non-matching ones alone', () => {
+    const origin = res([svc]);
+    const f = explorerFilter(
+      [origin],
+      [origin, res([svc, ['b', str('1')], ['c', str('2')]]), res([['service.name', str('z')]])],
+    );
+    expect(f).toEqual({
+      where: 'resource.attributes["service.name"] == "a" and resource.attributes["b"] == nil',
+      by: [],
+      unexcluded: 0,
+    });
+  });
+
+  test('counts a resource that differs only in an attribute a filter cannot compare', () => {
+    const tags = (v: string): [string, AnyValue] => ['tags', { kind: 'array', values: [str(v)] }];
+    const f = explorerFilter([res([svc, tags('x')])], [res([svc, tags('y')])]);
+    expect(f.where).toBe('resource.attributes["service.name"] == "a"');
+    expect(f.unexcluded).toBe(1);
+  });
+
+  test('two origin resources are or-ed and drawn one line each', () => {
+    const b = res([['service.name', str('b')]]);
+    const f = explorerFilter([res([svc]), b], []);
+    expect(f.where).toBe(
+      '(resource.attributes["service.name"] == "a") or (resource.attributes["service.name"] == "b")',
+    );
+    expect(f.by).toEqual(['resource.attributes["service.name"]']);
   });
 });
