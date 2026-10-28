@@ -3,7 +3,13 @@ import { userEvent } from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { View } from '../../src/dashboards/schema.js';
 import type { Manifest } from '../../src/format/manifest.js';
-import { LOCAL_VIEWS_KEY, readLocalViews, ViewsMenu, viewToUrl } from '../../src/viewer/shell/views-menu.js';
+import {
+  LOCAL_VIEWS_KEY,
+  readLocalViews,
+  ViewsMenu,
+  viewToUrl,
+  writeLocalViews,
+} from '../../src/viewer/shell/views-menu.js';
 import { ThemeProvider } from '../../src/viewer/theme/theme-provider.js';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -102,7 +108,38 @@ describe('readLocalViews', () => {
   });
 });
 
+describe('writeLocalViews', () => {
+  test('is false for no storage or a throwing setItem, true otherwise', () => {
+    expect(writeLocalViews(null, [])).toBe(false);
+    expect(
+      writeLocalViews(
+        {
+          setItem: () => {
+            throw new Error('quota');
+          },
+        },
+        [],
+      ),
+    ).toBe(false);
+    expect(writeLocalViews({ setItem: () => undefined }, [])).toBe(true);
+  });
+});
+
 describe('ViewsMenu', () => {
+  test('a refused write shows Could not save and keeps the dialog open', async () => {
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('quota');
+    });
+    const user = userEvent.setup();
+    mount('logs');
+    await user.click(screen.getByRole('button', { name: /Views/ }));
+    await user.click(await screen.findByRole('menuitem', { name: /Save current view/ }));
+    await user.type(screen.getByRole('textbox', { name: 'View title' }), 'Mine');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    expect((await screen.findByRole('alert')).textContent).toContain('Could not save');
+    expect(screen.getByRole('textbox', { name: 'View title' })).toBeTruthy();
+  });
+
   test('lists a config view only on its own page and applying it keeps t', async () => {
     const user = userEvent.setup();
     mount('logs');
