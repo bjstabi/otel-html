@@ -412,12 +412,16 @@ describe('metrics', () => {
 });
 
 describe('metricPoints', () => {
-  test('is the unfiltered point rollup over time, and reads nothing but the metrics rollup', async () => {
+  test('is the unfiltered point rollup over time, loaded once', async () => {
     const linked = await buildEmbeddedMetricsReport();
-    const ds = await createDataSource(createScriptedLoader(linked.files), linked.manifest, SMALL);
-    const points = await ds.metricPoints();
-    expect(points.keys).toEqual(['points']);
-    expect(points.total('points')).toBe(100);
+    const loader = createScriptedLoader(linked.files);
+    const ds = await createDataSource(loader, linked.manifest, SMALL);
+    const [a, b] = await Promise.all([ds.metricPoints(), ds.metricPoints()]);
+    expect(a.keys).toEqual(['points']);
+    expect(a.total('points')).toBe(100);
+    expect(b).toBe(a);
+    expect(await ds.metricPoints()).toBe(a);
+    expect(loader.calls.filter((p) => p === 'data/rollups/metrics.js')).toHaveLength(1);
   });
 });
 

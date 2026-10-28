@@ -27,7 +27,7 @@ const METRIC_POINT_SERIES: HistogramSeriesSet<string> = {
 const FRAME_CHROME_PX = 52;
 const MIN_CHART_PX = 96;
 
-interface Partial {
+interface ChunkCount {
   scanned: number;
   total: number;
 }
@@ -54,7 +54,7 @@ function notes(parts: readonly (string | null)[]): string | null {
   return kept.length === 0 ? null : kept.join(' · ');
 }
 
-const partialNote = (p: Partial | null): string | null =>
+const partialNote = (p: ChunkCount | null): string | null =>
   p === null ? null : `from ${p.scanned} of ${p.total} chunks`;
 
 const loadPoints = (ds: DataSource): Promise<TimeBuckets<'points'>> =>

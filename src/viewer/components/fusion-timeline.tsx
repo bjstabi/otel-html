@@ -1,5 +1,6 @@
-import { type JSX, type KeyboardEvent, type PointerEvent, useMemo, useRef, useState } from 'react';
+import { type JSX, useMemo } from 'react';
 import type { TimeWindow } from '../data/span-query.js';
+import { BrushOverlay, type ColumnRange } from './brush-overlay.js';
 import { Chart } from './chart.js';
 import {
   type BucketView,
@@ -23,8 +24,6 @@ export interface TimelineLane {
 
 /** Most columns before the shared axis doubles its column width; lanes then fit the same cap as the histogram. */
 const MAX_AXIS_COLUMNS = 4096;
-/** Pixels the pointer may move between press and release and still count as a click. */
-const CLICK_SLOP_PX = 3;
 /** Space under the last lane for the time labels, and between lanes. */
 const AXIS_PX = 20;
 const LANE_GAP_PX = 6;
@@ -138,48 +137,18 @@ export function FusionTimeline(props: {
     () => buildTimelineOption(lanes, axis.views, height),
     [lanes, axis, height, themeTick],
   );
-  const [range, setRange] = useState<{ anchor: number; cursor: number } | null>(null);
-  const overlay = useRef<HTMLDivElement>(null);
-  const press = useRef<{ x: number } | null>(null);
-
   const view = axis.view;
   const length = view?.length ?? 0;
   const last = Math.max(0, length - 1);
   const laneH = (height - AXIS_PX) / Math.max(1, lanes.length);
-  const col = 100 / Math.max(1, length);
-
-  const indexAt = (clientX: number): number => {
-    const el = overlay.current;
-    if (el === null || length === 0) return 0;
-    const r = el.getBoundingClientRect();
-    const f = r.width > 0 ? (clientX - r.left) / r.width : 0;
-    return Math.min(last, Math.max(0, Math.floor(f * length)));
-  };
 
   /** The brushed columns as a window of whole nanoseconds inside the page window. */
-  const commit = (r: { anchor: number; cursor: number }): void => {
+  const commit = (r: ColumnRange): void => {
     if (view === null) return;
     const w = brushToWindow(view, r.anchor, r.cursor, win.end);
     const start = Math.max(win.start, Math.ceil(w.start));
     const end = Math.min(win.end, Math.floor(w.end));
     onBrush({ start, end: Math.max(start, end) });
-  };
-
-  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>): void => {
-    if (length === 0) return;
-    const cur = range?.cursor ?? 0;
-    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-      e.preventDefault();
-      const cursor = Math.min(last, Math.max(0, cur + (e.key === 'ArrowRight' ? 1 : -1)));
-      setRange({ anchor: e.shiftKey ? (range?.anchor ?? cur) : cursor, cursor });
-    } else if (e.key === 'Enter' && range !== null) {
-      e.preventDefault();
-      commit(range);
-    } else if (e.key === 'Escape') {
-      e.preventDefault();
-      setRange(null);
-      onBrush(null);
-    }
   };
 
   // The brush from the page, as columns; a drag in progress takes over until it is released.
@@ -190,11 +159,6 @@ export function FusionTimeline(props: {
           lo: Math.max(0, Math.floor((brush.start - view.startNs) / view.widthNs)),
           hi: Math.min(last, Math.max(0, Math.ceil((brush.end - view.startNs) / view.widthNs) - 1)),
         };
-  const shown =
-    range === null
-      ? fromBrush
-      : { lo: Math.min(range.anchor, range.cursor), hi: Math.max(range.anchor, range.cursor) };
-
   const ariaLabel = `Timeline: ${lanes.map((l) => `${l.label} ${l.total}`).join(', ')}`;
   const plotTop = LANE_GAP_PX / 2;
   const plotBottom = AXIS_PX;
@@ -212,48 +176,14 @@ export function FusionTimeline(props: {
           {lane.note === null ? null : <span className="text-muted">{` · ${lane.note}`}</span>}
         </p>
       ))}
-      {/* biome-ignore lint/a11y/useSemanticElements: a custom brush widget, not a form field group */}
-      <div
-        ref={overlay}
-        role="group"
-        aria-label="Time brush"
-        // biome-ignore lint/a11y/noNoninteractiveTabindex: keyboard-operable brush (arrows, Shift, Enter, Escape)
-        tabIndex={0}
-        onKeyDown={onKeyDown}
-        onPointerDown={(e: PointerEvent<HTMLDivElement>) => {
-          press.current = { x: e.clientX };
-          e.currentTarget.setPointerCapture?.(e.pointerId);
-          const i = indexAt(e.clientX);
-          setRange({ anchor: i, cursor: i });
-        }}
-        onPointerMove={(e) => {
-          if (press.current !== null)
-            setRange((r) => (r === null ? r : { anchor: r.anchor, cursor: indexAt(e.clientX) }));
-        }}
-        onPointerUp={(e) => {
-          const down = press.current;
-          press.current = null;
-          if (down === null || range === null) return;
-          if (Math.abs(e.clientX - down.x) <= CLICK_SLOP_PX) {
-            setRange(null);
-            onBrush(null);
-            return;
-          }
-          const r = { anchor: range.anchor, cursor: indexAt(e.clientX) };
-          setRange(null);
-          commit(r);
-        }}
-        className="absolute cursor-crosshair rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+      <BrushOverlay
+        length={length}
+        clickClears
+        shown={fromBrush}
+        onCommit={commit}
+        onClear={() => onBrush(null)}
         style={{ left: GRID.left, right: GRID.right, top: plotTop, bottom: plotBottom }}
-      >
-        {shown === null ? null : (
-          <div
-            aria-hidden
-            className="absolute inset-y-0 border-x border-ink bg-ink/10"
-            style={{ left: `${shown.lo * col}%`, width: `${(shown.hi - shown.lo + 1) * col}%` }}
-          />
-        )}
-      </div>
+      />
     </div>
   );
 }

@@ -11,12 +11,16 @@ vi.mock('../../src/viewer/components/chart.js', () => ({
 }));
 
 import { DashboardSchema } from '../../src/dashboards/schema.js';
+import { FacetCounts } from '../../src/rollups/facets.js';
+import { RedSeries } from '../../src/rollups/red.js';
 import { FusionTimeline, type TimelineLane } from '../../src/viewer/components/fusion-timeline.js';
 import { SEVERITY_SERIES, SPAN_STATUS_SERIES } from '../../src/viewer/components/histogram-card.js';
 import type { WidgetActions } from '../../src/viewer/dashboards/dashboard-page.js';
 import { TimelineWidget } from '../../src/viewer/dashboards/widgets/timeline.js';
+import type { DataSource, SpanQueryResult } from '../../src/viewer/data/data-source.js';
 import { createDataSource } from '../../src/viewer/data/data-source.js';
 import type { TimeWindow } from '../../src/viewer/data/span-query.js';
+import { baseManifest, dataSourceOf } from './dashboard-shell.js';
 import { buildEmbeddedMetricsReport } from './report-fixture.js';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -93,18 +97,41 @@ describe('FusionTimeline', () => {
     expect(error.itemStyle.decal.symbol).toBe('rect');
   });
 
-  test('dragging across the plot brushes whole-nanosecond bounds inside the window', () => {
+  test('dragging across the plot brushes the exact columns under the pointer', () => {
     const onBrush = show();
     const brush = screen.getByRole('group', { name: 'Time brush' });
     fireEvent.pointerDown(brush, { clientX: 250, pointerId: 1 });
     fireEvent.pointerMove(brush, { clientX: 700, pointerId: 1 });
     fireEvent.pointerUp(brush, { clientX: 700, pointerId: 1 });
-    expect(onBrush).toHaveBeenCalledTimes(1);
-    const w = onBrush.mock.calls[0]?.[0] as TimeWindow;
-    expect(Number.isInteger(w.start) && Number.isInteger(w.end)).toBe(true);
-    expect(w.start).toBeGreaterThanOrEqual(WINDOW.start);
-    expect(w.end).toBeLessThanOrEqual(WINDOW.end);
-    expect(w.end).toBeGreaterThan(w.start);
+    // 1000 px over ten 1 ms columns: px 250 is column 2, px 700 is column 7 (inclusive).
+    expect(onBrush).toHaveBeenCalledOnce();
+    expect(onBrush).toHaveBeenCalledWith({ start: 2 * MS, end: 8 * MS });
+  });
+
+  test('a window that is not whole milliseconds clamps the brush to its own bounds', () => {
+    const onBrush = vi.fn();
+    const window: TimeWindow = { start: 1_500_500, end: 9_500_500 };
+    render(<FusionTimeline lanes={lanes()} window={window} brush={null} height={150} onBrush={onBrush} />);
+    const brush = screen.getByRole('group', { name: 'Time brush' });
+    // Columns start at 1 ms: nine of them, so the full width is columns 0-8.
+    fireEvent.pointerDown(brush, { clientX: 0, pointerId: 1 });
+    fireEvent.pointerUp(brush, { clientX: 999, pointerId: 1 });
+    expect(onBrush).toHaveBeenLastCalledWith({ start: 1_500_500, end: 9_500_500 });
+    // Columns 2-3 are 3 ms to 5 ms, inside the window, so they pass through whole.
+    fireEvent.pointerDown(brush, { clientX: 230, pointerId: 1 });
+    fireEvent.pointerUp(brush, { clientX: 450, pointerId: 1 });
+    expect(onBrush).toHaveBeenLastCalledWith({ start: 3 * MS, end: 5 * MS });
+  });
+
+  test('a cancelled pointer drops the pending press and the band', () => {
+    const onBrush = show();
+    const brush = screen.getByRole('group', { name: 'Time brush' });
+    fireEvent.pointerDown(brush, { clientX: 250, pointerId: 1 });
+    expect(brush.firstElementChild).not.toBeNull();
+    fireEvent.pointerCancel(brush, { pointerId: 1 });
+    expect(brush.firstElementChild).toBeNull();
+    fireEvent.pointerUp(brush, { clientX: 700, pointerId: 1 });
+    expect(onBrush).not.toHaveBeenCalled();
   });
 
   test('dragging backwards gives the same window; a click clears the brush', () => {
@@ -179,5 +206,87 @@ describe('TimelineWidget on the linked fixture', () => {
   test('with a bound variable the metric lane says all resources', async () => {
     await widget([{ key: 'service.name', value: 'checkout', kind: 'string' }]);
     await waitFor(() => expect(screen.getByText(/all resources/)).toBeTruthy());
+  });
+});
+
+describe('TimelineWidget states', () => {
+  const dashboard = DashboardSchema.parse({
+    id: 'd',
+    title: 'D',
+    widgets: [{ type: 'timeline', x: 0, y: 0, w: 12, h: 6 }],
+  });
+  const actions: WidgetActions = {
+    selectWindow: vi.fn(),
+    selectTrace: vi.fn(),
+    openIn: vi.fn(),
+    setLogView: vi.fn(),
+  };
+
+  function mount(ds: DataSource): void {
+    const w = dashboard.widgets[0];
+    if (w === undefined) throw new Error('no widget');
+    render(
+      <TimelineWidget
+        widget={w}
+        scope={{
+          window: null,
+          band: null,
+          traceFilter: null,
+          highlightTrace: null,
+          condition: null,
+          outside: false,
+        }}
+        dashboard={{ dashboard, source: 'x', isDefault: false }}
+        height={200}
+        dataSource={ds}
+        actions={actions}
+        variables={[]}
+      />,
+    );
+  }
+
+  const spansResult = (partial: SpanQueryResult['partial']): SpanQueryResult => ({
+    rows: [],
+    total: 0,
+    facets: new FacetCounts(10, 10),
+    buckets: new TimeBuckets(['ok', 'error', 'unset'], 8),
+    red: new RedSeries(8),
+    partial,
+  });
+
+  test('a partial scan says how much was read and Scan entire run rereads everything', async () => {
+    const base = dataSourceOf(baseManifest);
+    const calls: boolean[] = [];
+    mount({
+      ...base,
+      querySpans: (q) => {
+        calls.push(q.scanAll);
+        return Promise.resolve(spansResult(q.scanAll ? null : { scanned: 2, total: 5 }));
+      },
+    });
+    expect(await screen.findByText(/from 2 of 5 chunks/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Scan entire run' }));
+    await waitFor(() => expect(screen.queryByText(/from 2 of 5 chunks/)).toBeNull());
+    expect(calls).toEqual([false, true]);
+  });
+
+  test('a failing query shows the error', async () => {
+    const base = dataSourceOf(baseManifest);
+    mount({ ...base, querySpans: () => Promise.reject(new Error('chunk 3 is corrupt')) });
+    expect((await screen.findByRole('alert')).textContent).toContain('chunk 3 is corrupt');
+  });
+
+  test('loading shows a status until the queries settle', async () => {
+    const base = dataSourceOf(baseManifest);
+    mount({ ...base, querySpans: () => new Promise<SpanQueryResult>(() => {}) });
+    expect(screen.getByRole('status').textContent).toBe('Loading');
+  });
+
+  test('an empty lane still draws, saying there is nothing in it', async () => {
+    mount(dataSourceOf(baseManifest));
+    expect(await screen.findByText('Metric points 0')).toBeTruthy();
+    expect(screen.getByText(/no metric points/)).toBeTruthy();
+    expect(screen.getByText(/no spans/)).toBeTruthy();
+    expect(screen.getByText(/no logs/)).toBeTruthy();
   });
 });

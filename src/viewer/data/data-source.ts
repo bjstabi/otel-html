@@ -276,6 +276,14 @@ export async function createDataSource(
     });
     return metricCatalog;
   };
+  let metricPoints: Promise<TimeBuckets<'points'>> | undefined;
+  const getMetricPoints = (): Promise<TimeBuckets<'points'>> => {
+    metricPoints ??= loadMetricPoints(loader, manifest).catch((e: unknown) => {
+      metricPoints = undefined; // a failed load is retried on the next use
+      throw e;
+    });
+    return metricPoints;
+  };
   const metrics = new Lru<number, LoadedMetric>(METRIC_LRU_SIZE);
   const [rollups, spans] = await Promise.all([
     loadSpanRollups(loader, manifest),
@@ -322,7 +330,7 @@ export async function createDataSource(
     traceLogs: logs.traceLogs,
     surroundingLogs: logs.surroundingLogs,
     metricCatalog: getMetricCatalog,
-    metricPoints: () => loadMetricPoints(loader, manifest),
+    metricPoints: getMetricPoints,
     metric: (id) => metrics.get(id, async () => loadMetric(loader, manifest, id, await getMetricCatalog())),
     metricsForResources: async (resources) => metricsOnResources(await getMetricCatalog(), resources),
     async resourceValues(key) {
