@@ -227,7 +227,11 @@ describe('MetricSeriesWriter', () => {
     expect(writer.full()).toBe(true);
   });
 
-  test('a histogram-heavy buffer spills at a bounded heap (default budget)', async () => {
+  // 500k buckets and a forced GC per measurement take ~2 s locally and over 5 s on CI runners; the assertion is on
+  // heap, not time.
+  test('a histogram-heavy buffer spills at a bounded heap (default budget)', {
+    timeout: 60_000,
+  }, async () => {
     setFlagsFromString('--expose-gc');
     const gc = runInNewContext('gc') as () => void;
     const live = (): number => {
