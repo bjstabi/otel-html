@@ -1,6 +1,7 @@
 import { BarChart3, LayoutDashboard, Moon, ScrollText, Sun, SunMoon, Waypoints } from 'lucide-react';
 import type { JSX, ReactNode } from 'react';
 import type { Manifest } from '../../format/manifest.js';
+import { dashboardsOf } from '../dashboards/registry.js';
 import { applyPatch, carryTo, type UrlPatch } from '../state/carry.js';
 import { type Page, pageOfRoute } from '../state/page-options.js';
 import type { SelectionMode } from '../state/selection.js';
@@ -38,13 +39,37 @@ interface NavSection {
 
 const ICON = { size: 16, 'aria-hidden': true } as const;
 
-const SECTIONS: readonly NavSection[] = [
-  {
+/** Opening a dashboard starts from a clean `d`: the previous dashboard's selection does not follow. */
+const FRESH_DASHBOARD: UrlPatch = { d: null };
+
+function dashboardsSection(manifest: Manifest): NavSection {
+  const entry = dashboardsOf(manifest).find((e) => e.isDefault);
+  return {
     title: 'Dashboards',
     icon: <LayoutDashboard {...ICON} />,
-    target: { page: 'dashboards', route: '/dashboards' },
-    items: [],
-  },
+    target: null,
+    items: [
+      {
+        label: 'All dashboards',
+        target: { page: 'dashboards', route: '/dashboards', patch: FRESH_DASHBOARD },
+      },
+      ...(entry === undefined
+        ? []
+        : [
+            {
+              label: `★ ${entry.dashboard.title}`,
+              target: {
+                page: 'dashboards' as const,
+                route: `/dashboards/${entry.dashboard.id}`,
+                patch: FRESH_DASHBOARD,
+              },
+            },
+          ]),
+    ],
+  };
+}
+
+const STATIC_SECTIONS: readonly NavSection[] = [
   {
     title: 'Logs',
     icon: <ScrollText {...ICON} />,
@@ -77,7 +102,7 @@ const SECTIONS: readonly NavSection[] = [
   },
 ];
 
-const TARGETS: readonly NavTarget[] = SECTIONS.flatMap((s) => [
+const TARGETS: readonly NavTarget[] = STATIC_SECTIONS.flatMap((s) => [
   ...(s.target === null ? [] : [s.target]),
   ...s.items.flatMap((i) => (i.target === null ? [] : [i.target])),
 ]);
@@ -147,11 +172,12 @@ function ThemeToggle(): JSX.Element {
 
 export function Sidebar({ manifest }: { manifest: Manifest }): JSX.Element {
   const [current] = useRoute();
+  const sections = [dashboardsSection(manifest), ...STATIC_SECTIONS];
   return (
     <aside className="flex w-60 shrink-0 flex-col gap-4 border-r border-hairline p-3">
       <RunCard manifest={manifest} />
       <nav aria-label="Primary" className="flex flex-1 flex-col gap-3">
-        {SECTIONS.map((s) => (
+        {sections.map((s) => (
           <section key={s.title} aria-labelledby={`nav-${s.title}`} className="flex flex-col gap-0.5">
             <h2
               id={`nav-${s.title}`}

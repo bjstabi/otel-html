@@ -247,10 +247,11 @@ describe('routes', () => {
     expect(screen.queryByText('Coming in a later release')).toBeNull();
   });
 
-  test('dashboards shows a labelled count from the manifest totals', () => {
+  test('dashboards is the list', () => {
     renderShell('#/dashboards');
-    expect(screen.getByText('Coming in a later release')).toBeTruthy();
-    expect(screen.getByLabelText('Spans in this run').textContent).toBe('1234');
+    expect(screen.getByRole('heading', { name: 'Dashboards', level: 1 })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Fusion' })).toBeTruthy();
+    expect(screen.queryByText('Coming in a later release')).toBeNull();
   });
 
   test('traces explorer and services have labelled placeholder pages', () => {
