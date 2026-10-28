@@ -48,7 +48,6 @@ describe('the dashboard page', () => {
         .getAllByRole('region')
         .map((r) => r.querySelector('h2')?.textContent),
     ).toEqual(['Timeline', 'Traces', 'Logs', 'Metrics']);
-    expect(main().getByText('metric widget')).toBeTruthy();
   });
 
   test('an unknown id renders the not-found card with a link to the list', () => {

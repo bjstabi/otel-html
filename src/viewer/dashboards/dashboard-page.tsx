@@ -26,6 +26,7 @@ import { SelectionChips } from './selection-chips.js';
 import { VariablesBar } from './variables-bar.js';
 import { WidgetFrame } from './widget-frame.js';
 import { LogsWidget } from './widgets/logs.js';
+import { effectiveQueries, MetricWidget, type Narrowing, useNarrowing } from './widgets/metric.js';
 import { TimelineWidget } from './widgets/timeline.js';
 import { TracesWidget } from './widgets/traces.js';
 
@@ -62,7 +63,7 @@ export const WIDGETS: Record<WidgetType, WidgetRenderer> = {
   timeline: TimelineWidget,
   traces: TracesWidget,
   logs: LogsWidget,
-  metric: PendingWidget,
+  metric: MetricWidget,
   toplist: PendingWidget,
   table: PendingWidget,
 };
@@ -97,16 +98,41 @@ function windowText(w: TimeWindow | null, epoch: ReturnType<typeof parseUnixNano
 /**
  * The widget's "Open in …" target: the explorer for its signal, with its effective filter and window (and, for
  * Traces, its mode). The one mechanism for every widget: the frame shows the button, the page builds the patch.
- * For Traces and Logs `scope.condition` is the widget's query with the variables, plus the trace for Logs.
+ * For Traces and Logs `scope.condition` is the widget's query with the variables, plus the trace for Logs. A
+ * Metrics widget opens its queries with the same effective `where` it ran (`effectiveQueries`); it has none to
+ * open in grid mode, and none while the selected trace's resources are still being read.
  */
 function openInOf(
   widget: Widget,
   scope: WidgetScope,
-): { page: 'traces' | 'logs'; label: string; patch: UrlPatch } | null {
+  ctx: { variables: readonly VariableBinding[]; narrowing: Narrowing },
+): { page: 'traces' | 'logs' | 'metrics'; label: string; patch: UrlPatch } | null {
   switch (widget.type) {
     case 'timeline':
-    case 'metric':
       return null;
+    case 'metric': {
+      if (widget.queries === null) return null;
+      const { narrowing } = ctx;
+      // The trace's resources narrow the queries only while the widget follows it.
+      const narrows = scope.highlightTrace !== null;
+      if (narrows && narrowing.status !== 'ready') return null;
+      const filter = narrows && narrowing.status === 'ready' ? narrowing.where : null;
+      return {
+        page: 'metrics',
+        label: 'Open in Metrics',
+        patch: {
+          m: {
+            queries: effectiveQueries(widget.queries, ctx.variables, filter),
+            formulas: widget.formulas,
+            display: widget.display,
+            scale: widget.scale,
+            split: false,
+            exemplars: widget.exemplars,
+          },
+          t: scope.window === null ? null : formatWindow(scope.window),
+        },
+      };
+    }
     case 'traces':
     case 'logs':
     case 'toplist':
@@ -242,12 +268,19 @@ function DashboardView(props: {
     }
   }
   const outside = [...scopes.values()].some((s) => s.scope.outside);
+  // Open in Metrics needs the selected trace's resources, as the metric widgets read them.
+  const narrowing = useNarrowing(
+    dataSource,
+    d.widgets.some((w) => w.type === 'metric' && w.queries !== null && following(w, state))
+      ? state.sel.trace
+      : null,
+  );
 
   const renderWidget = (w: Widget, heightPx: number): JSX.Element => {
     const known = scopes.get(w.id);
     if (known === undefined) return <div />;
     const { scope } = known;
-    const open = openInOf(w, scope);
+    const open = openInOf(w, scope, { variables: bound?.bindings ?? [], narrowing });
     const actions: WidgetActions = {
       selectWindow: (win) =>
         change((s) => ({ ...s, sel: { ...s.sel, t: win === null ? null : formatWindow(win) } })),

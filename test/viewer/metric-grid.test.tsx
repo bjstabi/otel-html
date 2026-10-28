@@ -13,7 +13,8 @@ vi.mock('../../src/viewer/components/chart.js', () => ({
 import type { AnyValue } from '../../src/model/anyvalue.js';
 import type { ResourceRecord } from '../../src/model/records.js';
 import { createDataSource, type DataSource } from '../../src/viewer/data/data-source.js';
-import { explorerFilter, OTHER_LEFT_OUT } from '../../src/viewer/metrics/metric-grid.js';
+import { explorerFilter, MetricGrid, OTHER_LEFT_OUT } from '../../src/viewer/metrics/metric-grid.js';
+import { GoToContext } from '../../src/viewer/shell/go-to.js';
 import { Shell } from '../../src/viewer/shell/shell.js';
 import { createHashHistory } from '../../src/viewer/state/hash-history.js';
 import { parseUrlState } from '../../src/viewer/state/url-state.js';
@@ -278,5 +279,37 @@ describe('explorerFilter', () => {
       '(resource.attributes["service.name"] == "a") or (resource.attributes["service.name"] == "b")',
     );
     expect(f.by).toEqual(['resource.attributes["service.name"]']);
+  });
+});
+
+describe('MetricGrid embedded in a dashboard', () => {
+  test('a dashboard origin has no marker or +- 5 min label, and the band reaches every chart', async () => {
+    const real = await createDataSource(createScriptedLoader(report.files), report.manifest, 10_000_000);
+    const rs = (await real.metricCatalog()).resources();
+    render(
+      <ThemeProvider>
+        <GoToContext.Provider value={() => undefined}>
+          <MetricGrid
+            dataSource={real}
+            origin={{
+              kind: 'dashboard',
+              resources: rs,
+              at: null,
+              window: { start: 0, end: 120e9 },
+              traceId: null,
+            }}
+            band={{ start: 10e9, end: 20e9 }}
+            onSelectTrace={() => undefined}
+          />
+        </GoToContext.Provider>
+      </ThemeProvider>,
+    );
+    await screen.findByRole('img', { name: /^process\.cpu\.utilization/ });
+    expect(screen.queryByText('± 5 min')).toBeNull();
+    expect(screen.queryByText('this log')).toBeNull();
+    const option = charts.at(-1)?.option as { series: { markArea?: { data: { xAxis: number }[][] } }[] };
+    expect(option.series.find((x) => x.markArea !== undefined)?.markArea?.data).toEqual([
+      [{ xAxis: 10e9 }, { xAxis: 20e9 }],
+    ]);
   });
 });

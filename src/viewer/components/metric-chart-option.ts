@@ -23,6 +23,34 @@ export interface MetricChartInput {
   size: MetricSize;
   /** The x range; defaults to the extent of the data. Series only cover the buckets that hold data. */
   window?: TimeWindow | null;
+  /** The dashboard's selection window, shaded behind the lines (a time-axis chart only). */
+  band?: TimeWindow | null;
+  /** A config's ECharts options, deep-merged over the built option last. */
+  echarts?: Record<string, unknown> | null;
+}
+
+const UNSAFE_KEYS: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype']);
+
+function isPlain(v: unknown): v is Record<string, unknown> {
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return false;
+  const proto = Object.getPrototypeOf(v);
+  return proto === Object.prototype || proto === null;
+}
+
+/**
+ * `extra` merged over `base` into a new object: plain objects merge recursively, anything else (arrays, scalars,
+ * functions) replaces. `__proto__`, `constructor` and `prototype` keys are skipped at every level.
+ */
+export function mergeEchartsOption(base: object, extra: Record<string, unknown>): object {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(base)) if (!UNSAFE_KEYS.has(k)) out[k] = v;
+  for (const [k, v] of Object.entries(extra)) {
+    if (UNSAFE_KEYS.has(k)) continue;
+    const old = out[k];
+    out[k] =
+      isPlain(old) && isPlain(v) ? mergeEchartsOption(old, v) : isPlain(v) ? mergeEchartsOption({}, v) : v;
+  }
+  return out;
 }
 
 /** Canvas cannot read `var(--token)`, so colours resolve against the live theme; an unset token falls back. */
@@ -34,6 +62,8 @@ const FALLBACKS: Readonly<Record<string, string>> = {
   '--oh-hairline': '#e4e4de',
 };
 const GREY = '#6b6f78';
+/** The selection band's fill: the accent at 12 % alpha. */
+const BAND_OPACITY = 0.12;
 
 function token(name: string): string {
   const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -138,6 +168,13 @@ function withIsolatedDots(
 
 /** Pure ECharts option for a metric card. Hostile strings only ever reach the canvas or escaped tooltip HTML. */
 export function buildMetricChartOption(input: MetricChartInput): MetricChartOptionResult {
+  const option = buildOption(input);
+  return input.echarts == null
+    ? option
+    : (mergeEchartsOption(option, input.echarts) as MetricChartOptionResult);
+}
+
+function buildOption(input: MetricChartInput): MetricChartOptionResult {
   const { results, display, scale, unit, colors } = input;
   const all = results.flatMap((r) => r.series);
   const muted = token('--oh-muted');
@@ -173,7 +210,19 @@ export function buildMetricChartOption(input: MetricChartInput): MetricChartOpti
             data: [{ xAxis: input.marker }],
           }
         : undefined;
-    const mark = markLine === undefined ? {} : { markLine };
+    const band = i === 0 ? input.band : null;
+    const markArea =
+      band == null
+        ? undefined
+        : {
+            silent: true,
+            itemStyle: { color: accent, opacity: BAND_OPACITY },
+            data: [[{ xAxis: band.start }, { xAxis: band.end }]],
+          };
+    const mark = {
+      ...(markLine === undefined ? {} : { markLine }),
+      ...(markArea === undefined ? {} : { markArea }),
+    };
     if (display === 'bars') return { ...common, ...mark, type: 'bar' as const, barMaxWidth: 12 };
     return {
       ...common,
