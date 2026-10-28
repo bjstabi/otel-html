@@ -1,4 +1,5 @@
 import type { Locator, Page } from '@playwright/test';
+import { parse } from 'yaml';
 import { copied, stubClipboard } from './clipboard.js';
 import { DASHBOARDS_ENV_DEFAULT } from './fixture.js';
 import { watchProblems } from './metric-chart.js';
@@ -121,12 +122,19 @@ test('Checkout: the environment default narrows everything until it is changed',
   const env = page.getByRole('combobox', { name: 'environment' });
   await expect(env).toContainText(DASHBOARDS_ENV_DEFAULT);
   // The default names no environment of this report, so the list is empty.
-  await expect(widget(page, 'w2')).toContainText('No traces match');
+  const traces = widget(page, 'w2');
+  await expect(traces).toContainText('No traces match');
+  await expect(traces).toContainText('0 traces');
   await env.click();
   await page.getByRole('option', { name: 'production' }).click();
-  await expect(
-    widget(page, 'w2').getByRole('grid', { name: 'Results' }).getByRole('row').nth(1),
-  ).toBeVisible();
+  // The choice sticks: an option that vanished on selection once reset the variable to "all".
+  await expect(env).toContainText('production');
+  await expect(page).toHaveURL(/production/);
+  await expect(traces).toContainText('3 traces');
+  await expect(traces).not.toContainText('No traces match');
+  await expect(traces.getByRole('grid', { name: 'Results' }).getByRole('row').nth(1)).toBeVisible();
+  // It stays chosen once the lists have settled.
+  await expect(env).toContainText('production');
   // All six widget types are on the page.
   for (const id of ['w1', 'w2', 'w3', 'w4', 'w5', 'w6']) await expect(widget(page, id)).toBeVisible();
   await expect(widget(page, 'w4').getByRole('heading', { name: 'Request latency' })).toBeVisible();
@@ -154,12 +162,20 @@ test('Edit layout: drag Logs, then Copy config holds the new position', async ({
   await expect.poll(() => copied(page)).toContain('id: fusion-copy');
   const yaml = await copied(page);
   expect(yaml).toContain('title: Fusion (copy)');
-  const block = /- type: logs\n((?:\s+.*\n)+?)\s*- type:|- type: logs\n((?:\s+.*\n?)+)/.exec(yaml);
-  const logsBlock = block?.[1] ?? block?.[2] ?? '';
-  expect(logsBlock).toContain('id: logs');
-  const y = Number(/\by: (\d+)/.exec(logsBlock)?.[1]);
-  expect(y).toBeGreaterThan(6);
-  expect(Number(/\bx: (\d+)/.exec(logsBlock)?.[1] ?? 0)).toBeGreaterThanOrEqual(0);
+  const doc = parse(yaml) as {
+    dashboards: { widgets: { id?: string; type: string; x: number; y: number }[] }[];
+  };
+  const moved = doc.dashboards[0]?.widgets.find((w) => w.type === 'logs');
+  expect(moved?.id).toBe('logs');
+  // Fusion has Logs at (7, 6); the drag took it below the Metrics widget (rows 19-28), in its own column.
+  expect(moved?.x).toBe(7);
+  expect(moved?.y).toBeGreaterThanOrEqual(29);
+  const others = doc.dashboards[0]?.widgets.filter((w) => w.type !== 'logs') ?? [];
+  expect(others.map((w) => [w.type, w.x, w.y])).toEqual([
+    ['timeline', 0, 0],
+    ['traces', 0, 6],
+    ['metric', 0, 19],
+  ]);
   expect(problems).toEqual([]);
 });
 
