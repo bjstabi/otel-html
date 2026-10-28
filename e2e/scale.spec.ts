@@ -362,8 +362,8 @@ test("1M logs: a trace Logs tab loads only that trace's log chunks", { tag: '@pe
 /** Metrics targets (spec §7): the Explorer draws its first chart within 2 s, the Catalog opens within 1 s. */
 const METRICS_EXPLORER_BUDGET_MS = 2000;
 const METRICS_CATALOG_BUDGET_MS = 1000;
-/** Generating the metrics scale report the first time takes about 15 minutes; later runs reuse it. */
-const METRICS_SCALE_SETUP_MS = 30 * 60 * 1000;
+/** Generating the metrics scale report the first time takes about 15 minutes (more on a slow CI runner, whose job allows 60); later runs reuse it. */
+const METRICS_SCALE_SETUP_MS = 50 * 60 * 1000;
 
 /**
  * Median milliseconds from navigation start to the frame after an element matching `selector` (and, when given,

@@ -62,10 +62,10 @@ usage = 'arg "[args]" var=#true'
 # then kept in e2e/.cache/): `OTEL_HTML_METRICS_SCALE=1 mise run test:e2e:chromium -- e2e/scale.spec.ts`.
 run = """
 eval "set -- $usage_args"
-# Both passes run; the task fails if either does.
+# Both passes run; the task fails if either does. Only the @perf pass may match no tests (a spec with none).
 rc=0
 [ -n "$OTEL_HTML_SKIP_BROWSER_INSTALL" ] || pnpm exec playwright install chromium firefox webkit
-pnpm exec playwright test --grep-invert @perf --pass-with-no-tests "$@" || rc=1
+pnpm exec playwright test --grep-invert @perf "$@" || rc=1
 pnpm exec playwright test --grep @perf --workers=1 --pass-with-no-tests "$@" || rc=1
 exit $rc
 """
@@ -92,10 +92,10 @@ depends = ["build"]
 usage = 'arg "[args]" var=#true'
 run = """
 eval "set -- $usage_args"
-# Both passes run; the task fails if either does.
+# Both passes run; the task fails if either does. Only the @perf pass may match no tests (a spec with none).
 rc=0
 [ -n "$OTEL_HTML_SKIP_BROWSER_INSTALL" ] || pnpm exec playwright install chromium
-pnpm exec playwright test --project='chromium-*' --grep-invert @perf --pass-with-no-tests "$@" || rc=1
+pnpm exec playwright test --project='chromium-*' --grep-invert @perf "$@" || rc=1
 pnpm exec playwright test --project='chromium-*' --grep @perf --workers=1 --pass-with-no-tests "$@" || rc=1
 exit $rc
 """

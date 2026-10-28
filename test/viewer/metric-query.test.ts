@@ -8,6 +8,7 @@ import { ValueBuckets } from '../../src/rollups/value-buckets.js';
 import { evaluateFormula, formulaWidth, parseFormula } from '../../src/viewer/data/metric-formula.js';
 import type { LevelData, LoadedMetric, LoadedSeries } from '../../src/viewer/data/metric-load.js';
 import {
+  chartWidthNs,
   DEFAULT_SHOW,
   defaultShow,
   kindOf,
@@ -407,23 +408,24 @@ describe('runMetricQuery', () => {
       expect(pointIntervalNs(ladder([{ everyS: 10, route: '/a' }]), null)).toBe(10 * L0);
     });
 
-    test('10 s points over 1 h at 1100 points: level 2 (65.536 s), not level 1 (8.192 s, finer than 10 s)', () => {
-      const levels = ladder([{ everyS: 10, route: '/a' }]).levels;
-      expect(pickLevel(levels, hour, 1100)?.level).toBe(1);
-      expect(pickLevel(levels, hour, 1100, 10 * L0)?.level).toBe(2);
-      // Too wide for every level: the coarsest, as before.
-      expect(pickLevel(levels, hour, 1100, 1e15)?.level).toBe(3);
+    test('10 s points over 1 h at 1100 points: 16.384 s (two level-1 buckets, ~220 points), not 8.192 s', () => {
+      const m = ladder([{ everyS: 10, route: '/a' }]);
+      // R1 alone picks level 1 (8.192 s), finer than the 10.24 s interval.
+      expect(pickLevel(m.levels, hour, 1100)?.level).toBe(1);
+      expect(chartWidthNs(m, query({ show: 'avg' }), hour, 1100)).toBe(L0 * 16);
+      // R1 wider than the interval wins: 6 points over the hour need level 3.
+      expect(chartWidthNs(m, query({ show: 'avg' }), hour, 6)).toBe(L0 * 512);
     });
 
     test('runMetricQuery charts a line: consecutive buckets all hold a value', () => {
       const r = runMetricQuery(ladder([{ everyS: 10, route: '/a' }]), query({ show: 'avg' }), hour, 1100);
-      expect(r.widthNs).toBe(L0 * 64);
+      expect(r.widthNs).toBe(L0 * 16);
       const values = r.series[0]?.points.map((p) => p[1]) ?? [];
-      expect(values.length).toBeGreaterThan(50);
+      expect(values.length).toBe(220);
       expect(values.every((v) => v === 1)).toBe(true);
     });
 
-    test('a run too short for a level that wide merges its coarsest level up the ladder (100 s of 10 s points)', () => {
+    test('a run too short for a coarser level merges level 0 up to the interval (100 s of 10 s points: 10.24 s)', () => {
       const short = ladder([{ everyS: 10, route: '/a' }]);
       const levels = short.levels.slice(0, 1).map((l) => ({
         ...l,
@@ -440,14 +442,11 @@ describe('runMetricQuery', () => {
         { start: 0, end: 100 * S },
         1100,
       );
-      expect(r.widthNs).toBe(L0 * 64);
-      expect(r.series[0]?.points).toEqual([
-        [0, 1],
-        [L0 * 64, 1],
-      ]);
+      expect(r.widthNs).toBe(L0 * 10);
+      expect(r.series[0]?.points).toEqual(Array.from({ length: 10 }, (_, k) => [k * L0 * 10, 1]));
     });
 
-    test('a few points say nothing about the interval: under 8 gaps the pick is unconstrained', () => {
+    test('a few points say nothing about the interval: under 8 gaps R1 alone picks', () => {
       const m = metric(entry({ type: 'gauge' }), [
         { buckets: [0, 30, 60, 90, 120, 150, 180, 210].map((t): [number, BucketAgg] => [t, gauge(1)]) },
       ]);
@@ -456,6 +455,14 @@ describe('runMetricQuery', () => {
         { buckets: [0, 3, 6, 9, 12, 15, 18, 21, 24].map((t): [number, BucketAgg] => [t, gauge(1)]) },
       ]);
       expect(pointIntervalNs(nine, null)).toBe(30 * S);
+    });
+
+    test('an even sample takes the upper median', () => {
+      // Gaps of 1,1,1,1,3,3,3,3 buckets (10 s wide): the lower median would be 10 s, the upper is 30 s.
+      const m = metric(entry({ type: 'gauge' }), [
+        { buckets: [0, 1, 2, 3, 4, 7, 10, 13, 16].map((t): [number, BucketAgg] => [t, gauge(1)]) },
+      ]);
+      expect(pointIntervalNs(m, null)).toBe(30 * S);
     });
 
     test('the interval comes from the series the where keeps', () => {
@@ -477,15 +484,48 @@ describe('runMetricQuery', () => {
         hour,
         1100,
       );
-      expect(sparse.widthNs).toBe(L0 * 64);
+      expect(sparse.widthNs).toBe(L0 * 16);
       expect(dense.widthNs).toBe(L0 * 8);
     });
 
-    test('a formula re-run at a width keeps the floor too', () => {
+    test('a formula re-run gets exactly the width it asks for', () => {
       const m = ladder([{ everyS: 10, route: '/a' }]);
-      // 8.192 s is finer than the 10 s points: the re-run uses level 2 (65.536 s), the finest usable level.
-      expect(runMetricQueryAtWidth(m, query({ show: 'avg' }), hour, L0 * 8).widthNs).toBe(L0 * 64);
+      expect(runMetricQueryAtWidth(m, query({ show: 'avg' }), hour, L0 * 8).widthNs).toBe(L0 * 8);
       expect(runMetricQueryAtWidth(m, query({ show: 'avg' }), hour, L0 * 64).widthNs).toBe(L0 * 64);
+    });
+
+    test('a / b with a = rollup(20 s) over 10 s points re-runs b at exactly 20 s', () => {
+      const m = ladder([{ everyS: 10, route: '/a' }]);
+      const a = runMetricQuery(
+        m,
+        query({ id: 'a', show: 'avg', fn: [{ op: 'rollup', agg: 'avg', intervalMs: 20_000 }] }),
+        hour,
+        1100,
+      );
+      const b0 = runMetricQuery(m, query({ id: 'b', show: 'avg' }), hour, 1100);
+      const ast = parseFormula('a / b');
+      const width = formulaWidth(
+        ast,
+        new Map([
+          ['a', a],
+          ['b', b0],
+        ]),
+      );
+      expect(width).toBe(20 * S);
+      const b = runMetricQueryAtWidth(m, query({ id: 'b', show: 'avg' }), hour, width);
+      expect(b.widthNs).toBe(20 * S);
+      const f = evaluateFormula(
+        ast,
+        new Map([
+          ['a', a],
+          ['b', b],
+        ]),
+        'f',
+      );
+      expect(f.widthNs).toBe(20 * S);
+      const fv = values(f);
+      expect(fv.length).toBe(180);
+      expect(fv.every((v) => v === 1)).toBe(true);
     });
   });
 
