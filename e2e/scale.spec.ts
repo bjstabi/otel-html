@@ -409,7 +409,15 @@ async function paintedMs(page: Page, url: string, selector: string, label: strin
   return samples;
 }
 
+/** The metrics scale check runs only with this set to 1: its report takes ~15 minutes and ~12 GB to write. */
+const METRICS_SCALE_ENV = 'OTEL_HTML_METRICS_SCALE';
+
 test.describe(`metrics scale: ${SCALE_METRICS} metrics × ${SCALE_METRIC_SERIES} series × 1 h at 10 s`, () => {
+  // Skipped tests run no hooks, so the report is not written either.
+  test.skip(
+    process.env[METRICS_SCALE_ENV] !== '1',
+    `set ${METRICS_SCALE_ENV}=1 to write the metrics scale report and run its checks`,
+  );
   test.beforeAll(async () => {
     test.setTimeout(METRICS_SCALE_SETUP_MS);
     await ensureMetricsScaleReport();
