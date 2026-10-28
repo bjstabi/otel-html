@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
+import { parseSeriesFile } from '../../src/format/metric-files.js';
 import { TraceShardSchema } from '../../src/format/trace-shard.js';
 import { openSession } from '../../src/writer/session.js';
 import { logRecord, logsRequest } from '../../test-support/otlp-builders.js';
@@ -16,7 +17,9 @@ import {
   counterRequest,
   levelsOf,
   manifestOf,
+  metricCatalogOf,
   metricFilesOnDisk,
+  readDataFile,
   spansRequest,
 } from './helpers.js';
 
@@ -213,5 +216,31 @@ describe('writer killed between flushes with metrics', () => {
     await again.close();
     expect(metricFilesOnDisk(w, OUT)).toEqual(manifestOf(w, OUT).metricFiles);
     expect(metricFilesOnDisk(w, OUT).some((p) => p.startsWith('data/metrics/000002/'))).toBe(false);
+  });
+
+  test('a series.js ahead of the checkpoint is trimmed to it and rewritten', async () => {
+    const w = await killedAfterTwoFlushes();
+    const deps = { ...w.deps, process: createProcess(9001, w.process.hostname) };
+    const s = await openSession(deps, { out: OUT, config, mode: 'append' });
+    // a new series of metric `a`: its series.js is rewritten, then the manifest commit fails
+    await s.add(
+      otlp(counterRequest('a', [[20, 1]], [{ key: 'k', value: { stringValue: 'new' } }])),
+      'n.json',
+    );
+    w.fs.failNextWrite('data/manifest.js');
+    await expect(s.flush()).rejects.toThrow(/injected/);
+    deps.process.alive.delete(9001);
+    const series = (): unknown[] => {
+      const raw = readDataFile(w, OUT, 'data/metrics/000000/series.js');
+      return parseSeriesFile(raw, 'series.js').series;
+    };
+    expect(series()).toHaveLength(2);
+    const again = await openSession(
+      { ...w.deps, process: createProcess(9002, w.process.hostname) },
+      { out: OUT, config, mode: 'append' },
+    );
+    await again.close();
+    expect(series()).toHaveLength(1);
+    expect(metricCatalogOf(w, OUT).entries()[0]).toMatchObject({ name: 'a', series: 1 });
   });
 });

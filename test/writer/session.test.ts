@@ -29,6 +29,7 @@ import {
   allPoints,
   allSpans,
   counterRequest,
+  cumulativeRequest,
   levelsOf,
   logRollupsOf,
   manifestOf,
@@ -588,7 +589,7 @@ describe('metric series files', () => {
       JSON.parse(w.fs.snapshot().get('r/data/state/session.1.json') ?? ''),
     );
     expect(state.nextSegment).toEqual({ '0': 2 });
-    expect(state.metricStreams).toMatchObject({ streams: [{ time: 10_000_000_000 }] });
+    expect(state.metricStreams).toMatchObject({ keys: ['0/0:0'], times: [10_000_000_000] });
     await s.close();
   });
 
@@ -670,4 +671,116 @@ describe('metric series files', () => {
     );
     expect(metricCatalogOf(w, OUT).entries()[0]).toMatchObject({ points: 2, series: 1 });
   });
+
+  const deltas = (w: TestWriter, id = 0, series = 0): [number, number, number][] => {
+    const s = levelsOf(w, OUT, id)[0]?.series.find((x) => x.id === series);
+    return (s?.t ?? []).map((t, i) => {
+      const a = s?.a[i];
+      return a?.k === 'counter' ? [t, a.delta, a.resets] : [t, Number.NaN, 0];
+    });
+  };
+
+  test('a restart and a second producer sharing the series: no negative or double-counted deltas', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    // producer 1 starts at 0 s; producer 2 (same series identity) at 5 s; producer 1 restarts at 30 s
+    await s.add(
+      otlp(
+        cumulativeRequest('c', [
+          [0, 1, 0],
+          [10, 3, 0],
+          [15, 100, 5],
+        ]),
+      ),
+      'a.json',
+    );
+    await s.flush();
+    await s.add(
+      otlp(
+        cumulativeRequest('c', [
+          [20, 6, 0],
+          [25, 150, 5],
+          [40, 2, 30],
+        ]),
+      ),
+      'b.json',
+    );
+    await s.close();
+    const b = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'append' });
+    await b.add(
+      otlp(
+        cumulativeRequest('c', [
+          [35, 160, 5],
+          [50, 5, 30],
+        ]),
+      ),
+      'c.json',
+    );
+    await b.close();
+    expect(deltas(w)).toEqual([
+      [0, 1, 0],
+      [9, 2, 0],
+      [14, 100, 0],
+      [19, 3, 0],
+      [24, 50, 0],
+      [34, 10, 0],
+      [39, 2, 1],
+      [48, 3, 0],
+    ]);
+    expect(metricCatalogOf(w, OUT).entries()[0]).toMatchObject({ resets: 1, series: 1, points: 8 });
+  });
+
+  test('cumulative series folded into other keep their own streams', async () => {
+    const w = createTestWriter();
+    const s = await open(w, testConfig({ writer: { metricSeriesCap: 1 } }));
+    const host = (h: string) => [{ key: 'host', value: { stringValue: h } }];
+    for (const [t, i] of [
+      [0, 0],
+      [10, 1],
+      [20, 2],
+    ] as const) {
+      await s.add(otlp(cumulativeRequest('c', [[t, 1 + i, 0]], host('h1'))), 'h1.json');
+      await s.add(otlp(cumulativeRequest('c', [[t, 10 * (i + 1), 0]], host('h2'))), 'h2.json');
+      await s.add(otlp(cumulativeRequest('c', [[t, 100 + 10 * i, 0]], host('h3'))), 'h3.json');
+    }
+    await s.close();
+    expect(deltas(w, 0, 0)).toEqual([
+      [0, 1, 0],
+      [9, 1, 0],
+      [19, 1, 0],
+    ]);
+    expect(deltas(w, 0, 1)).toEqual([
+      [0, 110, 0],
+      [9, 20, 0],
+      [19, 20, 0],
+    ]); // `other`: h2 + h3
+    expect(metricCatalogOf(w, OUT).entries()[0]).toMatchObject({ resets: 0, series: 2 });
+  });
+
+  test.each(['data/metrics/000000/l1.js', 'data/metrics/000000/ex.js'])(
+    'a close that fails writing %s is retried without double counting',
+    async (failing) => {
+      const w = createTestWriter();
+      const s = await open(w);
+      await s.add(
+        otlp(
+          counterRequest('requests', [
+            [0, 1],
+            [3000, 5],
+          ]),
+        ),
+        'm.json',
+      );
+      w.fs.failNextWrite(failing);
+      await expect(s.close()).rejects.toThrow(/injected/);
+      expect(manifestOf(w, OUT).metricFiles.filter((p) => /\/l\d\.js$/.test(p))).toEqual([]);
+      await s.close();
+      expect(levelsOf(w, OUT, 0).map((l) => l.level)).toEqual([0, 1]);
+      expect(deltas(w)).toEqual([
+        [0, 1, 0],
+        [2929, 4, 0],
+      ]);
+      expect(metricFilesOnDisk(w, OUT)).toEqual(manifestOf(w, OUT).metricFiles);
+    },
+  );
 });

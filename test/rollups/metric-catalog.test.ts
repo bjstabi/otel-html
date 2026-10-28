@@ -93,7 +93,7 @@ describe('MetricCatalog series', () => {
     // An existing series still resolves after the cap.
     const again = c.seriesOf(def, pt({ attributes: attrs({ k: { kind: 'int', value: 3n } }) }), r, scope);
     expect(again.isNew).toBe(false);
-    expect(again.series.other).toBe(false);
+    expect(again.other).toBe(false);
     expect(c.entries()[0]?.folded).toBe(500);
   });
 
@@ -104,9 +104,9 @@ describe('MetricCatalog series', () => {
     const b = c.seriesOf(d, histPt([2]), res('a'), scope);
     const r2 = c.seriesOf(d, histPt([1]), res('b'), scope);
     const same = c.seriesOf(d, histPt([1]), res('a'), { ...scope });
-    expect(new Set([a.series.id, b.series.id, r2.series.id]).size).toBe(3);
-    expect(same.series.id).toBe(a.series.id);
-    expect(a.series.bounds).toEqual([1]);
+    expect(new Set([a.id, b.id, r2.id]).size).toBe(3);
+    expect(same.id).toBe(a.id);
+    expect(c.seriesDefs(d.id)[a.id]?.bounds).toEqual([1]);
     expect(c.resources()).toHaveLength(2);
     expect(c.scopes()).toHaveLength(1);
     expect(c.entries()[0]?.resources).toEqual([0, 1]);
@@ -178,28 +178,67 @@ describe('MetricCatalog serialization', () => {
     return c;
   }
 
-  it('round-trips deep-equal with stable series ids', () => {
+  function reload(c: MetricCatalog): MetricCatalog {
+    const back = MetricCatalog.from(
+      JSON.parse(JSON.stringify(c.toJSON())),
+      { seriesCap: 3 },
+      'rollups.metrics.catalog',
+    );
+    for (const e of c.entries())
+      if (e.series > 0) back.restoreSeries(e.id, c.seriesDefs(e.id), `series.js#${e.id}`);
+    return back;
+  }
+
+  it('keeps series counts only; definitions come back through restoreSeries', () => {
     const c = build();
-    const json = JSON.parse(JSON.stringify(c.toJSON()));
-    const back = MetricCatalog.from(json, { seriesCap: 3 }, 'rollups.metrics.catalog');
-    expect(back.toJSON()).toEqual(c.toJSON());
+    const json = c.toJSON();
+    expect(json.metrics.map((m) => m.series)).toEqual([2, 4, 0]);
+    const back = reload(c);
+    expect(back.toJSON()).toEqual(json);
     expect(back.entries()).toEqual(c.entries());
     expect(back.resources()).toEqual(c.resources());
     for (const e of c.entries()) expect(back.seriesDefs(e.id)).toEqual(c.seriesDefs(e.id));
+    expect(back.dirtyMetrics()).toEqual([]);
     // Interning keeps working after a reload: same inputs, same ids, nothing new.
     const before = back.seriesDefs(1).length;
     back.seriesOf(back.defOf(pt({ unit: 'ms' })), pt({ unit: 'ms' }), res('r0'), scope);
     expect(back.seriesDefs(1).length).toBe(before);
   });
 
+  it('refuses to intern into a metric whose series were not restored', () => {
+    const c = build();
+    const back = MetricCatalog.from(c.toJSON(), { seriesCap: 3 }, 'catalog');
+    expect(() => back.seriesOf(back.defOf(histPt([1, 2])), histPt([1, 2]), res('r0'), scope)).toThrow(
+      /not restored/,
+    );
+    expect(back.seriesDefs(2)).toEqual([]); // no series: nothing to restore
+  });
+
+  it('takes the committed prefix of a series file that is ahead, and marks the metric dirty', () => {
+    const c = build();
+    const back = MetricCatalog.from(c.toJSON(), { seriesCap: 3 }, 'catalog');
+    const extra = { id: 1, resource: 0, scope: 0, attributes: new Map(), bounds: [1, 2], other: false };
+    back.restoreSeries(0, [...c.seriesDefs(0), extra], 's0');
+    back.restoreSeries(1, c.seriesDefs(1), 's1');
+    expect(back.seriesDefs(0)).toEqual(c.seriesDefs(0));
+    expect(back.dirtyMetrics()).toEqual([0]);
+  });
+
   it('fails fast with the path of the bad field', () => {
     const json = JSON.parse(JSON.stringify(build().toJSON()));
-    json.metrics[0].series[0].resource = 99;
+    json.metrics[0].series = -1;
     expect(() => MetricCatalog.from(json, { seriesCap: 3 }, 'rollups.metrics.catalog')).toThrow(
-      /rollups\.metrics\.catalog\.metrics\[0\]\.series\[0\]\.resource/,
+      /rollups\.metrics\.catalog\.metrics\[0\]\.series/,
     );
     expect(() => MetricCatalog.from({ nope: 1 }, { seriesCap: 3 }, 'rollups.metrics.catalog')).toThrow(
       /rollups\.metrics\.catalog/,
     );
+    const c = build();
+    const back = MetricCatalog.from(c.toJSON(), { seriesCap: 3 }, 'catalog');
+    const bad = c.seriesDefs(1).map((x, i) => (i === 2 ? { ...x, resource: 99 } : x));
+    expect(() => back.restoreSeries(1, bad, 'data/metrics/000001/series.js')).toThrow(
+      /data\/metrics\/000001\/series\.js\.series\[2\]\.resource/,
+    );
+    expect(() => back.restoreSeries(0, [], 'data/metrics/000000/series.js')).toThrow(/at least 2 series/);
   });
 });

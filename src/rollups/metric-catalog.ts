@@ -29,6 +29,16 @@ export interface SeriesDef {
   other: boolean;
 }
 
+/** The series a point belongs to, from `seriesOf`. */
+export interface SeriesRef {
+  id: number;
+  /** The metric's `other` series, where over-cap series fold. */
+  other: boolean;
+  isNew: boolean;
+  /** A folded point's own series identity, so cumulative streams of folded series stay apart. */
+  foldKey: string | null;
+}
+
 export interface MetricEntry extends MetricDef {
   conflicting: boolean;
   scopes: string[];
@@ -163,14 +173,6 @@ export function decodeAttributes(v: JsonAny, path: string): Attributes {
 
 type SerializedResource = { attributes: JsonAny[]; droppedAttributesCount: number; schemaUrl: string };
 type SerializedScope = SerializedResource & { name: string; version: string };
-type SerializedSeries = {
-  id: number;
-  resource: number;
-  scope: number;
-  attributes: JsonAny[];
-  bounds: number[] | null;
-  other: boolean;
-};
 type SerializedMetric = {
   id: number;
   name: string;
@@ -188,7 +190,8 @@ type SerializedMetric = {
   noValue: number;
   points: number;
   spark: SerializedValueBuckets;
-  series: SerializedSeries[];
+  /** Series count; the definitions live in the metric's `series.js` (see `restoreSeries`). */
+  series: number;
 };
 export type SerializedMetricCatalog = {
   resources: SerializedResource[];
@@ -212,14 +215,6 @@ const ScopeSchema: z.ZodType<SerializedScope> = z.strictObject({
   droppedAttributesCount: nonNegInt,
   schemaUrl: z.string(),
 });
-const SeriesSchema: z.ZodType<SerializedSeries> = z.strictObject({
-  id: nonNegInt,
-  resource: z.number().int().min(-1),
-  scope: z.number().int().min(-1),
-  attributes: z.array(JsonAnySchema),
-  bounds: z.array(z.number()).nullable(),
-  other: z.boolean(),
-});
 const MetricSchema: z.ZodType<SerializedMetric> = z.strictObject({
   id: nonNegInt,
   name: z.string(),
@@ -237,7 +232,7 @@ const MetricSchema: z.ZodType<SerializedMetric> = z.strictObject({
   noValue: nonNegInt,
   points: nonNegInt,
   spark: z.custom<SerializedValueBuckets>(() => true),
-  series: z.array(SeriesSchema),
+  series: nonNegInt,
 });
 const CatalogSchema: z.ZodType<SerializedMetricCatalog> = z.strictObject({
   resources: z.array(ResourceSchema),
@@ -257,13 +252,72 @@ const scopeKey = (s: ScopeRecord): string =>
 const defKey = (d: Omit<MetricDef, 'id' | 'description'>): string =>
   JSON.stringify([d.name, d.unit, d.type, d.temporality, d.monotonic]);
 
+/** Attributes with keys sorted at every level, so equal attribute sets encode equally. */
+function sortedAttributes(a: Attributes): Attributes {
+  const keys = [...a.keys()].sort();
+  return new Map(keys.map((k) => [k, sortedValue(a.get(k) ?? { kind: 'empty' })]));
+}
+
+function sortedValue(v: AnyValue): AnyValue {
+  if (v.kind === 'kvlist') return { kind: 'kvlist', values: sortedAttributes(v.values) };
+  if (v.kind === 'array') return { kind: 'array', values: v.values.map(sortedValue) };
+  return v;
+}
+
+/**
+ * `JSON.stringify(encodeAttributes(...))` of the attributes with sorted keys: canonical, and decodable back into
+ * the attributes. Points of one series repeat it for every point, so plain string attributes in key order (the
+ * usual case) are written directly.
+ */
+function canonicalAttributesJson(a: Attributes): string {
+  let out = '[';
+  let prev = '';
+  for (const [k, v] of a) {
+    if (k < prev || (v.kind !== 'string' && v.kind !== 'bool')) {
+      return JSON.stringify(encodeAttributes(sortedAttributes(a)));
+    }
+    if (out.length > 1) out += ',';
+    out += `[${JSON.stringify(k)},${JSON.stringify(v.value)}]`;
+    prev = k;
+  }
+  return `${out}]`;
+}
+
+/**
+ * A series' identity, which is also all a series costs in memory (one string per series, the map key):
+ * `resource|scope|bounds|attributes JSON`, decoded by `seriesFromKey`. Bounds JSON holds no "|".
+ */
 const seriesKey = (
   resource: number,
   scope: number,
   attributes: Attributes,
   bounds: number[] | null,
 ): string =>
-  `${resource}|${scope}|${canonicalAttributesKey(attributes)}|${bounds === null ? '-' : JSON.stringify(bounds)}`;
+  `${resource}|${scope}|${bounds === null ? '-' : JSON.stringify(bounds)}|${canonicalAttributesJson(attributes)}`;
+
+function seriesFromKey(id: number, key: string): SeriesDef {
+  const a = key.indexOf('|');
+  const b = key.indexOf('|', a + 1);
+  const c = key.indexOf('|', b + 1);
+  const bounds = key.slice(b + 1, c);
+  return {
+    id,
+    resource: Number(key.slice(0, a)),
+    scope: Number(key.slice(a + 1, b)),
+    attributes: decodeAttributes(JSON.parse(key.slice(c + 1)) as JsonAny, `series[${id}].attributes`),
+    bounds: bounds === '-' ? null : (JSON.parse(bounds) as number[]),
+    other: false,
+  };
+}
+
+const otherSeries = (id: number): SeriesDef => ({
+  id,
+  resource: -1,
+  scope: -1,
+  attributes: new Map(),
+  bounds: null,
+  other: true,
+});
 
 function insertSorted<T extends string | number>(arr: T[], x: T): void {
   if (arr.includes(x)) return;
@@ -283,12 +337,15 @@ function boundsOf(p: MetricPointRecord): number[] | null {
 
 interface Slot {
   readonly entry: MetricEntry;
-  readonly series: SeriesDef[];
-  readonly byKey: Map<string, SeriesDef>;
+  /** Series keys by id (`seriesKey`); the `other` series has none. */
+  readonly series: (string | null)[];
+  readonly byKey: Map<string, number>;
   readonly scopeNames: Set<string>;
   readonly keys: Set<string>;
   readonly resourceIds: Set<number>;
-  other: SeriesDef | null;
+  other: number | null;
+  /** False after `from` until `restoreSeries` brings back the series definitions. */
+  restored: boolean;
 }
 
 function sparkValue(a: BucketAgg): number {
@@ -368,14 +425,12 @@ export class MetricCatalog {
     return entry;
   }
 
-  /** Interns the series of `p`; beyond the cap, new series fold into the metric's single `other` series. */
-  seriesOf(
-    def: MetricDef,
-    p: MetricPointRecord,
-    resource: ResourceRecord,
-    scope: ScopeRecord,
-  ): { series: SeriesDef; isNew: boolean } {
-    const slot = this.#slot(def.id);
+  /**
+   * Interns the series of `p`; beyond the cap, new series fold into the metric's single `other` series. A folded
+   * point also gets `foldKey`, its own series identity, so cumulative streams of folded series stay apart.
+   */
+  seriesOf(def: MetricDef, p: MetricPointRecord, resource: ResourceRecord, scope: ScopeRecord): SeriesRef {
+    const slot = this.#restoredSlot(def.id);
     const r = this.#resourceRef(resource);
     const s = this.#scopeRef(scope);
     const bounds = boundsOf(p);
@@ -383,36 +438,20 @@ export class MetricCatalog {
     const known = slot.byKey.get(key);
     if (known !== undefined) {
       this.#noteSeries(slot, r, scope.name, p.attributes);
-      return { series: known, isNew: false };
+      return { id: known, other: false, isNew: false, foldKey: null };
     }
     const real = slot.series.length - (slot.other === null ? 0 : 1);
     if (real >= this.#seriesCap) {
       slot.entry.folded++;
-      if (slot.other !== null) return { series: slot.other, isNew: false };
-      const other: SeriesDef = {
-        id: slot.series.length,
-        resource: -1,
-        scope: -1,
-        attributes: new Map(),
-        bounds: null,
-        other: true,
-      };
-      this.#push(slot, other);
-      slot.other = other;
-      return { series: other, isNew: true };
+      if (slot.other !== null) return { id: slot.other, other: true, isNew: false, foldKey: key };
+      const id = this.#push(slot, null);
+      slot.other = id;
+      return { id, other: true, isNew: true, foldKey: key };
     }
-    const series: SeriesDef = {
-      id: slot.series.length,
-      resource: r,
-      scope: s,
-      attributes: p.attributes,
-      bounds,
-      other: false,
-    };
-    this.#push(slot, series);
-    slot.byKey.set(key, series);
+    const id = this.#push(slot, key);
+    slot.byKey.set(key, id);
     this.#noteSeries(slot, r, scope.name, p.attributes);
-    return { series, isNew: true };
+    return { id, other: false, isNew: true, foldKey: null };
   }
 
   /** Counts one point: every point counts, resets and skips are tallied, and a value feeds the sparkline. */
@@ -438,8 +477,11 @@ export class MetricCatalog {
   scopes(): readonly ScopeRecord[] {
     return this.#scopes.entries();
   }
+  /** The metric's series definitions, decoded from their keys (for writing `series.js`). */
   seriesDefs(defId: number): readonly SeriesDef[] {
-    return this.#slot(defId).series;
+    return this.#restoredSlot(defId).series.map((key, id) =>
+      key === null ? otherSeries(id) : seriesFromKey(id, key),
+    );
   }
   /** Metrics whose series list changed since the last `clearDirty`. */
   dirtyMetrics(): number[] {
@@ -467,6 +509,12 @@ export class MetricCatalog {
     return s;
   }
 
+  #restoredSlot(id: number): Slot {
+    const slot = this.#slot(id);
+    if (!slot.restored) throw new Error(`invariant violated: series of metric ${id} not restored`);
+    return slot;
+  }
+
   #slot(id: number): Slot {
     const s = this.#slots[id];
     if (s === undefined) throw new RangeError(`unknown metric id ${id}`);
@@ -482,6 +530,7 @@ export class MetricCatalog {
       keys: new Set(),
       resourceIds: new Set(),
       other: null,
+      restored: true,
     };
     this.#slots.push(slot);
     this.#defIds.set(defKey(entry), entry.id);
@@ -491,10 +540,11 @@ export class MetricCatalog {
     return slot;
   }
 
-  #push(slot: Slot, series: SeriesDef): void {
-    slot.series.push(series);
+  #push(slot: Slot, key: string | null): number {
+    slot.series.push(key);
     slot.entry.series = slot.series.length;
     this.#dirty.add(slot.entry.id);
+    return slot.series.length - 1;
   }
 
   #noteSeries(slot: Slot, resource: number, scopeName: string, attributes: Attributes): void {
@@ -519,6 +569,45 @@ export class MetricCatalog {
     for (const s of same) s.entry.conflicting = same.length > 1;
   }
 
+  /**
+   * Restores a metric's series definitions from its `series.js` after `from`. The file may hold more series
+   * than the checkpoint knew (written by a flush that never committed): series ids only grow, so the first
+   * `series` of them are the committed ones, the rest are dropped and the metric is marked dirty so the file
+   * is rewritten.
+   */
+  restoreSeries(defId: number, defs: readonly SeriesDef[], path: string): void {
+    const slot = this.#slot(defId);
+    if (slot.restored) throw invalid(path, `series of metric ${defId} restored once`, 'a second restore');
+    const n = slot.entry.series;
+    if (defs.length < n) throw invalid(`${path}.series`, `at least ${n} series`, defs.length);
+    const resources = this.#resources.entries().length;
+    const scopes = this.#scopes.entries().length;
+    for (const [j, x] of defs.slice(0, n).entries()) {
+      const sp = `${path}.series[${j}]`;
+      if (x.id !== j) throw invalid(`${sp}.id`, `${j}`, x.id);
+      if (x.other) {
+        if (slot.other !== null) throw invalid(`${sp}.other`, 'at most one other series', true);
+        if (x.resource !== -1) throw invalid(`${sp}.resource`, '-1 for an other series', x.resource);
+        if (x.scope !== -1) throw invalid(`${sp}.scope`, '-1 for an other series', x.scope);
+        slot.other = j;
+        slot.series.push(null);
+      } else {
+        if (x.resource < 0 || x.resource >= resources) {
+          throw invalid(`${sp}.resource`, `a resource id in [0, ${resources})`, x.resource);
+        }
+        if (x.scope < 0 || x.scope >= scopes) {
+          throw invalid(`${sp}.scope`, `a scope id in [0, ${scopes})`, x.scope);
+        }
+        const key = seriesKey(x.resource, x.scope, x.attributes, x.bounds);
+        if (slot.byKey.has(key)) throw invalid(sp, 'a series distinct from the earlier ones', x.id);
+        slot.byKey.set(key, j);
+        slot.series.push(key);
+      }
+    }
+    slot.restored = true;
+    if (defs.length > n) this.#dirty.add(defId);
+  }
+
   toJSON(): SerializedMetricCatalog {
     return {
       resources: this.#resources.entries().map((r) => ({
@@ -533,7 +622,7 @@ export class MetricCatalog {
         droppedAttributesCount: s.droppedAttributesCount,
         schemaUrl: s.schemaUrl,
       })),
-      metrics: this.#slots.map(({ entry: e, series }) => ({
+      metrics: this.#slots.map(({ entry: e }) => ({
         id: e.id,
         name: e.name,
         description: e.description,
@@ -550,19 +639,16 @@ export class MetricCatalog {
         noValue: e.noValue,
         points: e.points,
         spark: e.spark.toJSON(),
-        series: series.map((x) => ({
-          id: x.id,
-          resource: x.resource,
-          scope: x.scope,
-          attributes: encodeAttributes(x.attributes),
-          bounds: x.bounds === null ? null : [...x.bounds],
-          other: x.other,
-        })),
+        series: e.series,
       })),
     };
   }
 
-  /** Rebuild from `toJSON` output, failing fast with an `invalid-report` error naming the field. */
+  /**
+   * Rebuild from `toJSON` output, failing fast with an `invalid-report` error naming the field. Series
+   * definitions are not part of it: `restoreSeries` must be called for every metric with series before it
+   * interns more.
+   */
   static from(input: unknown, opts: { seriesCap: number }, root = 'metricCatalog'): MetricCatalog {
     const s = parseWith(CatalogSchema, input, root);
     const c = new MetricCatalog(opts);
@@ -607,7 +693,7 @@ export class MetricCatalog {
       scopes: [...m.scopes],
       attributeKeys: [...m.attributeKeys],
       resources: [...m.resources],
-      series: m.series.length,
+      series: m.series,
       folded: m.folded,
       resets: m.resets,
       outOfOrder: m.outOfOrder,
@@ -622,36 +708,6 @@ export class MetricCatalog {
     for (const x of m.scopes) slot.scopeNames.add(x);
     for (const x of m.attributeKeys) slot.keys.add(x);
     for (const x of m.resources) slot.resourceIds.add(x);
-    m.series.forEach((x, j) => {
-      const sp = `${path}.series[${j}]`;
-      if (x.id !== j) throw invalid(`${sp}.id`, `${j}`, x.id);
-      if (x.other) {
-        if (slot.other !== null) throw invalid(`${sp}.other`, 'at most one other series', true);
-        if (x.resource !== -1) throw invalid(`${sp}.resource`, '-1 for an other series', x.resource);
-        if (x.scope !== -1) throw invalid(`${sp}.scope`, '-1 for an other series', x.scope);
-      } else {
-        if (x.resource < 0 || x.resource >= this.#resources.entries().length) {
-          throw invalid(
-            `${sp}.resource`,
-            `a resource id in [0, ${this.#resources.entries().length})`,
-            x.resource,
-          );
-        }
-        if (x.scope < 0 || x.scope >= this.#scopes.entries().length) {
-          throw invalid(`${sp}.scope`, `a scope id in [0, ${this.#scopes.entries().length})`, x.scope);
-        }
-      }
-      const series: SeriesDef = {
-        id: x.id,
-        resource: x.resource,
-        scope: x.scope,
-        attributes: decodeAttributes(x.attributes, `${sp}.attributes`),
-        bounds: x.bounds,
-        other: x.other,
-      };
-      slot.series.push(series);
-      if (x.other) slot.other = series;
-      else slot.byKey.set(seriesKey(x.resource, x.scope, series.attributes, x.bounds), series);
-    });
+    slot.restored = m.series === 0;
   }
 }

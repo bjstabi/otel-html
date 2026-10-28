@@ -75,10 +75,14 @@ function withPathPrefix(e: OtelHtmlError, prefix: string): OtelHtmlError {
   });
 }
 
-function bad(path: string, expected: string, actual: unknown): OtelHtmlError {
+/** A field path, or a function building it: the encode passes build paths only for errors. */
+type Path = string | (() => string);
+const pathText = (p: Path): string => (typeof p === 'string' ? p : p());
+
+function bad(path: Path, expected: string, actual: unknown): OtelHtmlError {
   const shown = actual === undefined ? 'nothing (missing)' : (JSON.stringify(actual) ?? String(actual));
   return new OtelHtmlError('invalid-report', {
-    path,
+    path: pathText(path),
     expected,
     actual: shown.length > 80 ? `${shown.slice(0, 77)}...` : shown,
   });
@@ -144,7 +148,13 @@ type Intern = (s: string) => number;
 // Plain JSON stays as is. Anything JSON cannot carry exactly is tagged: bigint -> {"$i"}, Uint8Array ->
 // {"$b"}, Map -> {"$m": [[k, v], ...]}, non-finite/-0 numbers -> {"$d": "<text>"}.
 
-function encodeJson(v: unknown, path: string): JsonValue {
+/** A value whose encoding cannot fail: its child path is never read, so none is built for it. */
+function isScalar(x: unknown): boolean {
+  const t = typeof x;
+  return t === 'string' || t === 'number' || t === 'boolean' || t === 'bigint';
+}
+
+function encodeJson(v: unknown, path: Path): JsonValue {
   switch (typeof v) {
     case 'string':
     case 'boolean':
@@ -159,17 +169,18 @@ function encodeJson(v: unknown, path: string): JsonValue {
       if (v instanceof Map) {
         const out: JsonValue[] = [];
         for (const [k, x] of v) {
-          if (typeof k !== 'string') throw bad(`${path}.<map key>`, 'a string key', k);
-          out.push([k, encodeJson(x, `${path}[${JSON.stringify(k)}]`)]);
+          if (typeof k !== 'string') throw bad(() => `${pathText(path)}.<map key>`, 'a string key', k);
+          out.push([k, encodeJson(x, isScalar(x) ? path : () => `${pathText(path)}[${JSON.stringify(k)}]`)]);
         }
         return { $m: out };
       }
-      if (Array.isArray(v)) return v.map((x, i) => encodeJson(x, `${path}[${i}]`));
+      if (Array.isArray(v))
+        return v.map((x, i) => encodeJson(x, isScalar(x) ? path : () => `${pathText(path)}[${i}]`));
       const out: { [k: string]: JsonValue } = {};
       for (const [k, x] of Object.entries(v)) {
         if (k.startsWith('$'))
-          throw bad(`${path}.${k}`, 'a key not starting with "$" (reserved for tags)', k);
-        if (x !== undefined) out[k] = encodeJson(x, `${path}.${k}`);
+          throw bad(() => `${pathText(path)}.${k}`, 'a key not starting with "$" (reserved for tags)', k);
+        if (x !== undefined) out[k] = encodeJson(x, isScalar(x) ? path : () => `${pathText(path)}.${k}`);
       }
       return out;
     }
@@ -212,7 +223,7 @@ function decodeJson(v: unknown, path: string): unknown {
 // string -> dict index (a bare number); bool -> bool; empty -> null; int -> [0, n] (or {"$i"} beyond
 // 2^53); double -> [1, x]; array -> [2, [...]]; kvlist -> [3, [k, v, k, v, ...]]; bytes -> {"$b"}.
 
-function encodeAny(v: AnyValue, d: Intern, path: string): JsonValue {
+function encodeAny(v: AnyValue, d: Intern, path: Path): JsonValue {
   switch (v.kind) {
     case 'string':
       return d(v.value);
@@ -229,17 +240,22 @@ function encodeAny(v: AnyValue, d: Intern, path: string): JsonValue {
     case 'bytes':
       return { $b: bytesToBase64(v.value) };
     case 'array':
-      return [2, v.values.map((x, i) => encodeAny(x, d, `${path}[${i}]`))];
+      return [2, v.values.map((x, i) => encodeAny(x, d, () => `${pathText(path)}[${i}]`))];
     case 'kvlist':
       return [3, encodeAttrs(v.values, d, path)];
     default:
-      return assertNever(v, path);
+      return assertNever(v, pathText(path));
   }
 }
 
-function encodeAttrs(a: Attributes, d: Intern, path: string): JsonValue[] {
+function encodeAttrs(a: Attributes, d: Intern, path: Path): JsonValue[] {
   const out: JsonValue[] = [];
-  for (const [k, v] of a) out.push(d(k), encodeAny(v, d, `${path}[${JSON.stringify(k)}]`));
+  for (const [k, v] of a) {
+    // nested values only: strings, bools and numbers need no path
+    const at =
+      v.kind === 'array' || v.kind === 'kvlist' ? () => `${pathText(path)}[${JSON.stringify(k)}]` : path;
+    out.push(d(k), encodeAny(v, d, at));
+  }
   return out;
 }
 
@@ -370,12 +386,12 @@ function cellOf(row: unknown, name: string): unknown {
   return (row as Record<string, unknown>)[name];
 }
 
-function safeInt(v: unknown, path: string): number {
+function safeInt(v: unknown, path: Path): number {
   if (typeof v !== 'number' || !Number.isSafeInteger(v)) throw bad(path, 'a safe integer', v);
   return v;
 }
 
-function hexId(v: unknown, re: RegExp, what: string, path: string): string {
+function hexId(v: unknown, re: RegExp, what: string, path: Path): string {
   if (typeof v !== 'string' || !re.test(v)) throw bad(path, what, v);
   return v;
 }
@@ -393,10 +409,12 @@ function encodePass<R>(
   let base = Number.POSITIVE_INFINITY;
   for (const col of spec.columns) {
     if (!isRelKind(col.kind)) continue;
-    for (const [i, row] of rows.entries()) {
-      const v = cellOf(row, col.name);
+    for (let i = 0; i < rows.length; i++) {
+      const v = cellOf(rows[i], col.name);
       if (v === null && col.kind === 'nullableRelnanos') continue;
-      base = Math.min(base, safeInt(v, `rows[${i}].${col.name}`));
+      if (typeof v !== 'number' || !Number.isSafeInteger(v))
+        throw bad(`rows[${i}].${col.name}`, 'a safe integer', v);
+      if (v < base) base = v;
     }
   }
   if (!Number.isFinite(base)) base = 0;
@@ -407,9 +425,11 @@ function encodePass<R>(
   for (const col of spec.columns) {
     const out: unknown[] = [];
     let prev = base;
-    for (const [i, row] of rows.entries()) {
-      const path = `rows[${i}].${col.name}`;
-      const v = cellOf(row, col.name);
+    let i = 0;
+    // one path builder per column, read only when a cell is rejected (immediately, while `i` is that cell's)
+    const path = (): string => `rows[${i}].${col.name}`;
+    for (; i < rows.length; i++) {
+      const v = cellOf(rows[i], col.name);
       switch (col.kind) {
         case 'traceId':
           out.push(d(hexId(v, TRACE_ID_RE, '32 lowercase hex chars', path)));
@@ -475,7 +495,7 @@ function encodePass<R>(
           break;
         }
         default:
-          return assertNever(col.kind, path);
+          return assertNever(col.kind, path());
       }
     }
     cols[col.name] = out;

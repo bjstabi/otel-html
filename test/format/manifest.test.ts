@@ -156,7 +156,10 @@ describe('session state', () => {
   test('valid state parses', () => {
     expect(SessionStateSchema.parse(state)).toEqual(state);
     const { metricStreams: _, nextSegment: __, ...old } = state;
-    expect(parseSessionState(old)).toMatchObject({ metricStreams: { streams: [] }, nextSegment: {} });
+    expect(parseSessionState(old)).toMatchObject({
+      metricStreams: { keys: [], times: [], lasts: [], seriesKeys: [], seriesTimes: [] },
+      nextSegment: {},
+    });
     expect(failure(() => parseSessionState({ ...state, nextSegment: { x: 1 } })).code).toBe('invalid-report');
     expect(parseSessionState({ ...state, epochUnixNano: '5' }).epochUnixNano).toBe('5');
   });

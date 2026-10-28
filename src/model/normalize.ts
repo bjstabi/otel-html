@@ -65,7 +65,11 @@ export function createNormalizeContext(epoch: UnixNanos): NormalizeContext {
   };
 }
 
-function convertAnyValue(v: ProtoAnyValue, path: string): AnyValue {
+/** A field path, or a function building it only for an error (per-point paths are costly at volume). */
+type Path = string | (() => string);
+const pathText = (p: Path): string => (typeof p === 'string' ? p : p());
+
+function convertAnyValue(v: ProtoAnyValue, path: Path): AnyValue {
   const inner = v.value;
   switch (inner.case) {
     case 'stringValue':
@@ -79,26 +83,32 @@ function convertAnyValue(v: ProtoAnyValue, path: string): AnyValue {
     case 'bytesValue':
       return { kind: 'bytes', value: inner.value };
     case 'arrayValue':
-      return { kind: 'array', values: inner.value.values.map((x, i) => convertAnyValue(x, `${path}[${i}]`)) };
+      return {
+        kind: 'array',
+        values: inner.value.values.map((x, i) => convertAnyValue(x, () => `${pathText(path)}[${i}]`)),
+      };
     case 'kvlistValue':
       return { kind: 'kvlist', values: convertAttributes(inner.value.values, path) };
     case undefined:
       return { kind: 'empty' };
     case 'stringValueStrindex':
       throw new OtelHtmlError('invalid-otlp', {
-        path,
+        path: pathText(path),
         expected: 'an inline AnyValue',
         actual: 'string table index (profiles-only encoding)',
       });
   }
 }
 
-function convertAttributes(kvs: readonly KeyValue[], path: string): Attributes {
+function convertAttributes(kvs: readonly KeyValue[], path: Path): Attributes {
   const out = new Map<string, AnyValue>();
-  for (const [i, kv] of kvs.entries()) {
+  for (let i = 0; i < kvs.length; i++) {
+    const kv = kvs[i] as KeyValue;
     out.set(
       kv.key,
-      kv.value === undefined ? { kind: 'empty' } : convertAnyValue(kv.value, `${path}[${i}].value`),
+      kv.value === undefined
+        ? { kind: 'empty' }
+        : convertAnyValue(kv.value, () => `${pathText(path)}[${i}].value`),
     );
   }
   return out;
@@ -116,12 +126,17 @@ function spanIdOrNull(b: Uint8Array, path: string): SpanId | null {
   return isAbsentId(b) ? null : spanIdFromBytes(b, path);
 }
 
-function rel(t: bigint, ctx: NormalizeContext, path: string): RelNanos {
-  return toRelNanos(parseUnixNanos(t, path), ctx.epoch, path);
+const MAX_REL = BigInt(Number.MAX_SAFE_INTEGER);
+
+function rel(t: bigint, ctx: NormalizeContext, path: Path): RelNanos {
+  const d = t - ctx.epoch;
+  if (t >= 0n && d <= MAX_REL && d >= -MAX_REL) return Number(d) as RelNanos;
+  const at = pathText(path);
+  return toRelNanos(parseUnixNanos(t, at), ctx.epoch, at);
 }
 
 /** Zero means "unset" for optional timestamps. */
-function relOrNull(t: bigint, ctx: NormalizeContext, path: string): RelNanos | null {
+function relOrNull(t: bigint, ctx: NormalizeContext, path: Path): RelNanos | null {
   return t === 0n ? null : rel(t, ctx, path);
 }
 
@@ -375,7 +390,7 @@ export function normalizeMetrics(
         const shape = metricShape(m);
         if (shape === null) continue;
         for (const [di, dp] of shape.points.entries()) {
-          const p = `${source}: ${sp}.metrics[${mi}].${m.data.case}.dataPoints[${di}]`;
+          const p = (): string => `${source}: ${sp}.metrics[${mi}].${m.data.case}.dataPoints[${di}]`;
           out.push({
             name: m.name,
             description: m.description,
@@ -383,9 +398,9 @@ export function normalizeMetrics(
             type: shape.type,
             temporality: shape.temporality,
             monotonic: shape.monotonic,
-            start: relOrNull(dp.startTimeUnixNano, ctx, `${p}.startTimeUnixNano`),
-            time: rel(dp.timeUnixNano, ctx, `${p}.timeUnixNano`),
-            attributes: convertAttributes(dp.attributes, `${p}.attributes`),
+            start: relOrNull(dp.startTimeUnixNano, ctx, () => `${p()}.startTimeUnixNano`),
+            time: rel(dp.timeUnixNano, ctx, () => `${p()}.timeUnixNano`),
+            attributes: convertAttributes(dp.attributes, () => `${p()}.attributes`),
             flags: dp.flags,
             point: pointJson(shape.schema, dp),
             resource,
@@ -447,10 +462,11 @@ function hexIdOrNull<T>(v: unknown, parse: (hex: string, path: string) => T, pat
  * The exemplars of a point (`point.exemplars`, OTLP JSON with hex ids). An exemplar without a finite value is
  * left out; one without a time takes the point's. Times are relative to `epoch`.
  */
-export function pointExemplars(p: MetricPointRecord, epoch: UnixNanos, path: string): PointExemplar[] {
+export function pointExemplars(p: MetricPointRecord, epoch: UnixNanos, at: Path): PointExemplar[] {
   const raw: unknown =
     typeof p.point === 'object' && p.point !== null ? Reflect.get(p.point, 'exemplars') : undefined;
   if (raw === undefined) return [];
+  const path = pathText(at);
   if (!Array.isArray(raw)) {
     throw new OtelHtmlError('invalid-otlp', { path, expected: 'a list of exemplars', actual: typeof raw });
   }

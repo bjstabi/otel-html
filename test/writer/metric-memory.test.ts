@@ -1,110 +1,75 @@
+import { execFile } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, describe, expect, test } from 'vitest';
-import type { AnyValue } from '../../src/model/anyvalue.js';
-import { parseUnixNanos, type RelNanos } from '../../src/model/ids.js';
-import type {
-  MetricPointRecord,
-  ResourceRecord,
-  ResourceRef,
-  ScopeRecord,
-  ScopeRef,
-} from '../../src/model/records.js';
-import { createNodeFileSystem } from '../../src/writer/node-fs.js';
-import type { FileSystem } from '../../src/writer/ports.js';
-import { openSession } from '../../src/writer/session.js';
-import { createTestWriter, EPOCH_NS, testConfig } from '../../test-support/writer-deps.js';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { promisify } from 'node:util';
+import { describe, expect, test } from 'vitest';
 
+/** Spec §7: writer peak RSS. */
+const MAX_RSS_BYTES = 512 * 1024 * 1024;
 const METRICS = 200;
 const SERIES = 1_000;
 const POINTS = 360;
 const FLUSH_EVERY = 36;
-const INTERVAL_NS = 10_000_000_000;
-const MB = 1024 * 1024;
 const LOAD_ENV = 'OTEL_HTML_LOAD';
+const run = promisify(execFile);
 
-const str = (value: string): AnyValue => ({ kind: 'string', value });
-
-/** Node file system that drops chunk bytes: chunk memory is bounded by `chunkTargetBytes` and not under test. */
-function withoutChunks(fs: FileSystem): FileSystem {
-  return {
-    ...fs,
-    writeBytes: (p, bytes) => (p.includes('/data/chunks/') ? Promise.resolve() : fs.writeBytes(p, bytes)),
-  };
-}
-
-const dirs: string[] = [];
-afterAll(async () => {
-  for (const d of dirs) await rm(d, { recursive: true, force: true });
-});
-
-// @slow: runs only with OTEL_HTML_LOAD=1 (`mise run test:load`), like the 1M-log RSS test in log-size.test.ts.
+// The real pipeline: the built library converts 200 metrics × 1,000 series × 360 points (half cumulative counters,
+// half gauges, 10 s apart) fed as OTLP JSON one metric at a time, flushing every 36 points, in a child process whose
+// own high-water resident set size (process.resourceUsage().maxRSS, kilobytes) is the figure, as log-size.test.ts.
+// @slow: runs only with OTEL_HTML_LOAD=1 (`mise run test:load`, which builds first).
 describe('metric series memory', () => {
   test.skipIf(process.env[LOAD_ENV] !== '1')(
-    '200 metrics × 1,000 series × 360 points keep RSS growth under 512 MB',
+    `${METRICS} metrics × ${SERIES} series × ${POINTS} points keep peak RSS under 512 MB`,
+    { timeout: 60 * 60 * 1000 },
     async () => {
-      const out = await mkdtemp(join(tmpdir(), 'otel-html-metric-memory-'));
-      dirs.push(out);
-      const w = createTestWriter();
-      const deps = { ...w.deps, fs: withoutChunks(createNodeFileSystem()) };
-      const session = await openSession(deps, { out, config: testConfig(), mode: 'create' });
-      const epoch = parseUnixNanos(EPOCH_NS, 'epoch');
-      const resources: ResourceRecord[] = [
-        { attributes: new Map([['service.name', str('load')]]), droppedAttributesCount: 0, schemaUrl: '' },
-      ];
-      const scopes: ScopeRecord[] = [
-        { name: 'load', version: '1', attributes: new Map(), droppedAttributesCount: 0, schemaUrl: '' },
-      ];
-      const attributes = Array.from(
-        { length: SERIES },
-        (_, j) =>
-          new Map<string, AnyValue>([
-            ['host', str(`host-${j % 50}`)],
-            ['route', str(`/api/v1/route-${j}`)],
-          ]),
-      );
-      globalThis.gc?.();
-      const baseline = process.memoryUsage().rss;
-      let peak = baseline;
-      const sample = (): void => {
-        peak = Math.max(peak, process.memoryUsage().rss);
-      };
-      for (let i = 0; i < POINTS; i++) {
-        const time = (i * INTERVAL_NS) as RelNanos;
-        for (let m = 0; m < METRICS; m++) {
-          const gauge = m % 2 === 1;
-          const rows: MetricPointRecord[] = attributes.map((attrs, j) => ({
-            name: `load.metric.${m}`,
-            description: '',
-            unit: gauge ? 'By' : '1',
-            type: gauge ? 'gauge' : 'sum',
-            temporality: gauge ? 'unspecified' : 'cumulative',
-            monotonic: !gauge,
-            start: gauge ? null : (0 as RelNanos),
-            time,
-            attributes: attrs,
-            flags: 0,
-            point: { asInt: String(gauge ? (i * 7 + j) % 1000 : i * (j + 1)) },
-            resource: 0 as ResourceRef,
-            scope: 0 as ScopeRef,
-          }));
-          await session.addRecords({ signal: 'metrics', rows, resources, scopes, epoch });
-        }
-        sample();
-        if ((i + 1) % FLUSH_EVERY === 0) {
-          sample();
-          await session.flush();
-          sample();
-        }
+      const dir = await mkdtemp(join(tmpdir(), 'oh-metric-load-'));
+      try {
+        const lib = pathToFileURL(fileURLToPath(new URL('../../dist/index.js', import.meta.url))).href;
+        const script = `import { Report } from ${JSON.stringify(lib)};
+const report = await Report.create({
+  out: ${JSON.stringify(join(dir, 'report'))},
+  config: { writer: { flushIntervalMs: 86400000 } },
+});
+const epoch = 1700000000000000000n;
+const attributes = Array.from({ length: ${SERIES} }, (_, j) => [
+  { key: 'host', value: { stringValue: 'host-' + (j % 50) } },
+  { key: 'route', value: { stringValue: '/api/v1/route-' + j } },
+]);
+const resource = { attributes: [{ key: 'service.name', value: { stringValue: 'load' } }] };
+const scope = { name: 'load', version: '1' };
+for (let i = 0; i < ${POINTS}; i++) {
+  const time = String(epoch + BigInt(i) * 10000000000n);
+  for (let m = 0; m < ${METRICS}; m++) {
+    const gauge = m % 2 === 1;
+    const dataPoints = attributes.map((attrs, j) =>
+      gauge
+        ? { attributes: attrs, timeUnixNano: time, asInt: String((i * 7 + j) % 1000) }
+        : { attributes: attrs, startTimeUnixNano: String(epoch), timeUnixNano: time, asInt: String(i * (j + 1)) },
+    );
+    const metric = gauge
+      ? { name: 'load.metric.' + m, unit: 'By', gauge: { dataPoints } }
+      : { name: 'load.metric.' + m, unit: '1', sum: { aggregationTemporality: 2, isMonotonic: true, dataPoints } };
+    await report.addMetrics({ resourceMetrics: [{ resource, scopeMetrics: [{ scope, metrics: [metric] }] }] });
+  }
+  if ((i + 1) % ${FLUSH_EVERY} === 0) await report.flush();
+}
+await report.close();
+process.stdout.write(String(process.resourceUsage().maxRSS));`;
+        const started = Date.now();
+        const { stdout } = await run(process.execPath, ['--input-type=module', '-e', script], {
+          maxBuffer: 1024 * 1024,
+        });
+        const peakBytes = Number(stdout.trim()) * 1024;
+        process.stdout.write(
+          `METRIC RSS peak ${(peakBytes / 1048576).toFixed(0)} MB in ${((Date.now() - started) / 1000).toFixed(0)} s\n`,
+        );
+        expect(peakBytes).toBeGreaterThan(0);
+        expect(peakBytes).toBeLessThan(MAX_RSS_BYTES);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
       }
-      sample();
-      await session.close();
-      sample();
-      const growthMb = (peak - baseline) / MB;
-      process.stdout.write(`metric-memory: peak RSS growth ${growthMb.toFixed(0)} MB\n`);
-      expect(growthMb).toBeLessThan(512);
     },
-    60 * 60 * 1000,
   );
 });

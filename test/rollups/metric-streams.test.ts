@@ -250,10 +250,27 @@ describe('StreamNormalizer', () => {
   it('prepare parses without touching streams; its step applies the point', () => {
     const s = new StreamNormalizer();
     const steps = [sum(5, 1), sum(8, 2)].map((p) => s.prepare(p));
-    expect(s.toJSON()).toEqual({ streams: [] });
+    expect(s.toJSON()).toEqual({ keys: [], times: [], lasts: [], seriesKeys: [], seriesTimes: [] });
     expect(() => s.prepare(pt({ type: 'gauge', point: { asDouble: 'abc' } }))).toThrow(OtelHtmlError);
     expect(steps.map((step) => deltaOf(step('0/0')).delta)).toEqual([5, 3]);
     // string keys tell apart equal series ids of different metrics
     expect(deltaOf(s.normalize('1/0', sum(2, 3))).delta).toBe(2);
+  });
+
+  it("counts a new start after the series' latest point as a restart, a concurrent one as another producer", () => {
+    const s = new StreamNormalizer();
+    const at = (v: number, time: number, start: number) =>
+      deltaOf(s.normalize('m/0', sum(v, time, { start: rel(start) })));
+    expect(at(10, 10, 1)).toEqual({ delta: 10, resets: 0, reset: false });
+    // a second producer, started before the first one's latest point
+    expect(at(100, 15, 5)).toEqual({ delta: 100, resets: 0, reset: false });
+    expect(at(20, 20, 1)).toEqual({ delta: 10, resets: 0, reset: false });
+    expect(at(150, 25, 5)).toEqual({ delta: 50, resets: 0, reset: false });
+    // the first producer restarts: its new start is after everything seen
+    expect(at(3, 40, 30)).toEqual({ delta: 3, resets: 1, reset: true });
+    expect(at(7, 50, 30)).toEqual({ delta: 4, resets: 0, reset: false });
+    // and the state survives a checkpoint
+    const back = StreamNormalizer.from(JSON.parse(JSON.stringify(s.toJSON())), 'streams');
+    expect(deltaOf(back.normalize('m/0', sum(4, 60, { start: rel(55) })))).toMatchObject({ reset: true });
   });
 });

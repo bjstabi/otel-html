@@ -60,7 +60,7 @@ import { type BuiltChunk, ChunkBuffer, LOG_SIGNAL, METRIC_SIGNAL, SPAN_SIGNAL } 
 import { DedupeSet } from './dedupe.js';
 import { renderIndexHtml } from './html.js';
 import { acquireLock, type LockHandle } from './lock.js';
-import { MetricSeriesWriter } from './metric-series-writer.js';
+import { MetricSeriesWriter, restoreCatalogSeries } from './metric-series-writer.js';
 import type { Clock, FileSystem, Logger, ProcessInfo, Tracer } from './ports.js';
 import { type Refs, rebaseLog, rebasePoint, rebaseSpan } from './rebase.js';
 import { TraceIndex } from './trace-index.js';
@@ -265,6 +265,9 @@ export async function openSession(deps: WriterDeps, options: SessionOptions): Pr
         resumed: true,
         replacing: false,
       };
+    }
+    if (options.mode === 'append') {
+      await restoreCatalogSeries(fs, out, restored.rollups.metrics.catalog, restored.metricFiles);
     }
     for (const d of ['chunks/spans', 'chunks/logs', 'chunks/metrics', 'traces', 'rollups', 'metrics']) {
       await fs.mkdirp(at(out, `data/${d}`));
@@ -650,22 +653,28 @@ class Session implements WriterSession {
         continue;
       }
       // Parsed before anything is stored: a malformed point or exemplar rejects the whole request.
-      const where = `metric ${JSON.stringify(point.name)}.point.exemplars`;
       staged.push({
         point,
         resource,
         scope,
         normalize: this.#normalizer.prepare(point),
-        exemplars: pointExemplars(point, ctx.epoch, where),
+        exemplars: pointExemplars(
+          point,
+          ctx.epoch,
+          () => `metric ${JSON.stringify(point.name)}.point.exemplars`,
+        ),
       });
     }
     for (const { point, resource, scope, normalize, exemplars } of staged) {
       const def = catalog.defOf(point);
-      const { series } = catalog.seriesOf(def, point, resource, scope);
-      const n = normalize(`${def.id}/${series.id}`);
+      const series = catalog.seriesOf(def, point, resource, scope);
+      // A folded series keeps its own cumulative stream; its deltas go into `other`.
+      const n = normalize(
+        series.foldKey === null ? `${def.id}/${series.id}` : `${def.id}/~${series.foldKey}`,
+      );
       catalog.note(def.id, n, point.time);
       if (n.kind === 'ok') {
-        const stored = exemplars.map((e) => ({ ...e, series: series.id }));
+        const stored = exemplars.length === 0 ? [] : exemplars.map((e) => ({ ...e, series: series.id }));
         this.#series.add(def, series, point.time, n.agg, stored);
       }
       this.#rollups.metrics.buckets.add(point.time, 'points');
@@ -688,7 +697,7 @@ class Session implements WriterSession {
     if (!this.#series.full() || (this.#partial && this.#replacing)) return;
     try {
       await this.#wipeReplaced();
-      await this.#series.flush(this.#rollups.metrics.catalog);
+      await this.#series.spill(this.#rollups.metrics.catalog);
     } catch (e) {
       this.#deps.logger.error('metric segment write failed; will retry at the next flush', {
         error: e instanceof Error ? e.message : String(e),

@@ -1,6 +1,7 @@
 import { resolve } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { unwrapDataFile, wrapDataFile } from '../../src/format/data-file.js';
+import { parseExemplarFile, parseSeriesFile } from '../../src/format/metric-files.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { parseUnixNanos, toUnixNanos } from '../../src/model/ids.js';
 import { mergeReports } from '../../src/writer/merge.js';
@@ -27,8 +28,10 @@ import {
   levelsOf,
   logRollupsOf,
   manifestOf,
+  readDataFile,
   spansRequest,
   traceIdOf,
+  withExemplars,
 } from './helpers.js';
 
 async function failure(p: Promise<unknown>): Promise<OtelHtmlError> {
@@ -134,22 +137,37 @@ describe('mergeReports', () => {
   test('metric level files equal converting both inputs at once', async () => {
     const w = createTestWriter();
     const host = (h: string): JsonObject[] => [{ key: 'host', value: { stringValue: h } }];
-    const first = counterRequest(
-      'requests',
-      [
-        [0, 1],
-        [10, 3],
-        [2500, 9],
-      ],
-      host('a'),
+    const ex = (sec: number, v: number, n: number): JsonObject => ({
+      timeUnixNano: String(BigInt(EPOCH_NS) + BigInt(sec) * 1_000_000_000n),
+      asDouble: v,
+      traceId: traceIdOf(n),
+      filteredAttributes: [{ key: 'user', value: { stringValue: `u${n}` } }],
+    });
+    const points = (xs: [number, number][]): [number, number][] => xs;
+    const first = withExemplars(
+      counterRequest(
+        'requests',
+        points([
+          [0, 1],
+          [10, 3],
+          [2500, 9],
+        ]),
+        host('a'),
+      ),
+      1,
+      [ex(9, 0.5, 1)],
     );
-    const second = counterRequest(
-      'requests',
-      [
-        [5, 2],
-        [15, 5],
-      ],
-      host('b'),
+    const second = withExemplars(
+      counterRequest(
+        'requests',
+        points([
+          [5, 2],
+          [15, 5],
+        ]),
+        host('b'),
+      ),
+      0,
+      [ex(4, 2.5, 2)],
     );
     await writeReport(w, 'a', [first]);
     await writeReport(w, 'b', [second]);
@@ -159,6 +177,14 @@ describe('mergeReports', () => {
     expect(merged.map((l) => l.level)).toEqual([0, 1]);
     expect(merged[0]?.series.map((s) => s.id)).toEqual([0, 1]);
     expect(merged).toEqual(levelsOf(w, 'both', 0));
+    for (const file of ['data/metrics/000000/ex.js', 'data/metrics/000000/series.js']) {
+      const parse = file.endsWith('ex.js') ? parseExemplarFile : parseSeriesFile;
+      const out = parse(readDataFile(w, 'out', file), file);
+      expect(out).toEqual(parse(readDataFile(w, 'both', file), file));
+    }
+    expect(
+      parseExemplarFile(readDataFile(w, 'out', 'data/metrics/000000/ex.js'), 'ex').exemplars,
+    ).toHaveLength(2);
   });
 
   test('rejects an unsupported formatVersion precisely', async () => {

@@ -306,19 +306,34 @@ function diffExp(cur: ExpAgg, prev: ExpAgg): ExpAgg | null {
   };
 }
 
-/** What a cumulative stream remembers: the previous value (counters) or counts (histograms). */
+/**
+ * Checkpointed state, columnar (one entry per cumulative stream, then one per series): what each stream
+ * remembers is its previous value (counters) or counts (histograms); per series, the time of its latest point.
+ */
 export interface SerializedStreams {
-  streams: { key: string; time: number; last: number | BucketAgg }[];
+  keys: string[];
+  times: number[];
+  lasts: (number | BucketAgg)[];
+  seriesKeys: string[];
+  seriesTimes: number[];
 }
-const SerializedStreamsSchema: z.ZodType<SerializedStreams> = z.strictObject({
-  streams: z.array(
-    z.strictObject({
-      key: z.string(),
-      time: z.number().finite(),
-      last: z.union([z.number().finite(), BucketAggSchema]),
-    }),
-  ),
-});
+
+const SerializedStreamsSchema: z.ZodType<SerializedStreams> = z
+  .strictObject({
+    keys: z.array(z.string()),
+    times: z.array(z.number().finite()),
+    lasts: z.array(z.union([z.number().finite(), BucketAggSchema])),
+    seriesKeys: z.array(z.string()),
+    seriesTimes: z.array(z.number().finite()),
+  })
+  .refine((s) => s.times.length === s.keys.length && s.lasts.length === s.keys.length, {
+    message: 'one time and one last value per stream key',
+    path: ['keys'],
+  })
+  .refine((s) => s.seriesTimes.length === s.seriesKeys.length, {
+    message: 'one time per series key',
+    path: ['seriesKeys'],
+  });
 
 interface Stream {
   time: number;
@@ -331,6 +346,8 @@ interface Stream {
  */
 export class StreamNormalizer {
   readonly #streams = new Map<string, Stream>();
+  /** Time of each series' latest cumulative point, over all its streams: tells a restart from a second producer. */
+  readonly #latest = new Map<string, number>();
 
   /** `series` identifies the point's series across the whole report (series ids alone repeat per metric). */
   normalize(series: SeriesKey, p: MetricPointRecord): Normalized {
@@ -392,7 +409,9 @@ export class StreamNormalizer {
 
   /**
    * `diff` returns null for a reset, in which case the point's own value counts. The first point of a stream
-   * counts in full when the stream has a start time, and is only a baseline otherwise.
+   * counts in full when the stream has a start time, and is only a baseline otherwise. A new stream that starts
+   * after the series' latest point is a restart and counts as a reset; one that starts earlier is another
+   * producer sharing the series identity (or a report replayed by merge) and is not.
    */
   #cumulative<T extends number | HistAgg | ExpAgg>(
     series: SeriesKey,
@@ -405,21 +424,47 @@ export class StreamNormalizer {
     const key = `${series}:${p.start ?? 'none'}`;
     const prev = this.#streams.get(key);
     if (prev !== undefined && p.time <= prev.time) return { kind: 'skip', reason: 'out-of-order' };
-    this.#streams.set(key, { time: p.time, last: cur });
-    if (prev === undefined) return wrap(p.start === null ? zero(cur) : cur, false);
+    const owner = String(series);
+    const latest = this.#latest.get(owner);
+    if (latest === undefined || p.time > latest) this.#latest.set(owner, p.time);
+    if (prev === undefined) {
+      this.#streams.set(key, { time: p.time, last: cur });
+      if (p.start === null) return wrap(zero(cur), false);
+      return wrap(cur, latest !== undefined && p.start > latest);
+    }
     const before = recall(prev.last);
+    prev.time = p.time;
+    prev.last = cur;
     const delta = before === null ? null : diff(cur, before);
     return delta === null ? wrap(cur, true) : wrap(delta, false);
   }
 
   toJSON(): SerializedStreams {
-    return { streams: [...this.#streams].map(([key, s]) => ({ key, time: s.time, last: s.last })) };
+    const out: SerializedStreams = { keys: [], times: [], lasts: [], seriesKeys: [], seriesTimes: [] };
+    for (const [key, s] of this.#streams) {
+      out.keys.push(key);
+      out.times.push(s.time);
+      out.lasts.push(s.last);
+    }
+    for (const [key, t] of this.#latest) {
+      out.seriesKeys.push(key);
+      out.seriesTimes.push(t);
+    }
+    return out;
   }
 
   static from(input: unknown, root: string): StreamNormalizer {
     const s = parseWith(SerializedStreamsSchema, input, root);
     const n = new StreamNormalizer();
-    for (const e of s.streams) n.#streams.set(e.key, { time: e.time, last: e.last });
+    s.keys.forEach((key, i) => {
+      const time = s.times[i];
+      const last = s.lasts[i];
+      if (time !== undefined && last !== undefined) n.#streams.set(key, { time, last });
+    });
+    s.seriesKeys.forEach((key, i) => {
+      const time = s.seriesTimes[i];
+      if (time !== undefined) n.#latest.set(key, time);
+    });
     return n;
   }
 }

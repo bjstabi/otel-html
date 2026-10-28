@@ -66,7 +66,7 @@ function setup(
   const series = (name: string, host: string) => {
     const p = pt(name, host);
     const def = catalog.defOf(p);
-    return { def, series: catalog.seriesOf(def, p, resource, scope).series };
+    return { def, series: catalog.seriesOf(def, p, resource, scope) };
   };
   return { fs, catalog, writer, series };
 }
@@ -190,7 +190,7 @@ describe('MetricSeriesWriter', () => {
     const writer = new MetricSeriesWriter(fs, OUT, { exemplars: 2, maxBufferedBuckets: 3 }, new Map(), []);
     const p = pt('a', 'h');
     const def = catalog.defOf(p);
-    const { series } = catalog.seriesOf(def, p, resource, scope);
+    const series = catalog.seriesOf(def, p, resource, scope);
     writer.add(def, series, rel(0), counter(1), []);
     writer.add(def, series, rel(2 * S), counter(1), []);
     expect(writer.full()).toBe(false);
@@ -198,5 +198,59 @@ describe('MetricSeriesWriter', () => {
     expect(writer.full()).toBe(true);
     await writer.flush(catalog);
     expect(writer.full()).toBe(false);
+  });
+
+  test('spill writes the largest buffers first, down to half the budget', async () => {
+    const { fs, catalog, series } = setup();
+    const writer = new MetricSeriesWriter(fs, OUT, { exemplars: 2, maxBufferedBuckets: 6 }, new Map(), []);
+    const a = series('a', 'h');
+    const b = series('b', 'h');
+    for (let i = 0; i < 4; i++) writer.add(a.def, a.series, rel(i * 2 * S), counter(1), []);
+    for (let i = 0; i < 2; i++) writer.add(b.def, b.series, rel(i * 2 * S), counter(1), []);
+    expect(writer.full()).toBe(true);
+    await writer.spill(catalog);
+    expect(writer.full()).toBe(false);
+    const segs = writer.listed().filter((p) => p.includes('/seg-'));
+    expect(segs).toEqual(['data/metrics/000000/seg-000000.js']); // only `a`, the larger one
+    expect((await writer.flush(catalog)).filter((p) => p.includes('/seg-'))).toEqual([
+      'data/metrics/000000/seg-000000.js',
+      'data/metrics/000001/seg-000000.js',
+    ]);
+  });
+
+  test('columnar buffers merge like mergeAgg, and keep older points apart until written', async () => {
+    const { fs, catalog, writer } = setup();
+    const g = catalog.defOf({ ...pt('g', 'h'), type: 'gauge', temporality: 'unspecified', monotonic: false });
+    const gs = catalog.seriesOf(
+      g,
+      { ...pt('g', 'h'), type: 'gauge', temporality: 'unspecified', monotonic: false },
+      resource,
+      scope,
+    );
+    const num = (v: number, t: number): BucketAgg => ({
+      k: 'number',
+      count: 1,
+      sum: v,
+      min: v,
+      max: v,
+      last: v,
+      lastTime: t,
+    });
+    writer.add(g, gs, rel(0.1 * S), num(5, 1), []);
+    writer.add(g, gs, rel(0.2 * S), num(2, 2), []);
+    writer.add(g, gs, rel(3 * S), num(9, 3), []);
+    writer.add(g, gs, rel(0.3 * S), num(1, 0), []); // older than the series' latest bucket
+    await writer.flush(catalog);
+    const seg = read<SegmentFile>(fs, metricSegmentKey(0, 0), parseSegmentFile);
+    expect(seg.series).toEqual([
+      {
+        id: 0,
+        t: [0, 2],
+        a: [
+          { k: 'number', count: 3, sum: 8, min: 1, max: 5, last: 2, lastTime: 2 },
+          { k: 'number', count: 1, sum: 9, min: 9, max: 9, last: 9, lastTime: 3 },
+        ],
+      },
+    ]);
   });
 });

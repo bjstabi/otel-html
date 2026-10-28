@@ -142,3 +142,27 @@ export function counterRequest(
     ],
   };
 }
+
+/** A monotonic cumulative counter with explicit starts: one point per `[seconds, value, startSeconds]`. */
+export function cumulativeRequest(
+  name: string,
+  points: readonly (readonly [number, number, number])[],
+  attributes: readonly JsonObject[] = [],
+): JsonObject {
+  const base = BigInt(EPOCH_NS);
+  const json = JSON.parse(JSON.stringify(counterRequest(name, [], attributes)));
+  json.resourceMetrics[0].scopeMetrics[0].metrics[0].sum.dataPoints = points.map(([s, v, start]) => ({
+    attributes,
+    startTimeUnixNano: String(base + BigInt(start) * SEC),
+    timeUnixNano: String(base + BigInt(s) * SEC),
+    asInt: String(v),
+  }));
+  return json;
+}
+
+/** `req` (one metric, as built above) with `exemplars` on its data point `i`. */
+export function withExemplars(req: JsonObject, i: number, exemplars: readonly JsonObject[]): JsonObject {
+  const json = JSON.parse(JSON.stringify(req));
+  json.resourceMetrics[0].scopeMetrics[0].metrics[0].sum.dataPoints[i].exemplars = exemplars;
+  return json;
+}
