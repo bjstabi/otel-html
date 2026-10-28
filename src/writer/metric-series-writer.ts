@@ -1,10 +1,9 @@
-import { reviveDataJson, unwrapDataFile, wrapDataFile } from '../format/data-file.js';
+import { reviveDataJson, unwrapDataFile, wrapDataFile, wrapDataFilePieces } from '../format/data-file.js';
 import {
   type BucketSeries,
   bucketIndex,
   bucketRange,
   capExemplars,
-  deriveLevels,
   encodeExemplarFile,
   encodeLevelFile,
   encodeSegmentFile,
@@ -12,12 +11,12 @@ import {
   LEVEL0_WIDTH_NS,
   levelCount,
   levelWidthNs,
-  mergeBucketSeries,
   metricDir,
   metricExemplarPath,
   metricLevelPath,
   metricSegmentPath,
   metricSeriesPath,
+  nextLevel,
   parseExemplarFile,
   parseLevelFile,
   parseSegmentFile,
@@ -258,29 +257,26 @@ export class MetricSeriesWriter {
     await this.flush(catalog); // also demotes: no metric has both levels and segments listed after it
     for (const [id, paths] of [...byMetric([...this.#listed])].sort(([a], [b]) => a - b)) {
       if (paths.segments.length === 0) continue;
-      const parts: BucketSeries[][] = [];
-      let exemplars: StoredExemplar[] = [];
-      for (const n of [...paths.segments].sort((a, b) => a - b)) {
-        const path = metricSegmentPath(id, n);
-        const seg = parseSegmentFile(await this.#read(path), path);
-        parts.push(seg.series);
-        exemplars = exemplars.concat(seg.exemplars);
-      }
-      const l0 = mergeBucketSeries(parts, metricDir(id));
-      const range = bucketRange(l0);
-      const levels =
-        range === null
-          ? []
-          : deriveLevels(l0, levelCount(range.min * LEVEL0_WIDTH_NS, range.max * LEVEL0_WIDTH_NS));
+      const merged = await this.#mergeSegments(id, paths.segments);
+      const exemplars = merged.exemplars;
+      let level: BucketSeries[] = merged.l0;
+      merged.l0 = [];
+      const range = bucketRange(level);
+      const count = range === null ? 0 : levelCount(range.min * LEVEL0_WIDTH_NS, range.max * LEVEL0_WIDTH_NS);
       // Written unlisted, then swapped in at once: a failure part way leaves the segments the only listed data.
+      // Levels are derived and written one at a time, so at most two are in memory.
       const written: string[] = [];
-      for (const [k, series] of levels.entries()) {
+      for (let k = 0; k < count; k++) {
         const path = metricLevelPath(id, k);
-        await this.#writeFile(
+        const series = level;
+        // in pieces, one per series: a long run's level files are tens of megabytes
+        const head = { metric: id, level: k, widthNs: levelWidthNs(k) };
+        await this.#writePieces(
           path,
-          encodeLevelFile({ metric: id, level: k, widthNs: levelWidthNs(k), series }),
+          wrapDataFilePieces(keyOf(path), head, 'series', encodeLevelFile({ ...head, series }).series),
         );
         written.push(path);
+        level = k + 1 < count ? nextLevel(series, k + 1) : [];
       }
       const ex = metricExemplarPath(id);
       await this.#writeFile(
@@ -293,6 +289,27 @@ export class MetricSeriesWriter {
       for (const path of written) this.#listed.add(path);
     }
     return this.listed();
+  }
+
+  /** A metric's segments merged into level 0, one segment at a time into a columnar buffer. */
+  async #mergeSegments(
+    id: number,
+    segments: readonly number[],
+  ): Promise<{ l0: BucketSeries[]; exemplars: StoredExemplar[] }> {
+    const merged = new MetricBuffer(this.#exemplars);
+    let exemplars: StoredExemplar[] = [];
+    for (const n of [...segments].sort((a, b) => a - b)) {
+      const path = metricSegmentPath(id, n);
+      const seg = parseSegmentFile(await this.#read(path), path);
+      for (const x of seg.series) {
+        for (let i = 0; i < x.t.length; i++) {
+          const agg = x.a[i];
+          if (agg !== undefined) merged.add(x.id, x.t[i] ?? 0, agg, path);
+        }
+      }
+      exemplars = exemplars.concat(seg.exemplars);
+    }
+    return { l0: merged.series(metricDir(id)), exemplars };
   }
 
   /** Deletes files under `data/metrics/` that are not listed: compacted segments, or an interrupted flush's leftovers. */
@@ -316,12 +333,23 @@ export class MetricSeriesWriter {
   }
 
   async #writeFile(path: string, payload: unknown): Promise<void> {
+    await this.#mkdir(path);
+    await this.#fs.writeTextAtomic(at(this.#out, path), wrapDataFile(keyOf(path), payload));
+  }
+
+  async #writePieces(path: string, pieces: Iterable<string>): Promise<void> {
+    await this.#mkdir(path);
+    const fs = this.#fs;
+    if (fs.writePiecesAtomic !== undefined) await fs.writePiecesAtomic(at(this.#out, path), pieces);
+    else await fs.writeTextAtomic(at(this.#out, path), [...pieces].join(''));
+  }
+
+  async #mkdir(path: string): Promise<void> {
     const id = Number(path.slice('data/metrics/'.length, 'data/metrics/'.length + 6));
     if (!this.#dirs.has(id)) {
       await this.#fs.mkdirp(at(this.#out, metricDir(id)));
       this.#dirs.add(id);
     }
-    await this.#fs.writeTextAtomic(at(this.#out, path), wrapDataFile(keyOf(path), payload));
   }
 
   #read(path: string): Promise<unknown> {

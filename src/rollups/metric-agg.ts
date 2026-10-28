@@ -324,7 +324,9 @@ const SummaryAggSchema = z.strictObject({
   lastTime: finite,
 });
 
-export const BucketAggSchema: z.ZodType<BucketAgg> = z.union([
+// Discriminated on `k`: one option is tried per aggregate (a plain union tries each in turn, which dominates
+// reading level and segment files).
+export const BucketAggSchema: z.ZodType<BucketAgg> = z.discriminatedUnion('k', [
   NumberAggSchema,
   CounterAggSchema,
   HistAggSchema,

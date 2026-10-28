@@ -1,5 +1,5 @@
 import type { ColumnSpec } from '../format/columns.js';
-import { encodeColumns } from '../format/columns.js';
+import { ColumnEncoder } from '../format/columns.js';
 import { wrapDataFile } from '../format/data-file.js';
 import type { ManifestChunk } from '../format/manifest.js';
 import { chunkKey, chunkPath, type Signal } from '../format/paths.js';
@@ -101,15 +101,21 @@ export interface BuiltChunk {
   readonly decodedBytes: number;
 }
 
-/** Accumulates rows of one signal and cuts them into numbered chunks. */
+/**
+ * Accumulates rows of one signal and cuts them into numbered chunks. Rows are encoded as they arrive, so the
+ * buffer holds compact cells rather than the records (which would otherwise all outlive the young generation).
+ */
 export class ChunkBuffer<R> {
   readonly #spec: SignalSpec<R>;
-  #rows: R[] = [];
+  #rows: ColumnEncoder<R>;
   #estimate = 0;
+  #start = Number.POSITIVE_INFINITY;
+  #end = Number.NEGATIVE_INFINITY;
   #n: number;
 
   constructor(spec: SignalSpec<R>, nextChunk: number) {
     this.#spec = spec;
+    this.#rows = new ColumnEncoder(spec.columns);
     this.#n = nextChunk;
   }
 
@@ -126,9 +132,13 @@ export class ChunkBuffer<R> {
     return this.#rows.length;
   }
 
+  /** Buffers a row; an invalid one throws `invalid-report` naming its cell, and nothing is buffered. */
   push(row: R): void {
     this.#rows.push(row);
     this.#estimate += this.#spec.estimate(row);
+    const [a, b] = this.#spec.range(row);
+    if (a < this.#start) this.#start = a;
+    if (b > this.#end) this.#end = b;
   }
 
   isFull(targetBytes: number): boolean {
@@ -141,24 +151,16 @@ export class ChunkBuffer<R> {
    */
   build(resources: readonly ResourceRecord[], scopes: readonly ScopeRecord[]): BuiltChunk | null {
     if (this.#rows.length === 0) return null;
-    const rows = this.#rows;
-    let start = Number.POSITIVE_INFINITY;
-    let end = Number.NEGATIVE_INFINITY;
-    for (const row of rows) {
-      const [a, b] = this.#spec.range(row);
-      if (a < start) start = a;
-      if (b > end) end = b;
-    }
-    const payload = encodeColumns(this.#spec.columns, rows, resources, scopes);
+    const payload = this.#rows.finish(resources, scopes);
     const bytes = encoder.encode(wrapDataFile(chunkKey(this.#spec.signal, this.#n), payload));
     return {
       entry: {
         signal: this.#spec.signal,
         n: this.#n,
         path: chunkPath(this.#spec.signal, this.#n),
-        start,
-        end,
-        count: rows.length,
+        start: this.#start,
+        end: this.#end,
+        count: this.#rows.length,
         bytes: bytes.length,
       },
       bytes,
@@ -171,8 +173,10 @@ export class ChunkBuffer<R> {
     if (chunk.entry.n !== this.#n) {
       throw new Error(`invariant violated: committing chunk ${chunk.entry.n}, expected ${this.#n}`);
     }
-    this.#rows = [];
+    this.#rows = new ColumnEncoder(this.#spec.columns);
     this.#estimate = 0;
+    this.#start = Number.POSITIVE_INFINITY;
+    this.#end = Number.NEGATIVE_INFINITY;
     this.#n++;
   }
 }

@@ -71,6 +71,35 @@ export function wrapDataFile(key: string, payload: unknown): string {
   return `${REGISTRATION_GLOBAL}.push(${escapeHostile(JSON.stringify(key))},${escapeHostile(json)}${SUFFIX}`;
 }
 
+/**
+ * `wrapDataFile(key, { ...head, [listKey]: items })` in pieces, one per item, so a large file is never one string
+ * (with `writePiecesAtomic`). `head` must not hold `listKey`.
+ */
+export function* wrapDataFilePieces(
+  key: string,
+  head: Record<string, unknown>,
+  listKey: string,
+  items: Iterable<unknown>,
+): Generator<string, void, void> {
+  const open = JSON.stringify(head, replacer);
+  const fields = open === '{}' ? '{' : `${open.slice(0, -1)},`;
+  yield `${REGISTRATION_GLOBAL}.push(${escapeHostile(JSON.stringify(key))},${escapeHostile(fields)}${escapeHostile(JSON.stringify(listKey))}:[`;
+  let first = true;
+  for (const item of items) {
+    const json = JSON.stringify(item, replacer);
+    if (json === undefined) {
+      throw new OtelHtmlError('invalid-report', {
+        path: listKey,
+        expected: 'a JSON-serializable payload',
+        actual: 'undefined',
+      });
+    }
+    yield first ? escapeHostile(json) : `,${escapeHostile(json)}`;
+    first = false;
+  }
+  yield `]}${SUFFIX}`;
+}
+
 function excerpt(s: string): string {
   return JSON.stringify(s.length > 60 ? `${s.slice(0, 57)}...` : s);
 }

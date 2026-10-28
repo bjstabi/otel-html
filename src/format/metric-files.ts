@@ -140,10 +140,13 @@ function coarsen(series: readonly BucketSeries[], factor: number, path: string):
 /** Levels 0…count-1 from level 0, each LEVEL_FACTOR× coarser than the one before. */
 export function deriveLevels(l0: readonly BucketSeries[], count: number): BucketSeries[][] {
   const levels: BucketSeries[][] = [[...l0]];
-  for (let k = 1; k < count; k++) {
-    levels.push(coarsen(levels[k - 1] ?? [], LEVEL_FACTOR, `level ${k}`));
-  }
+  for (let k = 1; k < count; k++) levels.push(nextLevel(levels[k - 1] ?? [], k));
   return levels;
+}
+
+/** Level `k` from level `k - 1` (`deriveLevels` one step at a time). */
+export function nextLevel(previous: readonly BucketSeries[], k: number): BucketSeries[] {
+  return coarsen(previous, LEVEL_FACTOR, `level ${k}`);
 }
 
 /**

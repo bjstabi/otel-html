@@ -30,6 +30,17 @@ describe.each([
     return 'resolved';
   };
 
+  test('a write in pieces round-trips atomically, like writeTextAtomic', async () => {
+    const f = fs();
+    await f.mkdirp(join(dir, 'a'));
+    if (_name === 'node') expect(f.writePiecesAtomic).toBeDefined(); // memory: the fallback
+    const write =
+      f.writePiecesAtomic ?? ((p: string, xs: Iterable<string>) => f.writeTextAtomic(p, [...xs].join('')));
+    await write(join(dir, 'a/x.js'), ['he', '', 'llo \u2028', 'é']);
+    expect(await f.readText(join(dir, 'a/x.js'))).toBe('hello \u2028é');
+    expect(await f.list(join(dir, 'a'))).toEqual(['x.js']);
+  });
+
   test('atomic write round-trips and leaves no tmp file', async () => {
     const f = fs();
     await f.mkdirp(join(dir, 'a/b'));

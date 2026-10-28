@@ -20,6 +20,21 @@ export function createNodeFileSystem(): FileSystem {
         throw e;
       }
     },
+    async writePiecesAtomic(p, pieces) {
+      const tmp = `${p}.tmp-${process.pid}`;
+      try {
+        const handle = await open(tmp, 'w');
+        try {
+          for (const piece of pieces) if (piece.length > 0) await handle.write(piece, null, 'utf8');
+        } finally {
+          await handle.close();
+        }
+        await rename(tmp, p);
+      } catch (e) {
+        await rm(tmp, { force: true });
+        throw e;
+      }
+    },
     async writeBytes(p, bytes) {
       await mkdir(dirname(p), { recursive: true });
       await writeFile(p, bytes);
