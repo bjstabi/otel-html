@@ -368,8 +368,8 @@ export function facetToken(
 
 /**
  * `token` added to `condition`, replacing a token on the same key with the same operator. A condition the token model
- * cannot hold (raw OTTL) is kept whole and and-ed with the token; a token this function added last time is replaced,
- * so repeating the call never stacks wrappers.
+ * cannot hold (raw OTTL) is kept whole and and-ed with the token; if its last and-ed term is a token with the same
+ * key and operator, that term is replaced instead, so repeating the call never stacks wrappers.
  */
 export function withToken(condition: string | null, token: FilterToken): string | null {
   const tokens = condition === null ? [] : ottlToTokens(condition);
