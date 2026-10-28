@@ -17,7 +17,12 @@ import type { LoadedSeries } from './metric-load.js';
 // A query's `where` and `by`, evaluated per series (never per point).
 
 const DATAPOINT = CONTEXTS.datapoint;
-const TIME_PATHS = new Set(['time_unix_nano', 'start_time_unix_nano']);
+/** Per-point fields: a series has no single value for them, so `where`/`by` reject them. */
+const PER_POINT_PATHS: ReadonlyMap<string, string> = new Map([
+  ['time_unix_nano', 'time filters use the time range'],
+  ['start_time_unix_nano', 'time filters use the time range'],
+  ['flags', 'flags is a per-point field; metric filters select whole series'],
+]);
 const IDENTITY_ROOTS = new Set(['attributes', 'resource', 'instrumentation_scope']);
 
 type PathValue = Extract<Value, { type: 'path' }>;
@@ -55,12 +60,11 @@ function pathsOf(e: Expr): PathValue[] {
   return out;
 }
 
-function rejectTimePaths(paths: readonly PathValue[]): void {
-  const time = paths.find((p) => TIME_PATHS.has(canonical(p).join('.')));
-  if (time !== undefined)
-    throw new OtelHtmlError('invalid-ottl', {
-      message: `col ${time.from + 1}: time filters use the time range`,
-    });
+function rejectPerPointPaths(paths: readonly PathValue[]): void {
+  for (const p of paths) {
+    const why = PER_POINT_PATHS.get(canonical(p).join('.'));
+    if (why !== undefined) throw new OtelHtmlError('invalid-ottl', { message: `col ${p.from + 1}: ${why}` });
+  }
 }
 
 /** Whether any path reads a series' identity (attributes, resource, scope), which `other` cannot answer. */
@@ -82,7 +86,7 @@ function compileBy(src: string): CompiledBy {
       path: `by ${JSON.stringify(src)}`,
       expected: 'a datapoint path',
     });
-  rejectTimePaths([v]);
+  rejectPerPointPaths([v]);
   const accessor = DATAPOINT.paths.get(canonical(v).join('.'));
   if (accessor === undefined)
     throw new OtelHtmlError('invalid-ottl', {
@@ -100,6 +104,28 @@ function display(v: OttlValue): string {
   if (v instanceof Uint8Array) return [...v].map((b) => b.toString(16).padStart(2, '0')).join('');
   if (v instanceof Map) return `{${[...v].map(([k, x]) => `${k}: ${display(x)}`).join(', ')}}`;
   return `[${[...v.values()].map(display).join(', ')}]`;
+}
+
+/** A type-tagged form of a value for group keys: int 1 and string "1" stay apart. */
+function typed(v: OttlValue): unknown {
+  if (v === null) return ['nil'];
+  if (typeof v === 'string') return ['s', v];
+  if (typeof v === 'bigint') return ['i', v.toString()];
+  if (typeof v === 'number') return ['d', String(v)];
+  if (typeof v === 'boolean') return ['b', v];
+  if (v instanceof Uint8Array) return ['y', display(v)];
+  if (v instanceof Map) return ['m', [...v].map(([k, x]) => [k, typed(x)])];
+  return ['a', [...v.values()].map(typed)];
+}
+
+/** The `other` series' value for every `by` path; no real value encodes to it. */
+const OTHER_VALUE = ['other'];
+
+export interface SeriesGroup {
+  /** Identity of the group: the `by` paths with their type-tagged values. */
+  key: string;
+  /** The values as displayed, in `by` order. */
+  shown: string[];
 }
 
 const EMPTY_RESOURCE: ResourceRecord = { attributes: new Map(), droppedAttributesCount: 0, schemaUrl: '' };
@@ -140,8 +166,8 @@ export interface SeriesSelector {
   test: ((t: DatapointTarget) => boolean) | null;
   /** The `by` paths, in query order. */
   by: readonly string[];
-  /** The `by` values of a series, displayed. */
-  groupOf(t: DatapointTarget): string[];
+  /** The group of a series; `null` is the folded `other` series. */
+  groupOf(t: DatapointTarget | null): SeriesGroup;
   /** Whether `where` or `by` reads series identity (attributes, resource, scope), which `other` cannot answer. */
   readsIdentity: boolean;
 }
@@ -152,7 +178,7 @@ export function compileSelector(where: string | null, by: readonly string[]): Se
   let identity = false;
   if (where !== null && where.trim() !== '') {
     const paths = pathsOf(parseCondition(where));
-    rejectTimePaths(paths);
+    rejectPerPointPaths(paths);
     cond = compileCondition(where, 'datapoint');
     identity = readsIdentity(paths);
   }
@@ -160,7 +186,15 @@ export function compileSelector(where: string | null, by: readonly string[]): Se
   return {
     test: cond === null ? null : (t) => cond.test(t),
     by,
-    groupOf: (t) => compiled.map((b) => display(b.accessor.get(t, b.keys))),
+    groupOf(t) {
+      const values = compiled.map((b) => (t === null ? null : b.accessor.get(t, b.keys)));
+      return {
+        key: JSON.stringify(
+          compiled.map((b, i) => [b.src, t === null ? OTHER_VALUE : typed(values[i] ?? null)]),
+        ),
+        shown: values.map((v) => (t === null ? 'other' : display(v))),
+      };
+    },
     readsIdentity: identity || compiled.some((b) => b.identity),
   };
 }

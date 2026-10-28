@@ -5,15 +5,19 @@ import type { MetricPointRecord, ResourceRecord } from '../../src/model/records.
 import { type BucketAgg, type HistAgg, mergeAgg, quantileOf } from '../../src/rollups/metric-agg.js';
 import type { MetricEntry, SeriesDef } from '../../src/rollups/metric-catalog.js';
 import { ValueBuckets } from '../../src/rollups/value-buckets.js';
+import { evaluateFormula, formulaWidth, parseFormula } from '../../src/viewer/data/metric-formula.js';
 import type { LevelData, LoadedMetric, LoadedSeries } from '../../src/viewer/data/metric-load.js';
 import {
   DEFAULT_SHOW,
+  defaultShow,
   kindOf,
   type MetricQuery,
   pickLevel,
   resolveMetric,
   runMetricQuery,
+  runMetricQueryAtWidth,
   SHOW_BY_KIND,
+  showOptions,
 } from '../../src/viewer/data/metric-query.js';
 import { medianMs } from '../../test-support/median-ms.js';
 
@@ -57,6 +61,8 @@ function entry(over: Partial<MetricEntry> & Pick<MetricEntry, 'type'>): MetricEn
 interface SeriesSpec {
   service?: string;
   attributes?: Record<string, string>;
+  /** Attributes with non-string values; wins over `attributes`. */
+  attributeMap?: Attributes;
   bounds?: number[];
   other?: boolean;
   /** bucket index → aggregate */
@@ -75,7 +81,7 @@ function metric(
       id,
       resource: s.other === true ? -1 : id,
       scope: s.other === true ? -1 : 0,
-      attributes: attrs(s.attributes ?? {}),
+      attributes: s.attributeMap ?? attrs(s.attributes ?? {}),
       bounds: s.bounds ?? null,
       other: s.other === true,
     };
@@ -380,7 +386,7 @@ describe('runMetricQuery', () => {
       w,
       600,
     );
-    expect(r.notes).toContain('partial: 500 series folded into other');
+    expect(r.notes).toContain('partial: 500 points folded into other');
     const byName = runMetricQuery(m, query({ show: 'increase', where: 'metric.name == "m"' }), w, 600);
     expect(byName.notes.some((n) => n.startsWith('partial'))).toBe(false);
     expect(values(byName)).toEqual([40]);
@@ -464,6 +470,136 @@ describe('runMetricQuery', () => {
     const { result, ms } = medianMs(() => runMetricQuery(m, q, w, 600));
     expect(result.series).toHaveLength(5);
     expect(ms).toBeLessThan(150 * PERF_FACTOR);
+  });
+});
+
+describe('review fixes', () => {
+  const ctr = entry({ type: 'sum', monotonic: true, temporality: 'cumulative', unit: '{request}' });
+  const svc = 'resource.attributes["service.name"]';
+
+  test('counter sum counts series whose data all precede the window', () => {
+    const m = metric(ctr, [
+      { buckets: [[0, counter(100)]] },
+      {
+        buckets: [
+          [0, counter(5)],
+          [3, counter(7)],
+        ],
+      },
+    ]);
+    const w = { start: 30 * S, end: 39 * S };
+    expect(values(runMetricQuery(m, query({ show: 'sum' }), w, 600))).toEqual([112]);
+    // Panning keeps the same total for the same bucket.
+    expect(values(runMetricQuery(m, query({ show: 'sum' }), { start: 0, end: 39 * S }, 600))).toEqual([
+      105,
+      null,
+      null,
+      112,
+    ]);
+    // A group with nothing in the window is not drawn.
+    const by = runMetricQuery(m, query({ show: 'sum', by: ['attributes["k"]'] }), w, 600);
+    expect(by.series).toHaveLength(1);
+  });
+
+  test('a formula over a rolled-up operand re-runs the other at the rollup width', () => {
+    const g = metric(entry({ type: 'gauge' }), [
+      { buckets: Array.from({ length: 12 }, (_, i): [number, BucketAgg] => [i, gauge(i + 1)]) },
+    ]);
+    const w = { start: 0, end: 119 * S };
+    const a = runMetricQuery(
+      g,
+      query({ id: 'a', show: 'max', fn: [{ op: 'rollup', agg: 'max', intervalMs: 60_000 }] }),
+      w,
+      600,
+    );
+    const b0 = runMetricQuery(g, query({ id: 'b', show: 'max' }), w, 600);
+    const ast = parseFormula('a / b');
+    const width = formulaWidth(
+      ast,
+      new Map([
+        ['a', a],
+        ['b', b0],
+      ]),
+    );
+    expect(width).toBe(60 * S);
+    const b = runMetricQueryAtWidth(g, query({ id: 'b', show: 'max' }), w, width);
+    expect(b.widthNs).toBe(60 * S);
+    expect(values(b)).toEqual([6, 12]);
+    const f = evaluateFormula(
+      ast,
+      new Map([
+        ['a', a],
+        ['b', b],
+      ]),
+      'f',
+    );
+    expect(values(f)).toEqual([1, 1]);
+  });
+
+  test('group keys are typed and name their paths; "other" and "(none)" values stay apart', () => {
+    const int1: Attributes = new Map([['k', { kind: 'int', value: 1n }]]);
+    const m = metric(entry({ ...ctr, folded: 9 }), [
+      { attributes: { k: 'other' }, buckets: [[0, counter(1)]] },
+      { attributes: { k: '(none)' }, buckets: [[0, counter(2)]] },
+      { attributes: { k: '1' }, buckets: [[0, counter(4)]] },
+      { attributeMap: int1, buckets: [[0, counter(8)]] },
+      { buckets: [[0, counter(16)]] },
+      { other: true, buckets: [[0, counter(32)]] },
+    ]);
+    const w = { start: 0, end: 9 * S };
+    const r = runMetricQuery(m, query({ show: 'increase', by: ['attributes["k"]'] }), w, 600);
+    expect(r.series).toHaveLength(6);
+    expect(new Set(r.series.map((s) => s.key)).size).toBe(6);
+    expect(r.series.map((s) => values({ series: [s] })[0]).sort((x, y) => (x ?? 0) - (y ?? 0))).toEqual([
+      1, 2, 4, 8, 16, 32,
+    ]);
+    const byOther = runMetricQuery(m, query({ show: 'increase', by: ['attributes["j"]'] }), w, 600);
+    const keysK = new Set(r.series.map((s) => s.key));
+    expect(byOther.series.some((s) => keysK.has(s.key))).toBe(false);
+  });
+
+  test('bounds differing between groups give a note for the missing heatmap', () => {
+    const m = metric(entry({ type: 'histogram' }), [
+      { service: 'a', bounds: [10, 100], buckets: [[0, hist([1, 1, 1])]] },
+      { service: 'b', bounds: [5], buckets: [[0, hist([1, 1], [5])]] },
+    ]);
+    const r = runMetricQuery(m, query({ show: 'count', by: [svc] }), { start: 0, end: 9 * S }, 600);
+    expect(r.heat).toBeNull();
+    expect(r.distribution).toBeNull();
+    expect(r.notes).toContain('histogram bounds differ across series: no heatmap or distribution');
+  });
+
+  test('flags in where or by is rejected as a per-point field', () => {
+    const m = metric(ctr, [{ buckets: [[0, counter(1)]] }]);
+    const w = { start: 0, end: 9 * S };
+    for (const q of [
+      query({ show: 'rate', where: 'flags == 1' }),
+      query({ show: 'rate', by: ['datapoint.flags'] }),
+    ]) {
+      const run = () => runMetricQuery(m, q, w, 600);
+      expect(run).toThrow(OtelHtmlError);
+      expect(run).toThrow(/flags is a per-point field/);
+    }
+  });
+
+  test('defaultShow gives a concrete option for every kind', () => {
+    const sum: BucketAgg = {
+      k: 'summary',
+      count: 1,
+      sum: 1,
+      quantiles: [
+        { q: 0.5, v: 1 },
+        { q: 0.99, v: 2 },
+      ],
+      lastTime: 0,
+    };
+    const s = metric(entry({ type: 'summary' }), [{ buckets: [[0, sum]] }]);
+    expect(defaultShow(s)).toBe('q0.99');
+    expect(showOptions(s)).toContain(defaultShow(s));
+    expect(defaultShow(metric(entry({ type: 'summary' }), []))).toBe('count');
+    const c = metric(ctr, [{ buckets: [[0, counter(1)]] }]);
+    expect(defaultShow(c)).toBe('rate');
+    expect(showOptions(c)).toContain(defaultShow(c));
   });
 });
 

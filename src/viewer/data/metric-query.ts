@@ -11,6 +11,7 @@ import {
   COMBINE,
   type CombineRule,
   checkShow,
+  DEFAULT_SHOW,
   kindOf,
   type MetricKind,
   NOTES,
@@ -114,6 +115,13 @@ export function showOptions(m: LoadedMetric): readonly string[] {
   return kind === 'summary' ? [...summaryQuantiles(m), ...SHOW_BY_KIND.summary] : SHOW_BY_KIND[kind];
 }
 
+/** The default `show` of a loaded metric: `DEFAULT_SHOW`, with a summary's highest quantile made concrete. */
+export function defaultShow(m: LoadedMetric): string {
+  const kind = kindOf(m.entry);
+  if (kind !== 'summary') return DEFAULT_SHOW[kind];
+  return summaryQuantiles(m).at(-1) ?? 'count';
+}
+
 // ---------------------------------------------------------------------------------------------
 // Level pick
 // ---------------------------------------------------------------------------------------------
@@ -155,6 +163,8 @@ interface Member {
 interface Group {
   /** The `by` values (plus the series, for summaries); bounds sets split it further only when they differ. */
   key: string;
+  /** The `by` group alone (summaries add the series to `key`). */
+  byKey: string;
   bounds: string;
   label: string;
   group: Record<string, string>;
@@ -344,7 +354,35 @@ export function runMetricQueryAtWidth(
   widthNs: number,
   signal?: AbortSignal,
 ): MetricQueryResult {
-  return runAtLevel(m, q, window, levelAtWidth(m.levels, widthNs), signal);
+  const level = levelAtWidth(m.levels, widthNs);
+  return runAtLevel(m, q, window, level === null ? null : coarsenedTo(level, widthNs), signal);
+}
+
+/**
+ * `level` merged into buckets of `widthNs` (aligned like a rollup: `floor(time / widthNs)`), so a formula reaches
+ * a width off the ladder, such as an operand's rollup interval. A finer or equal width leaves it unchanged.
+ */
+function coarsenedTo(level: LevelData, widthNs: number): LevelData {
+  if (widthNs <= level.widthNs) return level;
+  const series = new Map<number, { t: number[]; a: BucketAgg[] }>();
+  for (const [id, s] of level.series) {
+    const t: number[] = [];
+    const a: BucketAgg[] = [];
+    s.t.forEach((b, i) => {
+      const agg = s.a[i];
+      if (agg === undefined) return;
+      const nb = Math.floor((b * level.widthNs) / widthNs);
+      const last = a[a.length - 1];
+      if (t[t.length - 1] === nb && last !== undefined) a[a.length - 1] = mergeAgg(last, agg, `series ${id}`);
+      else {
+        t.push(nb);
+        a.push(agg);
+      }
+    });
+    series.set(id, { t, a });
+  }
+  // Merged buckets keep the last summary point, as a coarser ladder level does.
+  return { level: Math.max(level.level, 1), widthNs, series };
 }
 
 function runAtLevel(
@@ -392,34 +430,46 @@ function runAtLevel(
   let dataMax = Number.NEGATIVE_INFINITY;
   const baseLabel = q.alias ?? e.name;
 
+  // Counter `sum` is a running total since the run start: series whose data all precede the window still
+  // count toward their group's baseline.
+  const runningTotal = kind === 'counter' && q.show === 'sum';
+  const beforeWindow: { groupId: string; member: Member }[] = [];
   for (const s of m.series) {
     ticker.tick();
     const data = level.series.get(s.def.id);
     if (data === undefined) continue;
     const lo = lowerBound(data.t, b0Win);
     const hi = lowerBound(data.t, b1Win + 1);
-    if (lo >= hi) continue;
+    if (lo >= hi && !(runningTotal && lo > 0)) continue;
     const target = sel.by.length > 0 || sel.test !== null ? targetOf(e, s) : null;
     if (sel.test !== null && target !== null && !sel.test(target)) continue;
-    const values = s.def.other || target === null ? sel.by.map(() => 'other') : sel.groupOf(target);
-    let key = JSON.stringify(values);
-    let label = sel.by.length > 0 ? values.join(', ') : baseLabel;
+    const sg = sel.groupOf(s.def.other || target === null ? null : target);
+    let key = sg.key;
+    let label = sel.by.length > 0 ? sg.shown.join(', ') : baseLabel;
     const bounds = combine.rule === 'merge' && combine.splitByBounds ? JSON.stringify(s.def.bounds) : '';
     if (combine.rule === 'never') {
       key += `#${s.def.id}`;
       label = sel.by.length > 0 ? `${label} · ${seriesLabel(s, e)}` : seriesLabel(s, e);
     }
-    let g = groups.get(`${key}|${bounds}`);
-    if (g === undefined) {
-      const group = Object.fromEntries(sel.by.map((b, i) => [b, values[i] ?? '']));
-      g = { key, bounds, label, group, members: [] };
-      groups.set(`${key}|${bounds}`, g);
+    const groupId = `${key}|${bounds}`;
+    const member: Member = { s, t: data.t, a: data.a, lo, hi };
+    if (lo >= hi) {
+      beforeWindow.push({ groupId, member });
+      continue;
     }
-    g.members.push({ s, t: data.t, a: data.a, lo, hi });
+    let g = groups.get(groupId);
+    if (g === undefined) {
+      const group = Object.fromEntries(sel.by.map((b, i) => [b, sg.shown[i] ?? '']));
+      g = { key, byKey: sg.key, bounds, label, group, members: [] };
+      groups.set(groupId, g);
+    }
+    g.members.push(member);
     groupOfSeries.set(s.def.id, g);
     dataMin = Math.min(dataMin, data.t[lo] ?? b0Win);
     dataMax = Math.max(dataMax, data.t[hi - 1] ?? b1Win);
   }
+  // A group with no data in the window draws nothing; otherwise its earlier series join the baseline.
+  for (const { groupId, member } of beforeWindow) groups.get(groupId)?.members.push(member);
   if (groups.size === 0) return result([]);
 
   if (combine.rule === 'merge' && combine.splitByBounds) {
@@ -437,7 +487,7 @@ function runAtLevel(
   }
   if (combine.rule === 'never') {
     if (level.level > 0 && q.show !== 'count' && q.show !== 'sum') note(NOTES.summaryCoarse);
-    const byGroups = new Set([...groups.values()].map((g) => JSON.stringify(g.group)));
+    const byGroups = new Set([...groups.values()].map((g) => g.byKey));
     if (byGroups.size < groups.size) note(NOTES.summariesNotCombined);
   }
 
@@ -498,6 +548,7 @@ function runAtLevel(
   });
   // Heatmap and distribution need one bucket layout across every series charted.
   const oneLayout = new Set(allMembers.map((mb) => JSON.stringify(mb.s.def.bounds))).size === 1;
+  if (kind === 'hist' && !oneLayout) note(NOTES.heatBoundsDiffer);
   const views =
     (kind === 'hist' || kind === 'exp') && oneLayout
       ? histogramViews(mergedPerBucket(allMembers, frame), frame.b0, widthNs)

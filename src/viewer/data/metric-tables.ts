@@ -33,7 +33,7 @@ export const SHOW_BY_KIND: Record<MetricKind, readonly string[]> = {
   summary: ['count', 'sum'],
 };
 
-/** `qmax` is the highest quantile present, resolved from the data when the query runs. */
+/** `qmax` is the highest quantile present, resolved when the query runs; `defaultShow(m)` gives the concrete `q…`. */
 export const SUMMARY_TOP_QUANTILE = 'qmax';
 
 export const DEFAULT_SHOW: Record<MetricKind, string> = {
@@ -74,10 +74,11 @@ export const COMBINE: Record<MetricKind, CombineRule> = {
 
 export const NOTES = {
   boundsDiffer: 'histogram bounds differ',
+  heatBoundsDiffer: 'histogram bounds differ across series: no heatmap or distribution',
   summariesNotCombined: 'summaries are not combined',
   summaryCoarse: 'summary quantiles from the last point per bucket',
   fromSegments: 'report unfinished: series merged from flush segments',
-  partial: (n: number) => `partial: ${n} series folded into other`,
+  partial: (n: number) => `partial: ${n} points folded into other`,
   resets: (n: number) => `${n} counter reset${n === 1 ? '' : 's'} in range`,
   noValue: (n: number) => `${n} point${n === 1 ? '' : 's'} had no value`,
   conflicting: (e: MetricEntry) =>
