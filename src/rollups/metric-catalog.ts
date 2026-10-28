@@ -276,11 +276,22 @@ function canonicalAttributesJson(a: Attributes): string {
     if (k < prev || (v.kind !== 'string' && v.kind !== 'bool')) {
       return JSON.stringify(encodeAttributes(sortedAttributes(a)));
     }
-    if (out.length > 1) out += ',';
-    out += `[${JSON.stringify(k)},${JSON.stringify(v.value)}]`;
+    out += `${out.length > 1 ? ',' : ''}${keyPrefix(k)}${JSON.stringify(v.value)}]`;
     prev = k;
   }
   return `${out}]`;
+}
+
+/** `["<key>",` per attribute key: keys repeat on every point of every series. */
+const KEY_PREFIXES = new Map<string, string>();
+const MAX_KEY_PREFIXES = 4096;
+function keyPrefix(k: string): string {
+  let p = KEY_PREFIXES.get(k);
+  if (p === undefined) {
+    p = `[${JSON.stringify(k)},`;
+    if (KEY_PREFIXES.size < MAX_KEY_PREFIXES) KEY_PREFIXES.set(k, p);
+  }
+  return p;
 }
 
 /**

@@ -100,6 +100,12 @@ function convertAnyValue(v: ProtoAnyValue, path: Path): AnyValue {
   }
 }
 
+/** A value whose conversion cannot fail and needs no path (no child path is built for it). */
+function isScalarValue(v: ProtoAnyValue): boolean {
+  const c = v.value.case;
+  return c !== 'arrayValue' && c !== 'kvlistValue' && c !== 'stringValueStrindex';
+}
+
 function convertAttributes(kvs: readonly KeyValue[], path: Path): Attributes {
   const out = new Map<string, AnyValue>();
   for (let i = 0; i < kvs.length; i++) {
@@ -108,7 +114,7 @@ function convertAttributes(kvs: readonly KeyValue[], path: Path): Attributes {
       kv.key,
       kv.value === undefined
         ? { kind: 'empty' }
-        : convertAnyValue(kv.value, () => `${pathText(path)}[${i}].value`),
+        : convertAnyValue(kv.value, isScalarValue(kv.value) ? path : () => `${pathText(path)}[${i}].value`),
     );
   }
   return out;
@@ -398,8 +404,14 @@ export function* metricRecords(
       for (const [mi, m] of sm.metrics.entries()) {
         const shape = metricShape(m);
         if (shape === null) continue;
-        for (const [di, dp] of shape.points.entries()) {
-          const p = (): string => `${source}: ${sp}.metrics[${mi}].${m.data.case}.dataPoints[${di}]`;
+        // Path builders made once per metric and read only for an error, while `di` is the failing point's.
+        let di = 0;
+        const p = (): string => `${source}: ${sp}.metrics[${mi}].${m.data.case}.dataPoints[${di}]`;
+        const startPath = (): string => `${p()}.startTimeUnixNano`;
+        const timePath = (): string => `${p()}.timeUnixNano`;
+        const attributesPath = (): string => `${p()}.attributes`;
+        for (; di < shape.points.length; di++) {
+          const dp = shape.points[di] as (typeof shape.points)[number];
           yield {
             name: m.name,
             description: m.description,
@@ -407,9 +419,9 @@ export function* metricRecords(
             type: shape.type,
             temporality: shape.temporality,
             monotonic: shape.monotonic,
-            start: relOrNull(dp.startTimeUnixNano, ctx, () => `${p()}.startTimeUnixNano`),
-            time: rel(dp.timeUnixNano, ctx, () => `${p()}.timeUnixNano`),
-            attributes: convertAttributes(dp.attributes, () => `${p()}.attributes`),
+            start: relOrNull(dp.startTimeUnixNano, ctx, startPath),
+            time: rel(dp.timeUnixNano, ctx, timePath),
+            attributes: convertAttributes(dp.attributes, attributesPath),
             flags: dp.flags,
             point: pointJson(shape.schema, dp),
             resource,

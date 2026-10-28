@@ -362,10 +362,6 @@ export class StreamNormalizer {
   prepare(p: MetricPointRecord): (series: SeriesKey) => Normalized {
     if ((p.flags & NO_RECORDED_VALUE) !== 0) return () => SKIP_NO_VALUE;
     const rule = ruleFor(p);
-    const done =
-      (n: Normalized): (() => Normalized) =>
-      () =>
-        n;
     switch (rule.agg) {
       case 'number': {
         const v = numberValueOf(p);
@@ -380,15 +376,7 @@ export class StreamNormalizer {
         const v = numberValueOf(p);
         if (v === null) return done(SKIP_NO_VALUE);
         if (!rule.cumulative) return done(ok({ k: 'counter', delta: v, resets: 0 }));
-        return (series) =>
-          this.#cumulative(
-            series,
-            p,
-            v,
-            (cur, prev) => (cur < prev ? null : cur - prev),
-            asCounter,
-            () => 0,
-          );
+        return (series) => this.#cumulative(series, p, v, diffCounter, asCounter, zeroCounter);
       }
       case 'hist': {
         const h = histOf(p);
@@ -481,6 +469,13 @@ function wrap(v: number | HistAgg | ExpAgg, reset: boolean): Normalized {
 }
 
 const asCounter = (last: number | BucketAgg): number | null => (typeof last === 'number' ? last : null);
+const diffCounter = (cur: number, prev: number): number | null => (cur < prev ? null : cur - prev);
+const zeroCounter = (): number => 0;
+/** A step that ignores the series: the point's result does not depend on stream state. */
+const done =
+  (n: Normalized): (() => Normalized) =>
+  () =>
+    n;
 const asHist = (last: number | BucketAgg): HistAgg | null =>
   typeof last !== 'number' && last.k === 'hist' ? last : null;
 const asExp = (last: number | BucketAgg): ExpAgg | null =>

@@ -581,25 +581,19 @@ export class ColumnEncoder<R> {
   readonly #firstCol: number[] = [];
   readonly #firstRow: number[] = [];
   readonly #firstSeq: number[] = [];
+  // Per-row scratch, reused so a row costs no closures or arrays beyond its cells:
+  /** (id, column, sequence) of each string the current row used, committed once the row encodes. */
+  readonly #pending: number[] = [];
+  #pendingLength = 0;
+  #col = 0;
+  #seq = 0;
+  readonly #intern: Intern;
+  readonly #path: () => string;
 
   constructor(spec: ColumnSpec<R>) {
     this.#spec = spec;
     this.#cols = spec.columns.map(() => []);
-  }
-
-  get length(): number {
-    return this.#n;
-  }
-
-  /** Encodes one row; an invalid cell throws (naming `rows[<index>]`) and leaves the encoder unchanged. */
-  push(row: R): void {
-    const columns = this.#spec.columns;
-    const r = this.#n;
-    const cells: unknown[] = new Array(columns.length);
-    const uses: number[] = [];
-    let ci = 0;
-    let seq = 0;
-    const d: Intern = (str) => {
+    this.#intern = (str) => {
       let id = this.#ids.get(str);
       if (id === undefined) {
         id = this.#strings.length;
@@ -610,20 +604,43 @@ export class ColumnEncoder<R> {
         this.#firstRow.push(0);
         this.#firstSeq.push(0);
       }
-      uses.push(id, ci, seq++);
+      const k = this.#pendingLength;
+      this.#pending[k] = id;
+      this.#pending[k + 1] = this.#col;
+      this.#pending[k + 2] = this.#seq++;
+      this.#pendingLength = k + 3;
       return id;
     };
-    for (; ci < columns.length; ci++) {
-      const col = columns[ci] as ColumnDef<R>;
-      const path = (): string => `rows[${r}].${col.name}`;
-      seq = 0;
-      cells[ci] = encodeCell(col, cellOf(row, col.name), d, path);
+    // read only while a cell is being rejected, so the cursor is that cell's
+    this.#path = () => `rows[${this.#n}].${this.#spec.columns[this.#col]?.name ?? ''}`;
+  }
+
+  get length(): number {
+    return this.#n;
+  }
+
+  /** Encodes one row; an invalid cell throws (naming `rows[<index>]`) and leaves the encoder unchanged. */
+  push(row: R): void {
+    const columns = this.#spec.columns;
+    const r = this.#n;
+    this.#pendingLength = 0;
+    try {
+      for (this.#col = 0; this.#col < columns.length; this.#col++) {
+        const col = columns[this.#col] as ColumnDef<R>;
+        this.#seq = 0;
+        (this.#cols[this.#col] as unknown[]).push(
+          encodeCell(col, cellOf(row, col.name), this.#intern, this.#path),
+        );
+      }
+    } catch (e) {
+      for (const cells of this.#cols) cells.length = r; // drop the row's cells encoded before the failure
+      throw e;
     }
-    for (const [k, cell] of cells.entries()) (this.#cols[k] as unknown[]).push(cell);
-    for (let k = 0; k < uses.length; k += 3) {
-      const id = uses[k] as number;
-      const c = uses[k + 1] as number;
-      const q = uses[k + 2] as number;
+    const pending = this.#pending;
+    for (let k = 0; k < this.#pendingLength; k += 3) {
+      const id = pending[k] as number;
+      const c = pending[k + 1] as number;
+      const q = pending[k + 2] as number;
       this.#uses[id] = (this.#uses[id] ?? 0) + 1;
       const fc = this.#firstCol[id] ?? Number.POSITIVE_INFINITY;
       // rows arrive in order, so an earlier first use in the same column is always in an earlier row
