@@ -10,6 +10,8 @@ import {
   LINKED_SPAN,
   LINKED_TRACE,
   LINKED_WARN_PLUS_COUNT,
+  METRIC_HIST,
+  METRICS_COUNT,
   ORPHAN_LOG_TRACE,
 } from '../../e2e/fixture.js';
 import { convert } from '../../src/api/convert.js';
@@ -22,7 +24,7 @@ import { ExportLogsServiceRequestSchema } from '../../src/model/gen/opentelemetr
 import type { FileSystem } from '../../src/writer/ports.js';
 import { logRecord, logsRequest } from '../../test-support/otlp-builders.js';
 import { createTestWriter, type TestWriter } from '../../test-support/writer-deps.js';
-import { allLogs, allSpans, manifestOf, spansRequest } from '../writer/helpers.js';
+import { allLogs, allSpans, manifestOf, metricCatalogOf, spansRequest } from '../writer/helpers.js';
 
 async function failure(p: Promise<unknown>): Promise<OtelHtmlError> {
   try {
@@ -279,7 +281,7 @@ describe('merge (public)', () => {
 describe('the linked fixture', () => {
   async function convertLinked(): Promise<TestWriter> {
     const w = createTestWriter();
-    const files = ['linked-traces', 'linked-logs'].map((name) => `in/${name}.otlp.json`);
+    const files = ['linked-traces', 'linked-logs', 'metrics'].map((name) => `in/${name}.otlp.json`);
     for (const f of files) {
       await put(w, f, readFileSync(new URL(`../../fixtures/${f.slice('in/'.length)}`, import.meta.url)));
     }
@@ -329,5 +331,18 @@ describe('the linked fixture', () => {
     expect(logs.filter((l) => l.eventName !== '')).toHaveLength(2);
     expect(logs.filter((l) => l.time === null && l.observedTime !== null)).toHaveLength(1);
     expect(logs.filter((l) => l.spanId !== null && l.traceId !== null)).toHaveLength(35);
+  });
+
+  test('converts the metrics fixture: its histogram, the reset copy and the NaN point are all catalogued', async () => {
+    const w = await convertLinked();
+    expect(manifestOf(w, 'r').totals.metrics).toBeGreaterThan(0);
+    const entries = metricCatalogOf(w, 'r').entries();
+    expect(entries).toHaveLength(METRICS_COUNT);
+    // 2 resources x 3 routes.
+    expect(entries.find((e) => e.name === METRIC_HIST)?.series).toBe(6);
+    expect(entries.find((e) => e.name === 'jobs.completed.cumulative')?.resets).toBe(1);
+    expect(entries.filter((e) => e.noValue > 0).map((e) => [e.name, e.noValue])).toEqual([
+      ['process.open_file_descriptor.count', 1],
+    ]);
   });
 });

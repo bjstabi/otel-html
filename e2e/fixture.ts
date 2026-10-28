@@ -29,7 +29,7 @@ export const FIXTURE_REPORTS = ['small', 'orphans', 'logs-only', 'empty', 'linke
 export type FixtureReport = (typeof FIXTURE_REPORTS)[number];
 /** Fixture files of the reports that are not just `fixtures/<name>.otlp.json`. */
 const FIXTURE_FILES: Partial<Record<FixtureReport, readonly string[]>> = {
-  linked: ['linked-traces', 'linked-logs'],
+  linked: ['linked-traces', 'linked-logs', 'metrics'],
   /** Traces and logs together: what `mise run demo` converts and CI uploads as the sample report. */
   sample: ['small', 'linked-traces', 'linked-logs'],
 };
@@ -63,7 +63,8 @@ export function fixtureSpanCount(name: FixtureReport | 'hostile'): number {
 export const LOGS_ONLY_LOG_COUNT = 12;
 
 /**
- * The `linked` report: `linked-traces` (3 traces over `checkout` on runner-7 and `payments` on runner-8) plus `linked-logs`.
+ * The `linked` report: `linked-traces` (3 traces over `checkout` on runner-7 and `payments` on runner-8) plus `linked-logs`
+ * and `metrics`.
  * Of its 40 logs: 33 sit inside a span of an exported trace, 1 carries a span_id that is not in its trace (it belongs to
  * `LINKED_TRACE`), 1 carries a trace id that is not in the traces file, and 5 carry no trace context.
  */
@@ -81,6 +82,16 @@ export const LINKED_SEVERITY_COUNTS = { 0: 1, 1: 2, 5: 8, 9: 10, 13: 10, 17: 8, 
 export const LINKED_WARN_PLUS_COUNT = 19;
 /** Logs whose body contains "declined" (case-insensitive): the `card declined: 402 decline_code=<x>` lines. */
 export const LINKED_DECLINED_COUNT = 6;
+
+/**
+ * The `linked` report also converts `metrics` (generated with the OTel SDK, then augmented): 10 collections 10 s apart over
+ * the same two resources, as `METRICS_COUNT` metric definitions.
+ */
+export const METRICS_COUNT = 10;
+export const METRIC_HIST = 'http.server.request.duration';
+/** The trace id of the one exemplar on `METRIC_HIST` that points at a trace absent from the traces file. */
+export const ORPHAN_EXEMPLAR_TRACE = '9c1f0e5ab27d4c3388e0f6a1b5d2c47e';
+export const HOSTILE_METRIC_NAME = '</script><img src=x onerror=alert(1)>';
 
 /** The generated scale input: `SCALE_TRACES` traces of `SCALE_SPANS_PER_TRACE` spans each. */
 export const SCALE_TRACES = 2000;
