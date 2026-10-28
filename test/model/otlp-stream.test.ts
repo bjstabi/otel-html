@@ -253,6 +253,12 @@ describe('streamOtlpProtobuf', () => {
     expect(reqs.map((r) => [r.signal, resources(r)])).toEqual([['traces', 0]]);
   });
 
+  test('rejects a resource entry that is not length-delimited', () => {
+    expect(() => [...streamOtlpProtobuf(new Uint8Array([0x08, 0x05]), 'logs', 'a.pb')]).toThrowError(
+      /^a\.pb: invalid OTLP protobuf \(logs\)/,
+    );
+  });
+
   test('rejects garbage and truncation as invalid-otlp with the source', () => {
     expect(() => [...streamOtlpProtobuf(new Uint8Array([0xff, 0xff, 0xff]), 'traces', 'a.pb')]).toThrowError(
       /^a\.pb: invalid OTLP protobuf \(traces\)/,

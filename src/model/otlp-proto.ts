@@ -52,7 +52,8 @@ export function* streamOtlpProtobuf(
       const start = reader.pos;
       const [field, wire] = reader.tag();
       reader.skip(wire, field);
-      if (field === RESOURCES_FIELD && wire === WireType.LengthDelimited) {
+      if (field === RESOURCES_FIELD) {
+        if (wire !== WireType.LengthDelimited) throw new Error(`resource entry has wire type ${wire}`);
         entry = bytes.subarray(start, reader.pos);
       }
     } catch (e) {
