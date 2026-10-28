@@ -1,4 +1,4 @@
-import { cleanup, render } from '@testing-library/react';
+import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import type { RelNanos } from '../../src/model/ids.js';
 import { FlameGraph } from '../../src/viewer/components/flame-graph.js';
@@ -31,7 +31,7 @@ const detail = detailOf([
   traceRow(2, 1, 100, 400, { service: 'db' }),
 ]);
 
-function mount(extra: { markers?: { time: RelNanos; label: string }[] } = {}) {
+function mount(extra: { markers?: { time: RelNanos; label: string }[]; compact?: boolean } = {}) {
   const onSelect = vi.fn();
   render(
     <ThemeProvider>
@@ -76,5 +76,23 @@ describe('FlameGraph', () => {
     click(600, 1);
     click(250, 5);
     expect(onSelect).not.toHaveBeenCalled();
+  });
+});
+
+describe('FlameGraph compact', () => {
+  test('hides the minimap, the legend and the color-by control, and keeps the filter and the graph', () => {
+    mount({ compact: true });
+    expect(charts.map((c) => c.ariaLabel)).toHaveLength(1);
+    expect(charts.some((c) => /minimap/.test(c.ariaLabel))).toBe(false);
+    expect(screen.queryByLabelText('Color by')).toBeNull();
+    expect(screen.queryByRole('heading', { name: /Share of exclusive execution time/ })).toBeNull();
+    expect(screen.getByLabelText('Filter spans')).toBeTruthy();
+  });
+
+  test('the full card still has all three', () => {
+    mount();
+    expect(charts.some((c) => /minimap/.test(c.ariaLabel))).toBe(true);
+    expect(screen.getByLabelText('Color by')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: /Share of exclusive execution time/ })).toBeTruthy();
   });
 });

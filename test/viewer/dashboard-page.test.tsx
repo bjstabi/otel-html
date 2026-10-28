@@ -45,8 +45,8 @@ describe('the dashboard page', () => {
     await waitFor(() => expect(main().getAllByRole('region')).toHaveLength(4));
     expect(
       main()
-        .getAllByRole('heading', { level: 2 })
-        .map((h) => h.textContent),
+        .getAllByRole('region')
+        .map((r) => r.querySelector('h2')?.textContent),
     ).toEqual(['Timeline', 'Traces', 'Logs', 'Metrics']);
     expect(main().getByText('metric widget')).toBeTruthy();
   });
@@ -236,8 +236,8 @@ describe('Open in and narrow screens', () => {
     await waitFor(() => expect(main().getAllByRole('region')).toHaveLength(3));
     expect(
       main()
-        .getAllByRole('heading', { level: 2 })
-        .map((h) => h.textContent),
+        .getAllByRole('region')
+        .map((r) => r.querySelector('h2')?.textContent),
     ).toEqual(['Timeline', 'Traces', 'Logs']);
     expect((screen.getByRole('button', { name: 'Edit layout' }) as HTMLButtonElement).disabled).toBe(true);
     vi.unstubAllGlobals();
@@ -256,7 +256,9 @@ describe('a failing widget', () => {
       await waitFor(() => expect(main().getAllByRole('region')).toHaveLength(4));
       const logs = within(main().getByRole('region', { name: 'Logs' }));
       expect(logs.getByRole('alert').textContent).toContain('boom from logs');
-      expect(within(main().getByRole('region', { name: 'Traces' })).getByText('traces widget')).toBeTruthy();
+      expect(
+        within(main().getByRole('region', { name: 'Traces' })).getByText('No traces match'),
+      ).toBeTruthy();
       expect(screen.getByRole('heading', { name: 'Fusion', level: 1 })).toBeTruthy();
     } finally {
       WIDGETS.logs = original;

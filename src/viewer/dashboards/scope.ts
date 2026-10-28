@@ -31,6 +31,8 @@ export function variableCondition(
 
 export interface WidgetScope {
   window: TimeWindow | null;
+  /** The selection window narrows `window` (a following widget with a selection that overlaps the page). */
+  narrowed: boolean;
   /** The selection drawn as a band or brush instead of narrowing the window. */
   band: TimeWindow | null;
   /** The trace whose records the widget is narrowed to (its condition carries it). */
@@ -168,6 +170,7 @@ export function scopeFor(
   if (!on) {
     return {
       window: ctx.page,
+      narrowed: false,
       band: null,
       traceFilter: null,
       highlightTrace: null,
@@ -179,8 +182,10 @@ export function scopeFor(
   const outside = merged === 'empty';
   const selected = merged === 'empty' ? null : merged;
   const traceFilter = rule.trace === 'filter' ? ctx.sel.trace : null;
+  const narrowed = rule.window === 'selection' && !outside && ctx.sel.t !== null;
   return {
-    window: rule.window === 'selection' && !outside && ctx.sel.t !== null ? selected : ctx.page,
+    window: narrowed ? selected : ctx.page,
+    narrowed,
     band: rule.band && !outside ? ctx.sel.t : null,
     traceFilter,
     highlightTrace: rule.trace === 'highlight' || rule.trace === 'resources' ? ctx.sel.trace : null,

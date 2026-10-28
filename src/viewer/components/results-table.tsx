@@ -33,6 +33,8 @@ export interface ResultsTableProps<R> {
   moveEnabled?: boolean;
   /** Row height in px (default 36); taller rows suit multi-line cells such as log bodies. */
   rowHeight?: number;
+  /** Marks a row: `match` gets `data-match` and an accent left rule, `muted` is dimmed (`data-muted`). */
+  rowMark?(row: R): 'match' | 'muted' | null;
 }
 
 /** Default row height in px. */
@@ -233,6 +235,7 @@ export function ResultsTable<R>(props: ResultsTableProps<R>): JSX.Element {
             if (modelRow === undefined || row === undefined) return null;
             const id = props.rowId(row);
             const selected = id === selectedId;
+            const mark = props.rowMark?.(row) ?? null;
             return (
               <div
                 key={modelRow.id}
@@ -241,12 +244,14 @@ export function ResultsTable<R>(props: ResultsTableProps<R>): JSX.Element {
                 aria-rowindex={v.index + 2}
                 aria-selected={selected}
                 data-selected={selected ? 'true' : undefined}
+                data-match={mark === 'match' ? 'true' : undefined}
+                data-muted={mark === 'muted' ? 'true' : undefined}
                 tabIndex={v.index === tabbable ? 0 : -1}
                 onClick={() => props.onRowClick(row)}
                 onKeyDown={(e) => onRowKey(e, v.index)}
                 className={`absolute left-0 grid w-full cursor-pointer items-center gap-2 px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-accent ${
                   selected ? 'bg-ink text-surface' : 'hover:bg-page'
-                }`}
+                } ${mark === 'match' ? 'border-l-2 border-accent' : mark === 'muted' ? 'opacity-60' : ''}`}
                 style={{
                   top: 0,
                   height: rowHeight,

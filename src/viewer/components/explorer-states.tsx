@@ -64,15 +64,17 @@ export function LoadingNote(props: { progress: { scanned: number; total: number 
   );
 }
 
-/** The empty result: `No <noun> match`, with a way out. */
-export function NoMatch(props: { noun: string; onClear(): void }): JSX.Element {
+/** The empty result: `No <noun> match`, with a way out when the caller has one (`onClear`). */
+export function NoMatch(props: { noun: string; onClear?: () => void }): JSX.Element {
   return (
     <section className="rounded-card border border-hairline bg-surface p-6">
       <h2 className="text-base font-semibold">No {props.noun} match</h2>
       <p className="mt-1 text-sm text-ink-2">Nothing in this run matches the current filters.</p>
-      <button type="button" onClick={props.onClear} className={`${PILL} mt-3 bg-ink text-surface`}>
-        Clear filters
-      </button>
+      {props.onClear !== undefined && (
+        <button type="button" onClick={props.onClear} className={`${PILL} mt-3 bg-ink text-surface`}>
+          Clear filters
+        </button>
+      )}
     </section>
   );
 }

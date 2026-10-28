@@ -25,7 +25,9 @@ import { bindings, following, scopeFor, type VariableBinding, type WidgetScope }
 import { SelectionChips } from './selection-chips.js';
 import { VariablesBar } from './variables-bar.js';
 import { WidgetFrame } from './widget-frame.js';
+import { LogsWidget } from './widgets/logs.js';
 import { TimelineWidget } from './widgets/timeline.js';
+import { TracesWidget } from './widgets/traces.js';
 
 /** What a widget can do to the page; each widget gets its own, bound to its id. */
 export interface WidgetActions {
@@ -33,6 +35,8 @@ export interface WidgetActions {
   selectTrace(id: TraceId | null): void;
   openIn(page: Page, route: string, patch: UrlPatch): void;
   setLogView(v: 'matches' | 'context'): void;
+  /** Replaces the frame's subtitle (the window text) with a count; null restores it. */
+  setSubtitle(text: string | null): void;
 }
 
 export type WidgetRenderer = (props: {
@@ -44,6 +48,8 @@ export type WidgetRenderer = (props: {
   actions: WidgetActions;
   /** The variables bound on the page (empty when every variable is all or unset). */
   variables: readonly VariableBinding[];
+  /** The page's `d` state, for the parts a widget shows from it (the Logs view). */
+  state: DashboardPageState;
 }) => JSX.Element;
 
 /** Stands in for a widget type whose component has not been written yet. */
@@ -54,8 +60,8 @@ const PendingWidget: WidgetRenderer = ({ widget }) => (
 /** One renderer per widget type: the page draws every widget through this table. */
 export const WIDGETS: Record<WidgetType, WidgetRenderer> = {
   timeline: TimelineWidget,
-  traces: PendingWidget,
-  logs: PendingWidget,
+  traces: TracesWidget,
+  logs: LogsWidget,
   metric: PendingWidget,
   toplist: PendingWidget,
   table: PendingWidget,
@@ -88,7 +94,11 @@ function windowText(w: TimeWindow | null, epoch: ReturnType<typeof parseUnixNano
   return w === null ? 'entire run' : `${absoluteTime(w.start, epoch)} – ${absoluteTime(w.end, epoch)}`;
 }
 
-/** The widget's "Open in …" target: the explorer for its signal, with its effective filter and window. */
+/**
+ * The widget's "Open in …" target: the explorer for its signal, with its effective filter and window (and, for
+ * Traces, its mode). The one mechanism for every widget: the frame shows the button, the page builds the patch.
+ * For Traces and Logs `scope.condition` is the widget's query with the variables, plus the trace for Logs.
+ */
 function openInOf(
   widget: Widget,
   scope: WidgetScope,
@@ -111,6 +121,8 @@ function openInOf(
           q: scope.condition,
           t: scope.window === null ? null : formatWindow(scope.window),
           text: widget.text === '' ? null : widget.text,
+          // The Traces page opens in spans mode; a Traces widget in spans mode needs no `mode` key.
+          ...(widget.type === 'traces' ? { mode: widget.mode === 'spans' ? null : widget.mode } : {}),
         },
       };
     }
@@ -190,6 +202,8 @@ function DashboardView(props: {
   const logRef = useSelection((s) => s.logRef);
   const clear = useSelection((s) => s.clear);
   const [editing, setEditing] = useState(false);
+  /** Counts the widgets report for their frames ("12 in selected time"), by widget id. */
+  const [subtitles, setSubtitles] = useState<Readonly<Record<string, string>>>({});
   const stacked = useStacked();
   const epoch = parseUnixNanos(manifest.epochUnixNano, 'manifest.epochUnixNano');
   const layout = props.layout ?? layoutOf(d.widgets);
@@ -240,13 +254,19 @@ function DashboardView(props: {
       selectTrace: (id) => change((s) => ({ ...s, sel: { ...s.sel, trace: id } })),
       openIn: (target, route, patch) => goTo(target, route, patch),
       setLogView: (v) => change((s) => ({ ...s, logView: { ...s.logView, [w.id]: v } })),
+      setSubtitle: (text) =>
+        setSubtitles((all) => {
+          if (all[w.id] === (text ?? undefined)) return all;
+          const { [w.id]: _old, ...rest } = all;
+          return text === null ? rest : { ...rest, [w.id]: text };
+        }),
     };
     const Body = WIDGETS[w.type];
     return (
       <WidgetFrame
         widget={w}
         resetKey={JSON.stringify([w, scope])}
-        subtitle={windowText(scope.window, epoch)}
+        subtitle={subtitles[w.id] ?? windowText(scope.window, epoch)}
         following={w.type === 'timeline' ? null : known.following}
         onFollow={(v) => change((s) => ({ ...s, follow: { ...s.follow, [w.id]: v } }))}
         openIn={
@@ -264,6 +284,7 @@ function DashboardView(props: {
           dataSource={dataSource}
           actions={actions}
           variables={bound?.bindings ?? []}
+          state={state}
         />
       </WidgetFrame>
     );

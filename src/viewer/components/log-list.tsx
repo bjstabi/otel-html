@@ -38,9 +38,11 @@ export function LogList(props: {
   height?: number;
   /** Whether the report holds a trace; with it, a trace id the report lacks is shown as text, not a link. */
   hasTrace?: TraceCheck;
+  /** Refs to mark as matches (accent rule, `data-match`); with the set given, the other rows are muted. */
+  highlighted?: ReadonlySet<string>;
 }): JSX.Element {
   const [lines, setLines] = useState<number>(1);
-  const { extraColumns: extra, hasTrace } = props;
+  const { extraColumns: extra, hasTrace, highlighted } = props;
   const check = useMemo(() => (hasTrace === undefined ? undefined : cachedCheck(hasTrace)), [hasTrace]);
   const columns = useMemo(
     () => [...logColumns(lines, check), ...(extra ?? []).map(logAttributeColumn)],
@@ -79,6 +81,9 @@ export function LogList(props: {
         selectedId={props.selectedRef}
         epoch={props.epoch}
         rowHeight={20 * lines + 16}
+        {...(highlighted === undefined
+          ? {}
+          : { rowMark: (r: LogRow) => (highlighted.has(r.ref) ? ('match' as const) : ('muted' as const)) })}
         {...(props.height === undefined ? {} : { height: props.height })}
         {...(props.moveEnabled === undefined ? {} : { moveEnabled: props.moveEnabled })}
       />

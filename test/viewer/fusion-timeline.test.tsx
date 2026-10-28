@@ -20,6 +20,7 @@ import { TimelineWidget } from '../../src/viewer/dashboards/widgets/timeline.js'
 import type { DataSource, SpanQueryResult } from '../../src/viewer/data/data-source.js';
 import { createDataSource } from '../../src/viewer/data/data-source.js';
 import type { TimeWindow } from '../../src/viewer/data/span-query.js';
+import { EMPTY_DASHBOARD_STATE } from '../../src/viewer/state/dashboard-state.js';
 import { baseManifest, dataSourceOf } from './dashboard-shell.js';
 import { buildEmbeddedMetricsReport } from './report-fixture.js';
 
@@ -172,12 +173,14 @@ describe('TimelineWidget on the linked fixture', () => {
       selectTrace: vi.fn(),
       openIn: vi.fn(),
       setLogView: vi.fn(),
+      setSubtitle: vi.fn(),
     };
     render(
       <TimelineWidget
         widget={w}
         scope={{
           window: null,
+          narrowed: false,
           band: null,
           traceFilter: null,
           highlightTrace: null,
@@ -189,6 +192,7 @@ describe('TimelineWidget on the linked fixture', () => {
         dataSource={ds}
         actions={actions}
         variables={variables}
+        state={EMPTY_DASHBOARD_STATE}
       />,
     );
     await act(async () => {});
@@ -220,6 +224,7 @@ describe('TimelineWidget states', () => {
     selectTrace: vi.fn(),
     openIn: vi.fn(),
     setLogView: vi.fn(),
+    setSubtitle: vi.fn(),
   };
 
   function mount(ds: DataSource): void {
@@ -230,6 +235,7 @@ describe('TimelineWidget states', () => {
         widget={w}
         scope={{
           window: null,
+          narrowed: false,
           band: null,
           traceFilter: null,
           highlightTrace: null,
@@ -241,6 +247,7 @@ describe('TimelineWidget states', () => {
         dataSource={ds}
         actions={actions}
         variables={[]}
+        state={EMPTY_DASHBOARD_STATE}
       />,
     );
   }
