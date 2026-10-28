@@ -7,7 +7,7 @@ import { useSelection } from '../state/selection-context.js';
 import { Chart } from './chart.js';
 
 /** Plot insets in px; the brush overlay uses the same values so pointer x maps onto bucket columns. */
-const GRID = { left: 40, right: 8, top: 24, bottom: 24 } as const;
+export const GRID = { left: 40, right: 8, top: 24, bottom: 24 } as const;
 
 /**
  * Most columns the histogram draws. Rollups keep up to 4096 buckets, far more than the card is wide, and every
@@ -125,14 +125,14 @@ const VAR_RE = /^var\((--[a-z0-9-]+)\)$/;
 const UNRESOLVED_COLOR = '#6b6f78';
 
 /** Resolve a `var(--token)` reference against the live theme (an unset token gives `UNRESOLVED_COLOR`); other colours pass through. */
-function resolveColor(color: string): string {
+export function resolveColor(color: string): string {
   const name = VAR_RE.exec(color)?.[1];
   if (name === undefined) return color;
   const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   return v === '' ? UNRESOLVED_COLOR : v;
 }
 
-function seconds(ns: number): string {
+export function seconds(ns: number): string {
   return `${(ns / 1e9).toFixed(ns % 1e9 === 0 ? 0 : 1)}s`;
 }
 
@@ -140,17 +140,20 @@ function sum(xs: readonly number[]): number {
   return xs.reduce((a, b) => a + b, 0);
 }
 
-export function buildHistogramOption<K extends string>(
+/** One stacked bar series per histogram series, in legend order; errors keep their hatch pattern. */
+export function histogramBars<K extends string>(
   b: BucketView<K>,
-  { series, topFirst }: Pick<HistogramSeriesSet<K>, 'series' | 'topFirst'>,
+  series: readonly HistogramSeries<K>[],
+  /** Which axes of a multi-grid chart the bars belong to. */
+  axis: { xAxisIndex: number; yAxisIndex: number } | null = null,
 ) {
-  const x = Array.from({ length: b.length }, (_, i) => seconds(b.startNs + i * b.widthNs));
-  const bars = series.map((s) => {
+  return series.map((s) => {
     const color = resolveColor(s.color);
     return {
       name: s.label,
       type: 'bar',
       stack: 'total',
+      ...(axis ?? {}),
       data: Array.from({ length: b.length }, (_, i) => b.counts(s.key)[i] ?? 0),
       itemStyle:
         s.hatch === true
@@ -168,6 +171,25 @@ export function buildHistogramOption<K extends string>(
           : { color },
     };
   });
+}
+
+/** Re-resolves colour tokens when the theme attributes on the root element change. */
+export function useThemeTick(): number {
+  const [themeTick, setThemeTick] = useState(0);
+  useEffect(() => {
+    const mo = new MutationObserver(() => setThemeTick((n) => n + 1));
+    mo.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'class'] });
+    return () => mo.disconnect();
+  }, []);
+  return themeTick;
+}
+
+export function buildHistogramOption<K extends string>(
+  b: BucketView<K>,
+  { series, topFirst }: Pick<HistogramSeriesSet<K>, 'series' | 'topFirst'>,
+) {
+  const x = Array.from({ length: b.length }, (_, i) => seconds(b.startNs + i * b.widthNs));
+  const bars = histogramBars(b, series);
   return {
     animation: false,
     grid: { ...GRID, containLabel: false },
@@ -190,16 +212,10 @@ export function HistogramCard<K extends string>(props: {
 }): JSX.Element {
   const buckets = useMemo(() => coarsenBuckets(props.buckets), [props.buckets]);
   const setWindow = useSelection((s) => s.setWindow);
-  const [themeTick, setThemeTick] = useState(0);
+  const themeTick = useThemeTick();
   const [range, setRange] = useState<{ anchor: number; cursor: number } | null>(null);
   const overlay = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
-
-  useEffect(() => {
-    const mo = new MutationObserver(() => setThemeTick((n) => n + 1));
-    mo.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'class'] });
-    return () => mo.disconnect();
-  }, []);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: themeTick re-reads the CSS colour tokens
   const option = useMemo(

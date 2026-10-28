@@ -21,10 +21,11 @@ import { dashboardToYaml } from './copy-config.js';
 import { DashboardLink } from './dashboard-link.js';
 import { DashboardGrid, useStacked } from './grid.js';
 import { type DashboardEntry, dashboardsOf, findDashboard } from './registry.js';
-import { bindings, following, scopeFor, type WidgetScope } from './scope.js';
+import { bindings, following, scopeFor, type VariableBinding, type WidgetScope } from './scope.js';
 import { SelectionChips } from './selection-chips.js';
 import { VariablesBar } from './variables-bar.js';
 import { WidgetFrame } from './widget-frame.js';
+import { TimelineWidget } from './widgets/timeline.js';
 
 /** What a widget can do to the page; each widget gets its own, bound to its id. */
 export interface WidgetActions {
@@ -41,6 +42,8 @@ export type WidgetRenderer = (props: {
   height: number;
   dataSource: DataSource;
   actions: WidgetActions;
+  /** The variables bound on the page (empty when every variable is all or unset). */
+  variables: readonly VariableBinding[];
 }) => JSX.Element;
 
 /** Stands in for a widget type whose component has not been written yet. */
@@ -50,7 +53,7 @@ const PendingWidget: WidgetRenderer = ({ widget }) => (
 
 /** One renderer per widget type: the page draws every widget through this table. */
 export const WIDGETS: Record<WidgetType, WidgetRenderer> = {
-  timeline: PendingWidget,
+  timeline: TimelineWidget,
   traces: PendingWidget,
   logs: PendingWidget,
   metric: PendingWidget,
@@ -260,6 +263,7 @@ function DashboardView(props: {
           height={heightPx}
           dataSource={dataSource}
           actions={actions}
+          variables={bound?.bindings ?? []}
         />
       </WidgetFrame>
     );

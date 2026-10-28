@@ -411,6 +411,16 @@ describe('metrics', () => {
   });
 });
 
+describe('metricPoints', () => {
+  test('is the unfiltered point rollup over time, and reads nothing but the metrics rollup', async () => {
+    const linked = await buildEmbeddedMetricsReport();
+    const ds = await createDataSource(createScriptedLoader(linked.files), linked.manifest, SMALL);
+    const points = await ds.metricPoints();
+    expect(points.keys).toEqual(['points']);
+    expect(points.total('points')).toBe(100);
+  });
+});
+
 describe('resourceValues', () => {
   test('unions the facets and the metric catalog, sorted, uncapped', async () => {
     const linked = await buildEmbeddedMetricsReport();

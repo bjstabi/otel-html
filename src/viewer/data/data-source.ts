@@ -27,7 +27,13 @@ import {
   patternRowsOf,
 } from './log-query.js';
 import { createWindowedLogSource } from './log-windowed.js';
-import { type LoadedMetric, loadMetric, loadMetricCatalog, metricsOnResources } from './metric-load.js';
+import {
+  type LoadedMetric,
+  loadMetric,
+  loadMetricCatalog,
+  loadMetricPoints,
+  metricsOnResources,
+} from './metric-load.js';
 import type { ScriptLoader } from './script-loader.js';
 import type { SpanQuery, SpanQueryResult, SpanRow } from './span-query.js';
 import type { TraceTree } from './trace-tree.js';
@@ -105,6 +111,8 @@ export interface DataSource {
   surroundingLogs(ref: LogRef, n: number): Promise<SurroundingLogs>;
   /** The metric catalog, loaded on first use. */
   metricCatalog(): Promise<MetricCatalog>;
+  /** Data points over time across every resource (the unfiltered rollup), loaded on first use. */
+  metricPoints(): Promise<TimeBuckets<'points'>>;
   /** One metric's series and levels, loaded on demand (the 32 most recent are kept). */
   metric(id: number): Promise<LoadedMetric>;
   /** Metrics with a series on one of `resources`, matched by canonical resource equality. */
@@ -314,6 +322,7 @@ export async function createDataSource(
     traceLogs: logs.traceLogs,
     surroundingLogs: logs.surroundingLogs,
     metricCatalog: getMetricCatalog,
+    metricPoints: () => loadMetricPoints(loader, manifest),
     metric: (id) => metrics.get(id, async () => loadMetric(loader, manifest, id, await getMetricCatalog())),
     metricsForResources: async (resources) => metricsOnResources(await getMetricCatalog(), resources),
     async resourceValues(key) {

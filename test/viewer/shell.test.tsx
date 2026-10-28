@@ -91,6 +91,7 @@ const dataSource: DataSource = {
   traceLogs: unused,
   surroundingLogs: unused,
   metricCatalog: unused,
+  metricPoints: unused,
   metric: unused,
   metricsForResources: unused,
   resourceValues: unused,

@@ -120,6 +120,7 @@ export function dataSourceOf(
     traceLogs: unused,
     surroundingLogs: unused,
     metricCatalog: unused,
+    metricPoints: () => Promise.resolve(new TimeBuckets(['points'], 8)),
     metric: unused,
     metricsForResources: unused,
     resourceValues: (key) => Promise.resolve(values[key] ?? { values: [], kind: 'string', capped: false }),

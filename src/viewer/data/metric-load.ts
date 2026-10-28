@@ -30,6 +30,8 @@ import { canonicalAttributesKey } from '../../model/interner.js';
 import type { ResourceRecord, ScopeRecord } from '../../model/records.js';
 import type { BucketAgg } from '../../rollups/metric-agg.js';
 import { MetricCatalog, type MetricEntry, type SeriesDef } from '../../rollups/metric-catalog.js';
+import { METRIC_KEYS } from '../../rollups/signal-counts.js';
+import { TimeBuckets } from '../../rollups/time-buckets.js';
 import type { ScriptLoader } from './script-loader.js';
 
 export interface LoadedSeries {
@@ -61,8 +63,11 @@ function invalid(path: string, expected: string, actual: string): OtelHtmlError 
 /** Resources and scopes are only read here, so no series cap applies. */
 const READ_ONLY = { seriesCap: Number.MAX_SAFE_INTEGER };
 
-/** The catalog from `data/rollups/metrics.js`. Its series definitions stay in each metric's `series.js`. */
-export async function loadMetricCatalog(loader: ScriptLoader, manifest: Manifest): Promise<MetricCatalog> {
+/** The `data/rollups/metrics.js` payload: an object holding the point buckets and the catalog. */
+async function loadMetricRollup(
+  loader: ScriptLoader,
+  manifest: Manifest,
+): Promise<{ path: string; payload: object }> {
   const path = rollupPath('metrics');
   if (!manifest.rollups.includes(path)) {
     throw invalid('manifest.rollups', `a listing of ${path}`, JSON.stringify(manifest.rollups));
@@ -71,7 +76,22 @@ export async function loadMetricCatalog(loader: ScriptLoader, manifest: Manifest
   if (typeof payload !== 'object' || payload === null || !Object.hasOwn(payload, 'catalog')) {
     throw invalid(path, 'an object with a catalog', typeof payload);
   }
+  return { path, payload };
+}
+
+/** The catalog from `data/rollups/metrics.js`. Its series definitions stay in each metric's `series.js`. */
+export async function loadMetricCatalog(loader: ScriptLoader, manifest: Manifest): Promise<MetricCatalog> {
+  const { path, payload } = await loadMetricRollup(loader, manifest);
   return MetricCatalog.from(Reflect.get(payload, 'catalog'), READ_ONLY, `${path}.catalog`);
+}
+
+/** Data points over time, from the same file's `buckets`: the unfiltered rollup, every resource. */
+export async function loadMetricPoints(
+  loader: ScriptLoader,
+  manifest: Manifest,
+): Promise<TimeBuckets<'points'>> {
+  const { path, payload } = await loadMetricRollup(loader, manifest);
+  return TimeBuckets.from(Reflect.get(payload, 'buckets'), METRIC_KEYS, `${path}.buckets`);
 }
 
 const SEGMENT_NAME = /\/seg-([0-9]{6})\.js$/;

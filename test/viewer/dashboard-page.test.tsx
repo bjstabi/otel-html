@@ -16,6 +16,9 @@ import {
   renderShell,
 } from './dashboard-shell.js';
 
+// jsdom has no layout or ResizeObserver, which ECharts needs; the timeline's chart is covered by its own test.
+vi.mock('../../src/viewer/components/chart.js', () => ({ Chart: (): null => null }));
+
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const TRACE = 'a1b2c3d4e5f60718293a4b5c6d7e8f90' as TraceId;
@@ -45,7 +48,6 @@ describe('the dashboard page', () => {
         .getAllByRole('heading', { level: 2 })
         .map((h) => h.textContent),
     ).toEqual(['Timeline', 'Traces', 'Logs', 'Metrics']);
-    expect(main().getByText('timeline widget')).toBeTruthy();
     expect(main().getByText('metric widget')).toBeTruthy();
   });
 
