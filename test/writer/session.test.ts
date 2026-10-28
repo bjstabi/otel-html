@@ -501,6 +501,19 @@ describe('folders and locking', () => {
     expect(chunkFiles).toEqual(['r/data/chunks/spans/000000.js']);
   });
 
+  test('create replaces a report whose data/metrics holds a stray file (e.g. .DS_Store)', async () => {
+    const w = createTestWriter();
+    await (await open(w)).close();
+    await w.fs.mkdirp('r/data/metrics');
+    await w.fs.writeTextAtomic('r/data/metrics/.DS_Store', 'finder');
+    const b = await open(w);
+    await b.add(otlp(spansRequest(2)), 'b.json');
+    await b.close();
+    expect(manifestOf(w, OUT).totals.spans).toBe(2);
+    // Not a metric directory: left alone, like any other file the writer does not own.
+    expect(w.fs.snapshot().has('r/data/metrics/.DS_Store')).toBe(true);
+  });
+
   test('append refuses a folder without a report', async () => {
     const w = createTestWriter();
     const e = await failure(openSession(w.deps, { out: OUT, config: testConfig(), mode: 'append' }));
