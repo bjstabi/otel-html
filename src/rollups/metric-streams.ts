@@ -337,10 +337,13 @@ function diffSide(cur: ExpSide, prev: ExpSide): ExpSide | null {
   return trimSide(cur.offset, counts);
 }
 
-function diffExp(cur: ExpAgg, prev: ExpAgg): ExpAgg | null {
-  if (cur.count < prev.count || cur.scale > prev.scale || cur.zeroThreshold !== prev.zeroThreshold)
-    return null;
-  const old = downscaleExp(prev, cur.scale);
+function diffExp(given: ExpAgg, prev: ExpAgg): ExpAgg | null {
+  if (given.count < prev.count || given.zeroThreshold !== prev.zeroThreshold) return null;
+  // SDKs only lower the scale within a stream; a higher one is compared at the previous (coarser) scale, not
+  // taken for a reset.
+  const scale = Math.min(given.scale, prev.scale);
+  const cur = downscaleExp(given, scale);
+  const old = downscaleExp(prev, scale);
   const positive = diffSide(cur.positive, old.positive);
   const negative = diffSide(cur.negative, old.negative);
   if (positive === null || negative === null || cur.zeroCount < old.zeroCount) return null;

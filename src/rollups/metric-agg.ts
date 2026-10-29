@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { OtelHtmlError } from '../model/errors.js';
+import { assertNever, OtelHtmlError } from '../model/errors.js';
 
 /** Most buckets one side (positive or negative) of an `ExpAgg` keeps after a merge. */
 const MAX_EXP_BUCKETS = 160;
@@ -141,10 +141,15 @@ function foldSide(side: ExpSide, scale: number, threshold: number): { side: ExpS
   return { side: counts.length === 0 ? { offset: 0, counts } : { offset, counts }, folded };
 }
 
+/** Whether `e` has no buckets: its scale then says nothing, so a merge need not coarsen to it. */
+const noBuckets = (e: ExpAgg): boolean => e.positive.counts.length === 0 && e.negative.counts.length === 0;
+
 function mergeExp(a: ExpAgg, b: ExpAgg): ExpAgg {
-  let scale = Math.min(a.scale, b.scale);
-  let x = downscaleExp(a, scale);
-  let y = downscaleExp(b, scale);
+  let scale = noBuckets(a) ? b.scale : noBuckets(b) ? a.scale : Math.min(a.scale, b.scale);
+  // A side without buckets takes the scale as it is (no bucket to move).
+  const at = (e: ExpAgg): ExpAgg => (noBuckets(e) ? { ...e, scale } : downscaleExp(e, scale));
+  let x = at(a);
+  let y = at(b);
   while (
     mergedSpan(x.positive, y.positive) > MAX_EXP_BUCKETS ||
     mergedSpan(x.negative, y.negative) > MAX_EXP_BUCKETS
@@ -225,13 +230,9 @@ export function mergeAgg(a: BucketAgg, b: BucketAgg, path: string): BucketAgg {
       };
     }
     default:
-      return assertNeverAgg(a, path);
+      return assertNever(a, path);
   }
   throw invariantError(path, `aggregates of kind '${a.k}'`, `kind '${b.k}'`);
-}
-
-function assertNeverAgg(x: never, path: string): never {
-  throw invariantError(path, 'known aggregate kind', JSON.stringify(x));
 }
 
 function histQuantile(h: HistAgg, q: number): number {

@@ -87,6 +87,12 @@ describe('mergeAgg', () => {
     if (m.k !== 'exp') throw new Error('kind');
     expect(m.positive.counts.reduce((s, c) => s + c, 0)).toBe(2);
   });
+  it('an exp agg with no buckets (only zeros) keeps the other side at its own scale', () => {
+    const zeros = exp({ count: 2, zeroCount: 2, scale: -4 });
+    const m = mergeAgg(oneValue(3, 3), zeros, 'p');
+    expect(m).toMatchObject({ k: 'exp', scale: 3, count: 3, zeroCount: 2 });
+    expect(mergeAgg(zeros, oneValue(3, 3), 'p')).toEqual(m);
+  });
   it('stays within 160 buckets per side for wildly spread values', () => {
     let acc: BucketAgg = oneValue(1e-6, 20);
     for (let i = 1; i < 1000; i++) acc = mergeAgg(acc, oneValue(i % 2 === 0 ? 1e-6 : 1e6, 20), 'p');

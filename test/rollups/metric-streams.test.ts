@@ -188,6 +188,49 @@ describe('StreamNormalizer', () => {
     expect(n.kind === 'ok' && n.agg.k === 'exp' && [n.agg.count, n.agg.zeroCount]).toEqual([5, 1]);
   });
 
+  describe('cumulative exponential histograms across a change', () => {
+    const e = (
+      pos: string[],
+      time: number,
+      over: { scale?: number; offset?: number; zeroThreshold?: number } = {},
+    ): MetricPointRecord => {
+      const count = pos.reduce((a, c) => a + Number(c), 0);
+      return pt({
+        type: 'exponentialHistogram',
+        time: rel(time),
+        point: {
+          count: String(count),
+          sum: count,
+          scale: over.scale ?? 0,
+          zeroThreshold: over.zeroThreshold ?? 0,
+          positive: { offset: over.offset ?? 2, bucketCounts: pos },
+        },
+      });
+    };
+
+    it('a higher scale is compared at the previous scale, not counted from zero', () => {
+      const s = new StreamNormalizer();
+      s.normalize(0, e(['1', '1'], 1));
+      // Scale 1 halves each bucket: index 2 at scale 0 is 4-5 at scale 1, index 3 is 6-7.
+      const n = s.normalize(0, e(['1', '0', '1', '2'], 2, { scale: 1, offset: 4 }));
+      expect(n.kind === 'ok' && n.reset).toBe(false);
+      expect(n.kind === 'ok' && n.agg.k === 'exp' && [n.agg.scale, n.agg.count, n.agg.positive]).toEqual([
+        0,
+        2,
+        { offset: 3, counts: [2] },
+      ]);
+    });
+
+    it('a lower count, a lower bucket or a new zero threshold is a reset', () => {
+      for (const next of [e(['1'], 2), e(['0', '5'], 2), e(['1', '1', '1'], 2, { zeroThreshold: 0.5 })]) {
+        const s = new StreamNormalizer();
+        s.normalize(0, e(['1', '1'], 1));
+        const n = s.normalize(0, next);
+        expect(n.kind === 'ok' && n.reset).toBe(true);
+      }
+    });
+  });
+
   it('makes summaries from the point', () => {
     const s = new StreamNormalizer();
     const n = s.normalize(
