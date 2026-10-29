@@ -176,7 +176,7 @@ function mergeKinds(kinds: readonly FacetValueKind[]): FacetValueKind {
  * `facets` pairs each signal's rollup facets with the keys whose values there are resource attributes: any other key
  * of the same name is a span or log attribute, not a resource one, so only the metric catalog's resources answer it.
  */
-function resourceValuesOf(
+export function resourceValuesOf(
   key: string,
   facets: readonly { facets: FacetCounts; resourceKeys: ReadonlySet<string> }[],
   catalog: MetricCatalog,
