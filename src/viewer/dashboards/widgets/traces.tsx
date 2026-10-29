@@ -13,7 +13,7 @@ import { SPAN_COLUMNS_UI, TRACE_COLUMNS_UI } from '../../traces/columns.js';
 import { useSpanQuery } from '../../traces/use-span-query.js';
 import type { WidgetRenderer } from '../dashboard-page.js';
 import { FRAME_CHROME_PX, useEpoch } from './layout.js';
-import { count, useSubtitle } from './subtitle.js';
+import { scopedCount, useSubtitle } from './subtitle.js';
 
 const MIN_PX = 96;
 const LIST_SHARE = 0.6;
@@ -91,11 +91,7 @@ export const TracesWidget: WidgetRenderer = ({ widget, scope, height, dataSource
   const noun = mode === 'spans' ? 'spans' : 'traces';
   useSubtitle(
     actions,
-    result === null
-      ? null
-      : scope.narrowed
-        ? `${result.total} in selected time`
-        : count(result.total, mode === 'spans' ? 'span' : 'trace'),
+    result === null ? null : scopedCount(result.total, mode === 'spans' ? 'span' : 'trace', scope),
   );
 
   const spanRows: SpanRow[] = result?.rows.filter(isSpanRow) ?? [];

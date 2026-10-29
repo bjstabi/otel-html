@@ -234,10 +234,10 @@ describe('the Traces widget states', () => {
     expect(release).not.toBeNull();
   });
 
-  test('"N in selected time" follows a selection window; otherwise the count is pluralised', async () => {
+  test('"N traces in selected time" follows a selection window; otherwise the count is pluralised', async () => {
     const ds = await linked();
     const first = mount(ds, { scope: { narrowed: true } });
-    await waitFor(() => expect(first.setSubtitle).toHaveBeenCalledWith('1 in selected time'));
+    await waitFor(() => expect(first.setSubtitle).toHaveBeenCalledWith('1 trace in selected time'));
     cleanup();
     const second = mount(ds);
     await waitFor(() => expect(second.setSubtitle).toHaveBeenCalledWith('1 trace'));

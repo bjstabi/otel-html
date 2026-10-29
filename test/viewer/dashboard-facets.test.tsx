@@ -10,6 +10,7 @@ vi.mock('../../src/viewer/components/chart.js', () => ({
 }));
 
 import { type Dashboard, DashboardSchema } from '../../src/dashboards/schema.js';
+import type { TraceId } from '../../src/model/ids.js';
 import { FacetCounts } from '../../src/rollups/facets.js';
 import { RedSeries } from '../../src/rollups/red.js';
 import { TimeBuckets } from '../../src/rollups/time-buckets.js';
@@ -175,6 +176,30 @@ describe('the Top list and Table widgets', () => {
   test('the subtitle counts the spans or logs', async () => {
     const a = mount(await linked(), { type: 'table', signal: 'spans', groupBy: 'service.name' });
     await waitFor(() => expect(a.setSubtitle).toHaveBeenCalledWith('2 spans'));
+  });
+
+  test('the scope reaches the query: window, condition and trace, and the subtitle says so', async () => {
+    const ds = await linked();
+    const queryLogs = vi.spyOn(ds, 'queryLogs');
+    const querySpans = vi.spyOn(ds, 'querySpans');
+    const trace = 'a'.repeat(32) as TraceId;
+    const window = { start: 1, end: 9 };
+    const scope = { window, narrowed: true, traceFilter: trace, condition: 'severity_number >= 9' };
+    const a = mount(ds, { type: 'table', signal: 'logs', groupBy: 'service.name' }, scope);
+    await waitFor(() => expect(a.setSubtitle).toHaveBeenCalledWith('0 logs for the selected trace'));
+    expect(queryLogs.mock.calls.at(-1)?.[0]).toMatchObject({
+      window,
+      traceId: trace,
+      condition: 'severity_number >= 9',
+    });
+    cleanup();
+    const b = mount(
+      ds,
+      { type: 'toplist', signal: 'spans', groupBy: 'service.name' },
+      { window, narrowed: true },
+    );
+    await waitFor(() => expect(b.setSubtitle).toHaveBeenCalledWith('0 spans in selected time'));
+    expect(querySpans.mock.calls.at(-1)?.[0]).toMatchObject({ window });
   });
 });
 

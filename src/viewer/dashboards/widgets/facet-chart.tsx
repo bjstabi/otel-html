@@ -16,8 +16,9 @@ import { useTheme } from '../../theme/theme-provider.js';
 import { useSpanQuery } from '../../traces/use-span-query.js';
 import { cssTokenReader, resolveCssVars } from '../../traces/views.js';
 import type { WidgetRenderer } from '../dashboard-page.js';
+import type { WidgetScope } from '../scope.js';
 import { FRAME_CHROME_PX } from './layout.js';
-import { count, useSubtitle } from './subtitle.js';
+import { count, scopedCount, useSubtitle } from './subtitle.js';
 
 /** The partial and loading notes. */
 const NOTE_PX = 24;
@@ -41,7 +42,7 @@ interface Shared {
   height: number;
   noun: 'Spans' | 'Logs';
   actions: Parameters<WidgetRenderer>[0]['actions'];
-  narrowed: boolean;
+  scope: Pick<WidgetScope, 'narrowed' | 'traceFilter'>;
 }
 
 /** Only a finished result: facets of the previous inputs are never shown as if they were current. */
@@ -56,10 +57,7 @@ function FacetBody<R extends Facets>(props: Shared & { handle: QueryHandle<R> })
   const result = readyOf(handle);
   const { state } = handle;
   const unit = props.noun === 'Spans' ? 'span' : 'log';
-  useSubtitle(
-    props.actions,
-    result === null ? null : props.narrowed ? `${result.total} in selected time` : count(result.total, unit),
-  );
+  useSubtitle(props.actions, result === null ? null : scopedCount(result.total, unit, props.scope));
   const empty = result !== null && result.facets.total(groupBy) === 0;
   const option = useMemo(() => {
     if (result === null || empty || props.widgetType !== 'toplist') return null;
@@ -137,7 +135,7 @@ export const FacetChartWidget: WidgetRenderer = ({ widget, scope, height, dataSo
     height,
     noun: signal === 'spans' ? 'Spans' : 'Logs',
     actions,
-    narrowed: scope.narrowed,
+    scope,
   };
   return signal === 'spans' ? (
     <SpanFacets {...shared} dataSource={dataSource} query={spans} />

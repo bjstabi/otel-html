@@ -68,12 +68,12 @@ describe('the Logs widget', () => {
     expect(logs.getByText('web log')).toBeTruthy();
   });
 
-  test('follows the selected trace: only its logs, "N for the selected trace"; ⛓ off lists them all', async () => {
+  test('follows the selected trace: only its logs, "N logs for the selected trace"; ⛓ off lists them all', async () => {
     const user = await withTraceSelected();
     const logs = region('Logs');
     await waitFor(() => expect(logs.queryByText('web log')).toBeNull());
     expect(logs.getByText('charge declined')).toBeTruthy();
-    expect(regionEl('Logs').textContent).toContain('1 for the selected trace');
+    expect(regionEl('Logs').textContent).toContain('1 log for the selected trace');
     await user.click(logs.getByRole('button', { name: /follows selection/ }));
     await waitFor(() => expect(logs.getByText('web log')).toBeTruthy());
     expect(regionEl('Logs').textContent).not.toContain('for the selected trace');
@@ -233,7 +233,7 @@ describe('the Logs widget states', () => {
   test('the subtitle counts, pluralised, and says "in selected time" for a following window', async () => {
     const ds = await linked();
     const first = mount(ds, { scope: { narrowed: true } });
-    await waitFor(() => expect(first.setSubtitle).toHaveBeenCalledWith('2 in selected time'));
+    await waitFor(() => expect(first.setSubtitle).toHaveBeenCalledWith('2 logs in selected time'));
     cleanup();
     const second = mount(ds, { scope: { condition: 'trace_id.string != ""' } });
     await waitFor(() => expect(second.setSubtitle).toHaveBeenCalledWith('1 log'));

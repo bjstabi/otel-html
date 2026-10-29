@@ -13,7 +13,7 @@ import type { QueryHandle } from '../../state/use-query.js';
 import type { WidgetRenderer } from '../dashboard-page.js';
 import { variableCondition } from '../scope.js';
 import { FRAME_CHROME_PX, useEpoch } from './layout.js';
-import { count, useSubtitle } from './subtitle.js';
+import { scopedCount, useSubtitle } from './subtitle.js';
 
 /** The view toggle and the list's own control row, under the frame's chrome. */
 const TOGGLE_PX = 32;
@@ -176,16 +176,7 @@ export const LogsWidget: WidgetRenderer = ({
   );
   const handle = useLogQuery(dataSource, matches);
   const matched = logsOf(handle);
-  useSubtitle(
-    actions,
-    matched === null
-      ? null
-      : scope.traceFilter !== null
-        ? `${matched.total} for the selected trace`
-        : scope.narrowed
-          ? `${matched.total} in selected time`
-          : count(matched.total, 'log'),
-  );
+  useSubtitle(actions, matched === null ? null : scopedCount(matched.total, 'log', scope));
   const listPx =
     Math.max(MIN_PX, height - FRAME_CHROME_PX - TOGGLE_PX - LIST_CONTROLS_PX - NOTE_PX) - TABLE_HEADER_PX;
   const list = { dataSource, sort, onSort: setSort, height: Math.max(48, listPx) };
