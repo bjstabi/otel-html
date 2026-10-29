@@ -48,7 +48,7 @@ export function MetricsExplorer(props: { dataSource: DataSource }): JSX.Element 
   const { manifest } = props.dataSource;
   if (manifest.totals.metrics === 0 || manifest.range === null) {
     return (
-      <PageChrome title="Metrics" manifest={manifest}>
+      <PageChrome title="Metrics" manifest={manifest} page="metrics">
         <ZeroMetrics manifest={manifest} />
       </PageChrome>
     );

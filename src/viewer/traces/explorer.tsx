@@ -102,7 +102,7 @@ export function TracesExplorer(props: { dataSource: DataSource }): JSX.Element {
   const { manifest } = props.dataSource;
   if (manifest.totals.spans === 0) {
     return (
-      <PageChrome title="Traces Explorer" signal="span" manifest={manifest}>
+      <PageChrome title="Traces Explorer" signal="span" manifest={manifest} page="traces">
         <ZeroSpans manifest={manifest} />
       </PageChrome>
     );

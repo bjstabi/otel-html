@@ -116,7 +116,7 @@ export function LogsExplorer(props: { dataSource: DataSource }): JSX.Element {
   const { manifest } = props.dataSource;
   if (manifest.totals.logs === 0) {
     return (
-      <PageChrome title="Logs" signal="log" manifest={manifest}>
+      <PageChrome title="Logs" signal="log" manifest={manifest} page="logs">
         <div className="flex flex-col gap-4">
           <OptionNotices />
           <ZeroLogs manifest={manifest} />

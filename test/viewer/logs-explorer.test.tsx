@@ -450,6 +450,11 @@ describe('LogsExplorer', () => {
     expect(queryLogs).not.toHaveBeenCalled();
   });
 
+  test('a zero-log report still has the Views menu', () => {
+    setup({ logs: 0 });
+    expect(screen.getByRole('button', { name: /Views/ })).toBeTruthy();
+  });
+
   test('a zero-log report still shows the invalid mode notice', () => {
     setup({ logs: 0, initial: { mode: 'spans', view: 'pointplot' } });
     const alerts = screen.getAllByRole('alert').map((a) => a.textContent);
