@@ -91,6 +91,23 @@ describe('createShortcutHandler', () => {
     expect(calls).toEqual([]);
   });
 
+  test('the timeout is measured between the key events, not between handling them', () => {
+    const { actions, calls } = actionsSpy();
+    const h = createShortcutHandler(SHORTCUTS, actions);
+    const at = (k: string, timeStamp: number): KeyboardEvent => {
+      const e = key(document.body, k);
+      Object.defineProperty(e, 'timeStamp', { value: timeStamp });
+      return e;
+    };
+    // Handled back to back here, as a page busy for seconds would handle them, but pressed 400 ms apart.
+    h(at('g', 100));
+    h(at('l', 500));
+    expect(calls).toEqual(['goLogs']);
+    h(at('g', 1000));
+    h(at('l', 2100));
+    expect(calls).toEqual(['goLogs']);
+  });
+
   test('ignores chords with ctrl, meta or alt and prevents default for handled keys', () => {
     const { actions, calls } = actionsSpy();
     const h = createShortcutHandler(SHORTCUTS, actions);

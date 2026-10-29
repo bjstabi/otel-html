@@ -50,11 +50,15 @@ function keyName(e: KeyboardEvent): string {
   return e.key === 'Escape' ? 'Esc' : e.key;
 }
 
-/** `now` is injectable so sequence timeouts are testable. Keystrokes in form fields never trigger shortcuts. */
+/**
+ * Keystrokes in form fields never trigger shortcuts. A sequence's timeout runs between the keys' own event times, so a
+ * busy page (a dashboard still drawing) that handles the second key late does not drop it; `now` is injectable for
+ * tests.
+ */
 export function createShortcutHandler(
   table: readonly Shortcut[],
   actions: ShortcutActions,
-  now: () => number = Date.now,
+  now: (e: KeyboardEvent) => number = (e) => e.timeStamp,
 ): (e: KeyboardEvent) => void {
   let pending: string[] = [];
   let pendingAt = 0;
@@ -68,7 +72,7 @@ export function createShortcutHandler(
     if (e.defaultPrevented || e.isComposing || e.ctrlKey || e.metaKey || e.altKey) return;
     if (isEditable(e.target) || overlayOpen()) return;
     const k = keyName(e);
-    const t = now();
+    const t = now(e);
     if (pending.length > 0 && t - pendingAt > SEQUENCE_TIMEOUT_MS) pending = [];
     let seq = [...pending, k];
     if (exact(seq) === undefined && !startsWith(seq)) seq = [k];
