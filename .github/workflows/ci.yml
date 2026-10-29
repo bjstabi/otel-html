@@ -104,37 +104,30 @@ jobs:
           if-no-files-found: ignore
 
   # The metrics scale check (spec §7: Explorer < 2 s, Catalog < 1 s on 200 metrics × 1,000 series × 1 h at 10 s),
-  # Chromium only. Writing its report takes ~15 minutes and ~12.5 GB of disk (another ~2 GB go to the other e2e
-  # reports), so the matrix jobs above leave it off and this job alone sets OTEL_HTML_METRICS_SCALE. It runs on the
-  # runner itself, not in the Playwright image: with the image pulled, / had 9.2 GB free and the report filled it.
-  # On the bare runner the first step deletes preinstalled toolchains this repo never uses, and the `df` steps log
-  # the margin.
+  # Chromium only, in the Playwright image like the jobs above. Its report writes the full 1 h only for the metric the
+  # Explorer charts and the first and last collection for the rest (~0.76M points, ~150 MB, under a minute); the
+  # test fails if either page loads another metric's files (e2e/fixture.ts, e2e/scale.spec.ts). The matrix jobs leave
+  # it off and this job alone sets OTEL_HTML_METRICS_SCALE.
   e2e-metrics-scale:
     needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 15
+    container:
+      image: mcr.microsoft.com/playwright:v1.64.1-noble@sha256:47b510dd9230bf0b9bfc9b20102241e577ea7a99334ab4c3ca19f19770e9b8ea
+      options: --user 1001 --ipc=host
     env:
       OTEL_HTML_METRICS_SCALE: "1"
       # The @perf budgets scale by (calibration ÷ this), never below 1: GitHub's runners come as AMD EPYC 9V45
       # (~85 ms, budgets as written) and EPYC 7763 (~150 ms, about 1.5×). See e2e/calibrate.ts.
       OTEL_HTML_PERF_REFERENCE_MS: "100"
     steps:
-      - run: df -h /
-      - run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
-          sudo docker image prune --all --force > /dev/null
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: dist
           path: dist/
-      # Chromium alone; its OS libraries are a short apt install (WebKit's are what make the image worth it above).
-      - run: pnpm exec playwright install --with-deps chromium
-      - run: df -h .
       - run: pnpm exec playwright test e2e/scale.spec.ts --project 'chromium-*' --grep 'metrics scale' --workers=1
-      - if: always()
-        run: df -h .
       - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

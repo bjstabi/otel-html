@@ -45,7 +45,7 @@ const FIXTURE_FILES: Partial<Record<FixtureReport, readonly string[]>> = {
  * `merged` is `otel-html merge` of `small` and `orphans`; `scale` and `huge` come from one generated 100k-span input.
  * `metrics-merged` merges two reports of the `metrics` fixture's first and last five collections, `metrics-single`
  * converts the fixture at once. `unfinished` holds the `linked` inputs, flushed but never closed. `metrics-scale` is
- * the metrics scale report (`e2e/metrics-scale.ts`), kept outside `REPORTS_DIR` between runs.
+ * the metrics scale report (`e2e/metrics-scale.ts`), written only by the specs that need it.
  */
 export type ReportName =
   | 'main'
@@ -62,15 +62,25 @@ export type ReportName =
   | 'dashboards-hostile'
   | 'metrics-scale';
 
-/** The metrics scale report's folder: generating it takes minutes, so it outlives `REPORTS_DIR`'s rebuilds. */
-export const METRICS_SCALE_DIR: URL = new URL('./.cache/metrics-scale/', import.meta.url);
-/** The metrics scale workload: 200 metrics × 1,000 series × 360 points (1 h at a 10 s interval). */
+/**
+ * The metrics scale workload (spec §7): 200 metrics × 1,000 series × 360 points (1 h at a 10 s interval). The report
+ * writes it in full only for the metric the Explorer charts first (`SCALE_CHARTED_METRIC`); every other metric keeps
+ * all its series but has points only in the first and last collection (`scaleMetricEmitted`). The catalog, series,
+ * resources and time range are those of the full workload, at ~1% of its points. The data-file guard in
+ * `e2e/scale.spec.ts` checks that the pages under test read nothing the smaller report leaves out.
+ */
 export const SCALE_METRICS = 200;
 export const SCALE_METRIC_SERIES = 1_000;
 export const SCALE_METRIC_POINTS = 360;
+export const SCALE_CHARTED_METRIC = 0;
+
+/** Whether the metrics scale report has points of metric `m` in collection `i`. */
+export function scaleMetricEmitted(m: number, i: number): boolean {
+  return m === SCALE_CHARTED_METRIC || i === 0 || i === SCALE_METRIC_POINTS - 1;
+}
 
 export function reportDir(name: ReportName): URL {
-  return name === 'metrics-scale' ? METRICS_SCALE_DIR : new URL(`${name}/`, REPORTS_DIR);
+  return new URL(`${name}/`, REPORTS_DIR);
 }
 
 /** The committed OTLP/JSON files a fixture report is built from. */

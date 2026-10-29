@@ -35,13 +35,16 @@ const str = (key: string, value: string): KeyValue =>
 
 /**
  * One request per collection: collections `firstPoint` … `firstPoint + points - 1`. A large run is generated a few
- * collections at a time, so only those are in memory at once.
+ * collections at a time, so only those are in memory at once. `emits(m, i)` picks the metrics collection `i` carries
+ * (all by default); a metric left out has no points in that collection, and the others keep their values. A resource
+ * with no metric in a collection is left out of its request.
  */
 export function scaleMetrics(
   metrics: number,
   series: number,
   points: number,
   firstPoint = 0,
+  emits: (metric: number, collection: number) => boolean = () => true,
 ): ExportMetricsServiceRequest[] {
   const attributes = Array.from({ length: series }, (_, j) => [
     str('host', `host-${j % HOSTS}`),
@@ -54,6 +57,7 @@ export function scaleMetrics(
     const time = SCALE_METRIC_EPOCH_NS + BigInt(i) * SCALE_METRIC_STEP_NS;
     const byService: Metric[][] = SCALE_METRIC_SERVICES.map(() => []);
     for (let m = 0; m < metrics; m++) {
+      if (!emits(m, i)) continue;
       const gauge = m % 2 === 1;
       const dataPoints = attributes.map((attrs, j) =>
         create(NumberDataPointSchema, {
@@ -81,10 +85,10 @@ export function scaleMetrics(
     }
     out.push(
       create(ExportMetricsServiceRequestSchema, {
-        resourceMetrics: resources.map((resource, k) => ({
-          resource,
-          scopeMetrics: [{ scope, metrics: byService[k] ?? [] }],
-        })),
+        resourceMetrics: resources.flatMap((resource, k) => {
+          const ms = byService[k] ?? [];
+          return ms.length === 0 ? [] : [{ resource, scopeMetrics: [{ scope, metrics: ms }] }];
+        }),
       }),
     );
   }

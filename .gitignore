@@ -5,4 +5,3 @@ coverage/
 *.tsbuildinfo
 e2e/.reports/
 test-results/
-e2e/.cache/

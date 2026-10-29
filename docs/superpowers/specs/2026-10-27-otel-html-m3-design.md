@@ -112,6 +112,8 @@ Table from the catalog rollup: Metric, Type (with "monotonic"), Unit, Temporalit
 - **Unit:** temporality normalization (resets, start changes, out-of-order), bucket merging at each resolution, exp-histogram with negatives, percentile from explicit and exponential buckets, formula alignment, cardinality fold, per-series `where`.
 - **e2e:** Explorer query → chart → exemplar jump; Catalog → Explorer; Metrics tab in all three panels; `file://` and static server; merge of two reports with metrics.
 - **Targets** (new, ubuntu-latest, `OTEL_HTML_PERF_FACTOR` as before): Metrics Explorer interactive < 2 s on a report with 200 metrics × 1,000 series × 1 h at 10 s scrape; a query change re-renders < 150 ms (median); Catalog < 1 s; writer peak RSS stays < 512 MB with the series state included.
+  - The Explorer and Catalog targets are measured (`e2e/scale.spec.ts`, CI job `e2e-metrics-scale`) on a report with 200 metrics × 1,000 series where the charted metric has 1 h at 10 s and the other 199 have only their series, at the run's first and last collection. That is equivalent to the full workload because the test also checks which data files the pages load: the Catalog reads no per-metric files and the Explorer's first chart reads only the charted metric's `data/metrics/<id>/` files, so the points the smaller report leaves out never reach either page. If a page starts loading another metric's files the test fails.
+  - The writer RSS target (72M points) is not measured by that job. `test/writer/metric-memory.test.ts` measures it through the CLI, run by `mise run test:load` (not in CI).
 
 ## 8. Decided in conversation
 
