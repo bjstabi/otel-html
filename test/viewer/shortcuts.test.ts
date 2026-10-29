@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from 'vitest';
 import {
   createShortcutHandler,
+  SEQUENCE_TIMEOUT_MS,
   SHORTCUTS,
   type ShortcutAction,
   type ShortcutActions,
@@ -79,33 +80,40 @@ describe('createShortcutHandler', () => {
   });
 
   test('a sequence is dropped after the timeout and by an unrelated key', () => {
-    const { actions, calls } = actionsSpy();
-    let now = 0;
-    const h = createShortcutHandler(SHORTCUTS, actions, () => now);
-    h(key(document.body, 'g'));
-    now = 5000;
-    h(key(document.body, 'l'));
-    h(key(document.body, 'g'));
-    h(key(document.body, 'x'));
-    h(key(document.body, 'l'));
-    expect(calls).toEqual([]);
+    vi.useFakeTimers();
+    try {
+      const { actions, calls } = actionsSpy();
+      const h = createShortcutHandler(SHORTCUTS, actions);
+      h(key(document.body, 'g'));
+      vi.advanceTimersByTime(SEQUENCE_TIMEOUT_MS);
+      h(key(document.body, 'l'));
+      h(key(document.body, 'g'));
+      h(key(document.body, 'x'));
+      h(key(document.body, 'l'));
+      expect(calls).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
-  test('the timeout is measured between the key events, not between handling them', () => {
-    const { actions, calls } = actionsSpy();
-    const h = createShortcutHandler(SHORTCUTS, actions);
-    const at = (k: string, timeStamp: number): KeyboardEvent => {
-      const e = key(document.body, k);
-      Object.defineProperty(e, 'timeStamp', { value: timeStamp });
-      return e;
-    };
-    // Handled back to back here, as a page busy for seconds would handle them, but pressed 400 ms apart.
-    h(at('g', 100));
-    h(at('l', 500));
-    expect(calls).toEqual(['goLogs']);
-    h(at('g', 1000));
-    h(at('l', 2100));
-    expect(calls).toEqual(['goLogs']);
+  test('keys queued behind a busy page still pair up: the timeout is a timer, not the gap between their handling', () => {
+    vi.useFakeTimers();
+    try {
+      const { actions, calls } = actionsSpy();
+      const h = createShortcutHandler(SHORTCUTS, actions);
+      // A page busy for longer than the timeout handles both keys back to back, before the timer can run.
+      h(key(document.body, 'g'));
+      vi.setSystemTime(Date.now() + 5 * SEQUENCE_TIMEOUT_MS);
+      h(key(document.body, 'l'));
+      expect(calls).toEqual(['goLogs']);
+      // The timer starts over with each sequence.
+      h(key(document.body, 'g'));
+      vi.advanceTimersByTime(SEQUENCE_TIMEOUT_MS - 1);
+      h(key(document.body, 'l'));
+      expect(calls).toEqual(['goLogs', 'goLogs']);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test('ignores chords with ctrl, meta or alt and prevents default for handled keys', () => {

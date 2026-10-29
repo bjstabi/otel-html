@@ -1,6 +1,6 @@
 import { Tooltip } from '@base-ui/react/tooltip';
 import { X } from 'lucide-react';
-import { type JSX, useCallback, useEffect, useMemo, useState } from 'react';
+import { type JSX, useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { Redirect, Route, Router, Switch } from 'wouter';
 import type { Manifest } from '../../format/manifest.js';
 import { SELECTION_MODES } from '../../query/pages.js';
@@ -93,10 +93,11 @@ function CarryNotice(props: { carried: Carried | null; onDismiss: () => void }):
 
 /**
  * `/logs/patterns` is the Logs explorer in patterns mode: replace it with `/logs?<query>&mode=patterns`. The raw query
- * is rewritten (not parsed), so invalid params still reach `bindUrl` and are reported.
+ * is rewritten (not parsed), so invalid params still reach `bindUrl` and are reported: a layout effect, like `bindUrl`'s,
+ * and a child's, so it runs first.
  */
 function PatternsRedirect(): null {
-  useEffect(() => {
+  useLayoutEffect(() => {
     const hash = window.location.hash;
     const qi = hash.indexOf('?');
     const params = new URLSearchParams(qi >= 0 ? hash.slice(qi + 1) : '');
@@ -116,7 +117,10 @@ export function Shell(props: { dataSource: DataSource; history: HistoryPort }): 
   const [helpOpen, setHelpOpen] = useState(false);
   const [carried, setCarried] = useState<Carried | null>(null);
 
-  useEffect(() => bindUrl(store, history, setErrors), [store, history]);
+  // Layout effects, here and for the shortcuts below, run before the page first paints. A passive effect can run after
+  // it on a slow machine: bindUrl's first read of the URL then undid a choice made in between (a View picked), and keys
+  // pressed in between were lost.
+  useLayoutEffect(() => bindUrl(store, history, setErrors), [store, history]);
 
   const goTo = useCallback<GoTo>(
     (page, route, extra = {}, alsoDropped = []) => {
@@ -143,7 +147,7 @@ export function Shell(props: { dataSource: DataSource; history: HistoryPort }): 
     };
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const move = (delta: -1 | 1) => (): void => {
       window.dispatchEvent(new CustomEvent(MOVE_EVENT, { detail: delta }));
     };
