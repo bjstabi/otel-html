@@ -146,6 +146,7 @@
       "additionalProperties": false
     },
     "dashboards": {
+      "default": [],
       "type": "array",
       "items": {
         "type": "object",

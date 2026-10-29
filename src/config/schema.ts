@@ -115,7 +115,8 @@ export const ConfigSchema: z.ZodType<ResolvedConfig, ConfigInput> = z
     title: z.string().optional(),
     writer: WriterSchema,
     viewer: ViewerSchema,
-    dashboards: DashboardListSchema.default([]).transform((ds): ResolvedDashboard[] =>
+    // `config file` for a config parsed on its own; `resolveConfig` then names the layer each dashboard came from.
+    dashboards: DashboardListSchema.prefault([]).transform((ds): ResolvedDashboard[] =>
       ds.map((dashboard) => ({ source: 'config file', dashboard })),
     ),
     views: ViewListSchema.default([]),

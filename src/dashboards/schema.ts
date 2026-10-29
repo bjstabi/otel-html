@@ -10,6 +10,7 @@ import {
   type MetricPageState,
   MetricPageStateSchema,
   type MetricQuery,
+  type MetricQueryInput,
   MetricQuerySchema,
 } from '../query/metric-query.js';
 import { PAGE_OPTIONS } from '../query/pages.js';
@@ -116,7 +117,7 @@ export type WidgetInput =
     })
   | (FollowableInput & {
       type: 'metric';
-      queries?: unknown[] | null | undefined;
+      queries?: MetricQueryInput[] | null | undefined;
       formulas?: unknown[] | undefined;
       display?: 'lines' | 'area' | 'bars' | 'heatmap' | undefined;
       scale?: 'linear' | 'log' | undefined;
@@ -216,7 +217,7 @@ const signalBase = {
   text: z.string().default(''),
 };
 
-const MetricWidgetQuerySchema: z.ZodType<MetricQuery> = MetricQuerySchema.superRefine((q, ctx) => {
+const MetricWidgetQuerySchema: z.ZodType<MetricQuery, MetricQueryInput> = MetricQuerySchema.superRefine((q, ctx) => {
   if (q.metric === '') ctx.addIssue({ code: 'custom', path: ['metric'], message: 'a metric name' });
   if (q.show === '') ctx.addIssue({ code: 'custom', path: ['show'], message: 'a field to show' });
 });
