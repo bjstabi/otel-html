@@ -132,6 +132,9 @@ function ContextView(props: {
 }): JSX.Element {
   const handle = useLogQuery(props.dataSource, props.context);
   const { matched } = props;
+  // The first ROWS matches are enough: both lists share the sort, so the matches among the first ROWS logs are the
+  // first ones of the matches. A partial scan does not break that: the context list fills its rows from no more
+  // chunks than the (sparser) matches needed.
   const highlighted = useMemo(
     () => (matched === null ? undefined : new Set<string>(matched.rows.map((r) => r.ref))),
     [matched],
