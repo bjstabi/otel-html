@@ -16,10 +16,10 @@ import { useTheme } from '../../theme/theme-provider.js';
 import { useSpanQuery } from '../../traces/use-span-query.js';
 import { cssTokenReader, resolveCssVars } from '../../traces/views.js';
 import type { WidgetRenderer } from '../dashboard-page.js';
+import { FRAME_CHROME_PX } from './layout.js';
 import { count, useSubtitle } from './subtitle.js';
 
-/** Card header, padding and border around the body; the partial and loading notes. */
-const FRAME_CHROME_PX = 52;
+/** The partial and loading notes. */
 const NOTE_PX = 24;
 const MIN_PX = 96;
 

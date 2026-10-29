@@ -4,13 +4,13 @@ import { anyValueToDisplay } from '../../model/anyvalue.js';
 import type { RelNanos, TraceId } from '../../model/ids.js';
 import type { ResourceRecord } from '../../model/records.js';
 import { MAX_METRIC_QUERIES, type MetricPageState } from '../../query/metric-query.js';
-import type { MetricCatalog, MetricEntry } from '../../rollups/metric-catalog.js';
+import type { MetricEntry } from '../../rollups/metric-catalog.js';
 import { compareNamespaces, metricNamespace } from '../../semconv/metric-namespaces.js';
 import { tokenValue } from '../components/attribute-filter.js';
 import { ErrorCard, PILL } from '../components/explorer-states.js';
 import { type ChartPick, MetricChartCard } from '../components/metric-chart-card.js';
 import { METRIC_CHART_HEIGHT, type MetricSize } from '../components/metric-chart-option.js';
-import type { DataSource } from '../data/data-source.js';
+import { catalogOf, type DataSource } from '../data/data-source.js';
 import { type LoadedMetric, resourceKey } from '../data/metric-load.js';
 import {
   defaultShow,
@@ -19,8 +19,8 @@ import {
   runMetricQuery,
 } from '../data/metric-query.js';
 import type { TimeWindow } from '../data/span-query.js';
+import { CONTROL } from '../shell/controls.js';
 import { useGoTo } from '../shell/go-to.js';
-import { CONTROL } from '../shell/page-chrome.js';
 import { formatWindow } from '../state/url-state.js';
 import { useKeyedAsync } from '../state/use-keyed-async.js';
 import { exemplarTraceLookup, openChartPick } from './chart-pick.js';
@@ -374,8 +374,6 @@ function ResourceFacts(props: { resources: readonly ResourceRecord[] }): JSX.Ele
 
 const SEG = 'rounded-full px-2 py-0.5 text-xs';
 
-const loadCatalog = (ds: DataSource): Promise<MetricCatalog> => ds.metricCatalog();
-
 /**
  * Mockup 04, screen 3: every metric of the origin's resources as Explorer chart cards, grouped by semconv namespace
  * (only the first group starts expanded; charts render as they scroll into view), over the origin's moment ± 5 min.
@@ -388,7 +386,7 @@ export function MetricGrid(
   const resources = useMemo(() => distinctResources(origin.resources), [origin.resources]);
   const resourceKeys = useMemo(() => new Set(resources.map(resourceKey)), [resources]);
   const by = useMemo(() => resourceLines(resources), [resources]);
-  const catalogState = useKeyedAsync(dataSource, loadCatalog);
+  const catalogState = useKeyedAsync(dataSource, catalogOf);
   const loadEntries = useCallback(
     (rs: readonly ResourceRecord[]) => dataSource.metricsForResources(rs),
     [dataSource],

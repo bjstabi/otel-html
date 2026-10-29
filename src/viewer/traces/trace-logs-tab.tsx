@@ -5,8 +5,8 @@ import { LogList } from '../components/log-list.js';
 import type { SortState } from '../components/results-table.js';
 import type { DataSource } from '../data/data-source.js';
 import { byTimeThenRef, LOG_SORTS, type LogRow } from '../data/log-query.js';
+import { CONTROL } from '../shell/controls.js';
 import { useGoTo } from '../shell/go-to.js';
-import { CONTROL } from '../shell/page-chrome.js';
 import { useKeyedAsync } from '../state/use-keyed-async.js';
 
 export type TraceLogsState = { rows: readonly LogRow[]; error: null } | { rows: null; error: string | null };

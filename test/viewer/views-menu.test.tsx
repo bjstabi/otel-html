@@ -71,7 +71,7 @@ function mount(page: 'traces' | 'logs' | 'metrics'): void {
 
 beforeEach(() => {
   window.localStorage.clear();
-  window.location.hash = `#/logs?t=5~9&q=body%3D%3D%22x%22&trace=${'a'.repeat(32)}`;
+  window.location.hash = `#/logs?t=5~9&q=body%3D%3D%22x%22&trace=${'a'.repeat(32)}&tab=logs&ltab=attributes`;
 });
 afterEach(() => {
   cleanup();
@@ -207,6 +207,24 @@ describe('ViewsMenu', () => {
     await user.click(screen.getByRole('button', { name: /Views/ }));
     expect(screen.queryByText('Browser storage is unavailable')).toBeNull();
     expect(screen.queryByRole('menuitem', { name: /Delete view/ })).toBeNull();
+    await user.click(await screen.findByRole('menuitem', { name: /Save current view/ }));
+    await user.type(screen.getByRole('textbox', { name: 'View title' }), 'Mine');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    expect(readLocalViews(window.localStorage).map((v) => v.title)).toEqual(['Mine']);
+  });
+
+  test('a view saved on one page is listed only on that page', async () => {
+    const user = userEvent.setup();
+    mount('logs');
+    await user.click(screen.getByRole('button', { name: /Views/ }));
+    await user.click(await screen.findByRole('menuitem', { name: /Save current view/ }));
+    await user.type(screen.getByRole('textbox', { name: 'View title' }), 'Mine');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    cleanup();
+    mount('traces');
+    await user.click(screen.getByRole('button', { name: /Views/ }));
+    expect(await screen.findByRole('menuitem', { name: 'Slow traces' })).toBeTruthy();
+    expect(screen.queryByRole('menuitem', { name: 'Mine' })).toBeNull();
   });
 
   test('storage whose getItem throws says it is unavailable', async () => {

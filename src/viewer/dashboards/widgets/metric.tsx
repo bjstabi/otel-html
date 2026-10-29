@@ -4,11 +4,10 @@ import { OtelHtmlError } from '../../../model/errors.js';
 import type { TraceId } from '../../../model/ids.js';
 import type { ResourceRecord } from '../../../model/records.js';
 import type { MetricPageState } from '../../../query/metric-query.js';
-import type { MetricCatalog } from '../../../rollups/metric-catalog.js';
 import { ErrorCard, LoadingNote } from '../../components/explorer-states.js';
 import { type ChartPick, MetricChartCard } from '../../components/metric-chart-card.js';
 import { METRIC_CHART_HEIGHT, type MetricSize } from '../../components/metric-chart-option.js';
-import type { DataSource } from '../../data/data-source.js';
+import { catalogOf, type DataSource } from '../../data/data-source.js';
 import { type MetricQuery, resolveMetric } from '../../data/metric-query.js';
 import type { TimeWindow } from '../../data/span-query.js';
 import { exemplarTraceLookup, openChartPick } from '../../metrics/chart-pick.js';
@@ -20,10 +19,9 @@ import { useKeyedAsync } from '../../state/use-keyed-async.js';
 import { traceResources } from '../../traces/trace-tabs.js';
 import type { WidgetRenderer } from '../dashboard-page.js';
 import { resourcesMatching, variableCondition } from '../scope.js';
+import { FRAME_CHROME_PX } from './layout.js';
 import { useSubtitle } from './subtitle.js';
 
-/** Card header, padding and border around the body. */
-const FRAME_CHROME_PX = 52;
 /** A chart card's own title, subtitle and padding, around its chart. */
 const CARD_CHROME_PX = 60;
 const FALLBACK_WINDOW: TimeWindow = { start: 0, end: 1 };
@@ -85,8 +83,6 @@ export function effectiveQueries(
   return queries.map((q) => ({ ...q, where: effectiveWhere(q, variables, resourceFilter) }));
 }
 
-const loadCatalog = (ds: DataSource): Promise<MetricCatalog> => ds.metricCatalog();
-
 function sizeFor(heightPx: number): MetricSize {
   const room = heightPx - FRAME_CHROME_PX;
   if (room >= METRIC_CHART_HEIGHT.L + CARD_CHROME_PX) return 'L';
@@ -112,7 +108,7 @@ const QueriesBody: Body = ({ widget, scope, height, dataSource, actions, variabl
   const { queries: own, formulas, display, scale, exemplars, echarts } = widget;
   const goTo = useGoTo();
   const narrowing = useNarrowing(dataSource, scope.highlightTrace);
-  const catalog = useKeyedAsync(dataSource, loadCatalog);
+  const catalog = useKeyedAsync(dataSource, catalogOf);
   const run = dataSource.manifest.range;
   const win = scope.window ?? run ?? FALLBACK_WINDOW;
   const [actionError, setActionError] = useState<string | null>(null);
@@ -229,15 +225,16 @@ function NarrowingNote(props: { narrowing: Extract<Narrowing, { status: 'ready' 
   if (resources.length > 0 && where === null) {
     return (
       <p role="note" className="text-xs text-muted">
-        The selected trace's resources have no attribute a filter can compare, so the charts show every resource.
+        The selected trace's resources have no attribute a filter can compare, so the charts show every
+        resource.
       </p>
     );
   }
   if (unexcluded === 0) return null;
   return (
     <p role="note" className="text-xs text-muted">
-      The charts also include {unexcluded} other {unexcluded === 1 ? 'resource' : 'resources'} that differ from
-      the trace's only in attributes a filter cannot compare.
+      The charts also include {unexcluded} other {unexcluded === 1 ? 'resource' : 'resources'} that differ
+      from the trace's only in attributes a filter cannot compare.
     </p>
   );
 }
@@ -245,7 +242,7 @@ function NarrowingNote(props: { narrowing: Extract<Narrowing, { status: 'ready' 
 /** Fusion's Metrics widget: the metric grid of the selected trace's resources, else of every resource. */
 const GridBody: Body = ({ scope, height, dataSource, actions, variables }) => {
   const narrowing = useNarrowing(dataSource, scope.highlightTrace);
-  const catalog = useKeyedAsync(dataSource, loadCatalog);
+  const catalog = useKeyedAsync(dataSource, catalogOf);
   const run = dataSource.manifest.range;
   const start = scope.window?.start ?? run?.start;
   const end = scope.window?.end ?? run?.end;

@@ -1,7 +1,7 @@
 import { type JSX, useMemo, useState } from 'react';
 import { andConditions } from '../../../dashboards/conditions.js';
 import { OtelHtmlError } from '../../../model/errors.js';
-import { parseUnixNanos, type TraceId } from '../../../model/ids.js';
+import type { TraceId } from '../../../model/ids.js';
 import { ErrorCard, LoadingNote, NoMatch, PartialNote } from '../../components/explorer-states.js';
 import { LogList } from '../../components/log-list.js';
 import type { SortState } from '../../components/results-table.js';
@@ -12,10 +12,10 @@ import { useSelection, useSelectionStore } from '../../state/selection-context.j
 import type { QueryHandle } from '../../state/use-query.js';
 import type { WidgetRenderer } from '../dashboard-page.js';
 import { variableCondition } from '../scope.js';
+import { FRAME_CHROME_PX, useEpoch } from './layout.js';
 import { count, useSubtitle } from './subtitle.js';
 
-/** Card header, padding and border, then the view toggle and the list's own control row. */
-const FRAME_CHROME_PX = 52;
+/** The view toggle and the list's own control row, under the frame's chrome. */
 const TOGGLE_PX = 32;
 const LIST_CONTROLS_PX = 36;
 const TABLE_HEADER_PX = 40;
@@ -92,10 +92,7 @@ function ListBody(props: {
   const { dataSource, handle, shown } = props;
   const store = useSelectionStore();
   const logRef = useSelection((s) => s.logRef);
-  const epoch = useMemo(
-    () => parseUnixNanos(dataSource.manifest.epochUnixNano, 'manifest.epochUnixNano'),
-    [dataSource],
-  );
+  const epoch = useEpoch(dataSource);
   const { state } = handle;
   return (
     <div className="flex flex-col gap-1">

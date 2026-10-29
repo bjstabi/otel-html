@@ -6,6 +6,7 @@ import type { Manifest } from '../../format/manifest.js';
 import type { ExplorerPage } from '../../query/pages.js';
 import type { FacetSignal } from '../components/filter-tokens.js';
 import { QueryBar } from '../components/query-bar.js';
+import { CONTROL, POPUP } from './controls.js';
 import { TimeRange } from './time-range.js';
 import { ViewsMenu } from './views-menu.js';
 
@@ -15,10 +16,6 @@ export interface ExportItem {
   /** Why the item is unavailable; the item is then disabled and shows this as its description. */
   disabled?: string;
 }
-
-export const CONTROL =
-  'flex items-center gap-1.5 rounded-full border border-hairline bg-surface px-3 py-1.5 text-sm text-ink hover:bg-hairline';
-export const POPUP = 'rounded-card border border-hairline bg-surface p-1 shadow-lg';
 
 /** The clipboard fallback: the text in a read-only, pre-selected box (a link, a YAML document) to copy by hand. */
 export function CopyTextDialog(props: {

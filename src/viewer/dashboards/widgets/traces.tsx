@@ -1,6 +1,6 @@
 import { type JSX, useCallback, useMemo, useState } from 'react';
 import { OtelHtmlError } from '../../../model/errors.js';
-import { parseUnixNanos, type SpanId, type TraceId } from '../../../model/ids.js';
+import type { SpanId, TraceId } from '../../../model/ids.js';
 import { ErrorCard, LoadingNote, NoMatch, PartialNote } from '../../components/explorer-states.js';
 import { isSpanRow } from '../../components/export.js';
 import { FlameGraph } from '../../components/flame-graph.js';
@@ -12,10 +12,9 @@ import { useColorAssigner } from '../../theme/colors-context.js';
 import { SPAN_COLUMNS_UI, TRACE_COLUMNS_UI } from '../../traces/columns.js';
 import { useSpanQuery } from '../../traces/use-span-query.js';
 import type { WidgetRenderer } from '../dashboard-page.js';
+import { FRAME_CHROME_PX, useEpoch } from './layout.js';
 import { count, useSubtitle } from './subtitle.js';
 
-/** Card header, padding and border around the body (as in the timeline widget). */
-const FRAME_CHROME_PX = 52;
 const MIN_PX = 96;
 const LIST_SHARE = 0.6;
 /** The table's own header row. */
@@ -70,10 +69,7 @@ export const TracesWidget: WidgetRenderer = ({ widget, scope, height, dataSource
   const { mode, text } = widget;
   const store = useSelectionStore();
   const colors = useColorAssigner();
-  const epoch = useMemo(
-    () => parseUnixNanos(dataSource.manifest.epochUnixNano, 'manifest.epochUnixNano'),
-    [dataSource],
-  );
+  const epoch = useEpoch(dataSource);
   const [sort, setSort] = useState<SortState>(DEFAULT_SORT);
   const query = useMemo<SpanQuery>(
     () => ({

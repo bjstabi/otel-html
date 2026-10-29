@@ -201,10 +201,11 @@ describe('the Metrics widget with queries', () => {
       ...r,
       attributes: new Map([...r.attributes, ['tags', tags(v)]]),
     });
-    const ds = await withResources(await linked(), (r) => tagged(r, 'a'), (all) => [
-      ...all.map((r) => tagged(r, 'a')),
-      ...all.slice(0, 1).map((r) => tagged(r, 'b')),
-    ]);
+    const ds = await withResources(
+      await linked(),
+      (r) => tagged(r, 'a'),
+      (all) => [...all.map((r) => tagged(r, 'a')), ...all.slice(0, 1).map((r) => tagged(r, 'b'))],
+    );
     mount(ds, { scope: { highlightTrace: TRACE } });
     await screen.findByRole('img', { name: /process\.cpu\.utilization/ });
     expect(screen.getByRole('note').textContent).toMatch(/also include 1 other resource /);

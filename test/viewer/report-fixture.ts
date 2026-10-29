@@ -623,7 +623,9 @@ export async function buildResourceValuesReport(): Promise<Fixture> {
           scopeMetrics: [
             {
               scope: { name: 'test-scope' },
-              metrics: [{ name: 'up', unit: '1', gauge: { dataPoints: [{ timeUnixNano: String(t), asDouble: 1 }] } }],
+              metrics: [
+                { name: 'up', unit: '1', gauge: { dataPoints: [{ timeUnixNano: String(t), asDouble: 1 }] } },
+              ],
             },
           ],
         },

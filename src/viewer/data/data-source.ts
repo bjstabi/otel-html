@@ -140,6 +140,9 @@ export interface SpanStrategy extends Pick<DataSource, 'querySpans' | 'hasTrace'
 export type LogStrategy = Pick<DataSource, 'queryLogs' | 'getLog' | 'traceLogs' | 'surroundingLogs'>;
 
 /** Metrics kept decoded in memory. */
+/** `ds.metricCatalog()` as a stable function, for `useKeyedAsync(dataSource, catalogOf)`. */
+export const catalogOf = (ds: DataSource): Promise<MetricCatalog> => ds.metricCatalog();
+
 export const METRIC_LRU_SIZE = 32;
 
 const DURATION_KEY_SEP = '\u0000';

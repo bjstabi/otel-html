@@ -15,6 +15,7 @@ import { useLogQuery } from '../../logs/use-log-query.js';
 import { useKeyedAsync } from '../../state/use-keyed-async.js';
 import { useSpanQuery } from '../../traces/use-span-query.js';
 import type { WidgetRenderer } from '../dashboard-page.js';
+import { FRAME_CHROME_PX } from './layout.js';
 
 /** Metric points have one series; they are not a status, so no hatch. */
 const METRIC_POINT_SERIES: HistogramSeriesSet<string> = {
@@ -23,8 +24,6 @@ const METRIC_POINT_SERIES: HistogramSeriesSet<string> = {
   series: [{ key: 'points', label: 'points', color: 'var(--oh-series-3)' }],
 };
 
-/** Card header, padding and border around the body; the chart gets what is left of the widget's height. */
-const FRAME_CHROME_PX = 52;
 const MIN_CHART_PX = 96;
 
 interface ChunkCount {
