@@ -288,6 +288,33 @@ describe('StreamNormalizer', () => {
       point: { count: '5', bucketCounts: ['1', '1'], explicitBounds: [1] },
     });
     expect(() => s.normalize(0, badCount)).toThrow(expect.objectContaining({ code: 'invalid-otlp' }));
+    const unsorted = pt({
+      type: 'histogram',
+      temporality: 'delta',
+      point: { count: '3', bucketCounts: ['1', '1', '1'], explicitBounds: [5, 1] },
+    });
+    expect(() => s.normalize(0, unsorted)).toThrow(
+      expect.objectContaining({ expected: 'finite numbers in ascending order' }),
+    );
+  });
+
+  it('drops summary quantiles outside [0, 1]', () => {
+    const s = new StreamNormalizer();
+    const n = s.normalize(
+      0,
+      pt({
+        type: 'summary',
+        point: {
+          count: '1',
+          sum: 1,
+          quantileValues: [
+            { quantile: 1.5, value: 9 },
+            { quantile: 1, value: 2 },
+          ],
+        },
+      }),
+    );
+    expect(n.kind === 'ok' && n.agg.k === 'summary' && n.agg.quantiles).toEqual([{ q: 1, v: 2 }]);
   });
 
   it('rejects an exponential histogram scale outside [-10, 20] or a bucket index a double cannot reach', () => {

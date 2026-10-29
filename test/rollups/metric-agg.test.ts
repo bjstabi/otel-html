@@ -188,6 +188,20 @@ describe('BucketAggSchema', () => {
     expect(BucketAggSchema.safeParse(hist({ counts: [1, 2, 3] })).success).toBe(false);
     expect(BucketAggSchema.safeParse(hist({ count: 11 })).success).toBe(false);
   });
+  it('rejects bounds out of order and a quantile outside [0, 1]', () => {
+    expect(BucketAggSchema.safeParse(hist({ bounds: [0, 10, 5] })).success).toBe(false);
+    expect(BucketAggSchema.safeParse(hist({ bounds: [0, 5, 5] })).success).toBe(false);
+    const summary = (q: number): BucketAgg => ({
+      k: 'summary',
+      count: 1,
+      sum: 1,
+      quantiles: [{ q, v: 1 }],
+      lastTime: 0,
+    });
+    expect(BucketAggSchema.safeParse(summary(1)).success).toBe(true);
+    expect(BucketAggSchema.safeParse(summary(1.5)).success).toBe(false);
+    expect(BucketAggSchema.safeParse(summary(-0.1)).success).toBe(false);
+  });
   it('accepts valid aggs and checks exp count including zeroCount', () => {
     expect(BucketAggSchema.safeParse(hist({})).success).toBe(true);
     const ok = exp({ count: 3, zeroCount: 1, positive: { offset: 0, counts: [2] } });

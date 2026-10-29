@@ -321,6 +321,9 @@ const HistAggSchema = z
     bounds: z.array(finite),
     counts: z.array(nonNegInt),
   })
+  .refine((h) => h.bounds.every((b, i) => i === 0 || b > (h.bounds[i - 1] ?? b)), {
+    message: 'bounds in ascending order',
+  })
   .refine((h) => h.counts.length === h.bounds.length + 1, { message: 'counts.length === bounds.length + 1' })
   .refine((h) => sumOf(h.counts) === h.count, { message: 'count equal to sum(counts)' });
 const ExpSideSchema = z.strictObject({
@@ -351,7 +354,7 @@ const SummaryAggSchema = z.strictObject({
   k: z.literal('summary'),
   count: nonNegInt,
   sum: finite,
-  quantiles: z.array(z.strictObject({ q: finite, v: finite })),
+  quantiles: z.array(z.strictObject({ q: z.number().min(0).max(1), v: finite })),
   lastTime: finite,
 });
 

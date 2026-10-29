@@ -172,8 +172,15 @@ function histOf(p: MetricPointRecord): HistAgg | null {
   checkCounts(p, 'point.bucketCounts', d.bucketCounts);
   checkCounts(p, 'point.count', [d.count]);
   if (d.sum !== undefined && !Number.isFinite(d.sum)) return null;
-  if (d.explicitBounds.some((b) => !Number.isFinite(b))) {
-    throw malformed(p, 'point.explicitBounds', 'finite numbers', JSON.stringify(d.explicitBounds));
+  if (
+    d.explicitBounds.some((b, i) => !Number.isFinite(b) || (i > 0 && b <= (d.explicitBounds[i - 1] ?? b)))
+  ) {
+    throw malformed(
+      p,
+      'point.explicitBounds',
+      'finite numbers in ascending order',
+      JSON.stringify(d.explicitBounds),
+    );
   }
   const counts = d.bucketCounts.length === 0 && d.explicitBounds.length === 0 ? [d.count] : d.bucketCounts;
   if (counts.length !== d.explicitBounds.length + 1) {
@@ -272,7 +279,7 @@ function summaryOf(p: MetricPointRecord): BucketAgg | null {
     count: d.count,
     sum: d.sum,
     quantiles: d.quantileValues
-      .filter((q) => Number.isFinite(q.quantile) && Number.isFinite(q.value))
+      .filter((q) => q.quantile >= 0 && q.quantile <= 1 && Number.isFinite(q.value))
       .map((q) => ({ q: q.quantile, v: q.value })),
     lastTime: p.time,
   };
