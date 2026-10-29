@@ -148,6 +148,9 @@ export function scaleTraceId(i: number): string {
 
 /** The scale input also holds this many logs, in `SCALE_LOG_FILES` OTLP/JSON files of equal size. */
 export const SCALE_LOGS = 1_000_000;
+/** The `scale` run's metrics: this many metrics × series on four of its services, at 0 s and 10 s. */
+export const SCALE_RUN_METRICS = 60;
+export const SCALE_RUN_METRIC_SERIES = 250;
 export const SCALE_LOG_FILES = 10;
 /** Logs and spans share a clock origin; log `i` is at origin + `i` x `LOG_STEP_NS` (10 ms), so the logs span about 2.8 hours. */
 const SCALE_EPOCH_NS = 1_700_000_000_000_000_000n;

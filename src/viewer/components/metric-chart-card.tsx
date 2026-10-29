@@ -42,6 +42,8 @@ export interface MetricChartCardProps {
   echarts?: Record<string, unknown> | null;
   /** Adds "Select this trace" to the menu of an exemplar whose trace the report holds. */
   onSelectTrace?: (traceId: TraceId) => void;
+  /** A newer result is loading; the chart stays drawn and is marked busy meanwhile. */
+  busy?: boolean;
   onPick(pick: ChartPick): void;
   onZoom(w: TimeWindow): void;
 }
@@ -300,7 +302,11 @@ export function MetricChartCard(props: MetricChartCardProps): JSX.Element {
 
   const seriesCount = results.reduce((n, r) => n + r.series.length, 0);
   return (
-    <section aria-label={props.title} className="rounded-card border border-hairline bg-surface p-3">
+    <section
+      aria-label={props.title}
+      aria-busy={props.busy === true ? true : undefined}
+      className="rounded-card border border-hairline bg-surface p-3"
+    >
       <h3 className="truncate text-sm font-medium">{props.title}</h3>
       <p className="truncate text-xs text-muted">{props.subtitle}</p>
       {props.notes.length > 0 && (

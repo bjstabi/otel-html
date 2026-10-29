@@ -5,8 +5,11 @@ import { createServer } from 'node:http';
 import { extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { toJson } from '@bufbuild/protobuf';
 import { Report } from '../src/api/index.js';
+import { ExportMetricsServiceRequestSchema } from '../src/model/gen/opentelemetry/proto/collector/metrics/v1/metrics_service_pb.js';
 import { scaleLogsRequest } from '../test-support/scale-logs.js';
+import { scaleMetrics } from '../test-support/scale-metrics.js';
 import { calibrationMs, cpuModel } from './calibrate.js';
 import {
   DASHBOARDS_CONFIG,
@@ -34,6 +37,8 @@ import {
   SCALE_LOG_FILES,
   SCALE_LOG_IDS,
   SCALE_LOGS,
+  SCALE_RUN_METRIC_SERIES,
+  SCALE_RUN_METRICS,
   SCALE_SERVICES,
   SCALE_SPANS_PER_TRACE,
   SCALE_TRACES,
@@ -325,7 +330,24 @@ async function writeScaleLogFiles(dir: URL): Promise<string[]> {
 }
 
 /**
- * One input of 100k spans and 1M logs (10 files), converted twice: `scale` with default settings (spans eager, logs
+ * Metrics on four of the scale services (`scaleMetrics`: `service.name` only, the spans' resources), so Fusion's
+ * Metrics frame has charts to narrow and draw when a trace is clicked. Two collections, 0 s and 10 s, keep the run
+ * inside the spans' ~10 s.
+ */
+async function writeScaleMetricsFile(dir: URL): Promise<string> {
+  const file = fileURLToPath(new URL('metrics.json', dir));
+  const [first, ...rest] = scaleMetrics(SCALE_RUN_METRICS, SCALE_RUN_METRIC_SERIES, 2).map(
+    (r) => toJson(ExportMetricsServiceRequestSchema, r) as { resourceMetrics: unknown[] },
+  );
+  await writeFile(
+    file,
+    JSON.stringify({ resourceMetrics: [first, ...rest].flatMap((r) => r?.resourceMetrics ?? []) }),
+  );
+  return file;
+}
+
+/**
+ * One input of 100k spans, 1M logs (10 files) and the scale run's metrics, converted twice: `scale` with default settings (spans eager, logs
  * windowed) and `huge` over a 5 MB eager budget (both windowed).
  */
 async function buildScaleReports(): Promise<void> {
@@ -333,7 +355,7 @@ async function buildScaleReports(): Promise<void> {
   await mkdir(inputs, { recursive: true });
   const file = fileURLToPath(new URL('traces.json', inputs));
   await writeFile(file, JSON.stringify(scaleInput()));
-  const all = [file, ...(await writeScaleLogFiles(inputs))];
+  const all = [file, ...(await writeScaleLogFiles(inputs)), await writeScaleMetricsFile(inputs)];
   await Promise.all([
     convertTo(reportDir('scale'), all, 'scale run'),
     convertTo(reportDir('huge'), all, 'huge run', {
