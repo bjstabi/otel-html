@@ -501,6 +501,16 @@ export function parseSegmentFile(input: unknown, root: string): SegmentFile {
   return { ...f, exemplars: decodeExemplars(f.exemplars, `${root}.exemplars`) };
 }
 
+/**
+ * A segment file the running writer wrote itself, read back for compaction: decoded like `parseSegmentFile` without
+ * validating it again (it was encoded from validated buckets moments before). Segments of an earlier session, read on
+ * append or merge, go through `parseSegmentFile`.
+ */
+export function decodeOwnSegmentFile(input: unknown, root: string): SegmentFile {
+  const f = input as SerializedSegmentFile;
+  return { ...f, exemplars: decodeExemplars(f.exemplars, `${root}.exemplars`) };
+}
+
 export function parseLevelFile(input: unknown, root: string): LevelFile {
   return parseWith(LevelFileSchema, input, root);
 }

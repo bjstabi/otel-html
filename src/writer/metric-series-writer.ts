@@ -5,6 +5,7 @@ import {
   bucketRange,
   capExemplars,
   dataFileKey,
+  decodeOwnSegmentFile,
   EXEMPLAR_BASE_LEVEL,
   encodeExemplarFile,
   encodeSegmentFile,
@@ -93,7 +94,11 @@ export async function restoreCatalogSeries(
   }
 }
 
-async function readDataFile(fs: FileSystem, out: string, path: string): Promise<unknown> {
+/**
+ * A data file's payload. `revive` (the default) decodes `{"$i"}` / `{"$b"}` tags; a file whose payload type holds no
+ * bigint or bytes (a segment this writer wrote) has none to decode.
+ */
+async function readDataFile(fs: FileSystem, out: string, path: string, revive = true): Promise<unknown> {
   const file = at(out, path);
   let text: string;
   try {
@@ -104,7 +109,8 @@ async function readDataFile(fs: FileSystem, out: string, path: string): Promise<
     });
   }
   try {
-    return reviveDataJson(unwrapDataFile(text, dataFileKey(path)), path);
+    const payload = unwrapDataFile(text, dataFileKey(path));
+    return revive ? reviveDataJson(payload, path) : payload;
   } catch (e) {
     if (e instanceof OtelHtmlError && e.code === 'invalid-report') {
       throw new OtelHtmlError('invalid-report', { message: `${path}: ${e.message}` });
@@ -129,6 +135,8 @@ export class MetricSeriesWriter {
   readonly #toDemote: Set<number>;
   readonly #buffers = new Map<number, MetricBuffer>();
   readonly #dirs = new Set<number>();
+  /** Segments this writer wrote: compaction reads them back without validating them again. */
+  readonly #ownSegments = new Set<string>();
   /** Paths written since `flush` last returned. */
   #written: string[] = [];
   #buffered = 0;
@@ -229,10 +237,9 @@ export class MetricSeriesWriter {
 
   async #writeSegment(id: number, series: BucketSeries[], exemplars: StoredExemplar[]): Promise<void> {
     const n = this.#nextSegment.get(id) ?? 0;
-    await this.#write(
-      metricSegmentPath(id, n),
-      encodeSegmentFile({ metric: id, widthNs: LEVEL0_WIDTH_NS, series, exemplars }),
-    );
+    const path = metricSegmentPath(id, n);
+    await this.#write(path, encodeSegmentFile({ metric: id, widthNs: LEVEL0_WIDTH_NS, series, exemplars }));
+    this.#ownSegments.add(path);
     this.#nextSegment.set(id, n + 1);
   }
 
@@ -298,7 +305,10 @@ export class MetricSeriesWriter {
         metricSeriesPath(id),
         encodeSeriesFile({ metric: id, series: [...catalog.seriesDefs(id)], gaps }),
       );
-      for (const n of paths.segments) this.#listed.delete(metricSegmentPath(id, n));
+      for (const n of paths.segments) {
+        this.#listed.delete(metricSegmentPath(id, n));
+        this.#ownSegments.delete(metricSegmentPath(id, n));
+      }
       for (const k of paths.levels) this.#listed.delete(metricLevelPath(id, k));
       for (const k of paths.levelExemplars) this.#listed.delete(metricLevelExemplarPath(id, k));
       for (const path of written) this.#listed.add(path);
@@ -315,7 +325,9 @@ export class MetricSeriesWriter {
     let exemplars: StoredExemplar[] = [];
     for (const n of [...segments].sort((a, b) => a - b)) {
       const path = metricSegmentPath(id, n);
-      const seg = parseSegmentFile(await this.#read(path), path);
+      const seg = this.#ownSegments.has(path)
+        ? decodeOwnSegmentFile(await readDataFile(this.#fs, this.#out, path, false), path)
+        : parseSegmentFile(await this.#read(path), path);
       for (const x of seg.series) {
         for (let i = 0; i < x.t.length; i++) {
           const agg = x.a[i];

@@ -1,7 +1,7 @@
 import { setFlagsFromString } from 'node:v8';
 import { runInNewContext } from 'node:vm';
 import { describe, expect, test } from 'vitest';
-import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
+import { reviveDataJson, unwrapDataFile, wrapDataFile } from '../../src/format/data-file.js';
 import {
   GAP_SAMPLE,
   LEVEL0_WIDTH_NS,
@@ -255,6 +255,37 @@ describe('MetricSeriesWriter', () => {
     expect(demoted.exemplars.map((e) => e.value)).toEqual([1]);
     await writer.compact(first.catalog);
     const l0 = read<LevelFile>(first.fs, metricLevelKey(0, 0), parseLevelFile);
+    expect(l0.series).toEqual([{ id: 0, t: [0, 1], a: [counter(1), counter(5)] }]);
+  });
+
+  test("compaction validates an earlier session's segments, and trusts only the ones it wrote", async () => {
+    /** Rewrites segment `n` of metric 0 with its `widthNs` changed, which validation rejects. */
+    const skew = async (fs: FileSystem, n: number): Promise<void> => {
+      const key = metricSegmentKey(0, n);
+      const text = (fs as ReturnType<typeof createMemoryFileSystem>).snapshot().get(`${OUT}/data/${key}.js`);
+      if (text === undefined) throw new Error(`missing ${key}`);
+      const payload = { ...(unwrapDataFile(text, key) as object), widthNs: 1 };
+      await fs.writeTextAtomic(`${OUT}/data/${key}.js`, wrapDataFile(key, payload));
+    };
+    const reopen = async (tamper: 'earlier' | 'own') => {
+      const first = setup();
+      const a = first.series('a', 'h1');
+      first.writer.add(a.def, a.series, rel(0), counter(1), []);
+      const listed = await first.writer.flush(first.catalog); // seg-000000, never compacted (a crash)
+      if (tamper === 'earlier') await skew(first.fs, 0);
+      const writer = new MetricSeriesWriter(first.fs, OUT, { exemplars: 2 }, new Map([[0, 1]]), listed);
+      writer.add(a.def, a.series, rel(1.5 * S), counter(5), []);
+      await writer.flush(first.catalog); // seg-000001, this writer's own
+      if (tamper === 'own') await skew(first.fs, 1);
+      return { fs: first.fs, compact: () => writer.compact(first.catalog) };
+    };
+    const earlier = await reopen('earlier');
+    await expect(earlier.compact()).rejects.toThrowError(
+      expect.objectContaining({ code: 'invalid-report', path: 'data/metrics/000000/seg-000000.js.widthNs' }),
+    );
+    const own = await reopen('own');
+    await own.compact();
+    const l0 = read<LevelFile>(own.fs, metricLevelKey(0, 0), parseLevelFile);
     expect(l0.series).toEqual([{ id: 0, t: [0, 1], a: [counter(1), counter(5)] }]);
   });
 
