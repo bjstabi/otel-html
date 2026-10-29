@@ -188,8 +188,8 @@ report/
     manifest.js         run metadata and chunk list
     rollups/            spans.js, logs.js, metrics.js
     chunks/             spans/, logs/, metrics/  (000000.js, ...)
-    metrics/            per metric (<id6>/): series.js, l<k>.js resolution levels and ex.js exemplars,
-                        or seg-<n6>.js segments until the writer closes
+    metrics/            per metric (<id6>/): series.js, l<k>.js resolution levels and ex.js / ex<k>.js
+                        exemplars, or seg-<n6>.js segments until the writer closes
     traces/             trace index shards (<xx>.js)
     state/              writer checkpoint (session.<n>.json)
 ```
