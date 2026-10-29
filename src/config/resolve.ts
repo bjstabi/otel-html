@@ -1,4 +1,4 @@
-import { Document, Scalar, stringify, YAMLSeq } from 'yaml';
+import { Document, Scalar, stringify, YAMLMap, YAMLSeq } from 'yaml';
 import { OtelHtmlError } from '../model/errors.js';
 import { ENV_BINDINGS } from './env.js';
 import { type ConfigInput, ConfigSchema, type ResolvedConfig } from './schema.js';
@@ -134,9 +134,17 @@ export function resolveConfig(layers: ResolveLayers): ResolveResult {
 
 /** Renders the resolved config as YAML, each leaf annotated with `# from: <source>`. */
 export function formatConfig(resolved: ResolveResult): string {
-  // Dashboards print as they are written (`{ id, title, widgets }`), not as their resolved `{ source, dashboard }`.
+  // Dashboards print as they are written (`{ id, title, widgets }`), each with a `# source:` comment, not as their
+  // resolved `{ source, dashboard }`.
   const { config } = resolved;
   const doc = new Document({ ...config, dashboards: config.dashboards.map((d) => d.dashboard) });
+  const dashboards = doc.get('dashboards');
+  if (dashboards instanceof YAMLSeq) {
+    dashboards.items.forEach((item, i) => {
+      const source = config.dashboards[i]?.source;
+      if (item instanceof YAMLMap && source !== undefined) item.commentBefore = ` source: ${source}`;
+    });
+  }
   const annotate = (node: unknown, path: string): void => {
     if (node instanceof Scalar || node instanceof YAMLSeq) {
       node.comment = ` from: ${resolved.sources.get(path) ?? 'default'}`;

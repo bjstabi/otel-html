@@ -217,10 +217,12 @@ const signalBase = {
   text: z.string().default(''),
 };
 
-const MetricWidgetQuerySchema: z.ZodType<MetricQuery, MetricQueryInput> = MetricQuerySchema.superRefine((q, ctx) => {
-  if (q.metric === '') ctx.addIssue({ code: 'custom', path: ['metric'], message: 'a metric name' });
-  if (q.show === '') ctx.addIssue({ code: 'custom', path: ['show'], message: 'a field to show' });
-});
+const MetricWidgetQuerySchema: z.ZodType<MetricQuery, MetricQueryInput> = MetricQuerySchema.superRefine(
+  (q, ctx) => {
+    if (q.metric === '') ctx.addIssue({ code: 'custom', path: ['metric'], message: 'a metric name' });
+    if (q.show === '') ctx.addIssue({ code: 'custom', path: ['show'], message: 'a field to show' });
+  },
+);
 
 const WidgetSchema = z
   .discriminatedUnion('type', [

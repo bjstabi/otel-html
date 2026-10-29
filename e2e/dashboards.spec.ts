@@ -7,6 +7,15 @@ import { expect, test } from './test.js';
 
 const widget = (page: Page, id: string): Locator => page.locator(`[data-widget="${id}"]`);
 
+/** The `N logs` (or `N traces`) count in a widget's subtitle, once it shows one. */
+async function countIn(w: Locator, noun: string): Promise<number> {
+  const re = new RegExp(`(?:^|\\D)(\\d+) ${noun}s?`);
+  await expect(w).toContainText(re);
+  const m = re.exec((await w.textContent()) ?? '');
+  if (m?.[1] === undefined) throw new Error(`no ${noun} count`);
+  return Number(m[1]);
+}
+
 /** Drags across a widget's timeline brush, from `from` to `to` as fractions of its width. */
 async function brush(page: Page, timeline: Locator, from: number, to: number): Promise<void> {
   const box = await timeline.getByRole('group', { name: 'Time brush' }).boundingBox();
@@ -101,14 +110,13 @@ test('Fusion: a variable value narrows the Logs widget and the URL carries it', 
   const problems = watchProblems(page);
   await page.goto(`${reportUrl('dashboards')}/index.html#/dashboards/fusion`);
   const logs = widget(page, 'logs');
-  await expect(logs).toContainText('40 logs');
+  const all = await countIn(logs, 'log');
   const service = page.getByRole('combobox', { name: 'service.name' });
   await service.click();
   await page.getByRole('option', { name: 'checkout', exact: true }).click();
   await expect(service).toContainText('checkout');
   await expect(page).toHaveURL(/service\.name/);
-  await expect(logs).toContainText(/\d+ logs?/);
-  await expect(logs).not.toContainText('40 logs');
+  await expect.poll(() => countIn(logs, 'log')).toBeLessThan(all);
   await expect(widget(page, 'traces')).toContainText(/\d+ traces?/);
   expect(problems).toEqual([]);
 });
@@ -124,7 +132,7 @@ test('Checkout: the environment default narrows everything until it is changed',
   // The default names no environment of this report, so the list is empty.
   const traces = widget(page, 'w2');
   await expect(traces).toContainText('No traces match');
-  await expect(traces).toContainText('0 traces');
+  await expect(traces).toContainText(/(?:^|\D)0 traces/);
   await env.click();
   await page.getByRole('option', { name: 'production' }).click();
   // The choice sticks: an option that vanished on selection once reset the variable to "all".
@@ -171,10 +179,10 @@ test('Edit layout: drag Logs, then Copy config holds the new position', async ({
   expect(moved?.x).toBe(7);
   expect(moved?.y).toBeGreaterThanOrEqual(29);
   const others = doc.dashboards[0]?.widgets.filter((w) => w.type !== 'logs') ?? [];
-  expect(others.map((w) => [w.type, w.x, w.y])).toEqual([
+  expect(others.map((w) => [w.type, w.x, w.y]).sort()).toEqual([
+    ['metric', 0, 19],
     ['timeline', 0, 0],
     ['traces', 0, 6],
-    ['metric', 0, 19],
   ]);
   expect(problems).toEqual([]);
 });
@@ -185,6 +193,7 @@ test('Open in Logs from a widget lands on Logs with the widget condition', async
   await page.getByRole('combobox', { name: 'environment' }).click();
   await page.getByRole('option', { name: 'production' }).click();
   await expect(page).toHaveURL(/production/);
+  const shown = await countIn(widget(page, 'w3'), 'log');
   await widget(page, 'w3')
     .getByRole('button', { name: /Open in Logs/ })
     .click();
@@ -194,7 +203,12 @@ test('Open in Logs from a widget lands on Logs with the widget condition', async
   const q = new URL(page.url().replace('#', '')).search;
   expect(decodeURIComponent(q.replace(/\+/g, ' '))).toContain('severity_number >= 13');
   expect(decodeURIComponent(q.replace(/\+/g, ' '))).toContain('deployment.environment.name');
-  await expect(page.getByRole('main')).toContainText('19 logs');
+  // The query bar shows the condition, and the page counts what the widget counted.
+  const filters = page.getByRole('list', { name: 'Filters' });
+  await expect(filters).toContainText('severity_number');
+  await expect(filters).toContainText('deployment.environment.name');
+  await expect(page.getByRole('textbox', { name: 'Value of severity_number' })).toHaveValue('13');
+  await expect(page.getByRole('main')).toContainText(new RegExp(`(?:^|\\D)${shown} logs?`));
   await expect(page.getByRole('grid', { name: 'Results' }).getByRole('row').nth(1)).toBeVisible();
   expect(problems).toEqual([]);
 });
@@ -207,4 +221,41 @@ test('Copy config on Checkout copies YAML of the dashboard', async ({ page, repo
   const yaml = await copied(page);
   expect(yaml).toContain('http.server.request.duration');
   expect(yaml).toContain('show: false');
+});
+
+test('Copy config with the real clipboard: Chromium reads it back, elsewhere it is copied or offered by hand', async ({
+  page,
+  context,
+  browserName,
+  reportUrl,
+}) => {
+  if (browserName === 'chromium') await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  await page.goto(`${reportUrl('dashboards')}/index.html#/dashboards/checkout`);
+  await page.getByRole('button', { name: 'Copy config' }).click();
+  const byHand = page.getByRole('textbox', { name: 'Dashboard config' });
+  const done = page.getByRole('status').filter({ hasText: 'Copied' });
+  await expect(done.or(byHand)).toBeVisible();
+  if (browserName === 'chromium') {
+    await expect(done).toBeVisible();
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toContain('id: checkout');
+  } else if (await byHand.isVisible()) {
+    await expect(byHand).toHaveValue(/id: checkout/);
+  }
+});
+
+test('below 768 px the widgets stack in reading order and the layout cannot be edited', async ({
+  page,
+  reportUrl,
+}) => {
+  const problems = watchProblems(page);
+  await page.setViewportSize({ width: 700, height: 1200 });
+  await page.goto(`${reportUrl('dashboards')}/index.html#/dashboards/fusion`);
+  const ids = ['timeline', 'traces', 'logs', 'metrics'];
+  for (const id of ids) await expect(widget(page, id)).toBeVisible();
+  const tops = await Promise.all(ids.map(async (id) => (await widget(page, id).boundingBox())?.y ?? -1));
+  expect([...tops].sort((a, b) => a - b)).toEqual(tops);
+  const lefts = await Promise.all(ids.map(async (id) => (await widget(page, id).boundingBox())?.x ?? -1));
+  expect(new Set(lefts).size).toBe(1);
+  await expect(page.getByRole('button', { name: 'Edit layout' })).toBeDisabled();
+  expect(problems).toEqual([]);
 });

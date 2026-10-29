@@ -71,9 +71,9 @@ describe('dashboards in config', () => {
 
   test('formatConfig prints dashboards as written, with their source', () => {
     const out = formatConfig(resolveConfig({ file: { dashboards: [dash] }, env: {} }));
-    expect(out).toMatch(/^dashboards:\n {2}- id: ops$/m);
+    expect(out).toMatch(/^dashboards:\n {2}# source: config file\n {2}- id: ops$/m);
     expect(out).toMatch(/^ {2}# from: file$/m);
-    expect(out).not.toContain('source:');
+    expect(out).not.toMatch(/^ *source:/m);
   });
 
   test('hostile text survives resolution unchanged', () => {

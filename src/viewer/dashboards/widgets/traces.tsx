@@ -116,7 +116,7 @@ export const TracesWidget: WidgetRenderer = ({ widget, scope, height, dataSource
       {state.status === 'error' && <ErrorCard title="The query could not run" message={state.message} />}
       {result !== null &&
         (result.total === 0 ? (
-          <NoMatch noun={noun}  heading="h3" />
+          <NoMatch noun={noun} heading="h3" />
         ) : mode === 'spans' ? (
           <ResultsTable
             rows={spanRows}
