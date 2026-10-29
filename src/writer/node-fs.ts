@@ -3,6 +3,9 @@ import { mkdir, open, readdir, readFile, realpath, rename, rm, stat, writeFile }
 import { dirname } from 'node:path';
 import type { FileSystem } from './ports.js';
 
+/** Characters `writePiecesAtomic` gathers before writing them. */
+const PIECE_BATCH = 256 * 1024;
+
 export function createNodeFileSystem(): FileSystem {
   return {
     readText: (p) => readFile(p, 'utf8'),
@@ -25,7 +28,17 @@ export function createNodeFileSystem(): FileSystem {
       try {
         const handle = await open(tmp, 'w');
         try {
-          for (const piece of pieces) if (piece.length > 0) await handle.write(piece, null, 'utf8');
+          // Pieces are often small (one series each): written in batches of about PIECE_BATCH characters, not one
+          // write call per piece.
+          let batch = '';
+          for (const piece of pieces) {
+            batch += piece;
+            if (batch.length >= PIECE_BATCH) {
+              await handle.write(batch, null, 'utf8');
+              batch = '';
+            }
+          }
+          if (batch.length > 0) await handle.write(batch, null, 'utf8');
         } finally {
           await handle.close();
         }
