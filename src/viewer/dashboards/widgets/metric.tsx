@@ -160,8 +160,11 @@ const QueriesBody: Body = ({ widget, scope, height, dataSource, actions, variabl
   if (catalog.status === 'loading' || narrowing.status === 'loading' || result.loading) {
     return <LoadingNote progress={null} />;
   }
-  if (missingNames.length === queries.length) {
-    return <Empty title="Not in this report" message={`${missingNames.join(', ')} is not in this report`} />;
+  if (missing.size === queries.length) {
+    const verb = missingNames.length === 1 ? 'is' : 'are';
+    return (
+      <Empty title="Not in this report" message={`${missingNames.join(', ')} ${verb} not in this report`} />
+    );
   }
   const failures = [...result.errors].filter(([id]) => !missing.has(id));
   const noData = plots.length > 0 && plots.every((p) => p.result.series.length === 0);
@@ -284,6 +287,7 @@ const GridBody: Body = ({ scope, height, dataSource, actions, variables }) => {
         origin={origin}
         band={scope.band}
         onSelectTrace={actions.selectTrace}
+        onZoom={actions.selectWindow}
       />
     </div>
   );

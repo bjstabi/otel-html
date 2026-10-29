@@ -248,6 +248,32 @@ describe('the Metrics widget with queries', () => {
     expect(screen.queryByRole('img')).toBeNull();
   });
 
+  test('two queries on the same missing metric are the empty state too', async () => {
+    mount(await linked(), {
+      widget: {
+        queries: [
+          { id: 'a', metric: 'nope.nothing', show: 'avg' },
+          { id: 'b', metric: 'nope.nothing', show: 'max' },
+        ],
+      },
+    });
+    expect(await screen.findByText('Not in this report')).toBeTruthy();
+    expect(screen.getByText('nope.nothing is not in this report')).toBeTruthy();
+    expect(screen.queryByRole('note')).toBeNull();
+  });
+
+  test('two missing metrics are named together', async () => {
+    mount(await linked(), {
+      widget: {
+        queries: [
+          { id: 'a', metric: 'nope.one', show: 'avg' },
+          { id: 'b', metric: 'nope.two', show: 'avg' },
+        ],
+      },
+    });
+    expect(await screen.findByText('nope.one, nope.two are not in this report')).toBeTruthy();
+  });
+
   test('one missing metric is a note beside the other queries chart', async () => {
     mount(await linked(), {
       widget: { queries: [CPU, { id: 'b', metric: 'nope.nothing', show: 'avg' }] },

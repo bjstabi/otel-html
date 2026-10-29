@@ -51,6 +51,8 @@ export interface MetricGridOrigin {
 export interface MetricGridExtras {
   band?: TimeWindow | null;
   onSelectTrace?: (traceId: TraceId) => void;
+  /** Where a drag on a chart goes (a dashboard's selection); without it the grid zooms itself, with Reset zoom. */
+  onZoom?: (w: TimeWindow) => void;
 }
 
 const SIZES: readonly MetricSize[] = ['S', 'M', 'L'];
@@ -405,7 +407,9 @@ export function MetricGrid(
   }, [catalogState, listed, resources]);
   const [size, setSize] = useState<MetricSize>('S');
   const [expandedState, setExpanded] = useState<ReadonlySet<string> | null>(null);
-  const [zoom, setZoom] = useState<TimeWindow | null>(null);
+  const [localZoom, setLocalZoom] = useState<TimeWindow | null>(null);
+  const zoom = props.onZoom === undefined ? localZoom : null;
+  const setZoom = props.onZoom ?? setLocalZoom;
   const [actionError, setActionError] = useState<string | null>(null);
   const hasTrace = useMemo(() => exemplarTraceLookup(dataSource), [dataSource]);
   const shown = zoom ?? origin.window;
@@ -479,7 +483,7 @@ export function MetricGrid(
           </span>
         )}
         {zoom !== null && (
-          <button type="button" className={`${PILL} text-xs hover:bg-hairline`} onClick={() => setZoom(null)}>
+          <button type="button" className={`${PILL} text-xs hover:bg-hairline`} onClick={() => setLocalZoom(null)}>
             Reset zoom
           </button>
         )}
