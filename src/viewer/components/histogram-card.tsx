@@ -1,13 +1,14 @@
-import { type JSX, type KeyboardEvent, type PointerEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { type JSX, useEffect, useMemo, useState } from 'react';
 import type { SpanStatusKey } from '../../rollups/span-rollups.js';
 import type { TimeBuckets } from '../../rollups/time-buckets.js';
 import { LOG_SEVERITY_KEYS, type LogSeverityKey, SEVERITY_BANDS } from '../../semconv/severity.js';
 import type { TimeWindow } from '../data/span-query.js';
 import { useSelection } from '../state/selection-context.js';
+import { BrushOverlay } from './brush-overlay.js';
 import { Chart } from './chart.js';
 
 /** Plot insets in px; the brush overlay uses the same values so pointer x maps onto bucket columns. */
-const GRID = { left: 40, right: 8, top: 24, bottom: 24 } as const;
+export const GRID = { left: 40, right: 8, top: 24, bottom: 24 } as const;
 
 /**
  * Most columns the histogram draws. Rollups keep up to 4096 buckets, far more than the card is wide, and every
@@ -125,14 +126,14 @@ const VAR_RE = /^var\((--[a-z0-9-]+)\)$/;
 const UNRESOLVED_COLOR = '#6b6f78';
 
 /** Resolve a `var(--token)` reference against the live theme (an unset token gives `UNRESOLVED_COLOR`); other colours pass through. */
-function resolveColor(color: string): string {
+export function resolveColor(color: string): string {
   const name = VAR_RE.exec(color)?.[1];
   if (name === undefined) return color;
   const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   return v === '' ? UNRESOLVED_COLOR : v;
 }
 
-function seconds(ns: number): string {
+export function seconds(ns: number): string {
   return `${(ns / 1e9).toFixed(ns % 1e9 === 0 ? 0 : 1)}s`;
 }
 
@@ -140,17 +141,20 @@ function sum(xs: readonly number[]): number {
   return xs.reduce((a, b) => a + b, 0);
 }
 
-export function buildHistogramOption<K extends string>(
+/** One stacked bar series per histogram series, in legend order; errors keep their hatch pattern. */
+export function histogramBars<K extends string>(
   b: BucketView<K>,
-  { series, topFirst }: Pick<HistogramSeriesSet<K>, 'series' | 'topFirst'>,
+  series: readonly HistogramSeries<K>[],
+  /** Which axes of a multi-grid chart the bars belong to. */
+  axis: { xAxisIndex: number; yAxisIndex: number } | null = null,
 ) {
-  const x = Array.from({ length: b.length }, (_, i) => seconds(b.startNs + i * b.widthNs));
-  const bars = series.map((s) => {
+  return series.map((s) => {
     const color = resolveColor(s.color);
     return {
       name: s.label,
       type: 'bar',
       stack: 'total',
+      ...(axis ?? {}),
       data: Array.from({ length: b.length }, (_, i) => b.counts(s.key)[i] ?? 0),
       itemStyle:
         s.hatch === true
@@ -168,6 +172,25 @@ export function buildHistogramOption<K extends string>(
           : { color },
     };
   });
+}
+
+/** Re-resolves colour tokens when the theme attributes on the root element change. */
+export function useThemeTick(): number {
+  const [themeTick, setThemeTick] = useState(0);
+  useEffect(() => {
+    const mo = new MutationObserver(() => setThemeTick((n) => n + 1));
+    mo.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'class'] });
+    return () => mo.disconnect();
+  }, []);
+  return themeTick;
+}
+
+export function buildHistogramOption<K extends string>(
+  b: BucketView<K>,
+  { series, topFirst }: Pick<HistogramSeriesSet<K>, 'series' | 'topFirst'>,
+) {
+  const x = Array.from({ length: b.length }, (_, i) => seconds(b.startNs + i * b.widthNs));
+  const bars = histogramBars(b, series);
   return {
     animation: false,
     grid: { ...GRID, containLabel: false },
@@ -190,16 +213,7 @@ export function HistogramCard<K extends string>(props: {
 }): JSX.Element {
   const buckets = useMemo(() => coarsenBuckets(props.buckets), [props.buckets]);
   const setWindow = useSelection((s) => s.setWindow);
-  const [themeTick, setThemeTick] = useState(0);
-  const [range, setRange] = useState<{ anchor: number; cursor: number } | null>(null);
-  const overlay = useRef<HTMLDivElement>(null);
-  const dragging = useRef(false);
-
-  useEffect(() => {
-    const mo = new MutationObserver(() => setThemeTick((n) => n + 1));
-    mo.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'class'] });
-    return () => mo.disconnect();
-  }, []);
+  const themeTick = useThemeTick();
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: themeTick re-reads the CSS colour tokens
   const option = useMemo(
@@ -212,41 +226,6 @@ export function HistogramCard<K extends string>(props: {
   // Hatched series are the error-like ones; their counts add up to the "errors" total.
   const hatched = props.series.series.filter((x) => x.hatch === true);
   const errors = hatched.length === 0 ? null : sum(hatched.map((x) => buckets.total(x.key)));
-  const last = Math.max(0, buckets.length - 1);
-
-  const indexAt = (e: PointerEvent<HTMLDivElement>): number => {
-    const el = overlay.current;
-    if (el === null || buckets.length === 0) return 0;
-    const r = el.getBoundingClientRect();
-    const f = r.width > 0 ? (e.clientX - r.left) / r.width : 0;
-    return Math.min(last, Math.max(0, Math.floor(f * buckets.length)));
-  };
-
-  const commit = (r: { anchor: number; cursor: number }): void => {
-    setWindow(brushToWindow(buckets, r.anchor, r.cursor, props.rangeEnd));
-  };
-
-  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>): void => {
-    if (buckets.length === 0) return;
-    const cur = range?.cursor ?? 0;
-    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-      e.preventDefault();
-      const cursor = Math.min(last, Math.max(0, cur + (e.key === 'ArrowRight' ? 1 : -1)));
-      // Shift keeps the existing anchor and extends from it; a plain arrow moves a single-bucket brush.
-      setRange({ anchor: e.shiftKey ? (range?.anchor ?? cur) : cursor, cursor });
-    } else if (e.key === 'Enter' && range !== null) {
-      e.preventDefault();
-      commit(range);
-    } else if (e.key === 'Escape') {
-      e.preventDefault();
-      setRange(null);
-      setWindow(null);
-    }
-  };
-
-  const lo = range === null ? 0 : Math.min(range.anchor, range.cursor);
-  const hi = range === null ? 0 : Math.max(range.anchor, range.cursor);
-  const col = 100 / Math.max(1, buckets.length);
 
   return (
     <section aria-label={title} className="rounded-card border border-hairline bg-surface p-3">
@@ -282,44 +261,13 @@ export function HistogramCard<K extends string>(props: {
           height={160}
           ariaLabel={`${title}: ${total} ${noun}${errors === null ? '' : `, ${errors} errors`}`}
         />
-        {/* biome-ignore lint/a11y/useSemanticElements: a custom brush widget, not a form field group */}
-        <div
-          ref={overlay}
-          role="group"
-          aria-label="Time brush"
-          // biome-ignore lint/a11y/noNoninteractiveTabindex: keyboard-operable brush (arrows, Shift, Enter, Escape)
-          tabIndex={0}
-          onKeyDown={onKeyDown}
-          onPointerDown={(e) => {
-            dragging.current = true;
-            e.currentTarget.setPointerCapture?.(e.pointerId);
-            const i = indexAt(e);
-            setRange({ anchor: i, cursor: i });
-          }}
-          onPointerMove={(e) => {
-            if (dragging.current)
-              setRange((r) => (r === null ? r : { anchor: r.anchor, cursor: indexAt(e) }));
-          }}
-          onPointerUp={(e) => {
-            if (!dragging.current) return;
-            dragging.current = false;
-            const r = range === null ? null : { anchor: range.anchor, cursor: indexAt(e) };
-            if (r !== null) {
-              setRange(r);
-              commit(r);
-            }
-          }}
-          className="absolute cursor-crosshair rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+        <BrushOverlay
+          length={buckets.length}
+          clickClears={false}
+          onCommit={(r) => setWindow(brushToWindow(buckets, r.anchor, r.cursor, props.rangeEnd))}
+          onClear={() => setWindow(null)}
           style={{ left: GRID.left, right: GRID.right, top: GRID.top, bottom: GRID.bottom }}
-        >
-          {range === null ? null : (
-            <div
-              aria-hidden
-              className="absolute inset-y-0 border-x border-ink bg-ink/10"
-              style={{ left: `${lo * col}%`, width: `${(hi - lo + 1) * col}%` }}
-            />
-          )}
-        </div>
+        />
       </div>
     </section>
   );

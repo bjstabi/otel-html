@@ -20,7 +20,7 @@ export interface DroppedParam {
 /**
  * The cross-signal carry-over rule. Within one page everything is kept. Between explorers only `t`, `text` and a
  * `q` that compiles in the target's OTTL context come along; mode, group, view, sort, trace, span, log and tabs
- * reset. Metrics takes `t` and seeds its first query's `where` from `q`; Dashboards has no OTTL context yet, so it keeps everything.
+ * reset. Metrics takes `t` and seeds its first query's `where` from `q`; Dashboards takes `t` only.
  */
 export function carryTo(
   s: SelectionData,
@@ -29,8 +29,12 @@ export function carryTo(
 ): { url: UrlState; dropped: DroppedParam[] } {
   if (from === to) return { url: selectionToUrlState(s), dropped: [] };
   switch (to) {
-    case 'dashboards':
-      return { url: selectionToUrlState(s), dropped: [] };
+    case 'dashboards': {
+      // A dashboard has its own selection (`d`) and no query bar: only the time range comes along.
+      const url: UrlState = {};
+      if (s.window !== null) url.t = formatWindow(s.window);
+      return { url, dropped: [] };
+    }
     case 'metrics': {
       // Metrics has no `text` and no `q`: a compiling `q` seeds the first query's `where` instead.
       const url: UrlState = {};

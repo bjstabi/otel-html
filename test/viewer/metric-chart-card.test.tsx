@@ -79,6 +79,7 @@ function setup(over: {
   result?: MetricQueryResult;
   results?: MetricQueryResult[];
   queryLabels?: Record<string, string>;
+  onSelectTrace?: (id: string) => void;
 }): { picks: ChartPick[]; zooms: { start: number; end: number }[] } {
   const picks: ChartPick[] = [];
   const zooms: { start: number; end: number }[] = [];
@@ -94,6 +95,7 @@ function setup(over: {
       exemplars={over.exemplar === true}
       notes={over.notes ?? []}
       window={{ start: 0, end: 20 * S }}
+      {...(over.onSelectTrace === undefined ? {} : { onSelectTrace: over.onSelectTrace })}
       hasTrace={over.hasTrace ?? (() => Promise.resolve(true))}
       onPick={(p) => picks.push(p)}
       onZoom={(w) => zooms.push(w)}
@@ -203,6 +205,42 @@ describe('MetricChartCard', () => {
     expect(items).toHaveLength(4);
     await act(async () => items[0]?.click());
     expect(picks).toEqual([{ kind: 'exemplar', traceId: 'tt', spanId: 'ss' }]);
+  });
+
+  test('with onSelectTrace an exemplar in the report offers "Select this trace" above the open item', async () => {
+    const selected: string[] = [];
+    const trace = 'ab'.repeat(16);
+    const base = result(true);
+    setup({
+      result: { ...base, exemplars: base.exemplars.map((x) => ({ ...x, traceId: trace })) },
+      exemplar: true,
+      onSelectTrace: (id) => selected.push(id),
+    });
+    await clickAt(5);
+    const items = await screen.findAllByRole('menuitem');
+    expect(items.map((i) => i.textContent).slice(0, 2)).toEqual(['Select this trace', 'Open exemplar trace']);
+    await act(async () => items[0]?.click());
+    expect(selected).toEqual([trace]);
+  });
+
+  test('"Select this trace" is absent without onSelectTrace, without an exemplar and for a trace the report lacks', async () => {
+    setup({ exemplar: true });
+    await clickAt(5);
+    expect((await screen.findAllByRole('menuitem')).map((i) => i.textContent)).not.toContain(
+      'Select this trace',
+    );
+    cleanup();
+    setup({ exemplar: false, onSelectTrace: () => undefined });
+    await clickAt(5);
+    expect((await screen.findAllByRole('menuitem')).map((i) => i.textContent)).not.toContain(
+      'Select this trace',
+    );
+    cleanup();
+    setup({ exemplar: true, hasTrace: () => Promise.resolve(false), onSelectTrace: () => undefined });
+    await clickAt(5);
+    expect((await screen.findAllByRole('menuitem')).map((i) => i.textContent)).not.toContain(
+      'Select this trace',
+    );
   });
 
   test('an exemplar whose trace the report lacks is a disabled item', async () => {

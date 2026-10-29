@@ -25,9 +25,10 @@ import { FacetPanel } from '../components/facet-panel.js';
 import { GroupTable } from '../components/group-table.js';
 import { HistogramCard, SPAN_STATUS_SERIES } from '../components/histogram-card.js';
 import { ResultsTable, type SortState } from '../components/results-table.js';
+import { copyWidgetItem } from '../dashboards/copy-widget.js';
 import type { DataSource, SpanQuery, SpanRow, TraceRow } from '../data/data-source.js';
 import { useGoTo } from '../shell/go-to.js';
-import { PageChrome } from '../shell/page-chrome.js';
+import { PageChrome, useClipboardCopy } from '../shell/page-chrome.js';
 import { PageOptionNotice } from '../shell/page-option-notice.js';
 import {
   PAGE_OPTIONS,
@@ -192,10 +193,12 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
     }
   };
 
+  const widgetCopy = useClipboardCopy({ title: 'Copy as dashboard widget', label: 'Widget YAML' });
   const exportItems = [
     { label: 'Export CSV', onSelect: () => void runExport('csv') },
     { label: 'Export JSON', onSelect: () => void runExport('json') },
     ...(mode === 'spans' ? [{ label: 'Export OTLP JSON', onSelect: () => void runExport('otlp-json') }] : []),
+    copyWidgetItem('traces', sel, widgetCopy.copy),
   ];
 
   const grouped = GROUPED_VIEWS.has(view);
@@ -232,7 +235,13 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
   const bins = useMemo(() => durationBins(result?.rows ?? [], DURATION_BIN_COUNT), [result]);
 
   return (
-    <PageChrome title="Traces Explorer" signal="span" manifest={manifest} exportItems={exportItems}>
+    <PageChrome
+      title="Traces Explorer"
+      signal="span"
+      manifest={manifest}
+      page="traces"
+      exportItems={exportItems}
+    >
       <div className="flex flex-col gap-4">
         <PageOptionNotice message={invalidMode} onReset={() => sel.setMode(null)} />
         <PageOptionNotice message={invalidView} onReset={() => sel.setView('list')} />
@@ -364,6 +373,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
           onClose={() => sel.clear('traceId')}
         />
       )}
+      {widgetCopy.dialog}
     </PageChrome>
   );
 }

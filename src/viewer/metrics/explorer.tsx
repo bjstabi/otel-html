@@ -1,15 +1,17 @@
 import { type JSX, useCallback, useEffect, useMemo, useState } from 'react';
 import type { Manifest } from '../../format/manifest.js';
+import { MAX_METRIC_QUERIES, type MetricPageState } from '../../query/metric-query.js';
 import type { MetricCatalog, MetricEntry } from '../../rollups/metric-catalog.js';
 import { ErrorCard, LoadingNote, PILL } from '../components/explorer-states.js';
 import { downloadBlob } from '../components/export.js';
 import { type ChartPick, MetricChartCard } from '../components/metric-chart-card.js';
+import { copyWidgetItem } from '../dashboards/copy-widget.js';
 import type { DataSource } from '../data/data-source.js';
 import { defaultShow, kindOf, type MetricQuery, resolveMetric, SHOW_BY_KIND } from '../data/metric-query.js';
 import type { TimeWindow } from '../data/span-query.js';
 import { useGoTo } from '../shell/go-to.js';
-import { PageChrome } from '../shell/page-chrome.js';
-import { defaultMetricState, MAX_METRIC_QUERIES, type MetricPageState } from '../state/metric-state.js';
+import { PageChrome, useClipboardCopy } from '../shell/page-chrome.js';
+import { defaultMetricState } from '../state/metric-state.js';
 import { useSelection, useSelectionStore } from '../state/selection-context.js';
 import { useKeyedAsync } from '../state/use-keyed-async.js';
 import { useColorAssigner } from '../theme/colors-context.js';
@@ -163,9 +165,11 @@ function ExplorerBody(props: { dataSource: DataSource; range: TimeWindow }): JSX
       fail('The export failed', e);
     }
   };
+  const widgetCopy = useClipboardCopy({ title: 'Copy as dashboard widget', label: 'Widget YAML' });
   const exportItems = [
     { label: 'Export CSV', onSelect: () => runExport('csv') },
     { label: 'Export JSON', onSelect: () => runExport('json') },
+    copyWidgetItem('metrics', { ...sel, metrics: state }, widgetCopy.copy),
   ];
 
   const ids = new Set(state.queries.map((q) => q.id));
@@ -213,7 +217,7 @@ function ExplorerBody(props: { dataSource: DataSource; range: TimeWindow }): JSX
   const noData = !run.loading && plots.length > 0 && plots.every((p) => p.result.series.length === 0);
 
   return (
-    <PageChrome title="Metrics" manifest={manifest} exportItems={exportItems}>
+    <PageChrome title="Metrics" manifest={manifest} page="metrics" exportItems={exportItems}>
       <div className="flex flex-col gap-4">
         <section aria-label="Queries" className="rounded-card border border-hairline bg-surface px-3 py-2">
           <ul className="flex flex-col divide-y divide-dashed divide-hairline">
@@ -328,6 +332,7 @@ function ExplorerBody(props: { dataSource: DataSource; range: TimeWindow }): JSX
           ))}
         </div>
       </div>
+      {widgetCopy.dialog}
     </PageChrome>
   );
 }

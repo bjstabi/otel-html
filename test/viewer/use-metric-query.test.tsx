@@ -1,9 +1,10 @@
 import { act, cleanup, render } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, test } from 'vitest';
+import type { MetricPageState } from '../../src/query/metric-query.js';
 import type { MetricCatalog } from '../../src/rollups/metric-catalog.js';
 import { createDataSource, type DataSource } from '../../src/viewer/data/data-source.js';
 import { type MetricQueries, useMetricQueries } from '../../src/viewer/metrics/use-metric-query.js';
-import { defaultMetricState, type MetricPageState } from '../../src/viewer/state/metric-state.js';
+import { defaultMetricState } from '../../src/viewer/state/metric-state.js';
 import { createScriptedLoader } from '../../test-support/scripted-loader.js';
 import { buildMetricExplorerReport, type Fixture } from './report-fixture.js';
 

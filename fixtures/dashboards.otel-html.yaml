@@ -1,0 +1,78 @@
+# Dashboard config for the linked-* and metrics fixtures: `mise run demo` and the e2e suite convert them with it.
+viewer:
+  defaultDashboard: checkout
+  home: dashboards
+
+dashboards:
+  - id: checkout
+    title: Checkout
+    description: Checkout and payments on one page, one widget of each type
+    variables:
+      - service.name
+      - key: deployment.environment.name
+        label: environment
+        default: ci
+    widgets:
+      - type: timeline
+        x: 0
+        y: 0
+        w: 12
+        h: 6
+      - type: traces
+        x: 0
+        y: 6
+        w: 6
+        h: 10
+      - type: logs
+        x: 6
+        y: 6
+        w: 6
+        h: 10
+        query: severity_number >= 13
+      - type: metric
+        title: Request latency
+        x: 0
+        y: 16
+        w: 6
+        h: 8
+        queries:
+          - id: a
+            metric: http.server.request.duration
+            show: p95
+        echarts:
+          legend:
+            show: false
+      - type: toplist
+        x: 6
+        y: 16
+        w: 6
+        h: 8
+        signal: spans
+        groupBy: service.name
+      - type: table
+        x: 0
+        y: 24
+        w: 12
+        h: 8
+        signal: logs
+        groupBy: service.name
+
+views:
+  - id: slow-spans
+    title: Spans by service
+    page: traces
+    mode: spans
+    view: toplist
+    groupBy: service.name
+  - id: warnings
+    title: Warnings and errors
+    page: logs
+    query: severity_number >= 13
+  - id: latency
+    title: Request latency p95
+    page: metrics
+    metrics:
+      queries:
+        - id: a
+          metric: http.server.request.duration
+          show: p95

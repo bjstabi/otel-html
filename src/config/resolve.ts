@@ -9,6 +9,8 @@ export interface ResolveLayers {
   file?: unknown;
   env: Readonly<Record<string, string | undefined>>;
   flags?: ConfigInput;
+  /** Names the file in each dashboard's `source` (default `config file`). */
+  fileLabel?: string;
 }
 
 export interface ResolveResult {
@@ -117,6 +119,12 @@ export function resolveConfig(layers: ResolveLayers): ResolveResult {
       }
     }
     throw new OtelHtmlError('invalid-config', { message: lines.join('\n') });
+  }
+
+  const dashboardsFrom = origin.get('dashboards');
+  const label = dashboardsFrom === 'file' ? (layers.fileLabel ?? 'config file') : 'library API';
+  if (dashboardsFrom === 'file' || dashboardsFrom === 'flag') {
+    for (const d of parsed.data.dashboards) d.source = label;
   }
 
   const sources = new Map<string, ConfigSource>();

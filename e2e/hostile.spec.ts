@@ -1,4 +1,7 @@
 import {
+  DASHBOARDS_HOSTILE_DEFAULT,
+  DASHBOARDS_HOSTILE_DESCRIPTION,
+  DASHBOARDS_HOSTILE_TITLE,
   HOSTILE_METRIC_ATTR,
   HOSTILE_METRIC_ATTR_VALUE,
   HOSTILE_METRIC_NAME,
@@ -94,6 +97,34 @@ linkedTest(
     });
     await expect(tooltip).toBeVisible();
     expect(await card.locator('img').count()).toBe(0);
+
+    expect(await page.locator('img[src="x"]').count()).toBe(0);
+    expect(await page.evaluate(() => window.__pwned)).toBeUndefined();
+    expect(problems).toEqual([]);
+  },
+);
+
+linkedTest(
+  'a hostile dashboard title, description and variable default render as text',
+  async ({ page, reportUrl }) => {
+    const problems = watchProblems(page);
+    const base = `${reportUrl('dashboards-hostile')}/index.html`;
+
+    await page.goto(`${base}#/dashboards`);
+    const row = page.getByRole('table').getByRole('row').nth(2);
+    await expect(row).toContainText(DASHBOARDS_HOSTILE_TITLE);
+    await expect(row).toContainText(DASHBOARDS_HOSTILE_DESCRIPTION);
+
+    // `g d` opens the default dashboard, the hostile one.
+    await page.keyboard.press('g');
+    await page.keyboard.press('d');
+    await expect(page).toHaveURL(/#\/dashboards\/hostile/);
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText(DASHBOARDS_HOSTILE_TITLE);
+    // The variable default carries a quote and a backslash into the filter; it is a value, not syntax.
+    const service = page.getByRole('combobox', { name: 'service.name' });
+    await expect(service).toContainText(DASHBOARDS_HOSTILE_DEFAULT);
+    await expect(page.locator('[data-widget="w1"]')).toBeVisible();
+    await expect(page.getByRole('alert')).toHaveCount(0);
 
     expect(await page.locator('img[src="x"]').count()).toBe(0);
     expect(await page.evaluate(() => window.__pwned)).toBeUndefined();

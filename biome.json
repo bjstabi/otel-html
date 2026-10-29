@@ -53,6 +53,8 @@
         "src/ottl/**",
         "src/rollups/**",
         "src/semconv/**",
+        "src/query/**",
+        "src/dashboards/**",
         "src/viewer/**"
       ],
       "linter": { "rules": { "correctness": { "noNodejsModules": "error" } } }

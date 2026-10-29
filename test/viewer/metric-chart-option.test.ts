@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'vitest';
-import { buildMetricChartOption } from '../../src/viewer/components/metric-chart-option.js';
+import {
+  buildMetricChartOption,
+  mergeEchartsOption,
+} from '../../src/viewer/components/metric-chart-option.js';
 import type { MetricQueryResult, SeriesPoints } from '../../src/viewer/data/metric-query.js';
 import { createColorAssigner } from '../../src/viewer/theme/palette.js';
 
@@ -18,6 +21,7 @@ interface Opt {
     silent?: boolean;
     data: unknown[];
     markLine?: { data: { xAxis: number }[] };
+    markArea?: { data: { xAxis: number }[][] };
     itemStyle?: { borderColor?: string };
   }[];
 }
@@ -216,5 +220,47 @@ describe('buildMetricChartOption', () => {
     });
     expect(dist.series[0]?.type).toBe('bar');
     expect(dist.series[0]?.data).toHaveLength(3);
+  });
+});
+
+describe('selection band and echarts pass-through', () => {
+  test('a band is one markArea spanning it, on the first series', () => {
+    const o = build({ band: { start: 5 * S, end: 15 * S } });
+    const areas = o.series.flatMap((s) => (s.markArea === undefined ? [] : [s.markArea]));
+    expect(areas).toHaveLength(1);
+    expect(areas[0]?.data).toEqual([[{ xAxis: 5 * S }, { xAxis: 15 * S }]]);
+  });
+
+  test('no band draws no markArea', () => {
+    expect(build().series.some((s) => s.markArea !== undefined)).toBe(false);
+  });
+
+  test('echarts is deep-merged last, so it overrides what the builder set', () => {
+    const o = build({ echarts: { yAxis: { type: 'log' }, grid: { top: 99 } } });
+    expect(o.yAxis.type).toBe('log');
+    expect((o as unknown as { grid: { left: number; top: number } }).grid).toMatchObject({
+      left: 56,
+      top: 99,
+    });
+  });
+});
+
+describe('mergeEchartsOption', () => {
+  test('plain objects merge recursively, anything else replaces, and prototype keys are skipped', () => {
+    const extra = JSON.parse('{"a":{"c":[2]},"__proto__":{"polluted":1},"constructor":{"x":1}}') as Record<
+      string,
+      unknown
+    >;
+    const merged = mergeEchartsOption({ a: { b: 1, c: [1] } }, extra);
+    expect(merged).toEqual({ a: { b: 1, c: [2] } });
+    expect(Object.getPrototypeOf(merged)).toBe(Object.prototype);
+    expect('polluted' in {}).toBe(false);
+    expect(Object.hasOwn(merged, 'constructor')).toBe(false);
+  });
+
+  test('does not mutate its inputs', () => {
+    const base = { a: { b: 1 } };
+    mergeEchartsOption(base, { a: { b: 2 } });
+    expect(base).toEqual({ a: { b: 1 } });
   });
 });

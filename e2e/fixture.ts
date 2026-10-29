@@ -10,6 +10,14 @@ export const TRACE_1 = '0102030405060708090a0b0c0d0e0f10';
 export const TRACE_2 = '1102030405060708090a0b0c0d0e0f10';
 export const SERVICE_A = 'e2e-service';
 export const SERVICE_B = 'e2e-db';
+/** The config the `dashboards` report is converted with; `mise run demo` uses it too. */
+export const DASHBOARDS_CONFIG: URL = new URL('../fixtures/dashboards.otel-html.yaml', import.meta.url);
+/** `dashboards` holds the dashboard `checkout` (default, with `DASHBOARDS_ENV_DEFAULT` on its environment variable). */
+export const DASHBOARDS_ENV_DEFAULT = 'ci';
+/** `dashboards-hostile`: the `hostile` fixture with a config whose title, description and variable default are markup. */
+export const DASHBOARDS_HOSTILE_TITLE = '</script><img src=x onerror=alert(1)>';
+export const DASHBOARDS_HOSTILE_DESCRIPTION = 'line one\u2028line two';
+export const DASHBOARDS_HOSTILE_DEFAULT = 'a"b\\c';
 export const REPORTS_DIR: URL = new URL('./.reports/', import.meta.url);
 export const REPORT_DIR: URL = new URL('main/', REPORTS_DIR);
 /** A second report with one very large trace, for the flame-graph render-time check. */
@@ -50,6 +58,8 @@ export type ReportName =
   | 'metrics-merged'
   | 'metrics-single'
   | 'unfinished'
+  | 'dashboards'
+  | 'dashboards-hostile'
   | 'metrics-scale';
 
 /** The metrics scale report's folder: generating it takes minutes, so it outlives `REPORTS_DIR`'s rebuilds. */
@@ -119,6 +129,10 @@ export const HOSTILE_METRIC_NAME = '</script><img src=x onerror=alert(1)>';
 export const HOSTILE_METRIC_UNIT = '<img src=x onerror=alert(1)>';
 export const HOSTILE_METRIC_ATTR = 'hostile.attr';
 export const HOSTILE_METRIC_ATTR_VALUE = '"><img src=x onerror=alert(1)>';
+
+/** Fusion on `scale` is interactive within 3 s, and a trace selection updates its Logs and Metrics within 1 s. */
+export const FUSION_INTERACTIVE_BUDGET_MS = 3000;
+export const FUSION_SELECTION_BUDGET_MS = 1000;
 
 /** The generated scale input: `SCALE_TRACES` traces of `SCALE_SPANS_PER_TRACE` spans each. */
 export const SCALE_TRACES = 2000;

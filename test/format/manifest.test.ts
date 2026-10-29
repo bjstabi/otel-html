@@ -30,7 +30,23 @@ const manifest = (): Manifest => ({
   rollups: ['data/rollups/spans.js', 'data/rollups/logs.js', 'data/rollups/metrics.js'],
   traceShards: ['data/traces/5b.js'],
   metricFiles: ['data/metrics/000000/series.js', 'data/metrics/000000/seg-000003.js'],
-  config: { viewer: { eagerBudgetBytes: 75_000_000, listCap: 10_000, theme: 'system' } },
+  config: {
+    viewer: {
+      eagerBudgetBytes: 75_000_000,
+      listCap: 10_000,
+      theme: 'system',
+      defaultDashboard: 'fusion',
+      home: 'traces',
+    },
+    dashboards: [],
+    views: [],
+  },
+});
+
+const widgetAt = (x: number, w: number): unknown => ({ type: 'traces', x, y: 0, w, h: 6 });
+const dashboardOf = (widgets: unknown[]): unknown => ({
+  source: 'library API',
+  dashboard: { id: 'ops', title: 'Ops', widgets },
 });
 
 function failure(fn: () => unknown): OtelHtmlError {
@@ -67,6 +83,39 @@ describe('manifest', () => {
     expect(ManifestSchema.parse(manifest())).toEqual(manifest());
     expect(parseManifest(manifest())).toEqual(manifest());
     expect(parseManifest({ ...manifest(), range: null })).toEqual({ ...manifest(), range: null });
+  });
+  test('a manifest written by M3 (no dashboards, views or new viewer keys) parses with defaults', () => {
+    const m = manifest();
+    const old = {
+      ...m,
+      config: { viewer: { eagerBudgetBytes: 75_000_000, listCap: 10_000, theme: 'system' } },
+    };
+    expect(parseManifest(old)).toEqual(m);
+  });
+  test('a widget outside the 12-column grid is invalid-report at its path', () => {
+    const m = manifest();
+    const e = failure(() =>
+      parseManifest({ ...m, config: { ...m.config, dashboards: [dashboardOf([widgetAt(11, 4)])] } }),
+    );
+    expect(e.code).toBe('invalid-report');
+    expect(e.path).toContain('manifest.config.dashboards[0]');
+  });
+  test('a default dashboard that names no dashboard is invalid-report', () => {
+    const m = manifest();
+    const viewer = { ...m.config.viewer, defaultDashboard: 'nope' };
+    const e = failure(() => parseManifest({ ...m, config: { ...m.config, viewer } }));
+    expect(e.code).toBe('invalid-report');
+    expect(e.path).toBe('manifest.config.viewer.defaultDashboard');
+  });
+  test('a valid dashboard round-trips and can be the default', () => {
+    const m = manifest();
+    const viewer = { ...m.config.viewer, defaultDashboard: 'ops' };
+    const parsed = parseManifest({
+      ...m,
+      config: { ...m.config, viewer, dashboards: [dashboardOf([widgetAt(0, 6)])] },
+    });
+    expect(parsed.config.dashboards[0]?.dashboard.id).toBe('ops');
+    expect(parseManifest(parsed)).toEqual(parsed);
   });
   test('a manifest written before metric files (M2) parses with none', () => {
     const { metricFiles: _, ...old } = manifest();

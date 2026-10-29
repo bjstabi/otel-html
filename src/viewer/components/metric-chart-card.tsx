@@ -1,9 +1,10 @@
 import { Menu } from '@base-ui/react/menu';
 import { Info } from 'lucide-react';
 import { type JSX, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { parseTraceId, type TraceId } from '../../model/ids.js';
+import type { METRIC_DISPLAYS, METRIC_SCALES } from '../../query/metric-query.js';
 import type { MetricQueryResult } from '../data/metric-query.js';
 import type { TimeWindow } from '../data/span-query.js';
-import type { METRIC_DISPLAYS, METRIC_SCALES } from '../state/metric-state.js';
 import { useColorAssigner } from '../theme/colors-context.js';
 import { Chart, type EChartsType } from './chart.js';
 import {
@@ -35,6 +36,12 @@ export interface MetricChartCardProps {
   queryLabels?: Readonly<Record<string, string>>;
   /** Whether the report holds a trace; embedded callers pass an explicit resolver. */
   hasTrace: (traceId: string) => Promise<boolean>;
+  /** The dashboard's selection window, shaded on the chart. */
+  band?: TimeWindow | null;
+  /** A config's ECharts options, merged over the built option. */
+  echarts?: Record<string, unknown> | null;
+  /** Adds "Select this trace" to the menu of an exemplar whose trace the report holds. */
+  onSelectTrace?: (traceId: TraceId) => void;
   onPick(pick: ChartPick): void;
   onZoom(w: TimeWindow): void;
 }
@@ -130,6 +137,8 @@ export function MetricChartCard(props: MetricChartCardProps): JSX.Element {
         exemplars: props.exemplars,
         size: props.size,
         window: props.window,
+        band: props.band ?? null,
+        echarts: props.echarts ?? null,
       }),
     [
       results,
@@ -142,6 +151,8 @@ export function MetricChartCard(props: MetricChartCardProps): JSX.Element {
       props.exemplars,
       props.size,
       props.window,
+      props.band,
+      props.echarts,
       themeTick,
     ],
   );
@@ -313,6 +324,18 @@ export function MetricChartCard(props: MetricChartCardProps): JSX.Element {
         <Menu.Portal>
           <Menu.Positioner sideOffset={4} {...(anchor === undefined ? {} : { anchor })}>
             <Menu.Popup className={POPUP}>
+              {menu?.trace?.state === 'present' && props.onSelectTrace !== undefined && (
+                <Menu.Item
+                  className={ITEM}
+                  onClick={() => {
+                    const id = menu.trace?.traceId;
+                    setMenu(null);
+                    if (id !== undefined) props.onSelectTrace?.(parseTraceId(id, 'exemplar.traceId'));
+                  }}
+                >
+                  Select this trace
+                </Menu.Item>
+              )}
               {menu?.trace != null &&
                 (menu.trace.state === 'present' ? (
                   <Menu.Item

@@ -2,6 +2,11 @@ import { Tooltip } from '@base-ui/react/tooltip';
 import { X } from 'lucide-react';
 import { type JSX, useCallback, useEffect, useMemo, useState } from 'react';
 import { Redirect, Route, Router, Switch } from 'wouter';
+import type { Manifest } from '../../format/manifest.js';
+import { SELECTION_MODES } from '../../query/pages.js';
+import { DashboardPage } from '../dashboards/dashboard-page.js';
+import { DashboardsListPage } from '../dashboards/list-page.js';
+import { defaultDashboardRoute } from '../dashboards/registry.js';
 import type { DataSource } from '../data/data-source.js';
 import { LogsExplorer } from '../logs/explorer.js';
 import { MetricsCatalog } from '../metrics/catalog.js';
@@ -10,14 +15,14 @@ import { applyPatch, carryTo, type DroppedParam } from '../state/carry.js';
 import { PAGE_TITLES, type Page, pageOfRoute } from '../state/page-options.js';
 import { bindUrl, createSelectionStore, type HistoryPort } from '../state/selection.js';
 import { SelectionProvider } from '../state/selection-context.js';
-import { parseUrlState, SELECTION_MODES, serializeUrlState } from '../state/url-state.js';
+import { parseUrlState, serializeUrlState } from '../state/url-state.js';
 import { ColorsProvider } from '../theme/colors-context.js';
 import { TracesExplorer } from '../traces/explorer.js';
 import { ServicesPage } from '../traces/services-page.js';
 import { leaveTracePage, TracePage } from '../traces/trace-page.js';
 import { type GoTo, GoToContext } from './go-to.js';
 import { MOVE_EVENT } from './move-event.js';
-import { ComingLaterPage, NotFoundPage } from './pages.js';
+import { NotFoundPage } from './pages.js';
 import { ShortcutHelp } from './shortcut-help.js';
 import { createShortcutHandler, SHORTCUTS, type ShortcutActions } from './shortcuts.js';
 import { Sidebar } from './sidebar.js';
@@ -143,7 +148,7 @@ export function Shell(props: { dataSource: DataSource; history: HistoryPort }): 
       window.dispatchEvent(new CustomEvent(MOVE_EVENT, { detail: delta }));
     };
     const actions: ShortcutActions = {
-      goDashboards: () => goTo('dashboards', '/dashboards'),
+      goDashboards: () => goTo('dashboards', defaultDashboardRoute(manifest), { d: null }),
       goLogs: () => goTo('logs', '/logs'),
       goMetrics: () => goTo('metrics', '/metrics'),
       goTraces: () => goTo('traces', '/traces'),
@@ -165,7 +170,7 @@ export function Shell(props: { dataSource: DataSource; history: HistoryPort }): 
     const handler = createShortcutHandler(SHORTCUTS, actions);
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, [store, goTo]);
+  }, [store, goTo, manifest]);
 
   return (
     <SelectionProvider store={store}>
@@ -190,13 +195,19 @@ export function Shell(props: { dataSource: DataSource; history: HistoryPort }): 
   );
 }
 
+/** Where `#/` lands: the configured home page; `dashboards` opens the default dashboard. */
+function homeRoute(manifest: Manifest): string {
+  const { home } = manifest.config.viewer;
+  return home === 'dashboards' ? defaultDashboardRoute(manifest) : `/${home}`;
+}
+
 function RoutedPage({ dataSource }: { dataSource: DataSource }): JSX.Element {
   const manifest = dataSource.manifest;
   const [route] = useRoute();
   return (
     <Switch>
       <Route path="/">
-        <Redirect to="/traces" replace />
+        <Redirect to={homeRoute(manifest)} replace />
       </Route>
       <Route path="/traces">
         <TracesExplorer dataSource={dataSource} />
@@ -220,7 +231,10 @@ function RoutedPage({ dataSource }: { dataSource: DataSource }): JSX.Element {
         <MetricsExplorer dataSource={dataSource} />
       </Route>
       <Route path="/dashboards">
-        <ComingLaterPage page="dashboards" manifest={manifest} />
+        <DashboardsListPage manifest={manifest} />
+      </Route>
+      <Route path="/dashboards/:id">
+        {(params) => <DashboardPage dataSource={dataSource} id={params.id} />}
       </Route>
       <Route>
         <NotFoundPage route={route} />

@@ -148,4 +148,18 @@ describe('LogList', () => {
     mount([row(0)], { total: 5 });
     expect(screen.getByText(/1 of 5/)).toBeTruthy();
   });
+
+  test('highlighted rows carry data-match; the others are muted; without the set nothing is marked', () => {
+    mount([row(0), row(1)], { highlighted: new Set([logRef(0, 1)]) });
+    const rows = screen.getAllByRole('row').slice(1);
+    expect(rows.map((r) => r.hasAttribute('data-match'))).toEqual([false, true]);
+    expect(rows[0]?.hasAttribute('data-muted')).toBe(true);
+    expect(rows[1]?.hasAttribute('data-muted')).toBe(false);
+    cleanup();
+    mount([row(0), row(1)]);
+    for (const r of screen.getAllByRole('row').slice(1)) {
+      expect(r.hasAttribute('data-match')).toBe(false);
+      expect(r.hasAttribute('data-muted')).toBe(false);
+    }
+  });
 });

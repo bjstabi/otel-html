@@ -8,6 +8,7 @@ import { FORMAT_VERSION } from '../format/version.js';
 import { OtelHtmlError } from '../model/errors.js';
 import { parseUnixNanos, type UnixNanos } from '../model/ids.js';
 import { at } from './checkpoint.js';
+import { inheritDashboards } from './inherit-config.js';
 import type { FileSystem } from './ports.js';
 import {
   openSession,
@@ -183,10 +184,11 @@ export async function mergeReports(
     }
   }
   const first = loaded[0];
-  const config =
+  const titled =
     options.config.title === undefined && first !== undefined
       ? { ...options.config, title: first.manifest.title }
       : options.config;
+  const config = first === undefined ? titled : inheritDashboards(titled, first.manifest.config);
   const session = await openSession(deps, { ...options, out, config });
   try {
     for (const [origin, input] of loaded.entries()) {

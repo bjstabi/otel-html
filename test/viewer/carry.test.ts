@@ -3,6 +3,7 @@ import type { SpanId, TraceId } from '../../src/model/ids.js';
 import { parseLogRef } from '../../src/viewer/data/log-query.js';
 import type { MetricQuery } from '../../src/viewer/data/metric-query.js';
 import { applyPatch, carryTo, metricWindowLink } from '../../src/viewer/state/carry.js';
+import { EMPTY_DASHBOARD_STATE } from '../../src/viewer/state/dashboard-state.js';
 import {
   PAGE_OPTIONS,
   pageOfRoute,
@@ -77,9 +78,24 @@ describe('carryTo', () => {
     expect(carryTo(s, 'traces', 'traces')).toEqual({ url: selectionToUrlState(s), dropped: [] });
   });
 
-  test('the dashboards target keeps everything', () => {
-    const s = data({ condition: 'span.name == "x"', mode: 'traces', text: 'a' });
-    expect(carryTo(s, 'traces', 'dashboards')).toEqual({ url: selectionToUrlState(s), dropped: [] });
+  test('the dashboards target takes only t from another page', () => {
+    const s = data({
+      condition: 'log.severity_number >= 17',
+      text: 'a',
+      window: { start: 1, end: 2 },
+      traceId: TRACE,
+    });
+    expect(carryTo(s, 'logs', 'dashboards')).toEqual({ url: { t: '1~2' }, dropped: [] });
+    expect(carryTo(data({ text: 'a' }), 'logs', 'dashboards')).toEqual({ url: {}, dropped: [] });
+  });
+
+  test('within dashboards everything is kept', () => {
+    const dashboard = { ...EMPTY_DASHBOARD_STATE, follow: { w1: false } };
+    const s = data({ window: { start: 1, end: 2 }, dashboard });
+    expect(carryTo(s, 'dashboards', 'dashboards')).toEqual({
+      url: { t: '1~2', d: dashboard },
+      dropped: [],
+    });
   });
 });
 

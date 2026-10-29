@@ -127,9 +127,1063 @@
             "light",
             "dark"
           ]
+        },
+        "defaultDashboard": {
+          "default": "fusion",
+          "type": "string"
+        },
+        "home": {
+          "default": "traces",
+          "type": "string",
+          "enum": [
+            "traces",
+            "logs",
+            "metrics",
+            "dashboards"
+          ]
         }
       },
       "additionalProperties": false
+    },
+    "dashboards": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": {
+            "default": "",
+            "type": "string"
+          },
+          "variables": {
+            "maxItems": 8,
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "key": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "label": {
+                      "type": "string"
+                    },
+                    "default": {
+                      "default": null,
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "key"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          },
+          "widgets": {
+            "minItems": 1,
+            "maxItems": 50,
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "const": "timeline"
+                    },
+                    "id": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9-]{0,31}$"
+                    },
+                    "title": {
+                      "default": null,
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "x": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "y": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "w": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 9007199254740991
+                    },
+                    "h": {
+                      "type": "integer",
+                      "minimum": 2,
+                      "maximum": 40
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "x",
+                    "y",
+                    "w",
+                    "h"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "const": "traces"
+                    },
+                    "id": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9-]{0,31}$"
+                    },
+                    "title": {
+                      "default": null,
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "x": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "y": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "w": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 9007199254740991
+                    },
+                    "h": {
+                      "type": "integer",
+                      "minimum": 2,
+                      "maximum": 40
+                    },
+                    "follow": {
+                      "default": true,
+                      "type": "boolean"
+                    },
+                    "query": {
+                      "default": null,
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "text": {
+                      "default": "",
+                      "type": "string"
+                    },
+                    "mode": {
+                      "default": "traces",
+                      "type": "string",
+                      "enum": [
+                        "traces",
+                        "spans"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "x",
+                    "y",
+                    "w",
+                    "h"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "const": "logs"
+                    },
+                    "id": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9-]{0,31}$"
+                    },
+                    "title": {
+                      "default": null,
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "x": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "y": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "w": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 9007199254740991
+                    },
+                    "h": {
+                      "type": "integer",
+                      "minimum": 2,
+                      "maximum": 40
+                    },
+                    "follow": {
+                      "default": true,
+                      "type": "boolean"
+                    },
+                    "query": {
+                      "default": null,
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "text": {
+                      "default": "",
+                      "type": "string"
+                    },
+                    "context": {
+                      "default": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "x",
+                    "y",
+                    "w",
+                    "h"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "const": "metric"
+                    },
+                    "id": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9-]{0,31}$"
+                    },
+                    "title": {
+                      "default": null,
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "x": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "y": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "w": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 9007199254740991
+                    },
+                    "h": {
+                      "type": "integer",
+                      "minimum": 2,
+                      "maximum": 40
+                    },
+                    "follow": {
+                      "default": true,
+                      "type": "boolean"
+                    },
+                    "queries": {
+                      "default": null,
+                      "anyOf": [
+                        {
+                          "minItems": 1,
+                          "maxItems": 10,
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "pattern": "^[a-z]$"
+                              },
+                              "metric": {
+                                "type": "string"
+                              },
+                              "kind": {
+                                "default": null,
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "gauge",
+                                      "sum",
+                                      "histogram",
+                                      "exponentialHistogram",
+                                      "summary"
+                                    ]
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "unit": {
+                                "default": null,
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "show": {
+                                "type": "string"
+                              },
+                              "by": {
+                                "default": [],
+                                "type": "array",
+                                "items": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              },
+                              "where": {
+                                "default": null,
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "fn": {
+                                "default": [],
+                                "type": "array",
+                                "items": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "op": {
+                                          "type": "string",
+                                          "const": "rate"
+                                        }
+                                      },
+                                      "required": [
+                                        "op"
+                                      ]
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "op": {
+                                          "type": "string",
+                                          "const": "increase"
+                                        }
+                                      },
+                                      "required": [
+                                        "op"
+                                      ]
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "op": {
+                                          "type": "string",
+                                          "const": "rollup"
+                                        },
+                                        "agg": {
+                                          "type": "string",
+                                          "enum": [
+                                            "avg",
+                                            "min",
+                                            "max",
+                                            "sum"
+                                          ]
+                                        },
+                                        "intervalMs": {
+                                          "type": "integer",
+                                          "exclusiveMinimum": 0,
+                                          "maximum": 9007199254740991
+                                        }
+                                      },
+                                      "required": [
+                                        "op",
+                                        "agg",
+                                        "intervalMs"
+                                      ]
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "op": {
+                                          "type": "string",
+                                          "enum": [
+                                            "top",
+                                            "bottom"
+                                          ]
+                                        },
+                                        "n": {
+                                          "type": "integer",
+                                          "exclusiveMinimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "by": {
+                                          "type": "string",
+                                          "enum": [
+                                            "avg",
+                                            "max",
+                                            "last"
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "op",
+                                        "n",
+                                        "by"
+                                      ]
+                                    }
+                                  ]
+                                }
+                              },
+                              "alias": {
+                                "default": null,
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "hidden": {
+                                "default": false,
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "metric",
+                              "show"
+                            ]
+                          }
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "formulas": {
+                      "default": [],
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "pattern": "^f[1-9]\\d*$"
+                          },
+                          "expr": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "alias": {
+                            "default": null,
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "hidden": {
+                            "default": false,
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "expr"
+                        ]
+                      }
+                    },
+                    "display": {
+                      "default": "lines",
+                      "type": "string",
+                      "enum": [
+                        "lines",
+                        "area",
+                        "bars",
+                        "heatmap"
+                      ]
+                    },
+                    "scale": {
+                      "default": "linear",
+                      "type": "string",
+                      "enum": [
+                        "linear",
+                        "log"
+                      ]
+                    },
+                    "exemplars": {
+                      "default": true,
+                      "type": "boolean"
+                    },
+                    "echarts": {
+                      "default": null,
+                      "description": "Unstable: passed through to ECharts as is; compatibility is ECharts', not otel-html's.",
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "propertyNames": {
+                            "type": "string"
+                          },
+                          "additionalProperties": {}
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "x",
+                    "y",
+                    "w",
+                    "h"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "const": "toplist"
+                    },
+                    "id": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9-]{0,31}$"
+                    },
+                    "title": {
+                      "default": null,
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "x": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "y": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "w": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 9007199254740991
+                    },
+                    "h": {
+                      "type": "integer",
+                      "minimum": 2,
+                      "maximum": 40
+                    },
+                    "follow": {
+                      "default": true,
+                      "type": "boolean"
+                    },
+                    "query": {
+                      "default": null,
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "text": {
+                      "default": "",
+                      "type": "string"
+                    },
+                    "signal": {
+                      "type": "string",
+                      "enum": [
+                        "spans",
+                        "logs"
+                      ]
+                    },
+                    "groupBy": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "echarts": {
+                      "default": null,
+                      "description": "Unstable: passed through to ECharts as is; compatibility is ECharts', not otel-html's.",
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "propertyNames": {
+                            "type": "string"
+                          },
+                          "additionalProperties": {}
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "x",
+                    "y",
+                    "w",
+                    "h",
+                    "signal",
+                    "groupBy"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "const": "table"
+                    },
+                    "id": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9-]{0,31}$"
+                    },
+                    "title": {
+                      "default": null,
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "x": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "y": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "w": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 9007199254740991
+                    },
+                    "h": {
+                      "type": "integer",
+                      "minimum": 2,
+                      "maximum": 40
+                    },
+                    "follow": {
+                      "default": true,
+                      "type": "boolean"
+                    },
+                    "query": {
+                      "default": null,
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "text": {
+                      "default": "",
+                      "type": "string"
+                    },
+                    "signal": {
+                      "type": "string",
+                      "enum": [
+                        "spans",
+                        "logs"
+                      ]
+                    },
+                    "groupBy": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "x",
+                    "y",
+                    "w",
+                    "h",
+                    "signal",
+                    "groupBy"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "widgets"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "views": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "page": {
+            "type": "string",
+            "enum": [
+              "traces",
+              "logs",
+              "metrics"
+            ]
+          },
+          "query": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "default": "",
+            "type": "string"
+          },
+          "mode": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "groupBy": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "view": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sort": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "metrics": {
+            "default": null,
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "queries": {
+                    "maxItems": 10,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "pattern": "^[a-z]$"
+                        },
+                        "metric": {
+                          "type": "string"
+                        },
+                        "kind": {
+                          "default": null,
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "gauge",
+                                "sum",
+                                "histogram",
+                                "exponentialHistogram",
+                                "summary"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "unit": {
+                          "default": null,
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "show": {
+                          "type": "string"
+                        },
+                        "by": {
+                          "default": [],
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "where": {
+                          "default": null,
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "fn": {
+                          "default": [],
+                          "type": "array",
+                          "items": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "op": {
+                                    "type": "string",
+                                    "const": "rate"
+                                  }
+                                },
+                                "required": [
+                                  "op"
+                                ]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "op": {
+                                    "type": "string",
+                                    "const": "increase"
+                                  }
+                                },
+                                "required": [
+                                  "op"
+                                ]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "op": {
+                                    "type": "string",
+                                    "const": "rollup"
+                                  },
+                                  "agg": {
+                                    "type": "string",
+                                    "enum": [
+                                      "avg",
+                                      "min",
+                                      "max",
+                                      "sum"
+                                    ]
+                                  },
+                                  "intervalMs": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "op",
+                                  "agg",
+                                  "intervalMs"
+                                ]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "op": {
+                                    "type": "string",
+                                    "enum": [
+                                      "top",
+                                      "bottom"
+                                    ]
+                                  },
+                                  "n": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "by": {
+                                    "type": "string",
+                                    "enum": [
+                                      "avg",
+                                      "max",
+                                      "last"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "op",
+                                  "n",
+                                  "by"
+                                ]
+                              }
+                            ]
+                          }
+                        },
+                        "alias": {
+                          "default": null,
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "hidden": {
+                          "default": false,
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "metric",
+                        "show"
+                      ]
+                    }
+                  },
+                  "formulas": {
+                    "default": [],
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "pattern": "^f[1-9]\\d*$"
+                        },
+                        "expr": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "alias": {
+                          "default": null,
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "hidden": {
+                          "default": false,
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "expr"
+                      ]
+                    }
+                  },
+                  "display": {
+                    "default": "lines",
+                    "type": "string",
+                    "enum": [
+                      "lines",
+                      "area",
+                      "bars",
+                      "heatmap",
+                      "distribution"
+                    ]
+                  },
+                  "scale": {
+                    "default": "linear",
+                    "type": "string",
+                    "enum": [
+                      "linear",
+                      "log"
+                    ]
+                  },
+                  "split": {
+                    "default": false,
+                    "type": "boolean"
+                  },
+                  "exemplars": {
+                    "default": false,
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "queries"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "page"
+        ],
+        "additionalProperties": false
+      }
     }
   },
   "additionalProperties": false

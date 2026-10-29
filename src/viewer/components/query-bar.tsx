@@ -440,7 +440,7 @@ export function QueryBar(props: {
             role="tooltip"
             className="absolute top-full left-0 z-10 mt-1 hidden whitespace-nowrap rounded-md bg-ink px-2 py-1 text-xs text-page group-focus-within:block group-hover:block"
           >
-            second query arrives with Dashboards
+            not available yet
           </span>
         </span>
         {condition === null ? null : (

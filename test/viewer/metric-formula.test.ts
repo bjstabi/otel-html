@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { OtelHtmlError } from '../../src/model/errors.js';
-import { evaluateFormula, formulaRefs, parseFormula } from '../../src/viewer/data/metric-formula.js';
+import { formulaRefs, parseFormula } from '../../src/query/metric-formula.js';
+import { evaluateFormula } from '../../src/viewer/data/metric-formula.js';
 import type { MetricQueryResult, SeriesPoints } from '../../src/viewer/data/metric-query.js';
 
 const W = 10e9;

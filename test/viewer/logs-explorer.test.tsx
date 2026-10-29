@@ -58,7 +58,17 @@ const manifest = (logs: number): Manifest => ({
   rollups: [],
   traceShards: [],
   metricFiles: [],
-  config: { viewer: { eagerBudgetBytes: 1, listCap: 100, theme: 'system' } },
+  config: {
+    viewer: {
+      eagerBudgetBytes: 1,
+      listCap: 100,
+      theme: 'system',
+      defaultDashboard: 'fusion',
+      home: 'traces',
+    },
+    dashboards: [],
+    views: [],
+  },
 });
 
 /** Real log rows: OTLP JSON through `normalizeLogs`, so the export can be read back the same way. */
@@ -452,5 +462,30 @@ describe('LogsExplorer', () => {
     const alert = await screen.findByRole('alert');
     expect(within(alert).getByText('The query could not run')).toBeTruthy();
     expect(alert.textContent).toContain('000002.js: failed to load');
+  });
+
+  describe('Copy as dashboard widget', () => {
+    test('the Top list view copies a toplist widget', async () => {
+      const user = userEvent.setup();
+      const writeText = vi.fn(() => Promise.resolve());
+      Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+      setup({ initial: { view: 'toplist', group: 'host.name' } });
+      await user.click(screen.getByRole('button', { name: 'Export' }));
+      await user.click(await screen.findByRole('menuitem', { name: /Copy as dashboard widget/ }));
+      await waitFor(() => expect(writeText).toHaveBeenCalledOnce());
+      const yaml = String((writeText.mock.calls[0] as unknown[])[0]);
+      expect(yaml).toContain('type: toplist');
+      expect(yaml).toContain('signal: logs');
+      expect(yaml).toContain('groupBy: host.name');
+    });
+
+    test('Patterns disables it with the reason', async () => {
+      const user = userEvent.setup();
+      setup({ initial: { mode: 'patterns' } });
+      await user.click(screen.getByRole('button', { name: 'Export' }));
+      const item = await screen.findByRole('menuitem', { name: /Copy as dashboard widget/ });
+      expect(item.getAttribute('aria-disabled')).toBe('true');
+      expect(item.textContent).toContain("Patterns can't become a widget yet");
+    });
   });
 });

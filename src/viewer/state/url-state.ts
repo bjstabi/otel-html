@@ -1,21 +1,19 @@
 import { z } from 'zod';
 import { OtelHtmlError } from '../../model/errors.js';
-import { parseSpanId, parseTraceId, type SpanId, type TraceId } from '../../model/ids.js';
+import { parseSpanId, type SpanId } from '../../model/ids.js';
 import { parseCondition } from '../../ottl/parse.js';
+import { MetricPageStateSchema } from '../../query/metric-query.js';
+import { EXPLORER_VIEWS, SELECTION_MODES } from '../../query/pages.js';
 import { type LogRef, parseLogRef } from '../data/log-query.js';
 import type { TimeWindow } from '../data/span-query.js';
 import { LOG_TAB_IDS } from '../logs/tabs.js';
 import { TRACE_TAB_IDS } from '../traces/tabs.js';
-import { EXPLORER_VIEWS } from './explorer-view.js';
-import { MetricPageStateSchema, parseMetricParam } from './metric-state.js';
+import { DashboardPageStateSchema, parseDashboardParam } from './dashboard-state.js';
+import { parseMetricParam } from './metric-state.js';
+import { T_FORMAT, TraceIdParamSchema, tRange, WindowTextSchema } from './param-schemas.js';
 
-/** Every grouping any explorer offers; which ones a page accepts is `PAGE_OPTIONS` (page-options.ts). */
-export const SELECTION_MODES = ['spans', 'traces', 'logs', 'patterns'] as const;
-
-const T_FORMAT = /^(\d+)~(\d+)$/;
 const LOG_FORMAT = /^\d+\.\d+$/;
 const LOG_CANONICAL = /^(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
-const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
 const nonEmpty = z.string().min(1, 'a non-empty value');
 
 function isOttl(s: string): boolean {
@@ -27,30 +25,15 @@ function isOttl(s: string): boolean {
   }
 }
 
-function tRange(s: string): boolean {
-  const m = T_FORMAT.exec(s);
-  if (m === null) return true; // the regex check reports the format problem
-  const a = BigInt(m[1] ?? '');
-  const b = BigInt(m[2] ?? '');
-  return a <= b && b <= MAX_SAFE;
-}
-
 /** Each field's failure message is the "expected ..." half of the reported error. */
 export const UrlStateSchema = z.object({
   q: nonEmpty.refine(isOttl, 'a valid OTTL condition'),
   text: nonEmpty,
-  t: z
-    .string()
-    .regex(T_FORMAT, '<start>~<end> in nanoseconds')
-    .refine(tRange, `<start>~<end> with start <= end and values <= ${Number.MAX_SAFE_INTEGER}`),
+  t: WindowTextSchema,
   mode: z.enum(SELECTION_MODES, `one of ${SELECTION_MODES.join(', ')}`),
   group: nonEmpty,
   view: z.enum(EXPLORER_VIEWS, `one of ${EXPLORER_VIEWS.join(', ')}`),
-  trace: z
-    .string()
-    .regex(/^[0-9a-f]{32}$/, '32 lowercase hex chars')
-    .refine((s) => !/^0+$/.test(s), 'a non-zero trace id')
-    .transform((s): TraceId => parseTraceId(s, 'trace')),
+  trace: TraceIdParamSchema,
   span: z
     .string()
     .regex(/^[0-9a-f]{16}$/, '16 lowercase hex chars')
@@ -67,6 +50,8 @@ export const UrlStateSchema = z.object({
   ltab: z.enum(LOG_TAB_IDS, `one of ${LOG_TAB_IDS.join(', ')}`),
   // Arrives as JSON text, which `parseUrlState` decodes with `parseMetricParam`; this is the decoded shape.
   m: MetricPageStateSchema,
+  // Same: decoded with `parseDashboardParam`.
+  d: DashboardPageStateSchema,
 });
 
 const UrlStatePartial = UrlStateSchema.partial();
@@ -87,6 +72,7 @@ export const URL_KEYS = [
   'log',
   'ltab',
   'm',
+  'd',
 ] as const;
 export type UrlKey = (typeof URL_KEYS)[number];
 
@@ -121,6 +107,12 @@ export function parseUrlState(search: string): { state: UrlState; errors: string
       const m = parseMetricParam(raw);
       if (m.ok) state[key] = m.state;
       else errors.push(m.error);
+      continue;
+    }
+    if (key === 'd') {
+      const d = parseDashboardParam(raw);
+      if (d.ok) state[key] = d.state;
+      else errors.push(d.error);
       continue;
     }
     const r = UrlStateSchema.shape[key].safeParse(raw);

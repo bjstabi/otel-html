@@ -586,11 +586,16 @@ export interface FlameGraphProps {
   outlineSpanId?: SpanId | null;
   /** Dashed accent lines at times on the trace's axis. */
   markers?: readonly FlameMarker[];
+  /** A small embed (the Traces widget): no minimap, no legend and no colour-by control. */
+  compact?: boolean;
 }
 
-/** Flame graph card: filter, errors-only, colour-by, zoom controls, minimap and the % execution-time legend. */
+/**
+ * Flame graph card: filter, errors-only, colour-by, zoom controls, minimap and the % execution-time legend.
+ * `compact` leaves out the last three.
+ */
 export function FlameGraph(props: FlameGraphProps): JSX.Element {
-  const { detail, selectedSpanId, onSelect, colors, outlineSpanId = null, markers } = props;
+  const { detail, selectedSpanId, onSelect, colors, outlineSpanId = null, markers, compact = false } = props;
   const { resolved } = useTheme();
   const [colorBy, setColorBy] = useState<FlameColorBy>('service');
   const [filter, setFilter] = useState('');
@@ -748,22 +753,24 @@ export function FlameGraph(props: FlameGraphProps): JSX.Element {
           <input type="checkbox" checked={errorsOnly} onChange={(e) => setErrorsOnly(e.target.checked)} />
           Errors only
         </label>
-        <label className="flex items-center gap-2 text-sm text-ink-2">
-          Color by
-          <select
-            aria-label="Color by"
-            className={FIELD}
-            value={colorBy}
-            onChange={(e) => {
-              const v = e.target.value;
-              if (v === 'service' || v === 'host' || v === 'scope') setColorBy(v);
-            }}
-          >
-            <option value="service">Service</option>
-            <option value="host">Host</option>
-            <option value="scope">Scope</option>
-          </select>
-        </label>
+        {!compact && (
+          <label className="flex items-center gap-2 text-sm text-ink-2">
+            Color by
+            <select
+              aria-label="Color by"
+              className={FIELD}
+              value={colorBy}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (v === 'service' || v === 'host' || v === 'scope') setColorBy(v);
+              }}
+            >
+              <option value="service">Service</option>
+              <option value="host">Host</option>
+              <option value="scope">Scope</option>
+            </select>
+          </label>
+        )}
         <span className="ml-auto flex items-center gap-1">
           <button type="button" className={ICON_BTN} aria-label="Zoom in" onClick={() => zoomBy(0.5)}>
             <Plus size={14} aria-hidden />
@@ -790,17 +797,19 @@ export function FlameGraph(props: FlameGraphProps): JSX.Element {
           onInstance={attachPointer}
         />
       </div>
-      <div className="rounded-card border border-hairline bg-surface p-1">
-        <Chart
-          option={miniOption}
-          height={56}
-          ariaLabel="Trace minimap: drag the window to zoom"
-          onEvents={miniEvents}
-          onInstance={(c) => {
-            mini.current = c;
-          }}
-        />
-      </div>
+      {!compact && (
+        <div className="rounded-card border border-hairline bg-surface p-1">
+          <Chart
+            option={miniOption}
+            height={56}
+            ariaLabel="Trace minimap: drag the window to zoom"
+            onEvents={miniEvents}
+            onInstance={(c) => {
+              mini.current = c;
+            }}
+          />
+        </div>
+      )}
       {clipped && (
         <p role="note" className="text-xs text-muted">
           Showing the first <span className="font-mono tabular-nums">{FLAME_MAX_ROWS}</span> of{' '}
@@ -818,7 +827,7 @@ export function FlameGraph(props: FlameGraphProps): JSX.Element {
           ? 'Hover a bar for its span; click to select it.'
           : `${hovered.label} · ${formatDuration(hovered.end - hovered.start)}${hovered.error ? ' · error' : ''}`}
       </output>
-      <FlameLegend legend={legend} colors={colors} colorBy={colorBy} />
+      {!compact && <FlameLegend legend={legend} colors={colors} colorBy={colorBy} />}
     </div>
   );
 }

@@ -3,6 +3,7 @@ import { type JSX, useCallback, useMemo, useState } from 'react';
 import { anyValueToDisplay } from '../../model/anyvalue.js';
 import type { RelNanos, TraceId } from '../../model/ids.js';
 import type { ResourceRecord } from '../../model/records.js';
+import { MAX_METRIC_QUERIES, type MetricPageState } from '../../query/metric-query.js';
 import type { MetricCatalog, MetricEntry } from '../../rollups/metric-catalog.js';
 import { compareNamespaces, metricNamespace } from '../../semconv/metric-namespaces.js';
 import { tokenValue } from '../components/attribute-filter.js';
@@ -20,7 +21,6 @@ import {
 import type { TimeWindow } from '../data/span-query.js';
 import { useGoTo } from '../shell/go-to.js';
 import { CONTROL } from '../shell/page-chrome.js';
-import { MAX_METRIC_QUERIES, type MetricPageState } from '../state/metric-state.js';
 import { formatWindow } from '../state/url-state.js';
 import { useKeyedAsync } from '../state/use-keyed-async.js';
 import { exemplarTraceLookup, openChartPick } from './chart-pick.js';
@@ -38,13 +38,19 @@ export function gridWindow(from: TimeWindow, range: TimeWindow | null): TimeWind
 }
 
 export interface MetricGridOrigin {
-  kind: 'log' | 'span' | 'trace';
+  kind: 'log' | 'span' | 'trace' | 'dashboard';
   resources: readonly ResourceRecord[];
   /** The marker: the log's time, the span's or trace's start. */
   at: RelNanos | null;
   window: TimeWindow;
   /** Exemplars on this trace are highlighted. */
   traceId: TraceId | null;
+}
+
+/** What a grid embedded elsewhere adds: a selection window to shade, and "Select this trace" on exemplars. */
+export interface MetricGridExtras {
+  band?: TimeWindow | null;
+  onSelectTrace?: (traceId: TraceId) => void;
 }
 
 const SIZES: readonly MetricSize[] = ['S', 'M', 'L'];
@@ -58,10 +64,12 @@ const GRID_COLUMNS: Readonly<Record<MetricSize, string>> = {
 const GRID_MAX_POINTS: Readonly<Record<MetricSize, number>> = { S: 120, M: 240, L: 480 };
 /** Resource facts the header shows, in order. */
 const HEADER_KEYS = ['service.name', 'host.name'] as const;
-const MARKER_LABEL: Readonly<Record<MetricGridOrigin['kind'], string>> = {
+/** The legend text of the marker line; a dashboard has no marker. */
+const MARKER_LABEL: Readonly<Record<MetricGridOrigin['kind'], string | null>> = {
   log: 'this log',
   span: 'this span',
   trace: 'trace start',
+  dashboard: null,
 };
 const QUERY_IDS = 'abcdefghijklmnopqrstuvwxyz';
 export const OTHER_LEFT_OUT =
@@ -257,6 +265,8 @@ function GridChart(props: {
   size: MetricSize;
   origin: MetricGridOrigin;
   hasTrace: (traceId: string) => Promise<boolean>;
+  band: TimeWindow | null;
+  onSelectTrace: ((traceId: TraceId) => void) | undefined;
   onPick(pick: ChartPick, query: MetricQuery): void;
   onZoom(w: TimeWindow): void;
 }): JSX.Element {
@@ -305,6 +315,8 @@ function GridChart(props: {
         exemplars
         notes={result.notes}
         window={window}
+        band={props.band}
+        {...(props.onSelectTrace === undefined ? {} : { onSelectTrace: props.onSelectTrace })}
         hasTrace={props.hasTrace}
         onPick={(p) => props.onPick(p, { ...query, where: props.linkWhere })}
         onZoom={props.onZoom}
@@ -368,7 +380,9 @@ const loadCatalog = (ds: DataSource): Promise<MetricCatalog> => ds.metricCatalog
  * Mockup 04, screen 3: every metric of the origin's resources as Explorer chart cards, grouped by semconv namespace
  * (only the first group starts expanded; charts render as they scroll into view), over the origin's moment ± 5 min.
  */
-export function MetricGrid(props: { dataSource: DataSource; origin: MetricGridOrigin }): JSX.Element {
+export function MetricGrid(
+  props: { dataSource: DataSource; origin: MetricGridOrigin } & MetricGridExtras,
+): JSX.Element {
   const { dataSource, origin } = props;
   const goTo = useGoTo();
   const resources = useMemo(() => distinctResources(origin.resources), [origin.resources]);
@@ -459,8 +473,8 @@ export function MetricGrid(props: { dataSource: DataSource; origin: MetricGridOr
           Metrics from the same {resources.length > 1 ? 'resources' : 'resource'}
         </h3>
         <ResourceFacts resources={resources} />
-        <span className="text-xs text-muted">± 5 min</span>
-        {origin.at !== null && (
+        {origin.kind !== 'dashboard' && <span className="text-xs text-muted">± 5 min</span>}
+        {origin.at !== null && MARKER_LABEL[origin.kind] !== null && (
           <span className="text-xs text-muted">
             <span aria-hidden>┆ </span>
             {MARKER_LABEL[origin.kind]}
@@ -548,6 +562,8 @@ export function MetricGrid(props: { dataSource: DataSource; origin: MetricGridOr
                     size={size}
                     origin={origin}
                     hasTrace={hasTrace}
+                    band={props.band ?? null}
+                    onSelectTrace={props.onSelectTrace}
                     onPick={onPick}
                     onZoom={setZoom}
                   />

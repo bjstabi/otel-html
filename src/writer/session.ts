@@ -59,6 +59,7 @@ import {
 import { type BuiltChunk, ChunkBuffer, LOG_SIGNAL, METRIC_SIGNAL, SPAN_SIGNAL } from './chunker.js';
 import { DedupeSet } from './dedupe.js';
 import { renderIndexHtml } from './html.js';
+import { inheritDashboards } from './inherit-config.js';
 import { acquireLock, type LockHandle } from './lock.js';
 import { MetricSeriesWriter, restoreCatalogSeries } from './metric-series-writer.js';
 import type { Clock, FileSystem, Logger, ProcessInfo, Tracer } from './ports.js';
@@ -203,7 +204,7 @@ function iso(clock: Clock): string {
 }
 
 export async function openSession(deps: WriterDeps, options: SessionOptions): Promise<WriterSession> {
-  const { config } = options;
+  let { config } = options;
   const out = options.out.replace(/\/+$/, '') || options.out;
   // Bad OTTL must fail before anything is written (or locked).
   const drop = {
@@ -267,6 +268,7 @@ export async function openSession(deps: WriterDeps, options: SessionOptions): Pr
       };
     } else {
       const cp = await loadCheckpoint(fs, out, deps.version);
+      config = inheritDashboards(config, cp.manifest.config);
       restored = {
         lock,
         epoch:
@@ -944,7 +946,11 @@ class Session implements WriterSession {
       rollups: ROLLUP_NAMES.map((n) => rollupPath(n)),
       traceShards: shards.map((s) => traceShardPath(s)),
       metricFiles: this.#series.listed(),
-      config: { viewer: this.#config.viewer },
+      config: {
+        viewer: { ...this.#config.viewer },
+        dashboards: this.#config.dashboards,
+        views: this.#config.views,
+      },
     };
   }
 }

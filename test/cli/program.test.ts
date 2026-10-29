@@ -185,4 +185,18 @@ describe('cli', () => {
     await run(w, ['convert', 'in/a.json', '-o', 'out'], { OTEL_HTML_TITLE: 'env title' });
     expect(manifestOf(w, 'out').title).toBe('env title');
   });
+
+  test('dashboards carry the config file name as their source, through config print and convert', async () => {
+    const w = createTestWriter();
+    const yaml =
+      'dashboards:\n  - id: ops\n    title: Ops\n    widgets: [{type: traces, x: 0, y: 0, w: 6, h: 6}]\n';
+    await put(w, '/work/custom.yaml', yaml);
+    const printed = await run(w, ['config', 'print', '--config', '/work/custom.yaml']);
+    expect(printed.code).toBe(0);
+    expect(printed.stdout).toContain('source: custom.yaml');
+    await put(w, 'in/a.json', JSON.stringify(spansRequest(1)));
+    const r = await run(w, ['convert', 'in/a.json', '-o', 'out', '--config', '/work/custom.yaml']);
+    expect(r.code).toBe(0);
+    expect(manifestOf(w, 'out').config.dashboards[0]?.source).toBe('custom.yaml');
+  });
 });

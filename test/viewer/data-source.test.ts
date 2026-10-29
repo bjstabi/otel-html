@@ -11,6 +11,7 @@ import {
 import { CHUNK_LRU_SIZE } from '../../src/viewer/data/windowed.js';
 import { createScriptedLoader } from '../../test-support/scripted-loader.js';
 import {
+  buildEmbeddedMetricsReport,
   buildMetricReports,
   buildReport,
   buildSpreadReport,
@@ -209,7 +210,10 @@ describe('windowed strategy', () => {
   test('without condition, text or window it returns the head of the run and trusts the manifest total', async () => {
     const small: Fixture = {
       files: six.files,
-      manifest: { ...six.manifest, config: { viewer: { ...six.manifest.config.viewer, listCap: 4 } } },
+      manifest: {
+        ...six.manifest,
+        config: { ...six.manifest.config, viewer: { ...six.manifest.config.viewer, listCap: 4 } },
+      },
     };
     const loader = createScriptedLoader(small.files);
     const ds = await createDataSource(loader, small.manifest, 1);
@@ -347,7 +351,10 @@ describe('windowed traces mode', () => {
   });
 
   test('the list cap counts traces, not matched spans, and limit counts traces', async () => {
-    const capped = { ...six.manifest, config: { viewer: { ...six.manifest.config.viewer, listCap: 2 } } };
+    const capped = {
+      ...six.manifest,
+      config: { ...six.manifest.config, viewer: { ...six.manifest.config.viewer, listCap: 2 } },
+    };
     const loader = createScriptedLoader(six.files);
     const ds = await createDataSource(loader, capped, 1);
     loader.reset();
@@ -401,5 +408,38 @@ describe('metrics', () => {
     const count = (path: string): number => loader.calls.filter((p) => p === path).length;
     expect(count('data/metrics/000000/series.js')).toBe(1);
     expect(count('data/rollups/metrics.js')).toBe(1);
+  });
+});
+
+describe('metricPoints', () => {
+  test('is the unfiltered point rollup over time, loaded once', async () => {
+    const linked = await buildEmbeddedMetricsReport();
+    const loader = createScriptedLoader(linked.files);
+    const ds = await createDataSource(loader, linked.manifest, SMALL);
+    const [a, b] = await Promise.all([ds.metricPoints(), ds.metricPoints()]);
+    expect(a.keys).toEqual(['points']);
+    expect(a.total('points')).toBe(100);
+    expect(b).toBe(a);
+    expect(await ds.metricPoints()).toBe(a);
+    expect(loader.calls.filter((p) => p === 'data/rollups/metrics.js')).toHaveLength(1);
+  });
+});
+
+describe('resourceValues', () => {
+  test('unions the facets and the metric catalog, sorted, uncapped', async () => {
+    const linked = await buildEmbeddedMetricsReport();
+    const ds = await createDataSource(createScriptedLoader(linked.files), linked.manifest, SMALL);
+    expect(await ds.resourceValues('service.name')).toEqual({
+      values: ['checkout', 'payments', 'web'],
+      kind: 'string',
+      capped: false,
+    });
+  });
+
+  test('a key only the metric catalog knows is typed by its values; an unknown key is empty', async () => {
+    const linked = await buildEmbeddedMetricsReport();
+    const ds = await createDataSource(createScriptedLoader(linked.files), linked.manifest, SMALL);
+    expect(await ds.resourceValues('process.pid')).toEqual({ values: ['7'], kind: 'int', capped: false });
+    expect(await ds.resourceValues('nope')).toEqual({ values: [], kind: 'string', capped: false });
   });
 });

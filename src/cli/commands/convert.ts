@@ -1,5 +1,6 @@
 import { type Command, Option } from 'commander';
-import { convert } from '../../api/convert.js';
+import { convertResolved } from '../../api/convert.js';
+import { resolveDeps } from '../../api/report.js';
 import type { OtlpSignal } from '../../model/otlp-json.js';
 import { createNodeFileSystem } from '../../writer/node-fs.js';
 import type { ReportSummary, WriterDeps } from '../../writer/session.js';
@@ -35,7 +36,7 @@ export function addConvertCommand(program: Command, io: CliIo, deps: Partial<Wri
     .action(async (files: string[], flags: ConvertFlags) => {
       const fs = deps.fs ?? createNodeFileSystem();
       const { config } = await resolveCliConfig(io, fs, flags);
-      const summary = await convert(
+      const summary = await convertResolved(
         {
           input: files,
           out: flags.out,
@@ -43,7 +44,7 @@ export function addConvertCommand(program: Command, io: CliIo, deps: Partial<Wri
           ...(flags.append === true ? { append: true } : {}),
           ...(flags.signal === undefined ? {} : { signal: flags.signal }),
         },
-        deps,
+        await resolveDeps(deps),
       );
       io.stdout(describeSummary(summary));
     });

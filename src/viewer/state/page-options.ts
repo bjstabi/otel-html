@@ -1,5 +1,5 @@
 import { invariant } from '../../model/errors.js';
-import type { OttlContextName } from '../../ottl/contexts.js';
+import { type ExplorerPage, PAGE_OPTIONS, type PageMode, type PageView } from '../../query/pages.js';
 import type { ExplorerView } from './explorer-view.js';
 import type { SelectionMode } from './selection.js';
 
@@ -13,33 +13,7 @@ export function pageOfRoute(route: string): Page | null {
   return PAGES.find((p) => route === `/${p}` || route.startsWith(`/${p}/`)) ?? null;
 }
 
-interface PageOption {
-  /** The OTTL context a `q` must compile in on this page. */
-  readonly context: OttlContextName;
-  /** Groupings this page offers; the first is the default (stored as `mode: null`). */
-  readonly modes: readonly SelectionMode[];
-  /** Views this page offers; the first is the default. */
-  readonly views: readonly ExplorerView[];
-}
-
-/** What each explorer accepts. Data, not code: the explorers read their controls from here. */
-export const PAGE_OPTIONS = {
-  traces: {
-    context: 'span',
-    modes: ['spans', 'traces'],
-    views: ['list', 'timeseries', 'toplist', 'bar', 'table', 'pointplot', 'treemap', 'pie'],
-  },
-  logs: {
-    context: 'log_record',
-    modes: ['logs', 'patterns', 'traces'],
-    views: ['list', 'timeseries', 'toplist', 'bar', 'table', 'treemap', 'pie', 'scatter'],
-  },
-  metrics: { context: 'datapoint', modes: [], views: [] },
-} as const satisfies Record<string, PageOption>;
-
-export type ExplorerPage = keyof typeof PAGE_OPTIONS;
-export type PageMode<P extends ExplorerPage> = (typeof PAGE_OPTIONS)[P]['modes'][number];
-export type PageView<P extends ExplorerPage> = (typeof PAGE_OPTIONS)[P]['views'][number];
+export { type ExplorerPage, PAGE_OPTIONS, type PageMode, type PageView };
 
 export const PAGE_TITLES: Record<Page, string> = {
   traces: 'Traces',

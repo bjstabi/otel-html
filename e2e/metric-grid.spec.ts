@@ -6,8 +6,12 @@ import { expect, test } from './test.js';
 /** The grid's first (expanded) group draws its chart cards, each with one or more series, once scrolled into view. */
 async function expectCharts(grid: Locator): Promise<void> {
   await expect(grid.getByRole('button', { expanded: true }).first()).toBeVisible();
-  // Cards render lazily as they scroll into view.
-  await grid.getByRole('region').first().getByRole('region').first().scrollIntoViewIfNeeded();
+  // Cards render lazily as they scroll into view. A card can be replaced while it settles (the grid re-renders as the
+  // catalog and lookups land), which detaches the element mid-scroll; retry until the scroll lands on an attached card.
+  const card = grid.getByRole('region').first().getByRole('region').first();
+  await expect(async () => {
+    await card.scrollIntoViewIfNeeded({ timeout: 1000 });
+  }).toPass();
   const charts = grid.getByRole('img', { name: /: [1-9]\d* series$/ });
   await expect(charts.first()).toBeVisible();
   expect(await charts.count()).toBeGreaterThan(0);

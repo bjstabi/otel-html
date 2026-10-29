@@ -37,7 +37,17 @@ const manifest: Manifest = {
   rollups: [],
   traceShards: [],
   metricFiles: [],
-  config: { viewer: { eagerBudgetBytes: 75_000_000, listCap: 10_000, theme: 'system' } },
+  config: {
+    viewer: {
+      eagerBudgetBytes: 75_000_000,
+      listCap: 10_000,
+      theme: 'system',
+      defaultDashboard: 'fusion',
+      home: 'traces',
+    },
+    dashboards: [],
+    views: [],
+  },
 };
 
 function unused(): never {
@@ -81,8 +91,10 @@ const dataSource: DataSource = {
   traceLogs: unused,
   surroundingLogs: unused,
   metricCatalog: unused,
+  metricPoints: unused,
   metric: unused,
   metricsForResources: unused,
+  resourceValues: unused,
 };
 
 function renderShell(hash: string, ds: DataSource = dataSource): void {
@@ -236,10 +248,11 @@ describe('routes', () => {
     expect(screen.queryByText('Coming in a later release')).toBeNull();
   });
 
-  test('dashboards shows a labelled count from the manifest totals', () => {
+  test('dashboards is the list', () => {
     renderShell('#/dashboards');
-    expect(screen.getByText('Coming in a later release')).toBeTruthy();
-    expect(screen.getByLabelText('Spans in this run').textContent).toBe('1234');
+    expect(screen.getByRole('heading', { name: 'Dashboards', level: 1 })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Fusion' })).toBeTruthy();
+    expect(screen.queryByText('Coming in a later release')).toBeNull();
   });
 
   test('traces explorer and services have labelled placeholder pages', () => {
@@ -365,6 +378,7 @@ describe('chrome', () => {
       'Export CSV',
       'Export JSON',
       'Export OTLP JSON',
+      'Copy as dashboard widget',
     ]);
     cleanup();
     renderShell('#/dashboards');

@@ -28,10 +28,11 @@ vi.mock('../../src/viewer/components/chart.js', async () => {
   };
 });
 
+import type { MetricPageState } from '../../src/query/metric-query.js';
 import { createDataSource } from '../../src/viewer/data/data-source.js';
 import { Shell } from '../../src/viewer/shell/shell.js';
 import { createHashHistory } from '../../src/viewer/state/hash-history.js';
-import { defaultMetricState, type MetricPageState } from '../../src/viewer/state/metric-state.js';
+import { defaultMetricState } from '../../src/viewer/state/metric-state.js';
 import { parseUrlState, serializeUrlState } from '../../src/viewer/state/url-state.js';
 import { ThemeProvider } from '../../src/viewer/theme/theme-provider.js';
 import { createScriptedLoader } from '../../test-support/scripted-loader.js';
@@ -244,5 +245,34 @@ describe('Metrics Explorer', () => {
   test('an unknown metric in the URL says so on its row', async () => {
     await renderAt(metricsHash({ metric: 'no.such.metric', show: 'avg' }));
     expect(await screen.findByText('no metric named no.such.metric in this report')).toBeTruthy();
+  });
+
+  describe('Copy as dashboard widget', () => {
+    test('copies the queries as a metric widget', async () => {
+      const user = userEvent.setup();
+      const writeText = vi.fn(() => Promise.resolve());
+      Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+      await renderAt(metricsHash({ metric: 'http.server.request.duration', show: 'p95' }));
+      await screen.findByLabelText('Show of a');
+      await user.click(screen.getByRole('button', { name: 'Export' }));
+      await user.click(await screen.findByRole('menuitem', { name: /Copy as dashboard widget/ }));
+      await waitFor(() => expect(writeText).toHaveBeenCalledOnce());
+      const yaml = String((writeText.mock.calls[0] as unknown[])[0]);
+      expect(yaml).toContain('type: metric');
+      expect(yaml).toContain('metric: http.server.request.duration');
+      expect(yaml).toContain('show: p95');
+    });
+
+    test('is disabled in the Distribution display, with the reason', async () => {
+      const user = userEvent.setup();
+      await renderAt(
+        metricsHash({ metric: 'http.server.request.duration', show: 'p95' }, { display: 'distribution' }),
+      );
+      await screen.findByLabelText('Show of a');
+      await user.click(screen.getByRole('button', { name: 'Export' }));
+      const item = await screen.findByRole('menuitem', { name: /Copy as dashboard widget/ });
+      expect(item.getAttribute('aria-disabled')).toBe('true');
+      expect(item.textContent).toContain("The Distribution display can't become a widget");
+    });
   });
 });

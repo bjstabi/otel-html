@@ -8,6 +8,10 @@ import { promisify } from 'node:util';
 import { Report } from '../src/api/index.js';
 import { scaleLogsRequest } from '../test-support/scale-logs.js';
 import {
+  DASHBOARDS_CONFIG,
+  DASHBOARDS_HOSTILE_DEFAULT,
+  DASHBOARDS_HOSTILE_DESCRIPTION,
+  DASHBOARDS_HOSTILE_TITLE,
   FIXTURE_REPORTS,
   fixtureFiles,
   HOSTILE_REPORT_DIR,
@@ -164,8 +168,57 @@ async function convertTo(
   inputs: readonly string[],
   title: string,
   env?: Record<string, string>,
+  config?: string,
 ): Promise<void> {
-  await cli(['convert', ...inputs, '--out', fileURLToPath(out), '--title', title], env);
+  await cli(
+    [
+      'convert',
+      ...inputs,
+      '--out',
+      fileURLToPath(out),
+      '--title',
+      title,
+      ...(config === undefined ? [] : ['--config', config]),
+    ],
+    env,
+  );
+}
+
+/** `linked-*` and `metrics` converted with the fixture dashboard config; the hostile one converts `hostile` with markup in its text. */
+async function buildDashboardReports(): Promise<void> {
+  const hostileConfig = fileURLToPath(new URL('dashboards-hostile.json', REPORTS_DIR));
+  await mkdir(REPORTS_DIR, { recursive: true });
+  await writeFile(
+    hostileConfig,
+    JSON.stringify({
+      dashboards: [
+        {
+          id: 'hostile',
+          title: DASHBOARDS_HOSTILE_TITLE,
+          description: DASHBOARDS_HOSTILE_DESCRIPTION,
+          variables: [{ key: 'service.name', default: DASHBOARDS_HOSTILE_DEFAULT }],
+          widgets: [{ type: 'traces', x: 0, y: 0, w: 12, h: 10 }],
+        },
+      ],
+      viewer: { defaultDashboard: 'hostile' },
+    }),
+  );
+  await Promise.all([
+    convertTo(
+      reportDir('dashboards'),
+      fixtureFiles('linked').map((f) => fileURLToPath(f)),
+      'dashboards fixture',
+      undefined,
+      fileURLToPath(DASHBOARDS_CONFIG),
+    ),
+    convertTo(
+      reportDir('dashboards-hostile'),
+      fixtureFiles('hostile').map((f) => fileURLToPath(f)),
+      'dashboards hostile',
+      undefined,
+      hostileConfig,
+    ),
+  ]);
 }
 
 async function buildReport(): Promise<void> {
@@ -402,6 +455,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     buildScaleReports(),
     buildMetricsMergeReports(),
     buildUnfinishedReport(),
+    buildDashboardReports(),
   ]);
   const dir = (u: URL): string => fileURLToPath(u).replace(/\/$/, '');
   // `metrics-scale` is built on demand by the specs that need it (e2e/metrics-scale.ts); its mount may be empty.
@@ -415,6 +469,8 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     'metrics-merged',
     'metrics-single',
     'unfinished',
+    'dashboards',
+    'dashboards-hostile',
     'metrics-scale',
     ...FIXTURE_REPORTS,
   ];

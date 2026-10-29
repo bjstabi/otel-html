@@ -1,5 +1,6 @@
 import type { Manifest } from '../../format/manifest.js';
 import { chunkKey } from '../../format/paths.js';
+import { anyValueToDisplay } from '../../model/anyvalue.js';
 import type { TraceId } from '../../model/ids.js';
 import type { ResourceRecord, ResourceRef, ScopeRecord, ScopeRef } from '../../model/records.js';
 import type { ExpHistogram } from '../../rollups/exp-histogram.js';
@@ -10,6 +11,7 @@ import type { RedSeries } from '../../rollups/red.js';
 import type { SpanRollups } from '../../rollups/span-rollups.js';
 import type { TimeBuckets } from '../../rollups/time-buckets.js';
 import type { LogSeverityKey } from '../../semconv/severity.js';
+import type { FacetValueKind } from '../components/filter-tokens.js';
 import { Lru } from './chunk-window.js';
 import { createEagerSource } from './eager.js';
 import { createTraceIndex, loadSpanRollups } from './load.js';
@@ -25,7 +27,13 @@ import {
   patternRowsOf,
 } from './log-query.js';
 import { createWindowedLogSource } from './log-windowed.js';
-import { type LoadedMetric, loadMetric, loadMetricCatalog, metricsOnResources } from './metric-load.js';
+import {
+  type LoadedMetric,
+  loadMetric,
+  loadMetricCatalog,
+  loadMetricPoints,
+  metricsOnResources,
+} from './metric-load.js';
 import type { ScriptLoader } from './script-loader.js';
 import type { SpanQuery, SpanQueryResult, SpanRow } from './span-query.js';
 import type { TraceTree } from './trace-tree.js';
@@ -103,10 +111,24 @@ export interface DataSource {
   surroundingLogs(ref: LogRef, n: number): Promise<SurroundingLogs>;
   /** The metric catalog, loaded on first use. */
   metricCatalog(): Promise<MetricCatalog>;
+  /** Data points over time across every resource (the unfiltered rollup), loaded on first use. */
+  metricPoints(): Promise<TimeBuckets<'points'>>;
   /** One metric's series and levels, loaded on demand (the 32 most recent are kept). */
   metric(id: number): Promise<LoadedMetric>;
   /** Metrics with a series on one of `resources`, matched by canonical resource equality. */
   metricsForResources(resources: readonly ResourceRecord[]): Promise<readonly MetricEntry[]>;
+  /**
+   * The values of one resource attribute across the report: the union of the span and log Resource facets and the
+   * metric catalog's resources, sorted. `kind` is `mixed` when the sources disagree; `capped` when a facet kept
+   * only its first values (the rest are counted in "other").
+   */
+  resourceValues(key: string): Promise<ResourceValues>;
+}
+
+export interface ResourceValues {
+  values: string[];
+  kind: FacetValueKind;
+  capped: boolean;
 }
 
 /** What each span strategy provides; `createDataSource` adds the landing, percentile and log-count parts. */
@@ -134,6 +156,46 @@ function percentile(h: ExpHistogram, durationNs: number): number {
     else hi = mid;
   }
   return Math.round(lo * 1000) / 10;
+}
+
+/** The attribute kinds a facet records; anything else (an array, a map) has no filterable value. */
+function scalarKindOf(kind: string): FacetValueKind | null {
+  return kind === 'string' || kind === 'int' || kind === 'double' || kind === 'bool' ? kind : null;
+}
+
+function mergeKinds(kinds: readonly FacetValueKind[]): FacetValueKind {
+  const [first, ...rest] = kinds;
+  if (first === undefined) return 'string'; // nothing recorded the key: a typed filter has nothing to match anyway
+  return rest.every((k) => k === first) ? first : 'mixed';
+}
+
+function resourceValuesOf(
+  key: string,
+  facets: readonly FacetCounts[],
+  catalog: MetricCatalog,
+): ResourceValues {
+  const values = new Set<string>();
+  const kinds: FacetValueKind[] = [];
+  let capped = false;
+  for (const f of facets) {
+    const kind = f.kind(key);
+    if (kind === undefined) continue;
+    kinds.push(kind);
+    for (const { value } of f.top(key, f.valueCap)) values.add(value);
+    if (f.other(key) > 0) capped = true;
+  }
+  for (const r of catalog.resources()) {
+    const v = r.attributes.get(key);
+    const kind = v === undefined ? null : scalarKindOf(v.kind);
+    if (v === undefined || kind === null) continue;
+    kinds.push(kind);
+    values.add(anyValueToDisplay(v));
+  }
+  return {
+    values: [...values].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
+    kind: mergeKinds(kinds),
+    capped,
+  };
 }
 
 function landingOf(rollups: SpanRollups): Landing {
@@ -214,6 +276,14 @@ export async function createDataSource(
     });
     return metricCatalog;
   };
+  let metricPoints: Promise<TimeBuckets<'points'>> | undefined;
+  const getMetricPoints = (): Promise<TimeBuckets<'points'>> => {
+    metricPoints ??= loadMetricPoints(loader, manifest).catch((e: unknown) => {
+      metricPoints = undefined; // a failed load is retried on the next use
+      throw e;
+    });
+    return metricPoints;
+  };
   const metrics = new Lru<number, LoadedMetric>(METRIC_LRU_SIZE);
   const [rollups, spans] = await Promise.all([
     loadSpanRollups(loader, manifest),
@@ -260,7 +330,12 @@ export async function createDataSource(
     traceLogs: logs.traceLogs,
     surroundingLogs: logs.surroundingLogs,
     metricCatalog: getMetricCatalog,
+    metricPoints: getMetricPoints,
     metric: (id) => metrics.get(id, async () => loadMetric(loader, manifest, id, await getMetricCatalog())),
     metricsForResources: async (resources) => metricsOnResources(await getMetricCatalog(), resources),
+    async resourceValues(key) {
+      const [logsLanding, catalog] = await Promise.all([getLogRollups(), getMetricCatalog()]);
+      return resourceValuesOf(key, [rollups.facets, logsLanding.facets], catalog);
+    },
   };
 }

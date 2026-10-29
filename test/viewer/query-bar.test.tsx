@@ -221,7 +221,7 @@ describe('QueryBar', () => {
     act(() => btn.focus());
     expect(document.activeElement).toBe(btn);
     expect(document.getElementById(btn.getAttribute('aria-describedby') ?? '')?.textContent).toBe(
-      'second query arrives with Dashboards',
+      'not available yet',
     );
     await user.click(btn);
     expect(store.getState().condition).toBeNull();

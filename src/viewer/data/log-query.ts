@@ -92,6 +92,11 @@ export interface LogQuery {
   sort: { column: string; dir: 'asc' | 'desc' };
   limit: number;
   scanAll: boolean;
+  /**
+   * The trace the `condition` already restricts the logs to. A windowed source then reads only the log chunks the
+   * trace index lists for it instead of every chunk in the window; the condition is still applied to the rows.
+   */
+  traceId?: TraceId | null;
 }
 
 export interface PatternRow {

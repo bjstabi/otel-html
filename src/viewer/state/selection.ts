@@ -2,6 +2,8 @@ import { createStore, type StoreApi } from 'zustand/vanilla';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { SpanId, TraceId } from '../../model/ids.js';
 import { parseCondition } from '../../ottl/parse.js';
+import type { MetricPageState } from '../../query/metric-query.js';
+import type { SELECTION_MODES } from '../../query/pages.js';
 import type { LogSeverityKey } from '../../semconv/severity.js';
 import {
   type FacetScope,
@@ -18,16 +20,9 @@ import type { LogRef } from '../data/log-query.js';
 import type { TimeWindow } from '../data/span-query.js';
 import { isLogTabId, LOG_TAB_IDS, type LogTabId } from '../logs/tabs.js';
 import { isTraceTabId, TRACE_TAB_IDS, type TraceTabId } from '../traces/tabs.js';
+import { type DashboardPageState, isPristine } from './dashboard-state.js';
 import type { ExplorerView } from './explorer-view.js';
-import type { MetricPageState } from './metric-state.js';
-import {
-  formatWindow,
-  parseUrlState,
-  parseWindow,
-  type SELECTION_MODES,
-  serializeUrlState,
-  type UrlState,
-} from './url-state.js';
+import { formatWindow, parseUrlState, parseWindow, serializeUrlState, type UrlState } from './url-state.js';
 
 export const DEFAULT_TRACE_TAB: TraceTabId = 'flame';
 export const DEFAULT_SPAN_TAB = 'overview';
@@ -52,6 +47,8 @@ export interface Selection {
   tabs: { trace: string; span: string; log: string };
   /** The Metrics page's state (URL key `m`); null until the page is first used. */
   metrics: MetricPageState | null;
+  /** The Dashboards page's state (URL key `d`); null until the page is first used. */
+  dashboard: DashboardPageState | null;
   setWindow(w: TimeWindow | null): void;
   setCondition(c: string | null): void;
   setText(t: string): void;
@@ -61,6 +58,7 @@ export interface Selection {
   setSort(s: string | null): void;
   setTab(which: 'trace' | 'span' | 'log', tab: string): void;
   setMetrics(m: MetricPageState | null): void;
+  setDashboard(d: DashboardPageState | null): void;
   /** Facet values are strings (the rollups keep display text), so the token is a string literal. */
   toggleFacet(
     key: string,
@@ -91,6 +89,7 @@ export type SelectionData = Omit<
   | 'setSort'
   | 'setTab'
   | 'setMetrics'
+  | 'setDashboard'
   | 'toggleFacet'
   | 'setSeverityRange'
   | 'selectTrace'
@@ -118,6 +117,7 @@ function dataFromUrl(u: UrlState): SelectionData {
       log: u.ltab ?? DEFAULT_LOG_TAB,
     },
     metrics: u.m ?? null,
+    dashboard: u.d ?? null,
   };
 }
 
@@ -138,6 +138,7 @@ export function selectionToUrlState(s: SelectionData): UrlState {
   if (s.logRef !== null) u.log = s.logRef;
   if (s.tabs.log !== DEFAULT_LOG_TAB && isLogTabId(s.tabs.log)) u.ltab = s.tabs.log;
   if (s.metrics !== null) u.m = s.metrics;
+  if (s.dashboard !== null && !isPristine(s.dashboard)) u.d = s.dashboard;
   return u;
 }
 
@@ -246,6 +247,7 @@ export function createSelectionStore(initial: UrlState): StoreApi<Selection> {
       set({ tabs: { ...get().tabs, [which]: tab } });
     },
     setMetrics: (metrics) => set({ metrics }),
+    setDashboard: (dashboard) => set({ dashboard }),
     toggleFacet: (key, value, op, scope = 'core', kind = 'string', signal = 'span') =>
       set({ condition: toggleFacetCondition(get().condition, key, value, op, scope, kind, signal) }),
     setSeverityRange: (min, max) => set({ condition: severityRangeCondition(get().condition, min, max) }),
