@@ -188,7 +188,7 @@ describe('the Traces widget states', () => {
 
   test('an empty result says no traces match', async () => {
     mount(dataSourceOf(baseManifest));
-    expect(await screen.findByText('No traces match')).toBeTruthy();
+    expect((await screen.findByRole('heading', { name: 'No traces match' })).tagName).toBe('H3');
   });
 
   test('a partial scan says how much was read and Scan entire run rereads everything', async () => {

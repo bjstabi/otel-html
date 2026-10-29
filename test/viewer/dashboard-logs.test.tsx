@@ -184,7 +184,7 @@ describe('the Logs widget states', () => {
 
   test('an empty result says no logs match', async () => {
     mount(dataSourceOf(baseManifest));
-    expect(await screen.findByText('No logs match')).toBeTruthy();
+    expect((await screen.findByRole('heading', { name: 'No logs match' })).tagName).toBe('H3');
   });
 
   test('a partial scan says how much was read and Scan entire run rereads everything', async () => {

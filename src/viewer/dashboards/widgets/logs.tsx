@@ -101,7 +101,7 @@ function ListBody(props: {
       {state.status === 'error' && <ErrorCard title="The query could not run" message={state.message} />}
       {shown !== null &&
         (shown.total === 0 ? (
-          <NoMatch noun="logs" />
+          <NoMatch noun="logs"  heading="h3" />
         ) : (
           <LogList
             rows={shown.rows}
