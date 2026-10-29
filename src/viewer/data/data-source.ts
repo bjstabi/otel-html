@@ -5,10 +5,10 @@ import type { TraceId } from '../../model/ids.js';
 import type { ResourceRecord, ResourceRef, ScopeRecord, ScopeRef } from '../../model/records.js';
 import type { ExpHistogram } from '../../rollups/exp-histogram.js';
 import type { FacetCounts } from '../../rollups/facets.js';
-import type { LogRollups } from '../../rollups/log-rollups.js';
+import { LOG_RESOURCE_FACET_KEYS, type LogRollups } from '../../rollups/log-rollups.js';
 import type { MetricCatalog, MetricEntry } from '../../rollups/metric-catalog.js';
 import type { RedSeries } from '../../rollups/red.js';
-import type { SpanRollups } from '../../rollups/span-rollups.js';
+import { SPAN_RESOURCE_FACET_KEYS, type SpanRollups } from '../../rollups/span-rollups.js';
 import type { TimeBuckets } from '../../rollups/time-buckets.js';
 import type { LogSeverityKey } from '../../semconv/severity.js';
 import type { FacetValueKind } from '../components/filter-tokens.js';
@@ -118,8 +118,8 @@ export interface DataSource {
   /** Metrics with a series on one of `resources`, matched by canonical resource equality. */
   metricsForResources(resources: readonly ResourceRecord[]): Promise<readonly MetricEntry[]>;
   /**
-   * The values of one resource attribute across the report: the union of the span and log Resource facets and the
-   * metric catalog's resources, sorted. `kind` is `mixed` when the sources disagree; `capped` when a facet kept
+   * The values of one resource attribute across the report: the union of the span and log facets that hold resource
+   * attributes (service, host, environment) and the metric catalog's resources, sorted. `kind` is `mixed` when the sources disagree; `capped` when a facet kept
    * only its first values (the rest are counted in "other").
    */
   resourceValues(key: string): Promise<ResourceValues>;
@@ -138,6 +138,9 @@ export interface SpanStrategy extends Pick<DataSource, 'querySpans' | 'hasTrace'
 
 /** What each log strategy provides; `createDataSource` adds the landing. */
 export type LogStrategy = Pick<DataSource, 'queryLogs' | 'getLog' | 'traceLogs' | 'surroundingLogs'>;
+
+/** `ds.metricCatalog()` as a stable function, for `useKeyedAsync(dataSource, catalogOf)`. */
+export const catalogOf = (ds: DataSource): Promise<MetricCatalog> => ds.metricCatalog();
 
 /** Metrics kept decoded in memory. */
 export const METRIC_LRU_SIZE = 32;
@@ -169,15 +172,20 @@ function mergeKinds(kinds: readonly FacetValueKind[]): FacetValueKind {
   return rest.every((k) => k === first) ? first : 'mixed';
 }
 
-function resourceValuesOf(
+/**
+ * `facets` pairs each signal's rollup facets with the keys whose values there are resource attributes: any other key
+ * of the same name is a span or log attribute, not a resource one, so only the metric catalog's resources answer it.
+ */
+export function resourceValuesOf(
   key: string,
-  facets: readonly FacetCounts[],
+  facets: readonly { facets: FacetCounts; resourceKeys: ReadonlySet<string> }[],
   catalog: MetricCatalog,
 ): ResourceValues {
   const values = new Set<string>();
   const kinds: FacetValueKind[] = [];
   let capped = false;
-  for (const f of facets) {
+  for (const { facets: f, resourceKeys } of facets) {
+    if (!resourceKeys.has(key)) continue;
     const kind = f.kind(key);
     if (kind === undefined) continue;
     kinds.push(kind);
@@ -290,6 +298,27 @@ export async function createDataSource(
     budgets.spans === 'eager' ? createEagerSource(loader, manifest) : null,
   ]);
   const spanStrategy = spans ?? createWindowedSource(loader, manifest, rollups, index);
+  const loadTrace = async (traceId: TraceId): Promise<TraceDetail> => {
+    // The count comes from the trace index, so opening a trace never waits on the log load, with one exception
+    // below, and never fails with it.
+    // Under the eager span strategy the spans are already in memory, so a shard that fails to load costs only the
+    // log count (0); under the windowed strategy getTrace needs the same shard, so its failure stands.
+    const [trace, entry] = await Promise.all([
+      spanStrategy.getTrace(traceId),
+      budgets.spans === 'eager' ? index.entry(traceId).catch(() => null) : index.entry(traceId),
+    ]);
+    if (entry === null || entry.logs === 0) return { ...trace, logCount: 0 };
+    if (entry.logChunks.every((k) => listedLogChunks.has(k))) return { ...trace, logCount: entry.logs };
+    // Crash only: a crash between a flush's shard write and its manifest commit leaves the shard counting logs in
+    // chunks the manifest never listed. Count the committed rows instead; this waits on the log load, and if that
+    // load fails the index count stands, so the trace still opens.
+    const logCount = await logs.traceLogs(traceId).then(
+      (rows) => rows.length,
+      () => entry.logs,
+    );
+    return { ...trace, logCount };
+  };
+  let lastTrace: { id: TraceId; detail: Promise<TraceDetail> } | null = null;
   return {
     manifest,
     strategy: budgets.spans,
@@ -300,25 +329,15 @@ export async function createDataSource(
       return { facets: r.facets, buckets: r.buckets, patterns: patternRowsOf(r.patterns) };
     },
     querySpans: spanStrategy.querySpans,
-    async getTrace(traceId) {
-      // The count comes from the trace index, so opening a trace never waits on the log load, with one exception
-      // below, and never fails with it.
-      // Under the eager span strategy the spans are already in memory, so a shard that fails to load costs only the
-      // log count (0); under the windowed strategy getTrace needs the same shard, so its failure stands.
-      const [trace, entry] = await Promise.all([
-        spanStrategy.getTrace(traceId),
-        budgets.spans === 'eager' ? index.entry(traceId).catch(() => null) : index.entry(traceId),
-      ]);
-      if (entry === null || entry.logs === 0) return { ...trace, logCount: 0 };
-      if (entry.logChunks.every((k) => listedLogChunks.has(k))) return { ...trace, logCount: entry.logs };
-      // Crash only: a crash between a flush's shard write and its manifest commit leaves the shard counting logs in
-      // chunks the manifest never listed. Count the committed rows instead; this waits on the log load, and if that
-      // load fails the index count stands, so the trace still opens.
-      const logCount = await logs.traceLogs(traceId).then(
-        (rows) => rows.length,
-        () => entry.logs,
-      );
-      return { ...trace, logCount };
+    getTrace(traceId) {
+      // The widgets and the trace panel that follow one selected trace share its load.
+      if (lastTrace?.id === traceId) return lastTrace.detail;
+      const detail = loadTrace(traceId).catch((e: unknown) => {
+        if (lastTrace?.detail === detail) lastTrace = null; // a failed load is retried on the next use
+        throw e;
+      });
+      lastTrace = { id: traceId, detail };
+      return detail;
     },
     hasTrace: spanStrategy.hasTrace,
     percentileOf(service, resource, durationNs) {
@@ -335,7 +354,14 @@ export async function createDataSource(
     metricsForResources: async (resources) => metricsOnResources(await getMetricCatalog(), resources),
     async resourceValues(key) {
       const [logsLanding, catalog] = await Promise.all([getLogRollups(), getMetricCatalog()]);
-      return resourceValuesOf(key, [rollups.facets, logsLanding.facets], catalog);
+      return resourceValuesOf(
+        key,
+        [
+          { facets: rollups.facets, resourceKeys: SPAN_RESOURCE_FACET_KEYS },
+          { facets: logsLanding.facets, resourceKeys: LOG_RESOURCE_FACET_KEYS },
+        ],
+        catalog,
+      );
     },
   };
 }

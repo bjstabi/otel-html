@@ -3,7 +3,7 @@ import { Check, ChevronDown } from 'lucide-react';
 import type { JSX } from 'react';
 import type { Variable } from '../../dashboards/schema.js';
 import type { ResourceValues } from '../data/data-source.js';
-import { POPUP } from '../shell/page-chrome.js';
+import { POPUP } from '../shell/controls.js';
 import type { DashboardPageState } from '../state/dashboard-state.js';
 import type { VariableBindings } from './scope.js';
 

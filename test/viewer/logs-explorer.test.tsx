@@ -450,6 +450,11 @@ describe('LogsExplorer', () => {
     expect(queryLogs).not.toHaveBeenCalled();
   });
 
+  test('a zero-log report still has the Views menu', () => {
+    setup({ logs: 0 });
+    expect(screen.getByRole('button', { name: /Views/ })).toBeTruthy();
+  });
+
   test('a zero-log report still shows the invalid mode notice', () => {
     setup({ logs: 0, initial: { mode: 'spans', view: 'pointplot' } });
     const alerts = screen.getAllByRole('alert').map((a) => a.textContent);
@@ -477,6 +482,28 @@ describe('LogsExplorer', () => {
       expect(yaml).toContain('type: toplist');
       expect(yaml).toContain('signal: logs');
       expect(yaml).toContain('groupBy: host.name');
+    });
+
+    test('says the YAML was copied', async () => {
+      const user = userEvent.setup();
+      const writeText = vi.fn(() => Promise.resolve());
+      Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+      setup({ initial: { view: 'toplist' } });
+      await user.click(screen.getByRole('button', { name: 'Export' }));
+      await user.click(await screen.findByRole('menuitem', { name: /Copy as dashboard widget/ }));
+      expect(await screen.findByText('Widget YAML copied')).toBeTruthy();
+    });
+
+    test('a refused clipboard opens the YAML in a dialog to copy by hand', async () => {
+      const user = userEvent.setup();
+      const writeText = vi.fn(() => Promise.reject(new Error('denied')));
+      Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+      setup({ initial: { view: 'toplist' } });
+      await user.click(screen.getByRole('button', { name: 'Export' }));
+      await user.click(await screen.findByRole('menuitem', { name: /Copy as dashboard widget/ }));
+      const box = await screen.findByRole('textbox', { name: 'Widget YAML' });
+      expect((box as HTMLTextAreaElement).value).toContain('type: toplist');
+      expect(screen.queryByText('Widget YAML copied')).toBeNull();
     });
 
     test('Patterns disables it with the reason', async () => {

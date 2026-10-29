@@ -23,7 +23,7 @@ import { ResultsTable, type SortState } from '../components/results-table.js';
 import { copyWidgetItem } from '../dashboards/copy-widget.js';
 import type { DataSource } from '../data/data-source.js';
 import type { LogMode, LogQuery, LogRef, LogRow, LogTraceRow, PatternRow } from '../data/log-query.js';
-import { PageChrome, useClipboardCopy } from '../shell/page-chrome.js';
+import { PageChrome, useWidgetCopy } from '../shell/page-chrome.js';
 import { PageOptionNotice } from '../shell/page-option-notice.js';
 import {
   PAGE_OPTIONS,
@@ -116,7 +116,7 @@ export function LogsExplorer(props: { dataSource: DataSource }): JSX.Element {
   const { manifest } = props.dataSource;
   if (manifest.totals.logs === 0) {
     return (
-      <PageChrome title="Logs" signal="log" manifest={manifest}>
+      <PageChrome title="Logs" signal="log" manifest={manifest} page="logs">
         <div className="flex flex-col gap-4">
           <OptionNotices />
           <ZeroLogs manifest={manifest} />
@@ -216,7 +216,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
       fail('The export failed', e);
     }
   };
-  const widgetCopy = useClipboardCopy({ title: 'Copy as dashboard widget', label: 'Widget YAML' });
+  const widgetCopy = useWidgetCopy();
   const exportItems = [
     ...(mode === 'logs'
       ? [

@@ -1,10 +1,10 @@
 import { type JSX, useDeferredValue, useMemo, useState } from 'react';
 import type { Manifest } from '../../format/manifest.js';
 import { parseUnixNanos } from '../../model/ids.js';
-import type { MetricCatalog, MetricEntry } from '../../rollups/metric-catalog.js';
+import type { MetricEntry } from '../../rollups/metric-catalog.js';
 import { ErrorCard } from '../components/explorer-states.js';
 import { ResultsTable } from '../components/results-table.js';
-import type { DataSource } from '../data/data-source.js';
+import { catalogOf, type DataSource } from '../data/data-source.js';
 import { metricTypeLabel } from '../data/metric-tables.js';
 import { useGoTo } from '../shell/go-to.js';
 import { PageChrome } from '../shell/page-chrome.js';
@@ -89,7 +89,6 @@ const COLUMNS: readonly ColumnUi<MetricEntry>[] = [
 
 // Module-level so it is stable: `useKeyedAsync` reloads on a new `load`, and a fresh closure per render would start a
 // new load after every settled one.
-const loadCatalog = (ds: DataSource): Promise<MetricCatalog> => ds.metricCatalog();
 
 function ZeroMetrics({ manifest }: { manifest: Manifest }): JSX.Element {
   return (
@@ -107,7 +106,7 @@ function ZeroMetrics({ manifest }: { manifest: Manifest }): JSX.Element {
 export function MetricsCatalog(props: { dataSource: DataSource }): JSX.Element {
   const { manifest } = props.dataSource;
   const goTo = useGoTo();
-  const load = useKeyedAsync(props.dataSource, loadCatalog);
+  const load = useKeyedAsync(props.dataSource, catalogOf);
   const [filter, setFilter] = useState('');
   const needle = useDeferredValue(filter.trim().toLowerCase());
   const epoch = useMemo(() => parseUnixNanos(manifest.epochUnixNano, 'manifest.epochUnixNano'), [manifest]);

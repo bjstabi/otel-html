@@ -98,6 +98,14 @@ describe('append', () => {
       expect(m.views).toHaveLength(1);
       expect(m.viewer.defaultDashboard).toBe('ops');
     });
+    test('append without config keeps the home page; a config that sets another one wins', async () => {
+      const w = createTestWriter();
+      await (await open(w, 'create', testConfig({ viewer: { home: 'dashboards' } }))).close();
+      await (await open(w, 'append', testConfig())).close();
+      expect(manifestOf(w, OUT).config.viewer.home).toBe('dashboards');
+      await (await open(w, 'append', testConfig({ viewer: { home: 'logs' } }))).close();
+      expect(manifestOf(w, OUT).config.viewer.home).toBe('logs');
+    });
     test('append that replaces only dashboards keeps the views', async () => {
       const w = createTestWriter();
       await (await open(w, 'create', testConfig(ops))).close();

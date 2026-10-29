@@ -6,7 +6,9 @@ viewer:
 dashboards:
   - id: checkout
     title: Checkout
-    description: Checkout and payments on one page, one widget of each type
+    # The environment default names no environment of this data, on purpose (a default the report lacks), so the
+    # description says how to fill the page.
+    description: Checkout and payments on one page, one widget of each type. It opens on environment ci, which this data lacks; pick production.
     variables:
       - service.name
       - key: deployment.environment.name

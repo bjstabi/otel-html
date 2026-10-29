@@ -6,13 +6,16 @@ import type { View } from '../../dashboards/schema.js';
 import type { Manifest } from '../../format/manifest.js';
 import { EXPLORER_VIEWS, type ExplorerPage, SELECTION_MODES } from '../../query/pages.js';
 import { serializeUrlState, type UrlState } from '../state/url-state.js';
-import { CONTROL, POPUP } from './page-chrome.js';
+import { CONTROL, POPUP } from './controls.js';
 import { navigateRoute } from './use-route.js';
 
 export const LOCAL_VIEWS_KEY = 'otel-html:views:v1';
 
-/** Keys a saved view leaves out: the window (kept from the page being left) and what selects one trace, span or log. */
-const NOT_SAVED = ['t', 'trace', 'span', 'log'] as const;
+/**
+ * Keys a saved view leaves out: the window (kept from the page being left), what selects one trace, span or log,
+ * and the panel tabs, which mean nothing without that selection.
+ */
+const NOT_SAVED = ['t', 'trace', 'span', 'log', 'tab', 'stab', 'ltab'] as const;
 const PAGES: readonly ExplorerPage[] = ['traces', 'logs', 'metrics'];
 
 export interface LocalView {
@@ -86,6 +89,14 @@ function openStorage(): Storage | null {
   }
 }
 
+/** `params` without the keys a view leaves out, as a hash query (`~` kept readable). */
+function viewSearch(params: URLSearchParams, keepT: string | null): string {
+  const out = new URLSearchParams(params);
+  for (const k of NOT_SAVED) out.delete(k);
+  if (keepT !== null) out.set('t', keepT);
+  return out.toString().replace(/%7E/g, '~');
+}
+
 function currentParams(): URLSearchParams {
   const hash = window.location.hash;
   const qi = hash.indexOf('?');
@@ -114,11 +125,7 @@ export function ViewsMenu(props: { page: ExplorerPage; manifest: Manifest }): JS
 
   const apply = (search: string): void => {
     // The window stays; everything else is the view's. The raw query goes through so `bindUrl` reports a bad one.
-    const params = new URLSearchParams(search);
-    for (const k of NOT_SAVED) params.delete(k);
-    const keepT = currentParams().get('t');
-    if (keepT !== null) params.set('t', keepT);
-    navigateRoute(window, `/${page}`, params.toString().replace(/%7E/g, '~'));
+    navigateRoute(window, `/${page}`, viewSearch(new URLSearchParams(search), currentParams().get('t')));
   };
   const applyConfig = (v: View): void => {
     const keepT = currentParams().get('t') ?? undefined;
@@ -135,13 +142,11 @@ export function ViewsMenu(props: { page: ExplorerPage; manifest: Manifest }): JS
     e.preventDefault();
     const name = title.trim();
     if (name === '') return;
-    const params = currentParams();
-    for (const k of NOT_SAVED) params.delete(k);
     const view: LocalView = {
       id: newId(),
       title: name,
       page,
-      search: params.toString().replace(/%7E/g, '~'),
+      search: viewSearch(currentParams(), null),
     };
     if (commit((current) => [...current, view])) {
       setSaving(false);

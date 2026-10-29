@@ -76,14 +76,21 @@ export class SignalChunks {
 
   /**
    * The chunks a scan visits: those overlapping the window, or all of them for "scan entire run" or no window.
-   * `unfiltered` is a query with nothing to filter on, whose aggregates are the unfiltered rollups.
+   * `unfiltered` is a query with nothing to filter on (a trace restriction filters too), whose aggregates are the
+   * unfiltered rollups.
    */
-  targets(q: { condition: string | null; text: string; window: TimeWindow | null; scanAll: boolean }): {
+  targets(q: {
+    condition: string | null;
+    text: string;
+    window: TimeWindow | null;
+    scanAll: boolean;
+    traceId?: string | null;
+  }): {
     targets: readonly ManifestChunk[];
     unfiltered: boolean;
   } {
     const window = q.scanAll ? null : q.window;
-    const unfiltered = q.condition === null && q.text === '' && window === null;
+    const unfiltered = q.condition === null && q.text === '' && window === null && q.traceId == null;
     if (window === null) return { targets: this.ordered, unfiltered };
     const { start, end } = window;
     return { targets: this.ordered.filter((c) => c.end >= start && c.start <= end), unfiltered };

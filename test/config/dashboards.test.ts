@@ -69,10 +69,11 @@ describe('dashboards in config', () => {
     expect(e.message).toContain('dashboards.0.widgets.0.query');
   });
 
-  test('formatConfig prints dashboards with their source', () => {
+  test('formatConfig prints dashboards as written, with their source', () => {
     const out = formatConfig(resolveConfig({ file: { dashboards: [dash] }, env: {} }));
-    expect(out).toContain('dashboards:');
-    expect(out).toContain('# from: file');
+    expect(out).toMatch(/^dashboards:\n {2}# source: config file\n {2}- id: ops$/m);
+    expect(out).toMatch(/^ {2}# from: file$/m);
+    expect(out).not.toMatch(/^ *source:/m);
   });
 
   test('hostile text survives resolution unchanged', () => {
@@ -87,6 +88,8 @@ describe('dashboards in config', () => {
     const json = writeJsonSchema();
     expect(json).toContain('"dashboards"');
     expect(json).toContain('Unstable');
+    const schema = JSON.parse(json) as { properties: { dashboards: { default?: unknown } } };
+    expect(schema.properties.dashboards.default).toEqual([]);
   });
 
   test('resolveApiConfig labels file dashboards with the file name, and object ones as library API', async () => {
