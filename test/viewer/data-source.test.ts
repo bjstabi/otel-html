@@ -139,6 +139,17 @@ describe('eager strategy', () => {
     await expect(ds.getTrace(traceIdOf(99) as TraceId)).rejects.toBeInstanceOf(OtelHtmlError);
   });
 
+  test('getTrace shares the load of the trace asked for last; a failed one is asked again', async () => {
+    const ds = await createDataSource(createScriptedLoader(six.files), six.manifest, SMALL);
+    const four = ds.getTrace(traceIdOf(4) as TraceId);
+    expect(ds.getTrace(traceIdOf(4) as TraceId)).toBe(four);
+    const missing = ds.getTrace(traceIdOf(99) as TraceId);
+    await expect(missing).rejects.toBeInstanceOf(OtelHtmlError);
+    expect(ds.getTrace(traceIdOf(99) as TraceId)).not.toBe(missing);
+    await expect(ds.getTrace(traceIdOf(99) as TraceId)).rejects.toBeInstanceOf(OtelHtmlError);
+    expect(ds.getTrace(traceIdOf(4) as TraceId)).not.toBe(four);
+  });
+
   test('hasTrace answers from memory', async () => {
     const ds = await createDataSource(createScriptedLoader(six.files), six.manifest, SMALL);
     expect(await ds.hasTrace(traceIdOf(4) as TraceId)).toBe(true);

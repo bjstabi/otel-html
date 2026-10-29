@@ -139,10 +139,10 @@ export interface SpanStrategy extends Pick<DataSource, 'querySpans' | 'hasTrace'
 /** What each log strategy provides; `createDataSource` adds the landing. */
 export type LogStrategy = Pick<DataSource, 'queryLogs' | 'getLog' | 'traceLogs' | 'surroundingLogs'>;
 
-/** Metrics kept decoded in memory. */
 /** `ds.metricCatalog()` as a stable function, for `useKeyedAsync(dataSource, catalogOf)`. */
 export const catalogOf = (ds: DataSource): Promise<MetricCatalog> => ds.metricCatalog();
 
+/** Metrics kept decoded in memory. */
 export const METRIC_LRU_SIZE = 32;
 
 const DURATION_KEY_SEP = '\u0000';
@@ -298,6 +298,27 @@ export async function createDataSource(
     budgets.spans === 'eager' ? createEagerSource(loader, manifest) : null,
   ]);
   const spanStrategy = spans ?? createWindowedSource(loader, manifest, rollups, index);
+  const loadTrace = async (traceId: TraceId): Promise<TraceDetail> => {
+    // The count comes from the trace index, so opening a trace never waits on the log load, with one exception
+    // below, and never fails with it.
+    // Under the eager span strategy the spans are already in memory, so a shard that fails to load costs only the
+    // log count (0); under the windowed strategy getTrace needs the same shard, so its failure stands.
+    const [trace, entry] = await Promise.all([
+      spanStrategy.getTrace(traceId),
+      budgets.spans === 'eager' ? index.entry(traceId).catch(() => null) : index.entry(traceId),
+    ]);
+    if (entry === null || entry.logs === 0) return { ...trace, logCount: 0 };
+    if (entry.logChunks.every((k) => listedLogChunks.has(k))) return { ...trace, logCount: entry.logs };
+    // Crash only: a crash between a flush's shard write and its manifest commit leaves the shard counting logs in
+    // chunks the manifest never listed. Count the committed rows instead; this waits on the log load, and if that
+    // load fails the index count stands, so the trace still opens.
+    const logCount = await logs.traceLogs(traceId).then(
+      (rows) => rows.length,
+      () => entry.logs,
+    );
+    return { ...trace, logCount };
+  };
+  let lastTrace: { id: TraceId; detail: Promise<TraceDetail> } | null = null;
   return {
     manifest,
     strategy: budgets.spans,
@@ -308,25 +329,15 @@ export async function createDataSource(
       return { facets: r.facets, buckets: r.buckets, patterns: patternRowsOf(r.patterns) };
     },
     querySpans: spanStrategy.querySpans,
-    async getTrace(traceId) {
-      // The count comes from the trace index, so opening a trace never waits on the log load, with one exception
-      // below, and never fails with it.
-      // Under the eager span strategy the spans are already in memory, so a shard that fails to load costs only the
-      // log count (0); under the windowed strategy getTrace needs the same shard, so its failure stands.
-      const [trace, entry] = await Promise.all([
-        spanStrategy.getTrace(traceId),
-        budgets.spans === 'eager' ? index.entry(traceId).catch(() => null) : index.entry(traceId),
-      ]);
-      if (entry === null || entry.logs === 0) return { ...trace, logCount: 0 };
-      if (entry.logChunks.every((k) => listedLogChunks.has(k))) return { ...trace, logCount: entry.logs };
-      // Crash only: a crash between a flush's shard write and its manifest commit leaves the shard counting logs in
-      // chunks the manifest never listed. Count the committed rows instead; this waits on the log load, and if that
-      // load fails the index count stands, so the trace still opens.
-      const logCount = await logs.traceLogs(traceId).then(
-        (rows) => rows.length,
-        () => entry.logs,
-      );
-      return { ...trace, logCount };
+    getTrace(traceId) {
+      // The widgets and the trace panel that follow one selected trace share its load.
+      if (lastTrace?.id === traceId) return lastTrace.detail;
+      const detail = loadTrace(traceId).catch((e: unknown) => {
+        if (lastTrace?.detail === detail) lastTrace = null; // a failed load is retried on the next use
+        throw e;
+      });
+      lastTrace = { id: traceId, detail };
+      return detail;
     },
     hasTrace: spanStrategy.hasTrace,
     percentileOf(service, resource, durationNs) {
