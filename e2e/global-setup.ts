@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { Report } from '../src/api/index.js';
 import { scaleLogsRequest } from '../test-support/scale-logs.js';
+import { calibrationMs, cpuModel } from './calibrate.js';
 import {
   DASHBOARDS_CONFIG,
   DASHBOARDS_HOSTILE_DEFAULT,
@@ -21,12 +22,15 @@ import {
   LARGE_REPORT_DIR,
   LARGE_SPAN_COUNT,
   LARGE_TRACE_ID,
+  PERF_CALIBRATION_ENV,
+  PERF_REFERENCE_ENV,
   PORT_ENV,
   REPORT_DIR,
   REPORTS_DIR,
   type ReportName,
   RUN_TITLE,
   reportDir,
+  runnerFactor,
   SCALE_LOG_FILES,
   SCALE_LOG_IDS,
   SCALE_LOGS,
@@ -446,7 +450,18 @@ async function serve(
   return { port, close: () => new Promise((resolve) => server.close(() => resolve())) };
 }
 
+/** Times the calibration workload before anything else runs, for `perfFactor` in the workers (env is inherited). */
+function calibrate(): void {
+  const ms = calibrationMs();
+  process.env[PERF_CALIBRATION_ENV] = ms.toFixed(1);
+  const reference = process.env[PERF_REFERENCE_ENV];
+  process.stdout.write(
+    `PERF calibration: ${ms.toFixed(1)} ms on ${cpuModel()}${reference ? ` (reference ${reference} ms, runner factor ${runnerFactor().toFixed(2)})` : ''}\n`,
+  );
+}
+
 export default async function globalSetup(): Promise<() => Promise<void>> {
+  calibrate();
   await rm(REPORTS_DIR, { recursive: true, force: true });
   await Promise.all([
     buildReport(),

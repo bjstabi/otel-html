@@ -30,6 +30,7 @@ const config: ViteUserConfig = defineConfig({
         test: {
           name: 'viewer',
           environment: 'jsdom',
+          setupFiles: ['test/viewer/setup.ts'],
           include: perfPass
             ? perfFiles.filter((f) => f.startsWith('test/viewer/'))
             : ['test/viewer/**/*.test.{ts,tsx}'],
