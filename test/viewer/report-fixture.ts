@@ -636,3 +636,73 @@ export async function buildResourceValuesReport(): Promise<Fixture> {
   await session.close();
   return { files: reportFilesFromSnapshot(w.fs.snapshot(), OUT), manifest: manifestOf(w, OUT) };
 }
+
+/**
+ * A finished report of one delta counter `run.requests` (metric 0) with `series` series (`route` = `/r<j>`), a point
+ * every `stepS` seconds over `durationS` seconds from the epoch, each point 1, written by the real session (as
+ * `Report` does) with a flush every `FLUSH_POINTS` collections. With `exemplars`, every point carries one exemplar
+ * (value `j`, on a trace).
+ */
+export async function buildCounterRun(run: {
+  durationS: number;
+  stepS: number;
+  series: number;
+  exemplars?: boolean;
+}): Promise<Fixture> {
+  const FLUSH_POINTS = 500;
+  const w = createTestWriter();
+  const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'create' });
+  const base = BigInt(EPOCH_NS);
+  const at = (s: number): string => String(base + BigInt(s) * 1_000_000_000n);
+  const points = Math.floor(run.durationS / run.stepS) + 1;
+  for (let from = 0; from < points; from += FLUSH_POINTS) {
+    const dataPoints: JsonObject[] = [];
+    for (let i = from; i < Math.min(points, from + FLUSH_POINTS); i++) {
+      const s = i * run.stepS;
+      for (let j = 0; j < run.series; j++)
+        dataPoints.push({
+          startTimeUnixNano: at(Math.max(0, s - run.stepS)),
+          timeUnixNano: at(s),
+          asInt: '1',
+          attributes: [attr('route', { stringValue: `/r${j}` })],
+          ...(run.exemplars === true
+            ? {
+                exemplars: [
+                  {
+                    timeUnixNano: at(s),
+                    asDouble: j,
+                    traceId: (i + 1).toString(16).padStart(32, '0'),
+                    spanId: (j + 1).toString(16).padStart(16, '0'),
+                  },
+                ],
+              }
+            : {}),
+        });
+    }
+    await session.add(
+      otlp({
+        resourceMetrics: [
+          {
+            resource: { attributes: [attr('service.name', { stringValue: 'api' })] },
+            scopeMetrics: [
+              {
+                scope: { name: 'test-scope' },
+                metrics: [
+                  {
+                    name: 'run.requests',
+                    unit: '1',
+                    sum: { aggregationTemporality: 1, isMonotonic: true, dataPoints },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      }),
+      'metrics',
+    );
+    await session.flush();
+  }
+  await session.close();
+  return { files: reportFilesFromSnapshot(w.fs.snapshot(), OUT), manifest: manifestOf(w, OUT) };
+}

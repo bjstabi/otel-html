@@ -477,6 +477,10 @@ test.describe(`metrics scale: ${SCALE_METRICS} metrics × ${SCALE_METRIC_SERIES}
       if (testInfo.project.name.endsWith('-http')) {
         expectOnlyChartedData('Explorer', loaded, CHARTED_METRIC_ID);
         expect([...loaded].some((f) => f.startsWith(`data/metrics/${CHARTED_METRIC_ID}/`))).toBe(true);
+        // Levels load on demand (#37): the chart reads the one level its bucket width needs, never level 0 here
+        // (1 h at 10 s charts at 16.384 s from level 1), so its cost is bounded whatever the run length.
+        const levels = [...loaded].filter((f) => /^data\/metrics\/[0-9]{6}\/l[0-6]\.js$/.test(f)).sort();
+        expect(levels).toEqual([`data/metrics/${CHARTED_METRIC_ID}/l1.js`]);
       }
       // The first metric is a counter: its rate, all series summed into one line.
       await expect(
