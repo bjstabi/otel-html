@@ -7,7 +7,11 @@ import {
   parseLevelFile,
 } from '../../src/format/metric-files.js';
 import { loadMetric } from '../../src/viewer/data/metric-load.js';
-import { type MetricQuery, runMetricQuery } from '../../src/viewer/data/metric-query.js';
+import {
+  type MetricQuery,
+  runMetricQuery,
+  runMetricQueryAtWidth,
+} from '../../src/viewer/data/metric-query.js';
 import type { ScriptLoader } from '../../src/viewer/data/script-loader.js';
 import { maxPointsFor } from '../../src/viewer/metrics/use-metric-query.js';
 import { createScriptedLoader } from '../../test-support/scripted-loader.js';
@@ -136,7 +140,8 @@ describe('the first chart loads a bounded amount of data whatever the run length
     const window = { start: range.start + 3600e9, end: range.start + 5400e9 };
     const zoomed = await runMetricQuery(m, RATE, window, MAX_POINTS);
     expect(zoomed.widthNs).toBe(LEVEL0_WIDTH_NS * 16);
-    expect(c.levels.slice(loadedFirst.length).concat(loadedFirst)).toContain('data/metrics/000000/l1.js');
+    // The zoom read exactly the finer level's file: not level 0, and level 2 was already loaded.
+    expect(c.levels.slice(loadedFirst.length)).toEqual(['data/metrics/000000/l1.js']);
     const points = zoomed.series[0]?.points ?? [];
     expect(points.length).toBeGreaterThanOrEqual(Math.floor(1800e9 / zoomed.widthNs));
     // Every bucket holds a point, so the line has no gaps; 3 series × 1 or 2 points per bucket, per second.
@@ -148,5 +153,17 @@ describe('the first chart loads a bounded amount of data whatever the run length
     const before = c.levels.length;
     await runMetricQuery(m, RATE, { start: window.start + 60e9, end: window.end - 60e9 }, MAX_POINTS);
     expect(c.levels.length).toBe(before);
+  });
+
+  test('a formula operand re-run at the shared width loads only the level at that width', async () => {
+    const run = await buildCounterRun({ durationS: 6144 * 4, stepS: 10, series: SERIES });
+    const range = run.manifest.range;
+    if (range === null) throw new Error('the run has no range');
+    const c = counting(run);
+    const m = await loadMetric(c.loader, run.manifest, 0);
+    // 16 × level 0 is off the ladder: level 1 (8.192 s) is the coarsest no wider, merged up to it.
+    const result = await runMetricQueryAtWidth(m, RATE, range, LEVEL0_WIDTH_NS * 16);
+    expect(result.widthNs).toBe(LEVEL0_WIDTH_NS * 16);
+    expect(c.levels).toEqual(['data/metrics/000000/l1.js']);
   });
 });

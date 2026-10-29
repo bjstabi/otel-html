@@ -105,7 +105,7 @@ jobs:
 
   # The metrics scale check (spec §7: Explorer < 2 s, Catalog < 1 s on 200 metrics × 1,000 series × 1 h at 10 s),
   # Chromium only, in the Playwright image like the jobs above. Its report writes the full 1 h only for the metric the
-  # Explorer charts and the first and last collection for the rest (~0.76M points, ~150 MB, under a minute); the
+  # Explorer charts and the first and last collection for the rest (~0.76M points, ~150 MB; a few seconds locally, under a minute on CI); the
   # test fails if either page loads another metric's files (e2e/fixture.ts, e2e/scale.spec.ts). The matrix jobs leave
   # it off and this job alone sets OTEL_HTML_METRICS_SCALE.
   e2e-metrics-scale:

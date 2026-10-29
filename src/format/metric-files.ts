@@ -504,7 +504,8 @@ export function parseSegmentFile(input: unknown, root: string): SegmentFile {
 /**
  * A segment file the running writer wrote itself, read back for compaction: decoded like `parseSegmentFile` without
  * validating it again (it was encoded from validated buckets moments before). Segments of an earlier session, read on
- * append or merge, go through `parseSegmentFile`.
+ * append or merge, go through `parseSegmentFile`. Demoted segments count as this session's own too: they are built
+ * from level and exemplar files that were zod-validated when read, so skipping validation stays sound.
  */
 export function decodeOwnSegmentFile(input: unknown, root: string): SegmentFile {
   const f = input as SerializedSegmentFile;

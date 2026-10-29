@@ -365,7 +365,7 @@ test("1M logs: a trace Logs tab loads only that trace's log chunks", { tag: '@pe
 /** Metrics targets (spec §7): the Explorer draws its first chart within 2 s, the Catalog opens within 1 s. */
 const METRICS_EXPLORER_BUDGET_MS = 2000;
 const METRICS_CATALOG_BUDGET_MS = 1000;
-/** Writing the metrics scale report takes about 5 s locally and under a minute on a CI runner. */
+/** Writing the metrics scale report takes a few seconds locally and under a minute on CI. */
 const METRICS_SCALE_SETUP_MS = 5 * 60 * 1000;
 
 /** The charted metric's folder under `data/metrics/`. Metric 0 is the first one written, so it gets id 0. */
