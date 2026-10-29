@@ -26,7 +26,9 @@ export const LEVEL_MAX_BUCKETS = 2000;
 /** Exemplars are kept per series per bucket of this width (1 ms × 2^16). */
 export const EXEMPLAR_WIDTH_NS = 65_536_000_000;
 
-export const METRIC_FILE_PATH: RegExp = /^data\/metrics\/[0-9]{6}\/(series|ex|l[0-6]|seg-[0-9]{6})\.js$/;
+/** A metric data file's path; the groups are the metric id, the file, the level and the segment number. */
+export const METRIC_FILE_PATH: RegExp =
+  /^data\/metrics\/([0-9]{6})\/(series|ex|l([0-6])|seg-([0-9]{6}))\.js$/;
 
 const MAX_NUMBER = 999_999;
 
@@ -65,11 +67,11 @@ export function metricExemplarPath(id: number): string {
 }
 
 /** Registration key of a data file: its path without `data/` and `.js`. */
-const keyOf = (path: string): string => path.slice('data/'.length, -'.js'.length);
-export const metricSeriesKey = (id: number): string => keyOf(metricSeriesPath(id));
-export const metricSegmentKey = (id: number, n: number): string => keyOf(metricSegmentPath(id, n));
-export const metricLevelKey = (id: number, k: number): string => keyOf(metricLevelPath(id, k));
-export const metricExemplarKey = (id: number): string => keyOf(metricExemplarPath(id));
+export const dataFileKey = (path: string): string => path.slice('data/'.length, -'.js'.length);
+export const metricSeriesKey = (id: number): string => dataFileKey(metricSeriesPath(id));
+export const metricSegmentKey = (id: number, n: number): string => dataFileKey(metricSegmentPath(id, n));
+export const metricLevelKey = (id: number, k: number): string => dataFileKey(metricLevelPath(id, k));
+export const metricExemplarKey = (id: number): string => dataFileKey(metricExemplarPath(id));
 
 // ---------------------------------------------------------------------------------------------
 // Resolution ladder
@@ -421,10 +423,6 @@ export function encodeSegmentFile(f: SegmentFile): SerializedSegmentFile {
 export function parseSegmentFile(input: unknown, root: string): SegmentFile {
   const f = parseWith(SegmentFileSchema, input, root);
   return { ...f, exemplars: decodeExemplars(f.exemplars, `${root}.exemplars`) };
-}
-
-export function encodeLevelFile(f: LevelFile): LevelFile {
-  return f;
 }
 
 export function parseLevelFile(input: unknown, root: string): LevelFile {
