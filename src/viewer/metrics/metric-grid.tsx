@@ -483,7 +483,11 @@ export function MetricGrid(
           </span>
         )}
         {zoom !== null && (
-          <button type="button" className={`${PILL} text-xs hover:bg-hairline`} onClick={() => setLocalZoom(null)}>
+          <button
+            type="button"
+            className={`${PILL} text-xs hover:bg-hairline`}
+            onClick={() => setLocalZoom(null)}
+          >
             Reset zoom
           </button>
         )}

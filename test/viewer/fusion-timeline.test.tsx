@@ -149,6 +149,24 @@ describe('FusionTimeline', () => {
     expect(onBrush).toHaveBeenLastCalledWith(null);
   });
 
+  test('after Enter commits, the arrows go on from the committed column', () => {
+    const onBrush = show();
+    const brush = screen.getByRole('group', { name: 'Time brush' });
+    for (let i = 0; i < 3; i++) fireEvent.keyDown(brush, { key: 'ArrowRight' });
+    fireEvent.keyDown(brush, { key: 'Enter' });
+    expect(onBrush).toHaveBeenLastCalledWith({ start: 3 * MS, end: 4 * MS });
+    fireEvent.keyDown(brush, { key: 'ArrowRight' });
+    fireEvent.keyDown(brush, { key: 'Enter' });
+    expect(onBrush).toHaveBeenLastCalledWith({ start: 4 * MS, end: 5 * MS });
+  });
+
+  test('an approximate total is shown as ~N', () => {
+    const ls = lanes().map((l) => (l.label === 'Metric points' ? { ...l, approximate: true } : l));
+    render(<FusionTimeline lanes={ls} window={WINDOW} brush={null} height={150} onBrush={vi.fn()} />);
+    expect(screen.getByText('Metric points ~2')).toBeTruthy();
+    expect(screen.getByRole('img').getAttribute('aria-label')).toContain('Metric points ~2');
+  });
+
   test('the page brush is drawn over the plot', () => {
     show(vi.fn(), { start: 2 * MS, end: 5 * MS });
     const band = screen.getByRole('group', { name: 'Time brush' }).firstElementChild as HTMLElement;
@@ -158,7 +176,10 @@ describe('FusionTimeline', () => {
 });
 
 describe('TimelineWidget on the linked fixture', () => {
-  async function widget(variables: { key: string; value: string; kind: 'string' }[]) {
+  async function widget(
+    variables: { key: string; value: string; kind: 'string' }[],
+    window: TimeWindow | null = null,
+  ) {
     const linked = await buildEmbeddedMetricsReport();
     const ds = await createDataSource(createScriptedLoader(linked.files), linked.manifest, 1);
     const dashboard = DashboardSchema.parse({
@@ -179,7 +200,7 @@ describe('TimelineWidget on the linked fixture', () => {
       <TimelineWidget
         widget={w}
         scope={{
-          window: null,
+          window,
           narrowed: false,
           band: null,
           traceFilter: null,
@@ -205,6 +226,16 @@ describe('TimelineWidget on the linked fixture', () => {
     expect(screen.getByText('Logs 2')).toBeTruthy();
     expect(screen.getByText('Metric points 100')).toBeTruthy();
     expect(screen.queryByText(/all resources/)).toBeNull();
+  });
+
+  test('a window that cuts a bucket of metric points marks the total ~', async () => {
+    const linked = await buildEmbeddedMetricsReport();
+    const ds = await createDataSource(createScriptedLoader(linked.files), linked.manifest, 1);
+    const points = await ds.metricPoints();
+    const i = points.counts('points').findIndex((c) => c > 0);
+    const from = Math.max(points.startNs + i * points.widthNs, linked.manifest.range?.start ?? 0);
+    await widget([], { start: from + 1, end: from + 2 });
+    expect(await screen.findByText(/^Metric points ~\d+$/)).toBeTruthy();
   });
 
   test('with a bound variable the metric lane says all resources', async () => {
@@ -287,6 +318,19 @@ describe('TimelineWidget states', () => {
     const base = dataSourceOf(baseManifest);
     mount({ ...base, querySpans: () => new Promise<SpanQueryResult>(() => {}) });
     expect(screen.getByRole('status').textContent).toBe('Loading');
+  });
+
+  test('loading counts the log scan too', async () => {
+    const base = dataSourceOf(baseManifest);
+    mount({
+      ...base,
+      querySpans: () => new Promise<SpanQueryResult>(() => {}),
+      queryLogs: (_q, onProgress) => {
+        onProgress?.(2, 5);
+        return new Promise(() => {});
+      },
+    });
+    expect((await screen.findByText(/Scanning/)).textContent).toBe('Scanning 2 of 5 chunks');
   });
 
   test('an empty lane still draws, saying there is nothing in it', async () => {

@@ -17,10 +17,14 @@ import {
 export interface TimelineLane {
   label: string;
   total: number;
+  /** The total counts whole buckets at the window's edges: it is shown as `~N`. */
+  approximate?: boolean;
   buckets: BucketView<string>;
   series: HistogramSeriesSet<string>;
   note: string | null;
 }
+
+const totalText = (l: TimelineLane): string => (l.approximate === true ? `~${l.total}` : String(l.total));
 
 /** Most columns before the shared axis doubles its column width; lanes then fit the same cap as the histogram. */
 const MAX_AXIS_COLUMNS = 4096;
@@ -159,7 +163,7 @@ export function FusionTimeline(props: {
           lo: Math.max(0, Math.floor((brush.start - view.startNs) / view.widthNs)),
           hi: Math.min(last, Math.max(0, Math.ceil((brush.end - view.startNs) / view.widthNs) - 1)),
         };
-  const ariaLabel = `Timeline: ${lanes.map((l) => `${l.label} ${l.total}`).join(', ')}`;
+  const ariaLabel = `Timeline: ${lanes.map((l) => `${l.label} ${totalText(l)}`).join(', ')}`;
   const plotTop = LANE_GAP_PX / 2;
   const plotBottom = AXIS_PX;
 
@@ -172,7 +176,7 @@ export function FusionTimeline(props: {
           className="pointer-events-none absolute truncate rounded-sm bg-surface/80 px-1 text-xs text-ink-2"
           style={{ left: GRID.left + 4, right: GRID.right, top: i * laneH + LANE_GAP_PX / 2 + 1 }}
         >
-          <span className="font-mono tabular-nums">{`${lane.label} ${lane.total}`}</span>
+          <span className="font-mono tabular-nums">{`${lane.label} ${totalText(lane)}`}</span>
           {lane.note === null ? null : <span className="text-muted">{` · ${lane.note}`}</span>}
         </p>
       ))}
