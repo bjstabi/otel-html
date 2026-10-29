@@ -472,8 +472,9 @@ test.describe(`metrics scale: ${SCALE_METRICS} metrics × ${SCALE_METRIC_SERIES}
 
 /**
  * Fusion on `scale`: interactive when all four frames are past loading (the lists hold rows, the timeline has drawn,
- * no frame shows a status), timed in the page from navigation start. Then one trace click is timed to the frame
- * where Logs and Metrics both show the trace's scope and neither is loading.
+ * the Metrics grid has drawn a chart and no card is busy, no frame shows a status), timed in the page from navigation
+ * start. Then one trace click is timed to the frame where Logs and Metrics both show the trace's scope, the Metrics
+ * grid has redrawn its charts for the trace's resources, and neither frame is loading.
  */
 test(
   '100k spans, 1M logs: Fusion is interactive within 3 s and a trace click updates Logs and Metrics within 1 s',
@@ -487,19 +488,25 @@ test(
         [...(f?.querySelectorAll('[role="status"]') ?? [])].some((s) =>
           /^(Loading|Scanning)/.test(s.textContent ?? ''),
         );
+      const charted = (f: Element | null | undefined): boolean =>
+        f?.querySelector('[aria-busy="true"]') === null &&
+        [...(f?.querySelectorAll('[role="img"]') ?? [])].some((c) =>
+          /: [1-9]\d* series$/.test(c.getAttribute('aria-label') ?? ''),
+        );
       const settled = (): boolean => {
         const frames = ['timeline', 'traces', 'logs', 'metrics'].map((id) =>
           document.querySelector(`[data-widget="${id}"]`),
         );
         if (frames.some((f) => f === null)) return false;
-        const [timeline, traces, logs] = frames;
+        const [timeline, traces, logs, metrics] = frames;
         const rows = (f: Element | null | undefined): number =>
           f?.querySelectorAll('[role="row"]').length ?? 0;
         return (
           frames.every((f) => !loading(f)) &&
           timeline?.querySelector('canvas') !== null &&
           rows(traces) >= 2 &&
-          rows(logs) >= 2
+          rows(logs) >= 2 &&
+          charted(metrics)
         );
       };
       const mo = new MutationObserver(() => {
@@ -511,6 +518,8 @@ test(
       });
       mo.observe(document, { childList: true, subtree: true });
     });
+    // All four frames on screen: the Metrics grid draws only the cards in view, and sits below a 720 px fold.
+    await page.setViewportSize({ width: 1400, height: 1600 });
     await page.goto(`${reportUrl('scale')}/index.html#/dashboards/fusion`, { waitUntil: 'commit' });
     const interactiveMs = Number(
       await (
@@ -525,7 +534,7 @@ test(
     );
 
     // From the click to the frame after Logs says "for the selected trace", Metrics says "from the selected trace's
-    // resources" and neither frame is loading.
+    // resources" with its charts redrawn (none busy), and neither frame is loading.
     const selectionMs = await page.evaluate(
       () =>
         new Promise<number>((resolve, reject) => {
@@ -539,11 +548,17 @@ test(
             [...f.querySelectorAll('[role="status"]')].some((s) =>
               /^(Loading|Scanning)/.test(s.textContent ?? ''),
             );
+          const charted = (f: Element): boolean =>
+            f.querySelector('[aria-busy="true"]') === null &&
+            [...f.querySelectorAll('[role="img"]')].some((c) =>
+              /: [1-9]\d* series$/.test(c.getAttribute('aria-label') ?? ''),
+            );
           const done = (): boolean =>
             /for the selected trace/.test(logs.textContent ?? '') &&
             /selected trace's resources/.test(metrics.textContent ?? '') &&
             !loading(logs) &&
-            !loading(metrics);
+            !loading(metrics) &&
+            charted(metrics);
           const timer = setTimeout(
             () => reject(new Error('Logs and Metrics never followed the trace')),
             15_000,
@@ -555,7 +570,13 @@ test(
             clearTimeout(timer);
             requestAnimationFrame(() => resolve(performance.now() - t));
           });
-          mo.observe(document.body, { subtree: true, childList: true, characterData: true });
+          mo.observe(document.body, {
+            subtree: true,
+            childList: true,
+            characterData: true,
+            attributes: true,
+            attributeFilter: ['aria-busy', 'aria-label'],
+          });
           row.click();
         }),
     );

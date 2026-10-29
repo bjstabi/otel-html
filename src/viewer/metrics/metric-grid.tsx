@@ -327,7 +327,7 @@ function GridChart(props: {
     <section
       ref={ref}
       aria-label={entry.name}
-      aria-busy={run.status === 'loading'}
+      aria-busy={key !== null && run.status === 'loading'}
       className="rounded-card border border-hairline bg-surface p-3"
     >
       <h3 className="truncate text-sm font-medium">{entry.name}</h3>
