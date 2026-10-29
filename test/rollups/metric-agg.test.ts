@@ -59,6 +59,20 @@ describe('mergeAgg', () => {
     );
     expect(m).toEqual({ k: 'number', count: 5, sum: 11, min: 0, max: 4, last: 9, lastTime: 20 });
   });
+  it('equal last times give the same last value in either order', () => {
+    const a = num({ last: 9, lastTime: 20 });
+    const b = num({ last: 4, lastTime: 20 });
+    expect(mergeAgg(a, b, 'p')).toEqual(mergeAgg(b, a, 'p'));
+    expect(mergeAgg(b, a, 'p')).toMatchObject({ last: 9 });
+    const s = (count: number, v: number): BucketAgg => ({
+      k: 'summary',
+      count,
+      sum: count,
+      quantiles: [{ q: 0.5, v }],
+      lastTime: 5,
+    });
+    expect(mergeAgg(s(1, 1), s(2, 9), 'p')).toEqual(mergeAgg(s(2, 9), s(1, 1), 'p'));
+  });
   it('adds counter delta and resets', () => {
     const m = mergeAgg({ k: 'counter', delta: 3, resets: 1 }, { k: 'counter', delta: 4, resets: 2 }, 'p');
     expect(m).toEqual({ k: 'counter', delta: 7, resets: 3 });

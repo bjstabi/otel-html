@@ -184,7 +184,8 @@ export function mergeAgg(a: BucketAgg, b: BucketAgg, path: string): BucketAgg {
   switch (a.k) {
     case 'number': {
       if (b.k !== 'number') break;
-      const later = b.lastTime >= a.lastTime ? b : a;
+      // Equal times keep the larger value, so the merge is the same in either order.
+      const later = b.lastTime > a.lastTime || (b.lastTime === a.lastTime && b.last > a.last) ? b : a;
       return {
         k: 'number',
         count: a.count + b.count,
@@ -220,7 +221,12 @@ export function mergeAgg(a: BucketAgg, b: BucketAgg, path: string): BucketAgg {
     }
     case 'summary': {
       if (b.k !== 'summary') break;
-      const later = b.lastTime >= a.lastTime ? b : a;
+      // Equal times keep the one with more observations (then the larger sum), so either order gives the same.
+      const later =
+        b.lastTime > a.lastTime ||
+        (b.lastTime === a.lastTime && (b.count > a.count || (b.count === a.count && b.sum > a.sum)))
+          ? b
+          : a;
       return {
         k: 'summary',
         count: a.count + b.count,
