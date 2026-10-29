@@ -59,6 +59,20 @@ describe('mergeAgg', () => {
     );
     expect(m).toEqual({ k: 'number', count: 5, sum: 11, min: 0, max: 4, last: 9, lastTime: 20 });
   });
+  it('equal last times give the same last value in either order', () => {
+    const a = num({ last: 9, lastTime: 20 });
+    const b = num({ last: 4, lastTime: 20 });
+    expect(mergeAgg(a, b, 'p')).toEqual(mergeAgg(b, a, 'p'));
+    expect(mergeAgg(b, a, 'p')).toMatchObject({ last: 9 });
+    const s = (count: number, v: number): BucketAgg => ({
+      k: 'summary',
+      count,
+      sum: count,
+      quantiles: [{ q: 0.5, v }],
+      lastTime: 5,
+    });
+    expect(mergeAgg(s(1, 1), s(2, 9), 'p')).toEqual(mergeAgg(s(2, 9), s(1, 1), 'p'));
+  });
   it('adds counter delta and resets', () => {
     const m = mergeAgg({ k: 'counter', delta: 3, resets: 1 }, { k: 'counter', delta: 4, resets: 2 }, 'p');
     expect(m).toEqual({ k: 'counter', delta: 7, resets: 3 });
@@ -86,6 +100,12 @@ describe('mergeAgg', () => {
     expect(m).toMatchObject({ k: 'exp', scale: 1, count: 2 });
     if (m.k !== 'exp') throw new Error('kind');
     expect(m.positive.counts.reduce((s, c) => s + c, 0)).toBe(2);
+  });
+  it('an exp agg with no buckets (only zeros) keeps the other side at its own scale', () => {
+    const zeros = exp({ count: 2, zeroCount: 2, scale: -4 });
+    const m = mergeAgg(oneValue(3, 3), zeros, 'p');
+    expect(m).toMatchObject({ k: 'exp', scale: 3, count: 3, zeroCount: 2 });
+    expect(mergeAgg(zeros, oneValue(3, 3), 'p')).toEqual(m);
   });
   it('stays within 160 buckets per side for wildly spread values', () => {
     let acc: BucketAgg = oneValue(1e-6, 20);
@@ -167,6 +187,20 @@ describe('BucketAggSchema', () => {
     expect(BucketAggSchema.safeParse(exp({ scale: 20 })).success).toBe(true);
     expect(BucketAggSchema.safeParse(hist({ counts: [1, 2, 3] })).success).toBe(false);
     expect(BucketAggSchema.safeParse(hist({ count: 11 })).success).toBe(false);
+  });
+  it('rejects bounds out of order and a quantile outside [0, 1]', () => {
+    expect(BucketAggSchema.safeParse(hist({ bounds: [0, 10, 5] })).success).toBe(false);
+    expect(BucketAggSchema.safeParse(hist({ bounds: [0, 5, 5] })).success).toBe(false);
+    const summary = (q: number): BucketAgg => ({
+      k: 'summary',
+      count: 1,
+      sum: 1,
+      quantiles: [{ q, v: 1 }],
+      lastTime: 0,
+    });
+    expect(BucketAggSchema.safeParse(summary(1)).success).toBe(true);
+    expect(BucketAggSchema.safeParse(summary(1.5)).success).toBe(false);
+    expect(BucketAggSchema.safeParse(summary(-0.1)).success).toBe(false);
   });
   it('accepts valid aggs and checks exp count including zeroCount', () => {
     expect(BucketAggSchema.safeParse(hist({})).success).toBe(true);

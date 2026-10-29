@@ -295,6 +295,7 @@ function distributionShow(a: HistAgg | ExpAgg, show: string): number {
 }
 
 /** Adds `b` into the accumulator `acc` (same bounds, guaranteed by the bounds split). */
+/** `mergeAgg`'s histogram merge, in place: a group adds many series per bucket, and this allocates nothing. */
 function addHist(acc: HistAgg, b: HistAgg, path: string): void {
   if (acc.counts.length !== b.counts.length)
     throw new OtelHtmlError('invalid-report', {

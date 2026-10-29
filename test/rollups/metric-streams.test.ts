@@ -188,6 +188,49 @@ describe('StreamNormalizer', () => {
     expect(n.kind === 'ok' && n.agg.k === 'exp' && [n.agg.count, n.agg.zeroCount]).toEqual([5, 1]);
   });
 
+  describe('cumulative exponential histograms across a change', () => {
+    const e = (
+      pos: string[],
+      time: number,
+      over: { scale?: number; offset?: number; zeroThreshold?: number } = {},
+    ): MetricPointRecord => {
+      const count = pos.reduce((a, c) => a + Number(c), 0);
+      return pt({
+        type: 'exponentialHistogram',
+        time: rel(time),
+        point: {
+          count: String(count),
+          sum: count,
+          scale: over.scale ?? 0,
+          zeroThreshold: over.zeroThreshold ?? 0,
+          positive: { offset: over.offset ?? 2, bucketCounts: pos },
+        },
+      });
+    };
+
+    it('a higher scale is compared at the previous scale, not counted from zero', () => {
+      const s = new StreamNormalizer();
+      s.normalize(0, e(['1', '1'], 1));
+      // Scale 1 halves each bucket: index 2 at scale 0 is 4-5 at scale 1, index 3 is 6-7.
+      const n = s.normalize(0, e(['1', '0', '1', '2'], 2, { scale: 1, offset: 4 }));
+      expect(n.kind === 'ok' && n.reset).toBe(false);
+      expect(n.kind === 'ok' && n.agg.k === 'exp' && [n.agg.scale, n.agg.count, n.agg.positive]).toEqual([
+        0,
+        2,
+        { offset: 3, counts: [2] },
+      ]);
+    });
+
+    it('a lower count, a lower bucket or a new zero threshold is a reset', () => {
+      for (const next of [e(['1'], 2), e(['0', '5'], 2), e(['1', '1', '1'], 2, { zeroThreshold: 0.5 })]) {
+        const s = new StreamNormalizer();
+        s.normalize(0, e(['1', '1'], 1));
+        const n = s.normalize(0, next);
+        expect(n.kind === 'ok' && n.reset).toBe(true);
+      }
+    });
+  });
+
   it('makes summaries from the point', () => {
     const s = new StreamNormalizer();
     const n = s.normalize(
@@ -245,6 +288,33 @@ describe('StreamNormalizer', () => {
       point: { count: '5', bucketCounts: ['1', '1'], explicitBounds: [1] },
     });
     expect(() => s.normalize(0, badCount)).toThrow(expect.objectContaining({ code: 'invalid-otlp' }));
+    const unsorted = pt({
+      type: 'histogram',
+      temporality: 'delta',
+      point: { count: '3', bucketCounts: ['1', '1', '1'], explicitBounds: [5, 1] },
+    });
+    expect(() => s.normalize(0, unsorted)).toThrow(
+      expect.objectContaining({ expected: 'finite numbers in ascending order' }),
+    );
+  });
+
+  it('drops summary quantiles outside [0, 1]', () => {
+    const s = new StreamNormalizer();
+    const n = s.normalize(
+      0,
+      pt({
+        type: 'summary',
+        point: {
+          count: '1',
+          sum: 1,
+          quantileValues: [
+            { quantile: 1.5, value: 9 },
+            { quantile: 1, value: 2 },
+          ],
+        },
+      }),
+    );
+    expect(n.kind === 'ok' && n.agg.k === 'summary' && n.agg.quantiles).toEqual([{ q: 1, v: 2 }]);
   });
 
   it('rejects an exponential histogram scale outside [-10, 20] or a bucket index a double cannot reach', () => {
@@ -333,6 +403,26 @@ describe('StreamNormalizer', () => {
     // A restart inside one report still is.
     const restart = s.prepare(sum(1, 210, { start: rel(200) }))({ series: 0, origin: 1 });
     expect(deltaOf(restart)).toEqual({ delta: 1, resets: 1, reset: true });
+  });
+
+  it('overlapping merged reports: a restart is judged against its own report, not the other one', () => {
+    // Two parallel shards share series 0 without an instance id: shard A (origin 0) runs 10..100, shard B (origin 1)
+    // runs 20..90 and restarts at 60, inside A's time range. Merge replays A in full, then B.
+    const s = new StreamNormalizer();
+    const a = (v: number, t: number) => s.prepare(sum(v, t, { start: rel(0) }))({ series: 0, origin: 0 });
+    const b = (v: number, t: number, start: number) =>
+      s.prepare(sum(v, t, { start: rel(start) }))({ series: 0, origin: 1 });
+    expect(deltaOf(a(5, 10))).toEqual({ delta: 5, resets: 0, reset: false });
+    expect(deltaOf(a(50, 100))).toEqual({ delta: 45, resets: 0, reset: false });
+    // B's first stream is another producer, not a restart, though it starts before A's latest point.
+    expect(deltaOf(b(4, 20, 5))).toEqual({ delta: 4, resets: 0, reset: false });
+    expect(deltaOf(b(9, 50, 5))).toEqual({ delta: 5, resets: 0, reset: false });
+    // B restarts at 60: after B's own latest point (50), so a reset, although A already reached 100.
+    expect(deltaOf(b(2, 70, 60))).toEqual({ delta: 2, resets: 1, reset: true });
+    expect(deltaOf(b(6, 90, 60))).toEqual({ delta: 4, resets: 0, reset: false });
+    // A later report's stream that starts after B's latest point is still the next run, not a reset.
+    const c = s.prepare(sum(3, 130, { start: rel(120) }))({ series: 0, origin: 2 });
+    expect(deltaOf(c)).toEqual({ delta: 3, resets: 0, reset: false });
   });
 
   it('prepare parses without touching streams; its step applies the point', () => {

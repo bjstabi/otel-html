@@ -538,7 +538,7 @@ describe('runMetricQuery', () => {
     ]);
     const r = runMetricQuery(m, query({ show: 'increase' }), { start: 0, end: 9 * S }, 600);
     expect(r.notes).toContain(
-      'other is approximate: 3 folded series restarted from a baseline (too many to track)',
+      'other is approximate: 3 folded series lost one change each when there were too many to track',
     );
     const none = metric(entry({ ...ctr, folded: 500 }), [{ other: true, buckets: [[0, counter(30)]] }]);
     const quiet = runMetricQuery(none, query({ show: 'increase' }), { start: 0, end: 9 * S }, 600);
