@@ -1,5 +1,15 @@
+import { create, type JsonObject, toJson } from '@bufbuild/protobuf';
 import { describe, expect, test } from 'vitest';
 import { OtelHtmlError } from '../../src/model/errors.js';
+import { ExportMetricsServiceRequestSchema } from '../../src/model/gen/opentelemetry/proto/collector/metrics/v1/metrics_service_pb.js';
+import {
+  AnyValueSchema,
+  KeyValueSchema,
+} from '../../src/model/gen/opentelemetry/proto/common/v1/common_pb.js';
+import {
+  type NumberDataPoint,
+  NumberDataPointSchema,
+} from '../../src/model/gen/opentelemetry/proto/metrics/v1/metrics_pb.js';
 import { parseUnixNanos } from '../../src/model/ids.js';
 import {
   createNormalizeContext,
@@ -192,6 +202,114 @@ describe('normalizeMetrics', () => {
     });
     expect(pts[2]?.point).toEqual({ count: '3', sum: 6, bucketCounts: ['1', '2'], explicitBounds: [1] });
     expect(JSON.stringify(pts.map((p) => p.point))).toContain('"quantile":0.5');
+  });
+});
+
+describe('normalizeMetrics: number points', () => {
+  const T = BigInt(T0);
+  const request = (points: NumberDataPoint[]) =>
+    create(ExportMetricsServiceRequestSchema, {
+      resourceMetrics: [
+        {
+          scopeMetrics: [
+            { metrics: [{ name: 'g', data: { case: 'gauge', value: { dataPoints: points } } }] },
+          ],
+        },
+      ],
+    });
+  /** The point JSON as it was built before the direct path: protobuf `toJson` less the record-level fields. */
+  const viaToJson = (dp: NumberDataPoint): JsonObject => {
+    const {
+      attributes: _a,
+      startTimeUnixNano: _s,
+      timeUnixNano: _t,
+      flags: _f,
+      ...rest
+    } = toJson(NumberDataPointSchema, dp) as JsonObject;
+    return rest;
+  };
+
+  test('point JSON built straight from the message equals protobuf toJson at the edges', () => {
+    const values: NumberDataPoint['value'][] = [
+      { case: 'asInt', value: 0n },
+      { case: 'asInt', value: -1n },
+      { case: 'asInt', value: 2n ** 63n - 1n },
+      { case: 'asInt', value: -(2n ** 63n) },
+      { case: 'asDouble', value: 0 },
+      { case: 'asDouble', value: -0 },
+      { case: 'asDouble', value: 1.5 },
+      { case: 'asDouble', value: Number.MAX_VALUE },
+      { case: 'asDouble', value: Number.MIN_VALUE },
+      { case: 'asDouble', value: Number.NaN },
+      { case: 'asDouble', value: Number.POSITIVE_INFINITY },
+      { case: 'asDouble', value: Number.NEGATIVE_INFINITY },
+      { case: undefined },
+    ];
+    const kv = create(KeyValueSchema, {
+      key: 'k',
+      value: create(AnyValueSchema, { value: { case: 'intValue', value: 1n } }),
+    });
+    const points = values.flatMap((value, i) => [
+      create(NumberDataPointSchema, { timeUnixNano: T + BigInt(i), value }),
+      create(NumberDataPointSchema, {
+        timeUnixNano: T,
+        startTimeUnixNano: T,
+        flags: 1,
+        attributes: [kv],
+        value,
+      }),
+    ]);
+    const records = normalizeMetrics(request(points), createNormalizeContext(epoch), 'f');
+    expect(records).toHaveLength(points.length);
+    records.forEach((r, i) => {
+      const want = viaToJson(points[i] as NumberDataPoint);
+      expect(JSON.stringify(r.point)).toBe(JSON.stringify(want));
+      expect(r.point).toStrictEqual(want); // -0 stays -0
+    });
+    // With exemplars the general path runs: field order follows the field numbers, ids are hex.
+    const withExemplar = create(NumberDataPointSchema, {
+      timeUnixNano: T,
+      value: { case: 'asInt', value: 7n },
+      exemplars: [
+        { timeUnixNano: T, value: { case: 'asDouble', value: 1 }, spanId: new Uint8Array(8).fill(1) },
+      ],
+    });
+    const [r] = normalizeMetrics(request([withExemplar]), createNormalizeContext(epoch), 'f');
+    expect(JSON.stringify(r?.point)).toBe(
+      `{"exemplars":[{"timeUnixNano":"${T0}","asDouble":1,"spanId":"0101010101010101"}],"asInt":"7"}`,
+    );
+  });
+
+  test('times shared by neighbouring points convert once and still fail at the right point', () => {
+    const at = (t: bigint, start = 0n) =>
+      create(NumberDataPointSchema, {
+        timeUnixNano: t,
+        startTimeUnixNano: start,
+        value: { case: 'asInt', value: 1n },
+      });
+    const ok = normalizeMetrics(
+      request([at(T + 5n), at(T + 5n, T), at(T + 9n, T), at(T + 5n), at(T + 5n, T + 1n)]),
+      createNormalizeContext(epoch),
+      'f',
+    );
+    expect(ok.map((p) => [p.start, p.time])).toEqual([
+      [null, 5],
+      [0, 5],
+      [0, 9],
+      [null, 5],
+      [1, 5],
+    ]);
+    const far = T + 2n ** 60n;
+    for (const [points, field] of [
+      [[at(T), at(T), at(far)], 'timeUnixNano'],
+      [[at(T, T), at(T, T), at(T, far)], 'startTimeUnixNano'],
+    ] as const) {
+      expect(() => normalizeMetrics(request([...points]), createNormalizeContext(epoch), 'f')).toThrowError(
+        expect.objectContaining({
+          path: `f: resourceMetrics[0].scopeMetrics[0].metrics[0].gauge.dataPoints[2].${field}`,
+        }),
+      );
+    }
   });
 });
 

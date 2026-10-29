@@ -455,10 +455,8 @@ export class MetricCatalog {
     const bounds = boundsOf(p);
     const key = seriesKey(r, s, p.attributes, bounds);
     const known = slot.byKey.get(key);
-    if (known !== undefined) {
-      this.#noteSeries(slot, r, scope.name, p.attributes);
-      return { id: known, other: false, isNew: false, foldKey: null };
-    }
+    // A known series' resource, scope and attribute keys were noted when it was added (or restored with the entry).
+    if (known !== undefined) return { id: known, other: false, isNew: false, foldKey: null };
     const real = slot.series.length - (slot.other === null ? 0 : 1);
     if (real >= this.#seriesCap) {
       slot.entry.folded++;

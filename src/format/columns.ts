@@ -189,6 +189,34 @@ function encodeJson(v: unknown, path: Path): JsonValue {
   }
 }
 
+/**
+ * `JSON.stringify(encodeJson(v))` of a flat plain object whose values are strings, booleans, null or finite numbers
+ * other than -0, and whose keys do not start with "$" (a number point's JSON, nearly every metric cell): `encodeJson`
+ * would copy it unchanged. Null for any other value, which `encodeJson` encodes.
+ */
+function flatJsonText(v: unknown): string | null {
+  if (typeof v !== 'object' || v === null || Object.getPrototypeOf(v) !== Object.prototype) return null;
+  const rec = v as Record<string, unknown>;
+  for (const k in rec) {
+    if (k.startsWith('$')) return null;
+    const x = rec[k];
+    switch (typeof x) {
+      case 'string':
+      case 'boolean':
+        break;
+      case 'number':
+        if (!Number.isFinite(x) || Object.is(x, -0)) return null;
+        break;
+      case 'object':
+        if (x !== null) return null;
+        break;
+      default:
+        return null;
+    }
+  }
+  return JSON.stringify(v);
+}
+
 function decodeJson(v: unknown, path: string): unknown {
   if (typeof v !== 'object' || v === null) return v;
   if (Array.isArray(v)) return v.map((x, i) => decodeJson(x, `${path}[${i}]`));
@@ -689,7 +717,7 @@ function encodeCell<R>(col: ColumnDef<R>, v: unknown, d: Intern, path: () => str
       if (!(v instanceof Map)) throw bad(path, 'an attribute map', v);
       return encodeAttrs(v as Attributes, d, path);
     case 'json':
-      return d(JSON.stringify(encodeJson(v, path)));
+      return d(flatJsonText(v) ?? JSON.stringify(encodeJson(v, path)));
     case 'ref':
       return safeInt(v, path);
     default:
