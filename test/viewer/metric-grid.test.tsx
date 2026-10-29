@@ -138,6 +138,26 @@ describe('MetricGrid', () => {
     expect(within(grid).getByRole('img', { name })).toBeTruthy();
   });
 
+  test('a card waiting to scroll into view is not busy: only a running load is', async () => {
+    // An observer that never reports an intersection: every card stays out of view.
+    vi.stubGlobal(
+      'IntersectionObserver',
+      class {
+        observe(): void {}
+        disconnect(): void {}
+      },
+    );
+    try {
+      await renderAt(`#/logs?log=${PAYMENTS_LOG}&ltab=metrics`);
+      const grid = await screen.findByTestId('metric-grid');
+      const card = await within(grid).findByRole('region', { name: 'process.cpu.utilization' });
+      expect(card.getAttribute('aria-busy')).not.toBe('true');
+      expect(within(grid).queryByRole('img', { name: /process\.cpu\.utilization/ })).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   test('expanding http draws request duration with the linked trace exemplar highlighted', async () => {
     const user = userEvent.setup();
     await renderAt(`#/logs?log=${PAYMENTS_LOG}&ltab=metrics`);
