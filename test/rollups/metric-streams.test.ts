@@ -405,6 +405,26 @@ describe('StreamNormalizer', () => {
     expect(deltaOf(restart)).toEqual({ delta: 1, resets: 1, reset: true });
   });
 
+  it('overlapping merged reports: a restart is judged against its own report, not the other one', () => {
+    // Two parallel shards share series 0 without an instance id: shard A (origin 0) runs 10..100, shard B (origin 1)
+    // runs 20..90 and restarts at 60, inside A's time range. Merge replays A in full, then B.
+    const s = new StreamNormalizer();
+    const a = (v: number, t: number) => s.prepare(sum(v, t, { start: rel(0) }))({ series: 0, origin: 0 });
+    const b = (v: number, t: number, start: number) =>
+      s.prepare(sum(v, t, { start: rel(start) }))({ series: 0, origin: 1 });
+    expect(deltaOf(a(5, 10))).toEqual({ delta: 5, resets: 0, reset: false });
+    expect(deltaOf(a(50, 100))).toEqual({ delta: 45, resets: 0, reset: false });
+    // B's first stream is another producer, not a restart, though it starts before A's latest point.
+    expect(deltaOf(b(4, 20, 5))).toEqual({ delta: 4, resets: 0, reset: false });
+    expect(deltaOf(b(9, 50, 5))).toEqual({ delta: 5, resets: 0, reset: false });
+    // B restarts at 60: after B's own latest point (50), so a reset, although A already reached 100.
+    expect(deltaOf(b(2, 70, 60))).toEqual({ delta: 2, resets: 1, reset: true });
+    expect(deltaOf(b(6, 90, 60))).toEqual({ delta: 4, resets: 0, reset: false });
+    // A later report's stream that starts after B's latest point is still the next run, not a reset.
+    const c = s.prepare(sum(3, 130, { start: rel(120) }))({ series: 0, origin: 2 });
+    expect(deltaOf(c)).toEqual({ delta: 3, resets: 0, reset: false });
+  });
+
   it('prepare parses without touching streams; its step applies the point', () => {
     const s = new StreamNormalizer();
     const steps = [sum(5, 1), sum(8, 2)].map((p) => s.prepare(p));
