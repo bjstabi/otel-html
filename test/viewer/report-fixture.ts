@@ -579,3 +579,58 @@ export async function buildEmbeddedMetricsReport(): Promise<Fixture> {
   await session.close();
   return { files: reportFilesFromSnapshot(w.fs.snapshot(), OUT), manifest: manifestOf(w, OUT) };
 }
+
+/**
+ * A span on `api` with a span attribute `region` = `span-side`, and a gauge on a resource `api` + `region` = `eu`:
+ * `region` is a resource attribute only on the metric's resource.
+ */
+export async function buildResourceValuesReport(): Promise<Fixture> {
+  const w = createTestWriter();
+  const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'create' });
+  const t = BigInt(EPOCH_NS);
+  await session.add(
+    otlp({
+      resourceSpans: [
+        {
+          resource: { attributes: [attr('service.name', { stringValue: 'api' })] },
+          scopeSpans: [
+            {
+              scope: { name: 'test-scope' },
+              spans: [
+                span({
+                  traceId: traceIdOf(0),
+                  spanId: spanId(0, 0),
+                  name: 'GET /',
+                  startTimeUnixNano: String(t),
+                  endTimeUnixNano: String(t + 1000n),
+                  attributes: [attr('region', { stringValue: 'span-side' })],
+                }),
+              ],
+            },
+          ],
+        },
+      ],
+    }),
+    'spans',
+  );
+  await session.add(
+    otlp({
+      resourceMetrics: [
+        {
+          resource: {
+            attributes: [attr('service.name', { stringValue: 'api' }), attr('region', { stringValue: 'eu' })],
+          },
+          scopeMetrics: [
+            {
+              scope: { name: 'test-scope' },
+              metrics: [{ name: 'up', unit: '1', gauge: { dataPoints: [{ timeUnixNano: String(t), asDouble: 1 }] } }],
+            },
+          ],
+        },
+      ],
+    }),
+    'metrics',
+  );
+  await session.close();
+  return { files: reportFilesFromSnapshot(w.fs.snapshot(), OUT), manifest: manifestOf(w, OUT) };
+}

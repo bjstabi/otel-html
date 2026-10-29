@@ -24,7 +24,9 @@ vi.mock('../../src/viewer/metrics/use-metric-query.js', async (importOriginal) =
 
 import { type Dashboard, DashboardSchema } from '../../src/dashboards/schema.js';
 import type { Manifest } from '../../src/format/manifest.js';
+import type { AnyValue } from '../../src/model/anyvalue.js';
 import { parseTraceId } from '../../src/model/ids.js';
+import type { ResourceRecord } from '../../src/model/records.js';
 import type { WidgetActions } from '../../src/viewer/dashboards/dashboard-page.js';
 import type { VariableBinding, WidgetScope } from '../../src/viewer/dashboards/scope.js';
 import { MetricWidget } from '../../src/viewer/dashboards/widgets/metric.js';
@@ -124,6 +126,34 @@ function mount(
   return { actions, update: (n) => rerender(tree(n.ds ?? ds, n.scope ?? over.scope ?? {})) };
 }
 
+/**
+ * `ds` with the trace's resources mapped through `trace` and the catalog's resources replaced by `catalog(all)`; the
+ * catalog is a proxy, so everything else (and its private state) is the real one.
+ */
+async function withResources(
+  ds: DataSource,
+  trace: (r: ResourceRecord) => ResourceRecord,
+  catalog: (all: readonly ResourceRecord[]) => ResourceRecord[],
+): Promise<DataSource> {
+  const real = await ds.metricCatalog();
+  const resources = catalog(real.resources());
+  const proxied = new Proxy(real, {
+    get(target, key) {
+      if (key === 'resources') return () => resources;
+      const v: unknown = Reflect.get(target, key, target);
+      return typeof v === 'function' ? v.bind(target) : v;
+    },
+  });
+  return {
+    ...ds,
+    metricCatalog: () => Promise.resolve(proxied),
+    getTrace: async (id) => {
+      const d = await ds.getTrace(id);
+      return { ...d, resources: (ref) => trace(d.resources(ref)) };
+    },
+  };
+}
+
 const SERVICE = 'resource.attributes["service.name"]';
 const lastRun = (): { id: string; where: string | null }[] => runs.at(-1)?.queries ?? [];
 
@@ -161,6 +191,36 @@ describe('the Metrics widget with queries', () => {
     expect(runs.some((r) => r.queries.length > 0 && !(r.queries[0]?.where ?? '').includes(SERVICE))).toBe(
       false,
     );
+  });
+
+  test('a followed trace whose resources a filter cannot fully tell apart says so beside the charts', async () => {
+    // The trace's resources get an array attribute; the catalog gains a lookalike that differs only in its value,
+    // which no `where` can compare: the charts include it, and the widget says so.
+    const tags = (v: string): AnyValue => ({ kind: 'array', values: [{ kind: 'string', value: v }] });
+    const tagged = (r: ResourceRecord, v: string): ResourceRecord => ({
+      ...r,
+      attributes: new Map([...r.attributes, ['tags', tags(v)]]),
+    });
+    const ds = await withResources(await linked(), (r) => tagged(r, 'a'), (all) => [
+      ...all.map((r) => tagged(r, 'a')),
+      ...all.slice(0, 1).map((r) => tagged(r, 'b')),
+    ]);
+    mount(ds, { scope: { highlightTrace: TRACE } });
+    await screen.findByRole('img', { name: /process\.cpu\.utilization/ });
+    expect(screen.getByRole('note').textContent).toMatch(/also include 1 other resource /);
+  });
+
+  test('a followed trace whose resources have no attribute to filter on says the charts show every resource', async () => {
+    const bare = (r: ResourceRecord): ResourceRecord => ({
+      ...r,
+      attributes: new Map([['tags', { kind: 'array', values: [] } as AnyValue]]),
+    });
+    mount(await withResources(await linked(), bare, (all) => all.map(bare)), {
+      scope: { highlightTrace: TRACE },
+    });
+    await screen.findByRole('img', { name: /process\.cpu\.utilization/ });
+    expect(screen.getByRole('note').textContent).toMatch(/show every resource/);
+    expect(lastRun()[0]?.where ?? null).toBeNull();
   });
 
   test('the selection band, the echarts override and the scale reach the chart option', async () => {

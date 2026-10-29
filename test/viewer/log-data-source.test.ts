@@ -472,12 +472,21 @@ describe('windowed logs', () => {
     expect(all.total).toBe(3);
   });
 
-  test('a trace hint with a null condition still counts only that trace and skips the whole-run rollup', async () => {
+  test('a trace restriction with a null condition returns only that trace and skips the whole-run rollup', async () => {
     const { ds, loader } = await windowed();
     const r = await ds.queryLogs(query({ traceId: LOG_TRACE as TraceId }));
     expect(loader.calls).not.toContain('data/rollups/logs.js');
-    expect(r.total).toBeLessThan(rep.manifest.totals.logs);
+    // The trace's chunk also holds other logs: the restriction filters rows, not only chunks.
+    expect(r.total).toBe(3);
+    expect(r.mode === 'logs' && r.rows.every((x) => x.log.traceId === LOG_TRACE)).toBe(true);
     expect(r.partial).toBeNull();
+  });
+
+  test('the eager source applies a trace restriction too', async () => {
+    const ds = await createDataSource(createScriptedLoader(rep.files), rep.manifest, 10_000_000);
+    const r = await ds.queryLogs(query({ traceId: LOG_TRACE as TraceId }));
+    expect(r.total).toBe(3);
+    expect(r.mode === 'logs' && r.rows.every((x) => x.log.traceId === LOG_TRACE)).toBe(true);
   });
 
   test('a trace-restricted query for a trace without logs reads no log chunk', async () => {

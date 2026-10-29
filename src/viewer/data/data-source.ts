@@ -5,10 +5,10 @@ import type { TraceId } from '../../model/ids.js';
 import type { ResourceRecord, ResourceRef, ScopeRecord, ScopeRef } from '../../model/records.js';
 import type { ExpHistogram } from '../../rollups/exp-histogram.js';
 import type { FacetCounts } from '../../rollups/facets.js';
-import type { LogRollups } from '../../rollups/log-rollups.js';
+import { LOG_RESOURCE_FACET_KEYS, type LogRollups } from '../../rollups/log-rollups.js';
 import type { MetricCatalog, MetricEntry } from '../../rollups/metric-catalog.js';
 import type { RedSeries } from '../../rollups/red.js';
-import type { SpanRollups } from '../../rollups/span-rollups.js';
+import { SPAN_RESOURCE_FACET_KEYS, type SpanRollups } from '../../rollups/span-rollups.js';
 import type { TimeBuckets } from '../../rollups/time-buckets.js';
 import type { LogSeverityKey } from '../../semconv/severity.js';
 import type { FacetValueKind } from '../components/filter-tokens.js';
@@ -118,8 +118,8 @@ export interface DataSource {
   /** Metrics with a series on one of `resources`, matched by canonical resource equality. */
   metricsForResources(resources: readonly ResourceRecord[]): Promise<readonly MetricEntry[]>;
   /**
-   * The values of one resource attribute across the report: the union of the span and log Resource facets and the
-   * metric catalog's resources, sorted. `kind` is `mixed` when the sources disagree; `capped` when a facet kept
+   * The values of one resource attribute across the report: the union of the span and log facets that hold resource
+   * attributes (service, host, environment) and the metric catalog's resources, sorted. `kind` is `mixed` when the sources disagree; `capped` when a facet kept
    * only its first values (the rest are counted in "other").
    */
   resourceValues(key: string): Promise<ResourceValues>;
@@ -169,15 +169,20 @@ function mergeKinds(kinds: readonly FacetValueKind[]): FacetValueKind {
   return rest.every((k) => k === first) ? first : 'mixed';
 }
 
+/**
+ * `facets` pairs each signal's rollup facets with the keys whose values there are resource attributes: any other key
+ * of the same name is a span or log attribute, not a resource one, so only the metric catalog's resources answer it.
+ */
 function resourceValuesOf(
   key: string,
-  facets: readonly FacetCounts[],
+  facets: readonly { facets: FacetCounts; resourceKeys: ReadonlySet<string> }[],
   catalog: MetricCatalog,
 ): ResourceValues {
   const values = new Set<string>();
   const kinds: FacetValueKind[] = [];
   let capped = false;
-  for (const f of facets) {
+  for (const { facets: f, resourceKeys } of facets) {
+    if (!resourceKeys.has(key)) continue;
     const kind = f.kind(key);
     if (kind === undefined) continue;
     kinds.push(kind);
@@ -335,7 +340,14 @@ export async function createDataSource(
     metricsForResources: async (resources) => metricsOnResources(await getMetricCatalog(), resources),
     async resourceValues(key) {
       const [logsLanding, catalog] = await Promise.all([getLogRollups(), getMetricCatalog()]);
-      return resourceValuesOf(key, [rollups.facets, logsLanding.facets], catalog);
+      return resourceValuesOf(
+        key,
+        [
+          { facets: rollups.facets, resourceKeys: SPAN_RESOURCE_FACET_KEYS },
+          { facets: logsLanding.facets, resourceKeys: LOG_RESOURCE_FACET_KEYS },
+        ],
+        catalog,
+      );
     },
   };
 }

@@ -364,15 +364,17 @@ export const DashboardSchema: z.ZodType<Dashboard, DashboardInput> = z
     return { ...d, widgets };
   });
 
-function listIssues(
+/** Flag repeated and reserved ids; `pathOf` places each issue (the list's `[i, 'id']` by default). */
+export function listIssues(
   ids: readonly string[],
   reserved: readonly string[],
   ctx: z.RefinementCtx<unknown>,
+  pathOf: (i: number) => PropertyKey[] = (i) => [i, 'id'],
 ): void {
   ids.forEach((id, i) => {
-    if (ids.indexOf(id) !== i) ctx.addIssue({ code: 'custom', path: [i, 'id'], message: 'unique ids' });
+    if (ids.indexOf(id) !== i) ctx.addIssue({ code: 'custom', path: pathOf(i), message: 'unique ids' });
     if (reserved.includes(id))
-      ctx.addIssue({ code: 'custom', path: [i, 'id'], message: `"${id}" is reserved` });
+      ctx.addIssue({ code: 'custom', path: pathOf(i), message: `"${id}" is reserved` });
   });
 }
 

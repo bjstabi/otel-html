@@ -51,6 +51,8 @@ export const DEFAULT_LOG_FACETS: readonly LogCoreFacet[] = [
 ];
 
 const CORE_KEYS: ReadonlySet<string> = new Set(DEFAULT_LOG_FACETS.map((f) => f.key));
+/** Default facets whose values are resource attributes (log attributes of these names are not faceted). */
+export const LOG_RESOURCE_FACET_KEYS: ReadonlySet<string> = new Set([ATTR_SERVICE_NAME, ATTR_HOST_NAME]);
 
 const SerializedLogRollupsSchema = z.strictObject({
   buckets: z.unknown(),

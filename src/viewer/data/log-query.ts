@@ -93,8 +93,8 @@ export interface LogQuery {
   limit: number;
   scanAll: boolean;
   /**
-   * The trace the `condition` already restricts the logs to. A windowed source then reads only the log chunks the
-   * trace index lists for it instead of every chunk in the window; the condition is still applied to the rows.
+   * Only this trace's logs (on top of `condition`). A windowed source then reads only the log chunks the trace index
+   * lists for it instead of every chunk in the window.
    */
   traceId?: TraceId | null;
 }
@@ -328,6 +328,7 @@ export class LogQueryRun {
     const { row } = e;
     const window = this.#window;
     if (window !== null && (row.time < window.start || row.time > window.end)) return;
+    if (this.#q.traceId != null && row.log.traceId !== this.#q.traceId) return;
     if (this.#condition !== null && !this.#condition.test(e.target)) return;
     if (this.#q.text !== '' && !matchesText(this.#q.text, logTextFields(e.target))) return;
     if (this.#q.mode === 'traces') {

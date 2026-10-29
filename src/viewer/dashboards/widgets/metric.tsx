@@ -33,7 +33,13 @@ export type Narrowing =
   | { status: 'off' }
   | { status: 'loading' }
   | { status: 'error'; message: string }
-  | { status: 'ready'; resources: readonly ResourceRecord[]; where: string | null };
+  | {
+      status: 'ready';
+      resources: readonly ResourceRecord[];
+      where: string | null;
+      /** Other resources the `where` also matches (they differ only in attributes a filter cannot compare). */
+      unexcluded: number;
+    };
 
 const OFF: Narrowing = { status: 'off' };
 
@@ -43,10 +49,13 @@ const OFF: Narrowing = { status: 'off' };
  */
 export function useNarrowing(dataSource: DataSource, traceId: TraceId | null): Narrowing {
   const load = useCallback(
-    async (id: TraceId): Promise<{ resources: readonly ResourceRecord[]; where: string | null }> => {
+    async (
+      id: TraceId,
+    ): Promise<{ resources: readonly ResourceRecord[]; where: string | null; unexcluded: number }> => {
       const [detail, catalog] = await Promise.all([dataSource.getTrace(id), dataSource.metricCatalog()]);
       const resources = traceResources(detail);
-      return { resources, where: explorerFilter(resources, catalog.resources()).where };
+      const { where, unexcluded } = explorerFilter(resources, catalog.resources());
+      return { resources, where, unexcluded };
     },
     [dataSource],
   );
@@ -177,6 +186,7 @@ const QueriesBody: Body = ({ widget, scope, height, dataSource, actions, variabl
 
   return (
     <div className="flex flex-col gap-2" style={{ maxHeight: height - FRAME_CHROME_PX, overflowY: 'auto' }}>
+      {narrowing.status === 'ready' && <NarrowingNote narrowing={narrowing} />}
       {missingNames.map((name) => (
         <p key={name} role="note" className="text-xs text-muted">
           {name} is not in this report
@@ -212,6 +222,25 @@ const QueriesBody: Body = ({ widget, scope, height, dataSource, actions, variabl
     </div>
   );
 };
+
+/** What the trace's resources could not narrow: never a silently wider answer (spec §6.2). */
+function NarrowingNote(props: { narrowing: Extract<Narrowing, { status: 'ready' }> }): JSX.Element | null {
+  const { resources, where, unexcluded } = props.narrowing;
+  if (resources.length > 0 && where === null) {
+    return (
+      <p role="note" className="text-xs text-muted">
+        The selected trace's resources have no attribute a filter can compare, so the charts show every resource.
+      </p>
+    );
+  }
+  if (unexcluded === 0) return null;
+  return (
+    <p role="note" className="text-xs text-muted">
+      The charts also include {unexcluded} other {unexcluded === 1 ? 'resource' : 'resources'} that differ from
+      the trace's only in attributes a filter cannot compare.
+    </p>
+  );
+}
 
 /** Fusion's Metrics widget: the metric grid of the selected trace's resources, else of every resource. */
 const GridBody: Body = ({ scope, height, dataSource, actions, variables }) => {

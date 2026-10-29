@@ -14,6 +14,7 @@ import {
   buildEmbeddedMetricsReport,
   buildMetricReports,
   buildReport,
+  buildResourceValuesReport,
   buildSpreadReport,
   type Fixture,
   STEP_NS,
@@ -434,6 +435,12 @@ describe('resourceValues', () => {
       kind: 'string',
       capped: false,
     });
+  });
+
+  test('a span attribute that shares a resource key name is not offered as a resource value', async () => {
+    const rep = await buildResourceValuesReport();
+    const ds = await createDataSource(createScriptedLoader(rep.files), rep.manifest, SMALL);
+    expect(await ds.resourceValues('region')).toEqual({ values: ['eu'], kind: 'string', capped: false });
   });
 
   test('a key only the metric catalog knows is typed by its values; an unknown key is empty', async () => {
