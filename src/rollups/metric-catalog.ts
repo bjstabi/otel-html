@@ -46,7 +46,10 @@ export interface MetricEntry extends MetricDef {
   resources: number[];
   series: number;
   folded: number;
-  /** Folded series whose cumulative stream state was dropped (bounded per metric): each restarted from a baseline. */
+  /**
+   * Folded series whose cumulative stream state was dropped (bounded per metric): each one's next point started a new
+   * baseline, so one change was not counted.
+   */
   foldedEvicted: number;
   resets: number;
   outOfOrder: number;
