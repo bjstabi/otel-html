@@ -75,6 +75,30 @@ describe('DashboardSchema', () => {
     expect(DashboardSchema.safeParse(dash([tl(), tl({ x: 6, w: 6 }), tl({ y: 4 })])).success).toBe(true);
   });
 
+  it('takes at most 50 widgets', () => {
+    const rows = (n: number): WidgetInput[] => Array.from({ length: n }, (_, i) => tl({ y: i * 4 }));
+    expect(DashboardSchema.safeParse(dash(rows(50))).success).toBe(true);
+    const r = DashboardSchema.safeParse(dash(rows(51)));
+    expect(issuePaths(r)).toEqual(['widgets']);
+    expect(r.error?.issues[0]?.message).toBe('at most 50 widgets');
+  });
+
+  it('bounds h to 2..40 rows', () => {
+    expect(DashboardSchema.safeParse(dash([tl({ h: 2 })])).success).toBe(true);
+    expect(DashboardSchema.safeParse(dash([tl({ h: 40 })])).success).toBe(true);
+    expect(issuePaths(DashboardSchema.safeParse(dash([tl({ h: 1 })])))).toEqual(['widgets.0.h']);
+    expect(issuePaths(DashboardSchema.safeParse(dash([tl({ h: 41 })])))).toEqual(['widgets.0.h']);
+  });
+
+  it('rejects a repeated metric query id at the later query', () => {
+    const q = { id: 'a', metric: 'm', show: 'value' };
+    const r = DashboardSchema.safeParse(
+      dash([{ type: 'metric', x: 0, y: 0, w: 6, h: 4, queries: [q, { ...q, metric: 'n' }] }]),
+    );
+    expect(issuePaths(r)).toEqual(['widgets.0.queries.1.id']);
+    expect(r.error?.issues[0]?.message).toBe('unique query ids');
+  });
+
   it('rejects x + w over 12', () => {
     const r = DashboardSchema.safeParse(dash([tl({ x: 8, w: 6 })]));
     expect(JSON.stringify(r.error?.issues)).toContain('x + w at most 12');
