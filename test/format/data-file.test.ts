@@ -5,6 +5,7 @@ import {
   wrapDataFile,
   wrapDataFilePieces,
 } from '../../src/format/data-file.js';
+import { REGISTRATION_GLOBAL } from '../../src/format/version.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 
 const HOSTILE = '</script><img src=x onerror=alert(1)> \u2028\u2029';
@@ -88,6 +89,45 @@ describe('data files', () => {
   test('wrapDataFile rejects values JSON cannot carry', () => {
     expect(() => wrapDataFile('k', { x: Number.NaN })).toThrowError(/finite/);
     expect(() => wrapDataFile('k', { x: () => 1 })).toThrowError(OtelHtmlError);
+  });
+
+  test('plain payloads skip the replacer but write exactly what the tagging replacer would', () => {
+    // The replacer wrapDataFile applied to every payload before plain JSON took a fast path.
+    const tagging = (_k: string, v: unknown): unknown =>
+      typeof v === 'bigint'
+        ? { $i: v.toString() }
+        : v instanceof Uint8Array
+          ? { $b: Buffer.from(v).toString('base64') }
+          : v;
+    const payloads: unknown[] = [
+      { a: [1, -0, 'x', null, true, { b: undefined }, undefined], c: undefined, d: HOSTILE },
+      [{ k: 'number', count: 1, sum: 1.5e300, min: -5e-324, max: 0, last: 2, lastTime: 3 }],
+      { when: new Date(0), map: new Map([['k', 1]]), nested: { deep: [[[{}]]] } },
+      { plain: [1, 2, 3], late: { big: 2n ** 70n } },
+      [new Uint8Array([0, 255]), 'x'],
+      7,
+      'text',
+      null,
+    ];
+    for (const p of payloads) {
+      const json = JSON.stringify(p, tagging).replace(
+        /[<\u2028\u2029]/g,
+        (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`,
+      );
+      expect(wrapDataFile('k', p)).toBe(`${REGISTRATION_GLOBAL}.push("k",${json});\n`);
+      expect([...wrapDataFilePieces('k', { h: 1 }, 'items', [p])].join('')).toBe(
+        wrapDataFile('k', { h: 1, items: [p] }),
+      );
+    }
+    // A value JSON cannot carry fails the same way wherever it hides, naming its key.
+    for (const bad of [Number.POSITIVE_INFINITY, Number.NaN, -Number.MAX_VALUE * 2]) {
+      expect(() => wrapDataFile('k', { ok: [1, 2], deep: [{ x: bad }] })).toThrowError(
+        expect.objectContaining({ code: 'invalid-report', path: 'x', expected: 'a finite number' }),
+      );
+    }
+    expect(() => wrapDataFile('k', [{ f: Symbol('s') }])).toThrowError(
+      expect.objectContaining({ path: 'f', expected: 'a JSON-serializable value' }),
+    );
   });
 
   test('wrapDataFilePieces joins to exactly wrapDataFile of the whole payload', () => {
