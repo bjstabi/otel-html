@@ -123,6 +123,21 @@ describe('MetricGrid', () => {
     expect(within(grid).getByRole('button', { name: 'S' }).getAttribute('aria-pressed')).toBe('true');
   });
 
+  test('a size change redraws loaded charts in place: no skeleton while the new size loads', async () => {
+    const user = userEvent.setup();
+    await renderAt(`#/logs?log=${PAYMENTS_LOG}&ltab=metrics`);
+    const grid = await screen.findByTestId('metric-grid');
+    const name = 'process.cpu.utilization: 1 series';
+    await within(grid).findByRole('img', { name });
+    const card = within(grid).getByRole('region', { name: 'process.cpu.utilization' });
+    await user.click(within(grid).getByRole('button', { name: 'L' }));
+    // Straight after the click the old chart is still drawn, marked busy, never the skeleton.
+    expect(within(grid).getByRole('img', { name })).toBeTruthy();
+    expect(within(grid).getByRole('region', { name: 'process.cpu.utilization' })).toBe(card);
+    await waitFor(() => expect(card.getAttribute('aria-busy')).not.toBe('true'));
+    expect(within(grid).getByRole('img', { name })).toBeTruthy();
+  });
+
   test('expanding http draws request duration with the linked trace exemplar highlighted', async () => {
     const user = userEvent.setup();
     await renderAt(`#/logs?log=${PAYMENTS_LOG}&ltab=metrics`);

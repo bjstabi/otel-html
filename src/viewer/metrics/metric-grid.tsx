@@ -299,9 +299,14 @@ function GridChart(props: {
     [dataSource],
   );
   const run = useKeyedAsync(key, load);
+  // A size or zoom change reloads the chart; until it lands the last one stays drawn, so a card never falls back
+  // to its skeleton once it has data. The entry is fixed per card (`key={e.id}`), so the kept run is its own.
+  const [shownRun, setShownRun] = useState<ChartRun | null>(null);
+  if (run.status === 'ready' && shownRun !== run.value) setShownRun(run.value);
+  const drawn = run.status === 'ready' ? run.value : run.status === 'loading' ? shownRun : null;
   const height = METRIC_CHART_HEIGHT[size];
-  if (run.status === 'ready') {
-    const { query, result } = run.value;
+  if (drawn !== null) {
+    const { query, result } = drawn;
     return (
       <MetricChartCard
         title={entry.name}
@@ -320,6 +325,7 @@ function GridChart(props: {
         hasTrace={props.hasTrace}
         onPick={(p) => props.onPick(p, { ...query, where: props.linkWhere })}
         onZoom={props.onZoom}
+        busy={run.status === 'loading'}
       />
     );
   }
