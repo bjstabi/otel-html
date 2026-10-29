@@ -50,14 +50,27 @@ function keyName(e: KeyboardEvent): string {
   return e.key === 'Escape' ? 'Esc' : e.key;
 }
 
-/** `now` is injectable so sequence timeouts are testable. Keystrokes in form fields never trigger shortcuts. */
+/**
+ * Keystrokes in form fields never trigger shortcuts. A pending sequence expires on a timer rather than by comparing the
+ * keys' times: a page busy drawing (a dashboard on a slow machine) handles keys pressed milliseconds apart a second or
+ * more apart, and stamps them with that handling time, but the second key is already queued ahead of the timer.
+ */
 export function createShortcutHandler(
   table: readonly Shortcut[],
   actions: ShortcutActions,
-  now: () => number = Date.now,
 ): (e: KeyboardEvent) => void {
   let pending: string[] = [];
-  let pendingAt = 0;
+  let expiry: ReturnType<typeof setTimeout> | undefined;
+  const setPending = (seq: string[]): void => {
+    clearTimeout(expiry);
+    pending = seq;
+    expiry =
+      seq.length === 0
+        ? undefined
+        : setTimeout(() => {
+            pending = [];
+          }, SEQUENCE_TIMEOUT_MS);
+  };
 
   const startsWith = (seq: readonly string[]): boolean =>
     table.some((s) => s.keys.length > seq.length && seq.every((k, i) => s.keys[i] === k));
@@ -68,20 +81,17 @@ export function createShortcutHandler(
     if (e.defaultPrevented || e.isComposing || e.ctrlKey || e.metaKey || e.altKey) return;
     if (isEditable(e.target) || overlayOpen()) return;
     const k = keyName(e);
-    const t = now();
-    if (pending.length > 0 && t - pendingAt > SEQUENCE_TIMEOUT_MS) pending = [];
     let seq = [...pending, k];
     if (exact(seq) === undefined && !startsWith(seq)) seq = [k];
     const hit = exact(seq);
     if (hit !== undefined) {
-      pending = [];
+      setPending([]);
       e.preventDefault();
       actions[hit.action]();
     } else if (startsWith(seq)) {
-      pending = seq;
-      pendingAt = t;
+      setPending(seq);
     } else {
-      pending = [];
+      setPending([]);
     }
   };
 }

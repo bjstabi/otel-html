@@ -4,13 +4,14 @@ import {
   bucketIndex,
   bucketRange,
   capExemplars,
+  dataFileKey,
   encodeExemplarFile,
-  encodeLevelFile,
   encodeSegmentFile,
   encodeSeriesFile,
   LEVEL0_WIDTH_NS,
   levelCount,
   levelWidthNs,
+  METRIC_FILE_PATH,
   metricDir,
   metricExemplarPath,
   metricLevelPath,
@@ -52,8 +53,6 @@ interface MetricPaths {
   levels: number[];
   exemplars: boolean;
 }
-
-const LISTED = /^data\/metrics\/([0-9]{6})\/(series|ex|l([0-6])|seg-([0-9]{6}))\.js$/;
 
 /**
  * Brings back the series definitions of a reopened report's catalog from the committed `series.js` files
@@ -99,17 +98,13 @@ async function readDataFile(fs: FileSystem, out: string, path: string): Promise<
     });
   }
   try {
-    return reviveDataJson(unwrapDataFile(text, keyOf(path)), path);
+    return reviveDataJson(unwrapDataFile(text, dataFileKey(path)), path);
   } catch (e) {
     if (e instanceof OtelHtmlError && e.code === 'invalid-report') {
       throw new OtelHtmlError('invalid-report', { message: `${path}: ${e.message}` });
     }
     throw e;
   }
-}
-
-function keyOf(path: string): string {
-  return path.slice('data/'.length, -'.js'.length);
 }
 
 /**
@@ -274,10 +269,7 @@ export class MetricSeriesWriter {
         const series = level;
         // in pieces, one per series: a long run's level files are tens of megabytes
         const head = { metric: id, level: k, widthNs: levelWidthNs(k) };
-        await this.#writePieces(
-          path,
-          wrapDataFilePieces(keyOf(path), head, 'series', encodeLevelFile({ ...head, series }).series),
-        );
+        await this.#writePieces(path, wrapDataFilePieces(dataFileKey(path), head, 'series', series));
         written.push(path);
         level = k + 1 < count ? nextLevel(series, k + 1) : [];
       }
@@ -337,7 +329,7 @@ export class MetricSeriesWriter {
 
   async #writeFile(path: string, payload: unknown): Promise<void> {
     await this.#mkdir(path);
-    await this.#fs.writeTextAtomic(at(this.#out, path), wrapDataFile(keyOf(path), payload));
+    await this.#fs.writeTextAtomic(at(this.#out, path), wrapDataFile(dataFileKey(path), payload));
   }
 
   async #writePieces(path: string, pieces: Iterable<string>): Promise<void> {
@@ -374,7 +366,7 @@ export class MetricSeriesWriter {
 function byMetric(listed: readonly string[]): Map<number, MetricPaths> {
   const out = new Map<number, MetricPaths>();
   for (const p of listed) {
-    const m = LISTED.exec(p);
+    const m = METRIC_FILE_PATH.exec(p);
     if (m === null) continue;
     const id = Number(m[1]);
     let e = out.get(id);

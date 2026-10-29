@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { OtelHtmlError } from '../model/errors.js';
+import { assertNever, OtelHtmlError } from '../model/errors.js';
 
 /** Most buckets one side (positive or negative) of an `ExpAgg` keeps after a merge. */
 const MAX_EXP_BUCKETS = 160;
@@ -141,10 +141,15 @@ function foldSide(side: ExpSide, scale: number, threshold: number): { side: ExpS
   return { side: counts.length === 0 ? { offset: 0, counts } : { offset, counts }, folded };
 }
 
+/** Whether `e` has no buckets: its scale then says nothing, so a merge need not coarsen to it. */
+const noBuckets = (e: ExpAgg): boolean => e.positive.counts.length === 0 && e.negative.counts.length === 0;
+
 function mergeExp(a: ExpAgg, b: ExpAgg): ExpAgg {
-  let scale = Math.min(a.scale, b.scale);
-  let x = downscaleExp(a, scale);
-  let y = downscaleExp(b, scale);
+  let scale = noBuckets(a) ? b.scale : noBuckets(b) ? a.scale : Math.min(a.scale, b.scale);
+  // A side without buckets takes the scale as it is (no bucket to move).
+  const at = (e: ExpAgg): ExpAgg => (noBuckets(e) ? { ...e, scale } : downscaleExp(e, scale));
+  let x = at(a);
+  let y = at(b);
   while (
     mergedSpan(x.positive, y.positive) > MAX_EXP_BUCKETS ||
     mergedSpan(x.negative, y.negative) > MAX_EXP_BUCKETS
@@ -179,7 +184,8 @@ export function mergeAgg(a: BucketAgg, b: BucketAgg, path: string): BucketAgg {
   switch (a.k) {
     case 'number': {
       if (b.k !== 'number') break;
-      const later = b.lastTime >= a.lastTime ? b : a;
+      // Equal times keep the larger value, so the merge is the same in either order.
+      const later = b.lastTime > a.lastTime || (b.lastTime === a.lastTime && b.last > a.last) ? b : a;
       return {
         k: 'number',
         count: a.count + b.count,
@@ -215,7 +221,12 @@ export function mergeAgg(a: BucketAgg, b: BucketAgg, path: string): BucketAgg {
     }
     case 'summary': {
       if (b.k !== 'summary') break;
-      const later = b.lastTime >= a.lastTime ? b : a;
+      // Equal times keep the one with more observations (then the larger sum), so either order gives the same.
+      const later =
+        b.lastTime > a.lastTime ||
+        (b.lastTime === a.lastTime && (b.count > a.count || (b.count === a.count && b.sum > a.sum)))
+          ? b
+          : a;
       return {
         k: 'summary',
         count: a.count + b.count,
@@ -225,13 +236,9 @@ export function mergeAgg(a: BucketAgg, b: BucketAgg, path: string): BucketAgg {
       };
     }
     default:
-      return assertNeverAgg(a, path);
+      return assertNever(a, path);
   }
   throw invariantError(path, `aggregates of kind '${a.k}'`, `kind '${b.k}'`);
-}
-
-function assertNeverAgg(x: never, path: string): never {
-  throw invariantError(path, 'known aggregate kind', JSON.stringify(x));
 }
 
 function histQuantile(h: HistAgg, q: number): number {
@@ -314,6 +321,9 @@ const HistAggSchema = z
     bounds: z.array(finite),
     counts: z.array(nonNegInt),
   })
+  .refine((h) => h.bounds.every((b, i) => i === 0 || b > (h.bounds[i - 1] ?? b)), {
+    message: 'bounds in ascending order',
+  })
   .refine((h) => h.counts.length === h.bounds.length + 1, { message: 'counts.length === bounds.length + 1' })
   .refine((h) => sumOf(h.counts) === h.count, { message: 'count equal to sum(counts)' });
 const ExpSideSchema = z.strictObject({
@@ -344,7 +354,7 @@ const SummaryAggSchema = z.strictObject({
   k: z.literal('summary'),
   count: nonNegInt,
   sum: finite,
-  quantiles: z.array(z.strictObject({ q: finite, v: finite })),
+  quantiles: z.array(z.strictObject({ q: z.number().min(0).max(1), v: finite })),
   lastTime: finite,
 });
 

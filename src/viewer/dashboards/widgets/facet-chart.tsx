@@ -1,6 +1,7 @@
 import type { EChartsOption } from 'echarts';
 import { type JSX, useMemo } from 'react';
 import { OtelHtmlError } from '../../../model/errors.js';
+import type { TraceId } from '../../../model/ids.js';
 import { Chart } from '../../components/chart.js';
 import { ErrorCard, LoadingNote, PartialNote } from '../../components/explorer-states.js';
 import { type FacetSource, toplist } from '../../components/facet-views.js';
@@ -16,10 +17,11 @@ import { useTheme } from '../../theme/theme-provider.js';
 import { useSpanQuery } from '../../traces/use-span-query.js';
 import { cssTokenReader, resolveCssVars } from '../../traces/views.js';
 import type { WidgetRenderer } from '../dashboard-page.js';
-import { count, useSubtitle } from './subtitle.js';
+import type { WidgetScope } from '../scope.js';
+import { FRAME_CHROME_PX } from './layout.js';
+import { count, scopedCount, useSubtitle } from './subtitle.js';
 
-/** Card header, padding and border around the body; the partial and loading notes. */
-const FRAME_CHROME_PX = 52;
+/** The partial and loading notes. */
 const NOTE_PX = 24;
 const MIN_PX = 96;
 
@@ -41,7 +43,7 @@ interface Shared {
   height: number;
   noun: 'Spans' | 'Logs';
   actions: Parameters<WidgetRenderer>[0]['actions'];
-  narrowed: boolean;
+  scope: Pick<WidgetScope, 'narrowed' | 'traceFilter'>;
 }
 
 /** Only a finished result: facets of the previous inputs are never shown as if they were current. */
@@ -56,15 +58,11 @@ function FacetBody<R extends Facets>(props: Shared & { handle: QueryHandle<R> })
   const result = readyOf(handle);
   const { state } = handle;
   const unit = props.noun === 'Spans' ? 'span' : 'log';
-  useSubtitle(
-    props.actions,
-    result === null ? null : props.narrowed ? `${result.total} in selected time` : count(result.total, unit),
-  );
+  useSubtitle(props.actions, result === null ? null : scopedCount(result.total, unit, props.scope));
   const empty = result !== null && result.facets.total(groupBy) === 0;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: resolved re-reads the CSS colour tokens on a theme change
   const option = useMemo(() => {
     if (result === null || empty || props.widgetType !== 'toplist') return null;
-    // `resolved` re-reads the theme tokens when light/dark changes.
-    void resolved;
     const base = resolveCssVars(toplist(result, { groupBy, colors }), cssTokenReader());
     return props.echarts === null ? base : (mergeEchartsOption(base, props.echarts) as EChartsOption);
   }, [result, empty, props.widgetType, groupBy, colors, props.echarts, resolved]);
@@ -95,13 +93,32 @@ function FacetBody<R extends Facets>(props: Shared & { handle: QueryHandle<R> })
   );
 }
 
-function SpanFacets(props: Shared & { dataSource: DataSource; query: SpanQuery }): JSX.Element {
-  const { dataSource, query, ...rest } = props;
+/** What the query reads: the widget's text and the scope's condition, window and trace. */
+interface Filter {
+  condition: string | null;
+  text: string;
+  window: SpanQuery['window'];
+  traceId: TraceId | null;
+}
+
+// Only the facet counts are drawn, so no rows are read.
+function SpanFacets(props: Shared & { dataSource: DataSource; filter: Filter }): JSX.Element {
+  const { dataSource, filter, ...rest } = props;
+  const { condition, text, window } = filter;
+  const query = useMemo<SpanQuery>(
+    () => ({ ...queryOf(condition, text, window), mode: 'spans', sort: SORT.spans, groupBy: null }),
+    [condition, text, window],
+  );
   return <FacetBody {...rest} handle={useSpanQuery(dataSource, query)} />;
 }
 
-function LogFacets(props: Shared & { dataSource: DataSource; query: LogQuery }): JSX.Element {
-  const { dataSource, query, ...rest } = props;
+function LogFacets(props: Shared & { dataSource: DataSource; filter: Filter }): JSX.Element {
+  const { dataSource, filter, ...rest } = props;
+  const { condition, text, window, traceId } = filter;
+  const query = useMemo<LogQuery>(
+    () => ({ ...queryOf(condition, text, window), mode: 'logs', sort: SORT.logs, traceId }),
+    [condition, text, window, traceId],
+  );
   return <FacetBody {...rest} handle={useLogQuery(dataSource, query)} />;
 }
 
@@ -115,21 +132,12 @@ export const FacetChartWidget: WidgetRenderer = ({ widget, scope, height, dataSo
     });
   }
   const { text, signal } = widget;
-  const { condition } = scope;
-  // Only the facet counts are drawn, so no rows are read.
-  const spans = useMemo<SpanQuery>(
-    () => ({ ...queryOf(condition, text, scope.window), mode: 'spans', sort: SORT.spans, groupBy: null }),
-    [condition, scope.window, text],
-  );
-  const logs = useMemo<LogQuery>(
-    () => ({
-      ...queryOf(condition, text, scope.window),
-      mode: 'logs',
-      sort: SORT.logs,
-      traceId: scope.traceFilter,
-    }),
-    [condition, scope.window, scope.traceFilter, text],
-  );
+  const filter: Filter = {
+    condition: scope.condition,
+    text,
+    window: scope.window,
+    traceId: scope.traceFilter,
+  };
   const shared: Shared = {
     widgetType: widget.type,
     groupBy: widget.groupBy,
@@ -137,11 +145,11 @@ export const FacetChartWidget: WidgetRenderer = ({ widget, scope, height, dataSo
     height,
     noun: signal === 'spans' ? 'Spans' : 'Logs',
     actions,
-    narrowed: scope.narrowed,
+    scope,
   };
   return signal === 'spans' ? (
-    <SpanFacets {...shared} dataSource={dataSource} query={spans} />
+    <SpanFacets {...shared} dataSource={dataSource} filter={filter} />
   ) : (
-    <LogFacets {...shared} dataSource={dataSource} query={logs} />
+    <LogFacets {...shared} dataSource={dataSource} filter={filter} />
   );
 };

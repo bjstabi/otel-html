@@ -4,11 +4,10 @@ import { OtelHtmlError } from '../../../model/errors.js';
 import type { TraceId } from '../../../model/ids.js';
 import type { ResourceRecord } from '../../../model/records.js';
 import type { MetricPageState } from '../../../query/metric-query.js';
-import type { MetricCatalog } from '../../../rollups/metric-catalog.js';
 import { ErrorCard, LoadingNote } from '../../components/explorer-states.js';
 import { type ChartPick, MetricChartCard } from '../../components/metric-chart-card.js';
 import { METRIC_CHART_HEIGHT, type MetricSize } from '../../components/metric-chart-option.js';
-import type { DataSource } from '../../data/data-source.js';
+import { catalogOf, type DataSource } from '../../data/data-source.js';
 import { type MetricQuery, resolveMetric } from '../../data/metric-query.js';
 import type { TimeWindow } from '../../data/span-query.js';
 import { exemplarTraceLookup, openChartPick } from '../../metrics/chart-pick.js';
@@ -20,10 +19,9 @@ import { useKeyedAsync } from '../../state/use-keyed-async.js';
 import { traceResources } from '../../traces/trace-tabs.js';
 import type { WidgetRenderer } from '../dashboard-page.js';
 import { resourcesMatching, variableCondition } from '../scope.js';
+import { FRAME_CHROME_PX } from './layout.js';
 import { useSubtitle } from './subtitle.js';
 
-/** Card header, padding and border around the body. */
-const FRAME_CHROME_PX = 52;
 /** A chart card's own title, subtitle and padding, around its chart. */
 const CARD_CHROME_PX = 60;
 const FALLBACK_WINDOW: TimeWindow = { start: 0, end: 1 };
@@ -33,7 +31,13 @@ export type Narrowing =
   | { status: 'off' }
   | { status: 'loading' }
   | { status: 'error'; message: string }
-  | { status: 'ready'; resources: readonly ResourceRecord[]; where: string | null };
+  | {
+      status: 'ready';
+      resources: readonly ResourceRecord[];
+      where: string | null;
+      /** Other resources the `where` also matches (they differ only in attributes a filter cannot compare). */
+      unexcluded: number;
+    };
 
 const OFF: Narrowing = { status: 'off' };
 
@@ -43,10 +47,13 @@ const OFF: Narrowing = { status: 'off' };
  */
 export function useNarrowing(dataSource: DataSource, traceId: TraceId | null): Narrowing {
   const load = useCallback(
-    async (id: TraceId): Promise<{ resources: readonly ResourceRecord[]; where: string | null }> => {
+    async (
+      id: TraceId,
+    ): Promise<{ resources: readonly ResourceRecord[]; where: string | null; unexcluded: number }> => {
       const [detail, catalog] = await Promise.all([dataSource.getTrace(id), dataSource.metricCatalog()]);
       const resources = traceResources(detail);
-      return { resources, where: explorerFilter(resources, catalog.resources()).where };
+      const { where, unexcluded } = explorerFilter(resources, catalog.resources());
+      return { resources, where, unexcluded };
     },
     [dataSource],
   );
@@ -76,8 +83,6 @@ export function effectiveQueries(
   return queries.map((q) => ({ ...q, where: effectiveWhere(q, variables, resourceFilter) }));
 }
 
-const loadCatalog = (ds: DataSource): Promise<MetricCatalog> => ds.metricCatalog();
-
 function sizeFor(heightPx: number): MetricSize {
   const room = heightPx - FRAME_CHROME_PX;
   if (room >= METRIC_CHART_HEIGHT.L + CARD_CHROME_PX) return 'L';
@@ -103,7 +108,7 @@ const QueriesBody: Body = ({ widget, scope, height, dataSource, actions, variabl
   const { queries: own, formulas, display, scale, exemplars, echarts } = widget;
   const goTo = useGoTo();
   const narrowing = useNarrowing(dataSource, scope.highlightTrace);
-  const catalog = useKeyedAsync(dataSource, loadCatalog);
+  const catalog = useKeyedAsync(dataSource, catalogOf);
   const run = dataSource.manifest.range;
   const win = scope.window ?? run ?? FALLBACK_WINDOW;
   const [actionError, setActionError] = useState<string | null>(null);
@@ -155,8 +160,11 @@ const QueriesBody: Body = ({ widget, scope, height, dataSource, actions, variabl
   if (catalog.status === 'loading' || narrowing.status === 'loading' || result.loading) {
     return <LoadingNote progress={null} />;
   }
-  if (missingNames.length === queries.length) {
-    return <Empty title="Not in this report" message={`${missingNames.join(', ')} is not in this report`} />;
+  if (missing.size === queries.length) {
+    const verb = missingNames.length === 1 ? 'is' : 'are';
+    return (
+      <Empty title="Not in this report" message={`${missingNames.join(', ')} ${verb} not in this report`} />
+    );
   }
   const failures = [...result.errors].filter(([id]) => !missing.has(id));
   const noData = plots.length > 0 && plots.every((p) => p.result.series.length === 0);
@@ -177,6 +185,7 @@ const QueriesBody: Body = ({ widget, scope, height, dataSource, actions, variabl
 
   return (
     <div className="flex flex-col gap-2" style={{ maxHeight: height - FRAME_CHROME_PX, overflowY: 'auto' }}>
+      {narrowing.status === 'ready' && <NarrowingNote narrowing={narrowing} />}
       {missingNames.map((name) => (
         <p key={name} role="note" className="text-xs text-muted">
           {name} is not in this report
@@ -213,10 +222,30 @@ const QueriesBody: Body = ({ widget, scope, height, dataSource, actions, variabl
   );
 };
 
+/** What the trace's resources could not narrow: never a silently wider answer (spec §6.2). */
+function NarrowingNote(props: { narrowing: Extract<Narrowing, { status: 'ready' }> }): JSX.Element | null {
+  const { resources, where, unexcluded } = props.narrowing;
+  if (resources.length > 0 && where === null) {
+    return (
+      <p role="note" className="text-xs text-muted">
+        The selected trace's resources have no attribute a filter can compare, so the charts show every
+        resource.
+      </p>
+    );
+  }
+  if (unexcluded === 0) return null;
+  return (
+    <p role="note" className="text-xs text-muted">
+      The charts also include {unexcluded} other {unexcluded === 1 ? 'resource' : 'resources'} that differ
+      from the trace's only in attributes a filter cannot compare.
+    </p>
+  );
+}
+
 /** Fusion's Metrics widget: the metric grid of the selected trace's resources, else of every resource. */
 const GridBody: Body = ({ scope, height, dataSource, actions, variables }) => {
   const narrowing = useNarrowing(dataSource, scope.highlightTrace);
-  const catalog = useKeyedAsync(dataSource, loadCatalog);
+  const catalog = useKeyedAsync(dataSource, catalogOf);
   const run = dataSource.manifest.range;
   const start = scope.window?.start ?? run?.start;
   const end = scope.window?.end ?? run?.end;
@@ -258,6 +287,7 @@ const GridBody: Body = ({ scope, height, dataSource, actions, variables }) => {
         origin={origin}
         band={scope.band}
         onSelectTrace={actions.selectTrace}
+        onZoom={actions.selectWindow}
       />
     </div>
   );

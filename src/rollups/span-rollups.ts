@@ -78,6 +78,12 @@ export const DEFAULT_SPAN_FACETS: readonly CoreFacet[] = [
 ];
 
 const CORE_KEYS: ReadonlySet<string> = new Set(DEFAULT_SPAN_FACETS.map((f) => f.key));
+/** Default facets whose values are resource attributes (span attributes of these names are not faceted). */
+export const SPAN_RESOURCE_FACET_KEYS: ReadonlySet<string> = new Set([
+  ATTR_SERVICE_NAME,
+  ATTR_HOST_NAME,
+  ATTR_DEPLOYMENT_ENVIRONMENT_NAME,
+]);
 const DURATION_KEY_SEP = '\u0000';
 
 export interface SpanRollupOptions {

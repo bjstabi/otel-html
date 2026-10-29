@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { parse } from 'yaml';
 import { DashboardSchema, type WidgetInput } from '../../src/dashboards/schema.js';
+import { widgetToYaml } from '../../src/viewer/dashboards/copy-config.js';
 import { COPYABLE_VIEWS, widgetFromPage } from '../../src/viewer/dashboards/copy-widget.js';
 import { defaultMetricState } from '../../src/viewer/state/metric-state.js';
 import { createSelectionStore } from '../../src/viewer/state/selection.js';
@@ -104,7 +105,25 @@ describe('widgetFromPage', () => {
       );
       expect(w.type).toBe(c.type);
       parses(w);
+      expect(parse(widgetToYaml(w))).toEqual({ widgets: [w] });
     }
-    expect(parse('widgets:\n  - type: logs\n')).toBeTruthy();
+  });
+
+  test('a split metric chart and logs grouped into traces say why not', () => {
+    const seed = defaultMetricState(null);
+    const queries = seed.queries.map((q) => ({ ...q, metric: 'http.server.requests', show: 'rate' }));
+    expect(widgetFromPage('metrics', { ...data({}), metrics: { ...seed, queries, split: true } })).toEqual({
+      ok: false,
+      reason: "A split chart can't become a widget yet",
+    });
+    expect(widgetFromPage('logs', data({ mode: 'traces', view: 'list' }))).toEqual({
+      ok: false,
+      reason: "Logs grouped into traces can't become a widget yet",
+    });
+  });
+
+  test('a Logs top list without a group uses the explorer default', () => {
+    const w = widgetOf(widgetFromPage('logs', data({ view: 'toplist' })));
+    expect(w).toMatchObject({ type: 'toplist', signal: 'logs', groupBy: 'service.name' });
   });
 });

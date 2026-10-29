@@ -23,6 +23,11 @@ export interface MetricQuery {
   hidden: boolean;
 }
 
+/** What `MetricQuerySchema` accepts: `id`, `metric` and `show`, and any of the rest. */
+export type MetricQueryInput = Pick<MetricQuery, 'id' | 'metric' | 'show'> & {
+  [K in Exclude<keyof MetricQuery, 'id' | 'metric' | 'show'>]?: MetricQuery[K] | undefined;
+};
+
 export const MAX_METRIC_QUERIES = 10;
 
 export const METRIC_DISPLAYS = ['lines', 'area', 'bars', 'heatmap', 'distribution'] as const;
@@ -59,7 +64,7 @@ const MetricFnSchema = z.discriminatedUnion('op', [
  * Only `id`, `metric` and `show` are required; the rest default so a hand-written URL stays short. An empty
  * `metric` and `show` mean "not chosen yet" (a query seeded by carry-over); the Explorer asks for them.
  */
-export const MetricQuerySchema: z.ZodType<MetricQuery> = z
+export const MetricQuerySchema: z.ZodType<MetricQuery, MetricQueryInput> = z
   .object({
     id: z.string().regex(/^[a-z]$/, 'a query id of one letter a-z'),
     metric: z.string(),

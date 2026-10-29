@@ -107,6 +107,26 @@ describe('manifest', () => {
     expect(e.code).toBe('invalid-report');
     expect(e.path).toBe('manifest.config.viewer.defaultDashboard');
   });
+  test('repeated or reserved dashboard ids are invalid-report at the id', () => {
+    const m = manifest();
+    const ops = dashboardOf([widgetAt(0, 6)]) as { source: string; dashboard: object };
+    const fusion = { ...ops, dashboard: { ...ops.dashboard, id: 'fusion' } };
+    for (const [dashboards, path] of [
+      [[ops, ops], 'manifest.config.dashboards[1].dashboard.id'],
+      [[fusion], 'manifest.config.dashboards[0].dashboard.id'],
+    ] as const) {
+      const e = failure(() => parseManifest({ ...m, config: { ...m.config, dashboards } }));
+      expect(e.code).toBe('invalid-report');
+      expect(e.path).toBe(path);
+    }
+  });
+  test('repeated view ids are invalid-report at the id', () => {
+    const m = manifest();
+    const view = { id: 'v', title: 'V', page: 'traces' };
+    const e = failure(() => parseManifest({ ...m, config: { ...m.config, views: [view, view] } }));
+    expect(e.code).toBe('invalid-report');
+    expect(e.path).toBe('manifest.config.views[1].id');
+  });
   test('a valid dashboard round-trips and can be the default', () => {
     const m = manifest();
     const viewer = { ...m.config.viewer, defaultDashboard: 'ops' };

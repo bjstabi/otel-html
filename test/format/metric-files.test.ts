@@ -4,7 +4,6 @@ import {
   deriveLevels,
   EXEMPLAR_WIDTH_NS,
   encodeExemplarFile,
-  encodeLevelFile,
   encodeSegmentFile,
   encodeSeriesFile,
   LEVEL_MAX_BUCKETS,
@@ -184,7 +183,7 @@ describe('payloads', () => {
     };
     expect(parseSegmentFile(roundTrip('k', encodeSegmentFile(seg)), 'seg')).toEqual(seg);
     const level = { metric: 3, level: 2, widthNs: LEVEL0_WIDTH_NS * 64, series: seg.series };
-    expect(parseLevelFile(roundTrip('k', encodeLevelFile(level)), 'l2')).toEqual(level);
+    expect(parseLevelFile(roundTrip('k', level), 'l2')).toEqual(level);
     const exf = { metric: 3, exemplars: [exemplar] };
     expect(parseExemplarFile(roundTrip('k', encodeExemplarFile(exf)), 'ex')).toEqual(exf);
   });

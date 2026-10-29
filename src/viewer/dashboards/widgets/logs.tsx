@@ -1,7 +1,7 @@
 import { type JSX, useMemo, useState } from 'react';
 import { andConditions } from '../../../dashboards/conditions.js';
 import { OtelHtmlError } from '../../../model/errors.js';
-import { parseUnixNanos, type TraceId } from '../../../model/ids.js';
+import type { TraceId } from '../../../model/ids.js';
 import { ErrorCard, LoadingNote, NoMatch, PartialNote } from '../../components/explorer-states.js';
 import { LogList } from '../../components/log-list.js';
 import type { SortState } from '../../components/results-table.js';
@@ -12,10 +12,10 @@ import { useSelection, useSelectionStore } from '../../state/selection-context.j
 import type { QueryHandle } from '../../state/use-query.js';
 import type { WidgetRenderer } from '../dashboard-page.js';
 import { variableCondition } from '../scope.js';
-import { count, useSubtitle } from './subtitle.js';
+import { FRAME_CHROME_PX, useEpoch } from './layout.js';
+import { scopedCount, useSubtitle } from './subtitle.js';
 
-/** Card header, padding and border, then the view toggle and the list's own control row. */
-const FRAME_CHROME_PX = 52;
+/** The view toggle and the list's own control row, under the frame's chrome. */
 const TOGGLE_PX = 32;
 const LIST_CONTROLS_PX = 36;
 const TABLE_HEADER_PX = 40;
@@ -92,10 +92,7 @@ function ListBody(props: {
   const { dataSource, handle, shown } = props;
   const store = useSelectionStore();
   const logRef = useSelection((s) => s.logRef);
-  const epoch = useMemo(
-    () => parseUnixNanos(dataSource.manifest.epochUnixNano, 'manifest.epochUnixNano'),
-    [dataSource],
-  );
+  const epoch = useEpoch(dataSource);
   const { state } = handle;
   return (
     <div className="flex flex-col gap-1">
@@ -104,7 +101,7 @@ function ListBody(props: {
       {state.status === 'error' && <ErrorCard title="The query could not run" message={state.message} />}
       {shown !== null &&
         (shown.total === 0 ? (
-          <NoMatch noun="logs" />
+          <NoMatch noun="logs" heading="h3" />
         ) : (
           <LogList
             rows={shown.rows}
@@ -135,6 +132,9 @@ function ContextView(props: {
 }): JSX.Element {
   const handle = useLogQuery(props.dataSource, props.context);
   const { matched } = props;
+  // The first ROWS matches are enough: both lists share the sort, so the matches among the first ROWS logs are the
+  // first ones of the matches. A partial scan does not break that: the context list fills its rows from no more
+  // chunks than the (sparser) matches needed.
   const highlighted = useMemo(
     () => (matched === null ? undefined : new Set<string>(matched.rows.map((r) => r.ref))),
     [matched],
@@ -179,16 +179,7 @@ export const LogsWidget: WidgetRenderer = ({
   );
   const handle = useLogQuery(dataSource, matches);
   const matched = logsOf(handle);
-  useSubtitle(
-    actions,
-    matched === null
-      ? null
-      : scope.traceFilter !== null
-        ? `${matched.total} for the selected trace`
-        : scope.narrowed
-          ? `${matched.total} in selected time`
-          : count(matched.total, 'log'),
-  );
+  useSubtitle(actions, matched === null ? null : scopedCount(matched.total, 'log', scope));
   const listPx =
     Math.max(MIN_PX, height - FRAME_CHROME_PX - TOGGLE_PX - LIST_CONTROLS_PX - NOTE_PX) - TABLE_HEADER_PX;
   const list = { dataSource, sort, onSort: setSort, height: Math.max(48, listPx) };

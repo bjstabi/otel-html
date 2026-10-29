@@ -28,7 +28,7 @@ import { ResultsTable, type SortState } from '../components/results-table.js';
 import { copyWidgetItem } from '../dashboards/copy-widget.js';
 import type { DataSource, SpanQuery, SpanRow, TraceRow } from '../data/data-source.js';
 import { useGoTo } from '../shell/go-to.js';
-import { PageChrome, useClipboardCopy } from '../shell/page-chrome.js';
+import { PageChrome, useWidgetCopy } from '../shell/page-chrome.js';
 import { PageOptionNotice } from '../shell/page-option-notice.js';
 import {
   PAGE_OPTIONS,
@@ -102,7 +102,7 @@ export function TracesExplorer(props: { dataSource: DataSource }): JSX.Element {
   const { manifest } = props.dataSource;
   if (manifest.totals.spans === 0) {
     return (
-      <PageChrome title="Traces Explorer" signal="span" manifest={manifest}>
+      <PageChrome title="Traces Explorer" signal="span" manifest={manifest} page="traces">
         <ZeroSpans manifest={manifest} />
       </PageChrome>
     );
@@ -193,7 +193,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
     }
   };
 
-  const widgetCopy = useClipboardCopy({ title: 'Copy as dashboard widget', label: 'Widget YAML' });
+  const widgetCopy = useWidgetCopy();
   const exportItems = [
     { label: 'Export CSV', onSelect: () => void runExport('csv') },
     { label: 'Export JSON', onSelect: () => void runExport('json') },

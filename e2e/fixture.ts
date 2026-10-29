@@ -167,12 +167,32 @@ export const SCALE_LOG_IDS: ScaleLogIds = {
 
 /** Perf budgets are scaled by `OTEL_HTML_PERF_FACTOR` (slow machines, CI); the constants themselves stay fixed. */
 const PERF_ENV = 'OTEL_HTML_PERF_FACTOR';
-export function perfFactor(): number {
-  const raw = process.env[PERF_ENV];
-  if (raw === undefined || raw === '') return 1;
+/**
+ * The calibration workload's time on a typical machine of this kind (CI sets it for its runners). When set, a runner
+ * slower than that scales the budgets by how much slower it is (never below 1), so runner speed variance does not
+ * fail them; without it the factor is `OTEL_HTML_PERF_FACTOR` alone.
+ */
+export const PERF_REFERENCE_ENV = 'OTEL_HTML_PERF_REFERENCE_MS';
+/** This run's calibration time in ms, measured once by the global setup (`e2e/calibrate.ts`). */
+export const PERF_CALIBRATION_ENV = 'OTEL_HTML_PERF_CALIBRATION_MS';
+
+function positiveEnv(name: string): number | null {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '') return null;
   const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) throw new Error(`${PERF_ENV} must be a positive number, got ${raw}`);
+  if (!Number.isFinite(n) || n <= 0) throw new Error(`${name} must be a positive number, got ${raw}`);
   return n;
+}
+
+/** How much slower this runner is than the reference (at least 1), or 1 without a reference or a calibration. */
+export function runnerFactor(): number {
+  const reference = positiveEnv(PERF_REFERENCE_ENV);
+  const measured = positiveEnv(PERF_CALIBRATION_ENV);
+  return reference === null || measured === null ? 1 : Math.max(1, measured / reference);
+}
+
+export function perfFactor(): number {
+  return Math.round((positiveEnv(PERF_ENV) ?? 1) * runnerFactor() * 100) / 100;
 }
 
 export type UrlKind = 'file' | 'http';

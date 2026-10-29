@@ -382,6 +382,9 @@ describe('j/k ownership', () => {
     );
     return store;
   }
+  /** The header row renders before the results land; j/k only moves once the data rows are there. */
+  const dataRows = (): Promise<void> =>
+    waitFor(() => expect(screen.getAllByRole('row')).toHaveLength(1 + ids.length));
   const press = (delta: 1 | -1): void => {
     act(() => {
       window.dispatchEvent(new CustomEvent(MOVE_EVENT, { detail: delta }));
@@ -390,7 +393,7 @@ describe('j/k ownership', () => {
 
   test('with the panel closed the table moves; with it open the panel owns the key and exactly one consumer acts', async () => {
     const store = setup();
-    await screen.findAllByRole('row');
+    await dataRows();
     press(1);
     expect(store.getState().traceId).toBe(ids[0]);
     await screen.findByTestId('trace-panel');
@@ -410,7 +413,7 @@ describe('j/k ownership', () => {
 
   test('two presses before a re-render move two traces (the open trace is read at event time)', async () => {
     const store = setup();
-    await screen.findAllByRole('row');
+    await dataRows();
     press(1);
     await screen.findByTestId('trace-panel');
     act(() => {

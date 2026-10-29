@@ -1,4 +1,4 @@
-import { Document, Scalar, stringify, YAMLSeq } from 'yaml';
+import { Document, Scalar, stringify, YAMLMap, YAMLSeq } from 'yaml';
 import { OtelHtmlError } from '../model/errors.js';
 import { ENV_BINDINGS } from './env.js';
 import { type ConfigInput, ConfigSchema, type ResolvedConfig } from './schema.js';
@@ -121,11 +121,9 @@ export function resolveConfig(layers: ResolveLayers): ResolveResult {
     throw new OtelHtmlError('invalid-config', { message: lines.join('\n') });
   }
 
-  const dashboardsFrom = origin.get('dashboards');
-  const label = dashboardsFrom === 'file' ? (layers.fileLabel ?? 'config file') : 'library API';
-  if (dashboardsFrom === 'file' || dashboardsFrom === 'flag') {
-    for (const d of parsed.data.dashboards) d.source = label;
-  }
+  // The one place a dashboard's source is named: the file (by its label), else the library API's flags.
+  const label = origin.get('dashboards') === 'file' ? (layers.fileLabel ?? 'config file') : 'library API';
+  for (const d of parsed.data.dashboards) d.source = label;
 
   const sources = new Map<string, ConfigSource>();
   const all = new Map<string, unknown>();
@@ -136,7 +134,17 @@ export function resolveConfig(layers: ResolveLayers): ResolveResult {
 
 /** Renders the resolved config as YAML, each leaf annotated with `# from: <source>`. */
 export function formatConfig(resolved: ResolveResult): string {
-  const doc = new Document(resolved.config);
+  // Dashboards print as they are written (`{ id, title, widgets }`), each with a `# source:` comment, not as their
+  // resolved `{ source, dashboard }`.
+  const { config } = resolved;
+  const doc = new Document({ ...config, dashboards: config.dashboards.map((d) => d.dashboard) });
+  const dashboards = doc.get('dashboards');
+  if (dashboards instanceof YAMLSeq) {
+    dashboards.items.forEach((item, i) => {
+      const source = config.dashboards[i]?.source;
+      if (item instanceof YAMLMap && source !== undefined) item.commentBefore = ` source: ${source}`;
+    });
+  }
   const annotate = (node: unknown, path: string): void => {
     if (node instanceof Scalar || node instanceof YAMLSeq) {
       node.comment = ` from: ${resolved.sources.get(path) ?? 'default'}`;

@@ -6,6 +6,7 @@ import type { Manifest } from '../../format/manifest.js';
 import type { ExplorerPage } from '../../query/pages.js';
 import type { FacetSignal } from '../components/filter-tokens.js';
 import { QueryBar } from '../components/query-bar.js';
+import { CONTROL, POPUP } from './controls.js';
 import { TimeRange } from './time-range.js';
 import { ViewsMenu } from './views-menu.js';
 
@@ -15,10 +16,6 @@ export interface ExportItem {
   /** Why the item is unavailable; the item is then disabled and shows this as its description. */
   disabled?: string;
 }
-
-export const CONTROL =
-  'flex items-center gap-1.5 rounded-full border border-hairline bg-surface px-3 py-1.5 text-sm text-ink hover:bg-hairline';
-export const POPUP = 'rounded-card border border-hairline bg-surface p-1 shadow-lg';
 
 /** The clipboard fallback: the text in a read-only, pre-selected box (a link, a YAML document) to copy by hand. */
 export function CopyTextDialog(props: {
@@ -60,14 +57,21 @@ export function CopyTextDialog(props: {
 }
 
 /**
- * Copies text to the clipboard. Without a clipboard (or when it refuses) `dialog` is the `CopyTextDialog` to render
- * so the text can be copied by hand; otherwise it is null.
+ * Copies text to the clipboard; `copied` is true for two seconds after a copy succeeds. Without a clipboard (or when
+ * it refuses) `dialog` is the `CopyTextDialog` to render so the text can be copied by hand; otherwise it is null.
  */
 export function useClipboardCopy(dialogText: { title: string; label: string }): {
   copy: (text: string) => Promise<boolean>;
+  copied: boolean;
   dialog: JSX.Element | null;
 } {
   const [fallback, setFallback] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const t = window.setTimeout(() => setCopied(false), 2000);
+    return () => window.clearTimeout(t);
+  }, [copied]);
   const copy = async (text: string): Promise<boolean> => {
     const clipboard: Clipboard | undefined = navigator.clipboard;
     if (clipboard === undefined) {
@@ -76,6 +80,7 @@ export function useClipboardCopy(dialogText: { title: string; label: string }): 
     }
     try {
       await clipboard.writeText(text);
+      setCopied(true);
       return true;
     } catch {
       setFallback(text);
@@ -91,7 +96,36 @@ export function useClipboardCopy(dialogText: { title: string; label: string }): 
         onClose={() => setFallback(null)}
       />
     );
-  return { copy, dialog };
+  return { copy, copied, dialog };
+}
+
+/**
+ * Copy as dashboard widget: the clipboard copy, and `dialog` to render, which holds the fallback dialog and the
+ * "Widget YAML copied" note (the Export menu that ran the copy has closed by then).
+ */
+export function useWidgetCopy(): { copy: (text: string) => Promise<boolean>; dialog: JSX.Element } {
+  const { copy, copied, dialog } = useClipboardCopy({
+    title: 'Copy as dashboard widget',
+    label: 'Widget YAML',
+  });
+  return {
+    copy,
+    dialog: (
+      <>
+        {dialog}
+        <span
+          role="status"
+          className={
+            copied
+              ? 'fixed bottom-4 right-4 z-50 rounded-card border border-hairline bg-surface px-3 py-2 text-sm text-ink shadow-lg'
+              : 'sr-only'
+          }
+        >
+          {copied ? 'Widget YAML copied' : ''}
+        </span>
+      </>
+    ),
+  };
 }
 
 /** A button that copies `text()` and says "Copied"; without a clipboard (or when it refuses) it opens `CopyTextDialog`. */
@@ -103,20 +137,10 @@ export function CopyButton(props: {
   dialog: { title: string; label: string };
   className?: string;
 }): JSX.Element {
-  const { copy, dialog } = useClipboardCopy(props.dialog);
-  const [copied, setCopied] = useState(false);
-  useEffect(() => {
-    if (!copied) return;
-    const t = window.setTimeout(() => setCopied(false), 2000);
-    return () => window.clearTimeout(t);
-  }, [copied]);
+  const { copy, copied, dialog } = useClipboardCopy(props.dialog);
   return (
     <>
-      <button
-        type="button"
-        className={props.className ?? CONTROL}
-        onClick={() => void copy(props.text()).then((ok) => setCopied(ok))}
-      >
+      <button type="button" className={props.className ?? CONTROL} onClick={() => void copy(props.text())}>
         {props.icon}
         <span>{props.label}</span>
         <span role="status" className={copied ? 'text-xs text-accent' : 'sr-only'}>

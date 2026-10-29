@@ -265,6 +265,30 @@ describe('mergeReports', () => {
     expect(metricCatalogOf(w, 'one').entries()[0]).toMatchObject({ resets: 1, points: 4 });
   });
 
+  test('overlapping shards of one cumulative series: each restart counts once, the totals are unchanged (#15)', async () => {
+    const w = createTestWriter();
+    // Parallel shards without an instance id: A runs 10..100 s; B runs 20..90 s and restarts at 60 s, inside A's range.
+    const a = cumulativeRequest('c', [
+      [10, 5, 0],
+      [100, 50, 0],
+    ]);
+    const b = cumulativeRequest('c', [
+      [20, 4, 5],
+      [50, 9, 5],
+      [70, 2, 60],
+      [90, 6, 60],
+    ]);
+    await writeReport(w, 'a', [a]);
+    await writeReport(w, 'b', [b]);
+    await merge(w, ['a', 'b']);
+    const s = levelsOf(w, 'out', 0)[0]?.series[0];
+    const counters = (s?.a ?? []).flatMap((x) => (x.k === 'counter' ? [x] : []));
+    // A counts 50, B 9 before its restart and 6 after: 65 in all, and B's restart is its one reset.
+    expect(counters.reduce((sum, x) => sum + x.delta, 0)).toBe(65);
+    expect(counters.reduce((sum, x) => sum + x.resets, 0)).toBe(1);
+    expect(metricCatalogOf(w, 'out').entries()[0]).toMatchObject({ resets: 1, points: 6 });
+  });
+
   test('rejects an unsupported formatVersion precisely', async () => {
     const w = createTestWriter();
     await writeReport(w, 'a', [spansRequest(1)]);

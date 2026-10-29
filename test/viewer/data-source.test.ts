@@ -2,8 +2,11 @@ import { beforeAll, describe, expect, test } from 'vitest';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import type { TraceId } from '../../src/model/ids.js';
 import type { ResourceRecord } from '../../src/model/records.js';
+import { FacetCounts } from '../../src/rollups/facets.js';
+import type { MetricCatalog } from '../../src/rollups/metric-catalog.js';
 import {
   createDataSource,
+  resourceValuesOf,
   type SpanQuery,
   type SpanRow,
   type TraceRow,
@@ -14,6 +17,7 @@ import {
   buildEmbeddedMetricsReport,
   buildMetricReports,
   buildReport,
+  buildResourceValuesReport,
   buildSpreadReport,
   type Fixture,
   STEP_NS,
@@ -136,6 +140,17 @@ describe('eager strategy', () => {
     for (const s of t.spans)
       expect(t.resources(s.span.resource).attributes.get('service.name')).toMatchObject({ value: s.service });
     await expect(ds.getTrace(traceIdOf(99) as TraceId)).rejects.toBeInstanceOf(OtelHtmlError);
+  });
+
+  test('getTrace shares the load of the trace asked for last; a failed one is asked again', async () => {
+    const ds = await createDataSource(createScriptedLoader(six.files), six.manifest, SMALL);
+    const four = ds.getTrace(traceIdOf(4) as TraceId);
+    expect(ds.getTrace(traceIdOf(4) as TraceId)).toBe(four);
+    const missing = ds.getTrace(traceIdOf(99) as TraceId);
+    await expect(missing).rejects.toBeInstanceOf(OtelHtmlError);
+    expect(ds.getTrace(traceIdOf(99) as TraceId)).not.toBe(missing);
+    await expect(ds.getTrace(traceIdOf(99) as TraceId)).rejects.toBeInstanceOf(OtelHtmlError);
+    expect(ds.getTrace(traceIdOf(4) as TraceId)).not.toBe(four);
   });
 
   test('hasTrace answers from memory', async () => {
@@ -434,6 +449,33 @@ describe('resourceValues', () => {
       kind: 'string',
       capped: false,
     });
+  });
+
+  test('a span attribute that shares a resource key name is not offered as a resource value', async () => {
+    const rep = await buildResourceValuesReport();
+    const ds = await createDataSource(createScriptedLoader(rep.files), rep.manifest, SMALL);
+    expect(await ds.resourceValues('region')).toEqual({ values: ['eu'], kind: 'string', capped: false });
+  });
+
+  const KEYS = new Set(['host.name']);
+  const catalogOf = (resources: ResourceRecord[]): MetricCatalog =>
+    ({ resources: () => resources }) as unknown as MetricCatalog;
+
+  test('a facet past its value cap says capped, and keeps the values it holds', () => {
+    const f = new FacetCounts(2, 10);
+    for (const h of ['a', 'a', 'b', 'b', 'c']) f.add('host.name', h);
+    const r = resourceValuesOf('host.name', [{ facets: f, resourceKeys: KEYS }], catalogOf([]));
+    expect(r).toEqual({ values: ['a', 'b'], kind: 'string', capped: true });
+  });
+
+  test('kinds that disagree between signals and the catalog are mixed', () => {
+    const f = new FacetCounts(10, 10);
+    f.add('host.name', '7', 'int');
+    const resource: ResourceRecord = {
+      attributes: new Map([['host.name', { kind: 'string', value: 'web-1' }]]),
+    } as unknown as ResourceRecord;
+    const r = resourceValuesOf('host.name', [{ facets: f, resourceKeys: KEYS }], catalogOf([resource]));
+    expect(r).toEqual({ values: ['7', 'web-1'], kind: 'mixed', capped: false });
   });
 
   test('a key only the metric catalog knows is typed by its values; an unknown key is empty', async () => {

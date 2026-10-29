@@ -28,6 +28,8 @@ export function BrushOverlay(props: {
   const [range, setRange] = useState<ColumnRange | null>(null);
   const overlay = useRef<HTMLDivElement>(null);
   const press = useRef<{ x: number } | null>(null);
+  // Where the arrows start once the brush is committed or cleared: the keyboard cursor stays put.
+  const keyCursor = useRef(0);
   const last = Math.max(0, length - 1);
 
   const indexAt = (clientX: number): number => {
@@ -45,10 +47,11 @@ export function BrushOverlay(props: {
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>): void => {
     if (length === 0) return;
-    const cur = range?.cursor ?? 0;
+    const cur = Math.min(last, range?.cursor ?? keyCursor.current);
     if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
       e.preventDefault();
       const cursor = Math.min(last, Math.max(0, cur + (e.key === 'ArrowRight' ? 1 : -1)));
+      keyCursor.current = cursor;
       // Shift keeps the existing anchor and extends from it; a plain arrow moves a single-column brush.
       setRange({ anchor: e.shiftKey ? (range?.anchor ?? cur) : cursor, cursor });
     } else if (e.key === 'Enter' && range !== null) {
@@ -97,6 +100,7 @@ export function BrushOverlay(props: {
           return;
         }
         const r = { anchor: range.anchor, cursor: indexAt(e.clientX) };
+        keyCursor.current = r.cursor;
         setRange(clickClears ? null : r);
         onCommit(r);
       }}

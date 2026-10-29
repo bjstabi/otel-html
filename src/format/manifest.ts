@@ -1,6 +1,12 @@
 import { z } from 'zod';
 import type { ResolvedConfig, ResolvedDashboard } from '../config/schema.js';
-import { DashboardSchema, type View, ViewSchema } from '../dashboards/schema.js';
+import {
+  DashboardSchema,
+  listIssues,
+  RESERVED_DASHBOARD_IDS,
+  type View,
+  ViewListSchema,
+} from '../dashboards/schema.js';
 import { METRIC_FILE_PATH } from './metric-files.js';
 import { chunkPath, SIGNALS, type Signal } from './paths.js';
 import { parseWith } from './validate.js';
@@ -80,10 +86,16 @@ export const ManifestSchema: z.ZodType<Manifest> = z
         home: z.enum(['traces', 'logs', 'metrics', 'dashboards']).default('traces'),
       }),
       dashboards: z.array(z.strictObject({ source: z.string(), dashboard: DashboardSchema })).default([]),
-      views: z.array(ViewSchema).default([]),
+      views: ViewListSchema.default([]),
     }),
   })
   .superRefine((m, ctx) => {
+    listIssues(
+      m.config.dashboards.map((d) => d.dashboard.id),
+      RESERVED_DASHBOARD_IDS,
+      ctx,
+      (i) => ['config', 'dashboards', i, 'dashboard', 'id'],
+    );
     const def = m.config.viewer.defaultDashboard;
     if (def !== 'fusion' && !m.config.dashboards.some((d) => d.dashboard.id === def)) {
       ctx.addIssue({

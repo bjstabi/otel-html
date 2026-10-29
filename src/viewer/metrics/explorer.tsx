@@ -1,16 +1,16 @@
 import { type JSX, useCallback, useEffect, useMemo, useState } from 'react';
 import type { Manifest } from '../../format/manifest.js';
 import { MAX_METRIC_QUERIES, type MetricPageState } from '../../query/metric-query.js';
-import type { MetricCatalog, MetricEntry } from '../../rollups/metric-catalog.js';
+import type { MetricEntry } from '../../rollups/metric-catalog.js';
 import { ErrorCard, LoadingNote, PILL } from '../components/explorer-states.js';
 import { downloadBlob } from '../components/export.js';
 import { type ChartPick, MetricChartCard } from '../components/metric-chart-card.js';
 import { copyWidgetItem } from '../dashboards/copy-widget.js';
-import type { DataSource } from '../data/data-source.js';
+import { catalogOf, type DataSource } from '../data/data-source.js';
 import { defaultShow, kindOf, type MetricQuery, resolveMetric, SHOW_BY_KIND } from '../data/metric-query.js';
 import type { TimeWindow } from '../data/span-query.js';
 import { useGoTo } from '../shell/go-to.js';
-import { PageChrome, useClipboardCopy } from '../shell/page-chrome.js';
+import { PageChrome, useWidgetCopy } from '../shell/page-chrome.js';
 import { defaultMetricState } from '../state/metric-state.js';
 import { useSelection, useSelectionStore } from '../state/selection-context.js';
 import { useKeyedAsync } from '../state/use-keyed-async.js';
@@ -26,8 +26,6 @@ import { useMetricQueries } from './use-metric-query.js';
 const QUERY_IDS = 'abcdefghijklmnopqrstuvwxyz'.split('');
 /** Card widths are measured in steps of this many px, so a resize re-runs the queries only now and then. */
 const WIDTH_STEP_PX = 100;
-
-const loadCatalog = (ds: DataSource): Promise<MetricCatalog> => ds.metricCatalog();
 
 function seriesToken(index: number): string {
   return index >= OTHER_INDEX ? '--oh-series-other' : `--oh-series-${index + 1}`;
@@ -50,7 +48,7 @@ export function MetricsExplorer(props: { dataSource: DataSource }): JSX.Element 
   const { manifest } = props.dataSource;
   if (manifest.totals.metrics === 0 || manifest.range === null) {
     return (
-      <PageChrome title="Metrics" manifest={manifest}>
+      <PageChrome title="Metrics" manifest={manifest} page="metrics">
         <ZeroMetrics manifest={manifest} />
       </PageChrome>
     );
@@ -67,7 +65,7 @@ function ExplorerBody(props: { dataSource: DataSource; range: TimeWindow }): JSX
   const colors = useColorAssigner();
   const timeWindow = sel.window ?? props.range;
   const state = useMemo(() => sel.metrics ?? defaultMetricState(null), [sel.metrics]);
-  const catalogState = useKeyedAsync(dataSource, loadCatalog);
+  const catalogState = useKeyedAsync(dataSource, catalogOf);
   const catalog = catalogState.status === 'ready' ? catalogState.value : null;
   const entries = useMemo(() => catalog?.entries() ?? [], [catalog]);
   const [widthPx, setWidthPx] = useState<number | null>(null);
@@ -165,7 +163,7 @@ function ExplorerBody(props: { dataSource: DataSource; range: TimeWindow }): JSX
       fail('The export failed', e);
     }
   };
-  const widgetCopy = useClipboardCopy({ title: 'Copy as dashboard widget', label: 'Widget YAML' });
+  const widgetCopy = useWidgetCopy();
   const exportItems = [
     { label: 'Export CSV', onSelect: () => runExport('csv') },
     { label: 'Export JSON', onSelect: () => runExport('json') },

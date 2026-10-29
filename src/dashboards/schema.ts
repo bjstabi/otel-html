@@ -10,6 +10,7 @@ import {
   type MetricPageState,
   MetricPageStateSchema,
   type MetricQuery,
+  type MetricQueryInput,
   MetricQuerySchema,
 } from '../query/metric-query.js';
 import { PAGE_OPTIONS } from '../query/pages.js';
@@ -116,7 +117,7 @@ export type WidgetInput =
     })
   | (FollowableInput & {
       type: 'metric';
-      queries?: unknown[] | null | undefined;
+      queries?: MetricQueryInput[] | null | undefined;
       formulas?: unknown[] | undefined;
       display?: 'lines' | 'area' | 'bars' | 'heatmap' | undefined;
       scale?: 'linear' | 'log' | undefined;
@@ -216,10 +217,12 @@ const signalBase = {
   text: z.string().default(''),
 };
 
-const MetricWidgetQuerySchema: z.ZodType<MetricQuery> = MetricQuerySchema.superRefine((q, ctx) => {
-  if (q.metric === '') ctx.addIssue({ code: 'custom', path: ['metric'], message: 'a metric name' });
-  if (q.show === '') ctx.addIssue({ code: 'custom', path: ['show'], message: 'a field to show' });
-});
+const MetricWidgetQuerySchema: z.ZodType<MetricQuery, MetricQueryInput> = MetricQuerySchema.superRefine(
+  (q, ctx) => {
+    if (q.metric === '') ctx.addIssue({ code: 'custom', path: ['metric'], message: 'a metric name' });
+    if (q.show === '') ctx.addIssue({ code: 'custom', path: ['show'], message: 'a field to show' });
+  },
+);
 
 const WidgetSchema = z
   .discriminatedUnion('type', [
@@ -364,15 +367,17 @@ export const DashboardSchema: z.ZodType<Dashboard, DashboardInput> = z
     return { ...d, widgets };
   });
 
-function listIssues(
+/** Flag repeated and reserved ids; `pathOf` places each issue (the list's `[i, 'id']` by default). */
+export function listIssues(
   ids: readonly string[],
   reserved: readonly string[],
   ctx: z.RefinementCtx<unknown>,
+  pathOf: (i: number) => PropertyKey[] = (i) => [i, 'id'],
 ): void {
   ids.forEach((id, i) => {
-    if (ids.indexOf(id) !== i) ctx.addIssue({ code: 'custom', path: [i, 'id'], message: 'unique ids' });
+    if (ids.indexOf(id) !== i) ctx.addIssue({ code: 'custom', path: pathOf(i), message: 'unique ids' });
     if (reserved.includes(id))
-      ctx.addIssue({ code: 'custom', path: [i, 'id'], message: `"${id}" is reserved` });
+      ctx.addIssue({ code: 'custom', path: pathOf(i), message: `"${id}" is reserved` });
   });
 }
 
