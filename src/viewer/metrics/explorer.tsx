@@ -10,7 +10,7 @@ import { catalogOf, type DataSource } from '../data/data-source.js';
 import { defaultShow, kindOf, type MetricQuery, resolveMetric, SHOW_BY_KIND } from '../data/metric-query.js';
 import type { TimeWindow } from '../data/span-query.js';
 import { useGoTo } from '../shell/go-to.js';
-import { PageChrome, useClipboardCopy } from '../shell/page-chrome.js';
+import { PageChrome, useWidgetCopy } from '../shell/page-chrome.js';
 import { defaultMetricState } from '../state/metric-state.js';
 import { useSelection, useSelectionStore } from '../state/selection-context.js';
 import { useKeyedAsync } from '../state/use-keyed-async.js';
@@ -163,7 +163,7 @@ function ExplorerBody(props: { dataSource: DataSource; range: TimeWindow }): JSX
       fail('The export failed', e);
     }
   };
-  const widgetCopy = useClipboardCopy({ title: 'Copy as dashboard widget', label: 'Widget YAML' });
+  const widgetCopy = useWidgetCopy();
   const exportItems = [
     { label: 'Export CSV', onSelect: () => runExport('csv') },
     { label: 'Export JSON', onSelect: () => runExport('json') },
