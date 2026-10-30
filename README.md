@@ -362,7 +362,7 @@ Config is a YAML or JSON file (`otel-html.yaml` by default), or an object passed
 
 ## Development
 
-Tasks are defined in `mise.toml`; CI runs the same ones.
+Tasks are defined in `mise.toml`; CI runs the same ones. The Linux binaries (`linux-x64`, `linux-arm64`) are built and smoke-tested on every PR by the `binary` job (`test/cli/binary.test.ts` against the compiled binary: `convert`, `serve` over HTTP and gRPC, `run`, a SIGINT exit 0 and a bad-port exit 2); the release workflow smoke-tests the artefacts it uploads.
 
 | Task | Does |
 |---|---|
