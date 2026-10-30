@@ -1,3 +1,5 @@
+import type { AddressInfo } from 'node:net';
+import { createServer } from 'node:net';
 import { afterEach, describe, expect, test } from 'vitest';
 import { startReceiver } from '../../src/api/receiver.js';
 import { Report } from '../../src/api/report.js';
@@ -82,9 +84,23 @@ describe('startReceiver', () => {
     const first = await startReceiver(report, { http: false, grpc: { port: 0 } }, w.deps);
     running.push(first);
     const taken = Number(first.grpc?.split(':').at(-1));
+    const probe = createServer();
+    await new Promise<void>((ok) => probe.listen(0, '127.0.0.1', ok));
+    const free = (probe.address() as AddressInfo).port;
+    await new Promise<void>((ok) => probe.close(() => ok()));
+
     await expect(
-      startReceiver(report, { http: { port: 0 }, grpc: { port: taken } }, w.deps),
-    ).rejects.toBeDefined();
+      startReceiver(report, { http: { port: free }, grpc: { port: taken } }, w.deps),
+    ).rejects.toBeInstanceOf(Error);
+    const span = w.spans.filter((s) => s.name === 'otel-html.receive').at(-1);
+    expect(span?.ended).toBe(true);
+    expect(span?.error).toBeDefined();
+
+    // The HTTP port is free again: the listener bound before the failure was closed.
+    const again = await startReceiver(report, { http: { port: free }, grpc: false }, w.deps);
+    running.push(again);
+    expect(again.http).toBe(`http://127.0.0.1:${free}`);
+    await again.close();
     await first.close();
     await report.close();
   });
