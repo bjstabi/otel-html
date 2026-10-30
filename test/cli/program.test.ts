@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import { describe, expect, test } from 'vitest';
 import { runCli } from '../../src/cli/program.js';
 import { logRecord, logsRequest } from '../../test-support/otlp-builders.js';
@@ -28,6 +29,8 @@ async function run(
       },
       env,
       cwd: '/work',
+      signals: { on: () => () => undefined },
+      spawn,
     },
     w.deps,
   );

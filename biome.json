@@ -13,6 +13,7 @@
       "!node_modules",
       "!dist",
       "!e2e/.reports",
+      "!ci-report",
       "!e2e/.cache",
       "!test-results",
       "!.superpowers",

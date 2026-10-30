@@ -1,5 +1,7 @@
 import { basename } from 'node:path';
 import { trace } from '@opentelemetry/api';
+import type { ReadableLogRecord } from '@opentelemetry/sdk-logs';
+import type { ResourceMetrics } from '@opentelemetry/sdk-metrics';
 import type { ReadableSpan } from '@opentelemetry/sdk-trace-base';
 import pkg from '../../package.json' with { type: 'json' };
 import { loadConfigFile } from '../config/load.js';
@@ -13,6 +15,8 @@ import { ExportMetricsServiceRequestSchema } from '../model/gen/opentelemetry/pr
 import type { ExportTraceServiceRequest } from '../model/gen/opentelemetry/proto/collector/trace/v1/trace_service_pb.js';
 import { ExportTraceServiceRequestSchema } from '../model/gen/opentelemetry/proto/collector/trace/v1/trace_service_pb.js';
 import { type OtlpRequest, parseOtlpObject } from '../model/otlp-json.js';
+import { readableLogRecordsToRequest } from '../model/sdk-logs.js';
+import { resourceMetricsToRequest } from '../model/sdk-metrics.js';
 import { readableSpansToRequest } from '../model/sdk-spans.js';
 import { createNodeFileSystem } from '../writer/node-fs.js';
 import {
@@ -28,6 +32,11 @@ import { createOtelTracer } from './telemetry.js';
 import { packageDirViewerAssets } from './viewer-dir.js';
 
 export type { AddResult };
+
+/** The writer session behind a report: for the receiver and commands in this package, not part of the public API. */
+export let sessionOf: (report: Report) => WriterSession;
+/** The resolved configuration a report was created with. */
+export let configOf: (report: Report) => ResolvedConfig;
 
 /** The composition root: every real dependency is wired here and nowhere else. */
 export function defaultDeps(): WriterDeps {
@@ -122,25 +131,44 @@ function sum(a: AddResult, b: AddResult): AddResult {
   };
 }
 
+function isResourceMetrics(input: object): input is ResourceMetrics {
+  return 'scopeMetrics' in input && 'resource' in input;
+}
+
 const NOTHING: AddResult = { accepted: 0, dropped: 0, duplicates: 0 };
 
 /** A streaming report writer. Feed it telemetry, then `close()` to finish the report. */
 export class Report {
   readonly #session: WriterSession;
+  readonly #config: ResolvedConfig;
 
-  private constructor(session: WriterSession) {
+  static {
+    sessionOf = (report) => report.#session;
+    configOf = (report) => report.#config;
+  }
+
+  private constructor(session: WriterSession, config: ResolvedConfig) {
     this.#session = session;
+    this.#config = config;
   }
 
   static async create(options: ReportOptions, deps?: Partial<WriterDeps>): Promise<Report> {
     const full = await resolveDeps(deps);
-    const config = await resolveApiConfig(full, options.config, options.title);
+    return Report.createResolved(options, await resolveApiConfig(full, options.config, options.title), full);
+  }
+
+  /** Internal (the CLI): like `create`, with config already resolved so dashboard sources are kept. */
+  static async createResolved(
+    options: Pick<ReportOptions, 'out' | 'append'>,
+    config: ResolvedConfig,
+    full: WriterDeps,
+  ): Promise<Report> {
     const session = await openSession(full, {
       out: options.out,
       config,
       mode: options.append === true ? 'append' : 'create',
     });
-    return new Report(session);
+    return new Report(session, config);
   }
 
   /** SDK spans, a protobuf `ExportTraceServiceRequest`, or an OTLP-JSON object. */
@@ -155,7 +183,12 @@ export class Report {
     return this.#addAll(requestsOf('addSpans', 'traces', input), 'addSpans');
   }
 
-  async addLogs(input: ExportLogsServiceRequest | object): Promise<AddResult> {
+  /** SDK log records, a protobuf `ExportLogsServiceRequest`, or an OTLP-JSON object. */
+  async addLogs(input: readonly ReadableLogRecord[] | ExportLogsServiceRequest | object): Promise<AddResult> {
+    if (Array.isArray(input)) {
+      if (input.length === 0) return NOTHING;
+      return this.#session.add({ signal: 'logs', request: readableLogRecordsToRequest(input) }, 'addLogs');
+    }
     if (isMessage(input, ExportLogsServiceRequestSchema.typeName)) {
       return this.#session.add({ signal: 'logs', request: input as ExportLogsServiceRequest }, 'addLogs');
     }
@@ -163,10 +196,13 @@ export class Report {
   }
 
   /**
-   * A protobuf-es `ExportMetricsServiceRequest` or an OTLP-JSON object. OTLP JSON is read in place, not copied:
+   * An SDK `ResourceMetrics`, a protobuf-es `ExportMetricsServiceRequest` or an OTLP-JSON object. OTLP JSON is read in place, not copied:
    * leave it unchanged until the returned promise settles.
    */
-  async addMetrics(input: ExportMetricsServiceRequest | object): Promise<AddResult> {
+  async addMetrics(input: ResourceMetrics | ExportMetricsServiceRequest | object): Promise<AddResult> {
+    if (isResourceMetrics(input)) {
+      return this.#session.add({ signal: 'metrics', request: resourceMetricsToRequest(input) }, 'addMetrics');
+    }
     if (isMessage(input, ExportMetricsServiceRequestSchema.typeName)) {
       return this.#session.add(
         { signal: 'metrics', request: input as ExportMetricsServiceRequest },

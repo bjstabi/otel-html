@@ -1,7 +1,7 @@
 name: load
 
 # The slow load tests (writer peak memory on 1M logs and on 200 metrics × 1,000 series × 360 points, through the CLI
-# and through the library API), on an ubuntu runner. Not part of `ci`, which is already long: a daily schedule runs
+# and through the library API; the receiver under 1M spans and 10M logs), on an ubuntu runner. Not part of `ci`, which is already long: a daily schedule runs
 # them only when `main` has moved since the last run that measured (a manual run always measures).
 on:
   workflow_dispatch:
@@ -52,3 +52,28 @@ jobs:
       - run: lscpu | grep -E 'Model name|^CPU\(s\)'; free -m
       # Builds first (the 1M-log test runs the built library), then runs the two gated test files.
       - run: mise run test:load
+
+  # The receiver under load (spec §7): telemetrygen sends 1M spans over gRPC and 10M logs over HTTP to `otel-html serve`,
+  # which must write a complete report with every record, reject none and stay under 512 MB; then the viewer's Traces
+  # and Logs landings must be interactive on that report. Docker with host networking needs a Linux runner.
+  receiver:
+    needs: changed
+    if: needs.changed.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - run: lscpu | grep -E 'Model name|^CPU\(s\)'; free -m
+      - run: mise run test:load:receiver
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm exec playwright test e2e/load.spec.ts --project 'chromium-http' --workers=1
+        env:
+          OTEL_HTML_LOAD_REPORT: dist/load-receiver
+          OTEL_HTML_PERF_REFERENCE_MS: "100"
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: playwright-results-load-receiver
+          path: test-results/
+          if-no-files-found: ignore

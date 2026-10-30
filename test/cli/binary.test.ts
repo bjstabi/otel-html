@@ -1,11 +1,16 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
+import { fromJsonString, toBinary } from '@bufbuild/protobuf';
+import { credentials, makeGenericClientConstructor } from '@grpc/grpc-js';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import pkg from '../../package.json' with { type: 'json' };
+import { ExportTraceServiceRequestSchema } from '../../src/model/gen/opentelemetry/proto/collector/trace/v1/trace_service_pb.js';
+import { serviceDefinition } from '../../src/receiver/grpc.js';
+import { serviceOf } from '../../src/receiver/signals.js';
 
 // Runs only against a compiled binary: `OTEL_HTML_BINARY=dist/bin/otel-html-<target> vitest run test/cli/binary.test.ts`.
 // A path that does not exist fails loudly instead of skipping.
@@ -27,6 +32,70 @@ async function run(binary: string, args: readonly string[]): Promise<Run> {
 // Written as text: a JS number literal above 2^53 would already be rounded before it reached the binary.
 const INT64_REQUEST =
   '{"resourceSpans":[{"resource":{},"scopeSpans":[{"scope":{},"spans":[{"traceId":"5b8efff798038103d269b633813fc60c","spanId":"eee19b7ec3c1b174","name":"big","kind":2,"startTimeUnixNano":1700000000000000001,"endTimeUnixNano":"1700000000000000999","attributes":[{"key":"big","value":{"intValue":9007199254740993}}]}]}]}]}';
+
+const SPAN_REQUEST = (name: string, spanId: string): string =>
+  `{"resourceSpans":[{"resource":{},"scopeSpans":[{"scope":{},"spans":[{"traceId":"5b8efff798038103d269b633813fc60c","spanId":"${spanId}","name":"${name}","kind":2,"startTimeUnixNano":"1700000000000000000","endTimeUnixNano":"1700000000000000999"}]}]}]}`;
+
+interface Exited {
+  code: number | null;
+  stdout: string;
+  stderr: string;
+}
+
+/** Spawns the binary; `until` resolves once stdout matches, then `drive` runs, then SIGINT and wait for exit. */
+async function serveOnce(
+  binary: string,
+  args: readonly string[],
+  until: RegExp,
+  drive: (match: RegExpMatchArray) => Promise<void>,
+): Promise<Exited> {
+  const child = spawn(binary, [...args], { stdio: ['ignore', 'pipe', 'pipe'] });
+  let stdout = '';
+  let stderr = '';
+  const exited = new Promise<number | null>((done) => child.once('close', (code) => done(code)));
+  const ready = new Promise<RegExpMatchArray>((resolveReady, reject) => {
+    child.stdout.on('data', (d: Buffer) => {
+      stdout += d.toString('utf8');
+      const m = stdout.match(until);
+      if (m !== null) resolveReady(m);
+    });
+    child.stderr.on('data', (d: Buffer) => {
+      stderr += d.toString('utf8');
+    });
+    child.once('close', () => reject(new Error(`exited before listening: ${stdout}${stderr}`)));
+  });
+  const timer = setTimeout(() => child.kill('SIGKILL'), 50_000);
+  try {
+    await drive(await ready);
+    child.kill('SIGINT');
+    return { code: await exited, stdout, stderr };
+  } finally {
+    clearTimeout(timer);
+    child.kill('SIGKILL');
+  }
+}
+
+/** The OTLP/JSON request as protobuf; protobuf JSON carries bytes as base64, so the hex ids are re-encoded. */
+function protobufRequest(json: string): Uint8Array {
+  const base64 = json.replace(/"(traceId|spanId)":"([0-9a-f]+)"/g, (_, key: string, hex: string) => {
+    return `"${key}":"${Buffer.from(hex, 'hex').toString('base64')}"`;
+  });
+  return toBinary(ExportTraceServiceRequestSchema, fromJsonString(ExportTraceServiceRequestSchema, base64));
+}
+
+async function exportOverGrpc(address: string, body: Uint8Array): Promise<void> {
+  const Client = makeGenericClientConstructor(serviceDefinition(serviceOf('traces')), 'TraceService');
+  const client = new Client(address, credentials.createInsecure());
+  try {
+    const exportFn: unknown = Reflect.get(client, 'Export');
+    if (typeof exportFn !== 'function') throw new Error('client has no Export');
+    await new Promise<void>((done, fail) => {
+      Reflect.apply(exportFn, client, [body, (err: Error | null) => (err === null ? done() : fail(err))]);
+    });
+  } finally {
+    client.close();
+  }
+}
 
 describe.skipIf(binaryEnv === undefined)('compiled binary', () => {
   const binary = resolve(binaryEnv ?? '');
@@ -77,4 +146,39 @@ describe.skipIf(binaryEnv === undefined)('compiled binary', () => {
     expect(chunk).toContain('"9007199254740993"');
     expect(chunk).toContain('[998]');
   });
+
+  test('serve receives OTLP over HTTP and gRPC and finishes on SIGINT', async () => {
+    const out = join(dir, 'serve');
+    const result = await serveOnce(
+      binary,
+      ['serve', '-o', out, '--http', '0', '--grpc', '0'],
+      /listening on (\S+) \(OTLP\/HTTP\) and (\S+) \(OTLP\/gRPC\)/,
+      async (m) => {
+        const res = await fetch(`${m[1]}/v1/traces`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: SPAN_REQUEST('over-http', 'aaaaaaaaaaaaaaaa'),
+        });
+        expect(res.status).toBe(200);
+        await exportOverGrpc(m[2] ?? '', protobufRequest(SPAN_REQUEST('over-grpc', 'bbbbbbbbbbbbbbbb')));
+      },
+    );
+    expect(result.stderr).toBe('');
+    expect(result.code).toBe(0);
+    const manifest = await readFile(join(out, 'data', 'manifest.js'), 'utf8');
+    expect(manifest).toContain('"totals":{"spans":2,');
+  }, 60_000);
+
+  test('run exits with the child code and records a root span', async () => {
+    const out = join(dir, 'run');
+    const code = await new Promise<number | null>((done) => {
+      spawn(binary, ['run', '-o', out, '--', process.execPath, '-e', 'process.exit(4)'], {
+        stdio: 'ignore',
+        timeout: 50_000,
+      }).once('close', done);
+    });
+    expect(code).toBe(4);
+    const manifest = await readFile(join(out, 'data', 'manifest.js'), 'utf8');
+    expect(manifest).toContain('"totals":{"spans":1,');
+  }, 60_000);
 });

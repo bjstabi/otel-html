@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { spawn } from 'node:child_process';
 import * as v8 from 'node:v8';
 import { bunEmbeddedViewerAssets, hasBunEmbeddedFiles } from '../writer/viewer-assets.js';
 import { runCli } from './program.js';
@@ -14,14 +15,36 @@ const beforeMetrics = (): void => {
   if (!('bun' in process.versions)) v8.setFlagsFromString('--optimize-for-size');
 };
 
-process.exitCode = await runCli(
+const code = await runCli(
   process.argv.slice(2),
   {
     stdout: (s) => process.stdout.write(s),
     stderr: (s) => process.stderr.write(s),
     env: process.env,
     cwd: process.cwd(),
+    signals: {
+      on(fn) {
+        const sigint = (): void => fn('SIGINT');
+        const sigterm = (): void => fn('SIGTERM');
+        process.on('SIGINT', sigint);
+        process.on('SIGTERM', sigterm);
+        return () => {
+          process.off('SIGINT', sigint);
+          process.off('SIGTERM', sigterm);
+        };
+      },
+    },
+    spawn,
   },
   // Inside a `bun build --compile` binary the viewer ships embedded; under Node it is read from the package.
   hasBunEmbeddedFiles() ? { viewerAssets: bunEmbeddedViewerAssets(), beforeMetrics } : { beforeMetrics },
 );
+process.exitCode = code;
+// A failing command must end the process even if something (a bound server) still holds the event loop; an
+// interrupted `serve` may still be finishing its report, and a second Ctrl-C means stop now, at the last checkpoint.
+if (code !== 0) {
+  const flushed = (stream: NodeJS.WriteStream): Promise<void> =>
+    new Promise((resolve) => stream.write('', () => resolve()));
+  await Promise.all([flushed(process.stdout), flushed(process.stderr)]);
+  process.exit(code);
+}

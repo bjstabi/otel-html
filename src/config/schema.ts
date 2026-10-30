@@ -42,6 +42,28 @@ interface WriterIn {
   metricExemplars?: number | undefined;
   drop?: DropIn | undefined;
 }
+interface ListenerOut {
+  enabled: boolean;
+  port: number;
+}
+interface ListenerIn {
+  enabled?: boolean | undefined;
+  port?: number | undefined;
+}
+interface ReceiverOut {
+  host: string;
+  http: ListenerOut;
+  grpc: ListenerOut;
+  maxBodyBytes: number;
+  inflightBudgetBytes: number;
+}
+interface ReceiverIn {
+  host?: string | undefined;
+  http?: ListenerIn | undefined;
+  grpc?: ListenerIn | undefined;
+  maxBodyBytes?: number | undefined;
+  inflightBudgetBytes?: number | undefined;
+}
 interface ViewerOut {
   eagerBudgetBytes: number;
   listCap: number;
@@ -61,9 +83,11 @@ export interface ResolvedDashboard {
   source: string;
   dashboard: Dashboard;
 }
+export type ReceiverConfig = ResolvedConfig['receiver'];
 export interface ResolvedConfig {
   title?: string | undefined;
   writer: WriterOut;
+  receiver: ReceiverOut;
   viewer: ViewerOut;
   dashboards: ResolvedDashboard[];
   views: View[];
@@ -71,6 +95,7 @@ export interface ResolvedConfig {
 export interface ConfigInput {
   title?: string | undefined;
   writer?: WriterIn | undefined;
+  receiver?: ReceiverIn | undefined;
   viewer?: ViewerIn | undefined;
   dashboards?: DashboardInput[] | undefined;
   views?: ViewInput[] | undefined;
@@ -100,6 +125,18 @@ const WriterSchema = z
   })
   .prefault({});
 
+const port = z.number().int().min(0).max(65535);
+
+const ReceiverSchema = z
+  .strictObject({
+    host: z.string().min(1).default('127.0.0.1'),
+    http: z.strictObject({ enabled: z.boolean().default(true), port: port.default(4318) }).prefault({}),
+    grpc: z.strictObject({ enabled: z.boolean().default(true), port: port.default(4317) }).prefault({}),
+    maxBodyBytes: posInt.default(67_108_864),
+    inflightBudgetBytes: posInt.default(134_217_728),
+  })
+  .prefault({});
+
 const ViewerSchema = z
   .strictObject({
     eagerBudgetBytes: posInt.default(75_000_000),
@@ -114,6 +151,7 @@ export const ConfigSchema: z.ZodType<ResolvedConfig, ConfigInput> = z
   .strictObject({
     title: z.string().optional(),
     writer: WriterSchema,
+    receiver: ReceiverSchema,
     viewer: ViewerSchema,
     // `config file` for a config parsed on its own; `resolveConfig` then names the layer each dashboard came from.
     dashboards: DashboardListSchema.prefault([]).transform((ds): ResolvedDashboard[] =>

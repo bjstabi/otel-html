@@ -85,9 +85,10 @@ jobs:
         with:
           name: dist
           path: dist/
+      # The suite runs under `otel-html run`, which reports its own telemetry; the exit code is Playwright's.
       # --skip-deps: use the dist/ built and package-checked by the build job instead of rebuilding.
       # Playwright projects are named `<browser>-file` and `<browser>-http`.
-      - run: mise run --skip-deps test:e2e -- --project '${{ matrix.project }}-*'
+      - run: node dist/cli/main.js run -o ci-report/${{ matrix.project }} --no-grpc -- mise run --skip-deps test:e2e -- --project '${{ matrix.project }}-*'
       # The reporter is `list`, so failure traces and screenshots land in test-results/.
       - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -100,6 +101,13 @@ jobs:
         with:
           name: sample-report-${{ matrix.project }}
           path: e2e/.reports/sample
+          include-hidden-files: true
+          if-no-files-found: ignore
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-report-${{ matrix.project }}
+          path: ci-report/${{ matrix.project }}
           include-hidden-files: true
           if-no-files-found: ignore
 

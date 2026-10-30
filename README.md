@@ -2,7 +2,7 @@
 
 otel-html turns OpenTelemetry data into a static, self-contained HTML report. You give it OTLP files (or feed it spans from your own code) and it writes a folder you can open from disk, attach to a CI run, or publish on any static host. No server and no network access are needed to view it.
 
-Milestone 1 covers traces: a Traces explorer with a trace panel (flame graph, waterfall, span list, services, span details). Milestone 2 adds logs: a Logs explorer with log patterns and a log panel, linked to traces both ways. Milestone 3 adds metrics: a Metrics explorer with exemplars, a metrics catalog, and metric charts in the log, span and trace panels. Milestone 4 adds dashboards: the built-in Fusion dashboard, which puts every signal on one timeline, and dashboards you define in config.
+Milestone 1 covers traces: a Traces explorer with a trace panel (flame graph, waterfall, span list, services, span details). Milestone 2 adds logs: a Logs explorer with log patterns and a log panel, linked to traces both ways. Milestone 3 adds metrics: a Metrics explorer with exemplars, a metrics catalog, and metric charts in the log, span and trace panels. Milestone 4 adds dashboards: the built-in Fusion dashboard, which puts every signal on one timeline, and dashboards you define in config. Milestone 5 adds the OTLP receiver (`serve` and `run`) and the SDK exporters.
 
 > otel-html is not an official OpenTelemetry project. It is not affiliated with or endorsed by the OpenTelemetry project or the CNCF.
 
@@ -28,6 +28,8 @@ The binaries are built by `.github/workflows/release.yml` when a release is crea
 
 ## CLI
 
+Commands: `convert` (OTLP files to a report), `serve` (receive OTLP over HTTP and gRPC), `run` (wrap a command and report its telemetry), `merge` and `config print`.
+
 ```sh
 otel-html convert fixtures/small.otlp.json -o ./report
 ```
@@ -43,6 +45,50 @@ Turns OTLP files into a report. Inputs can be OTLP JSON, JSON lines (such as Col
 | `--title <title>` | Report title. |
 | `--append` | Add to an existing report instead of replacing it. Only works with a report written by the same otel-html version. |
 | `--signal <signal>` | `traces`, `logs` or `metrics`. Needed for protobuf (`.pb`) inputs, which do not say what they hold. |
+
+### `serve`
+
+Receives OTLP over HTTP and gRPC and writes a report until you press Ctrl-C.
+
+```sh
+otel-html serve -o ./report
+# listening on http://127.0.0.1:4318 (OTLP/HTTP) and 127.0.0.1:4317 (OTLP/gRPC), writing ./report; press Ctrl-C to finish
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `-o, --out <dir>` | Report folder (required). |
+| `--host <addr>` | Address to listen on. Default `127.0.0.1`. |
+| `--http <port>`, `--no-http` | OTLP/HTTP port (default 4318), or turn it off. |
+| `--grpc <port>`, `--no-grpc` | OTLP/gRPC port (default 4317), or turn it off. Port 0 picks a free port. |
+| `--append` | Add to an existing report instead of replacing it. |
+| `--config <file>`, `--title <title>` | As for `convert`. |
+
+Turning off both transports is a usage error (exit 2). A port that is already in use exits 1 with the system's `EADDRINUSE` message and a hint to pass `--http <port>` or `--grpc <port>`, or to turn that transport off.
+
+On Ctrl-C (SIGINT) or SIGTERM, `serve` stops listening, finishes the requests in progress, completes the report and prints `wrote <out>: ...` and `received <N> requests (<K> refused); <M> records rejected`. A request is refused when it fails outright (it could not be decoded, has an unsupported content type or path, is too large, or arrives while the receiver is busy); records are rejected when a request is otherwise accepted but an entry in it is dropped. When K is not zero, a second line breaks the refusals down, for example `refused: 3 invalid, 1 unsupported`, and a warning on stderr names the first refusal of each kind, so a misconfigured exporter shows up while `serve` runs. A second Ctrl-C while it finishes prints `interrupted; the report is at its last checkpoint` and exits 130; the report is then viewable and resumable from its last checkpoint but is not marked complete.
+
+### `run`
+
+Runs a command with its OpenTelemetry SDK pointed at a receiver, wraps the run in a root span, and writes the report when the command exits.
+
+```sh
+otel-html run -o ./report -- pytest -q
+```
+
+Everything before `--` is an `otel-html` flag: the `serve` flags except `--append` (`-o`, `--host`, `--http`, `--no-http`, `--grpc`, `--no-grpc`, `--config`, `--title`). The receiver starts first, then the command runs with its stdio inherited and these variables added to its environment:
+
+| Variable | Value |
+| --- | --- |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | The receiver's `http://host:port`, or the gRPC address when the protocol is `grpc`. Kept if you already set it (a warning is printed, and the command will not send to this receiver). |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | Your value if set to `grpc`, `http/protobuf` or `http/json`, else `http/protobuf`. Any other value is a usage error, as is a protocol whose receiver is turned off. |
+| `TRACEPARENT` | `00-<trace id>-<root span id>-01`, always set, so the command's own spans become children of the root span. |
+
+The root span is named after the command's basename (`.exe` stripped), has kind `INTERNAL`, and runs from spawn to exit. Its attributes are `process.command_args` (the full command line), `process.executable.name`, `process.pid` and, when the command exited, `process.exit.code`. A non-zero exit sets the status to `ERROR` with `exit code N`; a command killed by a signal sets `ERROR` with `killed by SIGTERM` (for example) and has no exit code; a zero exit leaves the status unset. The resource comes from the OpenTelemetry environment (`OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES`), host and process detectors, and `service.name` defaults to the command's basename. The `process.*` resource attributes from the process detector describe `otel-html` itself, not the command.
+
+`run` exits with the command's exit code, or `128` plus the signal number when the command was killed (143 for SIGTERM; signal numbers are Linux's, and a signal outside the table counts as 128). If the command succeeded but the report could not be finished, it exits 1 and prints the error; if the command failed too, it exits with the command's code and still prints the error. An empty command is a usage error (exit 2). A command that cannot be started (not found, not executable) exits 1 with the system's message, and no report is kept. SIGINT and SIGTERM sent to `run` are forwarded to the command, and `run` keeps waiting for it (in a terminal, Ctrl-C also reaches the command directly from the tty, so it sees the signal twice); a signal while the report is finishing exits 130, as for `serve`.
+
+`run` does not wait after the command exits: the receiver stops accepting, drains the requests in progress and closes the report. An SDK that has not flushed by then loses its tail, so make sure the command shuts its SDK down before it exits. On Windows the executable must be a real binary or a script `run` can start directly; no shell is involved, so a `.cmd` file needs `cmd /c` in front of it.
 
 ### `merge <reports...>`
 
@@ -88,7 +134,59 @@ const summary = await report.close(); // flushes chunks and finalizes the manife
 console.log(summary.totals); // { spans: 1, logs: 0, metrics: 0 }
 ```
 
-`Report` also has `addLogs`, `addMetrics` (OTLP request objects, JSON or protobuf-es messages) and `flush()`. `addMetrics` reads an OTLP JSON object in place rather than copying it: leave it unchanged until the returned promise settles (`addSpans` and `addLogs` copy). `addSpans` accepts SDK `ReadableSpan` arrays, OTLP trace requests, or OTLP JSON objects. `config` takes an object or the path of a YAML/JSON file. Environment variables are not read by the library.
+### SDK exporters
+
+`OtelHtmlSpanExporter`, `OtelHtmlLogRecordExporter` and `OtelHtmlMetricExporter` plug into the OpenTelemetry JS SDK and write into a `Report`. They can share one report. `shutdown()` flushes the report but does not close it: the caller closes the report.
+
+```ts
+import { LoggerProvider, SimpleLogRecordProcessor } from '@opentelemetry/sdk-logs';
+import { MeterProvider, PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics';
+import { BasicTracerProvider, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
+import {
+  OtelHtmlLogRecordExporter,
+  OtelHtmlMetricExporter,
+  OtelHtmlSpanExporter,
+  Report,
+} from 'otel-html';
+
+const report = await Report.create({ out: './report-c' });
+
+const tracerProvider = new BasicTracerProvider({
+  spanProcessors: [new SimpleSpanProcessor(new OtelHtmlSpanExporter({ report }))],
+});
+const loggerProvider = new LoggerProvider({
+  processors: [new SimpleLogRecordProcessor(new OtelHtmlLogRecordExporter({ report }))],
+});
+const meterProvider = new MeterProvider({
+  readers: [
+    new PeriodicExportingMetricReader({
+      exporter: new OtelHtmlMetricExporter({ report, temporality: 'delta' }), // default 'cumulative'
+    }),
+  ],
+});
+
+// ... instrument your code ...
+
+await Promise.all([tracerProvider.shutdown(), loggerProvider.shutdown(), meterProvider.shutdown()]);
+await report.close(); // shutdown() flushes, it never closes the report
+```
+
+### Receiving OTLP in-process
+
+`startReceiver(report, overrides?, deps?)` binds the OTLP/HTTP and OTLP/gRPC receivers over a report, the same receivers `serve` uses. `overrides` takes `http` and `grpc` (each `false` to disable, or `{ host?, port? }` to enable; port `0` picks a free one), plus `maxBodyBytes` and `inflightBudgetBytes`; anything left out comes from the report's `receiver.*` config. It returns `{ http, grpc, stats(), close() }`. `close()` stops listening and finishes requests in progress; the report stays open, so the caller closes it.
+
+```ts
+import { Report, startReceiver } from 'otel-html';
+
+const report = await Report.create({ out: './report-d' });
+const receiver = await startReceiver(report, { http: { port: 0 }, grpc: false });
+console.log(receiver.http); // http://127.0.0.1:<port>
+// ... point exporters at it ...
+await receiver.close();
+await report.close();
+```
+
+`Report` also has `addLogs`, `addMetrics` (an SDK `ResourceMetrics`, or OTLP request objects, JSON or protobuf-es messages) and `flush()`. `addMetrics` reads an OTLP JSON object in place rather than copying it: leave it unchanged until the returned promise settles (`addSpans` and `addLogs` copy). `addSpans` accepts SDK `ReadableSpan` arrays, OTLP trace requests, or OTLP JSON objects. `config` takes an object or the path of a YAML/JSON file. Environment variables are not read by the library.
 
 ## Viewing logs
 
@@ -221,6 +319,13 @@ Config is a YAML or JSON file (`otel-html.yaml` by default), or an object passed
 | `writer.drop.traces.span` | `[]` | OTTL conditions; matching spans are dropped at write time. |
 | `writer.drop.logs.log_record` | `[]` | Same, for log records. |
 | `writer.drop.metrics.datapoint` | `[]` | Same, for metric data points. |
+| `receiver.host` | `127.0.0.1` | Address the receiver listens on. |
+| `receiver.http.enabled` | `true` | Listen for OTLP/HTTP. |
+| `receiver.http.port` | 4318 | OTLP/HTTP port (0 picks a free port). |
+| `receiver.grpc.enabled` | `true` | Listen for OTLP/gRPC. |
+| `receiver.grpc.port` | 4317 | OTLP/gRPC port (0 picks a free port). |
+| `receiver.maxBodyBytes` | 67108864 | Largest request body accepted, after decompression (64 MiB). Larger requests are rejected (413 / `RESOURCE_EXHAUSTED`). |
+| `receiver.inflightBudgetBytes` | 134217728 | Body bytes the receiver holds in progress or queued (128 MiB). A request that would exceed it while another is in progress is refused with 503 / `UNAVAILABLE` so the exporter retries. |
 | `viewer.eagerBudgetBytes` | 75000000 | Decoded size under which the viewer loads everything up front. Applies to each signal on its own: the viewer estimates the decoded size of the spans and of the logs separately, so a report can have eager spans and windowed logs. Env: `OTEL_HTML_EAGER_BUDGET_BYTES`. |
 | `viewer.listCap` | 10000 | Maximum rows in result lists. |
 | `viewer.defaultDashboard` | `fusion` | The dashboard `g d` and the sidebar's ★ item open. Must be `fusion` or the id of a dashboard in `dashboards`. A config without `dashboards` that leaves it at `fusion` keeps the default of the report it is appended to. |
@@ -234,7 +339,8 @@ Config is a YAML or JSON file (`otel-html.yaml` by default), or an object passed
 ## Limits
 
 - Timestamps are JavaScript numbers, exact to 2^53 ns. That is about 104 days of relative time span within one report.
-- The viewer is for static reports that open from `file://`. It does not follow a report that is still being written.
+- The receiver has no TLS or authentication and reflects only localhost origins for CORS; bodies over 64 MiB are refused (413); logs and metric points a sender retries are not deduplicated.
+- The viewer is for static reports that open from `file://`. It does not follow a report that is still being written; reload to see what the receiver has checkpointed.
 - When a signal is larger than `viewer.eagerBudgetBytes`, the viewer reads its chunks on demand. Services numbers, filtered log results and filtered patterns are then partial (the viewer says "from N of M chunks") until you choose "Scan entire run". Opening a trace or its Logs tab reads only the chunks the trace index lists for it.
 - Dashboard layout edits are not saved: Edit layout changes the page until you reload. Use Copy config and paste the result into your config file.
 - The Fusion timeline's metric lane comes from the run-wide rollup, so it ignores variables and says "all resources" when one is set.
@@ -242,6 +348,7 @@ Config is a YAML or JSON file (`otel-html.yaml` by default), or an object passed
 - The design target for logs is 1,000,000 records in about 200 bytes each on disk. The end-to-end suite builds a 100k-span, 1M-log report to check the landing and a one-window filtered scan.
 - Input files are read in pieces and parsed one resource entry (one element of `resourceSpans`, `resourceLogs` or `resourceMetrics`) at a time, so memory does not grow with file size. Converting 1M logs from 10 files peaks at about 320 MB of resident memory, against a design target of 512 MB. A single resource entry is still parsed whole, and a protobuf file is read whole before it is decoded, so peak memory still scales with the largest resource entry and with protobuf file size. If one OTLP JSON object repeats a signal key (two `resourceLogs`, say), both arrays are imported.
 - Metrics: `otel-html convert` turns 200 metrics × 1,000 series × 360 points (72M points, OTLP JSON) into a report with a peak of about 460 MB of resident memory. When a conversion or merge takes metric points, the CLI under Node switches V8 to `--optimize-for-size` as the first ones arrive, which costs about 40% in conversion time; trace and log conversions are not affected. The library sets no V8 flags, so the same workload fed to `Report.addMetrics` peaks at about 770 MB: V8 grows its heap to several times the live data (about 100 MB here) when allocation is this steady. The 512 MB writer target is defined on the CLI; the library figure is measured and reported beside it, not held to the target. Both come from `mise run test:load` (the `load` workflow runs it on ubuntu). To get the CLI's figure in your own process, start Node with `--optimize-for-size`, or call `v8.setFlagsFromString('--optimize-for-size')` before converting. Calling `flush()` more often (or lowering `writer.flushIntervalMs`) bounds what the writer holds between checkpoints but does not lower this peak, which is V8 heap slack rather than live data. Gauges and sums in OTLP JSON are read without building protobuf-es messages. Other metric types, and points that carry exemplars, are decoded through protobuf-es and allocate more per point. The 512 MB target is for that workload (cumulative counters and gauges). For every metric type the buckets the writer holds before writing them out are bounded by their estimated size (about 40 MB; a histogram bucket weighs as much as its bucket counts), but the state kept per series is not: each cumulative stream keeps its previous point, which for a histogram is its bucket counts (roughly half a kilobyte at 16 buckets), so memory grows with the number of cumulative histogram series. Series folded into `other` keep their streams for at most 10 × `writer.metricSeriesCap` series per metric.
+- Receiver: `otel-html serve` takes 1M spans (OTLP/gRPC) and 10M logs (OTLP/HTTP) from telemetrygen into one complete report with nothing rejected, against a design target of 512 MB of resident memory. Measured on ubuntu-latest: peak RSS not measured yet on 1M spans + 10M logs. From `mise run test:load:receiver` (the `receiver` job of the `load` workflow).
 - Metric values, counts and sums are 64-bit floating point once read, as in Prometheus: an integer point (`asInt`) or a count above 2^53 loses precision.
 - The flame graph merges very narrow bars in traces above 2000 spans and clips anything deeper than 200 levels.
 
@@ -255,6 +362,7 @@ Tasks are defined in `mise.toml`; CI runs the same ones.
 | `mise run check` | Fast gate: lint, typecheck, unit tests, knip. Unit tests with a time budget (named `@perf`) run afterwards, alone and one file at a time; `OTEL_HTML_PERF_FACTOR` scales their budgets on a slow machine. |
 | `mise run build` | Build the library, then the viewer, into `dist/`. |
 | `mise run test:load` | The slow peak-memory tests (1M logs; 200 metrics × 1,000 series × 360 points through the CLI and through `Report.addMetrics`), after a build. Not part of `check` or `ci`; the `load` workflow runs them on an ubuntu runner on demand, and daily when `main` has changed since the last measurement. |
+| `mise run test:load:receiver` | The receiver under load, after a build: telemetrygen (a pinned Docker image, on the host network, so Linux only) sends 1M spans over gRPC and 10M logs over HTTP to `otel-html serve`, then the report must be complete with every record, nothing rejected and a peak under 512 MB of resident memory. The report stays in `dist/load-receiver`; `-- --spans 20000 --logs 100000` runs a small version. The `receiver` job of the `load` workflow runs it, then checks the Traces and Logs landings with `e2e/load.spec.ts`. |
 | `mise run test:e2e` | Build, then run the Playwright suite in Chromium, Firefox and WebKit. Extra arguments go to Playwright (`mise run test:e2e -- e2e/merge.spec.ts`). The metrics scale check runs only with `OTEL_HTML_METRICS_SCALE=1` (CI runs it in its own Chromium job): it writes a report of 200 metrics × 1,000 series in which only the charted metric has the full 1 h at 10 s (a few seconds locally and under a minute on CI; about 150 MB, in `e2e/.reports/`), and fails if the Explorer or Catalog loads another metric's points. The `@perf` budgets scale by `OTEL_HTML_PERF_FACTOR` and, when `OTEL_HTML_PERF_REFERENCE_MS` is set, by how much slower than that reference a fixed CPU workload runs on this machine (never below 1; the setup logs `PERF calibration: N ms`). CI sets the reference to 100 ms. |
 | `mise run build:binaries` | Compile standalone binaries into `dist/bin/` (after `build`). |
 | `mise run fixtures` | Regenerate `fixtures/*.otlp.json` with the OpenTelemetry SDK. |
@@ -268,7 +376,7 @@ Other tasks: `lint`, `format`, `typecheck`, `test:unit`, `knip`, `gen`, `gen:che
 - M2 (done): Logs explorer, log patterns and log panel, with log and trace cross-linking.
 - M3 (done): Metrics explorer and catalog, with embedded metric charts in all panels.
 - M4 (done): Dashboards, including the built-in Fusion dashboard, and dashboard config.
-- M5: OTLP receiver (HTTP, then gRPC), `serve` and `run` commands, SDK exporters and load tests.
+- M5 (done): OTLP receiver (HTTP, then gRPC), `serve` and `run` commands, SDK exporters and load tests.
 
 The design is in [`docs/superpowers/specs/2026-10-25-otel-html-design.md`](docs/superpowers/specs/2026-10-25-otel-html-design.md).
 

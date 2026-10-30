@@ -199,3 +199,8 @@
    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
    See the License for the specific language governing permissions and
    limitations under the License.
+
+---
+proto/google/rpc/status.proto and proto/google/rpc/error_details.proto are copied verbatim from
+https://github.com/googleapis/googleapis (google/rpc), Copyright 2025 Google LLC, under the Apache License 2.0
+(the license text above). Each file carries its own license header.
