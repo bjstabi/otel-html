@@ -7,7 +7,8 @@ export type ErrorCode =
   | 'version-mismatch'
   | 'invalid-report'
   | 'unsupported-input'
-  | 'usage';
+  | 'usage'
+  | 'receiver-busy';
 
 export interface ErrorDetails {
   path?: string;
