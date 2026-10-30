@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
   checkRun,
+  formatServeFigures,
   logsArgs,
   parseLoadArgs,
   parseManifestJs,
@@ -87,6 +88,13 @@ describe('output parsing', () => {
     });
     expect(parseStallStats('')).toBeNull();
     expect(parseStallStats('LOOP p99 1.0 max 2.0\n')).toBeNull();
+  });
+
+  test('formatServeFigures summarises RSS, loop and GC, and says what is missing', () => {
+    expect(
+      formatServeFigures('MAXRSS 524288\nLOOP p99 12.3 max 480.0\nGC count 152 total 3200.5 max 77.0\n'),
+    ).toBe('peak RSS 512 MB, loop p99 12.3 ms max 480.0 ms, gc 152 pauses 3200.5 ms max 77.0 ms');
+    expect(formatServeFigures('')).toBe('peak RSS not reported, stalls not reported');
   });
 
   test('parseReceived reads the serve summary', () => {

@@ -4,12 +4,12 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   checkRun,
+  formatServeFigures,
   logsArgs,
   parseLoadArgs,
   parseManifestJs,
   parseMaxRssKb,
   parseReceived,
-  parseStallStats,
   planWorkload,
   tracesArgs,
 } from './load-receiver-plan.js';
@@ -32,12 +32,13 @@ import { monitorEventLoopDelay, PerformanceObserver } from 'node:perf_hooks';
 const h = monitorEventLoopDelay({ resolution: 10 });
 h.enable();
 let gcCount = 0, gcTotal = 0, gcMax = 0;
-const obs = new PerformanceObserver((list) => {
-  for (const e of list.getEntries()) { gcCount++; gcTotal += e.duration; if (e.duration > gcMax) gcMax = e.duration; }
-});
+const tally = (entries) => {
+  for (const e of entries) { gcCount++; gcTotal += e.duration; if (e.duration > gcMax) gcMax = e.duration; }
+};
+const obs = new PerformanceObserver((list) => tally(list.getEntries()));
 obs.observe({ entryTypes: ['gc'] });
 process.on('exit', () => {
-  for (const e of obs.takeRecords()) { gcCount++; gcTotal += e.duration; if (e.duration > gcMax) gcMax = e.duration; }
+  tally(obs.takeRecords());
   h.disable();
   const ms = (ns) => (ns / 1e6).toFixed(1);
   writeSync(2, 'MAXRSS ' + process.resourceUsage().maxRSS + '\\n'
@@ -51,6 +52,8 @@ const HTTP_PORT = 4318;
 const GRPC_PORT = 4317;
 const START_TIMEOUT_MS = 30_000;
 const STOP_TIMEOUT_MS = 10 * 60_000;
+// After a generator failure the receiver only has to exit and print its figures, not finish a report, so wait less.
+const FAILED_STOP_TIMEOUT_MS = 60_000;
 
 interface Serve {
   child: ChildProcess;
@@ -100,6 +103,15 @@ function startServe(out: string): Promise<Serve> {
   });
 }
 
+/** SIGINT, then SIGKILL if serve has not exited within `timeoutMs`; resolves with its exit code. */
+async function stopServe(serve: Serve, timeoutMs: number): Promise<number | null> {
+  const timer = setTimeout(() => serve.child.kill('SIGKILL'), timeoutMs);
+  serve.child.kill('SIGINT');
+  const code = await serve.exited;
+  clearTimeout(timer);
+  return code;
+}
+
 function docker(args: readonly string[]): Promise<void> {
   return new Promise((ok, fail) => {
     const child = spawn('docker', ['run', '--rm', '--network', 'host', ...args], { stdio: 'inherit' });
@@ -130,13 +142,14 @@ async function main(): Promise<number> {
     await docker(logsArgs(args.image, HTTP_PORT, args.workers, plan.logsPerWorker));
     process.stdout.write(`logs: generator finished in ${((Date.now() - phase) / 1000).toFixed(0)} s\n`);
   } catch (e) {
-    serve.child.kill('SIGKILL');
-    throw e;
+    // Stop it gracefully so the preload's exit handler still prints the figures; SIGKILL would skip it.
+    await stopServe(serve, FAILED_STOP_TIMEOUT_MS);
+    const reason = e instanceof Error ? e.message : String(e);
+    throw new Error(
+      `${reason}\nreceiver at failure: ${formatServeFigures(serve.stderr())}\n${serve.stderr()}`,
+    );
   }
-  const stopTimer = setTimeout(() => serve.child.kill('SIGKILL'), STOP_TIMEOUT_MS);
-  serve.child.kill('SIGINT');
-  const code = await serve.exited;
-  clearTimeout(stopTimer);
+  const code = await stopServe(serve, STOP_TIMEOUT_MS);
   const seconds = (Date.now() - started) / 1000;
   if (code !== 0) throw new Error(`serve exited ${code} after SIGINT: ${serve.stdout()}${serve.stderr()}`);
 
@@ -150,14 +163,8 @@ async function main(): Promise<number> {
     received: parseReceived(serve.stdout()),
     rssKb,
   });
-  const rssMb = rssKb === null ? Number.NaN : rssKb / 1024;
-  const stalls = parseStallStats(serve.stderr());
-  const stallText =
-    stalls === null
-      ? 'stalls not reported'
-      : `loop p99 ${stalls.loopP99Ms.toFixed(1)} ms max ${stalls.loopMaxMs.toFixed(1)} ms, gc ${stalls.gcCount} pauses ${stalls.gcTotalMs.toFixed(1)} ms max ${stalls.gcMaxMs.toFixed(1)} ms`;
   process.stdout.write(
-    `LOAD receiver: spans ${manifest.totals.spans} logs ${manifest.totals.logs} in ${seconds.toFixed(0)} s, peak RSS ${rssMb.toFixed(0)} MB, ${stallText}\n`,
+    `LOAD receiver: spans ${manifest.totals.spans} logs ${manifest.totals.logs} in ${seconds.toFixed(0)} s, ${formatServeFigures(serve.stderr())}\n`,
   );
   for (const f of failures) process.stderr.write(`FAIL ${f}\n`);
   return failures.length === 0 ? 0 : 1;
