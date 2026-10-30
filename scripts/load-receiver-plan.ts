@@ -1,12 +1,52 @@
 import { parseArgs } from 'node:util';
 
-/** Pinned: telemetrygen's flags change between releases. `--rate 0` (unthrottled) is needed; the default is 1/s. */
+/** Pinned: telemetrygen's flags change between releases. */
 export const TELEMETRYGEN_IMAGE: string =
   'ghcr.io/open-telemetry/opentelemetry-collector-contrib/telemetrygen:v0.140.0';
 /** Spec §7: writer peak RSS. */
 export const MAX_RSS_KB: number = 512 * 1024;
 /** `telemetrygen traces` makes one root span and `--child-spans` (default 1) children per trace. */
 const SPANS_PER_TRACE = 2;
+/**
+ * telemetrygen's trace generator has no backpressure: unthrottled (`--rate 0`) it produces hundreds of thousands of
+ * traces a second and its batch span processor drops whatever the exporter has not sent, so traces are paced.
+ * 250/s × 8 workers = 2,000 traces/s = 4,000 spans/s, about 250 s for 1M spans. The logs path exports one request
+ * per record synchronously, so it stays unthrottled.
+ */
+export const TRACES_PER_SECOND_PER_WORKER = 250;
+
+export function tracesArgs(image: string, port: number, workers: number, tracesPerWorker: number): string[] {
+  return [
+    image,
+    'traces',
+    '--otlp-insecure',
+    '--otlp-endpoint',
+    `127.0.0.1:${port}`,
+    '--workers',
+    String(workers),
+    '--traces',
+    String(tracesPerWorker),
+    '--rate',
+    String(TRACES_PER_SECOND_PER_WORKER),
+  ];
+}
+
+export function logsArgs(image: string, port: number, workers: number, logsPerWorker: number): string[] {
+  return [
+    image,
+    'logs',
+    '--otlp-http',
+    '--otlp-insecure',
+    '--otlp-endpoint',
+    `127.0.0.1:${port}`,
+    '--workers',
+    String(workers),
+    '--logs',
+    String(logsPerWorker),
+    '--rate',
+    '0',
+  ];
+}
 
 export interface LoadArgs {
   spans: number;

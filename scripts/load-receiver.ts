@@ -4,11 +4,13 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   checkRun,
+  logsArgs,
   parseLoadArgs,
   parseManifestJs,
   parseMaxRssKb,
   parseReceived,
   planWorkload,
+  tracesArgs,
 } from './load-receiver-plan.js';
 
 /**
@@ -96,38 +98,19 @@ async function main(): Promise<number> {
   const started = Date.now();
   const serve = await startServe(out);
   try {
-    // --rate 0 is unthrottled (the default is 1 per second per worker). A trace is a root plus one child span.
+    // Traces are paced (see TRACES_PER_SECOND_PER_WORKER); a trace is a root plus one child span.
     process.stdout.write(
       `traces: ${args.spans} spans over gRPC (${plan.tracesPerWorker} traces × ${args.workers} workers)\n`,
     );
-    await docker([
-      args.image,
-      'traces',
-      '--otlp-insecure',
-      '--otlp-endpoint',
-      `127.0.0.1:${GRPC_PORT}`,
-      '--workers',
-      String(args.workers),
-      '--traces',
-      String(plan.tracesPerWorker),
-      '--rate',
-      '0',
-    ]);
+    let phase = Date.now();
+    await docker(tracesArgs(args.image, GRPC_PORT, args.workers, plan.tracesPerWorker));
+    process.stdout.write(
+      `traces: ${args.spans} spans done in ${((Date.now() - phase) / 1000).toFixed(0)} s\n`,
+    );
     process.stdout.write(`logs: ${args.logs} over HTTP (${plan.logsPerWorker} × ${args.workers} workers)\n`);
-    await docker([
-      args.image,
-      'logs',
-      '--otlp-http',
-      '--otlp-insecure',
-      '--otlp-endpoint',
-      `127.0.0.1:${HTTP_PORT}`,
-      '--workers',
-      String(args.workers),
-      '--logs',
-      String(plan.logsPerWorker),
-      '--rate',
-      '0',
-    ]);
+    phase = Date.now();
+    await docker(logsArgs(args.image, HTTP_PORT, args.workers, plan.logsPerWorker));
+    process.stdout.write(`logs: ${args.logs} done in ${((Date.now() - phase) / 1000).toFixed(0)} s\n`);
   } catch (e) {
     serve.child.kill('SIGKILL');
     throw e;
@@ -139,6 +122,8 @@ async function main(): Promise<number> {
   const seconds = (Date.now() - started) / 1000;
   if (code !== 0) throw new Error(`serve exited ${code} after SIGINT: ${serve.stdout()}${serve.stderr()}`);
 
+  const receivedLine = /^.*received \d+ requests.*$/m.exec(serve.stdout());
+  if (receivedLine !== null) process.stdout.write(`${receivedLine[0]}\n`);
   const manifest = parseManifestJs(await readFile(join(out, 'data', 'manifest.js'), 'utf8'));
   const rssKb = parseMaxRssKb(serve.stderr());
   const failures = checkRun({

@@ -40,8 +40,9 @@ depends = ["build"]
 env = { OTEL_HTML_LOAD = "1" }
 run = "pnpm exec vitest run test/writer/metric-memory.test.ts test/writer/log-size.test.ts"
 
-# The receiver under load: 1M spans over gRPC and 1M logs over HTTP from telemetrygen (Docker, host networking: Linux
-# only) into `otel-html serve`, then the manifest totals, the rejected count and the peak RSS are asserted. The report
+# The receiver under load: 1M spans over gRPC, paced at 250 traces/s per worker so telemetrygen does not drop them, and
+# 1M logs over HTTP from telemetrygen (Docker, host networking: Linux only) into `otel-html serve`, then the manifest
+# totals, the rejected count and the peak RSS are asserted. The report
 # stays in `dist/load-receiver` for `OTEL_HTML_LOAD_REPORT=dist/load-receiver pnpm exec playwright test e2e/load.spec.ts`.
 # Smaller runs: `mise run test:load:receiver -- --spans 20000 --logs 100000`.
 [tasks."test:load:receiver"]
