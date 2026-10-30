@@ -46,7 +46,7 @@ function endpointOf(
 }
 
 /**
- * Drain the receiver first (it stops admitting, so late requests get a retryable busy, and its queue empties), then
+ * Drain the receiver first (it stops accepting receives, so late requests get a retryable busy, and its queue empties), then
  * close every listener whether or not one rejects; rethrow the first rejection.
  */
 export async function closeAll(

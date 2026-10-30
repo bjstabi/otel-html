@@ -8,6 +8,7 @@ import {
   status,
 } from '@grpc/grpc-js';
 import { afterEach, describe, expect, test } from 'vitest';
+import { closeAll } from '../../src/api/receiver.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { RetryInfoSchema } from '../../src/model/gen/google/rpc/error_details_pb.js';
 import { StatusSchema } from '../../src/model/gen/google/rpc/status_pb.js';
@@ -315,7 +316,7 @@ describe('OTLP/gRPC transport', () => {
         calls.push(`add ${source}`);
         entered();
         await gate;
-        return { accepted: 1 } as never;
+        return { accepted: 1, dropped: 0, duplicates: 0 };
       },
       async endInput() {},
       async addRecords() {
@@ -335,12 +336,10 @@ describe('OTLP/gRPC transport', () => {
       '127.0.0.1',
       0,
     );
+    open.push(listener);
     const exported = call(clientFor(listener.address), requestOf([protoSpan(1)]));
     await addEntered;
-    const closing = (async () => {
-      await receiver.close();
-      await listener.close();
-    })();
+    const closing = closeAll([listener], receiver);
     // The hazard window: well past the force-shutdown deadline while the call is still queued.
     await new Promise((resolve) => setTimeout(resolve, 200));
     release();
