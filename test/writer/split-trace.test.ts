@@ -61,7 +61,7 @@ function expectComplete(w: TestWriter, out: string, spanCount: number): void {
 describe('a trace split across sessions', () => {
   test('append keeps the index and contents complete', async () => {
     const w = createTestWriter();
-    const a = await openSession(w.deps, { out: 'r', config, mode: 'create' });
+    const a = await openSession(w.deps, { out: 'r', config, mode: 'replace' });
     await a.add(otlp(part(2, 200)), 'a.json');
     await a.close();
     const b = await openSession(w.deps, { out: 'r', config, mode: 'append' });
@@ -78,11 +78,11 @@ describe('a trace split across sessions', () => {
       ['a', [part(2, 200), part(4, 600)]],
       ['b', [part(1, 0), part(3, 400)]],
     ] as const) {
-      const s = await openSession(w.deps, { out, config, mode: 'create' });
+      const s = await openSession(w.deps, { out, config, mode: 'replace' });
       for (const [i, p] of parts.entries()) await s.add(otlp(p), `${out}${i}.json`);
       await s.close();
     }
-    await mergeReports(w.deps, ['a', 'b'], { out: 'm', config, mode: 'create' });
+    await mergeReports(w.deps, ['a', 'b'], { out: 'm', config, mode: 'replace' });
     expectComplete(w, 'm', 4);
   });
 });
@@ -90,7 +90,7 @@ describe('a trace split across sessions', () => {
 describe('kill mid-flush, then append', () => {
   test('a session flushed but never closed (stale lock) is continued cleanly', async () => {
     const w = createTestWriter();
-    const a = await openSession(w.deps, { out: 'r', config, mode: 'create' });
+    const a = await openSession(w.deps, { out: 'r', config, mode: 'replace' });
     await a.add(otlp(part(1, 0)), 'a.json');
     await a.add(otlp(part(2, 200)), 'b.json');
     await a.flush(); // then the process dies: no close, the lock stays behind
@@ -112,7 +112,7 @@ describe('kill mid-flush, then append', () => {
 describe('a trace with logs in several log chunks', () => {
   test('the index lists each log chunk, and a span-less trace still gets an entry', async () => {
     const w = createTestWriter();
-    const s = await openSession(w.deps, { out: 'r', config, mode: 'create' });
+    const s = await openSession(w.deps, { out: 'r', config, mode: 'replace' });
     const log = (traceId: string, spanId?: string): ReturnType<typeof logRecord> =>
       logRecord({ traceId, ...(spanId === undefined ? {} : { spanId }) });
     await s.add(otlp(logsRequest([log(TRACE_ID), logRecord()])), 'l1.json');

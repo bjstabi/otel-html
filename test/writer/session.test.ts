@@ -51,7 +51,7 @@ function spanBatch(n: number): RecordBatch {
 }
 
 async function open(w: TestWriter, config = testConfig()): Promise<WriterSession> {
-  return openSession(w.deps, { out: OUT, config, mode: 'create' });
+  return openSession(w.deps, { out: OUT, config, mode: 'replace' });
 }
 
 async function failure(p: Promise<unknown>): Promise<OtelHtmlError> {
@@ -487,7 +487,7 @@ describe('flush policy and telemetry', () => {
 });
 
 describe('folders and locking', () => {
-  test('create refuses a non-empty folder that is not a report', async () => {
+  test('replace refuses a non-empty folder that is not a report', async () => {
     const w = createTestWriter();
     await w.fs.writeBytes('r/notes.txt', new Uint8Array([1]));
     const e = await failure(open(w));
@@ -503,7 +503,7 @@ describe('folders and locking', () => {
     const other = createProcess(555);
     other.alive.add(4242);
     const e = await failure(
-      openSession({ ...w.deps, process: other }, { out: OUT, config: testConfig(), mode: 'create' }),
+      openSession({ ...w.deps, process: other }, { out: OUT, config: testConfig(), mode: 'replace' }),
     );
     expect(e.code).toBe('report-locked');
     expect(e.hint).toContain('otel-html serve');
@@ -517,13 +517,13 @@ describe('folders and locking', () => {
     const successor = createProcess(555);
     const s = await openSession(
       { ...w.deps, process: successor },
-      { out: OUT, config: testConfig(), mode: 'create' },
+      { out: OUT, config: testConfig(), mode: 'replace' },
     );
     expect(w.logs.some((l) => l.level === 'warn' && l.msg.includes('stale'))).toBe(true);
     await s.close();
   });
 
-  test('create replaces an existing unlocked report completely', async () => {
+  test('replace replaces an existing unlocked report completely', async () => {
     const w = createTestWriter();
     const a = await open(w, testConfig({ writer: { chunkTargetBytes: 1 } }));
     await a.add(otlp(spansRequest(5)), 'a.json');
@@ -539,7 +539,7 @@ describe('folders and locking', () => {
     expect(chunkFiles).toEqual(['r/data/chunks/spans/000000.js']);
   });
 
-  test('create replaces a report whose data/metrics holds a stray file (e.g. .DS_Store)', async () => {
+  test('replace replaces a report whose data/metrics holds a stray file (e.g. .DS_Store)', async () => {
     const w = createTestWriter();
     await (await open(w)).close();
     await w.fs.mkdirp('r/data/metrics');
@@ -550,6 +550,57 @@ describe('folders and locking', () => {
     expect(manifestOf(w, OUT).totals.spans).toBe(2);
     // Not a metric directory: left alone, like any other file the writer does not own.
     expect(w.fs.snapshot().has('r/data/metrics/.DS_Store')).toBe(true);
+  });
+
+  test('open appends when a report is there', async () => {
+    const w = createTestWriter();
+    const config = testConfig({ writer: { chunkTargetBytes: 1 } });
+    const a = await openSession(w.deps, { out: OUT, config, mode: 'open' });
+    await a.add(otlp(spansRequest(3)), 'a.json');
+    await a.close();
+    const b = await openSession(w.deps, { out: OUT, config, mode: 'open' });
+    await b.add(otlp(spansRequest(2, 0, 100)), 'b.json');
+    await b.close();
+    const m = manifestOf(w, OUT);
+    expect(m.totals.spans).toBe(5);
+    expect(m.chunks).toHaveLength(5);
+    const chunkFiles = [...w.fs.snapshot().keys()].filter((p) => p.startsWith('r/data/chunks/spans/'));
+    expect(chunkFiles).toEqual(
+      [0, 1, 2, 3, 4].map((i) => `r/data/chunks/spans/${String(i).padStart(6, '0')}.js`),
+    );
+  });
+
+  test('open creates in a new or empty folder', async () => {
+    const w = createTestWriter();
+    const a = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'open' });
+    await a.add(otlp(spansRequest(2)), 'a.json');
+    await a.close();
+    expect(manifestOf(w, OUT).totals.spans).toBe(2);
+    const w2 = createTestWriter();
+    await w2.fs.mkdirp('r');
+    const b = await openSession(w2.deps, { out: OUT, config: testConfig(), mode: 'open' });
+    await b.add(otlp(spansRequest(3)), 'b.json');
+    await b.close();
+    expect(manifestOf(w2, OUT).totals.spans).toBe(3);
+  });
+
+  test('open refuses a non-empty folder that is not a report', async () => {
+    const w = createTestWriter();
+    await w.fs.writeBytes('r/notes.txt', new Uint8Array([1]));
+    const e = await failure(openSession(w.deps, { out: OUT, config: testConfig(), mode: 'open' }));
+    expect(e.code).toBe('usage');
+    expect(e.message).toContain('not an otel-html report');
+    expect(w.fs.snapshot().get('r/notes.txt')).toBeDefined();
+    expect(w.fs.snapshot().has('r/data/state/lock.json')).toBe(false);
+  });
+
+  test("open replaces a folder holding only a failed session's state dir", async () => {
+    const w = createTestWriter();
+    await w.fs.writeBytes('r/data/state/session.0.json', new Uint8Array([1]));
+    const s = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'open' });
+    await s.add(otlp(spansRequest(2)), 'a.json');
+    await s.close();
+    expect(manifestOf(w, OUT).totals.spans).toBe(2);
   });
 
   test('append refuses a folder without a report', async () => {
@@ -593,7 +644,7 @@ describe('metric series files', () => {
     let calls = 0;
     const s = await openSession(
       { ...w.deps, beforeMetrics: () => calls++ },
-      { out: OUT, config: testConfig(), mode: 'create' },
+      { out: OUT, config: testConfig(), mode: 'replace' },
     );
     await s.add(otlp(spansRequest(3)), 'spans.json');
     expect(calls).toBe(0);

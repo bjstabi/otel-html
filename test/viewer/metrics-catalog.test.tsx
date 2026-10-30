@@ -33,7 +33,7 @@ async function buildCappedReport(): Promise<Fixture> {
   const session = await openSession(w.deps, {
     out: 'rep',
     config: testConfig({ writer: { metricSeriesCap: TEST_CAP } }),
-    mode: 'create',
+    mode: 'replace',
   });
   const at = (s: number): string => String(BigInt(EPOCH_NS) + BigInt(s) * 1_000_000_000n);
   const point = (v: number, s: number, key: string): JsonObject => ({

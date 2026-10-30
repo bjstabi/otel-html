@@ -64,7 +64,7 @@ async function serve(
 
 async function realServer(options?: GrpcTransportOptions) {
   const w: TestWriter = createTestWriter();
-  const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'create' });
+  const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'replace' });
   const receiver = createReceiver(session, { inflightBudgetBytes: 1 << 20 }, { logger: silent });
   return { w, session, address: await serve(receiver, options) };
 }
@@ -233,7 +233,7 @@ describe('OTLP/gRPC transport', () => {
 
   test('a message over maxBodyBytes is RESOURCE_EXHAUSTED and counted as too-large', async () => {
     const w: TestWriter = createTestWriter();
-    const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'create' });
+    const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'replace' });
     const receiver = createReceiver(session, { inflightBudgetBytes: 1 << 20 }, { logger: silent });
     const address = await serve(receiver, { maxBodyBytes: 1_000, inflightBudgetBytes: 1 << 20 });
     const { err } = await call(clientFor(address), new Uint8Array(1_500));
@@ -246,7 +246,7 @@ describe('OTLP/gRPC transport', () => {
 
   test('a message over twice the limit is refused by grpc-js and is not counted', async () => {
     const w: TestWriter = createTestWriter();
-    const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'create' });
+    const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'replace' });
     const receiver = createReceiver(session, { inflightBudgetBytes: 1 << 20 }, { logger: silent });
     const address = await serve(receiver, { maxBodyBytes: 1_000, inflightBudgetBytes: 1 << 20 });
     const { err } = await call(clientFor(address), new Uint8Array(2_500));

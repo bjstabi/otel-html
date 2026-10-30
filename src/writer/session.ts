@@ -84,10 +84,13 @@ export interface WriterDeps {
   beforeMetrics?: () => void;
 }
 
+/** `open` appends when the folder holds a report and creates one otherwise; `replace` starts a new report over any report. */
+export type SessionMode = 'open' | 'append' | 'replace';
+
 export interface SessionOptions {
   out: string;
   config: ResolvedConfig;
-  mode: 'create' | 'append';
+  mode: SessionMode;
 }
 
 export interface AddResult {
@@ -222,8 +225,10 @@ export async function openSession(deps: WriterDeps, options: SessionOptions): Pr
   const normalizerOpts = { foldedPerMetric: FOLDED_STREAMS_PER_SERIES_CAP * config.writer.metricSeriesCap };
   const { fs } = deps;
 
+  const appending =
+    options.mode === 'append' || (options.mode === 'open' && (await fs.exists(at(out, MANIFEST_PATH))));
   let preexisting = false;
-  if (options.mode === 'create') {
+  if (!appending) {
     if (await fs.exists(out)) {
       const names = await fs.list(out);
       preexisting = names.length > 0;
@@ -239,14 +244,14 @@ export async function openSession(deps: WriterDeps, options: SessionOptions): Pr
     // Checked before creating any directory or taking the lock, so a wrong folder is left untouched.
     throw new OtelHtmlError('usage', {
       message: `cannot append: no report found at ${out} (missing ${MANIFEST_PATH})`,
-      hint: 'use mode create to start a new report',
+      hint: 'the folder holds no report; drop --append to create one',
     });
   }
   await fs.mkdirp(at(out, STATE_DIR));
   const lock = await acquireLock(deps, at(out, LOCK_PATH));
   try {
     let restored: Restored;
-    if (options.mode === 'create') {
+    if (!appending) {
       restored = {
         lock,
         epoch: null,
@@ -294,7 +299,7 @@ export async function openSession(deps: WriterDeps, options: SessionOptions): Pr
         replacing: false,
       };
     }
-    if (options.mode === 'append') {
+    if (appending) {
       await restoreCatalogSeries(fs, out, restored.rollups.metrics.catalog, restored.metricFiles);
     }
     for (const d of ['chunks/spans', 'chunks/logs', 'chunks/metrics', 'traces', 'rollups', 'metrics']) {

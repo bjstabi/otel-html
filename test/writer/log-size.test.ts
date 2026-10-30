@@ -24,7 +24,7 @@ describe('log chunk size', () => {
   test(`20k realistic logs take at most ${MAX_BYTES_PER_LOG} bytes each on disk`, async () => {
     const count = 20_000;
     const w = createTestWriter();
-    const s = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'create' });
+    const s = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'replace' });
     for (let first = 0; first < count; first += 5000)
       await s.add(otlp(scaleLogsRequest(first, 5000, TEST_SCALE_IDS)), 'l.json');
     await s.close();

@@ -93,6 +93,49 @@ describe('cli', () => {
     expect(r.stdout).toBe('wrote out: 5 spans, 0 logs, 0 metric points\n');
   });
 
+  test('convert into an existing report appends; --replace starts over; --append needs a report', async () => {
+    const w = createTestWriter();
+    await put(w, 'in/a.json', JSON.stringify(spansRequest(2)));
+    await put(w, 'in/b.json', JSON.stringify(spansRequest(3, 0, 10)));
+    await run(w, ['convert', 'in/a.json', '-o', 'out']);
+    const appended = await run(w, ['convert', 'in/b.json', '-o', 'out']);
+    expect(appended.stdout).toBe('wrote out: 5 spans, 0 logs, 0 metric points\n');
+    const replaced = await run(w, ['convert', 'in/b.json', '-o', 'out', '--replace']);
+    expect(replaced.stdout).toBe('wrote out: 3 spans, 0 logs, 0 metric points\n');
+    const missing = await run(w, ['convert', 'in/b.json', '-o', 'fresh', '--append']);
+    expect(missing.code).toBe(2);
+    expect(missing.stderr).toContain('error: ');
+    expect(missing.stderr).toContain('cannot append');
+    expect(await w.fs.exists('fresh')).toBe(false);
+  });
+
+  test('--append with --replace exits 2', async () => {
+    const w = createTestWriter();
+    await put(w, 'in/a.json', JSON.stringify(spansRequest(2)));
+    const both = ['-o', 'out', '--append', '--replace'];
+    for (const argv of [
+      ['convert', 'in/a.json', ...both],
+      ['merge', 'in', ...both],
+      ['serve', ...both],
+      ['run', ...both, '--', 'true'],
+    ]) {
+      const r = await run(w, argv);
+      expect(r.code).toBe(2);
+      expect(r.stderr).toContain('cannot be used with');
+    }
+    expect(await w.fs.exists('out')).toBe(false);
+  });
+
+  test('merge into an existing report at -o adds to it', async () => {
+    const w = createTestWriter();
+    await put(w, 'in/a.json', JSON.stringify(spansRequest(2)));
+    await put(w, 'in/b.json', JSON.stringify(spansRequest(3, 0, 10)));
+    await run(w, ['convert', 'in/a.json', '-o', 'one']);
+    await run(w, ['convert', 'in/b.json', '-o', 'out']);
+    const r = await run(w, ['merge', 'one', '-o', 'out']);
+    expect(r).toEqual({ code: 0, stdout: 'wrote out: 5 spans, 0 logs, 0 metric points\n', stderr: '' });
+  });
+
   test('merge combines reports', async () => {
     const w = createTestWriter();
     await put(w, 'in/a.json', JSON.stringify(spansRequest(2)));

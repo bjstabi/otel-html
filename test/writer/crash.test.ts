@@ -35,7 +35,7 @@ function assertManifestSelfConsistent(w: TestWriter): void {
 
 async function crashedWriter(failSuffix: string): Promise<{ w: TestWriter; manifestBefore: string }> {
   const w = createTestWriter();
-  const a = await openSession(w.deps, { out: OUT, config, mode: 'create' });
+  const a = await openSession(w.deps, { out: OUT, config, mode: 'replace' });
   await a.add(otlp(spansRequest(10)), 'first.json');
   await a.flush();
   const manifestBefore = w.fs.snapshot().get('r/data/manifest.js') ?? '';
@@ -101,7 +101,7 @@ describe.each(['data/manifest.js', 'data/state/session.1.json', 'data/rollups/sp
 describe('a chunk write fails during add', () => {
   test('the request is accepted once, the chunk is retried at flush, and nothing is double counted', async () => {
     const w = createTestWriter();
-    const a = await openSession(w.deps, { out: OUT, config, mode: 'create' });
+    const a = await openSession(w.deps, { out: OUT, config, mode: 'replace' });
     w.fs.failNextWrite('data/chunks/spans/000001.js');
     await a.add(otlp(spansRequest(1)), 'a.json');
     expect(await a.add(otlp(spansRequest(1, 0, 1)), 'b.json')).toMatchObject({ accepted: 1 });
@@ -115,7 +115,7 @@ describe('a chunk write fails during add', () => {
 
   test('after a clean flush, flush still checkpoints state so append works', async () => {
     const w = createTestWriter();
-    const a = await openSession(w.deps, { out: OUT, config, mode: 'create' });
+    const a = await openSession(w.deps, { out: OUT, config, mode: 'replace' });
     await a.add(otlp(spansRequest(2)), 'a.json');
     await a.flush(); // clean: nothing pending
     w.fs.failNextWrite('data/chunks/spans/000002.js');
@@ -131,7 +131,7 @@ describe('a chunk write fails during add', () => {
 
   test('logs and metrics are counted once even when their chunk writes fail', async () => {
     const w = createTestWriter();
-    const a = await openSession(w.deps, { out: OUT, config, mode: 'create' });
+    const a = await openSession(w.deps, { out: OUT, config, mode: 'replace' });
     w.fs.failNextWrite('data/chunks/logs/000000.js');
     const logs = Array.from({ length: 3 }, () => logRecord({}));
     expect(await a.add(otlp(logsRequest(logs)), 'l.json')).toMatchObject({ accepted: 3 });
@@ -143,7 +143,7 @@ describe('a chunk write fails during add', () => {
 describe('a failed flush on a live session', () => {
   test('retrying the flush succeeds without double counting', async () => {
     const w = createTestWriter();
-    const a = await openSession(w.deps, { out: OUT, config, mode: 'create' });
+    const a = await openSession(w.deps, { out: OUT, config, mode: 'replace' });
     await a.add(otlp(spansRequest(4)), 'a.json');
     w.fs.failNextWrite('data/manifest.js');
     await expect(a.flush()).rejects.toThrow(/injected/);
@@ -164,7 +164,7 @@ describe('writer killed between flushes with metrics', () => {
 
   async function killedAfterTwoFlushes(): Promise<TestWriter> {
     const w = createTestWriter();
-    const s = await openSession(w.deps, { out: OUT, config, mode: 'create' });
+    const s = await openSession(w.deps, { out: OUT, config, mode: 'replace' });
     for (const batch of reqs) {
       for (const r of batch) await s.add(otlp(r), 'm.json');
       await s.flush();

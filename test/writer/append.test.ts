@@ -26,12 +26,12 @@ async function failure(p: Promise<unknown>): Promise<OtelHtmlError> {
   throw new Error('expected failure');
 }
 
-function open(w: TestWriter, mode: 'create' | 'append', config = SMALL_CHUNKS): Promise<WriterSession> {
+function open(w: TestWriter, mode: 'replace' | 'append', config = SMALL_CHUNKS): Promise<WriterSession> {
   return openSession(w.deps, { out: OUT, config, mode });
 }
 
 async function closedReportWithTwoChunks(w: TestWriter): Promise<void> {
-  const a = await open(w, 'create');
+  const a = await open(w, 'replace');
   await a.add(otlp(spansRequest(1, 0, 0)), 'a.json');
   await a.add(otlp(spansRequest(1, 0, 1)), 'b.json');
   await a.close();
@@ -61,7 +61,7 @@ describe('append', () => {
     const w = createTestWriter();
     const logs = (bodies: readonly string[]): ReturnType<typeof logsRequest> =>
       logsRequest(bodies.map((body) => logRecord({ body: { stringValue: body } })));
-    const a = await open(w, 'create');
+    const a = await open(w, 'replace');
     await a.add(otlp(logs(['user 1 logged in', 'disk full on /dev/sda'])), 'a.json');
     await a.close();
     const before = logRollupsOf(w, OUT).patterns.clusters();
@@ -91,7 +91,7 @@ describe('append', () => {
     };
     test('append without config keeps them, and the default dashboard', async () => {
       const w = createTestWriter();
-      await (await open(w, 'create', testConfig({ ...ops, viewer: { defaultDashboard: 'ops' } }))).close();
+      await (await open(w, 'replace', testConfig({ ...ops, viewer: { defaultDashboard: 'ops' } }))).close();
       await (await open(w, 'append', testConfig())).close();
       const m = manifestOf(w, OUT).config;
       expect(m.dashboards.map((d) => d.dashboard.id)).toEqual(['ops']);
@@ -100,7 +100,7 @@ describe('append', () => {
     });
     test('append without config keeps the home page; a config that sets another one wins', async () => {
       const w = createTestWriter();
-      await (await open(w, 'create', testConfig({ viewer: { home: 'dashboards' } }))).close();
+      await (await open(w, 'replace', testConfig({ viewer: { home: 'dashboards' } }))).close();
       await (await open(w, 'append', testConfig())).close();
       expect(manifestOf(w, OUT).config.viewer.home).toBe('dashboards');
       await (await open(w, 'append', testConfig({ viewer: { home: 'logs' } }))).close();
@@ -108,7 +108,7 @@ describe('append', () => {
     });
     test('append that replaces only dashboards keeps the views', async () => {
       const w = createTestWriter();
-      await (await open(w, 'create', testConfig(ops))).close();
+      await (await open(w, 'replace', testConfig(ops))).close();
       await (await open(w, 'append', testConfig(other))).close();
       const m = manifestOf(w, OUT).config;
       expect(m.dashboards.map((d) => d.dashboard.id)).toEqual(['other']);
@@ -116,7 +116,7 @@ describe('append', () => {
     });
     test('append with another config replaces them', async () => {
       const w = createTestWriter();
-      await (await open(w, 'create', testConfig({ ...ops, viewer: { defaultDashboard: 'ops' } }))).close();
+      await (await open(w, 'replace', testConfig({ ...ops, viewer: { defaultDashboard: 'ops' } }))).close();
       await (await open(w, 'append', testConfig(other))).close();
       const m = manifestOf(w, OUT).config;
       expect(m.dashboards.map((d) => d.dashboard.id)).toEqual(['other']);
@@ -136,16 +136,41 @@ describe('append', () => {
     expect(after.createdAt).toBe(before.createdAt);
   });
 
-  test('a version mismatch tells the user to merge, with both versions', async () => {
+  test('a version mismatch tells the user to replace or merge, with both versions', async () => {
     const w = createTestWriter();
     await closedReportWithTwoChunks(w);
     const e = await failure(
       openSession({ ...w.deps, version: '9.9.9' }, { out: OUT, config: SMALL_CHUNKS, mode: 'append' }),
     );
     expect(e.code).toBe('version-mismatch');
-    expect(e.hint).toBe('append requires the same otel-html version (0.1.0 vs 9.9.9); use `otel-html merge`');
-    expect(e.message).toContain('0.1.0');
-    expect(e.message).toContain('9.9.9');
+    expect(e.message).toContain(
+      `cannot append: the report at ${OUT} was written by otel-html 0.1.0 (this is 9.9.9)`,
+    );
+    expect(e.hint).toBe(
+      `pass --replace (replace: true in the library) to start it over, or combine across versions with \`otel-html merge ${OUT} <new> -o <dir>\``,
+    );
+    expect(e.path).toBe('manifest.otelHtmlVersion');
+  });
+
+  test('a version mismatch on the default path deletes nothing', async () => {
+    const w = createTestWriter();
+    await closedReportWithTwoChunks(w);
+    const before = w.fs.snapshot();
+    const e = await failure(
+      openSession({ ...w.deps, version: '9.9.9' }, { out: OUT, config: SMALL_CHUNKS, mode: 'open' }),
+    );
+    expect(e.code).toBe('version-mismatch');
+    expect(e.message).toContain(
+      `cannot append: the report at ${OUT} was written by otel-html 0.1.0 (this is 9.9.9)`,
+    );
+    expect(e.hint).toBe(
+      `pass --replace (replace: true in the library) to start it over, or combine across versions with \`otel-html merge ${OUT} <new> -o <dir>\``,
+    );
+    expect(e.path).toBe('manifest.otelHtmlVersion');
+    const after = w.fs.snapshot();
+    for (const [path, text] of before) {
+      if (!path.endsWith('.lock')) expect(after.get(path), path).toBe(text);
+    }
   });
 
   test('a state file written by another version is a version mismatch too', async () => {
@@ -159,7 +184,11 @@ describe('append', () => {
     }
     const e = await failure(open(w, 'append'));
     expect(e.code).toBe('version-mismatch');
-    expect(e.hint).toContain('use `otel-html merge`');
+    expect(e.message).toContain(
+      `cannot append: the report at ${OUT} was written by otel-html 0.0.1 (this is 0.1.0)`,
+    );
+    expect(e.hint).toContain('pass --replace');
+    expect(e.path).toMatch(/^data\/state\/session\.[01]\.json otelHtmlVersion$/);
   });
 
   test('missing state files are an invalid report that points to merge', async () => {
@@ -213,14 +242,14 @@ describe('append with metrics', () => {
 
   test('the new level files equal converting all inputs at once', async () => {
     const w = createTestWriter();
-    const a = await open(w, 'create');
+    const a = await open(w, 'replace');
     await a.add(otlp(first), 'a.json');
     await a.close();
     const b = await open(w, 'append');
     await b.add(otlp(second), 'b.json');
     await b.close();
 
-    const once = await openSession(w.deps, { out: 'once', config: SMALL_CHUNKS, mode: 'create' });
+    const once = await openSession(w.deps, { out: 'once', config: SMALL_CHUNKS, mode: 'replace' });
     await once.add(otlp(first), 'a.json');
     await once.add(otlp(second), 'b.json');
     await once.close();

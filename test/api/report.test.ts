@@ -114,6 +114,40 @@ describe('Report', () => {
     expect((await r2.close()).totals.spans).toBe(4);
   });
 
+  test('create over an existing report appends', async () => {
+    const w = createTestWriter();
+    const r1 = await Report.create({ out: 'r' }, w.deps);
+    await r1.addSpans(spansRequest(3));
+    await r1.close();
+    const r2 = await Report.create({ out: 'r' }, w.deps);
+    await r2.addSpans(spansRequest(2, 0, 10));
+    expect((await r2.close()).totals.spans).toBe(5);
+  });
+
+  test('replace: true starts over', async () => {
+    const w = createTestWriter();
+    const r1 = await Report.create({ out: 'r' }, w.deps);
+    await r1.addSpans(spansRequest(3));
+    await r1.close();
+    const r2 = await Report.create({ out: 'r', replace: true }, w.deps);
+    await r2.addSpans(spansRequest(2, 0, 10));
+    expect((await r2.close()).totals.spans).toBe(2);
+  });
+
+  test('append and replace together is a usage error', async () => {
+    const w = createTestWriter();
+    const e = await failure(Report.create({ out: 'r', append: true, replace: true }, w.deps));
+    expect(e.code).toBe('usage');
+    expect(e.message).toBe('append and replace exclude each other');
+  });
+
+  test('append: true on an empty folder fails', async () => {
+    const w = createTestWriter();
+    const e = await failure(Report.create({ out: 'r', append: true }, w.deps));
+    expect(e.code).toBe('usage');
+    expect(e.message).toContain('cannot append');
+  });
+
   test('config as an object and as a file path; the title option wins', async () => {
     const w = createTestWriter();
     await w.fs.writeBytes(
