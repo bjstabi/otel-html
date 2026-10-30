@@ -37,9 +37,11 @@ const code = await runCli(
     spawn,
   },
   // Inside a `bun build --compile` binary the viewer ships embedded; under Node it is read from the package.
-  hasBunEmbeddedFiles()
-    ? { viewerAssets: bunEmbeddedViewerAssets(), beforeMetrics: favourHeapSize, favourHeapSize }
-    : { beforeMetrics: favourHeapSize, favourHeapSize },
+  {
+    beforeMetrics: favourHeapSize,
+    favourHeapSize,
+    ...(hasBunEmbeddedFiles() ? { viewerAssets: bunEmbeddedViewerAssets() } : {}),
+  },
 );
 process.exitCode = code;
 // A failing command must end the process even if something (a bound server) still holds the event loop; an

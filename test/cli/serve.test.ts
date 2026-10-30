@@ -78,20 +78,20 @@ afterEach(async () => {
 });
 
 describe('serve', () => {
-  test('favours heap size once, before the receiver is listening', async () => {
+  test('favours heap size once, before the report is created', async () => {
     const w = createTestWriter();
-    let seen: string | undefined;
+    let lockAtCall: Promise<boolean> | undefined;
     let calls = 0;
     const h = start(w, ['serve', '-o', 'out', '--http', '0', '--no-grpc'], undefined, {
       favourHeapSize: () => {
         calls++;
-        seen = h.stdout;
+        lockAtCall = w.fs.exists('out/data/state/lock.json');
       },
     });
     open.push(h);
     await listening(h);
     expect(calls).toBe(1);
-    expect(seen).toBe('');
+    expect(await lockAtCall).toBe(false);
   });
 
   test('receives until SIGINT, then finishes the report and prints the totals', async () => {
