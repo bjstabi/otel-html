@@ -50,7 +50,7 @@ async function writeReport(w: TestWriter, out: string, requests: readonly JsonOb
   const s = await openSession(w.deps, {
     out,
     config: testConfig({ writer: { chunkTargetBytes: 1 } }),
-    mode: 'create',
+    mode: 'replace',
   });
   for (const [i, r] of requests.entries()) await s.add(otlp(r), `in-${i}.json`);
   await s.close();
@@ -64,7 +64,7 @@ describe('dashboards', () => {
     const s = await openSession(w.deps, {
       out,
       config: testConfig({ ...dash(id), viewer: { defaultDashboard: id } }),
-      mode: 'create',
+      mode: 'replace',
     });
     await s.add(otlp(spansRequest(1)), 'in.json');
     await s.close();
@@ -83,17 +83,17 @@ describe('dashboards', () => {
     const s = await openSession(w.deps, {
       out: 'a',
       config: testConfig({ views: [{ id: 'v', title: 'V', page: 'traces' }] }),
-      mode: 'create',
+      mode: 'replace',
     });
     await s.add(otlp(spansRequest(1)), 'in.json');
     await s.close();
-    await mergeReports(w.deps, ['a'], { out: 'out', config: testConfig(dash('mine')), mode: 'create' });
+    await mergeReports(w.deps, ['a'], { out: 'out', config: testConfig(dash('mine')), mode: 'replace' });
     expect(manifestOf(w, 'out').config.views.map((v) => v.id)).toEqual(['v']);
   });
   test('merge with a config uses its dashboards', async () => {
     const w = createTestWriter();
     await reportWith(w, 'a', 'ops');
-    await mergeReports(w.deps, ['a'], { out: 'out', config: testConfig(dash('mine')), mode: 'create' });
+    await mergeReports(w.deps, ['a'], { out: 'out', config: testConfig(dash('mine')), mode: 'replace' });
     const m = manifestOf(w, 'out').config;
     expect(m.dashboards.map((d) => d.dashboard.id)).toEqual(['mine']);
     expect(m.viewer.defaultDashboard).toBe('fusion');
@@ -101,7 +101,7 @@ describe('dashboards', () => {
 });
 
 function merge(w: TestWriter, inputs: string[], out = 'out') {
-  return mergeReports(w.deps, inputs, { out, config: testConfig(), mode: 'create' });
+  return mergeReports(w.deps, inputs, { out, config: testConfig(), mode: 'replace' });
 }
 
 /** traceId -> absolute start in unix ns, from a report's own epoch. */
@@ -416,7 +416,7 @@ describe('mergeReports', () => {
     // A filesystem where `job` and `Job` are one folder, as on case-insensitive macOS or through a symlink.
     const fs = { ...w.fs, realpath: async (p: string): Promise<string> => p.toLowerCase() };
     const e = await failure(
-      mergeReports({ ...w.deps, fs }, ['Job'], { out: 'job', config: testConfig(), mode: 'create' }),
+      mergeReports({ ...w.deps, fs }, ['Job'], { out: 'job', config: testConfig(), mode: 'replace' }),
     );
     expect(e.code).toBe('usage');
     expect(e.message).toMatch(/input|inside|contains/);
@@ -441,7 +441,7 @@ describe('mergeReports', () => {
       },
     };
     const e = await failure(
-      mergeReports({ ...w.deps, fs }, ['a'], { out: 'out', config: testConfig(), mode: 'create' }),
+      mergeReports({ ...w.deps, fs }, ['a'], { out: 'out', config: testConfig(), mode: 'replace' }),
     );
     expect(e.code).toBe('invalid-report');
   });

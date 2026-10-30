@@ -172,7 +172,7 @@ export class Report {
     const session = await openSession(full, {
       out: options.out,
       config,
-      mode: options.append === true ? 'append' : 'create',
+      mode: options.append === true ? 'append' : 'replace',
     });
     return new Report(session, config, full);
   }

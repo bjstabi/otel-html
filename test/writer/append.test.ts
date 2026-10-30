@@ -26,12 +26,12 @@ async function failure(p: Promise<unknown>): Promise<OtelHtmlError> {
   throw new Error('expected failure');
 }
 
-function open(w: TestWriter, mode: 'create' | 'append', config = SMALL_CHUNKS): Promise<WriterSession> {
+function open(w: TestWriter, mode: 'replace' | 'append', config = SMALL_CHUNKS): Promise<WriterSession> {
   return openSession(w.deps, { out: OUT, config, mode });
 }
 
 async function closedReportWithTwoChunks(w: TestWriter): Promise<void> {
-  const a = await open(w, 'create');
+  const a = await open(w, 'replace');
   await a.add(otlp(spansRequest(1, 0, 0)), 'a.json');
   await a.add(otlp(spansRequest(1, 0, 1)), 'b.json');
   await a.close();
@@ -61,7 +61,7 @@ describe('append', () => {
     const w = createTestWriter();
     const logs = (bodies: readonly string[]): ReturnType<typeof logsRequest> =>
       logsRequest(bodies.map((body) => logRecord({ body: { stringValue: body } })));
-    const a = await open(w, 'create');
+    const a = await open(w, 'replace');
     await a.add(otlp(logs(['user 1 logged in', 'disk full on /dev/sda'])), 'a.json');
     await a.close();
     const before = logRollupsOf(w, OUT).patterns.clusters();
@@ -91,7 +91,7 @@ describe('append', () => {
     };
     test('append without config keeps them, and the default dashboard', async () => {
       const w = createTestWriter();
-      await (await open(w, 'create', testConfig({ ...ops, viewer: { defaultDashboard: 'ops' } }))).close();
+      await (await open(w, 'replace', testConfig({ ...ops, viewer: { defaultDashboard: 'ops' } }))).close();
       await (await open(w, 'append', testConfig())).close();
       const m = manifestOf(w, OUT).config;
       expect(m.dashboards.map((d) => d.dashboard.id)).toEqual(['ops']);
@@ -100,7 +100,7 @@ describe('append', () => {
     });
     test('append without config keeps the home page; a config that sets another one wins', async () => {
       const w = createTestWriter();
-      await (await open(w, 'create', testConfig({ viewer: { home: 'dashboards' } }))).close();
+      await (await open(w, 'replace', testConfig({ viewer: { home: 'dashboards' } }))).close();
       await (await open(w, 'append', testConfig())).close();
       expect(manifestOf(w, OUT).config.viewer.home).toBe('dashboards');
       await (await open(w, 'append', testConfig({ viewer: { home: 'logs' } }))).close();
@@ -108,7 +108,7 @@ describe('append', () => {
     });
     test('append that replaces only dashboards keeps the views', async () => {
       const w = createTestWriter();
-      await (await open(w, 'create', testConfig(ops))).close();
+      await (await open(w, 'replace', testConfig(ops))).close();
       await (await open(w, 'append', testConfig(other))).close();
       const m = manifestOf(w, OUT).config;
       expect(m.dashboards.map((d) => d.dashboard.id)).toEqual(['other']);
@@ -116,7 +116,7 @@ describe('append', () => {
     });
     test('append with another config replaces them', async () => {
       const w = createTestWriter();
-      await (await open(w, 'create', testConfig({ ...ops, viewer: { defaultDashboard: 'ops' } }))).close();
+      await (await open(w, 'replace', testConfig({ ...ops, viewer: { defaultDashboard: 'ops' } }))).close();
       await (await open(w, 'append', testConfig(other))).close();
       const m = manifestOf(w, OUT).config;
       expect(m.dashboards.map((d) => d.dashboard.id)).toEqual(['other']);
@@ -213,14 +213,14 @@ describe('append with metrics', () => {
 
   test('the new level files equal converting all inputs at once', async () => {
     const w = createTestWriter();
-    const a = await open(w, 'create');
+    const a = await open(w, 'replace');
     await a.add(otlp(first), 'a.json');
     await a.close();
     const b = await open(w, 'append');
     await b.add(otlp(second), 'b.json');
     await b.close();
 
-    const once = await openSession(w.deps, { out: 'once', config: SMALL_CHUNKS, mode: 'create' });
+    const once = await openSession(w.deps, { out: 'once', config: SMALL_CHUNKS, mode: 'replace' });
     await once.add(otlp(first), 'a.json');
     await once.add(otlp(second), 'b.json');
     await once.close();

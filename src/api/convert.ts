@@ -47,7 +47,7 @@ export async function convertResolved(
   const session = await openSession(full, {
     out: options.out,
     config,
-    mode: options.append === true ? 'append' : 'create',
+    mode: options.append === true ? 'append' : 'replace',
   });
   try {
     for (const file of files) {
@@ -87,5 +87,5 @@ export async function mergeResolved(
   options: Omit<MergeOptions, 'config'> & { config: ResolvedConfig },
   full: WriterDeps,
 ): Promise<ReportSummary> {
-  return mergeReports(full, options.inputs, { out: options.out, config: options.config, mode: 'create' });
+  return mergeReports(full, options.inputs, { out: options.out, config: options.config, mode: 'replace' });
 }

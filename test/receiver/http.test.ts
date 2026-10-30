@@ -40,7 +40,7 @@ async function serve(receiver: Receiver, options: HttpTransportOptions = { maxBo
 
 async function realServer(options?: HttpTransportOptions) {
   const w: TestWriter = createTestWriter();
-  const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'create' });
+  const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'replace' });
   const receiver = createReceiver(session, { inflightBudgetBytes: 1 << 20 }, { logger: silent });
   return { w, session, receiver, base: await serve(receiver, options) };
 }

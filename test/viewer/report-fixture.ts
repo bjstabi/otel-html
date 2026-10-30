@@ -71,7 +71,7 @@ export async function buildReport(traces: number, errorTraces: readonly number[]
   const session = await openSession(w.deps, {
     out: OUT,
     config: testConfig(),
-    mode: 'create',
+    mode: 'replace',
   });
   const errors = new Set(errorTraces);
   for (let i = 0; i < traces; i++) {
@@ -102,7 +102,7 @@ export function withShard(
  */
 export async function buildSpreadReport(): Promise<Fixture> {
   const w = createTestWriter();
-  const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'create' });
+  const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'replace' });
   const base = BigInt(EPOCH_NS);
   const one = (
     service: string,
@@ -170,7 +170,7 @@ const TICKS_PER_CHUNK = 2;
  */
 export async function buildLogReport(): Promise<Fixture> {
   const w = createTestWriter();
-  const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'create' });
+  const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'replace' });
   await session.add(otlp(traceRequest(0, new Set())), 'spans');
   await session.flush();
   const base = BigInt(EPOCH_NS);
@@ -232,7 +232,7 @@ export async function buildLogChunksReport(
   chunks: readonly (readonly [number, string])[][],
 ): Promise<Fixture> {
   const w = createTestWriter();
-  const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'create' });
+  const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'replace' });
   const base = BigInt(EPOCH_NS);
   for (const [k, bodies] of chunks.entries()) {
     await session.add(
@@ -388,7 +388,7 @@ export function buildMetricExplorerReport(): Promise<Fixture> {
 
 async function buildMetrics(finish: boolean, extras: boolean): Promise<Fixture> {
   const w = createTestWriter();
-  const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'create' });
+  const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'replace' });
   for (const r of metricRequest(extras)) await session.add(otlp(r), 'metrics');
   if (finish) await session.close();
   else await session.flush();
@@ -421,7 +421,7 @@ export const RPC_METRICS = 11;
  */
 export async function buildEmbeddedMetricsReport(): Promise<Fixture> {
   const w = createTestWriter();
-  const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'create' });
+  const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'replace' });
   const base = BigInt(EPOCH_NS);
   const sec = (s: number): string => String(base + BigInt(Math.round(s * 1000)) * 1_000_000n);
   const res = (service: string, host: string): JsonObject => ({
@@ -586,7 +586,7 @@ export async function buildEmbeddedMetricsReport(): Promise<Fixture> {
  */
 export async function buildResourceValuesReport(): Promise<Fixture> {
   const w = createTestWriter();
-  const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'create' });
+  const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'replace' });
   const t = BigInt(EPOCH_NS);
   await session.add(
     otlp({
@@ -651,7 +651,7 @@ export async function buildCounterRun(run: {
 }): Promise<Fixture> {
   const FLUSH_POINTS = 500;
   const w = createTestWriter();
-  const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'create' });
+  const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'replace' });
   const base = BigInt(EPOCH_NS);
   const at = (s: number): string => String(base + BigInt(s) * 1_000_000_000n);
   const points = Math.floor(run.durationS / run.stepS) + 1;
@@ -719,7 +719,7 @@ export async function buildSummaryRun(run: {
 }): Promise<Fixture> {
   const FLUSH_POINTS = 500;
   const w = createTestWriter();
-  const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'create' });
+  const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'replace' });
   const base = BigInt(EPOCH_NS);
   const at = (s: number): string => String(base + BigInt(s) * 1_000_000_000n);
   const points = Math.floor(run.durationS / run.stepS) + 1;
@@ -769,7 +769,7 @@ export async function buildUnfinishedRun(run: {
   series: number;
 }): Promise<Fixture> {
   const w = createTestWriter();
-  const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'create' });
+  const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'replace' });
   const base = BigInt(EPOCH_NS);
   const at = (s: number): string => String(base + BigInt(s) * 1_000_000_000n);
   for (let f = 0; f < run.flushes; f++) {

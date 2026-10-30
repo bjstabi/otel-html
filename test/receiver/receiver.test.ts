@@ -31,7 +31,7 @@ async function realReceiver(
   w: TestWriter,
   inflightBudgetBytes = 1 << 20,
 ): Promise<{ receiver: Receiver; session: WriterSession }> {
-  const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'create' });
+  const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'replace' });
   return { receiver: createReceiver(session, { inflightBudgetBytes }, { logger: w.deps.logger }), session };
 }
 
