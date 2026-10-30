@@ -28,6 +28,8 @@ export const GRPC_CEILING_FACTOR = 2;
 
 export interface GrpcTransportOptions {
   maxBodyBytes: number;
+  /** Sizes the per-connection concurrent-call limit: ⌈inflightBudgetBytes ÷ maxBodyBytes⌉. */
+  inflightBudgetBytes: number;
   forceShutdownAfterMs?: number;
 }
 
@@ -78,7 +80,17 @@ function handlerFor(s: SignalService, receiver: Receiver, options: GrpcTransport
       callback(failure(rejected, logger));
       return;
     }
-    receiver.receive(s.signal, call.request, 'protobuf', SOURCE).then(
+    const admission = receiver.admit(call.request.length);
+    if (admission === null) {
+      const rejected = new ReceiverRejected(
+        'busy',
+        `receiver is busy: ${call.request.length} bytes would exceed the in-flight budget`,
+      );
+      receiver.refused('busy', rejected.message);
+      callback(failure(rejected, logger));
+      return;
+    }
+    receiver.receive(s.signal, call.request, 'protobuf', SOURCE, admission).then(
       (result) => {
         logger.debug('grpc request', { service: s.service.typeName, bytes: call.request.length });
         callback(null, s.respond(result.accepted, result.rejected, result.errorMessage));
@@ -101,6 +113,7 @@ export function listenGrpc(
 ): Promise<Listener> {
   const server = new Server({
     'grpc.max_receive_message_length': options.maxBodyBytes * GRPC_CEILING_FACTOR,
+    'grpc.max_concurrent_streams': Math.max(1, Math.ceil(options.inflightBudgetBytes / options.maxBodyBytes)),
   });
   for (const s of SIGNAL_SERVICES) {
     server.addService(serviceDefinition(s), { Export: handlerFor(s, receiver, options, logger) });

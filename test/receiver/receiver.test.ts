@@ -2,7 +2,7 @@ import { create, toBinary } from '@bufbuild/protobuf';
 import { describe, expect, test } from 'vitest';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { ExportTraceServiceRequestSchema } from '../../src/model/gen/opentelemetry/proto/collector/trace/v1/trace_service_pb.js';
-import { createReceiver, type Receiver } from '../../src/receiver/receiver.js';
+import { type Admission, createReceiver, type Receiver } from '../../src/receiver/receiver.js';
 import { openSession, type WriterSession } from '../../src/writer/session.js';
 import { logRecord, logsRequest, span, traceRequest } from '../../test-support/otlp-builders.js';
 import { createTestWriter, type TestWriter, testConfig } from '../../test-support/writer-deps.js';
@@ -93,13 +93,31 @@ function fakeSession(block: boolean): FakeControl {
   return { session, calls, release };
 }
 
+/** Claims `bytes` of the budget, asserting it was granted. */
+function admitted(receiver: Receiver, bytes: number): Admission {
+  const admission = receiver.admit(bytes);
+  if (admission === null) throw new Error('expected the admission to be granted');
+  return admission;
+}
+
+/** `receiver.receive` with an admission for the body's own length. */
+function receive(
+  receiver: Receiver,
+  signal: Parameters<Receiver['receive']>[0],
+  body: Uint8Array,
+  encoding: Parameters<Receiver['receive']>[2],
+  source: string,
+) {
+  return receiver.receive(signal, body, encoding, source, admitted(receiver, body.length));
+}
+
 const silent = { debug() {}, info() {}, warn() {}, error() {} };
 
 describe('createReceiver', () => {
   test('JSON traces with two entries of two spans', async () => {
     const w = createTestWriter();
     const { receiver, session } = await realReceiver(w);
-    const r = await receiver.receive('traces', encode(twoEntryTraces()), 'json', 'otlp/http');
+    const r = await receive(receiver, 'traces', encode(twoEntryTraces()), 'json', 'otlp/http');
     expect(r).toEqual({ accepted: 4, rejected: 0, errorMessage: null });
     await session.close();
     expect(allSpans(w, OUT)).toHaveLength(4);
@@ -120,7 +138,7 @@ describe('createReceiver', () => {
         resourceSpans: [twoSpans, ENTRY(new Uint8Array(15).fill(3), 3), good(4)],
       }),
     );
-    const r = await receiver.receive('traces', body, 'protobuf', 'otlp/grpc');
+    const r = await receive(receiver, 'traces', body, 'protobuf', 'otlp/grpc');
     expect(r.accepted).toBe(3);
     expect(r.rejected).toBe(1);
     expect(r.errorMessage).toMatch(/resourceSpans\[1\]/);
@@ -135,7 +153,7 @@ describe('createReceiver', () => {
       ExportTraceServiceRequestSchema,
       create(ExportTraceServiceRequestSchema, { resourceSpans: [ENTRY(new Uint8Array(15).fill(3), 3)] }),
     );
-    expect((await failure(receiver.receive('traces', body, 'protobuf', 'otlp/grpc'))).code).toBe(
+    expect((await failure(receive(receiver, 'traces', body, 'protobuf', 'otlp/grpc'))).code).toBe(
       'invalid-otlp',
     );
     expect(receiver.stats().rejected.traces).toBe(1);
@@ -149,7 +167,7 @@ describe('createReceiver', () => {
       create(ExportTraceServiceRequestSchema, { resourceSpans: [ENTRY(new Uint8Array(16).fill(1), 1)] }),
     );
     const body = new Uint8Array([...good, 0x0a, 0x7f, 0x01]);
-    expect((await failure(receiver.receive('traces', body, 'protobuf', 'otlp/grpc'))).code).toBe(
+    expect((await failure(receive(receiver, 'traces', body, 'protobuf', 'otlp/grpc'))).code).toBe(
       'invalid-otlp',
     );
     await session.close();
@@ -161,11 +179,11 @@ describe('createReceiver', () => {
     const w = createTestWriter();
     const { receiver } = await realReceiver(w);
     const empty = { accepted: 0, rejected: 0, errorMessage: null };
-    expect(await receiver.receive('logs', encode('{}'), 'json', 'otlp/http')).toEqual(empty);
-    expect(await receiver.receive('logs', encode({ resourceLogs: [] }), 'json', 'otlp/http')).toEqual(empty);
-    expect(await receiver.receive('traces', new Uint8Array(), 'protobuf', 'otlp/grpc')).toEqual(empty);
+    expect(await receive(receiver, 'logs', encode('{}'), 'json', 'otlp/http')).toEqual(empty);
+    expect(await receive(receiver, 'logs', encode({ resourceLogs: [] }), 'json', 'otlp/http')).toEqual(empty);
+    expect(await receive(receiver, 'traces', new Uint8Array(), 'protobuf', 'otlp/grpc')).toEqual(empty);
     const wrong = await failure(
-      receiver.receive('traces', encode({ resourceLogs: [] }), 'json', 'otlp/http'),
+      receive(receiver, 'traces', encode({ resourceLogs: [] }), 'json', 'otlp/http'),
     );
     expect(wrong.code).toBe('invalid-otlp');
     expect(wrong.message).toMatch(/expected resourceSpans/);
@@ -197,7 +215,7 @@ describe('createReceiver', () => {
         ],
       }),
     );
-    expect((await failure(receiver.receive('traces', body, 'protobuf', 't'))).code).toBe('invalid-otlp');
+    expect((await failure(receive(receiver, 'traces', body, 'protobuf', 't'))).code).toBe('invalid-otlp');
     expect(receiver.stats().refused.invalid).toBe(1);
   });
 
@@ -205,7 +223,7 @@ describe('createReceiver', () => {
     const w = createTestWriter();
     const { receiver } = await realReceiver(w);
     const body = encode({ resourceSpans: [{ scopeSpans: [] }] });
-    expect(await receiver.receive('traces', body, 'json', 't')).toEqual({
+    expect(await receive(receiver, 'traces', body, 'json', 't')).toEqual({
       accepted: 0,
       rejected: 0,
       errorMessage: null,
@@ -216,7 +234,7 @@ describe('createReceiver', () => {
   test('{} succeeds with nothing and is not a refusal', async () => {
     const w = createTestWriter();
     const { receiver } = await realReceiver(w);
-    expect(await receiver.receive('traces', encode('{}'), 'json', 't')).toEqual({
+    expect(await receive(receiver, 'traces', encode('{}'), 'json', 't')).toEqual({
       accepted: 0,
       rejected: 0,
       errorMessage: null,
@@ -227,38 +245,86 @@ describe('createReceiver', () => {
   test.each(['[1,2]', 'not json'])('%s is invalid-otlp', async (text) => {
     const w = createTestWriter();
     const { receiver } = await realReceiver(w);
-    expect((await failure(receiver.receive('traces', encode(text), 'json', 'otlp/http'))).code).toBe(
+    expect((await failure(receive(receiver, 'traces', encode(text), 'json', 'otlp/http'))).code).toBe(
       'invalid-otlp',
     );
   });
 
-  test('budget: a second receive over the budget is refused while one is in flight', async () => {
-    const fake = fakeSession(true);
-    const receiver = createReceiver(fake.session, { inflightBudgetBytes: 100 }, { logger: silent });
-    const body = encode({ ...traceRequest([span()]), pad: 'x'.repeat(40) });
-    expect(body.length).toBeGreaterThan(50);
-    const first = receiver.receive('traces', body, 'json', 'otlp/http');
-    const second = await failure(receiver.receive('traces', body, 'json', 'otlp/http'));
-    expect(second.code).toBe('receiver-busy');
-    fake.release();
-    await first;
+  test('budget: a second admission over the budget is refused while one is open, and not counted', () => {
+    const receiver = createReceiver(
+      fakeSession(false).session,
+      { inflightBudgetBytes: 100 },
+      { logger: silent },
+    );
+    const first = admitted(receiver, 10);
+    expect(receiver.admit(100)).toBeNull();
+    expect(receiver.stats().refused.busy).toBe(0);
+    first.release();
+    expect(receiver.admit(100)).not.toBeNull();
   });
 
-  test('budget: a lone receive above the budget succeeds', async () => {
-    const fake = fakeSession(false);
-    const receiver = createReceiver(fake.session, { inflightBudgetBytes: 100 }, { logger: silent });
-    const padded = encode({ ...traceRequest([span()]), pad: 'x'.repeat(150) });
-    expect(padded.length).toBeGreaterThan(150);
-    const r = await receiver.receive('traces', padded, 'json', 'otlp/http');
-    expect(r.accepted).toBe(1);
+  test('budget: a lone admission above the budget is granted, and grow never refuses it', () => {
+    const receiver = createReceiver(
+      fakeSession(false).session,
+      { inflightBudgetBytes: 100 },
+      { logger: silent },
+    );
+    const lone = admitted(receiver, 200);
+    expect(lone.grow(500)).toBe(true);
+    expect(lone.bytes).toBe(700);
+  });
+
+  test('budget: grow past the budget is refused (claiming nothing) while another admission is open', () => {
+    const receiver = createReceiver(
+      fakeSession(false).session,
+      { inflightBudgetBytes: 100 },
+      { logger: silent },
+    );
+    const first = admitted(receiver, 10);
+    const second = admitted(receiver, 10);
+    expect(second.grow(200)).toBe(false);
+    expect(second.bytes).toBe(10);
+    expect(second.grow(80)).toBe(true);
+    first.release();
+    expect(second.grow(500)).toBe(true);
+  });
+
+  test('budget: release is idempotent and totals.bytes counts what was claimed', () => {
+    const receiver = createReceiver(
+      fakeSession(false).session,
+      { inflightBudgetBytes: 100 },
+      { logger: silent },
+    );
+    const a = admitted(receiver, 60);
+    a.grow(10);
+    a.release();
+    a.release();
+    expect(receiver.stats().bytes).toBe(70);
+    const b = admitted(receiver, 100);
+    expect(receiver.admit(1)).toBeNull();
+    b.release();
+  });
+
+  test('budget: receive releases its admission on success and on failure', async () => {
+    const receiver = createReceiver(
+      fakeSession(false).session,
+      { inflightBudgetBytes: 100 },
+      { logger: silent },
+    );
+    await receive(receiver, 'traces', encode(traceRequest([span()])), 'json', 'a');
+    await failure(receive(receiver, 'traces', encode('{not json'), 'json', 'b'));
+    const hold = admitted(receiver, 100);
+    expect(receiver.admit(100)).toBeNull();
+    hold.release();
+    expect(receiver.admit(100)).not.toBeNull();
   });
 
   test('receives are serialized: one request ends its input before the next adds', async () => {
     const fake = fakeSession(true);
     const receiver = createReceiver(fake.session, { inflightBudgetBytes: 1 << 20 }, { logger: silent });
     const body = encode(traceRequest([span()]));
-    const a = receiver.receive('traces', body, 'json', 'a');
-    const b = receiver.receive('traces', body, 'json', 'b');
+    const a = receive(receiver, 'traces', body, 'json', 'a');
+    const b = receive(receiver, 'traces', body, 'json', 'b');
     await Promise.resolve();
     fake.release();
     await Promise.all([a, b]);
@@ -271,9 +337,9 @@ describe('createReceiver', () => {
     const hour = 3_600_000_000_000;
     const day = 86_400_000_000_000;
     const at = (offset: number) => spansRequest(1, offset, 0);
-    expect((await receiver.receive('traces', encode(at(0)), 'json', 'otlp/http')).accepted).toBe(1);
-    expect((await receiver.receive('traces', encode(at(-hour)), 'json', 'otlp/http')).accepted).toBe(1);
-    const late = await failure(receiver.receive('traces', encode(at(200 * day)), 'json', 'otlp/http'));
+    expect((await receive(receiver, 'traces', encode(at(0)), 'json', 'otlp/http')).accepted).toBe(1);
+    expect((await receive(receiver, 'traces', encode(at(-hour)), 'json', 'otlp/http')).accepted).toBe(1);
+    const late = await failure(receive(receiver, 'traces', encode(at(200 * day)), 'json', 'otlp/http'));
     expect(late.code).toBe('invalid-otlp');
     expect(receiver.stats().rejected.traces).toBe(1);
     expect(receiver.stats().accepted.traces).toBe(2);
@@ -287,7 +353,7 @@ describe('createReceiver', () => {
       ...resourceSpansOf(spansRequest(1, 0, 0)),
       ...resourceSpansOf(spansRequest(1, 200 * day, 1)),
     ];
-    const r = await receiver.receive('traces', encode({ resourceSpans }), 'json', 'otlp/http');
+    const r = await receive(receiver, 'traces', encode({ resourceSpans }), 'json', 'otlp/http');
     expect(r.accepted).toBe(1);
     expect(r.rejected).toBe(1);
     expect(r.errorMessage).not.toBeNull();
@@ -298,7 +364,7 @@ describe('createReceiver', () => {
     const receiver = createReceiver(fake.session, { inflightBudgetBytes: 1 << 20 }, { logger: silent });
     const body = encode(traceRequest([span()]));
     let done = false;
-    const inflight = receiver.receive('traces', body, 'json', 'a').then((r) => {
+    const inflight = receive(receiver, 'traces', body, 'json', 'a').then((r) => {
       done = true;
       return r;
     });
@@ -306,7 +372,7 @@ describe('createReceiver', () => {
     const closing = receiver.close().then(() => {
       expect(done).toBe(true);
     });
-    expect((await failure(receiver.receive('traces', body, 'json', 'b'))).code).toBe('receiver-busy');
+    expect((await failure(receive(receiver, 'traces', body, 'json', 'b'))).code).toBe('receiver-busy');
     fake.release();
     await inflight;
     await closing;
@@ -318,8 +384,8 @@ describe('createReceiver', () => {
     const { receiver } = await realReceiver(w);
     const logs = encode(logsRequest([logRecord()]));
     const traces = encode(twoEntryTraces());
-    await receiver.receive('traces', traces, 'json', 'otlp/http');
-    await receiver.receive('logs', logs, 'json', 'otlp/http');
+    await receive(receiver, 'traces', traces, 'json', 'otlp/http');
+    await receive(receiver, 'logs', logs, 'json', 'otlp/http');
     const s = receiver.stats();
     expect(s.requests).toBe(2);
     expect(s.bytes).toBe(traces.length + logs.length);
@@ -330,8 +396,8 @@ describe('createReceiver', () => {
   test('stats count refused requests by outcome, and each counts as a request', async () => {
     const w = createTestWriter();
     const { receiver } = await realReceiver(w);
-    await failure(receiver.receive('traces', encode('{not json'), 'json', 'otlp/http'));
-    await failure(receiver.receive('traces', encode('{not json'), 'json', 'otlp/http'));
+    await failure(receive(receiver, 'traces', encode('{not json'), 'json', 'otlp/http'));
+    await failure(receive(receiver, 'traces', encode('{not json'), 'json', 'otlp/http'));
     receiver.refused('unsupported', 'unsupported content-type text/plain');
     const s = receiver.stats();
     expect(s.requests).toBe(3);
@@ -350,7 +416,7 @@ describe('createReceiver', () => {
     const w = createTestWriter();
     const { receiver } = await realReceiver(w);
     await receiver.close();
-    await failure(receiver.receive('traces', encode(traceRequest([span()])), 'json', 'otlp/http'));
+    await failure(receive(receiver, 'traces', encode(traceRequest([span()])), 'json', 'otlp/http'));
     expect(receiver.stats().refused.busy).toBe(1);
     expect(receiver.stats().requests).toBe(1);
   });
@@ -360,8 +426,8 @@ describe('createReceiver', () => {
     const logger = { ...silent, warn: (m: string) => warnings.push(m) };
     const fake = fakeSession(false);
     const receiver = createReceiver(fake.session, { inflightBudgetBytes: 1 << 20 }, { logger });
-    await failure(receiver.receive('traces', encode('{not json'), 'json', 'otlp/http'));
-    await failure(receiver.receive('traces', encode('{not json'), 'json', 'otlp/http'));
+    await failure(receive(receiver, 'traces', encode('{not json'), 'json', 'otlp/http'));
+    await failure(receive(receiver, 'traces', encode('{not json'), 'json', 'otlp/http'));
     receiver.refused('unsupported', 'unsupported content-type text/plain');
     receiver.refused('unsupported', 'unsupported content-type text/html');
     expect(warnings).toHaveLength(2);
@@ -380,7 +446,7 @@ describe('createReceiver', () => {
       },
     };
     const receiver = createReceiver(failing, { inflightBudgetBytes: 1 << 20 }, { logger: silent });
-    await expect(receiver.receive('traces', encode(twoEntryTraces()), 'json', 'otlp/http')).rejects.toThrow(
+    await expect(receive(receiver, 'traces', encode(twoEntryTraces()), 'json', 'otlp/http')).rejects.toThrow(
       'disk full',
     );
     expect(receiver.stats().accepted.traces).toBe(2);
@@ -397,7 +463,7 @@ describe('createReceiver', () => {
     };
     const receiver = createReceiver(failing, { inflightBudgetBytes: 1 << 20 }, { logger: silent });
     await expect(
-      receiver.receive('traces', encode(traceRequest([span()])), 'json', 'otlp/http'),
+      receive(receiver, 'traces', encode(traceRequest([span()])), 'json', 'otlp/http'),
     ).rejects.toThrow('disk full');
     expect(receiver.stats().rejected).toEqual({ traces: 0, logs: 0, metrics: 0 });
   });

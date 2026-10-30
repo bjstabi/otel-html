@@ -17,7 +17,7 @@ import {
 } from '../../src/model/gen/opentelemetry/proto/collector/trace/v1/trace_service_pb.js';
 import { type GrpcTransportOptions, listenGrpc, serviceDefinition } from '../../src/receiver/grpc.js';
 import type { Listener } from '../../src/receiver/http.js';
-import { createReceiver, type Receiver } from '../../src/receiver/receiver.js';
+import { type Admission, createReceiver, type Receiver } from '../../src/receiver/receiver.js';
 import { serviceOf } from '../../src/receiver/signals.js';
 import { openSession } from '../../src/writer/session.js';
 import { createTestWriter, type TestWriter, testConfig } from '../../test-support/writer-deps.js';
@@ -52,7 +52,10 @@ function clientFor(address: string, options: Record<string, string | number> = {
   };
 }
 
-async function serve(receiver: Receiver, options: GrpcTransportOptions = { maxBodyBytes: 1_000_000 }) {
+async function serve(
+  receiver: Receiver,
+  options: GrpcTransportOptions = { maxBodyBytes: 1_000_000, inflightBudgetBytes: 1 << 20 },
+) {
   const listener = await listenGrpc(receiver, options, silent, '127.0.0.1', 0);
   open.push(listener);
   return listener.address;
@@ -65,8 +68,11 @@ async function realServer(options?: GrpcTransportOptions) {
   return { w, session, address: await serve(receiver, options) };
 }
 
-function fake(receive: Receiver['receive']): Receiver {
+const stubAdmission: Admission = { bytes: 0, grow: () => true, release() {} };
+
+function fake(receive: Receiver['receive'], admit: Receiver['admit'] = () => stubAdmission): Receiver {
   return {
+    admit,
     receive,
     stats: () => ({
       requests: 0,
@@ -118,7 +124,7 @@ describe('OTLP/gRPC transport', () => {
   test('a port already in use is an OtelHtmlError that keeps EADDRINUSE and hints at the flag', async () => {
     const first = await listenGrpc(
       fake(async () => undefined as never),
-      { maxBodyBytes: 1 },
+      { maxBodyBytes: 1, inflightBudgetBytes: 1 },
       silent,
       '127.0.0.1',
       0,
@@ -127,7 +133,7 @@ describe('OTLP/gRPC transport', () => {
     const port = Number(first.address.split(':').pop());
     const error = await listenGrpc(
       fake(async () => undefined as never),
-      { maxBodyBytes: 1 },
+      { maxBodyBytes: 1, inflightBudgetBytes: 1 },
       silent,
       '127.0.0.1',
       port,
@@ -228,7 +234,7 @@ describe('OTLP/gRPC transport', () => {
     const w: TestWriter = createTestWriter();
     const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'create' });
     const receiver = createReceiver(session, { inflightBudgetBytes: 1 << 20 }, { logger: silent });
-    const address = await serve(receiver, { maxBodyBytes: 1_000 });
+    const address = await serve(receiver, { maxBodyBytes: 1_000, inflightBudgetBytes: 1 << 20 });
     const { err } = await call(clientFor(address), new Uint8Array(1_500));
     expect(err?.code).toBe(status.RESOURCE_EXHAUSTED);
     expect(err?.details).toBe('request of 1500 bytes exceeds the limit of 1000 bytes');
@@ -241,11 +247,33 @@ describe('OTLP/gRPC transport', () => {
     const w: TestWriter = createTestWriter();
     const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'create' });
     const receiver = createReceiver(session, { inflightBudgetBytes: 1 << 20 }, { logger: silent });
-    const address = await serve(receiver, { maxBodyBytes: 1_000 });
+    const address = await serve(receiver, { maxBodyBytes: 1_000, inflightBudgetBytes: 1 << 20 });
     const { err } = await call(clientFor(address), new Uint8Array(2_500));
     expect(err?.code).toBe(status.RESOURCE_EXHAUSTED);
     expect(receiver.stats().requests).toBe(0);
     await session.close();
+  });
+
+  test('an admission refused as busy is UNAVAILABLE with RetryInfo and counted', async () => {
+    const refusals: [string, string][] = [];
+    const base = fake(
+      async () => undefined as never,
+      () => null,
+    );
+    const receiver: Receiver = {
+      ...base,
+      refused: (outcome, reason) => void refusals.push([outcome, reason]),
+    };
+    const address = await serve(receiver);
+    const { err } = await call(clientFor(address), requestOf([protoSpan(1)]));
+    expect(err?.code).toBe(status.UNAVAILABLE);
+    const details = err?.metadata.get('grpc-status-details-bin')[0];
+    if (!(details instanceof Buffer)) throw new Error('no status details');
+    const detail = fromBinary(StatusSchema, details).details[0];
+    if (detail === undefined) throw new Error('no RetryInfo');
+    expect(anyUnpack(detail, RetryInfoSchema)?.retryDelay?.seconds).toBe(1n);
+    expect(refusals).toHaveLength(1);
+    expect(refusals[0]?.[0]).toBe('busy');
   });
 
   test('a gzip-compressed request is OK', async () => {
@@ -262,7 +290,7 @@ describe('OTLP/gRPC transport', () => {
   test('listenGrpc on port 0 returns a real port and close() resolves', async () => {
     const listener = await listenGrpc(
       fake(async () => ({ accepted: 0, rejected: 0, errorMessage: null })),
-      { maxBodyBytes: 1_000 },
+      { maxBodyBytes: 1_000, inflightBudgetBytes: 1_000 },
       silent,
       '127.0.0.1',
       0,

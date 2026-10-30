@@ -72,11 +72,8 @@ export async function startReceiver(
   }
   const full: WriterDeps = { ...depsOf(report), ...deps }; // the report's deps were already validated
   const maxBodyBytes = overrides.maxBodyBytes ?? config.maxBodyBytes;
-  const receiver = createReceiver(
-    sessionOf(report),
-    { inflightBudgetBytes: overrides.inflightBudgetBytes ?? config.inflightBudgetBytes },
-    { logger: full.logger },
-  );
+  const inflightBudgetBytes = overrides.inflightBudgetBytes ?? config.inflightBudgetBytes;
+  const receiver = createReceiver(sessionOf(report), { inflightBudgetBytes }, { logger: full.logger });
   const span = full.tracer.startSpan('otel-html.receive');
 
   const listeners: Listener[] = [];
@@ -92,7 +89,13 @@ export async function startReceiver(
       listeners.push(http);
     }
     if (grpcAt !== null) {
-      grpc = await listenGrpc(receiver, { maxBodyBytes }, full.logger, grpcAt.host, grpcAt.port);
+      grpc = await listenGrpc(
+        receiver,
+        { maxBodyBytes, inflightBudgetBytes },
+        full.logger,
+        grpcAt.host,
+        grpcAt.port,
+      );
       listeners.push(grpc);
     }
   } catch (e) {

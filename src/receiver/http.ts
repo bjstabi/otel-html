@@ -5,7 +5,7 @@ import { create, type DescMessage, type Message, toBinary, toJsonString } from '
 import { StatusSchema } from '../model/gen/google/rpc/status_pb.js';
 import type { Logger } from '../writer/ports.js';
 import { bindError, bracketed } from './host.js';
-import type { BodyEncoding, Receiver } from './receiver.js';
+import type { Admission, BodyEncoding, Receiver } from './receiver.js';
 import { serviceAtPath } from './signals.js';
 import {
   OUTCOME_STATUS,
@@ -130,7 +130,7 @@ export function createHttpHandler(
    * The inflated body, counted against the limit while it streams. The request is piped, not `pipeline`d, so that
    * stopping early (over the limit, a corrupt stream) leaves the socket for the response.
    */
-  async function readBody(req: IncomingMessage, gzip: boolean): Promise<Uint8Array> {
+  async function readBody(req: IncomingMessage, gzip: boolean, admission: Admission): Promise<Uint8Array> {
     const limit = options.maxBodyBytes;
     const gunzip = gzip ? createGunzip() : null;
     let source: AsyncIterable<unknown> = req;
@@ -151,6 +151,12 @@ export function createHttpHandler(
         total += buf.length;
         if (total > limit) {
           throw new ReceiverRejected('too-large', `request body exceeds the limit of ${limit} bytes`);
+        }
+        if (total > admission.bytes && !admission.grow(total - admission.bytes)) {
+          throw new ReceiverRejected(
+            'busy',
+            `receiver is busy: a body of at least ${total} bytes would exceed the in-flight budget`,
+          );
         }
         chunks.push(buf);
       }
@@ -236,10 +242,22 @@ export function createHttpHandler(
         closeRequest,
       );
     }
+    const admission = receiver.admit(Number.isFinite(declared) ? declared : 0);
+    if (admission === null) {
+      return refuse(
+        req,
+        res,
+        path,
+        encoding,
+        new ReceiverRejected('busy', `receiver is busy: ${declared} bytes would exceed the in-flight budget`),
+        closeRequest,
+      );
+    }
     let body: Uint8Array;
     try {
-      body = await readBody(req, contentEncoding === 'gzip');
+      body = await readBody(req, contentEncoding === 'gzip', admission);
     } catch (e) {
+      admission.release();
       if (e instanceof ReceiverRejected) return refuse(req, res, path, encoding, e, closeRequest);
       if (clientGone(e)) {
         logger.debug('http request aborted', { path });
@@ -257,7 +275,7 @@ export function createHttpHandler(
       );
     }
     try {
-      const result = await receiver.receive(service.signal, body, encoding, SOURCE);
+      const result = await receiver.receive(service.signal, body, encoding, SOURCE, admission);
       const response = service.respond(result.accepted, result.rejected, result.errorMessage);
       send(
         req,
