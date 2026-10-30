@@ -4,7 +4,7 @@ import {
   parseLoadArgs,
   parseManifestJs,
   parseMaxRssKb,
-  parseRejected,
+  parseReceived,
   planWorkload,
 } from '../../scripts/load-receiver-plan.js';
 
@@ -73,9 +73,13 @@ describe('output parsing', () => {
     expect(parseMaxRssKb('nothing')).toBeNull();
   });
 
-  test('parseRejected reads the serve summary', () => {
-    expect(parseRejected('wrote x\nreceived 120 requests (3 rejected)\n')).toBe(3);
-    expect(parseRejected('wrote x\n')).toBeNull();
+  test('parseReceived reads the serve summary', () => {
+    expect(parseReceived('wrote x\nreceived 120 requests (2 refused); 3 records rejected\n')).toEqual({
+      refused: 2,
+      rejected: 3,
+    });
+    expect(parseReceived('wrote x\nreceived 120 requests (0 rejected)\n')).toBeNull(); // the old wording
+    expect(parseReceived('wrote x\n')).toBeNull();
   });
 
   test('parseManifestJs reads the pushed manifest', () => {
@@ -95,25 +99,28 @@ describe('checkRun', () => {
   const want = { spans: 10, logs: 20 };
 
   test('passes a complete, exact, unrejected, small run', () => {
-    expect(checkRun({ manifest: ok, want, rejected: 0, rssKb: 100_000 })).toEqual([]);
+    expect(checkRun({ manifest: ok, want, received: { refused: 0, rejected: 0 }, rssKb: 100_000 })).toEqual(
+      [],
+    );
   });
 
   test('names every failed assertion', () => {
     const failures = checkRun({
       manifest: { complete: false, totals: { spans: 9, logs: 19, metrics: 0 } },
       want,
-      rejected: 2,
+      received: { refused: 1, rejected: 2 },
       rssKb: 512 * 1024,
     });
-    expect(failures).toHaveLength(5);
+    expect(failures).toHaveLength(6);
     expect(failures.join('\n')).toMatch(/complete/);
     expect(failures.join('\n')).toMatch(/spans: expected 10, got 9/);
     expect(failures.join('\n')).toMatch(/logs: expected 20, got 19/);
-    expect(failures.join('\n')).toMatch(/rejected/);
+    expect(failures.join('\n')).toMatch(/1 requests refused/);
+    expect(failures.join('\n')).toMatch(/2 records rejected/);
     expect(failures.join('\n')).toMatch(/RSS/);
   });
 
-  test('a missing RSS or rejected count is a failure, not a pass', () => {
-    expect(checkRun({ manifest: ok, want, rejected: null, rssKb: null })).toHaveLength(2);
+  test('a missing RSS or received line is a failure, not a pass', () => {
+    expect(checkRun({ manifest: ok, want, received: null, rssKb: null })).toHaveLength(2);
   });
 });

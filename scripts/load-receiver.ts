@@ -7,7 +7,7 @@ import {
   parseLoadArgs,
   parseManifestJs,
   parseMaxRssKb,
-  parseRejected,
+  parseReceived,
   planWorkload,
 } from './load-receiver-plan.js';
 
@@ -144,7 +144,7 @@ async function main(): Promise<number> {
   const failures = checkRun({
     manifest,
     want: { spans: args.spans, logs: args.logs },
-    rejected: parseRejected(serve.stdout()),
+    received: parseReceived(serve.stdout()),
     rssKb,
   });
   const rssMb = rssKb === null ? Number.NaN : rssKb / 1024;

@@ -89,10 +89,43 @@ describe('serve', () => {
     h.fire('SIGINT');
     expect(await h.result).toBe(0);
     expect(h.stdout).toContain('wrote out: 2 spans, 0 logs, 0 metric points\n');
-    expect(h.stdout).toContain('received 1 requests (0 rejected)\n');
+    expect(h.stdout).toContain('received 1 requests (0 refused); 0 records rejected\n');
+    expect(h.stdout).not.toContain('refused:');
     expect(h.stderr).toBe('');
     expect(manifestOf(w, 'out').complete).toBe(true);
     expect(allSpans(w, 'out')).toHaveLength(2);
+  });
+
+  test('refused requests are counted and broken down by outcome in the summary', async () => {
+    const w = createTestWriter();
+    const h = start(w, ['serve', '-o', 'out', '--http', '0', '--no-grpc']);
+    open.push(h);
+    const base = httpOf(await listening(h));
+    const bad = { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{not json' };
+    const statuses = [
+      (await fetch(`${base}/v1/traces`, bad)).status,
+      (await fetch(`${base}/v1/traces`, bad)).status,
+      (await fetch(`${base}/v1/traces`, bad)).status,
+      (await fetch(`${base}/v1/traces`, { ...bad, headers: { 'content-type': 'text/plain' } })).status,
+    ];
+    expect(statuses).toEqual([400, 400, 400, 415]);
+    h.fire();
+    expect(await h.result).toBe(0);
+    expect(h.stdout).toContain('received 4 requests (4 refused); 0 records rejected\n');
+    expect(h.stdout).toContain('refused: 3 invalid, 1 unsupported\n');
+  });
+
+  test('a config file that disables both transports is a usage error before the report is created', async () => {
+    const w = createTestWriter();
+    await w.fs.mkdirp('/work');
+    await w.fs.writeTextAtomic(
+      '/work/cfg.yaml',
+      'receiver:\n  http:\n    enabled: false\n  grpc:\n    enabled: false\n',
+    );
+    const h = start(w, ['serve', '-o', 'out', '--config', '/work/cfg.yaml']);
+    expect(await h.result).toBe(2);
+    expect(h.stderr).toContain('no receiver transport enabled');
+    expect(await w.fs.exists('out')).toBe(false);
   });
 
   test('SIGTERM finishes the report too', async () => {

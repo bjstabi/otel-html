@@ -2,6 +2,7 @@ import { type Command, InvalidArgumentError, Option } from 'commander';
 import { type RunningReceiver, startReceiver } from '../../api/receiver.js';
 import { Report, resolveDeps, sessionOf } from '../../api/report.js';
 import { OtelHtmlError } from '../../model/errors.js';
+import type { ReceiverStats } from '../../receiver/receiver.js';
 import { createNodeFileSystem } from '../../writer/node-fs.js';
 import type { WriterDeps } from '../../writer/session.js';
 import type { CliIo, ReceiverFlags } from '../io.js';
@@ -47,15 +48,15 @@ export async function openReceiver(
   /** Runs on the resolved transports before the report is created or a port is bound; throw to stop. */
   precheck: (enabled: { http: boolean; grpc: boolean }) => void = () => undefined,
 ): Promise<OpenReceiver> {
-  if (flags.http === false && flags.grpc === false) {
+  const fs = deps.fs ?? createNodeFileSystem();
+  const { config } = await resolveCliConfig(io, fs, flags);
+  // The flags are already merged into the config, so this is the rule startReceiver applies.
+  if (!config.receiver.http.enabled && !config.receiver.grpc.enabled) {
     throw new OtelHtmlError('usage', {
       message: 'no receiver transport enabled',
       hint: 'enable http or grpc',
     });
   }
-  const fs = deps.fs ?? createNodeFileSystem();
-  const { config } = await resolveCliConfig(io, fs, flags);
-  // The flags are already merged into the config, so this is the rule startReceiver applies.
   precheck({ http: config.receiver.http.enabled, grpc: config.receiver.grpc.enabled });
   const full = await resolveDeps(deps);
   const report = await Report.createResolved(
@@ -118,7 +119,19 @@ export async function finishReceiver(
   } finally {
     again.cancel();
   }
-  const { requests, rejected } = receiver.stats();
-  const refused = rejected.traces + rejected.logs + rejected.metrics;
-  io.stdout(`${describeSummary(summary)}received ${requests} requests (${refused} rejected)\n`);
+  io.stdout(`${describeSummary(summary)}${receivedLines(receiver.stats())}`);
+}
+
+/**
+ * Requests and records are different units, so they are named apart: `refused` requests failed (nothing from them
+ * was written); `rejected` records were dropped from requests that were otherwise accepted.
+ */
+function receivedLines({ requests, refused, rejected }: ReceiverStats): string {
+  const refusals = Object.entries(refused).filter(([, n]) => n > 0);
+  const refusedTotal = refusals.reduce((sum, [, n]) => sum + n, 0);
+  const records = rejected.traces + rejected.logs + rejected.metrics;
+  const head = `received ${requests} requests (${refusedTotal} refused); ${records} records rejected\n`;
+  return refusals.length === 0
+    ? head
+    : `${head}refused: ${refusals.map(([o, n]) => `${n} ${o}`).join(', ')}\n`;
 }

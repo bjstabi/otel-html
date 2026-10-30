@@ -69,10 +69,19 @@ export function parseMaxRssKb(stderr: string): number | null {
   return m?.[1] === undefined ? null : Number(m[1]);
 }
 
-/** The rejected count in serve's `received N requests (M rejected)` line. */
-export function parseRejected(stdout: string): number | null {
-  const m = /received \d+ requests \((\d+) rejected\)/.exec(stdout);
-  return m?.[1] === undefined ? null : Number(m[1]);
+export interface Received {
+  /** Requests that failed outright. */
+  refused: number;
+  /** Records dropped from requests that were otherwise accepted. */
+  rejected: number;
+}
+
+/** The counts in serve's `received N requests (K refused); M records rejected` line. */
+export function parseReceived(stdout: string): Received | null {
+  const m = /received \d+ requests \((\d+) refused\); (\d+) records rejected/.exec(stdout);
+  return m?.[1] === undefined || m[2] === undefined
+    ? null
+    : { refused: Number(m[1]), rejected: Number(m[2]) };
 }
 
 export interface LoadManifest {
@@ -102,7 +111,7 @@ export function parseManifestJs(text: string): LoadManifest {
 export interface RunResult {
   manifest: LoadManifest;
   want: { spans: number; logs: number };
-  rejected: number | null;
+  received: Received | null;
   rssKb: number | null;
 }
 
@@ -115,8 +124,11 @@ export function checkRun(r: RunResult): string[] {
       failures.push(`totals.${key}: expected ${r.want[key]}, got ${r.manifest.totals[key]}`);
     }
   }
-  if (r.rejected === null) failures.push('serve printed no rejected count');
-  else if (r.rejected !== 0) failures.push(`${r.rejected} requests rejected, expected 0`);
+  if (r.received === null) failures.push('serve printed no received line');
+  else {
+    if (r.received.refused !== 0) failures.push(`${r.received.refused} requests refused, expected 0`);
+    if (r.received.rejected !== 0) failures.push(`${r.received.rejected} records rejected, expected 0`);
+  }
   if (r.rssKb === null) failures.push('no MAXRSS line: peak RSS unknown');
   else if (r.rssKb >= MAX_RSS_KB) {
     failures.push(`peak RSS ${(r.rssKb / 1024).toFixed(0)} MB, limit ${MAX_RSS_KB / 1024} MB`);
