@@ -78,6 +78,22 @@ describe('startReceiver', () => {
     await report.close();
   });
 
+  test('a taken port is a receiver-bind error, not receiver-busy', async () => {
+    const w = createTestWriter();
+    const report = await Report.create({ out: 'r' }, w.deps);
+    const blocker = createServer();
+    try {
+      await new Promise<void>((ok) => blocker.listen(0, '127.0.0.1', ok));
+      const port = (blocker.address() as AddressInfo).port;
+      const e = await failure(startReceiver(report, { http: { port }, grpc: false }, w.deps));
+      expect(e.code).toBe('receiver-bind');
+      expect(e.hint).toContain('--http');
+    } finally {
+      await new Promise<void>((ok) => blocker.close(() => ok()));
+      await report.close();
+    }
+  });
+
   test('closes the HTTP listener when the gRPC bind fails', async () => {
     const w = createTestWriter();
     const report = await Report.create({ out: 'r' }, w.deps);

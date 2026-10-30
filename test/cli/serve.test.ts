@@ -233,6 +233,7 @@ describe('serve', () => {
     const h = start(w, ['serve', '-o', 'out', '--http', String(port), '--no-grpc']);
     expect(await h.result).toBe(1);
     expect(h.stderr).toContain('EADDRINUSE');
+    expect(h.stderr).toContain('--http');
     expect(await w.fs.exists('out/data/state/lock.json')).toBe(false);
   });
 });

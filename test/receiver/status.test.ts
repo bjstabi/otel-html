@@ -15,6 +15,7 @@ describe('outcomeOf', () => {
     expect(outcomeOf(new OtelHtmlError('time-out-of-range'))).toBe('invalid');
     expect(outcomeOf(new OtelHtmlError('unsupported-input'))).toBe('unsupported');
     expect(outcomeOf(new OtelHtmlError('invalid-config'))).toBe('internal');
+    expect(outcomeOf(new OtelHtmlError('receiver-bind'))).toBe('internal');
     expect(outcomeOf(new ReceiverRejected('too-large', 'big'))).toBe('too-large');
     expect(outcomeOf(new ReceiverRejected('not-found', 'nope'))).toBe('not-found');
     expect(outcomeOf(new Error('x'))).toBe('internal');

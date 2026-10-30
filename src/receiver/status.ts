@@ -51,6 +51,7 @@ export function outcomeOf(e: unknown): Outcome {
       case 'version-mismatch':
       case 'invalid-report':
       case 'usage':
+      case 'receiver-bind':
         return 'internal';
     }
   }
