@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createServer, type Server } from 'node:net';
 import { afterEach, describe, expect, test, vi } from 'vitest';
+import type { CliDeps } from '../../src/cli/commands/receive.js';
 import type { CliIo, StopSignal } from '../../src/cli/io.js';
 import { runCli } from '../../src/cli/program.js';
 import type { FileSystem } from '../../src/writer/ports.js';
@@ -14,7 +15,7 @@ interface Harness {
   result: Promise<number>;
 }
 
-function start(w: TestWriter, argv: readonly string[], fs?: FileSystem): Harness {
+function start(w: TestWriter, argv: readonly string[], fs?: FileSystem, extra: CliDeps = {}): Harness {
   const handlers = new Set<(s: StopSignal) => void>();
   const h: Harness = {
     stdout: '',
@@ -41,7 +42,7 @@ function start(w: TestWriter, argv: readonly string[], fs?: FileSystem): Harness
     },
     spawn,
   };
-  h.result = runCli(argv, io, fs === undefined ? w.deps : { ...w.deps, fs });
+  h.result = runCli(argv, io, { ...w.deps, ...(fs === undefined ? {} : { fs }), ...extra });
   return h;
 }
 
@@ -77,6 +78,22 @@ afterEach(async () => {
 });
 
 describe('serve', () => {
+  test('favours heap size once, before the report is created', async () => {
+    const w = createTestWriter();
+    let lockAtCall: Promise<boolean> | undefined;
+    let calls = 0;
+    const h = start(w, ['serve', '-o', 'out', '--http', '0', '--no-grpc'], undefined, {
+      favourShortPauses: () => {
+        calls++;
+        lockAtCall = w.fs.exists('out/data/state/lock.json');
+      },
+    });
+    open.push(h);
+    await listening(h);
+    expect(calls).toBe(1);
+    expect(await lockAtCall).toBe(false);
+  });
+
   test('receives until SIGINT, then finishes the report and prints the totals', async () => {
     const w = createTestWriter();
     const h = start(w, ['serve', '-o', 'out', '--http', '0', '--grpc', '0']);

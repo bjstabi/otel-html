@@ -2,7 +2,9 @@ import { describe, expect, test } from 'vitest';
 import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
 import { LEVEL0_WIDTH_NS, parseSegmentFile, parseSeriesFile } from '../../src/format/metric-files.js';
 import { TraceShardSchema } from '../../src/format/trace-shard.js';
+import { loadCheckpoint } from '../../src/writer/checkpoint.js';
 import { openSession } from '../../src/writer/session.js';
+import { createMemoryFileSystem } from '../../test-support/memory-fs.js';
 import { logRecord, logsRequest } from '../../test-support/otlp-builders.js';
 import {
   createProcess,
@@ -248,5 +250,31 @@ describe('writer killed between flushes with metrics', () => {
     await again.close();
     expect(series()).toHaveLength(1);
     expect(metricCatalogOf(w, OUT).entries()[0]).toMatchObject({ name: 'a', series: 1 });
+  });
+});
+
+describe('writer killed while a background checkpoint is held', () => {
+  test('the previous checkpoint stays committed and reopening resumes from it', async () => {
+    const w = createTestWriter({ fs: createMemoryFileSystem({ pieces: true }) });
+    const cfg = testConfig({ writer: { chunkTargetBytes: 1, flushIntervalMs: 5_000 } });
+    const a = await openSession(w.deps, { out: OUT, config: cfg, mode: 'replace' });
+    await a.add(otlp(spansRequest(10)), 'first.json');
+    await a.flush();
+    const manifestBefore = w.fs.snapshot().get('r/data/manifest.js') ?? '';
+    await a.add(otlp(spansRequest(5, 0, 10)), 'second.json');
+    w.clock.advance(5_000n * 1_000_000n);
+    const gate = w.fs.holdNextWrite('data/state/session.1.json');
+    await a.add(otlp(spansRequest(1, 0, 15)), 'third.json'); // due: the checkpoint is prepared, its write held
+    await gate.reached;
+    // the process dies here: the held write never finishes and its lock stays behind
+    w.process.alive.delete(w.process.pid);
+    expect(w.fs.snapshot().get('r/data/manifest.js')).toBe(manifestBefore);
+    const cp = await loadCheckpoint(w.fs, OUT, '0.1.0');
+    expect(cp.manifest.totals.spans).toBe(10);
+    const deps = { ...w.deps, process: createProcess(9001, w.process.hostname) };
+    const b = await openSession(deps, { out: OUT, config: cfg, mode: 'append' });
+    expect(await b.add(otlp(spansRequest(10)), 'again.json')).toMatchObject({ duplicates: 10 });
+    expect(await b.add(otlp(spansRequest(6, 0, 10)), 'rest.json')).toMatchObject({ accepted: 6 });
+    expect((await b.close()).totals.spans).toBe(16);
   });
 });

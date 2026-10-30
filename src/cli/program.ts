@@ -1,10 +1,10 @@
 import { Command, CommanderError } from 'commander';
 import pkg from '../../package.json' with { type: 'json' };
 import { OtelHtmlError } from '../model/errors.js';
-import type { WriterDeps } from '../writer/session.js';
 import { addConfigCommand } from './commands/config-print.js';
 import { addConvertCommand } from './commands/convert.js';
 import { addMergeCommand } from './commands/merge.js';
+import type { CliDeps } from './commands/receive.js';
 import { addRunCommand } from './commands/run.js';
 import { addServeCommand } from './commands/serve.js';
 import type { CliIo } from './io.js';
@@ -21,7 +21,7 @@ export class CliExit extends Error {
 }
 
 /** Commander parse failures never exit the process: they throw, and `runCli` maps them. */
-export function buildProgram(io: CliIo, deps: Partial<WriterDeps>): Command {
+export function buildProgram(io: CliIo, deps: CliDeps): Command {
   const program = new Command('otel-html')
     .description('turn OpenTelemetry data into a self-contained HTML report')
     .version(pkg.version)
@@ -41,7 +41,7 @@ function exitCodeOf(e: OtelHtmlError): 1 | 2 {
 }
 
 /** Parse and run `argv` (without node and script), returning the process exit code. */
-export async function runCli(argv: readonly string[], io: CliIo, deps: Partial<WriterDeps>): Promise<number> {
+export async function runCli(argv: readonly string[], io: CliIo, deps: CliDeps): Promise<number> {
   try {
     await buildProgram(io, deps).parseAsync(argv, { from: 'user' });
     return 0;

@@ -12,7 +12,7 @@ import {
   traceShardKey,
   traceShardPath,
 } from '../format/paths.js';
-import type { SessionState } from '../format/state.js';
+import type { TraceShard } from '../format/trace-shard.js';
 import { FORMAT_VERSION } from '../format/version.js';
 import { OtelHtmlError } from '../model/errors.js';
 import { parseUnixNanos, type UnixNanos } from '../model/ids.js';
@@ -52,7 +52,11 @@ import { severityKey } from '../semconv/severity.js';
 import {
   at,
   isReportFolder,
+  jsObjectKeyOrder,
   loadCheckpoint,
+  type StateHead,
+  type StringifiedHead,
+  stringifyHead,
   wipeReportData,
   writeManifest,
   writeStateSlot,
@@ -63,9 +67,9 @@ import { renderIndexHtml } from './html.js';
 import { inheritDashboards } from './inherit-config.js';
 import { acquireLock, type LockHandle } from './lock.js';
 import { MetricSeriesWriter, restoreCatalogSeries } from './metric-series-writer.js';
-import type { Clock, FileSystem, Logger, ProcessInfo, Tracer } from './ports.js';
+import type { Clock, FileSystem, Logger, ProcessInfo, SpanHandle, Tracer } from './ports.js';
 import { type Refs, rebaseLog, rebasePoint, rebaseSpan } from './rebase.js';
-import { TraceIndex } from './trace-index.js';
+import { TraceIndex, type TraceIndexSnapshot } from './trace-index.js';
 import { type ViewerAssets, writeViewerAssets } from './viewer-assets.js';
 
 export interface WriterDeps {
@@ -357,6 +361,8 @@ class Session implements WriterSession {
   /** Inside a `partial` input: see AddOptions. */
   #partial = false;
   #tail: Promise<unknown> = Promise.resolve();
+  /** The background checkpoint write, until it ends (it never rejects: a failure is logged and undone). */
+  #inflight: Promise<void> | null = null;
 
   constructor(deps: WriterDeps, out: string, config: ResolvedConfig, drop: Drops, r: Restored) {
     this.#deps = deps;
@@ -527,6 +533,7 @@ class Session implements WriterSession {
     return this.#serial(async () => {
       if (this.#closed !== null || this.#aborted) return;
       this.#aborted = true;
+      await this.#inflight;
       await this.#lock.release();
     });
   }
@@ -829,13 +836,29 @@ class Session implements WriterSession {
 
   /**
    * Interval flushes are only evaluated here, inside `add`: an idle session never flushes by itself, so
-   * long-running callers (serve, exporters) must call `flush()` on their own timer.
+   * long-running callers (serve, exporters) must call `flush()` on their own timer. The checkpoint is prepared
+   * here, under the serial queue, and written in the background so the adds queued behind it are not held up
+   * by a slow write; one write runs at a time.
    */
   async #maybeCheckpoint(): Promise<void> {
     const { clock } = this.#deps;
-    if (clock.monotonicMs() - this.#lastFlushMs >= this.#config.writer.flushIntervalMs) {
-      await this.#checkpoint(false);
-    }
+    if (this.#inflight !== null) return;
+    if (clock.monotonicMs() - this.#lastFlushMs < this.#config.writer.flushIntervalMs) return;
+    const prepared = await this.#prepareCheckpoint(false);
+    this.#inflight = this.#writeCheckpoint(prepared).then(
+      () => {
+        this.#inflight = null;
+      },
+      (e: unknown) => {
+        this.#inflight = null;
+        // Same as a failed foreground flush as far as the report goes; the next flush retries (and fails on its own
+        // if the problem stays). The interval restarts so a persistent fault is not retried by every request.
+        this.#lastFlushMs = this.#deps.clock.monotonicMs();
+        this.#deps.logger.error('checkpoint failed; will retry at the next flush', {
+          error: e instanceof Error ? e.message : String(e),
+        });
+      },
+    );
   }
 
   /** Remove the replaced report's data, once, immediately before this session's first write. */
@@ -859,14 +882,19 @@ class Session implements WriterSession {
     this.#shellWritten = true;
   }
 
-  /**
-   * One flush: chunks, then trace shards, rollups, the state checkpoint and, last and atomically, the
-   * manifest. Anything written before the manifest is invisible to readers and is overwritten or replaced
-   * by the next successful flush, so an interrupted flush leaves the previous manifest valid.
-   */
+  /** A foreground flush: waits for a background write, then prepares and writes. */
   async #checkpoint(complete: boolean): Promise<void> {
-    const { fs, tracer, clock } = this.#deps;
-    const span = tracer.startSpan('otel-html.flush', { complete });
+    await this.#inflight;
+    await this.#writeCheckpoint(await this.#prepareCheckpoint(complete));
+  }
+
+  /**
+   * The synchronous-ish first half of a flush, under the serial queue: chunks written, then an immutable picture
+   * of everything the second half writes, so the adds that follow cannot change it. Metric segments are flushed
+   * here too (they are not what makes a checkpoint slow).
+   */
+  async #prepareCheckpoint(complete: boolean): Promise<PreparedCheckpoint> {
+    const span = this.#deps.tracer.startSpan('otel-html.flush', { complete });
     try {
       await this.#wipeReplaced();
       this.#cutSync(this.#spans);
@@ -876,43 +904,86 @@ class Session implements WriterSession {
       const metricFiles = await this.#series.flush(this.#rollups.metrics.catalog);
       // New segment numbers must reach the state, or a resumed session would overwrite listed segments.
       if (metricFiles.length > 0) this.#dirty = true;
-      if (this.#dirty || !this.#everCommitted) {
-        for (const shard of this.#traceIndex.dirtyShards()) {
+      const manifest = this.#manifest(complete);
+      const chunks = this.#pending;
+      const writeState = this.#dirty || !this.#everCommitted;
+      const prepared: PreparedCheckpoint = {
+        complete,
+        span,
+        manifest,
+        chunks,
+        metricFiles: metricFiles.length,
+        records: this.#totals.spans + this.#totals.logs + this.#totals.metrics,
+        slot: this.#nextSlot(),
+        state: null,
+      };
+      if (writeState) {
+        const rollups = serializeRollups(this.#rollups);
+        const rollupFiles = ROLLUP_NAMES.map((n): [string, string] => [
+          rollupPath(n),
+          wrapDataFile(rollupKey(n), rollups[n]),
+        ]);
+        const head = stringifyHead(this.#stateHead(rollups));
+        const dedupe = this.#dedupe.toJSON();
+        // Last: nothing after it can throw, so a failed prepare never leaves a snapshot held or shards un-dirtied.
+        const snapshot = this.#traceIndex.snapshot();
+        prepared.state = { snapshot, rollupFiles, head, dedupe };
+        this.#dirty = false;
+      }
+      this.#pending = []; // last, after everything that can throw
+      return prepared;
+    } catch (e) {
+      span.recordError(e);
+      span.end();
+      throw e;
+    }
+  }
+
+  /**
+   * The second half of a flush, from the prepared picture alone: trace shards, rollups, the state checkpoint and,
+   * last and atomically, the manifest. Anything written before the manifest is invisible to readers and is
+   * overwritten or replaced by the next successful flush, so an interrupted flush leaves the previous manifest
+   * valid. On failure what the prepare took out of the live bookkeeping is put back.
+   */
+  async #writeCheckpoint(p: PreparedCheckpoint): Promise<void> {
+    const { fs, clock } = this.#deps;
+    const { state } = p;
+    try {
+      if (state !== null) {
+        for (const shard of state.snapshot.dirty) {
           await fs.writeTextAtomic(
             at(this.#out, traceShardPath(shard)),
-            wrapDataFile(traceShardKey(shard), this.#traceIndex.shardPayload(shard)),
+            wrapDataFile(traceShardKey(shard), Object.fromEntries(state.snapshot.entries(shard))),
           );
         }
-        const rollups = serializeRollups(this.#rollups);
-        for (const name of ROLLUP_NAMES) {
-          await fs.writeTextAtomic(
-            at(this.#out, rollupPath(name)),
-            wrapDataFile(rollupKey(name), rollups[name]),
-          );
-        }
-        await writeStateSlot(fs, this.#out, this.#nextSlot(), this.#state(rollups));
+        for (const [path, text] of state.rollupFiles) await fs.writeTextAtomic(at(this.#out, path), text);
+        await writeStateSlot(fs, this.#out, p.slot, state.head, state.dedupe, snapshotViews(state.snapshot));
       }
-      if (!this.#shellWritten && !complete) await this.#writeShell();
-      await writeManifest(fs, this.#out, this.#manifest(complete));
+      if (!this.#shellWritten && !p.complete) await this.#writeShell();
+      await writeManifest(fs, this.#out, p.manifest);
       // Committed: only now does in-memory bookkeeping move forward.
-      if (this.#dirty || !this.#everCommitted) this.#slot = this.#nextSlot();
-      this.#committed.push(...this.#pending);
-      span.setAttributes({
-        chunks: this.#pending.length,
-        records: this.#totals.spans + this.#totals.logs + this.#totals.metrics,
-        shards: this.#traceIndex.dirtyShards().length,
-        metricFiles: metricFiles.length,
+      if (state !== null) this.#slot = p.slot;
+      this.#committed.push(...p.chunks);
+      p.span.setAttributes({
+        chunks: p.chunks.length,
+        records: p.records,
+        shards: state?.snapshot.dirty.length ?? 0,
+        metricFiles: p.metricFiles,
       });
-      this.#pending = [];
-      this.#traceIndex.clearDirty();
-      this.#dirty = false;
       this.#everCommitted = true;
       this.#lastFlushMs = clock.monotonicMs();
     } catch (e) {
-      span.recordError(e);
+      // Chunks added since the prepare come after the ones it listed.
+      this.#pending = [...p.chunks, ...this.#pending];
+      if (state !== null) {
+        this.#traceIndex.restoreDirty(state.snapshot.dirty);
+        this.#dirty = true;
+      }
+      p.span.recordError(e);
       throw e;
     } finally {
-      span.end();
+      this.#traceIndex.release();
+      p.span.end();
     }
   }
 
@@ -920,7 +991,7 @@ class Session implements WriterSession {
     return this.#slot === 0 ? 1 : 0;
   }
 
-  #state(rollups: ReturnType<typeof serializeRollups>): SessionState {
+  #stateHead(rollups: ReturnType<typeof serializeRollups>): StateHead {
     return {
       formatVersion: 1,
       otelHtmlVersion: this.#deps.version,
@@ -931,8 +1002,6 @@ class Session implements WriterSession {
         metrics: this.#metrics.pendingNumber,
       },
       rollups,
-      dedupe: this.#dedupe.toJSON(),
-      traceIndex: this.#traceIndex.toJSON(),
       metricStreams: this.#normalizer.toJSON(),
       nextSegment: Object.fromEntries([...this.#series.nextSegments()].map(([id, n]) => [String(id), n])),
     };
@@ -963,6 +1032,30 @@ class Session implements WriterSession {
       },
     };
   }
+}
+
+/** What a flush writes, taken at prepare time (see `#prepareCheckpoint`). */
+interface PreparedCheckpoint {
+  complete: boolean;
+  span: SpanHandle;
+  manifest: Manifest;
+  /** The pending chunk entries this checkpoint lists, moved out of `#pending`. */
+  chunks: ManifestChunk[];
+  metricFiles: number;
+  records: number;
+  slot: StateSlot;
+  /** `null` when nothing changed since the last checkpoint: only the manifest is written. */
+  state: {
+    snapshot: TraceIndexSnapshot;
+    rollupFiles: [path: string, text: string][];
+    head: StringifiedHead;
+    dedupe: string[];
+  } | null;
+}
+
+/** The snapshot's shards in the state's object-key order, one view at a time. */
+function* snapshotViews(snapshot: TraceIndexSnapshot): Generator<[string, Readonly<TraceShard>]> {
+  for (const s of jsObjectKeyOrder(snapshot.shardNames)) yield [s, Object.fromEntries(snapshot.entries(s))];
 }
 
 function badRef(path: string, ref: number, len: number): OtelHtmlError {

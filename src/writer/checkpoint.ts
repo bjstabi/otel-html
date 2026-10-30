@@ -12,6 +12,7 @@ import {
   statePath,
 } from '../format/paths.js';
 import { parseSessionState, type SessionState } from '../format/state.js';
+import type { TraceShard } from '../format/trace-shard.js';
 import { OtelHtmlError } from '../model/errors.js';
 import type { FileSystem } from './ports.js';
 
@@ -32,13 +33,90 @@ export async function writeManifest(fs: FileSystem, out: string, manifest: Manif
   await fs.writeTextAtomic(at(out, MANIFEST_PATH), wrapDataFile(MANIFEST_KEY, manifest));
 }
 
+/** The state fields that stay small; `dedupe` and `traceIndex` hold the bulk and are streamed separately. */
+export type StateHead = Omit<SessionState, 'dedupe' | 'traceIndex'>;
+
+/**
+ * The head fields already stringified (`undefined` where `JSON.stringify` would drop the field). A background
+ * checkpoint takes these at prepare time: the rollups and metric streams are live structures that go on changing
+ * while the state is written.
+ */
+export interface StringifiedHead {
+  readonly fields: { readonly [K in keyof StateHead]: string | undefined };
+}
+
+export function stringifyHead(head: StateHead): StringifiedHead {
+  const entries = (Object.keys(head) as (keyof StateHead)[]).map((k) => [k, JSON.stringify(head[k])]);
+  return { fields: Object.fromEntries(entries) as StringifiedHead['fields'] };
+}
+
+/**
+ * Where each head field sits around `dedupe` and `traceIndex` in `SessionState` order (listed in that order). Typed
+ * as a record over every head field, so a new `SessionState` field fails to compile until it is placed here.
+ */
+const HEAD_SIDE = {
+  formatVersion: 'before',
+  otelHtmlVersion: 'before',
+  epochUnixNano: 'before',
+  nextChunk: 'before',
+  rollups: 'before',
+  metricStreams: 'after',
+  nextSegment: 'after',
+} satisfies Record<keyof StateHead, 'before' | 'after'>;
+
+/**
+ * Shard names in the order `JSON.stringify` gives an object keyed by them: canonical integer names ("12", "99")
+ * first in numeric order, then the rest in the given order. The state slot has always been written from such an
+ * object, and its bytes must not change.
+ */
+export function jsObjectKeyOrder(names: readonly string[]): string[] {
+  return Object.keys(Object.fromEntries(names.map((n) => [n, 0])));
+}
+
+/** Dedupe keys stringified per piece. */
+const DEDUPE_SLICE = 1000;
+
+/**
+ * The bytes of `JSON.stringify(state)` as pieces, so the full string (and a Buffer copy of it) never exists: the
+ * state embeds the whole trace index, which is hundreds of megabytes under load. Field order is the
+ * `SessionState` order; the head arrives stringified (see `stringifyHead`).
+ */
+export function* stateSlotPieces(
+  head: StringifiedHead,
+  dedupe: readonly string[],
+  shards: Iterable<[string, Readonly<TraceShard>]>,
+): Generator<string> {
+  const field = (k: keyof StateHead): string | undefined => {
+    const v = head.fields[k];
+    return v === undefined ? undefined : `${JSON.stringify(k)}:${v}`; // JSON.stringify drops undefined fields
+  };
+  const keys = Object.keys(HEAD_SIDE) as (keyof StateHead)[];
+  const before = keys.filter((k) => HEAD_SIDE[k] === 'before').map(field);
+  const after = keys.filter((k) => HEAD_SIDE[k] === 'after').map(field);
+  yield `{${before.filter((f) => f !== undefined).join(',')},"dedupe":[`;
+  for (let i = 0; i < dedupe.length; i += DEDUPE_SLICE)
+    yield (i > 0 ? ',' : '') + JSON.stringify(dedupe.slice(i, i + DEDUPE_SLICE)).slice(1, -1);
+  yield '],"traceIndex":{';
+  let first = true;
+  for (const [shard, view] of shards) {
+    yield `${first ? '' : ','}${JSON.stringify(shard)}:${JSON.stringify(view)}`;
+    first = false;
+  }
+  yield `}${after.map((f) => (f === undefined ? '' : `,${f}`)).join('')}}`;
+}
+
 export async function writeStateSlot(
   fs: FileSystem,
   out: string,
   slot: StateSlot,
-  state: SessionState,
+  head: StringifiedHead,
+  dedupe: readonly string[],
+  shards: Iterable<[string, Readonly<TraceShard>]>,
 ): Promise<void> {
-  await fs.writeTextAtomic(at(out, statePath(slot)), JSON.stringify(state));
+  const path = at(out, statePath(slot));
+  const pieces = stateSlotPieces(head, dedupe, shards);
+  if (fs.writePiecesAtomic !== undefined) await fs.writePiecesAtomic(path, pieces);
+  else await fs.writeTextAtomic(path, [...pieces].join(''));
 }
 
 function chunkCounts(manifest: Manifest): Record<Signal, number> | null {
