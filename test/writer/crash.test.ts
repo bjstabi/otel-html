@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
-import { parseSeriesFile } from '../../src/format/metric-files.js';
+import { LEVEL0_WIDTH_NS, parseSegmentFile, parseSeriesFile } from '../../src/format/metric-files.js';
 import { TraceShardSchema } from '../../src/format/trace-shard.js';
 import { openSession } from '../../src/writer/session.js';
 import { logRecord, logsRequest } from '../../test-support/otlp-builders.js';
@@ -184,6 +184,12 @@ describe('writer killed between flushes with metrics', () => {
       ]);
     }
     expect(listed.some((p) => /\/l[0-6]\.js$/.test(p))).toBe(false);
+    // Every listed segment decodes and holds the flush's buckets: one per flush, both for series 0.
+    for (const path of listed.filter((p) => p.includes('/seg-'))) {
+      const seg = parseSegmentFile(readDataFile(w, OUT, path), path);
+      expect(seg.widthNs).toBe(LEVEL0_WIDTH_NS);
+      expect(seg.series.map((x) => [x.id, x.t.length])).toEqual([[0, 1]]);
+    }
   });
 
   test('reopening and closing compacts the segments', async () => {

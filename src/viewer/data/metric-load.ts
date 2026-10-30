@@ -186,8 +186,8 @@ function expectMetric(actual: number, id: number, path: string): void {
 
 /**
  * `pages` of one level (in page order, or one whole file) as `LevelData`: a series' buckets follow page order. A
- * series id at or past `seriesCount` (the catalog's committed count) is left out, like the definitions past it in
- * `series.js`: a flush that never committed may have written it.
+ * series id at or past `seriesCount` (the catalog's committed count) is left out, buckets and exemplars alike, like
+ * the definitions past it in `series.js`: a flush that never committed may have written it.
  */
 function toLevelData(
   level: number,
@@ -207,7 +207,12 @@ function toLevelData(
       }
     }
   }
-  return { level, widthNs: levelWidthNs(level), series, exemplars };
+  return {
+    level,
+    widthNs: levelWidthNs(level),
+    series,
+    exemplars: exemplars.filter((e) => e.series < seriesCount),
+  };
 }
 
 async function loadSeriesDefs(

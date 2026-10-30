@@ -1,8 +1,10 @@
 import { beforeAll, describe, expect, test } from 'vitest';
 import { reviveDataJson, unwrapDataFile, wrapDataFile } from '../../src/format/data-file.js';
 import {
+  encodeExemplarFile,
   encodeSeriesFile,
   LEVEL0_WIDTH_NS,
+  parseExemplarFile,
   parseLevelFile,
   parseSeriesFile,
 } from '../../src/format/metric-files.js';
@@ -16,7 +18,13 @@ import {
   showOptions,
 } from '../../src/viewer/data/metric-query.js';
 import { createScriptedLoader } from '../../test-support/scripted-loader.js';
-import { buildCounterRun, buildMetricReports, buildSummaryRun, type Fixture } from './report-fixture.js';
+import {
+  buildCounterRun,
+  buildMetricReports,
+  buildSummaryRun,
+  buildUnfinishedRun,
+  type Fixture,
+} from './report-fixture.js';
 
 let reports: { compacted: Fixture; segments: Fixture };
 beforeAll(async () => {
@@ -101,6 +109,42 @@ describe('loadMetric', () => {
     const level = await m.level(1);
     expect(m.series).toHaveLength(3);
     expect([...level.series.keys()]).toEqual([0, 1, 2]);
+  });
+
+  test('an unfinished report merges every segment: buckets and exemplars of each flush are all there', async () => {
+    const f = await buildUnfinishedRun({ flushes: 3, pointsPerFlush: 4, series: 2 });
+    const segments = f.manifest.metricFiles.filter((p) => p.includes('/seg-'));
+    expect(segments).toHaveLength(3);
+    const loader = createScriptedLoader(f.files);
+    const m = await loadMetric(loader, f.manifest, 0);
+    expect(m.fromSegments).toBe(true);
+    const l0 = await m.level(0);
+    // 12 points per series, 10 s apart: 12 level-0 buckets each (10 s spans ~10 buckets of 1.024 s).
+    expect([...l0.series.values()].map((s) => s.t.length)).toEqual([12, 12]);
+    // 12 points × 2 series exemplars, from all three segments, in time order.
+    expect(l0.exemplars).toHaveLength(24);
+    const times = l0.exemplars.map((e) => e.time);
+    expect(times).toEqual([...times].sort((a, b) => a - b));
+    expect(new Set(l0.exemplars.map((e) => e.traceId)).size).toBe(12);
+    for (const p of segments) expect(loader.calls).toContain(p);
+  });
+
+  test('an exemplar whose series is past the catalog count is left out, like a stray series', async () => {
+    const f = await buildCounterRun({ durationS: 600, stepS: 10, series: 2, exemplars: true });
+    const path = 'data/metrics/000000/ex.js';
+    const key = 'metrics/000000/ex';
+    const ex = parseExemplarFile(reviveDataJson(unwrapDataFile(f.files.get(path) ?? '', key)), path);
+    const first = ex.exemplars[0];
+    if (first === undefined) throw new Error('the run has no exemplars');
+    const stray = { ...first, series: 99, time: first.time + 1 };
+    const files = new Map(f.files).set(
+      path,
+      wrapDataFile(key, encodeExemplarFile({ ...ex, exemplars: [...ex.exemplars, stray] })),
+    );
+    const m = await load(f, 0, files);
+    const level = await m.level(0);
+    expect(level.exemplars.some((e) => e.series === 99)).toBe(false);
+    expect(level.exemplars).toHaveLength(ex.exemplars.length);
   });
 
   test('loads only the files the manifest lists', async () => {

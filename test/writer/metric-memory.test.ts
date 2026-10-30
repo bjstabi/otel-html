@@ -101,7 +101,9 @@ describe('metric series memory', () => {
           '--config',
           config,
         ]);
-        // A failed convert stops reading its pipes, which would leave the generator blocked on them.
+        // A failed convert stops reading its pipes, which would leave the generator blocked on them; a dead
+        // generator leaves the convert waiting on a pipe no one writes, so each failure ends the other.
+        generator.done.catch(() => convert.kill());
         const stderr = await convert.done.catch((e: unknown) => {
           generator.kill();
           throw e;

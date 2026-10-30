@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import type { SpanId, TraceId } from '../../src/model/ids.js';
+import type { MetricPageState, MetricQuery } from '../../src/query/metric-query.js';
 import {
   formatWindow,
   parseUrlState,
@@ -128,7 +129,7 @@ describe('logs keys', () => {
 });
 
 describe('metrics key m', () => {
-  const q = (id: string, metric: string) => ({
+  const q = (id: string, metric: string): MetricQuery => ({
     id,
     metric,
     kind: null,
@@ -140,17 +141,17 @@ describe('metrics key m', () => {
     alias: null,
     hidden: false,
   });
-  const state = {
+  const state: MetricPageState = {
     queries: [q('a', 'req.count'), q('b', 'req.errors')],
     formulas: [{ id: 'f1', expr: 'b / a', alias: 'error rate', hidden: false }],
     display: 'area',
     scale: 'log',
     split: true,
     exemplars: false,
-  } as const;
+  };
 
   test('round-trips a two-query state through the URL', () => {
-    const url = serializeUrlState({ m: structuredClone(state) as never });
+    const url = serializeUrlState({ m: structuredClone(state) });
     const r = parseUrlState(`#/metrics?${url}`);
     expect(r.errors).toEqual([]);
     expect(r.state.m).toEqual(state);
