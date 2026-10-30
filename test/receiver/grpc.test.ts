@@ -9,7 +9,7 @@ import {
   type ServiceError,
   status,
 } from '@grpc/grpc-js';
-import { afterEach, describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 import { closeAll } from '../../src/api/receiver.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { RetryInfoSchema } from '../../src/model/gen/google/rpc/error_details_pb.js';
@@ -382,16 +382,13 @@ describe('OTLP/gRPC transport', () => {
       return { real, receiver, gate, reached: () => reached };
     }
 
-    const tick = () => new Promise((resolve) => setTimeout(resolve, 100));
-
     test('a call on a second connection is refused busy while a call on the first holds the budget', async () => {
       const { real, receiver, gate, reached } = await heldReceiver(1_000_000);
       const address = await serve(receiver, { maxBodyBytes: 1_000_000, inflightBudgetBytes: 1_000_000 });
       const a = clientFor(address, own);
       const b = clientFor(address, own);
       const first = call(a, requestOf([protoSpan(1)]));
-      await tick();
-      expect(reached()).toBe(1);
+      await vi.waitFor(() => expect(reached()).toBe(1));
       const second = await call(b, requestOf([protoSpan(2)]));
       expect(second.err?.code).toBe(status.UNAVAILABLE);
       const details = second.err?.metadata.get('grpc-status-details-bin')[0];
@@ -413,8 +410,7 @@ describe('OTLP/gRPC transport', () => {
       const client = clientFor(address, own);
       const one = call(client, requestOf([protoSpan(1)]));
       const two = call(client, requestOf([protoSpan(2)]));
-      await tick();
-      expect(reached()).toBe(2);
+      await vi.waitFor(() => expect(reached()).toBe(2));
       gate.resolve();
       expect((await one).err).toBeNull();
       expect((await two).err).toBeNull();
@@ -425,11 +421,12 @@ describe('OTLP/gRPC transport', () => {
       const address = await serve(receiver, { maxBodyBytes: 1_000, inflightBudgetBytes: 1_000_000 });
       const { err } = await call(clientFor(address, own), new Uint8Array(2_500));
       expect(err?.code).toBe(status.RESOURCE_EXHAUSTED);
-      await tick();
       // A full-budget admission is only granted while nothing else is open: a leaked reservation would refuse it.
-      const probe = real.admit(1_000_000);
-      expect(probe).not.toBeNull();
-      probe?.release();
+      await vi.waitFor(() => {
+        const probe = real.admit(1_000_000);
+        expect(probe).not.toBeNull();
+        probe?.release();
+      });
     });
 
     function startedCall(real: Receiver) {

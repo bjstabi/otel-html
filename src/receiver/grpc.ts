@@ -31,7 +31,7 @@ export const GRPC_CEILING_FACTOR = 2;
 
 export interface GrpcTransportOptions {
   maxBodyBytes: number;
-  /** Sizes the per-connection concurrent-call limit: ⌈inflightBudgetBytes ÷ maxBodyBytes⌉. */
+  /** The budget each call reserves `maxBodyBytes` from at start; also sizes the per-connection concurrent-call limit (⌈budget ÷ maxBodyBytes⌉) and the HTTP/2 session memory cap. */
   inflightBudgetBytes: number;
   /** How long `close()` waits for `tryShutdown` before force-closing idle or half-open streams. Default 5 s. */
   forceShutdownAfterMs?: number;
@@ -79,8 +79,9 @@ function failure(e: unknown, logger: Logger): { code: number; details: string; m
  * refused call. The reservation is held until half-close, not until the message arrives: grpc-js's unary path only
  * stores the message in `onReceiveMessage` and runs the handler synchronously inside `onReceiveHalfClose`, so
  * releasing there and delegating leaves no window in which a buffered body is uncounted (a client that sends a
- * message and never half-closes keeps its reservation). It is also released on cancel and when a status is sent
- * (grpc-js's own too-large refusal); `release` is idempotent.
+ * message and never half-closes keeps its reservation). It is also released on cancel (which grpc-js raises
+ * after it sends any status itself, such as its too-large refusal) and when a status is sent through the call;
+ * `release` is idempotent.
  */
 export function admissionInterceptor(
   receiver: Receiver,
@@ -136,6 +137,7 @@ function handlerFor(s: SignalService, receiver: Receiver, options: GrpcTransport
       return;
     }
     const admission = receiver.admit(call.request.length);
+    // Defence in depth: the call's own reservation was just released, so re-admitting the same size cannot fail.
     if (admission === null) {
       const rejected = new ReceiverRejected(
         'busy',
