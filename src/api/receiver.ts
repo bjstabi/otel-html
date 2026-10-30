@@ -122,12 +122,12 @@ export async function startReceiver(
           span.setAttributes({
             requests: s.requests,
             bytes: s.bytes,
-            'accepted.traces': s.accepted.traces,
-            'accepted.logs': s.accepted.logs,
-            'accepted.metrics': s.accepted.metrics,
-            'rejected.traces': s.rejected.traces,
-            'rejected.logs': s.rejected.logs,
-            'rejected.metrics': s.rejected.metrics,
+            acceptedTraces: s.accepted.traces,
+            acceptedLogs: s.accepted.logs,
+            acceptedMetrics: s.accepted.metrics,
+            rejectedTraces: s.rejected.traces,
+            rejectedLogs: s.rejected.logs,
+            rejectedMetrics: s.rejected.metrics,
           });
           span.end();
         }

@@ -31,6 +31,7 @@ function toLogRecord(log: ReadableLogRecord): LogRecord {
     eventName: log.eventName ?? '',
     traceId: ctx ? hexToBytes(ctx.traceId) : new Uint8Array(),
     spanId: ctx ? hexToBytes(ctx.spanId) : new Uint8Array(),
+    // Raw `traceFlags`, as the upstream log serializer does (spans mask it).
     flags: ctx ? ctx.traceFlags : 0,
   });
 }

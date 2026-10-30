@@ -1,8 +1,5 @@
 import { execFile } from 'node:child_process';
-import { createReadStream } from 'node:fs';
-import { cp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { createServer } from 'node:http';
-import { extname, join, normalize, sep } from 'node:path';
+import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { toJson } from '@bufbuild/protobuf';
@@ -48,15 +45,10 @@ import {
   TRACE_1,
   TRACE_2,
 } from './fixture.js';
+import { serve } from './static-server.js';
 
 const run = promisify(execFile);
 const CLI = fileURLToPath(new URL('../dist/cli/main.js', import.meta.url));
-const MIME: Record<string, string> = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-};
-
 const str = (key: string, value: string): { key: string; value: { stringValue: string } } => ({
   key,
   value: { stringValue: value },
@@ -439,37 +431,6 @@ async function buildUnfinishedReport(): Promise<void> {
   await report.flush();
   await report.addMetrics({ resourceMetrics: collections.slice(half) });
   await report.flush();
-}
-
-async function serve(
-  mounts: readonly { prefix: string; root: string }[],
-): Promise<{ port: number; close(): Promise<void> }> {
-  const server = createServer((req, res) => {
-    const url = new URL(req.url ?? '/', 'http://localhost');
-    const rel = decodeURIComponent(url.pathname);
-    const mount = mounts.find((m) => rel.startsWith(`${m.prefix}/`));
-    const file = mount === undefined ? null : normalize(join(mount.root, rel.slice(mount.prefix.length)));
-    if (mount === undefined || file === null || !file.startsWith(mount.root + sep)) {
-      res.writeHead(404).end();
-      return;
-    }
-    stat(file).then(
-      (s) => {
-        if (!s.isFile()) {
-          res.writeHead(404).end();
-          return;
-        }
-        res.writeHead(200, { 'content-type': MIME[extname(file)] ?? 'application/octet-stream' });
-        createReadStream(file).pipe(res);
-      },
-      () => res.writeHead(404).end(),
-    );
-  });
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const address = server.address();
-  if (address === null || typeof address === 'string') throw new Error('static server has no TCP address');
-  const { port } = address;
-  return { port, close: () => new Promise((resolve) => server.close(() => resolve())) };
 }
 
 /** Times the calibration workload before anything else runs, for `perfFactor` in the workers (env is inherited). */

@@ -41,7 +41,10 @@ export class ReportExporter {
     return this.report.flush();
   }
 
-  /** Stop accepting exports. The report belongs to the caller, so it is flushed but not closed. */
+  /**
+   * Stop accepting exports. The report belongs to the caller, so it is flushed but not closed. Shut the provider down
+   * first, then `report.close()`; `shutdown()` rejects when the report is already closed.
+   */
   async shutdown(): Promise<void> {
     this.#stopped = true;
     await this.report.flush();
