@@ -83,7 +83,7 @@ describe('serve', () => {
     let lockAtCall: Promise<boolean> | undefined;
     let calls = 0;
     const h = start(w, ['serve', '-o', 'out', '--http', '0', '--no-grpc'], undefined, {
-      favourHeapSize: () => {
+      favourShortPauses: () => {
         calls++;
         lockAtCall = w.fs.exists('out/data/state/lock.json');
       },

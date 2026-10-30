@@ -272,6 +272,27 @@ describe('TraceIndex shared roots and chunk lists', () => {
     }).toThrow();
   });
 
+  test('triples that differ only around a NUL keep their own roots', () => {
+    const entry = (service: string, name: string) => ({
+      chunks: ['chunks/spans/000000'],
+      logChunks: [],
+      start: 1,
+      end: 2,
+      spans: 1,
+      logs: 0,
+      errors: 0,
+      root: { service, name, resource: 'r' },
+    });
+    const idx = TraceIndex.load({
+      '5b': { [TRACE]: entry('a\u0000b', 'c') },
+      aa: { [T2]: entry('a', 'b\u0000c') },
+    });
+    const a = live(idx, TRACE)?.root;
+    const b = live(idx, T2)?.root;
+    expect(a).toEqual({ service: 'a\u0000b', name: 'c', resource: 'r' });
+    expect(b).toEqual({ service: 'a', name: 'b\u0000c', resource: 'r' });
+  });
+
   test('past the intern cap a root is still frozen and correct', () => {
     const idx = new TraceIndex({ internCap: 1 });
     idx.add(mk(1, { name: 'first' }), 'chunks/spans/000000', resource);

@@ -159,7 +159,7 @@ describe('run', () => {
       return spawn(command, args, options);
     }) as CliIo['spawn'];
     const h = start(w, ['run', '-o', 'out', ...node, '0'], {}, spawnOverride, undefined, {
-      favourHeapSize: () => {
+      favourShortPauses: () => {
         calls++;
         expect(spawned).toBe(false);
         lockAtCall = w.fs.exists('out/data/state/lock.json');

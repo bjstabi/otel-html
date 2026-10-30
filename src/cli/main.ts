@@ -45,7 +45,7 @@ const code = await runCli(
   // Inside a `bun build --compile` binary the viewer ships embedded; under Node it is read from the package.
   {
     beforeMetrics: favourHeapSize,
-    favourHeapSize: favourShortPauses,
+    favourShortPauses,
     ...(hasBunEmbeddedFiles() ? { viewerAssets: bunEmbeddedViewerAssets() } : {}),
   },
 );

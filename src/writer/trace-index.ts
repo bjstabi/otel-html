@@ -49,7 +49,8 @@ export class TraceIndex {
   #held: Map<string, Map<string, TraceEntry>> | null = null;
   // Shards whose live map is still the very map the held snapshot reads (see `#shardForWrite`).
   readonly #shared = new Set<string>();
-  readonly #roots = new Map<string, TraceRoot>();
+  readonly #roots = new Map<string, Map<string, Map<string, TraceRoot>>>();
+  #rootCount = 0;
   // The last one-element chunk list handed out per list kind. The chunk being written only changes on a cut, so
   // nearly every first chunk of a new entry equals the previous one.
   #lastSpanList: readonly string[] = NO_CHUNKS;
@@ -65,15 +66,25 @@ export class TraceIndex {
   // same three strings; frozen, because an entry copy made for a snapshot shares it too, so it must never change.
   // Bounded by the same cap; past it a fresh frozen root is returned.
   #sharedRoot(service: string, name: string, resource: string): TraceRoot {
-    const key = `${service}\u0000${name}\u0000${resource}`;
-    const known = this.#roots.get(key);
+    // Nested maps, not one joined key: OTLP strings may hold any character, so no separator keeps two triples apart,
+    // and a lookup allocates no key string.
+    const byName = this.#roots.get(service);
+    const byResource = byName?.get(name);
+    const known = byResource?.get(resource);
     if (known !== undefined) return known;
     const root = Object.freeze({
       service: this.#intern(service),
       name: this.#intern(name),
       resource: this.#intern(resource),
     });
-    if (this.#roots.size < this.#internCap) this.#roots.set(key, root);
+    if (this.#rootCount < this.#internCap) {
+      this.#rootCount++;
+      const n = byName ?? new Map<string, Map<string, TraceRoot>>();
+      if (byName === undefined) this.#roots.set(service, n);
+      const r = byResource ?? new Map<string, TraceRoot>();
+      if (byResource === undefined) n.set(name, r);
+      r.set(resource, root);
+    }
     return root;
   }
 
