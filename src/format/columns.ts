@@ -281,7 +281,8 @@ function encodeAttrs(a: Attributes, d: Intern, path: Path): JsonValue[] {
   const out: JsonValue[] = new Array(a.size * 2);
   let i = 0;
   for (const [k, v] of a) {
-    // nested values only: strings, bools and numbers need no path
+    // Only a nested value can fail (and then names `[key]` in its path); a string, bool, int, double, bytes or empty
+    // value always encodes, so building a path for it would be wasted work per cell.
     const at =
       v.kind === 'array' || v.kind === 'kvlist' ? () => `${pathText(path)}[${JSON.stringify(k)}]` : path;
     out[i++] = d(k);

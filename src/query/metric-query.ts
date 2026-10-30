@@ -2,6 +2,17 @@ import { z } from 'zod';
 import { OtelHtmlError } from '../model/errors.js';
 import type { MetricPointRecord } from '../model/records.js';
 import { compileCondition } from '../ottl/compile.js';
+import { parseFormula } from './metric-formula.js';
+
+/** Whether `expr` parses as a formula (`parseFormula`); the schema says so before the Explorer tries it. */
+function parses(expr: string): boolean {
+  try {
+    parseFormula(expr);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export type MetricFn =
   | { op: 'rate' }
@@ -93,7 +104,7 @@ export const MetricQuerySchema: z.ZodType<MetricQuery, MetricQueryInput> = z
 
 export const MetricFormulaSchema: z.ZodType<MetricFormula> = z.object({
   id: z.string().regex(/^f[1-9]\d*$/, 'a formula id f1, f2, ...'),
-  expr: z.string().min(1),
+  expr: z.string().min(1).refine(parses, { message: 'a formula over query ids, such as b / a' }),
   alias: z.string().nullable().default(null),
   hidden: z.boolean().default(false),
 });

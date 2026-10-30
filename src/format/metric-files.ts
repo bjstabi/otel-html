@@ -1,14 +1,14 @@
 import { z } from 'zod';
 import type { Attributes } from '../model/anyvalue.js';
 import { OtelHtmlError } from '../model/errors.js';
-import { type BucketAgg, BucketAggSchema, mergeAgg } from '../rollups/metric-agg.js';
 import {
   decodeAttributes,
   encodeAttributes,
   type JsonAny,
   JsonAnySchema,
-  type SeriesDef,
-} from '../rollups/metric-catalog.js';
+} from '../rollups/attribute-codec.js';
+import { type BucketAgg, BucketAggSchema, mergeAgg } from '../rollups/metric-agg.js';
+import type { SeriesDef } from '../rollups/metric-catalog.js';
 import { parseWith } from './validate.js';
 
 /**
