@@ -7,7 +7,6 @@ test('pendingKey follows the chunk number across a cut', () => {
   const f = realisticSpans(1);
   const buf = new ChunkBuffer(SPAN_SIGNAL, 0);
   expect(buf.pendingKey).toBe('chunks/spans/000000');
-  expect(buf.pendingKey).toBe('chunks/spans/000000');
   const span = f.spans[0];
   if (span === undefined) throw new Error('no span');
   buf.push(span);

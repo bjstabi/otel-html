@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { TraceShardSchema } from '../../src/format/trace-shard.js';
+import { type TraceShard, TraceShardSchema } from '../../src/format/trace-shard.js';
 import { parseSpanId, parseTraceId, type RelNanos } from '../../src/model/ids.js';
 import type { LogRecordRecord, SpanRecord, StatusCode } from '../../src/model/records.js';
 import { DedupeSet } from '../../src/writer/dedupe.js';
@@ -17,6 +17,22 @@ const base =
   (() => {
     throw new Error('no span');
   })();
+
+/** A deep copy of one shard as the state would hold it, read through a snapshot that is released straight away. */
+function payloadOf(idx: TraceIndex, shard: string): TraceShard {
+  const snap = idx.snapshot();
+  try {
+    const out: TraceShard = {};
+    for (const [id, e] of snap.entries(shard))
+      out[id] = { ...e, chunks: [...e.chunks], logChunks: [...e.logChunks] };
+    return out;
+  } finally {
+    idx.release();
+  }
+}
+
+const jsonOf = (idx: TraceIndex): Record<string, TraceShard> =>
+  Object.fromEntries(idx.shards().map((s) => [s, payloadOf(idx, s)]));
 
 const TRACE = parseTraceId('5b8efff798038103d269b633813fc60c', 't');
 const mk = (id: number, over: Partial<SpanRecord> = {}): SpanRecord => ({
@@ -60,7 +76,7 @@ describe('TraceIndex logs', () => {
   test('a log alone creates a span-less entry', () => {
     const idx = new TraceIndex();
     idx.addLog(mkLog(), 'chunks/logs/000000');
-    expect(idx.shardPayload('5b')[TRACE]).toEqual({
+    expect(payloadOf(idx, '5b')[TRACE]).toEqual({
       chunks: [],
       logChunks: ['chunks/logs/000000'],
       start: 300,
@@ -77,7 +93,7 @@ describe('TraceIndex logs', () => {
     idx.addLog(mkLog({ time: 5 as RelNanos, observedTime: 5 as RelNanos }), 'chunks/logs/000000');
     idx.add(mk(1), 'chunks/spans/000000', resource);
     idx.addLog(mkLog({ time: 9999 as RelNanos, observedTime: 9999 as RelNanos }), 'chunks/logs/000001');
-    const e = idx.shardPayload('5b')[TRACE];
+    const e = payloadOf(idx, '5b')[TRACE];
     expect(e).toMatchObject({ start: 100, end: 200, spans: 1, logs: 2 });
     expect(e?.logChunks).toEqual(['chunks/logs/000000', 'chunks/logs/000001']);
   });
@@ -86,7 +102,7 @@ describe('TraceIndex logs', () => {
     const idx = new TraceIndex();
     idx.addLog(mkLog({ time: 50 as RelNanos, observedTime: 50 as RelNanos }), 'chunks/logs/000000');
     idx.addLog(mkLog({ time: 80 as RelNanos, observedTime: 80 as RelNanos }), 'chunks/logs/000000');
-    expect(idx.shardPayload('5b')[TRACE]).toMatchObject({
+    expect(payloadOf(idx, '5b')[TRACE]).toMatchObject({
       logChunks: ['chunks/logs/000000'],
       start: 50,
       end: 80,
@@ -99,14 +115,14 @@ describe('TraceIndex logs', () => {
     idx.addLog(mkLog({ traceId: null, spanId: parseSpanId('00000000000000ff', 's') }), 'chunks/logs/000000');
     expect(idx.shards()).toEqual([]);
     idx.addLog(mkLog({ spanId: parseSpanId('00000000000000ff', 's') }), 'chunks/logs/000000');
-    expect(idx.shardPayload('5b')[TRACE]?.spans).toBe(0);
+    expect(payloadOf(idx, '5b')[TRACE]?.spans).toBe(0);
   });
 
   test('round-trips through load with the schema', () => {
     const idx = new TraceIndex();
     idx.addLog(mkLog(), 'chunks/logs/000000');
-    const back = TraceIndex.load({ '5b': TraceShardSchema.parse(idx.shardPayload('5b')) });
-    expect(back.toJSON()).toEqual(idx.toJSON());
+    const back = TraceIndex.load({ '5b': TraceShardSchema.parse(payloadOf(idx, '5b')) });
+    expect(jsonOf(back)).toEqual(jsonOf(idx));
   });
 });
 
@@ -114,7 +130,7 @@ describe('TraceIndex', () => {
   test('a root-less (orphan) trace has root null and grows as spans arrive', () => {
     const idx = new TraceIndex();
     idx.add(mk(2, { start: 50 as RelNanos }), 'chunks/spans/000000', resource);
-    expect(idx.shardPayload('5b')[TRACE]).toEqual({
+    expect(payloadOf(idx, '5b')[TRACE]).toEqual({
       chunks: ['chunks/spans/000000'],
       logChunks: [],
       start: 50,
@@ -136,7 +152,7 @@ describe('TraceIndex', () => {
       resource,
     );
     idx.add(mk(1), 'chunks/spans/000009', resource);
-    const e = idx.shardPayload('5b')[TRACE];
+    const e = payloadOf(idx, '5b')[TRACE];
     expect(e?.chunks).toEqual(['chunks/spans/000000', 'chunks/spans/000007', 'chunks/spans/000009']);
     expect(e).toMatchObject({ spans: 4, errors: 1, start: 100, end: 900 });
     expect(e?.root).toEqual({ service: 'frontend', name: 'GET /cart', resource: 'GET /cart' });
@@ -149,12 +165,12 @@ describe('TraceIndex', () => {
     idx.snapshot();
     idx.release();
     expect(idx.dirtyShards()).toEqual([]);
-    const json = idx.toJSON();
+    const json = jsonOf(idx);
     expect(TraceShardSchema.parse(json['5b'])).toEqual(json['5b']);
     const loaded = TraceIndex.load(json);
     expect(loaded.shards()).toEqual(['5b']);
     expect(loaded.dirtyShards()).toEqual(['5b']);
-    expect(loaded.toJSON()).toEqual(json);
+    expect(jsonOf(loaded)).toEqual(json);
   });
 });
 
@@ -187,7 +203,7 @@ describe('DedupeSet', () => {
 
 describe('TraceIndex memory shape', () => {
   const T2 = parseTraceId('aa8efff798038103d269b633813fc60c', 't2');
-  const entryOf = (idx: TraceIndex, id: string) => Object.values(idx.shardPayload(id.slice(0, 2)))[0];
+  const entryOf = (idx: TraceIndex, id: string) => Object.values(payloadOf(idx, id.slice(0, 2)))[0];
 
   test('traces do not share chunk arrays once one grows', () => {
     const idx = new TraceIndex();
@@ -223,9 +239,9 @@ describe('TraceIndex memory shape', () => {
     const idx = new TraceIndex();
     idx.add(mk(1), 'chunks/spans/000000', resource);
     idx.add(mk(1, { traceId: T2 }), 'chunks/spans/000000', resource);
-    const json = JSON.parse(JSON.stringify(idx.toJSON()));
+    const json = JSON.parse(JSON.stringify(jsonOf(idx)));
     const loaded = TraceIndex.load(json);
-    expect(loaded.toJSON()).toEqual(idx.toJSON());
+    expect(jsonOf(loaded)).toEqual(jsonOf(idx));
     loaded.addLog(mkLog({ traceId: T2 }), 'chunks/logs/000000');
     expect(entryOf(loaded, T2)?.logChunks).toEqual(['chunks/logs/000000']);
     expect(entryOf(loaded, TRACE)?.logChunks).toEqual([]);
@@ -247,10 +263,10 @@ describe('TraceIndex snapshot', () => {
     const held = snap.entries(shard).get(TRACE);
     expect(held).toMatchObject({ spans: 1, logs: 0, chunks: ['chunks/spans/000000'], logChunks: [] });
     expect(snap.entries('ff').size).toBe(0);
-    expect(idx.shardPayload(shard)[TRACE]).toMatchObject({ spans: 2, logs: 1 });
     idx.release();
+    expect(payloadOf(idx, shard)[TRACE]).toMatchObject({ spans: 2, logs: 1 });
     idx.add(mk(4), 'chunks/spans/000003', resource);
-    expect(idx.shardPayload(shard)[TRACE]).toMatchObject({ spans: 3 });
+    expect(payloadOf(idx, shard)[TRACE]).toMatchObject({ spans: 3 });
     expect(held?.spans).toBe(1);
   });
 
@@ -264,10 +280,10 @@ describe('TraceIndex snapshot', () => {
     idx.add(mk(3, { traceId: newShard }), 'chunks/spans/000002', resource);
     expect([...snap.entries(shard).keys()]).toEqual([TRACE]);
     expect(snap.entries('ee').size).toBe(0);
-    expect(Object.keys(idx.shardPayload(shard)).sort()).toEqual([TRACE, sameShard].sort());
-    expect(Object.keys(idx.shardPayload('ee'))).toEqual([newShard]);
-    expect(Object.keys(idx.toJSON())).toContain('ee');
     idx.release();
+    expect(Object.keys(payloadOf(idx, shard)).sort()).toEqual([TRACE, sameShard].sort());
+    expect(Object.keys(payloadOf(idx, 'ee'))).toEqual([newShard]);
+    expect(Object.keys(jsonOf(idx))).toContain('ee');
     const next = idx.snapshot();
     expect([...next.entries(shard).keys()].sort()).toEqual([TRACE, sameShard].sort());
     expect([...next.entries('ee').keys()]).toEqual([newShard]);

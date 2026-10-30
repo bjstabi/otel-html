@@ -147,3 +147,28 @@ describe('interval checkpoints run in the background', () => {
     },
   );
 });
+
+describe('the streamed state', () => {
+  test('is byte-identical to JSON.stringify, with integer-named shards first like JS object keys', async () => {
+    const w = createTestWriter();
+    const s = await openSession(w.deps, { out: OUT, config, mode: 'replace' });
+    // "0a" sorts before "12", but a JS object lists the integer-like key "12" first
+    for (const [i, prefix] of ['0a', '12', '0a', '12'].entries()) {
+      const request = traceRequest([
+        span({
+          traceId: `${prefix}${i.toString(16).padStart(30, '0')}`,
+          spanId: spanIdOf(i),
+          startTimeUnixNano: String(BigInt(EPOCH_NS) + BigInt(i)),
+          endTimeUnixNano: String(BigInt(EPOCH_NS) + BigInt(i) + 10n),
+        }),
+      ]);
+      await s.add(otlp(request), `${i}.json`);
+    }
+    await s.flush();
+    const text = w.fs.snapshot().get(`${OUT}/${STATE_0}`);
+    if (text === undefined) throw new Error('no state slot');
+    expect(JSON.stringify(JSON.parse(text))).toBe(text);
+    expect(Object.keys(JSON.parse(text).traceIndex)).toEqual(['12', '0a']);
+    await s.close();
+  });
+});

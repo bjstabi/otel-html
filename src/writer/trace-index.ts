@@ -152,8 +152,9 @@ export class TraceIndex {
   }
 
   /**
-   * Freeze the index for a checkpoint that writes while adds go on, and clear the dirty set. Costs O(shards): the maps are
-   * shared and copied by the first change to each (`#shardForWrite`). Only one snapshot can be held; `release` it when its writer is done (or has failed).
+   * Freeze the index for a checkpoint that writes while adds go on, and clear the dirty set. Costs O(shards): the
+   * maps are shared and copied by the first change to each (`#shardForWrite`). Only one snapshot can be held;
+   * `release` it when its writer is done (or has failed).
    */
   snapshot(): TraceIndexSnapshot {
     if (this.#held !== null) throw new Error('a trace index snapshot is already held');
@@ -174,18 +175,7 @@ export class TraceIndex {
     this.#shared.clear();
   }
 
-  shardPayload(shard: string): TraceShard {
-    const out: TraceShard = {};
-    for (const [id, e] of this.#shards.get(shard) ?? [])
-      out[id] = { ...e, chunks: [...e.chunks], logChunks: [...e.logChunks] };
-    return out;
-  }
-
-  toJSON(): Record<string, TraceShard> {
-    return Object.fromEntries(this.shards().map((s) => [s, this.shardPayload(s)]));
-  }
-
-  /** Rebuild from `toJSON` output (already validated by the state schema). All shards start dirty. */
+  /** Rebuild from the state's `traceIndex` (already validated by the state schema). All shards start dirty. */
   static load(shards: Readonly<Record<string, TraceShard>>): TraceIndex {
     const idx = new TraceIndex();
     for (const [shard, entries] of Object.entries(shards)) {
