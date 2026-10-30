@@ -12,7 +12,7 @@ import {
   traceShardKey,
   traceShardPath,
 } from '../format/paths.js';
-import type { SessionState } from '../format/state.js';
+import type { TraceShard } from '../format/trace-shard.js';
 import { FORMAT_VERSION } from '../format/version.js';
 import { OtelHtmlError } from '../model/errors.js';
 import { parseUnixNanos, type UnixNanos } from '../model/ids.js';
@@ -53,6 +53,7 @@ import {
   at,
   isReportFolder,
   loadCheckpoint,
+  type StateHead,
   wipeReportData,
   writeManifest,
   writeStateSlot,
@@ -880,7 +881,7 @@ class Session implements WriterSession {
         for (const shard of this.#traceIndex.dirtyShards()) {
           await fs.writeTextAtomic(
             at(this.#out, traceShardPath(shard)),
-            wrapDataFile(traceShardKey(shard), this.#traceIndex.shardPayload(shard)),
+            wrapDataFile(traceShardKey(shard), this.#traceIndex.shardView(shard)),
           );
         }
         const rollups = serializeRollups(this.#rollups);
@@ -890,7 +891,16 @@ class Session implements WriterSession {
             wrapDataFile(rollupKey(name), rollups[name]),
           );
         }
-        await writeStateSlot(fs, this.#out, this.#nextSlot(), this.#state(rollups));
+        await writeStateSlot(
+          fs,
+          this.#out,
+          this.#nextSlot(),
+          this.#stateHead(rollups),
+          this.#dedupe.toJSON(),
+          this.#traceIndex
+            .shards()
+            .map((s): [string, Readonly<TraceShard>] => [s, this.#traceIndex.shardView(s)]),
+        );
       }
       if (!this.#shellWritten && !complete) await this.#writeShell();
       await writeManifest(fs, this.#out, this.#manifest(complete));
@@ -920,7 +930,7 @@ class Session implements WriterSession {
     return this.#slot === 0 ? 1 : 0;
   }
 
-  #state(rollups: ReturnType<typeof serializeRollups>): SessionState {
+  #stateHead(rollups: ReturnType<typeof serializeRollups>): StateHead {
     return {
       formatVersion: 1,
       otelHtmlVersion: this.#deps.version,
@@ -931,8 +941,6 @@ class Session implements WriterSession {
         metrics: this.#metrics.pendingNumber,
       },
       rollups,
-      dedupe: this.#dedupe.toJSON(),
-      traceIndex: this.#traceIndex.toJSON(),
       metricStreams: this.#normalizer.toJSON(),
       nextSegment: Object.fromEntries([...this.#series.nextSegments()].map(([id, n]) => [String(id), n])),
     };

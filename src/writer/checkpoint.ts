@@ -12,6 +12,7 @@ import {
   statePath,
 } from '../format/paths.js';
 import { parseSessionState, type SessionState } from '../format/state.js';
+import type { TraceShard } from '../format/trace-shard.js';
 import { OtelHtmlError } from '../model/errors.js';
 import type { FileSystem } from './ports.js';
 
@@ -32,13 +33,54 @@ export async function writeManifest(fs: FileSystem, out: string, manifest: Manif
   await fs.writeTextAtomic(at(out, MANIFEST_PATH), wrapDataFile(MANIFEST_KEY, manifest));
 }
 
+/** The state fields that stay small; `dedupe` and `traceIndex` hold the bulk and are streamed separately. */
+export type StateHead = Omit<SessionState, 'dedupe' | 'traceIndex'>;
+
+/** Dedupe keys stringified per piece. */
+const DEDUPE_SLICE = 1000;
+
+/**
+ * The bytes of `JSON.stringify(state)` as pieces, so the full string (and a Buffer copy of it) never exists: the
+ * state embeds the whole trace index, which is hundreds of megabytes under load. Field order is the
+ * `SessionState` order; the head's fields stay as they are stringified today.
+ */
+export function* stateSlotPieces(
+  head: StateHead,
+  dedupe: readonly string[],
+  shards: Iterable<[string, Readonly<TraceShard>]>,
+): Generator<string> {
+  const field = (k: keyof StateHead): string | undefined => {
+    const v = JSON.stringify(head[k]);
+    return v === undefined ? undefined : `${JSON.stringify(k)}:${v}`; // JSON.stringify drops undefined fields
+  };
+  const before = (['formatVersion', 'otelHtmlVersion', 'epochUnixNano', 'nextChunk', 'rollups'] as const).map(
+    field,
+  );
+  const after = (['metricStreams', 'nextSegment'] as const).map(field);
+  yield `{${before.filter((f) => f !== undefined).join(',')},"dedupe":[`;
+  for (let i = 0; i < dedupe.length; i += DEDUPE_SLICE)
+    yield (i > 0 ? ',' : '') + JSON.stringify(dedupe.slice(i, i + DEDUPE_SLICE)).slice(1, -1);
+  yield '],"traceIndex":{';
+  let first = true;
+  for (const [shard, view] of shards) {
+    yield `${first ? '' : ','}${JSON.stringify(shard)}:${JSON.stringify(view)}`;
+    first = false;
+  }
+  yield `}${after.map((f) => (f === undefined ? '' : `,${f}`)).join('')}}`;
+}
+
 export async function writeStateSlot(
   fs: FileSystem,
   out: string,
   slot: StateSlot,
-  state: SessionState,
+  head: StateHead,
+  dedupe: readonly string[],
+  shards: Iterable<[string, Readonly<TraceShard>]>,
 ): Promise<void> {
-  await fs.writeTextAtomic(at(out, statePath(slot)), JSON.stringify(state));
+  const path = at(out, statePath(slot));
+  const pieces = stateSlotPieces(head, dedupe, shards);
+  if (fs.writePiecesAtomic !== undefined) await fs.writePiecesAtomic(path, pieces);
+  else await fs.writeTextAtomic(path, [...pieces].join(''));
 }
 
 function chunkCounts(manifest: Manifest): Record<Signal, number> | null {

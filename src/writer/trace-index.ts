@@ -111,6 +111,14 @@ export class TraceIndex {
     return [...this.#shards.keys()].sort();
   }
 
+  /**
+   * The shard's live entries as a plain object, for serializing at once: no copy of entries or arrays (chunk lists
+   * are only ever replaced, never mutated), so it must not be kept across further adds.
+   */
+  shardView(shard: string): Readonly<TraceShard> {
+    return Object.fromEntries(this.#shards.get(shard) ?? []);
+  }
+
   shardPayload(shard: string): TraceShard {
     const out: TraceShard = {};
     for (const [id, e] of this.#shards.get(shard) ?? [])
