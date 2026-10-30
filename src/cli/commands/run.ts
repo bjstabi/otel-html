@@ -4,7 +4,7 @@ import type { Command } from 'commander';
 import { sessionOf } from '../../api/report.js';
 import { OtelHtmlError } from '../../model/errors.js';
 import { parseUnixNanos, type UnixNanos } from '../../model/ids.js';
-import { childEnvironment } from '../../run/child-env.js';
+import { checkedProtocol, childEnvironment } from '../../run/child-env.js';
 import { detectRunResource } from '../../run/resource.js';
 import { type ChildExit, exitCodeOf, rootSpanRequest, traceparentOf } from '../../run/root-span.js';
 import type { WriterDeps } from '../../writer/session.js';
@@ -57,6 +57,8 @@ export function addRunCommand(
   addReceiverOptions(command).action(async (argv: string[], flags: ReceiveFlags) => {
     const [executable, ...args] = argv;
     if (executable === undefined) throw new OtelHtmlError('usage', { message: 'no command to run' });
+    // Usage errors that flags and the environment decide come before anything is created or bound.
+    checkedProtocol(io.env, { http: flags.http !== false, grpc: flags.grpc !== false });
     const opened = await openReceiver(io, deps, flags);
     const { report, receiver } = opened;
     const abandon = async (e: unknown): Promise<never> => {

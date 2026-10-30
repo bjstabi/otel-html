@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { OtelHtmlError } from '../../src/model/errors.js';
-import { childEnvironment } from '../../src/run/child-env.js';
+import { checkedProtocol, childEnvironment } from '../../src/run/child-env.js';
 
 const base = { http: 'http://127.0.0.1:4318', grpc: '127.0.0.1:4317', traceparent: '00-aa-bb-01' };
 
@@ -66,5 +66,19 @@ describe('childEnvironment', () => {
     });
     expect(at(env, 'OTEL_EXPORTER_OTLP_ENDPOINT')).toBe('http://collector:9');
     expect(at(env, 'TRACEPARENT')).toBe('00-aa-bb-01');
+  });
+});
+
+describe('checkedProtocol', () => {
+  const both = { http: true, grpc: true };
+  test('decides from the environment and which transports are on, with no addresses', () => {
+    expect(checkedProtocol({}, both)).toBe('http/protobuf');
+    expect(checkedProtocol({ OTEL_EXPORTER_OTLP_PROTOCOL: 'grpc' }, both)).toBe('grpc');
+    expect(usageOf(() => checkedProtocol({ OTEL_EXPORTER_OTLP_PROTOCOL: 'foo' }, both)).code).toBe('usage');
+    expect(usageOf(() => checkedProtocol({}, { http: false, grpc: true })).message).toContain('--http');
+    expect(
+      usageOf(() => checkedProtocol({ OTEL_EXPORTER_OTLP_PROTOCOL: 'grpc' }, { http: true, grpc: false }))
+        .message,
+    ).toContain('--grpc');
   });
 });
