@@ -3,6 +3,7 @@
   "packages": {
     ".": {
       "release-type": "node",
+      "bump-minor-pre-major": true,
       "package-name": "otel-html",
       "include-v-in-tag": true,
       "changelog-sections": [
