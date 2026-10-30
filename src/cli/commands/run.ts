@@ -8,14 +8,8 @@ import { checkedProtocol, childEnvironment } from '../../run/child-env.js';
 import { detectRunResource } from '../../run/resource.js';
 import { type ChildExit, exitCodeOf, rootSpanRequest, traceparentOf } from '../../run/root-span.js';
 import type { CliIo } from '../io.js';
-import { CliExit } from '../program.js';
-import {
-  addReceiverOptions,
-  type CliDeps,
-  finishReceiver,
-  openReceiver,
-  type ReceiveFlags,
-} from './receive.js';
+import { type CliDeps, CliExit } from '../program.js';
+import { addReceiverOptions, finishReceiver, openReceiver, type ReceiveFlags } from './receive.js';
 import { addReportModeOptions } from './report-mode.js';
 
 const TRACE_ID_BYTES = 16;

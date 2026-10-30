@@ -1,8 +1,8 @@
 import { spawn } from 'node:child_process';
 import { createServer, type Server } from 'node:net';
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import type { CliDeps } from '../../src/cli/commands/receive.js';
 import type { CliIo, StopSignal } from '../../src/cli/io.js';
+import type { CliDeps } from '../../src/cli/program.js';
 import { runCli } from '../../src/cli/program.js';
 import type { FileSystem } from '../../src/writer/ports.js';
 import { createTestWriter, type TestWriter } from '../../test-support/writer-deps.js';

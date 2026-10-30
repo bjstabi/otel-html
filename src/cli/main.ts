@@ -7,9 +7,9 @@ import { runCli } from './program.js';
 // The composition root of the CLI: the only place that touches process io and exits.
 
 // Under Node, V8 sizes its heap at several times the live data when allocation is steady. A receiver (`serve`, `run`)
-// sets `--optimize-for-size --heap-growing-percent=40` at process start: the first keeps memory low, the second
-// keeps full-GC pauses short so a sender's batch queue does not overflow. Start-up measured 473 MB against 524 MB
-// when set at runtime (#73). The library sets no flags.
+// sets `--optimize-for-size --heap-growing-percent=40` before it runs: the first keeps memory low, the second keeps
+// full-GC pauses short so a sender's batch queue does not overflow (#73 measured 473 MB when set at start-up against
+// 524 MB when set mid-run). The library sets no flags.
 const command = process.argv.slice(2).find((a) => !a.startsWith('-'));
 if ((command === 'serve' || command === 'run') && !('bun' in process.versions)) {
   v8.setFlagsFromString('--optimize-for-size --heap-growing-percent=40');

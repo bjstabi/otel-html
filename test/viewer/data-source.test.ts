@@ -294,7 +294,8 @@ describe('windowed strategy', () => {
   test('ignores shard chunk refs the manifest does not list (shard ahead of the manifest)', async () => {
     const id = traceIdOf(3);
     const ahead = withShard(six.files, id.slice(0, 2), (e) => {
-      e[id]?.chunks.push('chunks/spans/000099');
+      const entry = e[id];
+      if (entry !== undefined) entry.chunks = [...entry.chunks, 'chunks/spans/000099'];
     });
     const { ds, loader } = await windowed(ahead);
     const t = await ds.getTrace(id as TraceId);

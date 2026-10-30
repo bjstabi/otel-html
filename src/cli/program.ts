@@ -1,15 +1,18 @@
 import { Command, CommanderError } from 'commander';
 import pkg from '../../package.json' with { type: 'json' };
 import { OtelHtmlError } from '../model/errors.js';
+import type { WriterDeps } from '../writer/session.js';
 import { addConfigCommand } from './commands/config-print.js';
 import { addConvertCommand } from './commands/convert.js';
 import { addMergeCommand } from './commands/merge.js';
-import type { CliDeps } from './commands/receive.js';
 import { addRunCommand } from './commands/run.js';
 import { addServeCommand } from './commands/serve.js';
 import type { CliIo } from './io.js';
 
 export type { CliIo };
+
+/** The writer's deps as the CLI's composition root supplies them: all optional, `resolveDeps` fills the rest. */
+export type CliDeps = Partial<WriterDeps>;
 
 /** Thrown by a command's action to end the run with this exit code and no further message. */
 export class CliExit extends Error {

@@ -1,8 +1,8 @@
 import type { Command } from 'commander';
 import type { CliIo } from '../io.js';
+import type { CliDeps } from '../program.js';
 import {
   addReceiverOptions,
-  type CliDeps,
   finishReceiver,
   nextSignal,
   openReceiver,

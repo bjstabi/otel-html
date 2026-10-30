@@ -18,7 +18,7 @@ const base =
     throw new Error('no span');
   })();
 
-/** A deep copy of one shard as the state would hold it, read through a snapshot that is released straight away. */
+/** A deep copy of one shard as the state would hold it. It takes a snapshot, which clears the dirty set, and releases it straight away. */
 function payloadOf(idx: TraceIndex, shard: string): TraceShard {
   const snap = idx.snapshot();
   try {
@@ -387,6 +387,23 @@ describe('TraceIndex snapshot', () => {
     const next = idx.snapshot();
     expect([...next.entries(shard).keys()].sort()).toEqual([TRACE, sameShard].sort());
     expect([...next.entries('ee').keys()]).toEqual([newShard]);
+  });
+
+  test('a shard untouched while a snapshot is held is not copied', () => {
+    const idA = parseTraceId(`aa${'0'.repeat(30)}`, 't');
+    const idB = parseTraceId(`bb${'0'.repeat(30)}`, 't');
+    const idx = new TraceIndex();
+    idx.add(mk(1, { traceId: idA }), 'chunks/spans/000000', resource);
+    idx.add(mk(2, { traceId: idB }), 'chunks/spans/000000', resource);
+    const snap1 = idx.snapshot();
+    const a1 = snap1.entries('aa').get(idA);
+    const b1 = snap1.entries('bb').get(idB);
+    idx.add(mk(3, { traceId: idB }), 'chunks/spans/000000', resource);
+    idx.release();
+    const snap2 = idx.snapshot();
+    expect(snap2.entries('aa').get(idA)).toBe(a1);
+    expect(snap2.entries('bb').get(idB)).not.toBe(b1);
+    idx.release();
   });
 
   test('restoreDirty marks shards dirty again', () => {
