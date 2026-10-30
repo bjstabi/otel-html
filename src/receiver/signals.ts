@@ -85,7 +85,8 @@ export const SIGNAL_SERVICES: readonly SignalService[] = [
     response: ExportTraceServiceResponseSchema,
     rejectedField: 'rejectedSpans',
     recordCount(entry) {
-      if (entry.signal !== 'traces') return 0;
+      if (entry.signal !== 'traces')
+        throw new Error(`invariant violated: traces service counted a ${entry.signal} entry`);
       let n = 0;
       for (const rs of entry.request.resourceSpans) for (const ss of rs.scopeSpans) n += ss.spans.length;
       return n;
@@ -106,7 +107,8 @@ export const SIGNAL_SERVICES: readonly SignalService[] = [
     response: ExportLogsServiceResponseSchema,
     rejectedField: 'rejectedLogRecords',
     recordCount(entry) {
-      if (entry.signal !== 'logs') return 0;
+      if (entry.signal !== 'logs')
+        throw new Error(`invariant violated: logs service counted a ${entry.signal} entry`);
       let n = 0;
       for (const rl of entry.request.resourceLogs) for (const sl of rl.scopeLogs) n += sl.logRecords.length;
       return n;
@@ -127,7 +129,8 @@ export const SIGNAL_SERVICES: readonly SignalService[] = [
     response: ExportMetricsServiceResponseSchema,
     rejectedField: 'rejectedDataPoints',
     recordCount(entry) {
-      if (entry.signal !== 'metrics') return 0;
+      if (entry.signal !== 'metrics')
+        throw new Error(`invariant violated: metrics service counted a ${entry.signal} entry`);
       // Reading `request` of a plain entry would decode the whole JSON, which `plain` exists to avoid.
       if (entry.plain !== undefined) return plainPoints(entry.plain.items);
       let n = 0;

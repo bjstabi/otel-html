@@ -4,7 +4,7 @@ import { listenGrpc } from '../receiver/grpc.js';
 import { createHttpHandler, type Listener, listenHttp } from '../receiver/http.js';
 import { createReceiver, type ReceiverStats } from '../receiver/receiver.js';
 import type { WriterDeps } from '../writer/session.js';
-import { configOf, type Report, resolveDeps, sessionOf } from './report.js';
+import { configOf, depsOf, type Report, sessionOf } from './report.js';
 
 export interface ListenOverride {
   host?: string;
@@ -45,6 +45,16 @@ function endpointOf(
   return { host: override?.host ?? config.host, port: override?.port ?? transport.port };
 }
 
+/** Close every listener, then the receiver, whether or not a listener's close rejects; rethrow the first rejection. */
+export async function closeAll(
+  listeners: readonly Listener[],
+  receiver: { close(): Promise<void> },
+): Promise<void> {
+  const results = await Promise.allSettled(listeners.map((l) => l.close()));
+  await receiver.close();
+  for (const r of results) if (r.status === 'rejected') throw r.reason;
+}
+
 /** Bind the OTLP transports over `report`. The report stays open after `close()`. */
 export async function startReceiver(
   report: Report,
@@ -60,7 +70,7 @@ export async function startReceiver(
       hint: 'enable http or grpc',
     });
   }
-  const full = await resolveDeps(deps);
+  const full: WriterDeps = { ...depsOf(report), ...deps }; // the report's deps were already validated
   const maxBodyBytes = overrides.maxBodyBytes ?? config.maxBodyBytes;
   const receiver = createReceiver(
     sessionOf(report),
@@ -86,8 +96,7 @@ export async function startReceiver(
       listeners.push(grpc);
     }
   } catch (e) {
-    await Promise.allSettled(listeners.map((l) => l.close()));
-    await receiver.close();
+    await closeAll(listeners, receiver).catch(() => undefined);
     span.recordError(e);
     span.end();
     throw e;
@@ -101,8 +110,7 @@ export async function startReceiver(
     close() {
       closing ??= (async () => {
         try {
-          await Promise.all(listeners.map((l) => l.close()));
-          await receiver.close();
+          await closeAll(listeners, receiver);
         } finally {
           const s = receiver.stats();
           span.setAttributes({

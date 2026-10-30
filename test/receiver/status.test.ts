@@ -15,6 +15,7 @@ describe('outcomeOf', () => {
     expect(outcomeOf(new OtelHtmlError('time-out-of-range'))).toBe('invalid');
     expect(outcomeOf(new OtelHtmlError('unsupported-input'))).toBe('unsupported');
     expect(outcomeOf(new OtelHtmlError('invalid-config'))).toBe('internal');
+    expect(outcomeOf(new OtelHtmlError('receiver-bind'))).toBe('internal');
     expect(outcomeOf(new ReceiverRejected('too-large', 'big'))).toBe('too-large');
     expect(outcomeOf(new ReceiverRejected('not-found', 'nope'))).toBe('not-found');
     expect(outcomeOf(new Error('x'))).toBe('internal');
@@ -28,6 +29,11 @@ describe('statusMessage', () => {
     expect(statusMessage(new OtelHtmlError('invalid-otlp', { message: 'bad body' }))).toBe('bad body');
     expect(statusMessage(new Error('secret stack'))).toBe('internal error');
     expect(statusMessage(undefined)).toBe('internal error');
+  });
+
+  test('an internal typed outcome never leaks its message', () => {
+    expect(statusMessage(new OtelHtmlError('report-locked', { path: '/secret/x' }))).toBe('internal error');
+    expect(statusMessage(new ReceiverRejected('internal', 'detail'))).toBe('internal error');
   });
 });
 

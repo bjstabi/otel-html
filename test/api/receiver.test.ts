@@ -1,7 +1,7 @@
 import type { AddressInfo } from 'node:net';
 import { createServer } from 'node:net';
 import { afterEach, describe, expect, test } from 'vitest';
-import { startReceiver } from '../../src/api/receiver.js';
+import { closeAll, startReceiver } from '../../src/api/receiver.js';
 import { Report } from '../../src/api/report.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { createTestWriter } from '../../test-support/writer-deps.js';
@@ -78,6 +78,22 @@ describe('startReceiver', () => {
     await report.close();
   });
 
+  test('a taken port is a receiver-bind error, not receiver-busy', async () => {
+    const w = createTestWriter();
+    const report = await Report.create({ out: 'r' }, w.deps);
+    const blocker = createServer();
+    try {
+      await new Promise<void>((ok) => blocker.listen(0, '127.0.0.1', ok));
+      const port = (blocker.address() as AddressInfo).port;
+      const e = await failure(startReceiver(report, { http: { port }, grpc: false }, w.deps));
+      expect(e.code).toBe('receiver-bind');
+      expect(e.hint).toContain('--http');
+    } finally {
+      await new Promise<void>((ok) => blocker.close(() => ok()));
+      await report.close();
+    }
+  });
+
   test('closes the HTTP listener when the gRPC bind fails', async () => {
     const w = createTestWriter();
     const report = await Report.create({ out: 'r' }, w.deps);
@@ -121,5 +137,47 @@ describe('startReceiver', () => {
     expect(span?.ended).toBe(true);
     expect(span?.attrs).toMatchObject({ requests: 1, bytes: expect.any(Number) });
     await report.close();
+  });
+
+  test('a receiver started without deps logs on the logger the Report was created with', async () => {
+    const w = createTestWriter();
+    const lines: string[] = [];
+    const logger = {
+      debug() {},
+      info() {},
+      warn: (m: string) => {
+        lines.push(m);
+      },
+      error() {},
+    };
+    const report = await Report.create({ out: 'r' }, { ...w.deps, logger });
+    const rx = await startReceiver(report, { http: { port: 0 }, grpc: false });
+    running.push(rx);
+    await fetch(`${rx.http}/v1/traces`, {
+      method: 'POST',
+      headers: { 'content-type': 'text/plain' },
+      body: 'x',
+    });
+    expect(lines.some((l) => l.includes('receiver refused a request'))).toBe(true);
+    await rx.close();
+    await report.close();
+  });
+});
+
+describe('closeAll', () => {
+  test('closes the receiver even when a listener close rejects, and rethrows', async () => {
+    const boom = new Error('listener close failed');
+    let receiverClosed = 0;
+    const listeners = [
+      { address: 'a', close: () => Promise.reject(boom) },
+      { address: 'b', close: () => Promise.resolve() },
+    ];
+    const receiver = {
+      close: async () => {
+        receiverClosed++;
+      },
+    };
+    await expect(closeAll(listeners, receiver)).rejects.toBe(boom);
+    expect(receiverClosed).toBe(1);
   });
 });

@@ -63,14 +63,21 @@ function toMetric(m: MetricData): Metric {
   const head = { name, description, unit };
   const isInt = valueType === ValueType.INT;
   const numberPoints = (points: DataPoint<number>[]) =>
-    points.map((p) =>
-      create(NumberDataPointSchema, {
+    points.map((p, i) => {
+      if (isInt && !Number.isFinite(p.value)) {
+        throw new OtelHtmlError('invalid-otlp', {
+          path: `${name}.dataPoints[${i}].value`,
+          expected: 'a finite integer',
+          actual: String(p.value),
+        });
+      }
+      return create(NumberDataPointSchema, {
         ...common(p),
         value: isInt
           ? { case: 'asInt', value: BigInt(Math.trunc(p.value)) }
           : { case: 'asDouble', value: p.value },
-      }),
-    );
+      });
+    });
   const temporality = temporalityOf(m.aggregationTemporality);
 
   switch (m.dataPointType as number) {

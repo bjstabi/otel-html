@@ -49,7 +49,10 @@ export function addRunCommand(program: Command, io: CliIo, deps: Partial<WriterD
     if (executable === undefined || executable === '')
       throw new OtelHtmlError('usage', { message: 'no command to run' });
     const opened = await openReceiver(io, deps, flags, (enabled) => {
-      checkedProtocol(io.env, enabled); // before anything is created or bound
+      const protocol = checkedProtocol(io.env, enabled); // before anything is created or bound
+      // The transport the child will not use stays unbound unless an explicit port flag asked for it.
+      if (protocol === 'grpc') return flags.http === undefined ? { http: false } : undefined;
+      return flags.grpc === undefined ? { grpc: false } : undefined;
     });
     const { report, receiver } = opened;
     const abandon = async (e: unknown): Promise<never> => {

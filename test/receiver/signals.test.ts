@@ -34,6 +34,16 @@ describe('SIGNAL_SERVICES', () => {
     expect(serviceOf('traces').recordCount(otlp(traceRequest([span()])))).toBe(1);
   });
 
+  test('recordCount of another signal is an invariant violation', () => {
+    expect(() => serviceOf('traces').recordCount(otlp(logsRequest([logRecord()])))).toThrow(
+      /invariant violated/,
+    );
+    expect(() => serviceOf('logs').recordCount(otlp(traceRequest([span()])))).toThrow(/invariant violated/);
+    expect(() => serviceOf('metrics').recordCount(otlp(traceRequest([span()])))).toThrow(
+      /invariant violated/,
+    );
+  });
+
   test('recordCount counts log records', () => {
     expect(serviceOf('logs').recordCount(otlp(logsRequest([logRecord(), logRecord()])))).toBe(2);
   });

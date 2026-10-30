@@ -8,7 +8,8 @@ export type ErrorCode =
   | 'invalid-report'
   | 'unsupported-input'
   | 'usage'
-  | 'receiver-busy';
+  | 'receiver-busy'
+  | 'receiver-bind';
 
 export interface ErrorDetails {
   path?: string;

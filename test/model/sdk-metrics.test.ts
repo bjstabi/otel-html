@@ -11,6 +11,7 @@ import {
   type ResourceMetrics,
 } from '@opentelemetry/sdk-metrics';
 import { describe, expect, it } from 'vitest';
+import { OtelHtmlError } from '../../src/model/errors.js';
 import { ExportMetricsServiceRequestSchema } from '../../src/model/gen/opentelemetry/proto/collector/metrics/v1/metrics_service_pb.js';
 import { resourceMetricsToRequest } from '../../src/model/sdk-metrics.js';
 
@@ -82,5 +83,22 @@ describe('resourceMetricsToRequest', () => {
     expect(caseOf('c.int')).toBe('asInt');
     expect(caseOf('u.dbl')).toBe('asDouble');
     expect(caseOf('g.obs')).toBe('asDouble');
+  });
+
+  it('rejects a non-finite point on an INT instrument with a typed error', async () => {
+    const rm = await collect(AggregationTemporality.CUMULATIVE);
+    for (const sm of rm.scopeMetrics) {
+      for (const m of sm.metrics) {
+        if (m.descriptor.name === 'c.int') (m.dataPoints[0] as { value: number }).value = Number.NaN;
+      }
+    }
+    let caught: unknown;
+    try {
+      resourceMetricsToRequest(rm);
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(OtelHtmlError);
+    expect(caught).toMatchObject({ code: 'invalid-otlp', path: 'c.int.dataPoints[0].value', actual: 'NaN' });
   });
 });

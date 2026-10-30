@@ -294,8 +294,12 @@ export function decodeRequest(
   }
 }
 
+/** The path of a body that holds no signal at all: the document root. */
+export const NO_SIGNAL_PATH = '$';
+
 export function noSignal(source: string): OtelHtmlError {
   return new OtelHtmlError('invalid-otlp', {
     message: `${source}: expected at least one of resourceSpans, resourceLogs or resourceMetrics`,
+    path: NO_SIGNAL_PATH,
   });
 }

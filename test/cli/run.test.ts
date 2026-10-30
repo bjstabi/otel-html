@@ -1,4 +1,5 @@
 import { type ChildProcess, spawn } from 'node:child_process';
+import { createServer, type Server } from 'node:net';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { CliIo, StopSignal } from '../../src/cli/io.js';
 import { runCli } from '../../src/cli/program.js';
@@ -105,6 +106,18 @@ function chunkOf(w: TestWriter): Chunk {
 
 const node = ['--http', '0', '--no-grpc', '--', process.execPath, '-e', CHILD];
 const open: Harness[] = [];
+const taken: Server[] = [];
+
+/** A listening socket on a free loopback port: a stand-in for a collector already on 4317/4318. */
+async function takenPort(): Promise<number> {
+  const server = createServer();
+  taken.push(server);
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  if (address === null || typeof address === 'string') throw new Error('no port');
+  return address.port;
+}
+
 // The resource detectors read the real environment; a developer's own OTEL_* settings must not leak into the report.
 beforeEach(() => {
   vi.stubEnv('OTEL_SERVICE_NAME', '');
@@ -112,6 +125,7 @@ beforeEach(() => {
 });
 afterEach(async () => {
   vi.unstubAllEnvs();
+  for (const server of taken.splice(0)) await new Promise((resolve) => server.close(resolve));
   for (const h of open.splice(0)) {
     h.fire();
     h.fire();
@@ -262,5 +276,73 @@ describe('run', () => {
     expect(await h.result).toBe(2);
     expect(h.stderr).toContain('http/protobuf');
     expect(await w.fs.exists('out')).toBe(false);
+  });
+
+  test('with the default protocol only HTTP is bound, so a taken gRPC port does not matter', async () => {
+    const w = createTestWriter();
+    const grpc = await takenPort();
+    await w.fs.mkdirp('/work');
+    await w.fs.writeTextAtomic(
+      '/work/cfg.yaml',
+      `receiver:\n  host: 127.0.0.1\n  grpc:\n    port: ${grpc}\n  http:\n    port: 0\n`,
+    );
+    const h = start(w, [
+      'run',
+      '-o',
+      'out',
+      '--config',
+      '/work/cfg.yaml',
+      '--',
+      process.execPath,
+      '-e',
+      CHILD,
+      '0',
+    ]);
+    open.push(h);
+    expect(await h.result).toBe(0);
+    expect(h.stderr).toBe('');
+    expect(chunkOf(w).spans).toHaveLength(2);
+  });
+
+  test('OTEL_EXPORTER_OTLP_PROTOCOL=grpc binds gRPC and leaves HTTP unbound', async () => {
+    const w = createTestWriter();
+    const http = await takenPort();
+    await w.fs.mkdirp('/work');
+    await w.fs.writeTextAtomic(
+      '/work/cfg.yaml',
+      `receiver:\n  host: 127.0.0.1\n  http:\n    port: ${http}\n  grpc:\n    port: 0\n`,
+    );
+    const h = start(
+      w,
+      ['run', '-o', 'out', '--config', '/work/cfg.yaml', '--', process.execPath, '-e', '0'],
+      { OTEL_EXPORTER_OTLP_PROTOCOL: 'grpc' },
+    );
+    open.push(h);
+    expect(await h.result).toBe(0);
+    expect(h.stderr).toBe('');
+  });
+
+  test('an explicit --grpc <port> is still bound under the HTTP protocol', async () => {
+    const w = createTestWriter();
+    const grpc = await takenPort();
+    const h = start(w, [
+      'run',
+      '-o',
+      'out',
+      '--host',
+      '127.0.0.1',
+      '--http',
+      '0',
+      '--grpc',
+      String(grpc),
+      '--',
+      process.execPath,
+      '-e',
+      '0',
+    ]);
+    open.push(h);
+    expect(await h.result).toBe(1);
+    expect(h.stderr).toContain('EADDRINUSE');
+    expect(h.stderr).toContain('--grpc');
   });
 });

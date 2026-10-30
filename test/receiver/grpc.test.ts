@@ -189,6 +189,13 @@ describe('OTLP/gRPC transport', () => {
     expect(err?.details).toMatch(/resourceSpans\[0\]/);
   });
 
+  test('[empty, bad] is INVALID_ARGUMENT naming the entry', async () => {
+    const { address } = await realServer();
+    const { err } = await call(clientFor(address), requestOf([{ scopeSpans: [] }, protoSpan(3, 15)]));
+    expect(err?.code).toBe(status.INVALID_ARGUMENT);
+    expect(err?.details).toMatch(/resourceSpans\[1\]/);
+  });
+
   test('a busy receiver is UNAVAILABLE with a RetryInfo of 1 s in grpc-status-details-bin', async () => {
     const address = await serve(
       fake(async () => {

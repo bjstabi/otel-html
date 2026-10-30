@@ -1,5 +1,5 @@
 import { OtelHtmlError } from '../model/errors.js';
-import { noSignal, type OtlpRequest, type OtlpSignal } from '../model/otlp-json.js';
+import { NO_SIGNAL_PATH, type OtlpRequest, type OtlpSignal } from '../model/otlp-json.js';
 import { OtlpJsonStream } from '../model/otlp-json-stream.js';
 import { streamOtlpProtobuf } from '../model/otlp-proto.js';
 import type { Logger } from '../writer/ports.js';
@@ -77,7 +77,7 @@ function jsonEntries(signal: OtlpSignal, body: Uint8Array, source: string): Otlp
     entries = stream.push(new TextDecoder().decode(body));
     stream.end();
   } catch (e) {
-    if (e instanceof OtelHtmlError && e.message === noSignal(source).message) return [];
+    if (e instanceof OtelHtmlError && e.path === NO_SIGNAL_PATH) return [];
     throw e;
   }
   for (const entry of entries) {
@@ -163,9 +163,11 @@ export function createReceiver(
       for (const entry of entriesOf(signal, body, encoding, source)) {
         const records = service.recordCount(entry);
         try {
-          if (records > 0) await session.add(entry, source, { partial: true });
+          if (records > 0) {
+            await session.add(entry, source, { partial: true });
+            acceptedEntries++;
+          }
           accepted += records;
-          acceptedEntries++;
         } catch (e) {
           if (!isRejection(e)) throw e;
           rejected += records;

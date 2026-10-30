@@ -171,6 +171,59 @@ describe('createReceiver', () => {
     expect(wrong.message).toMatch(/expected resourceSpans/);
   });
 
+  test('[empty, bad] is invalid-otlp, not a partial success', async () => {
+    const w = createTestWriter();
+    const { receiver } = await realReceiver(w);
+    const body = toBinary(
+      ExportTraceServiceRequestSchema,
+      create(ExportTraceServiceRequestSchema, {
+        resourceSpans: [
+          { scopeSpans: [] },
+          {
+            scopeSpans: [
+              {
+                spans: [
+                  {
+                    traceId: new Uint8Array(15).fill(3),
+                    spanId: new Uint8Array(8).fill(3),
+                    name: 's',
+                    startTimeUnixNano: 1_700_000_000_000_000_000n,
+                    endTimeUnixNano: 1_700_000_000_000_001_000n,
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    expect((await failure(receiver.receive('traces', body, 'protobuf', 't'))).code).toBe('invalid-otlp');
+    expect(receiver.stats().refused.invalid).toBe(1);
+  });
+
+  test('[empty] alone succeeds with nothing', async () => {
+    const w = createTestWriter();
+    const { receiver } = await realReceiver(w);
+    const body = encode({ resourceSpans: [{ scopeSpans: [] }] });
+    expect(await receiver.receive('traces', body, 'json', 't')).toEqual({
+      accepted: 0,
+      rejected: 0,
+      errorMessage: null,
+    });
+    expect(Object.values(receiver.stats().refused).every((n) => n === 0)).toBe(true);
+  });
+
+  test('{} succeeds with nothing and is not a refusal', async () => {
+    const w = createTestWriter();
+    const { receiver } = await realReceiver(w);
+    expect(await receiver.receive('traces', encode('{}'), 'json', 't')).toEqual({
+      accepted: 0,
+      rejected: 0,
+      errorMessage: null,
+    });
+    expect(Object.values(receiver.stats().refused).every((n) => n === 0)).toBe(true);
+  });
+
   test.each(['[1,2]', 'not json'])('%s is invalid-otlp', async (text) => {
     const w = createTestWriter();
     const { receiver } = await realReceiver(w);
