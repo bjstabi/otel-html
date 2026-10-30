@@ -5,6 +5,7 @@ import type { MetricEntry } from '../../rollups/metric-catalog.js';
 import { ErrorCard, LoadingNote, PILL } from '../components/explorer-states.js';
 import { downloadBlob } from '../components/export.js';
 import { type ChartPick, MetricChartCard } from '../components/metric-chart-card.js';
+import { seriesColorKey } from '../components/metric-chart-option.js';
 import { copyWidgetItem } from '../dashboards/copy-widget.js';
 import { catalogOf, type DataSource } from '../data/data-source.js';
 import { defaultShow, kindOf, type MetricQuery, resolveMetric, SHOW_BY_KIND } from '../data/metric-query.js';
@@ -122,8 +123,11 @@ function ExplorerBody(props: { dataSource: DataSource; range: TimeWindow }): JSX
     return [...keys].sort();
   }, [catalog]);
 
-  const { results, entries: resolved } = run;
-  const plots = useMemo(() => buildPlots(state, { results, entries: resolved }), [state, results, resolved]);
+  const { results, entries: resolved, ran } = run;
+  const plots = useMemo(
+    () => buildPlots(state, { results, entries: resolved, ran }),
+    [state, results, resolved, ran],
+  );
   const { display, histogramDisplay, mixedUnits, histogramVisible, cards } = layoutCharts(plots, state);
 
   const queryLabels = useMemo(
@@ -214,6 +218,11 @@ function ExplorerBody(props: { dataSource: DataSource; range: TimeWindow }): JSX
     return r !== null && 'entry' in r ? SHOW_BY_KIND[kindOf(r.entry)] : [];
   };
   const tokenOf = (label: string): string => seriesToken(colors.colorFor(label));
+  /** A row's chip takes the colour of its chart's first line (keyed like the lines: by service when they have one). */
+  const chipOf = (id: string, prefix: string): string => {
+    const first = plots.find((p) => p.id === id)?.result.series[0];
+    return tokenOf(first === undefined ? prefix : seriesColorKey(first));
+  };
   const noData = !run.loading && plots.length > 0 && plots.every((p) => p.result.series.length === 0);
 
   return (
@@ -225,7 +234,7 @@ function ExplorerBody(props: { dataSource: DataSource; range: TimeWindow }): JSX
               <QueryRow
                 key={q.id}
                 query={q}
-                colorToken={tokenOf(queryPrefix(q))}
+                colorToken={chipOf(q.id, queryPrefix(q))}
                 resolution={resolution(q)}
                 entries={entries}
                 showOptions={showOptionsOf(q)}
@@ -243,7 +252,7 @@ function ExplorerBody(props: { dataSource: DataSource; range: TimeWindow }): JSX
               <FormulaRow
                 key={f.id}
                 formula={f}
-                colorToken={tokenOf(formulaPrefix(f))}
+                colorToken={chipOf(f.id, formulaPrefix(f))}
                 error={run.errors.get(f.id) ?? null}
                 onChange={(next) =>
                   update((s) => ({ ...s, formulas: s.formulas.map((x) => (x.id === f.id ? next : x)) }))

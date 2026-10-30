@@ -392,6 +392,11 @@ export function LogPanel(props: LogPanelProps): JSX.Element {
                 </Tabs.Tab>
               ))}
             </Tabs.List>
+            {active !== null && wanted !== active && (
+              <p role="status" className="pb-2 text-xs text-muted">
+                This log has no {wanted} tab; showing {tabs.find((t) => t.id === active)?.label ?? active}.
+              </p>
+            )}
             <Tabs.Panel value={active} className="p-1 outline-none">
               {body(row, active)}
             </Tabs.Panel>

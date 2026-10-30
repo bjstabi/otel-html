@@ -122,6 +122,25 @@ describe('Metrics Catalog', () => {
     expect(catalogLoads()).toBe(1);
   });
 
+  test('a filter nothing matches says so', async () => {
+    await renderCatalog(explorer);
+    await screen.findByText(/metrics ·/);
+    const user = userEvent.setup();
+    await user.type(screen.getByRole('searchbox', { name: 'Filter metrics' }), 'zzz');
+    expect(await screen.findByText('No metrics match “zzz”.')).toBeTruthy();
+    expect(rowsOf()).toHaveLength(0);
+  });
+
+  test('the Explore cell is a link to the Explorer on that metric', async () => {
+    await renderCatalog(explorer);
+    await screen.findByText(/metrics ·/);
+    const [first] = rowsOf();
+    const link = within(first as HTMLElement).getByRole('link', { name: 'Explore →' });
+    const href = link.getAttribute('href') ?? '';
+    expect(href.startsWith('#/metrics?m=')).toBe(true);
+    expect(decodeURIComponent(href)).toContain('"metric":"');
+  });
+
   test('filtering by http. leaves the two http metrics', async () => {
     const user = userEvent.setup();
     await renderCatalog(explorer);
