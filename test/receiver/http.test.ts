@@ -1,4 +1,4 @@
-import { request } from 'node:http';
+import { type ClientRequest, type IncomingMessage, request } from 'node:http';
 import { gzipSync } from 'node:zlib';
 import { create, fromBinary, fromJson, type JsonValue, toBinary } from '@bufbuild/protobuf';
 import { afterEach, describe, expect, test } from 'vitest';
@@ -19,8 +19,8 @@ import {
   type Listener,
   listenHttp,
 } from '../../src/receiver/http.js';
-import { createReceiver, type Receiver } from '../../src/receiver/receiver.js';
-import { openSession } from '../../src/writer/session.js';
+import { type Admission, createReceiver, type Receiver } from '../../src/receiver/receiver.js';
+import { type AddResult, openSession, type WriterSession } from '../../src/writer/session.js';
 import { createTestWriter, type TestWriter, testConfig } from '../../test-support/writer-deps.js';
 import { allSpans, spansRequest } from '../writer/helpers.js';
 
@@ -45,8 +45,11 @@ async function realServer(options?: HttpTransportOptions) {
   return { w, session, receiver, base: await serve(receiver, options) };
 }
 
-function fake(receive: Receiver['receive']): Receiver {
+const stubAdmission: Admission = { bytes: 0, grow: () => true, release() {} };
+
+function fake(receive: Receiver['receive'], admit: Receiver['admit'] = () => stubAdmission): Receiver {
   return {
+    admit,
     receive,
     stats: () => ({
       requests: 0,
@@ -89,6 +92,57 @@ const protoSpan = (n: number, traceLen = 16) => ({
     },
   ],
 });
+
+/** A real receiver with a 1000-byte budget over a session whose `add` waits for `release()`, so a request stays in flight. */
+async function gatedServer() {
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const session: WriterSession = {
+    async add(): Promise<AddResult> {
+      await gate;
+      return { accepted: 1, dropped: 0, duplicates: 0 };
+    },
+    async endInput() {},
+    async addRecords() {
+      throw new Error('unused');
+    },
+    async flush() {},
+    async close() {
+      throw new Error('unused');
+    },
+    async abort() {},
+  };
+  const receiver = createReceiver(session, { inflightBudgetBytes: 1000 }, { logger: silent });
+  const base = await serve(receiver);
+  return { receiver, base, release };
+}
+
+const sent: ClientRequest[] = [];
+afterEach(() => {
+  for (const r of sent.splice(0)) r.destroy();
+});
+
+/** Opens a request whose headers are sent at once; the caller writes the body. `response` settles on the first response. */
+function openRequest(base: string, headers: Record<string, string>) {
+  const req = request(`${base}/v1/traces`, { method: 'POST', headers: { ...JSON_HEADERS, ...headers } });
+  sent.push(req);
+  const response = new Promise<IncomingMessage>((resolve, reject) => {
+    req.once('response', resolve);
+    req.once('error', reject);
+  });
+  req.flushHeaders();
+  return { req, response };
+}
+
+/** Starts a first, complete 600-byte upload and returns once the receiver has admitted it. */
+async function startFirst(base: string, receiver: Receiver): Promise<{ response: Promise<Response> }> {
+  const body = JSON.stringify({ ...spansRequest(1), pad: 'x'.repeat(500) });
+  const first = post(base, '/v1/traces', body, JSON_HEADERS);
+  while (receiver.stats().bytes === 0) await new Promise((r) => setImmediate(r));
+  return { response: first };
+}
 
 describe('OTLP/HTTP transport', () => {
   test('a port already in use is an OtelHtmlError that keeps EADDRINUSE and hints at the flag', async () => {
@@ -417,6 +471,66 @@ describe('OTLP/HTTP transport', () => {
     ])('CORS_ORIGIN %s -> %s', (origin, ok) => {
       expect(CORS_ORIGIN.test(origin)).toBe(ok);
     });
+  });
+
+  test('a second upload is answered 503 from its Content-Length before its body is sent', async () => {
+    const { receiver, base, release } = await gatedServer();
+    const first = (await startFirst(base, receiver)).response;
+    const second = openRequest(base, { 'content-length': '600' }); // no body is ever written
+    const res = await second.response;
+    expect(res.statusCode).toBe(503);
+    expect(res.headers['retry-after']).toBe('1');
+    res.resume();
+    expect(receiver.stats().refused.busy).toBe(1);
+    release();
+    expect((await first).status).toBe(200);
+  });
+
+  test('a chunked body that grows past the budget while another is in flight is 503', async () => {
+    const { receiver, base, release } = await gatedServer();
+    const first = (await startFirst(base, receiver)).response;
+    const second = openRequest(base, { 'transfer-encoding': 'chunked' });
+    let ended = false;
+    second.req.once('finish', () => {
+      ended = true;
+    });
+    const chunk = Buffer.alloc(100, 'x');
+    const writes = (async () => {
+      for (let i = 0; i < 10 && !second.req.destroyed; i++) {
+        if (!second.req.write(chunk)) await new Promise((r) => second.req.once('drain', r));
+        await new Promise((r) => setImmediate(r));
+      }
+    })();
+    const res = await second.response;
+    expect(res.statusCode).toBe(503);
+    expect(ended).toBe(false);
+    res.resume();
+    second.req.destroy();
+    await writes.catch(() => undefined);
+    expect(receiver.stats().refused.busy).toBe(1);
+    release();
+    expect((await first).status).toBe(200);
+  });
+
+  test('a gzip body is counted inflated', async () => {
+    const { receiver, base, release } = await gatedServer();
+    const first = (await startFirst(base, receiver)).response;
+    const gz = gzipSync(Buffer.alloc(2000, 'x'));
+    expect(gz.length).toBeLessThan(100);
+    const res = await post(base, '/v1/traces', bytes(gz), { ...JSON_HEADERS, 'content-encoding': 'gzip' });
+    expect(res.status).toBe(503);
+    expect(res.headers.get('retry-after')).toBe('1');
+    expect(receiver.stats().refused.busy).toBe(1);
+    release();
+    expect((await first).status).toBe(200);
+  });
+
+  test('an invalid body releases its admission', async () => {
+    const { receiver, base, release } = await gatedServer();
+    release();
+    const bad = await post(base, '/v1/traces', '{not json', JSON_HEADERS);
+    expect(bad.status).toBe(400);
+    expect(receiver.admit(1_000_000)).not.toBeNull();
   });
 
   test('listenHttp binds the port it reports and close frees it', async () => {

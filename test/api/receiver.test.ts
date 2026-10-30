@@ -180,4 +180,23 @@ describe('closeAll', () => {
     await expect(closeAll(listeners, receiver)).rejects.toBe(boom);
     expect(receiverClosed).toBe(1);
   });
+
+  test('close() closes the receiver first', async () => {
+    const order: string[] = [];
+    const listeners = [
+      {
+        address: 'a',
+        close: async () => {
+          order.push('listener.close');
+        },
+      },
+    ];
+    const receiver = {
+      close: async () => {
+        order.push('receiver.close');
+      },
+    };
+    await closeAll(listeners, receiver);
+    expect(order).toEqual(['receiver.close', 'listener.close']);
+  });
 });

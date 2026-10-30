@@ -17,14 +17,21 @@ import { bindError, bracketed } from './host.js';
 import type { Listener } from './http.js';
 import type { Receiver } from './receiver.js';
 import { SIGNAL_SERVICES, type SignalService } from './signals.js';
-import { OUTCOME_STATUS, outcomeOf, RETRY_AFTER_SECONDS, statusMessage } from './status.js';
+import { OUTCOME_STATUS, outcomeOf, RETRY_AFTER_SECONDS, ReceiverRejected, statusMessage } from './status.js';
 
 const SOURCE = 'otlp/grpc';
 const FORCE_SHUTDOWN_AFTER_MS = 5_000;
 const DETAILS_KEY = 'grpc-status-details-bin';
 
+/** grpc-js refuses (uncounted) above this multiple of `maxBodyBytes`; below it the handler counts the refusal. */
+export const GRPC_CEILING_FACTOR = 2;
+
 export interface GrpcTransportOptions {
   maxBodyBytes: number;
+  /** Sizes the per-connection concurrent-call limit: ⌈inflightBudgetBytes ÷ maxBodyBytes⌉. */
+  inflightBudgetBytes: number;
+  /** How long `close()` waits for `tryShutdown` before force-closing idle or half-open streams. Default 5 s. */
+  forceShutdownAfterMs?: number;
 }
 
 /** A grpc-js service definition for one OTLP service: raw request bytes in, protobuf-es response out. */
@@ -63,9 +70,29 @@ function failure(e: unknown, logger: Logger): { code: number; details: string; m
   return { code, details, metadata };
 }
 
-function handlerFor(s: SignalService, receiver: Receiver, logger: Logger) {
+function handlerFor(s: SignalService, receiver: Receiver, options: GrpcTransportOptions, logger: Logger) {
   return (call: ServerUnaryCall<Uint8Array, Message>, callback: sendUnaryData<Message>): void => {
-    receiver.receive(s.signal, call.request, 'protobuf', SOURCE).then(
+    if (call.request.length > options.maxBodyBytes) {
+      const rejected = new ReceiverRejected(
+        'too-large',
+        `request of ${call.request.length} bytes exceeds the limit of ${options.maxBodyBytes} bytes`,
+      );
+      logger.debug('grpc request rejected', { service: s.service.typeName, bytes: call.request.length });
+      receiver.refused('too-large', rejected.message);
+      callback(failure(rejected, logger));
+      return;
+    }
+    const admission = receiver.admit(call.request.length);
+    if (admission === null) {
+      const rejected = new ReceiverRejected(
+        'busy',
+        `receiver is busy: ${call.request.length} bytes would exceed the in-flight budget`,
+      );
+      receiver.refused('busy', rejected.message);
+      callback(failure(rejected, logger));
+      return;
+    }
+    receiver.receive(s.signal, call.request, 'protobuf', SOURCE, admission).then(
       (result) => {
         logger.debug('grpc request', { service: s.service.typeName, bytes: call.request.length });
         callback(null, s.respond(result.accepted, result.rejected, result.errorMessage));
@@ -86,9 +113,12 @@ export function listenGrpc(
   host: string,
   port: number,
 ): Promise<Listener> {
-  const server = new Server({ 'grpc.max_receive_message_length': options.maxBodyBytes });
+  const server = new Server({
+    'grpc.max_receive_message_length': options.maxBodyBytes * GRPC_CEILING_FACTOR,
+    'grpc.max_concurrent_streams': Math.max(1, Math.ceil(options.inflightBudgetBytes / options.maxBodyBytes)),
+  });
   for (const s of SIGNAL_SERVICES) {
-    server.addService(serviceDefinition(s), { Export: handlerFor(s, receiver, logger) });
+    server.addService(serviceDefinition(s), { Export: handlerFor(s, receiver, options, logger) });
   }
   return new Promise((resolve, reject) => {
     server.bindAsync(`${bracketed(host)}:${port}`, ServerCredentials.createInsecure(), (err, actual) => {
@@ -104,7 +134,7 @@ export function listenGrpc(
             const timer = setTimeout(() => {
               server.forceShutdown();
               done();
-            }, FORCE_SHUTDOWN_AFTER_MS);
+            }, options.forceShutdownAfterMs ?? FORCE_SHUTDOWN_AFTER_MS);
             server.tryShutdown(() => {
               clearTimeout(timer);
               done();

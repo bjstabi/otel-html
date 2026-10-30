@@ -45,13 +45,16 @@ function endpointOf(
   return { host: override?.host ?? config.host, port: override?.port ?? transport.port };
 }
 
-/** Close every listener, then the receiver, whether or not a listener's close rejects; rethrow the first rejection. */
+/**
+ * Drain the receiver first (it stops accepting receives, so late requests get a retryable busy, and its queue empties), then
+ * close every listener whether or not one rejects; rethrow the first rejection.
+ */
 export async function closeAll(
   listeners: readonly Listener[],
   receiver: { close(): Promise<void> },
 ): Promise<void> {
-  const results = await Promise.allSettled(listeners.map((l) => l.close()));
   await receiver.close();
+  const results = await Promise.allSettled(listeners.map((l) => l.close()));
   for (const r of results) if (r.status === 'rejected') throw r.reason;
 }
 
@@ -72,11 +75,8 @@ export async function startReceiver(
   }
   const full: WriterDeps = { ...depsOf(report), ...deps }; // the report's deps were already validated
   const maxBodyBytes = overrides.maxBodyBytes ?? config.maxBodyBytes;
-  const receiver = createReceiver(
-    sessionOf(report),
-    { inflightBudgetBytes: overrides.inflightBudgetBytes ?? config.inflightBudgetBytes },
-    { logger: full.logger },
-  );
+  const inflightBudgetBytes = overrides.inflightBudgetBytes ?? config.inflightBudgetBytes;
+  const receiver = createReceiver(sessionOf(report), { inflightBudgetBytes }, { logger: full.logger });
   const span = full.tracer.startSpan('otel-html.receive');
 
   const listeners: Listener[] = [];
@@ -92,7 +92,13 @@ export async function startReceiver(
       listeners.push(http);
     }
     if (grpcAt !== null) {
-      grpc = await listenGrpc(receiver, { maxBodyBytes }, full.logger, grpcAt.host, grpcAt.port);
+      grpc = await listenGrpc(
+        receiver,
+        { maxBodyBytes, inflightBudgetBytes },
+        full.logger,
+        grpcAt.host,
+        grpcAt.port,
+      );
       listeners.push(grpc);
     }
   } catch (e) {

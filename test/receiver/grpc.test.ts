@@ -8,6 +8,7 @@ import {
   status,
 } from '@grpc/grpc-js';
 import { afterEach, describe, expect, test } from 'vitest';
+import { closeAll } from '../../src/api/receiver.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { RetryInfoSchema } from '../../src/model/gen/google/rpc/error_details_pb.js';
 import { StatusSchema } from '../../src/model/gen/google/rpc/status_pb.js';
@@ -17,9 +18,9 @@ import {
 } from '../../src/model/gen/opentelemetry/proto/collector/trace/v1/trace_service_pb.js';
 import { type GrpcTransportOptions, listenGrpc, serviceDefinition } from '../../src/receiver/grpc.js';
 import type { Listener } from '../../src/receiver/http.js';
-import { createReceiver, type Receiver } from '../../src/receiver/receiver.js';
+import { type Admission, createReceiver, type Receiver } from '../../src/receiver/receiver.js';
 import { serviceOf } from '../../src/receiver/signals.js';
-import { openSession } from '../../src/writer/session.js';
+import { openSession, type WriterSession } from '../../src/writer/session.js';
 import { createTestWriter, type TestWriter, testConfig } from '../../test-support/writer-deps.js';
 import { allSpans } from '../writer/helpers.js';
 
@@ -52,7 +53,10 @@ function clientFor(address: string, options: Record<string, string | number> = {
   };
 }
 
-async function serve(receiver: Receiver, options: GrpcTransportOptions = { maxBodyBytes: 1_000_000 }) {
+async function serve(
+  receiver: Receiver,
+  options: GrpcTransportOptions = { maxBodyBytes: 1_000_000, inflightBudgetBytes: 1 << 20 },
+) {
   const listener = await listenGrpc(receiver, options, silent, '127.0.0.1', 0);
   open.push(listener);
   return listener.address;
@@ -65,8 +69,11 @@ async function realServer(options?: GrpcTransportOptions) {
   return { w, session, address: await serve(receiver, options) };
 }
 
-function fake(receive: Receiver['receive']): Receiver {
+const stubAdmission: Admission = { bytes: 0, grow: () => true, release() {} };
+
+function fake(receive: Receiver['receive'], admit: Receiver['admit'] = () => stubAdmission): Receiver {
   return {
+    admit,
     receive,
     stats: () => ({
       requests: 0,
@@ -118,7 +125,7 @@ describe('OTLP/gRPC transport', () => {
   test('a port already in use is an OtelHtmlError that keeps EADDRINUSE and hints at the flag', async () => {
     const first = await listenGrpc(
       fake(async () => undefined as never),
-      { maxBodyBytes: 1 },
+      { maxBodyBytes: 1, inflightBudgetBytes: 1 },
       silent,
       '127.0.0.1',
       0,
@@ -127,7 +134,7 @@ describe('OTLP/gRPC transport', () => {
     const port = Number(first.address.split(':').pop());
     const error = await listenGrpc(
       fake(async () => undefined as never),
-      { maxBodyBytes: 1 },
+      { maxBodyBytes: 1, inflightBudgetBytes: 1 },
       silent,
       '127.0.0.1',
       port,
@@ -224,10 +231,50 @@ describe('OTLP/gRPC transport', () => {
     expect(err?.details).toBe('internal error');
   });
 
-  test('a message over maxBodyBytes is RESOURCE_EXHAUSTED', async () => {
-    const { address } = await realServer({ maxBodyBytes: 1_000 });
-    const { err } = await call(clientFor(address), new Uint8Array(2_000));
+  test('a message over maxBodyBytes is RESOURCE_EXHAUSTED and counted as too-large', async () => {
+    const w: TestWriter = createTestWriter();
+    const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'create' });
+    const receiver = createReceiver(session, { inflightBudgetBytes: 1 << 20 }, { logger: silent });
+    const address = await serve(receiver, { maxBodyBytes: 1_000, inflightBudgetBytes: 1 << 20 });
+    const { err } = await call(clientFor(address), new Uint8Array(1_500));
     expect(err?.code).toBe(status.RESOURCE_EXHAUSTED);
+    expect(err?.details).toBe('request of 1500 bytes exceeds the limit of 1000 bytes');
+    expect(receiver.stats().requests).toBe(1);
+    expect(receiver.stats().refused['too-large']).toBe(1);
+    await session.close();
+  });
+
+  test('a message over twice the limit is refused by grpc-js and is not counted', async () => {
+    const w: TestWriter = createTestWriter();
+    const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'create' });
+    const receiver = createReceiver(session, { inflightBudgetBytes: 1 << 20 }, { logger: silent });
+    const address = await serve(receiver, { maxBodyBytes: 1_000, inflightBudgetBytes: 1 << 20 });
+    const { err } = await call(clientFor(address), new Uint8Array(2_500));
+    expect(err?.code).toBe(status.RESOURCE_EXHAUSTED);
+    expect(receiver.stats().requests).toBe(0);
+    await session.close();
+  });
+
+  test('an admission refused as busy is UNAVAILABLE with RetryInfo and counted', async () => {
+    const refusals: [string, string][] = [];
+    const base = fake(
+      async () => undefined as never,
+      () => null,
+    );
+    const receiver: Receiver = {
+      ...base,
+      refused: (outcome, reason) => void refusals.push([outcome, reason]),
+    };
+    const address = await serve(receiver);
+    const { err } = await call(clientFor(address), requestOf([protoSpan(1)]));
+    expect(err?.code).toBe(status.UNAVAILABLE);
+    const details = err?.metadata.get('grpc-status-details-bin')[0];
+    if (!(details instanceof Buffer)) throw new Error('no status details');
+    const detail = fromBinary(StatusSchema, details).details[0];
+    if (detail === undefined) throw new Error('no RetryInfo');
+    expect(anyUnpack(detail, RetryInfoSchema)?.retryDelay?.seconds).toBe(1n);
+    expect(refusals).toHaveLength(1);
+    expect(refusals[0]?.[0]).toBe('busy');
   });
 
   test('a gzip-compressed request is OK', async () => {
@@ -244,7 +291,7 @@ describe('OTLP/gRPC transport', () => {
   test('listenGrpc on port 0 returns a real port and close() resolves', async () => {
     const listener = await listenGrpc(
       fake(async () => ({ accepted: 0, rejected: 0, errorMessage: null })),
-      { maxBodyBytes: 1_000 },
+      { maxBodyBytes: 1_000, inflightBudgetBytes: 1_000 },
       silent,
       '127.0.0.1',
       0,
@@ -252,5 +299,53 @@ describe('OTLP/gRPC transport', () => {
     const match = /^127\.0\.0\.1:(\d+)$/.exec(listener.address);
     expect(Number(match?.[1])).toBeGreaterThan(0);
     await listener.close();
+  });
+
+  test('a call queued at shutdown completes once the receiver has drained', async () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered: () => void = () => undefined;
+    const addEntered = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const calls: string[] = [];
+    const session: WriterSession = {
+      async add(_input, source) {
+        calls.push(`add ${source}`);
+        entered();
+        await gate;
+        return { accepted: 1, dropped: 0, duplicates: 0 };
+      },
+      async endInput() {},
+      async addRecords() {
+        throw new Error('unused');
+      },
+      async flush() {},
+      async close() {
+        throw new Error('unused');
+      },
+      async abort() {},
+    };
+    const receiver = createReceiver(session, { inflightBudgetBytes: 1 << 20 }, { logger: silent });
+    const listener = await listenGrpc(
+      receiver,
+      { maxBodyBytes: 1_000_000, inflightBudgetBytes: 1 << 20, forceShutdownAfterMs: 50 },
+      silent,
+      '127.0.0.1',
+      0,
+    );
+    open.push(listener);
+    const exported = call(clientFor(listener.address), requestOf([protoSpan(1)]));
+    await addEntered;
+    const closing = closeAll([listener], receiver);
+    // The hazard window: well past the force-shutdown deadline while the call is still queued.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    release();
+    const { err } = await exported;
+    await closing;
+    expect(err).toBeNull();
+    expect(calls).toHaveLength(1);
   });
 });

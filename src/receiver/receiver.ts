@@ -15,10 +15,19 @@ export interface ReceiveResult {
   errorMessage: string | null;
 }
 
+export interface Admission {
+  /** Bytes claimed so far. */
+  readonly bytes: number;
+  /** Claim `more` bytes; false (and nothing claimed) when that would exceed the budget while another admission is open. */
+  grow(more: number): boolean;
+  /** Give the bytes back. Idempotent. */
+  release(): void;
+}
+
 export interface ReceiverStats {
   /** Every request that reached the receiver, refused ones included. */
   requests: number;
-  /** Body bytes of the requests taken on for processing (not those refused before or at admission). */
+  /** Body bytes of the requests taken on for processing (not those refused before or at admission, nor those refused while streaming). */
   bytes: number;
   /** Records written, per signal. */
   accepted: Record<OtlpSignal, number>;
@@ -33,12 +42,19 @@ export interface ReceiverOptions {
 }
 
 export interface Receiver {
-  /** `transport` names the source: `otlp/http` or `otlp/grpc`. */
+  /**
+   * Claim `bytes` of the in-flight budget before buffering a body. Null when it would exceed the budget while another
+   * admission is open (the transport counts that refusal with `refused`). A single request is always admitted when
+   * nothing else is.
+   */
+  admit(bytes: number): Admission | null;
+  /** `transport` names the source: `otlp/http` or `otlp/grpc`. Releases `admission` when done, success or failure. */
   receive(
     signal: OtlpSignal,
     body: Uint8Array,
     encoding: BodyEncoding,
     transport: string,
+    admission: Admission,
   ): Promise<ReceiveResult>;
   /** A transport refused a request before it reached `receive` (a bad path, method, content type or body). */
   refused(outcome: Outcome, reason: string): void;
@@ -140,9 +156,9 @@ export function createReceiver(
     );
   }
 
-  /** Body bytes of the receives in progress or queued. */
+  /** Body bytes claimed by the open admissions. */
   let inflightBytes = 0;
-  const pending = new Set<Promise<unknown>>();
+  const openAdmissions = new Set<Admission>();
   let tail: Promise<unknown> = Promise.resolve();
   let closed = false;
 
@@ -195,30 +211,48 @@ export function createReceiver(
     return { accepted, rejected, errorMessage };
   }
 
+  /** The budget is only enforced while another admission is open: a lone request is always admitted. */
+  function fits(more: number, others: number): boolean {
+    return others === 0 || inflightBytes + more <= options.inflightBudgetBytes;
+  }
+
   return {
-    async receive(signal, body, encoding, transport) {
+    admit(bytes) {
+      if (!fits(bytes, openAdmissions.size)) return null;
+      let claimed = bytes;
+      inflightBytes += bytes;
+      const admission: Admission = {
+        get bytes() {
+          return claimed;
+        },
+        grow(more) {
+          if (!openAdmissions.has(admission)) return false;
+          if (!fits(more, openAdmissions.size - 1)) return false;
+          claimed += more;
+          inflightBytes += more;
+          return true;
+        },
+        release() {
+          if (!openAdmissions.delete(admission)) return;
+          inflightBytes -= claimed;
+        },
+      };
+      openAdmissions.add(admission);
+      return admission;
+    },
+    async receive(signal, body, encoding, transport, admission) {
       totals.requests++;
       try {
         if (closed) throw new OtelHtmlError('receiver-busy', { message: 'receiver is closing' });
-        if (pending.size > 0 && inflightBytes + body.length > options.inflightBudgetBytes) {
-          throw new OtelHtmlError('receiver-busy', {
-            message: `receiver is busy: ${inflightBytes + body.length} bytes in flight exceed ${options.inflightBudgetBytes}`,
-          });
-        }
         totals.bytes += body.length;
-        inflightBytes += body.length;
         const run = tail.then(() => process(signal, body, encoding, transport));
         tail = run.catch(() => undefined);
-        pending.add(run);
-        try {
-          return await run;
-        } finally {
-          pending.delete(run);
-          inflightBytes -= body.length;
-        }
+        return await run;
       } catch (e) {
         refuse(outcomeOf(e), e instanceof Error ? e.message : String(e));
         throw e;
+      } finally {
+        admission.release();
       }
     },
     refused(outcome, reason) {
