@@ -224,10 +224,28 @@ describe('OTLP/gRPC transport', () => {
     expect(err?.details).toBe('internal error');
   });
 
-  test('a message over maxBodyBytes is RESOURCE_EXHAUSTED', async () => {
-    const { address } = await realServer({ maxBodyBytes: 1_000 });
-    const { err } = await call(clientFor(address), new Uint8Array(2_000));
+  test('a message over maxBodyBytes is RESOURCE_EXHAUSTED and counted as too-large', async () => {
+    const w: TestWriter = createTestWriter();
+    const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'create' });
+    const receiver = createReceiver(session, { inflightBudgetBytes: 1 << 20 }, { logger: silent });
+    const address = await serve(receiver, { maxBodyBytes: 1_000 });
+    const { err } = await call(clientFor(address), new Uint8Array(1_500));
     expect(err?.code).toBe(status.RESOURCE_EXHAUSTED);
+    expect(err?.details).toBe('request of 1500 bytes exceeds the limit of 1000 bytes');
+    expect(receiver.stats().requests).toBe(1);
+    expect(receiver.stats().refused['too-large']).toBe(1);
+    await session.close();
+  });
+
+  test('a message over twice the limit is refused by grpc-js and is not counted', async () => {
+    const w: TestWriter = createTestWriter();
+    const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'create' });
+    const receiver = createReceiver(session, { inflightBudgetBytes: 1 << 20 }, { logger: silent });
+    const address = await serve(receiver, { maxBodyBytes: 1_000 });
+    const { err } = await call(clientFor(address), new Uint8Array(2_500));
+    expect(err?.code).toBe(status.RESOURCE_EXHAUSTED);
+    expect(receiver.stats().requests).toBe(0);
+    await session.close();
   });
 
   test('a gzip-compressed request is OK', async () => {

@@ -17,14 +17,18 @@ import { bindError, bracketed } from './host.js';
 import type { Listener } from './http.js';
 import type { Receiver } from './receiver.js';
 import { SIGNAL_SERVICES, type SignalService } from './signals.js';
-import { OUTCOME_STATUS, outcomeOf, RETRY_AFTER_SECONDS, statusMessage } from './status.js';
+import { OUTCOME_STATUS, outcomeOf, RETRY_AFTER_SECONDS, ReceiverRejected, statusMessage } from './status.js';
 
 const SOURCE = 'otlp/grpc';
 const FORCE_SHUTDOWN_AFTER_MS = 5_000;
 const DETAILS_KEY = 'grpc-status-details-bin';
 
+/** grpc-js refuses (uncounted) above this multiple of `maxBodyBytes`; below it the handler counts the refusal. */
+export const GRPC_CEILING_FACTOR = 2;
+
 export interface GrpcTransportOptions {
   maxBodyBytes: number;
+  forceShutdownAfterMs?: number;
 }
 
 /** A grpc-js service definition for one OTLP service: raw request bytes in, protobuf-es response out. */
@@ -63,8 +67,17 @@ function failure(e: unknown, logger: Logger): { code: number; details: string; m
   return { code, details, metadata };
 }
 
-function handlerFor(s: SignalService, receiver: Receiver, logger: Logger) {
+function handlerFor(s: SignalService, receiver: Receiver, options: GrpcTransportOptions, logger: Logger) {
   return (call: ServerUnaryCall<Uint8Array, Message>, callback: sendUnaryData<Message>): void => {
+    if (call.request.length > options.maxBodyBytes) {
+      const rejected = new ReceiverRejected(
+        'too-large',
+        `request of ${call.request.length} bytes exceeds the limit of ${options.maxBodyBytes} bytes`,
+      );
+      receiver.refused('too-large', rejected.message);
+      callback(failure(rejected, logger));
+      return;
+    }
     receiver.receive(s.signal, call.request, 'protobuf', SOURCE).then(
       (result) => {
         logger.debug('grpc request', { service: s.service.typeName, bytes: call.request.length });
@@ -86,9 +99,11 @@ export function listenGrpc(
   host: string,
   port: number,
 ): Promise<Listener> {
-  const server = new Server({ 'grpc.max_receive_message_length': options.maxBodyBytes });
+  const server = new Server({
+    'grpc.max_receive_message_length': options.maxBodyBytes * GRPC_CEILING_FACTOR,
+  });
   for (const s of SIGNAL_SERVICES) {
-    server.addService(serviceDefinition(s), { Export: handlerFor(s, receiver, logger) });
+    server.addService(serviceDefinition(s), { Export: handlerFor(s, receiver, options, logger) });
   }
   return new Promise((resolve, reject) => {
     server.bindAsync(`${bracketed(host)}:${port}`, ServerCredentials.createInsecure(), (err, actual) => {
