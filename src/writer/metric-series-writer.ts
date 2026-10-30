@@ -10,14 +10,17 @@ import {
   encodeExemplarFile,
   encodeSegmentFile,
   encodeSeriesFile,
+  exemplarPages,
+  groupMetricFiles,
   LEVEL0_WIDTH_NS,
   levelCount,
+  levelPages,
   levelWidthNs,
-  METRIC_FILE_PATH,
+  type MetricFiles,
+  mergeBucketSeries,
   metricDir,
-  metricExemplarPath,
-  metricLevelExemplarPath,
-  metricLevelPath,
+  metricExemplarFilePath,
+  metricLevelFilePath,
   metricSegmentPath,
   metricSeriesPath,
   nextLevel,
@@ -52,15 +55,6 @@ export interface SeriesWriterOptions {
   exemplars: number;
   /** The buffer budget, in columnar-bucket units (see DEFAULT_BUFFER_BUDGET). */
   bufferBudget?: number;
-}
-
-interface MetricPaths {
-  series: boolean;
-  segments: number[];
-  levels: number[];
-  exemplars: boolean;
-  /** Levels with an `ex<k>.js`. */
-  levelExemplars: number[];
 }
 
 /**
@@ -125,7 +119,8 @@ async function readRawDataFile(fs: FileSystem, out: string, path: string): Promi
 /**
  * The per-metric series files. Level-0 buckets (and exemplars) accumulate in memory and go out as one segment per
  * metric at each flush (or earlier, when the buffer is full); `compact` turns a metric's segments into its level
- * files and `ex.js` at close. It owns the list of metric files the manifest should name.
+ * files and exemplar files at close, each in pages when it spans more than one (format 3). It owns the list of
+ * metric files the manifest should name.
  */
 export class MetricSeriesWriter {
   readonly #fs: FileSystem;
@@ -157,7 +152,9 @@ export class MetricSeriesWriter {
     this.#maxBuffered = opts.bufferBudget ?? DEFAULT_BUFFER_BUDGET;
     this.#nextSegment = nextSegment;
     this.#listed = new Set(listed);
-    this.#toDemote = new Set([...byMetric(listed)].filter(([, p]) => p.levels.length > 0).map(([id]) => id));
+    this.#toDemote = new Set(
+      [...groupMetricFiles(listed)].filter(([, p]) => p.levels.size > 0).map(([id]) => id),
+    );
   }
 
   /** The metric files the next manifest lists, sorted. */
@@ -251,14 +248,15 @@ export class MetricSeriesWriter {
    * into a segment: the committed manifest never names a file that is being overwritten.
    */
   async #demote(id: number): Promise<void> {
-    const paths = byMetric([...this.#listed]).get(id);
-    if (paths !== undefined && paths.levels.length > 0) {
-      const l0 = await this.#readLevel(id, 0);
-      const exemplars = paths.exemplars ? await this.#readExemplars(id) : [];
+    const files = groupMetricFiles([...this.#listed]).get(id);
+    const l0Pages = files?.levels.get(0);
+    if (files !== undefined && l0Pages !== undefined) {
+      const l0 = await this.#readLevel(id, 0, l0Pages);
+      const exPages = files.exemplars.get(EXEMPLAR_BASE_LEVEL);
+      const exemplars =
+        exPages === undefined ? [] : await this.#readExemplars(id, EXEMPLAR_BASE_LEVEL, exPages);
       await this.#writeSegment(id, l0, exemplars);
-      for (const k of paths.levels) this.#listed.delete(metricLevelPath(id, k));
-      this.#listed.delete(metricExemplarPath(id));
-      for (const k of paths.levelExemplars) this.#listed.delete(metricLevelExemplarPath(id, k));
+      for (const path of compactedPaths(id, files)) this.#listed.delete(path);
     }
     this.#toDemote.delete(id);
   }
@@ -270,7 +268,7 @@ export class MetricSeriesWriter {
    */
   async compact(catalog: MetricCatalog): Promise<string[]> {
     await this.flush(catalog); // also demotes: no metric has both levels and segments listed after it
-    for (const [id, paths] of [...byMetric([...this.#listed])].sort(([a], [b]) => a - b)) {
+    for (const [id, paths] of [...groupMetricFiles([...this.#listed])].sort(([a], [b]) => a - b)) {
       if (paths.segments.length === 0) continue;
       const merged = await this.#mergeSegments(id, paths.segments);
       const exemplars = merged.exemplars;
@@ -285,24 +283,25 @@ export class MetricSeriesWriter {
       // Levels are derived and written one at a time, so at most two are in memory.
       const written: string[] = [];
       for (let k = 0; k < count; k++) {
-        const path = metricLevelPath(id, k);
         const series = level;
-        // in pieces, one per series: a long run's level files are tens of megabytes
-        const head = { metric: id, level: k, widthNs: levelWidthNs(k) };
-        await this.#writePieces(path, wrapDataFilePieces(dataFileKey(path), head, 'series', series));
-        written.push(path);
+        // A level over more than one page goes out per page (format 3); in pieces, one per series, either way:
+        // a long run's level files are tens of megabytes.
+        const pages = levelPages(series);
+        const parts: [number | null, BucketSeries[]][] = pages.size > 1 ? [...pages] : [[null, series]];
+        for (const [page, part] of parts) {
+          const path = metricLevelFilePath(id, k, page);
+          const head = { metric: id, level: k, widthNs: levelWidthNs(k), ...(page === null ? {} : { page }) };
+          await this.#writePieces(path, wrapDataFilePieces(dataFileKey(path), head, 'series', part));
+          written.push(path);
+        }
         level = k + 1 < count ? nextLevel(series, k + 1) : [];
       }
       let capped = capExemplars(exemplars, this.#exemplars);
-      const ex = metricExemplarPath(id);
-      await this.#writeFile(ex, encodeExemplarFile({ metric: id, exemplars: capped }));
-      written.push(ex);
+      written.push(...(await this.#writeExemplars(id, EXEMPLAR_BASE_LEVEL, capped)));
       // Each level coarser than `ex.js`'s keeps fewer, so the exemplars a chart loads are bounded like its buckets.
       for (let k = EXEMPLAR_BASE_LEVEL + 1; k < count; k++) {
         capped = capExemplars(capped, this.#exemplars, levelWidthNs(k));
-        const path = metricLevelExemplarPath(id, k);
-        await this.#writeFile(path, encodeExemplarFile({ metric: id, exemplars: capped }));
-        written.push(path);
+        written.push(...(await this.#writeExemplars(id, k, capped)));
       }
       // The series' point gaps, so a chart picks its bucket width without loading level 0, and a summary's
       // quantiles. Every series of the metric is in the catalog and in this file already: only those are new, and
@@ -320,8 +319,7 @@ export class MetricSeriesWriter {
         this.#listed.delete(metricSegmentPath(id, n));
         this.#ownSegments.delete(metricSegmentPath(id, n));
       }
-      for (const k of paths.levels) this.#listed.delete(metricLevelPath(id, k));
-      for (const k of paths.levelExemplars) this.#listed.delete(metricLevelExemplarPath(id, k));
+      for (const path of compactedPaths(id, paths)) this.#listed.delete(path);
       for (const path of written) this.#listed.add(path);
     }
     return this.listed();
@@ -399,35 +397,61 @@ export class MetricSeriesWriter {
     return decodeOwnSegmentFile(await readRawDataFile(this.#fs, this.#out, path), path);
   }
 
-  async #readLevel(id: number, k: number): Promise<BucketSeries[]> {
-    const path = metricLevelPath(id, k);
-    return parseLevelFile(await this.#read(path), path).series;
+  /** The exemplars of level `k`, one file or one per page when they span more than one; the paths written. */
+  async #writeExemplars(id: number, k: number, list: readonly StoredExemplar[]): Promise<string[]> {
+    const pages = exemplarPages(list, levelWidthNs(k));
+    const parts: [number | null, readonly StoredExemplar[]][] = pages.size > 1 ? [...pages] : [[null, list]];
+    const written: string[] = [];
+    for (const [page, exemplars] of parts) {
+      const path = metricExemplarFilePath(id, k, page);
+      await this.#writeFile(
+        path,
+        encodeExemplarFile({ metric: id, ...(page === null ? {} : { page }), exemplars: [...exemplars] }),
+      );
+      written.push(path);
+    }
+    return written;
   }
 
-  async #readExemplars(id: number): Promise<StoredExemplar[]> {
-    const path = metricExemplarPath(id);
-    return parseExemplarFile(await this.#read(path), path).exemplars;
+  /** Level `k` of a reopened report: its one file, or its pages merged. */
+  async #readLevel(id: number, k: number, pages: readonly number[] | null): Promise<BucketSeries[]> {
+    if (pages === null) {
+      const path = metricLevelFilePath(id, k, null);
+      return parseLevelFile(await this.#read(path), path).series;
+    }
+    const parts: BucketSeries[][] = [];
+    for (const page of pages) {
+      const path = metricLevelFilePath(id, k, page);
+      const f = parseLevelFile(await this.#read(path), path);
+      if (f.page !== page) {
+        throw new OtelHtmlError('invalid-report', {
+          path: `${path}.page`,
+          expected: String(page),
+          actual: String(f.page),
+        });
+      }
+      parts.push(f.series);
+    }
+    return mergeBucketSeries(parts, metricDir(id));
+  }
+
+  async #readExemplars(id: number, k: number, pages: readonly number[] | null): Promise<StoredExemplar[]> {
+    const out: StoredExemplar[] = [];
+    for (const page of pages ?? [null]) {
+      const path = metricExemplarFilePath(id, k, page);
+      out.push(...parseExemplarFile(await this.#read(path), path).exemplars);
+    }
+    return out;
   }
 }
 
-/** Listed metric files grouped by metric id. */
-function byMetric(listed: readonly string[]): Map<number, MetricPaths> {
-  const out = new Map<number, MetricPaths>();
-  for (const p of listed) {
-    const m = METRIC_FILE_PATH.exec(p);
-    if (m === null) continue;
-    const id = Number(m[1]);
-    let e = out.get(id);
-    if (e === undefined) {
-      e = { series: false, segments: [], levels: [], exemplars: false, levelExemplars: [] };
-      out.set(id, e);
-    }
-    if (m[2] === 'series') e.series = true;
-    else if (m[2] === 'ex') e.exemplars = true;
-    else if (m[3] !== undefined) e.levels.push(Number(m[3]));
-    else if (m[4] !== undefined) e.segments.push(Number(m[4]));
-    else if (m[5] !== undefined) e.levelExemplars.push(Number(m[5]));
-  }
+/** Every level and exemplar file (whole or page) a metric has listed: what compaction and demotion replace. */
+function compactedPaths(id: number, files: MetricFiles): string[] {
+  const out: string[] = [];
+  for (const [k, pages] of files.levels)
+    for (const page of pages ?? [null]) out.push(metricLevelFilePath(id, k, page));
+  for (const [k, pages] of files.exemplars)
+    for (const page of pages ?? [null]) out.push(metricExemplarFilePath(id, k, page));
   return out;
 }
 

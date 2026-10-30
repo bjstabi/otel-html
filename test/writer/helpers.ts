@@ -1,7 +1,13 @@
 import { decodeColumns } from '../../src/format/columns.js';
 import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
 import { type Manifest, parseManifest } from '../../src/format/manifest.js';
-import { type LevelFile, parseLevelFile } from '../../src/format/metric-files.js';
+import {
+  groupMetricFiles,
+  type LevelFile,
+  mergeBucketSeries,
+  metricLevelFilePath,
+  parseLevelFile,
+} from '../../src/format/metric-files.js';
 import { chunkKey, MANIFEST_KEY, rollupKey, type Signal } from '../../src/format/paths.js';
 import { LOG_COLUMNS, METRIC_COLUMNS, SPAN_COLUMNS } from '../../src/format/specs.js';
 import type { LogRecordRecord, MetricPointRecord, SpanRecord } from '../../src/model/records.js';
@@ -86,13 +92,28 @@ export function metricFilesOnDisk(w: TestWriter, out: string): string[] {
     .sort();
 }
 
-/** The listed level files of metric `id`, decoded, finest first. */
+/** The listed levels of metric `id`, decoded, finest first; a level written in pages (format 3) comes back whole. */
 export function levelsOf(w: TestWriter, out: string, id: number): LevelFile[] {
-  const prefix = `data/metrics/${String(id).padStart(6, '0')}/l`;
-  return manifestOf(w, out)
-    .metricFiles.filter((p) => p.startsWith(prefix))
-    .sort()
-    .map((p) => parseLevelFile(readDataFile(w, out, p), p));
+  const files = groupMetricFiles(manifestOf(w, out).metricFiles).get(id);
+  if (files === undefined) return [];
+  return [...files.levels]
+    .sort(([a], [b]) => a - b)
+    .map(([level, pages]) => {
+      const parts = (pages ?? [null]).map((page) => {
+        const p = metricLevelFilePath(id, level, page);
+        return parseLevelFile(readDataFile(w, out, p), p);
+      });
+      const [first] = parts;
+      if (first === undefined) throw new Error(`level ${level} of metric ${id} has no file`);
+      const { page: _page, ...whole } = first;
+      return {
+        ...whole,
+        series: mergeBucketSeries(
+          parts.map((f) => f.series),
+          `metric ${id}`,
+        ),
+      };
+    });
 }
 
 export function metricCatalogOf(w: TestWriter, out: string): MetricCatalog {

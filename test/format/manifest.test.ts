@@ -61,7 +61,7 @@ function failure(fn: () => unknown): OtelHtmlError {
 
 describe('paths', () => {
   test('constants and helpers', () => {
-    expect(FORMAT_VERSION).toBe(2);
+    expect(FORMAT_VERSION).toBe(3);
     expect(REGISTRATION_GLOBAL).toBe('__OH__');
     expect(chunkPath('spans', 12)).toBe('data/chunks/spans/000012.js');
     expect(chunkPath('metrics', 1234567)).toBe('data/chunks/metrics/1234567.js');
@@ -145,7 +145,7 @@ describe('manifest', () => {
     expect(parseManifest({ ...manifest(), formatVersion: 1 }).formatVersion).toBe(1);
   });
   test('rejects wrong format version with a precise path', () => {
-    const e = failure(() => parseManifest({ ...manifest(), formatVersion: 3 }));
+    const e = failure(() => parseManifest({ ...manifest(), formatVersion: 4 }));
     expect(e.code).toBe('invalid-report');
     expect(e.path).toBe('manifest.formatVersion');
   });

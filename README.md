@@ -189,7 +189,8 @@ report/
     rollups/            spans.js, logs.js, metrics.js
     chunks/             spans/, logs/, metrics/  (000000.js, ...)
     metrics/            per metric (<id6>/): series.js (definitions, point gaps, a summary's quantiles), l<k>.js resolution levels and ex.js / ex<k>.js
-                        exemplars, or seg-<n6>.js segments until the writer closes
+                        exemplars (a level or exemplar file over more than 2,048 buckets is one file per page:
+                        l<k>-<p6>.js, ex-<p6>.js, ex<k>-<p6>.js), or seg-<n6>.js segments until the writer closes
     traces/             trace index shards (<xx>.js)
     state/              writer checkpoint (session.<n>.json)
 ```
