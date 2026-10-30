@@ -31,13 +31,13 @@ import {
 const HAS_IS_REMOTE = 0x100;
 const IS_REMOTE = 0x200;
 
-function hexToBytes(hex: string): Uint8Array {
+export function hexToBytes(hex: string): Uint8Array {
   const out = new Uint8Array(hex.length / 2);
   for (let i = 0; i < out.length; i++) out[i] = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16);
   return out;
 }
 
-function hrToNanos(t: HrTime): bigint {
+export function hrToNanos(t: HrTime): bigint {
   return BigInt(t[0]) * 1_000_000_000n + BigInt(t[1]);
 }
 
@@ -45,7 +45,7 @@ function flagsFrom(traceFlags: number, isRemote: boolean | undefined): number {
   return (traceFlags & 0xff) | HAS_IS_REMOTE | (isRemote ? IS_REMOTE : 0);
 }
 
-function anyValue(v: unknown): AnyValue {
+export function anyValueOf(v: unknown): AnyValue {
   if (typeof v === 'string') return create(AnyValueSchema, { value: { case: 'stringValue', value: v } });
   if (typeof v === 'boolean') return create(AnyValueSchema, { value: { case: 'boolValue', value: v } });
   if (typeof v === 'number') {
@@ -56,7 +56,7 @@ function anyValue(v: unknown): AnyValue {
   if (v instanceof Uint8Array) return create(AnyValueSchema, { value: { case: 'bytesValue', value: v } });
   if (Array.isArray(v)) {
     return create(AnyValueSchema, {
-      value: { case: 'arrayValue', value: { values: v.map(anyValue) } },
+      value: { case: 'arrayValue', value: { values: v.map(anyValueOf) } },
     });
   }
   if (typeof v === 'object' && v !== null) {
@@ -68,7 +68,7 @@ function anyValue(v: unknown): AnyValue {
 }
 
 function kv(key: string, value: unknown): KeyValue {
-  return create(KeyValueSchema, { key, value: anyValue(value) });
+  return create(KeyValueSchema, { key, value: anyValueOf(value) });
 }
 
 export function attributesToKeyValues(attrs: Attributes): KeyValue[] {

@@ -1,5 +1,6 @@
 import { basename } from 'node:path';
 import { trace } from '@opentelemetry/api';
+import type { ReadableLogRecord } from '@opentelemetry/sdk-logs';
 import type { ReadableSpan } from '@opentelemetry/sdk-trace-base';
 import pkg from '../../package.json' with { type: 'json' };
 import { loadConfigFile } from '../config/load.js';
@@ -13,6 +14,7 @@ import { ExportMetricsServiceRequestSchema } from '../model/gen/opentelemetry/pr
 import type { ExportTraceServiceRequest } from '../model/gen/opentelemetry/proto/collector/trace/v1/trace_service_pb.js';
 import { ExportTraceServiceRequestSchema } from '../model/gen/opentelemetry/proto/collector/trace/v1/trace_service_pb.js';
 import { type OtlpRequest, parseOtlpObject } from '../model/otlp-json.js';
+import { readableLogRecordsToRequest } from '../model/sdk-logs.js';
 import { readableSpansToRequest } from '../model/sdk-spans.js';
 import { createNodeFileSystem } from '../writer/node-fs.js';
 import {
@@ -175,7 +177,12 @@ export class Report {
     return this.#addAll(requestsOf('addSpans', 'traces', input), 'addSpans');
   }
 
-  async addLogs(input: ExportLogsServiceRequest | object): Promise<AddResult> {
+  /** SDK log records, a protobuf `ExportLogsServiceRequest`, or an OTLP-JSON object. */
+  async addLogs(input: readonly ReadableLogRecord[] | ExportLogsServiceRequest | object): Promise<AddResult> {
+    if (Array.isArray(input)) {
+      if (input.length === 0) return NOTHING;
+      return this.#session.add({ signal: 'logs', request: readableLogRecordsToRequest(input) }, 'addLogs');
+    }
     if (isMessage(input, ExportLogsServiceRequestSchema.typeName)) {
       return this.#session.add({ signal: 'logs', request: input as ExportLogsServiceRequest }, 'addLogs');
     }
