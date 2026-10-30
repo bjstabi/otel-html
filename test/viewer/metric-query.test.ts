@@ -29,9 +29,7 @@ import {
   showOptions,
 } from '../../src/viewer/data/metric-query.js';
 import { medianMsAsync } from '../../test-support/median-ms.js';
-
-declare const process: { env: { OTEL_HTML_PERF_FACTOR?: string } }; // provided by vitest; the viewer project has no node types
-const PERF_FACTOR = Number(process.env.OTEL_HTML_PERF_FACTOR ?? '1');
+import { PERF_FACTOR } from '../../test-support/perf-factor.js';
 
 const S = 1e9;
 const str = (value: string): AnyValue => ({ kind: 'string', value });

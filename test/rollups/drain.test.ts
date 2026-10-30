@@ -9,9 +9,8 @@ import {
   tokenize,
 } from '../../src/rollups/drain.js';
 import { medianMs } from '../../test-support/median-ms.js';
+import { PERF_FACTOR } from '../../test-support/perf-factor.js';
 
-const { OTEL_HTML_PERF_FACTOR } = process.env;
-const PERF_FACTOR = Number(OTEL_HTML_PERF_FACTOR ?? '1');
 const t = (n: number): RelNanos => n as RelNanos;
 
 /** A distinct digit-free word per `n` (base 26). */

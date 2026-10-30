@@ -4,6 +4,7 @@ import { afterEach, describe, expect, test } from 'vitest';
 import type { AnyValue } from '../../src/model/anyvalue.js';
 import { LogBody, segmentBody } from '../../src/viewer/components/log-body.js';
 import { SeverityBadge, SeverityLabel } from '../../src/viewer/components/severity.js';
+import { PERF_FACTOR } from '../../test-support/perf-factor.js';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 afterEach(cleanup);
@@ -64,8 +65,6 @@ describe('segmentBody', () => {
   });
 });
 
-declare const process: { env: { OTEL_HTML_PERF_FACTOR?: string } }; // provided by vitest; the viewer project has no node types
-const PERF_FACTOR = Number(process.env.OTEL_HTML_PERF_FACTOR ?? '1');
 const join = (s: string): string =>
   segmentBody(s)
     .map((g) => (g.type === 'kv' ? `${g.key}=${g.value}` : g.type === 'json' ? g.raw : g.text))

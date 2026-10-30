@@ -1,11 +1,10 @@
 import { describe, expect, test } from 'vitest';
 import { layoutFlame } from '../../src/viewer/components/flame-layout.js';
 import { medianMs } from '../../test-support/median-ms.js';
+import { PERF_FACTOR } from '../../test-support/perf-factor.js';
 import { detailOf, spanIdOf, traceRow } from './trace-rows.js';
 
 const OPTS = { colorBy: 'service', filter: '', errorsOnly: false } as const;
-declare const process: { env: { OTEL_HTML_PERF_FACTOR?: string } }; // provided by vitest; the viewer project has no node types
-const perfFactor = Number(process.env.OTEL_HTML_PERF_FACTOR ?? '1');
 
 describe('layoutFlame', () => {
   test('a 3-span sequential trace has depths [0,1,1] and shares summing to 1', () => {
@@ -113,6 +112,6 @@ describe('layoutFlame', () => {
     const { result, ms } = medianMs(() => layoutFlame(tree, OPTS));
     const { bars } = result;
     expect(bars).toHaveLength(50_000);
-    expect(ms).toBeLessThan(1500 * perfFactor);
+    expect(ms).toBeLessThan(1500 * PERF_FACTOR);
   });
 });

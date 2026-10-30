@@ -19,6 +19,10 @@ env:
 jobs:
   check:
     runs-on: ubuntu-latest
+    env:
+      # The @perf budgets scale by (calibration ÷ this), never below 1: GitHub's runners come as AMD EPYC 9V45
+      # (~85 ms, budgets as written) and EPYC 7763 (~150 ms, about 1.5×). See test-support/calibrate.ts.
+      OTEL_HTML_PERF_REFERENCE_MS: "100"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup
@@ -33,6 +37,10 @@ jobs:
       matrix:
         os: [windows-latest]
     runs-on: ${{ matrix.os }}
+    env:
+      # The @perf budgets scale by (calibration ÷ this), never below 1: GitHub's runners come as AMD EPYC 9V45
+      # (~85 ms, budgets as written) and EPYC 7763 (~150 ms, about 1.5×). See test-support/calibrate.ts.
+      OTEL_HTML_PERF_REFERENCE_MS: "100"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup
@@ -74,7 +82,7 @@ jobs:
     env:
       OTEL_HTML_PERF_FACTOR: ${{ matrix.perf_factor || 1 }}
       # The @perf budgets scale by (calibration ÷ this), never below 1: GitHub's runners come as AMD EPYC 9V45
-      # (~85 ms, budgets as written) and EPYC 7763 (~150 ms, about 1.5×). See e2e/calibrate.ts.
+      # (~85 ms, budgets as written) and EPYC 7763 (~150 ms, about 1.5×). See test-support/calibrate.ts.
       OTEL_HTML_PERF_REFERENCE_MS: "100"
       # The image already has the browsers; test:e2e would otherwise run `playwright install` for all three.
       OTEL_HTML_SKIP_BROWSER_INSTALL: "1"
@@ -126,7 +134,7 @@ jobs:
     env:
       OTEL_HTML_METRICS_SCALE: "1"
       # The @perf budgets scale by (calibration ÷ this), never below 1: GitHub's runners come as AMD EPYC 9V45
-      # (~85 ms, budgets as written) and EPYC 7763 (~150 ms, about 1.5×). See e2e/calibrate.ts.
+      # (~85 ms, budgets as written) and EPYC 7763 (~150 ms, about 1.5×). See test-support/calibrate.ts.
       OTEL_HTML_PERF_REFERENCE_MS: "100"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
