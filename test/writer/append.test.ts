@@ -136,16 +136,20 @@ describe('append', () => {
     expect(after.createdAt).toBe(before.createdAt);
   });
 
-  test('a version mismatch tells the user to merge, with both versions', async () => {
+  test('a version mismatch tells the user to replace or merge, with both versions', async () => {
     const w = createTestWriter();
     await closedReportWithTwoChunks(w);
     const e = await failure(
       openSession({ ...w.deps, version: '9.9.9' }, { out: OUT, config: SMALL_CHUNKS, mode: 'append' }),
     );
     expect(e.code).toBe('version-mismatch');
-    expect(e.hint).toBe('append requires the same otel-html version (0.1.0 vs 9.9.9); use `otel-html merge`');
-    expect(e.message).toContain('0.1.0');
-    expect(e.message).toContain('9.9.9');
+    expect(e.message).toContain(
+      `cannot append: the report at ${OUT} was written by otel-html 0.1.0 (this is 9.9.9)`,
+    );
+    expect(e.hint).toBe(
+      `pass --replace (replace: true in the library) to start it over, or combine across versions with \`otel-html merge ${OUT} <new> -o <dir>\``,
+    );
+    expect(e.path).toBe('manifest.otelHtmlVersion');
   });
 
   test('a state file written by another version is a version mismatch too', async () => {
@@ -159,7 +163,11 @@ describe('append', () => {
     }
     const e = await failure(open(w, 'append'));
     expect(e.code).toBe('version-mismatch');
-    expect(e.hint).toContain('use `otel-html merge`');
+    expect(e.message).toContain(
+      `cannot append: the report at ${OUT} was written by otel-html 0.0.1 (this is 0.1.0)`,
+    );
+    expect(e.hint).toContain('pass --replace');
+    expect(e.path).toMatch(/^data\/state\/session\.[01]\.json otelHtmlVersion$/);
   });
 
   test('missing state files are an invalid report that points to merge', async () => {

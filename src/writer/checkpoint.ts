@@ -60,10 +60,16 @@ function consistent(state: SessionState, manifest: Manifest): boolean {
   );
 }
 
-function versionMismatch(where: string, reportVersion: string, currentVersion: string): OtelHtmlError {
+function versionMismatch(
+  out: string,
+  path: string,
+  reportVersion: string,
+  currentVersion: string,
+): OtelHtmlError {
   return new OtelHtmlError('version-mismatch', {
-    message: `${where}: the report was written by otel-html ${reportVersion}, this is ${currentVersion}`,
-    hint: `append requires the same otel-html version (${reportVersion} vs ${currentVersion}); use \`otel-html merge\``,
+    message: `cannot append: the report at ${out} was written by otel-html ${reportVersion} (this is ${currentVersion})`,
+    path,
+    hint: `pass --replace (replace: true in the library) to start it over, or combine across versions with \`otel-html merge ${out} <new> -o <dir>\``,
   });
 }
 
@@ -84,7 +90,7 @@ export async function loadCheckpoint(fs: FileSystem, out: string, version: strin
     reviveDataJson(unwrapDataFile(await fs.readText(manifestPath), MANIFEST_KEY)),
   );
   if (manifest.otelHtmlVersion !== version) {
-    throw versionMismatch('manifest.otelHtmlVersion', manifest.otelHtmlVersion, version);
+    throw versionMismatch(out, 'manifest.otelHtmlVersion', manifest.otelHtmlVersion, version);
   }
   const problems: string[] = [];
   for (const slot of STATE_SLOTS) {
@@ -98,7 +104,7 @@ export async function loadCheckpoint(fs: FileSystem, out: string, version: strin
       continue;
     }
     if (state.otelHtmlVersion !== version) {
-      throw versionMismatch(`${p} otelHtmlVersion`, state.otelHtmlVersion, version);
+      throw versionMismatch(out, `${p} otelHtmlVersion`, state.otelHtmlVersion, version);
     }
     if (consistent(state, manifest)) return { manifest, state, slot };
     problems.push(`${p}: does not match the committed manifest`);
