@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, inject, test } from 'vitest';
 import { type SeriesGaps, type StoredExemplar, seriesGaps } from '../../src/format/metric-files.js';
 import type { AnyValue, Attributes } from '../../src/model/anyvalue.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
@@ -29,7 +29,6 @@ import {
   showOptions,
 } from '../../src/viewer/data/metric-query.js';
 import { medianMsAsync } from '../../test-support/median-ms.js';
-import { PERF_FACTOR } from '../../test-support/perf-factor.js';
 
 const S = 1e9;
 const str = (value: string): AnyValue => ({ kind: 'string', value });
@@ -742,7 +741,7 @@ describe('runMetricQuery', () => {
     });
     const { result, ms } = await medianMsAsync(() => runMetricQuery(m, q, w, 600));
     expect(result.series).toHaveLength(5);
-    expect(ms).toBeLessThan(150 * PERF_FACTOR);
+    expect(ms).toBeLessThan(150 * inject('perfFactor'));
   });
 });
 

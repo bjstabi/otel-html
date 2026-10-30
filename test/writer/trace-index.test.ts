@@ -18,7 +18,10 @@ const base =
     throw new Error('no span');
   })();
 
-/** A deep copy of one shard as the state would hold it. It takes a snapshot, which clears the dirty set, and releases it straight away. */
+/**
+ * A deep copy of one shard as the state would hold it. It takes a snapshot, which clears the dirty set, and releases
+ * it straight away.
+ */
 function payloadOf(idx: TraceIndex, shard: string): TraceShard {
   const snap = idx.snapshot();
   try {
@@ -401,6 +404,8 @@ describe('TraceIndex snapshot', () => {
     idx.add(mk(3, { traceId: idB }), 'chunks/spans/000000', resource);
     idx.release();
     const snap2 = idx.snapshot();
+    expect(snap1.entries('bb').get(idB)).toBe(b1);
+    expect(snap2.entries('aa')).toBe(snap1.entries('aa'));
     expect(snap2.entries('aa').get(idA)).toBe(a1);
     expect(snap2.entries('bb').get(idB)).not.toBe(b1);
     idx.release();

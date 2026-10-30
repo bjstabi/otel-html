@@ -183,7 +183,7 @@ const PERF_ENV = 'OTEL_HTML_PERF_FACTOR';
  * fail them; without it the factor is `OTEL_HTML_PERF_FACTOR` alone.
  */
 export const PERF_REFERENCE_ENV = 'OTEL_HTML_PERF_REFERENCE_MS';
-/** This run's calibration time in ms, measured once by the global setup (`e2e/calibrate.ts`). */
+/** This run's calibration time in ms, measured once by the global setup (`test-support/calibrate.ts`). */
 export const PERF_CALIBRATION_ENV = 'OTEL_HTML_PERF_CALIBRATION_MS';
 
 function positiveEnv(name: string): number | null {

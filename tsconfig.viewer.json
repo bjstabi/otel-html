@@ -13,7 +13,7 @@
     "test-support/scripted-loader.ts",
     "test-support/median-ms.ts",
     "test-support/perf-factor.ts",
-    "test-support/calibrate.ts",
+    "test-support/perf-context.d.ts",
     "src/model/**/*",
     "src/format/**/*",
     "src/semconv/**/*",
