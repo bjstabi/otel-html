@@ -16,7 +16,7 @@ import {
  * (in Docker, on the host network, so Linux only), and the finished report must hold every record, reject none and
  * peak under 512 MB of resident memory.
  *
- *   bun scripts/load-receiver.ts --out <dir> [--spans 1000000] [--logs 10000000] [--workers 8] [--image <ref>]
+ *   bun scripts/load-receiver.ts --out <dir> [--spans 1000000] [--logs 1000000] [--workers 8] [--image <ref>]
  *
  * Run `mise run build` first: it serves the built CLI. Exits 1 when any assertion fails.
  */
