@@ -166,10 +166,14 @@ export function listenGrpc(
   host: string,
   port: number,
 ): Promise<Listener> {
+  const streams = Math.max(1, Math.ceil(options.inflightBudgetBytes / options.maxBodyBytes));
   const server = new Server({
     interceptors: [admissionInterceptor(receiver, options, logger)],
     'grpc.max_receive_message_length': options.maxBodyBytes * GRPC_CEILING_FACTOR,
-    'grpc.max_concurrent_streams': Math.max(1, Math.ceil(options.inflightBudgetBytes / options.maxBodyBytes)),
+    'grpc.max_concurrent_streams': streams,
+    // Node's HTTP/2 session memory, in MiB: the per-connection ceiling (every stream at the grpc-js message limit), plus 1 MiB of slack for framing.
+    'grpc-node.max_session_memory':
+      Math.ceil((GRPC_CEILING_FACTOR * options.maxBodyBytes * streams) / 2 ** 20) + 1,
   });
   for (const s of SIGNAL_SERVICES) {
     server.addService(serviceDefinition(s), { Export: handlerFor(s, receiver, options, logger) });
