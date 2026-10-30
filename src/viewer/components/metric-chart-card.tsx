@@ -207,8 +207,11 @@ export function MetricChartCard(props: MetricChartCardProps): JSX.Element {
       if (d === null || Math.abs(e.offsetX - d.x) < DRAG_PX) return;
       const a = d.t;
       // A drag released beyond the plot's edge zooms to that edge.
-      const edgeX = Math.min(Math.max(e.offsetX, GRID.left), chart.getWidth() - GRID.right);
-      const b = timeAt(e) ?? timeAt({ ...e, offsetX: edgeX, offsetY: d.y });
+      const atEdge = (): number | null => {
+        const x = Math.min(Math.max(e.offsetX, GRID.left), chart.getWidth() - GRID.right);
+        return timeAt({ ...e, offsetX: x, offsetY: d.y });
+      };
+      const b = timeAt(e) ?? atEdge();
       if (b === null) return;
       const { display, results: rs } = live.current;
       // A heatmap column spans its whole bucket.

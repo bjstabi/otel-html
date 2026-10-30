@@ -56,30 +56,35 @@ export const LINE_MIN_PX = 40;
  * lines, axes and labels are grey, an exemplar ring is ~12 px and an isolated point's dot 6 px, so a run of tens of
  * px means the chart drew a line through consecutive points. Read straight from ECharts' canvas.
  */
-export async function lineRunPx(chart: Locator): Promise<number> {
-  return chart.evaluate((host, plot) => {
-    const canvas = host.querySelector('canvas');
-    const ctx = canvas?.getContext('2d');
-    if (!canvas || !ctx) throw new Error('the chart has no 2d canvas');
-    const ratio = canvas.width / canvas.getBoundingClientRect().width;
-    const x0 = Math.round(plot.left * ratio);
-    const x1 = canvas.width - Math.round(plot.right * ratio);
-    const y1 = canvas.height - Math.round(plot.bottom * ratio);
-    const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    let best = 0;
-    let run = 0;
-    for (let x = x0; x < x1; x++) {
-      let coloured = false;
-      for (let y = 0; y < y1 && !coloured; y++) {
-        const i = (y * canvas.width + x) * 4;
-        const [r = 0, g = 0, b = 0, a = 0] = [data[i], data[i + 1], data[i + 2], data[i + 3]];
-        coloured = a > 128 && Math.max(r, g, b) - Math.min(r, g, b) > 80;
+export async function lineRunPx(chart: Locator, opts: { legend?: boolean } = {}): Promise<number> {
+  return chart.evaluate(
+    (host, { plot, top }) => {
+      const canvas = host.querySelector('canvas');
+      const ctx = canvas?.getContext('2d');
+      if (!canvas || !ctx) throw new Error('the chart has no 2d canvas');
+      const ratio = canvas.width / canvas.getBoundingClientRect().width;
+      const x0 = Math.round(plot.left * ratio);
+      const x1 = canvas.width - Math.round(plot.right * ratio);
+      // From below the legend strip, so a legend swatch is never taken for a drawn line.
+      const y0 = Math.round(top * ratio);
+      const y1 = canvas.height - Math.round(plot.bottom * ratio);
+      const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      let best = 0;
+      let run = 0;
+      for (let x = x0; x < x1; x++) {
+        let coloured = false;
+        for (let y = y0; y < y1 && !coloured; y++) {
+          const i = (y * canvas.width + x) * 4;
+          const [r = 0, g = 0, b = 0, a = 0] = [data[i], data[i + 1], data[i + 2], data[i + 3]];
+          coloured = a > 128 && Math.max(r, g, b) - Math.min(r, g, b) > 80;
+        }
+        run = coloured ? run + 1 : 0;
+        best = Math.max(best, run);
       }
-      run = coloured ? run + 1 : 0;
-      best = Math.max(best, run);
-    }
-    return best / ratio;
-  }, PLOT);
+      return best / ratio;
+    },
+    { plot: PLOT, top: opts.legend === true ? PLOT_TOP.legend : PLOT_TOP.plain },
+  );
 }
 
 /** Clicks the chart at (x, y) px from its top-left corner and returns the click menu's item texts. */
