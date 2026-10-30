@@ -7,27 +7,37 @@ import {
   encodeExemplarFile,
   encodeSegmentFile,
   encodeSeriesFile,
+  exemplarPages,
   GAP_SAMPLE,
+  groupMetricFiles,
   LEVEL_MAX_BUCKETS,
   LEVEL0_WIDTH_NS,
   levelCount,
+  levelPages,
   levelWidthNs,
   MAX_LEVEL,
   METRIC_FILE_PATH,
   mergeBucketSeries,
   metricDir,
   metricExemplarKey,
+  metricExemplarPagePath,
   metricExemplarPath,
   metricLevelExemplarKey,
+  metricLevelExemplarPagePath,
   metricLevelExemplarPath,
   metricLevelKey,
+  metricLevelPagePath,
   metricLevelPath,
   metricSegmentKey,
   metricSegmentPath,
   metricSeriesKey,
   metricSeriesPath,
+  PAGE_BUCKETS,
+  pageOf,
+  pagesIn,
   parseExemplarFile,
   parseLevelFile,
+  parseMetricFilePath,
   parseSegmentFile,
   parseSeriesFile,
   type StoredExemplar,
@@ -85,6 +95,94 @@ describe('metric file paths', () => {
     expect(METRIC_FILE_PATH.test('data/metrics/000001/ex2.js')).toBe(false);
     expect(failure(() => metricLevelExemplarPath(0, EXEMPLAR_BASE_LEVEL)).code).toBe('invalid-report');
     expect(METRIC_FILE_PATH.test('data/metrics/x/series.js')).toBe(false);
+  });
+
+  test('paged levels and exemplar files (format 3) have their own names and parse back', () => {
+    expect(metricLevelPagePath(7, 0, 12)).toBe('data/metrics/000007/l0-000012.js');
+    expect(metricExemplarPagePath(7, 3)).toBe('data/metrics/000007/ex-000003.js');
+    expect(metricLevelExemplarPagePath(7, 4, 1)).toBe('data/metrics/000007/ex4-000001.js');
+    for (const p of [
+      metricLevelPagePath(0, MAX_LEVEL, 999_999),
+      metricExemplarPagePath(1, 0),
+      metricLevelExemplarPagePath(1, 3, 5),
+    ]) {
+      expect(METRIC_FILE_PATH.test(p), p).toBe(true);
+    }
+    expect(METRIC_FILE_PATH.test('data/metrics/000001/ex2-000000.js')).toBe(false);
+    expect(METRIC_FILE_PATH.test('data/metrics/000001/l0-1.js')).toBe(false);
+    expect(parseMetricFilePath(metricSeriesPath(7))).toEqual({ id: 7, kind: 'series' });
+    expect(parseMetricFilePath(metricSegmentPath(7, 3))).toEqual({ id: 7, kind: 'segment', n: 3 });
+    expect(parseMetricFilePath(metricLevelPath(7, 2))).toEqual({
+      id: 7,
+      kind: 'level',
+      level: 2,
+      page: null,
+    });
+    expect(parseMetricFilePath(metricLevelPagePath(7, 2, 9))).toEqual({
+      id: 7,
+      kind: 'level',
+      level: 2,
+      page: 9,
+    });
+    expect(parseMetricFilePath(metricExemplarPath(7))).toEqual({
+      id: 7,
+      kind: 'exemplars',
+      level: EXEMPLAR_BASE_LEVEL,
+      page: null,
+    });
+    expect(parseMetricFilePath(metricExemplarPagePath(7, 1))).toEqual({
+      id: 7,
+      kind: 'exemplars',
+      level: EXEMPLAR_BASE_LEVEL,
+      page: 1,
+    });
+    expect(parseMetricFilePath(metricLevelExemplarPath(7, 5))).toEqual({
+      id: 7,
+      kind: 'exemplars',
+      level: 5,
+      page: null,
+    });
+    expect(parseMetricFilePath(metricLevelExemplarPagePath(7, 5, 2))).toEqual({
+      id: 7,
+      kind: 'exemplars',
+      level: 5,
+      page: 2,
+    });
+    expect(parseMetricFilePath('data/rollups/metrics.js')).toBeNull();
+  });
+
+  test('groupMetricFiles sorts a listing by metric, level and page', () => {
+    const grouped = groupMetricFiles([
+      metricLevelPagePath(1, 0, 3),
+      metricSeriesPath(1),
+      metricLevelPagePath(1, 0, 1),
+      metricLevelPath(1, 1),
+      metricExemplarPagePath(1, 2),
+      metricExemplarPagePath(1, 0),
+      metricLevelExemplarPath(1, 3),
+      metricSegmentPath(0, 2),
+      metricSegmentPath(0, 0),
+      'data/rollups/metrics.js',
+    ]);
+    expect([...grouped.keys()]).toEqual([1, 0]);
+    expect(grouped.get(1)).toEqual({
+      series: true,
+      segments: [],
+      levels: new Map([
+        [0, [1, 3]],
+        [1, null],
+      ]),
+      exemplars: new Map([
+        [EXEMPLAR_BASE_LEVEL, [0, 2]],
+        [3, null],
+      ]),
+    });
+    expect(grouped.get(0)).toEqual({
+      series: false,
+      segments: [0, 2],
+      levels: new Map(),
+      exemplars: new Map(),
+    });
   });
 
   test('reject ids, segment numbers and levels outside the layout', () => {
@@ -240,6 +338,96 @@ describe('payloads', () => {
       const bad = { ...encodeSeriesFile({ metric: 0, series }), quantiles };
       expect(failure(() => parseSeriesFile(bad, 'series.js')).message).toContain('series.js.quantiles');
     }
+  });
+});
+
+describe('pages', () => {
+  const exemplar: StoredExemplar = {
+    series: 0,
+    time: 1,
+    value: 2.5,
+    traceId: null,
+    spanId: null,
+    attributes: new Map(),
+  };
+  test('a level in one page is one file; more pages split each series by bucket index, leaving empty pages out', () => {
+    expect(PAGE_BUCKETS).toBe(2048);
+    expect(pageOf(0)).toBe(0);
+    expect(pageOf(2047)).toBe(0);
+    expect(pageOf(2048)).toBe(1);
+    // Buckets before the epoch (negative indexes) belong to page 0.
+    expect(pageOf(-1)).toBe(0);
+    expect(pageOf(-5000)).toBe(0);
+    expect(
+      levelPages([{ id: 0, t: [-3000, -1, 0, 2048], a: [counter(1), counter(2), counter(3), counter(4)] }]),
+    ).toEqual(
+      new Map([
+        [0, [{ id: 0, t: [-3000, -1, 0], a: [counter(1), counter(2), counter(3)] }]],
+        [1, [{ id: 0, t: [2048], a: [counter(4)] }]],
+      ]),
+    );
+    const one = [{ id: 0, t: [5, 2047], a: [counter(1), counter(2)] }];
+    expect(levelPages(one)).toEqual(new Map([[0, one]]));
+    const many = [
+      { id: 0, t: [5, 2048, 6144], a: [counter(1), counter(2), counter(3)] },
+      { id: 1, t: [2049], a: [counter(4)] },
+      { id: 2, t: [], a: [] },
+    ];
+    expect(levelPages(many)).toEqual(
+      new Map([
+        [0, [{ id: 0, t: [5], a: [counter(1)] }]],
+        [
+          1,
+          [
+            { id: 0, t: [2048], a: [counter(2)] },
+            { id: 1, t: [2049], a: [counter(4)] },
+          ],
+        ],
+        [3, [{ id: 0, t: [6144], a: [counter(3)] }]],
+      ]),
+    );
+    expect(levelPages([])).toEqual(new Map());
+  });
+
+  test('exemplars page on the grid of the level they serve', () => {
+    const w = levelWidthNs(2);
+    const at = (bucket: number): StoredExemplar => ({ ...exemplar, time: bucket * w + 1 });
+    const list = [at(0), at(2048 * 3), at(2047), at(2048)];
+    expect(exemplarPages(list, w)).toEqual(
+      new Map([
+        [0, [at(0), at(2047)]],
+        [1, [at(2048)]],
+        [3, [at(2048 * 3)]],
+      ]),
+    );
+    expect(exemplarPages([at(1)], w)).toEqual(new Map([[0, [at(1)]]]));
+  });
+
+  test('pagesIn picks the listed pages a window touches, all of them without a window', () => {
+    const w = LEVEL0_WIDTH_NS;
+    const listed = [0, 1, 3, 7];
+    expect(pagesIn(listed, undefined, w)).toEqual(listed);
+    expect(pagesIn(listed, { start: 0, end: w }, w)).toEqual([0]);
+    expect(pagesIn(listed, { start: 2047 * w, end: 2048 * w }, w)).toEqual([0, 1]);
+    expect(pagesIn(listed, { start: 2048 * 2 * w, end: 2048 * 8 * w }, w)).toEqual([3, 7]);
+    expect(pagesIn(listed, { start: 2048 * 9 * w, end: 2048 * 10 * w }, w)).toEqual([]);
+    expect(pagesIn(listed, { start: -5 * w, end: 0 }, w)).toEqual([0]);
+    expect(pagesIn(null, { start: 0, end: w }, w)).toBeNull();
+  });
+
+  test('a page file keeps its page and rejects buckets outside it', () => {
+    const page = {
+      metric: 3,
+      level: 1,
+      widthNs: levelWidthNs(1),
+      page: 2,
+      series: [{ id: 0, t: [4096, 6143], a: [counter(1), counter(2)] }],
+    };
+    expect(parseLevelFile(roundTrip('k', page), 'l1-000002')).toEqual(page);
+    const outside = { ...page, series: [{ id: 0, t: [4095], a: [counter(1)] }] };
+    expect(failure(() => parseLevelFile(outside, 'l1-000002')).message).toContain('l1-000002.series[0].t[0]');
+    const exPage = { metric: 3, page: 1, exemplars: [exemplar] };
+    expect(parseExemplarFile(roundTrip('k', encodeExemplarFile(exPage)), 'ex-000001')).toEqual(exPage);
   });
 });
 

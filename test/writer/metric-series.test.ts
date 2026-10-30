@@ -3,15 +3,21 @@ import { runInNewContext } from 'node:vm';
 import { describe, expect, test } from 'vitest';
 import { reviveDataJson, unwrapDataFile, wrapDataFile } from '../../src/format/data-file.js';
 import {
+  dataFileKey,
+  EXEMPLAR_BASE_LEVEL,
   GAP_SAMPLE,
+  groupMetricFiles,
   LEVEL0_WIDTH_NS,
   type LevelFile,
   levelWidthNs,
   metricExemplarKey,
+  metricExemplarPagePath,
   metricLevelExemplarKey,
   metricLevelKey,
+  metricLevelPagePath,
   metricSegmentKey,
   metricSeriesKey,
+  pageOf,
   parseExemplarFile,
   parseLevelFile,
   parseSegmentFile,
@@ -165,14 +171,18 @@ describe('MetricSeriesWriter', () => {
     writer.add(a.def, a.series, rel(2100 * S), counter(3), [ex(0, 2100 * S, 3)]);
     await writer.flush(catalog);
     const listed = await writer.compact(catalog);
+    // Level 0 spans two pages (bucket 2050 is past PAGE_BUCKETS), so it is written per page; level 1 fits one file.
     expect(listed).toEqual([
       'data/metrics/000000/ex.js',
-      'data/metrics/000000/l0.js',
+      'data/metrics/000000/l0-000000.js',
+      'data/metrics/000000/l0-000001.js',
       'data/metrics/000000/l1.js',
       'data/metrics/000000/series.js',
     ]);
-    const l0 = read<LevelFile>(fs, metricLevelKey(0, 0), parseLevelFile);
-    expect(l0.series).toEqual([{ id: 0, t: [0, 2050], a: [counter(3), counter(3)] }]);
+    const p0 = read<LevelFile>(fs, dataFileKey(metricLevelPagePath(0, 0, 0)), parseLevelFile);
+    expect(p0).toMatchObject({ level: 0, page: 0, series: [{ id: 0, t: [0], a: [counter(3)] }] });
+    const p1 = read<LevelFile>(fs, dataFileKey(metricLevelPagePath(0, 0, 1)), parseLevelFile);
+    expect(p1).toMatchObject({ level: 0, page: 1, series: [{ id: 0, t: [2050], a: [counter(3)] }] });
     const l1 = read<LevelFile>(fs, metricLevelKey(0, 1), parseLevelFile);
     expect(l1).toMatchObject({ level: 1, widthNs: LEVEL0_WIDTH_NS * 8 });
     expect(l1.series).toEqual([{ id: 0, t: [0, 256], a: [counter(3), counter(3)] }]);
@@ -233,16 +243,29 @@ describe('MetricSeriesWriter', () => {
       writer.add(a.def, a.series, rel(i * 60 * S), counter(1), [ex(0, i * 60 * S, i)]);
     await writer.flush(catalog);
     const listed = await writer.compact(catalog);
-    expect(listed).toEqual([
-      'data/metrics/000000/ex.js',
-      'data/metrics/000000/ex3.js',
-      'data/metrics/000000/l0.js',
-      'data/metrics/000000/l1.js',
-      'data/metrics/000000/l2.js',
-      'data/metrics/000000/l3.js',
-      'data/metrics/000000/series.js',
-    ]);
-    const base = read(fs, metricExemplarKey(0), parseExemplarFile).exemplars;
+    // Levels 0-2 span several pages each (level 2: 4,119 buckets); level 3 and its ex3.js fit one file. ex.js pages
+    // on level 2's grid, so it has level 2's three pages.
+    const files = groupMetricFiles(listed).get(0);
+    expect(files?.levels).toEqual(
+      new Map([
+        [0, Array.from({ length: 129 }, (_, i) => i)],
+        [1, Array.from({ length: 17 }, (_, i) => i)],
+        [2, [0, 1, 2]],
+        [3, null],
+      ]),
+    );
+    expect(files?.exemplars).toEqual(
+      new Map([
+        [EXEMPLAR_BASE_LEVEL, [0, 1, 2]],
+        [3, null],
+      ]),
+    );
+    const base = [0, 1, 2].flatMap((p) => {
+      const f = read(fs, dataFileKey(metricExemplarPagePath(0, p)), parseExemplarFile);
+      expect(f.page).toBe(p);
+      for (const e of f.exemplars) expect(pageOf(Math.floor(e.time / levelWidthNs(2)))).toBe(p);
+      return f.exemplars;
+    });
     const l3 = read(fs, metricLevelExemplarKey(0, 3), parseExemplarFile).exemplars;
     expect(base).toHaveLength(points);
     const perBucket = new Map<number, number>();
@@ -253,10 +276,17 @@ describe('MetricSeriesWriter', () => {
     expect(Math.max(...perBucket.values())).toBe(2);
     expect(l3.length).toBeLessThanOrEqual(2 * perBucket.size);
     expect(l3.length).toBeLessThan(base.length / 4);
-    // Reopened, the writer demotes ex3.js with the levels: the manifest never names a file being rewritten.
+    // Reopened, the writer demotes every level and exemplar file, pages included, into one segment: the manifest
+    // never names a file being rewritten, and the segment holds every level-0 bucket and base exemplar.
     const reopened = new MetricSeriesWriter(fs, OUT, { exemplars: 2 }, new Map([[0, 1]]), listed);
     await reopened.flush(catalog);
     expect(reopened.listed()).toEqual(['data/metrics/000000/seg-000001.js', 'data/metrics/000000/series.js']);
+    const demoted = read<SegmentFile>(fs, metricSegmentKey(0, 1), parseSegmentFile);
+    expect(demoted.series.map((x) => x.t.length)).toEqual([points]);
+    expect(demoted.series[0]?.t.slice(0, 3)).toEqual([0, 58, 117]);
+    expect(demoted.exemplars).toHaveLength(points);
+    // Compacted again, the same files come back.
+    expect(await reopened.compact(catalog)).toEqual(listed);
   });
 
   test('a writer reopened on compacted files demotes them to a segment at its first flush', async () => {

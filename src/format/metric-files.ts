@@ -13,9 +13,12 @@ import { parseWith } from './validate.js';
 
 /**
  * Per-metric series files under `data/metrics/<id6>/`, named by the metric's numeric id (never its name):
- * `series.js` (series definitions, plus each series' point gaps after compaction), `seg-<n6>.js` (level-0 buckets
- * and exemplars since the previous flush), `l<k>.js` (level k after compaction), `ex.js` (exemplars after
- * compaction, for levels 0…EXEMPLAR_BASE_LEVEL) and `ex<k>.js` (the exemplars of a coarser level k, format 2).
+ * `series.js` (series definitions, plus each series' point gaps and a summary's quantiles after compaction),
+ * `seg-<n6>.js` (level-0 buckets and exemplars since the previous flush), `l<k>.js` (level k after compaction),
+ * `ex.js` (exemplars after compaction, for levels 0…EXEMPLAR_BASE_LEVEL) and `ex<k>.js` (the exemplars of a coarser
+ * level k, format 2). A level or exemplar file whose buckets span more than one page of PAGE_BUCKETS is written as
+ * one file per page instead (format 3): `l<k>-<p6>.js`, `ex-<p6>.js`, `ex<k>-<p6>.js`, so a chart reads only the
+ * pages its window touches.
  */
 
 /** Level 0 is 1 ms × 2^10, aligned like `TimeBuckets`; level k is LEVEL_FACTOR^k times wider. */
@@ -34,11 +37,102 @@ export const EXEMPLAR_WIDTH_NS = 65_536_000_000;
 export const EXEMPLAR_BASE_LEVEL = 2;
 
 /**
- * A metric data file's path; the groups are the metric id, the file, the level, the segment number and the level
- * of an `ex<k>.js`.
+ * Buckets per page: page p of a level holds the bucket indexes in [p × PAGE_BUCKETS, (p + 1) × PAGE_BUCKETS), and
+ * page 0 any index below 0 as well (`pageOf`). A
+ * level in one page is one file; the coarsest level always is (LEVEL_MAX_BUCKETS < PAGE_BUCKETS), so a full-range
+ * chart reads one file and a zoomed chart the page or two under its window. Exemplar files page on the grid of the
+ * level they serve. A multiple of LEVEL_FACTOR³, so a page boundary of level k is a bucket boundary of levels up to
+ * k + 3 (the counter running total relies on this; see `runAtLevel`).
+ */
+export const PAGE_BUCKETS = 2048;
+
+/**
+ * The page holding bucket index `bucket`. Indexes are relative to the report epoch and can be negative (a point or
+ * exemplar from before the first record seen); page 0 holds those too, so page numbers are never negative.
+ */
+export const pageOf = (bucket: number): number => Math.max(0, Math.floor(bucket / PAGE_BUCKETS));
+
+/**
+ * A metric data file's path (`parseMetricFilePath` reads it): the groups are the metric id, the file name, a
+ * segment number, a level and its page, an exemplar level and its page.
  */
 export const METRIC_FILE_PATH: RegExp =
-  /^data\/metrics\/([0-9]{6})\/(series|ex|l([0-6])|seg-([0-9]{6})|ex([3-6]))\.js$/;
+  /^data\/metrics\/([0-9]{6})\/(series|seg-([0-9]{6})|l([0-6])(?:-([0-9]{6}))?|ex([3-6])?(?:-([0-9]{6}))?)\.js$/;
+
+/** What a metric file path names. `ex.js` and its pages are the exemplars of level EXEMPLAR_BASE_LEVEL. */
+export type MetricFileName =
+  | { id: number; kind: 'series' }
+  | { id: number; kind: 'segment'; n: number }
+  | { id: number; kind: 'level'; level: number; page: number | null }
+  | { id: number; kind: 'exemplars'; level: number; page: number | null };
+
+export function parseMetricFilePath(path: string): MetricFileName | null {
+  const m = METRIC_FILE_PATH.exec(path);
+  if (m === null) return null;
+  const id = Number(m[1]);
+  if (m[2] === 'series') return { id, kind: 'series' };
+  if (m[3] !== undefined) return { id, kind: 'segment', n: Number(m[3]) };
+  if (m[4] !== undefined)
+    return { id, kind: 'level', level: Number(m[4]), page: m[5] === undefined ? null : Number(m[5]) };
+  return {
+    id,
+    kind: 'exemplars',
+    level: m[6] === undefined ? EXEMPLAR_BASE_LEVEL : Number(m[6]),
+    page: m[7] === undefined ? null : Number(m[7]),
+  };
+}
+
+/** A metric's listed files: per level and per exemplar level, `null` for one whole file or its page numbers. */
+export interface MetricFiles {
+  series: boolean;
+  segments: number[];
+  levels: Map<number, number[] | null>;
+  exemplars: Map<number, number[] | null>;
+}
+
+/** Listed metric files grouped by metric id, segments and pages sorted; paths that are not metric files are skipped. */
+export function groupMetricFiles(listed: readonly string[]): Map<number, MetricFiles> {
+  const out = new Map<number, MetricFiles>();
+  const byNumber = (a: number, b: number): number => a - b;
+  const paged = (into: Map<number, number[] | null>, level: number, page: number | null): void => {
+    if (page === null) into.set(level, null);
+    else {
+      const pages = into.get(level);
+      if (pages === null) return; // a whole file wins over stray pages; `prune` removes those
+      if (pages === undefined) into.set(level, [page]);
+      else pages.push(page);
+    }
+  };
+  for (const p of listed) {
+    const name = parseMetricFilePath(p);
+    if (name === null) continue;
+    let e = out.get(name.id);
+    if (e === undefined) {
+      e = { series: false, segments: [], levels: new Map(), exemplars: new Map() };
+      out.set(name.id, e);
+    }
+    switch (name.kind) {
+      case 'series':
+        e.series = true;
+        break;
+      case 'segment':
+        e.segments.push(name.n);
+        break;
+      case 'level':
+        paged(e.levels, name.level, name.page);
+        break;
+      case 'exemplars':
+        paged(e.exemplars, name.level, name.page);
+        break;
+    }
+  }
+  for (const e of out.values()) {
+    e.segments.sort(byNumber);
+    for (const pages of e.levels.values()) pages?.sort(byNumber);
+    for (const pages of e.exemplars.values()) pages?.sort(byNumber);
+  }
+  return out;
+}
 
 const MAX_NUMBER = 999_999;
 
@@ -77,6 +171,31 @@ export function metricExemplarPath(id: number): string {
 }
 /** `ex<k>.js`, the exemplars of level k > EXEMPLAR_BASE_LEVEL. */
 export function metricLevelExemplarPath(id: number, k: number): string {
+  return `${metricDir(id)}/ex${exemplarLevel(k)}.js`;
+}
+/** Page `p` of level `k`: `l<k>-<p6>.js`. */
+export function metricLevelPagePath(id: number, k: number, p: number): string {
+  return `${metricLevelPath(id, k).slice(0, -'.js'.length)}-${sixDigits(p, 'page')}.js`;
+}
+/** Page `p` of `ex.js`: `ex-<p6>.js`. */
+export function metricExemplarPagePath(id: number, p: number): string {
+  return `${metricDir(id)}/ex-${sixDigits(p, 'page')}.js`;
+}
+/** Page `p` of `ex<k>.js`: `ex<k>-<p6>.js`. */
+export function metricLevelExemplarPagePath(id: number, k: number, p: number): string {
+  return `${metricDir(id)}/ex${exemplarLevel(k)}-${sixDigits(p, 'page')}.js`;
+}
+/** The exemplar file (whole or page `p`) of level `k`: `ex.js` up to EXEMPLAR_BASE_LEVEL, else `ex<k>.js`. */
+export function metricExemplarFilePath(id: number, k: number, p: number | null): string {
+  if (k <= EXEMPLAR_BASE_LEVEL) return p === null ? metricExemplarPath(id) : metricExemplarPagePath(id, p);
+  return p === null ? metricLevelExemplarPath(id, k) : metricLevelExemplarPagePath(id, k, p);
+}
+/** The level file (whole or page `p`) of level `k`. */
+export function metricLevelFilePath(id: number, k: number, p: number | null): string {
+  return p === null ? metricLevelPath(id, k) : metricLevelPagePath(id, k, p);
+}
+
+function exemplarLevel(k: number): number {
   if (!Number.isInteger(k) || k <= EXEMPLAR_BASE_LEVEL || k > MAX_LEVEL) {
     throw new OtelHtmlError('invalid-report', {
       path: 'exemplar level',
@@ -84,7 +203,7 @@ export function metricLevelExemplarPath(id: number, k: number): string {
       actual: String(k),
     });
   }
-  return `${metricDir(id)}/ex${k}.js`;
+  return k;
 }
 
 /** Registration key of a data file: its path without `data/` and `.js`. */
@@ -219,6 +338,63 @@ function mergePieces(id: number, pieces: readonly BucketSeries[], path: string):
 }
 
 // ---------------------------------------------------------------------------------------------
+// Pages
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * `series` split by page of their bucket indexes: page → each series' buckets in it (a series with none is left
+ * out, so is a page with none). One entry means the level fits one file.
+ */
+export function levelPages(series: readonly BucketSeries[]): Map<number, BucketSeries[]> {
+  const pages = new Map<number, BucketSeries[]>();
+  for (const s of series) {
+    let from = 0;
+    while (from < s.t.length) {
+      const page = pageOf(s.t[from] ?? 0);
+      let to = from + 1;
+      while (to < s.t.length && pageOf(s.t[to] ?? 0) === page) to++;
+      const part = { id: s.id, t: s.t.slice(from, to), a: s.a.slice(from, to) };
+      const list = pages.get(page);
+      if (list === undefined) pages.set(page, [part]);
+      else list.push(part);
+      from = to;
+    }
+  }
+  return new Map([...pages].sort(([a], [b]) => a - b));
+}
+
+/** `list` split by page of the bucket of width `widthNs` holding each exemplar's time, in the list's order. */
+export function exemplarPages(
+  list: readonly StoredExemplar[],
+  widthNs: number,
+): Map<number, StoredExemplar[]> {
+  const pages = new Map<number, StoredExemplar[]>();
+  for (const e of list) {
+    const page = pageOf(bucketIndex(e.time, widthNs));
+    const part = pages.get(page);
+    if (part === undefined) pages.set(page, [e]);
+    else part.push(e);
+  }
+  return new Map([...pages].sort(([a], [b]) => a - b));
+}
+
+/**
+ * Of a file's listed pages (`null` for one whole file, returned as is), those a window over buckets of `widthNs`
+ * touches; all of them without a window.
+ */
+export function pagesIn(
+  pages: readonly number[] | null,
+  window: { start: number; end: number } | undefined,
+  widthNs: number,
+): number[] | null {
+  if (pages === null) return null;
+  if (window === undefined) return [...pages];
+  const first = pageOf(bucketIndex(window.start, widthNs));
+  const last = pageOf(bucketIndex(window.end, widthNs));
+  return pages.filter((p) => p >= first && p <= last);
+}
+
+// ---------------------------------------------------------------------------------------------
 // Exemplars
 // ---------------------------------------------------------------------------------------------
 
@@ -338,10 +514,14 @@ export interface LevelFile {
   metric: number;
   level: number;
   widthNs: number;
+  /** The page this file is (format 3); absent in a whole level file. */
+  page?: number | undefined;
   series: BucketSeries[];
 }
 export interface ExemplarFile {
   metric: number;
+  /** The page this file is (format 3); absent in a whole exemplar file. */
+  page?: number | undefined;
   exemplars: StoredExemplar[];
 }
 
@@ -355,7 +535,11 @@ export type SerializedSeriesFile = {
   quantiles?: number[] | undefined;
 };
 export type SerializedSegmentFile = Omit<SegmentFile, 'exemplars'> & { exemplars: SerializedExemplar[] };
-export type SerializedExemplarFile = { metric: number; exemplars: SerializedExemplar[] };
+export type SerializedExemplarFile = {
+  metric: number;
+  page?: number | undefined;
+  exemplars: SerializedExemplar[];
+};
 
 const nonNegInt = z.number().int().nonnegative();
 const finite = z.number().finite();
@@ -454,6 +638,7 @@ export const LevelFileSchema: z.ZodType<LevelFile> = z
     metric: nonNegInt,
     level: z.number().int().min(0).max(MAX_LEVEL),
     widthNs: z.number().int().positive(),
+    page: nonNegInt.max(MAX_NUMBER).optional(),
     series: SeriesListSchema,
   })
   .superRefine((f, ctx) => {
@@ -464,10 +649,26 @@ export const LevelFileSchema: z.ZodType<LevelFile> = z
         message: `${levelWidthNs(f.level)} for level ${f.level}`,
       });
     }
+    if (f.page === undefined) return;
+    // A page holds only its own buckets (the first and last, as they ascend).
+    for (const [i, s] of f.series.entries()) {
+      for (const j of [0, s.t.length - 1]) {
+        const t = s.t[j];
+        if (t !== undefined && pageOf(t) !== f.page) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['series', i, 't', j],
+            message: `a bucket of page ${f.page}`,
+          });
+          return;
+        }
+      }
+    }
   });
 
 export const ExemplarFileSchema: z.ZodType<SerializedExemplarFile> = z.strictObject({
   metric: nonNegInt,
+  page: nonNegInt.max(MAX_NUMBER).optional(),
   exemplars: z.array(ExemplarSchema),
 });
 
@@ -545,10 +746,18 @@ export function parseLevelFile(input: unknown, root: string): LevelFile {
 }
 
 export function encodeExemplarFile(f: ExemplarFile): SerializedExemplarFile {
-  return { metric: f.metric, exemplars: f.exemplars.map(encodeExemplar) };
+  return {
+    metric: f.metric,
+    ...(f.page === undefined ? {} : { page: f.page }),
+    exemplars: f.exemplars.map(encodeExemplar),
+  };
 }
 
 export function parseExemplarFile(input: unknown, root: string): ExemplarFile {
   const f = parseWith(ExemplarFileSchema, input, root);
-  return { metric: f.metric, exemplars: decodeExemplars(f.exemplars, `${root}.exemplars`) };
+  return {
+    metric: f.metric,
+    ...(f.page === undefined ? {} : { page: f.page }),
+    exemplars: decodeExemplars(f.exemplars, `${root}.exemplars`),
+  };
 }

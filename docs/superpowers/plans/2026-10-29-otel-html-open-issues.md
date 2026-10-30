@@ -21,3 +21,19 @@ Everything in the M1–M4 plans' Global Constraints still applies (no `any`, exh
 **Tests.** Format: page split and parse, out-of-page bucket rejected, paths. Writer: a long run compacts into pages, a reopened paged report demotes and recompacts to the same bytes, the crash/retry test still holds. Viewer: `test/viewer/metric-scaling.test.ts` gets a fixed-width zoom at 1×/2×/4× (buckets and exemplars loaded do not grow with the run), the counter `sum` over a zoomed window equals the unpaged result, format-2 fixtures still load. e2e: the scale guard still expects exactly `l1.js` for the first chart.
 
 **Docs.** M3 spec Targets paragraph (the sentence "A zoomed chart reads whole finer-level files…" is replaced), README format tree and Limits, `version.ts` comment.
+
+## PR 3: the rest of #18, and #14
+
+Decisions per remaining #18 item (the issue's task ids). "Note" means the PR explains why nothing changes.
+
+**Correctness.** T6: `toLevelData` drops series ids at or past the catalog's count. T7 narrow width: `runMetricQueryAtWidth` throws a `usage` error naming the metric when no level is as fine as the width (only a malformed report reaches it). T7 recursion: the parser's `MAX_DEPTH` (64) already bounds `evalAt`/`unitOf`; note. T7 ordering: heat and distribution are built from the series `top`/`bottom` kept. T12 `where: null`: an origin with no scalar attribute counts every other resource as unexcluded, so the grid's note says the filter matches everything. T12 `unexcluded`: distinct other resources, not per clause. T12 null range: clamp to the run's range. T13: window ends are inclusive, so a window ending on a bucket boundary holds one bucket more than its length over the width; documented at `bucketsOver`, by design.
+
+**Viewer.** T9: the card's unit is the one every series shares, else none; the window marker and band live on their own silent series; duplicate legend labels get ` (2)`, ` (3)`; area exemplars sit on their series' stacked value; a drag released outside the plot zooms to the plot's edge, and a click outside bumps `seq` so an older lookup cannot open the menu. T10: the chip takes its colour from the plot's first series; plots label results with the state they ran under (`MetricQueries.ran`), relabelled only by alias; the exports carry `heat` and `distribution`; the click menu's window uses the picked query's width; legend labels truncate at 48 characters with the full label in the tooltip. T11: `entries()` memoised; a "No metrics match" line; the Explore cell is a real link. T12: a `ltab`/`tab`/`stab` the record has no tab for shows a notice instead of a silent fallback.
+
+**Writer and format.** Pre-release checkpoint keys: note. T3: `restoreSeries` already rejects a duplicate key (note); `ValueBuckets#fit` grows geometrically; folded points intern through the identity cache, which is one `Map` lookup (note). T4: `close` releases the lock in `finally` around `prune`; `ChunkBuffer.push` is a broken-invariant throw (note); `encodeAttrs` carries the key for every kind; `series.js` attribute order is the canonical key's, documented; the README says `addMetrics` reads OTLP JSON in place; segment exemplars are appended, not concatenated. T5: the fixture generator no longer stamps gauges with a start time (fixtures regenerated).
+
+**Tests.** Each listed gap gets a test unless an existing one already covers it (the PR names which).
+
+**Tidiness.** T3: the attribute codec moves to `src/rollups/attribute-codec.ts`. T4: `wrapDataFilePieces` reports an undefined item at `items[i]` like `wrapDataFile`'s root. T12: the `f.start as RelNanos` cast goes. T8: the dashboards carry-over keeps `m` (M4 shipped with it; the Fusion grid reads it).
+
+**#14.** The library figure is measured through the API in the gated memory test (reported, with the CLI's figure the asserted one), `mise run test:load` runs on ubuntu in a `workflow_dispatch` + weekly job, and the README numbers are refreshed from that run.
