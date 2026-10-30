@@ -20,11 +20,17 @@ The repository squash-merges. So **the PR title is the conventional commit** tha
 | 2 | `fix/receiver-backpressure` | `fix(receiver): count oversized gRPC exports, reserve the in-flight budget before buffering, drain before the gRPC force-shutdown` | #52, #57, #59 | 6–8 |
 | 3 | `feat/append-by-default` | `feat!: append to an existing report by default; --replace starts it over` | #55 | 9–13 |
 | 4 | `chore/m5-deferred-findings` | `fix: the rest of the M5 deferred review findings (#61)` | #61 | 14–16 |
-| 5 | `ci/binary-smoke` | `ci: build and smoke-test the Linux binaries on every PR; receiver load numbers` | #54, #53 | 17–18 |
+| 5 | `ci/binary-smoke` | `ci: build and smoke-test the Linux binaries on every PR; the receiver load job sends 1M logs with a 30-minute ceiling` | #54, #53 (Task 18 steps 1–2; its measurement and docs PR follow) | 17–18 |
 
-**Order:** 1 → 2 → 3 → 4, each branched from `main` after the previous one merged (they touch the same files: `receiver.ts`, `grpc.ts`, `http.ts`, `api/receiver.ts`, `receive.ts`). PR 5's Task 17 is independent and can be opened at any time; Task 18 (#53) runs last, against `main` with PR 2 merged, because the measured numbers must describe the shipped receiver.
+**Order:** 1 → 2 → 3 → 4, each branched from `main` after the previous one merged (they touch the same files: `receiver.ts`, `grpc.ts`, `http.ts`, `api/receiver.ts`, `receive.ts`). PR 5's Task 17 is independent and can be opened at any time; Task 18's workload change ships in PR 5; its measurement (steps 3–5) runs last, against `main` with PRs 1–4 merged, because the numbers must describe the shipped receiver.
 
 **PR 3 is a breaking change** (the CLI default and `Report.create`'s default change). `release-please-config.json` has no `bump-minor-pre-major`, so a `feat!:` on `main` would make the next release 1.0.0. Task 13 adds `"bump-minor-pre-major": true` so it lands as 0.2.0 (ordinary `feat:` commits keep bumping the minor, as they do today). If the maintainer wants 1.0.0 instead, drop that step.
+
+## PR process (unattended)
+
+- **Reviews:** per-task reviews and the whole-branch review run on **Fable** (the session model), not Opus, for this plan.
+- **Merging:** once a PR's CI is green and the branch review found nothing blocking, **squash-merge it without waiting for the maintainer** (`gh pr merge <n> --squash --delete-branch`, with the PR title as the commit subject and the body as its message), then branch the next PR from the updated `main`. The maintainer reads the merged PRs afterwards. A red CI is fixed on the branch, never merged around. The one exception is anything that needs a human decision the plan has left open; stop and ask then.
+- Each PR's body carries `Fixes #N` for every issue it closes and, for PR 3, a `BREAKING CHANGE:` paragraph.
 
 ## Global Constraints
 
@@ -431,14 +437,21 @@ Decision: the cheapest permanent answer to "unverified before the first release"
 - [ ] **Step 3b (gRPC fails under Bun on Linux):** apply the M5 plan Task 12 step 3 fallback in this PR: `main.ts` passes `grpcAvailable: false` with the Bun deps; `WriterDeps` gains `grpcAvailable?: boolean`; `openReceiver` defaults `receiver.grpc.enabled` to false when it is false and makes an explicit `--grpc <port>` a `usage` error "OTLP/gRPC is not available in the standalone binary; use OTLP/HTTP or run otel-html under Node"; `binary.test.ts` asserts that message instead of the gRPC export; README Install says so. Paste the failing error in the PR body.
 - [ ] Commit — `ci: build and smoke-test the Linux binaries on every PR (#54)`
 
-### Task 18: The receiver load job runs end to end; numbers in the README (#53)
+### Task 18: The receiver load job runs end to end on a right-sized workload; numbers in the README (#53)
 
-Operational; runs after PRs 1–4 are on `main`.
+Runs after PRs 1–4 are on `main` (the numbers must describe the shipped receiver).
 
-- [ ] **Step 1:** `gh workflow run load.yml --ref main`, then `gh run watch` the run; read the `receiver` job's log: wall time for spans and logs, peak RSS as printed by `scripts/load-receiver.ts`, the Playwright landing timings.
-- [ ] **Step 2 (if it times out or exceeds 60 min):** in order — raise `--workers` in `mise.toml` `test:load:receiver` to the runner's core count (`nproc`, 4 on ubuntu-latest); if still over, lower `--logs` to `2000000` and change spec §7, README Limits and the `load.yml` comment to "1M spans + 2M logs (10M logs ≈ 10M requests at telemetrygen's one record per request; the 2M figure is the hour-long run)". Re-dispatch.
-- [ ] **Step 3:** README Limits: replace "peak RSS not measured yet on 1M spans + 10M logs" with the measured RSS and time (and the landing timings if under the budget), with the run date and runner. Open the PR (this is the one code change of the task), body `Fixes #53` with the run link.
-- [ ] Commit — `docs: receiver load numbers from the first end-to-end load run (#53)`
+**Decision: the workload shrinks to 1M spans + 1M logs, and the job's ceiling to 30 minutes.** telemetrygen sends one log record per HTTP request with no batching flag, so 10M logs is 10M requests, roughly 1,850 req/s for an hour on a 4-core runner: that measures telemetrygen and the runner's HTTP stack, not otel-html. What the job exists to assert (peak RSS under 512 MB, every record written, nothing rejected, landings interactive) plateaus long before 10M records, because the writer checkpoints and the in-flight budget bounds the receiver. 1M single-record requests is still a harsher per-request test than the 1M batched spans.
+
+**Files:**
+- Modify: `scripts/load-receiver.ts` (default `--logs` 1000000, usage comment), `mise.toml` (`test:load:receiver` comment), `.github/workflows/load.yml` (`receiver` job `timeout-minutes: 30`; both comments), `docs/superpowers/specs/2026-10-29-otel-html-m5-design.md` lines 15 and 126 ("10M logs" → "1M logs", with the one-record-per-request reason), `README.md` Limits (line 351) and Development table (line 365)
+- Test: `test/scripts/load-receiver-plan.test.ts` (the default plan's totals)
+
+- [ ] **Step 1:** change the test's expectation of the default log total to 1,000,000; run it; fails.
+- [ ] **Step 2:** apply the file changes above; the test passes; `mise run lint` (actionlint) passes. Commit on the PR 5 branch — `ci(load): the receiver job sends 1M logs (one request each) and has a 30-minute ceiling (#53)`.
+- [ ] **Step 3:** once PR 5 is merged: `gh workflow run load.yml --ref main`, then `gh run watch` the run; read the `receiver` job's log: wall time for spans and logs, the peak RSS `scripts/load-receiver.ts` prints, the Playwright landing timings.
+- [ ] **Step 4 (if it still exceeds 30 minutes):** raise `--workers` to the runner's core count (`nproc`, 4 on ubuntu-latest) first; only then lower `--logs` further, and say so in the README. Re-dispatch.
+- [ ] **Step 5:** README Limits: replace "peak RSS not measured yet on 1M spans + 10M logs" with the measured RSS and wall time (and the landing timings), the run date and the runner. Open a small docs PR, body `Fixes #53` with the run link — `docs: receiver load numbers from the first end-to-end load run (#53)`.
 
 ---
 
