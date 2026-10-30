@@ -73,7 +73,17 @@ function fake(receive: Receiver['receive']): Receiver {
       bytes: 0,
       accepted: { traces: 0, logs: 0, metrics: 0 },
       rejected: { traces: 0, logs: 0, metrics: 0 },
+      refused: {
+        invalid: 0,
+        'too-large': 0,
+        unsupported: 0,
+        'not-found': 0,
+        method: 0,
+        busy: 0,
+        internal: 0,
+      },
     }),
+    refused: () => undefined,
     close: async () => undefined,
   };
 }
@@ -105,6 +115,28 @@ const requestOf = (resourceSpans: ReturnType<typeof protoSpan>[]): Uint8Array =>
   toBinary(ExportTraceServiceRequestSchema, create(ExportTraceServiceRequestSchema, { resourceSpans }));
 
 describe('OTLP/gRPC transport', () => {
+  test('a port already in use is an OtelHtmlError that keeps EADDRINUSE and hints at the flag', async () => {
+    const first = await listenGrpc(
+      fake(async () => undefined as never),
+      { maxBodyBytes: 1 },
+      silent,
+      '127.0.0.1',
+      0,
+    );
+    open.push(first);
+    const port = Number(first.address.split(':').pop());
+    const error = await listenGrpc(
+      fake(async () => undefined as never),
+      { maxBodyBytes: 1 },
+      silent,
+      '127.0.0.1',
+      port,
+    ).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(OtelHtmlError);
+    expect(String((error as Error).message)).toContain('EADDRINUSE');
+    expect((error as OtelHtmlError).hint).toContain('--grpc <port>');
+  });
+
   test('export of 2 spans is OK with an empty response; the report holds them', async () => {
     const { w, session, address } = await realServer();
     const body = toBinary(

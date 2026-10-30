@@ -13,6 +13,7 @@ import {
 import { RetryInfoSchema } from '../model/gen/google/rpc/error_details_pb.js';
 import { StatusSchema } from '../model/gen/google/rpc/status_pb.js';
 import type { Logger } from '../writer/ports.js';
+import { bindError, bracketed } from './host.js';
 import type { Listener } from './http.js';
 import type { Receiver } from './receiver.js';
 import { SIGNAL_SERVICES, type SignalService } from './signals.js';
@@ -77,10 +78,6 @@ function handlerFor(s: SignalService, receiver: Receiver, logger: Logger) {
   };
 }
 
-function bracketed(host: string): string {
-  return host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
-}
-
 /** Binds the three services; `address` is `host:port` as bound. */
 export function listenGrpc(
   receiver: Receiver,
@@ -97,7 +94,7 @@ export function listenGrpc(
     server.bindAsync(`${bracketed(host)}:${port}`, ServerCredentials.createInsecure(), (err, actual) => {
       if (err !== null) {
         server.forceShutdown();
-        reject(err);
+        reject(bindError(err, '--grpc'));
         return;
       }
       resolve({

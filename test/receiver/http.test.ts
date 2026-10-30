@@ -42,7 +42,7 @@ async function realServer(options?: HttpTransportOptions) {
   const w: TestWriter = createTestWriter();
   const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'create' });
   const receiver = createReceiver(session, { inflightBudgetBytes: 1 << 20 }, { logger: silent });
-  return { w, session, base: await serve(receiver, options) };
+  return { w, session, receiver, base: await serve(receiver, options) };
 }
 
 function fake(receive: Receiver['receive']): Receiver {
@@ -53,7 +53,17 @@ function fake(receive: Receiver['receive']): Receiver {
       bytes: 0,
       accepted: { traces: 0, logs: 0, metrics: 0 },
       rejected: { traces: 0, logs: 0, metrics: 0 },
+      refused: {
+        invalid: 0,
+        'too-large': 0,
+        unsupported: 0,
+        'not-found': 0,
+        method: 0,
+        busy: 0,
+        internal: 0,
+      },
     }),
+    refused: () => undefined,
     close: async () => undefined,
   };
 }
@@ -81,6 +91,32 @@ const protoSpan = (n: number, traceLen = 16) => ({
 });
 
 describe('OTLP/HTTP transport', () => {
+  test('a port already in use is an OtelHtmlError that keeps EADDRINUSE and hints at the flag', async () => {
+    const first = await listenHttp(
+      createHttpHandler(
+        fake(async () => undefined as never),
+        { maxBodyBytes: 1 },
+        silent,
+      ),
+      '127.0.0.1',
+      0,
+    );
+    open.push(first);
+    const port = Number(first.address.split(':').pop());
+    const error = await listenHttp(
+      createHttpHandler(
+        fake(async () => undefined as never),
+        { maxBodyBytes: 1 },
+        silent,
+      ),
+      '127.0.0.1',
+      port,
+    ).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(OtelHtmlError);
+    expect(String((error as Error).message)).toContain('EADDRINUSE');
+    expect((error as OtelHtmlError).hint).toContain('--http <port>');
+  });
+
   test('JSON traces: 200 with an empty JSON response; the spans are in the report', async () => {
     const { w, session, base } = await realServer();
     const res = await post(base, '/v1/traces', JSON.stringify(spansRequest(2)), JSON_HEADERS);
@@ -207,6 +243,29 @@ describe('OTLP/HTTP transport', () => {
     expect(res.status).toBe(413);
   });
 
+  test('a streamed gzip body without Content-Length that inflates past the limit is 413, not a reset', async () => {
+    const { receiver, base } = await realServer({ maxBodyBytes: 100_000 });
+    const body = gzipSync(Buffer.alloc(80_000_000));
+    const url = new URL(`${base}/v1/traces`);
+    const status = await new Promise<number>((resolve, reject) => {
+      const req = request(
+        url,
+        { method: 'POST', headers: { ...JSON_HEADERS, 'content-encoding': 'gzip' } },
+        (res) => {
+          res.resume();
+          resolve(res.statusCode ?? 0);
+        },
+      );
+      req.on('error', reject);
+      const head = Math.floor(body.length / 2);
+      req.write(body.subarray(0, head)); // chunked: no Content-Length
+      // The rest arrives after the server has seen the limit exceeded.
+      setTimeout(() => req.end(body.subarray(head)), 100);
+    });
+    expect(status).toBe(413);
+    expect(receiver.stats().refused['too-large']).toBe(1);
+  });
+
   test('undecodable bodies are 400 with a status', async () => {
     const { base } = await realServer();
     const json = await post(base, '/v1/traces', '{nope', JSON_HEADERS);
@@ -217,6 +276,28 @@ describe('OTLP/HTTP transport', () => {
     const status = fromBinary(StatusSchema, new Uint8Array(await proto.arrayBuffer()));
     expect(status.code).toBe(3);
     expect(status.message).not.toBe('');
+  });
+
+  test('refused requests show up in stats by outcome: undecodable, unsupported, not found, method and busy', async () => {
+    const { receiver, base } = await realServer();
+    expect((await post(base, '/v1/traces', '{nope', JSON_HEADERS)).status).toBe(400);
+    expect((await post(base, '/v1/traces', '{nope', JSON_HEADERS)).status).toBe(400);
+    expect((await post(base, '/v1/traces', 'hi', { 'content-type': 'text/plain' })).status).toBe(415);
+    expect((await post(base, '/v1/other', '{}', JSON_HEADERS)).status).toBe(404);
+    expect((await fetch(`${base}/v1/traces`)).status).toBe(405);
+    await receiver.close();
+    expect((await post(base, '/v1/traces', '{}', JSON_HEADERS)).status).toBe(503);
+    const s = receiver.stats();
+    expect(s.requests).toBe(6);
+    expect(s.refused).toEqual({
+      invalid: 2,
+      unsupported: 1,
+      'not-found': 1,
+      method: 1,
+      busy: 1,
+      'too-large': 0,
+      internal: 0,
+    });
   });
 
   test('busy is 503 with Retry-After', async () => {

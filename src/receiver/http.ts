@@ -1,10 +1,10 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { pipeline } from 'node:stream';
 import { createGunzip } from 'node:zlib';
 import { create, type DescMessage, type Message, toBinary, toJsonString } from '@bufbuild/protobuf';
 import { StatusSchema } from '../model/gen/google/rpc/status_pb.js';
 import type { Logger } from '../writer/ports.js';
+import { bindError, bracketed } from './host.js';
 import type { BodyEncoding, Receiver } from './receiver.js';
 import { serviceAtPath } from './signals.js';
 import {
@@ -113,19 +113,53 @@ export function createHttpHandler(
     send(req, res, path, spec.http, headers, statusBody(encoding, outcome, statusMessage(e)), after);
   }
 
-  /** The inflated body, counted against the limit while it streams. */
+  /** A refusal that happens before `receive`: counted by the receiver, then answered. */
+  function refuse(
+    req: IncomingMessage,
+    res: ServerResponse,
+    path: string,
+    encoding: BodyEncoding,
+    e: ReceiverRejected,
+    after?: () => void,
+  ): void {
+    receiver.refused(e.outcome, e.message);
+    fail(req, res, path, encoding, e, after);
+  }
+
+  /**
+   * The inflated body, counted against the limit while it streams. The request is piped, not `pipeline`d, so that
+   * stopping early (over the limit, a corrupt stream) leaves the socket for the response.
+   */
   async function readBody(req: IncomingMessage, gzip: boolean): Promise<Uint8Array> {
     const limit = options.maxBodyBytes;
-    const source = gzip ? pipeline(req, createGunzip(), () => undefined) : req;
+    const gunzip = gzip ? createGunzip() : null;
+    let source: AsyncIterable<unknown> = req;
+    if (gunzip !== null) {
+      req.once('error', (e) => gunzip.destroy(e));
+      req.once('close', () => {
+        if (!req.complete) {
+          gunzip.destroy(Object.assign(new Error('premature close'), { code: 'ERR_STREAM_PREMATURE_CLOSE' }));
+        }
+      });
+      source = req.pipe(gunzip);
+    }
     const chunks: Buffer[] = [];
     let total = 0;
-    for await (const chunk of source) {
-      const buf: Buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
-      total += buf.length;
-      if (total > limit) {
-        throw new ReceiverRejected('too-large', `request body exceeds the limit of ${limit} bytes`);
+    try {
+      for await (const chunk of source) {
+        const buf: Buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+        total += buf.length;
+        if (total > limit) {
+          throw new ReceiverRejected('too-large', `request body exceeds the limit of ${limit} bytes`);
+        }
+        chunks.push(buf);
       }
-      chunks.push(buf);
+    } finally {
+      if (gunzip !== null) {
+        req.unpipe(gunzip);
+        gunzip.destroy();
+        req.resume(); // drain what is left so the response can be sent
+      }
     }
     return Buffer.concat(chunks, total);
   }
@@ -134,7 +168,7 @@ export function createHttpHandler(
     const path = (req.url ?? '').split('?')[0] ?? '';
     const service = serviceAtPath(path);
     if (service === undefined) {
-      return fail(req, res, path, 'json', new ReceiverRejected('not-found', `no such endpoint: ${path}`));
+      return refuse(req, res, path, 'json', new ReceiverRejected('not-found', `no such endpoint: ${path}`));
     }
     if (req.method === 'OPTIONS') {
       const requested = header(req, 'access-control-request-headers');
@@ -153,7 +187,7 @@ export function createHttpHandler(
     }
     if (req.method !== 'POST') {
       res.setHeader('allow', ALLOWED_METHODS);
-      return fail(
+      return refuse(
         req,
         res,
         path,
@@ -163,7 +197,7 @@ export function createHttpHandler(
     }
     const encoding = encodingOf(req);
     if (encoding === undefined) {
-      return fail(
+      return refuse(
         req,
         res,
         path,
@@ -176,7 +210,7 @@ export function createHttpHandler(
     }
     const contentEncoding = header(req, 'content-encoding')?.trim().toLowerCase();
     if (contentEncoding !== undefined && contentEncoding !== 'gzip' && contentEncoding !== 'identity') {
-      return fail(
+      return refuse(
         req,
         res,
         path,
@@ -190,7 +224,7 @@ export function createHttpHandler(
     const declared = Number(header(req, 'content-length'));
     const closeRequest = () => req.destroy();
     if (declared > options.maxBodyBytes) {
-      return fail(
+      return refuse(
         req,
         res,
         path,
@@ -206,12 +240,12 @@ export function createHttpHandler(
     try {
       body = await readBody(req, contentEncoding === 'gzip');
     } catch (e) {
-      if (e instanceof ReceiverRejected) return fail(req, res, path, encoding, e, closeRequest);
+      if (e instanceof ReceiverRejected) return refuse(req, res, path, encoding, e, closeRequest);
       if (clientGone(e)) {
         logger.debug('http request aborted', { path });
         return;
       }
-      return fail(
+      return refuse(
         req,
         res,
         path,
@@ -253,17 +287,14 @@ function clientGone(e: unknown): boolean {
   return code === 'ECONNRESET' || code === 'ERR_STREAM_PREMATURE_CLOSE';
 }
 
-function bracketed(host: string): string {
-  return host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
-}
-
 /** Binds `handler`; `address` is `http://<host>:<port>` with the port actually bound. */
 export function listenHttp(handler: Handler, host: string, port: number): Promise<Listener> {
   return new Promise((resolve, reject) => {
     const server: Server = createServer(handler);
-    server.once('error', reject);
+    const onError = (e: Error): void => reject(bindError(e, '--http'));
+    server.once('error', onError);
     server.listen(port, host, () => {
-      server.off('error', reject);
+      server.off('error', onError);
       const bound = server.address();
       if (bound === null || typeof bound === 'string') {
         reject(new Error('invariant violated: http server has no address'));

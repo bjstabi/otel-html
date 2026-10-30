@@ -274,6 +274,48 @@ describe('createReceiver', () => {
     expect(s.rejected).toEqual({ traces: 0, logs: 0, metrics: 0 });
   });
 
+  test('stats count refused requests by outcome, and each counts as a request', async () => {
+    const w = createTestWriter();
+    const { receiver } = await realReceiver(w);
+    await failure(receiver.receive('traces', encode('{not json'), 'json', 'otlp/http'));
+    await failure(receiver.receive('traces', encode('{not json'), 'json', 'otlp/http'));
+    receiver.refused('unsupported', 'unsupported content-type text/plain');
+    const s = receiver.stats();
+    expect(s.requests).toBe(3);
+    expect(s.refused).toEqual({
+      invalid: 2,
+      'too-large': 0,
+      unsupported: 1,
+      'not-found': 0,
+      method: 0,
+      busy: 0,
+      internal: 0,
+    });
+  });
+
+  test('a refused request after close counts as busy', async () => {
+    const w = createTestWriter();
+    const { receiver } = await realReceiver(w);
+    await receiver.close();
+    await failure(receiver.receive('traces', encode(traceRequest([span()])), 'json', 'otlp/http'));
+    expect(receiver.stats().refused.busy).toBe(1);
+    expect(receiver.stats().requests).toBe(1);
+  });
+
+  test('the first refusal of each kind is warned once', async () => {
+    const warnings: string[] = [];
+    const logger = { ...silent, warn: (m: string) => warnings.push(m) };
+    const fake = fakeSession(false);
+    const receiver = createReceiver(fake.session, { inflightBudgetBytes: 1 << 20 }, { logger });
+    await failure(receiver.receive('traces', encode('{not json'), 'json', 'otlp/http'));
+    await failure(receiver.receive('traces', encode('{not json'), 'json', 'otlp/http'));
+    receiver.refused('unsupported', 'unsupported content-type text/plain');
+    receiver.refused('unsupported', 'unsupported content-type text/html');
+    expect(warnings).toHaveLength(2);
+    expect(warnings[0]).toContain('invalid');
+    expect(warnings[1]).toContain('unsupported');
+  });
+
   test('a write failure after some entries counts what was added and no rejections', async () => {
     const fake = fakeSession(false);
     let n = 0;

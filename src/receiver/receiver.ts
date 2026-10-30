@@ -5,6 +5,7 @@ import { streamOtlpProtobuf } from '../model/otlp-proto.js';
 import type { Logger } from '../writer/ports.js';
 import type { WriterSession } from '../writer/session.js';
 import { serviceOf } from './signals.js';
+import { type Outcome, outcomeOf } from './status.js';
 
 export type BodyEncoding = 'json' | 'protobuf';
 
@@ -15,10 +16,16 @@ export interface ReceiveResult {
 }
 
 export interface ReceiverStats {
+  /** Every request that reached the receiver, refused ones included. */
   requests: number;
+  /** Body bytes of the requests taken on for processing (not those refused before or at admission). */
   bytes: number;
+  /** Records written, per signal. */
   accepted: Record<OtlpSignal, number>;
+  /** Records dropped inside requests that were otherwise answered 200 (a partial success), per signal. */
   rejected: Record<OtlpSignal, number>;
+  /** Requests that failed, by outcome: refused by a transport before decoding, or failed inside `receive`. */
+  refused: Record<Outcome, number>;
 }
 
 export interface ReceiverOptions {
@@ -33,6 +40,8 @@ export interface Receiver {
     encoding: BodyEncoding,
     transport: string,
   ): Promise<ReceiveResult>;
+  /** A transport refused a request before it reached `receive` (a bad path, method, content type or body). */
+  refused(outcome: Outcome, reason: string): void;
   stats(): ReceiverStats;
   /** Stop accepting (later receives fail `receiver-busy`), wait for the receives in progress. Idempotent. */
   close(): Promise<void>;
@@ -43,6 +52,18 @@ const ROOT_KEY: Readonly<Record<OtlpSignal, string>> = {
   logs: 'resourceLogs',
   metrics: 'resourceMetrics',
 };
+
+function noRefusals(): Record<Outcome, number> {
+  return {
+    invalid: 0,
+    'too-large': 0,
+    unsupported: 0,
+    'not-found': 0,
+    method: 0,
+    busy: 0,
+    internal: 0,
+  };
+}
 
 function perSignal(): Record<OtlpSignal, number> {
   return { traces: 0, logs: 0, metrics: 0 };
@@ -97,7 +118,28 @@ export function createReceiver(
   deps: { logger: Logger },
 ): Receiver {
   const { logger } = deps;
-  const totals: ReceiverStats = { requests: 0, bytes: 0, accepted: perSignal(), rejected: perSignal() };
+  const totals: ReceiverStats = {
+    requests: 0,
+    bytes: 0,
+    accepted: perSignal(),
+    rejected: perSignal(),
+    refused: noRefusals(),
+  };
+  const warned = new Set<Outcome>();
+
+  /** Counts a failed request; the first of each kind is warned about, so a misconfigured exporter shows up. */
+  function refuse(outcome: Outcome, reason: string): void {
+    totals.refused[outcome]++;
+    if (warned.has(outcome)) return;
+    warned.add(outcome);
+    logger.warn(
+      `receiver refused a request (${outcome}); further ones of this kind are counted, not logged`,
+      {
+        reason,
+      },
+    );
+  }
+
   /** Body bytes of the receives in progress or queued. */
   let inflightBytes = 0;
   const pending = new Set<Promise<unknown>>();
@@ -153,30 +195,40 @@ export function createReceiver(
 
   return {
     async receive(signal, body, encoding, transport) {
-      if (closed) throw new OtelHtmlError('receiver-busy', { message: 'receiver is closing' });
-      if (pending.size > 0 && inflightBytes + body.length > options.inflightBudgetBytes) {
-        throw new OtelHtmlError('receiver-busy', {
-          message: `receiver is busy: ${inflightBytes + body.length} bytes in flight exceed ${options.inflightBudgetBytes}`,
-        });
-      }
       totals.requests++;
-      totals.bytes += body.length;
-      inflightBytes += body.length;
-      const run = tail.then(() => process(signal, body, encoding, transport));
-      tail = run.catch(() => undefined);
-      pending.add(run);
       try {
-        return await run;
-      } finally {
-        pending.delete(run);
-        inflightBytes -= body.length;
+        if (closed) throw new OtelHtmlError('receiver-busy', { message: 'receiver is closing' });
+        if (pending.size > 0 && inflightBytes + body.length > options.inflightBudgetBytes) {
+          throw new OtelHtmlError('receiver-busy', {
+            message: `receiver is busy: ${inflightBytes + body.length} bytes in flight exceed ${options.inflightBudgetBytes}`,
+          });
+        }
+        totals.bytes += body.length;
+        inflightBytes += body.length;
+        const run = tail.then(() => process(signal, body, encoding, transport));
+        tail = run.catch(() => undefined);
+        pending.add(run);
+        try {
+          return await run;
+        } finally {
+          pending.delete(run);
+          inflightBytes -= body.length;
+        }
+      } catch (e) {
+        refuse(outcomeOf(e), e instanceof Error ? e.message : String(e));
+        throw e;
       }
+    },
+    refused(outcome, reason) {
+      totals.requests++;
+      refuse(outcome, reason);
     },
     stats: () => ({
       requests: totals.requests,
       bytes: totals.bytes,
       accepted: { ...totals.accepted },
       rejected: { ...totals.rejected },
+      refused: { ...totals.refused },
     }),
     async close() {
       closed = true;
