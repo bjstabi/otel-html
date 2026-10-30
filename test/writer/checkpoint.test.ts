@@ -40,7 +40,7 @@ function stateOf(dedupe: string[], traceIndex: SessionState['traceIndex']): Sess
 
 function pieces(state: SessionState): string[] {
   const { dedupe, traceIndex, ...head } = state;
-  return [...stateSlotPieces(head, dedupe, Object.entries(traceIndex))];
+  return [...stateSlotPieces(stringifyHead(head), dedupe, Object.entries(traceIndex))];
 }
 
 const NASTY = 'quo"te </script>   \\ é';
@@ -80,7 +80,7 @@ describe('stateSlotPieces', () => {
     const ordered = jsObjectKeyOrder(sorted.map(([n]) => n)).map(
       (n): [string, (typeof sorted)[number][1]] => [n, traceIndex[n] ?? {}],
     );
-    const joined = [...stateSlotPieces(head, dedupe, ordered)].join('');
+    const joined = [...stateSlotPieces(stringifyHead(head), dedupe, ordered)].join('');
     expect(joined).toBe(JSON.stringify(state));
     expect(Object.keys(JSON.parse(joined).traceIndex)).toEqual(['12', '99', '00', '0a', '5b']);
   });
@@ -107,7 +107,7 @@ describe('writeStateSlot', () => {
       },
     };
     await mem.mkdirp('r/data/state');
-    await writeStateSlot(fs, 'r', 0, head, dedupe, Object.entries(traceIndex));
+    await writeStateSlot(fs, 'r', 0, stringifyHead(head), dedupe, Object.entries(traceIndex));
     expect(calls).toHaveLength(1);
     expect(calls[0]?.length).toBeGreaterThan(1);
     const text = mem.snapshot().get('r/data/state/session.0.json');
@@ -119,7 +119,7 @@ describe('writeStateSlot', () => {
     const { writePiecesAtomic: _unused, ...rest } = mem;
     const fs: FileSystem = rest;
     await mem.mkdirp('r/data/state');
-    await writeStateSlot(fs, 'r', 1, head, dedupe, Object.entries(traceIndex));
+    await writeStateSlot(fs, 'r', 1, stringifyHead(head), dedupe, Object.entries(traceIndex));
     expect(mem.snapshot().get('r/data/state/session.1.json')).toBe(JSON.stringify(state));
   });
 });

@@ -919,13 +919,15 @@ class Session implements WriterSession {
       };
       if (writeState) {
         const rollups = serializeRollups(this.#rollups);
+        const rollupFiles = ROLLUP_NAMES.map((n): [string, string] => [
+          rollupPath(n),
+          wrapDataFile(rollupKey(n), rollups[n]),
+        ]);
+        const head = stringifyHead(this.#stateHead(rollups));
+        const dedupe = this.#dedupe.toJSON();
+        // Last: nothing after it can throw, so a failed prepare never leaves a snapshot held or shards un-dirtied.
         const snapshot = this.#traceIndex.snapshot();
-        prepared.state = {
-          snapshot,
-          rollupFiles: ROLLUP_NAMES.map((n) => [rollupPath(n), wrapDataFile(rollupKey(n), rollups[n])]),
-          head: stringifyHead(this.#stateHead(rollups)),
-          dedupe: this.#dedupe.toJSON(),
-        };
+        prepared.state = { snapshot, rollupFiles, head, dedupe };
         this.#dirty = false;
       }
       this.#pending = []; // last, after everything that can throw

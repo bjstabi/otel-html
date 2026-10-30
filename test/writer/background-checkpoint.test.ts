@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
+import { StreamNormalizer } from '../../src/rollups/metric-streams.js';
 import { openSession, type WriterSession } from '../../src/writer/session.js';
 import { createMemoryFileSystem } from '../../test-support/memory-fs.js';
 import { span, traceRequest } from '../../test-support/otlp-builders.js';
@@ -46,7 +47,7 @@ const shardEntry = (w: TestWriter, trace: number): { spans: number } | undefined
   )[traceIdOf(trace)];
 
 /** A session whose first interval checkpoint (after two spans) is held at its state slot write. */
-async function heldCheckpoint(): Promise<{
+async function heldCheckpoint(holdPath = STATE_0): Promise<{
   w: TestWriter;
   s: WriterSession;
   gate: ReturnType<ReturnType<typeof createMemoryFileSystem>['holdNextWrite']>;
@@ -55,7 +56,7 @@ async function heldCheckpoint(): Promise<{
   const s = await openSession(w.deps, { out: OUT, config, mode: 'replace' });
   await s.add(one(0, 1), 'a.json');
   makeDue(w);
-  const gate = w.fs.holdNextWrite(STATE_0);
+  const gate = w.fs.holdNextWrite(holdPath);
   await s.add(one(1, 2), 'b.json'); // due: prepares the checkpoint and returns while its write is held
   await gate.reached;
   return { w, s, gate };
@@ -102,6 +103,30 @@ describe('interval checkpoints run in the background', () => {
     expect(m.chunks.map((c) => c.n)).toEqual([0, 1, 2]);
     expect(m.totals.spans).toBe(3);
     for (const t of [0, 1, 2]) expect(shardEntry(w, t)?.spans).toBe(1);
+    await s.close();
+  });
+
+  test('the shards of a failed shard write are dirty again: the next flush writes them without any new add', async () => {
+    const { w, s, gate } = await heldCheckpoint('data/traces/00.js');
+    gate.fail(new Error('disk gone'));
+    await s.flush(); // nothing was added since: only the restored dirty set tells it to write shard 00
+    expect(shardEntry(w, 0)?.spans).toBe(1);
+    expect(shardEntry(w, 1)?.spans).toBe(1);
+    await s.close();
+  });
+
+  test('a prepare that throws leaves the session able to checkpoint', async () => {
+    const w = createTestWriter();
+    const s = await openSession(w.deps, { out: OUT, config, mode: 'replace' });
+    await s.add(one(0, 1), 'a.json');
+    const spy = vi.spyOn(StreamNormalizer.prototype, 'toJSON').mockImplementationOnce(() => {
+      throw new Error('prepare broke');
+    });
+    await expect(s.flush()).rejects.toThrow(/prepare broke/);
+    spy.mockRestore();
+    await s.flush();
+    expect(shardEntry(w, 0)?.spans).toBe(1);
+    expect(manifestOf(w, OUT).totals.spans).toBe(1);
     await s.close();
   });
 

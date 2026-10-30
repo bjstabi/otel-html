@@ -79,15 +79,15 @@ const DEDUPE_SLICE = 1000;
 /**
  * The bytes of `JSON.stringify(state)` as pieces, so the full string (and a Buffer copy of it) never exists: the
  * state embeds the whole trace index, which is hundreds of megabytes under load. Field order is the
- * `SessionState` order; the head's fields stay as they are stringified today.
+ * `SessionState` order; the head arrives stringified (see `stringifyHead`).
  */
 export function* stateSlotPieces(
-  head: StateHead | StringifiedHead,
+  head: StringifiedHead,
   dedupe: readonly string[],
   shards: Iterable<[string, Readonly<TraceShard>]>,
 ): Generator<string> {
   const field = (k: keyof StateHead): string | undefined => {
-    const v = 'fields' in head ? head.fields[k] : JSON.stringify(head[k]);
+    const v = head.fields[k];
     return v === undefined ? undefined : `${JSON.stringify(k)}:${v}`; // JSON.stringify drops undefined fields
   };
   const keys = Object.keys(HEAD_SIDE) as (keyof StateHead)[];
@@ -109,7 +109,7 @@ export async function writeStateSlot(
   fs: FileSystem,
   out: string,
   slot: StateSlot,
-  head: StateHead | StringifiedHead,
+  head: StringifiedHead,
   dedupe: readonly string[],
   shards: Iterable<[string, Readonly<TraceShard>]>,
 ): Promise<void> {
