@@ -141,6 +141,22 @@ describe('createReceiver', () => {
     expect(receiver.stats().rejected.traces).toBe(1);
   });
 
+  test('a protobuf body that fails to decode partway writes nothing', async () => {
+    const w = createTestWriter();
+    const { receiver, session } = await realReceiver(w);
+    const good = toBinary(
+      ExportTraceServiceRequestSchema,
+      create(ExportTraceServiceRequestSchema, { resourceSpans: [ENTRY(new Uint8Array(16).fill(1), 1)] }),
+    );
+    const body = new Uint8Array([...good, 0x0a, 0x7f, 0x01]);
+    expect((await failure(receiver.receive('traces', body, 'protobuf', 'otlp/grpc'))).code).toBe(
+      'invalid-otlp',
+    );
+    await session.close();
+    expect(allSpans(w, OUT)).toHaveLength(0);
+    expect(receiver.stats().accepted.traces).toBe(0);
+  });
+
   test('empty and signal-less bodies', async () => {
     const w = createTestWriter();
     const { receiver } = await realReceiver(w);
@@ -256,6 +272,24 @@ describe('createReceiver', () => {
     expect(s.bytes).toBe(traces.length + logs.length);
     expect(s.accepted).toEqual({ traces: 4, logs: 1, metrics: 0 });
     expect(s.rejected).toEqual({ traces: 0, logs: 0, metrics: 0 });
+  });
+
+  test('a write failure after some entries counts what was added and no rejections', async () => {
+    const fake = fakeSession(false);
+    let n = 0;
+    const failing: WriterSession = {
+      ...fake.session,
+      async add() {
+        if (++n === 2) throw new Error('disk full');
+        return { accepted: 1 } as never;
+      },
+    };
+    const receiver = createReceiver(failing, { inflightBudgetBytes: 1 << 20 }, { logger: silent });
+    await expect(receiver.receive('traces', encode(twoEntryTraces()), 'json', 'otlp/http')).rejects.toThrow(
+      'disk full',
+    );
+    expect(receiver.stats().accepted.traces).toBe(2);
+    expect(receiver.stats().rejected.traces).toBe(0);
   });
 
   test('a write failure propagates and counts nothing as rejected', async () => {

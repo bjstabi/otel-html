@@ -74,12 +74,12 @@ function entriesOf(
   body: Uint8Array,
   encoding: BodyEncoding,
   source: string,
-): Iterable<OtlpRequest> {
+): OtlpRequest[] {
   switch (encoding) {
     case 'json':
       return jsonEntries(signal, body, source);
     case 'protobuf':
-      return streamOtlpProtobuf(body, signal, source);
+      return [...streamOtlpProtobuf(body, signal, source)];
     default: {
       const unknown: never = encoding;
       throw new Error(`invariant violated: unknown encoding ${String(unknown)}`);
@@ -140,8 +140,8 @@ export function createReceiver(
     } catch (e) {
       failure ??= { error: e };
     }
-    if (failure !== null) throw failure.error;
     totals.accepted[signal] += accepted;
+    if (failure !== null) throw failure.error;
     totals.rejected[signal] += rejected;
     if (rejectedEntries > 0 && acceptedEntries === 0) {
       throw new OtelHtmlError('invalid-otlp', {
