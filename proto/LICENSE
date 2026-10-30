@@ -202,5 +202,5 @@
 
 ---
 proto/google/rpc/status.proto and proto/google/rpc/error_details.proto are copied verbatim from
-https://github.com/googleapis/googleapis (google/rpc), Copyright 2025 Google LLC, under the Apache License 2.0
+https://github.com/googleapis/googleapis (google/rpc), Copyright 2026 Google LLC, under the Apache License 2.0
 (the license text above). Each file carries its own license header.

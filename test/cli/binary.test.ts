@@ -52,6 +52,7 @@ async function serveOnce(
   const child = spawn(binary, [...args], { stdio: ['ignore', 'pipe', 'pipe'] });
   let stdout = '';
   let stderr = '';
+  let watchdog = false;
   const exited = new Promise<number | null>((done) => child.once('close', (code) => done(code)));
   const ready = new Promise<RegExpMatchArray>((resolveReady, reject) => {
     child.stdout.on('data', (d: Buffer) => {
@@ -62,13 +63,24 @@ async function serveOnce(
     child.stderr.on('data', (d: Buffer) => {
       stderr += d.toString('utf8');
     });
-    child.once('close', () => reject(new Error(`exited before listening: ${stdout}${stderr}`)));
+    child.once('close', () =>
+      reject(
+        new Error(
+          `${watchdog ? 'killed by the 50 s watchdog' : 'exited before listening'}; stdout: ${stdout}; stderr: ${stderr}`,
+        ),
+      ),
+    );
   });
-  const timer = setTimeout(() => child.kill('SIGKILL'), 50_000);
+  const timer = setTimeout(() => {
+    watchdog = true;
+    child.kill('SIGKILL');
+  }, 50_000);
   try {
     await drive(await ready);
     child.kill('SIGINT');
-    return { code: await exited, stdout, stderr };
+    const code = await exited;
+    if (watchdog) throw new Error(`killed by the 50 s watchdog; stdout: ${stdout}; stderr: ${stderr}`);
+    return { code, stdout, stderr };
   } finally {
     clearTimeout(timer);
     child.kill('SIGKILL');
@@ -167,15 +179,34 @@ describe.skipIf(binaryEnv === undefined)('compiled binary', () => {
     expect(result.code).toBe(0);
     const manifest = await readFile(join(out, 'data', 'manifest.js'), 'utf8');
     expect(manifest).toContain('"totals":{"spans":2,');
+    const spans = await readFile(join(out, 'data', 'chunks', 'spans', '000000.js'), 'utf8');
+    expect(spans).toContain('over-http');
+    expect(spans).toContain('over-grpc');
+  }, 60_000);
+
+  test('a bad port is a usage error: exit 2, the reason on stderr, nothing on stdout', async () => {
+    const failed = await exec(binary, ['serve', '-o', join(dir, 'bad-port'), '--http', '99999'], {
+      encoding: 'utf8',
+      timeout: 60_000,
+    }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(failed).toMatchObject({ code: 2, stdout: '' });
+    expect(String(Reflect.get(failed ?? {}, 'stderr'))).toContain('is not a port');
   }, 60_000);
 
   test('run exits with the child code and records a root span', async () => {
     const out = join(dir, 'run');
-    const code = await new Promise<number | null>((done) => {
-      spawn(binary, ['run', '-o', out, '--', process.execPath, '-e', 'process.exit(4)'], {
+    const code = await new Promise<number | null>((done, fail) => {
+      const child = spawn(binary, ['run', '-o', out, '--', process.execPath, '-e', 'process.exit(4)'], {
         stdio: 'ignore',
         timeout: 50_000,
-      }).once('close', done);
+      });
+      child.once('error', fail);
+      child.once('close', (exitCode, signal) =>
+        signal === null ? done(exitCode) : fail(new Error(`run timed out after 50 s (${signal})`)),
+      );
     });
     expect(code).toBe(4);
     const manifest = await readFile(join(out, 'data', 'manifest.js'), 'utf8');

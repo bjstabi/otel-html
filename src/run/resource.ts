@@ -5,6 +5,8 @@ import { executableName } from './root-span.js';
 
 /** The run's resource: env, host and process detectors, with `service.name` defaulting to the command's name. */
 export async function detectRunResource(command: readonly string[]): Promise<KeyValue[]> {
+  // `process.env`, not `io.env`, on purpose: the detectors read the real environment, and the two are equal in
+  // production.
   const resource = detectResources({ detectors: [envDetector, hostDetector, processDetector] });
   await resource.waitForAsyncAttributes?.();
   const attributes = { ...resource.attributes };

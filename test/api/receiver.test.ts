@@ -23,6 +23,12 @@ async function failure(p: Promise<unknown>): Promise<OtelHtmlError> {
   throw new Error('expected failure');
 }
 
+function resourceSpansOf(req: unknown): unknown[] {
+  const v: unknown = Reflect.get(Object(req), 'resourceSpans');
+  if (!Array.isArray(v)) throw new Error('fixture');
+  return v;
+}
+
 const BOTH = { http: { port: 0 }, grpc: { port: 0 } };
 
 describe('startReceiver', () => {
@@ -136,6 +142,28 @@ describe('startReceiver', () => {
     await rx.close();
     expect(span?.ended).toBe(true);
     expect(span?.attrs).toMatchObject({ requests: 1, bytes: expect.any(Number) });
+    await report.close();
+  });
+
+  test('the receive span carries per-signal accepted and rejected counts', async () => {
+    const w = createTestWriter();
+    const report = await Report.create({ out: 'r' }, w.deps);
+    const rx = await startReceiver(report, { http: { port: 0 }, grpc: false }, w.deps);
+    running.push(rx);
+    const day = 86_400_000_000_000;
+    const resourceSpans = [
+      ...resourceSpansOf(spansRequest(3, 0, 0)),
+      ...resourceSpansOf(spansRequest(1, 200 * day, 3)),
+    ];
+    const res = await fetch(`${rx.http}/v1/traces`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ resourceSpans }),
+    });
+    expect(res.status).toBe(200);
+    await rx.close();
+    const span = w.spans.find((s) => s.name === 'otel-html.receive');
+    expect(span?.attrs).toMatchObject({ acceptedTraces: 3, rejectedTraces: 1 });
     await report.close();
   });
 

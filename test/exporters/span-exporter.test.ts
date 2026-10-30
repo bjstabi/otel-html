@@ -2,6 +2,7 @@ import { BasicTracerProvider, SimpleSpanProcessor } from '@opentelemetry/sdk-tra
 import { describe, expect, test } from 'vitest';
 import { Report } from '../../src/api/report.js';
 import { OtelHtmlSpanExporter } from '../../src/exporters/span-exporter.js';
+import { readableSpan } from '../../test-support/decode.js';
 import { createTestWriter } from '../../test-support/writer-deps.js';
 import { allSpans, manifestOf } from '../writer/helpers.js';
 
@@ -13,12 +14,9 @@ function emitSpans(exporter: OtelHtmlSpanExporter, names: string[]): BasicTracer
 }
 
 function exportOnce(exporter: OtelHtmlSpanExporter): Promise<{ code: number; error?: Error }> {
-  const provider = new BasicTracerProvider();
-  const span = provider.getTracer('t').startSpan('s');
-  span.end();
+  const span = readableSpan('s');
   return new Promise((resolve) => {
-    // A ReadableSpan is what the SDK hands exporters; Span implements it.
-    exporter.export([span as never], resolve);
+    exporter.export([span], resolve);
   });
 }
 
@@ -68,6 +66,7 @@ describe('OtelHtmlSpanExporter', () => {
     const report = await Report.create({ out: 'r' }, w.deps);
     const exporter = new OtelHtmlSpanExporter({ report });
     await exportOnce(exporter);
+    expect(() => manifestOf(w, 'r')).toThrow('no manifest');
     await exporter.forceFlush();
     expect(manifestOf(w, 'r').chunks.length).toBeGreaterThan(0);
     await report.close();

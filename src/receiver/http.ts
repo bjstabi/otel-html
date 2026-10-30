@@ -90,7 +90,10 @@ export function createHttpHandler(
     after?: () => void,
   ): void {
     const length = typeof body === 'string' ? Buffer.byteLength(body) : body.length;
-    logger.debug('http request', { method: req.method, path, status, bytes: length });
+    // `requestBytes` is the declared Content-Length (0 when absent): the same figure for every response, including
+    // refusals that never read the body. For a gzip body it is the compressed size.
+    const requestBytes = Number(header(req, 'content-length') ?? 0) || 0;
+    logger.debug('http request', { method: req.method, path, status, requestBytes, responseBytes: length });
     if (res.headersSent || res.writableEnded) return;
     res.writeHead(status, { ...corsHeaders(req), ...headers, 'content-length': String(length) });
     res.end(body, after);
@@ -296,7 +299,7 @@ export function createHttpHandler(
   return (req, res) => {
     handle(req, res).catch((e: unknown) => {
       logger.error('http handler failed', { message: String(e) });
-      if (!res.headersSent) fail(req, res, req.url ?? '', 'json', e);
+      if (!res.headersSent) fail(req, res, (req.url ?? '').split('?')[0] ?? '', 'json', e);
       else res.destroy();
     });
   };

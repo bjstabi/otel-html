@@ -1,9 +1,7 @@
-import { createReadStream } from 'node:fs';
-import { stat } from 'node:fs/promises';
-import { createServer, type Server } from 'node:http';
-import { extname, join, normalize, resolve, sep } from 'node:path';
+import { resolve } from 'node:path';
 import type { Page } from '@playwright/test';
 import { perfFactor } from './fixture.js';
+import { serve } from './static-server.js';
 import { expect, test } from './test.js';
 
 /**
@@ -16,35 +14,6 @@ const INTERACTIVE_BUDGET_MS = 3000;
 /** Timed loads after one untimed warm-up load; the median is compared with the budget. */
 const LOAD_SAMPLES = 3;
 const GRID = '[role="grid"][aria-label="Results"]';
-const MIME: Record<string, string> = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-};
-
-function serveFolder(root: string): Promise<{ server: Server; origin: string }> {
-  const server = createServer((req, res) => {
-    const rel = decodeURIComponent(new URL(req.url ?? '/', 'http://localhost').pathname);
-    const file = normalize(join(root, rel));
-    if (!file.startsWith(root + sep)) return void res.writeHead(404).end();
-    stat(file).then(
-      (s) => {
-        if (!s.isFile()) return void res.writeHead(404).end();
-        res.writeHead(200, { 'content-type': MIME[extname(file)] ?? 'application/octet-stream' });
-        createReadStream(file).pipe(res);
-      },
-      () => res.writeHead(404).end(),
-    );
-  });
-  return new Promise((ok, fail) => {
-    server.once('error', fail);
-    server.listen(0, '127.0.0.1', () => {
-      const address = server.address();
-      if (address === null || typeof address === 'string') return fail(new Error('no TCP address'));
-      ok({ server, origin: `http://127.0.0.1:${address.port}` });
-    });
-  });
-}
 
 /**
  * Milliseconds from navigation start to the frame in which the page's result grid has rows, for each of
@@ -86,14 +55,13 @@ function median(xs: readonly number[]): number {
 
 test.describe('report written by the receiver load test', () => {
   test.skip(reportRoot === undefined, `${REPORT_ENV} is not set`);
-  let served: { server: Server; origin: string } | undefined;
+  let served: { port: number; close(): Promise<void> } | undefined;
 
   test.beforeAll(async () => {
-    if (reportRoot !== undefined) served = await serveFolder(resolve(reportRoot));
+    if (reportRoot !== undefined) served = await serve([{ prefix: '', root: resolve(reportRoot) }]);
   });
   test.afterAll(async () => {
-    const server = served?.server;
-    if (server !== undefined) await new Promise<void>((done) => server.close(() => done()));
+    await served?.close();
   });
 
   for (const landing of ['traces', 'logs'] as const) {
@@ -103,7 +71,7 @@ test.describe('report written by the receiver load test', () => {
     }, testInfo) => {
       if (served === undefined) throw new Error('the report server is not running');
       const factor = perfFactor();
-      const samples = await landingMs(page, `${served.origin}/index.html#/${landing}`);
+      const samples = await landingMs(page, `http://127.0.0.1:${served.port}/index.html#/${landing}`);
       const ms = median(samples);
       const line = `PERF load ${landing} landing ${testInfo.project.name} (${browserName}): median ${ms.toFixed(0)} ms, samples [${samples.map((x) => x.toFixed(0)).join(', ')}] (budget ${INTERACTIVE_BUDGET_MS * factor}), factor ${factor}`;
       process.stdout.write(`${line}\n`);

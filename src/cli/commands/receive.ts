@@ -40,7 +40,10 @@ export interface OpenReceiver {
   receiver: RunningReceiver;
 }
 
-/** Resolve config, open the report and bind the transports; a failed bind aborts the report. */
+/**
+ * Resolve config, open the report and bind the transports; a failed bind or a stop signal during start-up aborts the
+ * report and releases its lock.
+ */
 export async function openReceiver(
   io: CliIo,
   deps: Partial<WriterDeps>,
@@ -59,7 +62,14 @@ export async function openReceiver(
   }
   const overrides = precheck({ http: config.receiver.http.enabled, grpc: config.receiver.grpc.enabled });
   const full = await resolveDeps(deps);
-  const report = await Report.createResolved(
+  // Installed before the lock is taken, so a stop signal during start-up is handled rather than left to the default.
+  const stop = nextSignal(io);
+  const interrupted = stop.signalled.then((): never => {
+    io.stdout('interrupted\n');
+    throw new CliExit(INTERRUPTED_EXIT);
+  });
+  interrupted.catch(() => undefined); // only observed through the race below
+  const creating = Report.createResolved(
     {
       out: flags.out,
       ...(flags.append === true ? { append: true } : {}),
@@ -68,13 +78,34 @@ export async function openReceiver(
     config,
     full,
   );
+  creating.catch(() => undefined); // its own failure is reported by the race, or dropped after a signal
+  let starting: Promise<RunningReceiver> | undefined;
+  let again: ReturnType<typeof nextSignal> | undefined;
   try {
-    return { report, receiver: await startReceiver(report, overrides) };
+    const report = await Promise.race([creating, interrupted]);
+    starting = startReceiver(report, overrides);
+    starting.catch(() => undefined);
+    const receiver = await Promise.race([starting, interrupted]);
+    return { report, receiver };
   } catch (e) {
-    await sessionOf(report)
-      .abort()
-      .catch(() => undefined); // never mask the original error
+    // Whatever the start leaves behind once it settles: its bound ports and the report's lock.
+    const cleanup = (async () => {
+      const report = await creating.catch(() => undefined);
+      const receiver = await starting?.catch(() => undefined);
+      await receiver?.close().catch(() => undefined);
+      if (report !== undefined)
+        await sessionOf(report)
+          .abort()
+          .catch(() => undefined); // never mask the original error
+    })();
+    // Wait for the lock release before exiting, so the process does not leave it behind. A second signal exits
+    // without waiting and may leave the lock behind; the dead-pid check reclaims it on the next start.
+    again = nextSignal(io);
+    await Promise.race([cleanup, again.signalled]);
     throw e;
+  } finally {
+    again?.cancel();
+    stop.cancel();
   }
 }
 

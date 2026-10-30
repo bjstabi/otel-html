@@ -19,8 +19,8 @@ describe('OtelHtmlMetricExporter', () => {
     await reader.forceFlush();
     await provider.shutdown();
     await report.close();
-    const points = allPoints(w, 'r');
-    expect(points.length).toBeGreaterThanOrEqual(2);
+    // forceFlush and shutdown each collect, so a name can repeat; the set of names is what is asserted.
+    expect([...new Set(allPoints(w, 'r').map((p) => p.name))].sort()).toEqual(['c', 'h']);
   });
 
   test('temporality defaults to cumulative (1) and delta selects 0', async () => {

@@ -136,6 +136,21 @@ function openRequest(base: string, headers: Record<string, string>) {
   return { req, response };
 }
 
+/** Resolves on the request's next drain, close or error, whichever comes first; the others are removed. */
+function drainedOrClosed(req: ClientRequest): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const done = (): void => {
+      req.off('drain', done);
+      req.off('close', done);
+      req.off('error', done);
+      resolve();
+    };
+    req.once('drain', done);
+    req.once('close', done);
+    req.once('error', done);
+  });
+}
+
 /** Starts a first, complete 600-byte upload and returns once the receiver has admitted it. */
 async function startFirst(base: string, receiver: Receiver): Promise<{ response: Promise<Response> }> {
   const body = JSON.stringify({ ...spansRequest(1), pad: 'x'.repeat(500) });
@@ -337,6 +352,24 @@ describe('OTLP/HTTP transport', () => {
       setTimeout(() => req.end(body.subarray(head)), 100);
     });
     expect(status).toBe(413);
+    expect(receiver.stats().refused['too-large']).toBe(1);
+  });
+
+  test('a plain body streamed past the limit without Content-Length is 413', async () => {
+    const { receiver, base } = await realServer({ maxBodyBytes: 100_000 });
+    const { req, response } = openRequest(base, { 'transfer-encoding': 'chunked' });
+    const chunk = Buffer.alloc(10_000, 'x');
+    const writes = (async () => {
+      for (let i = 0; i < 100 && !req.destroyed; i++) {
+        if (!req.write(chunk)) await drainedOrClosed(req);
+        await new Promise((r) => setImmediate(r));
+      }
+    })();
+    const res = await response;
+    expect(res.statusCode).toBe(413);
+    res.resume();
+    req.destroy();
+    await writes.catch(() => undefined);
     expect(receiver.stats().refused['too-large']).toBe(1);
   });
 

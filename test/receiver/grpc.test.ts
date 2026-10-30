@@ -21,6 +21,7 @@ import type { Listener } from '../../src/receiver/http.js';
 import { type Admission, createReceiver, type Receiver } from '../../src/receiver/receiver.js';
 import { serviceOf } from '../../src/receiver/signals.js';
 import { openSession, type WriterSession } from '../../src/writer/session.js';
+import { decodeResponse, unusedReceive } from '../../test-support/decode.js';
 import { createTestWriter, type TestWriter, testConfig } from '../../test-support/writer-deps.js';
 import { allSpans } from '../writer/helpers.js';
 
@@ -124,7 +125,7 @@ const requestOf = (resourceSpans: ReturnType<typeof protoSpan>[]): Uint8Array =>
 describe('OTLP/gRPC transport', () => {
   test('a port already in use is an OtelHtmlError that keeps EADDRINUSE and hints at the flag', async () => {
     const first = await listenGrpc(
-      fake(async () => undefined as never),
+      fake(unusedReceive),
       { maxBodyBytes: 1, inflightBudgetBytes: 1 },
       silent,
       '127.0.0.1',
@@ -133,7 +134,7 @@ describe('OTLP/gRPC transport', () => {
     open.push(first);
     const port = Number(first.address.split(':').pop());
     const error = await listenGrpc(
-      fake(async () => undefined as never),
+      fake(unusedReceive),
       { maxBodyBytes: 1, inflightBudgetBytes: 1 },
       silent,
       '127.0.0.1',
@@ -169,7 +170,9 @@ describe('OTLP/gRPC transport', () => {
     const { err, res } = await call(clientFor(address), body);
     expect(err).toBeNull();
     expect(res).toBeDefined();
-    expect(res && toBinary(ExportTraceServiceResponseSchema, res as never)).toHaveLength(0);
+    expect(
+      toBinary(ExportTraceServiceResponseSchema, decodeResponse(ExportTraceServiceResponseSchema, res)),
+    ).toHaveLength(0);
     await session.close();
     expect(allSpans(w, OUT)).toHaveLength(2);
   });
@@ -181,10 +184,7 @@ describe('OTLP/gRPC transport', () => {
       requestOf([protoSpan(1), protoSpan(3, 15), protoSpan(4)]),
     );
     expect(err).toBeNull();
-    const decoded = fromBinary(
-      ExportTraceServiceResponseSchema,
-      toBinary(ExportTraceServiceResponseSchema, res as never),
-    );
+    const decoded = decodeResponse(ExportTraceServiceResponseSchema, res);
     expect(decoded.partialSuccess?.rejectedSpans).toBe(1n);
     expect(decoded.partialSuccess?.errorMessage).toMatch(/resourceSpans\[1\]/);
   });
@@ -257,10 +257,7 @@ describe('OTLP/gRPC transport', () => {
 
   test('an admission refused as busy is UNAVAILABLE with RetryInfo and counted', async () => {
     const refusals: [string, string][] = [];
-    const base = fake(
-      async () => undefined as never,
-      () => null,
-    );
+    const base = fake(unusedReceive, () => null);
     const receiver: Receiver = {
       ...base,
       refused: (outcome, reason) => void refusals.push([outcome, reason]),

@@ -60,12 +60,18 @@ const ENTRY = (traceId: Uint8Array, spanId: number) => ({
 interface FakeControl {
   session: WriterSession;
   calls: string[];
+  /** Resolves once `add` has been entered. */
+  added: Promise<void>;
   release: () => void;
 }
 
 /** A session whose `add` waits for `release()` when `block` is set, recording the call order. */
 function fakeSession(block: boolean): FakeControl {
   const calls: string[] = [];
+  let entered: () => void = () => undefined;
+  const added = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
   let release: () => void = () => undefined;
   const gate = block
     ? new Promise<void>((resolve) => {
@@ -75,8 +81,9 @@ function fakeSession(block: boolean): FakeControl {
   const session: WriterSession = {
     async add(_input, source) {
       calls.push(`add ${source}`);
+      entered();
       await gate;
-      return { accepted: 1 } as never;
+      return { accepted: 1, dropped: 0, duplicates: 0 };
     },
     async endInput() {
       calls.push('endInput');
@@ -90,7 +97,7 @@ function fakeSession(block: boolean): FakeControl {
     },
     async abort() {},
   };
-  return { session, calls, release };
+  return { session, calls, added, release };
 }
 
 /** Claims `bytes` of the budget, asserting it was granted. */
@@ -328,7 +335,7 @@ describe('createReceiver', () => {
     const body = encode(traceRequest([span()]));
     const a = receive(receiver, 'traces', body, 'json', 'a');
     const b = receive(receiver, 'traces', body, 'json', 'b');
-    await Promise.resolve();
+    await fake.added;
     fake.release();
     await Promise.all([a, b]);
     expect(fake.calls).toEqual(['add a', 'endInput', 'add b', 'endInput']);
@@ -371,7 +378,7 @@ describe('createReceiver', () => {
       done = true;
       return r;
     });
-    await Promise.resolve();
+    await fake.added;
     const closing = receiver.close().then(() => {
       expect(done).toBe(true);
     });

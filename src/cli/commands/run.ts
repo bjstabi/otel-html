@@ -49,6 +49,9 @@ export function addRunCommand(program: Command, io: CliIo, deps: Partial<WriterD
     const [executable, ...args] = argv;
     if (executable === undefined || executable === '')
       throw new OtelHtmlError('usage', { message: 'no command to run' });
+    // Before the receiver opens: once it has returned, only `run`'s own forwarder handles a stop signal, and that is
+    // installed after the child starts, so a slow async detector here would leave a window with the lock taken.
+    const resource = await detectRunResource(argv);
     const opened = await openReceiver(io, deps, flags, (enabled) => {
       const protocol = checkedProtocol(io.env, enabled); // before anything is created or bound
       // The transport the child will not use stays unbound unless an explicit port flag asked for it.
@@ -85,10 +88,8 @@ export function addRunCommand(program: Command, io: CliIo, deps: Partial<WriterD
 
     let child: ChildProcess;
     let exit: ChildExit;
-    let resource: Awaited<ReturnType<typeof detectRunResource>>;
     let start: UnixNanos;
     try {
-      resource = await detectRunResource(argv);
       start = wallClockNow();
       child = io.spawn(executable, args, { stdio: 'inherit', env: { ...io.env, ...env } });
     } catch (e) {

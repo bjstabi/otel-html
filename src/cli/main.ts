@@ -42,6 +42,8 @@ const code = await runCli(
 process.exitCode = code;
 // A failing command must end the process even if something (a bound server) still holds the event loop; an
 // interrupted `serve` may still be finishing its report, and a second Ctrl-C means stop now, at the last checkpoint.
+// This safety net is not unit-testable without a build (main.ts runs on import). The binary smoke test covers it:
+// its `serve` + SIGINT path (exit 0, the net is skipped) and its bad-port test (non-zero, the net ends the process).
 if (code !== 0) {
   const flushed = (stream: NodeJS.WriteStream): Promise<void> =>
     new Promise((resolve) => stream.write('', () => resolve()));
