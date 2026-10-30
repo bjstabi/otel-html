@@ -361,6 +361,32 @@ describe('runMetricQuery', () => {
     expect(r.series.map((s) => s.label)).toEqual(['b']);
   });
 
+  test('top 1 builds the heatmap and distribution from the kept group only, like the exemplars', async () => {
+    const m = metric(entry({ type: 'histogram' }), [
+      { service: 'a', bounds: [10, 100], buckets: [[0, hist([1, 0, 0])]] },
+      { service: 'b', bounds: [10, 100], buckets: [[0, hist([0, 0, 9])]] },
+    ]);
+    const r = await runMetricQuery(
+      m,
+      query({
+        show: 'count',
+        by: ['resource.attributes["service.name"]'],
+        fn: [{ op: 'top', n: 1, by: 'avg' }],
+      }),
+      { start: 0, end: 9 * S },
+      600,
+    );
+    expect(r.series.map((s) => s.label)).toEqual(['b']);
+    expect(r.distribution).toEqual({ bounds: [10, 100], counts: [0, 0, 9] });
+  });
+
+  test('a width finer than every level of the metric is a usage error, not a silent wider result', async () => {
+    const m = metric(entry({ type: 'gauge' }), [{ buckets: [[0, gauge(1)]] }], 10 * S, 1);
+    await expect(
+      runMetricQueryAtWidth(m, query({ show: 'avg' }), { start: 0, end: 9 * S }, S),
+    ).rejects.toThrow(/no wider than/);
+  });
+
   test('rollup(max, 60000) re-buckets to one minute', async () => {
     const m = metric(entry({ type: 'gauge' }), [
       { buckets: Array.from({ length: 12 }, (_, i): [number, BucketAgg] => [i, gauge(i)]) },

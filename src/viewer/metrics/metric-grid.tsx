@@ -141,7 +141,8 @@ export function explorerFilter(
 ): ExplorerFilter {
   const origin = new Set(resources.map(resourceKey));
   const rest = others.filter((o) => !origin.has(resourceKey(o)));
-  let unexcluded = 0;
+  // Each other resource counts once, however many origin clauses it slips through.
+  const unexcluded = new Set<string>();
   const clauses = resources.map((r) => {
     const lits = literalAttributes(r);
     const parts = [...lits].map(([k, lit]) => `${resourcePath(k)} == ${lit}`);
@@ -150,18 +151,18 @@ export function explorerFilter(
       const matched = [...lits].every(([k, lit]) => ol.get(k) === lit);
       if (!matched) continue;
       const extra = [...o.attributes.keys()].filter((k) => !r.attributes.has(k)).sort()[0];
-      if (extra === undefined) unexcluded++;
+      if (extra === undefined) unexcluded.add(resourceKey(o));
       else parts.push(`${resourcePath(extra)} == nil`);
     }
     return parts;
   });
-  // A clause with no parts matches every resource, so the whole filter does.
+  // A clause with no parts matches every resource, so the whole filter does (each of them is counted above).
   const where = clauses.some((c) => c.length === 0)
     ? null
     : clauses.length === 1
       ? (clauses[0] ?? []).join(' and ')
       : clauses.map((c) => `(${c.join(' and ')})`).join(' or ');
-  return { where, by: resourceLines(resources), unexcluded };
+  return { where, by: resourceLines(resources), unexcluded: unexcluded.size };
 }
 
 function distinctResources(resources: readonly ResourceRecord[]): ResourceRecord[] {
