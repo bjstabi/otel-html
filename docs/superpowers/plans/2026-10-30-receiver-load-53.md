@@ -79,6 +79,17 @@ Today `#maybeCheckpoint()` (called from `add` when not partial, `addRecords` and
 2. Tests: serve and run call the hook once before the receiver binds (a fake dep in the existing command tests); convert does not call it for a trace-only input.
 3. README: the Limits bullet on metrics says the CLI switches V8 to `--optimize-for-size` when metric points arrive; add that `serve` and `run` set it at start. Update the comment above the function in `main.ts`. Do not touch the "Receiver:" Limits bullet (Task 5 rewrites it with measured numbers).
 
+## Task 4b: The snapshot copies shard maps lazily
+
+**Why:** the first CI run on the branch (run 41067773876, 4-core runner, the CLI setting `--optimize-for-size`) met the memory target (peak RSS 435 MB) and took all 1M logs, but 1,548 spans (three export batches) were dropped by telemetrygen: something still stalls receives for about 0.5 s. Locally the checkpoint prepare takes up to 123 ms, almost all of it `TraceIndex.snapshot()` copying every shard's entry map (`new Map(traces)` for ~500k entries) inside the serial queue; full GCs under `--optimize-for-size` add up to 65 ms. On the CI runner both are 2-3× slower.
+
+**Files:** `src/writer/trace-index.ts`, `test/writer/trace-index.test.ts` (and `test/writer/background-checkpoint.test.ts` only if needed).
+
+1. `snapshot()` no longer copies shard maps. It records the live shard `Map` objects as the snapshot's maps (O(number of shards)) and marks every shard as shared.
+2. Before the first change to a shared shard while the snapshot is held (a new trace id in that shard, or an update to one of its entries), the live index replaces that shard's map with a copy (`new Map(map)`) and marks the shard unshared; the snapshot keeps the original map. A new shard created while the snapshot is held is never shared. Entry-level copy-on-write stays as it is (an entry object the snapshot's map still holds is cloned before it is changed).
+3. `release()` drops the snapshot and the shared marks.
+4. Behaviour and bytes are unchanged; the existing snapshot/copy-on-write tests keep passing. New tests: a snapshot taken, then a new trace added to an existing shard and to a new shard: the snapshot's entries for those shards do not include the new traces, the live index does; a shard untouched during the snapshot is written from the same map object (no copy — observable through a test-only check that `snapshot().entries(shard)` and a second read after release refer to equal content; identity is not required to be observable); `snapshot()` cost does not grow with the number of traces is not unit-tested (measured by the load run).
+
 ## Task 5 (controller): measure, document, close #53
 
 1. Local run with native telemetrygen (1M spans gRPC + 1M logs HTTP, CI flags): all records, 0 refused/rejected, peak RSS under 512 MB.
