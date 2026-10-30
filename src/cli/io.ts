@@ -13,7 +13,10 @@ export interface CliIo {
   spawn: typeof spawn;
 }
 
-/** Flags that map onto configuration; the schema validates them like any other layer. */
+/**
+ * Flags shared by every writing command: the ones that map onto configuration (the schema validates
+ * them like any other layer) and the report mode flags `--append`/`--replace`, which do not.
+ */
 export interface ConfigFlags {
   config?: string;
   title?: string;

@@ -44,7 +44,7 @@ Turns OTLP files into a report. Inputs can be OTLP JSON, JSON lines (such as Col
 | `--config <file>` | Config file. Default: `$OTEL_HTML_CONFIG`, else `./otel-html.yaml`. |
 | `--title <title>` | Report title. |
 | `--append` | Require a report at `-o` and add to it (fails when there is none; useful in CI to catch a wrong path). |
-| `--replace` | Start the report over. Without either flag, `-o` is appended to when it already holds a report and created otherwise. |
+| `--replace` | Start the report over. Without either flag, `-o` is appended to when it already holds a report written by the same otel-html version and created otherwise. |
 | `--signal <signal>` | `traces`, `logs` or `metrics`. Needed for protobuf (`.pb`) inputs, which do not say what they hold. |
 
 ### `serve`
@@ -63,7 +63,7 @@ otel-html serve -o ./report
 | `--http <port>`, `--no-http` | OTLP/HTTP port (default 4318), or turn it off. |
 | `--grpc <port>`, `--no-grpc` | OTLP/gRPC port (default 4317), or turn it off. Port 0 picks a free port. |
 | `--append` | Require a report at `-o` and add to it (fails when there is none; useful in CI to catch a wrong path). |
-| `--replace` | Start the report over. Without either flag, `-o` is appended to when it already holds a report and created otherwise. |
+| `--replace` | Start the report over. Without either flag, `-o` is appended to when it already holds a report written by the same otel-html version and created otherwise. |
 | `--config <file>`, `--title <title>` | As for `convert`. |
 
 Turning off both transports is a usage error (exit 2). A port that is already in use exits 1 with the system's `EADDRINUSE` message and a hint to pass `--http <port>` or `--grpc <port>`, or to turn that transport off (other bind errors get a hint for their cause: privileges for ports below 1024, `--host` for an address that is not this machine's).

@@ -83,7 +83,7 @@ export async function loadCheckpoint(fs: FileSystem, out: string, version: strin
   if (!(await fs.exists(manifestPath))) {
     throw new OtelHtmlError('usage', {
       message: `cannot append: no report found at ${out} (missing ${MANIFEST_PATH})`,
-      hint: 'use mode create to start a new report',
+      hint: 'the folder holds no report; drop --append to create one',
     });
   }
   const manifest = parseManifest(

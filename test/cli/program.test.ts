@@ -105,6 +105,7 @@ describe('cli', () => {
     const missing = await run(w, ['convert', 'in/b.json', '-o', 'fresh', '--append']);
     expect(missing.code).toBe(2);
     expect(missing.stderr).toContain('error: ');
+    expect(missing.stderr).toContain('cannot append');
     expect(await w.fs.exists('fresh')).toBe(false);
   });
 

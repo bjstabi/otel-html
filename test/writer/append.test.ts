@@ -152,6 +152,27 @@ describe('append', () => {
     expect(e.path).toBe('manifest.otelHtmlVersion');
   });
 
+  test('a version mismatch on the default path deletes nothing', async () => {
+    const w = createTestWriter();
+    await closedReportWithTwoChunks(w);
+    const before = w.fs.snapshot();
+    const e = await failure(
+      openSession({ ...w.deps, version: '9.9.9' }, { out: OUT, config: SMALL_CHUNKS, mode: 'open' }),
+    );
+    expect(e.code).toBe('version-mismatch');
+    expect(e.message).toContain(
+      `cannot append: the report at ${OUT} was written by otel-html 0.1.0 (this is 9.9.9)`,
+    );
+    expect(e.hint).toBe(
+      `pass --replace (replace: true in the library) to start it over, or combine across versions with \`otel-html merge ${OUT} <new> -o <dir>\``,
+    );
+    expect(e.path).toBe('manifest.otelHtmlVersion');
+    const after = w.fs.snapshot();
+    for (const [path, text] of before) {
+      if (!path.endsWith('.lock')) expect(after.get(path), path).toBe(text);
+    }
+  });
+
   test('a state file written by another version is a version mismatch too', async () => {
     const w = createTestWriter();
     await closedReportWithTwoChunks(w);

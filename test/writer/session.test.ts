@@ -487,7 +487,7 @@ describe('flush policy and telemetry', () => {
 });
 
 describe('folders and locking', () => {
-  test('create refuses a non-empty folder that is not a report', async () => {
+  test('replace refuses a non-empty folder that is not a report', async () => {
     const w = createTestWriter();
     await w.fs.writeBytes('r/notes.txt', new Uint8Array([1]));
     const e = await failure(open(w));
@@ -539,7 +539,7 @@ describe('folders and locking', () => {
     expect(chunkFiles).toEqual(['r/data/chunks/spans/000000.js']);
   });
 
-  test('create replaces a report whose data/metrics holds a stray file (e.g. .DS_Store)', async () => {
+  test('replace replaces a report whose data/metrics holds a stray file (e.g. .DS_Store)', async () => {
     const w = createTestWriter();
     await (await open(w)).close();
     await w.fs.mkdirp('r/data/metrics');

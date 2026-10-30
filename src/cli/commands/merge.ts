@@ -15,9 +15,9 @@ interface MergeFlags extends ConfigFlags {
 export function addMergeCommand(program: Command, io: CliIo, deps: Partial<WriterDeps>): void {
   const merge = program
     .command('merge')
-    .description('combine reports into a new one')
+    .description('combine reports into one (adds to a report already at -o)')
     .argument('<reports...>', 'report folders')
-    .requiredOption('-o, --out <dir>', 'report folder to write')
+    .requiredOption('-o, --out <dir>', 'report folder to write or add to')
     .option('--config <file>', 'config file (default: $OTEL_HTML_CONFIG or ./otel-html.yaml)');
   addReportModeOptions(merge).action(async (reports: string[], flags: MergeFlags) => {
     const fs = deps.fs ?? createNodeFileSystem();
