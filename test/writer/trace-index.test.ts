@@ -200,32 +200,33 @@ describe('TraceIndex memory shape', () => {
     expect(entryOf(idx, T2)?.logChunks).toEqual(['chunks/logs/000000']);
   });
 
-  test('equal root strings of different traces are one instance', () => {
+  // Interning and the shared empty list are not observable in JS (strings compare by value); the load test
+  // measures them. These check the values stay right on those paths.
+  test('equal root strings of different traces keep their values', () => {
     const idx = new TraceIndex();
-    idx.add(mk(1, { name: `GET /${'x'.repeat(3)}` }), 'chunks/spans/000000', resource);
-    idx.add(mk(1, { traceId: T2, name: `GET /${'xxx'}` }), 'chunks/spans/000000', resource);
-    const a = entryOf(idx, TRACE)?.root;
-    const b = entryOf(idx, T2)?.root;
-    expect(Object.is(a?.name, b?.name)).toBe(true);
-    expect(Object.is(a?.service, b?.service)).toBe(true);
+    idx.add(mk(1, { name: 'GET /a' }), 'chunks/spans/000000', resource);
+    idx.add(mk(1, { traceId: T2, name: 'GET /a' }), 'chunks/spans/000000', resource);
+    expect(entryOf(idx, TRACE)?.root).toEqual(entryOf(idx, T2)?.root);
+    expect(entryOf(idx, T2)?.root?.name).toBe('GET /a');
   });
 
   test('past the intern cap new strings are still stored correctly', () => {
     const idx = new TraceIndex({ internCap: 1 });
     idx.add(mk(1, { name: 'first' }), 'chunks/spans/000000', resource);
-    idx.add(mk(1, { traceId: T2, name: `sec${'ond'}` }), 'chunks/spans/000000', resource);
+    idx.add(mk(1, { traceId: T2, name: 'second' }), 'chunks/spans/000000', resource);
+    expect(entryOf(idx, TRACE)?.root?.name).toBe('first');
     expect(entryOf(idx, T2)?.root?.name).toBe('second');
-    const again = new TraceIndex({ internCap: 1 });
-    again.add(mk(1, { name: 'first' }), 'chunks/spans/000000', resource);
-    expect(entryOf(again, TRACE)?.root?.name).toBe('first');
   });
 
-  test('load interns root strings', () => {
+  test('load round-trips, and a loaded entry without logs can take a log chunk', () => {
     const idx = new TraceIndex();
     idx.add(mk(1), 'chunks/spans/000000', resource);
     idx.add(mk(1, { traceId: T2 }), 'chunks/spans/000000', resource);
-    const loaded = TraceIndex.load(JSON.parse(JSON.stringify(idx.toJSON())));
-    expect(Object.is(entryOf(loaded, TRACE)?.root?.name, entryOf(loaded, T2)?.root?.name)).toBe(true);
+    const json = JSON.parse(JSON.stringify(idx.toJSON()));
+    const loaded = TraceIndex.load(json);
     expect(loaded.toJSON()).toEqual(idx.toJSON());
+    loaded.addLog(mkLog({ traceId: T2 }), 'chunks/logs/000000');
+    expect(entryOf(loaded, T2)?.logChunks).toEqual(['chunks/logs/000000']);
+    expect(entryOf(loaded, TRACE)?.logChunks).toEqual([]);
   });
 });

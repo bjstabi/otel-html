@@ -130,8 +130,8 @@ export class TraceIndex {
       for (const [id, e] of Object.entries(entries))
         traces.set(id, {
           ...e,
-          chunks: [...e.chunks],
-          logChunks: [...e.logChunks],
+          chunks: e.chunks.length === 0 ? NO_CHUNKS : [...e.chunks],
+          logChunks: e.logChunks.length === 0 ? NO_CHUNKS : [...e.logChunks],
           root:
             e.root === null
               ? null
