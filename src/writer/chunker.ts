@@ -112,6 +112,8 @@ export class ChunkBuffer<R> {
   #start = Number.POSITIVE_INFINITY;
   #end = Number.NEGATIVE_INFINITY;
   #n: number;
+  #key = '';
+  #keyFor = -1;
 
   constructor(spec: SignalSpec<R>, nextChunk: number) {
     this.#spec = spec;
@@ -124,8 +126,13 @@ export class ChunkBuffer<R> {
     return this.#n;
   }
 
+  /** Cached per chunk number: the trace index keeps a reference to it per trace, so one instance is shared. */
   get pendingKey(): string {
-    return chunkKey(this.#spec.signal, this.#n);
+    if (this.#keyFor !== this.#n) {
+      this.#key = chunkKey(this.#spec.signal, this.#n);
+      this.#keyFor = this.#n;
+    }
+    return this.#key;
   }
 
   get length(): number {

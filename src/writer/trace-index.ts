@@ -8,8 +8,15 @@ import { resourceName, serviceName } from '../semconv/resource-name.js';
 /** The registration key of the chunk a span was written to (`chunks/spans/000012`). */
 export type ChunkRef = string;
 
+// Every new entry starts on this one array (an empty `[]` that has been pushed to costs 184 B, a concat result
+// 56 B). It is frozen so a stray in-place push throws instead of corrupting every entry: chunk lists are only
+// ever replaced (`concat`), which also lets a checkpoint hold an entry while the writer keeps appending.
+const NO_CHUNKS = Object.freeze([]) as unknown as string[];
+
+const DEFAULT_INTERN_CAP = 10_000;
+
 function emptyEntry(start: number, end: number): TraceEntry {
-  return { chunks: [], logChunks: [], start, end, spans: 0, logs: 0, errors: 0, root: null };
+  return { chunks: NO_CHUNKS, logChunks: NO_CHUNKS, start, end, spans: 0, logs: 0, errors: 0, root: null };
 }
 
 /**
@@ -20,6 +27,21 @@ function emptyEntry(start: number, end: number): TraceEntry {
 export class TraceIndex {
   readonly #shards = new Map<string, Map<string, TraceEntry>>();
   readonly #dirty = new Set<string>();
+  // Root service/name/resource strings repeat across hundreds of thousands of traces. The cap bounds the table
+  // when names are unbounded (e.g. ids in span names); past it strings are stored as they are.
+  readonly #interned = new Map<string, string>();
+  readonly #internCap: number;
+
+  constructor(options: { internCap?: number } = {}) {
+    this.#internCap = options.internCap ?? DEFAULT_INTERN_CAP;
+  }
+
+  #intern(s: string): string {
+    const known = this.#interned.get(s);
+    if (known !== undefined) return known;
+    if (this.#interned.size < this.#internCap) this.#interned.set(s, s);
+    return s;
+  }
 
   #entry(traceId: TraceId): TraceEntry | undefined {
     return this.#shards.get(shardOf(traceId))?.get(traceId);
@@ -38,14 +60,18 @@ export class TraceIndex {
 
   add(span: SpanRecord, chunk: ChunkRef, resource: ResourceRecord): void {
     const e = this.#entry(span.traceId) ?? this.#create(span.traceId, emptyEntry(span.start, span.end));
-    if (e.chunks[e.chunks.length - 1] !== chunk) e.chunks.push(chunk);
+    if (e.chunks[e.chunks.length - 1] !== chunk) e.chunks = e.chunks.concat(chunk);
     // Timing is span-defined: an entry that so far only knew logs takes the first span's extent outright.
     e.start = e.spans === 0 ? span.start : Math.min(e.start, span.start);
     e.end = e.spans === 0 ? span.end : Math.max(e.end, span.end);
     e.spans++;
     if (span.status.code === StatusCode.ERROR) e.errors++;
     if (span.parentSpanId === null && e.root === null) {
-      e.root = { service: serviceName(resource), name: span.name, resource: resourceName(span) };
+      e.root = {
+        service: this.#intern(serviceName(resource)),
+        name: this.#intern(span.name),
+        resource: this.#intern(resourceName(span)),
+      };
     }
     this.#dirty.add(shardOf(span.traceId));
   }
@@ -58,7 +84,7 @@ export class TraceIndex {
     if (log.traceId === null) return;
     const t = logTime(log);
     const e = this.#entry(log.traceId) ?? this.#create(log.traceId, emptyEntry(t, t));
-    if (e.logChunks[e.logChunks.length - 1] !== chunk) e.logChunks.push(chunk);
+    if (e.logChunks[e.logChunks.length - 1] !== chunk) e.logChunks = e.logChunks.concat(chunk);
     if (e.spans === 0) {
       e.start = Math.min(e.start, t);
       e.end = Math.max(e.end, t);
@@ -102,7 +128,19 @@ export class TraceIndex {
     for (const [shard, entries] of Object.entries(shards)) {
       const traces = new Map<string, TraceEntry>();
       for (const [id, e] of Object.entries(entries))
-        traces.set(id, { ...e, chunks: [...e.chunks], logChunks: [...e.logChunks] });
+        traces.set(id, {
+          ...e,
+          chunks: [...e.chunks],
+          logChunks: [...e.logChunks],
+          root:
+            e.root === null
+              ? null
+              : {
+                  service: idx.#intern(e.root.service),
+                  name: idx.#intern(e.root.name),
+                  resource: idx.#intern(e.root.resource),
+                },
+        });
       idx.#shards.set(shard, traces);
     }
     idx.markAllDirty();
