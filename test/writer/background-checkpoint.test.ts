@@ -3,7 +3,7 @@ import { StreamNormalizer } from '../../src/rollups/metric-streams.js';
 import { openSession } from '../../src/writer/session.js';
 import { span, traceRequest } from '../../test-support/otlp-builders.js';
 import { createTestWriter, EPOCH_NS, otlp, type TestWriter } from '../../test-support/writer-deps.js';
-import { config, heldCheckpoint, OUT, one, STATE_0 } from './checkpoint-helpers.js';
+import { config, heldCheckpoint, makeDue, OUT, one, STATE_0 } from './checkpoint-helpers.js';
 import { manifestOf, readDataFile, spanIdOf, traceIdOf } from './helpers.js';
 
 const stateOf = (
@@ -85,6 +85,28 @@ describe('interval checkpoints run in the background', () => {
     await s.flush();
     expect(shardEntry(w, 0)?.spans).toBe(1);
     expect(manifestOf(w, OUT).totals.spans).toBe(1);
+    await s.close();
+  });
+
+  test('a failed interval prepare is logged and does not fail the add that triggered it', async () => {
+    const w = createTestWriter();
+    const s = await openSession(w.deps, { out: OUT, config, mode: 'replace' });
+    await s.add(one(0, 1), 'a.json');
+    makeDue(w);
+    const spy = vi.spyOn(StreamNormalizer.prototype, 'toJSON').mockImplementationOnce(() => {
+      throw new Error('prepare broke');
+    });
+    await expect(s.add(one(1, 2), 'b.json')).resolves.toMatchObject({ accepted: 1 });
+    spy.mockRestore();
+    const errors = (): string[] => w.logs.filter((l) => l.level === 'error').map((l) => l.msg);
+    expect(errors()).toEqual(['checkpoint failed; will retry at the next flush']);
+    // the interval restarted: the next add does not retry straight away
+    await s.add(one(2, 3), 'c.json');
+    expect(errors()).toHaveLength(1);
+    expect(w.fs.snapshot().has(`${OUT}/data/manifest.js`)).toBe(false);
+    makeDue(w);
+    await s.add(one(3, 4), 'd.json');
+    await vi.waitFor(() => expect(manifestOf(w, OUT)).toMatchObject({ totals: { spans: 4 } }));
     await s.close();
   });
 

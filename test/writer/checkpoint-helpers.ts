@@ -31,7 +31,7 @@ export const one = (trace: number, spanN: number): ReturnType<typeof otlp> =>
     ]),
   );
 
-const makeDue = (w: TestWriter): void => w.clock.advance(BigInt(INTERVAL_MS) * 1_000_000n);
+export const makeDue = (w: TestWriter): void => w.clock.advance(BigInt(INTERVAL_MS) * 1_000_000n);
 
 /** A session whose first interval checkpoint (after two spans) is held at its state slot write. */
 export async function heldCheckpoint(holdPath: string = STATE_0): Promise<{

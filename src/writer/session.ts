@@ -862,7 +862,19 @@ class Session implements WriterSession {
 
   /** Prepare a checkpoint under the serial queue and write it in the background (see `#inflight`). */
   async #startBackgroundCheckpoint(): Promise<void> {
-    const prepared = await this.#prepareCheckpoint(false);
+    let prepared: PreparedCheckpoint;
+    try {
+      prepared = await this.#prepareCheckpoint(false);
+    } catch (e) {
+      // The records that triggered this are already accepted, so the request must not fail (a sender would retry it
+      // and logs and metric points would be counted twice). A failed prepare leaves its chunks pending; the interval
+      // restarts so the next request does not retry straight away, and the next flush surfaces a persistent fault.
+      this.#lastFlushMs = this.#deps.clock.monotonicMs();
+      this.#deps.logger.error('checkpoint failed; will retry at the next flush', {
+        error: e instanceof Error ? e.message : String(e),
+      });
+      return;
+    }
     this.#inflight = this.#writeCheckpoint(prepared).then(
       () => {
         this.#inflight = null;
