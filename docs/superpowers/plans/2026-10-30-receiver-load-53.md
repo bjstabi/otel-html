@@ -90,6 +90,26 @@ Today `#maybeCheckpoint()` (called from `add` when not partial, `addRecords` and
 3. `release()` drops the snapshot and the shared marks.
 4. Behaviour and bytes are unchanged; the existing snapshot/copy-on-write tests keep passing. New tests: a snapshot taken, then a new trace added to an existing shard and to a new shard: the snapshot's entries for those shards do not include the new traces, the live index does; a shard untouched during the snapshot is written from the same map object (no copy — observable through a test-only check that `snapshot().entries(shard)` and a second read after release refer to equal content; identity is not required to be observable); `snapshot()` cost does not grow with the number of traces is not unit-tested (measured by the load run).
 
+## Task 4c: Fewer heap objects per trace; receivers keep GC pauses short
+
+**Why:** the CI run on the head after Task 4b (run 41077748099) met memory (430 MB) but telemetrygen still dropped 3,746 spans. Reproduced in a Linux container limited to 2 CPUs (node 24.22.1, native telemetrygen, CI flags): under `--optimize-for-size` V8 runs a full mark-compact about every 0.4 s (682-792 in 280 s) with pauses up to 200 ms; stalls of 300+ ms drop spans. Measured in that container (1M spans unless noted):
+
+| Trace index | V8 flags set by the CLI at receiver start | Spans | Peak RSS |
+|---|---|---|---|
+| head | `--optimize-for-size` | 993,894-996,522 | 421-430 MB |
+| head | none | 1,000,000 | 842 MB |
+| shared roots + shared chunk lists | `--optimize-for-size` | 995,368 | 356 MB |
+| shared roots + shared chunk lists | `--heap-growing-percent=20` | 1,000,000 | 542 MB |
+| shared roots + shared chunk lists | `--optimize-for-size --heap-growing-percent=40` | 1,000,000 | 435 MB (152 mark-compacts, pauses ≤ 77 ms) |
+| same, 1M spans + 1M logs | same | 1,000,000 + 1,000,000 | 438 MB |
+
+**Files:** `src/writer/trace-index.ts`, `test/writer/trace-index.test.ts`, `src/cli/main.ts`, the CLI tests that pin the hook if they assert the flag string, README (the metrics Limits bullet sentence added in Task 4).
+
+1. `TraceIndex` shares root objects: a root is frozen and reused for every trace with the same `service`, `name` and `resource` (a map keyed by the three strings joined with `\u0000`, bounded by the same intern cap; past the cap a fresh frozen root is stored). `load` shares the same way.
+2. `TraceIndex` shares one-element chunk lists: when an entry's `chunks` (or `logChunks`) is empty and gets its first chunk, it takes a frozen one-element array shared by every entry that got the same first chunk (cache the last such array per list kind: the pending chunk key only changes on a cut). Longer lists keep `concat`. `load` shares one-element lists the same way.
+3. Tests: entries with equal roots or the same single chunk serialize exactly as before; a shared one-element list is never mutated (an entry that gets a second chunk has `[c0, c1]` and the other entries keep `[c0]`); a frozen root cannot be changed (assigning throws in strict mode, or the entry's root is replaced, not mutated, wherever the code sets it).
+4. `src/cli/main.ts`: receivers (`serve`, `run`, through the `favourHeapSize` CLI dep) set `--optimize-for-size --heap-growing-percent=40`; metric conversions keep `--optimize-for-size` alone (the 72M-point metrics figure was measured with it). The comment above the functions gives the reason and the numbers above in two sentences. README: the sentence Task 4 added to the metrics bullet says what receivers set and why (short GC pauses: a sender's batch queue overflows when the receiver stalls).
+
 ## Task 5 (controller): measure, document, close #53
 
 1. Local run with native telemetrygen (1M spans gRPC + 1M logs HTTP, CI flags): all records, 0 refused/rejected, peak RSS under 512 MB.
