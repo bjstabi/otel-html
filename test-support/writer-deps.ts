@@ -5,6 +5,7 @@ import { parseOtlpJson } from '../src/model/otlp-json.js';
 import type { Logger, ProcessInfo, SpanHandle, Tracer } from '../src/writer/ports.js';
 import type { WriterDeps } from '../src/writer/session.js';
 import type { ViewerAssets } from '../src/writer/viewer-assets.js';
+import { createFakeTimers } from './fake-timers.js';
 import { createFixedClock } from './fixed-clock.js';
 import { createMemoryFileSystem } from './memory-fs.js';
 import type { JsonObject } from './otlp-builders.js';
@@ -31,6 +32,7 @@ export interface TestWriter {
   deps: WriterDeps;
   fs: ReturnType<typeof createMemoryFileSystem>;
   clock: ReturnType<typeof createFixedClock>;
+  timers: ReturnType<typeof createFakeTimers>;
   logs: LogEntry[];
   spans: RecordedSpan[];
   process: FakeProcess;
@@ -60,6 +62,7 @@ export function createTestWriter(
 ): TestWriter {
   const fs = overrides.fs ?? createMemoryFileSystem();
   const clock = createFixedClock(parseUnixNanos(EPOCH_NS, 'epoch'));
+  const timers = createFakeTimers();
   const logs: LogEntry[] = [];
   const spans: RecordedSpan[] = [];
   const log =
@@ -90,6 +93,7 @@ export function createTestWriter(
     deps: {
       fs,
       clock,
+      timers,
       logger,
       tracer,
       process,
@@ -98,6 +102,7 @@ export function createTestWriter(
     },
     fs,
     clock,
+    timers,
     logs,
     spans,
     process,

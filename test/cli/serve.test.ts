@@ -113,6 +113,18 @@ describe('serve', () => {
     expect(allSpans(w, 'out')).toHaveLength(2);
   });
 
+  test('a burst followed by silence reaches the report before SIGINT', async () => {
+    const w = createTestWriter();
+    const h = start(w, ['serve', '-o', 'out', '--http', '0', '--no-grpc']);
+    open.push(h);
+    expect(await post(httpOf(await listening(h)), 1)).toBe(200);
+    w.timers.fire();
+    await vi.waitFor(() => expect(manifestOf(w, 'out').totals.spans).toBeGreaterThanOrEqual(1));
+    h.fire('SIGINT');
+    expect(await h.result).toBe(0);
+    expect(manifestOf(w, 'out').complete).toBe(true);
+  });
+
   test('refused requests are counted and broken down by outcome in the summary', async () => {
     const w = createTestWriter();
     const h = start(w, ['serve', '-o', 'out', '--http', '0', '--no-grpc']);

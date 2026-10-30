@@ -314,7 +314,7 @@ Config is a YAML or JSON file (`otel-html.yaml` by default), or an object passed
 |---|---|---|
 | `title` | none | Report title. Env: `OTEL_HTML_TITLE`. |
 | `writer.chunkTargetBytes` | 4000000 | Target size of a data chunk. |
-| `writer.flushIntervalMs` | 5000 | Checkpoint interval. |
+| `writer.flushIntervalMs` | 5000 | Checkpoint interval. Also checkpoints once after this long idle with new records. |
 | `writer.dedupeCapacity` | 200000 | Recent span IDs remembered for de-duplication. |
 | `writer.facetValueCap` | 1000 | Distinct values kept per facet key. |
 | `writer.facetKeyCap` | 500 | Facet keys kept. |

@@ -24,6 +24,11 @@ export interface Clock {
   monotonicMs(): number;
 }
 
+export interface Timers {
+  /** Runs `fn` once after `ms`; the returned function cancels it (a no-op once it has fired or been cancelled). */
+  after(ms: number, fn: () => void): () => void;
+}
+
 export interface Logger {
   debug(msg: string, attrs?: Record<string, unknown>): void;
   info(msg: string, attrs?: Record<string, unknown>): void;

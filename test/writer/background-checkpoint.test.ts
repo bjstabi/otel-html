@@ -1,36 +1,10 @@
 import { describe, expect, test, vi } from 'vitest';
 import { StreamNormalizer } from '../../src/rollups/metric-streams.js';
-import { openSession, type WriterSession } from '../../src/writer/session.js';
-import { createMemoryFileSystem } from '../../test-support/memory-fs.js';
+import { openSession } from '../../src/writer/session.js';
 import { span, traceRequest } from '../../test-support/otlp-builders.js';
-import {
-  createTestWriter,
-  EPOCH_NS,
-  otlp,
-  type TestWriter,
-  testConfig,
-} from '../../test-support/writer-deps.js';
+import { createTestWriter, EPOCH_NS, otlp, type TestWriter } from '../../test-support/writer-deps.js';
+import { config, heldCheckpoint, OUT, one, STATE_0 } from './checkpoint-helpers.js';
 import { manifestOf, readDataFile, spanIdOf, traceIdOf } from './helpers.js';
-
-const OUT = 'r';
-const INTERVAL_MS = 5_000;
-const STATE_0 = 'data/state/session.0.json';
-// One chunk per span, so chunk numbers show which checkpoint listed what.
-const config = testConfig({ writer: { chunkTargetBytes: 1, flushIntervalMs: INTERVAL_MS } });
-
-const one = (trace: number, spanN: number): ReturnType<typeof otlp> =>
-  otlp(
-    traceRequest([
-      span({
-        traceId: traceIdOf(trace),
-        spanId: spanIdOf(spanN),
-        startTimeUnixNano: String(BigInt(EPOCH_NS) + BigInt(spanN)),
-        endTimeUnixNano: String(BigInt(EPOCH_NS) + BigInt(spanN) + 10n),
-      }),
-    ]),
-  );
-
-const makeDue = (w: TestWriter): void => w.clock.advance(BigInt(INTERVAL_MS) * 1_000_000n);
 
 const stateOf = (
   w: TestWriter,
@@ -45,22 +19,6 @@ const shardEntry = (w: TestWriter, trace: number): { spans: number } | undefined
       { spans: number }
     >
   )[traceIdOf(trace)];
-
-/** A session whose first interval checkpoint (after two spans) is held at its state slot write. */
-async function heldCheckpoint(holdPath = STATE_0): Promise<{
-  w: TestWriter;
-  s: WriterSession;
-  gate: ReturnType<ReturnType<typeof createMemoryFileSystem>['holdNextWrite']>;
-}> {
-  const w = createTestWriter({ fs: createMemoryFileSystem({ pieces: true }) });
-  const s = await openSession(w.deps, { out: OUT, config, mode: 'replace' });
-  await s.add(one(0, 1), 'a.json');
-  makeDue(w);
-  const gate = w.fs.holdNextWrite(holdPath);
-  await s.add(one(1, 2), 'b.json'); // due: prepares the checkpoint and returns while its write is held
-  await gate.reached;
-  return { w, s, gate };
-}
 
 describe('interval checkpoints run in the background', () => {
   test('adds and endInput resolve while the state slot write is held, and their spans are kept', async () => {
