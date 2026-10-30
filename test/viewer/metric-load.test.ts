@@ -3,9 +3,15 @@ import { reviveDataJson, unwrapDataFile, wrapDataFile } from '../../src/format/d
 import { encodeSeriesFile, LEVEL0_WIDTH_NS, parseSeriesFile } from '../../src/format/metric-files.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { loadMetric, loadMetricCatalog } from '../../src/viewer/data/metric-load.js';
-import { type MetricQuery, runMetricQuery } from '../../src/viewer/data/metric-query.js';
+import {
+  defaultShow,
+  type MetricQuery,
+  NOTES,
+  runMetricQuery,
+  showOptions,
+} from '../../src/viewer/data/metric-query.js';
 import { createScriptedLoader } from '../../test-support/scripted-loader.js';
-import { buildCounterRun, buildMetricReports, type Fixture } from './report-fixture.js';
+import { buildCounterRun, buildMetricReports, buildSummaryRun, type Fixture } from './report-fixture.js';
 
 let reports: { compacted: Fixture; segments: Fixture };
 beforeAll(async () => {
@@ -120,6 +126,46 @@ describe('loadMetric', () => {
       { n: 2, median: 3906 },
     ]);
     expect((await load(reports.segments, 0)).gaps).toBeNull();
+  });
+
+  test('summary quantile options come from series.js, so one dropped early still shows without level 0 (#39)', async () => {
+    // An hour at 1 s: levels 0 and 1 (8.192 s buckets). q0.99 is sent for the first 4 s only, so level 1's first
+    // bucket (last point per bucket) has no q0.99 and the coarsest level would miss it.
+    const f = await buildSummaryRun({ durationS: 3600, stepS: 1, dropAfterS: 4 });
+    const loader = createScriptedLoader(f.files);
+    const m = await loadMetric(loader, f.manifest, 0);
+    expect(m.levels.map((l) => l.level)).toEqual([0, 1]);
+    expect(m.quantiles).toEqual([0.5, 0.99]);
+    expect(await showOptions(m)).toEqual(['q0.5', 'q0.99', 'count', 'sum']);
+    expect(await defaultShow(m)).toBe('q0.99');
+    expect(loader.calls.filter((p) => /\/l[0-6]\.js$/.test(p))).toEqual([]);
+    const range = f.manifest.range ?? { start: 0, end: 0 };
+    const q: MetricQuery = {
+      id: 'a',
+      metric: 'run.latency',
+      kind: null,
+      unit: null,
+      by: [],
+      where: null,
+      fn: [],
+      alias: null,
+      hidden: false,
+      show: 'q0.99',
+    };
+    expect((await runMetricQuery(m, q, range, 600)).notes).not.toContain(NOTES.quantilesFromLevel);
+
+    // A report from before the set was recorded: the options come from the coarsest level and the chart says so.
+    const path = 'data/metrics/000000/series.js';
+    const key = 'metrics/000000/series';
+    const parsed = parseSeriesFile(reviveDataJson(unwrapDataFile(f.files.get(path) ?? '', key)), path);
+    const { quantiles: _dropped, ...withoutQuantiles } = parsed;
+    const files = new Map(f.files).set(path, wrapDataFile(key, encodeSeriesFile(withoutQuantiles)));
+    const oldLoader = createScriptedLoader(files);
+    const old = await loadMetric(oldLoader, f.manifest, 0);
+    expect(old.quantiles).toBeNull();
+    expect(await showOptions(old)).toEqual(['q0.5', 'count', 'sum']);
+    expect(oldLoader.calls.filter((p) => /\/l[0-6]\.js$/.test(p))).toEqual(['data/metrics/000000/l1.js']);
+    expect((await runMetricQuery(old, q, range, 600)).notes).toContain(NOTES.quantilesFromLevel);
   });
 
   test('a format-1 report (no gaps in series.js) still charts alike, measuring gaps on level 0', async () => {

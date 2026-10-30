@@ -29,6 +29,7 @@ import {
   type SeriesGaps,
   type StoredExemplar,
   seriesGaps,
+  summaryQuantilesOf,
 } from '../format/metric-files.js';
 import { OtelHtmlError } from '../model/errors.js';
 import type { RelNanos } from '../model/ids.js';
@@ -276,6 +277,8 @@ export class MetricSeriesWriter {
       let level: BucketSeries[] = merged.l0;
       merged.l0 = [];
       const gaps = gapsOf(catalog.seriesDefs(id).length, level);
+      // A summary's quantile set, so the show options need no level file (#39).
+      const quantiles = catalog.entries()[id]?.type === 'summary' ? summaryQuantilesOf(level) : undefined;
       const range = bucketRange(level);
       const count = range === null ? 0 : levelCount(range.min * LEVEL0_WIDTH_NS, range.max * LEVEL0_WIDTH_NS);
       // Written unlisted, then swapped in at once: a failure part way leaves the segments the only listed data.
@@ -301,11 +304,17 @@ export class MetricSeriesWriter {
         await this.#writeFile(path, encodeExemplarFile({ metric: id, exemplars: capped }));
         written.push(path);
       }
-      // The series' point gaps, so a chart picks its bucket width without loading level 0. Every series of the
-      // metric is in the catalog and in this file already: only `gaps` is new, and it is valid with the segments too.
+      // The series' point gaps, so a chart picks its bucket width without loading level 0, and a summary's
+      // quantiles. Every series of the metric is in the catalog and in this file already: only those are new, and
+      // they are valid with the segments too.
       await this.#writeFile(
         metricSeriesPath(id),
-        encodeSeriesFile({ metric: id, series: [...catalog.seriesDefs(id)], gaps }),
+        encodeSeriesFile({
+          metric: id,
+          series: [...catalog.seriesDefs(id)],
+          gaps,
+          ...(quantiles === undefined ? {} : { quantiles }),
+        }),
       );
       for (const n of paths.segments) {
         this.#listed.delete(metricSegmentPath(id, n));

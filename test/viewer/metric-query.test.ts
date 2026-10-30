@@ -105,7 +105,12 @@ function metric(
   specs: SeriesSpec[],
   widthNs = 10 * S,
   level = 0,
-  more: { fromSegments?: boolean; exemplars?: StoredExemplar[]; gaps?: SeriesGaps[] } = {},
+  more: {
+    fromSegments?: boolean;
+    exemplars?: StoredExemplar[];
+    gaps?: SeriesGaps[];
+    quantiles?: number[];
+  } = {},
 ): LoadedMetric {
   const series: LoadedSeries[] = specs.map((s, id) => {
     const def: SeriesDef = {
@@ -127,6 +132,7 @@ function metric(
       entry: { ...e, series: specs.length },
       series,
       gaps: more.gaps ?? null,
+      quantiles: more.quantiles ?? null,
       fromSegments: more.fromSegments ?? false,
     },
     [levelData(specs, widthNs, level, more.exemplars)],

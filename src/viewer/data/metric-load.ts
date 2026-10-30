@@ -71,6 +71,11 @@ export interface LoadedMetric {
    * and the bucket width measures them on the finest level instead.
    */
   gaps: readonly SeriesGaps[] | null;
+  /**
+   * A summary metric's quantiles from `series.js` (every one any series sent); null when the report has none
+   * (unfinished, or written before they were recorded), and the show options come from a level instead.
+   */
+  quantiles: readonly number[] | null;
   /** True when the levels were derived in memory from segments (the report is unfinished). */
   fromSegments: boolean;
   /** Level `k`, read once and kept with the metric (a failed read is tried again on the next call). */
@@ -79,7 +84,7 @@ export interface LoadedMetric {
 
 /** A `LoadedMetric` over levels already in memory (an unfinished report's derived levels, or a test's). */
 export function metricFromLevels(
-  m: Pick<LoadedMetric, 'entry' | 'series' | 'gaps' | 'fromSegments'>,
+  m: Pick<LoadedMetric, 'entry' | 'series' | 'gaps' | 'quantiles' | 'fromSegments'>,
   levels: readonly LevelData[],
 ): LoadedMetric {
   const byLevel = new Map(levels.map((l) => [l.level, l]));
@@ -203,10 +208,14 @@ async function loadSeriesDefs(
   loader: ScriptLoader,
   manifest: Manifest,
   entry: MetricEntry,
-): Promise<{ defs: readonly SeriesDef[]; gaps: readonly SeriesGaps[] | null }> {
+): Promise<{
+  defs: readonly SeriesDef[];
+  gaps: readonly SeriesGaps[] | null;
+  quantiles: readonly number[] | null;
+}> {
   const path = metricSeriesPath(entry.id);
   if (!manifest.metricFiles.includes(path)) {
-    if (entry.series === 0) return { defs: [], gaps: null };
+    if (entry.series === 0) return { defs: [], gaps: null, quantiles: null };
     throw invalid('manifest.metricFiles', `a listing of ${path}`, 'not listed');
   }
   const file = parseSeriesFile(reviveDataJson(await loader.load(path, metricSeriesKey(entry.id))), path);
@@ -218,6 +227,7 @@ async function loadSeriesDefs(
   return {
     defs: file.series.slice(0, entry.series),
     gaps: file.gaps === undefined ? null : file.gaps.slice(0, entry.series),
+    quantiles: file.quantiles ?? null,
   };
 }
 
@@ -260,7 +270,7 @@ export async function loadMetric(
   const files = listedFiles(manifest, id);
   const resources = catalog.resources();
   const scopes = catalog.scopes();
-  const { defs, gaps } = await loadSeriesDefs(loader, manifest, entry);
+  const { defs, gaps, quantiles } = await loadSeriesDefs(loader, manifest, entry);
   const series = defs.map((def): LoadedSeries => {
     const path = metricSeriesPath(id);
     const resource = def.other ? null : resources[def.resource];
@@ -288,6 +298,7 @@ export async function loadMetric(
     series,
     levels: files.levels.map((k) => ({ level: k, widthNs: levelWidthNs(k) })),
     gaps,
+    quantiles,
     fromSegments: false,
     level: levelOf,
   };
@@ -326,7 +337,7 @@ async function loadFromSegments(
   const range = bucketRange(merged);
   const count = range === null ? 0 : levelCount(range.min * LEVEL0_WIDTH_NS, range.max * LEVEL0_WIDTH_NS);
   const levels = count === 0 ? [] : deriveLevels(merged, count).map((s, k) => toLevelData(k, s, all));
-  return metricFromLevels({ entry, series, gaps: null, fromSegments: true }, levels);
+  return metricFromLevels({ entry, series, gaps: null, quantiles: null, fromSegments: true }, levels);
 }
 
 /** Canonical identity of a resource: what `metricsOnResources` matches on. */

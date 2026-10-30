@@ -706,3 +706,55 @@ export async function buildCounterRun(run: {
   await session.close();
   return { files: reportFilesFromSnapshot(w.fs.snapshot(), OUT), manifest: manifestOf(w, OUT) };
 }
+
+/**
+ * A summary metric over `durationS` at `stepS` (one series, no attributes), compacted. Points before `dropAfterS`
+ * carry quantiles 0.5 and 0.99, later ones only 0.5: a long run's coarser levels keep one point per bucket, so
+ * q0.99 is only in level 0 and in `series.js` (#39).
+ */
+export async function buildSummaryRun(run: {
+  durationS: number;
+  stepS: number;
+  dropAfterS: number;
+}): Promise<Fixture> {
+  const FLUSH_POINTS = 500;
+  const w = createTestWriter();
+  const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'create' });
+  const base = BigInt(EPOCH_NS);
+  const at = (s: number): string => String(base + BigInt(s) * 1_000_000_000n);
+  const points = Math.floor(run.durationS / run.stepS) + 1;
+  for (let from = 0; from < points; from += FLUSH_POINTS) {
+    const dataPoints: JsonObject[] = [];
+    for (let i = from; i < Math.min(points, from + FLUSH_POINTS); i++) {
+      const s = i * run.stepS;
+      const quantileValues = [{ quantile: 0.5, value: i }];
+      if (s < run.dropAfterS) quantileValues.push({ quantile: 0.99, value: 2 * i });
+      dataPoints.push({
+        startTimeUnixNano: at(0),
+        timeUnixNano: at(s),
+        count: String(i + 1),
+        sum: i,
+        quantileValues,
+      });
+    }
+    await session.add(
+      otlp({
+        resourceMetrics: [
+          {
+            resource: { attributes: [attr('service.name', { stringValue: 'api' })] },
+            scopeMetrics: [
+              {
+                scope: { name: 'test-scope' },
+                metrics: [{ name: 'run.latency', unit: 'ms', summary: { dataPoints } }],
+              },
+            ],
+          },
+        ],
+      }),
+      'metrics',
+    );
+    await session.flush();
+  }
+  await session.close();
+  return { files: reportFilesFromSnapshot(w.fs.snapshot(), OUT), manifest: manifestOf(w, OUT) };
+}

@@ -1,4 +1,9 @@
-import { GAP_SAMPLE, LEVEL0_WIDTH_NS, type SeriesGaps } from '../../format/metric-files.js';
+import {
+  GAP_SAMPLE,
+  LEVEL0_WIDTH_NS,
+  type SeriesGaps,
+  summaryQuantilesOf,
+} from '../../format/metric-files.js';
 import { anyValueToDisplay } from '../../model/anyvalue.js';
 import { assertNever, OtelHtmlError } from '../../model/errors.js';
 import type { ResourceRecord } from '../../model/records.js';
@@ -88,17 +93,25 @@ export function resolveMetric(
 }
 
 /**
- * The quantiles present in a summary's coarsest level, as `q<quantile>` show options: the level a full-range chart
- * reads, so this costs no more than that chart. A coarser bucket keeps its last point, so a quantile set a series
- * dropped early in a long run may show only at finer levels.
+ * A summary's quantiles as `q<quantile>` show options: the set `series.js` records (every quantile any series sent,
+ * at no level read). Without it (`quantilesFromLevel`), the finest level in memory of an unfinished report, which
+ * holds every point; or the coarsest level of a finished report from before the set was recorded, which costs no
+ * more than a full-range chart but keeps one point per bucket, so a quantile a series dropped early can be missing
+ * (`NOTES.quantilesFromLevel` says so on the chart).
  */
 async function summaryQuantiles(m: LoadedMetric): Promise<string[]> {
-  const coarsest = m.levels.at(-1);
-  if (coarsest === undefined) return [];
-  const qs = new Set<number>();
-  for (const s of (await m.level(coarsest.level)).series.values())
-    for (const a of s.a) if (a.k === 'summary') for (const q of a.quantiles) qs.add(q.q);
-  return [...qs].sort((a, b) => a - b).map((q) => `q${q}`);
+  const qs = m.quantiles ?? (await quantilesFromLevel(m));
+  return qs.map((q) => `q${q}`);
+}
+
+/** Whether `summaryQuantiles` reads a finished report's coarsest level, which may leave a quantile out. */
+const quantilesMayBeShort = (m: LoadedMetric): boolean =>
+  m.quantiles === null && !m.fromSegments && m.levels.length > 1;
+
+async function quantilesFromLevel(m: LoadedMetric): Promise<number[]> {
+  const info = m.fromSegments ? m.levels[0] : m.levels.at(-1);
+  if (info === undefined) return [];
+  return summaryQuantilesOf([...(await m.level(info.level)).series].map(([id, s]) => ({ id, ...s })));
 }
 
 /** Every `show` the metric offers (summary quantiles come from its data). */
@@ -583,6 +596,7 @@ function runAtLevel(
   }
   if (combine.rule === 'never') {
     if (level.level > 0 && q.show !== 'count' && q.show !== 'sum') note(NOTES.summaryCoarse);
+    if (quantilesMayBeShort(m)) note(NOTES.quantilesFromLevel);
     const byGroups = new Set([...groups.values()].map((g) => g.byKey));
     if (byGroups.size < groups.size) note(NOTES.summariesNotCombined);
   }

@@ -74,6 +74,14 @@ function pt(name: string, host: string): MetricPointRecord {
   };
 }
 
+const summary = (qs: readonly number[]): BucketAgg => ({
+  k: 'summary',
+  count: 1,
+  sum: 1,
+  quantiles: qs.map((q) => ({ q, v: q })),
+  lastTime: 0,
+});
+
 function setup(
   fs = createMemoryFileSystem(),
   listed: readonly string[] = [],
@@ -81,8 +89,8 @@ function setup(
 ) {
   const catalog = new MetricCatalog({ seriesCap: 10 });
   const writer = new MetricSeriesWriter(fs, OUT, { exemplars: 2 }, next, listed);
-  const series = (name: string, host: string) => {
-    const p = pt(name, host);
+  const series = (name: string, host: string, type: MetricPointRecord['type'] = 'sum') => {
+    const p = { ...pt(name, host), type };
     const def = catalog.defOf(p);
     return { def, series: catalog.seriesOf(def, p, resource, scope) };
   };
@@ -195,6 +203,25 @@ describe('MetricSeriesWriter', () => {
       { n: 0, median: 0 },
       { n: 0, median: 0 },
     ]);
+  });
+
+  test("compact records a summary metric's quantiles in series.js, every one any series sent (#39)", async () => {
+    const { fs, catalog, writer, series } = setup();
+    const c = series('c', 'h1');
+    const a = series('q', 'h1', 'summary');
+    const b = series('q', 'h2', 'summary');
+    // `a` sends q0.99 only at first; `b` never. Level 1 keeps the last point per 8.192 s bucket, so it has no q0.99.
+    writer.add(a.def, a.series, rel(0), summary([0.5, 0.99]), []);
+    writer.add(a.def, a.series, rel(2 * S), summary([0.5]), []);
+    writer.add(a.def, a.series, rel(2100 * S), summary([0.5]), []);
+    writer.add(b.def, b.series, rel(0), summary([0, 1]), []);
+    writer.add(c.def, c.series, rel(0), counter(1), []);
+    await writer.flush(catalog);
+    expect(read(fs, metricSeriesKey(1), parseSeriesFile).quantiles).toBeUndefined();
+    await writer.compact(catalog);
+    expect(read(fs, metricSeriesKey(1), parseSeriesFile).quantiles).toEqual([0, 0.5, 0.99, 1]);
+    // Only summaries carry the set.
+    expect(read(fs, metricSeriesKey(0), parseSeriesFile).quantiles).toBeUndefined();
   });
 
   test("levels above ex.js's get their own ex<k>.js, capped per series per level-k bucket", async () => {

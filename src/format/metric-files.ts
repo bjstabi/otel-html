@@ -321,6 +321,12 @@ export interface SeriesFile {
    * only) and in format-1 reports, where the viewer measures them on level 0 itself.
    */
   gaps?: SeriesGaps[];
+  /**
+   * A summary metric's quantiles, every one any of its series ever sent (ascending). Written at compaction, so the
+   * show options need no level file; absent before it and in reports from before it was recorded, where the viewer
+   * reads the coarsest level and says the list may be short.
+   */
+  quantiles?: number[];
 }
 export interface SegmentFile {
   metric: number;
@@ -346,6 +352,7 @@ export type SerializedSeriesFile = {
   metric: number;
   series: SerializedSeriesDef[];
   gaps?: [number, number][] | undefined;
+  quantiles?: number[] | undefined;
 };
 export type SerializedSegmentFile = Omit<SegmentFile, 'exemplars'> & { exemplars: SerializedExemplar[] };
 export type SerializedExemplarFile = { metric: number; exemplars: SerializedExemplar[] };
@@ -413,6 +420,17 @@ export const SeriesFileSchema: z.ZodType<SerializedSeriesFile> = z
       });
     }),
     gaps: z.array(z.tuple([z.number().int().min(0).max(GAP_SAMPLE), nonNegInt])).optional(),
+    quantiles: z
+      .array(z.number().min(0).max(1))
+      .superRefine((qs, ctx) => {
+        for (let i = 1; i < qs.length; i++) {
+          if ((qs[i] ?? 0) <= (qs[i - 1] ?? 0)) {
+            ctx.addIssue({ code: 'custom', path: [i], message: 'quantiles in ascending order' });
+            return;
+          }
+        }
+      })
+      .optional(),
   })
   .superRefine((f, ctx) => {
     if (f.gaps !== undefined && f.gaps.length !== f.series.length) {
@@ -477,6 +495,7 @@ export function encodeSeriesFile(f: SeriesFile): SerializedSeriesFile {
       other: s.other,
     })),
     ...(f.gaps === undefined ? {} : { gaps: f.gaps.map((g): [number, number] => [g.n, g.median]) }),
+    ...(f.quantiles === undefined ? {} : { quantiles: [...f.quantiles] }),
   };
 }
 
@@ -489,7 +508,16 @@ export function parseSeriesFile(input: unknown, root: string): SeriesFile {
       attributes: decodeAttributes(s.attributes, `${root}.series[${i}].attributes`),
     })),
     ...(f.gaps === undefined ? {} : { gaps: f.gaps.map(([n, median]) => ({ n, median })) }),
+    ...(f.quantiles === undefined ? {} : { quantiles: f.quantiles }),
   };
+}
+
+/** The quantiles of every summary bucket in `series`, ascending: what `SeriesFile.quantiles` records. */
+export function summaryQuantilesOf(series: readonly BucketSeries[]): number[] {
+  const qs = new Set<number>();
+  for (const s of series)
+    for (const a of s.a) if (a.k === 'summary') for (const q of a.quantiles) qs.add(q.q);
+  return [...qs].sort((a, b) => a - b);
 }
 
 export function encodeSegmentFile(f: SegmentFile): SerializedSegmentFile {
