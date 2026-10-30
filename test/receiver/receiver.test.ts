@@ -14,6 +14,10 @@ function resourceSpansOf(req: { readonly [k: string]: unknown }): unknown[] {
   if (!Array.isArray(v)) throw new Error('fixture');
   return v;
 }
+/** An entry whose spans carry a 15-byte trace id, which the decoder refuses. */
+function badTrace(entry: unknown): unknown {
+  return JSON.parse(JSON.stringify(entry).replace(/"traceId":"[^"]*"/g, `"traceId":"${'ab'.repeat(15)}"`));
+}
 const encode = (v: unknown): Uint8Array =>
   new TextEncoder().encode(typeof v === 'string' ? v : JSON.stringify(v));
 
@@ -169,6 +173,39 @@ describe('createReceiver', () => {
     );
     expect(wrong.code).toBe('invalid-otlp');
     expect(wrong.message).toMatch(/expected resourceSpans/);
+  });
+
+  test('[empty, bad] is invalid-otlp, not a partial success', async () => {
+    const w = createTestWriter();
+    const { receiver } = await realReceiver(w);
+    const body = encode({
+      resourceSpans: [{ scopeSpans: [] }, ...resourceSpansOf(spansRequest(1, 0, 0)).map(badTrace)],
+    });
+    expect((await failure(receiver.receive('traces', body, 'json', 't'))).code).toBe('invalid-otlp');
+    expect(receiver.stats().refused.invalid).toBe(1);
+  });
+
+  test('[empty] alone succeeds with nothing', async () => {
+    const w = createTestWriter();
+    const { receiver } = await realReceiver(w);
+    const body = encode({ resourceSpans: [{ scopeSpans: [] }] });
+    expect(await receiver.receive('traces', body, 'json', 't')).toEqual({
+      accepted: 0,
+      rejected: 0,
+      errorMessage: null,
+    });
+    expect(Object.values(receiver.stats().refused).every((n) => n === 0)).toBe(true);
+  });
+
+  test('{} succeeds with nothing and is not a refusal', async () => {
+    const w = createTestWriter();
+    const { receiver } = await realReceiver(w);
+    expect(await receiver.receive('traces', encode('{}'), 'json', 't')).toEqual({
+      accepted: 0,
+      rejected: 0,
+      errorMessage: null,
+    });
+    expect(Object.values(receiver.stats().refused).every((n) => n === 0)).toBe(true);
   });
 
   test.each(['[1,2]', 'not json'])('%s is invalid-otlp', async (text) => {
