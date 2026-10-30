@@ -38,6 +38,15 @@ export async function ensureMetricsScaleReport(): Promise<void> {
     if ((i + 1) % FLUSH_EVERY === 0) await report.flush();
   }
   await report.close();
-  await rename(tmp, dir);
+  try {
+    await rename(tmp, dir);
+  } catch (e) {
+    // Another worker finished first (`--workers=1` in CI and the @perf pass, but not a local run): its report is
+    // whole, so this copy goes and the one in place is used. `rename` onto a non-empty folder fails with ENOTEMPTY
+    // (EEXIST on some file systems, EPERM on Windows).
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code !== 'ENOTEMPTY' && code !== 'EEXIST' && code !== 'EPERM') throw e;
+    await rm(tmp, { recursive: true, force: true });
+  }
   process.stdout.write(`metrics scale report written in ${((Date.now() - started) / 1000).toFixed(1)} s\n`);
 }

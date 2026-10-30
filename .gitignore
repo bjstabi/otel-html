@@ -4,4 +4,6 @@ dist/
 coverage/
 *.tsbuildinfo
 e2e/.reports/
+# Written by the metrics scale check until #36 (2026-10-29): kept ignored so an old ~12 GB checkout can delete it at leisure.
+e2e/.cache/
 test-results/

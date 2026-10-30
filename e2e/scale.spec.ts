@@ -34,6 +34,27 @@ const SERVICE = SCALE_SERVICES[0];
 /** Span `j` of a trace belongs to service `j % 8`, so the first service owns spans 0, 8, ..., 48 of each trace. */
 const PER_SERVICE = SCALE_TRACES * Math.ceil(SCALE_SPANS_PER_TRACE / SCALE_SERVICES.length);
 
+/**
+ * Records every `<script src>` the viewer inserts from now on, in the page. Playwright's request events miss
+ * `file://` script loads in Firefox, and resource timing can miss them elsewhere, so tests that check which data
+ * files a page loaded merge this witness with the request events (`witnessedScripts`).
+ */
+async function witnessScripts(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const w = window as unknown as { __ohScripts: string[] };
+    w.__ohScripts = [];
+    new MutationObserver((records) => {
+      for (const r of records)
+        for (const n of r.addedNodes)
+          if (n instanceof HTMLScriptElement && n.src !== '') w.__ohScripts.push(n.src);
+    }).observe(document, { childList: true, subtree: true });
+  });
+}
+
+function witnessedScripts(page: Page): Promise<string[]> {
+  return page.evaluate(() => (window as unknown as { __ohScripts: string[] }).__ohScripts);
+}
+
 test(
   '100k spans: the explorer is interactive within 3 s and a facet toggle repaints within 150 ms (median)',
   { tag: '@perf' },
@@ -144,17 +165,8 @@ test('a report over the eager budget filters by chunk window and opens a trace t
   const spanChunks = readdirSync(`${dir}data/chunks/spans`).filter((f) => f.endsWith('.js'));
   expect(spanChunks.length).toBeGreaterThan(2);
 
-  // Which data files the page loaded. Playwright's request events miss file:// script loads in Firefox, so an init
-  // script also records every <script src> the viewer inserts; both witnesses are merged.
-  await page.addInitScript(() => {
-    const w = window as unknown as { __ohScripts: string[] };
-    w.__ohScripts = [];
-    new MutationObserver((records) => {
-      for (const r of records)
-        for (const n of r.addedNodes)
-          if (n instanceof HTMLScriptElement && n.src !== '') w.__ohScripts.push(n.src);
-    }).observe(document, { childList: true, subtree: true });
-  });
+  // Which data files the page loaded: request events and the script witness, merged.
+  await witnessScripts(page);
   const seen = new Set<string>();
   const note = (url: string): void => {
     const m = /\/data\/((?:traces|chunks\/spans)\/[^/?#]+\.js)(?:[?#].*)?$/.exec(url);
@@ -162,8 +174,7 @@ test('a report over the eager budget filters by chunk window and opens a trace t
   };
   page.on('request', (r) => note(r.url()));
   const loaded = async (): Promise<ReadonlySet<string>> => {
-    for (const url of await page.evaluate(() => (window as unknown as { __ohScripts: string[] }).__ohScripts))
-      note(url);
+    for (const url of await witnessedScripts(page)) note(url);
     return seen;
   };
 
@@ -332,26 +343,16 @@ test("1M logs: a trace Logs tab loads only that trace's log chunks", { tag: '@pe
   const [traceId, entry] = candidates[0] ?? [];
   expect(traceId).toBeDefined();
 
-  // Playwright's request events miss file:// script loads in Firefox, and resource timing can miss them elsewhere;
-  // an init script also records every <script src> the viewer inserts, and the witnesses are merged.
-  await page.addInitScript(() => {
-    const w = window as unknown as { __ohScripts: string[] };
-    w.__ohScripts = [];
-    new MutationObserver((records) => {
-      for (const r of records)
-        for (const n of r.addedNodes)
-          if (n instanceof HTMLScriptElement && n.src !== '') w.__ohScripts.push(n.src);
-    }).observe(document, { childList: true, subtree: true });
-  });
+  await witnessScripts(page);
   await page.goto(`${reportUrl('scale')}/index.html#/traces?trace=${traceId}&tab=logs`);
   const tab = page.getByTestId('trace-logs-tab');
   await expect(tab.getByRole('row').nth(1)).toBeVisible({ timeout: 30_000 });
   await expect(tab).toContainText(`${entry?.logs} logs`);
 
-  const names = await page.evaluate(() => [
-    ...performance.getEntriesByType('resource').map((e) => e.name),
-    ...(window as unknown as { __ohScripts: string[] }).__ohScripts,
-  ]);
+  const names = [
+    ...(await page.evaluate(() => performance.getEntriesByType('resource').map((e) => e.name))),
+    ...(await witnessedScripts(page)),
+  ];
   const loaded = new Set(
     names.flatMap((url) => {
       const m = /\/data\/(chunks\/logs\/[^/?#]+)\.js(?:[?#].*)?$/.exec(url);
@@ -372,16 +373,22 @@ const METRICS_SCALE_SETUP_MS = 5 * 60 * 1000;
 const CHARTED_METRIC_ID = String(SCALE_CHARTED_METRIC).padStart(6, '0');
 
 /**
- * The report-relative paths of the `data/` files the page requests from now on. Over HTTP every script load is a
- * request; `file://` loads are not reported the same way in every browser, so the guard runs on the `-http` projects.
+ * The report-relative paths of the `data/` files the page loads from now on: request events over HTTP, and the
+ * script witness (`witnessScripts`) for `file://`, where not every browser reports script loads as requests. The
+ * returned function reads both.
  */
-function recordDataFiles(page: Page, root: string): Set<string> {
+async function recordDataFiles(page: Page, root: string): Promise<() => Promise<Set<string>>> {
   const loaded = new Set<string>();
-  page.on('request', (request) => {
-    const url = request.url().split(/[?#]/)[0] ?? '';
-    if (url.startsWith(`${root}/data/`)) loaded.add(url.slice(root.length + 1));
-  });
-  return loaded;
+  const note = (url: string): void => {
+    const clean = url.split(/[?#]/)[0] ?? '';
+    if (clean.startsWith(`${root}/data/`)) loaded.add(clean.slice(root.length + 1));
+  };
+  page.on('request', (request) => note(request.url()));
+  await witnessScripts(page);
+  return async () => {
+    for (const url of await witnessedScripts(page)) note(url);
+    return loaded;
+  };
 }
 
 /**
@@ -465,7 +472,7 @@ test.describe(`metrics scale: ${SCALE_METRICS} metrics × ${SCALE_METRIC_SERIES}
     { tag: '@perf' },
     async ({ page, reportUrl, browserName }, testInfo) => {
       const factor = perfFactor();
-      const loaded = recordDataFiles(page, reportUrl('metrics-scale'));
+      const dataFiles = await recordDataFiles(page, reportUrl('metrics-scale'));
       // An empty Explorer charts the first metric of the catalog.
       const samples = await paintedMs(
         page,
@@ -474,14 +481,13 @@ test.describe(`metrics scale: ${SCALE_METRICS} metrics × ${SCALE_METRIC_SERIES}
         ': [1-9]\\d* series$',
       );
       const ms = median(samples);
-      if (testInfo.project.name.endsWith('-http')) {
-        expectOnlyChartedData('Explorer', loaded, CHARTED_METRIC_ID);
-        expect([...loaded].some((f) => f.startsWith(`data/metrics/${CHARTED_METRIC_ID}/`))).toBe(true);
-        // Levels load on demand (#37): the chart reads the one level its bucket width needs, never level 0 here
-        // (1 h at 10 s charts at 16.384 s from level 1), so its cost is bounded whatever the run length.
-        const levels = [...loaded].filter((f) => /^data\/metrics\/[0-9]{6}\/l[0-6]\.js$/.test(f)).sort();
-        expect(levels).toEqual([`data/metrics/${CHARTED_METRIC_ID}/l1.js`]);
-      }
+      const loaded = await dataFiles();
+      expectOnlyChartedData('Explorer', loaded, CHARTED_METRIC_ID);
+      expect([...loaded].some((f) => f.startsWith(`data/metrics/${CHARTED_METRIC_ID}/`))).toBe(true);
+      // Levels load on demand (#37): the chart reads the one level its bucket width needs, never level 0 here
+      // (1 h at 10 s charts at 16.384 s from level 1), so its cost is bounded whatever the run length.
+      const levels = [...loaded].filter((f) => /^data\/metrics\/[0-9]{6}\/l[0-6]\.js$/.test(f)).sort();
+      expect(levels).toEqual([`data/metrics/${CHARTED_METRIC_ID}/l1.js`]);
       // The first metric is a counter: its rate, all series summed into one line.
       await expect(
         page.getByRole('img', { name: `${scaleMetricName(SCALE_CHARTED_METRIC)} · rate: 1 series` }),
@@ -499,7 +505,7 @@ test.describe(`metrics scale: ${SCALE_METRICS} metrics × ${SCALE_METRIC_SERIES}
     { tag: '@perf' },
     async ({ page, reportUrl, browserName }, testInfo) => {
       const factor = perfFactor();
-      const loaded = recordDataFiles(page, reportUrl('metrics-scale'));
+      const dataFiles = await recordDataFiles(page, reportUrl('metrics-scale'));
       const samples = await paintedMs(
         page,
         `${reportUrl('metrics-scale')}/index.html#/metrics/catalog`,
@@ -507,7 +513,7 @@ test.describe(`metrics scale: ${SCALE_METRICS} metrics × ${SCALE_METRIC_SERIES}
         null,
       );
       const ms = median(samples);
-      if (testInfo.project.name.endsWith('-http')) expectOnlyChartedData('Catalog', loaded, null);
+      expectOnlyChartedData('Catalog', await dataFiles(), null);
       await expect(page.getByRole('main')).toContainText(`${SCALE_METRICS} metrics ·`);
       report(
         testInfo,
