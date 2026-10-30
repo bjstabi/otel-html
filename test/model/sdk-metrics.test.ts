@@ -101,4 +101,25 @@ describe('resourceMetricsToRequest', () => {
     expect(caught).toBeInstanceOf(OtelHtmlError);
     expect(caught).toMatchObject({ code: 'invalid-otlp', path: 'c.int.dataPoints[0].value', actual: 'NaN' });
   });
+
+  it('rejects an unsupported data point type with an error naming it', async () => {
+    const rm = await collect(AggregationTemporality.CUMULATIVE);
+    for (const sm of rm.scopeMetrics) {
+      for (const m of sm.metrics) {
+        if (m.descriptor.name === 'c.int') (m as { dataPointType: number }).dataPointType = 99;
+      }
+    }
+    let caught: unknown;
+    try {
+      resourceMetricsToRequest(rm);
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(OtelHtmlError);
+    expect(caught).toMatchObject({
+      code: 'unsupported-input',
+      path: 'metric c.int',
+      actual: 'data point type 99',
+    });
+  });
 });

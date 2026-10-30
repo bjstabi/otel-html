@@ -173,6 +173,7 @@ describe('serve', () => {
     const h = start(w, ['serve', '-o', 'out', '--http', port]);
     expect(await h.result).toBe(2);
     expect(h.stdout).toBe('');
+    expect(h.stderr).toContain('is not a port');
   });
 
   test('serve twice into one folder appends', async () => {
@@ -209,7 +210,7 @@ describe('serve', () => {
     expect(allSpans(w, 'out')).toHaveLength(5);
   });
 
-  test('a second signal while finishing exits 130 and leaves the last checkpoint, unlocked', async () => {
+  test('a second signal while a write is stuck exits 130 and releases the lock', async () => {
     const w = createTestWriter();
     let reached = false;
     let release: (() => void) | undefined;

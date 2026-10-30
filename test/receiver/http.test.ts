@@ -340,6 +340,24 @@ describe('OTLP/HTTP transport', () => {
     expect(receiver.stats().refused['too-large']).toBe(1);
   });
 
+  test('a plain body streamed past the limit without Content-Length is 413', async () => {
+    const { receiver, base } = await realServer({ maxBodyBytes: 100_000 });
+    const { req, response } = openRequest(base, { 'transfer-encoding': 'chunked' });
+    const chunk = Buffer.alloc(10_000, 'x');
+    const writes = (async () => {
+      for (let i = 0; i < 100 && !req.destroyed; i++) {
+        if (!req.write(chunk)) await new Promise((r) => req.once('drain', r));
+        await new Promise((r) => setImmediate(r));
+      }
+    })();
+    const res = await response;
+    expect(res.statusCode).toBe(413);
+    res.resume();
+    req.destroy();
+    await writes.catch(() => undefined);
+    expect(receiver.stats().refused['too-large']).toBe(1);
+  });
+
   test('undecodable bodies are 400 with a status', async () => {
     const { base } = await realServer();
     const json = await post(base, '/v1/traces', '{nope', JSON_HEADERS);
