@@ -175,6 +175,23 @@ describe('serve', () => {
     expect(h.stdout).toBe('');
   });
 
+  test('serve twice into one folder appends', async () => {
+    const w = createTestWriter();
+    const first = start(w, ['serve', '-o', 'out', '--http', '0', '--no-grpc']);
+    open.push(first);
+    expect(await post(httpOf(await listening(first)), 2)).toBe(200);
+    first.fire();
+    expect(await first.result).toBe(0);
+
+    const second = start(w, ['serve', '-o', 'out', '--http', '0', '--no-grpc']);
+    open.push(second);
+    expect(await post(httpOf(await listening(second)), 3, 10)).toBe(200);
+    second.fire();
+    expect(await second.result).toBe(0);
+    expect(second.stdout).toContain('wrote out: 5 spans');
+    expect(allSpans(w, 'out')).toHaveLength(5);
+  });
+
   test('--append keeps the spans of an existing report', async () => {
     const w = createTestWriter();
     const first = start(w, ['serve', '-o', 'out', '--http', '0', '--no-grpc']);

@@ -60,7 +60,11 @@ export async function openReceiver(
   const overrides = precheck({ http: config.receiver.http.enabled, grpc: config.receiver.grpc.enabled });
   const full = await resolveDeps(deps);
   const report = await Report.createResolved(
-    { out: flags.out, ...(flags.append === true ? { append: true } : {}) },
+    {
+      out: flags.out,
+      ...(flags.append === true ? { append: true } : {}),
+      ...(flags.replace === true ? { replace: true } : {}),
+    },
     config,
     full,
   );

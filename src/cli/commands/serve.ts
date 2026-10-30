@@ -8,6 +8,7 @@ import {
   openReceiver,
   type ReceiveFlags,
 } from './receive.js';
+import { addReportModeOptions } from './report-mode.js';
 
 export function addServeCommand(program: Command, io: CliIo, deps: Partial<WriterDeps>): void {
   const serve = program
@@ -15,9 +16,8 @@ export function addServeCommand(program: Command, io: CliIo, deps: Partial<Write
     .description('receive OTLP over HTTP and gRPC and write a report until Ctrl-C')
     .requiredOption('-o, --out <dir>', 'report folder')
     .option('--config <file>', 'config file (default: $OTEL_HTML_CONFIG or ./otel-html.yaml)')
-    .option('--title <title>', 'report title')
-    .option('--append', 'add to an existing report instead of replacing it');
-  addReceiverOptions(serve).action(async (flags: ReceiveFlags) => {
+    .option('--title <title>', 'report title');
+  addReceiverOptions(addReportModeOptions(serve)).action(async (flags: ReceiveFlags) => {
     const opened = await openReceiver(io, deps, flags);
     const { receiver } = opened;
     const listening = [

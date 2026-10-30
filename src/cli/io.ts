@@ -17,6 +17,10 @@ export interface CliIo {
 export interface ConfigFlags {
   config?: string;
   title?: string;
+  /** `--append`: require a report at -o and add to it. */
+  append?: boolean;
+  /** `--replace`: start the report over. */
+  replace?: boolean;
 }
 
 /** Receiver flags; a port of `false` is `--no-http` / `--no-grpc`. */
@@ -24,7 +28,6 @@ export interface ReceiverFlags extends ConfigFlags {
   host?: string;
   http?: number | false;
   grpc?: number | false;
-  append?: boolean;
 }
 
 function listenerOf(port: number | false | undefined): { enabled: boolean; port?: number } | undefined {

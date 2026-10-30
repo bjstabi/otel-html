@@ -11,6 +11,7 @@ import type { WriterDeps } from '../../writer/session.js';
 import type { CliIo } from '../io.js';
 import { CliExit } from '../program.js';
 import { addReceiverOptions, finishReceiver, openReceiver, type ReceiveFlags } from './receive.js';
+import { addReportModeOptions } from './report-mode.js';
 
 const TRACE_ID_BYTES = 16;
 const SPAN_ID_BYTES = 8;
@@ -44,7 +45,7 @@ export function addRunCommand(program: Command, io: CliIo, deps: Partial<WriterD
     .requiredOption('-o, --out <dir>', 'report folder')
     .option('--config <file>', 'config file (default: $OTEL_HTML_CONFIG or ./otel-html.yaml)')
     .option('--title <title>', 'report title');
-  addReceiverOptions(command).action(async (argv: string[], flags: ReceiveFlags) => {
+  addReceiverOptions(addReportModeOptions(command)).action(async (argv: string[], flags: ReceiveFlags) => {
     const [executable, ...args] = argv;
     if (executable === undefined || executable === '')
       throw new OtelHtmlError('usage', { message: 'no command to run' });

@@ -104,6 +104,19 @@ function chunkOf(w: TestWriter): Chunk {
   };
 }
 
+/** Every span of every span chunk in the report. */
+function allChunks(w: TestWriter): { spans: SpanRecord[] } {
+  const spans: SpanRecord[] = [];
+  for (const c of manifestOf(w, 'out').chunks.filter((c) => c.signal === 'spans')) {
+    const decoded = decodeColumns(
+      SPAN_COLUMNS as never,
+      readDataFile(w, 'out', `data/${chunkKey('spans', c.n)}.js`),
+    );
+    spans.push(...(decoded.rows as SpanRecord[]));
+  }
+  return { spans };
+}
+
 const node = ['--http', '0', '--no-grpc', '--', process.execPath, '-e', CHILD];
 const open: Harness[] = [];
 const taken: Server[] = [];
@@ -151,6 +164,36 @@ describe('run', () => {
     expect(child?.parentSpanId).toBe(root?.spanId);
     expect(root?.status.code ?? Status_StatusCode.UNSET).toBe(Status_StatusCode.UNSET);
     expect(root && serviceOf(root)).toEqual({ kind: 'string', value: 'node' });
+  });
+
+  test('two runs in one folder keep both root spans', async () => {
+    const w = createTestWriter();
+    for (let i = 0; i < 2; i++) {
+      const h = start(w, ['run', '-o', 'out', ...node, '0']);
+      open.push(h);
+      expect(await h.result).toBe(0);
+    }
+    const { spans } = allChunks(w);
+    expect(spans).toHaveLength(4);
+    const roots = spans.filter((s) => s.parentSpanId === null);
+    expect(roots).toHaveLength(2);
+    expect(new Set(spans.map((s) => s.traceId)).size).toBe(2);
+    for (const root of roots) {
+      const children = spans.filter((s) => s.parentSpanId === root.spanId);
+      expect(children.map((c) => c.traceId)).toEqual([root.traceId]);
+    }
+  });
+
+  test('run --replace keeps only the last run', async () => {
+    const w = createTestWriter();
+    for (const flags of [[], ['--replace']]) {
+      const h = start(w, ['run', '-o', 'out', ...flags, ...node, '0']);
+      open.push(h);
+      expect(await h.result).toBe(0);
+    }
+    const { spans } = allChunks(w);
+    expect(spans).toHaveLength(2);
+    expect(new Set(spans.map((s) => s.traceId)).size).toBe(1);
   });
 
   test('a non-zero exit is the command exit code and the root span says so', async () => {
