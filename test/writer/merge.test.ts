@@ -297,12 +297,26 @@ describe('mergeReports', () => {
     const manifest = unwrapDataFile(text, 'manifest') as Record<string, unknown>;
     await w.fs.writeTextAtomic(
       'b/data/manifest.js',
-      wrapDataFile('manifest', { ...manifest, formatVersion: 2 }),
+      wrapDataFile('manifest', { ...manifest, formatVersion: 3 }),
     );
     const e = await failure(merge(w, ['a', 'b']));
     expect(e.code).toBe('version-mismatch');
     expect(e.message).toContain('b');
-    expect(e.message).toContain('formatVersion 2');
+    expect(e.message).toContain('formatVersion 3');
+  });
+
+  test('merges a format-1 report: merge replays chunks, laid out alike in every readable version', async () => {
+    const w = createTestWriter();
+    await writeReport(w, 'a', [spansRequest(1)]);
+    await writeReport(w, 'b', [spansRequest(1, 0, 5)]);
+    const text = w.fs.snapshot().get('b/data/manifest.js') ?? '';
+    const manifest = unwrapDataFile(text, 'manifest') as Record<string, unknown>;
+    await w.fs.writeTextAtomic(
+      'b/data/manifest.js',
+      wrapDataFile('manifest', { ...manifest, formatVersion: 1 }),
+    );
+    await merge(w, ['a', 'b']);
+    expect(manifestOf(w, 'out').formatVersion).toBe(2);
   });
 
   test('a manifest without a usable formatVersion is an invalid report', async () => {

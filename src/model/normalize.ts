@@ -15,6 +15,7 @@ import {
   ExponentialHistogramDataPointSchema,
   HistogramDataPointSchema,
   type Metric,
+  type NumberDataPoint,
   NumberDataPointSchema,
   SummaryDataPointSchema,
 } from './gen/opentelemetry/proto/metrics/v1/metrics_pb.js';
@@ -306,8 +307,38 @@ function withHexIds(
   return Object.fromEntries(kept);
 }
 
+/** A double as protobuf JSON writes it: a number, or "NaN" | "Infinity" | "-Infinity". */
+function doubleJson(x: number): JsonValue {
+  if (Number.isNaN(x)) return 'NaN';
+  if (x === Number.POSITIVE_INFINITY) return 'Infinity';
+  if (x === Number.NEGATIVE_INFINITY) return '-Infinity';
+  return x;
+}
+
+/**
+ * `pointJson` of a number point without exemplars (nearly every point), built straight from the message: protobuf
+ * JSON writes only the value then, `asDouble` as `doubleJson` and `asInt` as a decimal string. Null for any other
+ * point, which takes the general path.
+ */
+function numberPointJson(dp: NumberDataPoint): JsonValue | null {
+  if (dp.exemplars.length > 0) return null;
+  const v = dp.value;
+  switch (v.case) {
+    case 'asDouble':
+      return typeof v.value === 'number' ? { asDouble: doubleJson(v.value) } : null;
+    case 'asInt':
+      return typeof v.value === 'bigint' ? { asInt: v.value.toString() } : null;
+    case undefined:
+      return {};
+  }
+}
+
 /** Point JSON without the fields that live on the record; exemplar ids as hex like OTLP JSON. */
 function pointJson(schema: DescMessage, dp: PointLike): JsonValue {
+  if (schema === NumberDataPointSchema) {
+    const fast = numberPointJson(dp as NumberDataPoint);
+    if (fast !== null) return fast;
+  }
   const entries = Object.entries(toJson(schema, dp as never) as JsonObject)
     .filter(([k]) => !RECORD_LEVEL_POINT_FIELDS.has(k))
     .map(([k, v]): [string, JsonValue] => {
@@ -395,6 +426,11 @@ export function* metricRecords(
   source: string,
   first = 0,
 ): Generator<MetricPointRecord, void, void> {
+  // Points of a request mostly share their timestamps: the last conversion of each is reused for an equal one.
+  let lastTime = -1n;
+  let lastTimeRel = 0 as RelNanos;
+  let lastStart = -1n;
+  let lastStartRel: RelNanos | null = null;
   for (const [ri, rm] of req.resourceMetrics.entries()) {
     const rp = `resourceMetrics[${first + ri}]`;
     const resource = internResource(rm.resource, rm.schemaUrl, ctx, `${source}: ${rp}`);
@@ -412,6 +448,14 @@ export function* metricRecords(
         const attributesPath = (): string => `${p()}.attributes`;
         for (; di < shape.points.length; di++) {
           const dp = shape.points[di] as (typeof shape.points)[number];
+          if (dp.timeUnixNano !== lastTime) {
+            lastTimeRel = rel(dp.timeUnixNano, ctx, timePath);
+            lastTime = dp.timeUnixNano;
+          }
+          if (dp.startTimeUnixNano !== lastStart) {
+            lastStartRel = relOrNull(dp.startTimeUnixNano, ctx, startPath);
+            lastStart = dp.startTimeUnixNano;
+          }
           yield {
             name: m.name,
             description: m.description,
@@ -419,8 +463,8 @@ export function* metricRecords(
             type: shape.type,
             temporality: shape.temporality,
             monotonic: shape.monotonic,
-            start: relOrNull(dp.startTimeUnixNano, ctx, startPath),
-            time: rel(dp.timeUnixNano, ctx, timePath),
+            start: lastStartRel,
+            time: lastTimeRel,
             attributes: convertAttributes(dp.attributes, attributesPath),
             flags: dp.flags,
             point: pointJson(shape.schema, dp),

@@ -5,6 +5,8 @@ import {
   bucketRange,
   capExemplars,
   dataFileKey,
+  decodeOwnSegmentFile,
+  EXEMPLAR_BASE_LEVEL,
   encodeExemplarFile,
   encodeSegmentFile,
   encodeSeriesFile,
@@ -14,6 +16,7 @@ import {
   METRIC_FILE_PATH,
   metricDir,
   metricExemplarPath,
+  metricLevelExemplarPath,
   metricLevelPath,
   metricSegmentPath,
   metricSeriesPath,
@@ -22,7 +25,9 @@ import {
   parseLevelFile,
   parseSegmentFile,
   parseSeriesFile,
+  type SeriesGaps,
   type StoredExemplar,
+  seriesGaps,
 } from '../format/metric-files.js';
 import { OtelHtmlError } from '../model/errors.js';
 import type { RelNanos } from '../model/ids.js';
@@ -52,6 +57,8 @@ interface MetricPaths {
   segments: number[];
   levels: number[];
   exemplars: boolean;
+  /** Levels with an `ex<k>.js`. */
+  levelExemplars: number[];
 }
 
 /**
@@ -87,7 +94,11 @@ export async function restoreCatalogSeries(
   }
 }
 
-async function readDataFile(fs: FileSystem, out: string, path: string): Promise<unknown> {
+/**
+ * A data file's payload. `revive` (the default) decodes `{"$i"}` / `{"$b"}` tags; a file whose payload type holds no
+ * bigint or bytes (a segment this writer wrote) has none to decode.
+ */
+async function readDataFile(fs: FileSystem, out: string, path: string, revive = true): Promise<unknown> {
   const file = at(out, path);
   let text: string;
   try {
@@ -98,7 +109,8 @@ async function readDataFile(fs: FileSystem, out: string, path: string): Promise<
     });
   }
   try {
-    return reviveDataJson(unwrapDataFile(text, dataFileKey(path)), path);
+    const payload = unwrapDataFile(text, dataFileKey(path));
+    return revive ? reviveDataJson(payload, path) : payload;
   } catch (e) {
     if (e instanceof OtelHtmlError && e.code === 'invalid-report') {
       throw new OtelHtmlError('invalid-report', { message: `${path}: ${e.message}` });
@@ -123,6 +135,8 @@ export class MetricSeriesWriter {
   readonly #toDemote: Set<number>;
   readonly #buffers = new Map<number, MetricBuffer>();
   readonly #dirs = new Set<number>();
+  /** Segments this writer wrote: compaction reads them back without validating them again. */
+  readonly #ownSegments = new Set<string>();
   /** Paths written since `flush` last returned. */
   #written: string[] = [];
   #buffered = 0;
@@ -223,10 +237,9 @@ export class MetricSeriesWriter {
 
   async #writeSegment(id: number, series: BucketSeries[], exemplars: StoredExemplar[]): Promise<void> {
     const n = this.#nextSegment.get(id) ?? 0;
-    await this.#write(
-      metricSegmentPath(id, n),
-      encodeSegmentFile({ metric: id, widthNs: LEVEL0_WIDTH_NS, series, exemplars }),
-    );
+    const path = metricSegmentPath(id, n);
+    await this.#write(path, encodeSegmentFile({ metric: id, widthNs: LEVEL0_WIDTH_NS, series, exemplars }));
+    this.#ownSegments.add(path);
     this.#nextSegment.set(id, n + 1);
   }
 
@@ -242,6 +255,7 @@ export class MetricSeriesWriter {
       await this.#writeSegment(id, l0, exemplars);
       for (const k of paths.levels) this.#listed.delete(metricLevelPath(id, k));
       this.#listed.delete(metricExemplarPath(id));
+      for (const k of paths.levelExemplars) this.#listed.delete(metricLevelExemplarPath(id, k));
     }
     this.#toDemote.delete(id);
   }
@@ -259,6 +273,7 @@ export class MetricSeriesWriter {
       const exemplars = merged.exemplars;
       let level: BucketSeries[] = merged.l0;
       merged.l0 = [];
+      const gaps = gapsOf(catalog.seriesDefs(id).length, level);
       const range = bucketRange(level);
       const count = range === null ? 0 : levelCount(range.min * LEVEL0_WIDTH_NS, range.max * LEVEL0_WIDTH_NS);
       // Written unlisted, then swapped in at once: a failure part way leaves the segments the only listed data.
@@ -273,14 +288,29 @@ export class MetricSeriesWriter {
         written.push(path);
         level = k + 1 < count ? nextLevel(series, k + 1) : [];
       }
+      let capped = capExemplars(exemplars, this.#exemplars);
       const ex = metricExemplarPath(id);
-      await this.#writeFile(
-        ex,
-        encodeExemplarFile({ metric: id, exemplars: capExemplars(exemplars, this.#exemplars) }),
-      );
+      await this.#writeFile(ex, encodeExemplarFile({ metric: id, exemplars: capped }));
       written.push(ex);
-      for (const n of paths.segments) this.#listed.delete(metricSegmentPath(id, n));
+      // Each level coarser than `ex.js`'s keeps fewer, so the exemplars a chart loads are bounded like its buckets.
+      for (let k = EXEMPLAR_BASE_LEVEL + 1; k < count; k++) {
+        capped = capExemplars(capped, this.#exemplars, levelWidthNs(k));
+        const path = metricLevelExemplarPath(id, k);
+        await this.#writeFile(path, encodeExemplarFile({ metric: id, exemplars: capped }));
+        written.push(path);
+      }
+      // The series' point gaps, so a chart picks its bucket width without loading level 0. Every series of the
+      // metric is in the catalog and in this file already: only `gaps` is new, and it is valid with the segments too.
+      await this.#writeFile(
+        metricSeriesPath(id),
+        encodeSeriesFile({ metric: id, series: [...catalog.seriesDefs(id)], gaps }),
+      );
+      for (const n of paths.segments) {
+        this.#listed.delete(metricSegmentPath(id, n));
+        this.#ownSegments.delete(metricSegmentPath(id, n));
+      }
       for (const k of paths.levels) this.#listed.delete(metricLevelPath(id, k));
+      for (const k of paths.levelExemplars) this.#listed.delete(metricLevelExemplarPath(id, k));
       for (const path of written) this.#listed.add(path);
     }
     return this.listed();
@@ -295,7 +325,9 @@ export class MetricSeriesWriter {
     let exemplars: StoredExemplar[] = [];
     for (const n of [...segments].sort((a, b) => a - b)) {
       const path = metricSegmentPath(id, n);
-      const seg = parseSegmentFile(await this.#read(path), path);
+      const seg = this.#ownSegments.has(path)
+        ? decodeOwnSegmentFile(await readDataFile(this.#fs, this.#out, path, false), path)
+        : parseSegmentFile(await this.#read(path), path);
       for (const x of seg.series) {
         for (let i = 0; i < x.t.length; i++) {
           const agg = x.a[i];
@@ -371,13 +403,21 @@ function byMetric(listed: readonly string[]): Map<number, MetricPaths> {
     const id = Number(m[1]);
     let e = out.get(id);
     if (e === undefined) {
-      e = { series: false, segments: [], levels: [], exemplars: false };
+      e = { series: false, segments: [], levels: [], exemplars: false, levelExemplars: [] };
       out.set(id, e);
     }
     if (m[2] === 'series') e.series = true;
     else if (m[2] === 'ex') e.exemplars = true;
     else if (m[3] !== undefined) e.levels.push(Number(m[3]));
     else if (m[4] !== undefined) e.segments.push(Number(m[4]));
+    else if (m[5] !== undefined) e.levelExemplars.push(Number(m[5]));
   }
   return out;
+}
+
+/** `SeriesGaps` of each of a metric's `count` series (by id) from its merged level 0; a series with no buckets has none. */
+function gapsOf(count: number, l0: readonly BucketSeries[]): SeriesGaps[] {
+  const gaps: SeriesGaps[] = Array.from({ length: count }, () => ({ n: 0, median: 0 }));
+  for (const s of l0) if (s.id < count) gaps[s.id] = seriesGaps(s.t);
+  return gaps;
 }

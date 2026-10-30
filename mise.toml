@@ -72,8 +72,8 @@ usage = 'arg "[args]" var=#true'
 # Budgets scale with OTEL_HTML_PERF_FACTOR on slow machines; they are never edited.
 # CI runs in the official Playwright image and sets OTEL_HTML_SKIP_BROWSER_INSTALL to skip the browser download.
 # Extra playwright args (`mise run test:e2e -- --project 'firefox-*'`) are passed to both passes.
-# The metrics scale check runs only with OTEL_HTML_METRICS_SCALE=1 (its report: ~15 minutes and ~12 GB the first time,
-# then kept in e2e/.cache/): `OTEL_HTML_METRICS_SCALE=1 mise run test:e2e:chromium -- e2e/scale.spec.ts`.
+# The metrics scale check runs only with OTEL_HTML_METRICS_SCALE=1 (its report takes a few seconds locally, under a minute on CI, and ~150 MB):
+# `OTEL_HTML_METRICS_SCALE=1 mise run test:e2e:chromium -- e2e/scale.spec.ts`.
 run = """
 eval "set -- $usage_args"
 # Both passes run; the task fails if either does. Only the @perf pass may match no tests (a spec with none).

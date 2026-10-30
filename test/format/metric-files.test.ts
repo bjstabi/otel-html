@@ -2,19 +2,24 @@ import { describe, expect, test } from 'vitest';
 import { reviveDataJson, unwrapDataFile, wrapDataFile } from '../../src/format/data-file.js';
 import {
   deriveLevels,
+  EXEMPLAR_BASE_LEVEL,
   EXEMPLAR_WIDTH_NS,
   encodeExemplarFile,
   encodeSegmentFile,
   encodeSeriesFile,
+  GAP_SAMPLE,
   LEVEL_MAX_BUCKETS,
   LEVEL0_WIDTH_NS,
   levelCount,
+  levelWidthNs,
   MAX_LEVEL,
   METRIC_FILE_PATH,
   mergeBucketSeries,
   metricDir,
   metricExemplarKey,
   metricExemplarPath,
+  metricLevelExemplarKey,
+  metricLevelExemplarPath,
   metricLevelKey,
   metricLevelPath,
   metricSegmentKey,
@@ -27,6 +32,7 @@ import {
   parseSeriesFile,
   type StoredExemplar,
   selectExemplars,
+  seriesGaps,
 } from '../../src/format/metric-files.js';
 import type { AnyValue } from '../../src/model/anyvalue.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
@@ -67,10 +73,16 @@ describe('metric file paths', () => {
       metricLevelPath(1, 0),
       metricLevelPath(1, MAX_LEVEL),
       metricExemplarPath(2),
+      metricLevelExemplarPath(2, EXEMPLAR_BASE_LEVEL + 1),
+      metricLevelExemplarPath(2, MAX_LEVEL),
     ]) {
       expect(METRIC_FILE_PATH.test(p), p).toBe(true);
     }
+    expect(metricLevelExemplarKey(7, 4)).toBe('metrics/000007/ex4');
     expect(METRIC_FILE_PATH.test('data/metrics/000001/l7.js')).toBe(false);
+    // ex.js serves levels 0…EXEMPLAR_BASE_LEVEL: there is no ex0.js-ex2.js.
+    expect(METRIC_FILE_PATH.test('data/metrics/000001/ex2.js')).toBe(false);
+    expect(failure(() => metricLevelExemplarPath(0, EXEMPLAR_BASE_LEVEL)).code).toBe('invalid-report');
     expect(METRIC_FILE_PATH.test('data/metrics/x/series.js')).toBe(false);
   });
 
@@ -86,6 +98,7 @@ describe('resolution ladder', () => {
   test('constants', () => {
     expect(LEVEL0_WIDTH_NS).toBe(1_024_000_000);
     expect(EXEMPLAR_WIDTH_NS).toBe(65_536_000_000);
+    expect(levelWidthNs(EXEMPLAR_BASE_LEVEL)).toBe(EXEMPLAR_WIDTH_NS);
     expect(LEVEL_MAX_BUCKETS).toBe(2000);
     expect(MAX_LEVEL).toBe(6);
   });
@@ -175,6 +188,9 @@ describe('payloads', () => {
   test('round-trip through data files', () => {
     const s = roundTrip('k', encodeSeriesFile({ metric: 3, series }));
     expect(parseSeriesFile(s, 'series.js')).toEqual({ metric: 3, series });
+    const gaps = series.map((_, i) => ({ n: i, median: 10 }));
+    const withGaps = roundTrip('k', encodeSeriesFile({ metric: 3, series, gaps }));
+    expect(parseSeriesFile(withGaps, 'series.js')).toEqual({ metric: 3, series, gaps });
     const seg = {
       metric: 3,
       widthNs: LEVEL0_WIDTH_NS,
@@ -214,5 +230,18 @@ describe('payloads', () => {
       ],
     };
     expect(failure(() => parseExemplarFile(badId, 'ex')).message).toContain('ex.exemplars[0].traceId');
+    const short = { ...encodeSeriesFile({ metric: 0, series }), gaps: [] };
+    expect(failure(() => parseSeriesFile(short, 'series.js')).message).toContain('series.js.gaps');
+  });
+});
+
+describe('seriesGaps', () => {
+  test('the upper median of the first GAP_SAMPLE gaps, in level-0 buckets', () => {
+    expect(seriesGaps([])).toEqual({ n: 0, median: 0 });
+    expect(seriesGaps([5])).toEqual({ n: 0, median: 0 });
+    expect(seriesGaps([0, 2, 5])).toEqual({ n: 2, median: 3 });
+    const t = Array.from({ length: GAP_SAMPLE + 10 }, (_, i) => i * 10);
+    t.push(1e6);
+    expect(seriesGaps(t)).toEqual({ n: GAP_SAMPLE, median: 10 });
   });
 });

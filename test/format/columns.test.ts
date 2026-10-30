@@ -225,6 +225,37 @@ describe('decode validation (invalid-report with precise paths)', () => {
 });
 
 describe('spec is data', () => {
+  test('json cells write flat points as they are and tag everything else, as before the flat fast path', () => {
+    interface Row {
+      readonly p: unknown;
+    }
+    const spec: ColumnSpec<Row> = { columns: [{ name: 'p', kind: 'json' }] };
+    const cases: [unknown, string][] = [
+      [{ asInt: '-9223372036854775808' }, '{"asInt":"-9223372036854775808"}'],
+      [{ asDouble: 1.5, ok: true, none: null }, '{"asDouble":1.5,"ok":true,"none":null}'],
+      [{ asDouble: 'NaN' }, '{"asDouble":"NaN"}'],
+      [{}, '{}'],
+      [{ skipped: undefined, kept: 1 }, '{"kept":1}'],
+      [{ asDouble: -0 }, '{"asDouble":{"$d":"-0"}}'],
+      [{ asDouble: Number.POSITIVE_INFINITY }, '{"asDouble":{"$d":"Infinity"}}'],
+      [{ big: 2n ** 64n }, '{"big":{"$i":"18446744073709551616"}}'],
+      [{ exemplars: [{ asInt: '1' }] }, '{"exemplars":[{"asInt":"1"}]}'],
+      [Object.assign(Object.create(null) as object, { a: 1 }), '{"a":1}'],
+    ];
+    for (const [p, text] of cases) {
+      const payload = encodeColumns(spec, [{ p }], [], []);
+      expect(payload.dict).toEqual([text]);
+      const back = decodeColumns(spec, viaJson(payload)).rows[0]?.p;
+      expect(back).toEqual(p);
+    }
+    expect(() => encodeColumns(spec, [{ p: { $i: '1' } }], [], [])).toThrowError(
+      expect.objectContaining({
+        code: 'invalid-report',
+        expected: 'a key not starting with "$" (reserved for tags)',
+      }),
+    );
+  });
+
   test('a custom spec drives the codec', () => {
     interface Row {
       readonly a: string;

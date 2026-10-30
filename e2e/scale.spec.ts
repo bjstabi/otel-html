@@ -8,6 +8,7 @@ import {
   FUSION_SELECTION_BUDGET_MS,
   perfFactor,
   reportDir,
+  SCALE_CHARTED_METRIC,
   SCALE_LOGS,
   SCALE_METRIC_SERIES,
   SCALE_METRICS,
@@ -364,8 +365,42 @@ test("1M logs: a trace Logs tab loads only that trace's log chunks", { tag: '@pe
 /** Metrics targets (spec §7): the Explorer draws its first chart within 2 s, the Catalog opens within 1 s. */
 const METRICS_EXPLORER_BUDGET_MS = 2000;
 const METRICS_CATALOG_BUDGET_MS = 1000;
-/** Generating the metrics scale report the first time takes about 15 minutes (more on a slow CI runner, whose job allows 60); later runs reuse it. */
-const METRICS_SCALE_SETUP_MS = 50 * 60 * 1000;
+/** Writing the metrics scale report takes a few seconds locally and under a minute on CI. */
+const METRICS_SCALE_SETUP_MS = 5 * 60 * 1000;
+
+/** The charted metric's folder under `data/metrics/`. Metric 0 is the first one written, so it gets id 0. */
+const CHARTED_METRIC_ID = String(SCALE_CHARTED_METRIC).padStart(6, '0');
+
+/**
+ * The report-relative paths of the `data/` files the page requests from now on. Over HTTP every script load is a
+ * request; `file://` loads are not reported the same way in every browser, so the guard runs on the `-http` projects.
+ */
+function recordDataFiles(page: Page, root: string): Set<string> {
+  const loaded = new Set<string>();
+  page.on('request', (request) => {
+    const url = request.url().split(/[?#]/)[0] ?? '';
+    if (url.startsWith(`${root}/data/`)) loaded.add(url.slice(root.length + 1));
+  });
+  return loaded;
+}
+
+/**
+ * The guard that keeps the smaller metrics scale report a stand-in for the full workload (`fixture.ts`): of the
+ * per-metric files (`data/metrics/<id>/`) the page may load only those of the metric `charted`, when given. Any other
+ * metric's points are the ones the report leaves short. The rollups (`data/rollups/metrics.js` holds the catalog) and
+ * the manifest are written in full.
+ */
+function expectOnlyChartedData(page: string, loaded: Set<string>, charted: string | null): void {
+  const stray = [...loaded]
+    .filter(
+      (f) => f.startsWith('data/metrics/') && (charted === null || !f.startsWith(`data/metrics/${charted}/`)),
+    )
+    .sort();
+  expect(
+    stray,
+    `the ${page} loaded data files the metrics scale report writes only in part: the smaller report no longer stands in for the spec's workload (${SCALE_METRICS} metrics × ${SCALE_METRIC_SERIES} series × 1 h at 10 s); see e2e/fixture.ts`,
+  ).toEqual([]);
+}
 
 /**
  * Median milliseconds from navigation start to the frame after an element matching `selector` (and, when given,
@@ -411,7 +446,7 @@ async function paintedMs(page: Page, url: string, selector: string, label: strin
   return samples;
 }
 
-/** The metrics scale check runs only with this set to 1: its report takes ~15 minutes and ~12 GB to write. */
+/** The metrics scale check runs only with this set to 1: it writes a report of ~0.76M points and runs on its own. */
 const METRICS_SCALE_ENV = 'OTEL_HTML_METRICS_SCALE';
 
 test.describe(`metrics scale: ${SCALE_METRICS} metrics × ${SCALE_METRIC_SERIES} series × 1 h at 10 s`, () => {
@@ -430,6 +465,7 @@ test.describe(`metrics scale: ${SCALE_METRICS} metrics × ${SCALE_METRIC_SERIES}
     { tag: '@perf' },
     async ({ page, reportUrl, browserName }, testInfo) => {
       const factor = perfFactor();
+      const loaded = recordDataFiles(page, reportUrl('metrics-scale'));
       // An empty Explorer charts the first metric of the catalog.
       const samples = await paintedMs(
         page,
@@ -438,8 +474,18 @@ test.describe(`metrics scale: ${SCALE_METRICS} metrics × ${SCALE_METRIC_SERIES}
         ': [1-9]\\d* series$',
       );
       const ms = median(samples);
+      if (testInfo.project.name.endsWith('-http')) {
+        expectOnlyChartedData('Explorer', loaded, CHARTED_METRIC_ID);
+        expect([...loaded].some((f) => f.startsWith(`data/metrics/${CHARTED_METRIC_ID}/`))).toBe(true);
+        // Levels load on demand (#37): the chart reads the one level its bucket width needs, never level 0 here
+        // (1 h at 10 s charts at 16.384 s from level 1), so its cost is bounded whatever the run length.
+        const levels = [...loaded].filter((f) => /^data\/metrics\/[0-9]{6}\/l[0-6]\.js$/.test(f)).sort();
+        expect(levels).toEqual([`data/metrics/${CHARTED_METRIC_ID}/l1.js`]);
+      }
       // The first metric is a counter: its rate, all series summed into one line.
-      await expect(page.getByRole('img', { name: `${scaleMetricName(0)} · rate: 1 series` })).toBeVisible();
+      await expect(
+        page.getByRole('img', { name: `${scaleMetricName(SCALE_CHARTED_METRIC)} · rate: 1 series` }),
+      ).toBeVisible();
       report(
         testInfo,
         `PERF metrics explorer ${testInfo.project.name} (${browserName}): median ${ms.toFixed(0)} ms, samples [${samples.map((x) => x.toFixed(0)).join(', ')}] (budget ${METRICS_EXPLORER_BUDGET_MS * factor}), factor ${factor}`,
@@ -453,6 +499,7 @@ test.describe(`metrics scale: ${SCALE_METRICS} metrics × ${SCALE_METRIC_SERIES}
     { tag: '@perf' },
     async ({ page, reportUrl, browserName }, testInfo) => {
       const factor = perfFactor();
+      const loaded = recordDataFiles(page, reportUrl('metrics-scale'));
       const samples = await paintedMs(
         page,
         `${reportUrl('metrics-scale')}/index.html#/metrics/catalog`,
@@ -460,6 +507,7 @@ test.describe(`metrics scale: ${SCALE_METRICS} metrics × ${SCALE_METRIC_SERIES}
         null,
       );
       const ms = median(samples);
+      if (testInfo.project.name.endsWith('-http')) expectOnlyChartedData('Catalog', loaded, null);
       await expect(page.getByRole('main')).toContainText(`${SCALE_METRICS} metrics ·`);
       report(
         testInfo,

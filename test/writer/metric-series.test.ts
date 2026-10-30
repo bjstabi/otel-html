@@ -1,16 +1,21 @@
 import { setFlagsFromString } from 'node:v8';
 import { runInNewContext } from 'node:vm';
 import { describe, expect, test } from 'vitest';
-import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
+import { reviveDataJson, unwrapDataFile, wrapDataFile } from '../../src/format/data-file.js';
 import {
+  GAP_SAMPLE,
   LEVEL0_WIDTH_NS,
   type LevelFile,
+  levelWidthNs,
   metricExemplarKey,
+  metricLevelExemplarKey,
   metricLevelKey,
   metricSegmentKey,
+  metricSeriesKey,
   parseExemplarFile,
   parseLevelFile,
   parseSegmentFile,
+  parseSeriesFile,
   type SegmentFile,
   type StoredExemplar,
 } from '../../src/format/metric-files.js';
@@ -171,6 +176,62 @@ describe('MetricSeriesWriter', () => {
     expect(left).toEqual(listed.map((p) => `r/${p}`));
   });
 
+  test("compact records each series' point gaps in series.js (format 2)", async () => {
+    const { fs, catalog, writer, series } = setup();
+    const a = series('a', 'h1');
+    const b = series('a', 'h2');
+    series('a', 'h3'); // a series with no points
+    // `a` every 10 s (level-0 gaps of 9 or 10 buckets), then one long gap past the sample; `b` once.
+    for (let i = 0; i < GAP_SAMPLE + 2; i++) writer.add(a.def, a.series, rel(i * 10 * S), counter(1), []);
+    writer.add(a.def, a.series, rel(100_000 * S), counter(1), []);
+    writer.add(b.def, b.series, rel(0), counter(1), []);
+    await writer.flush(catalog);
+    expect(read(fs, metricSeriesKey(0), parseSeriesFile).gaps).toBeUndefined();
+    await writer.compact(catalog);
+    const file = read(fs, metricSeriesKey(0), parseSeriesFile);
+    expect(file.series).toHaveLength(3);
+    expect(file.gaps).toEqual([
+      { n: GAP_SAMPLE, median: 10 },
+      { n: 0, median: 0 },
+      { n: 0, median: 0 },
+    ]);
+  });
+
+  test("levels above ex.js's get their own ex<k>.js, capped per series per level-k bucket", async () => {
+    const { fs, catalog, writer, series } = setup();
+    const a = series('a', 'h1');
+    // A point and an exemplar every 60 s for ~3 days: levels 0-3, level 3 being 524.288 s wide.
+    const points = 4500;
+    for (let i = 0; i < points; i++)
+      writer.add(a.def, a.series, rel(i * 60 * S), counter(1), [ex(0, i * 60 * S, i)]);
+    await writer.flush(catalog);
+    const listed = await writer.compact(catalog);
+    expect(listed).toEqual([
+      'data/metrics/000000/ex.js',
+      'data/metrics/000000/ex3.js',
+      'data/metrics/000000/l0.js',
+      'data/metrics/000000/l1.js',
+      'data/metrics/000000/l2.js',
+      'data/metrics/000000/l3.js',
+      'data/metrics/000000/series.js',
+    ]);
+    const base = read(fs, metricExemplarKey(0), parseExemplarFile).exemplars;
+    const l3 = read(fs, metricLevelExemplarKey(0, 3), parseExemplarFile).exemplars;
+    expect(base).toHaveLength(points);
+    const perBucket = new Map<number, number>();
+    for (const e of l3) {
+      const b = Math.floor(e.time / levelWidthNs(3));
+      perBucket.set(b, (perBucket.get(b) ?? 0) + 1);
+    }
+    expect(Math.max(...perBucket.values())).toBe(2);
+    expect(l3.length).toBeLessThanOrEqual(2 * perBucket.size);
+    expect(l3.length).toBeLessThan(base.length / 4);
+    // Reopened, the writer demotes ex3.js with the levels: the manifest never names a file being rewritten.
+    const reopened = new MetricSeriesWriter(fs, OUT, { exemplars: 2 }, new Map([[0, 1]]), listed);
+    await reopened.flush(catalog);
+    expect(reopened.listed()).toEqual(['data/metrics/000000/seg-000001.js', 'data/metrics/000000/series.js']);
+  });
+
   test('a writer reopened on compacted files demotes them to a segment at its first flush', async () => {
     const first = setup();
     const a = first.series('a', 'h1');
@@ -194,6 +255,37 @@ describe('MetricSeriesWriter', () => {
     expect(demoted.exemplars.map((e) => e.value)).toEqual([1]);
     await writer.compact(first.catalog);
     const l0 = read<LevelFile>(first.fs, metricLevelKey(0, 0), parseLevelFile);
+    expect(l0.series).toEqual([{ id: 0, t: [0, 1], a: [counter(1), counter(5)] }]);
+  });
+
+  test("compaction validates an earlier session's segments, and trusts only the ones it wrote", async () => {
+    /** Rewrites segment `n` of metric 0 with its `widthNs` changed, which validation rejects. */
+    const skew = async (fs: FileSystem, n: number): Promise<void> => {
+      const key = metricSegmentKey(0, n);
+      const text = (fs as ReturnType<typeof createMemoryFileSystem>).snapshot().get(`${OUT}/data/${key}.js`);
+      if (text === undefined) throw new Error(`missing ${key}`);
+      const payload = { ...(unwrapDataFile(text, key) as object), widthNs: 1 };
+      await fs.writeTextAtomic(`${OUT}/data/${key}.js`, wrapDataFile(key, payload));
+    };
+    const reopen = async (tamper: 'earlier' | 'own') => {
+      const first = setup();
+      const a = first.series('a', 'h1');
+      first.writer.add(a.def, a.series, rel(0), counter(1), []);
+      const listed = await first.writer.flush(first.catalog); // seg-000000, never compacted (a crash)
+      if (tamper === 'earlier') await skew(first.fs, 0);
+      const writer = new MetricSeriesWriter(first.fs, OUT, { exemplars: 2 }, new Map([[0, 1]]), listed);
+      writer.add(a.def, a.series, rel(1.5 * S), counter(5), []);
+      await writer.flush(first.catalog); // seg-000001, this writer's own
+      if (tamper === 'own') await skew(first.fs, 1);
+      return { fs: first.fs, compact: () => writer.compact(first.catalog) };
+    };
+    const earlier = await reopen('earlier');
+    await expect(earlier.compact()).rejects.toThrowError(
+      expect.objectContaining({ code: 'invalid-report', path: 'data/metrics/000000/seg-000000.js.widthNs' }),
+    );
+    const own = await reopen('own');
+    await own.compact();
+    const l0 = read<LevelFile>(own.fs, metricLevelKey(0, 0), parseLevelFile);
     expect(l0.series).toEqual([{ id: 0, t: [0, 1], a: [counter(1), counter(5)] }]);
   });
 

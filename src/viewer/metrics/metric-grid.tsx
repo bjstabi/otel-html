@@ -286,8 +286,8 @@ function GridChart(props: {
     async (k: ChartKey, signal: AbortSignal): Promise<ChartRun> => {
       const m = await dataSource.metric(k.entry.id);
       signal.throwIfAborted();
-      const query = { ...k.query, show: defaultShow(m) };
-      const result = runMetricQuery(
+      const query = { ...k.query, show: await defaultShow(m) };
+      const result = await runMetricQuery(
         seriesOnResources(m, k.resourceKeys),
         query,
         k.window,
@@ -448,12 +448,12 @@ export function MetricGrid(
     const filter = linkFilter;
     const entries = linkGroup.entries.slice(0, MAX_METRIC_QUERIES);
     setActionError(null);
-    Promise.all(entries.map((e) => dataSource.metric(e.id))).then(
-      (loaded) => {
+    Promise.all(entries.map((e) => dataSource.metric(e.id).then(defaultShow))).then(
+      (shows) => {
         try {
           const queries = entries.map((e, i) => ({
             ...gridQuery(e, filter, QUERY_IDS.charAt(i)),
-            show: loaded[i] === undefined ? '' : defaultShow(loaded[i]),
+            show: shows[i] ?? '',
           }));
           const m: MetricPageState = {
             queries,

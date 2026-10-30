@@ -1,6 +1,15 @@
 import { Tabs } from '@base-ui/react/tabs';
 import { CircleAlert, Copy, Download, Maximize2, X } from 'lucide-react';
-import { type JSX, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  type JSX,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { assertNever, OtelHtmlError } from '../../model/errors.js';
 import { parseUnixNanos, type RelNanos, type SpanId, type TraceId, type UnixNanos } from '../../model/ids.js';
 import { formatDuration, formatTime } from '../../semconv/formatters.js';
@@ -194,7 +203,7 @@ export function TracePanel(props: TracePanelProps): JSX.Element {
   const latest = useRef(traceIds);
   latest.current = traceIds;
   const movable = layout === 'overlay' && traceIds !== undefined;
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!movable) return;
     const onMove = (e: Event): void => {
       if (!(e instanceof CustomEvent)) return;

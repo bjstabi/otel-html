@@ -13,6 +13,7 @@ import {
   traceShardPath,
 } from '../format/paths.js';
 import type { SessionState } from '../format/state.js';
+import { FORMAT_VERSION } from '../format/version.js';
 import { OtelHtmlError } from '../model/errors.js';
 import { parseUnixNanos, type UnixNanos } from '../model/ids.js';
 import {
@@ -932,7 +933,7 @@ class Session implements WriterSession {
     const now = iso(this.#deps.clock);
     const shards = this.#traceIndex.shards();
     return {
-      formatVersion: 1,
+      formatVersion: FORMAT_VERSION,
       otelHtmlVersion: this.#deps.version,
       title: this.#title,
       epochUnixNano: this.#epoch === null ? '0' : this.#epoch.toString(),

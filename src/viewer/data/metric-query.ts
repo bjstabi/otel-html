@@ -1,3 +1,4 @@
+import { GAP_SAMPLE, LEVEL0_WIDTH_NS, type SeriesGaps } from '../../format/metric-files.js';
 import { anyValueToDisplay } from '../../model/anyvalue.js';
 import { assertNever, OtelHtmlError } from '../../model/errors.js';
 import type { ResourceRecord } from '../../model/records.js';
@@ -6,7 +7,7 @@ import { type BucketAgg, type ExpAgg, type HistAgg, mergeAgg, quantileOf } from 
 import type { MetricEntry } from '../../rollups/metric-catalog.js';
 import { applyFns } from './metric-fn.js';
 import { histogramViews } from './metric-heat.js';
-import type { LevelData, LoadedMetric, LoadedSeries } from './metric-load.js';
+import type { LevelData, LevelInfo, LoadedMetric, LoadedSeries } from './metric-load.js';
 import {
   type Across,
   COMBINE,
@@ -86,25 +87,31 @@ export function resolveMetric(
   return found.length === 1 ? { entry: only } : { ambiguous: found };
 }
 
-/** The quantiles present in a summary's finest level, as `q<quantile>` show options. */
-function summaryQuantiles(m: LoadedMetric): string[] {
+/**
+ * The quantiles present in a summary's coarsest level, as `q<quantile>` show options: the level a full-range chart
+ * reads, so this costs no more than that chart. A coarser bucket keeps its last point, so a quantile set a series
+ * dropped early in a long run may show only at finer levels.
+ */
+async function summaryQuantiles(m: LoadedMetric): Promise<string[]> {
+  const coarsest = m.levels.at(-1);
+  if (coarsest === undefined) return [];
   const qs = new Set<number>();
-  for (const s of m.levels[0]?.series.values() ?? [])
+  for (const s of (await m.level(coarsest.level)).series.values())
     for (const a of s.a) if (a.k === 'summary') for (const q of a.quantiles) qs.add(q.q);
   return [...qs].sort((a, b) => a - b).map((q) => `q${q}`);
 }
 
 /** Every `show` the metric offers (summary quantiles come from its data). */
-export function showOptions(m: LoadedMetric): readonly string[] {
+export async function showOptions(m: LoadedMetric): Promise<readonly string[]> {
   const kind = kindOf(m.entry);
-  return kind === 'summary' ? [...summaryQuantiles(m), ...SHOW_BY_KIND.summary] : SHOW_BY_KIND[kind];
+  return kind === 'summary' ? [...(await summaryQuantiles(m)), ...SHOW_BY_KIND.summary] : SHOW_BY_KIND[kind];
 }
 
 /** The default `show` of a loaded metric: `DEFAULT_SHOW`, with a summary's highest quantile made concrete. */
-export function defaultShow(m: LoadedMetric): string {
+export async function defaultShow(m: LoadedMetric): Promise<string> {
   const kind = kindOf(m.entry);
   if (kind !== 'summary') return DEFAULT_SHOW[kind];
-  return summaryQuantiles(m).at(-1) ?? 'count';
+  return (await summaryQuantiles(m)).at(-1) ?? 'count';
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -114,47 +121,81 @@ export function defaultShow(m: LoadedMetric): string {
 const bucketsOver = (w: TimeWindow, widthNs: number): number =>
   Math.floor(w.end / widthNs) - Math.floor(w.start / widthNs) + 1;
 
-/** Series and gaps per series sampled for the point interval: enough for a stable median, cheap at any size. */
+/** Series sampled for the point interval: enough for a stable median, cheap at any size. */
 const INTERVAL_SAMPLE_SERIES = 64;
-const INTERVAL_SAMPLE_GAPS = 32;
 /** Fewer sampled gaps than this leave the bucket width to R1's pick alone. */
 const INTERVAL_MIN_GAPS = 8;
 
 /**
- * The median time between consecutive points of the series a query charts (those its `where` keeps), in ns, from
- * the finest level; 0 when fewer than `INTERVAL_MIN_GAPS` gaps are found. A sample: up to `INTERVAL_SAMPLE_SERIES` series spread over the
- * matching ones, the first `INTERVAL_SAMPLE_GAPS` gaps of each.
+ * Calls `take` on a sample of the series a query charts (those its `where` keeps): up to `INTERVAL_SAMPLE_SERIES`
+ * spread over the matching ones, until `INTERVAL_SAMPLE_SERIES × GAP_SAMPLE` gaps are taken. `take` returns how many
+ * gaps the series gave.
  */
-export function pointIntervalNs(m: LoadedMetric, where: string | null): number {
-  const finest = [...m.levels].sort((a, b) => a.widthNs - b.widthNs)[0];
-  if (finest === undefined) return 0;
+function sampleSeries(m: LoadedMetric, where: string | null, take: (id: number) => number): void {
   const sel = compileSelector(where, []);
   const matching = m.series.filter((s) => sel.test === null || s.def.other || sel.test(targetOf(m.entry, s)));
   const step = Math.max(1, Math.floor(matching.length / INTERVAL_SAMPLE_SERIES));
-  const gaps: number[] = [];
-  for (
-    let i = 0;
-    i < matching.length && gaps.length < INTERVAL_SAMPLE_SERIES * INTERVAL_SAMPLE_GAPS;
-    i += step
-  ) {
+  let taken = 0;
+  for (let i = 0; i < matching.length && taken < INTERVAL_SAMPLE_SERIES * GAP_SAMPLE; i += step) {
     const id = matching[i]?.def.id;
-    const t = id === undefined ? undefined : finest.series.get(id)?.t;
-    if (t === undefined) continue;
-    for (let j = 1; j < t.length && j <= INTERVAL_SAMPLE_GAPS; j++) gaps.push((t[j] ?? 0) - (t[j - 1] ?? 0));
+    if (id !== undefined) taken += take(id);
   }
-  // Too few gaps say nothing about a scrape interval (two points around one outage would read as a slow scrape).
+}
+
+/**
+ * The median time between consecutive points of the series a query charts, in ns, over a sample of them
+ * (`sampleSeries`) and the first `GAP_SAMPLE` gaps of each; 0 when fewer than `INTERVAL_MIN_GAPS` gaps are found
+ * (two points around one outage would read as a slow scrape). A finished report records each series' gaps
+ * (`LoadedMetric.gaps`), so no level is read; otherwise they are measured on the finest level.
+ */
+export async function pointIntervalNs(m: LoadedMetric, where: string | null): Promise<number> {
+  if (m.gaps !== null) return recordedIntervalNs(m, m.gaps, where);
+  const finest = m.levels[0];
+  if (finest === undefined) return 0;
+  const level = await m.level(finest.level);
+  const gaps: number[] = [];
+  sampleSeries(m, where, (id) => {
+    const t = level.series.get(id)?.t ?? [];
+    const before = gaps.length;
+    for (let j = 1; j < t.length && j <= GAP_SAMPLE; j++) gaps.push((t[j] ?? 0) - (t[j - 1] ?? 0));
+    return gaps.length - before;
+  });
   if (gaps.length < INTERVAL_MIN_GAPS) return 0;
   gaps.sort((a, b) => a - b);
   // The upper median: an even sample rounds up, so a bucket is never narrower than the interval it should cover.
-  return (gaps[Math.floor(gaps.length / 2)] ?? 0) * finest.widthNs;
+  return (gaps[Math.floor(gaps.length / 2)] ?? 0) * level.widthNs;
+}
+
+/**
+ * `pointIntervalNs` from recorded gaps: the upper median of the sampled series' gaps, each series' median weighing
+ * its gap count. Equal to the pooled median of the gaps themselves when each series' gaps are alike.
+ */
+function recordedIntervalNs(m: LoadedMetric, recorded: readonly SeriesGaps[], where: string | null): number {
+  const sample: SeriesGaps[] = [];
+  sampleSeries(m, where, (id) => {
+    const g = recorded[id];
+    if (g === undefined || g.n === 0) return 0;
+    sample.push(g);
+    return g.n;
+  });
+  const total = sample.reduce((n, g) => n + g.n, 0);
+  if (total < INTERVAL_MIN_GAPS) return 0;
+  sample.sort((a, b) => a.median - b.median);
+  const middle = Math.floor(total / 2);
+  let seen = 0;
+  for (const g of sample) {
+    seen += g.n;
+    if (seen > middle) return g.median * LEVEL0_WIDTH_NS;
+  }
+  return 0;
 }
 
 /** R1: the finest level with at most `maxPoints` buckets over the window, else the coarsest level present. */
-export function pickLevel(
-  levels: readonly LevelData[],
+export function pickLevel<L extends LevelInfo>(
+  levels: readonly L[],
   window: TimeWindow,
   maxPoints: number,
-): LevelData | null {
+): L | null {
   const byWidth = [...levels].sort((a, b) => a.widthNs - b.widthNs);
   return (
     byWidth.find((l) => bucketsOver(window, l.widthNs) <= maxPoints) ?? byWidth[byWidth.length - 1] ?? null
@@ -165,7 +206,7 @@ export function pickLevel(
  * The coarsest level no wider than `widthNs` (so `coarsenedTo` can merge it up to exactly that width), else the
  * finest level present.
  */
-function levelAtWidth(levels: readonly LevelData[], widthNs: number): LevelData | null {
+function levelAtWidth(levels: readonly LevelInfo[], widthNs: number): LevelInfo | null {
   const byWidth = [...levels].sort((a, b) => a.widthNs - b.widthNs);
   return byWidth.filter((l) => l.widthNs <= widthNs).at(-1) ?? byWidth[0] ?? null;
 }
@@ -174,16 +215,17 @@ function levelAtWidth(levels: readonly LevelData[], widthNs: number): LevelData 
  * The bucket width a chart of `q` uses (R12′): the target is the wider of R1's pick and the points' interval
  * (spec §5.3: buckets narrower than the scrape interval leave every point between empty buckets, which draws no
  * line), rounded up to a whole multiple of the coarsest level no wider than it. Null when the metric has no levels.
+ * Reads no level when the report records its series' gaps.
  */
-export function chartWidthNs(
+export async function chartWidthNs(
   m: LoadedMetric,
   q: MetricQuery,
   window: TimeWindow,
   maxPoints: number,
-): number | null {
+): Promise<number | null> {
   const r1 = pickLevel(m.levels, window, maxPoints);
   if (r1 === null) return null;
-  const target = Math.max(r1.widthNs, pointIntervalNs(m, q.where));
+  const target = Math.max(r1.widthNs, await pointIntervalNs(m, q.where));
   const base = levelAtWidth(m.levels, target) ?? r1;
   return Math.ceil(target / base.widthNs) * base.widthNs;
 }
@@ -377,15 +419,16 @@ function topQuantile(members: readonly Member[]): number | null {
 // The engine
 // ---------------------------------------------------------------------------------------------
 
-/** Runs `q` at `chartWidthNs` for `maxPoints` buckets over the window. */
-export function runMetricQuery(
+/** Runs `q` at `chartWidthNs` for `maxPoints` buckets over the window, reading only the level that width needs. */
+export async function runMetricQuery(
   m: LoadedMetric,
   q: MetricQuery,
   window: TimeWindow,
   maxPoints: number,
   signal?: AbortSignal,
-): MetricQueryResult {
-  const widthNs = chartWidthNs(m, q, window, maxPoints);
+): Promise<MetricQueryResult> {
+  const widthNs = await chartWidthNs(m, q, window, maxPoints);
+  signal?.throwIfAborted();
   return widthNs === null
     ? runAtLevel(m, q, window, null, signal)
     : runMetricQueryAtWidth(m, q, window, widthNs, signal);
@@ -395,14 +438,16 @@ export function runMetricQuery(
  * Runs `q` at exactly `widthNs` (a formula's operands must share one, `formulaWidth`, which is already at least
  * each operand's interval): the coarsest level no wider, merged up to it.
  */
-export function runMetricQueryAtWidth(
+export async function runMetricQueryAtWidth(
   m: LoadedMetric,
   q: MetricQuery,
   window: TimeWindow,
   widthNs: number,
   signal?: AbortSignal,
-): MetricQueryResult {
-  const level = levelAtWidth(m.levels, widthNs);
+): Promise<MetricQueryResult> {
+  const info = levelAtWidth(m.levels, widthNs);
+  const level = info === null ? null : await m.level(info.level);
+  signal?.throwIfAborted();
   return runAtLevel(m, q, window, level === null ? null : coarsenedTo(level, widthNs), signal);
 }
 
@@ -431,7 +476,7 @@ function coarsenedTo(level: LevelData, widthNs: number): LevelData {
     series.set(id, { t, a });
   }
   // Merged buckets keep the last summary point, as a coarser ladder level does.
-  return { level: Math.max(level.level, 1), widthNs, series };
+  return { level: Math.max(level.level, 1), widthNs, series, exemplars: level.exemplars };
 }
 
 function runAtLevel(
@@ -591,7 +636,7 @@ function runAtLevel(
 
   const fns = applyFns(series, widthNs, q.fn);
   const kept = new Set(fns.series.map((s) => s.key));
-  const exemplars = m.exemplars.flatMap((x) => {
+  const exemplars = level.exemplars.flatMap((x) => {
     const seriesKey = groupOfSeries.get(x.series)?.key;
     if (seriesKey === undefined || !kept.has(seriesKey) || x.time < window.start || x.time > window.end)
       return [];

@@ -79,8 +79,8 @@ async function run(ds: DataSource, input: Input, signal: AbortSignal): Promise<O
     try {
       const m = await ds.metric(r.entry.id);
       signal.throwIfAborted();
-      out.showOptions.set(q.id, showOptions(m));
-      out.results.set(q.id, runMetricQuery(m, q, input.window, input.maxPoints, signal));
+      out.showOptions.set(q.id, await showOptions(m));
+      out.results.set(q.id, await runMetricQuery(m, q, input.window, input.maxPoints, signal));
       loaded.set(q.id, { m, q });
     } catch (e) {
       signal.throwIfAborted();
@@ -97,7 +97,8 @@ async function run(ds: DataSource, input: Input, signal: AbortSignal): Promise<O
         out.errors.set(f.id, `${f.id} reads query ${missing}, which has no result`);
         continue;
       }
-      // Operands must share one bucket width: re-run the finer ones at the coarsest.
+      // Operands must share one bucket width: re-run the finer ones at the coarsest, each reading only the level
+      // at that width.
       const width = formulaWidth(ast, out.results);
       const operands = new Map<string, MetricQueryResult>();
       for (const id of refs) {
@@ -106,7 +107,7 @@ async function run(ds: DataSource, input: Input, signal: AbortSignal): Promise<O
         if (r === undefined || l === undefined) continue;
         operands.set(
           id,
-          r.widthNs === width ? r : runMetricQueryAtWidth(l.m, l.q, input.window, width, signal),
+          r.widthNs === width ? r : await runMetricQueryAtWidth(l.m, l.q, input.window, width, signal),
         );
       }
       out.results.set(f.id, evaluateFormula(ast, operands, f.id));

@@ -13,8 +13,9 @@ import { parseWith } from './validate.js';
 
 /**
  * Per-metric series files under `data/metrics/<id6>/`, named by the metric's numeric id (never its name):
- * `series.js` (series definitions), `seg-<n6>.js` (level-0 buckets and exemplars since the previous flush),
- * `l<k>.js` (level k after compaction) and `ex.js` (exemplars after compaction).
+ * `series.js` (series definitions, plus each series' point gaps after compaction), `seg-<n6>.js` (level-0 buckets
+ * and exemplars since the previous flush), `l<k>.js` (level k after compaction), `ex.js` (exemplars after
+ * compaction, for levels 0…EXEMPLAR_BASE_LEVEL) and `ex<k>.js` (the exemplars of a coarser level k, format 2).
  */
 
 /** Level 0 is 1 ms × 2^10, aligned like `TimeBuckets`; level k is LEVEL_FACTOR^k times wider. */
@@ -23,12 +24,21 @@ export const LEVEL_FACTOR = 8;
 export const MAX_LEVEL = 6;
 /** Compaction stops at the first level with at most this many buckets over the metric's time range. */
 export const LEVEL_MAX_BUCKETS = 2000;
-/** Exemplars are kept per series per bucket of this width (1 ms × 2^16). */
+/** Exemplars are kept per series per bucket of this width (1 ms × 2^16): level 2's width. */
 export const EXEMPLAR_WIDTH_NS = 65_536_000_000;
+/**
+ * `ex.js` serves levels 0…EXEMPLAR_BASE_LEVEL (its buckets are this level's). Each level k above it that a metric
+ * has gets `ex<k>.js`, capped per series per level-k bucket, so the exemplars a chart loads are bounded like its
+ * buckets.
+ */
+export const EXEMPLAR_BASE_LEVEL = 2;
 
-/** A metric data file's path; the groups are the metric id, the file, the level and the segment number. */
+/**
+ * A metric data file's path; the groups are the metric id, the file, the level, the segment number and the level
+ * of an `ex<k>.js`.
+ */
 export const METRIC_FILE_PATH: RegExp =
-  /^data\/metrics\/([0-9]{6})\/(series|ex|l([0-6])|seg-([0-9]{6}))\.js$/;
+  /^data\/metrics\/([0-9]{6})\/(series|ex|l([0-6])|seg-([0-9]{6})|ex([3-6]))\.js$/;
 
 const MAX_NUMBER = 999_999;
 
@@ -65,6 +75,17 @@ export function metricLevelPath(id: number, k: number): string {
 export function metricExemplarPath(id: number): string {
   return `${metricDir(id)}/ex.js`;
 }
+/** `ex<k>.js`, the exemplars of level k > EXEMPLAR_BASE_LEVEL. */
+export function metricLevelExemplarPath(id: number, k: number): string {
+  if (!Number.isInteger(k) || k <= EXEMPLAR_BASE_LEVEL || k > MAX_LEVEL) {
+    throw new OtelHtmlError('invalid-report', {
+      path: 'exemplar level',
+      expected: `an integer in [${EXEMPLAR_BASE_LEVEL + 1}, ${MAX_LEVEL}]`,
+      actual: String(k),
+    });
+  }
+  return `${metricDir(id)}/ex${k}.js`;
+}
 
 /** Registration key of a data file: its path without `data/` and `.js`. */
 export const dataFileKey = (path: string): string => path.slice('data/'.length, -'.js'.length);
@@ -72,6 +93,8 @@ export const metricSeriesKey = (id: number): string => dataFileKey(metricSeriesP
 export const metricSegmentKey = (id: number, n: number): string => dataFileKey(metricSegmentPath(id, n));
 export const metricLevelKey = (id: number, k: number): string => dataFileKey(metricLevelPath(id, k));
 export const metricExemplarKey = (id: number): string => dataFileKey(metricExemplarPath(id));
+export const metricLevelExemplarKey = (id: number, k: number): string =>
+  dataFileKey(metricLevelExemplarPath(id, k));
 
 // ---------------------------------------------------------------------------------------------
 // Resolution ladder
@@ -244,16 +267,46 @@ export function selectExemplars(list: readonly StoredExemplar[], n: number): Sto
   return picked.sort(byTime);
 }
 
-/** `selectExemplars` applied per series per EXEMPLAR_WIDTH_NS bucket. */
-export function capExemplars(list: readonly StoredExemplar[], n: number): StoredExemplar[] {
+/** `selectExemplars` applied per series per bucket of `widthNs` (EXEMPLAR_WIDTH_NS by default). */
+export function capExemplars(
+  list: readonly StoredExemplar[],
+  n: number,
+  widthNs: number = EXEMPLAR_WIDTH_NS,
+): StoredExemplar[] {
   const groups = new Map<string, StoredExemplar[]>();
   for (const e of list) {
-    const key = `${e.series}:${bucketIndex(e.time, EXEMPLAR_WIDTH_NS)}`;
+    const key = `${e.series}:${bucketIndex(e.time, widthNs)}`;
     const g = groups.get(key);
     if (g === undefined) groups.set(key, [e]);
     else g.push(e);
   }
   return [...groups.values()].flatMap((g) => selectExemplars(g, n)).sort(byTime);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Point gaps
+// ---------------------------------------------------------------------------------------------
+
+/** The gaps a series' point interval is measured on: its first ones, so the measure costs the same at any length. */
+export const GAP_SAMPLE = 32;
+
+/**
+ * A series' first gaps between consecutive level-0 buckets holding a point: how many were measured (at most
+ * GAP_SAMPLE) and their upper median, in level-0 buckets (0 when none). The viewer's bucket width (R12′) reads these
+ * instead of loading level 0.
+ */
+export interface SeriesGaps {
+  n: number;
+  median: number;
+}
+
+/** `SeriesGaps` of one series' ascending level-0 bucket indexes. */
+export function seriesGaps(t: readonly number[]): SeriesGaps {
+  const gaps: number[] = [];
+  for (let j = 1; j < t.length && j <= GAP_SAMPLE; j++) gaps.push((t[j] ?? 0) - (t[j - 1] ?? 0));
+  gaps.sort((a, b) => a - b);
+  // The upper median: an even sample rounds up, so a bucket is never narrower than the interval it should cover.
+  return { n: gaps.length, median: gaps[Math.floor(gaps.length / 2)] ?? 0 };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -263,6 +316,11 @@ export function capExemplars(list: readonly StoredExemplar[], n: number): Stored
 export interface SeriesFile {
   metric: number;
   series: SeriesDef[];
+  /**
+   * Per series (by id), its point gaps from level 0. Written at compaction (format 2); absent before it (segments
+   * only) and in format-1 reports, where the viewer measures them on level 0 itself.
+   */
+  gaps?: SeriesGaps[];
 }
 export interface SegmentFile {
   metric: number;
@@ -283,7 +341,12 @@ export interface ExemplarFile {
 
 type SerializedSeriesDef = Omit<SeriesDef, 'attributes'> & { attributes: JsonAny[] };
 type SerializedExemplar = Omit<StoredExemplar, 'attributes'> & { attributes: JsonAny[] };
-export type SerializedSeriesFile = { metric: number; series: SerializedSeriesDef[] };
+/** `gaps` as `[n, median]` pairs, one per series. */
+export type SerializedSeriesFile = {
+  metric: number;
+  series: SerializedSeriesDef[];
+  gaps?: [number, number][] | undefined;
+};
 export type SerializedSegmentFile = Omit<SegmentFile, 'exemplars'> & { exemplars: SerializedExemplar[] };
 export type SerializedExemplarFile = { metric: number; exemplars: SerializedExemplar[] };
 
@@ -341,14 +404,25 @@ const SeriesDefSchema: z.ZodType<SerializedSeriesDef> = z.strictObject({
   other: z.boolean(),
 });
 
-export const SeriesFileSchema: z.ZodType<SerializedSeriesFile> = z.strictObject({
-  metric: nonNegInt,
-  series: z.array(SeriesDefSchema).superRefine((list, ctx) => {
-    list.forEach((s, i) => {
-      if (s.id !== i) ctx.addIssue({ code: 'custom', path: [i, 'id'], message: `${i}` });
-    });
-  }),
-});
+export const SeriesFileSchema: z.ZodType<SerializedSeriesFile> = z
+  .strictObject({
+    metric: nonNegInt,
+    series: z.array(SeriesDefSchema).superRefine((list, ctx) => {
+      list.forEach((s, i) => {
+        if (s.id !== i) ctx.addIssue({ code: 'custom', path: [i, 'id'], message: `${i}` });
+      });
+    }),
+    gaps: z.array(z.tuple([z.number().int().min(0).max(GAP_SAMPLE), nonNegInt])).optional(),
+  })
+  .superRefine((f, ctx) => {
+    if (f.gaps !== undefined && f.gaps.length !== f.series.length) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['gaps'],
+        message: `${f.series.length} entries (one per series)`,
+      });
+    }
+  });
 
 export const SegmentFileSchema: z.ZodType<SerializedSegmentFile> = z.strictObject({
   metric: nonNegInt,
@@ -402,6 +476,7 @@ export function encodeSeriesFile(f: SeriesFile): SerializedSeriesFile {
       bounds: s.bounds === null ? null : [...s.bounds],
       other: s.other,
     })),
+    ...(f.gaps === undefined ? {} : { gaps: f.gaps.map((g): [number, number] => [g.n, g.median]) }),
   };
 }
 
@@ -413,6 +488,7 @@ export function parseSeriesFile(input: unknown, root: string): SeriesFile {
       ...s,
       attributes: decodeAttributes(s.attributes, `${root}.series[${i}].attributes`),
     })),
+    ...(f.gaps === undefined ? {} : { gaps: f.gaps.map(([n, median]) => ({ n, median })) }),
   };
 }
 
@@ -422,6 +498,17 @@ export function encodeSegmentFile(f: SegmentFile): SerializedSegmentFile {
 
 export function parseSegmentFile(input: unknown, root: string): SegmentFile {
   const f = parseWith(SegmentFileSchema, input, root);
+  return { ...f, exemplars: decodeExemplars(f.exemplars, `${root}.exemplars`) };
+}
+
+/**
+ * A segment file the running writer wrote itself, read back for compaction: decoded like `parseSegmentFile` without
+ * validating it again (it was encoded from validated buckets moments before). Segments of an earlier session, read on
+ * append or merge, go through `parseSegmentFile`. Demoted segments count as this session's own too: they are built
+ * from level and exemplar files that were zod-validated when read, so skipping validation stays sound.
+ */
+export function decodeOwnSegmentFile(input: unknown, root: string): SegmentFile {
+  const f = input as SerializedSegmentFile;
   return { ...f, exemplars: decodeExemplars(f.exemplars, `${root}.exemplars`) };
 }
 

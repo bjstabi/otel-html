@@ -10,6 +10,7 @@ import {
 import { METRIC_FILE_PATH } from './metric-files.js';
 import { chunkPath, SIGNALS, type Signal } from './paths.js';
 import { parseWith } from './validate.js';
+import { type FormatVersion, READABLE_FORMAT_VERSIONS } from './version.js';
 
 export interface ManifestChunk {
   signal: Signal;
@@ -22,7 +23,7 @@ export interface ManifestChunk {
 }
 
 export interface Manifest {
-  formatVersion: 1;
+  formatVersion: FormatVersion;
   otelHtmlVersion: string;
   title: string;
   epochUnixNano: string;
@@ -51,7 +52,7 @@ const TRACE_SHARD_PATH = /^data\/traces\/[0-9a-f]{2}\.js$/;
 
 export const ManifestSchema: z.ZodType<Manifest> = z
   .strictObject({
-    formatVersion: z.literal(1),
+    formatVersion: z.literal(READABLE_FORMAT_VERSIONS),
     otelHtmlVersion: z.string(),
     title: z.string(),
     epochUnixNano: z.string().regex(/^[0-9]+$/, 'decimal nanoseconds'),

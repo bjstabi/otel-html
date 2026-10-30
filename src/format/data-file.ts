@@ -59,8 +59,45 @@ function replacer(key: string, value: unknown): unknown {
   }
 }
 
+/**
+ * Whether `JSON.stringify` writes `v` exactly as it does with `replacer`, which then has nothing to do: no bigint,
+ * byte array, non-finite number, function, symbol or `toJSON` anywhere in it. Walking the value first is several
+ * times cheaper than a replacer, which `JSON.stringify` calls back for every key; a value that is not plain is
+ * written with the replacer, so its tags and errors are unchanged.
+ */
+function isPlainJson(v: unknown): boolean {
+  switch (typeof v) {
+    case 'number':
+      return Number.isFinite(v);
+    case 'string':
+    case 'boolean':
+    case 'undefined':
+      return true;
+    case 'object': {
+      if (v === null) return true;
+      if (Array.isArray(v)) {
+        for (let i = 0; i < v.length; i++) if (!isPlainJson(v[i])) return false;
+        return true;
+      }
+      if (v instanceof Uint8Array || typeof Reflect.get(v, 'toJSON') === 'function') return false;
+      const rec = v as Record<string, unknown>;
+      // `for…in` visits every own enumerable key JSON.stringify writes (and any inherited one, which only makes the
+      // check stricter) without allocating a key list.
+      for (const k in rec) if (!isPlainJson(rec[k])) return false;
+      return true;
+    }
+    default:
+      return false;
+  }
+}
+
+/** `JSON.stringify(v, replacer)`, without the replacer's cost when `v` is plain JSON. */
+function stringify(v: unknown): string {
+  return isPlainJson(v) ? JSON.stringify(v) : JSON.stringify(v, replacer);
+}
+
 export function wrapDataFile(key: string, payload: unknown): string {
-  const json = JSON.stringify(payload, replacer);
+  const json = stringify(payload);
   if (json === undefined) {
     throw new OtelHtmlError('invalid-report', {
       path: key,
@@ -81,12 +118,12 @@ export function* wrapDataFilePieces(
   listKey: string,
   items: Iterable<unknown>,
 ): Generator<string, void, void> {
-  const open = JSON.stringify(head, replacer);
+  const open = stringify(head);
   const fields = open === '{}' ? '{' : `${open.slice(0, -1)},`;
   yield `${REGISTRATION_GLOBAL}.push(${escapeHostile(JSON.stringify(key))},${escapeHostile(fields)}${escapeHostile(JSON.stringify(listKey))}:[`;
   let first = true;
   for (const item of items) {
-    const json = JSON.stringify(item, replacer);
+    const json = stringify(item);
     if (json === undefined) {
       throw new OtelHtmlError('invalid-report', {
         path: listKey,

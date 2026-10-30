@@ -41,6 +41,21 @@ describe.each([
     expect(await f.list(join(dir, 'a'))).toEqual(['x.js']);
   });
 
+  test('many small pieces and pieces larger than a write batch join exactly', async () => {
+    const f = fs();
+    const write =
+      f.writePiecesAtomic ?? ((p: string, xs: Iterable<string>) => f.writeTextAtomic(p, [...xs].join('')));
+    const pieces = [
+      ...Array.from({ length: 50_000 }, (_, i) => `{"id":${i},"s":"é\u2028"},`),
+      'x'.repeat(600_000),
+      '',
+      '末',
+    ];
+    await f.mkdirp(join(dir, 'b'));
+    await write(join(dir, 'b/big.js'), pieces);
+    expect(await f.readText(join(dir, 'b/big.js'))).toBe(pieces.join(''));
+  });
+
   test('atomic write round-trips and leaves no tmp file', async () => {
     const f = fs();
     await f.mkdirp(join(dir, 'a/b'));

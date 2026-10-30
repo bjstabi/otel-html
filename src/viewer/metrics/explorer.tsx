@@ -89,20 +89,22 @@ function ExplorerBody(props: { dataSource: DataSource; range: TimeWindow }): JSX
   /** Points the matching queries at `entry` with its default show (a summary's highest quantile, from its data). */
   const applyEntry = useCallback(
     (match: (q: MetricQuery) => boolean, entry: MetricEntry): void => {
-      dataSource.metric(entry.id).then(
-        (m) => {
-          const show = defaultShow(m);
-          // Only a name with several definitions needs the kind and unit to pick one.
-          const kind = entry.conflicting ? entry.type : null;
-          const unit = entry.conflicting ? entry.unit : null;
-          update((s) => ({
-            ...s,
-            queries: s.queries.map((q) => (match(q) ? { ...q, metric: entry.name, kind, unit, show } : q)),
-          }));
-          setActionError(null);
-        },
-        (e: unknown) => fail('The metric could not be loaded', e),
-      );
+      dataSource
+        .metric(entry.id)
+        .then(defaultShow)
+        .then(
+          (show) => {
+            // Only a name with several definitions needs the kind and unit to pick one.
+            const kind = entry.conflicting ? entry.type : null;
+            const unit = entry.conflicting ? entry.unit : null;
+            update((s) => ({
+              ...s,
+              queries: s.queries.map((q) => (match(q) ? { ...q, metric: entry.name, kind, unit, show } : q)),
+            }));
+            setActionError(null);
+          },
+          (e: unknown) => fail('The metric could not be loaded', e),
+        );
     },
     [dataSource, update, fail],
   );
