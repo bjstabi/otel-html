@@ -98,19 +98,17 @@ async function main(): Promise<number> {
   const started = Date.now();
   const serve = await startServe(out);
   try {
-    // Traces are paced (see TRACES_PER_SECOND_PER_WORKER); a trace is a root plus one child span.
+    // Traces are paced (see SPANS_PER_SECOND_PER_WORKER); a trace is a root plus one child span.
     process.stdout.write(
       `traces: ${args.spans} spans over gRPC (${plan.tracesPerWorker} traces × ${args.workers} workers)\n`,
     );
     let phase = Date.now();
     await docker(tracesArgs(args.image, GRPC_PORT, args.workers, plan.tracesPerWorker));
-    process.stdout.write(
-      `traces: ${args.spans} spans done in ${((Date.now() - phase) / 1000).toFixed(0)} s\n`,
-    );
+    process.stdout.write(`traces: generator finished in ${((Date.now() - phase) / 1000).toFixed(0)} s\n`);
     process.stdout.write(`logs: ${args.logs} over HTTP (${plan.logsPerWorker} × ${args.workers} workers)\n`);
     phase = Date.now();
     await docker(logsArgs(args.image, HTTP_PORT, args.workers, plan.logsPerWorker));
-    process.stdout.write(`logs: ${args.logs} done in ${((Date.now() - phase) / 1000).toFixed(0)} s\n`);
+    process.stdout.write(`logs: generator finished in ${((Date.now() - phase) / 1000).toFixed(0)} s\n`);
   } catch (e) {
     serve.child.kill('SIGKILL');
     throw e;

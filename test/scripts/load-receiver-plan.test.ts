@@ -7,7 +7,7 @@ import {
   parseMaxRssKb,
   parseReceived,
   planWorkload,
-  TRACES_PER_SECOND_PER_WORKER,
+  SPANS_PER_SECOND_PER_WORKER,
   tracesArgs,
 } from '../../scripts/load-receiver-plan.js';
 
@@ -134,7 +134,7 @@ describe('tracesArgs', () => {
   test('paces the generator', () => {
     const i = args.indexOf('--rate');
     expect(i).toBeGreaterThan(-1);
-    expect(args[i + 1]).toBe(String(TRACES_PER_SECOND_PER_WORKER));
+    expect(args[i + 1]).toBe(String(SPANS_PER_SECOND_PER_WORKER));
   });
 
   test('targets the gRPC endpoint with the per-worker count', () => {

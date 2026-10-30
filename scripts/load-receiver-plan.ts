@@ -8,12 +8,13 @@ export const MAX_RSS_KB: number = 512 * 1024;
 /** `telemetrygen traces` makes one root span and `--child-spans` (default 1) children per trace. */
 const SPANS_PER_TRACE = 2;
 /**
- * telemetrygen's trace generator has no backpressure: unthrottled (`--rate 0`) it produces hundreds of thousands of
- * traces a second and its batch span processor drops whatever the exporter has not sent, so traces are paced.
- * 250/s × 8 workers = 2,000 traces/s = 4,000 spans/s, about 250 s for 1M spans. The logs path exports one request
- * per record synchronously, so it stays unthrottled.
+ * 500 spans/s per worker: telemetrygen's `--rate` counts spans (the limiter runs before the root and before each
+ * child), so at 2 spans per trace that is 250 traces/s; 8 workers → 4,000 spans/s, about 250 s for 1M spans — well
+ * under the ~18k spans/s one exporter pushed through during the unthrottled burst. Unthrottled (`--rate 0`) the trace
+ * generator has no backpressure: it makes hundreds of thousands of traces a second and its batch span processor drops
+ * what the exporter has not sent. The logs path exports one request per record synchronously, so it stays unthrottled.
  */
-export const TRACES_PER_SECOND_PER_WORKER = 250;
+export const SPANS_PER_SECOND_PER_WORKER = 500;
 
 export function tracesArgs(image: string, port: number, workers: number, tracesPerWorker: number): string[] {
   return [
@@ -27,7 +28,7 @@ export function tracesArgs(image: string, port: number, workers: number, tracesP
     '--traces',
     String(tracesPerWorker),
     '--rate',
-    String(TRACES_PER_SECOND_PER_WORKER),
+    String(SPANS_PER_SECOND_PER_WORKER),
   ];
 }
 
