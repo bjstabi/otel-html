@@ -248,6 +248,85 @@ describe('TraceIndex memory shape', () => {
   });
 });
 
+describe('TraceIndex shared roots and chunk lists', () => {
+  const T2 = parseTraceId('aa8efff798038103d269b633813fc60c', 't2');
+  const T3 = parseTraceId('cc8efff798038103d269b633813fc60c', 't3');
+  const live = (idx: TraceIndex, id: string) => {
+    const snap = idx.snapshot();
+    const e = snap.entries(id.slice(0, 2)).get(id);
+    idx.release();
+    return e;
+  };
+
+  test('traces with equal roots share one frozen root; a different root is its own', () => {
+    const idx = new TraceIndex();
+    idx.add(mk(1), 'chunks/spans/000000', resource);
+    idx.add(mk(1, { traceId: T2 }), 'chunks/spans/000000', resource);
+    idx.add(mk(1, { traceId: T3, name: 'other' }), 'chunks/spans/000000', resource);
+    const a = live(idx, TRACE)?.root;
+    expect(live(idx, T2)?.root).toBe(a);
+    expect(live(idx, T3)?.root).not.toBe(a);
+    expect(Object.isFrozen(a)).toBe(true);
+    expect(() => {
+      (a as { name: string }).name = 'x';
+    }).toThrow();
+  });
+
+  test('past the intern cap a root is still frozen and correct', () => {
+    const idx = new TraceIndex({ internCap: 1 });
+    idx.add(mk(1, { name: 'first' }), 'chunks/spans/000000', resource);
+    idx.add(mk(1, { traceId: T2, name: 'second' }), 'chunks/spans/000000', resource);
+    idx.add(mk(1, { traceId: T3, name: 'second' }), 'chunks/spans/000000', resource);
+    expect(Object.isFrozen(live(idx, T3)?.root)).toBe(true);
+    expect(live(idx, T3)?.root?.name).toBe('second');
+  });
+
+  test('entries with the same first chunk share a frozen list; a second chunk gives that entry its own', () => {
+    const idx = new TraceIndex();
+    idx.add(mk(1), 'chunks/spans/000000', resource);
+    idx.add(mk(1, { traceId: T2 }), 'chunks/spans/000000', resource);
+    idx.addLog(mkLog(), 'chunks/logs/000000');
+    idx.addLog(mkLog({ traceId: T2 }), 'chunks/logs/000000');
+    const first = live(idx, TRACE);
+    const second = live(idx, T2);
+    expect(first?.chunks).toBe(second?.chunks);
+    expect(first?.logChunks).toBe(second?.logChunks);
+    expect(Object.isFrozen(first?.chunks)).toBe(true);
+    const shared = first?.chunks;
+    idx.add(mk(2), 'chunks/spans/000001', resource);
+    idx.addLog(mkLog(), 'chunks/logs/000001');
+    expect(live(idx, TRACE)?.chunks).toEqual(['chunks/spans/000000', 'chunks/spans/000001']);
+    expect(live(idx, TRACE)?.logChunks).toEqual(['chunks/logs/000000', 'chunks/logs/000001']);
+    expect(live(idx, T2)?.chunks).toBe(shared);
+    expect(shared).toEqual(['chunks/spans/000000']);
+    expect(live(idx, T2)?.logChunks).toEqual(['chunks/logs/000000']);
+  });
+
+  test('a new chunk after a cut gets a new shared list', () => {
+    const idx = new TraceIndex();
+    idx.add(mk(1), 'chunks/spans/000000', resource);
+    idx.add(mk(1, { traceId: T2 }), 'chunks/spans/000001', resource);
+    expect(live(idx, T2)?.chunks).toEqual(['chunks/spans/000001']);
+    expect(live(idx, TRACE)?.chunks).toEqual(['chunks/spans/000000']);
+  });
+
+  test('load shares roots and one-element lists, and serializes as before', () => {
+    const idx = new TraceIndex();
+    idx.add(mk(1), 'chunks/spans/000000', resource);
+    idx.add(mk(1, { traceId: T2 }), 'chunks/spans/000000', resource);
+    idx.add(mk(2, { traceId: T2 }), 'chunks/spans/000001', resource);
+    const json = JSON.parse(JSON.stringify(jsonOf(idx)));
+    const loaded = TraceIndex.load(json);
+    expect(JSON.stringify(jsonOf(loaded))).toBe(JSON.stringify(jsonOf(idx)));
+    const fresh = TraceIndex.load({ ...json, cc: { [T3]: { ...json['5b'][TRACE] } } });
+    expect(live(fresh, T3)?.root).toBe(live(fresh, TRACE)?.root);
+    expect(live(fresh, T3)?.chunks).toBe(live(fresh, TRACE)?.chunks);
+    expect(Object.isFrozen(live(fresh, TRACE)?.root)).toBe(true);
+    fresh.add(mk(3), 'chunks/spans/000002', resource);
+    expect(live(fresh, T3)?.chunks).toEqual(['chunks/spans/000000']);
+  });
+});
+
 describe('TraceIndex snapshot', () => {
   const shard = TRACE.slice(0, 2);
 

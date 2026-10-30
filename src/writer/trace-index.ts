@@ -15,6 +15,8 @@ const NO_CHUNKS = Object.freeze([]) as unknown as string[];
 
 const DEFAULT_INTERN_CAP = 10_000;
 
+type TraceRoot = NonNullable<TraceEntry['root']>;
+
 function emptyEntry(start: number, end: number): TraceEntry {
   return { chunks: NO_CHUNKS, logChunks: NO_CHUNKS, start, end, spans: 0, logs: 0, errors: 0, root: null };
 }
@@ -47,10 +49,32 @@ export class TraceIndex {
   #held: Map<string, Map<string, TraceEntry>> | null = null;
   // Shards whose live map is still the very map the held snapshot reads (see `#shardForWrite`).
   readonly #shared = new Set<string>();
+  readonly #roots = new Map<string, TraceRoot>();
+  // The last one-element chunk list handed out per list kind. The chunk being written only changes on a cut, so
+  // nearly every first chunk of a new entry equals the previous one.
+  #lastSpanList: readonly string[] = NO_CHUNKS;
+  #lastLogList: readonly string[] = NO_CHUNKS;
   readonly #internCap: number;
 
   constructor(options: { internCap?: number } = {}) {
     this.#internCap = options.internCap ?? DEFAULT_INTERN_CAP;
+  }
+
+  // Roots repeat as much as their strings (a few distinct ones across hundreds of thousands of traces), and an
+  // object costs more heap than its three string fields point at. One frozen root is shared by every trace with the
+  // same three strings; frozen, because an entry copy made for a snapshot shares it too, so it must never change.
+  // Bounded by the same cap; past it a fresh frozen root is returned.
+  #sharedRoot(service: string, name: string, resource: string): TraceRoot {
+    const key = `${service}\u0000${name}\u0000${resource}`;
+    const known = this.#roots.get(key);
+    if (known !== undefined) return known;
+    const root = Object.freeze({
+      service: this.#intern(service),
+      name: this.#intern(name),
+      resource: this.#intern(resource),
+    });
+    if (this.#roots.size < this.#internCap) this.#roots.set(key, root);
+    return root;
   }
 
   #intern(s: string): string {
@@ -99,18 +123,19 @@ export class TraceIndex {
 
   add(span: SpanRecord, chunk: ChunkRef, resource: ResourceRecord): void {
     const e = this.#writable(span.traceId, () => emptyEntry(span.start, span.end));
-    if (e.chunks[e.chunks.length - 1] !== chunk) e.chunks = e.chunks.concat(chunk);
+    if (e.chunks[e.chunks.length - 1] !== chunk) {
+      if (e.chunks.length === 0) {
+        if (this.#lastSpanList[0] !== chunk) this.#lastSpanList = Object.freeze([chunk]);
+        e.chunks = this.#lastSpanList as string[];
+      } else e.chunks = e.chunks.concat(chunk);
+    }
     // Timing is span-defined: an entry that so far only knew logs takes the first span's extent outright.
     e.start = e.spans === 0 ? span.start : Math.min(e.start, span.start);
     e.end = e.spans === 0 ? span.end : Math.max(e.end, span.end);
     e.spans++;
     if (span.status.code === StatusCode.ERROR) e.errors++;
     if (span.parentSpanId === null && e.root === null) {
-      e.root = {
-        service: this.#intern(serviceName(resource)),
-        name: this.#intern(span.name),
-        resource: this.#intern(resourceName(span)),
-      };
+      e.root = this.#sharedRoot(serviceName(resource), span.name, resourceName(span));
     }
     this.#dirty.add(shardOf(span.traceId));
   }
@@ -123,7 +148,12 @@ export class TraceIndex {
     if (log.traceId === null) return;
     const t = logTime(log);
     const e = this.#writable(log.traceId, () => emptyEntry(t, t));
-    if (e.logChunks[e.logChunks.length - 1] !== chunk) e.logChunks = e.logChunks.concat(chunk);
+    if (e.logChunks[e.logChunks.length - 1] !== chunk) {
+      if (e.logChunks.length === 0) {
+        if (this.#lastLogList[0] !== chunk) this.#lastLogList = Object.freeze([chunk]);
+        e.logChunks = this.#lastLogList as string[];
+      } else e.logChunks = e.logChunks.concat(chunk);
+    }
     if (e.spans === 0) {
       e.start = Math.min(e.start, t);
       e.end = Math.max(e.end, t);
@@ -175,6 +205,18 @@ export class TraceIndex {
     this.#shared.clear();
   }
 
+  #loadList(chunks: readonly string[], kind: 'span' | 'log'): string[] {
+    if (chunks.length === 0) return NO_CHUNKS;
+    if (chunks.length > 1) return [...chunks];
+    const chunk = chunks[0] as string;
+    const last = kind === 'span' ? this.#lastSpanList : this.#lastLogList;
+    if (last[0] === chunk) return last as string[];
+    const list = Object.freeze([chunk]);
+    if (kind === 'span') this.#lastSpanList = list;
+    else this.#lastLogList = list;
+    return list as string[];
+  }
+
   /** Rebuild from the state's `traceIndex` (already validated by the state schema). All shards start dirty. */
   static load(shards: Readonly<Record<string, TraceShard>>): TraceIndex {
     const idx = new TraceIndex();
@@ -183,16 +225,9 @@ export class TraceIndex {
       for (const [id, e] of Object.entries(entries))
         traces.set(id, {
           ...e,
-          chunks: e.chunks.length === 0 ? NO_CHUNKS : [...e.chunks],
-          logChunks: e.logChunks.length === 0 ? NO_CHUNKS : [...e.logChunks],
-          root:
-            e.root === null
-              ? null
-              : {
-                  service: idx.#intern(e.root.service),
-                  name: idx.#intern(e.root.name),
-                  resource: idx.#intern(e.root.resource),
-                },
+          chunks: idx.#loadList(e.chunks, 'span'),
+          logChunks: idx.#loadList(e.logChunks, 'log'),
+          root: e.root === null ? null : idx.#sharedRoot(e.root.service, e.root.name, e.root.resource),
         });
       idx.#shards.set(shard, traces);
     }

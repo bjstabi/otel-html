@@ -7,12 +7,18 @@ import { runCli } from './program.js';
 // The composition root of the CLI: the only place that touches process io and exits.
 
 // Under Node, V8 sizes its heap at several times the live data when allocation is as steady as a large metrics
-// convert's (one record per point) or a receiver's under sustained load; favouring size keeps a 72M-point metrics run
-// under 512 MB resident instead of about 800 MB, for a run about 40% slower. So the flag is set when a receiver
-// (`serve`, `run`) starts and when the first metric points arrive in a conversion; trace and log conversions keep full
-// speed. V8 reads this flag as it goes, so setting it mid-run takes effect. The library sets no flags.
+// convert's (one record per point); favouring size keeps a 72M-point metrics run under 512 MB resident instead of
+// about 800 MB, for a run about 40% slower, so metric conversions set that flag as the first points arrive (trace and
+// log conversions keep full speed). Receivers (`serve`, `run`) also set it, but alone it makes V8 run a full
+// mark-compact about every 0.4 s with pauses up to 200 ms, and a sender's batch queue overflows (spans are dropped)
+// when the receiver stalls that long; `--heap-growing-percent=40` cut that to 152 collections with pauses of at most
+// 77 ms at 435 MB peak for 1M spans. V8 reads these flags as it goes, so setting them mid-run takes effect. The
+// library sets no flags.
 const favourHeapSize = (): void => {
   if (!('bun' in process.versions)) v8.setFlagsFromString('--optimize-for-size');
+};
+const favourShortPauses = (): void => {
+  if (!('bun' in process.versions)) v8.setFlagsFromString('--optimize-for-size --heap-growing-percent=40');
 };
 
 const code = await runCli(
@@ -39,7 +45,7 @@ const code = await runCli(
   // Inside a `bun build --compile` binary the viewer ships embedded; under Node it is read from the package.
   {
     beforeMetrics: favourHeapSize,
-    favourHeapSize,
+    favourHeapSize: favourShortPauses,
     ...(hasBunEmbeddedFiles() ? { viewerAssets: bunEmbeddedViewerAssets() } : {}),
   },
 );
