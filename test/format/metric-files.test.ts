@@ -355,6 +355,17 @@ describe('pages', () => {
     expect(pageOf(0)).toBe(0);
     expect(pageOf(2047)).toBe(0);
     expect(pageOf(2048)).toBe(1);
+    // Buckets before the epoch (negative indexes) belong to page 0.
+    expect(pageOf(-1)).toBe(0);
+    expect(pageOf(-5000)).toBe(0);
+    expect(
+      levelPages([{ id: 0, t: [-3000, -1, 0, 2048], a: [counter(1), counter(2), counter(3), counter(4)] }]),
+    ).toEqual(
+      new Map([
+        [0, [{ id: 0, t: [-3000, -1, 0], a: [counter(1), counter(2), counter(3)] }]],
+        [1, [{ id: 0, t: [2048], a: [counter(4)] }]],
+      ]),
+    );
     const one = [{ id: 0, t: [5, 2047], a: [counter(1), counter(2)] }];
     expect(levelPages(one)).toEqual(new Map([[0, one]]));
     const many = [
@@ -400,6 +411,7 @@ describe('pages', () => {
     expect(pagesIn(listed, { start: 2047 * w, end: 2048 * w }, w)).toEqual([0, 1]);
     expect(pagesIn(listed, { start: 2048 * 2 * w, end: 2048 * 8 * w }, w)).toEqual([3, 7]);
     expect(pagesIn(listed, { start: 2048 * 9 * w, end: 2048 * 10 * w }, w)).toEqual([]);
+    expect(pagesIn(listed, { start: -5 * w, end: 0 }, w)).toEqual([0]);
     expect(pagesIn(null, { start: 0, end: w }, w)).toBeNull();
   });
 

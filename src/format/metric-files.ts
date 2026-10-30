@@ -37,7 +37,8 @@ export const EXEMPLAR_WIDTH_NS = 65_536_000_000;
 export const EXEMPLAR_BASE_LEVEL = 2;
 
 /**
- * Buckets per page: page p of a level holds the bucket indexes in [p × PAGE_BUCKETS, (p + 1) × PAGE_BUCKETS). A
+ * Buckets per page: page p of a level holds the bucket indexes in [p × PAGE_BUCKETS, (p + 1) × PAGE_BUCKETS), and
+ * page 0 any index below 0 as well (`pageOf`). A
  * level in one page is one file; the coarsest level always is (LEVEL_MAX_BUCKETS < PAGE_BUCKETS), so a full-range
  * chart reads one file and a zoomed chart the page or two under its window. Exemplar files page on the grid of the
  * level they serve. A multiple of LEVEL_FACTOR³, so a page boundary of level k is a bucket boundary of levels up to
@@ -45,8 +46,11 @@ export const EXEMPLAR_BASE_LEVEL = 2;
  */
 export const PAGE_BUCKETS = 2048;
 
-/** The page holding bucket index `bucket`. */
-export const pageOf = (bucket: number): number => Math.floor(bucket / PAGE_BUCKETS);
+/**
+ * The page holding bucket index `bucket`. Indexes are relative to the report epoch and can be negative (a point or
+ * exemplar from before the first record seen); page 0 holds those too, so page numbers are never negative.
+ */
+export const pageOf = (bucket: number): number => Math.max(0, Math.floor(bucket / PAGE_BUCKETS));
 
 /**
  * A metric data file's path (`parseMetricFilePath` reads it): the groups are the metric id, the file name, a
