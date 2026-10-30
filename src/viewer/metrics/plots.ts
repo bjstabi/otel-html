@@ -36,28 +36,41 @@ function formulaBases(f: MetricFormula, queries: readonly MetricQuery[]): Set<st
   return new Set(queries.filter((q) => refs.includes(q.id)).map((q) => q.metric));
 }
 
-/** The visible queries and formulas that have a result, in row order. */
-export function buildPlots(state: MetricPageState, run: Pick<MetricQueries, 'results' | 'entries'>): Plot[] {
+/**
+ * The visible queries and formulas that have a result, in row order. A result is labelled with the query it was run
+ * for (`run.ran`: while a new run loads, the previous results stay and a changed `show` or metric must not relabel
+ * them); the alias and hide come from the state as it is now, since they re-run nothing.
+ */
+export function buildPlots(
+  state: MetricPageState,
+  run: Pick<MetricQueries, 'results' | 'entries'> & Partial<Pick<MetricQueries, 'ran'>>,
+): Plot[] {
   const out: Plot[] = [];
+  const ranQueries = run.ran?.queries ?? state.queries;
   for (const q of state.queries) {
     const r = run.results.get(q.id);
     if (q.hidden || r === undefined) continue;
+    const ran = { ...(ranQueries.find((x) => x.id === q.id) ?? q), alias: q.alias };
     const e = run.entries.get(q.id);
     const kind = e === undefined ? null : kindOf(e);
     out.push({
       id: q.id,
-      title: q.alias ?? `${q.metric} · ${q.show}`,
-      result: relabel(r, queryPrefix(q), new Set([q.metric])),
+      title: ran.alias ?? `${ran.metric} · ${ran.show}`,
+      result: relabel(r, queryPrefix(ran), new Set([ran.metric])),
       histogram: kind === 'hist' || kind === 'exp',
     });
   }
   for (const f of state.formulas) {
     const r = run.results.get(f.id);
     if (f.hidden || r === undefined) continue;
+    const ran = {
+      ...((run.ran?.formulas ?? state.formulas).find((x) => x.id === f.id) ?? f),
+      alias: f.alias,
+    };
     out.push({
       id: f.id,
-      title: f.alias ?? f.expr,
-      result: relabel(r, formulaPrefix(f), formulaBases(f, state.queries)),
+      title: ran.alias ?? ran.expr,
+      result: relabel(r, formulaPrefix(ran), formulaBases(ran, ranQueries)),
       histogram: false,
     });
   }

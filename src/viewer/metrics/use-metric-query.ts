@@ -36,6 +36,11 @@ export interface MetricQueries {
   entries: Map<string, MetricEntry>;
   /** Per query id: every `show` its metric offers (summary quantiles come from the data). */
   showOptions: Map<string, readonly string[]>;
+  /**
+   * The queries and formulas the results were run for (aliases and hides stripped). While a new run loads, the
+   * results shown are the previous run's, and belong to these, not to the state as it is now.
+   */
+  ran: { queries: readonly MetricQuery[]; formulas: readonly MetricFormula[] };
   /** True while a run is in flight; the previous results stay until it lands. */
   loading: boolean;
   /** A failure of the whole run (the catalog did not load). */
@@ -59,7 +64,13 @@ function definitionText(q: MetricQuery): string {
 }
 
 async function run(ds: DataSource, input: Input, signal: AbortSignal): Promise<Outcome> {
-  const out: Outcome = { results: new Map(), errors: new Map(), entries: new Map(), showOptions: new Map() };
+  const out: Outcome = {
+    results: new Map(),
+    errors: new Map(),
+    entries: new Map(),
+    showOptions: new Map(),
+    ran: { queries: input.queries, formulas: input.formulas },
+  };
   const catalog = await ds.metricCatalog();
   const loaded = new Map<string, { m: LoadedMetric; q: MetricQuery }>();
   for (const q of input.queries) {
@@ -119,7 +130,13 @@ async function run(ds: DataSource, input: Input, signal: AbortSignal): Promise<O
   return out;
 }
 
-const EMPTY: Outcome = { results: new Map(), errors: new Map(), entries: new Map(), showOptions: new Map() };
+const EMPTY: Outcome = {
+  results: new Map(),
+  errors: new Map(),
+  entries: new Map(),
+  showOptions: new Map(),
+  ran: { queries: [], formulas: [] },
+};
 
 /**
  * Runs the page's queries and formulas over `window`. Keyed on what changes the numbers (not display, scale,

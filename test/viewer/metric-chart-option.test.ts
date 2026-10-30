@@ -2,12 +2,14 @@ import { describe, expect, test } from 'vitest';
 import {
   buildMetricChartOption,
   mergeEchartsOption,
+  sharedUnit,
+  uniqueLabels,
 } from '../../src/viewer/components/metric-chart-option.js';
 import type { MetricQueryResult, SeriesPoints } from '../../src/viewer/data/metric-query.js';
 import { createColorAssigner } from '../../src/viewer/theme/palette.js';
 
 interface Opt {
-  legend?: { show: boolean };
+  legend: { show: boolean; data: string[] };
   tooltip: { formatter: (p: unknown) => string; axisPointer: { type: string } };
   xAxis: { min?: number; max?: number };
   yAxis: { type: string };
@@ -162,9 +164,53 @@ describe('buildMetricChartOption', () => {
     expect(build({ results: [r] }).series.some((s) => s.type === 'scatter')).toBe(false);
   });
 
-  test('the marker is a markLine', () => {
+  test('the marker is a markLine on a silent series of its own, so hiding a line keeps it', () => {
     const o = build({ marker: 12 * S });
-    expect(o.series[0]?.markLine?.data[0]?.xAxis).toBe(12 * S);
+    const marks = o.series.filter((s) => s.markLine !== undefined);
+    expect(marks).toHaveLength(1);
+    expect(marks[0]?.markLine?.data[0]?.xAxis).toBe(12 * S);
+    expect(marks[0]?.data).toEqual([]);
+    expect(marks[0]?.silent).toBe(true);
+    expect(o.legend.data).toEqual(['a']);
+  });
+
+  test('equal labels are told apart in the legend and the series; long ones are cut in the legend only', () => {
+    const long = 'x'.repeat(60);
+    const o = build({
+      results: [
+        result({ series: [series('a', [1]), series('b', [2])] }),
+        result({ queryId: 'q2', series: [series('c', [3])] }),
+      ].map((r) => ({ ...r, series: r.series.map((s) => ({ ...s, label: s.key === 'c' ? long : 'same' })) })),
+    });
+    expect(o.legend.data).toEqual(['same', 'same (2)', long]);
+    expect(o.series.slice(0, 3).map((s) => s.name)).toEqual(['same', 'same (2)', long]);
+    expect(uniqueLabels(['a', 'a', 'a', 'b'])).toEqual(['a', 'a (2)', 'a (3)', 'b']);
+    const formatter = (o.legend as unknown as { formatter: (n: string) => string }).formatter;
+    expect(formatter(long)).toBe(`${'x'.repeat(47)}…`);
+    expect(formatter('short')).toBe('short');
+  });
+
+  test('sharedUnit is the one unit of every series, none when they differ, 1 without series', () => {
+    expect(sharedUnit([result()])).toBe('s');
+    expect(sharedUnit([result({ series: [series('a', [1], 's'), series('b', [1], 'By')] })])).toBe('');
+    expect(sharedUnit([result({ series: [] })])).toBe('1');
+  });
+
+  test("area exemplars sit on their series' stacked line", () => {
+    const r = result({
+      series: [series('a', [1, 2]), series('b', [10, 20])],
+      exemplars: [
+        { time: 5 * S, value: 7, traceId: 'aa', spanId: null, seriesKey: 'a' },
+        { time: 15 * S, value: 7, traceId: 'bb', spanId: null, seriesKey: 'b' },
+      ],
+    });
+    const ys = (display: 'lines' | 'area'): number[] => {
+      const sc = build({ results: [r], exemplars: true, display }).series.find((s) => s.type === 'scatter');
+      return ((sc?.data ?? []) as { value: [number, number] }[]).map((d) => d.value[1]);
+    };
+    expect(ys('lines')).toEqual([7, 7]);
+    // `b` is drawn above `a`: at 15 s its exemplar sits on 2 (a's value in that bucket) + 7.
+    expect(ys('area')).toEqual([7, 9]);
   });
 
   test('tooltip formats seconds as milliseconds and escapes labels', () => {
@@ -224,7 +270,7 @@ describe('buildMetricChartOption', () => {
 });
 
 describe('selection band and echarts pass-through', () => {
-  test('a band is one markArea spanning it, on the first series', () => {
+  test('a band is one markArea spanning it, on the marks series', () => {
     const o = build({ band: { start: 5 * S, end: 15 * S } });
     const areas = o.series.flatMap((s) => (s.markArea === undefined ? [] : [s.markArea]));
     expect(areas).toHaveLength(1);

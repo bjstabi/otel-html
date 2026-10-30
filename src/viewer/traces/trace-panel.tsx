@@ -371,6 +371,11 @@ export function TracePanel(props: TracePanelProps): JSX.Element {
                 </Tabs.Tab>
               ))}
             </Tabs.List>
+            {active !== null && wanted !== active && (
+              <p role="status" className="pb-2 text-xs text-muted">
+                This trace has no {wanted} tab; showing {tabs.find((t) => t.id === active)?.label ?? active}.
+              </p>
+            )}
             <SplitPane
               label="Resize trace and span sections"
               top={

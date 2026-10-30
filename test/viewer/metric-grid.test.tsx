@@ -197,13 +197,14 @@ describe('MetricGrid', () => {
     expect(within(panel).queryByRole('tab', { name: 'Metrics' })).toBeNull();
   });
 
-  test('ltab=metrics on such a log falls back to the first tab, with no URL error', async () => {
+  test('ltab=metrics on such a log falls back to the first tab and says so, with no URL error', async () => {
     await renderAt(`#/logs?log=${NO_METRICS_LOG}&ltab=metrics`);
     const panel = await screen.findByTestId('log-panel');
     const first = await within(panel).findByRole('tab', { name: 'Attributes' });
     await metricLookupSettled();
     expect(first.getAttribute('aria-selected')).toBe('true');
     expect(within(panel).queryByTestId('metric-grid')).toBeNull();
+    expect(within(panel).getByText('This log has no metrics tab; showing Attributes.')).toBeTruthy();
     expect(screen.queryByText(/ltab:/)).toBeNull();
   });
 

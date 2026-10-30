@@ -1,6 +1,7 @@
-import { type JSX, useDeferredValue, useMemo, useState } from 'react';
+import { type JSX, useCallback, useDeferredValue, useMemo, useState } from 'react';
 import type { Manifest } from '../../format/manifest.js';
 import { parseUnixNanos } from '../../model/ids.js';
+import type { MetricPageState } from '../../query/metric-query.js';
 import type { MetricEntry } from '../../rollups/metric-catalog.js';
 import { ErrorCard } from '../components/explorer-states.js';
 import { ResultsTable } from '../components/results-table.js';
@@ -8,7 +9,10 @@ import { catalogOf, type DataSource } from '../data/data-source.js';
 import { metricTypeLabel } from '../data/metric-tables.js';
 import { useGoTo } from '../shell/go-to.js';
 import { PageChrome } from '../shell/page-chrome.js';
+import { routeHref } from '../shell/use-route.js';
 import { defaultMetricState } from '../state/metric-state.js';
+import { useSelection } from '../state/selection-context.js';
+import { formatWindow, serializeUrlState } from '../state/url-state.js';
 import { useKeyedAsync } from '../state/use-keyed-async.js';
 import type { ColumnUi } from '../traces/columns.js';
 import { Sparkline } from '../traces/sparkline.js';
@@ -84,8 +88,16 @@ const COLUMNS: readonly ColumnUi<MetricEntry>[] = [
     width: 110,
     cell: (e) => <Sparkline values={sparkValues(e)} />,
   },
-  { id: 'explore', header: '', width: 80, cell: () => <span className="text-accent">Explore →</span> },
 ];
+
+/** The Explorer state a catalog row opens: the metric with its default show, kind and unit when the name has several definitions. */
+function explorerState(e: MetricEntry): MetricPageState {
+  const state = defaultMetricState(e);
+  const [first, ...rest] = state.queries;
+  return first === undefined || !e.conflicting
+    ? state
+    : { ...state, queries: [{ ...first, kind: e.type, unit: e.unit }, ...rest] };
+}
 
 // Module-level so it is stable: `useKeyedAsync` reloads on a new `load`, and a fresh closure per render would start a
 // new load after every settled one.
@@ -110,19 +122,37 @@ export function MetricsCatalog(props: { dataSource: DataSource }): JSX.Element {
   const [filter, setFilter] = useState('');
   const needle = useDeferredValue(filter.trim().toLowerCase());
   const epoch = useMemo(() => parseUnixNanos(manifest.epochUnixNano, 'manifest.epochUnixNano'), [manifest]);
-  const all = load.status === 'ready' ? load.value.entries() : [];
+  // `entries()` returns a fresh array; memoised on the load, so the filtered rows are recomputed only on a change.
+  const all = useMemo(() => (load.status === 'ready' ? load.value.entries() : []), [load]);
   const rows = useMemo(() => (needle === '' ? all : all.filter((e) => matches(e, needle))), [all, needle]);
+  const window = useSelection((s) => s.window);
 
-  const open = (e: MetricEntry): void => {
-    const state = defaultMetricState(e);
-    const [first, ...rest] = state.queries;
-    // Only a name with several definitions needs the kind and unit to pick one.
-    const queries =
-      first === undefined || !e.conflicting
-        ? state.queries
-        : [{ ...first, kind: e.type, unit: e.unit }, ...rest];
-    goTo('metrics', '/metrics', { m: { ...state, queries } });
-  };
+  const open = (e: MetricEntry): void => goTo('metrics', '/metrics', { m: explorerState(e) });
+  /** The Explore cell is a real link to the same place, so it can open in a new tab; the window carries like `goTo`. */
+  const hrefOf = useCallback(
+    (e: MetricEntry): string =>
+      `${routeHref('/metrics')}?${serializeUrlState({
+        m: explorerState(e),
+        ...(window === null ? {} : { t: formatWindow(window) }),
+      })}`,
+    [window],
+  );
+  const columns = useMemo(
+    () => [
+      ...COLUMNS,
+      {
+        id: 'explore',
+        header: '',
+        width: 80,
+        cell: (e: MetricEntry) => (
+          <a href={hrefOf(e)} className="text-accent" onClick={(ev) => ev.stopPropagation()}>
+            Explore →
+          </a>
+        ),
+      },
+    ],
+    [hrefOf],
+  );
 
   return (
     <PageChrome title="Metrics Catalog" manifest={manifest}>
@@ -151,9 +181,14 @@ export function MetricsCatalog(props: { dataSource: DataSource }): JSX.Element {
               className="w-72 rounded-full border border-hairline bg-surface px-3 py-1.5 text-sm"
             />
           </div>
+          {rows.length === 0 && (
+            <p role="status" className="text-sm text-muted">
+              No metrics match “{filter.trim()}”.
+            </p>
+          )}
           <ResultsTable
             rows={rows}
-            columns={COLUMNS}
+            columns={columns}
             rowId={(e) => String(e.id)}
             sort={null}
             onSort={() => undefined}
