@@ -6,6 +6,7 @@ import {
   parseManifestJs,
   parseMaxRssKb,
   parseReceived,
+  parseStallStats,
   planWorkload,
   SPANS_PER_SECOND_PER_WORKER,
   tracesArgs,
@@ -74,6 +75,18 @@ describe('output parsing', () => {
   test('parseMaxRssKb reads the preload line', () => {
     expect(parseMaxRssKb('noise\nMAXRSS 412345\n')).toBe(412_345);
     expect(parseMaxRssKb('nothing')).toBeNull();
+  });
+
+  test('parseStallStats reads the loop and GC lines', () => {
+    expect(parseStallStats('LOOP p99 12.3 max 480.0\nGC count 152 total 3200.5 max 77.0\n')).toEqual({
+      loopP99Ms: 12.3,
+      loopMaxMs: 480,
+      gcCount: 152,
+      gcTotalMs: 3200.5,
+      gcMaxMs: 77,
+    });
+    expect(parseStallStats('')).toBeNull();
+    expect(parseStallStats('LOOP p99 1.0 max 2.0\n')).toBeNull();
   });
 
   test('parseReceived reads the serve summary', () => {

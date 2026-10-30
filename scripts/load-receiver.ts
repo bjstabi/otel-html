@@ -9,6 +9,7 @@ import {
   parseManifestJs,
   parseMaxRssKb,
   parseReceived,
+  parseStallStats,
   planWorkload,
   tracesArgs,
 } from './load-receiver-plan.js';
@@ -23,8 +24,27 @@ import {
  * Run `mise run build` first: it serves the built CLI. Exits 1 when any assertion fails.
  */
 const CLI = fileURLToPath(new URL('../dist/cli/main.js', import.meta.url));
-// Loaded into the serve process before its entrypoint: reports its own high-water resident set size (kilobytes) on exit.
-const REPORT_RSS = `process.on('exit', () => process.stderr.write('MAXRSS ' + process.resourceUsage().maxRSS + '\\n'));`;
+// Loaded into the serve process before its entrypoint. On exit it writes to stderr, synchronously: the high-water
+// resident set size (kilobytes), the event-loop delay (p99 and max, ms) and the GC pause count, total and max (ms).
+const PRELOAD = `
+import { writeSync } from 'node:fs';
+import { monitorEventLoopDelay, PerformanceObserver } from 'node:perf_hooks';
+const h = monitorEventLoopDelay({ resolution: 10 });
+h.enable();
+let gcCount = 0, gcTotal = 0, gcMax = 0;
+const obs = new PerformanceObserver((list) => {
+  for (const e of list.getEntries()) { gcCount++; gcTotal += e.duration; if (e.duration > gcMax) gcMax = e.duration; }
+});
+obs.observe({ entryTypes: ['gc'] });
+process.on('exit', () => {
+  for (const e of obs.takeRecords()) { gcCount++; gcTotal += e.duration; if (e.duration > gcMax) gcMax = e.duration; }
+  h.disable();
+  const ms = (ns) => (ns / 1e6).toFixed(1);
+  writeSync(2, 'MAXRSS ' + process.resourceUsage().maxRSS + '\\n'
+    + 'LOOP p99 ' + ms(h.percentile(99)) + ' max ' + ms(h.max) + '\\n'
+    + 'GC count ' + gcCount + ' total ' + gcTotal.toFixed(1) + ' max ' + gcMax.toFixed(1) + '\\n');
+});
+`;
 // Named, not a literal, so knip does not read the first argument after `node` as an import.
 const NODE = 'node';
 const HTTP_PORT = 4318;
@@ -44,7 +64,7 @@ function startServe(out: string): Promise<Serve> {
     NODE,
     [
       '--import',
-      `data:text/javascript,${encodeURIComponent(REPORT_RSS)}`,
+      `data:text/javascript,${encodeURIComponent(PRELOAD)}`,
       CLI,
       'serve',
       '-o',
@@ -131,8 +151,13 @@ async function main(): Promise<number> {
     rssKb,
   });
   const rssMb = rssKb === null ? Number.NaN : rssKb / 1024;
+  const stalls = parseStallStats(serve.stderr());
+  const stallText =
+    stalls === null
+      ? 'stalls not reported'
+      : `loop p99 ${stalls.loopP99Ms.toFixed(1)} ms max ${stalls.loopMaxMs.toFixed(1)} ms, gc ${stalls.gcCount} pauses ${stalls.gcTotalMs.toFixed(1)} ms max ${stalls.gcMaxMs.toFixed(1)} ms`;
   process.stdout.write(
-    `LOAD receiver: spans ${manifest.totals.spans} logs ${manifest.totals.logs} in ${seconds.toFixed(0)} s, peak RSS ${rssMb.toFixed(0)} MB\n`,
+    `LOAD receiver: spans ${manifest.totals.spans} logs ${manifest.totals.logs} in ${seconds.toFixed(0)} s, peak RSS ${rssMb.toFixed(0)} MB, ${stallText}\n`,
   );
   for (const f of failures) process.stderr.write(`FAIL ${f}\n`);
   return failures.length === 0 ? 0 : 1;
