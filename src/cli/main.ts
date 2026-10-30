@@ -7,11 +7,11 @@ import { runCli } from './program.js';
 // The composition root of the CLI: the only place that touches process io and exits.
 
 // Under Node, V8 sizes its heap at several times the live data when allocation is as steady as a large metrics
-// convert's (one record per point); favouring size keeps a 72M-point metrics run under 512 MB resident instead of
-// about 800 MB, for a run about 40% slower. So the flag is set when the first metric points arrive, and trace and log
-// conversions keep full speed. V8 reads this flag as it goes, so setting it mid-run takes effect. The library sets no
-// flags.
-const beforeMetrics = (): void => {
+// convert's (one record per point) or a receiver's under sustained load; favouring size keeps a 72M-point metrics run
+// under 512 MB resident instead of about 800 MB, for a run about 40% slower. So the flag is set when a receiver
+// (`serve`, `run`) starts and when the first metric points arrive in a conversion; trace and log conversions keep full
+// speed. V8 reads this flag as it goes, so setting it mid-run takes effect. The library sets no flags.
+const favourHeapSize = (): void => {
   if (!('bun' in process.versions)) v8.setFlagsFromString('--optimize-for-size');
 };
 
@@ -37,7 +37,9 @@ const code = await runCli(
     spawn,
   },
   // Inside a `bun build --compile` binary the viewer ships embedded; under Node it is read from the package.
-  hasBunEmbeddedFiles() ? { viewerAssets: bunEmbeddedViewerAssets(), beforeMetrics } : { beforeMetrics },
+  hasBunEmbeddedFiles()
+    ? { viewerAssets: bunEmbeddedViewerAssets(), beforeMetrics: favourHeapSize, favourHeapSize }
+    : { beforeMetrics: favourHeapSize, favourHeapSize },
 );
 process.exitCode = code;
 // A failing command must end the process even if something (a bound server) still holds the event loop; an

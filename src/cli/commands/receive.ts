@@ -31,6 +31,15 @@ export function addReceiverOptions(command: Command): Command {
     .option('--no-grpc', 'do not listen for OTLP/gRPC');
 }
 
+/** The writer's deps plus what only the CLI's composition root can supply. */
+export interface CliDeps extends Partial<WriterDeps> {
+  /**
+   * Called once before a receiver (`serve`, `run`) binds: a receiver is long-lived and its memory is bounded by the
+   * heap, not the input, so the CLI favours heap size there. `convert` and `merge` do not call it.
+   */
+  favourHeapSize?: () => void;
+}
+
 export interface ReceiveFlags extends ReceiverFlags {
   out: string;
 }
@@ -46,7 +55,7 @@ export interface OpenReceiver {
  */
 export async function openReceiver(
   io: CliIo,
-  deps: Partial<WriterDeps>,
+  deps: CliDeps,
   flags: ReceiveFlags,
   /** Runs on the resolved transports before the report is created or a port is bound; throw to stop, or return overrides for the receiver. */
   precheck: (enabled: { http: boolean; grpc: boolean }) => ReceiverOverrides | undefined = () => undefined,
@@ -61,6 +70,7 @@ export async function openReceiver(
     });
   }
   const overrides = precheck({ http: config.receiver.http.enabled, grpc: config.receiver.grpc.enabled });
+  deps.favourHeapSize?.();
   const full = await resolveDeps(deps);
   // Installed before the lock is taken, so a stop signal during start-up is handled rather than left to the default.
   const stop = nextSignal(io);

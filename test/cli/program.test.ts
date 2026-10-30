@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { describe, expect, test } from 'vitest';
+import type { CliDeps } from '../../src/cli/commands/receive.js';
 import { runCli } from '../../src/cli/program.js';
 import { logRecord, logsRequest } from '../../test-support/otlp-builders.js';
 import { createTestWriter, type TestWriter } from '../../test-support/writer-deps.js';
@@ -15,6 +16,7 @@ async function run(
   w: TestWriter,
   argv: readonly string[],
   env: Record<string, string | undefined> = {},
+  extra: CliDeps = {},
 ): Promise<Run> {
   let stdout = '';
   let stderr = '';
@@ -32,7 +34,7 @@ async function run(
       signals: { on: () => () => undefined },
       spawn,
     },
-    w.deps,
+    { ...w.deps, ...extra },
   );
   return { code, stdout, stderr };
 }
@@ -49,6 +51,15 @@ describe('cli', () => {
     const r = await run(w, ['convert', 'in/small.otlp.json', '-o', 'out']);
     expect(r).toEqual({ code: 0, stdout: 'wrote out: 1,234 spans, 0 logs, 0 metric points\n', stderr: '' });
     expect(manifestOf(w, 'out').complete).toBe(true);
+  });
+
+  test('convert of a trace-only input does not favour heap size', async () => {
+    const w = createTestWriter();
+    await put(w, 'in/a.json', JSON.stringify(spansRequest(2)));
+    let calls = 0;
+    const r = await run(w, ['convert', 'in/a.json', '-o', 'out'], {}, { favourHeapSize: () => calls++ });
+    expect(r.code).toBe(0);
+    expect(calls).toBe(0);
   });
 
   test('convert combines several files and applies --title', async () => {

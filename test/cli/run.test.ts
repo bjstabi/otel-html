@@ -1,6 +1,7 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import { createServer, type Server } from 'node:net';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import type { CliDeps } from '../../src/cli/commands/receive.js';
 import type { CliIo, StopSignal } from '../../src/cli/io.js';
 import { runCli } from '../../src/cli/program.js';
 import { decodeColumns } from '../../src/format/columns.js';
@@ -41,6 +42,7 @@ function start(
   env: Record<string, string> = {},
   spawnOverride?: CliIo['spawn'],
   fs?: FileSystem,
+  extra: CliDeps = {},
 ): Harness {
   const handlers = new Set<(s: StopSignal) => void>();
   const h: Harness = {
@@ -78,7 +80,7 @@ function start(
         return child;
       }) as CliIo['spawn']),
   };
-  h.result = runCli(argv, io, fs === undefined ? w.deps : { ...w.deps, fs });
+  h.result = runCli(argv, io, { ...w.deps, ...(fs === undefined ? {} : { fs }), ...extra });
   return h;
 }
 
@@ -147,6 +149,22 @@ afterEach(async () => {
 });
 
 describe('run', () => {
+  test('favours heap size once, before the child is spawned', async () => {
+    const w = createTestWriter();
+    let calls = 0;
+    let childAtCall: string | undefined;
+    const h = start(w, ['run', '-o', 'out', ...node, '0'], {}, undefined, undefined, {
+      favourHeapSize: () => {
+        calls++;
+        childAtCall = h.child;
+      },
+    });
+    open.push(h);
+    expect(await h.result).toBe(0);
+    expect(calls).toBe(1);
+    expect(childAtCall).toBe('');
+  });
+
   test('wraps a child that exits 0: two spans in one trace, the child under the root', async () => {
     const w = createTestWriter();
     const h = start(w, ['run', '-o', 'out', ...node, '0']);

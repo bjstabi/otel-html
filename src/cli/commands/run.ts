@@ -7,10 +7,15 @@ import { parseUnixNanos, type UnixNanos } from '../../model/ids.js';
 import { checkedProtocol, childEnvironment } from '../../run/child-env.js';
 import { detectRunResource } from '../../run/resource.js';
 import { type ChildExit, exitCodeOf, rootSpanRequest, traceparentOf } from '../../run/root-span.js';
-import type { WriterDeps } from '../../writer/session.js';
 import type { CliIo } from '../io.js';
 import { CliExit } from '../program.js';
-import { addReceiverOptions, finishReceiver, openReceiver, type ReceiveFlags } from './receive.js';
+import {
+  addReceiverOptions,
+  type CliDeps,
+  finishReceiver,
+  openReceiver,
+  type ReceiveFlags,
+} from './receive.js';
 import { addReportModeOptions } from './report-mode.js';
 
 const TRACE_ID_BYTES = 16;
@@ -36,7 +41,7 @@ function exitOf(child: ChildProcess, command: string): Promise<ChildExit> {
   });
 }
 
-export function addRunCommand(program: Command, io: CliIo, deps: Partial<WriterDeps>): void {
+export function addRunCommand(program: Command, io: CliIo, deps: CliDeps): void {
   const command = program
     .command('run')
     .description('run a command with OTLP pointed at a receiver and wrap it in a root span')

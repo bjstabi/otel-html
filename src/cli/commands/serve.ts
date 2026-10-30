@@ -1,8 +1,8 @@
 import type { Command } from 'commander';
-import type { WriterDeps } from '../../writer/session.js';
 import type { CliIo } from '../io.js';
 import {
   addReceiverOptions,
+  type CliDeps,
   finishReceiver,
   nextSignal,
   openReceiver,
@@ -10,7 +10,7 @@ import {
 } from './receive.js';
 import { addReportModeOptions } from './report-mode.js';
 
-export function addServeCommand(program: Command, io: CliIo, deps: Partial<WriterDeps>): void {
+export function addServeCommand(program: Command, io: CliIo, deps: CliDeps): void {
   const serve = program
     .command('serve')
     .description('receive OTLP over HTTP and gRPC and write a report until Ctrl-C')
