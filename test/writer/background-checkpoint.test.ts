@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from 'vitest';
 import { StreamNormalizer } from '../../src/rollups/metric-streams.js';
 import { openSession } from '../../src/writer/session.js';
+import { createMemoryFileSystem } from '../../test-support/memory-fs.js';
 import { span, traceRequest } from '../../test-support/otlp-builders.js';
 import { createTestWriter, EPOCH_NS, otlp, type TestWriter } from '../../test-support/writer-deps.js';
 import { config, heldCheckpoint, makeDue, OUT, one, STATE_0 } from './checkpoint-helpers.js';
@@ -107,6 +108,43 @@ describe('interval checkpoints run in the background', () => {
     makeDue(w);
     await s.add(one(3, 4), 'd.json');
     await vi.waitFor(() => expect(manifestOf(w, OUT)).toMatchObject({ totals: { spans: 4 } }));
+    await s.close();
+  });
+
+  test('a tracer that throws after the manifest is written does not list chunks twice', async () => {
+    const w = createTestWriter({ fs: createMemoryFileSystem({ pieces: true }) });
+    const inner = w.deps.tracer;
+    const deps = {
+      ...w.deps,
+      tracer: {
+        startSpan(name: string, attrs?: Record<string, string | number | boolean>) {
+          const h = inner.startSpan(name, attrs);
+          return name === 'otel-html.flush'
+            ? {
+                ...h,
+                setAttributes() {
+                  throw new Error('telemetry broke');
+                },
+              }
+            : h;
+        },
+      },
+    };
+    const s = await openSession(deps, { out: OUT, config, mode: 'replace' });
+    await s.add(one(0, 1), 'a.json');
+    makeDue(w);
+    await s.add(one(1, 2), 'b.json');
+    await vi.waitFor(() => expect(w.fs.snapshot().has(`${OUT}/data/manifest.js`)).toBe(true));
+    await s.add(one(2, 3), 'c.json');
+    makeDue(w);
+    await s.add(one(3, 4), 'd.json');
+    await vi.waitFor(() => expect(manifestOf(w, OUT).chunks.length).toBeGreaterThanOrEqual(3));
+    await expect(s.flush()).resolves.toBeUndefined();
+    const ns = manifestOf(w, OUT).chunks.map((c) => c.n);
+    expect(new Set(ns).size).toBe(ns.length);
+    expect(ns).toEqual([...ns].sort((a, b) => a - b));
+    expect(w.logs.some((l) => l.level === 'warn')).toBe(true);
+    expect(w.logs.some((l) => l.level === 'error')).toBe(false);
     await s.close();
   });
 

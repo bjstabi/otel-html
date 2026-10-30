@@ -1026,14 +1026,19 @@ class Session implements WriterSession {
       // Committed: only now does in-memory bookkeeping move forward.
       if (state !== null) this.#slot = p.slot;
       this.#committed.push(...p.chunks);
-      p.span.setAttributes({
-        chunks: p.chunks.length,
-        records: p.records,
-        shards: state?.snapshot.dirty.length ?? 0,
-        metricFiles: p.metricFiles,
-      });
       this.#everCommitted = true;
       this.#lastFlushMs = clock.monotonicMs();
+      // Telemetry is not part of the commit: a tracer that throws must not undo the bookkeeping above.
+      try {
+        p.span.setAttributes({
+          chunks: p.chunks.length,
+          records: p.records,
+          shards: state?.snapshot.dirty.length ?? 0,
+          metricFiles: p.metricFiles,
+        });
+      } catch (error) {
+        this.#deps.logger.warn('flush telemetry failed', { error });
+      }
     } catch (e) {
       // Chunks added since the prepare come after the ones it listed.
       this.#pending = [...p.chunks, ...this.#pending];
