@@ -40,7 +40,10 @@ export interface OpenReceiver {
   receiver: RunningReceiver;
 }
 
-/** Resolve config, open the report and bind the transports; a failed bind aborts the report. */
+/**
+ * Resolve config, open the report and bind the transports; a failed bind or a stop signal during start-up aborts the
+ * report and releases its lock.
+ */
 export async function openReceiver(
   io: CliIo,
   deps: Partial<WriterDeps>,
@@ -95,7 +98,8 @@ export async function openReceiver(
           .abort()
           .catch(() => undefined); // never mask the original error
     })();
-    // Wait for the lock release before exiting, so the process does not leave it behind; a second signal stops now.
+    // Wait for the lock release before exiting, so the process does not leave it behind. A second signal exits
+    // without waiting and may leave the lock behind; the dead-pid check reclaims it on the next start.
     again = nextSignal(io);
     await Promise.race([cleanup, again.signalled]);
     throw e;

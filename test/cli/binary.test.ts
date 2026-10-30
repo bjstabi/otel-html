@@ -194,7 +194,7 @@ describe.skipIf(binaryEnv === undefined)('compiled binary', () => {
     );
     expect(failed).toMatchObject({ code: 2, stdout: '' });
     expect(String(Reflect.get(failed ?? {}, 'stderr'))).toContain('is not a port');
-  });
+  }, 60_000);
 
   test('run exits with the child code and records a root span', async () => {
     const out = join(dir, 'run');

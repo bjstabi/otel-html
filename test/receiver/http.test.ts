@@ -136,6 +136,21 @@ function openRequest(base: string, headers: Record<string, string>) {
   return { req, response };
 }
 
+/** Resolves on the request's next drain, close or error, whichever comes first; the others are removed. */
+function drainedOrClosed(req: ClientRequest): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const done = (): void => {
+      req.off('drain', done);
+      req.off('close', done);
+      req.off('error', done);
+      resolve();
+    };
+    req.once('drain', done);
+    req.once('close', done);
+    req.once('error', done);
+  });
+}
+
 /** Starts a first, complete 600-byte upload and returns once the receiver has admitted it. */
 async function startFirst(base: string, receiver: Receiver): Promise<{ response: Promise<Response> }> {
   const body = JSON.stringify({ ...spansRequest(1), pad: 'x'.repeat(500) });
@@ -346,7 +361,7 @@ describe('OTLP/HTTP transport', () => {
     const chunk = Buffer.alloc(10_000, 'x');
     const writes = (async () => {
       for (let i = 0; i < 100 && !req.destroyed; i++) {
-        if (!req.write(chunk)) await new Promise((r) => req.once('drain', r));
+        if (!req.write(chunk)) await drainedOrClosed(req);
         await new Promise((r) => setImmediate(r));
       }
     })();
