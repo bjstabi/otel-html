@@ -65,7 +65,11 @@ function replacer(key: string, value: unknown): unknown {
  * times cheaper than a replacer, which `JSON.stringify` calls back for every key; a value that is not plain is
  * written with the replacer, so its tags and errors are unchanged.
  */
-function isPlainJson(v: unknown): boolean {
+const PLAIN_MAX_DEPTH = 64;
+
+function isPlainJson(v: unknown, depth = 0): boolean {
+  // Deeper than any payload: a cycle, which the replacer path then reports as `JSON.stringify` does (a TypeError).
+  if (depth > PLAIN_MAX_DEPTH) return false;
   switch (typeof v) {
     case 'number':
       return Number.isFinite(v);
@@ -76,14 +80,14 @@ function isPlainJson(v: unknown): boolean {
     case 'object': {
       if (v === null) return true;
       if (Array.isArray(v)) {
-        for (let i = 0; i < v.length; i++) if (!isPlainJson(v[i])) return false;
+        for (let i = 0; i < v.length; i++) if (!isPlainJson(v[i], depth + 1)) return false;
         return true;
       }
       if (v instanceof Uint8Array || typeof Reflect.get(v, 'toJSON') === 'function') return false;
       const rec = v as Record<string, unknown>;
       // `for…in` visits every own enumerable key JSON.stringify writes (and any inherited one, which only makes the
       // check stricter) without allocating a key list.
-      for (const k in rec) if (!isPlainJson(rec[k])) return false;
+      for (const k in rec) if (!isPlainJson(rec[k], depth + 1)) return false;
       return true;
     }
     default:

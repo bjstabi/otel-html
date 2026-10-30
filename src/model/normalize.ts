@@ -1,4 +1,5 @@
-import { type DescMessage, fromJson, type JsonObject, type JsonValue, toJson } from '@bufbuild/protobuf';
+import { fromJson, type JsonObject, type JsonValue } from '@bufbuild/protobuf';
+import { base64Encode } from '@bufbuild/protobuf/wire';
 import type { AnyValue, Attributes } from './anyvalue.js';
 import { OtelHtmlError } from './errors.js';
 import type { ExportLogsServiceRequest } from './gen/opentelemetry/proto/collector/logs/v1/logs_service_pb.js';
@@ -11,13 +12,14 @@ import type {
 } from './gen/opentelemetry/proto/common/v1/common_pb.js';
 import {
   AggregationTemporality,
+  type Exemplar,
   ExemplarSchema,
-  ExponentialHistogramDataPointSchema,
-  HistogramDataPointSchema,
+  type ExponentialHistogramDataPoint,
+  type ExponentialHistogramDataPoint_Buckets,
+  type HistogramDataPoint,
   type Metric,
   type NumberDataPoint,
-  NumberDataPointSchema,
-  SummaryDataPointSchema,
+  type SummaryDataPoint,
 } from './gen/opentelemetry/proto/metrics/v1/metrics_pb.js';
 import type { Resource } from './gen/opentelemetry/proto/resource/v1/resource_pb.js';
 import {
@@ -286,26 +288,18 @@ interface PointLike {
   readonly startTimeUnixNano: bigint;
   readonly timeUnixNano: bigint;
   readonly flags: number;
-  readonly exemplars?: readonly { readonly traceId: Uint8Array; readonly spanId: Uint8Array }[];
 }
 
-const RECORD_LEVEL_POINT_FIELDS: ReadonlySet<string> = new Set([
-  'attributes',
-  'startTimeUnixNano',
-  'timeUnixNano',
-  'flags',
-]);
-
-function withHexIds(
-  e: JsonValue,
-  src: { readonly traceId: Uint8Array; readonly spanId: Uint8Array },
-): JsonValue {
-  if (typeof e !== 'object' || e === null || Array.isArray(e)) return e;
-  const kept = Object.entries(e).filter(([k]) => k !== 'traceId' && k !== 'spanId');
-  if (src.traceId.length > 0) kept.push(['traceId', hex(src.traceId)]);
-  if (src.spanId.length > 0) kept.push(['spanId', hex(src.spanId)]);
-  return Object.fromEntries(kept);
-}
+/**
+ * Point JSON is built straight from the message, byte for byte what protobuf-es `toJson` writes without the fields
+ * that live on the record (`attributes`, `startTimeUnixNano`, `timeUnixNano`, `flags`), and with exemplar ids as hex
+ * like OTLP JSON. The rules, in the order `toJson` applies them: fields come in field-number order; an implicit
+ * scalar is left out at its zero value (`0`, `0n`, `""`, `false`, no bytes; a double at `0` but not `-0`), an
+ * `optional` one only when unset, a list when empty, a message when unset; a oneof member is written whatever its
+ * value; 64-bit integers are decimal strings, doubles `doubleJson`, bytes base64. The tests compare every kind with
+ * `toJson` at the edges, so a protobuf-es change shows up there.
+ */
+type PointJson = (dp: PointLike) => JsonValue;
 
 /** A double as protobuf JSON writes it: a number, or "NaN" | "Infinity" | "-Infinity". */
 function doubleJson(x: number): JsonValue {
@@ -315,51 +309,138 @@ function doubleJson(x: number): JsonValue {
   return x;
 }
 
-/**
- * `pointJson` of a number point without exemplars (nearly every point), built straight from the message: protobuf
- * JSON writes only the value then, `asDouble` as `doubleJson` and `asInt` as a decimal string. Null for any other
- * point, which takes the general path.
- */
-function numberPointJson(dp: NumberDataPoint): JsonValue | null {
-  if (dp.exemplars.length > 0) return null;
-  const v = dp.value;
-  switch (v.case) {
-    case 'asDouble':
-      return typeof v.value === 'number' ? { asDouble: doubleJson(v.value) } : null;
-    case 'asInt':
-      return typeof v.value === 'bigint' ? { asInt: v.value.toString() } : null;
+/** `JSON.stringify(-0)` is `0`, but the value stays `-0` in the record, as it does through `toJson`. */
+const isZero = (x: number): boolean => Object.is(x, 0);
+
+/** A JSON object under construction whose keys are known: a field is set only when `toJson` would write it. */
+type Fields<K extends string> = { [k in K]?: JsonValue };
+
+function anyValueJson(v: ProtoAnyValue): JsonObject {
+  const inner = v.value;
+  switch (inner.case) {
+    case 'stringValue':
+      return { stringValue: inner.value };
+    case 'boolValue':
+      return { boolValue: inner.value };
+    case 'intValue':
+      return { intValue: inner.value.toString() };
+    case 'doubleValue':
+      return { doubleValue: doubleJson(inner.value) };
+    case 'arrayValue':
+      return {
+        arrayValue: inner.value.values.length === 0 ? {} : { values: inner.value.values.map(anyValueJson) },
+      };
+    case 'kvlistValue':
+      return {
+        kvlistValue: inner.value.values.length === 0 ? {} : { values: inner.value.values.map(keyValueJson) },
+      };
+    case 'bytesValue':
+      return { bytesValue: base64Encode(inner.value) };
+    case 'stringValueStrindex':
+      return { stringValueStrindex: inner.value };
     case undefined:
       return {};
   }
 }
 
-/** Point JSON without the fields that live on the record; exemplar ids as hex like OTLP JSON. */
-function pointJson(schema: DescMessage, dp: PointLike): JsonValue {
-  if (schema === NumberDataPointSchema) {
-    const fast = numberPointJson(dp as NumberDataPoint);
-    if (fast !== null) return fast;
-  }
-  const entries = Object.entries(toJson(schema, dp as never) as JsonObject)
-    .filter(([k]) => !RECORD_LEVEL_POINT_FIELDS.has(k))
-    .map(([k, v]): [string, JsonValue] => {
-      if (k !== 'exemplars' || !Array.isArray(v)) return [k, v];
-      return [
-        k,
-        v.map((e, i) => {
-          const src = dp.exemplars?.[i];
-          return src === undefined ? e : withHexIds(e, src);
-        }),
-      ];
+function keyValueJson(kv: KeyValue): JsonObject {
+  const out: Fields<'key' | 'value'> = {};
+  if (kv.key !== '') out.key = kv.key;
+  if (kv.value !== undefined) out.value = anyValueJson(kv.value);
+  return out;
+}
+
+/** An exemplar: `toJson` with its ids taken out, then `traceId` and `spanId` as hex at the end (when present). */
+function exemplarJson(e: Exemplar): JsonObject {
+  const out: Fields<'timeUnixNano' | 'asDouble' | 'asInt' | 'filteredAttributes' | 'traceId' | 'spanId'> = {};
+  if (e.timeUnixNano !== 0n) out.timeUnixNano = e.timeUnixNano.toString();
+  if (e.value.case === 'asDouble') out.asDouble = doubleJson(e.value.value);
+  if (e.value.case === 'asInt') out.asInt = e.value.value.toString();
+  if (e.filteredAttributes.length > 0) out.filteredAttributes = e.filteredAttributes.map(keyValueJson);
+  if (e.traceId.length > 0) out.traceId = hex(e.traceId);
+  if (e.spanId.length > 0) out.spanId = hex(e.spanId);
+  return out;
+}
+
+const exemplarsJson = (list: readonly Exemplar[]): JsonValue[] => list.map(exemplarJson);
+const uint64ListJson = (list: readonly bigint[]): JsonValue[] => list.map((x) => x.toString());
+const doubleListJson = (list: readonly number[]): JsonValue[] => list.map(doubleJson);
+
+function numberPointJson(dp: NumberDataPoint): JsonObject {
+  const out: Fields<'asDouble' | 'exemplars' | 'asInt'> = {};
+  if (dp.value.case === 'asDouble') out.asDouble = doubleJson(dp.value.value);
+  if (dp.exemplars.length > 0) out.exemplars = exemplarsJson(dp.exemplars);
+  if (dp.value.case === 'asInt') out.asInt = dp.value.value.toString();
+  return out;
+}
+
+function histogramPointJson(dp: HistogramDataPoint): JsonObject {
+  const out: Fields<'count' | 'sum' | 'bucketCounts' | 'explicitBounds' | 'exemplars' | 'min' | 'max'> = {};
+  if (dp.count !== 0n) out.count = dp.count.toString();
+  if (dp.sum !== undefined) out.sum = doubleJson(dp.sum);
+  if (dp.bucketCounts.length > 0) out.bucketCounts = uint64ListJson(dp.bucketCounts);
+  if (dp.explicitBounds.length > 0) out.explicitBounds = doubleListJson(dp.explicitBounds);
+  if (dp.exemplars.length > 0) out.exemplars = exemplarsJson(dp.exemplars);
+  if (dp.min !== undefined) out.min = doubleJson(dp.min);
+  if (dp.max !== undefined) out.max = doubleJson(dp.max);
+  return out;
+}
+
+function expBucketsJson(b: ExponentialHistogramDataPoint_Buckets): JsonObject {
+  const out: Fields<'offset' | 'bucketCounts'> = {};
+  if (b.offset !== 0) out.offset = b.offset;
+  if (b.bucketCounts.length > 0) out.bucketCounts = uint64ListJson(b.bucketCounts);
+  return out;
+}
+
+function exponentialHistogramPointJson(dp: ExponentialHistogramDataPoint): JsonObject {
+  const out: Fields<
+    | 'count'
+    | 'sum'
+    | 'scale'
+    | 'zeroCount'
+    | 'positive'
+    | 'negative'
+    | 'exemplars'
+    | 'min'
+    | 'max'
+    | 'zeroThreshold'
+  > = {};
+  if (dp.count !== 0n) out.count = dp.count.toString();
+  if (dp.sum !== undefined) out.sum = doubleJson(dp.sum);
+  if (dp.scale !== 0) out.scale = dp.scale;
+  if (dp.zeroCount !== 0n) out.zeroCount = dp.zeroCount.toString();
+  if (dp.positive !== undefined) out.positive = expBucketsJson(dp.positive);
+  if (dp.negative !== undefined) out.negative = expBucketsJson(dp.negative);
+  if (dp.exemplars.length > 0) out.exemplars = exemplarsJson(dp.exemplars);
+  if (dp.min !== undefined) out.min = doubleJson(dp.min);
+  if (dp.max !== undefined) out.max = doubleJson(dp.max);
+  if (!isZero(dp.zeroThreshold)) out.zeroThreshold = doubleJson(dp.zeroThreshold);
+  return out;
+}
+
+function summaryPointJson(dp: SummaryDataPoint): JsonObject {
+  const out: Fields<'count' | 'sum' | 'quantileValues'> = {};
+  if (dp.count !== 0n) out.count = dp.count.toString();
+  if (!isZero(dp.sum)) out.sum = doubleJson(dp.sum);
+  if (dp.quantileValues.length > 0) {
+    out.quantileValues = dp.quantileValues.map((q) => {
+      const qv: Fields<'quantile' | 'value'> = {};
+      if (!isZero(q.quantile)) qv.quantile = doubleJson(q.quantile);
+      if (!isZero(q.value)) qv.value = doubleJson(q.value);
+      return qv;
     });
-  return Object.fromEntries(entries);
+  }
+  return out;
 }
 
 interface MetricShape {
   readonly type: MetricPointRecord['type'];
   readonly temporality: MetricPointRecord['temporality'];
   readonly monotonic: boolean;
-  readonly schema: DescMessage;
   readonly points: readonly PointLike[];
+  /** The point JSON of one of `points` (the one place a point's static type is known). */
+  readonly json: PointJson;
 }
 
 function metricShape(m: Metric): MetricShape | null {
@@ -370,40 +451,40 @@ function metricShape(m: Metric): MetricShape | null {
         type: 'gauge',
         temporality: 'unspecified',
         monotonic: false,
-        schema: NumberDataPointSchema,
         points: d.value.dataPoints,
+        json: (dp) => numberPointJson(dp as NumberDataPoint),
       };
     case 'sum':
       return {
         type: 'sum',
         temporality: temporality(d.value.aggregationTemporality),
         monotonic: d.value.isMonotonic,
-        schema: NumberDataPointSchema,
         points: d.value.dataPoints,
+        json: (dp) => numberPointJson(dp as NumberDataPoint),
       };
     case 'histogram':
       return {
         type: 'histogram',
         temporality: temporality(d.value.aggregationTemporality),
         monotonic: false,
-        schema: HistogramDataPointSchema,
         points: d.value.dataPoints,
+        json: (dp) => histogramPointJson(dp as HistogramDataPoint),
       };
     case 'exponentialHistogram':
       return {
         type: 'exponentialHistogram',
         temporality: temporality(d.value.aggregationTemporality),
         monotonic: false,
-        schema: ExponentialHistogramDataPointSchema,
         points: d.value.dataPoints,
+        json: (dp) => exponentialHistogramPointJson(dp as ExponentialHistogramDataPoint),
       };
     case 'summary':
       return {
         type: 'summary',
         temporality: 'unspecified',
         monotonic: false,
-        schema: SummaryDataPointSchema,
         points: d.value.dataPoints,
+        json: (dp) => summaryPointJson(dp as SummaryDataPoint),
       };
     case undefined:
       return null;
@@ -467,7 +548,7 @@ export function* metricRecords(
             time: lastTimeRel,
             attributes: convertAttributes(dp.attributes, attributesPath),
             flags: dp.flags,
-            point: pointJson(shape.schema, dp),
+            point: shape.json(dp),
             resource,
             scope,
           };

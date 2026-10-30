@@ -1,4 +1,11 @@
-import { create, type JsonObject, toJson } from '@bufbuild/protobuf';
+import {
+  create,
+  type DescMessage,
+  type JsonObject,
+  type JsonValue,
+  type MessageShape,
+  toJson,
+} from '@bufbuild/protobuf';
 import { describe, expect, test } from 'vitest';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { ExportMetricsServiceRequestSchema } from '../../src/model/gen/opentelemetry/proto/collector/metrics/v1/metrics_service_pb.js';
@@ -7,8 +14,13 @@ import {
   KeyValueSchema,
 } from '../../src/model/gen/opentelemetry/proto/common/v1/common_pb.js';
 import {
+  type Exemplar,
+  ExemplarSchema,
+  ExponentialHistogramDataPointSchema,
+  HistogramDataPointSchema,
   type NumberDataPoint,
   NumberDataPointSchema,
+  SummaryDataPointSchema,
 } from '../../src/model/gen/opentelemetry/proto/metrics/v1/metrics_pb.js';
 import { parseUnixNanos } from '../../src/model/ids.js';
 import {
@@ -310,6 +322,194 @@ describe('normalizeMetrics: number points', () => {
         }),
       );
     }
+  });
+});
+
+describe('normalizeMetrics: point JSON of every kind equals protobuf toJson', () => {
+  const T = BigInt(T0);
+  const hex = (b: Uint8Array): string => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+  /** The oracle: `toJson` without the record-level fields, exemplar ids replaced by hex ones at the end. */
+  function oracle<D extends DescMessage>(schema: D, dp: MessageShape<D>): JsonObject {
+    const exemplars = (dp as { exemplars?: Exemplar[] }).exemplars ?? [];
+    const hexIds = (e: JsonValue, i: number): JsonValue => {
+      if (typeof e !== 'object' || e === null || Array.isArray(e)) return e;
+      const src = exemplars[i];
+      const kept = Object.entries(e).filter(([k]) => k !== 'traceId' && k !== 'spanId');
+      if (src !== undefined && src.traceId.length > 0) kept.push(['traceId', hex(src.traceId)]);
+      if (src !== undefined && src.spanId.length > 0) kept.push(['spanId', hex(src.spanId)]);
+      return Object.fromEntries(kept);
+    };
+    const recordLevel = new Set(['attributes', 'startTimeUnixNano', 'timeUnixNano', 'flags']);
+    return Object.fromEntries(
+      Object.entries(toJson(schema, dp) as JsonObject)
+        .filter(([k]) => !recordLevel.has(k))
+        .map(([k, v]): [string, JsonValue] => [k, k === 'exemplars' && Array.isArray(v) ? v.map(hexIds) : v]),
+    );
+  }
+  const doubles = [
+    0,
+    -0,
+    1.5,
+    -2.25,
+    Number.MAX_VALUE,
+    Number.MIN_VALUE,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    Number.NEGATIVE_INFINITY,
+  ];
+  const kv = (key: string, value: Parameters<typeof create<typeof AnyValueSchema>>[1]) =>
+    create(KeyValueSchema, { key, ...(value === undefined ? {} : { value: create(AnyValueSchema, value) }) });
+  const attributes = [
+    kv('s', { value: { case: 'stringValue', value: '' } }),
+    kv('s2', { value: { case: 'stringValue', value: 'x</script> ' } }),
+    kv('b', { value: { case: 'boolValue', value: false } }),
+    kv('i', { value: { case: 'intValue', value: 0n } }),
+    kv('i2', { value: { case: 'intValue', value: -(2n ** 63n) } }),
+    kv('d', { value: { case: 'doubleValue', value: -0 } }),
+    kv('d2', { value: { case: 'doubleValue', value: Number.NaN } }),
+    kv('by', { value: { case: 'bytesValue', value: new Uint8Array([0, 1, 254, 255]) } }),
+    kv('by0', { value: { case: 'bytesValue', value: new Uint8Array() } }),
+    kv('a0', { value: { case: 'arrayValue', value: { values: [] } } }),
+    kv('a', {
+      value: {
+        case: 'arrayValue',
+        value: {
+          values: [
+            create(AnyValueSchema, {}),
+            create(AnyValueSchema, { value: { case: 'kvlistValue', value: { values: [] } } }),
+            create(AnyValueSchema, {
+              value: {
+                case: 'kvlistValue',
+                value: { values: [kv('', { value: { case: 'intValue', value: 7n } }), kv('k', undefined)] },
+              },
+            }),
+          ],
+        },
+      },
+    }),
+    kv('', undefined),
+    kv('empty', {}),
+  ];
+  const exemplars: Exemplar[] = [
+    create(ExemplarSchema, {}),
+    create(ExemplarSchema, { timeUnixNano: T, value: { case: 'asDouble', value: -0 } }),
+    create(ExemplarSchema, {
+      timeUnixNano: 0n,
+      value: { case: 'asInt', value: 0n },
+      spanId: new Uint8Array(8).fill(1),
+    }),
+    create(ExemplarSchema, {
+      timeUnixNano: T + 1n,
+      value: { case: 'asDouble', value: Number.NaN },
+      traceId: new Uint8Array(16).fill(2),
+      spanId: new Uint8Array(8).fill(3),
+      filteredAttributes: attributes,
+    }),
+    create(ExemplarSchema, {
+      value: { case: 'asInt', value: 2n ** 63n - 1n },
+      traceId: new Uint8Array(16).fill(4),
+    }),
+  ];
+
+  function check<D extends DescMessage>(
+    schema: D,
+    kind: 'gauge' | 'histogram' | 'exponentialHistogram' | 'summary',
+    points: MessageShape<D>[],
+  ): void {
+    // Points go through the request as the writer sees them: a `create`d request (the API path).
+    const req = create(ExportMetricsServiceRequestSchema, {
+      resourceMetrics: [
+        {
+          scopeMetrics: [
+            { metrics: [{ name: kind, data: { case: kind, value: { dataPoints: points as never } } }] },
+          ],
+        },
+      ],
+    });
+    const records = normalizeMetrics(req, createNormalizeContext(epoch), 'f');
+    expect(records).toHaveLength(points.length);
+    records.forEach((r, i) => {
+      const want = oracle(schema, points[i] as MessageShape<D>);
+      expect(JSON.stringify(r.point)).toBe(JSON.stringify(want));
+      expect(r.point).toStrictEqual(want); // -0 stays -0
+    });
+  }
+
+  test('number points with exemplars', () => {
+    check(NumberDataPointSchema, 'gauge', [
+      create(NumberDataPointSchema, { timeUnixNano: T, exemplars }),
+      create(NumberDataPointSchema, { timeUnixNano: T, value: { case: 'asDouble', value: 0 }, exemplars }),
+      create(NumberDataPointSchema, {
+        timeUnixNano: T,
+        value: { case: 'asInt', value: 0n },
+        exemplars: [exemplars[3] as Exemplar],
+      }),
+    ]);
+  });
+
+  test('histogram points', () => {
+    check(HistogramDataPointSchema, 'histogram', [
+      create(HistogramDataPointSchema, { timeUnixNano: T }),
+      create(HistogramDataPointSchema, { timeUnixNano: T, count: 0n, sum: 0, min: -0, max: 0 }),
+      ...doubles.map((d) =>
+        create(HistogramDataPointSchema, {
+          timeUnixNano: T,
+          count: 2n ** 64n - 1n,
+          sum: d,
+          bucketCounts: [0n, 1n, 2n ** 64n - 1n],
+          explicitBounds: [d, ...doubles],
+          exemplars,
+          min: d,
+          max: -d,
+        }),
+      ),
+    ]);
+  });
+
+  test('exponential histogram points', () => {
+    check(ExponentialHistogramDataPointSchema, 'exponentialHistogram', [
+      create(ExponentialHistogramDataPointSchema, { timeUnixNano: T }),
+      create(ExponentialHistogramDataPointSchema, {
+        timeUnixNano: T,
+        positive: {},
+        negative: { offset: 0, bucketCounts: [] },
+      }),
+      create(ExponentialHistogramDataPointSchema, { timeUnixNano: T, scale: -10, zeroThreshold: -0, sum: 0 }),
+      ...doubles.map((d, i) =>
+        create(ExponentialHistogramDataPointSchema, {
+          timeUnixNano: T,
+          count: BigInt(i),
+          sum: d,
+          scale: i - 4,
+          zeroCount: 2n ** 64n - BigInt(i),
+          positive: { offset: -(2 ** 31), bucketCounts: [1n, 0n] },
+          negative: { offset: 2 ** 31 - 1, bucketCounts: [3n] },
+          exemplars,
+          min: d,
+          max: d,
+          zeroThreshold: d,
+        }),
+      ),
+    ]);
+  });
+
+  test('summary points', () => {
+    check(SummaryDataPointSchema, 'summary', [
+      create(SummaryDataPointSchema, { timeUnixNano: T }),
+      create(SummaryDataPointSchema, {
+        timeUnixNano: T,
+        sum: -0,
+        quantileValues: [{ quantile: 0, value: 0 }],
+      }),
+      ...doubles.map((d) =>
+        create(SummaryDataPointSchema, {
+          timeUnixNano: T,
+          count: 3n,
+          sum: d,
+          quantileValues: doubles.map((q) => ({ quantile: q, value: d })),
+        }),
+      ),
+    ]);
   });
 });
 
