@@ -5,6 +5,9 @@ import {
   type MethodDefinition,
   Server,
   ServerCredentials,
+  ServerInterceptingCall,
+  type ServerInterceptor,
+  ServerListenerBuilder,
   type ServerUnaryCall,
   type ServiceDefinition,
   type sendUnaryData,
@@ -28,7 +31,7 @@ export const GRPC_CEILING_FACTOR = 2;
 
 export interface GrpcTransportOptions {
   maxBodyBytes: number;
-  /** Sizes the per-connection concurrent-call limit: ⌈inflightBudgetBytes ÷ maxBodyBytes⌉. */
+  /** The budget each call reserves `maxBodyBytes` from at start; also sizes the per-connection concurrent-call limit (⌈budget ÷ maxBodyBytes⌉) and the HTTP/2 session memory cap. */
   inflightBudgetBytes: number;
   /** How long `close()` waits for `tryShutdown` before force-closing idle or half-open streams. Default 5 s. */
   forceShutdownAfterMs?: number;
@@ -70,6 +73,57 @@ function failure(e: unknown, logger: Logger): { code: number; details: string; m
   return { code, details, metadata };
 }
 
+/**
+ * Reserves `maxBodyBytes` from the receiver's in-flight budget when a call starts (its headers have arrived, its
+ * message is not yet buffered) and refuses it as busy when that does not fit, so grpc-js never buffers the body of a
+ * refused call. The reservation is held until half-close, not until the message arrives: grpc-js's unary path only
+ * stores the message in `onReceiveMessage` and runs the handler synchronously inside `onReceiveHalfClose`, so
+ * releasing there and delegating leaves no window in which a buffered body is uncounted (a client that sends a
+ * message and never half-closes keeps its reservation). It is also released on cancel (which grpc-js raises
+ * after it sends any status itself, such as its too-large refusal) and when a status is sent through the call;
+ * `release` is idempotent.
+ */
+export function admissionInterceptor(
+  receiver: Receiver,
+  options: GrpcTransportOptions,
+  logger: Logger,
+): ServerInterceptor {
+  return (_method, call) => {
+    let reservation: { release(): void } | null = null;
+    const release = (): void => {
+      reservation?.release();
+    };
+    return new ServerInterceptingCall(call, {
+      start: (next) => {
+        const admission = receiver.admit(options.maxBodyBytes);
+        if (admission === null) {
+          const rejected = new ReceiverRejected(
+            'busy',
+            'receiver is busy: a new call would exceed the in-flight budget',
+          );
+          receiver.refused('busy', rejected.message);
+          call.sendStatus(failure(rejected, logger));
+          return;
+        }
+        reservation = admission;
+        next(
+          new ServerListenerBuilder()
+            .withOnReceiveHalfClose((forward) => {
+              release();
+              forward();
+            })
+            .withOnCancel(release)
+            .build(),
+        );
+      },
+      sendStatus: (statusObject, forward) => {
+        release();
+        forward(statusObject);
+      },
+    });
+  };
+}
+
 function handlerFor(s: SignalService, receiver: Receiver, options: GrpcTransportOptions, logger: Logger) {
   return (call: ServerUnaryCall<Uint8Array, Message>, callback: sendUnaryData<Message>): void => {
     if (call.request.length > options.maxBodyBytes) {
@@ -83,6 +137,7 @@ function handlerFor(s: SignalService, receiver: Receiver, options: GrpcTransport
       return;
     }
     const admission = receiver.admit(call.request.length);
+    // Defence in depth: the call's own reservation was just released, so re-admitting the same size cannot fail.
     if (admission === null) {
       const rejected = new ReceiverRejected(
         'busy',
@@ -113,9 +168,14 @@ export function listenGrpc(
   host: string,
   port: number,
 ): Promise<Listener> {
+  const streams = Math.max(1, Math.ceil(options.inflightBudgetBytes / options.maxBodyBytes));
   const server = new Server({
+    interceptors: [admissionInterceptor(receiver, options, logger)],
     'grpc.max_receive_message_length': options.maxBodyBytes * GRPC_CEILING_FACTOR,
-    'grpc.max_concurrent_streams': Math.max(1, Math.ceil(options.inflightBudgetBytes / options.maxBodyBytes)),
+    'grpc.max_concurrent_streams': streams,
+    // Node's HTTP/2 session memory, in MiB: the per-connection ceiling (every stream at the grpc-js message limit), plus 1 MiB of slack for framing.
+    'grpc-node.max_session_memory':
+      Math.ceil((GRPC_CEILING_FACTOR * options.maxBodyBytes * streams) / 2 ** 20) + 1,
   });
   for (const s of SIGNAL_SERVICES) {
     server.addService(serviceDefinition(s), { Export: handlerFor(s, receiver, options, logger) });

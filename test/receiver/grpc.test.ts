@@ -4,10 +4,12 @@ import {
   type ChannelCredentials,
   credentials,
   makeGenericClientConstructor,
+  type ServerInterceptingCallInterface,
+  type ServerMethodDefinition,
   type ServiceError,
   status,
 } from '@grpc/grpc-js';
-import { afterEach, describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 import { closeAll } from '../../src/api/receiver.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { RetryInfoSchema } from '../../src/model/gen/google/rpc/error_details_pb.js';
@@ -16,7 +18,12 @@ import {
   ExportTraceServiceRequestSchema,
   ExportTraceServiceResponseSchema,
 } from '../../src/model/gen/opentelemetry/proto/collector/trace/v1/trace_service_pb.js';
-import { type GrpcTransportOptions, listenGrpc, serviceDefinition } from '../../src/receiver/grpc.js';
+import {
+  admissionInterceptor,
+  type GrpcTransportOptions,
+  listenGrpc,
+  serviceDefinition,
+} from '../../src/receiver/grpc.js';
 import type { Listener } from '../../src/receiver/http.js';
 import { type Admission, createReceiver, type Receiver } from '../../src/receiver/receiver.js';
 import { serviceOf } from '../../src/receiver/signals.js';
@@ -344,5 +351,148 @@ describe('OTLP/gRPC transport', () => {
     await closing;
     expect(err).toBeNull();
     expect(calls).toHaveLength(1);
+  });
+
+  describe('admission on call start', () => {
+    const own = { 'grpc.use_local_subchannel_pool': 1 };
+
+    function deferred() {
+      let resolve: () => void = () => undefined;
+      const promise = new Promise<void>((r) => {
+        resolve = r;
+      });
+      return { promise, resolve };
+    }
+
+    async function heldReceiver(budget: number) {
+      const w: TestWriter = createTestWriter();
+      const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'replace' });
+      const real = createReceiver(session, { inflightBudgetBytes: budget }, { logger: silent });
+      const gate = deferred();
+      let reached = 0;
+      const receiver: Receiver = {
+        ...real,
+        receive: async (_signal, _body, _encoding, _transport, admission) => {
+          reached++;
+          await gate.promise;
+          admission.release();
+          return { accepted: 1, rejected: 0, errorMessage: null };
+        },
+      };
+      return { real, receiver, gate, reached: () => reached };
+    }
+
+    test('a call on a second connection is refused busy while a call on the first holds the budget', async () => {
+      const { real, receiver, gate, reached } = await heldReceiver(1_000_000);
+      const address = await serve(receiver, { maxBodyBytes: 1_000_000, inflightBudgetBytes: 1_000_000 });
+      const a = clientFor(address, own);
+      const b = clientFor(address, own);
+      const first = call(a, requestOf([protoSpan(1)]));
+      await vi.waitFor(() => expect(reached()).toBe(1));
+      const second = await call(b, requestOf([protoSpan(2)]));
+      expect(second.err?.code).toBe(status.UNAVAILABLE);
+      const details = second.err?.metadata.get('grpc-status-details-bin')[0];
+      if (!(details instanceof Buffer)) throw new Error('no status details');
+      const detail = fromBinary(StatusSchema, new Uint8Array(details)).details[0];
+      if (detail === undefined) throw new Error('no RetryInfo');
+      expect(anyUnpack(detail, RetryInfoSchema)?.retryDelay?.seconds).toBe(1n);
+      expect(real.stats().refused.busy).toBe(1);
+      expect(reached()).toBe(1);
+      gate.resolve();
+      expect((await first).err).toBeNull();
+      expect((await call(b, requestOf([protoSpan(3)]))).err).toBeNull();
+      expect(real.stats().refused.busy).toBe(1);
+    });
+
+    test('two calls on one connection still proceed together under the default-sized budget', async () => {
+      const { receiver, gate, reached } = await heldReceiver(2_000);
+      const address = await serve(receiver, { maxBodyBytes: 1_000, inflightBudgetBytes: 2_000 });
+      const client = clientFor(address, own);
+      const one = call(client, requestOf([protoSpan(1)]));
+      const two = call(client, requestOf([protoSpan(2)]));
+      await vi.waitFor(() => expect(reached()).toBe(2));
+      gate.resolve();
+      expect((await one).err).toBeNull();
+      expect((await two).err).toBeNull();
+    });
+
+    test('a message grpc-js itself refuses as too large does not leak the reservation', async () => {
+      const { real, receiver } = await heldReceiver(1_000_000);
+      const address = await serve(receiver, { maxBodyBytes: 1_000, inflightBudgetBytes: 1_000_000 });
+      const { err } = await call(clientFor(address, own), new Uint8Array(2_500));
+      expect(err?.code).toBe(status.RESOURCE_EXHAUSTED);
+      // A full-budget admission is only granted while nothing else is open: a leaked reservation would refuse it.
+      await vi.waitFor(() => {
+        const probe = real.admit(1_000_000);
+        expect(probe).not.toBeNull();
+        probe?.release();
+      });
+    });
+
+    function startedCall(real: Receiver) {
+      const interceptor = admissionInterceptor(
+        real,
+        { maxBodyBytes: 1_000_000, inflightBudgetBytes: 1_000_000 },
+        silent,
+      );
+      let captured: Parameters<ServerInterceptingCallInterface['start']>[0] | undefined;
+      const stub: ServerInterceptingCallInterface = {
+        start: (listener) => {
+          captured = listener;
+        },
+        sendMetadata() {},
+        sendMessage() {},
+        sendStatus() {},
+        startRead() {},
+        getPeer: () => 'peer',
+        getDeadline: () => Number.POSITIVE_INFINITY,
+        getHost: () => 'host',
+        getAuthContext: () => ({}),
+        getConnectionInfo: () => ({}),
+        getMetricsRecorder: () => {
+          throw new Error('unused');
+        },
+      };
+      const method: ServerMethodDefinition<Uint8Array, Message> = {
+        path: '/p/Export',
+        requestStream: false,
+        responseStream: false,
+        requestDeserialize: (bytes) => bytes,
+        responseSerialize: () => Buffer.alloc(0),
+      };
+      const intercepted = interceptor(method, stub);
+      intercepted.start({
+        onReceiveMetadata() {},
+        onReceiveMessage() {},
+        onReceiveHalfClose() {},
+        onCancel() {},
+      });
+      return () => {
+        if (captured === undefined) throw new Error('call was not started');
+        return captured;
+      };
+    }
+
+    test('a call holds the reservation after its message arrives until it half-closes', async () => {
+      const { real } = await heldReceiver(1_000_000);
+      const listener = startedCall(real);
+      listener().onReceiveMessage(new Uint8Array(10));
+      expect(real.admit(1_000_000)).toBeNull();
+      listener().onReceiveHalfClose();
+      const after = real.admit(1_000_000);
+      expect(after).not.toBeNull();
+      after?.release();
+    });
+
+    test('a call cancelled before its message releases the reservation', async () => {
+      const { real } = await heldReceiver(1_000_000);
+      const listener = startedCall(real);
+      // Started and not yet cancelled: the reservation is held, a second one does not fit.
+      expect(real.admit(1_000_000)).toBeNull();
+      listener().onCancel();
+      const after = real.admit(1_000_000);
+      expect(after).not.toBeNull();
+      after?.release();
+    });
   });
 });
