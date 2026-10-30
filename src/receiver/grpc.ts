@@ -5,6 +5,9 @@ import {
   type MethodDefinition,
   Server,
   ServerCredentials,
+  ServerInterceptingCall,
+  type ServerInterceptor,
+  ServerListenerBuilder,
   type ServerUnaryCall,
   type ServiceDefinition,
   type sendUnaryData,
@@ -70,6 +73,57 @@ function failure(e: unknown, logger: Logger): { code: number; details: string; m
   return { code, details, metadata };
 }
 
+/**
+ * Reserves `maxBodyBytes` from the receiver's in-flight budget when a call starts (its headers have arrived, its
+ * message is not yet buffered) and refuses it as busy when that does not fit, so grpc-js never buffers the body of a
+ * refused call. The reservation is released as soon as the message arrives (the handler then admits the real size),
+ * or when the call ends without one (half-close, cancel, or a status sent by grpc-js itself); `release` is idempotent.
+ */
+export function admissionInterceptor(
+  receiver: Receiver,
+  options: GrpcTransportOptions,
+  logger: Logger,
+): ServerInterceptor {
+  return (_method, call) => {
+    let reservation: { release(): void } | null = null;
+    const release = (): void => {
+      reservation?.release();
+    };
+    return new ServerInterceptingCall(call, {
+      start: (next) => {
+        const admission = receiver.admit(options.maxBodyBytes);
+        if (admission === null) {
+          const rejected = new ReceiverRejected(
+            'busy',
+            'receiver is busy: a new call would exceed the in-flight budget',
+          );
+          receiver.refused('busy', rejected.message);
+          call.sendStatus(failure(rejected, logger));
+          return;
+        }
+        reservation = admission;
+        next(
+          new ServerListenerBuilder()
+            .withOnReceiveMessage((message, forward) => {
+              release();
+              forward(message);
+            })
+            .withOnReceiveHalfClose((forward) => {
+              release();
+              forward();
+            })
+            .withOnCancel(release)
+            .build(),
+        );
+      },
+      sendStatus: (statusObject, forward) => {
+        release();
+        forward(statusObject);
+      },
+    });
+  };
+}
+
 function handlerFor(s: SignalService, receiver: Receiver, options: GrpcTransportOptions, logger: Logger) {
   return (call: ServerUnaryCall<Uint8Array, Message>, callback: sendUnaryData<Message>): void => {
     if (call.request.length > options.maxBodyBytes) {
@@ -114,6 +168,7 @@ export function listenGrpc(
   port: number,
 ): Promise<Listener> {
   const server = new Server({
+    interceptors: [admissionInterceptor(receiver, options, logger)],
     'grpc.max_receive_message_length': options.maxBodyBytes * GRPC_CEILING_FACTOR,
     'grpc.max_concurrent_streams': Math.max(1, Math.ceil(options.inflightBudgetBytes / options.maxBodyBytes)),
   });
