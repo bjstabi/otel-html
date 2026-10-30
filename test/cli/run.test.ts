@@ -192,6 +192,22 @@ describe('run', () => {
     expect(await w.fs.exists('out')).toBe(false);
   });
 
+  test('a transport disabled only by the config file is a usage error before anything starts', async () => {
+    const w = createTestWriter();
+    await w.fs.mkdirp('/work');
+    await w.fs.writeTextAtomic('/work/cfg.yaml', 'receiver:\n  grpc:\n    enabled: false\n');
+    const h = start(
+      w,
+      ['run', '-o', 'out', '--config', '/work/cfg.yaml', '--http', '0', '--', process.execPath, '-e', '0'],
+      {
+        OTEL_EXPORTER_OTLP_PROTOCOL: 'grpc',
+      },
+    );
+    expect(await h.result).toBe(2);
+    expect(h.stderr).toContain('--grpc');
+    expect(await w.fs.exists('out')).toBe(false);
+  });
+
   test('an unknown protocol is a usage error before anything starts', async () => {
     const w = createTestWriter();
     const h = start(w, ['run', '-o', 'out', '--http', '0', '--no-grpc', '--', process.execPath, '-e', '0'], {

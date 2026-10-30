@@ -44,6 +44,8 @@ export async function openReceiver(
   io: CliIo,
   deps: Partial<WriterDeps>,
   flags: ReceiveFlags,
+  /** Runs on the resolved transports before the report is created or a port is bound; throw to stop. */
+  precheck: (enabled: { http: boolean; grpc: boolean }) => void = () => undefined,
 ): Promise<OpenReceiver> {
   if (flags.http === false && flags.grpc === false) {
     throw new OtelHtmlError('usage', {
@@ -53,6 +55,8 @@ export async function openReceiver(
   }
   const fs = deps.fs ?? createNodeFileSystem();
   const { config } = await resolveCliConfig(io, fs, flags);
+  // The flags are already merged into the config, so this is the rule startReceiver applies.
+  precheck({ http: config.receiver.http.enabled, grpc: config.receiver.grpc.enabled });
   const full = await resolveDeps(deps);
   const report = await Report.createResolved(
     { out: flags.out, ...(flags.append === true ? { append: true } : {}) },

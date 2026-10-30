@@ -57,9 +57,9 @@ export function addRunCommand(
   addReceiverOptions(command).action(async (argv: string[], flags: ReceiveFlags) => {
     const [executable, ...args] = argv;
     if (executable === undefined) throw new OtelHtmlError('usage', { message: 'no command to run' });
-    // Usage errors that flags and the environment decide come before anything is created or bound.
-    checkedProtocol(io.env, { http: flags.http !== false, grpc: flags.grpc !== false });
-    const opened = await openReceiver(io, deps, flags);
+    const opened = await openReceiver(io, deps, flags, (enabled) => {
+      checkedProtocol(io.env, enabled); // before anything is created or bound
+    });
     const { report, receiver } = opened;
     const abandon = async (e: unknown): Promise<never> => {
       await receiver.close().catch(() => undefined);
