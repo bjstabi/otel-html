@@ -33,6 +33,7 @@ import {
   type StoredExemplar,
   selectExemplars,
   seriesGaps,
+  summaryQuantilesOf,
 } from '../../src/format/metric-files.js';
 import type { AnyValue } from '../../src/model/anyvalue.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
@@ -191,6 +192,9 @@ describe('payloads', () => {
     const gaps = series.map((_, i) => ({ n: i, median: 10 }));
     const withGaps = roundTrip('k', encodeSeriesFile({ metric: 3, series, gaps }));
     expect(parseSeriesFile(withGaps, 'series.js')).toEqual({ metric: 3, series, gaps });
+    const quantiles = [0, 0.5, 0.99, 1];
+    const withQuantiles = roundTrip('k', encodeSeriesFile({ metric: 3, series, gaps, quantiles }));
+    expect(parseSeriesFile(withQuantiles, 'series.js')).toEqual({ metric: 3, series, gaps, quantiles });
     const seg = {
       metric: 3,
       widthNs: LEVEL0_WIDTH_NS,
@@ -232,6 +236,30 @@ describe('payloads', () => {
     expect(failure(() => parseExemplarFile(badId, 'ex')).message).toContain('ex.exemplars[0].traceId');
     const short = { ...encodeSeriesFile({ metric: 0, series }), gaps: [] };
     expect(failure(() => parseSeriesFile(short, 'series.js')).message).toContain('series.js.gaps');
+    for (const quantiles of [[0.99, 0.5], [0.5, 0.5], [1.5]]) {
+      const bad = { ...encodeSeriesFile({ metric: 0, series }), quantiles };
+      expect(failure(() => parseSeriesFile(bad, 'series.js')).message).toContain('series.js.quantiles');
+    }
+  });
+});
+
+describe('summaryQuantilesOf', () => {
+  test('every quantile of every summary bucket, ascending, other kinds ignored', () => {
+    const summary = (qs: number[]): BucketAgg => ({
+      k: 'summary',
+      count: 1,
+      sum: 1,
+      quantiles: qs.map((q) => ({ q, v: q })),
+      lastTime: 0,
+    });
+    expect(
+      summaryQuantilesOf([
+        { id: 0, t: [0, 1], a: [summary([0.99, 0.5]), summary([0.5])] },
+        { id: 1, t: [0], a: [counter(1)] },
+        { id: 2, t: [5], a: [summary([0, 1])] },
+      ]),
+    ).toEqual([0, 0.5, 0.99, 1]);
+    expect(summaryQuantilesOf([])).toEqual([]);
   });
 });
 

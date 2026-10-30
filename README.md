@@ -188,7 +188,7 @@ report/
     manifest.js         run metadata and chunk list
     rollups/            spans.js, logs.js, metrics.js
     chunks/             spans/, logs/, metrics/  (000000.js, ...)
-    metrics/            per metric (<id6>/): series.js, l<k>.js resolution levels and ex.js / ex<k>.js
+    metrics/            per metric (<id6>/): series.js (definitions, point gaps, a summary's quantiles), l<k>.js resolution levels and ex.js / ex<k>.js
                         exemplars, or seg-<n6>.js segments until the writer closes
     traces/             trace index shards (<xx>.js)
     state/              writer checkpoint (session.<n>.json)
@@ -256,6 +256,7 @@ Tasks are defined in `mise.toml`; CI runs the same ones.
 | `mise run test:e2e` | Build, then run the Playwright suite in Chromium, Firefox and WebKit. Extra arguments go to Playwright (`mise run test:e2e -- e2e/merge.spec.ts`). The metrics scale check runs only with `OTEL_HTML_METRICS_SCALE=1` (CI runs it in its own Chromium job): it writes a report of 200 metrics × 1,000 series in which only the charted metric has the full 1 h at 10 s (a few seconds locally and under a minute on CI; about 150 MB, in `e2e/.reports/`), and fails if the Explorer or Catalog loads another metric's points. The `@perf` budgets scale by `OTEL_HTML_PERF_FACTOR` and, when `OTEL_HTML_PERF_REFERENCE_MS` is set, by how much slower than that reference a fixed CPU workload runs on this machine (never below 1; the setup logs `PERF calibration: N ms`). CI sets the reference to 100 ms. |
 | `mise run build:binaries` | Compile standalone binaries into `dist/bin/` (after `build`). |
 | `mise run fixtures` | Regenerate `fixtures/*.otlp.json` with the OpenTelemetry SDK. |
+| `mise run bench:metrics` | Time the metrics writer on 2.4M points (200 metrics × 1,000 series × 12 collections) through the library API under bun, and hash the report it writes. `-- --runs 3` takes the median of three; `-- --keep` leaves the last report in a temp folder. The reference figures are in [#35](https://github.com/bjstabi/otel-html/issues/35). |
 | `mise run demo` | Convert the `small`, `linked-*` and `metrics` fixtures (traces, logs and metrics) with `fixtures/dashboards.otel-html.yaml` and open the report in a browser, on the Checkout dashboard. Not for CI. |
 
 Other tasks: `lint`, `format`, `typecheck`, `test:unit`, `knip`, `gen`, `gen:check`, `check:package`, `test:e2e:chromium`.

@@ -114,6 +114,17 @@ pnpm exec playwright test --project='chromium-*' --grep @perf --workers=1 --pass
 exit $rc
 """
 
+# The metrics writer benchmark (#35): the 1/30 slice of the metrics scale workload through `Report.addMetrics`,
+# under bun. Prints ingest and `close` times and a hash of the report, so a change can show both its speed-up and
+# that its output is unchanged. `mise run bench:metrics -- --runs 3 --keep`.
+[tasks."bench:metrics"]
+shell = "bash -c"
+usage = 'arg "[args]" var=#true'
+run = """
+eval "set -- $usage_args"
+bun scripts/bench-metrics.ts "$@"
+"""
+
 # Regenerates fixtures/*.otlp.json with the OTel SDK (byte-stable). hostile.otlp.json is hand-authored and left alone.
 [tasks.fixtures]
 run = "bun scripts/fixtures.ts"

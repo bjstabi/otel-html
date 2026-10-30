@@ -91,6 +91,18 @@ describe('data files', () => {
     expect(() => wrapDataFile('k', { x: () => 1 })).toThrowError(OtelHtmlError);
   });
 
+  test('a cyclic payload fails as JSON.stringify does, not by overflowing the stack', () => {
+    const cyclic: { self?: unknown; list: unknown[] } = { list: [] };
+    cyclic.self = cyclic;
+    cyclic.list.push(cyclic);
+    expect(() => wrapDataFile('k', cyclic)).toThrowError(TypeError);
+    expect(() => [...wrapDataFilePieces('k', {}, 'items', [cyclic])]).toThrowError(TypeError);
+    // Deep but finite payloads are still written plain.
+    let deep: unknown = 1;
+    for (let i = 0; i < 200; i++) deep = [deep];
+    expect(wrapDataFile('k', deep)).toContain(JSON.stringify(deep));
+  });
+
   test('plain payloads skip the replacer but write exactly what the tagging replacer would', () => {
     // The replacer wrapDataFile applied to every payload before plain JSON took a fast path.
     const tagging = (_k: string, v: unknown): unknown =>

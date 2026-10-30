@@ -77,6 +77,8 @@ export const NOTES = {
   heatBoundsDiffer: 'histogram bounds differ across series: no heatmap or distribution',
   summariesNotCombined: 'summaries are not combined',
   summaryCoarse: 'summary quantiles from the last point per bucket',
+  quantilesFromLevel:
+    'quantile options read from the coarsest level (report written before they were recorded): one a series stopped sending early may be missing',
   fromSegments: 'report unfinished: series merged from flush segments',
   partial: (n: number) => `partial: ${n} points folded into other`,
   foldedEvicted: (n: number) =>

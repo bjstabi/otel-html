@@ -25,9 +25,11 @@ import {
   parseLevelFile,
   parseSegmentFile,
   parseSeriesFile,
+  type SegmentFile,
   type SeriesGaps,
   type StoredExemplar,
   seriesGaps,
+  summaryQuantilesOf,
 } from '../format/metric-files.js';
 import { OtelHtmlError } from '../model/errors.js';
 import type { RelNanos } from '../model/ids.js';
@@ -94,11 +96,13 @@ export async function restoreCatalogSeries(
   }
 }
 
-/**
- * A data file's payload. `revive` (the default) decodes `{"$i"}` / `{"$b"}` tags; a file whose payload type holds no
- * bigint or bytes (a segment this writer wrote) has none to decode.
- */
-async function readDataFile(fs: FileSystem, out: string, path: string, revive = true): Promise<unknown> {
+/** A data file's payload with its `{"$i"}` / `{"$b"}` tags decoded. */
+async function readDataFile(fs: FileSystem, out: string, path: string): Promise<unknown> {
+  return reviveDataJson(await readRawDataFile(fs, out, path), path);
+}
+
+/** A data file's payload as written: a segment this writer wrote holds no bigint or bytes, so there is nothing to decode. */
+async function readRawDataFile(fs: FileSystem, out: string, path: string): Promise<unknown> {
   const file = at(out, path);
   let text: string;
   try {
@@ -109,8 +113,7 @@ async function readDataFile(fs: FileSystem, out: string, path: string, revive = 
     });
   }
   try {
-    const payload = unwrapDataFile(text, dataFileKey(path));
-    return revive ? reviveDataJson(payload, path) : payload;
+    return unwrapDataFile(text, dataFileKey(path));
   } catch (e) {
     if (e instanceof OtelHtmlError && e.code === 'invalid-report') {
       throw new OtelHtmlError('invalid-report', { message: `${path}: ${e.message}` });
@@ -274,6 +277,8 @@ export class MetricSeriesWriter {
       let level: BucketSeries[] = merged.l0;
       merged.l0 = [];
       const gaps = gapsOf(catalog.seriesDefs(id).length, level);
+      // A summary's quantile set, so the show options need no level file (#39).
+      const quantiles = catalog.entries()[id]?.type === 'summary' ? summaryQuantilesOf(level) : undefined;
       const range = bucketRange(level);
       const count = range === null ? 0 : levelCount(range.min * LEVEL0_WIDTH_NS, range.max * LEVEL0_WIDTH_NS);
       // Written unlisted, then swapped in at once: a failure part way leaves the segments the only listed data.
@@ -299,11 +304,17 @@ export class MetricSeriesWriter {
         await this.#writeFile(path, encodeExemplarFile({ metric: id, exemplars: capped }));
         written.push(path);
       }
-      // The series' point gaps, so a chart picks its bucket width without loading level 0. Every series of the
-      // metric is in the catalog and in this file already: only `gaps` is new, and it is valid with the segments too.
+      // The series' point gaps, so a chart picks its bucket width without loading level 0, and a summary's
+      // quantiles. Every series of the metric is in the catalog and in this file already: only those are new, and
+      // they are valid with the segments too.
       await this.#writeFile(
         metricSeriesPath(id),
-        encodeSeriesFile({ metric: id, series: [...catalog.seriesDefs(id)], gaps }),
+        encodeSeriesFile({
+          metric: id,
+          series: [...catalog.seriesDefs(id)],
+          gaps,
+          ...(quantiles === undefined ? {} : { quantiles }),
+        }),
       );
       for (const n of paths.segments) {
         this.#listed.delete(metricSegmentPath(id, n));
@@ -326,7 +337,7 @@ export class MetricSeriesWriter {
     for (const n of [...segments].sort((a, b) => a - b)) {
       const path = metricSegmentPath(id, n);
       const seg = this.#ownSegments.has(path)
-        ? decodeOwnSegmentFile(await readDataFile(this.#fs, this.#out, path, false), path)
+        ? await this.#readOwnSegment(path)
         : parseSegmentFile(await this.#read(path), path);
       for (const x of seg.series) {
         for (let i = 0; i < x.t.length; i++) {
@@ -381,6 +392,11 @@ export class MetricSeriesWriter {
 
   #read(path: string): Promise<unknown> {
     return readDataFile(this.#fs, this.#out, path);
+  }
+
+  /** A segment this writer wrote, read back for compaction without validating it again. */
+  async #readOwnSegment(path: string): Promise<SegmentFile> {
+    return decodeOwnSegmentFile(await readRawDataFile(this.#fs, this.#out, path), path);
   }
 
   async #readLevel(id: number, k: number): Promise<BucketSeries[]> {
