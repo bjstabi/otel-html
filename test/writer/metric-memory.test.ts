@@ -71,6 +71,36 @@ function node(args: readonly string[]): { done: Promise<string>; kill: () => voi
   return { done, kill: () => child.kill() };
 }
 
+// Feeds the same workload to the library (`Report.addMetrics`, one OTLP JSON object per metric per collection, as a
+// receiver would) in its own process, with no V8 flags, and reports that process's peak RSS on stderr.
+const API_LOAD = (lib: string, out: string) => `import { Report } from ${JSON.stringify(lib)};
+const epoch = 1700000000000000000n;
+const attributes = Array.from({ length: ${SERIES} }, (_, j) => [
+  { key: 'host', value: { stringValue: 'host-' + (j % 50) } },
+  { key: 'route', value: { stringValue: '/api/v1/route-' + j } },
+]);
+const resource = { attributes: [{ key: 'service.name', value: { stringValue: 'load' } }] };
+const scope = { name: 'load', version: '1' };
+const report = await Report.create({ out: ${JSON.stringify(out)}, title: 'api load' });
+for (let i = 0; i < ${POINTS}; i++) {
+  const time = String(epoch + BigInt(i) * 10000000000n);
+  for (let m = 0; m < ${METRICS}; m++) {
+    const gauge = m % 2 === 1;
+    const dataPoints = attributes.map((attrs, j) =>
+      gauge
+        ? { attributes: attrs, timeUnixNano: time, asInt: String((i * 7 + j) % 1000) }
+        : { attributes: attrs, startTimeUnixNano: String(epoch), timeUnixNano: time, asInt: String(i * (j + 1)) },
+    );
+    const metric = gauge
+      ? { name: 'load.metric.' + m, unit: 'By', gauge: { dataPoints } }
+      : { name: 'load.metric.' + m, unit: '1', sum: { aggregationTemporality: 2, isMonotonic: true, dataPoints } };
+    await report.addMetrics({ resourceMetrics: [{ resource, scopeMetrics: [{ scope, metrics: [metric] }] }] });
+  }
+  if ((i + 1) % ${POINTS_PER_FILE} === 0) await report.flush();
+}
+await report.close();
+process.stderr.write('MAXRSS ' + process.resourceUsage().maxRSS + '\\n');`;
+
 // The workload as users run it: the built CLI (`otel-html convert`) on OTLP JSON files, in its own process. The
 // library API sets no V8 flags; README.md notes its memory on this workload.
 // @slow: runs only with OTEL_HTML_LOAD=1 (`mise run test:load`, which builds first).
@@ -101,7 +131,9 @@ describe('metric series memory', () => {
           '--config',
           config,
         ]);
-        // A failed convert stops reading its pipes, which would leave the generator blocked on them.
+        // A failed convert stops reading its pipes, which would leave the generator blocked on them; a dead
+        // generator leaves the convert waiting on a pipe no one writes, so each failure ends the other.
+        generator.done.catch(() => convert.kill());
         const stderr = await convert.done.catch((e: unknown) => {
           generator.kill();
           throw e;
@@ -114,6 +146,30 @@ describe('metric series memory', () => {
         );
         expect(peakBytes).toBeGreaterThan(0);
         expect(peakBytes).toBeLessThan(MAX_RSS_BYTES);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  // #14: the library API has no V8 flag to lean on, so its peak is higher than the CLI's (about 770 MB against
+  // 450 MB on an Apple M-series Mac; README.md Limits). The figure is reported, and the 512 MB target asserted
+  // only on the CLI above, until the API path is brought under it.
+  test.skipIf(process.env[LOAD_ENV] !== '1')(
+    `Report.addMetrics on the same workload reports its peak RSS (the 512 MB target is the CLI's)`,
+    { timeout: 60 * 60 * 1000 },
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'oh-metric-api-load-'));
+      try {
+        const lib = fileURLToPath(new URL('../../dist/index.js', import.meta.url));
+        const started = Date.now();
+        const stderr = await node(['--input-type=module', '-e', API_LOAD(lib, join(dir, 'report'))]).done;
+        const kb = /MAXRSS (\d+)/.exec(stderr)?.[1];
+        const peakBytes = Number(kb) * 1024;
+        process.stdout.write(
+          `METRIC RSS peak ${(peakBytes / 1048576).toFixed(0)} MB in ${((Date.now() - started) / 1000).toFixed(0)} s (Report.addMetrics, no V8 flags; target ${MAX_RSS_BYTES / 1048576} MB)\n`,
+        );
+        expect(peakBytes).toBeGreaterThan(0);
       } finally {
         await rm(dir, { recursive: true, force: true });
       }

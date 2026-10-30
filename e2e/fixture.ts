@@ -18,6 +18,17 @@ export const DASHBOARDS_ENV_DEFAULT = 'ci';
 export const DASHBOARDS_HOSTILE_TITLE = '</script><img src=x onerror=alert(1)>';
 export const DASHBOARDS_HOSTILE_DESCRIPTION = 'line one\u2028line two';
 export const DASHBOARDS_HOSTILE_DEFAULT = 'a"b\\c';
+export {
+  HOSTILE_METRIC_ATTR,
+  HOSTILE_METRIC_ATTR_VALUE,
+  HOSTILE_METRIC_NAME,
+  HOSTILE_METRIC_UNIT,
+  LINKED_SPAN,
+  LINKED_TRACE,
+  METRIC_HIST,
+  ORPHAN_EXEMPLAR_TRACE,
+} from '../test-support/fixture-ids.js';
+
 export const REPORTS_DIR: URL = new URL('./.reports/', import.meta.url);
 export const REPORT_DIR: URL = new URL('main/', REPORTS_DIR);
 /** A second report with one very large trace, for the flame-graph render-time check. */
@@ -112,9 +123,6 @@ export const LOGS_ONLY_LOG_COUNT = 12;
  * `LINKED_TRACE`), 1 carries a trace id that is not in the traces file, and 5 carry no trace context.
  */
 export const LINKED_LOG_COUNT = 40;
-export const LINKED_TRACE = '5134a3f57d52d9e9822e617916d38b35';
-/** `payments.Charge` in `LINKED_TRACE`: 7 logs, among them 3 declined-card and 3 retry lines. */
-export const LINKED_SPAN = '1d8745a159cef356';
 export const ORPHAN_LOG_TRACE = 'ea30c7b71377a677cb3ce2b5f8f4abb9';
 /** The warn-level log in `LINKED_TRACE` whose span_id (`deadbeefdeadbeef`) is not a span of that trace. */
 export const DANGLING_SPAN_LOG_TEXT = 'span context lost: parent span unknown';
@@ -131,14 +139,6 @@ export const LINKED_DECLINED_COUNT = 6;
  * the same two resources, as `METRICS_COUNT` metric definitions.
  */
 export const METRICS_COUNT = 10;
-export const METRIC_HIST = 'http.server.request.duration';
-/** The trace id of the one exemplar on `METRIC_HIST` that points at a trace absent from the traces file. */
-export const ORPHAN_EXEMPLAR_TRACE = '9c1f0e5ab27d4c3388e0f6a1b5d2c47e';
-export const HOSTILE_METRIC_NAME = '</script><img src=x onerror=alert(1)>';
-/** The hostile metric's unit and the value of its one attribute, `HOSTILE_METRIC_ATTR`: markup that reaches the tooltip. */
-export const HOSTILE_METRIC_UNIT = '<img src=x onerror=alert(1)>';
-export const HOSTILE_METRIC_ATTR = 'hostile.attr';
-export const HOSTILE_METRIC_ATTR_VALUE = '"><img src=x onerror=alert(1)>';
 
 /** Fusion on `scale` is interactive within 3 s, and a trace selection updates its Logs and Metrics within 1 s. */
 export const FUSION_INTERACTIVE_BUDGET_MS = 3000;

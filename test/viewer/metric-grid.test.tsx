@@ -197,14 +197,59 @@ describe('MetricGrid', () => {
     expect(within(panel).queryByRole('tab', { name: 'Metrics' })).toBeNull();
   });
 
-  test('ltab=metrics on such a log falls back to the first tab, with no URL error', async () => {
+  test('ltab=metrics on such a log falls back to the first tab and says so, with no URL error', async () => {
     await renderAt(`#/logs?log=${NO_METRICS_LOG}&ltab=metrics`);
     const panel = await screen.findByTestId('log-panel');
     const first = await within(panel).findByRole('tab', { name: 'Attributes' });
     await metricLookupSettled();
     expect(first.getAttribute('aria-selected')).toBe('true');
     expect(within(panel).queryByTestId('metric-grid')).toBeNull();
+    expect(within(panel).getByText('This log has no metrics tab; showing Attributes.')).toBeTruthy();
     expect(screen.queryByText(/ltab:/)).toBeNull();
+  });
+
+  test('the size toggle redraws the cards at the chosen size', async () => {
+    const user = userEvent.setup();
+    await renderAt(`#/logs?log=${PAYMENTS_LOG}&ltab=metrics`);
+    await screen.findByTestId('metric-grid');
+    await metricLookupSettled();
+    await waitFor(() => expect(charts.length).toBeGreaterThan(0));
+    const small = screen.getByRole('button', { name: 'S' });
+    const large = screen.getByRole('button', { name: 'L' });
+    expect(small.getAttribute('aria-pressed')).toBe('true');
+    const before = charts.length;
+    await user.click(large);
+    expect(large.getAttribute('aria-pressed')).toBe('true');
+    expect(small.getAttribute('aria-pressed')).toBe('false');
+    await waitFor(() => expect(charts.length).toBeGreaterThan(before));
+  });
+
+  test('a failed metric listing shows the error card, not an empty grid', async () => {
+    const real = await createDataSource(createScriptedLoader(report.files), report.manifest, 10_000_000);
+    const rs = (await real.metricCatalog()).resources();
+    const failing: DataSource = {
+      ...real,
+      metricsForResources: () => Promise.reject(new Error('listing boom')),
+    };
+    render(
+      <ThemeProvider>
+        <GoToContext.Provider value={() => undefined}>
+          <MetricGrid
+            dataSource={failing}
+            origin={{
+              kind: 'dashboard',
+              resources: rs,
+              at: null,
+              window: { start: 0, end: 120e9 },
+              traceId: null,
+            }}
+          />
+        </GoToContext.Provider>
+      </ThemeProvider>,
+    );
+    expect(await screen.findByText('The metrics could not be listed')).toBeTruthy();
+    expect(screen.getByText('listing boom')).toBeTruthy();
+    expect(screen.queryByRole('img')).toBeNull();
   });
 
   test('Open in Explorer opens the first expanded group, one query per metric, filtered to the resource', async () => {
@@ -304,6 +349,24 @@ describe('explorerFilter', () => {
     const tags = (v: string): [string, AnyValue] => ['tags', { kind: 'array', values: [str(v)] }];
     const f = explorerFilter([res([svc, tags('x')])], [res([svc, tags('y')])]);
     expect(f.where).toBe('resource.attributes["service.name"] == "a"');
+    expect(f.unexcluded).toBe(1);
+  });
+
+  test('an origin that nothing can tell apart gives no where, and every other such resource is unexcluded', () => {
+    const tags = (v: string): [string, AnyValue] => ['tags', { kind: 'array', values: [str(v)] }];
+    const f = explorerFilter([res([tags('x')])], [res([tags('y')]), res([tags('z')])]);
+    expect(f.where).toBeNull();
+    expect(f.unexcluded).toBe(2);
+    // One with an extra attribute is excluded by it instead.
+    const g = explorerFilter([res([tags('x')])], [res([svc, tags('y')])]);
+    expect(g.where).toBe('resource.attributes["service.name"] == nil');
+    expect(g.unexcluded).toBe(0);
+  });
+
+  test('a resource slipping through two origin clauses is counted once', () => {
+    const tags = (v: string): [string, AnyValue] => ['tags', { kind: 'array', values: [str(v)] }];
+    const other = res([svc, tags('y')]);
+    const f = explorerFilter([res([svc, tags('x')]), res([svc, tags('w')])], [other]);
     expect(f.unexcluded).toBe(1);
   });
 

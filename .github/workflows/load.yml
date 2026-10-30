@@ -1,0 +1,26 @@
+name: load
+
+# The slow load tests (writer peak memory on 1M logs and on 200 metrics × 1,000 series × 360 points, through the CLI
+# and through the library API), on an ubuntu runner: on demand, and weekly so a regression shows up within the week.
+# They take 30-60 minutes, so they are not part of `ci`.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 6 * * 1"
+
+permissions:
+  contents: read
+
+env:
+  MISE_DISABLE_TOOLS: claude
+
+jobs:
+  load:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - run: lscpu | grep -E 'Model name|^CPU\(s\)'; free -m
+      # Builds first (the 1M-log test runs the built library), then runs the two gated test files.
+      - run: mise run test:load

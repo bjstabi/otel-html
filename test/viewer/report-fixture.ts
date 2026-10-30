@@ -758,3 +758,64 @@ export async function buildSummaryRun(run: {
   await session.close();
   return { files: reportFilesFromSnapshot(w.fs.snapshot(), OUT), manifest: manifestOf(w, OUT) };
 }
+
+/**
+ * A counter with an exemplar per point, flushed after every `pointsPerFlush` points and never closed: `flushes`
+ * segments listed, no level file. Series `j` has attribute `route=/r<j>`.
+ */
+export async function buildUnfinishedRun(run: {
+  flushes: number;
+  pointsPerFlush: number;
+  series: number;
+}): Promise<Fixture> {
+  const w = createTestWriter();
+  const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'create' });
+  const base = BigInt(EPOCH_NS);
+  const at = (s: number): string => String(base + BigInt(s) * 1_000_000_000n);
+  for (let f = 0; f < run.flushes; f++) {
+    const dataPoints: JsonObject[] = [];
+    for (let p = 0; p < run.pointsPerFlush; p++) {
+      const i = f * run.pointsPerFlush + p;
+      const s = i * 10;
+      for (let j = 0; j < run.series; j++)
+        dataPoints.push({
+          startTimeUnixNano: at(Math.max(0, s - 10)),
+          timeUnixNano: at(s),
+          asInt: '1',
+          attributes: [attr('route', { stringValue: `/r${j}` })],
+          exemplars: [
+            {
+              timeUnixNano: at(s),
+              asDouble: i,
+              traceId: (i + 1).toString(16).padStart(32, '0'),
+              spanId: (j + 1).toString(16).padStart(16, '0'),
+            },
+          ],
+        });
+    }
+    await session.add(
+      otlp({
+        resourceMetrics: [
+          {
+            resource: { attributes: [attr('service.name', { stringValue: 'api' })] },
+            scopeMetrics: [
+              {
+                scope: { name: 'test-scope' },
+                metrics: [
+                  {
+                    name: 'run.requests',
+                    unit: '1',
+                    sum: { aggregationTemporality: 1, isMonotonic: true, dataPoints },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      }),
+      'metrics',
+    );
+    await session.flush();
+  }
+  return { files: reportFilesFromSnapshot(w.fs.snapshot(), OUT), manifest: manifestOf(w, OUT) };
+}

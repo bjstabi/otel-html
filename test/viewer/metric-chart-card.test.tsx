@@ -13,6 +13,7 @@ const fakeChart = {
   // 1 px per second on x; y is ignored.
   convertFromPixel: (_f: unknown, p: [number, number]): [number, number] => [p[0] * plot.scale, p[1]],
   convertToPixel: (_f: unknown, p: [number, number]): [number, number] => [p[0] / 1e9, p[1]],
+  getWidth: (): number => 212,
 };
 
 vi.mock('../../src/viewer/components/chart.js', async () => {
@@ -291,6 +292,34 @@ describe('MetricChartCard', () => {
     plot.inside = false;
     await clickAt(12);
     expect(screen.queryAllByRole('menuitem')).toHaveLength(0);
+  });
+
+  test("a click outside the plot ends an earlier click's pending lookup: its menu never opens", async () => {
+    let release: (ok: boolean) => void = () => undefined;
+    const slow = new Promise<boolean>((r) => {
+      release = r;
+    });
+    setup({ exemplar: true, hasTrace: () => slow });
+    await clickAt(5); // pending
+    plot.inside = false;
+    await clickAt(300);
+    await act(async () => release(true));
+    expect(screen.queryAllByRole('menuitem')).toHaveLength(0);
+  });
+
+  test("a drag released beyond the plot zooms to the plot's edge", async () => {
+    const { zooms } = setup({});
+    // The plot spans x = 56 (GRID.left) to 212 - 12 (GRID.right); the fake maps 1 px to 1 s. The release at 500 px
+    // is outside (the second containPixel call); the card's probe at the edge is inside again.
+    const inside = fakeChart.containPixel;
+    let calls = 0;
+    fakeChart.containPixel = () => calls++ !== 1;
+    try {
+      await drag(100, 500);
+    } finally {
+      fakeChart.containPixel = inside;
+    }
+    expect(zooms).toEqual([{ start: 100 * S, end: 200 * S }]);
   });
 
   test('a slow lookup from an earlier click does not replace a later menu', async () => {

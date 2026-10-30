@@ -4,6 +4,8 @@ import { describe, expect, test } from 'vitest';
 import {
   DANGLING_SPAN_LOG_TEXT,
   HOSTILE_LOG_TEXT,
+  HOSTILE_METRIC_NAME,
+  HOSTILE_METRIC_UNIT,
   LINKED_DECLINED_COUNT,
   LINKED_LOG_COUNT,
   LINKED_SEVERITY_COUNTS,
@@ -12,11 +14,13 @@ import {
   LINKED_WARN_PLUS_COUNT,
   METRIC_HIST,
   METRICS_COUNT,
+  ORPHAN_EXEMPLAR_TRACE,
   ORPHAN_LOG_TRACE,
 } from '../../e2e/fixture.js';
 import { convert } from '../../src/api/convert.js';
 import { merge } from '../../src/api/index.js';
 import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
+import { metricExemplarPath, parseExemplarFile } from '../../src/format/metric-files.js';
 import { traceShardKey, traceShardPath } from '../../src/format/paths.js';
 import { TraceShardSchema } from '../../src/format/trace-shard.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
@@ -24,7 +28,14 @@ import { ExportLogsServiceRequestSchema } from '../../src/model/gen/opentelemetr
 import type { FileSystem } from '../../src/writer/ports.js';
 import { logRecord, logsRequest } from '../../test-support/otlp-builders.js';
 import { createTestWriter, type TestWriter } from '../../test-support/writer-deps.js';
-import { allLogs, allSpans, manifestOf, metricCatalogOf, spansRequest } from '../writer/helpers.js';
+import {
+  allLogs,
+  allSpans,
+  manifestOf,
+  metricCatalogOf,
+  readDataFile,
+  spansRequest,
+} from '../writer/helpers.js';
 
 async function failure(p: Promise<unknown>): Promise<OtelHtmlError> {
   try {
@@ -354,5 +365,19 @@ describe('the linked fixture', () => {
     expect(entries.filter((e) => e.noValue > 0).map((e) => [e.name, e.noValue])).toEqual([
       ['process.open_file_descriptor.count', 1],
     ]);
+    // Every kind is catalogued, the hostile name as text, and the histogram's exemplars keep their trace ids
+    // (one into the linked trace, one into a trace the report lacks).
+    expect(new Set(entries.map((e) => e.type))).toEqual(
+      new Set(['sum', 'gauge', 'histogram', 'exponentialHistogram', 'summary']),
+    );
+    expect(entries.some((e) => e.name === HOSTILE_METRIC_NAME && e.unit === HOSTILE_METRIC_UNIT)).toBe(true);
+    const hist = entries.find((e) => e.name === METRIC_HIST);
+    if (hist === undefined) throw new Error('no histogram entry');
+    const exPath = metricExemplarPath(hist.id);
+    const exemplars = parseExemplarFile(readDataFile(w, 'r', exPath), exPath).exemplars;
+    const traceIds = new Set(exemplars.map((e) => e.traceId));
+    expect(traceIds.has(LINKED_TRACE)).toBe(true);
+    expect(traceIds.has(ORPHAN_EXEMPLAR_TRACE)).toBe(true);
+    expect(exemplars.every((e) => e.series < hist.series)).toBe(true);
   });
 });

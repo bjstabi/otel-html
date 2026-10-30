@@ -139,15 +139,19 @@ function tipLine(p: TipParam, unit: string): string {
   return `${p.marker ?? ''}${name}: ${num}`;
 }
 
+/** What a line's colour is keyed on: its service when it has one (so one service is one colour), else its label. */
+export const seriesColorKey = (s: SeriesPoints): string => s.resourceService ?? s.label;
+
 function lineColor(s: SeriesPoints, colors: ColorAssigner): string {
-  return token(seriesToken(colors.colorFor(s.resourceService ?? s.label)));
+  return token(seriesToken(colors.colorFor(seriesColorKey(s))));
 }
 
 function logSafe(scale: 'linear' | 'log', v: number | null): number | null {
   return scale === 'log' && v !== null && v <= 0 ? null : v;
 }
 
-const GRID = { left: 56, right: 12, bottom: 24 } as const;
+/** The plot's margins in px; the card uses them to clamp a drag released outside the plot. */
+export const GRID = { left: 56, right: 12, bottom: 24 } as const;
 /** Diameter in px of the dot drawn for a point with no neighbour to join (wider than the 2px line). */
 const ISOLATED_DOT_PX = 6;
 
@@ -174,16 +178,50 @@ export function buildMetricChartOption(input: MetricChartInput): MetricChartOpti
     : (mergeEchartsOption(option, input.echarts) as MetricChartOptionResult);
 }
 
+/** Legend entries longer than this are cut with an ellipsis; the legend's tooltip carries the whole label. */
+const LEGEND_LABEL_MAX = 48;
+
+/**
+ * ECharts keys series by name, so two series with one label would merge in the legend and the tooltip: the second
+ * and later ones get ` (2)`, ` (3)`. Two queries aliased alike, or `by` groups shown alike, give equal labels.
+ */
+export function uniqueLabels(labels: readonly string[]): string[] {
+  const seen = new Map<string, number>();
+  return labels.map((label) => {
+    const n = (seen.get(label) ?? 0) + 1;
+    seen.set(label, n);
+    return n === 1 ? label : `${label} (${n})`;
+  });
+}
+
+const truncateLabel = (name: string): string =>
+  name.length > LEGEND_LABEL_MAX ? `${name.slice(0, LEGEND_LABEL_MAX - 1)}…` : name;
+
+/** The unit the series share, else none (mixed units label no axis); `1` when there is no series. */
+export function sharedUnit(results: readonly MetricQueryResult[]): string {
+  const units = new Set(results.flatMap((r) => r.series.map((s) => s.unit)));
+  const [only] = units;
+  return units.size === 0 ? '1' : units.size === 1 && only !== undefined ? only : '';
+}
+
 function buildOption(input: MetricChartInput): MetricChartOptionResult {
   const { results, display, scale, unit, colors } = input;
   const all = results.flatMap((r) => r.series);
+  const names = uniqueLabels(all.map((s) => s.label));
   const muted = token('--oh-muted');
   const accent = token('--oh-accent');
   const surface = token('--oh-surface');
   const base = {
     animation: false,
     grid: { ...GRID, top: all.length > 1 ? 28 : 12, containLabel: false },
-    legend: { show: all.length > 1, top: 0, type: 'scroll' as const, data: all.map((s) => s.label) },
+    legend: {
+      show: all.length > 1,
+      top: 0,
+      type: 'scroll' as const,
+      data: names,
+      formatter: truncateLabel,
+      tooltip: { show: true },
+    },
   };
 
   if (display === 'heatmap' || display === 'distribution') {
@@ -199,34 +237,10 @@ function buildOption(input: MetricChartInput): MetricChartOptionResult {
   const lines = all.map((s, i) => {
     const color = lineColor(s, colors);
     const data = s.points.map((p) => [p[0], logSafe(scale, p[1])]);
-    const common = { name: s.label, data, itemStyle: { color } };
-    const markLine =
-      i === 0 && input.marker !== null
-        ? {
-            silent: true,
-            symbol: 'none',
-            label: { show: false },
-            lineStyle: { color: accent, type: 'dashed' as const, width: 1 },
-            data: [{ xAxis: input.marker }],
-          }
-        : undefined;
-    const band = i === 0 ? input.band : null;
-    const markArea =
-      band == null
-        ? undefined
-        : {
-            silent: true,
-            itemStyle: { color: accent, opacity: BAND_OPACITY },
-            data: [[{ xAxis: band.start }, { xAxis: band.end }]],
-          };
-    const mark = {
-      ...(markLine === undefined ? {} : { markLine }),
-      ...(markArea === undefined ? {} : { markArea }),
-    };
-    if (display === 'bars') return { ...common, ...mark, type: 'bar' as const, barMaxWidth: 12 };
+    const common = { name: names[i] ?? s.label, data, itemStyle: { color } };
+    if (display === 'bars') return { ...common, type: 'bar' as const, barMaxWidth: 12 };
     return {
       ...common,
-      ...mark,
       data: withIsolatedDots(data),
       type: 'line' as const,
       // Only the dots of isolated points are drawn (per item); the line itself has no symbols, and none react to the
@@ -240,6 +254,41 @@ function buildOption(input: MetricChartInput): MetricChartOptionResult {
     };
   });
 
+  // The marker and the band ride on a series of their own, so they stay when a legend click hides a line.
+  const markLine =
+    input.marker === null
+      ? undefined
+      : {
+          silent: true,
+          symbol: 'none',
+          label: { show: false },
+          lineStyle: { color: accent, type: 'dashed' as const, width: 1 },
+          data: [{ xAxis: input.marker }],
+        };
+  const markArea =
+    input.band == null
+      ? undefined
+      : {
+          silent: true,
+          itemStyle: { color: accent, opacity: BAND_OPACITY },
+          data: [[{ xAxis: input.band.start }, { xAxis: input.band.end }]],
+        };
+  const marks =
+    markLine === undefined && markArea === undefined
+      ? []
+      : [
+          {
+            name: 'marks',
+            type: 'line' as const,
+            data: [],
+            silent: true,
+            showSymbol: false,
+            legendHoverLink: false,
+            tooltip: { show: false },
+            ...(markLine === undefined ? {} : { markLine }),
+            ...(markArea === undefined ? {} : { markArea }),
+          },
+        ];
   const scatter = input.exemplars ? exemplarSeries(input, accent, surface) : [];
 
   return {
@@ -260,22 +309,35 @@ function buildOption(input: MetricChartInput): MetricChartOptionResult {
       type: scale === 'log' ? 'log' : 'value',
       axisLabel: { color: muted, formatter: (v: number) => formatMetricValue(unit, v) },
     },
-    series: [...lines, ...scatter],
+    series: [...lines, ...marks, ...scatter],
   };
 }
 
 function exemplarSeries(input: MetricChartInput, accent: string, surface: string): object[] {
-  const { colors, scale } = input;
-  const byKey = new Map(input.results.flatMap((r) => r.series.map((s) => [s.key, s] as const)));
+  const { colors, scale, display } = input;
+  const all = input.results.flatMap((r) => r.series);
+  const byKey = new Map(all.map((s) => [s.key, s] as const));
+  // Area stacks the lines in series order, so an exemplar sits on its own series' line: its value plus the values
+  // of the series under it in the exemplar's bucket.
+  const stackUnder = (s: SeriesPoints, time: number, widthNs: number): number => {
+    const start = Math.floor(time / widthNs) * widthNs;
+    let under = 0;
+    for (const other of all) {
+      if (other === s) break;
+      under += logSafe(scale, other.points.find((p) => p[0] === start)?.[1] ?? null) ?? 0;
+    }
+    return under;
+  };
   const data = input.results
-    .flatMap((r) => r.exemplars)
+    .flatMap((r) => r.exemplars.map((e) => ({ e, widthNs: r.widthNs })))
     // An exemplar without a trace id has nothing to open.
-    .filter((e) => e.traceId !== null && logSafe(scale, e.value) !== null)
-    .map((e) => {
+    .filter(({ e }) => e.traceId !== null && logSafe(scale, e.value) !== null)
+    .map(({ e, widthNs }) => {
       const s = byKey.get(e.seriesKey);
       const hit = e.traceId === input.highlightTrace;
+      const y = display === 'area' && s !== undefined ? e.value + stackUnder(s, e.time, widthNs) : e.value;
       return {
-        value: [e.time, e.value],
+        value: [e.time, y],
         traceId: e.traceId,
         spanId: e.spanId,
         symbolSize: hit ? 12 : 9,

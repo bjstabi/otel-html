@@ -1,7 +1,7 @@
 import { CircleAlert } from 'lucide-react';
 import { type JSX, useMemo, useState } from 'react';
 import { anyValueToDisplay } from '../../model/anyvalue.js';
-import type { RelNanos, SpanId, UnixNanos } from '../../model/ids.js';
+import type { SpanId, UnixNanos } from '../../model/ids.js';
 import { type ResourceRecord, StatusCode } from '../../model/records.js';
 import { formatDuration } from '../../semconv/formatters.js';
 import { ResultsTable, type SortState } from '../components/results-table.js';
@@ -216,7 +216,7 @@ export function TraceMetricsTab(props: {
     return {
       kind: 'trace',
       resources,
-      at: f.start as RelNanos,
+      at: f.start,
       window: gridWindow({ start: f.start, end: f.end }, range),
       traceId: detail.traceId,
     };

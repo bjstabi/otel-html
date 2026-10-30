@@ -131,6 +131,11 @@ export async function defaultShow(m: LoadedMetric): Promise<string> {
 // Level pick
 // ---------------------------------------------------------------------------------------------
 
+/**
+ * Buckets of `widthNs` a window touches. Both ends are inclusive (a point at `end` is charted), so a window ending
+ * on a bucket boundary holds one bucket more than its length over the width; `pickLevel` counts the same buckets
+ * the chart draws, which is what `maxPoints` bounds.
+ */
 const bucketsOver = (w: TimeWindow, widthNs: number): number =>
   Math.floor(w.end / widthNs) - Math.floor(w.start / widthNs) + 1;
 
@@ -457,6 +462,14 @@ export async function runMetricQueryAtWidth(
 ): Promise<MetricQueryResult> {
   const info = levelAtWidth(m.levels, widthNs);
   if (info === null) return runAtLevel(m, q, window, null, null, signal);
+  if (info.widthNs > widthNs) {
+    // Every finished metric has level 0, the finest width any result can carry; only a report missing it gets here.
+    throw new OtelHtmlError('usage', {
+      path: `metric ${m.entry.name} levels`,
+      expected: `a level no wider than ${widthNs} ns`,
+      actual: `finest ${info.widthNs} ns`,
+    });
+  }
   // A counter's running total counts every delta since the run start, not only the window's. The coarsest level
   // (one bounded file, `LEVEL_MAX_BUCKETS` per series) supplies the deltas up to the last coarse bucket boundary
   // before the first charted bucket, and the chart's level, read from that boundary on, the rest: exact, and
@@ -686,6 +699,8 @@ function runAtLevel(
 
   const fns = applyFns(series, widthNs, q.fn);
   const kept = new Set(fns.series.map((s) => s.key));
+  // What `top`/`bottom` dropped is out of the exemplars, the heatmap and the distribution alike.
+  const keptMembers = [...groups.values()].filter((g) => kept.has(g.key)).flatMap((g) => g.members);
   const exemplars = level.exemplars.flatMap((x) => {
     const seriesKey = groupOfSeries.get(x.series)?.key;
     if (seriesKey === undefined || !kept.has(seriesKey) || x.time < window.start || x.time > window.end)
@@ -693,11 +708,11 @@ function runAtLevel(
     return [{ time: x.time, value: x.value, traceId: x.traceId, spanId: x.spanId, seriesKey }];
   });
   // Heatmap and distribution need one bucket layout across every series charted.
-  const oneLayout = new Set(allMembers.map((mb) => JSON.stringify(mb.s.def.bounds))).size === 1;
+  const oneLayout = new Set(keptMembers.map((mb) => JSON.stringify(mb.s.def.bounds))).size === 1;
   if (kind === 'hist' && !oneLayout) note(NOTES.heatBoundsDiffer);
   const views =
     (kind === 'hist' || kind === 'exp') && oneLayout
-      ? histogramViews(mergedPerBucket(allMembers, frame), frame.b0, widthNs)
+      ? histogramViews(mergedPerBucket(keptMembers, frame), frame.b0, widthNs)
       : { heat: null, distribution: null };
   return { ...result(fns.series, { exemplars, ...views }), widthNs: fns.widthNs };
 }

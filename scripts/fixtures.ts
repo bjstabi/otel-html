@@ -41,7 +41,7 @@ import {
   LINKED_TRACE,
   METRIC_HIST,
   ORPHAN_EXEMPLAR_TRACE,
-} from '../e2e/fixture.js';
+} from '../test-support/fixture-ids.js';
 
 const OUT = new URL('../fixtures/', import.meta.url);
 /** 2023-11-14T22:13:20Z, the same fixed instant the e2e inputs use. */
@@ -914,7 +914,9 @@ function restamp(rm: OtlpResourceMetrics, k: number): void {
     for (const m of sm.metrics) {
       const temporality = (m.sum ?? m.histogram ?? m.exponentialHistogram)?.aggregationTemporality;
       for (const p of pointsOf(m)) {
-        p.startTimeUnixNano = String(temporality === 1 ? previous : START_NS);
+        // A gauge has no start time (the SDK leaves it 0); the others start the collection (delta) or the run.
+        if (m.gauge !== undefined) delete p.startTimeUnixNano;
+        else p.startTimeUnixNano = String(temporality === 1 ? previous : START_NS);
         p.timeUnixNano = String(end);
       }
     }

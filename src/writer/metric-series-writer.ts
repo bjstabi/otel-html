@@ -331,7 +331,7 @@ export class MetricSeriesWriter {
     segments: readonly number[],
   ): Promise<{ l0: BucketSeries[]; exemplars: StoredExemplar[] }> {
     const merged = new MetricBuffer(this.#exemplars);
-    let exemplars: StoredExemplar[] = [];
+    const exemplars: StoredExemplar[] = [];
     for (const n of [...segments].sort((a, b) => a - b)) {
       const path = metricSegmentPath(id, n);
       const seg = this.#ownSegments.has(path)
@@ -343,7 +343,8 @@ export class MetricSeriesWriter {
           if (agg !== undefined) merged.add(x.id, x.t[i] ?? 0, agg, path);
         }
       }
-      exemplars = exemplars.concat(seg.exemplars);
+      // Appended one by one: `concat` copied the list per segment, and `push(...list)` has an argument limit.
+      for (const e of seg.exemplars) exemplars.push(e);
     }
     return { l0: merged.series(metricDir(id)), exemplars };
   }

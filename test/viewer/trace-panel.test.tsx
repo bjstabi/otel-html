@@ -219,9 +219,10 @@ describe('TracePanel tabs', () => {
     expect(store.getState().spanId).toBe(errDetail().spans[1]?.span.spanId);
   });
 
-  test('a stored tab that is not available falls back to the first tab', async () => {
+  test('a stored tab that is not available falls back to the first tab and says so', async () => {
     mount({}, { tab: 'errors' });
     expect(await screen.findByTestId('flame-graph')).toBeTruthy();
+    expect(screen.getByText(/This trace has no errors tab; showing /)).toBeTruthy();
   });
 
   test('Services lists every service with its span count', async () => {

@@ -13,6 +13,7 @@ const fakeChart = {
   getZr: (): Zr => ({ on: (n, h) => zrHandlers.set(n, h), off: () => undefined }),
   convertFromPixel: (_f: unknown, p: [number, number]): [number, number] => [p[0] * 1e9, p[1]],
   convertToPixel: (_f: unknown, p: [number, number]): [number, number] => [p[0] / 1e9, p[1]],
+  getWidth: (): number => 400,
 };
 
 vi.mock('../../src/viewer/components/chart.js', async () => {
@@ -127,6 +128,64 @@ describe('Metrics Explorer', () => {
     await user.type(expr, 'a * 2{Enter}');
     expect(await screen.findByRole('img', { name: /: 2 series$/ })).toBeTruthy();
     expect(urlMetrics()?.formulas).toEqual([{ id: 'f1', expr: 'a * 2', alias: null, hidden: false }]);
+  });
+
+  test('an alias renames the chart and its series at once; hiding a query removes its chart', async () => {
+    const user = userEvent.setup();
+    await renderAt(metricsHash({ metric: 'checkout.queue.depth', show: 'avg' }));
+    await screen.findByRole('img', { name: /^checkout\.queue\.depth · avg: 1 series$/ });
+    const row = screen.getByLabelText('Query a');
+    await user.click(within(row).getByRole('button', { name: /alias/i }));
+    await user.type(within(row).getByLabelText('Alias of a'), 'depth{Enter}');
+    expect(await screen.findByRole('img', { name: /^depth: 1 series$/ })).toBeTruthy();
+    await waitFor(() => expect(urlMetrics()?.queries[0]?.alias).toBe('depth'));
+    await user.click(screen.getByLabelText('Hide a'));
+    await waitFor(() => expect(urlMetrics()?.queries[0]?.hidden).toBe(true));
+    expect(screen.queryByRole('img', { name: /series$/ })).toBeNull();
+  });
+
+  test('a by checkbox splits the lines per value; the function menu appends to fn', async () => {
+    const user = userEvent.setup();
+    await renderAt(metricsHash({ metric: 'http.server.requests', show: 'rate' }));
+    await screen.findByRole('img', { name: /: 1 series$/ });
+    await user.click(screen.getByLabelText('By of a'));
+    await user.click(await screen.findByLabelText('resource.attributes["service.name"]'));
+    // checkout and payments each get a line.
+    expect(await screen.findByRole('img', { name: /: 2 series$/ })).toBeTruthy();
+    await waitFor(() =>
+      expect(urlMetrics()?.queries[0]?.by).toEqual(['resource.attributes["service.name"]']),
+    );
+    await user.keyboard('{Escape}');
+    await user.click(screen.getByLabelText('Add function to a'));
+    const [item] = await screen.findAllByRole('menuitem');
+    if (item === undefined) throw new Error('no function in the menu');
+    await user.click(item);
+    await waitFor(() => expect(urlMetrics()?.queries[0]?.fn).toHaveLength(1));
+  });
+
+  test('the picker search narrows the metric list', async () => {
+    const user = userEvent.setup();
+    await renderAt('#/metrics');
+    await screen.findByRole('img', { name: /series$/ });
+    await user.click(screen.getByLabelText('Metric of a'));
+    const search = await screen.findByLabelText('Search metrics');
+    const list = screen.getByRole('list', { name: 'Metrics' });
+    expect(within(list).getAllByRole('listitem').length).toBeGreaterThan(1);
+    await user.type(search, 'queue.depth');
+    await waitFor(() => expect(within(list).getAllByRole('listitem')).toHaveLength(1));
+    expect(list.textContent).toContain('checkout.queue.depth');
+  });
+
+  test('a drag on the chart zooms: t lands in the URL', async () => {
+    await renderAt(metricsHash({ metric: 'checkout.queue.depth', show: 'avg' }));
+    await screen.findByRole('img', { name: /series$/ });
+    await act(async () => {
+      zrHandlers.get('mousedown')?.({ offsetX: 5, offsetY: 0, event: { clientX: 5, clientY: 0 } });
+      zrHandlers.get('mouseup')?.({ offsetX: 15, offsetY: 0, event: { clientX: 15, clientY: 0 } });
+    });
+    await waitFor(() => expect(parseUrlState(window.location.hash).state.t).toBeDefined());
+    const t = parseUrlState(window.location.hash).state.t ?? '';
+    expect(t).toMatch(/^5000000000~15000000000$/);
   });
 
   test('Heatmap and Distribution are disabled with only a gauge query, enabled with a histogram', async () => {

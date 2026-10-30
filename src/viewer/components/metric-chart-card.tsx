@@ -9,9 +9,11 @@ import { useColorAssigner } from '../theme/colors-context.js';
 import { Chart, type EChartsType } from './chart.js';
 import {
   buildMetricChartOption,
+  GRID,
   heatAxis,
   METRIC_CHART_HEIGHT,
   type MetricSize,
+  sharedUnit,
 } from './metric-chart-option.js';
 
 export type ChartPick =
@@ -124,7 +126,7 @@ export function MetricChartCard(props: MetricChartCardProps): JSX.Element {
     return () => mo.disconnect();
   }, []);
 
-  const unit = results[0]?.series[0]?.unit ?? '1';
+  const unit = sharedUnit(results);
   // biome-ignore lint/correctness/useExhaustiveDependencies: themeTick re-reads the CSS colour tokens
   const option = useMemo(
     () =>
@@ -181,7 +183,7 @@ export function MetricChartCard(props: MetricChartCardProps): JSX.Element {
   useEffect(() => {
     if (chart === null) return;
     const zr = chart.getZr();
-    let down: { x: number; t: number } | null = null;
+    let down: { x: number; y: number; t: number } | null = null;
     // Time under the pointer in whole nanoseconds (ECharts maps pixels to fractional values, and a window must be
     // integers), or null off the plot, on a distribution (no time axis) or when unconvertible.
     // A heatmap's x axis is a category index, mapped back to its bucket's time.
@@ -197,14 +199,19 @@ export function MetricChartCard(props: MetricChartCardProps): JSX.Element {
     };
     const onDown = (e: ZrEvent): void => {
       const t = timeAt(e);
-      down = t === null ? null : { x: e.offsetX, t };
+      down = t === null ? null : { x: e.offsetX, y: e.offsetY, t };
     };
     const onUp = (e: ZrEvent): void => {
       const d = down;
       down = null;
       if (d === null || Math.abs(e.offsetX - d.x) < DRAG_PX) return;
       const a = d.t;
-      const b = timeAt(e);
+      // A drag released beyond the plot's edge zooms to that edge.
+      const atEdge = (): number | null => {
+        const x = Math.min(Math.max(e.offsetX, GRID.left), chart.getWidth() - GRID.right);
+        return timeAt({ ...e, offsetX: x, offsetY: d.y });
+      };
+      const b = timeAt(e) ?? atEdge();
       if (b === null) return;
       const { display, results: rs } = live.current;
       // A heatmap column spans its whole bucket.
@@ -219,11 +226,15 @@ export function MetricChartCard(props: MetricChartCardProps): JSX.Element {
       const { results: rs, display, scale, exemplars, hasTrace: check } = live.current;
       const t = timeAt(e);
       const first = rs[0];
-      if (t === null || first === undefined) return;
-      const width = first.widthNs;
-      const start = Math.floor(t / width) * width;
+      // A click off the plot opens nothing, and ends an earlier click's pending lookup as a later click would.
       const mine = ++seq.current;
-      const window = { start, end: start + width };
+      if (t === null || first === undefined) return;
+      // The bucket under the click, at the width of the query the menu is for (they can differ in a combined chart).
+      const windowAt = (queryId: string): TimeWindow => {
+        const width = rs.find((r) => r.queryId === queryId)?.widthNs ?? first.widthNs;
+        const start = Math.floor(t / width) * width;
+        return { start, end: start + width };
+      };
       let hit: { traceId: string; spanId: string | null; queryId: string } | null = null;
       let best = HIT_PX;
       if (exemplars && display !== 'heatmap') {
@@ -242,11 +253,12 @@ export function MetricChartCard(props: MetricChartCardProps): JSX.Element {
       const open = (trace: Trace | null): void => {
         // A slower lookup from an earlier click must not replace a later one.
         if (mine !== seq.current) return;
+        const queryIds = hit === null ? queriesAt(chart, rs, display, scale, t, e.offsetY) : [hit.queryId];
         setMenu({
           x: e.event.clientX,
           y: e.event.clientY,
-          window,
-          queryIds: hit === null ? queriesAt(chart, rs, display, scale, t, e.offsetY) : [hit.queryId],
+          window: windowAt(queryIds[0] ?? first.queryId),
+          queryIds,
           trace,
         });
       };

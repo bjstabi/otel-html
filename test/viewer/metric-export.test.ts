@@ -46,6 +46,33 @@ describe('exportMetricCsv', () => {
   test('no results is just the header', () => {
     expect(exportMetricCsv([])).toBe('time,query,series,value');
   });
+
+  test('a histogram result adds its heatmap cells and its distribution, labelled by bucket', () => {
+    const h: MetricQueryResult = {
+      ...result('h', []),
+      heat: {
+        bounds: [1, 5],
+        cells: [
+          [0, 0, 3],
+          [10 * S, 2, 4],
+        ],
+      },
+      distribution: { bounds: [1, 5], counts: [3, 0, 4] },
+    };
+    const lines = exportMetricCsv([h]).split('\r\n');
+    expect(lines.slice(1)).toEqual([
+      '0,h,heat ≤1,3',
+      `${10 * S},h,heat >5,4`,
+      ',h,distribution ≤1,3',
+      ',h,distribution ≤5,0',
+      ',h,distribution >5,4',
+    ]);
+    const [json] = JSON.parse(exportMetricJson([h])) as { heat: unknown; distribution: unknown }[];
+    expect(json?.heat).toEqual(h.heat);
+    expect(json?.distribution).toEqual(h.distribution);
+    // A line result carries neither key.
+    expect(JSON.parse(exportMetricJson(RESULTS))[0]).not.toHaveProperty('heat');
+  });
 });
 
 describe('exportMetricJson', () => {

@@ -184,15 +184,21 @@ function expectMetric(actual: number, id: number, path: string): void {
   if (actual !== id) throw invalid(`${path}.metric`, String(id), String(actual));
 }
 
-/** `pages` of one level (in page order, or one whole file) as `LevelData`: a series' buckets follow page order. */
+/**
+ * `pages` of one level (in page order, or one whole file) as `LevelData`: a series' buckets follow page order. A
+ * series id at or past `seriesCount` (the catalog's committed count) is left out, buckets and exemplars alike, like
+ * the definitions past it in `series.js`: a flush that never committed may have written it.
+ */
 function toLevelData(
   level: number,
   pages: readonly (readonly BucketSeries[])[],
   exemplars: readonly StoredExemplar[],
+  seriesCount: number,
 ): LevelData {
   const series = new Map<number, { t: number[]; a: BucketAgg[] }>();
   for (const page of pages) {
     for (const s of page) {
+      if (s.id >= seriesCount) continue;
       const cur = series.get(s.id);
       if (cur === undefined) series.set(s.id, { t: [...s.t], a: [...s.a] });
       else {
@@ -201,7 +207,12 @@ function toLevelData(
       }
     }
   }
-  return { level, widthNs: levelWidthNs(level), series, exemplars };
+  return {
+    level,
+    widthNs: levelWidthNs(level),
+    series,
+    exemplars: exemplars.filter((e) => e.series < seriesCount),
+  };
 }
 
 async function loadSeriesDefs(
@@ -356,6 +367,7 @@ export async function loadMetric(
         k,
         parts.map((f) => f.series),
         exemplars,
+        entry.series,
       );
     },
     // Keyed on the pages read, so equal windows share one LevelData and a whole level is built once.
@@ -417,7 +429,8 @@ async function loadFromSegments(
   const all = [...exemplars, ...segFiles.flatMap((f) => f.exemplars)];
   const range = bucketRange(merged);
   const count = range === null ? 0 : levelCount(range.min * LEVEL0_WIDTH_NS, range.max * LEVEL0_WIDTH_NS);
-  const levels = count === 0 ? [] : deriveLevels(merged, count).map((s, k) => toLevelData(k, [s], all));
+  const levels =
+    count === 0 ? [] : deriveLevels(merged, count).map((s, k) => toLevelData(k, [s], all, entry.series));
   return metricFromLevels({ entry, series, gaps: null, quantiles: null, fromSegments: true }, levels);
 }
 
