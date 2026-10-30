@@ -8,9 +8,10 @@ import {
   type ReadableSpan,
   SimpleSpanProcessor,
 } from '@opentelemetry/sdk-trace-base';
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import { convert, merge } from '../../src/api/convert.js';
-import { defaultDeps, Report } from '../../src/api/report.js';
+import { startReceiver } from '../../src/api/receiver.js';
+import { defaultDeps, depsOf, Report } from '../../src/api/report.js';
 import { createOtelTracer } from '../../src/api/telemetry.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { ExportTraceServiceRequestSchema } from '../../src/model/gen/opentelemetry/proto/collector/trace/v1/trace_service_pb.js';
@@ -221,5 +222,24 @@ describe('viewer assets are validated before any data is processed', () => {
     const e = await failure(Report.create({ out: 'r' }, { ...w.deps, viewerAssets: evil }));
     expect(e.code).toBe('invalid-report');
     expect(await w.fs.exists('r')).toBe(false);
+  });
+
+  test('depsOf returns the deps the report was created with', async () => {
+    const w = createTestWriter();
+    const logger = { debug() {}, info() {}, warn() {}, error() {} };
+    const report = await Report.create({ out: 'r' }, { ...w.deps, logger });
+    expect(depsOf(report).logger).toBe(logger);
+    await report.close();
+  });
+
+  test('a startReceiver over a good report never re-validates the viewer assets', async () => {
+    const w = createTestWriter();
+    const files = vi.spyOn(w.deps.viewerAssets, 'files');
+    const report = await Report.create({ out: 'r' }, w.deps);
+    expect(files).toHaveBeenCalledTimes(1);
+    const rx = await startReceiver(report, { http: { port: 0 }, grpc: false });
+    await rx.close();
+    expect(files).toHaveBeenCalledTimes(1);
+    await report.close();
   });
 });

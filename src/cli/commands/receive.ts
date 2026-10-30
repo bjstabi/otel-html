@@ -65,7 +65,7 @@ export async function openReceiver(
     full,
   );
   try {
-    return { report, receiver: await startReceiver(report, {}, deps) };
+    return { report, receiver: await startReceiver(report) };
   } catch (e) {
     await sessionOf(report)
       .abort()

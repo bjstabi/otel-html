@@ -37,6 +37,8 @@ export type { AddResult };
 export let sessionOf: (report: Report) => WriterSession;
 /** The resolved configuration a report was created with. */
 export let configOf: (report: Report) => ResolvedConfig;
+/** The validated deps a report was created with. */
+export let depsOf: (report: Report) => WriterDeps;
 
 /** The composition root: every real dependency is wired here and nowhere else. */
 export function defaultDeps(): WriterDeps {
@@ -141,15 +143,19 @@ const NOTHING: AddResult = { accepted: 0, dropped: 0, duplicates: 0 };
 export class Report {
   readonly #session: WriterSession;
   readonly #config: ResolvedConfig;
+  readonly #deps: WriterDeps;
 
+  // assigned once by Report's static block; module-level `let` because the class body cannot reach a private field from outside
   static {
     sessionOf = (report) => report.#session;
     configOf = (report) => report.#config;
+    depsOf = (report) => report.#deps;
   }
 
-  private constructor(session: WriterSession, config: ResolvedConfig) {
+  private constructor(session: WriterSession, config: ResolvedConfig, deps: WriterDeps) {
     this.#session = session;
     this.#config = config;
+    this.#deps = deps;
   }
 
   static async create(options: ReportOptions, deps?: Partial<WriterDeps>): Promise<Report> {
@@ -168,7 +174,7 @@ export class Report {
       config,
       mode: options.append === true ? 'append' : 'create',
     });
-    return new Report(session, config);
+    return new Report(session, config, full);
   }
 
   /** SDK spans, a protobuf `ExportTraceServiceRequest`, or an OTLP-JSON object. */
