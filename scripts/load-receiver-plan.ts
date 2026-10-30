@@ -110,6 +110,41 @@ export function parseMaxRssKb(stderr: string): number | null {
   return m?.[1] === undefined ? null : Number(m[1]);
 }
 
+export interface StallStats {
+  loopP99Ms: number;
+  loopMaxMs: number;
+  gcCount: number;
+  gcTotalMs: number;
+  gcMaxMs: number;
+}
+
+/** The `LOOP p99 <ms> max <ms>` and `GC count <n> total <ms> max <ms>` lines the preload writes as the process exits. */
+export function parseStallStats(stderr: string): StallStats | null {
+  const loop = /^LOOP p99 (\d+(?:\.\d+)?) max (\d+(?:\.\d+)?)$/m.exec(stderr);
+  const gc = /^GC count (\d+) total (\d+(?:\.\d+)?) max (\d+(?:\.\d+)?)$/m.exec(stderr);
+  if (loop?.[1] === undefined || loop[2] === undefined) return null;
+  if (gc?.[1] === undefined || gc[2] === undefined || gc[3] === undefined) return null;
+  return {
+    loopP99Ms: Number(loop[1]),
+    loopMaxMs: Number(loop[2]),
+    gcCount: Number(gc[1]),
+    gcTotalMs: Number(gc[2]),
+    gcMaxMs: Number(gc[3]),
+  };
+}
+
+/** One line of the receiver's peak RSS, event-loop delay and GC pauses, from the lines the preload wrote to stderr. */
+export function formatServeFigures(stderr: string): string {
+  const rssKb = parseMaxRssKb(stderr);
+  const stalls = parseStallStats(stderr);
+  const rss = rssKb === null ? 'peak RSS not reported' : `peak RSS ${(rssKb / 1024).toFixed(0)} MB`;
+  const stall =
+    stalls === null
+      ? 'stalls not reported'
+      : `loop p99 ${stalls.loopP99Ms.toFixed(1)} ms max ${stalls.loopMaxMs.toFixed(1)} ms, gc ${stalls.gcCount} pauses ${stalls.gcTotalMs.toFixed(1)} ms max ${stalls.gcMaxMs.toFixed(1)} ms`;
+  return `${rss}, ${stall}`;
+}
+
 export interface Received {
   /** Requests that failed outright. */
   refused: number;

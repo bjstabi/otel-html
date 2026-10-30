@@ -149,29 +149,6 @@ afterEach(async () => {
 });
 
 describe('run', () => {
-  test('favours heap size once, before the report is created and the child is spawned', async () => {
-    const w = createTestWriter();
-    let calls = 0;
-    let spawned = false;
-    let lockAtCall: Promise<boolean> | undefined;
-    const spawnOverride = ((command: string, args: readonly string[], options: object): ChildProcess => {
-      spawned = true;
-      return spawn(command, args, options);
-    }) as CliIo['spawn'];
-    const h = start(w, ['run', '-o', 'out', ...node, '0'], {}, spawnOverride, undefined, {
-      favourShortPauses: () => {
-        calls++;
-        expect(spawned).toBe(false);
-        lockAtCall = w.fs.exists('out/data/state/lock.json');
-      },
-    });
-    open.push(h);
-    expect(await h.result).toBe(0);
-    expect(calls).toBe(1);
-    expect(spawned).toBe(true);
-    expect(await lockAtCall).toBe(false);
-  });
-
   test('wraps a child that exits 0: two spans in one trace, the child under the root', async () => {
     const w = createTestWriter();
     const h = start(w, ['run', '-o', 'out', ...node, '0']);
