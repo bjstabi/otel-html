@@ -6,8 +6,11 @@ import {
   type ErrorCode,
   merge,
   type OtelHtmlError,
+  type ReceiverOverrides,
   type Report,
   type ReportSummary,
+  type RunningReceiver,
+  startReceiver,
   type WriterDeps,
 } from '../../src/api/index.js';
 
@@ -22,6 +25,10 @@ test('public API types', () => {
   expectTypeOf<NonNullable<Parameters<typeof Report.create>[0]['config']>>().toEqualTypeOf<
     ConfigInput | string
   >();
+
+  expectTypeOf(startReceiver).returns.resolves.toEqualTypeOf<RunningReceiver>();
+  expectTypeOf<false>().toExtend<ReceiverOverrides['http']>();
+  expectTypeOf<RunningReceiver['http']>().toEqualTypeOf<string | null>();
 
   const never = (): void => {
     // @ts-expect-error unknown option is a type error

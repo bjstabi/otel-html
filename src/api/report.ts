@@ -29,6 +29,11 @@ import { packageDirViewerAssets } from './viewer-dir.js';
 
 export type { AddResult };
 
+/** The writer session behind a report: for the receiver and commands in this package, not part of the public API. */
+export let sessionOf: (report: Report) => WriterSession;
+/** The resolved configuration a report was created with. */
+export let configOf: (report: Report) => ResolvedConfig;
+
 /** The composition root: every real dependency is wired here and nowhere else. */
 export function defaultDeps(): WriterDeps {
   return {
@@ -127,9 +132,16 @@ const NOTHING: AddResult = { accepted: 0, dropped: 0, duplicates: 0 };
 /** A streaming report writer. Feed it telemetry, then `close()` to finish the report. */
 export class Report {
   readonly #session: WriterSession;
+  readonly #config: ResolvedConfig;
 
-  private constructor(session: WriterSession) {
+  static {
+    sessionOf = (report) => report.#session;
+    configOf = (report) => report.#config;
+  }
+
+  private constructor(session: WriterSession, config: ResolvedConfig) {
     this.#session = session;
+    this.#config = config;
   }
 
   static async create(options: ReportOptions, deps?: Partial<WriterDeps>): Promise<Report> {
@@ -140,7 +152,7 @@ export class Report {
       config,
       mode: options.append === true ? 'append' : 'create',
     });
-    return new Report(session);
+    return new Report(session, config);
   }
 
   /** SDK spans, a protobuf `ExportTraceServiceRequest`, or an OTLP-JSON object. */
