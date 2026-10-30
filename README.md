@@ -88,7 +88,7 @@ const summary = await report.close(); // flushes chunks and finalizes the manife
 console.log(summary.totals); // { spans: 1, logs: 0, metrics: 0 }
 ```
 
-`Report` also has `addLogs`, `addMetrics` (OTLP request objects, JSON or protobuf-es messages) and `flush()`. `addSpans` accepts SDK `ReadableSpan` arrays, OTLP trace requests, or OTLP JSON objects. `config` takes an object or the path of a YAML/JSON file. Environment variables are not read by the library.
+`Report` also has `addLogs`, `addMetrics` (OTLP request objects, JSON or protobuf-es messages) and `flush()`. `addMetrics` reads an OTLP JSON object in place rather than copying it: leave it unchanged until the returned promise settles (`addSpans` and `addLogs` copy). `addSpans` accepts SDK `ReadableSpan` arrays, OTLP trace requests, or OTLP JSON objects. `config` takes an object or the path of a YAML/JSON file. Environment variables are not read by the library.
 
 ## Viewing logs
 

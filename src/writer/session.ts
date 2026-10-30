@@ -507,8 +507,12 @@ class Session implements WriterSession {
       await this.#series.compact(this.#rollups.metrics.catalog);
       await this.#writeShell();
       await this.#checkpoint(true);
-      await this.#series.prune();
-      await this.#lock.release();
+      // The report is committed; a failed prune (stale segments left behind) must not keep the lock.
+      try {
+        await this.#series.prune();
+      } finally {
+        await this.#lock.release();
+      }
       this.#closed = this.#summary();
       return this.#closed;
     });

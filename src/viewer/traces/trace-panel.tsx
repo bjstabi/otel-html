@@ -11,7 +11,7 @@ import {
   useState,
 } from 'react';
 import { assertNever, OtelHtmlError } from '../../model/errors.js';
-import { parseUnixNanos, type RelNanos, type SpanId, type TraceId, type UnixNanos } from '../../model/ids.js';
+import { parseUnixNanos, type SpanId, type TraceId, type UnixNanos } from '../../model/ids.js';
 import { formatDuration, formatTime } from '../../semconv/formatters.js';
 import { downloadBlob, otlpBlob } from '../components/export.js';
 import { FlameGraph } from '../components/flame-graph.js';
@@ -166,7 +166,7 @@ function Header(props: { detail: TraceDetail; dataSource: DataSource; epoch: Uni
             <StatusDot error={false} label="No errors" />
           )}
         </Fact>
-        <Fact label="Start">{formatTime(f.start as RelNanos, epoch)}</Fact>
+        <Fact label="Start">{formatTime(f.start, epoch)}</Fact>
         <Fact label="Spans">{f.spans}</Fact>
         <Fact label="Services">{f.services}</Fact>
         <Fact label="Errors">{f.errors}</Fact>

@@ -125,18 +125,18 @@ export function* wrapDataFilePieces(
   const open = stringify(head);
   const fields = open === '{}' ? '{' : `${open.slice(0, -1)},`;
   yield `${REGISTRATION_GLOBAL}.push(${escapeHostile(JSON.stringify(key))},${escapeHostile(fields)}${escapeHostile(JSON.stringify(listKey))}:[`;
-  let first = true;
+  let i = 0;
   for (const item of items) {
     const json = stringify(item);
     if (json === undefined) {
       throw new OtelHtmlError('invalid-report', {
-        path: listKey,
+        path: `${listKey}[${i}]`,
         expected: 'a JSON-serializable payload',
         actual: 'undefined',
       });
     }
-    yield first ? escapeHostile(json) : `,${escapeHostile(json)}`;
-    first = false;
+    yield i === 0 ? escapeHostile(json) : `,${escapeHostile(json)}`;
+    i++;
   }
   yield `]}${SUFFIX}`;
 }

@@ -15,7 +15,8 @@ export function parseMetricParam(
   }
   const r = MetricPageStateSchema.safeParse(json);
   if (r.success) return { ok: true, state: r.data };
-  return { ok: false, error: paramError('m', json, r.error.issues[0]) };
+  // Every issue, so a hand-edited `m` with several mistakes is fixed in one go.
+  return { ok: false, error: r.error.issues.map((issue) => paramError('m', json, issue)).join('; ') };
 }
 
 /**
