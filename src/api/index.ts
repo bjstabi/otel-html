@@ -6,7 +6,7 @@ export { OtelHtmlSpanExporter } from '../exporters/span-exporter.js';
 export { type ErrorCode, OtelHtmlError } from '../model/errors.js';
 export type { OtlpSignal } from '../model/otlp-json.js';
 export type { ReceiverStats } from '../receiver/receiver.js';
-export type { Clock, FileSystem, Logger } from '../writer/ports.js';
+export type { Clock, FileSystem, Logger, Timers } from '../writer/ports.js';
 export type { AddResult, ReportSummary, WriterDeps } from '../writer/session.js';
 export { type ConvertOptions, convert, type MergeOptions, merge } from './convert.js';
 export { type ReceiverOverrides, type RunningReceiver, startReceiver } from './receiver.js';

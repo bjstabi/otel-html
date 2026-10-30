@@ -1,6 +1,17 @@
 import { hostname } from 'node:os';
 import { parseUnixNanos } from '../model/ids.js';
-import type { Clock, Logger, ProcessInfo } from '../writer/ports.js';
+import type { Clock, Logger, ProcessInfo, Timers } from '../writer/ports.js';
+
+/** `setTimeout` that is unref'd: an idle session must not keep the process alive. */
+export function createSystemTimers(): Timers {
+  return {
+    after(ms, fn) {
+      const t = setTimeout(fn, ms);
+      t.unref();
+      return () => clearTimeout(t);
+    },
+  };
+}
 
 /** Wall clock anchored once at creation and advanced by the monotonic clock, so it never jumps backwards. */
 export function createSystemClock(): Clock {

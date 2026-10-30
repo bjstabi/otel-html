@@ -190,7 +190,7 @@ await receiver.close();
 await report.close();
 ```
 
-`Report` also has `addLogs`, `addMetrics` (an SDK `ResourceMetrics`, or OTLP request objects, JSON or protobuf-es messages) and `flush()`. `addMetrics` reads an OTLP JSON object in place rather than copying it: leave it unchanged until the returned promise settles (`addSpans` and `addLogs` copy). `addSpans` accepts SDK `ReadableSpan` arrays, OTLP trace requests, or OTLP JSON objects. `config` takes an object or the path of a YAML/JSON file. Environment variables are not read by the library.
+`Report` also has `addLogs`, `addMetrics` (an SDK `ResourceMetrics`, or OTLP request objects, JSON or protobuf-es messages) and `flush()`. Interval checkpoints (every `writer.flushIntervalMs`, and after that long idle) are written in the background, so after `add*` resolves the report on disk may lag; `flush()` (or `close()`) is the only point at which the report on disk is known to be current. Crash safety does not depend on it: a report is always readable at its last checkpoint. `addMetrics` reads an OTLP JSON object in place rather than copying it: leave it unchanged until the returned promise settles (`addSpans` and `addLogs` copy). `addSpans` accepts SDK `ReadableSpan` arrays, OTLP trace requests, or OTLP JSON objects. `config` takes an object or the path of a YAML/JSON file. Environment variables are not read by the library.
 
 ## Viewing logs
 
@@ -314,7 +314,7 @@ Config is a YAML or JSON file (`otel-html.yaml` by default), or an object passed
 |---|---|---|
 | `title` | none | Report title. Env: `OTEL_HTML_TITLE`. |
 | `writer.chunkTargetBytes` | 4000000 | Target size of a data chunk. |
-| `writer.flushIntervalMs` | 5000 | Checkpoint interval. |
+| `writer.flushIntervalMs` | 5000 | Checkpoint interval. Also checkpoints once after this long idle with new records. |
 | `writer.dedupeCapacity` | 200000 | Recent span IDs remembered for de-duplication. |
 | `writer.facetValueCap` | 1000 | Distinct values kept per facet key. |
 | `writer.facetKeyCap` | 500 | Facet keys kept. |

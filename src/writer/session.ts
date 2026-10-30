@@ -67,7 +67,7 @@ import { renderIndexHtml } from './html.js';
 import { inheritDashboards } from './inherit-config.js';
 import { acquireLock, type LockHandle } from './lock.js';
 import { MetricSeriesWriter, restoreCatalogSeries } from './metric-series-writer.js';
-import type { Clock, FileSystem, Logger, ProcessInfo, SpanHandle, Tracer } from './ports.js';
+import type { Clock, FileSystem, Logger, ProcessInfo, SpanHandle, Timers, Tracer } from './ports.js';
 import { type Refs, rebaseLog, rebasePoint, rebaseSpan } from './rebase.js';
 import { TraceIndex, type TraceIndexSnapshot } from './trace-index.js';
 import { type ViewerAssets, writeViewerAssets } from './viewer-assets.js';
@@ -75,6 +75,8 @@ import { type ViewerAssets, writeViewerAssets } from './viewer-assets.js';
 export interface WriterDeps {
   fs: FileSystem;
   clock: Clock;
+  /** Arms the idle checkpoint; a timer must not keep the process alive. */
+  timers: Timers;
   logger: Logger;
   tracer: Tracer;
   process: ProcessInfo;
@@ -363,6 +365,10 @@ class Session implements WriterSession {
   #tail: Promise<unknown> = Promise.resolve();
   /** The background checkpoint write, until it ends (it never rejects: a failure is logged and undone). */
   #inflight: Promise<void> | null = null;
+  /** Records were accepted since the last checkpoint was prepared. */
+  #sinceCheckpoint = false;
+  /** Cancels the armed idle timer, if any. */
+  #cancelIdle: (() => void) | null = null;
 
   constructor(deps: WriterDeps, out: string, config: ResolvedConfig, drop: Drops, r: Restored) {
     this.#deps = deps;
@@ -429,7 +435,9 @@ class Session implements WriterSession {
           break;
         }
       }
+      if (result.accepted > 0) this.#sinceCheckpoint = true;
       if (!this.#partial) await this.#maybeCheckpoint();
+      this.#armIdle();
       return result;
     });
   }
@@ -440,6 +448,7 @@ class Session implements WriterSession {
       this.#partial = false;
       await this.#drainUnwritten(false);
       await this.#maybeCheckpoint();
+      this.#armIdle();
     });
   }
 
@@ -497,7 +506,9 @@ class Session implements WriterSession {
           );
           break;
       }
+      if (result.accepted > 0) this.#sinceCheckpoint = true;
       await this.#maybeCheckpoint();
+      this.#armIdle();
       return result;
     });
   }
@@ -513,6 +524,7 @@ class Session implements WriterSession {
     return this.#serial(async () => {
       if (this.#closed !== null) return this.#closed;
       this.#assertOpen();
+      this.#disarmIdle();
       await this.#checkpoint(false);
       // Level files are written under paths the committed manifest does not list (segments, or demoted levels).
       await this.#series.compact(this.#rollups.metrics.catalog);
@@ -533,6 +545,7 @@ class Session implements WriterSession {
     return this.#serial(async () => {
       if (this.#closed !== null || this.#aborted) return;
       this.#aborted = true;
+      this.#disarmIdle();
       await this.#inflight;
       await this.#lock.release();
     });
@@ -835,16 +848,35 @@ class Session implements WriterSession {
   }
 
   /**
-   * Interval flushes are only evaluated here, inside `add`: an idle session never flushes by itself, so
-   * long-running callers (serve, exporters) must call `flush()` on their own timer. The checkpoint is prepared
-   * here, under the serial queue, and written in the background so the adds queued behind it are not held up
-   * by a slow write; one write runs at a time.
+   * Interval checkpoints are evaluated inside `add` and, after `writer.flushIntervalMs` of silence with new
+   * records, by the idle timer; `flush()` is still the only point at which the report on disk is known to be
+   * current. The checkpoint is prepared here, under the serial queue, and written in the background so the adds
+   * queued behind it are not held up by a slow write; one write runs at a time.
    */
   async #maybeCheckpoint(): Promise<void> {
     const { clock } = this.#deps;
     if (this.#inflight !== null) return;
     if (clock.monotonicMs() - this.#lastFlushMs < this.#config.writer.flushIntervalMs) return;
-    const prepared = await this.#prepareCheckpoint(false);
+    await this.#startBackgroundCheckpoint();
+  }
+
+  /** Prepare a checkpoint under the serial queue and write it in the background (see `#inflight`). */
+  async #startBackgroundCheckpoint(): Promise<void> {
+    let prepared: PreparedCheckpoint;
+    try {
+      prepared = await this.#prepareCheckpoint(false);
+    } catch (e) {
+      // The records that triggered this are already accepted, so the request must not fail (a sender would retry it
+      // and logs and metric points would be counted twice). A failed prepare leaves its chunks pending; the interval
+      // restarts so the next request does not retry straight away, and the next flush surfaces a persistent fault.
+      this.#lastFlushMs = this.#deps.clock.monotonicMs();
+      this.#deps.logger.error('checkpoint failed; will retry at the next flush', {
+        error: e instanceof Error ? e.message : String(e),
+      });
+      this.#sinceCheckpoint = true;
+      this.#armIdle(); // a session that stays idle still retries
+      return;
+    }
     this.#inflight = this.#writeCheckpoint(prepared).then(
       () => {
         this.#inflight = null;
@@ -857,8 +889,41 @@ class Session implements WriterSession {
         this.#deps.logger.error('checkpoint failed; will retry at the next flush', {
           error: e instanceof Error ? e.message : String(e),
         });
+        // The prepare cleared this and the failed write put the chunks back: they are waiting again.
+        this.#sinceCheckpoint = true;
+        this.#armIdle();
       },
     );
+  }
+
+  /** (Re)start the idle timer when records are waiting for a checkpoint. */
+  #armIdle(): void {
+    this.#disarmIdle();
+    if (!this.#sinceCheckpoint || this.#closed !== null || this.#aborted) return;
+    this.#cancelIdle = this.#deps.timers.after(this.#config.writer.flushIntervalMs, () => {
+      this.#cancelIdle = null;
+      // Nobody awaits this: a failure is logged, and the next flush retries.
+      this.#serial(() => this.#idleCheckpoint()).catch((e: unknown) => {
+        this.#deps.logger.error('checkpoint failed; will retry at the next flush', {
+          error: e instanceof Error ? e.message : String(e),
+        });
+      });
+    });
+  }
+
+  #disarmIdle(): void {
+    this.#cancelIdle?.();
+    this.#cancelIdle = null;
+  }
+
+  /** The idle timer fired: checkpoint now, whatever the interval says, unless a write or a partial input is under way. */
+  async #idleCheckpoint(): Promise<void> {
+    if (this.#closed !== null || this.#aborted || !this.#sinceCheckpoint) return;
+    if (this.#inflight !== null || this.#partial) {
+      this.#armIdle();
+      return;
+    }
+    await this.#startBackgroundCheckpoint();
   }
 
   /** Remove the replaced report's data, once, immediately before this session's first write. */
@@ -931,6 +996,8 @@ class Session implements WriterSession {
         this.#dirty = false;
       }
       this.#pending = []; // last, after everything that can throw
+      this.#sinceCheckpoint = false;
+      this.#disarmIdle(); // nothing is waiting for it any more
       return prepared;
     } catch (e) {
       span.recordError(e);
@@ -964,14 +1031,21 @@ class Session implements WriterSession {
       // Committed: only now does in-memory bookkeeping move forward.
       if (state !== null) this.#slot = p.slot;
       this.#committed.push(...p.chunks);
-      p.span.setAttributes({
-        chunks: p.chunks.length,
-        records: p.records,
-        shards: state?.snapshot.dirty.length ?? 0,
-        metricFiles: p.metricFiles,
-      });
       this.#everCommitted = true;
       this.#lastFlushMs = clock.monotonicMs();
+      // Telemetry is not part of the commit: a tracer that throws must not undo the bookkeeping above.
+      try {
+        p.span.setAttributes({
+          chunks: p.chunks.length,
+          records: p.records,
+          shards: state?.snapshot.dirty.length ?? 0,
+          metricFiles: p.metricFiles,
+        });
+      } catch (error) {
+        this.#deps.logger.warn('flush telemetry failed', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     } catch (e) {
       // Chunks added since the prepare come after the ones it listed.
       this.#pending = [...p.chunks, ...this.#pending];
@@ -983,7 +1057,13 @@ class Session implements WriterSession {
       throw e;
     } finally {
       this.#traceIndex.release();
-      p.span.end();
+      try {
+        p.span.end();
+      } catch (error) {
+        this.#deps.logger.warn('flush telemetry failed', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
   }
 

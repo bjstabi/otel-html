@@ -28,7 +28,7 @@ import {
   type WriterSession,
 } from '../writer/session.js';
 import { assertAssetPath } from '../writer/viewer-assets.js';
-import { createConsoleLogger, createProcessInfo, createSystemClock } from './system.js';
+import { createConsoleLogger, createProcessInfo, createSystemClock, createSystemTimers } from './system.js';
 import { createOtelTracer } from './telemetry.js';
 import { packageDirViewerAssets } from './viewer-dir.js';
 
@@ -46,6 +46,7 @@ export function defaultDeps(): WriterDeps {
   return {
     fs: createNodeFileSystem(),
     clock: createSystemClock(),
+    timers: createSystemTimers(),
     logger: createConsoleLogger(),
     tracer: createOtelTracer(trace.getTracer('otel-html', pkg.version)),
     process: createProcessInfo(),
