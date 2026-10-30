@@ -3,9 +3,9 @@ import { z } from 'zod';
 /** A trace's summary in the trace index: which chunks hold its spans, plus enough to list it. */
 export interface TraceEntry {
   /** Chunk registration keys (`chunks/spans/000012`), in the order the chunks were written. */
-  chunks: string[];
+  chunks: readonly string[];
   /** Log chunk registration keys (`chunks/logs/000003`), in write order; empty when no log carries this trace id. */
-  logChunks: string[];
+  logChunks: readonly string[];
   start: number;
   end: number;
   spans: number;

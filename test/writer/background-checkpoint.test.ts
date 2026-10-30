@@ -1,3 +1,4 @@
+import { setImmediate } from 'node:timers/promises';
 import { describe, expect, test, vi } from 'vitest';
 import { StreamNormalizer } from '../../src/rollups/metric-streams.js';
 import { openSession } from '../../src/writer/session.js';
@@ -34,7 +35,7 @@ describe('interval checkpoints run in the background', () => {
     await s.close();
   });
 
-  test('an entry in the held snapshot that gains a span keeps its prepare-time value in the written files', async () => {
+  test('a held snapshot entry that gains a span keeps its prepare-time value in the written files', async () => {
     const { w, s, gate } = await heldCheckpoint();
     await s.add(one(0, 4), 'again.json'); // trace 0 is in the snapshot
     gate.release();
@@ -65,7 +66,7 @@ describe('interval checkpoints run in the background', () => {
     await s.close();
   });
 
-  test('the shards of a failed shard write are dirty again: the next flush writes them without any new add', async () => {
+  test('a failed shard write leaves its shards dirty: the next flush writes them without a new add', async () => {
     const { w, s, gate } = await heldCheckpoint('data/traces/00.js');
     gate.fail(new Error('disk gone'));
     await s.flush(); // nothing was added since: only the restored dirty set tells it to write shard 00
@@ -192,7 +193,8 @@ describe('interval checkpoints run in the background', () => {
       const p = s[call]().then(() => {
         done = true;
       });
-      await new Promise((r) => setTimeout(r, 20));
+      // A macrotask boundary: a held write cannot resolve `done` however long we wait, so one turn proves the same.
+      await setImmediate();
       expect(done).toBe(false);
       gate.release();
       await p;

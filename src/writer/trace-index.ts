@@ -11,7 +11,7 @@ export type ChunkRef = string;
 // Every new entry starts on this one array (an empty `[]` that has been pushed to costs 184 B, a concat result
 // 56 B). It is frozen so a stray in-place push throws instead of corrupting every entry: chunk lists are only
 // ever replaced (`concat`), which also lets a checkpoint hold an entry while the writer keeps appending.
-const NO_CHUNKS = Object.freeze([]) as unknown as string[];
+const NO_CHUNKS: readonly string[] = Object.freeze([]);
 
 const DEFAULT_INTERN_CAP = 10_000;
 
@@ -137,7 +137,7 @@ export class TraceIndex {
     if (e.chunks[e.chunks.length - 1] !== chunk) {
       if (e.chunks.length === 0) {
         if (this.#lastSpanList[0] !== chunk) this.#lastSpanList = Object.freeze([chunk]);
-        e.chunks = this.#lastSpanList as string[];
+        e.chunks = this.#lastSpanList;
       } else e.chunks = e.chunks.concat(chunk);
     }
     // Timing is span-defined: an entry that so far only knew logs takes the first span's extent outright.
@@ -162,7 +162,7 @@ export class TraceIndex {
     if (e.logChunks[e.logChunks.length - 1] !== chunk) {
       if (e.logChunks.length === 0) {
         if (this.#lastLogList[0] !== chunk) this.#lastLogList = Object.freeze([chunk]);
-        e.logChunks = this.#lastLogList as string[];
+        e.logChunks = this.#lastLogList;
       } else e.logChunks = e.logChunks.concat(chunk);
     }
     if (e.spans === 0) {
@@ -216,16 +216,16 @@ export class TraceIndex {
     this.#shared.clear();
   }
 
-  #loadList(chunks: readonly string[], kind: 'span' | 'log'): string[] {
+  #loadList(chunks: readonly string[], kind: 'span' | 'log'): readonly string[] {
     if (chunks.length === 0) return NO_CHUNKS;
     if (chunks.length > 1) return [...chunks];
     const chunk = chunks[0] as string;
     const last = kind === 'span' ? this.#lastSpanList : this.#lastLogList;
-    if (last[0] === chunk) return last as string[];
+    if (last[0] === chunk) return last;
     const list = Object.freeze([chunk]);
     if (kind === 'span') this.#lastSpanList = list;
     else this.#lastLogList = list;
-    return list as string[];
+    return list;
   }
 
   /** Rebuild from the state's `traceIndex` (already validated by the state schema). All shards start dirty. */

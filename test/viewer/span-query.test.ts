@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, inject, test } from 'vitest';
 import type { RelNanos, SpanId, TraceId, UnixNanos } from '../../src/model/ids.js';
 import type {
   ResourceRecord,
@@ -16,10 +16,6 @@ import {
   toEntries,
 } from '../../src/viewer/data/span-query.js';
 import { medianMs } from '../../test-support/median-ms.js';
-
-declare const process: { env: { OTEL_HTML_PERF_FACTOR?: string } }; // provided by vitest; the viewer project has no node types
-
-const PERF_FACTOR = Number(process.env.OTEL_HTML_PERF_FACTOR ?? '1');
 
 const resources: ResourceRecord[] = ['api', 'db', 'cache'].map((s) => ({
   attributes: new Map([['service.name', { kind: 'string', value: s }]]),
@@ -82,7 +78,7 @@ describe('querySpanEntries', () => {
     expect(r.rows).toHaveLength(100);
     expect(r.facets.total('service.name')).toBe(2000);
     expect(r.partial).toBeNull();
-    expect(ms).toBeLessThan(150 * PERF_FACTOR);
+    expect(ms).toBeLessThan(150 * inject('perfFactor'));
   });
 
   test('sorts by the requested column and direction, ties by start', () => {

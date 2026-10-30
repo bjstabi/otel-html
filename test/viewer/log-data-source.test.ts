@@ -68,7 +68,7 @@ describe('getTrace logCount after a crash', () => {
     withShard(rep.files, LOG_TRACE.slice(0, 2), (e) => {
       const entry = e[LOG_TRACE];
       if (entry === undefined) throw new Error('no LOG_TRACE entry');
-      entry.logChunks.push(logChunk(99).slice('data/'.length, -'.js'.length));
+      entry.logChunks = [...entry.logChunks, logChunk(99).slice('data/'.length, -'.js'.length)];
       entry.logs += 4;
     });
 

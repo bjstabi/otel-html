@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, inject, it } from 'vitest';
 import type { RelNanos } from '../../src/model/ids.js';
 import {
   DRAIN_PARAMS,
@@ -10,8 +10,6 @@ import {
 } from '../../src/rollups/drain.js';
 import { medianMs } from '../../test-support/median-ms.js';
 
-const { OTEL_HTML_PERF_FACTOR } = process.env;
-const PERF_FACTOR = Number(OTEL_HTML_PERF_FACTOR ?? '1');
 const t = (n: number): RelNanos => n as RelNanos;
 
 /** A distinct digit-free word per `n` (base 26). */
@@ -161,6 +159,6 @@ describe('Drain', () => {
       for (let i = 0; i < 200_000; i++) d.add(`${shapes[i % 50]} ${i}ms id=${i}`, 'info', t(i));
       return d;
     }, 3);
-    expect(ms).toBeLessThan(1000 * PERF_FACTOR);
+    expect(ms).toBeLessThan(1000 * inject('perfFactor'));
   });
 });

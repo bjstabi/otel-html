@@ -21,7 +21,7 @@ run = "pnpm exec tsc -p tsconfig.json --noEmit && pnpm exec tsc -p tsconfig.view
 
 # Unit tests in two passes: everything but the timing-sensitive `@perf` tests in parallel, then the `@perf` tests
 # alone, one file at a time (vitest.config.ts), so other work does not steal their CPU. Budgets scale with
-# OTEL_HTML_PERF_FACTOR on slow machines; they are never edited.
+# OTEL_HTML_PERF_FACTOR and, with OTEL_HTML_PERF_REFERENCE_MS set, the measured runner factor; they are never edited.
 [tasks."test:unit"]
 run = ["mise run test:unit:main", "mise run test:unit:perf"]
 

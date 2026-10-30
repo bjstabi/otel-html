@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, inject, test } from 'vitest';
 import type { AnyValue } from '../../src/model/anyvalue.js';
 import type { RelNanos, SpanId, TraceId, UnixNanos } from '../../src/model/ids.js';
 import type {
@@ -20,10 +20,6 @@ import {
   toLogEntries,
 } from '../../src/viewer/data/log-query.js';
 import { medianMs } from '../../test-support/median-ms.js';
-
-declare const process: { env: { OTEL_HTML_PERF_FACTOR?: string } }; // provided by vitest; the viewer project has no node types
-
-const PERF_FACTOR = Number(process.env.OTEL_HTML_PERF_FACTOR ?? '1');
 
 const str = (value: string): AnyValue => ({ kind: 'string', value });
 const resource = (service: string, host?: string): ResourceRecord => ({
@@ -376,14 +372,14 @@ describe('queryLogEntries', () => {
       const q: LogQuery = { ...base, condition: 'log.severity_number >= SEVERITY_NUMBER_ERROR' };
       const { result: r, ms } = medianMs(() => queryLogEntries(big, q));
       expect(r.total).toBe(4000);
-      expect(ms).toBeLessThan(150 * PERF_FACTOR);
+      expect(ms).toBeLessThan(150 * inject('perfFactor'));
     });
 
     test('broad filter (98% match) under 150 ms (median)', () => {
       const q: LogQuery = { ...base, condition: 'log.severity_number < SEVERITY_NUMBER_ERROR' };
       const { result: r, ms } = medianMs(() => queryLogEntries(big, q));
       expect(r.total).toBe(196_000);
-      expect(ms).toBeLessThan(150 * PERF_FACTOR);
+      expect(ms).toBeLessThan(150 * inject('perfFactor'));
     });
   });
 });

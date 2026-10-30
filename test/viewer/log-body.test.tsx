@@ -1,6 +1,6 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
-import { afterEach, describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, inject, test } from 'vitest';
 import type { AnyValue } from '../../src/model/anyvalue.js';
 import { LogBody, segmentBody } from '../../src/viewer/components/log-body.js';
 import { SeverityBadge, SeverityLabel } from '../../src/viewer/components/severity.js';
@@ -64,8 +64,6 @@ describe('segmentBody', () => {
   });
 });
 
-declare const process: { env: { OTEL_HTML_PERF_FACTOR?: string } }; // provided by vitest; the viewer project has no node types
-const PERF_FACTOR = Number(process.env.OTEL_HTML_PERF_FACTOR ?? '1');
 const join = (s: string): string =>
   segmentBody(s)
     .map((g) => (g.type === 'kv' ? `${g.key}=${g.value}` : g.type === 'json' ? g.raw : g.text))
@@ -81,7 +79,7 @@ describe('@perf segmentBody cost', () => {
   ])('hostile input of %#, length %d stays fast and lossless', (s) => {
     const t = performance.now();
     const out = join(s);
-    expect(performance.now() - t).toBeLessThan(500 * PERF_FACTOR);
+    expect(performance.now() - t).toBeLessThan(500 * inject('perfFactor'));
     expect(out).toBe(s);
   });
 });

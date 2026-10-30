@@ -5,9 +5,9 @@ import { promisify } from 'node:util';
 import { toJson } from '@bufbuild/protobuf';
 import { Report } from '../src/api/index.js';
 import { ExportMetricsServiceRequestSchema } from '../src/model/gen/opentelemetry/proto/collector/metrics/v1/metrics_service_pb.js';
+import { calibrationMs, cpuModel } from '../test-support/calibrate.js';
 import { scaleLogsRequest } from '../test-support/scale-logs.js';
 import { scaleMetrics } from '../test-support/scale-metrics.js';
-import { calibrationMs, cpuModel } from './calibrate.js';
 import {
   DASHBOARDS_CONFIG,
   DASHBOARDS_HOSTILE_DEFAULT,

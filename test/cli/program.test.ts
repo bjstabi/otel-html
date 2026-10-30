@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { describe, expect, test } from 'vitest';
-import type { CliDeps } from '../../src/cli/commands/receive.js';
+import type { CliDeps } from '../../src/cli/program.js';
 import { runCli } from '../../src/cli/program.js';
 import { logRecord, logsRequest } from '../../test-support/otlp-builders.js';
 import { createTestWriter, type TestWriter } from '../../test-support/writer-deps.js';

@@ -17,6 +17,7 @@ const config: ViteUserConfig = defineConfig({
     passWithNoTests: true,
     testNamePattern: perfPass ? new RegExp(PERF_TAG) : new RegExp(`^(?!.*${PERF_TAG})`),
     fileParallelism: !perfPass,
+    globalSetup: ['test-support/perf-global-setup.ts'],
     projects: [
       {
         test: {

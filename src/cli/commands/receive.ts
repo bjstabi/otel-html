@@ -4,9 +4,8 @@ import { Report, resolveDeps, sessionOf } from '../../api/report.js';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { ReceiverStats } from '../../receiver/receiver.js';
 import { createNodeFileSystem } from '../../writer/node-fs.js';
-import type { WriterDeps } from '../../writer/session.js';
 import type { CliIo, ReceiverFlags } from '../io.js';
-import { CliExit } from '../program.js';
+import { type CliDeps, CliExit } from '../program.js';
 import { resolveCliConfig } from './config-print.js';
 import { describeSummary } from './convert.js';
 
@@ -30,9 +29,6 @@ export function addReceiverOptions(command: Command): Command {
     .addOption(new Option('--grpc <port>', 'OTLP/gRPC port (default 4317)').argParser(portOf))
     .option('--no-grpc', 'do not listen for OTLP/gRPC');
 }
-
-/** The writer's deps plus what only the CLI's composition root can supply. */
-export type CliDeps = Partial<WriterDeps>;
 
 export interface ReceiveFlags extends ReceiverFlags {
   out: string;

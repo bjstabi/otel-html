@@ -1,8 +1,8 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import { createServer, type Server } from 'node:net';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import type { CliDeps } from '../../src/cli/commands/receive.js';
 import type { CliIo, StopSignal } from '../../src/cli/io.js';
+import type { CliDeps } from '../../src/cli/program.js';
 import { runCli } from '../../src/cli/program.js';
 import { decodeColumns } from '../../src/format/columns.js';
 import { chunkKey } from '../../src/format/paths.js';
