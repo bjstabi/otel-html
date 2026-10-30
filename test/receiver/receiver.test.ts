@@ -289,7 +289,7 @@ describe('createReceiver', () => {
     expect(second.grow(500)).toBe(true);
   });
 
-  test('budget: release is idempotent and totals.bytes counts what was claimed', () => {
+  test('budget: release is idempotent; stats.bytes is unaffected by admissions and counts bodies in receive', async () => {
     const receiver = createReceiver(
       fakeSession(false).session,
       { inflightBudgetBytes: 100 },
@@ -299,7 +299,10 @@ describe('createReceiver', () => {
     a.grow(10);
     a.release();
     a.release();
-    expect(receiver.stats().bytes).toBe(70);
+    expect(receiver.stats().bytes).toBe(0);
+    const body = encode(traceRequest([span()]));
+    await receive(receiver, 'traces', body, 'json', 'a');
+    expect(receiver.stats().bytes).toBe(body.length);
     const b = admitted(receiver, 100);
     expect(receiver.admit(1)).toBeNull();
     b.release();

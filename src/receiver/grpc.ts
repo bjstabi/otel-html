@@ -77,6 +77,7 @@ function handlerFor(s: SignalService, receiver: Receiver, options: GrpcTransport
         'too-large',
         `request of ${call.request.length} bytes exceeds the limit of ${options.maxBodyBytes} bytes`,
       );
+      logger.debug('grpc request rejected', { service: s.service.typeName, bytes: call.request.length });
       receiver.refused('too-large', rejected.message);
       callback(failure(rejected, logger));
       return;

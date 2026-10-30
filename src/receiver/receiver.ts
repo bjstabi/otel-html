@@ -27,7 +27,7 @@ export interface Admission {
 export interface ReceiverStats {
   /** Every request that reached the receiver, refused ones included. */
   requests: number;
-  /** Body bytes of the requests taken on for processing (not those refused before or at admission). */
+  /** Body bytes of the requests taken on for processing (not those refused before or at admission, nor those refused while streaming). */
   bytes: number;
   /** Records written, per signal. */
   accepted: Record<OtlpSignal, number>;
@@ -221,7 +221,6 @@ export function createReceiver(
       if (!fits(bytes, openAdmissions.size)) return null;
       let claimed = bytes;
       inflightBytes += bytes;
-      totals.bytes += bytes;
       const admission: Admission = {
         get bytes() {
           return claimed;
@@ -231,7 +230,6 @@ export function createReceiver(
           if (!fits(more, openAdmissions.size - 1)) return false;
           claimed += more;
           inflightBytes += more;
-          totals.bytes += more;
           return true;
         },
         release() {
@@ -246,6 +244,7 @@ export function createReceiver(
       totals.requests++;
       try {
         if (closed) throw new OtelHtmlError('receiver-busy', { message: 'receiver is closing' });
+        totals.bytes += body.length;
         const run = tail.then(() => process(signal, body, encoding, transport));
         tail = run.catch(() => undefined);
         return await run;

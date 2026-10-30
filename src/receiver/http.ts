@@ -249,7 +249,10 @@ export function createHttpHandler(
         res,
         path,
         encoding,
-        new ReceiverRejected('busy', `receiver is busy: ${declared} bytes would exceed the in-flight budget`),
+        new ReceiverRejected(
+          'busy',
+          `receiver is busy: ${Number.isFinite(declared) ? `${declared} bytes` : 'a body of unknown length'} would exceed the in-flight budget`,
+        ),
         closeRequest,
       );
     }

@@ -20,7 +20,7 @@ import {
   listenHttp,
 } from '../../src/receiver/http.js';
 import { type Admission, createReceiver, type Receiver } from '../../src/receiver/receiver.js';
-import { openSession, type WriterSession } from '../../src/writer/session.js';
+import { type AddResult, openSession, type WriterSession } from '../../src/writer/session.js';
 import { createTestWriter, type TestWriter, testConfig } from '../../test-support/writer-deps.js';
 import { allSpans, spansRequest } from '../writer/helpers.js';
 
@@ -100,9 +100,9 @@ async function gatedServer() {
     release = resolve;
   });
   const session: WriterSession = {
-    async add() {
+    async add(): Promise<AddResult> {
       await gate;
-      return { accepted: 1 } as never;
+      return { accepted: 1, dropped: 0, duplicates: 0 };
     },
     async endInput() {},
     async addRecords() {
