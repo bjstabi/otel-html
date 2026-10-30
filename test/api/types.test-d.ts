@@ -4,6 +4,7 @@ import {
   type ConfigInput,
   convert,
   type ErrorCode,
+  type MetricExporterOptions,
   merge,
   type OtelHtmlError,
   type ReceiverOverrides,
@@ -15,6 +16,7 @@ import {
 } from '../../src/api/index.js';
 
 test('public API types', () => {
+  expectTypeOf<MetricExporterOptions>().toHaveProperty('temporality');
   expectTypeOf(convert).returns.resolves.toEqualTypeOf<ReportSummary>();
   expectTypeOf(merge).returns.resolves.toEqualTypeOf<ReportSummary>();
   expectTypeOf<Parameters<typeof Report.create>[0]>().toHaveProperty('out').toEqualTypeOf<string>();
