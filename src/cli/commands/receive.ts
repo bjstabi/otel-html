@@ -59,7 +59,14 @@ export async function openReceiver(
   }
   const overrides = precheck({ http: config.receiver.http.enabled, grpc: config.receiver.grpc.enabled });
   const full = await resolveDeps(deps);
-  const report = await Report.createResolved(
+  // Installed before the lock is taken, so a stop signal during start-up is handled rather than left to the default.
+  const stop = nextSignal(io);
+  const interrupted = stop.signalled.then((): never => {
+    io.stdout('interrupted\n');
+    throw new CliExit(INTERRUPTED_EXIT);
+  });
+  interrupted.catch(() => undefined); // only observed through the race below
+  const creating = Report.createResolved(
     {
       out: flags.out,
       ...(flags.append === true ? { append: true } : {}),
@@ -68,13 +75,34 @@ export async function openReceiver(
     config,
     full,
   );
+  creating.catch(() => undefined); // its own failure is reported by the race, or dropped after a signal
+  // Whatever the start leaves behind once it settles after a failure: the lock, and any bound port.
+  const cleanups: Promise<unknown>[] = [];
+  let starting: Promise<RunningReceiver> | undefined;
   try {
-    return { report, receiver: await startReceiver(report, overrides) };
+    const report = await Promise.race([creating, interrupted]);
+    starting = startReceiver(report, overrides);
+    starting.catch(() => undefined);
+    const receiver = await Promise.race([starting, interrupted]);
+    return { report, receiver };
   } catch (e) {
-    await sessionOf(report)
-      .abort()
-      .catch(() => undefined); // never mask the original error
+    cleanups.push(
+      Promise.allSettled([creating, starting ?? Promise.reject(new Error('not started'))]).then(
+        async ([report, receiver]) => {
+          if (receiver.status === 'fulfilled') await receiver.value.close().catch(() => undefined);
+          if (report.status === 'fulfilled') {
+            await sessionOf(report.value)
+              .abort()
+              .catch(() => undefined); // never mask the original error
+          }
+        },
+      ),
+    );
+    // A bind failure has already settled everything, so waiting costs nothing; after a signal, do not wait.
+    if (!(e instanceof CliExit)) await Promise.all(cleanups);
     throw e;
+  } finally {
+    stop.cancel();
   }
 }
 

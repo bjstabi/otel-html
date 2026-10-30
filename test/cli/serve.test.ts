@@ -240,6 +240,36 @@ describe('serve', () => {
     await vi.waitFor(async () => expect(await w.fs.exists('out/data/state/lock.json')).toBe(false));
   });
 
+  test('a stop signal while the lock is being taken exits 130 and leaves no lock', async () => {
+    const w = createTestWriter();
+    let waiting: (() => void) | undefined;
+    const entered = new Promise<void>((r) => {
+      waiting = r;
+    });
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const fs: FileSystem = {
+      ...w.fs,
+      async createExclusive(p, text) {
+        if (p.endsWith('lock.json')) {
+          waiting?.();
+          await gate;
+        }
+        return w.fs.createExclusive(p, text);
+      },
+    };
+    const h = start(w, ['serve', '-o', 'out', '--http', '0', '--no-grpc'], fs);
+    open.push(h);
+    await entered;
+    h.fire();
+    expect(await h.result).toBe(130);
+    expect(h.stdout).toContain('interrupted\n');
+    release?.();
+    await vi.waitFor(async () => expect(await w.fs.exists('out/data/state/lock.json')).toBe(false));
+  });
+
   test('a port already in use exits 1 naming EADDRINUSE', async () => {
     const taken = createServer();
     servers.push(taken);
