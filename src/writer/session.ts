@@ -52,6 +52,7 @@ import { severityKey } from '../semconv/severity.js';
 import {
   at,
   isReportFolder,
+  jsObjectKeyOrder,
   loadCheckpoint,
   type StateHead,
   wipeReportData,
@@ -897,9 +898,7 @@ class Session implements WriterSession {
           this.#nextSlot(),
           this.#stateHead(rollups),
           this.#dedupe.toJSON(),
-          this.#traceIndex
-            .shards()
-            .map((s): [string, Readonly<TraceShard>] => [s, this.#traceIndex.shardView(s)]),
+          this.#shardViews(),
         );
       }
       if (!this.#shellWritten && !complete) await this.#writeShell();
@@ -924,6 +923,11 @@ class Session implements WriterSession {
     } finally {
       span.end();
     }
+  }
+
+  /** The state's shards in object-key order, one view at a time. */
+  *#shardViews(): Generator<[string, Readonly<TraceShard>]> {
+    for (const s of jsObjectKeyOrder(this.#traceIndex.shards())) yield [s, this.#traceIndex.shardView(s)];
   }
 
   #nextSlot(): StateSlot {

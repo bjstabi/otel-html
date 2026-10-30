@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { parseSessionState, type SessionState } from '../../src/format/state.js';
 import type { TraceEntry } from '../../src/format/trace-shard.js';
-import { stateSlotPieces, writeStateSlot } from '../../src/writer/checkpoint.js';
+import { jsObjectKeyOrder, stateSlotPieces, writeStateSlot } from '../../src/writer/checkpoint.js';
 import type { FileSystem } from '../../src/writer/ports.js';
 import { createMemoryFileSystem } from '../../test-support/memory-fs.js';
 
@@ -57,9 +57,23 @@ describe('stateSlotPieces', () => {
     expect(pieces(state).join('')).toBe(JSON.stringify(state));
   });
 
+  test('shards go out in object-key order, as JSON.stringify of an object keyed by them', () => {
+    const names = ['00', '0a', '5b', '12', '99'];
+    const index = Object.fromEntries(names.map((n) => [n, { [ID_A]: entry(n, []) }]));
+    const state = stateOf(['x'], index);
+    const { dedupe, traceIndex, ...head } = state;
+    const sorted = Object.entries(traceIndex).sort(([a], [b]) => (a < b ? -1 : 1));
+    const ordered = jsObjectKeyOrder(sorted.map(([n]) => n)).map(
+      (n): [string, (typeof sorted)[number][1]] => [n, traceIndex[n] ?? {}],
+    );
+    const joined = [...stateSlotPieces(head, dedupe, ordered)].join('');
+    expect(joined).toBe(JSON.stringify(state));
+    expect(Object.keys(JSON.parse(joined).traceIndex)).toEqual(['12', '99', '00', '0a', '5b']);
+  });
+
   test('a long dedupe list and several shards come in several pieces', () => {
     const state = stateOf(many, { '5b': { [ID_A]: entry('n', []) }, '5c': { [ID_A]: entry('n', []) } });
-    expect(pieces(state).length).toBeGreaterThan(5);
+    expect(pieces(state).length).toBe(8);
   });
 });
 

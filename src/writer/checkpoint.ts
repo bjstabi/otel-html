@@ -36,6 +36,29 @@ export async function writeManifest(fs: FileSystem, out: string, manifest: Manif
 /** The state fields that stay small; `dedupe` and `traceIndex` hold the bulk and are streamed separately. */
 export type StateHead = Omit<SessionState, 'dedupe' | 'traceIndex'>;
 
+/**
+ * Where each head field sits around `dedupe` and `traceIndex` in `SessionState` order (listed in that order). Typed
+ * as a record over every head field, so a new `SessionState` field fails to compile until it is placed here.
+ */
+const HEAD_SIDE = {
+  formatVersion: 'before',
+  otelHtmlVersion: 'before',
+  epochUnixNano: 'before',
+  nextChunk: 'before',
+  rollups: 'before',
+  metricStreams: 'after',
+  nextSegment: 'after',
+} satisfies Record<keyof StateHead, 'before' | 'after'>;
+
+/**
+ * Shard names in the order `JSON.stringify` gives an object keyed by them: canonical integer names ("12", "99")
+ * first in numeric order, then the rest in the given order. The state slot has always been written from such an
+ * object, and its bytes must not change.
+ */
+export function jsObjectKeyOrder(names: readonly string[]): string[] {
+  return Object.keys(Object.fromEntries(names.map((n) => [n, 0])));
+}
+
 /** Dedupe keys stringified per piece. */
 const DEDUPE_SLICE = 1000;
 
@@ -53,10 +76,9 @@ export function* stateSlotPieces(
     const v = JSON.stringify(head[k]);
     return v === undefined ? undefined : `${JSON.stringify(k)}:${v}`; // JSON.stringify drops undefined fields
   };
-  const before = (['formatVersion', 'otelHtmlVersion', 'epochUnixNano', 'nextChunk', 'rollups'] as const).map(
-    field,
-  );
-  const after = (['metricStreams', 'nextSegment'] as const).map(field);
+  const keys = Object.keys(HEAD_SIDE) as (keyof StateHead)[];
+  const before = keys.filter((k) => HEAD_SIDE[k] === 'before').map(field);
+  const after = keys.filter((k) => HEAD_SIDE[k] === 'after').map(field);
   yield `{${before.filter((f) => f !== undefined).join(',')},"dedupe":[`;
   for (let i = 0; i < dedupe.length; i += DEDUPE_SLICE)
     yield (i > 0 ? ',' : '') + JSON.stringify(dedupe.slice(i, i + DEDUPE_SLICE)).slice(1, -1);
