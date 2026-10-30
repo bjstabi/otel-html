@@ -33,12 +33,19 @@ export interface RootSpanInput {
   resource: readonly KeyValue[];
 }
 
-/** POSIX exit code for a child killed by a signal: 128 + the signal's number. */
+/**
+ * POSIX exit code for a child killed by a signal: 128 + the signal's number. The numbers are Linux's (a few, such as
+ * SIGBUS and SIGUSR1, differ on macOS); a literal table keeps this free of node:os.
+ */
 export const EXIT_CODE_OF_SIGNAL: Readonly<Partial<Record<NodeJS.Signals, number>>> = {
   SIGHUP: 1,
   SIGINT: 2,
   SIGQUIT: 3,
+  SIGILL: 4,
+  SIGTRAP: 5,
   SIGABRT: 6,
+  SIGBUS: 7,
+  SIGFPE: 8,
   SIGKILL: 9,
   SIGUSR1: 10,
   SIGSEGV: 11,

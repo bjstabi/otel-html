@@ -105,6 +105,11 @@ describe('exit codes', () => {
     expect(exitCodeOf({ code: null, signal: 'SIGKILL' })).toBe(137);
     expect(exitCodeOf({ code: null, signal: 'SIGWINCH' })).toBe(128);
     expect(EXIT_CODE_OF_SIGNAL.SIGINT).toBe(2);
+    // A crash is the common way a child dies by signal.
+    expect(exitCodeOf({ code: null, signal: 'SIGILL' })).toBe(132);
+    expect(exitCodeOf({ code: null, signal: 'SIGTRAP' })).toBe(133);
+    expect(exitCodeOf({ code: null, signal: 'SIGBUS' })).toBe(135);
+    expect(exitCodeOf({ code: null, signal: 'SIGFPE' })).toBe(136);
   });
 });
 
