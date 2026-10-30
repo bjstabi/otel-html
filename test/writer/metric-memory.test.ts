@@ -167,7 +167,7 @@ describe('metric series memory', () => {
         const kb = /MAXRSS (\d+)/.exec(stderr)?.[1];
         const peakBytes = Number(kb) * 1024;
         process.stdout.write(
-          `METRIC RSS peak ${(peakBytes / 1048576).toFixed(0)} MB in ${((Date.now() - started) / 1000).toFixed(0)} s (Report.addMetrics, no V8 flags; target ${MAX_RSS_BYTES / 1048576} MB)\n`,
+          `METRIC RSS peak ${(peakBytes / 1048576).toFixed(0)} MB in ${((Date.now() - started) / 1000).toFixed(0)} s (Report.addMetrics, no V8 flags; reported only, the ${MAX_RSS_BYTES / 1048576} MB target is the CLI's)\n`,
         );
         expect(peakBytes).toBeGreaterThan(0);
       } finally {

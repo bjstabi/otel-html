@@ -350,7 +350,7 @@ The OTTL grammar and evaluator land in M1, since Traces filters use it.
 - **Initial targets** (enforced by `load.yml` and an e2e perf check, measured on a GitHub-hosted `ubuntu-latest` runner):
   - A 100k-span / 1M-log report opens to the interactive Trace Explorer in under **3 s**, and filters/facet toggles respond in under **150 ms**.
   - Above budget, landing views open in under **3 s**, and a one-window filtered scan completes in under **5 s**.
-  - Writer peak RSS stays under **512 MB** regardless of input size.
+  - Writer peak RSS stays under **512 MB** regardless of input size, measured on the CLI (`otel-html convert` and `merge`), which switches V8 to `--optimize-for-size` when metric points arrive. The library sets no V8 flags, so the same metric workload fed to `Report.addMetrics` peaks higher (about 770 MB on 72M points; V8 grows its heap to several times the live data, which stays about 100 MB); that figure is measured and reported by the same test, not held to the target. A library caller that needs the CLI's figure starts Node with `--optimize-for-size`. Trace and log conversions meet the target on both paths.
   - Report size on disk is about **300 bytes/span** and **200 bytes/log** or less (uncompressed).
 
   If the size target can't be met without compression, gzip payloads move out of §15 into v1.
