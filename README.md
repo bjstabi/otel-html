@@ -66,6 +66,28 @@ Turning off both transports is a usage error (exit 2). A port that is already in
 
 On Ctrl-C (SIGINT) or SIGTERM, `serve` stops listening, finishes the requests in progress, completes the report and prints `wrote <out>: ...` and `received <N> requests (<M> rejected)`. A second Ctrl-C while it finishes prints `interrupted; the report is at its last checkpoint` and exits 130; the report is then viewable and resumable from its last checkpoint but is not marked complete.
 
+### `run`
+
+Runs a command with its OpenTelemetry SDK pointed at a receiver, wraps the run in a root span, and writes the report when the command exits.
+
+```sh
+otel-html run -o ./report -- pytest -q
+```
+
+Everything before `--` is an `otel-html` flag: the `serve` flags except `--append` (`-o`, `--host`, `--http`, `--no-http`, `--grpc`, `--no-grpc`, `--config`, `--title`). The receiver starts first, then the command runs with its stdio inherited and these variables added to its environment:
+
+| Variable | Value |
+| --- | --- |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | The receiver's `http://host:port`, or the gRPC address when the protocol is `grpc`. Kept if you already set it (a warning is printed, and the command will not send to this receiver). |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | Your value if set to `grpc`, `http/protobuf` or `http/json`, else `http/protobuf`. Any other value is a usage error, as is a protocol whose receiver is turned off. |
+| `TRACEPARENT` | `00-<trace id>-<root span id>-01`, always set, so the command's own spans become children of the root span. |
+
+The root span is named after the command's basename (`.exe` stripped), has kind `INTERNAL`, and runs from spawn to exit. Its attributes are `process.command_args` (the full command line), `process.executable.name`, `process.pid` and, when the command exited, `process.exit.code`. A non-zero exit sets the status to `ERROR` with `exit code N`; a command killed by a signal sets `ERROR` with `killed by SIGTERM` (for example) and has no exit code; a zero exit leaves the status unset. The resource comes from the OpenTelemetry environment (`OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES`), host and process detectors, and `service.name` defaults to the command's basename.
+
+`run` exits with the command's exit code, or `128` plus the signal number when the command was killed (143 for SIGTERM). If the command succeeded but the report could not be finished, it exits 1 and prints the error. A command that cannot be started (not found, not executable) exits 1 with the system's message, and no report is kept. SIGINT and SIGTERM sent to `run` are forwarded to the command, and `run` keeps waiting for it; a signal while the report is finishing exits 130, as for `serve`.
+
+`run` does not wait after the command exits: the receiver stops accepting, drains the requests in progress and closes the report. An SDK that has not flushed by then loses its tail, so make sure the command shuts its SDK down before it exits. On Windows the executable must be a real binary or a script `run` can start directly; no shell is involved, so a `.cmd` file needs `cmd /c` in front of it.
+
 ### `merge <reports...>`
 
 Combines report folders into a new one, for example the reports of parallel CI jobs. It reads each report's data chunks, so it works across otel-html versions that share the report format version. A cumulative metric series that appears in two reports is two runs: the second report's stream starts from its own start time and is not counted as a counter reset.

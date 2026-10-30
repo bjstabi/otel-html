@@ -5,6 +5,7 @@ import type { WriterDeps } from '../writer/session.js';
 import { addConfigCommand } from './commands/config-print.js';
 import { addConvertCommand } from './commands/convert.js';
 import { addMergeCommand } from './commands/merge.js';
+import { addRunCommand } from './commands/run.js';
 import { addServeCommand } from './commands/serve.js';
 import type { CliIo } from './io.js';
 
@@ -24,11 +25,13 @@ export function buildProgram(io: CliIo, deps: Partial<WriterDeps>): Command {
   const program = new Command('otel-html')
     .description('turn OpenTelemetry data into a self-contained HTML report')
     .version(pkg.version)
+    .enablePositionalOptions()
     .exitOverride()
     .configureOutput({ writeOut: io.stdout, writeErr: io.stderr });
   addConvertCommand(program, io, deps);
   addMergeCommand(program, io, deps);
   addServeCommand(program, io, deps);
+  addRunCommand(program, io, deps);
   addConfigCommand(program, io, deps.fs);
   return program;
 }

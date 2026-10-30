@@ -1,5 +1,5 @@
 import { create } from '@bufbuild/protobuf';
-import type { Attributes, AttributeValue, HrTime } from '@opentelemetry/api';
+import type { Attributes, HrTime } from '@opentelemetry/api';
 import type { ReadableSpan } from '@opentelemetry/sdk-trace-base';
 import {
   type ExportTraceServiceRequest,
@@ -71,7 +71,7 @@ function kv(key: string, value: unknown): KeyValue {
   return create(KeyValueSchema, { key, value: anyValue(value) });
 }
 
-function attributes(attrs: Attributes | Record<string, AttributeValue | undefined>): KeyValue[] {
+export function attributesToKeyValues(attrs: Attributes): KeyValue[] {
   return Object.entries(attrs).map(([k, v]) => kv(k, v));
 }
 
@@ -79,7 +79,7 @@ function toEvent(e: ReadableSpan['events'][number]): Span_Event {
   return create(Span_EventSchema, {
     timeUnixNano: hrToNanos(e.time),
     name: e.name,
-    attributes: e.attributes ? attributes(e.attributes) : [],
+    attributes: e.attributes ? attributesToKeyValues(e.attributes) : [],
     droppedAttributesCount: e.droppedAttributesCount ?? 0,
   });
 }
@@ -89,7 +89,7 @@ function toLink(l: ReadableSpan['links'][number]): Span_Link {
     traceId: hexToBytes(l.context.traceId),
     spanId: hexToBytes(l.context.spanId),
     traceState: l.context.traceState?.serialize() ?? '',
-    attributes: l.attributes ? attributes(l.attributes) : [],
+    attributes: l.attributes ? attributesToKeyValues(l.attributes) : [],
     droppedAttributesCount: l.droppedAttributesCount ?? 0,
     flags: flagsFrom(l.context.traceFlags, l.context.isRemote),
   });
@@ -120,7 +120,7 @@ function toSpan(s: ReadableSpan): Span {
     kind: (s.kind + 1) as Span_SpanKind,
     startTimeUnixNano: hrToNanos(s.startTime),
     endTimeUnixNano: hrToNanos(s.endTime),
-    attributes: attributes(s.attributes),
+    attributes: attributesToKeyValues(s.attributes),
     droppedAttributesCount: s.droppedAttributesCount,
     events: s.events.map(toEvent),
     droppedEventsCount: s.droppedEventsCount,
@@ -168,7 +168,7 @@ export function readableSpansToRequest(spans: readonly ReadableSpan[]): ExportTr
     }
     resourceSpans.push(
       create(ResourceSpansSchema, {
-        resource: create(ResourceSchema, { attributes: attributes(resource.attributes) }),
+        resource: create(ResourceSchema, { attributes: attributesToKeyValues(resource.attributes) }),
         scopeSpans,
         schemaUrl: resource.schemaUrl ?? '',
       }),

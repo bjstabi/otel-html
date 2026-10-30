@@ -184,6 +184,9 @@ importers:
       '@opentelemetry/api':
         specifier: 1.10.0
         version: 1.10.0
+      '@opentelemetry/resources':
+        specifier: 2.12.0
+        version: 2.12.0(@opentelemetry/api@1.10.0)
       '@tanstack/react-table':
         specifier: 9.3.1
         version: 9.3.1(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
@@ -248,9 +251,6 @@ importers:
       '@opentelemetry/otlp-transformer':
         specifier: 0.300.0
         version: 0.300.0(@opentelemetry/api@1.10.0)
-      '@opentelemetry/resources':
-        specifier: 2.12.0
-        version: 2.12.0(@opentelemetry/api@1.10.0)
       '@opentelemetry/sdk-logs':
         specifier: 3.0.0
         version: 3.0.0(@opentelemetry/api@1.10.0)
