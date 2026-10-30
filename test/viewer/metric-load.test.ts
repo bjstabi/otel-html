@@ -1,6 +1,11 @@
 import { beforeAll, describe, expect, test } from 'vitest';
 import { reviveDataJson, unwrapDataFile, wrapDataFile } from '../../src/format/data-file.js';
-import { encodeSeriesFile, LEVEL0_WIDTH_NS, parseSeriesFile } from '../../src/format/metric-files.js';
+import {
+  encodeSeriesFile,
+  LEVEL0_WIDTH_NS,
+  parseLevelFile,
+  parseSeriesFile,
+} from '../../src/format/metric-files.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { loadMetric, loadMetricCatalog } from '../../src/viewer/data/metric-load.js';
 import {
@@ -78,6 +83,24 @@ describe('loadMetric', () => {
     const e = await m.level(1).catch((x: unknown) => x);
     expect(e).toMatchObject({ code: 'invalid-report' });
     expect(String(e)).toContain('data/metrics/000000/l1.js');
+  });
+
+  test('a level holding a series id past the catalog count leaves it out, like series.js', async () => {
+    const path = 'data/metrics/000000/l1.js';
+    const key = 'metrics/000000/l1';
+    const l1 = parseLevelFile(
+      reviveDataJson(unwrapDataFile(reports.compacted.files.get(path) ?? '', key)),
+      path,
+    );
+    const extra = { id: 99, t: [0], a: [{ k: 'counter', delta: 1, resets: 0 }] };
+    const files = new Map(reports.compacted.files).set(
+      path,
+      wrapDataFile(key, { ...l1, series: [...l1.series, extra] }),
+    );
+    const m = await load(reports.compacted, 0, files);
+    const level = await m.level(1);
+    expect(m.series).toHaveLength(3);
+    expect([...level.series.keys()]).toEqual([0, 1, 2]);
   });
 
   test('loads only the files the manifest lists', async () => {
