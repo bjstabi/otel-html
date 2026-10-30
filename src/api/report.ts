@@ -146,7 +146,15 @@ export class Report {
 
   static async create(options: ReportOptions, deps?: Partial<WriterDeps>): Promise<Report> {
     const full = await resolveDeps(deps);
-    const config = await resolveApiConfig(full, options.config, options.title);
+    return Report.createResolved(options, await resolveApiConfig(full, options.config, options.title), full);
+  }
+
+  /** Internal (the CLI): like `create`, with config already resolved so dashboard sources are kept. */
+  static async createResolved(
+    options: Pick<ReportOptions, 'out' | 'append'>,
+    config: ResolvedConfig,
+    full: WriterDeps,
+  ): Promise<Report> {
     const session = await openSession(full, {
       out: options.out,
       config,

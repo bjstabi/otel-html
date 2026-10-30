@@ -5,9 +5,19 @@ import type { WriterDeps } from '../writer/session.js';
 import { addConfigCommand } from './commands/config-print.js';
 import { addConvertCommand } from './commands/convert.js';
 import { addMergeCommand } from './commands/merge.js';
+import { addServeCommand } from './commands/serve.js';
 import type { CliIo } from './io.js';
 
 export type { CliIo };
+
+/** Thrown by a command's action to end the run with this exit code and no further message. */
+export class CliExit extends Error {
+  readonly exitCode: number;
+  constructor(exitCode: number) {
+    super(`exit ${exitCode}`);
+    this.exitCode = exitCode;
+  }
+}
 
 /** Commander parse failures never exit the process: they throw, and `runCli` maps them. */
 export function buildProgram(io: CliIo, deps: Partial<WriterDeps>): Command {
@@ -18,6 +28,7 @@ export function buildProgram(io: CliIo, deps: Partial<WriterDeps>): Command {
     .configureOutput({ writeOut: io.stdout, writeErr: io.stderr });
   addConvertCommand(program, io, deps);
   addMergeCommand(program, io, deps);
+  addServeCommand(program, io, deps);
   addConfigCommand(program, io, deps.fs);
   return program;
 }
@@ -32,6 +43,7 @@ export async function runCli(argv: readonly string[], io: CliIo, deps: Partial<W
     await buildProgram(io, deps).parseAsync(argv, { from: 'user' });
     return 0;
   } catch (e) {
+    if (e instanceof CliExit) return e.exitCode;
     if (e instanceof CommanderError) {
       // Commander has already printed its message; help and version are successes.
       return e.exitCode === 0 ? 0 : 2;

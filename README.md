@@ -44,6 +44,28 @@ Turns OTLP files into a report. Inputs can be OTLP JSON, JSON lines (such as Col
 | `--append` | Add to an existing report instead of replacing it. Only works with a report written by the same otel-html version. |
 | `--signal <signal>` | `traces`, `logs` or `metrics`. Needed for protobuf (`.pb`) inputs, which do not say what they hold. |
 
+### `serve`
+
+Receives OTLP over HTTP and gRPC and writes a report until you press Ctrl-C.
+
+```sh
+otel-html serve -o ./report
+# listening on http://127.0.0.1:4318 (OTLP/HTTP) and 127.0.0.1:4317 (OTLP/gRPC), writing ./report; press Ctrl-C to finish
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `-o, --out <dir>` | Report folder (required). |
+| `--host <addr>` | Address to listen on. Default `127.0.0.1`. |
+| `--http <port>`, `--no-http` | OTLP/HTTP port (default 4318), or turn it off. |
+| `--grpc <port>`, `--no-grpc` | OTLP/gRPC port (default 4317), or turn it off. Port 0 picks a free port. |
+| `--append` | Add to an existing report instead of replacing it. |
+| `--config <file>`, `--title <title>` | As for `convert`. |
+
+Turning off both transports is a usage error (exit 2). A port that is already in use exits 1 with the system's `EADDRINUSE` message.
+
+On Ctrl-C (SIGINT) or SIGTERM, `serve` stops listening, finishes the requests in progress, completes the report and prints `wrote <out>: ...` and `received <N> requests (<M> rejected)`. A second Ctrl-C while it finishes prints `interrupted; the report is at its last checkpoint` and exits 130; the report is then viewable and resumable from its last checkpoint but is not marked complete.
+
 ### `merge <reports...>`
 
 Combines report folders into a new one, for example the reports of parallel CI jobs. It reads each report's data chunks, so it works across otel-html versions that share the report format version. A cumulative metric series that appears in two reports is two runs: the second report's stream starts from its own start time and is not counted as a counter reset.
@@ -241,6 +263,7 @@ Config is a YAML or JSON file (`otel-html.yaml` by default), or an object passed
 ## Limits
 
 - Timestamps are JavaScript numbers, exact to 2^53 ns. That is about 104 days of relative time span within one report.
+- The receiver has no TLS or authentication and reflects only localhost origins for CORS; bodies over 64 MiB are refused (413); logs and metric points a sender retries are not deduplicated.
 - The viewer is for static reports that open from `file://`. It does not follow a report that is still being written.
 - When a signal is larger than `viewer.eagerBudgetBytes`, the viewer reads its chunks on demand. Services numbers, filtered log results and filtered patterns are then partial (the viewer says "from N of M chunks") until you choose "Scan entire run". Opening a trace or its Logs tab reads only the chunks the trace index lists for it.
 - Dashboard layout edits are not saved: Edit layout changes the page until you reload. Use Copy config and paste the result into your config file.
