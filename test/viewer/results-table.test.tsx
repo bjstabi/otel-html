@@ -1,9 +1,11 @@
 import { act, cleanup, render, screen, within } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
+import { createRoot } from 'react-dom/client';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { parseUnixNanos } from '../../src/model/ids.js';
 import { ResultsTable } from '../../src/viewer/components/results-table.js';
 import type { SpanRow, TraceRow } from '../../src/viewer/data/span-query.js';
+import { MOVE_EVENT } from '../../src/viewer/shell/move-event.js';
 import { SPAN_COLUMNS_UI, TRACE_COLUMNS_UI } from '../../src/viewer/traces/columns.js';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -153,5 +155,47 @@ describe('ResultsTable', () => {
     mount();
     const total = document.querySelector<HTMLElement>('[role="rowgroup"] > div.relative');
     expect(total?.style.height).toBe(`${rows.length * 36}px`);
+  });
+});
+
+describe('ResultsTable j/k', () => {
+  // A render from a resolved query commits outside `act`: React paints the rows, then runs passive
+  // effects in a later task. A j/k press in between (a MutationObserver callback runs there) must move.
+  test('j/k moves as soon as the rows are on screen', async () => {
+    const env = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+    env.IS_REACT_ACT_ENVIRONMENT = false;
+    const container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+    const onRowClick = vi.fn();
+    try {
+      const pressed = new Promise<void>((resolve) => {
+        const observer = new MutationObserver(() => {
+          if (container.querySelectorAll('[role="row"]').length === 0) return;
+          observer.disconnect();
+          window.dispatchEvent(new CustomEvent(MOVE_EVENT, { detail: 1 }));
+          resolve();
+        });
+        observer.observe(container, { childList: true, subtree: true });
+      });
+      root.render(
+        <ResultsTable
+          rows={rows}
+          columns={SPAN_COLUMNS_UI}
+          rowId={rowId}
+          sort={null}
+          onSort={vi.fn()}
+          onRowClick={onRowClick}
+          selectedId={null}
+          epoch={parseUnixNanos('0', 'epoch')}
+        />,
+      );
+      await pressed;
+      expect(onRowClick).toHaveBeenCalledWith(rows[0]);
+    } finally {
+      root.unmount();
+      container.remove();
+      env.IS_REACT_ACT_ENVIRONMENT = true;
+    }
   });
 });

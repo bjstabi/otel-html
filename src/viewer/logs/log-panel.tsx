@@ -1,6 +1,15 @@
 import { Tabs } from '@base-ui/react/tabs';
 import { CircleAlert, Copy, Download, ListTree, X } from 'lucide-react';
-import { type JSX, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  type JSX,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { logsToOtlpJson } from '../../format/otlp-export.js';
 import { type AnyValue, anyValueToDisplay } from '../../model/anyvalue.js';
 import type { SpanId, TraceId } from '../../model/ids.js';
@@ -199,7 +208,7 @@ export function LogPanel(props: LogPanelProps): JSX.Element {
   latest.current = logRefs;
   // With a trace overlay open too, the trace panel owns j/k.
   const movable = logRefs !== undefined && sel.traceId === null;
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!movable) return;
     const onMove = (e: Event): void => {
       if (!(e instanceof CustomEvent)) return;

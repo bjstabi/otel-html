@@ -3,7 +3,7 @@
 import { type ColumnDef, tableFeatures, useTable } from '@tanstack/react-table';
 import { observeElementRect, useVirtualizer } from '@tanstack/react-virtual';
 import { ArrowDown, ArrowUp, ChevronsUpDown } from 'lucide-react';
-import { type JSX, type KeyboardEvent, useEffect, useMemo, useRef } from 'react';
+import { type JSX, type KeyboardEvent, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import type { UnixNanos } from '../../model/ids.js';
 import { MOVE_EVENT } from '../shell/move-event.js';
 import { type ColorAssigner, createColorAssigner } from '../theme/palette.js';
@@ -117,9 +117,10 @@ export function ResultsTable<R>(props: ResultsTableProps<R>): JSX.Element {
     if (selectedAt >= 0) virtual.scrollToIndex(selectedAt);
   }, [selectedId]);
 
-  // j/k from the shell: move the selection one row, keeping keyboard focus where it was.
+  // j/k from the shell: move the selection one row, keeping keyboard focus where it was. Attached before
+  // paint, so a press as soon as the rows show is not lost.
   // biome-ignore lint/correctness/useExhaustiveDependencies: the handler reads everything through `latest`
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!moveEnabled) return;
     const onMove = (e: Event): void => {
       if (!(e instanceof CustomEvent)) return;
