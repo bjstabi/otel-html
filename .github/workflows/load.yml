@@ -54,7 +54,8 @@ jobs:
       # Builds first (the 1M-log test runs the built library), then runs the two gated test files.
       - run: mise run test:load
 
-  # The receiver under load (spec §7): telemetrygen sends 1M spans over gRPC and 1M logs over HTTP (one record per request, so 1M requests) to
+  # The receiver under load (spec §7): telemetrygen sends 1M spans over gRPC (paced at 500 spans/s per worker (250
+  # traces/s) so it does not drop them) and 1M logs over HTTP (one record per request, so 1M requests) to
   # `otel-html serve`, which must write a complete report with every record, reject none and stay under 512 MB; then
   # the viewer's Traces and Logs landings must be interactive on that report. Docker with host networking needs a Linux
   # runner.

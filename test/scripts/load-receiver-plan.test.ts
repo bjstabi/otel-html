@@ -1,11 +1,14 @@
 import { describe, expect, test } from 'vitest';
 import {
   checkRun,
+  logsArgs,
   parseLoadArgs,
   parseManifestJs,
   parseMaxRssKb,
   parseReceived,
   planWorkload,
+  SPANS_PER_SECOND_PER_WORKER,
+  tracesArgs,
 } from '../../scripts/load-receiver-plan.js';
 
 describe('parseLoadArgs', () => {
@@ -122,5 +125,38 @@ describe('checkRun', () => {
 
   test('a missing RSS or received line is a failure, not a pass', () => {
     expect(checkRun({ manifest: ok, want, received: null, rssKb: null })).toHaveLength(2);
+  });
+});
+
+describe('tracesArgs', () => {
+  const args = tracesArgs('img:1', 4317, 8, 62_500);
+
+  test('paces the generator', () => {
+    const i = args.indexOf('--rate');
+    expect(i).toBeGreaterThan(-1);
+    expect(args[i + 1]).toBe(String(SPANS_PER_SECOND_PER_WORKER));
+  });
+
+  test('targets the gRPC endpoint with the per-worker count', () => {
+    expect(args[0]).toBe('img:1');
+    expect(args).toContain('traces');
+    expect(args).toContain('127.0.0.1:4317');
+    expect(args.join(' ')).toContain('--traces 62500');
+    expect(args.join(' ')).toContain('--workers 8');
+  });
+});
+
+describe('logsArgs', () => {
+  const args = logsArgs('img:1', 4318, 8, 125_000);
+
+  test('stays unthrottled over HTTP', () => {
+    expect(args.join(' ')).toContain('--rate 0');
+    expect(args).toContain('--otlp-http');
+  });
+
+  test('targets the HTTP endpoint with the per-worker count', () => {
+    expect(args).toContain('127.0.0.1:4318');
+    expect(args.join(' ')).toContain('--logs 125000');
+    expect(args.join(' ')).toContain('--workers 8');
   });
 });
