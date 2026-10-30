@@ -1,6 +1,7 @@
 import { basename } from 'node:path';
 import { trace } from '@opentelemetry/api';
 import type { ReadableLogRecord } from '@opentelemetry/sdk-logs';
+import type { ResourceMetrics } from '@opentelemetry/sdk-metrics';
 import type { ReadableSpan } from '@opentelemetry/sdk-trace-base';
 import pkg from '../../package.json' with { type: 'json' };
 import { loadConfigFile } from '../config/load.js';
@@ -15,6 +16,7 @@ import type { ExportTraceServiceRequest } from '../model/gen/opentelemetry/proto
 import { ExportTraceServiceRequestSchema } from '../model/gen/opentelemetry/proto/collector/trace/v1/trace_service_pb.js';
 import { type OtlpRequest, parseOtlpObject } from '../model/otlp-json.js';
 import { readableLogRecordsToRequest } from '../model/sdk-logs.js';
+import { resourceMetricsToRequest } from '../model/sdk-metrics.js';
 import { readableSpansToRequest } from '../model/sdk-spans.js';
 import { createNodeFileSystem } from '../writer/node-fs.js';
 import {
@@ -129,6 +131,10 @@ function sum(a: AddResult, b: AddResult): AddResult {
   };
 }
 
+function isResourceMetrics(input: object): input is ResourceMetrics {
+  return 'scopeMetrics' in input && 'resource' in input;
+}
+
 const NOTHING: AddResult = { accepted: 0, dropped: 0, duplicates: 0 };
 
 /** A streaming report writer. Feed it telemetry, then `close()` to finish the report. */
@@ -190,10 +196,13 @@ export class Report {
   }
 
   /**
-   * A protobuf-es `ExportMetricsServiceRequest` or an OTLP-JSON object. OTLP JSON is read in place, not copied:
+   * An SDK `ResourceMetrics`, a protobuf-es `ExportMetricsServiceRequest` or an OTLP-JSON object. OTLP JSON is read in place, not copied:
    * leave it unchanged until the returned promise settles.
    */
-  async addMetrics(input: ExportMetricsServiceRequest | object): Promise<AddResult> {
+  async addMetrics(input: ResourceMetrics | ExportMetricsServiceRequest | object): Promise<AddResult> {
+    if (isResourceMetrics(input)) {
+      return this.#session.add({ signal: 'metrics', request: resourceMetricsToRequest(input) }, 'addMetrics');
+    }
     if (isMessage(input, ExportMetricsServiceRequestSchema.typeName)) {
       return this.#session.add(
         { signal: 'metrics', request: input as ExportMetricsServiceRequest },

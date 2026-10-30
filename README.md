@@ -132,7 +132,59 @@ const summary = await report.close(); // flushes chunks and finalizes the manife
 console.log(summary.totals); // { spans: 1, logs: 0, metrics: 0 }
 ```
 
-`Report` also has `addLogs`, `addMetrics` (OTLP request objects, JSON or protobuf-es messages) and `flush()`. `addMetrics` reads an OTLP JSON object in place rather than copying it: leave it unchanged until the returned promise settles (`addSpans` and `addLogs` copy). `addSpans` accepts SDK `ReadableSpan` arrays, OTLP trace requests, or OTLP JSON objects. `config` takes an object or the path of a YAML/JSON file. Environment variables are not read by the library.
+### SDK exporters
+
+`OtelHtmlSpanExporter`, `OtelHtmlLogRecordExporter` and `OtelHtmlMetricExporter` plug into the OpenTelemetry JS SDK and write into a `Report`. They can share one report. `shutdown()` flushes the report but does not close it: the caller closes the report.
+
+```ts
+import { LoggerProvider, SimpleLogRecordProcessor } from '@opentelemetry/sdk-logs';
+import { MeterProvider, PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics';
+import { BasicTracerProvider, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
+import {
+  OtelHtmlLogRecordExporter,
+  OtelHtmlMetricExporter,
+  OtelHtmlSpanExporter,
+  Report,
+} from 'otel-html';
+
+const report = await Report.create({ out: './report-c' });
+
+const tracerProvider = new BasicTracerProvider({
+  spanProcessors: [new SimpleSpanProcessor(new OtelHtmlSpanExporter({ report }))],
+});
+const loggerProvider = new LoggerProvider({
+  processors: [new SimpleLogRecordProcessor(new OtelHtmlLogRecordExporter({ report }))],
+});
+const meterProvider = new MeterProvider({
+  readers: [
+    new PeriodicExportingMetricReader({
+      exporter: new OtelHtmlMetricExporter({ report, temporality: 'delta' }), // default 'cumulative'
+    }),
+  ],
+});
+
+// ... instrument your code ...
+
+await Promise.all([tracerProvider.shutdown(), loggerProvider.shutdown(), meterProvider.shutdown()]);
+await report.close(); // shutdown() flushes, it never closes the report
+```
+
+### Receiving OTLP in-process
+
+`startReceiver(report, overrides?, deps?)` binds the OTLP/HTTP and OTLP/gRPC receivers over a report, the same receivers `serve` uses. `overrides` takes `http` and `grpc` (each `false` to disable, or `{ host?, port? }` to enable; port `0` picks a free one), plus `maxBodyBytes` and `inflightBudgetBytes`; anything left out comes from the report's `receiver.*` config. It returns `{ http, grpc, stats(), close() }`. `close()` stops listening and finishes requests in progress; the report stays open, so the caller closes it.
+
+```ts
+import { Report, startReceiver } from 'otel-html';
+
+const report = await Report.create({ out: './report-d' });
+const receiver = await startReceiver(report, { http: { port: 0 }, grpc: false });
+console.log(receiver.http); // http://127.0.0.1:<port>
+// ... point exporters at it ...
+await receiver.close();
+await report.close();
+```
+
+`Report` also has `addLogs`, `addMetrics` (an SDK `ResourceMetrics`, or OTLP request objects, JSON or protobuf-es messages) and `flush()`. `addMetrics` reads an OTLP JSON object in place rather than copying it: leave it unchanged until the returned promise settles (`addSpans` and `addLogs` copy). `addSpans` accepts SDK `ReadableSpan` arrays, OTLP trace requests, or OTLP JSON objects. `config` takes an object or the path of a YAML/JSON file. Environment variables are not read by the library.
 
 ## Viewing logs
 
