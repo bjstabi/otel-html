@@ -151,7 +151,10 @@ async function main(): Promise<number> {
   }
   const code = await stopServe(serve, STOP_TIMEOUT_MS);
   const seconds = (Date.now() - started) / 1000;
-  if (code !== 0) throw new Error(`serve exited ${code} after SIGINT: ${serve.stdout()}${serve.stderr()}`);
+  if (code !== 0)
+    throw new Error(
+      `serve exited ${code} after SIGINT\nreceiver at failure: ${formatServeFigures(serve.stderr())}\n${serve.stdout()}${serve.stderr()}`,
+    );
 
   const receivedLine = /^.*received \d+ requests.*$/m.exec(serve.stdout());
   if (receivedLine !== null) process.stdout.write(`${receivedLine[0]}\n`);
