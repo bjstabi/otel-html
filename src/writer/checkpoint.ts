@@ -37,6 +37,20 @@ export async function writeManifest(fs: FileSystem, out: string, manifest: Manif
 export type StateHead = Omit<SessionState, 'dedupe' | 'traceIndex'>;
 
 /**
+ * The head fields already stringified (`undefined` where `JSON.stringify` would drop the field). A background
+ * checkpoint takes these at prepare time: the rollups and metric streams are live structures that go on changing
+ * while the state is written.
+ */
+export interface StringifiedHead {
+  readonly fields: { readonly [K in keyof StateHead]: string | undefined };
+}
+
+export function stringifyHead(head: StateHead): StringifiedHead {
+  const entries = (Object.keys(head) as (keyof StateHead)[]).map((k) => [k, JSON.stringify(head[k])]);
+  return { fields: Object.fromEntries(entries) as StringifiedHead['fields'] };
+}
+
+/**
  * Where each head field sits around `dedupe` and `traceIndex` in `SessionState` order (listed in that order). Typed
  * as a record over every head field, so a new `SessionState` field fails to compile until it is placed here.
  */
@@ -68,12 +82,12 @@ const DEDUPE_SLICE = 1000;
  * `SessionState` order; the head's fields stay as they are stringified today.
  */
 export function* stateSlotPieces(
-  head: StateHead,
+  head: StateHead | StringifiedHead,
   dedupe: readonly string[],
   shards: Iterable<[string, Readonly<TraceShard>]>,
 ): Generator<string> {
   const field = (k: keyof StateHead): string | undefined => {
-    const v = JSON.stringify(head[k]);
+    const v = 'fields' in head ? head.fields[k] : JSON.stringify(head[k]);
     return v === undefined ? undefined : `${JSON.stringify(k)}:${v}`; // JSON.stringify drops undefined fields
   };
   const keys = Object.keys(HEAD_SIDE) as (keyof StateHead)[];
@@ -95,7 +109,7 @@ export async function writeStateSlot(
   fs: FileSystem,
   out: string,
   slot: StateSlot,
-  head: StateHead,
+  head: StateHead | StringifiedHead,
   dedupe: readonly string[],
   shards: Iterable<[string, Readonly<TraceShard>]>,
 ): Promise<void> {

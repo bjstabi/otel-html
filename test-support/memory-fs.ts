@@ -20,19 +20,32 @@ function parentOf(p: string): string | null {
   return i === 0 ? '/' : p.slice(0, i);
 }
 
+/** Holds one write (see `holdNextWrite`) at the point where it would store its file. */
+export interface WriteGate {
+  /** Resolves once a write to the path is waiting at the gate. */
+  reached: Promise<void>;
+  /** Let the held write go through. */
+  release(): void;
+  /** Make the held write fail instead. */
+  fail(error: Error): void;
+}
+
 /**
  * In-memory FileSystem that mirrors the node implementation where the writer relies on it:
  * writing text needs an existing parent directory (writeBytes creates parents), `list` of a missing
  * directory fails with ENOENT, directories exist implicitly for every file prefix, and `remove` refuses
- * directories.
+ * directories. With `pieces`, `writePiecesAtomic` exists and consumes its pieces only once the write is let through
+ * (the node implementation streams them), so a test can see what a held write would read late.
  */
-export function createMemoryFileSystem(): FileSystem & {
+export function createMemoryFileSystem(options: { pieces?: boolean } = {}): FileSystem & {
   snapshot(): Map<string, string>;
   failNextWrite(pathSuffix: string): void;
+  holdNextWrite(pathSuffix: string): WriteGate;
 } {
   const files = new Map<string, Uint8Array>();
   const dirs = new Set<string>();
   const failures: string[] = [];
+  const gates: { suffix: string; reached(): void; open: Promise<Error | null> }[] = [];
 
   const checkFail = (p: string): void => {
     const i = failures.findIndex((s) => p.endsWith(s));
@@ -40,6 +53,16 @@ export function createMemoryFileSystem(): FileSystem & {
       failures.splice(i, 1);
       throw new Error(`injected write failure: ${p}`);
     }
+  };
+
+  const passGate = async (p: string): Promise<void> => {
+    const i = gates.findIndex((g) => p.endsWith(g.suffix));
+    const gate = gates[i];
+    if (gate === undefined) return;
+    gates.splice(i, 1);
+    gate.reached();
+    const error = await gate.open;
+    if (error !== null) throw error;
   };
 
   const registerDirs = (dir: string): void => {
@@ -100,8 +123,21 @@ export function createMemoryFileSystem(): FileSystem & {
       requireParent(p);
       requireWritable(p);
       checkFail(p);
+      await passGate(p);
       files.set(p, enc.encode(text));
     },
+    ...(options.pieces === true
+      ? {
+          async writePiecesAtomic(rawP: string, pieces: Iterable<string>): Promise<void> {
+            const p = norm(rawP);
+            requireParent(p);
+            requireWritable(p);
+            checkFail(p);
+            await passGate(p);
+            files.set(p, enc.encode([...pieces].join('')));
+          },
+        }
+      : {}),
     async writeBytes(rawP, bytes) {
       const p = norm(rawP);
       requireWritable(p);
@@ -152,6 +188,18 @@ export function createMemoryFileSystem(): FileSystem & {
     },
     failNextWrite(pathSuffix) {
       failures.push(norm(pathSuffix));
+    },
+    holdNextWrite(pathSuffix) {
+      let reached!: () => void;
+      let decide!: (error: Error | null) => void;
+      const reachedP = new Promise<void>((r) => {
+        reached = r;
+      });
+      const open = new Promise<Error | null>((r) => {
+        decide = r;
+      });
+      gates.push({ suffix: norm(pathSuffix), reached, open });
+      return { reached: reachedP, release: () => decide(null), fail: (e) => decide(e) };
     },
   };
 }

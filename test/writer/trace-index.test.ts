@@ -146,7 +146,8 @@ describe('TraceIndex', () => {
     const idx = new TraceIndex();
     idx.add(mk(1), 'chunks/spans/000000', resource);
     expect(idx.dirtyShards()).toEqual(['5b']);
-    idx.clearDirty();
+    idx.snapshot();
+    idx.release();
     expect(idx.dirtyShards()).toEqual([]);
     const json = idx.toJSON();
     expect(TraceShardSchema.parse(json['5b'])).toEqual(json['5b']);
@@ -228,5 +229,37 @@ describe('TraceIndex memory shape', () => {
     loaded.addLog(mkLog({ traceId: T2 }), 'chunks/logs/000000');
     expect(entryOf(loaded, T2)?.logChunks).toEqual(['chunks/logs/000000']);
     expect(entryOf(loaded, TRACE)?.logChunks).toEqual([]);
+  });
+});
+
+describe('TraceIndex snapshot', () => {
+  const shard = TRACE.slice(0, 2);
+
+  test('entries in a held snapshot are not changed by further adds or logs; new entries stay out of it', () => {
+    const idx = new TraceIndex();
+    idx.add(mk(1), 'chunks/spans/000000', resource);
+    const snap = idx.snapshot();
+    expect(snap.dirty).toEqual([shard]);
+    idx.add(mk(2), 'chunks/spans/000001', resource);
+    idx.addLog(mkLog(), 'chunks/logs/000000');
+    const other = parseTraceId('ffffffffffffffffffffffffffffffff', 't');
+    idx.add(mk(3, { traceId: other }), 'chunks/spans/000002', resource);
+    const held = snap.entries(shard).get(TRACE);
+    expect(held).toMatchObject({ spans: 1, logs: 0, chunks: ['chunks/spans/000000'], logChunks: [] });
+    expect(snap.entries('ff').size).toBe(0);
+    expect(idx.shardPayload(shard)[TRACE]).toMatchObject({ spans: 2, logs: 1 });
+    idx.release();
+    idx.add(mk(4), 'chunks/spans/000003', resource);
+    expect(idx.shardPayload(shard)[TRACE]).toMatchObject({ spans: 3 });
+    expect(held?.spans).toBe(1);
+  });
+
+  test('restoreDirty marks shards dirty again', () => {
+    const idx = new TraceIndex();
+    idx.add(mk(1), 'chunks/spans/000000', resource);
+    const snap = idx.snapshot();
+    idx.release();
+    idx.restoreDirty(snap.dirty);
+    expect(idx.dirtyShards()).toEqual([shard]);
   });
 });

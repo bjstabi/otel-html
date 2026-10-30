@@ -1,7 +1,12 @@
 import { describe, expect, test } from 'vitest';
 import { parseSessionState, type SessionState } from '../../src/format/state.js';
 import type { TraceEntry } from '../../src/format/trace-shard.js';
-import { jsObjectKeyOrder, stateSlotPieces, writeStateSlot } from '../../src/writer/checkpoint.js';
+import {
+  jsObjectKeyOrder,
+  stateSlotPieces,
+  stringifyHead,
+  writeStateSlot,
+} from '../../src/writer/checkpoint.js';
 import type { FileSystem } from '../../src/writer/ports.js';
 import { createMemoryFileSystem } from '../../test-support/memory-fs.js';
 
@@ -55,6 +60,15 @@ describe('stateSlotPieces', () => {
   ] as const)('joined pieces equal JSON.stringify of the full state: %s', (_n, dedupe, index) => {
     const state = stateOf([...dedupe], index as SessionState['traceIndex']);
     expect(pieces(state).join('')).toBe(JSON.stringify(state));
+  });
+
+  test('a head stringified up front gives the same bytes and no longer follows the live head', () => {
+    const state = stateOf(['one'], { '5b': { [ID_A]: entry('n', [2]) } });
+    const { dedupe, traceIndex, ...head } = state;
+    const early = stringifyHead(head);
+    head.nextSegment['4'] = 99; // the live structures go on changing after the prepare
+    const bytes = [...stateSlotPieces(early, dedupe, Object.entries(traceIndex))].join('');
+    expect(bytes).toBe(JSON.stringify({ ...state, nextSegment: { '4': 2 } }));
   });
 
   test('shards go out in object-key order, as JSON.stringify of an object keyed by them', () => {

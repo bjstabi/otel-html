@@ -20,6 +20,20 @@ function emptyEntry(start: number, end: number): TraceEntry {
 }
 
 /**
+ * A checkpoint's frozen view of the index: per shard, a copy of the entry map holding the very entry objects the
+ * index had at that moment. While the index holds it, an entry is replaced by a copy before it changes, so these
+ * objects stay as they were (see `TraceIndex.snapshot`).
+ */
+export interface TraceIndexSnapshot {
+  /** Shards that had changed since the previous snapshot, sorted. */
+  readonly dirty: readonly string[];
+  /** Every shard with a trace, sorted. */
+  readonly shardNames: readonly string[];
+  /** The shard's entries as they were; read only. */
+  entries(shard: string): ReadonlyMap<string, TraceEntry>;
+}
+
+/**
  * trace_id to chunk refs plus a small summary, sharded by the first two hex characters of the id. Spans of
  * one trace may arrive far apart, in different chunks or sessions: entries only ever grow, and the root is
  * `null` until the span without a parent is seen.
@@ -30,6 +44,7 @@ export class TraceIndex {
   // Root service/name/resource strings repeat across hundreds of thousands of traces. The cap bounds the table
   // when names are unbounded (e.g. ids in span names); past it strings are stored as they are.
   readonly #interned = new Map<string, string>();
+  #held: Map<string, Map<string, TraceEntry>> | null = null;
   readonly #internCap: number;
 
   constructor(options: { internCap?: number } = {}) {
@@ -43,10 +58,6 @@ export class TraceIndex {
     return s;
   }
 
-  #entry(traceId: TraceId): TraceEntry | undefined {
-    return this.#shards.get(shardOf(traceId))?.get(traceId);
-  }
-
   #create(traceId: TraceId, entry: TraceEntry): TraceEntry {
     const shard = shardOf(traceId);
     let traces = this.#shards.get(shard);
@@ -58,8 +69,22 @@ export class TraceIndex {
     return entry;
   }
 
+  /**
+   * The entry to change. An entry the held snapshot shares is replaced in the live map by a copy first: that
+   * keeps what the snapshot's writer reads as it was, at the cost of one lookup per change while a snapshot is held.
+   */
+  #writable(traceId: TraceId, created: () => TraceEntry): TraceEntry {
+    const shard = shardOf(traceId);
+    const e = this.#shards.get(shard)?.get(traceId);
+    if (e === undefined) return this.#create(traceId, created());
+    if (this.#held?.get(shard)?.get(traceId) !== e) return e;
+    const copy = { ...e };
+    this.#shards.get(shard)?.set(traceId, copy);
+    return copy;
+  }
+
   add(span: SpanRecord, chunk: ChunkRef, resource: ResourceRecord): void {
-    const e = this.#entry(span.traceId) ?? this.#create(span.traceId, emptyEntry(span.start, span.end));
+    const e = this.#writable(span.traceId, () => emptyEntry(span.start, span.end));
     if (e.chunks[e.chunks.length - 1] !== chunk) e.chunks = e.chunks.concat(chunk);
     // Timing is span-defined: an entry that so far only knew logs takes the first span's extent outright.
     e.start = e.spans === 0 ? span.start : Math.min(e.start, span.start);
@@ -83,7 +108,7 @@ export class TraceIndex {
   addLog(log: LogRecordRecord, chunk: ChunkRef): void {
     if (log.traceId === null) return;
     const t = logTime(log);
-    const e = this.#entry(log.traceId) ?? this.#create(log.traceId, emptyEntry(t, t));
+    const e = this.#writable(log.traceId, () => emptyEntry(t, t));
     if (e.logChunks[e.logChunks.length - 1] !== chunk) e.logChunks = e.logChunks.concat(chunk);
     if (e.spans === 0) {
       e.start = Math.min(e.start, t);
@@ -93,13 +118,14 @@ export class TraceIndex {
     this.#dirty.add(shardOf(log.traceId));
   }
 
-  /** Shards changed since the last `clearDirty`, sorted. */
+  /** Shards changed since the last `snapshot`, sorted. */
   dirtyShards(): string[] {
     return [...this.#dirty].sort();
   }
 
-  clearDirty(): void {
-    this.#dirty.clear();
+  /** Mark shards changed again, when the checkpoint that took them from `snapshot` failed. */
+  restoreDirty(shards: readonly string[]): void {
+    for (const s of shards) this.#dirty.add(s);
   }
 
   markAllDirty(): void {
@@ -112,11 +138,22 @@ export class TraceIndex {
   }
 
   /**
-   * The shard's live entries as a plain object, for serializing at once: no copy of entries or arrays (chunk lists
-   * are only ever replaced, never mutated), so it must not be kept across further adds.
+   * Freeze the index for a checkpoint that writes while adds go on, and clear the dirty set. Costs one shallow map
+   * copy per shard. Only one snapshot can be held; `release` it when its writer is done (or has failed).
    */
-  shardView(shard: string): Readonly<TraceShard> {
-    return Object.fromEntries(this.#shards.get(shard) ?? []);
+  snapshot(): TraceIndexSnapshot {
+    if (this.#held !== null) throw new Error('a trace index snapshot is already held');
+    const held = new Map<string, Map<string, TraceEntry>>();
+    for (const [shard, traces] of this.#shards) held.set(shard, new Map(traces));
+    this.#held = held;
+    const dirty = this.dirtyShards();
+    this.#dirty.clear();
+    const shardNames = this.shards();
+    return { dirty, shardNames, entries: (shard) => held.get(shard) ?? new Map() };
+  }
+
+  release(): void {
+    this.#held = null;
   }
 
   shardPayload(shard: string): TraceShard {

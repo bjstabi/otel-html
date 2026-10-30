@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
 import { parseExemplarFile } from '../../src/format/metric-files.js';
 import { SessionStateSchema } from '../../src/format/state.js';
@@ -448,7 +448,8 @@ describe('flush policy and telemetry', () => {
     expect(w.fs.snapshot().has('r/data/manifest.js')).toBe(false);
     w.clock.advance(5_000n * 1_000_000n);
     await s.add(otlp(spansRequest(1, 0, 1)), 'b.json');
-    expect(manifestOf(w, OUT).totals.spans).toBe(2);
+    // the interval checkpoint is written in the background: wait for it, without a flush of our own
+    await vi.waitFor(() => expect(manifestOf(w, OUT).totals.spans).toBe(2));
     await s.close();
   });
 
