@@ -184,12 +184,15 @@ export async function mergeReports(
       deps.logger.warn(`merging ${input.dir}, which was not closed cleanly; it may be missing recent data`);
     }
   }
+  // An existing report at `out` is the base; the session's append branch inherits its title and dashboards.
+  const intoExisting = options.mode !== 'replace' && (await deps.fs.exists(at(out, MANIFEST_PATH)));
   const first = loaded[0];
   const titled =
     options.config.title === undefined && first !== undefined
       ? { ...options.config, title: first.manifest.title }
       : options.config;
-  const config = first === undefined ? titled : inheritDashboards(titled, first.manifest.config);
+  const config =
+    intoExisting || first === undefined ? options.config : inheritDashboards(titled, first.manifest.config);
   const session = await openSession(deps, { ...options, out, config });
   try {
     for (const [origin, input] of loaded.entries()) {

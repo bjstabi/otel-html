@@ -221,11 +221,22 @@ describe('convert streams a file one resource entry at a time', () => {
       await convert({ input: 'in/good.json', out: 'r' }, w.deps);
       await put(w, 'in/late.json', late());
       const before = w.fs.snapshot();
-      await failure(convert({ input: 'in/late.json', out: 'r' }, { ...w.deps, fs: clockJumping(w) }));
+      await failure(
+        convert({ input: 'in/late.json', out: 'r', replace: true }, { ...w.deps, fs: clockJumping(w) }),
+      );
       const after = w.fs.snapshot();
       for (const [path, text] of before) {
         if (!path.endsWith('.lock')) expect(after.get(path), path).toBe(text);
       }
+    });
+
+    test('convert twice into one folder appends', async () => {
+      const w = createTestWriter();
+      await put(w, 'in/a.json', JSON.stringify(spansRequest(3)));
+      await put(w, 'in/b.json', JSON.stringify(spansRequest(2, 0, 10)));
+      await convert({ input: 'in/a.json', out: 'r' }, w.deps);
+      const summary = await convert({ input: 'in/b.json', out: 'r' }, w.deps);
+      expect(summary.totals.spans).toBe(5);
     });
 
     test('append: a bad entry late in a file commits none of it', async () => {

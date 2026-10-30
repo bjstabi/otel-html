@@ -23,6 +23,7 @@ import {
   type AddResult,
   openSession,
   type ReportSummary,
+  type SessionMode,
   type WriterDeps,
   type WriterSession,
 } from '../writer/session.js';
@@ -92,8 +93,20 @@ export interface ReportOptions {
   title?: string;
   /** A config object, or the path of an `otel-html.yaml`. Environment variables are not read. */
   config?: ConfigInput | string;
-  /** Reopen an existing report (same otel-html version) instead of replacing it. */
+  /** Require a report at `out` (fail when there is none). */
   append?: boolean;
+  /** Start the report over, even when `out` already holds one. */
+  replace?: boolean;
+}
+
+/** The session mode the `append` / `replace` options ask for; both at once is a usage error. */
+export function sessionModeOf(o: { append?: boolean; replace?: boolean }): SessionMode {
+  if (o.append === true && o.replace === true) {
+    throw new OtelHtmlError('usage', { message: 'append and replace exclude each other' });
+  }
+  if (o.replace === true) return 'replace';
+  if (o.append === true) return 'append';
+  return 'open';
 }
 
 function isMessage(input: object, typeName: string): boolean {
@@ -165,14 +178,14 @@ export class Report {
 
   /** Internal (the CLI): like `create`, with config already resolved so dashboard sources are kept. */
   static async createResolved(
-    options: Pick<ReportOptions, 'out' | 'append'>,
+    options: Pick<ReportOptions, 'out' | 'append' | 'replace'>,
     config: ResolvedConfig,
     full: WriterDeps,
   ): Promise<Report> {
     const session = await openSession(full, {
       out: options.out,
       config,
-      mode: options.append === true ? 'append' : 'replace',
+      mode: sessionModeOf(options),
     });
     return new Report(session, config, full);
   }

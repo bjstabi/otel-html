@@ -5,7 +5,7 @@ import type { OtlpSignal } from '../model/otlp-json.js';
 import { mergeReports } from '../writer/merge.js';
 import type { FileSystem } from '../writer/ports.js';
 import { openSession, type ReportSummary, type WriterDeps } from '../writer/session.js';
-import { resolveApiConfig, resolveDeps } from './report.js';
+import { resolveApiConfig, resolveDeps, sessionModeOf } from './report.js';
 
 export interface ConvertOptions {
   /** OTLP files: JSON, JSON lines or protobuf (`.pb` / `.binpb`). Read in the order given. */
@@ -15,8 +15,10 @@ export interface ConvertOptions {
   config?: ConfigInput | string;
   /** The signal of protobuf inputs, which do not say. */
   signal?: OtlpSignal;
-  /** Reopen an existing report (same otel-html version) and add to it instead of replacing it. */
+  /** Require a report at `out` (fail when there is none). */
   append?: boolean;
+  /** Start the report over, even when `out` already holds one. */
+  replace?: boolean;
 }
 
 export interface MergeOptions {
@@ -25,6 +27,10 @@ export interface MergeOptions {
   out: string;
   /** A config object or the path of an `otel-html.yaml`. Environment variables are not read. */
   config?: ConfigInput | string;
+  /** Require a report at `out` (fail when there is none). */
+  append?: boolean;
+  /** Start the report over, even when `out` already holds one. */
+  replace?: boolean;
 }
 
 /** Build a report from OTLP files. */
@@ -47,7 +53,7 @@ export async function convertResolved(
   const session = await openSession(full, {
     out: options.out,
     config,
-    mode: options.append === true ? 'append' : 'replace',
+    mode: sessionModeOf(options),
   });
   try {
     for (const file of files) {
@@ -87,5 +93,9 @@ export async function mergeResolved(
   options: Omit<MergeOptions, 'config'> & { config: ResolvedConfig },
   full: WriterDeps,
 ): Promise<ReportSummary> {
-  return mergeReports(full, options.inputs, { out: options.out, config: options.config, mode: 'replace' });
+  return mergeReports(full, options.inputs, {
+    out: options.out,
+    config: options.config,
+    mode: sessionModeOf(options),
+  });
 }

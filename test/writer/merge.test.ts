@@ -60,15 +60,52 @@ describe('dashboards', () => {
   const dash = (id: string) => ({
     dashboards: [{ id, title: id, widgets: [{ type: 'traces' as const, x: 0, y: 0, w: 6, h: 6 }] }],
   });
-  async function reportWith(w: TestWriter, out: string, id: string): Promise<void> {
+  async function reportWith(w: TestWriter, out: string, id: string, firstIndex = 0): Promise<void> {
     const s = await openSession(w.deps, {
       out,
       config: testConfig({ ...dash(id), viewer: { defaultDashboard: id } }),
       mode: 'replace',
     });
-    await s.add(otlp(spansRequest(1)), 'in.json');
+    await s.add(otlp(spansRequest(1, 0, firstIndex)), 'in.json');
     await s.close();
   }
+  test('merge into an existing report adds the inputs to it', async () => {
+    const w = createTestWriter();
+    const s = await openSession(w.deps, {
+      out: 'out',
+      config: testConfig({ ...dash('ops'), title: 'A title' }),
+      mode: 'replace',
+    });
+    await s.add(otlp(spansRequest(1)), 'a.json');
+    await s.close();
+    await reportWith(w, 'b', 'other', 1);
+    await reportWith(w, 'c', 'third', 2);
+    const summary = await mergeReports(w.deps, ['b', 'c'], {
+      out: 'out',
+      config: testConfig(),
+      mode: 'open',
+    });
+    expect(summary.totals.spans).toBe(3);
+    expect(allSpans(w, 'out')).toHaveLength(3);
+    const m = manifestOf(w, 'out');
+    expect(m.title).toBe('A title');
+    expect(m.config.dashboards.map((d) => d.dashboard.id)).toEqual(['ops']);
+  });
+
+  test('merge with replace: true writes a fresh combined report', async () => {
+    const w = createTestWriter();
+    await reportWith(w, 'out', 'ops');
+    await reportWith(w, 'b', 'other', 1);
+    await reportWith(w, 'c', 'third', 2);
+    const summary = await mergeReports(w.deps, ['b', 'c'], {
+      out: 'out',
+      config: testConfig(),
+      mode: 'replace',
+    });
+    expect(summary.totals.spans).toBe(2);
+    expect(manifestOf(w, 'out').config.dashboards.map((d) => d.dashboard.id)).toEqual(['other']);
+  });
+
   test('merge without config keeps the first report dashboards and default', async () => {
     const w = createTestWriter();
     await reportWith(w, 'a', 'ops');
