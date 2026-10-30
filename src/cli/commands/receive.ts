@@ -76,9 +76,8 @@ export async function openReceiver(
     full,
   );
   creating.catch(() => undefined); // its own failure is reported by the race, or dropped after a signal
-  // Whatever the start leaves behind once it settles after a failure: the lock, and any bound port.
-  const cleanups: Promise<unknown>[] = [];
   let starting: Promise<RunningReceiver> | undefined;
+  let again: ReturnType<typeof nextSignal> | undefined;
   try {
     const report = await Promise.race([creating, interrupted]);
     starting = startReceiver(report, overrides);
@@ -86,22 +85,22 @@ export async function openReceiver(
     const receiver = await Promise.race([starting, interrupted]);
     return { report, receiver };
   } catch (e) {
-    cleanups.push(
-      Promise.allSettled([creating, starting ?? Promise.reject(new Error('not started'))]).then(
-        async ([report, receiver]) => {
-          if (receiver.status === 'fulfilled') await receiver.value.close().catch(() => undefined);
-          if (report.status === 'fulfilled') {
-            await sessionOf(report.value)
-              .abort()
-              .catch(() => undefined); // never mask the original error
-          }
-        },
-      ),
-    );
-    // A bind failure has already settled everything, so waiting costs nothing; after a signal, do not wait.
-    if (!(e instanceof CliExit)) await Promise.all(cleanups);
+    // Whatever the start leaves behind once it settles: its bound ports and the report's lock.
+    const cleanup = (async () => {
+      const report = await creating.catch(() => undefined);
+      const receiver = await starting?.catch(() => undefined);
+      await receiver?.close().catch(() => undefined);
+      if (report !== undefined)
+        await sessionOf(report)
+          .abort()
+          .catch(() => undefined); // never mask the original error
+    })();
+    // Wait for the lock release before exiting, so the process does not leave it behind; a second signal stops now.
+    again = nextSignal(io);
+    await Promise.race([cleanup, again.signalled]);
     throw e;
   } finally {
+    again?.cancel();
     stop.cancel();
   }
 }

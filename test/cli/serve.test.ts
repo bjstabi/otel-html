@@ -240,7 +240,7 @@ describe('serve', () => {
     await vi.waitFor(async () => expect(await w.fs.exists('out/data/state/lock.json')).toBe(false));
   });
 
-  test('a stop signal while the lock is being taken exits 130 and leaves no lock', async () => {
+  test('a stop signal while the lock is being taken exits 130 with the lock already released', async () => {
     const w = createTestWriter();
     let waiting: (() => void) | undefined;
     const entered = new Promise<void>((r) => {
@@ -264,10 +264,44 @@ describe('serve', () => {
     open.push(h);
     await entered;
     h.fire();
+    release?.();
     expect(await h.result).toBe(130);
     expect(h.stdout).toContain('interrupted\n');
-    release?.();
-    await vi.waitFor(async () => expect(await w.fs.exists('out/data/state/lock.json')).toBe(false));
+    expect(await w.fs.exists('out/data/state/lock.json')).toBe(false);
+  });
+
+  test('a stop signal while the transports bind exits 130 with the lock released and no port bound', async () => {
+    const probe = createServer();
+    await new Promise<void>((r) => probe.listen(0, '127.0.0.1', r));
+    const addr = probe.address();
+    const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
+    await new Promise((r) => probe.close(r));
+    const w = createTestWriter();
+    let fire: () => void = () => undefined;
+    const signalling: TestWriter = {
+      ...w,
+      deps: {
+        ...w.deps,
+        tracer: {
+          startSpan(name, attrs) {
+            // startReceiver opens this span right before it binds.
+            if (name === 'otel-html.receive') fire();
+            return w.deps.tracer.startSpan(name, attrs);
+          },
+        },
+      },
+    };
+    const h = start(signalling, ['serve', '-o', 'out', '--http', String(port), '--no-grpc']);
+    fire = () => h.fire();
+    open.push(h);
+    expect(await h.result).toBe(130);
+    expect(await w.fs.exists('out/data/state/lock.json')).toBe(false);
+    const again = createServer();
+    servers.push(again);
+    await new Promise<void>((r, j) => {
+      again.once('error', j);
+      again.listen(port, '127.0.0.1', r);
+    });
   });
 
   test('a port already in use exits 1 naming EADDRINUSE', async () => {
