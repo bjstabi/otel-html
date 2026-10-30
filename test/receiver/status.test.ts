@@ -30,6 +30,11 @@ describe('statusMessage', () => {
     expect(statusMessage(new Error('secret stack'))).toBe('internal error');
     expect(statusMessage(undefined)).toBe('internal error');
   });
+
+  test('an internal typed outcome never leaks its message', () => {
+    expect(statusMessage(new OtelHtmlError('report-locked', { path: '/secret/x' }))).toBe('internal error');
+    expect(statusMessage(new ReceiverRejected('internal', 'detail'))).toBe('internal error');
+  });
 });
 
 describe('OUTCOME_STATUS', () => {

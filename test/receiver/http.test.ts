@@ -177,6 +177,13 @@ describe('OTLP/HTTP transport', () => {
     expect(allSpans(w, OUT)).toHaveLength(0);
   });
 
+  test('Content-Encoding identity with a plain JSON body: 200 {}', async () => {
+    const { base } = await realServer();
+    const res = await post(base, '/v1/traces', '{}', { ...JSON_HEADERS, 'content-encoding': 'identity' });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({});
+  });
+
   test('gzip protobuf is inflated', async () => {
     const { w, session, base } = await realServer();
     const body = toBinary(

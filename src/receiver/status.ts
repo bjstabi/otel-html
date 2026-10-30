@@ -58,7 +58,8 @@ export function outcomeOf(e: unknown): Outcome {
   return 'internal';
 }
 
-/** What a client is told: the typed message, or a fixed `internal error` (never a stack or an unexpected message). */
+/** What a client is told: the typed message of an outcome it can act on, or a fixed `internal error` (never a stack, a path or an unexpected message). */
 export function statusMessage(e: unknown): string {
+  if (outcomeOf(e) === 'internal') return 'internal error';
   return e instanceof OtelHtmlError || e instanceof ReceiverRejected ? e.message : 'internal error';
 }

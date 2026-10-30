@@ -66,7 +66,7 @@ Today every input is a file or an in-process object (`convert`, `Report.addSpans
 
 ### 5.2 OTLP/HTTP (`node:http`)
 - `POST` on `/v1/traces`, `/v1/logs`, `/v1/metrics`. Another path is 404, another method 405 (with `Allow: POST, OPTIONS`).
-- `Content-Type` `application/x-protobuf` or `application/json` (parameters such as `charset` ignored); anything else, or none, is 415. `Content-Encoding` absent or `gzip`; anything else is 415. The body is decompressed as a stream and counted: past `receiver.maxBodyBytes` (default 64 MiB) the request is answered 413 and the connection closed. A `Content-Length` above the limit is 413 before reading.
+- `Content-Type` `application/x-protobuf` or `application/json` (parameters such as `charset` ignored); anything else, or none, is 415. `Content-Encoding` absent, `identity` or `gzip`; anything else is 415. The body is decompressed as a stream and counted: past `receiver.maxBodyBytes` (default 64 MiB) the request is answered 413 and the connection closed. A `Content-Length` above the limit is 413 before reading.
 - Errors carry a `google.rpc.Status` (`code`, `message`) in the request's encoding (JSON `{ "code": 3, "message": "…" }`, or the protobuf message), per the OTLP spec. The `code` is the gRPC code the table in §5.4 gives.
 - CORS: an `Origin` of `http://localhost`, `http://127.0.0.1` or `http://[::1]` (any port, `https` too) is reflected in `Access-Control-Allow-Origin` with `Vary: Origin`; a preflight `OPTIONS` is answered 204 with `Access-Control-Allow-Methods: POST`, the requested headers reflected in `Access-Control-Allow-Headers` (default `Content-Type, Content-Encoding`), and `Access-Control-Max-Age: 600`. Any other origin gets no CORS headers.
 - Node's default header and request timeouts stay. No TLS.
