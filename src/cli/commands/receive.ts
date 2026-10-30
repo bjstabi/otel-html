@@ -32,14 +32,7 @@ export function addReceiverOptions(command: Command): Command {
 }
 
 /** The writer's deps plus what only the CLI's composition root can supply. */
-export interface CliDeps extends Partial<WriterDeps> {
-  /**
-   * Called once before a receiver (`serve`, `run`) binds. A receiver is long-lived and its memory is bounded by the
-   * heap, not the input, so the CLI sets V8 flags for a small heap and short garbage-collection pauses (a sender's
-   * batch queue overflows when the receiver stalls). `convert` and `merge` do not call it.
-   */
-  favourShortPauses?: () => void;
-}
+export type CliDeps = Partial<WriterDeps>;
 
 export interface ReceiveFlags extends ReceiverFlags {
   out: string;
@@ -71,7 +64,6 @@ export async function openReceiver(
     });
   }
   const overrides = precheck({ http: config.receiver.http.enabled, grpc: config.receiver.grpc.enabled });
-  deps.favourShortPauses?.();
   const full = await resolveDeps(deps);
   // Installed before the lock is taken, so a stop signal during start-up is handled rather than left to the default.
   const stop = nextSignal(io);

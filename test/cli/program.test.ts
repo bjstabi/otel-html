@@ -53,15 +53,6 @@ describe('cli', () => {
     expect(manifestOf(w, 'out').complete).toBe(true);
   });
 
-  test('convert of a trace-only input does not favour heap size', async () => {
-    const w = createTestWriter();
-    await put(w, 'in/a.json', JSON.stringify(spansRequest(2)));
-    let calls = 0;
-    const r = await run(w, ['convert', 'in/a.json', '-o', 'out'], {}, { favourShortPauses: () => calls++ });
-    expect(r.code).toBe(0);
-    expect(calls).toBe(0);
-  });
-
   test('convert combines several files and applies --title', async () => {
     const w = createTestWriter();
     await put(w, 'in/a.json', JSON.stringify(spansRequest(2)));
