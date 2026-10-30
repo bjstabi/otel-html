@@ -221,6 +221,13 @@ Config is a YAML or JSON file (`otel-html.yaml` by default), or an object passed
 | `writer.drop.traces.span` | `[]` | OTTL conditions; matching spans are dropped at write time. |
 | `writer.drop.logs.log_record` | `[]` | Same, for log records. |
 | `writer.drop.metrics.datapoint` | `[]` | Same, for metric data points. |
+| `receiver.host` | `127.0.0.1` | Address the receiver listens on. |
+| `receiver.http.enabled` | `true` | Listen for OTLP/HTTP. |
+| `receiver.http.port` | 4318 | OTLP/HTTP port (0 picks a free port). |
+| `receiver.grpc.enabled` | `true` | Listen for OTLP/gRPC. |
+| `receiver.grpc.port` | 4317 | OTLP/gRPC port (0 picks a free port). |
+| `receiver.maxBodyBytes` | 67108864 | Largest request body accepted, after decompression (64 MiB). Larger requests are rejected (413 / `RESOURCE_EXHAUSTED`). |
+| `receiver.inflightBudgetBytes` | 134217728 | Body bytes the receiver holds in progress or queued (128 MiB). A request that would exceed it while another is in progress is refused with 503 / `UNAVAILABLE` so the exporter retries. |
 | `viewer.eagerBudgetBytes` | 75000000 | Decoded size under which the viewer loads everything up front. Applies to each signal on its own: the viewer estimates the decoded size of the spans and of the logs separately, so a report can have eager spans and windowed logs. Env: `OTEL_HTML_EAGER_BUDGET_BYTES`. |
 | `viewer.listCap` | 10000 | Maximum rows in result lists. |
 | `viewer.defaultDashboard` | `fusion` | The dashboard `g d` and the sidebar's ★ item open. Must be `fusion` or the id of a dashboard in `dashboards`. A config without `dashboards` that leaves it at `fusion` keeps the default of the report it is appended to. |
