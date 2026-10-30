@@ -14,10 +14,6 @@ function resourceSpansOf(req: { readonly [k: string]: unknown }): unknown[] {
   if (!Array.isArray(v)) throw new Error('fixture');
   return v;
 }
-/** An entry whose spans carry a 15-byte trace id, which the decoder refuses. */
-function badTrace(entry: unknown): unknown {
-  return JSON.parse(JSON.stringify(entry).replace(/"traceId":"[^"]*"/g, `"traceId":"${'ab'.repeat(15)}"`));
-}
 const encode = (v: unknown): Uint8Array =>
   new TextEncoder().encode(typeof v === 'string' ? v : JSON.stringify(v));
 
@@ -178,10 +174,30 @@ describe('createReceiver', () => {
   test('[empty, bad] is invalid-otlp, not a partial success', async () => {
     const w = createTestWriter();
     const { receiver } = await realReceiver(w);
-    const body = encode({
-      resourceSpans: [{ scopeSpans: [] }, ...resourceSpansOf(spansRequest(1, 0, 0)).map(badTrace)],
-    });
-    expect((await failure(receiver.receive('traces', body, 'json', 't'))).code).toBe('invalid-otlp');
+    const body = toBinary(
+      ExportTraceServiceRequestSchema,
+      create(ExportTraceServiceRequestSchema, {
+        resourceSpans: [
+          { scopeSpans: [] },
+          {
+            scopeSpans: [
+              {
+                spans: [
+                  {
+                    traceId: new Uint8Array(15).fill(3),
+                    spanId: new Uint8Array(8).fill(3),
+                    name: 's',
+                    startTimeUnixNano: 1_700_000_000_000_000_000n,
+                    endTimeUnixNano: 1_700_000_000_000_001_000n,
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    expect((await failure(receiver.receive('traces', body, 'protobuf', 't'))).code).toBe('invalid-otlp');
     expect(receiver.stats().refused.invalid).toBe(1);
   });
 

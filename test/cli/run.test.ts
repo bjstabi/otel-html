@@ -343,5 +343,6 @@ describe('run', () => {
     open.push(h);
     expect(await h.result).toBe(1);
     expect(h.stderr).toContain('EADDRINUSE');
+    expect(h.stderr).toContain('--grpc');
   });
 });

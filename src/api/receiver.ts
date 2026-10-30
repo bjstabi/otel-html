@@ -96,8 +96,7 @@ export async function startReceiver(
       listeners.push(grpc);
     }
   } catch (e) {
-    await Promise.allSettled(listeners.map((l) => l.close()));
-    await receiver.close();
+    await closeAll(listeners, receiver).catch(() => undefined);
     span.recordError(e);
     span.end();
     throw e;

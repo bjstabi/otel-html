@@ -64,7 +64,7 @@ otel-html serve -o ./report
 | `--append` | Add to an existing report instead of replacing it. |
 | `--config <file>`, `--title <title>` | As for `convert`. |
 
-Turning off both transports is a usage error (exit 2). A port that is already in use exits 1 with the system's `EADDRINUSE` message and a hint to pass `--http <port>` or `--grpc <port>`, or to turn that transport off.
+Turning off both transports is a usage error (exit 2). A port that is already in use exits 1 with the system's `EADDRINUSE` message and a hint to pass `--http <port>` or `--grpc <port>`, or to turn that transport off (other bind errors get a hint for their cause: privileges for ports below 1024, `--host` for an address that is not this machine's).
 
 On Ctrl-C (SIGINT) or SIGTERM, `serve` stops listening, finishes the requests in progress, completes the report and prints `wrote <out>: ...` and `received <N> requests (<K> refused); <M> records rejected`. A request is refused when it fails outright (it could not be decoded, has an unsupported content type or path, is too large, or arrives while the receiver is busy); records are rejected when a request is otherwise accepted but an entry in it is dropped. When K is not zero, a second line breaks the refusals down, for example `refused: 3 invalid, 1 unsupported`, and a warning on stderr names the first refusal of each kind, so a misconfigured exporter shows up while `serve` runs. A second Ctrl-C while it finishes prints `interrupted; the report is at its last checkpoint` and exits 130; the report is then viewable and resumable from its last checkpoint but is not marked complete.
 
@@ -76,7 +76,7 @@ Runs a command with its OpenTelemetry SDK pointed at a receiver, wraps the run i
 otel-html run -o ./report -- pytest -q
 ```
 
-Everything before `--` is an `otel-html` flag: the `serve` flags except `--append` (`-o`, `--host`, `--http`, `--no-http`, `--grpc`, `--no-grpc`, `--config`, `--title`). `run` binds only the transport the command's protocol needs: OTLP/HTTP on 4318 by default, or OTLP/gRPC on 4317 when `OTEL_EXPORTER_OTLP_PROTOCOL=grpc`; an explicit `--http <port>` or `--grpc <port>` binds that transport as well. A local collector on 4317 therefore does not get in the way. The receiver starts first, then the command runs with its stdio inherited and these variables added to its environment:
+Everything before `--` is an `otel-html` flag: the `serve` flags except `--append` (`-o`, `--host`, `--http`, `--no-http`, `--grpc`, `--no-grpc`, `--config`, `--title`). `run` binds only the transport the command's protocol needs: OTLP/HTTP on 4318 by default, or OTLP/gRPC on 4317 when `OTEL_EXPORTER_OTLP_PROTOCOL=grpc`; an explicit `--http <port>` or `--grpc <port>` binds that transport as well (a transport enabled only in the config file is not bound by `run`). A local collector on 4317 therefore does not get in the way. The receiver starts first, then the command runs with its stdio inherited and these variables added to its environment:
 
 | Variable | Value |
 | --- | --- |
@@ -173,7 +173,7 @@ await report.close(); // shutdown() flushes, it never closes the report
 
 ### Receiving OTLP in-process
 
-`startReceiver(report, overrides?, deps?)` binds the OTLP/HTTP and OTLP/gRPC receivers over a report, the same receivers `serve` uses. `overrides` takes `http` and `grpc` (each `false` to disable, or `{ host?, port? }` to enable; port `0` picks a free one), plus `maxBodyBytes` and `inflightBudgetBytes`; anything left out comes from the report's `receiver.*` config. It returns `{ http, grpc, stats(), close() }`. `close()` stops listening and finishes requests in progress; the report stays open, so the caller closes it.
+`startReceiver(report, overrides?, deps?)` binds the OTLP/HTTP and OTLP/gRPC receivers over a report, the same receivers `serve` uses. `overrides` takes `http` and `grpc` (each `false` to disable, or `{ host?, port? }` to enable; port `0` picks a free one), plus `maxBodyBytes` and `inflightBudgetBytes`; anything left out comes from the report's `receiver.*` config. `deps` defaults to the deps the report was created with, with any you pass merged on top. It returns `{ http, grpc, stats(), close() }`. `close()` stops listening and finishes requests in progress; the report stays open, so the caller closes it.
 
 ```ts
 import { Report, startReceiver } from 'otel-html';
