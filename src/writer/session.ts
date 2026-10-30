@@ -873,6 +873,8 @@ class Session implements WriterSession {
       this.#deps.logger.error('checkpoint failed; will retry at the next flush', {
         error: e instanceof Error ? e.message : String(e),
       });
+      this.#sinceCheckpoint = true;
+      this.#armIdle(); // a session that stays idle still retries
       return;
     }
     this.#inflight = this.#writeCheckpoint(prepared).then(
@@ -887,6 +889,9 @@ class Session implements WriterSession {
         this.#deps.logger.error('checkpoint failed; will retry at the next flush', {
           error: e instanceof Error ? e.message : String(e),
         });
+        // The prepare cleared this and the failed write put the chunks back: they are waiting again.
+        this.#sinceCheckpoint = true;
+        this.#armIdle();
       },
     );
   }
@@ -1037,7 +1042,9 @@ class Session implements WriterSession {
           metricFiles: p.metricFiles,
         });
       } catch (error) {
-        this.#deps.logger.warn('flush telemetry failed', { error });
+        this.#deps.logger.warn('flush telemetry failed', {
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
     } catch (e) {
       // Chunks added since the prepare come after the ones it listed.
@@ -1050,7 +1057,13 @@ class Session implements WriterSession {
       throw e;
     } finally {
       this.#traceIndex.release();
-      p.span.end();
+      try {
+        p.span.end();
+      } catch (error) {
+        this.#deps.logger.warn('flush telemetry failed', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
   }
 

@@ -1,8 +1,9 @@
 import { describe, expect, test, vi } from 'vitest';
 import { StreamNormalizer } from '../../src/rollups/metric-streams.js';
 import { openSession } from '../../src/writer/session.js';
+import { createMemoryFileSystem } from '../../test-support/memory-fs.js';
 import { createTestWriter } from '../../test-support/writer-deps.js';
-import { config, heldCheckpoint, OUT, one } from './checkpoint-helpers.js';
+import { config, heldCheckpoint, makeDue, OUT, one, STATE_0 } from './checkpoint-helpers.js';
 import { manifestOf } from './helpers.js';
 
 const MANIFEST = 'r/data/manifest.js';
@@ -69,6 +70,50 @@ describe('an idle session checkpoints by itself', () => {
     spy.mockRestore();
     await s.flush();
     expect(manifestOf(w, OUT)).toMatchObject({ totals: { spans: 1 } });
+    await s.close();
+  });
+
+  test('an idle prepare failure re-arms the timer and the next firing commits', async () => {
+    const w = createTestWriter();
+    const s = await openSession(w.deps, { out: OUT, config, mode: 'replace' });
+    await s.add(one(0, 1), 'a.json');
+    const spy = vi.spyOn(StreamNormalizer.prototype, 'toJSON').mockImplementationOnce(() => {
+      throw new Error('prepare broke');
+    });
+    expect(w.timers.fire()).toBe(1);
+    await vi.waitFor(() => expect(w.logs.some((l) => l.level === 'error')).toBe(true));
+    spy.mockRestore();
+    await vi.waitFor(() => expect(w.timers.pending).toBe(1));
+    expect(w.timers.fire()).toBe(1);
+    await vi.waitFor(() => expect(manifestOf(w, OUT)).toMatchObject({ totals: { spans: 1 } }));
+    await s.close();
+  });
+
+  test('a failed background write re-arms the idle timer and the next firing commits', async () => {
+    const w = createTestWriter({ fs: createMemoryFileSystem({ pieces: true }) });
+    const s = await openSession(w.deps, { out: OUT, config, mode: 'replace' });
+    await s.add(one(0, 1), 'a.json');
+    makeDue(w);
+    w.fs.failNextWrite(STATE_0);
+    await s.add(one(1, 2), 'b.json'); // due: the background write fails
+    await vi.waitFor(() => expect(w.logs.some((l) => l.level === 'error')).toBe(true));
+    await vi.waitFor(() => expect(w.timers.pending).toBe(1));
+    expect(w.timers.fire()).toBe(1);
+    await vi.waitFor(() => expect(manifestOf(w, OUT)).toMatchObject({ totals: { spans: 2 } }));
+    await s.close();
+  });
+
+  test('the timer firing during a partial add re-arms; the checkpoint follows once the input ends', async () => {
+    const w = createTestWriter();
+    const s = await openSession(w.deps, { out: OUT, config, mode: 'replace' });
+    await s.add(one(0, 1), 'a.json', { partial: true });
+    expect(w.timers.pending).toBe(1);
+    expect(w.timers.fire()).toBe(1);
+    await vi.waitFor(() => expect(w.timers.pending).toBe(1));
+    expect(w.fs.snapshot().has(MANIFEST)).toBe(false);
+    await s.endInput();
+    expect(w.timers.fire()).toBe(1);
+    await vi.waitFor(() => expect(manifestOf(w, OUT)).toMatchObject({ totals: { spans: 1 } }));
     await s.close();
   });
 

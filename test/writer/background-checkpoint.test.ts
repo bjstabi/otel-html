@@ -143,8 +143,44 @@ describe('interval checkpoints run in the background', () => {
     const ns = manifestOf(w, OUT).chunks.map((c) => c.n);
     expect(new Set(ns).size).toBe(ns.length);
     expect(ns).toEqual([...ns].sort((a, b) => a - b));
-    expect(w.logs.some((l) => l.level === 'warn')).toBe(true);
+    expect(
+      w.logs.some((l) => l.level === 'warn' && Object.values(l.attrs ?? {}).includes('telemetry broke')),
+    ).toBe(true);
     expect(w.logs.some((l) => l.level === 'error')).toBe(false);
+    await s.close();
+  });
+
+  test('a span.end() that throws after the commit does not fail flush()', async () => {
+    const w = createTestWriter({ fs: createMemoryFileSystem({ pieces: true }) });
+    const inner = w.deps.tracer;
+    const deps = {
+      ...w.deps,
+      tracer: {
+        startSpan(name: string, attrs?: Record<string, string | number | boolean>) {
+          const h = inner.startSpan(name, attrs);
+          return name === 'otel-html.flush'
+            ? {
+                ...h,
+                end() {
+                  throw new Error('end broke');
+                },
+              }
+            : h;
+        },
+      },
+    };
+    const s = await openSession(deps, { out: OUT, config, mode: 'replace' });
+    await s.add(one(0, 1), 'a.json');
+    await expect(s.flush()).resolves.toBeUndefined();
+    expect(manifestOf(w, OUT)).toMatchObject({ totals: { spans: 1 } });
+    expect(
+      w.logs.some(
+        (l) =>
+          l.level === 'warn' &&
+          l.msg === 'flush telemetry failed' &&
+          Object.values(l.attrs ?? {}).includes('end broke'),
+      ),
+    ).toBe(true);
     await s.close();
   });
 
