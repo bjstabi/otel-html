@@ -254,6 +254,25 @@ describe('TraceIndex snapshot', () => {
     expect(held?.spans).toBe(1);
   });
 
+  test('a new trace in an existing shard, and one in a new shard, stay out of the snapshot', () => {
+    const idx = new TraceIndex();
+    idx.add(mk(1), 'chunks/spans/000000', resource);
+    const snap = idx.snapshot();
+    const sameShard = parseTraceId(`${shard}${'0'.repeat(30)}`, 't');
+    const newShard = parseTraceId('ee'.repeat(16), 't');
+    idx.add(mk(2, { traceId: sameShard }), 'chunks/spans/000001', resource);
+    idx.add(mk(3, { traceId: newShard }), 'chunks/spans/000002', resource);
+    expect([...snap.entries(shard).keys()]).toEqual([TRACE]);
+    expect(snap.entries('ee').size).toBe(0);
+    expect(Object.keys(idx.shardPayload(shard)).sort()).toEqual([TRACE, sameShard].sort());
+    expect(Object.keys(idx.shardPayload('ee'))).toEqual([newShard]);
+    expect(Object.keys(idx.toJSON())).toContain('ee');
+    idx.release();
+    const next = idx.snapshot();
+    expect([...next.entries(shard).keys()].sort()).toEqual([TRACE, sameShard].sort());
+    expect([...next.entries('ee').keys()]).toEqual([newShard]);
+  });
+
   test('restoreDirty marks shards dirty again', () => {
     const idx = new TraceIndex();
     idx.add(mk(1), 'chunks/spans/000000', resource);

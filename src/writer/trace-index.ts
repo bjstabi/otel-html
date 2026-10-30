@@ -20,7 +20,7 @@ function emptyEntry(start: number, end: number): TraceEntry {
 }
 
 /**
- * A checkpoint's frozen view of the index: per shard, a copy of the entry map holding the very entry objects the
+ * A checkpoint's frozen view of the index: per shard, the entry map as it was, holding the very entry objects the
  * index had at that moment. While the index holds it, an entry is replaced by a copy before it changes, so these
  * objects stay as they were (see `TraceIndex.snapshot`).
  */
@@ -45,6 +45,8 @@ export class TraceIndex {
   // when names are unbounded (e.g. ids in span names); past it strings are stored as they are.
   readonly #interned = new Map<string, string>();
   #held: Map<string, Map<string, TraceEntry>> | null = null;
+  // Shards whose live map is still the very map the held snapshot reads (see `#shardForWrite`).
+  readonly #shared = new Set<string>();
   readonly #internCap: number;
 
   constructor(options: { internCap?: number } = {}) {
@@ -58,15 +60,22 @@ export class TraceIndex {
     return s;
   }
 
-  #create(traceId: TraceId, entry: TraceEntry): TraceEntry {
-    const shard = shardOf(traceId);
+  /**
+   * The live map of a shard, made ready for a change. A shard the held snapshot still shares by map is copied
+   * first, so the snapshot keeps the original map; the copy is paid once per shard per snapshot, by the first
+   * change, instead of for every shard inside the queue when the snapshot is taken.
+   */
+  #shardForWrite(shard: string): Map<string, TraceEntry> {
     let traces = this.#shards.get(shard);
     if (traces === undefined) {
+      // A shard created while a snapshot is held is not in it, so nothing shares this map.
       traces = new Map();
       this.#shards.set(shard, traces);
+    } else if (this.#shared.delete(shard)) {
+      traces = new Map(traces);
+      this.#shards.set(shard, traces);
     }
-    traces.set(traceId, entry);
-    return entry;
+    return traces;
   }
 
   /**
@@ -75,11 +84,16 @@ export class TraceIndex {
    */
   #writable(traceId: TraceId, created: () => TraceEntry): TraceEntry {
     const shard = shardOf(traceId);
-    const e = this.#shards.get(shard)?.get(traceId);
-    if (e === undefined) return this.#create(traceId, created());
+    const traces = this.#shardForWrite(shard);
+    const e = traces.get(traceId);
+    if (e === undefined) {
+      const fresh = created();
+      traces.set(traceId, fresh);
+      return fresh;
+    }
     if (this.#held?.get(shard)?.get(traceId) !== e) return e;
     const copy = { ...e };
-    this.#shards.get(shard)?.set(traceId, copy);
+    traces.set(traceId, copy);
     return copy;
   }
 
@@ -138,13 +152,16 @@ export class TraceIndex {
   }
 
   /**
-   * Freeze the index for a checkpoint that writes while adds go on, and clear the dirty set. Costs one shallow map
-   * copy per shard. Only one snapshot can be held; `release` it when its writer is done (or has failed).
+   * Freeze the index for a checkpoint that writes while adds go on, and clear the dirty set. Costs O(shards): the maps are
+   * shared and copied by the first change to each (`#shardForWrite`). Only one snapshot can be held; `release` it when its writer is done (or has failed).
    */
   snapshot(): TraceIndexSnapshot {
     if (this.#held !== null) throw new Error('a trace index snapshot is already held');
     const held = new Map<string, Map<string, TraceEntry>>();
-    for (const [shard, traces] of this.#shards) held.set(shard, new Map(traces));
+    for (const [shard, traces] of this.#shards) {
+      held.set(shard, traces);
+      this.#shared.add(shard);
+    }
     this.#held = held;
     const dirty = this.dirtyShards();
     this.#dirty.clear();
@@ -154,6 +171,7 @@ export class TraceIndex {
 
   release(): void {
     this.#held = null;
+    this.#shared.clear();
   }
 
   shardPayload(shard: string): TraceShard {
