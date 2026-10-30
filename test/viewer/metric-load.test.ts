@@ -102,8 +102,14 @@ describe('loadMetric', () => {
     expect([...loader.calls].sort()).toEqual(['data/metrics/000000/ex.js', 'data/metrics/000000/l1.js']);
     loader.reset();
     await m.level(0);
-    // Levels 0-2 share ex.js, read once.
-    expect(loader.calls).toEqual(['data/metrics/000000/l0.js']);
+    // Levels 0-2 share ex.js, read once. Level 0 spans two pages (buckets 0, 976 and 4882), read without a window.
+    expect(loader.calls).toEqual(['data/metrics/000000/l0-000000.js', 'data/metrics/000000/l0-000002.js']);
+    expect((await m.level(0)).series.get(0)?.t).toEqual([0, 976, 4882]);
+    // A window reads only the page under it, and shares the file with the whole-level read.
+    loader.reset();
+    const late = await m.level(0, { start: 4882 * LEVEL0_WIDTH_NS, end: 4883 * LEVEL0_WIDTH_NS });
+    expect(loader.calls).toEqual([]);
+    expect(late.series.get(0)?.t).toEqual([4882]);
     await expect(m.level(5)).rejects.toMatchObject({ code: 'usage' });
   });
 

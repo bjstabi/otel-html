@@ -265,6 +265,8 @@ interface Group {
   label: string;
   group: Record<string, string>;
   members: Member[];
+  /** A counter running total's deltas before the window, over every series of the group. */
+  baseline: number;
 }
 
 function lowerBound(xs: readonly number[], x: number): number {
@@ -304,13 +306,8 @@ function counterColumn(g: Group, show: string, f: Frame): Column {
     const perSec = 1e9 / f.widthNs;
     for (let j = 0; j < f.n; j++) out[j] = (out[j] ?? 0) * perSec;
   } else if (show === 'sum') {
-    // Running total since the run start: deltas before the window count too.
-    let total = 0;
-    for (const m of g.members)
-      for (let i = 0; i < m.lo; i++) {
-        const a = m.a[i];
-        if (a?.k === 'counter') total += a.delta;
-      }
+    // Running total since the run start: the deltas before the window (`baseline`) count too.
+    let total = g.baseline;
     for (let j = 0; j < f.n; j++) {
       const v = out[j] ?? Number.NaN;
       if (Number.isNaN(v)) continue;
@@ -443,7 +440,7 @@ export async function runMetricQuery(
   const widthNs = await chartWidthNs(m, q, window, maxPoints);
   signal?.throwIfAborted();
   return widthNs === null
-    ? runAtLevel(m, q, window, null, signal)
+    ? runAtLevel(m, q, window, null, null, signal)
     : runMetricQueryAtWidth(m, q, window, widthNs, signal);
 }
 
@@ -459,9 +456,49 @@ export async function runMetricQueryAtWidth(
   signal?: AbortSignal,
 ): Promise<MetricQueryResult> {
   const info = levelAtWidth(m.levels, widthNs);
-  const level = info === null ? null : await m.level(info.level);
+  if (info === null) return runAtLevel(m, q, window, null, null, signal);
+  // A counter's running total counts every delta since the run start, not only the window's. The coarsest level
+  // (one bounded file, `LEVEL_MAX_BUCKETS` per series) supplies the deltas up to the last coarse bucket boundary
+  // before the first charted bucket, and the chart's level, read from that boundary on, the rest: exact, and
+  // bounded by the window rather than the run (#38).
+  const coarsest = m.levels.at(-1);
+  const runningTotal = kindOf(m.entry) === 'counter' && q.show === 'sum' && coarsest !== undefined;
+  const coarse = runningTotal ? await m.level(coarsest.level) : null;
   signal?.throwIfAborted();
-  return runAtLevel(m, q, window, level === null ? null : coarsenedTo(level, widthNs), signal);
+  const cut = Math.floor(window.start / widthNs) * widthNs;
+  const loadWindow =
+    coarse === null ? window : { start: Math.floor(cut / coarse.widthNs) * coarse.widthNs, end: window.end };
+  const level = await m.level(info.level, loadWindow);
+  signal?.throwIfAborted();
+  const baselines = coarse === null ? null : seriesBaselines(level, coarse, cut);
+  return runAtLevel(m, q, window, coarsenedTo(level, widthNs), baselines, signal);
+}
+
+/**
+ * Per series, the sum of its counter deltas before `cut` (the first charted bucket's start, a multiple of the
+ * ladder level's width): the coarsest level's buckets up to its last boundary before `cut`, then the ladder level's
+ * from that boundary to `cut`. Both widths are ladder widths, so the boundary and `cut` fall on whole buckets.
+ */
+function seriesBaselines(ladder: LevelData, coarse: LevelData, cut: number): Map<number, number> {
+  const coarseTo = Math.floor(cut / coarse.widthNs);
+  const fineFrom = Math.round((coarseTo * coarse.widthNs) / ladder.widthNs);
+  const fineTo = Math.round(cut / ladder.widthNs);
+  const out = new Map<number, number>();
+  const add = (level: LevelData, from: number, to: number): void => {
+    for (const [id, s] of level.series) {
+      let total = 0;
+      for (let i = 0; i < s.t.length; i++) {
+        const t = s.t[i] ?? 0;
+        if (t >= to) break;
+        const a = s.a[i];
+        if (t >= from && a?.k === 'counter') total += a.delta;
+      }
+      if (total !== 0) out.set(id, (out.get(id) ?? 0) + total);
+    }
+  };
+  add(coarse, 0, coarseTo);
+  if (fineTo > fineFrom) add(ladder, fineFrom, fineTo);
+  return out;
 }
 
 /**
@@ -497,6 +534,8 @@ function runAtLevel(
   q: MetricQuery,
   window: TimeWindow,
   level: LevelData | null,
+  /** Per series, the counter deltas before the window (`seriesBaselines`); set for a counter's running total. */
+  baselines: ReadonlyMap<number, number> | null,
   signal: AbortSignal | undefined,
 ): MetricQueryResult {
   const e = m.entry;
@@ -540,16 +579,16 @@ function runAtLevel(
   const baseLabel = q.alias ?? e.name;
 
   // Counter `sum` is a running total since the run start: series whose data all precede the window still
-  // count toward their group's baseline.
-  const runningTotal = kind === 'counter' && q.show === 'sum';
-  const beforeWindow: { groupId: string; member: Member }[] = [];
+  // count toward their group's baseline (`baselines`, summed per group).
+  const baselineByGroup = new Map<string, number>();
   for (const s of m.series) {
     ticker.tick();
     const data = level.series.get(s.def.id);
-    if (data === undefined) continue;
-    const lo = lowerBound(data.t, b0Win);
-    const hi = lowerBound(data.t, b1Win + 1);
-    if (lo >= hi && !(runningTotal && lo > 0)) continue;
+    const baseline = baselines?.get(s.def.id) ?? 0;
+    if (data === undefined && baseline === 0) continue;
+    const lo = data === undefined ? 0 : lowerBound(data.t, b0Win);
+    const hi = data === undefined ? 0 : lowerBound(data.t, b1Win + 1);
+    if (lo >= hi && baseline === 0) continue;
     const target = sel.by.length > 0 || sel.test !== null ? targetOf(e, s) : null;
     if (sel.test !== null && target !== null && !sel.test(target)) continue;
     const sg = sel.groupOf(s.def.other || target === null ? null : target);
@@ -561,24 +600,21 @@ function runAtLevel(
       label = sel.by.length > 0 ? `${label} · ${seriesLabel(s, e)}` : seriesLabel(s, e);
     }
     const groupId = `${key}|${bounds}`;
-    const member: Member = { s, t: data.t, a: data.a, lo, hi };
-    if (lo >= hi) {
-      beforeWindow.push({ groupId, member });
-      continue;
-    }
+    if (baseline !== 0) baselineByGroup.set(groupId, (baselineByGroup.get(groupId) ?? 0) + baseline);
+    // A series with no data in the window only feeds its group's baseline; a group with none draws nothing.
+    if (data === undefined || lo >= hi) continue;
     let g = groups.get(groupId);
     if (g === undefined) {
       const group = Object.fromEntries(sel.by.map((b, i) => [b, sg.shown[i] ?? '']));
-      g = { key, byKey: sg.key, bounds, label, group, members: [] };
+      g = { key, byKey: sg.key, bounds, label, group, members: [], baseline: 0 };
       groups.set(groupId, g);
     }
-    g.members.push(member);
+    g.members.push({ s, t: data.t, a: data.a, lo, hi });
     groupOfSeries.set(s.def.id, g);
     dataMin = Math.min(dataMin, data.t[lo] ?? b0Win);
     dataMax = Math.max(dataMax, data.t[hi - 1] ?? b1Win);
   }
-  // A group with no data in the window draws nothing; otherwise its earlier series join the baseline.
-  for (const { groupId, member } of beforeWindow) groups.get(groupId)?.members.push(member);
+  for (const [groupId, g] of groups) g.baseline = baselineByGroup.get(groupId) ?? 0;
   if (groups.size === 0) return result([]);
 
   if (combine.rule === 'merge' && combine.splitByBounds) {

@@ -3,6 +3,7 @@ import { reviveDataJson } from '../../src/format/data-file.js';
 import {
   LEVEL_MAX_BUCKETS,
   LEVEL0_WIDTH_NS,
+  PAGE_BUCKETS,
   parseExemplarFile,
   parseLevelFile,
 } from '../../src/format/metric-files.js';
@@ -31,8 +32,9 @@ const MAX_POINTS = maxPointsFor(null);
 /** Exemplars kept per series per bucket (`writer.metricExemplars` default). */
 const EXEMPLARS_PER_BUCKET = 4;
 
-const LEVEL_FILE = /\/l[0-6]\.js$/;
-const EXEMPLAR_FILE = /\/ex[0-6]?\.js$/;
+/** Whole level and exemplar files, and their pages (format 3). */
+const LEVEL_FILE = /\/l[0-6](?:-[0-9]{6})?\.js$/;
+const EXEMPLAR_FILE = /\/ex[0-6]?(?:-[0-9]{6})?\.js$/;
 
 interface Counted {
   loader: ScriptLoader;
@@ -140,8 +142,9 @@ describe('the first chart loads a bounded amount of data whatever the run length
     const window = { start: range.start + 3600e9, end: range.start + 5400e9 };
     const zoomed = await runMetricQuery(m, RATE, window, MAX_POINTS);
     expect(zoomed.widthNs).toBe(LEVEL0_WIDTH_NS * 16);
-    // The zoom read exactly the finer level's file: not level 0, and level 2 was already loaded.
-    expect(c.levels.slice(loadedFirst.length)).toEqual(['data/metrics/000000/l1.js']);
+    // The zoom read exactly the finer level's page under the window (level 1 spans 3,000 buckets, two pages):
+    // not level 0, not the other page, and level 2 was already loaded.
+    expect(c.levels.slice(loadedFirst.length)).toEqual(['data/metrics/000000/l1-000000.js']);
     const points = zoomed.series[0]?.points ?? [];
     expect(points.length).toBeGreaterThanOrEqual(Math.floor(1800e9 / zoomed.widthNs));
     // Every bucket holds a point, so the line has no gaps; 3 series × 1 or 2 points per bucket, per second.
@@ -161,9 +164,98 @@ describe('the first chart loads a bounded amount of data whatever the run length
     if (range === null) throw new Error('the run has no range');
     const c = counting(run);
     const m = await loadMetric(c.loader, run.manifest, 0);
-    // 16 × level 0 is off the ladder: level 1 (8.192 s) is the coarsest no wider, merged up to it.
+    // 16 × level 0 is off the ladder: level 1 (8.192 s) is the coarsest no wider, merged up to it. Over the whole
+    // run that is both of its pages.
     const result = await runMetricQueryAtWidth(m, RATE, range, LEVEL0_WIDTH_NS * 16);
     expect(result.widthNs).toBe(LEVEL0_WIDTH_NS * 16);
-    expect(c.levels).toEqual(['data/metrics/000000/l1.js']);
+    expect(c.levels).toEqual(['data/metrics/000000/l1-000000.js', 'data/metrics/000000/l1-000001.js']);
+  });
+});
+
+/**
+ * Issue #38: a zoomed chart's reads are bounded by the window it draws. The same window is charted on runs of 1×,
+ * 2× and 4× a base duration; the pages under it are the same files, so the buckets and exemplars loaded are equal.
+ */
+describe('a zoomed chart loads the pages under its window whatever the run length', () => {
+  /** The Explorer's bucket cap (`MAX_POINTS`): the zoom windows below then chart at the levels the comments name. */
+  const ZOOM_POINTS = 2000;
+  test('buckets: the same page at 1×, 2× and 4×, at most a page per series', async () => {
+    // 25 minutes from 600 s at a point every 10 s: the chart is at level 1 (16.384 s, R12′), over level-1 buckets
+    // 73-256: page 0 of a level that spans 2, 3 and 6 pages (3,000, 6,000 and 12,000 buckets).
+    const loads: number[] = [];
+    for (const times of [1, 2, 4]) {
+      const run = await buildCounterRun({ durationS: 24_576 * times, stepS: 10, series: SERIES });
+      const range = run.manifest.range;
+      if (range === null) throw new Error('the run has no range');
+      const c = counting(run);
+      const m = await loadMetric(c.loader, run.manifest, 0);
+      const r = await runMetricQuery(
+        m,
+        RATE,
+        { start: range.start + 600e9, end: range.start + 2100e9 },
+        ZOOM_POINTS,
+      );
+      expect(r.widthNs).toBe(LEVEL0_WIDTH_NS * 16);
+      expect(c.levels).toEqual(['data/metrics/000000/l1-000000.js']);
+      expect(c.buckets).toBeLessThanOrEqual(SERIES * PAGE_BUCKETS);
+      loads.push(c.buckets);
+    }
+    expect(new Set(loads).size, `buckets loaded at 1×, 2×, 4×: ${loads.join(', ')}`).toBe(1);
+  });
+
+  test('exemplars: the same pages at 1×, 2× and 4× from the exemplar file of the charted level', async () => {
+    // Ten hours from 1 h at a point a minute: level 2 (65.536 s) has 549 buckets, so the chart is at level 2, and
+    // `ex.js` pages on level 2's grid; at 1× and 2× (750 and 1,500 level-2 buckets) both are one file, at 4× and
+    // 8× (3,000 and 6,000) pages, of which the window reads page 0.
+    const loads: number[] = [];
+    for (const times of [1, 2, 4, 8]) {
+      const run = await buildCounterRun({
+        durationS: 49_152 * times,
+        stepS: 60,
+        series: SERIES,
+        exemplars: true,
+      });
+      const range = run.manifest.range;
+      if (range === null) throw new Error('the run has no range');
+      const c = counting(run);
+      const m = await loadMetric(c.loader, run.manifest, 0);
+      const r = await runMetricQuery(
+        m,
+        RATE,
+        { start: range.start + 3600e9, end: range.start + 39_600e9 },
+        ZOOM_POINTS,
+      );
+      expect(r.widthNs).toBe(LEVEL0_WIDTH_NS * 64);
+      expect(c.buckets).toBeLessThanOrEqual(SERIES * PAGE_BUCKETS);
+      expect(c.exemplars).toBeLessThanOrEqual(SERIES * PAGE_BUCKETS * EXEMPLARS_PER_BUCKET);
+      loads.push(c.exemplars);
+    }
+    // The whole files grow with the run; from the first paged run on, the page under the window is the same file.
+    const [one = 0, two = 0, four = 0, eight = 0] = loads;
+    expect(one).toBeLessThan(two);
+    expect(eight, `exemplars loaded at 1×, 2×, 4×, 8×: ${loads.join(', ')}`).toBe(four);
+  });
+
+  test('a counter running total over a zoomed window counts the deltas before it from the coarsest level', async () => {
+    // Every point adds 1 per series, every 10 s. The window sits in level 1's second page (level 1 has 6,000
+    // buckets, level 2, the coarsest, 750); the total at a charted bucket is the number of points up to its end,
+    // times the series, which the chart gets from level 2 (whole) and level 1's page 1, never page 0.
+    const run = await buildCounterRun({ durationS: 49_152, stepS: 10, series: SERIES });
+    const range = run.manifest.range;
+    if (range === null) throw new Error('the run has no range');
+    const c = counting(run);
+    const m = await loadMetric(c.loader, run.manifest, 0);
+    const start = range.start + 20_000e9;
+    const window = { start, end: start + 1300e9 };
+    const r = await runMetricQuery(m, { ...RATE, show: 'sum' }, window, ZOOM_POINTS);
+    expect(r.widthNs).toBe(LEVEL0_WIDTH_NS * 16);
+    expect(c.levels.sort()).toEqual(['data/metrics/000000/l1-000001.js', 'data/metrics/000000/l2.js']);
+    const points = r.series[0]?.points ?? [];
+    expect(points.length).toBeGreaterThan(50);
+    for (const [t, v] of points) {
+      const bucketEnd = t + r.widthNs;
+      const pointsBefore = Math.floor((bucketEnd - 1 - range.start) / 10e9) + 1;
+      expect(v, `running total at ${t}`).toBe(pointsBefore * SERIES);
+    }
   });
 });
