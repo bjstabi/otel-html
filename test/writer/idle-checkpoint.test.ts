@@ -1,4 +1,5 @@
 import { describe, expect, test, vi } from 'vitest';
+import { StreamNormalizer } from '../../src/rollups/metric-streams.js';
 import { openSession } from '../../src/writer/session.js';
 import { createTestWriter } from '../../test-support/writer-deps.js';
 import { config, heldCheckpoint, OUT, one } from './checkpoint-helpers.js';
@@ -50,6 +51,33 @@ describe('an idle session checkpoints by itself', () => {
       expect(manifestOf(w, OUT)).toMatchObject({ totals: { spans: 3 } });
     });
     await s.close();
+  });
+
+  test('an idle checkpoint whose prepare throws is logged, not left unhandled', async () => {
+    const w = createTestWriter();
+    const s = await openSession(w.deps, { out: OUT, config, mode: 'replace' });
+    await s.add(one(0, 1), 'a.json');
+    const spy = vi.spyOn(StreamNormalizer.prototype, 'toJSON').mockImplementationOnce(() => {
+      throw new Error('prepare broke');
+    });
+    expect(w.timers.fire()).toBe(1);
+    await vi.waitFor(() =>
+      expect(w.logs.some((l) => l.level === 'error' && l.msg.includes('checkpoint failed; will retry'))).toBe(
+        true,
+      ),
+    );
+    spy.mockRestore();
+    await s.flush();
+    expect(manifestOf(w, OUT)).toMatchObject({ totals: { spans: 1 } });
+    await s.close();
+  });
+
+  test('abort cancels the timer', async () => {
+    const w = createTestWriter();
+    const s = await openSession(w.deps, { out: OUT, config, mode: 'replace' });
+    await s.add(one(0, 1), 'a.json');
+    await s.abort();
+    expect(w.timers.pending).toBe(0);
   });
 
   test('close cancels the timer', async () => {

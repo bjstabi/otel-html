@@ -118,7 +118,7 @@ describe('serve', () => {
     const h = start(w, ['serve', '-o', 'out', '--http', '0', '--no-grpc']);
     open.push(h);
     expect(await post(httpOf(await listening(h)), 1)).toBe(200);
-    w.timers.fire();
+    expect(w.timers.fire()).toBe(1);
     await vi.waitFor(() => expect(manifestOf(w, 'out').totals.spans).toBeGreaterThanOrEqual(1));
     h.fire('SIGINT');
     expect(await h.result).toBe(0);

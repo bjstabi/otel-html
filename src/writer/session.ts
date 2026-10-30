@@ -885,7 +885,12 @@ class Session implements WriterSession {
     if (!this.#sinceCheckpoint || this.#closed !== null || this.#aborted) return;
     this.#cancelIdle = this.#deps.timers.after(this.#config.writer.flushIntervalMs, () => {
       this.#cancelIdle = null;
-      void this.#serial(() => this.#idleCheckpoint());
+      // Nobody awaits this: a failure is logged, and the next flush retries.
+      this.#serial(() => this.#idleCheckpoint()).catch((e: unknown) => {
+        this.#deps.logger.error('checkpoint failed; will retry at the next flush', {
+          error: e instanceof Error ? e.message : String(e),
+        });
+      });
     });
   }
 
