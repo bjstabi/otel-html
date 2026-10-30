@@ -40,5 +40,11 @@ const code = await runCli(
   hasBunEmbeddedFiles() ? { viewerAssets: bunEmbeddedViewerAssets(), beforeMetrics } : { beforeMetrics },
 );
 process.exitCode = code;
-// An interrupted `serve` may still be finishing its report; a second Ctrl-C means stop now, at the last checkpoint.
-if (code === 130) process.exit(code);
+// A failing command must end the process even if something (a bound server) still holds the event loop; an
+// interrupted `serve` may still be finishing its report, and a second Ctrl-C means stop now, at the last checkpoint.
+if (code !== 0) {
+  const flushed = (stream: NodeJS.WriteStream): Promise<void> =>
+    new Promise((resolve) => stream.write('', () => resolve()));
+  await Promise.all([flushed(process.stdout), flushed(process.stderr)]);
+  process.exit(code);
+}

@@ -16,11 +16,6 @@ const TRACE_ID_BYTES = 16;
 const SPAN_ID_BYTES = 8;
 const MS_TO_NS = 1_000_000n;
 
-export interface RunDeps {
-  ids?: () => { traceId: Uint8Array; spanId: Uint8Array };
-  now?: () => UnixNanos;
-}
-
 const randomIds = (): { traceId: Uint8Array; spanId: Uint8Array } => ({
   traceId: randomBytes(TRACE_ID_BYTES),
   spanId: randomBytes(SPAN_ID_BYTES),
@@ -40,12 +35,7 @@ function exitOf(child: ChildProcess, command: string): Promise<ChildExit> {
   });
 }
 
-export function addRunCommand(
-  program: Command,
-  io: CliIo,
-  deps: Partial<WriterDeps>,
-  run: RunDeps = {},
-): void {
+export function addRunCommand(program: Command, io: CliIo, deps: Partial<WriterDeps>): void {
   const command = program
     .command('run')
     .description('run a command with OTLP pointed at a receiver and wrap it in a root span')
@@ -56,7 +46,8 @@ export function addRunCommand(
     .option('--title <title>', 'report title');
   addReceiverOptions(command).action(async (argv: string[], flags: ReceiveFlags) => {
     const [executable, ...args] = argv;
-    if (executable === undefined) throw new OtelHtmlError('usage', { message: 'no command to run' });
+    if (executable === undefined || executable === '')
+      throw new OtelHtmlError('usage', { message: 'no command to run' });
     const opened = await openReceiver(io, deps, flags, (enabled) => {
       checkedProtocol(io.env, enabled); // before anything is created or bound
     });
@@ -69,7 +60,7 @@ export function addRunCommand(
       throw e;
     };
 
-    const { traceId, spanId } = (run.ids ?? randomIds)();
+    const { traceId, spanId } = randomIds();
     let env: Record<string, string | undefined>;
     try {
       env = childEnvironment({
@@ -88,15 +79,21 @@ export function addRunCommand(
       );
     }
 
-    const resource = await detectRunResource(argv);
-    const now = run.now ?? wallClockNow;
-    const start = now();
-    const child = io.spawn(executable, args, { stdio: 'inherit', env: { ...io.env, ...env } });
+    let child: ChildProcess;
+    let exit: ChildExit;
+    let resource: Awaited<ReturnType<typeof detectRunResource>>;
+    let start: UnixNanos;
+    try {
+      resource = await detectRunResource(argv);
+      start = wallClockNow();
+      child = io.spawn(executable, args, { stdio: 'inherit', env: { ...io.env, ...env } });
+    } catch (e) {
+      return abandon(e);
+    }
     const exiting = exitOf(child, executable);
     const forward = io.signals.on((signal) => {
       child.kill(signal);
     });
-    let exit: ChildExit;
     try {
       exit = await exiting;
     } catch (e) {
@@ -104,14 +101,30 @@ export function addRunCommand(
     } finally {
       forward();
     }
-    const end = now();
+    const end = wallClockNow();
 
-    await finishReceiver(io, opened, async () => {
-      await report.addSpans(
-        rootSpanRequest({ traceId, spanId, command: argv, pid: child.pid ?? 0, start, end, exit, resource }),
-      );
-    });
     const code = exitCodeOf(exit);
+    try {
+      await finishReceiver(io, opened, async () => {
+        await report.addSpans(
+          rootSpanRequest({
+            traceId,
+            spanId,
+            command: argv,
+            pid: child.pid ?? 0,
+            start,
+            end,
+            exit,
+            resource,
+          }),
+        );
+      });
+    } catch (e) {
+      // The command's own failure outranks a report failure, but the report failure is still told.
+      if (code === 0 || e instanceof CliExit) throw e;
+      io.stderr(`error: ${e instanceof Error ? e.message : String(e)}\n`);
+      throw new CliExit(code);
+    }
     if (code !== 0) throw new CliExit(code);
   });
 }

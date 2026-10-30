@@ -8,6 +8,7 @@ import { SPAN_COLUMNS } from '../../src/format/specs.js';
 import type { AnyValue } from '../../src/model/anyvalue.js';
 import { Status_StatusCode } from '../../src/model/gen/opentelemetry/proto/trace/v1/trace_pb.js';
 import type { SpanRecord } from '../../src/model/records.js';
+import type { FileSystem } from '../../src/writer/ports.js';
 import { createTestWriter, type TestWriter } from '../../test-support/writer-deps.js';
 import { manifestOf, readDataFile } from '../writer/helpers.js';
 
@@ -33,7 +34,13 @@ if (process.argv[1] === 'sleep') { process.stdout.write('ready\\n'); setInterval
 else process.exit(Number(process.argv[1] ?? 0));
 `;
 
-function start(w: TestWriter, argv: readonly string[], env: Record<string, string> = {}): Harness {
+function start(
+  w: TestWriter,
+  argv: readonly string[],
+  env: Record<string, string> = {},
+  spawnOverride?: CliIo['spawn'],
+  fs?: FileSystem,
+): Harness {
   const handlers = new Set<(s: StopSignal) => void>();
   const h: Harness = {
     stdout: '',
@@ -60,15 +67,17 @@ function start(w: TestWriter, argv: readonly string[], env: Record<string, strin
       },
     },
     // The child's stdout is piped so the test can see when it is ready; its stderr stays visible.
-    spawn: ((command: string, args: readonly string[], options: object): ChildProcess => {
-      const child = spawn(command, args, { ...options, stdio: ['ignore', 'pipe', 'inherit'] });
-      child.stdout?.on('data', (d: Buffer) => {
-        h.child += d.toString();
-      });
-      return child;
-    }) as CliIo['spawn'],
+    spawn:
+      spawnOverride ??
+      (((command: string, args: readonly string[], options: object): ChildProcess => {
+        const child = spawn(command, args, { ...options, stdio: ['ignore', 'pipe', 'inherit'] });
+        child.stdout?.on('data', (d: Buffer) => {
+          h.child += d.toString();
+        });
+        return child;
+      }) as CliIo['spawn']),
   };
-  h.result = runCli(argv, io, w.deps);
+  h.result = runCli(argv, io, fs === undefined ? w.deps : { ...w.deps, fs });
   return h;
 }
 
@@ -141,6 +150,23 @@ describe('run', () => {
     expect(manifestOf(w, 'out').complete).toBe(true);
   });
 
+  test('a non-zero exit is kept when the report then fails to finish, and the failure is printed', async () => {
+    const w = createTestWriter();
+    const fs: FileSystem = {
+      ...w.fs,
+      async writeTextAtomic(p, text) {
+        if (p.endsWith('data/manifest.js') && text.includes('"complete":true')) {
+          throw new Error('disk full');
+        }
+        return w.fs.writeTextAtomic(p, text);
+      },
+    };
+    const h = start(w, ['run', '-o', 'out', ...node, '3'], {}, undefined, fs);
+    open.push(h);
+    expect(await h.result).toBe(3);
+    expect(h.stderr).toContain('disk full');
+  });
+
   test('SIGTERM is forwarded to the child: 143, killed by SIGTERM, report complete', async () => {
     const w = createTestWriter();
     const h = start(w, ['run', '-o', 'out', ...node, 'sleep']);
@@ -174,6 +200,26 @@ describe('run', () => {
     expect(await h.result).toBe(1);
     expect(h.stderr).toContain('otel-html-no-such-command');
     expect(h.stderr).toContain('ENOENT');
+    expect(await w.fs.exists('out/data/manifest.js')).toBe(false);
+  });
+
+  test('an empty command is a usage error and leaves no lock', async () => {
+    const w = createTestWriter();
+    const h = start(w, ['run', '-o', 'out', '--http', '0', '--no-grpc', '--', '']);
+    open.push(h);
+    expect(await h.result).toBe(2);
+    expect(await w.fs.exists('out')).toBe(false);
+  });
+
+  test('a spawn that throws synchronously aborts the session: exit 1, no lock, no report', async () => {
+    const w = createTestWriter();
+    const h = start(w, ['run', '-o', 'out', '--http', '0', '--no-grpc', '--', 'x'], {}, () => {
+      throw new Error('spawn exploded');
+    });
+    open.push(h);
+    expect(await h.result).toBe(1);
+    expect(h.stderr).toContain('spawn exploded');
+    expect(await w.fs.exists('out/data/state/lock.json')).toBe(false);
     expect(await w.fs.exists('out/data/manifest.js')).toBe(false);
   });
 
