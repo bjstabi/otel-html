@@ -2,7 +2,7 @@
 
 otel-html turns OpenTelemetry data into a static, self-contained HTML report. You give it OTLP files (or feed it spans from your own code) and it writes a folder you can open from disk, attach to a CI run, or publish on any static host. No server and no network access are needed to view it.
 
-Milestone 1 covers traces: a Traces explorer with a trace panel (flame graph, waterfall, span list, services, span details). Milestone 2 adds logs: a Logs explorer with log patterns and a log panel, linked to traces both ways. Milestone 3 adds metrics: a Metrics explorer with exemplars, a metrics catalog, and metric charts in the log, span and trace panels. Milestone 4 adds dashboards: the built-in Fusion dashboard, which puts every signal on one timeline, and dashboards you define in config.
+Milestone 1 covers traces: a Traces explorer with a trace panel (flame graph, waterfall, span list, services, span details). Milestone 2 adds logs: a Logs explorer with log patterns and a log panel, linked to traces both ways. Milestone 3 adds metrics: a Metrics explorer with exemplars, a metrics catalog, and metric charts in the log, span and trace panels. Milestone 4 adds dashboards: the built-in Fusion dashboard, which puts every signal on one timeline, and dashboards you define in config. Milestone 5 adds the OTLP receiver (`serve` and `run`) and the SDK exporters.
 
 > otel-html is not an official OpenTelemetry project. It is not affiliated with or endorsed by the OpenTelemetry project or the CNCF.
 
@@ -27,6 +27,8 @@ shasum -a 256 -c --ignore-missing SHA256SUMS
 The binaries are built by `.github/workflows/release.yml` when a release is created. From source, Node 24 or newer is required.
 
 ## CLI
+
+Commands: `convert` (OTLP files to a report), `serve` (receive OTLP over HTTP and gRPC), `run` (wrap a command and report its telemetry), `merge` and `config print`.
 
 ```sh
 otel-html convert fixtures/small.otlp.json -o ./report
@@ -338,7 +340,7 @@ Config is a YAML or JSON file (`otel-html.yaml` by default), or an object passed
 
 - Timestamps are JavaScript numbers, exact to 2^53 ns. That is about 104 days of relative time span within one report.
 - The receiver has no TLS or authentication and reflects only localhost origins for CORS; bodies over 64 MiB are refused (413); logs and metric points a sender retries are not deduplicated.
-- The viewer is for static reports that open from `file://`. It does not follow a report that is still being written.
+- The viewer is for static reports that open from `file://`. It does not follow a report that is still being written; reload to see what the receiver has checkpointed.
 - When a signal is larger than `viewer.eagerBudgetBytes`, the viewer reads its chunks on demand. Services numbers, filtered log results and filtered patterns are then partial (the viewer says "from N of M chunks") until you choose "Scan entire run". Opening a trace or its Logs tab reads only the chunks the trace index lists for it.
 - Dashboard layout edits are not saved: Edit layout changes the page until you reload. Use Copy config and paste the result into your config file.
 - The Fusion timeline's metric lane comes from the run-wide rollup, so it ignores variables and says "all resources" when one is set.
@@ -374,7 +376,7 @@ Other tasks: `lint`, `format`, `typecheck`, `test:unit`, `knip`, `gen`, `gen:che
 - M2 (done): Logs explorer, log patterns and log panel, with log and trace cross-linking.
 - M3 (done): Metrics explorer and catalog, with embedded metric charts in all panels.
 - M4 (done): Dashboards, including the built-in Fusion dashboard, and dashboard config.
-- M5: OTLP receiver (HTTP, then gRPC), `serve` and `run` commands, SDK exporters and load tests.
+- M5 (done): OTLP receiver (HTTP, then gRPC), `serve` and `run` commands, SDK exporters and load tests.
 
 The design is in [`docs/superpowers/specs/2026-10-25-otel-html-design.md`](docs/superpowers/specs/2026-10-25-otel-html-design.md).
 
