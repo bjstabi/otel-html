@@ -76,7 +76,7 @@ Runs a command with its OpenTelemetry SDK pointed at a receiver, wraps the run i
 otel-html run -o ./report -- pytest -q
 ```
 
-Everything before `--` is an `otel-html` flag: the `serve` flags except `--append` (`-o`, `--host`, `--http`, `--no-http`, `--grpc`, `--no-grpc`, `--config`, `--title`). The receiver starts first, then the command runs with its stdio inherited and these variables added to its environment:
+Everything before `--` is an `otel-html` flag: the `serve` flags except `--append` (`-o`, `--host`, `--http`, `--no-http`, `--grpc`, `--no-grpc`, `--config`, `--title`). `run` binds only the transport the command's protocol needs: OTLP/HTTP on 4318 by default, or OTLP/gRPC on 4317 when `OTEL_EXPORTER_OTLP_PROTOCOL=grpc`; an explicit `--http <port>` or `--grpc <port>` binds that transport as well. A local collector on 4317 therefore does not get in the way. The receiver starts first, then the command runs with its stdio inherited and these variables added to its environment:
 
 | Variable | Value |
 | --- | --- |

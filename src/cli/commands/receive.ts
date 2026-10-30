@@ -1,5 +1,5 @@
 import { type Command, InvalidArgumentError, Option } from 'commander';
-import { type RunningReceiver, startReceiver } from '../../api/receiver.js';
+import { type ReceiverOverrides, type RunningReceiver, startReceiver } from '../../api/receiver.js';
 import { Report, resolveDeps, sessionOf } from '../../api/report.js';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { ReceiverStats } from '../../receiver/receiver.js';
@@ -45,8 +45,8 @@ export async function openReceiver(
   io: CliIo,
   deps: Partial<WriterDeps>,
   flags: ReceiveFlags,
-  /** Runs on the resolved transports before the report is created or a port is bound; throw to stop. */
-  precheck: (enabled: { http: boolean; grpc: boolean }) => void = () => undefined,
+  /** Runs on the resolved transports before the report is created or a port is bound; throw to stop, or return overrides for the receiver. */
+  precheck: (enabled: { http: boolean; grpc: boolean }) => ReceiverOverrides | undefined = () => undefined,
 ): Promise<OpenReceiver> {
   const fs = deps.fs ?? createNodeFileSystem();
   const { config } = await resolveCliConfig(io, fs, flags);
@@ -57,7 +57,7 @@ export async function openReceiver(
       hint: 'enable http or grpc',
     });
   }
-  precheck({ http: config.receiver.http.enabled, grpc: config.receiver.grpc.enabled });
+  const overrides = precheck({ http: config.receiver.http.enabled, grpc: config.receiver.grpc.enabled });
   const full = await resolveDeps(deps);
   const report = await Report.createResolved(
     { out: flags.out, ...(flags.append === true ? { append: true } : {}) },
@@ -65,7 +65,7 @@ export async function openReceiver(
     full,
   );
   try {
-    return { report, receiver: await startReceiver(report) };
+    return { report, receiver: await startReceiver(report, overrides) };
   } catch (e) {
     await sessionOf(report)
       .abort()
