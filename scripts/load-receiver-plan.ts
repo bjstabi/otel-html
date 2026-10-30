@@ -29,7 +29,7 @@ export function parseLoadArgs(argv: readonly string[]): LoadArgs {
     args: [...argv],
     options: {
       spans: { type: 'string', default: '1000000' },
-      logs: { type: 'string', default: '10000000' },
+      logs: { type: 'string', default: '1000000' },
       workers: { type: 'string', default: '8' },
       out: { type: 'string' },
       image: { type: 'string', default: TELEMETRYGEN_IMAGE },

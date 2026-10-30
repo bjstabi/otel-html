@@ -12,7 +12,7 @@ M5 adds the live ways in. After M5 a test suite, a batch job or a browser can se
 - `otel-html serve`, which receives until SIGINT/SIGTERM and then finishes the report;
 - `otel-html run -- <cmd…>`, which starts the receiver, launches a command with the standard `OTEL_EXPORTER_OTLP_*` variables and a `TRACEPARENT`, wraps the command in a root span, and exits with the command's exit code;
 - the **SDK exporters** `OtelHtmlSpanExporter`, `OtelHtmlLogRecordExporter` and `OtelHtmlMetricExporter`;
-- the **load workflow** (`load.yml`): telemetrygen → receiver at about 1M spans and 10M logs, asserting bounded writer memory and the viewer's landing time on the result.
+- the **load workflow** (`load.yml`): telemetrygen → receiver at about 1M spans and 1M logs (telemetrygen sends one record per request, so 1M requests), asserting bounded writer memory and the viewer's landing time on the result.
 
 Today every input is a file or an in-process object (`convert`, `Report.addSpans` with SDK spans). The writer session (§7.5) already streams, checkpoints at every flush and rewrites the manifest atomically, so a report opened mid-run shows what has arrived (§7.6). The lock's hint already points at `otel-html serve`.
 
@@ -123,7 +123,7 @@ Only busy/closing is retryable, as §6 requires.
 
 ## 9. Load workflow
 
-`load.yml` gains a `receiver` job beside `load` (same trigger rule): build, start `otel-html serve` on both transports with the process's peak RSS reported on exit, send **1M spans over gRPC and 10M logs over HTTP** with `telemetrygen` from its official container (`ghcr.io/open-telemetry/opentelemetry-collector-contrib/telemetrygen`, pinned; `docker run --network host`), send SIGINT, and assert: peak RSS under 512 MB, the manifest complete with exactly the sent totals, zero rejected. Then Playwright (Chromium only, installed on the bare runner) opens the report and asserts the Traces and Logs landings are interactive within 3 s × factor, as the scale spec does. The driver is `scripts/load-receiver.ts`, run by `mise run test:load:receiver`; the browser check is `e2e/load.spec.ts`, gated by `OTEL_HTML_LOAD_REPORT=<dir>`.
+`load.yml` gains a `receiver` job beside `load` (same trigger rule): build, start `otel-html serve` on both transports with the process's peak RSS reported on exit, send **1M spans over gRPC and 1M logs over HTTP** (one record per request, so 1M requests) with `telemetrygen` from its official container (`ghcr.io/open-telemetry/opentelemetry-collector-contrib/telemetrygen`, pinned; `docker run --network host`), send SIGINT, and assert: peak RSS under 512 MB, the manifest complete with exactly the sent totals, zero rejected. Then Playwright (Chromium only, installed on the bare runner) opens the report and asserts the Traces and Logs landings are interactive within 3 s × factor, as the scale spec does. The driver is `scripts/load-receiver.ts`, run by `mise run test:load:receiver`; the browser check is `e2e/load.spec.ts`, gated by `OTEL_HTML_LOAD_REPORT=<dir>`.
 
 ## 10. Binary and CI
 

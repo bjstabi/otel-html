@@ -9,9 +9,9 @@ import {
 } from '../../scripts/load-receiver-plan.js';
 
 describe('parseLoadArgs', () => {
-  test('defaults to 1M spans, 10M logs and 8 workers', () => {
+  test('defaults to 1M spans, 1M logs and 8 workers', () => {
     const args = parseLoadArgs(['--out', '/tmp/r']);
-    expect(args).toMatchObject({ spans: 1_000_000, logs: 10_000_000, workers: 8, out: '/tmp/r' });
+    expect(args).toMatchObject({ spans: 1_000_000, logs: 1_000_000, workers: 8, out: '/tmp/r' });
     expect(args.image).toMatch(/telemetrygen:v\d+\.\d+\.\d+$/);
   });
 

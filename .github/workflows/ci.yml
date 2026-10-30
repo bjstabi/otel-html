@@ -142,3 +142,26 @@ jobs:
           name: playwright-results-metrics-scale
           path: test-results/
           if-no-files-found: ignore
+
+  # The standalone Bun binaries, built and smoke-tested on every PR (convert, serve over HTTP and gRPC, run, SIGINT, bad
+  # port). The release workflow keeps its own smoke step, which tests the artefact it uploads.
+  binary:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x64
+          - os: ubuntu-24.04-arm
+            target: linux-arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - run: mise run build
+      - run: mise run build:binaries -- --target "$TARGET"
+      - run: OTEL_HTML_BINARY="dist/bin/otel-html-$TARGET" pnpm exec vitest run test/cli/binary.test.ts
