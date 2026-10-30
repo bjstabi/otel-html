@@ -432,8 +432,7 @@ describe('OTLP/gRPC transport', () => {
       probe?.release();
     });
 
-    test('a call cancelled before its message releases the reservation', async () => {
-      const { real } = await heldReceiver(1_000_000);
+    function startedCall(real: Receiver) {
       const interceptor = admissionInterceptor(
         real,
         { maxBodyBytes: 1_000_000, inflightBudgetBytes: 1_000_000 },
@@ -471,9 +470,29 @@ describe('OTLP/gRPC transport', () => {
         onReceiveHalfClose() {},
         onCancel() {},
       });
+      return () => {
+        if (captured === undefined) throw new Error('call was not started');
+        return captured;
+      };
+    }
+
+    test('a call holds the reservation after its message arrives until it half-closes', async () => {
+      const { real } = await heldReceiver(1_000_000);
+      const listener = startedCall(real);
+      listener().onReceiveMessage(new Uint8Array(10));
+      expect(real.admit(1_000_000)).toBeNull();
+      listener().onReceiveHalfClose();
+      const after = real.admit(1_000_000);
+      expect(after).not.toBeNull();
+      after?.release();
+    });
+
+    test('a call cancelled before its message releases the reservation', async () => {
+      const { real } = await heldReceiver(1_000_000);
+      const listener = startedCall(real);
       // Started and not yet cancelled: the reservation is held, a second one does not fit.
       expect(real.admit(1_000_000)).toBeNull();
-      captured?.onCancel();
+      listener().onCancel();
       const after = real.admit(1_000_000);
       expect(after).not.toBeNull();
       after?.release();

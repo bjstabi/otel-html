@@ -76,8 +76,11 @@ function failure(e: unknown, logger: Logger): { code: number; details: string; m
 /**
  * Reserves `maxBodyBytes` from the receiver's in-flight budget when a call starts (its headers have arrived, its
  * message is not yet buffered) and refuses it as busy when that does not fit, so grpc-js never buffers the body of a
- * refused call. The reservation is released as soon as the message arrives (the handler then admits the real size),
- * or when the call ends without one (half-close, cancel, or a status sent by grpc-js itself); `release` is idempotent.
+ * refused call. The reservation is held until half-close, not until the message arrives: grpc-js's unary path only
+ * stores the message in `onReceiveMessage` and runs the handler synchronously inside `onReceiveHalfClose`, so
+ * releasing there and delegating leaves no window in which a buffered body is uncounted (a client that sends a
+ * message and never half-closes keeps its reservation). It is also released on cancel and when a status is sent
+ * (grpc-js's own too-large refusal); `release` is idempotent.
  */
 export function admissionInterceptor(
   receiver: Receiver,
@@ -104,10 +107,6 @@ export function admissionInterceptor(
         reservation = admission;
         next(
           new ServerListenerBuilder()
-            .withOnReceiveMessage((message, forward) => {
-              release();
-              forward(message);
-            })
             .withOnReceiveHalfClose((forward) => {
               release();
               forward();
