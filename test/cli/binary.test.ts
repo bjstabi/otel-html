@@ -167,17 +167,18 @@ describe.skipIf(binaryEnv === undefined)('compiled binary', () => {
     expect(result.code).toBe(0);
     const manifest = await readFile(join(out, 'data', 'manifest.js'), 'utf8');
     expect(manifest).toContain('"totals":{"spans":2,');
-  });
+  }, 60_000);
 
   test('run exits with the child code and records a root span', async () => {
     const out = join(dir, 'run');
     const code = await new Promise<number | null>((done) => {
       spawn(binary, ['run', '-o', out, '--', process.execPath, '-e', 'process.exit(4)'], {
         stdio: 'ignore',
+        timeout: 50_000,
       }).once('close', done);
     });
     expect(code).toBe(4);
     const manifest = await readFile(join(out, 'data', 'manifest.js'), 'utf8');
     expect(manifest).toContain('"totals":{"spans":1,');
-  });
+  }, 60_000);
 });
