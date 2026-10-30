@@ -30,6 +30,7 @@ export interface GrpcTransportOptions {
   maxBodyBytes: number;
   /** Sizes the per-connection concurrent-call limit: ⌈inflightBudgetBytes ÷ maxBodyBytes⌉. */
   inflightBudgetBytes: number;
+  /** How long `close()` waits for `tryShutdown` before force-closing idle or half-open streams. Default 5 s. */
   forceShutdownAfterMs?: number;
 }
 
@@ -132,7 +133,7 @@ export function listenGrpc(
             const timer = setTimeout(() => {
               server.forceShutdown();
               done();
-            }, FORCE_SHUTDOWN_AFTER_MS);
+            }, options.forceShutdownAfterMs ?? FORCE_SHUTDOWN_AFTER_MS);
             server.tryShutdown(() => {
               clearTimeout(timer);
               done();

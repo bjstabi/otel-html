@@ -19,7 +19,7 @@ import { type GrpcTransportOptions, listenGrpc, serviceDefinition } from '../../
 import type { Listener } from '../../src/receiver/http.js';
 import { type Admission, createReceiver, type Receiver } from '../../src/receiver/receiver.js';
 import { serviceOf } from '../../src/receiver/signals.js';
-import { openSession } from '../../src/writer/session.js';
+import { openSession, type WriterSession } from '../../src/writer/session.js';
 import { createTestWriter, type TestWriter, testConfig } from '../../test-support/writer-deps.js';
 import { allSpans } from '../writer/helpers.js';
 
@@ -298,5 +298,55 @@ describe('OTLP/gRPC transport', () => {
     const match = /^127\.0\.0\.1:(\d+)$/.exec(listener.address);
     expect(Number(match?.[1])).toBeGreaterThan(0);
     await listener.close();
+  });
+
+  test('a call queued at shutdown completes once the receiver has drained', async () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered: () => void = () => undefined;
+    const addEntered = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const calls: string[] = [];
+    const session: WriterSession = {
+      async add(_input, source) {
+        calls.push(`add ${source}`);
+        entered();
+        await gate;
+        return { accepted: 1 } as never;
+      },
+      async endInput() {},
+      async addRecords() {
+        throw new Error('unused');
+      },
+      async flush() {},
+      async close() {
+        throw new Error('unused');
+      },
+      async abort() {},
+    };
+    const receiver = createReceiver(session, { inflightBudgetBytes: 1 << 20 }, { logger: silent });
+    const listener = await listenGrpc(
+      receiver,
+      { maxBodyBytes: 1_000_000, inflightBudgetBytes: 1 << 20, forceShutdownAfterMs: 50 },
+      silent,
+      '127.0.0.1',
+      0,
+    );
+    const exported = call(clientFor(listener.address), requestOf([protoSpan(1)]));
+    await addEntered;
+    const closing = (async () => {
+      await receiver.close();
+      await listener.close();
+    })();
+    // The hazard window: well past the force-shutdown deadline while the call is still queued.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    release();
+    const { err } = await exported;
+    await closing;
+    expect(err).toBeNull();
+    expect(calls).toHaveLength(1);
   });
 });
