@@ -1,4 +1,6 @@
 export type { ConfigInput } from '../config/schema.js';
+export type { ExporterOptions } from '../exporters/base.js';
+export { OtelHtmlSpanExporter } from '../exporters/span-exporter.js';
 export { type ErrorCode, OtelHtmlError } from '../model/errors.js';
 export type { OtlpSignal } from '../model/otlp-json.js';
 export type { ReceiverStats } from '../receiver/receiver.js';

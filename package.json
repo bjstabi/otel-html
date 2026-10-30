@@ -37,6 +37,7 @@
     "@commitlint/cli": "21.2.4",
     "@commitlint/config-conventional": "21.2.4",
     "@lezer/generator": "1.8.1",
+    "@opentelemetry/core": "2.12.0",
     "@opentelemetry/otlp-transformer": "0.300.0",
     "@opentelemetry/sdk-logs": "3.0.0",
     "@opentelemetry/sdk-metrics": "2.12.0",
@@ -80,5 +81,25 @@
     "yaml": "2.9.1",
     "zod": "4.6.7",
     "zustand": "5.0.16"
+  },
+  "peerDependencies": {
+    "@opentelemetry/core": ">=2.0.0",
+    "@opentelemetry/sdk-logs": ">=2.0.0",
+    "@opentelemetry/sdk-metrics": ">=2.0.0",
+    "@opentelemetry/sdk-trace-base": ">=2.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@opentelemetry/core": {
+      "optional": true
+    },
+    "@opentelemetry/sdk-logs": {
+      "optional": true
+    },
+    "@opentelemetry/sdk-metrics": {
+      "optional": true
+    },
+    "@opentelemetry/sdk-trace-base": {
+      "optional": true
+    }
   }
 }
