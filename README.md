@@ -332,7 +332,7 @@ The run's report is then published to the site at <https://bjstabi.github.io/ote
 
 - `/index.html` (landing page) and `/index.json` (site index).
 - `/<workflow>/` and `/<workflow>/runs/<run_id>/` for pushes to the default branch of this repo, for example `/ci/`.
-- `/pr/<number>/` and `/pr/<number>/runs/<run_id>/` for a run whose commit is the head of an open pull request.
+- `/pr/<number>/` and `/pr/<number>/runs/<run_id>/` for a run whose commit or branch belongs to an open pull request (the pull request may have been pushed to since).
 
 `/pr/<number>/` is a stub that forwards to the pull request's newest run. A run on any other branch, or a push from a fork, with no open pull request is not published. The site keeps the last 30 runs per workflow and the last 5 per pull request; a re-run replaces its folder. When a pull request closes, `pull_request_target` triggers the `cleanup` job, which removes its folder.
 

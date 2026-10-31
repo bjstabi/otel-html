@@ -62,7 +62,18 @@ export const slug = (name: string): string =>
 export const reportUrl = (baseUrl: string, reportPath: string): string => `${baseUrl}/${reportPath}/`;
 
 /**
- * Where a finished run is published: the open pull request whose head is the run's commit, else the workflow's
+ * The open pull requests a finished run belongs to: those whose head is the run's commit or whose head branch is the
+ * run's branch (the pull request may have moved on since), the exact-commit ones first.
+ */
+export function pullsOfRun(run: ApiRun, pulls: ApiPull[]): ApiPull[] {
+  const open = pulls.filter((p) => p.state === 'open');
+  const exact = open.filter((p) => p.head.sha === run.head_sha);
+  const moved = open.filter((p) => p.head.sha !== run.head_sha && p.head.ref === run.head_branch);
+  return [...exact, ...moved];
+}
+
+/**
+ * Where a finished run is published: the open pull request of the run's commit or branch (see `pullsOfRun`), else the workflow's
  * channel when the run is the default branch of this repository; anything else (a fork push, a feature branch
  * with no open pull) is not published.
  */
@@ -71,7 +82,7 @@ export function channelFor(
   pulls: ApiPull[],
   defaultBranch: string,
 ): { key: string; channel: Omit<Channel, 'runs'> } | undefined {
-  const pr = pulls.find((p) => p.state === 'open' && p.head.sha === run.head_sha);
+  const pr = pullsOfRun(run, pulls)[0];
   if (pr !== undefined) {
     return {
       key: `pr/${pr.number}`,
@@ -95,7 +106,10 @@ export function placeRun(
   const runs = [...(index.channels[key]?.runs ?? [])];
   const at = runs.findIndex((r) => r.runId === run.runId);
   if (at >= 0) runs[at] = run;
-  else runs.unshift(run);
+  else runs.push(run);
+  runs.sort((a, b) =>
+    a.completedAt === b.completedAt ? b.runId - a.runId : a.completedAt < b.completedAt ? 1 : -1,
+  );
   return { ...index, channels: { ...index.channels, [key]: { ...channel, runs } } };
 }
 

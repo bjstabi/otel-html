@@ -15,7 +15,7 @@ import {
   warning,
 } from './github-api.js';
 import { checkRunPayload, commentBody, findStickyComment, previousRun } from './link.js';
-import { slug } from './site.js';
+import { pullsOfRun, slug } from './site.js';
 import { readSiteIndex } from './site-io.js';
 
 export type LinkOptions = {
@@ -60,15 +60,15 @@ export async function runLink(opts: LinkOptions, io: CliIo, fetchFn: Fetch = fet
   let pulls: ApiPull[] = [];
   if (opts.comment) {
     try {
-      const sha = run.head_sha;
-      pulls = (
+      pulls = pullsOfRun(
+        run,
         await fetchPullsForSha(
-          { apiUrl: api, repository: opts.repository, sha },
+          { apiUrl: api, repository: opts.repository, sha: run.head_sha },
           token,
           API_TIMEOUT_MS,
           fetchFn,
-        )
-      ).filter((p) => p.state === 'open' && p.head.sha === sha);
+        ),
+      );
     } catch (e) {
       warn(`cannot list the pull requests of ${run.head_sha}, so no comment is posted: ${messageOf(e)}`);
     }

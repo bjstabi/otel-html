@@ -4,6 +4,7 @@ import {
   applyRetention,
   channelFor,
   placeRun,
+  pullsOfRun,
   removeChannel,
   renderLanding,
   renderRedirect,
@@ -72,11 +73,33 @@ test('channelFor: a fork push with no pull, or a non-default branch, is not publ
   expect(channelFor(apiRun({ head_branch: 'feat' }), [], 'main')).toBeUndefined();
 });
 
-test('channelFor: closed pulls and pulls for another sha are ignored', () => {
+test('channelFor: closed pulls and pulls of another sha and branch are ignored', () => {
   expect(channelFor(apiRun({ head_branch: 'feat' }), [pull({ state: 'closed' })], 'main')).toBeUndefined();
   expect(
-    channelFor(apiRun({ head_branch: 'feat' }), [pull({ head: { sha: 'zzz', ref: 'feat' } })], 'main'),
+    channelFor(apiRun({ head_branch: 'feat' }), [pull({ head: { sha: 'zzz', ref: 'other' } })], 'main'),
   ).toBeUndefined();
+});
+
+test('channelFor: a pull whose head moved on (same ref, new sha) still takes the run', () => {
+  expect(
+    channelFor(apiRun({ head_branch: 'feat' }), [pull({ head: { sha: 'zzz', ref: 'feat' } })], 'main')?.key,
+  ).toBe('pr/12');
+});
+
+test('pullsOfRun prefers the exact-commit pull', () => {
+  const run = apiRun({ head_branch: 'feat' });
+  const moved = pull({ number: 1, head: { sha: 'zzz', ref: 'feat' } });
+  const exact = pull({ number: 2 });
+  expect(pullsOfRun(run, [moved, exact]).map((p) => p.number)).toEqual([2, 1]);
+  expect(channelFor(run, [moved, exact], 'main')?.key).toBe('pr/2');
+});
+
+test('placeRun: a stale run placed after a newer one stays behind it', () => {
+  let ix = placeRun(empty(), 'ci', ci, siteRun(5));
+  ix = placeRun(ix, 'ci', ci, siteRun(3));
+  expect(ix.channels[CI]?.runs.map((r) => r.runId)).toEqual([5, 3]);
+  ix = placeRun(ix, 'ci', ci, siteRun(4, { completedAt: '2026-01-05T00:00:00Z' }));
+  expect(ix.channels[CI]?.runs.map((r) => r.runId)).toEqual([5, 4, 3]);
 });
 
 test('placeRun: newest first; the same runId replaces in place', () => {

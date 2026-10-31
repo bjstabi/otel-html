@@ -461,6 +461,35 @@ describe('otel-html ci link', () => {
     expect(readFileSync(summary, 'utf8')).toContain('Report: https://x.test/b/pr/7/runs/6/');
   });
 
+  test('comments on a pull request whose head moved on since the run', async () => {
+    stub();
+    calls = [];
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      if (url.includes('/pulls'))
+        return new Response(
+          JSON.stringify([{ number: 7, title: 'Fix', state: 'open', head: { sha: 'newer', ref: 'topic' } }]),
+          { status: 200 },
+        );
+      if (/\/actions\/runs\/6$/.test(url))
+        return new Response(
+          JSON.stringify({
+            id: 6,
+            run_attempt: 1,
+            name: 'ci',
+            status: 'completed',
+            head_branch: 'topic',
+            head_sha: 'sha6',
+          }),
+          { status: 200 },
+        );
+      if (url.includes('/jobs')) return new Response('{"jobs":[]}', { status: 200 });
+      calls.push({ method: init?.method ?? 'GET', url });
+      return new Response(url.includes('/comments') && !init?.method ? '[]' : '{}', { status: 200 });
+    });
+    expect(await runCli(linkArgs(['--no-check']), fakeIo().io, deps)).toBe(0);
+    expect(writes()).toEqual(['POST https://api.github.com/repos/o/r/issues/7/comments']);
+  });
+
   test('--no-check leaves only the comment', async () => {
     stub();
     expect(await runCli(linkArgs(['--no-check']), fakeIo().io, deps)).toBe(0);
