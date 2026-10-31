@@ -9,6 +9,11 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+defaults:
+  run:
+    # Every job's steps run under the built CLI; the few steps that run before dist/ exists say `shell: bash`.
+    shell: node dist/cli/main.js run -o .otel-html/report -- bash --noprofile --norc -eo pipefail {0}
+
 permissions:
   contents: read
   actions: read
@@ -24,9 +29,6 @@ jobs:
       # The @perf budgets scale by (calibration ÷ this), never below 1: GitHub's runners come as AMD EPYC 9V45
       # (~85 ms, budgets as written) and EPYC 7763 (~150 ms, about 1.5×). See test-support/calibrate.ts.
       OTEL_HTML_PERF_REFERENCE_MS: "100"
-    defaults:
-      run:
-        shell: node dist/cli/main.js run -o .otel-html/report -- bash --noprofile --norc -eo pipefail {0}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup
@@ -61,9 +63,6 @@ jobs:
       # The @perf budgets scale by (calibration ÷ this), never below 1: GitHub's runners come as AMD EPYC 9V45
       # (~85 ms, budgets as written) and EPYC 7763 (~150 ms, about 1.5×). See test-support/calibrate.ts.
       OTEL_HTML_PERF_REFERENCE_MS: "100"
-    defaults:
-      run:
-        shell: node dist/cli/main.js run -o .otel-html/report -- bash --noprofile --norc -eo pipefail {0}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup
@@ -88,9 +87,6 @@ jobs:
   build:
     needs: check
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        shell: node dist/cli/main.js run -o .otel-html/report -- bash --noprofile --norc -eo pipefail {0}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup
@@ -144,9 +140,6 @@ jobs:
       OTEL_HTML_PERF_REFERENCE_MS: "100"
       # The image already has the browsers; test:e2e would otherwise run `playwright install` for all three.
       OTEL_HTML_SKIP_BROWSER_INSTALL: "1"
-    defaults:
-      run:
-        shell: node dist/cli/main.js run -o .otel-html/report -- bash --noprofile --norc -eo pipefail {0}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup
@@ -202,9 +195,6 @@ jobs:
       # The @perf budgets scale by (calibration ÷ this), never below 1: GitHub's runners come as AMD EPYC 9V45
       # (~85 ms, budgets as written) and EPYC 7763 (~150 ms, about 1.5×). See test-support/calibrate.ts.
       OTEL_HTML_PERF_REFERENCE_MS: "100"
-    defaults:
-      run:
-        shell: node dist/cli/main.js run -o .otel-html/report -- bash --noprofile --norc -eo pipefail {0}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup
@@ -248,9 +238,6 @@ jobs:
     timeout-minutes: 15
     env:
       TARGET: ${{ matrix.target }}
-    defaults:
-      run:
-        shell: node dist/cli/main.js run -o .otel-html/report -- bash --noprofile --norc -eo pipefail {0}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup
