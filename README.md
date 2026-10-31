@@ -355,7 +355,7 @@ See [Use in your CI](#use-in-your-ci) to adopt this in another repo.
 
 ### Use in your CI
 
-Three composite actions let another repository report on its own CI. They need an otel-html release that has `run` and `ci` (the first release after 0.1.1). `@v0` floats to the latest 0.x release (the release workflow moves it); pin a release tag such as `@otel-html-v0.2.0` for reproducibility. `v0` becomes `v1` at 1.0.
+Three composite actions let another repository report on its own CI. They need an otel-html release that has `run` and `ci` (the first release after 0.1.1). `@v0` floats to the latest 0.x release (the release workflow moves it; prereleases leave it alone), and with `version: latest` (the default) the actions used at `@v0` install the newest 0.x binary, never a 1.x one; at any other ref `latest` is the repository's latest release. Pin a release tag such as `@otel-html-v0.2.0` for reproducibility. `v0` becomes `v1` at 1.0.
 
 - `bjstabi/otel-html/.github/actions/otel-html-setup@v0` installs the CLI (checksum-verified) and joins the job to the run's trace.
 - `bjstabi/otel-html/.github/actions/otel-html-collect@v0` uploads the job's `.otel-html/` folder as an `otel-html-<job>` artifact.

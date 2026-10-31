@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Download the otel-html release binary for this runner, verify it against the release's SHA256SUMS and put it on PATH.
-# Usage: install.sh <version|latest>   Env: REPO (owner/name of the release repository), GH_TOKEN, RUNNER_OS, RUNNER_ARCH, RUNNER_TEMP, GITHUB_PATH.
+# Usage: install.sh <version|latest>   Env: REPO (owner/name of the release repository), GH_TOKEN, RUNNER_OS, RUNNER_ARCH, RUNNER_TEMP, GITHUB_PATH,
+# and ACTION_REF (the ref the action was used at, such as `v0`; default $GITHUB_ACTION_REF).
+#
+# `latest` used from a floating major tag (`@v0`) is the newest release of that major, so `@v0` never installs a 1.x
+# binary; otherwise it is the repository's latest release.
 set -euo pipefail
 
 version="${1:-latest}"
@@ -24,7 +28,16 @@ if [ "$RUNNER_OS" = Windows ]; then
   installed="otel-html.exe"
 fi
 
-if [ "$version" = latest ]; then
+action_ref="${ACTION_REF:-${GITHUB_ACTION_REF:-}}"
+if [ "$version" = latest ] && [[ $action_ref =~ ^v([0-9]+)$ ]]; then
+  major=${BASH_REMATCH[1]}
+  tags=$(gh release list -R "$REPO" --limit 200 --exclude-drafts --exclude-pre-releases --json tagName --jq '.[].tagName')
+  tag=$(printf '%s\n' "$tags" | grep -E "^otel-html-v$major\.[0-9]+\.[0-9]+\$" | sort -V | tail -n 1 || true)
+  if [ -z "$tag" ]; then
+    echo "::error::$REPO has no otel-html-v$major.* release for @$action_ref" >&2
+    exit 1
+  fi
+elif [ "$version" = latest ]; then
   tag=$(gh release view -R "$REPO" --json tagName --jq .tagName)
 else
   tag="otel-html-v${version#v}"
