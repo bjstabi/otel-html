@@ -23,8 +23,29 @@ interface Run {
   stderr: string;
 }
 
+/**
+ * This process's environment without the trace context and OTLP settings an enclosing `otel-html run` exports (CI wraps
+ * every step in one): a binary under test must neither join that trace nor see its endpoint, and must not rely on the
+ * default ports (4317/4318) the outer receiver holds. `OTEL_HTML_*` stays.
+ */
+function hermeticEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    const inherited =
+      key === 'TRACEPARENT' ||
+      key === 'TRACESTATE' ||
+      (key.startsWith('OTEL_') && !key.startsWith('OTEL_HTML_'));
+    if (!inherited) env[key] = value;
+  }
+  return env;
+}
+
 async function run(binary: string, args: readonly string[]): Promise<Run> {
-  const { stdout, stderr } = await exec(binary, [...args], { encoding: 'utf8', timeout: 60_000 });
+  const { stdout, stderr } = await exec(binary, [...args], {
+    encoding: 'utf8',
+    timeout: 60_000,
+    env: hermeticEnv(),
+  });
   return { stdout, stderr };
 }
 
@@ -49,7 +70,7 @@ async function serveOnce(
   until: RegExp,
   drive: (match: RegExpMatchArray) => Promise<void>,
 ): Promise<Exited> {
-  const child = spawn(binary, [...args], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(binary, [...args], { stdio: ['ignore', 'pipe', 'pipe'], env: hermeticEnv() });
   let stdout = '';
   let stderr = '';
   let watchdog = false;
@@ -188,6 +209,7 @@ describe.skipIf(binaryEnv === undefined)('compiled binary', () => {
     const failed = await exec(binary, ['serve', '-o', join(dir, 'bad-port'), '--http', '99999'], {
       encoding: 'utf8',
       timeout: 60_000,
+      env: hermeticEnv(),
     }).then(
       () => null,
       (e: unknown) => e,
@@ -199,10 +221,15 @@ describe.skipIf(binaryEnv === undefined)('compiled binary', () => {
   test('run exits with the child code and records a root span', async () => {
     const out = join(dir, 'run');
     const code = await new Promise<number | null>((done, fail) => {
-      const child = spawn(binary, ['run', '-o', out, '--', process.execPath, '-e', 'process.exit(4)'], {
-        stdio: 'ignore',
-        timeout: 50_000,
-      });
+      const child = spawn(
+        binary,
+        ['run', '-o', out, '--http', '0', '--', process.execPath, '-e', 'process.exit(4)'],
+        {
+          stdio: 'ignore',
+          env: hermeticEnv(),
+          timeout: 50_000,
+        },
+      );
       child.once('error', fail);
       child.once('close', (exitCode, signal) =>
         signal === null ? done(exitCode) : fail(new Error(`run timed out after 50 s (${signal})`)),
