@@ -350,7 +350,134 @@ These subcommands are for the actions; stable flags, output format not guarantee
 | `ci link` | Comments on the pull requests, creates the check run and writes the job summary. Never fails the job. | `--run-id`, `--repository`, `--url`, `--site` (all required); `--no-comment`, `--no-check` |
 | `ci cleanup` | Removes a closed pull request's reports from the site folder. | `--site`, `--pr` (required); `--repository` (default `$GITHUB_REPOSITORY`) |
 
-Next milestone is a reusable action, so other repos can adopt this without copying workflows.
+See [Use in your CI](#use-in-your-ci) to adopt this in another repo.
+
+### Use in your CI
+
+Three composite actions let another repository report on its own CI. They need an otel-html release that has `run` and `ci` (the first release after 0.1.1). `@v0` floats to the latest 0.x release (the release workflow moves it); pin a release tag such as `@otel-html-v0.2.0` for reproducibility. `v0` becomes `v1` at 1.0.
+
+- `bjstabi/otel-html/.github/actions/otel-html-setup@v0` installs the CLI (checksum-verified) and joins the job to the run's trace.
+- `bjstabi/otel-html/.github/actions/otel-html-collect@v0` uploads the job's `.otel-html/` folder as an `otel-html-<job>` artifact.
+- `bjstabi/otel-html/.github/actions/otel-html-publish@v0` builds the run's report from those artifacts, publishes it to the `gh-pages` branch and links it from the pull request.
+
+In each job, run setup first, make the CLI the job shell, and collect last. A `run:` step before setup runs before the CLI exists, so it needs `shell: bash`:
+
+```yaml
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: otel-html run -o .otel-html/report -- bash --noprofile --norc -eo pipefail {0}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: bjstabi/otel-html/.github/actions/otel-html-setup@v0
+      - run: npm test
+      - if: always()
+        uses: bjstabi/otel-html/.github/actions/otel-html-collect@v0
+```
+
+Setup inputs: `version` (a release such as `0.2.0`, default `latest`), `command` (an executable instead of a download), `job-name` (matrix legs share a name, so give each its own) and `token`. Collect inputs: `name` (default `otel-html-<job>`) and `path` (default `.otel-html/`).
+
+#### The publisher
+
+Publish from a separate `workflow_run` workflow, which runs the default branch's copy and never the triggering run's code (which may be a fork PR). [ci-report.yml](.github/workflows/ci-report.yml) is the model. In short:
+
+```yaml
+name: ci-report
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+  pull_request_target:
+    types: [closed]
+permissions: {}
+
+jobs:
+  report:
+    if: github.event_name == 'workflow_run'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write # the gh-pages push
+      pages: read
+      pull-requests: write # the comment
+      checks: write # the check run
+    outputs:
+      published: ${{ steps.publish.outputs.published }}
+    steps:
+      - id: publish
+        uses: bjstabi/otel-html/.github/actions/otel-html-publish@v0
+        with:
+          deploy: false
+
+  cleanup:
+    if: github.event_name == 'pull_request_target'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # The default branch only: this job holds a write token, so never the PR's code.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: bjstabi/otel-html/.github/actions/otel-html-publish@v0
+        with:
+          cleanup-pr: ${{ github.event.pull_request.number }}
+          deploy: false
+
+  deploy:
+    needs: [report, cleanup]
+    if: "!cancelled() && (needs.report.outputs.published == 'true' || needs.cleanup.result == 'success')"
+    runs-on: ubuntu-latest
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: gh-pages
+          path: public
+          persist-credentials: false
+      - run: rm -rf public/.git
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: public
+      - id: deployment
+        uses: actions/deploy-pages@v5
+```
+
+`report` and `cleanup` do not share a concurrency group; only `deploy` does. GitHub cancels a superseded pending run in a concurrency group, so that group on the publishing jobs would drop reports; deploying the `gh-pages` tip makes a replaced deploy harmless, because the one that runs ships the latest. Pin the actions to SHAs as this repo does.
+
+Pages setup: Settings, Pages, Source: GitHub Actions (`build_type: workflow`), and the `github-pages` environment's deployment branches must allow the default branch.
+
+Publish inputs:
+
+| Input | Default | |
+| --- | --- | --- |
+| `run-id` | the `workflow_run`'s run, else this run | The run to report on. |
+| `version`, `command` | `latest`, empty | As for setup. |
+| `config` | the action's own `otel-html-ci.yaml` | The dashboard config for the reports. |
+| `target` | `github-pages` | `artifact` uploads the run report as the `ci-run-report` artifact only: nothing reaches the site and nothing is linked. |
+| `retention`, `pr-retention` | 30, 5 | Runs kept per workflow channel and per pull request. |
+| `comment`, `check` | true | The sticky PR comment and the `otel-html report` check run. |
+| `deploy` | true | Deploy to Pages in this job; needs `environment: github-pages` and `pages: write` and `id-token: write`. `false` leaves it to a separate `deploy` job as above. |
+| `cleanup-pr` | empty | A pull request number: skip the report and remove that PR's reports from the site. |
+| `token` | `github.token` | Needs `actions: read`, `contents: write`, `pages: read`, `pull-requests: write`, `checks: write`. |
+
+Outputs: `report-url` (empty when nothing was published) and `published`; a cleanup sets `published=false` and `cleaned=true`.
+
+GitHub points a check run created with `GITHUB_TOKEN` at the Actions run page, so the report URL is in the check's summary and in the PR comment.
+
+Final-job mode: for a repository with no separate publisher, put the action in the last job of the same workflow (`needs:` every other job, `if: always()`), with `deploy: true`, `environment: github-pages` and the write permissions above. That job's own timings are incomplete in the report, and a fork PR's token cannot push, so prefer the `workflow_run` publisher.
 
 ### Report format compatibility
 
