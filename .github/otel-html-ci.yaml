@@ -1,0 +1,64 @@
+title: CI
+viewer:
+  home: dashboards
+  defaultDashboard: ci
+dashboards:
+  - id: ci
+    title: CI
+    variables:
+      - key: cicd.pipeline.run.id
+        label: run
+      - key: cicd.pipeline.task.name
+        label: job
+    widgets:
+      - type: timeline
+        x: 0
+        y: 0
+        w: 12
+        h: 6
+      - type: metric
+        title: Job duration
+        x: 0
+        y: 6
+        w: 12
+        h: 8
+        queries:
+          - id: a
+            metric: cicd.pipeline.task.run.duration
+            show: avg
+            by: [cicd.pipeline.task.name]
+        display: lines
+      - type: metric
+        title: Queue time
+        x: 0
+        y: 14
+        w: 6
+        h: 8
+        queries:
+          - id: a
+            metric: cicd.pipeline.task.run.queue.duration
+            show: avg
+            by: [cicd.pipeline.task.name]
+      - type: toplist
+        title: Slowest steps
+        x: 6
+        y: 14
+        w: 6
+        h: 8
+        signal: spans
+        groupBy: name
+      - type: traces
+        title: Runs
+        x: 0
+        y: 22
+        w: 6
+        h: 10
+        mode: traces
+        query: IsRootSpan()
+      - type: logs
+        title: Warnings and errors
+        x: 6
+        y: 22
+        w: 6
+        h: 10
+        query: severity_number >= 13
