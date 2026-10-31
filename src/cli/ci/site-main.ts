@@ -170,22 +170,24 @@ export async function runSite(
 }
 
 /**
- * Removes pull request `pr`'s channels and folders from the site (its branch channels, and the legacy `pr/<n>`) and
- * writes `cleaned=true` to $GITHUB_OUTPUT. A pull request the site never had (no channel and no legacy folder)
+ * Removes pull request `pr` from the site: its branch channels and folders (a channel another open pull request still
+ * has stays, without `pr`), and the legacy `pr/<n>`. Writes `cleaned=true` to $GITHUB_OUTPUT when anything changed. A pull request the site never had (no channel and no legacy folder)
  * changes nothing and writes `cleaned=false`, so the caller pushes and deploys nothing.
  */
 export async function runCleanup(opts: CleanupOptions, io: CliIo): Promise<void> {
   const legacy = `pr/${opts.pr}`;
   const current = await readSiteIndex(opts.site);
-  const { index, remove, keys } = removePr(current, opts.pr);
-  if (!keys.includes(legacy) && existsSync(join(opts.site, legacy))) keys.push(legacy);
-  if (keys.length === 0) {
+  const { index, remove, removed, updated } = removePr(current, opts.pr);
+  if (!removed.includes(legacy) && existsSync(join(opts.site, legacy))) removed.push(legacy);
+  if (removed.length === 0 && updated.length === 0) {
     say(io, `pull request #${opts.pr} is not on the site; nothing to remove`);
     setOutputs(io, { cleaned: 'false' });
     return;
   }
-  await removePaths(opts.site, [...remove, ...keys]);
+  await removePaths(opts.site, [...remove, ...removed]);
   await writeSite(opts.site, index, opts.repository);
-  say(io, `removed ${keys.join(', ')} from the site`);
+  if (removed.length > 0) say(io, `removed ${removed.join(', ')} from the site`);
+  if (updated.length > 0)
+    say(io, `kept ${updated.join(', ')}: another open pull request still has the branch`);
   setOutputs(io, { cleaned: 'true' });
 }

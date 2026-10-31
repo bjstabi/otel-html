@@ -409,7 +409,7 @@ describe('otel-html ci site and cleanup', { timeout: 60_000 }, () => {
       kind: 'branch',
       title: '#7 Fix',
       headBranch: 'feat/topic',
-      pr: 7,
+      prs: [7],
       headRepo: 'o/r',
     });
     expect(index.channels['branch/feat-topic'].runs.map((r: { workflow: string }) => r.workflow)).toEqual([
@@ -442,7 +442,7 @@ describe('otel-html ci site and cleanup', { timeout: 60_000 }, () => {
             kind: 'branch',
             title: '#7 Fix',
             headBranch: 'feat/topic',
-            pr: 7,
+            prs: [7],
             headRepo: 'o/r',
             runs,
           },
@@ -497,6 +497,36 @@ describe('otel-html ci site and cleanup', { timeout: 60_000 }, () => {
     expect(await cleanup('9')).toBe(0);
     expect(readFileSync(outputs, 'utf8')).toBe('cleaned=true\n');
     expect(existsSync(join(site, 'pr/9'))).toBe(false);
+  });
+
+  test('closing one of two open pull requests on a branch keeps its page; closing both removes it', async () => {
+    const other = { ...topicPull, number: 8, title: 'Also' };
+    stubApi({ 50: runBody(50, 'feat/topic'), 52: runBody(52, 'feat/topic') }, [topicPull]);
+    expect(await runCli(siteArgs(50), fakeIo().io, deps)).toBe(0);
+    stubApi({ 52: runBody(52, 'feat/topic') }, [{ ...other, head: { ...other.head, sha: 'sha52' } }]);
+    expect(await runCli(siteArgs(52), fakeIo().io, deps)).toBe(0);
+    const channelOf = (): { prs: number[]; runs: unknown[] } | undefined =>
+      JSON.parse(readFileSync(join(site, 'index.json'), 'utf8')).channels['branch/feat-topic'];
+    expect(channelOf()?.prs).toEqual([7, 8]);
+
+    const outputs = join(dir, 'gh-output');
+    const cleanup = (pr: string): Promise<number> =>
+      runCli(
+        ['ci', 'cleanup', '--site', site, '--pr', pr, '--repository', 'o/r'],
+        fakeIo({ GITHUB_OUTPUT: outputs }).io,
+        deps,
+      );
+    expect(await cleanup('7')).toBe(0);
+    expect(readFileSync(outputs, 'utf8')).toBe('cleaned=true\n');
+    expect(channelOf()?.prs).toEqual([8]);
+    expect(channelOf()?.runs).toHaveLength(2);
+    expect(existsSync(join(site, 'branch/feat-topic/runs/50/data/manifest.js'))).toBe(true);
+
+    rmSync(outputs);
+    expect(await cleanup('8')).toBe(0);
+    expect(readFileSync(outputs, 'utf8')).toBe('cleaned=true\n');
+    expect(channelOf()).toBeUndefined();
+    expect(existsSync(join(site, 'branch/feat-topic'))).toBe(false);
   });
 
   test('cleanup needs --repository or $GITHUB_REPOSITORY, and validates it', async () => {
@@ -651,7 +681,7 @@ describe('otel-html ci link', () => {
             kind: 'branch',
             title: '#7 Fix',
             headBranch: 'topic',
-            pr: 7,
+            prs: [7],
             headRepo: 'o/r',
             runs: [entry(6, 'ci'), entry(5, 'load')],
           },

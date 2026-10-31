@@ -3,10 +3,10 @@ import type { ApiPull, ApiRun } from '../../../src/cli/ci/github-api.js';
 import {
   applyRetention,
   channelFor,
+  parseSiteIndex,
   placeRun,
   pullsOfRun,
   pullsToLink,
-  removeChannel,
   removePr,
   renderLanding,
   renderRedirect,
@@ -60,7 +60,7 @@ const empty = (): SiteIndex => ({ version: 1, channels: {} });
 test('channelFor: an open pull with the head sha is its branch channel', () => {
   expect(channelFor(apiRun({ head_branch: 'feat' }), [pull()], 'main')).toEqual({
     key: 'branch/feat',
-    channel: { kind: 'branch', title: '#12 Fix the thing', headBranch: 'feat', pr: 12, headRepo: 'o/r' },
+    channel: { kind: 'branch', title: '#12 Fix the thing', headBranch: 'feat', prs: [12], headRepo: 'o/r' },
   });
   const nested = pull({ head: { sha: 'abc', ref: 'Feat/Big Thing', repo: { full_name: 'o/r' } } });
   expect(channelFor(apiRun({ head_branch: 'Feat/Big Thing' }), [nested], 'main')?.key).toBe(
@@ -77,7 +77,7 @@ test('channelFor: a fork pull is keyed by owner and branch, never a same-repo ke
       kind: 'branch',
       title: '#12 Fix the thing',
       headBranch: 'feat',
-      pr: 12,
+      prs: [12],
       headRepo: 'Some.One/r',
     },
   });
@@ -87,7 +87,7 @@ test('channelFor: a fork pull is keyed by owner and branch, never a same-repo ke
 });
 
 test('channelFor: a branch that slugs to a key another branch holds gets the pull number appended', () => {
-  const channel = { kind: 'branch', title: '#3 x', headBranch: 'feat/x', pr: 3, headRepo: 'o/r' } as const;
+  const channel = { kind: 'branch', title: '#3 x', headBranch: 'feat/x', prs: [3], headRepo: 'o/r' } as const;
   const ix = placeRun(empty(), 'branch/feat-x', channel, siteRun(1, { reportPath: 'branch/feat-x/runs/1' }));
   const other = pull({ number: 4, head: { sha: 'abc', ref: 'feat-x', repo: { full_name: 'o/r' } } });
   expect(channelFor(apiRun({ head_branch: 'feat-x' }), [other], 'main', ix)?.key).toBe('branch/feat-x--pr-4');
@@ -95,7 +95,7 @@ test('channelFor: a branch that slugs to a key another branch holds gets the pul
   const same = pull({ number: 5, head: { sha: 'abc', ref: 'feat/x', repo: { full_name: 'o/r' } } });
   expect(channelFor(apiRun({ head_branch: 'feat/x' }), [same], 'main', ix)).toEqual({
     key: 'branch/feat-x',
-    channel: { ...channel, title: '#5 Fix the thing', pr: 5 },
+    channel: { ...channel, title: '#5 Fix the thing', prs: [5] },
   });
   // the same branch name in a fork is another key anyway
   const fork = pull({ number: 6, head: { sha: 'abc', ref: 'feat/x', repo: { full_name: 'f/r' } } });
@@ -159,7 +159,7 @@ test('pullsOfRun prefers the exact-commit pull', () => {
   const moved = pull({ number: 1, head: { sha: 'zzz', ref: 'feat', repo: { full_name: 'o/r' } } });
   const exact = pull({ number: 2 });
   expect(pullsOfRun(run, [moved, exact]).map((p) => p.number)).toEqual([2, 1]);
-  expect(channelFor(run, [moved, exact], 'main')?.channel.pr).toBe(2);
+  expect(channelFor(run, [moved, exact], 'main')?.channel.prs).toEqual([2]);
 });
 
 test('placeRun: a stale run placed after a newer one stays behind it', () => {
@@ -193,7 +193,7 @@ test('applyRetention drops the oldest runs per channel kind; branch and legacy p
   for (const id of [1, 2, 3]) ix = placeRun(ix, 'ci', ci, siteRun(id));
   const pr = { kind: 'pr', title: '#12 x', headBranch: 'feat' } as const;
   for (const id of [4, 5]) ix = placeRun(ix, 'pr/12', pr, siteRun(id, { reportPath: `pr/12/runs/${id}` }));
-  const br = { kind: 'branch', title: '#13 y', headBranch: 'y', pr: 13, headRepo: 'o/r' } as const;
+  const br = { kind: 'branch', title: '#13 y', headBranch: 'y', prs: [13], headRepo: 'o/r' } as const;
   for (const id of [6, 7])
     ix = placeRun(ix, 'branch/y', br, siteRun(id, { reportPath: `branch/y/runs/${id}` }));
   const r = applyRetention(ix, { workflow: 2, pr: 1 });
@@ -204,12 +204,12 @@ test('applyRetention drops the oldest runs per channel kind; branch and legacy p
 });
 
 test('removePr removes every channel of the pull request and its legacy pr channel', () => {
-  const br = (pr: number) =>
-    ({ kind: 'branch', title: `#${pr}`, headBranch: 'b', pr, headRepo: 'o/r' }) as const;
+  const br = (prs: number[]) =>
+    ({ kind: 'branch', title: `#${prs[0]}`, headBranch: 'b', prs, headRepo: 'o/r' }) as const;
   let ix = placeRun(empty(), 'ci', ci, siteRun(1));
-  ix = placeRun(ix, 'branch/a', br(7), siteRun(2, { reportPath: 'branch/a/runs/2' }));
-  ix = placeRun(ix, 'branch/a--pr-7', br(7), siteRun(3, { reportPath: 'branch/a--pr-7/runs/3' }));
-  ix = placeRun(ix, 'branch/b', br(8), siteRun(4, { reportPath: 'branch/b/runs/4' }));
+  ix = placeRun(ix, 'branch/a', br([7]), siteRun(2, { reportPath: 'branch/a/runs/2' }));
+  ix = placeRun(ix, 'branch/a--pr-7', br([7]), siteRun(3, { reportPath: 'branch/a--pr-7/runs/3' }));
+  ix = placeRun(ix, 'branch/b', br([8]), siteRun(4, { reportPath: 'branch/b/runs/4' }));
   ix = placeRun(
     ix,
     'pr/7',
@@ -217,18 +217,49 @@ test('removePr removes every channel of the pull request and its legacy pr chann
     siteRun(5, { reportPath: 'pr/7/runs/5' }),
   );
   const r = removePr(ix, 7);
-  expect(r.keys.sort()).toEqual(['branch/a', 'branch/a--pr-7', 'pr/7']);
+  expect(r.removed.sort()).toEqual(['branch/a', 'branch/a--pr-7', 'pr/7']);
+  expect(r.updated).toEqual([]);
   expect(r.remove.sort()).toEqual(['branch/a--pr-7/runs/3', 'branch/a/runs/2', 'pr/7/runs/5']);
   expect(Object.keys(r.index.channels).sort()).toEqual(['branch/b', 'ci']);
-  expect(removePr(ix, 99)).toEqual({ index: ix, remove: [], keys: [] });
+  expect(removePr(ix, 99)).toEqual({ index: ix, remove: [], removed: [], updated: [] });
 });
 
-test('removeChannel returns the report paths; a missing key is a no-op', () => {
-  const ix = placeRun(empty(), 'pr/12', { kind: 'pr', title: '#12 x', headBranch: 'f' }, siteRun(1));
-  const r = removeChannel(ix, 'pr/12');
-  expect(r.index.channels).toEqual({});
-  expect(r.remove).toEqual(['ci/runs/1']);
-  expect(removeChannel(ix, 'pr/99')).toEqual({ index: ix, remove: [] });
+test('placeRun gathers the pull requests of a branch; removePr keeps a page another pull request still has', () => {
+  const br = (n: number) =>
+    ({ kind: 'branch', title: `#${n} t`, headBranch: 'b', prs: [n], headRepo: 'o/r' }) as const;
+  let ix = placeRun(empty(), 'branch/b', br(7), siteRun(1, { reportPath: 'branch/b/runs/1' }));
+  ix = placeRun(ix, 'branch/b', br(8), siteRun(2, { reportPath: 'branch/b/runs/2' }));
+  ix = placeRun(ix, 'branch/b', br(7), siteRun(3, { reportPath: 'branch/b/runs/3' }));
+  expect(ix.channels['branch/b']).toMatchObject({ prs: [7, 8], title: '#7 t' });
+  const one = removePr(ix, 7);
+  expect(one.removed).toEqual([]);
+  expect(one.updated).toEqual(['branch/b']);
+  expect(one.remove).toEqual([]);
+  expect(one.index.channels['branch/b']?.prs).toEqual([8]);
+  expect(one.index.channels['branch/b']?.runs).toHaveLength(3);
+  const both = removePr(one.index, 8);
+  expect(both.removed).toEqual(['branch/b']);
+  expect(both.index.channels).toEqual({});
+});
+
+test('a branch channel written with the older single `pr` reads as a one-pull set', () => {
+  const ix = parseSiteIndex(
+    JSON.stringify({
+      version: 1,
+      channels: {
+        'branch/b': { kind: 'branch', title: '#7', headBranch: 'b', pr: 7, headRepo: 'o/r', runs: [] },
+      },
+    }),
+  );
+  const placed = placeRun(
+    ix,
+    'branch/b',
+    { kind: 'branch', title: '#8', headBranch: 'b', prs: [8], headRepo: 'o/r' },
+    siteRun(1),
+  );
+  expect(placed.channels['branch/b']?.prs).toEqual([7, 8]);
+  expect(placed.channels['branch/b']).not.toHaveProperty('pr');
+  expect(removePr(ix, 7).removed).toEqual(['branch/b']);
 });
 
 test('siteIndexSchema parses an index and rejects another version', () => {
@@ -237,7 +268,7 @@ test('siteIndexSchema parses an index and rejects another version', () => {
   ix = placeRun(
     ix,
     'branch/b',
-    { kind: 'branch', title: '#4', headBranch: 'b', pr: 4, headRepo: 'o/r' },
+    { kind: 'branch', title: '#4', headBranch: 'b', prs: [4], headRepo: 'o/r' },
     siteRun(3),
   );
   expect(siteIndexSchema.parse(JSON.parse(JSON.stringify(ix)))).toEqual(ix);
@@ -266,13 +297,13 @@ test('renderLanding lists branch channels with their branch, newest pull first, 
   ix = placeRun(
     ix,
     'branch/feat-x',
-    { kind: 'branch', title: '#20 Feature', headBranch: 'feat/x', pr: 20, headRepo: 'o/r' },
+    { kind: 'branch', title: '#20 Feature', headBranch: 'feat/x', prs: [20], headRepo: 'o/r' },
     siteRun(2, { conclusion: 'failure' }),
   );
   ix = placeRun(
     ix,
     'branch/f--y',
-    { kind: 'branch', title: '#15 Fork', headBranch: 'y', pr: 15, headRepo: 'f/r' },
+    { kind: 'branch', title: '#15 Fork', headBranch: 'y', prs: [15], headRepo: 'f/r' },
     siteRun(3),
   );
   const html = renderLanding(ix, 'o/r');

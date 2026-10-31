@@ -113,7 +113,7 @@ describe('branchPage', () => {
         kind: 'branch',
         title: '#7',
         headBranch: 'feat/x',
-        pr: 7,
+        prs: [7],
         headRepo: 'o/r',
         runs: [
           { ...r(5), workflow: 'ci' },

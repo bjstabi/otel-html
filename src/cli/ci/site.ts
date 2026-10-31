@@ -25,7 +25,9 @@ export type Channel = {
   /** `ci`, or `#12 Fix the thing`. */
   title: string;
   headBranch: string;
-  /** A branch channel's pull request: the one that last placed a run. */
+  /** A branch channel's open pull requests: every one that placed a run and has not closed yet. */
+  prs?: readonly number[];
+  /** The single pull request of a branch channel written before `prs`; read as `[pr]` (see `prsOf`). */
   pr?: number;
   /** A branch channel's head repository, `owner/repo`. */
   headRepo?: string;
@@ -53,6 +55,7 @@ export const siteIndexSchema: z.ZodType<SiteIndex> = z.object({
       kind: z.enum(['workflow', 'branch', 'pr']),
       title: z.string(),
       headBranch: z.string(),
+      prs: z.array(z.number()).exactOptional(),
       pr: z.number().exactOptional(),
       headRepo: z.string().exactOptional(),
       runs: z.array(siteRunSchema),
@@ -162,27 +165,40 @@ export function channelFor(
       kind: 'branch',
       title: `#${pr.number} ${pr.title}`,
       headBranch: pr.head.ref,
-      pr: pr.number,
+      prs: [pr.number],
       ...(headRepo === undefined ? {} : { headRepo }),
     },
   };
 }
 
-/** `index` with `run` in channel `key` (created if absent, metadata refreshed); the same runId is replaced in place. */
+/** A channel's pull requests: its `prs`, or the older single `pr`. */
+const prsOf = (ch: Pick<Channel, 'prs' | 'pr'>): readonly number[] =>
+  ch.prs ?? (ch.pr === undefined ? [] : [ch.pr]);
+
+/**
+ * `index` with `run` in channel `key` (created if absent, metadata refreshed); the same runId is replaced in place. A
+ * branch channel's `prs` gather the pull requests that placed runs on it (the older `pr` folds in).
+ */
 export function placeRun(
   index: SiteIndex,
   key: string,
   channel: Omit<Channel, 'runs'>,
   run: SiteRun,
 ): SiteIndex {
-  const runs = [...(index.channels[key]?.runs ?? [])];
+  const held = index.channels[key];
+  const { pr: _legacy, ...meta } = channel;
+  const prs = [...new Set([...(held === undefined ? [] : prsOf(held)), ...prsOf(channel)])].sort(
+    (a, b) => a - b,
+  );
+  const runs = [...(held?.runs ?? [])];
   const at = runs.findIndex((r) => r.runId === run.runId);
   if (at >= 0) runs[at] = run;
   else runs.push(run);
   runs.sort((a, b) =>
     a.completedAt === b.completedAt ? b.runId - a.runId : a.completedAt < b.completedAt ? 1 : -1,
   );
-  return { ...index, channels: { ...index.channels, [key]: { ...channel, runs } } };
+  const next: Channel = channel.kind === 'branch' ? { ...meta, prs, runs } : { ...channel, runs };
+  return { ...index, channels: { ...index.channels, [key]: next } };
 }
 
 /**
@@ -208,33 +224,32 @@ export function rollingInputs(channel: Channel): string[] {
   return channel.runs.map((r) => r.reportPath).reverse();
 }
 
-/** `index` without channel `key`, and its report paths; a missing key changes nothing. */
-export function removeChannel(index: SiteIndex, key: string): { index: SiteIndex; remove: string[] } {
-  const ch = index.channels[key];
-  if (ch === undefined) return { index, remove: [] };
-  const { [key]: _gone, ...channels } = index.channels;
-  return { index: { ...index, channels }, remove: ch.runs.map((r) => r.reportPath) };
-}
-
 /**
- * `index` without pull request `pr`'s channels: every channel whose `pr` is `pr`, and the legacy `pr/<pr>`. `keys` are
- * the removed channel keys and `remove` their report paths; a pull request the index does not have changes nothing.
+ * `index` without pull request `pr`: it leaves each branch channel's `prs`, and a channel left with none is removed,
+ * as is the legacy `pr/<pr>`. `removed` are the removed channel keys and `remove` their report paths; `updated` are
+ * the channels kept for another open pull request. A pull request the index does not have changes nothing.
  */
 export function removePr(
   index: SiteIndex,
   pr: number,
-): { index: SiteIndex; remove: string[]; keys: string[] } {
-  const keys = Object.entries(index.channels)
-    .filter(([key, ch]) => ch.pr === pr || key === `pr/${pr}`)
-    .map(([key]) => key);
-  let next = index;
+): { index: SiteIndex; remove: string[]; removed: string[]; updated: string[] } {
+  const removed: string[] = [];
+  const updated: string[] = [];
+  const channels: Record<string, Channel> = {};
   const remove: string[] = [];
-  for (const key of keys) {
-    const r = removeChannel(next, key);
-    next = r.index;
-    remove.push(...r.remove);
+  for (const [key, ch] of Object.entries(index.channels)) {
+    const prs = prsOf(ch);
+    if (key === `pr/${pr}` || (prs.includes(pr) && prs.length === 1)) {
+      removed.push(key);
+      remove.push(...ch.runs.map((r) => r.reportPath));
+    } else if (prs.includes(pr)) {
+      updated.push(key);
+      const { pr: _legacy, ...rest } = ch;
+      channels[key] = { ...rest, prs: prs.filter((n) => n !== pr) };
+    } else channels[key] = ch;
   }
-  return { index: next, remove, keys };
+  if (removed.length === 0 && updated.length === 0) return { index, remove, removed, updated };
+  return { index: { ...index, channels }, remove, removed, updated };
 }
 
 const esc = (s: string): string =>
@@ -264,8 +279,8 @@ const entry = (href: string, label: string, ch: Channel, branch?: string): strin
   return `<li><a href="${esc(href)}">${esc(label)}</a><div class="meta">${meta}</div></li>`;
 };
 
-/** A pull request channel's number: its `pr`, else the `<n>` of a legacy `pr/<n>` key. */
-const prNumber = (key: string, ch: Channel): number => ch.pr ?? Number(key.slice(3));
+/** A pull request channel's newest pull request, else the `<n>` of a legacy `pr/<n>` key. */
+const prNumber = (key: string, ch: Channel): number => Math.max(...prsOf(ch), Number(key.slice(3)) || 0);
 
 /** A branch channel's branch as people name it: `feat`, or `owner:feat` for a fork's. */
 const branchLabel = (ch: Channel, repository: string): string =>
