@@ -58,6 +58,12 @@ describe('commentBody', () => {
     expect(body.indexOf('All runs on')).toBeGreaterThan(body.indexOf('Report:'));
     expect(commentBody(run, jobs, 'https://x.test/r/', undefined)).not.toContain('All runs on');
   });
+  test('a branch name with backticks keeps its code span whole', () => {
+    const body = (branch: string): string =>
+      commentBody(run, jobs, 'https://x.test/r/', undefined, { branch, url: 'https://x.test/b/' });
+    expect(body('a`b')).toContain('All runs on `` a`b ``: https://x.test/b/');
+    expect(body('x``y`')).toContain('All runs on ``` x``y` ```: https://x.test/b/');
+  });
 });
 
 const bot = { login: 'github-actions[bot]', type: 'Bot' };
@@ -129,15 +135,45 @@ describe('branchPage', () => {
     },
   };
   test("is the branch channel's rolling page, from this run's URL", () => {
-    expect(branchPage(index, 5, 'https://x.test/base/branch/feat-x/runs/5/')).toEqual({
+    expect(branchPage(index, 5, 'https://x.test/base/branch/feat-x/runs/5/', 'o/r')).toEqual({
       branch: 'feat/x',
       url: 'https://x.test/base/branch/feat-x/',
     });
   });
   test('is undefined off a branch channel, for an unknown run or a foreign URL', () => {
-    expect(branchPage(index, 9, 'https://x.test/pr/8/runs/9/')).toBeUndefined();
-    expect(branchPage(index, 1, 'https://x.test/branch/feat-x/runs/1/')).toBeUndefined();
-    expect(branchPage(index, 5, 'https://x.test/elsewhere/')).toBeUndefined();
+    expect(branchPage(index, 9, 'https://x.test/pr/8/runs/9/', 'o/r')).toBeUndefined();
+    expect(branchPage(index, 1, 'https://x.test/branch/feat-x/runs/1/', 'o/r')).toBeUndefined();
+    expect(branchPage(index, 5, 'https://x.test/elsewhere/', 'o/r')).toBeUndefined();
+  });
+  test("names a fork's branch as the landing page does, owner:branch", () => {
+    expect(branchPage(index, 5, 'https://x.test/branch/feat-x/runs/5/', 'up/r')?.branch).toBe('o:feat/x');
+  });
+  test("previousRun prefers the channel's previous run of the same workflow", () => {
+    const mixed: SiteIndex = {
+      version: 1,
+      channels: {
+        'branch/feat-x': {
+          kind: 'branch',
+          title: '#7',
+          headBranch: 'feat/x',
+          prs: [7],
+          headRepo: 'o/r',
+          runs: [
+            { ...r(6), workflow: 'ci' },
+            { ...r(5), workflow: 'load' },
+            { ...r(4), workflow: 'ci' },
+            { ...r(3), workflow: 'load' },
+          ],
+        },
+      },
+    };
+    expect(previousRun(mixed, 6, 'https://x.test/branch/feat-x/runs/6/')).toEqual({
+      runId: 4,
+      url: 'https://x.test/branch/feat-x/runs/4/',
+      workflow: 'ci',
+    });
+    // no earlier run of its workflow: the run before it, of any workflow
+    expect(previousRun(mixed, 4, 'https://x.test/branch/feat-x/runs/4/')?.runId).toBe(3);
   });
   test('previousRun carries the workflow of the run before, of any workflow', () => {
     expect(previousRun(index, 5, 'https://x.test/branch/feat-x/runs/5/')).toEqual({

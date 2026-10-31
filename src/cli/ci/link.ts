@@ -1,5 +1,5 @@
 import { type ApiJob, type ApiRun, CHECK_RUN_NAME } from './github-api.js';
-import { type Channel, type SiteIndex, type SiteRun, slug } from './site.js';
+import { branchLabel, type Channel, type SiteIndex, type SiteRun, slug } from './site.js';
 import { MARKER, summaryTable } from './summary.js';
 
 /** The pure side of `ci link`: the sticky pull request comment and the check run that point at a run's report. */
@@ -26,12 +26,20 @@ export function commentBody(
   branch?: BranchPage,
 ): string {
   const lines = [markerOf(slug(run.name)), summaryTable(run, jobs, url)];
-  if (branch !== undefined) lines.push(`All runs on \`${branch.branch}\`: ${branch.url}`, '');
+  if (branch !== undefined) lines.push(`All runs on ${codeSpan(branch.branch)}: ${branch.url}`, '');
   if (previous !== undefined) {
     const label = previous.workflow === undefined ? '' : `${previous.workflow} `;
     lines.push(`Previous run: [${label}run ${previous.runId}](${previous.url})`, '');
   }
   return lines.join('\n');
+}
+
+/** `text` as a markdown code span, fenced by one more backtick than its longest run of them. */
+function codeSpan(text: string): string {
+  const longest = Math.max(0, ...(text.match(/`+/g) ?? []).map((run) => run.length));
+  if (longest === 0) return `\`${text}\``;
+  const fence = '`'.repeat(longest + 1);
+  return `${fence} ${text} ${fence}`;
 }
 
 /** The subset of the issue comments API that `ci link` reads. */
@@ -70,14 +78,17 @@ export function checkRunPayload(
 }
 
 /**
- * The run listed right after `runId` in its channel (the one before it in time) and the URL of its report, derived
- * from this run's report `url` by swapping the report paths. Undefined when the run is not on the site, is the oldest
+ * The run before `runId` in its channel, preferring the newest older run of the same workflow and else the one right
+ * after it in the list, of any workflow; with the URL of its report, derived from this run's report `url` by swapping
+ * the report paths. Undefined when the run is not on the site, is the oldest
  * in its channel, or `url` does not end in this run's report path.
  */
 export function previousRun(index: SiteIndex, runId: number, url: string): PreviousRun | undefined {
   const found = locate(index, runId, url);
   if (found === undefined) return undefined;
-  const prev = found.channel.runs[found.at + 1];
+  const older = found.channel.runs.slice(found.at + 1);
+  const workflow = found.channel.runs[found.at]?.workflow;
+  const prev = (workflow === undefined ? undefined : older.find((r) => r.workflow === workflow)) ?? older[0];
   if (prev === undefined) return undefined;
   return {
     runId: prev.runId,
@@ -91,10 +102,15 @@ export function previousRun(index: SiteIndex, runId: number, url: string): Previ
  * `previousRun`. Undefined when the run is not on the site, its channel is not a branch channel, or `url` does not end
  * in this run's report path.
  */
-export function branchPage(index: SiteIndex, runId: number, url: string): BranchPage | undefined {
+export function branchPage(
+  index: SiteIndex,
+  runId: number,
+  url: string,
+  repository: string,
+): BranchPage | undefined {
   const found = locate(index, runId, url);
   if (found === undefined || found.channel.kind !== 'branch') return undefined;
-  return { branch: found.channel.headBranch, url: `${found.base}/${found.key}/` };
+  return { branch: branchLabel(found.channel, repository), url: `${found.base}/${found.key}/` };
 }
 
 /** The channel holding `runId`, its position there, and the site's base URL (`url` minus the run's report path). */

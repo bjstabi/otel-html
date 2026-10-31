@@ -294,7 +294,7 @@ const entry = (href: string, label: string, ch: Channel, branch?: string): strin
 const prNumber = (key: string, ch: Channel): number => Math.max(...prsOf(ch), Number(key.slice(3)) || 0);
 
 /** A branch channel's branch as people name it: `feat`, or `owner:feat` for a fork's. */
-const branchLabel = (ch: Channel, repository: string): string =>
+export const branchLabel = (ch: Channel, repository: string): string =>
   ch.headRepo === undefined || ch.headRepo === repository
     ? ch.headBranch
     : `${ch.headRepo.split('/')[0]}:${ch.headBranch}`;

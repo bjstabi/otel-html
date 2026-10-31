@@ -95,7 +95,7 @@ export async function runLink(opts: LinkOptions, io: CliIo, fetchFn: Fetch = fet
   try {
     const index = await readSiteIndex(opts.site);
     previous = previousRun(index, run.id, opts.url);
-    branch = branchPage(index, run.id, opts.url);
+    branch = branchPage(index, run.id, opts.url, opts.repository);
   } catch (e) {
     warn(`cannot read the site index, so no previous run or branch page is linked: ${messageOf(e)}`);
   }
