@@ -62,13 +62,20 @@ export const slug = (name: string): string =>
 export const reportUrl = (baseUrl: string, reportPath: string): string => `${baseUrl}/${reportPath}/`;
 
 /**
- * The open pull requests a finished run belongs to: those whose head is the run's commit or whose head branch is the
- * run's branch (the pull request may have moved on since), the exact-commit ones first.
+ * The open pull requests a finished run belongs to, the exact-commit ones first: those whose head is the run's
+ * commit, then those whose head branch is the run's branch in the same repository (the pull request may have moved
+ * on since; a fork's branch of the same name is not this run's branch).
  */
 export function pullsOfRun(run: ApiRun, pulls: ApiPull[]): ApiPull[] {
   const open = pulls.filter((p) => p.state === 'open');
   const exact = open.filter((p) => p.head.sha === run.head_sha);
-  const moved = open.filter((p) => p.head.sha !== run.head_sha && p.head.ref === run.head_branch);
+  const sameRepo = (p: ApiPull): boolean =>
+    p.head.repo != null &&
+    run.head_repository != null &&
+    p.head.repo.full_name === run.head_repository.full_name;
+  const moved = open.filter(
+    (p) => p.head.sha !== run.head_sha && p.head.ref === run.head_branch && sameRepo(p),
+  );
   return [...exact, ...moved];
 }
 

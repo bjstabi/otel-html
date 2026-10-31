@@ -37,7 +37,7 @@ const pull = (over: Partial<ApiPull> = {}): ApiPull => ({
   number: 12,
   title: 'Fix the thing',
   state: 'open',
-  head: { sha: 'abc', ref: 'feat' },
+  head: { sha: 'abc', ref: 'feat', repo: { full_name: 'o/r' } },
   ...over,
 });
 const siteRun = (runId: number, over: Partial<SiteRun> = {}): SiteRun => ({
@@ -76,19 +76,34 @@ test('channelFor: a fork push with no pull, or a non-default branch, is not publ
 test('channelFor: closed pulls and pulls of another sha and branch are ignored', () => {
   expect(channelFor(apiRun({ head_branch: 'feat' }), [pull({ state: 'closed' })], 'main')).toBeUndefined();
   expect(
-    channelFor(apiRun({ head_branch: 'feat' }), [pull({ head: { sha: 'zzz', ref: 'other' } })], 'main'),
+    channelFor(
+      apiRun({ head_branch: 'feat' }),
+      [pull({ head: { sha: 'zzz', ref: 'other', repo: { full_name: 'o/r' } } })],
+      'main',
+    ),
   ).toBeUndefined();
 });
 
 test('channelFor: a pull whose head moved on (same ref, new sha) still takes the run', () => {
   expect(
-    channelFor(apiRun({ head_branch: 'feat' }), [pull({ head: { sha: 'zzz', ref: 'feat' } })], 'main')?.key,
+    channelFor(
+      apiRun({ head_branch: 'feat' }),
+      [pull({ head: { sha: 'zzz', ref: 'feat', repo: { full_name: 'o/r' } } })],
+      'main',
+    )?.key,
   ).toBe('pr/12');
+});
+
+test('channelFor: a fork pull from a branch of the same name does not take a default-branch run', () => {
+  const fork = pull({ head: { sha: 'zzz', ref: 'main', repo: { full_name: 'fork/r' } } });
+  expect(channelFor(apiRun(), [fork], 'main')?.key).toBe('ci');
+  expect(pullsOfRun(apiRun(), [fork])).toEqual([]);
+  expect(pullsOfRun(apiRun(), [pull({ head: { sha: 'zzz', ref: 'main', repo: null } })])).toEqual([]);
 });
 
 test('pullsOfRun prefers the exact-commit pull', () => {
   const run = apiRun({ head_branch: 'feat' });
-  const moved = pull({ number: 1, head: { sha: 'zzz', ref: 'feat' } });
+  const moved = pull({ number: 1, head: { sha: 'zzz', ref: 'feat', repo: { full_name: 'o/r' } } });
   const exact = pull({ number: 2 });
   expect(pullsOfRun(run, [moved, exact]).map((p) => p.number)).toEqual([2, 1]);
   expect(channelFor(run, [moved, exact], 'main')?.key).toBe('pr/2');

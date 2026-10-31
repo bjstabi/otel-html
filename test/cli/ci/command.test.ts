@@ -300,6 +300,20 @@ describe('otel-html ci site and cleanup', () => {
     expect(existsSync(site)).toBe(false);
   });
 
+  test('a default-branch run is not taken by a fork pull from a branch of the same name', async () => {
+    stubApi({ 60: runBody(60) }, [
+      {
+        number: 9,
+        title: 'Fork',
+        state: 'open',
+        head: { sha: 'zzz', ref: 'main', repo: { full_name: 'fork/r' } },
+      },
+    ]);
+    expect(await runCli(siteArgs(60), fakeIo().io, deps)).toBe(0);
+    expect(existsSync(join(site, 'ci/runs/60/data/manifest.js'))).toBe(true);
+    expect(existsSync(join(site, 'pr'))).toBe(false);
+  });
+
   test('an unreadable run is an ::error:: and exit 1', async () => {
     stubApi({});
     const f = fakeIo();
@@ -309,7 +323,12 @@ describe('otel-html ci site and cleanup', () => {
 
   test('a PR channel is published for an open pull request and cleanup removes it', async () => {
     stubApi({ 50: runBody(50, 'topic') }, [
-      { number: 7, title: 'Fix', state: 'open', head: { sha: 'sha50', ref: 'topic' } },
+      {
+        number: 7,
+        title: 'Fix',
+        state: 'open',
+        head: { sha: 'sha50', ref: 'topic', repo: { full_name: 'o/r' } },
+      },
     ]);
     expect(await runCli(siteArgs(50), fakeIo().io, deps)).toBe(0);
     expect(existsSync(join(site, 'pr/7/runs/50/data/manifest.js'))).toBe(true);
@@ -467,7 +486,14 @@ describe('otel-html ci link', () => {
     vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
       if (url.includes('/pulls'))
         return new Response(
-          JSON.stringify([{ number: 7, title: 'Fix', state: 'open', head: { sha: 'newer', ref: 'topic' } }]),
+          JSON.stringify([
+            {
+              number: 7,
+              title: 'Fix',
+              state: 'open',
+              head: { sha: 'newer', ref: 'topic', repo: { full_name: 'o/r' } },
+            },
+          ]),
           { status: 200 },
         );
       if (/\/actions\/runs\/6$/.test(url))
@@ -479,6 +505,7 @@ describe('otel-html ci link', () => {
             status: 'completed',
             head_branch: 'topic',
             head_sha: 'sha6',
+            head_repository: { full_name: 'o/r' },
           }),
           { status: 200 },
         );

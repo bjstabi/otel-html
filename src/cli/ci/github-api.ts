@@ -140,7 +140,12 @@ export async function sendJson<T>(
 }
 
 /** The subset of the pull request API that the publisher reads. */
-export type ApiPull = { number: number; title: string; state: string; head: { sha: string; ref: string } };
+export type ApiPull = {
+  number: number;
+  title: string;
+  state: string;
+  head: { sha: string; ref: string; repo: { full_name: string } | null };
+};
 
 /** Every pull request that contains commit `sha`. */
 export const fetchPullsForSha = (
