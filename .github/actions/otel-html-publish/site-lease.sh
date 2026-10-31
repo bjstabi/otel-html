@@ -11,7 +11,7 @@
 # site never had). The scratch outputs
 # are appended to the real GITHUB_OUTPUT once the attempt succeeds.
 #
-# Environment: as site-branch.sh, plus GITHUB_OUTPUT.
+# Environment: as site-branch.sh, plus GITHUB_OUTPUT. Test hook: SITE_LEASE_BACKOFF=0 retries without waiting.
 set -euo pipefail
 
 [ $# -ge 4 ] || {
@@ -33,7 +33,7 @@ for attempt in 1 2 3 4 5; do
       exit 0
     fi
   fi
-  [ "$attempt" = 5 ] || sleep $((attempt * 2 + RANDOM % 5))
+  [ "$attempt" = 5 ] || [ "${SITE_LEASE_BACKOFF:-}" = 0 ] || sleep $((attempt * 2 + RANDOM % 5))
 done
 echo "::error::could not push to gh-pages ($message) after 5 attempts"
 exit 1
