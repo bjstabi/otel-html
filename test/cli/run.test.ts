@@ -181,6 +181,48 @@ describe('run', () => {
     expect(root?.parentSpanId).toBe('2'.repeat(16));
   });
 
+  test('a malformed --traceparent names the flag; an empty one is still an error', async () => {
+    for (const value of ['nope', '']) {
+      const w = createTestWriter();
+      const h = start(w, ['run', '-o', 'out', '--traceparent', value, ...node, '0']);
+      open.push(h);
+      expect(await h.result).toBe(2);
+      expect(h.stderr).toContain('--traceparent is not a W3C traceparent');
+    }
+  });
+
+  test('an empty TRACEPARENT variable is unset: a fresh trace', async () => {
+    const w = createTestWriter();
+    const h = start(w, ['run', '-o', 'out', ...node, '0'], { TRACEPARENT: '' });
+    open.push(h);
+    expect(await h.result).toBe(0);
+    const root = chunkOf(w).spans.find((s) => s.name === 'node');
+    expect(root?.parentSpanId).toBeNull();
+  });
+
+  test('TRACESTATE in the environment reaches the child unchanged', async () => {
+    const w = createTestWriter();
+    const h = start(
+      w,
+      [
+        'run',
+        '-o',
+        'out',
+        '--http',
+        '0',
+        '--no-grpc',
+        '--',
+        process.execPath,
+        '-e',
+        'process.stdout.write(process.env.TRACESTATE ?? "unset")',
+      ],
+      { TRACESTATE: 'vendor=a,other=b' },
+    );
+    open.push(h);
+    expect(await h.result).toBe(0);
+    expect(h.child).toBe('vendor=a,other=b');
+  });
+
   test.each([
     ['uppercase hex', '00-0AF7651916CD43DD8448EB211C80319C-b7ad6b7169203331-01'],
     ['another version', '01-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01'],

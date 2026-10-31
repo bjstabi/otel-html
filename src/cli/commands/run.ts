@@ -25,10 +25,15 @@ interface RunIds {
 }
 
 /** The trace this run joins (the flag, else $TRACEPARENT) with a fresh span id for its root, or fresh random ids. */
-function idsOf(inherited: string | undefined): RunIds {
+function idsOf(flag: string | undefined, variable: string | undefined): RunIds {
   const spanId = randomBytes(SPAN_ID_BYTES);
-  if (inherited === undefined) return { traceId: randomBytes(TRACE_ID_BYTES), spanId };
-  const { traceId, spanId: parentSpanId } = parseTraceparent(inherited);
+  // An empty variable is unset (CI often expands an unset variable to ""); an explicit empty flag is an error.
+  const inherited =
+    flag === undefined
+      ? { value: variable === '' ? undefined : variable, source: 'TRACEPARENT' }
+      : { value: flag, source: '--traceparent' };
+  if (inherited.value === undefined) return { traceId: randomBytes(TRACE_ID_BYTES), spanId };
+  const { traceId, spanId: parentSpanId } = parseTraceparent(inherited.value, inherited.source);
   return { traceId, spanId, parentSpanId };
 }
 
@@ -64,7 +69,7 @@ export function addRunCommand(program: Command, io: CliIo, deps: CliDeps): void 
       throw new OtelHtmlError('usage', { message: 'no command to run' });
     // A malformed context fails before anything is created, bound or spawned.
     const { TRACEPARENT: inheritedTraceparent } = io.env;
-    const { traceId, spanId, parentSpanId } = idsOf(flags.traceparent ?? inheritedTraceparent);
+    const { traceId, spanId, parentSpanId } = idsOf(flags.traceparent, inheritedTraceparent);
     // Before the receiver opens: once it has returned, only `run`'s own forwarder handles a stop signal, and that is
     // installed after the child starts, so a slow async detector here would leave a window with the lock taken.
     const resource = await detectRunResource(argv);

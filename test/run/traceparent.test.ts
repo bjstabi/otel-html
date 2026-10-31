@@ -32,4 +32,13 @@ describe('parseTraceparent', () => {
     expect(e.code).toBe('usage');
     expect(e.hint).toContain('00-<32 hex trace id>');
   });
+
+  test('the error names the source it was given', () => {
+    expect(usageOf(() => parseTraceparent('nope')).message).toContain(
+      'TRACEPARENT is not a W3C traceparent: nope',
+    );
+    expect(usageOf(() => parseTraceparent('nope', '--traceparent')).message).toContain(
+      '--traceparent is not a W3C traceparent: nope',
+    );
+  });
 });
