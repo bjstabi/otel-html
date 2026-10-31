@@ -336,7 +336,7 @@ The run's report is then published to the site at <https://bjstabi.github.io/ote
 
 `/pr/<number>/` is a stub that forwards to the pull request's newest run. A run on any other branch, or a push from a fork, with no open pull request is not published. The site keeps the last 30 runs per workflow and the last 5 per pull request; a re-run replaces its folder. When a pull request closes, `pull_request_target` triggers the `cleanup` job, which removes its folder.
 
-`/ci/` and `/load/` are rolling reports: after each publish the publisher merges the channel's retained `runs/<run_id>/` reports, oldest first, into one report and replaces everything in the folder except `runs/`. Runs inside it are told apart by trace id (one per run attempt, so a re-run is its own trace) and by the `cicd.pipeline.run.id` resource attribute, which the dashboard's `run` variable selects. Retention bounds it: when the 30th-oldest run drops out of the channel, the next rebuild leaves it out. A per-run report whose format this version of otel-html no longer reads is skipped with a warning; its run stays listed and the rest still merge, until retention removes it. If the merge fails for any other reason, the channel warns and falls back to a stub forwarding to the newest run. A `load` run whose jobs were skipped has no job reports and publishes nothing.
+`/ci/` and `/load/` are rolling reports: after each publish the publisher merges the channel's retained `runs/<run_id>/` reports, oldest first, into one report and replaces everything in the folder except `runs/`. Runs inside it are told apart by trace id (one per run attempt, so a re-run is its own trace) and by the `cicd.pipeline.run.id` resource attribute, which the dashboard's `run` variable selects. Retention bounds it: a run older than the newest 30 drops out of the channel, and the next rebuild leaves it out. A per-run report whose format this version of otel-html no longer reads is skipped with a warning; its run stays listed and the rest still merge, until retention removes it. If the merge fails for any other reason, the channel warns and falls back to a stub forwarding to the newest run. A `load` run whose jobs were skipped has no job reports and publishes nothing.
 
 The `gh-pages` branch is the store: one orphan commit holding the whole site, replaced on every publish rather than grown, so history does not accumulate every run's data. [site-branch.sh](.github/actions/otel-html-publish/site-branch.sh) checks out the tip and pushes the new commit with `--force-with-lease` against it. A rejected lease (another publish or a cleanup got there first) checks out again, re-applies and retries, up to 5 attempts, so a cleaned-up pull request is never brought back. The `report` job in [ci-report.yml](.github/workflows/ci-report.yml) runs the [otel-html-publish](.github/actions/otel-html-publish/action.yml) action with `deploy: false`, which builds the report, publishes it and links it. The `deploy` job ships the `gh-pages` tip under the concurrency group `pages`, so a pending deploy replaced by a newer one loses nothing: the one that runs ships the latest tip. It runs only from the default branch, so a `workflow_dispatch` on another branch updates `gh-pages` and skips the deploy; the next default-branch deploy ships it.
 
@@ -396,7 +396,10 @@ permissions: {}
 
 jobs:
   report:
-    if: github.event_name == 'workflow_run'
+    # A failed or cancelled run is worth a report; a run that never really ran is not.
+    if: >-
+      github.event_name == 'workflow_run' && github.event.workflow_run.conclusion != 'skipped' &&
+      github.event.workflow_run.conclusion != 'action_required'
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -417,20 +420,22 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    outputs:
+      cleaned: ${{ steps.cleanup.outputs.cleaned }}
+    # No checkout: the action installs the CLI, and this job holds a write token, so it never runs the PR's code.
     steps:
-      # The default branch only: this job holds a write token, so never the PR's code.
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.repository.default_branch }}
-          persist-credentials: false
-      - uses: bjstabi/otel-html/.github/actions/otel-html-publish@v0
+      - id: cleanup
+        uses: bjstabi/otel-html/.github/actions/otel-html-publish@v0
         with:
           cleanup-pr: ${{ github.event.pull_request.number }}
           deploy: false
 
   deploy:
     needs: [report, cleanup]
-    if: "!cancelled() && (needs.report.outputs.published == 'true' || needs.cleanup.result == 'success')"
+    # The github-pages environment accepts the default branch only; a pull request the site never had deploys nothing.
+    if: >-
+      !cancelled() && github.ref_name == github.event.repository.default_branch &&
+      (needs.report.outputs.published == 'true' || needs.cleanup.outputs.cleaned == 'true')
     runs-on: ubuntu-latest
     concurrency:
       group: pages
