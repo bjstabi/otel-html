@@ -33,7 +33,9 @@ jobs:
         id: cap
         shell: bash
         run: |
-          if otel-html --help | grep -Eq '^[[:space:]]+run[[:space:]]'; then
+          # Captured first: under pipefail, `grep -q` quitting early could fail the pipe and read as "no run".
+          help=$(otel-html --help)
+          if grep -Eq '^[[:space:]]+run[[:space:]]' <<<"$help"; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
