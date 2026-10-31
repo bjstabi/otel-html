@@ -24,6 +24,9 @@ function nanosOf(whole: string, fraction: string | undefined): bigint | undefine
   return BigInt(sec) * 1_000_000n + BigInt((fraction ?? '').padEnd(9, '0'));
 }
 
+/** API times are truncated to whole seconds, so a step's end covers the rest of that second. */
+const SECOND_ROUNDING = 999_999_999n;
+
 type Window = { start: bigint; end: bigint; number: number };
 
 /** Step windows in nanoseconds; a step lacking `completed_at` extends to the job end (or without bound). */
@@ -36,7 +39,10 @@ function stepWindows(job: ApiJob): Window[] {
     const end = ms(step.completed_at) ?? jobEnd;
     out.push({
       start: BigInt(ns(start)),
-      end: end === undefined ? BigInt(Number.MAX_SAFE_INTEGER) * 1_000_000_000n : BigInt(ns(end)),
+      end:
+        end === undefined
+          ? BigInt(Number.MAX_SAFE_INTEGER) * 1_000_000_000n
+          : BigInt(ns(end)) + SECOND_ROUNDING,
       number: step.number,
     });
   }
@@ -92,13 +98,17 @@ export function jobLogRecordsRequest(i: {
       group = undefined;
       continue;
     }
-    const body = marker === undefined ? rest : rest.slice(marker.length + 4);
+    const body = rest;
     last = { time, severity: SEVERITIES[marker ?? ''] ?? INFO, body, group };
     drafts.push(last);
   }
 
   const logRecords = drafts.map((d) => {
-    const step = windows.find((w) => d.time >= w.start && d.time <= w.end);
+    let step: Window | undefined;
+    for (const w of windows) {
+      // Among overlapping windows the step that began most recently owns the line.
+      if (d.time >= w.start && d.time <= w.end && (step === undefined || w.start >= step.start)) step = w;
+    }
     const attributes: Attr[] = attrs({
       'log.group': d.group,
       'cicd.pipeline.task.run.id': step?.number === undefined ? undefined : String(step.number),

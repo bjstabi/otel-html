@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import type { ApiJob } from '../../../scripts/ci/context.js';
+import type { ApiJob, ApiStep } from '../../../scripts/ci/context.js';
 import { jobSpanIdOf, runKey, stepSpanIdOf, traceIdOf } from '../../../scripts/ci/ids.js';
 import { jobLogRecordsRequest } from '../../../scripts/ci/job-logs.js';
 import { parseOtlpObject } from '../../../src/model/otlp-json.js';
@@ -72,8 +72,8 @@ describe('jobLogRecordsRequest', () => {
     expect(records(LOG).map((r) => r.body.stringValue)).toEqual([
       'first info',
       'second info',
-      'careful\ncontinued warning text',
-      'boom',
+      '##[warning]careful\ncontinued warning text',
+      '##[error]boom',
       'after the group',
     ]);
   });
@@ -113,9 +113,22 @@ describe('jobLogRecordsRequest', () => {
     ]);
     expect(rs.every((r) => r.traceId === traceIdOf(key))).toBe(true);
 
-    const gap = records('2026-01-01T00:00:20.5000000Z between');
+    const gap = records('2026-01-01T00:00:09.5000000Z between');
     expect(gap[0]?.spanId).toBe(jobSpanIdOf(key, 7));
     expect(attr(gap[0] as Rec, 'cicd.pipeline.task.run.id')).toBeUndefined();
+  });
+
+  test("a step's last second belongs to the step, and the latest-starting step wins an overlap", () => {
+    expect(records('2026-01-01T00:00:20.9000000Z ##[error]late')[0]?.spanId).toBe(stepSpanIdOf(key, 7, 1));
+    const touching: ApiJob = {
+      ...job,
+      steps: [
+        { ...(job.steps[0] as ApiStep), completed_at: '2026-01-01T00:00:20Z' },
+        { ...(job.steps[1] as ApiStep), started_at: '2026-01-01T00:00:20Z' },
+      ],
+    };
+    const rs = records('2026-01-01T00:00:19.9000000Z a\n2026-01-01T00:00:20.5000000Z b', touching);
+    expect(rs.map((r) => r.spanId)).toEqual([stepSpanIdOf(key, 7, 1), stepSpanIdOf(key, 7, 2)]);
   });
 
   test('a step without completed_at extends to the job end', () => {
