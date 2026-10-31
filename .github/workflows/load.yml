@@ -16,6 +16,11 @@ permissions:
 env:
   MISE_DISABLE_TOOLS: claude
 
+defaults:
+  run:
+    # Every job's steps run under the built CLI; the steps that run before dist/ exists say `shell: bash`.
+    shell: node dist/cli/main.js run -o .otel-html/report -- bash --noprofile --norc -eo pipefail {0}
+
 jobs:
   # Whether main has changed since the last run whose `load` job passed. A run that skipped the job does not count.
   changed:
@@ -24,6 +29,7 @@ jobs:
       run: ${{ steps.check.outputs.run }}
     steps:
       - id: check
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -50,9 +56,26 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup
+      # The job shell below is the built CLI, so dist/ must exist before the first `run:` step starts.
+      - name: Build otel-html
+        shell: bash
+        run: mise run build
+      - name: otel-html context
+        shell: bash
+        run: node dist/cli/main.js ci context
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       - run: lscpu | grep -E 'Model name|^CPU\(s\)'; free -m
-      # Builds first (the 1M-log test runs the built library), then runs the two gated test files.
-      - run: mise run test:load
+      # The explicit build above is the 1M-log test's built library; `--skip-deps` keeps the task from rebuilding
+      # `dist/` under the running job shell.
+      - run: mise run --skip-deps test:load
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: otel-html-${{ github.job }}
+          path: .otel-html/
+          include-hidden-files: true
+          if-no-files-found: ignore
 
   # The receiver under load (spec §7): telemetrygen sends 1M spans over gRPC (paced at 500 spans/s per worker (250
   # traces/s) so it does not drop them) and 1M logs over HTTP (one record per request, so 1M requests) to
@@ -67,8 +90,17 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup
+      # The job shell below is the built CLI, so dist/ must exist before the first `run:` step starts.
+      - name: Build otel-html
+        shell: bash
+        run: mise run build
+      - name: otel-html context
+        shell: bash
+        run: node dist/cli/main.js ci context
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       - run: lscpu | grep -E 'Model name|^CPU\(s\)'; free -m
-      - run: mise run test:load:receiver
+      - run: mise run --skip-deps test:load:receiver
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm exec playwright test e2e/load.spec.ts --project 'chromium-http' --workers=1
         env:
@@ -79,4 +111,11 @@ jobs:
         with:
           name: playwright-results-load-receiver
           path: test-results/
+          if-no-files-found: ignore
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: otel-html-${{ github.job }}
+          path: .otel-html/
+          include-hidden-files: true
           if-no-files-found: ignore

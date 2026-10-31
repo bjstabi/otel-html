@@ -7,12 +7,12 @@ name: ci-report
 # run's head, which may be an untrusted PR.
 on:
   workflow_run:
-    workflows: [ci]
+    workflows: [ci, load]
     types: [completed]
   workflow_dispatch:
     inputs:
       run_id:
-        description: ci workflow run id to report on
+        description: ci or load workflow run id to report on
         required: true
         type: string
   # `_target`, not `pull_request`: a fork PR's `pull_request` token cannot push the site. The cleanup job runs with a
@@ -47,7 +47,7 @@ jobs:
       pull-requests: write
       checks: write
     outputs:
-      published: ${{ steps.site.outputs.published }}
+      published: ${{ steps.site.outputs.published || 'false' }}
       report-url: ${{ steps.site.outputs.report-url }}
     timeout-minutes: 15
     steps:
@@ -63,24 +63,29 @@ jobs:
           github-token: ${{ github.token }}
           pattern: otel-html-*
           path: artifacts/
+      # A run with no job reports (a `load` run that skipped its jobs) sets `published=false` and writes nothing.
       - name: Build the run report
+        id: report
         run: node dist/cli/main.js ci report --run-id "$RUN_ID" --repository "$GITHUB_REPOSITORY" --artifacts artifacts --out ci-run-report --config .github/otel-html-ci.yaml
         env:
           GITHUB_TOKEN: ${{ github.token }}
           RUN_ID: ${{ inputs.run_id || github.event.workflow_run.id }}
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      - if: steps.report.outputs.published != 'false'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ci-run-report
           path: ci-run-report/
           include-hidden-files: true
           if-no-files-found: error
       - id: pages
+        if: steps.report.outputs.published != 'false'
         uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
       # Places the report on a fresh copy of the gh-pages tip and pushes it under a lease. A rejected lease (another
       # publish or a PR cleanup got there first) starts over from the new tip, so a cleaned-up PR is never brought
       # back. `ci site` writes its outputs to a scratch file, copied to the step's outputs once the push lands.
       - name: Publish to the site branch
         id: site
+        if: steps.report.outputs.published != 'false'
         shell: bash
         run: |
           out=$(mktemp)
@@ -89,7 +94,8 @@ jobs:
             : >"$out"
             if "$SITE_BRANCH" checkout site &&
               GITHUB_OUTPUT=$out node dist/cli/main.js ci site --site site --report ci-run-report --run-id "$RUN_ID" \
-                --repository "$GITHUB_REPOSITORY" --base-url "$BASE_URL" --retention 30 --pr-retention 5; then
+                --repository "$GITHUB_REPOSITORY" --base-url "$BASE_URL" --retention 30 --pr-retention 5 \
+                --config .github/otel-html-ci.yaml; then
               # A run with no channel (a branch with no open PR) is announced by `ci site` and not pushed.
               if ! grep -qx 'published=true' "$out" || "$SITE_BRANCH" push site "ci-report: $GITHUB_WORKFLOW run $RUN_ID"; then
                 cat "$out" >>"$GITHUB_OUTPUT"

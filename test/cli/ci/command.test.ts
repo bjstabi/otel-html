@@ -65,6 +65,58 @@ describe('otel-html ci report arguments', () => {
   });
 });
 
+describe('otel-html ci report with no job reports', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'ci-report-empty-'));
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('announces it, writes nothing and sets published=false', async () => {
+    vi.stubGlobal('fetch', async (url: string) => {
+      const body = url.includes('/jobs')
+        ? { jobs: [] }
+        : {
+            id: 7,
+            run_attempt: 1,
+            name: 'load',
+            conclusion: 'skipped',
+            updated_at: '2026-01-01T00:00:00Z',
+            html_url: 'https://github.com/o/r/actions/runs/7',
+            head_branch: 'main',
+            head_sha: 'sha7',
+            repository: { full_name: 'o/r', html_url: 'https://github.com/o/r' },
+            head_repository: { full_name: 'o/r' },
+          };
+      return new Response(JSON.stringify(body), { status: 200 });
+    });
+    const outputs = join(dir, 'github-output');
+    const out = join(dir, 'out');
+    const artifacts = join(dir, 'artifacts');
+    mkdirSync(artifacts);
+    const f = fakeIo({ GITHUB_OUTPUT: outputs });
+    const argv = [
+      'ci',
+      'report',
+      '--run-id',
+      '7',
+      '--repository',
+      'o/r',
+      '--artifacts',
+      artifacts,
+      '--out',
+      out,
+    ];
+    expect(await runCli(argv, f.io, realFsDeps)).toBe(0);
+    expect(f.out()).toContain('::notice::otel-html report: run 7 has no job reports; nothing to publish');
+    expect(readFileSync(outputs, 'utf8')).toBe('published=false\n');
+    expect(existsSync(out)).toBe(false);
+  });
+});
+
 describe('otel-html ci context', () => {
   let dir: string;
   let prevCwd: string;

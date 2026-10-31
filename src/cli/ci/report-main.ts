@@ -107,6 +107,19 @@ export async function runReport(
     warn(`cannot read ${opts.artifacts}: ${messageOf(e)}`);
     return [] as Artifact[];
   });
+  if (artifacts.length === 0) {
+    // A run that skipped its jobs (`load` with nothing new on main) has nothing to publish.
+    say(io, `::notice::otel-html report: run ${opts.runId} has no job reports; nothing to publish`);
+    const outputs = env('GITHUB_OUTPUT');
+    if (outputs) {
+      try {
+        appendFileSync(outputs, 'published=false\n');
+      } catch (e) {
+        warn(`cannot write the step output: ${messageOf(e)}`);
+      }
+    }
+    return;
+  }
   const approximate = approximateJobs(
     jobs,
     artifacts.map((a) => a.context),
