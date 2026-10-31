@@ -1,5 +1,8 @@
 name: ci-report
 
+# Builds a ci run's report and publishes it to the GitHub Pages site (the `gh-pages` branch), linked from the run's
+# pull request; removes a pull request's reports when it closes.
+#
 # Runs from the default branch's copy of this file and checks out the default branch's code: never the triggering
 # run's head, which may be an untrusted PR.
 on:
@@ -12,14 +15,13 @@ on:
         description: ci workflow run id to report on
         required: true
         type: string
+  # `_target`, not `pull_request`: a fork PR's `pull_request` token cannot push the site. The cleanup job runs with a
+  # write token, so it checks out the default branch only and never the PR's code.
+  pull_request_target:
+    types: [closed]
 
-permissions:
-  contents: read
-  actions: read
-
-concurrency:
-  group: ci-report-${{ inputs.run_id || github.event.workflow_run.id }}
-  cancel-in-progress: false
+# Each job asks for what it needs.
+permissions: {}
 
 env:
   # `claude` in mise.toml is a developer tool; CI never needs it.
@@ -28,8 +30,25 @@ env:
 jobs:
   report:
     # A failed or cancelled run is the most interesting report; only runs that never really ran are skipped.
-    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion != 'skipped' && github.event.workflow_run.conclusion != 'action_required')
+    if: github.event_name != 'pull_request_target' && (github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion != 'skipped' && github.event.workflow_run.conclusion != 'action_required'))
     runs-on: ubuntu-latest
+    # One report per run at a time. Not the shared `pages` group: GitHub keeps one pending run per group and cancels
+    # the older one, which would drop reports in a burst; the gh-pages lease serializes the pushes instead.
+    concurrency:
+      group: ci-report-${{ inputs.run_id || github.event.workflow_run.id }}
+      cancel-in-progress: false
+    permissions:
+      actions: read
+      # The gh-pages push.
+      contents: write
+      # configure-pages reads the site's base URL.
+      pages: read
+      # `ci link`: the sticky PR comment and the check run.
+      pull-requests: write
+      checks: write
+    outputs:
+      published: ${{ steps.site.outputs.published }}
+      report-url: ${{ steps.site.outputs.report-url }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -55,3 +74,109 @@ jobs:
           path: ci-run-report/
           include-hidden-files: true
           if-no-files-found: error
+      - id: pages
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+      # Places the report on a fresh copy of the gh-pages tip and pushes it under a lease. A rejected lease (another
+      # publish or a PR cleanup got there first) starts over from the new tip, so a cleaned-up PR is never brought
+      # back. `ci site` writes its outputs to a scratch file, copied to the step's outputs once the push lands.
+      - name: Publish to the site branch
+        id: site
+        shell: bash
+        run: |
+          out=$(mktemp)
+          for attempt in 1 2 3 4 5; do
+            rm -rf site
+            : >"$out"
+            if "$SITE_BRANCH" checkout site &&
+              GITHUB_OUTPUT=$out node dist/cli/main.js ci site --site site --report ci-run-report --run-id "$RUN_ID" \
+                --repository "$GITHUB_REPOSITORY" --base-url "$BASE_URL" --retention 30 --pr-retention 5; then
+              # A run with no channel (a branch with no open PR) is announced by `ci site` and not pushed.
+              if ! grep -qx 'published=true' "$out" || "$SITE_BRANCH" push site "ci-report: $GITHUB_WORKFLOW run $RUN_ID"; then
+                cat "$out" >>"$GITHUB_OUTPUT"
+                exit 0
+              fi
+            fi
+            [ "$attempt" = 5 ] || sleep $((RANDOM % 5 + 1))
+          done
+          echo "::error::could not publish run $RUN_ID to gh-pages after 5 attempts"
+          exit 1
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.run_id || github.event.workflow_run.id }}
+          BASE_URL: ${{ steps.pages.outputs.base_url }}
+          SITE_BRANCH: .github/actions/otel-html-publish/site-branch.sh
+      # Never fails: a missing comment or check is a warning. Its comment body also goes to the step summary.
+      - name: Link
+        if: steps.site.outputs.published == 'true'
+        run: node dist/cli/main.js ci link --run-id "$RUN_ID" --repository "$GITHUB_REPOSITORY" --url "$REPORT_URL" --site site
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.run_id || github.event.workflow_run.id }}
+          REPORT_URL: ${{ steps.site.outputs.report-url }}
+
+  # A closed PR's folder and index entry leave the site.
+  cleanup:
+    if: github.event_name == 'pull_request_target' && github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      # The gh-pages push.
+      contents: write
+    steps:
+      # The default branch, never the PR's head: this job holds a write token.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - run: mise run build
+      # The same lease loop as the report job's publish.
+      - name: Remove the PR from the site branch
+        shell: bash
+        run: |
+          for attempt in 1 2 3 4 5; do
+            rm -rf site
+            if "$SITE_BRANCH" checkout site &&
+              node dist/cli/main.js ci cleanup --site site --pr "$PR" --repository "$GITHUB_REPOSITORY" &&
+              "$SITE_BRANCH" push site "ci-report: remove PR $PR"; then
+              exit 0
+            fi
+            [ "$attempt" = 5 ] || sleep $((RANDOM % 5 + 1))
+          done
+          echo "::error::could not remove PR $PR from gh-pages after 5 attempts"
+          exit 1
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          SITE_BRANCH: .github/actions/otel-html-publish/site-branch.sh
+
+  # Deploys the gh-pages tip, whoever pushed it. Pending deploys in the `pages` group replace each other, which loses
+  # nothing: the one that runs ships the latest tip.
+  deploy:
+    needs: [report, cleanup]
+    if: always() && (needs.report.outputs.published == 'true' || needs.cleanup.result == 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: gh-pages
+          path: public
+          fetch-depth: 1
+          persist-credentials: false
+      - run: rm -rf public/.git
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: public
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
