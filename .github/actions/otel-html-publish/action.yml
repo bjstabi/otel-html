@@ -163,6 +163,8 @@ runs:
         path: ${{ steps.resolve.outputs.report }}/
         include-hidden-files: true
         if-no-files-found: error
+        # A re-run of the report job (after a failed site push, say) finds the first attempt's artifact.
+        overwrite: true
     - id: pages
       if: inputs.cleanup-pr == '' && inputs.target == 'github-pages' && steps.report.outputs.published != 'false'
       uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
