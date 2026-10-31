@@ -7,7 +7,8 @@
 #
 # Each attempt checks the tip out into <dir> (see site-branch.sh) and runs <command...>, which changes <dir>, with
 # GITHUB_OUTPUT pointing at a scratch file. When <push-when> is not empty, the change is pushed only if the command
-# wrote that exact output line (`ci site` writes `published=false` for a run it does not publish). The scratch outputs
+# wrote that exact output line (`ci site` writes `published=false` for a run it does not publish, `ci cleanup` `cleaned=false` for a pull request the
+# site never had). The scratch outputs
 # are appended to the real GITHUB_OUTPUT once the attempt succeeds.
 #
 # Environment: as site-branch.sh, plus GITHUB_OUTPUT.
@@ -22,6 +23,7 @@ shift 3
 site_branch="$(dirname "$0")/site-branch.sh"
 
 out=$(mktemp)
+trap 'rm -f "$out"' EXIT
 for attempt in 1 2 3 4 5; do
   rm -rf "$dir"
   : >"$out"

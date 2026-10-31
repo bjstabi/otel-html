@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -393,16 +393,33 @@ describe('otel-html ci site and cleanup', { timeout: 60_000 }, () => {
     expect(existsSync(join(site, 'pr/7/runs/50/data/manifest.js'))).toBe(true);
     expect(readFileSync(join(site, 'pr/7/index.html'), 'utf8')).toContain('url=runs/50/');
 
-    const f = fakeIo();
-    expect(
-      await runCli(['ci', 'cleanup', '--site', site, '--pr', '7', '--repository', 'o/r'], f.io, deps),
-    ).toBe(0);
+    const outputs = join(dir, 'gh-output');
+    const cleanup = (pr: string): Promise<number> =>
+      runCli(
+        ['ci', 'cleanup', '--site', site, '--pr', pr, '--repository', 'o/r'],
+        fakeIo({ GITHUB_OUTPUT: outputs }).io,
+        deps,
+      );
+    expect(await cleanup('7')).toBe(0);
     expect(existsSync(join(site, 'pr/7'))).toBe(false);
     expect(readFileSync(join(site, 'index.json'), 'utf8')).not.toContain('pr/7');
-    // cleaning a pull request the site never had is a no-op
-    expect(
-      await runCli(['ci', 'cleanup', '--site', site, '--pr', '8', '--repository', 'o/r'], fakeIo().io, deps),
-    ).toBe(0);
+    expect(readFileSync(outputs, 'utf8')).toBe('cleaned=true\n');
+
+    // cleaning a pull request the site never had changes nothing and says so
+    rmSync(outputs);
+    const before = readFileSync(join(site, 'index.json'), 'utf8');
+    const landing = statSync(join(site, 'index.html')).mtimeMs;
+    expect(await cleanup('8')).toBe(0);
+    expect(readFileSync(outputs, 'utf8')).toBe('cleaned=false\n');
+    expect(readFileSync(join(site, 'index.json'), 'utf8')).toBe(before);
+    expect(statSync(join(site, 'index.html')).mtimeMs).toBe(landing);
+
+    // a folder left without an index entry is still removed
+    mkdirSync(join(site, 'pr/9/runs/1'), { recursive: true });
+    rmSync(outputs);
+    expect(await cleanup('9')).toBe(0);
+    expect(readFileSync(outputs, 'utf8')).toBe('cleaned=true\n');
+    expect(existsSync(join(site, 'pr/9'))).toBe(false);
   });
 
   test('cleanup needs --repository or $GITHUB_REPOSITORY, and validates it', async () => {

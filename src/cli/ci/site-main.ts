@@ -1,4 +1,4 @@
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, existsSync } from 'node:fs';
 import { cp, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -172,11 +172,22 @@ export async function runSite(
   });
 }
 
-/** Removes pull request `pr`'s channel and folder from the site. A pull request the site never had changes nothing. */
+/**
+ * Removes pull request `pr`'s channel and folder from the site and writes `cleaned=true` to $GITHUB_OUTPUT. A pull
+ * request the site never had (no channel and no folder) changes nothing and writes `cleaned=false`, so the caller
+ * pushes and deploys nothing.
+ */
 export async function runCleanup(opts: CleanupOptions, io: CliIo): Promise<void> {
   const key = `pr/${opts.pr}`;
-  const { index, remove } = removeChannel(await readSiteIndex(opts.site), key);
+  const current = await readSiteIndex(opts.site);
+  if (current.channels[key] === undefined && !existsSync(join(opts.site, key))) {
+    say(io, `${key} is not on the site; nothing to remove`);
+    setOutputs(io, { cleaned: 'false' });
+    return;
+  }
+  const { index, remove } = removeChannel(current, key);
   await removePaths(opts.site, [...remove, key]);
   await writeSite(opts.site, index, opts.repository);
   say(io, `removed ${key} from the site`);
+  setOutputs(io, { cleaned: 'true' });
 }

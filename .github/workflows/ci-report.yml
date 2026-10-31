@@ -73,6 +73,9 @@ jobs:
     permissions:
       # The gh-pages push.
       contents: write
+    outputs:
+      # `false` when the site never had the pull request: nothing was pushed, so there is nothing to deploy.
+      cleaned: ${{ steps.cleanup.outputs.cleaned || 'false' }}
     steps:
       # The default branch, never the PR's head: this job holds a write token.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -81,7 +84,8 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/setup
       - run: mise run build
-      - uses: ./.github/actions/otel-html-publish
+      - id: cleanup
+        uses: ./.github/actions/otel-html-publish
         with:
           command: node dist/cli/main.js
           cleanup-pr: ${{ github.event.pull_request.number }}
@@ -97,7 +101,7 @@ jobs:
     needs: [report, cleanup]
     if: >-
       !cancelled() && github.ref_name == github.event.repository.default_branch &&
-      (needs.report.outputs.published == 'true' || needs.cleanup.result == 'success')
+      (needs.report.outputs.published == 'true' || needs.cleanup.outputs.cleaned == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     concurrency:

@@ -349,7 +349,7 @@ These subcommands are for the actions; stable flags, output format not guarantee
 | `ci report` | Builds a run's report from the Actions API (with `$GITHUB_TOKEN` from the environment) and merges it with the downloaded job artifacts. Writes the summary table to the job summary, and `published=false` to `$GITHUB_OUTPUT` when the run has no job reports. | `--run-id`, `--repository`, `--artifacts`, `--out` (all required); `--config`; `--no-summary` (the action passes it on `github-pages`, where `ci link` writes the summary with the report's link) |
 | `ci site` | Places a run's report in the checked-out site folder, applies retention, rewrites the indexes and stubs. Writes `published` and `report-url` to `$GITHUB_OUTPUT`. | `--site`, `--report`, `--run-id`, `--repository`, `--base-url` (all required); `--retention` (30), `--pr-retention` (5) |
 | `ci link` | Comments on the pull requests, creates the check run and writes the job summary. Never fails the job. | `--run-id`, `--repository`, `--url`, `--site` (all required); `--no-comment`, `--no-check` |
-| `ci cleanup` | Removes a closed pull request's reports from the site folder. | `--site`, `--pr` (required); `--repository` (default `$GITHUB_REPOSITORY`) |
+| `ci cleanup` | Removes a closed pull request's reports from the site folder. Writes `cleaned=true` to `$GITHUB_OUTPUT`, or `cleaned=false` and changes nothing when the site never had the pull request. | `--site`, `--pr` (required); `--repository` (default `$GITHUB_REPOSITORY`) |
 
 See [Use in your CI](#use-in-your-ci) to adopt this in another repo.
 
@@ -474,7 +474,7 @@ Publish inputs:
 | `cleanup-pr` | empty | A pull request number: skip the report and remove that PR's reports from the site. |
 | `token` | `github.token` | Needs `actions: read`, `contents: write`, `pages: read`, `pull-requests: write`, `checks: write`. |
 
-Outputs: `report-url` (empty when nothing was published) and `published`; a cleanup sets `published=false` and `cleaned=true`.
+Outputs: `report-url` (empty when nothing was published), `published` and `cleaned`. A cleanup sets `published=false`, and `cleaned=true` only when the site had that pull request; for one it never had, nothing is pushed or deployed and `cleaned=false`.
 
 GitHub points a check run created with `GITHUB_TOKEN` at the Actions run page, so the report URL is in the check's summary and in the PR comment.
 
