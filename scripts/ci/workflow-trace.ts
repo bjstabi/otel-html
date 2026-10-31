@@ -1,5 +1,6 @@
 import type { ApiJob, ApiStep } from './context.js';
 import { jobSpanIdOf, runKey, runSpanIdOf, stepSpanIdOf, traceIdOf } from './ids.js';
+import { type Attr, attrs, ms, ns, resultOf } from './otlp.js';
 
 /** The subset of the Actions run API that the CI scripts read. */
 export type ApiRun = {
@@ -33,43 +34,11 @@ export function ciResource(run: ApiRun): Record<string, string> {
   };
 }
 
-const RESULTS: Readonly<Record<string, string>> = {
-  success: 'success',
-  failure: 'failure',
-  cancelled: 'cancellation',
-  timed_out: 'timeout',
-  skipped: 'skip',
-};
-
-const resultOf = (conclusion: string): string => RESULTS[conclusion] ?? 'error';
-
-type AttrValue = string | number | boolean;
-type Attr = { key: string; value: { stringValue: string } | { intValue: string } | { boolValue: boolean } };
 type Status = { code: number; message: string };
 
 const SPAN_KIND_INTERNAL = 1;
 const SPAN_KIND_SERVER = 2;
 const STATUS_ERROR = 2;
-
-function attrs(values: Record<string, AttrValue | null | undefined>): Attr[] {
-  const out: Attr[] = [];
-  for (const [key, v] of Object.entries(values)) {
-    if (v === null || v === undefined) continue;
-    if (typeof v === 'string') out.push({ key, value: { stringValue: v } });
-    else if (typeof v === 'boolean') out.push({ key, value: { boolValue: v } });
-    else out.push({ key, value: { intValue: String(v) } });
-  }
-  return out;
-}
-
-/** Epoch milliseconds of an API timestamp; unparsable values count as absent. */
-function ms(s: string | null | undefined): number | undefined {
-  if (s === null || s === undefined) return undefined;
-  const t = Date.parse(s);
-  return Number.isNaN(t) ? undefined : t;
-}
-
-const ns = (t: number): string => (BigInt(t) * 1_000_000n).toString();
 
 /** A conclusion other than success/skip is an error status carrying the conclusion; an unfinished one has none. */
 function statusOf(conclusion: string | null): Status | undefined {
