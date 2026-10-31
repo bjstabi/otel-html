@@ -56,13 +56,14 @@ bin="$RUNNER_TEMP/otel-html/bin"
 rm -rf "$work"
 mkdir -p "$work" "$bin"
 gh release download "$tag" -R "$REPO" -D "$work" -p "$asset" -p SHA256SUMS
-# Fail closed when SHA256SUMS has no line for the asset, whatever the coreutils version does with --ignore-missing.
-grep -Eq "^[0-9a-f]{64} [ *]${asset//./\\.}\$" "$work/SHA256SUMS" || {
+# Only the asset's line is checked: no line fails closed, and the other platforms' lines never come into it.
+grep -E "^[0-9a-f]{64} [ *]${asset//./\\.}\$" "$work/SHA256SUMS" >"$work/asset.sha256" || {
   echo "::error::no checksum for $asset in SHA256SUMS" >&2
   exit 1
 }
-# The binary keeps its release file name for the check; SHA256SUMS lists every platform, so ignore the missing ones.
-(cd "$work" && sha256sum -c --ignore-missing SHA256SUMS)
+# The binary keeps its release file name for the check. Older macOS runners have shasum but no sha256sum.
+if command -v sha256sum >/dev/null; then check=(sha256sum -c); else check=(shasum -a 256 -c); fi
+(cd "$work" && "${check[@]}" asset.sha256)
 mv "$work/$asset" "$bin/$installed"
 chmod +x "$bin/$installed"
 if [ "$RUNNER_OS" = Windows ]; then
