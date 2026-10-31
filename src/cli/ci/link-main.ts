@@ -93,7 +93,7 @@ export async function runLink(opts: LinkOptions, io: CliIo, fetchFn: Fetch = fet
   let previous: ReturnType<typeof previousRun>;
   let page: ReturnType<typeof channelPage>;
   try {
-    const index = await readSiteIndex(opts.site);
+    const index = await readSiteIndex(opts.site, warn);
     previous = previousRun(index, run.id, opts.url);
     page = channelPage(index, run.id, opts.url);
   } catch (e) {

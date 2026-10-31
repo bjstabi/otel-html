@@ -507,6 +507,25 @@ describe('otel-html ci site and cleanup', { timeout: 60_000 }, () => {
     expect(landing).toContain('href="pr/3/"');
   });
 
+  test('a channel of a kind this version does not know is skipped with a warning, not a failure', async () => {
+    mkdirSync(site, { recursive: true });
+    writeFileSync(
+      join(site, 'index.json'),
+      JSON.stringify({
+        version: 1,
+        channels: { 'tag/v1': { kind: 'tag', title: 'v1', headBranch: 'v1', runs: [] } },
+      }),
+    );
+    stubApi({ 42: runBody(42) });
+    const f = fakeIo();
+    expect(await runCli(siteArgs(42), f.io, deps)).toBe(0);
+    expect(f.out()).toContain('::warning::otel-html site: skipping channel tag/v1 of kind tag');
+    const g = fakeIo();
+    expect(
+      await runCli(['ci', 'cleanup', '--site', site, '--pr', '1', '--repository', 'o/r'], g.io, deps),
+    ).toBe(0);
+  });
+
   test('a stub-era pr channel is rebuilt as a rolling report by its next run', async () => {
     stubApi({ 50: runBody(50, 'feat/topic') }, [topicPull]);
     // the stub-era layout: pr/7/index.html forwards to the newest run

@@ -44,24 +44,46 @@ const siteRunSchema = z.object({
   reportPath: z.string(),
   workflow: z.string().exactOptional(),
 });
+const KINDS = ['branch', 'pr', 'workflow'] as const;
+const channelSchema: z.ZodType<Channel> = z.object({
+  kind: z.enum(KINDS),
+  title: z.string(),
+  headBranch: z.string(),
+  headRepo: z.string().exactOptional(),
+  runs: z.array(siteRunSchema),
+});
 export const siteIndexSchema: z.ZodType<SiteIndex> = z.object({
   version: z.literal(1),
-  channels: z.record(
-    z.string(),
-    z.object({
-      kind: z.enum(['branch', 'pr', 'workflow']),
-      title: z.string(),
-      headBranch: z.string(),
-      headRepo: z.string().exactOptional(),
-      runs: z.array(siteRunSchema),
-    }),
-  ),
+  channels: z.record(z.string(), channelSchema),
 });
+const looseIndexSchema = z.object({ version: z.literal(1), channels: z.record(z.string(), z.unknown()) });
 
-/** The index in `text` (an `index.json`), or an empty one when there is none. Throws on a malformed index. */
-export function parseSiteIndex(text: string | undefined): SiteIndex {
+/**
+ * The index in `text` (an `index.json`), or an empty one when there is none. A channel of a kind this version does
+ * not know (written by a newer otel-html), or one it cannot read, is skipped with `warn` rather than failing every
+ * publish and cleanup; the next write leaves it out. Throws when the index itself is malformed or another version.
+ */
+export function parseSiteIndex(
+  text: string | undefined,
+  warn: (message: string) => void = () => {},
+): SiteIndex {
   if (text === undefined) return { version: 1, channels: {} };
-  return siteIndexSchema.parse(JSON.parse(text));
+  const loose = looseIndexSchema.parse(JSON.parse(text));
+  const channels: Record<string, Channel> = {};
+  for (const [key, value] of Object.entries(loose.channels)) {
+    const parsed = channelSchema.safeParse(value);
+    if (parsed.success) {
+      channels[key] = parsed.data;
+      continue;
+    }
+    const kind = (value as { kind?: unknown } | null)?.kind;
+    warn(
+      typeof kind === 'string' && !(KINDS as readonly string[]).includes(kind)
+        ? `skipping channel ${key} of kind ${kind}, which this otel-html does not know`
+        : `skipping channel ${key}, which is not readable: ${parsed.error.issues[0]?.message ?? 'invalid'}`,
+    );
+  }
+  return { version: 1, channels };
 }
 
 /** `name` lower-cased with each run of non-alphanumerics one `-`, trimmed; `workflow` when nothing is left. */

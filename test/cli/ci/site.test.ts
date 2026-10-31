@@ -4,6 +4,7 @@ import {
   applyRetention,
   channelFor,
   dropWorkflowChannels,
+  parseSiteIndex,
   placeRun,
   pullsOfRun,
   pullsToLink,
@@ -219,6 +220,30 @@ test('siteIndexSchema parses an index, the older channel kinds too, and rejects 
     channels: { 'pr/7': { kind: 'pr', title: '#7', headBranch: 'b', runs: [siteRun(5)] } },
   };
   expect(siteIndexSchema.parse(legacy).channels['pr/7']?.kind).toBe('pr');
+});
+
+test('parseSiteIndex skips a channel of an unknown kind, or one it cannot read, with a warning', () => {
+  const good = { kind: 'pr', title: '#3', headBranch: 'b', runs: [siteRun(1)] };
+  const text = JSON.stringify({
+    version: 1,
+    channels: {
+      'pr/3': good,
+      'tag/v1': { kind: 'tag', title: 'v1', headBranch: 'v1', runs: [] },
+      'pr/4': { kind: 'pr', title: '#4' },
+    },
+  });
+  const warnings: string[] = [];
+  const ix = parseSiteIndex(text, (m) => warnings.push(m));
+  expect(Object.keys(ix.channels)).toEqual(['pr/3']);
+  expect(ix.channels['pr/3']?.runs).toHaveLength(1);
+  expect(warnings).toHaveLength(2);
+  expect(warnings[0]).toContain('tag/v1');
+  expect(warnings[0]).toContain('kind tag');
+  expect(warnings[1]).toContain('pr/4');
+  // without a warn callback it still reads; a wrong version or shape still throws
+  expect(Object.keys(parseSiteIndex(text).channels)).toEqual(['pr/3']);
+  expect(() => parseSiteIndex(JSON.stringify({ version: 2, channels: {} }))).toThrow();
+  expect(() => parseSiteIndex(JSON.stringify({ version: 1, channels: [] }))).toThrow();
 });
 
 test('renderLanding lists the branches, then pull requests newest first, has no script, and escapes titles', () => {

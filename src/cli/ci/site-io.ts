@@ -4,13 +4,16 @@ import { parseSiteIndex, renderLanding, type SiteIndex } from './site.js';
 
 /** The filesystem side of the published site: its index, landing page, and the report folders under it. */
 
-/** `<dir>/index.json`, or an empty index when the site has none yet. Throws on a malformed index. */
-export async function readSiteIndex(dir: string): Promise<SiteIndex> {
+/**
+ * `<dir>/index.json`, or an empty index when the site has none yet; channels it cannot read are skipped with `warn`
+ * (see `parseSiteIndex`). Throws on a malformed index.
+ */
+export async function readSiteIndex(dir: string, warn?: (message: string) => void): Promise<SiteIndex> {
   const text = await readFile(join(dir, 'index.json'), 'utf8').catch((e: NodeJS.ErrnoException) => {
     if (e.code === 'ENOENT') return undefined;
     throw e;
   });
-  return parseSiteIndex(text);
+  return parseSiteIndex(text, warn);
 }
 
 /** Writes `index.json`, the landing `index.html` and `.nojekyll` into `dir`. */

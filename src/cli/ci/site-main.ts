@@ -151,7 +151,7 @@ export async function runSite(
     reportPath,
     workflow: run.name,
   };
-  const migrated = dropWorkflowChannels(await readSiteIndex(opts.site));
+  const migrated = dropWorkflowChannels(await readSiteIndex(opts.site, (m) => warning(io, 'site', m)));
   const { index, remove } = applyRetention(placeRun(migrated.index, placed.key, placed.channel, siteRun), {
     branch: opts.retention,
     pr: opts.prRetention,
@@ -176,7 +176,7 @@ export async function runSite(
  */
 export async function runCleanup(opts: CleanupOptions, io: CliIo): Promise<void> {
   const key = `pr/${opts.pr}`;
-  const current = await readSiteIndex(opts.site);
+  const current = await readSiteIndex(opts.site, (m) => warning(io, 'cleanup', m));
   if (current.channels[key] === undefined && !existsSync(join(opts.site, key))) {
     say(io, `${key} is not on the site; nothing to remove`);
     setOutputs(io, { cleaned: 'false' });
