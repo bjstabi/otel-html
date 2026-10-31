@@ -60,22 +60,17 @@ jobs:
       - name: Build otel-html
         shell: bash
         run: mise run build
-      - name: otel-html context
-        shell: bash
-        run: node dist/cli/main.js ci context
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
+      - uses: ./.github/actions/otel-html-setup
+        with:
+          command: node dist/cli/main.js
       - run: lscpu | grep -E 'Model name|^CPU\(s\)'; free -m
       # The explicit build above is the 1M-log test's built library; `--skip-deps` keeps the task from rebuilding
       # `dist/` under the running job shell.
       - run: mise run --skip-deps test:load
       - if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: ./.github/actions/otel-html-collect
         with:
           name: otel-html-${{ github.job }}
-          path: .otel-html/
-          include-hidden-files: true
-          if-no-files-found: ignore
 
   # The receiver under load (spec §7): telemetrygen sends 1M spans over gRPC (paced at 500 spans/s per worker (250
   # traces/s) so it does not drop them) and 1M logs over HTTP (one record per request, so 1M requests) to
@@ -94,11 +89,9 @@ jobs:
       - name: Build otel-html
         shell: bash
         run: mise run build
-      - name: otel-html context
-        shell: bash
-        run: node dist/cli/main.js ci context
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
+      - uses: ./.github/actions/otel-html-setup
+        with:
+          command: node dist/cli/main.js
       - run: lscpu | grep -E 'Model name|^CPU\(s\)'; free -m
       - run: mise run --skip-deps test:load:receiver
       - run: pnpm exec playwright install --with-deps chromium
@@ -113,9 +106,6 @@ jobs:
           path: test-results/
           if-no-files-found: ignore
       - if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: ./.github/actions/otel-html-collect
         with:
           name: otel-html-${{ github.job }}
-          path: .otel-html/
-          include-hidden-files: true
-          if-no-files-found: ignore

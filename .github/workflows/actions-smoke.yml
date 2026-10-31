@@ -1,0 +1,41 @@
+name: actions-smoke
+
+# The composite actions under .github/actions, used from the released CLI on each runner OS. No macOS leg (cost).
+on:
+  pull_request:
+    paths: [".github/actions/**", ".github/workflows/actions-smoke.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+defaults:
+  run:
+    shell: otel-html run -o .otel-html/report -- bash --noprofile --norc -eo pipefail {0}
+
+jobs:
+  smoke:
+    # TODO: remove after the first release that has `ci context`. The latest release (0.1.1) predates it, so
+    # `otel-html ci context` fails in otel-html-setup until then.
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/otel-html-setup
+        with:
+          version: latest
+      - run: otel-html --version
+      - run: echo hello
+      - name: The job report exists
+        shell: bash
+        run: test -f .otel-html/report/data/manifest.js
+      - if: always()
+        uses: ./.github/actions/otel-html-collect
+        with:
+          name: otel-html-smoke-${{ matrix.os }}

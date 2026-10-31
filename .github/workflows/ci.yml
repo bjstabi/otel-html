@@ -36,20 +36,15 @@ jobs:
       - name: Build otel-html
         shell: bash
         run: mise run build
-      - name: otel-html context
-        shell: bash
-        run: node dist/cli/main.js ci context
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
+      - uses: ./.github/actions/otel-html-setup
+        with:
+          command: node dist/cli/main.js
       - run: mise run gen:check
       - run: mise run check
       - if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: ./.github/actions/otel-html-collect
         with:
           name: otel-html-${{ github.job }}
-          path: .otel-html/
-          include-hidden-files: true
-          if-no-files-found: ignore
 
   unit-os:
     needs: check
@@ -70,19 +65,14 @@ jobs:
       - name: Build otel-html
         shell: bash
         run: mise run build
-      - name: otel-html context
-        shell: bash
-        run: node dist/cli/main.js ci context
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
+      - uses: ./.github/actions/otel-html-setup
+        with:
+          command: node dist/cli/main.js
       - run: mise run test:unit
       - if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: ./.github/actions/otel-html-collect
         with:
           name: otel-html-${{ github.job }}${{ matrix.os && format('-{0}', matrix.os) || '' }}
-          path: .otel-html/
-          include-hidden-files: true
-          if-no-files-found: ignore
 
   build:
     needs: check
@@ -94,11 +84,9 @@ jobs:
       - name: Build otel-html
         shell: bash
         run: mise run build
-      - name: otel-html context
-        shell: bash
-        run: node dist/cli/main.js ci context
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
+      - uses: ./.github/actions/otel-html-setup
+        with:
+          command: node dist/cli/main.js
       # `check:package` (publint + attw) depends on `build`; --skip-deps keeps it from cleaning dist/ under the running job shell.
       - run: mise run --skip-deps check:package
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -107,12 +95,9 @@ jobs:
           path: dist/
           if-no-files-found: error
       - if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: ./.github/actions/otel-html-collect
         with:
           name: otel-html-${{ github.job }}
-          path: .otel-html/
-          include-hidden-files: true
-          if-no-files-found: ignore
 
   e2e:
     needs: build
@@ -147,11 +132,9 @@ jobs:
         with:
           name: dist
           path: dist/
-      - name: otel-html context
-        shell: bash
-        run: node dist/cli/main.js ci context
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
+      - uses: ./.github/actions/otel-html-setup
+        with:
+          command: node dist/cli/main.js
       # The job shell wraps this in `otel-html run`; the exit code is Playwright's.
       # --skip-deps: use the dist/ built and package-checked by the build job instead of rebuilding.
       # Playwright projects are named `<browser>-file` and `<browser>-http`.
@@ -171,12 +154,9 @@ jobs:
           include-hidden-files: true
           if-no-files-found: ignore
       - if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: ./.github/actions/otel-html-collect
         with:
           name: otel-html-${{ github.job }}${{ matrix.project && format('-{0}', matrix.project) || '' }}
-          path: .otel-html/
-          include-hidden-files: true
-          if-no-files-found: ignore
 
   # The metrics scale check (spec §7: Explorer < 2 s, Catalog < 1 s on 200 metrics × 1,000 series × 1 h at 10 s),
   # Chromium only, in the Playwright image like the jobs above. Its report writes the full 1 h only for the metric the
@@ -202,11 +182,9 @@ jobs:
         with:
           name: dist
           path: dist/
-      - name: otel-html context
-        shell: bash
-        run: node dist/cli/main.js ci context
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
+      - uses: ./.github/actions/otel-html-setup
+        with:
+          command: node dist/cli/main.js
       - run: pnpm exec playwright test e2e/scale.spec.ts --project 'chromium-*' --grep 'metrics scale' --workers=1
       - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -215,12 +193,9 @@ jobs:
           path: test-results/
           if-no-files-found: ignore
       - if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: ./.github/actions/otel-html-collect
         with:
           name: otel-html-${{ github.job }}
-          path: .otel-html/
-          include-hidden-files: true
-          if-no-files-found: ignore
 
   # The standalone Bun binaries, built and smoke-tested on every PR (convert, serve over HTTP and gRPC, run, SIGINT, bad
   # port). The release workflow keeps its own smoke step, which tests the artefact it uploads.
@@ -245,17 +220,12 @@ jobs:
       - name: Build otel-html
         shell: bash
         run: mise run build
-      - name: otel-html context
-        shell: bash
-        run: node dist/cli/main.js ci context
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
+      - uses: ./.github/actions/otel-html-setup
+        with:
+          command: node dist/cli/main.js
       - run: mise run build:binaries -- --target "$TARGET"
       - run: OTEL_HTML_BINARY="dist/bin/otel-html-$TARGET" pnpm exec vitest run test/cli/binary.test.ts
       - if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: ./.github/actions/otel-html-collect
         with:
           name: otel-html-${{ github.job }}${{ matrix.target && format('-{0}', matrix.target) || '' }}${{ matrix.os && format('-{0}', matrix.os) || '' }}
-          path: .otel-html/
-          include-hidden-files: true
-          if-no-files-found: ignore
