@@ -100,8 +100,9 @@ jobs:
       - name: Upload to the release
         run: gh release upload "$TAG" SHA256SUMS --clobber --repo "$GITHUB_REPOSITORY"
 
-  # Moves the floating major tag (v0 today, v1 at 1.0) to the new release, so `uses: ...@v0` follows releases. This is
-  # the only force push in the repo, and the tag only ever moves forward to a release tag.
+  # Moves the floating major tag (v0 today, v1 at 1.0) to the new release, so `uses: ...@v0` follows releases. A
+  # prerelease leaves it where it is. The tag is force-pushed, but only ever forward to a release tag (the other force
+  # push in the repo is the publisher's `gh-pages`, under a lease).
   actions-tag:
     needs: [release-please, binaries, checksums]
     if: needs.release-please.outputs.release_created == 'true'
@@ -118,12 +119,17 @@ jobs:
       - name: Move the major tag
         run: |
           set -euo pipefail
-          if ! [[ $TAG =~ ^otel-html-v([0-9]+)\.[0-9A-Za-z.+-]*$ ]]; then
+          if [[ $TAG =~ ^otel-html-v[0-9]+\.[0-9]+\.[0-9]+[-+] ]]; then
+            echo "::notice::$TAG is a prerelease; the major tag stays where it is"
+            exit 0
+          fi
+          if ! [[ $TAG =~ ^otel-html-v([0-9]+)\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::unexpected release tag '$TAG'; not moving a major tag"
             exit 1
           fi
           major="v${BASH_REMATCH[1]}"
-          git tag -f "$major" "$TAG"
+          # HEAD is the checked-out release commit, whether or not the checkout created the release tag locally.
+          git tag -f "$major" HEAD
           git push -f origin "refs/tags/$major"
 
   # Opt-in: set the repository variable NPM_PUBLISH to 'true' once the package is ready to publish.
