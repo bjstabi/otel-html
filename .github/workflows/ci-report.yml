@@ -47,7 +47,7 @@ jobs:
       pull-requests: write
       checks: write
     outputs:
-      published: ${{ steps.publish.outputs.published }}
+      published: ${{ steps.publish.outputs.published || 'false' }}
       report-url: ${{ steps.publish.outputs.report-url }}
     timeout-minutes: 15
     steps:

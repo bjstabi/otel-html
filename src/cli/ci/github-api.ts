@@ -111,14 +111,22 @@ export const jobsUrl = (i: {
 }): string =>
   `${i.apiUrl}/repos/${i.repository}/actions/runs/${i.runId}/attempts/${i.runAttempt}/jobs?per_page=100`;
 
-/** Every job of one run attempt. */
-export const fetchJobs = (
+/**
+ * The name of the check run `ci link` creates. Created with the workflow token, it joins the triggering run's check
+ * suite, so the jobs API lists it as a job of that run.
+ */
+export const CHECK_RUN_NAME = 'otel-html report';
+
+/** Every job of one run attempt, without the `ci link` check run (which is not a job of the workflow). */
+export const fetchJobs = async (
   i: { apiUrl: string; repository: string; runId: number; runAttempt: number },
   token: string | undefined,
   timeoutMs: number,
   fetchFn: Fetch = fetch,
 ): Promise<ApiJob[]> =>
-  fetchPaged<{ jobs?: ApiJob[] }, ApiJob>(jobsUrl(i), token, timeoutMs, (b) => b.jobs ?? [], fetchFn);
+  (
+    await fetchPaged<{ jobs?: ApiJob[] }, ApiJob>(jobsUrl(i), token, timeoutMs, (b) => b.jobs ?? [], fetchFn)
+  ).filter((j) => j.name !== CHECK_RUN_NAME);
 
 /** Sends `body` as JSON with `method` and decodes the JSON answer; throws naming the URL on a non-2xx answer or after `timeoutMs`. */
 export async function sendJson<T>(

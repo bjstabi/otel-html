@@ -1,5 +1,6 @@
 import { expect, test } from 'vitest';
 import {
+  CHECK_RUN_NAME,
   fetchJobs,
   fetchPaged,
   fetchPullsForSha,
@@ -52,6 +53,16 @@ test('fetchJobs reads the attempt and fails naming the URL on a non-2xx answer',
   await expect(fetchJobs(i, undefined, 1000, async () => page({}, undefined, 403))).rejects.toThrow(
     /attempts\/2\/jobs.* answered 403/,
   );
+});
+
+test('fetchJobs leaves out the check run ci link created on the run', async () => {
+  const i = { apiUrl: 'https://x', repository: 'o/r', runId: 1, runAttempt: 1 };
+  const jobs = [
+    { id: 1, name: 'test' },
+    { id: 2, name: CHECK_RUN_NAME },
+    { id: 3, name: 'build' },
+  ];
+  expect((await fetchJobs(i, undefined, 1000, async () => page({ jobs }))).map((j) => j.id)).toEqual([1, 3]);
 });
 
 test('sendJson sends JSON with the token, decodes the answer and names the URL on failure', async () => {

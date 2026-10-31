@@ -1,4 +1,4 @@
-import type { ApiJob, ApiRun } from './github-api.js';
+import { type ApiJob, type ApiRun, CHECK_RUN_NAME } from './github-api.js';
 import { type SiteIndex, type SiteRun, slug } from './site.js';
 import { MARKER, summaryTable } from './summary.js';
 
@@ -37,7 +37,7 @@ export function checkRunPayload(
   run: ApiRun,
   url: string,
 ): {
-  name: 'otel-html report';
+  name: typeof CHECK_RUN_NAME;
   head_sha: string;
   status: 'completed';
   conclusion: 'neutral';
@@ -45,7 +45,7 @@ export function checkRunPayload(
   output: { title: string; summary: string };
 } {
   return {
-    name: 'otel-html report',
+    name: CHECK_RUN_NAME,
     head_sha: run.head_sha,
     status: 'completed',
     conclusion: 'neutral',

@@ -18,8 +18,8 @@ inputs:
     default: ""
   target:
     description: >-
-      `github-pages` publishes to the gh-pages branch and links the report; `artifact` only uploads the run report as
-      the `ci-run-report` artifact.
+      `github-pages` publishes to the gh-pages branch and links the report; `artifact` uploads the run report as the
+      `ci-run-report` artifact only: nothing reaches the site, and nothing is linked.
     default: github-pages
   retention:
     description: Runs kept per workflow channel on the site.
@@ -85,6 +85,12 @@ runs:
         CMD: ${{ inputs.command }}
         CONFIG: ${{ inputs.config }}
       run: |
+        # Each value becomes one GITHUB_OUTPUT line; a newline would inject another output.
+        nl=$'\n'
+        if [[ $CMD == *"$nl"* || $CONFIG == *"$nl"* ]]; then
+          echo "::error::otel-html publish: the command and config inputs must be a single line"
+          exit 1
+        fi
         {
           echo "command=${CMD:-otel-html}"
           echo "config=${CONFIG:-$GITHUB_ACTION_PATH/otel-html-ci.yaml}"
