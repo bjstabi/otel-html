@@ -8,6 +8,7 @@ import { addConvertCommand } from './commands/convert.js';
 import { addMergeCommand } from './commands/merge.js';
 import { addRunCommand } from './commands/run.js';
 import { addServeCommand } from './commands/serve.js';
+import { addUpgradeCommand } from './commands/upgrade.js';
 import type { CliIo } from './io.js';
 
 export type { CliIo };
@@ -36,6 +37,7 @@ export function buildProgram(io: CliIo, deps: CliDeps): Command {
   addMergeCommand(program, io, deps);
   addServeCommand(program, io, deps);
   addRunCommand(program, io, deps);
+  addUpgradeCommand(program, io, deps);
   addConfigCommand(program, io, deps.fs);
   addCiCommand(program, io, deps);
   return program;

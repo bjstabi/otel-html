@@ -28,7 +28,7 @@ The binaries are built by `.github/workflows/release.yml` when a release is crea
 
 ## CLI
 
-Commands: `convert` (OTLP files to a report), `serve` (receive OTLP over HTTP and gRPC), `run` (wrap a command and report its telemetry), `merge` and `config print`.
+Commands: `convert` (OTLP files to a report), `serve` (receive OTLP over HTTP and gRPC), `run` (wrap a command and report its telemetry), `merge`, `upgrade` and `config print`.
 
 ```sh
 otel-html convert fixtures/small.otlp.json -o ./report
@@ -103,6 +103,14 @@ otel-html merge ./job-1 ./job-2 -o ./combined
 ```
 
 Options: `-o, --out <dir>`, `--config <file>`, `--append` and `--replace` (as for `convert`). When `-o` already holds a report, `merge` adds its inputs to it.
+
+### `upgrade <report>`
+
+Rewrites a report's viewer (`index.html` and `assets/`) with the one in this otel-html, so an old report opens with the current viewer. The report's `data/` is not touched, and viewer files in `assets/` that this version does not use are removed. It fails with exit 2, writing nothing, when the folder holds no report or another otel-html has the report open.
+
+```sh
+otel-html upgrade ./report
+```
 
 ### `config print`
 
