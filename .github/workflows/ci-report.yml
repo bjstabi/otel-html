@@ -3,8 +3,10 @@ name: ci-report
 # Builds a ci run's report and publishes it to the GitHub Pages site (the `gh-pages` branch), linked from the run's
 # pull request; removes a pull request's reports when it closes.
 #
-# Runs from the default branch's copy of this file and checks out the default branch's code: never the triggering
-# run's head, which may be an untrusted PR.
+# Runs from the default branch's copy of this file. The report job dogfoods the code under test: it checks out the
+# triggering run's head commit when that commit is in this repository (pushing a branch here already takes write
+# access, so its code gains nothing from this job's token), and the default branch's code for a fork's run, which may
+# be untrusted. A dispatch uses the code of the ref it was dispatched on.
 on:
   workflow_run:
     workflows: [ci, load]
@@ -51,8 +53,11 @@ jobs:
       report-url: ${{ steps.publish.outputs.report-url }}
     timeout-minutes: 15
     steps:
+      # The run's own commit when it is in this repository, so a pull request's report is built and placed by the
+      # pull request's code; otherwise (a fork's run, or a dispatch) the event's default ref.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.head_sha || '' }}
           persist-credentials: false
       - uses: ./.github/actions/setup
       # Report.create serves the viewer from dist/, which a fresh checkout does not have.
