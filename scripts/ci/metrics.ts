@@ -5,9 +5,10 @@ import { type ApiRun, jobResource } from './workflow-trace.js';
 const BOUNDS = [1, 5, 10, 30, 60, 120, 300, 600, 1200, 1800, 3600];
 const DELTA = 1;
 
-type HistogramPoint = { attributes: Attr[]; seconds: number };
+/** `start` and `end` are the interval the point measures, as unix-nano strings. */
+type HistogramPoint = { attributes: Attr[]; seconds: number; start: string; end: string };
 
-function histogram(name: string, description: string, time: string, points: HistogramPoint[]): object[] {
+function histogram(name: string, description: string, points: HistogramPoint[]): object[] {
   if (points.length === 0) return [];
   return [
     {
@@ -22,8 +23,8 @@ function histogram(name: string, description: string, time: string, points: Hist
           const at = BOUNDS.findIndex((b) => p.seconds <= b);
           bucketCounts[at === -1 ? BOUNDS.length : at] = 1;
           return {
-            startTimeUnixNano: time,
-            timeUnixNano: time,
+            startTimeUnixNano: p.start,
+            timeUnixNano: p.end,
             count: '1',
             sum: p.seconds,
             min: p.seconds,
@@ -52,9 +53,11 @@ export function ciMetricsRequest(run: ApiRun, jobs: ApiJob[], resource: Record<s
   const runSeconds = seconds(run.run_started_at ?? run.created_at, run.updated_at);
   if (runSeconds !== undefined) {
     metrics.push(
-      ...histogram('cicd.pipeline.run.duration', 'Duration of a workflow run', time, [
+      ...histogram('cicd.pipeline.run.duration', 'Duration of a workflow run', [
         {
           seconds: runSeconds,
+          start: ns(ms(run.run_started_at ?? run.created_at) ?? 0),
+          end: time,
           attributes: attrs({
             'cicd.pipeline.name': run.name,
             'cicd.pipeline.result': run.conclusion === null ? undefined : resultOf(run.conclusion),
@@ -74,6 +77,8 @@ export function ciMetricsRequest(run: ApiRun, jobs: ApiJob[], resource: Record<s
         : [
             {
               seconds: took,
+              start: ns(ms(job.started_at) ?? 0),
+              end: ns(ms(job.completed_at) ?? 0),
               attributes: attrs({
                 'cicd.pipeline.task.name': job.name,
                 'cicd.pipeline.task.run.result':
@@ -85,17 +90,19 @@ export function ciMetricsRequest(run: ApiRun, jobs: ApiJob[], resource: Record<s
     const queuePoints: HistogramPoint[] =
       queued === undefined
         ? []
-        : [{ seconds: queued, attributes: attrs({ 'cicd.pipeline.task.name': job.name }) }];
+        : [
+            {
+              seconds: queued,
+              start: ns(ms(job.created_at) ?? 0),
+              end: ns(ms(job.started_at) ?? 0),
+              attributes: attrs({ 'cicd.pipeline.task.name': job.name }),
+            },
+          ];
     jobMetrics.push({
       job,
       metrics: [
-        ...histogram('cicd.pipeline.task.run.duration', 'Duration of a job', time, taskPoints),
-        ...histogram(
-          'cicd.pipeline.task.run.queue.duration',
-          'Time a job waited for a runner',
-          time,
-          queuePoints,
-        ),
+        ...histogram('cicd.pipeline.task.run.duration', 'Duration of a job', taskPoints),
+        ...histogram('cicd.pipeline.task.run.queue.duration', 'Time a job waited for a runner', queuePoints),
       ],
     });
   }

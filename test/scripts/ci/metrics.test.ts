@@ -36,6 +36,7 @@ const job = (id: number, name: string, conclusion: string | null, over: Partial<
 
 type Value = { stringValue?: string };
 type Point = {
+  startTimeUnixNano?: string;
   timeUnixNano: string;
   count?: string;
   sum?: number;
@@ -88,7 +89,9 @@ describe('ciMetricsRequest', () => {
     expect(p?.explicitBounds).toEqual([1, 5, 10, 30, 60, 120, 300, 600, 1200, 1800, 3600]);
     // 60 s lands in the (30, 60] bucket
     expect(p?.bucketCounts).toEqual(['0', '0', '0', '0', '1', '0', '0', '0', '0', '0', '0', '0']);
-    expect(p?.timeUnixNano).toBe('1767226205000000000');
+    // a job's points cover the job's own interval, so they spread along the run instead of piling at its end
+    expect(p?.startTimeUnixNano).toBe('1767225610000000000');
+    expect(p?.timeUnixNano).toBe('1767225670000000000');
     expect(attr(p as Point, 'cicd.pipeline.task.name')).toBe('build');
     expect(attr(p as Point, 'cicd.pipeline.task.run.result')).toBe('success');
   });
@@ -99,6 +102,8 @@ describe('ciMetricsRequest', () => {
     expect(attr(r as Point, 'cicd.pipeline.result')).toBe('success');
     const [q] = named(green, 'cicd.pipeline.task.run.queue.duration')?.histogram?.dataPoints ?? [];
     expect(q?.sum).toBe(10);
+    expect([q?.startTimeUnixNano, q?.timeUnixNano]).toEqual(['1767225600000000000', '1767225610000000000']);
+    expect(r?.timeUnixNano).toBe('1767226205000000000');
   });
 
   test('values beyond the last bound land in the overflow bucket', () => {
