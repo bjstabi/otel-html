@@ -40,11 +40,14 @@ describe('commentBody', () => {
   });
 });
 
+const bot = { login: 'github-actions[bot]', type: 'Bot' };
+const human = { login: 'someone', type: 'User' };
+
 test('findStickyComment picks the comment carrying the workflow marker', () => {
   const comments = [
-    { id: 1, body: 'hello' },
-    { id: 2, body: '<!-- otel-html-report:load -->\nreport' },
-    { id: 3, body: '<!-- otel-html-report:ci -->\nreport' },
+    { id: 1, body: 'hello', user: bot },
+    { id: 2, body: '<!-- otel-html-report:load -->\nreport', user: bot },
+    { id: 3, body: '<!-- otel-html-report:ci -->\nreport', user: bot },
   ];
   expect(findStickyComment(comments, 'ci')).toBe(3);
   expect(findStickyComment(comments, 'load')).toBe(2);
@@ -52,9 +55,21 @@ test('findStickyComment picks the comment carrying the workflow marker', () => {
 });
 
 test('the old bare marker belongs to the ci workflow only', () => {
-  const comments = [{ id: 1, body: '<!-- otel-html-report -->\nold' }];
+  const comments = [{ id: 1, body: '<!-- otel-html-report -->\nold', user: bot }];
   expect(findStickyComment(comments, 'ci')).toBe(1);
   expect(findStickyComment(comments, 'load')).toBeUndefined();
+});
+
+test("findStickyComment never takes a person's comment that carries the marker", () => {
+  const comments = [
+    { id: 1, body: 'quoting it: <!-- otel-html-report:ci -->', user: human },
+    { id: 2, body: '<!-- otel-html-report -->\nold', user: human },
+    { id: 3, body: '<!-- otel-html-report:ci -->', user: null },
+  ];
+  expect(findStickyComment(comments, 'ci')).toBeUndefined();
+  expect(
+    findStickyComment([...comments, { id: 4, body: '<!-- otel-html-report:ci -->', user: bot }], 'ci'),
+  ).toBe(4);
 });
 
 test('checkRunPayload is a neutral completed check linking the report', () => {

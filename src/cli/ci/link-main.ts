@@ -14,7 +14,7 @@ import {
   sendJson,
   warning,
 } from './github-api.js';
-import { checkRunPayload, commentBody, findStickyComment, previousRun } from './link.js';
+import { type ApiComment, checkRunPayload, commentBody, findStickyComment, previousRun } from './link.js';
 import { pullsToLink, slug } from './site.js';
 import { readSiteIndex } from './site-io.js';
 
@@ -104,7 +104,7 @@ export async function runLink(opts: LinkOptions, io: CliIo, fetchFn: Fetch = fet
     const comments = `${repo}/issues/${pull.number}/comments`;
     try {
       const existing = findStickyComment(
-        await fetchPaged<{ id: number; body: string }[], { id: number; body: string }>(
+        await fetchPaged<ApiComment[], ApiComment>(
           `${comments}?per_page=100`,
           token,
           API_TIMEOUT_MS,

@@ -440,8 +440,14 @@ describe('otel-html ci link', () => {
         ]);
       if (url.includes('/issues/7/comments'))
         return json([
-          { id: 1, body: 'unrelated' },
-          { id: 2, body: '<!-- otel-html-report -->\nold' },
+          { id: 1, body: 'unrelated', user: { login: 'someone', type: 'User' } },
+          // a person quoting the marker comes before the bot's comment and is passed over
+          { id: 3, body: '<!-- otel-html-report:ci -->\nquoted', user: { login: 'someone', type: 'User' } },
+          {
+            id: 2,
+            body: '<!-- otel-html-report -->\nold',
+            user: { login: 'github-actions[bot]', type: 'Bot' },
+          },
         ]);
       if (url.endsWith('/repos/o/r')) return json({ default_branch: 'main' });
       return new Response('nope', { status: 404 });

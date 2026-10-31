@@ -24,13 +24,18 @@ export function commentBody(
   return lines.join('\n');
 }
 
-/** The id of the comment `workflow` (a `slug`) owns, if any: the one carrying its marker, or the legacy one for `ci`. */
-export const findStickyComment = (
-  comments: { id: number; body: string }[],
-  workflow: string,
-): number | undefined =>
+/** The subset of the issue comments API that `ci link` reads. */
+export type ApiComment = { id: number; body: string; user: { login: string; type: string } | null };
+
+/**
+ * The id of the comment `workflow` (a `slug`) owns, if any: a bot's comment carrying its marker, or the legacy one for
+ * `ci`. A person's comment that quotes the marker is never taken over.
+ */
+export const findStickyComment = (comments: ApiComment[], workflow: string): number | undefined =>
   comments.find(
-    (c) => c.body.includes(markerOf(workflow)) || (workflow === 'ci' && c.body.startsWith(LEGACY_MARKER)),
+    (c) =>
+      c.user?.type === 'Bot' &&
+      (c.body.includes(markerOf(workflow)) || (workflow === 'ci' && c.body.startsWith(LEGACY_MARKER))),
   )?.id;
 
 export function checkRunPayload(
