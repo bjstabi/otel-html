@@ -18,6 +18,7 @@ const run: ApiRun = {
   head_branch: 'main',
   head_sha: 'abc',
   repository: { full_name: 'o/r', html_url: 'https://github.com/o/r' },
+  head_repository: { full_name: 'o/r' },
 };
 const key = runKey({ repository: 'o/r', runId: 42, runAttempt: 2 });
 

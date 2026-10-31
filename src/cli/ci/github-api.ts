@@ -17,6 +17,7 @@ export type ApiRun = {
   head_branch: string | null;
   head_sha: string;
   repository: { full_name: string; html_url: string };
+  head_repository: { full_name: string } | null;
 };
 
 /** The subset of the Actions jobs API that the CI scripts read. */
@@ -115,3 +116,40 @@ export const fetchJobs = (
   fetchFn: Fetch = fetch,
 ): Promise<ApiJob[]> =>
   fetchPaged<{ jobs?: ApiJob[] }, ApiJob>(jobsUrl(i), token, timeoutMs, (b) => b.jobs ?? [], fetchFn);
+
+/** Sends `body` as JSON with `method` and decodes the JSON answer; throws naming the URL on a non-2xx answer or after `timeoutMs`. */
+export async function sendJson<T>(
+  method: 'POST' | 'PATCH',
+  url: string,
+  body: unknown,
+  token: string | undefined,
+  timeoutMs: number,
+  fetchFn: Fetch = fetch,
+): Promise<T> {
+  const res = await fetchFn(url, {
+    method,
+    headers: { ...apiHeaders(token), 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!res.ok) throw new Error(`${url} answered ${res.status}`);
+  return (await res.json()) as T;
+}
+
+/** The subset of the pull request API that the publisher reads. */
+export type ApiPull = { number: number; title: string; state: string; head: { sha: string; ref: string } };
+
+/** Every pull request that contains commit `sha`. */
+export const fetchPullsForSha = (
+  i: { apiUrl: string; repository: string; sha: string },
+  token: string | undefined,
+  timeoutMs: number,
+  fetchFn: Fetch = fetch,
+): Promise<ApiPull[]> =>
+  fetchPaged<ApiPull[], ApiPull>(
+    `${i.apiUrl}/repos/${i.repository}/commits/${i.sha}/pulls?per_page=100`,
+    token,
+    timeoutMs,
+    (b) => b,
+    fetchFn,
+  );

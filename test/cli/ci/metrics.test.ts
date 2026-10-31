@@ -17,6 +17,7 @@ const run: ApiRun = {
   head_branch: 'main',
   head_sha: 'abc',
   repository: { full_name: 'o/r', html_url: 'https://github.com/o/r' },
+  head_repository: { full_name: 'o/r' },
 };
 
 const job = (id: number, name: string, conclusion: string | null, over: Partial<ApiJob> = {}): ApiJob => ({
