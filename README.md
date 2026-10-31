@@ -308,6 +308,20 @@ Every data file is a classic script that registers its payload with a global, so
 
 The report is exercised from both `file://` and a static server in Chromium, Firefox and WebKit by the end-to-end tests.
 
+### This repo's CI
+
+This repo's CI reports on itself with `otel-html`. Every job in [ci.yml](.github/workflows/ci.yml) builds the CLI first, then uses it as the job's shell, so each `run:` step is a traced command:
+
+```yaml
+shell: node dist/cli/main.js run -o .otel-html/report -- bash --noprofile --norc -eo pipefail {0}
+```
+
+The `otel-html context` step ([scripts/ci-context.ts](scripts/ci-context.ts)) looks the job up in the Actions API and sets `TRACEPARENT` and the resource attributes for later steps. The trace id is derived from the run, and the span ids from the run and job, so the job reports nest under the run → job spans without the jobs talking to each other. If the job lookup fails, the job id falls back to a hash of its name (with a warning); matrix legs share a name, so set `OTEL_HTML_JOB_NAME` to give each its own. Each job uploads its `.otel-html/` folder as an `otel-html-*` artifact.
+
+When the `ci` workflow completes, [ci-report.yml](.github/workflows/ci-report.yml) runs [scripts/ci-report.ts](scripts/ci-report.ts) from `main`'s code, never the run's own, since the run may come from a fork. It writes the run → job spans from the Actions API, turns each job's log into log records, adds queue-time and duration metrics, and merges these with the job artifacts into one report, uploaded as `ci-run-report`. Run it by hand with `workflow_dispatch` and a `run_id` to rebuild a past run. The report opens on the [CI dashboard](.github/otel-html-ci.yaml): job duration, queue time, slowest steps, runs, and warnings and errors, with `run` and `job` variables. The run-level span lives on the run's own resource, so selecting a job in `job` hides it.
+
+Next milestones are a reusable action, so other repos can adopt this without copying scripts, and publishing the merged report to GitHub Pages.
+
 ### Report format compatibility
 
 `data/` is the model; `assets/` and `index.html` are the viewer. The manifest's `formatVersion` (now 3) is bumped only for a change an older reader cannot read. This otel-html reads formats 1 to 3 (see [`src/format/version.ts`](src/format/version.ts)), and a reader fails fast on a version it does not know.
