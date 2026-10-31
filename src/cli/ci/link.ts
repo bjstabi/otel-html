@@ -1,5 +1,5 @@
 import { type ApiJob, type ApiRun, CHECK_RUN_NAME } from './github-api.js';
-import { branchLabel, type Channel, type SiteIndex, type SiteRun, slug } from './site.js';
+import { type Channel, type SiteIndex, type SiteRun, slug } from './site.js';
 import { MARKER, summaryTable } from './summary.js';
 
 /** The pure side of `ci link`: the sticky pull request comment and the check run that point at a run's report. */
@@ -11,11 +11,14 @@ const markerOf = (workflow: string): string => `${MARKER}:${workflow} -->`;
 const LEGACY_MARKER = `${MARKER} -->`;
 
 export type PreviousRun = { url: string; runId: number; workflow?: string };
-/** A branch channel's rolling report: every retained run on `branch`, of every workflow. */
-export type BranchPage = { branch: string; url: string };
+/**
+ * A channel's rolling report, every retained run of every workflow: `label` is what the runs are on, `this pull
+ * request` or the branch as a code span.
+ */
+export type ChannelPage = { label: string; url: string };
 
 /**
- * The sticky comment: `MARKER`, the run's summary table, then, when there are, a link to the branch's rolling report
+ * The sticky comment: `MARKER`, the run's summary table, then, when there are, a link to the channel's rolling report
  * and to the run before this one (labelled with its workflow when the site knows it).
  */
 export function commentBody(
@@ -23,10 +26,10 @@ export function commentBody(
   jobs: ApiJob[],
   url: string,
   previous: PreviousRun | undefined,
-  branch?: BranchPage,
+  page?: ChannelPage,
 ): string {
   const lines = [markerOf(slug(run.name)), summaryTable(run, jobs, url)];
-  if (branch !== undefined) lines.push(`All runs on ${codeSpan(branch.branch)}: ${branch.url}`, '');
+  if (page !== undefined) lines.push(`All runs on ${page.label}: ${page.url}`, '');
   if (previous !== undefined) {
     const label = previous.workflow === undefined ? '' : `${previous.workflow} `;
     lines.push(`Previous run: [${label}run ${previous.runId}](${previous.url})`, '');
@@ -98,19 +101,15 @@ export function previousRun(index: SiteIndex, runId: number, url: string): Previ
 }
 
 /**
- * The rolling report of the branch channel holding `runId`, its URL derived from this run's report `url` as in
- * `previousRun`. Undefined when the run is not on the site, its channel is not a branch channel, or `url` does not end
- * in this run's report path.
+ * The rolling report of the channel holding `runId`, its URL derived from this run's report `url` as in
+ * `previousRun`. Undefined when the run is not on the site, its channel is an older per-workflow one, or `url` does
+ * not end in this run's report path.
  */
-export function branchPage(
-  index: SiteIndex,
-  runId: number,
-  url: string,
-  repository: string,
-): BranchPage | undefined {
+export function channelPage(index: SiteIndex, runId: number, url: string): ChannelPage | undefined {
   const found = locate(index, runId, url);
-  if (found === undefined || found.channel.kind !== 'branch') return undefined;
-  return { branch: branchLabel(found.channel, repository), url: `${found.base}/${found.key}/` };
+  if (found === undefined || found.channel.kind === 'workflow') return undefined;
+  const label = found.channel.kind === 'pr' ? 'this pull request' : codeSpan(found.channel.headBranch);
+  return { label, url: `${found.base}/${found.key}/` };
 }
 
 /** The channel holding `runId`, its position there, and the site's base URL (`url` minus the run's report path). */

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import type { ApiJob, ApiRun } from '../../../src/cli/ci/github-api.js';
 import {
-  branchPage,
+  channelPage,
   checkRunPayload,
   commentBody,
   findStickyComment,
@@ -44,25 +44,19 @@ describe('commentBody', () => {
   test('has no previous line without a previous run', () => {
     expect(commentBody(run, jobs, 'https://x.test/r/', undefined)).not.toContain('Previous run');
   });
-  test("links the branch's rolling page and labels the previous run with its workflow", () => {
+  test("links the channel's rolling page and labels the previous run with its workflow", () => {
     const body = commentBody(
       run,
       jobs,
-      'https://x.test/branch/feat/runs/5/',
-      { runId: 4, url: 'https://x.test/branch/feat/runs/4/', workflow: 'load' },
-      { branch: 'feat/x', url: 'https://x.test/branch/feat/' },
+      'https://x.test/pr/7/runs/5/',
+      { runId: 4, url: 'https://x.test/pr/7/runs/4/', workflow: 'load' },
+      { label: 'this pull request', url: 'https://x.test/pr/7/' },
     );
-    expect(body).toContain('Report: https://x.test/branch/feat/runs/5/');
-    expect(body).toContain('All runs on `feat/x`: https://x.test/branch/feat/');
-    expect(body).toContain('Previous run: [load run 4](https://x.test/branch/feat/runs/4/)');
+    expect(body).toContain('Report: https://x.test/pr/7/runs/5/');
+    expect(body).toContain('All runs on this pull request: https://x.test/pr/7/');
+    expect(body).toContain('Previous run: [load run 4](https://x.test/pr/7/runs/4/)');
     expect(body.indexOf('All runs on')).toBeGreaterThan(body.indexOf('Report:'));
     expect(commentBody(run, jobs, 'https://x.test/r/', undefined)).not.toContain('All runs on');
-  });
-  test('a branch name with backticks keeps its code span whole', () => {
-    const body = (branch: string): string =>
-      commentBody(run, jobs, 'https://x.test/r/', undefined, { branch, url: 'https://x.test/b/' });
-    expect(body('a`b')).toContain('All runs on `` a`b ``: https://x.test/b/');
-    expect(body('x``y`')).toContain('All runs on ``` x``y` ```: https://x.test/b/');
   });
 });
 
@@ -110,75 +104,90 @@ test('checkRunPayload is a neutral completed check linking the report', () => {
   expect(p.output.summary).toContain('https://x.test/r/');
 });
 
-describe('branchPage', () => {
-  const r = (runId: number): SiteRun => ({ ...siteRun(runId), reportPath: `branch/feat-x/runs/${runId}` });
+describe('channelPage', () => {
+  const r = (runId: number, workflow: string): SiteRun => ({
+    ...siteRun(runId),
+    reportPath: `pr/7/runs/${runId}`,
+    workflow,
+  });
   const index: SiteIndex = {
     version: 1,
     channels: {
-      'branch/feat-x': {
-        kind: 'branch',
+      'pr/7': {
+        kind: 'pr',
         title: '#7',
         headBranch: 'feat/x',
-        prs: [7],
         headRepo: 'o/r',
-        runs: [
-          { ...r(5), workflow: 'ci' },
-          { ...r(4), workflow: 'load' },
-        ],
+        runs: [r(5, 'ci'), r(4, 'load')],
       },
-      'pr/8': {
-        kind: 'pr',
-        title: '#8',
-        headBranch: 'b',
-        runs: [{ ...siteRun(9), reportPath: 'pr/8/runs/9' }],
+      'branch/main': {
+        kind: 'branch',
+        title: 'main',
+        headBranch: 'main',
+        runs: [{ ...siteRun(9), reportPath: 'branch/main/runs/9' }],
+      },
+      ci: {
+        kind: 'workflow',
+        title: 'ci',
+        headBranch: 'main',
+        runs: [{ ...siteRun(8), reportPath: 'ci/runs/8' }],
       },
     },
   };
-  test("is the branch channel's rolling page, from this run's URL", () => {
-    expect(branchPage(index, 5, 'https://x.test/base/branch/feat-x/runs/5/', 'o/r')).toEqual({
-      branch: 'feat/x',
-      url: 'https://x.test/base/branch/feat-x/',
+  test("is the pull request's rolling page, from this run's URL", () => {
+    expect(channelPage(index, 5, 'https://x.test/base/pr/7/runs/5/')).toEqual({
+      label: 'this pull request',
+      url: 'https://x.test/base/pr/7/',
     });
   });
-  test('is undefined off a branch channel, for an unknown run or a foreign URL', () => {
-    expect(branchPage(index, 9, 'https://x.test/pr/8/runs/9/', 'o/r')).toBeUndefined();
-    expect(branchPage(index, 1, 'https://x.test/branch/feat-x/runs/1/', 'o/r')).toBeUndefined();
-    expect(branchPage(index, 5, 'https://x.test/elsewhere/', 'o/r')).toBeUndefined();
+  test("is the branch's rolling page, the branch a code span", () => {
+    expect(channelPage(index, 9, 'https://x.test/branch/main/runs/9/')).toEqual({
+      label: '`main`',
+      url: 'https://x.test/branch/main/',
+    });
   });
-  test("names a fork's branch as the landing page does, owner:branch", () => {
-    expect(branchPage(index, 5, 'https://x.test/branch/feat-x/runs/5/', 'up/r')?.branch).toBe('o:feat/x');
+  test('fences a branch name holding backticks with more of them', () => {
+    const named = (headBranch: string): SiteIndex => ({
+      version: 1,
+      channels: {
+        'branch/b': {
+          kind: 'branch',
+          title: headBranch,
+          headBranch,
+          runs: [{ ...siteRun(1), reportPath: 'branch/b/runs/1' }],
+        },
+      },
+    });
+    expect(channelPage(named('a`b'), 1, 'https://x.test/branch/b/runs/1/')?.label).toBe('`` a`b ``');
+    expect(channelPage(named('x``y`'), 1, 'https://x.test/branch/b/runs/1/')?.label).toBe('``` x``y` ```');
+  });
+  test('is undefined on an older workflow channel, for an unknown run or a foreign URL', () => {
+    expect(channelPage(index, 8, 'https://x.test/ci/runs/8/')).toBeUndefined();
+    expect(channelPage(index, 1, 'https://x.test/pr/7/runs/1/')).toBeUndefined();
+    expect(channelPage(index, 5, 'https://x.test/elsewhere/')).toBeUndefined();
   });
   test("previousRun prefers the channel's previous run of the same workflow", () => {
     const mixed: SiteIndex = {
       version: 1,
       channels: {
-        'branch/feat-x': {
-          kind: 'branch',
+        'pr/7': {
+          kind: 'pr',
           title: '#7',
           headBranch: 'feat/x',
-          prs: [7],
-          headRepo: 'o/r',
-          runs: [
-            { ...r(6), workflow: 'ci' },
-            { ...r(5), workflow: 'load' },
-            { ...r(4), workflow: 'ci' },
-            { ...r(3), workflow: 'load' },
-          ],
+          runs: [r(6, 'ci'), r(5, 'load'), r(4, 'ci'), r(3, 'load')],
         },
       },
     };
-    expect(previousRun(mixed, 6, 'https://x.test/branch/feat-x/runs/6/')).toEqual({
+    expect(previousRun(mixed, 6, 'https://x.test/pr/7/runs/6/')).toEqual({
       runId: 4,
-      url: 'https://x.test/branch/feat-x/runs/4/',
+      url: 'https://x.test/pr/7/runs/4/',
       workflow: 'ci',
     });
     // no earlier run of its workflow: the run before it, of any workflow
-    expect(previousRun(mixed, 4, 'https://x.test/branch/feat-x/runs/4/')?.runId).toBe(3);
-  });
-  test('previousRun carries the workflow of the run before, of any workflow', () => {
-    expect(previousRun(index, 5, 'https://x.test/branch/feat-x/runs/5/')).toEqual({
+    expect(previousRun(mixed, 4, 'https://x.test/pr/7/runs/4/')?.runId).toBe(3);
+    expect(previousRun(index, 5, 'https://x.test/pr/7/runs/5/')).toEqual({
       runId: 4,
-      url: 'https://x.test/branch/feat-x/runs/4/',
+      url: 'https://x.test/pr/7/runs/4/',
       workflow: 'load',
     });
   });

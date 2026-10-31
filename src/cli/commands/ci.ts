@@ -108,8 +108,8 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
     .requiredOption('--run-id <n>', 'workflow run id')
     .requiredOption('--repository <owner/repo>', 'repository of the run')
     .requiredOption('--base-url <url>', "the site's public URL")
-    .option('--retention <n>', 'runs kept per workflow channel', '30')
-    .option('--pr-retention <n>', "runs kept per pull request's branch channel", '10')
+    .option('--retention <n>', 'runs kept per workflow in each branch channel', '30')
+    .option('--pr-retention <n>', 'runs kept per workflow in each pull request channel', '10')
     .option('--config <file>', "dashboard config file for the channel's rolling report")
     .action(async (flags: SiteFlags) => {
       const opts = {
@@ -153,7 +153,7 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
       );
     });
   ci.command('cleanup')
-    .description("remove a closed pull request's branch reports from the site folder")
+    .description("remove a closed pull request's reports (pr/<n>) from the site folder")
     .requiredOption('--site <dir>', 'the site folder (the gh-pages tree)')
     .requiredOption('--pr <number>', 'pull request number')
     .option('--repository <owner/repo>', 'repository, for the landing page (default: $GITHUB_REPOSITORY)')

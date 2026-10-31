@@ -16,7 +16,7 @@ import {
 } from './github-api.js';
 import {
   type ApiComment,
-  branchPage,
+  channelPage,
   checkRunPayload,
   commentBody,
   findStickyComment,
@@ -91,15 +91,15 @@ export async function runLink(opts: LinkOptions, io: CliIo, fetchFn: Fetch = fet
   }
 
   let previous: ReturnType<typeof previousRun>;
-  let branch: ReturnType<typeof branchPage>;
+  let page: ReturnType<typeof channelPage>;
   try {
     const index = await readSiteIndex(opts.site);
     previous = previousRun(index, run.id, opts.url);
-    branch = branchPage(index, run.id, opts.url, opts.repository);
+    page = channelPage(index, run.id, opts.url);
   } catch (e) {
-    warn(`cannot read the site index, so no previous run or branch page is linked: ${messageOf(e)}`);
+    warn(`cannot read the site index, so no previous run or channel page is linked: ${messageOf(e)}`);
   }
-  const body = commentBody(run, jobs, opts.url, previous, branch);
+  const body = commentBody(run, jobs, opts.url, previous, page);
 
   const summaryFile = envVar(io, 'GITHUB_STEP_SUMMARY');
   if (summaryFile) {

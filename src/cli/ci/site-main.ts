@@ -18,8 +18,9 @@ import { mergeSkippingBad, mergeWithConfig } from './publish-io.js';
 import {
   applyRetention,
   channelFor,
+  dropWorkflowChannels,
   placeRun,
-  removePr,
+  removeChannel,
   renderRedirect,
   reportUrl,
   rollingInputs,
@@ -104,10 +105,10 @@ async function rebuildRolling(
 }
 
 /**
- * Places a finished run's report on the site: resolves its channel (a default-branch workflow, or a pull request's
- * branch), copies the report to the run's folder, applies retention and rewrites the index, landing page and the
- * channel's rolling report. A run with no channel is announced and skipped. Throws when the run cannot be read from
- * the API.
+ * Places a finished run's report on the site: resolves its channel (`branch/<default>` or `pr/<n>`), copies the
+ * report to the run's folder, applies retention, drops the older per-workflow channels (`ci/`, `load/`) and rewrites
+ * the index, landing page and the channel's rolling report. A run with no channel is announced and skipped. Throws
+ * when the run cannot be read from the API.
  */
 export async function runSite(
   opts: SiteOptions,
@@ -128,8 +129,7 @@ export async function runSite(
     API_TIMEOUT_MS,
     fetchFn,
   );
-  const current = await readSiteIndex(opts.site);
-  const placed = channelFor(run, pulls, defaultBranch, current);
+  const placed = channelFor(run, pulls, defaultBranch);
   if (placed === undefined) {
     say(
       io,
@@ -151,15 +151,15 @@ export async function runSite(
     reportPath,
     workflow: run.name,
   };
-  const { index, remove } = applyRetention(placeRun(current, placed.key, placed.channel, siteRun), {
-    workflow: opts.retention,
+  const migrated = dropWorkflowChannels(await readSiteIndex(opts.site));
+  const { index, remove } = applyRetention(placeRun(migrated.index, placed.key, placed.channel, siteRun), {
+    branch: opts.retention,
     pr: opts.prRetention,
   });
   await copyReport(opts.report, join(opts.site, reportPath));
-  await removePaths(
-    opts.site,
-    remove.filter((p) => p !== reportPath),
-  );
+  await removePaths(opts.site, [...migrated.remove, ...remove.filter((p) => p !== reportPath)]);
+  if (migrated.remove.length > 0)
+    say(io, `removed the per-workflow channels ${migrated.remove.join(', ')}; see branch/ and pr/`);
   await rebuildRolling(opts.site, placed.key, index, opts.config, deps, io);
   await writeSite(opts.site, index, opts.repository);
   setOutputs(io, {
@@ -170,24 +170,21 @@ export async function runSite(
 }
 
 /**
- * Removes pull request `pr` from the site: its branch channels and folders (a channel another open pull request still
- * has stays, without `pr`), and the legacy `pr/<n>`. Writes `cleaned=true` to $GITHUB_OUTPUT when anything changed. A pull request the site never had (no channel and no legacy folder)
- * changes nothing and writes `cleaned=false`, so the caller pushes and deploys nothing.
+ * Removes pull request `pr`'s channel and folder (`pr/<n>`) from the site and writes `cleaned=true` to
+ * $GITHUB_OUTPUT. A pull request the site never had (no channel and no folder) changes nothing and writes
+ * `cleaned=false`, so the caller pushes and deploys nothing.
  */
 export async function runCleanup(opts: CleanupOptions, io: CliIo): Promise<void> {
-  const legacy = `pr/${opts.pr}`;
+  const key = `pr/${opts.pr}`;
   const current = await readSiteIndex(opts.site);
-  const { index, remove, removed, updated } = removePr(current, opts.pr);
-  if (!removed.includes(legacy) && existsSync(join(opts.site, legacy))) removed.push(legacy);
-  if (removed.length === 0 && updated.length === 0) {
-    say(io, `pull request #${opts.pr} is not on the site; nothing to remove`);
+  if (current.channels[key] === undefined && !existsSync(join(opts.site, key))) {
+    say(io, `${key} is not on the site; nothing to remove`);
     setOutputs(io, { cleaned: 'false' });
     return;
   }
-  await removePaths(opts.site, [...remove, ...removed]);
+  const { index, remove } = removeChannel(current, key);
+  await removePaths(opts.site, [...remove, key]);
   await writeSite(opts.site, index, opts.repository);
-  if (removed.length > 0) say(io, `removed ${removed.join(', ')} from the site`);
-  if (updated.length > 0)
-    say(io, `kept ${updated.join(', ')}: another open pull request still has the branch`);
+  say(io, `removed ${key} from the site`);
   setOutputs(io, { cleaned: 'true' });
 }
