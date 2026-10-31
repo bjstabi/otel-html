@@ -53,14 +53,17 @@ export function parseSiteIndex(text: string | undefined): SiteIndex {
   return siteIndexSchema.parse(JSON.parse(text));
 }
 
-/** A workflow's channel key and folder. `pr` is taken: `pr/<number>` holds the pull request channels. */
+/**
+ * A workflow's channel key and folder. `pr` is taken: `pr/<number>` holds the pull request channels, so a
+ * workflow named `pr` gets `pr--workflow`. Runs of non-alphanumerics collapse to one `-`, so no name slugs to that.
+ */
 export const slug = (name: string): string => {
   const key =
     name
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-+|-+$/g, '') || 'workflow';
-  return key === 'pr' ? 'pr-workflow' : key;
+  return key === 'pr' ? 'pr--workflow' : key;
 };
 
 export const reportUrl = (baseUrl: string, reportPath: string): string => `${baseUrl}/${reportPath}/`;
