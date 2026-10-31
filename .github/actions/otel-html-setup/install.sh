@@ -43,8 +43,17 @@ bin="$RUNNER_TEMP/otel-html/bin"
 rm -rf "$work"
 mkdir -p "$work" "$bin"
 gh release download "$tag" -R "$REPO" -D "$work" -p "$asset" -p SHA256SUMS
+# Fail closed when SHA256SUMS has no line for the asset, whatever the coreutils version does with --ignore-missing.
+grep -Eq "^[0-9a-f]{64} [ *]${asset//./\\.}\$" "$work/SHA256SUMS" || {
+  echo "::error::no checksum for $asset in SHA256SUMS" >&2
+  exit 1
+}
 # The binary keeps its release file name for the check; SHA256SUMS lists every platform, so ignore the missing ones.
 (cd "$work" && sha256sum -c --ignore-missing SHA256SUMS)
 mv "$work/$asset" "$bin/$installed"
 chmod +x "$bin/$installed"
+if [ "$RUNNER_OS" = Windows ]; then
+  # git-bash paths mean nothing to later steps' shells; GITHUB_PATH wants a Windows path.
+  bin=$(cygpath -w "$bin")
+fi
 echo "$bin" >> "$GITHUB_PATH"
