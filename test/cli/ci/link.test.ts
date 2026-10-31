@@ -50,10 +50,10 @@ describe('commentBody', () => {
       jobs,
       'https://x.test/pr/7/runs/5/',
       { runId: 4, url: 'https://x.test/pr/7/runs/4/', workflow: 'load' },
-      { label: 'this pull request', url: 'https://x.test/pr/7/' },
+      { label: 'pull request #7', url: 'https://x.test/pr/7/' },
     );
     expect(body).toContain('Report: https://x.test/pr/7/runs/5/');
-    expect(body).toContain('All runs on this pull request: https://x.test/pr/7/');
+    expect(body).toContain('All runs on pull request #7: https://x.test/pr/7/');
     expect(body).toContain('Previous run: [load run 4](https://x.test/pr/7/runs/4/)');
     expect(body.indexOf('All runs on')).toBeGreaterThan(body.indexOf('Report:'));
     expect(commentBody(run, jobs, 'https://x.test/r/', undefined)).not.toContain('All runs on');
@@ -136,7 +136,7 @@ describe('channelPage', () => {
   };
   test("is the pull request's rolling page, from this run's URL", () => {
     expect(channelPage(index, 5, 'https://x.test/base/pr/7/runs/5/')).toEqual({
-      label: 'this pull request',
+      label: 'pull request #7',
       url: 'https://x.test/base/pr/7/',
     });
   });

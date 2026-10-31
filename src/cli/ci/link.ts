@@ -108,7 +108,10 @@ export function previousRun(index: SiteIndex, runId: number, url: string): Previ
 export function channelPage(index: SiteIndex, runId: number, url: string): ChannelPage | undefined {
   const found = locate(index, runId, url);
   if (found === undefined || found.channel.kind === 'workflow') return undefined;
-  const label = found.channel.kind === 'pr' ? 'this pull request' : codeSpan(found.channel.headBranch);
+  const label =
+    found.channel.kind === 'pr'
+      ? `pull request #${found.key.slice('pr/'.length)}`
+      : codeSpan(found.channel.headBranch);
   return { label, url: `${found.base}/${found.key}/` };
 }
 

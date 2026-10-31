@@ -753,7 +753,7 @@ describe('otel-html ci link', () => {
     expect(await runCli(linkArgs(['--no-check']), fakeIo().io, deps)).toBe(0);
     const patch = calls.find((c) => c.method === 'PATCH')?.body as { body: string };
     expect(patch.body).toContain('Report: https://x.test/b/pr/7/runs/6/');
-    expect(patch.body).toContain('All runs on this pull request: https://x.test/b/pr/7/');
+    expect(patch.body).toContain('All runs on pull request #7: https://x.test/b/pr/7/');
     expect(patch.body).toContain('Previous run: [ci run 4](https://x.test/b/pr/7/runs/4/)');
   });
 
