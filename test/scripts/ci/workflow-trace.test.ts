@@ -103,9 +103,10 @@ describe('workflowTraceRequest', () => {
     expect(root.traceId).toBe(traceIdOf(key));
     expect(root.spanId).toBe(runSpanIdOf(key));
     expect(root.startTimeUnixNano).toBe(ns('2026-01-01T00:00:05Z'));
-    expect(root.status).toEqual({ code: 2, message: 'cancelled' });
+    expect(root.status).toEqual({ code: 2, message: 'cancellation' });
     expect(byName(spans, 'build').parentSpanId).toBe(root.spanId);
     expect(byName(spans, 'build').spanId).toBe(jobSpanIdOf(key, 1));
+    expect(byName(spans, 'checkout').spanId).toBe(stepSpanIdOf(key, 1, 1));
     expect(spans.every((s) => s.traceId === traceIdOf(key))).toBe(true);
   });
 
@@ -125,12 +126,23 @@ describe('workflowTraceRequest', () => {
     expect(q).toHaveLength(2);
     expect(q[0]?.startTimeUnixNano).toBe(ns('2026-01-01T00:00:01Z'));
     expect(q[0]?.endTimeUnixNano).toBe(ns('2026-01-01T00:00:10Z'));
+    expect(q[0]?.attributes).toContainEqual({
+      key: 'cicd.pipeline.task.name',
+      value: { stringValue: 'build' },
+    });
+    expect(q[1]?.startTimeUnixNano).toBe(ns('2026-01-01T00:00:01Z'));
+    expect(q[1]?.endTimeUnixNano).toBe(ns('2026-01-01T00:01:00Z'));
+    expect(q[1]?.parentSpanId).toBe(byName(spans, 'test').spanId);
+    expect(q[1]?.attributes).toContainEqual({
+      key: 'cicd.pipeline.task.name',
+      value: { stringValue: 'test' },
+    });
   });
 
   test('a cancelled step without completed_at ends at the job completed_at', () => {
     const step = byName(spans, 'slow');
     expect(step.endTimeUnixNano).toBe(ns('2026-01-01T00:08:00Z'));
-    expect(step.status).toEqual({ code: 2, message: 'cancelled' });
+    expect(step.status).toEqual({ code: 2, message: 'cancellation' });
   });
 
   test('a step without started_at starts at the job start; no negative or NaN durations', () => {
@@ -161,6 +173,18 @@ describe('workflowTraceRequest', () => {
     expect(byName(out, 'test').endTimeUnixNano).toBe(ns('2026-01-01T00:10:00Z'));
     expect(byName(out, 's').endTimeUnixNano).toBe(ns('2026-01-01T00:10:00Z'));
     expect(out.some((s) => s.name === 'queued')).toBe(false);
+  });
+
+  test('an in_progress job without completed_at ends at the run updated_at', () => {
+    const j: ApiJob = { ...(jobs[1] as ApiJob), conclusion: null, completed_at: null, steps: [] };
+    const job = byName(spansOf(workflowTraceRequest(run, [j], new Set())), 'test');
+    expect(job.endTimeUnixNano).toBe(ns('2026-01-01T00:10:00Z'));
+    expect(job.status).toBeUndefined();
+  });
+
+  test('unparsable run start times throw naming the run', () => {
+    const bad = { ...run, run_started_at: null, created_at: 'nope' };
+    expect(() => workflowTraceRequest(bad, [], new Set())).toThrow(/run 42/);
   });
 
   test('an end before its start is clamped to the start', () => {

@@ -74,7 +74,7 @@ const ns = (t: number): string => (BigInt(t) * 1_000_000n).toString();
 /** A conclusion other than success/skip is an error status carrying the conclusion; an unfinished one has none. */
 function statusOf(conclusion: string | null): Status | undefined {
   if (conclusion === null || conclusion === 'success' || conclusion === 'skipped') return undefined;
-  return { code: STATUS_ERROR, message: conclusion };
+  return { code: STATUS_ERROR, message: resultOf(conclusion) };
 }
 
 type SpanInput = {
@@ -93,7 +93,10 @@ export function workflowTraceRequest(run: ApiRun, jobs: ApiJob[], approximate: R
   const traceId = traceIdOf(key);
   const runSpanId = runSpanIdOf(key);
 
-  const runStart = ms(run.run_started_at) ?? ms(run.created_at) ?? 0;
+  const runStart = ms(run.run_started_at) ?? ms(run.created_at);
+  if (runStart === undefined) {
+    throw new Error(`workflow run ${run.id} has no parsable run_started_at or created_at`);
+  }
   const runEnd = Math.max(runStart, ms(run.updated_at) ?? runStart);
   const spans: SpanInput[] = [];
   const runResult = run.conclusion === null ? undefined : resultOf(run.conclusion);
@@ -155,7 +158,7 @@ export function workflowTraceRequest(run: ApiRun, jobs: ApiJob[], approximate: R
         kind: SPAN_KIND_INTERNAL,
         start: queuedStart,
         end: Math.max(queuedStart, queuedEnd),
-        attributes: attrs({ 'cicd.pipeline.task.name': 'queued' }),
+        attributes: attrs({ 'cicd.pipeline.task.name': job.name }),
       });
     }
 
