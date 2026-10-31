@@ -4,6 +4,7 @@ import { OtelHtmlError } from '../../model/errors.js';
 import type { WriterDeps } from '../../writer/session.js';
 import { runContext } from '../ci/context-main.js';
 import { messageOf, say } from '../ci/github-api.js';
+import { runLink } from '../ci/link-main.js';
 import { runReport } from '../ci/report-main.js';
 import { runCleanup, runSite } from '../ci/site-main.js';
 import type { CliIo } from '../io.js';
@@ -46,6 +47,15 @@ interface SiteFlags {
   baseUrl: string;
   retention: string;
   prRetention: string;
+}
+
+interface LinkFlags {
+  runId: string;
+  repository: string;
+  url: string;
+  site: string;
+  comment: boolean;
+  check: boolean;
 }
 
 interface CleanupFlags {
@@ -114,6 +124,29 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
         say(io, `::error::otel-html site: ${messageOf(e)}`);
         throw new CliExit(1);
       }
+    });
+  ci.command('link')
+    .description(
+      "link a published report: sticky comment on the commit's open pull requests, a check run, the job summary (never fails the job)",
+    )
+    .requiredOption('--run-id <n>', 'workflow run id')
+    .requiredOption('--repository <owner/repo>', 'repository of the run')
+    .requiredOption('--url <url>', "the run's published report URL")
+    .requiredOption('--site <dir>', 'the site folder (the gh-pages tree), for the previous run')
+    .option('--no-comment', 'do not comment on pull requests')
+    .option('--no-check', 'do not create a check run')
+    .action(async (flags: LinkFlags) => {
+      await runLink(
+        {
+          runId: parseRunId(flags.runId),
+          repository: parseRepository(flags.repository),
+          url: flags.url,
+          site: flags.site,
+          comment: flags.comment,
+          check: flags.check,
+        },
+        io,
+      );
     });
   ci.command('cleanup')
     .description("remove a closed pull request's reports from the site folder")

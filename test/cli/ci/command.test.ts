@@ -238,3 +238,137 @@ describe('otel-html ci site and cleanup', () => {
     expect(f.err()).toContain(`${flag} is not a positive integer`);
   });
 });
+
+describe('otel-html ci link', () => {
+  let dir: string;
+  let calls: { method: string; url: string; body?: unknown }[];
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'ci-link-'));
+    writeFileSync(
+      join(dir, 'index.json'),
+      JSON.stringify({
+        version: 1,
+        channels: {
+          'pr/7': {
+            kind: 'pr',
+            title: '#7 Fix',
+            headBranch: 'topic',
+            runs: ['6', '5'].map((id) => ({
+              runId: Number(id),
+              attempt: 1,
+              conclusion: 'success',
+              headSha: 'sha6',
+              headBranch: 'topic',
+              completedAt: '2026-01-01T00:00:00Z',
+              runUrl: 'u',
+              reportPath: `pr/7/runs/${id}`,
+            })),
+          },
+        },
+      }),
+    );
+    calls = [];
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const stub = (fail: (method: string, url: string) => boolean = () => false): void => {
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      const method = init?.method ?? 'GET';
+      calls.push({
+        method,
+        url,
+        ...(init?.body === undefined ? {} : { body: JSON.parse(String(init.body)) }),
+      });
+      const json = (b: unknown): Response => new Response(JSON.stringify(b), { status: 200 });
+      if (fail(method, url)) return new Response('no', { status: 403 });
+      if (method !== 'GET') return json({});
+      if (/\/actions\/runs\/6$/.test(url))
+        return json({
+          id: 6,
+          run_attempt: 1,
+          name: 'ci',
+          status: 'completed',
+          conclusion: 'success',
+          html_url: 'h',
+          head_sha: 'sha6',
+        });
+      if (url.includes('/jobs')) return json({ jobs: [] });
+      if (url.includes('/pulls'))
+        return json([
+          { number: 7, title: 'Fix', state: 'open', head: { sha: 'sha6', ref: 'topic' } },
+          { number: 8, title: 'Old', state: 'closed', head: { sha: 'sha6', ref: 'topic' } },
+          { number: 9, title: 'Moved', state: 'open', head: { sha: 'other', ref: 'topic' } },
+        ]);
+      if (url.includes('/issues/7/comments'))
+        return json([
+          { id: 1, body: 'unrelated' },
+          { id: 2, body: '<!-- otel-html-report -->\nold' },
+        ]);
+      return new Response('nope', { status: 404 });
+    });
+  };
+  const linkArgs = (extra: string[] = []): string[] => [
+    'ci',
+    'link',
+    '--run-id',
+    '6',
+    '--repository',
+    'o/r',
+    '--url',
+    'https://x.test/b/pr/7/runs/6/',
+    '--site',
+    dir,
+    ...extra,
+  ];
+  const writes = (): string[] => calls.filter((c) => c.method !== 'GET').map((c) => `${c.method} ${c.url}`);
+
+  test('patches the sticky comment of each open pull request of the sha and creates the check run', async () => {
+    stub();
+    const summary = join(dir, 'summary.md');
+    const f = fakeIo({ GITHUB_STEP_SUMMARY: summary });
+    expect(await runCli(linkArgs(), f.io, deps)).toBe(0);
+    expect(writes()).toEqual([
+      'PATCH https://api.github.com/repos/o/r/issues/comments/2',
+      'POST https://api.github.com/repos/o/r/check-runs',
+    ]);
+    const patch = calls.find((c) => c.method === 'PATCH')?.body as { body: string };
+    expect(patch.body).toContain('Previous run: [run 5](https://x.test/b/pr/7/runs/5/)');
+    expect(calls.find((c) => c.url.endsWith('/check-runs'))?.body).toMatchObject({ conclusion: 'neutral' });
+    expect(readFileSync(summary, 'utf8')).toContain('<!-- otel-html-report -->');
+  });
+
+  test('--no-comment leaves only the check run, and the step summary still gets the body', async () => {
+    stub();
+    const summary = join(dir, 'summary.md');
+    expect(await runCli(linkArgs(['--no-comment']), fakeIo({ GITHUB_STEP_SUMMARY: summary }).io, deps)).toBe(
+      0,
+    );
+    expect(writes()).toEqual(['POST https://api.github.com/repos/o/r/check-runs']);
+    expect(readFileSync(summary, 'utf8')).toContain('Report: https://x.test/b/pr/7/runs/6/');
+  });
+
+  test('--no-check leaves only the comment', async () => {
+    stub();
+    expect(await runCli(linkArgs(['--no-check']), fakeIo().io, deps)).toBe(0);
+    expect(writes()).toEqual(['PATCH https://api.github.com/repos/o/r/issues/comments/2']);
+  });
+
+  test('a failed write is a warning and exit 0, and the other write still happens', async () => {
+    stub((method, url) => method === 'PATCH' && url.includes('/issues/comments/'));
+    const f = fakeIo();
+    expect(await runCli(linkArgs(), f.io, deps)).toBe(0);
+    expect(f.out()).toContain('::warning::otel-html link: cannot comment on pull request #7');
+    expect(writes()).toContain('POST https://api.github.com/repos/o/r/check-runs');
+  });
+
+  test('an unreadable run is a warning and exit 0', async () => {
+    stub((_m, url) => /\/actions\/runs\/6$/.test(url));
+    const f = fakeIo();
+    expect(await runCli(linkArgs(), f.io, deps)).toBe(0);
+    expect(f.out()).toContain('::warning::otel-html link: cannot read run 6');
+    expect(writes()).toEqual([]);
+  });
+});
