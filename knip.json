@@ -1,7 +1,13 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
-  "entry": ["src/**/*.{ts,tsx}", "test/**/*.test.ts", "test/**/*.test-d.ts", "e2e/**/*.spec.ts"],
-  "project": ["src/**/*.{ts,tsx,css}", "test/**/*.ts", "e2e/**/*.ts"],
+  "entry": [
+    "scripts/*.ts",
+    "src/**/*.{ts,tsx}",
+    "test/**/*.test.ts",
+    "test/**/*.test-d.ts",
+    "e2e/**/*.spec.ts"
+  ],
+  "project": ["scripts/**/*.ts", "src/**/*.{ts,tsx,css}", "test/**/*.ts", "e2e/**/*.ts"],
   "ignoreDependencies": ["@commitlint/cli"],
   "ignoreBinaries": ["mise"]
 }
