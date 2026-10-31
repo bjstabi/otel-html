@@ -154,6 +154,53 @@ test('channelFor: a default-branch run goes to its workflow channel even when an
   expect(channelFor(forkRun, [containing], 'main')?.key).toBe('branch/feat');
 });
 
+test('channelFor: a branch keeps its key for life, even after the branch that pushed it aside is gone', () => {
+  const at = (ref: string, n: number) =>
+    pull({ number: n, head: { sha: 'abc', ref, repo: { full_name: 'o/r' } } });
+  const placeOf = (ix: SiteIndex, ref: string, n: number, id: number): SiteIndex => {
+    const c = channelFor(apiRun({ head_branch: ref }), [at(ref, n)], 'main', ix);
+    if (c === undefined) throw new Error('no channel');
+    return placeRun(ix, c.key, c.channel, siteRun(id, { reportPath: `${c.key}/runs/${id}` }));
+  };
+  let ix = placeOf(empty(), 'feat/x', 3, 1);
+  ix = placeOf(ix, 'feat-x', 4, 2);
+  expect(Object.keys(ix.channels).sort()).toEqual(['branch/feat-x', 'branch/feat-x--pr-4']);
+  ix = removePr(ix, 3).index;
+  expect(channelFor(apiRun({ head_branch: 'feat-x' }), [at('feat-x', 4)], 'main', ix)?.key).toBe(
+    'branch/feat-x--pr-4',
+  );
+  // a later pull request from the same branch joins the same page
+  expect(channelFor(apiRun({ head_branch: 'feat-x' }), [at('feat-x', 9)], 'main', ix)?.key).toBe(
+    'branch/feat-x--pr-4',
+  );
+});
+
+test('channelFor: a suffixed key another branch holds is not taken either', () => {
+  // `branch/a--pr-4` is both branch `a`'s suffixed key and fork `a`'s branch `pr-4`
+  let ix = placeRun(
+    empty(),
+    'branch/a',
+    { kind: 'branch', title: '#1', headBranch: 'A', prs: [1], headRepo: 'o/r' },
+    siteRun(1),
+  );
+  ix = placeRun(
+    ix,
+    'branch/a--pr-4',
+    { kind: 'branch', title: '#2', headBranch: 'pr-4', prs: [2], headRepo: 'a/r' },
+    siteRun(2),
+  );
+  const mine = pull({ number: 4, head: { sha: 'abc', ref: 'a', repo: { full_name: 'o/r' } } });
+  const key = channelFor(apiRun({ head_branch: 'a' }), [mine], 'main', ix)?.key;
+  expect(key).toBe('branch/a--pr-4--2');
+  // a pull whose head repository is gone keeps its key on the next run
+  const gone = pull({ number: 5, head: { sha: 'abc', ref: 'g', repo: null } });
+  const c = channelFor(apiRun({ head_branch: 'g' }), [gone], 'main', ix);
+  expect(c?.key).toBe('branch/g--pr-5');
+  if (c === undefined) return;
+  ix = placeRun(ix, c.key, c.channel, siteRun(3));
+  expect(channelFor(apiRun({ head_branch: 'g' }), [gone], 'main', ix)?.key).toBe('branch/g--pr-5');
+});
+
 test('pullsOfRun prefers the exact-commit pull', () => {
   const run = apiRun({ head_branch: 'feat' });
   const moved = pull({ number: 1, head: { sha: 'zzz', ref: 'feat', repo: { full_name: 'o/r' } } });

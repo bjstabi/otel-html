@@ -123,21 +123,32 @@ export const pullsToLink = (run: ApiRun, pulls: ApiPull[], defaultBranch: string
   isDefaultBranchRun(run, defaultBranch) ? [] : pullsOfRun(run, pulls);
 
 /**
- * The branch channel key of pull request `pr`'s head: `branch/<branch>` for a branch of `repository`,
- * `branch/<owner>--<branch>` for a fork's (no slug has `--`, so the two cannot meet), and `<key>--pr-<n>` when `index`
- * already has that key for another branch (`feat/x` and `feat-x`) or the head repository is gone.
+ * The branch channel key of pull request `pr`'s head. A branch the index already has keeps its key for life. A new
+ * one gets `branch/<branch>` for a branch of `repository`, `branch/<owner>--<branch>` for a fork's (no slug has `--`,
+ * so the two cannot meet), or, when that key is held by another branch (`feat/x` and `feat-x`) or the head repository
+ * is gone, the first of `<key>--pr-<n>`, `<key>--pr-<n>--2`, ... that nothing holds.
  */
 function branchKey(pr: ApiPull, repository: string, index: SiteIndex): string {
   const ref = slugPart(pr.head.ref, 'branch');
   const headRepo = pr.head.repo?.full_name;
-  if (headRepo === undefined) return `branch/${ref}--pr-${pr.number}`;
-  const key =
-    headRepo === repository
+  const own = Object.entries(index.channels).find(
+    ([, ch]) =>
+      ch.kind === 'branch' &&
+      ch.headBranch === pr.head.ref &&
+      ch.headRepo === headRepo &&
+      // with no head repository there is nothing to tell two forks' branches apart but the pull request
+      (headRepo !== undefined || prsOf(ch).includes(pr.number)),
+  );
+  if (own !== undefined) return own[0];
+  const base =
+    headRepo === undefined || headRepo === repository
       ? `branch/${ref}`
       : `branch/${slugPart(headRepo.split('/')[0] ?? '', 'fork')}--${ref}`;
-  const held = index.channels[key];
-  const taken = held !== undefined && (held.headBranch !== pr.head.ref || held.headRepo !== headRepo);
-  return taken ? `${key}--pr-${pr.number}` : key;
+  if (headRepo !== undefined && index.channels[base] === undefined) return base;
+  const suffixed = `${base}--pr-${pr.number}`;
+  let key = suffixed;
+  for (let k = 2; index.channels[key] !== undefined; k++) key = `${suffixed}--${k}`;
+  return key;
 }
 
 /**
