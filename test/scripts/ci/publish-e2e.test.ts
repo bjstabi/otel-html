@@ -76,8 +76,8 @@ test('the workflow-trace report merges with a job report and keeps spans, logs a
   await jobReport.close();
 
   const summary = await merge({ inputs: ['trace', 'job'], out: 'merged', replace: true }, w.deps);
-  expect(summary.totals.spans).toBeGreaterThanOrEqual(3); // run, job, step
-  expect(summary.totals.logs).toBeGreaterThanOrEqual(2);
+  expect(summary.totals.spans).toBe(4); // run, job, step and the job's queued span
+  expect(summary.totals.logs).toBe(2); // the one log line (the group marker is not a record) plus the job report's
   expect(summary.totals.metrics).toBeGreaterThan(0);
   expect(manifestOf(w, 'merged').complete).toBe(true);
 });

@@ -9,6 +9,7 @@ import { runKey } from './ci/ids.js';
 import { jobLogRecordsRequest } from './ci/job-logs.js';
 import { ciMetricsRequest } from './ci/metrics.js';
 import { approximateJobs, jobIdFor, parseJobContext, parsePublishArgs } from './ci/publish.js';
+import { fetchJobLog, mergeSkippingBad } from './ci/publish-io.js';
 import { summaryTable } from './ci/summary.js';
 import { type ApiRun, ciResource, workflowTraceRequest } from './ci/workflow-trace.js';
 
@@ -50,33 +51,6 @@ async function fetchJobs(run: ApiRun, repository: string, token: string | undefi
     next = parseNextLink(page.link);
   }
   return jobs;
-}
-
-/** The job's log text, or undefined (with a warning) when it cannot be had. The signed URL never sees the token. */
-async function fetchLog(
-  repository: string,
-  job: ApiJob,
-  token: string | undefined,
-): Promise<string | undefined> {
-  try {
-    let res = await fetch(`${API}/repos/${repository}/actions/jobs/${job.id}/logs`, {
-      headers: headers(token),
-      redirect: 'manual',
-      signal: AbortSignal.timeout(15_000),
-    });
-    const location = res.headers.get('location');
-    if (res.status >= 300 && res.status < 400 && location !== null) {
-      res = await fetch(location, { redirect: 'follow', signal: AbortSignal.timeout(60_000) });
-    }
-    if (!res.ok) {
-      warn(`no log for job ${job.name}: answered ${res.status}`);
-      return undefined;
-    }
-    return await res.text();
-  } catch (e) {
-    warn(`no log for job ${job.name}: ${messageOf(e)}`);
-    return undefined;
-  }
 }
 
 async function mapLimited<T, R>(
@@ -135,7 +109,9 @@ async function main(): Promise<number> {
   const key = runKey({ repository: opts.repository, runId: run.id, runAttempt: run.run_attempt });
   const resource = ciResource(run);
 
-  const logs = await mapLimited(jobs, LOG_CONCURRENCY, (job) => fetchLog(opts.repository, job, token));
+  const logs = await mapLimited(jobs, LOG_CONCURRENCY, (job) =>
+    fetchJobLog({ fetch, apiUrl: API, repository: opts.repository, job, token, warn }),
+  );
 
   const scratch = await mkdtemp(join(tmpdir(), 'otel-html-ci-'));
   try {
@@ -150,32 +126,26 @@ async function main(): Promise<number> {
     for (const [i, job] of jobs.entries()) {
       const text = logs[i];
       if (text === undefined) continue;
-      await trace.addLogs(
-        jobLogRecordsRequest({ key, jobId: jobIdFor(job, approximate), job, text, resource }),
-      );
+      try {
+        // Approximate jobs share `name:<job name>` with any same-named approximate job: an inherent limit of the fallback.
+        await trace.addLogs(
+          jobLogRecordsRequest({ key, jobId: jobIdFor(job, approximate), job, text, resource }),
+        );
+      } catch (e) {
+        warn(`logs of job ${job.name} dropped: ${messageOf(e)}`);
+      }
     }
     await trace.addMetrics(ciMetricsRequest(run, jobs, resource));
     await trace.close();
 
-    let inputs = [traceDir, ...artifacts.map((a) => a.report)];
-    let summary: Awaited<ReturnType<typeof merge>>;
-    try {
-      summary = await merge({ inputs, out: opts.out, replace: true, ...config });
-    } catch (first) {
-      // One unreadable report (say, a newer format version) must not sink the rest: find it, skip it, merge again.
-      const bad: string[] = [];
-      for (const [i, dir] of artifacts.map((a) => a.report).entries()) {
-        try {
-          await merge({ inputs: [dir], out: join(scratch, `probe-${i}`), replace: true });
-        } catch (e) {
-          warn(`skipping ${dir}: ${messageOf(e)}`);
-          bad.push(dir);
-        }
-      }
-      if (bad.length === 0) throw first;
-      inputs = inputs.filter((d) => !bad.includes(d));
-      summary = await merge({ inputs, out: opts.out, replace: true, ...config });
-    }
+    const { summary, inputs } = await mergeSkippingBad({
+      merge: (dirs, out) => merge({ inputs: dirs, out, replace: true, ...(dirs.length === 1 ? {} : config) }),
+      required: [traceDir],
+      optional: artifacts.map((a) => a.report),
+      out: opts.out,
+      probeOut: (n) => join(scratch, `probe-${n}`),
+      warn,
+    });
     say(
       `merged ${inputs.length} reports into ${summary.out}: ${summary.totals.spans} spans, ${summary.totals.logs} logs, ${summary.totals.metrics} metrics`,
     );
@@ -187,7 +157,13 @@ async function main(): Promise<number> {
   const table = summaryTable(run, jobs, reportUrl);
   say(table);
   const stepSummary = envVar('GITHUB_STEP_SUMMARY');
-  if (stepSummary) appendFileSync(stepSummary, `${table}\n`);
+  if (stepSummary) {
+    try {
+      appendFileSync(stepSummary, `${table}\n`);
+    } catch (e) {
+      warn(`cannot write the step summary: ${messageOf(e)}`);
+    }
+  }
   return 0;
 }
 
