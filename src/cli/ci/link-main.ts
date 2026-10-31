@@ -14,7 +14,14 @@ import {
   sendJson,
   warning,
 } from './github-api.js';
-import { type ApiComment, checkRunPayload, commentBody, findStickyComment, previousRun } from './link.js';
+import {
+  type ApiComment,
+  branchPage,
+  checkRunPayload,
+  commentBody,
+  findStickyComment,
+  previousRun,
+} from './link.js';
 import { pullsToLink, slug } from './site.js';
 import { readSiteIndex } from './site-io.js';
 
@@ -84,12 +91,15 @@ export async function runLink(opts: LinkOptions, io: CliIo, fetchFn: Fetch = fet
   }
 
   let previous: ReturnType<typeof previousRun>;
+  let branch: ReturnType<typeof branchPage>;
   try {
-    previous = previousRun(await readSiteIndex(opts.site), run.id, opts.url);
+    const index = await readSiteIndex(opts.site);
+    previous = previousRun(index, run.id, opts.url);
+    branch = branchPage(index, run.id, opts.url);
   } catch (e) {
-    warn(`cannot read the site index, so no previous run is linked: ${messageOf(e)}`);
+    warn(`cannot read the site index, so no previous run or branch page is linked: ${messageOf(e)}`);
   }
-  const body = commentBody(run, jobs, opts.url, previous);
+  const body = commentBody(run, jobs, opts.url, previous, branch);
 
   const summaryFile = envVar(io, 'GITHUB_STEP_SUMMARY');
   if (summaryFile) {

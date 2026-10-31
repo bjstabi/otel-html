@@ -13,12 +13,22 @@ export type SiteRun = {
   runUrl: string;
   /** Site-relative folder of the run's report, e.g. `ci/runs/123`. */
   reportPath: string;
+  /** The run's workflow name (`ci`, `load`); absent in entries written before it was recorded. */
+  workflow?: string;
 };
 export type Channel = {
-  kind: 'workflow' | 'pr';
+  /**
+   * `workflow`: a default-branch workflow, at `<slug>/`. `branch`: a pull request's head branch, every workflow's runs
+   * on it, at `branch/<...>/`. `pr`: the older per pull request channel at `pr/<n>/`, still parsed and cleaned up.
+   */
+  kind: 'workflow' | 'branch' | 'pr';
   /** `ci`, or `#12 Fix the thing`. */
   title: string;
   headBranch: string;
+  /** A branch channel's pull request: the one that last placed a run. */
+  pr?: number;
+  /** A branch channel's head repository, `owner/repo`. */
+  headRepo?: string;
   /** Newest first. */
   runs: SiteRun[];
 };
@@ -33,15 +43,18 @@ const siteRunSchema = z.object({
   completedAt: z.string(),
   runUrl: z.string(),
   reportPath: z.string(),
+  workflow: z.string().exactOptional(),
 });
 export const siteIndexSchema: z.ZodType<SiteIndex> = z.object({
   version: z.literal(1),
   channels: z.record(
     z.string(),
     z.object({
-      kind: z.enum(['workflow', 'pr']),
+      kind: z.enum(['workflow', 'branch', 'pr']),
       title: z.string(),
       headBranch: z.string(),
+      pr: z.number().exactOptional(),
+      headRepo: z.string().exactOptional(),
       runs: z.array(siteRunSchema),
     }),
   ),
@@ -53,17 +66,24 @@ export function parseSiteIndex(text: string | undefined): SiteIndex {
   return siteIndexSchema.parse(JSON.parse(text));
 }
 
+/** `name` lower-cased with each run of non-alphanumerics one `-`, trimmed: never contains `--`. */
+const slugPart = (name: string, fallback: string): string =>
+  name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || fallback;
+
+/** Top-level folders that are not workflow channels: `pr/<n>` (legacy pull request channels) and `branch/<...>`. */
+const RESERVED = new Set(['pr', 'branch']);
+
 /**
- * A workflow's channel key and folder. `pr` is taken: `pr/<number>` holds the pull request channels, so a
- * workflow named `pr` gets `pr--workflow`. Runs of non-alphanumerics collapse to one `-`, so no name slugs to that.
+ * A workflow's channel key and folder. `pr` and `branch` are taken (they hold the pull request and branch channels),
+ * so a workflow named `pr` gets `pr--workflow` and one named `branch` gets `branch--workflow`. Runs of
+ * non-alphanumerics collapse to one `-`, so no name slugs to those.
  */
 export const slug = (name: string): string => {
-  const key =
-    name
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '') || 'workflow';
-  return key === 'pr' ? 'pr--workflow' : key;
+  const key = slugPart(name, 'workflow');
+  return RESERVED.has(key) ? `${key}--workflow` : key;
 };
 
 export const reportUrl = (baseUrl: string, reportPath: string): string => `${baseUrl}/${reportPath}/`;
@@ -100,14 +120,34 @@ export const pullsToLink = (run: ApiRun, pulls: ApiPull[], defaultBranch: string
   isDefaultBranchRun(run, defaultBranch) ? [] : pullsOfRun(run, pulls);
 
 /**
+ * The branch channel key of pull request `pr`'s head: `branch/<branch>` for a branch of `repository`,
+ * `branch/<owner>--<branch>` for a fork's (no slug has `--`, so the two cannot meet), and `<key>--pr-<n>` when `index`
+ * already has that key for another branch (`feat/x` and `feat-x`) or the head repository is gone.
+ */
+function branchKey(pr: ApiPull, repository: string, index: SiteIndex): string {
+  const ref = slugPart(pr.head.ref, 'branch');
+  const headRepo = pr.head.repo?.full_name;
+  if (headRepo === undefined) return `branch/${ref}--pr-${pr.number}`;
+  const key =
+    headRepo === repository
+      ? `branch/${ref}`
+      : `branch/${slugPart(headRepo.split('/')[0] ?? '', 'fork')}--${ref}`;
+  const held = index.channels[key];
+  const taken = held !== undefined && (held.headBranch !== pr.head.ref || held.headRepo !== headRepo);
+  return taken ? `${key}--pr-${pr.number}` : key;
+}
+
+/**
  * Where a finished run is published: the workflow's channel when the run is the default branch of this repository,
- * else the open pull request of the run's commit or branch (see `pullsOfRun`); anything else (a fork push, a feature
- * branch with no open pull) is not published.
+ * else the branch channel of the open pull request of the run's commit or branch (see `pullsOfRun`), which every
+ * workflow's runs on that branch share; anything else (a fork push, a feature branch with no open pull) is not
+ * published. `index` is the site's current index, for the branch key's collision guard.
  */
 export function channelFor(
   run: ApiRun,
   pulls: ApiPull[],
   defaultBranch: string,
+  index: SiteIndex = { version: 1, channels: {} },
 ): { key: string; channel: Omit<Channel, 'runs'> } | undefined {
   if (isDefaultBranchRun(run, defaultBranch)) {
     const key = slug(run.name);
@@ -115,9 +155,16 @@ export function channelFor(
   }
   const pr = pullsOfRun(run, pulls)[0];
   if (pr === undefined) return undefined;
+  const headRepo = pr.head.repo?.full_name;
   return {
-    key: `pr/${pr.number}`,
-    channel: { kind: 'pr', title: `#${pr.number} ${pr.title}`, headBranch: pr.head.ref },
+    key: branchKey(pr, run.repository.full_name, index),
+    channel: {
+      kind: 'branch',
+      title: `#${pr.number} ${pr.title}`,
+      headBranch: pr.head.ref,
+      pr: pr.number,
+      ...(headRepo === undefined ? {} : { headRepo }),
+    },
   };
 }
 
@@ -138,7 +185,10 @@ export function placeRun(
   return { ...index, channels: { ...index.channels, [key]: { ...channel, runs } } };
 }
 
-/** Keeps the newest `keep.workflow` / `keep.pr` runs per channel; `remove` is the dropped runs' report paths. */
+/**
+ * Keeps the newest `keep.workflow` runs per workflow channel and `keep.pr` per branch (or legacy pr) channel;
+ * `remove` is the dropped runs' report paths.
+ */
 export function applyRetention(
   index: SiteIndex,
   keep: { workflow: number; pr: number },
@@ -146,7 +196,7 @@ export function applyRetention(
   const remove: string[] = [];
   const channels: Record<string, Channel> = {};
   for (const [key, ch] of Object.entries(index.channels)) {
-    const n = ch.kind === 'pr' ? keep.pr : keep.workflow;
+    const n = ch.kind === 'workflow' ? keep.workflow : keep.pr;
     remove.push(...ch.runs.slice(n).map((r) => r.reportPath));
     channels[key] = { ...ch, runs: ch.runs.slice(0, n) };
   }
@@ -166,6 +216,27 @@ export function removeChannel(index: SiteIndex, key: string): { index: SiteIndex
   return { index: { ...index, channels }, remove: ch.runs.map((r) => r.reportPath) };
 }
 
+/**
+ * `index` without pull request `pr`'s channels: every channel whose `pr` is `pr`, and the legacy `pr/<pr>`. `keys` are
+ * the removed channel keys and `remove` their report paths; a pull request the index does not have changes nothing.
+ */
+export function removePr(
+  index: SiteIndex,
+  pr: number,
+): { index: SiteIndex; remove: string[]; keys: string[] } {
+  const keys = Object.entries(index.channels)
+    .filter(([key, ch]) => ch.pr === pr || key === `pr/${pr}`)
+    .map(([key]) => key);
+  let next = index;
+  const remove: string[] = [];
+  for (const key of keys) {
+    const r = removeChannel(next, key);
+    next = r.index;
+    remove.push(...r.remove);
+  }
+  return { index: next, remove, keys };
+}
+
 const esc = (s: string): string =>
   s
     .replace(/&/g, '&amp;')
@@ -183,22 +254,35 @@ a{color:var(--link)}ul{list-style:none;margin:0;padding:0}li{padding:.5rem 0;bor
 const page = (title: string, body: string, head = ''): string =>
   `<!doctype html>\n<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${head}<title>${esc(title)}</title><style>${PAGE_STYLE}</style></head><body><main>${body}</main></body></html>\n`;
 
-const entry = (href: string, label: string, ch: Channel): string => {
+const entry = (href: string, label: string, ch: Channel, branch?: string): string => {
   const latest = ch.runs[0];
-  const meta =
+  const runs =
     latest === undefined
       ? 'no runs'
       : `${esc(latest.conclusion)} &middot; ${esc(latest.completedAt.slice(0, 10))} &middot; ${ch.runs.length} run${ch.runs.length === 1 ? '' : 's'}`;
+  const meta = branch === undefined ? runs : `<code>${esc(branch)}</code> &middot; ${runs}`;
   return `<li><a href="${esc(href)}">${esc(label)}</a><div class="meta">${meta}</div></li>`;
 };
 
-/** The static landing page: the default branch's workflows, then open pull requests (highest number first). */
+/** A pull request channel's number: its `pr`, else the `<n>` of a legacy `pr/<n>` key. */
+const prNumber = (key: string, ch: Channel): number => ch.pr ?? Number(key.slice(3));
+
+/** A branch channel's branch as people name it: `feat`, or `owner:feat` for a fork's. */
+const branchLabel = (ch: Channel, repository: string): string =>
+  ch.headRepo === undefined || ch.headRepo === repository
+    ? ch.headBranch
+    : `${ch.headRepo.split('/')[0]}:${ch.headBranch}`;
+
+/**
+ * The static landing page: the default branch's workflows, then the pull requests' branch channels and any legacy pr
+ * channels (highest pull request number first).
+ */
 export function renderLanding(index: SiteIndex, repository: string): string {
   const all = Object.entries(index.channels);
   const workflows = all.filter(([, c]) => c.kind === 'workflow').sort(([a], [b]) => a.localeCompare(b));
   const prs = all
-    .filter(([, c]) => c.kind === 'pr')
-    .sort(([a], [b]) => Number(b.slice(3)) - Number(a.slice(3)));
+    .filter(([, c]) => c.kind !== 'workflow')
+    .sort(([a, x], [b, y]) => prNumber(b, y) - prNumber(a, x) || a.localeCompare(b));
   const section = (heading: string, rows: string[]): string =>
     rows.length === 0 ? '' : `<h2>${heading}</h2><ul>${rows.join('')}</ul>`;
   const body =
@@ -209,7 +293,7 @@ export function renderLanding(index: SiteIndex, repository: string): string {
     ) +
     section(
       'Pull requests',
-      prs.map(([key, c]) => entry(`${key}/`, c.title, c)),
+      prs.map(([key, c]) => entry(`${key}/`, c.title, c, branchLabel(c, repository))),
     ) +
     (all.length === 0 ? '<p>No reports yet.</p>' : '');
   return page(`${repository} CI reports`, body);

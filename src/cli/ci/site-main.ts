@@ -19,7 +19,7 @@ import {
   applyRetention,
   channelFor,
   placeRun,
-  removeChannel,
+  removePr,
   renderRedirect,
   reportUrl,
   rollingInputs,
@@ -104,10 +104,10 @@ async function rebuildRolling(
 }
 
 /**
- * Places a finished run's report on the site: resolves its channel, copies the report to the run's folder, applies
- * retention and rewrites the index, landing page and the channel's page (the rolling report for a workflow
- * channel, a redirect stub to the latest run for a pull request). A run with no channel is announced and skipped.
- * Throws when the run cannot be read from the API.
+ * Places a finished run's report on the site: resolves its channel (a default-branch workflow, or a pull request's
+ * branch), copies the report to the run's folder, applies retention and rewrites the index, landing page and the
+ * channel's rolling report. A run with no channel is announced and skipped. Throws when the run cannot be read from
+ * the API.
  */
 export async function runSite(
   opts: SiteOptions,
@@ -128,7 +128,8 @@ export async function runSite(
     API_TIMEOUT_MS,
     fetchFn,
   );
-  const placed = channelFor(run, pulls, defaultBranch);
+  const current = await readSiteIndex(opts.site);
+  const placed = channelFor(run, pulls, defaultBranch, current);
   if (placed === undefined) {
     say(
       io,
@@ -148,8 +149,8 @@ export async function runSite(
     completedAt: run.updated_at,
     runUrl: run.html_url,
     reportPath,
+    workflow: run.name,
   };
-  const current = await readSiteIndex(opts.site);
   const { index, remove } = applyRetention(placeRun(current, placed.key, placed.channel, siteRun), {
     workflow: opts.retention,
     pr: opts.prRetention,
@@ -159,11 +160,7 @@ export async function runSite(
     opts.site,
     remove.filter((p) => p !== reportPath),
   );
-  if (placed.channel.kind === 'workflow') {
-    await rebuildRolling(opts.site, placed.key, index, opts.config, deps, io);
-  } else {
-    await writeStub(opts.site, placed.key, index);
-  }
+  await rebuildRolling(opts.site, placed.key, index, opts.config, deps, io);
   await writeSite(opts.site, index, opts.repository);
   setOutputs(io, {
     'report-url': reportUrl(opts.baseUrl.replace(/\/+$/, ''), reportPath),
@@ -173,21 +170,22 @@ export async function runSite(
 }
 
 /**
- * Removes pull request `pr`'s channel and folder from the site and writes `cleaned=true` to $GITHUB_OUTPUT. A pull
- * request the site never had (no channel and no folder) changes nothing and writes `cleaned=false`, so the caller
- * pushes and deploys nothing.
+ * Removes pull request `pr`'s channels and folders from the site (its branch channels, and the legacy `pr/<n>`) and
+ * writes `cleaned=true` to $GITHUB_OUTPUT. A pull request the site never had (no channel and no legacy folder)
+ * changes nothing and writes `cleaned=false`, so the caller pushes and deploys nothing.
  */
 export async function runCleanup(opts: CleanupOptions, io: CliIo): Promise<void> {
-  const key = `pr/${opts.pr}`;
+  const legacy = `pr/${opts.pr}`;
   const current = await readSiteIndex(opts.site);
-  if (current.channels[key] === undefined && !existsSync(join(opts.site, key))) {
-    say(io, `${key} is not on the site; nothing to remove`);
+  const { index, remove, keys } = removePr(current, opts.pr);
+  if (!keys.includes(legacy) && existsSync(join(opts.site, legacy))) keys.push(legacy);
+  if (keys.length === 0) {
+    say(io, `pull request #${opts.pr} is not on the site; nothing to remove`);
     setOutputs(io, { cleaned: 'false' });
     return;
   }
-  const { index, remove } = removeChannel(current, key);
-  await removePaths(opts.site, [...remove, key]);
+  await removePaths(opts.site, [...remove, ...keys]);
   await writeSite(opts.site, index, opts.repository);
-  say(io, `removed ${key} from the site`);
+  say(io, `removed ${keys.join(', ')} from the site`);
   setOutputs(io, { cleaned: 'true' });
 }

@@ -1,5 +1,5 @@
 import { type ApiJob, type ApiRun, CHECK_RUN_NAME } from './github-api.js';
-import { type SiteIndex, type SiteRun, slug } from './site.js';
+import { type Channel, type SiteIndex, type SiteRun, slug } from './site.js';
 import { MARKER, summaryTable } from './summary.js';
 
 /** The pure side of `ci link`: the sticky pull request comment and the check run that point at a run's report. */
@@ -10,17 +10,27 @@ const markerOf = (workflow: string): string => `${MARKER}:${workflow} -->`;
 /** The marker before comments were per workflow; those comments belong to the `ci` workflow. */
 const LEGACY_MARKER = `${MARKER} -->`;
 
-export type PreviousRun = { url: string; runId: number };
+export type PreviousRun = { url: string; runId: number; workflow?: string };
+/** A branch channel's rolling report: every retained run on `branch`, of every workflow. */
+export type BranchPage = { branch: string; url: string };
 
-/** The sticky comment: `MARKER`, the run's summary table and, when there is one, a link to the run before it. */
+/**
+ * The sticky comment: `MARKER`, the run's summary table, then, when there are, a link to the branch's rolling report
+ * and to the run before this one (labelled with its workflow when the site knows it).
+ */
 export function commentBody(
   run: ApiRun,
   jobs: ApiJob[],
   url: string,
   previous: PreviousRun | undefined,
+  branch?: BranchPage,
 ): string {
   const lines = [markerOf(slug(run.name)), summaryTable(run, jobs, url)];
-  if (previous !== undefined) lines.push(`Previous run: [run ${previous.runId}](${previous.url})`, '');
+  if (branch !== undefined) lines.push(`All runs on \`${branch.branch}\`: ${branch.url}`, '');
+  if (previous !== undefined) {
+    const label = previous.workflow === undefined ? '' : `${previous.workflow} `;
+    lines.push(`Previous run: [${label}run ${previous.runId}](${previous.url})`, '');
+  }
   return lines.join('\n');
 }
 
@@ -65,14 +75,40 @@ export function checkRunPayload(
  * in its channel, or `url` does not end in this run's report path.
  */
 export function previousRun(index: SiteIndex, runId: number, url: string): PreviousRun | undefined {
-  for (const channel of Object.values(index.channels)) {
+  const found = locate(index, runId, url);
+  if (found === undefined) return undefined;
+  const prev = found.channel.runs[found.at + 1];
+  if (prev === undefined) return undefined;
+  return {
+    runId: prev.runId,
+    url: `${found.base}/${prev.reportPath}/`,
+    ...(prev.workflow === undefined ? {} : { workflow: prev.workflow }),
+  };
+}
+
+/**
+ * The rolling report of the branch channel holding `runId`, its URL derived from this run's report `url` as in
+ * `previousRun`. Undefined when the run is not on the site, its channel is not a branch channel, or `url` does not end
+ * in this run's report path.
+ */
+export function branchPage(index: SiteIndex, runId: number, url: string): BranchPage | undefined {
+  const found = locate(index, runId, url);
+  if (found === undefined || found.channel.kind !== 'branch') return undefined;
+  return { branch: found.channel.headBranch, url: `${found.base}/${found.key}/` };
+}
+
+/** The channel holding `runId`, its position there, and the site's base URL (`url` minus the run's report path). */
+function locate(
+  index: SiteIndex,
+  runId: number,
+  url: string,
+): { key: string; channel: Channel; at: number; base: string } | undefined {
+  for (const [key, channel] of Object.entries(index.channels)) {
     const at = channel.runs.findIndex((r) => r.runId === runId);
     if (at < 0) continue;
-    const mine = channel.runs[at] as SiteRun;
-    const prev = channel.runs[at + 1];
-    const tail = `/${mine.reportPath}/`;
-    if (prev === undefined || !url.endsWith(tail)) return undefined;
-    return { runId: prev.runId, url: `${url.slice(0, -tail.length)}/${prev.reportPath}/` };
+    const tail = `/${(channel.runs[at] as SiteRun).reportPath}/`;
+    if (!url.endsWith(tail)) return undefined;
+    return { key, channel, at, base: url.slice(0, -tail.length) };
   }
   return undefined;
 }
