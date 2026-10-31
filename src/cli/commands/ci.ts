@@ -109,7 +109,7 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
     .requiredOption('--repository <owner/repo>', 'repository of the run')
     .requiredOption('--base-url <url>', "the site's public URL")
     .option('--retention <n>', 'runs kept per workflow channel', '30')
-    .option('--pr-retention <n>', "runs kept per pull request's branch channel", '20')
+    .option('--pr-retention <n>', "runs kept per pull request's branch channel", '10')
     .option('--config <file>', "dashboard config file for the channel's rolling report")
     .action(async (flags: SiteFlags) => {
       const opts = {

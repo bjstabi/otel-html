@@ -421,16 +421,16 @@ describe('otel-html ci site and cleanup', { timeout: 60_000 }, () => {
     expect(landing).toContain('feat/topic');
   });
 
-  test('a branch channel keeps 20 runs by default', async () => {
-    const runs = Array.from({ length: 20 }, (_, i) => ({
-      runId: 20 - i,
+  test('a branch channel keeps 10 runs by default', async () => {
+    const runs = Array.from({ length: 10 }, (_, i) => ({
+      runId: 10 - i,
       attempt: 1,
       conclusion: 'success',
       headSha: 'x',
       headBranch: 'feat/topic',
-      completedAt: `2025-01-01T00:00:${String(20 - i).padStart(2, '0')}Z`,
+      completedAt: `2025-01-01T00:00:${String(10 - i).padStart(2, '0')}Z`,
       runUrl: 'u',
-      reportPath: `branch/feat-topic/runs/${20 - i}`,
+      reportPath: `branch/feat-topic/runs/${10 - i}`,
     }));
     mkdirSync(join(site, 'branch/feat-topic/runs/1'), { recursive: true });
     writeFileSync(
@@ -453,7 +453,7 @@ describe('otel-html ci site and cleanup', { timeout: 60_000 }, () => {
     expect(await runCli(siteArgs(50), fakeIo().io, deps)).toBe(0);
     const index = JSON.parse(readFileSync(join(site, 'index.json'), 'utf8'));
     const ids = index.channels['branch/feat-topic'].runs.map((r: { runId: number }) => r.runId);
-    expect(ids).toHaveLength(20);
+    expect(ids).toHaveLength(10);
     expect(ids[0]).toBe(50);
     expect(ids).not.toContain(1);
     expect(existsSync(join(site, 'branch/feat-topic/runs/1'))).toBe(false);
