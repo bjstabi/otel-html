@@ -33,7 +33,7 @@ jobs:
         id: cap
         shell: bash
         run: |
-          if otel-html run --help >/dev/null 2>&1; then
+          if otel-html --help | grep -Eq '^[[:space:]]+run[[:space:]]'; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
