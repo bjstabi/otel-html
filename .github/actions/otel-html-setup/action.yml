@@ -52,7 +52,8 @@ runs:
         if [ -n "$JOB_NAME" ]; then args=(--job-name "$JOB_NAME"); fi
         # CMD is deliberately unquoted: it may be a command with arguments, such as `node dist/cli/main.js`.
         # shellcheck disable=SC2086
-        if ! $CMD ci context "${args[@]}"; then
-          code=$?
+        code=0
+        $CMD ci context "${args[@]}" || code=$?
+        if [ "$code" -ne 0 ]; then
           echo "::warning::otel-html-setup: \`ci context\` failed (exit $code); this job's report will not join the run's trace"
         fi
