@@ -81,25 +81,11 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/setup
       - run: mise run build
-      # The same lease loop as the report job's publish.
-      - name: Remove the PR from the site branch
-        shell: bash
-        run: |
-          for attempt in 1 2 3 4 5; do
-            rm -rf site
-            if "$SITE_BRANCH" checkout site &&
-              node dist/cli/main.js ci cleanup --site site --pr "$PR" --repository "$GITHUB_REPOSITORY" &&
-              "$SITE_BRANCH" push site "ci-report: remove PR $PR"; then
-              exit 0
-            fi
-            [ "$attempt" = 5 ] || sleep $((attempt * 2 + RANDOM % 5))
-          done
-          echo "::error::could not remove PR $PR from gh-pages after 5 attempts"
-          exit 1
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          PR: ${{ github.event.pull_request.number }}
-          SITE_BRANCH: .github/actions/otel-html-publish/site-branch.sh
+      - uses: ./.github/actions/otel-html-publish
+        with:
+          command: node dist/cli/main.js
+          cleanup-pr: ${{ github.event.pull_request.number }}
+          deploy: false
 
   # Deploys the gh-pages tip, whoever pushed it. Pending deploys in the `pages` group replace each other, which loses
   # nothing: the one that runs ships the latest tip. A replaced pending deploy shows its publisher run as cancelled,
