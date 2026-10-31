@@ -96,7 +96,7 @@ jobs:
                 exit 0
               fi
             fi
-            [ "$attempt" = 5 ] || sleep $((RANDOM % 5 + 1))
+            [ "$attempt" = 5 ] || sleep $((attempt * 2 + RANDOM % 5))
           done
           echo "::error::could not publish run $RUN_ID to gh-pages after 5 attempts"
           exit 1
@@ -141,7 +141,7 @@ jobs:
               "$SITE_BRANCH" push site "ci-report: remove PR $PR"; then
               exit 0
             fi
-            [ "$attempt" = 5 ] || sleep $((RANDOM % 5 + 1))
+            [ "$attempt" = 5 ] || sleep $((attempt * 2 + RANDOM % 5))
           done
           echo "::error::could not remove PR $PR from gh-pages after 5 attempts"
           exit 1
@@ -151,10 +151,16 @@ jobs:
           SITE_BRANCH: .github/actions/otel-html-publish/site-branch.sh
 
   # Deploys the gh-pages tip, whoever pushed it. Pending deploys in the `pages` group replace each other, which loses
-  # nothing: the one that runs ships the latest tip.
+  # nothing: the one that runs ships the latest tip. A replaced pending deploy shows its publisher run as cancelled,
+  # although that run's report was pushed and a newer deploy shipped it.
+  # Only from the default branch (workflow_run and pull_request_target always are): the github-pages environment
+  # rejects other refs, so a branch dispatch skips the deploy; it still updates gh-pages, and the next default-branch
+  # deploy ships that.
   deploy:
     needs: [report, cleanup]
-    if: always() && (needs.report.outputs.published == 'true' || needs.cleanup.result == 'success')
+    if: >-
+      !cancelled() && github.ref_name == github.event.repository.default_branch &&
+      (needs.report.outputs.published == 'true' || needs.cleanup.result == 'success')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     concurrency:
