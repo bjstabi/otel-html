@@ -11,7 +11,7 @@ import { ciMetricsRequest } from './ci/metrics.js';
 import { approximateJobs, jobIdFor, parseJobContext, parsePublishArgs } from './ci/publish.js';
 import { fetchJobLog, mergeSkippingBad } from './ci/publish-io.js';
 import { summaryTable } from './ci/summary.js';
-import { type ApiRun, ciResource, workflowTraceRequest } from './ci/workflow-trace.js';
+import { type ApiRun, ciResource, jobResource, workflowTraceRequest } from './ci/workflow-trace.js';
 
 /**
  * Publisher: after the `ci` workflow completes, builds the workflow-trace report from the Actions API, merges it with
@@ -129,7 +129,13 @@ async function main(): Promise<number> {
       try {
         // Approximate jobs share `name:<job name>` with any same-named approximate job: an inherent limit of the fallback.
         await trace.addLogs(
-          jobLogRecordsRequest({ key, jobId: jobIdFor(job, approximate), job, text, resource }),
+          jobLogRecordsRequest({
+            key,
+            jobId: jobIdFor(job, approximate),
+            job,
+            text,
+            resource: jobResource(run, job),
+          }),
         );
       } catch (e) {
         warn(`logs of job ${job.name} dropped: ${messageOf(e)}`);

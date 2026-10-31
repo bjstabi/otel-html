@@ -34,6 +34,11 @@ export function ciResource(run: ApiRun): Record<string, string> {
   };
 }
 
+/** The run's resource plus the job's name: the resource every record scoped to one job carries. */
+export function jobResource(run: ApiRun, job: ApiJob): Record<string, string> {
+  return { ...ciResource(run), 'cicd.pipeline.task.name': job.name };
+}
+
 type Status = { code: number; message: string };
 
 const SPAN_KIND_INTERNAL = 1;
@@ -68,6 +73,8 @@ export function workflowTraceRequest(run: ApiRun, jobs: ApiJob[], approximate: R
   }
   const runEnd = Math.max(runStart, ms(run.updated_at) ?? runStart);
   const spans: SpanInput[] = [];
+  // Each job's spans sit under that job's own resource, so a `cicd.pipeline.task.name` variable selects them.
+  const jobGroups: { job: ApiJob; spans: SpanInput[] }[] = [];
   const runResult = run.conclusion === null ? undefined : resultOf(run.conclusion);
 
   spans.push({
@@ -90,6 +97,8 @@ export function workflowTraceRequest(run: ApiRun, jobs: ApiJob[], approximate: R
   });
 
   for (const job of jobs) {
+    const jobSpans: SpanInput[] = [];
+    jobGroups.push({ job, spans: jobSpans });
     const isApprox = approximate.has(job.id);
     const jobKeyId = isApprox ? `name:${job.name}` : job.id;
     const jobSpanId = jobSpanIdOf(key, jobKeyId);
@@ -97,7 +106,7 @@ export function workflowTraceRequest(run: ApiRun, jobs: ApiJob[], approximate: R
     const jobEndFallback = ms(job.completed_at) ?? runEnd;
     const jobEnd = Math.max(jobStart, jobEndFallback);
 
-    spans.push({
+    jobSpans.push({
       name: job.name,
       spanId: jobSpanId,
       parentSpanId: runSpanId,
@@ -120,7 +129,7 @@ export function workflowTraceRequest(run: ApiRun, jobs: ApiJob[], approximate: R
     const queuedStart = ms(job.created_at);
     const queuedEnd = ms(job.started_at);
     if (queuedStart !== undefined && queuedEnd !== undefined) {
-      spans.push({
+      jobSpans.push({
         name: 'queued',
         spanId: jobSpanIdOf(key, `${jobKeyId}#queued`),
         parentSpanId: jobSpanId,
@@ -132,31 +141,34 @@ export function workflowTraceRequest(run: ApiRun, jobs: ApiJob[], approximate: R
     }
 
     for (const step of job.steps) {
-      spans.push(stepSpan(key, jobKeyId, jobSpanId, step, jobStart, jobEndFallback));
+      jobSpans.push(stepSpan(key, jobKeyId, jobSpanId, step, jobStart, jobEndFallback));
     }
   }
 
+  const toGroup = (resource: Record<string, string>, group: SpanInput[]): object => ({
+    resource: { attributes: attrs(resource) },
+    scopeSpans: [
+      {
+        scope: { name: 'otel-html-ci' },
+        spans: group.map((s) => ({
+          traceId,
+          spanId: s.spanId,
+          ...(s.parentSpanId === undefined ? {} : { parentSpanId: s.parentSpanId }),
+          name: s.name,
+          kind: s.kind,
+          startTimeUnixNano: ns(s.start),
+          endTimeUnixNano: ns(s.end),
+          attributes: s.attributes,
+          ...(s.status === undefined ? {} : { status: s.status }),
+        })),
+      },
+    ],
+  });
+
   return {
     resourceSpans: [
-      {
-        resource: { attributes: attrs(ciResource(run)) },
-        scopeSpans: [
-          {
-            scope: { name: 'otel-html-ci' },
-            spans: spans.map((s) => ({
-              traceId,
-              spanId: s.spanId,
-              ...(s.parentSpanId === undefined ? {} : { parentSpanId: s.parentSpanId }),
-              name: s.name,
-              kind: s.kind,
-              startTimeUnixNano: ns(s.start),
-              endTimeUnixNano: ns(s.end),
-              attributes: s.attributes,
-              ...(s.status === undefined ? {} : { status: s.status }),
-            })),
-          },
-        ],
-      },
+      toGroup(ciResource(run), spans),
+      ...jobGroups.map((g) => toGroup(jobResource(run, g.job), g.spans)),
     ],
   };
 }

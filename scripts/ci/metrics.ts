@@ -1,6 +1,6 @@
 import type { ApiJob } from './context.js';
 import { type Attr, attrs, ms, ns, resultOf } from './otlp.js';
-import type { ApiRun } from './workflow-trace.js';
+import { type ApiRun, jobResource } from './workflow-trace.js';
 
 const BOUNDS = [1, 5, 10, 30, 60, 120, 300, 600, 1200, 1800, 3600];
 const DELTA = 1;
@@ -64,33 +64,41 @@ export function ciMetricsRequest(run: ApiRun, jobs: ApiJob[], resource: Record<s
     );
   }
 
-  const taskPoints: HistogramPoint[] = [];
-  const queuePoints: HistogramPoint[] = [];
+  // Per-job points sit under that job's own resource, so a `cicd.pipeline.task.name` variable selects them.
+  const jobMetrics: { job: ApiJob; metrics: object[] }[] = [];
   for (const job of jobs) {
     const took = seconds(job.started_at, job.completed_at);
-    if (took !== undefined) {
-      taskPoints.push({
-        seconds: took,
-        attributes: attrs({
-          'cicd.pipeline.task.name': job.name,
-          'cicd.pipeline.task.run.result': job.conclusion === null ? undefined : resultOf(job.conclusion),
-        }),
-      });
-    }
+    const taskPoints: HistogramPoint[] =
+      took === undefined
+        ? []
+        : [
+            {
+              seconds: took,
+              attributes: attrs({
+                'cicd.pipeline.task.name': job.name,
+                'cicd.pipeline.task.run.result':
+                  job.conclusion === null ? undefined : resultOf(job.conclusion),
+              }),
+            },
+          ];
     const queued = seconds(job.created_at, job.started_at);
-    if (queued !== undefined) {
-      queuePoints.push({ seconds: queued, attributes: attrs({ 'cicd.pipeline.task.name': job.name }) });
-    }
+    const queuePoints: HistogramPoint[] =
+      queued === undefined
+        ? []
+        : [{ seconds: queued, attributes: attrs({ 'cicd.pipeline.task.name': job.name }) }];
+    jobMetrics.push({
+      job,
+      metrics: [
+        ...histogram('cicd.pipeline.task.run.duration', 'Duration of a job', time, taskPoints),
+        ...histogram(
+          'cicd.pipeline.task.run.queue.duration',
+          'Time a job waited for a runner',
+          time,
+          queuePoints,
+        ),
+      ],
+    });
   }
-  metrics.push(
-    ...histogram('cicd.pipeline.task.run.duration', 'Duration of a job', time, taskPoints),
-    ...histogram(
-      'cicd.pipeline.task.run.queue.duration',
-      'Time a job waited for a runner',
-      time,
-      queuePoints,
-    ),
-  );
 
   // A skipped job is not an error; a job without a conclusion has not finished.
   const failed = jobs.filter(
@@ -114,12 +122,16 @@ export function ciMetricsRequest(run: ApiRun, jobs: ApiJob[], resource: Record<s
     });
   }
 
+  const scoped = (r: Record<string, string>, m: object[]): object => ({
+    resource: { attributes: attrs(r) },
+    scopeMetrics: [{ scope: { name: 'otel-html-ci' }, metrics: m }],
+  });
   return {
     resourceMetrics: [
-      {
-        resource: { attributes: attrs(resource) },
-        scopeMetrics: [{ scope: { name: 'otel-html-ci' }, metrics }],
-      },
+      scoped(resource, metrics),
+      ...jobMetrics
+        .filter((g) => g.metrics.length > 0)
+        .map((g) => scoped(jobResource(run, g.job), g.metrics)),
     ],
   };
 }

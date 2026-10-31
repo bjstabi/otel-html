@@ -51,12 +51,18 @@ type Metric = {
   sum?: { aggregationTemporality: number; isMonotonic: boolean; dataPoints: Point[] };
 };
 
+type ResourceMetrics = {
+  resource: { attributes: { key: string; value: Value }[] };
+  scopeMetrics: { scope: { name: string }; metrics: Metric[] }[];
+};
+const resourcesOf = (r: ApiRun, jobs: ApiJob[]) =>
+  (ciMetricsRequest(r, jobs, { 'cicd.pipeline.name': 'ci' }) as { resourceMetrics: ResourceMetrics[] })
+    .resourceMetrics;
+
 function metrics(r: ApiRun, jobs: ApiJob[]): Metric[] {
-  const req = ciMetricsRequest(r, jobs, { 'cicd.pipeline.name': 'ci' }) as {
-    resourceMetrics: { scopeMetrics: { scope: { name: string }; metrics: Metric[] }[] }[];
-  };
-  expect(req.resourceMetrics[0]?.scopeMetrics[0]?.scope.name).toBe('otel-html-ci');
-  return req.resourceMetrics[0]?.scopeMetrics[0]?.metrics ?? [];
+  const rms = resourcesOf(r, jobs);
+  expect(rms.every((rm) => rm.scopeMetrics[0]?.scope.name === 'otel-html-ci')).toBe(true);
+  return rms.flatMap((rm) => rm.scopeMetrics[0]?.metrics ?? []);
 }
 const named = (ms: Metric[], n: string) => ms.find((m) => m.name === n);
 const attr = (p: Point, k: string) => p.attributes.find((a) => a.key === k)?.value.stringValue;
@@ -131,6 +137,28 @@ describe('ciMetricsRequest', () => {
     const ms = metrics(run, [job(1, 'a', null, { started_at: null, completed_at: null })]);
     expect(named(ms, 'cicd.pipeline.task.run.duration')).toBeUndefined();
     expect(named(ms, 'cicd.pipeline.task.run.queue.duration')).toBeUndefined();
+  });
+
+  test('per-job points sit under a resource carrying the job name; run-level points do not', () => {
+    const rms = resourcesOf({ ...run, conclusion: 'failure' }, [
+      job(1, 'a', 'failure'),
+      job(2, 'b', 'success'),
+    ]);
+    const taskName = (rm: ResourceMetrics) =>
+      rm.resource.attributes.find((a) => a.key === 'cicd.pipeline.task.name')?.value.stringValue;
+    const names = (rm: ResourceMetrics) => rm.scopeMetrics[0]?.metrics.map((m) => m.name);
+    expect(rms.map(taskName)).toEqual([undefined, 'a', 'b']);
+    expect(names(rms[0] as ResourceMetrics)).toEqual([
+      'cicd.pipeline.run.duration',
+      'cicd.pipeline.run.errors',
+    ]);
+    expect(names(rms[1] as ResourceMetrics)).toEqual([
+      'cicd.pipeline.task.run.duration',
+      'cicd.pipeline.task.run.queue.duration',
+    ]);
+    const dp = rms[2]?.scopeMetrics[0]?.metrics[0]?.histogram?.dataPoints[0];
+    expect(attr(dp as Point, 'cicd.pipeline.task.name')).toBe('b');
+    expect(rms[2]?.resource.attributes.some((a) => a.key === 'cicd.pipeline.name')).toBe(true);
   });
 
   test('the library accepts the output', () => {

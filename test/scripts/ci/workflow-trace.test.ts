@@ -84,9 +84,14 @@ type Span = {
   status?: { code: number; message: string };
   attributes: { key: string; value: Record<string, unknown> }[];
 };
+type ResourceSpans = {
+  resource: { attributes: { key: string; value: Record<string, unknown> }[] };
+  scopeSpans: { spans: Span[] }[];
+};
+const resourceSpansOf = (req: object): ResourceSpans[] =>
+  (req as { resourceSpans: ResourceSpans[] }).resourceSpans;
 const spansOf = (req: object): Span[] =>
-  (req as { resourceSpans: { scopeSpans: { spans: Span[] }[] }[] }).resourceSpans[0]?.scopeSpans[0]?.spans ??
-  [];
+  resourceSpansOf(req).flatMap((rs) => rs.scopeSpans.flatMap((ss) => ss.spans));
 const ns = (s: string) => (BigInt(Date.parse(s)) * 1_000_000n).toString();
 const byName = (spans: Span[], name: string) => {
   const s = spans.find((x) => x.name === name);
@@ -96,6 +101,21 @@ const byName = (spans: Span[], name: string) => {
 
 describe('workflowTraceRequest', () => {
   const spans = spansOf(workflowTraceRequest(run, jobs, new Set([2])));
+
+  test('job spans sit under a resource carrying the job name; the run span does not', () => {
+    const rss = resourceSpansOf(workflowTraceRequest(run, jobs, new Set([2])));
+    const taskName = (rs: ResourceSpans) =>
+      rs.resource.attributes.find((a) => a.key === 'cicd.pipeline.task.name');
+    expect(taskName(rss[0] as ResourceSpans)).toBeUndefined();
+    expect(rss[0]?.scopeSpans[0]?.spans.map((s) => s.name)).toEqual(['ci']);
+    expect(
+      rss.slice(1).map((rs) => [taskName(rs)?.value, rs.scopeSpans[0]?.spans.map((s) => s.name)]),
+    ).toEqual([
+      [{ stringValue: 'build' }, ['build', 'queued', 'checkout']],
+      [{ stringValue: 'test' }, ['test', 'queued', 'slow', 'never started']],
+    ]);
+    expect(rss[1]?.resource.attributes.some((a) => a.key === 'cicd.pipeline.run.id')).toBe(true);
+  });
 
   test('span count and ids', () => {
     expect(spans).toHaveLength(1 + 2 + 2 + 3);
