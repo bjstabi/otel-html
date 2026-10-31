@@ -7,9 +7,9 @@
 #
 # Each attempt checks the tip out into <dir> (see site-branch.sh) and runs <command...>, which changes <dir>, with
 # GITHUB_OUTPUT pointing at a scratch file. When <push-when> is not empty, the change is pushed only if the command
-# wrote that exact output line (`ci site` writes `published=false` for a run it does not publish, `ci cleanup` `cleaned=false` for a pull request the
-# site never had). The scratch outputs
-# are appended to the real GITHUB_OUTPUT once the attempt succeeds.
+# wrote that exact output line (`ci site` writes `published=false` for a run it does not publish, and `ci cleanup`
+# `cleaned=false` for a pull request the site never had). The scratch outputs are appended to the real GITHUB_OUTPUT
+# once the attempt succeeds.
 #
 # Environment: as site-branch.sh, plus GITHUB_OUTPUT. Test hook: SITE_LEASE_BACKOFF=0 retries without waiting.
 set -euo pipefail
