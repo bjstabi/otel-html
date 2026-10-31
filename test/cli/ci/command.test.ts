@@ -1,5 +1,14 @@
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -344,12 +353,17 @@ describe('otel-html ci site and cleanup', { timeout: 60_000 }, () => {
   });
 
   test('a rolling merge that fails with nothing to blame warns and leaves the redirect stub', async () => {
-    stubApi({ 70: runBody(70) });
+    stubApi({ 69: runBody(69), 70: runBody(70) });
+    expect(await runCli(siteArgs(69), fakeIo().io, realFsDeps)).toBe(0);
+    expect(existsSync(join(site, 'branch/main/data/manifest.js'))).toBe(true);
     const f = fakeIo();
     expect(await runCli(siteArgs(70, ['--config', join(dir, 'missing.yaml')]), f.io, realFsDeps)).toBe(0);
     expect(f.out()).toContain('::warning::otel-html site: rolling report of branch/main not rebuilt');
     expect(readFileSync(join(site, 'branch/main/index.html'), 'utf8')).toContain('url=runs/70/');
     expect(existsSync(join(site, 'branch/main/runs/70/data/manifest.js'))).toBe(true);
+    // the previous rolling report does not linger beside the stub
+    expect(readdirSync(join(site, 'branch/main')).sort()).toEqual(['index.html', 'runs']);
+    expect(existsSync(join(site, 'branch/main/runs/69/data/manifest.js'))).toBe(true);
   });
 
   test('a run on neither the default branch nor an open pull request is not published', async () => {

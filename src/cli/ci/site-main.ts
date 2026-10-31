@@ -61,11 +61,20 @@ async function writeStub(site: string, key: string, index: SiteIndex): Promise<v
 
 const RUNS = 'runs';
 
+/** Empties `<site>/<key>/` (creating it if absent) except its `runs/`. */
+async function clearRolling(site: string, key: string): Promise<void> {
+  const dir = join(site, key);
+  await mkdir(dir, { recursive: true });
+  for (const name of await readdir(dir)) {
+    if (name !== RUNS) await rm(join(dir, name), { recursive: true, force: true });
+  }
+}
+
 /**
  * Rebuilds `<site>/<key>/` as the merge of the channel's retained runs, oldest first. The runs live inside that
  * folder (`runs/<id>/`), so the merge goes to a scratch folder and every entry of the channel folder except `runs`
- * is replaced by the merged output's. A merge that fails with no bad input to blame is a warning and the redirect
- * stub is written instead; the per-run report stays published.
+ * is replaced by the merged output's. A merge that fails with no bad input to blame is a warning and the folder is
+ * left with only `runs/` and the redirect stub; the per-run report stays published.
  */
 async function rebuildRolling(
   site: string,
@@ -88,16 +97,14 @@ async function rebuildRolling(
       probeOut: (n) => join(scratch, `probe-${n}`),
       warn: (m) => warning(io, 'report', m),
     });
-    const dir = join(site, key);
-    await mkdir(dir, { recursive: true });
-    for (const name of await readdir(dir)) {
-      if (name !== RUNS) await rm(join(dir, name), { recursive: true, force: true });
-    }
+    await clearRolling(site, key);
     for (const name of await readdir(merged)) {
-      await cp(join(merged, name), join(dir, name), { recursive: true });
+      await cp(join(merged, name), join(site, key, name), { recursive: true });
     }
   } catch (e) {
     warning(io, 'site', `rolling report of ${key} not rebuilt: ${messageOf(e)}`);
+    // the stub alone, not beside a stale or half-replaced rolling report
+    await clearRolling(site, key);
     await writeStub(site, key, index);
   } finally {
     await rm(scratch, { recursive: true, force: true });
