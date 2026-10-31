@@ -1,0 +1,1 @@
+__OH__.push("metrics/000000/ex",{"metric":0,"exemplars":[{"series":0,"time":463681154,"value":0.9,"traceId":"5134a3f57d52d9e9822e617916d38b35","spanId":"1d8745a159cef356","attributes":[["http.request.method","POST"]]},{"series":0,"time":46963681154,"value":1.3,"traceId":"9c1f0e5ab27d4c3388e0f6a1b5d2c47e","spanId":"7a1b2c3d4e5f6071","attributes":[]}]});

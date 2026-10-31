@@ -3,6 +3,7 @@ import { OtelHtmlError } from '../model/errors.js';
 import type { MetricPointRecord } from '../model/records.js';
 import { compileCondition } from '../ottl/compile.js';
 import { parseFormula } from './metric-formula.js';
+import { compileBy } from './metric-paths.js';
 
 /** Whether `expr` parses as a formula (`parseFormula`); the schema says so before the Explorer tries it. */
 function parses(expr: string): boolean {
@@ -89,6 +90,19 @@ export const MetricQuerySchema: z.ZodType<MetricQuery, MetricQueryInput> = z
     hidden: z.boolean().default(false),
   })
   .superRefine((q, ctx) => {
+    // `by` is compiled by the viewer's own compiler, so a path the viewer cannot run is rejected here.
+    q.by.forEach((b, i) => {
+      try {
+        compileBy(b);
+      } catch (e) {
+        if (!(e instanceof OtelHtmlError && e.code === 'invalid-ottl')) throw e;
+        ctx.addIssue({
+          code: 'custom',
+          path: ['by', i],
+          message: `a data point path such as attributes["key"] (${e.message})`,
+        });
+      }
+    });
     if (q.where === null) return;
     try {
       compileCondition(q.where, 'datapoint');

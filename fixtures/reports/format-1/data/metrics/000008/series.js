@@ -1,0 +1,1 @@
+__OH__.push("metrics/000008/series",{"metric":8,"series":[{"id":0,"resource":0,"scope":0,"attributes":[["db.system.name","postgresql"]],"bounds":null,"other":false},{"id":1,"resource":1,"scope":1,"attributes":[["db.system.name","postgresql"]],"bounds":null,"other":false}]});

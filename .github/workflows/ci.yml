@@ -9,8 +9,14 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+defaults:
+  run:
+    # Every job's steps run under the built CLI; the few steps that run before dist/ exists say `shell: bash`.
+    shell: node dist/cli/main.js run -o .otel-html/report -- bash --noprofile --norc -eo pipefail {0}
+
 permissions:
   contents: read
+  actions: read
 
 env:
   # `claude` in mise.toml is a developer tool; CI never needs it.
@@ -26,8 +32,24 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup
+      # The job shell below is the built CLI, so dist/ must exist before the first `run:` step starts.
+      - name: Build otel-html
+        shell: bash
+        run: mise run build
+      - name: otel-html context
+        shell: bash
+        run: bun scripts/ci-context.ts
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       - run: mise run gen:check
       - run: mise run check
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: otel-html-${{ github.job }}
+          path: .otel-html/
+          include-hidden-files: true
+          if-no-files-found: ignore
 
   unit-os:
     needs: check
@@ -44,7 +66,23 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup
+      # The job shell below is the built CLI, so dist/ must exist before the first `run:` step starts.
+      - name: Build otel-html
+        shell: bash
+        run: mise run build
+      - name: otel-html context
+        shell: bash
+        run: bun scripts/ci-context.ts
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       - run: mise run test:unit
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: otel-html-${{ github.job }}${{ matrix.os && format('-{0}', matrix.os) || '' }}
+          path: .otel-html/
+          include-hidden-files: true
+          if-no-files-found: ignore
 
   build:
     needs: check
@@ -52,13 +90,29 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup
-      # `check:package` (publint + attw) depends on `build`, so this one task builds and then checks the package.
-      - run: mise run check:package
+      # The job shell below is the built CLI, so dist/ must exist before the first `run:` step starts.
+      - name: Build otel-html
+        shell: bash
+        run: mise run build
+      - name: otel-html context
+        shell: bash
+        run: bun scripts/ci-context.ts
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      # `check:package` (publint + attw) depends on `build`; --skip-deps keeps it from cleaning dist/ under the running job shell.
+      - run: mise run --skip-deps check:package
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist
           path: dist/
           if-no-files-found: error
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: otel-html-${{ github.job }}
+          path: .otel-html/
+          include-hidden-files: true
+          if-no-files-found: ignore
 
   e2e:
     needs: build
@@ -93,10 +147,15 @@ jobs:
         with:
           name: dist
           path: dist/
-      # The suite runs under `otel-html run`, which reports its own telemetry; the exit code is Playwright's.
+      - name: otel-html context
+        shell: bash
+        run: bun scripts/ci-context.ts
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      # The job shell wraps this in `otel-html run`; the exit code is Playwright's.
       # --skip-deps: use the dist/ built and package-checked by the build job instead of rebuilding.
       # Playwright projects are named `<browser>-file` and `<browser>-http`.
-      - run: node dist/cli/main.js run -o ci-report/${{ matrix.project }} --no-grpc -- mise run --skip-deps test:e2e -- --project '${{ matrix.project }}-*'
+      - run: mise run --skip-deps test:e2e -- --project '${{ matrix.project }}-*'
       # The reporter is `list`, so failure traces and screenshots land in test-results/.
       - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -114,8 +173,8 @@ jobs:
       - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: ci-report-${{ matrix.project }}
-          path: ci-report/${{ matrix.project }}
+          name: otel-html-${{ github.job }}${{ matrix.project && format('-{0}', matrix.project) || '' }}
+          path: .otel-html/
           include-hidden-files: true
           if-no-files-found: ignore
 
@@ -143,12 +202,24 @@ jobs:
         with:
           name: dist
           path: dist/
+      - name: otel-html context
+        shell: bash
+        run: bun scripts/ci-context.ts
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       - run: pnpm exec playwright test e2e/scale.spec.ts --project 'chromium-*' --grep 'metrics scale' --workers=1
       - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: playwright-results-metrics-scale
           path: test-results/
+          if-no-files-found: ignore
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: otel-html-${{ github.job }}
+          path: .otel-html/
+          include-hidden-files: true
           if-no-files-found: ignore
 
   # The standalone Bun binaries, built and smoke-tested on every PR (convert, serve over HTTP and gRPC, run, SIGINT, bad
@@ -170,6 +241,21 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup
-      - run: mise run build
+      # The job shell below is the built CLI, so dist/ must exist before the first `run:` step starts.
+      - name: Build otel-html
+        shell: bash
+        run: mise run build
+      - name: otel-html context
+        shell: bash
+        run: bun scripts/ci-context.ts
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       - run: mise run build:binaries -- --target "$TARGET"
       - run: OTEL_HTML_BINARY="dist/bin/otel-html-$TARGET" pnpm exec vitest run test/cli/binary.test.ts
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: otel-html-${{ github.job }}${{ matrix.target && format('-{0}', matrix.target) || '' }}${{ matrix.os && format('-{0}', matrix.os) || '' }}
+          path: .otel-html/
+          include-hidden-files: true
+          if-no-files-found: ignore

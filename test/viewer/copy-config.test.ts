@@ -114,7 +114,12 @@ describe('round trip', () => {
           h: 8,
           follow: false,
           queries: [
-            { id: 'a', metric: 'http.server.request.duration', show: 'p95', by: ['http.route'] },
+            {
+              id: 'a',
+              metric: 'http.server.request.duration',
+              show: 'p95',
+              by: ['attributes["http.route"]'],
+            },
             { id: 'b', metric: 'http.server.request.duration', show: 'count', alias: 'n' },
           ],
           formulas: [{ id: 'f1', expr: 'a / b', alias: 'ratio' }],

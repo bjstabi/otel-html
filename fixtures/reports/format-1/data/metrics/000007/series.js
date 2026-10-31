@@ -1,0 +1,1 @@
+__OH__.push("metrics/000007/series",{"metric":7,"series":[{"id":0,"resource":0,"scope":0,"attributes":[["hostile.attr","\">\u003cimg src=x onerror=alert(1)>"]],"bounds":null,"other":false}]});

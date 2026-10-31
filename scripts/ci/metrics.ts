@@ -1,0 +1,140 @@
+import type { ApiJob, ApiRun } from './github-api.js';
+import { type Attr, attrs, ms, ns, resultOf, seconds } from './otlp.js';
+import { jobResource } from './workflow-trace.js';
+
+const BOUNDS = [1, 5, 10, 30, 60, 120, 300, 600, 1200, 1800, 3600];
+const DELTA = 1;
+
+/** `start` and `end` are the interval the point measures, as unix-nano strings. */
+type HistogramPoint = { attributes: Attr[]; seconds: number; start: string; end: string };
+
+function histogram(name: string, description: string, points: HistogramPoint[]): object[] {
+  if (points.length === 0) return [];
+  return [
+    {
+      name,
+      description,
+      unit: 's',
+      histogram: {
+        aggregationTemporality: DELTA,
+        dataPoints: points.map((p) => {
+          const bucketCounts = new Array<number>(BOUNDS.length + 1).fill(0);
+          // Upper bounds are inclusive; anything past the last bound goes in the overflow bucket.
+          const at = BOUNDS.findIndex((b) => p.seconds <= b);
+          bucketCounts[at === -1 ? BOUNDS.length : at] = 1;
+          return {
+            startTimeUnixNano: p.start,
+            timeUnixNano: p.end,
+            count: '1',
+            sum: p.seconds,
+            min: p.seconds,
+            max: p.seconds,
+            bucketCounts: bucketCounts.map(String),
+            explicitBounds: BOUNDS,
+            attributes: p.attributes,
+          };
+        }),
+      },
+    },
+  ];
+}
+
+export function ciMetricsRequest(run: ApiRun, jobs: ApiJob[], resource: Record<string, string>): object {
+  const time = ns(ms(run.updated_at) ?? 0);
+  const metrics: object[] = [];
+
+  const runSeconds = seconds(run.run_started_at ?? run.created_at, run.updated_at);
+  if (runSeconds !== undefined) {
+    metrics.push(
+      ...histogram('cicd.pipeline.run.duration', 'Duration of a workflow run', [
+        {
+          seconds: runSeconds,
+          start: ns(ms(run.run_started_at ?? run.created_at) ?? 0),
+          end: time,
+          attributes: attrs({
+            'cicd.pipeline.name': run.name,
+            'cicd.pipeline.result': run.conclusion === null ? undefined : resultOf(run.conclusion),
+          }),
+        },
+      ]),
+    );
+  }
+
+  // Per-job points sit under that job's own resource, so a `cicd.pipeline.task.name` variable selects them.
+  const jobMetrics: { job: ApiJob; metrics: object[] }[] = [];
+  for (const job of jobs) {
+    const took = seconds(job.started_at, job.completed_at);
+    const taskPoints: HistogramPoint[] =
+      took === undefined
+        ? []
+        : [
+            {
+              seconds: took,
+              start: ns(ms(job.started_at) ?? 0),
+              end: ns(ms(job.completed_at) ?? 0),
+              attributes: attrs({
+                'cicd.pipeline.task.name': job.name,
+                'cicd.pipeline.task.run.result':
+                  job.conclusion === null ? undefined : resultOf(job.conclusion),
+              }),
+            },
+          ];
+    const queued = seconds(job.created_at, job.started_at);
+    const queuePoints: HistogramPoint[] =
+      queued === undefined
+        ? []
+        : [
+            {
+              seconds: queued,
+              start: ns(ms(job.created_at) ?? 0),
+              end: ns(ms(job.started_at) ?? 0),
+              attributes: attrs({ 'cicd.pipeline.task.name': job.name }),
+            },
+          ];
+    jobMetrics.push({
+      job,
+      metrics: [
+        ...histogram('cicd.pipeline.task.run.duration', 'Duration of a job', taskPoints),
+        ...histogram('cicd.pipeline.task.run.queue.duration', 'Time a job waited for a runner', queuePoints),
+      ],
+    });
+  }
+
+  // A skipped job is not an error; a job without a conclusion has not finished.
+  const failed = jobs.filter(
+    (j) => j.conclusion !== null && j.conclusion !== 'success' && j.conclusion !== 'skipped',
+  );
+  const errorCounts = new Map<string, number>();
+  for (const j of failed)
+    errorCounts.set(j.conclusion as string, (errorCounts.get(j.conclusion as string) ?? 0) + 1);
+  if (errorCounts.size > 0) {
+    metrics.push({
+      name: 'cicd.pipeline.run.errors',
+      description: 'Jobs that ended in an error',
+      unit: '{error}',
+      sum: {
+        aggregationTemporality: DELTA,
+        isMonotonic: true,
+        dataPoints: [...errorCounts].map(([errorType, count]) => ({
+          startTimeUnixNano: time,
+          timeUnixNano: time,
+          asInt: String(count),
+          attributes: attrs({ 'cicd.pipeline.name': run.name, 'error.type': errorType }),
+        })),
+      },
+    });
+  }
+
+  const scoped = (r: Record<string, string>, m: object[]): object => ({
+    resource: { attributes: attrs(r) },
+    scopeMetrics: [{ scope: { name: 'otel-html-ci' }, metrics: m }],
+  });
+  return {
+    resourceMetrics: [
+      scoped(resource, metrics),
+      ...jobMetrics
+        .filter((g) => g.metrics.length > 0)
+        .map((g) => scoped(jobResource(run, g.job), g.metrics)),
+    ],
+  };
+}

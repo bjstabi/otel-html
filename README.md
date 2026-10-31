@@ -84,7 +84,9 @@ Everything before `--` is an `otel-html` flag: the `serve` flags (`-o`, `--host`
 | --- | --- |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | The receiver's `http://host:port`, or the gRPC address when the protocol is `grpc`. Kept if you already set it (a warning is printed, and the command will not send to this receiver). |
 | `OTEL_EXPORTER_OTLP_PROTOCOL` | Your value if set to `grpc`, `http/protobuf` or `http/json`, else `http/protobuf`. Any other value is a usage error, as is a protocol whose receiver is turned off. |
-| `TRACEPARENT` | `00-<trace id>-<root span id>-01`, always set, so the command's own spans become children of the root span. |
+| `TRACEPARENT` | `00-<trace id>-<root span id>-01`, always set to `run`'s own root span, so the command's own spans become its children (whatever `TRACEPARENT` `run` itself inherited). `TRACESTATE` passes through untouched. |
+
+`--traceparent <value>` (default `$TRACEPARENT`) makes the root span a child of that W3C trace context, so a `run` inside a traced CI job joins the job's trace instead of starting its own. An empty `TRACEPARENT` counts as unset. A malformed value (uppercase hex, a version other than `00`, all-zero ids) is a usage error (exit 2) that names where it came from, `--traceparent` or `TRACEPARENT`.
 
 The root span is named after the command's basename (`.exe` stripped), has kind `INTERNAL`, and runs from spawn to exit. Its attributes are `process.command_args` (the full command line), `process.executable.name`, `process.pid` and, when the command exited, `process.exit.code`. A non-zero exit sets the status to `ERROR` with `exit code N`; a command killed by a signal sets `ERROR` with `killed by SIGTERM` (for example) and has no exit code; a zero exit leaves the status unset. The resource comes from the OpenTelemetry environment (`OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES`), host and process detectors, and `service.name` defaults to the command's basename. The `process.*` resource attributes from the process detector describe `otel-html` itself, not the command.
 
@@ -94,7 +96,7 @@ The root span is named after the command's basename (`.exe` stripped), has kind 
 
 ### `merge <reports...>`
 
-Combines report folders into one, for example the reports of parallel CI jobs. It reads each report's data chunks, so it works across otel-html versions that share the report format version. A cumulative metric series that appears in two reports is two runs: the second report's stream starts from its own start time and is not counted as a counter reset.
+Combines report folders into one, for example the reports of parallel CI jobs. It reads each report's data chunks, so it works across otel-html versions (see [Report format compatibility](#report-format-compatibility)). A cumulative metric series that appears in two reports is two runs: the second report's stream starts from its own start time and is not counted as a counter reset.
 
 ```sh
 otel-html merge ./job-1 ./job-2 -o ./combined
@@ -305,6 +307,29 @@ Every data file is a classic script that registers its payload with a global, so
 - CI: upload the folder as a build artifact.
 
 The report is exercised from both `file://` and a static server in Chromium, Firefox and WebKit by the end-to-end tests.
+
+### This repo's CI
+
+This repo's CI reports on itself with `otel-html`. Every job in [ci.yml](.github/workflows/ci.yml) builds the CLI first, then uses it as the job's shell, so each `run:` step is a traced command:
+
+```yaml
+shell: node dist/cli/main.js run -o .otel-html/report -- bash --noprofile --norc -eo pipefail {0}
+```
+
+The `otel-html context` step ([scripts/ci-context.ts](scripts/ci-context.ts)) looks the job up in the Actions API and sets `TRACEPARENT` and the resource attributes for later steps. The trace id is derived from the run, and the span ids from the run and job, so the job reports nest under the run → job spans without the jobs talking to each other. If the job lookup fails, the job id falls back to a hash of its name (with a warning); matrix legs share a name, so set `OTEL_HTML_JOB_NAME` to give each its own. Each job uploads its `.otel-html/` folder as an `otel-html-*` artifact.
+
+When the `ci` workflow completes, [ci-report.yml](.github/workflows/ci-report.yml) runs [scripts/ci-report.ts](scripts/ci-report.ts) from `main`'s code, never the run's own, since the run may come from a fork. It writes the run → job spans from the Actions API, turns each job's log into log records, adds queue-time and duration metrics, and merges these with the job artifacts into one report, uploaded as `ci-run-report`. Run it by hand with `workflow_dispatch` and a `run_id` to rebuild a past run. The report opens on the [CI dashboard](.github/otel-html-ci.yaml): job duration, queue time, step counts, runs, and warnings and errors, with `run` and `job` variables. The run-level span lives on the run's own resource, so selecting a job in `job` hides it. The run key includes the run attempt, so after a partial re-run the artifacts of jobs that did not re-run (still attempt 1) show up as separate traces without a job span.
+
+Next milestones are a reusable action, so other repos can adopt this without copying scripts, and publishing the merged report to GitHub Pages.
+
+### Report format compatibility
+
+`data/` is the model; `assets/` and `index.html` are the viewer. The manifest's `formatVersion` (now 3) is bumped only for a change an older reader cannot read. This otel-html reads formats 1 to 3 (see [`src/format/version.ts`](src/format/version.ts)), and a reader fails fast on a version it does not know.
+
+- `merge` re-renders any readable report with the current viewer, so reports from different otel-html versions combine into one report in the current format.
+- `--append` needs the same otel-html version as the report it appends to.
+- A new viewer must read every version in `READABLE_FORMAT_VERSIONS`. Frozen format-1 and format-2 reports in `fixtures/reports/` are merged, and opened by the viewer's data layer, by the tests to hold that.
+- Maintainers: bumping `FORMAT_VERSION` adds a frozen report of the outgoing version to `fixtures/reports/` with its compat test, and a version leaves `READABLE_FORMAT_VERSIONS` only together with its fixture.
 
 ## Configuration
 

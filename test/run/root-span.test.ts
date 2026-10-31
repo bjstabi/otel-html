@@ -71,6 +71,17 @@ describe('rootSpanRequest', () => {
     ]);
   });
 
+  test('an inherited parent makes the root span a remote child', () => {
+    const parent = Uint8Array.from({ length: 8 }, (_, i) => 0x20 + i);
+    const span = spanOf({ ...input({ code: 0, signal: null }), parentSpanId: parent });
+    expect(span.parentSpanId).toEqual(parent);
+    expect(span.flags).toBe(0x301);
+  });
+
+  test('without a parent the span stays a local root', () => {
+    expect(spanOf(input({ code: 0, signal: null })).flags).toBe(0x101);
+  });
+
   test('a non-zero exit is an error naming the code', () => {
     const span = spanOf(input({ code: 3, signal: null }));
     expect(span.status?.code).toBe(Status_StatusCode.ERROR);
