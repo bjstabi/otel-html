@@ -80,6 +80,15 @@ describe('contextEnv', () => {
     expect(attrs?.startsWith('a=b,cicd.pipeline.name=ci')).toBe(true);
   });
 
+  test('drops existing pairs for keys we set; ours win', () => {
+    const attrs = contextEnv({
+      ...base,
+      existingResourceAttributes: 'a=b,cicd.pipeline.run.id=999,c=d',
+    }).OTEL_RESOURCE_ATTRIBUTES;
+    expect(attrs.startsWith('a=b,c=d,cicd.pipeline.name=ci')).toBe(true);
+    expect(attrs).not.toContain('999');
+  });
+
   test('a fallback job id hashes the name', () => {
     expect(contextEnv({ ...base, jobId: 'name:e2e' }).TRACEPARENT).toBe(
       jobTraceparent(runKey(base), 'name:e2e'),

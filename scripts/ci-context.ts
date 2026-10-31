@@ -27,6 +27,7 @@ async function fetchJobs(first: string, token: string): Promise<ApiJob[]> {
   while (next !== undefined) {
     const res = await fetch(next, {
       headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
+      signal: AbortSignal.timeout(10_000),
     });
     if (!res.ok) throw new Error(`${next} answered ${res.status}`);
     const body = (await res.json()) as { jobs?: ApiJob[] };
@@ -52,7 +53,7 @@ async function main(): Promise<void> {
   const apiName = jobs.find((j) => j.id === resolved.jobId)?.name;
   if (resolved.approximate) {
     warn(
-      `::warning::otel-html context: could not tell which job this is; using the name ${inputs.jobNameHint} for its span id`,
+      `::warning::otel-html context: could not tell which job this is; using the name ${inputs.jobNameHint} for its span id. Set OTEL_HTML_JOB_NAME to the job's display name (matrix legs share GITHUB_JOB, so their fallback ids would collide).`,
     );
   }
   const env = contextEnv({ ...inputs, jobName: apiName ?? inputs.jobNameHint, jobId: resolved.jobId });

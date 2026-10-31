@@ -68,10 +68,15 @@ export function contextEnv(i: ContextInputs): ContextEnv {
     ['vcs.repository.url.full', `${i.serverUrl}/${i.repository}`],
   ];
   const pairs = ours.map(([k, v]) => `${k}=${encodeValue(v)}`);
-  const existing = i.existingResourceAttributes?.trim();
+  const ourKeys = new Set(ours.map(([k]) => k));
+  const existing = (i.existingResourceAttributes ?? '')
+    .split(',')
+    .map((p) => p.trim())
+    .filter((p) => p !== '' && !ourKeys.has(p.split('=')[0]?.trim() ?? ''))
+    .join(',');
   return {
     TRACEPARENT: jobTraceparent(key, i.jobId),
-    OTEL_RESOURCE_ATTRIBUTES: [...(existing ? [existing] : []), ...pairs].join(','),
+    OTEL_RESOURCE_ATTRIBUTES: [...(existing === '' ? [] : [existing]), ...pairs].join(','),
     OTEL_SERVICE_NAME: `${i.workflow}/${i.jobName}`,
   };
 }
