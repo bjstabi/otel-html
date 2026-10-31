@@ -1,36 +1,18 @@
+import type { ApiJob } from './github-api.js';
 import { type JobId, jobTraceparent, runKey } from './ids.js';
-
-/** The subset of the Actions jobs API that the CI scripts read. */
-export type ApiStep = {
-  number: number;
-  name: string;
-  status: string;
-  conclusion: string | null;
-  started_at: string | null;
-  completed_at: string | null;
-};
-
-export type ApiJob = {
-  id: number;
-  name: string;
-  status: string;
-  runner_name: string | null;
-  conclusion: string | null;
-  started_at: string | null;
-  completed_at: string | null;
-  created_at: string;
-  html_url: string | null;
-  steps: ApiStep[];
-};
 
 export type ResolvedJob = { jobId: JobId; approximate: boolean };
 
 /**
- * Finds the job this script is running in: the one in-progress job on this runner. Zero or several matches cannot be
+ * Finds the job this script is running in: the one in-progress job on this runner (among several, the one named like
+ * the hint). Zero or several matches cannot be
  * told apart, so fall back to the name hash (`name:<hint>`), which the publisher derives the same way.
  */
 export function resolveJob(jobs: ApiJob[], runnerName: string, jobNameHint: string): ResolvedJob {
-  const matches = jobs.filter((j) => j.status === 'in_progress' && j.runner_name === runnerName);
+  const onRunner = jobs.filter((j) => j.status === 'in_progress' && j.runner_name === runnerName);
+  // A same-named runner can briefly host another job's tail; the hint is the job's display name or its matrix prefix.
+  const named = onRunner.filter((j) => j.name === jobNameHint || j.name.startsWith(`${jobNameHint} (`));
+  const matches = named.length > 0 ? named : onRunner;
   const [only] = matches;
   if (matches.length === 1 && only !== undefined) return { jobId: only.id, approximate: false };
   return { jobId: `name:${jobNameHint}`, approximate: true };
@@ -127,19 +109,6 @@ export function readInputs(env: Env): RawInputs {
     ...(existing === undefined ? {} : { existingResourceAttributes: existing }),
   };
 }
-
-/** The `rel="next"` target of an RFC 8288 `Link` header, if any. */
-export function parseNextLink(header: string | null): string | undefined {
-  if (header === null) return undefined;
-  for (const part of header.split(',')) {
-    const m = /^\s*<([^>]+)>\s*;(.*)$/.exec(part);
-    if (m?.[1] !== undefined && /;?\s*rel="?next"?/.test(`;${m[2]}`)) return m[1];
-  }
-  return undefined;
-}
-
-export const jobsUrl = (i: Pick<RawInputs, 'apiUrl' | 'repository' | 'runId' | 'runAttempt'>): string =>
-  `${i.apiUrl}/repos/${i.repository}/actions/runs/${i.runId}/attempts/${i.runAttempt}/jobs?per_page=100`;
 
 /** `KEY=value` lines for `$GITHUB_ENV`. A newline would start a second assignment, so it is flattened to a space. */
 export function envFileText(env: Readonly<Record<string, string>>): string {

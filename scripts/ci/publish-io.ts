@@ -1,7 +1,6 @@
-import type { ApiJob } from './context.js';
+import { type ApiJob, apiHeaders, messageOf } from './github-api.js';
 
 type Fetch = (url: string, init?: RequestInit) => Promise<Response>;
-const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 /**
  * The job's log text, or undefined (after `warn`) when it cannot be had. The API answers 302 to a signed URL; that
@@ -21,10 +20,7 @@ export async function fetchJobLog(i: {
   };
   try {
     let res = await i.fetch(`${i.apiUrl}/repos/${i.repository}/actions/jobs/${i.job.id}/logs`, {
-      headers: {
-        Accept: 'application/vnd.github+json',
-        ...(i.token === undefined ? {} : { Authorization: `Bearer ${i.token}` }),
-      },
+      headers: apiHeaders(i.token),
       redirect: 'manual',
       signal: AbortSignal.timeout(15_000),
     });

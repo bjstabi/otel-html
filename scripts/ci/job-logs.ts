@@ -1,4 +1,4 @@
-import type { ApiJob } from './context.js';
+import type { ApiJob } from './github-api.js';
 import { type JobId, jobSpanIdOf, stepSpanIdOf, traceIdOf } from './ids.js';
 import { type Attr, attrs, ms, ns } from './otlp.js';
 

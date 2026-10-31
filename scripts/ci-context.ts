@@ -1,14 +1,6 @@
 import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
-import {
-  type ApiJob,
-  contextEnv,
-  contextJson,
-  envFileText,
-  jobsUrl,
-  parseNextLink,
-  readInputs,
-  resolveJob,
-} from './ci/context.js';
+import { contextEnv, contextJson, envFileText, readInputs, resolveJob } from './ci/context.js';
+import { type ApiJob, fetchJobs, messageOf, warning } from './ci/github-api.js';
 
 /**
  * Job-side CI context: appends TRACEPARENT, OTEL_RESOURCE_ATTRIBUTES and OTEL_SERVICE_NAME to $GITHUB_ENV so later
@@ -17,43 +9,26 @@ import {
  *
  *   bun scripts/ci-context.ts
  */
-const warn = (message: string): void => {
-  process.stdout.write(`${message}\n`);
-};
-
-async function fetchJobs(first: string, token: string): Promise<ApiJob[]> {
-  const jobs: ApiJob[] = [];
-  let next: string | undefined = first;
-  while (next !== undefined) {
-    const res = await fetch(next, {
-      headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (!res.ok) throw new Error(`${next} answered ${res.status}`);
-    const body = (await res.json()) as { jobs?: ApiJob[] };
-    jobs.push(...(body.jobs ?? []));
-    next = parseNextLink(res.headers.get('link'));
-  }
-  return jobs;
-}
+const warn = (message: string): void => warning('context', message);
+const JOBS_TIMEOUT_MS = 10_000;
 
 async function main(): Promise<void> {
   const inputs = readInputs(process.env);
   let jobs: ApiJob[] = [];
   if (inputs.token === undefined) {
-    warn('::warning::otel-html context: GITHUB_TOKEN is not set; using the job name for the span id');
+    warn('GITHUB_TOKEN is not set; using the job name for the span id');
   } else {
     try {
-      jobs = await fetchJobs(jobsUrl(inputs), inputs.token);
+      jobs = await fetchJobs(inputs, inputs.token, JOBS_TIMEOUT_MS);
     } catch (e) {
-      warn(`::warning::otel-html context: ${e instanceof Error ? e.message : String(e)}`);
+      warn(messageOf(e));
     }
   }
   const resolved = resolveJob(jobs, inputs.runnerName, inputs.jobNameHint);
   const apiName = jobs.find((j) => j.id === resolved.jobId)?.name;
   if (resolved.approximate) {
     warn(
-      `::warning::otel-html context: could not tell which job this is; using the name ${inputs.jobNameHint} for its span id. Set OTEL_HTML_JOB_NAME to the job's display name (matrix legs share GITHUB_JOB, so their fallback ids would collide).`,
+      `could not tell which job this is; using the name ${inputs.jobNameHint} for its span id. Set OTEL_HTML_JOB_NAME to the job's display name (matrix legs share GITHUB_JOB, so their fallback ids would collide).`,
     );
   }
   const env = contextEnv({ ...inputs, jobName: apiName ?? inputs.jobNameHint, jobId: resolved.jobId });
@@ -63,5 +38,5 @@ async function main(): Promise<void> {
 }
 
 main().catch((e: unknown) => {
-  warn(`::warning::otel-html context: ${e instanceof Error ? e.message : String(e)}`);
+  warn(messageOf(e));
 });

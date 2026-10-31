@@ -1,5 +1,5 @@
 import { parseArgs } from 'node:util';
-import type { ApiJob } from './context.js';
+import type { ApiJob } from './github-api.js';
 import type { JobId } from './ids.js';
 
 export type PublishOptions = {

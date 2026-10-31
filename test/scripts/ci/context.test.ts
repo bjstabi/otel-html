@@ -1,14 +1,6 @@
 import { describe, expect, test } from 'vitest';
-import {
-  type ApiJob,
-  contextEnv,
-  contextJson,
-  envFileText,
-  jobsUrl,
-  parseNextLink,
-  readInputs,
-  resolveJob,
-} from '../../../scripts/ci/context.js';
+import { contextEnv, contextJson, envFileText, readInputs, resolveJob } from '../../../scripts/ci/context.js';
+import type { ApiJob } from '../../../scripts/ci/github-api.js';
 import { jobTraceparent, runKey } from '../../../scripts/ci/ids.js';
 
 const job = (id: number, over: Partial<ApiJob> = {}): ApiJob => ({
@@ -33,6 +25,22 @@ describe('resolveJob', () => {
 
   test('two in-progress jobs on one runner name fall back to the name hash', () => {
     expect(resolveJob([job(1), job(2)], 'runner-1', 'e2e')).toEqual({ jobId: 'name:e2e', approximate: true });
+  });
+
+  test('among several in-progress jobs on one runner, the one named like the hint wins', () => {
+    const jobs = [
+      job(1, { name: 'build' }),
+      job(2, { name: 'e2e (webkit)' }),
+      job(3, { name: 'e2e (firefox)' }),
+    ];
+    expect(resolveJob(jobs, 'runner-1', 'e2e (webkit)')).toEqual({ jobId: 2, approximate: false });
+    expect(
+      resolveJob([job(1, { name: 'build' }), job(2, { name: 'e2e (webkit)' })], 'runner-1', 'e2e'),
+    ).toEqual({
+      jobId: 2,
+      approximate: false,
+    });
+    expect(resolveJob(jobs, 'runner-1', 'e2e')).toEqual({ jobId: 'name:e2e', approximate: true });
   });
 
   test('no match falls back to the name hash', () => {
@@ -132,21 +140,6 @@ describe('readInputs', () => {
   test('names the missing or malformed variable', () => {
     expect(() => readInputs({ ...env, GITHUB_SHA: undefined })).toThrow('GITHUB_SHA is not set');
     expect(() => readInputs({ ...env, GITHUB_RUN_ID: 'x' })).toThrow('GITHUB_RUN_ID is not a number');
-  });
-});
-
-describe('jobs API plumbing', () => {
-  test('jobsUrl names the attempt', () => {
-    expect(jobsUrl({ apiUrl: 'https://api.github.com', repository: 'o/r', runId: 1, runAttempt: 2 })).toBe(
-      'https://api.github.com/repos/o/r/actions/runs/1/attempts/2/jobs?per_page=100',
-    );
-  });
-
-  test('parseNextLink finds rel="next"', () => {
-    const h = '<https://api.github.com/x?page=2>; rel="next", <https://api.github.com/x?page=5>; rel="last"';
-    expect(parseNextLink(h)).toBe('https://api.github.com/x?page=2');
-    expect(parseNextLink('<https://api.github.com/x?page=1>; rel="prev"')).toBeUndefined();
-    expect(parseNextLink(null)).toBeUndefined();
   });
 });
 

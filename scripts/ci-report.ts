@@ -4,14 +4,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { merge } from '../src/api/convert.js';
 import { Report } from '../src/api/report.js';
-import { type ApiJob, parseNextLink } from './ci/context.js';
+import { type ApiRun, fetchJobs, getJson, messageOf, say, warning } from './ci/github-api.js';
 import { runKey } from './ci/ids.js';
 import { jobLogRecordsRequest } from './ci/job-logs.js';
 import { ciMetricsRequest } from './ci/metrics.js';
 import { approximateJobs, jobIdFor, parseJobContext, parsePublishArgs } from './ci/publish.js';
 import { fetchJobLog, mergeSkippingBad } from './ci/publish-io.js';
 import { summaryTable } from './ci/summary.js';
-import { type ApiRun, ciResource, jobResource, workflowTraceRequest } from './ci/workflow-trace.js';
+import { ciResource, jobResource, workflowTraceRequest } from './ci/workflow-trace.js';
 
 /**
  * Publisher: after the `ci` workflow completes, builds the workflow-trace report from the Actions API, merges it with
@@ -19,39 +19,13 @@ import { type ApiRun, ciResource, jobResource, workflowTraceRequest } from './ci
  *
  *   bun scripts/ci-report.ts --run-id <n> --repository <owner/repo> --artifacts <dir> --out <dir> [--config <file>]
  */
-const say = (message: string): void => {
-  process.stdout.write(`${message}\n`);
-};
-const warn = (message: string): void => say(`::warning::otel-html report: ${message.replace(/\r?\n/g, ' ')}`);
-const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+const warn = (message: string): void => warning('report', message);
 
 const envVar = (name: string): string | undefined => process.env[name] || undefined;
 
 const API = envVar('GITHUB_API_URL') ?? 'https://api.github.com';
 const LOG_CONCURRENCY = 4;
-
-const headers = (token: string | undefined): Record<string, string> => ({
-  Accept: 'application/vnd.github+json',
-  ...(token === undefined ? {} : { Authorization: `Bearer ${token}` }),
-});
-
-async function getJson<T>(url: string, token: string | undefined): Promise<{ body: T; link: string | null }> {
-  const res = await fetch(url, { headers: headers(token), signal: AbortSignal.timeout(15_000) });
-  if (!res.ok) throw new Error(`${url} answered ${res.status}`);
-  return { body: (await res.json()) as T, link: res.headers.get('link') };
-}
-
-async function fetchJobs(run: ApiRun, repository: string, token: string | undefined): Promise<ApiJob[]> {
-  const jobs: ApiJob[] = [];
-  let next: string | undefined =
-    `${API}/repos/${repository}/actions/runs/${run.id}/attempts/${run.run_attempt}/jobs?per_page=100`;
-  while (next !== undefined) {
-    const page: { body: { jobs?: ApiJob[] }; link: string | null } = await getJson(next, token);
-    jobs.push(...(page.body.jobs ?? []));
-    next = parseNextLink(page.link);
-  }
-  return jobs;
-}
+const API_TIMEOUT_MS = 15_000;
 
 async function mapLimited<T, R>(
   items: readonly T[],
@@ -95,9 +69,14 @@ async function main(): Promise<number> {
   const token = envVar('GITHUB_TOKEN');
   const config = opts.config === undefined ? {} : { config: opts.config };
 
-  const run = (await getJson<ApiRun>(`${API}/repos/${opts.repository}/actions/runs/${opts.runId}`, token))
-    .body;
-  const jobs = await fetchJobs(run, opts.repository, token);
+  const run = (
+    await getJson<ApiRun>(`${API}/repos/${opts.repository}/actions/runs/${opts.runId}`, token, API_TIMEOUT_MS)
+  ).body;
+  const jobs = await fetchJobs(
+    { apiUrl: API, repository: opts.repository, runId: run.id, runAttempt: run.run_attempt },
+    token,
+    API_TIMEOUT_MS,
+  );
   const artifacts = await discoverArtifacts(opts.artifacts).catch((e: unknown) => {
     warn(`cannot read ${opts.artifacts}: ${messageOf(e)}`);
     return [] as Artifact[];
@@ -106,7 +85,7 @@ async function main(): Promise<number> {
     jobs,
     artifacts.map((a) => a.context),
   );
-  const key = runKey({ repository: opts.repository, runId: run.id, runAttempt: run.run_attempt });
+  const key = runKey({ repository: run.repository.full_name, runId: run.id, runAttempt: run.run_attempt });
   const resource = ciResource(run);
 
   const logs = await mapLimited(jobs, LOG_CONCURRENCY, (job) =>
@@ -122,7 +101,7 @@ async function main(): Promise<number> {
       replace: true,
       ...config,
     });
-    await trace.addSpans(workflowTraceRequest(run, jobs, approximate));
+    await trace.addSpans(workflowTraceRequest(key, run, jobs, approximate));
     for (const [i, job] of jobs.entries()) {
       const text = logs[i];
       if (text === undefined) continue;

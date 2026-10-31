@@ -1,14 +1,9 @@
 import { expect, test } from 'vitest';
-import type { ApiJob } from '../../../scripts/ci/context.js';
+import type { ApiJob, ApiRun } from '../../../scripts/ci/github-api.js';
 import { runKey } from '../../../scripts/ci/ids.js';
 import { jobLogRecordsRequest } from '../../../scripts/ci/job-logs.js';
 import { ciMetricsRequest } from '../../../scripts/ci/metrics.js';
-import {
-  type ApiRun,
-  ciResource,
-  jobResource,
-  workflowTraceRequest,
-} from '../../../scripts/ci/workflow-trace.js';
+import { ciResource, jobResource, workflowTraceRequest } from '../../../scripts/ci/workflow-trace.js';
 import { merge } from '../../../src/api/convert.js';
 import { Report } from '../../../src/api/report.js';
 import { createTestWriter } from '../../../test-support/writer-deps.js';
@@ -57,7 +52,7 @@ test('the workflow-trace report merges with a job report and keeps spans, logs a
   const resource = ciResource(run);
 
   const trace = await Report.create({ out: 'trace', replace: true }, w.deps);
-  await trace.addSpans(workflowTraceRequest(run, [job], new Set()));
+  await trace.addSpans(workflowTraceRequest(key, run, [job], new Set()));
   const text = '2026-01-01T00:00:11.0000000Z ##[group]Run tests\n2026-01-01T00:00:12.0000000Z hello\n';
   await trace.addLogs(jobLogRecordsRequest({ key, jobId: 7, job, text, resource: jobResource(run, job) }));
   await trace.addMetrics(ciMetricsRequest(run, [job], resource));

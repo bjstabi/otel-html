@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import type { ApiJob, ApiStep } from '../../../scripts/ci/context.js';
+import type { ApiJob, ApiStep } from '../../../scripts/ci/github-api.js';
 import { jobSpanIdOf, runKey, stepSpanIdOf, traceIdOf } from '../../../scripts/ci/ids.js';
 import { jobLogRecordsRequest } from '../../../scripts/ci/job-logs.js';
 import { parseOtlpObject } from '../../../src/model/otlp-json.js';

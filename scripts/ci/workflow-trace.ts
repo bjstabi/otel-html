@@ -1,23 +1,6 @@
-import type { ApiJob, ApiStep } from './context.js';
-import { jobSpanIdOf, runKey, runSpanIdOf, stepSpanIdOf, traceIdOf } from './ids.js';
+import type { ApiJob, ApiRun, ApiStep } from './github-api.js';
+import { jobSpanIdOf, runSpanIdOf, stepSpanIdOf, traceIdOf } from './ids.js';
 import { type Attr, attrs, ms, ns, resultOf } from './otlp.js';
-
-/** The subset of the Actions run API that the CI scripts read. */
-export type ApiRun = {
-  id: number;
-  run_attempt: number;
-  name: string;
-  event: string;
-  status: string;
-  conclusion: string | null;
-  created_at: string;
-  run_started_at: string | null;
-  updated_at: string;
-  html_url: string;
-  head_branch: string | null;
-  head_sha: string;
-  repository: { full_name: string; html_url: string };
-};
 
 /** The resource attributes every CI record carries, plus the service identity of the workflow run. */
 export function ciResource(run: ApiRun): Record<string, string> {
@@ -62,8 +45,13 @@ type SpanInput = {
   status?: Status | undefined;
 };
 
-export function workflowTraceRequest(run: ApiRun, jobs: ApiJob[], approximate: ReadonlySet<number>): object {
-  const key = runKey({ repository: run.repository.full_name, runId: run.id, runAttempt: run.run_attempt });
+/** `key` is the run key (`runKey`) every record of the run, logs included, derives its ids from. */
+export function workflowTraceRequest(
+  key: string,
+  run: ApiRun,
+  jobs: ApiJob[],
+  approximate: ReadonlySet<number>,
+): object {
   const traceId = traceIdOf(key);
   const runSpanId = runSpanIdOf(key);
 
@@ -189,7 +177,7 @@ function stepSpan(
     kind: SPAN_KIND_INTERNAL,
     start,
     end: Math.max(start, ms(step.completed_at) ?? jobEnd),
-    attributes: attrs({ 'cicd.pipeline.task.name': step.name, 'github.job.step.number': step.number }),
+    attributes: attrs({ 'github.job.step.name': step.name, 'github.job.step.number': step.number }),
     status: statusOf(step.conclusion),
   };
 }

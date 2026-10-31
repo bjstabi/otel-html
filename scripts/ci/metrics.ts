@@ -1,6 +1,6 @@
-import type { ApiJob } from './context.js';
-import { type Attr, attrs, ms, ns, resultOf } from './otlp.js';
-import { type ApiRun, jobResource } from './workflow-trace.js';
+import type { ApiJob, ApiRun } from './github-api.js';
+import { type Attr, attrs, ms, ns, resultOf, seconds } from './otlp.js';
+import { jobResource } from './workflow-trace.js';
 
 const BOUNDS = [1, 5, 10, 30, 60, 120, 300, 600, 1200, 1800, 3600];
 const DELTA = 1;
@@ -37,13 +37,6 @@ function histogram(name: string, description: string, points: HistogramPoint[]):
       },
     },
   ];
-}
-
-/** Seconds between two API timestamps; undefined when either is absent or unparsable, never negative. */
-function seconds(from: string | null, to: string | null): number | undefined {
-  const a = ms(from);
-  const b = ms(to);
-  return a === undefined || b === undefined ? undefined : Math.max(0, b - a) / 1000;
 }
 
 export function ciMetricsRequest(run: ApiRun, jobs: ApiJob[], resource: Record<string, string>): object {
@@ -111,7 +104,10 @@ export function ciMetricsRequest(run: ApiRun, jobs: ApiJob[], resource: Record<s
   const failed = jobs.filter(
     (j) => j.conclusion !== null && j.conclusion !== 'success' && j.conclusion !== 'skipped',
   );
-  if (failed.length > 0) {
+  const errorCounts = new Map<string, number>();
+  for (const j of failed)
+    errorCounts.set(j.conclusion as string, (errorCounts.get(j.conclusion as string) ?? 0) + 1);
+  if (errorCounts.size > 0) {
     metrics.push({
       name: 'cicd.pipeline.run.errors',
       description: 'Jobs that ended in an error',
@@ -119,11 +115,11 @@ export function ciMetricsRequest(run: ApiRun, jobs: ApiJob[], resource: Record<s
       sum: {
         aggregationTemporality: DELTA,
         isMonotonic: true,
-        dataPoints: failed.map((j) => ({
+        dataPoints: [...errorCounts].map(([errorType, count]) => ({
           startTimeUnixNano: time,
           timeUnixNano: time,
-          asInt: '1',
-          attributes: attrs({ 'cicd.pipeline.name': run.name, 'error.type': j.conclusion }),
+          asInt: String(count),
+          attributes: attrs({ 'cicd.pipeline.name': run.name, 'error.type': errorType }),
         })),
       },
     });

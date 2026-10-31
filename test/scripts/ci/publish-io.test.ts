@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from 'vitest';
-import type { ApiJob } from '../../../scripts/ci/context.js';
+import type { ApiJob } from '../../../scripts/ci/github-api.js';
 import { fetchJobLog, mergeSkippingBad } from '../../../scripts/ci/publish-io.js';
 
 const job = { id: 7, name: 'build' } as ApiJob;

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import type { ApiJob } from '../../../scripts/ci/context.js';
+import type { ApiJob } from '../../../scripts/ci/github-api.js';
 import { approximateJobs, jobIdFor, parseJobContext, parsePublishArgs } from '../../../scripts/ci/publish.js';
 
 const j = (id: number, name = `job${id}`): ApiJob => ({ id, name }) as ApiJob;

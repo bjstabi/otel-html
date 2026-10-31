@@ -1,7 +1,6 @@
 import { describe, expect, test } from 'vitest';
-import type { ApiJob } from '../../../scripts/ci/context.js';
+import type { ApiJob, ApiRun } from '../../../scripts/ci/github-api.js';
 import { ciMetricsRequest } from '../../../scripts/ci/metrics.js';
-import type { ApiRun } from '../../../scripts/ci/workflow-trace.js';
 import { parseOtlpObject } from '../../../src/model/otlp-json.js';
 
 const run: ApiRun = {
@@ -118,12 +117,13 @@ describe('ciMetricsRequest', () => {
     expect(named(skipped, 'cicd.pipeline.run.errors')).toBeUndefined();
   });
 
-  test('the errors sum has a point per failed job', () => {
+  test('the errors sum has one point per error type with its count', () => {
     const ms = metrics({ ...run, conclusion: 'failure' }, [
       job(1, 'a', 'success'),
       job(2, 'b', 'failure'),
       job(3, 'c', 'cancelled'),
       job(4, 'd', null),
+      job(5, 'e', 'failure'),
     ]);
     const sum = named(ms, 'cicd.pipeline.run.errors')?.sum;
     expect(sum?.isMonotonic).toBe(true);
@@ -131,7 +131,7 @@ describe('ciMetricsRequest', () => {
     expect(
       sum?.dataPoints.map((p) => [p.asInt, attr(p, 'error.type'), attr(p, 'cicd.pipeline.name')]),
     ).toEqual([
-      ['1', 'failure', 'ci'],
+      ['2', 'failure', 'ci'],
       ['1', 'cancelled', 'ci'],
     ]);
     const [r] = named(ms, 'cicd.pipeline.run.duration')?.histogram?.dataPoints ?? [];

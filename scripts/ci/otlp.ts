@@ -36,5 +36,12 @@ export function ms(s: string | null | undefined): number | undefined {
   return Number.isNaN(t) ? undefined : t;
 }
 
+/** Seconds between two API timestamps; undefined when either is absent or unparsable, never negative. */
+export function seconds(from: string | null | undefined, to: string | null | undefined): number | undefined {
+  const a = ms(from);
+  const b = ms(to);
+  return a === undefined || b === undefined ? undefined : Math.max(0, b - a) / 1000;
+}
+
 /** Nanosecond string of epoch milliseconds. */
 export const ns = (t: number): string => (BigInt(t) * 1_000_000n).toString();

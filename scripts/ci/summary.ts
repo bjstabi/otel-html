@@ -1,5 +1,5 @@
-import type { ApiJob } from './context.js';
-import type { ApiRun } from './workflow-trace.js';
+import type { ApiJob, ApiRun } from './github-api.js';
+import { seconds } from './otlp.js';
 
 /** `12s`, `1m 23s`, `4m 05s`, `1h 02m 03s`. */
 export function formatDuration(totalSeconds: number): string {
@@ -14,10 +14,8 @@ export function formatDuration(totalSeconds: number): string {
 }
 
 const secondsBetween = (from: string | null, to: string | null): string => {
-  if (from === null || to === null) return '–';
-  const a = Date.parse(from);
-  const b = Date.parse(to);
-  return Number.isNaN(a) || Number.isNaN(b) ? '–' : formatDuration((b - a) / 1000);
+  const s = seconds(from, to);
+  return s === undefined ? '–' : formatDuration(s);
 };
 
 const cell = (s: string): string => s.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
