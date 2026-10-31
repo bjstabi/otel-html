@@ -1,7 +1,7 @@
 import { type JobId, jobTraceparent, runKey } from './ids.js';
 
 /** The subset of the Actions jobs API that the CI scripts read. */
-type ApiStep = {
+export type ApiStep = {
   number: number;
   name: string;
   status: string;
