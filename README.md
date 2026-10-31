@@ -433,6 +433,7 @@ jobs:
   deploy:
     needs: [report, cleanup]
     # The github-pages environment accepts the default branch only; a pull request the site never had deploys nothing.
+    # Closing a pull request into another branch updates gh-pages, and the next report's deploy ships it.
     if: >-
       !cancelled() && github.ref_name == github.event.repository.default_branch &&
       (needs.report.outputs.published == 'true' || needs.cleanup.outputs.cleaned == 'true')
