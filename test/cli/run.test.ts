@@ -149,6 +149,53 @@ afterEach(async () => {
 });
 
 describe('run', () => {
+  test('TRACEPARENT in the environment is inherited: same trace id, root parented under it', async () => {
+    const w = createTestWriter();
+    const h = start(w, ['run', '-o', 'out', ...node, '0'], {
+      TRACEPARENT: '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01',
+    });
+    open.push(h);
+    expect(await h.result).toBe(0);
+    const { spans } = chunkOf(w);
+    const root = spans.find((s) => s.name === 'node');
+    const child = spans.find((s) => s.name === 'child-work');
+    expect(root?.traceId).toBe('0af7651916cd43dd8448eb211c80319c');
+    expect(root?.parentSpanId).toBe('b7ad6b7169203331');
+    expect(child?.traceId).toBe('0af7651916cd43dd8448eb211c80319c');
+    expect(child?.parentSpanId).toBe(root?.spanId);
+  });
+
+  test('--traceparent wins over the variable', async () => {
+    const w = createTestWriter();
+    const h = start(
+      w,
+      ['run', '-o', 'out', '--traceparent', `00-${'1'.repeat(32)}-${'2'.repeat(16)}-01`, ...node, '0'],
+      {
+        TRACEPARENT: '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01',
+      },
+    );
+    open.push(h);
+    expect(await h.result).toBe(0);
+    const root = chunkOf(w).spans.find((s) => s.name === 'node');
+    expect(root?.traceId).toBe('1'.repeat(32));
+    expect(root?.parentSpanId).toBe('2'.repeat(16));
+  });
+
+  test.each([
+    ['uppercase hex', '00-0AF7651916CD43DD8448EB211C80319C-b7ad6b7169203331-01'],
+    ['another version', '01-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01'],
+    ['all-zero ids', `00-${'0'.repeat(32)}-${'0'.repeat(16)}-01`],
+    ['not a traceparent', 'nope'],
+  ])('a malformed TRACEPARENT (%s) is a usage error before the child starts', async (_name, value) => {
+    const w = createTestWriter();
+    const h = start(w, ['run', '-o', 'out', ...node, '0'], { TRACEPARENT: value });
+    open.push(h);
+    expect(await h.result).toBe(2);
+    expect(h.stderr).toContain('TRACEPARENT');
+    expect(h.child).toBe('');
+    expect(await w.fs.exists('out/data/manifest.js')).toBe(false);
+  });
+
   test('wraps a child that exits 0: two spans in one trace, the child under the root', async () => {
     const w = createTestWriter();
     const h = start(w, ['run', '-o', 'out', ...node, '0']);

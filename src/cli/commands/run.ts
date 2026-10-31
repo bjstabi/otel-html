@@ -7,6 +7,7 @@ import { parseUnixNanos, type UnixNanos } from '../../model/ids.js';
 import { checkedProtocol, childEnvironment } from '../../run/child-env.js';
 import { detectRunResource } from '../../run/resource.js';
 import { type ChildExit, exitCodeOf, rootSpanRequest, traceparentOf } from '../../run/root-span.js';
+import { parseTraceparent } from '../../run/traceparent.js';
 import type { CliIo } from '../io.js';
 import { type CliDeps, CliExit } from '../program.js';
 import { addReceiverOptions, finishReceiver, openReceiver, type ReceiveFlags } from './receive.js';
@@ -16,10 +17,20 @@ const TRACE_ID_BYTES = 16;
 const SPAN_ID_BYTES = 8;
 const MS_TO_NS = 1_000_000n;
 
-const randomIds = (): { traceId: Uint8Array; spanId: Uint8Array } => ({
-  traceId: randomBytes(TRACE_ID_BYTES),
-  spanId: randomBytes(SPAN_ID_BYTES),
-});
+interface RunIds {
+  traceId: Uint8Array;
+  spanId: Uint8Array;
+  /** The inherited parent's span id; undefined when this run starts a fresh trace. */
+  parentSpanId?: Uint8Array;
+}
+
+/** The trace this run joins (the flag, else $TRACEPARENT) with a fresh span id for its root, or fresh random ids. */
+function idsOf(inherited: string | undefined): RunIds {
+  const spanId = randomBytes(SPAN_ID_BYTES);
+  if (inherited === undefined) return { traceId: randomBytes(TRACE_ID_BYTES), spanId };
+  const { traceId, spanId: parentSpanId } = parseTraceparent(inherited);
+  return { traceId, spanId, parentSpanId };
+}
 
 // Wall-clock time, not the writer's clock: the root span must sit on the same timeline as the child's own spans.
 const wallClockNow = (): UnixNanos => parseUnixNanos(BigInt(Date.now()) * MS_TO_NS, 'now');
@@ -35,6 +46,8 @@ function exitOf(child: ChildProcess, command: string): Promise<ChildExit> {
   });
 }
 
+type RunFlags = ReceiveFlags & { traceparent?: string };
+
 export function addRunCommand(program: Command, io: CliIo, deps: CliDeps): void {
   const command = program
     .command('run')
@@ -43,11 +56,15 @@ export function addRunCommand(program: Command, io: CliIo, deps: CliDeps): void 
     .passThroughOptions()
     .requiredOption('-o, --out <dir>', 'report folder')
     .option('--config <file>', 'config file (default: $OTEL_HTML_CONFIG or ./otel-html.yaml)')
-    .option('--title <title>', 'report title');
-  addReceiverOptions(addReportModeOptions(command)).action(async (argv: string[], flags: ReceiveFlags) => {
+    .option('--title <title>', 'report title')
+    .option('--traceparent <value>', 'join this W3C trace context (default: $TRACEPARENT)');
+  addReceiverOptions(addReportModeOptions(command)).action(async (argv: string[], flags: RunFlags) => {
     const [executable, ...args] = argv;
     if (executable === undefined || executable === '')
       throw new OtelHtmlError('usage', { message: 'no command to run' });
+    // A malformed context fails before anything is created, bound or spawned.
+    const { TRACEPARENT: inheritedTraceparent } = io.env;
+    const { traceId, spanId, parentSpanId } = idsOf(flags.traceparent ?? inheritedTraceparent);
     // Before the receiver opens: once it has returned, only `run`'s own forwarder handles a stop signal, and that is
     // installed after the child starts, so a slow async detector here would leave a window with the lock taken.
     const resource = await detectRunResource(argv);
@@ -66,7 +83,6 @@ export function addRunCommand(program: Command, io: CliIo, deps: CliDeps): void 
       throw e;
     };
 
-    const { traceId, spanId } = randomIds();
     let env: Record<string, string | undefined>;
     try {
       env = childEnvironment({
@@ -114,6 +130,7 @@ export function addRunCommand(program: Command, io: CliIo, deps: CliDeps): void 
           rootSpanRequest({
             traceId,
             spanId,
+            ...(parentSpanId === undefined ? {} : { parentSpanId }),
             command: argv,
             pid: child.pid ?? 0,
             start,
