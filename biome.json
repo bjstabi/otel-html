@@ -13,7 +13,6 @@
       "!node_modules",
       "!dist",
       "!e2e/.reports",
-      "!ci-report",
       "!.otel-html",
       "!e2e/.cache",
       "!test-results",
