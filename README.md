@@ -471,6 +471,8 @@ Pages setup: Settings, Pages, Source: GitHub Actions (`build_type: workflow`), a
 
 A private repository's Pages site is public unless the organization has Pages access control (GitHub Enterprise Cloud). The reports carry the CI logs, job names and pull request titles, so publishing them makes those public; the action warns when it publishes from a private repository. Use `target: artifact` to keep the reports in the run's artifacts instead.
 
+Nothing in a report is redacted. The job logs come from the Actions API, where GitHub has already masked the secrets it knows about; the jobs' own telemetry (what the commands under `otel-html run` export) is published as sent, so keep secrets out of the spans, logs and metrics your jobs emit.
+
 Publish inputs:
 
 | Input | Default | |
