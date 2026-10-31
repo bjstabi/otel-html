@@ -114,6 +114,11 @@ export function applyRetention(
   return { index: { ...index, channels }, remove };
 }
 
+/** The channel's report paths (site-relative), oldest first: the order the rolling report merges them in. */
+export function rollingInputs(channel: Channel): string[] {
+  return channel.runs.map((r) => r.reportPath).reverse();
+}
+
 /** `index` without channel `key`, and its report paths; a missing key changes nothing. */
 export function removeChannel(index: SiteIndex, key: string): { index: SiteIndex; remove: string[] } {
   const ch = index.channels[key];

@@ -45,6 +45,7 @@ interface SiteFlags {
   baseUrl: string;
   retention: string;
   prRetention: string;
+  config?: string;
 }
 
 interface LinkFlags {
@@ -106,6 +107,7 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
     .requiredOption('--base-url <url>', "the site's public URL")
     .option('--retention <n>', 'runs kept per workflow channel', '30')
     .option('--pr-retention <n>', 'runs kept per pull request channel', '5')
+    .option('--config <file>', "dashboard config file for the workflow channel's rolling report")
     .action(async (flags: SiteFlags) => {
       const opts = {
         site: flags.site,
@@ -115,9 +117,10 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
         baseUrl: flags.baseUrl,
         retention: parsePositive('--retention', flags.retention),
         prRetention: parsePositive('--pr-retention', flags.prRetention),
+        ...(flags.config === undefined ? {} : { config: flags.config }),
       };
       try {
-        await runSite(opts, io);
+        await runSite(opts, io, await resolveDeps(deps));
       } catch (e) {
         say(io, `::error::otel-html site: ${messageOf(e)}`);
         throw new CliExit(1);

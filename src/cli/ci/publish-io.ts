@@ -1,3 +1,5 @@
+import { merge } from '../../api/convert.js';
+import type { ReportSummary, WriterDeps } from '../../writer/session.js';
 import { type ApiJob, apiHeaders, messageOf } from './github-api.js';
 
 type Fetch = (url: string, init?: RequestInit) => Promise<Response>;
@@ -72,4 +74,16 @@ export async function mergeSkippingBad<S>(i: {
     const inputs = all.filter((d) => !bad.includes(d));
     return { summary: await i.merge(inputs, i.out, false), inputs };
   }
+}
+
+/**
+ * The `merge` callback `mergeSkippingBad` wants: the library merge over `deps`, replacing `out`, with the dashboard
+ * `config` file (a path) except for single-report readability probes.
+ */
+export function mergeWithConfig(
+  deps: WriterDeps,
+  config: string | undefined,
+): (inputs: string[], out: string, probe: boolean) => Promise<ReportSummary> {
+  const extra = config === undefined ? {} : { config };
+  return (inputs, out, probe) => merge({ inputs, out, replace: true, ...(probe ? {} : extra) }, deps);
 }

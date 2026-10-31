@@ -8,6 +8,7 @@ import {
   renderLanding,
   renderRedirect,
   reportUrl,
+  rollingInputs,
   type SiteIndex,
   type SiteRun,
   siteIndexSchema,
@@ -149,4 +150,20 @@ test('slug and reportUrl', () => {
   expect(slug('ci')).toBe('ci');
   expect(slug('Perf / Load')).toBe('perf-load');
   expect(reportUrl('https://o.github.io/r', 'ci/runs/1')).toBe('https://o.github.io/r/ci/runs/1/');
+});
+
+test('rollingInputs lists the report paths oldest first', () => {
+  const r = (runId: number): SiteRun => ({
+    runId,
+    attempt: 1,
+    conclusion: 'success',
+    headSha: 'a',
+    headBranch: 'main',
+    completedAt: '2026-01-01T00:00:00Z',
+    runUrl: 'u',
+    reportPath: `ci/runs/${runId}`,
+  });
+  const channel = { kind: 'workflow' as const, title: 'ci', headBranch: 'main', runs: [r(3), r(2), r(1)] };
+  expect(rollingInputs(channel)).toEqual(['ci/runs/1', 'ci/runs/2', 'ci/runs/3']);
+  expect(channel.runs.map((x) => x.runId)).toEqual([3, 2, 1]);
 });

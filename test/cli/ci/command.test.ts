@@ -1,9 +1,15 @@
 import { spawn } from 'node:child_process';
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { Report } from '../../../src/api/report.js';
 import { runCli } from '../../../src/cli/program.js';
+import { reviveDataJson, unwrapDataFile } from '../../../src/format/data-file.js';
+import { parseManifest } from '../../../src/format/manifest.js';
+import { MANIFEST_KEY } from '../../../src/format/paths.js';
+import { createNodeFileSystem } from '../../../src/writer/node-fs.js';
+import { span, traceRequest } from '../../../test-support/otlp-builders.js';
 import { createTestWriter } from '../../../test-support/writer-deps.js';
 
 function fakeIo(env: Record<string, string | undefined> = {}): {
@@ -32,6 +38,8 @@ function fakeIo(env: Record<string, string | undefined> = {}): {
 }
 
 const deps = createTestWriter().deps;
+// merges read and write real report folders
+const realFsDeps = { ...deps, fs: createNodeFileSystem() };
 const REPORT = ['--repository', 'o/r', '--artifacts', 'a', '--out', 'o'];
 
 describe('otel-html ci report arguments', () => {
@@ -167,17 +175,68 @@ describe('otel-html ci site and cleanup', () => {
     const out = join(dir, 'gh-output');
     writeFileSync(out, '');
     const f = fakeIo({ GITHUB_OUTPUT: out });
-    expect(await runCli(siteArgs(42), f.io, deps)).toBe(0);
+    expect(await runCli(siteArgs(42), f.io, realFsDeps)).toBe(0);
     expect(existsSync(join(site, 'ci/runs/42/data/manifest.js'))).toBe(true);
-    expect(readFileSync(join(site, 'ci/index.html'), 'utf8')).toContain('url=runs/42/');
+    expect(existsSync(join(site, 'ci/data/manifest.js'))).toBe(true);
     expect(f.out()).toContain('report-url=https://x.test/otel-html/ci/runs/42/');
     expect(readFileSync(out, 'utf8')).toContain('channel=ci\n');
     expect(readFileSync(out, 'utf8')).toContain('published=true\n');
 
-    expect(await runCli(siteArgs(43, ['--retention', '1']), fakeIo().io, deps)).toBe(0);
+    expect(await runCli(siteArgs(43, ['--retention', '1']), fakeIo().io, realFsDeps)).toBe(0);
     expect(existsSync(join(site, 'ci/runs/42'))).toBe(false);
     expect(existsSync(join(site, 'ci/runs/43/data/manifest.js'))).toBe(true);
-    expect(readFileSync(join(site, 'ci/index.html'), 'utf8')).toContain('url=runs/43/');
+    expect(existsSync(join(site, 'ci/data/manifest.js'))).toBe(true);
+  });
+
+  const totalsOf = (dirPath: string): { spans: number; logs: number; metrics: number } => {
+    const text = readFileSync(join(dirPath, 'data/manifest.js'), 'utf8');
+    const manifest = parseManifest(reviveDataJson(unwrapDataFile(text, MANIFEST_KEY)));
+    const sum = { spans: 0, logs: 0, metrics: 0 };
+    for (const c of manifest.chunks) sum[c.signal] += c.count;
+    return sum;
+  };
+
+  test('the workflow channel is one rolling report over its retained runs, and runs/ survives rebuilds', async () => {
+    stubApi({ 60: runBody(60), 61: runBody(61), 62: runBody(62) });
+    expect(await runCli(siteArgs(60), fakeIo().io, realFsDeps)).toBe(0);
+    const second = join(dir, 'report-2');
+    const w = await Report.create({ out: second }, realFsDeps);
+    await w.addSpans(
+      traceRequest(
+        [1, 2, 3].map((n) => span({ spanId: `00000000000000a${n}`, name: `extra-${n}` })),
+        [],
+      ),
+    );
+    await w.close();
+    const withReport = (args: string[], to: string): string[] => args.map((a) => (a === report ? to : a));
+    expect(await runCli(withReport(siteArgs(61), second), fakeIo().io, realFsDeps)).toBe(0);
+    const first = totalsOf(report);
+    const rolling = totalsOf(join(site, 'ci'));
+    expect(totalsOf(second).spans).toBe(3);
+    expect(rolling.spans).toBe(first.spans + 3);
+    expect(rolling.metrics).toBe(first.metrics);
+    expect(existsSync(join(site, 'ci/runs/60/data/manifest.js'))).toBe(true);
+    expect(existsSync(join(site, 'ci/runs/61/data/manifest.js'))).toBe(true);
+    expect(existsSync(join(site, 'ci/index.html'))).toBe(true);
+
+    // a retained run that is no longer a report is skipped with a warning; the rest still merge
+    rmSync(join(site, 'ci/runs/60'), { recursive: true });
+    mkdirSync(join(site, 'ci/runs/60'));
+    writeFileSync(join(site, 'ci/runs/60/data'), 'garbage');
+    const g = fakeIo();
+    expect(await runCli(siteArgs(62), g.io, realFsDeps)).toBe(0);
+    expect(g.out()).toContain('::warning::otel-html report: skipping');
+    expect(totalsOf(join(site, 'ci')).spans).toBe(3 + first.spans);
+    expect(existsSync(join(site, 'ci/runs/62/data/manifest.js'))).toBe(true);
+  });
+
+  test('a rolling merge that fails with nothing to blame warns and leaves the redirect stub', async () => {
+    stubApi({ 70: runBody(70) });
+    const f = fakeIo();
+    expect(await runCli(siteArgs(70, ['--config', join(dir, 'missing.yaml')]), f.io, realFsDeps)).toBe(0);
+    expect(f.out()).toContain('::warning::otel-html site: rolling report of ci not rebuilt');
+    expect(readFileSync(join(site, 'ci/index.html'), 'utf8')).toContain('url=runs/70/');
+    expect(existsSync(join(site, 'ci/runs/70/data/manifest.js'))).toBe(true);
   });
 
   test('a run on neither the default branch nor an open pull request is not published', async () => {

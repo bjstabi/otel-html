@@ -1,8 +1,20 @@
 import { appendFileSync } from 'node:fs';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { WriterDeps } from '../../writer/session.js';
 import type { CliIo } from '../io.js';
-import { type ApiRun, envVar, type Fetch, fetchPullsForSha, getJson, say } from './github-api.js';
+import {
+  type ApiRun,
+  envVar,
+  type Fetch,
+  fetchPullsForSha,
+  getJson,
+  messageOf,
+  say,
+  warning,
+} from './github-api.js';
+import { mergeSkippingBad, mergeWithConfig } from './publish-io.js';
 import {
   applyRetention,
   channelFor,
@@ -10,6 +22,7 @@ import {
   removeChannel,
   renderRedirect,
   reportUrl,
+  rollingInputs,
   type SiteIndex,
   type SiteRun,
 } from './site.js';
@@ -23,6 +36,8 @@ export type SiteOptions = {
   baseUrl: string;
   retention: number;
   prRetention: number;
+  /** The dashboard config file for the rolling report. */
+  config?: string;
 };
 export type CleanupOptions = { site: string; pr: number; repository: string };
 
@@ -43,12 +58,63 @@ async function writeStub(site: string, key: string, index: SiteIndex): Promise<v
   await writeFile(join(site, key, 'index.html'), renderRedirect(`runs/${latest.runId}/`));
 }
 
+const RUNS = 'runs';
+
+/**
+ * Rebuilds `<site>/<key>/` as the merge of the channel's retained runs, oldest first. The runs live inside that
+ * folder (`runs/<id>/`), so the merge goes to a scratch folder and every entry of the channel folder except `runs`
+ * is replaced by the merged output's. A merge that fails with no bad input to blame is a warning and the redirect
+ * stub is written instead; the per-run report stays published.
+ */
+async function rebuildRolling(
+  site: string,
+  key: string,
+  index: SiteIndex,
+  config: string | undefined,
+  deps: WriterDeps,
+  io: CliIo,
+): Promise<void> {
+  const channel = index.channels[key];
+  if (channel === undefined) return;
+  const scratch = await mkdtemp(join(tmpdir(), 'otel-html-site-'));
+  try {
+    const merged = join(scratch, 'rolling');
+    await mergeSkippingBad({
+      merge: mergeWithConfig(deps, config),
+      required: [],
+      optional: rollingInputs(channel).map((p) => join(site, p)),
+      out: merged,
+      probeOut: (n) => join(scratch, `probe-${n}`),
+      warn: (m) => warning(io, 'report', m),
+    });
+    const dir = join(site, key);
+    await mkdir(dir, { recursive: true });
+    for (const name of await readdir(dir)) {
+      if (name !== RUNS) await rm(join(dir, name), { recursive: true, force: true });
+    }
+    for (const name of await readdir(merged)) {
+      await cp(join(merged, name), join(dir, name), { recursive: true });
+    }
+  } catch (e) {
+    warning(io, 'site', `rolling report of ${key} not rebuilt: ${messageOf(e)}`);
+    await writeStub(site, key, index);
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
+}
+
 /**
  * Places a finished run's report on the site: resolves its channel, copies the report to the run's folder, applies
- * retention and rewrites the index, landing page and channel stub. A run with no channel is announced and skipped.
+ * retention and rewrites the index, landing page and the channel's page (the rolling report for a workflow
+ * channel, a redirect stub to the latest run for a pull request). A run with no channel is announced and skipped.
  * Throws when the run cannot be read from the API.
  */
-export async function runSite(opts: SiteOptions, io: CliIo, fetchFn: Fetch = fetch): Promise<void> {
+export async function runSite(
+  opts: SiteOptions,
+  io: CliIo,
+  deps: WriterDeps,
+  fetchFn: Fetch = fetch,
+): Promise<void> {
   const api = envVar(io, 'GITHUB_API_URL') ?? 'https://api.github.com';
   const token = envVar(io, 'GITHUB_TOKEN');
   const get = async <T>(path: string): Promise<T> =>
@@ -93,7 +159,11 @@ export async function runSite(opts: SiteOptions, io: CliIo, fetchFn: Fetch = fet
     opts.site,
     remove.filter((p) => p !== reportPath),
   );
-  await writeStub(opts.site, placed.key, index);
+  if (placed.channel.kind === 'workflow') {
+    await rebuildRolling(opts.site, placed.key, index, opts.config, deps, io);
+  } else {
+    await writeStub(opts.site, placed.key, index);
+  }
   await writeSite(opts.site, index, opts.repository);
   setOutputs(io, {
     'report-url': reportUrl(opts.baseUrl.replace(/\/+$/, ''), reportPath),

@@ -2,7 +2,6 @@ import { appendFileSync } from 'node:fs';
 import { access, mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { merge } from '../../api/convert.js';
 import { Report } from '../../api/report.js';
 import type { WriterDeps } from '../../writer/session.js';
 import type { CliIo } from '../io.js';
@@ -20,7 +19,7 @@ import { runKey } from './ids.js';
 import { jobLogRecordsRequest } from './job-logs.js';
 import { ciMetricsRequest } from './metrics.js';
 import { approximateJobs, jobIdFor, parseJobContext } from './publish.js';
-import { fetchJobLog, mergeSkippingBad } from './publish-io.js';
+import { fetchJobLog, mergeSkippingBad, mergeWithConfig } from './publish-io.js';
 import { summaryTable } from './summary.js';
 import { ciResource, jobResource, workflowTraceRequest } from './workflow-trace.js';
 
@@ -154,8 +153,7 @@ export async function runReport(
     await trace.close();
 
     const { summary, inputs } = await mergeSkippingBad({
-      merge: (dirs, out, probe) =>
-        merge({ inputs: dirs, out, replace: true, ...(probe ? {} : config) }, deps),
+      merge: mergeWithConfig(deps, opts.config),
       required: [traceDir],
       optional: artifacts.map((a) => a.report),
       out: opts.out,
