@@ -69,6 +69,27 @@ describe('dashboards in config', () => {
     expect(e.message).toContain('dashboards.0.widgets.0.query');
   });
 
+  test('a metric by that is not a data point path is rejected', () => {
+    const widget = (by: string) => ({
+      type: 'metric' as const,
+      queries: [{ id: 'a', metric: 'm', show: 'avg', by: [by] }],
+      x: 0,
+      y: 0,
+      w: 6,
+      h: 6,
+    });
+    const e = failure(() =>
+      resolveConfig({ file: { dashboards: [{ ...dash, widgets: [widget('service.name')] }] }, env: {} }),
+    );
+    expect(e.message).toContain('dashboards.0.widgets.0.queries.0.by.0');
+    expect(() =>
+      resolveConfig({
+        file: { dashboards: [{ ...dash, widgets: [widget('attributes["service.name"]')] }] },
+        env: {},
+      }),
+    ).not.toThrow();
+  });
+
   test('formatConfig prints dashboards as written, with their source', () => {
     const out = formatConfig(resolveConfig({ file: { dashboards: [dash] }, env: {} }));
     expect(out).toMatch(/^dashboards:\n {2}# source: config file\n {2}- id: ops$/m);

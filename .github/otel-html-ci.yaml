@@ -26,7 +26,7 @@ dashboards:
           - id: a
             metric: cicd.pipeline.task.run.duration
             show: avg
-            by: [cicd.pipeline.task.name]
+            by: ['attributes["cicd.pipeline.task.name"]']
         display: lines
       - type: metric
         title: Queue time
@@ -38,7 +38,7 @@ dashboards:
           - id: a
             metric: cicd.pipeline.task.run.queue.duration
             show: avg
-            by: [cicd.pipeline.task.name]
+            by: ['attributes["cicd.pipeline.task.name"]']
       - type: toplist
         title: Slowest steps
         x: 6
@@ -46,7 +46,7 @@ dashboards:
         w: 6
         h: 8
         signal: spans
-        groupBy: name
+        groupBy: span.name
       - type: traces
         title: Runs
         x: 0
