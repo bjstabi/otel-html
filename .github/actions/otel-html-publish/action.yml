@@ -72,6 +72,7 @@ runs:
       env:
         TARGET: ${{ inputs.target }}
         PR: ${{ inputs.cleanup-pr }}
+        PRIVATE: ${{ github.event.repository.private }}
       run: |
         case "$TARGET" in
           github-pages | artifact) ;;
@@ -80,6 +81,9 @@ runs:
             exit 1
             ;;
         esac
+        if [ "$TARGET" = github-pages ] && [ "$PRIVATE" = true ]; then
+          echo "::warning::otel-html publish: this repository is private, but its GitHub Pages site is public unless the organization restricts Pages access (GitHub Enterprise Cloud), so the reports' CI logs, job names and pull request titles become public. Use target: artifact to keep them private."
+        fi
         if [ -n "$PR" ]; then
           if ! [[ $PR =~ ^[1-9][0-9]*$ ]]; then
             echo "::error::otel-html publish: cleanup-pr must be a pull request number, not '$PR'"
