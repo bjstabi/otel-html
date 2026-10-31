@@ -320,7 +320,27 @@ The `otel-html ci context` step ([src/cli/ci/context-main.ts](src/cli/ci/context
 
 When the `ci` workflow completes, [ci-report.yml](.github/workflows/ci-report.yml) runs `otel-html ci report` ([src/cli/ci/report-main.ts](src/cli/ci/report-main.ts)) from `main`'s code, never the run's own, since the run may come from a fork. It writes the run → job spans from the Actions API, turns each job's log into log records, adds queue-time and duration metrics, and merges these with the job artifacts into one report, uploaded as `ci-run-report`. Run it by hand with `workflow_dispatch` and a `run_id` to rebuild a past run. The report opens on the [CI dashboard](.github/otel-html-ci.yaml): job duration, queue time, step counts, runs, and warnings and errors, with `run` and `job` variables. The run-level span lives on the run's own resource, so selecting a job in `job` hides it. The run key includes the run attempt, so after a partial re-run the artifacts of jobs that did not re-run (still attempt 1) show up as separate traces without a job span.
 
-Next milestones are a reusable action, so other repos can adopt this without copying scripts, and publishing the merged report to GitHub Pages.
+The run's report is then published to the site at <https://bjstabi.github.io/otel-html/>. The layout is:
+
+- `/index.html` (landing page) and `/index.json` (site index).
+- `/<workflow>/` and `/<workflow>/runs/<run_id>/` for pushes to the default branch of this repo, for example `/ci/`.
+- `/pr/<number>/` and `/pr/<number>/runs/<run_id>/` for a run whose commit is the head of an open pull request.
+
+`/ci/` and `/pr/<number>/` are stubs that forward to the channel's newest run. A run on any other branch, or a push from a fork, with no open pull request is not published. The site keeps the last 30 runs per workflow and the last 5 per pull request; a re-run replaces its folder. When a pull request closes, `pull_request_target` triggers the `cleanup` job, which removes its folder.
+
+The `gh-pages` branch is the store: one orphan commit holding the whole site, replaced on every publish rather than grown, so history does not accumulate every run's data. [site-branch.sh](.github/actions/otel-html-publish/site-branch.sh) checks out the tip and pushes the new commit with `--force-with-lease` against it. A rejected lease (another publish or a cleanup got there first) checks out again, re-applies and retries, up to 5 attempts, so a cleaned-up pull request is never brought back. The `report` job in [ci-report.yml](.github/workflows/ci-report.yml) builds the report, publishes it and links it. The `deploy` job ships the `gh-pages` tip under the concurrency group `pages`, so a pending deploy replaced by a newer one loses nothing: the one that runs ships the latest tip. It runs only from the default branch, so a `workflow_dispatch` on another branch updates `gh-pages` and skips the deploy; the next default-branch deploy ships it.
+
+`otel-html ci link` posts one sticky comment per workflow on the commit's open pull requests (found by a per-workflow marker, so `ci` and `load` do not overwrite each other) and creates a check run named `otel-html report` that concludes `neutral`: it is a link, not a second verdict on the run.
+
+These subcommands are for the actions; stable flags, output format not guaranteed.
+
+| Subcommand | What it does | Flags |
+| --- | --- | --- |
+| `ci site` | Places a run's report in the checked-out site folder, applies retention, rewrites the indexes and stubs. Writes `published` and `report-url` to `$GITHUB_OUTPUT`. | `--site`, `--report`, `--run-id`, `--repository`, `--base-url` (all required); `--retention` (30), `--pr-retention` (5) |
+| `ci link` | Comments on the pull requests, creates the check run and writes the job summary. Never fails the job. | `--run-id`, `--repository`, `--url`, `--site` (all required); `--no-comment`, `--no-check` |
+| `ci cleanup` | Removes a closed pull request's reports from the site folder. | `--site`, `--pr` (required); `--repository` (default `$GITHUB_REPOSITORY`) |
+
+Next milestone is a reusable action, so other repos can adopt this without copying workflows.
 
 ### Report format compatibility
 
