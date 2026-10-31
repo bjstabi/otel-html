@@ -367,6 +367,9 @@ In each job, run setup first, make the CLI the job shell, and collect last. A `r
 jobs:
   test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read # checkout
+      actions: read # setup reads the run's jobs to find this one
     defaults:
       run:
         shell: otel-html run -o .otel-html/report -- bash --noprofile --norc -eo pipefail {0}
