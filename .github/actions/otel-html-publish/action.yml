@@ -95,8 +95,9 @@ runs:
       shell: bash
       env:
         VERSION: ${{ inputs.version }}
-        # The action's own repository when used from another repo; empty for a local `./` use.
-        REPO: ${{ github.action_repository || github.repository }}
+        # The binaries always come from this action's repository: `action_repository` when used from another repo, and
+        # empty for a local `./` use, which is this repository itself (a fork's own releases are not used).
+        REPO: ${{ github.action_repository || 'bjstabi/otel-html' }}
         GH_TOKEN: ${{ inputs.token }}
       run: bash "$GITHUB_ACTION_PATH/../otel-html-setup/install.sh" "$VERSION"
     - name: Resolve command
