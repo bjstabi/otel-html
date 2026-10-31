@@ -22,11 +22,11 @@ inputs:
       `ci-run-report` artifact only: nothing reaches the site, and nothing is linked.
     default: github-pages
   retention:
-    description: Runs kept per workflow channel on the site.
+    description: Runs kept per workflow on each branch page (`branch/<name>/`, the default branch's) of the site.
     default: "30"
   pr-retention:
-    description: Runs kept per pull request channel on the site.
-    default: "5"
+    description: Runs kept per workflow on each pull request page (`pr/<number>/`) of the site.
+    default: "10"
   comment:
     description: Post a sticky comment linking the report on the run's open pull requests.
     default: "true"
@@ -42,7 +42,7 @@ inputs:
     default: "true"
   cleanup-pr:
     description: >-
-      A pull request number. When set, the action removes that pull request's reports from the site instead of
+      A pull request number. When set, the action removes that pull request's reports (`pr/<number>/`) from the site instead of
       publishing: no artifact download, report or link, only the gh-pages update (and the deploy, with `deploy: true`).
       Use it in a `pull_request_target: [closed]` job, set to `github.event.pull_request.number`; the token then needs
       only `contents: write` (plus the deploy permissions with `deploy: true`). Requires `target: github-pages`.
@@ -171,7 +171,8 @@ runs:
       with:
         token: ${{ inputs.token }}
     # Places the report on a fresh copy of the gh-pages tip and pushes it under a lease (site-lease.sh). A run with no
-    # channel (a branch with no open PR) is announced by `ci site` and not pushed.
+    # channel (a branch with no open PR) is announced by `ci site` and not pushed. A default-branch run goes to
+    # `branch/<name>/` and a pull request's to `pr/<number>/`: each a rolling report over every workflow's runs.
     - name: Publish to the site branch
       id: site
       if: inputs.cleanup-pr == '' && inputs.target == 'github-pages' && steps.report.outputs.published != 'false'
@@ -192,7 +193,7 @@ runs:
         "$GITHUB_ACTION_PATH/site-lease.sh" "$SITE" "otel-html: publish run $RUN_ID" published=true \
           $CMD ci site --site "$SITE" --report "$REPORT" --run-id "$RUN_ID" --repository "$GITHUB_REPOSITORY" \
           --base-url "$BASE_URL" --retention "$RETENTION" --pr-retention "$PR_RETENTION" --config "$CONFIG"
-    # A closed PR's folder and index entry leave the site, under the same lease. A PR the site never had (`ci cleanup`
+    # A closed PR's folder (`pr/<number>/`) and index entry leave the site, under the same lease. A PR the site never had (`ci cleanup`
     # writes `cleaned=false`) pushes nothing, so nothing is deployed.
     - name: Remove the pull request from the site branch
       id: cleanup

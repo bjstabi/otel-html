@@ -1,5 +1,14 @@
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -250,10 +259,10 @@ describe('otel-html ci site and cleanup', { timeout: 60_000 }, () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  const runBody = (id: number, branch = 'main'): object => ({
+  const runBody = (id: number, branch = 'main', name = 'ci'): object => ({
     id,
     run_attempt: 1,
-    name: 'ci',
+    name,
     conclusion: 'success',
     updated_at: '2026-01-01T00:00:00Z',
     html_url: `https://github.com/o/r/actions/runs/${id}`,
@@ -288,22 +297,23 @@ describe('otel-html ci site and cleanup', { timeout: 60_000 }, () => {
     ...extra,
   ];
 
-  test('places a default-branch run, rebuilds the rolling channel report and applies retention', async () => {
+  test('places a default-branch run, rebuilds the rolling branch report and applies retention', async () => {
     stubApi({ 42: runBody(42), 43: runBody(43) });
     const out = join(dir, 'gh-output');
     writeFileSync(out, '');
     const f = fakeIo({ GITHUB_OUTPUT: out });
     expect(await runCli(siteArgs(42), f.io, realFsDeps)).toBe(0);
-    expect(existsSync(join(site, 'ci/runs/42/data/manifest.js'))).toBe(true);
-    expect(existsSync(join(site, 'ci/data/manifest.js'))).toBe(true);
-    expect(f.out()).toContain('report-url=https://x.test/otel-html/ci/runs/42/');
-    expect(readFileSync(out, 'utf8')).toContain('channel=ci\n');
+    expect(existsSync(join(site, 'branch/main/runs/42/data/manifest.js'))).toBe(true);
+    expect(existsSync(join(site, 'branch/main/data/manifest.js'))).toBe(true);
+    expect(f.out()).toContain('report-url=https://x.test/otel-html/branch/main/runs/42/');
+    expect(readFileSync(out, 'utf8')).toContain('channel=branch/main\n');
     expect(readFileSync(out, 'utf8')).toContain('published=true\n');
 
     expect(await runCli(siteArgs(43, ['--retention', '1']), fakeIo().io, realFsDeps)).toBe(0);
-    expect(existsSync(join(site, 'ci/runs/42'))).toBe(false);
-    expect(existsSync(join(site, 'ci/runs/43/data/manifest.js'))).toBe(true);
-    expect(existsSync(join(site, 'ci/data/manifest.js'))).toBe(true);
+    expect(existsSync(join(site, 'branch/main/runs/42'))).toBe(false);
+    expect(existsSync(join(site, 'branch/main/runs/43/data/manifest.js'))).toBe(true);
+    expect(existsSync(join(site, 'branch/main/data/manifest.js'))).toBe(true);
+    expect(readFileSync(join(site, 'index.html'), 'utf8')).toContain('href="branch/main/"');
   });
 
   const totalsOf = (dirPath: string): { spans: number; logs: number; metrics: number } => {
@@ -313,41 +323,47 @@ describe('otel-html ci site and cleanup', { timeout: 60_000 }, () => {
     for (const c of manifest.chunks) sum[c.signal] += c.count;
     return sum;
   };
+  const withReport = (args: string[], to: string): string[] => args.map((a) => (a === report ? to : a));
 
-  test('the workflow channel is one rolling report over its retained runs, and runs/ survives rebuilds', async () => {
+  test('the branch channel is one rolling report over its retained runs, and runs/ survives rebuilds', async () => {
     stubApi({ 60: runBody(60), 61: runBody(61), 62: runBody(62) });
     expect(await runCli(siteArgs(60), fakeIo().io, realFsDeps)).toBe(0);
     const second = join(dir, 'report-2');
     await smallReport(second, 'a');
-    const withReport = (args: string[], to: string): string[] => args.map((a) => (a === report ? to : a));
     expect(await runCli(withReport(siteArgs(61), second), fakeIo().io, realFsDeps)).toBe(0);
+    const ch = join(site, 'branch/main');
     const first = totalsOf(report);
-    const rolling = totalsOf(join(site, 'ci'));
+    const rolling = totalsOf(ch);
     expect(totalsOf(second).spans).toBe(2);
     expect(rolling.spans).toBe(first.spans + 2);
     expect(rolling.metrics).toBe(first.metrics);
-    expect(existsSync(join(site, 'ci/runs/60/data/manifest.js'))).toBe(true);
-    expect(existsSync(join(site, 'ci/runs/61/data/manifest.js'))).toBe(true);
-    expect(existsSync(join(site, 'ci/index.html'))).toBe(true);
+    expect(existsSync(join(ch, 'runs/60/data/manifest.js'))).toBe(true);
+    expect(existsSync(join(ch, 'runs/61/data/manifest.js'))).toBe(true);
+    expect(existsSync(join(ch, 'index.html'))).toBe(true);
 
     // a retained run that is no longer a report is skipped with a warning; the rest still merge
-    rmSync(join(site, 'ci/runs/60'), { recursive: true });
-    mkdirSync(join(site, 'ci/runs/60'));
-    writeFileSync(join(site, 'ci/runs/60/data'), 'garbage');
+    rmSync(join(ch, 'runs/60'), { recursive: true });
+    mkdirSync(join(ch, 'runs/60'));
+    writeFileSync(join(ch, 'runs/60/data'), 'garbage');
     const g = fakeIo();
     expect(await runCli(siteArgs(62), g.io, realFsDeps)).toBe(0);
     expect(g.out()).toContain('::warning::otel-html report: skipping');
-    expect(totalsOf(join(site, 'ci')).spans).toBe(2 + first.spans);
-    expect(existsSync(join(site, 'ci/runs/62/data/manifest.js'))).toBe(true);
+    expect(totalsOf(ch).spans).toBe(2 + first.spans);
+    expect(existsSync(join(ch, 'runs/62/data/manifest.js'))).toBe(true);
   });
 
   test('a rolling merge that fails with nothing to blame warns and leaves the redirect stub', async () => {
-    stubApi({ 70: runBody(70) });
+    stubApi({ 69: runBody(69), 70: runBody(70) });
+    expect(await runCli(siteArgs(69), fakeIo().io, realFsDeps)).toBe(0);
+    expect(existsSync(join(site, 'branch/main/data/manifest.js'))).toBe(true);
     const f = fakeIo();
     expect(await runCli(siteArgs(70, ['--config', join(dir, 'missing.yaml')]), f.io, realFsDeps)).toBe(0);
-    expect(f.out()).toContain('::warning::otel-html site: rolling report of ci not rebuilt');
-    expect(readFileSync(join(site, 'ci/index.html'), 'utf8')).toContain('url=runs/70/');
-    expect(existsSync(join(site, 'ci/runs/70/data/manifest.js'))).toBe(true);
+    expect(f.out()).toContain('::warning::otel-html site: rolling report of branch/main not rebuilt');
+    expect(readFileSync(join(site, 'branch/main/index.html'), 'utf8')).toContain('url=runs/70/');
+    expect(existsSync(join(site, 'branch/main/runs/70/data/manifest.js'))).toBe(true);
+    // the previous rolling report does not linger beside the stub
+    expect(readdirSync(join(site, 'branch/main')).sort()).toEqual(['index.html', 'runs']);
+    expect(existsSync(join(site, 'branch/main/runs/69/data/manifest.js'))).toBe(true);
   });
 
   test('a run on neither the default branch nor an open pull request is not published', async () => {
@@ -369,7 +385,7 @@ describe('otel-html ci site and cleanup', { timeout: 60_000 }, () => {
       },
     ]);
     expect(await runCli(siteArgs(60), fakeIo().io, deps)).toBe(0);
-    expect(existsSync(join(site, 'ci/runs/60/data/manifest.js'))).toBe(true);
+    expect(existsSync(join(site, 'branch/main/runs/60/data/manifest.js'))).toBe(true);
     expect(existsSync(join(site, 'pr'))).toBe(false);
   });
 
@@ -380,18 +396,171 @@ describe('otel-html ci site and cleanup', { timeout: 60_000 }, () => {
     expect(f.out()).toContain('::error::otel-html site:');
   });
 
-  test('a PR channel is published for an open pull request and cleanup removes it', async () => {
-    stubApi({ 50: runBody(50, 'topic') }, [
-      {
-        number: 7,
-        title: 'Fix',
-        state: 'open',
-        head: { sha: 'sha50', ref: 'topic', repo: { full_name: 'o/r' } },
-      },
-    ]);
+  const topicPull = {
+    number: 7,
+    title: 'Fix',
+    state: 'open',
+    head: { sha: 'sha50', ref: 'feat/topic', repo: { full_name: 'o/r' } },
+  };
+
+  test("a pull request's runs of every workflow share one rolling report at pr/<n>", async () => {
+    stubApi({ 50: runBody(50, 'feat/topic'), 51: runBody(51, 'feat/topic', 'load') }, [topicPull]);
+    const out = join(dir, 'gh-output');
+    writeFileSync(out, '');
+    const f = fakeIo({ GITHUB_OUTPUT: out });
+    expect(await runCli(siteArgs(50), f.io, realFsDeps)).toBe(0);
+    expect(readFileSync(out, 'utf8')).toContain('channel=pr/7\n');
+    expect(f.out()).toContain('report-url=https://x.test/otel-html/pr/7/runs/50/');
+    const second = join(dir, 'report-2');
+    await smallReport(second, 'a');
+    expect(await runCli(withReport(siteArgs(51), second), fakeIo().io, realFsDeps)).toBe(0);
+
+    const ch = join(site, 'pr/7');
+    expect(totalsOf(ch).spans).toBe(totalsOf(report).spans + 2);
+    expect(existsSync(join(ch, 'runs/50/data/manifest.js'))).toBe(true);
+    expect(existsSync(join(ch, 'runs/51/data/manifest.js'))).toBe(true);
+    const index = JSON.parse(readFileSync(join(site, 'index.json'), 'utf8'));
+    expect(index.channels['pr/7']).toMatchObject({
+      kind: 'pr',
+      title: '#7 Fix',
+      headBranch: 'feat/topic',
+      headRepo: 'o/r',
+    });
+    expect(index.channels['pr/7'].runs.map((r: { workflow: string }) => r.workflow)).toEqual(['load', 'ci']);
+    const landing = readFileSync(join(site, 'index.html'), 'utf8');
+    expect(landing).toContain('href="pr/7/"');
+    expect(landing).toContain('feat/topic');
+  });
+
+  test('a pull request channel keeps 10 runs per workflow by default', async () => {
+    const entry = (id: number, workflow: string): object => ({
+      runId: id,
+      attempt: 1,
+      conclusion: 'success',
+      headSha: 'x',
+      headBranch: 'feat/topic',
+      completedAt: `2025-01-01T00:00:${String(id).padStart(2, '0')}Z`,
+      runUrl: 'u',
+      reportPath: `pr/7/runs/${id}`,
+      workflow,
+    });
+    // ten ci runs (1-10) and one load run (11), newest first
+    const runs = [entry(11, 'load'), ...Array.from({ length: 10 }, (_, i) => entry(10 - i, 'ci'))];
+    mkdirSync(join(site, 'pr/7/runs/1'), { recursive: true });
+    writeFileSync(
+      join(site, 'index.json'),
+      JSON.stringify({
+        version: 1,
+        channels: { 'pr/7': { kind: 'pr', title: '#7 Fix', headBranch: 'feat/topic', runs } },
+      }),
+    );
+    stubApi({ 50: runBody(50, 'feat/topic') }, [topicPull]);
+    expect(await runCli(siteArgs(50), fakeIo().io, deps)).toBe(0);
+    const index = JSON.parse(readFileSync(join(site, 'index.json'), 'utf8'));
+    const ids = index.channels['pr/7'].runs.map((r: { runId: number }) => r.runId);
+    expect(ids).toHaveLength(11);
+    expect(ids[0]).toBe(50);
+    expect(ids).toContain(11);
+    expect(ids).not.toContain(1);
+    expect(existsSync(join(site, 'pr/7/runs/1'))).toBe(false);
+  });
+
+  test('the next publish drops the older per-workflow channels and their folders', async () => {
+    const old = (key: string, id: number): object => ({
+      kind: 'workflow',
+      title: key,
+      headBranch: 'main',
+      runs: [
+        {
+          runId: id,
+          attempt: 1,
+          conclusion: 'success',
+          headSha: 'x',
+          headBranch: 'main',
+          completedAt: '2025-01-01T00:00:00Z',
+          runUrl: 'u',
+          reportPath: `${key}/runs/${id}`,
+        },
+      ],
+    });
+    for (const key of ['ci', 'load']) mkdirSync(join(site, key, 'runs/1'), { recursive: true });
+    writeFileSync(join(site, 'ci/index.html'), 'old rolling report');
+    mkdirSync(join(site, 'pr/3/runs/9'), { recursive: true });
+    const legacyPr = {
+      kind: 'pr',
+      title: '#3 Old',
+      headBranch: 'old',
+      runs: [
+        {
+          runId: 9,
+          attempt: 1,
+          conclusion: 'success',
+          headSha: 'x',
+          headBranch: 'old',
+          completedAt: '2025-01-01T00:00:00Z',
+          runUrl: 'u',
+          reportPath: 'pr/3/runs/9',
+        },
+      ],
+    };
+    writeFileSync(
+      join(site, 'index.json'),
+      JSON.stringify({ version: 1, channels: { ci: old('ci', 1), load: old('load', 1), 'pr/3': legacyPr } }),
+    );
+    stubApi({ 42: runBody(42) });
+    const f = fakeIo();
+    expect(await runCli(siteArgs(42), f.io, deps)).toBe(0);
+    expect(f.out()).toContain('removed the per-workflow channels ci, load');
+    expect(existsSync(join(site, 'ci'))).toBe(false);
+    expect(existsSync(join(site, 'load'))).toBe(false);
+    expect(existsSync(join(site, 'pr/3/runs/9'))).toBe(true);
+    const index = JSON.parse(readFileSync(join(site, 'index.json'), 'utf8'));
+    expect(Object.keys(index.channels).sort()).toEqual(['branch/main', 'pr/3']);
+    const landing = readFileSync(join(site, 'index.html'), 'utf8');
+    expect(landing).not.toContain('href="ci/"');
+    expect(landing).toContain('href="pr/3/"');
+  });
+
+  test('a channel of a kind this version does not know is skipped with a warning, not a failure', async () => {
+    mkdirSync(site, { recursive: true });
+    writeFileSync(
+      join(site, 'index.json'),
+      JSON.stringify({
+        version: 1,
+        channels: { 'tag/v1': { kind: 'tag', title: 'v1', headBranch: 'v1', runs: [] } },
+      }),
+    );
+    stubApi({ 42: runBody(42) });
+    const f = fakeIo();
+    expect(await runCli(siteArgs(42), f.io, deps)).toBe(0);
+    expect(f.out()).toContain('::warning::otel-html site: skipping channel tag/v1 of kind tag');
+    const g = fakeIo();
+    expect(
+      await runCli(['ci', 'cleanup', '--site', site, '--pr', '1', '--repository', 'o/r'], g.io, deps),
+    ).toBe(0);
+  });
+
+  test('a stub-era pr channel is rebuilt as a rolling report by its next run', async () => {
+    stubApi({ 50: runBody(50, 'feat/topic') }, [topicPull]);
+    // the stub-era layout: pr/7/index.html forwards to the newest run
+    mkdirSync(join(site, 'pr/7'), { recursive: true });
+    writeFileSync(join(site, 'pr/7/index.html'), '<meta http-equiv="refresh" content="0; url=runs/49/">');
+    writeFileSync(
+      join(site, 'index.json'),
+      JSON.stringify({
+        version: 1,
+        channels: { 'pr/7': { kind: 'pr', title: '#7 Fix', headBranch: 'feat/topic', runs: [] } },
+      }),
+    );
+    expect(await runCli(siteArgs(50), fakeIo().io, realFsDeps)).toBe(0);
+    expect(existsSync(join(site, 'pr/7/data/manifest.js'))).toBe(true);
+    expect(readFileSync(join(site, 'pr/7/index.html'), 'utf8')).not.toContain('url=runs/49/');
+  });
+
+  test('cleanup removes the pull request channel and folder; an unknown one is cleaned=false', async () => {
+    stubApi({ 50: runBody(50, 'feat/topic') }, [topicPull]);
     expect(await runCli(siteArgs(50), fakeIo().io, deps)).toBe(0);
     expect(existsSync(join(site, 'pr/7/runs/50/data/manifest.js'))).toBe(true);
-    expect(readFileSync(join(site, 'pr/7/index.html'), 'utf8')).toContain('url=runs/50/');
 
     const outputs = join(dir, 'gh-output');
     const cleanup = (pr: string): Promise<number> =>
@@ -551,6 +720,41 @@ describe('otel-html ci link', () => {
     expect(patch.body).toContain('Previous run: [run 5](https://x.test/b/pr/7/runs/5/)');
     expect(calls.find((c) => c.url.endsWith('/check-runs'))?.body).toMatchObject({ conclusion: 'neutral' });
     expect(readFileSync(summary, 'utf8')).toContain('<!-- otel-html-report:ci -->');
+  });
+
+  test("links the pull request's rolling page and the previous run of the same workflow", async () => {
+    const entry = (id: number, workflow: string): object => ({
+      runId: id,
+      attempt: 1,
+      conclusion: 'success',
+      headSha: 'sha6',
+      headBranch: 'topic',
+      completedAt: '2026-01-01T00:00:00Z',
+      runUrl: 'u',
+      reportPath: `pr/7/runs/${id}`,
+      workflow,
+    });
+    writeFileSync(
+      join(dir, 'index.json'),
+      JSON.stringify({
+        version: 1,
+        channels: {
+          'pr/7': {
+            kind: 'pr',
+            title: '#7 Fix',
+            headBranch: 'topic',
+            headRepo: 'o/r',
+            runs: [entry(6, 'ci'), entry(5, 'load'), entry(4, 'ci')],
+          },
+        },
+      }),
+    );
+    stub();
+    expect(await runCli(linkArgs(['--no-check']), fakeIo().io, deps)).toBe(0);
+    const patch = calls.find((c) => c.method === 'PATCH')?.body as { body: string };
+    expect(patch.body).toContain('Report: https://x.test/b/pr/7/runs/6/');
+    expect(patch.body).toContain('All runs on pull request #7: https://x.test/b/pr/7/');
+    expect(patch.body).toContain('Previous run: [ci run 4](https://x.test/b/pr/7/runs/4/)');
   });
 
   test('--no-comment leaves only the check run, and the step summary still gets the body', async () => {

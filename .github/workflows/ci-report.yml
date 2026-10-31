@@ -3,8 +3,11 @@ name: ci-report
 # Builds a ci run's report and publishes it to the GitHub Pages site (the `gh-pages` branch), linked from the run's
 # pull request; removes a pull request's reports when it closes.
 #
-# Runs from the default branch's copy of this file and checks out the default branch's code: never the triggering
-# run's head, which may be an untrusted PR.
+# Runs from the default branch's copy of this file. The report job dogfoods the code under test: it checks out the
+# triggering run's head commit when that commit is in this repository and a person (not a bot) started the run.
+# Pushing a branch here already takes write access, so a person's code gains nothing from this job's token. A bot's
+# branch (Renovate) carries third-party dependency code that ci.yml runs with a read-only token, and a fork's run may
+# be untrusted, so both use the default branch's code. A dispatch uses the code of the ref it was dispatched on.
 on:
   workflow_run:
     workflows: [ci, load]
@@ -51,8 +54,15 @@ jobs:
       report-url: ${{ steps.publish.outputs.report-url }}
     timeout-minutes: 15
     steps:
+      # The run's own commit when it is in this repository and a person started it, so a pull request's report is
+      # built and placed by the pull request's code; otherwise (a fork's or a bot's run, or a dispatch) the event's
+      # default ref.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: >-
+            ${{ github.event_name == 'workflow_run' &&
+            github.event.workflow_run.head_repository.full_name == github.repository &&
+            github.event.workflow_run.actor.type == 'User' && github.event.workflow_run.head_sha || '' }}
           persist-credentials: false
       - uses: ./.github/actions/setup
       # Report.create serves the viewer from dist/, which a fresh checkout does not have.
@@ -65,7 +75,7 @@ jobs:
           run-id: ${{ inputs.run_id || github.event.workflow_run.id }}
           deploy: false
 
-  # A closed PR's folder and index entry leave the site.
+  # A closed or merged PR's folder (pr/<number>/) and index entry leave the site.
   cleanup:
     if: github.event_name == 'pull_request_target' && github.event.action == 'closed'
     runs-on: ubuntu-latest

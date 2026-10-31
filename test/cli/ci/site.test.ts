@@ -3,6 +3,8 @@ import type { ApiPull, ApiRun } from '../../../src/cli/ci/github-api.js';
 import {
   applyRetention,
   channelFor,
+  dropWorkflowChannels,
+  parseSiteIndex,
   placeRun,
   pullsOfRun,
   pullsToLink,
@@ -52,20 +54,32 @@ const siteRun = (runId: number, over: Partial<SiteRun> = {}): SiteRun => ({
   reportPath: `ci/runs/${runId}`,
   ...over,
 });
-const ci = { kind: 'workflow', title: 'ci', headBranch: 'main' } as const;
-const CI: string = 'ci';
+const main = { kind: 'branch', title: 'main', headBranch: 'main' } as const;
+const MAIN: string = 'branch/main';
 const empty = (): SiteIndex => ({ version: 1, channels: {} });
 
-test('channelFor: an open pull with the head sha is a pr channel', () => {
+test('channelFor: an open pull with the head sha is its pr channel', () => {
   expect(channelFor(apiRun({ head_branch: 'feat' }), [pull()], 'main')).toEqual({
+    key: 'pr/12',
+    channel: { kind: 'pr', title: '#12 Fix the thing', headBranch: 'feat', headRepo: 'o/r' },
+  });
+  const fork = pull({ head: { sha: 'abc', ref: 'feat', repo: { full_name: 'f/r' } } });
+  expect(channelFor(apiRun({ head_branch: 'feat' }), [fork], 'main')?.channel.headRepo).toBe('f/r');
+  const gone = pull({ head: { sha: 'abc', ref: 'feat', repo: null } });
+  expect(channelFor(apiRun({ head_branch: 'feat' }), [gone], 'main')).toEqual({
     key: 'pr/12',
     channel: { kind: 'pr', title: '#12 Fix the thing', headBranch: 'feat' },
   });
 });
 
-test('channelFor: a default-branch run of this repo is a workflow channel', () => {
-  expect(channelFor(apiRun(), [], 'main')).toEqual({ key: 'ci', channel: ci });
-  expect(channelFor(apiRun({ name: 'Load Test!' }), [], 'main')?.key).toBe('load-test');
+test('channelFor: a default-branch run of this repo is its branch channel, whatever the workflow', () => {
+  expect(channelFor(apiRun(), [], 'main')).toEqual({ key: 'branch/main', channel: main });
+  expect(channelFor(apiRun({ name: 'Load Test!' }), [], 'main')?.key).toBe('branch/main');
+  const run = apiRun({ head_branch: 'Release/1.x' });
+  expect(channelFor(run, [], 'Release/1.x')).toEqual({
+    key: 'branch/release-1-x',
+    channel: { kind: 'branch', title: 'Release/1.x', headBranch: 'Release/1.x' },
+  });
 });
 
 test('channelFor: a fork push with no pull, or a non-default branch, is not published', () => {
@@ -97,16 +111,16 @@ test('channelFor: a pull whose head moved on (same ref, new sha) still takes the
 
 test('channelFor: a fork pull from a branch of the same name does not take a default-branch run', () => {
   const fork = pull({ head: { sha: 'zzz', ref: 'main', repo: { full_name: 'fork/r' } } });
-  expect(channelFor(apiRun(), [fork], 'main')?.key).toBe('ci');
+  expect(channelFor(apiRun(), [fork], 'main')?.key).toBe('branch/main');
   expect(pullsOfRun(apiRun(), [fork])).toEqual([]);
   expect(pullsOfRun(apiRun(), [pull({ head: { sha: 'zzz', ref: 'main', repo: null } })])).toEqual([]);
 });
 
-test('channelFor: a default-branch run goes to its workflow channel even when an open pull has its commit', () => {
+test('channelFor: a default-branch run goes to its branch channel even when an open pull has its commit', () => {
   // A pull request whose head is main (or contains main's head commit) must not capture main's runs.
   const fromMain = pull({ head: { sha: 'abc', ref: 'main', repo: { full_name: 'o/r' } } });
   const containing = pull({ number: 13, head: { sha: 'abc', ref: 'feat', repo: { full_name: 'o/r' } } });
-  expect(channelFor(apiRun(), [fromMain, containing], 'main')).toEqual({ key: 'ci', channel: ci });
+  expect(channelFor(apiRun(), [fromMain, containing], 'main')).toEqual({ key: 'branch/main', channel: main });
   expect(pullsToLink(apiRun(), [fromMain, containing], 'main')).toEqual([]);
   expect(pullsToLink(apiRun({ head_branch: 'feat' }), [containing], 'main')).toEqual([containing]);
   // a fork's `main` is not the default branch
@@ -124,19 +138,19 @@ test('pullsOfRun prefers the exact-commit pull', () => {
 });
 
 test('placeRun: a stale run placed after a newer one stays behind it', () => {
-  let ix = placeRun(empty(), 'ci', ci, siteRun(5));
-  ix = placeRun(ix, 'ci', ci, siteRun(3));
-  expect(ix.channels[CI]?.runs.map((r) => r.runId)).toEqual([5, 3]);
-  ix = placeRun(ix, 'ci', ci, siteRun(4, { completedAt: '2026-01-05T00:00:00Z' }));
-  expect(ix.channels[CI]?.runs.map((r) => r.runId)).toEqual([5, 4, 3]);
+  let ix = placeRun(empty(), MAIN, main, siteRun(5));
+  ix = placeRun(ix, MAIN, main, siteRun(3));
+  expect(ix.channels[MAIN]?.runs.map((r) => r.runId)).toEqual([5, 3]);
+  ix = placeRun(ix, MAIN, main, siteRun(4, { completedAt: '2026-01-05T00:00:00Z' }));
+  expect(ix.channels[MAIN]?.runs.map((r) => r.runId)).toEqual([5, 4, 3]);
 });
 
 test('placeRun: newest first; the same runId replaces in place', () => {
-  let ix = placeRun(empty(), 'ci', ci, siteRun(1));
-  ix = placeRun(ix, 'ci', ci, siteRun(2));
-  expect(ix.channels[CI]?.runs.map((r) => r.runId)).toEqual([2, 1]);
-  ix = placeRun(ix, 'ci', ci, siteRun(1, { attempt: 2 }));
-  expect(ix.channels[CI]?.runs.map((r) => [r.runId, r.attempt])).toEqual([
+  let ix = placeRun(empty(), MAIN, main, siteRun(1));
+  ix = placeRun(ix, MAIN, main, siteRun(2));
+  expect(ix.channels[MAIN]?.runs.map((r) => r.runId)).toEqual([2, 1]);
+  ix = placeRun(ix, MAIN, main, siteRun(1, { attempt: 2 }));
+  expect(ix.channels[MAIN]?.runs.map((r) => [r.runId, r.attempt])).toEqual([
     [2, 1],
     [1, 2],
   ]);
@@ -149,15 +163,29 @@ test('placeRun creates a channel that was removed meanwhile, without mutating th
   expect(after.channels['pr/12']?.runs).toHaveLength(1);
 });
 
-test('applyRetention drops the oldest runs per channel kind', () => {
+test('applyRetention keeps the newest runs of each workflow per channel, by channel kind', () => {
   let ix = empty();
-  for (const id of [1, 2, 3]) ix = placeRun(ix, 'ci', ci, siteRun(id));
+  const w = (workflow: string | undefined) => (workflow === undefined ? {} : { workflow });
+  for (const [id, wf] of [
+    [1, 'ci'],
+    [2, 'load'],
+    [3, 'ci'],
+    [4, 'ci'],
+  ] as const)
+    ix = placeRun(ix, MAIN, main, siteRun(id, { reportPath: `branch/main/runs/${id}`, ...w(wf) }));
   const pr = { kind: 'pr', title: '#12 x', headBranch: 'feat' } as const;
-  for (const id of [4, 5]) ix = placeRun(ix, 'pr/12', pr, siteRun(id, { reportPath: `pr/12/runs/${id}` }));
-  const r = applyRetention(ix, { workflow: 2, pr: 1 });
-  expect(r.remove.sort()).toEqual(['ci/runs/1', 'pr/12/runs/4']);
-  expect(r.index.channels[CI]?.runs.map((x) => x.runId)).toEqual([3, 2]);
-  expect(r.index.channels['pr/12']?.runs.map((x) => x.runId)).toEqual([5]);
+  for (const [id, wf] of [
+    [5, undefined],
+    [6, undefined],
+    [7, 'ci'],
+    [8, 'load'],
+    [9, 'ci'],
+  ] as const)
+    ix = placeRun(ix, 'pr/12', pr, siteRun(id, { reportPath: `pr/12/runs/${id}`, ...w(wf) }));
+  const r = applyRetention(ix, { branch: 2, pr: 1 });
+  expect(r.remove.sort()).toEqual(['branch/main/runs/1', 'pr/12/runs/5', 'pr/12/runs/7']);
+  expect(r.index.channels[MAIN]?.runs.map((x) => x.runId)).toEqual([4, 3, 2]);
+  expect(r.index.channels['pr/12']?.runs.map((x) => x.runId)).toEqual([9, 8, 6]);
 });
 
 test('removeChannel returns the report paths; a missing key is a no-op', () => {
@@ -168,27 +196,94 @@ test('removeChannel returns the report paths; a missing key is a no-op', () => {
   expect(removeChannel(ix, 'pr/99')).toEqual({ index: ix, remove: [] });
 });
 
-test('siteIndexSchema parses an index and rejects another version', () => {
-  const ix = placeRun(empty(), 'ci', ci, siteRun(1));
-  expect(siteIndexSchema.parse(JSON.parse(JSON.stringify(ix)))).toEqual(ix);
-  expect(siteIndexSchema.safeParse({ version: 2, channels: {} }).success).toBe(false);
+test('dropWorkflowChannels removes the older per-workflow channels and names their folders', () => {
+  const wf = (title: string) => ({ kind: 'workflow', title, headBranch: 'main' }) as const;
+  let ix = placeRun(empty(), 'ci', wf('ci'), siteRun(1));
+  ix = placeRun(ix, 'load', wf('load'), siteRun(2, { reportPath: 'load/runs/2' }));
+  ix = placeRun(ix, 'pr/3', { kind: 'pr', title: '#3', headBranch: 'old' }, siteRun(3));
+  ix = placeRun(ix, MAIN, main, siteRun(4));
+  const r = dropWorkflowChannels(ix);
+  expect(r.remove.sort()).toEqual(['ci', 'load']);
+  expect(Object.keys(r.index.channels).sort()).toEqual([MAIN, 'pr/3']);
+  expect(dropWorkflowChannels(r.index)).toEqual({ index: r.index, remove: [] });
 });
 
-test('renderLanding links main and each PR, has no script, and escapes titles', () => {
-  let ix = placeRun(empty(), 'ci', ci, siteRun(1));
+test('siteIndexSchema parses an index, the older channel kinds too, and rejects another version', () => {
+  let ix = placeRun(empty(), MAIN, main, siteRun(1, { workflow: 'ci' }));
+  ix = placeRun(ix, 'pr/3', { kind: 'pr', title: '#3', headBranch: 'b', headRepo: 'o/r' }, siteRun(2));
+  ix = placeRun(ix, 'ci', { kind: 'workflow', title: 'ci', headBranch: 'main' }, siteRun(3));
+  expect(siteIndexSchema.parse(JSON.parse(JSON.stringify(ix)))).toEqual(ix);
+  expect(siteIndexSchema.safeParse({ version: 2, channels: {} }).success).toBe(false);
+  // a stub-era pr channel, with no workflow on its runs, reads as a pr channel
+  const legacy = {
+    version: 1,
+    channels: { 'pr/7': { kind: 'pr', title: '#7', headBranch: 'b', runs: [siteRun(5)] } },
+  };
+  expect(siteIndexSchema.parse(legacy).channels['pr/7']?.kind).toBe('pr');
+});
+
+test('parseSiteIndex skips a channel of an unknown kind, or one it cannot read, with a warning', () => {
+  const good = { kind: 'pr', title: '#3', headBranch: 'b', runs: [siteRun(1)] };
+  const text = JSON.stringify({
+    version: 1,
+    channels: {
+      'pr/3': good,
+      'tag/v1': { kind: 'tag', title: 'v1', headBranch: 'v1', runs: [] },
+      'pr/4': { kind: 'pr', title: '#4' },
+    },
+  });
+  const warnings: string[] = [];
+  const ix = parseSiteIndex(text, (m) => warnings.push(m));
+  expect(Object.keys(ix.channels)).toEqual(['pr/3']);
+  expect(ix.channels['pr/3']?.runs).toHaveLength(1);
+  expect(warnings).toHaveLength(2);
+  expect(warnings[0]).toContain('tag/v1');
+  expect(warnings[0]).toContain('kind tag');
+  expect(warnings[1]).toContain('pr/4');
+  // without a warn callback it still reads; a wrong version or shape still throws
+  expect(Object.keys(parseSiteIndex(text).channels)).toEqual(['pr/3']);
+  expect(() => parseSiteIndex(JSON.stringify({ version: 2, channels: {} }))).toThrow();
+  expect(() => parseSiteIndex(JSON.stringify({ version: 1, channels: [] }))).toThrow();
+});
+
+test('renderLanding lists the branches, then pull requests newest first, has no script, and escapes titles', () => {
+  let ix = placeRun(empty(), MAIN, main, siteRun(1));
   ix = placeRun(
     ix,
     'pr/12',
     { kind: 'pr', title: '#12 <img src=x onerror=1> & "q"', headBranch: 'feat' },
     siteRun(2),
   );
+  ix = placeRun(
+    ix,
+    'pr/20',
+    { kind: 'pr', title: '#20 Fork', headBranch: 'y', headRepo: 'f/r' },
+    siteRun(3, { conclusion: 'failure' }),
+  );
+  ix = placeRun(ix, 'ci', { kind: 'workflow', title: 'ci', headBranch: 'main' }, siteRun(4));
   const html = renderLanding(ix, 'o/<r>');
-  expect(html).toMatch(/<a href="ci\/">main<\/a>/);
-  expect(html).toContain('href="pr/12/"');
+  expect(html).toContain('<h2>Branches</h2>');
+  expect(html).toMatch(/<a href="branch\/main\/">main<\/a>/);
+  expect(html).toContain('<h2>Pull requests</h2>');
   expect(html).toContain('#12 &lt;img src=x onerror=1&gt; &amp; &quot;q&quot;');
+  expect(html).toContain('f:y');
+  expect(html).toContain('failure');
   expect(html).toContain('o/&lt;r&gt;');
+  expect(html).not.toContain('href="ci/"');
   expect(html).not.toContain('<img');
   expect(html).not.toContain('<script');
+  const order = ['branch/main/', 'pr/20/', 'pr/12/'].map((h) => html.indexOf(`href="${h}"`));
+  expect(order.every((i) => i > 0)).toBe(true);
+  expect(order).toEqual([...order].sort((a, b) => a - b));
+});
+
+test('slug and reportUrl', () => {
+  expect(slug('ci')).toBe('ci');
+  expect(slug('Perf / Load')).toBe('perf-load');
+  expect(slug('feat/Big Thing')).toBe('feat-big-thing');
+  expect(slug('pr')).toBe('pr');
+  expect(slug('--')).toBe('workflow');
+  expect(reportUrl('https://o.github.io/r', 'pr/1/runs/1')).toBe('https://o.github.io/r/pr/1/runs/1/');
 });
 
 test('renderRedirect refreshes to the target', () => {
@@ -196,18 +291,6 @@ test('renderRedirect refreshes to the target', () => {
   expect(html).toContain('url=runs/123/');
   expect(html).toContain('<a href="runs/123/">');
   expect(renderRedirect('a"><script>')).not.toContain('<script');
-});
-
-test('slug and reportUrl', () => {
-  expect(slug('ci')).toBe('ci');
-  expect(slug('Perf / Load')).toBe('perf-load');
-  // `pr/` holds the pull request channels, so a workflow named PR gets another folder.
-  expect(slug('PR')).toBe('pr--workflow');
-  expect(slug(' pr ')).toBe('pr--workflow');
-  expect(slug('PR')).not.toBe(slug('PR workflow'));
-  expect(slug('PR workflow')).toBe('pr-workflow');
-  expect(slug('pr checks')).toBe('pr-checks');
-  expect(reportUrl('https://o.github.io/r', 'ci/runs/1')).toBe('https://o.github.io/r/ci/runs/1/');
 });
 
 test('rollingInputs lists the report paths oldest first', () => {

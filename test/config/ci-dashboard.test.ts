@@ -36,7 +36,9 @@ describe('.github/actions/otel-html-publish/otel-html-ci.yaml', () => {
     expect(config.viewer.defaultDashboard).toBe('ci');
     const dash = ci(config);
     expect(dash.widgets).toHaveLength(6);
+    // `workflow` tells ci and load apart now that both share one rolling page
     expect(dash.variables.map((v) => [v.key, v.label])).toEqual([
+      ['cicd.pipeline.name', 'workflow'],
       ['cicd.pipeline.run.id', 'run'],
       ['cicd.pipeline.task.name', 'job'],
     ]);

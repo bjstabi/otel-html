@@ -18,6 +18,7 @@ import { mergeSkippingBad, mergeWithConfig } from './publish-io.js';
 import {
   applyRetention,
   channelFor,
+  dropWorkflowChannels,
   placeRun,
   removeChannel,
   renderRedirect,
@@ -60,11 +61,20 @@ async function writeStub(site: string, key: string, index: SiteIndex): Promise<v
 
 const RUNS = 'runs';
 
+/** Empties `<site>/<key>/` (creating it if absent) except its `runs/`. */
+async function clearRolling(site: string, key: string): Promise<void> {
+  const dir = join(site, key);
+  await mkdir(dir, { recursive: true });
+  for (const name of await readdir(dir)) {
+    if (name !== RUNS) await rm(join(dir, name), { recursive: true, force: true });
+  }
+}
+
 /**
  * Rebuilds `<site>/<key>/` as the merge of the channel's retained runs, oldest first. The runs live inside that
  * folder (`runs/<id>/`), so the merge goes to a scratch folder and every entry of the channel folder except `runs`
- * is replaced by the merged output's. A merge that fails with no bad input to blame is a warning and the redirect
- * stub is written instead; the per-run report stays published.
+ * is replaced by the merged output's. A merge that fails with no bad input to blame is a warning and the folder is
+ * left with only `runs/` and the redirect stub; the per-run report stays published.
  */
 async function rebuildRolling(
   site: string,
@@ -87,16 +97,14 @@ async function rebuildRolling(
       probeOut: (n) => join(scratch, `probe-${n}`),
       warn: (m) => warning(io, 'report', m),
     });
-    const dir = join(site, key);
-    await mkdir(dir, { recursive: true });
-    for (const name of await readdir(dir)) {
-      if (name !== RUNS) await rm(join(dir, name), { recursive: true, force: true });
-    }
+    await clearRolling(site, key);
     for (const name of await readdir(merged)) {
-      await cp(join(merged, name), join(dir, name), { recursive: true });
+      await cp(join(merged, name), join(site, key, name), { recursive: true });
     }
   } catch (e) {
     warning(io, 'site', `rolling report of ${key} not rebuilt: ${messageOf(e)}`);
+    // the stub alone, not beside a stale or half-replaced rolling report
+    await clearRolling(site, key);
     await writeStub(site, key, index);
   } finally {
     await rm(scratch, { recursive: true, force: true });
@@ -104,10 +112,10 @@ async function rebuildRolling(
 }
 
 /**
- * Places a finished run's report on the site: resolves its channel, copies the report to the run's folder, applies
- * retention and rewrites the index, landing page and the channel's page (the rolling report for a workflow
- * channel, a redirect stub to the latest run for a pull request). A run with no channel is announced and skipped.
- * Throws when the run cannot be read from the API.
+ * Places a finished run's report on the site: resolves its channel (`branch/<default>` or `pr/<n>`), copies the
+ * report to the run's folder, applies retention, drops the older per-workflow channels (`ci/`, `load/`) and rewrites
+ * the index, landing page and the channel's rolling report. A run with no channel is announced and skipped. Throws
+ * when the run cannot be read from the API.
  */
 export async function runSite(
   opts: SiteOptions,
@@ -148,22 +156,18 @@ export async function runSite(
     completedAt: run.updated_at,
     runUrl: run.html_url,
     reportPath,
+    workflow: run.name,
   };
-  const current = await readSiteIndex(opts.site);
-  const { index, remove } = applyRetention(placeRun(current, placed.key, placed.channel, siteRun), {
-    workflow: opts.retention,
+  const migrated = dropWorkflowChannels(await readSiteIndex(opts.site, (m) => warning(io, 'site', m)));
+  const { index, remove } = applyRetention(placeRun(migrated.index, placed.key, placed.channel, siteRun), {
+    branch: opts.retention,
     pr: opts.prRetention,
   });
   await copyReport(opts.report, join(opts.site, reportPath));
-  await removePaths(
-    opts.site,
-    remove.filter((p) => p !== reportPath),
-  );
-  if (placed.channel.kind === 'workflow') {
-    await rebuildRolling(opts.site, placed.key, index, opts.config, deps, io);
-  } else {
-    await writeStub(opts.site, placed.key, index);
-  }
+  await removePaths(opts.site, [...migrated.remove, ...remove.filter((p) => p !== reportPath)]);
+  if (migrated.remove.length > 0)
+    say(io, `removed the per-workflow channels ${migrated.remove.join(', ')}; see branch/ and pr/`);
+  await rebuildRolling(opts.site, placed.key, index, opts.config, deps, io);
   await writeSite(opts.site, index, opts.repository);
   setOutputs(io, {
     'report-url': reportUrl(opts.baseUrl.replace(/\/+$/, ''), reportPath),
@@ -173,13 +177,13 @@ export async function runSite(
 }
 
 /**
- * Removes pull request `pr`'s channel and folder from the site and writes `cleaned=true` to $GITHUB_OUTPUT. A pull
- * request the site never had (no channel and no folder) changes nothing and writes `cleaned=false`, so the caller
- * pushes and deploys nothing.
+ * Removes pull request `pr`'s channel and folder (`pr/<n>`) from the site and writes `cleaned=true` to
+ * $GITHUB_OUTPUT. A pull request the site never had (no channel and no folder) changes nothing and writes
+ * `cleaned=false`, so the caller pushes and deploys nothing.
  */
 export async function runCleanup(opts: CleanupOptions, io: CliIo): Promise<void> {
   const key = `pr/${opts.pr}`;
-  const current = await readSiteIndex(opts.site);
+  const current = await readSiteIndex(opts.site, (m) => warning(io, 'cleanup', m));
   if (current.channels[key] === undefined && !existsSync(join(opts.site, key))) {
     say(io, `${key} is not on the site; nothing to remove`);
     setOutputs(io, { cleaned: 'false' });
