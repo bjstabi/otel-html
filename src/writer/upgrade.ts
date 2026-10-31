@@ -1,3 +1,4 @@
+import { basename, dirname } from 'node:path';
 import { LOCK_PATH } from '../format/paths.js';
 import { OtelHtmlError } from '../model/errors.js';
 import { at } from './checkpoint.js';
@@ -6,6 +7,23 @@ import { acquireLock } from './lock.js';
 import { readReportManifest } from './merge.js';
 import type { WriterDeps } from './session.js';
 import { writeViewerAssets } from './viewer-assets.js';
+
+/**
+ * Refuses an `assets` folder that is a link out of the report (one copied from elsewhere may be): the viewer files
+ * would land wherever it points. Links at the files themselves are replaced, not followed, by the writes.
+ */
+async function assertAssetsInside(fs: WriterDeps['fs'], dir: string): Promise<void> {
+  const assets = at(dir, 'assets');
+  if (!(await fs.exists(assets))) return;
+  const real = await fs.realpath(assets);
+  // On-disk case may differ from `assets` on a case-insensitive file system.
+  if (dirname(real) === (await fs.realpath(dir)) && basename(real).toLowerCase() === 'assets') return;
+  throw new OtelHtmlError('invalid-report', {
+    path: assets,
+    expected: 'a folder inside the report',
+    actual: real,
+  });
+}
 
 /**
  * Rewrite a report's viewer (`index.html`, `.nojekyll`, `assets/`) with this otel-html's, leaving `data/`
@@ -19,6 +37,7 @@ export async function upgradeReport(
   const { fs, viewerAssets } = deps;
   const report = await readReportManifest(fs, dir, 'upgrade');
   const { manifest } = report;
+  await assertAssetsInside(fs, report.dir);
   // Holding the writer lock for the rewrite also keeps a writer from starting underneath it.
   const lock = await acquireLock(deps, at(report.dir, LOCK_PATH)).catch((e: unknown) => {
     if (e instanceof OtelHtmlError && e.code === 'report-locked') {

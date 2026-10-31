@@ -1,5 +1,15 @@
 import { createHash } from 'node:crypto';
-import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  cpSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  readlinkSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
@@ -21,7 +31,8 @@ function hashTree(dir: string, rel = ''): Record<string, string> {
   const out: Record<string, string> = {};
   for (const e of readdirSync(join(dir, rel), { withFileTypes: true })) {
     const r = rel === '' ? e.name : `${rel}/${e.name}`;
-    if (e.isDirectory()) Object.assign(out, hashTree(dir, r));
+    if (e.isSymbolicLink()) out[r] = `-> ${readlinkSync(join(dir, r))}`;
+    else if (e.isDirectory()) Object.assign(out, hashTree(dir, r));
     else
       out[r] = createHash('sha256')
         .update(readFileSync(join(dir, r)))
@@ -59,6 +70,35 @@ describe('upgradeReport', () => {
     expect(readdirSync(join(dir, 'assets')).sort()).toEqual(['viewer.abc123.css', 'viewer.abc123.js']);
     expect(readdirSync(join(dir, 'data/state'))).not.toContain('lock.json');
   });
+
+  // An untrusted report may carry symlinks at the viewer's paths. Symlinks on Windows need a privilege.
+  test.skipIf(process.platform === 'win32')(
+    'a symlinked asset is replaced, not written through',
+    async () => {
+      const dir = copyReport();
+      const outside = join(mkdtempSync(join(tmpdir(), 'upgrade-outside-')), 'precious');
+      writeFileSync(outside, 'precious');
+      mkdirSync(join(dir, 'assets'));
+      symlinkSync(outside, join(dir, 'assets/viewer.abc123.js'));
+      await upgradeReport(deps(), dir);
+      expect(readFileSync(outside, 'utf8')).toBe('precious');
+      expect(lstatSync(join(dir, 'assets/viewer.abc123.js')).isSymbolicLink()).toBe(false);
+    },
+  );
+
+  test.skipIf(process.platform === 'win32')(
+    'an assets folder that links out of the report is refused',
+    async () => {
+      const dir = copyReport();
+      const outside = mkdtempSync(join(tmpdir(), 'upgrade-outside-'));
+      symlinkSync(outside, join(dir, 'assets'));
+      const before = hashTree(dir);
+      const e = await failure(upgradeReport(deps(), dir));
+      expect(e.code).toBe('invalid-report');
+      expect(readdirSync(outside)).toEqual([]);
+      expect(hashTree(dir)).toEqual(before);
+    },
+  );
 
   test('a folder with no report is a usage error and nothing is written', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'upgrade-empty-'));
