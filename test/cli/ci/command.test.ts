@@ -117,6 +117,59 @@ describe('otel-html ci report with no job reports', () => {
   });
 });
 
+describe('otel-html ci report step summary', { timeout: 60_000 }, () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'ci-report-summary-'));
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const report = async (extra: string[]): Promise<string> => {
+    vi.stubGlobal('fetch', async (url: string) => {
+      const body = url.includes('/jobs')
+        ? { jobs: [] }
+        : {
+            id: 8,
+            run_attempt: 1,
+            name: 'ci',
+            event: 'push',
+            status: 'completed',
+            conclusion: 'success',
+            // around the job report's spans (test-support T0)
+            created_at: '2023-11-14T22:13:00Z',
+            run_started_at: '2023-11-14T22:13:01Z',
+            updated_at: '2023-11-14T22:14:00Z',
+            html_url: 'https://github.com/o/r/actions/runs/8',
+            head_branch: 'main',
+            head_sha: 'sha8',
+            repository: { full_name: 'o/r', html_url: 'https://github.com/o/r' },
+            head_repository: { full_name: 'o/r' },
+          };
+      return new Response(JSON.stringify(body), { status: 200 });
+    });
+    const artifacts = join(dir, 'artifacts');
+    await smallReport(join(artifacts, 'otel-html-build', 'report'));
+    const summary = join(dir, 'summary.md');
+    writeFileSync(summary, '');
+    const argv = ['ci', 'report', '--run-id', '8', '--repository', 'o/r', '--artifacts', artifacts];
+    const f = fakeIo({ GITHUB_STEP_SUMMARY: summary });
+    expect(await runCli([...argv, '--out', join(dir, 'out'), ...extra], f.io, realFsDeps)).toBe(0);
+    expect(f.out()).toContain('Report: see the `ci-run-report` artifact');
+    return readFileSync(summary, 'utf8');
+  };
+
+  test('writes the summary table to the job summary', async () => {
+    expect(await report([])).toContain('Report: see the `ci-run-report` artifact');
+  });
+
+  test('--no-summary leaves the job summary to `ci link`', async () => {
+    expect(await report(['--no-summary'])).toBe('');
+  });
+});
+
 describe('otel-html ci context', () => {
   let dir: string;
   let prevCwd: string;

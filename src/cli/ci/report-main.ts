@@ -30,6 +30,8 @@ export type ReportOptions = {
   out: string;
   config?: string;
   token?: string;
+  /** Append the summary table to $GITHUB_STEP_SUMMARY (default true); off when `ci link` writes the linked one. */
+  stepSummary?: boolean;
 };
 
 const LOG_CONCURRENCY = 4;
@@ -184,7 +186,7 @@ export async function runReport(
   const reportUrl = env('OTEL_HTML_REPORT_URL') ?? null;
   const table = summaryTable(run, jobs, reportUrl);
   say(io, table);
-  const stepSummary = env('GITHUB_STEP_SUMMARY');
+  const stepSummary = opts.stepSummary === false ? undefined : env('GITHUB_STEP_SUMMARY');
   if (stepSummary) {
     try {
       appendFileSync(stepSummary, `${table}\n`);

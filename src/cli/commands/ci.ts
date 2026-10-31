@@ -20,6 +20,7 @@ interface ReportFlags {
   artifacts: string;
   out: string;
   config?: string;
+  summary: boolean;
 }
 
 const parseRunId = (text: string): number => parsePositive('--run-id', text);
@@ -81,12 +82,14 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
     .requiredOption('--artifacts <dir>', 'folder of downloaded otel-html-* job artifacts')
     .requiredOption('--out <dir>', 'merged report folder')
     .option('--config <file>', 'config file for the written reports')
+    .option('--no-summary', 'do not write the job summary (`ci link` writes the one with the report link)')
     .action(async (flags: ReportFlags) => {
       const opts = {
         runId: parseRunId(flags.runId),
         repository: parseRepository(flags.repository),
         artifacts: flags.artifacts,
         out: flags.out,
+        stepSummary: flags.summary,
         ...(flags.config === undefined ? {} : { config: flags.config }),
       };
       try {

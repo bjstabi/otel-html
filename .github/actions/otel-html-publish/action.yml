@@ -139,12 +139,17 @@ runs:
         ARTIFACTS: ${{ steps.resolve.outputs.artifacts }}
         REPORT: ${{ steps.resolve.outputs.report }}
         RUN_ID: ${{ inputs.run-id }}
+        TARGET: ${{ inputs.target }}
         GITHUB_TOKEN: ${{ inputs.token }}
       run: |
+        # On github-pages, `ci link` writes the job summary with the report's link; this one would only say "see the
+        # ci-run-report artifact".
+        args=()
+        if [ "$TARGET" = github-pages ]; then args+=(--no-summary); fi
         # CMD is deliberately unquoted: it may be a command with arguments, such as `node dist/cli/main.js`.
         # shellcheck disable=SC2086
         $CMD ci report --run-id "$RUN_ID" --repository "$GITHUB_REPOSITORY" --artifacts "$ARTIFACTS" --out "$REPORT" \
-          --config "$CONFIG"
+          --config "$CONFIG" "${args[@]}"
     - if: inputs.cleanup-pr == '' && steps.report.outputs.published != 'false'
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:

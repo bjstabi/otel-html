@@ -346,6 +346,7 @@ These subcommands are for the actions; stable flags, output format not guarantee
 
 | Subcommand | What it does | Flags |
 | --- | --- | --- |
+| `ci report` | Builds a run's report from the Actions API (with `$GITHUB_TOKEN` from the environment) and merges it with the downloaded job artifacts. Writes the summary table to the job summary, and `published=false` to `$GITHUB_OUTPUT` when the run has no job reports. | `--run-id`, `--repository`, `--artifacts`, `--out` (all required); `--config`; `--no-summary` (the action passes it on `github-pages`, where `ci link` writes the summary with the report's link) |
 | `ci site` | Places a run's report in the checked-out site folder, applies retention, rewrites the indexes and stubs. Writes `published` and `report-url` to `$GITHUB_OUTPUT`. | `--site`, `--report`, `--run-id`, `--repository`, `--base-url` (all required); `--retention` (30), `--pr-retention` (5) |
 | `ci link` | Comments on the pull requests, creates the check run and writes the job summary. Never fails the job. | `--run-id`, `--repository`, `--url`, `--site` (all required); `--no-comment`, `--no-check` |
 | `ci cleanup` | Removes a closed pull request's reports from the site folder. | `--site`, `--pr` (required); `--repository` (default `$GITHUB_REPOSITORY`) |
