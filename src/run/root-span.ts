@@ -25,6 +25,8 @@ export interface ChildExit {
 export interface RootSpanInput {
   traceId: Uint8Array;
   spanId: Uint8Array;
+  /** The inherited parent's span id; absent or empty means this is a root. */
+  parentSpanId?: Uint8Array;
   command: readonly string[];
   pid: number;
   start: UnixNanos;
@@ -58,6 +60,8 @@ export const EXIT_CODE_OF_SIGNAL: Readonly<Partial<Record<NodeJS.Signals, number
 const SIGNALLED_BASE = 128;
 // The trace flags of a sampled root span (01), with "has is-remote" set and is-remote clear: the span is local.
 const SAMPLED_LOCAL_FLAGS = 0x101;
+// Sampled, with "has is-remote" and is-remote set: the parent came from another process.
+const SAMPLED_REMOTE_FLAGS = 0x301;
 const SCOPE_NAME = 'otel-html';
 
 export function exitCodeOf({ code, signal }: ChildExit): number {
@@ -86,9 +90,11 @@ function statusOf({ code, signal }: ChildExit): { code: Status_StatusCode; messa
 
 export function rootSpanRequest(input: RootSpanInput): ExportTraceServiceRequest {
   const executable = executableName(input.command[0] ?? '');
+  const inherited = input.parentSpanId !== undefined && input.parentSpanId.length > 0;
   const span = create(SpanSchema, {
     traceId: input.traceId,
     spanId: input.spanId,
+    ...(inherited ? { parentSpanId: input.parentSpanId } : {}),
     name: executable,
     kind: Span_SpanKind.INTERNAL,
     startTimeUnixNano: input.start,
@@ -100,7 +106,7 @@ export function rootSpanRequest(input: RootSpanInput): ExportTraceServiceRequest
       ...(input.exit.code === null ? {} : { 'process.exit.code': input.exit.code }),
     }),
     status: create(StatusSchema, statusOf(input.exit)),
-    flags: SAMPLED_LOCAL_FLAGS,
+    flags: inherited ? SAMPLED_REMOTE_FLAGS : SAMPLED_LOCAL_FLAGS,
   });
   return create(ExportTraceServiceRequestSchema, {
     resourceSpans: [
