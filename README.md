@@ -332,7 +332,7 @@ The run's report is then published to the site at <https://bjstabi.github.io/ote
 
 - `/index.html` (landing page) and `/index.json` (site index).
 - `/<workflow>/` and `/<workflow>/runs/<run_id>/` for pushes to the default branch of this repo, for example `/ci/`.
-- `/pr/<number>/` and `/pr/<number>/runs/<run_id>/` for a run whose commit or branch belongs to an open pull request (the pull request may have been pushed to since).
+- `/pr/<number>/` and `/pr/<number>/runs/<run_id>/` for any other run whose commit or branch belongs to an open pull request (the pull request may have been pushed to since). A default-branch run always goes to its workflow's folder, even when an open pull request's head is, or contains, its commit.
 
 `/pr/<number>/` is a stub that forwards to the pull request's newest run. A run on any other branch, or a push from a fork, with no open pull request is not published. The site keeps the last 30 runs per workflow and the last 5 per pull request; a re-run replaces its folder. When a pull request closes, `pull_request_target` triggers the `cleanup` job, which removes its folder.
 
@@ -340,7 +340,7 @@ The run's report is then published to the site at <https://bjstabi.github.io/ote
 
 The `gh-pages` branch is the store: one orphan commit holding the whole site, replaced on every publish rather than grown, so history does not accumulate every run's data. [site-branch.sh](.github/actions/otel-html-publish/site-branch.sh) checks out the tip and pushes the new commit with `--force-with-lease` against it. A rejected lease (another publish or a cleanup got there first) checks out again, re-applies and retries, up to 5 attempts, so a cleaned-up pull request is never brought back. The `report` job in [ci-report.yml](.github/workflows/ci-report.yml) runs the [otel-html-publish](.github/actions/otel-html-publish/action.yml) action with `deploy: false`, which builds the report, publishes it and links it. The `deploy` job ships the `gh-pages` tip under the concurrency group `pages`, so a pending deploy replaced by a newer one loses nothing: the one that runs ships the latest tip. It runs only from the default branch, so a `workflow_dispatch` on another branch updates `gh-pages` and skips the deploy; the next default-branch deploy ships it.
 
-`otel-html ci link` posts one sticky comment per workflow on the commit's open pull requests (found by a per-workflow marker, so `ci` and `load` do not overwrite each other) and creates a check run named `otel-html report` that concludes `neutral`: it is a link, not a second verdict on the run.
+`otel-html ci link` posts one sticky comment per workflow on the open pull requests of a pull request run (found by a per-workflow marker, so `ci` and `load` do not overwrite each other; a default-branch run comments on none) and creates a check run named `otel-html report` that concludes `neutral`: it is a link, not a second verdict on the run.
 
 These subcommands are for the actions; stable flags, output format not guaranteed.
 

@@ -5,6 +5,7 @@ import {
   channelFor,
   placeRun,
   pullsOfRun,
+  pullsToLink,
   removeChannel,
   renderLanding,
   renderRedirect,
@@ -99,6 +100,19 @@ test('channelFor: a fork pull from a branch of the same name does not take a def
   expect(channelFor(apiRun(), [fork], 'main')?.key).toBe('ci');
   expect(pullsOfRun(apiRun(), [fork])).toEqual([]);
   expect(pullsOfRun(apiRun(), [pull({ head: { sha: 'zzz', ref: 'main', repo: null } })])).toEqual([]);
+});
+
+test('channelFor: a default-branch run goes to its workflow channel even when an open pull has its commit', () => {
+  // A pull request whose head is main (or contains main's head commit) must not capture main's runs.
+  const fromMain = pull({ head: { sha: 'abc', ref: 'main', repo: { full_name: 'o/r' } } });
+  const containing = pull({ number: 13, head: { sha: 'abc', ref: 'feat', repo: { full_name: 'o/r' } } });
+  expect(channelFor(apiRun(), [fromMain, containing], 'main')).toEqual({ key: 'ci', channel: ci });
+  expect(pullsToLink(apiRun(), [fromMain, containing], 'main')).toEqual([]);
+  expect(pullsToLink(apiRun({ head_branch: 'feat' }), [containing], 'main')).toEqual([containing]);
+  // a fork's `main` is not the default branch
+  const forkRun = apiRun({ head_repository: { full_name: 'fork/r' } });
+  expect(pullsToLink(forkRun, [containing], 'main')).toEqual([containing]);
+  expect(channelFor(forkRun, [containing], 'main')?.key).toBe('pr/13');
 });
 
 test('pullsOfRun prefers the exact-commit pull', () => {

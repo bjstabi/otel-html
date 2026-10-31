@@ -79,28 +79,39 @@ export function pullsOfRun(run: ApiRun, pulls: ApiPull[]): ApiPull[] {
   return [...exact, ...moved];
 }
 
+/** Whether `run` is a run of the default branch of its own repository (not a fork's branch of the same name). */
+export const isDefaultBranchRun = (run: ApiRun, defaultBranch: string): boolean =>
+  run.head_branch === defaultBranch &&
+  run.head_repository != null &&
+  run.head_repository.full_name === run.repository.full_name;
+
 /**
- * Where a finished run is published: the open pull request of the run's commit or branch (see `pullsOfRun`), else the workflow's
- * channel when the run is the default branch of this repository; anything else (a fork push, a feature branch
- * with no open pull) is not published.
+ * The pull requests whose sticky comment links `run`: none for a default-branch run (it is published to the
+ * workflow's channel even when an open pull request's head is, or contains, the same commit), else `pullsOfRun`.
+ */
+export const pullsToLink = (run: ApiRun, pulls: ApiPull[], defaultBranch: string): ApiPull[] =>
+  isDefaultBranchRun(run, defaultBranch) ? [] : pullsOfRun(run, pulls);
+
+/**
+ * Where a finished run is published: the workflow's channel when the run is the default branch of this repository,
+ * else the open pull request of the run's commit or branch (see `pullsOfRun`); anything else (a fork push, a feature
+ * branch with no open pull) is not published.
  */
 export function channelFor(
   run: ApiRun,
   pulls: ApiPull[],
   defaultBranch: string,
 ): { key: string; channel: Omit<Channel, 'runs'> } | undefined {
-  const pr = pullsOfRun(run, pulls)[0];
-  if (pr !== undefined) {
-    return {
-      key: `pr/${pr.number}`,
-      channel: { kind: 'pr', title: `#${pr.number} ${pr.title}`, headBranch: pr.head.ref },
-    };
-  }
-  if (run.head_branch === defaultBranch && run.head_repository?.full_name === run.repository.full_name) {
+  if (isDefaultBranchRun(run, defaultBranch)) {
     const key = slug(run.name);
     return { key, channel: { kind: 'workflow', title: key, headBranch: defaultBranch } };
   }
-  return undefined;
+  const pr = pullsOfRun(run, pulls)[0];
+  if (pr === undefined) return undefined;
+  return {
+    key: `pr/${pr.number}`,
+    channel: { kind: 'pr', title: `#${pr.number} ${pr.title}`, headBranch: pr.head.ref },
+  };
 }
 
 /** `index` with `run` in channel `key` (created if absent, metadata refreshed); the same runId is replaced in place. */

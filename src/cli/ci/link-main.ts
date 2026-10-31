@@ -15,7 +15,7 @@ import {
   warning,
 } from './github-api.js';
 import { checkRunPayload, commentBody, findStickyComment, previousRun } from './link.js';
-import { pullsOfRun, slug } from './site.js';
+import { pullsToLink, slug } from './site.js';
 import { readSiteIndex } from './site-io.js';
 
 export type LinkOptions = {
@@ -57,20 +57,29 @@ export async function runLink(opts: LinkOptions, io: CliIo, fetchFn: Fetch = fet
   } catch (e) {
     warn(`cannot read the jobs of run ${opts.runId}, so the table is empty: ${messageOf(e)}`);
   }
+  // As `ci site` places it: a default-branch run is the workflow's, so no pull request gets its comment.
   let pulls: ApiPull[] = [];
   if (opts.comment) {
     try {
-      pulls = pullsOfRun(
-        run,
-        await fetchPullsForSha(
-          { apiUrl: api, repository: opts.repository, sha: run.head_sha },
-          token,
-          API_TIMEOUT_MS,
-          fetchFn,
-        ),
-      );
+      const { default_branch: defaultBranch } = (
+        await getJson<{ default_branch: string }>(repo, token, API_TIMEOUT_MS, fetchFn)
+      ).body;
+      try {
+        pulls = pullsToLink(
+          run,
+          await fetchPullsForSha(
+            { apiUrl: api, repository: opts.repository, sha: run.head_sha },
+            token,
+            API_TIMEOUT_MS,
+            fetchFn,
+          ),
+          defaultBranch,
+        );
+      } catch (e) {
+        warn(`cannot list the pull requests of ${run.head_sha}, so no comment is posted: ${messageOf(e)}`);
+      }
     } catch (e) {
-      warn(`cannot list the pull requests of ${run.head_sha}, so no comment is posted: ${messageOf(e)}`);
+      warn(`cannot read the default branch of ${opts.repository}, so no comment is posted: ${messageOf(e)}`);
     }
   }
 

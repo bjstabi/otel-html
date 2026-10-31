@@ -443,6 +443,7 @@ describe('otel-html ci link', () => {
           { id: 1, body: 'unrelated' },
           { id: 2, body: '<!-- otel-html-report -->\nold' },
         ]);
+      if (url.endsWith('/repos/o/r')) return json({ default_branch: 'main' });
       return new Response('nope', { status: 404 });
     });
   };
@@ -521,6 +522,38 @@ describe('otel-html ci link', () => {
     });
     expect(await runCli(linkArgs(['--no-check']), fakeIo().io, deps)).toBe(0);
     expect(writes()).toEqual(['POST https://api.github.com/repos/o/r/issues/7/comments']);
+  });
+
+  test('a default-branch run comments on no pull request, even one whose head is its commit', async () => {
+    stub();
+    const inner = globalThis.fetch;
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) =>
+      /\/actions\/runs\/6$/.test(url)
+        ? new Response(
+            JSON.stringify({
+              id: 6,
+              run_attempt: 1,
+              name: 'ci',
+              status: 'completed',
+              head_branch: 'main',
+              head_sha: 'sha6',
+              repository: { full_name: 'o/r' },
+              head_repository: { full_name: 'o/r' },
+            }),
+            { status: 200 },
+          )
+        : inner(url, init),
+    );
+    expect(await runCli(linkArgs(), fakeIo().io, deps)).toBe(0);
+    expect(writes()).toEqual(['POST https://api.github.com/repos/o/r/check-runs']);
+  });
+
+  test('an unreadable default branch posts no comment and still creates the check run', async () => {
+    stub((_m, url) => url.endsWith('/repos/o/r'));
+    const f = fakeIo();
+    expect(await runCli(linkArgs(), f.io, deps)).toBe(0);
+    expect(f.out()).toContain('::warning::otel-html link: cannot read the default branch of o/r');
+    expect(writes()).toEqual(['POST https://api.github.com/repos/o/r/check-runs']);
   });
 
   test('--no-check leaves only the comment', async () => {
