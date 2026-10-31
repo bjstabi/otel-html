@@ -2,7 +2,7 @@ import { appendFileSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { CliIo } from '../io.js';
-import { type ApiRun, type Fetch, fetchPullsForSha, getJson, say } from './github-api.js';
+import { type ApiRun, envVar, type Fetch, fetchPullsForSha, getJson, say } from './github-api.js';
 import {
   applyRetention,
   channelFor,
@@ -27,8 +27,6 @@ export type SiteOptions = {
 export type CleanupOptions = { site: string; pr: number; repository: string };
 
 const API_TIMEOUT_MS = 15_000;
-
-const envVar = (io: CliIo, name: string): string | undefined => io.env[name] || undefined;
 
 function setOutputs(io: CliIo, values: Record<string, string>): void {
   const lines = Object.entries(values).map(([k, v]) => `${k}=${v}`);

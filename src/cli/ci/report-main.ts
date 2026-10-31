@@ -6,7 +6,16 @@ import { merge } from '../../api/convert.js';
 import { Report } from '../../api/report.js';
 import type { WriterDeps } from '../../writer/session.js';
 import type { CliIo } from '../io.js';
-import { type ApiRun, type Fetch, fetchJobs, getJson, messageOf, say, warning } from './github-api.js';
+import {
+  type ApiRun,
+  envVar,
+  type Fetch,
+  fetchJobs,
+  getJson,
+  messageOf,
+  say,
+  warning,
+} from './github-api.js';
 import { runKey } from './ids.js';
 import { jobLogRecordsRequest } from './job-logs.js';
 import { ciMetricsRequest } from './metrics.js';
@@ -76,9 +85,9 @@ export async function runReport(
   fetchFn: Fetch = fetch,
 ): Promise<void> {
   const warn = (message: string): void => warning(io, 'report', message);
-  const envVar = (name: string): string | undefined => io.env[name] || undefined;
-  const API = envVar('GITHUB_API_URL') ?? 'https://api.github.com';
-  const token = opts.token ?? envVar('GITHUB_TOKEN');
+  const env = (name: string): string | undefined => envVar(io, name);
+  const API = env('GITHUB_API_URL') ?? 'https://api.github.com';
+  const token = opts.token ?? env('GITHUB_TOKEN');
   const config = opts.config === undefined ? {} : { config: opts.config };
 
   const run = (
@@ -161,10 +170,10 @@ export async function runReport(
     await rm(scratch, { recursive: true, force: true });
   }
 
-  const reportUrl = envVar('OTEL_HTML_REPORT_URL') ?? null;
+  const reportUrl = env('OTEL_HTML_REPORT_URL') ?? null;
   const table = summaryTable(run, jobs, reportUrl);
   say(io, table);
-  const stepSummary = envVar('GITHUB_STEP_SUMMARY');
+  const stepSummary = env('GITHUB_STEP_SUMMARY');
   if (stepSummary) {
     try {
       appendFileSync(stepSummary, `${table}\n`);

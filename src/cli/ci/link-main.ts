@@ -4,6 +4,7 @@ import {
   type ApiJob,
   type ApiPull,
   type ApiRun,
+  envVar,
   type Fetch,
   fetchJobs,
   fetchPaged,
@@ -14,6 +15,7 @@ import {
   warning,
 } from './github-api.js';
 import { checkRunPayload, commentBody, findStickyComment, previousRun } from './link.js';
+import { slug } from './site.js';
 import { readSiteIndex } from './site-io.js';
 
 export type LinkOptions = {
@@ -27,42 +29,49 @@ export type LinkOptions = {
 
 const API_TIMEOUT_MS = 15_000;
 
-const envVar = (io: CliIo, name: string): string | undefined => io.env[name] || undefined;
-
 /**
  * Links a published report from where people look: a sticky comment on each open pull request of the run's head
  * commit, a neutral check run on the commit, and the job summary. Never throws: every failure is a `::warning::`.
  */
 export async function runLink(opts: LinkOptions, io: CliIo, fetchFn: Fetch = fetch): Promise<void> {
   const warn = (message: string): void => warning(io, 'link', message);
-  const api = envVar(io, 'GITHUB_API_URL') || 'https://api.github.com';
-  const token = envVar(io, 'GITHUB_TOKEN') || undefined;
+  const api = envVar(io, 'GITHUB_API_URL') ?? 'https://api.github.com';
+  const token = envVar(io, 'GITHUB_TOKEN');
   const repo = `${api}/repos/${opts.repository}`;
 
   let run: ApiRun;
-  let jobs: ApiJob[];
-  let pulls: ApiPull[];
   try {
     run = (await getJson<ApiRun>(`${repo}/actions/runs/${opts.runId}`, token, API_TIMEOUT_MS, fetchFn)).body;
+  } catch (e) {
+    warn(`cannot read run ${opts.runId}: ${messageOf(e)}`);
+    return;
+  }
+  let jobs: ApiJob[] = [];
+  try {
     jobs = await fetchJobs(
       { apiUrl: api, repository: opts.repository, runId: run.id, runAttempt: run.run_attempt },
       token,
       API_TIMEOUT_MS,
       fetchFn,
     );
-    pulls = opts.comment
-      ? (
-          await fetchPullsForSha(
-            { apiUrl: api, repository: opts.repository, sha: run.head_sha },
-            token,
-            API_TIMEOUT_MS,
-            fetchFn,
-          )
-        ).filter((p) => p.state === 'open' && p.head.sha === run.head_sha)
-      : [];
   } catch (e) {
-    warn(`cannot read run ${opts.runId}: ${messageOf(e)}`);
-    return;
+    warn(`cannot read the jobs of run ${opts.runId}, so the table is empty: ${messageOf(e)}`);
+  }
+  let pulls: ApiPull[] = [];
+  if (opts.comment) {
+    try {
+      const sha = run.head_sha;
+      pulls = (
+        await fetchPullsForSha(
+          { apiUrl: api, repository: opts.repository, sha },
+          token,
+          API_TIMEOUT_MS,
+          fetchFn,
+        )
+      ).filter((p) => p.state === 'open' && p.head.sha === sha);
+    } catch (e) {
+      warn(`cannot list the pull requests of ${run.head_sha}, so no comment is posted: ${messageOf(e)}`);
+    }
   }
 
   let previous: ReturnType<typeof previousRun>;
@@ -93,6 +102,7 @@ export async function runLink(opts: LinkOptions, io: CliIo, fetchFn: Fetch = fet
           (b) => b,
           fetchFn,
         ),
+        slug(run.name),
       );
       if (existing === undefined) await sendJson('POST', comments, { body }, token, API_TIMEOUT_MS, fetchFn);
       else

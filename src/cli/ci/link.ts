@@ -1,10 +1,14 @@
 import type { ApiJob, ApiRun } from './github-api.js';
-import type { SiteIndex, SiteRun } from './site.js';
+import { type SiteIndex, type SiteRun, slug } from './site.js';
 import { MARKER, summaryTable } from './summary.js';
 
 /** The pure side of `ci link`: the sticky pull request comment and the check run that point at a run's report. */
 
 export { MARKER };
+
+const markerOf = (workflow: string): string => `${MARKER}:${workflow} -->`;
+/** The marker before comments were per workflow; those comments belong to the `ci` workflow. */
+const LEGACY_MARKER = `${MARKER} -->`;
 
 export type PreviousRun = { url: string; runId: number };
 
@@ -15,14 +19,19 @@ export function commentBody(
   url: string,
   previous: PreviousRun | undefined,
 ): string {
-  const lines = [MARKER, summaryTable(run, jobs, url)];
+  const lines = [markerOf(slug(run.name)), summaryTable(run, jobs, url)];
   if (previous !== undefined) lines.push(`Previous run: [run ${previous.runId}](${previous.url})`, '');
   return lines.join('\n');
 }
 
-/** The id of the comment that carries `MARKER`, if any. */
-export const findStickyComment = (comments: { id: number; body: string }[]): number | undefined =>
-  comments.find((c) => c.body.includes(MARKER))?.id;
+/** The id of the comment `workflow` (a `slug`) owns, if any: the one carrying its marker, or the legacy one for `ci`. */
+export const findStickyComment = (
+  comments: { id: number; body: string }[],
+  workflow: string,
+): number | undefined =>
+  comments.find(
+    (c) => c.body.includes(markerOf(workflow)) || (workflow === 'ci' && c.body.startsWith(LEGACY_MARKER)),
+  )?.id;
 
 export function checkRunPayload(
   run: ApiRun,

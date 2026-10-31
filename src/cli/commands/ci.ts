@@ -3,7 +3,7 @@ import { resolveDeps } from '../../api/report.js';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { WriterDeps } from '../../writer/session.js';
 import { runContext } from '../ci/context-main.js';
-import { messageOf, say } from '../ci/github-api.js';
+import { envVar, messageOf, say } from '../ci/github-api.js';
 import { runLink } from '../ci/link-main.js';
 import { runReport } from '../ci/report-main.js';
 import { runCleanup, runSite } from '../ci/site-main.js';
@@ -36,8 +36,6 @@ function parseRepository(text: string): string {
     throw new OtelHtmlError('usage', { message: `--repository is not owner/repo: ${text}` });
   return text;
 }
-
-const envOf = (io: CliIo, name: string): string | undefined => io.env[name];
 
 interface SiteFlags {
   site: string;
@@ -154,7 +152,7 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
     .requiredOption('--pr <number>', 'pull request number')
     .option('--repository <owner/repo>', 'repository, for the landing page (default: $GITHUB_REPOSITORY)')
     .action(async (flags: CleanupFlags) => {
-      const repository = flags.repository ?? (envOf(io, 'GITHUB_REPOSITORY') || undefined);
+      const repository = flags.repository ?? envVar(io, 'GITHUB_REPOSITORY');
       if (repository === undefined)
         throw new OtelHtmlError('usage', {
           message: '--repository is required when GITHUB_REPOSITORY is not set',

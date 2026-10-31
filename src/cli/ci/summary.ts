@@ -18,8 +18,8 @@ const secondsBetween = (from: string | null, to: string | null): string => {
   return s === undefined ? '–' : formatDuration(s);
 };
 
-/** First line of the sticky pull request comment; `ci link` finds its own comment by it. */
-export const MARKER = '<!-- otel-html-report -->';
+/** Prefix of the sticky pull request comment's first line, `<!-- otel-html-report:<workflow> -->`. */
+export const MARKER = '<!-- otel-html-report';
 
 const cell = (s: string): string => s.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
 

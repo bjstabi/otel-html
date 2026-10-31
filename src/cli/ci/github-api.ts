@@ -43,6 +43,9 @@ export type ApiJob = {
   steps: ApiStep[];
 };
 
+/** The environment variable `name`, or undefined when unset or empty. */
+export const envVar = (io: Pick<CliIo, 'env'>, name: string): string | undefined => io.env[name] || undefined;
+
 export const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 export const say = (io: Pick<CliIo, 'stdout'>, message: string): void => {

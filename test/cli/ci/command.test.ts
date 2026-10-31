@@ -337,7 +337,7 @@ describe('otel-html ci link', () => {
     const patch = calls.find((c) => c.method === 'PATCH')?.body as { body: string };
     expect(patch.body).toContain('Previous run: [run 5](https://x.test/b/pr/7/runs/5/)');
     expect(calls.find((c) => c.url.endsWith('/check-runs'))?.body).toMatchObject({ conclusion: 'neutral' });
-    expect(readFileSync(summary, 'utf8')).toContain('<!-- otel-html-report -->');
+    expect(readFileSync(summary, 'utf8')).toContain('<!-- otel-html-report:ci -->');
   });
 
   test('--no-comment leaves only the check run, and the step summary still gets the body', async () => {
@@ -362,6 +362,15 @@ describe('otel-html ci link', () => {
     expect(await runCli(linkArgs(), f.io, deps)).toBe(0);
     expect(f.out()).toContain('::warning::otel-html link: cannot comment on pull request #7');
     expect(writes()).toContain('POST https://api.github.com/repos/o/r/check-runs');
+  });
+
+  test('failed jobs and pulls fetches still create the check run', async () => {
+    stub((_m, url) => url.includes('/jobs') || url.includes('/pulls'));
+    const f = fakeIo();
+    expect(await runCli(linkArgs(), f.io, deps)).toBe(0);
+    expect(f.out()).toContain('::warning::otel-html link: cannot read the jobs of run 6');
+    expect(f.out()).toContain('::warning::otel-html link: cannot list the pull requests');
+    expect(writes()).toEqual(['POST https://api.github.com/repos/o/r/check-runs']);
   });
 
   test('an unreadable run is a warning and exit 0', async () => {

@@ -1,12 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import type { ApiJob, ApiRun } from '../../../src/cli/ci/github-api.js';
-import {
-  checkRunPayload,
-  commentBody,
-  findStickyComment,
-  MARKER,
-  previousRun,
-} from '../../../src/cli/ci/link.js';
+import { checkRunPayload, commentBody, findStickyComment, previousRun } from '../../../src/cli/ci/link.js';
 import type { SiteIndex, SiteRun } from '../../../src/cli/ci/site.js';
 
 const run = {
@@ -37,7 +31,7 @@ describe('commentBody', () => {
       runId: 4,
       url: 'https://x.test/pr/7/runs/4/',
     });
-    expect(body.split('\n')[0]).toBe(MARKER);
+    expect(body.split('\n')[0]).toBe('<!-- otel-html-report:ci -->');
     expect(body).toContain('Report: https://x.test/pr/7/runs/5/');
     expect(body).toContain('Previous run: [run 4](https://x.test/pr/7/runs/4/)');
   });
@@ -46,14 +40,21 @@ describe('commentBody', () => {
   });
 });
 
-test('findStickyComment picks the comment carrying the marker', () => {
-  expect(
-    findStickyComment([
-      { id: 1, body: 'hello' },
-      { id: 2, body: `${MARKER}\nreport` },
-    ]),
-  ).toBe(2);
-  expect(findStickyComment([{ id: 1, body: 'hello' }])).toBeUndefined();
+test('findStickyComment picks the comment carrying the workflow marker', () => {
+  const comments = [
+    { id: 1, body: 'hello' },
+    { id: 2, body: '<!-- otel-html-report:load -->\nreport' },
+    { id: 3, body: '<!-- otel-html-report:ci -->\nreport' },
+  ];
+  expect(findStickyComment(comments, 'ci')).toBe(3);
+  expect(findStickyComment(comments, 'load')).toBe(2);
+  expect(findStickyComment(comments, 'other')).toBeUndefined();
+});
+
+test('the old bare marker belongs to the ci workflow only', () => {
+  const comments = [{ id: 1, body: '<!-- otel-html-report -->\nold' }];
+  expect(findStickyComment(comments, 'ci')).toBe(1);
+  expect(findStickyComment(comments, 'load')).toBeUndefined();
 });
 
 test('checkRunPayload is a neutral completed check linking the report', () => {
