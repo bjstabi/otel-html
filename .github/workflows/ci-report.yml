@@ -1,0 +1,55 @@
+name: ci-report
+
+# Runs from the default branch's copy of this file and checks out the default branch's code: never the triggering
+# run's head, which may be an untrusted PR.
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: ci workflow run id to report on
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ci-report-${{ inputs.run_id || github.event.workflow_run.id }}
+  cancel-in-progress: false
+
+env:
+  # `claude` in mise.toml is a developer tool; CI never needs it.
+  MISE_DISABLE_TOOLS: claude
+
+jobs:
+  report:
+    # A failed or cancelled run is the most interesting report; only runs that never really ran are skipped.
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion != 'skipped' && github.event.workflow_run.conclusion != 'action_required')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          run-id: ${{ inputs.run_id || github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+          pattern: otel-html-*
+          path: artifacts/
+      - name: Build the run report
+        run: bun scripts/ci-report.ts --run-id "$RUN_ID" --repository "$GITHUB_REPOSITORY" --artifacts artifacts --out ci-run-report --config .github/otel-html-ci.yaml
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.run_id || github.event.workflow_run.id }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-run-report
+          path: ci-run-report/
+          include-hidden-files: true
+          if-no-files-found: error
