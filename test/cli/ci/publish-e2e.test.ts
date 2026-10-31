@@ -1,11 +1,11 @@
 import { expect, test } from 'vitest';
-import type { ApiJob, ApiRun } from '../../../scripts/ci/github-api.js';
-import { runKey } from '../../../scripts/ci/ids.js';
-import { jobLogRecordsRequest } from '../../../scripts/ci/job-logs.js';
-import { ciMetricsRequest } from '../../../scripts/ci/metrics.js';
-import { ciResource, jobResource, workflowTraceRequest } from '../../../scripts/ci/workflow-trace.js';
 import { merge } from '../../../src/api/convert.js';
 import { Report } from '../../../src/api/report.js';
+import type { ApiJob, ApiRun } from '../../../src/cli/ci/github-api.js';
+import { runKey } from '../../../src/cli/ci/ids.js';
+import { jobLogRecordsRequest } from '../../../src/cli/ci/job-logs.js';
+import { ciMetricsRequest } from '../../../src/cli/ci/metrics.js';
+import { ciResource, jobResource, workflowTraceRequest } from '../../../src/cli/ci/workflow-trace.js';
 import { createTestWriter } from '../../../test-support/writer-deps.js';
 import { manifestOf } from '../../writer/helpers.js';
 
@@ -23,6 +23,7 @@ const run: ApiRun = {
   head_branch: 'main',
   head_sha: 'abc',
   repository: { full_name: 'o/r', html_url: 'https://github.com/o/r' },
+  head_repository: { full_name: 'o/r' },
 };
 const job: ApiJob = {
   id: 7,

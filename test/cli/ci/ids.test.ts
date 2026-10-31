@@ -7,7 +7,7 @@ import {
   runSpanIdOf,
   stepSpanIdOf,
   traceIdOf,
-} from '../../../scripts/ci/ids.js';
+} from '../../../src/cli/ci/ids.js';
 import { parseTraceparent } from '../../../src/run/traceparent.js';
 
 const key = runKey({ repository: 'bjstabi/otel-html', runId: 42, runAttempt: 2 });

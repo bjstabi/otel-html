@@ -1,0 +1,24 @@
+name: otel-html collect
+description: "Upload the job's otel-html report. Use it as the job's last step, with if: always()."
+
+inputs:
+  name:
+    description: >-
+      Artifact name. Matrix legs share the default (`github.job`), so give each leg its own name, or one leg's upload
+      replaces another's.
+    default: otel-html-${{ github.job }}
+  path:
+    description: Directory to upload.
+    default: .otel-html/
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: ${{ inputs.name }}
+        path: ${{ inputs.path }}
+        include-hidden-files: true
+        if-no-files-found: ignore
+        # A re-run of the job reuses the run, where the first attempt's artifact of this name already exists.
+        overwrite: true

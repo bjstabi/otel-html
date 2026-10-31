@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
-import type { ApiJob, ApiRun } from '../../../scripts/ci/github-api.js';
-import { ciMetricsRequest } from '../../../scripts/ci/metrics.js';
+import type { ApiJob, ApiRun } from '../../../src/cli/ci/github-api.js';
+import { ciMetricsRequest } from '../../../src/cli/ci/metrics.js';
 import { parseOtlpObject } from '../../../src/model/otlp-json.js';
 
 const run: ApiRun = {
@@ -17,6 +17,7 @@ const run: ApiRun = {
   head_branch: 'main',
   head_sha: 'abc',
   repository: { full_name: 'o/r', html_url: 'https://github.com/o/r' },
+  head_repository: { full_name: 'o/r' },
 };
 
 const job = (id: number, name: string, conclusion: string | null, over: Partial<ApiJob> = {}): ApiJob => ({

@@ -1,0 +1,62 @@
+name: otel-html setup
+description: Install the otel-html CLI (or use a given executable) and join the workflow run's trace, so the job shell can be `otel-html run`.
+
+inputs:
+  version:
+    description: Release version to install, such as `0.2.0`, or `latest`. Ignored when `command` is given.
+    default: latest
+  command:
+    description: An executable to use instead of a download, for example `node dist/cli/main.js`. Empty installs the release binary.
+    default: ""
+  job-name:
+    description: The job's name in the report. Empty uses the GITHUB_JOB id.
+    default: ""
+  token:
+    description: Token for the release download and the `ci context` API calls.
+    default: ${{ github.token }}
+
+outputs:
+  command:
+    description: The CLI invocation to put at the start of the job shell, before `run -o .otel-html/report -- bash ...`.
+    value: ${{ steps.resolve.outputs.command }}
+  report:
+    description: The report directory the job shell writes to.
+    value: .otel-html/report
+
+runs:
+  using: composite
+  steps:
+    - name: Install otel-html
+      if: inputs.command == ''
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        # The binaries always come from this action's repository: `action_repository` when used from another repo, and
+        # empty for a local `./` use, which is this repository itself (a fork's own releases are not used).
+        REPO: ${{ github.action_repository || 'bjstabi/otel-html' }}
+        # `@v0` with version `latest` installs the newest 0.x release.
+        ACTION_REF: ${{ github.action_ref }}
+        GH_TOKEN: ${{ inputs.token }}
+      run: bash "$GITHUB_ACTION_PATH/install.sh" "$VERSION"
+    - name: Resolve command
+      id: resolve
+      shell: bash
+      env:
+        CMD: ${{ inputs.command }}
+      run: echo "command=${CMD:-otel-html}" >> "$GITHUB_OUTPUT"
+    - name: otel-html context
+      shell: bash
+      env:
+        CMD: ${{ steps.resolve.outputs.command }}
+        JOB_NAME: ${{ inputs.job-name }}
+        GITHUB_TOKEN: ${{ inputs.token }}
+      run: |
+        args=()
+        if [ -n "$JOB_NAME" ]; then args=(--job-name "$JOB_NAME"); fi
+        # CMD is deliberately unquoted: it may be a command with arguments, such as `node dist/cli/main.js`.
+        code=0
+        # shellcheck disable=SC2086
+        $CMD ci context "${args[@]}" || code=$?
+        if [ "$code" -ne 0 ]; then
+          echo "::warning::otel-html-setup: \`ci context\` failed (exit $code); this job's report will not join the run's trace"
+        fi

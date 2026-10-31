@@ -48,8 +48,9 @@ process.on('exit', () => {
 `;
 // Named, not a literal, so knip does not read the first argument after `node` as an import.
 const NODE = 'node';
-const HTTP_PORT = 4318;
-const GRPC_PORT = 4317;
+// Not the OTLP defaults (4318/4317): in CI this runs under the job shell's `otel-html run`, which already holds 4318.
+const HTTP_PORT = 14318;
+const GRPC_PORT = 14317;
 const START_TIMEOUT_MS = 30_000;
 const STOP_TIMEOUT_MS = 10 * 60_000;
 // After a generator failure the receiver only has to exit and print its figures, not finish a report, so wait less.

@@ -18,7 +18,7 @@ import {
   type WriterDeps,
 } from './session.js';
 
-interface Input {
+export interface Input {
   dir: string;
   manifest: Manifest;
   epoch: UnixNanos;
@@ -54,12 +54,13 @@ async function readFile(fs: FileSystem, file: string, what: string): Promise<str
   }
 }
 
-async function loadInput(fs: FileSystem, rawDir: string): Promise<Input> {
+/** The report at `rawDir`: its manifest and epoch. `verb` names the command in the usage error when there is no report. */
+export async function readReportManifest(fs: FileSystem, rawDir: string, verb = 'merge'): Promise<Input> {
   const dir = trimSlashes(rawDir);
   const file = at(dir, MANIFEST_PATH);
   if (!(await fs.exists(file))) {
     throw new OtelHtmlError('usage', {
-      message: `cannot merge: no report found at ${dir} (missing ${MANIFEST_PATH})`,
+      message: `cannot ${verb}: no report found at ${dir} (missing ${MANIFEST_PATH})`,
       hint: 'pass report folders (the ones containing index.html)',
     });
   }
@@ -177,7 +178,7 @@ export async function mergeReports(
   const dirs = inputs.map(trimSlashes);
   for (const dir of dirs) await assertDisjoint(deps.fs, out, dir);
   const loaded: Input[] = [];
-  for (const dir of dirs) loaded.push(await loadInput(deps.fs, dir));
+  for (const dir of dirs) loaded.push(await readReportManifest(deps.fs, dir));
   loaded.sort((a, b) => (a.epoch < b.epoch ? -1 : a.epoch > b.epoch ? 1 : 0));
   for (const input of loaded) {
     if (!input.manifest.complete) {

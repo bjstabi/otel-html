@@ -1,0 +1,60 @@
+name: actions-smoke
+
+# The composite actions under .github/actions, used from the released CLI on each runner OS. No macOS leg (cost).
+on:
+  pull_request:
+    paths: [".github/actions/**", ".github/workflows/actions-smoke.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+defaults:
+  run:
+    shell: otel-html run -o .otel-html/report -- bash --noprofile --norc -eo pipefail {0}
+
+jobs:
+  # The steps that need `otel-html run` and `ci context` are gated on what the installed release supports. Remove the
+  # gate (the `cap` step and its `if:`s) once a release has both (issue #89).
+  smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/otel-html-setup
+        with:
+          version: latest
+      - name: Detect whether the installed otel-html has `run`
+        id: cap
+        shell: bash
+        run: |
+          # Captured first: under pipefail, `grep -q` quitting early could fail the pipe and read as "no run".
+          help=$(otel-html --help)
+          if grep -Eq '^[[:space:]]+run[[:space:]]' <<<"$help"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::the installed otel-html ($(otel-html --version)) predates \`run\`; skipping the job-shell checks (issue #89)"
+          fi
+      - name: The install works
+        shell: bash
+        run: otel-html --version
+      - if: steps.cap.outputs.run == 'true'
+        name: The run context exists
+        shell: bash
+        run: test -f .otel-html/context.json
+      - if: steps.cap.outputs.run == 'true'
+        run: echo hello
+      - if: steps.cap.outputs.run == 'true'
+        name: The job report exists
+        shell: bash
+        run: test -f .otel-html/report/data/manifest.js
+      - if: always()
+        uses: ./.github/actions/otel-html-collect
+        with:
+          name: otel-html-smoke-${{ matrix.os }}

@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { lstat, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
@@ -160,6 +160,42 @@ describe.each([
 test('node atomic write leaves no .tmp- file on disk', async () => {
   await createNodeFileSystem().writeTextAtomic(join(dir, 'x'), 'v');
   expect((await readdir(dir)).filter((n) => n.includes('.tmp-'))).toEqual([]);
+});
+
+// A report from elsewhere may hold symlinks; a write replaces the link and never writes through it. Creating symlinks
+// on Windows needs a privilege the runners may lack.
+describe.skipIf(process.platform === 'win32')('node writes never follow a symlink', () => {
+  const outside = (): string => join(dir, 'outside');
+  beforeEach(async () => {
+    await writeFile(outside(), 'precious');
+  });
+
+  test('writeBytes replaces a symlink at the destination', async () => {
+    await symlink(outside(), join(dir, 'x'));
+    await createNodeFileSystem().writeBytes(join(dir, 'x'), new TextEncoder().encode('new'));
+    expect(await readFile(outside(), 'utf8')).toBe('precious');
+    expect((await lstat(join(dir, 'x'))).isSymbolicLink()).toBe(false);
+    expect(await readFile(join(dir, 'x'), 'utf8')).toBe('new');
+  });
+
+  test('writeBytes replaces a dangling symlink instead of creating its target', async () => {
+    await symlink(join(dir, 'missing'), join(dir, 'x'));
+    await createNodeFileSystem().writeBytes(join(dir, 'x'), new TextEncoder().encode('new'));
+    expect(await readdir(dir)).not.toContain('missing');
+    expect(await readFile(join(dir, 'x'), 'utf8')).toBe('new');
+  });
+
+  test.each(['writeTextAtomic', 'writePiecesAtomic'] as const)(
+    '%s ignores a symlink at its tmp path',
+    async (m) => {
+      const fs = createNodeFileSystem();
+      await symlink(outside(), join(dir, `x.tmp-${process.pid}`));
+      if (m === 'writeTextAtomic') await fs.writeTextAtomic(join(dir, 'x'), 'new');
+      else await fs.writePiecesAtomic?.(join(dir, 'x'), ['n', 'ew']);
+      expect(await readFile(outside(), 'utf8')).toBe('precious');
+      expect(await readFile(join(dir, 'x'), 'utf8')).toBe('new');
+    },
+  );
 });
 
 test('memory fs failNextWrite fails once and snapshot reflects content', async () => {

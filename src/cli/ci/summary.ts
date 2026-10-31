@@ -18,6 +18,9 @@ const secondsBetween = (from: string | null, to: string | null): string => {
   return s === undefined ? '–' : formatDuration(s);
 };
 
+/** Prefix of the sticky pull request comment's first line, `<!-- otel-html-report:<workflow> -->`. */
+export const MARKER = '<!-- otel-html-report';
+
 const cell = (s: string): string => s.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
 
 /** GitHub-flavoured markdown for `$GITHUB_STEP_SUMMARY`: the run's outcome, one row per job, and where the report is. */

@@ -6,6 +6,15 @@ import type { FileSystem } from './ports.js';
 /** Characters `writePiecesAtomic` gathers before writing them. */
 const PIECE_BATCH = 256 * 1024;
 
+/**
+ * Creates `p` afresh: whatever is there, a symlink included, is removed first and the file is opened exclusively, so
+ * a write never goes through a link planted in a report from elsewhere.
+ */
+async function writeFresh(p: string, data: string | Uint8Array): Promise<void> {
+  await rm(p, { force: true });
+  await writeFile(p, data, { flag: 'wx' });
+}
+
 export function createNodeFileSystem(): FileSystem {
   return {
     readText: (p) => readFile(p, 'utf8'),
@@ -16,7 +25,7 @@ export function createNodeFileSystem(): FileSystem {
     async writeTextAtomic(p, text) {
       const tmp = `${p}.tmp-${process.pid}`;
       try {
-        await writeFile(tmp, text, 'utf8');
+        await writeFresh(tmp, text);
         await rename(tmp, p);
       } catch (e) {
         await rm(tmp, { force: true });
@@ -26,7 +35,8 @@ export function createNodeFileSystem(): FileSystem {
     async writePiecesAtomic(p, pieces) {
       const tmp = `${p}.tmp-${process.pid}`;
       try {
-        const handle = await open(tmp, 'w');
+        await rm(tmp, { force: true });
+        const handle = await open(tmp, 'wx');
         try {
           // Pieces are often small (one series each): written in batches of about PIECE_BATCH characters, not one
           // write call per piece.
@@ -50,7 +60,7 @@ export function createNodeFileSystem(): FileSystem {
     },
     async writeBytes(p, bytes) {
       await mkdir(dirname(p), { recursive: true });
-      await writeFile(p, bytes);
+      await writeFresh(p, bytes);
     },
     async mkdirp(p) {
       await mkdir(p, { recursive: true });
