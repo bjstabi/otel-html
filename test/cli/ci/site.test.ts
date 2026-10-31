@@ -201,6 +201,10 @@ test('renderRedirect refreshes to the target', () => {
 test('slug and reportUrl', () => {
   expect(slug('ci')).toBe('ci');
   expect(slug('Perf / Load')).toBe('perf-load');
+  // `pr/` holds the pull request channels, so a workflow named PR gets another folder.
+  expect(slug('PR')).toBe('pr-workflow');
+  expect(slug(' pr ')).toBe('pr-workflow');
+  expect(slug('pr checks')).toBe('pr-checks');
   expect(reportUrl('https://o.github.io/r', 'ci/runs/1')).toBe('https://o.github.io/r/ci/runs/1/');
 });
 

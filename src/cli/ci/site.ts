@@ -53,11 +53,15 @@ export function parseSiteIndex(text: string | undefined): SiteIndex {
   return siteIndexSchema.parse(JSON.parse(text));
 }
 
-export const slug = (name: string): string =>
-  name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '') || 'workflow';
+/** A workflow's channel key and folder. `pr` is taken: `pr/<number>` holds the pull request channels. */
+export const slug = (name: string): string => {
+  const key =
+    name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '') || 'workflow';
+  return key === 'pr' ? 'pr-workflow' : key;
+};
 
 export const reportUrl = (baseUrl: string, reportPath: string): string => `${baseUrl}/${reportPath}/`;
 
