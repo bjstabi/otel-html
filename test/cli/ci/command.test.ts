@@ -216,6 +216,22 @@ describe('otel-html ci site and cleanup', () => {
     ).toBe(0);
   });
 
+  test('cleanup needs --repository or $GITHUB_REPOSITORY, and validates it', async () => {
+    const f = fakeIo();
+    expect(await runCli(['ci', 'cleanup', '--site', site, '--pr', '7'], f.io, deps)).toBe(2);
+    expect(f.err()).toContain('--repository is required');
+    const g = fakeIo({ GITHUB_REPOSITORY: 'nonsense' });
+    expect(await runCli(['ci', 'cleanup', '--site', site, '--pr', '7'], g.io, deps)).toBe(2);
+    expect(g.err()).toContain('--repository is not owner/repo');
+    expect(
+      await runCli(
+        ['ci', 'cleanup', '--site', site, '--pr', '7'],
+        fakeIo({ GITHUB_REPOSITORY: 'o/r' }).io,
+        deps,
+      ),
+    ).toBe(0);
+  });
+
   test.each(['--retention', '--pr-retention'])('%s must be a positive integer', async (flag) => {
     const f = fakeIo();
     expect(await runCli(siteArgs(42, [flag, '0']), f.io, deps)).toBe(2);

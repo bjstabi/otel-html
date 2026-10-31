@@ -55,6 +55,12 @@ describe('site-io', () => {
     await expect(removePaths(join(dir, 'site'), ['.'])).rejects.toThrow('not inside');
   });
 
+  test('removePaths accepts a child whose name starts with two dots', async () => {
+    mkdirSync(join(dir, '..foo'), { recursive: true });
+    await removePaths(dir, ['..foo']);
+    expect(existsSync(join(dir, '..foo'))).toBe(false);
+  });
+
   test('removePaths removes folders and ignores missing ones', async () => {
     mkdirSync(join(dir, 'a', 'b'), { recursive: true });
     await removePaths(dir, ['a/b', 'missing']);

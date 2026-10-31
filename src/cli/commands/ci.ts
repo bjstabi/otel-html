@@ -36,6 +36,8 @@ function parseRepository(text: string): string {
   return text;
 }
 
+const envOf = (io: CliIo, name: string): string | undefined => io.env[name];
+
 interface SiteFlags {
   site: string;
   report: string;
@@ -119,11 +121,15 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
     .requiredOption('--pr <number>', 'pull request number')
     .option('--repository <owner/repo>', 'repository, for the landing page (default: $GITHUB_REPOSITORY)')
     .action(async (flags: CleanupFlags) => {
-      const env = (name: string): string | undefined => io.env[name];
+      const repository = flags.repository ?? (envOf(io, 'GITHUB_REPOSITORY') || undefined);
+      if (repository === undefined)
+        throw new OtelHtmlError('usage', {
+          message: '--repository is required when GITHUB_REPOSITORY is not set',
+        });
       const opts = {
         site: flags.site,
         pr: parsePositive('--pr', flags.pr),
-        repository: parseRepository(flags.repository ?? (env('GITHUB_REPOSITORY') || 'unknown/site')),
+        repository: parseRepository(repository),
       };
       try {
         await runCleanup(opts, io);

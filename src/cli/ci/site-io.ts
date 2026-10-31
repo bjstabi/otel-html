@@ -1,5 +1,5 @@
 import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { parseSiteIndex, renderLanding, type SiteIndex } from './site.js';
 
 /** The filesystem side of the published site: its index, landing page, and the report folders under it. */
@@ -34,7 +34,7 @@ export async function removePaths(dir: string, rel: string[]): Promise<void> {
   const targets = rel.map((p) => {
     const target = resolve(root, p);
     const back = relative(root, target);
-    if (isAbsolute(p) || back === '' || back.startsWith('..') || isAbsolute(back))
+    if (isAbsolute(p) || back === '' || back === '..' || back.startsWith(`..${sep}`) || isAbsolute(back))
       throw new Error(`refusing to remove ${p}: it is not inside ${dir}`);
     return target;
   });
