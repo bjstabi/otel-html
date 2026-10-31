@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
-import type { ApiJob, ApiStep } from '../../../scripts/ci/github-api.js';
-import { jobSpanIdOf, runKey, stepSpanIdOf, traceIdOf } from '../../../scripts/ci/ids.js';
-import { jobLogRecordsRequest } from '../../../scripts/ci/job-logs.js';
+import type { ApiJob, ApiStep } from '../../../src/cli/ci/github-api.js';
+import { jobSpanIdOf, runKey, stepSpanIdOf, traceIdOf } from '../../../src/cli/ci/ids.js';
+import { jobLogRecordsRequest } from '../../../src/cli/ci/job-logs.js';
 import { parseOtlpObject } from '../../../src/model/otlp-json.js';
 
 const key = runKey({ repository: 'o/r', runId: 42, runAttempt: 1 });

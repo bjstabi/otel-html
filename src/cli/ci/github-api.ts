@@ -1,3 +1,5 @@
+import type { CliIo } from '../io.js';
+
 /** The GitHub Actions API as the CI scripts use it: the fields they read, paging, and the workflow-command output. */
 
 /** The subset of the Actions run API that the CI scripts read. */
@@ -42,13 +44,13 @@ export type ApiJob = {
 
 export const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
-export const say = (message: string): void => {
-  process.stdout.write(`${message}\n`);
+export const say = (io: Pick<CliIo, 'stdout'>, message: string): void => {
+  io.stdout(`${message}\n`);
 };
 
 /** A `::warning::` workflow command from `scope` (`report`, `context`); a newline would end the command. */
-export const warning = (scope: string, message: string): void =>
-  say(`::warning::otel-html ${scope}: ${message.replace(/\r?\n/g, ' ')}`);
+export const warning = (io: Pick<CliIo, 'stdout'>, scope: string, message: string): void =>
+  say(io, `::warning::otel-html ${scope}: ${message.replace(/\r?\n/g, ' ')}`);
 
 export const apiHeaders = (token: string | undefined): Record<string, string> => ({
   Accept: 'application/vnd.github+json',
@@ -65,7 +67,7 @@ export function parseNextLink(header: string | null): string | undefined {
   return undefined;
 }
 
-type Fetch = (url: string, init?: RequestInit) => Promise<Response>;
+export type Fetch = (url: string, init?: RequestInit) => Promise<Response>;
 
 /** GETs `url` and decodes the JSON body; throws naming the URL on a non-2xx answer or after `timeoutMs`. */
 export async function getJson<T>(

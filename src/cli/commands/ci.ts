@@ -1,0 +1,69 @@
+import type { Command } from 'commander';
+import { resolveDeps } from '../../api/report.js';
+import { OtelHtmlError } from '../../model/errors.js';
+import type { WriterDeps } from '../../writer/session.js';
+import { runContext } from '../ci/context-main.js';
+import { messageOf, say } from '../ci/github-api.js';
+import { runReport } from '../ci/report-main.js';
+import type { CliIo } from '../io.js';
+import { CliExit } from '../program.js';
+
+interface ContextFlags {
+  jobName?: string;
+}
+
+interface ReportFlags {
+  runId: string;
+  repository: string;
+  artifacts: string;
+  out: string;
+  config?: string;
+}
+
+function parseRunId(text: string): number {
+  const n = Number(text);
+  if (!/^\d+$/.test(text) || !Number.isSafeInteger(n) || n <= 0)
+    throw new OtelHtmlError('usage', { message: `--run-id is not a positive integer: ${text}` });
+  return n;
+}
+
+function parseRepository(text: string): string {
+  if (!/^[^/\s]+\/[^/\s]+$/.test(text))
+    throw new OtelHtmlError('usage', { message: `--repository is not owner/repo: ${text}` });
+  return text;
+}
+
+export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDeps>): void {
+  const ci = program.command('ci').description("CI dogfooding: join a workflow run's trace and report on it");
+  ci.command('context')
+    .description(
+      'append TRACEPARENT and resource attributes for this job to $GITHUB_ENV (never fails the job)',
+    )
+    .option('--job-name <name>', "the job's display name (default: $OTEL_HTML_JOB_NAME or $GITHUB_JOB)")
+    .action(async (flags: ContextFlags) => {
+      const env = flags.jobName === undefined ? io.env : { ...io.env, OTEL_HTML_JOB_NAME: flags.jobName };
+      await runContext(env, io);
+    });
+  ci.command('report')
+    .description("build a workflow run's report from the Actions API and merge it with the job reports")
+    .requiredOption('--run-id <n>', 'workflow run id')
+    .requiredOption('--repository <owner/repo>', 'repository of the run')
+    .requiredOption('--artifacts <dir>', 'folder of downloaded otel-html-* job artifacts')
+    .requiredOption('--out <dir>', 'merged report folder')
+    .option('--config <file>', 'config file for the written reports')
+    .action(async (flags: ReportFlags) => {
+      const opts = {
+        runId: parseRunId(flags.runId),
+        repository: parseRepository(flags.repository),
+        artifacts: flags.artifacts,
+        out: flags.out,
+        ...(flags.config === undefined ? {} : { config: flags.config }),
+      };
+      try {
+        await runReport(opts, io, await resolveDeps(deps));
+      } catch (e) {
+        say(io, `::error::otel-html report: ${messageOf(e)}`);
+        throw new CliExit(1);
+      }
+    });
+}

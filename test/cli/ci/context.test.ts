@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
-import { contextEnv, contextJson, envFileText, readInputs, resolveJob } from '../../../scripts/ci/context.js';
-import type { ApiJob } from '../../../scripts/ci/github-api.js';
-import { jobTraceparent, runKey } from '../../../scripts/ci/ids.js';
+import { contextEnv, contextJson, envFileText, readInputs, resolveJob } from '../../../src/cli/ci/context.js';
+import type { ApiJob } from '../../../src/cli/ci/github-api.js';
+import { jobTraceparent, runKey } from '../../../src/cli/ci/ids.js';
 
 const job = (id: number, over: Partial<ApiJob> = {}): ApiJob => ({
   id,

@@ -2,28 +2,28 @@ import { appendFileSync } from 'node:fs';
 import { access, mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { merge } from '../src/api/convert.js';
-import { Report } from '../src/api/report.js';
-import { type ApiRun, fetchJobs, getJson, messageOf, say, warning } from './ci/github-api.js';
-import { runKey } from './ci/ids.js';
-import { jobLogRecordsRequest } from './ci/job-logs.js';
-import { ciMetricsRequest } from './ci/metrics.js';
-import { approximateJobs, jobIdFor, parseJobContext, parsePublishArgs } from './ci/publish.js';
-import { fetchJobLog, mergeSkippingBad } from './ci/publish-io.js';
-import { summaryTable } from './ci/summary.js';
-import { ciResource, jobResource, workflowTraceRequest } from './ci/workflow-trace.js';
+import { merge } from '../../api/convert.js';
+import { Report } from '../../api/report.js';
+import type { WriterDeps } from '../../writer/session.js';
+import type { CliIo } from '../io.js';
+import { type ApiRun, type Fetch, fetchJobs, getJson, messageOf, say, warning } from './github-api.js';
+import { runKey } from './ids.js';
+import { jobLogRecordsRequest } from './job-logs.js';
+import { ciMetricsRequest } from './metrics.js';
+import { approximateJobs, jobIdFor, parseJobContext } from './publish.js';
+import { fetchJobLog, mergeSkippingBad } from './publish-io.js';
+import { summaryTable } from './summary.js';
+import { ciResource, jobResource, workflowTraceRequest } from './workflow-trace.js';
 
-/**
- * Publisher: after the `ci` workflow completes, builds the workflow-trace report from the Actions API, merges it with
- * every job's report artifact and prints a per-job summary. Reads only public run, job, step and log fields.
- *
- *   bun scripts/ci-report.ts --run-id <n> --repository <owner/repo> --artifacts <dir> --out <dir> [--config <file>]
- */
-const warn = (message: string): void => warning('report', message);
+export type ReportOptions = {
+  runId: number;
+  repository: string;
+  artifacts: string;
+  out: string;
+  config?: string;
+  token?: string;
+};
 
-const envVar = (name: string): string | undefined => process.env[name] || undefined;
-
-const API = envVar('GITHUB_API_URL') ?? 'https://api.github.com';
 const LOG_CONCURRENCY = 4;
 const API_TIMEOUT_MS = 15_000;
 
@@ -64,18 +64,36 @@ async function discoverArtifacts(dir: string): Promise<Artifact[]> {
   return found;
 }
 
-async function main(): Promise<number> {
-  const opts = parsePublishArgs(process.argv.slice(2));
-  const token = envVar('GITHUB_TOKEN');
+/**
+ * Publisher: after the `ci` workflow completes, builds the workflow-trace report from the Actions API, merges it with
+ * every job's report artifact and prints a per-job summary. Reads only public run, job, step and log fields. Throws
+ * when the run itself cannot be read or merged.
+ */
+export async function runReport(
+  opts: ReportOptions,
+  io: CliIo,
+  deps: WriterDeps,
+  fetchFn: Fetch = fetch,
+): Promise<void> {
+  const warn = (message: string): void => warning(io, 'report', message);
+  const envVar = (name: string): string | undefined => io.env[name] || undefined;
+  const API = envVar('GITHUB_API_URL') ?? 'https://api.github.com';
+  const token = opts.token ?? envVar('GITHUB_TOKEN');
   const config = opts.config === undefined ? {} : { config: opts.config };
 
   const run = (
-    await getJson<ApiRun>(`${API}/repos/${opts.repository}/actions/runs/${opts.runId}`, token, API_TIMEOUT_MS)
+    await getJson<ApiRun>(
+      `${API}/repos/${opts.repository}/actions/runs/${opts.runId}`,
+      token,
+      API_TIMEOUT_MS,
+      fetchFn,
+    )
   ).body;
   const jobs = await fetchJobs(
     { apiUrl: API, repository: opts.repository, runId: run.id, runAttempt: run.run_attempt },
     token,
     API_TIMEOUT_MS,
+    fetchFn,
   );
   const artifacts = await discoverArtifacts(opts.artifacts).catch((e: unknown) => {
     warn(`cannot read ${opts.artifacts}: ${messageOf(e)}`);
@@ -89,18 +107,21 @@ async function main(): Promise<number> {
   const resource = ciResource(run);
 
   const logs = await mapLimited(jobs, LOG_CONCURRENCY, (job) =>
-    fetchJobLog({ fetch, apiUrl: API, repository: opts.repository, job, token, warn }),
+    fetchJobLog({ fetch: fetchFn, apiUrl: API, repository: opts.repository, job, token, warn }),
   );
 
   const scratch = await mkdtemp(join(tmpdir(), 'otel-html-ci-'));
   try {
     const traceDir = join(scratch, 'workflow-trace');
-    const trace = await Report.create({
-      out: traceDir,
-      title: `${run.name} #${run.id}`,
-      replace: true,
-      ...config,
-    });
+    const trace = await Report.create(
+      {
+        out: traceDir,
+        title: `${run.name} #${run.id}`,
+        replace: true,
+        ...config,
+      },
+      deps,
+    );
     await trace.addSpans(workflowTraceRequest(key, run, jobs, approximate));
     for (const [i, job] of jobs.entries()) {
       const text = logs[i];
@@ -124,7 +145,8 @@ async function main(): Promise<number> {
     await trace.close();
 
     const { summary, inputs } = await mergeSkippingBad({
-      merge: (dirs, out, probe) => merge({ inputs: dirs, out, replace: true, ...(probe ? {} : config) }),
+      merge: (dirs, out, probe) =>
+        merge({ inputs: dirs, out, replace: true, ...(probe ? {} : config) }, deps),
       required: [traceDir],
       optional: artifacts.map((a) => a.report),
       out: opts.out,
@@ -132,6 +154,7 @@ async function main(): Promise<number> {
       warn,
     });
     say(
+      io,
       `merged ${inputs.length} reports into ${summary.out}: ${summary.totals.spans} spans, ${summary.totals.logs} logs, ${summary.totals.metrics} metrics`,
     );
   } finally {
@@ -140,7 +163,7 @@ async function main(): Promise<number> {
 
   const reportUrl = envVar('OTEL_HTML_REPORT_URL') ?? null;
   const table = summaryTable(run, jobs, reportUrl);
-  say(table);
+  say(io, table);
   const stepSummary = envVar('GITHUB_STEP_SUMMARY');
   if (stepSummary) {
     try {
@@ -149,15 +172,4 @@ async function main(): Promise<number> {
       warn(`cannot write the step summary: ${messageOf(e)}`);
     }
   }
-  return 0;
 }
-
-main().then(
-  (code) => {
-    process.exitCode = code;
-  },
-  (e: unknown) => {
-    say(`::error::otel-html report: ${messageOf(e)}`);
-    process.exitCode = 1;
-  },
-);

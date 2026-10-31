@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
-import type { ApiJob, ApiRun } from '../../../scripts/ci/github-api.js';
-import { jobSpanIdOf, runKey, runSpanIdOf, stepSpanIdOf, traceIdOf } from '../../../scripts/ci/ids.js';
-import { ciResource, workflowTraceRequest } from '../../../scripts/ci/workflow-trace.js';
+import type { ApiJob, ApiRun } from '../../../src/cli/ci/github-api.js';
+import { jobSpanIdOf, runKey, runSpanIdOf, stepSpanIdOf, traceIdOf } from '../../../src/cli/ci/ids.js';
+import { ciResource, workflowTraceRequest } from '../../../src/cli/ci/workflow-trace.js';
 import { parseOtlpObject } from '../../../src/model/otlp-json.js';
 
 const run: ApiRun = {

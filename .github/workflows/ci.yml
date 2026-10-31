@@ -38,7 +38,7 @@ jobs:
         run: mise run build
       - name: otel-html context
         shell: bash
-        run: bun scripts/ci-context.ts
+        run: node dist/cli/main.js ci context
         env:
           GITHUB_TOKEN: ${{ github.token }}
       - run: mise run gen:check
@@ -72,7 +72,7 @@ jobs:
         run: mise run build
       - name: otel-html context
         shell: bash
-        run: bun scripts/ci-context.ts
+        run: node dist/cli/main.js ci context
         env:
           GITHUB_TOKEN: ${{ github.token }}
       - run: mise run test:unit
@@ -96,7 +96,7 @@ jobs:
         run: mise run build
       - name: otel-html context
         shell: bash
-        run: bun scripts/ci-context.ts
+        run: node dist/cli/main.js ci context
         env:
           GITHUB_TOKEN: ${{ github.token }}
       # `check:package` (publint + attw) depends on `build`; --skip-deps keeps it from cleaning dist/ under the running job shell.
@@ -149,7 +149,7 @@ jobs:
           path: dist/
       - name: otel-html context
         shell: bash
-        run: bun scripts/ci-context.ts
+        run: node dist/cli/main.js ci context
         env:
           GITHUB_TOKEN: ${{ github.token }}
       # The job shell wraps this in `otel-html run`; the exit code is Playwright's.
@@ -204,7 +204,7 @@ jobs:
           path: dist/
       - name: otel-html context
         shell: bash
-        run: bun scripts/ci-context.ts
+        run: node dist/cli/main.js ci context
         env:
           GITHUB_TOKEN: ${{ github.token }}
       - run: pnpm exec playwright test e2e/scale.spec.ts --project 'chromium-*' --grep 'metrics scale' --workers=1
@@ -247,7 +247,7 @@ jobs:
         run: mise run build
       - name: otel-html context
         shell: bash
-        run: bun scripts/ci-context.ts
+        run: node dist/cli/main.js ci context
         env:
           GITHUB_TOKEN: ${{ github.token }}
       - run: mise run build:binaries -- --target "$TARGET"

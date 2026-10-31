@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
-import type { ApiJob, ApiRun } from '../../../scripts/ci/github-api.js';
-import { ciMetricsRequest } from '../../../scripts/ci/metrics.js';
+import type { ApiJob, ApiRun } from '../../../src/cli/ci/github-api.js';
+import { ciMetricsRequest } from '../../../src/cli/ci/metrics.js';
 import { parseOtlpObject } from '../../../src/model/otlp-json.js';
 
 const run: ApiRun = {

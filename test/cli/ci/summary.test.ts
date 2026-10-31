@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
-import type { ApiJob, ApiRun } from '../../../scripts/ci/github-api.js';
-import { formatDuration, summaryTable } from '../../../scripts/ci/summary.js';
+import type { ApiJob, ApiRun } from '../../../src/cli/ci/github-api.js';
+import { formatDuration, summaryTable } from '../../../src/cli/ci/summary.js';
 
 const run: ApiRun = {
   id: 42,

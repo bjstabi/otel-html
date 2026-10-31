@@ -45,7 +45,7 @@ jobs:
           pattern: otel-html-*
           path: artifacts/
       - name: Build the run report
-        run: bun scripts/ci-report.ts --run-id "$RUN_ID" --repository "$GITHUB_REPOSITORY" --artifacts artifacts --out ci-run-report --config .github/otel-html-ci.yaml
+        run: node dist/cli/main.js ci report --run-id "$RUN_ID" --repository "$GITHUB_REPOSITORY" --artifacts artifacts --out ci-run-report --config .github/otel-html-ci.yaml
         env:
           GITHUB_TOKEN: ${{ github.token }}
           RUN_ID: ${{ inputs.run_id || github.event.workflow_run.id }}

@@ -1,6 +1,6 @@
 import { execFile, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -216,6 +216,35 @@ describe.skipIf(binaryEnv === undefined)('compiled binary', () => {
     );
     expect(failed).toMatchObject({ code: 2, stdout: '' });
     expect(String(Reflect.get(failed ?? {}, 'stderr'))).toContain('is not a port');
+  }, 60_000);
+
+  test('ci context writes a name-hashed TRACEPARENT to GITHUB_ENV and exits 0 with the API unreachable', async () => {
+    const cwd = join(dir, 'ci-context');
+    await mkdir(cwd, { recursive: true });
+    const envFile = join(cwd, 'github-env');
+    await writeFile(envFile, '');
+    const { stdout } = await exec(binary, ['ci', 'context'], {
+      encoding: 'utf8',
+      timeout: 60_000,
+      cwd,
+      env: {
+        ...hermeticEnv(),
+        GITHUB_REPOSITORY: 'o/r',
+        GITHUB_RUN_ID: '42',
+        GITHUB_RUN_ATTEMPT: '1',
+        GITHUB_SERVER_URL: 'https://github.com',
+        GITHUB_WORKFLOW: 'ci',
+        GITHUB_REF_NAME: 'main',
+        GITHUB_SHA: 'abc123',
+        GITHUB_JOB: 'build',
+        RUNNER_NAME: 'runner-1',
+        GITHUB_TOKEN: 'x',
+        GITHUB_API_URL: 'http://127.0.0.1:9',
+        GITHUB_ENV: envFile,
+      },
+    });
+    expect(await readFile(envFile, 'utf8')).toMatch(/^TRACEPARENT=00-[0-9a-f]{32}-[0-9a-f]{16}-01$/m);
+    expect(stdout).toContain('::warning::');
   }, 60_000);
 
   test('run exits with the child code and records a root span', async () => {

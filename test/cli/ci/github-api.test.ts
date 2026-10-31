@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { fetchJobs, fetchPaged, jobsUrl, parseNextLink } from '../../../scripts/ci/github-api.js';
+import { fetchJobs, fetchPaged, jobsUrl, parseNextLink } from '../../../src/cli/ci/github-api.js';
 
 test('jobsUrl names the attempt', () => {
   expect(jobsUrl({ apiUrl: 'https://api.github.com', repository: 'o/r', runId: 1, runAttempt: 2 })).toBe(

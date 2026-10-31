@@ -1,27 +1,8 @@
 import { describe, expect, test } from 'vitest';
-import type { ApiJob } from '../../../scripts/ci/github-api.js';
-import { approximateJobs, jobIdFor, parseJobContext, parsePublishArgs } from '../../../scripts/ci/publish.js';
+import type { ApiJob } from '../../../src/cli/ci/github-api.js';
+import { approximateJobs, jobIdFor, parseJobContext } from '../../../src/cli/ci/publish.js';
 
 const j = (id: number, name = `job${id}`): ApiJob => ({ id, name }) as ApiJob;
-
-describe('parsePublishArgs', () => {
-  const base = ['--run-id', '7', '--repository', 'o/r', '--artifacts', 'a', '--out', 'o'];
-  test('reads every option', () => {
-    expect(parsePublishArgs([...base, '--config', 'c.yaml'])).toEqual({
-      runId: 7,
-      repository: 'o/r',
-      artifacts: 'a',
-      out: 'o',
-      config: 'c.yaml',
-    });
-  });
-  test('config is optional', () => expect(parsePublishArgs(base).config).toBeUndefined());
-  test.each([
-    [['--repository', 'o/r', '--artifacts', 'a', '--out', 'o'], '--run-id is required'],
-    [['--run-id', 'x', '--repository', 'o/r', '--artifacts', 'a', '--out', 'o'], 'not a positive integer'],
-    [['--run-id', '7', '--repository', 'nope', '--artifacts', 'a', '--out', 'o'], 'not owner/repo'],
-  ])('rejects %j', (argv, message) => expect(() => parsePublishArgs(argv)).toThrow(message));
-});
 
 describe('parseJobContext', () => {
   test('numeric and name ids', () => {
