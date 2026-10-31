@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -169,15 +169,28 @@ describe('otel-html ci context', () => {
   });
 });
 
-describe('otel-html ci site and cleanup', () => {
+/** A two-span report at `out`: enough to place and merge, and light enough that the rolling merges stay quick. */
+async function smallReport(out: string, prefix = 'b'): Promise<void> {
+  const w = await Report.create({ out }, realFsDeps);
+  await w.addSpans(
+    traceRequest(
+      [1, 2].map((n) => span({ spanId: `00000000000000${prefix}${n}`, name: `run-${prefix}${n}` })),
+      [],
+    ),
+  );
+  await w.close();
+}
+
+// Real-fs rolling merges: well under a second locally, but a loaded CI runner has taken more than the 5 s default.
+describe('otel-html ci site and cleanup', { timeout: 60_000 }, () => {
   let dir: string;
   let site: string;
   let report: string;
-  beforeEach(() => {
+  beforeEach(async () => {
     dir = mkdtempSync(join(tmpdir(), 'ci-site-'));
     site = join(dir, 'site');
     report = join(dir, 'report');
-    cpSync(join(__dirname, '../../../fixtures/reports/format-2'), report, { recursive: true });
+    await smallReport(report);
   });
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -222,7 +235,7 @@ describe('otel-html ci site and cleanup', () => {
     ...extra,
   ];
 
-  test('places a default-branch run, stubs the channel and applies retention', async () => {
+  test('places a default-branch run, rebuilds the rolling channel report and applies retention', async () => {
     stubApi({ 42: runBody(42), 43: runBody(43) });
     const out = join(dir, 'gh-output');
     writeFileSync(out, '');
@@ -252,20 +265,13 @@ describe('otel-html ci site and cleanup', () => {
     stubApi({ 60: runBody(60), 61: runBody(61), 62: runBody(62) });
     expect(await runCli(siteArgs(60), fakeIo().io, realFsDeps)).toBe(0);
     const second = join(dir, 'report-2');
-    const w = await Report.create({ out: second }, realFsDeps);
-    await w.addSpans(
-      traceRequest(
-        [1, 2, 3].map((n) => span({ spanId: `00000000000000a${n}`, name: `extra-${n}` })),
-        [],
-      ),
-    );
-    await w.close();
+    await smallReport(second, 'a');
     const withReport = (args: string[], to: string): string[] => args.map((a) => (a === report ? to : a));
     expect(await runCli(withReport(siteArgs(61), second), fakeIo().io, realFsDeps)).toBe(0);
     const first = totalsOf(report);
     const rolling = totalsOf(join(site, 'ci'));
-    expect(totalsOf(second).spans).toBe(3);
-    expect(rolling.spans).toBe(first.spans + 3);
+    expect(totalsOf(second).spans).toBe(2);
+    expect(rolling.spans).toBe(first.spans + 2);
     expect(rolling.metrics).toBe(first.metrics);
     expect(existsSync(join(site, 'ci/runs/60/data/manifest.js'))).toBe(true);
     expect(existsSync(join(site, 'ci/runs/61/data/manifest.js'))).toBe(true);
@@ -278,7 +284,7 @@ describe('otel-html ci site and cleanup', () => {
     const g = fakeIo();
     expect(await runCli(siteArgs(62), g.io, realFsDeps)).toBe(0);
     expect(g.out()).toContain('::warning::otel-html report: skipping');
-    expect(totalsOf(join(site, 'ci')).spans).toBe(3 + first.spans);
+    expect(totalsOf(join(site, 'ci')).spans).toBe(2 + first.spans);
     expect(existsSync(join(site, 'ci/runs/62/data/manifest.js'))).toBe(true);
   });
 
