@@ -6,6 +6,8 @@ dashboards:
   - id: ci
     title: CI
     variables:
+      - key: cicd.pipeline.name
+        label: workflow
       - key: cicd.pipeline.run.id
         label: run
       - key: cicd.pipeline.task.name
