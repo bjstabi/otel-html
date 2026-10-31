@@ -9,7 +9,7 @@ import { compileBy } from '../../src/query/metric-paths.js';
 import { createMemoryFileSystem } from '../../test-support/memory-fs.js';
 import { spanTarget } from '../ottl/fixtures.js';
 
-const PATH = '.github/otel-html-ci.yaml';
+const PATH = '.github/actions/otel-html-publish/otel-html-ci.yaml';
 
 const ci = (config: ResolveResult['config']) => {
   const d = config.dashboards.find((x) => x.dashboard.id === 'ci')?.dashboard;
@@ -28,7 +28,7 @@ async function resolved() {
   });
 }
 
-describe('.github/otel-html-ci.yaml', () => {
+describe('.github/actions/otel-html-publish/otel-html-ci.yaml', () => {
   test('loads and resolves to the CI dashboard as the home page', async () => {
     const { config } = await resolved();
     expect(config.title).toBe('CI');

@@ -1,0 +1,205 @@
+name: otel-html publish
+description: Build a workflow run's report from its otel-html-* job artifacts, publish it to the GitHub Pages site (the gh-pages branch) and link it from the run's pull request.
+
+inputs:
+  run-id:
+    description: >-
+      The workflow run to report on. The default serves a `workflow_run` publisher and, failing that, the run this job
+      belongs to (a final job in the workflow itself, whose own timings are then incomplete).
+    default: ${{ github.event.workflow_run.id || github.run_id }}
+  version:
+    description: Release version to install, such as `0.2.0`, or `latest`. Ignored when `command` is given.
+    default: latest
+  command:
+    description: An executable to use instead of a download, for example `node dist/cli/main.js`. Empty installs the release binary.
+    default: ""
+  config:
+    description: Dashboard config file for the reports. Empty uses the CI dashboard shipped with this action (otel-html-ci.yaml).
+    default: ""
+  target:
+    description: >-
+      `github-pages` publishes to the gh-pages branch and links the report; `artifact` only uploads the run report as
+      the `ci-run-report` artifact.
+    default: github-pages
+  retention:
+    description: Runs kept per workflow channel on the site.
+    default: "30"
+  pr-retention:
+    description: Runs kept per pull request channel on the site.
+    default: "5"
+  comment:
+    description: Post a sticky comment linking the report on the run's open pull requests.
+    default: "true"
+  check:
+    description: Create a check run linking the report on the run's head commit.
+    default: "true"
+  deploy:
+    description: >-
+      Deploy the site to GitHub Pages in this job after the gh-pages push. That needs the job to have
+      `environment: github-pages` and the `pages: write` and `id-token: write` permissions. With `false`, deploy in a
+      separate job that checks out the gh-pages tip, under `concurrency: {group: pages, cancel-in-progress: false}`:
+      that form survives GitHub cancelling superseded pending runs in the `pages` group.
+    default: "true"
+  token:
+    description: >-
+      Token for the release download, the Actions API, the gh-pages push, the comment and the check run. It needs
+      `actions: read`, `contents: write`, `pages: read`, `pull-requests: write` and `checks: write`.
+    default: ${{ github.token }}
+
+outputs:
+  report-url:
+    description: The run's published report URL; empty when nothing was published.
+    value: ${{ steps.site.outputs.report-url }}
+  published:
+    description: "`true` when the report was pushed to the site, otherwise `false`."
+    value: ${{ steps.site.outputs.published || 'false' }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check inputs
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+      run: |
+        case "$TARGET" in
+          github-pages | artifact) ;;
+          *)
+            echo "::error::otel-html publish: target must be github-pages or artifact, not '$TARGET'"
+            exit 1
+            ;;
+        esac
+    - name: Install otel-html
+      if: inputs.command == ''
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        # The action's own repository when used from another repo; empty for a local `./` use.
+        REPO: ${{ github.action_repository || github.repository }}
+        GH_TOKEN: ${{ inputs.token }}
+      run: bash "$GITHUB_ACTION_PATH/../otel-html-setup/install.sh" "$VERSION"
+    - name: Resolve command
+      id: resolve
+      shell: bash
+      env:
+        CMD: ${{ inputs.command }}
+        CONFIG: ${{ inputs.config }}
+      run: |
+        {
+          echo "command=${CMD:-otel-html}"
+          echo "config=${CONFIG:-$GITHUB_ACTION_PATH/otel-html-ci.yaml}"
+          echo "artifacts=$RUNNER_TEMP/otel-html-artifacts"
+          echo "report=$RUNNER_TEMP/otel-html-run-report"
+          echo "site=$RUNNER_TEMP/otel-html-site"
+          echo "pages=$RUNNER_TEMP/otel-html-pages"
+        } >>"$GITHUB_OUTPUT"
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      with:
+        run-id: ${{ inputs.run-id }}
+        github-token: ${{ inputs.token }}
+        pattern: otel-html-*
+        path: ${{ steps.resolve.outputs.artifacts }}
+    # A run with no job reports (one that skipped its jobs) sets `published=false` and writes nothing.
+    - name: Build the run report
+      id: report
+      shell: bash
+      env:
+        CMD: ${{ steps.resolve.outputs.command }}
+        CONFIG: ${{ steps.resolve.outputs.config }}
+        ARTIFACTS: ${{ steps.resolve.outputs.artifacts }}
+        REPORT: ${{ steps.resolve.outputs.report }}
+        RUN_ID: ${{ inputs.run-id }}
+        GITHUB_TOKEN: ${{ inputs.token }}
+      run: |
+        # CMD is deliberately unquoted: it may be a command with arguments, such as `node dist/cli/main.js`.
+        # shellcheck disable=SC2086
+        $CMD ci report --run-id "$RUN_ID" --repository "$GITHUB_REPOSITORY" --artifacts "$ARTIFACTS" --out "$REPORT" \
+          --config "$CONFIG"
+    - if: steps.report.outputs.published != 'false'
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: ci-run-report
+        path: ${{ steps.resolve.outputs.report }}/
+        include-hidden-files: true
+        if-no-files-found: error
+    - id: pages
+      if: inputs.target == 'github-pages' && steps.report.outputs.published != 'false'
+      uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+      with:
+        token: ${{ inputs.token }}
+    # Places the report on a fresh copy of the gh-pages tip and pushes it under a lease. A rejected lease (another
+    # publish or a PR cleanup got there first) starts over from the new tip, so a cleaned-up PR is never brought
+    # back. `ci site` writes its outputs to a scratch file, copied to the step's outputs once the push lands.
+    - name: Publish to the site branch
+      id: site
+      if: inputs.target == 'github-pages' && steps.report.outputs.published != 'false'
+      shell: bash
+      env:
+        CMD: ${{ steps.resolve.outputs.command }}
+        CONFIG: ${{ steps.resolve.outputs.config }}
+        REPORT: ${{ steps.resolve.outputs.report }}
+        SITE: ${{ steps.resolve.outputs.site }}
+        RUN_ID: ${{ inputs.run-id }}
+        RETENTION: ${{ inputs.retention }}
+        PR_RETENTION: ${{ inputs.pr-retention }}
+        BASE_URL: ${{ steps.pages.outputs.base_url }}
+        GITHUB_TOKEN: ${{ inputs.token }}
+      run: |
+        site_branch="$GITHUB_ACTION_PATH/site-branch.sh"
+        out=$(mktemp)
+        for attempt in 1 2 3 4 5; do
+          rm -rf "$SITE"
+          : >"$out"
+          # CMD is deliberately unquoted: it may be a command with arguments, such as `node dist/cli/main.js`.
+          # shellcheck disable=SC2086
+          if "$site_branch" checkout "$SITE" &&
+            GITHUB_OUTPUT=$out $CMD ci site --site "$SITE" --report "$REPORT" --run-id "$RUN_ID" \
+              --repository "$GITHUB_REPOSITORY" --base-url "$BASE_URL" --retention "$RETENTION" \
+              --pr-retention "$PR_RETENTION" --config "$CONFIG"; then
+            # A run with no channel (a branch with no open PR) is announced by `ci site` and not pushed.
+            if ! grep -qx 'published=true' "$out" || "$site_branch" push "$SITE" "otel-html: publish run $RUN_ID"; then
+              cat "$out" >>"$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          [ "$attempt" = 5 ] || sleep $((attempt * 2 + RANDOM % 5))
+        done
+        echo "::error::could not publish run $RUN_ID to gh-pages after 5 attempts"
+        exit 1
+    # Never fails: a missing comment or check is a warning. Its comment body also goes to the step summary.
+    - name: Link
+      if: steps.site.outputs.published == 'true'
+      shell: bash
+      env:
+        CMD: ${{ steps.resolve.outputs.command }}
+        SITE: ${{ steps.resolve.outputs.site }}
+        RUN_ID: ${{ inputs.run-id }}
+        REPORT_URL: ${{ steps.site.outputs.report-url }}
+        COMMENT: ${{ inputs.comment }}
+        CHECK: ${{ inputs.check }}
+        GITHUB_TOKEN: ${{ inputs.token }}
+      run: |
+        args=()
+        if [ "$COMMENT" != true ]; then args+=(--no-comment); fi
+        if [ "$CHECK" != true ]; then args+=(--no-check); fi
+        # shellcheck disable=SC2086
+        $CMD ci link --run-id "$RUN_ID" --repository "$GITHUB_REPOSITORY" --url "$REPORT_URL" --site "$SITE" "${args[@]}"
+    # The site without the git metadata and the lease file.
+    - name: Stage the site for Pages
+      if: steps.site.outputs.published == 'true' && inputs.deploy == 'true'
+      shell: bash
+      env:
+        SITE: ${{ steps.resolve.outputs.site }}
+        PAGES: ${{ steps.resolve.outputs.pages }}
+      run: |
+        rm -rf "$PAGES"
+        mkdir -p "$PAGES"
+        rsync -a --exclude .git --exclude .lease "$SITE/" "$PAGES/"
+    - if: steps.site.outputs.published == 'true' && inputs.deploy == 'true'
+      uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+      with:
+        path: ${{ steps.resolve.outputs.pages }}
+    - if: steps.site.outputs.published == 'true' && inputs.deploy == 'true'
+      uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+      with:
+        token: ${{ inputs.token }}

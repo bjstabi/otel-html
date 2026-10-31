@@ -47,8 +47,8 @@ jobs:
       pull-requests: write
       checks: write
     outputs:
-      published: ${{ steps.site.outputs.published || 'false' }}
-      report-url: ${{ steps.site.outputs.report-url }}
+      published: ${{ steps.publish.outputs.published }}
+      report-url: ${{ steps.publish.outputs.report-url }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -57,68 +57,13 @@ jobs:
       - uses: ./.github/actions/setup
       # Report.create serves the viewer from dist/, which a fresh checkout does not have.
       - run: mise run build
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      # Builds the run report, pushes it to gh-pages and links it; the `deploy` job below ships the site.
+      - id: publish
+        uses: ./.github/actions/otel-html-publish
         with:
+          command: node dist/cli/main.js
           run-id: ${{ inputs.run_id || github.event.workflow_run.id }}
-          github-token: ${{ github.token }}
-          pattern: otel-html-*
-          path: artifacts/
-      # A run with no job reports (a `load` run that skipped its jobs) sets `published=false` and writes nothing.
-      - name: Build the run report
-        id: report
-        run: node dist/cli/main.js ci report --run-id "$RUN_ID" --repository "$GITHUB_REPOSITORY" --artifacts artifacts --out ci-run-report --config .github/otel-html-ci.yaml
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          RUN_ID: ${{ inputs.run_id || github.event.workflow_run.id }}
-      - if: steps.report.outputs.published != 'false'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: ci-run-report
-          path: ci-run-report/
-          include-hidden-files: true
-          if-no-files-found: error
-      - id: pages
-        if: steps.report.outputs.published != 'false'
-        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
-      # Places the report on a fresh copy of the gh-pages tip and pushes it under a lease. A rejected lease (another
-      # publish or a PR cleanup got there first) starts over from the new tip, so a cleaned-up PR is never brought
-      # back. `ci site` writes its outputs to a scratch file, copied to the step's outputs once the push lands.
-      - name: Publish to the site branch
-        id: site
-        if: steps.report.outputs.published != 'false'
-        shell: bash
-        run: |
-          out=$(mktemp)
-          for attempt in 1 2 3 4 5; do
-            rm -rf site
-            : >"$out"
-            if "$SITE_BRANCH" checkout site &&
-              GITHUB_OUTPUT=$out node dist/cli/main.js ci site --site site --report ci-run-report --run-id "$RUN_ID" \
-                --repository "$GITHUB_REPOSITORY" --base-url "$BASE_URL" --retention 30 --pr-retention 5 \
-                --config .github/otel-html-ci.yaml; then
-              # A run with no channel (a branch with no open PR) is announced by `ci site` and not pushed.
-              if ! grep -qx 'published=true' "$out" || "$SITE_BRANCH" push site "ci-report: $GITHUB_WORKFLOW run $RUN_ID"; then
-                cat "$out" >>"$GITHUB_OUTPUT"
-                exit 0
-              fi
-            fi
-            [ "$attempt" = 5 ] || sleep $((attempt * 2 + RANDOM % 5))
-          done
-          echo "::error::could not publish run $RUN_ID to gh-pages after 5 attempts"
-          exit 1
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          RUN_ID: ${{ inputs.run_id || github.event.workflow_run.id }}
-          BASE_URL: ${{ steps.pages.outputs.base_url }}
-          SITE_BRANCH: .github/actions/otel-html-publish/site-branch.sh
-      # Never fails: a missing comment or check is a warning. Its comment body also goes to the step summary.
-      - name: Link
-        if: steps.site.outputs.published == 'true'
-        run: node dist/cli/main.js ci link --run-id "$RUN_ID" --repository "$GITHUB_REPOSITORY" --url "$REPORT_URL" --site site
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          RUN_ID: ${{ inputs.run_id || github.event.workflow_run.id }}
-          REPORT_URL: ${{ steps.site.outputs.report-url }}
+          deploy: false
 
   # A closed PR's folder and index entry leave the site.
   cleanup:
