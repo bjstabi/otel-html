@@ -5,6 +5,7 @@ import type { WriterDeps } from '../../writer/session.js';
 import { runContext } from '../ci/context-main.js';
 import { messageOf, say } from '../ci/github-api.js';
 import { runReport } from '../ci/report-main.js';
+import { runCleanup, runSite } from '../ci/site-main.js';
 import type { CliIo } from '../io.js';
 import { CliExit } from '../program.js';
 
@@ -20,10 +21,12 @@ interface ReportFlags {
   config?: string;
 }
 
-function parseRunId(text: string): number {
+const parseRunId = (text: string): number => parsePositive('--run-id', text);
+
+function parsePositive(flag: string, text: string): number {
   const n = Number(text);
   if (!/^\d+$/.test(text) || !Number.isSafeInteger(n) || n <= 0)
-    throw new OtelHtmlError('usage', { message: `--run-id is not a positive integer: ${text}` });
+    throw new OtelHtmlError('usage', { message: `${flag} is not a positive integer: ${text}` });
   return n;
 }
 
@@ -31,6 +34,22 @@ function parseRepository(text: string): string {
   if (!/^[^/\s]+\/[^/\s]+$/.test(text))
     throw new OtelHtmlError('usage', { message: `--repository is not owner/repo: ${text}` });
   return text;
+}
+
+interface SiteFlags {
+  site: string;
+  report: string;
+  runId: string;
+  repository: string;
+  baseUrl: string;
+  retention: string;
+  prRetention: string;
+}
+
+interface CleanupFlags {
+  site: string;
+  pr: string;
+  repository?: string;
 }
 
 export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDeps>): void {
@@ -63,6 +82,53 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
         await runReport(opts, io, await resolveDeps(deps));
       } catch (e) {
         say(io, `::error::otel-html report: ${messageOf(e)}`);
+        throw new CliExit(1);
+      }
+    });
+  ci.command('site')
+    .description(
+      "place a run's report on the checked-out site folder, apply retention and rewrite the indexes",
+    )
+    .requiredOption('--site <dir>', 'the site folder (the gh-pages tree)')
+    .requiredOption('--report <dir>', "the run's merged report folder")
+    .requiredOption('--run-id <n>', 'workflow run id')
+    .requiredOption('--repository <owner/repo>', 'repository of the run')
+    .requiredOption('--base-url <url>', "the site's public URL")
+    .option('--retention <n>', 'runs kept per workflow channel', '30')
+    .option('--pr-retention <n>', 'runs kept per pull request channel', '5')
+    .action(async (flags: SiteFlags) => {
+      const opts = {
+        site: flags.site,
+        report: flags.report,
+        runId: parseRunId(flags.runId),
+        repository: parseRepository(flags.repository),
+        baseUrl: flags.baseUrl,
+        retention: parsePositive('--retention', flags.retention),
+        prRetention: parsePositive('--pr-retention', flags.prRetention),
+      };
+      try {
+        await runSite(opts, io);
+      } catch (e) {
+        say(io, `::error::otel-html site: ${messageOf(e)}`);
+        throw new CliExit(1);
+      }
+    });
+  ci.command('cleanup')
+    .description("remove a closed pull request's reports from the site folder")
+    .requiredOption('--site <dir>', 'the site folder (the gh-pages tree)')
+    .requiredOption('--pr <number>', 'pull request number')
+    .option('--repository <owner/repo>', 'repository, for the landing page (default: $GITHUB_REPOSITORY)')
+    .action(async (flags: CleanupFlags) => {
+      const env = (name: string): string | undefined => io.env[name];
+      const opts = {
+        site: flags.site,
+        pr: parsePositive('--pr', flags.pr),
+        repository: parseRepository(flags.repository ?? (env('GITHUB_REPOSITORY') || 'unknown/site')),
+      };
+      try {
+        await runCleanup(opts, io);
+      } catch (e) {
+        say(io, `::error::otel-html cleanup: ${messageOf(e)}`);
         throw new CliExit(1);
       }
     });
