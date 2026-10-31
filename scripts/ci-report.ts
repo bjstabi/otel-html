@@ -139,7 +139,7 @@ async function main(): Promise<number> {
     await trace.close();
 
     const { summary, inputs } = await mergeSkippingBad({
-      merge: (dirs, out) => merge({ inputs: dirs, out, replace: true, ...(dirs.length === 1 ? {} : config) }),
+      merge: (dirs, out, probe) => merge({ inputs: dirs, out, replace: true, ...(probe ? {} : config) }),
       required: [traceDir],
       optional: artifacts.map((a) => a.report),
       out: opts.out,

@@ -30,6 +30,20 @@ describe('fetchJobLog', () => {
     expect(warn).toHaveBeenCalledWith('no log for job build: answered 404');
   });
 
+  test('the scheme check ignores case and refuses garbage', async () => {
+    for (const [location, ok] of [
+      ['HTTPS://blob.test/x', true],
+      ['not a url', false],
+    ] as const) {
+      const fetch = vi.fn(async (url: string) =>
+        url.startsWith('https://api')
+          ? new Response(null, { status: 302, headers: { location } })
+          : new Response('log'),
+      );
+      expect(await fetchJobLog({ ...base, fetch, warn: vi.fn() })).toBe(ok ? 'log' : undefined);
+    }
+  });
+
   test('a non-https redirect is refused', async () => {
     const warn = vi.fn();
     const fetch = vi.fn(
@@ -51,7 +65,7 @@ describe('fetchJobLog', () => {
 });
 
 describe('mergeSkippingBad', () => {
-  const args = (merge: (i: string[], o: string) => Promise<string>, warn = vi.fn()) => ({
+  const args = (merge: (i: string[], o: string, p: boolean) => Promise<string>, warn = vi.fn()) => ({
     merge,
     required: ['trace'],
     optional: ['a', 'bad', 'c'],
@@ -77,6 +91,20 @@ describe('mergeSkippingBad', () => {
     expect(r.inputs).toEqual(['trace', 'a', 'c']);
     expect(warn).toHaveBeenCalledOnce();
     expect(warn.mock.calls[0]?.[0]).toContain('skipping bad');
+  });
+
+  test('the final merge is not a probe even with a single input; probes are', async () => {
+    const merge = vi.fn(async (inputs: string[], _out: string, _probe: boolean) => {
+      if (inputs.includes('bad')) throw new Error('unreadable');
+      return 'ok';
+    });
+    const r = await mergeSkippingBad({ ...args(merge), optional: ['bad'] });
+    expect(r.inputs).toEqual(['trace']);
+    expect(merge.mock.calls.map((c) => [c[0], c[2]])).toEqual([
+      [['trace', 'bad'], false],
+      [['bad'], true],
+      [['trace'], false],
+    ]);
   });
 
   test('a failure no report explains is rethrown', async () => {

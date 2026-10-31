@@ -30,7 +30,13 @@ export async function fetchJobLog(i: {
     });
     const location = res.headers.get('location');
     if (res.status >= 300 && res.status < 400 && location !== null) {
-      if (!location.startsWith('https://')) return none('redirected to a non-https URL');
+      let secure = false;
+      try {
+        secure = new URL(location).protocol === 'https:';
+      } catch {
+        // an unparsable Location is refused below
+      }
+      if (!secure) return none('redirected to a non-https URL');
       res = await i.fetch(location, { redirect: 'follow', signal: AbortSignal.timeout(60_000) });
     }
     return res.ok ? await res.text() : none(`answered ${res.status}`);
@@ -45,7 +51,8 @@ export async function fetchJobLog(i: {
  * the merge is retried. A failure with no bad report to blame is rethrown.
  */
 export async function mergeSkippingBad<S>(i: {
-  merge: (inputs: string[], out: string) => Promise<S>;
+  /** `probe` marks the single-report readability checks, which need no config. */
+  merge: (inputs: string[], out: string, probe: boolean) => Promise<S>;
   required: string[];
   optional: string[];
   out: string;
@@ -54,12 +61,12 @@ export async function mergeSkippingBad<S>(i: {
 }): Promise<{ summary: S; inputs: string[] }> {
   const all = [...i.required, ...i.optional];
   try {
-    return { summary: await i.merge(all, i.out), inputs: all };
+    return { summary: await i.merge(all, i.out, false), inputs: all };
   } catch (first) {
     const bad: string[] = [];
     for (const [n, dir] of i.optional.entries()) {
       try {
-        await i.merge([dir], i.probeOut(n));
+        await i.merge([dir], i.probeOut(n), true);
       } catch (e) {
         i.warn(`skipping ${dir}: ${messageOf(e)}`);
         bad.push(dir);
@@ -67,6 +74,6 @@ export async function mergeSkippingBad<S>(i: {
     }
     if (bad.length === 0) throw first;
     const inputs = all.filter((d) => !bad.includes(d));
-    return { summary: await i.merge(inputs, i.out), inputs };
+    return { summary: await i.merge(inputs, i.out, false), inputs };
   }
 }
