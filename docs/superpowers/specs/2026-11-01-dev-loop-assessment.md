@@ -276,9 +276,9 @@ report with a partial run, so a partial report would simply be wrong).
 **P14. Test effectiveness notes** (observations, not a plan):
 - 2,496 unit tests over 634 files; 71 distinct e2e tests. The ratio is healthy; e2e should stay the layer that checks
   pages, not logic.
-- The three `metrics-explorer` e2e tests take 12 s each on CI (4.5 s locally) because each replays the same
-  seven-step `p99ByRoute` UI sequence; a URL that encodes the query (the hash already holds `show` and `by`) would
-  make them ≈ 1 s each and is also a feature.
+- The three `metrics-explorer` e2e tests take 12 s each on CI (4.5 s locally). The time is the `exemplarRings`
+  sweep (a pointer probe at every spot of the plot), not the seven-step `p99ByRoute` UI sequence, which takes under
+  1 s; a URL that encodes the query would not remove it.
 - `test/receiver/http.test.ts` is 12 s of the unit run (one deliberate 100 ms `setTimeout` and real sockets); the
   next slowest unit file is 3.4 s.
 - `run-chart.spec.ts` holds 25 of the 71 e2e tests, mostly interaction details that need a real canvas and so belong
