@@ -289,7 +289,7 @@ dashboards:
 
 The grid has 12 columns. A widget is `timeline`, `traces`, `logs`, `metric`, `toplist` or `table`; `toplist` and `table` take `signal` (`spans` or `logs`) and `groupBy`. A `metric` widget without `queries` is a grid of the metrics of the selected trace's resources.
 
-A `metric` widget with `runBy` is a run chart: one point per CI run instead of one per time bucket. `runBy` is a data point path whose value identifies a run, `failedWhen` an OTTL condition (data point context) that marks a point as failed, and `controls` sets the starting state of the chart's toggles (`slider`, `evenSpacing`, `split` and `legend`; the values below are the defaults and can be left out). `failedWhen` and `controls` need `runBy`, and `runBy` needs exactly one query, no `formulas`, `display: lines` and `scale: linear`.
+A `metric` widget with `runBy` is a run chart: one point per CI run instead of one per time bucket. `runBy` is a data point path whose value identifies a run, `failedWhen` an OTTL condition (data point context) that marks a point as failed, and `controls` sets the starting state of the chart's toggles (`slider`, `evenSpacing`, `split` and `legend`; the values below are the defaults and can be left out). `failedWhen` and `controls` need `runBy`, and `runBy` needs exactly one query with no `fn`, no `formulas`, `display: lines` and `scale: linear`. `failedWhen` can't read per-point fields such as `flags`.
 
 ```yaml
 - type: metric

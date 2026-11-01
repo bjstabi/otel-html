@@ -17,7 +17,7 @@ const IDENTITY_ROOTS = new Set(['attributes', 'resource', 'instrumentation_scope
 
 type PathValue = Extract<Value, { type: 'path' }>;
 
-function canonical(p: PathValue): string[] {
+export function canonical(p: PathValue): string[] {
   return p.segments.length > 1 && p.segments[0] === DATAPOINT.prefix ? p.segments.slice(1) : [...p.segments];
 }
 

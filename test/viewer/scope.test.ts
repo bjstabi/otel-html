@@ -175,6 +175,7 @@ describe('runByKey', () => {
   test('is the attribute key of a resource attribute path', () => {
     expect(runByKey('resource.attributes["cicd.pipeline.run.id"]')).toBe('cicd.pipeline.run.id');
     expect(runByKey('resource.attributes["a\\"b"]')).toBe('a"b');
+    expect(runByKey('datapoint.resource.attributes["run"]')).toBe('run');
   });
 
   test('is null for any other path', () => {

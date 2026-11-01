@@ -2,8 +2,9 @@ import { z } from 'zod';
 import { OtelHtmlError } from '../model/errors.js';
 import { compileCondition } from '../ottl/compile.js';
 import type { OttlContextName } from '../ottl/contexts.js';
+import { parseCondition } from '../ottl/parse.js';
 import { formulaRefs, parseFormula } from '../query/metric-formula.js';
-import { compileBy } from '../query/metric-paths.js';
+import { compileBy, pathsOf, rejectPerPointPaths } from '../query/metric-paths.js';
 import {
   MAX_METRIC_QUERIES,
   type MetricFormula,
@@ -213,6 +214,17 @@ function conditionIssue(src: string, context: OttlContextName): string | null {
   }
 }
 
+/** A message when a condition that already compiles reads a per-point field, which a per-series query can't run. */
+function perPointIssue(src: string): string | null {
+  try {
+    rejectPerPointPaths(pathsOf(parseCondition(src)));
+    return null;
+  } catch (e) {
+    if (!(e instanceof OtelHtmlError && e.code === 'invalid-ottl')) throw e;
+    return `a condition on whole series (${e.message})`;
+  }
+}
+
 const dashboardId = z
   .string()
   .regex(/^[a-z0-9][a-z0-9-]{0,63}$/, 'an id of lowercase letters, digits and dashes');
@@ -327,8 +339,11 @@ const WidgetSchema = z
         });
       }
       if (w.failedWhen !== null) {
-        const message = conditionIssue(w.failedWhen, 'datapoint');
+        const message = conditionIssue(w.failedWhen, 'datapoint') ?? perPointIssue(w.failedWhen);
         if (message !== null) ctx.addIssue({ code: 'custom', path: ['failedWhen'], message });
+      }
+      if (w.queries?.some((q) => q.fn.length > 0)) {
+        ctx.addIssue({ code: 'custom', path: ['queries'], message: 'no fn together with runBy' });
       }
       if (w.formulas.length > 0) {
         ctx.addIssue({ code: 'custom', path: ['formulas'], message: 'no formulas together with runBy' });

@@ -158,6 +158,9 @@ describe('DashboardSchema', () => {
       ['log scale', { scale: 'log' }, 'scale'],
       ['a bad runBy path', { runBy: 'nope(' }, 'runBy'],
       ['a bad failedWhen', { failedWhen: 'attributes["r"] ==' }, 'failedWhen'],
+      ['a per-point failedWhen', { failedWhen: 'flags == 1' }, 'failedWhen'],
+      ['a time failedWhen', { failedWhen: 'datapoint.time_unix_nano > 0' }, 'failedWhen'],
+      ['a query function', { queries: [{ ...q, fn: [{ op: 'top', n: 1, by: 'avg' }] }] }, 'queries'],
       ['a misspelled toggle', { controls: { legned: true } }, 'controls'],
     ])('rejects %s at its field', (_name, extra, path) => {
       expect(issuePaths(DashboardSchema.safeParse(dash([run(extra)])))).toContain(`widgets.0.${path}`);

@@ -108,7 +108,7 @@ export async function runMetricRunQuery(
     signal?.throwIfAborted();
     const ids = run.members.map((s) => s.def.id);
     const one = (only: readonly number[]): ReturnType<typeof runAtLevel> =>
-      runAtLevel(m, { ...q, fn: [] }, ...oneBucket(level, only), null, signal);
+      runAtLevel(m, q, ...oneBucket(level, only), null, signal);
     const result = one(ids);
     for (const n of result.notes) if (!notes.includes(n)) notes.push(n);
     // A line failed in this run when a failing series of the run feeds it: the run again over those series alone.
