@@ -14,6 +14,9 @@ experimental = true
 # Freshness by content, not mtime: a checkout or a cache restore rewrites every timestamp.
 task.source_freshness_hash_contents = true
 
+# `!` entries inside a group are NOT applied in a merged sources list (verified with --task-cache-explain), so groups hold
+# none: @group:node is src/** and test/** including the viewer, and @group:e2e is `e2e/*.ts` so the generated dot
+# directories (e2e/.reports, e2e/.metrics-scale*, hundreds of MB) never match.
 # Not `global_inputs`: that gives every task sources and an automatic output, so `check`, `test:unit:perf`, `format`,
 # `fixtures` and the rest would be skipped as "up to date". Each task with sources lists `@group:deps` instead.
 # A task's sources name the groups it reads (`@group:node`) plus anything extra; the checks cover everything their
@@ -21,9 +24,9 @@ task.source_freshness_hash_contents = true
 # src-only lists (a test edit must not rebuild dist/ and every fixture report).
 [task_config.input_groups]
 deps = ["mise.toml", "package.json", "pnpm-lock.yaml"]
-node = ["src/**", "!src/viewer/**", "test/**", "!test/viewer/**", "test-support/**", "tsconfig.json", "tsconfig.base.json", "vitest.config.ts"]
+node = ["src/**", "test/**", "test-support/**", "tsconfig.json", "tsconfig.base.json", "vitest.config.ts"]
 viewer = ["src/viewer/**", "src/model/**", "src/format/**", "src/semconv/**", "src/rollups/**", "src/ottl/**", "src/query/**", "src/dashboards/**", "test/viewer/**", "test-support/**", "tsconfig.viewer.json", "vite.config.ts"]
-e2e = ["e2e/**", "!e2e/.reports/**", "!e2e/.metrics-scale/**", "!e2e/.metrics-scale.tmp-*/**", "fixtures/**", "playwright.config.ts", "tsconfig.e2e.json"]
+e2e = ["e2e/*.ts", "fixtures/**", "playwright.config.ts", "tsconfig.e2e.json"]
 scripts = ["scripts/**", "proto/**", "buf.gen.yaml", "schema/**"]
 # What biome, tsc, actionlint and knip read besides the code: every root config file (biome.json, knip.json, tsconfig*.json,
 # tsdown/vite/vitest/playwright/commitlint configs, lefthook.yml, ...), the workflows and the actions.
@@ -65,7 +68,7 @@ description = "vitest, everything but @perf, in parallel"
 # under OTEL_HTML_LOAD / OTEL_HTML_BINARY, so it is not an input.
 sources = ["@group:deps", "@group:node", "@group:viewer", "scripts/**", "fixtures/**", "schema/**", "e2e/fixture.ts", ".github/actions/**", ".github/otel-html-ci.yaml"]
 outputs = []
-cache = { enabled = true, env = ["CI", "OTEL_HTML_LOAD"] }
+cache = { enabled = true, env = ["CI", "OTEL_HTML_LOAD", "OTEL_HTML_BINARY"] }
 run = "pnpm exec vitest run"
 
 # Env vars go in `env`, not a `VAR=1 cmd` prefix: Windows cmd (the unit-os CI job) can't run that.
@@ -112,7 +115,8 @@ cache = { enabled = true }
 run = "pnpm exec knip"
 
 [tasks.gen]
-description = "protobuf-es, the config schema and the OTTL grammar"
+description = """protobuf-es, the config schema and the OTTL grammar
+`mise run --force gen` restores a hand-edited generated file (gen:check does this)."""
 # The two scripts import src/config (schema.ts and what it pulls in) and read src/ottl/ottl.grammar.
 sources = ["@group:deps", "proto/**", "buf.gen.yaml", "scripts/gen-schema.ts", "scripts/gen-ottl.ts", "src/**", "!src/viewer/**", "!src/model/gen/**", "!src/ottl/*.gen.ts", "!src/ottl/*.gen.terms.ts"]
 outputs = ["src/model/gen/**", "src/ottl/*.gen.ts", "src/ottl/*.gen.terms.ts", "schema/**"]
