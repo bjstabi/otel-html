@@ -73,6 +73,7 @@ jobs:
         with:
           command: node dist/cli/main.js
           run-id: ${{ inputs.run_id || github.event.workflow_run.id }}
+          config: .github/otel-html-ci.yaml
           deploy: false
 
   # A closed or merged PR's folder (pr/<number>/) and index entry leave the site.
