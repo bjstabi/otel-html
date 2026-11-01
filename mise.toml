@@ -9,22 +9,22 @@ actionlint = "1.7.12"
 shellcheck = "0.11.0"
 
 [tasks.setup]
-run = "pnpm install --frozen-lockfile && lefthook install"
+run = ["pnpm install --frozen-lockfile", "lefthook install"]
 
 [tasks.lint]
-run = "pnpm exec biome ci --error-on-warnings . && actionlint .github/workflows/*.yml"
+run = ["pnpm exec biome ci --error-on-warnings .", "actionlint .github/workflows/*.yml"]
 
 [tasks.format]
 run = "pnpm exec biome format --write ."
 
 [tasks.typecheck]
-run = "pnpm exec tsc -p tsconfig.json --noEmit && pnpm exec tsc -p tsconfig.viewer.json --noEmit && pnpm exec tsc -p tsconfig.e2e.json --noEmit"
+run = ["pnpm exec tsc -p tsconfig.json --noEmit", "pnpm exec tsc -p tsconfig.viewer.json --noEmit", "pnpm exec tsc -p tsconfig.e2e.json --noEmit"]
 
 # Unit tests in two passes: everything but the timing-sensitive `@perf` tests in parallel, then the `@perf` tests
 # alone, one file at a time (vitest.config.ts), so other work does not steal their CPU. Budgets scale with
 # OTEL_HTML_PERF_FACTOR and, with OTEL_HTML_PERF_REFERENCE_MS set, the measured runner factor; they are never edited.
 [tasks."test:unit"]
-run = ["mise run test:unit:main", "mise run test:unit:perf"]
+run = [{ task = "test:unit:main" }, {task = "test:unit:perf" }]
 
 [tasks."test:unit:main"]
 run = "pnpm exec vitest run"
@@ -59,7 +59,7 @@ bun scripts/load-receiver.ts --out dist/load-receiver "$@"
 run = "pnpm exec knip"
 
 [tasks.gen]
-run = "pnpm exec buf generate && bun scripts/gen-schema.ts && bun scripts/gen-ottl.ts"
+run = ["pnpm exec buf generate", "bun scripts/gen-schema.ts", "bun scripts/gen-ottl.ts"]
 
 [tasks."gen:check"]
 run = "bash scripts/gen-check.sh"
@@ -67,7 +67,7 @@ run = "bash scripts/gen-check.sh"
 # The `@perf` unit tests run after the parallel steps finish, not alongside them.
 [tasks.check]
 depends = ["lint", "typecheck", "test:unit:main", "knip"]
-run = "mise run test:unit:perf"
+run = { task = "test:unit:perf" }
 
 [tasks."build:lib"]
 run = "pnpm exec tsdown"
@@ -77,7 +77,7 @@ run = "pnpm exec vite build"
 
 # The lib build cleans dist/, so it runs first; the viewer build then adds dist/viewer/.
 [tasks.build]
-run = "mise run build:lib && mise run build:viewer"
+run = [{ task = "build:lib" }, { task = "build:viewer" }]
 
 [tasks."test:e2e"]
 shell = "bash -c"
@@ -111,7 +111,7 @@ bun scripts/build-binaries.ts "$@"
 
 [tasks."check:package"]
 depends = ["build"]
-run = "pnpm exec publint && pnpm exec attw --pack --profile esm-only"
+run = ["pnpm exec publint", "pnpm exec attw --pack --profile esm-only"]
 
 # Chromium only (file and http projects): the quick loop while iterating; `test:e2e` is the full matrix.
 # Extra playwright args (`mise run test:e2e:chromium -- e2e/metrics-explorer.spec.ts`) are passed to both passes.
