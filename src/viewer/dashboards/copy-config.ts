@@ -1,11 +1,12 @@
 import { stringify } from 'yaml';
-import type {
-  Dashboard,
-  Variable,
-  Widget,
-  WidgetInput,
-  WidgetLayout,
-  WidgetType,
+import {
+  type Dashboard,
+  DEFAULT_RUN_CONTROLS,
+  type Variable,
+  type Widget,
+  type WidgetInput,
+  type WidgetLayout,
+  type WidgetType,
 } from '../../dashboards/schema.js';
 
 /**
@@ -24,6 +25,9 @@ export const WIDGET_DEFAULTS: Record<WidgetType, Readonly<Record<string, unknown
     display: 'lines',
     scale: 'linear',
     exemplars: true,
+    runBy: null,
+    failedWhen: null,
+    controls: null,
     echarts: null,
   },
   toplist: { title: null, follow: true, query: null, text: '', echarts: null },
@@ -59,6 +63,8 @@ function widgetInput(w: Widget, layout: WidgetLayout, index: number): Record<str
     const v = merged[k];
     if (v === null || v === undefined) continue;
     if (Object.hasOwn(defaults, k) && sameValue(defaults[k], v)) continue;
+    // `controls` is null in the defaults, but a run chart is filled with its defaults: those are left out too.
+    if (k === 'controls' && sameValue(DEFAULT_RUN_CONTROLS, v)) continue;
     out[k] = v;
   }
   return out;

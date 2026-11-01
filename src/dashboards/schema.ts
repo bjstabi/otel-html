@@ -3,6 +3,7 @@ import { OtelHtmlError } from '../model/errors.js';
 import { compileCondition } from '../ottl/compile.js';
 import type { OttlContextName } from '../ottl/contexts.js';
 import { formulaRefs, parseFormula } from '../query/metric-formula.js';
+import { compileBy } from '../query/metric-paths.js';
 import {
   MAX_METRIC_QUERIES,
   type MetricFormula,
@@ -14,6 +15,20 @@ import {
   MetricQuerySchema,
 } from '../query/metric-query.js';
 import { PAGE_OPTIONS } from '../query/pages.js';
+
+/** The toggles of a run chart (a metric widget with `runBy`); `controls` sets their starting state. */
+export interface RunControls {
+  slider: boolean;
+  evenSpacing: boolean;
+  split: boolean;
+  legend: boolean;
+}
+export const DEFAULT_RUN_CONTROLS: RunControls = {
+  slider: true,
+  evenSpacing: true,
+  split: true,
+  legend: false,
+};
 
 // Explicit input/output interfaces keep `isolatedDeclarations` satisfied, as in config/schema.ts.
 // The output is what the viewer reads; the input also accepts the output, so a resolved dashboard
@@ -46,6 +61,9 @@ export type Widget =
       display: 'lines' | 'area' | 'bars' | 'heatmap';
       scale: 'linear' | 'log';
       exemplars: boolean;
+      runBy: string | null;
+      failedWhen: string | null;
+      controls: RunControls | null;
       echarts: Record<string, unknown> | null;
     })
   | (Followable & {
@@ -122,6 +140,9 @@ export type WidgetInput =
       display?: 'lines' | 'area' | 'bars' | 'heatmap' | undefined;
       scale?: 'linear' | 'log' | undefined;
       exemplars?: boolean | undefined;
+      runBy?: string | null | undefined;
+      failedWhen?: string | null | undefined;
+      controls?: { [K in keyof RunControls]?: boolean | undefined } | null | undefined;
       echarts?: Record<string, unknown> | null | undefined;
     })
   | (FollowableInput & {
@@ -242,6 +263,17 @@ const WidgetSchema = z
       display: z.enum(['lines', 'area', 'bars', 'heatmap']).default('lines'),
       scale: z.enum(['linear', 'log']).default('linear'),
       exemplars: z.boolean().default(true),
+      runBy: z.string().min(1).nullable().default(null),
+      failedWhen: z.string().min(1).nullable().default(null),
+      controls: z
+        .strictObject({
+          slider: z.boolean().default(DEFAULT_RUN_CONTROLS.slider),
+          evenSpacing: z.boolean().default(DEFAULT_RUN_CONTROLS.evenSpacing),
+          split: z.boolean().default(DEFAULT_RUN_CONTROLS.split),
+          legend: z.boolean().default(DEFAULT_RUN_CONTROLS.legend),
+        })
+        .nullable()
+        .default(null),
       echarts,
     }),
     z.strictObject({
@@ -277,6 +309,40 @@ const WidgetSchema = z
       if (message !== null) ctx.addIssue({ code: 'custom', path: ['query'], message });
     }
     if (w.type !== 'metric') return;
+    if (w.runBy === null) {
+      for (const field of ['failedWhen', 'controls'] as const) {
+        if (w[field] !== null) {
+          ctx.addIssue({ code: 'custom', path: [field], message: `${field} only together with runBy` });
+        }
+      }
+    } else {
+      try {
+        compileBy(w.runBy);
+      } catch (e) {
+        if (!(e instanceof OtelHtmlError && e.code === 'invalid-ottl')) throw e;
+        ctx.addIssue({
+          code: 'custom',
+          path: ['runBy'],
+          message: `a data point path such as attributes["key"] (${e.message})`,
+        });
+      }
+      if (w.failedWhen !== null) {
+        const message = conditionIssue(w.failedWhen, 'datapoint');
+        if (message !== null) ctx.addIssue({ code: 'custom', path: ['failedWhen'], message });
+      }
+      if (w.formulas.length > 0) {
+        ctx.addIssue({ code: 'custom', path: ['formulas'], message: 'no formulas together with runBy' });
+      }
+      if (w.queries === null || w.queries.length !== 1) {
+        ctx.addIssue({ code: 'custom', path: ['queries'], message: 'exactly one query together with runBy' });
+      }
+      if (w.display !== 'lines') {
+        ctx.addIssue({ code: 'custom', path: ['display'], message: 'lines together with runBy' });
+      }
+      if (w.scale !== 'linear') {
+        ctx.addIssue({ code: 'custom', path: ['scale'], message: 'linear together with runBy' });
+      }
+    }
     if (w.queries === null) {
       if (w.formulas.length > 0) {
         ctx.addIssue({ code: 'custom', path: ['formulas'], message: 'formulas only together with queries' });
@@ -304,7 +370,13 @@ const WidgetSchema = z
         ctx.addIssue({ code: 'custom', path: ['formulas', i, 'expr'], message: e.message });
       }
     });
-  });
+  })
+  // A run chart always carries its toggles, so the viewer never fills defaults itself.
+  .transform((w) =>
+    w.type === 'metric' && w.runBy !== null && w.controls === null
+      ? { ...w, controls: { ...DEFAULT_RUN_CONTROLS } }
+      : w,
+  );
 
 const VariableSchema = z
   .union([

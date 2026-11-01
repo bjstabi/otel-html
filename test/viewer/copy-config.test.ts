@@ -46,6 +46,40 @@ describe('dashboardToYaml', () => {
     expect(out).toContain('id: mine');
   });
 
+  test('run chart fields are left out when unset, and controls when they equal the defaults', () => {
+    const make = (extra: object): Dashboard =>
+      DashboardSchema.parse({
+        id: 'r',
+        title: 'R',
+        widgets: [
+          {
+            type: 'metric',
+            x: 0,
+            y: 0,
+            w: 12,
+            h: 8,
+            queries: [{ id: 'a', metric: 'm', show: 'avg' }],
+            ...extra,
+          },
+        ],
+      });
+    const plain = make({});
+    expect(dashboardToYaml(plain, layoutOf(plain))).not.toMatch(/runBy|failedWhen|controls/);
+    const runs = make({ runBy: 'resource.attributes["run"]' });
+    const out = dashboardToYaml(runs, layoutOf(runs));
+    expect(out).toContain('runBy:');
+    expect(out).not.toMatch(/controls|slider/);
+    expect(reparse(out)).toEqual(runs);
+    const custom = make({
+      runBy: 'resource.attributes["run"]',
+      failedWhen: 'attributes["r"] == "failure"',
+      controls: { legend: true },
+    });
+    const text = dashboardToYaml(custom, layoutOf(custom));
+    expect(text).toContain('failedWhen:');
+    expect(reparse(text)).toEqual(custom);
+  });
+
   test('a moved widget keeps its new position, and the result is a valid dashboard', () => {
     const mine = DashboardSchema.parse({
       id: 'mine',
