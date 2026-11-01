@@ -215,6 +215,19 @@ export function RunChartCard(props: RunChartCardProps): JSX.Element {
   );
   const guide = useMemo(() => restingGuide(option), [option]);
 
+  // A rebuild makes new series models over the same elements, and ECharts only leaves a blur a model remembers, so a
+  // blur still on when it happens never clears. A cleanup, because cleanups all run before `Chart`'s `setOption`.
+  const hovering = useRef(false);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: each new option is a rebuild
+  useEffect(
+    () => () => {
+      if (!hovering.current) return;
+      hovering.current = false;
+      chart.current?.dispatchAction({ type: 'downplay' });
+    },
+    [option],
+  );
+
   // Latest values for the ECharts handlers, which stay the same so that an event never rebuilds the chart.
   const live = useRef({ result, controls, hidden, split: false, guide, onPickRun });
   live.current = { result, controls, hidden, split: controls.split && splitFits, guide, onPickRun };
@@ -233,6 +246,7 @@ export function RunChartCard(props: RunChartCardProps): JSX.Element {
       chart.current?.setOption({ series: Array.from({ length: plots }, (_, n) => guideSeries(n, x)) });
     };
     const leaveDot = (): void => {
+      hovering.current = false;
       setHoveredRun(null);
       drawGuide(live.current.guide.x);
     };
@@ -254,6 +268,7 @@ export function RunChartCard(props: RunChartCardProps): JSX.Element {
         const { value, data } = e as DotEvent;
         const x = Array.isArray(value) ? Number(value[0]) : Number.NaN;
         if (data?.meta === undefined || Number.isNaN(x)) return;
+        hovering.current = true;
         setHoveredRun(data.meta.run.id);
         drawGuide(x);
       },
@@ -273,6 +288,7 @@ export function RunChartCard(props: RunChartCardProps): JSX.Element {
     setHiddenKeys(next);
   };
   const hoverLine = (key: string, on: boolean): void => {
+    hovering.current = on;
     chart.current?.dispatchAction({ type: on ? 'highlight' : 'downplay', seriesId: `line:${key}` });
   };
 
