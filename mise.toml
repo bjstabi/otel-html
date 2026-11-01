@@ -205,7 +205,7 @@ depends = ["e2e:fixtures"]
 # source because it names the Playwright image the browsers come from. OTEL_HTML_METRICS_SCALE changes which tests run.
 sources = ["@group:deps", "dist/**", "!dist/bin/**", "!dist/load-receiver/**", "@group:e2e", "test-support/**", ".github/workflows/ci.yml"]
 outputs = []
-cache = { enabled = true, env = ["CI", "OTEL_HTML_PERF_FACTOR", "OTEL_HTML_PERF_REFERENCE_MS", "OTEL_HTML_SKIP_BROWSER_INSTALL", "OTEL_HTML_METRICS_SCALE"], command_inputs = ["pnpm exec playwright --version"] }
+cache = { enabled = true, env = ["CI", "OTEL_HTML_PERF_FACTOR", "OTEL_HTML_PERF_REFERENCE_MS", "OTEL_HTML_SKIP_BROWSER_INSTALL", "OTEL_HTML_METRICS_SCALE", "OTEL_HTML_LOAD_REPORT"], command_inputs = ["pnpm exec playwright --version"] }
 usage = '''
 flag "--browser <browser>" default="*"
 arg "[args]" var=#true
