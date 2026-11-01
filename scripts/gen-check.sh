@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-mise run gen
+mise run --force gen
 git diff --exit-code -- src/model/gen 'src/ottl/*.gen.ts' 'src/ottl/*.gen.terms.ts' schema
 # git diff ignores untracked files; stale or new generated files must fail too.
 untracked="$(git status --porcelain --untracked-files=all -- src/model/gen 'src/ottl/*.gen.ts' 'src/ottl/*.gen.terms.ts' schema)"
