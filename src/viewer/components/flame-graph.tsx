@@ -142,15 +142,33 @@ function readFlameTheme(): FlameTheme {
   };
 }
 
-/** Ink or surface, whichever reads better on `fill` (hex only; anything else keeps ink). */
-export function labelColorOn(fill: string, theme: Pick<FlameTheme, 'ink' | 'surface'>): string {
-  const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(fill);
-  if (m === null) return theme.ink;
-  const lin = (h: string | undefined): number => {
-    const c = Number.parseInt(h ?? '0', 16) / 255;
-    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+/** A fill's red, green and blue from 0 to 1: `#rrggbb`, or the `hsl(h, s%, l%)` of a generated colour; else null. */
+function fillChannels(fill: string): [number, number, number] | null {
+  const hex = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(fill);
+  if (hex !== null) {
+    const c = (h: string | undefined): number => Number.parseInt(h ?? '0', 16) / 255;
+    return [c(hex[1]), c(hex[2]), c(hex[3])];
+  }
+  const hsl = /^hsl\(([\d.]+),\s*([\d.]+)%,\s*([\d.]+)%\)$/.exec(fill);
+  if (hsl === null) return null;
+  const [h, s, l] = [Number(hsl[1]), Number(hsl[2]) / 100, Number(hsl[3]) / 100];
+  const c = (n: number): number => {
+    const k = (n + h / 30) % 12;
+    return l - s * Math.min(l, 1 - l) * Math.max(-1, Math.min(k - 3, 9 - k, 1));
   };
-  const lum = 0.2126 * lin(m[1]) + 0.7152 * lin(m[2]) + 0.0722 * lin(m[3]);
+  return [c(0), c(8), c(4)];
+}
+
+/** Ink or surface, whichever reads better on `fill` (see `fillChannels`; anything else keeps ink). */
+export function labelColorOn(fill: string, theme: Pick<FlameTheme, 'ink' | 'surface'>): string {
+  const channels = fillChannels(fill);
+  if (channels === null) return theme.ink;
+  const [r, g, b] = channels.map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4)) as [
+    number,
+    number,
+    number,
+  ];
+  const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
   // Contrast against black text vs white text.
   return (lum + 0.05) / 0.05 > 1.05 / (lum + 0.05) ? '#111111' : '#ffffff';
 }
