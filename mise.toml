@@ -1,5 +1,9 @@
 #:schema https://mise.jdx.dev/schema/mise.json
 
+# Floor: input groups (`task_config.input_groups`), `mise generate task-docs --inject` and the task artifact cache
+# were verified on this version; older ones may ignore or reject them.
+min_version = "2026.10.25"
+
 [tools]
 node = "24.22.1"
 bun = "1.4.4"
@@ -10,7 +14,8 @@ shellcheck = "0.11.0"
 watchexec = "2.8.0"
 
 [settings]
-# The task artifact cache (`cache = { ... }` on lint, typecheck, knip and test:unit:main).
+# Needed for the task artifact cache (`cache = { ... }` on lint, typecheck, knip and test:unit:main) AND for input
+# groups: without it every task errors. `MISE_TASK_CACHE=off` is the off switch for the cache.
 experimental = true
 # Freshness by content, not mtime: a checkout or a cache restore rewrites every timestamp.
 task.source_freshness_hash_contents = true
@@ -27,11 +32,13 @@ task.source_freshness_hash_contents = true
 deps = ["mise.toml", "package.json", "pnpm-lock.yaml"]
 node = ["src/**", "test/**", "test-support/**", "tsconfig.json", "tsconfig.base.json", "vitest.config.ts"]
 viewer = ["src/viewer/**", "src/model/**", "src/format/**", "src/semconv/**", "src/rollups/**", "src/ottl/**", "src/query/**", "src/dashboards/**", "test/viewer/**", "test-support/**", "tsconfig.viewer.json", "vite.config.ts"]
-e2e = ["e2e/*.ts", "fixtures/**", "playwright.config.ts", "tsconfig.e2e.json"]
+e2e = ["e2e/*.ts", "e2e/[!.]*/**", "fixtures/**", "playwright.config.ts", "tsconfig.e2e.json"]
 scripts = ["scripts/**", "proto/**", "buf.gen.yaml", "schema/**"]
 # What biome, tsc, actionlint and knip read besides the code: every root config file (biome.json, knip.json, tsconfig*.json,
-# tsdown/vite/vitest/playwright/commitlint configs, lefthook.yml, ...), the workflows and the actions.
-config = ["*.ts", "*.js", "*.json", "*.yml", "*.yaml", ".github/**"]
+# tsdown/vite/vitest/playwright/commitlint configs, lefthook.yml, ...), the root markdown biome formats (AGENTS.md,
+# CLAUDE.md; not README.md or docs/, which biome excludes), the workflows and the actions.
+# A new top-level source directory (or root file kind) must be added to a group here, or lint and typecheck skip it.
+config = ["*.ts", "*.js", "*.mjs", "*.cjs", "*.json", "*.jsonc", "*.css", "*.yml", "*.yaml", "AGENTS.md", "CLAUDE.md", ".github/**"]
 
 [tasks.setup]
 description = "Install dependencies and git hooks"
@@ -116,7 +123,7 @@ cache = { enabled = true }
 run = "pnpm exec knip"
 
 [tasks.gen]
-description = """protobuf-es, the config schema and the OTTL grammar
+description = """protobuf-es, the config schema and the OTTL grammar; also rewrites the README's generated task section
 `mise run --force gen` restores a hand-edited generated file (gen:check does this)."""
 # The two scripts import src/config (schema.ts and what it pulls in) and read src/ottl/ottl.grammar.
 sources = ["@group:deps", "proto/**", "buf.gen.yaml", "scripts/gen-schema.ts", "scripts/gen-ottl.ts", "src/**", "!src/viewer/**", "!src/model/gen/**", "!src/ottl/*.gen.ts", "!src/ottl/*.gen.terms.ts"]
@@ -144,7 +151,7 @@ depends = ["check"]
 run = { task = "test:e2e:chromium" }
 
 [tasks."test:unit:changed"]
-description = "Unit tests whose import graph reaches a file changed since <ref> (default main)"
+description = "Unit tests whose import graph reaches a file changed since `ref` (default main)"
 usage = 'arg "[ref]" default="main"'
 run = "pnpm exec vitest run --changed $usage_ref"
 

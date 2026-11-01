@@ -688,7 +688,7 @@ Fix formatting with biome
 
 - **Usage:** `gen`
 
-protobuf-es, the config schema and the OTTL grammar
+protobuf-es, the config schema and the OTTL grammar; also rewrites the README's generated task section
 `mise run --force gen` restores a hand-edited generated file (gen:check does this).
 
 ## `gen:check`
@@ -787,7 +787,7 @@ Unit tests: the parallel pass, then the @perf pass
 
 ## `test:unit:changed`
 
-Unit tests whose import graph reaches a file changed since <ref> (default main)
+Unit tests whose import graph reaches a file changed since `ref` (default main)
 
 
 - **Usage:** `test:unit:changed [ref]`
