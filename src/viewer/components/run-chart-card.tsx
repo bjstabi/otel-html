@@ -5,6 +5,7 @@ import type { RunInfo, RunQueryResult } from '../data/metric-run-query.js';
 import { useColorAssigner } from '../theme/colors-context.js';
 import { Chart, type EChartsType } from './chart.js';
 import { seriesToken, token } from './metric-chart-option.js';
+import { plotRects } from './run-chart-layout.js';
 import { LEGEND_ROW_PX, legendRows, RunChartLegend } from './run-chart-legend.js';
 import {
   buildRunChartOption,
@@ -250,6 +251,20 @@ export function RunChartCard(props: RunChartCardProps): JSX.Element {
 
   const tooSmall = body !== null && !splitFits;
   const notes = tooSmall ? [...props.notes, TOO_SMALL] : props.notes;
+  // With split off the builder's `splitFits` says nothing, and turning it on here would only strand it on, disabled.
+  const visible = result.lines.filter((l) => !hidden.has(l.key));
+  const wouldNotFit =
+    body !== null &&
+    !controls.split &&
+    !plotRects({
+      width: box.width,
+      height: box.height,
+      plots: visible.length,
+      split: true,
+      slider: controls.slider,
+      // As the builder: mixed units split whatever the size or the toggle.
+      forceSplit: new Set(visible.map((l) => l.unit)).size > 1,
+    }).splitFits;
   const empty = result.runs.length === 0 || result.lines.length === 0;
   const inView = runsInView(result, zoom);
   const rows =
@@ -281,7 +296,8 @@ export function RunChartCard(props: RunChartCardProps): JSX.Element {
               key={key}
               type="button"
               aria-pressed={controls[key]}
-              disabled={key === 'split' && tooSmall}
+              disabled={key === 'split' && (tooSmall || wouldNotFit)}
+              {...(key === 'split' && wouldNotFit ? { title: TOO_SMALL } : {})}
               onClick={() => onControls({ ...controls, [key]: !controls[key] })}
               className={BUTTON}
             >

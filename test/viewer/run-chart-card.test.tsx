@@ -522,6 +522,42 @@ describe('RunChartCard states', () => {
     expect(lastFull().grid).toHaveLength(1);
   });
 
+  test('split off and too small to split cannot be turned on, and adds no note', () => {
+    size.height = 100;
+    const onControls = vi.fn();
+    render(<RunChartCard {...props({ onControls })} />);
+    const split = toggle('Split') as HTMLButtonElement;
+    expect(split.getAttribute('aria-pressed')).toBe('false');
+    expect(split.disabled).toBe(true);
+    expect(split.title).toBe('Too small to split. Make this widget taller.');
+    expect(screen.queryByText('Too small to split. Make this widget taller.')).toBeNull();
+    fireEvent.click(split);
+    expect(onControls).not.toHaveBeenCalled();
+  });
+
+  test('split off is enabled again once it would fit, with no title', async () => {
+    size.height = 100;
+    render(<RunChartCard {...props()} />);
+    await resize(1000, 600);
+    const split = toggle('Split') as HTMLButtonElement;
+    expect(split.disabled).toBe(false);
+    expect(split.title).toBe('');
+  });
+
+  test('split off with one visible line left has nothing to split, so it stays enabled', () => {
+    size.height = 100;
+    render(<RunChartCard {...props()} />);
+    fireEvent.click(row(/^slow/));
+    expect((toggle('Split') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  test('split off with mixed units draws split anyway, so the size does not disable it', () => {
+    size.height = 100;
+    const mixed = result({ lines: [line('a', [1, 2, 3, 4]), { ...line('b', [1, 2, 3, 4]), unit: 'By' }] });
+    render(<RunChartCard {...props({ result: mixed })} />);
+    expect((toggle('Split') as HTMLButtonElement).disabled).toBe(false);
+  });
+
   test('a split that fits again takes the note away', async () => {
     size.height = 100;
     render(<RunChartCard {...props({ controls: { ...CONTROLS, split: true } })} />);
