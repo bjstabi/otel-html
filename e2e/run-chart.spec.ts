@@ -36,6 +36,21 @@ const toggle = (page: Page, name: string): Locator => card(page).getByRole('butt
 /** ECharts appends its tooltip beside the canvas's parent. */
 const tooltipOf = (host: Locator): Locator => host.locator('> div:not(:has(canvas))');
 
+/**
+ * Waits out the dashboard grid's first width change. The chart re-lays out through it, so a dot read too early is
+ * where no dot is by the time the mouse gets there.
+ */
+async function layoutSettled(page: Page, host: Locator): Promise<void> {
+  const layout = async (): Promise<string> => {
+    await page.evaluate(() => Promise.all(document.getAnimations().map((a) => a.finished)));
+    await page.evaluate(
+      () => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))),
+    );
+    return JSON.stringify([await host.boundingBox(), (await readRunChart(host)).grids]);
+  };
+  await expect(async () => expect(await layout()).toBe(await layout())).toPass();
+}
+
 async function open(page: Page, reportUrl: (name: 'run-charts') => string, id = 'runs'): Promise<Locator> {
   await page.goto(`${reportUrl('run-charts')}/index.html#/dashboards/${id}`);
   // The variables bar loads after the chart can, and moves it down when it does.
@@ -43,6 +58,7 @@ async function open(page: Page, reportUrl: (name: 'run-charts') => string, id = 
   const host = hostOf(page);
   await expect(host).toBeVisible();
   await expect.poll(async () => (await readRunChart(host)).lines.length).toBeGreaterThan(0);
+  await layoutSettled(page, host);
   return host;
 }
 
@@ -71,6 +87,11 @@ async function zoomPastOldest(page: Page, host: Locator): Promise<void> {
   await grabLeftHandle(page, host, 0.3);
   await page.mouse.up();
 }
+
+const OPAQUE = 255;
+/** The opacity of `lint`'s dot in the second run, off the column of the third-run and later dots the tests hover. */
+const alphaOfLint = async (host: Locator): Promise<number> =>
+  (await pixelAt(host, await runDot(host, 'lint', 1)))[3] ?? 0;
 
 const maxOfOutlier = (r: RunChartRead): number => {
   const plot = r.lines.find((l) => l.name === RUN_CHART_OUTLIER_JOB)?.plot;
@@ -210,22 +231,79 @@ test('hovering a dot on one plot dims the other lines, draws the guide and keeps
   const host = await open(page, reportUrl);
   await toggle(page, 'Split').click();
   await expect.poll(async () => (await readRunChart(host)).grids.length).toBe(1);
-  const other = await runDot(host, 'lint', 3);
+  // In another column from the hovered dot: the guide is opaque and would paint over a dot in the same one.
+  const other = await runDot(host, 'lint', 1);
   const rest = await pixelAt(host, other);
   const dot = await runDot(host, RUN_CHART_OUTLIER_JOB, 3);
   await page.mouse.move(dot.x, dot.y);
   await expect.poll(async () => (await readRunChart(host)).guides).toBe(1);
   await expect(tooltipOf(host)).toBeVisible();
-  await expect.poll(() => pixelAt(host, other)).not.toEqual(rest);
-  // Still open once the guide's `setOption` has drawn and a frame has passed.
+  await expect.poll(() => alphaOfLint(host)).toBeLessThan(OPAQUE);
+  // Still open and still dim once the guide's `setOption` has drawn and a frame has passed.
   await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
   await expect(tooltipOf(host)).toBeVisible();
+  expect(await alphaOfLint(host)).toBeLessThan(OPAQUE);
   await expect(tooltipOf(host)).toContainText(RUN_CHART_OUTLIER_JOB);
 
   await page.mouse.move(dot.x + 15, dot.y - 40);
   await expect(tooltipOf(host)).toBeHidden();
   await expect.poll(async () => (await readRunChart(host)).guides).toBe(0);
   await expect.poll(() => pixelAt(host, other)).toEqual(rest);
+});
+
+test.describe('a rebuild during a hover on one plot leaves no line dim', () => {
+  const rebuilds: Record<
+    string,
+    (page: Page, host: Locator, dot: { x: number; y: number }) => Promise<void>
+  > = {
+    'a click on the dot': async (page, _host, dot) => {
+      await page.mouse.click(dot.x, dot.y);
+      await expect(page.getByRole('combobox', { name: 'run' })).toHaveText(runChartRunId(3));
+    },
+    'a toggle from the keyboard': async (page) => {
+      await page.keyboard.press('Enter');
+      await expect(toggle(page, 'Slider')).toHaveAttribute('aria-pressed', 'false');
+    },
+    'a resize': async (page, host) => {
+      const before = (await readRunChart(host)).grids;
+      await page.setViewportSize({ width: 1100, height: 720 });
+      await expect.poll(async () => (await readRunChart(host)).grids).not.toEqual(before);
+    },
+    'a theme switch from the keyboard': async (page) => {
+      await page.getByRole('button', { name: 'Dark theme' }).focus();
+      await page.keyboard.press('Enter');
+      await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+    },
+  };
+  for (const [name, rebuild] of Object.entries(rebuilds)) {
+    test(name, async ({ page, reportUrl }) => {
+      const host = await open(page, reportUrl);
+      await toggle(page, 'Split').click();
+      await expect.poll(async () => (await readRunChart(host)).grids.length).toBe(1);
+      await toggle(page, 'Slider').focus();
+      const dot = await runDot(host, RUN_CHART_OUTLIER_JOB, 3);
+      await page.mouse.move(dot.x, dot.y);
+      await expect.poll(() => alphaOfLint(host)).toBeLessThan(OPAQUE);
+      await rebuild(page, host, dot);
+      await page.mouse.move(dot.x + 15, dot.y - 40);
+      await page.mouse.move(1, 1);
+      await expect.poll(() => alphaOfLint(host)).toBe(OPAQUE);
+    });
+  }
+
+  test('hiding a line from its highlighted legend row', async ({ page, reportUrl }) => {
+    const host = await open(page, reportUrl);
+    await toggle(page, 'Split').click();
+    await toggle(page, 'Legend').click();
+    await expect.poll(async () => (await readRunChart(host)).grids.length).toBe(1);
+    const row = card(page).getByRole('list', { name: 'Lines' }).getByRole('button', { name: /^docs/ });
+    await row.hover();
+    await expect.poll(() => alphaOfLint(host)).toBeLessThan(OPAQUE);
+    await row.click();
+    await expect.poll(async () => (await readRunChart(host)).lines.length).toBe(RUN_CHART_JOBS.length - 1);
+    await page.mouse.move(1, 1);
+    await expect.poll(() => alphaOfLint(host)).toBe(OPAQUE);
+  });
 });
 
 test('two-line x labels fit, with the slider on and off, on either spacing and when narrow', async ({
