@@ -169,8 +169,8 @@ export function labelColorOn(fill: string, theme: Pick<FlameTheme, 'ink' | 'surf
     number,
   ];
   const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-  // Contrast against black text vs white text.
-  return (lum + 0.05) / 0.05 > 1.05 / (lum + 0.05) ? '#111111' : '#ffffff';
+  // Contrast against #111111 text (luminance 0.0056) vs white text.
+  return (lum + 0.05) / 0.0556 > 1.05 / (lum + 0.05) ? '#111111' : '#ffffff';
 }
 
 const hatchCache = new Map<string, unknown>();
