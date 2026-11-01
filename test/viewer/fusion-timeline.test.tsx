@@ -195,6 +195,8 @@ describe('TimelineWidget on the linked fixture', () => {
       openIn: vi.fn(),
       setLogView: vi.fn(),
       setSubtitle: vi.fn(),
+      setVariable: vi.fn(),
+      setControls: vi.fn(),
     };
     render(
       <TimelineWidget
@@ -213,6 +215,7 @@ describe('TimelineWidget on the linked fixture', () => {
         dataSource={ds}
         actions={actions}
         variables={variables}
+        controls={null}
         state={EMPTY_DASHBOARD_STATE}
       />,
     );
@@ -256,6 +259,8 @@ describe('TimelineWidget states', () => {
     openIn: vi.fn(),
     setLogView: vi.fn(),
     setSubtitle: vi.fn(),
+    setVariable: vi.fn(),
+    setControls: vi.fn(),
   };
 
   function mount(ds: DataSource): void {
@@ -278,6 +283,7 @@ describe('TimelineWidget states', () => {
         dataSource={ds}
         actions={actions}
         variables={[]}
+        controls={null}
         state={EMPTY_DASHBOARD_STATE}
       />,
     );

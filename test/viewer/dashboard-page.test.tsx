@@ -243,6 +243,137 @@ describe('Open in and narrow screens', () => {
   });
 });
 
+describe('what a run chart widget does to the page', () => {
+  const RUN = 'cicd.pipeline.run.id';
+  const QUERY = { id: 'a', metric: 'm', show: 'avg' };
+  const widget = { type: 'metric', x: 0, y: 0, w: 12, h: 8, queries: [QUERY] };
+  const RUNS = DashboardSchema.parse({
+    id: 'runs',
+    title: 'Runs',
+    variables: [RUN],
+    widgets: [
+      {
+        ...widget,
+        id: 'jobs',
+        title: 'Jobs',
+        runBy: `resource.attributes["${RUN}"]`,
+        controls: { legend: true },
+      },
+    ],
+  });
+  const OTHER = DashboardSchema.parse({
+    id: 'other',
+    title: 'Other',
+    widgets: [{ type: 'timeline', x: 0, y: 0, w: 12, h: 6 }],
+  });
+  const RUN_VALUES = { [RUN]: { values: ['100', '200'], kind: 'string' as const, capped: false } };
+  const OFF = { slider: false, evenSpacing: true, split: true, legend: true };
+
+  /** The metric renderer swapped for buttons on its actions, so the page's state is all that's under test. */
+  function probed(run: () => void): () => void {
+    const original = WIDGETS.metric;
+    WIDGETS.metric = ({ actions, controls, variables }) => (
+      <div>
+        <output aria-label="controls">{JSON.stringify(controls)}</output>
+        <output aria-label="bound">{variables.map((v) => `${v.key}=${v.value}`).join()}</output>
+        <button type="button" onClick={() => actions.setVariable(RUN, '200')}>
+          pick
+        </button>
+        <button type="button" onClick={() => actions.setControls(OFF)}>
+          toggle
+        </button>
+      </div>
+    );
+    run();
+    return () => {
+      WIDGETS.metric = original;
+    };
+  }
+  let restore: () => void = () => undefined;
+  afterEach(() => restore());
+
+  const shown = (name: string): string => screen.getByRole('status', { name }).textContent ?? '';
+
+  test('controls start as the config has them, and setControls replaces them for the widget', async () => {
+    const user = userEvent.setup();
+    restore = probed(() => renderShell('#/dashboards/runs', dataSourceOf(manifestWith([RUNS]), RUN_VALUES)));
+    await screen.findByRole('button', { name: 'toggle' });
+    expect(JSON.parse(shown('controls'))).toEqual({
+      slider: true,
+      evenSpacing: true,
+      split: true,
+      legend: true,
+    });
+    await user.click(screen.getByRole('button', { name: 'toggle' }));
+    expect(JSON.parse(shown('controls'))).toEqual(OFF);
+  });
+
+  test('a toggle survives the page re-rendering, and never reaches the URL', async () => {
+    const user = userEvent.setup();
+    restore = probed(() => renderShell('#/dashboards/runs', dataSourceOf(manifestWith([RUNS]), RUN_VALUES)));
+    await user.click(await screen.findByRole('button', { name: 'toggle' }));
+    const before = window.location.hash;
+    expect(before).not.toMatch(/slider|controls/);
+    await user.click(screen.getByRole('button', { name: /follows selection/ }));
+    expect(currentD()?.follow).toEqual({ jobs: false });
+    expect(JSON.parse(shown('controls'))).toEqual(OFF);
+    expect(window.location.hash).not.toMatch(/slider|controls/);
+  });
+
+  test('a toggle lasts through leaving the dashboard and coming back', async () => {
+    const user = userEvent.setup();
+    restore = probed(() =>
+      renderShell('#/dashboards/runs', dataSourceOf(manifestWith([RUNS, OTHER]), RUN_VALUES)),
+    );
+    await user.click(await screen.findByRole('button', { name: 'toggle' }));
+    await user.click(screen.getByRole('button', { name: 'Dashboards' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Other' }));
+    await screen.findByRole('heading', { name: 'Other', level: 1 });
+    await user.click(screen.getByRole('button', { name: 'Dashboards' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Runs' }));
+    await screen.findByRole('button', { name: 'toggle' });
+    expect(JSON.parse(shown('controls'))).toEqual(OFF);
+  });
+
+  test('setVariable updates what the variables bar reads and shows, and binds the widget', async () => {
+    const user = userEvent.setup();
+    restore = probed(() => renderShell('#/dashboards/runs', dataSourceOf(manifestWith([RUNS]), RUN_VALUES)));
+    await user.click(await screen.findByRole('button', { name: 'pick' }));
+    expect(currentD()?.vars).toEqual({ [RUN]: '200' });
+    expect(shown('bound')).toBe(`${RUN}=200`);
+    expect(within(main().getByRole('combobox')).getByText('200')).toBeTruthy();
+  });
+
+  test('setVariable to the config default is no override, as in the variables bar', async () => {
+    const user = userEvent.setup();
+    const withDefault = DashboardSchema.parse({
+      ...RUNS,
+      variables: [{ key: RUN, default: '200' }],
+    });
+    const d = dParam({ vars: { [RUN]: '100' } });
+    restore = probed(() =>
+      renderShell(`#/dashboards/runs?${d}`, dataSourceOf(manifestWith([withDefault]), RUN_VALUES)),
+    );
+    await user.click(await screen.findByRole('button', { name: 'pick' }));
+    expect(currentD()).toBeUndefined();
+    expect(shown('bound')).toBe(`${RUN}=200`);
+  });
+
+  test('Copy config writes the current toggles', async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn((_: string) => Promise.resolve());
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+    restore = probed(() => renderShell('#/dashboards/runs', dataSourceOf(manifestWith([RUNS]), RUN_VALUES)));
+    await user.click(await screen.findByRole('button', { name: 'toggle' }));
+    await user.click(screen.getByRole('button', { name: /Copy config/ }));
+    expect(writeText).toHaveBeenCalledWith(
+      dashboardToYaml(RUNS, [{ x: 0, y: 0, w: 12, h: 8 }], { jobs: OFF }),
+    );
+    expect(writeText.mock.calls[0]?.[0]).toContain('slider: false');
+    vi.unstubAllGlobals();
+  });
+});
+
 describe('a failing widget', () => {
   test('shows the error inside its frame while the other frames still render', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);

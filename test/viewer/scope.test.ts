@@ -14,6 +14,7 @@ import {
   bindings,
   following,
   resourcesMatching,
+  runByKey,
   scopeFor,
   type VariableBinding,
   variableCondition,
@@ -67,6 +68,9 @@ const WIDGETS: Record<WidgetType, Widget> = {
     display: 'lines',
     scale: 'linear',
     exemplars: false,
+    runBy: null,
+    failedWhen: null,
+    controls: null,
     echarts: null,
   },
   toplist: {
@@ -164,6 +168,19 @@ describe('scopeFor, table-driven over WIDGET_SCOPE', () => {
     expect(scopeFor(WIDGETS.logs, ctx({ vars, following: false })).condition).toBe(
       'resource.attributes["k"] == "v"',
     );
+  });
+});
+
+describe('runByKey', () => {
+  test('is the attribute key of a resource attribute path', () => {
+    expect(runByKey('resource.attributes["cicd.pipeline.run.id"]')).toBe('cicd.pipeline.run.id');
+    expect(runByKey('resource.attributes["a\\"b"]')).toBe('a"b');
+  });
+
+  test('is null for any other path', () => {
+    expect(runByKey('attributes["run"]')).toBeNull();
+    expect(runByKey('resource.attributes["a"]["b"]')).toBeNull();
+    expect(runByKey('metric.name')).toBeNull();
   });
 });
 

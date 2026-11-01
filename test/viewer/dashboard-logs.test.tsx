@@ -142,6 +142,8 @@ function mount(
     openIn: vi.fn(),
     setLogView: vi.fn(),
     setSubtitle: vi.fn(),
+    setVariable: vi.fn(),
+    setControls: vi.fn(),
   };
   render(
     <ThemeProvider>
@@ -154,6 +156,7 @@ function mount(
           dataSource={ds}
           actions={actions}
           variables={[]}
+          controls={null}
           state={{
             ...EMPTY_DASHBOARD_STATE,
             logView: opts.logView === undefined ? {} : { logs: opts.logView },

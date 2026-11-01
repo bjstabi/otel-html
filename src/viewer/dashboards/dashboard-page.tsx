@@ -1,7 +1,7 @@
 import { Menu } from '@base-ui/react/menu';
 import { ChevronDown, Copy, LayoutDashboard, Pencil } from 'lucide-react';
 import { type JSX, useCallback, useMemo, useState } from 'react';
-import type { Widget, WidgetLayout, WidgetType } from '../../dashboards/schema.js';
+import type { RunControls, Widget, WidgetLayout, WidgetType } from '../../dashboards/schema.js';
 import { parseUnixNanos, type TraceId } from '../../model/ids.js';
 import type { DataSource, ResourceValues } from '../data/data-source.js';
 import type { TimeWindow } from '../data/span-query.js';
@@ -24,7 +24,7 @@ import { DashboardGrid, useStacked } from './grid.js';
 import { type DashboardEntry, dashboardsOf, findDashboard } from './registry.js';
 import { bindings, following, scopeFor, type VariableBinding, type WidgetScope } from './scope.js';
 import { SelectionChips } from './selection-chips.js';
-import { VariablesBar } from './variables-bar.js';
+import { VariablesBar, withVariable } from './variables-bar.js';
 import { WidgetFrame } from './widget-frame.js';
 import { FacetChartWidget } from './widgets/facet-chart.js';
 import { LogsWidget } from './widgets/logs.js';
@@ -40,6 +40,10 @@ export interface WidgetActions {
   setLogView(v: 'matches' | 'context'): void;
   /** Replaces the frame's subtitle (the window text) with a count; null restores it. */
   setSubtitle(text: string | null): void;
+  /** Sets a dashboard variable, as choosing it in the variables bar does. */
+  setVariable(key: string, value: string): void;
+  /** Replaces a run chart's toggles until the page reloads. */
+  setControls(c: RunControls): void;
 }
 
 export type WidgetRenderer = (props: {
@@ -53,6 +57,8 @@ export type WidgetRenderer = (props: {
   variables: readonly VariableBinding[];
   /** The page's `d` state, for the parts a widget shows from it (the Logs view). */
   state: DashboardPageState;
+  /** A run chart's toggles: as changed on the page, else the config's. Null for any other widget. */
+  controls: RunControls | null;
 }) => JSX.Element;
 
 /** One renderer per widget type: the page draws every widget through this table. */
@@ -65,6 +71,7 @@ export const WIDGETS: Record<WidgetType, WidgetRenderer> = {
   table: FacetChartWidget,
 };
 
+const NO_CONTROLS: Readonly<Record<string, RunControls>> = {};
 const CARD = 'max-w-xl rounded-card border border-hairline bg-surface p-6';
 
 function layoutOf(widgets: readonly Widget[]): WidgetLayout[] {
@@ -214,6 +221,9 @@ function DashboardView(props: {
   /** The grid positions as edited on this page; the config's when absent. Never persisted. */
   layout: WidgetLayout[] | undefined;
   onLayout(layout: WidgetLayout[] | undefined): void;
+  /** The run charts' toggles as changed on this page, by widget id. Never persisted. */
+  controls: Readonly<Record<string, RunControls>>;
+  onControls(widgetId: string, controls: RunControls): void;
 }): JSX.Element {
   const { entry, dataSource } = props;
   const d = entry.dashboard;
@@ -293,6 +303,11 @@ function DashboardView(props: {
           const { [w.id]: _old, ...rest } = all;
           return text === null ? rest : { ...rest, [w.id]: text };
         }),
+      setVariable: (key, value) => {
+        const variable = d.variables.find((v) => v.key === key);
+        if (variable !== undefined) change((s) => ({ ...s, vars: withVariable(s.vars, variable, value) }));
+      },
+      setControls: (c) => props.onControls(w.id, c),
     };
     const Body = WIDGETS[w.type];
     return (
@@ -318,6 +333,7 @@ function DashboardView(props: {
           actions={actions}
           variables={bound?.bindings ?? []}
           state={state}
+          controls={props.controls[w.id] ?? (w.type === 'metric' ? w.controls : null)}
         />
       </WidgetFrame>
     );
@@ -350,7 +366,7 @@ function DashboardView(props: {
       <CopyButton
         label="Copy config"
         icon={<Copy size={16} aria-hidden />}
-        text={() => dashboardToYaml(d, layout)}
+        text={() => dashboardToYaml(d, layout, props.controls)}
         dialog={{ title: 'Copy config', label: 'Dashboard config' }}
       />
     </>
@@ -423,6 +439,10 @@ export function DashboardPage(props: { dataSource: DataSource; id: string }): JS
   const entry = findDashboard(dashboardsOf(dataSource.manifest), id);
   // Edited positions live here, keyed by dashboard, so switching away and back keeps them; a reload drops them.
   const [layouts, setLayouts] = useState<Readonly<Record<string, WidgetLayout[]>>>({});
+  // So do the run charts' toggles, by dashboard and then widget.
+  const [controls, setControls] = useState<Readonly<Record<string, Readonly<Record<string, RunControls>>>>>(
+    {},
+  );
   if (entry === null) return <NotFound id={id} manifest={dataSource.manifest} />;
   return (
     <DashboardView
@@ -436,6 +456,8 @@ export function DashboardPage(props: { dataSource: DataSource; id: string }): JS
           return layout === undefined ? rest : { ...rest, [id]: layout };
         })
       }
+      controls={controls[id] ?? NO_CONTROLS}
+      onControls={(widgetId, c) => setControls((all) => ({ ...all, [id]: { ...all[id], [widgetId]: c } }))}
     />
   );
 }

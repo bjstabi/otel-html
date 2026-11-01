@@ -2,6 +2,7 @@ import { stringify } from 'yaml';
 import {
   type Dashboard,
   DEFAULT_RUN_CONTROLS,
+  type RunControls,
   type Variable,
   type Widget,
   type WidgetInput,
@@ -70,6 +71,11 @@ function widgetInput(w: Widget, layout: WidgetLayout, index: number): Record<str
   return out;
 }
 
+function withControls(w: Widget, controls: Readonly<Record<string, RunControls>>): Widget {
+  if (w.type !== 'metric' || w.runBy === null) return w;
+  return { ...w, controls: controls[w.id] ?? w.controls };
+}
+
 function variableInput(v: Variable): string | Record<string, string> {
   if (v.label === v.key && v.default === null) return v.key;
   return {
@@ -81,16 +87,21 @@ function variableInput(v: Variable): string | Record<string, string> {
 
 /**
  * The dashboard with its current layout as a `dashboards:` YAML document, ready to paste into a config. Fusion is
- * renamed (`fusion-copy`) because its id is reserved. `layout[i]` is the position of `d.widgets[i]`.
+ * renamed (`fusion-copy`) because its id is reserved. `layout[i]` is the position of `d.widgets[i]`. `controls` is
+ * the toggles as changed on the page, by widget id; only a run chart can carry them.
  */
-export function dashboardToYaml(d: Dashboard, layout: readonly WidgetLayout[]): string {
+export function dashboardToYaml(
+  d: Dashboard,
+  layout: readonly WidgetLayout[],
+  controls: Readonly<Record<string, RunControls>> = {},
+): string {
   const fusion = d.id === 'fusion';
   const input = {
     id: fusion ? 'fusion-copy' : d.id,
     title: fusion ? 'Fusion (copy)' : d.title,
     ...(d.description === '' ? {} : { description: d.description }),
     ...(d.variables.length === 0 ? {} : { variables: d.variables.map(variableInput) }),
-    widgets: d.widgets.map((w, i) => widgetInput(w, layout[i] ?? w, i)),
+    widgets: d.widgets.map((w, i) => widgetInput(withControls(w, controls), layout[i] ?? w, i)),
   };
   return stringify({ dashboards: [input] });
 }

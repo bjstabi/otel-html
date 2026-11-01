@@ -72,6 +72,8 @@ function mount(ds: DataSource, widget: Input, scope: Partial<WidgetScope> = {}):
     openIn: vi.fn(),
     setLogView: vi.fn(),
     setSubtitle: vi.fn(),
+    setVariable: vi.fn(),
+    setControls: vi.fn(),
   };
   render(
     <ThemeProvider>
@@ -84,6 +86,7 @@ function mount(ds: DataSource, widget: Input, scope: Partial<WidgetScope> = {}):
           dataSource={ds}
           actions={actions}
           variables={[]}
+          controls={null}
           state={EMPTY_DASHBOARD_STATE}
         />
       </SelectionProvider>
@@ -263,8 +266,11 @@ describe('the Top list and Table widget states', () => {
               openIn: vi.fn(),
               setLogView: vi.fn(),
               setSubtitle: vi.fn(),
+              setVariable: vi.fn(),
+              setControls: vi.fn(),
             }}
             variables={[]}
+            controls={null}
             state={EMPTY_DASHBOARD_STATE}
           />
         </SelectionProvider>

@@ -1,11 +1,17 @@
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
 
-const charts = vi.hoisted((): { label: string; option: unknown }[] => []);
+const charts = vi.hoisted(
+  (): { label: string; option: unknown; onEvents: { click?: (e: unknown) => void } | undefined }[] => [],
+);
 vi.mock('../../src/viewer/components/chart.js', () => ({
-  Chart: (p: { option: unknown; ariaLabel: string }): React.JSX.Element => {
-    charts.push({ label: p.ariaLabel, option: p.option });
+  Chart: (p: {
+    option: unknown;
+    ariaLabel: string;
+    onEvents?: { click?: (e: unknown) => void };
+  }): React.JSX.Element => {
+    charts.push({ label: p.ariaLabel, option: p.option, onEvents: p.onEvents });
     return <div role="img" aria-label={p.ariaLabel} />;
   },
 }));
@@ -22,7 +28,21 @@ vi.mock('../../src/viewer/metrics/use-metric-query.js', async (importOriginal) =
   };
 });
 
-import { type Dashboard, DashboardSchema } from '../../src/dashboards/schema.js';
+const runQueries = vi.hoisted(
+  (): { where: string | null; window: { start: number; end: number }; runBy: string }[] => [],
+);
+vi.mock('../../src/viewer/data/metric-run-query.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/viewer/data/metric-run-query.js')>();
+  return {
+    ...actual,
+    runMetricRunQuery: (...args: Parameters<typeof actual.runMetricRunQuery>) => {
+      runQueries.push({ where: args[1].where, window: args[2].window, runBy: args[2].runBy });
+      return actual.runMetricRunQuery(...args);
+    },
+  };
+});
+
+import { type Dashboard, DashboardSchema, type RunControls } from '../../src/dashboards/schema.js';
 import type { Manifest } from '../../src/format/manifest.js';
 import type { AnyValue } from '../../src/model/anyvalue.js';
 import { parseTraceId } from '../../src/model/ids.js';
@@ -51,6 +71,7 @@ beforeEach(() => {
   window.location.hash = '';
   charts.length = 0;
   runs.length = 0;
+  runQueries.length = 0;
 });
 afterEach(cleanup);
 
@@ -80,6 +101,8 @@ function actionsOf(): WidgetActions {
     openIn: vi.fn(),
     setLogView: vi.fn(),
     setSubtitle: vi.fn(),
+    setVariable: vi.fn(),
+    setControls: vi.fn(),
   };
 }
 
@@ -94,11 +117,15 @@ function mount(
     widget?: object;
     scope?: Partial<WidgetScope>;
     variables?: readonly VariableBinding[];
+    /** The dashboard's configured variables, unlike `variables`: the bound values. */
+    configured?: readonly string[];
+    controls?: RunControls | null;
   } = {},
 ): Mounted {
   const dashboard = DashboardSchema.parse({
     id: 'd',
     title: 'D',
+    variables: over.configured ?? [],
     widgets: [{ type: 'metric', x: 0, y: 0, w: 12, h: 12, queries: [CPU], ...over.widget }],
   });
   const w = dashboard.widgets[0];
@@ -116,6 +143,7 @@ function mount(
             dataSource={source}
             actions={actions}
             variables={over.variables ?? []}
+            controls={over.controls ?? null}
             state={EMPTY_DASHBOARD_STATE}
           />
         </SelectionProvider>
@@ -443,6 +471,285 @@ describe('the Metrics widget without queries', () => {
     const real = await linked();
     mount({ ...real, manifest: { ...real.manifest, range: null } }, { widget: { queries: null } });
     expect(await screen.findByText('This report has no metrics')).toBeTruthy();
+  });
+});
+
+describe('the Metrics widget with runBy', () => {
+  const RUN_BY = { runBy: SERVICE };
+  const SERVICES = ['service.name'];
+
+  interface Option {
+    backgroundColor?: string;
+    series: { id: string; cursor?: string; markLine?: { data: { xAxis: number }[] } }[];
+  }
+  const lastOption = (): Option => charts.at(-1)?.option as Option;
+  const guideX = (): number | undefined =>
+    lastOption().series.find((s) => s.id.startsWith('guide'))?.markLine?.data[0]?.xAxis;
+  const lineCursor = (): string | undefined =>
+    lastOption().series.find((s) => s.id.startsWith('line:'))?.cursor;
+  const clickDot = (run: string): void => {
+    act(() => charts.at(-1)?.onEvents?.click?.({ data: { meta: { run: { id: run } } } }));
+  };
+  const toggle = (name: string): HTMLElement => screen.getByRole('button', { name });
+
+  beforeEach(() => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe(): void {}
+        disconnect(): void {}
+      },
+    );
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  test('draws the run chart card, and a widget without runBy still draws the bucket chart', async () => {
+    mount(await linked(), { widget: RUN_BY });
+    expect(
+      await screen.findByRole('img', { name: /process\.cpu\.utilization.*lines over \d+ runs/ }),
+    ).toBeTruthy();
+    expect(toggle('Slider')).toBeTruthy();
+    expect(runs.every((r) => r.queries.length === 0)).toBe(true);
+    cleanup();
+    runQueries.length = 0;
+    mount(await linked());
+    await screen.findByRole('img', { name: /process\.cpu\.utilization/ });
+    expect(screen.queryByRole('button', { name: 'Slider' })).toBeNull();
+    expect(runQueries).toEqual([]);
+  });
+
+  test('the query covers the scope window, else the whole run', async () => {
+    const ds = await linked();
+    mount(ds, { widget: RUN_BY, scope: { window: { start: 0, end: 5000 * S } } });
+    await screen.findByRole('img');
+    expect(runQueries.at(-1)?.window).toEqual({ start: 0, end: 5000 * S });
+    expect(runQueries.at(-1)?.runBy).toBe(SERVICE);
+    cleanup();
+    mount(ds, { widget: RUN_BY });
+    await screen.findByRole('img');
+    expect(runQueries.at(-1)?.window).toEqual(ds.manifest.range);
+  });
+
+  test('a binding on its own runBy key is not in the where and draws the guide; other bindings narrow it', async () => {
+    mount(await linked(), {
+      widget: { ...RUN_BY, queries: [{ ...CPU, where: 'attributes["x"] != 1' }] },
+      variables: [
+        { key: 'service.name', value: 'checkout', kind: 'string' },
+        { key: 'host.name', value: 'runner-1', kind: 'string' },
+      ],
+    });
+    await screen.findByRole('img');
+    const where = runQueries.at(-1)?.where ?? '';
+    expect(where).toContain('attributes["x"] != 1');
+    expect(where).toContain('resource.attributes["host.name"] == "runner-1"');
+    expect(where).not.toContain('service.name');
+    expect(guideX()).toBeDefined();
+  });
+
+  test('without a binding on its key there is no guide', async () => {
+    mount(await linked(), {
+      widget: RUN_BY,
+      variables: [{ key: 'host.name', value: 'runner-1', kind: 'string' }],
+    });
+    await screen.findByRole('img');
+    expect(guideX()).toBeUndefined();
+  });
+
+  test('a followed trace narrows it, once its resources are read', async () => {
+    mount(await linked(), { widget: RUN_BY, scope: { highlightTrace: TRACE } });
+    await screen.findByRole('img');
+    expect(runQueries.every((q) => (q.where ?? '').includes('"checkout"'))).toBe(true);
+    expect(runQueries.length).toBeGreaterThan(0);
+  });
+
+  test('clicking a dot sets the variable named by runBy', async () => {
+    const { actions } = mount(await linked(), { widget: RUN_BY, configured: SERVICES });
+    await screen.findByRole('img');
+    expect(lineCursor()).toBe('pointer');
+    clickDot('payments');
+    expect(actions.setVariable).toHaveBeenCalledWith('service.name', 'payments');
+  });
+
+  test('with no variable of that key a click does nothing and dots have no pointer', async () => {
+    const { actions } = mount(await linked(), { widget: RUN_BY, configured: ['host.name'] });
+    await screen.findByRole('img');
+    expect(lineCursor()).not.toBe('pointer');
+    clickDot('payments');
+    expect(actions.setVariable).not.toHaveBeenCalled();
+  });
+
+  test('a run path that is not a resource attribute narrows as usual and has no click', async () => {
+    const { actions } = mount(await linked(), {
+      widget: { runBy: 'attributes["cpu"]' },
+      configured: SERVICES,
+      variables: [{ key: 'service.name', value: 'payments', kind: 'string' }],
+    });
+    await waitFor(() => expect(runQueries.length).toBeGreaterThan(0));
+    expect(runQueries.at(-1)?.where).toContain('service.name');
+    clickDot('x');
+    expect(actions.setVariable).not.toHaveBeenCalled();
+  });
+
+  test('series with no run are left out and counted in a card note', async () => {
+    mount(await linked(), { widget: { runBy: 'resource.attributes["process.pid"]' } });
+    await screen.findByRole('img');
+    const notes = screen.getByRole('list', { name: 'Notes' });
+    expect(notes.textContent).toMatch(/\d+ series ha(s|ve) no value for .*process\.pid.* left out/);
+  });
+
+  test('toggles read the session value over the config, and a click reports the change', async () => {
+    const user = userEvent.setup();
+    const session = { slider: false, evenSpacing: true, split: true, legend: false };
+    const { actions } = mount(await linked(), {
+      widget: { ...RUN_BY, controls: { slider: true } },
+      controls: session,
+    });
+    await screen.findByRole('img');
+    expect(toggle('Slider').getAttribute('aria-pressed')).toBe('false');
+    await user.click(toggle('Legend'));
+    expect(actions.setControls).toHaveBeenCalledWith({ ...session, legend: true });
+    // Reset goes back to the config, not to the session's.
+    await user.click(toggle('Reset'));
+    expect(actions.setControls).toHaveBeenLastCalledWith({ ...session, slider: true });
+  });
+
+  test('without a session value the toggles are the config', async () => {
+    mount(await linked(), { widget: { ...RUN_BY, controls: { slider: false } } });
+    await screen.findByRole('img');
+    expect(toggle('Slider').getAttribute('aria-pressed')).toBe('false');
+  });
+
+  test('echarts merges last', async () => {
+    mount(await linked(), { widget: { ...RUN_BY, echarts: { backgroundColor: '#123456' } } });
+    await screen.findByRole('img');
+    expect(lastOption().backgroundColor).toBe('#123456');
+  });
+
+  test('a page re-render with equal inputs neither re-runs the query nor rebuilds the option', async () => {
+    const m = mount(await linked(), {
+      widget: RUN_BY,
+      scope: { window: { start: 0, end: 5000 * S } },
+      variables: [{ key: 'host.name', value: 'runner-1', kind: 'string' }],
+    });
+    await screen.findByRole('img');
+    const option = lastOption();
+    const queried = runQueries.length;
+    m.update({ scope: { window: { start: 0, end: 5000 * S } } });
+    await act(async () => {});
+    expect(lastOption()).toBe(option);
+    expect(runQueries).toHaveLength(queried);
+  });
+
+  test('a metric the report lacks is the empty state, naming it', async () => {
+    mount(await linked(), {
+      widget: { ...RUN_BY, queries: [{ id: 'a', metric: 'nope.nothing', show: 'avg' }] },
+    });
+    expect(await screen.findByText('Not in this report')).toBeTruthy();
+    expect(screen.getByText('nope.nothing is not in this report')).toBeTruthy();
+    expect(runQueries).toEqual([]);
+  });
+
+  test('a metric that fails to load is an error inside the widget', async () => {
+    const real = await linked();
+    mount({ ...real, metric: () => Promise.reject(new Error('chunk 3 is corrupt')) }, { widget: RUN_BY });
+    expect((await screen.findByRole('alert')).textContent).toContain('chunk 3 is corrupt');
+    expect(screen.queryByRole('img')).toBeNull();
+  });
+
+  test('a catalog that fails to load is an error', async () => {
+    const real = await linked();
+    mount({ ...real, metricCatalog: () => Promise.reject(new Error('catalog broke')) }, { widget: RUN_BY });
+    expect((await screen.findByRole('alert')).textContent).toContain('catalog broke');
+  });
+
+  test('a trace that cannot be read is an error, not the wider set', async () => {
+    const real = await linked();
+    mount(
+      { ...real, getTrace: () => Promise.reject(new Error('shard missing')) },
+      { widget: RUN_BY, scope: { highlightTrace: TRACE } },
+    );
+    expect((await screen.findByRole('alert')).textContent).toContain('shard missing');
+    expect(runQueries).toEqual([]);
+  });
+
+  test('loading shows a status and no chart', async () => {
+    const real = await linked();
+    mount({ ...real, metric: () => new Promise(() => {}) }, { widget: RUN_BY });
+    expect((await screen.findByRole('status')).textContent).toBe('Loading');
+    expect(screen.queryByRole('img')).toBeNull();
+  });
+
+  test('a report with no metrics says so', async () => {
+    const real = await linked();
+    mount({ ...real, manifest: { ...real.manifest, range: null } }, { widget: RUN_BY });
+    expect(await screen.findByText('This report has no metrics')).toBeTruthy();
+  });
+
+  test('a window with no runs says so', async () => {
+    mount(await linked(), { widget: RUN_BY, scope: { window: { start: 5000 * S, end: 6000 * S } } });
+    expect(await screen.findByText('No data points in this window')).toBeTruthy();
+  });
+
+  describe('on the page', () => {
+    const DASH: Dashboard = DashboardSchema.parse({
+      id: 'runs',
+      title: 'Runs',
+      variables: SERVICES,
+      widgets: [
+        {
+          type: 'metric',
+          title: 'Jobs',
+          x: 0,
+          y: 0,
+          w: 12,
+          h: 12,
+          queries: [CPU],
+          exemplars: true,
+          ...RUN_BY,
+        },
+      ],
+    });
+    const page = (): Promise<DataSource> =>
+      linked({
+        ...report.manifest,
+        config: { ...report.manifest.config, dashboards: [{ source: 'otel-html.yaml', dashboard: DASH }] },
+      });
+
+    test('a click on a dot filters the page without re-running the chart or collapsing it', async () => {
+      renderShell('#/dashboards/runs', await page());
+      const chart = await screen.findByRole('img', { name: /lines over/ });
+      const before = chart.getAttribute('aria-label');
+      const queried = runQueries.length;
+      expect(guideX()).toBeUndefined();
+      clickDot('payments');
+      await waitFor(() => expect(currentD()?.vars).toEqual({ 'service.name': 'payments' }));
+      await waitFor(() => expect(guideX()).toBeDefined());
+      expect(runQueries).toHaveLength(queried);
+      expect(screen.getByRole('img', { name: /lines over/ }).getAttribute('aria-label')).toBe(before);
+    });
+
+    test('a toggle lasts through a variable changing, and is not in the URL', async () => {
+      const user = userEvent.setup();
+      renderShell('#/dashboards/runs', await page());
+      await screen.findByRole('img', { name: /lines over/ });
+      await user.click(toggle('Legend'));
+      clickDot('payments');
+      await waitFor(() => expect(currentD()?.vars).toEqual({ 'service.name': 'payments' }));
+      expect(toggle('Legend').getAttribute('aria-pressed')).toBe('true');
+      expect(window.location.hash).not.toMatch(/legend|slider/i);
+    });
+
+    test('Open in Metrics opens the queries as they are, with the bound run in the where', async () => {
+      const user = userEvent.setup();
+      const d = encodeURIComponent(JSON.stringify({ vars: { 'service.name': 'payments' } }));
+      renderShell(`#/dashboards/runs?d=${d}`, await page());
+      await screen.findByRole('img', { name: /lines over/ });
+      await user.click(screen.getByRole('button', { name: /Open in Metrics/ }));
+      await waitFor(() => expect(window.location.hash.startsWith('#/metrics')).toBe(true));
+      const url = parseUrlState(window.location.hash).state;
+      expect(url.m?.queries[0]?.where).toBe(`${SERVICE} == "payments"`);
+      expect(url.m).toMatchObject({ display: 'lines', exemplars: true });
+    });
   });
 });
 
