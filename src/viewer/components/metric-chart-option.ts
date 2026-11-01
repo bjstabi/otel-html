@@ -65,12 +65,12 @@ const GREY = '#6b6f78';
 /** The selection band's fill: the accent at 12 % alpha. */
 const BAND_OPACITY = 0.12;
 
-function token(name: string): string {
+export function token(name: string): string {
   const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   return v === '' ? (FALLBACKS[name] ?? GREY) : v;
 }
 
-function seriesToken(index: number): string {
+export function seriesToken(index: number): string {
   return index >= OTHER_INDEX ? '--oh-series-other' : `--oh-series-${index + 1}`;
 }
 
@@ -82,7 +82,7 @@ const HTML_ESCAPES: Readonly<Record<string, string>> = {
   "'": '&#39;',
 };
 
-function escapeHtml(s: string): string {
+export function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => HTML_ESCAPES[c] ?? c);
 }
 

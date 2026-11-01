@@ -40,6 +40,7 @@ vi.mock('echarts/components', () => ({
   TooltipComponent: {},
   LegendComponent: {},
   MarkLineComponent: {},
+  TitleComponent: {},
   VisualMapContinuousComponent: {},
 }));
 vi.mock('echarts/renderers', () => ({ CanvasRenderer: {} }));
