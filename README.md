@@ -728,6 +728,8 @@ report of 200 metrics x 1,000 series in which only the charted metric has the fu
 under a minute on CI; about 150 MB in e2e/.metrics-scale/), and fails if the Explorer or Catalog loads another metric's
 points. The @perf budgets scale by OTEL_HTML_PERF_FACTOR and, when OTEL_HTML_PERF_REFERENCE_MS is set (CI: 100), by how
 much slower than that reference a fixed CPU workload runs here (never below 1; the setup logs `PERF calibration: N ms`).
+A run whose inputs match a cached success is replayed. `MISE_TASK_CACHE=off` re-runs the browsers, also through
+`test:e2e:chromium`; `--force` reaches only the task it is given to, so it works on `test:e2e` and not on the wrapper.
 
 
 - Depends: e2e:fixtures

@@ -10,3 +10,4 @@ e2e/.metrics-scale.tmp-*/
 e2e/.cache/
 test-results/
 .otel-html/
+.mise/
