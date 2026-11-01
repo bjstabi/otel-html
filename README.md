@@ -654,6 +654,12 @@ pass logs one `PERF calibration:` line).
 
 publint and are-the-types-wrong on the packed package
 
+## `coverage`
+
+- **Usage:** `coverage`
+
+Unit coverage from the full suite, per vitest project, into coverage/unit-&lt;project>/ (lcov, summary); never cached
+
 ## `demo`
 
 - Depends: build

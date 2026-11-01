@@ -18,6 +18,12 @@ const config: ViteUserConfig = defineConfig({
     testNamePattern: perfPass ? new RegExp(PERF_TAG) : new RegExp(`^(?!.*${PERF_TAG})`),
     fileParallelism: !perfPass,
     globalSetup: ['test-support/perf-global-setup.ts'],
+    coverage: {
+      provider: 'v8',
+      include: ['src/**'],
+      exclude: ['src/model/gen/**', 'src/**/*.gen.ts', 'src/**/*.gen.terms.ts'],
+      reporter: ['text', 'lcov', 'json-summary'],
+    },
     projects: [
       {
         test: {
