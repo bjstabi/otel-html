@@ -440,27 +440,6 @@ describe('RunChartCard legend', () => {
     ]);
   });
 
-  test('a line drawn with a dash has that dash in its swatch, and any other a dot', () => {
-    const names = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i'];
-    const lines = names.map((n, i) => line(n, [i + 1, i + 1, i + 1, i + 1]));
-    render(<RunChartCard {...props({ result: result({ lines }) })} />);
-    const drawn = new Map(
-      ((lastFull().series ?? []) as unknown as { id: string; lineStyle?: { type?: number[] } }[]).map((x) => [
-        x.id,
-        x.lineStyle?.type?.join(' ') ?? null,
-      ]),
-    );
-    const rows = within(screen.getByRole('list', { name: 'Lines' })).getAllByRole('button');
-    const dashes = names.map((n) => {
-      const row = rows.find((b) => b.getAttribute('title') === n);
-      return row?.querySelector('line')?.getAttribute('stroke-dasharray') ?? null;
-    });
-    expect(dashes).toEqual(names.map((n) => drawn.get(`line:${n}`)));
-    expect(dashes.slice(0, 7)).toEqual(Array(7).fill(null));
-    expect(new Set(dashes.slice(7)).size).toBe(2);
-    expect(dashes[7]).not.toBeNull();
-  });
-
   test('values and medians follow the zoom, and the order does not', async () => {
     render(<RunChartCard {...props()} />);
     await zoomTo(0, 1);
@@ -513,7 +492,6 @@ describe('RunChartCard legend', () => {
   test('other widgets using up the shared colors leave the lines colored, and the same on every run chart', () => {
     const root = document.documentElement.style;
     for (let i = 1; i <= 7; i++) root.setProperty(`--oh-series-${i}`, `#00000${i}`);
-    root.setProperty('--oh-series-other', '#999999');
     const colorOf = (id: string): string | undefined =>
       lastFull().series?.find((s) => s.id === id)?.lineStyle?.color;
     try {
@@ -536,7 +514,6 @@ describe('RunChartCard legend', () => {
       expect(colorOf('line:fast')).toBe(first);
     } finally {
       for (let i = 1; i <= 7; i++) root.removeProperty(`--oh-series-${i}`);
-      root.removeProperty('--oh-series-other');
     }
   });
 

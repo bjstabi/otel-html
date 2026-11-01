@@ -192,9 +192,10 @@ keep this case (§10).
 ### Color
 
 Colors are keyed on the line's label through a `ColorAssigner` of their own, not on `resourceService`, because every
-job shares service `ci`. They don't use the shell's shared assigner, because other widgets' services and facet values
-would use up its seven colors first and leave every line gray. A job has the same color on every run chart. A line keeps its color through zooming and hiding. Lines past the seventh use
-`--oh-series-other`, and each further line in that color gets a different dash so the lines stay distinct.
+job shares service `ci`. They don't use the shell's shared assigner, whose first colors other widgets would take. A job
+has the same color on every run chart, and keeps it through zooming and hiding. Colors don't run out: past the seven
+fixed ones, each new color takes the middle of the widest gap left on the color wheel. Gray stays only for a real aggregated
+"Other" bucket. All of this hangs off a `Palette`, so selectable palettes can follow.
 
 ### Legend
 

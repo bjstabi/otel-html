@@ -6,7 +6,7 @@ import type { RelNanos, SpanId } from '../../model/ids.js';
 import { formatDuration } from '../../semconv/formatters.js';
 import type { TraceDetail } from '../data/data-source.js';
 import type { SpanRow } from '../data/span-query.js';
-import { type ColorAssigner, OTHER_INDEX } from '../theme/palette.js';
+import { CATEGORICAL_LIGHT, type ColorAssigner, seriesToken, seriesVar } from '../theme/palette.js';
 import { useTheme } from '../theme/theme-provider.js';
 import { Chart, type EChartsType } from './chart.js';
 import { FIELD } from './field.js';
@@ -21,7 +21,7 @@ export interface FlameTheme {
   hairline: string;
   accent: string;
   font: string;
-  series: readonly string[];
+  series: string[];
 }
 
 export interface FlameView {
@@ -113,8 +113,14 @@ export const FLAME_MAX_ROWS = 200;
 const ROW_PX = 18;
 const GRID = { left: 8, right: 8, top: 4, bottom: 24 } as const;
 
-function fallbackSeries(): string[] {
-  return Array.from({ length: OTHER_INDEX + 1 }, () => '#9a9da5');
+/** A series' fill; a colour past the palette is read the first time a bar asks for it. */
+function seriesFill(theme: FlameTheme, index: number): string {
+  const known = theme.series[index];
+  if (known !== undefined) return known;
+  const v = getComputedStyle(document.documentElement).getPropertyValue(seriesToken(index)).trim();
+  const fill = v === '' ? theme.muted : v;
+  theme.series[index] = fill;
+  return fill;
 }
 
 function readFlameTheme(): FlameTheme {
@@ -123,9 +129,7 @@ function readFlameTheme(): FlameTheme {
     const x = style.getPropertyValue(name).trim();
     return x === '' ? fallback : x;
   };
-  const series = fallbackSeries().map((f, i) =>
-    v(i >= OTHER_INDEX ? '--oh-series-other' : `--oh-series-${i + 1}`, f),
-  );
+  const series = CATEGORICAL_LIGHT.map((f, i) => v(seriesToken(i), f));
   return {
     ink: v('--oh-ink', '#16181d'),
     surface: v('--oh-surface', '#ffffff'),
@@ -278,7 +282,7 @@ function renderBatch(
     }
   }
   if (!Number.isNaN(run0)) flush(run0, run1);
-  const fill = theme.series[item.colorIndex] ?? theme.series[OTHER_INDEX] ?? theme.muted;
+  const fill = seriesFill(theme, item.colorIndex);
   return {
     type: 'path',
     shape: { d },
@@ -319,7 +323,7 @@ export function flameOption(bars: readonly FlameBar[], theme: FlameTheme, view: 
     if (x1 <= x0) return { type: 'group', children: [] };
     const y = cs.y + depth * rowH + 1;
     const h = Math.max(1, rowH - 2);
-    const fill = theme.series[bar.colorIndex] ?? theme.series[OTHER_INDEX] ?? theme.muted;
+    const fill = seriesFill(theme, bar.colorIndex);
     const opacity = bar.dimmed ? 0.22 : 1;
     const shape = { x: x0, y, width: x1 - x0, height: h, r: x1 - x0 > 8 ? 3 : 0 };
     const base = { type: 'rect', shape, style: { fill, opacity } };
@@ -476,7 +480,7 @@ export function minimapOption(
         height: Math.max(1, rowH - 0.5),
       },
       style: {
-        fill: bar.error ? theme.critical : (theme.series[bar.colorIndex] ?? theme.muted),
+        fill: bar.error ? theme.critical : seriesFill(theme, bar.colorIndex),
         opacity: 0.8,
       },
     } as ReturnType<RenderItem>;
@@ -568,8 +572,6 @@ function perfEnabled(): boolean {
   return typeof document !== 'undefined' && document.documentElement.hasAttribute('data-perf');
 }
 
-const SWATCH = (i: number): string =>
-  i >= OTHER_INDEX ? 'var(--oh-series-other)' : `var(--oh-series-${i + 1})`;
 const ICON_BTN = 'rounded-full border border-hairline bg-surface p-1.5 hover:bg-hairline';
 
 function hostOf(detail: TraceDetail, row: SpanRow): string {
@@ -845,7 +847,7 @@ function FlameLegend(props: {
           <span
             aria-hidden
             className="inline-block size-2.5 rounded-sm"
-            style={{ background: SWATCH(props.colors.colorFor(l.key)) }}
+            style={{ background: seriesVar(props.colors.colorFor(l.key)) }}
           />
           <span className="max-w-[16rem] truncate">{l.key}</span>
           <span className="font-mono text-xs tabular-nums text-ink-2">{(l.share * 100).toFixed(1)}%</span>

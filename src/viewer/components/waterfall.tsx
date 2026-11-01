@@ -6,7 +6,7 @@ import type { SpanId } from '../../model/ids.js';
 import { StatusCode } from '../../model/records.js';
 import { formatDuration } from '../../semconv/formatters.js';
 import type { TraceNode, TraceTree } from '../data/trace-tree.js';
-import { type ColorAssigner, createColorAssigner, OTHER_INDEX } from '../theme/palette.js';
+import { type ColorAssigner, createColorAssigner, seriesVar } from '../theme/palette.js';
 import { ServiceChip } from '../traces/columns.js';
 import { rectWithFallback } from './results-table.js';
 
@@ -61,9 +61,6 @@ export interface WaterfallProps {
   /** Scroll viewport height in px (default 420). */
   height?: number;
 }
-
-const seriesVar = (i: number): string =>
-  i >= OTHER_INDEX ? 'var(--oh-series-other)' : `var(--oh-series-${i + 1})`;
 
 const HATCH = 'repeating-linear-gradient(135deg, rgba(255,255,255,0.55) 0 3px, transparent 3px 6px)';
 

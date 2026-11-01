@@ -6,7 +6,7 @@ import { formatDuration } from '../../semconv/formatters.js';
 import type { SpanRow, TraceRow } from '../data/span-query.js';
 import { absoluteTime } from '../shell/time-range.js';
 import type { ColorAssigner } from '../theme/palette.js';
-import { OTHER_INDEX } from '../theme/palette.js';
+import { seriesVar } from '../theme/palette.js';
 
 export interface CellContext {
   epoch: UnixNanos;
@@ -24,9 +24,6 @@ export interface ColumnUi<R> {
   /** Monospace tabular numerals: times, durations, ids, attribute keys and values. */
   mono?: boolean;
 }
-
-const seriesVar = (i: number): string =>
-  i >= OTHER_INDEX ? 'var(--oh-series-other)' : `var(--oh-series-${i + 1})`;
 
 /** Labelled status dot: the label carries the meaning, the colour only repeats it. */
 export function StatusDot(props: { error: boolean; label: string }): JSX.Element {

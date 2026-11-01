@@ -14,7 +14,7 @@ import { runDateTime, shortLabel } from '../../src/viewer/components/run-chart-f
 import {
   buildRunChartOption,
   guideSeries,
-  lineStyles,
+  lineColors,
   type RunChartInput,
   runsInView,
   runYAxes,
@@ -455,32 +455,24 @@ describe('color', () => {
       expect(hiddenFirst.get(name)).toBe(before.get(name));
       expect(zoomed.get(name)).toBe(before.get(name));
     }
-    expect(new Set(before.values()).size).toBe(8);
+    expect(new Set(before.values()).size).toBe(NAMES.length);
   });
 
-  test('lines past the seventh share the other color, each with its own dash, kept through hiding', () => {
-    const o = build();
-    const rest = lineSeries(o).slice(7);
-    expect(rest.length).toBe(2);
-    expect(rest.map((s) => s.lineStyle.color)).toEqual([OTHER_COLOR, OTHER_COLOR]);
-    const dashes = rest.map((s) => JSON.stringify(s.lineStyle.type));
-    expect(new Set(dashes).size).toBe(2);
-    for (const s of lineSeries(o).slice(0, 7)) expect(s.lineStyle.type).toBeUndefined();
-    const hid = lineSeries(build({ hidden: new Set(['key:job-h']) })).at(-1);
-    expect(JSON.stringify(hid?.lineStyle.type)).toBe(dashes[1]);
+  test('lines past the seventh keep colors of their own, not the other color', () => {
+    const colors = lineSeries(build()).map((s) => s.lineStyle.color);
+    expect(colors).not.toContain(OTHER_COLOR);
+    expect(new Set(colors).size).toBe(NAMES.length);
   });
 });
 
 describe('swatch', () => {
-  test('lineStyles is what the series draw, hidden lines included', () => {
+  test('lineColors is what the series draw, hidden lines included', () => {
     const r = fixture();
-    const styles = lineStyles(r, createColorAssigner());
+    const colors = lineColors(r, createColorAssigner());
     const hidden = new Set(['key:job-a']);
     for (const s of lineSeries(build({ result: r, hidden }))) {
-      expect(s.lineStyle).toMatchObject(styles.get(s.id.slice('line:'.length)) ?? {});
+      expect(s.lineStyle.color).toBe(colors.get(s.id.slice('line:'.length)));
     }
-    expect(styles.get('key:job-h')?.type).toBeDefined();
-    expect(styles.get('key:job-a')?.type).toBeUndefined();
   });
 });
 

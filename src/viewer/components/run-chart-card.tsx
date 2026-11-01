@@ -10,7 +10,7 @@ import { LEGEND_ROW_PX, legendRows, RunChartLegend } from './run-chart-legend.js
 import {
   buildRunChartOption,
   guideSeries,
-  lineStyles,
+  lineColors,
   type RunZoom,
   runsInView,
   runYAxes,
@@ -331,7 +331,7 @@ export function RunChartCard(props: RunChartCardProps): JSX.Element {
           inView: inView.length === 0 ? result.runs : inView,
           hoveredRun,
           hidden,
-          styles: lineStyles(result, colors),
+          colors: lineColors(result, colors),
         })
       : [];
 
