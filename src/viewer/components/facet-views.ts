@@ -1,6 +1,6 @@
 import type { EChartsOption } from 'echarts';
 import type { FacetCounts } from '../../rollups/facets.js';
-import { type ColorAssigner, OTHER_INDEX } from '../theme/palette.js';
+import { type ColorAssigner, seriesVar } from '../theme/palette.js';
 
 /** Most groups drawn before the rest collapse into one neutral "Other" slice. */
 export const MAX_GROUPS = 7;
@@ -16,11 +16,6 @@ export interface FacetSource {
 export interface FacetViewContext {
   groupBy: string | null;
   colors: ColorAssigner;
-}
-
-/** Colour references are `var(--oh-*)` strings so the builders stay pure; `resolveCssVars` swaps in the theme. */
-function seriesVar(index: number): string {
-  return index >= OTHER_INDEX ? 'var(--oh-series-other)' : `var(--oh-series-${index + 1})`;
 }
 
 export interface Slice {
@@ -50,7 +45,7 @@ export function groupSlices(facets: FacetCounts, key: string, colors: ColorAssig
       name: OTHER_LABEL,
       value: rest,
       other: true,
-      color: seriesVar(OTHER_INDEX),
+      color: 'var(--oh-series-other)',
     });
   return slices;
 }

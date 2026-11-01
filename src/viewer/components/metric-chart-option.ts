@@ -2,7 +2,7 @@ import type { METRIC_DISPLAYS, METRIC_SCALES } from '../../query/metric-query.js
 import { formatBytes, formatDuration } from '../../semconv/formatters.js';
 import type { MetricQueryResult, SeriesPoints } from '../data/metric-query.js';
 import type { TimeWindow } from '../data/span-query.js';
-import { type ColorAssigner, OTHER_INDEX } from '../theme/palette.js';
+import { type ColorAssigner, seriesToken } from '../theme/palette.js';
 import type { ChartProps } from './chart.js';
 
 export type MetricChartOptionResult = ChartProps['option'];
@@ -68,10 +68,6 @@ const BAND_OPACITY = 0.12;
 export function token(name: string): string {
   const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   return v === '' ? (FALLBACKS[name] ?? GREY) : v;
-}
-
-export function seriesToken(index: number): string {
-  return index >= OTHER_INDEX ? '--oh-series-other' : `--oh-series-${index + 1}`;
 }
 
 const HTML_ESCAPES: Readonly<Record<string, string>> = {

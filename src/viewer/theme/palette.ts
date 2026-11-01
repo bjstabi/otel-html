@@ -19,6 +19,14 @@ export const CATEGORICAL_DARK: readonly string[] = [
   '#9085e9',
 ];
 
+/** A set of series colours: the fixed ones first, per mode, then as many more as are asked for. */
+export interface Palette {
+  light: readonly string[];
+  dark: readonly string[];
+}
+
+export const DEFAULT_PALETTE: Palette = { light: CATEGORICAL_LIGHT, dark: CATEGORICAL_DARK };
+
 export const STATUS = { critical: '#d03b3b', warning: '#fab219' } as const;
 
 /**
@@ -43,22 +51,72 @@ export const SEVERITY_DARK = {
   trace: '#6f7681',
 } as const;
 
-/** Index used for every entity past the seventh: the neutral "Other" gray. */
-export const OTHER_INDEX = 7;
+function hueOf(hex: string): number {
+  const [r, g, b] = [1, 3, 5].map((i) => Number.parseInt(hex.slice(i, i + 2), 16) / 255) as [
+    number,
+    number,
+    number,
+  ];
+  const max = Math.max(r, g, b);
+  const d = max - Math.min(r, g, b);
+  if (d === 0) return 0;
+  const h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  return (h * 60 + 360) % 360;
+}
+
+const huesByPalette = new WeakMap<Palette, number[]>();
+
+/** The hue of a colour past the fixed ones: the middle of the widest gap left on the wheel, so gaps only ever narrow. */
+function hueAt(palette: Palette, index: number): number {
+  const hues = huesByPalette.get(palette) ?? palette.light.map(hueOf);
+  huesByPalette.set(palette, hues);
+  while (hues.length <= index) {
+    const sorted = [...hues].sort((a, b) => a - b);
+    let from = 0;
+    let widest = -1;
+    for (const [i, h] of sorted.entries()) {
+      const gap = (sorted[i + 1] ?? (sorted[0] ?? 0) + 360) - h;
+      if (gap > widest) {
+        widest = gap;
+        from = h;
+      }
+    }
+    hues.push((from + widest / 2) % 360);
+  }
+  return hues[index] as number;
+}
+
+/** A colour past the fixed ones. Lightness is a theme token, and alternates to tell apart hues that have grown close. */
+function generatedColor(palette: Palette, index: number): string {
+  const lightness = index % 2 === 0 ? '--oh-series-lightness' : '--oh-series-lightness-alt';
+  return `hsl(${hueAt(palette, index).toFixed(1)}, 68%, var(${lightness}))`;
+}
+
+/** The custom property of a series colour. Past the palette it exists once `colorFor` has handed out that index. */
+export const seriesToken = (index: number): string => `--oh-series-${index + 1}`;
+
+export const seriesVar = (index: number): string => `var(${seriesToken(index)})`;
 
 export interface ColorAssigner {
-  /** 0..6 by first-seen order; 7 (Other) for the 8th entity onwards. Stable once assigned. */
+  /** 0, 1, 2... by first-seen order, without end. Stable once assigned. */
   colorFor(entity: string): number;
 }
 
-export function createColorAssigner(): ColorAssigner {
+// This module also loads outside a browser, where no document has tokens to set.
+const rootStyle = (): { setProperty(name: string, value: string): void } | undefined =>
+  (globalThis as { document?: { documentElement: { style: { setProperty(n: string, v: string): void } } } })
+    .document?.documentElement.style;
+
+export function createColorAssigner(palette: Palette = DEFAULT_PALETTE): ColorAssigner {
   const seen = new Map<string, number>();
   return {
     colorFor(entity: string): number {
       const existing = seen.get(entity);
       if (existing !== undefined) return existing;
-      const index = Math.min(seen.size, OTHER_INDEX);
+      const index = seen.size;
       seen.set(entity, index);
+      if (index >= palette.light.length)
+        rootStyle()?.setProperty(seriesToken(index), generatedColor(palette, index));
       return index;
     },
   };

@@ -1,14 +1,8 @@
 import type { RunControls } from '../../dashboards/schema.js';
 import type { RunInfo, RunLine, RunQueryResult } from '../data/metric-run-query.js';
-import { type ColorAssigner, OTHER_INDEX, STATUS } from '../theme/palette.js';
+import { type ColorAssigner, STATUS, seriesToken } from '../theme/palette.js';
 import type { ChartProps } from './chart.js';
-import {
-  escapeHtml,
-  formatMetricValue,
-  mergeEchartsOption,
-  seriesToken,
-  token,
-} from './metric-chart-option.js';
+import { escapeHtml, formatMetricValue, mergeEchartsOption, token } from './metric-chart-option.js';
 import { epochMs, formatTick, niceAxis, runDateTime, shortLabel } from './run-chart-format.js';
 import { plotRects } from './run-chart-layout.js';
 
@@ -150,27 +144,9 @@ export function guideSeries(i: number, x: number | null): object {
   };
 }
 
-/** A distinct dash per line past the seventh, counted over all lines so that hiding one doesn't change another's. */
-function dashOf(n: number): number[] {
-  return [3 + 3 * (n % 6), 3 + 2 * Math.floor(n / 6)];
-}
-
-/** A line's color, and its dash (px on, px off) if it has one. */
-export interface RunLineStyle {
-  color: string;
-  type?: number[];
-}
-
-/** Each line's color and dash, assigned over all lines in order so that neither depends on what is hidden. */
-export function lineStyles(result: RunQueryResult, colors: ColorAssigner): Map<string, RunLineStyle> {
-  const styles = new Map<string, RunLineStyle>();
-  let others = 0;
-  for (const l of result.lines) {
-    const index = colors.colorFor(l.label);
-    const color = token(seriesToken(index));
-    styles.set(l.key, index >= OTHER_INDEX ? { color, type: dashOf(others++) } : { color });
-  }
-  return styles;
+/** Each line's color, assigned over all lines in order so that none depends on what is hidden. */
+export function lineColors(result: RunQueryResult, colors: ColorAssigner): Map<string, string> {
+  return new Map(result.lines.map((l) => [l.key, token(seriesToken(colors.colorFor(l.label)))]));
 }
 
 /** Pure ECharts option for a run chart: one grid per plot, one slider over all of them. */
@@ -189,7 +165,7 @@ export function buildRunChartOption(i: RunChartInput): { option: ChartProps['opt
     forceSplit: mixed,
   });
   const split = rects.length > 1;
-  const styles = lineStyles(result, i.colors);
+  const lineColor = lineColors(result, i.colors);
   const muted = token('--oh-muted');
   const hairline = token('--oh-hairline');
   const epoch = epochMs(epochUnixNano);
@@ -244,7 +220,7 @@ export function buildRunChartOption(i: RunChartInput): { option: ChartProps['opt
   });
 
   const series = lines.map((l, n) => {
-    const style = styles.get(l.key);
+    const color = lineColor.get(l.key);
     const plot = split ? n : 0;
     return {
       id: `line:${l.key}`,
@@ -259,8 +235,8 @@ export function buildRunChartOption(i: RunChartInput): { option: ChartProps['opt
       symbol: 'circle',
       symbolSize: DOT_PX,
       cursor: i.pickable ? 'pointer' : 'default',
-      itemStyle: { color: style?.color },
-      lineStyle: { width: 1.5, ...style },
+      itemStyle: { color },
+      lineStyle: { width: 1.5, color },
       ...(split ? {} : { emphasis: { focus: 'series' as const } }),
       data: l.points.flatMap((p, r) => {
         const run = runs[r];

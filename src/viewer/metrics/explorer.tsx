@@ -16,7 +16,7 @@ import { defaultMetricState } from '../state/metric-state.js';
 import { useSelection, useSelectionStore } from '../state/selection-context.js';
 import { useKeyedAsync } from '../state/use-keyed-async.js';
 import { useColorAssigner } from '../theme/colors-context.js';
-import { OTHER_INDEX } from '../theme/palette.js';
+import { seriesToken } from '../theme/palette.js';
 import { exemplarTraceLookup, openChartPick } from './chart-pick.js';
 import { DisplayBar } from './display-bar.js';
 import { exportMetricCsv, exportMetricJson } from './export.js';
@@ -27,10 +27,6 @@ import { useMetricQueries } from './use-metric-query.js';
 const QUERY_IDS = 'abcdefghijklmnopqrstuvwxyz'.split('');
 /** Card widths are measured in steps of this many px, so a resize re-runs the queries only now and then. */
 const WIDTH_STEP_PX = 100;
-
-function seriesToken(index: number): string {
-  return index >= OTHER_INDEX ? '--oh-series-other' : `--oh-series-${index + 1}`;
-}
 
 function ZeroMetrics({ manifest }: { manifest: Manifest }): JSX.Element {
   return (

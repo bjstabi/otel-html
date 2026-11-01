@@ -17,6 +17,8 @@
   --oh-series-6: #008300;
   --oh-series-7: #6250d6;
   --oh-series-other: #9a9da5;
+  --oh-series-lightness: 42%;
+  --oh-series-lightness-alt: 54%;
   --oh-sev-fatal: #8f1d21;
   --oh-sev-error: #d03b3b;
   --oh-sev-warn: #b87a00;
@@ -46,6 +48,8 @@
     --oh-series-6: #008300;
     --oh-series-7: #9085e9;
     --oh-series-other: #6f7279;
+    --oh-series-lightness: 62%;
+    --oh-series-lightness-alt: 50%;
     --oh-sev-fatal: #f0709a;
     --oh-sev-error: #e5605f;
     --oh-sev-warn: #fab219;
@@ -73,6 +77,8 @@
   --oh-series-6: #008300;
   --oh-series-7: #9085e9;
   --oh-series-other: #6f7279;
+  --oh-series-lightness: 62%;
+  --oh-series-lightness-alt: 50%;
   --oh-sev-fatal: #f0709a;
   --oh-sev-error: #e5605f;
   --oh-sev-warn: #fab219;

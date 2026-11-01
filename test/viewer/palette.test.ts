@@ -6,6 +6,7 @@ import {
   SEVERITY_DARK,
   SEVERITY_LIGHT,
   STATUS,
+  seriesToken,
 } from '../../src/viewer/theme/palette.js';
 
 describe('palette', () => {
@@ -33,12 +34,27 @@ describe('palette', () => {
     expect(b.colorFor('checkout')).toBe(first);
   });
 
-  it('maps the 8th and later entities to Other (7)', () => {
+  it('keeps handing out new indexes past the palette', () => {
     const a = createColorAssigner();
-    for (let i = 0; i < 7; i++) expect(a.colorFor(`e${i}`)).toBe(i);
-    expect(a.colorFor('e7')).toBe(7);
-    expect(a.colorFor('e8')).toBe(7);
+    for (let i = 0; i < 40; i++) expect(a.colorFor(`e${i}`)).toBe(i);
     expect(a.colorFor('e0')).toBe(0);
+  });
+
+  it('gives each color past the palette a token in the widest gap left, so hues only grow closer', () => {
+    const a = createColorAssigner();
+    const count = 40;
+    for (let i = 0; i < count; i++) a.colorFor(`e${i}`);
+    const hues = Array.from({ length: count - CATEGORICAL_LIGHT.length }, (_, i) => {
+      const css = document.documentElement.style.getPropertyValue(seriesToken(i + CATEGORICAL_LIGHT.length));
+      expect(css).toMatch(/^hsl\([\d.]+, 68%, var\(--oh-series-lightness(-alt)?\)\)$/);
+      return Number(/^hsl\(([\d.]+)/.exec(css)?.[1]);
+    });
+    expect(new Set(hues).size).toBe(hues.length);
+    const gapOf = (n: number): number => {
+      const sorted = hues.slice(0, n).sort((x, y) => x - y);
+      return Math.max(...sorted.map((h, i) => (sorted[i + 1] ?? (sorted[0] ?? 0) + 360) - h));
+    };
+    expect(gapOf(30)).toBeLessThan(gapOf(5));
   });
 });
 
