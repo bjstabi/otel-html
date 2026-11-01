@@ -32,3 +32,7 @@ test(
     await expect(page.getByText('data/manifest.js').first()).toBeVisible();
   },
 );
+
+test('probe fails', () => {
+  throw new Error('probe');
+});
