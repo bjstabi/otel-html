@@ -30,6 +30,11 @@ export {
 } from '../test-support/fixture-ids.js';
 
 export const REPORTS_DIR: URL = new URL('./.reports/', import.meta.url);
+/**
+ * Where the on-demand metrics scale report lives: outside `REPORTS_DIR`, which is the `e2e:fixtures` task's declared
+ * output, so writing it does not make the fixtures look out of date. `e2e/build-fixtures.ts` removes it.
+ */
+export const METRICS_SCALE_DIR: URL = new URL('./.metrics-scale/', import.meta.url);
 export const REPORT_DIR: URL = new URL('main/', REPORTS_DIR);
 /**
  * `run-charts`: `RUN_CHART_RUN_MINUTES.length` CI runs at uneven gaps from `RUN_CHART_T0_MS`, all of `RUN_CHART_JOBS` in
@@ -66,6 +71,8 @@ const HOSTILE_SUBPATH = '/sub/hostile';
 export const HOSTILE_TRACE_ID = '2a2b2c2d2e2f30313233343536373839';
 export const HOSTILE_ROOT_SPAN = '1111111111111111';
 export const PORT_ENV = 'OTEL_HTML_E2E_PORT';
+/** Names the report folder `e2e/load.spec.ts` serves itself; global setup then skips the fixture-report check. */
+export const LOAD_REPORT_ENV = 'OTEL_HTML_LOAD_REPORT';
 
 /** Reports built from the committed SDK fixtures (`fixtures/<name>.otlp.json`) and served beside the main one. */
 export const FIXTURE_REPORTS = ['small', 'orphans', 'logs-only', 'empty', 'linked', 'sample'] as const;
@@ -80,7 +87,7 @@ const FIXTURE_FILES: Partial<Record<FixtureReport, readonly string[]>> = {
  * `merged` is `otel-html merge` of `small` and `orphans`; `scale` and `huge` come from one generated 100k-span input.
  * `metrics-merged` merges two reports of the `metrics` fixture's first and last five collections, `metrics-single`
  * converts the fixture at once. `unfinished` holds the `linked` inputs, flushed but never closed. `metrics-scale` is
- * the metrics scale report (`e2e/metrics-scale.ts`), written only by the specs that need it.
+ * the metrics scale report (`e2e/metrics-scale.ts`), written only by the specs that need it, into `METRICS_SCALE_DIR`.
  */
 export type ReportName =
   | 'main'
@@ -116,7 +123,7 @@ export function scaleMetricEmitted(m: number, i: number): boolean {
 }
 
 export function reportDir(name: ReportName): URL {
-  return new URL(`${name}/`, REPORTS_DIR);
+  return name === 'metrics-scale' ? METRICS_SCALE_DIR : new URL(`${name}/`, REPORTS_DIR);
 }
 
 /** The committed OTLP/JSON files a fixture report is built from. */

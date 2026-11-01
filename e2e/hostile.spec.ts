@@ -10,7 +10,7 @@ import {
   HOSTILE_TRACE_ID,
 } from './fixture.js';
 import { watchProblems } from './metric-chart.js';
-import { expect, test as linkedTest, hostileTest as test } from './test.js';
+import { expect, HTTP, test as linkedTest, hostileTest as test } from './test.js';
 
 declare global {
   interface Window {
@@ -18,7 +18,7 @@ declare global {
   }
 }
 
-test('hostile content renders as text: explorer, panel and span section', async ({ page, baseURL }) => {
+test('hostile content renders as text: explorer, panel and span section', HTTP, async ({ page, baseURL }) => {
   const problems: string[] = [];
   page.on('console', (m) => {
     if (m.type() === 'error') problems.push(`console error: ${m.text()}`);
@@ -70,6 +70,7 @@ test('hostile content renders as text: explorer, panel and span section', async 
 
 linkedTest(
   'a hostile metric name renders as text: Catalog, Explorer picker and chart card',
+  HTTP,
   async ({ page, reportUrl }) => {
     const problems = watchProblems(page);
     await page.goto(`${reportUrl('linked')}/index.html#/metrics/catalog`);
@@ -106,6 +107,7 @@ linkedTest(
 
 linkedTest(
   'a hostile dashboard title, description and variable default render as text',
+  HTTP,
   async ({ page, reportUrl }) => {
     const problems = watchProblems(page);
     const base = `${reportUrl('dashboards-hostile')}/index.html`;

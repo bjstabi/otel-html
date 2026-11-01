@@ -160,10 +160,6 @@ test(
   'flame graph of a very large trace renders within the budget',
   { tag: '@perf' },
   async ({ page }, testInfo) => {
-    test.skip(
-      !testInfo.project.name.endsWith('-file'),
-      'the large report is only generated for file:// loading',
-    );
     // Init scripts run before the document element exists; set the marker as soon as it does.
     await page.addInitScript(() => {
       const mark = (): void => document.documentElement?.setAttribute('data-perf', '');

@@ -132,10 +132,12 @@ jobs:
       - uses: ./.github/actions/otel-html-setup
         with:
           command: node dist/cli/main.js
-      # The job shell wraps this in `otel-html run`; the exit code is Playwright's.
-      # --skip-deps: dist/ was built by the step above; do not clean it under the running job shell.
-      # Playwright projects are named `<browser>-file` and `<browser>-http`.
-      - run: mise run --skip-deps test:e2e -- --project '${{ matrix.project }}-*'
+      # The job shell wraps these in `otel-html run`; the exit code is Playwright's.
+      # --skip-deps: dist/ was built by the Build step above and must not be cleaned under the running job shell,
+      # so the fixture reports are built here, once, and test:e2e's own e2e:fixtures dependency is skipped.
+      - run: mise run --skip-deps e2e:fixtures
+      # `--browser` selects the `<browser>-file` and `<browser>-http` projects, then the `<browser>-perf-file` pass.
+      - run: mise run --skip-deps test:e2e --browser ${{ matrix.project }}
       # The reporter is `list`, so failure traces and screenshots land in test-results/.
       - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -181,7 +183,10 @@ jobs:
       - uses: ./.github/actions/otel-html-setup
         with:
           command: node dist/cli/main.js
-      - run: pnpm exec playwright test e2e/scale.spec.ts --project 'chromium-*' --grep 'metrics scale' --workers=1
+      # The metrics-scale tests are @perf, so they live in the chromium-perf-file project. Global setup asserts the
+      # other fixture reports exist, and the spec writes the metrics-scale report itself.
+      - run: mise run --skip-deps e2e:fixtures
+      - run: pnpm exec playwright test e2e/scale.spec.ts --project chromium-perf-file --grep 'metrics scale' --workers=1
       - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

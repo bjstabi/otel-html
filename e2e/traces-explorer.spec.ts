@@ -1,5 +1,5 @@
 import { ERROR_SPAN_COUNT, HOSTILE_SPAN_NAME, SERVICE_B, SPAN_COUNT } from './fixture.js';
-import { expect, test } from './test.js';
+import { expect, HTTP, test } from './test.js';
 
 const ERRORS = 'status.code == STATUS_CODE_ERROR';
 
@@ -72,7 +72,7 @@ test('Traces explorer: OTTL filter, facets, URL state, hostile text', async ({ p
   expect(problems).toEqual([]);
 });
 
-test('every view and the Services page render without errors', async ({ page, baseURL }) => {
+test('every view and the Services page render without errors', HTTP, async ({ page, baseURL }) => {
   const problems: string[] = [];
   page.on('console', (m) => {
     if (m.type() === 'error' || m.type() === 'warning') problems.push(`console ${m.type()}: ${m.text()}`);

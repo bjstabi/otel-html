@@ -17,6 +17,9 @@ export const test = base.extend<{ reportUrl: (name: ReportName) => string }>({
 });
 export { expect } from '@playwright/test';
 
+/** Test options for a spec that also runs over HTTP: `test('title', HTTP, async ...)`. Untagged tests run over file:// only. */
+export const HTTP = { tag: '@http' } as const;
+
 /** Same as `test`, but `baseURL` points at the hostile-content report. */
 export const hostileTest = base.extend({
   baseURL: async ({ baseURL: _unused }, use, testInfo) => {

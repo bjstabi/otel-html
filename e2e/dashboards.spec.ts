@@ -3,7 +3,7 @@ import { parse } from 'yaml';
 import { copied, stubClipboard } from './clipboard.js';
 import { DASHBOARDS_ENV_DEFAULT } from './fixture.js';
 import { watchProblems } from './metric-chart.js';
-import { expect, test } from './test.js';
+import { expect, HTTP, test } from './test.js';
 
 const widget = (page: Page, id: string): Locator => page.locator(`[data-widget="${id}"]`);
 
@@ -26,29 +26,33 @@ async function brush(page: Page, timeline: Locator, from: number, to: number): P
   await page.mouse.up();
 }
 
-test('the list shows Fusion (built-in) and Checkout (its file, starred)', async ({ page, reportUrl }) => {
-  const problems = watchProblems(page);
-  await page.goto(`${reportUrl('dashboards')}/index.html#/dashboards`);
-  const rows = page.getByRole('table').getByRole('row');
-  await expect(rows).toHaveCount(3);
-  await expect(rows.nth(1)).toContainText('Fusion');
-  await expect(rows.nth(1)).toContainText('BUILT-IN');
-  await expect(rows.nth(2)).toContainText('Checkout');
-  await expect(rows.nth(2)).toContainText('dashboards.otel-html.yaml');
-  await expect(rows.nth(2).getByRole('img', { name: 'Default dashboard' })).toBeVisible();
-  await expect(rows.nth(1).getByRole('img', { name: 'Default dashboard' })).toHaveCount(0);
+test(
+  'the list shows Fusion (built-in) and Checkout (its file, starred)',
+  HTTP,
+  async ({ page, reportUrl }) => {
+    const problems = watchProblems(page);
+    await page.goto(`${reportUrl('dashboards')}/index.html#/dashboards`);
+    const rows = page.getByRole('table').getByRole('row');
+    await expect(rows).toHaveCount(3);
+    await expect(rows.nth(1)).toContainText('Fusion');
+    await expect(rows.nth(1)).toContainText('BUILT-IN');
+    await expect(rows.nth(2)).toContainText('Checkout');
+    await expect(rows.nth(2)).toContainText('dashboards.otel-html.yaml');
+    await expect(rows.nth(2).getByRole('img', { name: 'Default dashboard' })).toBeVisible();
+    await expect(rows.nth(1).getByRole('img', { name: 'Default dashboard' })).toHaveCount(0);
 
-  // `g d` and the home route (`viewer.home: dashboards`) both open the configured default.
-  await page.goto(`${reportUrl('dashboards')}/index.html#/`);
-  await expect(page).toHaveURL(/#\/dashboards\/checkout/);
-  await page.goto(`${reportUrl('dashboards')}/index.html#/dashboards/fusion`);
-  await expect(page.getByRole('heading', { level: 1, name: 'Fusion' })).toBeVisible();
-  await page.keyboard.press('g');
-  await page.keyboard.press('d');
-  await expect(page).toHaveURL(/#\/dashboards\/checkout/);
-  await expect(page.getByRole('heading', { level: 1, name: 'Checkout' })).toBeVisible();
-  expect(problems).toEqual([]);
-});
+    // `g d` and the home route (`viewer.home: dashboards`) both open the configured default.
+    await page.goto(`${reportUrl('dashboards')}/index.html#/`);
+    await expect(page).toHaveURL(/#\/dashboards\/checkout/);
+    await page.goto(`${reportUrl('dashboards')}/index.html#/dashboards/fusion`);
+    await expect(page.getByRole('heading', { level: 1, name: 'Fusion' })).toBeVisible();
+    await page.keyboard.press('g');
+    await page.keyboard.press('d');
+    await expect(page).toHaveURL(/#\/dashboards\/checkout/);
+    await expect(page.getByRole('heading', { level: 1, name: 'Checkout' })).toBeVisible();
+    expect(problems).toEqual([]);
+  },
+);
 
 test('Fusion: a brush, a trace click, ⛓ off and Show context', async ({ page, reportUrl }) => {
   const problems = watchProblems(page);

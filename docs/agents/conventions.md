@@ -29,7 +29,7 @@ Shared by every PR process in this folder. Short on purpose; the README and the 
 - Unit tests live in `test/`, mirroring `src/`; one file is `pnpm exec vitest run <file>`. Timing-sensitive tests
   carry `@perf` and run only in the perf pass (`OTEL_HTML_PERF_PASS=1`); never loosen a budget to make one pass.
 - E2E specs live in `e2e/`; one spec is `mise run test:e2e:chromium -- e2e/<spec>.spec.ts`. A viewer behaviour
-  that needs a real browser (canvas, keyboard, URL state) is an e2e test; logic is a unit test.
+  that needs a real browser (canvas, keyboard, URL state) is an e2e test; logic is a unit test. The first test of a new page's spec carries the HTTP tag (`HTTP` in `e2e/test.ts`) so the page is also checked over http.
 - Before each commit run `pnpm exec biome check .` and `mise run typecheck` by hand, not through a pipe that hides
   the exit status. Before a push, `mise run check`; before opening a PR, the Chromium e2e suite as well (the ladder
   in AGENTS.md).

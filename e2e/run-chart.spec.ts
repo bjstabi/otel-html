@@ -20,7 +20,7 @@ import {
   runDot,
   watchProblems,
 } from './metric-chart.js';
-import { expect, test } from './test.js';
+import { expect, HTTP, test } from './test.js';
 
 test.use({ timezoneId: 'Asia/Tokyo' });
 
@@ -116,7 +116,7 @@ const expectConfigured = async (page: Page, host: Locator): Promise<void> => {
   await expect(toggle(page, 'Reset')).toBeDisabled();
 };
 
-test('opens split with the slider and no legend', async ({ page, reportUrl }) => {
+test('opens split with the slider and no legend', HTTP, async ({ page, reportUrl }) => {
   const problems = watchProblems(page);
   const host = await open(page, reportUrl);
   expect((await readRunChart(host)).grids).toHaveLength(RUN_CHART_JOBS.length);
