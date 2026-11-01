@@ -8,14 +8,14 @@ human or agent. Read only what the links below say applies to you.
 
 Run the smallest check that can catch the mistake, and run it often. CI runs the same mise tasks.
 
-| when | run | cost |
-|---|---|---|
-| after every edit | `mise run check` (lint, typecheck, unit tests, knip) | ≈ 20 s |
-| while iterating on one module | `pnpm exec vitest run <test file>` or `pnpm exec vitest run --changed main` | seconds |
-| after a viewer or report-path change | `mise run test:e2e:chromium -- e2e/<spec>.spec.ts` | the spec plus the fixture setup |
-| before every push | `mise run check` (the pre-push hook runs it too) | ≈ 20 s |
-| before opening a PR | `mise run check` then `mise run test:e2e:chromium` (`mise run verify` once it exists) | ≈ 2 min |
-| never locally | the three-browser matrix, the windows unit run, metrics-scale, the binaries | CI's job |
+| when                                 | run                                                                                   | cost                            |
+| ------------------------------------ | ------------------------------------------------------------------------------------- | ------------------------------- |
+| after every edit                     | `mise run check` (lint, typecheck, unit tests, knip)                                  | ≈ 20 s                          |
+| while iterating on one module        | `pnpm exec vitest run <test file>` or `pnpm exec vitest run --changed main`           | seconds                         |
+| after a viewer or report-path change | `mise run test:e2e:chromium -- e2e/<spec>.spec.ts`                                    | the spec plus the fixture setup |
+| before every push                    | `mise run check` (the pre-push hook runs it too)                                      | ≈ 20 s                          |
+| before opening a PR                  | `mise run check` then `mise run test:e2e:chromium` (`mise run verify` once it exists) | ≈ 2 min                         |
+| never locally                        | the three-browser matrix, the windows unit run, metrics-scale, the binaries           | CI's job                        |
 
 The e2e suite before a PR is a rule, not a hook, so a failure that reaches CI is a measurable event. `mise run
 build` first if `dist/` is missing. The tasks document themselves: `mise tasks ls` for the list, `mise tasks info
