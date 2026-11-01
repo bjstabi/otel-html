@@ -70,13 +70,16 @@ export function shortLabel(label: string): string {
   return [match[1]?.trim(), last].filter(Boolean).join(' ');
 }
 
+/** The epoch in whole ms since 1970: it can pass 2^53 in nanos, so through BigInt and never through a float. */
+export const epochMs = (epochUnixNano: string): number => Number(BigInt(epochUnixNano) / 1_000_000n);
+
 /** A run's local date and time in the browser's locale; `timeZone` is for tests. */
 export function runDateTime(
   epochUnixNano: string,
   relNanos: number,
   timeZone?: string,
 ): { date: string; time: string } {
-  const ms = Number(BigInt(epochUnixNano) / 1_000_000n) + relNanos / 1e6;
+  const ms = epochMs(epochUnixNano) + relNanos / 1e6;
   return {
     date: new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', timeZone }).format(ms),
     time: new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', timeZone }).format(ms),

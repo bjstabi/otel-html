@@ -9,7 +9,7 @@ import {
   seriesToken,
   token,
 } from './metric-chart-option.js';
-import { formatTick, niceAxis, runDateTime, shortLabel } from './run-chart-format.js';
+import { epochMs, formatTick, niceAxis, runDateTime, shortLabel } from './run-chart-format.js';
 import { plotRects } from './run-chart-layout.js';
 
 /** A zoom as run times, so switching spacing keeps the same runs in view. RelNanos, both inclusive. */
@@ -56,10 +56,10 @@ const SLIDER = { height: 20, bottom: 8, right: 16 };
 const TITLE_ABOVE_PX = 16;
 
 /**
- * A run's x on the time axis: whole ms since the report's epoch, not since 1970, because ECharts reads the axis as ms
- * and `zoomFromEvent` has no epoch. Labels add the epoch back through `runDateTime`.
+ * A run's x on the time axis: whole ms since 1970, because ECharts puts a time axis's ticks on round times of the
+ * value it is given. The epoch is `epochMs`'s.
  */
-const timeX = (relNanos: number): number => Math.round(relNanos / NS_PER_MS);
+const timeX = (relNanos: number, epoch: number): number => epoch + Math.round(relNanos / NS_PER_MS);
 
 const visibleLines = (result: RunQueryResult, hidden: ReadonlySet<string>): RunLine[] =>
   result.lines.filter((l) => !hidden.has(l.key));
@@ -107,6 +107,7 @@ export function zoomFromEvent(
   evenSpacing: boolean,
   startValue: number,
   endValue: number,
+  epochUnixNano: string,
 ): RunZoom | null {
   const { runs } = result;
   if (runs.length === 0) return null;
@@ -117,9 +118,11 @@ export function zoomFromEvent(
     if (first === 0 && last === runs.length - 1) return null;
     return { start: runs[first]?.time ?? 0, end: runs[last]?.time ?? 0 };
   }
-  if (runs.every((r) => timeX(r.time) >= startValue && timeX(r.time) <= endValue)) return null;
+  const epoch = epochMs(epochUnixNano);
+  const xOf = (r: RunInfo): number => timeX(r.time, epoch);
+  if (runs.every((r) => xOf(r) >= startValue && xOf(r) <= endValue)) return null;
   // An edge on a run's x is that run's exact time: ms to nanos doesn't round-trip below a millisecond.
-  const relNanos = (v: number): number => runs.find((r) => timeX(r.time) === v)?.time ?? v * NS_PER_MS;
+  const relNanos = (v: number): number => runs.find((r) => xOf(r) === v)?.time ?? (v - epoch) * NS_PER_MS;
   return { start: relNanos(startValue), end: relNanos(endValue) };
 }
 
@@ -152,12 +155,15 @@ function dashOf(n: number): number[] {
   return [3 + 3 * (n % 6), 3 + 2 * Math.floor(n / 6)];
 }
 
+/** A line's color, and its dash (px on, px off) if it has one. */
+export interface RunLineStyle {
+  color: string;
+  type?: number[];
+}
+
 /** Each line's color and dash, assigned over all lines in order so that neither depends on what is hidden. */
-function lineStyles(
-  result: RunQueryResult,
-  colors: ColorAssigner,
-): Map<string, { color: string; type?: number[] }> {
-  const styles = new Map<string, { color: string; type?: number[] }>();
+export function lineStyles(result: RunQueryResult, colors: ColorAssigner): Map<string, RunLineStyle> {
+  const styles = new Map<string, RunLineStyle>();
   let others = 0;
   for (const l of result.lines) {
     const index = colors.colorFor(l.label);
@@ -186,7 +192,8 @@ export function buildRunChartOption(i: RunChartInput): { option: ChartProps['opt
   const styles = lineStyles(result, i.colors);
   const muted = token('--oh-muted');
   const hairline = token('--oh-hairline');
-  const xOf = (r: RunInfo, n: number): number => (even ? n : timeX(r.time));
+  const epoch = epochMs(epochUnixNano);
+  const xOf = (r: RunInfo, n: number): number => (even ? n : timeX(r.time, epoch));
 
   const label = (relNanos: number | undefined): string => {
     if (relNanos === undefined) return '';
@@ -196,13 +203,13 @@ export function buildRunChartOption(i: RunChartInput): { option: ChartProps['opt
   // Category values are the run's index as a string; ECharts' own label index counts from the zoom's start.
   const xFormatter = even
     ? (v: string | number): string => label(runs[Number(v)]?.time)
-    : (v: string | number): string => label(Number(v) * NS_PER_MS);
+    : (v: string | number): string => label((Number(v) - epoch) * NS_PER_MS);
   const first = runs[0];
   const last = runs[runs.length - 1];
   // One run leaves the extent empty, so ECharts centers it on an extent of its own.
   const timeExtent =
-    first !== undefined && last !== undefined && timeX(first.time) !== timeX(last.time)
-      ? { min: timeX(first.time), max: timeX(last.time) }
+    first !== undefined && last !== undefined && timeX(first.time, epoch) !== timeX(last.time, epoch)
+      ? { min: timeX(first.time, epoch), max: timeX(last.time, epoch) }
       : {};
 
   const xAxis = rects.map((rect, n) => ({
@@ -292,7 +299,7 @@ export function buildRunChartOption(i: RunChartInput): { option: ChartProps['opt
     i.zoom === null
       ? {}
       : !even
-        ? { startValue: timeX(i.zoom.start), endValue: timeX(i.zoom.end) }
+        ? { startValue: timeX(i.zoom.start, epoch), endValue: timeX(i.zoom.end, epoch) }
         : firstInView === undefined || lastInView === undefined
           ? {}
           : { startValue: runs.indexOf(firstInView), endValue: runs.indexOf(lastInView) };
@@ -314,7 +321,7 @@ export function buildRunChartOption(i: RunChartInput): { option: ChartProps['opt
             filterMode: 'none' as const,
             left: rects[0]?.left,
             ...SLIDER,
-            // Its default labels would show the time axis's raw values, which are relative to the report.
+            // Its default labels aren't in the axis's format, and would read a run's index on even spacing.
             showDetail: false,
             showDataShadow: false,
             ...window,

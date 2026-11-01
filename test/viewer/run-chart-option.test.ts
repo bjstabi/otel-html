@@ -14,6 +14,7 @@ import { runDateTime, shortLabel } from '../../src/viewer/components/run-chart-f
 import {
   buildRunChartOption,
   guideSeries,
+  lineStyles,
   type RunChartInput,
   runsInView,
   runYAxes,
@@ -95,6 +96,7 @@ beforeAll(() => {
 
 const HOUR = 3600e9;
 const EPOCH = '1760000000000000000';
+const EPOCH_MS = 1760000000000;
 const OUTLIER = 'job-a';
 const NAMES = [OUTLIER, 'job-b', 'job-c', 'job-d', 'job-e', 'job-f', 'job-g', 'job-h', 'job-i'];
 const CONTROLS: RunControls = { slider: true, evenSpacing: true, split: true, legend: false };
@@ -270,8 +272,8 @@ describe('zoom', () => {
 
   test('zoomFromEvent round trip with even spacing', () => {
     const r = fixture();
-    expect(zoomFromEvent(r, true, 3, 27)).toEqual({ start: r.runs[3]?.time, end: r.runs[27]?.time });
-    expect(zoomFromEvent(r, true, 0, 27)).toBeNull();
+    expect(zoomFromEvent(r, true, 3, 27, EPOCH)).toEqual({ start: r.runs[3]?.time, end: r.runs[27]?.time });
+    expect(zoomFromEvent(r, true, 0, 27, EPOCH)).toBeNull();
   });
 
   test('zoomFromEvent round trip on real time is exact to the run, including sub-millisecond times', () => {
@@ -280,15 +282,31 @@ describe('zoom', () => {
     for (const [i, run] of r.runs.entries()) run.time = times[i] ?? 0;
     const o = timeAxis({ result: r });
     const x = lineSeries(o)[0]?.data.map((d) => d.value[0]) ?? [];
-    expect(zoomFromEvent(r, false, x[1] ?? 0, x[2] ?? 0)).toEqual({ start: times[1], end: times[2] });
-    expect(zoomFromEvent(r, false, x[0] ?? 0, x[3] ?? 0)).toBeNull();
-    expect(runsInView(r, zoomFromEvent(r, false, x[1] ?? 0, x[2] ?? 0)).length).toBe(2);
+    expect(zoomFromEvent(r, false, x[1] ?? 0, x[2] ?? 0, EPOCH)).toEqual({ start: times[1], end: times[2] });
+    expect(zoomFromEvent(r, false, x[0] ?? 0, x[3] ?? 0, EPOCH)).toBeNull();
+    expect(runsInView(r, zoomFromEvent(r, false, x[1] ?? 0, x[2] ?? 0, EPOCH)).length).toBe(2);
+  });
+
+  test('the axis carries absolute ms, exact past what a float holds of the epoch in nanos', () => {
+    const epochUnixNano = '1760000000123456789';
+    const r = result([line('a', [1, 2])], 2);
+    const times = [1234567890123, 7777777777777];
+    for (const [i, run] of r.runs.entries()) run.time = times[i] ?? 0;
+    const o = timeAxis({ result: r, epochUnixNano });
+    const x = lineSeries(o)[0]?.data.map((d) => d.value[0]) ?? [];
+    expect(x).toEqual([1760000000123 + 1234568, 1760000000123 + 7777778]);
+    expect(zoomFromEvent(r, false, x[0] ?? 0, x[0] ?? 0, epochUnixNano)).toEqual({
+      start: times[0],
+      end: times[0],
+    });
+    expect(zoomFromEvent(r, false, x[0] ?? 0, x[1] ?? 0, epochUnixNano)).toBeNull();
   });
 
   test('zoomFromEvent on real time keeps a window edge between runs, so the slider is not snapped away', () => {
     const r = fixture();
     const start = 3.5 * HOUR;
-    expect(zoomFromEvent(r, false, start / 1e6, (r.runs[27]?.time ?? 0) / 1e6)).toEqual({
+    const at = (rel: number): number => EPOCH_MS + rel / 1e6;
+    expect(zoomFromEvent(r, false, at(start), at(r.runs[27]?.time ?? 0), EPOCH)).toEqual({
       start,
       end: r.runs[27]?.time,
     });
@@ -296,8 +314,8 @@ describe('zoom', () => {
 
   test('zoomFromEvent has no zoom to hold without runs', () => {
     const r = result([], 0);
-    expect(zoomFromEvent(r, true, 0, 0)).toBeNull();
-    expect(zoomFromEvent(r, false, 0, 1)).toBeNull();
+    expect(zoomFromEvent(r, true, 0, 0, EPOCH)).toBeNull();
+    expect(zoomFromEvent(r, false, 0, 1, EPOCH)).toBeNull();
   });
 });
 
@@ -453,6 +471,19 @@ describe('color', () => {
   });
 });
 
+describe('swatch', () => {
+  test('lineStyles is what the series draw, hidden lines included', () => {
+    const r = fixture();
+    const styles = lineStyles(r, createColorAssigner());
+    const hidden = new Set(['key:job-a']);
+    for (const s of lineSeries(build({ result: r, hidden }))) {
+      expect(s.lineStyle).toMatchObject(styles.get(s.id.slice('line:'.length)) ?? {});
+    }
+    expect(styles.get('key:job-h')?.type).toBeDefined();
+    expect(styles.get('key:job-a')?.type).toBeUndefined();
+  });
+});
+
 describe('tooltip', () => {
   const r = (): RunQueryResult => result([line('<img src=x>', [1, 90], 's', [1]), line('b', [3, 4])], 2);
   const tip = (data: unknown): string => build({ result: r() }).tooltip.formatter({ marker: '', data });
@@ -597,6 +628,50 @@ describe('in the real ECharts', () => {
     const real = render({ controls: { ...realTime, split: false } });
     expect(real).toContain(runDateTime(EPOCH, HOUR).date);
     expect(real).not.toContain('1970');
+  });
+
+  test('a time axis puts the ticks between its ends on round local times', () => {
+    const ticksOf = (controls: RunControls, r: RunQueryResult, width: number): number[] => {
+      const seen = new Set<number>();
+      const { option } = buildRunChartOption(input({ result: r, controls, width }));
+      const axis = (option as unknown as Opt).xAxis[0];
+      const format = axis?.axisLabel.formatter;
+      if (axis === undefined || format === undefined) throw new Error('no axis');
+      axis.axisLabel.formatter = (v) => {
+        seen.add(Number(v));
+        return format(v);
+      };
+      const chart = init(null as unknown as HTMLElement, undefined, {
+        renderer: 'svg',
+        ssr: true,
+        width,
+        height: 600,
+      });
+      chart.setOption(option);
+      chart.renderToSVGString();
+      chart.dispose();
+      return [...seen].sort((a, b) => a - b);
+    };
+    // Runs 7 minutes apart, off the epoch by seconds: nothing about the runs themselves lands on a round time.
+    const r = result(
+      [
+        line(
+          'a',
+          Array.from({ length: 12 }, (_, i) => i + 1),
+        ),
+      ],
+      12,
+    );
+    for (const [i, run] of r.runs.entries()) run.time = (i * 7 * 60 + 43) * 1e9;
+    const ticks = ticksOf({ ...CONTROLS, evenSpacing: false, split: false }, r, 1200);
+    const inner = ticks.slice(1, -1);
+    expect(inner.length).toBeGreaterThan(0);
+    for (const t of ticks) expect(t).toBeGreaterThanOrEqual(EPOCH_MS);
+    for (const t of inner) {
+      const d = new Date(t);
+      expect(d.getSeconds()).toBe(0);
+      expect(d.getMinutes() % 5).toBe(0);
+    }
   });
 
   test('a guide draws on a category axis and on a real time axis', () => {

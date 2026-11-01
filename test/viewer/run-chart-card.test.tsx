@@ -154,6 +154,7 @@ function result(over: Partial<RunQueryResult> = {}): RunQueryResult {
 }
 
 const CONTROLS: RunControls = { slider: true, evenSpacing: true, split: false, legend: true };
+const EPOCH_MS = 1_700_000_000_000;
 
 function props(over: Partial<RunChartCardProps> = {}): RunChartCardProps {
   return {
@@ -164,7 +165,7 @@ function props(over: Partial<RunChartCardProps> = {}): RunChartCardProps {
     controls: CONTROLS,
     onControls: () => undefined,
     height: 700,
-    epochUnixNano: '1700000000000000000',
+    epochUnixNano: `${EPOCH_MS}000000`,
     selectedRun: null,
     echarts: null,
     onPickRun: null,
@@ -407,7 +408,10 @@ describe('RunChartCard zoom', () => {
     const { rerender } = render(<RunChartCard {...props()} />);
     await zoomTo(1, 2);
     rerender(<RunChartCard {...props({ controls: { ...CONTROLS, evenSpacing: false } })} />);
-    expect(lastFull().dataZoom?.[0]).toMatchObject({ startValue: 100_000, endValue: 200_000 });
+    expect(lastFull().dataZoom?.[0]).toMatchObject({
+      startValue: EPOCH_MS + 100_000,
+      endValue: EPOCH_MS + 200_000,
+    });
   });
 });
 
@@ -426,6 +430,27 @@ describe('RunChartCard legend', () => {
       // fast: median of 10, 20, 30, 40 is 25, and 40 is 60% above it.
       expect.stringMatching(/^fast.*40.*\+60%$/),
     ]);
+  });
+
+  test('a line drawn with a dash has that dash in its swatch, and any other a dot', () => {
+    const names = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i'];
+    const lines = names.map((n, i) => line(n, [i + 1, i + 1, i + 1, i + 1]));
+    render(<RunChartCard {...props({ result: result({ lines }) })} />);
+    const drawn = new Map(
+      ((lastFull().series ?? []) as unknown as { id: string; lineStyle?: { type?: number[] } }[]).map((x) => [
+        x.id,
+        x.lineStyle?.type?.join(' ') ?? null,
+      ]),
+    );
+    const rows = within(screen.getByRole('list', { name: 'Lines' })).getAllByRole('button');
+    const dashes = names.map((n) => {
+      const row = rows.find((b) => b.getAttribute('title') === n);
+      return row?.querySelector('line')?.getAttribute('stroke-dasharray') ?? null;
+    });
+    expect(dashes).toEqual(names.map((n) => drawn.get(`line:${n}`)));
+    expect(dashes.slice(0, 7)).toEqual(Array(7).fill(null));
+    expect(new Set(dashes.slice(7)).size).toBe(2);
+    expect(dashes[7]).not.toBeNull();
   });
 
   test('values and medians follow the zoom, and the order does not', async () => {
@@ -692,11 +717,14 @@ describe('RunChartCard on real ECharts', () => {
     const controls = { ...CONTROLS, evenSpacing: false };
     render(<RunChartCard {...props({ controls, configured: controls })} />);
     const live = (): Live => chart.getOption() as unknown as Live;
-    await act(async () => void chart.dispatchAction({ type: 'dataZoom', startValue: 0, endValue: 100_000 }));
+    await act(
+      async () =>
+        void chart.dispatchAction({ type: 'dataZoom', startValue: EPOCH_MS, endValue: EPOCH_MS + 100_000 }),
+    );
     expect(live().yAxis[0]?.max).toBe(480);
     await resize(1200, 500);
     expect(live().yAxis[0]?.max).toBe(480);
-    expect(live().dataZoom[0]?.startValue).toBe(0);
+    expect(live().dataZoom[0]?.startValue).toBe(EPOCH_MS);
     chart.dispose();
   });
 

@@ -5,12 +5,12 @@ import type { RunInfo, RunQueryResult } from '../data/metric-run-query.js';
 import type { TimeWindow } from '../data/span-query.js';
 import { useColorAssigner } from '../theme/colors-context.js';
 import { Chart, type EChartsType } from './chart.js';
-import { seriesToken, token } from './metric-chart-option.js';
 import { plotRects } from './run-chart-layout.js';
 import { LEGEND_ROW_PX, legendRows, RunChartLegend } from './run-chart-legend.js';
 import {
   buildRunChartOption,
   guideSeries,
+  lineStyles,
   type RunZoom,
   runsInView,
   runYAxes,
@@ -228,8 +228,16 @@ export function RunChartCard(props: RunChartCardProps): JSX.Element {
   );
 
   // Latest values for the ECharts handlers, which stay the same so that an event never rebuilds the chart.
-  const live = useRef({ result, controls, hidden, split: false, guide, onPickRun });
-  live.current = { result, controls, hidden, split: controls.split && splitFits, guide, onPickRun };
+  const live = useRef({ result, controls, hidden, split: false, guide, onPickRun, epochUnixNano });
+  live.current = {
+    result,
+    controls,
+    hidden,
+    split: controls.split && splitFits,
+    guide,
+    onPickRun,
+    epochUnixNano,
+  };
 
   const guideDrawn = useRef<number | null>(guide.x);
   useEffect(() => {
@@ -255,8 +263,8 @@ export function RunChartCard(props: RunChartCardProps): JSX.Element {
         const { dataZoom } = c.getOption() as { dataZoom?: { startValue?: number; endValue?: number }[] };
         const { startValue, endValue } = dataZoom?.[0] ?? {};
         if (startValue === undefined || endValue === undefined) return;
-        const { result: r, controls: t, hidden: h, split } = live.current;
-        const next = zoomFromEvent(r, t.evenSpacing, startValue, endValue);
+        const { result: r, controls: t, hidden: h, split, epochUnixNano: epoch } = live.current;
+        const next = zoomFromEvent(r, t.evenSpacing, startValue, endValue, epoch);
         if (next?.start === zoomNow.current?.start && next?.end === zoomNow.current?.end) return;
         zoomNow.current = next;
         setZoomState(next);
@@ -323,7 +331,7 @@ export function RunChartCard(props: RunChartCardProps): JSX.Element {
           inView: inView.length === 0 ? result.runs : inView,
           hoveredRun,
           hidden,
-          colorOf: (label) => token(seriesToken(colors.colorFor(label))),
+          styles: lineStyles(result, colors),
         })
       : [];
 
