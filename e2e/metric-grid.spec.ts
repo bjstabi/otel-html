@@ -1,7 +1,7 @@
 import type { Locator } from '@playwright/test';
 import { LINKED_SPAN, LINKED_TRACE } from './fixture.js';
 import { LINE_MIN_PX, lineRunPx, watchProblems } from './metric-chart.js';
-import { expect, test } from './test.js';
+import { expect, HTTP, test } from './test.js';
 
 /** The grid's first (expanded) group draws its chart cards, each with one or more series, once scrolled into view. */
 async function expectCharts(grid: Locator): Promise<void> {
@@ -20,33 +20,37 @@ async function expectCharts(grid: Locator): Promise<void> {
   await expect(grid.getByRole('alert')).toHaveCount(0);
 }
 
-test('log panel Metrics tab: charts of the log’s resource around the log, with its marker', async ({
-  page,
-  reportUrl,
-}) => {
-  const problems = watchProblems(page);
-  const q = encodeURIComponent(`span_id.string == "${LINKED_SPAN}"`);
-  await page.goto(`${reportUrl('linked')}/index.html#/logs?q=${q}`);
-  const rows = page.getByRole('grid', { name: 'Results' }).getByRole('row');
-  await rows.nth(1).click();
-  const panel = page.getByTestId('log-panel');
-  await panel.getByRole('tablist', { name: 'Log views' }).getByRole('tab', { name: 'Metrics' }).click();
-  await expect(page).toHaveURL(/[?&]ltab=metrics/);
-  const grid = panel.getByTestId('metric-grid');
-  await expect(grid).toContainText('Metrics from the same resource');
-  await expect(grid).toContainText('service.name=payments');
-  // The marker line on each chart is the log's time; the header names it.
-  await expect(grid).toContainText('┆ this log');
-  await expectCharts(grid);
+test(
+  'log panel Metrics tab: charts of the log’s resource around the log, with its marker',
+  HTTP,
+  async ({ page, reportUrl }) => {
+    const problems = watchProblems(page);
+    const q = encodeURIComponent(`span_id.string == "${LINKED_SPAN}"`);
+    await page.goto(`${reportUrl('linked')}/index.html#/logs?q=${q}`);
+    const rows = page.getByRole('grid', { name: 'Results' }).getByRole('row');
+    await rows.nth(1).click();
+    const panel = page.getByTestId('log-panel');
+    await panel.getByRole('tablist', { name: 'Log views' }).getByRole('tab', { name: 'Metrics' }).click();
+    await expect(page).toHaveURL(/[?&]ltab=metrics/);
+    const grid = panel.getByTestId('metric-grid');
+    await expect(grid).toContainText('Metrics from the same resource');
+    await expect(grid).toContainText('service.name=payments');
+    // The marker line on each chart is the log's time; the header names it.
+    await expect(grid).toContainText('┆ this log');
+    await expectCharts(grid);
 
-  // Size L redraws the charts taller.
-  const first = grid.getByRole('img', { name: /: [1-9]\d* series$/ }).first();
-  const small = (await first.boundingBox())?.height ?? 0;
-  await grid.getByRole('button', { name: 'L', exact: true }).click();
-  await expect(grid.getByRole('button', { name: 'L', exact: true })).toHaveAttribute('aria-pressed', 'true');
-  await expect.poll(async () => (await first.boundingBox())?.height ?? 0).toBeGreaterThan(small);
-  expect(problems).toEqual([]);
-});
+    // Size L redraws the charts taller.
+    const first = grid.getByRole('img', { name: /: [1-9]\d* series$/ }).first();
+    const small = (await first.boundingBox())?.height ?? 0;
+    await grid.getByRole('button', { name: 'L', exact: true }).click();
+    await expect(grid.getByRole('button', { name: 'L', exact: true })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    await expect.poll(async () => (await first.boundingBox())?.height ?? 0).toBeGreaterThan(small);
+    expect(problems).toEqual([]);
+  },
+);
 
 test('the span section and the trace panel have Metrics tabs too', async ({ page, reportUrl }) => {
   const problems = watchProblems(page);

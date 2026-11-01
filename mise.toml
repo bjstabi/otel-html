@@ -98,23 +98,28 @@ sources = ["dist/**", "!dist/bin/**", "!dist/load-receiver/**", "e2e/build-fixtu
 outputs = ["e2e/.reports/**"]
 run = "bun e2e/build-fixtures.ts"
 
-[tasks."test:e2e"]
-shell = "bash -c"
-depends = ["e2e:fixtures"]
-usage = 'arg "[args]" var=#true'
-# Timing-sensitive specs (@perf) run alone afterwards, one worker, so parallel browsers do not steal their CPU.
 # Budgets scale with OTEL_HTML_PERF_FACTOR on slow machines; they are never edited.
 # CI runs in the official Playwright image and sets OTEL_HTML_SKIP_BROWSER_INSTALL to skip the browser download.
-# Extra playwright args (`mise run test:e2e -- --project 'firefox-*'`) are passed to both passes.
 # The metrics scale check runs only with OTEL_HTML_METRICS_SCALE=1 (its report takes a few seconds locally, under a minute on CI, and ~150 MB):
 # `OTEL_HTML_METRICS_SCALE=1 mise run test:e2e:chromium -- e2e/scale.spec.ts`.
+[tasks."test:e2e"]
+description = """Playwright over the fixture reports, per browser (--browser chromium|firefox|webkit, default all).
+Two passes: the `<browser>-file` and `<browser>-http` projects in parallel (`-http` runs only specs tagged HTTP), then the
+`<browser>-perf-file` project (@perf tests) alone with one worker. Both run; the task fails if either does. Only the perf
+pass may match no tests. Playwright args after `--` go to both passes (`mise run test:e2e -- --project chromium-file`).
+Browsers are installed first unless OTEL_HTML_SKIP_BROWSER_INSTALL is set (CI's Playwright image has them)."""
+shell = "bash -c"
+depends = ["e2e:fixtures"]
+usage = '''
+flag "--browser <browser>" default="*"
+arg "[args]" var=#true
+'''
 run = """
 eval "set -- $usage_args"
-# Both passes run; the task fails if either does. Only the @perf pass may match no tests (a spec with none).
 rc=0
 [ -n "$OTEL_HTML_SKIP_BROWSER_INSTALL" ] || pnpm exec playwright install chromium firefox webkit
-pnpm exec playwright test --grep-invert @perf "$@" || rc=1
-pnpm exec playwright test --grep @perf --workers=1 --pass-with-no-tests "$@" || rc=1
+pnpm exec playwright test "$@" --project "${usage_browser}-file" --project "${usage_browser}-http" || rc=1
+pnpm exec playwright test "$@" --project "${usage_browser}-perf-file" --workers=1 --pass-with-no-tests || rc=1
 exit $rc
 """
 
@@ -132,20 +137,14 @@ bun scripts/build-binaries.ts "$@"
 depends = ["build"]
 run = ["pnpm exec publint", "pnpm exec attw --pack --profile esm-only"]
 
-# Chromium only (file and http projects): the quick loop while iterating; `test:e2e` is the full matrix.
-# Extra playwright args (`mise run test:e2e:chromium -- e2e/metrics-explorer.spec.ts`) are passed to both passes.
 [tasks."test:e2e:chromium"]
+description = "Chromium only: the quick loop while iterating (`test:e2e --browser chromium`). Playwright args after `--` (`mise run test:e2e:chromium -- e2e/metrics-explorer.spec.ts`) go to both passes."
 shell = "bash -c"
-depends = ["e2e:fixtures"]
 usage = 'arg "[args]" var=#true'
 run = """
 eval "set -- $usage_args"
-# Both passes run; the task fails if either does. Only the @perf pass may match no tests (a spec with none).
-rc=0
 [ -n "$OTEL_HTML_SKIP_BROWSER_INSTALL" ] || pnpm exec playwright install chromium
-pnpm exec playwright test --project='chromium-*' --grep-invert @perf "$@" || rc=1
-pnpm exec playwright test --project='chromium-*' --grep @perf --workers=1 --pass-with-no-tests "$@" || rc=1
-exit $rc
+OTEL_HTML_SKIP_BROWSER_INSTALL=1 mise run test:e2e --browser chromium -- "$@"
 """
 
 # The metrics writer benchmark (#35): the 1/30 slice of the metrics scale workload through `Report.addMetrics`,

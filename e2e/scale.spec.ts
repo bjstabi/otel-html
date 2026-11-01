@@ -18,7 +18,7 @@ import {
   SCALE_TRACES,
 } from './fixture.js';
 import { ensureMetricsScaleReport } from './metrics-scale.js';
-import { expect, test } from './test.js';
+import { expect, HTTP, test } from './test.js';
 
 /** Fixed budgets; `OTEL_HTML_PERF_FACTOR` scales them for slow machines, the constants are never loosened. */
 const INTERACTIVE_BUDGET_MS = 3000;
@@ -157,60 +157,61 @@ test(
   },
 );
 
-test('a report over the eager budget filters by chunk window and opens a trace through its shard', async ({
-  page,
-  reportUrl,
-}) => {
-  const dir = fileURLToPath(reportDir('huge'));
-  const spanChunks = readdirSync(`${dir}data/chunks/spans`).filter((f) => f.endsWith('.js'));
-  expect(spanChunks.length).toBeGreaterThan(2);
+test(
+  'a report over the eager budget filters by chunk window and opens a trace through its shard',
+  HTTP,
+  async ({ page, reportUrl }) => {
+    const dir = fileURLToPath(reportDir('huge'));
+    const spanChunks = readdirSync(`${dir}data/chunks/spans`).filter((f) => f.endsWith('.js'));
+    expect(spanChunks.length).toBeGreaterThan(2);
 
-  // Which data files the page loaded: request events and the script witness, merged.
-  await witnessScripts(page);
-  const seen = new Set<string>();
-  const note = (url: string): void => {
-    const m = /\/data\/((?:traces|chunks\/spans)\/[^/?#]+\.js)(?:[?#].*)?$/.exec(url);
-    if (m?.[1] !== undefined) seen.add(m[1]);
-  };
-  page.on('request', (r) => note(r.url()));
-  const loaded = async (): Promise<ReadonlySet<string>> => {
-    for (const url of await witnessedScripts(page)) note(url);
-    return seen;
-  };
+    // Which data files the page loaded: request events and the script witness, merged.
+    await witnessScripts(page);
+    const seen = new Set<string>();
+    const note = (url: string): void => {
+      const m = /\/data\/((?:traces|chunks\/spans)\/[^/?#]+\.js)(?:[?#].*)?$/.exec(url);
+      if (m?.[1] !== undefined) seen.add(m[1]);
+    };
+    page.on('request', (r) => note(r.url()));
+    const loaded = async (): Promise<ReadonlySet<string>> => {
+      for (const url of await witnessedScripts(page)) note(url);
+      return seen;
+    };
 
-  await page.goto(`${reportUrl('huge')}/index.html#/traces`);
-  const rows = page.getByRole('grid', { name: 'Results' }).getByRole('row');
-  await expect(rows.nth(1)).toBeVisible({ timeout: 30_000 });
+    await page.goto(`${reportUrl('huge')}/index.html#/traces`);
+    const rows = page.getByRole('grid', { name: 'Results' }).getByRole('row');
+    await expect(rows.nth(1)).toBeVisible({ timeout: 30_000 });
 
-  // Filtering scans chunks on demand and stops once it has enough rows.
-  const facet = page.getByTestId(`facet-row:service.name:${SERVICE}`);
-  await facet.hover();
-  await page.getByRole('button', { name: `Only ${SERVICE}` }).click();
-  const partial = page.getByRole('status', { name: 'Partial results' });
-  await expect(partial).toContainText(/from \d+ of \d+ chunks/);
-  const text = (await partial.textContent()) ?? '';
-  const [, scanned, total] = /from (\d+) of (\d+) chunks/.exec(text) ?? [];
-  expect(Number(total)).toBe(spanChunks.length);
-  expect(Number(scanned)).toBeLessThan(Number(total));
-  const chunksAfterFilter = [...(await loaded())].filter((f) => f.startsWith('chunks/')).length;
-  expect(chunksAfterFilter).toBeLessThan(spanChunks.length);
+    // Filtering scans chunks on demand and stops once it has enough rows.
+    const facet = page.getByTestId(`facet-row:service.name:${SERVICE}`);
+    await facet.hover();
+    await page.getByRole('button', { name: `Only ${SERVICE}` }).click();
+    const partial = page.getByRole('status', { name: 'Partial results' });
+    await expect(partial).toContainText(/from \d+ of \d+ chunks/);
+    const text = (await partial.textContent()) ?? '';
+    const [, scanned, total] = /from (\d+) of (\d+) chunks/.exec(text) ?? [];
+    expect(Number(total)).toBe(spanChunks.length);
+    expect(Number(scanned)).toBeLessThan(Number(total));
+    const chunksAfterFilter = [...(await loaded())].filter((f) => f.startsWith('chunks/')).length;
+    expect(chunksAfterFilter).toBeLessThan(spanChunks.length);
 
-  // Opening a trace loads its shard, then exactly the chunks that shard lists.
-  await rows.nth(1).click();
-  const panel = page.getByTestId('trace-panel');
-  await expect(panel.getByTestId('trace-header')).toBeVisible();
-  const traceId = /trace=([0-9a-f]{32})/.exec(page.url())?.[1];
-  expect(traceId).toBeDefined();
-  const shard = (traceId ?? '').slice(0, 2);
-  const shardBody = readFileSync(`${dir}data/traces/${shard}.js`, 'utf8');
-  const payload = shardBody.slice(shardBody.indexOf(',') + 1, shardBody.lastIndexOf(')'));
-  const entry = (JSON.parse(payload) as Record<string, { chunks: string[] }>)[traceId ?? ''];
-  expect(entry?.chunks.length).toBeGreaterThan(0);
-  const requested = await loaded();
-  expect(requested).toContain(`traces/${shard}.js`);
-  for (const key of entry?.chunks ?? []) expect(requested).toContain(`${key}.js`);
-  expect([...requested].filter((f) => f.startsWith('chunks/')).length).toBeLessThan(spanChunks.length);
-});
+    // Opening a trace loads its shard, then exactly the chunks that shard lists.
+    await rows.nth(1).click();
+    const panel = page.getByTestId('trace-panel');
+    await expect(panel.getByTestId('trace-header')).toBeVisible();
+    const traceId = /trace=([0-9a-f]{32})/.exec(page.url())?.[1];
+    expect(traceId).toBeDefined();
+    const shard = (traceId ?? '').slice(0, 2);
+    const shardBody = readFileSync(`${dir}data/traces/${shard}.js`, 'utf8');
+    const payload = shardBody.slice(shardBody.indexOf(',') + 1, shardBody.lastIndexOf(')'));
+    const entry = (JSON.parse(payload) as Record<string, { chunks: string[] }>)[traceId ?? ''];
+    expect(entry?.chunks.length).toBeGreaterThan(0);
+    const requested = await loaded();
+    expect(requested).toContain(`traces/${shard}.js`);
+    for (const key of entry?.chunks ?? []) expect(requested).toContain(`${key}.js`);
+    expect([...requested].filter((f) => f.startsWith('chunks/')).length).toBeLessThan(spanChunks.length);
+  },
+);
 
 const LOGS_GRID = '[role="grid"][aria-label="Results"]';
 const PARTIAL_NOTE = '[role="status"][aria-label="Partial results"]';
@@ -457,6 +458,8 @@ async function paintedMs(page: Page, url: string, selector: string, label: strin
 const METRICS_SCALE_ENV = 'OTEL_HTML_METRICS_SCALE';
 
 test.describe(`metrics scale: ${SCALE_METRICS} metrics × ${SCALE_METRIC_SERIES} series × 1 h at 10 s`, () => {
+  // `beforeAll` writes the on-demand report: one worker runs the describe, in order, so it is written once.
+  test.describe.configure({ mode: 'serial' });
   // Skipped tests run no hooks, so the report is not written either.
   test.skip(
     process.env[METRICS_SCALE_ENV] !== '1',

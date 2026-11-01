@@ -3,7 +3,7 @@ import { sep } from 'node:path';
 import type { Page } from '@playwright/test';
 import { LINKED_SPAN, LINKED_TRACE, METRIC_HIST, reportDir } from './fixture.js';
 import { exemplarRings, LINE_MIN_PX, lineRunPx, menuAt, watchProblems } from './metric-chart.js';
-import { expect, test } from './test.js';
+import { expect, HTTP, test } from './test.js';
 
 /** In the Explorer: query `a` charts the p99 of `METRIC_HIST` by `http.route`, exemplars on. */
 async function p99ByRoute(page: Page): Promise<void> {
@@ -22,49 +22,50 @@ async function p99ByRoute(page: Page): Promise<void> {
 /** The chart's legend lists one entry per series, which the chart's accessible name counts. */
 const p99Chart = (page: Page) => page.getByRole('img', { name: `${METRIC_HIST} · p99: 3 series` });
 
-test('g m opens the Explorer; p99 by http.route draws 3 series; an exemplar opens its trace', async ({
-  page,
-  reportUrl,
-}) => {
-  const problems = watchProblems(page);
-  await page.goto(`${reportUrl('linked')}/index.html#/traces`);
-  await expect(page.getByRole('grid', { name: 'Results' })).toBeVisible();
-  await page.keyboard.press('g');
-  await page.keyboard.press('m');
-  await expect(page).toHaveURL(/#\/metrics(\?|$)/);
-  await expect(page.getByRole('heading', { level: 1, name: 'Metrics', exact: true })).toBeVisible();
+test(
+  'g m opens the Explorer; p99 by http.route draws 3 series; an exemplar opens its trace',
+  HTTP,
+  async ({ page, reportUrl }) => {
+    const problems = watchProblems(page);
+    await page.goto(`${reportUrl('linked')}/index.html#/traces`);
+    await expect(page.getByRole('grid', { name: 'Results' })).toBeVisible();
+    await page.keyboard.press('g');
+    await page.keyboard.press('m');
+    await expect(page).toHaveURL(/#\/metrics(\?|$)/);
+    await expect(page.getByRole('heading', { level: 1, name: 'Metrics', exact: true })).toBeVisible();
 
-  await p99ByRoute(page);
-  const chart = p99Chart(page);
-  await expect(chart).toBeVisible();
-  await expect.poll(() => lineRunPx(chart)).toBeGreaterThan(LINE_MIN_PX);
-  const json = await page.evaluate(() => decodeURIComponent(location.hash));
-  expect(json).toContain('"show":"p99"');
-  expect(json).toContain('"by":["attributes[\\"http.route\\"]"]');
+    await p99ByRoute(page);
+    const chart = p99Chart(page);
+    await expect(chart).toBeVisible();
+    await expect.poll(() => lineRunPx(chart)).toBeGreaterThan(LINE_MIN_PX);
+    const json = await page.evaluate(() => decodeURIComponent(location.hash));
+    expect(json).toContain('"show":"p99"');
+    expect(json).toContain('"by":["attributes[\\"http.route\\"]"]');
 
-  // Two exemplars in the run: one on LINKED_TRACE, one on a trace the report lacks.
-  const rings = await exemplarRings(chart, { legend: true });
-  expect(rings).toHaveLength(2);
-  const menus: string[][] = [];
-  for (const ring of rings) {
-    menus.push(await menuAt(page, chart, ring));
-    await page.keyboard.press('Escape');
-    await expect(page.getByRole('menu')).toHaveCount(0);
-  }
-  expect(menus.map((m) => m[0]).sort()).toEqual(['Open exemplar trace', 'trace not in this report']);
-  const linked = rings[menus.findIndex((m) => m[0] === 'Open exemplar trace')];
-  if (linked === undefined) throw new Error('no ring opens a trace');
-  await menuAt(page, chart, linked);
-  await page.getByRole('menuitem', { name: 'Open exemplar trace' }).click();
-  await expect(page).toHaveURL(new RegExp(`#/traces\\?.*trace=${LINKED_TRACE}`));
-  await expect(page).toHaveURL(new RegExp(`span=${LINKED_SPAN}`));
-  await expect(page.getByTestId('trace-panel').getByTestId('trace-header')).toContainText(LINKED_TRACE);
+    // Two exemplars in the run: one on LINKED_TRACE, one on a trace the report lacks.
+    const rings = await exemplarRings(chart, { legend: true });
+    expect(rings).toHaveLength(2);
+    const menus: string[][] = [];
+    for (const ring of rings) {
+      menus.push(await menuAt(page, chart, ring));
+      await page.keyboard.press('Escape');
+      await expect(page.getByRole('menu')).toHaveCount(0);
+    }
+    expect(menus.map((m) => m[0]).sort()).toEqual(['Open exemplar trace', 'trace not in this report']);
+    const linked = rings[menus.findIndex((m) => m[0] === 'Open exemplar trace')];
+    if (linked === undefined) throw new Error('no ring opens a trace');
+    await menuAt(page, chart, linked);
+    await page.getByRole('menuitem', { name: 'Open exemplar trace' }).click();
+    await expect(page).toHaveURL(new RegExp(`#/traces\\?.*trace=${LINKED_TRACE}`));
+    await expect(page).toHaveURL(new RegExp(`span=${LINKED_SPAN}`));
+    await expect(page.getByTestId('trace-panel').getByTestId('trace-header')).toContainText(LINKED_TRACE);
 
-  // Back returns to the chart as it was.
-  await page.goBack();
-  await expect(p99Chart(page)).toBeVisible();
-  expect(problems).toEqual([]);
-});
+    // Back returns to the chart as it was.
+    await page.goBack();
+    await expect(p99Chart(page)).toBeVisible();
+    expect(problems).toEqual([]);
+  },
+);
 
 test('"Logs in this window" opens the Logs Explorer with t set to the clicked bucket', async ({
   page,

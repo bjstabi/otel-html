@@ -2,7 +2,7 @@ import { resolve } from 'node:path';
 import type { Page } from '@playwright/test';
 import { LOAD_REPORT_ENV, perfFactor } from './fixture.js';
 import { serve } from './static-server.js';
-import { expect, test } from './test.js';
+import { expect, HTTP, test } from './test.js';
 
 /**
  * The viewer on a report the receiver load test wrote (`scripts/load-receiver.ts`): both landings must be interactive.
@@ -63,19 +63,21 @@ test.describe('report written by the receiver load test', () => {
     await served?.close();
   });
 
+  // Tagged HTTP so the load workflow's `--project chromium-http` lists them.
   for (const landing of ['traces', 'logs'] as const) {
-    test(`the ${landing} landing is interactive within 3 s (median)`, async ({
-      page,
-      browserName,
-    }, testInfo) => {
-      if (served === undefined) throw new Error('the report server is not running');
-      const factor = perfFactor();
-      const samples = await landingMs(page, `http://127.0.0.1:${served.port}/index.html#/${landing}`);
-      const ms = median(samples);
-      const line = `PERF load ${landing} landing ${testInfo.project.name} (${browserName}): median ${ms.toFixed(0)} ms, samples [${samples.map((x) => x.toFixed(0)).join(', ')}] (budget ${INTERACTIVE_BUDGET_MS * factor}), factor ${factor}`;
-      process.stdout.write(`${line}\n`);
-      testInfo.annotations.push({ type: 'perf', description: line });
-      expect(ms).toBeLessThan(INTERACTIVE_BUDGET_MS * factor);
-    });
+    test(
+      `the ${landing} landing is interactive within 3 s (median)`,
+      HTTP,
+      async ({ page, browserName }, testInfo) => {
+        if (served === undefined) throw new Error('the report server is not running');
+        const factor = perfFactor();
+        const samples = await landingMs(page, `http://127.0.0.1:${served.port}/index.html#/${landing}`);
+        const ms = median(samples);
+        const line = `PERF load ${landing} landing ${testInfo.project.name} (${browserName}): median ${ms.toFixed(0)} ms, samples [${samples.map((x) => x.toFixed(0)).join(', ')}] (budget ${INTERACTIVE_BUDGET_MS * factor}), factor ${factor}`;
+        process.stdout.write(`${line}\n`);
+        testInfo.annotations.push({ type: 'perf', description: line });
+        expect(ms).toBeLessThan(INTERACTIVE_BUDGET_MS * factor);
+      },
+    );
   }
 });
