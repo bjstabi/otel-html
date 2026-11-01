@@ -8,6 +8,10 @@ lefthook = "2.2.2"
 actionlint = "1.7.12"
 shellcheck = "0.11.0"
 
+[settings]
+# Freshness by content, not mtime: a checkout or a cache restore rewrites every timestamp.
+task.source_freshness_hash_contents = true
+
 [tasks.setup]
 run = ["pnpm install --frozen-lockfile", "lefthook install"]
 
@@ -70,14 +74,29 @@ depends = ["lint", "typecheck", "test:unit:main", "knip"]
 run = { task = "test:unit:perf" }
 
 [tasks."build:lib"]
+description = "Build the library and CLI into dist/ (skipped while up to date)"
+sources = ["src/**", "!src/viewer/**", "tsdown.config.ts", "package.json", "pnpm-lock.yaml"]
+outputs = ["dist/cli/**", "dist/index.js", "dist/index.d.ts", "dist/receiver-*.js"]
 run = "pnpm exec tsdown"
 
 [tasks."build:viewer"]
+description = "Build the viewer into dist/viewer (skipped while up to date)"
+# The lib build cleans dist/, so the viewer builds after it; mise re-runs this task whenever build:lib ran.
+depends = ["build:lib"]
+sources = ["src/viewer/**", "src/model/**", "src/format/**", "src/semconv/**", "src/rollups/**", "src/ottl/**", "src/query/**", "src/dashboards/**", "vite.config.ts", "tsconfig.viewer.json", "package.json", "pnpm-lock.yaml"]
+outputs = ["dist/viewer/**"]
 run = "pnpm exec vite build"
 
-# The lib build cleans dist/, so it runs first; the viewer build then adds dist/viewer/.
 [tasks.build]
-run = [{ task = "build:lib" }, { task = "build:viewer" }]
+description = "Build the library, then the viewer, into dist/"
+depends = ["build:viewer"]
+
+[tasks."e2e:fixtures"]
+description = "Build the e2e fixture reports into e2e/.reports/ (skipped while up to date; --force rebuilds)"
+depends = ["build"]
+sources = ["dist/**", "!dist/bin/**", "!dist/load-receiver/**", "e2e/build-fixtures.ts", "e2e/fixture.ts", "test-support/scale-logs.ts", "test-support/scale-metrics.ts", "test-support/otlp-builders.ts", "test-support/fixture-ids.ts", "fixtures/**"]
+outputs = ["e2e/.reports/**"]
+run = "bun e2e/build-fixtures.ts"
 
 [tasks."test:e2e"]
 shell = "bash -c"
