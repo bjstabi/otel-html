@@ -31,7 +31,7 @@ task.cache_dir = ".mise/task-cache"
 # tools read, so an edit to any such file re-runs them and an edit to README.md or docs/ does not. The build tasks keep
 # src-only lists (a test edit must not rebuild dist/ and every fixture report).
 [task_config.input_groups]
-deps = ["mise.toml", "package.json", "pnpm-lock.yaml"]
+deps = ["mise.toml", "package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", ".npmrc"]
 node = ["src/**", "test/**", "test-support/**", "tsconfig.json", "tsconfig.base.json", "vitest.config.ts"]
 viewer = ["src/viewer/**", "src/model/**", "src/format/**", "src/semconv/**", "src/rollups/**", "src/ottl/**", "src/query/**", "src/dashboards/**", "test/viewer/**", "test-support/**", "tsconfig.viewer.json", "vite.config.ts"]
 e2e = ["e2e/*.ts", "e2e/[!.]*/**", "fixtures/**", "playwright.config.ts", "tsconfig.e2e.json"]
@@ -200,12 +200,13 @@ report of 200 metrics x 1,000 series in which only the charted metric has the fu
 under a minute on CI; about 150 MB in e2e/.metrics-scale/), and fails if the Explorer or Catalog loads another metric's
 points. The @perf budgets scale by OTEL_HTML_PERF_FACTOR and, when OTEL_HTML_PERF_REFERENCE_MS is set (CI: 100), by how
 much slower than that reference a fixed CPU workload runs here (never below 1; the setup logs `PERF calibration: N ms`).
-A run whose inputs match a cached success is replayed; `--force` or `MISE_TASK_CACHE=off` re-runs the browsers."""
+A run whose inputs match a cached success is replayed. `MISE_TASK_CACHE=off` re-runs the browsers, also through
+`test:e2e:chromium`; `--force` reaches only the task it is given to, so it works on `test:e2e` and not on the wrapper."""
 shell = "bash -c"
 depends = ["e2e:fixtures"]
 # The key also holds the task's args (--browser, specs after `--`) and the resolved tool versions. The workflow file is a
 # source because it names the Playwright image the browsers come from. OTEL_HTML_METRICS_SCALE changes which tests run.
-sources = ["@group:deps", "dist/**", "!dist/bin/**", "!dist/load-receiver/**", "@group:e2e", "test-support/**", ".github/workflows/ci.yml"]
+sources = ["@group:deps", "dist/**", "!dist/bin/**", "!dist/load-receiver/**", "@group:e2e", "test-support/**", "tsconfig.json", "tsconfig.base.json", ".github/workflows/ci.yml"]
 outputs = []
 cache = { enabled = true, env = ["CI", "OTEL_HTML_PERF_FACTOR", "OTEL_HTML_PERF_REFERENCE_MS", "OTEL_HTML_SKIP_BROWSER_INSTALL", "OTEL_HTML_METRICS_SCALE", "OTEL_HTML_LOAD_REPORT"], command_inputs = ["pnpm exec playwright --version"] }
 usage = '''

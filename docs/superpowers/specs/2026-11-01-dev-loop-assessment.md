@@ -220,6 +220,8 @@ each) and then replays; a change to anything a browser run reads runs the browse
 that needs project-level `mise run --affected`, which pays once the repository has workspace packages (P16), and
 until then would mean either a script of our own re-implementing mise's input matching or a GitHub-only path rule.
 Both were considered and dropped: the rule would live in one place only, and mise already owns the question.
+An e2e replay does not re-measure the @perf budgets, though `test:unit:perf` is never cached: identical inputs
+already met them once, and the unit perf pass still runs on every push.
 
 **P7. Affected unit tests for free:** `test:unit:changed` = `vitest run --changed <ref>` runs the test files whose
 import graph reaches a changed file (measured: 22 files, 3.4 s for a 3-file change). `mise watch check` once
