@@ -77,6 +77,8 @@ description = "vitest, everything but @perf, in parallel"
 sources = ["@group:deps", "@group:node", "@group:viewer", "scripts/**", "fixtures/**", "schema/**", "e2e/fixture.ts", ".github/actions/**", ".github/otel-html-ci.yaml"]
 outputs = []
 cache = { enabled = true, env = ["CI", "OTEL_HTML_LOAD", "OTEL_HTML_BINARY"] }
+# Pinned: an inherited OTEL_HTML_PERF_PASS=1 would select only @perf and cache that as this pass.
+env = { OTEL_HTML_PERF_PASS = "0" }
 run = "pnpm exec vitest run"
 
 # Env vars go in `env`, not a `VAR=1 cmd` prefix: Windows cmd (the unit-os CI job) can't run that.
