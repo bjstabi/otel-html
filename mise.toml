@@ -100,7 +100,7 @@ run = "bun e2e/build-fixtures.ts"
 
 [tasks."test:e2e"]
 shell = "bash -c"
-depends = ["build"]
+depends = ["e2e:fixtures"]
 usage = 'arg "[args]" var=#true'
 # Timing-sensitive specs (@perf) run alone afterwards, one worker, so parallel browsers do not steal their CPU.
 # Budgets scale with OTEL_HTML_PERF_FACTOR on slow machines; they are never edited.
@@ -136,7 +136,7 @@ run = ["pnpm exec publint", "pnpm exec attw --pack --profile esm-only"]
 # Extra playwright args (`mise run test:e2e:chromium -- e2e/metrics-explorer.spec.ts`) are passed to both passes.
 [tasks."test:e2e:chromium"]
 shell = "bash -c"
-depends = ["build"]
+depends = ["e2e:fixtures"]
 usage = 'arg "[args]" var=#true'
 run = """
 eval "set -- $usage_args"

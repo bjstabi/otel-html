@@ -1,8 +1,10 @@
+import { stat } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { calibrationMs, cpuModel } from '../test-support/calibrate.js';
 import {
   FIXTURE_REPORTS,
   httpSubpath,
+  LOAD_REPORT_ENV,
   PERF_CALIBRATION_ENV,
   PERF_REFERENCE_ENV,
   PORT_ENV,
@@ -20,6 +22,20 @@ function calibrate(): void {
   process.stdout.write(
     `PERF calibration: ${ms.toFixed(1)} ms on ${cpuModel()}${reference ? ` (reference ${reference} ms, runner factor ${runnerFactor().toFixed(2)})` : ''}\n`,
   );
+}
+
+/** Throws naming the first mounted report (metrics-scale is built on demand) that `mise run e2e:fixtures` has not built. */
+async function assertReportsBuilt(mounted: readonly ReportName[]): Promise<void> {
+  for (const name of mounted) {
+    if (name === 'metrics-scale') continue;
+    // `no-manifest` is a copy of `main` without its manifest, by design.
+    const probe = name === 'no-manifest' ? 'index.html' : 'data/manifest.js';
+    try {
+      await stat(new URL(probe, reportDir(name)));
+    } catch {
+      throw new Error(`the e2e fixture reports are missing: run \`mise run e2e:fixtures\` (${name})`);
+    }
+  }
 }
 
 export default async function globalSetup(): Promise<() => Promise<void>> {
@@ -42,6 +58,8 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     'metrics-scale',
     ...FIXTURE_REPORTS,
   ];
+  // The load spec serves its own report (`dist/load-receiver`) and runs without the fixture reports built.
+  if (process.env[LOAD_REPORT_ENV] === undefined) await assertReportsBuilt(mounted);
   const server = await serve(
     mounted.map((name) => ({ prefix: httpSubpath(name), root: dir(reportDir(name)) })),
   );

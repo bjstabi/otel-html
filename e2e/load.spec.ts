@@ -1,6 +1,6 @@
 import { resolve } from 'node:path';
 import type { Page } from '@playwright/test';
-import { perfFactor } from './fixture.js';
+import { LOAD_REPORT_ENV, perfFactor } from './fixture.js';
 import { serve } from './static-server.js';
 import { expect, test } from './test.js';
 
@@ -8,8 +8,7 @@ import { expect, test } from './test.js';
  * The viewer on a report the receiver load test wrote (`scripts/load-receiver.ts`): both landings must be interactive.
  * Skipped unless OTEL_HTML_LOAD_REPORT names the report folder, which this spec serves itself.
  */
-const REPORT_ENV = 'OTEL_HTML_LOAD_REPORT';
-const reportRoot = process.env[REPORT_ENV];
+const reportRoot = process.env[LOAD_REPORT_ENV];
 const INTERACTIVE_BUDGET_MS = 3000;
 /** Timed loads after one untimed warm-up load; the median is compared with the budget. */
 const LOAD_SAMPLES = 3;
@@ -54,7 +53,7 @@ function median(xs: readonly number[]): number {
 }
 
 test.describe('report written by the receiver load test', () => {
-  test.skip(reportRoot === undefined, `${REPORT_ENV} is not set`);
+  test.skip(reportRoot === undefined, `${LOAD_REPORT_ENV} is not set`);
   let served: { port: number; close(): Promise<void> } | undefined;
 
   test.beforeAll(async () => {

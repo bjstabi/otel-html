@@ -66,6 +66,8 @@ const HOSTILE_SUBPATH = '/sub/hostile';
 export const HOSTILE_TRACE_ID = '2a2b2c2d2e2f30313233343536373839';
 export const HOSTILE_ROOT_SPAN = '1111111111111111';
 export const PORT_ENV = 'OTEL_HTML_E2E_PORT';
+/** Names the report folder `e2e/load.spec.ts` serves itself; global setup then skips the fixture-report check. */
+export const LOAD_REPORT_ENV = 'OTEL_HTML_LOAD_REPORT';
 
 /** Reports built from the committed SDK fixtures (`fixtures/<name>.otlp.json`) and served beside the main one. */
 export const FIXTURE_REPORTS = ['small', 'orphans', 'logs-only', 'empty', 'linked', 'sample'] as const;
