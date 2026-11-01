@@ -7,6 +7,7 @@ pnpm = "12.15.0"
 lefthook = "2.2.2"
 actionlint = "1.7.12"
 shellcheck = "0.11.0"
+watchexec = "2.8.0"
 
 [settings]
 # The task artifact cache (`cache = { ... }` on lint, typecheck, knip and test:unit:main).
@@ -120,7 +121,7 @@ description = """protobuf-es, the config schema and the OTTL grammar
 # The two scripts import src/config (schema.ts and what it pulls in) and read src/ottl/ottl.grammar.
 sources = ["@group:deps", "proto/**", "buf.gen.yaml", "scripts/gen-schema.ts", "scripts/gen-ottl.ts", "src/**", "!src/viewer/**", "!src/model/gen/**", "!src/ottl/*.gen.ts", "!src/ottl/*.gen.terms.ts"]
 outputs = ["src/model/gen/**", "src/ottl/*.gen.ts", "src/ottl/*.gen.terms.ts", "schema/**"]
-run = ["pnpm exec buf generate", "bun scripts/gen-schema.ts", "bun scripts/gen-ottl.ts"]
+run = ["pnpm exec buf generate", "bun scripts/gen-schema.ts", "bun scripts/gen-ottl.ts", "mise generate task-docs --inject --output README.md"]
 
 [tasks."gen:check"]
 description = "Regenerate with --force and fail if git sees a difference (never cached)"
@@ -136,6 +137,16 @@ set (CI sets 100), so does how much slower than that reference a fixed CPU workl
 pass logs one `PERF calibration:` line)."""
 depends = ["lint", "typecheck", "test:unit:main", "knip"]
 run = { task = "test:unit:perf" }
+
+[tasks.verify]
+description = "Before a push or a PR: check, then the Chromium e2e suite"
+depends = ["check"]
+run = { task = "test:e2e:chromium" }
+
+[tasks."test:unit:changed"]
+description = "Unit tests whose import graph reaches a file changed since <ref> (default main)"
+usage = 'arg "[ref]" default="main"'
+run = "pnpm exec vitest run --changed $usage_ref"
 
 [tasks."build:lib"]
 description = "Build the library and CLI into dist/ (skipped while up to date)"

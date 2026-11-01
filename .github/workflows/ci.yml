@@ -19,8 +19,8 @@ permissions:
   actions: read
 
 env:
-  # `claude` in mise.toml is a developer tool; CI never needs it.
-  MISE_DISABLE_TOOLS: claude
+  # `claude` and `watchexec` (`mise watch`) are developer tools; CI never needs them.
+  MISE_DISABLE_TOOLS: claude,watchexec
 
 jobs:
   check:
