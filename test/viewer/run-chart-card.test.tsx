@@ -12,6 +12,7 @@ import { SVGRenderer } from 'echarts/renderers';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { RunControls } from '../../src/dashboards/schema.js';
 import type { RunLine, RunQueryResult } from '../../src/viewer/data/metric-run-query.js';
+import { ColorsProvider, useColorAssigner } from '../../src/viewer/theme/colors-context.js';
 
 use([
   LineChart,
@@ -172,6 +173,13 @@ function props(over: Partial<RunChartCardProps> = {}): RunChartCardProps {
     notes: [],
     ...over,
   };
+}
+
+/** Stands in for widgets that take every shared color before a run chart renders. */
+function UseUpShared(): null {
+  const shared = useColorAssigner();
+  for (let i = 0; i < 8; i++) shared.colorFor(`step ${i}`);
+  return null;
 }
 
 const toggle = (name: string): HTMLElement => screen.getByRole('button', { name });
@@ -500,6 +508,36 @@ describe('RunChartCard legend', () => {
     fireEvent.click(row(/^slow/));
     expect(lastFull().yAxis?.[0]?.max).toBe(40);
     expect(colorOf('line:fast')).toBe(before);
+  });
+
+  test('other widgets using up the shared colors leave the lines colored, and the same on every run chart', () => {
+    const root = document.documentElement.style;
+    for (let i = 1; i <= 7; i++) root.setProperty(`--oh-series-${i}`, `#00000${i}`);
+    root.setProperty('--oh-series-other', '#999999');
+    const colorOf = (id: string): string | undefined =>
+      lastFull().series?.find((s) => s.id === id)?.lineStyle?.color;
+    try {
+      const { rerender } = render(
+        <ColorsProvider>
+          <UseUpShared />
+          <RunChartCard {...props()} />
+        </ColorsProvider>,
+      );
+      const first = colorOf('line:fast');
+      expect(first).toMatch(/^#00000[1-7]$/);
+      expect(colorOf('line:slow')).toMatch(/^#00000[1-7]$/);
+      expect(colorOf('line:slow')).not.toBe(first);
+      rerender(
+        <ColorsProvider>
+          <UseUpShared />
+          <RunChartCard {...props({ title: 'Another run chart' })} />
+        </ColorsProvider>,
+      );
+      expect(colorOf('line:fast')).toBe(first);
+    } finally {
+      for (let i = 1; i <= 7; i++) root.removeProperty(`--oh-series-${i}`);
+      root.removeProperty('--oh-series-other');
+    }
   });
 
   test('a line hidden and then gone from the result does not leave the chart empty', () => {

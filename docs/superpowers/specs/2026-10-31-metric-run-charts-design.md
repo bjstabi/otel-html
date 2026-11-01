@@ -191,8 +191,9 @@ keep this case (§10).
 
 ### Color
 
-Colors are keyed on the line's label through the existing `ColorAssigner`, not on `resourceService`, because every
-job shares service `ci`. A line keeps its color through zooming and hiding. Lines past the seventh use
+Colors are keyed on the line's label through a `ColorAssigner` of their own, not on `resourceService`, because every
+job shares service `ci`. They don't use the shell's shared assigner, because other widgets' services and facet values
+would use up its seven colors first and leave every line gray. A job has the same color on every run chart. A line keeps its color through zooming and hiding. Lines past the seventh use
 `--oh-series-other`, and each further line in that color gets a different dash so the lines stay distinct.
 
 ### Legend
