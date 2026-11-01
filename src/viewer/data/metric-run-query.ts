@@ -86,8 +86,8 @@ export async function runMetricRunQuery(
     const target = targetOf(m.entry, s);
     if (where !== null && !s.def.other && !where(target)) continue;
     const g = s.def.other ? null : runOf.groupOf(target);
-    // `key` tags a missing value as nil; an empty string is as little of a run id.
-    const id = g === null || g.key.includes('"nil"') ? '' : (g.shown[0] ?? '');
+    // An empty string is as little of a run id as a missing value.
+    const id = g === null || g.missing ? '' : (g.shown[0] ?? '');
     if (id === '') {
       leftOut++;
       continue;

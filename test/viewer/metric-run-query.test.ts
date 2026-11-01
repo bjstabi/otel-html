@@ -220,6 +220,16 @@ describe('runMetricRunQuery', () => {
     expect(r.runs).toHaveLength(3);
   });
 
+  test.each(['nil', '"nil"', '["nil"]', 'vanilla'])(
+    'a run id of %s is a run, not a missing one',
+    async (run) => {
+      const specs: Spec[] = [{ run, buckets: [[1, obs(10)]] }];
+      const r = await runMetricRunQuery(metric(specs), query(), opts);
+      expect(r.runs.map((x) => x.id)).toEqual([run]);
+      expect(r.leftOut).toBe(0);
+    },
+  );
+
   test('a folded other series counts as left out', async () => {
     const specs: Spec[] = [...THREE_RUNS, { other: true, buckets: [[5, obs(99)]] }];
     const r = await runMetricRunQuery(metric(specs), query(), opts);

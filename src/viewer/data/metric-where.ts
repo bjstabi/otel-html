@@ -44,6 +44,8 @@ export interface SeriesGroup {
   key: string;
   /** The values as displayed, in `by` order. */
   shown: string[];
+  /** Whether a `by` path has no value here, which `shown` can't tell from a value displayed the same way. */
+  missing: boolean;
 }
 
 const EMPTY_RESOURCE: ResourceRecord = { attributes: new Map(), droppedAttributesCount: 0, schemaUrl: '' };
@@ -111,6 +113,7 @@ export function compileSelector(where: string | null, by: readonly string[]): Se
           compiled.map((b, i) => [b.src, t === null ? OTHER_VALUE : typed(values[i] ?? null)]),
         ),
         shown: values.map((v) => (t === null ? 'other' : display(v))),
+        missing: values.some((v) => (v ?? null) === null),
       };
     },
     readsIdentity: identity || compiled.some((b) => b.identity),
