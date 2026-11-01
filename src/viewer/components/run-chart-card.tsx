@@ -217,13 +217,12 @@ export function RunChartCard(props: RunChartCardProps): JSX.Element {
 
   // A rebuild makes new series models over the same elements, and ECharts only leaves a blur a model remembers, so a
   // blur still on when it happens never clears. A cleanup, because cleanups all run before `Chart`'s `setOption`.
-  const hovering = useRef(false);
+  // Gated on the pointer being over the body, because a line blurs with no ECharts event for the card to see.
+  const pointerInBody = useRef(false);
   // biome-ignore lint/correctness/useExhaustiveDependencies: each new option is a rebuild
   useEffect(
     () => () => {
-      if (!hovering.current) return;
-      hovering.current = false;
-      chart.current?.dispatchAction({ type: 'downplay' });
+      if (pointerInBody.current) chart.current?.dispatchAction({ type: 'downplay' });
     },
     [option],
   );
@@ -246,7 +245,6 @@ export function RunChartCard(props: RunChartCardProps): JSX.Element {
       chart.current?.setOption({ series: Array.from({ length: plots }, (_, n) => guideSeries(n, x)) });
     };
     const leaveDot = (): void => {
-      hovering.current = false;
       setHoveredRun(null);
       drawGuide(live.current.guide.x);
     };
@@ -268,7 +266,6 @@ export function RunChartCard(props: RunChartCardProps): JSX.Element {
         const { value, data } = e as DotEvent;
         const x = Array.isArray(value) ? Number(value[0]) : Number.NaN;
         if (data?.meta === undefined || Number.isNaN(x)) return;
-        hovering.current = true;
         setHoveredRun(data.meta.run.id);
         drawGuide(x);
       },
@@ -288,7 +285,6 @@ export function RunChartCard(props: RunChartCardProps): JSX.Element {
     setHiddenKeys(next);
   };
   const hoverLine = (key: string, on: boolean): void => {
-    hovering.current = on;
     chart.current?.dispatchAction({ type: on ? 'highlight' : 'downplay', seriesId: `line:${key}` });
   };
 
@@ -372,7 +368,17 @@ export function RunChartCard(props: RunChartCardProps): JSX.Element {
           </ul>
         </div>
       )}
-      <div ref={bodyRef} className="mt-1 min-h-0 flex-1">
+      {/* biome-ignore lint/a11y/noStaticElementInteractions: only notes where the pointer is, and nothing acts on it */}
+      <div
+        ref={bodyRef}
+        className="mt-1 min-h-0 flex-1"
+        onMouseEnter={() => {
+          pointerInBody.current = true;
+        }}
+        onMouseLeave={() => {
+          pointerInBody.current = false;
+        }}
+      >
         {empty ? (
           <>
             <p className="text-sm font-semibold">No data points in this window</p>

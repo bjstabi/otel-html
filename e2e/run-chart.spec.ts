@@ -37,8 +37,8 @@ const toggle = (page: Page, name: string): Locator => card(page).getByRole('butt
 const tooltipOf = (host: Locator): Locator => host.locator('> div:not(:has(canvas))');
 
 /**
- * Waits out the dashboard grid's first width change. The chart re-lays out through it, so a dot read too early is
- * where no dot is by the time the mouse gets there.
+ * Waits for the chart's box and plots to hold still. Just after opening its width was seen to shrink (686 or 720 px to
+ * 666 px), which moved the dots after they were read; what drives that wasn't traced.
  */
 async function layoutSettled(page: Page, host: Locator): Promise<void> {
   const layout = async (): Promise<string> => {
@@ -286,6 +286,29 @@ test.describe('a rebuild during a hover on one plot leaves no line dim', () => {
       await expect.poll(() => alphaOfLint(host)).toBeLessThan(OPAQUE);
       await rebuild(page, host, dot);
       await page.mouse.move(dot.x + 15, dot.y - 40);
+      await page.mouse.move(1, 1);
+      await expect.poll(() => alphaOfLint(host)).toBe(OPAQUE);
+    });
+  }
+
+  // The outlier's steep first segment has no other line near it, and a line blurs with no ECharts `mouseover`.
+  for (const from of ['directly', 'from a dot']) {
+    test(`a keyboard toggle while hovering a line, ${from}`, async ({ page, reportUrl }) => {
+      const host = await open(page, reportUrl);
+      await toggle(page, 'Split').click();
+      await expect.poll(async () => (await readRunChart(host)).grids.length).toBe(1);
+      await toggle(page, 'Slider').focus();
+      const start = await runDot(host, RUN_CHART_OUTLIER_JOB, 0);
+      const end = await runDot(host, RUN_CHART_OUTLIER_JOB, 1);
+      if (from === 'from a dot') {
+        await page.mouse.move(start.x, start.y);
+        await expect(tooltipOf(host)).toBeVisible();
+      }
+      await page.mouse.move((start.x + end.x) / 2, (start.y + end.y) / 2);
+      await expect(tooltipOf(host)).toBeHidden();
+      await expect.poll(() => alphaOfLint(host)).toBeLessThan(OPAQUE);
+      await page.keyboard.press('Enter');
+      await expect(toggle(page, 'Slider')).toHaveAttribute('aria-pressed', 'false');
       await page.mouse.move(1, 1);
       await expect.poll(() => alphaOfLint(host)).toBe(OPAQUE);
     });

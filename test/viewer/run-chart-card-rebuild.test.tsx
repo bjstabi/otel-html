@@ -48,7 +48,7 @@ afterEach(() => {
 const controls = { slider: true, evenSpacing: true, split: false, legend: true };
 
 // ECharts only leaves a blur its current series models remember, and a rebuild replaces them.
-test('a rebuild during a hover leaves it before the new option goes in, and otherwise adds nothing', () => {
+test('a rebuild with the pointer over the body leaves any hover before the new option goes in, and otherwise adds nothing', () => {
   const props = {
     title: 't',
     subtitle: '',
@@ -78,4 +78,16 @@ test('a rebuild during a hover leaves it before the new option goes in, and othe
   fireEvent.mouseEnter(screen.getByRole('button', { name: /^k/ }));
   rerender(<RunChartCard {...props} controls={controls} />);
   expect(order).toEqual(['highlight', 'downplay', 'setOption']);
+
+  // Over the chart a line can be blurred with no event to the card.
+  fireEvent.mouseLeave(screen.getByRole('button', { name: /^k/ }));
+  order.length = 0;
+  fireEvent.mouseEnter(screen.getByRole('img'));
+  rerender(<RunChartCard {...props} controls={{ ...controls, slider: false }} />);
+  expect(order).toEqual(['downplay', 'setOption']);
+
+  order.length = 0;
+  fireEvent.mouseLeave(screen.getByRole('img'));
+  rerender(<RunChartCard {...props} controls={controls} />);
+  expect(order).toEqual(['setOption']);
 });
