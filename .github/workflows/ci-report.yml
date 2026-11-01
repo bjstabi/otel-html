@@ -67,13 +67,19 @@ jobs:
       - uses: ./.github/actions/setup
       # Report.create serves the viewer from dist/, which a fresh checkout does not have.
       - run: mise run build
+      # A branch from before the repo had its own config has no such file to read: no output, so the action's default.
+      - id: config
+        run: |
+          if [ -f .github/otel-html-ci.yaml ]; then
+            echo "config=.github/otel-html-ci.yaml" >> "$GITHUB_OUTPUT"
+          fi
       # Builds the run report, pushes it to gh-pages and links it; the `deploy` job below ships the site.
       - id: publish
         uses: ./.github/actions/otel-html-publish
         with:
           command: node dist/cli/main.js
           run-id: ${{ inputs.run_id || github.event.workflow_run.id }}
-          config: .github/otel-html-ci.yaml
+          config: ${{ steps.config.outputs.config }}
           deploy: false
 
   # A closed or merged PR's folder (pr/<number>/) and index entry leave the site.
