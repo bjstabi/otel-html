@@ -1,3 +1,5 @@
+#:schema https://mise.jdx.dev/schema/mise.json
+
 [tools]
 node = "24.22.1"
 bun = "1.4.4"
@@ -5,7 +7,6 @@ pnpm = "12.15.0"
 lefthook = "2.2.2"
 actionlint = "1.7.12"
 shellcheck = "0.11.0"
-claude = "latest"
 
 [tasks.setup]
 run = "pnpm install --frozen-lockfile && lefthook install"
@@ -143,7 +144,7 @@ bun scripts/bench-metrics.ts "$@"
 [tasks.fixtures]
 run = "bun scripts/fixtures.ts"
 
-# Converts the `small`, `linked-*` and `metrics` fixtures into one report with the fixture dashboard config and opens it in the browser (on the Checkout dashboard). Interactive only: refuses to run in CI.
+# Converts the `small`, `linked-*` and `metrics` fixtures into one report with the fixture dashboard config and opens it in the browser (on the Checkout dashboard). In code-server, serves it through the port proxy instead, until Ctrl-C. Interactive only: refuses to run in CI.
 [tasks.demo]
 shell = "bash -c"
 depends = ["build"]
@@ -152,5 +153,6 @@ if [ -n "$CI" ]; then echo 'demo opens a browser and does not run in CI' >&2; ex
 out="${TMPDIR:-/tmp}/otel-html-demo"
 rm -rf "$out"
 node dist/cli/main.js convert fixtures/small.otlp.json fixtures/linked-traces.otlp.json fixtures/linked-logs.otlp.json fixtures/metrics.otlp.json --out "$out" --title 'otel-html demo' --config fixtures/dashboards.otel-html.yaml
+if [ -n "$VSCODE_PROXY_URI" ]; then exec bun scripts/demo-serve.ts "$out"; fi
 if command -v open >/dev/null 2>&1; then open "$out/index.html"; else xdg-open "$out/index.html"; fi
 """

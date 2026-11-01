@@ -573,7 +573,7 @@ Tasks are defined in `mise.toml`; CI runs the same ones. The Linux binaries (`li
 | `mise run build:binaries` | Compile standalone binaries into `dist/bin/` (after `build`). |
 | `mise run fixtures` | Regenerate `fixtures/*.otlp.json` with the OpenTelemetry SDK. |
 | `mise run bench:metrics` | Time the metrics writer on 2.4M points (200 metrics × 1,000 series × 12 collections) through the library API under bun, and hash the report it writes. `-- --runs 3` takes the median of three; `-- --keep` leaves the last report in a temp folder. The reference figures are in [#35](https://github.com/bjstabi/otel-html/issues/35). |
-| `mise run demo` | Convert the `small`, `linked-*` and `metrics` fixtures (traces, logs and metrics) with `fixtures/dashboards.otel-html.yaml` and open the report in a browser, on the Checkout dashboard. Not for CI. |
+| `mise run demo` | Convert the `small`, `linked-*` and `metrics` fixtures (traces, logs and metrics) with `fixtures/dashboards.otel-html.yaml` and open the report in a browser, on the Checkout dashboard (in code-server, served through its port proxy until Ctrl-C). Not for CI. |
 
 Other tasks: `lint`, `format`, `typecheck`, `test:unit`, `knip`, `gen`, `gen:check`, `check:package`, `test:e2e:chromium`.
 
