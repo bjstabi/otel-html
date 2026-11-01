@@ -13,6 +13,8 @@
       "!node_modules",
       "!dist",
       "!e2e/.reports",
+      "!e2e/.metrics-scale",
+      "!e2e/.metrics-scale.tmp-*",
       "!.otel-html",
       "!e2e/.cache",
       "!test-results",

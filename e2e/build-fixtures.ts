@@ -20,6 +20,7 @@ import {
   LARGE_REPORT_DIR,
   LARGE_SPAN_COUNT,
   LARGE_TRACE_ID,
+  METRICS_SCALE_DIR,
   REPORT_DIR,
   REPORTS_DIR,
   RUN_CHART_FAILED_JOB,
@@ -538,6 +539,8 @@ async function buildUnfinishedReport(): Promise<void> {
 }
 
 await rm(REPORTS_DIR, { recursive: true, force: true });
+// The on-demand metrics scale report is built from `dist`, which a rebuild of the fixtures may have changed.
+await rm(METRICS_SCALE_DIR, { recursive: true, force: true });
 await Promise.all([
   buildReport(),
   buildLargeReport(),

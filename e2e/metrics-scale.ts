@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { Report } from '../src/api/index.js';
 import { scaleMetrics } from '../test-support/scale-metrics.js';
 import {
-  REPORTS_DIR,
+  METRICS_SCALE_DIR,
   reportDir,
   SCALE_METRIC_POINTS,
   SCALE_METRIC_SERIES,
@@ -17,7 +17,7 @@ const FLUSH_EVERY = 6;
 /**
  * The metrics scale report (`fixture.ts`: 200 metrics × 1,000 series, 1 h at 10 s for the charted metric and the
  * first and last collection for the rest), written through the library API. It takes seconds, so it is written once
- * per run, into `REPORTS_DIR` (which the global setup clears), by the specs that need it.
+ * per run, into `METRICS_SCALE_DIR` (outside the `e2e:fixtures` outputs, which `build-fixtures.ts` clears with the rest), by the specs that need it.
  */
 export async function ensureMetricsScaleReport(): Promise<void> {
   const dir = reportDir('metrics-scale');
@@ -28,7 +28,7 @@ export async function ensureMetricsScaleReport(): Promise<void> {
   if (written) return;
   const started = Date.now();
   // Written aside and moved into place, so the folder exists only once the report is whole.
-  const tmp = new URL(`metrics-scale.tmp-${process.pid}/`, REPORTS_DIR);
+  const tmp = new URL(`../.metrics-scale.tmp-${process.pid}/`, METRICS_SCALE_DIR);
   await rm(tmp, { recursive: true, force: true });
   await mkdir(tmp, { recursive: true });
   const report = await Report.create({ out: fileURLToPath(tmp), title: 'metrics scale run' });

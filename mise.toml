@@ -48,7 +48,7 @@ run = "pnpm exec vitest run test/writer/metric-memory.test.ts test/writer/log-si
 # The receiver under load: 1M spans over gRPC, paced at 500 spans/s per worker (250 traces/s) so telemetrygen does not
 # drop them, and 1M logs over HTTP from telemetrygen (Docker, host networking: Linux only) into `otel-html serve`, then
 # the manifest totals, the rejected count and the peak RSS (serve's own high-water mark) are asserted. The report
-# stays in `dist/load-receiver` for `OTEL_HTML_LOAD_REPORT=dist/load-receiver pnpm exec playwright test e2e/load.spec.ts`.
+# stays in `dist/load-receiver` for `OTEL_HTML_LOAD_REPORT=dist/load-receiver pnpm exec playwright test e2e/load.spec.ts --project chromium-http --workers=1`.
 # Smaller runs: `mise run test:load:receiver -- --spans 20000 --logs 100000`.
 [tasks."test:load:receiver"]
 depends = ["build"]
@@ -94,7 +94,7 @@ depends = ["build:viewer"]
 [tasks."e2e:fixtures"]
 description = "Build the e2e fixture reports into e2e/.reports/ (skipped while up to date; --force rebuilds)"
 depends = ["build"]
-sources = ["dist/**", "!dist/bin/**", "!dist/load-receiver/**", "e2e/build-fixtures.ts", "e2e/fixture.ts", "test-support/scale-logs.ts", "test-support/scale-metrics.ts", "test-support/otlp-builders.ts", "test-support/fixture-ids.ts", "fixtures/**"]
+sources = ["dist/**", "!dist/bin/**", "!dist/load-receiver/**", "e2e/build-fixtures.ts", "e2e/fixture.ts", "e2e/metrics-scale.ts", "test-support/scale-logs.ts", "test-support/scale-metrics.ts", "test-support/otlp-builders.ts", "test-support/fixture-ids.ts", "fixtures/**"]
 outputs = ["e2e/.reports/**"]
 run = "bun e2e/build-fixtures.ts"
 
@@ -119,7 +119,7 @@ run = """
 eval "set -- $usage_args"
 rc=0
 [ -n "$OTEL_HTML_SKIP_BROWSER_INSTALL" ] || pnpm exec playwright install chromium firefox webkit
-pnpm exec playwright test "$@" --project "${usage_browser}-file" --project "${usage_browser}-http" || rc=1
+pnpm exec playwright test "$@" --project "${usage_browser}-file" --project "${usage_browser}-http" --grep-invert @perf || rc=1
 pnpm exec playwright test "$@" --project "${usage_browser}-perf-file" --workers=1 --pass-with-no-tests || rc=1
 exit $rc
 """
