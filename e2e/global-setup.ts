@@ -28,8 +28,17 @@ import {
   REPORT_DIR,
   REPORTS_DIR,
   type ReportName,
+  RUN_CHART_FAILED_JOB,
+  RUN_CHART_FAILED_RUN,
+  RUN_CHART_HOSTILE_JOB,
+  RUN_CHART_JOBS,
+  RUN_CHART_OUTLIER_JOB,
+  RUN_CHART_OUTLIER_S,
+  RUN_CHART_RUN_MINUTES,
+  RUN_CHART_T0_MS,
   RUN_TITLE,
   reportDir,
+  runChartRunId,
   runnerFactor,
   SCALE_LOG_FILES,
   SCALE_LOG_IDS,
@@ -220,6 +229,109 @@ async function buildDashboardReports(): Promise<void> {
       hostileConfig,
     ),
   ]);
+}
+
+/** One histogram point of `seconds` under its own resource per job per run, the shape `otel-html ci` writes. */
+function runChartMetric(
+  metric: string,
+  jobs: readonly string[],
+  seconds: (job: string, jobIndex: number, run: number) => number,
+): object[] {
+  return RUN_CHART_RUN_MINUTES.flatMap((minutes, run) =>
+    jobs.map((job, jobIndex) => {
+      const value = seconds(job, jobIndex, run);
+      const end = BigInt(RUN_CHART_T0_MS + minutes * 60_000) * 1_000_000n;
+      const result = job === RUN_CHART_FAILED_JOB && run === RUN_CHART_FAILED_RUN ? 'failure' : 'success';
+      return {
+        resource: {
+          attributes: [
+            str('service.name', 'ci'),
+            str('cicd.pipeline.run.id', runChartRunId(run)),
+            str('cicd.pipeline.task.name', job),
+            str('vcs.ref.head.revision', `abcdef${run}000000`),
+          ],
+        },
+        scopeMetrics: [
+          {
+            scope: { name: 'e2e-run-charts' },
+            metrics: [
+              {
+                name: metric,
+                unit: 's',
+                histogram: {
+                  aggregationTemporality: 1,
+                  dataPoints: [
+                    {
+                      startTimeUnixNano: String(end - BigInt(Math.round(value * 1e9))),
+                      timeUnixNano: String(end),
+                      count: '1',
+                      sum: value,
+                      min: value,
+                      max: value,
+                      bucketCounts: ['1'],
+                      explicitBounds: [],
+                      attributes: [
+                        str('cicd.pipeline.task.name', job),
+                        str('cicd.pipeline.task.run.result', result),
+                      ],
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        ],
+      };
+    }),
+  );
+}
+
+/** The `run-charts` report: a Job duration widget on default controls, and a job named in markup on its own dashboard. */
+async function buildRunChartReport(): Promise<void> {
+  const inputs = new URL('run-chart-inputs/', REPORTS_DIR);
+  await mkdir(inputs, { recursive: true });
+  const metrics = fileURLToPath(new URL('metrics.json', inputs));
+  const config = fileURLToPath(new URL('config.json', inputs));
+  const variables = [{ key: 'cicd.pipeline.run.id', label: 'run' }];
+  const widget = (metric: string): object => ({
+    type: 'metric',
+    title: 'Job duration',
+    x: 0,
+    y: 0,
+    w: 12,
+    h: 20,
+    runBy: 'resource.attributes["cicd.pipeline.run.id"]',
+    failedWhen: 'attributes["cicd.pipeline.task.run.result"] == "failure"',
+    queries: [{ id: 'a', metric, show: 'avg', by: ['attributes["cicd.pipeline.task.name"]'] }],
+  });
+  await writeFile(
+    metrics,
+    JSON.stringify({
+      resourceMetrics: [
+        ...runChartMetric('ci.job.duration', RUN_CHART_JOBS, (job, jobIndex, run) =>
+          job === RUN_CHART_OUTLIER_JOB && run === 0 ? RUN_CHART_OUTLIER_S : 40 + 25 * jobIndex + 7 * run,
+        ),
+        ...runChartMetric('ci.hostile.duration', [RUN_CHART_HOSTILE_JOB, 'plain'], (_, jobIndex, run) =>
+          jobIndex === 0 ? 60 + run : 200 + run,
+        ),
+      ],
+    }),
+  );
+  await writeFile(
+    config,
+    JSON.stringify({
+      dashboards: [
+        { id: 'runs', title: 'Runs', variables, widgets: [widget('ci.job.duration')] },
+        {
+          id: 'runs-hostile',
+          title: 'Hostile runs',
+          variables,
+          widgets: [{ ...widget('ci.hostile.duration'), controls: { split: false, legend: true } }],
+        },
+      ],
+    }),
+  );
+  await convertTo(reportDir('run-charts'), [metrics], 'run charts', undefined, config);
 }
 
 async function buildReport(): Promise<void> {
@@ -454,6 +566,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     buildMetricsMergeReports(),
     buildUnfinishedReport(),
     buildDashboardReports(),
+    buildRunChartReport(),
   ]);
   const dir = (u: URL): string => fileURLToPath(u).replace(/\/$/, '');
   // `metrics-scale` is built on demand by the specs that need it (e2e/metrics-scale.ts); its mount may be empty.
@@ -469,6 +582,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     'unfinished',
     'dashboards',
     'dashboards-hostile',
+    'run-charts',
     'metrics-scale',
     ...FIXTURE_REPORTS,
   ];
