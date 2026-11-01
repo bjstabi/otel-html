@@ -232,7 +232,7 @@ jobs:
           name: otel-html-${{ github.job }}
 
   # Unit coverage of the whole suite, on main only (never gates anything). `mise run coverage` has no sources and no
-  # cache, so a restored task cache (which speeds the build) can never replay it and leave coverage/ empty.
+  # cache, so nothing can replay it and leave coverage/ empty.
   coverage:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
@@ -240,13 +240,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0 (the SHA .github/actions/setup pins)
-        with:
-          path: |
-            ~/.local/state/mise
-            .mise/task-cache
-          key: mise-tasks-${{ runner.os }}-${{ github.job }}-${{ github.run_id }}
-          restore-keys: mise-tasks-${{ runner.os }}-${{ github.job }}-
       # The job shell below is the built CLI, so dist/ must exist before the first `run:` step starts.
       - name: Build otel-html
         shell: bash
@@ -259,6 +252,7 @@ jobs:
         with:
           name: coverage
           path: coverage/
+          if-no-files-found: error
       - if: always()
         uses: ./.github/actions/otel-html-collect
         with:

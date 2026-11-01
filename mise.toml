@@ -159,11 +159,13 @@ run = { task = "test:e2e:chromium" }
 # and leave coverage/ empty. Coverage is only meaningful from the whole suite, never from the subset the cached
 # test:unit:main would skip or `vitest --changed` would pick. Pinned like test:unit:main: an inherited
 # OTEL_HTML_PERF_PASS=1 would measure only the @perf tests.
-description = "Unit coverage from the full suite, per vitest project, into coverage/unit-<project>/ (lcov, summary); never cached"
+description = "Unit coverage from the suite without @perf, per vitest project, into coverage/unit-<project>/ (lcov, summary); never cached"
 env = { OTEL_HTML_PERF_PASS = "0" }
 run = [
-  "pnpm exec vitest run --project node --coverage --coverage.reportsDirectory=coverage/unit-node",
-  "pnpm exec vitest run --project viewer --coverage --coverage.reportsDirectory=coverage/unit-viewer",
+  # Each run is charged only for its own sources. The CLI --coverage.exclude replaces vitest.config.ts's list, so the
+  # node run repeats those excludes (generated files) and adds the viewer's.
+  "pnpm exec vitest run --project node --coverage --coverage.reportsDirectory=coverage/unit-node '--coverage.exclude=src/model/gen/**' '--coverage.exclude=src/**/*.gen.ts' '--coverage.exclude=src/**/*.gen.terms.ts' '--coverage.exclude=src/viewer/**'",
+  "pnpm exec vitest run --project viewer --coverage --coverage.reportsDirectory=coverage/unit-viewer '--coverage.include=src/viewer/**'",
   "bun scripts/coverage-summary.ts",
 ]
 

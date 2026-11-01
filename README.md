@@ -658,7 +658,7 @@ publint and are-the-types-wrong on the packed package
 
 - **Usage:** `coverage`
 
-Unit coverage from the full suite, per vitest project, into coverage/unit-&lt;project>/ (lcov, summary); never cached
+Unit coverage from the suite without @perf, per vitest project, into coverage/unit-&lt;project>/ (lcov, summary); never cached
 
 ## `demo`
 
