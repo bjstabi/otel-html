@@ -14,7 +14,7 @@ permissions:
   actions: read
 
 env:
-  MISE_DISABLE_TOOLS: claude
+  MISE_DISABLE_TOOLS: claude,watchexec
 
 defaults:
   run:

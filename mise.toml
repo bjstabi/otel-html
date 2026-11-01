@@ -1,5 +1,9 @@
 #:schema https://mise.jdx.dev/schema/mise.json
 
+# Floor: input groups (`task_config.input_groups`), `mise generate task-docs --inject` and the task artifact cache
+# were verified on this version; older ones may ignore or reject them.
+min_version = "2026.10.25"
+
 [tools]
 node = "24.22.1"
 bun = "1.4.4"
@@ -7,40 +11,88 @@ pnpm = "12.15.0"
 lefthook = "2.2.2"
 actionlint = "1.7.12"
 shellcheck = "0.11.0"
+watchexec = "2.8.0"
 
 [settings]
+# Needed for the task artifact cache (`cache = { ... }` on lint, typecheck, knip and test:unit:main) AND for input
+# groups: without it every task errors. `MISE_TASK_CACHE=off` is the off switch for the cache.
+experimental = true
 # Freshness by content, not mtime: a checkout or a cache restore rewrites every timestamp.
 task.source_freshness_hash_contents = true
 
+# `!` entries inside a group are NOT applied in a merged sources list (verified with --task-cache-explain), so groups hold
+# none: @group:node is src/** and test/** including the viewer, and @group:e2e is `e2e/*.ts` so the generated dot
+# directories (e2e/.reports, e2e/.metrics-scale*, hundreds of MB) never match.
+# Not `global_inputs`: that gives every task sources and an automatic output, so `check`, `test:unit:perf`, `format`,
+# `fixtures` and the rest would be skipped as "up to date". Each task with sources lists `@group:deps` instead.
+# A task's sources name the groups it reads (`@group:node`) plus anything extra; the checks cover everything their
+# tools read, so an edit to any such file re-runs them and an edit to README.md or docs/ does not. The build tasks keep
+# src-only lists (a test edit must not rebuild dist/ and every fixture report).
+[task_config.input_groups]
+deps = ["mise.toml", "package.json", "pnpm-lock.yaml"]
+node = ["src/**", "test/**", "test-support/**", "tsconfig.json", "tsconfig.base.json", "vitest.config.ts"]
+viewer = ["src/viewer/**", "src/model/**", "src/format/**", "src/semconv/**", "src/rollups/**", "src/ottl/**", "src/query/**", "src/dashboards/**", "test/viewer/**", "test-support/**", "tsconfig.viewer.json", "vite.config.ts"]
+e2e = ["e2e/*.ts", "e2e/[!.]*/**", "fixtures/**", "playwright.config.ts", "tsconfig.e2e.json"]
+scripts = ["scripts/**", "proto/**", "buf.gen.yaml", "schema/**"]
+# What biome, tsc, actionlint and knip read besides the code: every root config file (biome.json, knip.json, tsconfig*.json,
+# tsdown/vite/vitest/playwright/commitlint configs, lefthook.yml, ...), the root markdown biome formats (AGENTS.md,
+# CLAUDE.md; not README.md or docs/, which biome excludes), the workflows and the actions.
+# A new top-level source directory (or root file kind) must be added to a group here, or lint and typecheck skip it.
+config = ["*.ts", "*.js", "*.mjs", "*.cjs", "*.json", "*.jsonc", "*.css", "*.yml", "*.yaml", "AGENTS.md", "CLAUDE.md", ".github/**"]
+
 [tasks.setup]
+description = "Install dependencies and git hooks"
 run = ["pnpm install --frozen-lockfile", "lefthook install"]
 
 [tasks.lint]
+description = "biome ci and actionlint"
+sources = ["@group:deps", "@group:node", "@group:viewer", "@group:e2e", "@group:scripts", "@group:config"]
+outputs = []
+cache = { enabled = true, env = ["CI"] }
 run = ["pnpm exec biome ci --error-on-warnings .", "actionlint .github/workflows/*.yml"]
 
 [tasks.format]
+description = "Fix formatting with biome"
 run = "pnpm exec biome format --write ."
 
 [tasks.typecheck]
+description = "tsc on the node, viewer and e2e projects"
+sources = ["@group:deps", "@group:node", "@group:viewer", "@group:e2e", "@group:scripts", "@group:config"]
+outputs = []
+cache = { enabled = true }
 run = ["pnpm exec tsc -p tsconfig.json --noEmit", "pnpm exec tsc -p tsconfig.viewer.json --noEmit", "pnpm exec tsc -p tsconfig.e2e.json --noEmit"]
 
 # Unit tests in two passes: everything but the timing-sensitive `@perf` tests in parallel, then the `@perf` tests
 # alone, one file at a time (vitest.config.ts), so other work does not steal their CPU. Budgets scale with
 # OTEL_HTML_PERF_FACTOR and, with OTEL_HTML_PERF_REFERENCE_MS set, the measured runner factor; they are never edited.
 [tasks."test:unit"]
+description = "Unit tests: the parallel pass, then the @perf pass"
 run = [{ task = "test:unit:main" }, {task = "test:unit:perf" }]
 
 [tasks."test:unit:main"]
+description = "vitest, everything but @perf, in parallel"
+# Beyond the code: what tests read from disk (fixtures/reports, the committed JSON schema, the shipped CI dashboard
+# config, .github/actions scripts, scripts/load-receiver-plan, e2e/fixture.ts, tsconfig.base.json). dist/ is read only
+# under OTEL_HTML_LOAD / OTEL_HTML_BINARY, so it is not an input.
+sources = ["@group:deps", "@group:node", "@group:viewer", "scripts/**", "fixtures/**", "schema/**", "e2e/fixture.ts", ".github/actions/**", ".github/otel-html-ci.yaml"]
+outputs = []
+cache = { enabled = true, env = ["CI", "OTEL_HTML_LOAD", "OTEL_HTML_BINARY"] }
+# Pinned: an inherited OTEL_HTML_PERF_PASS=1 would select only @perf and cache that as this pass.
+env = { OTEL_HTML_PERF_PASS = "0" }
 run = "pnpm exec vitest run"
 
 # Env vars go in `env`, not a `VAR=1 cmd` prefix: Windows cmd (the unit-os CI job) can't run that.
 [tasks."test:unit:perf"]
+description = "The @perf unit tests alone, one file at a time (never cached: timing)"
 env = { OTEL_HTML_PERF_PASS = "1" }
 run = "pnpm exec vitest run"
 
 # Slow load tests (writer peak memory), skipped by `test:unit` and `check` unless OTEL_HTML_LOAD=1. The 1M-log
 # test runs the built library, hence the build.
 [tasks."test:load"]
+description = """The slow peak-memory tests: 1M logs; 200 metrics x 1,000 series x 360 points through the CLI and through Report.addMetrics
+Runs after a build. Not part of `check` or CI's gate; the `load` workflow runs it on an ubuntu runner on demand, and daily
+when main has changed since the last measurement."""
 depends = ["build"]
 env = { OTEL_HTML_LOAD = "1" }
 run = "pnpm exec vitest run test/writer/metric-memory.test.ts test/writer/log-size.test.ts"
@@ -51,6 +103,12 @@ run = "pnpm exec vitest run test/writer/metric-memory.test.ts test/writer/log-si
 # stays in `dist/load-receiver` for `OTEL_HTML_LOAD_REPORT=dist/load-receiver pnpm exec playwright test e2e/load.spec.ts --project chromium-http --workers=1`.
 # Smaller runs: `mise run test:load:receiver -- --spans 20000 --logs 100000`.
 [tasks."test:load:receiver"]
+description = """The receiver under load, after a build (Linux with Docker only)
+telemetrygen (a pinned Docker image, on the host network) sends 1M spans over gRPC, paced at 500 spans/s per worker
+(250 traces/s), and 1M logs over HTTP (one record per request) to `otel-html serve`; then the report must be complete
+with every record, nothing rejected and a peak under 512 MB of resident memory. The report stays in `dist/load-receiver`.
+`-- --spans 20000 --logs 100000` runs a small version. The `receiver` job of the `load` workflow runs it, then checks
+the Traces and Logs landings with e2e/load.spec.ts."""
 depends = ["build"]
 shell = "bash -c"
 usage = 'arg "[args]" var=#true'
@@ -60,22 +118,48 @@ bun scripts/load-receiver.ts --out dist/load-receiver "$@"
 """
 
 [tasks.knip]
+description = "unused files, exports and dependencies"
+sources = ["@group:deps", "@group:node", "@group:viewer", "@group:e2e", "@group:scripts", "@group:config"]
+outputs = []
+cache = { enabled = true }
 run = "pnpm exec knip"
 
 [tasks.gen]
-run = ["pnpm exec buf generate", "bun scripts/gen-schema.ts", "bun scripts/gen-ottl.ts"]
+description = """protobuf-es, the config schema and the OTTL grammar; also rewrites the README's generated task section
+`mise run --force gen` restores a hand-edited generated file (gen:check does this)."""
+# The two scripts import src/config (schema.ts and what it pulls in) and read src/ottl/ottl.grammar.
+sources = ["@group:deps", "proto/**", "buf.gen.yaml", "scripts/gen-schema.ts", "scripts/gen-ottl.ts", "src/**", "!src/viewer/**", "!src/model/gen/**", "!src/ottl/*.gen.ts", "!src/ottl/*.gen.terms.ts"]
+outputs = ["src/model/gen/**", "src/ottl/*.gen.ts", "src/ottl/*.gen.terms.ts", "schema/**"]
+run = ["pnpm exec buf generate", "bun scripts/gen-schema.ts", "bun scripts/gen-ottl.ts", "mise generate task-docs --inject --output README.md"]
 
 [tasks."gen:check"]
+description = "Regenerate with --force and fail if git sees a difference (never cached)"
 run = "bash scripts/gen-check.sh"
 
 # The `@perf` unit tests run after the parallel steps finish, not alongside them.
 [tasks.check]
+description = """Fast gate: lint, typecheck, unit tests, knip
+Results of lint, typecheck, knip and the parallel unit pass are cached by the content of their inputs, so a second run
+with nothing changed skips them. The unit tests with a time budget (named @perf) always run afterwards, alone and one
+file at a time; OTEL_HTML_PERF_FACTOR scales their budgets on a slow machine and, when OTEL_HTML_PERF_REFERENCE_MS is
+set (CI sets 100), so does how much slower than that reference a fixed CPU workload runs here (never below 1; the perf
+pass logs one `PERF calibration:` line)."""
 depends = ["lint", "typecheck", "test:unit:main", "knip"]
 run = { task = "test:unit:perf" }
 
+[tasks.verify]
+description = "Before a push or a PR: check, then the Chromium e2e suite"
+depends = ["check"]
+run = { task = "test:e2e:chromium" }
+
+[tasks."test:unit:changed"]
+description = "Unit tests whose import graph reaches a file changed since `ref` (default main)"
+usage = 'arg "[ref]" default="main"'
+run = "pnpm exec vitest run --changed $usage_ref"
+
 [tasks."build:lib"]
 description = "Build the library and CLI into dist/ (skipped while up to date)"
-sources = ["src/**", "!src/viewer/**", "tsdown.config.ts", "package.json", "pnpm-lock.yaml"]
+sources = ["@group:deps", "src/**", "!src/viewer/**", "tsdown.config.ts", "tsconfig.base.json", "tsconfig.json"]
 outputs = ["dist/cli/**", "dist/index.js", "dist/index.d.ts", "dist/receiver-*.js"]
 run = "pnpm exec tsdown"
 
@@ -83,7 +167,7 @@ run = "pnpm exec tsdown"
 description = "Build the viewer into dist/viewer (skipped while up to date)"
 # The lib build cleans dist/, so the viewer builds after it; mise re-runs this task whenever build:lib ran.
 depends = ["build:lib"]
-sources = ["src/viewer/**", "src/model/**", "src/format/**", "src/semconv/**", "src/rollups/**", "src/ottl/**", "src/query/**", "src/dashboards/**", "vite.config.ts", "tsconfig.viewer.json", "package.json", "pnpm-lock.yaml"]
+sources = ["@group:deps", "src/viewer/**", "src/model/**", "src/format/**", "src/semconv/**", "src/rollups/**", "src/ottl/**", "src/query/**", "src/dashboards/**", "vite.config.ts", "tsconfig.base.json", "tsconfig.viewer.json"]
 outputs = ["dist/viewer/**"]
 run = "pnpm exec vite build"
 
@@ -94,7 +178,7 @@ depends = ["build:viewer"]
 [tasks."e2e:fixtures"]
 description = "Build the e2e fixture reports into e2e/.reports/ (skipped while up to date; --force rebuilds)"
 depends = ["build"]
-sources = ["dist/**", "!dist/bin/**", "!dist/load-receiver/**", "e2e/build-fixtures.ts", "e2e/fixture.ts", "e2e/metrics-scale.ts", "test-support/scale-logs.ts", "test-support/scale-metrics.ts", "test-support/otlp-builders.ts", "test-support/fixture-ids.ts", "fixtures/**"]
+sources = ["@group:deps", "dist/**", "!dist/bin/**", "!dist/load-receiver/**", "e2e/build-fixtures.ts", "e2e/fixture.ts", "e2e/metrics-scale.ts", "test-support/scale-logs.ts", "test-support/scale-metrics.ts", "test-support/otlp-builders.ts", "test-support/fixture-ids.ts", "fixtures/**"]
 outputs = ["e2e/.reports/**"]
 run = "bun e2e/build-fixtures.ts"
 
@@ -103,12 +187,17 @@ run = "bun e2e/build-fixtures.ts"
 # The metrics scale check runs only with OTEL_HTML_METRICS_SCALE=1 (its report takes a few seconds locally, under a minute on CI, and ~150 MB):
 # `OTEL_HTML_METRICS_SCALE=1 mise run test:e2e:chromium -- e2e/scale.spec.ts`.
 [tasks."test:e2e"]
-description = """Playwright over the fixture reports, per browser (--browser chromium|firefox|webkit, default all).
+description = """Playwright over the fixture reports, per browser (--browser chromium|firefox|webkit, default all)
 Two passes: the `<browser>-file` and `<browser>-http` projects in parallel (`-http` runs only specs tagged HTTP), then the
 `<browser>-perf-file` project (@perf tests) alone with one worker. Both run; the task fails if either does. Only the perf
-pass may match no tests. Playwright args after `--` go to both passes (`mise run test:e2e --browser chromium -- e2e/scale.spec.ts`);
+pass may match no tests. The perf pass writes its artifacts to test-results/perf, so it does not clear the first pass's failures. Playwright args after `--` go to both passes (`mise run test:e2e --browser chromium -- e2e/scale.spec.ts`);
 narrow the browsers with `--browser`, not `--project`, which would add to the two passes' own projects.
-Browsers are installed first unless OTEL_HTML_SKIP_BROWSER_INSTALL is set (CI's Playwright image has them)."""
+Browsers are installed first unless OTEL_HTML_SKIP_BROWSER_INSTALL is set (CI's Playwright image has them).
+The metrics scale check runs only with OTEL_HTML_METRICS_SCALE=1 (CI runs it in its own Chromium job): it writes a
+report of 200 metrics x 1,000 series in which only the charted metric has the full 1 h at 10 s (a few seconds locally,
+under a minute on CI; about 150 MB in e2e/.metrics-scale/), and fails if the Explorer or Catalog loads another metric's
+points. The @perf budgets scale by OTEL_HTML_PERF_FACTOR and, when OTEL_HTML_PERF_REFERENCE_MS is set (CI: 100), by how
+much slower than that reference a fixed CPU workload runs here (never below 1; the setup logs `PERF calibration: N ms`)."""
 shell = "bash -c"
 depends = ["e2e:fixtures"]
 usage = '''
@@ -120,13 +209,14 @@ eval "set -- $usage_args"
 rc=0
 [ -n "$OTEL_HTML_SKIP_BROWSER_INSTALL" ] || pnpm exec playwright install chromium firefox webkit
 pnpm exec playwright test "$@" --project "${usage_browser}-file" --project "${usage_browser}-http" --grep-invert @perf || rc=1
-pnpm exec playwright test "$@" --project "${usage_browser}-perf-file" --workers=1 --pass-with-no-tests || rc=1
+pnpm exec playwright test "$@" --project "${usage_browser}-perf-file" --workers=1 --pass-with-no-tests --output test-results/perf || rc=1
 exit $rc
 """
 
 # Compiles standalone binaries into dist/bin/ (needs `mise run build` first). All five targets by default;
 # `mise run build:binaries -- --target darwin-arm64` builds one and merges its line into SHA256SUMS.
 [tasks."build:binaries"]
+description = "Compile standalone binaries into dist/bin/ (after build); -- --target darwin-arm64 builds one"
 shell = "bash -c"
 usage = 'arg "[args]" var=#true'
 run = """
@@ -135,6 +225,7 @@ bun scripts/build-binaries.ts "$@"
 """
 
 [tasks."check:package"]
+description = "publint and are-the-types-wrong on the packed package"
 depends = ["build"]
 run = ["pnpm exec publint", "pnpm exec attw --pack --profile esm-only"]
 
@@ -152,6 +243,10 @@ OTEL_HTML_SKIP_BROWSER_INSTALL=1 mise run test:e2e --browser chromium -- "$@"
 # under bun. Prints ingest and `close` times and a hash of the report, so a change can show both its speed-up and
 # that its output is unchanged. `mise run bench:metrics -- --runs 3 --keep`.
 [tasks."bench:metrics"]
+description = """Time the metrics writer on 2.4M points (200 metrics x 1,000 series x 12 collections) under bun
+Goes through the library API and hashes the report it writes, so a change can show both its speed-up and that its
+output is unchanged. `-- --runs 3` takes the median of three; `-- --keep` leaves the last report in a temp folder.
+The reference figures are in https://github.com/bjstabi/otel-html/issues/35."""
 shell = "bash -c"
 usage = 'arg "[args]" var=#true'
 run = """
@@ -161,10 +256,14 @@ bun scripts/bench-metrics.ts "$@"
 
 # Regenerates fixtures/*.otlp.json with the OTel SDK (byte-stable). hostile.otlp.json is hand-authored and left alone.
 [tasks.fixtures]
+description = "Regenerate fixtures/*.otlp.json with the OpenTelemetry SDK"
 run = "bun scripts/fixtures.ts"
 
 # Converts the `small`, `linked-*` and `metrics` fixtures into one report with the fixture dashboard config and opens it in the browser (on the Checkout dashboard). In code-server, serves it through the port proxy instead, until Ctrl-C. Interactive only: refuses to run in CI.
 [tasks.demo]
+description = """Open the small, linked-* and metrics fixtures as one report in a browser (not for CI)
+Converts them with fixtures/dashboards.otel-html.yaml and opens the report on the Checkout dashboard. In code-server it
+serves the report through the port proxy instead, until Ctrl-C. Interactive only: refuses to run in CI."""
 shell = "bash -c"
 depends = ["build"]
 run = """

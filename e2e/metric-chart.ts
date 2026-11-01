@@ -3,8 +3,10 @@ import type { JSHandle, Locator, Page } from '@playwright/test';
 /** The chart card's plot grid inside its canvas (`GRID` in metric-chart-option.ts); a legend (2+ series) sits above it. */
 const PLOT = { left: 56, right: 12, bottom: 24 } as const;
 const PLOT_TOP = { legend: 28, plain: 12 } as const;
-/** Sweep step in px, below an exemplar ring's ~9 px diameter so none is skipped. */
-const STEP_PX = 3;
+/** Sweep step in px: a ring's ~9 px diameter needs a step under 9/sqrt(2) ≈ 6.4 so that every ring holds a probe. */
+const STEP_PX = 6;
+/** Spots closer than this are one ring (the merge radius; independent of the step). */
+const RING_MERGE_PX = 12;
 
 /**
  * Where the exemplar rings of a chart card are, in px from the chart's top-left corner. The chart is a canvas, so the
@@ -37,7 +39,7 @@ export async function exemplarRings(
   );
   const rings: { x: number; y: number; n: number }[] = [];
   for (const [x, y] of spots) {
-    const near = rings.find((g) => Math.hypot(g.x / g.n - x, g.y / g.n - y) <= 4 * STEP_PX);
+    const near = rings.find((g) => Math.hypot(g.x / g.n - x, g.y / g.n - y) <= RING_MERGE_PX);
     if (near === undefined) rings.push({ x, y, n: 1 });
     else {
       near.x += x;

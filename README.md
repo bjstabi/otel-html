@@ -585,22 +585,244 @@ Config is a YAML or JSON file (`otel-html.yaml` by default), or an object passed
 
 ## Development
 
-Tasks are defined in `mise.toml`; CI runs the same ones. The Linux binaries (`linux-x64`, `linux-arm64`) are built and smoke-tested on every PR by the `binary` job (`test/cli/binary.test.ts` against the compiled binary: `convert`, `serve` over HTTP and gRPC, `run`, a SIGINT exit 0 and a bad-port exit 2); the release workflow smoke-tests the artefacts it uploads.
+Tasks are defined in `mise.toml`; CI runs the same ones. The Linux binaries (`linux-x64`, `linux-arm64`) are built and smoke-tested on every PR by the `binary` job (`test/cli/binary.test.ts` against the compiled binary: `convert`, `serve` over HTTP and gRPC, `run`, a SIGINT exit 0 and a bad-port exit 2); the release workflow smoke-tests the artefacts it uploads. Tasks with `sources` are skipped while up to date; `mise run --force <task>` overrides.
 
-| Task | Does |
-|---|---|
-| `mise run setup` | Install dependencies and git hooks. |
-| `mise run check` | Fast gate: lint, typecheck, unit tests, knip. Unit tests with a time budget (named `@perf`) run afterwards, alone and one file at a time; `OTEL_HTML_PERF_FACTOR` scales their budgets on a slow machine, and, when `OTEL_HTML_PERF_REFERENCE_MS` is set (CI sets 100), so does how much slower than that reference a fixed CPU workload runs here (never below 1; the perf pass logs one `PERF calibration:` line). |
-| `mise run build` | Build the library, then the viewer, into `dist/`. |
-| `mise run test:load` | The slow peak-memory tests (1M logs; 200 metrics × 1,000 series × 360 points through the CLI and through `Report.addMetrics`), after a build. Not part of `check` or `ci`; the `load` workflow runs them on an ubuntu runner on demand, and daily when `main` has changed since the last measurement. |
-| `mise run test:load:receiver` | The receiver under load, after a build: telemetrygen (a pinned Docker image, on the host network, so Linux only) sends 1M spans over gRPC, paced at 500 spans/s per worker (250 traces/s) so telemetrygen does not drop them, and 1M logs over HTTP (one record per request) to `otel-html serve`, then the report must be complete with every record, nothing rejected and a peak under 512 MB of resident memory. The report stays in `dist/load-receiver`; `-- --spans 20000 --logs 100000` runs a small version. The `receiver` job of the `load` workflow runs it, then checks the Traces and Logs landings with `e2e/load.spec.ts`. |
-| `mise run test:e2e` | Build the fixture reports (`e2e:fixtures`, skipped while up to date; they land in `e2e/.reports/`), then run the Playwright suite in Chromium, Firefox and WebKit: every test on `file://`, the tagged subset also over http, the `@perf` tests alone afterwards. `--browser chromium` narrows it. Extra arguments go to Playwright (`mise run test:e2e -- e2e/merge.spec.ts`). The metrics scale check runs only with `OTEL_HTML_METRICS_SCALE=1` (CI runs it in its own Chromium job): it writes a report of 200 metrics × 1,000 series in which only the charted metric has the full 1 h at 10 s (a few seconds locally and under a minute on CI; about 150 MB, in `e2e/.metrics-scale/`), and fails if the Explorer or Catalog loads another metric's points. The `@perf` budgets scale by `OTEL_HTML_PERF_FACTOR` and, when `OTEL_HTML_PERF_REFERENCE_MS` is set, by how much slower than that reference a fixed CPU workload runs on this machine (never below 1; the setup logs `PERF calibration: N ms`). CI sets the reference to 100 ms. |
-| `mise run build:binaries` | Compile standalone binaries into `dist/bin/` (after `build`). |
-| `mise run fixtures` | Regenerate `fixtures/*.otlp.json` with the OpenTelemetry SDK. |
-| `mise run bench:metrics` | Time the metrics writer on 2.4M points (200 metrics × 1,000 series × 12 collections) through the library API under bun, and hash the report it writes. `-- --runs 3` takes the median of three; `-- --keep` leaves the last report in a temp folder. The reference figures are in [#35](https://github.com/bjstabi/otel-html/issues/35). |
-| `mise run demo` | Convert the `small`, `linked-*` and `metrics` fixtures (traces, logs and metrics) with `fixtures/dashboards.otel-html.yaml` and open the report in a browser, on the Checkout dashboard (in code-server, served through its port proxy until Ctrl-C). Not for CI. |
+<!-- mise-tasks -->
+## `bench:metrics`
 
-Other tasks: `e2e:fixtures`, `lint`, `format`, `typecheck`, `test:unit`, `knip`, `gen`, `gen:check`, `check:package`, `test:e2e:chromium`.
+Time the metrics writer on 2.4M points (200 metrics x 1,000 series x 12 collections) under bun
+Goes through the library API and hashes the report it writes, so a change can show both its speed-up and that its
+output is unchanged. `-- --runs 3` takes the median of three; `-- --keep` leaves the last report in a temp folder.
+The reference figures are in https://github.com/bjstabi/otel-html/issues/35.
+
+
+- **Usage:** `bench:metrics [args]…`
+
+### Arguments
+- **`[args]…`**
+
+## `build`
+
+- Depends: build:viewer
+
+- **Usage:** `build`
+
+Build the library, then the viewer, into dist/
+
+## `build:binaries`
+
+Compile standalone binaries into dist/bin/ (after build); -- --target darwin-arm64 builds one
+
+
+- **Usage:** `build:binaries [args]…`
+
+### Arguments
+- **`[args]…`**
+
+## `build:lib`
+
+- **Usage:** `build:lib`
+
+Build the library and CLI into dist/ (skipped while up to date)
+
+## `build:viewer`
+
+- Depends: build:lib
+
+- **Usage:** `build:viewer`
+
+Build the viewer into dist/viewer (skipped while up to date)
+
+## `check`
+
+- Depends: lint, typecheck, test:unit:main, knip
+
+- **Usage:** `check`
+
+Fast gate: lint, typecheck, unit tests, knip
+Results of lint, typecheck, knip and the parallel unit pass are cached by the content of their inputs, so a second run
+with nothing changed skips them. The unit tests with a time budget (named @perf) always run afterwards, alone and one
+file at a time; OTEL_HTML_PERF_FACTOR scales their budgets on a slow machine and, when OTEL_HTML_PERF_REFERENCE_MS is
+set (CI sets 100), so does how much slower than that reference a fixed CPU workload runs here (never below 1; the perf
+pass logs one `PERF calibration:` line).
+
+## `check:package`
+
+- Depends: build
+
+- **Usage:** `check:package`
+
+publint and are-the-types-wrong on the packed package
+
+## `demo`
+
+- Depends: build
+
+- **Usage:** `demo`
+
+Open the small, linked-* and metrics fixtures as one report in a browser (not for CI)
+Converts them with fixtures/dashboards.otel-html.yaml and opens the report on the Checkout dashboard. In code-server it
+serves the report through the port proxy instead, until Ctrl-C. Interactive only: refuses to run in CI.
+
+## `e2e:fixtures`
+
+- Depends: build
+
+- **Usage:** `e2e:fixtures`
+
+Build the e2e fixture reports into e2e/.reports/ (skipped while up to date; --force rebuilds)
+
+## `fixtures`
+
+- **Usage:** `fixtures`
+
+Regenerate fixtures/*.otlp.json with the OpenTelemetry SDK
+
+## `format`
+
+- **Usage:** `format`
+
+Fix formatting with biome
+
+## `gen`
+
+- **Usage:** `gen`
+
+protobuf-es, the config schema and the OTTL grammar; also rewrites the README's generated task section
+`mise run --force gen` restores a hand-edited generated file (gen:check does this).
+
+## `gen:check`
+
+- **Usage:** `gen:check`
+
+Regenerate with --force and fail if git sees a difference (never cached)
+
+## `knip`
+
+- **Usage:** `knip`
+
+unused files, exports and dependencies
+
+## `lint`
+
+- **Usage:** `lint`
+
+biome ci and actionlint
+
+## `setup`
+
+- **Usage:** `setup`
+
+Install dependencies and git hooks
+
+## `test:e2e`
+
+Playwright over the fixture reports, per browser (--browser chromium|firefox|webkit, default all)
+Two passes: the `<browser>-file` and `<browser>-http` projects in parallel (`-http` runs only specs tagged HTTP), then the
+`<browser>-perf-file` project (@perf tests) alone with one worker. Both run; the task fails if either does. Only the perf
+pass may match no tests. The perf pass writes its artifacts to test-results/perf, so it does not clear the first pass's failures. Playwright args after `--` go to both passes (`mise run test:e2e --browser chromium -- e2e/scale.spec.ts`);
+narrow the browsers with `--browser`, not `--project`, which would add to the two passes' own projects.
+Browsers are installed first unless OTEL_HTML_SKIP_BROWSER_INSTALL is set (CI's Playwright image has them).
+The metrics scale check runs only with OTEL_HTML_METRICS_SCALE=1 (CI runs it in its own Chromium job): it writes a
+report of 200 metrics x 1,000 series in which only the charted metric has the full 1 h at 10 s (a few seconds locally,
+under a minute on CI; about 150 MB in e2e/.metrics-scale/), and fails if the Explorer or Catalog loads another metric's
+points. The @perf budgets scale by OTEL_HTML_PERF_FACTOR and, when OTEL_HTML_PERF_REFERENCE_MS is set (CI: 100), by how
+much slower than that reference a fixed CPU workload runs here (never below 1; the setup logs `PERF calibration: N ms`).
+
+
+- Depends: e2e:fixtures
+
+- **Usage:** `test:e2e [--browser <browser>] [args]…`
+
+### Arguments
+- **`[args]…`**
+
+### Flags
+- **`--browser <browser>`**
+
+  **Default:** `*`
+
+## `test:e2e:chromium`
+
+Chromium only: the quick loop while iterating (`test:e2e --browser chromium`). Playwright args after `--` (`mise run test:e2e:chromium -- e2e/metrics-explorer.spec.ts`) go to both passes.
+
+
+- **Usage:** `test:e2e:chromium [args]…`
+
+### Arguments
+- **`[args]…`**
+
+## `test:load`
+
+- Depends: build
+
+- **Usage:** `test:load`
+
+The slow peak-memory tests: 1M logs; 200 metrics x 1,000 series x 360 points through the CLI and through Report.addMetrics
+Runs after a build. Not part of `check` or CI's gate; the `load` workflow runs it on an ubuntu runner on demand, and daily
+when main has changed since the last measurement.
+
+## `test:load:receiver`
+
+The receiver under load, after a build (Linux with Docker only)
+telemetrygen (a pinned Docker image, on the host network) sends 1M spans over gRPC, paced at 500 spans/s per worker
+(250 traces/s), and 1M logs over HTTP (one record per request) to `otel-html serve`; then the report must be complete
+with every record, nothing rejected and a peak under 512 MB of resident memory. The report stays in `dist/load-receiver`.
+`-- --spans 20000 --logs 100000` runs a small version. The `receiver` job of the `load` workflow runs it, then checks
+the Traces and Logs landings with e2e/load.spec.ts.
+
+
+- Depends: build
+
+- **Usage:** `test:load:receiver [args]…`
+
+### Arguments
+- **`[args]…`**
+
+## `test:unit`
+
+- **Usage:** `test:unit`
+
+Unit tests: the parallel pass, then the @perf pass
+
+## `test:unit:changed`
+
+Unit tests whose import graph reaches a file changed since `ref` (default main)
+
+
+- **Usage:** `test:unit:changed [ref]`
+
+### Arguments
+- **`[ref]`**
+
+  **Default:** `main`
+
+## `test:unit:main`
+
+- **Usage:** `test:unit:main`
+
+vitest, everything but @perf, in parallel
+
+## `test:unit:perf`
+
+- **Usage:** `test:unit:perf`
+
+The @perf unit tests alone, one file at a time (never cached: timing)
+
+## `typecheck`
+
+- **Usage:** `typecheck`
+
+tsc on the node, viewer and e2e projects
+
+## `verify`
+
+- Depends: check
+
+- **Usage:** `verify`
+
+Before a push or a PR: check, then the Chromium e2e suite
+<!-- /mise-tasks -->
 
 ## Roadmap
 
