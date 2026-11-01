@@ -310,7 +310,9 @@ A `metric` widget with `runBy` is a run chart: one point per CI run instead of o
       metric: cicd.pipeline.task.run.duration
       show: avg
       by: ['attributes["cicd.pipeline.task.name"]']
-``` [`fixtures/dashboards.otel-html.yaml`](fixtures/dashboards.otel-html.yaml) has one widget of each type.
+```
+
+[`fixtures/dashboards.otel-html.yaml`](fixtures/dashboards.otel-html.yaml) has one widget of each type.
 
 ## Report layout and hosting
 
