@@ -101,7 +101,10 @@ export function dashboardToYaml(
     title: fusion ? 'Fusion (copy)' : d.title,
     ...(d.description === '' ? {} : { description: d.description }),
     ...(d.variables.length === 0 ? {} : { variables: d.variables.map(variableInput) }),
-    widgets: d.widgets.map((w, i) => widgetInput(withControls(w, controls), layout[i] ?? w, i)),
+    widgets: d.widgets.map((w, i) => {
+      const widget = withControls(w, controls);
+      return widgetInput(widget, layout[i] ?? widget, i);
+    }),
   };
   return stringify({ dashboards: [input] });
 }

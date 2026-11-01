@@ -106,6 +106,28 @@ describe('dashboardToYaml', () => {
     expect(text).not.toMatch(/zoom/);
   });
 
+  test('a widget with no layout entry keeps its controls override', () => {
+    const d = DashboardSchema.parse({
+      id: 'r',
+      title: 'R',
+      widgets: [
+        {
+          type: 'metric',
+          id: 'runs',
+          x: 1,
+          y: 2,
+          w: 6,
+          h: 8,
+          queries: [{ id: 'a', metric: 'm', show: 'avg' }],
+          runBy: 'resource.attributes["run"]',
+        },
+      ],
+    });
+    const current = { slider: false, evenSpacing: true, split: false, legend: true };
+    const [runs] = reparse(dashboardToYaml(d, [], { runs: current })).widgets;
+    expect(runs).toMatchObject({ controls: current, x: 1, y: 2, w: 6, h: 8 });
+  });
+
   test('toggles put back to the defaults are left out, over a config that set others', () => {
     const d = DashboardSchema.parse({
       id: 'r',
