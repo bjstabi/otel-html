@@ -139,6 +139,9 @@ describe('labelColorOn', () => {
   test('picks readable text for light and dark fills', () => {
     expect(labelColorOn('#ffffff', THEME)).toBe('#111111');
     expect(labelColorOn('#0b1020', THEME)).toBe('#ffffff');
+    expect(labelColorOn('hsl(240, 68%, 30%)', THEME)).toBe('#ffffff');
+    expect(labelColorOn('hsl(60.5, 68%, 62%)', THEME)).toBe('#111111');
+    expect(labelColorOn('hsl(259.2, 68%, 62%)', THEME)).toBe('#ffffff');
     expect(labelColorOn('not-a-colour', THEME)).toBe(THEME.ink);
   });
 });
