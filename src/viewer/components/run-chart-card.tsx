@@ -137,6 +137,18 @@ export function RunChartCard(props: RunChartCardProps): JSX.Element {
     return () => ro.disconnect();
   }, []);
 
+  // ECharts swallows every wheel event over a plot once it has an inside zoom, ctrl or not, which would stop the page
+  // scrolling. A plain one is kept from reaching it, so only Ctrl+scroll gets to the chart.
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (el === null) return;
+    const leaveToPage = (e: WheelEvent): void => {
+      if (!e.ctrlKey) e.stopPropagation();
+    };
+    el.addEventListener('wheel', leaveToPage, { capture: true, passive: true });
+    return () => el.removeEventListener('wheel', leaveToPage, { capture: true });
+  }, []);
+
   // The zoom is also a ref because it isn't an input to the option: ECharts already shows a zoom it reports, and
   // only the y axis follows it. A rebuild for any other reason reads the ref, so it comes back at the current zoom.
   const [zoom, setZoomState] = useState(() => startingZoom(props.view, result.window));
