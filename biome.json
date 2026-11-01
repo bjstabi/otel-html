@@ -16,6 +16,7 @@
       "!e2e/.metrics-scale",
       "!e2e/.metrics-scale.tmp-*",
       "!.otel-html",
+      "!.mise",
       "!e2e/.cache",
       "!test-results",
       "!.superpowers",

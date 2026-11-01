@@ -19,6 +19,8 @@ watchexec = "2.8.0"
 experimental = true
 # Freshness by content, not mtime: a checkout or a cache restore rewrites every timestamp.
 task.source_freshness_hash_contents = true
+# The artifact cache lives in the workspace so CI restores it with actions/cache (next to the freshness records in the state dir).
+task.cache_dir = ".mise/task-cache"
 
 # `!` entries inside a group are NOT applied in a merged sources list (verified with --task-cache-explain), so groups hold
 # none: @group:node is src/** and test/** including the viewer, and @group:e2e is `e2e/*.ts` so the generated dot
