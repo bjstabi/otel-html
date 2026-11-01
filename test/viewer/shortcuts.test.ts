@@ -96,6 +96,23 @@ describe('createShortcutHandler', () => {
     }
   });
 
+  test('a finished sequence stops its timeout: the next sequence gets the whole time', () => {
+    vi.useFakeTimers();
+    try {
+      const { actions, calls } = actionsSpy();
+      const h = createShortcutHandler(SHORTCUTS, actions);
+      h(key(document.body, 'g'));
+      vi.advanceTimersByTime(600);
+      h(key(document.body, 'l'));
+      h(key(document.body, 'g'));
+      vi.advanceTimersByTime(600);
+      h(key(document.body, 'l'));
+      expect(calls).toEqual(['goLogs', 'goLogs']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test('keys queued behind a busy page still pair up: the timeout is a timer, not the gap between their handling', () => {
     vi.useFakeTimers();
     try {

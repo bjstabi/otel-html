@@ -30,7 +30,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
 
 export type ShortcutActions = Record<ShortcutAction, () => void>;
 
-/** A second key must follow the first within this time. */
+/** A second key must follow the first within this much time that the page could have handled it. */
 export const SEQUENCE_TIMEOUT_MS = 1000;
 
 const EDITABLE = 'input, textarea, select, [contenteditable=""], [contenteditable="true"]';
