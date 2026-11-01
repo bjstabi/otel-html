@@ -50,10 +50,14 @@ function keyName(e: KeyboardEvent): string {
   return e.key === 'Escape' ? 'Esc' : e.key;
 }
 
+/** A timer that fires late counts as this much waiting, however late it is. */
+const SEQUENCE_TICK_MS = 100;
+
 /**
- * Keystrokes in form fields never trigger shortcuts. A pending sequence expires on a timer rather than by comparing the
- * keys' times: a page busy drawing (a dashboard on a slow machine) handles keys pressed milliseconds apart a second or
- * more apart, and stamps them with that handling time, but the second key is already queued ahead of the timer.
+ * Keystrokes in form fields never trigger shortcuts. A pending sequence expires after SEQUENCE_TIMEOUT_MS during which
+ * the page could have handled a key, counted in short timer ticks. One long timer cannot do it: a page busy drawing (a
+ * dashboard on a slow machine) handles keys pressed milliseconds apart a second or more apart, and when it comes free
+ * WebKit runs a due timer before a queued key. A freeze of any length costs one tick.
  */
 export function createShortcutHandler(
   table: readonly Shortcut[],
@@ -61,15 +65,17 @@ export function createShortcutHandler(
 ): (e: KeyboardEvent) => void {
   let pending: string[] = [];
   let expiry: ReturnType<typeof setTimeout> | undefined;
+  const tick = (left: number): void => {
+    expiry = setTimeout(() => {
+      if (left > SEQUENCE_TICK_MS) tick(left - SEQUENCE_TICK_MS);
+      else pending = [];
+    }, SEQUENCE_TICK_MS);
+  };
   const setPending = (seq: string[]): void => {
     clearTimeout(expiry);
     pending = seq;
-    expiry =
-      seq.length === 0
-        ? undefined
-        : setTimeout(() => {
-            pending = [];
-          }, SEQUENCE_TIMEOUT_MS);
+    expiry = undefined;
+    if (seq.length > 0) tick(SEQUENCE_TIMEOUT_MS);
   };
 
   const startsWith = (seq: readonly string[]): boolean =>
