@@ -278,7 +278,7 @@ report with a partial run, so a partial report would simply be wrong).
   pages, not logic.
 - The three `metrics-explorer` e2e tests take 12 s each on CI (4.5 s locally). The time is the `exemplarRings`
   sweep (a pointer probe at every spot of the plot), not the seven-step `p99ByRoute` UI sequence, which takes under
-  1 s; a URL that encodes the query would not remove it.
+  1 s in most runs; a URL that encodes the query would not remove it.
 - `test/receiver/http.test.ts` is 12 s of the unit run (one deliberate 100 ms `setTimeout` and real sockets); the
   next slowest unit file is 3.4 s.
 - `run-chart.spec.ts` holds 25 of the 71 e2e tests, mostly interaction details that need a real canvas and so belong
