@@ -518,7 +518,7 @@ function seriesBaselines(ladder: LevelData, coarse: LevelData, cut: number): Map
  * `level` merged into buckets of `widthNs` (aligned like a rollup: `floor(time / widthNs)`), so a formula reaches
  * a width off the ladder, such as an operand's rollup interval. A finer or equal width leaves it unchanged.
  */
-function coarsenedTo(level: LevelData, widthNs: number): LevelData {
+export function coarsenedTo(level: LevelData, widthNs: number): LevelData {
   if (widthNs <= level.widthNs) return level;
   const series = new Map<number, { t: number[]; a: BucketAgg[] }>();
   for (const [id, s] of level.series) {
@@ -542,7 +542,7 @@ function coarsenedTo(level: LevelData, widthNs: number): LevelData {
   return { level: Math.max(level.level, 1), widthNs, series, exemplars: level.exemplars };
 }
 
-function runAtLevel(
+export function runAtLevel(
   m: LoadedMetric,
   q: MetricQuery,
   window: TimeWindow,

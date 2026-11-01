@@ -32,6 +32,16 @@ function optionsOf(known: ResourceValues, current: string | null, fallback: stri
   ];
 }
 
+/** `vars` with `variable` set to `value`: a choice equal to the config's default is no override at all. */
+export function withVariable(
+  vars: DashboardPageState['vars'],
+  variable: Variable,
+  value: string | null,
+): DashboardPageState['vars'] {
+  const { [variable.key]: _dropped, ...rest } = vars;
+  return value === variable.default ? rest : { ...rest, [variable.key]: value };
+}
+
 function VariableSelect(props: {
   variable: Variable;
   known: ResourceValues;
@@ -43,11 +53,7 @@ function VariableSelect(props: {
     ? (state.vars[variable.key] ?? null)
     : variable.default;
   const options = optionsOf(known, current, variable.default);
-  const choose = (value: string | null): void => {
-    const { [variable.key]: _dropped, ...rest } = state.vars;
-    // A choice equal to the config's default is no override at all.
-    props.onChange(value === variable.default ? rest : { ...rest, [variable.key]: value });
-  };
+  const choose = (value: string | null): void => props.onChange(withVariable(state.vars, variable, value));
   return (
     <div className="flex items-center gap-1.5 rounded-full border border-hairline bg-surface py-0.5 pr-1 pl-3 text-xs">
       <span className="font-mono text-muted" id={`var-${variable.key}`}>

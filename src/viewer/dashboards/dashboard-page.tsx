@@ -1,7 +1,7 @@
 import { Menu } from '@base-ui/react/menu';
 import { ChevronDown, Copy, LayoutDashboard, Pencil } from 'lucide-react';
-import { type JSX, useCallback, useMemo, useState } from 'react';
-import type { Widget, WidgetLayout, WidgetType } from '../../dashboards/schema.js';
+import { type JSX, useCallback, useMemo, useState, useSyncExternalStore } from 'react';
+import type { RunControls, Widget, WidgetLayout, WidgetType } from '../../dashboards/schema.js';
 import { parseUnixNanos, type TraceId } from '../../model/ids.js';
 import type { DataSource, ResourceValues } from '../data/data-source.js';
 import type { TimeWindow } from '../data/span-query.js';
@@ -22,9 +22,10 @@ import { dashboardToYaml } from './copy-config.js';
 import { DashboardLink } from './dashboard-link.js';
 import { DashboardGrid, useStacked } from './grid.js';
 import { type DashboardEntry, dashboardsOf, findDashboard } from './registry.js';
+import { useRunSession } from './run-session.js';
 import { bindings, following, scopeFor, type VariableBinding, type WidgetScope } from './scope.js';
 import { SelectionChips } from './selection-chips.js';
-import { VariablesBar } from './variables-bar.js';
+import { VariablesBar, withVariable } from './variables-bar.js';
 import { WidgetFrame } from './widget-frame.js';
 import { FacetChartWidget } from './widgets/facet-chart.js';
 import { LogsWidget } from './widgets/logs.js';
@@ -40,6 +41,10 @@ export interface WidgetActions {
   setLogView(v: 'matches' | 'context'): void;
   /** Replaces the frame's subtitle (the window text) with a count; null restores it. */
   setSubtitle(text: string | null): void;
+  /** Sets a dashboard variable, as choosing it in the variables bar does. */
+  setVariable(key: string, value: string): void;
+  /** Replaces a run chart's toggles until the page reloads. */
+  setControls(c: RunControls): void;
 }
 
 export type WidgetRenderer = (props: {
@@ -53,6 +58,8 @@ export type WidgetRenderer = (props: {
   variables: readonly VariableBinding[];
   /** The page's `d` state, for the parts a widget shows from it (the Logs view). */
   state: DashboardPageState;
+  /** A run chart's toggles: as changed on the page, else the config's. Null for any other widget. */
+  controls: RunControls | null;
 }) => JSX.Element;
 
 /** One renderer per widget type: the page draws every widget through this table. */
@@ -233,6 +240,8 @@ function DashboardView(props: {
   const stacked = useStacked();
   const epoch = parseUnixNanos(manifest.epochUnixNano, 'manifest.epochUnixNano');
   const layout = props.layout ?? layoutOf(d.widgets);
+  const session = useRunSession();
+  const controls = useSyncExternalStore(session.subscribe, () => session.controlsOf(d.id));
 
   /** Applies `fn` to the state as it is now, so two quick changes never overwrite each other. */
   const change = useCallback(
@@ -293,6 +302,11 @@ function DashboardView(props: {
           const { [w.id]: _old, ...rest } = all;
           return text === null ? rest : { ...rest, [w.id]: text };
         }),
+      setVariable: (key, value) => {
+        const variable = d.variables.find((v) => v.key === key);
+        if (variable !== undefined) change((s) => ({ ...s, vars: withVariable(s.vars, variable, value) }));
+      },
+      setControls: (c) => session.setControls(d.id, w.id, c),
     };
     const Body = WIDGETS[w.type];
     return (
@@ -318,6 +332,7 @@ function DashboardView(props: {
           actions={actions}
           variables={bound?.bindings ?? []}
           state={state}
+          controls={controls[w.id] ?? (w.type === 'metric' ? w.controls : null)}
         />
       </WidgetFrame>
     );
@@ -350,7 +365,7 @@ function DashboardView(props: {
       <CopyButton
         label="Copy config"
         icon={<Copy size={16} aria-hidden />}
-        text={() => dashboardToYaml(d, layout)}
+        text={() => dashboardToYaml(d, layout, controls)}
         dialog={{ title: 'Copy config', label: 'Dashboard config' }}
       />
     </>

@@ -31,6 +31,30 @@ export {
 
 export const REPORTS_DIR: URL = new URL('./.reports/', import.meta.url);
 export const REPORT_DIR: URL = new URL('main/', REPORTS_DIR);
+/**
+ * `run-charts`: `RUN_CHART_RUN_MINUTES.length` CI runs at uneven gaps from `RUN_CHART_T0_MS`, all of `RUN_CHART_JOBS` in
+ * each. The outlier job takes `RUN_CHART_OUTLIER_S` in the oldest run, and `RUN_CHART_FAILED_JOB` fails in the third.
+ */
+export const RUN_CHART_T0_MS: number = Date.UTC(2026, 9, 28, 7, 56, 0);
+export const RUN_CHART_RUN_MINUTES = [0, 90, 110, 480, 495, 1900] as const;
+export const RUN_CHART_JOBS = [
+  'lint',
+  'typecheck',
+  'unit',
+  'e2e',
+  'docs',
+  'package',
+  'publish',
+  'load',
+  'binary (ubuntu-24.04-arm, linux-arm64)',
+] as const;
+export const RUN_CHART_OUTLIER_JOB = 'e2e';
+export const RUN_CHART_OUTLIER_S = 1254;
+export const RUN_CHART_FAILED_JOB = 'unit';
+export const RUN_CHART_FAILED_RUN = 2;
+export const runChartRunId = (run: number): string => `run-${run + 1}`;
+/** A job whose name is markup, alone on the `run-charts-hostile` dashboard with one plain job. */
+export const RUN_CHART_HOSTILE_JOB = '<img src=x onerror=alert(1)>';
 /** A second report with one very large trace, for the flame-graph render-time check. */
 export const LARGE_REPORT_DIR: URL = new URL('large/', REPORTS_DIR);
 export const LARGE_SPAN_COUNT = 50_000;
@@ -71,6 +95,7 @@ export type ReportName =
   | 'unfinished'
   | 'dashboards'
   | 'dashboards-hostile'
+  | 'run-charts'
   | 'metrics-scale';
 
 /**

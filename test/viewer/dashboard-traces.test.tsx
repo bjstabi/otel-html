@@ -132,6 +132,8 @@ function actionsOf(): WidgetActions {
     openIn: vi.fn(),
     setLogView: vi.fn(),
     setSubtitle: vi.fn(),
+    setVariable: vi.fn(),
+    setControls: vi.fn(),
   };
 }
 
@@ -162,6 +164,7 @@ function mount(
           dataSource={ds}
           actions={actions}
           variables={[]}
+          controls={null}
           state={EMPTY_DASHBOARD_STATE}
         />
       </SelectionProvider>

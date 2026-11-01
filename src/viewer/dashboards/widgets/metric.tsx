@@ -1,5 +1,6 @@
-import { type JSX, useCallback, useMemo, useState } from 'react';
+import { type JSX, useCallback, useMemo, useRef, useState } from 'react';
 import { andConditions } from '../../../dashboards/conditions.js';
+import { DEFAULT_RUN_CONTROLS } from '../../../dashboards/schema.js';
 import { OtelHtmlError } from '../../../model/errors.js';
 import type { TraceId } from '../../../model/ids.js';
 import type { ResourceRecord } from '../../../model/records.js';
@@ -7,8 +8,10 @@ import type { MetricPageState } from '../../../query/metric-query.js';
 import { ErrorCard, LoadingNote } from '../../components/explorer-states.js';
 import { type ChartPick, MetricChartCard } from '../../components/metric-chart-card.js';
 import { METRIC_CHART_HEIGHT, type MetricSize } from '../../components/metric-chart-option.js';
+import { RunChartCard } from '../../components/run-chart-card.js';
 import { catalogOf, type DataSource } from '../../data/data-source.js';
 import { type MetricQuery, resolveMetric } from '../../data/metric-query.js';
+import { runMetricRunQuery } from '../../data/metric-run-query.js';
 import type { TimeWindow } from '../../data/span-query.js';
 import { exemplarTraceLookup, openChartPick } from '../../metrics/chart-pick.js';
 import { explorerFilter, MetricGrid, type MetricGridOrigin } from '../../metrics/metric-grid.js';
@@ -18,7 +21,8 @@ import { useGoTo } from '../../shell/go-to.js';
 import { useKeyedAsync } from '../../state/use-keyed-async.js';
 import { traceResources } from '../../traces/trace-tabs.js';
 import type { WidgetRenderer } from '../dashboard-page.js';
-import { resourcesMatching, variableCondition } from '../scope.js';
+import { useRunSession } from '../run-session.js';
+import { resourcesMatching, runByKey, variableCondition } from '../scope.js';
 import { FRAME_CHROME_PX } from './layout.js';
 import { useSubtitle } from './subtitle.js';
 
@@ -223,24 +227,123 @@ const QueriesBody: Body = ({ widget, scope, height, dataSource, actions, variabl
 };
 
 /** What the trace's resources could not narrow: never a silently wider answer (spec §6.2). */
-function NarrowingNote(props: { narrowing: Extract<Narrowing, { status: 'ready' }> }): JSX.Element | null {
-  const { resources, where, unexcluded } = props.narrowing;
+function narrowingNote(narrowing: Extract<Narrowing, { status: 'ready' }>): string | null {
+  const { resources, where, unexcluded } = narrowing;
   if (resources.length > 0 && where === null) {
-    return (
-      <p role="note" className="text-xs text-muted">
-        The selected trace's resources have no attribute a filter can compare, so the charts show every
-        resource.
-      </p>
-    );
+    return "The selected trace's resources have no attribute a filter can compare, so the charts show every resource.";
   }
   if (unexcluded === 0) return null;
-  return (
+  const others = `${unexcluded} other ${unexcluded === 1 ? 'resource' : 'resources'}`;
+  return `The charts also include ${others} that differ from the trace's only in attributes a filter cannot compare.`;
+}
+
+function NarrowingNote(props: { narrowing: Extract<Narrowing, { status: 'ready' }> }): JSX.Element | null {
+  const note = narrowingNote(props.narrowing);
+  return note === null ? null : (
     <p role="note" className="text-xs text-muted">
-      The charts also include {unexcluded} other {unexcluded === 1 ? 'resource' : 'resources'} that differ
-      from the trace's only in attributes a filter cannot compare.
+      {note}
     </p>
   );
 }
+
+/**
+ * The run chart over the widget's one query: one point per run per line. A variable bound on `runBy`'s own key is
+ * left out of the `where`, so filtering to a run doesn't collapse the chart to that run, and draws its guide instead.
+ */
+const RunBody: Body = ({ widget, scope, dashboard, height, dataSource, actions, variables, controls }) => {
+  if (widget.type !== 'metric' || widget.runBy === null) {
+    throw new OtelHtmlError('usage', { path: 'widget.runBy', expected: 'a path', actual: 'none' });
+  }
+  const own = widget.queries?.[0];
+  if (own === undefined) {
+    throw new OtelHtmlError('usage', { path: 'widget.queries', expected: 'one query', actual: 'none' });
+  }
+  const { runBy, failedWhen, echarts } = widget;
+  const configured = widget.controls ?? DEFAULT_RUN_CONTROLS;
+  const key = useMemo(() => runByKey(runBy), [runBy]);
+  const session = useRunSession();
+  const dashboardId = dashboard.dashboard.id;
+  const narrowing = useNarrowing(dataSource, scope.highlightTrace);
+  const catalog = useKeyedAsync(dataSource, catalogOf);
+  const run = dataSource.manifest.range;
+  const { start, end } = scope.window ?? run ?? FALLBACK_WINDOW;
+
+  const filter = narrowing.status === 'ready' ? narrowing.where : null;
+  // The page hands over new variables, scope and actions on every render, so the query is keyed on their values.
+  const where = effectiveWhere(
+    own,
+    variables.filter((v) => v.key !== key),
+    filter,
+  );
+  const resolved = useMemo(
+    () => (catalog.status === 'ready' ? resolveMetric(catalog.value, own) : null),
+    [catalog, own],
+  );
+  const entry = resolved !== null && 'entry' in resolved ? resolved.entry : null;
+  // Until the trace's resources are known nothing runs: a run on the wider set would flash as the answer.
+  const ready = narrowing.status === 'off' || narrowing.status === 'ready';
+  const input = useMemo(
+    () =>
+      ready && entry !== null
+        ? { id: entry.id, q: { ...own, where }, window: { start, end }, runBy, failedWhen }
+        : null,
+    [ready, entry, own, where, start, end, runBy, failedWhen],
+  );
+  const load = useCallback(
+    async (i: NonNullable<typeof input>, signal: AbortSignal) => {
+      const m = await dataSource.metric(i.id);
+      signal.throwIfAborted();
+      return runMetricRunQuery(m, i.q, i, signal);
+    },
+    [dataSource],
+  );
+  const result = useKeyedAsync(input, load);
+
+  const setVariable = useRef(actions.setVariable);
+  setVariable.current = actions.setVariable;
+  const pickKey = key !== null && dashboard.dashboard.variables.some((v) => v.key === key) ? key : null;
+  const onPickRun = useMemo(
+    () => (pickKey === null ? null : (id: string): void => setVariable.current(pickKey, id)),
+    [pickKey],
+  );
+
+  if (run === null) return <Empty title="This report has no metrics" message="There is nothing to chart." />;
+  if (narrowing.status === 'error')
+    return <ErrorCard title="The selected trace could not be read" message={narrowing.message} />;
+  if (catalog.status === 'error')
+    return <ErrorCard title="The metric catalog could not be loaded" message={catalog.message} />;
+  if (resolved !== null && 'missing' in resolved) {
+    return <Empty title="Not in this report" message={`${own.metric} is not in this report`} />;
+  }
+  if (resolved !== null && 'ambiguous' in resolved) {
+    const message = `${own.metric} has ${resolved.ambiguous.length} definitions: choose one`;
+    return <ErrorCard title={`Query ${own.id} could not run`} message={message} />;
+  }
+  if (result.status === 'error') {
+    return <ErrorCard title={`Query ${own.id} could not run`} message={result.message} />;
+  }
+  if (result.status === 'loading') return <LoadingNote progress={null} />;
+
+  const note = narrowing.status === 'ready' ? narrowingNote(narrowing) : null;
+  return (
+    <RunChartCard
+      title={own.alias ?? `${own.metric} · ${own.show}`}
+      subtitle={[...new Set(result.value.lines.map((l) => l.unit))].join(', ')}
+      result={result.value}
+      configured={configured}
+      controls={controls ?? configured}
+      onControls={actions.setControls}
+      height={height - FRAME_CHROME_PX}
+      epochUnixNano={dataSource.manifest.epochUnixNano}
+      selectedRun={variables.find((v) => v.key === key)?.value ?? null}
+      echarts={echarts}
+      onPickRun={onPickRun}
+      notes={note === null ? result.value.notes : [note, ...result.value.notes]}
+      view={session.viewOf(dashboardId, widget.id)}
+      onView={(view) => session.setView(dashboardId, widget.id, view)}
+    />
+  );
+};
 
 /** Fusion's Metrics widget: the metric grid of the selected trace's resources, else of every resource. */
 const GridBody: Body = ({ scope, height, dataSource, actions, variables }) => {
@@ -299,5 +402,6 @@ export const MetricWidget: WidgetRenderer = (props) => {
   if (widget.type !== 'metric') {
     throw new OtelHtmlError('usage', { path: 'widget.type', expected: 'metric', actual: widget.type });
   }
+  if (widget.runBy !== null) return <RunBody {...props} />;
   return widget.queries === null ? <GridBody {...props} /> : <QueriesBody {...props} />;
 };

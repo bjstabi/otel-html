@@ -1,11 +1,13 @@
 import { stringify } from 'yaml';
-import type {
-  Dashboard,
-  Variable,
-  Widget,
-  WidgetInput,
-  WidgetLayout,
-  WidgetType,
+import {
+  type Dashboard,
+  DEFAULT_RUN_CONTROLS,
+  type RunControls,
+  type Variable,
+  type Widget,
+  type WidgetInput,
+  type WidgetLayout,
+  type WidgetType,
 } from '../../dashboards/schema.js';
 
 /**
@@ -24,6 +26,9 @@ export const WIDGET_DEFAULTS: Record<WidgetType, Readonly<Record<string, unknown
     display: 'lines',
     scale: 'linear',
     exemplars: true,
+    runBy: null,
+    failedWhen: null,
+    controls: null,
     echarts: null,
   },
   toplist: { title: null, follow: true, query: null, text: '', echarts: null },
@@ -59,9 +64,16 @@ function widgetInput(w: Widget, layout: WidgetLayout, index: number): Record<str
     const v = merged[k];
     if (v === null || v === undefined) continue;
     if (Object.hasOwn(defaults, k) && sameValue(defaults[k], v)) continue;
+    // `controls` is null in the defaults, but a run chart is filled with its defaults: those are left out too.
+    if (k === 'controls' && sameValue(DEFAULT_RUN_CONTROLS, v)) continue;
     out[k] = v;
   }
   return out;
+}
+
+function withControls(w: Widget, controls: Readonly<Record<string, RunControls>>): Widget {
+  if (w.type !== 'metric' || w.runBy === null) return w;
+  return { ...w, controls: controls[w.id] ?? w.controls };
 }
 
 function variableInput(v: Variable): string | Record<string, string> {
@@ -75,16 +87,24 @@ function variableInput(v: Variable): string | Record<string, string> {
 
 /**
  * The dashboard with its current layout as a `dashboards:` YAML document, ready to paste into a config. Fusion is
- * renamed (`fusion-copy`) because its id is reserved. `layout[i]` is the position of `d.widgets[i]`.
+ * renamed (`fusion-copy`) because its id is reserved. `layout[i]` is the position of `d.widgets[i]`. `controls` is
+ * the toggles as changed on the page, by widget id; only a run chart can carry them.
  */
-export function dashboardToYaml(d: Dashboard, layout: readonly WidgetLayout[]): string {
+export function dashboardToYaml(
+  d: Dashboard,
+  layout: readonly WidgetLayout[],
+  controls: Readonly<Record<string, RunControls>> = {},
+): string {
   const fusion = d.id === 'fusion';
   const input = {
     id: fusion ? 'fusion-copy' : d.id,
     title: fusion ? 'Fusion (copy)' : d.title,
     ...(d.description === '' ? {} : { description: d.description }),
     ...(d.variables.length === 0 ? {} : { variables: d.variables.map(variableInput) }),
-    widgets: d.widgets.map((w, i) => widgetInput(w, layout[i] ?? w, i)),
+    widgets: d.widgets.map((w, i) => {
+      const widget = withControls(w, controls);
+      return widgetInput(widget, layout[i] ?? widget, i);
+    }),
   };
   return stringify({ dashboards: [input] });
 }

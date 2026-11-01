@@ -6,6 +6,7 @@ import {
   DashboardSchema,
   ViewListSchema,
   ViewSchema,
+  type Widget,
   type WidgetInput,
 } from '../../src/dashboards/schema.js';
 
@@ -115,6 +116,55 @@ describe('DashboardSchema', () => {
   it('names log records for a logs query', () => {
     const r = DashboardSchema.safeParse(dash([{ type: 'logs', x: 0, y: 0, w: 6, h: 4, query: 'name ==' }]));
     expect(r.error?.issues[0]?.message).toMatch(/^an OTTL condition valid for log records \(/);
+  });
+
+  describe('run charts', () => {
+    const q = { id: 'a', metric: 'm', show: 'avg' };
+    const runBy = 'resource.attributes["run"]';
+    const run = (extra: object = {}): WidgetInput =>
+      ({ type: 'metric', x: 0, y: 0, w: 6, h: 4, queries: [q], runBy, ...extra }) as WidgetInput;
+    const widget = (
+      w: WidgetInput,
+    ): Pick<Extract<Widget, { type: 'metric' }>, 'runBy' | 'failedWhen' | 'controls'> =>
+      DashboardSchema.parse(dash([w])).widgets[0] as Extract<Widget, { type: 'metric' }>;
+
+    it('fills the controls from the defaults when runBy is set', () => {
+      expect(widget(run()).controls).toEqual({
+        slider: true,
+        evenSpacing: true,
+        split: true,
+        legend: false,
+      });
+      expect(widget(run({ controls: { legend: true } })).controls).toEqual({
+        slider: true,
+        evenSpacing: true,
+        split: true,
+        legend: true,
+      });
+    });
+
+    it('leaves runBy, failedWhen and controls null without runBy', () => {
+      const w = widget({ type: 'metric', x: 0, y: 0, w: 6, h: 4 } as WidgetInput);
+      expect([w.runBy, w.failedWhen, w.controls]).toEqual([null, null, null]);
+    });
+
+    it.each([
+      ['controls without runBy', { runBy: null, controls: {} }, 'controls'],
+      ['failedWhen without runBy', { runBy: null, failedWhen: 'attributes["r"] == "failure"' }, 'failedWhen'],
+      ['formulas', { formulas: [{ id: 'f1', expr: 'a' }] }, 'formulas'],
+      ['no queries', { queries: null }, 'queries'],
+      ['two queries', { queries: [q, { ...q, id: 'b' }] }, 'queries'],
+      ['bars', { display: 'bars' }, 'display'],
+      ['log scale', { scale: 'log' }, 'scale'],
+      ['a bad runBy path', { runBy: 'nope(' }, 'runBy'],
+      ['a bad failedWhen', { failedWhen: 'attributes["r"] ==' }, 'failedWhen'],
+      ['a per-point failedWhen', { failedWhen: 'flags == 1' }, 'failedWhen'],
+      ['a time failedWhen', { failedWhen: 'datapoint.time_unix_nano > 0' }, 'failedWhen'],
+      ['a query function', { queries: [{ ...q, fn: [{ op: 'top', n: 1, by: 'avg' }] }] }, 'queries'],
+      ['a misspelled toggle', { controls: { legned: true } }, 'controls'],
+    ])('rejects %s at its field', (_name, extra, path) => {
+      expect(issuePaths(DashboardSchema.safeParse(dash([run(extra)])))).toContain(`widgets.0.${path}`);
+    });
   });
 
   it('validates metric queries and formulas', () => {

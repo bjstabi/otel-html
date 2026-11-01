@@ -723,6 +723,60 @@
                       "default": true,
                       "type": "boolean"
                     },
+                    "runBy": {
+                      "default": null,
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "failedWhen": {
+                      "default": null,
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "controls": {
+                      "default": null,
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "slider": {
+                              "default": true,
+                              "type": "boolean"
+                            },
+                            "evenSpacing": {
+                              "default": true,
+                              "type": "boolean"
+                            },
+                            "split": {
+                              "default": true,
+                              "type": "boolean"
+                            },
+                            "legend": {
+                              "default": false,
+                              "type": "boolean"
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "echarts": {
                       "default": null,
                       "description": "Unstable: passed through to ECharts as is; compatibility is ECharts', not otel-html's.",

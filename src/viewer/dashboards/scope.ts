@@ -4,6 +4,8 @@ import { anyValueToDisplay } from '../../model/anyvalue.js';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { TraceId } from '../../model/ids.js';
 import type { ResourceRecord } from '../../model/records.js';
+import { parseCondition } from '../../ottl/parse.js';
+import { canonical } from '../../query/metric-paths.js';
 import {
   type FacetSignal,
   type FacetValueKind,
@@ -45,6 +47,16 @@ export function resourcesMatching(
       return v !== undefined && anyValueToDisplay(v) === b.value;
     }),
   );
+}
+
+/** The attribute key of a `resource.attributes["…"]` path; null for any other path. */
+export function runByKey(runBy: string): string | null {
+  const e = parseCondition(runBy);
+  const v = e.type === 'value' ? e.value : null;
+  if (v?.type !== 'path' || canonical(v).join('.') !== 'resource.attributes' || v.keys.length !== 1)
+    return null;
+  const [key] = v.keys;
+  return typeof key === 'string' ? key : null;
 }
 
 export interface WidgetScope {

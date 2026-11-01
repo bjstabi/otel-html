@@ -2,7 +2,12 @@ import { describe, expect, test } from 'vitest';
 import { parse, stringify } from 'yaml';
 import { ConfigSchema } from '../../src/config/schema.js';
 import { FUSION } from '../../src/dashboards/fusion.js';
-import { type Dashboard, DashboardSchema, type WidgetLayout } from '../../src/dashboards/schema.js';
+import {
+  type Dashboard,
+  DashboardSchema,
+  DEFAULT_RUN_CONTROLS,
+  type WidgetLayout,
+} from '../../src/dashboards/schema.js';
 import { dashboardToYaml, WIDGET_DEFAULTS, widgetToYaml } from '../../src/viewer/dashboards/copy-config.js';
 
 const layoutOf = (d: Dashboard): WidgetLayout[] => d.widgets.map(({ x, y, w, h }) => ({ x, y, w, h }));
@@ -44,6 +49,105 @@ describe('dashboardToYaml', () => {
     expect(out).toContain('query: severity_number >= 17');
     expect(out).not.toContain('context');
     expect(out).toContain('id: mine');
+  });
+
+  test('run chart fields are left out when unset, and controls when they equal the defaults', () => {
+    const make = (extra: object): Dashboard =>
+      DashboardSchema.parse({
+        id: 'r',
+        title: 'R',
+        widgets: [
+          {
+            type: 'metric',
+            x: 0,
+            y: 0,
+            w: 12,
+            h: 8,
+            queries: [{ id: 'a', metric: 'm', show: 'avg' }],
+            ...extra,
+          },
+        ],
+      });
+    const plain = make({});
+    expect(dashboardToYaml(plain, layoutOf(plain))).not.toMatch(/runBy|failedWhen|controls/);
+    const runs = make({ runBy: 'resource.attributes["run"]' });
+    const out = dashboardToYaml(runs, layoutOf(runs));
+    expect(out).toContain('runBy:');
+    expect(out).not.toMatch(/controls|slider/);
+    expect(reparse(out)).toEqual(runs);
+    const custom = make({
+      runBy: 'resource.attributes["run"]',
+      failedWhen: 'attributes["r"] == "failure"',
+      controls: { legend: true },
+    });
+    const text = dashboardToYaml(custom, layoutOf(custom));
+    expect(text).toContain('failedWhen:');
+    expect(reparse(text)).toEqual(custom);
+  });
+
+  test('a controls override writes the current toggles, and the YAML parses back to them', () => {
+    const queries = [{ id: 'a', metric: 'm', show: 'avg' }];
+    const d = DashboardSchema.parse({
+      id: 'r',
+      title: 'R',
+      widgets: [
+        { type: 'metric', id: 'runs', x: 0, y: 0, w: 12, h: 8, queries, runBy: 'resource.attributes["run"]' },
+        { type: 'metric', id: 'kept', x: 0, y: 8, w: 12, h: 8, queries, runBy: 'resource.attributes["run"]' },
+        { type: 'metric', id: 'plain', x: 0, y: 16, w: 12, h: 8, queries },
+      ],
+    });
+    const current = { slider: false, evenSpacing: true, split: false, legend: true };
+    const text = dashboardToYaml(d, layoutOf(d), { runs: current, plain: current });
+    const [runs, kept, plain] = reparse(text).widgets;
+    expect(runs).toMatchObject({ controls: current });
+    expect(kept).toMatchObject({ controls: DEFAULT_RUN_CONTROLS });
+    // A widget that isn't a run chart can't carry controls: the schema would refuse the paste.
+    expect(plain).toMatchObject({ runBy: null, controls: null });
+    expect(text).not.toMatch(/zoom/);
+  });
+
+  test('a widget with no layout entry keeps its controls override', () => {
+    const d = DashboardSchema.parse({
+      id: 'r',
+      title: 'R',
+      widgets: [
+        {
+          type: 'metric',
+          id: 'runs',
+          x: 1,
+          y: 2,
+          w: 6,
+          h: 8,
+          queries: [{ id: 'a', metric: 'm', show: 'avg' }],
+          runBy: 'resource.attributes["run"]',
+        },
+      ],
+    });
+    const current = { slider: false, evenSpacing: true, split: false, legend: true };
+    const [runs] = reparse(dashboardToYaml(d, [], { runs: current })).widgets;
+    expect(runs).toMatchObject({ controls: current, x: 1, y: 2, w: 6, h: 8 });
+  });
+
+  test('toggles put back to the defaults are left out, over a config that set others', () => {
+    const d = DashboardSchema.parse({
+      id: 'r',
+      title: 'R',
+      widgets: [
+        {
+          type: 'metric',
+          id: 'runs',
+          x: 0,
+          y: 0,
+          w: 12,
+          h: 8,
+          queries: [{ id: 'a', metric: 'm', show: 'avg' }],
+          runBy: 'resource.attributes["run"]',
+          controls: { legend: true },
+        },
+      ],
+    });
+    expect(dashboardToYaml(d, layoutOf(d), { runs: DEFAULT_RUN_CONTROLS })).not.toMatch(/controls|legend/);
+    expect(dashboardToYaml(d, layoutOf(d))).toContain('legend: true');
   });
 
   test('a moved widget keeps its new position, and the result is a valid dashboard', () => {
