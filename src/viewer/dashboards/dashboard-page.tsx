@@ -1,6 +1,6 @@
 import { Menu } from '@base-ui/react/menu';
 import { ChevronDown, Copy, LayoutDashboard, Pencil } from 'lucide-react';
-import { type JSX, useCallback, useMemo, useState } from 'react';
+import { type JSX, useCallback, useMemo, useState, useSyncExternalStore } from 'react';
 import type { RunControls, Widget, WidgetLayout, WidgetType } from '../../dashboards/schema.js';
 import { parseUnixNanos, type TraceId } from '../../model/ids.js';
 import type { DataSource, ResourceValues } from '../data/data-source.js';
@@ -22,6 +22,7 @@ import { dashboardToYaml } from './copy-config.js';
 import { DashboardLink } from './dashboard-link.js';
 import { DashboardGrid, useStacked } from './grid.js';
 import { type DashboardEntry, dashboardsOf, findDashboard } from './registry.js';
+import { useRunSession } from './run-session.js';
 import { bindings, following, scopeFor, type VariableBinding, type WidgetScope } from './scope.js';
 import { SelectionChips } from './selection-chips.js';
 import { VariablesBar, withVariable } from './variables-bar.js';
@@ -71,7 +72,6 @@ export const WIDGETS: Record<WidgetType, WidgetRenderer> = {
   table: FacetChartWidget,
 };
 
-const NO_CONTROLS: Readonly<Record<string, RunControls>> = {};
 const CARD = 'max-w-xl rounded-card border border-hairline bg-surface p-6';
 
 function layoutOf(widgets: readonly Widget[]): WidgetLayout[] {
@@ -221,9 +221,6 @@ function DashboardView(props: {
   /** The grid positions as edited on this page; the config's when absent. Never persisted. */
   layout: WidgetLayout[] | undefined;
   onLayout(layout: WidgetLayout[] | undefined): void;
-  /** The run charts' toggles as changed on this page, by widget id. Never persisted. */
-  controls: Readonly<Record<string, RunControls>>;
-  onControls(widgetId: string, controls: RunControls): void;
 }): JSX.Element {
   const { entry, dataSource } = props;
   const d = entry.dashboard;
@@ -243,6 +240,8 @@ function DashboardView(props: {
   const stacked = useStacked();
   const epoch = parseUnixNanos(manifest.epochUnixNano, 'manifest.epochUnixNano');
   const layout = props.layout ?? layoutOf(d.widgets);
+  const session = useRunSession();
+  const controls = useSyncExternalStore(session.subscribe, () => session.controlsOf(d.id));
 
   /** Applies `fn` to the state as it is now, so two quick changes never overwrite each other. */
   const change = useCallback(
@@ -307,7 +306,7 @@ function DashboardView(props: {
         const variable = d.variables.find((v) => v.key === key);
         if (variable !== undefined) change((s) => ({ ...s, vars: withVariable(s.vars, variable, value) }));
       },
-      setControls: (c) => props.onControls(w.id, c),
+      setControls: (c) => session.setControls(d.id, w.id, c),
     };
     const Body = WIDGETS[w.type];
     return (
@@ -333,7 +332,7 @@ function DashboardView(props: {
           actions={actions}
           variables={bound?.bindings ?? []}
           state={state}
-          controls={props.controls[w.id] ?? (w.type === 'metric' ? w.controls : null)}
+          controls={controls[w.id] ?? (w.type === 'metric' ? w.controls : null)}
         />
       </WidgetFrame>
     );
@@ -366,7 +365,7 @@ function DashboardView(props: {
       <CopyButton
         label="Copy config"
         icon={<Copy size={16} aria-hidden />}
-        text={() => dashboardToYaml(d, layout, props.controls)}
+        text={() => dashboardToYaml(d, layout, controls)}
         dialog={{ title: 'Copy config', label: 'Dashboard config' }}
       />
     </>
@@ -439,10 +438,6 @@ export function DashboardPage(props: { dataSource: DataSource; id: string }): JS
   const entry = findDashboard(dashboardsOf(dataSource.manifest), id);
   // Edited positions live here, keyed by dashboard, so switching away and back keeps them; a reload drops them.
   const [layouts, setLayouts] = useState<Readonly<Record<string, WidgetLayout[]>>>({});
-  // So do the run charts' toggles, by dashboard and then widget.
-  const [controls, setControls] = useState<Readonly<Record<string, Readonly<Record<string, RunControls>>>>>(
-    {},
-  );
   if (entry === null) return <NotFound id={id} manifest={dataSource.manifest} />;
   return (
     <DashboardView
@@ -456,8 +451,6 @@ export function DashboardPage(props: { dataSource: DataSource; id: string }): JS
           return layout === undefined ? rest : { ...rest, [id]: layout };
         })
       }
-      controls={controls[id] ?? NO_CONTROLS}
-      onControls={(widgetId, c) => setControls((all) => ({ ...all, [id]: { ...all[id], [widgetId]: c } }))}
     />
   );
 }

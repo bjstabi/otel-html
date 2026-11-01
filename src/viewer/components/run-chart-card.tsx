@@ -2,6 +2,7 @@ import { Info } from 'lucide-react';
 import { type JSX, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { RunControls } from '../../dashboards/schema.js';
 import type { RunInfo, RunQueryResult } from '../data/metric-run-query.js';
+import type { TimeWindow } from '../data/span-query.js';
 import { useColorAssigner } from '../theme/colors-context.js';
 import { Chart, type EChartsType } from './chart.js';
 import { seriesToken, token } from './metric-chart-option.js';
@@ -15,6 +16,14 @@ import {
   runYAxes,
   zoomFromEvent,
 } from './run-chart-option.js';
+
+/** The card's own state, which a parent can keep across a remount. */
+export interface RunChartView {
+  zoom: RunZoom | null;
+  /** The window `zoom` was taken in: a zoom doesn't outlive its window. */
+  zoomWindow: TimeWindow | null;
+  hidden: ReadonlySet<string>;
+}
 
 export interface RunChartCardProps {
   title: string;
@@ -30,6 +39,9 @@ export interface RunChartCardProps {
   echarts: Record<string, unknown> | null;
   onPickRun: ((runId: string) => void) | null;
   notes: string[];
+  /** Where the card starts; read on mount only. */
+  view?: RunChartView | undefined;
+  onView?: ((view: RunChartView) => void) | undefined;
 }
 
 const TOGGLES: readonly { key: keyof RunControls; label: string }[] = [
@@ -48,6 +60,12 @@ const LEGEND_GAP_PX = 8;
 /** Under the plot, the legend scrolls past this share of the height rather than squeezing the plot away. */
 const LEGEND_UNDER_MAX_SHARE = 0.4;
 const NO_HIDDEN: ReadonlySet<string> = new Set();
+
+/** The zoom a card starts at: a stored one only counts in the window it was taken in. */
+function startingZoom(view: RunChartView | undefined, window: TimeWindow): RunZoom | null {
+  const taken = view?.zoomWindow;
+  return taken?.start === window.start && taken.end === window.end ? (view?.zoom ?? null) : null;
+}
 
 interface DotEvent {
   value?: unknown;
@@ -121,8 +139,8 @@ export function RunChartCard(props: RunChartCardProps): JSX.Element {
 
   // The zoom is also a ref because it isn't an input to the option: ECharts already shows a zoom it reports, and
   // only the y axis follows it. A rebuild for any other reason reads the ref, so it comes back at the current zoom.
-  const [zoom, setZoomState] = useState<RunZoom | null>(null);
-  const zoomNow = useRef<RunZoom | null>(null);
+  const [zoom, setZoomState] = useState(() => startingZoom(props.view, result.window));
+  const zoomNow = useRef(zoom);
   const setZoom = (z: RunZoom | null): void => {
     zoomNow.current = z;
     setZoomState(z);
@@ -135,12 +153,18 @@ export function RunChartCard(props: RunChartCardProps): JSX.Element {
   // Reset clears a zoom ECharts is showing, which takes a rebuild when nothing else changes.
   const [resetTick, setResetTick] = useState(0);
 
-  const [hiddenKeys, setHiddenKeys] = useState<ReadonlySet<string>>(NO_HIDDEN);
+  const [hiddenKeys, setHiddenKeys] = useState(props.view?.hidden ?? NO_HIDDEN);
   // A new result can drop lines: hidden keys only count while they exist, and never hide everything.
   const hidden = useMemo(() => {
     const kept = new Set(result.lines.filter((l) => hiddenKeys.has(l.key)).map((l) => l.key));
     return kept.size === result.lines.length ? NO_HIDDEN : kept;
   }, [result.lines, hiddenKeys]);
+
+  const onView = useRef(props.onView);
+  onView.current = props.onView;
+  useEffect(() => {
+    onView.current?.({ zoom, zoomWindow: zoom === null ? null : result.window, hidden: hiddenKeys });
+  }, [zoom, hiddenKeys, result.window]);
 
   const [hoveredRun, setHoveredRun] = useState<string | null>(null);
 

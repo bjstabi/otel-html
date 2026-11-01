@@ -7,6 +7,7 @@ import { SELECTION_MODES } from '../../query/pages.js';
 import { DashboardPage } from '../dashboards/dashboard-page.js';
 import { DashboardsListPage } from '../dashboards/list-page.js';
 import { defaultDashboardRoute } from '../dashboards/registry.js';
+import { RunSessionProvider } from '../dashboards/run-session.js';
 import type { DataSource } from '../data/data-source.js';
 import { LogsExplorer } from '../logs/explorer.js';
 import { MetricsCatalog } from '../metrics/catalog.js';
@@ -187,7 +188,9 @@ export function Shell(props: { dataSource: DataSource; history: HistoryPort }): 
                 <div className="flex min-w-0 flex-1 flex-col">
                   <UrlErrors errors={errors} onDismiss={() => setErrors([])} />
                   <CarryNotice carried={carried} onDismiss={() => setCarried(null)} />
-                  <RoutedPage dataSource={dataSource} />
+                  <RunSessionProvider>
+                    <RoutedPage dataSource={dataSource} />
+                  </RunSessionProvider>
                 </div>
               </div>
               <ShortcutHelp open={helpOpen} onClose={() => setHelpOpen(false)} />

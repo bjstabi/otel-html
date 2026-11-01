@@ -3,18 +3,38 @@ import { userEvent } from '@testing-library/user-event';
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
 
 const charts = vi.hoisted(
-  (): { label: string; option: unknown; onEvents: { click?: (e: unknown) => void } | undefined }[] => [],
-);
-vi.mock('../../src/viewer/components/chart.js', () => ({
-  Chart: (p: {
+  (): {
+    label: string;
     option: unknown;
-    ariaLabel: string;
-    onEvents?: { click?: (e: unknown) => void };
-  }): React.JSX.Element => {
-    charts.push({ label: p.ariaLabel, option: p.option, onEvents: p.onEvents });
-    return <div role="img" aria-label={p.ariaLabel} />;
-  },
-}));
+    onEvents: { click?: (e: unknown) => void; datazoom?: () => void } | undefined;
+  }[] => [],
+);
+const chartZoom = vi.hoisted(() => ({ startValue: 0, endValue: 0 }));
+vi.mock('../../src/viewer/components/chart.js', async () => {
+  const { useEffect } = await import('react');
+  const instance = {
+    getOption: () => ({ dataZoom: [chartZoom] }),
+    setOption: () => undefined,
+    dispatchAction: () => undefined,
+  };
+  return {
+    Chart: (p: {
+      option: unknown;
+      ariaLabel: string;
+      onEvents?: { click?: (e: unknown) => void; datazoom?: () => void };
+      onInstance?: (c: unknown) => void;
+    }): React.JSX.Element => {
+      useEffect(() => {
+        // The bucket card binds zrender handlers, which this stand-in lacks; only the run card needs it.
+        if (!p.ariaLabel.includes('lines over')) return;
+        p.onInstance?.(instance);
+        return () => p.onInstance?.(null);
+      }, [p.onInstance, p.ariaLabel]);
+      charts.push({ label: p.ariaLabel, option: p.option, onEvents: p.onEvents });
+      return <div role="img" aria-label={p.ariaLabel} />;
+    },
+  };
+});
 
 const runs = vi.hoisted((): { queries: { id: string; where: string | null }[] }[] => []);
 vi.mock('../../src/viewer/metrics/use-metric-query.js', async (importOriginal) => {
@@ -31,12 +51,19 @@ vi.mock('../../src/viewer/metrics/use-metric-query.js', async (importOriginal) =
 const runQueries = vi.hoisted(
   (): { where: string | null; window: { start: number; end: number }; runBy: string }[] => [],
 );
+/** A crafted answer for the query: the fixture's runs all end at one time, so its zooms can't be told apart. */
+const cannedRuns = vi.hoisted(() => ({
+  of: null as null | ((window: { start: number; end: number }) => unknown),
+}));
 vi.mock('../../src/viewer/data/metric-run-query.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/viewer/data/metric-run-query.js')>();
   return {
     ...actual,
     runMetricRunQuery: (...args: Parameters<typeof actual.runMetricRunQuery>) => {
       runQueries.push({ where: args[1].where, window: args[2].window, runBy: args[2].runBy });
+      if (cannedRuns.of !== null) {
+        return Promise.resolve(cannedRuns.of(args[2].window) as ReturnType<typeof actual.runMetricRunQuery>);
+      }
       return actual.runMetricRunQuery(...args);
     },
   };
@@ -48,6 +75,7 @@ import type { AnyValue } from '../../src/model/anyvalue.js';
 import { parseTraceId } from '../../src/model/ids.js';
 import type { ResourceRecord } from '../../src/model/records.js';
 import type { WidgetActions } from '../../src/viewer/dashboards/dashboard-page.js';
+import { RunSessionProvider } from '../../src/viewer/dashboards/run-session.js';
 import type { VariableBinding, WidgetScope } from '../../src/viewer/dashboards/scope.js';
 import { MetricWidget } from '../../src/viewer/dashboards/widgets/metric.js';
 import { createDataSource, type DataSource } from '../../src/viewer/data/data-source.js';
@@ -72,6 +100,7 @@ beforeEach(() => {
   charts.length = 0;
   runs.length = 0;
   runQueries.length = 0;
+  cannedRuns.of = null;
 });
 afterEach(cleanup);
 
@@ -135,17 +164,19 @@ function mount(
     <ThemeProvider>
       <GoToContext.Provider value={vi.fn()}>
         <SelectionProvider store={createSelectionStore({})}>
-          <MetricWidget
-            widget={w}
-            scope={{ ...SCOPE, ...scope }}
-            dashboard={{ dashboard, source: 'x', isDefault: false }}
-            height={500}
-            dataSource={source}
-            actions={actions}
-            variables={over.variables ?? []}
-            controls={over.controls ?? null}
-            state={EMPTY_DASHBOARD_STATE}
-          />
+          <RunSessionProvider>
+            <MetricWidget
+              widget={w}
+              scope={{ ...SCOPE, ...scope }}
+              dashboard={{ dashboard, source: 'x', isDefault: false }}
+              height={500}
+              dataSource={source}
+              actions={actions}
+              variables={over.variables ?? []}
+              controls={over.controls ?? null}
+              state={EMPTY_DASHBOARD_STATE}
+            />
+          </RunSessionProvider>
         </SelectionProvider>
       </GoToContext.Provider>
     </ThemeProvider>
@@ -737,6 +768,164 @@ describe('the Metrics widget with runBy', () => {
       await waitFor(() => expect(currentD()?.vars).toEqual({ 'service.name': 'payments' }));
       expect(toggle('Legend').getAttribute('aria-pressed')).toBe('true');
       expect(window.location.hash).not.toMatch(/legend|slider/i);
+    });
+
+    describe('what the viewer changed on the chart', () => {
+      const VIEW_DASH: Dashboard = DashboardSchema.parse({
+        id: 'view',
+        title: 'View',
+        variables: ['service.name', 'host.name'],
+        widgets: [
+          {
+            type: 'metric',
+            title: 'Jobs',
+            x: 0,
+            y: 0,
+            w: 12,
+            h: 12,
+            queries: [CPU],
+            controls: { legend: true },
+            ...RUN_BY,
+          },
+        ],
+      });
+      const viewPage = (): Promise<DataSource> =>
+        linked({
+          ...report.manifest,
+          config: {
+            ...report.manifest.config,
+            dashboards: [{ source: 'otel-html.yaml', dashboard: VIEW_DASH }],
+          },
+        });
+      const WIDE = '#/dashboards/view';
+      const point = { value: 1, failed: false };
+      const line = (key: string) => ({ key, label: key, unit: 's', points: [point, point, point] });
+
+      beforeEach(() => {
+        cannedRuns.of = (win) => ({
+          queryId: 'a',
+          runs: ['r1', 'r2', 'r3'].map((id, i) => ({ id, time: (i + 1) * S, revision: null })),
+          lines: [line('fast'), line('slow')],
+          leftOut: 0,
+          window: win,
+          notes: [],
+        });
+      });
+
+      interface Zoomed {
+        dataZoom: { startValue?: number; endValue?: number }[];
+      }
+      const zoomed = (): { startValue?: number; endValue?: number } | undefined => {
+        const option = charts.at(-1)?.option as Zoomed;
+        return option.dataZoom[0];
+      };
+      const zoomToLastTwo = (): void => {
+        chartZoom.startValue = 1;
+        chartZoom.endValue = 2;
+        act(() => charts.at(-1)?.onEvents?.datazoom?.());
+      };
+      const chart = (): Promise<HTMLElement> => screen.findByRole('img', { name: /lines over/ });
+      const slow = (): HTMLElement =>
+        within(screen.getByRole('list', { name: 'Lines' })).getByRole('button', { name: /^slow/ });
+      const expectKept = (): void => {
+        expect(zoomed()).toMatchObject({ startValue: 1, endValue: 2 });
+        expect(slow().getAttribute('aria-pressed')).toBe('false');
+        expect((toggle('Reset') as HTMLButtonElement).disabled).toBe(false);
+      };
+
+      /** A `matchMedia` whose stacking query can be flipped, as resizing past the breakpoint does. */
+      function stubViewport(): { cross(matches: boolean): void } {
+        const state = { matches: false };
+        const listeners = new Set<() => void>();
+        vi.stubGlobal('matchMedia', (media: string) => ({
+          get matches() {
+            return state.matches;
+          },
+          media,
+          addEventListener: (_: string, l: () => void) => listeners.add(l),
+          removeEventListener: (_: string, l: () => void) => listeners.delete(l),
+        }));
+        return {
+          cross(matches) {
+            state.matches = matches;
+            act(() => {
+              for (const l of listeners) l();
+            });
+          },
+        };
+      }
+
+      test('zoom and hidden lines survive another variable changing, which reloads the card', async () => {
+        const user = userEvent.setup();
+        renderShell(WIDE, await viewPage());
+        const before = await chart();
+        await user.click(slow());
+        zoomToLastTwo();
+        await user.click(screen.getByRole('combobox', { name: 'host.name' }));
+        await user.click(await screen.findByRole('option', { name: 'runner-1' }));
+        await waitFor(() => expect(runQueries.at(-1)?.where).toContain('runner-1'));
+        const after = await chart();
+        expect(after).not.toBe(before);
+        expectKept();
+      });
+
+      test('zoom and hidden lines survive the grid crossing its stacking breakpoint', async () => {
+        const user = userEvent.setup();
+        const viewport = stubViewport();
+        renderShell(WIDE, await viewPage());
+        const before = await chart();
+        await user.click(slow());
+        zoomToLastTwo();
+        viewport.cross(true);
+        const after = await chart();
+        expect(after).not.toBe(before);
+        expectKept();
+      });
+
+      test('toggles, zoom and hidden lines survive leaving to another route and back', async () => {
+        const user = userEvent.setup();
+        renderShell(WIDE, await viewPage());
+        await chart();
+        await user.click(toggle('Slider'));
+        await user.click(slow());
+        zoomToLastTwo();
+        await user.click(screen.getByRole('button', { name: /Open in Metrics/ }));
+        await waitFor(() => expect(window.location.hash.startsWith('#/metrics')).toBe(true));
+        window.location.hash = WIDE;
+        await chart();
+        expect(toggle('Slider').getAttribute('aria-pressed')).toBe('false');
+        expectKept();
+      });
+
+      test('a window change clears the zoom and keeps the hidden lines', async () => {
+        const user = userEvent.setup();
+        renderShell(WIDE, await viewPage());
+        await chart();
+        await user.click(slow());
+        zoomToLastTwo();
+        window.location.hash = `${WIDE}?t=0~100000000000`;
+        await waitFor(() => expect(runQueries.at(-1)?.window.end).toBe(100 * S));
+        await chart();
+        expect(zoomed()?.startValue).toBeUndefined();
+        expect(slow().getAttribute('aria-pressed')).toBe('false');
+      });
+
+      test('Reset clears what is stored, so a remount comes back as configured', async () => {
+        const user = userEvent.setup();
+        const viewport = stubViewport();
+        renderShell(WIDE, await viewPage());
+        await chart();
+        await user.click(toggle('Slider'));
+        await user.click(slow());
+        zoomToLastTwo();
+        await user.click(toggle('Reset'));
+        viewport.cross(true);
+        await chart();
+        expect((toggle('Reset') as HTMLButtonElement).disabled).toBe(true);
+        expect(toggle('Slider').getAttribute('aria-pressed')).toBe('true');
+        expect(slow().getAttribute('aria-pressed')).toBe('true');
+        expect(zoomed()?.startValue).toBeUndefined();
+      });
     });
 
     test('Open in Metrics opens the queries as they are, with the bound run in the where', async () => {

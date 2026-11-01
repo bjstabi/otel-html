@@ -21,6 +21,7 @@ import { useGoTo } from '../../shell/go-to.js';
 import { useKeyedAsync } from '../../state/use-keyed-async.js';
 import { traceResources } from '../../traces/trace-tabs.js';
 import type { WidgetRenderer } from '../dashboard-page.js';
+import { useRunSession } from '../run-session.js';
 import { resourcesMatching, runByKey, variableCondition } from '../scope.js';
 import { FRAME_CHROME_PX } from './layout.js';
 import { useSubtitle } from './subtitle.js';
@@ -260,6 +261,8 @@ const RunBody: Body = ({ widget, scope, dashboard, height, dataSource, actions, 
   const { runBy, failedWhen, echarts } = widget;
   const configured = widget.controls ?? DEFAULT_RUN_CONTROLS;
   const key = useMemo(() => runByKey(runBy), [runBy]);
+  const session = useRunSession();
+  const dashboardId = dashboard.dashboard.id;
   const narrowing = useNarrowing(dataSource, scope.highlightTrace);
   const catalog = useKeyedAsync(dataSource, catalogOf);
   const run = dataSource.manifest.range;
@@ -336,6 +339,8 @@ const RunBody: Body = ({ widget, scope, dashboard, height, dataSource, actions, 
       echarts={echarts}
       onPickRun={onPickRun}
       notes={note === null ? result.value.notes : [note, ...result.value.notes]}
+      view={session.viewOf(dashboardId, widget.id)}
+      onView={(view) => session.setView(dashboardId, widget.id, view)}
     />
   );
 };

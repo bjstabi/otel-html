@@ -80,7 +80,11 @@ vi.mock('../../src/viewer/components/chart.js', async () => {
   };
 });
 
-import { RunChartCard, type RunChartCardProps } from '../../src/viewer/components/run-chart-card.js';
+import {
+  RunChartCard,
+  type RunChartCardProps,
+  type RunChartView,
+} from '../../src/viewer/components/run-chart-card.js';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -237,6 +241,60 @@ describe('RunChartCard toggles', () => {
     const g = lastFull().grid?.[0];
     expect(g?.width).toBe(600 - 56 - 16);
     expect(screen.getByRole('img').getAttribute('data-height')).toBe(String(600 - 2 * 28 - 8));
+  });
+});
+
+describe('RunChartCard view', () => {
+  const windowOf = (): RunChartView['zoomWindow'] => result().window;
+  const zoomOf = (): NonNullable<RunChartView['zoom']> => {
+    const [, second, third] = result().runs;
+    return { start: second?.time ?? 0, end: third?.time ?? 0 };
+  };
+
+  test('starts from a given zoom and hidden lines', () => {
+    const view = { zoom: zoomOf(), zoomWindow: windowOf(), hidden: new Set(['slow']) };
+    render(<RunChartCard {...props({ view })} />);
+    expect(lastFull().dataZoom?.[0]?.startValue).toBe(1);
+    expect(lineIds(lastFull())).toEqual(['line:fast']);
+    expect((reset() as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  test('drops a given zoom taken in another window, and keeps the hidden lines', () => {
+    const w = windowOf();
+    const view = {
+      zoom: zoomOf(),
+      zoomWindow: { start: w?.start ?? 0, end: (w?.end ?? 0) + 1 },
+      hidden: new Set(['slow']),
+    };
+    const onView = vi.fn();
+    render(<RunChartCard {...props({ view, onView })} />);
+    expect(lastFull().dataZoom?.[0]?.startValue).toBeUndefined();
+    expect(lineIds(lastFull())).toEqual(['line:fast']);
+    expect(onView).toHaveBeenLastCalledWith({ zoom: null, zoomWindow: null, hidden: new Set(['slow']) });
+  });
+
+  test('reports a zoom and a hidden line, and Reset reports them gone', async () => {
+    const onView = vi.fn();
+    render(<RunChartCard {...props({ onView })} />);
+    await zoomTo(1, 2);
+    expect(onView).toHaveBeenLastCalledWith({ zoom: zoomOf(), zoomWindow: windowOf(), hidden: new Set() });
+    fireEvent.click(row(/^slow/));
+    expect(onView).toHaveBeenLastCalledWith({
+      zoom: zoomOf(),
+      zoomWindow: windowOf(),
+      hidden: new Set(['slow']),
+    });
+    fireEvent.click(reset());
+    expect(onView).toHaveBeenLastCalledWith({ zoom: null, zoomWindow: null, hidden: new Set() });
+  });
+
+  test('a window change reports the zoom gone', async () => {
+    const onView = vi.fn();
+    const { rerender } = render(<RunChartCard {...props({ onView })} />);
+    await zoomTo(1, 2);
+    const moved = { ...result(), window: { start: 0, end: 1 } };
+    rerender(<RunChartCard {...props({ onView, result: moved })} />);
+    expect(onView).toHaveBeenLastCalledWith({ zoom: null, zoomWindow: null, hidden: new Set() });
   });
 });
 
