@@ -350,7 +350,7 @@ config dashboard: the publisher passes a `--config` with `viewer.home: dashboard
 `viewer.defaultDashboard: ci`, variables `cicd.pipeline.run.id` and `cicd.pipeline.task.name`, and widgets
 built from what the writer already supports: a `metric` widget charting `cicd.pipeline.task.run.duration` by
 `cicd.pipeline.task.name` as lines over time (the multi-line job-duration chart), one for queue time, a
-`toplist` of spans by name for the slowest steps, the `traces` list filtered to run root spans, and the `logs`
+`toplist` of spans by name for the steps, and (since #87, with `measure: duration.max`) one for the slowest steps, the `traces` list filtered to run root spans, and the `logs`
 widget on warnings and errors. The current dashboard schema can express all of that, so no viewer change is
 needed to ship it; the YAML lives in the publish action as its default config and a repo can override it.
 

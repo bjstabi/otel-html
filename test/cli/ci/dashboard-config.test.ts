@@ -32,7 +32,7 @@ const metric = (ws: Widget[], title: string) => {
 
 describe('CI dashboard configs', () => {
   test.each([SHIPPED, COPY])('%s parses through the dashboard schema', async (path) => {
-    await expect(widgets(path)).resolves.toHaveLength(6);
+    await expect(widgets(path)).resolves.toHaveLength(7);
   });
 
   test('Job duration is a full-width run chart with the failure rule', async () => {

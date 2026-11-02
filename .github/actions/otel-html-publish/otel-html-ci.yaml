@@ -47,15 +47,26 @@ dashboards:
             show: avg
             by: ['attributes["cicd.pipeline.task.name"]']
       - type: toplist
-        # The toplist ranks by span count: it has no duration measure. The query keeps it to the publisher's step spans.
+        # Steps counts the publisher's step spans by name; the query keeps it to them.
         title: Steps
         x: 6
         y: 26
-        w: 6
+        w: 3
         h: 12
         signal: spans
         query: instrumentation_scope.name == "otel-html-ci" and attributes["github.job.step.number"] != nil
         groupBy: span.name
+      - type: toplist
+        # Slowest steps ranks the same spans by their longest duration.
+        title: Slowest steps
+        x: 9
+        y: 26
+        w: 3
+        h: 12
+        signal: spans
+        query: instrumentation_scope.name == "otel-html-ci" and attributes["github.job.step.number"] != nil
+        groupBy: span.name
+        measure: duration.max
       - type: traces
         title: Runs
         x: 0

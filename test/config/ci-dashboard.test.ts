@@ -35,7 +35,7 @@ describe('.github/actions/otel-html-publish/otel-html-ci.yaml', () => {
     expect(config.viewer.home).toBe('dashboards');
     expect(config.viewer.defaultDashboard).toBe('ci');
     const dash = ci(config);
-    expect(dash.widgets).toHaveLength(6);
+    expect(dash.widgets).toHaveLength(7);
     // `workflow` tells ci and load apart now that both share one rolling page
     expect(dash.variables.map((v) => [v.key, v.label])).toEqual([
       ['cicd.pipeline.name', 'workflow'],
@@ -70,6 +70,17 @@ describe('.github/actions/otel-html-publish/otel-html-ci.yaml', () => {
     // a job, queued or run span of the publisher, and a span of the job shell's own report
     expect(cond.test(target('otel-html-ci', new Map()))).toBe(false);
     expect(cond.test(target('otel-html', step))).toBe(false);
+  });
+
+  test('the Slowest steps toplist ranks the publisher step spans by max duration', async () => {
+    const { config } = await resolved();
+    const ws = ci(config).widgets;
+    const steps = ws.find((w) => w.type === 'toplist' && w.title === 'Steps');
+    const slow = ws.find((w) => w.type === 'toplist' && w.title === 'Slowest steps');
+    if (steps?.type !== 'toplist' || slow?.type !== 'toplist') throw new Error('no toplist');
+    expect(slow.measure).toBe('duration.max');
+    expect(slow.groupBy).toBe('span.name');
+    expect(slow.query).toBe(steps.query);
   });
 
   test('the Runs widget selects root spans only', async () => {
