@@ -39,6 +39,7 @@ function result(services: number, spans: Partial<Record<string, number>> = {}): 
     facets,
     buckets: new TimeBuckets(['ok', 'error', 'unset'], 64),
     red: new RedSeries(64),
+    groups: null,
     partial: null,
   };
 }

@@ -75,6 +75,7 @@ function resultOf(rows: SpanRow[], partial: SpanQueryResult['partial'] = null): 
     facets,
     buckets: new TimeBuckets(['ok', 'error', 'unset'], 8),
     red: new RedSeries(8),
+    groups: null,
     partial,
   };
 }

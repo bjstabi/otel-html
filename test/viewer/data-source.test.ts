@@ -33,6 +33,7 @@ const query = (over: Partial<SpanQuery> = {}): SpanQuery => ({
   sort: { column: 'start', dir: 'asc' },
   limit: 1000,
   groupBy: null,
+  measureBy: null,
   scanAll: false,
   ...over,
 });

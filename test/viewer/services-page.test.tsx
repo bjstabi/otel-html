@@ -54,6 +54,7 @@ function result(errors: number, partial: SpanQueryResult['partial']): SpanQueryR
     facets,
     buckets: new TimeBuckets(['ok', 'error', 'unset'], 8),
     red: new RedSeries(8),
+    groups: null,
     partial,
   };
 }

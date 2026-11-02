@@ -11,7 +11,7 @@ import {
 } from '../semconv/attributes.js';
 import { resourceName, serviceName } from '../semconv/resource-name.js';
 import { ExpHistogram } from './exp-histogram.js';
-import { addFacet, facetableAttributes } from './facet-values.js';
+import { addFacet, facetableAttributes, truncateFacetValue } from './facet-values.js';
 import { FacetCounts } from './facets.js';
 import { RedSeries } from './red.js';
 import { TimeBuckets } from './time-buckets.js';
@@ -84,6 +84,49 @@ export const SPAN_RESOURCE_FACET_KEYS: ReadonlySet<string> = new Set([
   ATTR_HOST_NAME,
   ATTR_DEPLOYMENT_ENVIRONMENT_NAME,
 ]);
+/**
+ * The value a span has for a facet key: the default facet's value for a core key, else the span attribute of
+ * that name, truncated as `addFacet` truncates. Undefined when the span has none.
+ */
+export function facetValueOf(t: SpanTarget, key: string): string | undefined {
+  const core = DEFAULT_SPAN_FACETS.find((f) => f.key === key);
+  if (core !== undefined) {
+    const v = core.value(t);
+    return v === undefined ? undefined : truncateFacetValue(v);
+  }
+  for (const a of facetableAttributes(t.span.attributes, CORE_KEYS)) {
+    if (a.key === key) return truncateFacetValue(a.value);
+  }
+  return undefined;
+}
+
+/** One duration histogram per group, capped at `MAX_DURATION_GROUPS` groups. */
+export class GroupDurations {
+  readonly #groups = new Map<string, ExpHistogram>();
+  dropped = 0;
+
+  get size(): number {
+    return this.#groups.size;
+  }
+
+  add(group: string, durationNs: number): void {
+    let h = this.#groups.get(group);
+    if (h === undefined) {
+      if (this.#groups.size >= MAX_DURATION_GROUPS) {
+        this.dropped++;
+        return;
+      }
+      h = new ExpHistogram();
+      this.#groups.set(group, h);
+    }
+    h.record(durationNs);
+  }
+
+  get(group: string): ExpHistogram | undefined {
+    return this.#groups.get(group);
+  }
+}
+
 const DURATION_KEY_SEP = '\u0000';
 
 export interface SpanRollupOptions {

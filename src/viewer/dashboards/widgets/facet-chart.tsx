@@ -106,7 +106,13 @@ function SpanFacets(props: Shared & { dataSource: DataSource; filter: Filter }):
   const { dataSource, filter, ...rest } = props;
   const { condition, text, window } = filter;
   const query = useMemo<SpanQuery>(
-    () => ({ ...queryOf(condition, text, window), mode: 'spans', sort: SORT.spans, groupBy: null }),
+    () => ({
+      ...queryOf(condition, text, window),
+      mode: 'spans',
+      sort: SORT.spans,
+      groupBy: null,
+      measureBy: null,
+    }),
     [condition, text, window],
   );
   return <FacetBody {...rest} handle={useSpanQuery(dataSource, query)} />;

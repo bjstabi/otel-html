@@ -95,6 +95,7 @@ export const TimelineWidget: WidgetRenderer = ({ scope, height, dataSource, acti
     mode: 'spans',
     sort: { column: 'start', dir: 'asc' },
     groupBy: null,
+    measureBy: null,
   });
   const logs = useLogQuery(dataSource, { ...base, mode: 'logs', sort: { column: 'time', dir: 'desc' } });
   const points = useKeyedAsync(dataSource, loadPoints);
