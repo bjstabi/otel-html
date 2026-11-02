@@ -18,6 +18,13 @@ const config: ViteUserConfig = defineConfig({
     testNamePattern: perfPass ? new RegExp(PERF_TAG) : new RegExp(`^(?!.*${PERF_TAG})`),
     fileParallelism: !perfPass,
     globalSetup: ['test-support/perf-global-setup.ts'],
+    coverage: {
+      provider: 'v8',
+      include: ['src/**'],
+      // Keep in step with the node run of the `coverage` task in mise.toml, whose flag replaces this list.
+      exclude: ['src/model/gen/**', 'src/**/*.gen.ts', 'src/**/*.gen.terms.ts'],
+      reporter: ['text', 'lcov', 'json-summary'],
+    },
     projects: [
       {
         test: {

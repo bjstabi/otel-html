@@ -231,6 +231,33 @@ jobs:
         with:
           name: otel-html-${{ github.job }}
 
+  # Unit coverage of the suite without @perf, on main only (never gates anything). `mise run coverage` has no sources and no
+  # cache, so nothing can replay it and leave coverage/ empty.
+  coverage:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      # The job shell below is the built CLI, so dist/ must exist before the first `run:` step starts.
+      - name: Build otel-html
+        shell: bash
+        run: mise run build
+      - uses: ./.github/actions/otel-html-setup
+        with:
+          command: node dist/cli/main.js
+      - run: mise run coverage
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage
+          path: coverage/
+          if-no-files-found: error
+      - if: always()
+        uses: ./.github/actions/otel-html-collect
+        with:
+          name: otel-html-${{ github.job }}
+
   # The standalone Bun binaries, built and smoke-tested on every PR (convert, serve over HTTP and gRPC, run, SIGINT, bad
   # port). The release workflow keeps its own smoke step, which tests the artefact it uploads.
   binary:
