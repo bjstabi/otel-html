@@ -412,7 +412,8 @@ description = "Build the library, then the viewer, into dist/"
 depends = ["build:viewer"]
 
 [tasks."e2e:fixtures"]
-description = "Build the e2e fixture reports into e2e/.reports/ (skipped while up to date; --force rebuilds)"
+description = """Build the e2e fixture reports into e2e/.reports/ (skipped while up to date; --force rebuilds)
+All but `scale` and `huge`, which e2e:fixtures:scale builds; about a second after `build`."""
 depends = ["build"]
 sources = [
   "@group:deps",
@@ -431,6 +432,37 @@ sources = [
 outputs = ["e2e/.reports/**"]
 run = "bun e2e/build-fixtures.ts"
 
+# The scale reports are split from their viewer: the data needs the writer (the build:lib outputs) and the generators,
+# the viewer only dist/viewer. A viewer change runs `upgrade` (byte-identical to a fresh convert) instead of converting
+# 1M logs twice again.
+[tasks."e2e:fixtures:scale:data"]
+description = """Convert the e2e `scale` and `huge` reports into e2e/.reports-scale/ (skipped while up to date)
+100k spans, 1M logs and metrics, converted twice (~15 s, ~1 GB of memory). Its sources are the writer's build output,
+not the viewer's: a viewer change only reruns e2e:fixtures:scale."""
+depends = ["build"]
+sources = [
+  "@group:deps",
+  "dist/cli/**",
+  "dist/receiver-*.js",
+  "dist/index.d.ts",
+  "dist/index.js",
+  "e2e/build-scale-fixtures.ts",
+  "e2e/fixture.ts",
+  "test-support/fixture-ids.ts",
+  "test-support/otlp-builders.ts",
+  "test-support/scale-logs.ts",
+  "test-support/scale-metrics.ts",
+]
+outputs = ["e2e/.reports-scale/**"]
+run = "bun e2e/build-scale-fixtures.ts"
+
+[tasks."e2e:fixtures:scale"]
+description = """The e2e `scale` and `huge` reports with the current viewer (only e2e/scale.spec.ts reads them)
+Depends on e2e:fixtures:scale:data; `otel-html upgrade` then swaps in the current dist/viewer (~0.3 s, every run: a
+freshness record of its own could miss a viewer that :data wrote in between), so a viewer change never converts again."""
+depends = ["e2e:fixtures:scale:data"]
+run = "node dist/cli/main.js upgrade e2e/.reports-scale/scale && node dist/cli/main.js upgrade e2e/.reports-scale/huge"
+
 # Budgets scale with OTEL_HTML_PERF_FACTOR on slow machines; they are never edited.
 # CI runs in the official Playwright image and sets OTEL_HTML_SKIP_BROWSER_INSTALL to skip the browser download.
 # The metrics scale check runs only with OTEL_HTML_METRICS_SCALE=1 (its report takes a few seconds locally, under a minute on CI, and ~150 MB):
@@ -441,6 +473,8 @@ Two passes: the `<browser>-file` and `<browser>-http` projects in parallel (`-ht
 `<browser>-perf-file` project (@perf tests) alone with one worker. Both run; the task fails if either does. Only the perf
 pass may match no tests. The perf pass writes its artifacts to test-results/perf, so it does not clear the first pass's failures. Playwright args after `--` go to both passes (`mise run test:e2e --browser chromium -- e2e/scale.spec.ts`);
 narrow the browsers with `--browser`, not `--project`, which would add to the two passes' own projects.
+The scale reports (e2e:fixtures:scale, ~15 s cold) are built only when the selection includes e2e/scale.spec.ts, decided
+by `playwright test --list` with the same args; a direct `playwright test e2e/scale.spec.ts` needs that task run first.
 Browsers are installed first unless OTEL_HTML_SKIP_BROWSER_INSTALL is set (CI's Playwright image has them).
 The metrics scale check runs only with OTEL_HTML_METRICS_SCALE=1 (CI runs it in its own Chromium job): it writes a
 report of 200 metrics x 1,000 series in which only the charted metric has the full 1 h at 10 s (a few seconds locally,
@@ -482,6 +516,15 @@ arg "[args]" var=#true
 run = """
 eval "set -- $usage_args"
 rc=0
+# The scale reports only when a selected test is in e2e/scale.spec.ts (the listing is both passes' projects); a listing
+# that fails builds them too, and the passes below report its error. --skip-deps: dist/ is already built (and in CI it
+# must not be rebuilt under the job shell).
+if ! listed=$(pnpm exec playwright test "$@" --project "${usage_browser}-file" --project "${usage_browser}-http" --project "${usage_browser}-perf-file" --list 2>&1) || grep -qF 'scale.spec.ts' <<<"$listed"; then
+  echo "test:e2e: the selection needs the scale reports (e2e:fixtures:scale)"
+  mise run --skip-deps e2e:fixtures:scale:data && mise run --skip-deps e2e:fixtures:scale || exit 1
+else
+  echo "test:e2e: the selection does not need the scale reports"
+fi
 [ -n "$OTEL_HTML_SKIP_BROWSER_INSTALL" ] || pnpm exec playwright install chromium firefox webkit
 pnpm exec playwright test "$@" --project "${usage_browser}-file" --project "${usage_browser}-http" --grep-invert @perf || rc=1
 pnpm exec playwright test "$@" --project "${usage_browser}-perf-file" --workers=1 --pass-with-no-tests --output test-results/perf || rc=1

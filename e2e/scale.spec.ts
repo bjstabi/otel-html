@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { Page } from '@playwright/test';
 import { LOG_STEP_NS } from '../test-support/scale-logs.js';
@@ -16,6 +16,8 @@ import {
   SCALE_SPAN_COUNT,
   SCALE_SPANS_PER_TRACE,
   SCALE_TRACES,
+  SCALE_WRITER_STAMP,
+  writerBuildHash,
 } from './fixture.js';
 import { ensureMetricsScaleReport } from './metrics-scale.js';
 import { expect, HTTP, test } from './test.js';
@@ -29,6 +31,31 @@ const FACET_SAMPLES = 7;
 const SCAN_BUDGET_MS = 5000;
 /** Timed loads after one untimed warm-up load; the median is compared with the budget. */
 const LOAD_SAMPLES = 3;
+
+// `scale` and `huge` are built only when the selection includes this spec (`test:e2e`), so a direct run without them,
+// or with them built by another writer or viewer, fails here naming the task. The metrics scale tests write their own
+// report and run without them (CI's `e2e-metrics-scale` job; the title prefix is that describe's).
+test.beforeEach(() => {
+  if (test.info().titlePath.some((t) => t.startsWith('metrics scale'))) return;
+  const viewer = readdirSync(new URL('../dist/viewer/assets/', import.meta.url))
+    .sort()
+    .join();
+  for (const name of ['scale', 'huge'] as const) {
+    const problem = !existsSync(new URL('data/manifest.js', reportDir(name)))
+      ? 'missing'
+      : readdirSync(new URL('assets/', reportDir(name)))
+            .sort()
+            .join() !== viewer
+        ? 'built with another viewer'
+        : !existsSync(SCALE_WRITER_STAMP) || readFileSync(SCALE_WRITER_STAMP, 'utf8') !== writerBuildHash()
+          ? 'converted by another writer build'
+          : undefined;
+    if (problem !== undefined)
+      throw new Error(
+        `the scale fixture reports are ${problem}: run \`mise run e2e:fixtures:scale\` (${name})`,
+      );
+  }
+});
 
 const SERVICE = SCALE_SERVICES[0];
 /** Span `j` of a trace belongs to service `j % 8`, so the first service owns spans 0, 8, ..., 48 of each trace. */

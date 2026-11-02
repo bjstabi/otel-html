@@ -24,10 +24,13 @@ function calibrate(): void {
   );
 }
 
-/** Throws naming the first mounted report (metrics-scale is built on demand) that `mise run e2e:fixtures` has not built. */
+/**
+ * Throws naming the first mounted report that `mise run e2e:fixtures` has not built. `metrics-scale` is built on demand,
+ * and `scale` and `huge` only when the selection includes `e2e/scale.spec.ts`, which checks for them itself.
+ */
 async function assertReportsBuilt(mounted: readonly ReportName[]): Promise<void> {
   for (const name of mounted) {
-    if (name === 'metrics-scale') continue;
+    if (name === 'metrics-scale' || name === 'scale' || name === 'huge') continue;
     // `no-manifest` is a copy of `main` without its manifest, by design.
     const probe = name === 'no-manifest' ? 'index.html' : 'data/manifest.js';
     try {

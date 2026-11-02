@@ -683,6 +683,27 @@ serves the report through the port proxy instead, until Ctrl-C. Interactive only
 - **Usage:** `e2e:fixtures`
 
 Build the e2e fixture reports into e2e/.reports/ (skipped while up to date; --force rebuilds)
+All but `scale` and `huge`, which e2e:fixtures:scale builds; about a second after `build`.
+
+## `e2e:fixtures:scale`
+
+- Depends: e2e:fixtures:scale:data
+
+- **Usage:** `e2e:fixtures:scale`
+
+The e2e `scale` and `huge` reports with the current viewer (only e2e/scale.spec.ts reads them)
+Depends on e2e:fixtures:scale:data; `otel-html upgrade` then swaps in the current dist/viewer (~0.3 s, every run: a
+freshness record of its own could miss a viewer that :data wrote in between), so a viewer change never converts again.
+
+## `e2e:fixtures:scale:data`
+
+- Depends: build
+
+- **Usage:** `e2e:fixtures:scale:data`
+
+Convert the e2e `scale` and `huge` reports into e2e/.reports-scale/ (skipped while up to date)
+100k spans, 1M logs and metrics, converted twice (~15 s, ~1 GB of memory). Its sources are the writer's build output,
+not the viewer's: a viewer change only reruns e2e:fixtures:scale.
 
 ## `fixtures`
 
@@ -734,6 +755,8 @@ Two passes: the `<browser>-file` and `<browser>-http` projects in parallel (`-ht
 `<browser>-perf-file` project (@perf tests) alone with one worker. Both run; the task fails if either does. Only the perf
 pass may match no tests. The perf pass writes its artifacts to test-results/perf, so it does not clear the first pass's failures. Playwright args after `--` go to both passes (`mise run test:e2e --browser chromium -- e2e/scale.spec.ts`);
 narrow the browsers with `--browser`, not `--project`, which would add to the two passes' own projects.
+The scale reports (e2e:fixtures:scale, ~15 s cold) are built only when the selection includes e2e/scale.spec.ts, decided
+by `playwright test --list` with the same args; a direct `playwright test e2e/scale.spec.ts` needs that task run first.
 Browsers are installed first unless OTEL_HTML_SKIP_BROWSER_INSTALL is set (CI's Playwright image has them).
 The metrics scale check runs only with OTEL_HTML_METRICS_SCALE=1 (CI runs it in its own Chromium job): it writes a
 report of 200 metrics x 1,000 series in which only the charted metric has the full 1 h at 10 s (a few seconds locally,
