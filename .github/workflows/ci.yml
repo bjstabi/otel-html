@@ -32,6 +32,9 @@ permissions:
 env:
   # `claude` and `watchexec` (`mise watch`) are developer tools; CI never needs them.
   MISE_DISABLE_TOOLS: claude,watchexec
+  # Under the job shell every `mise run` task exports its span to `otel-html run`'s receiver (the endpoint and
+  # TRACEPARENT come from `run`); outside it there is no endpoint and mise exports nothing.
+  MISE_OTEL_ENABLED: "1"
   # `read-write` is mise's default; an empty value is an error.
   MISE_TASK_CACHE: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !inputs.task_cache)) && 'off' || 'read-write' }}
 
