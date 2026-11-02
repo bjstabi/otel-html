@@ -146,10 +146,9 @@ export function addRunCommand(program: Command, io: CliIo, deps: CliDeps): void 
         );
       });
     } catch (e) {
-      // The command's own failure outranks a report failure, but the report failure is still told.
-      if (code === 0 || e instanceof CliExit) throw e;
+      // The command's exit code is the step's result; a report failure is told, never counted.
+      if (e instanceof CliExit) throw e;
       io.stderr(`error: ${e instanceof Error ? e.message : String(e)}\n`);
-      throw new CliExit(code);
     }
     if (code !== 0) throw new CliExit(code);
   });

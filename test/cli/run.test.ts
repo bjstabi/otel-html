@@ -315,6 +315,23 @@ describe('run', () => {
     expect(h.stderr).toContain('disk full');
   });
 
+  test('a zero exit is kept when the report fails to finish; the failure is printed', async () => {
+    const w = createTestWriter();
+    const fs: FileSystem = {
+      ...w.fs,
+      async writeTextAtomic(p, text) {
+        if (p.endsWith('data/manifest.js') && text.includes('"complete":true')) {
+          throw new Error('disk full');
+        }
+        return w.fs.writeTextAtomic(p, text);
+      },
+    };
+    const h = start(w, ['run', '-o', 'out', ...node, '0'], {}, undefined, fs);
+    open.push(h);
+    expect(await h.result).toBe(0);
+    expect(h.stderr).toContain('disk full');
+  });
+
   test('SIGTERM is forwarded to the child: 143, killed by SIGTERM, report complete', async () => {
     const w = createTestWriter();
     const h = start(w, ['run', '-o', 'out', ...node, 'sleep']);
