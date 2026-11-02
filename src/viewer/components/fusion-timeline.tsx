@@ -43,7 +43,7 @@ export function alignLanes(
 ): { startNs: number; widthNs: number; length: number; lanes: BucketView<string>[] } {
   let widthNs = Math.max(1_000_000, ...lanes.map((l) => l.buckets.widthNs));
   const columns = (w: number): number =>
-    Math.max(1, Math.ceil((window.end - Math.floor(window.start / w) * w) / w));
+    Math.max(1, Math.floor((window.end - Math.floor(window.start / w) * w) / w) + 1);
   while (columns(widthNs) > MAX_AXIS_COLUMNS) widthNs *= 2;
   const startNs = Math.floor(window.start / widthNs) * widthNs;
   const length = columns(widthNs);

@@ -53,7 +53,7 @@ function pointsWithin(
     for (let i = 0; i < b.length; i++) {
       const t = b.startNs + i * b.widthNs;
       const c = counts[i] ?? 0;
-      if (c === 0 || t + b.widthNs <= w.start || t >= w.end) continue;
+      if (c === 0 || t + b.widthNs <= w.start || t > w.end) continue;
       n += c;
       // The part of the bucket where the run has data, against the window.
       const from = Math.max(t, run?.start ?? t);
