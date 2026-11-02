@@ -1,5 +1,4 @@
 import { readFile } from 'node:fs/promises';
-import type { Page } from '@playwright/test';
 import { reportDir } from './fixture.js';
 import { watchProblems } from './metric-chart.js';
 import { expect, HTTP, test } from './test.js';
@@ -20,13 +19,7 @@ function groupedCount(n: number): RegExp {
 for (const n of [1, 2] as const) {
   const report = `frozen-format-${n}` as const;
   const title = `the frozen format-${n} report renders with the current viewer: totals, a flame graph and a metric chart`;
-  const body = async ({
-    page,
-    reportUrl,
-  }: {
-    page: Page;
-    reportUrl: (name: typeof report) => string;
-  }): Promise<void> => {
+  test(title, HTTP, async ({ page, reportUrl }) => {
     const problems = watchProblems(page);
     const spans = await manifestSpans(report);
 
@@ -42,7 +35,5 @@ for (const n of [1, 2] as const) {
     await expect(page).toHaveURL(/#\/metrics\?/);
     await expect(page.getByRole('img', { name: / · .+: [1-9]\d* series?$/ })).toBeVisible();
     expect(problems).toEqual([]);
-  };
-  if (n === 1) test(title, HTTP, body);
-  else test(title, body);
+  });
 }

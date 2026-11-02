@@ -22,6 +22,6 @@ git worktree remove --force <tmp>/fmt-<n>
 
 What is covered: `test/format/compat.test.ts` merges each fixture with the current reader and checks its manifest version and totals. `test/viewer/frozen-reports.test.ts` loads each fixture from disk through the viewer's scripted loader and runs the viewer's data layer on it (manifest parse, span query, metric catalog, every metric level, and the format-1 fallback of measuring point gaps). `e2e/frozen.spec.ts` renders each fixture in the current viewer in a browser. `test/format/frozen-checksums.test.ts` pins the bytes of every file. Not covered: reports of a format version older than the oldest fixture here.
 
-When a version is bumped, add a frozen report of the outgoing version here and to both tests. A version leaves `READABLE_FORMAT_VERSIONS` only together with its fixture.
+When a version is bumped, add a frozen report of the outgoing version here. That also means adding it to `FROZEN` in the checksum test, `buildFrozenReports`, `ReportName`, the mounted list in `e2e/global-setup.ts` and the loop in `e2e/frozen.spec.ts`, and regenerating `SHA256SUMS`. A version leaves `READABLE_FORMAT_VERSIONS` only together with its fixture.
 
 Format 3 needs no frozen copy: the end-to-end and writer tests exercise the current build.
