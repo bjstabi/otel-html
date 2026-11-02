@@ -96,6 +96,23 @@ describe('createShortcutHandler', () => {
     }
   });
 
+  test('a finished sequence stops its timeout: the next sequence gets the whole time', () => {
+    vi.useFakeTimers();
+    try {
+      const { actions, calls } = actionsSpy();
+      const h = createShortcutHandler(SHORTCUTS, actions);
+      h(key(document.body, 'g'));
+      vi.advanceTimersByTime(600);
+      h(key(document.body, 'l'));
+      h(key(document.body, 'g'));
+      vi.advanceTimersByTime(600);
+      h(key(document.body, 'l'));
+      expect(calls).toEqual(['goLogs', 'goLogs']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test('keys queued behind a busy page still pair up: the timeout is a timer, not the gap between their handling', () => {
     vi.useFakeTimers();
     try {
@@ -113,6 +130,30 @@ describe('createShortcutHandler', () => {
       expect(calls).toEqual(['goLogs', 'goLogs']);
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  test('a page frozen past the timeout does not drop the sequence: its late timer is not a second of waiting', () => {
+    const timers = new Map<number, () => void>();
+    let id = 0;
+    vi.stubGlobal('setTimeout', (fn: () => void) => {
+      timers.set(++id, fn);
+      return id;
+    });
+    vi.stubGlobal('clearTimeout', (t: number) => timers.delete(t));
+    try {
+      const { actions, calls } = actionsSpy();
+      const h = createShortcutHandler(SHORTCUTS, actions);
+      h(key(document.body, 'g'));
+      // The freeze ends: the browser runs whatever timer is due, once, and only then the queued key (WebKit's order).
+      const [first] = timers.entries();
+      if (first === undefined) throw new Error('a timer is pending');
+      timers.delete(first[0]);
+      first[1]();
+      h(key(document.body, 'l'));
+      expect(calls).toEqual(['goLogs']);
+    } finally {
+      vi.unstubAllGlobals();
     }
   });
 
