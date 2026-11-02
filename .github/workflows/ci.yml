@@ -33,7 +33,7 @@ env:
   # `claude` and `watchexec` (`mise watch`) are developer tools; CI never needs them.
   MISE_DISABLE_TOOLS: claude,watchexec
   # `read-write` is mise's default; an empty value is an error.
-  MISE_TASK_CACHE: off
+  MISE_TASK_CACHE: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !inputs.task_cache)) && 'off' || 'read-write' }}
 
 jobs:
   check:
