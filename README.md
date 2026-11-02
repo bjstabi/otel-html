@@ -754,6 +754,8 @@ Two passes: the `<browser>-file` and `<browser>-http` projects in parallel (`-ht
 `<browser>-perf-file` project (@perf tests) alone with one worker. Both run; the task fails if either does. Only the perf
 pass may match no tests. The perf pass writes its artifacts to test-results/perf, so it does not clear the first pass's failures. Playwright args after `--` go to both passes (`mise run test:e2e --browser chromium -- e2e/scale.spec.ts`);
 narrow the browsers with `--browser`, not `--project`, which would add to the two passes' own projects.
+The scale reports (e2e:fixtures:scale, ~15 s cold) are built only when the selection includes e2e/scale.spec.ts, decided
+by `playwright test --list` with the same args; a direct `playwright test e2e/scale.spec.ts` needs that task run first.
 Browsers are installed first unless OTEL_HTML_SKIP_BROWSER_INSTALL is set (CI's Playwright image has them).
 The metrics scale check runs only with OTEL_HTML_METRICS_SCALE=1 (CI runs it in its own Chromium job): it writes a
 report of 200 metrics x 1,000 series in which only the charted metric has the full 1 h at 10 s (a few seconds locally,
@@ -764,7 +766,7 @@ A run whose inputs match a cached success is replayed. `MISE_TASK_CACHE=off` re-
 `test:e2e:chromium`; `--force` reaches only the task it is given to, so it works on `test:e2e` and not on the wrapper.
 
 
-- Depends: e2e:fixtures, e2e:fixtures:scale
+- Depends: e2e:fixtures
 
 - **Usage:** `test:e2e [--browser <browser>] [args]…`
 

@@ -19,7 +19,8 @@ Run the smallest check that can catch the mistake, and run it often. CI runs the
 Agents whose harness reads `.mcp.json` get the tasks, with their effect metadata, from `mise mcp` instead of the README.
 
 The e2e suite before a PR is a rule, not a hook, so a failure that reaches CI is a measurable event. The mise tasks build `dist/` and the fixture reports themselves; a direct
-`pnpm exec playwright test` needs `mise run e2e:fixtures` first. The tasks document themselves: `mise tasks ls` for the list, `mise tasks info
+`pnpm exec playwright test` needs `mise run e2e:fixtures` first (and `mise run e2e:fixtures:scale` for `e2e/scale.spec.ts`,
+which `test:e2e` builds only when the selection includes it). The tasks document themselves: `mise tasks ls` for the list, `mise tasks info
 <task>` for the full description (the slow ones, `test:load*` and `bench:metrics`, say what they cost).
 
 ## Conventions
