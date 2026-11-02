@@ -63,7 +63,7 @@ jobs:
             *) echo "docs_only=false" >> "$GITHUB_OUTPUT"; exit 0 ;;
           esac
           if ! git fetch --depth=1 origin "$base" "$head" 2>/dev/null; then echo "docs_only=false" >> "$GITHUB_OUTPUT"; exit 0; fi
-          files=$(git diff --name-only "$base" "$head") || { echo "docs_only=false" >> "$GITHUB_OUTPUT"; exit 0; }
+          files=$(git diff --name-only --no-renames "$base" "$head") || { echo "docs_only=false" >> "$GITHUB_OUTPUT"; exit 0; }
           docs_only=true
           while IFS= read -r f; do
             case "$f" in docs/*|*.md) ;; *) docs_only=false; break ;; esac
