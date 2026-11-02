@@ -4,9 +4,20 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Every night, and on demand, the whole suite runs for real: a replay cannot catch a flaky test, a marginal @perf
+  # budget, a date-dependent test or runner image drift.
+  schedule:
+    - cron: "43 3 * * *"
+  workflow_dispatch:
+    inputs:
+      task_cache:
+        description: Replay unchanged tasks from the mise task cache
+        type: boolean
+        default: false
 
 concurrency:
-  group: ci-${{ github.ref }}
+  # By event too: a nightly run on main must not cancel a push's run, or be cancelled by one.
+  group: ci-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 defaults:
@@ -21,6 +32,8 @@ permissions:
 env:
   # `claude` and `watchexec` (`mise watch`) are developer tools; CI never needs them.
   MISE_DISABLE_TOOLS: claude,watchexec
+  # `read-write` is mise's default; an empty value is an error.
+  MISE_TASK_CACHE: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !inputs.task_cache)) && 'off' || 'read-write' }}
 
 jobs:
   check:
