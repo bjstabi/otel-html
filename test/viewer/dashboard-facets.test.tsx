@@ -12,11 +12,13 @@ vi.mock('../../src/viewer/components/chart.js', () => ({
 import { type Dashboard, DashboardSchema } from '../../src/dashboards/schema.js';
 import type { TraceId } from '../../src/model/ids.js';
 import { FacetCounts } from '../../src/rollups/facets.js';
+import { LogRollups } from '../../src/rollups/log-rollups.js';
 import { RedSeries } from '../../src/rollups/red.js';
+import { SpanRollups } from '../../src/rollups/span-rollups.js';
 import { TimeBuckets } from '../../src/rollups/time-buckets.js';
 import type { WidgetActions } from '../../src/viewer/dashboards/dashboard-page.js';
 import type { WidgetScope } from '../../src/viewer/dashboards/scope.js';
-import { FacetChartWidget } from '../../src/viewer/dashboards/widgets/facet-chart.js';
+import { FacetChartWidget, suggestKeys } from '../../src/viewer/dashboards/widgets/facet-chart.js';
 import {
   createDataSource,
   type DataSource,
@@ -112,6 +114,7 @@ const emptySpans = (partial: SpanQueryResult['partial'] = null): SpanQueryResult
   facets: new FacetCounts(10, 10),
   buckets: new TimeBuckets(['ok', 'error', 'unset'], 8),
   red: new RedSeries(8),
+  groups: null,
   partial,
 });
 
@@ -141,6 +144,62 @@ describe('the Top list and Table widgets', () => {
     expect(within(table).getAllByRole('columnheader')[1]?.textContent).toBe('Spans');
   });
 
+  test('a top list with measure duration.max shows one bar per group with the group max', async () => {
+    const ds = await linked();
+    const all = await ds.querySpans({
+      condition: null,
+      text: '',
+      window: null,
+      mode: 'spans',
+      sort: { column: 'start', dir: 'desc' },
+      limit: 100000,
+      groupBy: null,
+      measureBy: null,
+      scanAll: true,
+    });
+    const max = new Map<string, number>();
+    for (const r of all.rows) {
+      if (!('span' in r)) continue;
+      max.set(r.service, Math.max(max.get(r.service) ?? 0, r.durationNs));
+    }
+    expect(max.size).toBe(2);
+    mount(ds, { type: 'toplist', signal: 'spans', groupBy: 'service.name', measure: 'duration.max' });
+    const data = await bars();
+    expect(data.map((d) => d.name).sort()).toEqual([...max.keys()].sort());
+    for (const d of data) {
+      const want = max.get(d.name) ?? Number.NaN;
+      expect(d.value).toBe(want);
+    }
+  });
+
+  test.each([
+    ['duration.sum', true],
+    ['duration.avg', false],
+    ['duration.max', false],
+  ] as const)('the table with %s shows a Share column: %s', async (measure, share) => {
+    mount(await linked(), { type: 'table', signal: 'spans', groupBy: 'service.name', measure });
+    const table = await screen.findByRole('table');
+    const headers = within(table)
+      .getAllByRole('columnheader')
+      .map((h) => h.textContent);
+    expect(headers.includes('Share')).toBe(share);
+  });
+
+  test('the table with duration.p95 has a p95 column and no Share', async () => {
+    mount(await linked(), {
+      type: 'table',
+      signal: 'spans',
+      groupBy: 'service.name',
+      measure: 'duration.p95',
+    });
+    const table = await screen.findByRole('table');
+    expect(
+      within(table)
+        .getAllByRole('columnheader')
+        .map((h) => h.textContent),
+    ).toEqual(['service.name', 'p95']);
+  });
+
   test('the logs signal groups logs', async () => {
     mount(await linked(), { type: 'table', signal: 'logs', groupBy: 'service.name' });
     const table = await screen.findByRole('table');
@@ -162,18 +221,82 @@ describe('the Top list and Table widgets', () => {
     expect(option.grid).toMatchObject({ left: 7, top: 8 });
   });
 
-  test('a missing key shows the empty state, for either view', async () => {
+  test('a key that is no facet of the report says so and suggests known keys', async () => {
     const ds = await linked();
-    mount(ds, { type: 'toplist', signal: 'spans', groupBy: 'no.such.key' });
-    expect(await screen.findByText(/values in this window/)).toBeTruthy();
-    expect(screen.getByText('no.such.key').parentElement?.textContent).toBe(
-      'No no.such.key values in this window',
-    );
+    mount(ds, { type: 'toplist', signal: 'spans', groupBy: 'name' });
+    expect(await screen.findByText(/is not a facet of this report/)).toBeTruthy();
+    expect(screen.getByText('span.name')).toBeTruthy();
     expect(screen.queryByRole('img')).toBeNull();
     cleanup();
     mount(ds, { type: 'table', signal: 'logs', groupBy: 'no.such.key' });
-    expect(await screen.findByText(/values in this window/)).toBeTruthy();
+    expect(await screen.findByText(/is not a facet of this report/)).toBeTruthy();
     expect(screen.queryByRole('table')).toBeNull();
+  });
+
+  test('a facet with no values in the window keeps the empty message', async () => {
+    mount(
+      await linked(),
+      { type: 'toplist', signal: 'spans', groupBy: 'service.name' },
+      { window: { start: 1, end: 2 } },
+    );
+    expect(await screen.findByText(/values in this window/)).toBeTruthy();
+  });
+
+  test('a pinned facet with no observations keeps the empty message', async () => {
+    const base = await linked();
+    const landing = await base.landing();
+    const ds: DataSource = {
+      ...base,
+      landing: () =>
+        Promise.resolve({ ...landing, facets: new FacetCounts(10, 10, ['deployment.environment.name']) }),
+    };
+    mount(ds, { type: 'toplist', signal: 'spans', groupBy: 'deployment.environment.name' });
+    expect(await screen.findByText(/values in this window/)).toBeTruthy();
+    expect(screen.queryByText(/is not a facet/)).toBeNull();
+  });
+
+  test('a report with no spans or logs keeps the empty message for the core keys', async () => {
+    const base = await linked();
+    const [landing, logLanding] = await Promise.all([base.landing(), base.logLanding()]);
+    const window = { start: 1, end: 2 };
+    const caps = { facetValueCap: 10, facetKeyCap: 10 };
+    const ds: DataSource = {
+      ...base,
+      landing: () => Promise.resolve({ ...landing, facets: new SpanRollups(caps).facets }),
+      logLanding: () => Promise.resolve({ ...logLanding, facets: new LogRollups(caps).facets }),
+    };
+    mount(ds, { type: 'toplist', signal: 'spans', groupBy: 'span.name' }, { window });
+    expect(await screen.findByText(/values in this window/)).toBeTruthy();
+    expect(screen.queryByText(/is not a facet/)).toBeNull();
+    cleanup();
+    mount(ds, { type: 'table', signal: 'logs', groupBy: 'severity' }, { window });
+    expect(await screen.findByText(/values in this window/)).toBeTruthy();
+    expect(screen.queryByText(/is not a facet/)).toBeNull();
+  });
+
+  test('no message is shown until the report keys have loaded', async () => {
+    const base = await linked();
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const ds: DataSource = { ...base, landing: () => gate.then(() => base.landing()) };
+    mount(ds, { type: 'toplist', signal: 'spans', groupBy: 'name' });
+    await waitFor(() => expect(screen.queryByRole('status')).toBeNull());
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByText(/values in this window/)).toBeNull();
+    expect(screen.queryByText(/is not a facet/)).toBeNull();
+    release();
+    expect(await screen.findByText(/is not a facet of this report/)).toBeTruthy();
+  });
+
+  test('suggestKeys puts suffix matches first, deduplicated and capped', () => {
+    expect(suggestKeys(['span.name', 'service.name', 'http.route'], 'name')).toEqual([
+      'span.name',
+      'service.name',
+    ]);
+    expect(suggestKeys(['a.x', 'b.x', 'c.x', 'd.x'], 'X')).toEqual(['a.x', 'b.x', 'c.x']);
+    expect(suggestKeys(['xname', 'a.name'], 'name')).toEqual(['a.name', 'xname']);
   });
 
   test('the subtitle counts the spans or logs', async () => {

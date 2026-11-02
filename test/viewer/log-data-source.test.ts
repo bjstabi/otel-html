@@ -205,6 +205,7 @@ describe('eager logs load on first log use', () => {
       sort: { column: 'start', dir: 'asc' },
       limit: 1000,
       groupBy: null,
+      measureBy: null,
       scanAll: false,
     });
     expect(loader.calls.filter(isLogChunk)).toEqual([]);

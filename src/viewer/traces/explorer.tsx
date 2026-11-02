@@ -140,6 +140,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
       limit: manifest.config.viewer.listCap,
       // Grouping is a presentation concern in M1: group-by views are built from the result's facets.
       groupBy: null,
+      measureBy: null,
       scanAll: false,
     }),
     [sel.condition, sel.text, sel.window, mode, sort.column, sort.dir, manifest.config.viewer.listCap],
@@ -323,7 +324,13 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
                       />
                     </div>
                   ) : view === 'table' ? (
-                    <GroupTable result={result} groupBy={sel.groupBy} colors={colors} noun="Spans" />
+                    <GroupTable
+                      result={result}
+                      groupBy={sel.groupBy}
+                      colors={colors}
+                      noun="Spans"
+                      measure="count"
+                    />
                   ) : (
                     <div className="flex flex-col gap-2">
                       {mode === 'spans' && (

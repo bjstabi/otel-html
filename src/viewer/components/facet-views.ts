@@ -1,5 +1,8 @@
 import type { EChartsOption } from 'echarts';
+import type { Measure } from '../../dashboards/schema.js';
 import type { FacetCounts } from '../../rollups/facets.js';
+import type { GroupDurations } from '../../rollups/span-rollups.js';
+import { formatDuration } from '../../semconv/formatters.js';
 import { type ColorAssigner, seriesVar } from '../theme/palette.js';
 
 /** Most groups drawn before the rest collapse into one neutral "Other" slice. */
@@ -11,10 +14,14 @@ export const DEFAULT_GROUP_KEY = 'service.name';
 /** What the facet views read from a signal's query result; spans and logs both carry one. */
 export interface FacetSource {
   facets: FacetCounts;
+  /** Per-group duration histograms; only a span query asked to `measureBy` a key carries them. */
+  groups?: GroupDurations | null;
 }
 
 export interface FacetViewContext {
   groupBy: string | null;
+  /** What each bar measures; `count` (the default) is the facet count. */
+  measure?: Measure;
   colors: ColorAssigner;
 }
 
@@ -50,6 +57,70 @@ export function groupSlices(facets: FacetCounts, key: string, colors: ColorAssig
   return slices;
 }
 
+/** The header of a duration measure's column. */
+export const MEASURE_LABELS: Record<Exclude<Measure, 'count'>, string> = {
+  'duration.sum': 'Total',
+  'duration.avg': 'Average',
+  'duration.max': 'Max',
+  'duration.p95': 'p95',
+  'duration.p99': 'p99',
+};
+
+/**
+ * Every group valued by a duration measure of its histogram, the `MAX_GROUPS` largest first. Ranking is by the
+ * measure over all groups, not over the most frequent ones, so a rare slow group is not displaced. There is no
+ * "Other" slice: a remainder has no meaningful maximum or percentile, so it is left out for every measure.
+ */
+export function measuredSlices(
+  groups: GroupDurations,
+  measure: Exclude<Measure, 'count'>,
+  colors: ColorAssigner,
+): Slice[] {
+  const ranked: { group: string; value: number }[] = [];
+  for (const [group, h] of groups.entries()) {
+    let value: number;
+    switch (measure) {
+      case 'duration.sum':
+        value = h.sum;
+        break;
+      case 'duration.avg':
+        value = h.count === 0 ? 0 : h.sum / h.count;
+        break;
+      case 'duration.max':
+        value = h.max;
+        break;
+      case 'duration.p95':
+        value = h.quantile(0.95);
+        break;
+      case 'duration.p99':
+        value = h.quantile(0.99);
+        break;
+      default: {
+        const unreachable: never = measure;
+        return unreachable;
+      }
+    }
+    ranked.push({ group, value });
+  }
+  // Colours are handed out in first-seen order: only the groups drawn may take one.
+  return ranked
+    .sort((a, b) => b.value - a.value)
+    .slice(0, MAX_GROUPS)
+    .map(({ group, value }) => ({
+      key: group,
+      name: group === OTHER_LABEL ? `${OTHER_LABEL} (value)` : group,
+      value,
+      other: false,
+      color: seriesVar(colors.colorFor(group)),
+    }));
+}
+
+/** The slices a view draws for `measure`: facet counts, or per-group durations when the result carries them. */
+export function sliceSet(result: FacetSource, key: string, measure: Measure, colors: ColorAssigner): Slice[] {
+  if (measure === 'count' || result.groups == null) return groupSlices(result.facets, key, colors);
+  return measuredSlices(result.groups, measure, colors);
+}
+
 function datum(s: Slice): { name: string; value: number; itemStyle: { color: string } } {
   return { name: s.name, value: s.value, itemStyle: { color: s.color } };
 }
@@ -59,14 +130,25 @@ function slicesOf(result: FacetSource, ctx: FacetViewContext): Slice[] {
 }
 
 export function toplist(result: FacetSource, ctx: FacetViewContext): EChartsOption {
-  const slices = slicesOf(result, ctx);
+  const measure = ctx.measure ?? 'count';
+  const slices = sliceSet(result, ctx.groupBy ?? DEFAULT_GROUP_KEY, measure, ctx.colors);
+  const timed = measure !== 'count';
+  const format = (v: number): string => formatDuration(v);
   return {
     animation: false,
-    grid: { left: 120, right: 24, top: 8, bottom: 24 },
-    tooltip: { trigger: 'item' },
-    xAxis: { type: 'value', minInterval: 1 },
+    grid: { left: 120, right: timed ? 56 : 24, top: 8, bottom: 24 },
+    tooltip: timed ? { trigger: 'item', valueFormatter: (v) => format(Number(v)) } : { trigger: 'item' },
+    xAxis: timed ? { type: 'value', axisLabel: { formatter: format } } : { type: 'value', minInterval: 1 },
     yAxis: { type: 'category', inverse: true, data: slices.map((s) => s.name) },
-    series: [{ type: 'bar', data: slices.map(datum), label: { show: true, position: 'right' } }],
+    series: [
+      {
+        type: 'bar',
+        data: slices.map(datum),
+        label: timed
+          ? { show: true, position: 'right', formatter: (p) => format(Number(p.value)) }
+          : { show: true, position: 'right' },
+      },
+    ],
   };
 }
 

@@ -44,6 +44,16 @@ export interface WidgetLayout {
   h: number;
 }
 
+export const MEASURES = [
+  'count',
+  'duration.sum',
+  'duration.avg',
+  'duration.max',
+  'duration.p95',
+  'duration.p99',
+] as const;
+export type Measure = (typeof MEASURES)[number];
+
 interface WidgetBase extends WidgetLayout {
   id: string;
   title: string | null;
@@ -73,6 +83,7 @@ export type Widget =
       query: string | null;
       text: string;
       groupBy: string;
+      measure: Measure;
       echarts: Record<string, unknown> | null;
     })
   | (Followable & {
@@ -81,6 +92,7 @@ export type Widget =
       query: string | null;
       text: string;
       groupBy: string;
+      measure: Measure;
     });
 
 export interface Variable {
@@ -152,6 +164,7 @@ export type WidgetInput =
       query?: string | null | undefined;
       text?: string | undefined;
       groupBy: string;
+      measure?: Measure | undefined;
       echarts?: Record<string, unknown> | null | undefined;
     })
   | (FollowableInput & {
@@ -160,6 +173,7 @@ export type WidgetInput =
       query?: string | null | undefined;
       text?: string | undefined;
       groupBy: string;
+      measure?: Measure | undefined;
     });
 
 export type VariableInput =
@@ -234,6 +248,8 @@ const echarts = z.record(z.string(), z.unknown()).nullable().default(null).meta(
   description: "Unstable: passed through to ECharts as is; compatibility is ECharts', not otel-html's.",
 });
 
+const measure = z.enum(MEASURES).default('count');
+
 const layout = {
   id: widgetId.optional(),
   title: nullableString,
@@ -293,6 +309,7 @@ const WidgetSchema = z
       ...signalBase,
       signal: z.enum(['spans', 'logs']),
       groupBy: z.string().min(1),
+      measure,
       echarts,
     }),
     z.strictObject({
@@ -300,6 +317,7 @@ const WidgetSchema = z
       ...signalBase,
       signal: z.enum(['spans', 'logs']),
       groupBy: z.string().min(1),
+      measure,
     }),
   ])
   .superRefine((w, ctx) => {
@@ -319,6 +337,14 @@ const WidgetSchema = z
     if (context !== null && 'query' in w && w.query !== null) {
       const message = conditionIssue(w.query, context);
       if (message !== null) ctx.addIssue({ code: 'custom', path: ['query'], message });
+    }
+    if ((w.type === 'toplist' || w.type === 'table') && w.signal === 'logs' && w.measure !== 'count') {
+      const name = w.title === null ? w.type : `${w.type} "${w.title}"`;
+      ctx.addIssue({
+        code: 'custom',
+        path: ['measure'],
+        message: `${name}: a duration measure needs signal: spans`,
+      });
     }
     if (w.type !== 'metric') return;
     if (w.runBy === null) {

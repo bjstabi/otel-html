@@ -179,6 +179,7 @@ const emptySpans = (partial: SpanQueryResult['partial'] = null): SpanQueryResult
   facets: new FacetCounts(10, 10),
   buckets: new TimeBuckets(['ok', 'error', 'unset'], 8),
   red: new RedSeries(8),
+  groups: null,
   partial,
 });
 

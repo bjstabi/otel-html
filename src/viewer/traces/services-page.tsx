@@ -67,6 +67,7 @@ const baseQuery = (over: Partial<SpanQuery>): SpanQuery => ({
   sort: { column: 'start', dir: 'asc' },
   limit: 0,
   groupBy: null,
+  measureBy: null,
   scanAll: false,
   ...over,
 });
