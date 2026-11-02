@@ -33,6 +33,7 @@ const query = (over: Partial<SpanQuery> = {}): SpanQuery => ({
   sort: { column: 'start', dir: 'asc' },
   limit: 1000,
   groupBy: null,
+  measureBy: null,
   scanAll: false,
   ...over,
 });
@@ -220,6 +221,25 @@ describe('windowed strategy', () => {
     expect(loader.calls).toEqual([0, 1, 2, 3, 4, 5].map(chunkPath));
     expect(r.total).toBe(2);
     expect(r.partial).toBeNull();
+  });
+
+  test('a duration measure over the whole run is not cut at listCap', async () => {
+    const small: Fixture = {
+      files: six.files,
+      manifest: {
+        ...six.manifest,
+        config: { ...six.manifest.config, viewer: { ...six.manifest.config.viewer, listCap: 4 } },
+      },
+    };
+    const make = async (): Promise<Awaited<ReturnType<typeof createDataSource>>> =>
+      createDataSource(createScriptedLoader(small.files), small.manifest, 1);
+    const head = await (await make()).querySpans(query({ measureBy: 'service.name' }));
+    expect(head.partial).not.toBeNull();
+    const all = await (await make()).querySpans(query({ measureBy: 'service.name', scanAll: true }));
+    expect(all.partial).toBeNull();
+    let n = 0;
+    for (const [, h] of all.groups?.entries() ?? []) n += h.count;
+    expect(n).toBe(six.manifest.totals.spans);
   });
 
   test('without condition, text or window it returns the head of the run and trusts the manifest total', async () => {

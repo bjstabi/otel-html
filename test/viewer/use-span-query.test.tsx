@@ -17,6 +17,7 @@ const query = (text: string, scanAll = false): SpanQuery => ({
   sort: { column: 'start', dir: 'asc' },
   limit: 10,
   groupBy: null,
+  measureBy: null,
   scanAll,
 });
 
@@ -26,6 +27,7 @@ const resultOf = (total: number): SpanQueryResult => ({
   facets: new FacetCounts(10, 10),
   buckets: new TimeBuckets(['ok', 'error', 'unset'], 8),
   red: new RedSeries(8),
+  groups: null,
   partial: null,
 });
 

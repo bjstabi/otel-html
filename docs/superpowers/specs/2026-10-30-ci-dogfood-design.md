@@ -39,8 +39,8 @@ Non-goals (for this work)
 Anti-goals
 
 - A CI pipeline that is slower or flakier because of the report. Collection must add seconds, not minutes, and
-  a report failure must never fail a job that otherwise passed (the existing `run` exit-code contract already
-  says this).
+  a report failure must never fail a job that otherwise passed (held since #83: `run` exits with the command's
+  exit code whatever happens to the report).
 - Secrets or tokens reaching the published report. The publisher runs with the default token only, and the
   workflow trace is built from public API fields.
 - A site that grows without bound. Retention is part of the design, not a follow-up.
@@ -350,7 +350,7 @@ config dashboard: the publisher passes a `--config` with `viewer.home: dashboard
 `viewer.defaultDashboard: ci`, variables `cicd.pipeline.run.id` and `cicd.pipeline.task.name`, and widgets
 built from what the writer already supports: a `metric` widget charting `cicd.pipeline.task.run.duration` by
 `cicd.pipeline.task.name` as lines over time (the multi-line job-duration chart), one for queue time, a
-`toplist` of spans by name for the slowest steps, the `traces` list filtered to run root spans, and the `logs`
+`toplist` of spans by name for the steps, and (since #87, with `measure: duration.max`) one for the slowest steps, the `traces` list filtered to run root spans, and the `logs`
 widget on warnings and errors. The current dashboard schema can express all of that, so no viewer change is
 needed to ship it; the YAML lives in the publish action as its default config and a repo can override it.
 

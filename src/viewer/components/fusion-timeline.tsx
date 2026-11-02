@@ -43,7 +43,7 @@ export function alignLanes(
 ): { startNs: number; widthNs: number; length: number; lanes: BucketView<string>[] } {
   let widthNs = Math.max(1_000_000, ...lanes.map((l) => l.buckets.widthNs));
   const columns = (w: number): number =>
-    Math.max(1, Math.ceil((window.end - Math.floor(window.start / w) * w) / w));
+    Math.max(1, Math.floor((window.end - Math.floor(window.start / w) * w) / w) + 1);
   while (columns(widthNs) > MAX_AXIS_COLUMNS) widthNs *= 2;
   const startNs = Math.floor(window.start / widthNs) * widthNs;
   const length = columns(widthNs);
@@ -159,10 +159,12 @@ export function FusionTimeline(props: {
   const fromBrush =
     brush === null || view === null
       ? null
-      : {
-          lo: Math.max(0, Math.floor((brush.start - view.startNs) / view.widthNs)),
-          hi: Math.min(last, Math.max(0, Math.ceil((brush.end - view.startNs) / view.widthNs) - 1)),
-        };
+      : (() => {
+          const lo = Math.max(0, Math.floor((brush.start - view.startNs) / view.widthNs));
+          const hi = Math.min(last, Math.ceil((brush.end - view.startNs) / view.widthNs) - 1);
+          // A brush with no width (a drag inside the column at the aligned window end) is that one column.
+          return { lo: Math.min(lo, last), hi: Math.min(last, Math.max(lo, hi)) };
+        })();
   const ariaLabel = `Timeline: ${lanes.map((l) => `${l.label} ${totalText(l)}`).join(', ')}`;
   const plotTop = LANE_GAP_PX / 2;
   const plotBottom = AXIS_PX;

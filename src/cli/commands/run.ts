@@ -51,6 +51,43 @@ function exitOf(child: ChildProcess, command: string): Promise<ChildExit> {
   });
 }
 
+/** Whether a failure to open the receiver stops `run`: a usage error or a stop signal, not the report's own failure. */
+function propagates(e: unknown): boolean {
+  return e instanceof CliExit || (e instanceof OtelHtmlError && e.code === 'usage');
+}
+
+/** The report could not be started: tell why, then run the command as it would have run, with its own exit code. */
+async function runWithoutReport(
+  io: CliIo,
+  executable: string,
+  args: string[],
+  cause: unknown,
+): Promise<never> {
+  io.stderr(`error: ${cause instanceof Error ? cause.message : String(cause)}\n`);
+  io.stderr('warning: the report was not written; running the command without it\n');
+  let child: ChildProcess;
+  try {
+    child = io.spawn(executable, args, { stdio: 'inherit', env: io.env });
+  } catch (e) {
+    io.stderr(`error: ${e instanceof Error ? e.message : String(e)}\n`);
+    throw new CliExit(1);
+  }
+  const exiting = exitOf(child, executable);
+  const forward = io.signals.on((signal) => {
+    child.kill(signal);
+  });
+  let code: number;
+  try {
+    code = exitCodeOf(await exiting);
+  } catch (e) {
+    io.stderr(`error: ${e instanceof Error ? e.message : String(e)}\n`);
+    code = 1;
+  } finally {
+    forward();
+  }
+  throw new CliExit(code);
+}
+
 type RunFlags = ReceiveFlags & { traceparent?: string };
 
 export function addRunCommand(program: Command, io: CliIo, deps: CliDeps): void {
@@ -73,12 +110,18 @@ export function addRunCommand(program: Command, io: CliIo, deps: CliDeps): void 
     // Before the receiver opens: once it has returned, only `run`'s own forwarder handles a stop signal, and that is
     // installed after the child starts, so a slow async detector here would leave a window with the lock taken.
     const resource = await detectRunResource(argv);
-    const opened = await openReceiver(io, deps, flags, (enabled) => {
-      const protocol = checkedProtocol(io.env, enabled); // before anything is created or bound
-      // The transport the child will not use stays unbound unless an explicit port flag asked for it.
-      if (protocol === 'grpc') return flags.http === undefined ? { http: false } : undefined;
-      return flags.grpc === undefined ? { grpc: false } : undefined;
-    });
+    let opened: Awaited<ReturnType<typeof openReceiver>>;
+    try {
+      opened = await openReceiver(io, deps, flags, (enabled) => {
+        const protocol = checkedProtocol(io.env, enabled); // before anything is created or bound
+        // The transport the child will not use stays unbound unless an explicit port flag asked for it.
+        if (protocol === 'grpc') return flags.http === undefined ? { http: false } : undefined;
+        return flags.grpc === undefined ? { grpc: false } : undefined;
+      });
+    } catch (e) {
+      if (propagates(e)) throw e;
+      return runWithoutReport(io, executable, args, e);
+    }
     const { report, receiver } = opened;
     const abandon = async (e: unknown): Promise<never> => {
       await receiver.close().catch(() => undefined);
@@ -146,10 +189,9 @@ export function addRunCommand(program: Command, io: CliIo, deps: CliDeps): void 
         );
       });
     } catch (e) {
-      // The command's own failure outranks a report failure, but the report failure is still told.
-      if (code === 0 || e instanceof CliExit) throw e;
+      // The command's exit code is the step's result; a report failure is told, never counted.
+      if (e instanceof CliExit) throw e;
       io.stderr(`error: ${e instanceof Error ? e.message : String(e)}\n`);
-      throw new CliExit(code);
     }
     if (code !== 0) throw new CliExit(code);
   });

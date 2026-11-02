@@ -3,17 +3,13 @@ import { spawn } from 'node:child_process';
 import * as v8 from 'node:v8';
 import { bunEmbeddedViewerAssets, hasBunEmbeddedFiles } from '../writer/viewer-assets.js';
 import { runCli } from './program.js';
+import { v8FlagsFor } from './v8-flags.js';
 
 // The composition root of the CLI: the only place that touches process io and exits.
 
-// Under Node, V8 sizes its heap at several times the live data when allocation is steady. A receiver (`serve`, `run`)
-// sets `--optimize-for-size --heap-growing-percent=40` before it runs: the first keeps memory low, the second keeps
-// full-GC pauses short so a sender's batch queue does not overflow (#73 measured 473 MB when set at start-up against
-// 524 MB when set mid-run). The library sets no flags.
-const command = process.argv.slice(2).find((a) => !a.startsWith('-'));
-if ((command === 'serve' || command === 'run') && !('bun' in process.versions)) {
-  v8.setFlagsFromString('--optimize-for-size --heap-growing-percent=40');
-}
+// A receiver (`serve`, `run`) sets its V8 flags before it runs; v8-flags.ts says why and decides.
+const flags = v8FlagsFor(process.argv.slice(2), process.versions);
+if (flags !== null) v8.setFlagsFromString(flags);
 // Metric conversions set the size flag as the first points arrive (a 72M-point run stays under 512 MB, about 40%
 // slower); trace and log conversions keep full speed.
 const favourHeapSize = (): void => {
@@ -50,6 +46,10 @@ const code = await runCli(
 process.exitCode = code;
 // A failing command must end the process even if something (a bound server) still holds the event loop; an
 // interrupted `serve` may still be finishing its report, and a second Ctrl-C means stop now, at the last checkpoint.
+// Exit 0 is left to the event loop on purpose: a clean `serve` or `run` has closed everything, and forcing an exit
+// there could cut short work still in flight. (A `run` whose report failed to finish after a passing command also
+// exits 0 and relies on the loop draining; its listeners are closed before the report is, and a close that rejects
+// while holding its handle is the one way that could hang, which is not worth a forced exit on the success path.)
 // This safety net is not unit-testable without a build (main.ts runs on import). The binary smoke test covers it:
 // its `serve` + SIGINT path (exit 0, the net is skipped) and its bad-port test (non-zero, the net ends the process).
 if (code !== 0) {

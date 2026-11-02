@@ -86,6 +86,7 @@ const WIDGETS: Record<WidgetType, Widget> = {
     query: null,
     text: '',
     groupBy: 'service.name',
+    measure: 'count',
     echarts: null,
   },
   table: {
@@ -101,6 +102,7 @@ const WIDGETS: Record<WidgetType, Widget> = {
     query: null,
     text: '',
     groupBy: 'service.name',
+    measure: 'count',
   },
 };
 

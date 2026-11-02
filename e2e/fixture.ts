@@ -103,7 +103,9 @@ export type ReportName =
   | 'dashboards'
   | 'dashboards-hostile'
   | 'run-charts'
-  | 'metrics-scale';
+  | 'metrics-scale'
+  | 'frozen-format-1'
+  | 'frozen-format-2';
 
 /**
  * The metrics scale workload (spec §7): 200 metrics × 1,000 series × 360 points (1 h at a 10 s interval). The report
