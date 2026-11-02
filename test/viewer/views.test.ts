@@ -220,6 +220,22 @@ describe('measured slices', () => {
     expect(slices[0]?.key).toBe('deploy');
   });
 
+  test('colours are assigned to the groups drawn only, in rank order', () => {
+    const groups = new GroupDurations(1000);
+    for (let g = 0; g < 12; g++) groups.add(`g${g}`, (g + 1) * 1e6);
+    const asked: string[] = [];
+    const colors = {
+      colorFor: (name: string): number => {
+        asked.push(name);
+        return asked.length - 1;
+      },
+    };
+    const slices = measuredSlices(groups, 'duration.max', colors);
+    expect(slices).toHaveLength(7);
+    expect(asked).toEqual(slices.map((s) => s.key));
+    expect(asked[0]).toBe('g11');
+  });
+
   test('toplist with a duration measure formats its labels as durations', () => {
     const { facets, groups } = measured();
     const option = toplist(

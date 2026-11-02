@@ -76,7 +76,7 @@ export function measuredSlices(
   measure: Exclude<Measure, 'count'>,
   colors: ColorAssigner,
 ): Slice[] {
-  const slices: Slice[] = [];
+  const ranked: { group: string; value: number }[] = [];
   for (const [group, h] of groups.entries()) {
     let value: number;
     switch (measure) {
@@ -100,15 +100,19 @@ export function measuredSlices(
         return unreachable;
       }
     }
-    slices.push({
+    ranked.push({ group, value });
+  }
+  // Colours are handed out in first-seen order: only the groups drawn may take one.
+  return ranked
+    .sort((a, b) => b.value - a.value)
+    .slice(0, MAX_GROUPS)
+    .map(({ group, value }) => ({
       key: group,
       name: group === OTHER_LABEL ? `${OTHER_LABEL} (value)` : group,
       value,
       other: false,
       color: seriesVar(colors.colorFor(group)),
-    });
-  }
-  return slices.sort((a, b) => b.value - a.value).slice(0, MAX_GROUPS);
+    }));
 }
 
 /** The slices a view draws for `measure`: facet counts, or per-group durations when the result carries them. */
