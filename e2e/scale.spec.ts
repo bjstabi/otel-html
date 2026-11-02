@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { Page } from '@playwright/test';
 import { LOG_STEP_NS } from '../test-support/scale-logs.js';
@@ -29,6 +29,16 @@ const FACET_SAMPLES = 7;
 const SCAN_BUDGET_MS = 5000;
 /** Timed loads after one untimed warm-up load; the median is compared with the budget. */
 const LOAD_SAMPLES = 3;
+
+// `scale` and `huge` are built only when the selection includes this spec (`test:e2e`), so a direct run without them
+// fails here, naming the task. The metrics scale tests write their own report and run without them (CI's
+// `e2e-metrics-scale` job).
+test.beforeEach(() => {
+  if (test.info().titlePath.some((t) => t.startsWith('metrics scale'))) return;
+  for (const name of ['scale', 'huge'] as const)
+    if (!existsSync(new URL('data/manifest.js', reportDir(name))))
+      throw new Error(`the scale fixture reports are missing: run \`mise run e2e:fixtures:scale\` (${name})`);
+});
 
 const SERVICE = SCALE_SERVICES[0];
 /** Span `j` of a trace belongs to service `j % 8`, so the first service owns spans 0, 8, ..., 48 of each trace. */

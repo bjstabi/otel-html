@@ -412,7 +412,8 @@ description = "Build the library, then the viewer, into dist/"
 depends = ["build:viewer"]
 
 [tasks."e2e:fixtures"]
-description = "Build the e2e fixture reports into e2e/.reports/ (skipped while up to date; --force rebuilds)"
+description = """Build the e2e fixture reports into e2e/.reports/ (skipped while up to date; --force rebuilds)
+All but `scale` and `huge`, which e2e:fixtures:scale builds; about a second after `build`."""
 depends = ["build"]
 sources = [
   "@group:deps",
@@ -430,6 +431,38 @@ sources = [
 ]
 outputs = ["e2e/.reports/**"]
 run = "bun e2e/build-fixtures.ts"
+
+# The scale reports are split from their viewer: the data needs the writer (the build:lib outputs) and the generators,
+# the viewer only dist/viewer. A viewer change runs `upgrade` (byte-identical to a fresh convert) instead of converting
+# 1M logs twice again.
+[tasks."e2e:fixtures:scale:data"]
+description = """Convert the e2e `scale` and `huge` reports into e2e/.reports-scale/ (skipped while up to date)
+100k spans, 1M logs and metrics, converted twice (~15 s, ~1 GB of memory). Its sources are the writer's build output,
+not the viewer's: a viewer change only reruns e2e:fixtures:scale."""
+depends = ["build"]
+sources = [
+  "@group:deps",
+  "dist/cli/**",
+  "dist/receiver-*.js",
+  "dist/index.d.ts",
+  "dist/index.js",
+  "e2e/build-scale-fixtures.ts",
+  "e2e/fixture.ts",
+  "test-support/fixture-ids.ts",
+  "test-support/otlp-builders.ts",
+  "test-support/scale-logs.ts",
+  "test-support/scale-metrics.ts",
+]
+outputs = ["e2e/.reports-scale/**"]
+run = "bun e2e/build-scale-fixtures.ts"
+
+[tasks."e2e:fixtures:scale"]
+description = """The e2e `scale` and `huge` reports with the current viewer (only e2e/scale.spec.ts reads them)
+Depends on e2e:fixtures:scale:data; when only dist/viewer changed, `otel-html upgrade` swaps the viewer in (~0.3 s)."""
+depends = ["e2e:fixtures:scale:data"]
+sources = ["@group:deps", "dist/viewer/**"]
+outputs = { auto = true }
+run = "node dist/cli/main.js upgrade e2e/.reports-scale/scale && node dist/cli/main.js upgrade e2e/.reports-scale/huge"
 
 # Budgets scale with OTEL_HTML_PERF_FACTOR on slow machines; they are never edited.
 # CI runs in the official Playwright image and sets OTEL_HTML_SKIP_BROWSER_INSTALL to skip the browser download.
@@ -450,7 +483,7 @@ much slower than that reference a fixed CPU workload runs here (never below 1; t
 A run whose inputs match a cached success is replayed. `MISE_TASK_CACHE=off` re-runs the browsers, also through
 `test:e2e:chromium`; `--force` reaches only the task it is given to, so it works on `test:e2e` and not on the wrapper."""
 shell = "bash -c"
-depends = ["e2e:fixtures"]
+depends = ["e2e:fixtures", "e2e:fixtures:scale"]
 # The key also holds the task's args (--browser, specs after `--`) and the resolved tool versions. The workflow file is a
 # source because it names the Playwright image the browsers come from. OTEL_HTML_METRICS_SCALE changes which tests run.
 sources = [

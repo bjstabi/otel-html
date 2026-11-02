@@ -683,6 +683,26 @@ serves the report through the port proxy instead, until Ctrl-C. Interactive only
 - **Usage:** `e2e:fixtures`
 
 Build the e2e fixture reports into e2e/.reports/ (skipped while up to date; --force rebuilds)
+All but `scale` and `huge`, which e2e:fixtures:scale builds; about a second after `build`.
+
+## `e2e:fixtures:scale`
+
+- Depends: e2e:fixtures:scale:data
+
+- **Usage:** `e2e:fixtures:scale`
+
+The e2e `scale` and `huge` reports with the current viewer (only e2e/scale.spec.ts reads them)
+Depends on e2e:fixtures:scale:data; when only dist/viewer changed, `otel-html upgrade` swaps the viewer in (~0.3 s).
+
+## `e2e:fixtures:scale:data`
+
+- Depends: build
+
+- **Usage:** `e2e:fixtures:scale:data`
+
+Convert the e2e `scale` and `huge` reports into e2e/.reports-scale/ (skipped while up to date)
+100k spans, 1M logs and metrics, converted twice (~15 s, ~1 GB of memory). Its sources are the writer's build output,
+not the viewer's: a viewer change only reruns e2e:fixtures:scale.
 
 ## `fixtures`
 
@@ -744,7 +764,7 @@ A run whose inputs match a cached success is replayed. `MISE_TASK_CACHE=off` re-
 `test:e2e:chromium`; `--force` reaches only the task it is given to, so it works on `test:e2e` and not on the wrapper.
 
 
-- Depends: e2e:fixtures
+- Depends: e2e:fixtures, e2e:fixtures:scale
 
 - **Usage:** `test:e2e [--browser <browser>] [args]…`
 

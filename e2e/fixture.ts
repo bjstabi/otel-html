@@ -35,6 +35,12 @@ export const REPORTS_DIR: URL = new URL('./.reports/', import.meta.url);
  * output, so writing it does not make the fixtures look out of date. `e2e/build-fixtures.ts` removes it.
  */
 export const METRICS_SCALE_DIR: URL = new URL('./.metrics-scale/', import.meta.url);
+/**
+ * Where `scale` and `huge` live: outside `REPORTS_DIR`, so `e2e/build-fixtures.ts` leaves them alone. The
+ * `e2e:fixtures:scale` mise tasks build them (`e2e/build-scale-fixtures.ts`), and `test:e2e` runs those tasks only
+ * when the selected tests include `e2e/scale.spec.ts`.
+ */
+export const SCALE_REPORTS_DIR: URL = new URL('./.reports-scale/', import.meta.url);
 export const REPORT_DIR: URL = new URL('main/', REPORTS_DIR);
 /**
  * `run-charts`: `RUN_CHART_RUN_MINUTES.length` CI runs at uneven gaps from `RUN_CHART_T0_MS`, all of `RUN_CHART_JOBS` in
@@ -84,7 +90,8 @@ const FIXTURE_FILES: Partial<Record<FixtureReport, readonly string[]>> = {
   sample: ['small', 'linked-traces', 'linked-logs'],
 };
 /**
- * `merged` is `otel-html merge` of `small` and `orphans`; `scale` and `huge` come from one generated 100k-span input.
+ * `merged` is `otel-html merge` of `small` and `orphans`; `scale` and `huge` come from one generated 100k-span input,
+ * into `SCALE_REPORTS_DIR`.
  * `metrics-merged` merges two reports of the `metrics` fixture's first and last five collections, `metrics-single`
  * converts the fixture at once. `unfinished` holds the `linked` inputs, flushed but never closed. `metrics-scale` is
  * the metrics scale report (`e2e/metrics-scale.ts`), written only by the specs that need it, into `METRICS_SCALE_DIR`.
@@ -125,7 +132,8 @@ export function scaleMetricEmitted(m: number, i: number): boolean {
 }
 
 export function reportDir(name: ReportName): URL {
-  return name === 'metrics-scale' ? METRICS_SCALE_DIR : new URL(`${name}/`, REPORTS_DIR);
+  if (name === 'metrics-scale') return METRICS_SCALE_DIR;
+  return new URL(`${name}/`, name === 'scale' || name === 'huge' ? SCALE_REPORTS_DIR : REPORTS_DIR);
 }
 
 /** The committed OTLP/JSON files a fixture report is built from. */
