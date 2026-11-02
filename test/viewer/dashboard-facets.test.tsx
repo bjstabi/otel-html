@@ -12,7 +12,9 @@ vi.mock('../../src/viewer/components/chart.js', () => ({
 import { type Dashboard, DashboardSchema } from '../../src/dashboards/schema.js';
 import type { TraceId } from '../../src/model/ids.js';
 import { FacetCounts } from '../../src/rollups/facets.js';
+import { LogRollups } from '../../src/rollups/log-rollups.js';
 import { RedSeries } from '../../src/rollups/red.js';
+import { SpanRollups } from '../../src/rollups/span-rollups.js';
 import { TimeBuckets } from '../../src/rollups/time-buckets.js';
 import type { WidgetActions } from '../../src/viewer/dashboards/dashboard-page.js';
 import type { WidgetScope } from '../../src/viewer/dashboards/scope.js';
@@ -236,6 +238,25 @@ describe('the Top list and Table widgets', () => {
         Promise.resolve({ ...landing, facets: new FacetCounts(10, 10, ['deployment.environment.name']) }),
     };
     mount(ds, { type: 'toplist', signal: 'spans', groupBy: 'deployment.environment.name' });
+    expect(await screen.findByText(/values in this window/)).toBeTruthy();
+    expect(screen.queryByText(/is not a facet/)).toBeNull();
+  });
+
+  test('a report with no spans or logs keeps the empty message for the core keys', async () => {
+    const base = await linked();
+    const [landing, logLanding] = await Promise.all([base.landing(), base.logLanding()]);
+    const window = { start: 1, end: 2 };
+    const caps = { facetValueCap: 10, facetKeyCap: 10 };
+    const ds: DataSource = {
+      ...base,
+      landing: () => Promise.resolve({ ...landing, facets: new SpanRollups(caps).facets }),
+      logLanding: () => Promise.resolve({ ...logLanding, facets: new LogRollups(caps).facets }),
+    };
+    mount(ds, { type: 'toplist', signal: 'spans', groupBy: 'span.name' }, { window });
+    expect(await screen.findByText(/values in this window/)).toBeTruthy();
+    expect(screen.queryByText(/is not a facet/)).toBeNull();
+    cleanup();
+    mount(ds, { type: 'table', signal: 'logs', groupBy: 'severity' }, { window });
     expect(await screen.findByText(/values in this window/)).toBeTruthy();
     expect(screen.queryByText(/is not a facet/)).toBeNull();
   });
