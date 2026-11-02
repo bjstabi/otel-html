@@ -36,6 +36,41 @@ env:
   MISE_TASK_CACHE: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !inputs.task_cache)) && 'off' || 'read-write' }}
 
 jobs:
+  # Decides whether the change touches only documentation (`docs/**` and `*.md`). The browser, OS, binary and coverage jobs
+  # skip then; `check` (lint, typecheck, unit tests, gen:check, which covers README.md) and `build` always run. Any doubt
+  # (another event, a failed fetch, an all-zero `before` on a new branch, an empty diff) runs everything.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      docs_only: ${{ steps.diff.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # `shell: bash`: the job default is the built CLI, which this job does not build.
+      - id: diff
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          # pull_request: base..head; push: before..sha; anything else, or any failure: run everything.
+          case "$GITHUB_EVENT_NAME" in
+            pull_request) base="$BASE_SHA"; head="$HEAD_SHA" ;;
+            push) base="$BEFORE_SHA"; head="$GITHUB_SHA" ;;
+            *) echo "docs_only=false" >> "$GITHUB_OUTPUT"; exit 0 ;;
+          esac
+          if ! git fetch --depth=1 origin "$base" "$head" 2>/dev/null; then echo "docs_only=false" >> "$GITHUB_OUTPUT"; exit 0; fi
+          files=$(git diff --name-only "$base" "$head") || { echo "docs_only=false" >> "$GITHUB_OUTPUT"; exit 0; }
+          docs_only=true
+          while IFS= read -r f; do
+            case "$f" in docs/*|*.md) ;; *) docs_only=false; break ;; esac
+          done <<<"$files"
+          [ -n "$files" ] || docs_only=false
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+
   check:
     runs-on: ubuntu-latest
     env:
@@ -68,6 +103,8 @@ jobs:
           name: otel-html-${{ github.job }}
 
   unit-os:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     strategy:
       fail-fast: true
       # No macOS runners (cost); Linux runs the unit tests in `check`.
@@ -128,6 +165,8 @@ jobs:
           name: otel-html-${{ github.job }}
 
   e2e:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     strategy:
       # Each browser reports on its own; one failing browser must not hide the others' results.
       fail-fast: false
@@ -201,6 +240,8 @@ jobs:
   # test fails if either page loads another metric's files (e2e/fixture.ts, e2e/scale.spec.ts). The matrix jobs leave
   # it off and this job alone sets OTEL_HTML_METRICS_SCALE.
   e2e-metrics-scale:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     container:
@@ -247,7 +288,8 @@ jobs:
   # Unit coverage of the suite without @perf, on main only (never gates anything). `mise run coverage` has no sources and no
   # cache, so nothing can replay it and leave coverage/ empty.
   coverage:
-    if: github.event_name == 'push'
+    needs: changes
+    if: github.event_name == 'push' && needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -274,6 +316,8 @@ jobs:
   # The standalone Bun binaries, built and smoke-tested on every PR (convert, serve over HTTP and gRPC, run, SIGINT, bad
   # port). The release workflow keeps its own smoke step, which tests the artefact it uploads.
   binary:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     strategy:
       fail-fast: false
       matrix:
