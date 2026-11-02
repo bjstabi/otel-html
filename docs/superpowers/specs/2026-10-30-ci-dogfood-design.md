@@ -39,8 +39,8 @@ Non-goals (for this work)
 Anti-goals
 
 - A CI pipeline that is slower or flakier because of the report. Collection must add seconds, not minutes, and
-  a report failure must never fail a job that otherwise passed (the existing `run` exit-code contract already
-  says this).
+  a report failure must never fail a job that otherwise passed (held since #83: `run` exits with the command's
+  exit code whatever happens to the report).
 - Secrets or tokens reaching the published report. The publisher runs with the default token only, and the
   workflow trace is built from public API fields.
 - A site that grows without bound. Retention is part of the design, not a follow-up.
