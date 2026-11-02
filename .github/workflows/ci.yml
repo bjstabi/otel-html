@@ -292,7 +292,7 @@ jobs:
   # cache, so nothing can replay it and leave coverage/ empty.
   coverage:
     needs: changes
-    if: github.event_name == 'push' && needs.changes.outputs.docs_only != 'true'
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -311,6 +311,18 @@ jobs:
           name: coverage
           path: coverage/
           if-no-files-found: error
+      - uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5.5.5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage/unit-node/lcov.info
+          flags: unit-node
+          fail_ci_if_error: true
+      - uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5.5.5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage/unit-viewer/lcov.info
+          flags: unit-viewer
+          fail_ci_if_error: true
       - if: always()
         uses: ./.github/actions/otel-html-collect
         with:
