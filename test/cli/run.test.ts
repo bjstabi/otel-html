@@ -5,11 +5,13 @@ import type { CliIo, StopSignal } from '../../src/cli/io.js';
 import type { CliDeps } from '../../src/cli/program.js';
 import { runCli } from '../../src/cli/program.js';
 import { decodeColumns } from '../../src/format/columns.js';
-import { chunkKey } from '../../src/format/paths.js';
+import { chunkKey, LOCK_PATH } from '../../src/format/paths.js';
 import { SPAN_COLUMNS } from '../../src/format/specs.js';
 import type { AnyValue } from '../../src/model/anyvalue.js';
 import { Status_StatusCode } from '../../src/model/gen/opentelemetry/proto/trace/v1/trace_pb.js';
 import type { SpanRecord } from '../../src/model/records.js';
+import { at } from '../../src/writer/checkpoint.js';
+import { acquireLock } from '../../src/writer/lock.js';
 import type { FileSystem } from '../../src/writer/ports.js';
 import { createTestWriter, type TestWriter } from '../../test-support/writer-deps.js';
 import { manifestOf, readDataFile } from '../writer/helpers.js';
@@ -492,8 +494,115 @@ describe('run', () => {
       '0',
     ]);
     open.push(h);
-    expect(await h.result).toBe(1);
+    expect(await h.result).toBe(0);
     expect(h.stderr).toContain('EADDRINUSE');
     expect(h.stderr).toContain('--grpc');
+    expect(h.stderr).toContain('without it');
+  });
+
+  test('a taken HTTP port runs the command without a report: exit 0, the bind error and its hint are printed', async () => {
+    const w = createTestWriter();
+    const http = await takenPort();
+    const h = start(w, [
+      'run',
+      '-o',
+      'out',
+      '--host',
+      '127.0.0.1',
+      '--http',
+      String(http),
+      '--no-grpc',
+      '--',
+      process.execPath,
+      '-e',
+      'process.exit(0)',
+    ]);
+    open.push(h);
+    expect(await h.result).toBe(0);
+    expect(h.stderr).toContain('EADDRINUSE');
+    expect(h.stderr).toContain('--http');
+    expect(h.stderr).toContain('without it');
+    expect(await w.fs.exists('out/data/manifest.js')).toBe(false);
+  });
+
+  test('a taken HTTP port keeps a non-zero command exit code', async () => {
+    const w = createTestWriter();
+    const http = await takenPort();
+    const h = start(w, [
+      'run',
+      '-o',
+      'out',
+      '--host',
+      '127.0.0.1',
+      '--http',
+      String(http),
+      '--no-grpc',
+      '--',
+      process.execPath,
+      '-e',
+      'process.exit(3)',
+    ]);
+    open.push(h);
+    expect(await h.result).toBe(3);
+    expect(h.stderr).toContain('without it');
+  });
+
+  test('the command without a report inherits the environment unchanged', async () => {
+    const w = createTestWriter();
+    const http = await takenPort();
+    const seen: (Record<string, string | undefined> | undefined)[] = [];
+    const h = start(
+      w,
+      [
+        'run',
+        '-o',
+        'out',
+        '--host',
+        '127.0.0.1',
+        '--http',
+        String(http),
+        '--no-grpc',
+        '--',
+        process.execPath,
+        '-e',
+        'process.exit(["OTEL_EXPORTER_OTLP_ENDPOINT","OTEL_EXPORTER_OTLP_PROTOCOL","TRACEPARENT"].some((k) => process.env[k] !== undefined) ? 4 : 0)',
+      ],
+      { FOO: 'bar' },
+      ((command: string, args: readonly string[], options: { env?: Record<string, string | undefined> }) => {
+        seen.push(options.env);
+        return spawn(command, args, {
+          stdio: 'inherit',
+          ...(options.env === undefined ? {} : { env: options.env }),
+        });
+      }) as CliIo['spawn'],
+    );
+    open.push(h);
+    expect(await h.result).toBe(0);
+    expect(seen).toEqual([{ FOO: 'bar' }]);
+  });
+
+  test('a report locked by a live process runs the command without a report', async () => {
+    const w = createTestWriter();
+    const lock = await acquireLock(w.deps, at('out', LOCK_PATH));
+    try {
+      const h = start(w, [
+        'run',
+        '-o',
+        'out',
+        '--http',
+        '0',
+        '--no-grpc',
+        '--',
+        process.execPath,
+        '-e',
+        'process.exit(0)',
+      ]);
+      open.push(h);
+      expect(await h.result).toBe(0);
+      expect(h.stderr).toContain('locked');
+      expect(h.stderr).toContain('without it');
+    } finally {
+      await lock.release();
+    }
   });
 });
