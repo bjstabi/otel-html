@@ -16,7 +16,7 @@ import { RedSeries } from '../../src/rollups/red.js';
 import { TimeBuckets } from '../../src/rollups/time-buckets.js';
 import type { WidgetActions } from '../../src/viewer/dashboards/dashboard-page.js';
 import type { WidgetScope } from '../../src/viewer/dashboards/scope.js';
-import { FacetChartWidget } from '../../src/viewer/dashboards/widgets/facet-chart.js';
+import { FacetChartWidget, suggestKeys } from '../../src/viewer/dashboards/widgets/facet-chart.js';
 import {
   createDataSource,
   type DataSource,
@@ -206,18 +206,34 @@ describe('the Top list and Table widgets', () => {
     expect(option.grid).toMatchObject({ left: 7, top: 8 });
   });
 
-  test('a missing key shows the empty state, for either view', async () => {
+  test('a key that is no facet of the report says so and suggests known keys', async () => {
     const ds = await linked();
-    mount(ds, { type: 'toplist', signal: 'spans', groupBy: 'no.such.key' });
-    expect(await screen.findByText(/values in this window/)).toBeTruthy();
-    expect(screen.getByText('no.such.key').parentElement?.textContent).toBe(
-      'No no.such.key values in this window',
-    );
+    mount(ds, { type: 'toplist', signal: 'spans', groupBy: 'name' });
+    expect(await screen.findByText(/is not a facet of this report/)).toBeTruthy();
+    expect(screen.getByText('span.name')).toBeTruthy();
     expect(screen.queryByRole('img')).toBeNull();
     cleanup();
     mount(ds, { type: 'table', signal: 'logs', groupBy: 'no.such.key' });
-    expect(await screen.findByText(/values in this window/)).toBeTruthy();
+    expect(await screen.findByText(/is not a facet of this report/)).toBeTruthy();
     expect(screen.queryByRole('table')).toBeNull();
+  });
+
+  test('a facet with no values in the window keeps the empty message', async () => {
+    mount(
+      await linked(),
+      { type: 'toplist', signal: 'spans', groupBy: 'service.name' },
+      { window: { start: 1, end: 2 } },
+    );
+    expect(await screen.findByText(/values in this window/)).toBeTruthy();
+  });
+
+  test('suggestKeys puts suffix matches first, deduplicated and capped', () => {
+    expect(suggestKeys(['span.name', 'service.name', 'http.route'], 'name')).toEqual([
+      'span.name',
+      'service.name',
+    ]);
+    expect(suggestKeys(['a.x', 'b.x', 'c.x', 'd.x'], 'X')).toEqual(['a.x', 'b.x', 'c.x']);
+    expect(suggestKeys(['xname', 'a.name'], 'name')).toEqual(['a.name', 'xname']);
   });
 
   test('the subtitle counts the spans or logs', async () => {

@@ -12,6 +12,7 @@ import type { DataSource } from '../../data/data-source.js';
 import type { LogQuery } from '../../data/log-query.js';
 import type { SpanQuery } from '../../data/span-query.js';
 import { useLogQuery } from '../../logs/use-log-query.js';
+import { useKeyedAsync } from '../../state/use-keyed-async.js';
 import type { QueryHandle } from '../../state/use-query.js';
 import { useColorAssigner } from '../../theme/colors-context.js';
 import { useTheme } from '../../theme/theme-provider.js';
@@ -53,8 +54,45 @@ function readyOf<R extends Facets>(h: QueryHandle<R>): R | null {
   return h.state.status === 'ready' ? h.state.result : null;
 }
 
-function FacetBody<R extends Facets>(props: Shared & { handle: QueryHandle<R> }): JSX.Element {
+/** Keys that end with `.typed` first, then keys containing it (case-insensitive); each once, at most `max`. */
+export function suggestKeys(known: readonly string[], typed: string, max = 3): string[] {
+  const t = typed.toLowerCase();
+  const suffix = known.filter((k) => k.toLowerCase().endsWith(`.${t}`));
+  const inside = known.filter((k) => k.toLowerCase().includes(t));
+  return [...new Set([...suffix, ...inside])].slice(0, max);
+}
+
+// Module-level so they are stable: `useKeyedAsync` reloads on a new `load`.
+const spanKeys = (d: DataSource): Promise<string[]> => d.landing().then((l) => l.facets.keys());
+const logKeys = (d: DataSource): Promise<string[]> => d.logLanding().then((l) => l.facets.keys());
+
+function UnknownKey(props: { groupBy: string; known: readonly string[] }): JSX.Element {
+  const hints = suggestKeys(props.known, props.groupBy);
+  return (
+    <p className="rounded-card border border-hairline bg-surface p-4 text-sm text-ink-2">
+      <span className="font-mono">{props.groupBy}</span> is not a facet of this report
+      {hints.length > 0 && (
+        <>
+          {' \u2014 did you mean '}
+          {hints.map((h, i) => (
+            <span key={h}>
+              {i > 0 && ', '}
+              <span className="font-mono">{h}</span>
+            </span>
+          ))}
+          ?
+        </>
+      )}
+    </p>
+  );
+}
+
+function FacetBody<R extends Facets>(
+  props: Shared & { handle: QueryHandle<R>; dataSource: DataSource },
+): JSX.Element {
   const { handle, groupBy, measure } = props;
+  const keys = useKeyedAsync(props.dataSource, props.noun === 'Spans' ? spanKeys : logKeys);
+  const known = keys.status === 'ready' ? keys.value : null;
   const colors = useColorAssigner();
   const { resolved } = useTheme();
   const result = readyOf(handle);
@@ -77,9 +115,13 @@ function FacetBody<R extends Facets>(props: Shared & { handle: QueryHandle<R> })
       {state.status === 'error' && <ErrorCard title="The query could not run" message={state.message} />}
       {result !== null &&
         (empty ? (
-          <p className="rounded-card border border-hairline bg-surface p-4 text-sm text-ink-2">
-            No <span className="font-mono">{groupBy}</span> values in this window
-          </p>
+          known !== null && !known.includes(groupBy) ? (
+            <UnknownKey groupBy={groupBy} known={known} />
+          ) : (
+            <p className="rounded-card border border-hairline bg-surface p-4 text-sm text-ink-2">
+              No <span className="font-mono">{groupBy}</span> values in this window
+            </p>
+          )
         ) : option !== null ? (
           <Chart
             option={option}
@@ -124,7 +166,7 @@ function SpanFacets(props: Shared & { dataSource: DataSource; filter: Filter }):
     }),
     [condition, text, window, measure, groupBy],
   );
-  return <FacetBody {...rest} handle={useSpanQuery(dataSource, query)} />;
+  return <FacetBody {...rest} dataSource={dataSource} handle={useSpanQuery(dataSource, query)} />;
 }
 
 function LogFacets(props: Shared & { dataSource: DataSource; filter: Filter }): JSX.Element {
@@ -134,7 +176,7 @@ function LogFacets(props: Shared & { dataSource: DataSource; filter: Filter }): 
     () => ({ ...queryOf(condition, text, window), mode: 'logs', sort: SORT.logs, traceId }),
     [condition, text, window, traceId],
   );
-  return <FacetBody {...rest} handle={useLogQuery(dataSource, query)} />;
+  return <FacetBody {...rest} dataSource={dataSource} handle={useLogQuery(dataSource, query)} />;
 }
 
 /** A span or log query's facet counts grouped by the widget's key: the explorers' top-list chart or group table. */
