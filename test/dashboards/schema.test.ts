@@ -118,6 +118,32 @@ describe('DashboardSchema', () => {
     expect(r.error?.issues[0]?.message).toMatch(/^an OTTL condition valid for log records \(/);
   });
 
+  describe('toplist and table measure', () => {
+    const rank = (over: Record<string, unknown>): WidgetInput =>
+      ({ type: 'toplist', x: 0, y: 0, w: 6, h: 4, signal: 'spans', groupBy: 'name', ...over }) as WidgetInput;
+    it('a toplist defaults measure to count', () => {
+      const w = DashboardSchema.parse(dash([rank({})])).widgets[0];
+      expect(w?.type === 'toplist' && w.measure).toBe('count');
+    });
+    it('a table may rank by duration.p95', () => {
+      const w = DashboardSchema.parse(dash([rank({ type: 'table', measure: 'duration.p95' })])).widgets[0];
+      expect(w?.type === 'table' && w.measure).toBe('duration.p95');
+    });
+    it('a duration measure on the logs signal is an error at measure', () => {
+      const r = DashboardSchema.safeParse(
+        dash([rank({ signal: 'logs', measure: 'duration.sum', title: 'Slowest' })]),
+      );
+      expect(issuePaths(r)).toEqual(['widgets.0.measure']);
+      const message = r.error?.issues[0]?.message ?? '';
+      expect(message).toContain('a duration measure needs signal: spans');
+      expect(message).toContain('toplist');
+      expect(message).toBe('toplist "Slowest": a duration measure needs signal: spans');
+    });
+    it('an unknown measure is an error', () => {
+      expect(DashboardSchema.safeParse(dash([rank({ measure: 'duration.min' })])).success).toBe(false);
+    });
+  });
+
   describe('run charts', () => {
     const q = { id: 'a', metric: 'm', show: 'avg' };
     const runBy = 'resource.attributes["run"]';
