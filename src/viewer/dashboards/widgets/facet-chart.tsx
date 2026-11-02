@@ -3,6 +3,7 @@ import { type JSX, useMemo } from 'react';
 import type { Measure } from '../../../dashboards/schema.js';
 import { OtelHtmlError } from '../../../model/errors.js';
 import type { TraceId } from '../../../model/ids.js';
+import type { FacetCounts } from '../../../rollups/facets.js';
 import { Chart } from '../../components/chart.js';
 import { ErrorCard, LoadingNote, PartialNote } from '../../components/explorer-states.js';
 import { type FacetSource, toplist } from '../../components/facet-views.js';
@@ -63,8 +64,10 @@ export function suggestKeys(known: readonly string[], typed: string, max = 3): s
 }
 
 // Module-level so they are stable: `useKeyedAsync` reloads on a new `load`.
-const spanKeys = (d: DataSource): Promise<string[]> => d.landing().then((l) => l.facets.keys());
-const logKeys = (d: DataSource): Promise<string[]> => d.logLanding().then((l) => l.facets.keys());
+// A pinned key is known before its first observation, so a report without it still says "no values".
+const knownKeys = (f: FacetCounts): string[] => [...new Set([...f.keys(), ...f.pinned])];
+const spanKeys = (d: DataSource): Promise<string[]> => d.landing().then((l) => knownKeys(l.facets));
+const logKeys = (d: DataSource): Promise<string[]> => d.logLanding().then((l) => knownKeys(l.facets));
 
 function UnknownKey(props: { groupBy: string; known: readonly string[] }): JSX.Element {
   const hints = suggestKeys(props.known, props.groupBy);
@@ -115,7 +118,7 @@ function FacetBody<R extends Facets>(
       {state.status === 'error' && <ErrorCard title="The query could not run" message={state.message} />}
       {result !== null &&
         (empty ? (
-          known !== null && !known.includes(groupBy) ? (
+          keys.status === 'loading' ? null : known !== null && !known.includes(groupBy) ? (
             <UnknownKey groupBy={groupBy} known={known} />
           ) : (
             <p className="rounded-card border border-hairline bg-surface p-4 text-sm text-ink-2">

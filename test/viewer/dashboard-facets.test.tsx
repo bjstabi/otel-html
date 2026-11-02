@@ -227,6 +227,35 @@ describe('the Top list and Table widgets', () => {
     expect(await screen.findByText(/values in this window/)).toBeTruthy();
   });
 
+  test('a pinned facet with no observations keeps the empty message', async () => {
+    const base = await linked();
+    const landing = await base.landing();
+    const ds: DataSource = {
+      ...base,
+      landing: () =>
+        Promise.resolve({ ...landing, facets: new FacetCounts(10, 10, ['deployment.environment.name']) }),
+    };
+    mount(ds, { type: 'toplist', signal: 'spans', groupBy: 'deployment.environment.name' });
+    expect(await screen.findByText(/values in this window/)).toBeTruthy();
+    expect(screen.queryByText(/is not a facet/)).toBeNull();
+  });
+
+  test('no message is shown until the report keys have loaded', async () => {
+    const base = await linked();
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const ds: DataSource = { ...base, landing: () => gate.then(() => base.landing()) };
+    mount(ds, { type: 'toplist', signal: 'spans', groupBy: 'name' });
+    await waitFor(() => expect(screen.queryByRole('status')).toBeNull());
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByText(/values in this window/)).toBeNull();
+    expect(screen.queryByText(/is not a facet/)).toBeNull();
+    release();
+    expect(await screen.findByText(/is not a facet of this report/)).toBeTruthy();
+  });
+
   test('suggestKeys puts suffix matches first, deduplicated and capped', () => {
     expect(suggestKeys(['span.name', 'service.name', 'http.route'], 'name')).toEqual([
       'span.name',
