@@ -135,6 +135,10 @@ describe('ciMetricsRequest', () => {
       ['2', 'failure', 'ci'],
       ['1', 'cancelled', 'ci'],
     ]);
+    expect(sum?.dataPoints.map((p) => [p.startTimeUnixNano, p.timeUnixNano])).toEqual([
+      ['1767225605000000000', '1767226205000000000'],
+      ['1767225605000000000', '1767226205000000000'],
+    ]);
     const [r] = named(ms, 'cicd.pipeline.run.duration')?.histogram?.dataPoints ?? [];
     expect(attr(r as Point, 'cicd.pipeline.result')).toBe('failure');
   });
