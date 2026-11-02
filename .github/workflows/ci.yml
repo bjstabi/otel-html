@@ -231,9 +231,10 @@ jobs:
         with:
           name: otel-html-${{ github.job }}
 
-  # Unit coverage of the whole suite, on main only (never gates anything). `mise run coverage` has no sources and no
+  # Unit coverage of the suite without @perf, on main only (never gates anything). `mise run coverage` has no sources and no
   # cache, so nothing can replay it and leave coverage/ empty.
   coverage:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
