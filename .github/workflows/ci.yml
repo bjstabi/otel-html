@@ -282,6 +282,10 @@ jobs:
             target: linux-x64
           - os: ubuntu-24.04-arm
             target: linux-arm64
+          # Windows here as in the release, so a Windows-only failure shows on the PR rather than after the tag.
+          - os: windows-latest
+            target: windows-x64
+            ext: .exe
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     env:
@@ -297,7 +301,9 @@ jobs:
         with:
           command: node dist/cli/main.js
       - run: mise run build:binaries -- --target "$TARGET"
-      - run: OTEL_HTML_BINARY="dist/bin/otel-html-$TARGET" pnpm exec vitest run test/cli/binary.test.ts
+      - env:
+          OTEL_HTML_BINARY: dist/bin/otel-html-${{ matrix.target }}${{ matrix.ext }}
+        run: pnpm exec vitest run test/cli/binary.test.ts
       - if: always()
         uses: ./.github/actions/otel-html-collect
         with:
