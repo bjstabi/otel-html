@@ -324,7 +324,13 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
                       />
                     </div>
                   ) : view === 'table' ? (
-                    <GroupTable result={result} groupBy={sel.groupBy} colors={colors} noun="Spans" />
+                    <GroupTable
+                      result={result}
+                      groupBy={sel.groupBy}
+                      colors={colors}
+                      noun="Spans"
+                      measure="count"
+                    />
                   ) : (
                     <div className="flex flex-col gap-2">
                       {mode === 'spans' && (

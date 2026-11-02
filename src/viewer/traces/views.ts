@@ -17,7 +17,8 @@ export {
 export type ChartView = Exclude<PageView<'traces'>, 'list' | 'table'>;
 export type Measure = 'requests' | 'errors' | 'latency';
 
-export interface ViewContext extends FacetViewContext {
+// The explorer's measure is the time series' own; the facet views' duration measure is a dashboard widget's.
+export interface ViewContext extends Omit<FacetViewContext, 'measure'> {
   /** What the time series plots; requests by default. */
   measure?: Measure;
 }
@@ -139,14 +140,21 @@ function pointplot(result: SpanQueryResult): EChartsOption {
   };
 }
 
+/** The facet views never read the time series' measure; they get only what they draw by. */
+function facetView(
+  view: (result: SpanQueryResult, ctx: FacetViewContext) => EChartsOption,
+): (result: SpanQueryResult, ctx: ViewContext) => EChartsOption {
+  return (result, ctx) => view(result, { groupBy: ctx.groupBy, colors: ctx.colors });
+}
+
 export const VIEW_BUILDERS: Record<ChartView, (result: SpanQueryResult, ctx: ViewContext) => EChartsOption> =
   {
     timeseries,
-    toplist,
-    bar,
+    toplist: facetView(toplist),
+    bar: facetView(bar),
     pointplot,
-    treemap,
-    pie,
+    treemap: facetView(treemap),
+    pie: facetView(pie),
   };
 
 const VAR_RE = /^var\((--[a-z0-9-]+)\)$/;

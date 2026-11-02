@@ -1,10 +1,13 @@
 import { describe, expect, test } from 'vitest';
 import { FacetCounts } from '../../src/rollups/facets.js';
 import { RedSeries } from '../../src/rollups/red.js';
+import { GroupDurations } from '../../src/rollups/span-rollups.js';
 import { TimeBuckets } from '../../src/rollups/time-buckets.js';
+import { formatDuration } from '../../src/semconv/formatters.js';
 import {
   bar,
   groupSlices as groupSlicesShared,
+  measuredSlices,
   pie,
   toplist,
   treemap,
@@ -185,4 +188,38 @@ describe('facet views over a log facet set', () => {
 
 test('views re-exports the shared groupSlices', () => {
   expect(groupSlices).toBe(groupSlicesShared);
+});
+
+describe('measured slices', () => {
+  function measured(): { facets: FacetCounts; groups: GroupDurations } {
+    const facets = new FacetCounts(100, 50, ['service.name']);
+    const groups = new GroupDurations(1000);
+    for (const [name, ns] of [
+      ['a', 30e6],
+      ['b', 50e6],
+    ] as const) {
+      facets.add('service.name', name);
+      groups.add(name, ns);
+    }
+    return { facets, groups };
+  }
+
+  test('measuredSlices ranks groups by the measure, no Other slice', () => {
+    const { facets, groups } = measured();
+    const slices = measuredSlices(groups, facets, 'service.name', 'duration.max', createColorAssigner());
+    expect(slices.map((s) => s.key)).toEqual(['b', 'a']);
+    expect(slices.some((s) => s.other)).toBe(false);
+  });
+
+  test('toplist with a duration measure formats its labels as durations', () => {
+    const { facets, groups } = measured();
+    const option = toplist(
+      { facets, groups },
+      { groupBy: 'service.name', colors: createColorAssigner(), measure: 'duration.max' },
+    ) as {
+      xAxis: { minInterval?: number; axisLabel: { formatter: (v: number) => string } };
+    };
+    expect(option.xAxis.axisLabel.formatter(50e6)).toBe(formatDuration(50e6));
+    expect(option.xAxis.minInterval).toBeUndefined();
+  });
 });

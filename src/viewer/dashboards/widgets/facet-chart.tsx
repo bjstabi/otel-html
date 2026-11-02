@@ -1,5 +1,6 @@
 import type { EChartsOption } from 'echarts';
 import { type JSX, useMemo } from 'react';
+import type { Measure } from '../../../dashboards/schema.js';
 import { OtelHtmlError } from '../../../model/errors.js';
 import type { TraceId } from '../../../model/ids.js';
 import { Chart } from '../../components/chart.js';
@@ -39,6 +40,7 @@ function queryOf(condition: string | null, text: string, window: SpanQuery['wind
 interface Shared {
   widgetType: 'toplist' | 'table';
   groupBy: string;
+  measure: Measure;
   echarts: Record<string, unknown> | null;
   height: number;
   noun: 'Spans' | 'Logs';
@@ -52,7 +54,7 @@ function readyOf<R extends Facets>(h: QueryHandle<R>): R | null {
 }
 
 function FacetBody<R extends Facets>(props: Shared & { handle: QueryHandle<R> }): JSX.Element {
-  const { handle, groupBy } = props;
+  const { handle, groupBy, measure } = props;
   const colors = useColorAssigner();
   const { resolved } = useTheme();
   const result = readyOf(handle);
@@ -63,9 +65,9 @@ function FacetBody<R extends Facets>(props: Shared & { handle: QueryHandle<R> })
   // biome-ignore lint/correctness/useExhaustiveDependencies: resolved re-reads the CSS colour tokens on a theme change
   const option = useMemo(() => {
     if (result === null || empty || props.widgetType !== 'toplist') return null;
-    const base = resolveCssVars(toplist(result, { groupBy, colors }), cssTokenReader());
+    const base = resolveCssVars(toplist(result, { groupBy, colors, measure }), cssTokenReader());
     return props.echarts === null ? base : (mergeEchartsOption(base, props.echarts) as EChartsOption);
-  }, [result, empty, props.widgetType, groupBy, colors, props.echarts, resolved]);
+  }, [result, empty, props.widgetType, groupBy, measure, colors, props.echarts, resolved]);
   const notes = (result?.partial == null ? 0 : NOTE_PX) + (state.status === 'loading' ? NOTE_PX : 0);
   const chartPx = Math.max(MIN_PX, props.height - FRAME_CHROME_PX - notes);
   return (
@@ -86,7 +88,13 @@ function FacetBody<R extends Facets>(props: Shared & { handle: QueryHandle<R> })
           />
         ) : (
           <div className="overflow-auto" style={{ maxHeight: chartPx }}>
-            <GroupTable result={result} groupBy={groupBy} colors={colors} noun={props.noun} />
+            <GroupTable
+              result={result}
+              groupBy={groupBy}
+              colors={colors}
+              noun={props.noun}
+              measure={measure}
+            />
           </div>
         ))}
     </div>
@@ -105,15 +113,16 @@ interface Filter {
 function SpanFacets(props: Shared & { dataSource: DataSource; filter: Filter }): JSX.Element {
   const { dataSource, filter, ...rest } = props;
   const { condition, text, window } = filter;
+  const { measure, groupBy } = rest;
   const query = useMemo<SpanQuery>(
     () => ({
       ...queryOf(condition, text, window),
       mode: 'spans',
       sort: SORT.spans,
       groupBy: null,
-      measureBy: null,
+      measureBy: measure === 'count' ? null : groupBy,
     }),
-    [condition, text, window],
+    [condition, text, window, measure, groupBy],
   );
   return <FacetBody {...rest} handle={useSpanQuery(dataSource, query)} />;
 }
@@ -147,6 +156,7 @@ export const FacetChartWidget: WidgetRenderer = ({ widget, scope, height, dataSo
   const shared: Shared = {
     widgetType: widget.type,
     groupBy: widget.groupBy,
+    measure: widget.measure,
     echarts: widget.type === 'toplist' ? widget.echarts : null,
     height,
     noun: signal === 'spans' ? 'Spans' : 'Logs',

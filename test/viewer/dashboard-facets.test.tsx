@@ -142,6 +142,49 @@ describe('the Top list and Table widgets', () => {
     expect(within(table).getAllByRole('columnheader')[1]?.textContent).toBe('Spans');
   });
 
+  test('a top list with measure duration.max shows one bar per group with the group max', async () => {
+    const ds = await linked();
+    const all = await ds.querySpans({
+      condition: null,
+      text: '',
+      window: null,
+      mode: 'spans',
+      sort: { column: 'start', dir: 'desc' },
+      limit: 100000,
+      groupBy: null,
+      measureBy: null,
+      scanAll: true,
+    });
+    const max = new Map<string, number>();
+    for (const r of all.rows) {
+      if (!('span' in r)) continue;
+      max.set(r.service, Math.max(max.get(r.service) ?? 0, r.durationNs));
+    }
+    expect(max.size).toBe(2);
+    mount(ds, { type: 'toplist', signal: 'spans', groupBy: 'service.name', measure: 'duration.max' });
+    const data = await bars();
+    expect(data.map((d) => d.name).sort()).toEqual([...max.keys()].sort());
+    for (const d of data) {
+      const want = max.get(d.name) ?? Number.NaN;
+      expect(Math.abs(d.value - want) / want).toBeLessThan(0.05);
+    }
+  });
+
+  test('the table with duration.p95 has a p95 column and no Share', async () => {
+    mount(await linked(), {
+      type: 'table',
+      signal: 'spans',
+      groupBy: 'service.name',
+      measure: 'duration.p95',
+    });
+    const table = await screen.findByRole('table');
+    expect(
+      within(table)
+        .getAllByRole('columnheader')
+        .map((h) => h.textContent),
+    ).toEqual(['service.name', 'p95']);
+  });
+
   test('the logs signal groups logs', async () => {
     mount(await linked(), { type: 'table', signal: 'logs', groupBy: 'service.name' });
     const table = await screen.findByRole('table');
