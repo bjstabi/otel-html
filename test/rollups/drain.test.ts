@@ -1,4 +1,4 @@
-import { describe, expect, inject, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { RelNanos } from '../../src/model/ids.js';
 import {
   DRAIN_PARAMS,
@@ -9,6 +9,7 @@ import {
   tokenize,
 } from '../../src/rollups/drain.js';
 import { medianMs } from '../../test-support/median-ms.js';
+import { perfFactor } from '../../test-support/perf-inject.js';
 
 const t = (n: number): RelNanos => n as RelNanos;
 
@@ -159,6 +160,6 @@ describe('Drain', () => {
       for (let i = 0; i < 200_000; i++) d.add(`${shapes[i % 50]} ${i}ms id=${i}`, 'info', t(i));
       return d;
     }, 3);
-    expect(ms).toBeLessThan(1000 * inject('perfFactor'));
+    expect(ms).toBeLessThan(1000 * perfFactor());
   });
 });

@@ -31,27 +31,172 @@ task.cache_dir = ".mise/task-cache"
 # tools read, so an edit to any such file re-runs them and an edit to README.md or docs/ does not. The build tasks keep
 # src-only lists (a test edit must not rebuild dist/ and every fixture report).
 [task_config.input_groups]
-deps = ["mise.toml", "package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", ".npmrc"]
-node = ["src/**", "test/**", "test-support/**", "tsconfig.json", "tsconfig.base.json", "vitest.config.ts"]
-viewer = ["src/viewer/**", "src/model/**", "src/format/**", "src/semconv/**", "src/rollups/**", "src/ottl/**", "src/query/**", "src/dashboards/**", "test/viewer/**", "test-support/**", "tsconfig.viewer.json", "vite.config.ts"]
-e2e = ["e2e/*.ts", "e2e/[!.]*/**", "fixtures/**", "playwright.config.ts", "tsconfig.e2e.json"]
-scripts = ["scripts/**", "proto/**", "buf.gen.yaml", "schema/**"]
+deps = [
+  ".npmrc",
+  "mise.toml",
+  "package.json",
+  "pnpm-lock.yaml",
+  "pnpm-workspace.yaml",
+]
+node = [
+  "src/**",
+  "test-support/**",
+  "test/**",
+  "tsconfig.base.json",
+  "tsconfig.json",
+  "vitest.config.ts",
+]
+viewer = [
+  "src/dashboards/**",
+  "src/format/**",
+  "src/model/**",
+  "src/ottl/**",
+  "src/query/**",
+  "src/rollups/**",
+  "src/semconv/**",
+  "src/viewer/**",
+  "test-support/**",
+  "test/viewer/**",
+  "tsconfig.viewer.json",
+  "vite.config.ts",
+]
+e2e = [
+  "e2e/*.ts",
+  "e2e/[!.]*/**",
+  "fixtures/**",
+  "playwright.config.ts",
+  "tsconfig.e2e.json",
+]
+scripts = ["proto/**", "schema/**", "scripts/**", "buf.gen.yaml"]
 # What biome, tsc, actionlint and knip read besides the code: every root config file (biome.json, knip.json, tsconfig*.json,
 # tsdown/vite/vitest/playwright/commitlint configs, lefthook.yml, ...), the root markdown biome formats (AGENTS.md,
 # CLAUDE.md; not README.md or docs/, which biome excludes), the workflows and the actions.
 # A new top-level source directory (or root file kind) must be added to a group here, or lint and typecheck skip it.
-config = ["*.ts", "*.js", "*.mjs", "*.cjs", "*.json", "*.jsonc", "*.css", "*.yml", "*.yaml", "AGENTS.md", "CLAUDE.md", ".github/**"]
+config = [
+  "*.cjs",
+  "*.css",
+  "*.js",
+  "*.json",
+  "*.jsonc",
+  "*.mjs",
+  "*.ts",
+  "*.yaml",
+  "*.yml",
+  ".github/**",
+  "AGENTS.md",
+  "CLAUDE.md",
+]
+
+# Host packages for `mise bootstrap`: Docker, and the libraries and fonts Playwright needs for Chromium, Firefox and
+# WebKit on Ubuntu 24.04 (the list is from playwright-core's dependency table for that release).
+[bootstrap.packages]
+"apt:docker.io" = { os = "linux" }
+"apt:fonts-freefont-ttf" = { os = "linux" }
+"apt:fonts-ipafont-gothic" = { os = "linux" }
+"apt:fonts-liberation" = { os = "linux" }
+"apt:fonts-noto-color-emoji" = { os = "linux" }
+"apt:fonts-tlwg-loma-otf" = { os = "linux" }
+"apt:fonts-unifont" = { os = "linux" }
+"apt:fonts-wqy-zenhei" = { os = "linux" }
+"apt:gstreamer1.0-libav" = { os = "linux" }
+"apt:gstreamer1.0-plugins-bad" = { os = "linux" }
+"apt:gstreamer1.0-plugins-base" = { os = "linux" }
+"apt:gstreamer1.0-plugins-good" = { os = "linux" }
+"apt:libasound2t64" = { os = "linux" }
+"apt:libatk-bridge2.0-0t64" = { os = "linux" }
+"apt:libatk1.0-0t64" = { os = "linux" }
+"apt:libatomic1" = { os = "linux" }
+"apt:libatspi2.0-0t64" = { os = "linux" }
+"apt:libavcodec60" = { os = "linux" }
+"apt:libavif16" = { os = "linux" }
+"apt:libcairo-gobject2" = { os = "linux" }
+"apt:libcairo2" = { os = "linux" }
+"apt:libcups2t64" = { os = "linux" }
+"apt:libdbus-1-3" = { os = "linux" }
+"apt:libdrm2" = { os = "linux" }
+"apt:libenchant-2-2" = { os = "linux" }
+"apt:libepoxy0" = { os = "linux" }
+"apt:libevent-2.1-7t64" = { os = "linux" }
+"apt:libflite1" = { os = "linux" }
+"apt:libfontconfig1" = { os = "linux" }
+"apt:libfreetype6" = { os = "linux" }
+"apt:libgbm1" = { os = "linux" }
+"apt:libgdk-pixbuf-2.0-0" = { os = "linux" }
+"apt:libgles2" = { os = "linux" }
+"apt:libglib2.0-0t64" = { os = "linux" }
+"apt:libgstreamer-gl1.0-0" = { os = "linux" }
+"apt:libgstreamer-plugins-bad1.0-0" = { os = "linux" }
+"apt:libgstreamer-plugins-base1.0-0" = { os = "linux" }
+"apt:libgstreamer1.0-0" = { os = "linux" }
+"apt:libgtk-3-0t64" = { os = "linux" }
+"apt:libgtk-4-1" = { os = "linux" }
+"apt:libharfbuzz-icu0" = { os = "linux" }
+"apt:libharfbuzz0b" = { os = "linux" }
+"apt:libhyphen0" = { os = "linux" }
+"apt:libicu74" = { os = "linux" }
+"apt:libjpeg-turbo8" = { os = "linux" }
+"apt:liblcms2-2" = { os = "linux" }
+"apt:libmanette-0.2-0" = { os = "linux" }
+"apt:libnspr4" = { os = "linux" }
+"apt:libnss3" = { os = "linux" }
+"apt:libopus0" = { os = "linux" }
+"apt:libpango-1.0-0" = { os = "linux" }
+"apt:libpangocairo-1.0-0" = { os = "linux" }
+"apt:libpng16-16t64" = { os = "linux" }
+"apt:libsecret-1-0" = { os = "linux" }
+"apt:libvpx9" = { os = "linux" }
+"apt:libwayland-client0" = { os = "linux" }
+"apt:libwayland-egl1" = { os = "linux" }
+"apt:libwayland-server0" = { os = "linux" }
+"apt:libwebp7" = { os = "linux" }
+"apt:libwebpdemux2" = { os = "linux" }
+"apt:libwoff1" = { os = "linux" }
+"apt:libx11-6" = { os = "linux" }
+"apt:libx11-xcb1" = { os = "linux" }
+"apt:libx264-164" = { os = "linux" }
+"apt:libxcb-shm0" = { os = "linux" }
+"apt:libxcb1" = { os = "linux" }
+"apt:libxcomposite1" = { os = "linux" }
+"apt:libxcursor1" = { os = "linux" }
+"apt:libxdamage1" = { os = "linux" }
+"apt:libxext6" = { os = "linux" }
+"apt:libxfixes3" = { os = "linux" }
+"apt:libxi6" = { os = "linux" }
+"apt:libxkbcommon0" = { os = "linux" }
+"apt:libxml2" = { os = "linux" }
+"apt:libxrandr2" = { os = "linux" }
+"apt:libxrender1" = { os = "linux" }
+"apt:libxslt1.1" = { os = "linux" }
+"apt:xfonts-cyrillic" = { os = "linux" }
+"apt:xfonts-scalable" = { os = "linux" }
+"apt:xvfb" = { os = "linux" }
+
+[tasks.bootstrap]
+description = "Set this machine up: dependencies, git hooks and the Playwright browsers (`mise bootstrap` runs this after the host packages)"
+run = [{ task = "setup" }, "pnpm exec playwright install"]
 
 [tasks.setup]
 description = "Install dependencies and git hooks"
 run = ["pnpm install --frozen-lockfile", "lefthook install"]
 
 [tasks.lint]
-description = "biome ci and actionlint"
-sources = ["@group:deps", "@group:node", "@group:viewer", "@group:e2e", "@group:scripts", "@group:config"]
+description = "biome ci, actionlint, the task graph and the formatting of mise.toml"
+sources = [
+  "@group:config",
+  "@group:deps",
+  "@group:e2e",
+  "@group:node",
+  "@group:scripts",
+  "@group:viewer",
+]
 outputs = []
 cache = { enabled = true, env = ["CI"] }
-run = ["pnpm exec biome ci --error-on-warnings .", "actionlint .github/workflows/*.yml"]
+run = [
+  "pnpm exec biome ci --error-on-warnings .",
+  "actionlint .github/workflows/*.yml",
+  "mise tasks validate",
+  "mise fmt --check",
+]
 
 [tasks.format]
 description = "Fix formatting with biome"
@@ -59,24 +204,45 @@ run = "pnpm exec biome format --write ."
 
 [tasks.typecheck]
 description = "tsc on the node, viewer and e2e projects"
-sources = ["@group:deps", "@group:node", "@group:viewer", "@group:e2e", "@group:scripts", "@group:config"]
+sources = [
+  "@group:config",
+  "@group:deps",
+  "@group:e2e",
+  "@group:node",
+  "@group:scripts",
+  "@group:viewer",
+]
 outputs = []
 cache = { enabled = true }
-run = ["pnpm exec tsc -p tsconfig.json --noEmit", "pnpm exec tsc -p tsconfig.viewer.json --noEmit", "pnpm exec tsc -p tsconfig.e2e.json --noEmit"]
+run = [
+  "pnpm exec tsc -p tsconfig.json --noEmit",
+  "pnpm exec tsc -p tsconfig.viewer.json --noEmit",
+  "pnpm exec tsc -p tsconfig.e2e.json --noEmit",
+]
 
 # Unit tests in two passes: everything but the timing-sensitive `@perf` tests in parallel, then the `@perf` tests
 # alone, one file at a time (vitest.config.ts), so other work does not steal their CPU. Budgets scale with
 # OTEL_HTML_PERF_FACTOR and, with OTEL_HTML_PERF_REFERENCE_MS set, the measured runner factor; they are never edited.
 [tasks."test:unit"]
 description = "Unit tests: the parallel pass, then the @perf pass"
-run = [{ task = "test:unit:main" }, {task = "test:unit:perf" }]
+run = [{ task = "test:unit:main" }, { task = "test:unit:perf" }]
 
 [tasks."test:unit:main"]
 description = "vitest, everything but @perf, in parallel"
 # Beyond the code: what tests read from disk (fixtures/reports, the committed JSON schema, the shipped CI dashboard
 # config, .github/actions scripts, scripts/load-receiver-plan, e2e/fixture.ts, tsconfig.base.json). dist/ is read only
 # under OTEL_HTML_LOAD / OTEL_HTML_BINARY, so it is not an input.
-sources = ["@group:deps", "@group:node", "@group:viewer", "scripts/**", "fixtures/**", "schema/**", "e2e/fixture.ts", ".github/actions/**", ".github/otel-html-ci.yaml"]
+sources = [
+  "@group:deps",
+  "@group:node",
+  "@group:viewer",
+  ".github/actions/**",
+  "fixtures/**",
+  "schema/**",
+  "scripts/**",
+  ".github/otel-html-ci.yaml",
+  "e2e/fixture.ts",
+]
 outputs = []
 cache = { enabled = true, env = ["CI", "OTEL_HTML_LOAD", "OTEL_HTML_BINARY"] }
 # Pinned: an inherited OTEL_HTML_PERF_PASS=1 would select only @perf and cache that as this pass.
@@ -121,7 +287,14 @@ bun scripts/load-receiver.ts --out dist/load-receiver "$@"
 
 [tasks.knip]
 description = "unused files, exports and dependencies"
-sources = ["@group:deps", "@group:node", "@group:viewer", "@group:e2e", "@group:scripts", "@group:config"]
+sources = [
+  "@group:config",
+  "@group:deps",
+  "@group:e2e",
+  "@group:node",
+  "@group:scripts",
+  "@group:viewer",
+]
 outputs = []
 cache = { enabled = true }
 run = "pnpm exec knip"
@@ -130,9 +303,30 @@ run = "pnpm exec knip"
 description = """protobuf-es, the config schema and the OTTL grammar; also rewrites the README's generated task section
 `mise run --force gen` restores a hand-edited generated file (gen:check does this)."""
 # The two scripts import src/config (schema.ts and what it pulls in) and read src/ottl/ottl.grammar.
-sources = ["@group:deps", "proto/**", "buf.gen.yaml", "scripts/gen-schema.ts", "scripts/gen-ottl.ts", "src/**", "!src/viewer/**", "!src/model/gen/**", "!src/ottl/*.gen.ts", "!src/ottl/*.gen.terms.ts"]
-outputs = ["src/model/gen/**", "src/ottl/*.gen.ts", "src/ottl/*.gen.terms.ts", "schema/**"]
-run = ["pnpm exec buf generate", "bun scripts/gen-schema.ts", "bun scripts/gen-ottl.ts", "mise generate task-docs --inject --output README.md"]
+sources = [
+  "@group:deps",
+  "proto/**",
+  "buf.gen.yaml",
+  "scripts/gen-schema.ts",
+  "scripts/gen-ottl.ts",
+  "src/**",
+  "!src/viewer/**",
+  "!src/model/gen/**",
+  "!src/ottl/*.gen.ts",
+  "!src/ottl/*.gen.terms.ts",
+]
+outputs = [
+  "schema/**",
+  "src/model/gen/**",
+  "src/ottl/*.gen.terms.ts",
+  "src/ottl/*.gen.ts",
+]
+run = [
+  "pnpm exec buf generate",
+  "bun scripts/gen-schema.ts",
+  "bun scripts/gen-ottl.ts",
+  "mise generate task-docs --inject --output README.md",
+]
 
 [tasks."gen:check"]
 description = "Regenerate with --force and fail if git sees a difference (never cached)"
@@ -176,15 +370,40 @@ run = "pnpm exec vitest run --changed $usage_ref"
 
 [tasks."build:lib"]
 description = "Build the library and CLI into dist/ (skipped while up to date)"
-sources = ["@group:deps", "src/**", "!src/viewer/**", "tsdown.config.ts", "tsconfig.base.json", "tsconfig.json"]
-outputs = ["dist/cli/**", "dist/index.js", "dist/index.d.ts", "dist/receiver-*.js"]
+sources = [
+  "@group:deps",
+  "src/**",
+  "!src/viewer/**",
+  "tsdown.config.ts",
+  "tsconfig.base.json",
+  "tsconfig.json",
+]
+outputs = [
+  "dist/cli/**",
+  "dist/receiver-*.js",
+  "dist/index.d.ts",
+  "dist/index.js",
+]
 run = "pnpm exec tsdown"
 
 [tasks."build:viewer"]
 description = "Build the viewer into dist/viewer (skipped while up to date)"
 # The lib build cleans dist/, so the viewer builds after it; mise re-runs this task whenever build:lib ran.
 depends = ["build:lib"]
-sources = ["@group:deps", "src/viewer/**", "src/model/**", "src/format/**", "src/semconv/**", "src/rollups/**", "src/ottl/**", "src/query/**", "src/dashboards/**", "vite.config.ts", "tsconfig.base.json", "tsconfig.viewer.json"]
+sources = [
+  "@group:deps",
+  "src/dashboards/**",
+  "src/format/**",
+  "src/model/**",
+  "src/ottl/**",
+  "src/query/**",
+  "src/rollups/**",
+  "src/semconv/**",
+  "src/viewer/**",
+  "tsconfig.base.json",
+  "tsconfig.viewer.json",
+  "vite.config.ts",
+]
 outputs = ["dist/viewer/**"]
 run = "pnpm exec vite build"
 
@@ -195,7 +414,20 @@ depends = ["build:viewer"]
 [tasks."e2e:fixtures"]
 description = "Build the e2e fixture reports into e2e/.reports/ (skipped while up to date; --force rebuilds)"
 depends = ["build"]
-sources = ["@group:deps", "dist/**", "!dist/bin/**", "!dist/load-receiver/**", "e2e/build-fixtures.ts", "e2e/fixture.ts", "e2e/metrics-scale.ts", "test-support/scale-logs.ts", "test-support/scale-metrics.ts", "test-support/otlp-builders.ts", "test-support/fixture-ids.ts", "fixtures/**"]
+sources = [
+  "@group:deps",
+  "dist/**",
+  "!dist/bin/**",
+  "!dist/load-receiver/**",
+  "e2e/build-fixtures.ts",
+  "e2e/fixture.ts",
+  "e2e/metrics-scale.ts",
+  "test-support/scale-logs.ts",
+  "test-support/scale-metrics.ts",
+  "test-support/otlp-builders.ts",
+  "test-support/fixture-ids.ts",
+  "fixtures/**",
+]
 outputs = ["e2e/.reports/**"]
 run = "bun e2e/build-fixtures.ts"
 
@@ -221,9 +453,28 @@ shell = "bash -c"
 depends = ["e2e:fixtures"]
 # The key also holds the task's args (--browser, specs after `--`) and the resolved tool versions. The workflow file is a
 # source because it names the Playwright image the browsers come from. OTEL_HTML_METRICS_SCALE changes which tests run.
-sources = ["@group:deps", "dist/**", "!dist/bin/**", "!dist/load-receiver/**", "@group:e2e", "test-support/**", "tsconfig.json", "tsconfig.base.json", ".github/workflows/ci.yml"]
+sources = [
+  "@group:deps",
+  "dist/**",
+  "!dist/bin/**",
+  "!dist/load-receiver/**",
+  "@group:e2e",
+  "test-support/**",
+  "tsconfig.json",
+  "tsconfig.base.json",
+  ".github/workflows/ci.yml",
+]
 outputs = []
-cache = { enabled = true, env = ["CI", "OTEL_HTML_PERF_FACTOR", "OTEL_HTML_PERF_REFERENCE_MS", "OTEL_HTML_SKIP_BROWSER_INSTALL", "OTEL_HTML_METRICS_SCALE", "OTEL_HTML_LOAD_REPORT"], command_inputs = ["pnpm exec playwright --version"] }
+cache = { enabled = true, env = [
+  "CI",
+  "OTEL_HTML_PERF_FACTOR",
+  "OTEL_HTML_PERF_REFERENCE_MS",
+  "OTEL_HTML_SKIP_BROWSER_INSTALL",
+  "OTEL_HTML_METRICS_SCALE",
+  "OTEL_HTML_LOAD_REPORT",
+], command_inputs = [
+  "pnpm exec playwright --version",
+] }
 usage = '''
 flag "--browser <browser>" default="*"
 arg "[args]" var=#true

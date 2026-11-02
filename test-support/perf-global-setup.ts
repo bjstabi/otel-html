@@ -6,7 +6,7 @@ import { parseReference, runnerFactor } from './perf-factor.js';
  * Provides `perfFactor`, the factor the unit `@perf` budgets are multiplied by: `OTEL_HTML_PERF_FACTOR` times the
  * runner factor (the calibration workload's time over `OTEL_HTML_PERF_REFERENCE_MS`, never below 1; 1 when no
  * reference is set). Measured once per run, and only in the perf pass (`OTEL_HTML_PERF_PASS=1`), where budgets
- * apply; elsewhere the factor is 1 and nothing is measured or logged. Tests read it with `inject('perfFactor')`.
+ * apply; elsewhere the factor is 1 and nothing is measured or logged. Tests read it with `perfFactor()`.
  */
 export function setup(project: TestProject): void {
   const { OTEL_HTML_PERF_PASS, OTEL_HTML_PERF_REFERENCE_MS, OTEL_HTML_PERF_FACTOR } = process.env;

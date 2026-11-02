@@ -1,4 +1,4 @@
-import { describe, expect, inject, test } from 'vitest';
+import { describe, expect, test } from 'vitest';
 import type { RelNanos, SpanId, TraceId, UnixNanos } from '../../src/model/ids.js';
 import type {
   ResourceRecord,
@@ -16,6 +16,7 @@ import {
   toEntries,
 } from '../../src/viewer/data/span-query.js';
 import { medianMs } from '../../test-support/median-ms.js';
+import { perfFactor } from '../../test-support/perf-inject.js';
 
 const resources: ResourceRecord[] = ['api', 'db', 'cache'].map((s) => ({
   attributes: new Map([['service.name', { kind: 'string', value: s }]]),
@@ -79,7 +80,7 @@ describe('querySpanEntries', () => {
     expect(r.rows).toHaveLength(100);
     expect(r.facets.total('service.name')).toBe(2000);
     expect(r.partial).toBeNull();
-    expect(ms).toBeLessThan(150 * inject('perfFactor'));
+    expect(ms).toBeLessThan(150 * perfFactor());
   });
 
   test('sorts by the requested column and direction, ties by start', () => {

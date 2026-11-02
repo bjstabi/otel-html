@@ -1,3 +1,6 @@
 * text=auto eol=lf
 *.pb binary
 *.binpb binary
+
+# fixtures/reports/format-*/** are checksummed bytes: never normalise line endings
+fixtures/reports/format-*/** -text

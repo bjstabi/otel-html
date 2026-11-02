@@ -145,17 +145,19 @@ runs:
         ARTIFACTS: ${{ steps.resolve.outputs.artifacts }}
         REPORT: ${{ steps.resolve.outputs.report }}
         RUN_ID: ${{ inputs.run-id }}
-        TARGET: ${{ inputs.target }}
+        # On github-pages the table goes to a scratch file for this step only: `ci link` writes the summary with the
+        # report's link on a published run, and the "Summary without a link" step appends the file otherwise.
+        SUMMARY_FILE: ${{ inputs.target == 'github-pages' && format('{0}/otel-html-report-summary.md', runner.temp) || '' }}
         GITHUB_TOKEN: ${{ inputs.token }}
       run: |
-        # On github-pages, `ci link` writes the job summary with the report's link; this one would only say "see the
-        # ci-run-report artifact".
-        args=()
-        if [ "$TARGET" = github-pages ]; then args+=(--no-summary); fi
+        if [ -n "$SUMMARY_FILE" ]; then
+          rm -f "$SUMMARY_FILE"
+          export GITHUB_STEP_SUMMARY=$SUMMARY_FILE
+        fi
         # CMD is deliberately unquoted: it may be a command with arguments, such as `node dist/cli/main.js`.
         # shellcheck disable=SC2086
         $CMD ci report --run-id "$RUN_ID" --repository "$GITHUB_REPOSITORY" --artifacts "$ARTIFACTS" --out "$REPORT" \
-          --config "$CONFIG" "${args[@]}"
+          --config "$CONFIG"
     - if: inputs.cleanup-pr == '' && steps.report.outputs.published != 'false'
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
@@ -193,6 +195,17 @@ runs:
         "$GITHUB_ACTION_PATH/site-lease.sh" "$SITE" "otel-html: publish run $RUN_ID" published=true \
           $CMD ci site --site "$SITE" --report "$REPORT" --run-id "$RUN_ID" --repository "$GITHUB_REPOSITORY" \
           --base-url "$BASE_URL" --retention "$RETENTION" --pr-retention "$PR_RETENTION" --config "$CONFIG"
+    # A run that reached no site page (no channel, or a push that gave up after five attempts, which fails the step above)
+    # still gets the table `ci report` kept in a file. `!cancelled()` lets it run after that failure.
+    - name: Summary without a link
+      if: >-
+        !cancelled() && inputs.cleanup-pr == '' && inputs.target == 'github-pages'
+        && steps.report.outputs.published != 'false' && steps.site.outputs.published != 'true'
+      shell: bash
+      env:
+        SUMMARY_FILE: ${{ runner.temp }}/otel-html-report-summary.md
+      run: |
+        if [ -f "$SUMMARY_FILE" ]; then cat "$SUMMARY_FILE" >>"$GITHUB_STEP_SUMMARY"; fi
     # A closed PR's folder (`pr/<number>/`) and index entry leave the site, under the same lease. A PR the site never had (`ci cleanup`
     # writes `cleaned=false`) pushes nothing, so nothing is deployed.
     - name: Remove the pull request from the site branch

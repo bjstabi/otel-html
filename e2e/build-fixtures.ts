@@ -538,6 +538,20 @@ async function buildUnfinishedReport(): Promise<void> {
   await report.flush();
 }
 
+/**
+ * The frozen format-1 and format-2 data folders (`fixtures/reports/`, never edited) completed into reports by
+ * `otel-html upgrade`, which writes the current viewer beside the data.
+ */
+async function buildFrozenReports(): Promise<void> {
+  for (const n of [1, 2] as const) {
+    const dir = fileURLToPath(reportDir(`frozen-format-${n}`));
+    await cp(fileURLToPath(new URL(`../fixtures/reports/format-${n}/data`, import.meta.url)), `${dir}data`, {
+      recursive: true,
+    });
+    await cli(['upgrade', dir]);
+  }
+}
+
 await rm(REPORTS_DIR, { recursive: true, force: true });
 // The on-demand metrics scale report is built from `dist`, which a rebuild of the fixtures may have changed.
 await rm(METRICS_SCALE_DIR, { recursive: true, force: true });
@@ -550,4 +564,5 @@ await Promise.all([
   buildUnfinishedReport(),
   buildDashboardReports(),
   buildRunChartReport(),
+  buildFrozenReports(),
 ]);
