@@ -80,6 +80,7 @@ export const TracesWidget: WidgetRenderer = ({ widget, scope, height, dataSource
       sort: { column: sort.column, dir: sort.dir },
       limit: ROWS,
       groupBy: null,
+      measureBy: null,
       scanAll: false,
     }),
     [scope.condition, scope.window, text, mode, sort],

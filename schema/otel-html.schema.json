@@ -867,6 +867,18 @@
                       "type": "string",
                       "minLength": 1
                     },
+                    "measure": {
+                      "default": "count",
+                      "type": "string",
+                      "enum": [
+                        "count",
+                        "duration.sum",
+                        "duration.avg",
+                        "duration.max",
+                        "duration.p95",
+                        "duration.p99"
+                      ]
+                    },
                     "echarts": {
                       "default": null,
                       "description": "Unstable: passed through to ECharts as is; compatibility is ECharts', not otel-html's.",
@@ -958,6 +970,18 @@
                     "groupBy": {
                       "type": "string",
                       "minLength": 1
+                    },
+                    "measure": {
+                      "default": "count",
+                      "type": "string",
+                      "enum": [
+                        "count",
+                        "duration.sum",
+                        "duration.avg",
+                        "duration.max",
+                        "duration.p95",
+                        "duration.p99"
+                      ]
                     }
                   },
                   "required": [

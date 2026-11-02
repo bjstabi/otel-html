@@ -284,7 +284,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
       );
     }
     if (view === 'table')
-      return <GroupTable result={result} groupBy={sel.groupBy} colors={colors} noun="Logs" />;
+      return <GroupTable result={result} groupBy={sel.groupBy} colors={colors} noun="Logs" measure="count" />;
     const moveEnabled = sel.logRef === null && sel.traceId === null;
     switch (result.mode) {
       case 'logs':

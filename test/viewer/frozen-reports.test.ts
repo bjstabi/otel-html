@@ -47,6 +47,7 @@ describe.each([
       sort: { column: 'start', dir: 'asc' },
       limit: 1000,
       groupBy: null,
+      measureBy: null,
       scanAll: false,
     });
     expect(result.total).toBe(manifest.totals.spans);

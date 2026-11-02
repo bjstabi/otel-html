@@ -13,7 +13,11 @@ vi.mock('../../src/viewer/components/chart.js', () => ({
 import { DashboardSchema } from '../../src/dashboards/schema.js';
 import { FacetCounts } from '../../src/rollups/facets.js';
 import { RedSeries } from '../../src/rollups/red.js';
-import { FusionTimeline, type TimelineLane } from '../../src/viewer/components/fusion-timeline.js';
+import {
+  alignLanes,
+  FusionTimeline,
+  type TimelineLane,
+} from '../../src/viewer/components/fusion-timeline.js';
 import { SEVERITY_SERIES, SPAN_STATUS_SERIES } from '../../src/viewer/components/histogram-card.js';
 import type { WidgetActions } from '../../src/viewer/dashboards/dashboard-page.js';
 import { TimelineWidget } from '../../src/viewer/dashboards/widgets/timeline.js';
@@ -104,7 +108,7 @@ describe('FusionTimeline', () => {
     fireEvent.pointerDown(brush, { clientX: 250, pointerId: 1 });
     fireEvent.pointerMove(brush, { clientX: 700, pointerId: 1 });
     fireEvent.pointerUp(brush, { clientX: 700, pointerId: 1 });
-    // 1000 px over ten 1 ms columns: px 250 is column 2, px 700 is column 7 (inclusive).
+    // 1000 px over eleven columns: px 250 is column 2, px 700 is column 7 (inclusive).
     expect(onBrush).toHaveBeenCalledOnce();
     expect(onBrush).toHaveBeenCalledWith({ start: 2 * MS, end: 8 * MS });
   });
@@ -170,8 +174,70 @@ describe('FusionTimeline', () => {
   test('the page brush is drawn over the plot', () => {
     show(vi.fn(), { start: 2 * MS, end: 5 * MS });
     const band = screen.getByRole('group', { name: 'Time brush' }).firstElementChild as HTMLElement;
-    expect(band.style.left).toBe('20%');
-    expect(band.style.width).toBe('30%');
+    // The window ends on a bucket edge, so the bucket at 10 ms is a column too: eleven columns, not ten.
+    expect(Number.parseFloat(band.style.left)).toBeCloseTo((2 / 11) * 100, 6);
+    expect(Number.parseFloat(band.style.width)).toBeCloseTo((3 / 11) * 100, 6);
+  });
+  test('a zero-width page brush at the aligned window end is drawn as the last column', () => {
+    show(vi.fn(), { start: 10 * MS, end: 10 * MS });
+    const band = screen.getByRole('group', { name: 'Time brush' }).firstElementChild as HTMLElement;
+    expect(Number.parseFloat(band.style.left)).toBeCloseTo((10 / 11) * 100, 6);
+    expect(Number.parseFloat(band.style.width)).toBeCloseTo((1 / 11) * 100, 6);
+  });
+});
+
+describe('alignLanes at an aligned window end', () => {
+  const window: TimeWindow = { start: 0, end: 8 * MS };
+
+  test('alignLanes gives the bucket that starts at an aligned window end a column', () => {
+    const buckets = new TimeBuckets<'points'>(['points']);
+    buckets.add((8 * MS) as RelNanos, 'points');
+    const aligned = alignLanes([{ buckets }], window);
+    expect(buckets.widthNs).toBe(MS);
+    expect(aligned.length).toBe(9);
+    expect(aligned.lanes[0]?.total('points')).toBe(1);
+    expect(aligned.lanes[0]?.counts('points')[8]).toBe(1);
+  });
+
+  test('a spans and a logs bucket at the aligned end are drawn too', () => {
+    const spans = new TimeBuckets<'ok' | 'error' | 'unset'>(['ok', 'error', 'unset']);
+    spans.add((8 * MS) as RelNanos, 'ok');
+    const logs = new TimeBuckets<'info'>(['info']);
+    logs.add((8 * MS) as RelNanos, 'info', 3);
+    const aligned = alignLanes([{ buckets: spans }, { buckets: logs }], window);
+    expect(aligned.lanes[0]?.counts('ok')[8]).toBe(1);
+    expect(aligned.lanes[1]?.counts('info')[8]).toBe(3);
+    expect(aligned.lanes[1]?.total('info')).toBe(3);
+  });
+
+  test('a window that is not aligned keeps the column count', () => {
+    const buckets = new TimeBuckets<'points'>(['points']);
+    buckets.add(0 as RelNanos, 'points');
+    expect(alignLanes([{ buckets }], { start: 0, end: 8 * MS + 1 }).length).toBe(9);
+    expect(alignLanes([{ buckets }], { start: 0, end: 7 * MS + 500 }).length).toBe(8);
+  });
+
+  test('a metric point at the window end is drawn in the column of the rendered chart', () => {
+    const points = new TimeBuckets<'points'>(['points']);
+    points.add((8 * MS) as RelNanos, 'points', 2);
+    const ls: TimelineLane[] = [
+      {
+        label: 'Metric points',
+        total: 2,
+        buckets: points,
+        series: {
+          noun: 'points',
+          topFirst: false,
+          series: [{ key: 'points', label: 'points', color: '#000' }],
+        },
+        note: null,
+      },
+    ];
+    render(<FusionTimeline lanes={ls} window={window} brush={null} height={150} onBrush={vi.fn()} />);
+    const option = JSON.parse(screen.getByRole('img').getAttribute('data-option') ?? '{}');
+    const data: unknown[] = option.series[0].data;
+    expect(data).toHaveLength(9);
+    expect(JSON.stringify(data[8])).toContain('2');
   });
 });
 
@@ -241,6 +307,24 @@ describe('TimelineWidget on the linked fixture', () => {
     expect(await screen.findByText(/^Metric points ~\d+$/)).toBeTruthy();
   });
 
+  test('a metric point in the bucket at an aligned window end is counted', async () => {
+    const linked = await buildEmbeddedMetricsReport();
+    const ds = await createDataSource(createScriptedLoader(linked.files), linked.manifest, 1);
+    const points = await ds.metricPoints();
+    const counts = points.counts('points');
+    const range = linked.manifest.range;
+    if (range === undefined || range === null) throw new Error('no range');
+    // The fixture's range end falls inside its last bucket, so end the window where that bucket starts: the window
+    // end is aligned, as it is whenever a report's range end sits on a bucket edge.
+    const last = Math.floor((range.end - points.startNs) / points.widthNs);
+    const end = points.startNs + last * points.widthNs;
+    const atEnd = counts[last] ?? 0;
+    const before = counts[last - 1] ?? 0;
+    expect(atEnd).toBeGreaterThan(0);
+    await widget([], { start: end - 1, end });
+    expect(await screen.findByText(new RegExp(`^Metric points ~?${atEnd + before}$`))).toBeTruthy();
+  });
+
   test('with a bound variable the metric lane says all resources', async () => {
     await widget([{ key: 'service.name', value: 'checkout', kind: 'string' }]);
     await waitFor(() => expect(screen.getByText(/all resources/)).toBeTruthy());
@@ -295,6 +379,7 @@ describe('TimelineWidget states', () => {
     facets: new FacetCounts(10, 10),
     buckets: new TimeBuckets(['ok', 'error', 'unset'], 8),
     red: new RedSeries(8),
+    groups: null,
     partial,
   });
 

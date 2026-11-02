@@ -79,6 +79,7 @@ function matches(condition: string | null): string[] {
     sort: { column: 'name', dir: 'asc' },
     limit: 100,
     groupBy: null,
+    measureBy: null,
     scanAll: false,
   });
   return (r.rows as readonly { span: SpanRecord }[]).map((x) => x.span.name);

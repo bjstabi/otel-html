@@ -65,6 +65,7 @@ const query = (over: Partial<SpanQuery>): SpanQuery => ({
   sort: { column: 'duration', dir: 'desc' },
   limit: 100,
   groupBy: null,
+  measureBy: null,
   scanAll: false,
   ...over,
 });
@@ -117,5 +118,67 @@ describe('querySpanEntries', () => {
       expect.objectContaining({ name: 'AbortError' }),
     );
     expect(seen).toBeLessThan(10_000);
+  });
+});
+
+describe('measureBy', () => {
+  const span = (i: number, svc: number, ms: number, attrs: [string, string][] = []): SpanRecord => ({
+    traceId: i.toString(16).padStart(32, '0') as TraceId,
+    spanId: i.toString(16).padStart(16, '0') as SpanId,
+    parentSpanId: null,
+    traceState: '',
+    flags: 0,
+    name: 'op',
+    kind: 1,
+    start: 0 as RelNanos,
+    end: (ms * 1e6) as RelNanos,
+    attributes: new Map(attrs.map(([k, v]) => [k, { kind: 'string' as const, value: v }])),
+    droppedAttributesCount: 0,
+    events: [],
+    droppedEventsCount: 0,
+    links: [],
+    droppedLinksCount: 0,
+    status: { code: StatusCode.UNSET, message: '' },
+    resource: svc as ResourceRef,
+    scope: 0 as ScopeRef,
+  });
+  const entries = (spans: SpanRecord[]): SpanEntry[] =>
+    toEntries({ n: 0, resources, scopes }, spans, 0n as UnixNanos, 'measure');
+  const three = (): SpanEntry[] => entries([span(1, 0, 10), span(2, 0, 30), span(3, 1, 50)]);
+
+  test('measureBy collects a duration histogram per group', () => {
+    const { groups } = querySpanEntries(three(), query({ measureBy: 'service.name' }));
+    expect(groups?.get('api')?.count).toBe(2);
+    expect(groups?.get('api')?.max).toBe(30e6);
+    expect(groups?.get('api')?.sum).toBe(40e6);
+    expect(groups?.get('db')?.count).toBe(1);
+    expect(groups?.size).toBe(2);
+  });
+
+  test("a single-span group's p95 is its duration within the histogram bound", () => {
+    const { groups } = querySpanEntries(three(), query({ measureBy: 'service.name' }));
+    const h = groups?.get('db');
+    const q = h?.quantile(0.95) ?? Number.NaN;
+    expect(q).toBeGreaterThanOrEqual(50e6);
+    expect(q).toBeLessThanOrEqual(50e6 * 2 ** (2 ** -(h?.scale ?? 0)));
+  });
+
+  test('measureBy null leaves groups null', () => {
+    expect(querySpanEntries(three(), query({})).groups).toBeNull();
+  });
+
+  test('a span attribute is a measure key; spans without it are skipped', () => {
+    const e = entries([span(1, 0, 10, [['http.route', '/x']]), span(2, 0, 20)]);
+    const { groups } = querySpanEntries(e, query({ measureBy: 'http.route' }));
+    expect(groups?.get('/x')?.count).toBe(1);
+    expect(groups?.size).toBe(1);
+  });
+
+  test('only matched spans are aggregated', () => {
+    const { groups } = querySpanEntries(
+      three(),
+      query({ measureBy: 'service.name', condition: 'name == "none"' }),
+    );
+    expect(groups?.size).toBe(0);
   });
 });

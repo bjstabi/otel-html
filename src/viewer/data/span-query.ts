@@ -7,7 +7,7 @@ import type { SpanTarget } from '../../ottl/contexts.js';
 import { matchesText, spanTextFields } from '../../ottl/text.js';
 import type { FacetCounts } from '../../rollups/facets.js';
 import type { RedSeries } from '../../rollups/red.js';
-import { SpanRollups, type SpanStatusKey } from '../../rollups/span-rollups.js';
+import { facetValueOf, GroupDurations, SpanRollups, type SpanStatusKey } from '../../rollups/span-rollups.js';
 import type { TimeBuckets } from '../../rollups/time-buckets.js';
 import { resourceName, serviceName } from '../../semconv/resource-name.js';
 import {
@@ -37,6 +37,8 @@ export interface SpanQuery {
   limit: number;
   /** Carried for the UI; grouping is a presentation concern and is not applied by the data layer. */
   groupBy: string | null;
+  /** The facet key to aggregate span durations by (`SpanQueryResult.groups`); null for none. */
+  measureBy: string | null;
   scanAll: boolean;
 }
 
@@ -75,6 +77,8 @@ export interface SpanQueryResult {
   facets: FacetCounts;
   buckets: TimeBuckets<SpanStatusKey>;
   red: RedSeries;
+  /** Duration histograms per `measureBy` value; null when `measureBy` is null. */
+  groups: GroupDurations | null;
   /** Chunks scanned of all chunks; null when the result is exact. */
   partial: { scanned: number; total: number } | null;
 }
@@ -200,6 +204,7 @@ export class SpanQueryRun {
   readonly #signal: AbortSignal | undefined;
   readonly #condition: CompiledCondition<'span'> | null;
   readonly #rollups = new SpanRollups(QUERY_FACET_CAPS);
+  readonly #groups: GroupDurations | null;
   readonly #matched: SpanEntry[] = [];
   readonly #traces = new Map<TraceId, { rows: SpanRow[]; hit: boolean }>();
   readonly #compare: Compare | null;
@@ -218,6 +223,7 @@ export class SpanQueryRun {
     }
     checkLimit(q.limit);
     this.#q = q;
+    this.#groups = q.measureBy === null ? null : new GroupDurations(QUERY_FACET_CAPS.facetValueCap);
     // "Scan entire run" means the whole run, whatever window the view had.
     this.#window = q.scanAll ? null : q.window;
     this.#signal = signal;
@@ -266,6 +272,10 @@ export class SpanQueryRun {
       group.hit = true;
     }
     this.#rollups.add(e.target);
+    if (this.#groups !== null && this.#q.measureBy !== null) {
+      const v = facetValueOf(e.target, this.#q.measureBy);
+      if (v !== undefined) this.#groups.add(v, e.row.durationNs);
+    }
   }
 
   finish(
@@ -304,6 +314,7 @@ export class SpanQueryRun {
       facets: this.#rollups.facets,
       buckets: this.#rollups.buckets,
       red: this.#rollups.red,
+      groups: this.#groups,
       partial,
     };
   }
