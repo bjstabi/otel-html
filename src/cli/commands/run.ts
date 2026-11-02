@@ -76,15 +76,16 @@ async function runWithoutReport(
   const forward = io.signals.on((signal) => {
     child.kill(signal);
   });
+  let code: number;
   try {
-    throw new CliExit(exitCodeOf(await exiting));
+    code = exitCodeOf(await exiting);
   } catch (e) {
-    if (e instanceof CliExit) throw e;
     io.stderr(`error: ${e instanceof Error ? e.message : String(e)}\n`);
-    throw new CliExit(1);
+    code = 1;
   } finally {
     forward();
   }
+  throw new CliExit(code);
 }
 
 type RunFlags = ReceiveFlags & { traceparent?: string };

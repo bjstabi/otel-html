@@ -521,8 +521,81 @@ describe('run', () => {
     expect(await h.result).toBe(0);
     expect(h.stderr).toContain('EADDRINUSE');
     expect(h.stderr).toContain('--http');
+    expect(h.stderr).toContain(String(http));
     expect(h.stderr).toContain('without it');
     expect(await w.fs.exists('out/data/manifest.js')).toBe(false);
+  });
+
+  test('a stop signal while a failed start releases its lock exits 130 and does not run the command', async () => {
+    const w = createTestWriter();
+    const http = await takenPort();
+    let releasing!: () => void;
+    const removing = new Promise<void>((resolve) => {
+      releasing = resolve;
+    });
+    let removeStarted!: () => void;
+    const removeStart = new Promise<void>((resolve) => {
+      removeStarted = resolve;
+    });
+    const fs: FileSystem = {
+      ...w.fs,
+      async remove(p) {
+        removeStarted();
+        await removing;
+        return w.fs.remove(p);
+      },
+    };
+    const marker = 'ran-anyway';
+    const h = start(
+      w,
+      [
+        'run',
+        '-o',
+        'out',
+        '--host',
+        '127.0.0.1',
+        '--http',
+        String(http),
+        '--no-grpc',
+        '--',
+        process.execPath,
+        '-e',
+        `console.log('${marker}')`,
+      ],
+      {},
+      undefined,
+      fs,
+    );
+    open.push(h);
+    await removeStart;
+    h.fire('SIGINT');
+    releasing();
+    expect(await h.result).toBe(130);
+    expect(h.child).not.toContain(marker);
+    expect(h.stderr).not.toContain('without it');
+  });
+
+  test('a signal while the command runs without a report is forwarded: 128 + n', async () => {
+    const w = createTestWriter();
+    const http = await takenPort();
+    const h = start(w, [
+      'run',
+      '-o',
+      'out',
+      '--host',
+      '127.0.0.1',
+      '--http',
+      String(http),
+      '--no-grpc',
+      '--',
+      process.execPath,
+      '-e',
+      "console.log('ready'); setInterval(() => undefined, 1000)",
+    ]);
+    open.push(h);
+    await vi.waitFor(() => expect(h.child).toContain('ready'));
+    h.fire('SIGTERM');
+    expect(await h.result).toBe(143);
   });
 
   test('a taken HTTP port keeps a non-zero command exit code', async () => {

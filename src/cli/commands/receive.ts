@@ -100,7 +100,9 @@ export async function openReceiver(
     // Wait for the lock release before exiting, so the process does not leave it behind. A second signal exits
     // without waiting and may leave the lock behind; the dead-pid check reclaims it on the next start.
     again = nextSignal(io);
-    await Promise.race([cleanup, again.signalled]);
+    const signalled = await Promise.race([cleanup.then(() => false), again.signalled.then(() => true)]);
+    // `stop` is still subscribed here, so it has already printed "interrupted" for this signal.
+    if (signalled) throw new CliExit(INTERRUPTED_EXIT);
     throw e;
   } finally {
     again?.cancel();
