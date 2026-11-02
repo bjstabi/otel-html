@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/bjstabi/otel-html/compare/otel-html-v0.2.0...otel-html-v0.2.1) (2026-11-02)
+
+
+### Bug fixes
+
+* **release:** the windows binary smoke test no longer waits for a graceful SIGINT exit ([#118](https://github.com/bjstabi/otel-html/issues/118)) ([eb14954](https://github.com/bjstabi/otel-html/commit/eb149546cda6d4c49982a2c17f7b69914c4bc9db))
+
 ## [0.2.0](https://github.com/bjstabi/otel-html/compare/otel-html-v0.1.1...otel-html-v0.2.0) (2026-11-02)
 
 
