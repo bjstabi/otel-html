@@ -601,6 +601,12 @@ The reference figures are in https://github.com/bjstabi/otel-html/issues/35.
 ### Arguments
 - **`[args]…`**
 
+## `bootstrap`
+
+- **Usage:** `bootstrap`
+
+Set this machine up: dependencies, git hooks and the Playwright browsers (after mise bootstrap)
+
 ## `build`
 
 - Depends: build:viewer

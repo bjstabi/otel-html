@@ -16,6 +16,8 @@ Run the smallest check that can catch the mistake, and run it often. CI runs the
 | before opening a PR                     | `mise run verify` (`check`, then the Chromium e2e suite)                      | ≈ 2 min                        |
 | never locally                           | the three-browser matrix, the windows unit run, metrics-scale, the binaries   | CI's job                       |
 
+Agents whose harness reads `.mcp.json` get the tasks, with their effect metadata, from `mise mcp` instead of the README.
+
 The e2e suite before a PR is a rule, not a hook, so a failure that reaches CI is a measurable event. The mise tasks build `dist/` and the fixture reports themselves; a direct
 `pnpm exec playwright test` needs `mise run e2e:fixtures` first. The tasks document themselves: `mise tasks ls` for the list, `mise tasks info
 <task>` for the full description (the slow ones, `test:load*` and `bench:metrics`, say what they cost).
@@ -38,6 +40,8 @@ that file:
 
 ## Where things are
 
+- Setting up a machine: `mise bootstrap` installs the host packages (Docker, Playwright's libraries), then `mise run bootstrap` does
+  dependencies, git hooks and the browsers. `mise bootstrap status --missing` says what is off.
 - `mise.toml`: every task CI and developers run. `.github/workflows/ci.yml`: the jobs, which call those tasks.
 - `docs/superpowers/specs/`: design documents. `docs/superpowers/plans/`: implementation plans, one per project.
 - `e2e/`: Playwright specs; `e2e/build-fixtures.ts` builds the fixture reports (the `e2e:fixtures` mise task); `e2e/global-setup.ts` serves them. `test/`: vitest, mirrors `src/`.
