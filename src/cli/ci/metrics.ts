@@ -116,7 +116,7 @@ export function ciMetricsRequest(run: ApiRun, jobs: ApiJob[], resource: Record<s
         aggregationTemporality: DELTA,
         isMonotonic: true,
         dataPoints: [...errorCounts].map(([errorType, count]) => ({
-          startTimeUnixNano: time,
+          startTimeUnixNano: ns(ms(run.run_started_at ?? run.created_at) ?? 0),
           timeUnixNano: time,
           asInt: String(count),
           attributes: attrs({ 'cicd.pipeline.name': run.name, 'error.type': errorType }),

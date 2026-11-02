@@ -1,6 +1,7 @@
-import { describe, expect, inject, test } from 'vitest';
+import { describe, expect, test } from 'vitest';
 import { layoutFlame } from '../../src/viewer/components/flame-layout.js';
 import { medianMs } from '../../test-support/median-ms.js';
+import { perfFactor } from '../../test-support/perf-inject.js';
 import { detailOf, spanIdOf, traceRow } from './trace-rows.js';
 
 const OPTS = { colorBy: 'service', filter: '', errorsOnly: false } as const;
@@ -111,6 +112,6 @@ describe('layoutFlame', () => {
     const { result, ms } = medianMs(() => layoutFlame(tree, OPTS));
     const { bars } = result;
     expect(bars).toHaveLength(50_000);
-    expect(ms).toBeLessThan(1500 * inject('perfFactor'));
+    expect(ms).toBeLessThan(1500 * perfFactor());
   });
 });
