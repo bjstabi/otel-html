@@ -713,7 +713,7 @@ unused files, exports and dependencies
 
 - **Usage:** `lint`
 
-biome ci and actionlint
+biome ci, actionlint, the task graph and the formatting of mise.toml
 
 ## `setup`
 

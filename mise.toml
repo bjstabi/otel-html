@@ -92,7 +92,7 @@ description = "Install dependencies and git hooks"
 run = ["pnpm install --frozen-lockfile", "lefthook install"]
 
 [tasks.lint]
-description = "biome ci and actionlint"
+description = "biome ci, actionlint, the task graph and the formatting of mise.toml"
 sources = [
   "@group:config",
   "@group:deps",
@@ -106,6 +106,8 @@ cache = { enabled = true, env = ["CI"] }
 run = [
   "pnpm exec biome ci --error-on-warnings .",
   "actionlint .github/workflows/*.yml",
+  "mise tasks validate",
+  "mise fmt --check",
 ]
 
 [tasks.format]
