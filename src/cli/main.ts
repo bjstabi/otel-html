@@ -50,6 +50,10 @@ const code = await runCli(
 process.exitCode = code;
 // A failing command must end the process even if something (a bound server) still holds the event loop; an
 // interrupted `serve` may still be finishing its report, and a second Ctrl-C means stop now, at the last checkpoint.
+// Exit 0 is left to the event loop on purpose: a clean `serve` or `run` has closed everything, and forcing an exit
+// there could cut short work still in flight. (A `run` whose report failed to finish after a passing command also
+// exits 0 and relies on the loop draining; its listeners are closed before the report is, and a close that rejects
+// while holding its handle is the one way that could hang, which is not worth a forced exit on the success path.)
 // This safety net is not unit-testable without a build (main.ts runs on import). The binary smoke test covers it:
 // its `serve` + SIGINT path (exit 0, the net is skipped) and its bad-port test (non-zero, the net ends the process).
 if (code !== 0) {

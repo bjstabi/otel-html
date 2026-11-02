@@ -197,6 +197,9 @@ describe.skipIf(binaryEnv === undefined)('compiled binary', () => {
       },
     );
     expect(result.stderr).toBe('');
+    // Node cannot deliver SIGINT to a child on Windows: `child.kill('SIGINT')` terminates it (libuv's
+    // TerminateProcess), so there is no exit code and no finished report to read. There the test ends at the receive.
+    if (process.platform === 'win32') return;
     expect(result.code).toBe(0);
     const manifest = await readFile(join(out, 'data', 'manifest.js'), 'utf8');
     expect(manifest).toContain('"totals":{"spans":2,');
