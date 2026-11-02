@@ -223,7 +223,7 @@ export class SpanQueryRun {
     }
     checkLimit(q.limit);
     this.#q = q;
-    this.#groups = q.measureBy === null ? null : new GroupDurations();
+    this.#groups = q.measureBy === null ? null : new GroupDurations(QUERY_FACET_CAPS.facetValueCap);
     // "Scan entire run" means the whole run, whatever window the view had.
     this.#window = q.scanAll ? null : q.window;
     this.#signal = signal;

@@ -100,10 +100,15 @@ export function facetValueOf(t: SpanTarget, key: string): string | undefined {
   return undefined;
 }
 
-/** One duration histogram per group, capped at `MAX_DURATION_GROUPS` groups. */
+/** One duration histogram per group; a group past `cap` groups is dropped and counted in `dropped`. */
 export class GroupDurations {
   readonly #groups = new Map<string, ExpHistogram>();
   dropped = 0;
+  readonly #cap: number;
+
+  constructor(cap: number) {
+    this.#cap = cap;
+  }
 
   get size(): number {
     return this.#groups.size;
@@ -112,7 +117,7 @@ export class GroupDurations {
   add(group: string, durationNs: number): void {
     let h = this.#groups.get(group);
     if (h === undefined) {
-      if (this.#groups.size >= MAX_DURATION_GROUPS) {
+      if (this.#groups.size >= this.#cap) {
         this.dropped++;
         return;
       }
