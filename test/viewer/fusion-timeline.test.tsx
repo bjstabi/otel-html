@@ -178,6 +178,12 @@ describe('FusionTimeline', () => {
     expect(Number.parseFloat(band.style.left)).toBeCloseTo((2 / 11) * 100, 6);
     expect(Number.parseFloat(band.style.width)).toBeCloseTo((3 / 11) * 100, 6);
   });
+  test('a zero-width page brush at the aligned window end is drawn as the last column', () => {
+    show(vi.fn(), { start: 10 * MS, end: 10 * MS });
+    const band = screen.getByRole('group', { name: 'Time brush' }).firstElementChild as HTMLElement;
+    expect(Number.parseFloat(band.style.left)).toBeCloseTo((10 / 11) * 100, 6);
+    expect(Number.parseFloat(band.style.width)).toBeCloseTo((1 / 11) * 100, 6);
+  });
 });
 
 describe('alignLanes at an aligned window end', () => {
