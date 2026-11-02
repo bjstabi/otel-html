@@ -692,7 +692,8 @@ All but `scale` and `huge`, which e2e:fixtures:scale builds; about a second afte
 - **Usage:** `e2e:fixtures:scale`
 
 The e2e `scale` and `huge` reports with the current viewer (only e2e/scale.spec.ts reads them)
-Depends on e2e:fixtures:scale:data; when only dist/viewer changed, `otel-html upgrade` swaps the viewer in (~0.3 s).
+Depends on e2e:fixtures:scale:data; `otel-html upgrade` then swaps in the current dist/viewer (~0.3 s, every run: a
+freshness record of its own could miss a viewer that :data wrote in between), so a viewer change never converts again.
 
 ## `e2e:fixtures:scale:data`
 

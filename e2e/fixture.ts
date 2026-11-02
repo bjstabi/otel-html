@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { readdirSync, readFileSync } from 'node:fs';
 import type { ScaleLogIds } from '../test-support/scale-logs.js';
 
 export const RUN_TITLE = 'e2e smoke run';
@@ -41,6 +42,25 @@ export const METRICS_SCALE_DIR: URL = new URL('./.metrics-scale/', import.meta.u
  * when the selected tests include `e2e/scale.spec.ts`.
  */
 export const SCALE_REPORTS_DIR: URL = new URL('./.reports-scale/', import.meta.url);
+/** Written by `e2e/build-scale-fixtures.ts`: the `writerBuildHash()` the scale reports were converted with. */
+export const SCALE_WRITER_STAMP: URL = new URL('writer.sha256', SCALE_REPORTS_DIR);
+const DIST = new URL('../dist/', import.meta.url);
+
+/**
+ * A hash of the writer's build output (the `build:lib` files `e2e:fixtures:scale:data` lists as sources), so
+ * `e2e/scale.spec.ts` can tell that `scale` and `huge` were converted by an older writer.
+ */
+export function writerBuildHash(): string {
+  const files = [
+    ...readdirSync(new URL('cli/', DIST), { recursive: true, encoding: 'utf8' }).map((f) => `cli/${f}`),
+    ...readdirSync(DIST).filter((f) => f === 'index.js' || f === 'index.d.ts' || /^receiver-.*\.js$/.test(f)),
+  ]
+    .filter((f) => f.endsWith('.js') || f.endsWith('.d.ts'))
+    .sort();
+  const hash = createHash('sha256');
+  for (const f of files) hash.update(f).update(readFileSync(new URL(f, DIST)));
+  return hash.digest('hex');
+}
 export const REPORT_DIR: URL = new URL('main/', REPORTS_DIR);
 /**
  * `run-charts`: `RUN_CHART_RUN_MINUTES.length` CI runs at uneven gaps from `RUN_CHART_T0_MS`, all of `RUN_CHART_JOBS` in

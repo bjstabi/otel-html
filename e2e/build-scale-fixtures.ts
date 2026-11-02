@@ -23,7 +23,9 @@ import {
   SCALE_SERVICES,
   SCALE_SPANS_PER_TRACE,
   SCALE_TRACES,
+  SCALE_WRITER_STAMP,
   scaleTraceId,
+  writerBuildHash,
 } from './fixture.js';
 
 const run = promisify(execFile);
@@ -129,3 +131,4 @@ async function buildScaleReports(): Promise<void> {
 
 await rm(SCALE_REPORTS_DIR, { recursive: true, force: true });
 await buildScaleReports();
+await writeFile(SCALE_WRITER_STAMP, writerBuildHash());

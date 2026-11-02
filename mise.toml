@@ -458,10 +458,9 @@ run = "bun e2e/build-scale-fixtures.ts"
 
 [tasks."e2e:fixtures:scale"]
 description = """The e2e `scale` and `huge` reports with the current viewer (only e2e/scale.spec.ts reads them)
-Depends on e2e:fixtures:scale:data; when only dist/viewer changed, `otel-html upgrade` swaps the viewer in (~0.3 s)."""
+Depends on e2e:fixtures:scale:data; `otel-html upgrade` then swaps in the current dist/viewer (~0.3 s, every run: a
+freshness record of its own could miss a viewer that :data wrote in between), so a viewer change never converts again."""
 depends = ["e2e:fixtures:scale:data"]
-sources = ["@group:deps", "dist/viewer/**"]
-outputs = { auto = true }
 run = "node dist/cli/main.js upgrade e2e/.reports-scale/scale && node dist/cli/main.js upgrade e2e/.reports-scale/huge"
 
 # Budgets scale with OTEL_HTML_PERF_FACTOR on slow machines; they are never edited.
