@@ -15,8 +15,6 @@ defaults:
     shell: otel-html run -o .otel-html/report -- bash --noprofile --norc -eo pipefail {0}
 
 jobs:
-  # The steps that need `otel-html run` and `ci context` are gated on what the installed release supports. Remove the
-  # gate (the `cap` step and its `if:`s) once a release has both (issue #89).
   smoke:
     strategy:
       fail-fast: false
@@ -29,29 +27,14 @@ jobs:
       - uses: ./.github/actions/otel-html-setup
         with:
           version: latest
-      - name: Detect whether the installed otel-html has `run`
-        id: cap
-        shell: bash
-        run: |
-          # Captured first: under pipefail, `grep -q` quitting early could fail the pipe and read as "no run".
-          help=$(otel-html --help)
-          if grep -Eq '^[[:space:]]+run[[:space:]]' <<<"$help"; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::the installed otel-html ($(otel-html --version)) predates \`run\`; skipping the job-shell checks (issue #89)"
-          fi
       - name: The install works
         shell: bash
         run: otel-html --version
-      - if: steps.cap.outputs.run == 'true'
-        name: The run context exists
+      - name: The run context exists
         shell: bash
         run: test -f .otel-html/context.json
-      - if: steps.cap.outputs.run == 'true'
-        run: echo hello
-      - if: steps.cap.outputs.run == 'true'
-        name: The job report exists
+      - run: echo hello
+      - name: The job report exists
         shell: bash
         run: test -f .otel-html/report/data/manifest.js
       - if: always()
