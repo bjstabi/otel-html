@@ -44,3 +44,5 @@ Shared by every PR process in this folder. Short on purpose; the README and the 
 - Something that changes a public interface, needs a measurement the PR cannot make, or belongs to another area:
   open an issue (`gh issue create`), link it from the PR body, move on.
 - A decision the plan left open: stop and ask, whatever the PR process.
+
+<!-- probe: docs-only run for #107; this pull request is closed without merging. -->
