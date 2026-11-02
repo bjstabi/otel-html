@@ -108,7 +108,7 @@ describe('FusionTimeline', () => {
     fireEvent.pointerDown(brush, { clientX: 250, pointerId: 1 });
     fireEvent.pointerMove(brush, { clientX: 700, pointerId: 1 });
     fireEvent.pointerUp(brush, { clientX: 700, pointerId: 1 });
-    // 1000 px over ten 1 ms columns: px 250 is column 2, px 700 is column 7 (inclusive).
+    // 1000 px over eleven columns: px 250 is column 2, px 700 is column 7 (inclusive).
     expect(onBrush).toHaveBeenCalledOnce();
     expect(onBrush).toHaveBeenCalledWith({ start: 2 * MS, end: 8 * MS });
   });
@@ -301,7 +301,7 @@ describe('TimelineWidget on the linked fixture', () => {
     expect(await screen.findByText(/^Metric points ~\d+$/)).toBeTruthy();
   });
 
-  test('a metric point stamped at range.end is counted', async () => {
+  test('a metric point in the bucket at an aligned window end is counted', async () => {
     const linked = await buildEmbeddedMetricsReport();
     const ds = await createDataSource(createScriptedLoader(linked.files), linked.manifest, 1);
     const points = await ds.metricPoints();

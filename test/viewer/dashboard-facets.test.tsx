@@ -168,8 +168,21 @@ describe('the Top list and Table widgets', () => {
     expect(data.map((d) => d.name).sort()).toEqual([...max.keys()].sort());
     for (const d of data) {
       const want = max.get(d.name) ?? Number.NaN;
-      expect(Math.abs(d.value - want) / want).toBeLessThan(0.05);
+      expect(d.value).toBe(want);
     }
+  });
+
+  test.each([
+    ['duration.sum', true],
+    ['duration.avg', false],
+    ['duration.max', false],
+  ] as const)('the table with %s shows a Share column: %s', async (measure, share) => {
+    mount(await linked(), { type: 'table', signal: 'spans', groupBy: 'service.name', measure });
+    const table = await screen.findByRole('table');
+    const headers = within(table)
+      .getAllByRole('columnheader')
+      .map((h) => h.textContent);
+    expect(headers.includes('Share')).toBe(share);
   });
 
   test('the table with duration.p95 has a p95 column and no Share', async () => {
