@@ -67,20 +67,17 @@ export const MEASURE_LABELS: Record<Exclude<Measure, 'count'>, string> = {
 };
 
 /**
- * One slice per top group, valued by a duration measure of its histogram, largest first. There is no "Other" slice:
- * a remainder has no meaningful maximum or percentile, so it is left out for every measure.
+ * Every group valued by a duration measure of its histogram, the `MAX_GROUPS` largest first. Ranking is by the
+ * measure over all groups, not over the most frequent ones, so a rare slow group is not displaced. There is no
+ * "Other" slice: a remainder has no meaningful maximum or percentile, so it is left out for every measure.
  */
 export function measuredSlices(
   groups: GroupDurations,
-  facets: FacetCounts,
-  key: string,
   measure: Exclude<Measure, 'count'>,
   colors: ColorAssigner,
 ): Slice[] {
   const slices: Slice[] = [];
-  for (const t of facets.top(key, MAX_GROUPS)) {
-    const h = groups.get(t.value);
-    if (h === undefined) continue;
+  for (const [group, h] of groups.entries()) {
     let value: number;
     switch (measure) {
       case 'duration.sum':
@@ -104,20 +101,20 @@ export function measuredSlices(
       }
     }
     slices.push({
-      key: t.value,
-      name: t.value === OTHER_LABEL ? `${OTHER_LABEL} (value)` : t.value,
+      key: group,
+      name: group === OTHER_LABEL ? `${OTHER_LABEL} (value)` : group,
       value,
       other: false,
-      color: seriesVar(colors.colorFor(t.value)),
+      color: seriesVar(colors.colorFor(group)),
     });
   }
-  return slices.sort((a, b) => b.value - a.value);
+  return slices.sort((a, b) => b.value - a.value).slice(0, MAX_GROUPS);
 }
 
 /** The slices a view draws for `measure`: facet counts, or per-group durations when the result carries them. */
 export function sliceSet(result: FacetSource, key: string, measure: Measure, colors: ColorAssigner): Slice[] {
   if (measure === 'count' || result.groups == null) return groupSlices(result.facets, key, colors);
-  return measuredSlices(result.groups, result.facets, key, measure, colors);
+  return measuredSlices(result.groups, measure, colors);
 }
 
 function datum(s: Slice): { name: string; value: number; itemStyle: { color: string } } {

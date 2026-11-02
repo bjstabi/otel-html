@@ -100,10 +100,9 @@ export function facetValueOf(t: SpanTarget, key: string): string | undefined {
   return undefined;
 }
 
-/** One duration histogram per group; a group past `cap` groups is dropped and counted in `dropped`. */
+/** One duration histogram per group; a group past `cap` groups is dropped. */
 export class GroupDurations {
   readonly #groups = new Map<string, ExpHistogram>();
-  dropped = 0;
   readonly #cap: number;
 
   constructor(cap: number) {
@@ -118,7 +117,6 @@ export class GroupDurations {
     let h = this.#groups.get(group);
     if (h === undefined) {
       if (this.#groups.size >= this.#cap) {
-        this.dropped++;
         return;
       }
       h = new ExpHistogram();
@@ -129,6 +127,10 @@ export class GroupDurations {
 
   get(group: string): ExpHistogram | undefined {
     return this.#groups.get(group);
+  }
+
+  entries(): IterableIterator<[string, ExpHistogram]> {
+    return this.#groups.entries();
   }
 }
 

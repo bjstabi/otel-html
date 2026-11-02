@@ -205,10 +205,19 @@ describe('measured slices', () => {
   }
 
   test('measuredSlices ranks groups by the measure, no Other slice', () => {
-    const { facets, groups } = measured();
-    const slices = measuredSlices(groups, facets, 'service.name', 'duration.max', createColorAssigner());
+    const { groups } = measured();
+    const slices = measuredSlices(groups, 'duration.max', createColorAssigner());
     expect(slices.map((s) => s.key)).toEqual(['b', 'a']);
     expect(slices.some((s) => s.other)).toBe(false);
+  });
+
+  test('a rare slow group outranks many frequent fast ones', () => {
+    const groups = new GroupDurations(1000);
+    for (let g = 0; g < 8; g++) for (let i = 0; i < 5; i++) groups.add(`fast${g}`, 1e6);
+    groups.add('deploy', 600e9);
+    const slices = measuredSlices(groups, 'duration.max', createColorAssigner());
+    expect(slices).toHaveLength(7);
+    expect(slices[0]?.key).toBe('deploy');
   });
 
   test('toplist with a duration measure formats its labels as durations', () => {
