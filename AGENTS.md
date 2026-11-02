@@ -40,8 +40,9 @@ that file:
 
 ## Where things are
 
-- Setting up a machine: `mise bootstrap` installs the host packages (Docker, Playwright's libraries), then `mise run bootstrap` does
-  dependencies, git hooks and the browsers. `mise bootstrap status --missing` says what is off.
+- Setting up a machine: `mise bootstrap` installs the host packages (Docker, Playwright's libraries; the list is for Ubuntu 24.04)
+  and then runs the `bootstrap` task (dependencies, git hooks, browsers); `mise run bootstrap` alone repeats the non-package part.
+  `mise bootstrap status --missing` says what is off.
 - `mise.toml`: every task CI and developers run. `.github/workflows/ci.yml`: the jobs, which call those tasks.
 - `docs/superpowers/specs/`: design documents. `docs/superpowers/plans/`: implementation plans, one per project.
 - `e2e/`: Playwright specs; `e2e/build-fixtures.ts` builds the fixture reports (the `e2e:fixtures` mise task); `e2e/global-setup.ts` serves them. `test/`: vitest, mirrors `src/`.

@@ -107,7 +107,7 @@ jobs:
 
   unit-os:
     needs: changes
-    if: needs.changes.outputs.docs_only != 'true'
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
     strategy:
       fail-fast: true
       # No macOS runners (cost); Linux runs the unit tests in `check`.
@@ -169,7 +169,7 @@ jobs:
 
   e2e:
     needs: changes
-    if: needs.changes.outputs.docs_only != 'true'
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
     strategy:
       # Each browser reports on its own; one failing browser must not hide the others' results.
       fail-fast: false
@@ -244,7 +244,7 @@ jobs:
   # it off and this job alone sets OTEL_HTML_METRICS_SCALE.
   e2e-metrics-scale:
     needs: changes
-    if: needs.changes.outputs.docs_only != 'true'
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     container:
@@ -288,11 +288,11 @@ jobs:
         with:
           name: otel-html-${{ github.job }}
 
-  # Unit coverage of the suite without @perf, on main only (never gates anything). `mise run coverage` has no sources and no
+  # Unit coverage of the suite without @perf, on pushes to main and on dispatch (never gates anything). `mise run coverage` has no sources and no
   # cache, so nothing can replay it and leave coverage/ empty.
   coverage:
     needs: changes
-    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && needs.changes.outputs.docs_only != 'true'
+    if: ${{ !cancelled() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && needs.changes.outputs.docs_only != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -314,12 +314,14 @@ jobs:
       - uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5.5.5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
+          disable_search: true
           files: coverage/unit-node/lcov.info
           flags: unit-node
           fail_ci_if_error: true
       - uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5.5.5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
+          disable_search: true
           files: coverage/unit-viewer/lcov.info
           flags: unit-viewer
           fail_ci_if_error: true
@@ -332,7 +334,7 @@ jobs:
   # port). The release workflow keeps its own smoke step, which tests the artefact it uploads.
   binary:
     needs: changes
-    if: needs.changes.outputs.docs_only != 'true'
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
     strategy:
       fail-fast: false
       matrix:

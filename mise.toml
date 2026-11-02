@@ -88,7 +88,7 @@ config = [
 ]
 
 # Host packages for `mise bootstrap`: Docker, and the libraries and fonts Playwright needs for Chromium, Firefox and
-# WebKit on Ubuntu 24.04 (the list `pnpm exec playwright install-deps --dry-run` prints there).
+# WebKit on Ubuntu 24.04 (the list is from playwright-core's dependency table for that release).
 [bootstrap.packages]
 "apt:docker.io" = { os = "linux" }
 "apt:fonts-freefont-ttf" = { os = "linux" }
@@ -172,7 +172,7 @@ config = [
 "apt:xvfb" = { os = "linux" }
 
 [tasks.bootstrap]
-description = "Set this machine up: dependencies, git hooks and the Playwright browsers (after mise bootstrap)"
+description = "Set this machine up: dependencies, git hooks and the Playwright browsers (`mise bootstrap` runs this after the host packages)"
 run = [{ task = "setup" }, "pnpm exec playwright install"]
 
 [tasks.setup]
