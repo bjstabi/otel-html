@@ -351,7 +351,7 @@ shell: node dist/cli/main.js run -o .otel-html/report -- bash --noprofile --norc
 
 The `otel-html ci context` step ([src/cli/ci/context-main.ts](src/cli/ci/context-main.ts)) looks the job up in the Actions API and sets `TRACEPARENT` and the resource attributes for later steps. The trace id is derived from the run, and the span ids from the run and job, so the job reports nest under the run → job spans without the jobs talking to each other. If the job lookup fails, the job id falls back to a hash of its name (with a warning); matrix legs share a name, so set `OTEL_HTML_JOB_NAME` to give each its own. Each job uploads its `.otel-html/` folder as an `otel-html-*` artifact.
 
-When the `ci` or `load` workflow completes, [ci-report.yml](.github/workflows/ci-report.yml) runs `otel-html ci report` ([src/cli/ci/report-main.ts](src/cli/ci/report-main.ts)) from `main`'s code, never the run's own, since the run may come from a fork. It writes the run → job spans from the Actions API, turns each job's log into log records, adds queue-time and duration metrics, and merges these with the job artifacts into one report, uploaded as `ci-run-report`. Run it by hand with `workflow_dispatch` and a `run_id` to rebuild a past run. The report opens on the [CI dashboard](.github/actions/otel-html-publish/otel-html-ci.yaml): job duration, queue time, step counts, runs, and warnings and errors, with `workflow` (`cicd.pipeline.name`, to tell `ci` and `load` runs apart on a shared page), `run` and `job` variables. The run-level span lives on the run's own resource, so selecting a job in `job` hides it. The run key includes the run attempt, so after a partial re-run the artifacts of jobs that did not re-run (still attempt 1) show up as separate traces without a job span.
+When the `ci` or `load` workflow completes, [ci-report.yml](.github/workflows/ci-report.yml) runs `otel-html ci report` ([src/cli/ci/report-main.ts](src/cli/ci/report-main.ts)). The workflow is the default branch's copy, and it builds the report with the triggering commit's own code when that commit is in this repository and a person started the run; a fork's or a bot's run, or a dispatched `ci` run, uses the default branch's code (a manual dispatch of `ci-report` uses the code of the ref it was dispatched on). A person's same-repository commit executes under `main`'s Actions cache scope and could save a `mise-tasks-*` entry that later runs replay as a pass. Only people with write access can do that, and `main`'s ruleset requires a pull request with an approving review and requires no status check, so a forged pass can make a run look green but cannot merge anything a reviewer would not see. This risk is accepted. The report job writes the run → job spans from the Actions API, turns each job's log into log records, adds queue-time and duration metrics, and merges these with the job artifacts into one report, uploaded as `ci-run-report`. Run it by hand with `workflow_dispatch` and a `run_id` to rebuild a past run. The report opens on the [CI dashboard](.github/actions/otel-html-publish/otel-html-ci.yaml): job duration, queue time, step counts, runs, and warnings and errors, with `workflow` (`cicd.pipeline.name`, to tell `ci` and `load` runs apart on a shared page), `run` and `job` variables. The run-level span lives on the run's own resource, so selecting a job in `job` hides it. The run key includes the run attempt, so after a partial re-run the artifacts of jobs that did not re-run (still attempt 1) show up as separate traces without a job span.
 
 The run's report is then published to the site at <https://bjstabi.github.io/otel-html/>. The layout is:
 
@@ -371,7 +371,7 @@ These subcommands are for the actions; stable flags, output format not guarantee
 
 | Subcommand | What it does | Flags |
 | --- | --- | --- |
-| `ci report` | Builds a run's report from the Actions API (with `$GITHUB_TOKEN` from the environment) and merges it with the downloaded job artifacts. Writes the summary table to the job summary, and `published=false` to `$GITHUB_OUTPUT` when the run has no job reports. | `--run-id`, `--repository`, `--artifacts`, `--out` (all required); `--config`; `--no-summary` (the action passes it on `github-pages`, where `ci link` writes the summary with the report's link) |
+| `ci report` | Builds a run's report from the Actions API (with `$GITHUB_TOKEN` from the environment) and merges it with the downloaded job artifacts. Writes the summary table to the job summary, and `published=false` to `$GITHUB_OUTPUT` when the run has no job reports. | `--run-id`, `--repository`, `--artifacts`, `--out` (all required); `--config`; `--no-summary` (the action does not pass it: on `github-pages` it points `$GITHUB_STEP_SUMMARY` at a file for this step and appends that file to the job summary only when the site push did not publish, since `ci link` writes the linked summary otherwise) |
 | `ci site` | Places a run's report in the checked-out site folder, applies retention, drops the older per-workflow channels, rewrites the indexes and the rolling report. Writes `published` and `report-url` to `$GITHUB_OUTPUT`. | `--site`, `--report`, `--run-id`, `--repository`, `--base-url` (all required); `--retention` (30 per workflow, per branch), `--pr-retention` (10 per workflow, per pull request) |
 | `ci link` | Comments on the pull requests (this run's report, the pull request's rolling report (`/pr/<number>/`), the previous run), creates the check run and writes the job summary. Never fails the job. | `--run-id`, `--repository`, `--url`, `--site` (all required); `--no-comment`, `--no-check` |
 | `ci cleanup` | Removes a closed pull request's reports (`pr/<number>/`) from the site folder. Writes `cleaned=true` to `$GITHUB_OUTPUT`, or `cleaned=false` and changes nothing when the site never had the pull request. | `--site`, `--pr` (required); `--repository` (default `$GITHUB_REPOSITORY`) |
@@ -601,6 +601,12 @@ The reference figures are in https://github.com/bjstabi/otel-html/issues/35.
 ### Arguments
 - **`[args]…`**
 
+## `bootstrap`
+
+- **Usage:** `bootstrap`
+
+Set this machine up: dependencies, git hooks and the Playwright browsers (`mise bootstrap` runs this after the host packages)
+
 ## `build`
 
 - Depends: build:viewer
@@ -713,7 +719,7 @@ unused files, exports and dependencies
 
 - **Usage:** `lint`
 
-biome ci and actionlint
+biome ci, actionlint, the task graph and the formatting of mise.toml
 
 ## `setup`
 
