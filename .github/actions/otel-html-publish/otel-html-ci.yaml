@@ -35,8 +35,8 @@ dashboards:
       - type: metric
         title: Queue time
         x: 0
-        y: 26
-        w: 6
+        y: 38
+        w: 12
         h: 12
         runBy: resource.attributes["cicd.pipeline.run.id"]
         controls:
@@ -49,9 +49,9 @@ dashboards:
       - type: toplist
         # Steps counts the publisher's step spans by name; the query keeps it to them.
         title: Steps
-        x: 6
+        x: 0
         y: 26
-        w: 3
+        w: 6
         h: 12
         signal: spans
         query: instrumentation_scope.name == "otel-html-ci" and attributes["github.job.step.number"] != nil
@@ -59,9 +59,9 @@ dashboards:
       - type: toplist
         # Slowest steps ranks the same spans by their longest duration.
         title: Slowest steps
-        x: 9
+        x: 6
         y: 26
-        w: 3
+        w: 6
         h: 12
         signal: spans
         query: instrumentation_scope.name == "otel-html-ci" and attributes["github.job.step.number"] != nil
@@ -70,7 +70,7 @@ dashboards:
       - type: traces
         title: Runs
         x: 0
-        y: 38
+        y: 50
         w: 6
         h: 10
         mode: traces
@@ -78,7 +78,7 @@ dashboards:
       - type: logs
         title: Warnings and errors
         x: 6
-        y: 38
+        y: 50
         w: 6
         h: 10
         query: severity_number >= 13

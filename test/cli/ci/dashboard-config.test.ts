@@ -45,10 +45,18 @@ describe('CI dashboard configs', () => {
   test('Queue time is an unsplit run chart without a failure rule', async () => {
     const ws = await widgets(SHIPPED);
     const w = metric(ws, 'Queue time');
-    expect(w).toMatchObject({ w: 6, h: 12, failedWhen: null });
+    expect(w).toMatchObject({ w: 12, h: 12, failedWhen: null });
     expect(w.runBy).toBe('resource.attributes["cicd.pipeline.run.id"]');
     expect(w.controls?.split).toBe(false);
     expect(ws.find((x) => x.type === 'toplist')?.h).toBe(12);
+  });
+
+  test('Steps and Slowest steps share a row, six columns each', async () => {
+    const tops = (await widgets(SHIPPED)).filter((x) => x.type === 'toplist');
+    expect(tops.map((t) => [t.x, t.y, t.w])).toEqual([
+      [0, 26, 6],
+      [6, 26, 6],
+    ]);
   });
 
   test('no two widgets overlap', async () => {
@@ -57,6 +65,7 @@ describe('CI dashboard configs', () => {
       for (const [i, a] of ws.entries()) {
         for (const b of ws.slice(i + 1)) {
           const apart = a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y;
+          expect(a.x + a.w, `${path}: ${a.type} fits the grid`).toBeLessThanOrEqual(12);
           expect(apart, `${path}: ${a.type} and ${b.type}`).toBe(true);
         }
       }
