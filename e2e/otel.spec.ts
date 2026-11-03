@@ -1,13 +1,23 @@
+import { existsSync } from 'node:fs';
 import type { Span } from '@opentelemetry/api';
 import type { BrowserContext } from '@playwright/test';
 import { inMemoryTracing } from '../test-support/otel/sdk.js';
 import { instrumentContext } from './otel.js';
+import { RECORDER_PATH } from './otel-page/span-json.js';
 import { expect, HTTP, test } from './test.js';
 
 /**
  * The in-page recorder end to end: a real browser context, the real viewer, an in-memory worker-side tracing. It
  * never starts a second global SDK (the worker already has one when an endpoint is set).
  */
+test.beforeAll(() => {
+  if (!existsSync(new URL(`../${RECORDER_PATH}`, import.meta.url))) {
+    throw new Error(
+      `${RECORDER_PATH} is missing: run \`mise run e2e:otel-recorder\` (CI: \`mise run --skip-deps e2e:otel-recorder\`)`,
+    );
+  }
+});
+
 async function setup(context: BrowserContext, limit?: number) {
   const { tracing, exporter } = inMemoryTracing();
   const parent: Span = tracing.tracer.startSpan('parent');
