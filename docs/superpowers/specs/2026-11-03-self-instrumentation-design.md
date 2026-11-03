@@ -77,9 +77,10 @@ repo's `@opentelemetry/otlp-transformer` 0.300.0 already belongs to). One module
 
 - No `OTEL_EXPORTER_OTLP_ENDPOINT` (and no `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`), or `OTEL_SDK_DISABLED=true` →
   no SDK; callers do nothing.
-- Otherwise a `NodeSDK` with traces only (no metric reader, no log processor, no auto-instrumentations). The SDK
-  owns the environment: protocol (`http/protobuf`, `http/json` and `grpc` all work), endpoint, headers. It
-  registers the global provider, the W3C propagator and the async-hooks context manager in that process.
+- Otherwise a `NodeSDK` with traces only (no metric reader, no log processor, no auto-instrumentations). Our module
+  chooses the exporter from the protocol variables (`http/protobuf`, `http/json` and `grpc` all work); the exporter
+  reads endpoint and headers from the environment itself. The SDK registers the global provider, the W3C propagator
+  and the async-hooks context manager in that process.
 - The module creates the `BatchSpanProcessor` itself and passes it in, so it can also queue finished spans from
   the browser (below).
 - Resource: `service.name` from `OTEL_HTML_TEST_SERVICE_NAME`, else `otel-html-tests`, **not** the inherited
@@ -89,10 +90,12 @@ repo's `@opentelemetry/otlp-transformer` 0.300.0 already belongs to). One module
   malformed → fresh trace, no error.
 - Shutdown flushes with a 5 s cap; an export error is logged once to stderr and otherwise ignored.
 
-**New dependency:** `@opentelemetry/sdk-node` 0.300.0 (devDependency, pinned exact). It brings the OTLP exporters,
-the context manager and the environment configuration. Its `tracing` and `resources` re-exports are what the
-test-side code imports, so no transitive package is imported directly. Called out in the plan and the PR body as
-the conventions require.
+**New dependencies** (devDependencies, pinned exact): `@opentelemetry/sdk-node` 0.300.0 (`NodeSDK`: the global
+provider, the W3C propagator, the async-hooks context manager); `@opentelemetry/sdk-trace` 3.0.0 (processors, the
+in-memory exporter, `ReadableSpan`; sdk-node 0.300.0 has no `tracing`/`resources`/`core` re-exports);
+`@opentelemetry/exporter-trace-otlp-{proto,http,grpc}` 0.300.0, chosen by protocol, because passing our own span
+processor turns off NodeSDK's environment-built exporter. `@opentelemetry/resources` and `@opentelemetry/core`
+2.12.0 were already present. Called out in the plan and the PR body as the conventions require.
 
 ### Vitest: built-in OpenTelemetry
 

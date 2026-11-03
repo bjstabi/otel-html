@@ -8,8 +8,9 @@ const browsers = [
 ];
 
 // Playwright workers inherit this process's environment, including any OTEL_EXPORTER_OTLP_* variables the developer's
-// shell sets. The worker fixture in e2e/test.ts reads them to export one span per test; a test that spawns
-// `serve`/`run` must still unset them first.
+// shell sets. The worker fixture in e2e/test.ts starts a NodeSDK per worker (test-support/otel/sdk.ts) that exports one
+// span per test, and the viewer spans under it, to that inherited endpoint; a test that spawns `serve`/`run` must still
+// unset them first.
 const config: PlaywrightTestConfig = defineConfig({
   testDir: 'e2e',
   globalSetup: './e2e/global-setup.ts',
