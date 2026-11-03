@@ -49,7 +49,7 @@
   },
   "overrides": [
     {
-      "includes": ["*.config.ts", "*.config.js", "e2e/global-setup.ts"],
+      "includes": ["*.config.ts", "*.config.js", "e2e/global-setup.ts", "test-support/otel/vitest-sdk.ts"],
       "linter": { "rules": { "style": { "noDefaultExport": "off" } } }
     },
     {
