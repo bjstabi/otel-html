@@ -5,5 +5,5 @@
     "types": ["node"],
     "isolatedDeclarations": false
   },
-  "include": ["e2e/**/*", "playwright.config.ts", "test-support/calibrate.ts"]
+  "include": ["e2e/**/*", "playwright.config.ts", "test-support/calibrate.ts", "test-support/otel/sdk.ts"]
 }

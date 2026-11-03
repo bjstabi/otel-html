@@ -66,6 +66,26 @@
       "linter": { "rules": { "correctness": { "noNodejsModules": "error" } } }
     },
     {
+      "includes": ["e2e/**", "!e2e/test.ts"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "paths": {
+                  "@playwright/test": {
+                    "importNames": ["test", "expect"],
+                    "message": "take test from ./test.js"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
       "includes": ["src/**"],
       "linter": {
         "rules": {
