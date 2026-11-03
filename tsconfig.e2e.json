@@ -3,7 +3,14 @@
   "compilerOptions": {
     "lib": ["ES2024", "DOM", "DOM.Iterable"],
     "types": ["node"],
+    "allowImportingTsExtensions": true,
     "isolatedDeclarations": false
   },
-  "include": ["e2e/**/*", "playwright.config.ts", "test-support/calibrate.ts", "test-support/otel/sdk.ts"]
+  "include": [
+    "e2e/**/*",
+    "playwright.config.ts",
+    "test-support/calibrate.ts",
+    "test-support/otel/sdk.ts",
+    "test-support/otel/enabled.ts"
+  ]
 }

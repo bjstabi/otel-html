@@ -1,15 +1,22 @@
-import { context, propagation, ROOT_CONTEXT, SpanKind, trace } from '@opentelemetry/api';
+import {
+  context,
+  type ProxyTracerProvider,
+  propagation,
+  ROOT_CONTEXT,
+  SpanKind,
+  type TracerProvider,
+  trace,
+} from '@opentelemetry/api';
 import { type ExportResult, ExportResultCode } from '@opentelemetry/core';
-import { resourceFromAttributes } from '@opentelemetry/resources';
 import { InMemorySpanExporter, type ReadableSpan, type SpanExporter } from '@opentelemetry/sdk-trace';
-import { afterEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { tracingEnabled } from '../../test-support/otel/enabled.js';
 import {
   inMemoryTracing,
   reporting,
   startTestSdk,
   stderrOnce,
   type TestTracing,
-  tracingEnabled,
   VIEWER_RESOURCE,
 } from '../../test-support/otel/sdk.js';
 
@@ -17,12 +24,28 @@ const TRACEPARENT = '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01';
 const ENDPOINT = 'http://127.0.0.1:9';
 let started: TestTracing | undefined;
 
+let savedProvider: TracerProvider | undefined;
+
+// Under an endpoint vitest's own OTel has registered a global provider, context manager and propagator in this
+// worker. NodeSDK's registration is refused while one exists, so clear them before each test and put the tracer
+// provider back afterwards. The context manager and propagator cannot be recovered through the public API, so
+// vitest's spans in this worker lose parenting after this file (acceptable).
+beforeEach(() => {
+  const delegate = (trace.getTracerProvider() as ProxyTracerProvider).getDelegate();
+  savedProvider = delegate.constructor.name === 'NoopTracerProvider' ? undefined : delegate;
+  trace.disable();
+  context.disable();
+  propagation.disable();
+});
+
 afterEach(async () => {
   await started?.shutdown();
   started = undefined;
   trace.disable();
   context.disable();
   propagation.disable();
+  if (savedProvider !== undefined) trace.setGlobalTracerProvider(savedProvider);
+  savedProvider = undefined;
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
@@ -158,17 +181,37 @@ describe('test SDK', () => {
     tracing.record(span);
     expect(await finished(exporter)).toEqual([span]);
     expect(VIEWER_RESOURCE.attributes['service.name']).toBe('otel-html-viewer');
-    expect(resourceFromAttributes({}).attributes).toEqual({});
   });
 
   test('shutdown resolves within the cap against an unreachable endpoint', async () => {
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
-    started = startTestSdk({ OTEL_EXPORTER_OTLP_ENDPOINT: ENDPOINT }, 'vitest');
+    started = startTestSdk({ OTEL_EXPORTER_OTLP_ENDPOINT: ENDPOINT }, 'vitest', { shutdownCapMs: 200 });
     expect(started).toBeDefined();
     started?.tracer.startSpan('lost').end();
     const t0 = Date.now();
     await expect(started?.shutdown()).resolves.toBeUndefined();
-    expect(Date.now() - t0).toBeLessThan(6_000);
+    expect(Date.now() - t0).toBeLessThan(1_000);
     expect(stderr.mock.calls.length).toBeLessThanOrEqual(1);
-  }, 10_000);
+  });
+
+  test('a shutdown that never settles is cut at the injected cap', async () => {
+    const hanging: SpanExporter = { export: () => undefined, shutdown: () => new Promise(() => undefined) };
+    const tracing = startTestSdk({}, 'vitest', { exporter: hanging, shutdownCapMs: 100 });
+    started = tracing;
+    const t0 = Date.now();
+    await expect(tracing?.shutdown()).resolves.toBeUndefined();
+    expect(Date.now() - t0).toBeLessThan(1_000);
+  });
+
+  test('an exporter package that fails to load turns tracing off with one warning', () => {
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const loadExporter = (): never => {
+      throw new Error('Cannot find module');
+    };
+    expect(
+      startTestSdk({ OTEL_EXPORTER_OTLP_ENDPOINT: ENDPOINT }, 'vitest', { loadExporter }),
+    ).toBeUndefined();
+    expect(stderr.mock.calls).toHaveLength(1);
+    expect(String(stderr.mock.calls[0]?.[0])).toContain('Cannot find module');
+  });
 });

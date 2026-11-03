@@ -20,6 +20,7 @@ import {
   type SpanProcessor,
   TracerProvider,
 } from '@opentelemetry/sdk-trace';
+import { hasEndpoint } from './enabled.ts';
 
 /**
  * The test-side OpenTelemetry SDK, shared by vitest's workers and Playwright's. `NodeSDK` registers the global
@@ -56,17 +57,6 @@ export const VIEWER_RESOURCE: Resource = resourceFromAttributes({
   'service.version': packageVersion(),
 });
 
-function endpoint(env: Env): boolean {
-  const { OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_EXPORTER_OTLP_TRACES_ENDPOINT } = env;
-  return Boolean(OTEL_EXPORTER_OTLP_ENDPOINT) || Boolean(OTEL_EXPORTER_OTLP_TRACES_ENDPOINT);
-}
-
-/** True when an OTLP endpoint is configured and the SDK is not disabled. */
-export function tracingEnabled(env: Env): boolean {
-  const { OTEL_SDK_DISABLED } = env;
-  return endpoint(env) && OTEL_SDK_DISABLED !== 'true';
-}
-
 /** A writer of `otel-html tests: <message>` lines to stderr that writes only the first message. */
 export function stderrOnce(): (message: string) => void {
   let written = false;
@@ -79,7 +69,11 @@ export function stderrOnce(): (message: string) => void {
 
 type ExporterModule = { OTLPTraceExporter: new () => SpanExporter };
 
-function otlpExporter(env: Env, warn: (message: string) => void): SpanExporter | undefined {
+function otlpExporter(
+  env: Env,
+  warn: (message: string) => void,
+  load: (name: string) => ExporterModule = createRequire(import.meta.url),
+): SpanExporter | undefined {
   const { OTEL_EXPORTER_OTLP_TRACES_PROTOCOL, OTEL_EXPORTER_OTLP_PROTOCOL } = env;
   const protocol = OTEL_EXPORTER_OTLP_TRACES_PROTOCOL || OTEL_EXPORTER_OTLP_PROTOCOL || 'http/protobuf';
   const packages: Readonly<Record<string, string>> = {
@@ -92,8 +86,13 @@ function otlpExporter(env: Env, warn: (message: string) => void): SpanExporter |
     warn(`unknown OTLP protocol "${protocol}"; tracing is off`);
     return undefined;
   }
-  const loaded: ExporterModule = createRequire(import.meta.url)(name);
-  return new loaded.OTLPTraceExporter();
+  try {
+    const loaded: ExporterModule = load(name);
+    return new loaded.OTLPTraceExporter();
+  } catch (e) {
+    warn(`cannot load ${name}: ${e instanceof Error ? e.message : String(e)}; tracing is off`);
+    return undefined;
+  }
 }
 
 /** One stderr line per process when an export fails; the result still reaches the processor. */
@@ -117,9 +116,9 @@ export function reporting(inner: SpanExporter, warn: (message: string) => void):
   };
 }
 
-function capped(work: () => Promise<void>): Promise<void> {
+function capped(work: () => Promise<void>, capMs: number = SHUTDOWN_CAP_MS): Promise<void> {
   return new Promise<void>((resolve) => {
-    const timer = setTimeout(resolve, SHUTDOWN_CAP_MS);
+    const timer = setTimeout(resolve, capMs);
     const done = (): void => {
       clearTimeout(timer);
       resolve();
@@ -150,15 +149,20 @@ function traceparentContext(propagator: Pick<W3CTraceContextPropagator, 'extract
 export function startTestSdk(
   env: Env,
   framework: TestFramework,
-  options: { exporter?: SpanExporter; processor?: 'batch' | 'simple' } = {},
+  options: {
+    exporter?: SpanExporter;
+    processor?: 'batch' | 'simple';
+    shutdownCapMs?: number;
+    loadExporter?: (name: string) => ExporterModule;
+  } = {},
 ): TestTracing | undefined {
   const { OTEL_SDK_DISABLED, OTEL_HTML_TEST_SERVICE_NAME } = env;
   if (OTEL_SDK_DISABLED === 'true') return undefined;
   const warn = stderrOnce();
   let exporter = options.exporter;
   if (exporter === undefined) {
-    if (!endpoint(env)) return undefined;
-    const built = otlpExporter(env, warn);
+    if (!hasEndpoint(env)) return undefined;
+    const built = otlpExporter(env, warn, options.loadExporter);
     if (built === undefined) return undefined;
     exporter = reporting(built, warn);
   }
@@ -174,6 +178,8 @@ export function startTestSdk(
     }),
     resourceDetectors: [],
     spanProcessors: [processor],
+    // Empty arrays keep NodeSDK from building the env-default OTLP metric and log exporters (it still registers a
+    // processor-less global LoggerProvider, which is harmless).
     metricReaders: [],
     logRecordProcessors: [],
     instrumentations: [],
@@ -183,7 +189,7 @@ export function startTestSdk(
     tracer: trace.getTracer(TRACER_NAME),
     parentFrom: (e) => traceparentContext({ extract: (c, ...r) => propagation.extract(c, ...r) }, e),
     record: (span) => processor.onEnd(span),
-    shutdown: () => capped(() => sdk.shutdown()),
+    shutdown: () => capped(() => sdk.shutdown(), options.shutdownCapMs),
   };
 }
 

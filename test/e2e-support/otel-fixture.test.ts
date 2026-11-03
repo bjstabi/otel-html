@@ -56,8 +56,27 @@ describe('test spans', () => {
   });
 });
 
+describe('endTestSpan colours', () => {
+  it('strips ANSI colour codes from the message and stack', async () => {
+    const setup = inMemoryTracing();
+    const red = (t: string): string => `\u001b[31m${t}\u001b[39m`;
+    endTestSpan(startTestSpan(setup.tracing, info), {
+      status: 'failed',
+      error: { message: `Expected ${red('1')}`, stack: `Error: ${red('boom')}\n  at x` },
+    });
+    await vi.waitFor(() => expect(setup.exporter.getFinishedSpans()).toHaveLength(1));
+    const [span] = setup.exporter.getFinishedSpans();
+    expect(span?.status.message).toBe('Expected 1');
+    expect(span?.events[0]?.attributes).toEqual({
+      'exception.message': 'Expected 1',
+      'exception.stacktrace': 'Error: boom\n  at x',
+    });
+  });
+});
+
 describe('recordsViewer', () => {
   it('is off for perf-tagged tests, scale.spec.ts and load.spec.ts', () => {
+    // Built by concatenation so vitest.config.ts' perf-file detection (a literal substring match on the tag) leaves this file in the default pass.
     expect(recordsViewer({ ...info, tags: [`@${'perf'}`] })).toBe(false);
     expect(recordsViewer({ ...info, file: 'e2e/scale.spec.ts' })).toBe(false);
     expect(recordsViewer({ ...info, file: 'e2e/load.spec.ts' })).toBe(false);

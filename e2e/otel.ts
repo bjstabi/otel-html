@@ -40,6 +40,10 @@ export function startTestSpan(tracing: TestTracing, info: TestSpanInfo): Span {
   return span;
 }
 
+/** Playwright colours its messages; the colour codes are noise in a trace backend. */
+const plain = (text: string): string =>
+  text.replace(new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g'), '');
+
 export function endTestSpan(span: Span, outcome: TestOutcome): void {
   const { status, error } = outcome;
   if (status === 'skipped') {
@@ -52,12 +56,12 @@ export function endTestSpan(span: Span, outcome: TestOutcome): void {
     span.end();
     return;
   }
-  const message = error?.message ?? status;
+  const message = plain(error?.message ?? status);
   span.setAttribute('test.case.result.status', 'fail');
   span.setStatus({ code: SpanStatusCode.ERROR, message });
   span.addEvent('exception', {
     'exception.message': message,
-    ...(error?.stack === undefined ? {} : { 'exception.stacktrace': error.stack }),
+    ...(error?.stack === undefined ? {} : { 'exception.stacktrace': plain(error.stack) }),
   });
   span.end();
 }

@@ -1,7 +1,7 @@
 import { globSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { defineConfig, type ViteUserConfig } from 'vitest/config';
-import { tracingEnabled } from './test-support/otel/sdk.js';
+import { tracingEnabled } from './test-support/otel/enabled.ts';
 
 /**
  * Timing-sensitive tests (budgets scaled by OTEL_HTML_PERF_FACTOR) carry `@perf` in their name. The default run skips
