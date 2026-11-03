@@ -1,10 +1,13 @@
 import { context, propagation, ROOT_CONTEXT, SpanKind, trace } from '@opentelemetry/api';
+import { type ExportResult, ExportResultCode } from '@opentelemetry/core';
 import { resourceFromAttributes } from '@opentelemetry/resources';
-import { InMemorySpanExporter, type ReadableSpan } from '@opentelemetry/sdk-trace';
+import { InMemorySpanExporter, type ReadableSpan, type SpanExporter } from '@opentelemetry/sdk-trace';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import {
   inMemoryTracing,
+  reporting,
   startTestSdk,
+  stderrOnce,
   type TestTracing,
   tracingEnabled,
   VIEWER_RESOURCE,
@@ -77,16 +80,14 @@ describe('test SDK', () => {
 
   test('uses otel-html-tests unless OTEL_HTML_TEST_SERVICE_NAME is set', async () => {
     vi.stubEnv('OTEL_SERVICE_NAME', 'mise');
-    const first = inject({ OTEL_SERVICE_NAME: 'mise' });
-    first.tracing.tracer.startSpan('a').end();
-    const [a] = await finished(first.exporter);
+    const { tracing, exporter } = inject({ OTEL_SERVICE_NAME: 'mise' });
+    tracing.tracer.startSpan('a').end();
+    const [a] = await finished(exporter);
     expect(a?.resource.attributes['service.name']).toBe('otel-html-tests');
     expect(a?.resource.attributes['test.framework']).toBe('vitest');
-    await first.tracing.shutdown();
-    trace.disable();
-    context.disable();
-    propagation.disable();
+  });
 
+  test('OTEL_HTML_TEST_SERVICE_NAME and the framework go on the resource', async () => {
     const exporter = new InMemorySpanExporter();
     started = startTestSdk({ OTEL_SERVICE_NAME: 'mise', OTEL_HTML_TEST_SERVICE_NAME: 'x' }, 'playwright', {
       exporter,
@@ -96,6 +97,28 @@ describe('test SDK', () => {
     const [b] = await finished(exporter);
     expect(b?.resource.attributes['service.name']).toBe('x');
     expect(b?.resource.attributes['test.framework']).toBe('playwright');
+  });
+
+  test('reporting writes one stderr line across failures and passes results through', () => {
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const failed = { code: ExportResultCode.FAILED, error: new Error('boom') };
+    const results: ExportResult[] = [];
+    const failing: SpanExporter = {
+      export: (_spans, done) => done(failed),
+      shutdown: () => Promise.resolve(),
+    };
+    const throwing: SpanExporter = {
+      export: () => {
+        throw new Error('sync');
+      },
+      shutdown: () => Promise.resolve(),
+    };
+    const warn = stderrOnce();
+    reporting(failing, warn).export([], (r) => results.push(r));
+    reporting(throwing, warn).export([], (r) => results.push(r));
+    expect(results.map((r) => r.code)).toEqual([ExportResultCode.FAILED, ExportResultCode.FAILED]);
+    expect(results[0]).toBe(failed);
+    expect(stderr.mock.calls).toEqual([['otel-html tests: span export failed: boom\n']]);
   });
 
   test('inMemoryTracing registers nothing globally', async () => {
@@ -146,7 +169,6 @@ describe('test SDK', () => {
     const t0 = Date.now();
     await expect(started?.shutdown()).resolves.toBeUndefined();
     expect(Date.now() - t0).toBeLessThan(6_000);
-    const lines = stderr.mock.calls.filter(([chunk]) => String(chunk).includes('span export failed'));
-    expect(lines.length).toBeLessThanOrEqual(1);
+    expect(stderr.mock.calls.length).toBeLessThanOrEqual(1);
   }, 10_000);
 });

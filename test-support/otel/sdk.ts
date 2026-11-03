@@ -67,7 +67,8 @@ export function tracingEnabled(env: Env): boolean {
   return endpoint(env) && OTEL_SDK_DISABLED !== 'true';
 }
 
-function stderrOnce(): (message: string) => void {
+/** A writer of `otel-html tests: <message>` lines to stderr that writes only the first message. */
+export function stderrOnce(): (message: string) => void {
   let written = false;
   return (message) => {
     if (written) return;
@@ -96,7 +97,7 @@ function otlpExporter(env: Env, warn: (message: string) => void): SpanExporter |
 }
 
 /** One stderr line per process when an export fails; the result still reaches the processor. */
-function reporting(inner: SpanExporter, warn: (message: string) => void): SpanExporter {
+export function reporting(inner: SpanExporter, warn: (message: string) => void): SpanExporter {
   return {
     export(spans, done) {
       try {
