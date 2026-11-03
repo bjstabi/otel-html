@@ -48,8 +48,9 @@ the designer's call, marked as such where it matters.
 - A test run without an endpoint gets slower or noisier, or a run with an unreachable endpoint fails or hangs.
   Export failures are swallowed (a single warning at most); shutdown has a bounded timeout.
 - Instrumentation changes a test's outcome. Vitest's built-in support registers a global provider in each worker;
-  that is accepted because every unit test that uses OTel builds its own provider and none reads the global one
-  (checked: `test/api/report.test.ts`, `test/model/sdk-*.test.ts`, `test/exporters/*.test.ts`). A new unit test
+  that is accepted because every unit test that uses OTel builds its own provider and none asserts on the global
+  one; the library's own spans (`src/api/report.ts` uses the global tracer) are exported under vitest's spans, which
+  is harmless (checked: `test/api/report.test.ts`, `test/model/sdk-*.test.ts`, `test/exporters/*.test.ts`). A new unit test
   that needs the global API must save and restore it.
 - Telemetry goes somewhere the developer did not choose. It goes only to the endpoint in the environment.
 
@@ -129,7 +130,7 @@ An automatic worker-scoped fixture starts the shared SDK per worker. An automati
 test's span before the test and ends it after, inside the worker, while the test runs.
 
 - The span: name = the test title, `test.case.name` = the title path joined by ` > `, `test.suite.name` = the spec
-  file, plus `playwright.project` (`chromium-file`, …), `test.case.retry` and the tags. Status from `testInfo`
+  file, plus `playwright.project` (`chromium-file`, …), `otel_html.test.retry` and `otel_html.test.tags`. Status from `testInfo`
   after the test: `passed` → pass, `failed`/`timedOut` → fail with ERROR and the error message,
   `skipped` → skipped. Parent = `TRACEPARENT` (the `test:e2e*` task span).
 - No per-file spans for Playwright: a file's tests are spread over workers and the worker cannot know when the
@@ -143,15 +144,15 @@ test's span before the test and ends it after, inside the worker, while the test
 
 ### Viewer: spans through `@opentelemetry/api`
 
-`@opentelemetry/api` is already a runtime dependency. The viewer gets a tracer named `otel-html-viewer` (version =
-the package version) and spans for:
+`@opentelemetry/api` is already a runtime dependency. The viewer gets a tracer named `otel-html-viewer` (no version; `viewer.load` carries `otel_html.report.version`)
+and spans for:
 
 - `viewer.load`: from script start until the data source is ready (manifest parsed, strategy chosen), with the
   manifest's totals and format version as attributes.
-- `viewer.chunk.load`: each chunk script load (`src/viewer/data/script-loader.ts`), with signal, chunk number and
-  bytes; errors and timeouts as ERROR.
-- `viewer.query`: each span, log and metric query in `src/viewer/data/` (the `*-query.ts` entry points) with the
-  signal, the query kind, and the result count.
+- `viewer.chunk.load`: each chunk script load (`src/viewer/data/script-loader.ts`), with `otel_html.path` and
+  `otel_html.key`; errors and timeouts as ERROR.
+- `viewer.query`: each span, log and metric query in `src/viewer/data/` (the `*-query.ts` entry points) with
+  `otel_html.query.kind`, `otel_html.query.result_count` and `otel_html.query.aborted` (no signal attribute).
 - `viewer.navigate`: each hash-route change (`src/viewer/state/hash-history.ts`), with the route (no query values:
   filter text could be large; the route name and which parameters are set is enough). Ends when the new route's
   first data is ready if that is cheaply knowable, else it is a zero-duration marker span (builder's choice).
@@ -196,7 +197,8 @@ In the test-scoped fixture, when the worker has a provider and the test is eligi
 
 **Limits (designer's call):**
 
-- No recorder for `@perf`-tagged tests or for `scale.spec.ts` and `load.spec.ts`. They still get their test span;
+- No recorder for `@perf`-tagged tests, for `scale.spec.ts` and `load.spec.ts`, or for `hostileTest` (the hostile
+  report; the recorder's binding would take input from hostile content). They still get their test span;
   only the in-page recording is off, so their timing is what it was.
 - Each test records at most 2,000 viewer spans. Spans past the cap are dropped and counted in
   `otel_html.viewer.spans.dropped` on the test span.

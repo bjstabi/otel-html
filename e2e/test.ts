@@ -71,7 +71,10 @@ export { expect } from '@playwright/test';
 /** Test options for a spec that also runs over HTTP: `test('title', HTTP, async ...)`. Untagged tests run over file:// only. */
 export const HTTP = { tag: '@http' } as const;
 
-/** Same as `test`, but `baseURL` points at the hostile-content report. */
+/**
+ * Same as `test` (test spans included), but `baseURL` points at the hostile-content report. It deliberately lacks the
+ * recorder `context` override: the in-page binding would take input from hostile content, so no viewer spans here.
+ */
 export const hostileTest = base.extend({
   baseURL: async ({ baseURL: _unused }, use, testInfo) => {
     await use(baseUrlFor(kindOf(testInfo.project.name), 'hostile'));
