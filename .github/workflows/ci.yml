@@ -174,12 +174,8 @@ jobs:
       # Each browser reports on its own; one failing browser must not hide the others' results.
       fail-fast: false
       matrix:
+        # Only the chromium leg runs the @perf pass, the HTTP project and e2e/scale.spec.ts (playwright.config.ts).
         project: [chromium, firefox, webkit]
-        include:
-          # Playwright's Linux WebKit runs JavaScript ~16x slower than WebKit on macOS (Chromium here is ~2x), so
-          # its @perf budgets are scaled; the budget constants stay fixed and are met on macOS.
-          - project: webkit
-            perf_factor: 6
     runs-on: ubuntu-latest
     # The official image ships all three browsers and their OS libraries, matching @playwright/test (keep this tag
     # in step with package.json). `playwright install --with-deps webkit` spent ~9 of 10 minutes in apt fetching
@@ -188,7 +184,6 @@ jobs:
       image: mcr.microsoft.com/playwright:v1.64.1-noble@sha256:47b510dd9230bf0b9bfc9b20102241e577ea7a99334ab4c3ca19f19770e9b8ea
       options: --user 1001 --ipc=host
     env:
-      OTEL_HTML_PERF_FACTOR: ${{ matrix.perf_factor || 1 }}
       # The @perf budgets scale by (calibration ÷ this), never below 1: GitHub's runners come as AMD EPYC 9V45
       # (~85 ms, budgets as written) and EPYC 7763 (~150 ms, about 1.5×). See test-support/calibrate.ts.
       OTEL_HTML_PERF_REFERENCE_MS: "100"
@@ -216,7 +211,7 @@ jobs:
       # --skip-deps: dist/ was built by the Build step above and must not be cleaned under the running job shell,
       # so the fixture reports are built here, once, and test:e2e's own e2e:fixtures dependency is skipped.
       - run: mise run --skip-deps e2e:fixtures
-      # `--browser` selects the `<browser>-file` and `<browser>-http` projects, then the `<browser>-perf-file` pass.
+      # `--browser` selects the `<browser>-file` and (chromium) `-http` projects, then the chromium `-perf-file` pass.
       - run: mise run --skip-deps test:e2e --browser ${{ matrix.project }}
       # The reporter is `list`, so failure traces and screenshots land in test-results/.
       - if: always()

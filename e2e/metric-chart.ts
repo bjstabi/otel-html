@@ -3,51 +3,40 @@ import type { JSHandle, Locator, Page } from '@playwright/test';
 /** The chart card's plot grid inside its canvas (`GRID` in metric-chart-option.ts); a legend (2+ series) sits above it. */
 const PLOT = { left: 56, right: 12, bottom: 24 } as const;
 const PLOT_TOP = { legend: 28, plain: 12 } as const;
-/** Sweep step in px: a ring's ~9 px diameter needs a step under 9/sqrt(2) ≈ 6.4 so that every ring holds a probe. */
-const STEP_PX = 6;
-/** Spots closer than this are one ring (the merge radius; independent of the step). */
-const RING_MERGE_PX = 12;
 
 /**
- * Where the exemplar rings of a chart card are, in px from the chart's top-left corner. The chart is a canvas, so the
- * rings are found the way a pointer finds them: ECharts shows a pointer cursor over a hoverable symbol, and line
- * series draw none (`showSymbol: false`), so every pointer spot inside the plot is an exemplar ring. Neighbouring
- * spots are merged into one ring each.
+ * Where the exemplar rings of a chart card are, in px from the chart's top-left corner. Each point of the `exemplars`
+ * scatter series is placed with ECharts' own `convertToPixel`, then checked the way a pointer finds it: ECharts shows a
+ * pointer cursor over a hoverable symbol, and line series draw none (`showSymbol: false`). A sweep of the whole plot
+ * found the same rings with a mousemove every 6 px, which took 1–2 s a call even locally.
  */
-export async function exemplarRings(
-  chart: Locator,
-  opts: { legend: boolean },
-): Promise<{ x: number; y: number }[]> {
-  const spots = await chart.evaluate(
-    (host, { plot, top, step }) => {
-      const canvas = host.querySelector('canvas');
-      const root = canvas?.parentElement;
-      if (!canvas || !root) throw new Error('the chart has no canvas');
-      const r = canvas.getBoundingClientRect();
-      const out: [number, number][] = [];
-      for (let y = top; y < r.height - plot.bottom; y += step)
-        for (let x = plot.left; x < r.width - plot.right; x += step) {
-          canvas.dispatchEvent(
-            new MouseEvent('mousemove', { bubbles: true, clientX: r.left + x, clientY: r.top + y }),
-          );
-          if (root.style.cursor === 'pointer') out.push([x, y]);
-        }
-      canvas.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
-      return out;
-    },
-    { plot: PLOT, top: opts.legend ? PLOT_TOP.legend : PLOT_TOP.plain, step: STEP_PX },
-  );
-  const rings: { x: number; y: number; n: number }[] = [];
-  for (const [x, y] of spots) {
-    const near = rings.find((g) => Math.hypot(g.x / g.n - x, g.y / g.n - y) <= RING_MERGE_PX);
-    if (near === undefined) rings.push({ x, y, n: 1 });
-    else {
-      near.x += x;
-      near.y += y;
-      near.n += 1;
-    }
-  }
-  return rings.map((g) => ({ x: g.x / g.n, y: g.y / g.n }));
+export async function exemplarRings(chart: Locator): Promise<{ x: number; y: number }[]> {
+  const rings = await (await liveChart(chart)).evaluate((c) => {
+    const { series } = c.getOption();
+    const index = series.findIndex((s) => s.name === 'exemplars');
+    const s = series[index];
+    if (s === undefined) return [];
+    return s.data.map((d) => {
+      const [x = Number.NaN, y = Number.NaN] = c.convertToPixel({ seriesIndex: index }, d.value);
+      return { x, y };
+    });
+  });
+  const off = await chart.evaluate((host, at) => {
+    const canvas = host.querySelector('canvas');
+    const root = canvas?.parentElement;
+    if (!canvas || !root) throw new Error('the chart has no canvas');
+    const r = canvas.getBoundingClientRect();
+    const misses = at.filter(({ x, y }) => {
+      canvas.dispatchEvent(
+        new MouseEvent('mousemove', { bubbles: true, clientX: r.left + x, clientY: r.top + y }),
+      );
+      return root.style.cursor !== 'pointer';
+    });
+    canvas.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
+    return misses;
+  }, rings);
+  if (off.length > 0) throw new Error(`no pointer over the exemplar rings at ${JSON.stringify(off)}`);
+  return rings;
 }
 
 /** A drawn line spans at least this many px; dots, rings and the marker are far narrower. */
@@ -114,7 +103,10 @@ export function watchProblems(page: Page): string[] {
 /** The parts of an ECharts instance a run chart spec reads. */
 interface LiveChart {
   getOption(): RawOption;
-  convertToPixel(finder: { xAxisIndex: number; yAxisIndex: number }, value: number[]): number[];
+  convertToPixel(
+    finder: { xAxisIndex: number; yAxisIndex: number } | { seriesIndex: number },
+    value: number[],
+  ): number[];
   getZr(): { storage: { getDisplayList(): DisplayEl[] } };
   getDom(): HTMLElement;
 }
