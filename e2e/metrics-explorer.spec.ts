@@ -43,7 +43,7 @@ test(
     expect(json).toContain('"by":["attributes[\\"http.route\\"]"]');
 
     // Two exemplars in the run: one on LINKED_TRACE, one on a trace the report lacks.
-    const rings = await exemplarRings(chart, { legend: true });
+    const rings = await exemplarRings(chart);
     expect(rings).toHaveLength(2);
     const menus: string[][] = [];
     for (const ring of rings) {
@@ -76,7 +76,7 @@ test('"Logs in this window" opens the Logs Explorer with t set to the clicked bu
   await p99ByRoute(page);
   const chart = p99Chart(page);
   await expect(chart).toBeVisible();
-  const rings = await exemplarRings(chart, { legend: true });
+  const rings = await exemplarRings(chart);
   const box = await chart.boundingBox();
   if (box === null) throw new Error('the chart has no box');
   const at = { x: Math.round(box.width * 0.75), y: 60 };
@@ -138,6 +138,6 @@ test('an unfinished report (flushed, never closed) charts METRIC_HIST from its s
     page.getByRole('region', { name: `${METRIC_HIST} · p99` }).getByRole('list', { name: 'Notes' }),
   ).toContainText('report unfinished: series merged from flush segments');
   // Exemplars come from the segments too.
-  expect(await exemplarRings(p99Chart(page), { legend: true })).toHaveLength(2);
+  expect(await exemplarRings(p99Chart(page))).toHaveLength(2);
   expect(problems).toEqual([]);
 });

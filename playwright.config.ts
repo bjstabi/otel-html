@@ -1,4 +1,4 @@
-import { defineConfig, devices, type PlaywrightTestConfig } from '@playwright/test';
+import { defineConfig, devices, type PlaywrightTestConfig, type Project } from '@playwright/test';
 
 const { CI } = process.env;
 const browsers = [
@@ -17,14 +17,20 @@ const config: PlaywrightTestConfig = defineConfig({
   reporter: 'list',
   fullyParallel: true,
   ...(CI ? { workers: 4 } : {}),
-  // Per browser: `-file` runs every spec over file://, `-http` only the specs tagged `HTTP` (e2e/test.ts) over HTTP,
-  // and `-perf-file` the `@perf` ones, which `test:e2e` runs alone with one worker. `kindOf` (e2e/test.ts) reads
-  // the last `-` segment, so `perf-file` is `file`.
-  projects: browsers.flatMap((b) => [
-    { name: `${b.name}-file`, use: b.device, grepInvert: /@perf/ },
-    { name: `${b.name}-http`, use: b.device, grep: /@http/, grepInvert: /@perf/ },
-    { name: `${b.name}-perf-file`, use: b.device, grep: /@perf/ },
-  ]),
+  // Per browser, `-file` runs every spec over file:// (Firefox and WebKit leave out scale.spec.ts, so they need no scale
+  // reports). Chromium alone has `-http`, the specs tagged `HTTP` (e2e/test.ts) over HTTP, and `-perf-file`, the `@perf`
+  // ones, which `test:e2e` runs alone with one worker: loading over HTTP does not depend on the browser, and Linux
+  // Firefox and WebKit are too slow for a budget to say much. `kindOf` (e2e/test.ts) reads the last `-` segment, so
+  // `perf-file` is `file`.
+  projects: browsers.flatMap((b): Project[] =>
+    b.name === 'chromium'
+      ? [
+          { name: `${b.name}-file`, use: b.device, grepInvert: /@perf/ },
+          { name: `${b.name}-http`, use: b.device, grep: /@http/, grepInvert: /@perf/ },
+          { name: `${b.name}-perf-file`, use: b.device, grep: /@perf/ },
+        ]
+      : [{ name: `${b.name}-file`, use: b.device, grepInvert: /@perf/, testIgnore: 'scale.spec.ts' }],
+  ),
 });
 
 export default config;
