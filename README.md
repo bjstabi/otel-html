@@ -591,7 +591,7 @@ Tasks are defined in `mise.toml`; CI runs the same ones. The Linux binaries (`li
 
 The test suites trace themselves. Spans are exported only when an OTLP endpoint is configured (`OTEL_EXPORTER_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`), for example by running under `otel-html run`, as CI's job shell does; `OTEL_SDK_DISABLED=true` turns it off. The protocol comes from `OTEL_EXPORTER_OTLP_PROTOCOL` (`http/protobuf` by default, `http/json` or `grpc`). Test spans carry `service.name` `otel-html-tests`, or `OTEL_HTML_TEST_SERVICE_NAME` when set; the inherited `OTEL_SERVICE_NAME` is ignored.
 
-- **vitest:** its built-in (experimental) OpenTelemetry support, with vitest's own span names (`vitest.test_run`, `run.suite`, `run.test`, hooks, module imports), parented to `TRACEPARENT`, which mise sets per task.
+- **vitest:** its built-in (experimental) OpenTelemetry support, with vitest's own span names (`vitest.test_run`, `vitest.test.runner.run.suite`, `vitest.test.runner.run.test`, hooks, module imports), parented to `TRACEPARENT`, which mise sets per task.
 - **Playwright:** one span per test (`test.case.name`, `test.case.result.status`, ...) under `TRACEPARENT`. The viewer's own spans (`viewer.load`, `viewer.chunk.load`, `viewer.query`, `viewer.navigate`, resource `service.name=otel-html-viewer`) are exported under each test's span, except for `@perf` tests, `scale.spec.ts`, `load.spec.ts` and the hostile-content report (`hostileTest`), and at most 2 000 per test.
 - **The library's own spans:** under an endpoint, the spans the library emits through the global tracer (`otel-html.flush`, `otel-html.receive`, in `src/api/report.ts`) during unit tests are exported too, under vitest's spans.
 

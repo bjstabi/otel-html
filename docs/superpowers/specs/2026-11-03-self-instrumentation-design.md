@@ -108,14 +108,14 @@ the end, so with no endpoint the export is an inert `{ shutdown }`. That file ne
 override.
 
 What vitest emits, as of 5.0.5: `vitest.test_run`; per worker the runtime and environment setup and teardown;
-module transforms and imports; `collect_spec`; `run.suite` and `run.test` (attributes `vitest.test.name`,
-`vitest.test.id`, `vitest.test.mode`, `vitest.suite.name`, …); hook spans (`test.beforeEach`, `suite.beforeAll`, …);
+module transforms and imports; and, prefixed `vitest.test.runner.`, `collect_spec`, `run.suite` and `run.test` (attributes `vitest.test.name`,
+`vitest.test.id`, `vitest.test.mode`, `vitest.suite.name`, …); hook spans (`test.beforeEach`, `suite.beforeAll`, …)
 and `test.callback`. It reads `TRACEPARENT` itself, so the run nests under the mise task span.
 
 **Accepted trade-offs (designer's call):** the feature is experimental, so span names may change in a vitest minor
 release. Its attributes are vitest's own (`vitest.test.name`), not the semconv `test.case.*` keys used for
 Playwright. Nothing in this project depends on the names except the CI check at the end, which looks for
-`run.test` and the vitest attributes.
+`vitest.test.runner.run.test` and the vitest attributes.
 
 The perf pass (`OTEL_HTML_PERF_PASS=1`) runs with the same config.
 
@@ -217,7 +217,7 @@ Timestamps: the page and the worker share a machine clock; the in-page SDK's tim
 Nothing to wire: the job shell already exports `OTEL_EXPORTER_OTLP_ENDPOINT`, `MISE_OTEL_ENABLED` already makes
 mise pass `TRACEPARENT` to tasks, and Playwright workers and vitest inherit both. The checks:
 
-- The CI report of a PR run contains `run.test` spans under the `test:unit` task span and `test.case.name` spans
+- The CI report of a PR run contains `vitest.test.runner.run.test` spans under the `test:unit` task span and `test.case.name` spans
   under the `test:e2e:chromium` task span, and viewer spans under e2e test spans. The plan's final task opens a PR, downloads the job's report, and
   records span counts in the PR body.
 - The existing `ci` dashboard's span toplist query (`instrumentation_scope.name == "otel-html-ci"`) is unaffected.
@@ -227,7 +227,7 @@ mise pass `TRACEPARENT` to tasks, and Playwright workers and vitest inherit both
 - Unit (vitest, node project): the SDK module starts nothing without an endpoint, honours `OTEL_SDK_DISABLED`,
   sets the resource (not `OTEL_SERVICE_NAME`), and queues a foreign span. The JSON → `ReadableSpan` mapping
   round-trips. Vitest's own spans are checked end to end: the unit suite runs under an `otel-html run` receiver and
-  the report must hold `run.test` spans under `vitest.test_run`.
+  the report must hold `vitest.test.runner.run.test` spans under `vitest.test_run`.
 - Unit (viewer project): with an in-memory provider registered in that test only (and unregistered after), loading a
   scripted report produces `viewer.load` and `viewer.chunk.load` spans; a query produces `viewer.query`. With
   nothing registered, no requests.
