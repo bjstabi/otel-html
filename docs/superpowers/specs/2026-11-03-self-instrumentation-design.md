@@ -19,9 +19,9 @@ the designer's call, marked as such where it matters.
 
 ## Goals
 
-1. Every vitest test case and every Playwright test produces a span when an OTLP endpoint is configured, with the
-   OTel test semantic conventions (`test.suite.name`, `test.case.name`, `test.case.result.status`) and the error
-   message on failure.
+1. Every vitest test case and every Playwright test produces a span when an OTLP endpoint is configured. Vitest
+   spans come from vitest's built-in support, under vitest's own names. Playwright spans carry the OTel test semantic
+   conventions (`test.suite.name`, `test.case.name`, `test.case.result.status`) and, on failure, the error message.
 2. The spans join the ambient trace: `TRACEPARENT` from the environment is the parent (mise sets it to the task
    span; `otel-html run` sets it for the job shell). No `TRACEPARENT` → a fresh trace.
 3. The viewer is instrumented through `@opentelemetry/api` only. Shipped reports carry no SDK and no exporter; with
@@ -47,9 +47,10 @@ the designer's call, marked as such where it matters.
   registered.
 - A test run without an endpoint gets slower or noisier, or a run with an unreachable endpoint fails or hangs.
   Export failures are swallowed (a single warning at most); shutdown has a bounded timeout.
-- Instrumentation changes a test's outcome: a global tracer provider registered in a vitest worker would leak into
-  the unit tests that exercise `src/api/telemetry.ts` and the exporters. Test instrumentation never calls
-  `trace.setGlobalTracerProvider` (or `context.setGlobalContextManager`) in a test process.
+- Instrumentation changes a test's outcome. Vitest's built-in support registers a global provider in each worker;
+  that is accepted because every unit test that uses OTel builds its own provider and none reads the global one
+  (checked: `test/api/report.test.ts`, `test/model/sdk-*.test.ts`, `test/exporters/*.test.ts`). A new unit test
+  that needs the global API must save and restore it.
 - Telemetry goes somewhere the developer did not choose. It goes only to the endpoint in the environment.
 
 ## Facts the design rests on
@@ -69,57 +70,60 @@ the designer's call, marked as such where it matters.
 
 ## Design
 
-### Shared: the test exporter (`test-support/otel/`)
+### Shared: the test SDK (`test-support/otel/`)
 
-One small module builds a tracer for test processes, or nothing:
+Both runners start the same SDK, `@opentelemetry/sdk-node`'s `NodeSDK` (the OTel JS SDK 3.0 line, which the
+repo's `@opentelemetry/otlp-transformer` 0.300.0 already belongs to). One module builds it, or nothing:
 
-- No `OTEL_EXPORTER_OTLP_ENDPOINT` (and no `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`) → returns `undefined`; callers do
-  nothing. `OTEL_SDK_DISABLED=true` also disables it.
-- Otherwise a `BasicTracerProvider` (from `@opentelemetry/sdk-trace-base`, already a devDependency) with a
-  `BatchSpanProcessor` and an OTLP trace exporter chosen by `OTEL_EXPORTER_OTLP_PROTOCOL`: `http/protobuf`
-  (default) or `http/json`. `grpc` → a one-line warning and no export (designer's call: tests do not pull in a gRPC
-  exporter for a protocol neither mise nor `run` defaults to). The exporter reads endpoint and headers from the
-  environment as the OTLP exporters already do.
-- Resource: `service.name` from `OTEL_HTML_TEST_SERVICE_NAME`, else `otel-html-tests` — **not** the inherited
+- No `OTEL_EXPORTER_OTLP_ENDPOINT` (and no `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`), or `OTEL_SDK_DISABLED=true` →
+  no SDK; callers do nothing.
+- Otherwise a `NodeSDK` with traces only (no metric reader, no log processor, no auto-instrumentations). The SDK
+  owns the environment: protocol (`http/protobuf`, `http/json` and `grpc` all work), endpoint, headers. It
+  registers the global provider, the W3C propagator and the async-hooks context manager in that process.
+- The module creates the `BatchSpanProcessor` itself and passes it in, so it can also queue finished spans from
+  the browser (below).
+- Resource: `service.name` from `OTEL_HTML_TEST_SERVICE_NAME`, else `otel-html-tests`, **not** the inherited
   `OTEL_SERVICE_NAME`, which mise sets to `mise` (designer's call). Plus `service.version` from `package.json` and
   the runner (`vitest`/`playwright`) as `test.framework` (custom attribute; there is no semconv key).
-- The parent context is `TRACEPARENT` parsed by the W3C propagator into a non-recording parent; malformed → fresh
-  trace, no error.
-- The provider is used directly (`provider.getTracer(...)`), never registered globally.
-- `shutdown()` flushes with a 5 s cap; an export error is logged once to stderr and otherwise ignored.
+- Parent: vitest reads `TRACEPARENT` itself. The Playwright fixture extracts it with the global W3C propagator;
+  malformed → fresh trace, no error.
+- Shutdown flushes with a 5 s cap; an export error is logged once to stderr and otherwise ignored.
 
-**New dependency:** `@opentelemetry/exporter-trace-otlp-proto` and `@opentelemetry/exporter-trace-otlp-http`
-(devDependencies, pinned exact, versions matching the installed `sdk-trace-base` line). Called out in the plan and
-the PR body as the conventions require. Also `@opentelemetry/core` for the W3C propagator (already a devDependency).
+**New dependency:** `@opentelemetry/sdk-node` 0.300.0 (devDependency, pinned exact). It brings the OTLP exporters,
+the context manager and the environment configuration. Its `tracing` and `resources` re-exports are what the
+test-side code imports, so no transitive package is imported directly. Called out in the plan and the PR body as
+the conventions require.
 
-### Vitest: a reporter
+### Vitest: built-in OpenTelemetry
 
-A custom reporter (`test-support/otel/vitest-reporter.ts`, added to `reporters` in `vitest.config.ts` next to the
-default) builds the spans in the main process after the fact, from vitest's results (start time and duration per
-task). Reporter, not setup file, because it runs once in the main process, sees skipped tests, needs no global
-state in workers, and cannot affect a test (designer's call).
+Vitest has OpenTelemetry built in (`test.experimental.openTelemetry`: `enabled`, `sdkPath`, `browserSdkPath`;
+<https://vitest.dev/guide/open-telemetry>). `vitest.config.ts` sets `enabled` only when the shared module says an
+endpoint is configured, and `sdkPath` to `test-support/otel/vitest-sdk.ts`. Vitest imports that file in the main
+process and in each worker. It default-exports the started SDK; vitest needs an object with `shutdown()` to flush at
+the end, so with no endpoint the export is an inert `{ shutdown }`. That file needs a Biome `noDefaultExport`
+override.
 
-Span tree:
+What vitest emits, as of 5.0.5: `vitest.test_run`; per worker the runtime and environment setup and teardown;
+module transforms and imports; `collect_spec`; `run.suite` and `run.test` (attributes `vitest.test.name`,
+`vitest.test.id`, `vitest.test.mode`, `vitest.suite.name`, …); hook spans (`test.beforeEach`, `suite.beforeAll`, …);
+and `test.callback`. It reads `TRACEPARENT` itself, so the run nests under the mise task span.
 
-- `vitest` run span (start = run start, end = run end), parent = `TRACEPARENT`.
-  - one span per test file, name = the path relative to the repo, `test.suite.name` = the path, and the vitest
-    project (`node`/`viewer`) as `vitest.project`.
-    - one span per `describe`, name = the suite name.
-      - one span per test, name = the test name, `test.case.name` = the full name (suites joined by ` > `),
-        `test.case.result.status` = `pass`/`fail`, skipped tests get `test.case.result.status=skipped` (designer's
-        call: the semconv enum has only pass/fail, a skipped test is still worth seeing) and zero duration. A
-        failure sets span status ERROR with the first error's message, and an `exception` event with message and
-        stack. Retries: one span per attempt if vitest exposes them, else one span with `test.case.retry.count`
-        (builder's choice).
+**Accepted trade-offs (designer's call):** the feature is experimental, so span names may change in a vitest minor
+release. Its attributes are vitest's own (`vitest.test.name`), not the semconv `test.case.*` keys used for
+Playwright. Nothing in this project depends on the names except the CI check at the end, which looks for
+`run.test` and the vitest attributes.
 
-The perf pass (`OTEL_HTML_PERF_PASS=1`) gets the same reporter; its tests are just fewer.
+The perf pass (`OTEL_HTML_PERF_PASS=1`) runs with the same config.
 
 ### Playwright: a worker fixture
 
-An automatic worker-scoped fixture owns the provider per worker; an automatic test-scoped fixture starts the
-test's span before the test and ends it after, inside the worker, live. Fixture, not reporter, because the browser
-spans must be parented to the test span, and that span must exist in the worker while the page runs (designer's
-call).
+Playwright has no built-in OpenTelemetry. The third-party `@playwright-labs/reporter-otel` (1.4.1) was considered
+and rejected (designer's call). It runs in the reporter process, so its test spans do not exist while the page runs
+in the worker, and the browser spans need a live parent there. It also pins `@opentelemetry/sdk-node` 0.217, which
+would put a second SDK line next to 0.300.
+
+An automatic worker-scoped fixture starts the shared SDK per worker. An automatic test-scoped fixture starts the
+test's span before the test and ends it after, inside the worker, while the test runs.
 
 - The span: name = the test title, `test.case.name` = the title path joined by ` > `, `test.suite.name` = the spec
   file, plus `playwright.project` (`chromium-file`, …), `test.case.retry` and the tags. Status from `testInfo`
@@ -132,7 +136,7 @@ call).
   gets them. A regression guard: no value import from `@playwright/test` outside `e2e/test.ts`. `import type` stays
   allowed everywhere. The builder picks the mechanism; a Biome `noRestrictedImports` rule with `allowTypeImports`,
   with `e2e/test.ts` exempt, is the obvious one.
-- Skipped tests (vitest and Playwright) start where their parent starts and have zero duration. (Designer's call.)
+- Skipped tests start when the fixture starts and have zero duration. (Designer's call.)
 
 ### Viewer: spans through `@opentelemetry/api`
 
@@ -197,8 +201,9 @@ In the test-scoped fixture, when the worker has a provider and the test is eligi
   Chromium e2e suite's wall time with and without an endpoint and puts both numbers in the PR body. More than 10%
   slower stops the work and goes back to the maintainer.
 
-Registration happens only in the browser page, which is a test-controlled environment, so the anti-goal about
-global providers in test processes does not apply.
+The recorder's page-side SDK is `@opentelemetry/sdk-trace-base` 2.12.0, which is already installed and runs in a
+browser; it talks to the viewer only through the API. On the worker side, spans are rebuilt as the SDK 3.0
+`ReadableSpan` that `sdk-node`'s `tracing` exports.
 
 Timestamps: the page and the worker share a machine clock; the in-page SDK's times are used as they are.
 
@@ -207,17 +212,17 @@ Timestamps: the page and the worker share a machine clock; the in-page SDK's tim
 Nothing to wire: the job shell already exports `OTEL_EXPORTER_OTLP_ENDPOINT`, `MISE_OTEL_ENABLED` already makes
 mise pass `TRACEPARENT` to tasks, and Playwright workers and vitest inherit both. The checks:
 
-- The CI report of a PR run contains `test.case.name` spans under the `test:unit` and `test:e2e:chromium` task
-  spans, and viewer spans under e2e test spans. The plan's final task opens a PR, downloads the job's report, and
+- The CI report of a PR run contains `run.test` spans under the `test:unit` task span and `test.case.name` spans
+  under the `test:e2e:chromium` task span, and viewer spans under e2e test spans. The plan's final task opens a PR, downloads the job's report, and
   records span counts in the PR body.
 - The existing `ci` dashboard's span toplist query (`instrumentation_scope.name == "otel-html-ci"`) is unaffected.
 
 ### Tests for the instrumentation
 
-- Unit (vitest, node project): the exporter module returns `undefined` without an endpoint, honours
-  `OTEL_SDK_DISABLED`, parses `TRACEPARENT`, ignores a malformed one, picks the exporter by protocol. The vitest
-  reporter is fed synthetic task results and checked against an in-memory exporter (span names, nesting, status,
-  attributes, times). The JSON → `ReadableSpan` mapping round-trips.
+- Unit (vitest, node project): the SDK module starts nothing without an endpoint, honours `OTEL_SDK_DISABLED`,
+  sets the resource (not `OTEL_SERVICE_NAME`), and queues a foreign span. The JSON → `ReadableSpan` mapping
+  round-trips. Vitest's own spans are checked end to end: the unit suite runs under an `otel-html run` receiver and
+  the report must hold `run.test` spans under `vitest.test_run`.
 - Unit (viewer project): with an in-memory provider registered in that test only (and unregistered after), loading a
   scripted report produces `viewer.load` and `viewer.chunk.load` spans; a query produces `viewer.query`. With
   nothing registered, no requests.
