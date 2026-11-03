@@ -6,6 +6,7 @@
     "test/**/*.test.ts",
     "test/**/*.test-d.ts",
     "e2e/**/*.spec.ts",
+    "e2e/otel-page/recorder.ts",
     "test-support/otel/vitest-sdk.ts"
   ],
   "project": [

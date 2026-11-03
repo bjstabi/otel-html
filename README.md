@@ -678,7 +678,7 @@ serves the report through the port proxy instead, until Ctrl-C. Interactive only
 
 ## `e2e:fixtures`
 
-- Depends: build
+- Depends: build, e2e:otel-recorder
 
 - **Usage:** `e2e:fixtures`
 
@@ -704,6 +704,12 @@ freshness record of its own could miss a viewer that :data wrote in between), so
 Convert the e2e `scale` and `huge` reports into e2e/.reports-scale/ (skipped while up to date)
 100k spans, 1M logs and metrics, converted twice (~15 s, ~1 GB of memory). Its sources are the writer's build output,
 not the viewer's: a viewer change only reruns e2e:fixtures:scale.
+
+## `e2e:otel-recorder`
+
+- **Usage:** `e2e:otel-recorder`
+
+Bundle the e2e in-page span recorder into e2e/.cache/otel-recorder.js (skipped while up to date)
 
 ## `fixtures`
 

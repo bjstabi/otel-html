@@ -2,7 +2,7 @@ import type { Span } from '@opentelemetry/api';
 import { test as playwrightTest, type TestInfo } from '@playwright/test';
 import { startTestSdk, type TestTracing } from '../test-support/otel/sdk.js';
 import { baseUrlFor, type ReportName, type UrlKind } from './fixture.js';
-import { endTestSpan, startTestSpan, type TestSpanInfo } from './otel.js';
+import { endTestSpan, instrumentContext, recordsViewer, startTestSpan, type TestSpanInfo } from './otel.js';
 
 function kindOf(projectName: string): UrlKind {
   const kind = projectName.split('-').at(-1);
@@ -46,6 +46,19 @@ const base = playwrightTest.extend<
 });
 
 export const test = base.extend<{ reportUrl: (name: ReportName) => string }>({
+  // The viewer's spans are recorded in every page of the test's context, as children of the test span. The recorder
+  // settles before the base `context` closes it, which is before the test span ends (fixtures tear down in reverse).
+  context: async ({ context, otelTracing, otelTestSpan }, use, testInfo) => {
+    const info = spanInfo(testInfo);
+    if (otelTracing === undefined || otelTestSpan === undefined || !recordsViewer(info)) {
+      await use(context);
+      return;
+    }
+    const recorder = await instrumentContext(context, otelTracing, otelTestSpan);
+    await use(context);
+    const { dropped } = await recorder.settle();
+    if (dropped > 0) otelTestSpan.setAttribute('otel_html.viewer.spans.dropped', dropped);
+  },
   baseURL: async ({ baseURL: _unused }, use, testInfo) => {
     await use(baseUrlFor(kindOf(testInfo.project.name)));
   },
