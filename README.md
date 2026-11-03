@@ -754,7 +754,7 @@ Playwright over the fixture reports, per browser (--browser chromium|firefox|web
 Two passes: the `<browser>-file` and `<browser>-http` projects in parallel (`-http` runs only specs tagged HTTP), then the
 `<browser>-perf-file` project (@perf tests) alone with one worker. Only Chromium has `-http` and `-perf-file`, and
 Firefox and WebKit leave out e2e/scale.spec.ts (playwright.config.ts). Both passes run; the task fails if either does.
-The perf pass is skipped when the selection lists no @perf test. The perf pass writes its artifacts to test-results/perf, so it does not clear the first pass's failures. Playwright args after `--` go to both passes (`mise run test:e2e --browser chromium -- e2e/scale.spec.ts`);
+The perf pass is skipped for a browser without a `-perf-file` project. The perf pass writes its artifacts to test-results/perf, so it does not clear the first pass's failures. Playwright args after `--` go to both passes (`mise run test:e2e --browser chromium -- e2e/scale.spec.ts`);
 narrow the browsers with `--browser`, not `--project`, which would add to the two passes' own projects.
 The scale reports (e2e:fixtures:scale, ~15 s cold, ~35 s on CI) are built only when the selection includes e2e/scale.spec.ts, decided
 by `playwright test --list` with the same args; a direct `playwright test e2e/scale.spec.ts` needs that task run first.
