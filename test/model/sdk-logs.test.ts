@@ -29,6 +29,8 @@ function collectLogs(): ReadableLogRecord[] {
     severityNumber: SeverityNumber.INFO,
     severityText: 'INFO',
     body: 'hello',
+    // Explicit: under a test SDK the worker has an active span, which an emit without a context would pick up.
+    context: ROOT_CONTEXT,
     attributes: {
       s: 'str',
       i: 42,

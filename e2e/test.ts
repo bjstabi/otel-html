@@ -1,5 +1,8 @@
-import { test as base } from '@playwright/test';
+import type { Span } from '@opentelemetry/api';
+import { test as playwrightTest, type TestInfo } from '@playwright/test';
+import { startTestSdk, type TestTracing } from '../test-support/otel/sdk.js';
 import { baseUrlFor, type ReportName, type UrlKind } from './fixture.js';
+import { endTestSpan, instrumentContext, recordsViewer, startTestSpan, type TestSpanInfo } from './otel.js';
 
 function kindOf(projectName: string): UrlKind {
   const kind = projectName.split('-').at(-1);
@@ -7,7 +10,55 @@ function kindOf(projectName: string): UrlKind {
   return kind;
 }
 
+function spanInfo(testInfo: TestInfo): TestSpanInfo {
+  return {
+    titlePath: testInfo.titlePath.slice(1),
+    file: testInfo.titlePath[0] ? `e2e/${testInfo.titlePath[0]}` : testInfo.file,
+    project: testInfo.project.name,
+    retry: testInfo.retry,
+    tags: testInfo.tags,
+  };
+}
+
+/** The base `test` plus the OpenTelemetry fixtures: a worker SDK and a span per test (both undefined without an endpoint). */
+const base = playwrightTest.extend<
+  { otelTestSpan: Span | undefined },
+  { otelTracing: TestTracing | undefined }
+>({
+  otelTracing: [
+    async ({ playwright: _unused }, use) => {
+      const tracing = startTestSdk(process.env, 'playwright');
+      await use(tracing);
+      await tracing?.shutdown();
+    },
+    { scope: 'worker', auto: true },
+  ],
+  otelTestSpan: [
+    async ({ otelTracing }, use, testInfo) => {
+      const span = otelTracing && startTestSpan(otelTracing, spanInfo(testInfo));
+      await use(span);
+      if (span === undefined) return;
+      const { status = 'interrupted', error } = testInfo;
+      endTestSpan(span, error === undefined ? { status } : { status, error });
+    },
+    { auto: true },
+  ],
+});
+
 export const test = base.extend<{ reportUrl: (name: ReportName) => string }>({
+  // The viewer's spans are recorded in every page of the test's context, as children of the test span. The recorder
+  // settles before the base `context` closes it, which is before the test span ends (fixtures tear down in reverse).
+  context: async ({ context, otelTracing, otelTestSpan }, use, testInfo) => {
+    const info = spanInfo(testInfo);
+    if (otelTracing === undefined || otelTestSpan === undefined || !recordsViewer(info)) {
+      await use(context);
+      return;
+    }
+    const recorder = await instrumentContext(context, otelTracing, otelTestSpan);
+    await use(context);
+    const { dropped } = await recorder.settle();
+    if (dropped > 0) otelTestSpan.setAttribute('otel_html.viewer.spans.dropped', dropped);
+  },
   baseURL: async ({ baseURL: _unused }, use, testInfo) => {
     await use(baseUrlFor(kindOf(testInfo.project.name)));
   },
@@ -20,7 +71,10 @@ export { expect } from '@playwright/test';
 /** Test options for a spec that also runs over HTTP: `test('title', HTTP, async ...)`. Untagged tests run over file:// only. */
 export const HTTP = { tag: '@http' } as const;
 
-/** Same as `test`, but `baseURL` points at the hostile-content report. */
+/**
+ * Same as `test` (test spans included), but `baseURL` points at the hostile-content report. It deliberately lacks the
+ * recorder `context` override: the in-page binding would take input from hostile content, so no viewer spans here.
+ */
 export const hostileTest = base.extend({
   baseURL: async ({ baseURL: _unused }, use, testInfo) => {
     await use(baseUrlFor(kindOf(testInfo.project.name), 'hostile'));

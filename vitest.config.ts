@@ -1,5 +1,7 @@
 import { globSync, readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { defineConfig, type ViteUserConfig } from 'vitest/config';
+import { tracingEnabled } from './test-support/otel/enabled.ts';
 
 /**
  * Timing-sensitive tests (budgets scaled by OTEL_HTML_PERF_FACTOR) carry `@perf` in their name. The default run skips
@@ -15,6 +17,13 @@ const perfFiles = globSync('test/**/*.test.{ts,tsx}').filter((f) =>
 const config: ViteUserConfig = defineConfig({
   test: {
     passWithNoTests: true,
+    // Vitest's own spans (`vitest.test_run`, `run.test`, ...), exported when an OTLP endpoint is set.
+    experimental: {
+      openTelemetry: {
+        enabled: tracingEnabled(process.env),
+        sdkPath: fileURLToPath(new URL('./test-support/otel/vitest-sdk.ts', import.meta.url)),
+      },
+    },
     testNamePattern: perfPass ? new RegExp(PERF_TAG) : new RegExp(`^(?!.*${PERF_TAG})`),
     fileParallelism: !perfPass,
     globalSetup: ['test-support/perf-global-setup.ts'],

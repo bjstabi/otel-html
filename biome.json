@@ -49,7 +49,7 @@
   },
   "overrides": [
     {
-      "includes": ["*.config.ts", "*.config.js", "e2e/global-setup.ts"],
+      "includes": ["*.config.ts", "*.config.js", "e2e/global-setup.ts", "test-support/otel/vitest-sdk.ts"],
       "linter": { "rules": { "style": { "noDefaultExport": "off" } } }
     },
     {
@@ -64,6 +64,26 @@
         "src/viewer/**"
       ],
       "linter": { "rules": { "correctness": { "noNodejsModules": "error" } } }
+    },
+    {
+      "includes": ["e2e/**", "!e2e/test.ts"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "paths": {
+                  "@playwright/test": {
+                    "importNames": ["test", "expect"],
+                    "message": "take test from ./test.js"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     },
     {
       "includes": ["src/**"],

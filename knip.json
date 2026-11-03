@@ -5,9 +5,17 @@
     "src/**/*.{ts,tsx}",
     "test/**/*.test.ts",
     "test/**/*.test-d.ts",
-    "e2e/**/*.spec.ts"
+    "e2e/**/*.spec.ts",
+    "e2e/otel-page/recorder.ts",
+    "test-support/otel/vitest-sdk.ts"
   ],
-  "project": ["scripts/**/*.ts", "src/**/*.{ts,tsx,css}", "test/**/*.ts", "e2e/**/*.ts"],
-  "ignoreDependencies": ["@commitlint/cli"],
+  "project": [
+    "scripts/**/*.ts",
+    "src/**/*.{ts,tsx,css}",
+    "test/**/*.ts",
+    "e2e/**/*.ts",
+    "test-support/otel/**/*.ts"
+  ],
+  "ignoreDependencies": ["@commitlint/cli", "@opentelemetry/exporter-trace-otlp-(grpc|http|proto)"],
   "ignoreBinaries": ["mise"]
 }

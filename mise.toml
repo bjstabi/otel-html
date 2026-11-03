@@ -411,10 +411,16 @@ run = "pnpm exec vite build"
 description = "Build the library, then the viewer, into dist/"
 depends = ["build:viewer"]
 
+[tasks."e2e:otel-recorder"]
+description = "Bundle the e2e in-page span recorder into e2e/.cache/otel-recorder.js (skipped while up to date)"
+sources = ["@group:deps", "e2e/otel-page/**"]
+outputs = ["e2e/.cache/otel-recorder.js"]
+run = "bun build e2e/otel-page/recorder.ts --target browser --format iife --minify --outfile e2e/.cache/otel-recorder.js"
+
 [tasks."e2e:fixtures"]
 description = """Build the e2e fixture reports into e2e/.reports/ (skipped while up to date; --force rebuilds)
 All but `scale` and `huge`, which e2e:fixtures:scale builds; about a second after `build`."""
-depends = ["build"]
+depends = ["build", "e2e:otel-recorder"]
 sources = [
   "@group:deps",
   "dist/**",

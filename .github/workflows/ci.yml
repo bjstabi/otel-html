@@ -210,6 +210,8 @@ jobs:
       # The job shell wraps these in `otel-html run`; the exit code is Playwright's.
       # --skip-deps: dist/ was built by the Build step above and must not be cleaned under the running job shell,
       # so the fixture reports are built here, once, and test:e2e's own e2e:fixtures dependency is skipped.
+      # --skip-deps also skips e2e:fixtures' own e2e:otel-recorder dependency, which e2e/otel.spec.ts needs.
+      - run: mise run --skip-deps e2e:otel-recorder
       - run: mise run --skip-deps e2e:fixtures
       # `--browser` selects the `<browser>-file` and (chromium) `-http` projects, then the chromium `-perf-file` pass.
       - run: mise run --skip-deps test:e2e --browser ${{ matrix.project }}
