@@ -9,6 +9,8 @@ export type SiteRun = {
   conclusion: string;
   headSha: string;
   headBranch: string;
+  /** When the run started; absent in entries written before it was recorded. */
+  startedAt?: string;
   completedAt: string;
   runUrl: string;
   /** Site-relative folder of the run's report, e.g. `pr/12/runs/123`. */
@@ -39,6 +41,7 @@ const siteRunSchema = z.object({
   conclusion: z.string(),
   headSha: z.string(),
   headBranch: z.string(),
+  startedAt: z.string().exactOptional(),
   completedAt: z.string(),
   runUrl: z.string(),
   reportPath: z.string(),
@@ -92,6 +95,50 @@ export const slug = (name: string): string =>
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '') || 'workflow';
+
+/** A shields.io endpoint badge (https://shields.io/badges/endpoint-badge). */
+export type Badge = { schemaVersion: 1; label: string; message: string; color: string };
+
+/** `52s`, `4m12s`, `1h03m`; a negative duration is `0s`. */
+export function formatRunDuration(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m${String(seconds % 60).padStart(2, '0')}s`;
+  return `${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, '0')}m`;
+}
+
+/** The badge of a run: its conclusion's mark and color, then its duration when its start is known. */
+export function badgeFor(run: SiteRun): Badge {
+  const failed = ['failure', 'timed_out', 'startup_failure'].includes(run.conclusion);
+  const [mark, color] =
+    run.conclusion === 'success'
+      ? ['✓', 'brightgreen']
+      : failed
+        ? ['✗', 'red']
+        : [run.conclusion, 'lightgrey'];
+  const duration =
+    run.startedAt === undefined
+      ? undefined
+      : formatRunDuration(Date.parse(run.completedAt) - Date.parse(run.startedAt));
+  return {
+    schemaVersion: 1,
+    label: `${run.workflow ?? 'ci'} report`,
+    message: duration === undefined ? mark : `${mark} ${duration}`,
+    color,
+  };
+}
+
+/** The channel's badge files by name, `badge-<slug(workflow)>.json`, from each workflow's newest run. */
+export function channelBadges(channel: Channel): Record<string, Badge> {
+  const badges: Record<string, Badge> = {};
+  for (const run of channel.runs) {
+    if (run.workflow === undefined) continue;
+    const name = `badge-${slug(run.workflow)}.json`;
+    if (!(name in badges)) badges[name] = badgeFor(run);
+  }
+  return badges;
+}
 
 export const reportUrl = (baseUrl: string, reportPath: string): string => `${baseUrl}/${reportPath}/`;
 

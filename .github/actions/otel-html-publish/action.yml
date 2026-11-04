@@ -40,6 +40,12 @@ inputs:
       separate job that checks out the gh-pages tip, under `concurrency: {group: pages, cancel-in-progress: false}`:
       that form survives GitHub cancelling superseded pending runs in the `pages` group.
     default: "true"
+  preview:
+    description: >-
+      Screenshot the default branch's rolling report (light and dark, `preview-light.png` and `preview-dark.png` in its
+      folder) for the README, when this run rebuilt it. Installs Playwright's Chromium (about 1 minute); needs Node and
+      passwordless sudo on the runner. A failed install or screenshot is a warning. Requires `target: github-pages`.
+    default: "false"
   cleanup-pr:
     description: >-
       A pull request number. When set, the action removes that pull request's reports (`pr/<number>/`) from the site instead of
@@ -172,6 +178,17 @@ runs:
       uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
       with:
         token: ${{ inputs.token }}
+    # The default branch's report is screenshotted after `ci site` rebuilds it (site-publish.sh). A failed install only
+    # skips the screenshot: the publish goes on.
+    - name: Install the preview browser
+      id: browser
+      if: inputs.preview == 'true' && inputs.cleanup-pr == '' && inputs.target == 'github-pages' && steps.report.outputs.published != 'false'
+      continue-on-error: true
+      shell: bash
+      run: |
+        dir=$RUNNER_TEMP/otel-html-playwright
+        npm install --prefix "$dir" --no-audit --no-fund @playwright/test@1.64.1
+        "$dir/node_modules/.bin/playwright" install --with-deps chromium
     # Places the report on a fresh copy of the gh-pages tip and pushes it under a lease (site-lease.sh). A run with no
     # channel (a branch with no open PR) is announced by `ci site` and not pushed. A default-branch run goes to
     # `branch/<name>/` and a pull request's to `pr/<number>/`: each a rolling report over every workflow's runs.
@@ -189,10 +206,19 @@ runs:
         PR_RETENTION: ${{ inputs.pr-retention }}
         BASE_URL: ${{ steps.pages.outputs.base_url }}
         GITHUB_TOKEN: ${{ inputs.token }}
+        # Empty skips the screenshots (preview off, or the browser install failed).
+        PREVIEW_COMMAND: ${{ steps.browser.outcome == 'success' && format('node {0}/preview.mjs', github.action_path) || '' }}
+        PLAYWRIGHT_FROM: ${{ runner.temp }}/otel-html-playwright/package.json
+        PREVIEW: ${{ inputs.preview }}
+        BROWSER: ${{ steps.browser.outcome }}
       run: |
+        if [ "$PREVIEW" = true ] && [ "$BROWSER" != success ]; then
+          echo "::warning::otel-html preview: the browser install failed; no screenshot"
+        fi
         # CMD is deliberately unquoted: it may be a command with arguments, such as `node dist/cli/main.js`.
         # shellcheck disable=SC2086
         "$GITHUB_ACTION_PATH/site-lease.sh" "$SITE" "otel-html: publish run $RUN_ID" published=true \
+          "$GITHUB_ACTION_PATH/site-publish.sh" "$SITE" \
           $CMD ci site --site "$SITE" --report "$REPORT" --run-id "$RUN_ID" --repository "$GITHUB_REPOSITORY" \
           --base-url "$BASE_URL" --retention "$RETENTION" --pr-retention "$PR_RETENTION" --config "$CONFIG"
     # A run that reached no site page (no channel, or a push that gave up after five attempts, which fails the step above)

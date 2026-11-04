@@ -30,7 +30,14 @@ const config: PlaywrightTestConfig = defineConfig({
           { name: `${b.name}-http`, use: b.device, grep: /@http/, grepInvert: /@perf/ },
           { name: `${b.name}-perf-file`, use: b.device, grep: /@perf/ },
         ]
-      : [{ name: `${b.name}-file`, use: b.device, grepInvert: /@perf/, testIgnore: 'scale.spec.ts' }],
+      : [
+          {
+            name: `${b.name}-file`,
+            use: b.device,
+            grepInvert: /@perf/,
+            testIgnore: ['scale.spec.ts', 'preview.spec.ts'],
+          },
+        ],
   ),
 });
 
