@@ -42,6 +42,7 @@ import {
   METRIC_HIST,
   ORPHAN_EXEMPLAR_TRACE,
 } from '../test-support/fixture-ids.js';
+import { buildCi } from './ci-fixture.js';
 
 const OUT = new URL('../fixtures/', import.meta.url);
 /** 2023-11-14T22:13:20Z, the same fixed instant the e2e inputs use. */
@@ -737,6 +738,7 @@ async function buildLinked(): Promise<{ traces: string; logs: string }> {
 }
 
 const METRICS_SEED = 0x3e7c5;
+const CI_SEED = 0xc1;
 const COLLECTIONS = 10;
 const COLLECTION_STEP_S = 10;
 const ROUTES = ['/checkout', '/cart', '/health'] as const;
@@ -1089,6 +1091,7 @@ const linked = await buildLinked();
 write('linked-traces', linked.traces);
 write('linked-logs', linked.logs);
 write('metrics', await buildMetrics());
+write('ci', buildCi(prng(CI_SEED), T0_SECONDS));
 write('empty', '{"resourceSpans":[]}\n');
 if (!existsSync(new URL('hostile.otlp.json', OUT)))
   throw new Error('fixtures/hostile.otlp.json is hand-authored and missing; restore it from git');

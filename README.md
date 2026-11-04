@@ -312,7 +312,7 @@ A `metric` widget with `runBy` is a run chart: one point per CI run instead of o
       by: ['attributes["cicd.pipeline.task.name"]']
 ```
 
-[`fixtures/dashboards.otel-html.yaml`](fixtures/dashboards.otel-html.yaml) has one widget of each type.
+[`fixtures/dashboards.otel-html.yaml`](fixtures/dashboards.otel-html.yaml) has one widget of each type on its Checkout dashboard, and the CI dashboard of `.github/otel-html-ci.yaml`; `mise run demo` includes both, on made-up data.
 
 ## Report layout and hosting
 
@@ -682,9 +682,11 @@ Unit coverage from the suite without @perf, per vitest project, into coverage/un
 
 - **Usage:** `demo`
 
-Open the small, linked-* and metrics fixtures as one report in a browser (not for CI)
-Converts them with fixtures/dashboards.otel-html.yaml and opens the report on the Checkout dashboard. In code-server it
-serves the report through the port proxy instead, until Ctrl-C. Interactive only: refuses to run in CI.
+Open the small, linked-*, metrics and ci fixtures as one report in a browser (not for CI)
+Converts them with fixtures/dashboards.otel-html.yaml (the Checkout and CI dashboards) and opens the report on the
+Checkout dashboard. In code-server or over SSH it serves the report over HTTP instead (code-server's port proxy, or
+localhost for VS Code's port forwarding; over plain SSH, forward the printed port), until Ctrl-C. Interactive only:
+refuses to run in CI.
 
 ## `e2e:fixtures`
 

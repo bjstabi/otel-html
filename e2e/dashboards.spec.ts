@@ -27,18 +27,19 @@ async function brush(page: Page, timeline: Locator, from: number, to: number): P
 }
 
 test(
-  'the list shows Fusion (built-in) and Checkout (its file, starred)',
+  'the list shows Fusion (built-in), Checkout (its file, starred) and CI',
   HTTP,
   async ({ page, reportUrl }) => {
     const problems = watchProblems(page);
     await page.goto(`${reportUrl('dashboards')}/index.html#/dashboards`);
     const rows = page.getByRole('table').getByRole('row');
-    await expect(rows).toHaveCount(3);
+    await expect(rows).toHaveCount(4);
     await expect(rows.nth(1)).toContainText('Fusion');
     await expect(rows.nth(1)).toContainText('BUILT-IN');
     await expect(rows.nth(2)).toContainText('Checkout');
     await expect(rows.nth(2)).toContainText('dashboards.otel-html.yaml');
     await expect(rows.nth(2).getByRole('img', { name: 'Default dashboard' })).toBeVisible();
+    await expect(rows.nth(3)).toContainText('CI');
     await expect(rows.nth(1).getByRole('img', { name: 'Default dashboard' })).toHaveCount(0);
 
     // `g d` and the home route (`viewer.home: dashboards`) both open the configured default.

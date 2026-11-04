@@ -593,18 +593,20 @@ bun scripts/bench-metrics.ts "$@"
 description = "Regenerate fixtures/*.otlp.json with the OpenTelemetry SDK"
 run = "bun scripts/fixtures.ts"
 
-# Converts the `small`, `linked-*` and `metrics` fixtures into one report with the fixture dashboard config and opens it in the browser (on the Checkout dashboard). In code-server, serves it through the port proxy instead, until Ctrl-C. Interactive only: refuses to run in CI.
+# Converts the `small`, `linked-*`, `metrics` and `ci` fixtures into one report with the fixture dashboard config and opens it in the browser (on the Checkout dashboard). In code-server or over SSH, serves it over HTTP instead (through code-server's port proxy, or on localhost for VS Code's port forwarding), until Ctrl-C. Interactive only: refuses to run in CI.
 [tasks.demo]
-description = """Open the small, linked-* and metrics fixtures as one report in a browser (not for CI)
-Converts them with fixtures/dashboards.otel-html.yaml and opens the report on the Checkout dashboard. In code-server it
-serves the report through the port proxy instead, until Ctrl-C. Interactive only: refuses to run in CI."""
+description = """Open the small, linked-*, metrics and ci fixtures as one report in a browser (not for CI)
+Converts them with fixtures/dashboards.otel-html.yaml (the Checkout and CI dashboards) and opens the report on the
+Checkout dashboard. In code-server or over SSH it serves the report over HTTP instead (code-server's port proxy, or
+localhost for VS Code's port forwarding; over plain SSH, forward the printed port), until Ctrl-C. Interactive only:
+refuses to run in CI."""
 shell = "bash -c"
 depends = ["build"]
 run = """
 if [ -n "$CI" ]; then echo 'demo opens a browser and does not run in CI' >&2; exit 1; fi
 out="${TMPDIR:-/tmp}/otel-html-demo"
 rm -rf "$out"
-node dist/cli/main.js convert fixtures/small.otlp.json fixtures/linked-traces.otlp.json fixtures/linked-logs.otlp.json fixtures/metrics.otlp.json --out "$out" --title 'otel-html demo' --config fixtures/dashboards.otel-html.yaml
-if [ -n "$VSCODE_PROXY_URI" ]; then exec bun scripts/demo-serve.ts "$out"; fi
+node dist/cli/main.js convert fixtures/small.otlp.json fixtures/linked-traces.otlp.json fixtures/linked-logs.otlp.json fixtures/metrics.otlp.json fixtures/ci.otlp.json --out "$out" --title 'otel-html demo' --config fixtures/dashboards.otel-html.yaml
+if [ -n "$VSCODE_PROXY_URI$SSH_CONNECTION" ]; then exec bun scripts/demo-serve.ts "$out"; fi
 if command -v open >/dev/null 2>&1; then open "$out/index.html"; else xdg-open "$out/index.html"; fi
 """

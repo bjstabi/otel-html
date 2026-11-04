@@ -1,4 +1,6 @@
-# Dashboard config for the linked-* and metrics fixtures: `mise run demo` and the e2e suite convert them with it.
+# Dashboard config for the linked-*, metrics and ci fixtures: `mise run demo` converts them all with it, the e2e suite
+# all but ci.
+# The CI dashboard is .github/otel-html-ci.yaml's, verbatim (test/cli/ci/dashboard-config.test.ts keeps them equal).
 viewer:
   defaultDashboard: checkout
   home: dashboards
@@ -58,6 +60,88 @@ dashboards:
         h: 8
         signal: logs
         groupBy: service.name
+
+  - id: ci
+    title: CI
+    variables:
+      - key: cicd.pipeline.name
+        label: workflow
+      - key: cicd.pipeline.run.id
+        label: run
+      - key: cicd.pipeline.task.name
+        label: job
+    widgets:
+      - type: timeline
+        x: 0
+        y: 0
+        w: 12
+        h: 6
+      - type: metric
+        title: Job duration
+        x: 0
+        y: 6
+        w: 12
+        h: 20
+        runBy: resource.attributes["cicd.pipeline.run.id"]
+        failedWhen: attributes["cicd.pipeline.task.run.result"] == "failure" or attributes["cicd.pipeline.task.run.result"] == "timeout" or attributes["cicd.pipeline.task.run.result"] == "error"
+        queries:
+          - id: a
+            metric: cicd.pipeline.task.run.duration
+            where: resource.attributes["cicd.pipeline.name"] == "ci"
+            show: avg
+            by: ['attributes["cicd.pipeline.task.name"]']
+        display: lines
+      - type: metric
+        title: Queue time
+        x: 0
+        y: 38
+        w: 12
+        h: 12
+        runBy: resource.attributes["cicd.pipeline.run.id"]
+        controls:
+          split: false
+        queries:
+          - id: a
+            metric: cicd.pipeline.task.run.queue.duration
+            where: resource.attributes["cicd.pipeline.name"] == "ci"
+            show: avg
+            by: ['attributes["cicd.pipeline.task.name"]']
+      - type: toplist
+        # Steps counts the publisher's step spans by name; the query keeps it to them.
+        title: Steps
+        x: 0
+        y: 26
+        w: 6
+        h: 12
+        signal: spans
+        query: instrumentation_scope.name == "otel-html-ci" and attributes["github.job.step.number"] != nil
+        groupBy: span.name
+      - type: toplist
+        # Slowest steps ranks the same spans by their longest duration.
+        title: Slowest steps
+        x: 6
+        y: 26
+        w: 6
+        h: 12
+        signal: spans
+        query: instrumentation_scope.name == "otel-html-ci" and attributes["github.job.step.number"] != nil
+        groupBy: span.name
+        measure: duration.max
+      - type: traces
+        title: Runs
+        x: 0
+        y: 50
+        w: 6
+        h: 10
+        mode: traces
+        query: IsRootSpan()
+      - type: logs
+        title: Warnings and errors
+        x: 6
+        y: 50
+        w: 6
+        h: 10
+        query: severity_number >= 13
 
 views:
   - id: slow-spans
