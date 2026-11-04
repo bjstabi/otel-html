@@ -238,11 +238,18 @@ function buildJob(
   };
 
   add('Set up job', 1);
+  let timedOut = false;
   for (const step of plan.steps) {
     // The work step varies most from run to run; the rest only a little.
     const jitter = step.main === true ? 0.8 + rand() * 0.5 : 0.85 + rand() * 0.35;
     const seconds = Math.round(step.s * jitter);
-    if (step.main === true && timesOut) {
+    // Past the timeout only the `if: always()` collect step and the post steps run; the rest are skipped.
+    if (timedOut && !step.name.startsWith('Post ') && !step.name.includes('otel-html-collect')) {
+      add(step.name, 0, 'skipped');
+    } else if (timedOut) {
+      add(step.name, seconds);
+    } else if (step.main === true && timesOut) {
+      timedOut = true;
       add(step.name, started + JOB_TIMEOUT_S - t, 'cancelled');
       say(
         t - 1,

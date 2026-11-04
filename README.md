@@ -685,7 +685,8 @@ Unit coverage from the suite without @perf, per vitest project, into coverage/un
 Open the small, linked-*, metrics and ci fixtures as one report in a browser (not for CI)
 Converts them with fixtures/dashboards.otel-html.yaml (the Checkout and CI dashboards) and opens the report on the
 Checkout dashboard. In code-server or over SSH it serves the report over HTTP instead (code-server's port proxy, or
-localhost for VS Code's port forwarding), until Ctrl-C. Interactive only: refuses to run in CI.
+localhost for VS Code's port forwarding; over plain SSH, forward the printed port), until Ctrl-C. Interactive only:
+refuses to run in CI.
 
 ## `e2e:fixtures`
 

@@ -3,7 +3,15 @@ import { describe, expect, test } from 'vitest';
 import { buildCi, CI_RUNS, FAILING_JOB, TIMING_OUT_JOB } from '../../scripts/ci-fixture.js';
 
 type Attr = { key: string; value: { stringValue?: string; intValue?: string } };
-type Span = { name: string; spanId: string; attributes: Attr[]; status?: { code: number } };
+type Span = {
+  name: string;
+  spanId: string;
+  parentSpanId?: string;
+  startTimeUnixNano: string;
+  endTimeUnixNano: string;
+  attributes: Attr[];
+  status?: { code: number };
+};
 type Line = {
   resourceSpans?: { resource: { attributes: Attr[] }; scopeSpans: { spans: Span[] }[] }[];
   resourceLogs?: { scopeLogs: { logRecords: { severityNumber: number; spanId?: string }[] }[] }[];
@@ -47,6 +55,19 @@ describe('fixtures/ci.otlp.json', () => {
     expect(skipped.length).toBeGreaterThan(0);
     expect(new Set(skipped.map((j) => j.name))).toEqual(new Set(['coverage']));
     expect(new Set(jobs.map((j) => j.result))).toEqual(new Set(['success', 'failure', 'timeout', 'skip']));
+  });
+
+  test('past the timeout only the collect and post steps run', () => {
+    const job = spans.find((s) => value(s.attrs, 'cicd.pipeline.task.run.result') === 'timeout')?.span;
+    const steps = spans.filter((s) => s.span.parentSpanId === job?.spanId && s.span.name !== 'queued');
+    const cancelled = steps.findIndex((s) => s.span.status?.code === 2);
+    expect(cancelled).toBeGreaterThan(0);
+    const ran = steps
+      .slice(cancelled + 1)
+      .filter((s) => BigInt(s.span.endTimeUnixNano) > BigInt(s.span.startTimeUnixNano))
+      .map((s) => s.span.name);
+    expect(ran.length).toBeGreaterThan(0);
+    for (const name of ran) expect(name).toMatch(/^Post |otel-html-collect/);
   });
 
   test('every error line belongs to the step that failed', () => {

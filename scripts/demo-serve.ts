@@ -26,4 +26,8 @@ const url = new URL(
 if (/\.[a-z]+$/i.test(url.hostname)) url.hostname = `${url.hostname}.`;
 process.stdout.write(`otel-html demo: ${url.href}\nCtrl-C to stop.\n`);
 
-if (browser !== undefined) spawn(browser, [url.href], { stdio: 'ignore', detached: true }).unref();
+// A `$BROWSER` that cannot start (a stale VS Code IPC socket, a missing binary) leaves the printed URL to open by hand.
+if (browser !== undefined)
+  spawn(browser, [url.href], { stdio: 'ignore', detached: true })
+    .on('error', () => {})
+    .unref();
