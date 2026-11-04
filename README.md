@@ -312,7 +312,7 @@ A `metric` widget with `runBy` is a run chart: one point per CI run instead of o
       by: ['attributes["cicd.pipeline.task.name"]']
 ```
 
-[`fixtures/dashboards.otel-html.yaml`](fixtures/dashboards.otel-html.yaml) has one widget of each type on its Checkout dashboard, and the CI dashboard of `.github/otel-html-ci.yaml`; `mise run demo` opens both on made-up data.
+[`fixtures/dashboards.otel-html.yaml`](fixtures/dashboards.otel-html.yaml) has one widget of each type on its Checkout dashboard, and the CI dashboard of `.github/otel-html-ci.yaml`; `mise run demo` includes both, on made-up data.
 
 ## Report layout and hosting
 

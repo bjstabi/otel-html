@@ -1,4 +1,4 @@
-// The made-up CI history behind fixtures/ci.otlp.json: runs of this repo's `ci` workflow, its real job and step names,
+// The made-up CI history behind fixtures/ci.otlp.json: runs of this repo's `ci` workflow, its job and step names,
 // timings near a real run's, described as the Actions API returns them and turned into OTLP by the code `otel-html ci
 // report` uses, so the data carries what a real CI report does. One OTLP/JSON request per line.
 import type { ApiJob, ApiRun, ApiStep } from '../src/cli/ci/github-api.js';
@@ -13,9 +13,13 @@ const REPO_URL = `https://github.com/${REPOSITORY}`;
 export const CI_RUNS = 12;
 const RUN_EVERY_S = 3 * 3600;
 const FIRST_RUN_ID = 41_600_000_000;
-/** The run whose `e2e (webkit)` fails, and the one whose `unit-os (windows-latest)` hits its timeout. */
+/** The run whose `FAILING_JOB` fails, and the one whose `TIMING_OUT_JOB` hits its 15-minute `timeout-minutes`. */
 export const FAILED_RUN = 4;
+export const FAILING_JOB = 'e2e (webkit)';
 export const TIMED_OUT_RUN = 9;
+export const TIMING_OUT_JOB = 'binary (windows-latest, windows-x64, .exe)';
+/** ci.yml runs `coverage` on pushes only; on other events the API lists it as skipped, with no steps. */
+const PUSH_ONLY = 'coverage';
 /** The run that waited for runners. */
 const SLOW_QUEUE_RUN = 7;
 const JOB_TIMEOUT_S = 15 * 60;
@@ -29,6 +33,9 @@ const CODECOV = 'Run codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd6038351
 type StepPlan = { name: string; s: number; main?: true };
 /** `afterChanges`: the job `needs: changes`, so it is created when `changes` completes. */
 type JobPlan = { name: string; steps: StepPlan[]; afterChanges: boolean };
+
+const containers: StepPlan = { name: 'Initialize containers', s: 25 };
+const stopContainers: StepPlan = { name: 'Stop containers', s: 0 };
 
 const setup = (s: number): StepPlan[] => [
   { name: `Run ${CHECKOUT}`, s: 2 },
@@ -49,7 +56,7 @@ const e2e = (name: string, run: StepPlan[]): JobPlan => ({
   name,
   afterChanges: true,
   steps: [
-    { name: 'Initialize containers', s: 25 },
+    containers,
     ...setup(15),
     { name: `Run ${CACHE}`, s: 0 },
     ...otelSetup,
@@ -58,7 +65,7 @@ const e2e = (name: string, run: StepPlan[]): JobPlan => ({
     ...run,
     { name: UPLOAD, s: 2 },
     ...teardown(true),
-    { name: 'Stop containers', s: 0 },
+    stopContainers,
   ],
 });
 
@@ -133,9 +140,25 @@ const JOBS: readonly JobPlan[] = [
       { name: UPLOAD, s: 0 },
     ]),
   ),
-  e2e('e2e-metrics-scale', [
-    { name: 'Run mise run --skip-deps test:e2e e2e/scale.spec.ts', s: 55, main: true },
-  ]),
+  {
+    name: 'e2e-metrics-scale',
+    afterChanges: true,
+    steps: [
+      containers,
+      ...setup(16),
+      { name: `Run ${CACHE}`, s: 1 },
+      ...otelSetup,
+      { name: 'Run mise run --skip-deps e2e:fixtures', s: 6 },
+      {
+        name: "Run pnpm exec playwright test e2e/scale.spec.ts --project chromium-perf-file --grep 'metrics scale' --workers=1",
+        s: 55,
+        main: true,
+      },
+      { name: UPLOAD, s: 0 },
+      ...teardown(true),
+      stopContainers,
+    ],
+  },
   {
     name: 'unit-os (windows-latest)',
     afterChanges: true,
@@ -169,12 +192,31 @@ function buildJob(
   plan: JobPlan,
   createdAt: number,
   runId: number,
+  event: string,
 ): Built {
   const id = runId * 100 + index;
+  if (plan.name === PUSH_ONLY && event !== 'push') {
+    const at = iso(createdAt);
+    return {
+      job: {
+        id,
+        name: plan.name,
+        status: 'completed',
+        runner_name: null,
+        conclusion: 'skipped',
+        created_at: at,
+        started_at: at,
+        completed_at: at,
+        html_url: `${REPO_URL}/actions/runs/${runId}/job/${id}`,
+        steps: [],
+      },
+      log: '',
+    };
+  }
   const queue = run === SLOW_QUEUE_RUN ? 30 + Math.round(rand() * 60) : 1 + Math.round(rand() * 3);
   const started = createdAt + queue;
-  const fails = run === FAILED_RUN && plan.name === 'e2e (webkit)';
-  const timesOut = run === TIMED_OUT_RUN && plan.name === 'unit-os (windows-latest)';
+  const fails = run === FAILED_RUN && plan.name === FAILING_JOB;
+  const timesOut = run === TIMED_OUT_RUN && plan.name === TIMING_OUT_JOB;
   const steps: ApiStep[] = [];
   const log: string[] = [];
   let line = 0;
@@ -203,17 +245,17 @@ function buildJob(
     if (step.main === true && timesOut) {
       add(step.name, started + JOB_TIMEOUT_S - t, 'cancelled');
       say(
-        t,
+        t - 1,
         `##[error]The job running on runner GitHub Actions ${id} has exceeded the maximum execution time of 15 minutes.`,
       );
     } else if (step.main === true && fails) {
       add(step.name, Math.round(seconds * 0.6), 'failure');
       say(
-        t - 2,
+        t - 3,
         '  1) [webkit] › e2e/traces.spec.ts:212:1 › the waterfall keeps its scroll position on a filter change',
       );
-      say(t - 1, '##[error]Error: expect(locator).toBeInViewport() failed');
-      say(t, '##[error]Process completed with exit code 1.');
+      say(t - 2, '##[error]Error: expect(locator).toBeInViewport() failed');
+      say(t - 1, '##[error]Process completed with exit code 1.');
     } else {
       add(step.name, seconds);
       if (step.main === true && plan.name.startsWith('e2e (') && rand() < 0.25)
@@ -222,7 +264,7 @@ function buildJob(
   }
   add('Complete job', 0);
   const conclusion = timesOut ? 'timed_out' : fails ? 'failure' : 'success';
-  if (plan.name === 'unit-os (windows-latest)' && !timesOut)
+  if (plan.name === 'unit-os (windows-latest)')
     say(t, '##[warning]The windows-latest label will move to windows-2025 on 2026-12-01.');
 
   return {
@@ -248,24 +290,26 @@ const EVENTS = ['push', 'push', 'pull_request', 'push', 'pull_request', 'schedul
 function runRequests(rand: () => number, run: number, t0Seconds: number): object[] {
   const id = FIRST_RUN_ID + run * 1_731;
   const start = t0Seconds + run * RUN_EVERY_S;
+  const event = EVENTS[run % EVENTS.length] ?? 'push';
   const built: Built[] = [];
-  const changes = buildJob(rand, run, 0, JOBS[0] as JobPlan, start, id);
+  const changes = buildJob(rand, run, 0, JOBS[0] as JobPlan, start, id, event);
   const changesEnd = Date.parse(changes.job.completed_at ?? '') / 1000;
   built.push(changes);
   for (const [i, plan] of JOBS.entries()) {
     if (i === 0) continue;
-    built.push(buildJob(rand, run, i, plan, plan.afterChanges ? changesEnd : start, id));
+    built.push(buildJob(rand, run, i, plan, plan.afterChanges ? changesEnd : start, id, event));
   }
   const jobs = built.map((b) => b.job);
   const end = Math.max(...jobs.map((j) => Date.parse(j.completed_at ?? '') / 1000)) + 2;
-  const event = EVENTS[run % EVENTS.length] ?? 'push';
   const apiRun: ApiRun = {
     id,
     run_attempt: 1,
     name: 'ci',
     event,
     status: 'completed',
-    conclusion: jobs.every((j) => j.conclusion === 'success') ? 'success' : 'failure',
+    conclusion: jobs.every((j) => j.conclusion === 'success' || j.conclusion === 'skipped')
+      ? 'success'
+      : 'failure',
     created_at: iso(start),
     run_started_at: iso(start),
     updated_at: iso(end),
@@ -280,15 +324,18 @@ function runRequests(rand: () => number, run: number, t0Seconds: number): object
   const none: ReadonlySet<number> = new Set();
   return [
     workflowTraceRequest(key, apiRun, jobs, none),
-    ...built.map(({ job, log }) =>
-      jobLogRecordsRequest({
-        key,
-        jobId: jobIdFor(job, none),
-        job,
-        text: log,
-        resource: jobResource(apiRun, job),
-      }),
-    ),
+    // A skipped job has no log, so `ci report` adds no records for it.
+    ...built
+      .filter(({ log }) => log !== '')
+      .map(({ job, log }) =>
+        jobLogRecordsRequest({
+          key,
+          jobId: jobIdFor(job, none),
+          job,
+          text: log,
+          resource: jobResource(apiRun, job),
+        }),
+      ),
     ciMetricsRequest(apiRun, jobs, ciResource(apiRun)),
   ];
 }

@@ -5,8 +5,9 @@ import { serve } from '../e2e/static-server.js';
 /**
  * Serves the `mise run demo` report over HTTP and opens it in the browser, for sessions whose browser runs on another
  * machine (code-server, or VS Code over SSH), where a `file://` path to the report on this one cannot load. In
- * code-server the URL goes through its port proxy; otherwise it is on localhost, which VS Code forwards when its
- * `$BROWSER` helper opens it (over plain SSH, forward the printed port yourself). Runs until interrupted.
+ * code-server the URL goes through its port proxy; otherwise it is on 127.0.0.1, where the server listens, which VS
+ * Code forwards when its `$BROWSER` helper opens it (over plain SSH, forward the printed port yourself). Runs until
+ * interrupted.
  *
  *   bun scripts/demo-serve.ts <report-dir>
  */
@@ -17,7 +18,7 @@ if (dir === undefined) throw new Error('usage: demo-serve.ts <report-dir>');
 const { port } = await serve([{ prefix: '', root: resolve(dir) }]);
 const url = new URL(
   proxy === undefined || proxy === ''
-    ? `http://localhost:${port}/index.html`
+    ? `http://127.0.0.1:${port}/index.html`
     : `${proxy.replace('{{port}}', String(port))}index.html`,
 );
 // A trailing dot names the same host but is another origin, outside an installed code-server app's scope: the

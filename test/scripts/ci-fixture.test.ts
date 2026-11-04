@@ -1,11 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
-import { buildCi, CI_RUNS } from '../../scripts/ci-fixture.js';
+import { buildCi, CI_RUNS, FAILING_JOB, TIMING_OUT_JOB } from '../../scripts/ci-fixture.js';
 
 type Attr = { key: string; value: { stringValue?: string; intValue?: string } };
+type Span = { name: string; spanId: string; attributes: Attr[]; status?: { code: number } };
 type Line = {
-  resourceSpans?: { resource: { attributes: Attr[] }; scopeSpans: { spans: { attributes: Attr[] }[] }[] }[];
-  resourceLogs?: { scopeLogs: { logRecords: { severityNumber: number }[] }[] }[];
+  resourceSpans?: { resource: { attributes: Attr[] }; scopeSpans: { spans: Span[] }[] }[];
+  resourceLogs?: { scopeLogs: { logRecords: { severityNumber: number; spanId?: string }[] }[] }[];
   resourceMetrics?: { scopeMetrics: { metrics: { name: string }[] }[] }[];
 };
 
@@ -23,7 +24,7 @@ const committed = lines(readFileSync(new URL('../../fixtures/ci.otlp.json', impo
 const spans = committed.flatMap((l) =>
   (l.resourceSpans ?? []).flatMap((r) =>
     r.scopeSpans.flatMap((s) =>
-      s.spans.map((span) => ({ resource: r.resource.attributes, attrs: span.attributes })),
+      s.spans.map((span) => ({ span, resource: r.resource.attributes, attrs: span.attributes })),
     ),
   ),
 );
@@ -35,13 +36,32 @@ describe('fixtures/ci.otlp.json', () => {
     expect(new Set(spans.map((s) => value(s.resource, 'cicd.pipeline.name')))).toEqual(new Set(['ci']));
   });
 
-  test('one job fails and one times out; the rest succeed', () => {
-    const results = spans
-      .map((s) => value(s.attrs, 'cicd.pipeline.task.run.result'))
-      .filter((r) => r !== undefined);
-    expect(results.filter((r) => r === 'failure')).toHaveLength(1);
-    expect(results.filter((r) => r === 'timeout')).toHaveLength(1);
-    expect(new Set(results)).toEqual(new Set(['success', 'failure', 'timeout']));
+  test('one job fails and one times out; coverage skips off push; the rest succeed', () => {
+    const jobs = spans.flatMap((s) => {
+      const result = value(s.attrs, 'cicd.pipeline.task.run.result');
+      return result === undefined ? [] : [{ name: s.span.name, result }];
+    });
+    expect(jobs.filter((j) => j.result === 'failure')).toEqual([{ name: FAILING_JOB, result: 'failure' }]);
+    expect(jobs.filter((j) => j.result === 'timeout')).toEqual([{ name: TIMING_OUT_JOB, result: 'timeout' }]);
+    const skipped = jobs.filter((j) => j.result === 'skip');
+    expect(skipped.length).toBeGreaterThan(0);
+    expect(new Set(skipped.map((j) => j.name))).toEqual(new Set(['coverage']));
+    expect(new Set(jobs.map((j) => j.result))).toEqual(new Set(['success', 'failure', 'timeout', 'skip']));
+  });
+
+  test('every error line belongs to the step that failed', () => {
+    const errorSteps = new Set(
+      spans
+        .filter((s) => value(s.attrs, 'github.job.step.number') !== undefined && s.span.status?.code === 2)
+        .map((s) => s.span.spanId),
+    );
+    const errors = committed.flatMap((l) =>
+      (l.resourceLogs ?? []).flatMap((r) =>
+        r.scopeLogs.flatMap((s) => s.logRecords.filter((x) => x.severityNumber >= 17)),
+      ),
+    );
+    expect(errors.length).toBeGreaterThan(0);
+    for (const e of errors) expect(errorSteps).toContain(e.spanId);
   });
 
   test("this repo's job names, with numbered step spans", () => {
