@@ -264,7 +264,9 @@ describe('otel-html ci site and cleanup', { timeout: 60_000 }, () => {
     run_attempt: 1,
     name,
     conclusion: 'success',
-    updated_at: '2026-01-01T00:00:00Z',
+    created_at: '2026-01-01T00:00:00Z',
+    run_started_at: '2026-01-01T00:00:10Z',
+    updated_at: '2026-01-01T00:01:02Z',
     html_url: `https://github.com/o/r/actions/runs/${id}`,
     head_branch: branch,
     head_sha: `sha${id}`,
@@ -352,6 +354,28 @@ describe('otel-html ci site and cleanup', { timeout: 60_000 }, () => {
     expect(existsSync(join(ch, 'runs/62/data/manifest.js'))).toBe(true);
   });
 
+  test("writes a badge file per workflow beside the rolling report, from each workflow's newest run", async () => {
+    const older = { ...runBody(82), conclusion: 'failure', updated_at: '2025-12-31T00:00:00Z' };
+    stubApi({ 80: runBody(80), 81: runBody(81, 'main', 'load'), 82: older });
+    const badge = (name: string): unknown =>
+      JSON.parse(readFileSync(join(site, 'branch/main', name), 'utf8'));
+    expect(await runCli(siteArgs(80), fakeIo().io, realFsDeps)).toBe(0);
+    const ci = {
+      schemaVersion: 1,
+      label: 'ci report',
+      message: '✓ 52s',
+      color: 'brightgreen',
+    };
+    expect(badge('badge-ci.json')).toEqual(ci);
+    expect(await runCli(siteArgs(81), fakeIo().io, realFsDeps)).toBe(0);
+    expect(badge('badge-ci.json')).toEqual(ci);
+    expect(badge('badge-load.json')).toMatchObject({ label: 'load report', message: '✓ 52s' });
+    expect(await runCli(siteArgs(82), fakeIo().io, realFsDeps)).toBe(0);
+    expect(badge('badge-ci.json')).toEqual(ci);
+    const index = JSON.parse(readFileSync(join(site, 'index.json'), 'utf8'));
+    expect(index.channels['branch/main'].runs[0].startedAt).toBeDefined();
+  });
+
   test('a rolling merge that fails with nothing to blame warns and leaves the redirect stub', async () => {
     stubApi({ 69: runBody(69), 70: runBody(70) });
     expect(await runCli(siteArgs(69), fakeIo().io, realFsDeps)).toBe(0);
@@ -362,7 +386,7 @@ describe('otel-html ci site and cleanup', { timeout: 60_000 }, () => {
     expect(readFileSync(join(site, 'branch/main/index.html'), 'utf8')).toContain('url=runs/70/');
     expect(existsSync(join(site, 'branch/main/runs/70/data/manifest.js'))).toBe(true);
     // the previous rolling report does not linger beside the stub
-    expect(readdirSync(join(site, 'branch/main')).sort()).toEqual(['index.html', 'runs']);
+    expect(readdirSync(join(site, 'branch/main')).sort()).toEqual(['badge-ci.json', 'index.html', 'runs']);
     expect(existsSync(join(site, 'branch/main/runs/69/data/manifest.js'))).toBe(true);
   });
 

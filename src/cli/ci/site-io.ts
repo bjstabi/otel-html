@@ -1,6 +1,6 @@
 import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { parseSiteIndex, renderLanding, type SiteIndex } from './site.js';
+import { type Channel, channelBadges, parseSiteIndex, renderLanding, type SiteIndex } from './site.js';
 
 /** The filesystem side of the published site: its index, landing page, and the report folders under it. */
 
@@ -22,6 +22,14 @@ export async function writeSite(dir: string, index: SiteIndex, repository: strin
   await writeFile(join(dir, 'index.json'), `${JSON.stringify(index, null, 2)}\n`);
   await writeFile(join(dir, 'index.html'), renderLanding(index, repository));
   await writeFile(join(dir, '.nojekyll'), '');
+}
+
+/** Writes the channel's badge files (see `channelBadges`) into `<site>/<key>/`. */
+export async function writeBadges(site: string, key: string, channel: Channel): Promise<void> {
+  await mkdir(join(site, key), { recursive: true });
+  for (const [name, badge] of Object.entries(channelBadges(channel))) {
+    await writeFile(join(site, key, name), `${JSON.stringify(badge)}\n`);
+  }
 }
 
 /** Replaces `to` with a copy of the report folder `from`. */

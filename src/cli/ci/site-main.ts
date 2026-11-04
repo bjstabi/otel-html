@@ -27,7 +27,7 @@ import {
   type SiteIndex,
   type SiteRun,
 } from './site.js';
-import { copyReport, readSiteIndex, removePaths, writeSite } from './site-io.js';
+import { copyReport, readSiteIndex, removePaths, writeBadges, writeSite } from './site-io.js';
 
 export type SiteOptions = {
   site: string;
@@ -153,6 +153,7 @@ export async function runSite(
     conclusion: run.conclusion ?? 'unknown',
     headSha: run.head_sha,
     headBranch: run.head_branch ?? '',
+    startedAt: run.run_started_at ?? run.created_at,
     completedAt: run.updated_at,
     runUrl: run.html_url,
     reportPath,
@@ -168,6 +169,9 @@ export async function runSite(
   if (migrated.remove.length > 0)
     say(io, `removed the per-workflow channels ${migrated.remove.join(', ')}; see branch/ and pr/`);
   await rebuildRolling(opts.site, placed.key, index, opts.config, deps, io);
+  // after the rebuild, which empties the channel folder but for runs/
+  const channel = index.channels[placed.key];
+  if (channel !== undefined) await writeBadges(opts.site, placed.key, channel);
   await writeSite(opts.site, index, opts.repository);
   setOutputs(io, {
     'report-url': reportUrl(opts.baseUrl.replace(/\/+$/, ''), reportPath),

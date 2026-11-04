@@ -2,8 +2,11 @@ import { expect, test } from 'vitest';
 import type { ApiPull, ApiRun } from '../../../src/cli/ci/github-api.js';
 import {
   applyRetention,
+  badgeFor,
+  channelBadges,
   channelFor,
   dropWorkflowChannels,
+  formatRunDuration,
   parseSiteIndex,
   placeRun,
   pullsOfRun,
@@ -307,4 +310,65 @@ test('rollingInputs lists the report paths oldest first', () => {
   const channel = { kind: 'workflow' as const, title: 'ci', headBranch: 'main', runs: [r(3), r(2), r(1)] };
   expect(rollingInputs(channel)).toEqual(['ci/runs/1', 'ci/runs/2', 'ci/runs/3']);
   expect(channel.runs.map((x) => x.runId)).toEqual([3, 2, 1]);
+});
+
+test('formatRunDuration: seconds, minutes and hours, never negative', () => {
+  expect(formatRunDuration(52_000)).toBe('52s');
+  expect(formatRunDuration(252_000)).toBe('4m12s');
+  expect(formatRunDuration(3_780_000)).toBe('1h03m');
+  expect(formatRunDuration(0)).toBe('0s');
+  expect(formatRunDuration(-5_000)).toBe('0s');
+});
+
+const timed = (over: Partial<SiteRun> = {}): SiteRun =>
+  siteRun(1, {
+    workflow: 'ci',
+    startedAt: '2026-01-01T00:00:00Z',
+    completedAt: '2026-01-01T00:04:12Z',
+    ...over,
+  });
+
+test('badgeFor: the conclusion picks the mark and color, the run its duration', () => {
+  expect(badgeFor(timed())).toEqual({
+    schemaVersion: 1,
+    label: 'ci report',
+    message: '✓ 4m12s',
+    color: 'brightgreen',
+  });
+  for (const conclusion of ['failure', 'timed_out', 'startup_failure']) {
+    expect(badgeFor(timed({ conclusion }))).toMatchObject({ message: '✗ 4m12s', color: 'red' });
+  }
+  expect(badgeFor(timed({ conclusion: 'cancelled' }))).toMatchObject({
+    message: 'cancelled 4m12s',
+    color: 'lightgrey',
+  });
+  expect(badgeFor(timed({ conclusion: 'neutral' }))).toMatchObject({
+    message: 'neutral 4m12s',
+    color: 'lightgrey',
+  });
+  expect(badgeFor(siteRun(1, { workflow: 'ci' })).message).toBe('✓');
+});
+
+test('channelBadges: one badge file per workflow, from its newest run; runs without a workflow are skipped', () => {
+  const channel = {
+    ...main,
+    runs: [
+      timed({ runId: 4 }),
+      timed({ runId: 3, workflow: 'load', conclusion: 'failure' }),
+      timed({ runId: 2, conclusion: 'failure' }),
+      siteRun(1),
+    ],
+  };
+  const badges = channelBadges(channel);
+  expect(Object.keys(badges).sort()).toEqual(['badge-ci.json', 'badge-load.json']);
+  expect(badges['badge-ci.json']?.message).toBe('✓ 4m12s');
+  expect(badges['badge-load.json']?.message).toBe('✗ 4m12s');
+});
+
+test('parseSiteIndex round-trips a run with and without startedAt', () => {
+  const index: SiteIndex = {
+    version: 1,
+    channels: { [MAIN]: { ...main, runs: [timed({ runId: 2 }), siteRun(1)] } },
+  };
+  expect(parseSiteIndex(JSON.stringify(index))).toEqual(index);
 });
