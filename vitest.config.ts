@@ -7,7 +7,8 @@ import { PERF_TAG, perfFiles } from './test-support/perf-files.ts';
 /**
  * Timing-sensitive tests (budgets scaled by OTEL_HTML_PERF_FACTOR) carry `@perf` in their name. The default run skips
  * them; `OTEL_HTML_PERF_PASS=1` runs only them, one file at a time, so parallel test files (or the lint and typecheck
- * that `mise run check` runs alongside) do not steal their CPU. `mise run test:unit` and `check` run both passes.
+ * that `mise run check` runs alongside) do not steal their CPU. `mise run test:unit` and `check` run both passes. A perf
+ * pass that selects no file fails, so a file filter under `OTEL_HTML_PERF_PASS=1` must name a file with an `@perf` test.
  */
 const { OTEL_HTML_PERF_PASS } = process.env;
 const perfPass = OTEL_HTML_PERF_PASS === '1';
