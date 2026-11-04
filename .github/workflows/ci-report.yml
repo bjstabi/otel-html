@@ -81,8 +81,9 @@ jobs:
           run-id: ${{ inputs.run_id || github.event.workflow_run.id }}
           config: ${{ steps.config.outputs.config }}
           deploy: false
-          # The default branch's page gets the light and dark screenshots the README shows.
-          preview: true
+          # Only the default branch's page gets the light and dark screenshots the README shows; other runs
+          # (pull requests, feature branches, load runs) would pay for the browser install for nothing.
+          preview: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.head_branch == github.event.repository.default_branch && github.event.workflow_run.head_repository.full_name == github.repository) }}
 
   # A closed or merged PR's folder (pr/<number>/) and index entry leave the site.
   cleanup:

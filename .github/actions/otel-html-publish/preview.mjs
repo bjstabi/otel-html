@@ -7,7 +7,7 @@
 // (no index.html, no browser, a report still loading after 30 s) prints `::warning::otel-html preview: <message>` and
 // exits 0: a missing preview must not fail a publish.
 //
-// Environment: PLAYWRIGHT_FROM, the path of a package.json (or a directory's) that `@playwright/test` resolves from.
+// Environment: PLAYWRIGHT_FROM, the path of a package.json (or any file) in the directory `@playwright/test` is installed under.
 // Nothing but Node built-ins is imported here.
 
 import { existsSync, renameSync, rmSync } from 'node:fs';
