@@ -310,6 +310,7 @@ describe('otel-html ci site and cleanup', { timeout: 60_000 }, () => {
     expect(f.out()).toContain('report-url=https://x.test/otel-html/branch/main/runs/42/');
     expect(readFileSync(out, 'utf8')).toContain('channel=branch/main\n');
     expect(readFileSync(out, 'utf8')).toContain('published=true\n');
+    expect(readFileSync(out, 'utf8')).toContain('rolling=built\n');
 
     expect(await runCli(siteArgs(43, ['--retention', '1']), fakeIo().io, realFsDeps)).toBe(0);
     expect(existsSync(join(site, 'branch/main/runs/42'))).toBe(false);
@@ -380,14 +381,43 @@ describe('otel-html ci site and cleanup', { timeout: 60_000 }, () => {
     stubApi({ 69: runBody(69), 70: runBody(70) });
     expect(await runCli(siteArgs(69), fakeIo().io, realFsDeps)).toBe(0);
     expect(existsSync(join(site, 'branch/main/data/manifest.js'))).toBe(true);
-    const f = fakeIo();
+    const out = join(dir, 'gh-output-stub');
+    writeFileSync(out, '');
+    const f = fakeIo({ GITHUB_OUTPUT: out });
     expect(await runCli(siteArgs(70, ['--config', join(dir, 'missing.yaml')]), f.io, realFsDeps)).toBe(0);
+    expect(readFileSync(out, 'utf8')).toContain('rolling=stub\n');
     expect(f.out()).toContain('::warning::otel-html site: rolling report of branch/main not rebuilt');
     expect(readFileSync(join(site, 'branch/main/index.html'), 'utf8')).toContain('url=runs/70/');
     expect(existsSync(join(site, 'branch/main/runs/70/data/manifest.js'))).toBe(true);
     // the previous rolling report does not linger beside the stub
     expect(readdirSync(join(site, 'branch/main')).sort()).toEqual(['badge-ci.json', 'index.html', 'runs']);
     expect(existsSync(join(site, 'branch/main/runs/69/data/manifest.js'))).toBe(true);
+  });
+
+  test('preview-*.png in the channel folder survive a built rebuild and a stub fallback; other files do not', async () => {
+    stubApi({ 71: runBody(71), 72: runBody(72), 73: runBody(73) });
+    const channelDir = join(site, 'branch/main');
+    const previews = { 'preview-light.png': 'light bytes', 'preview-dark.png': 'dark bytes' };
+    const putPreviews = (): void => {
+      mkdirSync(channelDir, { recursive: true });
+      for (const [name, bytes] of Object.entries(previews)) writeFileSync(join(channelDir, name), bytes);
+      writeFileSync(join(channelDir, 'other.png'), 'not a preview');
+    };
+    const expectKept = (): void => {
+      for (const [name, bytes] of Object.entries(previews))
+        expect(readFileSync(join(channelDir, name), 'utf8')).toBe(bytes);
+      expect(existsSync(join(channelDir, 'other.png'))).toBe(false);
+    };
+    putPreviews();
+    expect(await runCli(siteArgs(71), fakeIo().io, realFsDeps)).toBe(0);
+    expect(existsSync(join(channelDir, 'data/manifest.js'))).toBe(true);
+    expectKept();
+    putPreviews();
+    expect(await runCli(siteArgs(72, ['--config', join(dir, 'missing.yaml')]), fakeIo().io, realFsDeps)).toBe(
+      0,
+    );
+    expect(existsSync(join(channelDir, 'data/manifest.js'))).toBe(false);
+    expectKept();
   });
 
   test('a run on neither the default branch nor an open pull request is not published', async () => {
