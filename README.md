@@ -1,6 +1,14 @@
 # otel-html
 
+[![ci report](https://img.shields.io/endpoint?url=https://bjstabi.github.io/otel-html/branch/main/badge-ci.json&logo=opentelemetry)](https://bjstabi.github.io/otel-html/branch/main/)
+
 otel-html turns OpenTelemetry data into a static, self-contained HTML report. You give it OTLP files (or feed it spans from your own code) and it writes a folder you can open from disk, attach to a CI run, or publish on any static host. No server and no network access are needed to view it.
+
+<a href="https://bjstabi.github.io/otel-html/branch/main/"><picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://bjstabi.github.io/otel-html/branch/main/preview-dark.png">
+  <img alt="This repository's own CI, as an otel-html report" src="https://bjstabi.github.io/otel-html/branch/main/preview-light.png">
+</picture></a>
+<sub>Live: this repository's own CI, reported by otel-html. Click to open.</sub>
 
 Milestone 1 covers traces: a Traces explorer with a trace panel (flame graph, waterfall, span list, services, span details). Milestone 2 adds logs: a Logs explorer with log patterns and a log panel, linked to traces both ways. Milestone 3 adds metrics: a Metrics explorer with exemplars, a metrics catalog, and metric charts in the log, span and trace panels. Milestone 4 adds dashboards: the built-in Fusion dashboard, which puts every signal on one timeline, and dashboards you define in config. Milestone 5 adds the OTLP receiver (`serve` and `run`) and the SDK exporters.
 
