@@ -388,7 +388,7 @@ function DashboardView(props: {
           </p>
         )}
         {values.status === 'loading' && (
-          <p role="status" className="text-sm text-muted">
+          <p role="status" aria-busy="true" className="text-sm text-muted">
             Loading variables…
           </p>
         )}

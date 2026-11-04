@@ -4,7 +4,7 @@
 //
 // Writes <report-dir>/preview-light.png and preview-dark.png (1280x720 at device scale factor 2, so 2560x1440), each to
 // a `.tmp` file first and renamed only once both are taken, so a failure leaves the previous images intact. Any failure
-// (no index.html, no browser, a report still loading after 30 s) prints `::warning::otel-html preview: <message>` and
+// (no index.html, no browser, a report still loading after 30 s, a report that failed to load) prints `::warning::otel-html preview: <message>` and
 // exits 0: a missing preview must not fail a publish.
 //
 // Environment: PLAYWRIGHT_FROM, the path of a package.json (or any file) in the directory `@playwright/test` is installed under.
@@ -46,6 +46,13 @@ async function main() {
         { timeout: READY_TIMEOUT_MS },
       );
       await page.waitForTimeout(SETTLE_MS);
+      // The viewer's load-failure screen is a <main> holding this alert and no busy marker, so it passes the wait above.
+      const failed = await page.evaluate(() =>
+        [...document.querySelectorAll('main [role="alert"] h1')].some(
+          (h) => h.textContent?.trim() === 'This report could not be loaded',
+        ),
+      );
+      if (failed) throw new Error('the report could not be loaded');
       const tmp = join(resolve(dir), `preview-${colorScheme}.png.tmp`);
       await page.screenshot({ path: tmp, type: 'png' });
       taken.push([tmp, join(resolve(dir), `preview-${colorScheme}.png`)]);
