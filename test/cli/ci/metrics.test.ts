@@ -112,6 +112,26 @@ describe('ciMetricsRequest', () => {
     expect(p?.bucketCounts?.[11]).toBe('1');
   });
 
+  test('a skipped job has no duration or queue point', () => {
+    // GitHub lists a job skipped by its `if:` with equal (or reversed) timestamps
+    const ms = metrics(run, [
+      job(1, 'a', 'success'),
+      job(2, 'coverage', 'skipped', {
+        started_at: '2026-01-01T00:00:01Z',
+        completed_at: '2026-01-01T00:00:00Z',
+      }),
+    ]);
+    for (const n of ['cicd.pipeline.task.run.duration', 'cicd.pipeline.task.run.queue.duration']) {
+      expect(
+        ms
+          .filter((m) => m.name === n)
+          .flatMap((m) => m.histogram?.dataPoints.map((p) => attr(p, 'cicd.pipeline.task.name')) ?? []),
+      ).toEqual(['a']);
+    }
+    // no job resource is emitted for it either
+    expect(resourcesOf(run, [job(2, 'coverage', 'skipped')])).toHaveLength(1);
+  });
+
   test('the errors sum is absent when every job succeeded or was skipped', () => {
     expect(named(green, 'cicd.pipeline.run.errors')).toBeUndefined();
     const skipped = metrics(run, [job(1, 'a', 'success'), job(2, 'b', 'skipped')]);

@@ -83,13 +83,21 @@ describe('.github/actions/otel-html-publish/otel-html-ci.yaml', () => {
     expect(slow.query).toBe(steps.query);
   });
 
-  test('the Runs widget selects root spans only', async () => {
+  test('the Runs widget matches root spans and job spans', async () => {
     const { config } = await resolved();
     const runs = ci(config).widgets.find((w) => w.type === 'traces');
     const query = runs && 'query' in runs ? runs.query : null;
     expect(query).not.toBeNull();
     const cond = compileCondition(query ?? '', 'span');
     expect(cond.test(spanTarget({ parentSpanId: null, kind: SpanKind.INTERNAL }))).toBe(true);
+    // the run span sits on the run's resource, so with `job` set only the job span can bring its trace back
+    const jobSpan = new Map<string, AnyValue>([
+      ['cicd.pipeline.task.run.id', { kind: 'string', value: '7' }],
+    ]);
+    expect(cond.test(spanTarget({ attributes: jobSpan }))).toBe(true);
+    // a step or queued span does not
+    const step = new Map<string, AnyValue>([['github.job.step.number', { kind: 'int', value: 3n }]]);
+    expect(cond.test(spanTarget({ attributes: step }))).toBe(false);
     expect(cond.test(spanTarget())).toBe(false);
   });
 });
