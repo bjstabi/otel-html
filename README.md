@@ -511,6 +511,7 @@ Publish inputs:
 | `retention`, `pr-retention` | 30, 10 | Runs kept of each workflow per branch page and per pull request page. GitHub Pages sites are limited to 1 GB, and a run's report is about 3.6 MB in this repo, so mind the total: about workflows × (`retention` + open pull requests × `pr-retention`) × your report size × 1.5, the 1.5 for the rolling reports (each holds its runs' data again). In this repo that is about 320 MB for the default branch and 55 MB per open pull request. |
 | `comment`, `check` | true | The sticky PR comment and the `otel-html report` check run. |
 | `deploy` | true | Deploy to Pages in this job; needs `environment: github-pages` and `pages: write` and `id-token: write`. `false` leaves it to a separate `deploy` job as above. |
+| `preview` | false | Screenshot the default branch's rolling report in light and dark (`preview-light.png`, `preview-dark.png` in its folder) when a run rebuilds it, for a README image. Installs Playwright's Chromium, about 1 minute per run; needs Node and passwordless sudo on the runner. Only the default branch's page; a failed install or screenshot is a warning and the publish goes on. |
 | `cleanup-pr` | empty | A pull request number: skip the report and remove that PR's reports (`/pr/<number>/`) from the site. |
 | `token` | `github.token` | Needs `actions: read`, `contents: write`, `pages: read`, `pull-requests: write`, `checks: write`. |
 
