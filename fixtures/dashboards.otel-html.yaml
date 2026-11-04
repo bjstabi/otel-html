@@ -134,7 +134,8 @@ dashboards:
         w: 6
         h: 10
         mode: traces
-        query: IsRootSpan()
+        # The run span sits on the run's resource, so with `job` set the job span (unless skipped) is what lists the run.
+        query: IsRootSpan() or (attributes["cicd.pipeline.task.run.id"] != nil and attributes["cicd.pipeline.task.run.result"] != "skip")
       - type: logs
         title: Warnings and errors
         x: 6

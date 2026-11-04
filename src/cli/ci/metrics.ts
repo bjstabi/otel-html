@@ -63,6 +63,8 @@ export function ciMetricsRequest(run: ApiRun, jobs: ApiJob[], resource: Record<s
   // Per-job points sit under that job's own resource, so a `cicd.pipeline.task.name` variable selects them.
   const jobMetrics: { job: ApiJob; metrics: object[] }[] = [];
   for (const job of jobs) {
+    // A job skipped by its `if:` never ran; its equal (or reversed) timestamps would chart as 0 s.
+    if (job.conclusion === 'skipped') continue;
     const took = seconds(job.started_at, job.completed_at);
     const taskPoints: HistogramPoint[] =
       took === undefined
