@@ -7,6 +7,7 @@ import { DEFAULT_RUN_CONTROLS } from '../../../src/dashboards/schema.js';
 
 const SHIPPED = '.github/actions/otel-html-publish/otel-html-ci.yaml';
 const COPY = '.github/otel-html-ci.yaml';
+const DEMO = 'fixtures/dashboards.otel-html.yaml';
 const CI_ONLY = 'resource.attributes["cicd.pipeline.name"] == "ci"';
 const FAILED_WHEN =
   'attributes["cicd.pipeline.task.run.result"] == "failure" or attributes["cicd.pipeline.task.run.result"] == "timeout" or attributes["cicd.pipeline.task.run.result"] == "error"';
@@ -82,5 +83,10 @@ describe('CI dashboard configs', () => {
       delete q?.where;
     }
     expect(copy).toEqual(shipped);
+  });
+
+  test('the demo config carries the repo copy verbatim', async () => {
+    const demo = (await raw(DEMO)).dashboards.find((d) => (d as { id?: string }).id === 'ci');
+    expect(demo).toEqual((await raw(COPY)).dashboards[0]);
   });
 });
