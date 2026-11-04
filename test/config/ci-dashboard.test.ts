@@ -95,6 +95,12 @@ describe('.github/actions/otel-html-publish/otel-html-ci.yaml', () => {
       ['cicd.pipeline.task.run.id', { kind: 'string', value: '7' }],
     ]);
     expect(cond.test(spanTarget({ attributes: jobSpan }))).toBe(true);
+    // a job skipped by its `if:` did not run in that run
+    const skipped = new Map<string, AnyValue>([
+      ...jobSpan,
+      ['cicd.pipeline.task.run.result', { kind: 'string', value: 'skip' }],
+    ]);
+    expect(cond.test(spanTarget({ attributes: skipped }))).toBe(false);
     // a step or queued span does not
     const step = new Map<string, AnyValue>([['github.job.step.number', { kind: 'int', value: 3n }]]);
     expect(cond.test(spanTarget({ attributes: step }))).toBe(false);
