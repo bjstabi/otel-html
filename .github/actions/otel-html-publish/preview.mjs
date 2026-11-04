@@ -4,7 +4,7 @@
 //
 // Writes <report-dir>/preview-light.png and preview-dark.png (1280x720 at device scale factor 2, so 2560x1440), each to
 // a `.tmp` file first and renamed only once both are taken, so a failure leaves the previous images intact. Any failure
-// (no index.html, no browser, a report still loading after 30 s, a report that failed to load) prints `::warning::otel-html preview: <message>` and
+// (no index.html, no browser, a report still loading after 30 s, a page that shows an alert such as a report that failed to load) prints `::warning::otel-html preview: <message>` and
 // exits 0: a missing preview must not fail a publish.
 //
 // Environment: PLAYWRIGHT_FROM, the path of a package.json (or any file) in the directory `@playwright/test` is installed under.
@@ -46,13 +46,13 @@ async function main() {
         { timeout: READY_TIMEOUT_MS },
       );
       await page.waitForTimeout(SETTLE_MS);
-      // The viewer's load-failure screen is a <main> holding this alert and no busy marker, so it passes the wait above.
-      const failed = await page.evaluate(() =>
-        [...document.querySelectorAll('main [role="alert"] h1')].some(
-          (h) => h.textContent?.trim() === 'This report could not be loaded',
-        ),
-      );
-      if (failed) throw new Error('the report could not be loaded');
+      // A page that shows an alert is not the report: the viewer's load-failure screen and a dashboard that could not read
+      // its variables' values both render a <main> holding one and no busy marker, so they pass the wait above.
+      const alert = await page.evaluate(() => {
+        const el = document.querySelector('main [role="alert"]');
+        return el === null ? null : (el.textContent ?? '').trim().split('\n')[0];
+      });
+      if (alert !== null) throw new Error(`the page shows an alert: ${alert}`);
       const tmp = join(resolve(dir), `preview-${colorScheme}.png.tmp`);
       await page.screenshot({ path: tmp, type: 'png' });
       taken.push([tmp, join(resolve(dir), `preview-${colorScheme}.png`)]);

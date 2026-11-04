@@ -80,4 +80,19 @@ test.describe('preview.mjs', () => {
       expect(existsSync(join(dir, `preview-${scheme}.png.tmp`))).toBe(false);
     }
   });
+
+  test('warns and keeps the previous images when the dashboard could not read its variables values', () => {
+    cpSync(fileURLToPath(reportDir('dashboards')), dir, { recursive: true });
+    rmSync(join(dir, 'data', 'rollups', 'logs.js'));
+    for (const scheme of ['light', 'dark'])
+      writeFileSync(join(dir, `preview-${scheme}.png`), `previous ${scheme}`);
+    const result = runPreview(dir);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('::warning::otel-html preview:');
+    expect(result.stdout).toContain('Could not read the variables');
+    for (const scheme of ['light', 'dark']) {
+      expect(readFileSync(join(dir, `preview-${scheme}.png`), 'utf8')).toBe(`previous ${scheme}`);
+      expect(existsSync(join(dir, `preview-${scheme}.png.tmp`))).toBe(false);
+    }
+  });
 });
