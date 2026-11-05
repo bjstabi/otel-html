@@ -20,6 +20,8 @@ const SPAN_2 = '2d8745a159cef356' as SpanId;
 function row(i: number): LogRow {
   return {
     ref: logRef(0, i),
+    n: 0,
+    i,
     log: {
       time: (1_000_000 * (i + 1)) as RelNanos,
       observedTime: null,

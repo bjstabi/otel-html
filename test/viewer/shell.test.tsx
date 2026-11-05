@@ -602,6 +602,8 @@ describe('full-page trace route', () => {
     const user = userEvent.setup();
     const logRow = {
       ref: logRef(0, 3),
+      n: 0,
+      i: 3,
       log: {
         time: 1000,
         observedTime: null,

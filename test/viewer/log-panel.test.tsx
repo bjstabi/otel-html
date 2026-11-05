@@ -80,6 +80,8 @@ function row(
   const time = over.time === undefined ? 1_000_000 * (i + 1) : over.time;
   return {
     ref: logRef(0, i),
+    n: 0,
+    i,
     log: {
       time: time === null ? null : (time as RelNanos),
       observedTime: over.observed === false ? null : ((time ?? 5) as RelNanos),
