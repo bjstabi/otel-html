@@ -328,11 +328,13 @@ describe('TracesExplorer duration facet', () => {
   });
 
   test('clearing the filter re-derives the axis from the rows', async () => {
-    const { store } = setup(filtering, 10, { q: `${DUR} >= 1e5` });
+    const { store } = setup(filtering, 10, { q: `${DUR} >= 100000` });
     await screen.findByRole('slider', { name: 'Minimum duration' });
-    store.getState().clear('condition');
-    await waitFor(() =>
-      expect(document.querySelector('[data-bin="0"]')?.getAttribute('title')).toContain(`${edges[0]}-`),
-    );
+    const first = (): string | undefined =>
+      document.querySelector('[data-bin="0"]')?.getAttribute('title')?.split('-')[0];
+    expect(first()).toBe('100000');
+    expect(first()).not.toBe(String(edges[0]));
+    act(() => store.getState().clear('condition'));
+    await waitFor(() => expect(first()).toBe(String(edges[0])));
   });
 });

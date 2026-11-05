@@ -251,6 +251,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
       axis = durationAxis(rows, DURATION_BIN_COUNT);
       axisRef.current = axis.length === 0 ? null : axis;
     } else if (axisRef.current !== null) {
+      // A hand-typed condition moving the bounds outside the stored axis keeps the old axis (accepted by the spec).
       axis = axisRef.current;
     } else if (rows.length === 0) {
       axis = []; // nothing to anchor an axis on yet (loading, or the filter matched nothing): keep waiting
