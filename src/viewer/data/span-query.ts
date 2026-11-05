@@ -162,8 +162,10 @@ const TRACE_SORTS: Readonly<Record<string, (a: TraceRow, b: TraceRow) => number>
   duration: (a, b) => a.durationNs - b.durationNs,
   spans: (a, b) => a.spans - b.spans,
   errors: (a, b) => a.errors - b.errors,
-  resource: (a, b) => cmp(a.root?.resource ?? '', b.root?.resource ?? ''),
-  service: (a, b) => cmp(a.root?.service ?? '', b.root?.service ?? ''),
+  resource: (a, b) =>
+    cmp(a.root?.resource ?? a.rootSummary?.resource ?? '', b.root?.resource ?? b.rootSummary?.resource ?? ''),
+  service: (a, b) =>
+    cmp(a.root?.service ?? a.rootSummary?.service ?? '', b.root?.service ?? b.rootSummary?.service ?? ''),
 };
 
 function traceRow(

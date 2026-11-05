@@ -282,6 +282,29 @@ describe('SpanQueryRun traces mode across chunks', () => {
     expect(rows[1]).toMatchObject({ spans: 1, root: null, rootSummary: null, shareComplete: false });
     expect(rows[0]).toMatchObject({ spans: 2, shareComplete: true });
   });
+
+  test('service and resource sorts fall back to the root summary, as the columns do', () => {
+    for (const column of ['service', 'resource'] as const) {
+      const run = new SpanQueryRun(
+        query({ mode: 'traces', condition: 'name == "hit"', sort: { column, dir: 'asc' } }),
+        undefined,
+        DEFAULT_FACET_CAPS,
+      );
+      // trace 1: only a child is seen (root null); trace 2: its root, service 'api', resource 'hit'
+      for (const e of chunkOf([traceSpan(1, 1, 'hit', 0), traceSpan(2, 0, 'hit', null)])) run.visit(e);
+      const t1 = '1'.padStart(32, '0') as TraceId;
+      const facts = {
+        start: 1000,
+        end: 1020,
+        spans: 2,
+        errors: 0,
+        complete: false,
+        root: { service: 'zzz', name: 'r', resource: 'zzz' },
+      };
+      const r = run.finish(null, (id) => (id === t1 ? facts : undefined));
+      expect((r.rows as TraceRow[]).map((t) => t.traceId)).toEqual(['2'.padStart(32, '0'), t1]);
+    }
+  });
 });
 
 describe('measureBy', () => {
