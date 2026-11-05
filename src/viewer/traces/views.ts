@@ -2,6 +2,7 @@ import type { EChartsOption } from 'echarts';
 import { formatDuration } from '../../semconv/formatters.js';
 import type { DurationBin } from '../components/facet-panel.js';
 import { bar, type FacetViewContext, pie, toplist, treemap } from '../components/facet-views.js';
+import { seconds } from '../components/histogram-card.js';
 import type { SpanQueryResult, SpanRow, TraceRow } from '../data/span-query.js';
 import type { ExplorerView } from '../state/explorer-view.js';
 import type { PageView } from '../state/page-options.js';
@@ -32,11 +33,9 @@ export const GROUPED_VIEWS: ReadonlySet<ExplorerView> = new Set<ExplorerView>([
   'treemap',
 ]);
 
-const seconds = (ns: number): string => `${(ns / 1e9).toFixed(ns % 1e9 === 0 ? 0 : 1)}s`;
-
 function timeAxis(result: SpanQueryResult): string[] {
   const b = result.buckets;
-  return Array.from({ length: b.length }, (_, i) => seconds(b.startNs + i * b.widthNs));
+  return Array.from({ length: b.length }, (_, i) => seconds(b.startNs + i * b.widthNs, b.widthNs));
 }
 
 const STATUS_VARS = {

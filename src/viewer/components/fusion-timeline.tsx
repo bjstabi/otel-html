@@ -82,7 +82,9 @@ function buildTimelineOption(
   const x =
     first === undefined
       ? []
-      : Array.from({ length: first.length }, (_, i) => seconds(first.startNs + i * first.widthNs));
+      : Array.from({ length: first.length }, (_, i) =>
+          seconds(first.startNs + i * first.widthNs, first.widthNs),
+        );
   const laneH = (height - AXIS_PX) / Math.max(1, lanes.length);
   const top = (i: number): number => i * laneH + LANE_GAP_PX / 2;
   return {

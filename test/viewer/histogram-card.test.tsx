@@ -14,11 +14,13 @@ vi.mock('../../src/viewer/components/chart.js', () => ({
 
 import {
   brushToWindow,
+  buildHistogramOption,
   coarsenBuckets,
   HISTOGRAM_MAX_COLUMNS,
   HistogramCard,
   SEVERITY_SERIES,
   SPAN_STATUS_SERIES,
+  seconds,
 } from '../../src/viewer/components/histogram-card.js';
 import { createSelectionStore } from '../../src/viewer/state/selection.js';
 import { SelectionProvider } from '../../src/viewer/state/selection-context.js';
@@ -46,6 +48,25 @@ function wide(n: number): TimeBuckets<SpanStatusKey> {
   }
   return b;
 }
+
+describe('seconds', () => {
+  test('a column width picks the decimals', () => {
+    expect(seconds(14e6, 7e6)).toBe('0.014s');
+    expect(seconds(0, 7e6)).toBe('0.000s');
+    expect(seconds(3e9, 1e9)).toBe('3s');
+    expect(seconds(1.5e9, 0.5e9)).toBe('1.5s');
+    expect(seconds(2e6, 1e5)).toBe('0.002s'); // below 1 ms the cap is 3 decimals
+  });
+  test('without a width, today’s rule', () => {
+    expect(seconds(2e9)).toBe('2s');
+    expect(seconds(2.5e9)).toBe('2.5s');
+  });
+  test('coarsened histogram columns get distinct labels', () => {
+    const v = coarsenBuckets(wide(2500));
+    const labels = buildHistogramOption(v, SPAN_STATUS_SERIES).xAxis.data;
+    expect(new Set(labels).size).toBe(labels.length);
+  });
+});
 
 describe('coarsenBuckets', () => {
   test('leaves a histogram that already fits untouched', () => {
