@@ -230,18 +230,20 @@ run = [{ task = "test:unit:main" }, { task = "test:unit:perf" }]
 [tasks."test:unit:main"]
 description = "vitest, everything but @perf, in parallel"
 # Beyond the code: what tests read from disk (fixtures/reports, the committed JSON schema, the shipped CI dashboard
-# config, .github/actions scripts, scripts/load-receiver-plan, e2e/fixture.ts, tsconfig.base.json). dist/ is read only
-# under OTEL_HTML_LOAD / OTEL_HTML_BINARY, so it is not an input.
+# config, .github/actions scripts, scripts/load-receiver-plan, the e2e helpers they import (e2e/*.ts and e2e/otel-page/,
+# not e2e/**, which would walk the generated dot directories), tsconfig.base.json). dist/ is read only under
+# OTEL_HTML_LOAD / OTEL_HTML_BINARY, so it is not an input.
 sources = [
   "@group:deps",
   "@group:node",
   "@group:viewer",
   ".github/actions/**",
+  "e2e/*.ts",
+  "e2e/otel-page/**/*.ts",
   "fixtures/**",
   "schema/**",
   "scripts/**",
   ".github/otel-html-ci.yaml",
-  "e2e/fixture.ts",
 ]
 outputs = []
 cache = { enabled = true, env = ["CI", "OTEL_HTML_LOAD", "OTEL_HTML_BINARY"] }
