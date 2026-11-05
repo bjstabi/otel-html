@@ -1,5 +1,5 @@
 import { Tooltip } from '@base-ui/react/tooltip';
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import type { Manifest } from '../../src/format/manifest.js';
@@ -12,6 +12,7 @@ import { createSelectionStore } from '../../src/viewer/state/selection.js';
 import { SelectionProvider } from '../../src/viewer/state/selection-context.js';
 import { ThemeProvider } from '../../src/viewer/theme/theme-provider.js';
 import { TracesExplorer } from '../../src/viewer/traces/explorer.js';
+import { durationAxis } from '../../src/viewer/traces/views.js';
 
 vi.mock('../../src/viewer/components/chart.js', () => ({ Chart: (): null => null }));
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -268,5 +269,70 @@ describe('TracesExplorer', () => {
       expect(item.getAttribute('aria-disabled')).toBe('true');
       expect(item.textContent).toContain('Only the List, Top list and Table views can become widgets');
     });
+  });
+});
+
+describe('TracesExplorer duration facet', () => {
+  const DUR = 'span.end_time_unix_nano - span.start_time_unix_nano';
+  const ROWS = [1e3, 5e3, 2e4, 1e5, 4e5, 2e6, 9e6, 3e7, 2e8, 1e9].map((d, i) => row('s', 'svc', d, `d${i}`));
+  /** A data source that applies the duration bounds in the condition like the real one. */
+  const filtering: DataSource['querySpans'] = (q) => {
+    const lo = />= (\d+(?:\.\d+)?)/.exec(q.condition ?? '')?.[1];
+    const hi = /<= (\d+(?:\.\d+)?)/.exec(q.condition ?? '')?.[1];
+    return Promise.resolve(
+      resultOf(
+        ROWS.filter(
+          (r) =>
+            (lo === undefined || r.durationNs >= Number(lo)) &&
+            (hi === undefined || r.durationNs <= Number(hi)),
+        ),
+      ),
+    );
+  };
+  const edges = durationAxis(ROWS, 24);
+
+  test('the duration axis stays put while a duration filter is set', async () => {
+    const user = userEvent.setup();
+    const { store } = setup(filtering);
+    const min = await screen.findByRole('slider', { name: 'Minimum duration' });
+    const firstTitle = document.querySelector('[data-bin="0"]')?.getAttribute('title');
+    await user.click(min);
+    await user.keyboard('{ArrowRight}');
+    await user.keyboard('{ArrowRight}');
+    expect(store.getState().condition).toBe(`${DUR} >= ${edges[2]}`);
+    await waitFor(() => expect(document.querySelector('[data-bin="0"]')?.getAttribute('title')).toBeTruthy());
+    expect(document.querySelector('[data-bin="0"]')?.getAttribute('title')?.split('-')[0]).toBe(
+      firstTitle?.split('-')[0],
+    );
+  });
+
+  test('a page opened with a duration filter pins the axis to the committed range', async () => {
+    setup(filtering, 10, { q: `${DUR} >= 300000 and ${DUR} <= 50000000` });
+    const min = await screen.findByRole('slider', { name: 'Minimum duration' });
+    const max = screen.getByRole('slider', { name: 'Maximum duration' });
+    expect(min.getAttribute('aria-valuetext')).toBe('from 300000 ns');
+    expect(max.getAttribute('aria-valuetext')).toBe('up to 50000000 ns');
+  });
+
+  test('a committed value that is not an edge highlights its bin and ArrowLeft keeps the <= token', async () => {
+    const user = userEvent.setup();
+    const { store } = setup(filtering);
+    const min = await screen.findByRole('slider', { name: 'Minimum duration' });
+    const max = screen.getByRole('slider', { name: 'Maximum duration' });
+    act(() => store.getState().setCondition(`${DUR} >= 300000 and ${DUR} <= 50000000`));
+    await waitFor(() => expect(Number(min.getAttribute('aria-valuenow'))).toBeGreaterThan(0));
+    expect(Number(max.getAttribute('aria-valuenow'))).toBeLessThan(23);
+    await user.click(min);
+    await user.keyboard('{ArrowLeft}');
+    expect(store.getState().condition).toContain('<=');
+  });
+
+  test('clearing the filter re-derives the axis from the rows', async () => {
+    const { store } = setup(filtering, 10, { q: `${DUR} >= 1e5` });
+    await screen.findByRole('slider', { name: 'Minimum duration' });
+    store.getState().clear('condition');
+    await waitFor(() =>
+      expect(document.querySelector('[data-bin="0"]')?.getAttribute('title')).toContain(`${edges[0]}-`),
+    );
   });
 });

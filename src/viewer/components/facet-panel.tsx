@@ -287,15 +287,21 @@ function DurationFacet(props: {
 }): JSX.Element {
   const { bins } = props;
   const last = bins.length - 1;
+  const bound = (op: '>=' | '<='): number | undefined => {
+    const v = props.tokens?.find((x) => x.key === DURATION_KEY && x.op === op)?.value;
+    return typeof v === 'number' ? v : undefined;
+  };
+  const loValue = bound('>=');
+  const hiValue = bound('<=');
+  // A committed value need not be an edge (the URL may carry any number): the bin starting there, else the one containing it.
+  const containing = (v: number): number => bins.findIndex((b) => b.fromNs <= v && v < b.toNs);
+  const fromIndex = loValue === undefined ? -1 : bins.findIndex((b) => b.fromNs === loValue);
   const committedLo = Math.max(
-    bins.findIndex(
-      (b) => b.fromNs === props.tokens?.find((x) => x.key === DURATION_KEY && x.op === '>=')?.value,
-    ),
+    fromIndex >= 0 ? fromIndex : loValue === undefined ? -1 : containing(loValue),
     0,
   );
-  const hiIndex = bins.findIndex(
-    (b) => b.toNs === props.tokens?.find((x) => x.key === DURATION_KEY && x.op === '<=')?.value,
-  );
+  const toIndex = hiValue === undefined ? -1 : bins.findIndex((b) => b.toNs === hiValue);
+  const hiIndex = toIndex >= 0 ? toIndex : hiValue === undefined ? -1 : containing(hiValue);
   const committedHi = hiIndex < 0 ? last : hiIndex;
   // A drag only previews here; the single store write happens on pointer up.
   const [drag, setDrag] = useState<{ anchor: number; current: number } | null>(null);
