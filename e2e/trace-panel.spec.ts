@@ -163,7 +163,10 @@ test('trace panel: the Waterfall opens at a deep selected span and Tab reaches i
   await panel.getByRole('tab', { name: 'Waterfall' }).click();
   const tree = panel.getByRole('tree', { name: 'Waterfall' });
   await expect(tree.locator(`[data-span-id="${deep}"]`)).toBeInViewport({ timeout: 30_000 });
-  await page.keyboard.press('Tab'); // the tab panel
+  // Start from the tab panel itself: where focus lands after a tab click differs between browsers.
+  const tabPanel = panel.getByRole('tabpanel', { name: 'Waterfall' });
+  await tabPanel.focus();
+  await expect(tabPanel).toBeFocused();
   await page.keyboard.press('Tab'); // the tree's Tab stop
   const focused = page.locator(':focus');
   await expect(focused).toHaveAttribute('role', 'treeitem');
