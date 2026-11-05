@@ -100,6 +100,8 @@ export class SignalChunks {
 export interface ScanRun<E> {
   readonly units: number;
   visit(e: E): void;
+  /** Called after each chunk has been visited. */
+  endChunk?(): void;
 }
 
 /**
@@ -130,6 +132,7 @@ export async function scanChunks<E>(opts: {
       }
       run.visit(e);
     }
+    run.endChunk?.();
     scanned.add(c.n);
     opts.onProgress?.(scanned.size, total);
     if (run.units >= cap) {

@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
-import { Lru } from '../../src/viewer/data/chunk-window.js';
+import type { ManifestChunk } from '../../src/format/manifest.js';
+import { Lru, scanChunks } from '../../src/viewer/data/chunk-window.js';
 
 describe('Lru', () => {
   test('drops the least recently used value past its size; a hit refreshes', async () => {
@@ -37,5 +38,47 @@ describe('Lru', () => {
       return Promise.resolve({ v: 'ok' });
     });
     expect(retried).toBe(1);
+  });
+});
+
+describe('scanChunks', () => {
+  const chunk = (n: number): ManifestChunk => ({
+    signal: 'spans',
+    n,
+    path: `p${n}`,
+    start: n,
+    end: n,
+    count: 1,
+    bytes: 1,
+  });
+  test('ends each chunk on the run after visiting it whole', async () => {
+    const log: string[] = [];
+    const run = { units: 0, visit: (e: string) => log.push(e), endChunk: () => log.push('end') };
+    await scanChunks({
+      targets: [chunk(0), chunk(1)],
+      total: 2,
+      entries: (c) => Promise.resolve([`${c.n}a`, `${c.n}b`]),
+      run,
+      cap: 10,
+      finishChunk: true,
+      onProgress: undefined,
+      signal: undefined,
+    });
+    expect(log).toEqual(['0a', '0b', 'end', '1a', '1b', 'end']);
+  });
+  test('a run without endChunk is scanned as before', async () => {
+    const seen: string[] = [];
+    const r = await scanChunks({
+      targets: [chunk(0)],
+      total: 1,
+      entries: () => Promise.resolve(['x']),
+      run: { units: 0, visit: (e: string) => seen.push(e) },
+      cap: 10,
+      finishChunk: false,
+      onProgress: undefined,
+      signal: undefined,
+    });
+    expect(seen).toEqual(['x']);
+    expect(r.partial).toBeNull();
   });
 });

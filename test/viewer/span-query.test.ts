@@ -15,6 +15,7 @@ import {
   type SpanQuery,
   SpanQueryRun,
   type SpanRow,
+  type TraceRow,
   toEntries,
 } from '../../src/viewer/data/span-query.js';
 import { medianMs } from '../../test-support/median-ms.js';
@@ -213,15 +214,73 @@ describe('SpanQueryRun row buffer', () => {
     expect(run.units).toBe(10_000);
   });
 
-  test('traces mode holds no matched rows', () => {
+  test('traces mode without endChunk holds every visited row', () => {
     const run = new SpanQueryRun(
       query({ mode: 'traces', sort: { column: 'start', dir: 'asc' } }),
       undefined,
       DEFAULT_FACET_CAPS,
     );
     for (const e of synthetic(1000)) run.visit(e);
-    expect(run.heldRows).toBe(0);
+    expect(run.heldRows).toBe(1000);
     expect(run.finish(null).total).toBe(1000);
+  });
+});
+
+const traceSpan = (trace: number, id: number, name: string, parent: number | null): SpanRecord => ({
+  traceId: trace.toString(16).padStart(32, '0') as TraceId,
+  spanId: (trace * 100 + id).toString(16).padStart(16, '0') as SpanId,
+  parentSpanId: parent === null ? null : ((trace * 100 + parent).toString(16).padStart(16, '0') as SpanId),
+  traceState: '',
+  flags: 0,
+  name,
+  kind: 1,
+  start: (trace * 1000 + id) as RelNanos,
+  end: (trace * 1000 + id + 10) as RelNanos,
+  attributes: new Map(),
+  droppedAttributesCount: 0,
+  events: [],
+  droppedEventsCount: 0,
+  links: [],
+  droppedLinksCount: 0,
+  status: { code: StatusCode.UNSET, message: '' },
+  resource: 0 as ResourceRef,
+  scope: 0 as ScopeRef,
+});
+const chunkOf = (spans: SpanRecord[], n = 0): SpanEntry[] =>
+  toEntries({ n, resources, scopes }, spans, 0n as UnixNanos, 'c');
+const hitQuery = () =>
+  query({ mode: 'traces', condition: 'name == "hit"', sort: { column: 'start', dir: 'asc' } });
+
+describe('SpanQueryRun traces mode across chunks', () => {
+  test('endChunk drops the rows of traces that have not hit; heldRows counts hit traces only', () => {
+    const run = new SpanQueryRun(hitQuery(), undefined, DEFAULT_FACET_CAPS);
+    for (const e of chunkOf([
+      traceSpan(1, 0, 'hit', null),
+      traceSpan(1, 1, 'miss', 0),
+      traceSpan(2, 0, 'miss', null),
+      traceSpan(2, 1, 'miss', 0),
+    ]))
+      run.visit(e);
+    expect(run.heldRows).toBe(4);
+    run.endChunk();
+    expect(run.heldRows).toBe(2);
+    expect(run.seenRows('2'.padStart(32, '0') as TraceId)).toEqual([]);
+  });
+
+  test('a trace that hits in a later chunk is listed once, built from the rows seen since', () => {
+    const run = new SpanQueryRun(hitQuery(), undefined, DEFAULT_FACET_CAPS);
+    for (const e of chunkOf([traceSpan(2, 0, 'miss', null), traceSpan(1, 0, 'hit', null)], 0)) run.visit(e);
+    run.endChunk();
+    for (const e of chunkOf([traceSpan(2, 1, 'hit', 0), traceSpan(1, 1, 'hit', 0)], 1)) run.visit(e);
+    run.endChunk();
+    expect(run.units).toBe(2);
+    const r = run.finish(null);
+    expect(r.total).toBe(2);
+    const rows = r.rows as TraceRow[];
+    expect(rows.map((t) => t.traceId)).toEqual(['1'.padStart(32, '0'), '2'.padStart(32, '0')]);
+    // trace 2's root was dropped before it hit: no root, and the share is from a fragment, so not complete
+    expect(rows[1]).toMatchObject({ spans: 1, root: null, rootSummary: null, shareComplete: false });
+    expect(rows[0]).toMatchObject({ spans: 2, shareComplete: true });
   });
 });
 

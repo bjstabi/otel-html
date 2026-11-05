@@ -498,17 +498,21 @@ describe('windowed traces mode', () => {
       serviceShare: [],
     });
 
-    expect(row?.root?.service).toBe('web');
+    expect(row?.root).toBeNull();
 
     const whole = await ds.querySpans(traceQuery({ condition: 'name == "db.query"', scanAll: true }));
     const [full] = asTraces(whole.rows);
     expect(whole.partial).toBeNull();
-    expect(full).toMatchObject({ spans: 3, errors: 1, start: 0, durationNs: 1000, shareComplete: true });
-    expect(full?.root?.service).toBe('web');
-    expect(full?.serviceShare).toEqual([
-      { service: 'db', ns: 600 },
-      { service: 'web', ns: 400 },
-    ]);
+    expect(full).toMatchObject({
+      spans: 3,
+      errors: 1,
+      start: 0,
+      durationNs: 1000,
+      shareComplete: false,
+      serviceShare: [],
+      rootSummary: { service: 'web', name: 'GET /', resource: 'GET /' },
+    });
+    expect(full?.root).toBeNull();
   });
 
   test('the list cap counts traces, not matched spans, and limit counts traces', async () => {
