@@ -21,7 +21,19 @@ const secondsBetween = (from: string | null, to: string | null): string => {
 /** Prefix of the sticky pull request comment's first line, `<!-- otel-html-report:<workflow> -->`. */
 export const MARKER = '<!-- otel-html-report';
 
-const cell = (s: string): string => s.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
+/**
+ * `text` as a markdown code span, so a name cannot mention, link or embed: the delimiter is one backtick longer than
+ * the longest run inside, and a space pads a text that starts or ends with a backtick. The empty string stays empty.
+ */
+export function codeSpan(text: string): string {
+  if (text === '') return '';
+  const longest = Math.max(0, ...(text.match(/`+/g) ?? []).map((run) => run.length));
+  const fence = '`'.repeat(longest + 1);
+  const pad = text.startsWith('`') || text.endsWith('`') ? ' ' : '';
+  return `${fence}${pad}${text}${pad}${fence}`;
+}
+
+const cell = (s: string): string => codeSpan(s.replace(/\|/g, '\\|').replace(/\r?\n/g, ' '));
 
 /** GitHub-flavoured markdown for `$GITHUB_STEP_SUMMARY`: the run's outcome and one row per job. */
 export function summaryTable(run: ApiRun, jobs: ApiJob[]): string {

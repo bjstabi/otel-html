@@ -158,7 +158,7 @@ describe('channelPage', () => {
         },
       },
     });
-    expect(channelPage(named('a`b'), 1, 'https://x.test/branch/b/runs/1/')?.label).toBe('`` a`b ``');
+    expect(channelPage(named('a`b'), 1, 'https://x.test/branch/b/runs/1/')?.label).toBe('``a`b``');
     expect(channelPage(named('x``y`'), 1, 'https://x.test/branch/b/runs/1/')?.label).toBe('``` x``y` ```');
   });
   test('is undefined on an older workflow channel, for an unknown run or a foreign URL', () => {
