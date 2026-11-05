@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
   buildMetricChartOption,
+  heatAxis,
   mergeEchartsOption,
   sharedUnit,
   uniqueLabels,
@@ -190,6 +191,21 @@ describe('buildMetricChartOption', () => {
     expect(formatter('short')).toBe('short');
   });
 
+  test('a generated label never repeats one already in the list (#158)', () => {
+    expect(uniqueLabels(['a', 'a'])).toEqual(['a', 'a (2)']);
+    expect(uniqueLabels(['a', 'a', 'a', 'b'])).toEqual(['a', 'a (2)', 'a (3)', 'b']);
+    // The literal `a (2)` comes after the generated one: it is the one renamed, and the first `a` keeps its label.
+    expect(uniqueLabels(['a', 'a', 'a (2)'])).toEqual(['a', 'a (2)', 'a (2) (2)']);
+    // A literal `a (2)` first: the second `a` skips to 3.
+    expect(uniqueLabels(['a (2)', 'a', 'a'])).toEqual(['a (2)', 'a', 'a (3)']);
+    for (const xs of [
+      ['a', 'a', 'a (2)'],
+      ['a (2)', 'a', 'a'],
+      ['x', 'x (2)', 'x', 'x', 'x (3)'],
+    ])
+      expect(new Set(uniqueLabels(xs)).size).toBe(xs.length);
+  });
+
   test('sharedUnit is the one unit of every series, none when they differ, 1 without series', () => {
     expect(sharedUnit([result()])).toBe('s');
     expect(sharedUnit([result({ series: [series('a', [1], 's'), series('b', [1], 'By')] })])).toBe('');
@@ -243,6 +259,23 @@ describe('buildMetricChartOption', () => {
     }
   });
 
+  test('heatAxis steps by the cells’ width, not the series’ (#146)', () => {
+    const r = result({
+      widthNs: 60 * S,
+      heat: {
+        bounds: [1],
+        widthNs: 10 * S,
+        cells: [
+          [0, 0, 1],
+          [30 * S, 1, 2],
+        ],
+      },
+    });
+    expect(heatAxis([r])).toEqual({ t0: 0, width: 10 * S, count: 4 });
+    // The heat result need not be first: a line result before it does not set the width.
+    expect(heatAxis([result({ widthNs: 60 * S }), r]).width).toBe(10 * S);
+  });
+
   test('heatmap and distribution use their data', () => {
     const heat = build({
       display: 'heatmap',
@@ -250,6 +283,7 @@ describe('buildMetricChartOption', () => {
         result({
           heat: {
             bounds: [1, 2],
+            widthNs: 10 * S,
             cells: [
               [0, 0, 3],
               [10 * S, 2, 1],

@@ -7,6 +7,7 @@ import { parseFormula } from '../../src/query/metric-formula.js';
 import { type BucketAgg, type HistAgg, mergeAgg, quantileOf } from '../../src/rollups/metric-agg.js';
 import type { MetricEntry, SeriesDef } from '../../src/rollups/metric-catalog.js';
 import { ValueBuckets } from '../../src/rollups/value-buckets.js';
+import { heatAxis } from '../../src/viewer/components/metric-chart-option.js';
 import { evaluateFormula, formulaWidth } from '../../src/viewer/data/metric-formula.js';
 import {
   type LevelData,
@@ -402,6 +403,36 @@ describe('runMetricQuery', () => {
     ]);
   });
 
+  test('a rollup ƒ over a heatmap reports the rollup width for the series and the source width for the cells (#146)', async () => {
+    const fine = 8.192 * S;
+    const m = metric(
+      entry({ type: 'histogram', temporality: 'delta' }),
+      [
+        {
+          bounds: [10, 100],
+          buckets: Array.from({ length: 15 }, (_, i): [number, BucketAgg] => [i, hist([0, 1, 0])]),
+        },
+      ],
+      fine,
+    );
+    const r = await runMetricQuery(
+      m,
+      query({ show: 'p95', fn: [{ op: 'rollup', agg: 'avg', intervalMs: 60_000 }] }),
+      { start: 0, end: 119 * S },
+      600,
+    );
+    expect(r.widthNs).toBe(60 * S);
+    expect(r.heat?.widthNs).toBe(fine);
+    // Cells stay one per 8.192 s bucket; heatAxis gives each its own category, 8 of them in the first 60 s.
+    const { t0, width, count } = heatAxis([r]);
+    expect(width).toBe(fine);
+    expect(count).toBe(15);
+    const firstMinute = (r.heat?.cells ?? [])
+      .filter(([t]) => t < 60 * S)
+      .map(([t]) => Math.round((t - t0) / width));
+    expect(new Set(firstMinute).size).toBe(8);
+  });
+
   test('ƒ increase and rate difference consecutive values', async () => {
     const m = metric(entry({ type: 'gauge' }), [
       {
@@ -793,6 +824,49 @@ describe('review fixes', () => {
       600,
     );
     expect(r.series.map((x) => [x.label, values({ series: [x] })])).toEqual([['y', [13]]]);
+  });
+
+  test('a counter running total at a rollup width counts the ladder bucket straddling the cut (#145)', async () => {
+    const fine = 8.192 * S;
+    // One counter series, delta 1 in every 8.192 s bucket 0..39 (0 s .. 327.7 s).
+    const specs = [{ buckets: Array.from({ length: 40 }, (_, i): [number, BucketAgg] => [i, counter(1)]) }];
+    // Coarsest level (65.536 s): its first boundary is past the cut, so the baseline comes from level 1 alone.
+    const coarse = [
+      {
+        buckets: [
+          [0, counter(8)],
+          [1, counter(8)],
+          [2, counter(8)],
+          [3, counter(8)],
+          [4, counter(8)],
+        ] as [number, BucketAgg][],
+      },
+    ];
+    const m = withLevels(metric(ctr, specs, fine, 1), [
+      levelData(specs, fine, 1),
+      levelData(coarse, 65.536 * S, 2),
+    ]);
+    const r = await runMetricQueryAtWidth(m, query({ show: 'sum' }), { start: 70 * S, end: 179 * S }, 60 * S);
+    expect(r.widthNs).toBe(60 * S);
+    // Baseline: buckets 0..7 (8, the straddling bucket 7 included). 60-120 s holds buckets 8..14 (7), 120-180 s 15..21 (7).
+    expect(r.series[0]?.points).toEqual([
+      [60 * S, 15],
+      [120 * S, 22],
+    ]);
+    // A window from 250 s has cut = 240e9, so the baseline spans both levels: coarse buckets 0..2 (65.536 s,
+    // 8 each, up to 196.6 s) then fine buckets 24..29 (6; fineTo = ceil(240 / 8.192) = ceil(29.3) = 30, where
+    // round would give 29 and drop the straddling bucket 29). 240-300 s holds buckets 30..36 (7), 300-360 s
+    // 37..39 (3): the totals are the plain sums of every bucket before 300 s and 360 s.
+    const late = await runMetricQueryAtWidth(
+      m,
+      query({ show: 'sum' }),
+      { start: 250 * S, end: 359 * S },
+      60 * S,
+    );
+    expect(late.series[0]?.points).toEqual([
+      [240 * S, 37],
+      [300 * S, 40],
+    ]);
   });
 
   test('a formula over a rolled-up operand re-runs the other at the rollup width', async () => {

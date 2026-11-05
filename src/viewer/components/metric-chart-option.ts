@@ -180,13 +180,19 @@ const LEGEND_LABEL_MAX = 48;
 /**
  * ECharts keys series by name, so two series with one label would merge in the legend and the tooltip: the second
  * and later ones get ` (2)`, ` (3)`. Two queries aliased alike, or `by` groups shown alike, give equal labels.
+ * A label is checked against every label emitted so far, so a literal `a (2)` after a generated one is renamed too.
  */
 export function uniqueLabels(labels: readonly string[]): string[] {
-  const seen = new Map<string, number>();
+  const used = new Set<string>();
+  // Per label, the last suffix tried, so k equal labels cost O(k) rather than O(k^2).
+  const last = new Map<string, number>();
   return labels.map((label) => {
-    const n = (seen.get(label) ?? 0) + 1;
-    seen.set(label, n);
-    return n === 1 ? label : `${label} (${n})`;
+    let out = label;
+    let n = last.get(label) ?? 1;
+    while (used.has(out)) out = `${label} (${++n})`;
+    last.set(label, n);
+    used.add(out);
+    return out;
   });
 }
 
@@ -353,8 +359,9 @@ export function heatAxis(results: readonly MetricQueryResult[]): {
   width: number;
   count: number;
 } {
-  const cells = results.find((r) => r.heat !== null)?.heat?.cells ?? [];
-  const width = results[0]?.widthNs ?? 1;
+  const h = results.find((r) => r.heat !== null)?.heat;
+  const cells = h?.cells ?? [];
+  const width = h?.widthNs ?? results[0]?.widthNs ?? 1;
   const t0 = cells.length === 0 ? 0 : Math.min(...cells.map((x) => x[0]));
   const t1 = cells.length === 0 ? 0 : Math.max(...cells.map((x) => x[0]));
   return { t0, width, count: Math.round((t1 - t0) / width) + 1 };

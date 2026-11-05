@@ -6,7 +6,7 @@ import type { MetricEntry, SeriesDef } from '../../src/rollups/metric-catalog.js
 import { ValueBuckets } from '../../src/rollups/value-buckets.js';
 import { type LoadedMetric, type LoadedSeries, metricFromLevels } from '../../src/viewer/data/metric-load.js';
 import type { MetricQuery } from '../../src/viewer/data/metric-query.js';
-import { runMetricRunQuery } from '../../src/viewer/data/metric-run-query.js';
+import { runMetricRunQuery, runMetricView } from '../../src/viewer/data/metric-run-query.js';
 
 const S = 1e9;
 const WIDTH = 10 * S;
@@ -177,6 +177,40 @@ describe('runMetricRunQuery', () => {
     expect(r.lines.map((l) => l.points.map((p) => p?.failed))).toEqual([
       [false, false, false],
       [false, true, false],
+    ]);
+  });
+
+  test("runMetricView's series are the run's members and nothing else (#156)", () => {
+    const m = metric(THREE_RUNS);
+    const members = m.series.slice(2, 4);
+    const v = runMetricView(m, members);
+    expect(v.series).toEqual(members);
+    expect(v.entry).toBe(m.entry);
+    expect(v.level).toBe(m.level);
+  });
+
+  test('two runs with a failing job: lines and failed marks are unchanged (#156)', async () => {
+    const specs = THREE_RUNS.slice(0, 4).map((s, i) => (i === 3 ? { ...s, result: 'failure' } : s));
+    const r = await runMetricRunQuery(metric(specs), query(), {
+      ...opts,
+      failedWhen: 'attributes["result"] == "failure"',
+    });
+    expect(r.runs.map((x) => x.id)).toEqual(['r1', 'r2']);
+    expect(r.lines.map((l) => [l.label, l.points.map((p) => [p?.value, p?.failed])])).toEqual([
+      [
+        'build',
+        [
+          [10, false],
+          [11, false],
+        ],
+      ],
+      [
+        'check',
+        [
+          [20, false],
+          [21, true],
+        ],
+      ],
     ]);
   });
 

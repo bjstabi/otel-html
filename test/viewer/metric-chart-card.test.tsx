@@ -123,6 +123,7 @@ const HEAT: MetricQueryResult = {
   ...result(false),
   heat: {
     bounds: [1],
+    widthNs: 10 * S,
     cells: [
       [20 * S, 0, 1],
       [40 * S, 1, 2],
@@ -335,6 +336,16 @@ describe('MetricChartCard', () => {
     await act(async () => release(true));
     const items = await screen.findAllByRole('menuitem');
     expect(items[0]?.textContent).toBe('trace not in this report');
+  });
+
+  test('a heatmap under a rollup maps a click by the cell width (#146)', async () => {
+    const rolled: MetricQueryResult = { ...HEAT, widthNs: 60 * S };
+    const { picks } = setup({ display: 'heatmap', result: rolled });
+    plot.scale = 1;
+    await clickAt(1);
+    const items = await screen.findAllByRole('menuitem');
+    await act(async () => items[0]?.click());
+    expect(picks).toEqual([{ kind: 'traces', queryId: 'q1', window: { start: 30 * S, end: 40 * S } }]);
   });
 
   test('a heatmap click maps the category index back to its bucket time', async () => {

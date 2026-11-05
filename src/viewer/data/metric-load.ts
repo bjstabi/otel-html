@@ -114,19 +114,38 @@ function notInLadder(id: number, k: number): OtelHtmlError {
   });
 }
 
-/** Caches `read` per `keyOf(...args)`; a rejected read is dropped, so the next call reads again. */
+/** Windows of level data kept by `levelOf`; each can hold a whole level, so few. */
+const LEVEL_DATA_CACHE = 4;
+/** Level files and exemplar files kept; a page file is small and windows share them. */
+const METRIC_FILE_CACHE = 32;
+
+/**
+ * Caches `read` per `keyOf(...args)`, keeping the `limit` most recently used keys (the promise is cached, so
+ * concurrent calls share one read); a rejected read is dropped, so the next call reads again.
+ */
 function once<A extends unknown[], V>(
   read: (args: A) => Promise<V>,
   keyOf: (...args: A) => string,
+  limit: number,
 ): (args: A) => Promise<V> {
   const cache = new Map<string, Promise<V>>();
   return (args) => {
     const key = keyOf(...args);
     const hit = cache.get(key);
-    if (hit !== undefined) return hit;
+    if (hit !== undefined) {
+      cache.delete(key);
+      cache.set(key, hit);
+      return hit;
+    }
     const p = read(args);
     cache.set(key, p);
-    p.catch(() => cache.delete(key));
+    if (cache.size > limit) {
+      const oldest = cache.keys().next();
+      if (!oldest.done) cache.delete(oldest.value);
+    }
+    p.catch(() => {
+      if (cache.get(key) === p) cache.delete(key); // not a newer read of the same key, after this one was evicted
+    });
     return p;
   };
 }
@@ -328,14 +347,16 @@ export async function loadMetric(
       throw invalid(`${path}.series[${def.id}].scope`, 'a catalog scope', String(def.scope));
     return { def, resource, scope };
   });
-  // Every file is read once: levels 0-2 share `ex.js`, and windows share the pages they touch.
+  // Recently read files are kept: levels 0-2 share `ex.js`, and windows share the pages they touch.
   const cachedLevelFile = once(
     ([k, page]: [number, number | null]) => loadLevelFile(loader, id, k, page),
     (k, page) => `${k}:${page}`,
+    METRIC_FILE_CACHE,
   );
   const cachedExemplarFile = once(
     ([k, page]: [number, number | null]) => loadExemplars(loader, id, k, page),
     (k, page) => `${k}:${page}`,
+    METRIC_FILE_CACHE,
   );
   const levelFile = (k: number, page: number | null): Promise<LevelFile> => cachedLevelFile([k, page]);
   const exemplarFile = (k: number, page: number | null): Promise<StoredExemplar[]> =>
@@ -381,6 +402,7 @@ export async function loadMetric(
           : pagesIn(files.exemplars.get(exLevel) ?? null, window, levelWidthNs(exLevel));
       return `${k}:${pages?.join(',') ?? '*'}:${exPages?.join(',') ?? '*'}`;
     },
+    LEVEL_DATA_CACHE,
   );
   return {
     entry,

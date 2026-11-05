@@ -283,6 +283,45 @@ describe('loadMetric', () => {
   });
 });
 
+describe('bounded caches (#155)', () => {
+  let run: Fixture;
+  beforeAll(async () => {
+    run = await buildCounterRun({ durationS: 72_000, stepS: 2000, series: 1 });
+  });
+  const PAGE_NS = 2048 * LEVEL0_WIDTH_NS;
+  const page = (p: number) => ({ start: p * PAGE_NS, end: (p + 1) * PAGE_NS - 1 });
+  const l0 = (p: number): string => `data/metrics/000000/l0-${String(p).padStart(6, '0')}.js`;
+
+  test('levelOf keeps the 4 most recent windows', async () => {
+    const loader = createScriptedLoader(run.files);
+    const m = await loadMetric(loader, run.manifest, 0);
+    const first = await m.level(0, page(0));
+    const first1 = await m.level(0, page(1));
+    for (const p of [2, 3]) await m.level(0, page(p));
+    expect(await m.level(0, page(0))).toBe(first); // a hit makes page 0 the most recent
+    await m.level(0, page(4)); // evicts the least recently used: page 1, not page 0
+    expect(await m.level(0, page(0))).toBe(first);
+    expect(await m.level(0, page(1))).not.toBe(first1);
+    for (const p of [2, 3, 4, 1]) await m.level(0, page(p)); // page 0's window is now the oldest of five
+    loader.reset();
+    const again = await m.level(0, page(0));
+    expect(again).not.toBe(first);
+    expect(again.series.get(0)?.t).toEqual(first.series.get(0)?.t);
+    expect(loader.calls).toEqual([]); // its page came from the file cache
+  });
+
+  test('the level-file cache keeps 32 pages', async () => {
+    const loader = createScriptedLoader(run.files);
+    const m = await loadMetric(loader, run.manifest, 0);
+    for (let p = 0; p < 34; p++) await m.level(0, page(p));
+    loader.reset();
+    await m.level(0, page(33)); // a levelOf hit: nothing read
+    expect(loader.calls).toEqual([]);
+    await m.level(0, page(0)); // levelOf evicted it, and page 0 is past the 32 most recent files
+    expect(loader.calls).toEqual([l0(0)]);
+  });
+});
+
 describe('loadMetricCatalog', () => {
   test('yields the entries and interned resources without the series files', async () => {
     const loader = createScriptedLoader(reports.compacted.files);

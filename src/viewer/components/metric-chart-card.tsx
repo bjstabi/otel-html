@@ -231,7 +231,9 @@ export function MetricChartCard(props: MetricChartCardProps): JSX.Element {
       if (t === null || first === undefined) return;
       // The bucket under the click, at the width of the query the menu is for (they can differ in a combined chart).
       const windowAt = (queryId: string): TimeWindow => {
-        const width = rs.find((r) => r.queryId === queryId)?.widthNs ?? first.widthNs;
+        const r = rs.find((x) => x.queryId === queryId) ?? first;
+        // A heatmap's cells keep their own width under a rollup ƒ.
+        const width = display === 'heatmap' ? (r.heat?.widthNs ?? r.widthNs) : r.widthNs;
         const start = Math.floor(t / width) * width;
         return { start, end: start + width };
       };
