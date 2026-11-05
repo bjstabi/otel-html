@@ -158,6 +158,9 @@ describe('the cap note of a duration measure', () => {
       name: 'Measured over the first 2 service.name values; 3 spans with other values are left out',
     });
     expect(note.textContent).toBe('3 spans past the first 2 values left out');
+    expect(note.getAttribute('aria-label')).toBe(
+      'Measured over the first 2 service.name values; 3 spans with other values are left out',
+    );
     expect(note.className).toContain('truncate');
   });
 

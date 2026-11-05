@@ -6,6 +6,7 @@ import type { Manifest } from '../../src/format/manifest.js';
 import { FacetCounts } from '../../src/rollups/facets.js';
 import { RedSeries } from '../../src/rollups/red.js';
 import { TimeBuckets } from '../../src/rollups/time-buckets.js';
+import { formatDuration } from '../../src/semconv/formatters.js';
 import type { DataSource, SpanQuery, SpanQueryResult, SpanRow } from '../../src/viewer/data/data-source.js';
 import { type GoTo, GoToContext } from '../../src/viewer/shell/go-to.js';
 import { createSelectionStore } from '../../src/viewer/state/selection.js';
@@ -301,8 +302,8 @@ describe('TracesExplorer duration facet', () => {
     await user.keyboard('{ArrowRight}');
     expect(store.getState().condition).toBe(`${DUR} >= ${edges[2]}`);
     await waitFor(() => expect(document.querySelector('[data-bin="0"]')?.getAttribute('title')).toBeTruthy());
-    expect(document.querySelector('[data-bin="0"]')?.getAttribute('title')?.split('-')[0]).toBe(
-      firstTitle?.split('-')[0],
+    expect(document.querySelector('[data-bin="0"]')?.getAttribute('title')?.split(' - ')[0]).toBe(
+      firstTitle?.split(' - ')[0],
     );
   });
 
@@ -310,8 +311,8 @@ describe('TracesExplorer duration facet', () => {
     setup(filtering, 10, { q: `${DUR} >= 300000 and ${DUR} <= 50000000` });
     const min = await screen.findByRole('slider', { name: 'Minimum duration' });
     const max = screen.getByRole('slider', { name: 'Maximum duration' });
-    expect(min.getAttribute('aria-valuetext')).toBe('from 300000 ns');
-    expect(max.getAttribute('aria-valuetext')).toBe('up to 50000000 ns');
+    expect(min.getAttribute('aria-valuetext')).toBe('from 300 µs');
+    expect(max.getAttribute('aria-valuetext')).toBe('up to 50 ms');
     expect(min.getAttribute('aria-valuenow')).toBe('1');
     expect(max.getAttribute('aria-valuenow')).toBe('22');
   });
@@ -364,10 +365,10 @@ describe('TracesExplorer duration facet', () => {
     const { store } = setup(filtering, 10, { q: `${DUR} >= 100000` });
     await screen.findByRole('slider', { name: 'Minimum duration' });
     const first = (): string | undefined =>
-      document.querySelector('[data-bin="0"]')?.getAttribute('title')?.split('-')[0];
-    expect(first()).not.toBe(String(edges[0]));
-    expect(Number(first())).toBeLessThan(100000);
+      document.querySelector('[data-bin="0"]')?.getAttribute('title')?.split(' - ')[0];
+    expect(first()).not.toBe(formatDuration(edges[0] ?? 0));
+    expect(first()).not.toBe(formatDuration(100000));
     act(() => store.getState().clear('condition'));
-    await waitFor(() => expect(first()).toBe(String(edges[0])));
+    await waitFor(() => expect(first()).toBe(formatDuration(edges[0] ?? 0)));
   });
 });

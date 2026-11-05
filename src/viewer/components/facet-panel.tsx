@@ -2,6 +2,7 @@ import { type JSX, type ReactNode, useState } from 'react';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { FacetCounts } from '../../rollups/facets.js';
 import { DEFAULT_LOG_FACETS } from '../../rollups/log-rollups.js';
+import { formatDuration } from '../../semconv/formatters.js';
 import { LOG_SEVERITY_KEYS, type LogSeverityKey } from '../../semconv/severity.js';
 import { useSelection } from '../state/selection-context.js';
 import {
@@ -339,7 +340,7 @@ function DurationFacet(props: {
             // biome-ignore lint/suspicious/noArrayIndexKey: bins are positional
             key={i}
             data-bin={i}
-            title={`${b.fromNs}-${b.toNs} ns: ${b.count}`}
+            title={`${formatDuration(b.fromNs)} - ${formatDuration(b.toNs)}: ${b.count}`}
             onPointerDown={() => setDrag({ anchor: i, current: i })}
             onPointerEnter={() => setDrag((d) => (d === null ? d : { anchor: d.anchor, current: i }))}
             className={`flex-1 cursor-col-resize rounded-sm ${i >= lo && i <= hi ? 'bg-accent' : 'bg-hairline'}`}
@@ -355,11 +356,11 @@ function DurationFacet(props: {
           aria-valuemin={0}
           aria-valuemax={last}
           aria-valuenow={lo}
-          aria-valuetext={`from ${bins[lo]?.fromNs ?? 0} ns`}
+          aria-valuetext={`from ${formatDuration(bins[lo]?.fromNs ?? 0)}`}
           onKeyDown={step('min')}
           className="rounded-full border border-hairline px-2 py-0.5"
         >
-          {bins[lo]?.fromNs ?? 0} ns
+          {formatDuration(bins[lo]?.fromNs ?? 0)}
         </div>
         <div
           role="slider"
@@ -368,11 +369,11 @@ function DurationFacet(props: {
           aria-valuemin={0}
           aria-valuemax={last}
           aria-valuenow={hi}
-          aria-valuetext={`up to ${bins[hi]?.toNs ?? 0} ns`}
+          aria-valuetext={`up to ${formatDuration(bins[hi]?.toNs ?? 0)}`}
           onKeyDown={step('max')}
           className="rounded-full border border-hairline px-2 py-0.5"
         >
-          {bins[hi]?.toNs ?? 0} ns
+          {formatDuration(bins[hi]?.toNs ?? 0)}
         </div>
       </div>
     </section>

@@ -110,6 +110,26 @@ describe('FacetPanel', () => {
     expect(screen.getByText(HOSTILE, { normalizer: (t) => t })).toBeTruthy();
   });
 
+  test('duration bounds read as formatted durations and write integer nanoseconds', async () => {
+    const user = userEvent.setup();
+    const bins = [
+      { fromNs: 0, toNs: 1874, count: 5 },
+      { fromNs: 1874, toNs: 10_000, count: 3 },
+      { fromNs: 10_000, toNs: 2_500_000, count: 1 },
+    ];
+    const { store } = setup(undefined, { durationBins: bins });
+    const max = screen.getByRole('slider', { name: 'Maximum duration' });
+    expect(max.getAttribute('aria-valuetext')).toBe('up to 2.5 ms');
+    expect(max.textContent).toBe('2.5 ms');
+    expect(document.querySelector('[data-bin="0"]')?.getAttribute('title')).toBe('0 ns - 1.87 µs: 5');
+    const min = screen.getByRole('slider', { name: 'Minimum duration' });
+    await user.click(min);
+    await user.keyboard('{ArrowRight}');
+    expect(min.getAttribute('aria-valuetext')).toBe('from 1.87 µs');
+    expect(min.textContent).toBe('1.87 µs');
+    expect(store.getState().condition).toBe('span.end_time_unix_nano - span.start_time_unix_nano >= 1874');
+  });
+
   test('duration range writes span duration tokens, replacing earlier ones', async () => {
     const user = userEvent.setup();
     const bins = [

@@ -218,7 +218,8 @@ export function durationAxis(
   for (let i = 1; i < binCount; i++) edges[i] = Math.max(start, Math.min(edges[i] ?? start, end));
   edges[0] = start;
   edges[binCount] = end;
-  return edges;
+  // Whole nanoseconds: the edges become `>=`/`<=` tokens, and rounding keeps them non-decreasing.
+  return edges.map(Math.round);
 }
 
 /** Counts rows into the `[from, to)` bins between `edges`; a row below the first edge counts in the first bin, one at or above the last in the last. */
