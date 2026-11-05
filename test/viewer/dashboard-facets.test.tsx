@@ -19,6 +19,7 @@ import { TimeBuckets } from '../../src/rollups/time-buckets.js';
 import type { WidgetActions } from '../../src/viewer/dashboards/dashboard-page.js';
 import type { WidgetScope } from '../../src/viewer/dashboards/scope.js';
 import { FacetChartWidget, suggestKeys } from '../../src/viewer/dashboards/widgets/facet-chart.js';
+import { count } from '../../src/viewer/dashboards/widgets/subtitle.js';
 import {
   createDataSource,
   type DataSource,
@@ -149,6 +150,20 @@ describe('the cap note of a duration measure', () => {
       'Measured over the first 2 service.name values; 3 spans with other values are left out',
     );
     expect(note.className).toContain('truncate');
+  });
+
+  test('the full sentence is the accessible name, so touch and screen readers get it', async () => {
+    mount(over(3), widget('duration.max'));
+    const note = await screen.findByRole('status', {
+      name: 'Measured over the first 2 service.name values; 3 spans with other values are left out',
+    });
+    expect(note.textContent).toBe('3 spans past the first 2 values left out');
+    expect(note.className).toContain('truncate');
+  });
+
+  test('count() groups thousands', () => {
+    expect(count(1000, 'span')).toBe('1,000 spans');
+    expect(count(1, 'log')).toBe('1 log');
   });
 
   test('formats a thousand with a separator', async () => {
