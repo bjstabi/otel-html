@@ -299,6 +299,15 @@ describe('otel-html ci site and cleanup', { timeout: 60_000 }, () => {
     ...extra,
   ];
 
+  test('republishing an old run with retention 1 keeps it on the site and in the index', async () => {
+    stubApi({ 42: runBody(42), 43: runBody(43) });
+    expect(await runCli(siteArgs(43, ['--retention', '1']), fakeIo().io, realFsDeps)).toBe(0);
+    expect(await runCli(siteArgs(42, ['--retention', '1']), fakeIo().io, realFsDeps)).toBe(0);
+    expect(existsSync(join(site, 'branch/main/runs/42/data/manifest.js'))).toBe(true);
+    const index = JSON.parse(readFileSync(join(site, 'index.json'), 'utf8'));
+    expect(index.channels['branch/main'].runs.map((r: { runId: number }) => r.runId)).toEqual([43, 42]);
+  });
+
   test('places a default-branch run, rebuilds the rolling branch report and applies retention', async () => {
     stubApi({ 42: runBody(42), 43: runBody(43) });
     const out = join(dir, 'gh-output');
