@@ -16,93 +16,162 @@ export interface ConverterSpec {
 
 // ---------------------------------------------------------------------------
 // Regex: user patterns run on the JS (backtracking) engine, while OTTL users expect
-// Go RE2 (linear time). We therefore accept only an RE2-like subset: no
-// lookaround or backreferences, and no quantifier that can repeat more than 4 times
-// applied to a group that itself contains a variable quantifier (maximum above 1 and
-// minimum below maximum): the classic `(a+)+` blow-up, and its bounded form
-// `(a+){2,20}`. `?` is not a repeat and an exact count like `{2}` gives a fixed width.
-// Allowing up to 4 outer repetitions keeps common forms such as `(\d+\.){3}` usable,
-// but the cost on long subjects is still polynomial of high degree (see #188). Pattern
-// length is capped. Alternation overlap such as `(a|a)*` is not detected.
+// Go RE2 (linear time). We therefore accept only an RE2-like subset: no lookaround or
+// backreferences, and no repeated group (maximum above 1) that contains a variable
+// quantifier (`*`, `+`, `{n,}`, `{n,m}` with m > n) unless each such quantifier is followed,
+// inside the group (looking through subgroup ends), by a mandatory single literal the
+// quantified part cannot match, as in `(\d+\.){3}`. That literal pins where each repeat
+// ends, so the split is unique and cannot blow up like `(a+)+`. Pattern length is capped.
+// Alternation overlap such as `(a|a)*` is not detected.
 // ---------------------------------------------------------------------------
 
 const MAX_PATTERN_LENGTH = 512;
 const REGEX_CACHE_LIMIT = 256;
 const regexCache = new Map<string, RegExp>();
 
-function regexProblem(p: string): string | undefined {
-  // Frame per open group: whether it contains a variable quantifier (maximum above 1, minimum below it).
-  const stack: boolean[] = [false];
-  let lastAtomRepeatGroup = false;
+const NESTED_REPETITION =
+  'nested repetition (e.g. "(a+)+" or "(a+){2}") can backtrack catastrophically; put a literal the repeated part cannot match after it, like (\\d+\\.){3}, or repeat a class instead, like [a-z]{1,64}';
+
+interface Quant {
+  readonly min: number;
+  readonly max: number;
+}
+
+/** One element of a pattern sequence, with its source span (`start` to `end`, quantifier excluded). */
+interface Item {
+  readonly kind: 'atom' | 'group' | 'alt' | 'anchor';
+  readonly start: number;
+  end: number;
+  readonly children: Item[];
+  /** The single character an atom stands for when it is a plain or identity-escaped one. */
+  readonly literal: string | undefined;
+  q: Quant | undefined;
+}
+
+const SPECIAL = '^$\\.*+?()[]{}|';
+const IDENTITY_ESCAPES = `${SPECIAL}/`;
+const ESCAPE = /^\\(?:x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|u\{[0-9a-fA-F]+\}|[pP]\{[^}]*\}|c[A-Za-z]|.)/su;
+const QUANTIFIER = /^(?:([*+?])|\{(\d+)(?:(,)(\d*))?\})\??/;
+
+function item(kind: Item['kind'], start: number, end: number, literal?: string): Item {
+  return { kind, start, end, children: [], literal, q: undefined };
+}
+
+/** The pattern as an item tree, or the reason it is not supported. */
+function parseRegex(p: string): Item | string {
+  const root = item('group', 0, p.length);
+  const stack: Item[] = [root];
+  const top = (): Item => stack[stack.length - 1] ?? root;
   let i = 0;
-  const markTop = (): void => {
-    stack[stack.length - 1] = true;
-  };
   while (i < p.length) {
     const c = p.charAt(i);
+    const seq = top().children;
     if (c === '\\') {
       const n = p.charAt(i + 1);
       if ((n >= '1' && n <= '9') || n === 'k') return 'backreferences are not supported';
-      lastAtomRepeatGroup = false;
-      i += 2;
-      continue;
-    }
-    if (c === '[') {
-      i++;
+      const len = ESCAPE.exec(p.slice(i))?.[0].length ?? 1;
+      const identity = len === 2 && IDENTITY_ESCAPES.includes(n);
+      seq.push(item('atom', i, i + len, identity ? n : undefined));
+      i += len;
+    } else if (c === '[') {
+      const start = i++;
       if (p.charAt(i) === '^') i++;
       // JS semantics: a ']' right after '[' or '[^' closes the class ([] is empty, [^] is any).
       while (i < p.length && p.charAt(i) !== ']') i += p.charAt(i) === '\\' ? 2 : 1;
-      lastAtomRepeatGroup = false;
-      i++;
-      continue;
-    }
-    if (c === '(') {
+      i = Math.min(i + 1, p.length);
+      seq.push(item('atom', start, i));
+    } else if (c === '(') {
+      const k = p.charAt(i + 2);
+      let open = 1;
       if (p.charAt(i + 1) === '?') {
-        const k = p.charAt(i + 2);
         if (k === '=' || k === '!' || (k === '<' && (p.charAt(i + 3) === '=' || p.charAt(i + 3) === '!')))
           return 'lookaround is not supported';
+        open = k === '<' ? Math.max(p.indexOf('>', i), i + 2) - i + 1 : 3;
       }
-      stack.push(false);
-      lastAtomRepeatGroup = false;
+      const g = item('group', i, p.length);
+      seq.push(g);
+      stack.push(g);
+      i += open;
+    } else if (c === ')') {
+      if (stack.length > 1) {
+        const g = stack.pop();
+        if (g !== undefined) g.end = i + 1;
+      }
       i++;
-      continue;
-    }
-    if (c === ')') {
-      const inner = stack.length > 1 ? stack.pop() === true : false;
-      if (inner) markTop();
-      lastAtomRepeatGroup = inner;
+    } else if (c === '|') {
+      seq.push(item('alt', i, i + 1));
       i++;
-      continue;
-    }
-    // The quantifier's maximum repeat count, when this character starts one.
-    let max: number;
-    let min = 0;
-    let len = 1;
-    if (c === '*' || c === '+') max = Number.POSITIVE_INFINITY;
-    else if (c === '?') max = 1;
-    else if (c === '{') {
-      const m = /^\{(\d+)(,(\d*))?\}/.exec(p.slice(i));
+    } else if (c === '^' || c === '$') {
+      seq.push(item('anchor', i, i + 1));
+      i++;
+    } else if (c === '.') {
+      seq.push(item('atom', i, i + 1));
+      i++;
+    } else {
+      const m = QUANTIFIER.exec(p.slice(i));
       if (m === null) {
-        lastAtomRepeatGroup = false;
-        i++;
+        const cp = String.fromCodePoint(p.codePointAt(i) ?? 0);
+        seq.push(item('atom', i, i + cp.length, SPECIAL.includes(cp) ? undefined : cp));
+        i += cp.length;
         continue;
       }
-      len = m[0].length;
-      min = Number(m[1]);
-      if (m[2] === undefined) max = min;
-      else max = m[3] === '' ? Number.POSITIVE_INFINITY : Number(m[3]);
-    } else {
-      lastAtomRepeatGroup = false;
-      i++;
-      continue;
+      // A quantifier applies to the previous item (the group just closed, when it follows a ')').
+      const prev = seq[seq.length - 1];
+      const min = m[1] === '+' ? 1 : Number(m[2] ?? 0);
+      let max: number;
+      if (m[1] === '*' || m[1] === '+') max = Number.POSITIVE_INFINITY;
+      else if (m[1] === '?') max = 1;
+      else if (m[3] === undefined) max = min;
+      else max = m[4] === '' || m[4] === undefined ? Number.POSITIVE_INFINITY : Number(m[4]);
+      if (prev !== undefined && (prev.kind === 'atom' || prev.kind === 'group') && prev.q === undefined)
+        prev.q = { min, max };
+      i += m[0].length;
     }
-    if (max > 4 && lastAtomRepeatGroup)
-      return 'nested repetition (e.g. "(a+)+" or "(a+){2,20}") can backtrack catastrophically; repeat a class instead, like [a-z]{1,64}';
-    if (max > 1 && min < max) markTop();
-    lastAtomRepeatGroup = false;
-    i += len;
   }
-  return undefined;
+  return root;
+}
+
+const isVariable = (q: Quant | undefined): boolean => q !== undefined && q.max > 1 && q.min < q.max;
+
+const hasVariable = (it: Item): boolean => isVariable(it.q) || it.children.some(hasVariable);
+
+/** Whether `follow` is a mandatory single literal that the quantified part `x` cannot match. */
+function safeFollower(p: string, flags: string, x: Item, follow: Item | undefined): boolean {
+  if (follow === undefined || follow.kind !== 'atom' || follow.literal === undefined) return false;
+  if (follow.q !== undefined && follow.q.min === 0) return false;
+  try {
+    return !new RegExp(`^(?:${p.slice(x.start, x.end)})$`, flags).test(follow.literal);
+  } catch {
+    return false;
+  }
+}
+
+/** Every variable quantifier in `items` has a safe follower; `outer` follows the sequence's group. */
+function followersSafe(p: string, flags: string, items: readonly Item[], outer: Item | undefined): boolean {
+  return items.every((it, i) => {
+    const follow = items[i + 1] ?? outer;
+    if (isVariable(it.q) && !safeFollower(p, flags, it, follow)) return false;
+    return it.kind !== 'group' || followersSafe(p, flags, it.children, follow);
+  });
+}
+
+/** Whether some repeated group contains a variable quantifier that has no safe follower inside it. */
+function hasUnsafeRepeat(p: string, flags: string, it: Item): boolean {
+  if (it.kind !== 'group') return false;
+  if (
+    it.q !== undefined &&
+    it.q.max > 1 &&
+    it.children.some(hasVariable) &&
+    !followersSafe(p, flags, it.children, undefined)
+  )
+    return true;
+  return it.children.some((c) => hasUnsafeRepeat(p, flags, c));
+}
+
+function regexProblem(p: string, flags: string): string | undefined {
+  const tree = parseRegex(p);
+  if (typeof tree === 'string') return tree;
+  return hasUnsafeRepeat(p, flags, tree) ? NESTED_REPETITION : undefined;
 }
 
 function compileRegex(pattern: string, col: number): RegExp {
@@ -127,7 +196,7 @@ function compileRegex(pattern: string, col: number): RegExp {
     if (lead[1]?.includes('i')) flags += 'i';
     if (lead[1]?.includes('s')) flags += 's';
   }
-  const problem = regexProblem(body);
+  const problem = regexProblem(body, flags);
   if (problem !== undefined) fail(JSON.stringify(pattern), problem);
   let re: RegExp;
   try {
