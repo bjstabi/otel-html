@@ -2,8 +2,9 @@ import { z } from 'zod';
 import { OtelHtmlError } from '../model/errors.js';
 import type { MetricPointRecord } from '../model/records.js';
 import { compileCondition } from '../ottl/compile.js';
+import { parseCondition } from '../ottl/parse.js';
 import { parseFormula } from './metric-formula.js';
-import { compileBy } from './metric-paths.js';
+import { compileBy, pathsOf, rejectPerPointPaths } from './metric-paths.js';
 
 /** Whether `expr` parses as a formula (`parseFormula`); the schema says so before the Explorer tries it. */
 function parses(expr: string): boolean {
@@ -112,6 +113,17 @@ export const MetricQuerySchema: z.ZodType<MetricQuery, MetricQueryInput> = z
         code: 'custom',
         path: ['where'],
         message: `an OTTL condition valid for data points (${e.message})`,
+      });
+      return;
+    }
+    try {
+      rejectPerPointPaths(pathsOf(parseCondition(q.where)));
+    } catch (e) {
+      if (!(e instanceof OtelHtmlError && e.code === 'invalid-ottl')) throw e;
+      ctx.addIssue({
+        code: 'custom',
+        path: ['where'],
+        message: `a condition on whole series (${e.message})`,
       });
     }
   });

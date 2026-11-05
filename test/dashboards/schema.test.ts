@@ -201,6 +201,9 @@ describe('DashboardSchema', () => {
       dash([m({ queries: [q], formulas: [{ id: 'f1', expr: 'a / c' }] })]),
     );
     expect(issuePaths(bad)).toEqual(['widgets.0.formulas.0.expr']);
+    expect(
+      issuePaths(DashboardSchema.safeParse(dash([m({ queries: [{ ...q, where: 'flags == 1' }] })]))),
+    ).toEqual(['widgets.0.queries.0.where']);
     expect(DashboardSchema.safeParse(dash([m({ queries: [] })])).success).toBe(false);
     expect(DashboardSchema.safeParse(dash([m({ queries: [{ ...q, metric: '' }] })])).success).toBe(false);
     expect(DashboardSchema.safeParse(dash([m({ queries: [{ ...q, show: '' }] })])).success).toBe(false);
