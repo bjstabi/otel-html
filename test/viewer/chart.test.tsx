@@ -216,7 +216,7 @@ describe('Chart patch', () => {
       );
     await show(a, p1);
     expect(setOptionCalls).toEqual([
-      [a, true],
+      [a, { notMerge: true, lazyUpdate: true }],
       [p1, { notMerge: false }],
     ]);
     setOptionCalls.length = 0;
@@ -225,7 +225,7 @@ describe('Chart patch', () => {
     setOptionCalls.length = 0;
     await show(b, p2);
     expect(setOptionCalls).toEqual([
-      [b, true],
+      [b, { notMerge: true, lazyUpdate: true }],
       [p2, { notMerge: false }],
     ]);
   });

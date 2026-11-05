@@ -128,7 +128,10 @@ export function Chart({
     // Subscribe first: a render's `rendered`/`finished` events can fire during setOption itself.
     const entries = Object.entries(onEvents ?? {});
     for (const [name, handler] of entries) chart.on(name, handler);
-    chart.setOption(option, true);
+    // ECharts re-runs every `renderItem` of a kept series on each merge: with a patch following, defer this render
+    // so the bars draw once, in the patch's flush.
+    if (patchRef.current === undefined) chart.setOption(option, true);
+    else chart.setOption(option, { notMerge: true, lazyUpdate: true });
     if (patchRef.current !== undefined) {
       chart.setOption(patchRef.current, { notMerge: false });
       applied.current = patchRef.current;

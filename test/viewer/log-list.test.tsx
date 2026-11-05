@@ -100,12 +100,14 @@ describe('LogList', () => {
   });
 
   test('lines option changes row height (20 x lines + 16)', async () => {
-    mount([row(0)]);
+    mount([row(0), row(1)]);
     const rowEl = (): HTMLElement => screen.getAllByRole('row')[1] as HTMLElement;
+    const secondRow = (): HTMLElement => screen.getAllByRole('row')[2] as HTMLElement;
     expect(rowEl().style.height).toBe('36px');
     const select = screen.getByRole('combobox', { name: 'Lines' });
     await userEvent.setup().selectOptions(select, '3');
     expect(rowEl().style.height).toBe('76px');
+    expect(secondRow().style.transform).toBe('translateY(76px)');
     await userEvent.setup().selectOptions(select, '10');
     expect(rowEl().style.height).toBe('216px');
   });

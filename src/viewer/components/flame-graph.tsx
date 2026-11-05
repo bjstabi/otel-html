@@ -452,8 +452,8 @@ export function flameOption(bars: readonly FlameBar[], theme: FlameTheme, view: 
 }
 
 /**
- * The selection ring as a one-item series merged over `flameOption` (`Chart`'s `patch`), so a click re-sets one
- * item instead of every bar. `data` is `[[depth, start, end]]` for the selected bar, empty when none is selected.
+ * The selection ring as a one-item series merged over `flameOption` (`Chart`'s `patch`), so a click rebuilds no
+ * React-side option for the bars (ECharts still redraws the items). `data` is `[[depth, start, end]]` for the selected bar, empty when none is selected.
  */
 export function selectionPatch(
   bars: readonly FlameBar[],
