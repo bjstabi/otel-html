@@ -445,6 +445,8 @@ describe('TracePanel Logs tabs', () => {
   const logRow = (i: number, ns: number, spanId: string | null, body: string, traceId = TRACE_ID): LogRow =>
     ({
       ref: logRef(0, i),
+      n: 0,
+      i,
       log: {
         time: ns as RelNanos,
         observedTime: null,

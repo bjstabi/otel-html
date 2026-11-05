@@ -27,6 +27,7 @@ import {
   ordered,
   sortFor,
   throwIfAborted,
+  visitInBlocks,
 } from './query-common.js';
 import type { LoadedChunk, TimeWindow } from './span-query.js';
 import { TopKBuffer, topK } from './top-k.js';
@@ -57,17 +58,15 @@ export function refParts(r: LogRef): { n: number; i: number } {
   return { n: Number(n), i: Number(i) };
 }
 
-function compareRefs(a: LogRef, b: LogRef): number {
-  const x = refParts(a);
-  const y = refParts(b);
-  return x.n - y.n || x.i - y.i;
-}
-
 /** The part of a decoded log chunk that rows need: its number and the resource and scope tables. */
 export type LoadedLogChunk = LoadedChunk;
 
 export interface LogRow {
   ref: LogRef;
+  /** The ref's chunk number. */
+  n: number;
+  /** The ref's row index in that chunk. */
+  i: number;
   log: LogRecordRecord;
   resource: ResourceRecord;
   scope: ScopeRecord;
@@ -166,6 +165,8 @@ export function toLogEntries(
     return {
       row: {
         ref: logRef(chunk.n, i),
+        n: chunk.n,
+        i,
         log,
         resource,
         scope,
@@ -193,7 +194,7 @@ export function patternRowsOf(d: Drain): PatternRow[] {
 }
 
 /** Time order with the ref as tiebreak: the order of a trace's logs and of Surrounding logs. */
-export const byTimeThenRef = (a: LogRow, b: LogRow): number => a.time - b.time || compareRefs(a.ref, b.ref);
+export const byTimeThenRef = (a: LogRow, b: LogRow): number => a.time - b.time || a.n - b.n || a.i - b.i;
 
 /** Logs from the same stream as `target`: same service and same host. */
 function sameStream(target: LogRow, row: LogRow): boolean {
@@ -435,5 +436,17 @@ export function queryLogEntries(
 ): LogQueryResult {
   const run = new LogQueryRun(q, signal, caps);
   for (const e of entries) run.visit(e);
+  return run.finish(null);
+}
+
+/** `queryLogEntries`, yielding to events between blocks so an abort that arrives meanwhile is seen. */
+export async function scanLogEntries(
+  entries: readonly LogEntry[],
+  q: LogQuery,
+  signal?: AbortSignal,
+  caps: FacetCaps = DEFAULT_FACET_CAPS,
+): Promise<LogQueryResult> {
+  const run = new LogQueryRun(q, signal, caps);
+  await visitInBlocks(entries, run, signal);
   return run.finish(null);
 }

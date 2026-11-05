@@ -37,6 +37,42 @@ export class AbortTicker {
   }
 }
 
+/** Entries an in-memory scan visits between yields to the event loop. */
+export const EAGER_BLOCK = 8192;
+
+/** Resolve on a later task, so events queued meanwhile (a keystroke's cleanup, an abort) run first. */
+export function yieldToEvents(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof MessageChannel === 'undefined') {
+      setTimeout(resolve, 0);
+      return;
+    }
+    const { port1, port2 } = new MessageChannel();
+    port1.addEventListener('message', () => {
+      port1.close();
+      resolve();
+    });
+    port1.start();
+    port2.postMessage(null);
+  });
+}
+
+/** Visit `entries` in blocks of `EAGER_BLOCK`, yielding to events and checking the signal between blocks. */
+export async function visitInBlocks<E>(
+  entries: readonly E[],
+  run: { visit(e: E): void },
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  for (let start = 0; start < entries.length; start += EAGER_BLOCK) {
+    const end = Math.min(start + EAGER_BLOCK, entries.length);
+    for (let i = start; i < end; i++) run.visit(entries[i] as E);
+    if (end < entries.length) {
+      await yieldToEvents();
+      throwIfAborted(signal);
+    }
+  }
+}
+
 export function checkLimit(limit: number): void {
   if (!Number.isInteger(limit) || limit < 0) {
     throw new OtelHtmlError('usage', {

@@ -221,10 +221,12 @@ as used. Tests: `['a', 'a', 'a (2)']` has no duplicates and the first `a` keeps 
 
 **(call)** `SpanQueryRun` gains `endChunk(): void`: in traces mode it drops the rows of every trace that has not hit
 yet (the group stays, marked seen, so a later hit still counts the trace once). `scanChunks` calls `run.endChunk?.()`
-after each chunk; the eager source never calls it (its entries live in memory regardless). A trace that hits in a
-later chunk is therefore built from the rows seen since; in a windowed report `TraceFacts` supplies start, duration,
-counts and the root summary, as today when the root's chunk was not scanned (its `root` is null and its service
-share reads as partial even after a whole-run scan; the README says so). The class comment says what is held:
+after each chunk; the eager source never calls it (its entries live in memory regardless). A trace is therefore
+built from the rows of the chunks scanned from its first matching span onward — which chunks come first depends on
+the scan order, which follows the sort (newest chunk first under the explorer's default `start` desc), as the branch
+review pointed out; in a windowed report `TraceFacts` supplies start, duration, counts and the root summary, as
+today when the root's chunk was not scanned (its `root` is null and its service share reads as partial even after a
+whole-run scan; the README says so). The class comment says what is held:
 hit traces' rows since their first chunk, and the current chunk's. Test: after `endChunk`, `heldRows` counts only
 hit traces' rows; a trace hitting across two chunks is listed once.
 

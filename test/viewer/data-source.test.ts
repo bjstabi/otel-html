@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, test } from 'vitest';
+import { beforeAll, describe, expect, test, vi } from 'vitest';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import type { TraceId } from '../../src/model/ids.js';
 import type { ResourceRecord } from '../../src/model/records.js';
@@ -419,6 +419,23 @@ describe('windowed strategy', () => {
     expect(loader.calls).toEqual([1, 2, 3, 4, 5].map(chunkPath));
   });
 
+  test('an abort from a timer stops a scan over cached chunks after one chunk', async () => {
+    const { ds } = await windowed();
+    await ds.querySpans(query({ condition: ERRORS, scanAll: true }));
+    vi.stubGlobal('MessageChannel', undefined);
+    try {
+      const progress: number[] = [];
+      const ac = new AbortController();
+      setTimeout(() => ac.abort(), 0);
+      await expect(
+        ds.querySpans(query({ condition: ERRORS, scanAll: true }), (s) => progress.push(s), ac.signal),
+      ).rejects.toMatchObject({ name: 'AbortError' });
+      expect(progress).toEqual([1]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   test('getTrace loads one shard file and only the chunks listed for that trace', async () => {
     const { ds, loader } = await windowed();
     const id = traceIdOf(3);
@@ -498,17 +515,21 @@ describe('windowed traces mode', () => {
       serviceShare: [],
     });
 
-    expect(row?.root?.service).toBe('web');
+    expect(row?.root).toBeNull();
 
     const whole = await ds.querySpans(traceQuery({ condition: 'name == "db.query"', scanAll: true }));
     const [full] = asTraces(whole.rows);
     expect(whole.partial).toBeNull();
-    expect(full).toMatchObject({ spans: 3, errors: 1, start: 0, durationNs: 1000, shareComplete: true });
-    expect(full?.root?.service).toBe('web');
-    expect(full?.serviceShare).toEqual([
-      { service: 'db', ns: 600 },
-      { service: 'web', ns: 400 },
-    ]);
+    expect(full).toMatchObject({
+      spans: 3,
+      errors: 1,
+      start: 0,
+      durationNs: 1000,
+      shareComplete: false,
+      serviceShare: [],
+      rootSummary: { service: 'web', name: 'GET /', resource: 'GET /' },
+    });
+    expect(full?.root).toBeNull();
   });
 
   test('the list cap counts traces, not matched spans, and limit counts traces', async () => {

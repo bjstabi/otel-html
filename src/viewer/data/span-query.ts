@@ -7,7 +7,7 @@ import type { SpanTarget } from '../../ottl/contexts.js';
 import { matchesText, spanTextFields } from '../../ottl/text.js';
 import type { FacetCounts } from '../../rollups/facets.js';
 import type { RedSeries } from '../../rollups/red.js';
-import { facetValueOf, GroupDurations, SpanRollups, type SpanStatusKey } from '../../rollups/span-rollups.js';
+import { facetReader, GroupDurations, SpanRollups, type SpanStatusKey } from '../../rollups/span-rollups.js';
 import type { TimeBuckets } from '../../rollups/time-buckets.js';
 import { resourceName, serviceName } from '../../semconv/resource-name.js';
 import {
@@ -19,6 +19,7 @@ import {
   ordered,
   sortFor,
   throwIfAborted,
+  visitInBlocks,
 } from './query-common.js';
 import { TopKBuffer, topK } from './top-k.js';
 import { buildTraceTree, exclusiveTimeByService } from './trace-tree.js';
@@ -136,6 +137,13 @@ export function toEntries(
   });
 }
 
+interface TraceGroup {
+  rows: SpanRow[];
+  hit: boolean;
+  /** Rows were dropped at a chunk end before the trace hit, so what is held is a fragment. */
+  dropped: boolean;
+}
+
 type Compare = (a: SpanRow, b: SpanRow) => number;
 
 /** The spans-mode tiebreak: start, then span id, so the order is total and windowed and eager scans agree. */
@@ -155,11 +163,18 @@ const TRACE_SORTS: Readonly<Record<string, (a: TraceRow, b: TraceRow) => number>
   duration: (a, b) => a.durationNs - b.durationNs,
   spans: (a, b) => a.spans - b.spans,
   errors: (a, b) => a.errors - b.errors,
-  resource: (a, b) => cmp(a.root?.resource ?? '', b.root?.resource ?? ''),
-  service: (a, b) => cmp(a.root?.service ?? '', b.root?.service ?? ''),
+  resource: (a, b) =>
+    cmp(a.root?.resource ?? a.rootSummary?.resource ?? '', b.root?.resource ?? b.rootSummary?.resource ?? ''),
+  service: (a, b) =>
+    cmp(a.root?.service ?? a.rootSummary?.service ?? '', b.root?.service ?? b.rootSummary?.service ?? ''),
 };
 
-function traceRow(traceId: TraceId, rows: readonly SpanRow[], facts?: TraceFacts): TraceRow {
+function traceRow(
+  traceId: TraceId,
+  rows: readonly SpanRow[],
+  facts: TraceFacts | undefined,
+  dropped: boolean,
+): TraceRow {
   const tree = buildTraceTree(rows);
   const root = tree.roots.find((n) => n.row.span.parentSpanId === null)?.row ?? null;
   const rootSummary =
@@ -193,16 +208,21 @@ function traceRow(traceId: TraceId, rows: readonly SpanRow[], facts?: TraceFacts
     durationNs: Math.max(0, end - start),
     spans: rows.length,
     errors,
-    shareComplete: true,
-    serviceShare: exclusiveTimeByService(tree),
+    // A share built from a fragment (rows dropped at a chunk end) is never complete.
+    shareComplete: !dropped,
+    serviceShare: dropped ? [] : exclusiveTimeByService(tree),
   };
 }
 
 /**
  * One filtered pass over span entries, shared by the eager (all entries) and windowed (chunk by chunk)
  * strategies. Feed every candidate entry to `visit`, then call `finish`. Holds no state outside itself, so an
- * abandoned or aborted run leaves nothing behind. It keeps the matched rows only up to a bound: in spans mode the
- * best `limit` so far plus a little slack, in traces mode none (the per-trace rows are what `finish` reads).
+ * abandoned or aborted run leaves nothing behind. It keeps matched rows only up to a bound in spans mode (the best
+ * `limit` so far plus a little slack). In traces mode it keeps, per trace, the rows since the trace's first chunk
+ * with a hit, plus the current chunk's rows; `endChunk` drops the rest. A trace is built from the rows of the
+ * chunks scanned from its first hit onward, so with a newest-first scan a trace whose root is in the newest chunk
+ * keeps it and one that hits first in an older chunk does not (a windowed report reads the whole-trace figures
+ * from the trace index).
  */
 export class SpanQueryRun {
   readonly #q: SpanQuery;
@@ -210,9 +230,10 @@ export class SpanQueryRun {
   readonly #condition: CompiledCondition<'span'> | null;
   readonly #rollups: SpanRollups;
   readonly #groups: GroupDurations | null;
+  readonly #measure: ((t: SpanTarget) => string | undefined) | null;
   /** Spans mode: the best `limit` matched rows so far plus compaction slack; null in traces mode. */
   readonly #rows: TopKBuffer<SpanRow> | null;
-  readonly #traces = new Map<TraceId, { rows: SpanRow[]; hit: boolean }>();
+  readonly #traces = new Map<TraceId, TraceGroup>();
   readonly #order: ((a: SpanRow, b: SpanRow) => number) | null;
   readonly #traceCompare: ((a: TraceRow, b: TraceRow) => number) | null;
   readonly #window: TimeWindow | null;
@@ -232,6 +253,7 @@ export class SpanQueryRun {
     this.#q = q;
     this.#rollups = new SpanRollups(caps);
     this.#groups = q.measureBy === null ? null : new GroupDurations(caps.facetValueCap);
+    this.#measure = q.measureBy === null ? null : facetReader(q.measureBy);
     // "Scan entire run" means the whole run, whatever window the view had.
     this.#window = q.scanAll ? null : q.window;
     this.#signal = signal;
@@ -253,7 +275,23 @@ export class SpanQueryRun {
 
   /** @internal for tests: how many matched rows the run holds right now. */
   get heldRows(): number {
-    return this.#rows?.size ?? 0;
+    if (this.#rows !== null) return this.#rows.size;
+    let n = 0;
+    for (const g of this.#traces.values()) n += g.rows.length;
+    return n;
+  }
+
+  /**
+   * Call after a chunk has been visited whole (traces mode): drops the rows of traces that have not hit, so a
+   * whole-run scan does not hold every span. The group stays, so a later hit still counts the trace once.
+   */
+  endChunk(): void {
+    if (this.#q.mode !== 'traces') return;
+    for (const g of this.#traces.values()) {
+      if (g.hit || g.rows.length === 0) continue;
+      g.rows.length = 0;
+      g.dropped = true;
+    }
   }
 
   /** Ids of traces with a matching span (traces mode), in first-seen order. */
@@ -271,11 +309,11 @@ export class SpanQueryRun {
     const window = this.#window;
     const { span } = e.row;
     const traces = this.#traces;
-    let group: { rows: SpanRow[]; hit: boolean } | undefined;
+    let group: TraceGroup | undefined;
     if (this.#q.mode === 'traces') {
       group = traces.get(span.traceId);
       if (group === undefined) {
-        group = { rows: [], hit: false };
+        group = { rows: [], hit: false, dropped: false };
         traces.set(span.traceId, group);
       }
       group.rows.push(e.row);
@@ -290,8 +328,8 @@ export class SpanQueryRun {
       group.hit = true;
     }
     this.#rollups.add(e.target);
-    if (this.#groups !== null && this.#q.measureBy !== null) {
-      const v = facetValueOf(e.target, this.#q.measureBy);
+    if (this.#groups !== null && this.#measure !== null) {
+      const v = this.#measure(e.target);
       if (v !== undefined) this.#groups.add(v, e.row.durationNs);
     }
   }
@@ -310,7 +348,7 @@ export class SpanQueryRun {
       const compare = this.#traceCompare;
       const hits = [...this.#traces]
         .filter(([, g]) => g.hit)
-        .map(([id, g]) => traceRow(id, g.rows, factsOf?.(id)));
+        .map(([id, g]) => traceRow(id, g.rows, factsOf?.(id), g.dropped));
       rows =
         compare === null
           ? hits.slice(0, this.#q.limit)
@@ -342,5 +380,17 @@ export function querySpanEntries(
 ): SpanQueryResult {
   const run = new SpanQueryRun(q, signal, caps);
   for (const e of entries) run.visit(e);
+  return run.finish(null);
+}
+
+/** `querySpanEntries`, yielding to events between blocks so an abort that arrives meanwhile is seen. */
+export async function scanSpanEntries(
+  entries: readonly SpanEntry[],
+  q: SpanQuery,
+  signal?: AbortSignal,
+  caps: FacetCaps = DEFAULT_FACET_CAPS,
+): Promise<SpanQueryResult> {
+  const run = new SpanQueryRun(q, signal, caps);
+  await visitInBlocks(entries, run, signal);
   return run.finish(null);
 }

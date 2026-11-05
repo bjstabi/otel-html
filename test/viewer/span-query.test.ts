@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import type { RelNanos, SpanId, TraceId, UnixNanos } from '../../src/model/ids.js';
 import type {
   ResourceRecord,
@@ -8,13 +8,15 @@ import type {
   SpanRecord,
 } from '../../src/model/records.js';
 import { StatusCode } from '../../src/model/records.js';
-import { DEFAULT_FACET_CAPS } from '../../src/viewer/data/query-common.js';
+import { DEFAULT_FACET_CAPS, EAGER_BLOCK } from '../../src/viewer/data/query-common.js';
 import {
   querySpanEntries,
   type SpanEntry,
   type SpanQuery,
   SpanQueryRun,
   type SpanRow,
+  scanSpanEntries,
+  type TraceRow,
   toEntries,
 } from '../../src/viewer/data/span-query.js';
 import { medianMs } from '../../test-support/median-ms.js';
@@ -132,21 +134,35 @@ describe('querySpanEntries', () => {
     expect(() => querySpanEntries(synthetic(10), query({}), ac.signal)).toThrow(/aborted/);
   });
 
-  test('a signal aborted during a long scan stops it', () => {
-    const entries = synthetic(20_000);
-    const ac = new AbortController();
-    let seen = 0;
-    const spy = entries.map((e) => ({
-      ...e,
-      get target() {
-        if (++seen === 5000) ac.abort();
-        return e.target;
-      },
-    }));
-    expect(() => querySpanEntries(spy, query({ condition: 'name == "op1"' }), ac.signal)).toThrow(
-      expect.objectContaining({ name: 'AbortError' }),
-    );
-    expect(seen).toBeLessThan(10_000);
+  test('an abort from a timer stops an in-memory scan after its first block', async () => {
+    vi.stubGlobal('MessageChannel', undefined);
+    try {
+      let seen = 0;
+      const counted = synthetic(EAGER_BLOCK * 4).map((e) => ({
+        ...e,
+        get target() {
+          seen++;
+          return e.target;
+        },
+      }));
+      const ac = new AbortController();
+      setTimeout(() => ac.abort(), 0);
+      await expect(
+        scanSpanEntries(counted, query({ condition: 'name == "none"' }), ac.signal),
+      ).rejects.toMatchObject({
+        name: 'AbortError',
+      });
+      expect(seen).toBe(EAGER_BLOCK);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test('scanSpanEntries lists what querySpanEntries lists', async () => {
+    const e = synthetic(EAGER_BLOCK * 2 + 5);
+    const q = query({ condition: 'status.code == STATUS_CODE_ERROR' });
+    const [a, b] = [await scanSpanEntries(e, q), querySpanEntries(e, q)];
+    expect([a.rows, a.total, a.partial]).toEqual([b.rows, b.total, b.partial]);
   });
 });
 
@@ -213,15 +229,96 @@ describe('SpanQueryRun row buffer', () => {
     expect(run.units).toBe(10_000);
   });
 
-  test('traces mode holds no matched rows', () => {
+  test('traces mode without endChunk holds every visited row', () => {
     const run = new SpanQueryRun(
       query({ mode: 'traces', sort: { column: 'start', dir: 'asc' } }),
       undefined,
       DEFAULT_FACET_CAPS,
     );
     for (const e of synthetic(1000)) run.visit(e);
-    expect(run.heldRows).toBe(0);
+    expect(run.heldRows).toBe(1000);
     expect(run.finish(null).total).toBe(1000);
+  });
+});
+
+const traceSpan = (trace: number, id: number, name: string, parent: number | null): SpanRecord => ({
+  traceId: trace.toString(16).padStart(32, '0') as TraceId,
+  spanId: (trace * 100 + id).toString(16).padStart(16, '0') as SpanId,
+  parentSpanId: parent === null ? null : ((trace * 100 + parent).toString(16).padStart(16, '0') as SpanId),
+  traceState: '',
+  flags: 0,
+  name,
+  kind: 1,
+  start: (trace * 1000 + id) as RelNanos,
+  end: (trace * 1000 + id + 10) as RelNanos,
+  attributes: new Map(),
+  droppedAttributesCount: 0,
+  events: [],
+  droppedEventsCount: 0,
+  links: [],
+  droppedLinksCount: 0,
+  status: { code: StatusCode.UNSET, message: '' },
+  resource: 0 as ResourceRef,
+  scope: 0 as ScopeRef,
+});
+const chunkOf = (spans: SpanRecord[], n = 0): SpanEntry[] =>
+  toEntries({ n, resources, scopes }, spans, 0n as UnixNanos, 'c');
+const hitQuery = () =>
+  query({ mode: 'traces', condition: 'name == "hit"', sort: { column: 'start', dir: 'asc' } });
+
+describe('SpanQueryRun traces mode across chunks', () => {
+  test('endChunk drops the rows of traces that have not hit; heldRows counts hit traces only', () => {
+    const run = new SpanQueryRun(hitQuery(), undefined, DEFAULT_FACET_CAPS);
+    for (const e of chunkOf([
+      traceSpan(1, 0, 'hit', null),
+      traceSpan(1, 1, 'miss', 0),
+      traceSpan(2, 0, 'miss', null),
+      traceSpan(2, 1, 'miss', 0),
+    ]))
+      run.visit(e);
+    expect(run.heldRows).toBe(4);
+    run.endChunk();
+    expect(run.heldRows).toBe(2);
+    expect(run.seenRows('2'.padStart(32, '0') as TraceId)).toEqual([]);
+  });
+
+  test('a trace that hits in a later chunk is listed once, built from the rows seen since', () => {
+    const run = new SpanQueryRun(hitQuery(), undefined, DEFAULT_FACET_CAPS);
+    for (const e of chunkOf([traceSpan(2, 0, 'miss', null), traceSpan(1, 0, 'hit', null)], 0)) run.visit(e);
+    run.endChunk();
+    for (const e of chunkOf([traceSpan(2, 1, 'hit', 0), traceSpan(1, 1, 'hit', 0)], 1)) run.visit(e);
+    run.endChunk();
+    expect(run.units).toBe(2);
+    const r = run.finish(null);
+    expect(r.total).toBe(2);
+    const rows = r.rows as TraceRow[];
+    expect(rows.map((t) => t.traceId)).toEqual(['1'.padStart(32, '0'), '2'.padStart(32, '0')]);
+    // trace 2's root was dropped before it hit: no root, and the share is from a fragment, so not complete
+    expect(rows[1]).toMatchObject({ spans: 1, root: null, rootSummary: null, shareComplete: false });
+    expect(rows[0]).toMatchObject({ spans: 2, shareComplete: true });
+  });
+
+  test('service and resource sorts fall back to the root summary, as the columns do', () => {
+    for (const column of ['service', 'resource'] as const) {
+      const run = new SpanQueryRun(
+        query({ mode: 'traces', condition: 'name == "hit"', sort: { column, dir: 'asc' } }),
+        undefined,
+        DEFAULT_FACET_CAPS,
+      );
+      // trace 1: only a child is seen (root null); trace 2: its root, service 'api', resource 'hit'
+      for (const e of chunkOf([traceSpan(1, 1, 'hit', 0), traceSpan(2, 0, 'hit', null)])) run.visit(e);
+      const t1 = '1'.padStart(32, '0') as TraceId;
+      const facts = {
+        start: 1000,
+        end: 1020,
+        spans: 2,
+        errors: 0,
+        complete: false,
+        root: { service: 'zzz', name: 'r', resource: 'zzz' },
+      };
+      const r = run.finish(null, (id) => (id === t1 ? facts : undefined));
+      expect((r.rows as TraceRow[]).map((t) => t.traceId)).toEqual(['2'.padStart(32, '0'), t1]);
+    }
   });
 });
 
@@ -249,6 +346,12 @@ describe('measureBy', () => {
   const entries = (spans: SpanRecord[]): SpanEntry[] =>
     toEntries({ n: 0, resources, scopes }, spans, 0n as UnixNanos, 'measure');
   const three = (): SpanEntry[] => entries([span(1, 0, 10), span(2, 0, 30), span(3, 1, 50)]);
+
+  test('a key that is neither a core facet nor an attribute of any span yields no groups', () => {
+    const { groups } = querySpanEntries(three(), query({ measureBy: 'http.route' }));
+    expect(groups?.size).toBe(0);
+    expect(groups?.dropped).toBe(0);
+  });
 
   test('measureBy collects a duration histogram per group', () => {
     const { groups } = querySpanEntries(three(), query({ measureBy: 'service.name' }));

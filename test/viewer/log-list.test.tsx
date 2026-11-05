@@ -19,6 +19,8 @@ function row(
 ): LogRow {
   return {
     ref: logRef(0, i),
+    n: 0,
+    i,
     log: {
       time: 1_000_000 as RelNanos,
       observedTime: null,

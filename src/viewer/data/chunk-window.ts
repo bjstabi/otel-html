@@ -1,6 +1,6 @@
 import type { Manifest, ManifestChunk } from '../../format/manifest.js';
 import { chunkKey, type Signal } from '../../format/paths.js';
-import { throwIfAborted } from './query-common.js';
+import { throwIfAborted, yieldToEvents } from './query-common.js';
 import type { TimeWindow } from './span-query.js';
 
 /** Decoded chunks each windowed strategy keeps in memory (least recently used are dropped). */
@@ -100,6 +100,8 @@ export class SignalChunks {
 export interface ScanRun<E> {
   readonly units: number;
   visit(e: E): void;
+  /** Called after each chunk has been visited. */
+  endChunk?(): void;
 }
 
 /**
@@ -130,8 +132,10 @@ export async function scanChunks<E>(opts: {
       }
       run.visit(e);
     }
+    run.endChunk?.();
     scanned.add(c.n);
     opts.onProgress?.(scanned.size, total);
+    await yieldToEvents();
     if (run.units >= cap) {
       cut ||= i < opts.targets.length - 1;
       break;

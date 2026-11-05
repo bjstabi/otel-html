@@ -26,7 +26,7 @@ export function* facetableAttributes(
   }
 }
 
-function scalarKind(v: AnyValue): ScalarKind | undefined {
+export function scalarKind(v: AnyValue): ScalarKind | undefined {
   switch (v.kind) {
     case 'string':
     case 'int':
