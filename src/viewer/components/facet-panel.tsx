@@ -296,13 +296,13 @@ function DurationFacet(props: {
   const hiValue = bound('<=');
   // A committed value need not be an edge (the URL may carry any number): the bin starting there, else the one containing it.
   const containing = (v: number): number => bins.findIndex((b) => b.fromNs <= v && v < b.toNs);
-  const fromIndex = loValue === undefined ? -1 : bins.findIndex((b) => b.fromNs === loValue);
+  const fromIndex = loValue === undefined ? -1 : bins.findIndex((b) => b.fromNs === Math.round(loValue));
   const committedLo = Math.max(
-    fromIndex >= 0 ? fromIndex : loValue === undefined ? -1 : containing(loValue),
+    fromIndex >= 0 ? fromIndex : loValue === undefined ? -1 : containing(Math.round(loValue)),
     0,
   );
-  const toIndex = hiValue === undefined ? -1 : bins.findIndex((b) => b.toNs === hiValue);
-  const hiIndex = toIndex >= 0 ? toIndex : hiValue === undefined ? -1 : containing(hiValue);
+  const toIndex = hiValue === undefined ? -1 : bins.findIndex((b) => b.toNs === Math.round(hiValue));
+  const hiIndex = toIndex >= 0 ? toIndex : hiValue === undefined ? -1 : containing(Math.round(hiValue));
   const committedHi = hiIndex < 0 ? last : hiIndex;
   // A drag only previews here; the single store write happens on pointer up.
   const [drag, setDrag] = useState<{ anchor: number; current: number } | null>(null);

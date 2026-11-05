@@ -222,6 +222,34 @@ export function durationAxis(
   return edges.map(Math.round);
 }
 
+/**
+ * A duration axis for a page opened with a duration filter: the given bounds sit on interior edges, one extra bin
+ * outside each. `DurationFacet.setRange` reads the first and last bin as "no bound" and writes no token for them, so
+ * pinning a bound to an end edge would drop it on the first key press. Yields `binCount + 1` edges when a bound is
+ * given.
+ */
+export function paddedAxis(
+  rows: readonly { durationNs: number }[],
+  binCount: number,
+  range: { lo?: number; hi?: number },
+): number[] {
+  const pinned = (range.lo === undefined ? 0 : 1) + (range.hi === undefined ? 0 : 1);
+  const edges = durationAxis(rows, binCount - pinned, range);
+  const first = edges[0];
+  const second = edges[1];
+  if (first === undefined || second === undefined) return edges;
+  const step = second / first;
+  const r = Number.isFinite(step) && step > 1 ? step : 10;
+  const lo = range.lo;
+  const hi = range.hi;
+  const last = edges[edges.length - 1];
+  return [
+    ...(lo === undefined ? [] : [Math.round(lo / r)]),
+    ...edges,
+    ...(hi === undefined || last === undefined ? [] : [Math.round(last * r)]),
+  ];
+}
+
 /** Counts rows into the `[from, to)` bins between `edges`; a row below the first edge counts in the first bin, one at or above the last in the last. */
 export function binsOnAxis(rows: readonly { durationNs: number }[], edges: readonly number[]): DurationBin[] {
   const n = edges.length - 1;

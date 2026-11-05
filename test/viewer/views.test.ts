@@ -20,6 +20,7 @@ import {
   durationBins,
   GROUPED_VIEWS,
   groupSlices,
+  paddedAxis,
   resolveCssVars,
   VIEW_BUILDERS,
 } from '../../src/viewer/traces/views.js';
@@ -186,6 +187,21 @@ describe('durationBins', () => {
       durationAxis([2e6].map(row), 24, { lo: 1e6, hi: 1e7 }),
       durationAxis([2e6].map(row), 24, { lo: 1873.8174228603843 }),
     ]) {
+      expect(edges.every(Number.isInteger)).toBe(true);
+      for (let i = 1; i < edges.length; i++)
+        expect(edges[i]).toBeGreaterThanOrEqual(edges[i - 1] ?? Number.NaN);
+    }
+  });
+
+  test('paddedAxis outer edges are integers too, so a fractional bound pads to whole nanoseconds', () => {
+    const rows = [1000, 5000, 9e6].map(row);
+    for (const range of [
+      { lo: 1873.8174228603843 },
+      { hi: 7777.7 },
+      { lo: 1873.8174228603843, hi: 7777.7 },
+    ]) {
+      const edges = paddedAxis(rows, 24, range);
+      expect(edges).toHaveLength(25);
       expect(edges.every(Number.isInteger)).toBe(true);
       for (let i = 1; i < edges.length; i++)
         expect(edges[i]).toBeGreaterThanOrEqual(edges[i - 1] ?? Number.NaN);
