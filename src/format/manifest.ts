@@ -1,11 +1,11 @@
 import { z } from 'zod';
 import type { ResolvedConfig, ResolvedDashboard } from '../config/schema.js';
 import {
-  DashboardSchema,
+  DashboardShapeSchema,
   listIssues,
   RESERVED_DASHBOARD_IDS,
   type View,
-  ViewListSchema,
+  ViewListShapeSchema,
 } from '../dashboards/schema.js';
 import { METRIC_FILE_PATH } from './metric-files.js';
 import { chunkPath, SIGNALS, type Signal } from './paths.js';
@@ -86,8 +86,11 @@ export const ManifestSchema: z.ZodType<Manifest> = z
         defaultDashboard: z.string().default('fusion'),
         home: z.enum(['traces', 'logs', 'metrics', 'dashboards']).default('traces'),
       }),
-      dashboards: z.array(z.strictObject({ source: z.string(), dashboard: DashboardSchema })).default([]),
-      views: ViewListSchema.default([]),
+      dashboards: z
+        .array(z.strictObject({ source: z.string(), dashboard: DashboardShapeSchema }))
+        .default([]),
+      // Shape only: a report stored by an older build may hold a query this build's compiler rejects; the widget shows that error.
+      views: ViewListShapeSchema.default([]),
     }),
   })
   .superRefine((m, ctx) => {

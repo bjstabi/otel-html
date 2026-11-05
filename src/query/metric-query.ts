@@ -77,56 +77,64 @@ const MetricFnSchema = z.discriminatedUnion('op', [
  * Only `id`, `metric` and `show` are required; the rest default so a hand-written URL stays short. An empty
  * `metric` and `show` mean "not chosen yet" (a query seeded by carry-over); the Explorer asks for them.
  */
-export const MetricQuerySchema: z.ZodType<MetricQuery, MetricQueryInput> = z
-  .object({
-    id: z.string().regex(/^[a-z]$/, 'a query id of one letter a-z'),
-    metric: z.string(),
-    kind: z.enum(POINT_TYPES).nullable().default(null),
-    unit: z.string().nullable().default(null),
-    show: z.string(),
-    by: z.array(z.string().min(1)).default([]),
-    where: z.string().min(1).nullable().default(null),
-    fn: z.array(MetricFnSchema).default([]),
-    alias: z.string().nullable().default(null),
-    hidden: z.boolean().default(false),
-  })
-  .superRefine((q, ctx) => {
-    // `by` is compiled by the viewer's own compiler, so a path the viewer cannot run is rejected here.
-    q.by.forEach((b, i) => {
+function buildQuerySchema(compiled: boolean): z.ZodType<MetricQuery, MetricQueryInput> {
+  return z
+    .object({
+      id: z.string().regex(/^[a-z]$/, 'a query id of one letter a-z'),
+      metric: z.string(),
+      kind: z.enum(POINT_TYPES).nullable().default(null),
+      unit: z.string().nullable().default(null),
+      show: z.string(),
+      by: z.array(z.string().min(1)).default([]),
+      where: z.string().min(1).nullable().default(null),
+      fn: z.array(MetricFnSchema).default([]),
+      alias: z.string().nullable().default(null),
+      hidden: z.boolean().default(false),
+    })
+    .superRefine((q, ctx) => {
+      if (!compiled) return;
+      // `by` is compiled by the viewer's own compiler, so a path the viewer cannot run is rejected here.
+      q.by.forEach((b, i) => {
+        try {
+          compileBy(b);
+        } catch (e) {
+          if (!(e instanceof OtelHtmlError && e.code === 'invalid-ottl')) throw e;
+          ctx.addIssue({
+            code: 'custom',
+            path: ['by', i],
+            message: `a data point path such as attributes["key"] (${e.message})`,
+          });
+        }
+      });
+      if (q.where === null) return;
       try {
-        compileBy(b);
+        compileCondition(q.where, 'datapoint');
       } catch (e) {
         if (!(e instanceof OtelHtmlError && e.code === 'invalid-ottl')) throw e;
         ctx.addIssue({
           code: 'custom',
-          path: ['by', i],
-          message: `a data point path such as attributes["key"] (${e.message})`,
+          path: ['where'],
+          message: `an OTTL condition valid for data points (${e.message})`,
+        });
+        return;
+      }
+      try {
+        rejectPerPointPaths(pathsOf(parseCondition(q.where)));
+      } catch (e) {
+        if (!(e instanceof OtelHtmlError && e.code === 'invalid-ottl')) throw e;
+        ctx.addIssue({
+          code: 'custom',
+          path: ['where'],
+          message: `a condition on whole series (${e.message})`,
         });
       }
     });
-    if (q.where === null) return;
-    try {
-      compileCondition(q.where, 'datapoint');
-    } catch (e) {
-      if (!(e instanceof OtelHtmlError && e.code === 'invalid-ottl')) throw e;
-      ctx.addIssue({
-        code: 'custom',
-        path: ['where'],
-        message: `an OTTL condition valid for data points (${e.message})`,
-      });
-      return;
-    }
-    try {
-      rejectPerPointPaths(pathsOf(parseCondition(q.where)));
-    } catch (e) {
-      if (!(e instanceof OtelHtmlError && e.code === 'invalid-ottl')) throw e;
-      ctx.addIssue({
-        code: 'custom',
-        path: ['where'],
-        message: `a condition on whole series (${e.message})`,
-      });
-    }
-  });
+}
+
+/** Everything a query must be, including that its `by` paths and `where` compile (config, URL and page state). */
+export const MetricQuerySchema: z.ZodType<MetricQuery, MetricQueryInput> = buildQuerySchema(true);
+/** The query's shape alone; a stored report holds queries an older build accepted (see `ManifestSchema`). */
+export const MetricQueryShapeSchema: z.ZodType<MetricQuery, MetricQueryInput> = buildQuerySchema(false);
 
 export const MetricFormulaSchema: z.ZodType<MetricFormula> = z.object({
   id: z.string().regex(/^f[1-9]\d*$/, 'a formula id f1, f2, ...'),
@@ -139,20 +147,25 @@ function duplicates(ids: readonly string[]): number[] {
   return ids.flatMap((id, i) => (ids.indexOf(id) === i ? [] : [i]));
 }
 
-export const MetricPageStateSchema: z.ZodType<MetricPageState> = z
-  .object({
-    queries: z.array(MetricQuerySchema).max(MAX_METRIC_QUERIES, `at most ${MAX_METRIC_QUERIES} queries`),
-    formulas: z.array(MetricFormulaSchema).default([]),
-    display: z.enum(METRIC_DISPLAYS).default('lines'),
-    scale: z.enum(METRIC_SCALES).default('linear'),
-    split: z.boolean().default(false),
-    exemplars: z.boolean().default(false),
-  })
-  .superRefine((s, ctx) => {
-    for (const i of duplicates(s.queries.map((q) => q.id))) {
-      ctx.addIssue({ code: 'custom', path: ['queries', i, 'id'], message: 'unique query ids' });
-    }
-    for (const i of duplicates(s.formulas.map((f) => f.id))) {
-      ctx.addIssue({ code: 'custom', path: ['formulas', i, 'id'], message: 'unique formula ids' });
-    }
-  });
+function buildPageSchema(query: z.ZodType<MetricQuery, MetricQueryInput>): z.ZodType<MetricPageState> {
+  return z
+    .object({
+      queries: z.array(query).max(MAX_METRIC_QUERIES, `at most ${MAX_METRIC_QUERIES} queries`),
+      formulas: z.array(MetricFormulaSchema).default([]),
+      display: z.enum(METRIC_DISPLAYS).default('lines'),
+      scale: z.enum(METRIC_SCALES).default('linear'),
+      split: z.boolean().default(false),
+      exemplars: z.boolean().default(false),
+    })
+    .superRefine((s, ctx) => {
+      for (const i of duplicates(s.queries.map((q) => q.id))) {
+        ctx.addIssue({ code: 'custom', path: ['queries', i, 'id'], message: 'unique query ids' });
+      }
+      for (const i of duplicates(s.formulas.map((f) => f.id))) {
+        ctx.addIssue({ code: 'custom', path: ['formulas', i, 'id'], message: 'unique formula ids' });
+      }
+    });
+}
+
+export const MetricPageStateSchema: z.ZodType<MetricPageState> = buildPageSchema(MetricQuerySchema);
+export const MetricPageStateShapeSchema: z.ZodType<MetricPageState> = buildPageSchema(MetricQueryShapeSchema);
