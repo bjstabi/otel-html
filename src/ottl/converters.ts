@@ -17,8 +17,10 @@ export interface ConverterSpec {
 // ---------------------------------------------------------------------------
 // Regex: user patterns run on the JS (backtracking) engine, while OTTL users expect
 // Go RE2 (linear time). We therefore accept only an RE2-like subset: no
-// lookaround or backreferences, and no unbounded quantifier applied to a group that
-// itself contains an unbounded quantifier (the classic `(a+)+` blow-up). Pattern
+// lookaround or backreferences, and no quantifier that can repeat more than 4 times
+// applied to a group that itself contains a repeating quantifier (maximum above 1):
+// the classic `(a+)+` blow-up, and its bounded form `(a+){2,20}`. `?` is not a repeat,
+// and up to 4 outer repetitions stay polynomial, so `(\d+\.){3}\d+` is fine. Pattern
 // length is capped. Alternation overlap such as `(a|a)*` is not detected.
 // ---------------------------------------------------------------------------
 
@@ -27,9 +29,9 @@ const REGEX_CACHE_LIMIT = 256;
 const regexCache = new Map<string, RegExp>();
 
 function regexProblem(p: string): string | undefined {
-  // Frame per open group: whether it contains an unbounded quantifier.
+  // Frame per open group: whether it contains a quantifier with a maximum above 1.
   const stack: boolean[] = [false];
-  let lastAtomUnboundedGroup = false;
+  let lastAtomRepeatGroup = false;
   let i = 0;
   const markTop = (): void => {
     stack[stack.length - 1] = true;
@@ -39,7 +41,7 @@ function regexProblem(p: string): string | undefined {
     if (c === '\\') {
       const n = p.charAt(i + 1);
       if ((n >= '1' && n <= '9') || n === 'k') return 'backreferences are not supported';
-      lastAtomUnboundedGroup = false;
+      lastAtomRepeatGroup = false;
       i += 2;
       continue;
     }
@@ -48,7 +50,7 @@ function regexProblem(p: string): string | undefined {
       if (p.charAt(i) === '^') i++;
       // JS semantics: a ']' right after '[' or '[^' closes the class ([] is empty, [^] is any).
       while (i < p.length && p.charAt(i) !== ']') i += p.charAt(i) === '\\' ? 2 : 1;
-      lastAtomUnboundedGroup = false;
+      lastAtomRepeatGroup = false;
       i++;
       continue;
     }
@@ -59,41 +61,41 @@ function regexProblem(p: string): string | undefined {
           return 'lookaround is not supported';
       }
       stack.push(false);
-      lastAtomUnboundedGroup = false;
+      lastAtomRepeatGroup = false;
       i++;
       continue;
     }
     if (c === ')') {
       const inner = stack.length > 1 ? stack.pop() === true : false;
       if (inner) markTop();
-      lastAtomUnboundedGroup = inner;
+      lastAtomRepeatGroup = inner;
       i++;
       continue;
     }
-    let unbounded = false;
+    // The quantifier's maximum repeat count, when this character starts one.
+    let max: number;
     let len = 1;
-    if (c === '*' || c === '+') unbounded = true;
+    if (c === '*' || c === '+') max = Number.POSITIVE_INFINITY;
+    else if (c === '?') max = 1;
     else if (c === '{') {
-      const m = /^\{\d+(,\d*)?\}/.exec(p.slice(i));
-      if (m !== null) {
-        len = m[0].length;
-        unbounded = m[1] === ',';
-      } else {
-        lastAtomUnboundedGroup = false;
+      const m = /^\{(\d+)(,(\d*))?\}/.exec(p.slice(i));
+      if (m === null) {
+        lastAtomRepeatGroup = false;
         i++;
         continue;
       }
-    } else if (c !== '?') {
-      lastAtomUnboundedGroup = false;
+      len = m[0].length;
+      if (m[2] === undefined) max = Number(m[1]);
+      else max = m[3] === '' ? Number.POSITIVE_INFINITY : Number(m[3]);
+    } else {
+      lastAtomRepeatGroup = false;
       i++;
       continue;
     }
-    if (unbounded) {
-      if (lastAtomUnboundedGroup)
-        return 'nested unbounded repetition (e.g. "(a+)+") can backtrack catastrophically; use bounded repetition like {1,64}';
-      markTop();
-    }
-    lastAtomUnboundedGroup = false;
+    if (max > 4 && lastAtomRepeatGroup)
+      return 'nested repetition (e.g. "(a+)+" or "(a+){2,20}") can backtrack catastrophically; repeat a class instead, like [a-z]{1,64}';
+    if (max > 1) markTop();
+    lastAtomRepeatGroup = false;
     i += len;
   }
   return undefined;
