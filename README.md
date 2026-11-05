@@ -535,8 +535,8 @@ Final-job mode: for a repository with no separate publisher, put the action in t
 
 - `merge` re-renders any readable report with the current viewer, so reports from different otel-html versions combine into one report in the current format.
 - `--append` needs the same otel-html version as the report it appends to.
-- A new viewer must read every version in `READABLE_FORMAT_VERSIONS`. Frozen format-1 and format-2 reports in `fixtures/reports/` are merged, and opened by the viewer's data layer, by the tests to hold that.
-- Maintainers: bumping `FORMAT_VERSION` adds a frozen report of the outgoing version to `fixtures/reports/` with its compat test, and a version leaves `READABLE_FORMAT_VERSIONS` only together with its fixture.
+- A new viewer must read every version in `READABLE_FORMAT_VERSIONS`. Frozen format-1, format-2 and format-3 reports in `fixtures/reports/` are merged, and opened by the viewer's data layer, by the tests to hold that.
+- Maintainers: every format version a release ships has a frozen report, written by that release, in `fixtures/reports/`, added with its compat test when the release is cut; a version leaves `READABLE_FORMAT_VERSIONS` only together with its fixture.
 
 ## Configuration
 

@@ -28,6 +28,7 @@ function reportFiles(name: string): Map<string, string> {
 describe.each([
   ['format-1', 1],
   ['format-2', 2],
+  ['format-3', 3],
 ])('the viewer opens frozen %s', (name, version) => {
   test('reads spans and every metric level', async () => {
     const files = reportFiles(name);

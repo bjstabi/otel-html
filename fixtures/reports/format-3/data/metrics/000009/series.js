@@ -1,0 +1,1 @@
+__OH__.push("metrics/000009/series",{"metric":9,"series":[{"id":0,"resource":0,"scope":0,"attributes":[],"bounds":null,"other":false},{"id":1,"resource":1,"scope":1,"attributes":[],"bounds":null,"other":false}],"gaps":[[9,10],[9,10]]});
