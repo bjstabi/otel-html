@@ -54,10 +54,13 @@ between the two points and reads the merged bucket back, asserting it equals the
 
 ### #148 A partial input into a `--replace` report holds the whole file in memory
 
-**(call)** Documented, not changed: the delayed wipe is the feature, and a staging directory is a larger design
-than this plan carries. `AddOptions.partial`'s doc comment and the README's `--replace` paragraph say that while a
-partial input goes into a report being replaced, everything accepted stays in memory until the input ends, so the
-first file into a replaced report should fit in memory (or the folder should be emptied first).
+**(call)** Documented, with one small change: the delayed wipe is the feature, and a staging directory is a larger
+design than this plan carries. `AddOptions.partial`'s doc comment and the README's `--replace` paragraphs say that
+while a partial input goes into a report being replaced, everything accepted stays in memory until the input ends,
+so the first file into a replaced report should fit in memory (or the folder should be emptied first). **(call,
+from the branch review)** The wipe used to happen at the first *write*, which a small first file can leave until a
+later file, so a second large file was held whole too; `endInput` now wipes the replaced report as soon as the first
+input has ended (it was read without error by then), so the hold is bounded by the first input as documented.
 
 ## PR 2 — `fix/api-surface` — #149, #150, #180
 
