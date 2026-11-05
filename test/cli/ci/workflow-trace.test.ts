@@ -101,10 +101,10 @@ const byName = (spans: Span[], name: string) => {
 };
 
 describe('workflowTraceRequest', () => {
-  const spans = spansOf(workflowTraceRequest(key, run, jobs, new Set([2])));
+  const spans = spansOf(workflowTraceRequest(key, run, jobs, new Map([[2, 'name:test']])));
 
   test('job spans sit under a resource carrying the job name; the run span does not', () => {
-    const rss = resourceSpansOf(workflowTraceRequest(key, run, jobs, new Set([2])));
+    const rss = resourceSpansOf(workflowTraceRequest(key, run, jobs, new Map([[2, 'name:test']])));
     const taskName = (rs: ResourceSpans) =>
       rs.resource.attributes.find((a) => a.key === 'cicd.pipeline.task.name');
     expect(taskName(rss[0] as ResourceSpans)).toBeUndefined();
@@ -128,7 +128,7 @@ describe('workflowTraceRequest', () => {
 
   test('the trace id comes from the key passed in, the one the job logs use too', () => {
     const other = runKey({ repository: 'Other/Repo', runId: 42, runAttempt: 2 });
-    const root = byName(spansOf(workflowTraceRequest(other, run, jobs, new Set([2]))), 'ci');
+    const root = byName(spansOf(workflowTraceRequest(other, run, jobs, new Map([[2, 'name:test']]))), 'ci');
     expect(root.traceId).toBe(traceIdOf(other));
     expect(root.traceId).not.toBe(traceIdOf(key));
   });
@@ -155,6 +155,13 @@ describe('workflowTraceRequest', () => {
     });
     expect(byName(spans, 'slow').spanId).toBe(stepSpanIdOf(key, 'name:test', 1));
     expect(byName(spans, 'slow').parentSpanId).toBe(job.spanId);
+  });
+
+  test('an approximate job uses the id the map carries', () => {
+    const ids = new Map([[2, 'name:test@gh-9']]);
+    const out = spansOf(workflowTraceRequest(key, run, jobs, ids));
+    expect(byName(out, 'test').spanId).toBe(jobSpanIdOf(key, 'name:test@gh-9'));
+    expect(byName(out, 'slow').spanId).toBe(stepSpanIdOf(key, 'name:test@gh-9', 1));
   });
 
   test('queued spans run from created_at to started_at', () => {
@@ -204,7 +211,7 @@ describe('workflowTraceRequest', () => {
         },
       ],
     };
-    const out = spansOf(workflowTraceRequest(key, run, [j], new Set()));
+    const out = spansOf(workflowTraceRequest(key, run, [j], new Map()));
     expect(byName(out, 'test').startTimeUnixNano).toBe(ns('2026-01-01T00:00:05Z'));
     expect(byName(out, 'test').endTimeUnixNano).toBe(ns('2026-01-01T00:10:00Z'));
     expect(byName(out, 's').endTimeUnixNano).toBe(ns('2026-01-01T00:10:00Z'));
@@ -213,25 +220,25 @@ describe('workflowTraceRequest', () => {
 
   test('an in_progress job without completed_at ends at the run updated_at', () => {
     const j: ApiJob = { ...(jobs[1] as ApiJob), conclusion: null, completed_at: null, steps: [] };
-    const job = byName(spansOf(workflowTraceRequest(key, run, [j], new Set())), 'test');
+    const job = byName(spansOf(workflowTraceRequest(key, run, [j], new Map())), 'test');
     expect(job.endTimeUnixNano).toBe(ns('2026-01-01T00:10:00Z'));
     expect(job.status).toBeUndefined();
   });
 
   test('unparsable run start times throw naming the run', () => {
     const bad = { ...run, run_started_at: null, created_at: 'nope' };
-    expect(() => workflowTraceRequest(key, bad, [], new Set())).toThrow(/run 42/);
+    expect(() => workflowTraceRequest(key, bad, [], new Map())).toThrow(/run 42/);
   });
 
   test('an end before its start is clamped to the start', () => {
     const j: ApiJob = { ...(jobs[0] as ApiJob), completed_at: '2025-01-01T00:00:00Z', steps: [] };
-    const job = byName(spansOf(workflowTraceRequest(key, run, [j], new Set())), 'build');
+    const job = byName(spansOf(workflowTraceRequest(key, run, [j], new Map())), 'build');
     expect(job.endTimeUnixNano).toBe(job.startTimeUnixNano);
   });
 
   test('conclusions map to results', () => {
     const attr = (r: ApiRun, name: string) =>
-      byName(spansOf(workflowTraceRequest(key, r, [], new Set())), 'ci').attributes.find(
+      byName(spansOf(workflowTraceRequest(key, r, [], new Map())), 'ci').attributes.find(
         (a) => a.key === name,
       )?.value;
     expect(attr(run, 'cicd.pipeline.result')).toEqual({ stringValue: 'cancellation' });
@@ -240,7 +247,7 @@ describe('workflowTraceRequest', () => {
     });
     expect(attr({ ...run, conclusion: 'weird' }, 'cicd.pipeline.result')).toEqual({ stringValue: 'error' });
     const ok = byName(
-      spansOf(workflowTraceRequest(key, { ...run, conclusion: 'success' }, [], new Set())),
+      spansOf(workflowTraceRequest(key, { ...run, conclusion: 'success' }, [], new Map())),
       'ci',
     );
     expect(ok.status).toBeUndefined();
@@ -258,7 +265,7 @@ describe('workflowTraceRequest', () => {
   });
 
   test('the library accepts the output', () => {
-    const [req] = parseOtlpObject(workflowTraceRequest(key, run, jobs, new Set([2])), 'test');
+    const [req] = parseOtlpObject(workflowTraceRequest(key, run, jobs, new Map([[2, 'name:test']])), 'test');
     expect(req?.signal).toBe('traces');
   });
 });

@@ -24,7 +24,12 @@ describe('resolveJob', () => {
   });
 
   test('two in-progress jobs on one runner name fall back to the name hash', () => {
-    expect(resolveJob([job(1), job(2)], 'runner-1', 'e2e')).toEqual({ jobId: 'name:e2e', approximate: true });
+    expect(resolveJob([job(1), job(2)], 'runner-1', 'e2e')).toEqual({
+      jobId: 'name:e2e@runner-1',
+      approximate: true,
+      jobName: 'e2e',
+      runner: 'runner-1',
+    });
   });
 
   test('among several in-progress jobs on one runner, the one named like the hint wins', () => {
@@ -40,15 +45,36 @@ describe('resolveJob', () => {
       jobId: 2,
       approximate: false,
     });
-    expect(resolveJob(jobs, 'runner-1', 'e2e')).toEqual({ jobId: 'name:e2e', approximate: true });
+    expect(resolveJob(jobs, 'runner-1', 'e2e')).toEqual({
+      jobId: 'name:e2e@runner-1',
+      approximate: true,
+      jobName: 'e2e',
+      runner: 'runner-1',
+    });
   });
 
   test('no match falls back to the name hash', () => {
     expect(resolveJob([job(1, { status: 'queued' })], 'runner-1', 'e2e')).toEqual({
+      jobId: 'name:e2e@runner-1',
+      approximate: true,
+      jobName: 'e2e',
+      runner: 'runner-1',
+    });
+  });
+
+  test('the fallback id carries the hint and the runner, and records both', () => {
+    expect(resolveJob([], 'runner-1', 'e2e')).toEqual({
+      jobId: 'name:e2e@runner-1',
+      approximate: true,
+      jobName: 'e2e',
+      runner: 'runner-1',
+    });
+    expect(resolveJob([], '', 'e2e')).toEqual({
       jobId: 'name:e2e',
       approximate: true,
+      jobName: 'e2e',
+      runner: null,
     });
-    expect(resolveJob([], 'runner-1', 'e2e')).toEqual({ jobId: 'name:e2e', approximate: true });
   });
 });
 
@@ -148,10 +174,16 @@ describe('env file output', () => {
     expect(envFileText({ A: '1', B: 'x\ny=z' })).toBe('A=1\nB=x y=z\n');
   });
 
-  test('context.json carries the id and approximation', () => {
-    expect(JSON.parse(contextJson({ jobId: 'name:e2e', approximate: true }))).toEqual({
-      jobId: 'name:e2e',
+  test('context.json carries the id, the approximation, and for a fallback the hint and runner', () => {
+    expect(JSON.parse(contextJson({ jobId: 5, approximate: false }))).toEqual({
+      jobId: 5,
+      approximate: false,
+    });
+    expect(JSON.parse(contextJson(resolveJob([], 'gh-1', 'e2e')))).toEqual({
+      jobId: 'name:e2e@gh-1',
       approximate: true,
+      jobName: 'e2e',
+      runner: 'gh-1',
     });
   });
 });

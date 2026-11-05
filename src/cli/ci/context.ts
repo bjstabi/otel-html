@@ -1,12 +1,16 @@
 import type { ApiJob } from './github-api.js';
 import { type JobId, jobTraceparent, runKey } from './ids.js';
 
-export type ResolvedJob = { jobId: JobId; approximate: boolean };
+export type ResolvedJob =
+  | { jobId: number; approximate: false }
+  | { jobId: string; approximate: true; jobName: string; runner: string | null };
 
 /**
  * Finds the job this script is running in: the one in-progress job on this runner (among several, the one named like
- * the hint). Zero or several matches cannot be
- * told apart, so fall back to the name hash (`name:<hint>`), which the publisher derives the same way.
+ * the hint). Zero or several matches cannot be told apart, so fall back to `name:<hint>@<runner>` and record the hint
+ * and the runner in `context.json`: the publisher matches them to the API job (`approximateJobIds`) and reuses this
+ * id verbatim, so both sides agree and matrix legs on different runners get different ids. Two legs with one hint
+ * that ran one after the other on one runner still share an id, as same-named jobs do.
  */
 export function resolveJob(jobs: ApiJob[], runnerName: string, jobNameHint: string): ResolvedJob {
   const onRunner = jobs.filter((j) => j.status === 'in_progress' && j.runner_name === runnerName);
@@ -15,7 +19,12 @@ export function resolveJob(jobs: ApiJob[], runnerName: string, jobNameHint: stri
   const matches = named.length > 0 ? named : onRunner;
   const [only] = matches;
   if (matches.length === 1 && only !== undefined) return { jobId: only.id, approximate: false };
-  return { jobId: `name:${jobNameHint}`, approximate: true };
+  return {
+    jobId: `name:${jobNameHint}${runnerName === '' ? '' : `@${runnerName}`}`,
+    approximate: true,
+    jobName: jobNameHint,
+    runner: runnerName === '' ? null : runnerName,
+  };
 }
 
 export type ContextInputs = {
@@ -118,5 +127,4 @@ export function envFileText(env: Readonly<Record<string, string>>): string {
 }
 
 /** What the publisher reads to pick the same job id. */
-export const contextJson = (r: ResolvedJob): string =>
-  `${JSON.stringify({ jobId: r.jobId, approximate: r.approximate })}\n`;
+export const contextJson = (r: ResolvedJob): string => `${JSON.stringify(r)}\n`;

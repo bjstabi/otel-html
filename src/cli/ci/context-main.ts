@@ -31,9 +31,12 @@ export async function runContext(
     const resolved = resolveJob(jobs, inputs.runnerName, inputs.jobNameHint);
     const apiName = jobs.find((j) => j.id === resolved.jobId)?.name;
     if (resolved.approximate) {
-      warn(
-        `could not tell which job this is; using the name ${inputs.jobNameHint} for its span id. Set OTEL_HTML_JOB_NAME (or --job-name) to the job's display name (matrix legs share GITHUB_JOB, so their fallback ids would collide).`,
-      );
+      // Without OTEL_HTML_JOB_NAME the hint is GITHUB_JOB (the job's id), which differs from a `name:` the job sets.
+      const { OTEL_HTML_JOB_NAME: hinted } = env;
+      const advice = hinted
+        ? ''
+        : ' If the job sets a `name:` other than its id, set OTEL_HTML_JOB_NAME (or --job-name) to it.';
+      warn(`could not tell which job this is; using ${resolved.jobId} for its span id.${advice}`);
     }
     const ctx = contextEnv({ ...inputs, jobName: apiName ?? inputs.jobNameHint, jobId: resolved.jobId });
     appendFileSync(inputs.envFile, envFileText(ctx));
