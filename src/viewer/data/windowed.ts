@@ -60,16 +60,20 @@ export function createWindowedSource(
     async querySpans(q, onProgress, signal) {
       const run = new SpanQueryRun(q, signal);
       const { targets, unfiltered } = chunks.targets(q);
+      // Newest first (the Traces explorer default) visits chunks by end time descending, so a scan cut short by the
+      // cap lists the newest spans rather than the newest of the oldest ones.
+      const newest = q.sort.column === 'start' && q.sort.dir === 'desc';
       const { scanned, partial } = await scanChunks({
-        targets,
+        targets: newest ? [...targets].sort((a, b) => b.end - a.end || b.n - a.n) : targets,
         total: chunks.ordered.length,
         entries: chunkEntries,
         run,
         // "Scan entire run" lifts the cap outside traces mode (matched rows are bounded by a TopKBuffer there; the
         // per-trace maps of traces mode are not), so a measure's groups and the listed rows span the whole run.
         cap: q.scanAll && q.mode !== 'traces' ? Number.POSITIVE_INFINITY : cap,
-        // Traces mode finishes the chunk it is in, so the traces it matched are seen whole within it.
-        finishChunk: q.mode === 'traces',
+        // Traces mode finishes the chunk it is in, so the traces it matched are seen whole within it; newest first
+        // does too, because rows within a chunk are not in time order and the newest may come last.
+        finishChunk: q.mode === 'traces' || newest,
         onProgress,
         signal,
       });

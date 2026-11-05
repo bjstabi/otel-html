@@ -288,6 +288,52 @@ describe('windowed strategy', () => {
     expect(r.partial).not.toBeNull();
   });
 
+  test('a start:desc head scans the newest chunks first', async () => {
+    const small = withListCap(3);
+    const loader = createScriptedLoader(small.files);
+    const ds = await createDataSource(loader, small.manifest, 1);
+    const eager = await createDataSource(createScriptedLoader(six.files), six.manifest, SMALL);
+    loader.reset();
+    const q = query({ sort: { column: 'start', dir: 'desc' }, limit: 3 });
+    const r = await ds.querySpans(q);
+    expect(loader.calls[0]).toBe(chunkPath(5));
+    expect(asSpans(r.rows).map((s) => s.span.spanId)).toEqual(
+      asSpans((await eager.querySpans(q)).rows).map((s) => s.span.spanId),
+    );
+  });
+
+  test('a start:desc head keeps reading into older chunks until the cap', async () => {
+    const small = withListCap(4); // each trace chunk holds three spans
+    const loader = createScriptedLoader(small.files);
+    const ds = await createDataSource(loader, small.manifest, 1);
+    const eager = await createDataSource(createScriptedLoader(six.files), six.manifest, SMALL);
+    loader.reset();
+    const q = query({ sort: { column: 'start', dir: 'desc' }, limit: 4 });
+    const r = await ds.querySpans(q);
+    expect(loader.calls).toEqual([chunkPath(5), chunkPath(4)]);
+    expect(asSpans(r.rows).map((s) => s.span.spanId)).toEqual(
+      asSpans((await eager.querySpans(q)).rows).map((s) => s.span.spanId),
+    );
+  });
+
+  test('traces mode under start:desc also scans the newest chunk first', async () => {
+    const small = withListCap(1);
+    const loader = createScriptedLoader(small.files);
+    const ds = await createDataSource(loader, small.manifest, 1);
+    loader.reset();
+    await ds.querySpans(query({ mode: 'traces', sort: { column: 'start', dir: 'desc' } }));
+    expect(loader.calls[0]).toBe(chunkPath(5));
+  });
+
+  test('a start:asc head keeps the oldest-first order', async () => {
+    const small = withListCap(3);
+    const loader = createScriptedLoader(small.files);
+    const ds = await createDataSource(loader, small.manifest, 1);
+    loader.reset();
+    await ds.querySpans(query({ sort: { column: 'start', dir: 'asc' } }));
+    expect(loader.calls[0]).toBe(chunkPath(0));
+  });
+
   test('without condition, text or window it returns the head of the run and trusts the manifest total', async () => {
     const small: Fixture = {
       files: six.files,
