@@ -34,6 +34,7 @@ import {
   loadMetricPoints,
   metricsOnResources,
 } from './metric-load.js';
+import { capsOf } from './query-common.js';
 import type { ScriptLoader } from './script-loader.js';
 import type { SpanQuery, SpanQueryResult, SpanRow } from './span-query.js';
 import type { TraceTree } from './trace-tree.js';
@@ -274,7 +275,9 @@ export async function createDataSource(
   };
   const logs =
     budgets.logs === 'eager'
-      ? lazyLogStrategy(() => createEagerLogSource(loader, manifest))
+      ? lazyLogStrategy(() =>
+          createEagerLogSource(loader, manifest, async () => capsOf(await getLogRollups())),
+        )
       : createWindowedLogSource(loader, manifest, getLogRollups, index);
   let metricCatalog: Promise<MetricCatalog> | undefined;
   const getMetricCatalog = (): Promise<MetricCatalog> => {
@@ -293,11 +296,11 @@ export async function createDataSource(
     return metricPoints;
   };
   const metrics = new Lru<number, LoadedMetric>(METRIC_LRU_SIZE);
-  const [rollups, spans] = await Promise.all([
-    loadSpanRollups(loader, manifest),
-    budgets.spans === 'eager' ? createEagerSource(loader, manifest) : null,
-  ]);
-  const spanStrategy = spans ?? createWindowedSource(loader, manifest, rollups, index);
+  const rollups = await loadSpanRollups(loader, manifest);
+  const spanStrategy =
+    budgets.spans === 'eager'
+      ? await createEagerSource(loader, manifest, capsOf(rollups))
+      : createWindowedSource(loader, manifest, rollups, index);
   const loadTrace = async (traceId: TraceId): Promise<TraceDetail> => {
     // The count comes from the trace index, so opening a trace never waits on the log load, with one exception
     // below, and never fails with it.

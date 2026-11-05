@@ -11,6 +11,7 @@ import {
   type SpanRow,
   type TraceRow,
 } from '../../src/viewer/data/data-source.js';
+import { loadSpanRollups } from '../../src/viewer/data/load.js';
 import { CHUNK_LRU_SIZE } from '../../src/viewer/data/windowed.js';
 import { createScriptedLoader } from '../../test-support/scripted-loader.js';
 import {
@@ -173,6 +174,27 @@ describe('eager strategy', () => {
     await expect(ds.querySpans(query({ sort: { column: 'nope', dir: 'asc' } }))).rejects.toThrow(
       /query\.sort\.column/,
     );
+  });
+});
+
+describe('facet caps come from the report', () => {
+  test('loaded rollups expose the writer caps', async () => {
+    const capped = await buildReport(2, [], { writer: { facetValueCap: 2, facetKeyCap: 9 } });
+    const loader = createScriptedLoader(capped.files);
+    const spans = await loadSpanRollups(loader, capped.manifest);
+    expect([spans.facets.valueCap, spans.facets.keyCap]).toEqual([2, 9]);
+  });
+
+  test('a filtered query folds at the writer cap, windowed and eager', async () => {
+    const capped = await buildReport(6, [1, 3], { writer: { facetValueCap: 1, facetKeyCap: 7 } });
+    const windowed = await createDataSource(createScriptedLoader(capped.files), capped.manifest, 1);
+    expect(windowed.strategy).toBe('windowed');
+    const w = await windowed.querySpans(query({ condition: ERRORS }));
+    expect([w.facets.valueCap, w.facets.keyCap]).toEqual([1, 7]);
+    const eager = await createDataSource(createScriptedLoader(capped.files), capped.manifest, SMALL);
+    expect(eager.strategy).toBe('eager');
+    const e = await eager.querySpans(query({ condition: ERRORS }));
+    expect([e.facets.valueCap, e.facets.keyCap]).toEqual([1, 7]);
   });
 });
 

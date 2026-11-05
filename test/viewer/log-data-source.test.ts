@@ -534,13 +534,14 @@ describe('windowed logs', () => {
     expect(loader.calls).toEqual(['data/rollups/logs.js', logChunk(9), logChunk(8)]);
   });
 
-  test('an unfiltered traces-mode query does not load the landing rollup', async () => {
+  test('an unfiltered traces-mode query loads the rollup only for its caps and scans chunks for the result', async () => {
     const loader = createScriptedLoader(rep.files);
     const ds = await createDataSource(loader, rep.manifest, 1);
     loader.reset();
     const r = await ds.queryLogs(query({ mode: 'traces', sort: { column: 'first', dir: 'asc' } }));
     expect(r.mode).toBe('traces');
-    expect(loader.calls.some((p) => p.includes('/rollups/'))).toBe(false);
+    expect(loader.calls.filter((p) => p.includes('/rollups/'))).toEqual(['data/rollups/logs.js']);
+    expect(loader.calls.some((p) => p.includes('/chunks/logs/'))).toBe(true);
   });
 
   test('unfiltered patterns are the writer patterns from the rollup, with no chunk scanned', async () => {

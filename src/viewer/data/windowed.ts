@@ -6,7 +6,7 @@ import type { SpanRollups } from '../../rollups/span-rollups.js';
 import { CHUNK_LRU_SIZE, Lru, SignalChunks, scanChunks } from './chunk-window.js';
 import type { SpanStrategy } from './data-source.js';
 import { epochOf, loadSpanChunk, type TraceIndex } from './load.js';
-import { throwIfAborted } from './query-common.js';
+import { capsOf, throwIfAborted } from './query-common.js';
 import type { ScriptLoader } from './script-loader.js';
 import { type SpanEntry, SpanQueryRun, type TraceFacts } from './span-query.js';
 import { assembleTrace, traceNotFound } from './trace-detail.js';
@@ -58,7 +58,7 @@ export function createWindowedSource(
 
   return {
     async querySpans(q, onProgress, signal) {
-      const run = new SpanQueryRun(q, signal);
+      const run = new SpanQueryRun(q, signal, capsOf(rollups));
       const { targets, unfiltered } = chunks.targets(q);
       // Newest first (the Traces explorer default) visits chunks by end time descending, so a scan cut short by the
       // cap lists the newest spans rather than the newest of the oldest ones.

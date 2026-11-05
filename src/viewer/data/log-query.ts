@@ -22,8 +22,9 @@ import {
   AbortTicker,
   checkLimit,
   cmp,
+  DEFAULT_FACET_CAPS,
+  type FacetCaps,
   ordered,
-  QUERY_FACET_CAPS,
   sortFor,
   throwIfAborted,
 } from './query-common.js';
@@ -305,11 +306,11 @@ export class LogQueryRun {
   readonly #sort: ModeSort;
   #count = 0;
 
-  constructor(q: LogQuery, signal?: AbortSignal) {
+  constructor(q: LogQuery, signal: AbortSignal | undefined, caps: FacetCaps) {
     checkLimit(q.limit);
     this.#q = q;
     // Drain is the costly part of the rollups; only patterns mode reads it.
-    this.#rollups = new LogRollups(QUERY_FACET_CAPS, { cluster: q.mode === 'patterns' });
+    this.#rollups = new LogRollups(caps, { cluster: q.mode === 'patterns' });
     // "Scan entire run" means the whole run, whatever window the view had.
     this.#window = q.scanAll ? null : q.window;
     this.#signal = signal;
@@ -430,8 +431,9 @@ export function queryLogEntries(
   entries: readonly LogEntry[],
   q: LogQuery,
   signal?: AbortSignal,
+  caps: FacetCaps = DEFAULT_FACET_CAPS,
 ): LogQueryResult {
-  const run = new LogQueryRun(q, signal);
+  const run = new LogQueryRun(q, signal, caps);
   for (const e of entries) run.visit(e);
   return run.finish(null);
 }

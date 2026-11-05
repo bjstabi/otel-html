@@ -12,6 +12,7 @@ import {
   refParts,
   surroundingIn,
 } from './log-query.js';
+import type { FacetCaps } from './query-common.js';
 import type { ScriptLoader } from './script-loader.js';
 
 /** Runs `fn` in memory and reports a throw as a rejection, as the windowed strategy's async reads do. */
@@ -24,11 +25,18 @@ function attempt<T>(fn: () => T): Promise<T> {
 }
 
 /** Load every log chunk listed in the manifest once; queries then filter in memory and are exact. */
-export async function createEagerLogSource(loader: ScriptLoader, manifest: Manifest): Promise<LogStrategy> {
+export async function createEagerLogSource(
+  loader: ScriptLoader,
+  manifest: Manifest,
+  caps: () => Promise<FacetCaps>,
+): Promise<LogStrategy> {
   const epoch = epochOf(manifest);
-  const loaded = await Promise.all(
-    manifest.chunks.filter((c) => c.signal === 'logs').map((c) => loadLogChunk(loader, c, epoch)),
-  );
+  const [loaded, facetCaps] = await Promise.all([
+    Promise.all(
+      manifest.chunks.filter((c) => c.signal === 'logs').map((c) => loadLogChunk(loader, c, epoch)),
+    ),
+    caps(),
+  ]);
   const byChunk = new Map<number, readonly LogEntry[]>(loaded.map((l) => [l.chunk.n, l.entries]));
   const entries = loaded.flatMap((l) => l.entries);
   const rows = entries.map((e) => e.row);
@@ -51,7 +59,7 @@ export async function createEagerLogSource(loader: ScriptLoader, manifest: Manif
 
   return {
     queryLogs(q, _onProgress, signal) {
-      return attempt(() => queryLogEntries(entries, q, signal));
+      return attempt(() => queryLogEntries(entries, q, signal, facetCaps));
     },
     getLog(ref) {
       return attempt(() => find(ref));

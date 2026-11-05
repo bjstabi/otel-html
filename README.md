@@ -548,7 +548,7 @@ Config is a YAML or JSON file (`otel-html.yaml` by default), or an object passed
 | `writer.chunkTargetBytes` | 4000000 | Target size of a data chunk. |
 | `writer.flushIntervalMs` | 5000 | Checkpoint interval. Also checkpoints once after this long idle with new records. |
 | `writer.dedupeCapacity` | 200000 | Recent span IDs remembered for de-duplication. |
-| `writer.facetValueCap` | 1000 | Distinct values kept per facet key. |
+| `writer.facetValueCap` | 1000 | Distinct values kept per facet key; also bounds the viewer's filtered facets. |
 | `writer.facetKeyCap` | 500 | Facet keys kept. |
 | `writer.metricSeriesCap` | 1000 | Series kept per metric. Further series fold into one "other" series, and charts that would need to split it say they are partial. |
 | `writer.metricExemplars` | 4 | Exemplars kept per series per finest time bucket (those with a trace id first, then the most extreme values). |

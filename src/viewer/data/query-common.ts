@@ -1,7 +1,20 @@
 import { OtelHtmlError } from '../../model/errors.js';
 
-/** Facet caps used when rebuilding facets for a filtered set (the writer's defaults). */
-export const QUERY_FACET_CAPS = { facetValueCap: 1_000, facetKeyCap: 500 } as const;
+/** The caps a filtered set's facets are rebuilt with: the report's own, as the writer serialized them. */
+export interface FacetCaps {
+  readonly facetValueCap: number;
+  readonly facetKeyCap: number;
+}
+
+/** Fallback for callers without a report (the writer's defaults). */
+export const DEFAULT_FACET_CAPS: FacetCaps = { facetValueCap: 1_000, facetKeyCap: 500 };
+
+/** The caps a loaded rollup's facets were written with. */
+export function capsOf(rollups: {
+  readonly facets: { readonly valueCap: number; readonly keyCap: number };
+}): FacetCaps {
+  return { facetValueCap: rollups.facets.valueCap, facetKeyCap: rollups.facets.keyCap };
+}
 
 const ABORT_CHECK_EVERY = 4096;
 

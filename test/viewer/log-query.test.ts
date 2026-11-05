@@ -19,6 +19,7 @@ import {
   refParts,
   toLogEntries,
 } from '../../src/viewer/data/log-query.js';
+import { DEFAULT_FACET_CAPS } from '../../src/viewer/data/query-common.js';
 import { medianMs } from '../../test-support/median-ms.js';
 import { perfFactor } from '../../test-support/perf-inject.js';
 
@@ -321,7 +322,7 @@ describe('queryLogEntries', () => {
 
   test('units are matched logs, or matched traces in traces mode', () => {
     const count = (q: LogQuery): number => {
-      const run = new LogQueryRun(q);
+      const run = new LogQueryRun(q, undefined, DEFAULT_FACET_CAPS);
       for (const e of entries) run.visit(e);
       return run.units;
     };
@@ -393,7 +394,7 @@ test('LogRef is a branded string', () => {
 describe('LogQueryRun memory', () => {
   test('logs mode holds at most limit plus the compaction slack', () => {
     const logs = Array.from({ length: 10_000 }, (_, i) => log({ time: (i * 10) as RelNanos }));
-    const run = new LogQueryRun({ ...base, limit: 1 });
+    const run = new LogQueryRun({ ...base, limit: 1 }, undefined, DEFAULT_FACET_CAPS);
     for (const e of entriesOf(logs)) run.visit(e);
     expect(run.heldRows).toBeLessThanOrEqual(1 + 1024);
     const r = run.finish(null);

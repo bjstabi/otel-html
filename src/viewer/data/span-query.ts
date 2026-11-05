@@ -14,8 +14,9 @@ import {
   AbortTicker,
   checkLimit,
   cmp,
+  DEFAULT_FACET_CAPS,
+  type FacetCaps,
   ordered,
-  QUERY_FACET_CAPS,
   sortFor,
   throwIfAborted,
 } from './query-common.js';
@@ -204,7 +205,7 @@ export class SpanQueryRun {
   readonly #q: SpanQuery;
   readonly #signal: AbortSignal | undefined;
   readonly #condition: CompiledCondition<'span'> | null;
-  readonly #rollups = new SpanRollups(QUERY_FACET_CAPS);
+  readonly #rollups: SpanRollups;
   readonly #groups: GroupDurations | null;
   /** Spans mode: the best `limit` matched rows so far plus compaction slack; null in traces mode. */
   readonly #rows: TopKBuffer<SpanRow> | null;
@@ -216,7 +217,7 @@ export class SpanQueryRun {
   #hitTraces = 0;
   #count = 0;
 
-  constructor(q: SpanQuery, signal?: AbortSignal) {
+  constructor(q: SpanQuery, signal: AbortSignal | undefined, caps: FacetCaps) {
     if (q.groupBy !== null) {
       throw new OtelHtmlError('usage', {
         path: 'query.groupBy',
@@ -226,7 +227,8 @@ export class SpanQueryRun {
     }
     checkLimit(q.limit);
     this.#q = q;
-    this.#groups = q.measureBy === null ? null : new GroupDurations(QUERY_FACET_CAPS.facetValueCap);
+    this.#rollups = new SpanRollups(caps);
+    this.#groups = q.measureBy === null ? null : new GroupDurations(caps.facetValueCap);
     // "Scan entire run" means the whole run, whatever window the view had.
     this.#window = q.scanAll ? null : q.window;
     this.#signal = signal;
@@ -337,8 +339,9 @@ export function querySpanEntries(
   entries: readonly SpanEntry[],
   q: SpanQuery,
   signal?: AbortSignal,
+  caps: FacetCaps = DEFAULT_FACET_CAPS,
 ): SpanQueryResult {
-  const run = new SpanQueryRun(q, signal);
+  const run = new SpanQueryRun(q, signal, caps);
   for (const e of entries) run.visit(e);
   return run.finish(null);
 }
