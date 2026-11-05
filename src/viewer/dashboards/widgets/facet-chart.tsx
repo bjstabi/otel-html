@@ -80,7 +80,7 @@ function CapNote(props: { groupBy: string; cap: number; dropped: number }): JSX.
   const one = dropped === 1;
   const full = `Measured over the first ${cap} ${props.groupBy} values; ${n} ${one ? 'span' : 'spans'} with other values ${one ? 'is' : 'are'} left out`;
   return (
-    <p role="status" aria-label={full} title={full} className="truncate text-sm text-ink-2">
+    <p role="status" title={full} className="truncate text-sm text-ink-2">
       {`${n} ${one ? 'span' : 'spans'} past the first ${cap} values left out`}
     </p>
   );
