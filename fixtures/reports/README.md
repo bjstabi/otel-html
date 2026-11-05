@@ -8,11 +8,12 @@ that stops reading an older format version fails the tests. Do not regenerate or
 | --- | --- | --- | --- |
 | `format-1/` | 1 | `68ce54f`, the last commit that writes format 1 (the plan's `1b83faa` predates the CLI) | `fixtures/small.otlp.json`, `fixtures/metrics.otlp.json` |
 | `format-2/` | 2 | `01d0e53`, the first commit that writes format 2 (the last is `858f1fd`) | `fixtures/small.otlp.json`, `fixtures/metrics.otlp.json` |
+| `format-3/` | 3 | `otel-html-v0.2.1` (`3e2ede4`), the last release that writes format 3 when it was frozen | `fixtures/small.otlp.json`, `fixtures/metrics.otlp.json` |
 
 Regenerating (only if a fixture must change, for example the manifest schema gained a required field):
 
 ```sh
-git worktree add <tmp>/fmt-<n> <sha>
+git worktree add <tmp>/fmt-<n> <sha or release tag>
 cd <tmp>/fmt-<n> && mise run setup && mise run build
 node dist/cli/main.js convert fixtures/small.otlp.json fixtures/metrics.otlp.json -o <tmp>/fmt-<n>-report --title "format <n> fixture"
 cp -R <tmp>/fmt-<n>-report/data <repo>/fixtures/reports/format-<n>/
@@ -20,8 +21,8 @@ git worktree remove --force <tmp>/fmt-<n>
 (cd <repo>/fixtures/reports && find format-* -type f | LC_ALL=C sort | xargs sha256sum > SHA256SUMS)
 ```
 
-What is covered: `test/format/compat.test.ts` merges each fixture with the current reader and checks its manifest version and totals. `test/viewer/frozen-reports.test.ts` loads each fixture from disk through the viewer's scripted loader and runs the viewer's data layer on it (manifest parse, span query, metric catalog, every metric level, and the format-1 fallback of measuring point gaps). `e2e/frozen.spec.ts` renders each fixture in the current viewer in a browser. `test/format/frozen-checksums.test.ts` pins the bytes of every file. Not covered: reports of a format version older than the oldest fixture here.
+What is covered: `test/format/compat.test.ts` merges each fixture with the current reader and checks its manifest version and totals. `test/viewer/frozen-reports.test.ts` loads each fixture from disk through the viewer's scripted loader and runs the viewer's data layer on it (manifest parse, span query, metric catalog, every metric level, and the format-1 fallback of measuring point gaps). `e2e/frozen.spec.ts` renders each fixture in the current viewer in a browser. `test/format/frozen-checksums.test.ts` pins the bytes of every file. Not covered: reports of a format version older than the oldest fixture here, and the paged level and exemplar files format 3 introduced (`l<k>-<page>.js`, `ex-<page>.js`): these inputs are too short to fill a page, so `format-3/` holds only unpaged metric files.
 
-When a version is bumped, add a frozen report of the outgoing version here. That also means adding it to `FROZEN` in the checksum test, `buildFrozenReports`, `ReportName`, the mounted list in `e2e/global-setup.ts` and the loop in `e2e/frozen.spec.ts`, and regenerating `SHA256SUMS`. A version leaves `READABLE_FORMAT_VERSIONS` only together with its fixture.
+The current writer also writes format 3, so `format-3/` is what catches an in-place change to a format-3 shape: the rebuilt reports change with the writer, the frozen one does not.
 
-Format 3 needs no frozen copy: the end-to-end and writer tests exercise the current build.
+Every format version a release ships has a frozen report here, written by that release and added when the release is cut (a release that ships a format already frozen adds nothing). That also means adding it to `FROZEN` in the checksum test, `buildFrozenReports`, `ReportName`, the mounted list in `e2e/global-setup.ts` and the loop in `e2e/frozen.spec.ts`, and regenerating `SHA256SUMS`. A version leaves `READABLE_FORMAT_VERSIONS` only together with its fixture.

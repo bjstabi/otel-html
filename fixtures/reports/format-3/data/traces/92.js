@@ -1,0 +1,1 @@
+__OH__.push("traces/92",{"92182a35bf23d8836b27af32c92153f8":{"chunks":["chunks/spans/000000"],"logChunks":[],"start":1759096408,"end":1791149192,"spans":12,"logs":0,"errors":0,"root":{"service":"frontend","name":"GET /orders","resource":"GET /orders"}}});

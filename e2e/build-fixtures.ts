@@ -444,11 +444,11 @@ async function buildUnfinishedReport(): Promise<void> {
 }
 
 /**
- * The frozen format-1 and format-2 data folders (`fixtures/reports/`, never edited) completed into reports by
+ * The frozen data folders (`fixtures/reports/format-<n>/`, never edited) completed into reports by
  * `otel-html upgrade`, which writes the current viewer beside the data.
  */
 async function buildFrozenReports(): Promise<void> {
-  for (const n of [1, 2] as const) {
+  for (const n of [1, 2, 3] as const) {
     const dir = fileURLToPath(reportDir(`frozen-format-${n}`));
     await cp(fileURLToPath(new URL(`../fixtures/reports/format-${n}/data`, import.meta.url)), `${dir}data`, {
       recursive: true,

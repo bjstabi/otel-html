@@ -61,6 +61,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     'metrics-scale',
     'frozen-format-1',
     'frozen-format-2',
+    'frozen-format-3',
     ...FIXTURE_REPORTS,
   ];
   // The load spec serves its own report (`dist/load-receiver`) and runs without the fixture reports built.
