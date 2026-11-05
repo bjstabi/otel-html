@@ -15,6 +15,8 @@ import {
 import type { SpanQueryResult, SpanRow } from '../../src/viewer/data/span-query.js';
 import { createColorAssigner } from '../../src/viewer/theme/palette.js';
 import {
+  binsOnAxis,
+  durationAxis,
   durationBins,
   GROUPED_VIEWS,
   groupSlices,
@@ -167,6 +169,28 @@ describe('durationBins', () => {
     expect(durationBins([], 4)).toEqual([]);
     const one = durationBins([row(7), row(7)], 4);
     expect(one.reduce((a, b) => a + b.count, 0)).toBe(2);
+  });
+
+  test('durationAxis with a range puts lo and hi on the first and last edge exactly', () => {
+    const edges = durationAxis([2e6, 5e6, 9e6].map(row), 24, { lo: 1e6, hi: 1e7 });
+    expect(edges).toHaveLength(25);
+    expect(edges[0]).toBe(1e6);
+    expect(edges.at(-1)).toBe(1e7);
+    for (let i = 1; i < edges.length; i++) expect(edges[i]).toBeGreaterThan(edges[i - 1] ?? Number.NaN);
+  });
+
+  test('binsOnAxis counts rows into given edges and clamps outliers', () => {
+    const bins = binsOnAxis([5, 50, 500, -1].map(row), [0, 10, 100]);
+    expect(bins).toEqual([
+      { fromNs: 0, toNs: 10, count: 2 },
+      { fromNs: 10, toNs: 100, count: 2 },
+    ]);
+  });
+
+  test('durationBins equals binsOnAxis over durationAxis', () => {
+    const rows = [1, 10, 100, 1000, 1000, 5000].map(row);
+    expect(durationBins(rows, 4)).toEqual(binsOnAxis(rows, durationAxis(rows, 4)));
+    expect(durationAxis([], 4)).toEqual([]);
   });
 });
 
