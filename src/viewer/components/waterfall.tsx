@@ -92,6 +92,11 @@ export function Waterfall(props: WaterfallProps): JSX.Element {
   // Bring the selection into view on mount and when it changes; a collapse does not re-scroll. On mount it is
   // centred: the list sits in a pane that may show only part of it, and an edge row would be clipped there.
   const opened = useRef(false);
+  // A new tree (a trace switch on a mounted component) is a new mount: its selection is centred too.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset only when the tree changes
+  useEffect(() => {
+    opened.current = false;
+  }, [tree]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: scroll only when the selected span changes
   useEffect(() => {
     if (selectedIndex >= 0)
