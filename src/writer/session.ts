@@ -141,9 +141,10 @@ export interface AddOptions {
    * committed report as it was. In append and fresh-create mode, chunks written before a failing entry stay on disk
    * outside the manifest: harmless, never read, and overwritten by the next append.
    *
-   * While a partial input goes into a report being replaced, nothing is written before `endInput`: every accepted
-   * chunk and metric bucket stays in memory, outside the chunk and metric buffer budgets. The first input into a
-   * replaced report should therefore fit in memory; otherwise empty the folder first.
+   * While a partial input goes into a report being replaced, no chunk, spill or checkpoint is written before
+   * `endInput`: every accepted chunk and metric bucket stays in memory, outside the chunk and metric buffer budgets.
+   * `endInput` then wipes the replaced report, so only the first input is held; later inputs are written as they
+   * arrive. The first input into a replaced report should therefore fit in memory; otherwise empty the folder first.
    */
   readonly partial?: boolean;
 }
@@ -450,6 +451,9 @@ class Session implements WriterSession {
     return this.#serial(async () => {
       this.#assertOpen();
       this.#partial = false;
+      // The input has been read without error: the report being replaced can go, which bounds the in-memory hold
+      // to the first input even when that input was too small to have written anything.
+      if (this.#replacing) await this.#wipeReplaced();
       await this.#drainUnwritten(false);
       await this.#maybeCheckpoint();
       this.#armIdle();

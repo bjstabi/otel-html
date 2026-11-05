@@ -134,7 +134,7 @@ Options: `--config <file>` and `--title <title>`.
 
 The package exports `convert`, `merge`, `Report` and `OtelHtmlError`, plus types (`ConfigInput`, `ConvertOptions`, `MergeOptions`, `ReportOptions`, `ReportSummary`, `AddResult` and others).
 
-`Report.create`, `convert` and `merge` append when `out` already holds a report written by the same otel-html version; `replace: true` starts over, `append: true` requires the report to be there. A report from another version fails with a message naming `--replace` and `merge`.
+`Report.create`, `convert` and `merge` append when `out` already holds a report written by the same otel-html version; `replace: true` starts over (and, as with `--replace`, holds the first input in memory until it has been read without error; see Limits), `append: true` requires the report to be there. A report from another version fails with a message naming `--replace` and `merge`.
 
 ```ts
 import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
