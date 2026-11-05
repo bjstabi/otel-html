@@ -313,8 +313,9 @@ function mergePieces(id: number, pieces: readonly BucketSeries[], path: string):
   const ts: number[] = [];
   const as: BucketAgg[] = [];
   for (const p of pieces) {
-    ts.push(...p.t);
-    as.push(...p.a);
+    // One by one: `push(...list)` throws past ~125k arguments, which a long run's series reaches.
+    for (const x of p.t) ts.push(x);
+    for (const x of p.a) as.push(x);
   }
   let order = ts.map((_, i) => i);
   if (ts.some((x, i) => i > 0 && x < (ts[i - 1] ?? x))) {

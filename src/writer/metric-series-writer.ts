@@ -440,7 +440,8 @@ export class MetricSeriesWriter {
     const out: StoredExemplar[] = [];
     for (const page of pages ?? [null]) {
       const path = metricExemplarFilePath(id, k, page);
-      out.push(...parseExemplarFile(await this.#read(path), path).exemplars);
+      // One by one: `push(...list)` has an argument limit an exemplar page can exceed.
+      for (const e of parseExemplarFile(await this.#read(path), path).exemplars) out.push(e);
     }
     return out;
   }
