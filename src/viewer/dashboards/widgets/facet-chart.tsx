@@ -69,14 +69,19 @@ const knownKeys = (f: FacetCounts): string[] => [...new Set([...f.keys(), ...f.p
 const spanKeys = (d: DataSource): Promise<string[]> => d.landing().then((l) => knownKeys(l.facets));
 const logKeys = (d: DataSource): Promise<string[]> => d.logLanding().then((l) => knownKeys(l.facets));
 
-/** A duration measure keeps a bounded number of groups; says how many spans fell in the groups left out. */
+/**
+ * A duration measure keeps a bounded number of groups; says how many spans fell in the groups left out. One
+ * truncated line, so the chart's `NOTE_PX` budget holds in a narrow widget; the full sentence is the title.
+ */
 function CapNote(props: { groupBy: string; cap: number; dropped: number }): JSX.Element {
   const { dropped } = props;
+  const n = dropped.toLocaleString('en-US');
+  const cap = props.cap.toLocaleString('en-US');
+  const one = dropped === 1;
+  const full = `Measured over the first ${cap} ${props.groupBy} values; ${n} ${one ? 'span' : 'spans'} with other values ${one ? 'is' : 'are'} left out`;
   return (
-    <p role="status" aria-label="Groups left out" className="text-sm text-ink-2">
-      Measured over the first {props.cap.toLocaleString('en-US')} {props.groupBy} values;{' '}
-      {dropped.toLocaleString('en-US')} {dropped === 1 ? 'span' : 'spans'} with other values{' '}
-      {dropped === 1 ? 'is' : 'are'} left out
+    <p role="status" aria-label={full} title={full} className="truncate text-sm text-ink-2">
+      {`${n} ${one ? 'span' : 'spans'} past the first ${cap} values left out`}
     </p>
   );
 }

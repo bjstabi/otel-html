@@ -142,18 +142,24 @@ describe('the cap note of a duration measure', () => {
     querySpans: () => Promise.resolve(spansMeasured(dropped)),
   });
 
-  test('says how many spans had values past the cap', async () => {
+  test('says how many spans had values past the cap, on one line with the full sentence as its title', async () => {
     mount(over(3), widget('duration.max'));
-    expect(
-      await screen.findByText(
-        'Measured over the first 2 service.name values; 3 spans with other values are left out',
-      ),
-    ).toBeTruthy();
+    const note = await screen.findByText('3 spans past the first 2 values left out');
+    expect(note.getAttribute('title')).toBe(
+      'Measured over the first 2 service.name values; 3 spans with other values are left out',
+    );
+    expect(note.className).toContain('truncate');
   });
 
   test('formats a thousand with a separator', async () => {
     mount(over(1000), widget('duration.max'));
-    expect(await screen.findByText(/1,000 spans with other values are left out/)).toBeTruthy();
+    expect(await screen.findByText('1,000 spans past the first 2 values left out')).toBeTruthy();
+  });
+
+  test('one span reads in the singular', async () => {
+    mount(over(1), widget('duration.max'));
+    const note = await screen.findByText('1 span past the first 2 values left out');
+    expect(note.getAttribute('title')).toMatch(/1 span with other values is left out$/);
   });
 
   test('is absent when nothing was dropped', async () => {
