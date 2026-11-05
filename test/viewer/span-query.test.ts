@@ -155,6 +155,30 @@ describe('SpanQueryRun row buffer', () => {
     }
   });
 
+  test('equal sort keys and starts keep input order across compactions', () => {
+    const entries = synthetic(5000).map((e) => ({
+      ...e,
+      row: { ...e.row, span: { ...e.row.span, start: 0 as RelNanos, end: 500 as RelNanos }, durationNs: 500 },
+    }));
+    const r = querySpanEntries(entries, query({ sort: { column: 'duration', dir: 'desc' }, limit: 1500 }));
+    expect(r.rows).toEqual(entries.slice(0, 1500).map((e) => e.row));
+  });
+
+  test('a limit above the match count lists every match in order', () => {
+    const r = querySpanEntries(
+      synthetic(20_000),
+      query({
+        condition: 'status.code == STATUS_CODE_ERROR',
+        sort: { column: 'start', dir: 'asc' },
+        limit: 5000,
+      }),
+    );
+    expect(r.total).toBe(400);
+    expect(r.rows.map((x) => ('span' in x ? x.span.start : -1))).toEqual(
+      Array.from({ length: 400 }, (_, i) => i * 50 * 1000),
+    );
+  });
+
   test('holds at most limit plus the compaction slack however many spans it sees', () => {
     const run = new SpanQueryRun(query({ limit: 1 }));
     for (const e of synthetic(10_000)) run.visit(e);
