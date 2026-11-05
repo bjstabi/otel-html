@@ -1,4 +1,4 @@
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { flattenVisible, traceExtent, Waterfall } from '../../src/viewer/components/waterfall.js';
@@ -115,5 +115,49 @@ describe('Waterfall', () => {
     const { tree } = detailOf(rows);
     render(<Waterfall tree={tree} selectedSpanId={null} onSelect={() => undefined} />);
     expect(screen.getAllByRole('treeitem').length).toBeLessThan(60);
+  });
+});
+
+/** Records the virtualizer's scroll writes; a tall scrollHeight keeps the offset from clamping to 0. */
+function spyScroll(): { tops: number[]; restore(): void } {
+  const tops: number[] = [];
+  Object.defineProperty(HTMLElement.prototype, 'scrollTo', {
+    configurable: true,
+    value: (o: ScrollToOptions) => tops.push(o.top ?? 0),
+  });
+  Object.defineProperty(HTMLElement.prototype, 'scrollHeight', { configurable: true, get: () => 10_000_000 });
+  return {
+    tops,
+    restore: () => {
+      Reflect.deleteProperty(HTMLElement.prototype, 'scrollTo');
+      Reflect.deleteProperty(HTMLElement.prototype, 'scrollHeight');
+    },
+  };
+}
+const flat = (n: number) => {
+  const rows = [traceRow(1, null, 0, n * 100 + 100)];
+  for (let i = 2; i <= n; i++) rows.push(traceRow(i, 1, i * 100, i * 100 + 50));
+  return detailOf(rows).tree; // row index of span i is i - 1
+};
+
+describe('Waterfall selection', () => {
+  test('a selection deep in the list is scrolled into view on mount', async () => {
+    const s = spyScroll();
+    try {
+      render(<Waterfall tree={flat(3500)} selectedSpanId={spanIdOf(3001)} onSelect={() => undefined} />);
+      await waitFor(() => expect(s.tops.length).toBeGreaterThan(0));
+      const top = s.tops.at(-1) ?? 0;
+      expect(top).toBeGreaterThanOrEqual(3000 * 32 - 420);
+      expect(top).toBeLessThanOrEqual(3001 * 32);
+    } finally {
+      s.restore();
+    }
+  });
+
+  test('when the selected row is not rendered, the first rendered row is the Tab stop', () => {
+    render(<Waterfall tree={flat(3500)} selectedSpanId={spanIdOf(3001)} onSelect={() => undefined} />);
+    const items = screen.getAllByRole('treeitem');
+    expect(items.filter((i) => i.tabIndex === 0)).toHaveLength(1);
+    expect(items[0]?.tabIndex).toBe(0);
   });
 });

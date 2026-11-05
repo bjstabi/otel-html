@@ -8,7 +8,7 @@ import { formatDuration } from '../../semconv/formatters.js';
 import type { TraceNode, TraceTree } from '../data/trace-tree.js';
 import { type ColorAssigner, createColorAssigner, seriesVar } from '../theme/palette.js';
 import { ServiceChip } from '../traces/columns.js';
-import { rectWithFallback } from './results-table.js';
+import { rectWithFallback, tabStop } from './results-table.js';
 
 const ROW_HEIGHT = 32;
 const INDENT_PX = 14;
@@ -87,6 +87,18 @@ export function Waterfall(props: WaterfallProps): JSX.Element {
     observeElementRect: rectWithFallback(height),
   });
 
+  const selectedIndex =
+    selectedSpanId === null ? -1 : rows.findIndex((r) => r.node.row.span.spanId === selectedSpanId);
+  // Bring the selection into view on mount and when it changes; a collapse does not re-scroll. On mount it is
+  // centred: the list sits in a pane that may show only part of it, and an edge row would be clipped there.
+  const opened = useRef(false);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: scroll only when the selected span changes
+  useEffect(() => {
+    if (selectedIndex >= 0)
+      virtual.scrollToIndex(selectedIndex, opened.current ? undefined : { align: 'center' });
+    opened.current = true;
+  }, [selectedSpanId]);
+
   const toggle = (n: TraceNode, open: boolean): void => {
     const next = new Set(collapsed);
     if (open) next.delete(n);
@@ -151,9 +163,7 @@ export function Waterfall(props: WaterfallProps): JSX.Element {
     }
   };
 
-  const selectedIndex =
-    selectedSpanId === null ? -1 : rows.findIndex((r) => r.node.row.span.spanId === selectedSpanId);
-  const tabbable = Math.max(0, selectedIndex);
+  const tabbable = tabStop(selectedIndex, virtual.getVirtualItems());
 
   return (
     <div className="overflow-hidden rounded-card border border-hairline bg-surface" data-testid="waterfall">

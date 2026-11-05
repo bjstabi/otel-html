@@ -156,6 +156,20 @@ test('trace panel: flame graph click selects a span', async ({ page, baseURL }) 
   await expect(page).toHaveURL(/span=0102030405060708/);
 });
 
+test('trace panel: the Waterfall opens at a deep selected span and Tab reaches it', async ({ page }) => {
+  const deep = '000000000000c350';
+  await page.goto(`${LARGE_REPORT_DIR.href}index.html#/traces?trace=${LARGE_TRACE_ID}&span=${deep}`);
+  const panel = page.getByTestId('trace-panel');
+  await panel.getByRole('tab', { name: 'Waterfall' }).click();
+  const tree = panel.getByRole('tree', { name: 'Waterfall' });
+  await expect(tree.locator(`[data-span-id="${deep}"]`)).toBeInViewport({ timeout: 30_000 });
+  await page.keyboard.press('Tab'); // the tab panel
+  await page.keyboard.press('Tab'); // the tree's Tab stop
+  const focused = page.locator(':focus');
+  await expect(focused).toHaveAttribute('role', 'treeitem');
+  await expect(focused).toHaveAttribute('data-span-id', deep);
+});
+
 test(
   'flame graph of a very large trace renders within the budget',
   { tag: '@perf' },
