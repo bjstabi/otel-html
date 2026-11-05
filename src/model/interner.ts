@@ -1,4 +1,5 @@
 import type { AnyValue, Attributes } from './anyvalue.js';
+import { bytesToHex } from './bytes.js';
 
 export class Interner<T> {
   readonly #keyOf: (t: T) => string;
@@ -41,7 +42,7 @@ function valueKey(v: AnyValue): string {
     case 'double':
       return `d${Object.is(v.value, -0) ? '-0' : v.value}`;
     case 'bytes':
-      return `x${Array.from(v.value, (b) => b.toString(16).padStart(2, '0')).join('')}`;
+      return `x${bytesToHex(v.value)}`;
     case 'array':
       return `[${v.values.map(valueKey).join(',')}]`;
     case 'kvlist':

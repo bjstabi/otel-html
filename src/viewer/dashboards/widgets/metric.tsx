@@ -70,7 +70,7 @@ export function useNarrowing(dataSource: DataSource, traceId: TraceId | null): N
  * A query's effective `where`: its own, the variables on the data point's resource, and the selected trace's
  * resources, joined with `and`. The one place that builds it: the widget runs it and Open in Metrics links it.
  */
-export function effectiveWhere(
+function effectiveWhere(
   q: Pick<MetricQuery, 'where'>,
   variables: Parameters<typeof variableCondition>[0],
   resourceFilter: string | null,

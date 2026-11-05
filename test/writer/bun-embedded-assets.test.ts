@@ -3,6 +3,7 @@ import {
   type BunLike,
   bunEmbeddedViewerAssets,
   hasBunEmbeddedFiles,
+  viewerEntryNames,
 } from '../../src/writer/viewer-assets.js';
 
 function bunWith(...names: string[]): BunLike {
@@ -32,4 +33,19 @@ test('a css-less build is accepted and a missing or ambiguous script is a usage 
   expect(() => bunEmbeddedViewerAssets(bunWith('viewer.a.js', 'viewer.b.js')).entry()).toThrowError(
     /exactly one/,
   );
+});
+
+test('viewerEntryNames keeps only viewer.<hash>.<ext>', () => {
+  const names = [
+    'viewer.Ab_1-z.js',
+    'viewer.Ab.css',
+    'viewer.js',
+    'xviewer.a.js',
+    'viewer.a.js.map',
+    'receiver-1.js',
+    'viewer.b.js',
+  ];
+  expect(viewerEntryNames(names, 'js')).toEqual(['viewer.Ab_1-z.js', 'viewer.b.js']);
+  expect(viewerEntryNames(names, 'css')).toEqual(['viewer.Ab.css']);
+  expect(viewerEntryNames([], 'js')).toEqual([]);
 });

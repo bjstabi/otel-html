@@ -43,9 +43,8 @@ export interface TargetMap {
   log_record: LogTarget;
   datapoint: DatapointTarget;
 }
-export type TargetOf<C extends OttlContextName> = TargetMap[C];
 
-export type PathType = 'string' | 'int' | 'bool' | 'map' | 'bytes' | 'any';
+type PathType = 'string' | 'int' | 'bool' | 'map' | 'bytes' | 'any';
 
 export interface PathAccessor<T> {
   readonly type: PathType;
@@ -56,7 +55,7 @@ export interface PathAccessor<T> {
 // AnyValue -> OttlValue
 // ---------------------------------------------------------------------------
 
-export function fromAnyValue(v: AnyValue): OttlValue {
+function fromAnyValue(v: AnyValue): OttlValue {
   switch (v.kind) {
     case 'string':
     case 'bool':
@@ -129,10 +128,7 @@ function sharedPaths<T extends Shared>(): [string, PathAccessor<T>][] {
 // Path tables, keyed by canonical (context-prefix-free) path
 // ---------------------------------------------------------------------------
 
-export const SPAN_PATHS: ReadonlyMap<string, PathAccessor<SpanTarget>> = new Map<
-  string,
-  PathAccessor<SpanTarget>
->([
+const SPAN_PATHS: ReadonlyMap<string, PathAccessor<SpanTarget>> = new Map<string, PathAccessor<SpanTarget>>([
   ['trace_id.string', scalar('string', (t: SpanTarget) => t.span.traceId)],
   ['span_id.string', scalar('string', (t: SpanTarget) => t.span.spanId)],
   ['parent_span_id.string', scalar('string', (t: SpanTarget) => t.span.parentSpanId ?? '')],
@@ -151,10 +147,7 @@ export const SPAN_PATHS: ReadonlyMap<string, PathAccessor<SpanTarget>> = new Map
   ...sharedPaths<SpanTarget>(),
 ]);
 
-export const LOG_PATHS: ReadonlyMap<string, PathAccessor<LogTarget>> = new Map<
-  string,
-  PathAccessor<LogTarget>
->([
+const LOG_PATHS: ReadonlyMap<string, PathAccessor<LogTarget>> = new Map<string, PathAccessor<LogTarget>>([
   ['trace_id.string', scalar('string', (t: LogTarget) => t.log.traceId ?? '')],
   ['span_id.string', scalar('string', (t: LogTarget) => t.log.spanId ?? '')],
   [
@@ -184,7 +177,7 @@ export const LOG_PATHS: ReadonlyMap<string, PathAccessor<LogTarget>> = new Map<
   ...sharedPaths<LogTarget>(),
 ]);
 
-export const DATAPOINT_PATHS: ReadonlyMap<string, PathAccessor<DatapointTarget>> = new Map<
+const DATAPOINT_PATHS: ReadonlyMap<string, PathAccessor<DatapointTarget>> = new Map<
   string,
   PathAccessor<DatapointTarget>
 >([

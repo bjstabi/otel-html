@@ -6,8 +6,8 @@ import { formatDuration } from '../../semconv/formatters.js';
 import { type ColorAssigner, seriesVar } from '../theme/palette.js';
 
 /** Most groups drawn before the rest collapse into one neutral "Other" slice. */
-export const MAX_GROUPS = 7;
-export const OTHER_LABEL = 'Other';
+const MAX_GROUPS = 7;
+const OTHER_LABEL = 'Other';
 /** The grouping key used when none is chosen. */
 export const DEFAULT_GROUP_KEY = 'service.name';
 

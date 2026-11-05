@@ -16,13 +16,13 @@ import { FacetCounts } from './facets.js';
 import { RedSeries } from './red.js';
 import { TimeBuckets } from './time-buckets.js';
 
-export const SPAN_STATUS_KEYS = ['ok', 'error', 'unset'] as const;
+const SPAN_STATUS_KEYS = ['ok', 'error', 'unset'] as const;
 export type SpanStatusKey = (typeof SPAN_STATUS_KEYS)[number];
 
 /** Distinct (service, resource) duration histograms kept; further groups are counted in `droppedDurationGroups`. */
-export const MAX_DURATION_GROUPS = 10_000;
+const MAX_DURATION_GROUPS = 10_000;
 
-export function spanKindName(k: SpanKind): string {
+function spanKindName(k: SpanKind): string {
   switch (k) {
     case SpanKind.UNSPECIFIED:
       return 'unspecified';
@@ -39,7 +39,7 @@ export function spanKindName(k: SpanKind): string {
   }
 }
 
-export function statusKey(c: StatusCode): SpanStatusKey {
+function statusKey(c: StatusCode): SpanStatusKey {
   switch (c) {
     case StatusCode.OK:
       return 'ok';

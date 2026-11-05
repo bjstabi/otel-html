@@ -58,7 +58,7 @@ export async function loadSpanRollups(loader: ScriptLoader, manifest: Manifest):
  * One trace-index shard, or null when the manifest lists none for it. The shard may be newer than the
  * manifest after a crash, so callers filter its chunk refs against the manifest.
  */
-export async function loadTraceShard(
+async function loadTraceShard(
   loader: ScriptLoader,
   manifest: Manifest,
   shard: string,
@@ -69,7 +69,7 @@ export async function loadTraceShard(
 }
 
 /** Trace-index shards kept decoded, shared by the windowed span and log strategies. */
-export const TRACE_SHARD_LRU_SIZE = 16;
+const TRACE_SHARD_LRU_SIZE = 16;
 
 export interface TraceIndex {
   shard(name: string): Promise<TraceShard | null>;

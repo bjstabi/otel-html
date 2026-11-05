@@ -13,7 +13,7 @@ const TYPE_TITLES: Record<WidgetType, string> = {
 };
 
 /** The widget's own title, else its type's. */
-export function widgetTitle(w: Widget): string {
+function widgetTitle(w: Widget): string {
   return w.title ?? TYPE_TITLES[w.type];
 }
 

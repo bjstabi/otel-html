@@ -24,13 +24,13 @@ import { type DashboardPageState, isPristine } from './dashboard-state.js';
 import type { ExplorerView } from './explorer-view.js';
 import { formatWindow, parseUrlState, parseWindow, serializeUrlState, type UrlState } from './url-state.js';
 
-export const DEFAULT_TRACE_TAB: TraceTabId = 'flame';
-export const DEFAULT_SPAN_TAB = 'overview';
-export const DEFAULT_LOG_TAB: LogTabId = 'attributes';
+const DEFAULT_TRACE_TAB: TraceTabId = 'flame';
+const DEFAULT_SPAN_TAB = 'overview';
+const DEFAULT_LOG_TAB: LogTabId = 'attributes';
 
 /** Every explorer's groupings; `PAGE_OPTIONS` says which ones each page accepts. */
 export type SelectionMode = (typeof SELECTION_MODES)[number];
-export type ClearKey = 'window' | 'condition' | 'text' | 'traceId' | 'spanId' | 'logRef' | 'groupBy' | 'sort';
+type ClearKey = 'window' | 'condition' | 'text' | 'traceId' | 'spanId' | 'logRef' | 'groupBy' | 'sort';
 
 export interface Selection {
   window: TimeWindow | null;

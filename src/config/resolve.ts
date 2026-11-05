@@ -3,7 +3,7 @@ import { OtelHtmlError } from '../model/errors.js';
 import { ENV_BINDINGS } from './env.js';
 import { type ConfigInput, ConfigSchema, type ResolvedConfig } from './schema.js';
 
-export type ConfigSource = 'default' | 'file' | 'env' | 'flag';
+type ConfigSource = 'default' | 'file' | 'env' | 'flag';
 
 export interface ResolveLayers {
   file?: unknown;

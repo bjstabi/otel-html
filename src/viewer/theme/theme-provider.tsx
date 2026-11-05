@@ -11,7 +11,7 @@ import {
 } from 'react';
 
 export type ThemePreference = 'system' | 'light' | 'dark';
-export type ResolvedTheme = 'light' | 'dark';
+type ResolvedTheme = 'light' | 'dark';
 
 const STORAGE_KEY = 'otel-html:theme';
 

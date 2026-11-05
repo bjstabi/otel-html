@@ -1,7 +1,7 @@
 import type { ResourceRecord, SpanRecord } from '../model/records.js';
 import { ATTR_HTTP_REQUEST_METHOD, ATTR_HTTP_ROUTE, ATTR_SERVICE_NAME } from './attributes.js';
 
-export const UNKNOWN_SERVICE = 'unknown_service';
+const UNKNOWN_SERVICE = 'unknown_service';
 
 const ATTR_PROCESS_EXECUTABLE_NAME = 'process.executable.name';
 

@@ -17,7 +17,7 @@ import type { TimeWindow } from '../data/span-query.js';
 import { useKeyedAsync } from '../state/use-keyed-async.js';
 
 /** Buckets per chart when the card has not been measured (no layout, as in tests). */
-export const DEFAULT_MAX_POINTS = 600;
+const DEFAULT_MAX_POINTS = 600;
 const MIN_POINTS = 60;
 const MAX_POINTS = 2000;
 

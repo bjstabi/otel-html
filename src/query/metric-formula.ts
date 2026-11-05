@@ -1,6 +1,6 @@
 import { OtelHtmlError } from '../model/errors.js';
 
-export type FormulaOp = '+' | '-' | '*' | '/';
+type FormulaOp = '+' | '-' | '*' | '/';
 export type FormulaAst =
   | { type: 'num'; value: number }
   | { type: 'ref'; id: string }

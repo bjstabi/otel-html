@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { OtelHtmlError } from '../model/errors.js';
-import type { ViewerAsset, ViewerAssets } from '../writer/viewer-assets.js';
+import { type ViewerAsset, type ViewerAssets, viewerEntryNames } from '../writer/viewer-assets.js';
 
 interface Loaded {
   files: ViewerAsset[];
@@ -15,7 +15,7 @@ function usage(message: string): OtelHtmlError {
 
 /** Exactly one `viewer.<hash>.<ext>` is expected; several mean a stale or mixed build. */
 function pick(names: readonly string[], ext: 'js' | 'css', dir: string, required: boolean): string | null {
-  const matches = names.filter((n) => new RegExp(`^viewer\\.[A-Za-z0-9_-]+\\.${ext}$`).test(n));
+  const matches = viewerEntryNames(names, ext);
   const [only, ...rest] = matches;
   if (only === undefined) {
     if (required) throw usage(`viewer assets at ${dir} contain no viewer.<hash>.${ext} entry`);

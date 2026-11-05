@@ -1,4 +1,5 @@
 import type { AnyValue, Attributes } from '../model/anyvalue.js';
+import { bytesToBase64 } from '../model/bytes.js';
 import { OtelHtmlError } from '../model/errors.js';
 import { type RelNanos, toUnixNanos, type UnixNanos } from '../model/ids.js';
 import type {
@@ -12,7 +13,6 @@ import type {
   SpanRecord,
 } from '../model/records.js';
 import type { JsonValue } from './columns.js';
-import { bytesToBase64 } from './data-file.js';
 
 function anyValueJson(v: AnyValue): JsonValue {
   switch (v.kind) {

@@ -1,3 +1,5 @@
+import { bytesToBase64 } from './bytes.js';
+
 export type AnyValue =
   | { readonly kind: 'string'; readonly value: string }
   | { readonly kind: 'bool'; readonly value: boolean }
@@ -9,12 +11,6 @@ export type AnyValue =
   | { readonly kind: 'empty' };
 
 export type Attributes = ReadonlyMap<string, AnyValue>;
-
-function bytesToBase64(b: Uint8Array): string {
-  let bin = '';
-  for (const byte of b) bin += String.fromCharCode(byte);
-  return btoa(bin);
-}
 
 type Json = null | boolean | number | string | readonly Json[] | { readonly [k: string]: Json };
 

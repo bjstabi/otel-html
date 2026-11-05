@@ -9,7 +9,7 @@ import type {
 } from '../model/records.js';
 
 /** Shift a relative timestamp by `shift` ns, failing fast when it leaves the exact-integer range. */
-export function shiftNanos(t: RelNanos, shift: bigint, path: string): RelNanos {
+function shiftNanos(t: RelNanos, shift: bigint, path: string): RelNanos {
   if (shift === 0n) return t;
   const v = BigInt(t) + shift;
   if (v > BigInt(Number.MAX_SAFE_INTEGER) || v < BigInt(Number.MIN_SAFE_INTEGER)) {

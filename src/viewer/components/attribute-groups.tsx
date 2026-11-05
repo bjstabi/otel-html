@@ -45,7 +45,7 @@ interface TreeNode {
 }
 
 /** Nest dotted keys by segment, merging a valueless node with its only child (`a` + `b` -> `a.b`). */
-export function buildTree(entries: readonly (readonly [string, AnyValue])[]): TreeNode[] {
+function buildTree(entries: readonly (readonly [string, AnyValue])[]): TreeNode[] {
   const roots: TreeNode[] = [];
   for (const [key, value] of entries) {
     let level = roots;

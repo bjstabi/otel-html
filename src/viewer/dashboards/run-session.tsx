@@ -21,7 +21,7 @@ export interface RunSessionStore {
   setView(dashboardId: string, widgetId: string, view: RunChartView): void;
 }
 
-export function createRunSessionStore(): RunSessionStore {
+function createRunSessionStore(): RunSessionStore {
   const controls = new Map<string, ControlsByWidget>();
   const views = new Map<string, RunChartView>();
   const listeners = new Set<() => void>();

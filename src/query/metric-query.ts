@@ -63,7 +63,7 @@ export interface MetricPageState {
   exemplars: boolean;
 }
 
-export const POINT_TYPES = ['gauge', 'sum', 'histogram', 'exponentialHistogram', 'summary'] as const;
+const POINT_TYPES = ['gauge', 'sum', 'histogram', 'exponentialHistogram', 'summary'] as const;
 const positiveInt = z.number().int().positive();
 
 const MetricFnSchema = z.discriminatedUnion('op', [

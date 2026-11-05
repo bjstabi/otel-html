@@ -7,13 +7,7 @@ import type { SpanQueryResult, SpanRow, TraceRow } from '../data/span-query.js';
 import type { ExplorerView } from '../state/explorer-view.js';
 import type { PageView } from '../state/page-options.js';
 
-export {
-  DEFAULT_GROUP_KEY,
-  groupSlices,
-  MAX_GROUPS,
-  OTHER_LABEL,
-  type Slice,
-} from '../components/facet-views.js';
+export { groupSlices } from '../components/facet-views.js';
 
 export type ChartView = Exclude<PageView<'traces'>, 'list' | 'table'>;
 export type Measure = 'requests' | 'errors' | 'latency';

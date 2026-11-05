@@ -1,5 +1,6 @@
 import { create } from '@bufbuild/protobuf';
 import pkg from '../../package.json' with { type: 'json' };
+import { bytesToHex } from '../model/bytes.js';
 import {
   type ExportTraceServiceRequest,
   ExportTraceServiceRequestSchema,
@@ -69,11 +70,9 @@ export function exitCodeOf({ code, signal }: ChildExit): number {
   return SIGNALLED_BASE + (signal === null ? 0 : (EXIT_CODE_OF_SIGNAL[signal] ?? 0));
 }
 
-const hex = (b: Uint8Array): string => Buffer.from(b).toString('hex');
-
 /** `00-<trace id>-<span id>-01`: the W3C trace context of the root span, sampled. */
 export function traceparentOf(traceId: Uint8Array, spanId: Uint8Array): string {
-  return `00-${hex(traceId)}-${hex(spanId)}-01`;
+  return `00-${bytesToHex(traceId)}-${bytesToHex(spanId)}-01`;
 }
 
 /** The command's basename, without a trailing `.exe`; both path separators count. */

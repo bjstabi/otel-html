@@ -1,4 +1,4 @@
-import { type JSX, useEffect, useMemo, useState } from 'react';
+import { type JSX, useMemo } from 'react';
 import type { SpanStatusKey } from '../../rollups/span-rollups.js';
 import type { TimeBuckets } from '../../rollups/time-buckets.js';
 import { LOG_SEVERITY_KEYS, type LogSeverityKey, SEVERITY_BANDS } from '../../semconv/severity.js';
@@ -6,6 +6,7 @@ import type { TimeWindow } from '../data/span-query.js';
 import { useSelection } from '../state/selection-context.js';
 import { BrushOverlay } from './brush-overlay.js';
 import { Chart } from './chart.js';
+import { useThemeTick } from './theme-tick.js';
 
 /** Plot insets in px; the brush overlay uses the same values so pointer x maps onto bucket columns. */
 export const GRID = { left: 40, right: 8, top: 24, bottom: 24 } as const;
@@ -126,7 +127,7 @@ const VAR_RE = /^var\((--[a-z0-9-]+)\)$/;
 const UNRESOLVED_COLOR = '#6b6f78';
 
 /** Resolve a `var(--token)` reference against the live theme (an unset token gives `UNRESOLVED_COLOR`); other colours pass through. */
-export function resolveColor(color: string): string {
+function resolveColor(color: string): string {
   const name = VAR_RE.exec(color)?.[1];
   if (name === undefined) return color;
   const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -179,17 +180,6 @@ export function histogramBars<K extends string>(
           : { color },
     };
   });
-}
-
-/** Re-resolves colour tokens when the theme attributes on the root element change. */
-export function useThemeTick(): number {
-  const [themeTick, setThemeTick] = useState(0);
-  useEffect(() => {
-    const mo = new MutationObserver(() => setThemeTick((n) => n + 1));
-    mo.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'class'] });
-    return () => mo.disconnect();
-  }, []);
-  return themeTick;
 }
 
 export function buildHistogramOption<K extends string>(

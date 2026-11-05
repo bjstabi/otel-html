@@ -26,7 +26,7 @@ export function useTraceLogs(dataSource: DataSource, traceId: TraceId, enabled: 
 }
 
 /** The `trace_id` (and `span_id`) condition that selects exactly these logs in the Logs Explorer. */
-export function logScopeQuery(scope: { traceId: TraceId; spanId?: SpanId }): string {
+function logScopeQuery(scope: { traceId: TraceId; spanId?: SpanId }): string {
   const trace = `trace_id.string == "${scope.traceId}"`;
   return scope.spanId === undefined ? trace : `${trace} and span_id.string == "${scope.spanId}"`;
 }

@@ -1,5 +1,5 @@
 /** A small chart's plot must be at least this tall, or the split falls back to one plot. */
-export const SPLIT_MIN_PLOT_PX = 60;
+const SPLIT_MIN_PLOT_PX = 60;
 
 const MIN_CELL_PX = 230;
 const TOP_PX = 8;

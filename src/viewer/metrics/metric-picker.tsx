@@ -8,7 +8,7 @@ export const FIELD =
   'inline-flex items-center gap-1.5 whitespace-nowrap rounded-md border border-hairline bg-surface px-2 py-1 text-sm';
 const POPUP = 'rounded-card border border-hairline bg-surface p-2 shadow-lg';
 
-export function TypeBadge({ entry }: { entry: Pick<MetricEntry, 'type' | 'monotonic'> }): JSX.Element {
+function TypeBadge({ entry }: { entry: Pick<MetricEntry, 'type' | 'monotonic'> }): JSX.Element {
   return (
     <span className="rounded bg-accent/10 px-1.5 text-[10.5px] font-semibold tracking-wide text-accent">
       {metricTypeLabel(entry)}

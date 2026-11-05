@@ -1,12 +1,12 @@
 import { type JSX, type KeyboardEvent, type PointerEvent, type ReactNode, useRef, useState } from 'react';
 
-export const SPLIT_MIN = 20;
-export const SPLIT_MAX = 80;
+const SPLIT_MIN = 20;
+const SPLIT_MAX = 80;
 const KEY_STEP = 5;
 export const SPLIT_STORAGE_KEY = 'oh:trace-split';
 
 /** Percentage given to the top pane, kept within 20..80 so each pane keeps at least 20%. */
-export function clampSplit(pct: number): number {
+function clampSplit(pct: number): number {
   if (!Number.isFinite(pct)) return 50;
   return Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, pct));
 }

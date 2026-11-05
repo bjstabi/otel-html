@@ -1,9 +1,10 @@
 import { z } from 'zod';
 import type { AnyValue, Attributes } from '../model/anyvalue.js';
+import { bytesToBase64 } from '../model/bytes.js';
 import { assertNever, OtelHtmlError } from '../model/errors.js';
 import type { SpanId, TraceId } from '../model/ids.js';
 import type { ResourceRecord, ScopeRecord } from '../model/records.js';
-import { base64ToBytes, bytesToBase64 } from './data-file.js';
+import { base64ToBytes } from './data-file.js';
 import { parseWith } from './validate.js';
 
 /**
@@ -17,7 +18,7 @@ import { parseWith } from './validate.js';
  *   `{"$b":"<base64>"}` (bytes). The encoded payload is plain JSON, so it survives `JSON.stringify`.
  */
 
-export type ColumnKind =
+type ColumnKind =
   | 'traceId'
   | 'spanId'
   | 'nullableSpanId'
@@ -32,7 +33,7 @@ export type ColumnKind =
   | 'json'
   | 'ref';
 
-export interface ColumnDef<R> {
+interface ColumnDef<R> {
   readonly name: keyof R & string;
   readonly kind: ColumnKind;
   /** `dict` columns only: the closed set of allowed values (enum-like string unions). */

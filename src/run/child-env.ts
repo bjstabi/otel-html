@@ -15,7 +15,7 @@ const PROTOCOLS: readonly OtlpProtocol[] = ['grpc', 'http/protobuf', 'http/json'
 const DEFAULT_PROTOCOL: OtlpProtocol = 'http/protobuf';
 
 /** The variables `run` adds: the endpoint and protocol keep the user's choice; TRACEPARENT is always ours. */
-export const CHILD_ENV: readonly {
+const CHILD_ENV: readonly {
   name: string;
   value(input: ChildEnvInput, protocol: OtlpProtocol): string | undefined;
 }[] = [

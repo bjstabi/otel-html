@@ -13,8 +13,8 @@ const DISPLAY_LABEL: Record<Display, string> = {
 };
 /** Built from bucket counts, so only a histogram query can draw them. */
 const HISTOGRAM_ONLY: ReadonlySet<Display> = new Set(['heatmap', 'distribution']);
-export const HEATMAP_DISABLED = 'needs a visible histogram query';
-export const MIXED_UNITS_NOTE = 'different units: one chart per query';
+const HEATMAP_DISABLED = 'needs a visible histogram query';
+const MIXED_UNITS_NOTE = 'different units: one chart per query';
 
 function Switch(props: {
   label: string;

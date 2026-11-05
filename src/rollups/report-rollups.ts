@@ -5,7 +5,7 @@ import { MetricCatalog } from './metric-catalog.js';
 import { METRIC_KEYS, type MetricKey, SignalCounts } from './signal-counts.js';
 import { type SpanRollupOptions, SpanRollups } from './span-rollups.js';
 
-export type MetricRollups = {
+type MetricRollups = {
   buckets: SignalCounts<MetricKey>;
   catalog: MetricCatalog;
 };

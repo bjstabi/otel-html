@@ -4,8 +4,6 @@ import { codeSpan, MARKER, summaryTable } from './summary.js';
 
 /** The pure side of `ci link`: the sticky pull request comment and the check run that point at a run's report. */
 
-export { MARKER };
-
 const markerOf = (workflow: string): string => `${MARKER}:${workflow} -->`;
 /** The marker before comments were per workflow; those comments belong to the `ci` workflow. */
 const LEGACY_MARKER = `${MARKER} -->`;

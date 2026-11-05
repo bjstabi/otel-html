@@ -161,7 +161,7 @@ export function pullsOfRun(run: ApiRun, pulls: ApiPull[]): ApiPull[] {
 }
 
 /** Whether `run` is a run of the default branch of its own repository (not a fork's branch of the same name). */
-export const isDefaultBranchRun = (run: ApiRun, defaultBranch: string): boolean =>
+const isDefaultBranchRun = (run: ApiRun, defaultBranch: string): boolean =>
   run.head_branch === defaultBranch &&
   run.head_repository != null &&
   run.head_repository.full_name === run.repository.full_name;

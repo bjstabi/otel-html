@@ -94,7 +94,7 @@ export function following(widget: Widget, state: DashboardPageState): boolean {
   return state.follow[widget.id] ?? widget.follow;
 }
 
-export interface UnusableVariable {
+interface UnusableVariable {
   key: string;
   value: string;
   reason: string;

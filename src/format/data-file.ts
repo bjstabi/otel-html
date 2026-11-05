@@ -1,3 +1,4 @@
+import { bytesToBase64 } from '../model/bytes.js';
 import { OtelHtmlError } from '../model/errors.js';
 import { REGISTRATION_GLOBAL } from './version.js';
 
@@ -9,12 +10,6 @@ import { REGISTRATION_GLOBAL } from './version.js';
  */
 
 const SUFFIX = ');\n';
-
-export function bytesToBase64(b: Uint8Array): string {
-  let bin = '';
-  for (const byte of b) bin += String.fromCharCode(byte);
-  return btoa(bin);
-}
 
 const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 

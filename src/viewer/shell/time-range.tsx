@@ -11,12 +11,12 @@ type Range = NonNullable<Manifest['range']>;
 
 const MINUTE_NS = 60_000_000_000;
 
-export interface Preset {
+interface Preset {
   label: string;
   /** Window width in nanoseconds; null is the entire run. */
   widthNs: number | null;
 }
-export const PRESETS: readonly Preset[] = [
+const PRESETS: readonly Preset[] = [
   { label: 'Entire run', widthNs: null },
   { label: '15m', widthNs: 15 * MINUTE_NS },
   { label: '1h', widthNs: 60 * MINUTE_NS },
@@ -28,7 +28,7 @@ export function absoluteTime(rel: number, epoch: UnixNanos): string {
 }
 
 /** The preset window anchored at the run end; the whole run when the run is shorter than the preset. */
-export function presetWindow(range: Range, widthNs: number | null): TimeWindow | null {
+function presetWindow(range: Range, widthNs: number | null): TimeWindow | null {
   if (widthNs === null || range.end - range.start <= widthNs) return null;
   return { start: range.end - widthNs, end: range.end };
 }
@@ -42,7 +42,7 @@ export function stepWindow(w: TimeWindow, range: Range, dir: -1 | 1): TimeWindow
 }
 
 /** Double the width around the centre, kept inside the run; the whole run once it no longer fits. */
-export function zoomOutWindow(w: TimeWindow, range: Range): TimeWindow | null {
+function zoomOutWindow(w: TimeWindow, range: Range): TimeWindow | null {
   const width = w.end - w.start;
   if (width * 2 >= range.end - range.start) return null;
   const start = Math.round(Math.min(Math.max(w.start - width / 2, range.start), range.end - width * 2));

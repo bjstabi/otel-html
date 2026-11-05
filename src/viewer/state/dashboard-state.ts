@@ -3,7 +3,7 @@ import type { TraceId } from '../../model/ids.js';
 import { paramError, shown } from './param-error.js';
 import { TraceIdParamSchema, WindowTextSchema } from './param-schemas.js';
 
-export type LogViewMode = 'matches' | 'context';
+type LogViewMode = 'matches' | 'context';
 
 /** The URL key `d`: everything a dashboard page keeps beyond the shared `t`. */
 export interface DashboardPageState {

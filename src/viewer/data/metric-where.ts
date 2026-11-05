@@ -1,3 +1,4 @@
+import { bytesToHex } from '../../model/bytes.js';
 import type { UnixNanos } from '../../model/ids.js';
 import type {
   MetricPointRecord,
@@ -19,7 +20,7 @@ function display(v: OttlValue): string {
   if (v === null) return '(none)';
   if (typeof v === 'string') return v;
   if (typeof v === 'number' || typeof v === 'bigint' || typeof v === 'boolean') return String(v);
-  if (v instanceof Uint8Array) return [...v].map((b) => b.toString(16).padStart(2, '0')).join('');
+  if (v instanceof Uint8Array) return bytesToHex(v);
   if (v instanceof Map) return `{${[...v].map(([k, x]) => `${k}: ${display(x)}`).join(', ')}}`;
   return `[${[...v.values()].map(display).join(', ')}]`;
 }
@@ -39,7 +40,7 @@ function typed(v: OttlValue): unknown {
 /** The `other` series' value for every `by` path; no real value encodes to it. */
 const OTHER_VALUE = ['other'];
 
-export interface SeriesGroup {
+interface SeriesGroup {
   /** Identity of the group: the `by` paths with their type-tagged values. */
   key: string;
   /** The values as displayed, in `by` order. */

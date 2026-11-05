@@ -21,7 +21,7 @@ const JsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
   ]),
 );
 
-export const SerializedRollupsSchema: z.ZodType<SerializedRollups> = z.record(z.string(), JsonValueSchema);
+const SerializedRollupsSchema: z.ZodType<SerializedRollups> = z.record(z.string(), JsonValueSchema);
 
 export interface SessionState {
   formatVersion: 1;

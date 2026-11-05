@@ -26,7 +26,7 @@ function isOttl(s: string): boolean {
 }
 
 /** Each field's failure message is the "expected ..." half of the reported error. */
-export const UrlStateSchema = z.object({
+const UrlStateSchema = z.object({
   q: nonEmpty.refine(isOttl, 'a valid OTTL condition'),
   text: nonEmpty,
   t: WindowTextSchema,

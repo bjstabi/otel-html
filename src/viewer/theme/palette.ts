@@ -25,7 +25,7 @@ export interface Palette {
   dark: readonly string[];
 }
 
-export const DEFAULT_PALETTE: Palette = { light: CATEGORICAL_LIGHT, dark: CATEGORICAL_DARK };
+const DEFAULT_PALETTE: Palette = { light: CATEGORICAL_LIGHT, dark: CATEGORICAL_DARK };
 
 export const STATUS = { critical: '#d03b3b', warning: '#fab219' } as const;
 

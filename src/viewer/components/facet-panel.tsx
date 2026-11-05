@@ -27,7 +27,7 @@ export interface DurationBin {
 
 export const DURATION_KEY = 'span.end_time_unix_nano - span.start_time_unix_nano';
 
-export type FacetAction = 'only' | 'exclude';
+type FacetAction = 'only' | 'exclude';
 
 const SEVERITY_FACET = 'severity';
 const SEVERITY_EXCLUDE_MESSAGE =

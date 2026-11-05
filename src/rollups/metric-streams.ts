@@ -13,6 +13,7 @@ import {
   MAX_EXP_SCALE,
   MIN_EXP_SCALE,
   type SummaryAgg,
+  sameBounds,
 } from './metric-agg.js';
 
 export type Normalized =
@@ -305,10 +306,6 @@ const emptyExp = (e: ExpAgg): ExpAgg => ({
   positive: { offset: 0, counts: [] },
   negative: { offset: 0, counts: [] },
 });
-
-function sameBounds(a: readonly number[], b: readonly number[]): boolean {
-  return a.length === b.length && a.every((v, i) => v === b[i]);
-}
 
 /** Cumulative `cur` minus `prev`; null when something dropped, which means the stream was reset. */
 function diffHist(cur: HistAgg, prev: HistAgg): HistAgg | null {
