@@ -214,6 +214,8 @@ export function ConditionEditor(props: {
   context: OttlContextName;
   rawOpen: boolean;
   keyPlaceholder: string;
+  /** A further check on a condition that compiles; it throws an OtelHtmlError to refuse it. */
+  validate?(src: string): void;
   /** Appended to the controls' accessible names when a page holds several editors (` of a`). */
   labelSuffix?: string;
 }): JSX.Element {
@@ -251,7 +253,10 @@ export function ConditionEditor(props: {
     const src = tokensToOttl(next);
     // Compile first so an invalid regex or a path from another signal never reaches the store. A removal skips
     // it: it adds nothing, and must work on a condition that already does not compile.
-    if (compile && src !== null) compileCondition(src, context);
+    if (compile && src !== null) {
+      compileCondition(src, context);
+      props.validate?.(src);
+    }
     onChange(src);
   };
   const current = tokens ?? [];
@@ -260,6 +265,7 @@ export function ConditionEditor(props: {
     if (src.trim() === '') return null;
     try {
       compileCondition(src, context);
+      props.validate?.(src);
       return null;
     } catch (e) {
       if (e instanceof OtelHtmlError) return describeOttlError(e);
