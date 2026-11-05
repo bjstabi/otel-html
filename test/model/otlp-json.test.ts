@@ -116,6 +116,63 @@ describe('parseOtlpJson', () => {
     expect(s.parentSpanId).toBeNull();
   });
 
+  test('snake_case int64 fields above 2^53 stay exact', () => {
+    const text = `{"resource_spans":[{"scope_spans":[{"spans":[{"trace_id":"${TRACE_ID}","span_id":"${SPAN_ID}","start_time_unix_nano":1700000000000000123,"end_time_unix_nano":1700000000000000125,"events":[{"time_unix_nano":1700000000000000003,"name":"e"}]}]}]}],"resource_metrics":[{"scope_metrics":[{"metrics":[{"name":"h","histogram":{"aggregation_temporality":2,"data_points":[{"time_unix_nano":1700000000000000005,"count":18446744073709551615,"bucket_counts":[9007199254740993,1],"exemplars":[{"time_unix_nano":1700000000000000007,"as_int":9007199254740995}]}]}},{"name":"g","gauge":{"data_points":[{"time_unix_nano":1700000000000000009,"as_int":-9007199254740997}]}}]}]}]}`;
+    const [tr, mr] = parseOtlpJson(text, 'run.json');
+    const sp = traces(tr).resourceSpans[0]?.scopeSpans[0]?.spans[0];
+    expect(sp?.startTimeUnixNano).toBe(1700000000000000123n);
+    expect(sp?.endTimeUnixNano).toBe(1700000000000000125n);
+    expect(sp?.events[0]?.timeUnixNano).toBe(1700000000000000003n);
+    const ms = metrics(mr).resourceMetrics[0]?.scopeMetrics[0]?.metrics;
+    const h = ms?.[0]?.data;
+    if (h?.case !== 'histogram') throw new Error('expected histogram');
+    const dp = h.value.dataPoints[0];
+    expect(dp?.timeUnixNano).toBe(1700000000000000005n);
+    expect(dp?.count).toBe(18446744073709551615n);
+    expect(dp?.bucketCounts).toEqual([9007199254740993n, 1n]);
+    expect(dp?.exemplars[0]?.timeUnixNano).toBe(1700000000000000007n);
+    expect(dp?.exemplars[0]?.value).toEqual({ case: 'asInt', value: 9007199254740995n });
+    const g = ms?.[1]?.data;
+    if (g?.case !== 'gauge') throw new Error('expected gauge');
+    expect(g.value.dataPoints[0]?.value).toEqual({ case: 'asInt', value: -9007199254740997n });
+  });
+
+  test('snake_case int_value and observed_time_unix_nano stay exact', () => {
+    const text = `{"resource_logs":[{"scope_logs":[{"log_records":[{"observed_time_unix_nano":1700000000000000011,"attributes":[{"key":"big","value":{"int_value":9007199254740993}}]}]}]}]}`;
+    const [r] = parseOtlpJson(text, 'run.json');
+    const lr = r?.signal === 'logs' ? r.request.resourceLogs[0]?.scopeLogs[0]?.logRecords[0] : undefined;
+    expect(lr?.observedTimeUnixNano).toBe(1700000000000000011n);
+    expect(lr?.attributes[0]?.value?.value).toEqual({ case: 'intValue', value: 9007199254740993n });
+  });
+
+  test('snake_case zero_count stays exact', () => {
+    const text = `{"resource_metrics":[{"scope_metrics":[{"metrics":[{"name":"e","exponential_histogram":{"data_points":[{"zero_count":9007199254740993}]}}]}]}]}`;
+    const [mr] = parseOtlpJson(text, 'run.json');
+    const e = metrics(mr).resourceMetrics[0]?.scopeMetrics[0]?.metrics[0]?.data;
+    if (e?.case !== 'exponentialHistogram') throw new Error('expected exponentialHistogram');
+    expect(e.value.dataPoints[0]?.zeroCount).toBe(9007199254740993n);
+  });
+
+  test('snake_case hex ids are normalised like lowerCamelCase ones', () => {
+    const text = `{"resource_spans":[{"scope_spans":[{"spans":[{"trace_id":"${TRACE_ID.toUpperCase()}","span_id":"${SPAN_ID}","parent_span_id":"${SPAN_ID.toUpperCase()}"}]}]}]}`;
+    const camel = text
+      .replace('trace_id', 'traceId')
+      .replace('parent_span_id', 'parentSpanId')
+      .replace('span_id', 'spanId')
+      .replace(/resource_spans|scope_spans/g, (m) =>
+        m === 'resource_spans' ? 'resourceSpans' : 'scopeSpans',
+      );
+    const s = traces(parseOtlpJson(text, 'run.json')[0]).resourceSpans[0]?.scopeSpans[0]?.spans[0];
+    expect(s?.traceId.length).toBe(16);
+    expect(s?.parentSpanId.length).toBe(8);
+    expect(s).toEqual(traces(parseOtlpJson(camel, 'run.json')[0]).resourceSpans[0]?.scopeSpans[0]?.spans[0]);
+  });
+
+  test('snake_case top-level keys select the signal', () => {
+    const reqs = parseOtlpObject({ resource_spans: [{}], resource_logs: [{}], resource_metrics: [{}] }, 'a');
+    expect(reqs.map((r) => r.signal).sort()).toEqual(['logs', 'metrics', 'traces']);
+  });
+
   test('rejects bad input with a precise path', () => {
     expect(() =>
       parseOtlpJson('{"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"zz"}]}]}]}', 'run.json'),

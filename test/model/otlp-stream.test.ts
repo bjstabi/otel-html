@@ -135,6 +135,21 @@ describe('streamOtlpJson', () => {
     );
   });
 
+  test('snake_case top-level keys are read in both modes', () => {
+    const body =
+      '{"resource_logs":[{"scope_logs":[{"log_records":[{"time_unix_nano":1700000000000000123}]}]}]}';
+    for (const lines of [true, false]) {
+      const reqs = [...streamOtlpJson(body, 'a.json', body.length, lines)];
+      expect(reqs.map((r) => r.signal)).toEqual(['logs']);
+      const r = reqs[0];
+      expect(
+        r?.signal === 'logs' && r.request.resourceLogs[0]?.scopeLogs[0]?.logRecords[0]?.timeUnixNano,
+      ).toBe(1700000000000000123n);
+    }
+    const two = '{"resource_spans":[{}],"resource_metrics":[{}]}';
+    expect([...streamOtlpJson(two, 'a.json', 7)].map((r) => r.signal)).toEqual(['traces', 'metrics']);
+  });
+
   test('an empty signal array yields one empty request, like parseOtlpJson', () => {
     expect([...streamOtlpJson('{"resourceSpans":[ ]}', 'a.json')]).toEqual(
       parseOtlpJson('{"resourceSpans":[]}', 'a.json'),
