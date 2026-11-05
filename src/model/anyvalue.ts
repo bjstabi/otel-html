@@ -34,7 +34,7 @@ function toJson(v: AnyValue): Json {
     case 'array':
       return v.values.map(toJson);
     case 'kvlist': {
-      const o: Record<string, Json> = {};
+      const o = Object.create(null) as Record<string, Json>;
       for (const [k, x] of v.values) o[k] = toJson(x);
       return o;
     }
