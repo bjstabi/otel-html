@@ -16,7 +16,7 @@ import {
   refParts,
   surroundingIn,
 } from './log-query.js';
-import { throwIfAborted } from './query-common.js';
+import { capsOf, throwIfAborted } from './query-common.js';
 import type { ScriptLoader } from './script-loader.js';
 
 /** Neighbor chunks (wholly before, or wholly after, the log) Surrounding logs reads on each side before it says partial. */
@@ -62,7 +62,9 @@ export function createWindowedLogSource(
 
   return {
     async queryLogs(q, onProgress, signal) {
-      const run = new LogQueryRun(q, signal);
+      // The report's caps live in its log rollups, so even a filtered query waits on them.
+      const loadedRollups = await rollups();
+      const run = new LogQueryRun(q, signal, capsOf(loadedRollups));
       const found = chunks.targets(q);
       const { unfiltered } = found;
       // A query restricted to one trace reads that trace's chunks (the index lists them all), not the whole window.
@@ -73,7 +75,7 @@ export function createWindowedLogSource(
           ? found.targets
           : found.targets.filter((c) => traceChunks.some((t) => t.n === c.n));
       // Traces-mode aggregates cover trace-bearing logs only, so the all-logs rollup does not stand in for them.
-      const landing = unfiltered && q.mode !== 'traces' ? await rollups() : null;
+      const landing = unfiltered && q.mode !== 'traces' ? loadedRollups : null;
       if (landing !== null && q.mode === 'patterns') {
         // The writer clustered every log: the unfiltered patterns are exact without a scan.
         throwIfAborted(signal);
@@ -91,7 +93,8 @@ export function createWindowedLogSource(
         total: traceChunks === null ? chunks.ordered.length : traceChunks.length,
         entries: chunkEntries,
         run,
-        cap,
+        // "Scan entire run" lifts the cap outside traces mode, where matched rows are bounded by a TopKBuffer.
+        cap: q.scanAll && q.mode !== 'traces' ? Number.POSITIVE_INFINITY : cap,
         // Traces mode finishes the chunk it is in, so the traces it matched are seen whole within it; newest first
         // does too, because rows within a chunk are not in time order and the newest may come last.
         finishChunk: q.mode === 'traces' || newest,

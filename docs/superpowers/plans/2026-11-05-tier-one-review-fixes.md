@@ -228,11 +228,11 @@ it('a whitespace-only body is a refusal', async () => { /* '  \n' -> failure(...
 - Modify: `src/ottl/converters.ts:29-99`
 - Test: `test/ottl/compile.test.ts` (the `test.each` lists at ~84 and ~90)
 
-- [ ] **Step 1: Extend the tests:** add to the rejected list `(a+){2,20}`, `(a{1,64}){1,64}`, `(a|aa){2,}`,
+- [ ] **Step 1: Extend the tests:** add to the rejected list `(a+){2,20}`, `(a{1,64}){1,64}`,
   `(a+){5}`; add to the accepted list `(\d+\.){3}\d+`, `(a+){4}`, `(ab){2,5}`, `(a?){20}`. Add one assertion that
   the error message for `(a+){2,20}` matches `/nested repetition/` and `/\[a-z\]\{1,64\}/`.
 
-- [ ] **Step 2: Run** `pnpm exec vitest run test/ottl/compile.test.ts` — expected: the four new rejects FAIL (accepted today).
+- [ ] **Step 2: Run** `pnpm exec vitest run test/ottl/compile.test.ts` — expected: the three new rejects FAIL (accepted today).
 
 - [ ] **Step 3: Implement:** frames record `repeats` (the group contains a quantifier with max > 1); a quantifier's max is `Infinity` for `*`, `+`, `{n,}`, `n` for `{n}`, `m` for `{n,m}`, `1` for `?`; on `)` a repeating group marks its parent and sets `lastAtomRepeatGroup`; a quantifier with max > 4 after such an atom returns the new message from the spec.
 

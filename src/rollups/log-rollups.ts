@@ -105,14 +105,17 @@ export class LogRollups {
     return { buckets: this.buckets.toJSON(), facets: this.facets.toJSON(), patterns: this.patterns.toJSON() };
   }
 
-  static from(input: unknown, opts: SpanRollupOptions, root = 'logs'): LogRollups {
+  static from(input: unknown, opts: SpanRollupOptions | undefined, root = 'logs'): LogRollups {
     const s = parseWith(SerializedLogRollupsSchema, input, root);
-    const r = new LogRollups(opts);
+    // Without `opts` the facets keep the caps they were written with.
+    const facets = FacetCounts.from(
+      s.facets,
+      `${root}.facets`,
+      opts && { valueCap: opts.facetValueCap, keyCap: opts.facetKeyCap },
+    );
+    const r = new LogRollups({ facetValueCap: facets.valueCap, facetKeyCap: facets.keyCap });
+    r.facets = facets;
     r.buckets = TimeBuckets.from(s.buckets, LOG_SEVERITY_KEYS, `${root}.buckets`);
-    r.facets = FacetCounts.from(s.facets, `${root}.facets`, {
-      valueCap: opts.facetValueCap,
-      keyCap: opts.facetKeyCap,
-    });
     for (const k of DEFAULT_LOG_FACETS) {
       if (!r.facets.pinned.has(k.key)) {
         throw new OtelHtmlError('invalid-report', {

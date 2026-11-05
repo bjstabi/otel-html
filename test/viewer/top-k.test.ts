@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { topK } from '../../src/viewer/data/top-k.js';
+import { TopKBuffer, topK } from '../../src/viewer/data/top-k.js';
 
 /** Deterministic pseudo-random ints, many repeated, so ties exercise the stable-order rule. */
 function values(n: number, range: number, seed = 7): { v: number; id: number }[] {
@@ -43,5 +43,37 @@ describe('topK', () => {
     const copy = [...xs];
     topK(xs, 10, byV);
     expect(xs).toEqual(copy);
+  });
+});
+
+describe('TopKBuffer', () => {
+  const asc = (a: number, b: number): number => a - b;
+  const numbers = (n: number): number[] => values(n, 1000).map((x) => x.v);
+
+  test('take equals topK over everything pushed', () => {
+    const all = numbers(5000);
+    const buf = new TopKBuffer<number>(7, asc);
+    for (const x of all) buf.push(x);
+    expect(buf.take()).toEqual(topK(all, 7, asc));
+    const none = new TopKBuffer<number>(0, asc);
+    for (const x of all) none.push(x);
+    expect(none.take()).toEqual([]);
+  });
+
+  test('take is stable for ties across compactions', () => {
+    const all = values(5000, 5);
+    const buf = new TopKBuffer<{ v: number; id: number }>(7, byV);
+    for (const x of all) buf.push(x);
+    expect(buf.take()).toEqual(stableTop(all, 7, byV));
+  });
+
+  test('holds at most limit + max(limit, 1024)', () => {
+    const buf = new TopKBuffer<number>(1, asc);
+    let peak = 0;
+    for (const x of numbers(10_000)) {
+      buf.push(x);
+      peak = Math.max(peak, buf.size);
+    }
+    expect(peak).toBeLessThanOrEqual(1 + 1024);
   });
 });

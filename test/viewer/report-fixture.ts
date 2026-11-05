@@ -1,3 +1,4 @@
+import type { ConfigInput } from '../../src/config/schema.js';
 import { wrapDataFile } from '../../src/format/data-file.js';
 import type { Manifest } from '../../src/format/manifest.js';
 import type { TraceEntry } from '../../src/format/trace-shard.js';
@@ -66,11 +67,15 @@ export interface Fixture {
 }
 
 /** A report of `traces` traces, one span chunk per trace (flushed after each), written by the real session. */
-export async function buildReport(traces: number, errorTraces: readonly number[] = []): Promise<Fixture> {
+export async function buildReport(
+  traces: number,
+  errorTraces: readonly number[] = [],
+  config: ConfigInput = {},
+): Promise<Fixture> {
   const w = createTestWriter();
   const session = await openSession(w.deps, {
     out: OUT,
-    config: testConfig(),
+    config: testConfig(config),
     mode: 'replace',
   });
   const errors = new Set(errorTraces);
@@ -168,9 +173,9 @@ const TICKS_PER_CHUNK = 2;
  * +50 ns. Chunk 2 adds two `LOG_TRACE` logs on its root span and one on span `deadbeefdeadbeef` (not in the trace);
  * chunk 2 also has a log carrying `LOG_TRACE_ROOT_SPAN` but no trace id; chunk 3 adds the `ORPHAN_LOG_TRACE` log.
  */
-export async function buildLogReport(): Promise<Fixture> {
+export async function buildLogReport(config: ConfigInput = {}): Promise<Fixture> {
   const w = createTestWriter();
-  const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'replace' });
+  const session = await openSession(w.deps, { out: OUT, config: testConfig(config), mode: 'replace' });
   await session.add(otlp(traceRequest(0, new Set())), 'spans');
   await session.flush();
   const base = BigInt(EPOCH_NS);

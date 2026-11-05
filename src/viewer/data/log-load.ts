@@ -7,7 +7,6 @@ import { OtelHtmlError } from '../../model/errors.js';
 import type { UnixNanos } from '../../model/ids.js';
 import { LogRollups } from '../../rollups/log-rollups.js';
 import { type LoadedLogChunk, type LogEntry, type LogRef, toLogEntries } from './log-query.js';
-import { QUERY_FACET_CAPS } from './query-common.js';
 import type { ScriptLoader } from './script-loader.js';
 
 export function logNotFound(ref: LogRef): OtelHtmlError {
@@ -46,5 +45,5 @@ export async function loadLogRollups(loader: ScriptLoader, manifest: Manifest): 
       actual: JSON.stringify(manifest.rollups),
     });
   }
-  return LogRollups.from(reviveDataJson(await loader.load(path, rollupKey('logs'))), QUERY_FACET_CAPS, path);
+  return LogRollups.from(reviveDataJson(await loader.load(path, rollupKey('logs'))), undefined, path);
 }

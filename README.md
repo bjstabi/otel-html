@@ -548,7 +548,7 @@ Config is a YAML or JSON file (`otel-html.yaml` by default), or an object passed
 | `writer.chunkTargetBytes` | 4000000 | Target size of a data chunk. |
 | `writer.flushIntervalMs` | 5000 | Checkpoint interval. Also checkpoints once after this long idle with new records. |
 | `writer.dedupeCapacity` | 200000 | Recent span IDs remembered for de-duplication. |
-| `writer.facetValueCap` | 1000 | Distinct values kept per facet key. |
+| `writer.facetValueCap` | 1000 | Distinct values kept per facet key; also bounds the viewer's filtered facets. |
 | `writer.facetKeyCap` | 500 | Facet keys kept. |
 | `writer.metricSeriesCap` | 1000 | Series kept per metric. Further series fold into one "other" series, and charts that would need to split it say they are partial. |
 | `writer.metricExemplars` | 4 | Exemplars kept per series per finest time bucket (those with a trace id first, then the most extreme values). |
@@ -581,7 +581,7 @@ Config is a YAML or JSON file (`otel-html.yaml` by default), or an object passed
 - The in-flight budget (`receiver.inflightBudgetBytes`, 128 MiB) is reserved from `Content-Length`, or as a streamed body inflates, before the body is buffered, so HTTP memory is bounded by the budget plus one body.
 - gRPC: a call reserves `maxBodyBytes` of the in-flight budget when it starts, before its message is read, and is refused `UNAVAILABLE` (retryable, counted `busy`) when that would exceed the budget. The reservation is held until the message has been read in full and the handler admits its real size. Each admitted call reserves `maxBodyBytes` but may buffer up to twice that (the grpc-js ceiling) before the handler refuses it as too large, so across connections gRPC memory is bounded by about twice the budget. Each connection is additionally capped by Node's HTTP/2 session memory at that ceiling × its stream limit. Each concurrent call needs `maxBodyBytes` of budget while its message is read, so a budget below twice `maxBodyBytes` lets a connection run only one call at a time (the defaults are exactly twice).
 - The viewer is for static reports that open from `file://`. It does not follow a report that is still being written; reload to see what the receiver has checkpointed.
-- When a signal is larger than `viewer.eagerBudgetBytes`, the viewer reads its chunks on demand. Services numbers, filtered log results and filtered patterns are then partial (the viewer says "from N of M chunks") until you choose "Scan entire run". Opening a trace or its Logs tab reads only the chunks the trace index lists for it.
+- When a signal is larger than `viewer.eagerBudgetBytes`, the viewer reads its chunks on demand. Services numbers, filtered log results and filtered patterns are then partial (the viewer says "from N of M chunks") until you choose "Scan entire run" (in Traces mode that scan still stops at `viewer.listCap` traces, because the per-trace maps are unbounded; tracked in #151). Opening a trace or its Logs tab reads only the chunks the trace index lists for it.
 - Dashboard layout edits are not saved: Edit layout changes the page until you reload. Use Copy config and paste the result into your config file.
 - The Fusion timeline's metric lane comes from the run-wide rollup, so it ignores variables and says "all resources" when one is set.
 - Log pattern clustering stops creating clusters at 2,000. A message that fits no existing cluster after that stays unclustered, and the Patterns view reports how many.

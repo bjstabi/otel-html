@@ -14,12 +14,13 @@ import {
   AbortTicker,
   checkLimit,
   cmp,
+  DEFAULT_FACET_CAPS,
+  type FacetCaps,
   ordered,
-  QUERY_FACET_CAPS,
   sortFor,
   throwIfAborted,
 } from './query-common.js';
-import { topK } from './top-k.js';
+import { TopKBuffer, topK } from './top-k.js';
 import { buildTraceTree, exclusiveTimeByService } from './trace-tree.js';
 
 /** Nanoseconds relative to the report epoch (same unit and range as `SpanRecord.start`). */
@@ -137,6 +138,9 @@ export function toEntries(
 
 type Compare = (a: SpanRow, b: SpanRow) => number;
 
+/** The spans-mode tiebreak: start, then span id, so the order is total and windowed and eager scans agree. */
+const bySpanStartThenId: Compare = (a, b) => a.span.start - b.span.start || cmp(a.span.spanId, b.span.spanId);
+
 const SPAN_SORTS: Readonly<Record<string, Compare>> = {
   start: (a, b) => a.span.start - b.span.start,
   duration: (a, b) => a.durationNs - b.durationNs,
@@ -204,11 +208,10 @@ export class SpanQueryRun {
   readonly #q: SpanQuery;
   readonly #signal: AbortSignal | undefined;
   readonly #condition: CompiledCondition<'span'> | null;
-  readonly #rollups = new SpanRollups(QUERY_FACET_CAPS);
+  readonly #rollups: SpanRollups;
   readonly #groups: GroupDurations | null;
-  /** Spans mode: the matched rows, compacted to the best `limit` whenever the buffer reaches `#bound`. */
-  #rows: SpanRow[] = [];
-  readonly #bound: number;
+  /** Spans mode: the best `limit` matched rows so far plus compaction slack; null in traces mode. */
+  readonly #rows: TopKBuffer<SpanRow> | null;
   readonly #traces = new Map<TraceId, { rows: SpanRow[]; hit: boolean }>();
   readonly #order: ((a: SpanRow, b: SpanRow) => number) | null;
   readonly #traceCompare: ((a: TraceRow, b: TraceRow) => number) | null;
@@ -217,7 +220,7 @@ export class SpanQueryRun {
   #hitTraces = 0;
   #count = 0;
 
-  constructor(q: SpanQuery, signal?: AbortSignal) {
+  constructor(q: SpanQuery, signal: AbortSignal | undefined, caps: FacetCaps) {
     if (q.groupBy !== null) {
       throw new OtelHtmlError('usage', {
         path: 'query.groupBy',
@@ -227,7 +230,8 @@ export class SpanQueryRun {
     }
     checkLimit(q.limit);
     this.#q = q;
-    this.#groups = q.measureBy === null ? null : new GroupDurations(QUERY_FACET_CAPS.facetValueCap);
+    this.#rollups = new SpanRollups(caps);
+    this.#groups = q.measureBy === null ? null : new GroupDurations(caps.facetValueCap);
     // "Scan entire run" means the whole run, whatever window the view had.
     this.#window = q.scanAll ? null : q.window;
     this.#signal = signal;
@@ -235,13 +239,9 @@ export class SpanQueryRun {
     this.#condition = q.condition === null ? null : compileCondition(q.condition, 'span');
     this.#order =
       q.mode === 'spans'
-        ? ordered(
-            q.sort.dir,
-            sortFor(SPAN_SORTS, q.sort.column, q.mode),
-            (a, b) => a.span.start - b.span.start,
-          )
+        ? ordered(q.sort.dir, sortFor(SPAN_SORTS, q.sort.column, q.mode), bySpanStartThenId)
         : null;
-    this.#bound = q.limit + Math.max(q.limit, 1024);
+    this.#rows = this.#order === null ? null : new TopKBuffer(q.limit, this.#order);
     this.#traceCompare = q.mode === 'traces' ? sortFor(TRACE_SORTS, q.sort.column, q.mode) : null;
     throwIfAborted(signal);
   }
@@ -253,7 +253,7 @@ export class SpanQueryRun {
 
   /** @internal for tests: how many matched rows the run holds right now. */
   get heldRows(): number {
-    return this.#rows.length;
+    return this.#rows?.size ?? 0;
   }
 
   /** Ids of traces with a matching span (traces mode), in first-seen order. */
@@ -284,10 +284,7 @@ export class SpanQueryRun {
     if (this.#condition !== null && !this.#condition.test(e.target)) return;
     if (this.#q.text !== '' && !matchesText(this.#q.text, spanTextFields(e.target))) return;
     this.#count++;
-    if (this.#order !== null) {
-      this.#rows.push(e.row);
-      if (this.#rows.length >= this.#bound) this.#rows = topK(this.#rows, this.#q.limit, this.#order);
-    }
+    this.#rows?.push(e.row);
     if (group !== undefined) {
       if (!group.hit) this.#hitTraces++;
       group.hit = true;
@@ -306,8 +303,8 @@ export class SpanQueryRun {
     throwIfAborted(this.#signal);
     let rows: (SpanRow | TraceRow)[];
     let total: number;
-    if (this.#order !== null) {
-      rows = topK(this.#rows, this.#q.limit, this.#order);
+    if (this.#rows !== null) {
+      rows = this.#rows.take();
       total = this.#count;
     } else {
       const compare = this.#traceCompare;
@@ -341,8 +338,9 @@ export function querySpanEntries(
   entries: readonly SpanEntry[],
   q: SpanQuery,
   signal?: AbortSignal,
+  caps: FacetCaps = DEFAULT_FACET_CAPS,
 ): SpanQueryResult {
-  const run = new SpanQueryRun(q, signal);
+  const run = new SpanQueryRun(q, signal, caps);
   for (const e of entries) run.visit(e);
   return run.finish(null);
 }

@@ -6,7 +6,7 @@ import type { SpanRollups } from '../../rollups/span-rollups.js';
 import { CHUNK_LRU_SIZE, Lru, SignalChunks, scanChunks } from './chunk-window.js';
 import type { SpanStrategy } from './data-source.js';
 import { epochOf, loadSpanChunk, type TraceIndex } from './load.js';
-import { throwIfAborted } from './query-common.js';
+import { capsOf, throwIfAborted } from './query-common.js';
 import type { ScriptLoader } from './script-loader.js';
 import { type SpanEntry, SpanQueryRun, type TraceFacts } from './span-query.js';
 import { assembleTrace, traceNotFound } from './trace-detail.js';
@@ -58,17 +58,22 @@ export function createWindowedSource(
 
   return {
     async querySpans(q, onProgress, signal) {
-      const run = new SpanQueryRun(q, signal);
+      const run = new SpanQueryRun(q, signal, capsOf(rollups));
       const { targets, unfiltered } = chunks.targets(q);
+      // Newest first (the Traces explorer default) visits chunks by end time descending, so a scan cut short by the
+      // cap lists the newest spans rather than the newest of the oldest ones.
+      const newest = q.sort.column === 'start' && q.sort.dir === 'desc';
       const { scanned, partial } = await scanChunks({
-        targets,
+        targets: newest ? [...targets].sort((a, b) => b.end - a.end || b.n - a.n) : targets,
         total: chunks.ordered.length,
         entries: chunkEntries,
         run,
-        // A per-group duration measure over "Scan entire run" must see every span, or its groups are a head's.
-        cap: q.measureBy !== null && q.scanAll ? Number.POSITIVE_INFINITY : cap,
-        // Traces mode finishes the chunk it is in, so the traces it matched are seen whole within it.
-        finishChunk: q.mode === 'traces',
+        // "Scan entire run" lifts the cap outside traces mode (matched rows are bounded by a TopKBuffer there; the
+        // per-trace maps of traces mode are not), so a measure's groups and the listed rows span the whole run.
+        cap: q.scanAll && q.mode !== 'traces' ? Number.POSITIVE_INFINITY : cap,
+        // Traces mode finishes the chunk it is in, so the traces it matched are seen whole within it; newest first
+        // does too, because rows within a chunk are not in time order and the newest may come last.
+        finishChunk: q.mode === 'traces' || newest,
         onProgress,
         signal,
       });

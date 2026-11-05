@@ -222,14 +222,17 @@ export class SpanRollups {
     };
   }
 
-  static from(input: unknown, opts: SpanRollupOptions, root = 'spans'): SpanRollups {
+  static from(input: unknown, opts: SpanRollupOptions | undefined, root = 'spans'): SpanRollups {
     const s = parseWith(SerializedSpanRollupsSchema, input, root);
-    const r = new SpanRollups(opts);
+    // Without `opts` the facets keep the caps they were written with.
+    const facets = FacetCounts.from(
+      s.facets,
+      `${root}.facets`,
+      opts && { valueCap: opts.facetValueCap, keyCap: opts.facetKeyCap },
+    );
+    const r = new SpanRollups({ facetValueCap: facets.valueCap, facetKeyCap: facets.keyCap });
+    r.facets = facets;
     r.buckets = TimeBuckets.from(s.buckets, SPAN_STATUS_KEYS, `${root}.buckets`);
-    r.facets = FacetCounts.from(s.facets, `${root}.facets`, {
-      valueCap: opts.facetValueCap,
-      keyCap: opts.facetKeyCap,
-    });
     for (const k of DEFAULT_SPAN_FACETS) {
       if (!r.facets.pinned.has(k.key)) {
         throw new OtelHtmlError('invalid-report', {

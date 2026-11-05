@@ -16,7 +16,6 @@ import { OtelHtmlError } from '../../model/errors.js';
 import type { TraceId, UnixNanos } from '../../model/ids.js';
 import { SpanRollups } from '../../rollups/span-rollups.js';
 import { Lru } from './chunk-window.js';
-import { QUERY_FACET_CAPS } from './query-common.js';
 import type { ScriptLoader } from './script-loader.js';
 import { type LoadedChunk, type SpanEntry, toEntries } from './span-query.js';
 
@@ -52,11 +51,7 @@ export async function loadSpanRollups(loader: ScriptLoader, manifest: Manifest):
       actual: JSON.stringify(manifest.rollups),
     });
   }
-  return SpanRollups.from(
-    reviveDataJson(await loader.load(path, rollupKey('spans'))),
-    QUERY_FACET_CAPS,
-    path,
-  );
+  return SpanRollups.from(reviveDataJson(await loader.load(path, rollupKey('spans'))), undefined, path);
 }
 
 /**

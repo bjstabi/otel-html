@@ -13,7 +13,7 @@ import { LOG_COLUMNS, METRIC_COLUMNS, SPAN_COLUMNS } from '../../src/format/spec
 import type { LogRecordRecord, MetricPointRecord, SpanRecord } from '../../src/model/records.js';
 import { LogRollups } from '../../src/rollups/log-rollups.js';
 import { MetricCatalog } from '../../src/rollups/metric-catalog.js';
-import { QUERY_FACET_CAPS } from '../../src/viewer/data/query-common.js';
+import { DEFAULT_FACET_CAPS } from '../../src/viewer/data/query-common.js';
 import type { JsonObject } from '../../test-support/otlp-builders.js';
 import { span, traceRequest } from '../../test-support/otlp-builders.js';
 import type { TestWriter } from '../../test-support/writer-deps.js';
@@ -74,7 +74,7 @@ export function spansRequest(count: number, offsetNs = 0, firstIndex = 0): JsonO
 export function logRollupsOf(w: TestWriter, out: string): LogRollups {
   const text = w.fs.snapshot().get(`${out}/data/rollups/logs.js`);
   if (text === undefined) throw new Error('no log rollups');
-  return LogRollups.from(reviveDataJson(unwrapDataFile(text, rollupKey('logs'))), QUERY_FACET_CAPS);
+  return LogRollups.from(reviveDataJson(unwrapDataFile(text, rollupKey('logs'))), DEFAULT_FACET_CAPS);
 }
 
 /** A data file of the report by its layout path, unwrapped with the key the path implies. */

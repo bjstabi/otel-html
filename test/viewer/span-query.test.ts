@@ -8,6 +8,7 @@ import type {
   SpanRecord,
 } from '../../src/model/records.js';
 import { StatusCode } from '../../src/model/records.js';
+import { DEFAULT_FACET_CAPS } from '../../src/viewer/data/query-common.js';
 import {
   querySpanEntries,
   type SpanEntry,
@@ -73,6 +74,14 @@ const query = (over: Partial<SpanQuery>): SpanQuery => ({
 });
 
 describe('querySpanEntries', () => {
+  test('a query folds facets at the caps it is given', () => {
+    const r = querySpanEntries(synthetic(100), query({}), undefined, { facetValueCap: 2, facetKeyCap: 500 });
+    expect(r.facets.valueCap).toBe(2);
+    expect(r.facets.total('service.name')).toBe(100);
+    expect(r.facets.top('service.name', 10)).toHaveLength(2);
+    expect(r.facets.other('service.name')).toBeGreaterThan(0);
+  });
+
   test('@perf filters 100k spans in memory under 150 ms (median)', () => {
     const entries = synthetic(100_000);
     const q = query({ condition: 'status.code == STATUS_CODE_ERROR' });
@@ -90,6 +99,24 @@ describe('querySpanEntries', () => {
     expect((asc.rows as SpanRow[]).map((r) => r.span.name)).toEqual(['op0', 'op0', 'op0']);
     const starts = (asc.rows as SpanRow[]).map((r) => r.span.start);
     expect(starts).toEqual([...starts].sort((a, b) => a - b));
+  });
+
+  test('spans with equal start and sort key order by span id whatever the input order', () => {
+    const tied = synthetic(2).map((e) => ({
+      ...e,
+      row: {
+        ...e.row,
+        span: { ...e.row.span, name: 'same', start: 5 as RelNanos, end: 9 as RelNanos },
+        durationNs: 4,
+      },
+    }));
+    const [a, b] = tied;
+    if (a === undefined || b === undefined) throw new Error('expected two entries');
+    for (const dir of ['asc', 'desc'] as const) {
+      const q = query({ sort: { column: 'name', dir } });
+      const ids = (es: SpanEntry[]) => (querySpanEntries(es, q).rows as SpanRow[]).map((r) => r.span.spanId);
+      expect(ids([a, b])).toEqual(ids([b, a]));
+    }
   });
 
   test('a limit of 0 returns no rows but still counts', () => {
@@ -180,14 +207,18 @@ describe('SpanQueryRun row buffer', () => {
   });
 
   test('holds at most limit plus the compaction slack however many spans it sees', () => {
-    const run = new SpanQueryRun(query({ limit: 1 }));
+    const run = new SpanQueryRun(query({ limit: 1 }), undefined, DEFAULT_FACET_CAPS);
     for (const e of synthetic(10_000)) run.visit(e);
     expect(run.heldRows).toBeLessThanOrEqual(1 + 1024);
     expect(run.units).toBe(10_000);
   });
 
   test('traces mode holds no matched rows', () => {
-    const run = new SpanQueryRun(query({ mode: 'traces', sort: { column: 'start', dir: 'asc' } }));
+    const run = new SpanQueryRun(
+      query({ mode: 'traces', sort: { column: 'start', dir: 'asc' } }),
+      undefined,
+      DEFAULT_FACET_CAPS,
+    );
     for (const e of synthetic(1000)) run.visit(e);
     expect(run.heldRows).toBe(0);
     expect(run.finish(null).total).toBe(1000);

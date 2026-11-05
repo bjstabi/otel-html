@@ -11,6 +11,7 @@ import {
   type SpanRow,
   type TraceRow,
 } from '../../src/viewer/data/data-source.js';
+import { loadSpanRollups } from '../../src/viewer/data/load.js';
 import { CHUNK_LRU_SIZE } from '../../src/viewer/data/windowed.js';
 import { createScriptedLoader } from '../../test-support/scripted-loader.js';
 import {
@@ -176,6 +177,38 @@ describe('eager strategy', () => {
   });
 });
 
+describe('facet caps come from the report', () => {
+  test('loaded rollups expose the writer caps', async () => {
+    const capped = await buildReport(2, [], { writer: { facetValueCap: 2, facetKeyCap: 9 } });
+    const loader = createScriptedLoader(capped.files);
+    const spans = await loadSpanRollups(loader, capped.manifest);
+    expect([spans.facets.valueCap, spans.facets.keyCap]).toEqual([2, 9]);
+  });
+
+  test('a filtered query folds at the writer cap, windowed and eager', async () => {
+    const capped = await buildReport(6, [1, 3], { writer: { facetValueCap: 1, facetKeyCap: 7 } });
+    const windowed = await createDataSource(createScriptedLoader(capped.files), capped.manifest, 1);
+    expect(windowed.strategy).toBe('windowed');
+    const w = await windowed.querySpans(query({ condition: ERRORS }));
+    expect([w.facets.valueCap, w.facets.keyCap]).toEqual([1, 7]);
+    const eager = await createDataSource(createScriptedLoader(capped.files), capped.manifest, SMALL);
+    expect(eager.strategy).toBe('eager');
+    const e = await eager.querySpans(query({ condition: ERRORS }));
+    expect([e.facets.valueCap, e.facets.keyCap]).toEqual([1, 7]);
+  });
+});
+
+describe('measure groups follow the report cap', () => {
+  test('a measure over more distinct values than facetValueCap drops the rest', async () => {
+    const capped = await buildReport(6, [], { writer: { facetValueCap: 1 } });
+    const ds = await createDataSource(createScriptedLoader(capped.files), capped.manifest, 1);
+    const r = await ds.querySpans(query({ measureBy: 'service.name', scanAll: true }));
+    expect(r.groups?.cap).toBe(1);
+    expect(r.groups?.size).toBe(1);
+    expect(r.groups?.dropped).toBeGreaterThan(0);
+  });
+});
+
 describe('windowed strategy', () => {
   async function windowed(files = six.files): Promise<{
     ds: Awaited<ReturnType<typeof createDataSource>>;
@@ -240,6 +273,98 @@ describe('windowed strategy', () => {
     let n = 0;
     for (const [, h] of all.groups?.entries() ?? []) n += h.count;
     expect(n).toBe(six.manifest.totals.spans);
+  });
+
+  const withListCap = (listCap: number): Fixture => ({
+    files: six.files,
+    manifest: {
+      ...six.manifest,
+      config: { ...six.manifest.config, viewer: { ...six.manifest.config.viewer, listCap } },
+    },
+  });
+
+  test('scanAll without a measure lists the best rows over the whole run and is exact', async () => {
+    const small = withListCap(4);
+    const ds = await createDataSource(createScriptedLoader(small.files), small.manifest, 1);
+    const eager = await createDataSource(createScriptedLoader(six.files), six.manifest, SMALL);
+    const q = query({ sort: { column: 'duration', dir: 'desc' }, limit: 4 });
+    const r = await ds.querySpans({ ...q, scanAll: true });
+    expect(r.partial).toBeNull();
+    expect(r.rows).toHaveLength(4);
+    expect(asSpans(r.rows).map((s) => s.span.spanId)).toEqual(
+      asSpans((await eager.querySpans(q)).rows).map((s) => s.span.spanId),
+    );
+    expect(r.total).toBe(six.manifest.totals.spans);
+  });
+
+  test('a run that matches exactly listCap units over every chunk is exact', async () => {
+    const late = await buildReport(1);
+    const manifest = {
+      ...late.manifest,
+      config: { ...late.manifest.config, viewer: { ...late.manifest.config.viewer, listCap: 2 } },
+    };
+    const ds = await createDataSource(createScriptedLoader(late.files), manifest, 1);
+    const r = await ds.querySpans(query({ condition: 'name == "db.query"' }));
+    expect(r.total).toBe(2);
+    expect(r.partial).toBeNull();
+  });
+
+  test('a cap reached inside the last chunk still marks the scan partial', async () => {
+    const one = await buildReport(1);
+    expect(one.manifest.totals.spans).toBeGreaterThan(2);
+    const manifest = {
+      ...one.manifest,
+      config: { ...one.manifest.config, viewer: { ...one.manifest.config.viewer, listCap: 2 } },
+    };
+    const ds = await createDataSource(createScriptedLoader(one.files), manifest, 1);
+    const r = await ds.querySpans(query({ sort: { column: 'duration', dir: 'desc' } }));
+    expect(r.partial).not.toBeNull();
+  });
+
+  test('a start:desc head scans the newest chunks first', async () => {
+    const small = withListCap(3);
+    const loader = createScriptedLoader(small.files);
+    const ds = await createDataSource(loader, small.manifest, 1);
+    const eager = await createDataSource(createScriptedLoader(six.files), six.manifest, SMALL);
+    loader.reset();
+    const q = query({ sort: { column: 'start', dir: 'desc' }, limit: 3 });
+    const r = await ds.querySpans(q);
+    expect(loader.calls[0]).toBe(chunkPath(5));
+    expect(asSpans(r.rows).map((s) => s.span.spanId)).toEqual(
+      asSpans((await eager.querySpans(q)).rows).map((s) => s.span.spanId),
+    );
+  });
+
+  test('a start:desc head keeps reading into older chunks until the cap', async () => {
+    const small = withListCap(4); // each trace chunk holds three spans
+    const loader = createScriptedLoader(small.files);
+    const ds = await createDataSource(loader, small.manifest, 1);
+    const eager = await createDataSource(createScriptedLoader(six.files), six.manifest, SMALL);
+    loader.reset();
+    const q = query({ sort: { column: 'start', dir: 'desc' }, limit: 4 });
+    const r = await ds.querySpans(q);
+    expect(loader.calls).toEqual([chunkPath(5), chunkPath(4)]);
+    expect(asSpans(r.rows).map((s) => s.span.spanId)).toEqual(
+      asSpans((await eager.querySpans(q)).rows).map((s) => s.span.spanId),
+    );
+  });
+
+  test('traces mode under start:desc also scans the newest chunk first', async () => {
+    const small = withListCap(1);
+    const loader = createScriptedLoader(small.files);
+    const ds = await createDataSource(loader, small.manifest, 1);
+    loader.reset();
+    await ds.querySpans(query({ mode: 'traces', sort: { column: 'start', dir: 'desc' } }));
+    expect(loader.calls[0]).toBe(chunkPath(5));
+  });
+
+  test('a start:asc head keeps the oldest-first order', async () => {
+    const small = withListCap(3);
+    const loader = createScriptedLoader(small.files);
+    const ds = await createDataSource(loader, small.manifest, 1);
+    loader.reset();
+    await ds.querySpans(query({ sort: { column: 'start', dir: 'asc' } }));
+    expect(loader.calls[0]).toBe(chunkPath(0));
   });
 
   test('without condition, text or window it returns the head of the run and trusts the manifest total', async () => {

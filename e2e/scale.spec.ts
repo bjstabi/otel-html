@@ -60,6 +60,8 @@ test.beforeEach(() => {
 const SERVICE = SCALE_SERVICES[0];
 /** Span `j` of a trace belongs to service `j % 8`, so the first service owns spans 0, 8, ..., 48 of each trace. */
 const PER_SERVICE = SCALE_TRACES * Math.ceil(SCALE_SPANS_PER_TRACE / SCALE_SERVICES.length);
+/** The service whose spans the huge report's latest-ending span chunks hold (see the chunk-window test). */
+const WINDOW_SERVICE = SCALE_SERVICES[6];
 
 /**
  * Records every `<script src>` the viewer inserts from now on, in the page. Playwright's request events miss
@@ -209,18 +211,29 @@ test(
     const rows = page.getByRole('grid', { name: 'Results' }).getByRole('row');
     await expect(rows.nth(1)).toBeVisible({ timeout: 30_000 });
 
-    // Filtering scans chunks on demand and stops once it has enough rows.
-    const facet = page.getByTestId(`facet-row:service.name:${SERVICE}`);
+    // Filtering scans chunks on demand and stops once it has enough rows. The scan order follows the sort: under
+    // the default start:desc it visits the newest chunks first, so the filter names a service whose spans sit in the
+    // newest chunks (the writer chunks the input by resource; `worker` fills the two latest-ending chunks). A
+    // service in the oldest chunk would scan the whole run before reaching the cap.
+    const service = WINDOW_SERVICE;
+    const facet = page.getByTestId(`facet-row:service.name:${service}`);
     await facet.hover();
-    await page.getByRole('button', { name: `Only ${SERVICE}` }).click();
+    await page.getByRole('button', { name: `Only ${service}` }).click();
+    // The unfiltered result already shows a partial note (its scan stops at the cap too); wait for the filtered
+    // result to replace it before reading the note.
+    const count = page.getByRole('main').locator('output', { hasText: /\bspans\b/ });
+    await expect(count).toBeVisible();
+    await expect(count).not.toHaveText(new RegExp(`^${SCALE_TRACES * SCALE_SPANS_PER_TRACE} spans`));
     const partial = page.getByRole('status', { name: 'Partial results' });
     await expect(partial).toContainText(/from \d+ of \d+ chunks/);
     const text = (await partial.textContent()) ?? '';
     const [, scanned, total] = /from (\d+) of (\d+) chunks/.exec(text) ?? [];
     expect(Number(total)).toBe(spanChunks.length);
     expect(Number(scanned)).toBeLessThan(Number(total));
-    const chunksAfterFilter = [...(await loaded())].filter((f) => f.startsWith('chunks/')).length;
-    expect(chunksAfterFilter).toBeLessThan(spanChunks.length);
+    const chunksOf = (files: ReadonlySet<string>): string[] =>
+      [...files].filter((f) => f.startsWith('chunks/'));
+    const beforeOpen = new Set(chunksOf(await loaded()));
+    expect(beforeOpen.size).toBeLessThan(spanChunks.length);
 
     // Opening a trace loads its shard, then exactly the chunks that shard lists.
     await rows.nth(1).click();
@@ -236,7 +249,9 @@ test(
     const requested = await loaded();
     expect(requested).toContain(`traces/${shard}.js`);
     for (const key of entry?.chunks ?? []) expect(requested).toContain(`${key}.js`);
-    expect([...requested].filter((f) => f.startsWith('chunks/')).length).toBeLessThan(spanChunks.length);
+    const listed = new Set((entry?.chunks ?? []).map((key) => `${key}.js`));
+    const afterOpen = chunksOf(requested).filter((f) => !beforeOpen.has(f));
+    expect(afterOpen.filter((f) => !listed.has(f))).toEqual([]);
   },
 );
 

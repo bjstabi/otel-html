@@ -22,13 +22,14 @@ import {
   AbortTicker,
   checkLimit,
   cmp,
+  DEFAULT_FACET_CAPS,
+  type FacetCaps,
   ordered,
-  QUERY_FACET_CAPS,
   sortFor,
   throwIfAborted,
 } from './query-common.js';
 import type { LoadedChunk, TimeWindow } from './span-query.js';
-import { topK } from './top-k.js';
+import { TopKBuffer, topK } from './top-k.js';
 
 declare const logRefBrand: unique symbol;
 /** `<chunk n>.<row index>`: stable for a report folder, and the URL key `log=`. */
@@ -299,23 +300,33 @@ export class LogQueryRun {
   readonly #condition: CompiledCondition<'log_record'> | null;
   readonly #window: TimeWindow | null;
   readonly #rollups: LogRollups;
-  readonly #matched: LogRow[] = [];
+  /** Logs mode: the best `limit` matched rows so far plus compaction slack; null in other modes. */
+  readonly #matched: TopKBuffer<LogRow> | null;
   readonly #traces = new Map<TraceId, TraceGroup>();
   readonly #sort: ModeSort;
   #count = 0;
 
-  constructor(q: LogQuery, signal?: AbortSignal) {
+  constructor(q: LogQuery, signal: AbortSignal | undefined, caps: FacetCaps) {
     checkLimit(q.limit);
     this.#q = q;
     // Drain is the costly part of the rollups; only patterns mode reads it.
-    this.#rollups = new LogRollups(QUERY_FACET_CAPS, { cluster: q.mode === 'patterns' });
+    this.#rollups = new LogRollups(caps, { cluster: q.mode === 'patterns' });
     // "Scan entire run" means the whole run, whatever window the view had.
     this.#window = q.scanAll ? null : q.window;
     this.#signal = signal;
     this.#ticker = new AbortTicker(signal);
     this.#condition = q.condition === null ? null : compileCondition(q.condition, 'log_record');
     this.#sort = modeSort(q);
+    this.#matched =
+      this.#sort.mode === 'logs'
+        ? new TopKBuffer(q.limit, ordered(q.sort.dir, this.#sort.compare, byTimeThenRef))
+        : null;
     throwIfAborted(signal);
+  }
+
+  /** @internal for tests: how many matched rows the run holds right now. */
+  get heldRows(): number {
+    return this.#matched?.size ?? 0;
   }
 
   /** What a scan's cap counts: matched logs, or matched traces in traces mode. */
@@ -335,8 +346,8 @@ export class LogQueryRun {
       const id = row.log.traceId;
       if (id === null) return;
       this.#group(id, row);
-    } else if (this.#q.mode === 'logs') {
-      this.#matched.push(row);
+    } else {
+      this.#matched?.push(row);
     }
     this.#count++;
     this.#rollups.add(e.target);
@@ -382,8 +393,8 @@ export class LogQueryRun {
     };
     switch (sort.mode) {
       case 'logs': {
-        const rows = topK(this.#matched, limit, ordered(order.dir, sort.compare, byTimeThenRef));
-        return { ...common, mode: sort.mode, rows, total: this.#matched.length };
+        const rows = this.#matched?.take() ?? [];
+        return { ...common, mode: sort.mode, rows, total: this.#count };
       }
       case 'patterns':
         return { ...common, ...this.patternsOf(this.#rollups.patterns) };
@@ -420,8 +431,9 @@ export function queryLogEntries(
   entries: readonly LogEntry[],
   q: LogQuery,
   signal?: AbortSignal,
+  caps: FacetCaps = DEFAULT_FACET_CAPS,
 ): LogQueryResult {
-  const run = new LogQueryRun(q, signal);
+  const run = new LogQueryRun(q, signal, caps);
   for (const e of entries) run.visit(e);
   return run.finish(null);
 }

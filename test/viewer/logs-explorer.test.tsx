@@ -20,7 +20,7 @@ import {
   type PatternRow,
   toLogEntries,
 } from '../../src/viewer/data/log-query.js';
-import { QUERY_FACET_CAPS } from '../../src/viewer/data/query-common.js';
+import { DEFAULT_FACET_CAPS } from '../../src/viewer/data/query-common.js';
 import { LogsExplorer } from '../../src/viewer/logs/explorer.js';
 import { MOVE_EVENT } from '../../src/viewer/shell/move-event.js';
 import { createSelectionStore } from '../../src/viewer/state/selection.js';
@@ -95,7 +95,7 @@ function logRows(bodies: readonly string[]): LogRow[] {
 }
 
 function rollupsOf(rows: readonly LogRow[]): LogRollups {
-  const r = new LogRollups(QUERY_FACET_CAPS, { cluster: false });
+  const r = new LogRollups(DEFAULT_FACET_CAPS, { cluster: false });
   for (const row of rows) r.add({ log: row.log, resource: row.resource, scope: row.scope, epoch });
   return r;
 }

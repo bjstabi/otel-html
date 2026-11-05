@@ -83,9 +83,10 @@ found" (400). The CLI's `convert` keeps the default and keeps failing on `{}` fi
 `regexProblem` (`src/ottl/converters.ts:29-99`) rejects an *unbounded* quantifier over a group that contains an
 unbounded quantifier, so `(a+){2,20}` and the hint's own `{1,64}` pass and backtrack exponentially. **(call)** The
 rule becomes: a quantifier whose maximum is **greater than 4** (`*`, `+`, `{n,}`, `{n}`/`{n,m}` with the upper bound
-above 4) applied to a group that contains any quantifier with a maximum greater than 1 is rejected. `?` is not a
-repeat. Up to 4 outer repetitions keeps the cost polynomial of low degree, so `(\d+\.){3}\d+` stays accepted. Every
-pattern the current tests accept stays accepted; `(a+){2,20}`, `(a{1,64}){1,64}` and `(a|aa){2,}` are rejected. The
+above 4) applied to a group that contains a *variable* quantifier (maximum greater than 1 and minimum below the maximum:
+`*`, `+`, `{n,}`, `{n,m}` with m > n) is rejected. `?` and an exact count `{n}` are not repeats, so fixed-width forms
+such as `([0-9a-f]{2}:){5}[0-9a-f]{2}` stay accepted. Up to 4 outer repetitions keeps the cost polynomial of low degree, so `(\d+\.){3}\d+` stays accepted. Every
+pattern the current tests accept stays accepted; `(a+){2,20}` and `(a{1,64}){1,64}` are rejected (`(a|aa){2,}` has no inner quantifier; alternation overlap stays undetected, as the guard documents). The
 message becomes: `nested repetition (e.g. "(a+)+" or "(a+){2,20}") can backtrack catastrophically; repeat a class
 instead, like [a-z]{1,64}`.
 
@@ -115,7 +116,7 @@ as its header says). The README's OTLP/JSON sentence says both spellings are acc
   stopped the chunk loop with targets left, instead of `run.units < cap`. A run that read everything and matched
   exactly `cap` units is exact.
 
-The second click of "Scan entire run" being a no-op (`use-query.ts:83`) is moot once the first click is exact.
+The second click of "Scan entire run" being a no-op (`use-query.ts:83`) is moot for spans, logs and patterns once the first click is exact. In Traces mode the cap stays, so a result with more than `listCap` matching traces still shows the partial note with a button that does nothing further (#151).
 
 ### #143 Span scans walk chunks oldest-first under a `start:desc` sort
 
