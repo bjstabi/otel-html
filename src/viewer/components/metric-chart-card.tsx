@@ -15,6 +15,7 @@ import {
   type MetricSize,
   sharedUnit,
 } from './metric-chart-option.js';
+import { useThemeTick } from './theme-tick.js';
 
 export type ChartPick =
   | { kind: 'exemplar'; traceId: string; spanId: string | null }
@@ -118,13 +119,7 @@ export function MetricChartCard(props: MetricChartCardProps): JSX.Element {
   const { results, hasTrace, onZoom } = props;
   const [chart, setChart] = useState<EChartsType | null>(null);
   const [menu, setMenu] = useState<PinnedMenu | null>(null);
-  const [themeTick, setThemeTick] = useState(0);
-
-  useEffect(() => {
-    const mo = new MutationObserver(() => setThemeTick((n) => n + 1));
-    mo.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'class'] });
-    return () => mo.disconnect();
-  }, []);
+  const themeTick = useThemeTick();
 
   const unit = sharedUnit(results);
   // biome-ignore lint/correctness/useExhaustiveDependencies: themeTick re-reads the CSS colour tokens

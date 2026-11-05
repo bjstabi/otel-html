@@ -16,6 +16,7 @@ import {
   runYAxes,
   zoomFromEvent,
 } from './run-chart-option.js';
+import { useThemeTick } from './theme-tick.js';
 
 /** The card's own state, which a parent can keep across a remount. */
 export interface RunChartView {
@@ -112,12 +113,7 @@ export function RunChartCard(props: RunChartCardProps): JSX.Element {
     chart.current = c;
   }, []);
 
-  const [themeTick, setThemeTick] = useState(0);
-  useEffect(() => {
-    const mo = new MutationObserver(() => setThemeTick((n) => n + 1));
-    mo.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'class'] });
-    return () => mo.disconnect();
-  }, []);
+  const themeTick = useThemeTick();
 
   // The body's size, measured: null until first laid out, and kept while it isn't (a size of 0).
   const bodyRef = useRef<HTMLDivElement>(null);

@@ -10,8 +10,8 @@ import {
   type HistogramSeriesSet,
   histogramBars,
   seconds,
-  useThemeTick,
 } from './histogram-card.js';
+import { useThemeTick } from './theme-tick.js';
 
 /** One lane of the timeline: a bucketed signal with its label, total and a note ("no spans", "all resources"). */
 export interface TimelineLane {
