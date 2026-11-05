@@ -222,11 +222,14 @@ export function placeRun(
 
 /**
  * Keeps, in each channel, the newest `keep.branch` (branch channels) or `keep.pr` (pull request channels) runs of each
- * workflow; runs recorded without a workflow count as one more. `remove` is the dropped runs' report paths.
+ * workflow; runs recorded without a workflow count as one more. The run `publishing` (a run id) is kept as well, and
+ * counts toward its workflow's tally, so a rebuild of an old run stays indexed until the next publish. `remove` is the
+ * dropped runs' report paths.
  */
 export function applyRetention(
   index: SiteIndex,
   keep: { branch: number; pr: number },
+  publishing?: number,
 ): { index: SiteIndex; remove: string[] } {
   const remove: string[] = [];
   const channels: Record<string, Channel> = {};
@@ -236,7 +239,7 @@ export function applyRetention(
     const runs = ch.runs.filter((r) => {
       const count = (seen.get(r.workflow) ?? 0) + 1;
       seen.set(r.workflow, count);
-      if (count <= n) return true;
+      if (count <= n || r.runId === publishing) return true;
       remove.push(r.reportPath);
       return false;
     });

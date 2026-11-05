@@ -18,10 +18,12 @@ import {
 import { runKey } from './ids.js';
 import { jobLogRecordsRequest } from './job-logs.js';
 import { ciMetricsRequest } from './metrics.js';
-import { approximateJobs, jobIdFor, parseJobContext } from './publish.js';
+import { approximateJobIds, jobIdFor, parseJobContext } from './publish.js';
 import { fetchJobLog, mergeSkippingBad, mergeWithConfig } from './publish-io.js';
 import { summaryTable } from './summary.js';
 import { ciResource, jobResource, workflowTraceRequest } from './workflow-trace.js';
+
+const ARTIFACT_POINTER = 'Report: see the `ci-run-report` artifact';
 
 export type ReportOptions = {
   runId: number;
@@ -122,7 +124,7 @@ export async function runReport(
     }
     return;
   }
-  const approximate = approximateJobs(
+  const approximate = approximateJobIds(
     jobs,
     artifacts.map((a) => a.context),
   );
@@ -150,7 +152,7 @@ export async function runReport(
       const text = logs[i];
       if (text === undefined) continue;
       try {
-        // Approximate jobs share `name:<job name>` with any same-named approximate job: an inherent limit of the fallback.
+        // Approximate jobs with no matching context share `name:<job name>` with any same-named job: an inherent limit.
         await trace.addLogs(
           jobLogRecordsRequest({
             key,
@@ -183,8 +185,7 @@ export async function runReport(
     await rm(scratch, { recursive: true, force: true });
   }
 
-  const reportUrl = env('OTEL_HTML_REPORT_URL') ?? null;
-  const table = summaryTable(run, jobs, reportUrl);
+  const table = [summaryTable(run, jobs), ARTIFACT_POINTER, ''].join('\n');
   say(io, table);
   const stepSummary = opts.stepSummary === false ? undefined : env('GITHUB_STEP_SUMMARY');
   if (stepSummary) {

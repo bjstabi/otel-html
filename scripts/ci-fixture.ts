@@ -2,7 +2,7 @@
 // timings near a real run's, described as the Actions API returns them and turned into OTLP by the code `otel-html ci
 // report` uses, so the data carries what a real CI report does. One OTLP/JSON request per line.
 import type { ApiJob, ApiRun, ApiStep } from '../src/cli/ci/github-api.js';
-import { runKey } from '../src/cli/ci/ids.js';
+import { type JobId, runKey } from '../src/cli/ci/ids.js';
 import { jobLogRecordsRequest } from '../src/cli/ci/job-logs.js';
 import { ciMetricsRequest } from '../src/cli/ci/metrics.js';
 import { jobIdFor } from '../src/cli/ci/publish.js';
@@ -328,7 +328,7 @@ function runRequests(rand: () => number, run: number, t0Seconds: number): object
   };
 
   const key = runKey({ repository: REPOSITORY, runId: id, runAttempt: 1 });
-  const none: ReadonlySet<number> = new Set();
+  const none: ReadonlyMap<number, JobId> = new Map();
   return [
     workflowTraceRequest(key, apiRun, jobs, none),
     // A skipped job has no log, so `ci report` adds no records for it.

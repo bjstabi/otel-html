@@ -21,10 +21,23 @@ const secondsBetween = (from: string | null, to: string | null): string => {
 /** Prefix of the sticky pull request comment's first line, `<!-- otel-html-report:<workflow> -->`. */
 export const MARKER = '<!-- otel-html-report';
 
-const cell = (s: string): string => s.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
+/**
+ * `text` as a markdown code span, so a name cannot mention, link or embed: the delimiter is one backtick longer than
+ * the longest run inside, and a space pads a text that starts or ends with a backtick. The empty string stays empty.
+ */
+export function codeSpan(text: string): string {
+  if (text === '') return '';
+  const longest = Math.max(0, ...(text.match(/`+/g) ?? []).map((run) => run.length));
+  const fence = '`'.repeat(longest + 1);
+  const pad = text.startsWith('`') || text.endsWith('`') ? ' ' : '';
+  return `${fence}${pad}${text}${pad}${fence}`;
+}
 
-/** GitHub-flavoured markdown for `$GITHUB_STEP_SUMMARY`: the run's outcome, one row per job, and where the report is. */
-export function summaryTable(run: ApiRun, jobs: ApiJob[], reportUrl: string | null): string {
+/** CommonMark ends a line at `\r\n`, `\r` or `\n`, so all three are flattened before the code span. */
+const cell = (s: string): string => codeSpan(s.replace(/\r\n|\r|\n/g, ' ').replace(/\|/g, '\\|'));
+
+/** GitHub-flavoured markdown for `$GITHUB_STEP_SUMMARY`: the run's outcome and one row per job. */
+export function summaryTable(run: ApiRun, jobs: ApiJob[]): string {
   const rows = jobs.map(
     (j) =>
       `| ${cell(j.name)} | ${j.conclusion ?? j.status} | ${secondsBetween(j.created_at, j.started_at)} | ${secondsBetween(j.started_at, j.completed_at)} |`,
@@ -35,8 +48,6 @@ export function summaryTable(run: ApiRun, jobs: ApiJob[], reportUrl: string | nu
     '| Job | Result | Queued | Duration |',
     '| --- | --- | --- | --- |',
     ...rows,
-    '',
-    reportUrl === null ? 'Report: see the `ci-run-report` artifact' : `Report: ${reportUrl}`,
     '',
   ].join('\n');
 }

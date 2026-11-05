@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import type { ApiJob, ApiRun } from '../../../src/cli/ci/github-api.js';
-import { formatDuration, summaryTable } from '../../../src/cli/ci/summary.js';
+import { codeSpan, formatDuration, summaryTable } from '../../../src/cli/ci/summary.js';
 
 const run: ApiRun = {
   id: 42,
@@ -34,33 +34,55 @@ const job = (over: Partial<ApiJob>): ApiJob => ({
 
 describe('summaryTable', () => {
   test('one row per job with queued time and duration', () => {
-    const t = summaryTable(run, [job({ name: 'e2e (webkit)' })], null);
+    const t = summaryTable(run, [job({ name: 'e2e (webkit)' })]);
     expect(t).toContain('| Job | Result | Queued | Duration |');
-    expect(t).toContain('| e2e (webkit) | success | 12s | 4m 05s |');
+    expect(t).toContain('| `e2e (webkit)` | success | 12s | 4m 05s |');
   });
 
   test('heading carries the conclusion and links the run', () => {
-    expect(summaryTable(run, [], null).split('\n')[0]).toBe(
-      '## ci: failure ([run 42](https://github.com/o/r/actions/runs/42))',
+    expect(summaryTable(run, []).split('\n')[0]).toBe(
+      '## `ci`: failure ([run 42](https://github.com/o/r/actions/runs/42))',
     );
   });
 
-  test('report line: the url, or the artifact when there is none', () => {
-    expect(summaryTable(run, [], null)).toContain('Report: see the `ci-run-report` artifact');
-    expect(summaryTable(run, [], 'https://x.test/r')).toContain('Report: https://x.test/r');
+  test('the table names no report; the caller adds it', () => {
+    expect(summaryTable(run, [])).not.toContain('Report:');
   });
 
   test('a job without times shows a dash; a running job falls back to its status', () => {
-    const t = summaryTable(
-      run,
-      [job({ conclusion: null, status: 'queued', started_at: null, completed_at: null })],
-      null,
+    const t = summaryTable(run, [
+      job({ conclusion: null, status: 'queued', started_at: null, completed_at: null }),
+    ]);
+    expect(t).toContain('| `build` | queued | – | – |');
+  });
+
+  test('a mention and an image in a job name are a code span', () => {
+    const name = '@org/team ![x](https://tracker.example/p.png)';
+    expect(summaryTable(run, [job({ name })])).toContain(`| \`${name}\` |`);
+  });
+
+  test('a name with backticks gets a longer delimiter, padded when it starts or ends with one', () => {
+    expect(codeSpan('a ``b`` c')).toBe('```a ``b`` c```');
+    expect(codeSpan('`x`')).toBe('`` `x` ``');
+    expect(codeSpan('plain')).toBe('`plain`');
+    expect(codeSpan('')).toBe('');
+  });
+
+  test('a lone carriage return stays inside the code span', () => {
+    const t = summaryTable(run, [job({ name: 'a\r@org/team' })]);
+    expect(t).not.toContain('\r');
+    expect(t).toContain('| `a @org/team` |');
+    expect(t.split('\n').filter((l) => l.includes('@org/team'))).toHaveLength(1);
+  });
+
+  test('a pipe and a backtick together stay one code span', () => {
+    expect(summaryTable(run, [job({ name: 'pipe+tick `|` @octocat' })])).toContain(
+      '| ``pipe+tick `\\|` @octocat`` |',
     );
-    expect(t).toContain('| build | queued | – | – |');
   });
 
   test('pipes in names do not break the table', () => {
-    expect(summaryTable(run, [job({ name: 'a|b' })], null)).toContain('| a\\|b |');
+    expect(summaryTable(run, [job({ name: 'a|b' })])).toContain('| `a\\|b` |');
   });
 });
 

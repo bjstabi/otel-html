@@ -53,7 +53,7 @@ test('the workflow-trace report merges with a job report and keeps spans, logs a
   const resource = ciResource(run);
 
   const trace = await createReportWith({ out: 'trace', replace: true }, w.deps);
-  await trace.addSpans(workflowTraceRequest(key, run, [job], new Set()));
+  await trace.addSpans(workflowTraceRequest(key, run, [job], new Map()));
   const text = '2026-01-01T00:00:11.0000000Z ##[group]Run tests\n2026-01-01T00:00:12.0000000Z hello\n';
   await trace.addLogs(jobLogRecordsRequest({ key, jobId: 7, job, text, resource: jobResource(run, job) }));
   await trace.addMetrics(ciMetricsRequest(run, [job], resource));

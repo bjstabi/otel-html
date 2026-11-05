@@ -1,6 +1,7 @@
 import type { ApiJob, ApiRun, ApiStep } from './github-api.js';
-import { jobSpanIdOf, runSpanIdOf, stepSpanIdOf, traceIdOf } from './ids.js';
+import { type JobId, jobSpanIdOf, runSpanIdOf, stepSpanIdOf, traceIdOf } from './ids.js';
 import { type Attr, attrs, ms, ns, resultOf } from './otlp.js';
+import { jobIdFor } from './publish.js';
 
 /** The resource attributes every CI record carries, plus the service identity of the workflow run. */
 export function ciResource(run: ApiRun): Record<string, string> {
@@ -50,7 +51,7 @@ export function workflowTraceRequest(
   key: string,
   run: ApiRun,
   jobs: ApiJob[],
-  approximate: ReadonlySet<number>,
+  approximate: ReadonlyMap<number, JobId>,
 ): object {
   const traceId = traceIdOf(key);
   const runSpanId = runSpanIdOf(key);
@@ -88,7 +89,7 @@ export function workflowTraceRequest(
     const jobSpans: SpanInput[] = [];
     jobGroups.push({ job, spans: jobSpans });
     const isApprox = approximate.has(job.id);
-    const jobKeyId = isApprox ? `name:${job.name}` : job.id;
+    const jobKeyId = jobIdFor(job, approximate);
     const jobSpanId = jobSpanIdOf(key, jobKeyId);
     const jobStart = ms(job.started_at) ?? runStart;
     const jobEndFallback = ms(job.completed_at) ?? runEnd;

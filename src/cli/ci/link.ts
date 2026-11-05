@@ -1,6 +1,6 @@
 import { type ApiJob, type ApiRun, CHECK_RUN_NAME } from './github-api.js';
 import { type Channel, type SiteIndex, type SiteRun, slug } from './site.js';
-import { MARKER, summaryTable } from './summary.js';
+import { codeSpan, MARKER, summaryTable } from './summary.js';
 
 /** The pure side of `ci link`: the sticky pull request comment and the check run that point at a run's report. */
 
@@ -28,21 +28,13 @@ export function commentBody(
   previous: PreviousRun | undefined,
   page?: ChannelPage,
 ): string {
-  const lines = [markerOf(slug(run.name)), summaryTable(run, jobs, url)];
+  const lines = [markerOf(slug(run.name)), summaryTable(run, jobs), `Report: ${url}`, ''];
   if (page !== undefined) lines.push(`All runs on ${page.label}: ${page.url}`, '');
   if (previous !== undefined) {
     const label = previous.workflow === undefined ? '' : `${previous.workflow} `;
     lines.push(`Previous run: [${label}run ${previous.runId}](${previous.url})`, '');
   }
   return lines.join('\n');
-}
-
-/** `text` as a markdown code span, fenced by one more backtick than its longest run of them. */
-function codeSpan(text: string): string {
-  const longest = Math.max(0, ...(text.match(/`+/g) ?? []).map((run) => run.length));
-  if (longest === 0) return `\`${text}\``;
-  const fence = '`'.repeat(longest + 1);
-  return `${fence} ${text} ${fence}`;
 }
 
 /** The subset of the issue comments API that `ci link` reads. */

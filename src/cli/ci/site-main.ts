@@ -165,12 +165,13 @@ export async function runSite(
     workflow: run.name,
   };
   const migrated = dropWorkflowChannels(await readSiteIndex(opts.site, (m) => warning(io, 'site', m)));
-  const { index, remove } = applyRetention(placeRun(migrated.index, placed.key, placed.channel, siteRun), {
-    branch: opts.retention,
-    pr: opts.prRetention,
-  });
+  const { index, remove } = applyRetention(
+    placeRun(migrated.index, placed.key, placed.channel, siteRun),
+    { branch: opts.retention, pr: opts.prRetention },
+    run.id,
+  );
   await copyReport(opts.report, join(opts.site, reportPath));
-  await removePaths(opts.site, [...migrated.remove, ...remove.filter((p) => p !== reportPath)]);
+  await removePaths(opts.site, [...migrated.remove, ...remove]);
   if (migrated.remove.length > 0)
     say(io, `removed the per-workflow channels ${migrated.remove.join(', ')}; see branch/ and pr/`);
   const rolling = await rebuildRolling(opts.site, placed.key, index, opts.config, deps, io);

@@ -166,6 +166,23 @@ test('placeRun creates a channel that was removed meanwhile, without mutating th
   expect(after.channels['pr/12']?.runs).toHaveLength(1);
 });
 
+test('applyRetention keeps the run being published even when it is older than the kept ones', () => {
+  let ix = empty();
+  for (const id of [1, 2, 3, 4])
+    ix = placeRun(ix, MAIN, main, siteRun(id, { reportPath: `branch/main/runs/${id}`, workflow: 'ci' }));
+  const r = applyRetention(ix, { branch: 2, pr: 1 }, 1);
+  expect(r.index.channels[MAIN]?.runs.map((x) => x.runId)).toEqual([4, 3, 1]);
+  expect(r.remove).toEqual(['branch/main/runs/2']);
+  // the next publish drops it like any other old run
+  const next = applyRetention(
+    placeRun(r.index, MAIN, main, siteRun(5, { reportPath: 'branch/main/runs/5', workflow: 'ci' })),
+    { branch: 2, pr: 1 },
+    5,
+  );
+  expect(next.index.channels[MAIN]?.runs.map((x) => x.runId)).toEqual([5, 4]);
+  expect(next.remove.sort()).toEqual(['branch/main/runs/1', 'branch/main/runs/3']);
+});
+
 test('applyRetention keeps the newest runs of each workflow per channel, by channel kind', () => {
   let ix = empty();
   const w = (workflow: string | undefined) => (workflow === undefined ? {} : { workflow });

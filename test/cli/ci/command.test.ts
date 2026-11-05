@@ -136,7 +136,7 @@ describe('otel-html ci report step summary', { timeout: 60_000 }, () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  const report = async (extra: string[]): Promise<string> => {
+  const report = async (extra: string[], env: Record<string, string | undefined> = {}): Promise<string> => {
     vi.stubGlobal('fetch', async (url: string) => {
       const body = url.includes('/jobs')
         ? { jobs: [] }
@@ -164,7 +164,7 @@ describe('otel-html ci report step summary', { timeout: 60_000 }, () => {
     const summary = join(dir, 'summary.md');
     writeFileSync(summary, '');
     const argv = ['ci', 'report', '--run-id', '8', '--repository', 'o/r', '--artifacts', artifacts];
-    const f = fakeIo({ GITHUB_STEP_SUMMARY: summary });
+    const f = fakeIo({ GITHUB_STEP_SUMMARY: summary, ...env });
     expect(await runCli([...argv, '--out', join(dir, 'out'), ...extra], f.io, realFsDeps)).toBe(0);
     expect(f.out()).toContain('Report: see the `ci-run-report` artifact');
     return readFileSync(summary, 'utf8');
@@ -172,6 +172,12 @@ describe('otel-html ci report step summary', { timeout: 60_000 }, () => {
 
   test('writes the summary table to the job summary', async () => {
     expect(await report([])).toContain('Report: see the `ci-run-report` artifact');
+  });
+
+  test('OTEL_HTML_REPORT_URL is ignored', async () => {
+    const text = await report([], { OTEL_HTML_REPORT_URL: 'https://x.test/r' });
+    expect(text).toContain('Report: see the `ci-run-report` artifact');
+    expect(text).not.toContain('https://x.test/r');
   });
 
   test('--no-summary leaves the job summary to `ci link`', async () => {
@@ -222,6 +228,29 @@ describe('otel-html ci context', () => {
     const f = fakeIo(githubEnv(envFile));
     expect(await runCli(['ci', 'context', '--job-name', 'unit (a)'], f.io, deps)).toBe(0);
     expect(readFileSync(envFile, 'utf8')).toContain('OTEL_SERVICE_NAME=ci/unit (a)');
+  });
+
+  test('an ambiguous job asks for OTEL_HTML_JOB_NAME only when it is unset', async () => {
+    const envFile = join(dir, 'github-env');
+    writeFileSync(envFile, '');
+    const unset = fakeIo(githubEnv(envFile));
+    expect(await runCli(['ci', 'context'], unset.io, deps)).toBe(0);
+    expect(unset.out()).toContain(
+      'could not tell which job this is; using name:build@runner-1 for its span id.',
+    );
+    expect(unset.out()).toContain('set OTEL_HTML_JOB_NAME (or --job-name)');
+    const set = fakeIo(githubEnv(envFile));
+    expect(await runCli(['ci', 'context', '--job-name', 'unit'], set.io, deps)).toBe(0);
+    expect(set.out()).toContain('using name:unit@runner-1 for its span id.');
+    expect(set.out()).not.toContain('OTEL_HTML_JOB_NAME');
+  });
+
+  test('without a token the warning names the name-based span id', async () => {
+    const envFile = join(dir, 'github-env');
+    writeFileSync(envFile, '');
+    const f = fakeIo({ ...githubEnv(envFile), GITHUB_TOKEN: '' });
+    expect(await runCli(['ci', 'context'], f.io, deps)).toBe(0);
+    expect(f.out()).toContain('GITHUB_TOKEN is not set; deriving the span id from the job name and runner');
   });
 
   test('a missing GITHUB_* variable is a warning, not a failure', async () => {
@@ -298,6 +327,15 @@ describe('otel-html ci site and cleanup', { timeout: 60_000 }, () => {
     'https://x.test/otel-html',
     ...extra,
   ];
+
+  test('republishing an old run with retention 1 keeps it on the site and in the index', async () => {
+    stubApi({ 42: runBody(42), 43: runBody(43) });
+    expect(await runCli(siteArgs(43, ['--retention', '1']), fakeIo().io, realFsDeps)).toBe(0);
+    expect(await runCli(siteArgs(42, ['--retention', '1']), fakeIo().io, realFsDeps)).toBe(0);
+    expect(existsSync(join(site, 'branch/main/runs/42/data/manifest.js'))).toBe(true);
+    const index = JSON.parse(readFileSync(join(site, 'index.json'), 'utf8'));
+    expect(index.channels['branch/main'].runs.map((r: { runId: number }) => r.runId)).toEqual([43, 42]);
+  });
 
   test('places a default-branch run, rebuilds the rolling branch report and applies retention', async () => {
     stubApi({ 42: runBody(42), 43: runBody(43) });
