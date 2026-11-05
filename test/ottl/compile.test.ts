@@ -96,6 +96,13 @@ describe('compile-time failures', () => {
     '(a{1,2}){5}',
     '(.*a){1,}b*(x+y)+',
     '(?i)([a-z]+A){3}',
+    '^((bb)+b)+$',
+    '((.b)+b)+x',
+    '^((ab|a)+b)+$',
+    '(\\d?\\d+\\.)+x',
+    '^(a?a+b)+$',
+    '^(a|a+b)+$',
+    '^(\\w|\\w+\\.)+$',
   ])('rejects nested repetition without a disjoint literal: %s (#188)', (p) => {
     expect(() => compileCondition(`IsMatch(name, ${JSON.stringify(p)})`, 'span')).toThrowError(
       /nested repetition/,
@@ -125,8 +132,19 @@ describe('compile-time failures', () => {
     '([0-9a-f]{2}:){5}[0-9a-f]{2}',
     '((\\d+)\\.){3}',
     '([a-z]+A){3}',
+    '(-?\\d+,)+',
+    '((ab|a)c){3}',
+    '((a+)b){5}',
   ])('accepts a repeated group whose variable parts end at a disjoint literal: %s (#188)', (p) => {
     expect(() => compileCondition(`IsMatch(name, ${JSON.stringify(p)})`, 'span')).not.toThrow();
+  });
+  test.each(['(?i:a)', '(?s:a.)+', '(?-i:a)', '^(?i:[a-z]+A)+$'])('rejects an inline flag group %s', (p) => {
+    expect(() => compileCondition(`IsMatch(name, ${JSON.stringify(p)})`, 'span')).toThrowError(
+      /inline flag groups are not supported; use a leading \(\?i\) or \(\?s\)/,
+    );
+  });
+  test('(?:…) and named groups stay accepted', () => {
+    expect(() => compileCondition('IsMatch(name, "(?:ab)+(?<n>c)")', 'span')).not.toThrow();
   });
   test('((a+)b){5} is accepted now: b follows a+ through the subgroup end and a+ cannot match it (#188)', () => {
     expect(() => compileCondition('IsMatch(name, "((a+)b){5}")', 'span')).not.toThrow();

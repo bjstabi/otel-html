@@ -16,13 +16,15 @@ export interface ConverterSpec {
 
 // ---------------------------------------------------------------------------
 // Regex: user patterns run on the JS (backtracking) engine, while OTTL users expect
-// Go RE2 (linear time). We therefore accept only an RE2-like subset: no lookaround or
-// backreferences, and no repeated group (maximum above 1) that contains a variable
-// quantifier (`*`, `+`, `{n,}`, `{n,m}` with m > n) unless each such quantifier is followed,
-// inside the group (looking through subgroup ends), by a mandatory single literal the
-// quantified part cannot match, as in `(\d+\.){3}`. That literal pins where each repeat
-// ends, so the split is unique and cannot blow up like `(a+)+`. Pattern length is capped.
-// Alternation overlap such as `(a|a)*` is not detected.
+// Go RE2 (linear time). We therefore accept only an RE2-like subset: no lookaround,
+// backreferences or inline flag groups (a leading `(?i)`/`(?s)` is the only flag form). A repeated
+// group (maximum above 1) that holds a variable quantifier (`*`, `+`, `{n,}`, `{n,m}` with m > n)
+// is accepted only when, inside it: every variable quantifier is on a single-character atom
+// (never a group) that is followed, looking through subgroup ends, by a mandatory single literal
+// the atom cannot match, as in `(\d+\.){3}`; no `|` sits on the path down to a variable atom; and
+// every optional item is a single literal the next atom cannot match, as in `(-?\d+,)+`. That
+// pins where each repeat ends, so the split is unique and cannot blow up like `(a+)+`.
+// Pattern length is capped.
 // ---------------------------------------------------------------------------
 
 const MAX_PATTERN_LENGTH = 512;
@@ -31,6 +33,8 @@ const regexCache = new Map<string, RegExp>();
 
 const NESTED_REPETITION =
   'nested repetition (e.g. "(a+)+" or "(a+){2}") can backtrack catastrophically; put a literal the repeated part cannot match after it, like (\\d+\\.){3}, or repeat a class instead, like [a-z]{1,64}';
+
+const INLINE_FLAGS = 'inline flag groups are not supported; use a leading (?i) or (?s)';
 
 interface Quant {
   readonly min: number;
@@ -84,6 +88,7 @@ function parseRegex(p: string): Item | string {
       const k = p.charAt(i + 2);
       let open = 1;
       if (p.charAt(i + 1) === '?') {
+        if (k !== ':' && k !== '<' && k !== '=' && k !== '!') return INLINE_FLAGS;
         if (k === '=' || k === '!' || (k === '<' && (p.charAt(i + 3) === '=' || p.charAt(i + 3) === '!')))
           return 'lookaround is not supported';
         open = k === '<' ? Math.max(p.indexOf('>', i), i + 2) - i + 1 : 3;
@@ -135,34 +140,56 @@ const isVariable = (q: Quant | undefined): boolean => q !== undefined && q.max >
 
 const hasVariable = (it: Item): boolean => isVariable(it.q) || it.children.some(hasVariable);
 
-/** Whether `follow` is a mandatory single literal that the quantified part `x` cannot match. */
-function safeFollower(p: string, flags: string, x: Item, follow: Item | undefined): boolean {
-  if (follow === undefined || follow.kind !== 'atom' || follow.literal === undefined) return false;
-  if (follow.q !== undefined && follow.q.min === 0) return false;
+/** Whether `a` is a single literal character that the single-character atom `x` cannot match. */
+function disjoint(p: string, flags: string, x: Item, literal: string | undefined): boolean {
+  if (literal === undefined) return false;
   try {
-    return !new RegExp(`^(?:${p.slice(x.start, x.end)})$`, flags).test(follow.literal);
+    return !new RegExp(`^(?:${p.slice(x.start, x.end)})$`, flags).test(literal);
   } catch {
     return false;
   }
 }
 
-/** Every variable quantifier in `items` has a safe follower; `outer` follows the sequence's group. */
-function followersSafe(p: string, flags: string, items: readonly Item[], outer: Item | undefined): boolean {
+/** Whether `follow` is a mandatory single literal that the quantified atom `x` cannot match. */
+function safeFollower(p: string, flags: string, x: Item, follow: Item | undefined): boolean {
+  if (follow === undefined || follow.kind !== 'atom' || follow.literal === undefined) return false;
+  if (follow.q !== undefined && follow.q.min === 0) return false;
+  return disjoint(p, flags, x, follow.literal);
+}
+
+/** An optional item is a single literal that the (mandatory) single-character atom after it cannot match. */
+function safeOptional(p: string, flags: string, it: Item, follow: Item | undefined): boolean {
+  if (it.kind !== 'atom' || follow === undefined || follow.kind !== 'atom') return false;
+  if (follow.q !== undefined && follow.q.min === 0) return false;
+  return disjoint(p, flags, follow, it.literal);
+}
+
+/**
+ * Inside a repeated group that holds a variable quantifier: no `|`, no variable quantifier on a
+ * group, every variable quantifier has a safe follower and every optional item a safe successor.
+ * `outer` follows the sequence's group.
+ */
+function repeatSafe(p: string, flags: string, items: readonly Item[], outer: Item | undefined): boolean {
   return items.every((it, i) => {
+    if (it.kind === 'alt') return false;
     const follow = items[i + 1] ?? outer;
-    if (isVariable(it.q) && !safeFollower(p, flags, it, follow)) return false;
-    return it.kind !== 'group' || followersSafe(p, flags, it.children, follow);
+    if (it.q !== undefined && it.q.min === 0 && !safeOptional(p, flags, it, follow)) return false;
+    if (it.kind === 'group') {
+      if (isVariable(it.q)) return false;
+      return !hasVariable(it) || repeatSafe(p, flags, it.children, follow);
+    }
+    return !isVariable(it.q) || safeFollower(p, flags, it, follow);
   });
 }
 
-/** Whether some repeated group contains a variable quantifier that has no safe follower inside it. */
+/** Whether some repeated group contains a variable quantifier without the structure `repeatSafe` needs. */
 function hasUnsafeRepeat(p: string, flags: string, it: Item): boolean {
   if (it.kind !== 'group') return false;
   if (
     it.q !== undefined &&
     it.q.max > 1 &&
     it.children.some(hasVariable) &&
-    !followersSafe(p, flags, it.children, undefined)
+    !repeatSafe(p, flags, it.children, undefined)
   )
     return true;
   return it.children.some((c) => hasUnsafeRepeat(p, flags, c));
