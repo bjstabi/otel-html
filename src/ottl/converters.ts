@@ -19,12 +19,15 @@ export interface ConverterSpec {
 // Go RE2 (linear time). We therefore accept only an RE2-like subset: no lookaround,
 // backreferences or inline flag groups (a leading `(?i)`/`(?s)` is the only flag form). A repeated
 // group (maximum above 1) that holds a variable quantifier (`*`, `+`, `{n,}`, `{n,m}` with m > n)
+// or an optional item (`?`, `{0,n}`)
 // is accepted only when, inside it: every variable quantifier is on a single-character atom
 // (never a group) that is followed, looking through subgroup ends, by a mandatory single literal
 // the atom cannot match, as in `(\d+\.){3}`; no `|` sits on the path down to a variable atom; and
 // every optional item is a single literal the next atom cannot match, as in `(-?\d+,)+`. That
 // pins where each repeat ends, so the split is unique and cannot blow up like `(a+)+`.
-// Pattern length is capped.
+// Pattern length is capped. Not detected (tracked in #195): overlapping alternation with no
+// quantifier inside the repeated group, as in `(a|aa)+`, and long chains of variable atoms outside
+// any repeated group, as in `.*.*.*.*x`.
 // ---------------------------------------------------------------------------
 
 const MAX_PATTERN_LENGTH = 512;
@@ -138,7 +141,8 @@ function parseRegex(p: string): Item | string {
 
 const isVariable = (q: Quant | undefined): boolean => q !== undefined && q.max > 1 && q.min < q.max;
 
-const hasVariable = (it: Item): boolean => isVariable(it.q) || it.children.some(hasVariable);
+/** Whether `it` or anything inside it is a variable quantifier or an optional (minimum 0) item. */
+const hasLoose = (it: Item): boolean => isVariable(it.q) || it.q?.min === 0 || it.children.some(hasLoose);
 
 /** Whether `a` is a single literal character that the single-character atom `x` cannot match. */
 function disjoint(p: string, flags: string, x: Item, literal: string | undefined): boolean {
@@ -176,7 +180,7 @@ function repeatSafe(p: string, flags: string, items: readonly Item[], outer: Ite
     if (it.q !== undefined && it.q.min === 0 && !safeOptional(p, flags, it, follow)) return false;
     if (it.kind === 'group') {
       if (isVariable(it.q)) return false;
-      return !hasVariable(it) || repeatSafe(p, flags, it.children, follow);
+      return !hasLoose(it) || repeatSafe(p, flags, it.children, follow);
     }
     return !isVariable(it.q) || safeFollower(p, flags, it, follow);
   });
@@ -188,7 +192,7 @@ function hasUnsafeRepeat(p: string, flags: string, it: Item): boolean {
   if (
     it.q !== undefined &&
     it.q.max > 1 &&
-    it.children.some(hasVariable) &&
+    it.children.some(hasLoose) &&
     !repeatSafe(p, flags, it.children, undefined)
   )
     return true;

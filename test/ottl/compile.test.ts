@@ -117,7 +117,6 @@ describe('compile-time failures', () => {
     '\\(a+\\)+',
     '(?i)get',
     '(ab){2,5}',
-    '(a?){20}',
     '(a{2}){5}',
   ])('accepts %s', (p) => {
     expect(() => compileCondition(`IsMatch(name, ${JSON.stringify(p)})`, 'span')).not.toThrow();
@@ -138,6 +137,21 @@ describe('compile-time failures', () => {
   ])('accepts a repeated group whose variable parts end at a disjoint literal: %s (#188)', (p) => {
     expect(() => compileCondition(`IsMatch(name, ${JSON.stringify(p)})`, 'span')).not.toThrow();
   });
+  test.each([
+    '(a?){20}',
+    '^(?:a?a?){12}a{24}$',
+    '^(-?){25}-{25}x',
+    '^(a?){20}a{20}$',
+    '^(\\d?){22}\\d{22}$',
+    '^(?:\\w?){20}\\w{20}$',
+  ])(
+    'rejects %s: an optional with nothing after it lets each repetition match empty or not, so the split is free',
+    (p) => {
+      expect(() => compileCondition(`IsMatch(name, ${JSON.stringify(p)})`, 'span')).toThrowError(
+        /nested repetition/,
+      );
+    },
+  );
   test.each(['(?i:a)', '(?s:a.)+', '(?-i:a)', '^(?i:[a-z]+A)+$'])('rejects an inline flag group %s', (p) => {
     expect(() => compileCondition(`IsMatch(name, ${JSON.stringify(p)})`, 'span')).toThrowError(
       /inline flag groups are not supported; use a leading \(\?i\) or \(\?s\)/,
