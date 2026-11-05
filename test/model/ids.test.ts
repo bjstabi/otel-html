@@ -51,3 +51,21 @@ test('parseUnixNanos accepts string, number and bigint and rejects junk', () => 
   expect(() => parseUnixNanos(1.5, 'p')).toThrowError(OtelHtmlError);
   expect(() => parseUnixNanos('abc', 'p')).toThrowError(OtelHtmlError);
 });
+
+test('ids from bytes keep their errors exactly (#182)', () => {
+  expect(() => spanIdFromBytes(new Uint8Array(3), 'p')).toThrowError(
+    'p: expected 16 hex chars, not all zero, got "000000"',
+  );
+  expect(() => spanIdFromBytes(new Uint8Array(8), 'p')).toThrowError(
+    'p: expected 16 hex chars, not all zero, got "0000000000000000"',
+  );
+  expect(() => traceIdFromBytes(new Uint8Array(16), 'q')).toThrowError(
+    `q: expected 32 hex chars, not all zero, got "${'0'.repeat(32)}"`,
+  );
+  expect(() => traceIdFromBytes(Uint8Array.from([0xab]), 'q')).toThrowError(
+    'q: expected 32 hex chars, not all zero, got "ab"',
+  );
+  const last = new Uint8Array(16);
+  last[15] = 1;
+  expect(traceIdFromBytes(last, 'q')).toBe(`${'0'.repeat(30)}01`);
+});

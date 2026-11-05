@@ -75,6 +75,29 @@ describe('resolveConfig', () => {
     expect(e.message).toContain('unrecognized key');
   });
 
+  test('a file key containing a dot is an unknown top-level key (#176)', () => {
+    const e = failure(() => resolveConfig({ file: { 'writer.chunkTargetBytes': 5 }, env: {} }));
+    expect(e.code).toBe('invalid-config');
+    expect(e.message).toContain('writer.chunkTargetBytes: unrecognized key');
+    // the nested spelling still works
+    expect(
+      resolveConfig({ file: { writer: { chunkTargetBytes: 5 } }, env: {} }).config.writer.chunkTargetBytes,
+    ).toBe(5);
+  });
+
+  test('a flag key containing a dot is an unknown key too', () => {
+    const e = failure(() => resolveConfig({ flags: { 'viewer.theme': 'dark' } as never, env: {} }));
+    expect(e.message).toContain('viewer.theme: unrecognized key');
+  });
+
+  test('a layer setting a path through a non-object reports the non-object (#176)', () => {
+    const e = failure(() =>
+      resolveConfig({ file: { viewer: 5 }, env: { OTEL_HTML_EAGER_BUDGET_BYTES: '7' } }),
+    );
+    expect(e.code).toBe('invalid-config');
+    expect(e.message).toContain('viewer: expected object, got 5');
+  });
+
   test('bad env int names the variable', () => {
     const e = failure(() => resolveConfig({ env: { OTEL_HTML_EAGER_BUDGET_BYTES: 'abc' } }));
     expect(e.code).toBe('invalid-config');

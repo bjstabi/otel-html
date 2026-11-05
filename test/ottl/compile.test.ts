@@ -71,24 +71,41 @@ describe('compile-time failures', () => {
   test('regex pattern must be a string literal', () => {
     expect(() => compileCondition('IsMatch(name, name)', 'span')).toThrowError(/string literal/);
   });
+  test.each(['(a)\\1', '(?=a)a', '(?<!a)b', '[^](a+)+$', '[](a+)+$'])(
+    'rejects backtracking-prone or non-RE2 regex %s',
+    (p) => {
+      expect(() => compileCondition(`IsMatch(name, ${JSON.stringify(p)})`, 'span')).toThrowError(
+        /invalid-?|regular expression/i,
+      );
+    },
+  );
   test.each([
+    '(a+){2}',
+    '(a+){4}',
+    '(a+){4}$',
+    '(\\d+\\.\\d+){3}',
+    '(.+;){3}',
+    '(\\d+\\.?){3}',
+    '(a+){2,20}',
+    '(a+)+',
     '(a+)+$',
     '(a*)*',
-    '(.*a){1,}b*(x+y)+',
     '(a|b+)*',
-    '(a)\\1',
-    '(?=a)a',
-    '(?<!a)b',
-    '[^](a+)+$',
-    '[](a+)+$',
-    '(a+){2,20}',
     '(a{1,64}){1,64}',
     '(a+){5}',
-    '((a+)b){5}',
     '(a{1,2}){5}',
-  ])('rejects backtracking-prone or non-RE2 regex %s', (p) => {
+    '(.*a){1,}b*(x+y)+',
+    '(?i)([a-z]+A){3}',
+    '^((bb)+b)+$',
+    '((.b)+b)+x',
+    '^((ab|a)+b)+$',
+    '(\\d?\\d+\\.)+x',
+    '^(a?a+b)+$',
+    '^(a|a+b)+$',
+    '^(\\w|\\w+\\.)+$',
+  ])('rejects nested repetition without a disjoint literal: %s (#188)', (p) => {
     expect(() => compileCondition(`IsMatch(name, ${JSON.stringify(p)})`, 'span')).toThrowError(
-      /invalid-?|regular expression/i,
+      /nested repetition/,
     );
   });
   test.each([
@@ -99,19 +116,67 @@ describe('compile-time failures', () => {
     '[(+*]+',
     '\\(a+\\)+',
     '(?i)get',
-    '(\\d+\\.){3}\\d+',
-    '(a+){4}',
     '(ab){2,5}',
-    '(a?){20}',
-    '([0-9a-f]{2}:){5}[0-9a-f]{2}',
     '(a{2}){5}',
   ])('accepts %s', (p) => {
     expect(() => compileCondition(`IsMatch(name, ${JSON.stringify(p)})`, 'span')).not.toThrow();
   });
+  test.each([
+    '(\\d+\\.){3}\\d+',
+    '([a-z]+-){2}',
+    '(\\w+,){1,5}',
+    '(\\d+\\.)*',
+    '(a+b)+',
+    '(a|aa){2,}',
+    '([0-9a-f]{2}:){5}[0-9a-f]{2}',
+    '((\\d+)\\.){3}',
+    '([a-z]+A){3}',
+    '(-?\\d+,)+',
+    '((ab|a)c){3}',
+    '((a+)b){5}',
+  ])('accepts a repeated group whose variable parts end at a disjoint literal: %s (#188)', (p) => {
+    expect(() => compileCondition(`IsMatch(name, ${JSON.stringify(p)})`, 'span')).not.toThrow();
+  });
+  test.each([
+    '(a?){20}',
+    '^(?:a?a?){12}a{24}$',
+    '^(-?){25}-{25}x',
+    '^(a?){20}a{20}$',
+    '^(\\d?){22}\\d{22}$',
+    '^(?:\\w?){20}\\w{20}$',
+  ])(
+    'rejects %s: an optional with nothing after it lets each repetition match empty or not, so the split is free',
+    (p) => {
+      expect(() => compileCondition(`IsMatch(name, ${JSON.stringify(p)})`, 'span')).toThrowError(
+        /nested repetition/,
+      );
+    },
+  );
+  test.each(['(?i:a)', '(?s:a.)+', '(?-i:a)', '^(?i:[a-z]+A)+$'])('rejects an inline flag group %s', (p) => {
+    expect(() => compileCondition(`IsMatch(name, ${JSON.stringify(p)})`, 'span')).toThrowError(
+      /inline flag groups are not supported; use a leading \(\?i\) or \(\?s\)/,
+    );
+  });
+  test('(?:…) and named groups stay accepted', () => {
+    expect(() => compileCondition('IsMatch(name, "(?:ab)+(?<n>c)")', 'span')).not.toThrow();
+  });
+  test('((a+)b){5} is accepted now: b follows a+ through the subgroup end and a+ cannot match it (#188)', () => {
+    expect(() => compileCondition('IsMatch(name, "((a+)b){5}")', 'span')).not.toThrow();
+  });
+  test('(a+){4} is rejected now: nothing follows a+ inside the group, whatever the count (#188)', () => {
+    expect(() => compileCondition('IsMatch(name, "(a+){4}")', 'span')).toThrowError(/nested repetition/);
+  });
+  test('the case-insensitive flag decides whether the literal is disjoint (#188)', () => {
+    expect(() => compileCondition('IsMatch(name, "([a-z]+A){3}")', 'span')).not.toThrow();
+    expect(() => compileCondition('IsMatch(name, "(?i)([a-z]+A){3}")', 'span')).toThrowError(
+      /nested repetition/,
+    );
+  });
   test('the nested-repetition error names the rule and the fix', () => {
-    const run = (): unknown => compileCondition('IsMatch(name, "(a+){2,20}")', 'span');
+    const run = (): unknown => compileCondition('IsMatch(name, "(a+){2}")', 'span');
     expect(run).toThrowError(/nested repetition/);
     expect(run).toThrowError(/\[a-z\]\{1,64\}/);
+    expect(run).toThrowError('put a literal the repeated part cannot match after it, like (\\d+\\.){3}');
   });
   test('over-long regex', () => {
     expect(() => compileCondition(`IsMatch(name, "${'a'.repeat(2000)}")`, 'span')).toThrowError(/too long/);

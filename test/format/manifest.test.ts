@@ -137,6 +137,33 @@ describe('manifest', () => {
     expect(parsed.config.dashboards[0]?.dashboard.id).toBe('ops');
     expect(parseManifest(parsed)).toEqual(parsed);
   });
+  test('a report whose dashboard or view holds a query this build rejects still opens (the widget shows the error)', () => {
+    const m = manifest();
+    const at = { x: 0, y: 0, w: 6, h: 6 };
+    const widgets = [
+      { type: 'traces', ...at, query: 'IsMatch(name, "(a+){3}")' },
+      {
+        type: 'metric',
+        ...at,
+        y: 6,
+        queries: [{ id: 'a', metric: 'm', show: 'value', where: 'flags == 1', by: ['nope'] }],
+      },
+    ];
+    const view = { id: 'v', title: 'V', page: 'traces', query: 'IsMatch(name, "(a+){3}")' };
+    const parsed = parseManifest({
+      ...m,
+      config: {
+        ...m.config,
+        dashboards: [{ source: 'x.yaml', dashboard: { id: 'ops', title: 'Ops', widgets } }],
+        views: [view],
+      },
+    });
+    expect(parsed.config.dashboards[0]?.dashboard.widgets).toHaveLength(2);
+    expect(parsed.config.views[0]?.query).toBe('IsMatch(name, "(a+){3}")');
+    expect(() =>
+      parseManifest({ ...m, config: { ...m.config, views: [{ ...view, page: 'nope' }] } }),
+    ).toThrow();
+  });
   test('a manifest written before metric files (M2) parses with none', () => {
     const { metricFiles: _, ...old } = manifest();
     expect(parseManifest(old).metricFiles).toEqual([]);

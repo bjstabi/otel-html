@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { MetricPageStateSchema, type MetricQuery } from '../../src/query/metric-query.js';
+import { MetricPageStateSchema, type MetricQuery, MetricQuerySchema } from '../../src/query/metric-query.js';
 
 function query(over: Partial<MetricQuery>): MetricQuery {
   return {
@@ -53,6 +53,19 @@ describe('MetricPageStateSchema', () => {
     const r = MetricPageStateSchema.safeParse({ queries: [bad] });
     expect(r.success).toBe(false);
     expect(r.error?.issues[0]?.path).toEqual(['queries', 0, 'where']);
+  });
+
+  test.each([
+    ['time_unix_nano > 0', 'time filters use the time range'],
+    ['datapoint.start_time_unix_nano > 0', 'time filters use the time range'],
+    ['flags == 1', 'flags is a per-point field; metric filters select whole series'],
+  ])('where %s fails validation with the per-point message (#177)', (where, why) => {
+    const r = MetricQuerySchema.safeParse({ id: 'a', metric: 'm', show: 'x', where });
+    expect(r.success).toBe(false);
+    expect(r.error?.issues[0]?.path).toEqual(['where']);
+    expect(r.error?.issues[0]?.message).toBe(`a condition on whole series (col 1: ${why})`);
+    const page = MetricPageStateSchema.safeParse({ queries: [query({ where })] });
+    expect(page.error?.issues[0]?.path).toEqual(['queries', 0, 'where']);
   });
 
   test('heatmap without a histogram query is allowed', () => {

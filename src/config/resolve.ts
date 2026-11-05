@@ -26,30 +26,39 @@ function isTree(v: unknown): v is Tree {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
-/** Leaf paths (arrays and scalars are leaves) of a plain-object tree. */
-function leaves(v: unknown, prefix: string, out: Map<string, unknown>): void {
+type Leaves = Map<string, { path: readonly string[]; value: unknown }>;
+
+/** Leaf paths (arrays and scalars are leaves) of a plain-object tree, keyed by `JSON.stringify(path)`. */
+function leaves(v: unknown, prefix: readonly string[], out: Leaves): void {
   if (isTree(v)) {
     for (const [k, child] of Object.entries(v)) {
+      const path = [...prefix, k];
       if (FORBIDDEN_KEYS.has(k)) {
         throw new OtelHtmlError('invalid-config', {
-          path: prefix === '' ? k : `${prefix}.${k}`,
-          message: `${prefix === '' ? k : `${prefix}.${k}`}: unrecognized key`,
+          path: path.join('.'),
+          message: `${path.join('.')}: unrecognized key`,
         });
       }
-      if (child !== undefined) leaves(child, prefix === '' ? k : `${prefix}.${k}`, out);
+      if (child !== undefined) leaves(child, path, out);
     }
-  } else if (prefix !== '') {
-    out.set(prefix, v);
+  } else if (prefix.length > 0) {
+    out.set(JSON.stringify(prefix), { path: prefix, value: v });
   }
 }
 
-function setPath(root: Tree, path: string, value: unknown): void {
-  const parts = path.split('.');
+/** Sets a value at a path of parts (never split, so a key containing a dot stays one key). */
+function setPath(root: Tree, parts: readonly string[], value: unknown): void {
   let cur = root;
-  for (const part of parts.slice(0, -1)) {
-    const next = Object.hasOwn(cur, part) ? cur[part] : undefined;
-    if (isTree(next)) cur = next;
-    else {
+  for (const [i, part] of parts.slice(0, -1).entries()) {
+    const existing = Object.hasOwn(cur, part) ? cur[part] : undefined;
+    if (isTree(existing)) cur = existing;
+    else if (existing !== undefined) {
+      throw new OtelHtmlError('invalid-config', {
+        path: parts.slice(0, i + 1).join('.'),
+        expected: 'object',
+        actual: JSON.stringify(existing),
+      });
+    } else {
       const created: Tree = {};
       cur[part] = created;
       cur = created;
@@ -72,9 +81,9 @@ function envLayer(env: Readonly<Record<string, string | undefined>>): Tree {
           actual: JSON.stringify(raw),
         });
       }
-      setPath(out, b.path, Number(raw.trim()));
+      setPath(out, b.path.split('.'), Number(raw.trim()));
     } else {
-      setPath(out, b.path, raw);
+      setPath(out, b.path.split('.'), raw);
     }
   }
   return out;
@@ -86,7 +95,7 @@ export function resolveConfig(layers: ResolveLayers): ResolveResult {
     ['env', envLayer(layers.env)],
     ['flag', layers.flags],
   ];
-  const merged = new Map<string, unknown>();
+  const merged: Leaves = new Map();
   const origin = new Map<string, ConfigSource>();
   for (const [source, layer] of ordered) {
     if (layer === undefined) continue;
@@ -97,15 +106,15 @@ export function resolveConfig(layers: ResolveLayers): ResolveResult {
         actual: JSON.stringify(layer),
       });
     }
-    const found = new Map<string, unknown>();
-    leaves(layer, '', found);
-    for (const [p, v] of found) {
-      merged.set(p, v);
-      origin.set(p, source);
+    const found: Leaves = new Map();
+    leaves(layer, [], found);
+    for (const [key, leaf] of found) {
+      merged.set(key, leaf);
+      origin.set(key, source);
     }
   }
   const raw: Tree = {};
-  for (const [p, v] of merged) setPath(raw, p, v);
+  for (const { path, value } of merged.values()) setPath(raw, path, value);
 
   const parsed = ConfigSchema.safeParse(raw);
   if (!parsed.success) {
@@ -122,13 +131,16 @@ export function resolveConfig(layers: ResolveLayers): ResolveResult {
   }
 
   // The one place a dashboard's source is named: the file (by its label), else the library API's flags.
-  const label = origin.get('dashboards') === 'file' ? (layers.fileLabel ?? 'config file') : 'library API';
+  const label =
+    origin.get(JSON.stringify(['dashboards'])) === 'file'
+      ? (layers.fileLabel ?? 'config file')
+      : 'library API';
   for (const d of parsed.data.dashboards) d.source = label;
 
   const sources = new Map<string, ConfigSource>();
-  const all = new Map<string, unknown>();
-  leaves(parsed.data, '', all);
-  for (const p of all.keys()) sources.set(p, origin.get(p) ?? 'default');
+  const all: Leaves = new Map();
+  leaves(parsed.data, [], all);
+  for (const [key, { path }] of all) sources.set(path.join('.'), origin.get(key) ?? 'default');
   return { config: parsed.data, sources };
 }
 

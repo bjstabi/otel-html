@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { RelNanos } from '../../src/model/ids.js';
+import { compileCondition } from '../../src/ottl/compile.js';
 import {
   DRAIN_PARAMS,
   Drain,
@@ -76,6 +77,17 @@ describe('Drain', () => {
     const re = new RegExp(templateToRegex(first(d)));
     expect(re.test('GET /a?x=1 (ok) 7')).toBe(true);
     expect(re.test('GET /aXx=1 (ok) 7')).toBe(false);
+  });
+
+  it('templateToRegex compiles under the u flag IsMatch uses, with - and / in the template', () => {
+    const d = new Drain();
+    d.add('GET retry-after /api/v failed 1', 'info', t(0));
+    d.add('GET retry-after /api/v failed 2', 'info', t(0));
+    const src = templateToRegex(first(d));
+    expect(template(first(d))).toContain('retry-after');
+    expect(() => new RegExp(src, 'u')).not.toThrow();
+    expect(new RegExp(src, 'u').test('GET retry-after /api/v failed 3')).toBe(true);
+    expect(() => compileCondition(`IsMatch(body, ${JSON.stringify(src)})`, 'log_record')).not.toThrow();
   });
 
   it('maxClusters caps clusters and counts the rest', () => {

@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { findConfigPath, loadConfigFile } from '../../src/config/load.js';
+import { resolveConfig } from '../../src/config/resolve.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { createMemoryFileSystem } from '../../test-support/memory-fs.js';
 
@@ -16,6 +17,18 @@ describe('loadConfigFile', () => {
     await fs.mkdirp('/c');
     await fs.writeTextAtomic('/c/x.json', '{"title":"j"}');
     expect(await loadConfigFile(fs, '/c/x.json')).toEqual({ title: 'j' });
+  });
+
+  test.each([
+    ['empty', ''],
+    ['comment-only', '# just a comment\n'],
+  ])('an %s file is an empty config (#175)', async (_name, text) => {
+    const fs = createMemoryFileSystem();
+    await fs.mkdirp('/c');
+    await fs.writeTextAtomic('/c/otel-html.yaml', text);
+    const file = await loadConfigFile(fs, '/c/otel-html.yaml');
+    expect(file).toEqual({});
+    expect(resolveConfig({ file, env: {} }).config.title).toBe(resolveConfig({ env: {} }).config.title);
   });
 
   test('invalid YAML is invalid-config with path', async () => {

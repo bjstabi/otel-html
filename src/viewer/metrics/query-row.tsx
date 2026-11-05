@@ -2,7 +2,9 @@ import { Menu } from '@base-ui/react/menu';
 import { Popover } from '@base-ui/react/popover';
 import { ChevronDown, Eye, EyeOff, Pencil, X } from 'lucide-react';
 import { type JSX, type ReactNode, useEffect, useState } from 'react';
+import { parseCondition } from '../../ottl/parse.js';
 import { parseFormula } from '../../query/metric-formula.js';
+import { pathsOf, rejectPerPointPaths } from '../../query/metric-paths.js';
 import type { MetricFormula } from '../../query/metric-query.js';
 import type { MetricEntry } from '../../rollups/metric-catalog.js';
 import { ConditionEditor } from '../components/query-bar.js';
@@ -301,6 +303,8 @@ export function QueryRow(props: {
             condition={q.where}
             onChange={(where) => set({ where })}
             context="datapoint"
+            // A per-series query cannot read a per-point field, and a URL holding one is rejected on reload.
+            validate={(src) => rejectPerPointPaths(pathsOf(parseCondition(src)))}
             rawOpen={false}
             keyPlaceholder='resource.attributes["key"]'
             labelSuffix={` of ${q.id}`}

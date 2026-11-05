@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { type AnyValue, anyValueEquals, anyValueToDisplay } from '../../src/model/anyvalue.js';
+import {
+  type AnyValue,
+  anyValueEquals,
+  anyValueToDisplay,
+  anyValueToJson,
+} from '../../src/model/anyvalue.js';
 import { canonicalAttributesKey } from '../../src/model/interner.js';
 
 describe('anyValueToDisplay', () => {
@@ -83,6 +88,23 @@ describe('edge cases', () => {
       ]),
     };
     expect(anyValueToDisplay(v)).toBe('{"b":"AQID","arr":["/w==",{}]}');
+  });
+  it('keeps a kvlist key named __proto__ as an own key (#174)', () => {
+    const v: AnyValue = {
+      kind: 'kvlist',
+      values: new Map<string, AnyValue>([
+        ['__proto__', { kind: 'string', value: 'x' }],
+        ['a', { kind: 'int', value: 1n }],
+      ]),
+    };
+    const json = anyValueToJson(v) as object;
+    expect(Object.hasOwn(json, '__proto__')).toBe(true);
+    expect(Object.getOwnPropertyDescriptor(json, '__proto__')?.value).toBe('x');
+    expect(Object.keys(json)).toEqual(['__proto__', 'a']);
+    expect(anyValueToDisplay(v)).toBe('{"__proto__":"x","a":1}');
+    // nested inside an array too
+    expect(anyValueToDisplay({ kind: 'array', values: [v] })).toBe('[{"__proto__":"x","a":1}]');
+    expect(Object.hasOwn(Object.prototype, 'x')).toBe(false);
   });
   it('renders empty array and kvlist', () => {
     expect(anyValueToDisplay({ kind: 'array', values: [] })).toBe('[]');

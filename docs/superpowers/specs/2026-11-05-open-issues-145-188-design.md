@@ -153,6 +153,25 @@ part cannot match after it, like (\d+\.){3}, or repeat a class instead, like [a-
 sentence (if it states the rule) says the same. This is the one place a previously accepted input is rejected;
 `(a+){2}`-style patterns can be written out (`a+a+`).
 
+**(call, from the branch review)** The follower rule alone pins the end of a variable part but not how the group
+splits, and the review found four exponential families it admitted (a variable-quantified multi-character group
+`((bb)+b)+`, an optional overlapping the variable atom `(\d?\d+\.)+`, overlapping alternation `(a|a+b)+`, and
+modifier groups `(?i:…)` checked with the outer flags), then a fifth (repeated optional-only groups `(a?){20}`). The
+rule is therefore tightened: the exemption applies only when the variable-quantified item is a single-character
+atom, never a group; no alternation lies on the path from the checked group to a variable atom; a group is checked
+when it holds any variable quantifier *or any min-0 item*, and every min-0 item inside it must be a single literal
+character that the following single-character atom cannot match (so `(-?\d+,)+` stays, `(a?){20}` and `(ab?)+` go);
+inline flag groups are rejected as unsupported (use a leading `(?i)`/`(?s)`). Overlapping alternation with no
+quantifier inside (`(a|aa)+`, which this spec keeps accepted) and long chains of variable atoms outside a repeated
+group (`.*.*.*.*x`) stay undetected, as before this plan; the guard's comment says so and #195 tracks them.
+
+**(call, from the branch review)** `ManifestSchema` re-validated stored dashboards and views with the strict
+schemas, which compile every query and (with #177) run the per-point check, so a report written before this PR
+whose dashboard held a now-rejected condition would no longer open, merge or append. The manifest validates
+dashboards and views by shape only (derived from the same schema factories as the strict ones); a compile error
+shows on the widget at render as it always did; config resolution and URL state keep the strict checks. The metric
+`where` editor runs the per-point check at commit, so the URL it writes is never one that fails on reload.
+
 *Also*, found while planning: `templateToRegex` (`src/rollups/drain.ts`) escapes `-` as `\-`, which the `u` flag
 `IsMatch` compiles with rejects, so a log pattern whose template holds `-` cannot be added as a filter. Fixed in
 this PR (the escape set loses `-`).

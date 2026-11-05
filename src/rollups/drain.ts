@@ -66,7 +66,7 @@ function cutSample(body: string): string {
 }
 
 function escapeRegex(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\/-]/g, '\\$&');
+  return s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
 }
 
 /** A regex source matching every member of the cluster (open-ended when the template was truncated). */

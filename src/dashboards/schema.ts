@@ -11,9 +11,11 @@ import {
   MetricFormulaSchema,
   type MetricPageState,
   MetricPageStateSchema,
+  MetricPageStateShapeSchema,
   type MetricQuery,
   type MetricQueryInput,
   MetricQuerySchema,
+  MetricQueryShapeSchema,
 } from '../query/metric-query.js';
 import { PAGE_OPTIONS } from '../query/pages.js';
 
@@ -266,158 +268,167 @@ const signalBase = {
   text: z.string().default(''),
 };
 
-const MetricWidgetQuerySchema: z.ZodType<MetricQuery, MetricQueryInput> = MetricQuerySchema.superRefine(
-  (q, ctx) => {
+const widgetQuery = (compiled: boolean): z.ZodType<MetricQuery, MetricQueryInput> =>
+  (compiled ? MetricQuerySchema : MetricQueryShapeSchema).superRefine((q, ctx) => {
     if (q.metric === '') ctx.addIssue({ code: 'custom', path: ['metric'], message: 'a metric name' });
     if (q.show === '') ctx.addIssue({ code: 'custom', path: ['show'], message: 'a field to show' });
-  },
-);
+  });
 
-const WidgetSchema = z
-  .discriminatedUnion('type', [
-    z.strictObject({ type: z.literal('timeline'), ...layout }),
-    z.strictObject({
-      type: z.literal('traces'),
-      ...signalBase,
-      mode: z.enum(['traces', 'spans']).default('traces'),
-    }),
-    z.strictObject({ type: z.literal('logs'), ...signalBase, context: z.boolean().default(false) }),
-    z.strictObject({
-      type: z.literal('metric'),
-      ...layout,
-      ...follow,
-      queries: z.array(MetricWidgetQuerySchema).min(1).max(MAX_METRIC_QUERIES).nullable().default(null),
-      formulas: z.array(MetricFormulaSchema).default([]),
-      display: z.enum(['lines', 'area', 'bars', 'heatmap']).default('lines'),
-      scale: z.enum(['linear', 'log']).default('linear'),
-      exemplars: z.boolean().default(true),
-      runBy: z.string().min(1).nullable().default(null),
-      failedWhen: z.string().min(1).nullable().default(null),
-      controls: z
-        .strictObject({
-          slider: z.boolean().default(DEFAULT_RUN_CONTROLS.slider),
-          evenSpacing: z.boolean().default(DEFAULT_RUN_CONTROLS.evenSpacing),
-          split: z.boolean().default(DEFAULT_RUN_CONTROLS.split),
-          legend: z.boolean().default(DEFAULT_RUN_CONTROLS.legend),
-        })
-        .nullable()
-        .default(null),
-      echarts,
-    }),
-    z.strictObject({
-      type: z.literal('toplist'),
-      ...signalBase,
-      signal: z.enum(['spans', 'logs']),
-      groupBy: z.string().min(1),
-      measure,
-      echarts,
-    }),
-    z.strictObject({
-      type: z.literal('table'),
-      ...signalBase,
-      signal: z.enum(['spans', 'logs']),
-      groupBy: z.string().min(1),
-      measure,
-    }),
-  ])
-  .superRefine((w, ctx) => {
-    if (w.x + w.w > GRID_COLUMNS) {
-      ctx.addIssue({ code: 'custom', path: ['x'], message: `x + w at most ${GRID_COLUMNS}` });
-    }
-    const context: OttlContextName | null =
-      w.type === 'traces'
-        ? 'span'
-        : w.type === 'logs'
-          ? 'log_record'
-          : w.type === 'toplist' || w.type === 'table'
-            ? w.signal === 'spans'
-              ? 'span'
-              : 'log_record'
-            : null;
-    if (context !== null && 'query' in w && w.query !== null) {
-      const message = conditionIssue(w.query, context);
-      if (message !== null) ctx.addIssue({ code: 'custom', path: ['query'], message });
-    }
-    if ((w.type === 'toplist' || w.type === 'table') && w.signal === 'logs' && w.measure !== 'count') {
-      const name = w.title === null ? w.type : `${w.type} "${w.title}"`;
-      ctx.addIssue({
-        code: 'custom',
-        path: ['measure'],
-        message: `${name}: a duration measure needs signal: spans`,
-      });
-    }
-    if (w.type !== 'metric') return;
-    if (w.runBy === null) {
-      for (const field of ['failedWhen', 'controls'] as const) {
-        if (w[field] !== null) {
-          ctx.addIssue({ code: 'custom', path: [field], message: `${field} only together with runBy` });
-        }
+/** `compiled` false leaves out every OTTL compile and per-point check: the shape alone. */
+const buildWidgetSchema = (compiled: boolean) =>
+  z
+    .discriminatedUnion('type', [
+      z.strictObject({ type: z.literal('timeline'), ...layout }),
+      z.strictObject({
+        type: z.literal('traces'),
+        ...signalBase,
+        mode: z.enum(['traces', 'spans']).default('traces'),
+      }),
+      z.strictObject({ type: z.literal('logs'), ...signalBase, context: z.boolean().default(false) }),
+      z.strictObject({
+        type: z.literal('metric'),
+        ...layout,
+        ...follow,
+        queries: z.array(widgetQuery(compiled)).min(1).max(MAX_METRIC_QUERIES).nullable().default(null),
+        formulas: z.array(MetricFormulaSchema).default([]),
+        display: z.enum(['lines', 'area', 'bars', 'heatmap']).default('lines'),
+        scale: z.enum(['linear', 'log']).default('linear'),
+        exemplars: z.boolean().default(true),
+        runBy: z.string().min(1).nullable().default(null),
+        failedWhen: z.string().min(1).nullable().default(null),
+        controls: z
+          .strictObject({
+            slider: z.boolean().default(DEFAULT_RUN_CONTROLS.slider),
+            evenSpacing: z.boolean().default(DEFAULT_RUN_CONTROLS.evenSpacing),
+            split: z.boolean().default(DEFAULT_RUN_CONTROLS.split),
+            legend: z.boolean().default(DEFAULT_RUN_CONTROLS.legend),
+          })
+          .nullable()
+          .default(null),
+        echarts,
+      }),
+      z.strictObject({
+        type: z.literal('toplist'),
+        ...signalBase,
+        signal: z.enum(['spans', 'logs']),
+        groupBy: z.string().min(1),
+        measure,
+        echarts,
+      }),
+      z.strictObject({
+        type: z.literal('table'),
+        ...signalBase,
+        signal: z.enum(['spans', 'logs']),
+        groupBy: z.string().min(1),
+        measure,
+      }),
+    ])
+    .superRefine((w, ctx) => {
+      if (w.x + w.w > GRID_COLUMNS) {
+        ctx.addIssue({ code: 'custom', path: ['x'], message: `x + w at most ${GRID_COLUMNS}` });
       }
-    } else {
-      try {
-        compileBy(w.runBy);
-      } catch (e) {
-        if (!(e instanceof OtelHtmlError && e.code === 'invalid-ottl')) throw e;
+      const context: OttlContextName | null =
+        w.type === 'traces'
+          ? 'span'
+          : w.type === 'logs'
+            ? 'log_record'
+            : w.type === 'toplist' || w.type === 'table'
+              ? w.signal === 'spans'
+                ? 'span'
+                : 'log_record'
+              : null;
+      if (compiled && context !== null && 'query' in w && w.query !== null) {
+        const message = conditionIssue(w.query, context);
+        if (message !== null) ctx.addIssue({ code: 'custom', path: ['query'], message });
+      }
+      if ((w.type === 'toplist' || w.type === 'table') && w.signal === 'logs' && w.measure !== 'count') {
+        const name = w.title === null ? w.type : `${w.type} "${w.title}"`;
         ctx.addIssue({
           code: 'custom',
-          path: ['runBy'],
-          message: `a data point path such as attributes["key"] (${e.message})`,
+          path: ['measure'],
+          message: `${name}: a duration measure needs signal: spans`,
         });
       }
-      if (w.failedWhen !== null) {
-        const message = conditionIssue(w.failedWhen, 'datapoint') ?? perPointIssue(w.failedWhen);
-        if (message !== null) ctx.addIssue({ code: 'custom', path: ['failedWhen'], message });
-      }
-      if (w.queries?.some((q) => q.fn.length > 0)) {
-        ctx.addIssue({ code: 'custom', path: ['queries'], message: 'no fn together with runBy' });
-      }
-      if (w.formulas.length > 0) {
-        ctx.addIssue({ code: 'custom', path: ['formulas'], message: 'no formulas together with runBy' });
-      }
-      if (w.queries === null || w.queries.length !== 1) {
-        ctx.addIssue({ code: 'custom', path: ['queries'], message: 'exactly one query together with runBy' });
-      }
-      if (w.display !== 'lines') {
-        ctx.addIssue({ code: 'custom', path: ['display'], message: 'lines together with runBy' });
-      }
-      if (w.scale !== 'linear') {
-        ctx.addIssue({ code: 'custom', path: ['scale'], message: 'linear together with runBy' });
-      }
-    }
-    if (w.queries === null) {
-      if (w.formulas.length > 0) {
-        ctx.addIssue({ code: 'custom', path: ['formulas'], message: 'formulas only together with queries' });
-      }
-      return;
-    }
-    const ids = w.queries.map((q) => q.id);
-    ids.forEach((id, i) => {
-      if (ids.indexOf(id) !== i)
-        ctx.addIssue({ code: 'custom', path: ['queries', i, 'id'], message: 'unique query ids' });
-    });
-    w.formulas.forEach((f, i) => {
-      try {
-        for (const ref of formulaRefs(parseFormula(f.expr))) {
-          if (!ids.includes(ref)) {
-            ctx.addIssue({
-              code: 'custom',
-              path: ['formulas', i, 'expr'],
-              message: `only existing query ids (${ref} is not one of ${ids.join(', ')})`,
-            });
+      if (w.type !== 'metric') return;
+      if (w.runBy === null) {
+        for (const field of ['failedWhen', 'controls'] as const) {
+          if (w[field] !== null) {
+            ctx.addIssue({ code: 'custom', path: [field], message: `${field} only together with runBy` });
           }
         }
-      } catch (e) {
-        if (!(e instanceof OtelHtmlError)) throw e;
-        ctx.addIssue({ code: 'custom', path: ['formulas', i, 'expr'], message: e.message });
+      } else {
+        try {
+          if (compiled) compileBy(w.runBy);
+        } catch (e) {
+          if (!(e instanceof OtelHtmlError && e.code === 'invalid-ottl')) throw e;
+          ctx.addIssue({
+            code: 'custom',
+            path: ['runBy'],
+            message: `a data point path such as attributes["key"] (${e.message})`,
+          });
+        }
+        if (compiled && w.failedWhen !== null) {
+          const message = conditionIssue(w.failedWhen, 'datapoint') ?? perPointIssue(w.failedWhen);
+          if (message !== null) ctx.addIssue({ code: 'custom', path: ['failedWhen'], message });
+        }
+        if (w.queries?.some((q) => q.fn.length > 0)) {
+          ctx.addIssue({ code: 'custom', path: ['queries'], message: 'no fn together with runBy' });
+        }
+        if (w.formulas.length > 0) {
+          ctx.addIssue({ code: 'custom', path: ['formulas'], message: 'no formulas together with runBy' });
+        }
+        if (w.queries === null || w.queries.length !== 1) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['queries'],
+            message: 'exactly one query together with runBy',
+          });
+        }
+        if (w.display !== 'lines') {
+          ctx.addIssue({ code: 'custom', path: ['display'], message: 'lines together with runBy' });
+        }
+        if (w.scale !== 'linear') {
+          ctx.addIssue({ code: 'custom', path: ['scale'], message: 'linear together with runBy' });
+        }
       }
-    });
-  })
-  // A run chart always carries its toggles, so the viewer never fills defaults itself.
-  .transform((w) =>
-    w.type === 'metric' && w.runBy !== null && w.controls === null
-      ? { ...w, controls: { ...DEFAULT_RUN_CONTROLS } }
-      : w,
-  );
+      if (w.queries === null) {
+        if (w.formulas.length > 0) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['formulas'],
+            message: 'formulas only together with queries',
+          });
+        }
+        return;
+      }
+      const ids = w.queries.map((q) => q.id);
+      ids.forEach((id, i) => {
+        if (ids.indexOf(id) !== i)
+          ctx.addIssue({ code: 'custom', path: ['queries', i, 'id'], message: 'unique query ids' });
+      });
+      w.formulas.forEach((f, i) => {
+        try {
+          for (const ref of formulaRefs(parseFormula(f.expr))) {
+            if (!ids.includes(ref)) {
+              ctx.addIssue({
+                code: 'custom',
+                path: ['formulas', i, 'expr'],
+                message: `only existing query ids (${ref} is not one of ${ids.join(', ')})`,
+              });
+            }
+          }
+        } catch (e) {
+          if (!(e instanceof OtelHtmlError)) throw e;
+          ctx.addIssue({ code: 'custom', path: ['formulas', i, 'expr'], message: e.message });
+        }
+      });
+    })
+    // A run chart always carries its toggles, so the viewer never fills defaults itself.
+    .transform((w) =>
+      w.type === 'metric' && w.runBy !== null && w.controls === null
+        ? { ...w, controls: { ...DEFAULT_RUN_CONTROLS } }
+        : w,
+    );
 
 const VariableSchema = z
   .union([
@@ -437,48 +448,53 @@ function overlaps(a: WidgetLayout, b: WidgetLayout): boolean {
   return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 }
 
-export const DashboardSchema: z.ZodType<Dashboard, DashboardInput> = z
-  .strictObject({
-    id: dashboardId,
-    title: z.string().min(1),
-    description: z.string().default(''),
-    variables: z.array(VariableSchema).max(MAX_VARIABLES, `at most ${MAX_VARIABLES} variables`).default([]),
-    widgets: z.array(WidgetSchema).min(1).max(MAX_WIDGETS, `at most ${MAX_WIDGETS} widgets`),
-  })
-  .transform((d, ctx): Dashboard => {
-    const widgets = d.widgets.map((w, i): Widget => ({ ...w, id: w.id ?? `w${i + 1}` }));
-    d.variables.forEach((v, i) => {
-      if (d.variables.findIndex((o) => o.key === v.key) !== i) {
-        ctx.issues.push({
-          code: 'custom',
-          input: v,
-          path: ['variables', i, 'key'],
-          message: 'unique variable keys',
-        });
-      }
+const buildDashboardSchema = (compiled: boolean): z.ZodType<Dashboard, DashboardInput> =>
+  z
+    .strictObject({
+      id: dashboardId,
+      title: z.string().min(1),
+      description: z.string().default(''),
+      variables: z.array(VariableSchema).max(MAX_VARIABLES, `at most ${MAX_VARIABLES} variables`).default([]),
+      widgets: z.array(buildWidgetSchema(compiled)).min(1).max(MAX_WIDGETS, `at most ${MAX_WIDGETS} widgets`),
+    })
+    .transform((d, ctx): Dashboard => {
+      const widgets = d.widgets.map((w, i): Widget => ({ ...w, id: w.id ?? `w${i + 1}` }));
+      d.variables.forEach((v, i) => {
+        if (d.variables.findIndex((o) => o.key === v.key) !== i) {
+          ctx.issues.push({
+            code: 'custom',
+            input: v,
+            path: ['variables', i, 'key'],
+            message: 'unique variable keys',
+          });
+        }
+      });
+      widgets.forEach((w, j) => {
+        if (widgets.findIndex((o) => o.id === w.id) !== j) {
+          ctx.issues.push({
+            code: 'custom',
+            input: w,
+            path: ['widgets', j, 'id'],
+            message: 'unique widget ids',
+          });
+        }
+        const i = widgets.findIndex((o, k) => k < j && overlaps(o, w));
+        const other = widgets[i];
+        if (other !== undefined) {
+          ctx.issues.push({
+            code: 'custom',
+            input: w,
+            path: ['widgets', j],
+            message: `does not overlap widgets[${i}] (${other.id})`,
+          });
+        }
+      });
+      return { ...d, widgets };
     });
-    widgets.forEach((w, j) => {
-      if (widgets.findIndex((o) => o.id === w.id) !== j) {
-        ctx.issues.push({
-          code: 'custom',
-          input: w,
-          path: ['widgets', j, 'id'],
-          message: 'unique widget ids',
-        });
-      }
-      const i = widgets.findIndex((o, k) => k < j && overlaps(o, w));
-      const other = widgets[i];
-      if (other !== undefined) {
-        ctx.issues.push({
-          code: 'custom',
-          input: w,
-          path: ['widgets', j],
-          message: `does not overlap widgets[${i}] (${other.id})`,
-        });
-      }
-    });
-    return { ...d, widgets };
-  });
+
+export const DashboardSchema: z.ZodType<Dashboard, DashboardInput> = buildDashboardSchema(true);
+/** A dashboard's shape without compiling its queries: what a stored report's manifest holds (see `ManifestSchema`). */
+export const DashboardShapeSchema: z.ZodType<Dashboard, DashboardInput> = buildDashboardSchema(false);
 
 /** Flag repeated and reserved ids; `pathOf` places each issue (the list's `[i, 'id']` by default). */
 export function listIssues(
@@ -506,47 +522,55 @@ export const DashboardListSchema: z.ZodType<Dashboard[], DashboardInput[]> = z
 
 const nullableText = z.string().nullable().default(null);
 
-export const ViewSchema: z.ZodType<View, ViewInput> = z
-  .strictObject({
-    id: dashboardId,
-    title: z.string().min(1),
-    page: z.enum(['traces', 'logs', 'metrics']),
-    query: nullableText,
-    text: z.string().default(''),
-    mode: nullableText,
-    groupBy: nullableText,
-    view: nullableText,
-    sort: nullableText,
-    metrics: MetricPageStateSchema.nullable().default(null),
-  })
-  .superRefine((v, ctx) => {
-    const opts = PAGE_OPTIONS[v.page];
-    const bad = (path: string, message: string): void =>
-      ctx.addIssue({ code: 'custom', path: [path], message });
-    const modes: readonly string[] = opts.modes;
-    const views: readonly string[] = opts.views;
-    if (v.mode !== null && !modes.includes(v.mode)) {
-      bad('mode', modes.length === 0 ? 'not offered on this page' : `one of ${modes.join(', ')}`);
-    }
-    if (v.view !== null && !views.includes(v.view)) {
-      bad('view', views.length === 0 ? 'not offered on this page' : `one of ${views.join(', ')}`);
-    }
-    if (v.page === 'metrics') {
-      if (v.query !== null) bad('query', 'not offered on this page');
-      if (v.text !== '') bad('text', 'not offered on this page');
-    } else {
-      if (v.metrics !== null) bad('metrics', 'only on the metrics page');
-      if (v.query !== null) {
-        const message = conditionIssue(v.query, opts.context);
-        if (message !== null) bad('query', message);
+const buildViewSchema = (compiled: boolean): z.ZodType<View, ViewInput> =>
+  z
+    .strictObject({
+      id: dashboardId,
+      title: z.string().min(1),
+      page: z.enum(['traces', 'logs', 'metrics']),
+      query: nullableText,
+      text: z.string().default(''),
+      mode: nullableText,
+      groupBy: nullableText,
+      view: nullableText,
+      sort: nullableText,
+      metrics: (compiled ? MetricPageStateSchema : MetricPageStateShapeSchema).nullable().default(null),
+    })
+    .superRefine((v, ctx) => {
+      const opts = PAGE_OPTIONS[v.page];
+      const bad = (path: string, message: string): void =>
+        ctx.addIssue({ code: 'custom', path: [path], message });
+      const modes: readonly string[] = opts.modes;
+      const views: readonly string[] = opts.views;
+      if (v.mode !== null && !modes.includes(v.mode)) {
+        bad('mode', modes.length === 0 ? 'not offered on this page' : `one of ${modes.join(', ')}`);
       }
-    }
-  });
+      if (v.view !== null && !views.includes(v.view)) {
+        bad('view', views.length === 0 ? 'not offered on this page' : `one of ${views.join(', ')}`);
+      }
+      if (v.page === 'metrics') {
+        if (v.query !== null) bad('query', 'not offered on this page');
+        if (v.text !== '') bad('text', 'not offered on this page');
+      } else {
+        if (v.metrics !== null) bad('metrics', 'only on the metrics page');
+        if (compiled && v.query !== null) {
+          const message = conditionIssue(v.query, opts.context);
+          if (message !== null) bad('query', message);
+        }
+      }
+    });
 
-export const ViewListSchema: z.ZodType<View[], ViewInput[]> = z.array(ViewSchema).superRefine((vs, ctx) =>
-  listIssues(
-    vs.map((v) => v.id),
-    [],
-    ctx,
-  ),
-);
+export const ViewSchema: z.ZodType<View, ViewInput> = buildViewSchema(true);
+export const ViewShapeSchema: z.ZodType<View, ViewInput> = buildViewSchema(false);
+
+const buildViewListSchema = (view: z.ZodType<View, ViewInput>): z.ZodType<View[], ViewInput[]> =>
+  z.array(view).superRefine((vs, ctx) =>
+    listIssues(
+      vs.map((v) => v.id),
+      [],
+      ctx,
+    ),
+  );
+
+export const ViewListSchema: z.ZodType<View[], ViewInput[]> = buildViewListSchema(ViewSchema);
+export const ViewListShapeSchema: z.ZodType<View[], ViewInput[]> = buildViewListSchema(ViewShapeSchema);

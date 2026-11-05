@@ -99,6 +99,17 @@ describe('Metrics Explorer', () => {
     expect(screen.queryByText('Coming in a later release')).toBeNull();
   });
 
+  test('a where on a per-point field is refused at commit, with the message on the editor and nothing in the URL', async () => {
+    const user = userEvent.setup();
+    await renderAt(metricsHash({ metric: 'http.server.requests', show: 'increase' }));
+    await user.type(await screen.findByLabelText('New filter key of a'), 'flags');
+    await user.type(screen.getByLabelText('New filter value of a'), '1');
+    await user.click(screen.getByRole('button', { name: 'Add filter of a' }));
+    const row = screen.getByRole('listitem', { name: 'Query a' });
+    expect((await within(row).findByRole('alert')).textContent).toMatch(/flags is a per-point field/);
+    expect(window.location.hash).not.toContain('flags');
+  });
+
   test('changing show to p99 updates m in the URL', async () => {
     const user = userEvent.setup();
     await renderAt(metricsHash({ metric: 'http.server.request.duration', show: 'p95' }));
