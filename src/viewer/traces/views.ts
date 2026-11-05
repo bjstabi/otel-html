@@ -189,7 +189,9 @@ export function cssTokenReader(): (name: string) => string {
  * Log-spaced duration bin edges (`binCount + 1`, ascending) over the rows' durations. A `range` pins the axis
  * instead: `range.lo` and `range.hi` become the first and last edge exactly, whatever the rows hold. A `lo` below 1
  * ns spaces the interior edges from 1 ns (the log needs a positive floor) but the first edge stays `lo`; a `hi` at or
- * below the floor falls back to the floor plus 1 ns. No rows and no range give no edges.
+ * below the floor spaces the interior as if it were the floor plus 1 ns, with the interior clamped into the pinned
+ * ends (degenerate ranges give zero-width bins). With a range the axis exists without rows; no rows and no range give
+ * no edges.
  */
 export function durationAxis(
   rows: readonly { durationNs: number }[],
@@ -202,16 +204,21 @@ export function durationAxis(
     lo = Math.min(lo, r.durationNs);
     hi = Math.max(hi, r.durationNs);
   }
-  const first = range?.lo ?? (rows.length === 0 ? undefined : lo);
-  const last = range?.hi ?? (rows.length === 0 ? undefined : hi);
-  if (first === undefined || last === undefined) return [];
+  const given = range?.lo !== undefined || range?.hi !== undefined;
+  if (rows.length === 0 && !given) return [];
+  let first = range?.lo ?? (rows.length === 0 ? 1 : lo);
+  // A `hi` below the rows' minimum drags the unpinned first edge down with it.
+  if (range?.lo === undefined && range?.hi !== undefined) first = Math.min(first, range.hi);
   const floor = Math.max(1, first);
-  const top = range?.hi !== undefined && range.hi > floor ? range.hi : Math.max(last, floor) + 1;
+  const top = range?.hi !== undefined ? (range.hi > floor ? range.hi : floor + 1) : Math.max(hi, floor) + 1;
   // Without a range the top edge sits one past the largest duration so that duration is inside its `[from, to)` bin.
   const step = (Math.log(top) - Math.log(floor)) / binCount;
   const edges = Array.from({ length: binCount + 1 }, (_, i) => Math.exp(Math.log(floor) + step * i));
-  edges[0] = range?.lo ?? Math.min(floor, first);
-  edges[binCount] = top;
+  const start = range?.lo ?? Math.min(floor, first);
+  const end = range?.hi ?? top;
+  for (let i = 1; i < binCount; i++) edges[i] = Math.max(start, Math.min(edges[i] ?? start, end));
+  edges[0] = start;
+  edges[binCount] = end;
   return edges;
 }
 
