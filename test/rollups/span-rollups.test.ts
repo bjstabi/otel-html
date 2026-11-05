@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 import type { RelNanos, SpanId, TraceId, UnixNanos } from '../../src/model/ids.js';
 import type { ResourceRef, ScopeRef, SpanRecord } from '../../src/model/records.js';
 import { StatusCode } from '../../src/model/records.js';
-import { facetValueOf, GroupDurations } from '../../src/rollups/span-rollups.js';
+import { facetReader, facetValueOf, GroupDurations } from '../../src/rollups/span-rollups.js';
 import { toEntries } from '../../src/viewer/data/span-query.js';
 
 const span: SpanRecord = {
@@ -52,6 +52,26 @@ describe('facetValueOf', () => {
     expect(facetValueOf(target, 'span.kind')).toBe('server');
     expect(facetValueOf(target, 'http.route')).toBe('/x');
     expect(facetValueOf(target, 'nope')).toBeUndefined();
+  });
+});
+
+describe('facetReader', () => {
+  test('reads the same values as facetValueOf', () => {
+    for (const k of ['service.name', 'span.kind', 'http.route', 'nope'])
+      expect(facetReader(k)(target)).toBe(facetValueOf(target, k));
+  });
+  test('an attribute key is one map lookup, not a walk of the attributes', () => {
+    const attrs = new Map([['http.route', { kind: 'string' as const, value: '/y' }]]);
+    Object.defineProperty(attrs, Symbol.iterator, {
+      value: () => {
+        throw new Error('walked');
+      },
+    });
+    expect(facetReader('http.route')({ ...target, span: { ...target.span, attributes: attrs } })).toBe('/y');
+  });
+  test('a non-scalar attribute has no facet value', () => {
+    const attrs = new Map([['tags', { kind: 'array' as const, values: [] }]]);
+    expect(facetReader('tags')({ ...target, span: { ...target.span, attributes: attrs } })).toBeUndefined();
   });
 });
 

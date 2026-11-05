@@ -7,7 +7,7 @@ import type { SpanTarget } from '../../ottl/contexts.js';
 import { matchesText, spanTextFields } from '../../ottl/text.js';
 import type { FacetCounts } from '../../rollups/facets.js';
 import type { RedSeries } from '../../rollups/red.js';
-import { facetValueOf, GroupDurations, SpanRollups, type SpanStatusKey } from '../../rollups/span-rollups.js';
+import { facetReader, GroupDurations, SpanRollups, type SpanStatusKey } from '../../rollups/span-rollups.js';
 import type { TimeBuckets } from '../../rollups/time-buckets.js';
 import { resourceName, serviceName } from '../../semconv/resource-name.js';
 import {
@@ -227,6 +227,7 @@ export class SpanQueryRun {
   readonly #condition: CompiledCondition<'span'> | null;
   readonly #rollups: SpanRollups;
   readonly #groups: GroupDurations | null;
+  readonly #measure: ((t: SpanTarget) => string | undefined) | null;
   /** Spans mode: the best `limit` matched rows so far plus compaction slack; null in traces mode. */
   readonly #rows: TopKBuffer<SpanRow> | null;
   readonly #traces = new Map<TraceId, TraceGroup>();
@@ -249,6 +250,7 @@ export class SpanQueryRun {
     this.#q = q;
     this.#rollups = new SpanRollups(caps);
     this.#groups = q.measureBy === null ? null : new GroupDurations(caps.facetValueCap);
+    this.#measure = q.measureBy === null ? null : facetReader(q.measureBy);
     // "Scan entire run" means the whole run, whatever window the view had.
     this.#window = q.scanAll ? null : q.window;
     this.#signal = signal;
@@ -323,8 +325,8 @@ export class SpanQueryRun {
       group.hit = true;
     }
     this.#rollups.add(e.target);
-    if (this.#groups !== null && this.#q.measureBy !== null) {
-      const v = facetValueOf(e.target, this.#q.measureBy);
+    if (this.#groups !== null && this.#measure !== null) {
+      const v = this.#measure(e.target);
       if (v !== undefined) this.#groups.add(v, e.row.durationNs);
     }
   }

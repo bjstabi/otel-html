@@ -11,7 +11,7 @@ import {
 } from '../semconv/attributes.js';
 import { resourceName, serviceName } from '../semconv/resource-name.js';
 import { ExpHistogram } from './exp-histogram.js';
-import { addFacet, facetableAttributes, truncateFacetValue } from './facet-values.js';
+import { addFacet, facetableAttributes, scalarKind, truncateFacetValue } from './facet-values.js';
 import { FacetCounts } from './facets.js';
 import { RedSeries } from './red.js';
 import { TimeBuckets } from './time-buckets.js';
@@ -85,19 +85,28 @@ export const SPAN_RESOURCE_FACET_KEYS: ReadonlySet<string> = new Set([
   ATTR_DEPLOYMENT_ENVIRONMENT_NAME,
 ]);
 /**
- * The value a span has for a facet key: the default facet's value for a core key, else the span attribute of
- * that name, truncated as `addFacet` truncates. Undefined when the span has none.
+ * A reader for the value a span has for a facet key: the default facet's value for a core key, else the span
+ * attribute of that name, truncated as `addFacet` truncates. The key is resolved once; the reader returns
+ * undefined when the span has none.
  */
-export function facetValueOf(t: SpanTarget, key: string): string | undefined {
+export function facetReader(key: string): (t: SpanTarget) => string | undefined {
   const core = DEFAULT_SPAN_FACETS.find((f) => f.key === key);
   if (core !== undefined) {
-    const v = core.value(t);
-    return v === undefined ? undefined : truncateFacetValue(v);
+    return (t) => {
+      const v = core.value(t);
+      return v === undefined ? undefined : truncateFacetValue(v);
+    };
   }
-  for (const a of facetableAttributes(t.span.attributes, CORE_KEYS)) {
-    if (a.key === key) return truncateFacetValue(a.value);
-  }
-  return undefined;
+  return (t) => {
+    const v = t.span.attributes.get(key);
+    return v === undefined || scalarKind(v) === undefined
+      ? undefined
+      : truncateFacetValue(anyValueToDisplay(v));
+  };
+}
+
+export function facetValueOf(t: SpanTarget, key: string): string | undefined {
+  return facetReader(key)(t);
 }
 
 /** One duration histogram per group; groups past `cap` are not kept and their spans are counted in `dropped`. */

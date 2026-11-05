@@ -332,6 +332,12 @@ describe('measureBy', () => {
     toEntries({ n: 0, resources, scopes }, spans, 0n as UnixNanos, 'measure');
   const three = (): SpanEntry[] => entries([span(1, 0, 10), span(2, 0, 30), span(3, 1, 50)]);
 
+  test('a key that is neither a core facet nor an attribute of any span yields no groups', () => {
+    const { groups } = querySpanEntries(three(), query({ measureBy: 'http.route' }));
+    expect(groups?.size).toBe(0);
+    expect(groups?.dropped).toBe(0);
+  });
+
   test('measureBy collects a duration histogram per group', () => {
     const { groups } = querySpanEntries(three(), query({ measureBy: 'service.name' }));
     expect(groups?.get('api')?.count).toBe(2);
