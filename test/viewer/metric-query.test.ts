@@ -828,15 +828,17 @@ describe('review fixes', () => {
 
   test('a counter running total at a rollup width counts the ladder bucket straddling the cut (#145)', async () => {
     const fine = 8.192 * S;
-    // One counter series, delta 1 in every 8.192 s bucket 0..21 (0 s .. 180.2 s).
-    const specs = [{ buckets: Array.from({ length: 22 }, (_, i): [number, BucketAgg] => [i, counter(1)]) }];
+    // One counter series, delta 1 in every 8.192 s bucket 0..39 (0 s .. 327.7 s).
+    const specs = [{ buckets: Array.from({ length: 40 }, (_, i): [number, BucketAgg] => [i, counter(1)]) }];
     // Coarsest level (65.536 s): its first boundary is past the cut, so the baseline comes from level 1 alone.
     const coarse = [
       {
         buckets: [
           [0, counter(8)],
           [1, counter(8)],
-          [2, counter(6)],
+          [2, counter(8)],
+          [3, counter(8)],
+          [4, counter(8)],
         ] as [number, BucketAgg][],
       },
     ];
@@ -851,16 +853,20 @@ describe('review fixes', () => {
       [60 * S, 15],
       [120 * S, 22],
     ]);
-    // A window from 130 s has cut = 120e9, so the baseline spans both levels: coarse bucket 0
-    // (65.536 s, delta 8) then fine buckets 8..14 (7; fineTo = ceil(120 / 8.192) = 15). The total at 120-180 s is
-    // still 22, the plain sum of every bucket before 180 s.
+    // A window from 250 s has cut = 240e9, so the baseline spans both levels: coarse buckets 0..2 (65.536 s,
+    // 8 each, up to 196.6 s) then fine buckets 24..29 (6; fineTo = ceil(240 / 8.192) = ceil(29.3) = 30, where
+    // round would give 29 and drop the straddling bucket 29). 240-300 s holds buckets 30..36 (7), 300-360 s
+    // 37..39 (3): the totals are the plain sums of every bucket before 300 s and 360 s.
     const late = await runMetricQueryAtWidth(
       m,
       query({ show: 'sum' }),
-      { start: 130 * S, end: 179 * S },
+      { start: 250 * S, end: 359 * S },
       60 * S,
     );
-    expect(late.series[0]?.points).toEqual([[120 * S, 22]]);
+    expect(late.series[0]?.points).toEqual([
+      [240 * S, 37],
+      [300 * S, 40],
+    ]);
   });
 
   test('a formula over a rolled-up operand re-runs the other at the rollup width', async () => {

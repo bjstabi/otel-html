@@ -296,9 +296,13 @@ describe('bounded caches (#155)', () => {
     const loader = createScriptedLoader(run.files);
     const m = await loadMetric(loader, run.manifest, 0);
     const first = await m.level(0, page(0));
-    for (const p of [1, 2, 3]) await m.level(0, page(p));
-    expect(await m.level(0, page(0))).toBe(first); // within the limit (and now the most recent)
-    for (const p of [1, 2, 3, 4]) await m.level(0, page(p)); // page 0's window is now the oldest of five
+    const first1 = await m.level(0, page(1));
+    for (const p of [2, 3]) await m.level(0, page(p));
+    expect(await m.level(0, page(0))).toBe(first); // a hit makes page 0 the most recent
+    await m.level(0, page(4)); // evicts the least recently used: page 1, not page 0
+    expect(await m.level(0, page(0))).toBe(first);
+    expect(await m.level(0, page(1))).not.toBe(first1);
+    for (const p of [2, 3, 4, 1]) await m.level(0, page(p)); // page 0's window is now the oldest of five
     loader.reset();
     const again = await m.level(0, page(0));
     expect(again).not.toBe(first);

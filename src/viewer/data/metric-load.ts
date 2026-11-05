@@ -143,7 +143,9 @@ function once<A extends unknown[], V>(
       const oldest = cache.keys().next();
       if (!oldest.done) cache.delete(oldest.value);
     }
-    p.catch(() => cache.delete(key));
+    p.catch(() => {
+      if (cache.get(key) === p) cache.delete(key); // not a newer read of the same key, after this one was evicted
+    });
     return p;
   };
 }
