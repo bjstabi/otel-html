@@ -20,7 +20,7 @@ export async function runContext(
     const inputs = readInputs(env);
     let jobs: ApiJob[] = [];
     if (inputs.token === undefined) {
-      warn('GITHUB_TOKEN is not set; using the job name for the span id');
+      warn('GITHUB_TOKEN is not set; deriving the span id from the job name and runner');
     } else {
       try {
         jobs = await fetchJobs(inputs, inputs.token, JOBS_TIMEOUT_MS, fetchFn);

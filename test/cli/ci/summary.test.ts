@@ -68,6 +68,19 @@ describe('summaryTable', () => {
     expect(codeSpan('')).toBe('');
   });
 
+  test('a lone carriage return stays inside the code span', () => {
+    const t = summaryTable(run, [job({ name: 'a\r@org/team' })]);
+    expect(t).not.toContain('\r');
+    expect(t).toContain('| `a @org/team` |');
+    expect(t.split('\n').filter((l) => l.includes('@org/team'))).toHaveLength(1);
+  });
+
+  test('a pipe and a backtick together stay one code span', () => {
+    expect(summaryTable(run, [job({ name: 'pipe+tick `|` @octocat' })])).toContain(
+      '| ``pipe+tick `\\|` @octocat`` |',
+    );
+  });
+
   test('pipes in names do not break the table', () => {
     expect(summaryTable(run, [job({ name: 'a|b' })])).toContain('| `a\\|b` |');
   });

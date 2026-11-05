@@ -414,7 +414,7 @@ jobs:
         uses: bjstabi/otel-html/.github/actions/otel-html-collect@v0
 ```
 
-Setup inputs: `version` (a release such as `0.2.0`, default `latest`), `command` (an executable instead of a download), `job-name` (the job's display name, used for the span id only when the job lookup fails; see above) and `token`. Collect inputs: `name` (default `otel-html-<job>`; matrix legs need one each, or one leg's upload replaces another's) and `path` (default `.otel-html/`).
+Setup inputs: `version` (a release such as `0.2.0`, default `latest`), `command` (an executable instead of a download), `job-name` (the job's display name, used to tell the job apart when the lookup is ambiguous, and for the span id when it fails; see above) and `token`. Collect inputs: `name` (default `otel-html-<job>`; matrix legs need one each, or one leg's upload replaces another's) and `path` (default `.otel-html/`).
 
 #### The publisher
 

@@ -33,7 +33,8 @@ export function codeSpan(text: string): string {
   return `${fence}${pad}${text}${pad}${fence}`;
 }
 
-const cell = (s: string): string => codeSpan(s.replace(/\|/g, '\\|').replace(/\r?\n/g, ' '));
+/** CommonMark ends a line at `\r\n`, `\r` or `\n`, so all three are flattened before the code span. */
+const cell = (s: string): string => codeSpan(s.replace(/\r\n|\r|\n/g, ' ').replace(/\|/g, '\\|'));
 
 /** GitHub-flavoured markdown for `$GITHUB_STEP_SUMMARY`: the run's outcome and one row per job. */
 export function summaryTable(run: ApiRun, jobs: ApiJob[]): string {

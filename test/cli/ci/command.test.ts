@@ -230,6 +230,29 @@ describe('otel-html ci context', () => {
     expect(readFileSync(envFile, 'utf8')).toContain('OTEL_SERVICE_NAME=ci/unit (a)');
   });
 
+  test('an ambiguous job asks for OTEL_HTML_JOB_NAME only when it is unset', async () => {
+    const envFile = join(dir, 'github-env');
+    writeFileSync(envFile, '');
+    const unset = fakeIo(githubEnv(envFile));
+    expect(await runCli(['ci', 'context'], unset.io, deps)).toBe(0);
+    expect(unset.out()).toContain(
+      'could not tell which job this is; using name:build@runner-1 for its span id.',
+    );
+    expect(unset.out()).toContain('set OTEL_HTML_JOB_NAME (or --job-name)');
+    const set = fakeIo(githubEnv(envFile));
+    expect(await runCli(['ci', 'context', '--job-name', 'unit'], set.io, deps)).toBe(0);
+    expect(set.out()).toContain('using name:unit@runner-1 for its span id.');
+    expect(set.out()).not.toContain('OTEL_HTML_JOB_NAME');
+  });
+
+  test('without a token the warning names the name-based span id', async () => {
+    const envFile = join(dir, 'github-env');
+    writeFileSync(envFile, '');
+    const f = fakeIo({ ...githubEnv(envFile), GITHUB_TOKEN: '' });
+    expect(await runCli(['ci', 'context'], f.io, deps)).toBe(0);
+    expect(f.out()).toContain('GITHUB_TOKEN is not set; deriving the span id from the job name and runner');
+  });
+
   test('a missing GITHUB_* variable is a warning, not a failure', async () => {
     const f = fakeIo({});
     expect(await runCli(['ci', 'context'], f.io, deps)).toBe(0);
