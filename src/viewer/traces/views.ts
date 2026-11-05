@@ -186,33 +186,64 @@ export function cssTokenReader(): (name: string) => string {
 }
 
 /**
- * Log-spaced duration bins over the durations of the returned rows (the filtered set when `total` fits the list
- * limit, the leading rows of it otherwise), `[from, to)` with contiguous edges; every row lands in exactly one bin.
+ * Log-spaced duration bin edges (`binCount + 1`, ascending) over the rows' durations. A `range` pins the axis
+ * instead: `range.lo` and `range.hi` become the first and last edge exactly, whatever the rows hold. A `lo` below 1
+ * ns spaces the interior edges from 1 ns (the log needs a positive floor) but the first edge stays `lo`; a `hi` at or
+ * below the floor spaces the interior as if it were the floor plus 1 ns, with the interior clamped into the pinned
+ * ends (degenerate ranges give zero-width bins). With a range the axis exists without rows; no rows and no range give
+ * no edges.
  */
-export function durationBins(rows: readonly { durationNs: number }[], binCount: number): DurationBin[] {
-  if (rows.length === 0) return [];
+export function durationAxis(
+  rows: readonly { durationNs: number }[],
+  binCount: number,
+  range?: { lo?: number; hi?: number },
+): number[] {
   let lo = Number.POSITIVE_INFINITY;
   let hi = 0;
   for (const r of rows) {
     lo = Math.min(lo, r.durationNs);
     hi = Math.max(hi, r.durationNs);
   }
-  const floor = Math.max(1, lo);
-  const top = Math.max(hi, floor) + 1;
+  const given = range?.lo !== undefined || range?.hi !== undefined;
+  if (rows.length === 0 && !given) return [];
+  let first = range?.lo ?? (rows.length === 0 ? 1 : lo);
+  // A `hi` below the rows' minimum drags the unpinned first edge down with it.
+  if (range?.lo === undefined && range?.hi !== undefined) first = Math.min(first, range.hi);
+  const floor = Math.max(1, first);
+  const top = range?.hi !== undefined ? (range.hi > floor ? range.hi : floor + 1) : Math.max(hi, floor) + 1;
+  // Without a range the top edge sits one past the largest duration so that duration is inside its `[from, to)` bin.
   const step = (Math.log(top) - Math.log(floor)) / binCount;
   const edges = Array.from({ length: binCount + 1 }, (_, i) => Math.exp(Math.log(floor) + step * i));
-  edges[0] = Math.min(floor, lo);
-  edges[binCount] = top;
-  const bins = Array.from({ length: binCount }, (_, i) => ({
+  const start = range?.lo ?? Math.min(floor, first);
+  const end = range?.hi ?? top;
+  for (let i = 1; i < binCount; i++) edges[i] = Math.max(start, Math.min(edges[i] ?? start, end));
+  edges[0] = start;
+  edges[binCount] = end;
+  return edges;
+}
+
+/** Counts rows into the `[from, to)` bins between `edges`; a row below the first edge counts in the first bin, one at or above the last in the last. */
+export function binsOnAxis(rows: readonly { durationNs: number }[], edges: readonly number[]): DurationBin[] {
+  const n = edges.length - 1;
+  if (n < 1) return [];
+  const bins = Array.from({ length: n }, (_, i) => ({
     fromNs: edges[i] ?? 0,
-    toNs: edges[i + 1] ?? top,
+    toNs: edges[i + 1] ?? 0,
     count: 0,
   }));
   for (const r of rows) {
-    const d = Math.max(r.durationNs, 1);
-    const i = Math.min(binCount - 1, Math.max(0, Math.floor((Math.log(d) - Math.log(floor)) / step)));
-    const bin = bins[step === 0 ? 0 : i];
+    let i = 0;
+    while (i < n - 1 && r.durationNs >= (edges[i + 1] ?? Number.POSITIVE_INFINITY)) i++;
+    const bin = bins[i];
     if (bin !== undefined) bin.count++;
   }
   return bins;
+}
+
+/**
+ * Log-spaced duration bins over the durations of the returned rows (the filtered set when `total` fits the list
+ * limit, the leading rows of it otherwise), `[from, to)` with contiguous edges; every row lands in exactly one bin.
+ */
+export function durationBins(rows: readonly { durationNs: number }[], binCount: number): DurationBin[] {
+  return binsOnAxis(rows, durationAxis(rows, binCount));
 }

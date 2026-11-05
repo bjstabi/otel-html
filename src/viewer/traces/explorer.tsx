@@ -1,4 +1,4 @@
-import { type JSX, useMemo, useState } from 'react';
+import { type JSX, useMemo, useRef, useState } from 'react';
 import type { Manifest } from '../../format/manifest.js';
 import { parseUnixNanos, type SpanId, type TraceId } from '../../model/ids.js';
 import { Chart } from '../components/chart.js';
@@ -21,7 +21,8 @@ import {
   isSpanRow,
   type OtlpSpanGroup,
 } from '../components/export.js';
-import { FacetPanel } from '../components/facet-panel.js';
+import { DURATION_KEY, FacetPanel } from '../components/facet-panel.js';
+import { ottlToTokens } from '../components/filter-tokens.js';
 import { GroupTable } from '../components/group-table.js';
 import { HistogramCard, SPAN_STATUS_SERIES } from '../components/histogram-card.js';
 import { ResultsTable, type SortState } from '../components/results-table.js';
@@ -45,9 +46,10 @@ import { RedStrip } from './red-strip.js';
 import { TracePanel } from './trace-panel.js';
 import { useSpanQuery } from './use-span-query.js';
 import {
+  binsOnAxis,
   type ChartView,
   cssTokenReader,
-  durationBins,
+  durationAxis,
   GROUPED_VIEWS,
   type Measure,
   resolveCssVars,
@@ -95,6 +97,34 @@ export function ZeroSpans({ manifest }: { manifest: Manifest }): JSX.Element {
       {manifest.totals.logs > 0 && <OpenLogs />}
     </section>
   );
+}
+
+/**
+ * A duration axis for a page opened with a duration filter: the given bounds sit on interior edges, one extra bin
+ * outside each. `DurationFacet.setRange` reads the first and last bin as "no bound" and writes no token for them, so
+ * pinning a bound to an end edge would drop it on the first key press. Yields `binCount + 1` edges when a bound is
+ * given.
+ */
+function paddedAxis(
+  rows: readonly { durationNs: number }[],
+  binCount: number,
+  range: { lo?: number; hi?: number },
+): number[] {
+  const pinned = (range.lo === undefined ? 0 : 1) + (range.hi === undefined ? 0 : 1);
+  const edges = durationAxis(rows, binCount - pinned, range);
+  const first = edges[0];
+  const second = edges[1];
+  if (first === undefined || second === undefined) return edges;
+  const step = second / first;
+  const r = Number.isFinite(step) && step > 1 ? step : 10;
+  const lo = range.lo;
+  const hi = range.hi;
+  const last = edges[edges.length - 1];
+  return [
+    ...(lo === undefined ? [] : [lo / r]),
+    ...edges,
+    ...(hi === undefined || last === undefined ? [] : [last * r]),
+  ];
 }
 
 /** Mockup 01: query bar, mode / group-by / view controls, RED strip, histogram, facets left and results right. */
@@ -233,7 +263,39 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
   }, [result]);
 
   const truncated = result !== null && result.total > result.rows.length;
-  const bins = useMemo(() => durationBins(result?.rows ?? [], DURATION_BIN_COUNT), [result]);
+  // The Duration facet's axis is derived from the current result's rows (the leading rows when the result is
+  // truncated) and kept while a duration filter is set, so the committed range stays addressable; with a URL filter
+  // it comes from those rows plus the padded range. Clearing the filter re-derives it.
+  const axisRef = useRef<readonly number[] | null>(null);
+  const bins = useMemo(() => {
+    const rows = result?.rows ?? [];
+    const tokens = sel.condition === null ? null : ottlToTokens(sel.condition);
+    const bounds = (tokens ?? []).filter((t) => t.key === DURATION_KEY && typeof t.value === 'number');
+    const num = (op: '>=' | '<='): number | undefined => {
+      const v = bounds.find((t) => t.op === op)?.value;
+      return typeof v === 'number' ? v : undefined;
+    };
+    let axis: readonly number[];
+    if (bounds.length === 0) {
+      axis = durationAxis(rows, DURATION_BIN_COUNT);
+      axisRef.current = axis.length === 0 ? null : axis;
+    } else if (axisRef.current !== null) {
+      // A hand-typed condition moving the bounds outside the stored axis keeps the old axis (accepted by the spec).
+      axis = axisRef.current;
+    } else if (rows.length === 0) {
+      axis = []; // nothing to anchor an axis on yet (loading, or the filter matched nothing): keep waiting
+    } else {
+      const lo = num('>=');
+      const hi = num('<=');
+      axis = paddedAxis(rows, DURATION_BIN_COUNT, {
+        ...(lo === undefined ? {} : { lo }),
+        ...(hi === undefined || (lo !== undefined && hi < lo) ? {} : { hi }),
+      });
+      axisRef.current = axis.length === 0 ? null : axis;
+    }
+    return binsOnAxis(rows, axis);
+    // axisRef is a ref (stable); the memo is the one place it is written, so the axis survives re-derivations.
+  }, [result, sel.condition]);
 
   return (
     <PageChrome

@@ -130,6 +130,20 @@ describe('FacetPanel', () => {
     );
   });
 
+  test('a committed value inside a bin selects that bin', () => {
+    const bins = [
+      { fromNs: 0, toNs: 1_000_000, count: 5 },
+      { fromNs: 1_000_000, toNs: 10_000_000, count: 3 },
+      { fromNs: 10_000_000, toNs: 100_000_000, count: 1 },
+    ];
+    setup(
+      'span.end_time_unix_nano - span.start_time_unix_nano >= 5000000 and span.end_time_unix_nano - span.start_time_unix_nano <= 50000000',
+      { durationBins: bins },
+    );
+    expect(screen.getByRole('slider', { name: 'Minimum duration' }).getAttribute('aria-valuenow')).toBe('1');
+    expect(screen.getByRole('slider', { name: 'Maximum duration' }).getAttribute('aria-valuenow')).toBe('2');
+  });
+
   test('search finds values beyond the top 8 and keeps counts honest', async () => {
     const user = userEvent.setup();
     const f = new FacetCounts(100, 50, ['service.name']);

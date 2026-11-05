@@ -15,6 +15,8 @@ import {
 import type { SpanQueryResult, SpanRow } from '../../src/viewer/data/span-query.js';
 import { createColorAssigner } from '../../src/viewer/theme/palette.js';
 import {
+  binsOnAxis,
+  durationAxis,
   durationBins,
   GROUPED_VIEWS,
   groupSlices,
@@ -167,6 +169,70 @@ describe('durationBins', () => {
     expect(durationBins([], 4)).toEqual([]);
     const one = durationBins([row(7), row(7)], 4);
     expect(one.reduce((a, b) => a + b.count, 0)).toBe(2);
+  });
+
+  test('durationAxis with a range puts lo and hi on the first and last edge exactly', () => {
+    const edges = durationAxis([2e6, 5e6, 9e6].map(row), 24, { lo: 1e6, hi: 1e7 });
+    expect(edges).toHaveLength(25);
+    expect(edges[0]).toBe(1e6);
+    expect(edges.at(-1)).toBe(1e7);
+    for (let i = 1; i < edges.length; i++) expect(edges[i]).toBeGreaterThan(edges[i - 1] ?? Number.NaN);
+  });
+
+  test('durationAxis pins a degenerate range exactly and stays non-decreasing', () => {
+    for (const range of [
+      { lo: 5, hi: 5 },
+      { lo: 0.5, hi: 1 },
+    ]) {
+      const edges = durationAxis([2e6].map(row), 24, range);
+      expect(edges).toHaveLength(25);
+      expect(edges[0]).toBe(range.lo);
+      expect(edges.at(-1)).toBe(range.hi);
+      for (let i = 1; i < edges.length; i++)
+        expect(edges[i]).toBeGreaterThanOrEqual(edges[i - 1] ?? Number.NaN);
+    }
+    const below = durationAxis([2e6].map(row), 24, { hi: 1e3 });
+    expect(below.at(-1)).toBe(1e3);
+    for (let i = 1; i < below.length; i++)
+      expect(below[i]).toBeGreaterThanOrEqual(below[i - 1] ?? Number.NaN);
+  });
+
+  test('durationAxis with a range exists without rows', () => {
+    const hiOnly = durationAxis([], 24, { hi: 1e6 });
+    expect(hiOnly).toHaveLength(25);
+    expect(hiOnly.at(-1)).toBe(1e6);
+    const loOnly = durationAxis([], 24, { lo: 5e5 });
+    expect(loOnly).toHaveLength(25);
+    expect(loOnly[0]).toBe(5e5);
+    const both = durationAxis([], 24, { lo: 1e3, hi: 1e6 });
+    expect(both).toHaveLength(25);
+    expect([both[0], both.at(-1)]).toEqual([1e3, 1e6]);
+  });
+
+  test('durationAxis keeps a sub-nanosecond lo as the first edge and spaces the interior from 1 ns', () => {
+    const edges = durationAxis([row(50)], 4, { lo: 0.5, hi: 1e4 });
+    expect(edges[0]).toBe(0.5);
+    expect(edges[1]).toBeGreaterThan(1);
+    expect(edges.at(-1)).toBe(1e4);
+  });
+
+  test('binsOnAxis puts a duration equal to an edge in the upper bin', () => {
+    const bins = binsOnAxis([row(10), row(100)], [0, 10, 100, 1000]);
+    expect(bins.map((b) => b.count)).toEqual([0, 1, 1]);
+  });
+
+  test('binsOnAxis counts rows into given edges and clamps outliers', () => {
+    const bins = binsOnAxis([5, 50, 500, -1].map(row), [0, 10, 100]);
+    expect(bins).toEqual([
+      { fromNs: 0, toNs: 10, count: 2 },
+      { fromNs: 10, toNs: 100, count: 2 },
+    ]);
+  });
+
+  test('durationBins equals binsOnAxis over durationAxis', () => {
+    const rows = [1, 10, 100, 1000, 1000, 5000].map(row);
+    expect(durationBins(rows, 4)).toEqual(binsOnAxis(rows, durationAxis(rows, 4)));
+    expect(durationAxis([], 4)).toEqual([]);
   });
 });
 
