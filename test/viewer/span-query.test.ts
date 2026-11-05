@@ -12,6 +12,7 @@ import {
   querySpanEntries,
   type SpanEntry,
   type SpanQuery,
+  SpanQueryRun,
   type SpanRow,
   toEntries,
 } from '../../src/viewer/data/span-query.js';
@@ -119,6 +120,53 @@ describe('querySpanEntries', () => {
       expect.objectContaining({ name: 'AbortError' }),
     );
     expect(seen).toBeLessThan(10_000);
+  });
+});
+
+describe('SpanQueryRun row buffer', () => {
+  const keyOf: Record<string, (r: SpanRow) => number | string> = {
+    duration: (r) => r.durationNs,
+    name: (r) => r.span.name,
+    start: (r) => r.span.start,
+  };
+
+  test.each([0, 1, 7, 100, 5000])('limit %i lists the same rows as a full sort', (limit) => {
+    const entries = synthetic(20_000);
+    const rows = entries.map((e) => e.row);
+    for (const [column, dir] of [
+      ['duration', 'desc'],
+      ['duration', 'asc'],
+      ['name', 'asc'],
+      ['start', 'desc'],
+    ] as const) {
+      const key = keyOf[column] as (r: SpanRow) => number | string;
+      const sign = dir === 'asc' ? 1 : -1;
+      const expected = [...rows]
+        .sort((a, b) => {
+          const ka = key(a);
+          const kb = key(b);
+          const c = ka < kb ? -1 : ka > kb ? 1 : 0;
+          return sign * c || a.span.start - b.span.start;
+        })
+        .slice(0, limit);
+      const r = querySpanEntries(entries, query({ sort: { column, dir }, limit }));
+      expect(r.rows).toEqual(expected);
+      expect(r.total).toBe(20_000);
+    }
+  });
+
+  test('holds at most limit plus the compaction slack however many spans it sees', () => {
+    const run = new SpanQueryRun(query({ limit: 1 }));
+    for (const e of synthetic(10_000)) run.visit(e);
+    expect(run.heldRows).toBeLessThanOrEqual(1 + 1024);
+    expect(run.units).toBe(10_000);
+  });
+
+  test('traces mode holds no matched rows', () => {
+    const run = new SpanQueryRun(query({ mode: 'traces', sort: { column: 'start', dir: 'asc' } }));
+    for (const e of synthetic(1000)) run.visit(e);
+    expect(run.heldRows).toBe(0);
+    expect(run.finish(null).total).toBe(1000);
   });
 });
 

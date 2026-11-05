@@ -197,7 +197,8 @@ function traceRow(traceId: TraceId, rows: readonly SpanRow[], facts?: TraceFacts
 /**
  * One filtered pass over span entries, shared by the eager (all entries) and windowed (chunk by chunk)
  * strategies. Feed every candidate entry to `visit`, then call `finish`. Holds no state outside itself, so an
- * abandoned or aborted run leaves nothing behind.
+ * abandoned or aborted run leaves nothing behind. It keeps the matched rows only up to a bound: in spans mode the
+ * best `limit` so far plus a little slack, in traces mode none (the per-trace rows are what `finish` reads).
  */
 export class SpanQueryRun {
   readonly #q: SpanQuery;
@@ -205,13 +206,16 @@ export class SpanQueryRun {
   readonly #condition: CompiledCondition<'span'> | null;
   readonly #rollups = new SpanRollups(QUERY_FACET_CAPS);
   readonly #groups: GroupDurations | null;
-  readonly #matched: SpanEntry[] = [];
+  /** Spans mode: the matched rows, compacted to the best `limit` whenever the buffer reaches `#bound`. */
+  #rows: SpanRow[] = [];
+  readonly #bound: number;
   readonly #traces = new Map<TraceId, { rows: SpanRow[]; hit: boolean }>();
-  readonly #compare: Compare | null;
+  readonly #order: ((a: SpanRow, b: SpanRow) => number) | null;
   readonly #traceCompare: ((a: TraceRow, b: TraceRow) => number) | null;
   readonly #window: TimeWindow | null;
   readonly #ticker: AbortTicker;
   #hitTraces = 0;
+  #count = 0;
 
   constructor(q: SpanQuery, signal?: AbortSignal) {
     if (q.groupBy !== null) {
@@ -229,14 +233,27 @@ export class SpanQueryRun {
     this.#signal = signal;
     this.#ticker = new AbortTicker(signal);
     this.#condition = q.condition === null ? null : compileCondition(q.condition, 'span');
-    this.#compare = q.mode === 'spans' ? sortFor(SPAN_SORTS, q.sort.column, q.mode) : null;
+    this.#order =
+      q.mode === 'spans'
+        ? ordered(
+            q.sort.dir,
+            sortFor(SPAN_SORTS, q.sort.column, q.mode),
+            (a, b) => a.span.start - b.span.start,
+          )
+        : null;
+    this.#bound = q.limit + Math.max(q.limit, 1024);
     this.#traceCompare = q.mode === 'traces' ? sortFor(TRACE_SORTS, q.sort.column, q.mode) : null;
     throwIfAborted(signal);
   }
 
   /** What a scan's cap counts: matched spans, or matched traces in traces mode. */
   get units(): number {
-    return this.#q.mode === 'traces' ? this.#hitTraces : this.#matched.length;
+    return this.#q.mode === 'traces' ? this.#hitTraces : this.#count;
+  }
+
+  /** @internal for tests: how many matched rows the run holds right now. */
+  get heldRows(): number {
+    return this.#rows.length;
   }
 
   /** Ids of traces with a matching span (traces mode), in first-seen order. */
@@ -266,7 +283,11 @@ export class SpanQueryRun {
     if (window !== null && (span.end < window.start || span.start > window.end)) return;
     if (this.#condition !== null && !this.#condition.test(e.target)) return;
     if (this.#q.text !== '' && !matchesText(this.#q.text, spanTextFields(e.target))) return;
-    this.#matched.push(e);
+    this.#count++;
+    if (this.#order !== null) {
+      this.#rows.push(e.row);
+      if (this.#rows.length >= this.#bound) this.#rows = topK(this.#rows, this.#q.limit, this.#order);
+    }
     if (group !== undefined) {
       if (!group.hit) this.#hitTraces++;
       group.hit = true;
@@ -285,14 +306,9 @@ export class SpanQueryRun {
     throwIfAborted(this.#signal);
     let rows: (SpanRow | TraceRow)[];
     let total: number;
-    if (this.#compare !== null) {
-      const compare = this.#compare;
-      rows = topK(
-        this.#matched.map((e) => e.row),
-        this.#q.limit,
-        ordered(this.#q.sort.dir, compare, (a, b) => a.span.start - b.span.start),
-      );
-      total = this.#matched.length;
+    if (this.#order !== null) {
+      rows = topK(this.#rows, this.#q.limit, this.#order);
+      total = this.#count;
     } else {
       const compare = this.#traceCompare;
       const hits = [...this.#traces]
