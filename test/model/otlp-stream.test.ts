@@ -135,6 +135,21 @@ describe('streamOtlpJson', () => {
     );
   });
 
+  test('snake_case top-level keys are read in both modes', () => {
+    const body =
+      '{"resource_logs":[{"scope_logs":[{"log_records":[{"time_unix_nano":1700000000000000123}]}]}]}';
+    for (const lines of [true, false]) {
+      const reqs = [...streamOtlpJson(body, 'a.json', body.length, lines)];
+      expect(reqs.map((r) => r.signal)).toEqual(['logs']);
+      const r = reqs[0];
+      expect(
+        r?.signal === 'logs' && r.request.resourceLogs[0]?.scopeLogs[0]?.logRecords[0]?.timeUnixNano,
+      ).toBe(1700000000000000123n);
+    }
+    const two = '{"resource_spans":[{}],"resource_metrics":[{}]}';
+    expect([...streamOtlpJson(two, 'a.json', 7)].map((r) => r.signal)).toEqual(['traces', 'metrics']);
+  });
+
   test('an empty signal array yields one empty request, like parseOtlpJson', () => {
     expect([...streamOtlpJson('{"resourceSpans":[ ]}', 'a.json')]).toEqual(
       parseOtlpJson('{"resourceSpans":[]}', 'a.json'),
@@ -220,6 +235,28 @@ describe('several documents (JSON lines)', () => {
     expect(() => [...streamOtlpJson('{"resourceSpans":[]}\n\n{}', 'a.json')]).toThrowError(
       /^a\.json:3: expected at least one of/,
     );
+  });
+
+  test('allowEmpty accepts a document with no signal as empty, in both modes and orders', () => {
+    const doc = JSON.stringify(traceRequest([span()]));
+    for (const lines of [true, false]) {
+      for (const text of [`${doc}\n{}`, `{}\n${doc}`]) {
+        const s = new OtlpJsonStream('in.json', { lines, allowEmpty: true });
+        const out = s.push(text);
+        s.end();
+        expect(out.map((r) => r.signal)).toEqual(['traces']);
+      }
+      const e = new OtlpJsonStream('in.json', { lines, allowEmpty: true });
+      expect(e.push('{}')).toEqual([]);
+      expect(() => e.end()).not.toThrow();
+    }
+  });
+
+  test('without allowEmpty a no-signal document still throws', () => {
+    for (const lines of [true, false]) {
+      const s = new OtlpJsonStream('in.json', { lines });
+      expect(() => s.push('{}')).toThrowError(/expected at least one of/);
+    }
   });
 
   test('an input without documents is valid only as JSON lines', () => {

@@ -31,12 +31,22 @@ export type OtlpRequest = (
 
 export type OtlpSignal = OtlpRequest['signal'];
 
+/** `timeUnixNano` to `time_unix_nano`: the proto field name, which protobuf-es also accepts in JSON. */
+function snakeCase(name: string): string {
+  return name.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
+}
+
+/** The lowerCamelCase names and their snake_case spellings, which OTLP JSON accepts too. */
+function withSnakeCase(names: readonly string[]): ReadonlySet<string> {
+  return new Set(names.flatMap((n) => [n, snakeCase(n)]));
+}
+
 /**
  * OTLP-JSON field names whose protobuf type is a 64-bit integer (or a repeated one). OTLP JSON allows these
  * as numbers or strings; numbers beyond 2^53 are only exact if read from the source text, so they are
  * rewritten to strings before protobuf-es sees them.
  */
-const INT64_FIELDS: ReadonlySet<string> = new Set([
+const INT64_FIELDS: ReadonlySet<string> = withSnakeCase([
   'timeUnixNano',
   'startTimeUnixNano',
   'endTimeUnixNano',
@@ -49,11 +59,15 @@ const INT64_FIELDS: ReadonlySet<string> = new Set([
 ]);
 
 /** Fields holding hex-encoded ids in OTLP JSON (protobuf-es wants base64 for bytes). */
-const ID_FIELD_LENGTHS: ReadonlyMap<string, number> = new Map([
-  ['traceId', 32],
-  ['spanId', 16],
-  ['parentSpanId', 16],
-]);
+const ID_FIELD_LENGTHS: ReadonlyMap<string, number> = new Map(
+  (
+    [
+      ['traceId', 32],
+      ['spanId', 16],
+      ['parentSpanId', 16],
+    ] as const
+  ).flatMap(([name, len]) => [[name, len] as const, [snakeCase(name), len] as const]),
+);
 
 export interface SignalEntry {
   readonly signal: OtlpSignal;
@@ -69,7 +83,7 @@ const SIGNALS: readonly SignalEntry[] = [
 
 /** The signal whose resource array a top-level OTLP-JSON key holds, if any. */
 export function signalEntry(key: string): SignalEntry | undefined {
-  return SIGNALS.find((s) => s.key === key);
+  return SIGNALS.find((s) => s.key === key || snakeCase(s.key) === key);
 }
 
 type RevivedContext = { readonly source?: string };
@@ -225,12 +239,14 @@ export function parseOtlpObject(root: unknown, source: string): OtlpRequest[] {
     });
   }
   const out: OtlpRequest[] = [];
+  const entries = new Map(Object.entries(root));
   for (const entry of SIGNALS) {
-    if (!Object.hasOwn(root, entry.key)) continue;
-    const entries = new Map(Object.entries(root));
-    const raw = entries.get(entry.key);
-    if (!Array.isArray(raw)) fail(source, entry.key, 'array', describe(raw));
-    out.push(requestOf(entry, raw, 0, source));
+    for (const key of [entry.key, snakeCase(entry.key)]) {
+      if (!Object.hasOwn(root, key)) continue;
+      const raw = entries.get(key);
+      if (!Array.isArray(raw)) fail(source, key, 'array', describe(raw));
+      out.push(requestOf(entry, raw, 0, source));
+    }
   }
   if (out.length === 0) throw noSignal(source);
   return out;

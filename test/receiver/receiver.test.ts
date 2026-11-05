@@ -196,6 +196,26 @@ describe('createReceiver', () => {
     expect(wrong.message).toMatch(/expected resourceSpans/);
   });
 
+  test('keeps the entries of the other documents when one document has no signal', async () => {
+    const doc = JSON.stringify({ resourceSpans: resourceSpansOf(spansRequest(1, 0, 0)) });
+    for (const body of [`${doc} {}`, `{} ${doc}`]) {
+      const w = createTestWriter();
+      const { receiver } = await realReceiver(w);
+      expect(await receive(receiver, 'traces', encode(body), 'json', 'otlp/http')).toEqual({
+        accepted: 1,
+        rejected: 0,
+        errorMessage: null,
+      });
+    }
+  });
+
+  test('a whitespace-only body is a refusal', async () => {
+    const w = createTestWriter();
+    const { receiver } = await realReceiver(w);
+    const e = await failure(receive(receiver, 'traces', encode('  \n'), 'json', 'otlp/http'));
+    expect(e.message).toMatch(/no JSON object/);
+  });
+
   test('[empty, bad] is invalid-otlp, not a partial success', async () => {
     const w = createTestWriter();
     const { receiver } = await realReceiver(w);

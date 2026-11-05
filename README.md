@@ -44,7 +44,7 @@ otel-html convert fixtures/small.otlp.json -o ./report
 
 ### `convert [files...]`
 
-Turns OTLP files into a report. Inputs can be OTLP JSON, JSON lines (such as Collector file-exporter output) or protobuf.
+Turns OTLP files into a report. Inputs can be OTLP JSON (field names in lowerCamelCase or snake_case), JSON lines (such as Collector file-exporter output) or protobuf.
 
 | Option | Meaning |
 |---|---|

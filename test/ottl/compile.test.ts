@@ -81,17 +81,38 @@ describe('compile-time failures', () => {
     '(?<!a)b',
     '[^](a+)+$',
     '[](a+)+$',
+    '(a+){2,20}',
+    '(a{1,64}){1,64}',
+    '(a+){5}',
+    '((a+)b){5}',
+    '(a{1,2}){5}',
   ])('rejects backtracking-prone or non-RE2 regex %s', (p) => {
     expect(() => compileCondition(`IsMatch(name, ${JSON.stringify(p)})`, 'span')).toThrowError(
       /invalid-?|regular expression/i,
     );
   });
-  test.each(['^GET /api/[a-z]+$', '(ab)+c', '(a+)?b', '(a|b){2,5}', '[(+*]+', '\\(a+\\)+', '(?i)get'])(
-    'accepts %s',
-    (p) => {
-      expect(() => compileCondition(`IsMatch(name, ${JSON.stringify(p)})`, 'span')).not.toThrow();
-    },
-  );
+  test.each([
+    '^GET /api/[a-z]+$',
+    '(ab)+c',
+    '(a+)?b',
+    '(a|b){2,5}',
+    '[(+*]+',
+    '\\(a+\\)+',
+    '(?i)get',
+    '(\\d+\\.){3}\\d+',
+    '(a+){4}',
+    '(ab){2,5}',
+    '(a?){20}',
+    '([0-9a-f]{2}:){5}[0-9a-f]{2}',
+    '(a{2}){5}',
+  ])('accepts %s', (p) => {
+    expect(() => compileCondition(`IsMatch(name, ${JSON.stringify(p)})`, 'span')).not.toThrow();
+  });
+  test('the nested-repetition error names the rule and the fix', () => {
+    const run = (): unknown => compileCondition('IsMatch(name, "(a+){2,20}")', 'span');
+    expect(run).toThrowError(/nested repetition/);
+    expect(run).toThrowError(/\[a-z\]\{1,64\}/);
+  });
   test('over-long regex', () => {
     expect(() => compileCondition(`IsMatch(name, "${'a'.repeat(2000)}")`, 'span')).toThrowError(/too long/);
   });
