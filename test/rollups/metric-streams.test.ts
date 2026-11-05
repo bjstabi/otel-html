@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import type { RelNanos } from '../../src/model/ids.js';
 import type { MetricPointRecord, ResourceRef, ScopeRef } from '../../src/model/records.js';
-import { foldedSeriesKey, StreamNormalizer } from '../../src/rollups/metric-streams.js';
+import { mergeAgg } from '../../src/rollups/metric-agg.js';
+import { diffSummary, foldedSeriesKey, StreamNormalizer } from '../../src/rollups/metric-streams.js';
 
 const rel = (n: number): RelNanos => n as RelNanos;
 
@@ -254,6 +255,76 @@ describe('StreamNormalizer', () => {
         ],
         lastTime: 9,
       },
+    });
+  });
+
+  describe('cumulative summaries', () => {
+    const summ = (count: number, total: number, time: number, o: Partial<MetricPointRecord> = {}) =>
+      pt({ type: 'summary', time: rel(time), point: { count: String(count), sum: total }, ...o });
+    const cs = (n: ReturnType<StreamNormalizer['normalize']>) => {
+      if (n.kind !== 'ok' || n.agg.k !== 'summary')
+        throw new Error(`not an ok summary: ${JSON.stringify(n)}`);
+      return { count: n.agg.count, sum: n.agg.sum, reset: n.reset };
+    };
+
+    it('differences cumulative summaries and flags a reset', () => {
+      const s = new StreamNormalizer();
+      const out = [
+        summ(1000, 10, 1),
+        summ(1010, 11, 2),
+        summ(1020, 12, 3),
+        summ(1030, 13, 4),
+        summ(5, 1, 5),
+      ].map((p) => cs(s.normalize(0, p)));
+      expect(out).toEqual([
+        { count: 1000, sum: 10, reset: false },
+        { count: 10, sum: 1, reset: false },
+        { count: 10, sum: 1, reset: false },
+        { count: 10, sum: 1, reset: false },
+        { count: 5, sum: 1, reset: true },
+      ]);
+    });
+
+    it('a summary sum that falls while count grows is a delta, not a reset', () => {
+      const s = new StreamNormalizer();
+      s.normalize(0, summ(10, 5, 1));
+      expect(cs(s.normalize(0, summ(20, 3, 2)))).toEqual({ count: 10, sum: -2, reset: false });
+    });
+
+    it('a summary with no start time starts from a zero baseline', () => {
+      const s = new StreamNormalizer();
+      expect(cs(s.normalize(0, summ(7, 3, 1, { start: null })))).toEqual({ count: 0, sum: 0, reset: false });
+      expect(cs(s.normalize(0, summ(9, 4, 2, { start: null })))).toEqual({ count: 2, sum: 1, reset: false });
+    });
+
+    it('continues a summary stream after toJSON and from', () => {
+      const s = new StreamNormalizer();
+      s.normalize(0, summ(10, 5, 1));
+      const copy = StreamNormalizer.from(JSON.parse(JSON.stringify(s.toJSON())), 'streams');
+      expect(cs(copy.normalize(0, summ(15, 7, 2)))).toEqual({ count: 5, sum: 2, reset: false });
+      expect(copy.normalize(0, summ(16, 8, 1))).toEqual({ kind: 'skip', reason: 'out-of-order' });
+    });
+
+    it('diffSummary takes the current quantiles and is null only when the count falls', () => {
+      const agg = (count: number, total: number, v: number) => ({
+        k: 'summary' as const,
+        count,
+        sum: total,
+        quantiles: [{ q: 0.5, v }],
+        lastTime: count,
+      });
+      expect(diffSummary(agg(30, 9, 2), agg(20, 4, 1))).toEqual({ ...agg(10, 5, 2), lastTime: 30 });
+      expect(diffSummary(agg(19, 9, 2), agg(20, 4, 1))).toBeNull();
+    });
+
+    it('merged summary deltas add', () => {
+      const s = new StreamNormalizer();
+      s.normalize(0, summ(100, 10, 1));
+      const a = s.normalize(0, summ(110, 11, 2));
+      const b = s.normalize(0, summ(120, 12, 3));
+      if (a.kind !== 'ok' || b.kind !== 'ok') throw new Error('expected ok');
+      const m = mergeAgg(a.agg, b.agg, 'p');
+      expect(m.k === 'summary' && [m.count, m.sum]).toEqual([20, 2]);
     });
   });
 
