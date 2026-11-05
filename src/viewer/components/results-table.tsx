@@ -88,6 +88,10 @@ export function ResultsTable<R>(props: ResultsTableProps<R>): JSX.Element {
     observeElementRect: rectWithFallback(height),
   });
 
+  // TanStack Virtual's measurement memo does not key on `estimateSize`, so a new row height needs a re-measure.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-measure only when the row height changes
+  useEffect(() => virtual.measure(), [rowHeight]);
+
   const latest = useRef({ rows, selectedId, props });
   latest.current = { rows, selectedId, props };
 

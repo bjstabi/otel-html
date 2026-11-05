@@ -144,6 +144,29 @@ describe('ResultsTable', () => {
     expect(screen.getByText('GET /')).toBeTruthy();
   });
 
+  test('a rowHeight change re-measures: rows move to the new pitch and the total follows', () => {
+    const props = {
+      rows,
+      columns: SPAN_COLUMNS_UI,
+      rowId,
+      sort: null,
+      onSort: vi.fn(),
+      onRowClick: vi.fn(),
+      selectedId: null,
+      epoch: parseUnixNanos('0', 'epoch'),
+    };
+    const { rerender } = render(<ResultsTable {...props} rowHeight={36} />);
+    rerender(<ResultsTable {...props} rowHeight={76} />);
+    const total = document.querySelector<HTMLElement>('[role="rowgroup"] > div.relative');
+    expect(total?.style.height).toBe(`${rows.length * 76}px`);
+    const body = screen.getAllByRole('row').slice(1);
+    expect(body.map((r) => r.style.transform)).toEqual([
+      'translateY(0px)',
+      'translateY(76px)',
+      'translateY(152px)',
+    ]);
+  });
+
   test('rowHeight sizes every row and the virtualizer total', () => {
     mount({ rowHeight: 76 });
     const total = document.querySelector<HTMLElement>('[role="rowgroup"] > div.relative');
