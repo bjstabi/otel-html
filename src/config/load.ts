@@ -15,7 +15,9 @@ export async function loadConfigFile(fs: FileSystem, path: string): Promise<unkn
   }
   try {
     // YAML 1.2 is a superset of JSON, so one parser handles both.
-    return parse(text) as unknown;
+    // An empty or comment-only document parses to null; that is an empty config.
+    const doc = parse(text) as unknown;
+    return doc === null ? {} : doc;
   } catch (e) {
     throw new OtelHtmlError('invalid-config', {
       path,
