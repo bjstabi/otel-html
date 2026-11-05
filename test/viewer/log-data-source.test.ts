@@ -634,3 +634,33 @@ describe('eager and windowed agree', () => {
     expect(w.total).toBe(e.total);
   });
 });
+
+describe('facet caps and the log rollups', () => {
+  const ERRORS = 'log.severity_number >= SEVERITY_NUMBER_ERROR';
+  let capped: Fixture;
+  beforeAll(async () => {
+    capped = await buildLogReport({ writer: { facetValueCap: 2, facetKeyCap: 7 } });
+  });
+
+  test.each([
+    ['windowed', 1],
+    ['eager', SMALL],
+  ])('a filtered %s query folds at the report caps', async (strategy, budget) => {
+    const ds = await createDataSource(createScriptedLoader(capped.files), capped.manifest, budget);
+    expect(ds.logStrategy).toBe(strategy);
+    const r = await ds.queryLogs(query({ condition: ERRORS }));
+    expect([r.facets.valueCap, r.facets.keyCap]).toEqual([2, 7]);
+  });
+
+  test('a failed rollup load rejects the query, and a later query retries it', async () => {
+    const files = new Map(capped.files);
+    const rollups = files.get('data/rollups/logs.js');
+    files.delete('data/rollups/logs.js');
+    const ds = await createDataSource(createScriptedLoader(files), capped.manifest, 1);
+    await expect(ds.queryLogs(query({ condition: ERRORS }))).rejects.toThrow(/logs\.js/);
+    if (rollups === undefined) throw new Error('no rollup');
+    files.set('data/rollups/logs.js', rollups);
+    const r = await ds.queryLogs(query({ condition: ERRORS }));
+    expect(r.facets.valueCap).toBe(2);
+  });
+});

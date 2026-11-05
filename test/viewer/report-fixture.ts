@@ -173,9 +173,9 @@ const TICKS_PER_CHUNK = 2;
  * +50 ns. Chunk 2 adds two `LOG_TRACE` logs on its root span and one on span `deadbeefdeadbeef` (not in the trace);
  * chunk 2 also has a log carrying `LOG_TRACE_ROOT_SPAN` but no trace id; chunk 3 adds the `ORPHAN_LOG_TRACE` log.
  */
-export async function buildLogReport(): Promise<Fixture> {
+export async function buildLogReport(config: ConfigInput = {}): Promise<Fixture> {
   const w = createTestWriter();
-  const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'replace' });
+  const session = await openSession(w.deps, { out: OUT, config: testConfig(config), mode: 'replace' });
   await session.add(otlp(traceRequest(0, new Set())), 'spans');
   await session.flush();
   const base = BigInt(EPOCH_NS);

@@ -198,6 +198,17 @@ describe('facet caps come from the report', () => {
   });
 });
 
+describe('measure groups follow the report cap', () => {
+  test('a measure over more distinct values than facetValueCap drops the rest', async () => {
+    const capped = await buildReport(6, [], { writer: { facetValueCap: 1 } });
+    const ds = await createDataSource(createScriptedLoader(capped.files), capped.manifest, 1);
+    const r = await ds.querySpans(query({ measureBy: 'service.name', scanAll: true }));
+    expect(r.groups?.cap).toBe(1);
+    expect(r.groups?.size).toBe(1);
+    expect(r.groups?.dropped).toBeGreaterThan(0);
+  });
+});
+
 describe('windowed strategy', () => {
   async function windowed(files = six.files): Promise<{
     ds: Awaited<ReturnType<typeof createDataSource>>;
