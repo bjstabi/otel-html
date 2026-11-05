@@ -489,13 +489,15 @@ export async function runMetricQueryAtWidth(
 
 /**
  * Per series, the sum of its counter deltas before `cut` (the first charted bucket's start, a multiple of the
- * ladder level's width): the coarsest level's buckets up to its last boundary before `cut`, then the ladder level's
- * from that boundary to `cut`. Both widths are ladder widths, so the boundary and `cut` fall on whole buckets.
+ * chart width): the coarsest level's buckets up to its last boundary before `cut`, then the ladder level's from
+ * that boundary to `cut`. The boundary is a ladder multiple, but `cut` is a multiple of the chart width, which
+ * need not be a ladder width, so it can fall inside a ladder bucket. That straddling bucket counts in the
+ * baseline (`coarsenedTo` assigns it to a bucket before the window), hence the ceiling.
  */
 function seriesBaselines(ladder: LevelData, coarse: LevelData, cut: number): Map<number, number> {
   const coarseTo = Math.floor(cut / coarse.widthNs);
   const fineFrom = Math.round((coarseTo * coarse.widthNs) / ladder.widthNs);
-  const fineTo = Math.round(cut / ladder.widthNs);
+  const fineTo = Math.ceil(cut / ladder.widthNs);
   const out = new Map<number, number>();
   const add = (level: LevelData, from: number, to: number): void => {
     for (const [id, s] of level.series) {

@@ -795,6 +795,43 @@ describe('review fixes', () => {
     expect(r.series.map((x) => [x.label, values({ series: [x] })])).toEqual([['y', [13]]]);
   });
 
+  test('a counter running total at a rollup width counts the ladder bucket straddling the cut (#145)', async () => {
+    const fine = 8.192 * S;
+    // One counter series, delta 1 in every 8.192 s bucket 0..21 (0 s .. 180.2 s).
+    const specs = [{ buckets: Array.from({ length: 22 }, (_, i): [number, BucketAgg] => [i, counter(1)]) }];
+    // Coarsest level (65.536 s): its first boundary is past the cut, so the baseline comes from level 1 alone.
+    const coarse = [
+      {
+        buckets: [
+          [0, counter(8)],
+          [1, counter(8)],
+          [2, counter(6)],
+        ] as [number, BucketAgg][],
+      },
+    ];
+    const m = withLevels(metric(ctr, specs, fine, 1), [
+      levelData(specs, fine, 1),
+      levelData(coarse, 65.536 * S, 2),
+    ]);
+    const r = await runMetricQueryAtWidth(m, query({ show: 'sum' }), { start: 70 * S, end: 179 * S }, 60 * S);
+    expect(r.widthNs).toBe(60 * S);
+    // Baseline: buckets 0..7 (8, the straddling bucket 7 included). 60-120 s holds buckets 8..14 (7), 120-180 s 15..21 (7).
+    expect(r.series[0]?.points).toEqual([
+      [60 * S, 15],
+      [120 * S, 22],
+    ]);
+    // A window from 130 s has cut = 120e9, so the baseline spans both levels: coarse bucket 0
+    // (65.536 s, delta 8) then fine buckets 8..14 (7; fineTo = ceil(120 / 8.192) = 15). The total at 120-180 s is
+    // still 22, the plain sum of every bucket before 180 s.
+    const late = await runMetricQueryAtWidth(
+      m,
+      query({ show: 'sum' }),
+      { start: 130 * S, end: 179 * S },
+      60 * S,
+    );
+    expect(late.series[0]?.points).toEqual([[120 * S, 22]]);
+  });
+
   test('a formula over a rolled-up operand re-runs the other at the rollup width', async () => {
     const g = metric(entry({ type: 'gauge' }), [
       { buckets: Array.from({ length: 12 }, (_, i): [number, BucketAgg] => [i, gauge(i + 1)]) },
