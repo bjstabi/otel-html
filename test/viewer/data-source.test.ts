@@ -265,15 +265,27 @@ describe('windowed strategy', () => {
   });
 
   test('a run that matches exactly listCap units over every chunk is exact', async () => {
-    const late = await buildReport(6, [4, 5]);
+    const late = await buildReport(1);
     const manifest = {
       ...late.manifest,
       config: { ...late.manifest.config, viewer: { ...late.manifest.config.viewer, listCap: 2 } },
     };
     const ds = await createDataSource(createScriptedLoader(late.files), manifest, 1);
-    const r = await ds.querySpans(query({ condition: ERRORS }));
+    const r = await ds.querySpans(query({ condition: 'name == "db.query"' }));
     expect(r.total).toBe(2);
     expect(r.partial).toBeNull();
+  });
+
+  test('a cap reached inside the last chunk still marks the scan partial', async () => {
+    const one = await buildReport(1);
+    expect(one.manifest.totals.spans).toBeGreaterThan(2);
+    const manifest = {
+      ...one.manifest,
+      config: { ...one.manifest.config, viewer: { ...one.manifest.config.viewer, listCap: 2 } },
+    };
+    const ds = await createDataSource(createScriptedLoader(one.files), manifest, 1);
+    const r = await ds.querySpans(query({ sort: { column: 'duration', dir: 'desc' } }));
+    expect(r.partial).not.toBeNull();
   });
 
   test('without condition, text or window it returns the head of the run and trusts the manifest total', async () => {

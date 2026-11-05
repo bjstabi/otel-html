@@ -133,7 +133,7 @@ export async function scanChunks<E>(opts: {
     scanned.add(c.n);
     opts.onProgress?.(scanned.size, total);
     if (run.units >= cap) {
-      cut = i < opts.targets.length - 1;
+      cut ||= i < opts.targets.length - 1;
       break;
     }
   }
