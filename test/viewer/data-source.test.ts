@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, test } from 'vitest';
+import { beforeAll, describe, expect, test, vi } from 'vitest';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import type { TraceId } from '../../src/model/ids.js';
 import type { ResourceRecord } from '../../src/model/records.js';
@@ -417,6 +417,23 @@ describe('windowed strategy', () => {
     const r = await ds.querySpans(query({ condition: ERRORS, scanAll: true }));
     expect(r.total).toBe(2);
     expect(loader.calls).toEqual([1, 2, 3, 4, 5].map(chunkPath));
+  });
+
+  test('an abort from a timer stops a scan over cached chunks after one chunk', async () => {
+    const { ds } = await windowed();
+    await ds.querySpans(query({ condition: ERRORS, scanAll: true }));
+    vi.stubGlobal('MessageChannel', undefined);
+    try {
+      const progress: number[] = [];
+      const ac = new AbortController();
+      setTimeout(() => ac.abort(), 0);
+      await expect(
+        ds.querySpans(query({ condition: ERRORS, scanAll: true }), (s) => progress.push(s), ac.signal),
+      ).rejects.toMatchObject({ name: 'AbortError' });
+      expect(progress).toEqual([1]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   test('getTrace loads one shard file and only the chunks listed for that trace', async () => {

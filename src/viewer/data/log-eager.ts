@@ -8,8 +8,8 @@ import {
   checkSurroundingCount,
   type LogEntry,
   type LogRow,
-  queryLogEntries,
   refParts,
+  scanLogEntries,
   surroundingIn,
 } from './log-query.js';
 import type { FacetCaps } from './query-common.js';
@@ -59,7 +59,7 @@ export async function createEagerLogSource(
 
   return {
     queryLogs(q, _onProgress, signal) {
-      return attempt(() => queryLogEntries(entries, q, signal, facetCaps));
+      return scanLogEntries(entries, q, signal, facetCaps);
     },
     getLog(ref) {
       return attempt(() => find(ref));

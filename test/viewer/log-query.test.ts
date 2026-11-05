@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import type { AnyValue } from '../../src/model/anyvalue.js';
 import type { RelNanos, SpanId, TraceId, UnixNanos } from '../../src/model/ids.js';
 import type {
@@ -18,9 +18,10 @@ import {
   parseLogRef,
   queryLogEntries,
   refParts,
+  scanLogEntries,
   toLogEntries,
 } from '../../src/viewer/data/log-query.js';
-import { DEFAULT_FACET_CAPS } from '../../src/viewer/data/query-common.js';
+import { DEFAULT_FACET_CAPS, EAGER_BLOCK } from '../../src/viewer/data/query-common.js';
 import { medianMs } from '../../test-support/median-ms.js';
 import { perfFactor } from '../../test-support/perf-inject.js';
 
@@ -352,21 +353,39 @@ describe('queryLogEntries', () => {
     );
   });
 
-  test('a signal aborted during a long scan stops it', () => {
-    const logs = Array.from({ length: 20_000 }, (_, i) => log({ time: i as RelNanos, body: str(`op ${i}`) }));
-    const ac = new AbortController();
-    let seen = 0;
-    const spy = entriesOf(logs).map((e) => ({
-      ...e,
-      get target() {
-        if (++seen === 5000) ac.abort();
-        return e.target;
-      },
-    }));
-    expect(() => queryLogEntries(spy, { ...base, condition: 'body == "none"' }, ac.signal)).toThrowError(
-      expect.objectContaining({ name: 'AbortError' }),
+  test('an abort from a timer stops an in-memory scan after its first block', async () => {
+    vi.stubGlobal('MessageChannel', undefined);
+    try {
+      const logs = Array.from({ length: EAGER_BLOCK * 4 }, (_, i) =>
+        log({ time: i as RelNanos, body: str(`op ${i}`) }),
+      );
+      let seen = 0;
+      const counted = entriesOf(logs).map((e) => ({
+        ...e,
+        get target() {
+          seen++;
+          return e.target;
+        },
+      }));
+      const ac = new AbortController();
+      setTimeout(() => ac.abort(), 0);
+      await expect(
+        scanLogEntries(counted, { ...base, condition: 'body == "none"' }, ac.signal),
+      ).rejects.toMatchObject({ name: 'AbortError' });
+      expect(seen).toBe(EAGER_BLOCK);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test('scanLogEntries lists what queryLogEntries lists', async () => {
+    const logs = Array.from({ length: EAGER_BLOCK * 2 + 5 }, (_, i) =>
+      log({ time: i as RelNanos, body: str(`op ${i}`) }),
     );
-    expect(seen).toBeLessThan(10_000);
+    const e = entriesOf(logs);
+    const q = { ...base, condition: 'body == "op 7"' };
+    const [a, b] = [await scanLogEntries(e, q), queryLogEntries(e, q)];
+    expect([a.rows, a.total, a.matched]).toEqual([b.rows, b.total, b.matched]);
   });
 
   describe('@perf 200k logs', () => {

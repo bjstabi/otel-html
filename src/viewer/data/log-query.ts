@@ -27,6 +27,7 @@ import {
   ordered,
   sortFor,
   throwIfAborted,
+  visitInBlocks,
 } from './query-common.js';
 import type { LoadedChunk, TimeWindow } from './span-query.js';
 import { TopKBuffer, topK } from './top-k.js';
@@ -435,5 +436,17 @@ export function queryLogEntries(
 ): LogQueryResult {
   const run = new LogQueryRun(q, signal, caps);
   for (const e of entries) run.visit(e);
+  return run.finish(null);
+}
+
+/** `queryLogEntries`, yielding to events between blocks so an abort that arrives meanwhile is seen. */
+export async function scanLogEntries(
+  entries: readonly LogEntry[],
+  q: LogQuery,
+  signal?: AbortSignal,
+  caps: FacetCaps = DEFAULT_FACET_CAPS,
+): Promise<LogQueryResult> {
+  const run = new LogQueryRun(q, signal, caps);
+  await visitInBlocks(entries, run, signal);
   return run.finish(null);
 }

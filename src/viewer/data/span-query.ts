@@ -19,6 +19,7 @@ import {
   ordered,
   sortFor,
   throwIfAborted,
+  visitInBlocks,
 } from './query-common.js';
 import { TopKBuffer, topK } from './top-k.js';
 import { buildTraceTree, exclusiveTimeByService } from './trace-tree.js';
@@ -377,5 +378,17 @@ export function querySpanEntries(
 ): SpanQueryResult {
   const run = new SpanQueryRun(q, signal, caps);
   for (const e of entries) run.visit(e);
+  return run.finish(null);
+}
+
+/** `querySpanEntries`, yielding to events between blocks so an abort that arrives meanwhile is seen. */
+export async function scanSpanEntries(
+  entries: readonly SpanEntry[],
+  q: SpanQuery,
+  signal?: AbortSignal,
+  caps: FacetCaps = DEFAULT_FACET_CAPS,
+): Promise<SpanQueryResult> {
+  const run = new SpanQueryRun(q, signal, caps);
+  await visitInBlocks(entries, run, signal);
   return run.finish(null);
 }

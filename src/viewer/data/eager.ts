@@ -4,7 +4,7 @@ import type { SpanStrategy } from './data-source.js';
 import { epochOf, loadSpanChunk } from './load.js';
 import type { FacetCaps } from './query-common.js';
 import type { ScriptLoader } from './script-loader.js';
-import { querySpanEntries, type SpanEntry } from './span-query.js';
+import { type SpanEntry, scanSpanEntries } from './span-query.js';
 import { assembleTrace } from './trace-detail.js';
 
 /** Load every span chunk listed in the manifest once; queries then filter in memory and are exact. */
@@ -26,11 +26,7 @@ export async function createEagerSource(
   }
   return {
     querySpans(q, _onProgress, signal) {
-      try {
-        return Promise.resolve(querySpanEntries(entries, q, signal, caps));
-      } catch (e) {
-        return Promise.reject(e);
-      }
+      return scanSpanEntries(entries, q, signal, caps);
     },
     hasTrace(traceId) {
       return Promise.resolve(byTrace.has(traceId));

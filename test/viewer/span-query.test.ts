@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import type { RelNanos, SpanId, TraceId, UnixNanos } from '../../src/model/ids.js';
 import type {
   ResourceRecord,
@@ -8,13 +8,14 @@ import type {
   SpanRecord,
 } from '../../src/model/records.js';
 import { StatusCode } from '../../src/model/records.js';
-import { DEFAULT_FACET_CAPS } from '../../src/viewer/data/query-common.js';
+import { DEFAULT_FACET_CAPS, EAGER_BLOCK } from '../../src/viewer/data/query-common.js';
 import {
   querySpanEntries,
   type SpanEntry,
   type SpanQuery,
   SpanQueryRun,
   type SpanRow,
+  scanSpanEntries,
   type TraceRow,
   toEntries,
 } from '../../src/viewer/data/span-query.js';
@@ -133,21 +134,35 @@ describe('querySpanEntries', () => {
     expect(() => querySpanEntries(synthetic(10), query({}), ac.signal)).toThrow(/aborted/);
   });
 
-  test('a signal aborted during a long scan stops it', () => {
-    const entries = synthetic(20_000);
-    const ac = new AbortController();
-    let seen = 0;
-    const spy = entries.map((e) => ({
-      ...e,
-      get target() {
-        if (++seen === 5000) ac.abort();
-        return e.target;
-      },
-    }));
-    expect(() => querySpanEntries(spy, query({ condition: 'name == "op1"' }), ac.signal)).toThrow(
-      expect.objectContaining({ name: 'AbortError' }),
-    );
-    expect(seen).toBeLessThan(10_000);
+  test('an abort from a timer stops an in-memory scan after its first block', async () => {
+    vi.stubGlobal('MessageChannel', undefined);
+    try {
+      let seen = 0;
+      const counted = synthetic(EAGER_BLOCK * 4).map((e) => ({
+        ...e,
+        get target() {
+          seen++;
+          return e.target;
+        },
+      }));
+      const ac = new AbortController();
+      setTimeout(() => ac.abort(), 0);
+      await expect(
+        scanSpanEntries(counted, query({ condition: 'name == "none"' }), ac.signal),
+      ).rejects.toMatchObject({
+        name: 'AbortError',
+      });
+      expect(seen).toBe(EAGER_BLOCK);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test('scanSpanEntries lists what querySpanEntries lists', async () => {
+    const e = synthetic(EAGER_BLOCK * 2 + 5);
+    const q = query({ condition: 'status.code == STATUS_CODE_ERROR' });
+    const [a, b] = [await scanSpanEntries(e, q), querySpanEntries(e, q)];
+    expect([a.rows, a.total, a.partial]).toEqual([b.rows, b.total, b.partial]);
   });
 });
 
