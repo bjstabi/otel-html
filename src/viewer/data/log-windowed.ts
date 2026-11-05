@@ -91,7 +91,8 @@ export function createWindowedLogSource(
         total: traceChunks === null ? chunks.ordered.length : traceChunks.length,
         entries: chunkEntries,
         run,
-        cap,
+        // "Scan entire run" lifts the cap outside traces mode, where matched rows are bounded by a TopKBuffer.
+        cap: q.scanAll && q.mode !== 'traces' ? Number.POSITIVE_INFINITY : cap,
         // Traces mode finishes the chunk it is in, so the traces it matched are seen whole within it; newest first
         // does too, because rows within a chunk are not in time order and the newest may come last.
         finishChunk: q.mode === 'traces' || newest,

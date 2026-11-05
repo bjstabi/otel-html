@@ -119,17 +119,24 @@ export async function scanChunks<E>(opts: {
 }): Promise<{ scanned: ReadonlySet<number>; partial: { scanned: number; total: number } | null }> {
   const { run, cap, total } = opts;
   const scanned = new Set<number>();
-  for (const c of opts.targets) {
+  let cut = false;
+  for (const [i, c] of opts.targets.entries()) {
     throwIfAborted(opts.signal);
     const entries = await opts.entries(c);
     for (const e of entries) {
-      if (!opts.finishChunk && run.units >= cap) break;
+      if (!opts.finishChunk && run.units >= cap) {
+        cut = true;
+        break;
+      }
       run.visit(e);
     }
     scanned.add(c.n);
     opts.onProgress?.(scanned.size, total);
-    if (run.units >= cap) break;
+    if (run.units >= cap) {
+      cut = i < opts.targets.length - 1;
+      break;
+    }
   }
-  const exact = scanned.size === total && run.units < cap;
+  const exact = scanned.size === total && !cut;
   return { scanned, partial: exact ? null : { scanned: scanned.size, total } };
 }

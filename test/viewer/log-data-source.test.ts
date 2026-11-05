@@ -571,6 +571,20 @@ describe('windowed logs', () => {
     });
   });
 
+  test('scanAll in logs mode is not cut at listCap', async () => {
+    const capped: Manifest = {
+      ...rep.manifest,
+      config: { ...rep.manifest.config, viewer: { ...rep.manifest.config.viewer, listCap: 3 } },
+    };
+    const ds = await createDataSource(createScriptedLoader(rep.files), capped, 1);
+    const q = query({ condition: 'log.severity_number >= 0', limit: 3 });
+    expect((await ds.queryLogs(q)).partial).not.toBeNull();
+    const r = await ds.queryLogs({ ...q, scanAll: true });
+    expect(r.partial).toBeNull();
+    expect(r.matched).toBe(rep.manifest.totals.logs);
+    expect(asLogs(r)).toHaveLength(3);
+  });
+
   test('reports progress once per scanned chunk', async () => {
     const { ds } = await windowed();
     const seen: Array<[number, number]> = [];

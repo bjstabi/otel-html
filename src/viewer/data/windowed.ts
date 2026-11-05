@@ -65,8 +65,9 @@ export function createWindowedSource(
         total: chunks.ordered.length,
         entries: chunkEntries,
         run,
-        // A per-group duration measure over "Scan entire run" must see every span, or its groups are a head's.
-        cap: q.measureBy !== null && q.scanAll ? Number.POSITIVE_INFINITY : cap,
+        // "Scan entire run" lifts the cap outside traces mode (matched rows are bounded by a TopKBuffer there; the
+        // per-trace maps of traces mode are not), so a measure's groups and the listed rows span the whole run.
+        cap: q.scanAll && q.mode !== 'traces' ? Number.POSITIVE_INFINITY : cap,
         // Traces mode finishes the chunk it is in, so the traces it matched are seen whole within it.
         finishChunk: q.mode === 'traces',
         onProgress,

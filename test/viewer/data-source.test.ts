@@ -242,6 +242,40 @@ describe('windowed strategy', () => {
     expect(n).toBe(six.manifest.totals.spans);
   });
 
+  const withListCap = (listCap: number): Fixture => ({
+    files: six.files,
+    manifest: {
+      ...six.manifest,
+      config: { ...six.manifest.config, viewer: { ...six.manifest.config.viewer, listCap } },
+    },
+  });
+
+  test('scanAll without a measure lists the best rows over the whole run and is exact', async () => {
+    const small = withListCap(4);
+    const ds = await createDataSource(createScriptedLoader(small.files), small.manifest, 1);
+    const eager = await createDataSource(createScriptedLoader(six.files), six.manifest, SMALL);
+    const q = query({ sort: { column: 'duration', dir: 'desc' }, limit: 4 });
+    const r = await ds.querySpans({ ...q, scanAll: true });
+    expect(r.partial).toBeNull();
+    expect(r.rows).toHaveLength(4);
+    expect(asSpans(r.rows).map((s) => s.span.spanId)).toEqual(
+      asSpans((await eager.querySpans(q)).rows).map((s) => s.span.spanId),
+    );
+    expect(r.total).toBe(six.manifest.totals.spans);
+  });
+
+  test('a run that matches exactly listCap units over every chunk is exact', async () => {
+    const late = await buildReport(6, [4, 5]);
+    const manifest = {
+      ...late.manifest,
+      config: { ...late.manifest.config, viewer: { ...late.manifest.config.viewer, listCap: 2 } },
+    };
+    const ds = await createDataSource(createScriptedLoader(late.files), manifest, 1);
+    const r = await ds.querySpans(query({ condition: ERRORS }));
+    expect(r.total).toBe(2);
+    expect(r.partial).toBeNull();
+  });
+
   test('without condition, text or window it returns the head of the run and trusts the manifest total', async () => {
     const small: Fixture = {
       files: six.files,
