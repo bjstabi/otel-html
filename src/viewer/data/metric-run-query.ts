@@ -1,3 +1,4 @@
+import type { BucketAgg } from '../../rollups/metric-agg.js';
 import type { LevelData, LoadedMetric, LoadedSeries } from './metric-load.js';
 import { coarsenedTo, type MetricQuery, runAtLevel } from './metric-query.js';
 import { checkShow, kindOf } from './metric-tables.js';
@@ -106,14 +107,21 @@ export async function runMetricRunQuery(
   const lines = new Map<string, RunLine>();
   for (const [i, run] of runs.entries()) {
     signal?.throwIfAborted();
-    const ids = run.members.map((s) => s.def.id);
-    const one = (only: readonly number[]): ReturnType<typeof runAtLevel> =>
-      runAtLevel(m, q, ...oneBucket(level, only), null, signal);
-    const result = one(ids);
+    const one = (members: readonly LoadedSeries[]): ReturnType<typeof runAtLevel> =>
+      runAtLevel(
+        runMetricView(m, members),
+        q,
+        ...oneBucket(
+          level,
+          members.map((s) => s.def.id),
+        ),
+        null,
+        signal,
+      );
+    const result = one(run.members);
     for (const n of result.notes) if (!notes.includes(n)) notes.push(n);
     // A line failed in this run when a failing series of the run feeds it: the run again over those series alone.
-    const failing =
-      failed === null ? [] : run.members.filter((s) => failed(targetOf(m.entry, s))).map((s) => s.def.id);
+    const failing = failed === null ? [] : run.members.filter((s) => failed(targetOf(m.entry, s)));
     const failedKeys = new Set(failing.length === 0 ? [] : one(failing).series.map((s) => s.key));
     for (const s of result.series) {
       const value = s.points.find(([, v]) => v !== null)?.[1];
@@ -140,13 +148,21 @@ export async function runMetricRunQuery(
   };
 }
 
+/** `m` seen as just `members`: `runAtLevel` walks `series`, so a run's query costs the run, not the metric. */
+export function runMetricView(m: LoadedMetric, members: readonly LoadedSeries[]): LoadedMetric {
+  return { ...m, series: members };
+}
+
 /**
  * `runAtLevel`'s window and level for the series `only` of `level` merged into a single bucket: a width past the
  * last point puts every point in bucket 0, and the window covers that bucket.
  */
 function oneBucket(level: LevelData, only: readonly number[]): [TimeWindow, LevelData] {
-  const keep = new Set(only);
-  const series = new Map([...level.series].filter(([id]) => keep.has(id)));
+  const series = new Map<number, { t: number[]; a: BucketAgg[] }>();
+  for (const id of only) {
+    const s = level.series.get(id);
+    if (s !== undefined) series.set(id, s);
+  }
   const last = Math.max(0, ...[...series.values()].map((s) => s.t.at(-1) ?? 0));
   const widthNs = (last + 1) * level.widthNs;
   return [{ start: 0, end: widthNs - 1 }, coarsenedTo({ ...level, series }, widthNs)];
