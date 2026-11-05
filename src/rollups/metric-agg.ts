@@ -175,7 +175,7 @@ function mergeExp(a: ExpAgg, b: ExpAgg): ExpAgg {
   };
 }
 
-function sameBounds(a: number[], b: number[]): boolean {
+export function sameBounds(a: readonly number[], b: readonly number[]): boolean {
   return a.length === b.length && a.every((v, i) => v === b[i]);
 }
 

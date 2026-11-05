@@ -7,7 +7,13 @@ import {
   selectExemplars,
 } from '../format/metric-files.js';
 import { assertNever } from '../model/errors.js';
-import { type BucketAgg, type CounterAgg, mergeAgg, type NumberAgg } from '../rollups/metric-agg.js';
+import {
+  type BucketAgg,
+  type CounterAgg,
+  mergeAgg,
+  type NumberAgg,
+  sameBounds,
+} from '../rollups/metric-agg.js';
 
 /** Fields per bucket of the columnar kinds. */
 const STRIDE = { counter: 2, number: 6 } as const;
@@ -48,10 +54,6 @@ function objectWeight(a: BucketAgg): number {
       return assertNever(a, 'metric buffer bucket');
   }
   return Math.ceil(bytes / UNIT_BYTES);
-}
-
-function sameBounds(a: readonly number[], b: readonly number[]): boolean {
-  return a.length === b.length && a.every((v, i) => v === b[i]);
 }
 
 /**

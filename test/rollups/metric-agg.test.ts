@@ -9,6 +9,7 @@ import {
   mergeAgg,
   type NumberAgg,
   quantileOf,
+  sameBounds,
 } from '../../src/rollups/metric-agg.js';
 
 const num = (o: Partial<NumberAgg>): NumberAgg => ({
@@ -49,6 +50,17 @@ function oneValue(v: number, scale: number): ExpAgg {
   const i = Math.ceil(Math.log2(v) * 2 ** scale) - 1;
   return exp({ count: 1, sum: v, min: v, max: v, scale, positive: { offset: i, counts: [1] } });
 }
+
+describe('sameBounds', () => {
+  it('is true only for the same values in the same order', () => {
+    expect(sameBounds([], [])).toBe(true);
+    expect(sameBounds([1, 5, 10], [1, 5, 10])).toBe(true);
+    expect(sameBounds([1, 5, 10], [1, 5])).toBe(false);
+    expect(sameBounds([1, 5], [1, 5, 10])).toBe(false);
+    expect(sameBounds([1, 5, 10], [1, 6, 10])).toBe(false);
+    expect(sameBounds([0], [-0])).toBe(true); // === semantics, like all three old copies
+  });
+});
 
 describe('mergeAgg', () => {
   it('merges number aggs, taking last from the later lastTime', () => {
