@@ -14,7 +14,7 @@ import type { TraceId } from '../../src/model/ids.js';
 import { FacetCounts } from '../../src/rollups/facets.js';
 import { LogRollups } from '../../src/rollups/log-rollups.js';
 import { RedSeries } from '../../src/rollups/red.js';
-import { SpanRollups } from '../../src/rollups/span-rollups.js';
+import { GroupDurations, SpanRollups } from '../../src/rollups/span-rollups.js';
 import { TimeBuckets } from '../../src/rollups/time-buckets.js';
 import type { WidgetActions } from '../../src/viewer/dashboards/dashboard-page.js';
 import type { WidgetScope } from '../../src/viewer/dashboards/scope.js';
@@ -125,6 +125,55 @@ function spansWith(partial: SpanQueryResult['partial'] = null): SpanQueryResult 
   facets.add('service.name', 'payments');
   return { ...emptySpans(partial), total: 3, facets };
 }
+
+function spansMeasured(dropped: number): SpanQueryResult {
+  const groups = new GroupDurations(2);
+  groups.add('checkout', 5);
+  groups.add('payments', 7);
+  for (let i = 0; i < dropped; i++) groups.add('other', 9);
+  return { ...spansWith(), groups };
+}
+
+describe('the cap note of a duration measure', () => {
+  const widget = (measure: 'count' | 'duration.max') =>
+    ({ type: 'toplist', signal: 'spans', groupBy: 'service.name', measure }) as const;
+  const over = (dropped: number): DataSource => ({
+    ...dataSourceOf(baseManifest),
+    querySpans: () => Promise.resolve(spansMeasured(dropped)),
+  });
+
+  test('says how many spans had values past the cap, on one line with the full sentence as its title', async () => {
+    mount(over(3), widget('duration.max'));
+    const note = await screen.findByText('3 spans past the first 2 values left out');
+    expect(note.getAttribute('title')).toBe(
+      'Measured over the first 2 service.name values; 3 spans with other values are left out',
+    );
+    expect(note.className).toContain('truncate');
+  });
+
+  test('formats a thousand with a separator', async () => {
+    mount(over(1000), widget('duration.max'));
+    expect(await screen.findByText('1,000 spans past the first 2 values left out')).toBeTruthy();
+  });
+
+  test('one span reads in the singular', async () => {
+    mount(over(1), widget('duration.max'));
+    const note = await screen.findByText('1 span past the first 2 values left out');
+    expect(note.getAttribute('title')).toMatch(/1 span with other values is left out$/);
+  });
+
+  test('is absent when nothing was dropped', async () => {
+    mount(over(0), widget('duration.max'));
+    await bars();
+    expect(screen.queryByText(/left out/)).toBeNull();
+  });
+
+  test('is absent for a count measure', async () => {
+    mount(over(3), widget('count'));
+    await bars();
+    expect(screen.queryByText(/left out/)).toBeNull();
+  });
+});
 
 describe('the Top list and Table widgets', () => {
   test('a top list over service.name has one bar per service', async () => {

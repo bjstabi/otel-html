@@ -24,7 +24,7 @@ import type { WidgetScope } from '../scope.js';
 import { FRAME_CHROME_PX } from './layout.js';
 import { count, scopedCount, useSubtitle } from './subtitle.js';
 
-/** The partial and loading notes. */
+/** The partial, cap and loading notes. */
 const NOTE_PX = 24;
 const MIN_PX = 96;
 
@@ -69,6 +69,23 @@ const knownKeys = (f: FacetCounts): string[] => [...new Set([...f.keys(), ...f.p
 const spanKeys = (d: DataSource): Promise<string[]> => d.landing().then((l) => knownKeys(l.facets));
 const logKeys = (d: DataSource): Promise<string[]> => d.logLanding().then((l) => knownKeys(l.facets));
 
+/**
+ * A duration measure keeps a bounded number of groups; says how many spans fell in the groups left out. One
+ * truncated line, so the chart's `NOTE_PX` budget holds in a narrow widget; the full sentence is the title.
+ */
+function CapNote(props: { groupBy: string; cap: number; dropped: number }): JSX.Element {
+  const { dropped } = props;
+  const n = dropped.toLocaleString('en-US');
+  const cap = props.cap.toLocaleString('en-US');
+  const one = dropped === 1;
+  const full = `Measured over the first ${cap} ${props.groupBy} values; ${n} ${one ? 'span' : 'spans'} with other values ${one ? 'is' : 'are'} left out`;
+  return (
+    <p role="status" title={full} className="truncate text-sm text-ink-2">
+      {`${n} ${one ? 'span' : 'spans'} past the first ${cap} values left out`}
+    </p>
+  );
+}
+
 function UnknownKey(props: { groupBy: string; known: readonly string[] }): JSX.Element {
   const hints = suggestKeys(props.known, props.groupBy);
   return (
@@ -109,11 +126,18 @@ function FacetBody<R extends Facets>(
     const base = resolveCssVars(toplist(result, { groupBy, colors, measure }), cssTokenReader());
     return props.echarts === null ? base : (mergeEchartsOption(base, props.echarts) as EChartsOption);
   }, [result, empty, props.widgetType, groupBy, measure, colors, props.echarts, resolved]);
-  const notes = (result?.partial == null ? 0 : NOTE_PX) + (state.status === 'loading' ? NOTE_PX : 0);
+  const dropped = measure === 'count' ? 0 : (result?.groups?.dropped ?? 0);
+  const notes =
+    (result?.partial == null ? 0 : NOTE_PX) +
+    (dropped > 0 ? NOTE_PX : 0) +
+    (state.status === 'loading' ? NOTE_PX : 0);
   const chartPx = Math.max(MIN_PX, props.height - FRAME_CHROME_PX - notes);
   return (
     <div className="flex flex-col gap-1">
       {result !== null && <PartialNote partial={result.partial} onScanAll={handle.scanAll} />}
+      {result?.groups != null && dropped > 0 && (
+        <CapNote groupBy={groupBy} cap={result.groups.cap} dropped={dropped} />
+      )}
       {state.status === 'loading' && <LoadingNote progress={state.progress} />}
       {state.status === 'error' && <ErrorCard title="The query could not run" message={state.message} />}
       {result !== null &&

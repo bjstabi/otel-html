@@ -65,5 +65,9 @@ describe('GroupDurations', () => {
     expect(g.size).toBe(2);
     expect(g.get('c')).toBeUndefined();
     expect(g.get('a')?.count).toBe(2);
+    expect(g.dropped).toBe(1);
+    g.add('c', 5);
+    expect(g.dropped).toBe(2);
+    expect(g.cap).toBe(2);
   });
 });

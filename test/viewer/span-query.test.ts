@@ -12,6 +12,7 @@ import {
   querySpanEntries,
   type SpanEntry,
   type SpanQuery,
+  SpanQueryRun,
   type SpanRow,
   toEntries,
 } from '../../src/viewer/data/span-query.js';
@@ -119,6 +120,77 @@ describe('querySpanEntries', () => {
       expect.objectContaining({ name: 'AbortError' }),
     );
     expect(seen).toBeLessThan(10_000);
+  });
+});
+
+describe('SpanQueryRun row buffer', () => {
+  const keyOf: Record<string, (r: SpanRow) => number | string> = {
+    duration: (r) => r.durationNs,
+    name: (r) => r.span.name,
+    start: (r) => r.span.start,
+  };
+
+  test.each([0, 1, 7, 100, 5000])('limit %i lists the same rows as a full sort', (limit) => {
+    const entries = synthetic(20_000);
+    const rows = entries.map((e) => e.row);
+    for (const [column, dir] of [
+      ['duration', 'desc'],
+      ['duration', 'asc'],
+      ['name', 'asc'],
+      ['start', 'desc'],
+    ] as const) {
+      const key = keyOf[column] as (r: SpanRow) => number | string;
+      const sign = dir === 'asc' ? 1 : -1;
+      const expected = [...rows]
+        .sort((a, b) => {
+          const ka = key(a);
+          const kb = key(b);
+          const c = ka < kb ? -1 : ka > kb ? 1 : 0;
+          return sign * c || a.span.start - b.span.start;
+        })
+        .slice(0, limit);
+      const r = querySpanEntries(entries, query({ sort: { column, dir }, limit }));
+      expect(r.rows).toEqual(expected);
+      expect(r.total).toBe(20_000);
+    }
+  });
+
+  test('equal sort keys and starts keep input order across compactions', () => {
+    const entries = synthetic(5000).map((e) => ({
+      ...e,
+      row: { ...e.row, span: { ...e.row.span, start: 0 as RelNanos, end: 500 as RelNanos }, durationNs: 500 },
+    }));
+    const r = querySpanEntries(entries, query({ sort: { column: 'duration', dir: 'desc' }, limit: 1500 }));
+    expect(r.rows).toEqual(entries.slice(0, 1500).map((e) => e.row));
+  });
+
+  test('a limit above the match count lists every match in order', () => {
+    const r = querySpanEntries(
+      synthetic(20_000),
+      query({
+        condition: 'status.code == STATUS_CODE_ERROR',
+        sort: { column: 'start', dir: 'asc' },
+        limit: 5000,
+      }),
+    );
+    expect(r.total).toBe(400);
+    expect(r.rows.map((x) => ('span' in x ? x.span.start : -1))).toEqual(
+      Array.from({ length: 400 }, (_, i) => i * 50 * 1000),
+    );
+  });
+
+  test('holds at most limit plus the compaction slack however many spans it sees', () => {
+    const run = new SpanQueryRun(query({ limit: 1 }));
+    for (const e of synthetic(10_000)) run.visit(e);
+    expect(run.heldRows).toBeLessThanOrEqual(1 + 1024);
+    expect(run.units).toBe(10_000);
+  });
+
+  test('traces mode holds no matched rows', () => {
+    const run = new SpanQueryRun(query({ mode: 'traces', sort: { column: 'start', dir: 'asc' } }));
+    for (const e of synthetic(1000)) run.visit(e);
+    expect(run.heldRows).toBe(0);
+    expect(run.finish(null).total).toBe(1000);
   });
 });
 
