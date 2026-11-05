@@ -190,6 +190,21 @@ describe('buildMetricChartOption', () => {
     expect(formatter('short')).toBe('short');
   });
 
+  test('a generated label never repeats one already in the list (#158)', () => {
+    expect(uniqueLabels(['a', 'a'])).toEqual(['a', 'a (2)']);
+    expect(uniqueLabels(['a', 'a', 'a', 'b'])).toEqual(['a', 'a (2)', 'a (3)', 'b']);
+    // The literal `a (2)` comes after the generated one: it is the one renamed, and the first `a` keeps its label.
+    expect(uniqueLabels(['a', 'a', 'a (2)'])).toEqual(['a', 'a (2)', 'a (2) (2)']);
+    // A literal `a (2)` first: the second `a` skips to 3.
+    expect(uniqueLabels(['a (2)', 'a', 'a'])).toEqual(['a (2)', 'a', 'a (3)']);
+    for (const xs of [
+      ['a', 'a', 'a (2)'],
+      ['a (2)', 'a', 'a'],
+      ['x', 'x (2)', 'x', 'x', 'x (3)'],
+    ])
+      expect(new Set(uniqueLabels(xs)).size).toBe(xs.length);
+  });
+
   test('sharedUnit is the one unit of every series, none when they differ, 1 without series', () => {
     expect(sharedUnit([result()])).toBe('s');
     expect(sharedUnit([result({ series: [series('a', [1], 's'), series('b', [1], 'By')] })])).toBe('');
