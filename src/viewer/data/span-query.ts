@@ -219,8 +219,10 @@ function traceRow(
  * strategies. Feed every candidate entry to `visit`, then call `finish`. Holds no state outside itself, so an
  * abandoned or aborted run leaves nothing behind. It keeps matched rows only up to a bound in spans mode (the best
  * `limit` so far plus a little slack). In traces mode it keeps, per trace, the rows since the trace's first chunk
- * with a hit, plus the current chunk's rows; `endChunk` drops the rest. A trace that hits in a later chunk than its
- * root is built from the rows seen since (windowed reads whole-trace figures from the trace index).
+ * with a hit, plus the current chunk's rows; `endChunk` drops the rest. A trace is built from the rows of the
+ * chunks scanned from its first hit onward, so with a newest-first scan a trace whose root is in the newest chunk
+ * keeps it and one that hits first in an older chunk does not (a windowed report reads the whole-trace figures
+ * from the trace index).
  */
 export class SpanQueryRun {
   readonly #q: SpanQuery;

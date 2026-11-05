@@ -68,8 +68,8 @@ export function createWindowedSource(
         total: chunks.ordered.length,
         entries: chunkEntries,
         run,
-        // "Scan entire run" lifts the cap outside traces mode (matched rows are bounded by a TopKBuffer there; the
-        // per-trace maps of traces mode are not), so a measure's groups and the listed rows span the whole run.
+        // "Scan entire run" lifts the cap outside traces mode (matched rows are bounded by a TopKBuffer there; in
+        // traces mode the rows are bounded by the hit traces, but one empty group per visited trace still grows), so a measure's groups and the listed rows span the whole run.
         cap: q.scanAll && q.mode !== 'traces' ? Number.POSITIVE_INFINITY : cap,
         // Traces mode finishes the chunk it is in, so the traces it matched are seen whole within it; newest first
         // does too, because rows within a chunk are not in time order and the newest may come last.
