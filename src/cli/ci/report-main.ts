@@ -23,6 +23,8 @@ import { fetchJobLog, mergeSkippingBad, mergeWithConfig } from './publish-io.js'
 import { summaryTable } from './summary.js';
 import { ciResource, jobResource, workflowTraceRequest } from './workflow-trace.js';
 
+const ARTIFACT_POINTER = 'Report: see the `ci-run-report` artifact';
+
 export type ReportOptions = {
   runId: number;
   repository: string;
@@ -183,8 +185,7 @@ export async function runReport(
     await rm(scratch, { recursive: true, force: true });
   }
 
-  const reportUrl = env('OTEL_HTML_REPORT_URL') ?? null;
-  const table = summaryTable(run, jobs, reportUrl);
+  const table = [summaryTable(run, jobs), ARTIFACT_POINTER, ''].join('\n');
   say(io, table);
   const stepSummary = opts.stepSummary === false ? undefined : env('GITHUB_STEP_SUMMARY');
   if (stepSummary) {

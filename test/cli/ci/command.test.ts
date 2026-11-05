@@ -136,7 +136,7 @@ describe('otel-html ci report step summary', { timeout: 60_000 }, () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  const report = async (extra: string[]): Promise<string> => {
+  const report = async (extra: string[], env: Record<string, string | undefined> = {}): Promise<string> => {
     vi.stubGlobal('fetch', async (url: string) => {
       const body = url.includes('/jobs')
         ? { jobs: [] }
@@ -164,7 +164,7 @@ describe('otel-html ci report step summary', { timeout: 60_000 }, () => {
     const summary = join(dir, 'summary.md');
     writeFileSync(summary, '');
     const argv = ['ci', 'report', '--run-id', '8', '--repository', 'o/r', '--artifacts', artifacts];
-    const f = fakeIo({ GITHUB_STEP_SUMMARY: summary });
+    const f = fakeIo({ GITHUB_STEP_SUMMARY: summary, ...env });
     expect(await runCli([...argv, '--out', join(dir, 'out'), ...extra], f.io, realFsDeps)).toBe(0);
     expect(f.out()).toContain('Report: see the `ci-run-report` artifact');
     return readFileSync(summary, 'utf8');
@@ -172,6 +172,12 @@ describe('otel-html ci report step summary', { timeout: 60_000 }, () => {
 
   test('writes the summary table to the job summary', async () => {
     expect(await report([])).toContain('Report: see the `ci-run-report` artifact');
+  });
+
+  test('OTEL_HTML_REPORT_URL is ignored', async () => {
+    const text = await report([], { OTEL_HTML_REPORT_URL: 'https://x.test/r' });
+    expect(text).toContain('Report: see the `ci-run-report` artifact');
+    expect(text).not.toContain('https://x.test/r');
   });
 
   test('--no-summary leaves the job summary to `ci link`', async () => {

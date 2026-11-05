@@ -28,7 +28,7 @@ export function commentBody(
   previous: PreviousRun | undefined,
   page?: ChannelPage,
 ): string {
-  const lines = [markerOf(slug(run.name)), summaryTable(run, jobs, url)];
+  const lines = [markerOf(slug(run.name)), summaryTable(run, jobs), `Report: ${url}`, ''];
   if (page !== undefined) lines.push(`All runs on ${page.label}: ${page.url}`, '');
   if (previous !== undefined) {
     const label = previous.workflow === undefined ? '' : `${previous.workflow} `;

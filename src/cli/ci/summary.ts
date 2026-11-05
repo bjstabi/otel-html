@@ -23,8 +23,8 @@ export const MARKER = '<!-- otel-html-report';
 
 const cell = (s: string): string => s.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
 
-/** GitHub-flavoured markdown for `$GITHUB_STEP_SUMMARY`: the run's outcome, one row per job, and where the report is. */
-export function summaryTable(run: ApiRun, jobs: ApiJob[], reportUrl: string | null): string {
+/** GitHub-flavoured markdown for `$GITHUB_STEP_SUMMARY`: the run's outcome and one row per job. */
+export function summaryTable(run: ApiRun, jobs: ApiJob[]): string {
   const rows = jobs.map(
     (j) =>
       `| ${cell(j.name)} | ${j.conclusion ?? j.status} | ${secondsBetween(j.created_at, j.started_at)} | ${secondsBetween(j.started_at, j.completed_at)} |`,
@@ -35,8 +35,6 @@ export function summaryTable(run: ApiRun, jobs: ApiJob[], reportUrl: string | nu
     '| Job | Result | Queued | Duration |',
     '| --- | --- | --- | --- |',
     ...rows,
-    '',
-    reportUrl === null ? 'Report: see the `ci-run-report` artifact' : `Report: ${reportUrl}`,
     '',
   ].join('\n');
 }

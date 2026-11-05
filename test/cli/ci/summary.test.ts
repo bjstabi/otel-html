@@ -34,33 +34,30 @@ const job = (over: Partial<ApiJob>): ApiJob => ({
 
 describe('summaryTable', () => {
   test('one row per job with queued time and duration', () => {
-    const t = summaryTable(run, [job({ name: 'e2e (webkit)' })], null);
+    const t = summaryTable(run, [job({ name: 'e2e (webkit)' })]);
     expect(t).toContain('| Job | Result | Queued | Duration |');
     expect(t).toContain('| e2e (webkit) | success | 12s | 4m 05s |');
   });
 
   test('heading carries the conclusion and links the run', () => {
-    expect(summaryTable(run, [], null).split('\n')[0]).toBe(
+    expect(summaryTable(run, []).split('\n')[0]).toBe(
       '## ci: failure ([run 42](https://github.com/o/r/actions/runs/42))',
     );
   });
 
-  test('report line: the url, or the artifact when there is none', () => {
-    expect(summaryTable(run, [], null)).toContain('Report: see the `ci-run-report` artifact');
-    expect(summaryTable(run, [], 'https://x.test/r')).toContain('Report: https://x.test/r');
+  test('the table names no report; the caller adds it', () => {
+    expect(summaryTable(run, [])).not.toContain('Report:');
   });
 
   test('a job without times shows a dash; a running job falls back to its status', () => {
-    const t = summaryTable(
-      run,
-      [job({ conclusion: null, status: 'queued', started_at: null, completed_at: null })],
-      null,
-    );
+    const t = summaryTable(run, [
+      job({ conclusion: null, status: 'queued', started_at: null, completed_at: null }),
+    ]);
     expect(t).toContain('| build | queued | – | – |');
   });
 
   test('pipes in names do not break the table', () => {
-    expect(summaryTable(run, [job({ name: 'a|b' })], null)).toContain('| a\\|b |');
+    expect(summaryTable(run, [job({ name: 'a|b' })])).toContain('| a\\|b |');
   });
 });
 
