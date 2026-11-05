@@ -151,7 +151,9 @@ exact equality against those edges, so after any duration filter the range is lo
   `durationBins(rows, binCount)` stays as the composition.
 - The Traces explorer keeps the axis in a ref. With no duration token in the condition it derives the axis from the
   rows and stores it. With a duration token it reuses the stored axis; if there is none (the page opened with the
-  filter in its URL) it derives one with the tokens' values as `range`, stores it, and uses it from then on. Bins are
+  filter in its URL) it derives one with the tokens' values as `range`, stores it, and uses it from then on. That
+  axis is padded by one bin outside each given bound, so the bounds sit on interior edges and the end bins keep
+  meaning "unbounded" for `setRange`; an arrow key then widens by one bin and keeps the other token. Bins are
   always `binsOnAxis(rows, axis)`.
 - `DurationFacet` finds the committed indexes tolerantly: the bin whose `fromNs` equals the `>=` value, else the bin
   containing the value, else 0; and the bin whose `toNs` equals the `<=` value, else the bin containing it, else the

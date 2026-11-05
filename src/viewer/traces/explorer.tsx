@@ -99,6 +99,34 @@ export function ZeroSpans({ manifest }: { manifest: Manifest }): JSX.Element {
   );
 }
 
+/**
+ * A duration axis for a page opened with a duration filter: the given bounds sit on interior edges, one extra bin
+ * outside each. `DurationFacet.setRange` reads the first and last bin as "no bound" and writes no token for them, so
+ * pinning a bound to an end edge would drop it on the first key press. Yields `binCount + 1` edges when a bound is
+ * given.
+ */
+function paddedAxis(
+  rows: readonly { durationNs: number }[],
+  binCount: number,
+  range: { lo?: number; hi?: number },
+): number[] {
+  const pinned = (range.lo === undefined ? 0 : 1) + (range.hi === undefined ? 0 : 1);
+  const edges = durationAxis(rows, binCount - pinned, range);
+  const first = edges[0];
+  const second = edges[1];
+  if (first === undefined || second === undefined) return edges;
+  const step = second / first;
+  const r = Number.isFinite(step) && step > 1 ? step : 10;
+  const lo = range.lo;
+  const hi = range.hi;
+  const last = edges[edges.length - 1];
+  return [
+    ...(lo === undefined ? [] : [lo / r]),
+    ...edges,
+    ...(hi === undefined || last === undefined ? [] : [last * r]),
+  ];
+}
+
 /** Mockup 01: query bar, mode / group-by / view controls, RED strip, histogram, facets left and results right. */
 export function TracesExplorer(props: { dataSource: DataSource }): JSX.Element {
   const { manifest } = props.dataSource;
@@ -235,8 +263,9 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
   }, [result]);
 
   const truncated = result !== null && result.total > result.rows.length;
-  // The Duration facet's axis is derived from the unfiltered rows and kept while a duration filter is set, so the
-  // committed range stays addressable; clearing the filter re-derives it.
+  // The Duration facet's axis is derived from the current result's rows (the leading rows when the result is
+  // truncated) and kept while a duration filter is set, so the committed range stays addressable; with a URL filter
+  // it comes from those rows plus the padded range. Clearing the filter re-derives it.
   const axisRef = useRef<readonly number[] | null>(null);
   const bins = useMemo(() => {
     const rows = result?.rows ?? [];
@@ -258,7 +287,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
     } else {
       const lo = num('>=');
       const hi = num('<=');
-      axis = durationAxis(rows, DURATION_BIN_COUNT, {
+      axis = paddedAxis(rows, DURATION_BIN_COUNT, {
         ...(lo === undefined ? {} : { lo }),
         ...(hi === undefined || (lo !== undefined && hi < lo) ? {} : { hi }),
       });

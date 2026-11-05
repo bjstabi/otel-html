@@ -306,12 +306,45 @@ describe('TracesExplorer duration facet', () => {
     );
   });
 
-  test('a page opened with a duration filter pins the axis to the committed range', async () => {
+  test('a page opened with a duration filter pads the axis so both bounds sit on interior edges', async () => {
     setup(filtering, 10, { q: `${DUR} >= 300000 and ${DUR} <= 50000000` });
     const min = await screen.findByRole('slider', { name: 'Minimum duration' });
     const max = screen.getByRole('slider', { name: 'Maximum duration' });
     expect(min.getAttribute('aria-valuetext')).toBe('from 300000 ns');
     expect(max.getAttribute('aria-valuetext')).toBe('up to 50000000 ns');
+    expect(min.getAttribute('aria-valuenow')).toBe('1');
+    expect(max.getAttribute('aria-valuenow')).toBe('22');
+  });
+
+  test('a key press on a URL-opened range widens it by one bin and keeps the other token', async () => {
+    const user = userEvent.setup();
+    const A = 300000;
+    const B = 50000000;
+    const { store } = setup(filtering, 10, { q: `${DUR} >= ${A} and ${DUR} <= ${B}` });
+    const min = await screen.findByRole('slider', { name: 'Minimum duration' });
+    await user.click(min);
+    // The pad bin is the "unbounded" end bin, so widening onto it lifts the lower bound and keeps the upper.
+    await user.keyboard('{ArrowLeft}');
+    expect(store.getState().condition).toBe(`${DUR} <= ${B}`);
+    await user.keyboard('{ArrowRight}{ArrowRight}');
+    expect(store.getState().condition).toContain(`<= ${B}`);
+    expect(store.getState().condition).toContain('>=');
+  });
+
+  test('a one-sided URL filter keeps its token under a key press on the other slider', async () => {
+    const user = userEvent.setup();
+    const A = 300000;
+    const { store } = setup(filtering, 10, { q: `${DUR} >= ${A}` });
+    const min = await screen.findByRole('slider', { name: 'Minimum duration' });
+    const max = screen.getByRole('slider', { name: 'Maximum duration' });
+    expect(min.getAttribute('aria-valuenow')).toBe('1');
+    expect(max.getAttribute('aria-valuenow')).toBe('23');
+    await user.click(max);
+    await user.keyboard('{ArrowRight}');
+    expect(store.getState().condition).toContain(`>= ${A}`);
+    await user.keyboard('{ArrowLeft}');
+    expect(store.getState().condition).toContain(`>= ${A}`);
+    expect(store.getState().condition).toContain('<=');
   });
 
   test('a committed value that is not an edge highlights its bin and ArrowLeft keeps the <= token', async () => {
@@ -332,8 +365,8 @@ describe('TracesExplorer duration facet', () => {
     await screen.findByRole('slider', { name: 'Minimum duration' });
     const first = (): string | undefined =>
       document.querySelector('[data-bin="0"]')?.getAttribute('title')?.split('-')[0];
-    expect(first()).toBe('100000');
     expect(first()).not.toBe(String(edges[0]));
+    expect(Number(first())).toBeLessThan(100000);
     act(() => store.getState().clear('condition'));
     await waitFor(() => expect(first()).toBe(String(edges[0])));
   });
