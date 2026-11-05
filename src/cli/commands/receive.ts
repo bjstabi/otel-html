@@ -1,6 +1,6 @@
 import { type Command, InvalidArgumentError, Option } from 'commander';
 import { type ReceiverOverrides, type RunningReceiver, startReceiver } from '../../api/receiver.js';
-import { Report, resolveDeps, sessionOf } from '../../api/report.js';
+import { Report, resolveDeps } from '../../api/report.js';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { ReceiverStats } from '../../receiver/receiver.js';
 import { createNodeFileSystem } from '../../writer/node-fs.js';
@@ -92,10 +92,7 @@ export async function openReceiver(
       const report = await creating.catch(() => undefined);
       const receiver = await starting?.catch(() => undefined);
       await receiver?.close().catch(() => undefined);
-      if (report !== undefined)
-        await sessionOf(report)
-          .abort()
-          .catch(() => undefined); // never mask the original error
+      if (report !== undefined) await report.abort().catch(() => undefined); // never mask the original error
     })();
     // Wait for the lock release before exiting, so the process does not leave it behind. A second signal exits
     // without waiting and may leave the lock behind; the dead-pid check reclaims it on the next start.
@@ -142,9 +139,7 @@ export async function finishReceiver(
       await beforeClose();
       return await report.close();
     } catch (e) {
-      await sessionOf(report)
-        .abort()
-        .catch(() => undefined);
+      await report.abort().catch(() => undefined);
       throw e;
     }
   })();

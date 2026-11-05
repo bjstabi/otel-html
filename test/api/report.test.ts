@@ -124,6 +124,47 @@ describe('Report', () => {
     expect((await r2.close()).totals.spans).toBe(5);
   });
 
+  test('abort releases the lock, keeps what was checkpointed and closes the report', async () => {
+    const w = createTestWriter();
+    const r = await Report.create({ out: 'r' }, w.deps);
+    await r.addSpans(spansRequest(2));
+    await r.flush();
+    await r.abort();
+    await r.abort(); // a second abort resolves
+    await expect(r.addSpans(spansRequest(1, 0, 10))).rejects.toThrow(/is closed/);
+    await expect(r.close()).rejects.toThrow(/is closed/);
+    // the lock is free: the same process can reopen the folder, and the flushed spans are there
+    const again = await Report.create({ out: 'r', append: true }, w.deps);
+    expect((await again.close()).totals.spans).toBe(2);
+  });
+
+  test('without abort the folder stays locked', async () => {
+    const w = createTestWriter();
+    await Report.create({ out: 'r' }, w.deps);
+    expect((await failure(Report.create({ out: 'r' }, w.deps))).code).toBe('report-locked');
+  });
+
+  test('abort while an add is pending lets the add settle, then releases the lock', async () => {
+    // The session's serial queue runs the pending add first; neither promise may hang.
+    const w = createTestWriter();
+    const r = await Report.create({ out: 'r' }, w.deps);
+    const pending = r.addSpans(spansRequest(2));
+    await r.abort();
+    await pending.catch(() => undefined); // settled either way
+    // nothing was checkpointed, so there is no report to append to; the lock being free is what matters
+    const again = await Report.create({ out: 'r' }, w.deps);
+    await again.close();
+  });
+
+  test('abort after close resolves and the summary stands', async () => {
+    const w = createTestWriter();
+    const r = await Report.create({ out: 'r' }, w.deps);
+    await r.addSpans(spansRequest(1));
+    const summary = await r.close();
+    await r.abort();
+    expect(await r.close()).toEqual(summary);
+  });
+
   test('replace: true starts over', async () => {
     const w = createTestWriter();
     const r1 = await Report.create({ out: 'r' }, w.deps);

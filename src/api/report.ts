@@ -247,4 +247,12 @@ export class Report {
   close(): Promise<ReportSummary> {
     return this.#session.close();
   }
+
+  /**
+   * Give up without finishing: release the folder's lock and leave what earlier checkpoints wrote. The report is
+   * closed afterwards (`add*`, `flush` and `close` reject); a second `abort()`, or one after `close()`, resolves.
+   */
+  abort(): Promise<void> {
+    return this.#session.abort();
+  }
 }
