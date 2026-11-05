@@ -1,5 +1,5 @@
 import { OtelHtmlError } from '../model/errors.js';
-import { NO_SIGNAL_PATH, type OtlpRequest, type OtlpSignal } from '../model/otlp-json.js';
+import type { OtlpRequest, OtlpSignal } from '../model/otlp-json.js';
 import { OtlpJsonStream } from '../model/otlp-json-stream.js';
 import { streamOtlpProtobuf } from '../model/otlp-proto.js';
 import type { Logger } from '../writer/ports.js';
@@ -87,15 +87,9 @@ function perSignal(): Record<OtlpSignal, number> {
 
 /** The resource entries of a JSON body. A body with no signal key at all (`{}`) holds none. */
 function jsonEntries(signal: OtlpSignal, body: Uint8Array, source: string): OtlpRequest[] {
-  const stream = new OtlpJsonStream(source, { lines: false });
-  let entries: OtlpRequest[];
-  try {
-    entries = stream.push(new TextDecoder().decode(body));
-    stream.end();
-  } catch (e) {
-    if (e instanceof OtelHtmlError && e.path === NO_SIGNAL_PATH) return [];
-    throw e;
-  }
+  const stream = new OtlpJsonStream(source, { lines: false, allowEmpty: true });
+  const entries = stream.push(new TextDecoder().decode(body));
+  stream.end();
   for (const entry of entries) {
     if (entry.signal !== signal) {
       throw new OtelHtmlError('invalid-otlp', {

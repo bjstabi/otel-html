@@ -61,6 +61,8 @@ export interface OtlpJsonStreamOptions {
    * `<source>:<line>`, and an input without any document is an error.
    */
   readonly lines: boolean;
+  /** A document without any signal key (`{}`) is accepted as an empty one instead of an error. Default false. */
+  readonly allowEmpty?: boolean;
 }
 
 /**
@@ -77,6 +79,7 @@ export interface OtlpJsonStreamOptions {
 export class OtlpJsonStream {
   readonly #source: string;
   readonly #lines: boolean;
+  readonly #allowEmpty: boolean;
   #phase: Phase = 'between';
   /** Characters consumed before the current piece. */
   #offset = 0;
@@ -103,6 +106,7 @@ export class OtlpJsonStream {
   constructor(source: string, options: OtlpJsonStreamOptions) {
     this.#source = source;
     this.#lines = options.lines;
+    this.#allowEmpty = options.allowEmpty ?? false;
     this.#label = source;
   }
 
@@ -312,7 +316,7 @@ export class OtlpJsonStream {
   }
 
   #endDocument(): void {
-    if (this.#signals === 0) throw noSignal(this.#label);
+    if (this.#signals === 0 && !this.#allowEmpty) throw noSignal(this.#label);
     this.#phase = 'between';
   }
 

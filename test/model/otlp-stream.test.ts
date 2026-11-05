@@ -222,6 +222,28 @@ describe('several documents (JSON lines)', () => {
     );
   });
 
+  test('allowEmpty accepts a document with no signal as empty, in both modes and orders', () => {
+    const doc = JSON.stringify(traceRequest([span()]));
+    for (const lines of [true, false]) {
+      for (const text of [`${doc}\n{}`, `{}\n${doc}`]) {
+        const s = new OtlpJsonStream('in.json', { lines, allowEmpty: true });
+        const out = s.push(text);
+        s.end();
+        expect(out.map((r) => r.signal)).toEqual(['traces']);
+      }
+      const e = new OtlpJsonStream('in.json', { lines, allowEmpty: true });
+      expect(e.push('{}')).toEqual([]);
+      expect(() => e.end()).not.toThrow();
+    }
+  });
+
+  test('without allowEmpty a no-signal document still throws', () => {
+    for (const lines of [true, false]) {
+      const s = new OtlpJsonStream('in.json', { lines });
+      expect(() => s.push('{}')).toThrowError(/expected at least one of/);
+    }
+  });
+
   test('an input without documents is valid only as JSON lines', () => {
     expect([...streamOtlpJson(' \n', 'a.jsonl', undefined, true)]).toEqual([]);
     expect(() => [...streamOtlpJson(' \n', 'a.json')]).toThrowError(/^a\.json: invalid JSON/);
