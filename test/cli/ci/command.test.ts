@@ -12,7 +12,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { Report } from '../../../src/api/report.js';
+import { createReportWith } from '../../../src/api/report.js';
 import { runCli } from '../../../src/cli/program.js';
 import { reviveDataJson, unwrapDataFile } from '../../../src/format/data-file.js';
 import { parseManifest } from '../../../src/format/manifest.js';
@@ -233,7 +233,7 @@ describe('otel-html ci context', () => {
 
 /** A two-span report at `out`: enough to place and merge, and light enough that the rolling merges stay quick. */
 async function smallReport(out: string, prefix = 'b'): Promise<void> {
-  const w = await Report.create({ out }, realFsDeps);
+  const w = await createReportWith({ out }, realFsDeps);
   await w.addSpans(
     traceRequest(
       [1, 2].map((n) => span({ spanId: `00000000000000${prefix}${n}`, name: `run-${prefix}${n}` })),

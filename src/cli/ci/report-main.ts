@@ -2,7 +2,7 @@ import { appendFileSync } from 'node:fs';
 import { access, mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Report } from '../../api/report.js';
+import { createReportWith } from '../../api/report.js';
 import type { WriterDeps } from '../../writer/session.js';
 import type { CliIo } from '../io.js';
 import {
@@ -136,7 +136,7 @@ export async function runReport(
   const scratch = await mkdtemp(join(tmpdir(), 'otel-html-ci-'));
   try {
     const traceDir = join(scratch, 'workflow-trace');
-    const trace = await Report.create(
+    const trace = await createReportWith(
       {
         out: traceDir,
         title: `${run.name} #${run.id}`,

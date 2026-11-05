@@ -5,7 +5,7 @@ import type { OtlpSignal } from '../model/otlp-json.js';
 import { mergeReports } from '../writer/merge.js';
 import type { FileSystem } from '../writer/ports.js';
 import { openSession, type ReportSummary, type WriterDeps } from '../writer/session.js';
-import { resolveApiConfig, resolveDeps, sessionModeOf } from './report.js';
+import { type ReportDeps, reportDepsOf, resolveApiConfig, resolveDeps, sessionModeOf } from './report.js';
 
 export interface ConvertOptions {
   /** OTLP files: JSON, JSON lines or protobuf (`.pb` / `.binpb`). Read in the order given. */
@@ -34,7 +34,15 @@ export interface MergeOptions {
 }
 
 /** Build a report from OTLP files. */
-export async function convert(options: ConvertOptions, deps?: Partial<WriterDeps>): Promise<ReportSummary> {
+export async function convert(options: ConvertOptions, deps?: Partial<ReportDeps>): Promise<ReportSummary> {
+  return convertWith(options, reportDepsOf(deps));
+}
+
+/** Internal: like `convert`, with every writer dependency injectable (tests, the CLI). */
+export async function convertWith(
+  options: ConvertOptions,
+  deps?: Partial<WriterDeps>,
+): Promise<ReportSummary> {
   const full = await resolveDeps(deps);
   const config = await resolveApiConfig(full, options.config, undefined);
   return convertResolved({ ...options, config }, full);
@@ -82,7 +90,12 @@ async function* inputPieces(fs: FileSystem, file: string): AsyncGenerator<Uint8A
 }
 
 /** Combine finished reports into a new one, de-duplicating spans and keeping absolute times. */
-export async function merge(options: MergeOptions, deps?: Partial<WriterDeps>): Promise<ReportSummary> {
+export async function merge(options: MergeOptions, deps?: Partial<ReportDeps>): Promise<ReportSummary> {
+  return mergeWith(options, reportDepsOf(deps));
+}
+
+/** Internal: like `merge`, with every writer dependency injectable (tests, the CLI). */
+export async function mergeWith(options: MergeOptions, deps?: Partial<WriterDeps>): Promise<ReportSummary> {
   const full = await resolveDeps(deps);
   const config = await resolveApiConfig(full, options.config, undefined);
   return mergeResolved({ ...options, config }, full);

@@ -3,8 +3,7 @@ import { OtelHtmlError } from '../model/errors.js';
 import { listenGrpc } from '../receiver/grpc.js';
 import { createHttpHandler, type Listener, listenHttp } from '../receiver/http.js';
 import { createReceiver, type ReceiverStats } from '../receiver/receiver.js';
-import type { WriterDeps } from '../writer/session.js';
-import { configOf, depsOf, type Report, sessionOf } from './report.js';
+import { configOf, depsOf, type Report, type ReportDeps, reportDepsOf, sessionOf } from './report.js';
 
 export interface ListenOverride {
   host?: string;
@@ -62,7 +61,7 @@ export async function closeAll(
 export async function startReceiver(
   report: Report,
   overrides: ReceiverOverrides = {},
-  deps?: Partial<WriterDeps>,
+  deps?: Partial<ReportDeps>,
 ): Promise<RunningReceiver> {
   const config = configOf(report).receiver;
   const httpAt = endpointOf(config, config.http, overrides.http);
@@ -73,7 +72,7 @@ export async function startReceiver(
       hint: 'enable http or grpc',
     });
   }
-  const full: WriterDeps = { ...depsOf(report), ...deps }; // the report's deps were already validated
+  const full = { ...depsOf(report), ...reportDepsOf(deps) }; // the report's deps were already validated
   const maxBodyBytes = overrides.maxBodyBytes ?? config.maxBodyBytes;
   const inflightBudgetBytes = overrides.inflightBudgetBytes ?? config.inflightBudgetBytes;
   const receiver = createReceiver(sessionOf(report), { inflightBudgetBytes }, { logger: full.logger });
