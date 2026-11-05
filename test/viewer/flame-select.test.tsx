@@ -1,6 +1,6 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import type { RelNanos } from '../../src/model/ids.js';
+import type { RelNanos, SpanId } from '../../src/model/ids.js';
 import { FlameGraph } from '../../src/viewer/components/flame-graph.js';
 import { createColorAssigner } from '../../src/viewer/theme/palette.js';
 import { ThemeProvider } from '../../src/viewer/theme/theme-provider.js';
@@ -10,6 +10,7 @@ import { detailOf, spanIdOf, traceRow } from './trace-rows.js';
 
 interface ChartProps {
   option: { series?: { markLine?: { data: { xAxis: number }[] } }[] };
+  patch?: { series?: { data: unknown[] }[] };
   onInstance?: (chart: unknown) => void;
   ariaLabel: string;
 }
@@ -95,4 +96,20 @@ describe('FlameGraph compact', () => {
     expect(screen.getByLabelText('Color by')).toBeTruthy();
     expect(screen.getByRole('heading', { name: /Share of exclusive execution time/ })).toBeTruthy();
   });
+});
+
+test('a new selection keeps the main option and changes only the patch', () => {
+  const colors = createColorAssigner();
+  const view = (sel: SpanId | null) => (
+    <ThemeProvider>
+      <FlameGraph detail={detail} selectedSpanId={sel} onSelect={vi.fn()} colors={colors} />
+    </ThemeProvider>
+  );
+  const { rerender } = render(view(null));
+  const before = charts.filter((c) => c.ariaLabel.startsWith('Flame graph')).at(-1);
+  rerender(view(spanIdOf(2)));
+  const after = charts.filter((c) => c.ariaLabel.startsWith('Flame graph')).at(-1);
+  expect(after?.option).toBe(before?.option);
+  expect(before?.patch?.series?.[0]?.data).toEqual([]);
+  expect(after?.patch?.series?.[0]?.data).toEqual([[1, 100, 400]]);
 });

@@ -25,7 +25,6 @@ export interface FlameTheme {
 }
 
 export interface FlameView {
-  selectedSpanId: SpanId | null;
   /** Visible window as percentages of the trace extent. */
   zoom: { start: number; end: number };
   /** Rows of depth drawn; deeper bars are clipped (the Waterfall shows every span). */
@@ -71,18 +70,17 @@ export type FlameItem =
   | { kind: 'bar'; index: number }
   | { kind: 'batch'; depth: number; colorIndex: number; dimmed: boolean; error: boolean; indexes: number[] };
 
-/** Chart items: wide bars (and the selected one) alone, the narrow rest merged by depth, colour, dimming and error. */
+/** Chart items: wide bars (and the outlined one) alone, the narrow rest merged by depth, colour, dimming and error. */
 export function buildFlameItems(
   bars: readonly FlameBar[],
   minBarNs: number,
-  selectedSpanId: SpanId | null,
   outlineSpanId: SpanId | null = null,
 ): FlameItem[] {
   if (minBarNs <= 0) return bars.map((_, index) => ({ kind: 'bar', index }));
   const items: FlameItem[] = [];
   const batches = new Map<string, Extract<FlameItem, { kind: 'batch' }>>();
   bars.forEach((b, index) => {
-    if (b.end - b.start >= minBarNs || b.spanId === selectedSpanId || b.spanId === outlineSpanId) {
+    if (b.end - b.start >= minBarNs || b.spanId === outlineSpanId) {
       items.push({ kind: 'bar', index });
       return;
     }
@@ -315,7 +313,7 @@ function renderBatch(
 
 /**
  * The flame graph as an ECharts custom series (spike section 12): rounded bars, a `service · name` label that
- * truncates to the bar, hatch plus outline for errors, a ring on the selected bar. Labels are canvas text, never
+ * truncates to the bar, hatch plus outline for errors. The selection ring is a separate series (`selectionPatch`). Labels are canvas text, never
  * HTML. The tooltip is off on purpose; the panel shows the hovered span as plain React text.
  */
 export function flameOption(bars: readonly FlameBar[], theme: FlameTheme, view: FlameView): EChartsOption {
@@ -324,7 +322,7 @@ export function flameOption(bars: readonly FlameBar[], theme: FlameTheme, view: 
   // ECharts does not clip a markLine to the plot: a time outside the trace extent would draw past the axis.
   const markers = (view.markers ?? []).filter((m) => m.time >= min && m.time <= max);
   const outlineId = view.outlineSpanId ?? null;
-  const items = buildFlameItems(bars, view.minBarNs ?? 0, view.selectedSpanId, outlineId);
+  const items = buildFlameItems(bars, view.minBarNs ?? 0, outlineId);
   const renderItem: RenderItem = (params, api) => {
     const item = items[Number(api.value(3))];
     const cs: unknown = params.coordSys;
@@ -347,7 +345,7 @@ export function flameOption(bars: readonly FlameBar[], theme: FlameTheme, view: 
     const base = { type: 'rect', shape, style: { fill, opacity } };
     // The common bar is one flat rect: at 50k spans a group per bar would double the element count.
     const outlined = bar.spanId === outlineId;
-    const plain = !bar.error && bar.spanId !== view.selectedSpanId && !outlined && x1 - x0 < 36;
+    const plain = !bar.error && !outlined && x1 - x0 < 36;
     if (plain) return base as ReturnType<RenderItem>;
     const children: object[] = [base];
     if (bar.error) {
@@ -364,13 +362,6 @@ export function flameOption(bars: readonly FlameBar[], theme: FlameTheme, view: 
         type: 'rect',
         shape: { x: x0 - 1, y: y - 1, width: x1 - x0 + 2, height: h + 2, r: 4 },
         style: { fill: 'none', stroke: theme.accent, lineWidth: 2 },
-      });
-    }
-    if (bar.spanId === view.selectedSpanId) {
-      children.push({
-        type: 'rect',
-        shape: { x: x0 - 2, y: y - 2, width: x1 - x0 + 4, height: h + 4, r: 5 },
-        style: { fill: 'none', stroke: theme.ink, lineWidth: 2 },
       });
     }
     if (x1 - x0 >= 36 && h >= 10) {
@@ -429,6 +420,7 @@ export function flameOption(bars: readonly FlameBar[], theme: FlameTheme, view: 
     ],
     series: [
       {
+        id: 'bars',
         type: 'custom',
         renderItem,
         encode: { x: [1, 2], y: 0 },
@@ -452,6 +444,52 @@ export function flameOption(bars: readonly FlameBar[], theme: FlameTheme, view: 
                 data: markers.map((m) => ({ xAxis: m.time, label: { formatter: m.label } })),
               },
             }),
+      },
+    ],
+  };
+}
+
+/**
+ * The selection ring as a one-item series merged over `flameOption` (`Chart`'s `patch`), so a click re-sets one
+ * item instead of every bar. `data` is `[[depth, start, end]]` for the selected bar, empty when none is selected.
+ */
+export function selectionPatch(
+  bars: readonly FlameBar[],
+  theme: FlameTheme,
+  selectedSpanId: SpanId | null,
+  maxRows: number,
+): EChartsOption {
+  const rows = Math.min(bars.reduce((d, b) => Math.max(d, b.depth), 0) + 1, maxRows);
+  const selected = selectedSpanId === null ? undefined : bars.find((b) => b.spanId === selectedSpanId);
+  const renderItem: RenderItem = (params, api) => {
+    const cs: unknown = params.coordSys;
+    if (!isCoordSys(cs)) return { type: 'group', children: [] };
+    const sx = api.coord([Number(api.value(1)), 0])[0] ?? 0;
+    const ex = api.coord([Number(api.value(2)), 0])[0] ?? 0;
+    const rowH = cs.height / rows;
+    const x0 = Math.max(sx, cs.x);
+    const x1 = Math.min(Math.max(ex, sx + 1.5), cs.x + cs.width);
+    if (x1 <= x0) return { type: 'group', children: [] };
+    const y = cs.y + Number(api.value(0)) * rowH + 1;
+    const h = Math.max(1, rowH - 2);
+    return {
+      type: 'rect',
+      shape: { x: x0 - 2, y: y - 2, width: x1 - x0 + 4, height: h + 4, r: 5 },
+      style: { fill: 'none', stroke: theme.ink, lineWidth: 2 },
+    } as ReturnType<RenderItem>;
+  };
+  return {
+    series: [
+      {
+        id: 'selection',
+        type: 'custom',
+        renderItem,
+        encode: { x: [1, 2], y: 0 },
+        data: selected === undefined ? [] : [[selected.depth, selected.start, selected.end]],
+        clip: false,
+        silent: true,
+        z: 3,
+        animation: false,
       },
     ],
   };
@@ -554,21 +592,74 @@ function zoomRangeOf(params: unknown): { start: number; end: number } | null {
   return pick(params);
 }
 
+interface DepthIndex {
+  /** Positions in `bars`, sorted by (start, position). */
+  order: number[];
+  /** `maxEnd[i]`: the largest end among `order[0..i]`. */
+  maxEnd: number[];
+}
+
+/** Opaque: the bars of each depth sorted by start with a running maximum end (see `buildBarIndex`). */
+export interface BarIndex {
+  bars: readonly FlameBar[];
+  depths: Map<number, DepthIndex>;
+}
+
+/** Index `bars` for `barAt`; depths at or past `maxRows` are not drawn and are left out. */
+export function buildBarIndex(bars: readonly FlameBar[], maxRows = FLAME_MAX_ROWS): BarIndex {
+  const byDepth = new Map<number, number[]>();
+  bars.forEach((b, position) => {
+    if (b.depth >= maxRows) return;
+    const list = byDepth.get(b.depth);
+    if (list === undefined) byDepth.set(b.depth, [position]);
+    else list.push(position);
+  });
+  const depths = new Map<number, DepthIndex>();
+  for (const [depth, order] of byDepth) {
+    order.sort((a, b) => (bars[a]?.start ?? 0) - (bars[b]?.start ?? 0) || a - b);
+    let max = Number.NEGATIVE_INFINITY;
+    const maxEnd = order.map((position) => {
+      max = Math.max(max, bars[position]?.end ?? max);
+      return max;
+    });
+    depths.set(depth, { order, maxEnd });
+  }
+  return { bars, depths };
+}
+
 /**
  * The bar under a point: at that depth, the narrowest bar whose extent (widened by `tolerance` so sub-pixel bars
- * stay clickable) contains `time`. Hit-testing is done here, not per element, because 50k interactive elements
- * make the chart several times slower to build.
+ * stay clickable) contains `time`; of equal widths, the earlier in `bars`. Hit-testing is done here, not per
+ * element, because 50k interactive elements make the chart several times slower to build.
  */
-export function barAt(
-  bars: readonly FlameBar[],
-  time: number,
-  depth: number,
-  tolerance: number,
-): FlameBar | null {
+export function barAt(index: BarIndex, time: number, depth: number, tolerance: number): FlameBar | null {
+  const row = index.depths.get(depth);
+  if (row === undefined) return null;
+  // The last bar that starts at or before time + tolerance.
+  let lo = 0;
+  let hi = row.order.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    const b = index.bars[row.order[mid] ?? 0];
+    if (b !== undefined && b.start - tolerance <= time) lo = mid + 1;
+    else hi = mid;
+  }
   let best: FlameBar | null = null;
-  for (const b of bars) {
-    if (b.depth !== depth || time < b.start - tolerance || time > b.end + tolerance) continue;
-    if (best === null || b.end - b.start < best.end - best.start) best = b;
+  let bestPosition = 0;
+  for (let i = lo - 1; i >= 0; i--) {
+    if ((row.maxEnd[i] ?? Number.NEGATIVE_INFINITY) + tolerance < time) break;
+    const position = row.order[i] ?? 0;
+    const b = index.bars[position];
+    if (b === undefined || time > b.end + tolerance) continue;
+    const width = b.end - b.start;
+    if (
+      best === null ||
+      width < best.end - best.start ||
+      (width === best.end - best.start && position < bestPosition)
+    ) {
+      best = b;
+      bestPosition = position;
+    }
   }
   return best;
 }
@@ -663,7 +754,6 @@ export function FlameGraph(props: FlameGraphProps): JSX.Element {
     const { min, max } = extentOf(bars);
     const minBarNs = bars.length <= BATCH_ABOVE_BARS ? 0 : ((max - min) * NARROW_FRACTION) / 2 ** zoomLevel;
     const o = flameOption(bars, theme, {
-      selectedSpanId,
       zoom: zoom.current,
       maxRows: FLAME_MAX_ROWS,
       minBarNs,
@@ -672,7 +762,11 @@ export function FlameGraph(props: FlameGraphProps): JSX.Element {
     });
     if (perfEnabled() && started.current !== 0) stages.current.optionMs = performance.now() - t;
     return o;
-  }, [bars, theme, selectedSpanId, zoomLevel, outlineSpanId, markers]);
+  }, [bars, theme, zoomLevel, outlineSpanId, markers]);
+  const patch = useMemo(
+    () => selectionPatch(bars, theme, selectedSpanId, FLAME_MAX_ROWS),
+    [bars, theme, selectedSpanId],
+  );
   const miniOption = useMemo(() => minimapOption(bars, theme, zoom.current), [bars, theme]);
 
   const sync = useCallback((to: 'main' | 'mini') => {
@@ -710,8 +804,9 @@ export function FlameGraph(props: FlameGraphProps): JSX.Element {
     }),
     [bars, sync],
   );
-  const latest = useRef({ bars, onSelect });
-  latest.current = { bars, onSelect };
+  const index = useMemo(() => buildBarIndex(bars, FLAME_MAX_ROWS), [bars]);
+  const latest = useRef({ index, onSelect });
+  latest.current = { index, onSelect };
   const attachPointer = useCallback((chart: EChartsType | null): void => {
     main.current = chart;
     if (chart === null) return;
@@ -722,7 +817,7 @@ export function FlameGraph(props: FlameGraphProps): JSX.Element {
       const time = here[0];
       const depth = here[1];
       if (time === undefined || depth === undefined || next[0] === undefined) return null;
-      return barAt(latest.current.bars, time, Math.floor(depth), next[0] - time);
+      return barAt(latest.current.index, time, Math.floor(depth), next[0] - time);
     };
     zr.on('click', (e: { offsetX: number; offsetY: number }) => {
       const bar = pick(e.offsetX, e.offsetY);
@@ -749,11 +844,22 @@ export function FlameGraph(props: FlameGraphProps): JSX.Element {
     mini.current?.dispatchAction({ type: 'dataZoom', start: 0, end: 100 });
   };
 
-  const maxDepth = bars.reduce((d, b) => Math.max(d, b.depth), 0);
+  const { maxDepth, errorCount, dimmed } = useMemo(() => {
+    let depth = 0;
+    let errors = 0;
+    let dim = 0;
+    for (const b of bars) {
+      if (b.depth > depth) depth = b.depth;
+      if (b.error) errors++;
+      if (b.dimmed) dim++;
+    }
+    return { maxDepth: depth, errorCount: errors, dimmed: dim };
+  }, [bars]);
   const clipped = maxDepth + 1 > FLAME_MAX_ROWS;
-  const errorCount = bars.filter((b) => b.error).length;
-  const dimmed = bars.filter((b) => b.dimmed).length;
-  const outlined = outlineSpanId === null ? undefined : bars.find((b) => b.spanId === outlineSpanId);
+  const outlined = useMemo(
+    () => (outlineSpanId === null ? undefined : bars.find((b) => b.spanId === outlineSpanId)),
+    [bars, outlineSpanId],
+  );
 
   return (
     <div data-testid="flame-graph" className="flex flex-col gap-3">
@@ -811,6 +917,7 @@ export function FlameGraph(props: FlameGraphProps): JSX.Element {
       <div className="max-h-[420px] overflow-y-auto rounded-card border border-hairline bg-surface p-1">
         <Chart
           option={mainOption}
+          patch={patch}
           height={flameHeight(bars)}
           ariaLabel={`Flame graph of ${bars.length} spans (the Waterfall and Span list tabs are keyboard accessible)`}
           onEvents={mainEvents}

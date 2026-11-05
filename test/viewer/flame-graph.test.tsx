@@ -6,14 +6,16 @@ vi.mock('../../src/viewer/components/chart.js', () => ({ Chart: (): null => null
 
 import {
   barAt,
+  buildBarIndex,
   buildFlameItems,
   type FlameTheme,
   flameOption,
   labelColorOn,
   minimapOption,
   sampleForOverview,
+  selectionPatch,
 } from '../../src/viewer/components/flame-graph.js';
-import { layoutFlame } from '../../src/viewer/components/flame-layout.js';
+import { type FlameBar, layoutFlame } from '../../src/viewer/components/flame-layout.js';
 import { spanIdOf } from './trace-rows.js';
 
 const THEME: FlameTheme = {
@@ -28,6 +30,17 @@ const THEME: FlameTheme = {
 };
 const HOSTILE = '</script><img src=x onerror=alert(1)> ';
 
+const fb = (n: number, depth: number, start: number, end: number): FlameBar => ({
+  spanId: spanIdOf(n),
+  depth,
+  start,
+  end,
+  label: `n${n}`,
+  colorIndex: 0,
+  error: false,
+  dimmed: false,
+});
+
 interface Shape {
   type: string;
   style?: { text?: unknown; stroke?: unknown };
@@ -41,7 +54,7 @@ describe('flameOption', () => {
     traceRow(2, 1, 100, 400, { service: 'db', error: true }),
   ]);
   const { bars } = layoutFlame(tree, { colorBy: 'service', filter: '', errorsOnly: false });
-  const view = { selectedSpanId: spanIdOf(2), zoom: { start: 0, end: 100 }, maxRows: 200 };
+  const view = { zoom: { start: 0, end: 100 }, maxRows: 200 };
   const option = flameOption(bars, THEME, view);
   const series = Array.isArray(option.series) ? option.series[0] : option.series;
 
@@ -54,27 +67,28 @@ describe('flameOption', () => {
     expect(option.tooltip).toEqual({ show: false });
   });
 
-  test('bars draw with canvas text: the hostile name is a plain string, error bars get an outline, the selection a ring', () => {
+  const cs = { coordSys: { x: 0, y: 0, width: 100, height: 100 } };
+
+  test('bars draw with canvas text: the hostile name is a plain string, error bars get an outline', () => {
     const renderItem = (series as { renderItem: (p: unknown, a: unknown) => { children: Shape[] } })
       .renderItem;
     const api = (i: number) => ({
       value: (d: number) => [bars[i]?.depth ?? 0, bars[i]?.start ?? 0, bars[i]?.end ?? 0, i][d],
       coord: ([x, y]: [number, number]) => [x / 10, y * 18],
     });
-    const cs = { coordSys: { x: 0, y: 0, width: 100, height: 100 } };
     const root = renderItem(cs, api(0)).children;
     const label = root.find((c) => c.type === 'text');
     expect(label?.style?.text).toBe(`web · ${HOSTILE}`);
     expect(root.some((c) => c.type === 'rect' && c.style?.stroke === THEME.ink)).toBe(false);
     const failing = renderItem(cs, api(1)).children;
     expect(failing.some((c) => c.style?.stroke === THEME.critical)).toBe(true);
-    expect(failing.some((c) => c.style?.stroke === THEME.ink)).toBe(true);
+    expect(failing.some((c) => c.style?.stroke === THEME.ink)).toBe(false);
     // The error label is prefixed so colour is never the only cue.
     expect(String(failing.find((c) => c.type === 'text')?.style?.text ?? '✕')).toContain('✕');
   });
 
   test('outlineSpanId draws a 2px accent outline and a label tail on that bar only; narrow outlined bars stay unmerged', () => {
-    const o = flameOption(bars, THEME, { ...view, selectedSpanId: null, outlineSpanId: spanIdOf(2) });
+    const o = flameOption(bars, THEME, { ...view, outlineSpanId: spanIdOf(2) });
     const s = Array.isArray(o.series) ? o.series[0] : o.series;
     const renderItem = (s as { renderItem: (p: unknown, a: unknown) => { children: Shape[] } }).renderItem;
     const api = (i: number) => ({
@@ -88,9 +102,27 @@ describe('flameOption', () => {
     expect(hit.find((c) => c.type === 'text')?.style?.text).toContain('← emitted this log');
     const other = renderItem(cs, api(0)).children;
     expect(other.some((c) => c.style?.stroke === THEME.accent)).toBe(false);
-    expect(
-      buildFlameItems(bars, 10_000, null, spanIdOf(2)).some((i) => i.kind === 'bar' && i.index === 1),
-    ).toBe(true);
+    expect(buildFlameItems(bars, 10_000, spanIdOf(2)).some((i) => i.kind === 'bar' && i.index === 1)).toBe(
+      true,
+    );
+  });
+
+  test('the selection is a patch series, not part of the main option', () => {
+    const p = selectionPatch(bars, THEME, spanIdOf(2), 200);
+    const s = (Array.isArray(p.series) ? p.series[0] : p.series) as {
+      id: string;
+      data: number[][];
+      renderItem: (p: unknown, a: unknown) => Shape;
+    };
+    expect(s.id).toBe('selection');
+    expect(s.data).toEqual([[1, 100, 400]]);
+    const ring = s.renderItem(cs, {
+      value: (d: number) => s.data[0]?.[d],
+      coord: ([x, y]: [number, number]) => [x / 10, y * 18],
+    });
+    expect(ring.style?.stroke).toBe(THEME.ink);
+    const none = selectionPatch(bars, THEME, null, 200).series;
+    expect((Array.isArray(none) ? none[0] : none)?.data).toEqual([]);
   });
 
   test('markers become dashed accent markLines at the marker time', () => {
@@ -155,11 +187,10 @@ describe('level of detail for big traces', () => {
     return layoutFlame(detailOf(rows).tree, { colorBy: 'service', filter: '', errorsOnly: false }).bars;
   })();
 
-  test('narrow bars are merged per depth, colour and error flag; wide and selected bars stay alone', () => {
-    const selected = many[10]?.spanId ?? null;
-    const items = buildFlameItems(many, 1000, selected);
+  test('narrow bars are merged per depth, colour and error flag; wide bars stay alone', () => {
+    const items = buildFlameItems(many, 1000);
     const alone = items.filter((i) => i.kind === 'bar').map((i) => (i.kind === 'bar' ? i.index : -1));
-    expect(alone.sort((a, b) => a - b)).toEqual([0, 10]); // the 1 ms root and the selected span
+    expect(alone.sort((a, b) => a - b)).toEqual([0]); // the 1 ms root
     const batches = items.filter((i) => i.kind === 'batch');
     expect(batches.length).toBeLessThanOrEqual(3 * 2); // 3 colours x error or not, all at depth 1
     expect(batches.some((b) => b.kind === 'batch' && b.error)).toBe(true);
@@ -167,12 +198,11 @@ describe('level of detail for big traces', () => {
   });
 
   test('minBarNs 0 keeps one item per bar', () => {
-    expect(buildFlameItems(many, 0, null)).toHaveLength(many.length);
+    expect(buildFlameItems(many, 0)).toHaveLength(many.length);
   });
 
   test('batch paths merge bars that touch within half a pixel', () => {
     const option = flameOption(many, THEME, {
-      selectedSpanId: null,
       zoom: { start: 0, end: 100 },
       maxRows: 200,
       minBarNs: 1000,
@@ -197,17 +227,47 @@ describe('level of detail for big traces', () => {
 describe('barAt', () => {
   const { tree } = detailOf([traceRow(1, null, 0, 1000), traceRow(2, 1, 100, 200), traceRow(3, 1, 150, 160)]);
   const { bars } = layoutFlame(tree, { colorBy: 'service', filter: '', errorsOnly: false });
+  const index = buildBarIndex(bars);
 
   test('finds the narrowest bar at a depth containing the time', () => {
-    expect(barAt(bars, 500, 0, 0)?.spanId).toBe(spanIdOf(1));
-    expect(barAt(bars, 155, 1, 0)?.spanId).toBe(spanIdOf(3));
-    expect(barAt(bars, 120, 1, 0)?.spanId).toBe(spanIdOf(2));
+    expect(barAt(index, 500, 0, 0)?.spanId).toBe(spanIdOf(1));
+    expect(barAt(index, 155, 1, 0)?.spanId).toBe(spanIdOf(3));
+    expect(barAt(index, 120, 1, 0)?.spanId).toBe(spanIdOf(2));
   });
 
   test('misses empty space, and the tolerance keeps sub-pixel bars clickable', () => {
-    expect(barAt(bars, 500, 1, 0)).toBeNull();
-    expect(barAt(bars, 162, 1, 0)?.spanId).toBe(spanIdOf(2));
-    expect(barAt(bars, 163, 1, 5)?.spanId).toBe(spanIdOf(3));
+    expect(barAt(index, 500, 1, 0)).toBeNull();
+    expect(barAt(index, 162, 1, 0)?.spanId).toBe(spanIdOf(2));
+    expect(barAt(index, 163, 1, 5)?.spanId).toBe(spanIdOf(3));
+  });
+});
+
+describe('the bar index', () => {
+  test('barAt through the index returns what the linear scan returns', () => {
+    let seed = 7;
+    const rnd = (): number => {
+      seed = (seed * 1103515245 + 12345) % 2 ** 31;
+      return seed / 2 ** 31;
+    };
+    const bars = Array.from({ length: 2000 }, (_, i) => {
+      const start = Math.floor(rnd() * 1e6);
+      return fb(i + 1, Math.floor(rnd() * 6), start, start + Math.floor(rnd() * 5e4));
+    });
+    const linear = (t: number, d: number, tol: number): FlameBar | null => {
+      let best: FlameBar | null = null;
+      for (const b of bars) {
+        if (b.depth !== d || t < b.start - tol || t > b.end + tol) continue;
+        if (best === null || b.end - b.start < best.end - best.start) best = b;
+      }
+      return best;
+    };
+    const index = buildBarIndex(bars);
+    for (let k = 0; k < 5000; k++) {
+      const t = Math.floor(rnd() * 1.05e6);
+      const d = Math.floor(rnd() * 7);
+      const tol = Math.floor(rnd() * 100);
+      expect(barAt(index, t, d, tol)).toBe(linear(t, d, tol));
+    }
   });
 });
 

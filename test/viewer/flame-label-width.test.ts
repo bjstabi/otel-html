@@ -55,7 +55,6 @@ describe('flame label width', () => {
     ]);
     const { bars } = layoutFlame(tree, { colorBy: 'service', filter: '', errorsOnly: false });
     const o = flameOption(bars, THEME, {
-      selectedSpanId: null,
       zoom: { start: 0, end: 100 },
       maxRows: 200,
       outlineSpanId: spanIdOf(2),
