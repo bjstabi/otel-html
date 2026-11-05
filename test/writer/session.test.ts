@@ -931,6 +931,43 @@ describe('metric series files', () => {
     expect(e?.foldedEvicted).toBe(30 * 3 - 10);
   });
 
+  test('a close whose prune fails still closes the session and releases the lock', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    await s.add(
+      otlp(
+        counterRequest('requests', [
+          [0, 1],
+          [3000, 5],
+        ]),
+      ),
+      'm.json',
+    );
+    await w.fs.mkdirp('r/data/metrics/000000');
+    await w.fs.writeTextAtomic('r/data/metrics/000000/stale.js', 'old');
+    const remove = w.fs.remove.bind(w.fs);
+    let failed = false;
+    w.fs.remove = async (p) => {
+      if (!failed && p.includes('data/metrics')) {
+        failed = true;
+        throw new Error('EBUSY');
+      }
+      return remove(p);
+    };
+    const summary = await s.close();
+    expect(failed).toBe(true);
+    expect(w.logs).toContainEqual(
+      expect.objectContaining({
+        level: 'warn',
+        msg: 'stale metric segments left behind',
+        attrs: { error: 'EBUSY' },
+      }),
+    );
+    await expect(s.add(otlp(counterRequest('requests', [[0, 1]])), 'm2.json')).rejects.toThrow(/closed/);
+    expect(await s.close()).toBe(summary);
+    expect(w.fs.snapshot().has('r/data/state/lock.json')).toBe(false);
+  });
+
   test.each(['data/metrics/000000/l1.js', 'data/metrics/000000/ex.js'])(
     'a close that fails writing %s is retried without double counting',
     async (failing) => {
