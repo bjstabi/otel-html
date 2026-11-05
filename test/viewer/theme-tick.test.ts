@@ -14,6 +14,8 @@ it('ticks when data-theme or class on <html> changes, not on other attributes', 
   document.documentElement.setAttribute('data-theme', 'dark');
   await waitFor(() => expect(result.current).toBe(1));
   document.documentElement.setAttribute('lang', 'fr');
+  await new Promise((r) => setTimeout(r, 0));
+  expect(result.current).toBe(1);
   document.documentElement.classList.add('dark');
   await waitFor(() => expect(result.current).toBe(2));
   unmount();

@@ -16,7 +16,7 @@ import { ThemeProvider } from '../../src/viewer/theme/theme-provider.js';
 vi.mock('../../src/viewer/components/chart.js', () => ({ Chart: (): null => null }));
 
 const HOUR = 3_600_000_000_000;
-export const EPOCH = '1700000000000000000';
+const EPOCH = '1700000000000000000';
 
 export const baseManifest: Manifest = {
   formatVersion: 1,

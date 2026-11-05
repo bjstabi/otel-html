@@ -13,6 +13,7 @@
     "scripts/**/*.ts",
     "src/**/*.{ts,tsx,css}",
     "test/**/*.ts",
+    "test/**/*.tsx",
     "e2e/**/*.ts",
     "test-support/otel/**/*.ts"
   ],
