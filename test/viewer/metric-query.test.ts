@@ -7,6 +7,7 @@ import { parseFormula } from '../../src/query/metric-formula.js';
 import { type BucketAgg, type HistAgg, mergeAgg, quantileOf } from '../../src/rollups/metric-agg.js';
 import type { MetricEntry, SeriesDef } from '../../src/rollups/metric-catalog.js';
 import { ValueBuckets } from '../../src/rollups/value-buckets.js';
+import { heatAxis } from '../../src/viewer/components/metric-chart-option.js';
 import { evaluateFormula, formulaWidth } from '../../src/viewer/data/metric-formula.js';
 import {
   type LevelData,
@@ -400,6 +401,36 @@ describe('runMetricQuery', () => {
       [0, 5],
       [60 * S, 11],
     ]);
+  });
+
+  test('a rollup ƒ over a heatmap reports the rollup width for the series and the source width for the cells (#146)', async () => {
+    const fine = 8.192 * S;
+    const m = metric(
+      entry({ type: 'histogram', temporality: 'delta' }),
+      [
+        {
+          bounds: [10, 100],
+          buckets: Array.from({ length: 15 }, (_, i): [number, BucketAgg] => [i, hist([0, 1, 0])]),
+        },
+      ],
+      fine,
+    );
+    const r = await runMetricQuery(
+      m,
+      query({ show: 'p95', fn: [{ op: 'rollup', agg: 'avg', intervalMs: 60_000 }] }),
+      { start: 0, end: 119 * S },
+      600,
+    );
+    expect(r.widthNs).toBe(60 * S);
+    expect(r.heat?.widthNs).toBe(fine);
+    // Cells stay one per 8.192 s bucket; heatAxis gives each its own category, 8 of them in the first 60 s.
+    const { t0, width, count } = heatAxis([r]);
+    expect(width).toBe(fine);
+    expect(count).toBe(15);
+    const firstMinute = (r.heat?.cells ?? [])
+      .filter(([t]) => t < 60 * S)
+      .map(([t]) => Math.round((t - t0) / width));
+    expect(new Set(firstMinute).size).toBe(8);
   });
 
   test('ƒ increase and rate difference consecutive values', async () => {

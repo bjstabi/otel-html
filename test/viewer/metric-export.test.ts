@@ -47,11 +47,23 @@ describe('exportMetricCsv', () => {
     expect(exportMetricCsv([])).toBe('time,query,series,value');
   });
 
+  test('the JSON export carries the series width and the heat cells’ width apart (#146)', () => {
+    const h: MetricQueryResult = {
+      ...result('h', []),
+      widthNs: 60 * S,
+      heat: { bounds: [1], widthNs: 8.192 * S, cells: [[0, 0, 3]] },
+    };
+    const [json] = JSON.parse(exportMetricJson([h])) as { widthNs: number; heat: { widthNs: number } }[];
+    expect(json?.widthNs).toBe(60 * S);
+    expect(json?.heat.widthNs).toBe(8.192 * S);
+  });
+
   test('a histogram result adds its heatmap cells and its distribution, labelled by bucket', () => {
     const h: MetricQueryResult = {
       ...result('h', []),
       heat: {
         bounds: [1, 5],
+        widthNs: 10 * S,
         cells: [
           [0, 0, 3],
           [10 * S, 2, 4],

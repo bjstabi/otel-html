@@ -359,8 +359,9 @@ export function heatAxis(results: readonly MetricQueryResult[]): {
   width: number;
   count: number;
 } {
-  const cells = results.find((r) => r.heat !== null)?.heat?.cells ?? [];
-  const width = results[0]?.widthNs ?? 1;
+  const h = results.find((r) => r.heat !== null)?.heat;
+  const cells = h?.cells ?? [];
+  const width = h?.widthNs ?? results[0]?.widthNs ?? 1;
   const t0 = cells.length === 0 ? 0 : Math.min(...cells.map((x) => x[0]));
   const t1 = cells.length === 0 ? 0 : Math.max(...cells.map((x) => x[0]));
   return { t0, width, count: Math.round((t1 - t0) / width) + 1 };

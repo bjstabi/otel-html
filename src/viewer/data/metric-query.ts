@@ -61,6 +61,7 @@ export interface SeriesPoints {
 
 export interface MetricQueryResult {
   queryId: string;
+  /** The series' bucket width: the rollup interval when a rollup ƒ applies. `heat.widthNs` is the cells'. */
   widthNs: number;
   series: SeriesPoints[];
   exemplars: {
@@ -70,7 +71,7 @@ export interface MetricQueryResult {
     spanId: string | null;
     seriesKey: string;
   }[];
-  heat: { bounds: number[]; cells: [number, number, number][] } | null;
+  heat: { bounds: number[]; cells: [number, number, number][]; widthNs: number } | null;
   distribution: { bounds: number[]; counts: number[] } | null;
   notes: string[];
 }

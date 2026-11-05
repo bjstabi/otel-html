@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
   buildMetricChartOption,
+  heatAxis,
   mergeEchartsOption,
   sharedUnit,
   uniqueLabels,
@@ -258,6 +259,23 @@ describe('buildMetricChartOption', () => {
     }
   });
 
+  test('heatAxis steps by the cells’ width, not the series’ (#146)', () => {
+    const r = result({
+      widthNs: 60 * S,
+      heat: {
+        bounds: [1],
+        widthNs: 10 * S,
+        cells: [
+          [0, 0, 1],
+          [30 * S, 1, 2],
+        ],
+      },
+    });
+    expect(heatAxis([r])).toEqual({ t0: 0, width: 10 * S, count: 4 });
+    // The heat result need not be first: a line result before it does not set the width.
+    expect(heatAxis([result({ widthNs: 60 * S }), r]).width).toBe(10 * S);
+  });
+
   test('heatmap and distribution use their data', () => {
     const heat = build({
       display: 'heatmap',
@@ -265,6 +283,7 @@ describe('buildMetricChartOption', () => {
         result({
           heat: {
             bounds: [1, 2],
+            widthNs: 10 * S,
             cells: [
               [0, 0, 3],
               [10 * S, 2, 1],

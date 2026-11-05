@@ -3,7 +3,7 @@ import { type ExpAgg, type HistAgg, mergeAgg } from '../../rollups/metric-agg.js
 
 export interface HistogramViews {
   /** Cells are [bucket start (RelNanos), value-bucket index, count]; `bounds` are the value buckets' upper bounds. */
-  heat: { bounds: number[]; cells: [number, number, number][] } | null;
+  heat: { bounds: number[]; cells: [number, number, number][]; widthNs: number } | null;
   distribution: { bounds: number[]; counts: number[] } | null;
 }
 
@@ -99,5 +99,5 @@ export function histogramViews(
       counts[k] = (counts[k] ?? 0) + c;
     });
   }
-  return { heat: { bounds: layout.bounds, cells }, distribution: { bounds: layout.bounds, counts } };
+  return { heat: { bounds: layout.bounds, cells, widthNs }, distribution: { bounds: layout.bounds, counts } };
 }
