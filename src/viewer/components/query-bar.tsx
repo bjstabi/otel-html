@@ -94,6 +94,8 @@ function TokenChip(props: {
   const { token } = props;
   // The value is committed on Enter or blur, so a half-typed number never reaches the store.
   const [draft, setDraft] = useState<string | null>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: an outside change (URL, Back, a facet) discards the draft
+  useEffect(() => setDraft(null), [token.op, token.value]);
   const commit = (): void => {
     if (draft !== null && props.onChange({ ...token, value: draft })) setDraft(null);
   };
