@@ -400,5 +400,6 @@ describe('LogQueryRun memory', () => {
     const r = run.finish(null);
     expect(r.total).toBe(10_000);
     expect(r.rows).toHaveLength(1);
+    expect(r.mode === 'logs' && r.rows[0]?.time).toBe(0);
   });
 });

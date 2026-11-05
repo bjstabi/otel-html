@@ -116,7 +116,7 @@ as its header says). The README's OTLP/JSON sentence says both spellings are acc
   stopped the chunk loop with targets left, instead of `run.units < cap`. A run that read everything and matched
   exactly `cap` units is exact.
 
-The second click of "Scan entire run" being a no-op (`use-query.ts:83`) is moot once the first click is exact.
+The second click of "Scan entire run" being a no-op (`use-query.ts:83`) is moot for spans, logs and patterns once the first click is exact. In Traces mode the cap stays, so a result with more than `listCap` matching traces still shows the partial note with a button that does nothing further (#151).
 
 ### #143 Span scans walk chunks oldest-first under a `start:desc` sort
 

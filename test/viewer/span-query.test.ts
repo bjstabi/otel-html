@@ -101,6 +101,24 @@ describe('querySpanEntries', () => {
     expect(starts).toEqual([...starts].sort((a, b) => a - b));
   });
 
+  test('spans with equal start and sort key order by span id whatever the input order', () => {
+    const tied = synthetic(2).map((e) => ({
+      ...e,
+      row: {
+        ...e.row,
+        span: { ...e.row.span, name: 'same', start: 5 as RelNanos, end: 9 as RelNanos },
+        durationNs: 4,
+      },
+    }));
+    const [a, b] = tied;
+    if (a === undefined || b === undefined) throw new Error('expected two entries');
+    for (const dir of ['asc', 'desc'] as const) {
+      const q = query({ sort: { column: 'name', dir } });
+      const ids = (es: SpanEntry[]) => (querySpanEntries(es, q).rows as SpanRow[]).map((r) => r.span.spanId);
+      expect(ids([a, b])).toEqual(ids([b, a]));
+    }
+  });
+
   test('a limit of 0 returns no rows but still counts', () => {
     const r = querySpanEntries(synthetic(100), query({ limit: 0 }));
     expect(r.rows).toEqual([]);

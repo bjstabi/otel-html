@@ -138,6 +138,9 @@ export function toEntries(
 
 type Compare = (a: SpanRow, b: SpanRow) => number;
 
+/** The spans-mode tiebreak: start, then span id, so the order is total and windowed and eager scans agree. */
+const bySpanStartThenId: Compare = (a, b) => a.span.start - b.span.start || cmp(a.span.spanId, b.span.spanId);
+
 const SPAN_SORTS: Readonly<Record<string, Compare>> = {
   start: (a, b) => a.span.start - b.span.start,
   duration: (a, b) => a.durationNs - b.durationNs,
@@ -236,11 +239,7 @@ export class SpanQueryRun {
     this.#condition = q.condition === null ? null : compileCondition(q.condition, 'span');
     this.#order =
       q.mode === 'spans'
-        ? ordered(
-            q.sort.dir,
-            sortFor(SPAN_SORTS, q.sort.column, q.mode),
-            (a, b) => a.span.start - b.span.start,
-          )
+        ? ordered(q.sort.dir, sortFor(SPAN_SORTS, q.sort.column, q.mode), bySpanStartThenId)
         : null;
     this.#rows = this.#order === null ? null : new TopKBuffer(q.limit, this.#order);
     this.#traceCompare = q.mode === 'traces' ? sortFor(TRACE_SORTS, q.sort.column, q.mode) : null;
