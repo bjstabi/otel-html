@@ -271,6 +271,36 @@ describe('the bar index', () => {
   });
 });
 
+describe('rows past maxRows', () => {
+  // depths 0..201, every bar 0..1000 ns
+  const deep = Array.from({ length: 202 }, (_, d) => fb(d + 1, d, 0, 1000));
+  const cs = { coordSys: { x: 0, y: 0, width: 100, height: 3600 } };
+  const drawRow = (minBarNs: number, depth: number) => {
+    const o = flameOption(deep, THEME, { zoom: { start: 0, end: 100 }, maxRows: 200, minBarNs });
+    const s = (Array.isArray(o.series) ? o.series[0] : o.series) as {
+      data: number[][];
+      renderItem: (p: unknown, a: unknown) => unknown;
+    };
+    const row = s.data.find((r) => r[0] === depth);
+    return s.renderItem(cs, {
+      value: (d: number) => row?.[d],
+      coord: ([x]: [number, number]) => [x / 10, 0],
+    });
+  };
+  test('renderItem and renderBatch draw nothing at depth 200 and below', () => {
+    expect(drawRow(0, 200)).toEqual({ type: 'group', children: [] });
+    expect(drawRow(5000, 200)).toEqual({ type: 'group', children: [] }); // every bar is narrow: batched
+    expect(drawRow(0, 199)).not.toEqual({ type: 'group', children: [] });
+  });
+  test('barAt and the selection ring ignore them', () => {
+    const index = buildBarIndex(deep, 200);
+    expect(barAt(index, 500, 200, 0)).toBeNull();
+    expect(barAt(index, 500, 199, 0)?.spanId).toBe(spanIdOf(200));
+    const s = selectionPatch(deep, THEME, spanIdOf(201), 200).series;
+    expect((Array.isArray(s) ? s[0] : s)?.data).toEqual([]);
+  });
+});
+
 describe('sampleForOverview', () => {
   test('keeps small traces whole; samples big ones to the cap, keeping errors and the longest bars', () => {
     const rows = [traceRow(1, null, 0, 10_000)];

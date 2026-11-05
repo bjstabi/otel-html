@@ -267,6 +267,7 @@ function renderBatch(
   cs: CoordSys,
   coord: Coord,
 ): ReturnType<RenderItem> {
+  if (item.depth >= rows) return { type: 'group', children: [] };
   const rowH = cs.height / rows;
   const y = cs.y + item.depth * rowH + 1;
   const h = Math.max(1, rowH - 2);
@@ -331,6 +332,7 @@ export function flameOption(bars: readonly FlameBar[], theme: FlameTheme, view: 
     const bar = bars[item.index];
     if (bar === undefined) return { type: 'group', children: [] };
     const depth = Number(api.value(0));
+    if (depth >= rows) return { type: 'group', children: [] };
     const sx = api.coord([Number(api.value(1)), 0])[0] ?? 0;
     const ex = api.coord([Number(api.value(2)), 0])[0] ?? 0;
     const rowH = cs.height / rows;
@@ -460,7 +462,8 @@ export function selectionPatch(
   maxRows: number,
 ): EChartsOption {
   const rows = Math.min(bars.reduce((d, b) => Math.max(d, b.depth), 0) + 1, maxRows);
-  const selected = selectedSpanId === null ? undefined : bars.find((b) => b.spanId === selectedSpanId);
+  const selected =
+    selectedSpanId === null ? undefined : bars.find((b) => b.spanId === selectedSpanId && b.depth < maxRows);
   const renderItem: RenderItem = (params, api) => {
     const cs: unknown = params.coordSys;
     if (!isCoordSys(cs)) return { type: 'group', children: [] };
