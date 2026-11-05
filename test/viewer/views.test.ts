@@ -20,6 +20,7 @@ import {
   durationBins,
   GROUPED_VIEWS,
   groupSlices,
+  paddedAxis,
   resolveCssVars,
   VIEW_BUILDERS,
 } from '../../src/viewer/traces/views.js';
@@ -179,6 +180,34 @@ describe('durationBins', () => {
     for (let i = 1; i < edges.length; i++) expect(edges[i]).toBeGreaterThan(edges[i - 1] ?? Number.NaN);
   });
 
+  test('durationAxis edges are integer nanoseconds, pinned or not, and non-decreasing', () => {
+    for (const edges of [
+      durationAxis([1000, 1873, 5000, 9e6].map(row), 24),
+      durationAxis([7].map(row), 4),
+      durationAxis([2e6].map(row), 24, { lo: 1e6, hi: 1e7 }),
+      durationAxis([2e6].map(row), 24, { lo: 1873.8174228603843 }),
+    ]) {
+      expect(edges.every(Number.isInteger)).toBe(true);
+      for (let i = 1; i < edges.length; i++)
+        expect(edges[i]).toBeGreaterThanOrEqual(edges[i - 1] ?? Number.NaN);
+    }
+  });
+
+  test('paddedAxis outer edges are integers too, so a fractional bound pads to whole nanoseconds', () => {
+    const rows = [1000, 5000, 9e6].map(row);
+    for (const range of [
+      { lo: 1873.8174228603843 },
+      { hi: 7777.7 },
+      { lo: 1873.8174228603843, hi: 7777.7 },
+    ]) {
+      const edges = paddedAxis(rows, 24, range);
+      expect(edges).toHaveLength(25);
+      expect(edges.every(Number.isInteger)).toBe(true);
+      for (let i = 1; i < edges.length; i++)
+        expect(edges[i]).toBeGreaterThanOrEqual(edges[i - 1] ?? Number.NaN);
+    }
+  });
+
   test('durationAxis pins a degenerate range exactly and stays non-decreasing', () => {
     for (const range of [
       { lo: 5, hi: 5 },
@@ -186,8 +215,8 @@ describe('durationBins', () => {
     ]) {
       const edges = durationAxis([2e6].map(row), 24, range);
       expect(edges).toHaveLength(25);
-      expect(edges[0]).toBe(range.lo);
-      expect(edges.at(-1)).toBe(range.hi);
+      expect(edges[0]).toBe(Math.round(range.lo));
+      expect(edges.at(-1)).toBe(Math.round(range.hi));
       for (let i = 1; i < edges.length; i++)
         expect(edges[i]).toBeGreaterThanOrEqual(edges[i - 1] ?? Number.NaN);
     }
@@ -209,9 +238,9 @@ describe('durationBins', () => {
     expect([both[0], both.at(-1)]).toEqual([1e3, 1e6]);
   });
 
-  test('durationAxis keeps a sub-nanosecond lo as the first edge and spaces the interior from 1 ns', () => {
+  test('durationAxis rounds a sub-nanosecond lo to the first edge and spaces the interior from 1 ns', () => {
     const edges = durationAxis([row(50)], 4, { lo: 0.5, hi: 1e4 });
-    expect(edges[0]).toBe(0.5);
+    expect(edges[0]).toBe(1);
     expect(edges[1]).toBeGreaterThan(1);
     expect(edges.at(-1)).toBe(1e4);
   });

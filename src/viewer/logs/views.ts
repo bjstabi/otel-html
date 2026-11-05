@@ -1,7 +1,7 @@
 import type { EChartsOption } from 'echarts';
 import { severityKey } from '../../semconv/severity.js';
 import { bar, type FacetViewContext, pie, toplist, treemap } from '../components/facet-views.js';
-import { SEVERITY_SERIES } from '../components/histogram-card.js';
+import { SEVERITY_SERIES, seconds } from '../components/histogram-card.js';
 import type { LogQueryResult } from '../data/log-query.js';
 import type { PageView } from '../state/page-options.js';
 
@@ -11,8 +11,6 @@ export interface LogViewContext extends FacetViewContext {
   /** Most points the scatter draws (the report's `viewer.listCap`). */
   listCap: number;
 }
-
-const seconds = (ns: number): string => `${(ns / 1e9).toFixed(ns % 1e9 === 0 ? 0 : 1)}s`;
 
 /** Stacked log counts per severity band over the result's buckets, in the severity colours (fatal on top). */
 export function timeseries(result: LogQueryResult): EChartsOption {
@@ -34,7 +32,7 @@ export function timeseries(result: LogQueryResult): EChartsOption {
     tooltip: { trigger: 'axis' },
     xAxis: {
       type: 'category',
-      data: Array.from({ length: b.length }, (_, i) => seconds(b.startNs + i * b.widthNs)),
+      data: Array.from({ length: b.length }, (_, i) => seconds(b.startNs + i * b.widthNs, b.widthNs)),
       boundaryGap: false,
     },
     yAxis: { type: 'value', minInterval: 1 },

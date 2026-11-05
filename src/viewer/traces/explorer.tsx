@@ -52,6 +52,7 @@ import {
   durationAxis,
   GROUPED_VIEWS,
   type Measure,
+  paddedAxis,
   resolveCssVars,
   VIEW_BUILDERS,
 } from './views.js';
@@ -97,34 +98,6 @@ export function ZeroSpans({ manifest }: { manifest: Manifest }): JSX.Element {
       {manifest.totals.logs > 0 && <OpenLogs />}
     </section>
   );
-}
-
-/**
- * A duration axis for a page opened with a duration filter: the given bounds sit on interior edges, one extra bin
- * outside each. `DurationFacet.setRange` reads the first and last bin as "no bound" and writes no token for them, so
- * pinning a bound to an end edge would drop it on the first key press. Yields `binCount + 1` edges when a bound is
- * given.
- */
-function paddedAxis(
-  rows: readonly { durationNs: number }[],
-  binCount: number,
-  range: { lo?: number; hi?: number },
-): number[] {
-  const pinned = (range.lo === undefined ? 0 : 1) + (range.hi === undefined ? 0 : 1);
-  const edges = durationAxis(rows, binCount - pinned, range);
-  const first = edges[0];
-  const second = edges[1];
-  if (first === undefined || second === undefined) return edges;
-  const step = second / first;
-  const r = Number.isFinite(step) && step > 1 ? step : 10;
-  const lo = range.lo;
-  const hi = range.hi;
-  const last = edges[edges.length - 1];
-  return [
-    ...(lo === undefined ? [] : [lo / r]),
-    ...edges,
-    ...(hi === undefined || last === undefined ? [] : [last * r]),
-  ];
 }
 
 /** Mockup 01: query bar, mode / group-by / view controls, RED strip, histogram, facets left and results right. */

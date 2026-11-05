@@ -52,6 +52,11 @@ export function rectWithFallback(fallback: number): typeof observeElementRect {
     observeElementRect(instance, (r) => cb(r.height === 0 ? { width: r.width, height: fallback } : r));
 }
 
+/** The row that carries `tabIndex=0`: the selection when it is rendered, else the first rendered row, so the list always has a Tab stop. */
+export function tabStop(selectedIndex: number, rendered: readonly { index: number }[]): number {
+  return rendered.some((v) => v.index === selectedIndex) ? selectedIndex : (rendered[0]?.index ?? 0);
+}
+
 function nextDir(sort: SortState | null, column: string): SortState['dir'] {
   // First click on a column sorts descending (largest / latest first); a second click flips it.
   return sort?.column === column && sort.dir === 'desc' ? 'asc' : 'desc';
@@ -87,6 +92,10 @@ export function ResultsTable<R>(props: ResultsTableProps<R>): JSX.Element {
     initialRect: { width: 0, height },
     observeElementRect: rectWithFallback(height),
   });
+
+  // TanStack Virtual's measurement memo does not key on `estimateSize`, so a new row height needs a re-measure.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-measure only when the row height changes
+  useEffect(() => virtual.measure(), [rowHeight]);
 
   const latest = useRef({ rows, selectedId, props });
   latest.current = { rows, selectedId, props };
@@ -175,7 +184,7 @@ export function ResultsTable<R>(props: ResultsTableProps<R>): JSX.Element {
   };
 
   const selectedIndex = selectedId === null ? -1 : rows.findIndex((r) => props.rowId(r) === selectedId);
-  const tabbable = Math.max(0, selectedIndex);
+  const tabbable = tabStop(selectedIndex, virtual.getVirtualItems());
 
   return (
     <div

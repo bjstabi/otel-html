@@ -13,9 +13,9 @@ export function useSubtitle(actions: WidgetActions, text: string | null): void {
   }, [text]);
 }
 
-/** `1 trace`, `2 traces`. */
+/** `1 trace`, `2 traces`, `1,234 traces`. */
 export function count(n: number, noun: string): string {
-  return `${n} ${n === 1 ? noun : `${noun}s`}`;
+  return `${n.toLocaleString('en-US')} ${n === 1 ? noun : `${noun}s`}`;
 }
 
 /** A record widget's subtitle: the count, then what narrows it (`3 logs for the selected trace`, `1 span in selected time`). */

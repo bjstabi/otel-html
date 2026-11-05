@@ -71,17 +71,16 @@ const logKeys = (d: DataSource): Promise<string[]> => d.logLanding().then((l) =>
 
 /**
  * A duration measure keeps a bounded number of groups; says how many spans fell in the groups left out. One
- * truncated line, so the chart's `NOTE_PX` budget holds in a narrow widget; the full sentence is the title.
+ * truncated line, so the chart's `NOTE_PX` budget holds in a narrow widget; the full sentence is the title and the accessible name.
  */
 function CapNote(props: { groupBy: string; cap: number; dropped: number }): JSX.Element {
   const { dropped } = props;
-  const n = dropped.toLocaleString('en-US');
   const cap = props.cap.toLocaleString('en-US');
-  const one = dropped === 1;
-  const full = `Measured over the first ${cap} ${props.groupBy} values; ${n} ${one ? 'span' : 'spans'} with other values ${one ? 'is' : 'are'} left out`;
+  const spans = count(dropped, 'span');
+  const full = `Measured over the first ${cap} ${props.groupBy} values; ${spans} with other values ${dropped === 1 ? 'is' : 'are'} left out`;
   return (
-    <p role="status" title={full} className="truncate text-sm text-ink-2">
-      {`${n} ${one ? 'span' : 'spans'} past the first ${cap} values left out`}
+    <p role="status" title={full} aria-label={full} className="truncate text-sm text-ink-2">
+      {`${spans} past the first ${cap} values left out`}
     </p>
   );
 }
@@ -126,7 +125,8 @@ function FacetBody<R extends Facets>(
     const base = resolveCssVars(toplist(result, { groupBy, colors, measure }), cssTokenReader());
     return props.echarts === null ? base : (mergeEchartsOption(base, props.echarts) as EChartsOption);
   }, [result, empty, props.widgetType, groupBy, measure, colors, props.echarts, resolved]);
-  const dropped = measure === 'count' ? 0 : (result?.groups?.dropped ?? 0);
+  const groups = measure === 'count' ? null : (result?.groups ?? null);
+  const dropped = groups?.dropped ?? 0;
   const notes =
     (result?.partial == null ? 0 : NOTE_PX) +
     (dropped > 0 ? NOTE_PX : 0) +
@@ -135,9 +135,7 @@ function FacetBody<R extends Facets>(
   return (
     <div className="flex flex-col gap-1">
       {result !== null && <PartialNote partial={result.partial} onScanAll={handle.scanAll} />}
-      {result?.groups != null && dropped > 0 && (
-        <CapNote groupBy={groupBy} cap={result.groups.cap} dropped={dropped} />
-      )}
+      {groups !== null && dropped > 0 && <CapNote groupBy={groupBy} cap={groups.cap} dropped={dropped} />}
       {state.status === 'loading' && <LoadingNote progress={state.progress} />}
       {state.status === 'error' && <ErrorCard title="The query could not run" message={state.message} />}
       {result !== null &&

@@ -2,6 +2,7 @@ import type { EChartsOption } from 'echarts';
 import { formatDuration } from '../../semconv/formatters.js';
 import type { DurationBin } from '../components/facet-panel.js';
 import { bar, type FacetViewContext, pie, toplist, treemap } from '../components/facet-views.js';
+import { seconds } from '../components/histogram-card.js';
 import type { SpanQueryResult, SpanRow, TraceRow } from '../data/span-query.js';
 import type { ExplorerView } from '../state/explorer-view.js';
 import type { PageView } from '../state/page-options.js';
@@ -32,11 +33,9 @@ export const GROUPED_VIEWS: ReadonlySet<ExplorerView> = new Set<ExplorerView>([
   'treemap',
 ]);
 
-const seconds = (ns: number): string => `${(ns / 1e9).toFixed(ns % 1e9 === 0 ? 0 : 1)}s`;
-
 function timeAxis(result: SpanQueryResult): string[] {
   const b = result.buckets;
-  return Array.from({ length: b.length }, (_, i) => seconds(b.startNs + i * b.widthNs));
+  return Array.from({ length: b.length }, (_, i) => seconds(b.startNs + i * b.widthNs, b.widthNs));
 }
 
 const STATUS_VARS = {
@@ -219,7 +218,36 @@ export function durationAxis(
   for (let i = 1; i < binCount; i++) edges[i] = Math.max(start, Math.min(edges[i] ?? start, end));
   edges[0] = start;
   edges[binCount] = end;
-  return edges;
+  // Whole nanoseconds: the edges become `>=`/`<=` tokens, and rounding keeps them non-decreasing.
+  return edges.map(Math.round);
+}
+
+/**
+ * A duration axis for a page opened with a duration filter: the given bounds sit on interior edges, one extra bin
+ * outside each. `DurationFacet.setRange` reads the first and last bin as "no bound" and writes no token for them, so
+ * pinning a bound to an end edge would drop it on the first key press. Yields `binCount + 1` edges when a bound is
+ * given.
+ */
+export function paddedAxis(
+  rows: readonly { durationNs: number }[],
+  binCount: number,
+  range: { lo?: number; hi?: number },
+): number[] {
+  const pinned = (range.lo === undefined ? 0 : 1) + (range.hi === undefined ? 0 : 1);
+  const edges = durationAxis(rows, binCount - pinned, range);
+  const first = edges[0];
+  const second = edges[1];
+  if (first === undefined || second === undefined) return edges;
+  const step = second / first;
+  const r = Number.isFinite(step) && step > 1 ? step : 10;
+  const lo = range.lo;
+  const hi = range.hi;
+  const last = edges[edges.length - 1];
+  return [
+    ...(lo === undefined ? [] : [Math.round(lo / r)]),
+    ...edges,
+    ...(hi === undefined || last === undefined ? [] : [Math.round(last * r)]),
+  ];
 }
 
 /** Counts rows into the `[from, to)` bins between `edges`; a row below the first edge counts in the first bin, one at or above the last in the last. */

@@ -133,8 +133,15 @@ export function resolveColor(color: string): string {
   return v === '' ? UNRESOLVED_COLOR : v;
 }
 
-export function seconds(ns: number): string {
-  return `${(ns / 1e9).toFixed(ns % 1e9 === 0 ? 0 : 1)}s`;
+/**
+ * A time as seconds. With the column `widthNs` of a category axis the decimals are the fewest (0..3) that keep a
+ * column's width visible, so neighbouring columns never share a label; without it, whole seconds or one decimal.
+ */
+export function seconds(ns: number, widthNs?: number): string {
+  if (widthNs === undefined) return `${(ns / 1e9).toFixed(ns % 1e9 === 0 ? 0 : 1)}s`;
+  let d = 0;
+  while (d < 3 && 1e9 / 10 ** d > widthNs) d++;
+  return `${(ns / 1e9).toFixed(d)}s`;
 }
 
 function sum(xs: readonly number[]): number {
@@ -189,7 +196,7 @@ export function buildHistogramOption<K extends string>(
   b: BucketView<K>,
   { series, topFirst }: Pick<HistogramSeriesSet<K>, 'series' | 'topFirst'>,
 ) {
-  const x = Array.from({ length: b.length }, (_, i) => seconds(b.startNs + i * b.widthNs));
+  const x = Array.from({ length: b.length }, (_, i) => seconds(b.startNs + i * b.widthNs, b.widthNs));
   const bars = histogramBars(b, series);
   return {
     animation: false,

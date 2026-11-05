@@ -156,6 +156,28 @@ test('trace panel: flame graph click selects a span', async ({ page, baseURL }) 
   await expect(page).toHaveURL(/span=0102030405060708/);
 });
 
+test('trace panel: the Waterfall opens at a deep selected span and Tab reaches it', async ({ page }) => {
+  const deep = '000000000000c350';
+  await page.goto(`${LARGE_REPORT_DIR.href}index.html#/traces?trace=${LARGE_TRACE_ID}&span=${deep}`);
+  const panel = page.getByTestId('trace-panel');
+  await panel.getByRole('tab', { name: 'Waterfall' }).click();
+  const tree = panel.getByRole('tree', { name: 'Waterfall' });
+  await expect(tree.locator(`[data-span-id="${deep}"]`)).toBeInViewport({ timeout: 30_000 });
+  // Start from the tab panel itself: where focus lands after a tab click differs between browsers.
+  const tabPanel = panel.getByRole('tabpanel', { name: 'Waterfall' });
+  await tabPanel.focus();
+  await expect(tabPanel).toBeFocused();
+  // Firefox also stops on the scrollable tree container; Chromium skips it. Tab until a tree item has focus.
+  const focused = page.locator(':focus');
+  let role: string | null = null;
+  for (let presses = 0; presses < 3 && role !== 'treeitem'; presses++) {
+    await page.keyboard.press('Tab');
+    role = await focused.getAttribute('role');
+  }
+  expect(role, 'a tree item has focus within 3 Tab presses').toBe('treeitem');
+  await expect(focused).toHaveAttribute('data-span-id', deep);
+});
+
 test(
   'flame graph of a very large trace renders within the budget',
   { tag: '@perf' },

@@ -113,6 +113,19 @@ describe('QueryBar', () => {
     void user;
   });
 
+  test('a chip draft is dropped when its token changes from outside', async () => {
+    const user = userEvent.setup();
+    const store = setup({ q: 'span.attributes["n"] > 5' });
+    const value = screen.getByRole('textbox', { name: 'Value of span.attributes["n"]' });
+    await user.clear(value);
+    await user.type(value, 'abc{Enter}');
+    expect(screen.getByRole('alert').textContent).toMatch(/number/);
+    expect(store.getState().condition).toBe('span.attributes["n"] > 5');
+    act(() => store.getState().setCondition('span.attributes["n"] > 9'));
+    const now = screen.getByRole('textbox', { name: 'Value of span.attributes["n"]' }) as HTMLInputElement;
+    expect(now.value).toBe('9');
+  });
+
   test('token value edits commit on Enter, once', async () => {
     const user = userEvent.setup();
     const store = setup({ q: 'span.attributes["n"] >= 5' });

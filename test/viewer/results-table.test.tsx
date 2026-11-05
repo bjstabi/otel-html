@@ -3,7 +3,7 @@ import { userEvent } from '@testing-library/user-event';
 import { createRoot } from 'react-dom/client';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { parseUnixNanos } from '../../src/model/ids.js';
-import { ResultsTable } from '../../src/viewer/components/results-table.js';
+import { ResultsTable, tabStop } from '../../src/viewer/components/results-table.js';
 import type { SpanRow, TraceRow } from '../../src/viewer/data/span-query.js';
 import { MOVE_EVENT } from '../../src/viewer/shell/move-event.js';
 import { SPAN_COLUMNS_UI, TRACE_COLUMNS_UI } from '../../src/viewer/traces/columns.js';
@@ -70,6 +70,21 @@ describe('ResultsTable', () => {
     );
     await user.click(screen.getByRole('button', { name: /Duration/ }));
     expect(onSort).toHaveBeenLastCalledWith({ column: 'duration', dir: 'asc' });
+  });
+
+  test('when the selected row is not rendered, the first rendered row is the Tab stop', () => {
+    const many = Array.from({ length: 3000 }, (_, i) => row(`s${i}`, `n${i}`, 5));
+    mount({ rows: many, selectedId: 's2999' });
+    const body = screen.getAllByRole('row').slice(1);
+    expect(body.filter((r) => r.tabIndex === 0)).toHaveLength(1);
+    expect(body[0]?.tabIndex).toBe(0);
+  });
+
+  test('tabStop keeps a rendered selection and falls back to the first rendered row', () => {
+    expect(tabStop(5, [{ index: 4 }, { index: 5 }])).toBe(5);
+    expect(tabStop(2999, [{ index: 10 }, { index: 11 }])).toBe(10);
+    expect(tabStop(-1, [{ index: 3 }])).toBe(3);
+    expect(tabStop(-1, [])).toBe(0);
   });
 
   test('renders rows in the given order and marks the selected one', () => {
@@ -142,6 +157,29 @@ describe('ResultsTable', () => {
     mount({ rows: [t], columns: TRACE_COLUMNS_UI });
     expect(screen.getByText('partial')).toBeTruthy();
     expect(screen.getByText('GET /')).toBeTruthy();
+  });
+
+  test('a rowHeight change re-measures: rows move to the new pitch and the total follows', () => {
+    const props = {
+      rows,
+      columns: SPAN_COLUMNS_UI,
+      rowId,
+      sort: null,
+      onSort: vi.fn(),
+      onRowClick: vi.fn(),
+      selectedId: null,
+      epoch: parseUnixNanos('0', 'epoch'),
+    };
+    const { rerender } = render(<ResultsTable {...props} rowHeight={36} />);
+    rerender(<ResultsTable {...props} rowHeight={76} />);
+    const total = document.querySelector<HTMLElement>('[role="rowgroup"] > div.relative');
+    expect(total?.style.height).toBe(`${rows.length * 76}px`);
+    const body = screen.getAllByRole('row').slice(1);
+    expect(body.map((r) => r.style.transform)).toEqual([
+      'translateY(0px)',
+      'translateY(76px)',
+      'translateY(152px)',
+    ]);
   });
 
   test('rowHeight sizes every row and the virtualizer total', () => {
