@@ -182,7 +182,7 @@ export function histogramBars<K extends string>(
   });
 }
 
-function buildHistogramOption<K extends string>(
+export function buildHistogramOption<K extends string>(
   b: BucketView<K>,
   { series, topFirst }: Pick<HistogramSeriesSet<K>, 'series' | 'topFirst'>,
 ) {
