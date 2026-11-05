@@ -367,7 +367,11 @@ describe('TracesExplorer duration facet', () => {
     const first = (): string | undefined =>
       document.querySelector('[data-bin="0"]')?.getAttribute('title')?.split(' - ')[0];
     expect(first()).not.toBe(formatDuration(edges[0] ?? 0));
-    expect(first()).not.toBe(formatDuration(100000));
+    // The padded axis puts a bin below the 100 µs bound: the lower handle sits on edge 1, not on the first edge.
+    expect(screen.getByRole('slider', { name: 'Minimum duration' }).getAttribute('aria-valuenow')).toBe('1');
+    expect(screen.getByRole('slider', { name: 'Minimum duration' }).getAttribute('aria-valuetext')).toBe(
+      `from ${formatDuration(100000)}`,
+    );
     act(() => store.getState().clear('condition'));
     await waitFor(() => expect(first()).toBe(formatDuration(edges[0] ?? 0)));
   });
