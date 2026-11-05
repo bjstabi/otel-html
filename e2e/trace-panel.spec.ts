@@ -167,9 +167,14 @@ test('trace panel: the Waterfall opens at a deep selected span and Tab reaches i
   const tabPanel = panel.getByRole('tabpanel', { name: 'Waterfall' });
   await tabPanel.focus();
   await expect(tabPanel).toBeFocused();
-  await page.keyboard.press('Tab'); // the tree's Tab stop
+  // Firefox also stops on the scrollable tree container; Chromium skips it. Tab until a tree item has focus.
   const focused = page.locator(':focus');
-  await expect(focused).toHaveAttribute('role', 'treeitem');
+  let role: string | null = null;
+  for (let presses = 0; presses < 3 && role !== 'treeitem'; presses++) {
+    await page.keyboard.press('Tab');
+    role = await focused.getAttribute('role');
+  }
+  expect(role, 'a tree item has focus within 3 Tab presses').toBe('treeitem');
   await expect(focused).toHaveAttribute('data-span-id', deep);
 });
 
