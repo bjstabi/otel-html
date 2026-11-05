@@ -136,7 +136,9 @@ class Columns {
     v[o + 1] = (v[o + 1] ?? 0) + a.sum;
     v[o + 2] = Math.min(v[o + 2] ?? a.min, a.min);
     v[o + 3] = Math.max(v[o + 3] ?? a.max, a.max);
-    if (a.lastTime >= (v[o + 5] ?? a.lastTime)) {
+    const curTime = v[o + 5] ?? a.lastTime;
+    const curLast = v[o + 4] ?? a.last;
+    if (a.lastTime > curTime || (a.lastTime === curTime && a.last > curLast)) {
       v[o + 4] = a.last;
       v[o + 5] = a.lastTime;
     }
