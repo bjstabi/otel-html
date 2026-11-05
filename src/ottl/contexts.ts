@@ -43,7 +43,6 @@ export interface TargetMap {
   log_record: LogTarget;
   datapoint: DatapointTarget;
 }
-export type TargetOf<C extends OttlContextName> = TargetMap[C];
 
 export type PathType = 'string' | 'int' | 'bool' | 'map' | 'bytes' | 'any';
 

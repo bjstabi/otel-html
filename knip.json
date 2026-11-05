@@ -2,13 +2,13 @@
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "entry": [
     "scripts/*.ts",
-    "src/**/*.{ts,tsx}",
     "test/**/*.test.ts",
     "test/**/*.test-d.ts",
     "e2e/**/*.spec.ts",
     "e2e/otel-page/recorder.ts",
     "test-support/otel/vitest-sdk.ts"
   ],
+  "ignore": ["src/model/gen/**"],
   "project": [
     "scripts/**/*.ts",
     "src/**/*.{ts,tsx,css}",

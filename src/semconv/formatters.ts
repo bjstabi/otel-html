@@ -56,9 +56,3 @@ export function formatBytes(bytes: number): string {
   }
   return `${r} ${BYTE_UNITS[i] ?? 'B'}`;
 }
-
-export const FORMATTERS: {
-  readonly formatDuration: typeof formatDuration;
-  readonly formatTime: typeof formatTime;
-  readonly formatBytes: typeof formatBytes;
-} = { formatDuration, formatTime, formatBytes };

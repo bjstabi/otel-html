@@ -8,7 +8,6 @@ import {
 import type { ExportMetricsServiceRequest } from '../../src/model/gen/opentelemetry/proto/collector/metrics/v1/metrics_service_pb.js';
 import type { ExportTraceServiceRequest } from '../../src/model/gen/opentelemetry/proto/collector/trace/v1/trace_service_pb.js';
 import { parseUnixNanos } from '../../src/model/ids.js';
-import { parseJsonLines } from '../../src/model/jsonl.js';
 import {
   createNormalizeContext,
   normalizeLogs,
@@ -16,6 +15,7 @@ import {
   normalizeTraces,
 } from '../../src/model/normalize.js';
 import { type OtlpRequest, parseOtlpJson, parseOtlpObject } from '../../src/model/otlp-json.js';
+import { OtlpJsonStream } from '../../src/model/otlp-json-stream.js';
 import { parseOtlpProtobuf } from '../../src/model/otlp-proto.js';
 import { SpanKind } from '../../src/model/records.js';
 import {
@@ -317,6 +317,17 @@ describe('parseOtlpJson', () => {
     expect('polluted' in {}).toBe(false);
   });
 });
+
+/**
+ * One OTLP JSON object per line (the collector file exporter format), one request per resource entry; blank lines
+ * are skipped and errors name the line (`<source>:<line>`).
+ */
+function parseJsonLines(text: string, source: string): OtlpRequest[] {
+  const stream = new OtlpJsonStream(source, { lines: true });
+  const out = stream.push(text);
+  stream.end();
+  return out;
+}
 
 describe('parseJsonLines', () => {
   test('collector file-exporter JSON lines with mixed signals', () => {
