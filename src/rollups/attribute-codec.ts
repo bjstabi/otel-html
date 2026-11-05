@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { AnyValue, Attributes } from '../model/anyvalue.js';
+import { bytesToBase64 } from '../model/bytes.js';
 import { OtelHtmlError } from '../model/errors.js';
 
 // ---------------------------------------------------------------------------------------------
@@ -8,12 +9,6 @@ import { OtelHtmlError } from '../model/errors.js';
 // ---------------------------------------------------------------------------------------------
 
 export type JsonAny = null | boolean | number | string | JsonAny[] | { [k: string]: JsonAny };
-
-function bytesToBase64(b: Uint8Array): string {
-  let bin = '';
-  for (const byte of b) bin += String.fromCharCode(byte);
-  return btoa(bin);
-}
 
 function encodeValue(v: AnyValue): JsonAny {
   switch (v.kind) {

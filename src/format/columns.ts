@@ -1,9 +1,10 @@
 import { z } from 'zod';
 import type { AnyValue, Attributes } from '../model/anyvalue.js';
+import { bytesToBase64 } from '../model/bytes.js';
 import { assertNever, OtelHtmlError } from '../model/errors.js';
 import type { SpanId, TraceId } from '../model/ids.js';
 import type { ResourceRecord, ScopeRecord } from '../model/records.js';
-import { base64ToBytes, bytesToBase64 } from './data-file.js';
+import { base64ToBytes } from './data-file.js';
 import { parseWith } from './validate.js';
 
 /**

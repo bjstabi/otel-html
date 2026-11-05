@@ -1,6 +1,6 @@
 import { fromJson, type JsonObject, type JsonValue } from '@bufbuild/protobuf';
-import { base64Encode } from '@bufbuild/protobuf/wire';
 import type { AnyValue, Attributes } from './anyvalue.js';
+import { bytesToBase64, bytesToHex } from './bytes.js';
 import { OtelHtmlError } from './errors.js';
 import type { ExportLogsServiceRequest } from './gen/opentelemetry/proto/collector/logs/v1/logs_service_pb.js';
 import type { ExportMetricsServiceRequest } from './gen/opentelemetry/proto/collector/metrics/v1/metrics_service_pb.js';
@@ -279,10 +279,6 @@ function temporality(t: AggregationTemporality): MetricPointRecord['temporality'
   }
 }
 
-function hex(b: Uint8Array): string {
-  return Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
-}
-
 interface PointLike {
   readonly attributes: readonly KeyValue[];
   readonly startTimeUnixNano: bigint;
@@ -335,7 +331,7 @@ function anyValueJson(v: ProtoAnyValue): JsonObject {
         kvlistValue: inner.value.values.length === 0 ? {} : { values: inner.value.values.map(keyValueJson) },
       };
     case 'bytesValue':
-      return { bytesValue: base64Encode(inner.value) };
+      return { bytesValue: bytesToBase64(inner.value) };
     case 'stringValueStrindex':
       return { stringValueStrindex: inner.value };
     case undefined:
@@ -357,8 +353,8 @@ function exemplarJson(e: Exemplar): JsonObject {
   if (e.value.case === 'asDouble') out.asDouble = doubleJson(e.value.value);
   if (e.value.case === 'asInt') out.asInt = e.value.value.toString();
   if (e.filteredAttributes.length > 0) out.filteredAttributes = e.filteredAttributes.map(keyValueJson);
-  if (e.traceId.length > 0) out.traceId = hex(e.traceId);
-  if (e.spanId.length > 0) out.spanId = hex(e.spanId);
+  if (e.traceId.length > 0) out.traceId = bytesToHex(e.traceId);
+  if (e.spanId.length > 0) out.spanId = bytesToHex(e.spanId);
   return out;
 }
 
