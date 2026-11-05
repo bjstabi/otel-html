@@ -8,6 +8,7 @@ const chartSize = { width: 0, height: 0 };
 // Mirrors ECharts: a synchronous setOption render emits `finished` before setOption returns.
 const handlers = new Map<string, () => void>();
 const initThemes: unknown[] = [];
+const setOptionCalls: unknown[][] = [];
 
 vi.mock('echarts/core', () => ({
   use: (): void => undefined,
@@ -15,7 +16,10 @@ vi.mock('echarts/core', () => ({
     initThemes.push(theme);
     return {
       setTheme,
-      setOption: () => handlers.get('finished')?.(),
+      setOption: (...args: unknown[]) => {
+        setOptionCalls.push(args);
+        handlers.get('finished')?.();
+      },
       on: (name: string, h: () => void) => handlers.set(name, h),
       off: (name: string) => handlers.delete(name),
       resize,
@@ -85,6 +89,7 @@ afterEach(() => {
   resize.mockClear();
   handlers.clear();
   initThemes.length = 0;
+  setOptionCalls.length = 0;
 });
 
 describe('Chart theming', () => {
@@ -184,5 +189,44 @@ describe('Chart events', () => {
       );
     });
     expect(finished).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Chart patch', () => {
+  it('merges the patch after the main option, alone when only the patch changes, again after a new option', async () => {
+    vi.stubGlobal('ResizeObserver', FakeResizeObserver);
+    vi.stubGlobal('matchMedia', () => ({
+      matches: false,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    }));
+    installTokens();
+    const a = { series: [{ id: 'bars' }] };
+    const b = { series: [{ id: 'bars', data: [1] }] };
+    const p1 = { series: [{ id: 'selection', data: [] }] };
+    const p2 = { series: [{ id: 'selection', data: [[1, 2, 3]] }] };
+    const root = createRoot(document.createElement('div'));
+    const show = (option: Record<string, unknown>, patch: Record<string, unknown>) =>
+      act(async () =>
+        root.render(
+          <ThemeProvider>
+            <Chart option={option} patch={patch} ariaLabel="x" />
+          </ThemeProvider>,
+        ),
+      );
+    await show(a, p1);
+    expect(setOptionCalls).toEqual([
+      [a, true],
+      [p1, { notMerge: false }],
+    ]);
+    setOptionCalls.length = 0;
+    await show(a, p2);
+    expect(setOptionCalls).toEqual([[p2, { notMerge: false }]]);
+    setOptionCalls.length = 0;
+    await show(b, p2);
+    expect(setOptionCalls).toEqual([
+      [b, true],
+      [p2, { notMerge: false }],
+    ]);
   });
 });

@@ -65,6 +65,8 @@ export type ChartEvents = Readonly<Record<string, (params: unknown) => void>>;
 
 export interface ChartProps {
   option: Option;
+  /** Merged over `option` (`notMerge: false`) after it and whenever it changes; a series with an `id` merges by that id. */
+  patch?: Option;
   onEvents?: ChartEvents;
   height?: number;
   /** Accessible description of what the chart shows. */
@@ -76,11 +78,21 @@ export interface ChartProps {
 export type { EChartsType };
 
 /** Tree-shaken ECharts wrapper; rebuilds the instance with the runtime theme when light/dark changes. */
-export function Chart({ option, onEvents, height = 240, ariaLabel, onInstance }: ChartProps): JSX.Element {
+export function Chart({
+  option,
+  patch,
+  onEvents,
+  height = 240,
+  ariaLabel,
+  onInstance,
+}: ChartProps): JSX.Element {
   const host = useRef<HTMLDivElement>(null);
   const { resolved } = useTheme();
 
   const chartRef = useRef<EChartsType | null>(null);
+  const patchRef = useRef(patch);
+  patchRef.current = patch;
+  const applied = useRef<Option | undefined>(undefined);
   const instanceCb = useRef(onInstance);
   instanceCb.current = onInstance;
 
@@ -117,10 +129,22 @@ export function Chart({ option, onEvents, height = 240, ariaLabel, onInstance }:
     const entries = Object.entries(onEvents ?? {});
     for (const [name, handler] of entries) chart.on(name, handler);
     chart.setOption(option, true);
+    if (patchRef.current !== undefined) {
+      chart.setOption(patchRef.current, { notMerge: false });
+      applied.current = patchRef.current;
+    }
     return () => {
       for (const [name, handler] of entries) chart.off(name, handler);
     };
   }, [option, onEvents]);
+
+  // Declared after the option effect: a render that changes both sends the patch there, and this effect skips it.
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (chart === null || patch === undefined || patch === applied.current) return;
+    chart.setOption(patch, { notMerge: false });
+    applied.current = patch;
+  }, [patch]);
 
   return <div ref={host} style={{ height }} role="img" aria-label={ariaLabel} />;
 }
