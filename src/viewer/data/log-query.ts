@@ -28,7 +28,7 @@ import {
   throwIfAborted,
 } from './query-common.js';
 import type { LoadedChunk, TimeWindow } from './span-query.js';
-import { topK } from './top-k.js';
+import { TopKBuffer, topK } from './top-k.js';
 
 declare const logRefBrand: unique symbol;
 /** `<chunk n>.<row index>`: stable for a report folder, and the URL key `log=`. */
@@ -299,7 +299,8 @@ export class LogQueryRun {
   readonly #condition: CompiledCondition<'log_record'> | null;
   readonly #window: TimeWindow | null;
   readonly #rollups: LogRollups;
-  readonly #matched: LogRow[] = [];
+  /** Logs mode: the best `limit` matched rows so far plus compaction slack; null in other modes. */
+  readonly #matched: TopKBuffer<LogRow> | null;
   readonly #traces = new Map<TraceId, TraceGroup>();
   readonly #sort: ModeSort;
   #count = 0;
@@ -315,7 +316,16 @@ export class LogQueryRun {
     this.#ticker = new AbortTicker(signal);
     this.#condition = q.condition === null ? null : compileCondition(q.condition, 'log_record');
     this.#sort = modeSort(q);
+    this.#matched =
+      this.#sort.mode === 'logs'
+        ? new TopKBuffer(q.limit, ordered(q.sort.dir, this.#sort.compare, byTimeThenRef))
+        : null;
     throwIfAborted(signal);
+  }
+
+  /** @internal for tests: how many matched rows the run holds right now. */
+  get heldRows(): number {
+    return this.#matched?.size ?? 0;
   }
 
   /** What a scan's cap counts: matched logs, or matched traces in traces mode. */
@@ -335,8 +345,8 @@ export class LogQueryRun {
       const id = row.log.traceId;
       if (id === null) return;
       this.#group(id, row);
-    } else if (this.#q.mode === 'logs') {
-      this.#matched.push(row);
+    } else {
+      this.#matched?.push(row);
     }
     this.#count++;
     this.#rollups.add(e.target);
@@ -382,8 +392,8 @@ export class LogQueryRun {
     };
     switch (sort.mode) {
       case 'logs': {
-        const rows = topK(this.#matched, limit, ordered(order.dir, sort.compare, byTimeThenRef));
-        return { ...common, mode: sort.mode, rows, total: this.#matched.length };
+        const rows = this.#matched?.take() ?? [];
+        return { ...common, mode: sort.mode, rows, total: this.#count };
       }
       case 'patterns':
         return { ...common, ...this.patternsOf(this.#rollups.patterns) };

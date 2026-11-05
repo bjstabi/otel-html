@@ -46,3 +46,37 @@ export function topK<T>(items: readonly T[], k: number, cmp: (a: T, b: T) => num
     .sort(order)
     .map((i) => items[i] as T);
 }
+
+/**
+ * The best `limit` of a stream of items, held in bounded memory: items pile up until the buffer reaches
+ * `limit + max(limit, 1024)`, then `topK` compacts it back to `limit`. The slack amortises the compaction (one
+ * quickselect per at least 1024 pushes) while a 10M-row match still holds about a thousand rows. Compaction keeps
+ * stable order, so `take()` equals `topK(everythingPushed, limit, compare)`.
+ */
+export class TopKBuffer<T> {
+  readonly #limit: number;
+  readonly #compare: (a: T, b: T) => number;
+  readonly #bound: number;
+  #items: T[] = [];
+
+  constructor(limit: number, compare: (a: T, b: T) => number) {
+    this.#limit = limit;
+    this.#compare = compare;
+    this.#bound = limit + Math.max(limit, 1024);
+  }
+
+  push(item: T): void {
+    this.#items.push(item);
+    if (this.#items.length >= this.#bound) this.#items = topK(this.#items, this.#limit, this.#compare);
+  }
+
+  /** How many items are held right now (never more than the bound). */
+  get size(): number {
+    return this.#items.length;
+  }
+
+  /** The best `limit` items pushed so far, in order. */
+  take(): T[] {
+    return topK(this.#items, this.#limit, this.#compare);
+  }
+}

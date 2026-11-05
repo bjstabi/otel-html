@@ -389,3 +389,15 @@ test('LogRef is a branded string', () => {
   const r: LogRef = logRef(1, 2);
   expect(r).toBe('1.2');
 });
+
+describe('LogQueryRun memory', () => {
+  test('logs mode holds at most limit plus the compaction slack', () => {
+    const logs = Array.from({ length: 10_000 }, (_, i) => log({ time: (i * 10) as RelNanos }));
+    const run = new LogQueryRun({ ...base, limit: 1 });
+    for (const e of entriesOf(logs)) run.visit(e);
+    expect(run.heldRows).toBeLessThanOrEqual(1 + 1024);
+    const r = run.finish(null);
+    expect(r.total).toBe(10_000);
+    expect(r.rows).toHaveLength(1);
+  });
+});

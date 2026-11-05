@@ -19,7 +19,7 @@ import {
   sortFor,
   throwIfAborted,
 } from './query-common.js';
-import { topK } from './top-k.js';
+import { TopKBuffer, topK } from './top-k.js';
 import { buildTraceTree, exclusiveTimeByService } from './trace-tree.js';
 
 /** Nanoseconds relative to the report epoch (same unit and range as `SpanRecord.start`). */
@@ -206,9 +206,8 @@ export class SpanQueryRun {
   readonly #condition: CompiledCondition<'span'> | null;
   readonly #rollups = new SpanRollups(QUERY_FACET_CAPS);
   readonly #groups: GroupDurations | null;
-  /** Spans mode: the matched rows, compacted to the best `limit` whenever the buffer reaches `#bound`. */
-  #rows: SpanRow[] = [];
-  readonly #bound: number;
+  /** Spans mode: the best `limit` matched rows so far plus compaction slack; null in traces mode. */
+  readonly #rows: TopKBuffer<SpanRow> | null;
   readonly #traces = new Map<TraceId, { rows: SpanRow[]; hit: boolean }>();
   readonly #order: ((a: SpanRow, b: SpanRow) => number) | null;
   readonly #traceCompare: ((a: TraceRow, b: TraceRow) => number) | null;
@@ -241,7 +240,7 @@ export class SpanQueryRun {
             (a, b) => a.span.start - b.span.start,
           )
         : null;
-    this.#bound = q.limit + Math.max(q.limit, 1024);
+    this.#rows = this.#order === null ? null : new TopKBuffer(q.limit, this.#order);
     this.#traceCompare = q.mode === 'traces' ? sortFor(TRACE_SORTS, q.sort.column, q.mode) : null;
     throwIfAborted(signal);
   }
@@ -253,7 +252,7 @@ export class SpanQueryRun {
 
   /** @internal for tests: how many matched rows the run holds right now. */
   get heldRows(): number {
-    return this.#rows.length;
+    return this.#rows?.size ?? 0;
   }
 
   /** Ids of traces with a matching span (traces mode), in first-seen order. */
@@ -284,10 +283,7 @@ export class SpanQueryRun {
     if (this.#condition !== null && !this.#condition.test(e.target)) return;
     if (this.#q.text !== '' && !matchesText(this.#q.text, spanTextFields(e.target))) return;
     this.#count++;
-    if (this.#order !== null) {
-      this.#rows.push(e.row);
-      if (this.#rows.length >= this.#bound) this.#rows = topK(this.#rows, this.#q.limit, this.#order);
-    }
+    this.#rows?.push(e.row);
     if (group !== undefined) {
       if (!group.hit) this.#hitTraces++;
       group.hit = true;
@@ -306,8 +302,8 @@ export class SpanQueryRun {
     throwIfAborted(this.#signal);
     let rows: (SpanRow | TraceRow)[];
     let total: number;
-    if (this.#order !== null) {
-      rows = topK(this.#rows, this.#q.limit, this.#order);
+    if (this.#rows !== null) {
+      rows = this.#rows.take();
       total = this.#count;
     } else {
       const compare = this.#traceCompare;
