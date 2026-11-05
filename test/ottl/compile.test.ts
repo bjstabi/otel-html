@@ -84,6 +84,8 @@ describe('compile-time failures', () => {
     '(a+){2,20}',
     '(a{1,64}){1,64}',
     '(a+){5}',
+    '((a+)b){5}',
+    '(a{1,2}){5}',
   ])('rejects backtracking-prone or non-RE2 regex %s', (p) => {
     expect(() => compileCondition(`IsMatch(name, ${JSON.stringify(p)})`, 'span')).toThrowError(
       /invalid-?|regular expression/i,
@@ -101,6 +103,8 @@ describe('compile-time failures', () => {
     '(a+){4}',
     '(ab){2,5}',
     '(a?){20}',
+    '([0-9a-f]{2}:){5}[0-9a-f]{2}',
+    '(a{2}){5}',
   ])('accepts %s', (p) => {
     expect(() => compileCondition(`IsMatch(name, ${JSON.stringify(p)})`, 'span')).not.toThrow();
   });

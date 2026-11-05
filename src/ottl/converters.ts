@@ -18,9 +18,11 @@ export interface ConverterSpec {
 // Regex: user patterns run on the JS (backtracking) engine, while OTTL users expect
 // Go RE2 (linear time). We therefore accept only an RE2-like subset: no
 // lookaround or backreferences, and no quantifier that can repeat more than 4 times
-// applied to a group that itself contains a repeating quantifier (maximum above 1):
-// the classic `(a+)+` blow-up, and its bounded form `(a+){2,20}`. `?` is not a repeat,
-// and up to 4 outer repetitions stay polynomial, so `(\d+\.){3}\d+` is fine. Pattern
+// applied to a group that itself contains a variable quantifier (maximum above 1 and
+// minimum below maximum): the classic `(a+)+` blow-up, and its bounded form
+// `(a+){2,20}`. `?` is not a repeat and an exact count like `{2}` gives a fixed width.
+// Allowing up to 4 outer repetitions keeps common forms such as `(\d+\.){3}` usable,
+// but the cost on long subjects is still polynomial of high degree (see #188). Pattern
 // length is capped. Alternation overlap such as `(a|a)*` is not detected.
 // ---------------------------------------------------------------------------
 
@@ -29,7 +31,7 @@ const REGEX_CACHE_LIMIT = 256;
 const regexCache = new Map<string, RegExp>();
 
 function regexProblem(p: string): string | undefined {
-  // Frame per open group: whether it contains a quantifier with a maximum above 1.
+  // Frame per open group: whether it contains a variable quantifier (maximum above 1, minimum below it).
   const stack: boolean[] = [false];
   let lastAtomRepeatGroup = false;
   let i = 0;
@@ -74,6 +76,7 @@ function regexProblem(p: string): string | undefined {
     }
     // The quantifier's maximum repeat count, when this character starts one.
     let max: number;
+    let min = 0;
     let len = 1;
     if (c === '*' || c === '+') max = Number.POSITIVE_INFINITY;
     else if (c === '?') max = 1;
@@ -85,7 +88,8 @@ function regexProblem(p: string): string | undefined {
         continue;
       }
       len = m[0].length;
-      if (m[2] === undefined) max = Number(m[1]);
+      min = Number(m[1]);
+      if (m[2] === undefined) max = min;
       else max = m[3] === '' ? Number.POSITIVE_INFINITY : Number(m[3]);
     } else {
       lastAtomRepeatGroup = false;
@@ -94,7 +98,7 @@ function regexProblem(p: string): string | undefined {
     }
     if (max > 4 && lastAtomRepeatGroup)
       return 'nested repetition (e.g. "(a+)+" or "(a+){2,20}") can backtrack catastrophically; repeat a class instead, like [a-z]{1,64}';
-    if (max > 1) markTop();
+    if (max > 1 && min < max) markTop();
     lastAtomRepeatGroup = false;
     i += len;
   }
