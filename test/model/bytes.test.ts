@@ -24,5 +24,7 @@ describe('bytesToHex', () => {
     const all = Uint8Array.from({ length: 256 }, (_, i) => i);
     expect(bytesToHex(all)).toBe(Array.from(all, (x) => x.toString(16).padStart(2, '0')).join(''));
     expect(bytesToHex(new Uint8Array([0x0a, 0xff]))).toBe('0aff');
+    expect(bytesToHex(new Uint8Array(0))).toBe('');
+    expect(bytesToHex(Uint8Array.from([0x00, 0x0f, 0xa0, 0xff]))).toBe('000fa0ff');
   });
 });
