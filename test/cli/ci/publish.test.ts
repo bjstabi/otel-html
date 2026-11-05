@@ -64,6 +64,23 @@ describe('approximateJobIds', () => {
       'name:build',
     );
   });
+  test('a hint is a whole name or a prefix before " (", not any string prefix', () => {
+    expect(approximateJobIds([j(5, 'e2e-extra')], [fallback('e2e', 'gh-1')]).get(5)).toBe('name:e2e-extra');
+  });
+  test('a hint equal to a full parenthesised display name matches by equality', () => {
+    const ids = approximateJobIds([j(7, 'e2e (chromium)')], [fallback('e2e (chromium)', 'gh-1')]);
+    expect(ids.get(7)).toBe('name:e2e (chromium)@gh-1');
+  });
+  test('two contexts with different ids matching one job fall back to name:<display>', () => {
+    const ids = approximateJobIds(
+      [j(7, 'e2e (chromium)')],
+      [
+        { jobId: 'name:e2e@a', approximate: true, jobName: 'e2e' },
+        { jobId: 'name:e2e@b', approximate: true, jobName: 'e2e' },
+      ],
+    );
+    expect(ids.get(7)).toBe('name:e2e (chromium)');
+  });
   test('an exact claim leaves the job out of the map', () => {
     expect(approximateJobIds([j(1), j(2)], [{ jobId: 1, approximate: false }]).has(1)).toBe(false);
   });
