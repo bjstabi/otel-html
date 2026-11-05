@@ -1,3 +1,4 @@
+import { bytesToHex } from './bytes.js';
 import { OtelHtmlError } from './errors.js';
 
 declare const brand: unique symbol;
@@ -20,10 +21,16 @@ function parseHexId(hex: string, len: number, path: string): string {
   return lower;
 }
 
-function bytesToHex(b: Uint8Array): string {
-  let s = '';
-  for (const byte of b) s += byte.toString(16).padStart(2, '0');
-  return s;
+/** An id from raw bytes: the length and the all-zero check run on the bytes, the hex is built once. */
+function idFromBytes(b: Uint8Array, bytes: number, path: string): string {
+  if (b.length !== bytes || b.every((x) => x === 0)) {
+    throw new OtelHtmlError('invalid-otlp', {
+      path,
+      expected: `${bytes * 2} hex chars, not all zero`,
+      actual: JSON.stringify(bytesToHex(b)),
+    });
+  }
+  return bytesToHex(b);
 }
 
 export function parseTraceId(hex: string, path: string): TraceId {
@@ -35,11 +42,11 @@ export function parseSpanId(hex: string, path: string): SpanId {
 }
 
 export function traceIdFromBytes(b: Uint8Array, path: string): TraceId {
-  return parseTraceId(bytesToHex(b), path);
+  return idFromBytes(b, 16, path) as TraceId;
 }
 
 export function spanIdFromBytes(b: Uint8Array, path: string): SpanId {
-  return parseSpanId(bytesToHex(b), path);
+  return idFromBytes(b, 8, path) as SpanId;
 }
 
 export function parseUnixNanos(v: string | number | bigint, path: string): UnixNanos {
