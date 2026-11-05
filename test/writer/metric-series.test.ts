@@ -482,4 +482,41 @@ describe('MetricSeriesWriter', () => {
       },
     ]);
   });
+
+  test('equal-time gauge points give the same bucket buffered and across a spill (#147)', async () => {
+    const gauge = {
+      ...pt('g', 'h'),
+      type: 'gauge' as const,
+      temporality: 'unspecified' as const,
+      monotonic: false,
+    };
+    const num = (v: number): BucketAgg => ({
+      k: 'number',
+      count: 1,
+      sum: v,
+      min: v,
+      max: v,
+      last: v,
+      lastTime: 1,
+    });
+    const want = { k: 'number', count: 2, sum: 8, min: 3, max: 5, last: 5, lastTime: 1 };
+
+    const one = setup(); // both points in one buffer
+    const d1 = one.catalog.defOf(gauge);
+    const s1 = one.catalog.seriesOf(d1, gauge, resource, scope);
+    one.writer.add(d1, s1, rel(0.1 * S), num(5), []);
+    one.writer.add(d1, s1, rel(0.2 * S), num(3), []); // same 1.024 s bucket
+    await one.writer.flush(one.catalog);
+    expect(read<SegmentFile>(one.fs, metricSegmentKey(0, 0), parseSegmentFile).series[0]?.a[0]).toEqual(want);
+
+    const two = setup(); // the buffer is written out as a segment between the points
+    const d2 = two.catalog.defOf(gauge);
+    const s2 = two.catalog.seriesOf(d2, gauge, resource, scope);
+    two.writer.add(d2, s2, rel(0.1 * S), num(5), []);
+    await two.writer.flush(two.catalog);
+    two.writer.add(d2, s2, rel(0.2 * S), num(3), []);
+    await two.writer.flush(two.catalog);
+    await two.writer.compact(two.catalog);
+    expect(read<LevelFile>(two.fs, metricLevelKey(0, 0), parseLevelFile).series[0]?.a[0]).toEqual(want);
+  });
 });

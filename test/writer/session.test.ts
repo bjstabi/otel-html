@@ -540,6 +540,33 @@ describe('folders and locking', () => {
     expect(chunkFiles).toEqual(['r/data/chunks/spans/000000.js']);
   });
 
+  test('replace wipes the old report when the first partial input ends, so a second partial input is not held', async () => {
+    const w = createTestWriter();
+    const a = await open(w, testConfig({ writer: { chunkTargetBytes: 1 } }));
+    await a.add(otlp(spansRequest(3)), 'old.json');
+    await a.close();
+    const chunkFiles = (): string[] =>
+      [...w.fs.snapshot().keys()].filter((p) => p.startsWith('r/data/chunks/spans/'));
+    expect(chunkFiles().length).toBeGreaterThan(0);
+    const oldFiles = new Set(chunkFiles());
+
+    // a first input below the chunk target and the flush interval: nothing of it is cut or written by itself
+    const b = await open(w, testConfig({ writer: { chunkTargetBytes: 20_000, flushIntervalMs: 60_000 } }));
+    await b.add(otlp(spansRequest(1, 0, 100)), 'small.json', { partial: true });
+    await b.endInput();
+    // the first input has been read without error: the old report is gone
+    expect(oldFiles.has('r/data/chunks/spans/000002.js')).toBe(true);
+    expect(chunkFiles()).not.toContain('r/data/chunks/spans/000002.js');
+
+    // a later partial input is written as it arrives, not held until its end
+    const before = chunkFiles().length;
+    await b.add(otlp(spansRequest(300, 0, 200)), 'big.json', { partial: true });
+    expect(chunkFiles().length).toBeGreaterThan(before);
+    await b.endInput();
+    await b.close();
+    expect(manifestOf(w, OUT).totals.spans).toBe(301);
+  });
+
   test('replace replaces a report whose data/metrics holds a stray file (e.g. .DS_Store)', async () => {
     const w = createTestWriter();
     await (await open(w)).close();
