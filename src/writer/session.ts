@@ -140,6 +140,10 @@ export interface AddOptions {
    * checkpoint runs and a report being replaced is not wiped, so a bad entry later in the input leaves the
    * committed report as it was. In append and fresh-create mode, chunks written before a failing entry stay on disk
    * outside the manifest: harmless, never read, and overwritten by the next append.
+   *
+   * While a partial input goes into a report being replaced, nothing is written before `endInput`: every accepted
+   * chunk and metric bucket stays in memory, outside the chunk and metric buffer budgets. The first input into a
+   * replaced report should therefore fit in memory; otherwise empty the folder first.
    */
   readonly partial?: boolean;
 }
