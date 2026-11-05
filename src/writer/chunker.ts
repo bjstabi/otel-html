@@ -43,18 +43,18 @@ function attributesSize(a: Attributes): number {
 }
 
 /** Cheap estimate of a record's decoded (in-memory/JSON) size; chunks are cut on this, not on exact bytes. */
-export function estimateSpanBytes(s: SpanRecord): number {
+function estimateSpanBytes(s: SpanRecord): number {
   let n = 230 + s.name.length + s.traceState.length + s.status.message.length + attributesSize(s.attributes);
   for (const e of s.events) n += 40 + e.name.length + attributesSize(e.attributes);
   for (const l of s.links) n += 120 + attributesSize(l.attributes);
   return n;
 }
 
-export function estimateLogBytes(l: LogRecordRecord): number {
+function estimateLogBytes(l: LogRecordRecord): number {
   return 160 + l.severityText.length + l.eventName.length + valueSize(l.body) + attributesSize(l.attributes);
 }
 
-export function estimateMetricBytes(p: MetricPointRecord): number {
+function estimateMetricBytes(p: MetricPointRecord): number {
   return (
     150 +
     p.name.length +

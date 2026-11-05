@@ -30,19 +30,7 @@ import { compileSelector, targetOf } from './metric-where.js';
 import { AbortTicker } from './query-common.js';
 import type { TimeWindow } from './span-query.js';
 
-export {
-  COMBINE,
-  type CombineRule,
-  DEFAULT_SHOW,
-  kindOf,
-  METRIC_TYPE_LABELS,
-  type MetricKind,
-  type MetricTypeBadge,
-  metricTypeLabel,
-  NOTES,
-  SHOW_BY_KIND,
-  SUMMARY_TOP_QUANTILE,
-} from './metric-tables.js';
+export { DEFAULT_SHOW, kindOf, metricTypeLabel, NOTES, SHOW_BY_KIND } from './metric-tables.js';
 export type { MetricFn, MetricQuery };
 
 // ---------------------------------------------------------------------------------------------

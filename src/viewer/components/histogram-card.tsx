@@ -127,7 +127,7 @@ const VAR_RE = /^var\((--[a-z0-9-]+)\)$/;
 const UNRESOLVED_COLOR = '#6b6f78';
 
 /** Resolve a `var(--token)` reference against the live theme (an unset token gives `UNRESOLVED_COLOR`); other colours pass through. */
-export function resolveColor(color: string): string {
+function resolveColor(color: string): string {
   const name = VAR_RE.exec(color)?.[1];
   if (name === undefined) return color;
   const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -182,7 +182,7 @@ export function histogramBars<K extends string>(
   });
 }
 
-export function buildHistogramOption<K extends string>(
+function buildHistogramOption<K extends string>(
   b: BucketView<K>,
   { series, topFirst }: Pick<HistogramSeriesSet<K>, 'series' | 'topFirst'>,
 ) {

@@ -27,7 +27,7 @@ const FORCE_SHUTDOWN_AFTER_MS = 5_000;
 const DETAILS_KEY = 'grpc-status-details-bin';
 
 /** grpc-js refuses (uncounted) above this multiple of `maxBodyBytes`; below it the handler counts the refusal. */
-export const GRPC_CEILING_FACTOR = 2;
+const GRPC_CEILING_FACTOR = 2;
 
 export interface GrpcTransportOptions {
   maxBodyBytes: number;

@@ -18,7 +18,7 @@ export interface ExportItem {
 }
 
 /** The clipboard fallback: the text in a read-only, pre-selected box (a link, a YAML document) to copy by hand. */
-export function CopyTextDialog(props: {
+function CopyTextDialog(props: {
   title: string;
   /** Accessible name of the text box. */
   label: string;
@@ -60,7 +60,7 @@ export function CopyTextDialog(props: {
  * Copies text to the clipboard; `copied` is true for two seconds after a copy succeeds. Without a clipboard (or when
  * it refuses) `dialog` is the `CopyTextDialog` to render so the text can be copied by hand; otherwise it is null.
  */
-export function useClipboardCopy(dialogText: { title: string; label: string }): {
+function useClipboardCopy(dialogText: { title: string; label: string }): {
   copy: (text: string) => Promise<boolean>;
   copied: boolean;
   dialog: JSX.Element | null;

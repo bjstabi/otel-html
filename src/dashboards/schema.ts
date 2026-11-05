@@ -46,7 +46,7 @@ export interface WidgetLayout {
   h: number;
 }
 
-export const MEASURES = [
+const MEASURES = [
   'count',
   'duration.sum',
   'duration.avg',
@@ -178,7 +178,7 @@ export type WidgetInput =
       measure?: Measure | undefined;
     });
 
-export type VariableInput =
+type VariableInput =
   | string
   | { key: string; label?: string | undefined; default?: string | null | undefined };
 
@@ -561,7 +561,7 @@ const buildViewSchema = (compiled: boolean): z.ZodType<View, ViewInput> =>
     });
 
 export const ViewSchema: z.ZodType<View, ViewInput> = buildViewSchema(true);
-export const ViewShapeSchema: z.ZodType<View, ViewInput> = buildViewSchema(false);
+const ViewShapeSchema: z.ZodType<View, ViewInput> = buildViewSchema(false);
 
 const buildViewListSchema = (view: z.ZodType<View, ViewInput>): z.ZodType<View[], ViewInput[]> =>
   z.array(view).superRefine((vs, ctx) =>

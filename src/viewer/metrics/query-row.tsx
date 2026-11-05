@@ -27,7 +27,7 @@ const FN_PRESETS: readonly { label: string; fn: MetricFn }[] = [
   { label: 'bottom 5 by avg', fn: { op: 'bottom', n: 5, by: 'avg' } },
 ];
 
-export function fnLabel(f: MetricFn): string {
+function fnLabel(f: MetricFn): string {
   switch (f.op) {
     case 'rate':
     case 'increase':
@@ -45,12 +45,12 @@ export function fnLabel(f: MetricFn): string {
 }
 
 /** `resource.attributes["service.name"]` is shown as `service.name`, a point attribute as itself. */
-export function byKeyLabel(path: string): string {
+function byKeyLabel(path: string): string {
   const m = /^(?:resource\.)?attributes\["(.*)"\]$/.exec(path);
   return m?.[1] ?? path;
 }
 
-export function IdChip(props: { id: string; colorToken: string }): JSX.Element {
+function IdChip(props: { id: string; colorToken: string }): JSX.Element {
   return (
     <span
       aria-hidden

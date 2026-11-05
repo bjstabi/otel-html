@@ -18,7 +18,7 @@ import { useColorAssigner } from '../theme/colors-context.js';
 import { traceFacts } from '../traces/trace-facts.js';
 
 /** Neighbors requested on each side of the log in Surrounding logs. */
-export const SURROUNDING_N = 10;
+const SURROUNDING_N = 10;
 
 /** The shared log filter actions, with the error they raise rendered as a card above the tab. */
 function useLogFilterActions(): ReturnType<typeof useFilterActions> & { errorNote: JSX.Element | null } {

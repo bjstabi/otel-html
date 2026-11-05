@@ -12,12 +12,12 @@ export const DRAIN_PARAMS = {
   maxTokens: 64,
 } as const;
 
-export const WILDCARD = '<*>';
+const WILDCARD = '<*>';
 
 const SAMPLE_CHARS = 256;
 
 /** Whole-token masks: a token matching any of these is replaced by the wildcard before clustering. */
-export const DRAIN_MASKS: readonly RegExp[] = [
+const DRAIN_MASKS: readonly RegExp[] = [
   /^[-+]?\d+(\.\d+)?$/,
   /^(0x)?[0-9a-f]{8,}$/i,
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,

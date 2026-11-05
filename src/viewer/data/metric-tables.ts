@@ -106,9 +106,9 @@ export function checkShow(kind: MetricKind, show: string): void {
 }
 
 /** The badge a metric definition shows (picker, Catalog): its point type, a monotonic sum told apart. */
-export type MetricTypeBadge = MetricDef['type'] | 'monotonicSum';
+type MetricTypeBadge = MetricDef['type'] | 'monotonicSum';
 
-export const METRIC_TYPE_LABELS: Record<MetricTypeBadge, string> = {
+const METRIC_TYPE_LABELS: Record<MetricTypeBadge, string> = {
   histogram: 'HIST',
   exponentialHistogram: 'EXP HIST',
   sum: 'SUM',

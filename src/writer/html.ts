@@ -5,7 +5,7 @@ export interface ViewerEntry {
   style: string | null;
 }
 
-export function escapeHtml(s: string): string {
+function escapeHtml(s: string): string {
   return s
     .replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;')

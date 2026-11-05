@@ -14,7 +14,7 @@ export interface RunInfo {
   revision: string | null;
 }
 
-export interface RunPoint {
+interface RunPoint {
   value: number;
   failed: boolean;
 }

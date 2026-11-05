@@ -86,7 +86,7 @@ const BODY_PATH = 'log.body.string';
 const TRACE_ID_PATH = 'trace_id.string';
 const CORE_FACET_KEYS: ReadonlySet<string> = new Set(DEFAULT_LOG_FACETS.map((f) => f.key));
 
-export function ZeroLogs({ manifest }: { manifest: Manifest }): JSX.Element {
+function ZeroLogs({ manifest }: { manifest: Manifest }): JSX.Element {
   return (
     <section className="max-w-xl rounded-card border border-hairline bg-surface p-6">
       <h2 className="text-base font-semibold">This report has no logs</h2>

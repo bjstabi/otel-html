@@ -1,7 +1,7 @@
 import { OtelHtmlError } from '../../model/errors.js';
 
 /** The `window.__OH__` global every data file registers into: `__OH__.push("<key>", <payload>);`. */
-export interface OhGlobal {
+interface OhGlobal {
   /** Pushes made before the registry was installed, drained by `installRegistry`. */
   q: [string, unknown][];
   push(key: string, payload: unknown): void;

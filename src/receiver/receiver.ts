@@ -9,7 +9,7 @@ import { type Outcome, outcomeOf } from './status.js';
 
 export type BodyEncoding = 'json' | 'protobuf';
 
-export interface ReceiveResult {
+interface ReceiveResult {
   accepted: number;
   rejected: number;
   errorMessage: string | null;

@@ -26,7 +26,7 @@ export class CliExit extends Error {
 }
 
 /** Commander parse failures never exit the process: they throw, and `runCli` maps them. */
-export function buildProgram(io: CliIo, deps: CliDeps): Command {
+function buildProgram(io: CliIo, deps: CliDeps): Command {
   const program = new Command('otel-html')
     .description('turn OpenTelemetry data into a self-contained HTML report')
     .version(pkg.version)

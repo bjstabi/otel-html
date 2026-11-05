@@ -1,7 +1,7 @@
 import type { AnyValue, Attributes } from '../model/anyvalue.js';
 
 /** Attribute namespaces, in display order. A key belongs to a group when it equals the prefix or starts with `prefix.`. */
-export const SEMCONV_GROUPS: readonly { readonly prefix: string; readonly label: string }[] = [
+const SEMCONV_GROUPS: readonly { readonly prefix: string; readonly label: string }[] = [
   { prefix: 'http', label: 'HTTP' },
   { prefix: 'url', label: 'URL' },
   { prefix: 'server', label: 'Server' },
@@ -28,7 +28,7 @@ export const SEMCONV_GROUPS: readonly { readonly prefix: string; readonly label:
   { prefix: 'deployment', label: 'Deployment' },
 ];
 
-export const OTHER_GROUP_LABEL = 'Other';
+const OTHER_GROUP_LABEL = 'Other';
 
 export interface AttributeGroup {
   readonly label: string;

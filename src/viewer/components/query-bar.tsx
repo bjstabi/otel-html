@@ -27,7 +27,7 @@ function isOp(v: string): v is FilterToken['op'] {
 }
 
 /** `col N: expected …, got …` for OTTL errors (the column is the 1-based offset into the source). */
-export function describeOttlError(e: unknown): string {
+function describeOttlError(e: unknown): string {
   if (e instanceof OtelHtmlError) {
     const detail =
       e.expected !== undefined && e.actual !== undefined
@@ -83,7 +83,7 @@ const timeoutScheduler: Scheduler = (fn, ms) => {
   return () => clearTimeout(id);
 };
 
-export const TEXT_DEBOUNCE_MS = 250;
+const TEXT_DEBOUNCE_MS = 250;
 
 function TokenChip(props: {
   token: FilterToken;

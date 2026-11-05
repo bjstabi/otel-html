@@ -5,7 +5,7 @@ import { createHttpHandler, type Listener, listenHttp } from '../receiver/http.j
 import { createReceiver, type ReceiverStats } from '../receiver/receiver.js';
 import { configOf, depsOf, type Report, type ReportDeps, reportDepsOf, sessionOf } from './report.js';
 
-export interface ListenOverride {
+interface ListenOverride {
   host?: string;
   port?: number;
 }

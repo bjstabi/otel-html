@@ -26,7 +26,7 @@ import { useKeyedAsync } from '../state/use-keyed-async.js';
 import { exemplarTraceLookup, openChartPick } from './chart-pick.js';
 
 /** How far the grid looks on each side of the moment (or span) it was opened from. */
-export const GRID_MARGIN_NS = 5 * 60 * 1_000_000_000;
+const GRID_MARGIN_NS = 5 * 60 * 1_000_000_000;
 
 /** The grid's window: `from` widened by `GRID_MARGIN_NS` on each side, clamped to the run's range. */
 export function gridWindow(from: TimeWindow, range: TimeWindow | null): TimeWindow {
@@ -104,7 +104,7 @@ function literalAttributes(r: ResourceRecord): Map<string, string> {
  * With several resources, one line per resource: `by` the service plus every attribute whose value differs between
  * them, so two resources of one service still draw apart (lines take the service color).
  */
-export function resourceLines(resources: readonly ResourceRecord[]): string[] {
+function resourceLines(resources: readonly ResourceRecord[]): string[] {
   if (resources.length < 2) return [];
   const keys = new Set(resources.flatMap((r) => [...r.attributes.keys()]));
   keys.delete('service.name');
@@ -121,7 +121,7 @@ export function resourceLines(resources: readonly ResourceRecord[]): string[] {
 }
 
 /** `m` with only the series on one of `keys` (canonical `resourceKey`s): the grid charts exactly the origin's resources. */
-export function seriesOnResources(m: LoadedMetric, keys: ReadonlySet<string>): LoadedMetric {
+function seriesOnResources(m: LoadedMetric, keys: ReadonlySet<string>): LoadedMetric {
   return { ...m, series: m.series.filter((s) => s.resource !== null && keys.has(resourceKey(s.resource))) };
 }
 

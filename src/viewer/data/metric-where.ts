@@ -40,7 +40,7 @@ function typed(v: OttlValue): unknown {
 /** The `other` series' value for every `by` path; no real value encodes to it. */
 const OTHER_VALUE = ['other'];
 
-export interface SeriesGroup {
+interface SeriesGroup {
   /** Identity of the group: the `by` paths with their type-tagged values. */
   key: string;
   /** The values as displayed, in `by` order. */

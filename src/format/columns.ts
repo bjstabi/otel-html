@@ -18,7 +18,7 @@ import { parseWith } from './validate.js';
  *   `{"$b":"<base64>"}` (bytes). The encoded payload is plain JSON, so it survives `JSON.stringify`.
  */
 
-export type ColumnKind =
+type ColumnKind =
   | 'traceId'
   | 'spanId'
   | 'nullableSpanId'
@@ -33,7 +33,7 @@ export type ColumnKind =
   | 'json'
   | 'ref';
 
-export interface ColumnDef<R> {
+interface ColumnDef<R> {
   readonly name: keyof R & string;
   readonly kind: ColumnKind;
   /** `dict` columns only: the closed set of allowed values (enum-like string unions). */

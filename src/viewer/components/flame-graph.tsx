@@ -40,7 +40,7 @@ export interface FlameView {
   markers?: readonly FlameMarker[];
 }
 
-export interface FlameMarker {
+interface FlameMarker {
   time: RelNanos;
   label: string;
 }
@@ -62,9 +62,9 @@ export function labelWidth(text: string, font: string): number {
 }
 
 /** Traces with at most this many spans always draw every bar on its own. */
-export const BATCH_ABOVE_BARS = 2000;
+const BATCH_ABOVE_BARS = 2000;
 /** Narrow means shorter than this fraction of the visible window. */
-export const NARROW_FRACTION = 0.004;
+const NARROW_FRACTION = 0.004;
 
 export type FlameItem =
   | { kind: 'bar'; index: number }
@@ -107,7 +107,7 @@ export function buildFlameItems(
   return items;
 }
 
-export const FLAME_MAX_ROWS = 200;
+const FLAME_MAX_ROWS = 200;
 const ROW_PX = 18;
 const GRID = { left: 8, right: 8, top: 4, bottom: 24 } as const;
 
@@ -220,7 +220,7 @@ function isCoordSys(v: unknown): v is CoordSys {
 }
 
 /** Pixel rows needed for the chart body, including the time axis. */
-export function flameHeight(bars: readonly FlameBar[], maxRows = FLAME_MAX_ROWS): number {
+function flameHeight(bars: readonly FlameBar[], maxRows = FLAME_MAX_ROWS): number {
   let depth = 0;
   for (const b of bars) if (b.depth > depth) depth = b.depth;
   const rows = Math.min(depth + 1, maxRows);
@@ -498,7 +498,7 @@ export function selectionPatch(
   };
 }
 
-export const MINIMAP_MAX_BARS = 4000;
+const MINIMAP_MAX_BARS = 4000;
 
 /** At most `cap` bars for the overview: every error, then the longest spans (order kept). Small traces are untouched. */
 export function sampleForOverview(bars: readonly FlameBar[], cap: number): readonly FlameBar[] {

@@ -383,7 +383,7 @@ function time(dp: JsonObject, key: string): bigint {
 }
 
 /** `metricRecords` for a request `plainMetrics` accepted: equal records, equal errors (same paths). */
-export function* plainMetricRecords(
+function* plainMetricRecords(
   plain: PlainMetrics,
   ctx: NormalizeContext,
   source: string,

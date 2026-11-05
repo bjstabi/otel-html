@@ -233,7 +233,7 @@ export function facetKeyToPath(key: string, signal: FacetSignal, scope: FacetSco
 export const SEVERITY_PATH = 'log.severity_number';
 
 /** First and last OTTL severity enum of each band (`severityKey` ranges): a band is `>= first and <= last`. */
-export function severityBounds(band: LogSeverityKey): { first: string; last: string } {
+function severityBounds(band: LogSeverityKey): { first: string; last: string } {
   const { min, max } = SEVERITY_BANDS[band];
   return { first: severityEnumName(band, min), last: severityEnumName(band, max) };
 }

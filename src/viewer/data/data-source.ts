@@ -41,8 +41,6 @@ import type { TraceTree } from './trace-tree.js';
 import { createWindowedSource } from './windowed.js';
 
 export type { SpanQuery, SpanQueryResult, SpanRow, TimeWindow, TraceRow } from './span-query.js';
-export type { TraceNode, TraceTree } from './trace-tree.js';
-export { buildTraceTree } from './trace-tree.js';
 
 export interface Landing {
   facets: FacetCounts;
@@ -65,14 +63,14 @@ export interface TraceDetail {
 /** A trace as the span strategy assembles it; `createDataSource` adds the log count. */
 export type SpanTrace = Omit<TraceDetail, 'logCount'>;
 
-export interface LogLanding {
+interface LogLanding {
   facets: FacetCounts;
   buckets: TimeBuckets<LogSeverityKey>;
   /** The writer's clusters over every log. */
   patterns: readonly PatternRow[];
 }
 
-export interface SurroundingLogs {
+interface SurroundingLogs {
   before: readonly LogRow[];
   log: LogRow;
   after: readonly LogRow[];
@@ -144,7 +142,7 @@ export type LogStrategy = Pick<DataSource, 'queryLogs' | 'getLog' | 'traceLogs' 
 export const catalogOf = (ds: DataSource): Promise<MetricCatalog> => ds.metricCatalog();
 
 /** Metrics kept decoded in memory. */
-export const METRIC_LRU_SIZE = 32;
+const METRIC_LRU_SIZE = 32;
 
 const DURATION_KEY_SEP = '\u0000';
 

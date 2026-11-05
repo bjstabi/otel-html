@@ -61,7 +61,7 @@ function readTokens(): Record<string, string> {
 }
 
 type Option = Parameters<EChartsType['setOption']>[0];
-export type ChartEvents = Readonly<Record<string, (params: unknown) => void>>;
+type ChartEvents = Readonly<Record<string, (params: unknown) => void>>;
 
 export interface ChartProps {
   option: Option;

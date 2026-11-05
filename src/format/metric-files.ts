@@ -23,7 +23,7 @@ import { parseWith } from './validate.js';
 
 /** Level 0 is 1 ms × 2^10, aligned like `TimeBuckets`; level k is LEVEL_FACTOR^k times wider. */
 export const LEVEL0_WIDTH_NS = 1_024_000_000;
-export const LEVEL_FACTOR = 8;
+const LEVEL_FACTOR = 8;
 export const MAX_LEVEL = 6;
 /** Compaction stops at the first level with at most this many buckets over the metric's time range. */
 export const LEVEL_MAX_BUCKETS = 2000;
@@ -596,7 +596,7 @@ const SeriesDefSchema: z.ZodType<SerializedSeriesDef> = z.strictObject({
   other: z.boolean(),
 });
 
-export const SeriesFileSchema: z.ZodType<SerializedSeriesFile> = z
+const SeriesFileSchema: z.ZodType<SerializedSeriesFile> = z
   .strictObject({
     metric: nonNegInt,
     series: z.array(SeriesDefSchema).superRefine((list, ctx) => {
@@ -627,14 +627,14 @@ export const SeriesFileSchema: z.ZodType<SerializedSeriesFile> = z
     }
   });
 
-export const SegmentFileSchema: z.ZodType<SerializedSegmentFile> = z.strictObject({
+const SegmentFileSchema: z.ZodType<SerializedSegmentFile> = z.strictObject({
   metric: nonNegInt,
   widthNs: z.literal(LEVEL0_WIDTH_NS),
   series: SeriesListSchema,
   exemplars: z.array(ExemplarSchema),
 });
 
-export const LevelFileSchema: z.ZodType<LevelFile> = z
+const LevelFileSchema: z.ZodType<LevelFile> = z
   .strictObject({
     metric: nonNegInt,
     level: z.number().int().min(0).max(MAX_LEVEL),
@@ -667,7 +667,7 @@ export const LevelFileSchema: z.ZodType<LevelFile> = z
     }
   });
 
-export const ExemplarFileSchema: z.ZodType<SerializedExemplarFile> = z.strictObject({
+const ExemplarFileSchema: z.ZodType<SerializedExemplarFile> = z.strictObject({
   metric: nonNegInt,
   page: nonNegInt.max(MAX_NUMBER).optional(),
   exemplars: z.array(ExemplarSchema),

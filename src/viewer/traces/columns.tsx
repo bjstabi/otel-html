@@ -8,7 +8,7 @@ import { absoluteTime } from '../shell/time-range.js';
 import type { ColorAssigner } from '../theme/palette.js';
 import { seriesVar } from '../theme/palette.js';
 
-export interface CellContext {
+interface CellContext {
   epoch: UnixNanos;
   colors: ColorAssigner;
 }
@@ -84,7 +84,7 @@ const CODE_CLASS: Record<string, string> = {
 };
 
 /** Class-tinted pill ("2xx" family in the tooltip, the code itself as text). */
-export function CodePill({ code }: { code: string }): JSX.Element {
+function CodePill({ code }: { code: string }): JSX.Element {
   const family = code.slice(0, 1);
   return (
     <span

@@ -31,7 +31,7 @@ export function isTraceTabId(s: string): s is TraceTabId {
 }
 
 /** True when a span has an error status or an `exception` event (the Errors tab has something to show). */
-export function hasErrorSpans(detail: TraceDetail): boolean {
+function hasErrorSpans(detail: TraceDetail): boolean {
   return detail.spans.some(
     (r) => r.span.status.code === StatusCode.ERROR || r.span.events.some((e) => e.name === 'exception'),
   );
