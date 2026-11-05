@@ -51,8 +51,19 @@ export function hasBunEmbeddedFiles(bun: BunLike | undefined = bunGlobal()): boo
   return (bun?.embeddedFiles?.length ?? 0) > 0;
 }
 
+const ENTRY_RE = {
+  js: /^viewer\.[A-Za-z0-9_-]+\.js$/,
+  css: /^viewer\.[A-Za-z0-9_-]+\.css$/,
+} as const;
+
+/** The names that are `viewer.<hash>.<ext>` entries, in input order. */
+export function viewerEntryNames(names: readonly string[], ext: 'js' | 'css'): string[] {
+  const re = ENTRY_RE[ext];
+  return names.filter((n) => re.test(n));
+}
+
 function embeddedEntry(names: readonly string[], ext: 'js' | 'css', required: boolean): string | null {
-  const matches = names.filter((n) => new RegExp(`^viewer\\.[A-Za-z0-9_-]+\\.${ext}$`).test(n));
+  const matches = viewerEntryNames(names, ext);
   if (matches.length === 1) return `assets/${matches[0]}`;
   if (matches.length === 0 && !required) return null;
   throw new OtelHtmlError('usage', {
