@@ -1,4 +1,4 @@
-import { merge } from '../../api/convert.js';
+import { mergeWith } from '../../api/convert.js';
 import type { ReportSummary, WriterDeps } from '../../writer/session.js';
 import { type ApiJob, apiHeaders, messageOf } from './github-api.js';
 
@@ -85,5 +85,5 @@ export function mergeWithConfig(
   config: string | undefined,
 ): (inputs: string[], out: string, probe: boolean) => Promise<ReportSummary> {
   const extra = config === undefined ? {} : { config };
-  return (inputs, out, probe) => merge({ inputs, out, replace: true, ...(probe ? {} : extra) }, deps);
+  return (inputs, out, probe) => mergeWith({ inputs, out, replace: true, ...(probe ? {} : extra) }, deps);
 }

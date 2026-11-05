@@ -17,8 +17,7 @@ import {
   ORPHAN_EXEMPLAR_TRACE,
   ORPHAN_LOG_TRACE,
 } from '../../e2e/fixture.js';
-import { convert } from '../../src/api/convert.js';
-import { merge } from '../../src/api/index.js';
+import { convertWith, mergeWith } from '../../src/api/convert.js';
 import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
 import { metricExemplarPath, parseExemplarFile } from '../../src/format/metric-files.js';
 import { traceShardKey, traceShardPath } from '../../src/format/paths.js';
@@ -55,7 +54,7 @@ async function put(w: TestWriter, path: string, text: string | Uint8Array): Prom
 describe('convert', () => {
   test('no input files is a usage error', async () => {
     const w = createTestWriter();
-    const e = await failure(convert({ input: [], out: 'r' }, w.deps));
+    const e = await failure(convertWith({ input: [], out: 'r' }, w.deps));
     expect(e.code).toBe('usage');
     expect(e.message).toContain('no input files');
     expect(await w.fs.exists('r')).toBe(false);
@@ -67,14 +66,14 @@ describe('convert', () => {
     const dashboards = [
       { id: 'ops', title: 'Ops', widgets: [{ type: 'traces' as const, x: 0, y: 0, w: 6, h: 6 }] },
     ];
-    await convert({ input: 'in/a.json', out: 'r', config: { dashboards } }, w.deps);
+    await convertWith({ input: 'in/a.json', out: 'r', config: { dashboards } }, w.deps);
     expect(manifestOf(w, 'r').config.dashboards[0]?.source).toBe('library API');
   });
 
   test('a logs-only file succeeds with no spans', async () => {
     const w = createTestWriter();
     await put(w, 'in/logs.otlp.json', JSON.stringify(logsRequest([logRecord(), logRecord()])));
-    const summary = await convert({ input: 'in/logs.otlp.json', out: 'r' }, w.deps);
+    const summary = await convertWith({ input: 'in/logs.otlp.json', out: 'r' }, w.deps);
     expect(summary.totals).toEqual({ spans: 0, logs: 2, metrics: 0 });
     expect(manifestOf(w, 'r').complete).toBe(true);
   });
@@ -94,7 +93,7 @@ describe('convert', () => {
       }),
     );
     await put(w, 'in/c.pb', bin);
-    const summary = await convert(
+    const summary = await convertWith(
       { input: ['in/a.json', 'in/b.jsonl', 'in/c.pb'], out: 'r', signal: 'logs' },
       w.deps,
     );
@@ -105,9 +104,9 @@ describe('convert', () => {
     const w = createTestWriter();
     await put(w, 'in/logs.json', JSON.stringify(logsRequest([logRecord(), logRecord()])));
     const { readChunks: _, ...whole } = w.fs;
-    const summary = await convert({ input: 'in/logs.json', out: 'r' }, { ...w.deps, fs: whole });
+    const summary = await convertWith({ input: 'in/logs.json', out: 'r' }, { ...w.deps, fs: whole });
     expect(summary.totals.logs).toBe(2);
-    const e = await failure(convert({ input: 'in/missing.json', out: 'r2' }, { ...w.deps, fs: whole }));
+    const e = await failure(convertWith({ input: 'in/missing.json', out: 'r2' }, { ...w.deps, fs: whole }));
     expect(e.code).toBe('usage');
     expect(e.message).toContain('cannot read input file in/missing.json');
   });
@@ -115,14 +114,14 @@ describe('convert', () => {
   test('protobuf without a signal hint is a usage error naming the file', async () => {
     const w = createTestWriter();
     await put(w, 'in/c.pb', new Uint8Array([]));
-    const e = await failure(convert({ input: 'in/c.pb', out: 'r' }, w.deps));
+    const e = await failure(convertWith({ input: 'in/c.pb', out: 'r' }, w.deps));
     expect(e.code).toBe('usage');
     expect(e.message).toContain('in/c.pb');
   });
 
   test('a missing input file is a usage error naming it', async () => {
     const w = createTestWriter();
-    const e = await failure(convert({ input: ['in/missing.json'], out: 'r' }, w.deps));
+    const e = await failure(convertWith({ input: ['in/missing.json'], out: 'r' }, w.deps));
     expect(e.code).toBe('usage');
     expect(e.message).toContain('in/missing.json');
   });
@@ -130,11 +129,11 @@ describe('convert', () => {
   test('invalid OTLP names the file and leaves a lock-free folder', async () => {
     const w = createTestWriter();
     await put(w, 'in/bad.json', '{"resourceSpans": 3}');
-    const e = await failure(convert({ input: 'in/bad.json', out: 'r' }, w.deps));
+    const e = await failure(convertWith({ input: 'in/bad.json', out: 'r' }, w.deps));
     expect(e.code).toBe('invalid-otlp');
     expect(e.message).toContain('in/bad.json');
     await put(w, 'in/ok.json', JSON.stringify(spansRequest(1)));
-    await convert({ input: 'in/ok.json', out: 'r' }, w.deps);
+    await convertWith({ input: 'in/ok.json', out: 'r' }, w.deps);
   });
 });
 
@@ -159,7 +158,7 @@ describe('convert streams a file one resource entry at a time', () => {
   test('an empty first entry does not fix the epoch: data far from the wall clock still converts', async () => {
     const w = createTestWriter(); // wall clock 1700000000000000000, over three years later
     await put(w, 'in/old.json', JSON.stringify({ resourceLogs: [entry(0), entry(2)] }));
-    const summary = await convert({ input: 'in/old.json', out: 'r' }, w.deps);
+    const summary = await convertWith({ input: 'in/old.json', out: 'r' }, w.deps);
     expect(summary.totals.logs).toBe(2);
     expect(manifestOf(w, 'r').epochUnixNano).toBe('1600000000000000000');
   });
@@ -172,7 +171,7 @@ describe('convert streams a file one resource entry at a time', () => {
       'in/bad.json',
       JSON.stringify({ resourceLogs: [entry(1), entry(1), { ...bad, scopeLogs: [] }] }),
     );
-    const e = await failure(convert({ input: 'in/bad.json', out: 'r' }, w.deps));
+    const e = await failure(convertWith({ input: 'in/bad.json', out: 'r' }, w.deps));
     expect(e.path).toMatch(/^in\/bad\.json: resourceLogs\[2\]\.resource\./);
     const bin = toBinary(
       ExportLogsServiceRequestSchema,
@@ -188,7 +187,7 @@ describe('convert streams a file one resource entry at a time', () => {
       }),
     );
     await put(w, 'in/bad.pb', bin);
-    const p = await failure(convert({ input: 'in/bad.pb', out: 'r2', signal: 'logs' }, w.deps));
+    const p = await failure(convertWith({ input: 'in/bad.pb', out: 'r2', signal: 'logs' }, w.deps));
     expect(p.path).toMatch(/^in\/bad\.pb: resourceLogs\[1\]\.resource\./);
   });
 
@@ -218,11 +217,11 @@ describe('convert streams a file one resource entry at a time', () => {
     test('create: a bad entry late in a file leaves the report being replaced untouched', async () => {
       const w = createTestWriter();
       await put(w, 'in/good.json', JSON.stringify(spansRequest(3)));
-      await convert({ input: 'in/good.json', out: 'r' }, w.deps);
+      await convertWith({ input: 'in/good.json', out: 'r' }, w.deps);
       await put(w, 'in/late.json', late());
       const before = w.fs.snapshot();
       await failure(
-        convert({ input: 'in/late.json', out: 'r', replace: true }, { ...w.deps, fs: clockJumping(w) }),
+        convertWith({ input: 'in/late.json', out: 'r', replace: true }, { ...w.deps, fs: clockJumping(w) }),
       );
       const after = w.fs.snapshot();
       for (const [path, text] of before) {
@@ -234,18 +233,18 @@ describe('convert streams a file one resource entry at a time', () => {
       const w = createTestWriter();
       await put(w, 'in/a.json', JSON.stringify(spansRequest(3)));
       await put(w, 'in/b.json', JSON.stringify(spansRequest(2, 0, 10)));
-      await convert({ input: 'in/a.json', out: 'r' }, w.deps);
-      const summary = await convert({ input: 'in/b.json', out: 'r' }, w.deps);
+      await convertWith({ input: 'in/a.json', out: 'r' }, w.deps);
+      const summary = await convertWith({ input: 'in/b.json', out: 'r' }, w.deps);
       expect(summary.totals.spans).toBe(5);
     });
 
     test('append: a bad entry late in a file commits none of it', async () => {
       const w = createTestWriter();
       await put(w, 'in/good.json', JSON.stringify(spansRequest(3)));
-      await convert({ input: 'in/good.json', out: 'r' }, w.deps);
+      await convertWith({ input: 'in/good.json', out: 'r' }, w.deps);
       await put(w, 'in/late.json', late());
       await failure(
-        convert({ input: 'in/late.json', out: 'r', append: true }, { ...w.deps, fs: clockJumping(w) }),
+        convertWith({ input: 'in/late.json', out: 'r', append: true }, { ...w.deps, fs: clockJumping(w) }),
       );
       expect(manifestOf(w, 'r').totals).toEqual({ spans: 3, logs: 0, metrics: 0 });
     });
@@ -256,7 +255,7 @@ describe('convert of an empty request', () => {
   test('{"resourceSpans":[]} produces a valid, empty report', async () => {
     const w = createTestWriter();
     await put(w, 'in/empty.json', '{"resourceSpans":[]}');
-    const summary = await convert({ input: 'in/empty.json', out: 'r' }, w.deps);
+    const summary = await convertWith({ input: 'in/empty.json', out: 'r' }, w.deps);
     expect(summary.totals).toEqual({ spans: 0, logs: 0, metrics: 0 });
     const m = manifestOf(w, 'r');
     expect(m.complete).toBe(true);
@@ -270,9 +269,9 @@ describe('merge (public)', () => {
     const w = createTestWriter();
     await put(w, 'in/a.json', JSON.stringify(spansRequest(2)));
     await put(w, 'in/b.json', JSON.stringify(spansRequest(2, 1000, 5)));
-    await convert({ input: 'in/a.json', out: 'a' }, w.deps);
-    await convert({ input: 'in/b.json', out: 'b' }, w.deps);
-    const summary = await merge({ inputs: ['a', 'b'], out: 'm', config: { title: 'merged' } }, w.deps);
+    await convertWith({ input: 'in/a.json', out: 'a' }, w.deps);
+    await convertWith({ input: 'in/b.json', out: 'b' }, w.deps);
+    const summary = await mergeWith({ inputs: ['a', 'b'], out: 'm', config: { title: 'merged' } }, w.deps);
     expect(summary.totals.spans).toBe(4);
     expect(manifestOf(w, 'm').title).toBe('merged');
   });
@@ -280,14 +279,14 @@ describe('merge (public)', () => {
   describe('a failed convert leaves the existing report in place', () => {
     async function existing(w: TestWriter): Promise<void> {
       await put(w, 'in/good.json', JSON.stringify(spansRequest(3)));
-      await convert({ input: 'in/good.json', out: 'r' }, w.deps);
+      await convertWith({ input: 'in/good.json', out: 'r' }, w.deps);
     }
 
     test('a missing input file', async () => {
       const w = createTestWriter();
       await existing(w);
       const before = w.fs.snapshot();
-      const e = await failure(convert({ input: 'in/typo.json', out: 'r' }, w.deps));
+      const e = await failure(convertWith({ input: 'in/typo.json', out: 'r' }, w.deps));
       expect(e.code).toBe('usage');
       expect(manifestOf(w, 'r').totals.spans).toBe(3);
       expect(allSpans(w, 'r')).toHaveLength(3);
@@ -303,7 +302,7 @@ describe('merge (public)', () => {
       await existing(w);
       await put(w, 'in/other.json', JSON.stringify(spansRequest(2, 0, 50)));
       await put(w, 'in/bad.json', '{ not json');
-      await failure(convert({ input: ['in/other.json', 'in/bad.json'], out: 'r' }, w.deps));
+      await failure(convertWith({ input: ['in/other.json', 'in/bad.json'], out: 'r' }, w.deps));
       expect(manifestOf(w, 'r').totals.spans).toBe(3);
       expect(allSpans(w, 'r')).toHaveLength(3);
     });
@@ -317,7 +316,7 @@ describe('the linked fixture', () => {
     for (const f of files) {
       await put(w, f, readFileSync(new URL(`../../fixtures/${f.slice('in/'.length)}`, import.meta.url)));
     }
-    await convert({ input: files, out: 'r' }, w.deps);
+    await convertWith({ input: files, out: 'r' }, w.deps);
     return w;
   }
 

@@ -1,6 +1,6 @@
 import { type Command, InvalidArgumentError, Option } from 'commander';
 import { type ReceiverOverrides, type RunningReceiver, startReceiver } from '../../api/receiver.js';
-import { Report, resolveDeps } from '../../api/report.js';
+import { createResolvedReport, type Report, resolveDeps } from '../../api/report.js';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { ReceiverStats } from '../../receiver/receiver.js';
 import { createNodeFileSystem } from '../../writer/node-fs.js';
@@ -68,7 +68,7 @@ export async function openReceiver(
     throw new CliExit(INTERRUPTED_EXIT);
   });
   interrupted.catch(() => undefined); // only observed through the race below
-  const creating = Report.createResolved(
+  const creating = createResolvedReport(
     {
       out: flags.out,
       ...(flags.append === true ? { append: true } : {}),

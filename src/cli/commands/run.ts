@@ -1,7 +1,6 @@
 import type { ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import type { Command } from 'commander';
-import { sessionOf } from '../../api/report.js';
 import { OtelHtmlError } from '../../model/errors.js';
 import { parseUnixNanos, type UnixNanos } from '../../model/ids.js';
 import { checkedProtocol, childEnvironment } from '../../run/child-env.js';
@@ -125,9 +124,7 @@ export function addRunCommand(program: Command, io: CliIo, deps: CliDeps): void 
     const { report, receiver } = opened;
     const abandon = async (e: unknown): Promise<never> => {
       await receiver.close().catch(() => undefined);
-      await sessionOf(report)
-        .abort()
-        .catch(() => undefined); // never mask the original error
+      await report.abort().catch(() => undefined); // never mask the original error
       throw e;
     };
 

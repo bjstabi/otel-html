@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
-import { merge } from '../../../src/api/convert.js';
-import { Report } from '../../../src/api/report.js';
+import { mergeWith } from '../../../src/api/convert.js';
+import { createReportWith } from '../../../src/api/report.js';
 import type { ApiJob, ApiRun } from '../../../src/cli/ci/github-api.js';
 import { runKey } from '../../../src/cli/ci/ids.js';
 import { jobLogRecordsRequest } from '../../../src/cli/ci/job-logs.js';
@@ -52,14 +52,14 @@ test('the workflow-trace report merges with a job report and keeps spans, logs a
   const key = runKey({ repository: 'o/r', runId: 42, runAttempt: 1 });
   const resource = ciResource(run);
 
-  const trace = await Report.create({ out: 'trace', replace: true }, w.deps);
+  const trace = await createReportWith({ out: 'trace', replace: true }, w.deps);
   await trace.addSpans(workflowTraceRequest(key, run, [job], new Set()));
   const text = '2026-01-01T00:00:11.0000000Z ##[group]Run tests\n2026-01-01T00:00:12.0000000Z hello\n';
   await trace.addLogs(jobLogRecordsRequest({ key, jobId: 7, job, text, resource: jobResource(run, job) }));
   await trace.addMetrics(ciMetricsRequest(run, [job], resource));
   await trace.close();
 
-  const jobReport = await Report.create({ out: 'job', replace: true }, w.deps);
+  const jobReport = await createReportWith({ out: 'job', replace: true }, w.deps);
   await jobReport.addLogs({
     resourceLogs: [
       {
@@ -76,7 +76,7 @@ test('the workflow-trace report merges with a job report and keeps spans, logs a
   });
   await jobReport.close();
 
-  const summary = await merge({ inputs: ['trace', 'job'], out: 'merged', replace: true }, w.deps);
+  const summary = await mergeWith({ inputs: ['trace', 'job'], out: 'merged', replace: true }, w.deps);
   expect(summary.totals.spans).toBe(4); // run, job, step and the job's queued span
   expect(summary.totals.logs).toBe(2); // the one log line (the group marker is not a record) plus the job report's
   expect(summary.totals.metrics).toBeGreaterThan(0);

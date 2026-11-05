@@ -19,6 +19,7 @@ import { readableLogRecordsToRequest } from '../model/sdk-logs.js';
 import { resourceMetricsToRequest } from '../model/sdk-metrics.js';
 import { readableSpansToRequest } from '../model/sdk-spans.js';
 import { createNodeFileSystem } from '../writer/node-fs.js';
+import type { Logger, Tracer } from '../writer/ports.js';
 import {
   type AddResult,
   openSession,
@@ -34,8 +35,23 @@ import { packageDirViewerAssets } from './viewer-dir.js';
 
 export type { AddResult };
 
+/** What a caller of the library may inject: the logger and the tracer, nothing else. */
+export interface ReportDeps {
+  logger: Logger;
+  tracer: Tracer;
+}
+
+/** A new object holding only a defined `logger` and `tracer`, whatever else the input carries at runtime. */
+export function reportDepsOf(deps: Partial<ReportDeps> | undefined): Partial<ReportDeps> {
+  const picked: Partial<ReportDeps> = {};
+  if (deps?.logger !== undefined) picked.logger = deps.logger;
+  if (deps?.tracer !== undefined) picked.tracer = deps.tracer;
+  return picked;
+}
+
 /** The writer session behind a report: for the receiver and commands in this package, not part of the public API. */
 export let sessionOf: (report: Report) => WriterSession;
+let construct: (session: WriterSession, config: ResolvedConfig, deps: WriterDeps) => Report;
 /** The resolved configuration a report was created with. */
 export let configOf: (report: Report) => ResolvedConfig;
 /** The validated deps a report was created with. */
@@ -153,6 +169,26 @@ function isResourceMetrics(input: object): input is ResourceMetrics {
 
 const NOTHING: AddResult = { accepted: 0, dropped: 0, duplicates: 0 };
 
+/** Internal: like `Report.create`, with every writer dependency injectable (tests, the CLI). */
+export async function createReportWith(options: ReportOptions, deps?: Partial<WriterDeps>): Promise<Report> {
+  const full = await resolveDeps(deps);
+  return createResolvedReport(options, await resolveApiConfig(full, options.config, options.title), full);
+}
+
+/** Internal (the CLI): like `createReportWith`, with config already resolved so dashboard sources are kept. */
+export async function createResolvedReport(
+  options: Pick<ReportOptions, 'out' | 'append' | 'replace'>,
+  config: ResolvedConfig,
+  full: WriterDeps,
+): Promise<Report> {
+  const session = await openSession(full, {
+    out: options.out,
+    config,
+    mode: sessionModeOf(options),
+  });
+  return construct(session, config, full);
+}
+
 /** A streaming report writer. Feed it telemetry, then `close()` to finish the report. */
 export class Report {
   readonly #session: WriterSession;
@@ -161,6 +197,7 @@ export class Report {
 
   // assigned once by Report's static block; module-level `let` because the class body cannot reach a private field from outside
   static {
+    construct = (session, config, deps) => new Report(session, config, deps);
     sessionOf = (report) => report.#session;
     configOf = (report) => report.#config;
     depsOf = (report) => report.#deps;
@@ -172,23 +209,8 @@ export class Report {
     this.#deps = deps;
   }
 
-  static async create(options: ReportOptions, deps?: Partial<WriterDeps>): Promise<Report> {
-    const full = await resolveDeps(deps);
-    return Report.createResolved(options, await resolveApiConfig(full, options.config, options.title), full);
-  }
-
-  /** Internal (the CLI): like `create`, with config already resolved so dashboard sources are kept. */
-  static async createResolved(
-    options: Pick<ReportOptions, 'out' | 'append' | 'replace'>,
-    config: ResolvedConfig,
-    full: WriterDeps,
-  ): Promise<Report> {
-    const session = await openSession(full, {
-      out: options.out,
-      config,
-      mode: sessionModeOf(options),
-    });
-    return new Report(session, config, full);
+  static async create(options: ReportOptions, deps?: Partial<ReportDeps>): Promise<Report> {
+    return createReportWith(options, reportDepsOf(deps));
   }
 
   /** SDK spans, a protobuf `ExportTraceServiceRequest`, or an OTLP-JSON object. */

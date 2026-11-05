@@ -2,7 +2,7 @@ import type { AddressInfo } from 'node:net';
 import { createServer } from 'node:net';
 import { afterEach, describe, expect, test } from 'vitest';
 import { closeAll, startReceiver } from '../../src/api/receiver.js';
-import { Report } from '../../src/api/report.js';
+import { createReportWith } from '../../src/api/report.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { createTestWriter } from '../../test-support/writer-deps.js';
 import { allSpans, manifestOf, spansRequest } from '../writer/helpers.js';
@@ -34,7 +34,7 @@ const BOTH = { http: { port: 0 }, grpc: { port: 0 } };
 describe('startReceiver', () => {
   test('binds both transports on real ports and lands posted spans in the report', async () => {
     const w = createTestWriter();
-    const report = await Report.create({ out: 'r' }, w.deps);
+    const report = await createReportWith({ out: 'r' }, w.deps);
     const rx = await startReceiver(report, BOTH, w.deps);
     running.push(rx);
     expect(rx.http).toMatch(/^http:\/\/127\.0\.0\.1:[1-9]\d*$/);
@@ -57,7 +57,7 @@ describe('startReceiver', () => {
 
   test('both transports disabled is a usage error', async () => {
     const w = createTestWriter();
-    const report = await Report.create({ out: 'r' }, w.deps);
+    const report = await createReportWith({ out: 'r' }, w.deps);
     const e = await failure(startReceiver(report, { http: false, grpc: false }, w.deps));
     expect(e.code).toBe('usage');
     expect(e.message).toContain('no receiver transport enabled');
@@ -67,7 +67,7 @@ describe('startReceiver', () => {
 
   test('config enabled: false is honoured without an override, and an object override beats it', async () => {
     const w = createTestWriter();
-    const report = await Report.create(
+    const report = await createReportWith(
       { out: 'r', config: { receiver: { grpc: { enabled: false } } } },
       w.deps,
     );
@@ -86,7 +86,7 @@ describe('startReceiver', () => {
 
   test('a taken port is a receiver-bind error, not receiver-busy', async () => {
     const w = createTestWriter();
-    const report = await Report.create({ out: 'r' }, w.deps);
+    const report = await createReportWith({ out: 'r' }, w.deps);
     const blocker = createServer();
     try {
       await new Promise<void>((ok) => blocker.listen(0, '127.0.0.1', ok));
@@ -102,7 +102,7 @@ describe('startReceiver', () => {
 
   test('closes the HTTP listener when the gRPC bind fails', async () => {
     const w = createTestWriter();
-    const report = await Report.create({ out: 'r' }, w.deps);
+    const report = await createReportWith({ out: 'r' }, w.deps);
     const first = await startReceiver(report, { http: false, grpc: { port: 0 } }, w.deps);
     running.push(first);
     const taken = Number(first.grpc?.split(':').at(-1));
@@ -129,7 +129,7 @@ describe('startReceiver', () => {
 
   test('the otel-html.receive span carries the stats once closed', async () => {
     const w = createTestWriter();
-    const report = await Report.create({ out: 'r' }, w.deps);
+    const report = await createReportWith({ out: 'r' }, w.deps);
     const rx = await startReceiver(report, { http: { port: 0 }, grpc: false }, w.deps);
     running.push(rx);
     await fetch(`${rx.http}/v1/traces`, {
@@ -147,7 +147,7 @@ describe('startReceiver', () => {
 
   test('the receive span carries per-signal accepted and rejected counts', async () => {
     const w = createTestWriter();
-    const report = await Report.create({ out: 'r' }, w.deps);
+    const report = await createReportWith({ out: 'r' }, w.deps);
     const rx = await startReceiver(report, { http: { port: 0 }, grpc: false }, w.deps);
     running.push(rx);
     const day = 86_400_000_000_000;
@@ -178,7 +178,7 @@ describe('startReceiver', () => {
       },
       error() {},
     };
-    const report = await Report.create({ out: 'r' }, { ...w.deps, logger });
+    const report = await createReportWith({ out: 'r' }, { ...w.deps, logger });
     const rx = await startReceiver(report, { http: { port: 0 }, grpc: false });
     running.push(rx);
     await fetch(`${rx.http}/v1/traces`, {

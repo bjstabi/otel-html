@@ -6,7 +6,7 @@ import {
   SimpleLogRecordProcessor,
 } from '@opentelemetry/sdk-logs';
 import { describe, expect, test } from 'vitest';
-import { Report } from '../../src/api/report.js';
+import { createReportWith } from '../../src/api/report.js';
 import { OtelHtmlLogRecordExporter } from '../../src/exporters/log-exporter.js';
 import { createTestWriter } from '../../test-support/writer-deps.js';
 import { allLogs, manifestOf } from '../writer/helpers.js';
@@ -35,7 +35,7 @@ function exportOnce(exporter: OtelHtmlLogRecordExporter): Promise<{ code: number
 describe('OtelHtmlLogRecordExporter', () => {
   test('a logger provider delivers its records into the report', async () => {
     const w = createTestWriter();
-    const report = await Report.create({ out: 'r' }, w.deps);
+    const report = await createReportWith({ out: 'r' }, w.deps);
     const provider = emitLogs(new OtelHtmlLogRecordExporter({ report }), ['a', 'b']);
     await provider.shutdown();
     await report.close();
@@ -44,7 +44,7 @@ describe('OtelHtmlLogRecordExporter', () => {
 
   test('export after shutdown calls back a failure with an error', async () => {
     const w = createTestWriter();
-    const report = await Report.create({ out: 'r' }, w.deps);
+    const report = await createReportWith({ out: 'r' }, w.deps);
     const exporter = new OtelHtmlLogRecordExporter({ report });
     await exporter.shutdown();
     const result = await exportOnce(exporter);
@@ -55,7 +55,7 @@ describe('OtelHtmlLogRecordExporter', () => {
 
   test('a report that rejects the records calls back a failure', async () => {
     const w = createTestWriter();
-    const report = await Report.create({ out: 'r' }, w.deps);
+    const report = await createReportWith({ out: 'r' }, w.deps);
     await report.close();
     const result = await exportOnce(new OtelHtmlLogRecordExporter({ report }));
     expect(result.code).toBe(1);
@@ -64,14 +64,14 @@ describe('OtelHtmlLogRecordExporter', () => {
 
   test('a successful export calls back code 0', async () => {
     const w = createTestWriter();
-    const report = await Report.create({ out: 'r' }, w.deps);
+    const report = await createReportWith({ out: 'r' }, w.deps);
     expect((await exportOnce(new OtelHtmlLogRecordExporter({ report }))).code).toBe(0);
     await report.close();
   });
 
   test('forceFlush writes a checkpoint before the report is closed', async () => {
     const w = createTestWriter();
-    const report = await Report.create({ out: 'r' }, w.deps);
+    const report = await createReportWith({ out: 'r' }, w.deps);
     const exporter = new OtelHtmlLogRecordExporter({ report });
     await exportOnce(exporter);
     await exporter.forceFlush();
