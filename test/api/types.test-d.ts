@@ -17,6 +17,15 @@ import {
   startReceiver,
   type Tracer,
 } from '../../src/api/index.js';
+import type { ViewerAssets } from '../../src/writer/viewer-assets.js';
+import { createMemoryFileSystem } from '../../test-support/memory-fs.js';
+
+// Well-typed values of the old port types: only the excess-property error is left to expect.
+const fs = createMemoryFileSystem();
+const viewerAssets: ViewerAssets = {
+  files: async () => [],
+  entry: () => ({ script: 'assets/viewer.js', style: null }),
+};
 
 test('public API types', () => {
   expectTypeOf<MetricExporterOptions>().toHaveProperty('temporality');
@@ -48,9 +57,9 @@ test('public API types', () => {
     // @ts-expect-error a version is not a public dep
     void Report.create({ out: 'r' }, { version: 'x' });
     // @ts-expect-error the file system is not a public dep
-    void convert({ input: 'a.json', out: 'r' }, { version: 'x', fs: {} });
+    void convert({ input: 'a.json', out: 'r' }, { version: 'x', fs });
     // @ts-expect-error neither is the viewer build
-    void merge({ inputs: ['a'], out: 'r' }, { viewerAssets: {} });
+    void merge({ inputs: ['a'], out: 'r' }, { viewerAssets });
   };
   void never;
 });

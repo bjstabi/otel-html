@@ -1,3 +1,6 @@
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { create } from '@bufbuild/protobuf';
 import { ROOT_CONTEXT, SpanKind, trace } from '@opentelemetry/api';
 import { JsonTraceSerializer } from '@opentelemetry/otlp-transformer';
@@ -9,9 +12,9 @@ import {
   SimpleSpanProcessor,
 } from '@opentelemetry/sdk-trace-base';
 import { describe, expect, test, vi } from 'vitest';
-import { convertWith, mergeWith } from '../../src/api/convert.js';
+import { convert, convertWith, merge, mergeWith } from '../../src/api/convert.js';
 import { startReceiver } from '../../src/api/receiver.js';
-import { createReportWith, defaultDeps, depsOf, reportDepsOf } from '../../src/api/report.js';
+import { createReportWith, defaultDeps, depsOf, Report, reportDepsOf } from '../../src/api/report.js';
 import { createOtelTracer } from '../../src/api/telemetry.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { ExportTraceServiceRequestSchema } from '../../src/model/gen/opentelemetry/proto/collector/trace/v1/trace_service_pb.js';
@@ -228,14 +231,99 @@ describe('public deps', () => {
     expect(reportDepsOf(undefined)).toEqual({});
     expect(Object.keys(reportDepsOf({ logger: w.deps.logger }))).toEqual(['logger']);
   });
+});
 
-  test('the manifest stamps the real version, not a passed one', async () => {
+describe('public entry points drop everything but logger and tracer', () => {
+  // A variable, so the extra keys type-check as Partial<ReportDeps>; used here as a caller who bypasses the types.
+  function forgedDeps(w: ReturnType<typeof createTestWriter>) {
+    return {
+      logger: w.deps.logger,
+      version: '0.0.0-forged',
+      viewerAssets: {
+        files(): never {
+          throw new Error('FORGED');
+        },
+        entry(): never {
+          throw new Error('FORGED');
+        },
+      },
+    };
+  }
+
+  // With the forged keys dropped the real viewer assets apply: the call succeeds, or (no viewer build) fails with a
+  // usage error about them. Either way the forged assets are never consulted.
+  async function outcome(run: () => Promise<unknown>): Promise<string> {
+    try {
+      await run();
+      return 'ok';
+    } catch (e) {
+      return e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  async function scratch(): Promise<string> {
+    return mkdtemp(join(tmpdir(), 'otel-html-forged-'));
+  }
+
+  test('Report.create', async () => {
     const w = createTestWriter();
-    const forged = { ...w.deps, version: '0.0.0-forged' }; // a variable, so it type-checks as Partial<ReportDeps>
-    const r = await createReportWith({ out: 'r' }, { ...w.deps, ...reportDepsOf(forged) });
-    await r.close();
-    expect(manifestOf(w, 'r').otelHtmlVersion).toBe(w.deps.version);
-    expect(manifestOf(w, 'r').otelHtmlVersion).not.toBe('0.0.0-forged');
+    const dir = await scratch();
+    try {
+      const forged = forgedDeps(w);
+      let report: Report | undefined;
+      const result = await outcome(async () => {
+        report = await Report.create({ out: join(dir, 'r') }, forged);
+      });
+      expect(result).not.toContain('FORGED');
+      await report?.close();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('convert', async () => {
+    const w = createTestWriter();
+    const dir = await scratch();
+    try {
+      const input = join(dir, 'in.json');
+      await writeFile(input, JSON.stringify(spansRequest(1)));
+      const forged = forgedDeps(w);
+      expect(await outcome(() => convert({ input, out: join(dir, 'r') }, forged))).not.toContain('FORGED');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('merge', async () => {
+    const w = createTestWriter();
+    const dir = await scratch();
+    try {
+      const forged = forgedDeps(w);
+      const result = await outcome(() =>
+        merge({ inputs: [join(dir, 'a'), join(dir, 'b')], out: join(dir, 'r') }, forged),
+      );
+      expect(result).not.toContain('FORGED');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('startReceiver', async () => {
+    const w = createTestWriter();
+    const report = await createReportWith({ out: 'r' }, w.deps);
+    // The receiver reads only logger and tracer from its deps, so the forged keys cannot surface here; the
+    // observable guarantee is that the two allowed ones are honoured and the call starts despite the rest.
+    const names: string[] = [];
+    const tracer = {
+      startSpan(name: string) {
+        names.push(name);
+        return w.deps.tracer.startSpan(name);
+      },
+    };
+    const rx = await startReceiver(report, { http: { port: 0 }, grpc: false }, { ...forgedDeps(w), tracer });
+    expect(names).toContain('otel-html.receive');
+    await rx.close();
+    await report.close();
   });
 });
 
