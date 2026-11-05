@@ -530,13 +530,17 @@ class Session implements WriterSession {
       await this.#series.compact(this.#rollups.metrics.catalog);
       await this.#writeShell();
       await this.#checkpoint(true);
-      // The report is committed; a failed prune (stale segments left behind) must not keep the lock.
+      // The report is committed: from here the session is closed, and a failed prune only leaves stale segments.
+      this.#closed = this.#summary();
       try {
         await this.#series.prune();
+      } catch (e) {
+        this.#deps.logger.warn('stale metric segments left behind', {
+          error: e instanceof Error ? e.message : String(e),
+        });
       } finally {
         await this.#lock.release();
       }
-      this.#closed = this.#summary();
       return this.#closed;
     });
   }

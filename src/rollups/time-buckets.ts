@@ -147,7 +147,7 @@ export class TimeBuckets<K extends string> {
           next[k] = (next[k] ?? 0) + n;
         });
         row.length = 0;
-        row.push(...next);
+        for (const v of next) row.push(v);
       }
     }
     this.#width = w;
@@ -187,7 +187,7 @@ export class TimeBuckets<K extends string> {
     b.#len = s.counts[0]?.length ?? 0;
     s.counts.forEach((row, i) => {
       const dst = b.#rows[i];
-      if (dst !== undefined) dst.push(...row);
+      if (dst !== undefined) for (const v of row) dst.push(v);
     });
     return b;
   }

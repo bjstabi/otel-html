@@ -12,6 +12,7 @@ import {
   type HistAgg,
   MAX_EXP_SCALE,
   MIN_EXP_SCALE,
+  type SummaryAgg,
 } from './metric-agg.js';
 
 export type Normalized =
@@ -84,7 +85,7 @@ const RULES: readonly Rule[] = [
   { type: 'exponentialHistogram', temporality: 'delta', monotonic: '*', agg: 'exp', cumulative: false },
   { type: 'exponentialHistogram', temporality: 'cumulative', monotonic: '*', agg: 'exp', cumulative: true },
   { type: 'exponentialHistogram', temporality: 'unspecified', monotonic: '*', agg: 'exp', cumulative: false },
-  { type: 'summary', temporality: '*', monotonic: '*', agg: 'summary', cumulative: false },
+  { type: 'summary', temporality: '*', monotonic: '*', agg: 'summary', cumulative: true },
 ];
 
 function ruleFor(p: MetricPointRecord): Rule {
@@ -270,7 +271,7 @@ function numberValueOf(p: MetricPointRecord): number | null {
   return v !== undefined && Number.isFinite(v) ? v : null;
 }
 
-function summaryOf(p: MetricPointRecord): BucketAgg | null {
+function summaryOf(p: MetricPointRecord): SummaryAgg | null {
   const d = parsePoint(SummaryPointSchema, p);
   checkCounts(p, 'point.count', [d.count]);
   if (!Number.isFinite(d.sum)) return null;
@@ -293,6 +294,7 @@ const emptyHist = (h: HistAgg): HistAgg => ({
   max: null,
   counts: h.counts.map(() => 0),
 });
+const zeroSummary = (s: SummaryAgg): SummaryAgg => ({ ...s, count: 0, sum: 0 });
 const emptyExp = (e: ExpAgg): ExpAgg => ({
   ...e,
   count: 0,
@@ -322,6 +324,12 @@ function diffHist(cur: HistAgg, prev: HistAgg): HistAgg | null {
     bounds: cur.bounds,
     counts,
   };
+}
+
+/** Cumulative `cur` minus `prev`; null when the count dropped (a reset). A falling sum is not one. */
+export function diffSummary(cur: SummaryAgg, prev: SummaryAgg): SummaryAgg | null {
+  if (cur.count < prev.count) return null;
+  return { ...cur, count: cur.count - prev.count, sum: cur.sum - prev.sum };
 }
 
 function trimSide(offset: number, counts: number[]): ExpSide {
@@ -450,7 +458,8 @@ export class StreamNormalizer {
       }
       case 'summary': {
         const agg = summaryOf(p);
-        return done(agg === null ? SKIP_NO_VALUE : ok(agg));
+        if (agg === null) return done(SKIP_NO_VALUE);
+        return (series) => this.#cumulative(series, p, agg, diffSummary, asSummary, zeroSummary);
       }
       case 'counter': {
         const v = numberValueOf(p);
@@ -483,7 +492,7 @@ export class StreamNormalizer {
    * (`StreamTarget.origin`) "the series' latest point" is the latest in the same report: a stream after an earlier
    * report's points is the next run, and reports that overlap in time do not hide each other's restarts.
    */
-  #cumulative<T extends number | HistAgg | ExpAgg>(
+  #cumulative<T extends number | HistAgg | ExpAgg | SummaryAgg>(
     target: SeriesKey | StreamTarget,
     p: MetricPointRecord,
     cur: T,
@@ -609,7 +618,7 @@ function ok(agg: BucketAgg): Normalized {
   return { kind: 'ok', agg, reset: false };
 }
 
-function wrap(v: number | HistAgg | ExpAgg, reset: boolean): Normalized {
+function wrap(v: number | HistAgg | ExpAgg | SummaryAgg, reset: boolean): Normalized {
   const agg: BucketAgg = typeof v === 'number' ? { k: 'counter', delta: v, resets: reset ? 1 : 0 } : v;
   return { kind: 'ok', agg, reset };
 }
@@ -624,6 +633,8 @@ const done =
     n;
 const asHist = (last: number | BucketAgg): HistAgg | null =>
   typeof last !== 'number' && last.k === 'hist' ? last : null;
+const asSummary = (last: number | BucketAgg): SummaryAgg | null =>
+  typeof last !== 'number' && last.k === 'summary' ? last : null;
 const asExp = (last: number | BucketAgg): ExpAgg | null =>
   typeof last !== 'number' && last.k === 'exp' ? last : null;
 

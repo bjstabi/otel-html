@@ -27,6 +27,21 @@ describe('TimeBuckets', () => {
     expect(Math.log2(b.widthNs / 1_000_000) % 1).toBe(0);
     expect(sum(b.counts('x')) + sum(b.counts('y'))).toBe(total);
   });
+  it('restores and coarsens rows of 150 000 buckets without a stack overflow', () => {
+    const n = 150_000;
+    const json = {
+      maxBuckets: n,
+      widthNs: 1_000_000,
+      startNs: 0,
+      keys: ['a'],
+      counts: [Array.from({ length: n }, () => 1)],
+    };
+    const b = TimeBuckets.from(json);
+    expect(b.counts('a')).toHaveLength(n);
+    b.add(t(2 * n * 1_000_000), 'a');
+    expect(b.widthNs).toBe(4_000_000);
+    expect(sum(b.counts('a'))).toBe(n + 1);
+  });
   it('is independent of insertion order', () => {
     const times = Array.from({ length: 2000 }, (_, i) => ((i * 7919) % 100_000) * 1_000_000);
     const fwd = new TimeBuckets(['k'], 32);

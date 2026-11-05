@@ -225,6 +225,17 @@ describe('resolution ladder', () => {
     expect(levels[2]).toEqual([{ id: 0, t: [-1, 0, 1], a: [1, 9, 5].map(counter) }]);
   });
 
+  test('mergeBucketSeries merges a 150 000-bucket series without a stack overflow', () => {
+    const n = 150_000;
+    const piece = {
+      id: 1,
+      t: Array.from({ length: n }, (_, i) => i),
+      a: Array.from({ length: n }, () => counter(1)),
+    };
+    const out = mergeBucketSeries([[piece]], 'x');
+    expect(out[0]?.t.length).toBe(n);
+  });
+
   test('mergeBucketSeries unions parts by series and bucket', () => {
     const merged = mergeBucketSeries(
       [

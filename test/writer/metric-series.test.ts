@@ -5,6 +5,7 @@ import { reviveDataJson, unwrapDataFile, wrapDataFile } from '../../src/format/d
 import {
   dataFileKey,
   EXEMPLAR_BASE_LEVEL,
+  encodeExemplarFile,
   GAP_SAMPLE,
   groupMetricFiles,
   LEVEL0_WIDTH_NS,
@@ -287,6 +288,25 @@ describe('MetricSeriesWriter', () => {
     expect(demoted.exemplars).toHaveLength(points);
     // Compacted again, the same files come back.
     expect(await reopened.compact(catalog)).toEqual(listed);
+  });
+
+  test('demotes an exemplar file of 150 000 exemplars without a stack overflow', async () => {
+    const first = setup();
+    const a = first.series('a', 'h1');
+    first.writer.add(a.def, a.series, rel(0), counter(1), [ex(0, 0, 1)]);
+    await first.writer.flush(first.catalog);
+    const listed = await first.writer.compact(first.catalog);
+    const n = 150_000;
+    const exemplars = Array.from({ length: n }, (_, i) => ex(0, i, i));
+    const key = metricExemplarKey(0);
+    await first.fs.writeTextAtomic(
+      `${OUT}/data/${key}.js`,
+      wrapDataFile(key, encodeExemplarFile({ metric: 0, exemplars })),
+    );
+    const reopened = new MetricSeriesWriter(first.fs, OUT, { exemplars: 2 }, new Map([[0, 1]]), listed);
+    await reopened.flush(first.catalog);
+    const demoted = read<SegmentFile>(first.fs, metricSegmentKey(0, 1), parseSegmentFile);
+    expect(demoted.exemplars).toHaveLength(n);
   });
 
   test('a writer reopened on compacted files demotes them to a segment at its first flush', async () => {
