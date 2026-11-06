@@ -128,7 +128,7 @@ const POINTS: readonly ColumnDef[] = [
   col('negative_counts', 'list_int64'),
   col('quantiles', 'json'),
   col('exemplars', 'json'),
-  col('flags', 'int32'),
+  col('flags', 'int64'),
   col('delta_value', 'float64'),
   col('delta_count', 'int64'),
   col('reset', 'bool'),

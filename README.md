@@ -555,7 +555,7 @@ Config is a YAML or JSON file (`otel-html.yaml` by default), or an object passed
 | `writer.dedupeCapacity` | 200000 | Recent span IDs remembered for de-duplication. |
 | `writer.facetValueCap` | 1000 | Distinct values kept per facet key; also bounds the viewer's filtered facets. |
 | `writer.facetKeyCap` | 500 | Facet keys kept. |
-| `writer.metricSeriesCap` | 1000 | Series kept per metric. Further series fold into one "other" series, and charts that would need to split it say they are partial. |
+| `writer.metricSeriesCap` | 1000 | Series kept per metric. Further series fold into one "other" series, and charts that would need to split it say they are partial. Applies to `writer.format: chunks` only: `local` and `site` write every point as a row and fold nothing. |
 | `writer.metricExemplars` | 4 | Exemplars kept per series per finest time bucket (those with a trace id first, then the most extreme values). |
 | `writer.drop.traces.span` | `[]` | OTTL conditions; matching spans are dropped at write time. |
 | `writer.drop.logs.log_record` | `[]` | Same, for log records. |

@@ -1,7 +1,7 @@
 import type { ResolvedConfig } from '../config/schema.js';
 import type { ManifestV4, PartitionEntry } from '../format/manifest.js';
 import { checkRow } from '../format/parquet/codec.js';
-import { logRow, type Row, spanRow } from '../format/parquet/rows.js';
+import { logRow, type PointNormalization, pointRow, type Row, spanRow } from '../format/parquet/rows.js';
 import { TABLES, type Table } from '../format/parquet/schema.js';
 import { statisticsKeysFor } from '../format/parquet/stats.js';
 import { LOCK_PATH, type Signal, STATE_DIR, type StateSlot } from '../format/paths.js';
@@ -17,9 +17,11 @@ import {
   normalizeTraces,
 } from '../model/normalize.js';
 import type { OtlpRequest } from '../model/otlp-json.js';
-import { type LogRecordRecord, logTime, type SpanRecord } from '../model/records.js';
+import { metricPointsOf } from '../model/otlp-json-metrics.js';
+import { type LogRecordRecord, logTime, type MetricPointRecord, type SpanRecord } from '../model/records.js';
 import type { LogTarget, SpanTarget } from '../ottl/contexts.js';
 import { Drain } from '../rollups/drain.js';
+import { type Normalized, StreamNormalizer } from '../rollups/metric-streams.js';
 import { severityKey } from '../semconv/severity.js';
 import {
   at,
@@ -36,6 +38,7 @@ import { DEFAULT_TITLE, type Drops, type FolderState, iso } from './open-common.
 import { PartitionWriter } from './partition-writer.js';
 import { patternRows } from './pattern-rows.js';
 import type { SpanHandle } from './ports.js';
+import { seriesIdOf } from './series-id.js';
 import type {
   AddOptions,
   AddResult,
@@ -56,6 +59,7 @@ interface Restored {
   epoch: UnixNanos | null;
   dedupe: DedupeSet;
   drain: Drain;
+  normalizer: StreamNormalizer;
   nextPartition: number;
   checkpoint: number;
   flushed: number[];
@@ -91,6 +95,7 @@ export async function openPartitionSession(
         epoch: null,
         dedupe: new DedupeSet(config.writer.dedupeCapacity),
         drain: new Drain(),
+        normalizer: new StreamNormalizer(),
         nextPartition: 0,
         checkpoint: 0,
         flushed: [],
@@ -114,6 +119,10 @@ export async function openPartitionSession(
             : parseUnixNanos(cp.state.epochUnixNano, 'state.epochUnixNano'),
         dedupe: DedupeSet.from(cp.state.dedupe, config.writer.dedupeCapacity),
         drain: cp.state.drain === null ? new Drain() : Drain.from(cp.state.drain, 'state.drain'),
+        normalizer:
+          cp.state.metricStreams === null
+            ? new StreamNormalizer()
+            : StreamNormalizer.from(cp.state.metricStreams, 'state.metricStreams'),
         nextPartition: cp.state.nextPartition,
         checkpoint: cp.state.checkpoint,
         // A report left incomplete was interrupted: its flush partitions still await compaction. A closed one
@@ -148,7 +157,7 @@ interface Prepared {
   cut: Promise<PartitionEntry | null>;
   slot: StateSlot;
   /** `null` when nothing but the manifest changed. */
-  state: { epoch: string | null; dedupe: string[] } | null;
+  state: { epoch: string | null; dedupe: string[]; metricStreams: unknown } | null;
   updatedAt: string;
   epoch: string;
   totals: Record<Signal, number>;
@@ -162,6 +171,8 @@ class PartitionSession implements WriterSession {
   readonly #drop: Drops;
   readonly #lock: LockHandle;
   readonly #dedupe: DedupeSet;
+  /** Cumulative-stream state of the points accepted so far (held ones included); frozen at each prepare. */
+  readonly #normalizer: StreamNormalizer;
   /** The committed log-template state: swapped in only after a cut's files were written. */
   #drain: Drain;
   readonly #writer: PartitionWriter;
@@ -200,6 +211,7 @@ class PartitionSession implements WriterSession {
     this.#drop = drop;
     this.#lock = r.lock;
     this.#dedupe = r.dedupe;
+    this.#normalizer = r.normalizer;
     this.#drain = r.drain;
     this.#statisticsKeys = Object.fromEntries(TABLES.map((t) => [t, statisticsKeysFor(t, config)])) as Record<
       Table,
@@ -242,17 +254,15 @@ class PartitionSession implements WriterSession {
   add(input: OtlpRequest, source: string, options?: AddOptions): Promise<AddResult> {
     return this.#serial(async () => {
       this.#assertOpen();
-      if (input.signal === 'metrics') {
-        throw new OtelHtmlError('usage', {
-          message: 'metrics are not written in format 4 yet',
-          hint: 'use writer.format chunks for metrics',
-        });
-      }
       this.#partial = options?.partial === true;
       const ctx = this.#ensureEpoch(earliestTimestamp(input));
       const first = input.first ?? 0;
       let result: AddResult;
-      if (input.signal === 'traces') {
+      if (input.signal === 'metrics') {
+        const points = [...metricPointsOf(input, ctx, source)];
+        this.#settleEpoch(points.length);
+        result = this.#acceptPoints(points);
+      } else if (input.signal === 'traces') {
         const rows = normalizeTraces(input.request, ctx, source, first);
         this.#settleEpoch(rows.length);
         result = this.#acceptSpans(rows);
@@ -438,6 +448,46 @@ class PartitionSession implements WriterSession {
       });
     }
     return row;
+  }
+
+  /**
+   * Every accepted point is one `points` row, normalized now: the stream state advances here, and a cut that fails
+   * restores its rows without touching it. All or nothing: parsing and the row check run on the whole request before
+   * any stream is stepped (the check uses a row without deltas, which only the stepped normalizer can fill in).
+   */
+  #acceptPoints(points: readonly MetricPointRecord[]): AddResult {
+    const ctx = this.#context();
+    const rowCtx = {
+      epoch: ctx.epoch,
+      resources: ctx.resources.get.bind(ctx.resources),
+      scopes: ctx.scopes.get.bind(ctx.scopes),
+    };
+    let dropped = 0;
+    const staged: {
+      point: MetricPointRecord;
+      seriesId: string;
+      step: ReturnType<StreamNormalizer['prepare']>;
+    }[] = [];
+    for (const point of points) {
+      const resource = ctx.resources.get(point.resource);
+      const scope = ctx.scopes.get(point.scope);
+      if (this.#drop.point.test({ point, resource, scope, epoch: ctx.epoch })) {
+        dropped++;
+        continue;
+      }
+      const seriesId = seriesIdOf(point, resource, scope);
+      const step = this.#normalizer.prepare(point);
+      this.#checked('points', pointRow(point, { ...UNNORMALIZED, seriesId }, rowCtx));
+      staged.push({ point, seriesId, step });
+    }
+    for (const { point, seriesId, step } of staged) {
+      const n = step(seriesId);
+      this.#writer.add('points', pointRow(point, normalization(point, n, seriesId), rowCtx));
+      this.#totals.metrics++;
+      this.#extend(ctx, point.time, point.time);
+    }
+    if (staged.length > 0) this.#dirty = true;
+    return { accepted: staged.length, dropped, duplicates: 0 };
   }
 
   #acceptLogs(rows: readonly LogRecordRecord[], source: string): AddResult {
@@ -632,7 +682,12 @@ class PartitionSession implements WriterSession {
         cut: Promise.resolve(null),
         slot: this.#slot === 0 ? 1 : 0,
         state: writeState
-          ? { epoch: this.#epoch === null ? null : this.#epoch.toString(), dedupe: this.#dedupe.toJSON() }
+          ? {
+              epoch: this.#epoch === null ? null : this.#epoch.toString(),
+              dedupe: this.#dedupe.toJSON(),
+              // With the cut below, in this synchronous segment: points accepted later are not in this state.
+              metricStreams: this.#normalizer.toJSON(),
+            }
           : null,
         updatedAt: iso(this.#deps.clock),
         epoch: this.#epoch === null ? '0' : this.#epoch.toString(),
@@ -682,7 +737,7 @@ class PartitionSession implements WriterSession {
       try {
         p.span.setAttributes({
           partitions: entry === null ? 0 : 1,
-          records: p.totals.spans + p.totals.logs,
+          records: p.totals.spans + p.totals.logs + p.totals.metrics,
         });
       } catch (error) {
         this.#deps.logger.warn('flush telemetry failed', {
@@ -705,7 +760,10 @@ class PartitionSession implements WriterSession {
     }
   }
 
-  #state(s: { epoch: string | null; dedupe: string[] }, checkpoint: number): SessionStateV2 {
+  #state(
+    s: { epoch: string | null; dedupe: string[]; metricStreams: unknown },
+    checkpoint: number,
+  ): SessionStateV2 {
     return {
       formatVersion: 2,
       otelHtmlVersion: this.#deps.version,
@@ -714,7 +772,7 @@ class PartitionSession implements WriterSession {
       checkpoint,
       flushPartitions: [...this.#flushed],
       dedupe: s.dedupe,
-      metricStreams: null,
+      metricStreams: s.metricStreams,
       drain: this.#drain.toJSON(),
       statisticsKeys: this.#statisticsKeys,
     };
@@ -761,4 +819,22 @@ class PartitionSession implements WriterSession {
       },
     };
   }
+}
+
+const UNNORMALIZED = { deltaValue: null, deltaCount: null, reset: false, outOfOrder: false } as const;
+
+/**
+ * The normalization columns of a point from what the stream normalizer reported. Deltas exist for cumulative sums
+ * (the counter delta) and cumulative histograms (the count and sum deltas); a reset restarts them at the point's own
+ * value, as the normalizer says. Everything else, and a skipped point, has none.
+ */
+function normalization(point: MetricPointRecord, n: Normalized, seriesId: string): PointNormalization {
+  if (n.kind === 'skip') return { ...UNNORMALIZED, seriesId, outOfOrder: n.reason === 'out-of-order' };
+  const { agg } = n;
+  const base = { ...UNNORMALIZED, seriesId, reset: n.reset };
+  if (agg.k === 'counter' && point.temporality !== 'delta') return { ...base, deltaValue: agg.delta };
+  if ((agg.k === 'hist' || agg.k === 'exp') && point.temporality === 'cumulative') {
+    return { ...base, deltaValue: agg.sum, deltaCount: agg.count };
+  }
+  return base;
 }

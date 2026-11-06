@@ -40,7 +40,7 @@ export interface StreamTarget {
 }
 
 /** A 32-bit xor-multiply hash of `s` (FNV-1a when given FNV's basis and prime), as 8 hex chars. */
-function hash32(s: string, basis: number, prime: number): string {
+export function hash32(s: string, basis: number, prime: number): string {
   let h = basis >>> 0;
   for (let i = 0; i < s.length; i++) {
     h ^= s.charCodeAt(i);

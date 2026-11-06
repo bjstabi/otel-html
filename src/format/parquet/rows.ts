@@ -37,6 +37,16 @@ export interface PointNormalization {
   readonly seriesId: string;
 }
 
+/**
+ * A count from the normalizer (a double: counts above 2^53 already lost their low bits when read) as an int64 cell.
+ * A non-integer or a value outside the signed int64 range cannot be stored and becomes null, never an exception.
+ */
+function countColumn(n: number | null): bigint | null {
+  if (n === null || !Number.isInteger(n)) return null;
+  const b = BigInt(n);
+  return b >= INT64_MIN && b <= INT64_MAX ? b : null;
+}
+
 /** A report-relative time as absolute unix nanoseconds: `epoch + t`. */
 export function absolute(t: RelNanos, epoch: UnixNanos): bigint {
   return epoch + BigInt(t);
@@ -283,9 +293,9 @@ export function pointRow(point: MetricPointRecord, norm: PointNormalization, ctx
     ...pointValues(point),
     quantiles: pointJsonColumn(point.point, 'quantileValues'),
     exemplars: pointJsonColumn(point.point, 'exemplars'),
-    flags: point.flags,
+    flags: BigInt(point.flags),
     delta_value: norm.deltaValue,
-    delta_count: norm.deltaCount === null ? null : BigInt(norm.deltaCount),
+    delta_count: countColumn(norm.deltaCount),
     reset: norm.reset,
     out_of_order: norm.outOfOrder,
   };
