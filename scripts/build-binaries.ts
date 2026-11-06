@@ -7,11 +7,13 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { join, relative, resolve } from 'node:path';
 
 const TARGETS = ['linux-x64', 'linux-arm64', 'darwin-x64', 'darwin-arm64', 'windows-x64'] as const;
 type Target = (typeof TARGETS)[number];
 
+const require = createRequire(import.meta.url);
 const root = resolve(import.meta.dirname, '..');
 const viewerAssets = join(root, 'dist', 'viewer', 'assets');
 const binDir = join(root, 'dist', 'bin');
@@ -42,10 +44,24 @@ function writeEntry(): string {
     (n) =>
       `import ${JSON.stringify(posix(relative(entryDir, join(viewerAssets, n))))} with { type: 'file' };`,
   );
+  // The codec's WASM is embedded under its own name (viewer-assets.ts filters it out of the report's assets/) and
+  // registered by path, because parquet-wasm's node build would read it from the build machine's node_modules.
+  const wasm = posix(relative(entryDir, require.resolve('parquet-wasm/esm/parquet_wasm_bg.wasm')));
+  const codec = posix(relative(entryDir, join(root, 'src', 'writer', 'parquet-wasm-source.ts')));
   const main = posix(relative(entryDir, join(root, 'src', 'cli', 'main.ts')));
   const file = join(entryDir, 'entry.ts');
   mkdirSync(entryDir, { recursive: true });
-  writeFileSync(file, `${imports.join('\n')}\nimport ${JSON.stringify(main)};\n`);
+  writeFileSync(
+    file,
+    [
+      ...imports,
+      `import wasmPath from ${JSON.stringify(wasm)} with { type: 'file' };`,
+      `import { registerEmbeddedParquetWasm } from ${JSON.stringify(codec)};`,
+      'registerEmbeddedParquetWasm(wasmPath);',
+      `await import(${JSON.stringify(main)});`,
+      '',
+    ].join('\n'),
+  );
   return file;
 }
 

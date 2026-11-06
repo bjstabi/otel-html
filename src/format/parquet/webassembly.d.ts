@@ -4,7 +4,14 @@ declare namespace WebAssembly {
   interface Table {
     readonly length: number;
   }
+  interface Module {
+    readonly __module?: never;
+  }
   interface Memory {
     readonly buffer: ArrayBuffer;
   }
 }
+
+// The ESM build's `init` signatures name these too; only `initSync` is called, with a Uint8Array.
+type BufferSource = ArrayBufferView<ArrayBufferLike> | ArrayBufferLike;
+type RequestInfo = string | URL;

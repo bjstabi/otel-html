@@ -1,4 +1,5 @@
 import type { PartitionEntry, PartitionFile } from '../format/manifest.js';
+import './parquet-wasm-source.js';
 import { encodeTable } from '../format/parquet/codec.js';
 import type { Row } from '../format/parquet/rows.js';
 import { TABLES, type Table } from '../format/parquet/schema.js';

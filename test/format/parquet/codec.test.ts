@@ -1,3 +1,4 @@
+import '../../../src/writer/parquet-wasm-source.js';
 import { describe, expect, test } from 'vitest';
 import { decodeTable, encodeTable } from '../../../src/format/parquet/codec.js';
 import type { Row } from '../../../src/format/parquet/rows.js';

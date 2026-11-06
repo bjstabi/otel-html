@@ -9,17 +9,21 @@ import {
   type Vector,
   vectorFromArray,
 } from 'apache-arrow';
-import parquet from 'parquet-wasm';
+import {
+  Compression,
+  readParquet,
+  Table as WasmTable,
+  WriterPropertiesBuilder,
+  writeParquet,
+} from 'parquet-wasm/esm';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { Row } from './rows.js';
 import { arrowSchema, type ColumnType, SORT_COLUMNS, TABLE_COLUMNS, type Table } from './schema.js';
+import { ensureParquetWasm } from './wasm.js';
 
 export interface EncodeOptions {
   readonly rowGroupRows: number;
 }
-
-// parquet-wasm's package `node` condition resolves to its CommonJS build, which loads its WASM synchronously at import.
-const { Compression, Table: WasmTable, WriterPropertiesBuilder, readParquet, writeParquet } = parquet;
 
 const OBSERVED = 'observed_time_unix_nano';
 
@@ -127,6 +131,7 @@ export function encodeTable(table: Table, rows: readonly Row[], opts: EncodeOpti
           schema,
           new RecordBatch(schema, makeData({ type, length: sorted.length, nullCount: 0, children })),
         );
+  ensureParquetWasm();
   const wasm = WasmTable.fromIPCStream(tableToIPC(arrow, 'stream'));
   const props = new WriterPropertiesBuilder()
     .setCompression(Compression.ZSTD)
@@ -145,6 +150,7 @@ function plain(value: unknown): unknown {
 
 /** Decodes a partition file into rows: every schema column is present, `null` for a null; dictionaries as strings. */
 export function decodeTable(_table: Table, bytes: Uint8Array): Row[] {
+  ensureParquetWasm();
   const arrow = tableFromIPC(readParquet(bytes).intoIPCStream());
   const names = arrow.schema.fields.map((f) => f.name);
   const rows: Row[] = [];

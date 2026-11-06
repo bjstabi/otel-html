@@ -64,7 +64,6 @@ import { inheritDashboards } from './inherit-config.js';
 import { acquireLock, type LockHandle } from './lock.js';
 import { MetricSeriesWriter, restoreCatalogSeries } from './metric-series-writer.js';
 import { compileDrops, DEFAULT_TITLE, type Drops, inspectFolder, iso, type OpenMode } from './open-common.js';
-import { openPartitionSession } from './partition-session.js';
 import type { Clock, FileSystem, Logger, ProcessInfo, SpanHandle, Timers, Tracer } from './ports.js';
 import { type Refs, rebaseLog, rebasePoint, rebaseSpan } from './rebase.js';
 import { TraceIndex, type TraceIndexSnapshot } from './trace-index.js';
@@ -226,6 +225,8 @@ export async function openSession(deps: WriterDeps, options: SessionOptions): Pr
 
   const { appending, preexisting } = await inspectFolder(fs, out, options.mode);
   if (config.writer.format !== 'chunks') {
+    // Lazy: the partition session pulls in parquet-wasm, which the chunk format and every other command never need.
+    const { openPartitionSession } = await import('./partition-session.js');
     return openPartitionSession(deps, { out, config, mode: options.mode }, drop, { appending, preexisting });
   }
   await fs.mkdirp(at(out, STATE_DIR));

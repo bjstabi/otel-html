@@ -362,6 +362,23 @@ jobs:
       - env:
           OTEL_HTML_BINARY: dist/bin/otel-html-${{ matrix.target }}${{ matrix.ext }}
         run: pnpm exec vitest run test/cli/binary.test.ts
+      # The binary run from a directory outside the checkout, so a path baked in at build time (parquet-wasm's WASM)
+      # cannot be found: a site-format convert must still write a Parquet partition.
+      - name: Binary runs outside the checkout (format site)
+        shell: bash
+        env:
+          BIN: ${{ github.workspace }}/dist/bin/otel-html-${{ matrix.target }}${{ matrix.ext }}
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          cp "$BIN" "$tmp/otel-html${{ matrix.ext }}"
+          cp fixtures/linked-traces.otlp.json "$tmp/in.otlp.json"
+          # The checkout's node_modules is where the inlined path would point; move it away for the run.
+          mv node_modules "$tmp/node_modules.away"
+          trap 'mv "$tmp/node_modules.away" "$GITHUB_WORKSPACE/node_modules"' EXIT
+          cd "$tmp"
+          OTEL_HTML_FORMAT=site ./otel-html${{ matrix.ext }} convert in.otlp.json -o out
+          test -s out/data/partitions/000000/spans.parquet
       - if: always()
         uses: ./.github/actions/otel-html-collect
         with:

@@ -12,6 +12,9 @@ export interface ViewerAssets {
   entry(): ViewerEntry;
 }
 
+/** The file name the binary build embeds parquet-wasm's WASM under (see `scripts/build-binaries.ts`); not a viewer asset. */
+export const PARQUET_WASM_FILE = 'parquet_wasm_bg.wasm';
+
 const SAFE_SEGMENT = /^[A-Za-z0-9.][A-Za-z0-9._-]*$/;
 
 /** Viewer files must land under `assets/`, with no `..`, no leading `_` and no absolute or scheme paths. */
@@ -77,7 +80,8 @@ function embeddedEntry(names: readonly string[], ext: 'js' | 'css', required: bo
  * `assets/` folder because the binary is built with `--asset-naming '[name].[ext]'`).
  */
 export function bunEmbeddedViewerAssets(bun: BunLike | undefined = bunGlobal()): ViewerAssets {
-  const embedded = bun?.embeddedFiles ?? [];
+  // The parquet codec's WASM is embedded beside the viewer files but is not one of them.
+  const embedded = (bun?.embeddedFiles ?? []).filter((f) => f.name !== PARQUET_WASM_FILE);
   const names = embedded.map((f) => f.name);
   return {
     async files() {
