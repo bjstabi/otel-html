@@ -109,6 +109,12 @@ open into one partition per signal, sorted (§6.2), so a finished run is a few l
 412 requests and 3.9 MB, because each file's footer is read). Compaction is a rewrite of the run's own partitions only;
 partitions that came from `merge` inputs are never rewritten.
 
+**Partitions are immutable; the manifest's set of live partitions changes.** Compaction writes a new partition and the
+next manifest commit drops the flush partitions it replaced; their files are deleted after the manifest is written, so
+a reader that holds the old manifest may find a file gone and must re-read the manifest (the viewer's Refresh does
+this). Nothing ever edits a partition file in place. The same rule lets a publisher replace a partition it wrote
+earlier with a better one (incremental CI publishing, separate design).
+
 `merge <reports…>` copies each input's partitions into the output (renumbered) and rewrites the manifest. No records
 are decoded or re-encoded; merge is O(manifest). Inputs in format 1 to 3 are converted through the existing decoders
 into partitions first (§9). `merge --compact` additionally rewrites the copied partitions into one sorted partition per
@@ -122,7 +128,10 @@ stays "drop the run's folder and rebuild".
 `data/manifest.js` registers the manifest as today. It carries, besides the fields the current manifest has (format
 version 4, otel-html version, title, epoch, created and updated times, `complete`, range, totals, config):
 
-- `partitions[]`: `{ n, files: { spans?, logs?, points?, traces?, patterns? } }` where each file entry has `path`,
+- `partitions[]`: `{ n, source, files: { spans?, logs?, points?, traces?, patterns? } }` where `n` is the folder number
+  (`<p6>`, assigned by the writer of this report; `merge` and a publisher renumber what they copy), `source` is free-text
+  provenance (`flush:<n>`, `compact:<n..m>`, `job:<id>#<n>`) that a copier uses to tell what it already holds, and
+  each file entry has `path`,
   `bytes`, `rows`, the time range, and **column statistics**: for the sort and prune columns (§6.2) the distinct values
   up to the facet value cap, or `null` past it, and min/max for time columns. The viewer prunes partitions with these
   before any Parquet footer is read; Parquet row-group statistics prune within a file.
@@ -235,7 +244,9 @@ as its query layer, confined to `src/viewer/data/` and `src/query/sql/`:
 
 - A Mosaic **Coordinator** owns the connection: the `wasmConnector` over DuckDB-WASM in the page (both output formats),
   or the REST connector to a host (§8). It consolidates concurrent queries, caches results, and runs its
-  pre-aggregation for clients that opt in (the timeline brush).
+  pre-aggregation for clients that opt in (the timeline brush) **on the wasm connector only**: pre-aggregation creates
+  tables through `exec` requests, which the host's engine policy refuses (§8), so the viewer disables it on the REST
+  connector and the served brush is a plain query (its budget says so).
 - Every page and widget is a **MosaicClient** behind a small React hook (`useMosaicQuery(build, { filterBy })`):
   `build` returns a mosaic-sql `Query`, the hook delivers the Arrow result mapped into the result types the components
   consume today (facet counts, time buckets, RED series, histograms, rows). Components never import Mosaic.
@@ -275,13 +286,11 @@ Queries name only five **views**: `spans`, `logs`, `points`, `traces`, `patterns
 after registering the report's files, as `read_parquet([...])` over the partitions the manifest lists (after pruning,
 a query may use a narrower temporary view over the pruned files; the builder decides whether pruning is a view per
 query or a `WHERE` on a `filename` column). A host creates the same views server-side. Column names follow
-OpenTelemetry Arrow where it has a name (§6.1). The `spans` view also resolves **span versions**: for one
-`(trace_id, span_id)` it keeps the latest row whose `provisional` attribute is unset, else the latest provisional row
-(`QUALIFY row_number() OVER (PARTITION BY trace_id, span_id ORDER BY provisional, time_unix_nano DESC) = 1`), so a
-span re-emitted with better information supersedes the earlier one without rewriting a partition (used by incremental
-CI publishing, separate design). Compaction drops superseded rows for good.
+OpenTelemetry Arrow where it has a name (§6.1). The views carry **no deduplication or versioning**: a row that must be
+superseded is superseded by replacing the partition that holds it (§5.1), so every query keeps its pruning (a window
+over `trace_id, span_id` across the whole table would read every row and defeat the design).
 
-The views, their columns and the version rule are **the contract between the viewer and any backend**: a store that
+The views and their columns are **the contract between the viewer and any backend**: a store that
 holds telemetry differently satisfies it by defining the same views. They are documented in a generated page under
 `docs/format/`, checked by a golden test, and versioned with the format version.
 
@@ -370,8 +379,10 @@ into the page it serves, otherwise it runs the engine itself.
    code. e2e re-baselined.
 3. **Metrics**: `points` table, metric query compilation, Metrics explorer, catalog and dashboard metric widgets;
    downsampled tables only if the scale budget demands them.
-4. **`host` and `RemoteDataSource`**, the `QueryBackend` interface. The publisher switches to format 4 and `site`
-   with the bump release, passing `assetsBase`.
+4. **`host`** and the REST connector path in the viewer.
+
+The publisher switches to format 4 and `site`, passing `assetsBase`, **in the bump release** (it is part of
+milestone 2's acceptance: the rolling report of this repository opens fast), not with milestone 4.
 
 Milestones 1 to 3 land on one long-lived branch (`feat/format-4`, PRs target it, `main` keeps shipping format 3
 meanwhile) and ship together as the format bump; 4 may follow as its own release. PR process: **unattended**
@@ -406,6 +417,8 @@ Real CI report, 2.17M spans, `@duckdb/duckdb-wasm` 1.32.0, headless browsers on 
 - DuckDB-WASM in the browser, DuckDB behind `otel-html` when served, one SQL generation path.
 - Mosaic (core and sql) is the viewer's query layer; SQL travels on the wire to a locked-down engine; the five views
   are the schema contract; vendor plurality is DuckDB `ATTACH` behind the same views (2026-11-06).
+- Superseding data happens by replacing whole partitions, never by a version rule in the views (builder check,
+  2026-11-06).
 - Partitions per flush, append-only, retention by deletion; merge by copy.
 
 ## 14. Designer's calls (flag if wrong)
@@ -415,7 +428,8 @@ Real CI report, 2.17M spans, `@duckdb/duckdb-wasm` 1.32.0, headless browsers on 
 - `traces` and `patterns` as writer-maintained tables rather than derived at query time.
 - Metric levels dropped unless the scale budget forces a downsampled table.
 - `host` as the command name; it speaks Mosaic's REST connector protocol under the engine policy of §8.
-- The span version rule lives in the `spans` view (query time), not in the writer.
+- Pre-aggregation is enabled on the wasm connector only.
+- Manifest partition entries carry `source`; folders are always `<p6>`.
 - OTTL conditions outside the translatable subset fall back to browser evaluation rather than erroring.
 - Milestones 1–3 ship together as one format bump.
 - The publisher keeps rebuilding the rolling report from the retained runs (merge by copy, then `--compact`) rather
