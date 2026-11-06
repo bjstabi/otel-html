@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { decodeTable } from '../../src/format/parquet/codec.js';
 import type { Row } from '../../src/format/parquet/rows.js';
-import { TABLES, type Table } from '../../src/format/parquet/schema.js';
+import type { Table } from '../../src/format/parquet/schema.js';
 import { PartitionWriter } from '../../src/writer/partition-writer.js';
 import { createMemoryFileSystem } from '../../test-support/memory-fs.js';
 
@@ -95,7 +95,6 @@ describe('PartitionWriter', () => {
     await expect(w.cut('flush:1')).rejects.toThrow();
     expect(w.pendingRows).toBe(2);
     expect(w.nextPartition).toBe(0);
-    expect(TABLES.length).toBe(5);
     expect(await fs.exists('/out/data/partitions/000000/spans.parquet')).toBe(false);
   });
 

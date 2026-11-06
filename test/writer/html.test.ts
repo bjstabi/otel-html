@@ -7,7 +7,7 @@ import { spansRequest } from './helpers.js';
 const entry = { script: 'assets/viewer.abc123.js', style: 'assets/viewer.abc123.css' };
 
 describe('renderIndexHtml', () => {
-  test('the default base is the report own assets/', () => {
+  test("the default base is the report's own assets/", () => {
     const html = renderIndexHtml(entry, 't');
     expect(html).toContain('<script src="assets/viewer.abc123.js"></script>');
     expect(html).toContain('href="assets/viewer.abc123.css"');
@@ -23,7 +23,9 @@ describe('renderIndexHtml', () => {
   });
 
   test('a base that is not a layout path is refused', () => {
-    expect(() => renderIndexHtml(entry, 't', { assetsBase: 'https://x/assets/' })).toThrow();
+    expect(() => renderIndexHtml(entry, 't', { assetsBase: 'https://x/assets/' })).toThrowError(
+      expect.objectContaining({ code: 'invalid-report' }),
+    );
   });
 });
 

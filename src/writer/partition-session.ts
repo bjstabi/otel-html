@@ -74,7 +74,7 @@ export async function openPartitionSession(
   drop: Drops,
   folder: FolderState,
 ): Promise<WriterSession> {
-  const { out, mode: _mode } = options;
+  const { out } = options;
   let { config } = options;
   const { fs } = deps;
   await fs.mkdirp(at(out, STATE_DIR));

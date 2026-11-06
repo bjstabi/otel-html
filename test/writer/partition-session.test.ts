@@ -452,6 +452,32 @@ describe('format mismatches', () => {
     expect(e.hint).toContain('local or site');
   });
 
+  test('the chunk session replacing a format-4 report removes its partitions', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    await s.add(spans(2), 'a.json');
+    await s.close();
+    expect(await w.fs.exists(`${OUT}/data/partitions/000000/spans.parquet`)).toBe(true);
+    const r = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'replace' });
+    await r.add(spans(1, 0, 7), 'b.json');
+    await r.close();
+    expect([...w.fs.snapshot().keys()].some((k) => k.includes('data/partitions'))).toBe(false);
+    expect(
+      parseAnyManifest(
+        reviveDataJson(unwrapDataFile(w.fs.snapshot().get(`${OUT}/data/manifest.js`) ?? '', MANIFEST_KEY)),
+      ).formatVersion,
+    ).toBe(3);
+  });
+
+  test('format local is recorded in manifest.engine', async () => {
+    const w = createTestWriter();
+    const s = await open(w, cfg({ format: 'local' }));
+    await s.add(spans(1), 'a.json');
+    await s.flush();
+    expect(manifest(w).engine).toEqual({ version: '1.32.0', format: 'local', assetsBase: 'assets/' });
+    await s.close();
+  });
+
   test('replace over a format-3 report starts a format-4 one', async () => {
     const w = createTestWriter();
     await chunkReport(w);
