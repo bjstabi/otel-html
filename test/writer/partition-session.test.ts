@@ -634,6 +634,22 @@ describe('close compacts the flush partitions', () => {
     expect(partitionDirs(w)).toEqual(['000000', '000003']);
   });
 
+  test('the state written at close is the state before it, apart from the partition numbering', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    await flushed(s, 3);
+    const before = ([0, 1] as const).map((i) => state(w, i)).sort((a, b) => b.checkpoint - a.checkpoint)[0];
+    await s.close();
+    const after = ([0, 1] as const).map((i) => state(w, i)).sort((a, b) => b.checkpoint - a.checkpoint)[0];
+    if (before === undefined || after === undefined) throw new Error('no state');
+    expect(after.checkpoint).toBeGreaterThan(before.checkpoint);
+    expect(before.dedupe.length).toBeGreaterThan(0);
+    const { checkpoint: _c, nextPartition: _n, flushPartitions: _f, ...rest } = after;
+    const { checkpoint: _c2, nextPartition: _n2, flushPartitions: _f2, ...restBefore } = before;
+    expect(rest).toEqual(restBefore);
+    expect(after).toMatchObject({ nextPartition: 4, flushPartitions: [] });
+  });
+
   test('a compaction that fails keeps the flush partitions, closes the report and removes what it wrote', async () => {
     const w = createTestWriter();
     const s = await open(w);

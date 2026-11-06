@@ -178,11 +178,13 @@ class PartitionSession implements WriterSession {
   readonly #config: ResolvedConfig;
   readonly #drop: Drops;
   readonly #lock: LockHandle;
-  readonly #dedupe: DedupeSet;
+  #dedupe: DedupeSet | null;
   /** Cumulative-stream state of the points accepted so far (held ones included); frozen at each prepare. */
-  readonly #normalizer: StreamNormalizer;
+  #normalizer: StreamNormalizer | null;
   /** The committed log-template state: swapped in only after a cut's files were written. */
-  #drain: Drain;
+  #drain: Drain | null;
+  /** The state `release` serialised before it dropped the live structures; the final checkpoint writes these. */
+  #frozen: { dedupe: string; metricStreams: string; drain: string } | null = null;
   readonly #writer: PartitionWriter;
   readonly #statisticsKeys: Record<Table, string[]>;
   readonly #createdAt: string;
@@ -232,7 +234,7 @@ class PartitionSession implements WriterSession {
       facetValueCap: config.writer.facetValueCap,
       nextPartition: r.nextPartition,
       derive: (taken) => {
-        const p = patternRows(this.#drain, taken.logs, this.#epoch ?? 0n);
+        const p = patternRows(this.#live(this.#drain), taken.logs, this.#epoch ?? 0n);
         return {
           rows: { traces: traceRows(taken.spans, taken.logs), patterns: p.rows },
           commit: () => {
@@ -324,6 +326,7 @@ class PartitionSession implements WriterSession {
       this.#disarmIdle();
       await this.#checkpoint(false);
       if (!this.#shellWritten) await this.#writeShell();
+      this.#release();
       const compacted = await this.#compact();
       await this.#checkpoint(true);
       await this.#removePartitions(compacted);
@@ -425,7 +428,7 @@ class PartitionSession implements WriterSession {
         continue;
       }
       const key = span.traceId + span.spanId;
-      if (seenInRequest.has(key) || this.#dedupe.has(span.traceId, span.spanId)) {
+      if (seenInRequest.has(key) || this.#live(this.#dedupe).has(span.traceId, span.spanId)) {
         duplicates++;
         continue;
       }
@@ -433,7 +436,7 @@ class PartitionSession implements WriterSession {
       staged.push({ span, row: this.#checked('spans', spanRow(span, rowCtx)) });
     }
     for (const { span, row } of staged) {
-      this.#dedupe.seen(span.traceId, span.spanId);
+      this.#live(this.#dedupe).seen(span.traceId, span.spanId);
       this.#writer.add('spans', row);
       this.#totals.spans++;
       this.#extend(ctx, span.start, Math.max(span.start, span.end));
@@ -487,7 +490,7 @@ class PartitionSession implements WriterSession {
         continue;
       }
       const seriesId = seriesIdOf(point, resource, scope);
-      const step = this.#normalizer.prepare(point);
+      const step = this.#live(this.#normalizer).prepare(point);
       const row = this.#checked('points', pointRow(point, { ...UNNORMALIZED, seriesId }, rowCtx));
       staged.push({ point, seriesId, row, step });
     }
@@ -668,6 +671,28 @@ class PartitionSession implements WriterSession {
     this.#shellWritten = true;
   }
 
+  #live<T>(v: T | null): T {
+    if (v === null) throw new Error('invariant violated: the session state was released');
+    return v;
+  }
+
+  /**
+   * Called at close, after the held rows are durable: keeps what the final state write needs as JSON text and drops
+   * the live dedupe set, Drain, stream normalizer and interners, so compaction runs without them. The state written
+   * is the same as without the release.
+   */
+  #release(): void {
+    this.#frozen ??= {
+      dedupe: JSON.stringify(this.#live(this.#dedupe).toJSON()),
+      metricStreams: JSON.stringify(this.#live(this.#normalizer).toJSON()),
+      drain: JSON.stringify(this.#live(this.#drain).toJSON()),
+    };
+    this.#dedupe = null;
+    this.#normalizer = null;
+    this.#drain = null;
+    this.#ctx = null;
+  }
+
   /**
    * Compacts this session's flush partitions into one when there are two or more (a copy made by merge is never one
    * of them), as `compactPartitions` says. Writes only the new partition's folder; the next checkpoint commits it, in
@@ -751,9 +776,15 @@ class PartitionSession implements WriterSession {
         state: writeState
           ? {
               epoch: this.#epoch === null ? null : this.#epoch.toString(),
-              dedupe: this.#dedupe.toJSON(),
+              dedupe:
+                this.#frozen === null
+                  ? this.#live(this.#dedupe).toJSON()
+                  : (JSON.parse(this.#frozen.dedupe) as string[]),
               // With the cut below, in this synchronous segment: points accepted later are not in this state.
-              metricStreams: this.#normalizer.toJSON(),
+              metricStreams:
+                this.#frozen === null
+                  ? this.#live(this.#normalizer).toJSON()
+                  : (JSON.parse(this.#frozen.metricStreams) as unknown),
             }
           : null,
         updatedAt: iso(this.#deps.clock),
@@ -840,7 +871,10 @@ class PartitionSession implements WriterSession {
       flushPartitions: [...this.#flushed],
       dedupe: s.dedupe,
       metricStreams: s.metricStreams,
-      drain: this.#drain.toJSON(),
+      drain:
+        this.#frozen === null
+          ? this.#live(this.#drain).toJSON()
+          : (JSON.parse(this.#frozen.drain) as ReturnType<Drain['toJSON']>),
       statisticsKeys: this.#statisticsKeys,
     };
   }

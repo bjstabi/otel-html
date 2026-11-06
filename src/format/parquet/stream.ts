@@ -16,8 +16,8 @@ import { columnsOfBatch, columnsToArrow, type EncodeOptions, writerProperties } 
 import { arrowSchema, TABLE_COLUMNS, type Table } from './schema.js';
 import { ensureParquetWasm } from './wasm.js';
 
-/** Rows per record batch a reader takes from a file: small, so a file open in a merge holds little decoded data. */
-const READ_BATCH_ROWS = 1024;
+/** Rows per record batch a reader takes from a file. Larger is better: each batch carries its columns' whole dictionaries through Arrow IPC, and many small batches of a big row group made garbage that raised the peak (measured). */
+const READ_BATCH_ROWS = 32_768;
 
 /** Throws `invalid-report` unless `actual` has exactly the columns, types and nullability `arrowSchema(table)` has. */
 function checkSchema(table: Table, actual: ArrowSchema, path: string): void {
