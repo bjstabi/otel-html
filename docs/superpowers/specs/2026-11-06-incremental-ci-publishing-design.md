@@ -1,8 +1,9 @@
 # Incremental CI publishing: a run's report grows while the run is going
 
 Status: design, direction approved in conversation on 2026-11-06. Builds on the format-4 design
-(`2026-11-06-parquet-duckdb-format-4-design.md`): partitions, the `spans` view's version rule, `assetsBase` and the
-`site` output format are assumed, and nothing here ships before milestone 1 of that design.
+(`2026-11-06-parquet-duckdb-format-4-design.md`): partitions, the "immutable partitions, live set in the manifest"
+rule, the `source` field, `assetsBase` and the `site` output format are assumed, and nothing here ships before the
+format-4 bump release.
 
 ## 1. Intent
 
@@ -33,8 +34,9 @@ Non-goals
 
 - Seconds-level liveness on GitHub Pages. Pages deploys one site at a time and takes about a minute; the design works
   within that and names the targets where seconds are possible (§6).
-- A viewer that follows a run by itself. A Refresh affordance is in scope (§5.6); polling is left optional.
-- In-progress span records in OTLP. There are none; the provisional root is a real span re-emitted (§5.4).
+- A viewer that follows a run by itself. A Refresh affordance is in scope (§5.7); polling is left optional.
+- In-progress span records in OTLP. There are none; the provisional root is a real span re-emitted in a replaced
+  partition (§5.5).
 
 Anti-goals
 
@@ -54,6 +56,11 @@ Anti-goals
 - The publisher must not run a pull request's code with a write token (dogfood design §6.1); the per-job pusher runs
   the job's own otel-html with the job's token, so that rule is unchanged: the pusher only ever has the job's rights.
 - The site index (`index.json`), channels, retention and the rolling report keep their shapes.
+- Under the job shell every `run:` step is its own `otel-html run` process, so `close()` compacts a step's flush
+  partitions at the end of every step, and a job report's manifest flips `complete` once per step.
+- Pages is deployed only by the `deploy` job of `ci-report.yml`, on `workflow_run: completed` from the default branch;
+  nothing deploys on a push to `gh-pages` today. The `github-pages` environment's branch policy decides which refs may
+  deploy. Windows runners exist in `ci.yml` and `actions-smoke.yml`.
 
 ## 4. Approaches considered
 
@@ -82,14 +89,18 @@ A new CLI subcommand, run inside a job with the gh-pages checkout the lease scri
 otel-html ci push --report .otel-html/report --site <checkout> --channel <channel> --run <run id> --job <job id>
 ```
 
-It copies every partition of the job's report that the site's run report does not list yet into
-`<channel>/runs/<run id>/data/partitions/<job id>-<n6>/`, appends their manifest entries (statistics included, copied
-from the job report's manifest), writes or refreshes the run report's `index.html` and the channel's `index.json`
-entry for the run (conclusion `in_progress`), and writes one small partition of **CI spans** (§5.4). It writes nothing
-else: no compaction, no rolling report, no link, no preview. Partition folders are named deterministically from the
-job id and the job report's partition number, so a push is idempotent and a retry under the lease starts from the
-tip and skips what is already there. A push with nothing new prints `pushed=false` and the lease script does not
-push (its existing `push-when` mechanism).
+It is a **sync**, not an append: after it, the site's run report lists, for this job, exactly the partitions the
+job's report lists right now, plus one small partition of **CI spans** this job writes (§5.5). Concretely it copies
+each job partition whose `source` (`job:<id>#<n>`) the run report does not list into the next free
+`<channel>/runs/<run id>/data/partitions/<p6>/` with that `source` and its manifest entry (statistics included),
+drops from the run manifest every partition of this job whose `source` the job report no longer lists (a step's
+`close()` compacted its flush partitions), writes the manifest, then deletes the dropped partitions' files, and
+refreshes the run report's `index.html` and the channel's `index.json` entry (conclusion `in_progress`). It writes
+nothing else: no compaction across jobs, no rolling report, no link, no preview. Matching on `source` makes a push
+idempotent and a retry under the lease start from the tip and change nothing already there. A push with nothing to
+change prints `pushed=false` and the lease script does not push (its existing `push-when` mechanism). Because the
+manifest is written before files are deleted, a reader with an older manifest can at worst miss a file and must
+re-read the manifest, which is the format-4 rule.
 
 The run report's manifest while the run is going has `complete: false` and an `updatedAt` per push; the viewer shows
 "in progress, updated <time>" from it.
@@ -97,12 +108,14 @@ The run report's manifest while the run is going has `complete: false` and an `u
 ### 5.2 When pushes happen, and with what token
 
 - **At job end (approach B):** `otel-html-collect` gains a `publish` input. When set, after the artifact upload it
-  checks out gh-pages under the lease and runs `ci push`. Partitions written by `run` are already closed and sorted,
-  so the job's report is in its final per-job shape.
+  checks out gh-pages under the lease and runs `ci push`. Every step's `close()` has compacted by then, so the final
+  sync leaves the job's compacted partitions and removes any flush partitions the pusher shipped mid-step.
 - **During the job (approach C):** `otel-html-setup` gains a `push-every` input (default off; `60s` in this repo). When
-  set, it starts `otel-html ci pusher --every 60s …` detached (`setsid`, output to a file under `.otel-html/`), which
-  waits for the report's manifest to list new partitions, then runs one leased `ci push`. It dies with the job; the
-  collect step's final push covers what it missed. A failing push is logged to the pusher's file and retried on the
+  set, it starts `otel-html ci pusher --every 60s …`, which detaches itself (`child_process.spawn` with
+  `detached: true` and its stdio on a file under `.otel-html/`, so it works on Linux, macOS and Windows runners), waits
+  for the job report's manifest to list a partition set that differs from the last synced one (mid-step: new flush
+  partitions; at a step's end: the compacted one replacing them; `complete` toggling per step is not a signal), then
+  runs one leased `ci push`. It dies with the job; the collect step's final push covers what it missed. A failing push is logged to the pusher's file and retried on the
   next tick, never to the job's step output, so the steps are unaffected and a broken pusher cannot fail a job.
 - **Token:** both need `contents: write` on the job. In this repo the jobs that produce reports declare
   `permissions: { contents: write, actions: read }`; every other job keeps read-only. A fork pull request's run has a
@@ -110,7 +123,18 @@ The run report's manifest while the run is going has `complete: false` and an `u
   skip pushing with a notice; its report arrives from the end-of-run publisher as today. This is a widening of what a
   same-repo CI job may do (push to gh-pages) and is the designer's call to flag first (§10).
 
-### 5.3 The end-of-run pass
+### 5.3 Deploying Pages after a push
+
+Today only `ci-report.yml`'s `deploy` job deploys Pages, after the run completes, so a mid-run push would reach the
+branch and not the site. A new `pages-deploy.yml` on `push: branches: [gh-pages]` deploys the tip in the existing
+`pages` concurrency group, which keeps one pending deploy and replaces it, so a burst of pushes from several jobs
+coalesces into one deploy at a time (about a minute each). The `deploy` job leaves `ci-report.yml`; the end-of-run
+pass pushes and the new workflow deploys. This needs the `github-pages` environment's deployment branch policy to
+admit `gh-pages` (a repository setting the maintainer changes; noted in §10). Rejected: GitHub's "deploy from branch"
+build (a soft limit of ten builds an hour, which a 60 s tick across jobs would hit) and each job deploying itself
+(`pages: write` and the environment gate on every report-producing job, which pull request runs cannot pass).
+
+### 5.4 The end-of-run pass
 
 `ci-report.yml` keeps its trigger (`workflow_run: completed`) and its write token, and `ci site` becomes a
 reconciliation:
@@ -118,32 +142,34 @@ reconciliation:
 1. Download the run's artifacts (the only source for a fork pull request, and the fallback for a job whose pushes
    failed) and push any partition the run report does not list yet, as `ci push` would.
 2. Write the **definitive CI spans** (workflow, jobs, steps) from the API, which now has final timings, replacing the
-   provisional ones (§5.4).
+   provisional ones (§5.5).
 3. `merge --compact` the run report into one sorted partition per signal, mark it `complete`, and rebuild the
    channel's rolling report by copy and compaction as the format-4 design says.
 4. Link, preview, retention, deploy: unchanged.
 
-### 5.4 The workflow trace while the run is going
+### 5.5 The workflow trace while the run is going
 
 `ci context` already fixes the run's trace id and each job's span id at job start and exports `TRACEPARENT`, so every
 span a job emits is a child of the workflow trace from the first second. What arrives late is the parent rows, and
 OTLP has no in-progress span. So:
 
-- Each `ci push` writes a CI-spans partition from the jobs API: this job's span (start known, end `now` while the job
-  runs, final at the collect push) and its steps that have completed, plus a **provisional workflow root** (start =
-  the run's start, end = now). All carry `otel_html.ci.provisional = true` except a job span written at job end and
-  steps that have completed.
-- The format-4 `spans` view keeps, per `(trace_id, span_id)`, the latest non-provisional row, else the latest
-  provisional one, so each push supersedes the previous provisional rows without touching earlier partitions, and the
-  end-of-run pass's definitive rows win over everything. Compaction drops superseded rows.
+- Each `ci push` writes this job's **CI-spans partition** from the jobs API: this job's span (start known, end `now`
+  while the job runs, final at the collect push) and its steps that have completed, plus a **provisional workflow
+  root** (start = the run's start, end = now). Rows that are not final carry `otel_html.ci.provisional = true`.
+- A push **replaces** the job's previous CI-spans partition (`source: ci:<job id>`): the new one is written, the
+  manifest swaps it in, the old file is deleted. No row is ever versioned inside the data, and the views carry no
+  dedupe rule (format-4 §7.4). Several jobs each write a provisional root with the same span id; the viewer shows a
+  trace with duplicate root rows only until the end-of-run pass replaces every job's CI-spans partition with the one
+  definitive partition it writes, and the trace panel prefers a non-provisional row when ids collide, which is a
+  display rule, not a query rule.
 - Span ids are the deterministic ones `ci context` and `ci site` derive today, so a job's `run` root spans parent
   correctly under the job span whichever row of it is current.
 
 Every row is a legitimate OTLP span with the `cicd.*` resource and attributes the workflow trace uses today; the only
-addition is the `otel_html.ci.provisional` attribute, and a reader that ignores it sees a trace with duplicate spans
-rather than a broken one.
+addition is the `otel_html.ci.provisional` attribute, and a reader that ignores it sees, at worst, duplicate root rows
+while the run is going rather than a broken trace.
 
-### 5.5 OTLP fan-out
+### 5.6 OTLP fan-out
 
 `run` and `serve` gain `--export-otlp <endpoint>` (config `receiver.exportOtlp`, with protocol from
 `OTEL_EXPORTER_OTLP_PROTOCOL` semantics). Every accepted OTLP request is forwarded unchanged, as received, to that
@@ -152,14 +178,14 @@ is logged once per process, and nothing about forwarding affects what is written
 sender. This is the standards hook: a team with a collector or backend gets live data there while otel-html writes
 the static report beside it, and otel-html is a pass-through, not a sink.
 
-### 5.6 Viewer
+### 5.7 Viewer
 
 A manifest with `complete: false` shows an "in progress, updated <time>" line in the page chrome with a **Refresh**
 button that re-reads the manifest, registers partitions not yet registered, and re-runs the current queries through
 the Coordinator; no page reload. Automatic polling is a per-session toggle on that line, off by default, and it polls
 only the manifest. Nothing else in the viewer knows about publishing.
 
-### 5.7 Targets
+### 5.8 Targets
 
 The dogfood design's publisher `target` interface (fetch current site, write files, delete paths) gains the
 operations `ci push` needs (copy partition files, rewrite one manifest, rewrite `index.json`). `github-pages` is the
@@ -182,6 +208,13 @@ is the third shape and needs no target code at all.
 
 - The job token widening (§5.2) is the one new right: a same-repo job can push gh-pages. Fork runs cannot, and the
   publisher never runs their code with a write token, as today.
+- **Open for the maintainer:** bot branches (Renovate) are same-repo, so their jobs would run third-party dependency
+  code under a token that can push `gh-pages` and any branch a ruleset does not protect. `ci-report.yml` today avoids
+  exactly that by running the default branch's otel-html for bot runs. Job-level `permissions` cannot be conditional,
+  so the options are: accept the exposure (with `main` protected by its ruleset, the exposure is the site and
+  unprotected branches); keep bot runs on the end-of-run path by giving the report-producing jobs their write token
+  through a reusable workflow that bot runs call with read-only permissions; or use approach D for bot runs. Decided in
+  §10 once answered.
 - Provisional spans are plain spans; a consumer that ignores the attribute sees duplicates, not corruption.
 - OTLP fan-out sends telemetry to an endpoint the operator configured; the endpoint is never taken from a request.
 - `ci push` writes only under `<channel>/runs/<run id>/` and the run's `index.json` entry; paths are validated as the
@@ -192,8 +225,9 @@ is the third shape and needs no target code at all.
 - Unit: `ci push` idempotency (a second push with the same report changes nothing), manifest append with statistics,
   deterministic partition folder names, provisional span emission from a jobs-API fixture, the `spans` view's version
   rule against provisional and definitive rows, the fan-out client's bounded queue.
-- `actions-smoke.yml` gains a leg that runs a job with `push-every` against a scratch gh-pages checkout and asserts the
-  run report lists the job's partitions before the job ends.
+- `actions-smoke.yml` gains a leg, on a Linux and a Windows runner, that runs a job with `push-every` against a scratch
+  gh-pages checkout and asserts the run report lists the job's partitions before the job ends, and lists only the
+  compacted ones after a step ends.
 - e2e: a fixture report with provisional CI spans renders the trace with one root and shows the in-progress line and
   Refresh; after a second manifest is served, Refresh shows the new partition's rows.
 
@@ -212,12 +246,18 @@ pusher and a `schedule`d publisher tick) with the latency that implies.
 - Direction approved on 2026-11-06: per-job incremental publishing, during the run from a background process, with
   OpenTelemetry at every integration point.
 - The workflow trace is "opened" at run start as OTel does it (ids fixed and propagated); parent spans are emitted
-  provisionally and superseded, resolved by the `spans` view.
+  provisionally and superseded by replacing the partition that holds them.
+- Maintainer action: admit `gh-pages` in the `github-pages` environment's deployment branch policy (§5.3).
 
 ## 11. Designer's calls (flag if wrong)
 
 - Same-repo report-producing jobs get `contents: write`; fork runs fall back to the end-of-run path.
-- `ci push` is a CLI subcommand invoked by the actions under the existing lease script, not a new action.
+- `ci push` is a CLI subcommand invoked by the actions under the existing lease script, not a new action; it syncs a
+  job's live partition set rather than appending (builder check: a step's `close()` compaction would otherwise double
+  every row the pusher shipped mid-step).
+- A `pages-deploy.yml` on `push: branches: [gh-pages]` in the `pages` group deploys; the `deploy` job leaves
+  `ci-report.yml`.
+- The pusher detaches itself from the CLI, so Windows runners are covered.
 - A pusher failure never fails the job; it is logged to a file under `.otel-html/` and surfaced as a job notice.
 - `push-every` defaults off; this repo sets 60 s.
 - The provisional attribute name `otel_html.ci.provisional`.
