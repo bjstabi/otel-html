@@ -1,3 +1,4 @@
+import { OtelHtmlError } from '../../model/errors.js';
 import type { RelNanos, UnixNanos } from '../../model/ids.js';
 import type {
   LogRecordRecord,
@@ -10,7 +11,13 @@ import type {
 } from '../../model/records.js';
 import { ATTR_HOST_NAME } from '../../semconv/attributes.js';
 import { resourceName, serviceName } from '../../semconv/resource-name.js';
-import { anyValueJson, attributesToJson, attributesToJsonValue, type JsonValue } from '../columns.js';
+import {
+  anyValueJson,
+  attributesToJson,
+  attributesToJsonValue,
+  doublesJson,
+  type JsonValue,
+} from '../columns.js';
 
 /** One record as a table row, keyed by column name (see `schema.ts`): bigint for int64 columns, JSON text for json. */
 export type Row = Record<string, unknown>;
@@ -41,6 +48,13 @@ function absoluteOrNull(t: RelNanos | null, epoch: UnixNanos): bigint | null {
 
 const TEMPORALITY_NUMBER = { unspecified: 0, delta: 1, cumulative: 2 } as const;
 
+const SAFE_MAX = BigInt(Number.MAX_SAFE_INTEGER);
+
+/** An int64 in format-4 JSON: a plain number within +-(2^53-1), else `{"$i"}`. */
+function intJson(n: bigint): JsonValue {
+  return n <= SAFE_MAX && n >= -SAFE_MAX ? Number(n) : { $i: n.toString() };
+}
+
 function resourceAndScope(resource: ResourceRecord, scope: ScopeRecord): Row {
   return {
     resource_attributes: attributesToJson(resource.attributes),
@@ -60,7 +74,7 @@ export function spanRow(span: SpanRecord, ctx: Context): Row {
   const start = absolute(span.start, ctx.epoch);
   const end = absolute(span.end, ctx.epoch);
   const events: JsonValue[] = span.events.map((e) => ({
-    time_unix_nano: { $i: absolute(e.time, ctx.epoch).toString() },
+    time_unix_nano: intJson(absolute(e.time, ctx.epoch)),
     name: e.name,
     attributes: attributesToJsonValue(e.attributes),
     dropped_attributes_count: e.droppedAttributesCount,
@@ -124,16 +138,112 @@ export function logRow(log: LogRecordRecord, ctx: Context): Row {
   };
 }
 
-function pointField(point: unknown, key: string): string | null {
-  if (typeof point !== 'object' || point === null) return null;
-  const v: unknown = Object.getOwnPropertyDescriptor(point, key)?.value;
-  return v === undefined ? null : JSON.stringify(v);
+const bad = (path: string, expected: string, actual: unknown): OtelHtmlError =>
+  new OtelHtmlError('invalid-report', { path, expected, actual: JSON.stringify(actual) ?? String(actual) });
+
+/** The field of a point's JSON (protobuf JSON: int64 as decimal strings, non-finite doubles as strings), if present. */
+function field(point: unknown, key: string): unknown {
+  if (typeof point !== 'object' || point === null) return undefined;
+  return Object.getOwnPropertyDescriptor(point, key)?.value;
+}
+
+function double(v: unknown, path: string): number | null {
+  if (v === undefined) return null;
+  if (typeof v === 'number') return v;
+  if (v === 'NaN') return Number.NaN;
+  if (v === 'Infinity') return Number.POSITIVE_INFINITY;
+  if (v === '-Infinity') return Number.NEGATIVE_INFINITY;
+  throw bad(path, 'a number or "NaN" | "Infinity" | "-Infinity"', v);
+}
+
+/** An int64 field: a decimal string (a missing one is the protobuf default, `absent`). */
+function int64(v: unknown, path: string, absent: bigint | null): bigint | null {
+  if (v === undefined) return absent;
+  if (typeof v === 'string' && /^-?[0-9]+$/.test(v)) return BigInt(v);
+  throw bad(path, 'a decimal integer string', v);
+}
+
+function list<T>(v: unknown, path: string, item: (x: unknown, p: string) => T | null): T[] {
+  if (v === undefined) return [];
+  if (!Array.isArray(v)) throw bad(path, 'an array', v);
+  return v.map((x, i) => {
+    const r = item(x, `${path}[${i}]`);
+    if (r === null) throw bad(`${path}[${i}]`, 'a value', x);
+    return r;
+  });
+}
+
+function int32(v: unknown, path: string, absent: number | null): number | null {
+  if (v === undefined) return absent;
+  if (typeof v === 'number' && Number.isInteger(v)) return v;
+  throw bad(path, 'an integer', v);
+}
+
+/** The kind-specific value columns of a point, from its protobuf-JSON `point` (absent fields at their zero value). */
+function pointValues(point: MetricPointRecord): Row {
+  const p = point.point;
+  const at = (k: string): string => `point.${k}`;
+  const get = (k: string): unknown => field(p, k);
+  switch (point.type) {
+    case 'gauge':
+    case 'sum': {
+      // An int point's value is an int64 string; the column is float64, so ints beyond 2^53 lose precision here.
+      const asInt = int64(get('asInt'), at('asInt'), null);
+      const value = asInt === null ? double(get('asDouble'), at('asDouble')) : Number(asInt);
+      return { value_double: value };
+    }
+    case 'histogram':
+      return {
+        count: int64(get('count'), at('count'), 0n),
+        sum: double(get('sum'), at('sum')),
+        min: double(get('min'), at('min')),
+        max: double(get('max'), at('max')),
+        explicit_bounds: list(get('explicitBounds'), at('explicitBounds'), double),
+        bucket_counts: list(get('bucketCounts'), at('bucketCounts'), (x, q) => int64(x, q, null)),
+      };
+    case 'exponentialHistogram': {
+      const positive = get('positive');
+      const negative = get('negative');
+      const buckets = (b: unknown, k: string): Row =>
+        b === undefined
+          ? { [`${k}_offset`]: null, [`${k}_counts`]: null }
+          : {
+              [`${k}_offset`]: int32(field(b, 'offset'), at(`${k}.offset`), 0),
+              [`${k}_counts`]: list(field(b, 'bucketCounts'), at(`${k}.bucketCounts`), (x, q) =>
+                int64(x, q, null),
+              ),
+            };
+      return {
+        count: int64(get('count'), at('count'), 0n),
+        sum: double(get('sum'), at('sum')),
+        min: double(get('min'), at('min')),
+        max: double(get('max'), at('max')),
+        scale: int32(get('scale'), at('scale'), 0),
+        zero_count: int64(get('zeroCount'), at('zeroCount'), 0n),
+        ...buckets(positive, 'positive'),
+        ...buckets(negative, 'negative'),
+      };
+    }
+    case 'summary':
+      return {
+        count: int64(get('count'), at('count'), 0n),
+        sum: double(get('sum'), at('sum')) ?? 0,
+      };
+  }
+}
+
+/** A tagged-JSON column from a field of the point's JSON, null when the point has none. */
+function pointJsonColumn(point: unknown, key: string): string | null {
+  const v = field(point, key);
+  return v === undefined ? null : doublesJson(v);
 }
 
 /**
- * A metric point's row: identity, time, attributes, resource/scope and the normalization columns. The kind-specific
- * value columns (value_double, buckets, ...) are filled by the point encoder (Task 5.1); `exemplars` and `quantiles`
- * are taken verbatim from the point's JSON.
+ * A metric point's row: identity, time, attributes, resource and scope, the normalization columns, and the value
+ * columns of the point's type (gauge/sum: `value_double`; histogram: count, sum, min, max, bounds, bucket counts;
+ * exponential histogram: count, sum, min, max, scale, zero count, positive/negative offset and counts; summary: count,
+ * sum, `quantiles`). `exemplars` and `quantiles` are the point's JSON with numbers tagged as doubles. Columns that do
+ * not apply to the type are absent (null when written).
  */
 export function pointRow(point: MetricPointRecord, norm: PointNormalization, ctx: Context): Row {
   const resource = ctx.resources(point.resource);
@@ -151,8 +261,9 @@ export function pointRow(point: MetricPointRecord, norm: PointNormalization, ctx
     series_id: norm.seriesId,
     ...resourceAndScope(resource, scope),
     service_name: serviceName(resource),
-    quantiles: pointField(point.point, 'quantileValues'),
-    exemplars: pointField(point.point, 'exemplars'),
+    ...pointValues(point),
+    quantiles: pointJsonColumn(point.point, 'quantileValues'),
+    exemplars: pointJsonColumn(point.point, 'exemplars'),
     flags: point.flags,
     delta_value: norm.deltaValue,
     delta_count: norm.deltaCount === null ? null : BigInt(norm.deltaCount),

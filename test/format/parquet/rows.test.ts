@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'vitest';
-import { type ColumnSpec, decodeColumns } from '../../../src/format/columns.js';
+import {
+  anyValueFromJson,
+  anyValueJson,
+  attributesFromJson,
+  attributesToJson,
+} from '../../../src/format/columns.js';
 import {
   absolute,
   type Context,
@@ -10,6 +15,7 @@ import {
 } from '../../../src/format/parquet/rows.js';
 import { TABLE_COLUMNS } from '../../../src/format/parquet/schema.js';
 import type { AnyValue, Attributes } from '../../../src/model/anyvalue.js';
+import { OtelHtmlError } from '../../../src/model/errors.js';
 import type { RelNanos, SpanId, TraceId, UnixNanos } from '../../../src/model/ids.js';
 import type {
   LogRecordRecord,
@@ -27,6 +33,7 @@ const SCOPE = 0 as ScopeRef;
 
 const str = (value: string): AnyValue => ({ kind: 'string', value });
 const int = (value: bigint): AnyValue => ({ kind: 'int', value });
+const bool = (value: boolean): AnyValue => ({ kind: 'bool', value });
 const dbl = (value: number): AnyValue => ({ kind: 'double', value });
 const bytes = (b: number[]): AnyValue => ({ kind: 'bytes', value: new Uint8Array(b) });
 const attrs = (o: Record<string, AnyValue>): Attributes => new Map(Object.entries(o));
@@ -110,14 +117,6 @@ function point(over: Partial<MetricPointRecord> = {}): MetricPointRecord {
 /** A cell by column name (rows are index-signature records). */
 const cell = (row: Row, name: string): unknown => row[name];
 
-const jsonColumn: ColumnSpec<{ x: unknown }> = { columns: [{ name: 'x', kind: 'json' }] };
-
-/** What the chunk format's JSON decoder makes of attribute JSON text. */
-function decodeAsChunkJson(text: string): unknown {
-  const payload = { v: 1, n: 1, dict: [text], base: 0, cols: { x: [0] }, resources: [], scopes: [] };
-  return decodeColumns(jsonColumn, payload).rows[0]?.x;
-}
-
 function expectKeys(row: Row, table: 'spans' | 'logs' | 'points'): void {
   const known = TABLE_COLUMNS[table].map((c) => c.name);
   for (const k of Object.keys(row)) expect(known).toContain(k);
@@ -137,6 +136,8 @@ describe('row mapping', () => {
       'a.b"c': { $i: (2n ** 60n).toString() },
       raw: { $b: 'AQI=' },
     });
+    const small = spanRow(span({ attributes: attrs({ 'http.status_code': int(200n) }) }), ctx);
+    expect(JSON.parse(cell(small, 'attributes') as string)).toEqual({ 'http.status_code': 200 });
     expectKeys(row, 'spans');
   });
 
@@ -182,28 +183,10 @@ describe('row mapping', () => {
       $m: [
         ['$x', 'v'],
         ['$i', '7'],
-        ['plain', { $i: '1' }],
+        ['plain', 1],
       ],
     });
-    const decoded = decodeAsChunkJson(json);
-    expect(decoded).toBeInstanceOf(Map);
-    expect((decoded as Map<string, unknown>).get('$i')).toBe('7');
-    expect((decoded as Map<string, unknown>).get('plain')).toBe(1n);
-  });
-
-  test('an attribute set without such keys decodes the way the chunk format decodes it', () => {
-    const row = spanRow(
-      span({
-        attributes: attrs({
-          n: int(2n ** 60n),
-          b: bytes([1, 2]),
-          nested: { kind: 'kvlist', values: attrs({ k: str('v') }) },
-        }),
-      }),
-      ctx,
-    );
-    const json = cell(row, 'attributes') as string;
-    expect(decodeAsChunkJson(json)).toEqual({ n: 2n ** 60n, b: new Uint8Array([1, 2]), nested: { k: 'v' } });
+    expect(attributesFromJson(json)).toEqual(attrs({ $x: str('v'), $i: str('7'), plain: int(1n) }));
   });
 
   test('a log row has null trace ids when unset and the host name promoted', () => {
@@ -244,5 +227,197 @@ describe('row mapping', () => {
 
   test('absolute adds the epoch', () => {
     expect(absolute(-3 as RelNanos, EPOCH)).toBe(EPOCH - 3n);
+  });
+});
+
+describe('format-4 attribute JSON', () => {
+  const nested: AnyValue = {
+    kind: 'kvlist',
+    values: attrs({
+      list: {
+        kind: 'array',
+        values: [int(1n), dbl(1), dbl(1.5), { kind: 'empty' }, str('s'), bytes([0, 255])],
+      },
+      inner: { kind: 'kvlist', values: attrs({ $x: bool(true), plain: str('p') }) },
+    }),
+  };
+  const set = attrs({
+    'a.b"c': str('quoted'),
+    'a.b': int(7n),
+    $x: str('dollar'),
+    $i: int(5n),
+    __proto__: str('proto'),
+    max: int(2n ** 53n - 1n),
+    min: int(-(2n ** 53n - 1n)),
+    over: int(2n ** 53n),
+    under: int(-(2n ** 53n)),
+    i64max: int(2n ** 63n - 1n),
+    i64min: int(-(2n ** 63n)),
+    two_int: int(2n),
+    two_dbl: dbl(2),
+    neg_zero: dbl(-0),
+    nan: dbl(Number.NaN),
+    inf: dbl(Number.POSITIVE_INFINITY),
+    ninf: dbl(Number.NEGATIVE_INFINITY),
+    half: dbl(0.5),
+    huge: dbl(1e300),
+    big_whole: dbl(2 ** 60),
+    raw: bytes([1, 2]),
+    nested,
+  });
+
+  test('ints are plain numbers within 2^53-1, doubles are plain only when not whole', () => {
+    const dollarFree = new Map([...set].filter(([k]) => !k.startsWith('$') && k !== '__proto__'));
+    const json: unknown = JSON.parse(attributesToJson(dollarFree));
+    expect(json).toMatchObject({
+      max: 2 ** 53 - 1,
+      min: -(2 ** 53 - 1),
+      over: { $i: (2n ** 53n).toString() },
+      two_int: 2,
+      two_dbl: { $d: '2' },
+      neg_zero: { $d: '-0' },
+      nan: { $d: 'NaN' },
+      half: 0.5,
+    });
+  });
+
+  test('a mixed attribute set round-trips exactly', () => {
+    const back = attributesFromJson(attributesToJson(set));
+    expect([...back.keys()]).toEqual([...set.keys()]);
+    expect(back).toEqual(set);
+    expect(Object.is((back.get('neg_zero') as { value: number }).value, -0)).toBe(true);
+    expect(back.get('two_int')).toEqual(int(2n));
+    expect(back.get('two_dbl')).toEqual(dbl(2));
+  });
+
+  test('a set without $ keys is an object and round-trips', () => {
+    const plain = attrs({ 'a.b"c': int(2n ** 60n), n: int(3n), nested });
+    const json = attributesToJson(plain);
+    expect(Object.keys(JSON.parse(json) as object)).toEqual(['a.b"c', 'n', 'nested']);
+    expect(attributesFromJson(json)).toEqual(plain);
+  });
+
+  test('single values round-trip', () => {
+    for (const v of [
+      str('x'),
+      int(0n),
+      int(-1n),
+      dbl(0),
+      dbl(-0),
+      dbl(0.1),
+      { kind: 'empty' } as AnyValue,
+      nested,
+    ]) {
+      expect(anyValueFromJson(anyValueJson(v))).toEqual(v);
+    }
+  });
+
+  test('malformed or mis-tagged JSON is a typed error', () => {
+    const codes = (fn: () => unknown): string | undefined => {
+      try {
+        fn();
+      } catch (e) {
+        return e instanceof OtelHtmlError ? e.code : 'other';
+      }
+      return undefined;
+    };
+    expect(codes(() => attributesFromJson('{'))).toBe('invalid-report');
+    expect(codes(() => attributesFromJson('[]'))).toBe('invalid-report');
+    expect(codes(() => attributesFromJson('{"$i":"1"}'))).toBe('invalid-report');
+    expect(codes(() => attributesFromJson('{"a":{"$i":"x"}}'))).toBe('invalid-report');
+    expect(codes(() => attributesFromJson('{"a":{"$d":"abc"}}'))).toBe('invalid-report');
+    expect(codes(() => attributesFromJson('{"a":1e300}'))).toBe('invalid-report');
+    expect(codes(() => attributesFromJson('{"a":{"$m":3}}'))).toBe('invalid-report');
+    expect(codes(() => anyValueFromJson('{"$q":1}'))).toBe('invalid-report');
+  });
+});
+
+describe('point value columns', () => {
+  const norm = { deltaValue: null, deltaCount: null, reset: false, outOfOrder: false, seriesId: 's' };
+  const row = (over: Partial<MetricPointRecord>): Row => pointRow(point(over), norm, ctx);
+
+  test('a gauge or sum carries value_double from asDouble or asInt', () => {
+    const g = row({ type: 'gauge', point: { asDouble: 1.5 } });
+    expect(cell(g, 'value_double')).toBe(1.5);
+    expect(cell(row({ type: 'sum', point: { asInt: '42' } }), 'value_double')).toBe(42);
+    expect(cell(row({ type: 'gauge', point: { asDouble: 'NaN' } }), 'value_double')).toBeNaN();
+    expect(cell(row({ type: 'gauge', point: {} }), 'value_double')).toBeNull();
+    expectKeys(g, 'points');
+  });
+
+  test('a histogram carries count, sum, min, max, bounds and bucket counts', () => {
+    const r = row({
+      type: 'histogram',
+      point: {
+        count: '6',
+        sum: 12.5,
+        min: 0.5,
+        max: 9,
+        explicitBounds: [1, 5, 'Infinity'],
+        bucketCounts: ['1', '2', '3', '18446744073709551615'],
+      },
+    });
+    expect(cell(r, 'count')).toBe(6n);
+    expect(cell(r, 'sum')).toBe(12.5);
+    expect(cell(r, 'min')).toBe(0.5);
+    expect(cell(r, 'max')).toBe(9);
+    expect(cell(r, 'explicit_bounds')).toEqual([1, 5, Number.POSITIVE_INFINITY]);
+    expect(cell(r, 'bucket_counts')).toEqual([1n, 2n, 3n, 18446744073709551615n]);
+    expectKeys(r, 'points');
+  });
+
+  test('an exponential histogram carries scale, zero count and bucket offsets and counts', () => {
+    const r = row({
+      type: 'exponentialHistogram',
+      point: {
+        count: '7',
+        scale: -2,
+        zeroCount: '1',
+        positive: { offset: 3, bucketCounts: ['2', '4'] },
+        negative: { bucketCounts: ['1'] },
+        sum: 3,
+      },
+    });
+    expect(cell(r, 'count')).toBe(7n);
+    expect(cell(r, 'scale')).toBe(-2);
+    expect(cell(r, 'zero_count')).toBe(1n);
+    expect(cell(r, 'positive_offset')).toBe(3);
+    expect(cell(r, 'positive_counts')).toEqual([2n, 4n]);
+    expect(cell(r, 'negative_offset')).toBe(0);
+    expect(cell(r, 'negative_counts')).toEqual([1n]);
+    expect(cell(r, 'min')).toBeNull();
+    expectKeys(r, 'points');
+    const none = row({ type: 'exponentialHistogram', point: {} });
+    expect(cell(none, 'scale')).toBe(0);
+    expect(cell(none, 'positive_offset')).toBeNull();
+    expect(cell(none, 'positive_counts')).toBeNull();
+  });
+
+  test('a summary carries count, sum and tagged quantiles', () => {
+    const r = row({
+      type: 'summary',
+      point: { count: '4', sum: 10, quantileValues: [{ quantile: 0.5, value: 2 }, { value: -0 }] },
+    });
+    expect(cell(r, 'count')).toBe(4n);
+    expect(cell(r, 'sum')).toBe(10);
+    expect(JSON.parse(cell(r, 'quantiles') as string)).toEqual([
+      { quantile: 0.5, value: { $d: '2' } },
+      { value: { $d: '-0' } },
+    ]);
+    expect(cell(row({ type: 'summary', point: {} }), 'sum')).toBe(0);
+    expectKeys(r, 'points');
+  });
+
+  test('exemplars keep -0 and whole doubles tagged', () => {
+    const r = row({ point: { asInt: '1', exemplars: [{ asDouble: -0 }, { asDouble: 1.25 }] } });
+    expect(JSON.parse(cell(r, 'exemplars') as string)).toEqual([
+      { asDouble: { $d: '-0' } },
+      { asDouble: 1.25 },
+    ]);
+    expect(cell(row({ point: { asInt: '1' } }), 'exemplars')).toBeNull();
+  });
+
+  test('a malformed point field is a typed error', () => {
+    expect(() => row({ type: 'histogram', point: { count: 5 } })).toThrow(OtelHtmlError);
   });
 });
