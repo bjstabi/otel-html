@@ -340,6 +340,62 @@ function decodeAttrs(v: unknown, dict: readonly string[], path: string): Attribu
 }
 
 // ---------------------------------------------------------------------------------------------
+// Self-contained JSON of AnyValues (format 4's attribute columns)
+// ---------------------------------------------------------------------------------------------
+// Same tags as the generic JSON above, no dictionary: string/bool/null/array as is, int -> {"$i"} (always, so an int
+// and a double never share a spelling), double -> number or {"$d"}, bytes -> {"$b"}, kvlist and attribute sets ->
+// an object keyed by name. A set with a key starting with "$" (or "__proto__") cannot be an object without a key
+// being mistaken for a tag, so it takes the {"$m": [[key, value], ...]} form instead; `decodeJson` reads both.
+
+function anyToJson(v: AnyValue): JsonValue {
+  switch (v.kind) {
+    case 'string':
+    case 'bool':
+      return v.value;
+    case 'empty':
+      return null;
+    case 'int':
+      return { $i: v.value.toString() };
+    case 'double':
+      return Number.isFinite(v.value) && !Object.is(v.value, -0)
+        ? v.value
+        : { $d: Object.is(v.value, -0) ? '-0' : String(v.value) };
+    case 'bytes':
+      return { $b: bytesToBase64(v.value) };
+    case 'array':
+      return v.values.map(anyToJson);
+    case 'kvlist':
+      return attributesToJsonValue(v.values);
+    default:
+      return assertNever(v, '');
+  }
+}
+
+export function attributesToJsonValue(a: Attributes): JsonValue {
+  let ambiguous = false;
+  for (const k of a.keys()) {
+    if (k.startsWith('$') || k === '__proto__') {
+      ambiguous = true;
+      break;
+    }
+  }
+  if (ambiguous) return { $m: [...a].map(([k, x]): JsonValue => [k, anyToJson(x)]) };
+  const out: { [k: string]: JsonValue } = {};
+  for (const [k, x] of a) out[k] = anyToJson(x);
+  return out;
+}
+
+/** An attribute set as JSON text: an object keyed by attribute key, values tagged as above. */
+export function attributesToJson(a: Attributes): string {
+  return JSON.stringify(attributesToJsonValue(a));
+}
+
+/** One AnyValue as JSON text, tagged as `attributesToJson`. */
+export function anyValueJson(v: AnyValue): string {
+  return JSON.stringify(anyToJson(v));
+}
+
+// ---------------------------------------------------------------------------------------------
 // Resource / scope tables
 // ---------------------------------------------------------------------------------------------
 
