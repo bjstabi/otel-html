@@ -1,13 +1,22 @@
 import {
   Table as ArrowTable,
+  Bool,
   type Data,
+  type DataType,
+  Dictionary,
+  Field,
+  Float64,
+  Int32,
+  Int64,
+  List,
   makeData,
+  makeVector,
   RecordBatch,
   Struct,
   tableFromIPC,
   tableToIPC,
+  Utf8,
   type Vector,
-  vectorFromArray,
 } from 'apache-arrow';
 import {
   Compression,
@@ -19,7 +28,15 @@ import {
 import { OtelHtmlError } from '../../model/errors.js';
 import { batchFromRows, type ColumnBatch, rowAt } from './batch.js';
 import type { Row } from './rows.js';
-import { arrowSchema, type ColumnType, SORT_COLUMNS, TABLE_COLUMNS, TABLES, type Table } from './schema.js';
+import {
+  arrowSchema,
+  type ColumnDef,
+  type ColumnType,
+  SORT_COLUMNS,
+  TABLE_COLUMNS,
+  TABLES,
+  type Table,
+} from './schema.js';
 import { ensureParquetWasm } from './wasm.js';
 
 export interface EncodeOptions {
@@ -122,6 +139,198 @@ export function checkRow(table: Table, row: Row, index = 0): void {
   }
 }
 
+interface Cells {
+  readonly col: readonly unknown[];
+  readonly perm: readonly number[];
+  readonly valid: Uint8Array;
+  nullCount: number;
+}
+
+function setValid(c: Cells, i: number): void {
+  c.valid[i >> 3] = (c.valid[i >> 3] ?? 0) | (1 << (i & 7));
+}
+
+function validity(c: Cells, length: number): { nullCount: number; nullBitmap?: Uint8Array } {
+  return c.nullCount === 0 || length === 0
+    ? { nullCount: 0 }
+    : { nullCount: c.nullCount, nullBitmap: c.valid };
+}
+
+/** A fixed-width column: `fill` stores each non-null cell of the permuted column into the typed array. */
+function fixedData<T extends Float64Array | Int32Array | BigInt64Array>(
+  type: DataType,
+  c: Cells,
+  data: T,
+  put: (data: T, i: number, v: unknown) => void,
+): Data {
+  const n = c.perm.length;
+  for (let i = 0; i < n; i++) {
+    const v = c.col[c.perm[i] ?? 0] ?? null;
+    if (v === null) c.nullCount++;
+    else {
+      setValid(c, i);
+      put(data, i, v);
+    }
+  }
+  return makeData({ type, length: n, data, ...validity(c, n) } as Parameters<typeof makeData>[0]);
+}
+
+const ENCODER = new TextEncoder();
+
+/** UTF-8 bytes and Int32 offsets of the permuted strings (null cells are empty), written in one `encodeInto` pass. */
+function utf8Buffers(c: Cells): { offsets: Int32Array; bytes: Uint8Array } {
+  const n = c.perm.length;
+  const offsets = new Int32Array(n + 1);
+  let chars = 0;
+  for (let i = 0; i < n; i++) {
+    const v = c.col[c.perm[i] ?? 0];
+    if (typeof v === 'string') chars += v.length;
+  }
+  let bytes = new Uint8Array(Math.max(chars, 8));
+  let pos = 0;
+  for (let i = 0; i < n; i++) {
+    const v = c.col[c.perm[i] ?? 0] ?? null;
+    if (typeof v === 'string') {
+      setValid(c, i);
+      if (pos + v.length * 3 > bytes.length) {
+        // Grow only when the worst case (3 bytes per UTF-16 unit) might not fit.
+        const need = ENCODER.encode(v).length;
+        if (pos + need > bytes.length) {
+          const grown = new Uint8Array(Math.max(bytes.length * 2, pos + need));
+          grown.set(bytes.subarray(0, pos));
+          bytes = grown;
+        }
+      }
+      pos += ENCODER.encodeInto(v, bytes.subarray(pos)).written;
+    } else c.nullCount++;
+    offsets[i + 1] = pos;
+  }
+  return { offsets, bytes: bytes.subarray(0, pos) };
+}
+
+function utf8Data(c: Cells): Data {
+  const n = c.perm.length;
+  const { offsets, bytes } = utf8Buffers(c);
+  return makeData({ type: new Utf8(), length: n, valueOffsets: offsets, data: bytes, ...validity(c, n) });
+}
+
+/** A dictionary column: indices in first-appearance order of the permuted values, like Arrow's dictionary builder. */
+function dictionaryData(c: Cells): Data {
+  const n = c.perm.length;
+  const index = new Map<string, number>();
+  const indices = new Int32Array(n);
+  for (let i = 0; i < n; i++) {
+    const v = c.col[c.perm[i] ?? 0] ?? null;
+    if (typeof v !== 'string') {
+      c.nullCount++;
+      continue;
+    }
+    setValid(c, i);
+    let k = index.get(v);
+    if (k === undefined) {
+      k = index.size;
+      index.set(v, k);
+    }
+    indices[i] = k;
+  }
+  const words = [...index.keys()];
+  const dict = utf8Data({
+    col: words,
+    perm: words.map((_, i) => i),
+    valid: new Uint8Array((words.length >> 3) + 1),
+    nullCount: 0,
+  });
+  return makeData({
+    type: new Dictionary(new Utf8(), new Int32()),
+    length: n,
+    data: indices,
+    dictionary: makeVector(dict),
+    ...validity(c, n),
+  } as Parameters<typeof makeData>[0]);
+}
+
+function listData(c: Cells, item: 'float64' | 'int64'): Data {
+  const n = c.perm.length;
+  const offsets = new Int32Array(n + 1);
+  let total = 0;
+  for (let i = 0; i < n; i++) {
+    const v = c.col[c.perm[i] ?? 0] ?? null;
+    if (Array.isArray(v)) total += v.length;
+    offsets[i + 1] = total;
+  }
+  const f64 = new Float64Array(item === 'float64' ? total : 0);
+  const i64 = new BigInt64Array(item === 'int64' ? total : 0);
+  for (let i = 0; i < n; i++) {
+    const v = c.col[c.perm[i] ?? 0] ?? null;
+    if (!Array.isArray(v)) {
+      c.nullCount++;
+      continue;
+    }
+    setValid(c, i);
+    const at = offsets[i] ?? 0;
+    for (const [j, x] of v.entries()) {
+      if (item === 'float64') f64[at + j] = x as number;
+      else i64[at + j] = x as bigint;
+    }
+  }
+  const itemType = item === 'float64' ? new Float64() : new Int64();
+  const child = makeData({
+    type: itemType,
+    length: total,
+    data: item === 'float64' ? f64 : i64,
+  } as Parameters<typeof makeData>[0]);
+  return makeData({
+    type: new List(new Field('item', itemType, true)),
+    length: n,
+    valueOffsets: offsets,
+    child,
+    ...validity(c, n),
+  } as Parameters<typeof makeData>[0]);
+}
+
+function boolData(c: Cells): Data {
+  const n = c.perm.length;
+  const bits = new Uint8Array((n + 7) >> 3);
+  for (let i = 0; i < n; i++) {
+    const v = c.col[c.perm[i] ?? 0] ?? null;
+    if (v === null) c.nullCount++;
+    else {
+      setValid(c, i);
+      if (v === true) bits[i >> 3] = (bits[i >> 3] ?? 0) | (1 << (i & 7));
+    }
+  }
+  return makeData({ type: new Bool(), length: n, data: bits, ...validity(c, n) });
+}
+
+/** One column's Arrow data, filled in `perm` order straight from the column array. */
+function columnData(def: ColumnDef, col: readonly unknown[], perm: readonly number[]): Data {
+  const n = perm.length;
+  const c: Cells = { col, perm, valid: new Uint8Array((n + 7) >> 3), nullCount: 0 };
+  switch (def.type) {
+    case 'utf8':
+    case 'json':
+      return def.dictionary ? dictionaryData(c) : utf8Data(c);
+    case 'int32':
+      return fixedData(new Int32(), c, new Int32Array(n), (d, i, v) => {
+        d[i] = v as number;
+      });
+    case 'float64':
+      return fixedData(new Float64(), c, new Float64Array(n), (d, i, v) => {
+        d[i] = v as number;
+      });
+    case 'int64':
+      return fixedData(new Int64(), c, new BigInt64Array(n), (d, i, v) => {
+        d[i] = v as bigint;
+      });
+    case 'bool':
+      return boolData(c);
+    case 'list_float64':
+      return listData(c, 'float64');
+    case 'list_int64':
+      return listData(c, 'int64');
+  }
+}
+
 /** Runs `checkRow` on every row of a batch (the error names the row's index in the batch). */
 export function checkBatch(table: Table, batch: ColumnBatch): void {
   for (let i = 0; i < batch.length; i++) checkRow(table, rowAt(table, batch, i), i);
@@ -141,14 +350,7 @@ export function encodeColumns(
   const perm = sortPermutation(table, batch);
   const schema = arrowSchema(table);
   const children: Data[] = [];
-  for (const [i, def] of TABLE_COLUMNS[table].entries()) {
-    const field = schema.fields[i];
-    if (field === undefined) throw new Error(`no arrow field for ${table}.${def.name}`);
-    const col = batch.cells[def.name] ?? [];
-    const values = perm.map((r) => col[r] ?? null);
-    const vector = vectorFromArray(values, field.type);
-    children.push(...vector.data);
-  }
+  for (const def of TABLE_COLUMNS[table]) children.push(columnData(def, batch.cells[def.name] ?? [], perm));
   const type = new Struct(schema.fields);
   const arrow =
     batch.length === 0
