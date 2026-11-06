@@ -149,13 +149,28 @@ describe('points table', () => {
     await s.close();
   });
 
-  test('a gauge and a non-monotonic sum have no deltas, even with delta temporality', async () => {
+  test('a delta up-down counter writes its own value as the delta; gauges and other non-monotonic sums stay null', async () => {
     const w = createTestWriter();
     const s = await open(w);
-    await s.add(sum('up', 4, 1, { aggregationTemporality: 1, isMonotonic: false }), 'a.json');
+    await s.add(sum('delta-updown', 4, 1, { aggregationTemporality: 1, isMonotonic: false }), 'a.json');
+    await s.add(sum('cumulative-updown', 5, 1, { aggregationTemporality: 2, isMonotonic: false }), 'a.json');
+    await s.add(sum('unspecified-updown', 6, 1, { aggregationTemporality: 0, isMonotonic: false }), 'a.json');
+    await s.add(
+      metricsRequestOf({
+        name: 'g',
+        gauge: { dataPoints: [{ asInt: '7', timeUnixNano: T(1) }] },
+      }),
+      'a.json',
+    );
     await s.flush();
-    const [row] = await points(w, 0);
-    expect(row).toMatchObject({ delta_value: null, delta_count: null });
+    const rows = await points(w, 0);
+    const delta = (name: string) =>
+      cell(rows.find((r) => cell(r, 'metric_name') === name) ?? {}, 'delta_value');
+    expect(delta('delta-updown')).toBe(4);
+    expect(delta('cumulative-updown')).toBeNull();
+    expect(delta('unspecified-updown')).toBeNull();
+    expect(delta('g')).toBeNull();
+    expect(rows.every((r) => cell(r, 'delta_count') === null)).toBe(true);
     await s.close();
   });
 

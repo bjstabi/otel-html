@@ -489,7 +489,7 @@ class PartitionSession implements WriterSession {
       staged.push({ point, seriesId, row, step });
     }
     for (const { point, seriesId, row, step } of staged) {
-      applyNormalization(row, normalization(step(seriesId), seriesId));
+      applyNormalization(row, normalization(point, step(seriesId), seriesId));
       this.#writer.add('points', row);
       this.#totals.metrics++;
       this.#extend(ctx, Math.min(point.start ?? point.time, point.time), point.time);
@@ -833,15 +833,18 @@ const UNNORMALIZED = { deltaValue: null, deltaCount: null, reset: false, outOfOr
 
 /**
  * The normalization columns of a point from what the stream normalizer reported. Deltas exist for every counter (the
- * counter delta; a delta sum's own value) and every histogram (the count and sum deltas; a delta histogram's own); a
- * reset restarts them at the point's own value, as the normalizer says. Gauges, non-monotonic sums and summaries have
- * none, and neither does a skipped point.
+ * counter delta), every histogram (the count and sum deltas) and every delta-temporality sum, monotonic or not (its
+ * own value); a reset restarts them at the point's own value, as the normalizer says. Gauges, summaries, and
+ * cumulative or unspecified non-monotonic sums have none, and neither does a skipped point.
  */
-function normalization(n: Normalized, seriesId: string): PointNormalization {
+function normalization(point: MetricPointRecord, n: Normalized, seriesId: string): PointNormalization {
   if (n.kind === 'skip') return { ...UNNORMALIZED, seriesId, outOfOrder: n.reason === 'out-of-order' };
   const { agg } = n;
   const base = { ...UNNORMALIZED, seriesId, reset: n.reset };
   if (agg.k === 'counter') return { ...base, deltaValue: agg.delta };
   if (agg.k === 'hist' || agg.k === 'exp') return { ...base, deltaValue: agg.sum, deltaCount: agg.count };
+  if (agg.k === 'number' && point.type === 'sum' && point.temporality === 'delta') {
+    return { ...base, deltaValue: agg.sum };
+  }
   return base;
 }
