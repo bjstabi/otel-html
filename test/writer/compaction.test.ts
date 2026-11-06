@@ -154,6 +154,31 @@ describe('compactPartitions: merged tables', () => {
     expect(stats).toEqual(fileStatistics('logs', batchFromRows('logs', rowsPer.flat()), KEYS.logs, 100));
   });
 
+  test.each([
+    [37, 3],
+    [270, 2],
+  ])(
+    '%i partitions (more files than one merge takes) merge in rounds to the same bytes, leaving no temporary file',
+    async (count, per) => {
+      const r = lcg(count);
+      let id = 0;
+      const rowsPer = Array.from({ length: count }, () => Array.from({ length: per }, () => logRow(id++, r)));
+      const fs = createMemoryFileSystem();
+      const entries = await writeParts(
+        fs,
+        rowsPer.map((logs) => ({ logs })),
+      );
+      const out = await compactPartitions(fs, OUT, entries, opts(count));
+      const expected = encodeTable('logs', rowsPer.flat(), { rowGroupRows: ROW_GROUP });
+      expect(Buffer.from(await bytesOf(fs, out, 'logs')).equals(Buffer.from(expected))).toBe(true);
+      expect(await fs.list(`${OUT}/data/partitions/${String(count).padStart(6, '0')}`)).toEqual([
+        'logs.parquet',
+      ]);
+      const { path, bytes, ...stats } = out.files.logs ?? { path: '', bytes: 0 };
+      expect(stats).toEqual(fileStatistics('logs', batchFromRows('logs', rowsPer.flat()), KEYS.logs, 100));
+    },
+  );
+
   test('the statistics are those of the merged rows', async () => {
     const r = lcg(3);
     let id = 0;

@@ -21,7 +21,7 @@ export interface CompactOptions {
 }
 
 /** Rows a merge holds before it hands them to the writer; the Parquet writer still cuts row groups of `rowGroupRows`. */
-const MERGE_CHUNK_ROWS = 8192;
+const MERGE_CHUNK_ROWS = 4096;
 
 const big = (v: unknown): bigint | null => (typeof v === 'bigint' ? v : null);
 const cell = (r: Row | undefined, k: string): unknown => (r === undefined ? undefined : Reflect.get(r, k));
@@ -399,14 +399,100 @@ function aggregatePatterns(rows: readonly Located[]): Row[] {
 // -- compaction -----------------------------------------------------------------------------------------------------
 
 /**
+ * Files merged at once. An open reader holds the decoded pages of the row group it is on (about 200 bytes a row,
+ * and a flush partition is one row group), so the merge is done in rounds of at most this many files and what is
+ * held stays about this many row groups, however many partitions a session flushed.
+ */
+const FANOUT = 8;
+
+/** Row groups of the files a round writes for the next one: they are read again at once, so they are kept small. */
+const ROUND_ROW_GROUP_ROWS = 4096;
+
+/**
+ * One merge of the sorted files at `paths` (given in order; ties go to the earlier file) into a Parquet file of row
+ * groups of `rowGroupRows`. `onChunk` sees the merged rows as they go by.
+ */
+async function mergeFiles(
+  fs: FileSystem,
+  table: Table,
+  paths: readonly string[],
+  rowGroupRows: number,
+  onChunk?: (chunk: ColumnBatch) => void,
+): Promise<Uint8Array> {
+  const names = new Map(TABLE_COLUMNS[table].map((c, i) => [c.name, i]));
+  const generators: AsyncGenerator<unknown[][]>[] = [];
+  const cursors: Cursor[] = [];
+  try {
+    for (const [i, p] of paths.entries()) {
+      const g = readColumns(table, await blobOf(fs, p), p);
+      generators.push(g);
+      cursors.push(new Cursor(table, i, g, names));
+    }
+    async function* chunks(): AsyncGenerator<ColumnBatch> {
+      for await (const chunk of mergeSorted(table, cursors)) {
+        onChunk?.(chunk);
+        yield chunk;
+      }
+    }
+    return await encodeBatches(table, chunks(), { rowGroupRows });
+  } finally {
+    await Promise.all(generators.map((g) => g.return(undefined).catch(() => undefined)));
+  }
+}
+
+/**
+ * Merges the table's files into the table file of the compacted partition. With more files than `FANOUT`, rounds
+ * of `FANOUT` consecutive files are merged into temporary files in `dir` first (consecutive, so the order of equal
+ * keys is kept), and the last round writes the result, whose statistics are folded from the rows as they pass.
+ */
+async function mergeTable(
+  fs: FileSystem,
+  dir: string,
+  table: Table,
+  inputs: readonly string[],
+  opts: CompactOptions,
+): Promise<{ bytes: Uint8Array; stats: FileStatistics }> {
+  const keys = opts.statisticsKeys[table];
+  let level: string[] = [...inputs];
+  const temporary: string[] = [];
+  for (let round = 0; level.length > FANOUT; round++) {
+    const next: string[] = [];
+    for (let g = 0; g < level.length; g += FANOUT) {
+      const group = level.slice(g, g + FANOUT);
+      const only = group[0];
+      if (group.length === 1 && only !== undefined) {
+        next.push(only);
+        continue;
+      }
+      const path = at(dir, `.merge-${table}-${round}-${g / FANOUT}.parquet`);
+      await fs.writeBytes(path, await mergeFiles(fs, table, group, ROUND_ROW_GROUP_ROWS));
+      temporary.push(path);
+      next.push(path);
+      for (const used of group) {
+        if (temporary.includes(used)) await fs.remove(used);
+      }
+    }
+    level = next;
+  }
+  const fold = new StatisticsFold(keys, opts.facetValueCap);
+  const bytes = await mergeFiles(fs, table, level, opts.rowGroupRows, (chunk) =>
+    fold.add(fileStatistics(table, chunk, keys, opts.facetValueCap)),
+  );
+  for (const used of level) {
+    if (temporary.includes(used)) await fs.remove(used);
+  }
+  return { bytes, stats: fold.result() };
+}
+
+/**
  * Compacts the partitions `entries` (given in partition order) into one partition, `opts.nextPartition`, one file per
  * table, and returns its entry. The caller lists it and removes the old partitions; this writes only the new folder
  * and removes it again if anything fails.
  *
  * - spans, logs, points: every row is kept. Each input file is already sorted by the table's key, so the files are
- *   merged (a k-way merge, ties to the earlier partition) and written as they come: the memory held is a small
- *   decoded batch per input file, one chunk of merged rows, and the compressed output. The bytes equal encoding the
- *   sorted union of the rows in one go (same sort, row groups and compression).
+ *   merged (a k-way merge, ties to the earlier partition; see `mergeTable` for the rounds) and written as they
+ *   come. What is held is a small decoded batch per open file, one chunk of merged rows, and the compressed output.
+ *   The bytes equal encoding the sorted union of the rows in one go (same sort, row groups and compression).
  * - traces, patterns: one row per trace or cluster across the partitions (see `aggregateTraces`,
  *   `aggregatePatterns`), held whole: their size follows the distinct traces and clusters, not the records.
  *
@@ -427,8 +513,11 @@ export async function compactPartitions(
     for (const table of TABLES) {
       const inputs = inputsOf(entries, table);
       if (inputs.length === 0) continue;
+      if (!created) {
+        await fs.mkdirp(dir);
+        created = true;
+      }
       const keys = opts.statisticsKeys[table];
-      const encode = { rowGroupRows: opts.rowGroupRows };
       let bytes: Uint8Array;
       let stats: FileStatistics;
       if (table === 'traces' || table === 'patterns') {
@@ -441,34 +530,16 @@ export async function compactPartitions(
         const rows = table === 'traces' ? aggregateTraces(located) : aggregatePatterns(located);
         for (const [i, row] of rows.entries()) checkRow(table, row, i);
         const batch = batchFromRows(table, rows);
-        bytes = encodeColumns(table, batch, encode);
+        bytes = encodeColumns(table, batch, { rowGroupRows: opts.rowGroupRows });
         stats = fileStatistics(table, batch, keys, opts.facetValueCap);
       } else {
-        const names = new Map(TABLE_COLUMNS[table].map((c, i) => [c.name, i]));
-        const generators: AsyncGenerator<unknown[][]>[] = [];
-        const cursors: Cursor[] = [];
-        try {
-          for (const [i, f] of inputs.entries()) {
-            const g = readColumns(table, await blobOf(fs, at(out, f.path)), f.path);
-            generators.push(g);
-            cursors.push(new Cursor(table, i, g, names));
-          }
-          const fold = new StatisticsFold(keys, opts.facetValueCap);
-          async function* chunks(): AsyncGenerator<ColumnBatch> {
-            for await (const chunk of mergeSorted(table, cursors)) {
-              fold.add(fileStatistics(table, chunk, keys, opts.facetValueCap));
-              yield chunk;
-            }
-          }
-          bytes = await encodeBatches(table, chunks(), encode);
-          stats = fold.result();
-        } finally {
-          await Promise.all(generators.map((g) => g.return(undefined).catch(() => undefined)));
-        }
-      }
-      if (!created) {
-        await fs.mkdirp(dir);
-        created = true;
+        ({ bytes, stats } = await mergeTable(
+          fs,
+          dir,
+          table,
+          inputs.map((f) => at(out, f.path)),
+          opts,
+        ));
       }
       const path = partitionFilePath(n, table);
       await fs.writeBytes(at(out, path), bytes);

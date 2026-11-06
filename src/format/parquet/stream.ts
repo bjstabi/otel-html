@@ -119,6 +119,7 @@ export async function encodeBatches(
           tableToIPC(columnsToArrow(table, next.value, identity), 'stream'),
         );
         for (const b of wasm.recordBatches()) controller.enqueue(b);
+        wasm.free(); // wasm memory is not garbage collected promptly: free what we are done with
       } catch (error) {
         failure = { error };
         throw error;
