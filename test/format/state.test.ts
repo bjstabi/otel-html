@@ -66,4 +66,13 @@ describe('writer state v2', () => {
     const s = { ...v2(), statisticsKeys: { spans: [], logs: [], points: [], traces: [] } };
     expect(failure(() => parseAnySessionState(s)).path).toBe('state.statisticsKeys.patterns');
   });
+
+  test('a bigint formatVersion is invalid-report, and non-objects are described, not "missing"', () => {
+    const e = failure(() => parseAnySessionState({ ...v2(), formatVersion: 2n }));
+    expect(e.code).toBe('invalid-report');
+    expect(e.path).toBe('state.formatVersion');
+    expect(failure(() => parseAnySessionState(null)).actual).toBe('null');
+    expect(failure(() => parseAnySessionState(7)).actual).toBe('7');
+    expect(failure(() => parseAnySessionState({})).actual).toBe('nothing (missing)');
+  });
 });

@@ -24,7 +24,7 @@ const v4 = (): ManifestV4 => ({
   createdAt: '2026-11-06T00:00:00.000Z',
   updatedAt: '2026-11-06T00:00:01.000Z',
   complete: true,
-  range: { start: -5, end: 10 },
+  range: { start: '-5', end: '10' },
   totals: { spans: 3, logs: 0, metrics: 0 },
   partitions: [
     {
@@ -154,5 +154,45 @@ describe('manifest v4', () => {
     for (const t of TABLES) {
       for (const n of [7, 1234567]) expect(PARTITION_FILE_RE.test(partitionFilePath(n, t))).toBe(true);
     }
+  });
+
+  test('engine.version is a path-safe version', () => {
+    for (const bad of ['x/../../', '1/2', '', '.1', '_1']) {
+      const m = v4();
+      m.engine.version = bad;
+      expect(failure(() => parseAnyManifest(m)).path).toBe('manifest.engine.version');
+    }
+  });
+
+  test('range is absolute int64 text, ordered, and parses far beyond 2^53', () => {
+    const m = v4();
+    m.range = { start: '1793923200000000000', end: '1793923201000000000' };
+    expect(parseAnyManifest(m)).toEqual(m);
+    const bad = (range: unknown, path: string): void => {
+      expect(failure(() => parseAnyManifest({ ...v4(), range })).path).toBe(path);
+    };
+    bad({ start: '10', end: '5' }, 'manifest.range.end');
+    bad({ start: '007', end: '9' }, 'manifest.range.start');
+    bad({ start: '-0', end: '9' }, 'manifest.range.start');
+    bad({ start: '1', end: '9223372036854775808' }, 'manifest.range.end');
+    bad({ start: -5, end: 10 }, 'manifest.range.start');
+  });
+
+  test('timeMin <= timeMax and int64 bounds are enforced per file', () => {
+    const m = v4();
+    const f = m.partitions[0]?.files.spans;
+    if (f) {
+      f.timeMin = '9223372036854775807';
+      f.timeMax = '-9223372036854775808';
+    }
+    expect(failure(() => parseAnyManifest(m)).path).toBe('manifest.partitions[0].files.spans.timeMax');
+    if (f) f.timeMax = '9223372036854775808';
+    expect(failure(() => parseAnyManifest(m)).path).toBe('manifest.partitions[0].files.spans.timeMax');
+  });
+
+  test('a bigint formatVersion is invalid-report, not a TypeError', () => {
+    const e = failure(() => parseAnyManifest({ ...v4(), formatVersion: 4n }));
+    expect(e.code).toBe('invalid-report');
+    expect(e.path).toBe('manifest.formatVersion');
   });
 });

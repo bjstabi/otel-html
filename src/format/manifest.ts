@@ -11,8 +11,8 @@ import { OtelHtmlError } from '../model/errors.js';
 import { METRIC_FILE_PATH } from './metric-files.js';
 import { TABLES, type Table } from './parquet/schema.js';
 import type { FileStatistics } from './parquet/stats.js';
-import { chunkPath, partitionFilePath, SIGNALS, type Signal } from './paths.js';
-import { parseWith } from './validate.js';
+import { chunkPath, ENGINE_VERSION_RE, partitionFilePath, SIGNALS, type Signal } from './paths.js';
+import { describe, parseWith } from './validate.js';
 import {
   CHUNK_READABLE_FORMAT_VERSIONS,
   type FormatVersion,
@@ -152,7 +152,8 @@ export interface ManifestV4 {
   createdAt: string;
   updatedAt: string;
   complete: boolean;
-  range: { start: number; end: number } | null;
+  /** Absolute int64 nanosecond text, like every other v4 time. */
+  range: { start: string; end: string } | null;
   totals: Record<Signal, number>;
   partitions: PartitionEntry[];
   statisticsKeys: Record<Table, string[]>;
@@ -165,7 +166,20 @@ export type AnyManifest = Manifest | ManifestV4;
 const SOURCE_RE = /^(flush|compact|job|ci|merge):[A-Za-z0-9#:._-]{1,200}$/;
 // `assets/` or `../` segments then `assets/<segment>/`: relative, no scheme, no leading `_`.
 const ASSETS_BASE_RE = /^(?:\.\.\/)*assets\/(?:[A-Za-z0-9][A-Za-z0-9._-]*\/)?$/;
-const INT64_TEXT = /^-?[0-9]{1,19}$/;
+const INT64_MIN = -(2n ** 63n);
+const INT64_MAX = 2n ** 63n - 1n;
+const INT64_CANONICAL = /^(?:0|-?[1-9][0-9]*)$/;
+/** `a > b` for two int64 texts; false when either is not canonical (the field's own issue reports that). */
+const after = (a: string, b: string): boolean =>
+  INT64_CANONICAL.test(a) && INT64_CANONICAL.test(b) && BigInt(a) > BigInt(b);
+const int64Text = z
+  .string()
+  .regex(INT64_CANONICAL, 'canonical decimal int64 text')
+  .refine((t) => {
+    if (!INT64_CANONICAL.test(t)) return true;
+    const n = BigInt(t);
+    return n >= INT64_MIN && n <= INT64_MAX;
+  }, 'a value within signed 64 bits');
 
 const tableKeyed = <T extends z.ZodType>(v: T): z.ZodObject<Record<Table, T>, z.core.$strict> =>
   z.strictObject({ spans: v, logs: v, points: v, traces: v, patterns: v });
@@ -174,8 +188,8 @@ const PartitionFileSchema: z.ZodType<PartitionFile> = z.strictObject({
   path: z.string(),
   bytes: nonNegInt,
   rows: nonNegInt,
-  timeMin: z.string().regex(INT64_TEXT, 'decimal int64 text').nullable(),
-  timeMax: z.string().regex(INT64_TEXT, 'decimal int64 text').nullable(),
+  timeMin: int64Text.nullable(),
+  timeMax: int64Text.nullable(),
   values: z.record(z.string(), z.array(z.string()).nullable()),
 });
 
@@ -188,7 +202,7 @@ const ManifestV4Schema: z.ZodType<ManifestV4> = z
     createdAt: z.string(),
     updatedAt: z.string(),
     complete: z.boolean(),
-    range: z.strictObject({ start: z.number().int(), end: z.number().int() }).nullable(),
+    range: z.strictObject({ start: int64Text, end: int64Text }).nullable(),
     totals: z.strictObject({ spans: nonNegInt, logs: nonNegInt, metrics: nonNegInt }),
     partitions: z.array(
       z.strictObject({
@@ -205,7 +219,7 @@ const ManifestV4Schema: z.ZodType<ManifestV4> = z
     ),
     statisticsKeys: tableKeyed(z.array(z.string())),
     engine: z.strictObject({
-      version: z.string(),
+      version: z.string().regex(ENGINE_VERSION_RE, 'an engine version like 1.4.1 (no /)'),
       format: z.enum(['local', 'site']),
       assetsBase: z.string().regex(ASSETS_BASE_RE, 'assets/ or a relative path like ../../assets/0.3.0/'),
     }),
@@ -213,12 +227,29 @@ const ManifestV4Schema: z.ZodType<ManifestV4> = z
   })
   .superRefine((m, ctx) => {
     refineConfig(m.config, ctx, []);
+    if (m.range !== null && after(m.range.start, m.range.end)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['range', 'end'],
+        message: `a time at or after start (${m.range.start})`,
+      });
+    }
     let prev = -1;
     m.partitions.forEach((p, i) => {
       if (p.n <= prev) {
         ctx.addIssue({ code: 'custom', path: ['partitions', i, 'n'], message: `a number above ${prev}` });
       }
       prev = p.n;
+      for (const t of TABLES) {
+        const f = p.files[t];
+        if (f?.timeMin != null && f.timeMax != null && after(f.timeMin, f.timeMax)) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['partitions', i, 'files', t, 'timeMax'],
+            message: `a time at or after timeMin (${f.timeMin})`,
+          });
+        }
+      }
       for (const t of TABLES) {
         const f = p.files[t];
         if (f === undefined) continue;
@@ -247,6 +278,6 @@ export function parseAnyManifest(input: unknown): AnyManifest {
   throw new OtelHtmlError('invalid-report', {
     path: 'manifest.formatVersion',
     expected: READABLE_FORMAT_VERSIONS.join(' | '),
-    actual: JSON.stringify(v) ?? 'nothing (missing)',
+    actual: describe(v),
   });
 }

@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
   ENGINE_ASSET_RE,
+  ENGINE_VERSION_RE,
   PARTITION_FILE_RE,
   partitionDir,
   partitionFilePath,
@@ -53,5 +54,10 @@ describe('partition paths', () => {
     expect(ENGINE_ASSET_RE.test('assets/duckdb..wasm')).toBe(false);
     expect(ENGINE_ASSET_RE.test('assets/../duckdb.1.wasm')).toBe(false);
     expect(ENGINE_ASSET_RE.test('assets/_duckdb.1.wasm')).toBe(false);
+  });
+
+  test('ENGINE_VERSION_RE', () => {
+    for (const ok of ['1.4.1', '1.4.1-abc']) expect(ENGINE_VERSION_RE.test(ok)).toBe(true);
+    for (const bad of ['x/../../', '1/2', '', '.1', '_1']) expect(ENGINE_VERSION_RE.test(bad)).toBe(false);
   });
 });

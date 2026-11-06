@@ -4,7 +4,7 @@ import type { JsonValue } from './columns.js';
 import type { Table } from './parquet/schema.js';
 import type { SIGNALS } from './paths.js';
 import { type TraceShard, TraceShardSchema } from './trace-shard.js';
-import { parseWith } from './validate.js';
+import { describe, parseWith } from './validate.js';
 
 /**
  * Serialized rollups: per-signal (or per-rollup) JSON values. Permissive on purpose: the rollup
@@ -129,6 +129,6 @@ export function parseAnySessionState(input: unknown): AnySessionState {
   throw new OtelHtmlError('invalid-report', {
     path: 'state.formatVersion',
     expected: '1 | 2',
-    actual: JSON.stringify(v) ?? 'nothing (missing)',
+    actual: describe(typeof input === 'object' && input !== null ? v : input),
   });
 }
