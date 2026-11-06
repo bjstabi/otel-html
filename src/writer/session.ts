@@ -3,7 +3,6 @@ import { wrapDataFile } from '../format/data-file.js';
 import type { Manifest, ManifestChunk } from '../format/manifest.js';
 import {
   LOCK_PATH,
-  MANIFEST_PATH,
   rollupKey,
   rollupPath,
   type Signal,
@@ -37,8 +36,6 @@ import {
   type ScopeRef,
   type SpanRecord,
 } from '../model/records.js';
-import type { CompiledCondition } from '../ottl/compile.js';
-import { compileAny } from '../ottl/compile.js';
 import type { LogTarget, SpanTarget } from '../ottl/contexts.js';
 import type { Normalized, StreamTarget } from '../rollups/metric-streams.js';
 import { foldedSeriesKey, StreamNormalizer } from '../rollups/metric-streams.js';
@@ -51,7 +48,6 @@ import {
 import { severityKey } from '../semconv/severity.js';
 import {
   at,
-  isReportFolder,
   jsObjectKeyOrder,
   loadCheckpoint,
   type StateHead,
@@ -67,6 +63,7 @@ import { renderIndexHtml } from './html.js';
 import { inheritDashboards } from './inherit-config.js';
 import { acquireLock, type LockHandle } from './lock.js';
 import { MetricSeriesWriter, restoreCatalogSeries } from './metric-series-writer.js';
+import { compileDrops, DEFAULT_TITLE, type Drops, inspectFolder, iso, type OpenMode } from './open-common.js';
 import type { Clock, FileSystem, Logger, ProcessInfo, SpanHandle, Timers, Tracer } from './ports.js';
 import { type Refs, rebaseLog, rebasePoint, rebaseSpan } from './rebase.js';
 import { TraceIndex, type TraceIndexSnapshot } from './trace-index.js';
@@ -91,7 +88,7 @@ export interface WriterDeps {
 }
 
 /** `open` appends when the folder holds a report and creates one otherwise; `replace` starts a new report over any report. */
-export type SessionMode = 'open' | 'append' | 'replace';
+export type SessionMode = OpenMode;
 
 export interface SessionOptions {
   out: string;
@@ -134,7 +131,7 @@ export type RecordBatch = (
     }
 ) & { origin?: number };
 
-interface AddOptions {
+export interface AddOptions {
   /**
    * More of the same input follows (a file read one resource entry at a time). Until `endInput`, no periodic
    * checkpoint runs and a report being replaced is not wiped, so a bad entry later in the input leaves the
@@ -186,7 +183,6 @@ interface StagedPoint {
   exemplars: readonly PointExemplar[];
 }
 const ROLLUP_NAMES = ['spans', 'logs', 'metrics'] as const;
-const DEFAULT_TITLE = 'otel-html report';
 
 interface Restored {
   lock: LockHandle;
@@ -214,19 +210,10 @@ interface Restored {
   replacing: boolean;
 }
 
-function iso(clock: Clock): string {
-  return new Date(Number(clock.nowUnixNano() / 1_000_000n)).toISOString();
-}
-
 export async function openSession(deps: WriterDeps, options: SessionOptions): Promise<WriterSession> {
   let { config } = options;
   const out = options.out.replace(/\/+$/, '') || options.out;
-  // Bad OTTL must fail before anything is written (or locked).
-  const drop = {
-    span: compileAny(config.writer.drop.traces.span, 'span'),
-    log: compileAny(config.writer.drop.logs.log_record, 'log_record'),
-    point: compileAny(config.writer.drop.metrics.datapoint, 'datapoint'),
-  };
+  const drop = compileDrops(config);
   const rollupOpts = {
     facetValueCap: config.writer.facetValueCap,
     facetKeyCap: config.writer.facetKeyCap,
@@ -236,27 +223,11 @@ export async function openSession(deps: WriterDeps, options: SessionOptions): Pr
   const normalizerOpts = { foldedPerMetric: FOLDED_STREAMS_PER_SERIES_CAP * config.writer.metricSeriesCap };
   const { fs } = deps;
 
-  const appending =
-    options.mode === 'append' || (options.mode === 'open' && (await fs.exists(at(out, MANIFEST_PATH))));
-  let preexisting = false;
-  if (!appending) {
-    if (await fs.exists(out)) {
-      const names = await fs.list(out);
-      preexisting = names.length > 0;
-      if (preexisting && !(await isReportFolder(fs, out))) {
-        throw new OtelHtmlError('usage', {
-          message: `refusing to write into ${out}: the folder is not empty and is not an otel-html report`,
-          hint: 'choose an empty or new folder, or an existing report folder to replace it',
-        });
-      }
-    }
-  }
-  if (options.mode === 'append' && !(await fs.exists(at(out, MANIFEST_PATH)))) {
-    // Checked before creating any directory or taking the lock, so a wrong folder is left untouched.
-    throw new OtelHtmlError('usage', {
-      message: `cannot append: no report found at ${out} (missing ${MANIFEST_PATH})`,
-      hint: 'the folder holds no report; drop --append to create one',
-    });
+  const { appending, preexisting } = await inspectFolder(fs, out, options.mode);
+  if (config.writer.format !== 'chunks') {
+    // Lazy: the partition session pulls in parquet-wasm, which the chunk format and every other command never need.
+    const { openPartitionSession } = await import('./partition-session.js');
+    return openPartitionSession(deps, { out, config, mode: options.mode }, drop, { appending, preexisting });
   }
   await fs.mkdirp(at(out, STATE_DIR));
   const lock = await acquireLock(deps, at(out, LOCK_PATH));
@@ -321,12 +292,6 @@ export async function openSession(deps: WriterDeps, options: SessionOptions): Pr
     await lock.release();
     throw e;
   }
-}
-
-interface Drops {
-  span: CompiledCondition<'span'>;
-  log: CompiledCondition<'log_record'>;
-  point: CompiledCondition<'datapoint'>;
 }
 
 class Session implements WriterSession {

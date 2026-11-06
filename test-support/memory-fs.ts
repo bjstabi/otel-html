@@ -142,6 +142,7 @@ export function createMemoryFileSystem(options: { pieces?: boolean } = {}): File
       const p = norm(rawP);
       requireWritable(p);
       checkFail(p);
+      await passGate(p);
       const parent = parentOf(p);
       if (parent !== null) registerDirs(parent);
       files.set(p, bytes.slice());

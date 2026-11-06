@@ -58,6 +58,7 @@ function anyValueText(v: AnyValue | undefined): string | null {
   }
 }
 
+const PARSE_CACHE_CAP = 4_096;
 const OBSERVED = 'observed_time_unix_nano';
 
 function effectiveTime(table: Table, row: Row): bigint | null {
@@ -83,6 +84,7 @@ export function fileStatistics(
   const parse = (text: string): Attributes => {
     let a = parsed.get(text);
     if (a === undefined) {
+      if (parsed.size >= PARSE_CACHE_CAP) parsed.clear(); // bound memory on high-cardinality json columns
       a = attributesFromJson(text);
       parsed.set(text, a);
     }

@@ -9,17 +9,21 @@ import {
   type Vector,
   vectorFromArray,
 } from 'apache-arrow';
-import parquet from 'parquet-wasm';
+import {
+  Compression,
+  readParquet,
+  Table as WasmTable,
+  WriterPropertiesBuilder,
+  writeParquet,
+} from 'parquet-wasm/esm';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { Row } from './rows.js';
-import { arrowSchema, type ColumnType, SORT_COLUMNS, TABLE_COLUMNS, type Table } from './schema.js';
+import { arrowSchema, type ColumnType, SORT_COLUMNS, TABLE_COLUMNS, TABLES, type Table } from './schema.js';
+import { ensureParquetWasm } from './wasm.js';
 
 export interface EncodeOptions {
   readonly rowGroupRows: number;
 }
-
-// parquet-wasm's package `node` condition resolves to its CommonJS build, which loads its WASM synchronously at import.
-const { Compression, Table: WasmTable, WriterPropertiesBuilder, readParquet, writeParquet } = parquet;
 
 const OBSERVED = 'observed_time_unix_nano';
 
@@ -84,31 +88,41 @@ function invalidCell(path: string, expected: string, actual: string): OtelHtmlEr
   return new OtelHtmlError('invalid-report', { path, expected, actual });
 }
 
+const COLUMN_NAMES = new Map<Table, ReadonlySet<string>>(
+  TABLES.map((t) => [t, new Set(TABLE_COLUMNS[t].map((c) => c.name))]),
+);
+
+/**
+ * Throws `invalid-report` unless `row` holds only columns of `table`, a value in every non-nullable column, and for
+ * every cell the JS type and range its column stores. `encodeTable` runs it on every row; a session runs it on rows
+ * it is about to accept, so a row that cannot be encoded never reaches a cut. `index` names the row in the error.
+ */
+export function checkRow(table: Table, row: Row, index = 0): void {
+  const columns = TABLE_COLUMNS[table];
+  for (const k of Object.keys(row)) {
+    if (!COLUMN_NAMES.get(table)?.has(k))
+      throw invalidCell(`${table}.${k}`, 'a column of the table', `unknown column in row ${index}`);
+  }
+  for (const def of columns) {
+    const v = row[def.name] ?? null;
+    if (v === null) {
+      if (!def.nullable) {
+        throw invalidCell(
+          `${table}.${def.name}`,
+          'a value in a non-nullable column',
+          `null or missing in row ${index}`,
+        );
+      }
+    } else if (!cellFits(def.type, v)) {
+      throw invalidCell(`${table}.${def.name}`, `a ${def.type} value`, `${typeof v} in row ${index}`);
+    }
+  }
+}
+
 /** Sorts `rows` by `SORT_COLUMNS[table]` (nulls last, stable) and encodes them as ZSTD Parquet. */
 export function encodeTable(table: Table, rows: readonly Row[], opts: EncodeOptions): Uint8Array {
   // Validate in the caller's row order, so the row index in an error is the caller's.
-  const columns = TABLE_COLUMNS[table];
-  const known = new Set(columns.map((c) => c.name));
-  for (const [r, row] of rows.entries()) {
-    for (const k of Object.keys(row)) {
-      if (!known.has(k))
-        throw invalidCell(`${table}.${k}`, 'a column of the table', `unknown column in row ${r}`);
-    }
-    for (const def of columns) {
-      const v = row[def.name] ?? null;
-      if (v === null) {
-        if (!def.nullable) {
-          throw invalidCell(
-            `${table}.${def.name}`,
-            'a value in a non-nullable column',
-            `null or missing in row ${r}`,
-          );
-        }
-      } else if (!cellFits(def.type, v)) {
-        throw invalidCell(`${table}.${def.name}`, `a ${def.type} value`, `${typeof v} in row ${r}`);
-      }
-    }
-  }
+  for (const [r, row] of rows.entries()) checkRow(table, row, r);
   const sorted = sortedRows(table, rows);
   const schema = arrowSchema(table);
   const children: Data[] = [];
@@ -127,6 +141,7 @@ export function encodeTable(table: Table, rows: readonly Row[], opts: EncodeOpti
           schema,
           new RecordBatch(schema, makeData({ type, length: sorted.length, nullCount: 0, children })),
         );
+  ensureParquetWasm();
   const wasm = WasmTable.fromIPCStream(tableToIPC(arrow, 'stream'));
   const props = new WriterPropertiesBuilder()
     .setCompression(Compression.ZSTD)
@@ -145,6 +160,7 @@ function plain(value: unknown): unknown {
 
 /** Decodes a partition file into rows: every schema column is present, `null` for a null; dictionaries as strings. */
 export function decodeTable(_table: Table, bytes: Uint8Array): Row[] {
+  ensureParquetWasm();
   const arrow = tableFromIPC(readParquet(bytes).intoIPCStream());
   const names = arrow.schema.fields.map((f) => f.name);
   const rows: Row[] = [];

@@ -49,3 +49,8 @@ test('viewerEntryNames keeps only viewer.<hash>.<ext>', () => {
   expect(viewerEntryNames(names, 'css')).toEqual(['viewer.Ab.css']);
   expect(viewerEntryNames([], 'js')).toEqual([]);
 });
+
+test("the codec's embedded WASM is not copied into a report's assets", async () => {
+  const files = await bunEmbeddedViewerAssets(bunWith('viewer.abc.js', 'parquet_wasm_bg.wasm')).files();
+  expect(files.map((f) => f.path)).toEqual(['assets/viewer.abc.js']);
+});

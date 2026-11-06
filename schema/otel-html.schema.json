@@ -9,6 +9,39 @@
       "default": {},
       "type": "object",
       "properties": {
+        "format": {
+          "default": "chunks",
+          "type": "string",
+          "enum": [
+            "chunks",
+            "local",
+            "site"
+          ]
+        },
+        "rowGroupRows": {
+          "default": 50000,
+          "type": "integer",
+          "minimum": 50000,
+          "maximum": 100000
+        },
+        "statisticsKeys": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "localWarnBytes": {
+          "default": 256000000,
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "assetsBase": {
+          "default": "assets/",
+          "type": "string",
+          "pattern": "^(?:\\.\\.\\/)*assets\\/(?:[A-Za-z0-9][A-Za-z0-9._-]*\\/)?$"
+        },
         "chunkTargetBytes": {
           "default": 4000000,
           "type": "integer",

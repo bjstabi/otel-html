@@ -7,6 +7,7 @@ const v2 = (): SessionStateV2 => ({
   otelHtmlVersion: '0.3.0',
   epochUnixNano: '1700000000000000000',
   nextPartition: 5,
+  checkpoint: 7,
   flushPartitions: [1, 3, 4],
   dedupe: ['a'],
   metricStreams: null,

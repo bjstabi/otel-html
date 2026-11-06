@@ -14,7 +14,7 @@ export type ColumnType =
   | 'list_float64'
   | 'list_int64';
 
-// OTLP uint32 fields (flags, dropped counts) are stored as int32; values >= 2^31 are rejected by encodeTable.
+// OTLP uint32 fields (flags, dropped counts) are stored as int64, so every value they can hold fits.
 export interface ColumnDef {
   readonly name: string;
   readonly type: ColumnType;
@@ -50,12 +50,12 @@ const required = (name: string, type: ColumnType): ColumnDef => col(name, type, 
 const resourceAndScope = (): ColumnDef[] => [
   col('resource_attributes', 'json'),
   col('resource_schema_url', 'utf8'),
-  col('resource_dropped_attributes_count', 'int32'),
+  col('resource_dropped_attributes_count', 'int64'),
   col('scope_name', 'utf8'),
   col('scope_version', 'utf8'),
   col('scope_attributes', 'json'),
   col('scope_schema_url', 'utf8'),
-  col('scope_dropped_attributes_count', 'int32'),
+  col('scope_dropped_attributes_count', 'int64'),
 ];
 
 const SPANS: readonly ColumnDef[] = [
@@ -63,7 +63,7 @@ const SPANS: readonly ColumnDef[] = [
   required('span_id', 'utf8'),
   col('parent_span_id', 'utf8'),
   col('trace_state', 'utf8'),
-  col('flags', 'int32'),
+  col('flags', 'int64'),
   required('name', 'utf8'),
   col('kind', 'int32'),
   required('start_time_unix_nano', 'int64'),
@@ -71,9 +71,9 @@ const SPANS: readonly ColumnDef[] = [
   required('duration_ns', 'int64'),
   col('status_code', 'int32'),
   col('status_message', 'utf8'),
-  col('dropped_attributes_count', 'int32'),
-  col('dropped_events_count', 'int32'),
-  col('dropped_links_count', 'int32'),
+  col('dropped_attributes_count', 'int64'),
+  col('dropped_events_count', 'int64'),
+  col('dropped_links_count', 'int64'),
   col('attributes', 'json'),
   col('events', 'json'),
   col('links', 'json'),
@@ -90,8 +90,8 @@ const LOGS: readonly ColumnDef[] = [
   col('event_name', 'utf8'),
   col('body', 'json'),
   col('attributes', 'json'),
-  col('dropped_attributes_count', 'int32'),
-  col('flags', 'int32'),
+  col('dropped_attributes_count', 'int64'),
+  col('flags', 'int64'),
   col('trace_id', 'utf8'),
   col('span_id', 'utf8'),
   ...resourceAndScope(),
