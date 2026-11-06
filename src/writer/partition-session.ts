@@ -11,7 +11,7 @@ import {
 } from '../format/parquet/rows.js';
 import { TABLES, type Table } from '../format/parquet/schema.js';
 import { statisticsKeysFor } from '../format/parquet/stats.js';
-import { LOCK_PATH, type Signal, STATE_DIR, type StateSlot } from '../format/paths.js';
+import { LOCK_PATH, partitionDir, type Signal, STATE_DIR, type StateSlot } from '../format/paths.js';
 import type { SessionStateV2 } from '../format/state.js';
 import { PARTITION_FORMAT_VERSION } from '../format/version.js';
 import { OtelHtmlError } from '../model/errors.js';
@@ -37,6 +37,7 @@ import {
   writeManifest,
   writeStateSlotV2,
 } from './checkpoint.js';
+import { compactPartitions } from './compaction.js';
 import { DedupeSet } from './dedupe.js';
 import { renderIndexHtml } from './html.js';
 import { inheritDashboards } from './inherit-config.js';
@@ -323,7 +324,9 @@ class PartitionSession implements WriterSession {
       this.#disarmIdle();
       await this.#checkpoint(false);
       if (!this.#shellWritten) await this.#writeShell();
+      const compacted = await this.#compact();
       await this.#checkpoint(true);
+      await this.#removePartitions(compacted);
       this.#closed = this.#summary();
       await this.#lock.release();
       return this.#closed;
@@ -663,6 +666,62 @@ class PartitionSession implements WriterSession {
     );
     await fs.writeTextAtomic(at(this.#out, '.nojekyll'), '');
     this.#shellWritten = true;
+  }
+
+  /**
+   * Compacts this session's flush partitions into one when there are two or more (a copy made by merge is never one
+   * of them), as `compactPartitions` says. Writes only the new partition's folder; the next checkpoint commits it, in
+   * this order: the state (numbering past it, no flush partitions left), then the manifest (listing it in place of the
+   * flush partitions). Returns the partitions that commit replaces, whose folders the caller removes afterwards.
+   * Compaction is an optimisation, so a failure keeps the flush partitions and is logged.
+   */
+  async #compact(): Promise<PartitionEntry[]> {
+    const flushed = new Set(this.#flushed);
+    const picks = this.#committed.filter((e) => flushed.has(e.n) && e.source.startsWith('flush:'));
+    const first = picks[0];
+    const last = picks.at(-1);
+    if (first === undefined || last === undefined || picks.length < 2) return [];
+    const span = this.#deps.tracer.startSpan('otel-html.compact', { partitions: picks.length });
+    try {
+      const n = this.#writer.nextPartition;
+      const entry = await compactPartitions(this.#deps.fs, this.#out, picks, {
+        nextPartition: n,
+        rowGroupRows: this.#config.writer.rowGroupRows,
+        statisticsKeys: this.#statisticsKeys,
+        facetValueCap: this.#config.writer.facetValueCap,
+        source: `compact:${first.n}..${last.n}`,
+      });
+      this.#writer.skipTo(n + 1);
+      const replaced = new Set(picks.map((e) => e.n));
+      this.#committed = this.#committed.flatMap((e) =>
+        e.n === first.n ? [entry] : replaced.has(e.n) ? [] : [e],
+      );
+      this.#flushed = this.#flushed.filter((p) => !replaced.has(p));
+      this.#dirty = true;
+      return picks;
+    } catch (e) {
+      span.recordError(e);
+      this.#deps.logger.error('compaction failed; keeping the flush partitions', {
+        error: e instanceof Error ? e.message : String(e),
+      });
+      return [];
+    } finally {
+      span.end();
+    }
+  }
+
+  /** Removes the folders of partitions the manifest no longer lists; one that stays is pruned when the report is opened. */
+  async #removePartitions(entries: readonly PartitionEntry[]): Promise<void> {
+    for (const e of entries) {
+      try {
+        await this.#deps.fs.removeDir(at(this.#out, partitionDir(e.n)));
+      } catch (error) {
+        this.#deps.logger.warn('could not remove a compacted partition', {
+          partition: e.n,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
   }
 
   /** A foreground flush: waits for a background write, then prepares and writes. */

@@ -411,10 +411,10 @@ describe('points table', () => {
     await s.flush();
     await s.add(sum('c', 20, 3), 'a.json');
     await s.close();
-    const rows = [...(await points(w, 1)), ...(await points(w, 2))].sort((a, b) =>
-      Number(BigInt(cell(a, 'time_unix_nano') as bigint) - BigInt(cell(b, 'time_unix_nano') as bigint)),
-    );
-    expect(rows.map((r) => cell(r, 'delta_value'))).toEqual([5, 5]);
+    // The three flush partitions were compacted into partition 3, in time order.
+    const rows = await points(w, 3);
+    expect(rows.map((r) => cell(r, 'delta_value')).slice(1)).toEqual([5, 5]);
+    expect(rows).toHaveLength(3);
     expect(manifestOf(w).totals.metrics).toBe(3);
   });
 

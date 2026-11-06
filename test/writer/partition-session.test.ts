@@ -6,7 +6,7 @@ import { decodeTable } from '../../src/format/parquet/codec.js';
 import { LOCK_PATH, MANIFEST_KEY } from '../../src/format/paths.js';
 import { parseAnySessionState, type SessionStateV2 } from '../../src/format/state.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
-import { writeStateSlotV2 } from '../../src/writer/checkpoint.js';
+import { writeManifest, writeStateSlotV2 } from '../../src/writer/checkpoint.js';
 import { openSession, type WriterSession } from '../../src/writer/session.js';
 import { logRecord, logsRequest, span, traceRequest } from '../../test-support/otlp-builders.js';
 import {
@@ -555,5 +555,96 @@ describe('trace summaries per partition', () => {
     expect(file?.timeMin).toBe(String(Reflect.get(real ?? {}, 'start_time_unix_nano')));
     expect(file?.timeMax).toBe(String(Reflect.get(real ?? {}, 'start_time_unix_nano')));
     await s.close();
+  });
+});
+
+describe('close compacts the flush partitions', () => {
+  const partitionDirs = (w: TestWriter): string[] => [
+    ...new Set([...w.fs.snapshot().keys()].flatMap((p) => p.match(/data\/partitions\/(\d{6})\//)?.[1] ?? [])),
+  ];
+
+  async function flushed(s: WriterSession, batches: number): Promise<void> {
+    for (let i = 0; i < batches; i++) {
+      await s.add(spans(2, 0, i * 10), `s${i}.json`);
+      await s.add(logs(3), `l${i}.json`);
+      await s.flush();
+    }
+  }
+
+  test('three flushes become one partition after them, holding every row, and the old folders are gone', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    await flushed(s, 3);
+    expect(partitionDirs(w)).toEqual(['000000', '000001', '000002']);
+    await s.close();
+    const m = manifest(w);
+    expect(m.complete).toBe(true);
+    expect(m.partitions.map((p) => [p.n, p.source])).toEqual([[3, 'compact:0..2']]);
+    expect(partitionDirs(w)).toEqual(['000003']);
+    expect(m.partitions[0]?.files.spans?.rows).toBe(6);
+    expect(m.partitions[0]?.files.logs?.rows).toBe(9);
+    expect(m.partitions[0]?.files.traces?.rows).toBeGreaterThan(0);
+    const ids = (await spanIds(w, 3)).sort();
+    expect(ids).toEqual([0, 1, 10, 11, 20, 21].map((i) => spanIdOf(i)).sort());
+    const slots = ([0, 1] as const).map((i) => state(w, i));
+    expect(slots.some((st) => st.nextPartition === 4 && st.flushPartitions.length === 0)).toBe(true);
+    expect(m.totals).toMatchObject({ spans: 6, logs: 9 });
+  });
+
+  test('the compacted rows are in the table sort order', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    await s.add(spans(1, 0, 20), 'a.json');
+    await s.flush();
+    await s.add(spans(1, 0, 0), 'b.json');
+    await s.flush();
+    await s.close();
+    const rows = decodeTable('spans', await w.fs.readBytes(`${OUT}/data/partitions/000002/spans.parquet`));
+    const starts = rows.map((r) => Reflect.get(r, 'start_time_unix_nano') as bigint);
+    expect(starts).toEqual([...starts].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)));
+  });
+
+  test('one flush partition is left as it is', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    await s.add(spans(2), 'a.json');
+    await s.close();
+    const m = manifest(w);
+    expect(m.partitions.map((p) => [p.n, p.source])).toEqual([[0, 'flush:0']]);
+    expect(partitionDirs(w)).toEqual(['000000']);
+  });
+
+  test('a partition copied by merge is never compacted with the flush partitions', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    await s.add(spans(2), 'a.json');
+    await s.close();
+    const copied = manifest(w);
+    const [first] = copied.partitions;
+    if (first === undefined) throw new Error('no partition');
+    await writeManifest(w.fs, OUT, { ...copied, partitions: [{ ...first, source: 'merge:other' }] });
+    const a = await open(w, cfg(), 'append');
+    await flushed(a, 2);
+    await a.close();
+    const m = manifest(w);
+    expect(m.partitions.map((p) => [p.n, p.source])).toEqual([
+      [0, 'merge:other'],
+      [3, 'compact:1..2'],
+    ]);
+    expect(partitionDirs(w)).toEqual(['000000', '000003']);
+  });
+
+  test('a compaction that fails keeps the flush partitions, closes the report and removes what it wrote', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    await flushed(s, 2);
+    w.fs.failNextWrite('data/partitions/000002/logs.parquet');
+    await s.close();
+    const m = manifest(w);
+    expect(m.complete).toBe(true);
+    expect(m.partitions.map((p) => p.source)).toEqual(['flush:0', 'flush:1']);
+    expect(partitionDirs(w)).toEqual(['000000', '000001']);
+    expect(w.logs.some((l) => l.level === 'error' && l.msg.includes('compaction failed'))).toBe(true);
+    expect(await w.fs.exists(`${OUT}/${LOCK_PATH}`)).toBe(false);
   });
 });
