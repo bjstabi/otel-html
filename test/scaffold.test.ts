@@ -48,7 +48,9 @@ test('runtime dependencies are exactly what the library and CLI import', () => {
     '@lezer/lr',
     '@opentelemetry/api',
     '@opentelemetry/resources',
+    'apache-arrow',
     'commander',
+    'parquet-wasm',
     'yaml',
     'zod',
   ]);

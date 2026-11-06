@@ -1,4 +1,5 @@
 ---
+
 name: format-4
 description: Continue the format-4 project (Parquet partitions, DuckDB in the browser, incremental CI publishing) from wherever it stands. Use when the maintainer types /format-4 or asks to continue, resume or kick off the format-4 work after clearing context.
 ---

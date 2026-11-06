@@ -340,6 +340,183 @@ function decodeAttrs(v: unknown, dict: readonly string[], path: string): Attribu
 }
 
 // ---------------------------------------------------------------------------------------------
+// Self-contained JSON of AnyValues (format 4's attribute columns)
+// ---------------------------------------------------------------------------------------------
+// No dictionary. string/bool as is, empty -> null, array -> array, bytes -> {"$b"}. A plain number is an int iff it is
+// integral: an int within +-(2^53-1) is a plain number, beyond that {"$i": "<decimal>"}; a double is a plain number
+// only when finite, not -0 and not whole, else {"$d": "<text>"} ("2", "-0", "NaN", "Infinity"), so ints and doubles never
+// share a spelling and SQL json_extract sees ordinary numbers. A kvlist or attribute set is an object keyed by name; a
+// set with a key starting with "$" (or "__proto__") cannot be an object without a key being mistaken for a tag, so it
+// takes the {"$m": [[key, value], ...]} form instead. `anyValueFromJson` / `attributesFromJson` are the inverse.
+
+const SAFE_MIN = BigInt(Number.MIN_SAFE_INTEGER);
+const SAFE_MAX = BigInt(Number.MAX_SAFE_INTEGER);
+
+/** A double in format-4 JSON: a plain number only when it cannot be mistaken for an int. */
+function doubleToTagged(x: number): JsonValue {
+  return Number.isFinite(x) && !Number.isInteger(x) ? x : { $d: Object.is(x, -0) ? '-0' : String(x) };
+}
+
+function anyToJson(v: AnyValue): JsonValue {
+  switch (v.kind) {
+    case 'string':
+    case 'bool':
+      return v.value;
+    case 'empty':
+      return null;
+    case 'int':
+      return v.value >= SAFE_MIN && v.value <= SAFE_MAX ? Number(v.value) : { $i: v.value.toString() };
+    case 'double':
+      return doubleToTagged(v.value);
+    case 'bytes':
+      return { $b: bytesToBase64(v.value) };
+    case 'array':
+      return v.values.map(anyToJson);
+    case 'kvlist':
+      return attributesToJsonValue(v.values);
+    default:
+      return assertNever(v, '');
+  }
+}
+
+export function attributesToJsonValue(a: Attributes): JsonValue {
+  let ambiguous = false;
+  for (const k of a.keys()) {
+    if (k.startsWith('$') || k === '__proto__') {
+      ambiguous = true;
+      break;
+    }
+  }
+  if (ambiguous) return { $m: [...a].map(([k, x]): JsonValue => [k, anyToJson(x)]) };
+  const out: { [k: string]: JsonValue } = {};
+  for (const [k, x] of a) out[k] = anyToJson(x);
+  return out;
+}
+
+/** An attribute set as JSON text: an object keyed by attribute key, values tagged as above. */
+export function attributesToJson(a: Attributes): string {
+  return JSON.stringify(attributesToJsonValue(a));
+}
+
+/** One AnyValue as JSON text, tagged as `attributesToJson`. */
+export function anyValueJson(v: AnyValue): string {
+  return JSON.stringify(anyToJson(v));
+}
+
+/**
+ * The JSON text of a value whose numbers are all doubles (a point's exemplars and quantiles, which the model keeps as
+ * protobuf JSON: int64 as decimal strings, non-finite doubles as "NaN" | "Infinity" | "-Infinity" strings): each number
+ * is tagged as a double is, so a whole-numbered or negative-zero value keeps its type, and other values pass through.
+ */
+export function doublesJson(v: unknown): string {
+  const walk = (x: unknown): JsonValue => {
+    if (typeof x === 'number') return doubleToTagged(x);
+    if (Array.isArray(x)) return x.map(walk);
+    if (typeof x === 'object' && x !== null) {
+      const entries = Object.entries(x).filter(([, y]) => y !== undefined);
+      if (entries.some(([k]) => k.startsWith('$') || k === '__proto__')) {
+        return { $m: entries.map(([k, y]): JsonValue => [k, walk(y)]) };
+      }
+      const out: { [k: string]: JsonValue } = {};
+      for (const [k, y] of entries) out[k] = walk(y);
+      return out;
+    }
+    if (x === null || typeof x === 'string' || typeof x === 'boolean') return x;
+    throw bad('', 'a JSON value', typeof x);
+  };
+  return JSON.stringify(walk(v));
+}
+
+const DOUBLE_TEXT_RE = /^-?[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?$/;
+
+function taggedDouble(text: unknown, path: string): number {
+  if (typeof text === 'string' && DOUBLE_TEXT_RE.test(text) && Number.isFinite(Number(text)))
+    return Number(text);
+  return jsonToDouble(text, path); // "-0" | "NaN" | "Infinity" | "-Infinity" (or throws)
+}
+
+function anyFromJsonValue(v: unknown, path: string): AnyValue {
+  switch (typeof v) {
+    case 'string':
+      return { kind: 'string', value: v };
+    case 'boolean':
+      return { kind: 'bool', value: v };
+    case 'number':
+      if (Number.isInteger(v)) {
+        if (!Number.isSafeInteger(v)) throw bad(path, 'an integer within +-(2^53-1), else {"$i"}', v);
+        return { kind: 'int', value: BigInt(v) };
+      }
+      if (!Number.isFinite(v)) throw bad(path, 'a finite number', v);
+      return { kind: 'double', value: v };
+    case 'object':
+      break;
+    default:
+      throw bad(path, 'a tagged AnyValue', v);
+  }
+  if (v === null) return { kind: 'empty' };
+  if (Array.isArray(v))
+    return { kind: 'array', values: v.map((x, i) => anyFromJsonValue(x, `${path}[${i}]`)) };
+  const big = intTag(v, path);
+  if (big !== null) {
+    if (big < INT64_MIN || big > INT64_MAX) throw bad(path, 'an int64', v);
+    return { kind: 'int', value: big };
+  }
+  const bytes = bytesTag(v, path);
+  if (bytes !== null) return { kind: 'bytes', value: bytes };
+  return objectFromJson(v, path, true);
+}
+
+/** An attribute object or `{"$m"}` form. `asValue`: wrap it as a kvlist AnyValue, else the Attributes. */
+function objectFromJson(v: object, path: string, asValue: true): AnyValue;
+function objectFromJson(v: object, path: string, asValue: false): Attributes;
+function objectFromJson(v: object, path: string, asValue: boolean): AnyValue | Attributes {
+  const rec = v as Record<string, unknown>;
+  const keys = Object.keys(rec);
+  const only = keys.length === 1 ? keys[0] : undefined;
+  if (only === '$d') {
+    if (!asValue) throw bad(path, 'an attribute set', v);
+    return { kind: 'double', value: taggedDouble((rec as Tagged).$d, path) };
+  }
+  const out = new Map<string, AnyValue>();
+  if (only === '$m') {
+    const entries = (rec as Tagged).$m;
+    if (!Array.isArray(entries)) throw bad(path, '{"$m": [[key, value], ...]}', v);
+    for (const [i, e] of entries.entries()) {
+      if (!Array.isArray(e) || e.length !== 2 || typeof e[0] !== 'string') {
+        throw bad(`${path}.$m[${i}]`, '[string key, value]', e);
+      }
+      out.set(e[0], anyFromJsonValue(e[1], `${path}.$m[${i}]`));
+    }
+  } else {
+    for (const [k, x] of Object.entries(rec)) {
+      if (k.startsWith('$')) throw bad(`${path}.${k}`, 'a key not starting with "$" (tags only)', k);
+      out.set(k, anyFromJsonValue(x, `${path}.${k}`));
+    }
+  }
+  return asValue ? { kind: 'kvlist', values: out } : out;
+}
+
+function parseText(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw bad('', 'JSON text', text);
+  }
+}
+
+/** Inverse of `anyValueJson`. Throws `invalid-report` on malformed or mis-tagged JSON. */
+export function anyValueFromJson(text: string): AnyValue {
+  return anyFromJsonValue(parseText(text), '');
+}
+
+/** Inverse of `attributesToJson`. Throws `invalid-report` on malformed or mis-tagged JSON. */
+export function attributesFromJson(text: string): Attributes {
+  const v = parseText(text);
+  if (!isRecord(v)) throw bad('', 'an attribute object', v);
+  return objectFromJson(v, '', false);
+}
+
+// ---------------------------------------------------------------------------------------------
 // Resource / scope tables
 // ---------------------------------------------------------------------------------------------
 
