@@ -11,7 +11,14 @@ import { OtelHtmlError } from '../model/errors.js';
 import { METRIC_FILE_PATH } from './metric-files.js';
 import { TABLES, type Table } from './parquet/schema.js';
 import type { FileStatistics } from './parquet/stats.js';
-import { chunkPath, ENGINE_VERSION_RE, partitionFilePath, SIGNALS, type Signal } from './paths.js';
+import {
+  ASSETS_BASE_RE,
+  chunkPath,
+  ENGINE_VERSION_RE,
+  partitionFilePath,
+  SIGNALS,
+  type Signal,
+} from './paths.js';
 import { describe, parseWith } from './validate.js';
 import {
   CHUNK_READABLE_FORMAT_VERSIONS,
@@ -164,8 +171,6 @@ export interface ManifestV4 {
 export type AnyManifest = Manifest | ManifestV4;
 
 const SOURCE_RE = /^(flush|compact|job|ci|merge):[A-Za-z0-9#:._-]{1,200}$/;
-// `assets/` or `../` segments then `assets/<segment>/`: relative, no scheme, no leading `_`.
-const ASSETS_BASE_RE = /^(?:\.\.\/)*assets\/(?:[A-Za-z0-9][A-Za-z0-9._-]*\/)?$/;
 const INT64_MIN = -(2n ** 63n);
 const INT64_MAX = 2n ** 63n - 1n;
 const INT64_CANONICAL = /^(?:0|-?[1-9][0-9]*)$/;

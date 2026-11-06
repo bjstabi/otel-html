@@ -32,6 +32,27 @@ describe('resolveConfig', () => {
     expect(e.message).toContain('writer.metricSeriesCap');
   });
 
+  test('format-4 writer keys: defaults, bounds and the env binding', () => {
+    const { config } = resolveConfig({ env: {} });
+    expect(config.writer.format).toBe('chunks');
+    expect(config.writer.rowGroupRows).toBe(50_000);
+    expect(config.writer.statisticsKeys).toEqual([]);
+    expect(config.writer.localWarnBytes).toBe(256_000_000);
+    expect(config.writer.assetsBase).toBe('assets/');
+    const bad = (writer: object) => failure(() => resolveConfig({ file: { writer }, env: {} }));
+    expect(bad({ rowGroupRows: 10 }).message).toContain('writer.rowGroupRows');
+    expect(bad({ rowGroupRows: 100_001 }).message).toContain('writer.rowGroupRows');
+    expect(bad({ assetsBase: '/x' }).message).toContain('writer.assetsBase');
+    const f = bad({ format: 'parquet' }).message;
+    expect(f).toContain('writer.format');
+    for (const v of ['chunks', 'local', 'site']) expect(f).toContain(v);
+    expect(resolveConfig({ env: { OTEL_HTML_FORMAT: 'site' } }).config.writer.format).toBe('site');
+    expect(
+      resolveConfig({ file: { writer: { assetsBase: '../../assets/0.3.0/' } }, env: {} }).config.writer
+        .assetsBase,
+    ).toBe('../../assets/0.3.0/');
+  });
+
   test('flag > env > file > default', () => {
     const r = resolveConfig({
       file: { title: 'a' },

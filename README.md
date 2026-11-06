@@ -545,6 +545,11 @@ Config is a YAML or JSON file (`otel-html.yaml` by default), or an object passed
 | Key | Default | Meaning |
 |---|---|---|
 | `title` | none | Report title. Env: `OTEL_HTML_TITLE`. |
+| `writer.format` | `chunks` | Report format: `chunks` (the current format), or `local` / `site`, which write format 4 (Parquet partitions; `site` is for a published site with shared assets). Format 4 is not yet readable by the viewer, so `chunks` stays the default for now. Env: `OTEL_HTML_FORMAT`. |
+| `writer.rowGroupRows` | 50000 | Rows per Parquet row group in format 4 (50000 to 100000). |
+| `writer.statisticsKeys` | `[]` | Extra attribute keys (beyond those the dashboards and views use) whose statistics are kept per partition file in format 4. |
+| `writer.localWarnBytes` | 256000000 | Format `local` warns when the report grows past this many bytes. |
+| `writer.assetsBase` | `assets/` | Where a format-4 report loads the viewer assets from: `assets/`, or a relative path such as `../../assets/0.3.0/`. |
 | `writer.chunkTargetBytes` | 4000000 | Target size of a data chunk. |
 | `writer.flushIntervalMs` | 5000 | Checkpoint interval. Also checkpoints once after this long idle with new records. |
 | `writer.dedupeCapacity` | 200000 | Recent span IDs remembered for de-duplication. |

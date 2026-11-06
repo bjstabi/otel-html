@@ -7,6 +7,7 @@ import {
   type ViewInput,
   ViewListSchema,
 } from '../dashboards/schema.js';
+import { ASSETS_BASE_RE } from '../format/paths.js';
 
 // Explicit input/output types keep `isolatedDeclarations` satisfied (Zod's inferred
 // builder types cannot be emitted per-file). The schemas below are the source of truth;
@@ -23,6 +24,11 @@ interface DropIn {
   metrics?: { datapoint?: string[] | undefined } | undefined;
 }
 interface WriterOut {
+  format: 'chunks' | 'local' | 'site';
+  rowGroupRows: number;
+  statisticsKeys: string[];
+  localWarnBytes: number;
+  assetsBase: string;
   chunkTargetBytes: number;
   flushIntervalMs: number;
   dedupeCapacity: number;
@@ -33,6 +39,11 @@ interface WriterOut {
   drop: DropOut;
 }
 interface WriterIn {
+  format?: 'chunks' | 'local' | 'site' | undefined;
+  rowGroupRows?: number | undefined;
+  statisticsKeys?: string[] | undefined;
+  localWarnBytes?: number | undefined;
+  assetsBase?: string | undefined;
   chunkTargetBytes?: number | undefined;
   flushIntervalMs?: number | undefined;
   dedupeCapacity?: number | undefined;
@@ -114,6 +125,14 @@ const DropSchema = z
 
 const WriterSchema = z
   .strictObject({
+    format: z.enum(['chunks', 'local', 'site']).default('chunks'),
+    rowGroupRows: z.number().int().min(50_000).max(100_000).default(50_000),
+    statisticsKeys: z.array(z.string()).default([]),
+    localWarnBytes: posInt.default(256_000_000),
+    assetsBase: z
+      .string()
+      .regex(ASSETS_BASE_RE, 'assets/ or a relative path like ../../assets/0.3.0/')
+      .default('assets/'),
     chunkTargetBytes: posInt.default(4_000_000),
     flushIntervalMs: posInt.default(5_000),
     dedupeCapacity: posInt.default(200_000),

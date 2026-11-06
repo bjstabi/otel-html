@@ -5,6 +5,9 @@ import type { Table } from './parquet/schema.js';
 export const SIGNALS = ['spans', 'logs', 'metrics'] as const;
 export type Signal = (typeof SIGNALS)[number];
 
+/** `assets/` or `../` segments then `assets/<segment>/`: relative, no scheme, no leading `_`. */
+export const ASSETS_BASE_RE: RegExp = /^(?:\.\.\/)*assets\/(?:[A-Za-z0-9][A-Za-z0-9._-]*\/)?$/;
+
 export const MANIFEST_PATH = 'data/manifest.js';
 export const STATE_DIR = 'data/state';
 export const LOCK_PATH = 'data/state/lock.json';
