@@ -15,6 +15,13 @@ export interface FileSystem {
   realpath(p: string): Promise<string>;
   list(dir: string): Promise<string[]>;
   remove(p: string): Promise<void>;
+  /** Removes a directory with everything under it; a missing path is a no-op. Symbolic links are removed, not followed. */
+  removeDir(p: string): Promise<void>;
+  /**
+   * The file as a `Blob` that reads its bytes on demand, so a reader can take pieces of a large file. Without it,
+   * `readBytes` is used and the file is held whole.
+   */
+  openBlob?(p: string): Promise<Blob>;
   /** Resolves false if the file already exists. */
   createExclusive(p: string, text: string): Promise<boolean>;
 }

@@ -34,7 +34,7 @@ export interface WriteGate {
  * In-memory FileSystem that mirrors the node implementation where the writer relies on it:
  * writing text needs an existing parent directory (writeBytes creates parents), `list` of a missing
  * directory fails with ENOENT, directories exist implicitly for every file prefix, and `remove` refuses
- * directories. With `pieces`, `writePiecesAtomic` exists and consumes its pieces only once the write is let through
+ * directories (`removeDir` removes one). With `pieces`, `writePiecesAtomic` exists and consumes its pieces only once the write is let through
  * (the node implementation streams them), so a test can see what a held write would read late.
  */
 export function createMemoryFileSystem(options: { pieces?: boolean } = {}): FileSystem & {
@@ -171,6 +171,12 @@ export function createMemoryFileSystem(options: { pieces?: boolean } = {}): File
       const p = norm(rawP);
       if (isDir(p)) throw fsError('ERR_FS_EISDIR', 'path is a directory', p);
       files.delete(p);
+    },
+    async removeDir(rawP) {
+      const p = norm(rawP);
+      const prefix = p.endsWith('/') ? p : `${p}/`;
+      for (const f of [...files.keys()]) if (f === p || f.startsWith(prefix)) files.delete(f);
+      for (const d of [...dirs]) if (d === p || d.startsWith(prefix)) dirs.delete(d);
     },
     async realpath(rawP) {
       const p = norm(rawP);

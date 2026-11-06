@@ -128,6 +128,24 @@ describe.each([
     await f.remove(join(dir, 'missing'));
   });
 
+  test('removeDir removes a directory with its files and subdirectories, and only that', async () => {
+    const f = fs();
+    await f.mkdirp(join(dir, 'p/000001/sub'));
+    await f.writeBytes(join(dir, 'p/000001/a.parquet'), new Uint8Array([1]));
+    await f.writeBytes(join(dir, 'p/000001/sub/b'), new Uint8Array([2]));
+    await f.writeBytes(join(dir, 'p/000002/c.parquet'), new Uint8Array([3]));
+    await f.removeDir(join(dir, 'p/000001'));
+    expect(await f.exists(join(dir, 'p/000001'))).toBe(false);
+    expect(await f.exists(join(dir, 'p/000001/a.parquet'))).toBe(false);
+    expect(await f.list(join(dir, 'p'))).toEqual(['000002']);
+  });
+
+  test('removeDir of a missing path is a no-op', async () => {
+    const f = fs();
+    await f.mkdirp(dir);
+    await f.removeDir(join(dir, 'missing'));
+  });
+
   test('createExclusive returns false the second time', async () => {
     const f = fs();
     await f.mkdirp(dir);
