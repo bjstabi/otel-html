@@ -540,4 +540,24 @@ describe('trace summaries per partition', () => {
     expect(await traceIds(w, 0)).toHaveLength(2);
     await s.close();
   });
+
+  test('a logs-only trace without log times writes null times and leaves the file range to the others', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    await s.add(spans(1), 'a.json');
+    await s.add(
+      otlp(logsRequest([logRecord({ traceId: traceIdOf(9), timeUnixNano: '0', observedTimeUnixNano: '0' })])),
+      'l.json',
+    );
+    await s.flush();
+    const bytes = await w.fs.readBytes(`${OUT}/data/partitions/000000/traces.parquet`);
+    const rows = decodeTable('traces', bytes);
+    const timeless = rows.find((r) => Reflect.get(r, 'trace_id') === traceIdOf(9));
+    expect(Reflect.get(timeless ?? {}, 'start_time_unix_nano')).toBeNull();
+    const file = manifest(w).partitions[0]?.files.traces;
+    const real = rows.find((r) => Reflect.get(r, 'trace_id') === traceIdOf(0));
+    expect(file?.timeMin).toBe(String(Reflect.get(real ?? {}, 'start_time_unix_nano')));
+    expect(file?.timeMax).toBe(String(Reflect.get(real ?? {}, 'start_time_unix_nano')));
+    await s.close();
+  });
 });

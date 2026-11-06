@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 import { decodeTable } from '../../src/format/parquet/codec.js';
 import type { Row } from '../../src/format/parquet/rows.js';
 import type { Table } from '../../src/format/parquet/schema.js';
-import { PartitionWriter } from '../../src/writer/partition-writer.js';
+import { PartitionWriter, type PartitionWriterOptions } from '../../src/writer/partition-writer.js';
 import { createMemoryFileSystem } from '../../test-support/memory-fs.js';
 
 const keys = (): Record<Table, string[]> => ({
@@ -31,7 +31,7 @@ function log(i: number, scope: string): Row {
   return { time_unix_nano: BigInt(i), body: `b${i}`, scope_name: scope, service_name: 'svc' };
 }
 
-function make(nextPartition = 0) {
+function make(nextPartition = 0, derive?: PartitionWriterOptions['derive']) {
   const fs = createMemoryFileSystem();
   const w = new PartitionWriter(fs, {
     out: '/out',
@@ -39,6 +39,7 @@ function make(nextPartition = 0) {
     statisticsKeys: keys(),
     facetValueCap: 100,
     nextPartition,
+    ...(derive === undefined ? {} : { derive }),
   });
   return { fs, w };
 }
@@ -136,5 +137,64 @@ describe('PartitionWriter', () => {
     expect(e?.files.spans?.rows).toBe(2);
     const rows = decodeTable('spans', await fs.readBytes('/out/data/partitions/000000/spans.parquet'));
     expect(rows.map((r) => Reflect.get(r, 'span_id'))).toEqual(['s1', 's2']);
+  });
+
+  describe('the derive hook', () => {
+    const trace = (id: string): Row => ({
+      trace_id: id,
+      start_time_unix_nano: 7n,
+      end_time_unix_nano: 9n,
+      span_count: 1,
+      error_count: 0,
+      log_count: 0,
+    });
+
+    test('derived rows are written with their own file statistics', async () => {
+      const { fs, w } = make(0, () => ({ rows: { traces: [trace('a'), trace('b')] } }));
+      w.add('spans', span(1, 'a', 100n));
+      const e = await w.cut('flush:1');
+      expect(e?.files.traces).toMatchObject({ rows: 2, timeMin: '7', timeMax: '7' });
+      expect(await fs.exists('/out/data/partitions/000000/traces.parquet')).toBe(true);
+    });
+
+    test('commit runs once after the writes, and not when a write fails', async () => {
+      let commits = 0;
+      const { fs, w } = make(0, () => ({ rows: { traces: [trace('a')] }, commit: () => void commits++ }));
+      w.add('spans', span(1, 'a', 100n));
+      fs.failNextWrite('000000/traces.parquet');
+      await expect(w.cut('flush:1')).rejects.toThrow();
+      expect(commits).toBe(0);
+      expect(w.pendingRows).toBe(1);
+      await w.cut('flush:1');
+      expect(commits).toBe(1);
+    });
+
+    test('a throw from derive restores the taken rows and writes nothing', async () => {
+      let fail = true;
+      const { fs, w } = make(0, () => {
+        if (fail) throw new Error('derive failed');
+        return { rows: {} };
+      });
+      w.add('spans', span(1, 'a', 100n));
+      await expect(w.cut('flush:1')).rejects.toThrow('derive failed');
+      expect(w.pendingRows).toBe(1);
+      expect(w.nextPartition).toBe(0);
+      expect(await fs.exists('/out/data/partitions/000000/spans.parquet')).toBe(false);
+      fail = false;
+      expect((await w.cut('flush:1'))?.files.spans?.rows).toBe(1);
+    });
+
+    test('a throwing commit leaves nextPartition unchanged and the rows held', async () => {
+      const { w } = make(0, () => ({
+        rows: {},
+        commit: () => {
+          throw new Error('commit failed');
+        },
+      }));
+      w.add('spans', span(1, 'a', 100n));
+      await expect(w.cut('flush:1')).rejects.toThrow('commit failed');
+      expect(w.nextPartition).toBe(0);
+      expect(w.pendingRows).toBe(1);
+    });
   });
 });

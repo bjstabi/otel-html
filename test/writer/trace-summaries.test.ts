@@ -88,4 +88,16 @@ describe('traceRows', () => {
       end_time_unix_nano: 20n,
     });
   });
+
+  test('equal-start roots break on span_id, whatever the row order', () => {
+    const a = span('t', 'b', 10n, 20n, { parent_span_id: null });
+    const b = span('t', 'a', 10n, 20n, { parent_span_id: null });
+    expect(Reflect.get(traceRows([a, b], [])[0] ?? {}, 'root_name')).toBe('na');
+    expect(Reflect.get(traceRows([b, a], [])[0] ?? {}, 'root_name')).toBe('na');
+  });
+
+  test('a logs-only trace whose logs carry no time has null start and end', () => {
+    const [row] = traceRows([], [{ trace_id: 't', time_unix_nano: null, observed_time_unix_nano: null }]);
+    expect(row).toMatchObject({ start_time_unix_nano: null, end_time_unix_nano: null, log_count: 1 });
+  });
 });

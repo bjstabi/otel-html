@@ -49,6 +49,12 @@ describe('parquet table schemas', () => {
     expect(names.indexOf('event_name')).toBe(names.indexOf('severity_text') + 1);
   });
 
+  test('traces start and end times are nullable', () => {
+    const traces = TABLE_COLUMNS.traces;
+    for (const n of ['start_time_unix_nano', 'end_time_unix_nano'])
+      expect(traces.find((c) => c.name === n)).toMatchObject({ type: 'int64', nullable: true });
+  });
+
   test('points carry a nullable zero_threshold float64 right after zero_count', () => {
     const points = TABLE_COLUMNS.points;
     expect(points.find((c) => c.name === 'zero_threshold')).toMatchObject({

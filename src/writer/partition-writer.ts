@@ -113,8 +113,8 @@ export class PartitionWriter {
           ...fileStatistics(table, rows, this.#opts.statisticsKeys[table], this.#opts.facetValueCap),
         };
       }
+      derived?.commit?.(); // before the number advances: a throw here leaves the cut retryable
       this.#next = n + 1;
-      derived?.commit?.();
       return { n, source, files };
     } catch (e) {
       for (const table of TABLES) this.#held[table] = [...taken[table], ...this.#held[table]];

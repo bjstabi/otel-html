@@ -1,7 +1,5 @@
 import type { Row } from '../format/parquet/rows.js';
-
-/** OTLP `Status.StatusCode.STATUS_CODE_ERROR`. */
-const STATUS_ERROR = 2;
+import { StatusCode } from '../model/records.js';
 
 interface Acc {
   start: bigint | null;
@@ -18,15 +16,23 @@ const cell = (r: Row, k: string): unknown => Reflect.get(r, k);
 const big = (v: unknown): bigint | null => (typeof v === 'bigint' ? v : null);
 const text = (v: unknown): string | null => (typeof v === 'string' ? v : null);
 
+/** Whether root candidate `x` beats `y`: earlier start (a missing start loses), then the smaller span_id. */
+function rootBefore(x: Row, y: Row): boolean {
+  const sx = big(cell(x, 'start_time_unix_nano'));
+  const sy = big(cell(y, 'start_time_unix_nano'));
+  if (sx !== sy) return sx !== null && (sy === null || sx < sy);
+  return String(cell(x, 'span_id') ?? '') < String(cell(y, 'span_id') ?? '');
+}
+
 /**
  * The `traces` rows of one partition: one per trace id found in its spans or logs (a log without a trace id adds
  * nothing). Pure, so a cut that is retried derives the same rows again.
  *
  * - start/end: the min span start and max span end. A trace with only logs has no spans, so its range is the min
  *   and max log time (`time_unix_nano`, else `observed_time_unix_nano`); a log with neither adds no time, and a
- *   trace with no time at all gets 0 (the columns are required).
+ *   trace with no time at all gets null start and end (the columns are nullable).
  * - root_*: from the span with a null `parent_span_id`; with several such spans in one partition the earliest
- *   start wins (the first seen on a tie), so the choice does not depend on row order. Null when there is none.
+ *   start wins (ties break on the smaller span_id), so the choice does not depend on row order. Null when there is none.
  * - Rows come out ordered by start time, then trace id.
  */
 export function traceRows(spans: readonly Row[], logs: readonly Row[]): Row[] {
@@ -55,12 +61,11 @@ export function traceRows(spans: readonly Row[], logs: readonly Row[]): Row[] {
     const start = big(cell(s, 'start_time_unix_nano'));
     const end = big(cell(s, 'end_time_unix_nano'));
     a.spanCount++;
-    if (cell(s, 'status_code') === STATUS_ERROR) a.errorCount++;
+    if (cell(s, 'status_code') === StatusCode.ERROR) a.errorCount++;
     if (start !== null && (a.start === null || start < a.start)) a.start = start;
     if (end !== null && (a.end === null || end > a.end)) a.end = end;
     if (cell(s, 'parent_span_id') === null || cell(s, 'parent_span_id') === undefined) {
-      const rootStart = a.root === null ? null : big(cell(a.root, 'start_time_unix_nano'));
-      if (a.root === null || (start !== null && (rootStart === null || start < rootStart))) a.root = s;
+      if (a.root === null || rootBefore(s, a.root)) a.root = s;
     }
   }
   for (const l of logs) {
@@ -79,8 +84,8 @@ export function traceRows(spans: readonly Row[], logs: readonly Row[]): Row[] {
     const fromSpans = a.spanCount > 0;
     rows.push({
       trace_id: id,
-      start_time_unix_nano: (fromSpans ? a.start : a.logStart) ?? 0n,
-      end_time_unix_nano: (fromSpans ? a.end : a.logEnd) ?? 0n,
+      start_time_unix_nano: (fromSpans ? a.start : a.logStart) ?? null,
+      end_time_unix_nano: (fromSpans ? a.end : a.logEnd) ?? null,
       span_count: a.spanCount,
       error_count: a.errorCount,
       root_service: a.root === null ? null : text(cell(a.root, 'service_name')),
@@ -90,9 +95,9 @@ export function traceRows(spans: readonly Row[], logs: readonly Row[]): Row[] {
     });
   }
   return rows.sort((x, y) => {
-    const dx = cell(x, 'start_time_unix_nano') as bigint;
-    const dy = cell(y, 'start_time_unix_nano') as bigint;
-    if (dx !== dy) return dx < dy ? -1 : 1;
+    const dx = big(cell(x, 'start_time_unix_nano'));
+    const dy = big(cell(y, 'start_time_unix_nano'));
+    if (dx !== dy) return dx === null ? 1 : dy === null ? -1 : dx < dy ? -1 : 1;
     return (cell(x, 'trace_id') as string) < (cell(y, 'trace_id') as string) ? -1 : 1;
   });
 }
