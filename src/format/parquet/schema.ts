@@ -151,8 +151,8 @@ const PATTERNS: readonly ColumnDef[] = [
   required('cluster_id', 'int64'),
   required('template', 'utf8'),
   required('count', 'int64'),
-  required('first_time_unix_nano', 'int64'),
-  required('last_time_unix_nano', 'int64'),
+  col('first_time_unix_nano', 'int64'),
+  col('last_time_unix_nano', 'int64'),
   col('severity_counts', 'json'),
   col('sample', 'utf8'),
 ];
