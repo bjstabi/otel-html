@@ -220,6 +220,7 @@ function pointValues(point: MetricPointRecord): Row {
         max: double(get('max'), at('max')),
         scale: int32(get('scale'), at('scale'), 0),
         zero_count: int64(get('zeroCount'), at('zeroCount'), 0n),
+        zero_threshold: double(get('zeroThreshold'), at('zeroThreshold')) ?? 0,
         ...buckets(positive, 'positive'),
         ...buckets(negative, 'negative'),
       };

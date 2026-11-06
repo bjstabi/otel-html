@@ -241,12 +241,11 @@ describe('format-4 attribute JSON', () => {
       inner: { kind: 'kvlist', values: attrs({ $x: bool(true), plain: str('p') }) },
     }),
   };
-  const set = attrs({
+  const base = attrs({
     'a.b"c': str('quoted'),
     'a.b': int(7n),
     $x: str('dollar'),
     $i: int(5n),
-    __proto__: str('proto'),
     max: int(2n ** 53n - 1n),
     min: int(-(2n ** 53n - 1n)),
     over: int(2n ** 53n),
@@ -265,6 +264,7 @@ describe('format-4 attribute JSON', () => {
     raw: bytes([1, 2]),
     nested,
   });
+  const set: Attributes = new Map([...base, ['__proto__', str('proto')]]);
 
   test('ints are plain numbers within 2^53-1, doubles are plain only when not whole', () => {
     const dollarFree = new Map([...set].filter(([k]) => !k.startsWith('$') && k !== '__proto__'));
@@ -279,6 +279,19 @@ describe('format-4 attribute JSON', () => {
       nan: { $d: 'NaN' },
       half: 0.5,
     });
+  });
+
+  test('a __proto__ key forces the entries form and survives as a key', () => {
+    const withProto: Attributes = new Map([
+      ['__proto__', str('proto')],
+      ['ok', int(1n)],
+    ]);
+    const json = attributesToJson(withProto);
+    expect(Object.keys(JSON.parse(json) as object)).toEqual(['$m']);
+    const back = attributesFromJson(json);
+    expect(back.has('__proto__')).toBe(true);
+    expect(back.get('__proto__')).toEqual(str('proto'));
+    expect(back).toEqual(withProto);
   });
 
   test('a mixed attribute set round-trips exactly', () => {
@@ -373,6 +386,7 @@ describe('point value columns', () => {
         count: '7',
         scale: -2,
         zeroCount: '1',
+        zeroThreshold: 0.001,
         positive: { offset: 3, bucketCounts: ['2', '4'] },
         negative: { bucketCounts: ['1'] },
         sum: 3,
@@ -381,6 +395,7 @@ describe('point value columns', () => {
     expect(cell(r, 'count')).toBe(7n);
     expect(cell(r, 'scale')).toBe(-2);
     expect(cell(r, 'zero_count')).toBe(1n);
+    expect(cell(r, 'zero_threshold')).toBe(0.001);
     expect(cell(r, 'positive_offset')).toBe(3);
     expect(cell(r, 'positive_counts')).toEqual([2n, 4n]);
     expect(cell(r, 'negative_offset')).toBe(0);
@@ -389,6 +404,8 @@ describe('point value columns', () => {
     expectKeys(r, 'points');
     const none = row({ type: 'exponentialHistogram', point: {} });
     expect(cell(none, 'scale')).toBe(0);
+    expect(cell(none, 'zero_threshold')).toBe(0);
+    expect(cell(row({ type: 'histogram', point: {} }), 'zero_threshold')).toBeUndefined();
     expect(cell(none, 'positive_offset')).toBeNull();
     expect(cell(none, 'positive_counts')).toBeNull();
   });

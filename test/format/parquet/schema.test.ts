@@ -49,6 +49,16 @@ describe('parquet table schemas', () => {
     expect(names.indexOf('event_name')).toBe(names.indexOf('severity_text') + 1);
   });
 
+  test('points carry a nullable zero_threshold float64 right after zero_count', () => {
+    const points = TABLE_COLUMNS.points;
+    expect(points.find((c) => c.name === 'zero_threshold')).toMatchObject({
+      type: 'float64',
+      nullable: true,
+    });
+    const names = points.map((c) => c.name);
+    expect(names.indexOf('zero_threshold')).toBe(names.indexOf('zero_count') + 1);
+  });
+
   test('arrow types follow the column types', () => {
     const points = arrowSchema('points');
     expect(String(points.fields.find((f) => f.name === 'explicit_bounds')?.type)).toBe('List<Float64>');

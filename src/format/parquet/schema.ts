@@ -120,6 +120,7 @@ const POINTS: readonly ColumnDef[] = [
   col('bucket_counts', 'list_int64'),
   col('scale', 'int32'),
   col('zero_count', 'int64'),
+  col('zero_threshold', 'float64'),
   col('positive_offset', 'int32'),
   col('positive_counts', 'list_int64'),
   col('negative_offset', 'int32'),
