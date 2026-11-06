@@ -6,9 +6,16 @@ import { decodeTable } from '../../src/format/parquet/codec.js';
 import { LOCK_PATH, MANIFEST_KEY } from '../../src/format/paths.js';
 import { parseAnySessionState, type SessionStateV2 } from '../../src/format/state.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
+import { writeStateSlotV2 } from '../../src/writer/checkpoint.js';
 import { openSession, type WriterSession } from '../../src/writer/session.js';
 import { logRecord, logsRequest } from '../../test-support/otlp-builders.js';
-import { createTestWriter, otlp, type TestWriter, testConfig } from '../../test-support/writer-deps.js';
+import {
+  createTestWriter,
+  EPOCH_NS,
+  otlp,
+  type TestWriter,
+  testConfig,
+} from '../../test-support/writer-deps.js';
 import { spanIdOf, spansRequest } from './helpers.js';
 
 const OUT = 'r';
@@ -73,7 +80,12 @@ describe('PartitionSession', () => {
     expect(m.complete).toBe(false);
     expect(m.engine).toEqual({ version: '1.32.0', format: 'site', assetsBase: 'assets/' });
     expect(m.statisticsKeys.spans).toContain('service_name');
-    expect(BigInt(m.range?.start ?? 'x') <= BigInt(m.range?.end ?? 'x')).toBe(true);
+    // spansRequest: span i starts at EPOCH_NS + i*1000 and ends 500 later; the logs sit at the builders' T0.
+    const logT = BigInt(String(Reflect.get(logRecord(), 'timeUnixNano')));
+    const spanStart = BigInt(EPOCH_NS);
+    const spanEnd = spanStart + 2000n + 500n;
+    const times = [logT, spanStart, spanEnd].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    expect(m.range).toEqual({ start: String(times[0]), end: String(times[2]) });
     expect([...w.fs.snapshot().keys()].some((k) => k.includes('data/chunks'))).toBe(false);
     expect(w.fs.snapshot().has(`${OUT}/index.html`)).toBe(true);
     await s.close();
@@ -277,6 +289,31 @@ describe('PartitionSession', () => {
     await s.flush();
     expect(manifest(w).totals.spans).toBe(1);
     await s.close();
+  });
+});
+
+describe('statistics keys and state validation', () => {
+  test('append with an added statistics key marks older partitions unknown for it', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    await s.add(spans(1), 'a.json');
+    await s.close();
+    const a = await open(w, cfg({ statisticsKeys: ['resource:deployment.environment'] }), 'append');
+    await a.add(spans(1, 0, 5), 'b.json');
+    await a.close();
+    const m = manifest(w);
+    const key = 'resource:deployment.environment';
+    expect(m.statisticsKeys.spans).toContain(key);
+    expect(m.partitions[0]?.files.spans?.values[key]).toBeNull();
+    expect(m.partitions[1]?.files.spans?.values[key]).toEqual([]);
+    expect(Reflect.get(m.partitions[0]?.files.spans?.values ?? {}, 'service_name')).toEqual(['svc']);
+  });
+
+  test('a malformed state is refused before any write', async () => {
+    const w = createTestWriter();
+    const bad = { formatVersion: 2, nextPartition: -1 } as unknown as SessionStateV2;
+    await expect(writeStateSlotV2(w.fs, OUT, 0, bad)).rejects.toThrow();
+    expect([...w.fs.snapshot().keys()]).toEqual([]);
   });
 });
 

@@ -640,6 +640,22 @@ class PartitionSession implements WriterSession {
     };
   }
 
+  /**
+   * Earlier partitions (an append under another config) may lack values for a listed key: they get `null`, which
+   * means unknown and prunes nothing. Values for keys no longer listed stay. Only the manifest entry changes.
+   */
+  #withKeys(e: PartitionEntry): PartitionEntry {
+    const files: PartitionEntry['files'] = {};
+    for (const t of TABLES) {
+      const f = e.files[t];
+      if (f === undefined) continue;
+      const values = { ...f.values };
+      for (const k of this.#statisticsKeys[t]) if (!(k in values)) values[k] = null;
+      files[t] = { ...f, values };
+    }
+    return { ...e, files };
+  }
+
   #manifest(p: Prepared): ManifestV4 {
     return {
       formatVersion: PARTITION_FORMAT_VERSION,
@@ -651,7 +667,7 @@ class PartitionSession implements WriterSession {
       complete: p.complete,
       range: p.range === null ? null : { start: p.range.start.toString(), end: p.range.end.toString() },
       totals: p.totals,
-      partitions: [...this.#committed, ...this.#pending],
+      partitions: [...this.#committed, ...this.#pending].map((e) => this.#withKeys(e)),
       statisticsKeys: this.#statisticsKeys,
       engine: {
         version: ENGINE_VERSION,
