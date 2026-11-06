@@ -240,7 +240,7 @@ function insertSorted<T extends string | number>(arr: T[], x: T): void {
 }
 
 /** Explicit bucket bounds of a histogram point; `null` for every other type. */
-function boundsOf(p: MetricPointRecord): number[] | null {
+export function boundsOf(p: MetricPointRecord): number[] | null {
   if (p.type !== 'histogram') return null;
   const raw: unknown =
     typeof p.point === 'object' && p.point !== null ? Reflect.get(p.point, 'explicitBounds') : [];

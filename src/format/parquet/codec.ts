@@ -1,13 +1,21 @@
 import {
   Table as ArrowTable,
+  Bool,
   type Data,
+  type DataType,
+  Field,
+  Float64,
+  Int32,
+  Int64,
+  List,
   makeData,
+  makeVector,
   RecordBatch,
   Struct,
   tableFromIPC,
   tableToIPC,
+  Utf8,
   type Vector,
-  vectorFromArray,
 } from 'apache-arrow';
 import {
   Compression,
@@ -17,8 +25,17 @@ import {
   writeParquet,
 } from 'parquet-wasm/esm';
 import { OtelHtmlError } from '../../model/errors.js';
+import { batchFromRows, type ColumnBatch } from './batch.js';
 import type { Row } from './rows.js';
-import { arrowSchema, type ColumnType, SORT_COLUMNS, TABLE_COLUMNS, TABLES, type Table } from './schema.js';
+import {
+  arrowSchema,
+  type ColumnDef,
+  type ColumnType,
+  SORT_COLUMNS,
+  TABLE_COLUMNS,
+  TABLES,
+  type Table,
+} from './schema.js';
 import { ensureParquetWasm } from './wasm.js';
 
 export interface EncodeOptions {
@@ -26,14 +43,6 @@ export interface EncodeOptions {
 }
 
 const OBSERVED = 'observed_time_unix_nano';
-
-/** The value a column is sorted by; logs sort by `time_unix_nano ?? observed_time_unix_nano` (the column keeps its null). */
-function sortKey(table: Table, row: Row, column: string): unknown {
-  const v = row[column];
-  if (v !== undefined && v !== null) return v;
-  if (table === 'logs' && column === 'time_unix_nano') return row[OBSERVED] ?? null;
-  return null;
-}
 
 function compareKeys(a: unknown, b: unknown): number {
   const aNull = a === undefined || a === null;
@@ -46,12 +55,22 @@ function compareKeys(a: unknown, b: unknown): number {
       : 0;
 }
 
-function sortedRows(table: Table, rows: readonly Row[]): Row[] {
-  const columns = SORT_COLUMNS[table];
+/**
+ * The stable permutation that sorts a batch by `SORT_COLUMNS[table]` (nulls last); logs sort by
+ * `time_unix_nano ?? observed_time_unix_nano` (the column keeps its null).
+ */
+function sortPermutation(table: Table, batch: ColumnBatch): number[] {
+  const keys = SORT_COLUMNS[table].map((c): readonly unknown[] => {
+    const col = batch.cells[c] ?? [];
+    if (!(table === 'logs' && c === 'time_unix_nano')) return col;
+    const observed = batch.cells[OBSERVED] ?? [];
+    return col.map((v, i) => v ?? observed[i] ?? null);
+  });
+  const order = Array.from({ length: batch.length }, (_, i) => i);
   // Array.prototype.sort is stable.
-  return [...rows].sort((x, y) => {
-    for (const c of columns) {
-      const d = compareKeys(sortKey(table, x, c), sortKey(table, y, c));
+  return order.sort((x, y) => {
+    for (const k of keys) {
+      const d = compareKeys(k[x], k[y]);
       if (d !== 0) return d;
     }
     return 0;
@@ -119,27 +138,236 @@ export function checkRow(table: Table, row: Row, index = 0): void {
   }
 }
 
-/** Sorts `rows` by `SORT_COLUMNS[table]` (nulls last, stable) and encodes them as ZSTD Parquet. */
-export function encodeTable(table: Table, rows: readonly Row[], opts: EncodeOptions): Uint8Array {
-  // Validate in the caller's row order, so the row index in an error is the caller's.
-  for (const [r, row] of rows.entries()) checkRow(table, row, r);
-  const sorted = sortedRows(table, rows);
+interface Cells {
+  readonly name: string;
+  readonly col: readonly unknown[];
+  readonly perm: readonly number[];
+  readonly valid: Uint8Array;
+  nullCount: number;
+}
+
+function setValid(c: Cells, i: number): void {
+  c.valid[i >> 3] = (c.valid[i >> 3] ?? 0) | (1 << (i & 7));
+}
+
+function validity(c: Cells, length: number): { nullCount: number; nullBitmap?: Uint8Array } {
+  return c.nullCount === 0 || length === 0
+    ? { nullCount: 0 }
+    : { nullCount: c.nullCount, nullBitmap: c.valid };
+}
+
+/** A fixed-width column: `fill` stores each non-null cell of the permuted column into the typed array. */
+function fixedData<T extends Float64Array | Int32Array | BigInt64Array>(
+  type: DataType,
+  c: Cells,
+  data: T,
+  put: (data: T, i: number, v: unknown) => void,
+): Data {
+  const n = c.perm.length;
+  for (let i = 0; i < n; i++) {
+    const v = c.col[c.perm[i] ?? 0] ?? null;
+    if (v === null) c.nullCount++;
+    else {
+      setValid(c, i);
+      put(data, i, v);
+    }
+  }
+  return makeData({ type, length: n, data, ...validity(c, n) } as Parameters<typeof makeData>[0]);
+}
+
+/**
+ * Arrow offsets are Int32: a column of strings or list items past 2^31-1 would wrap into negative offsets and
+ * corrupt the file, so it is an error. `limit` is a parameter so a test can hit it without allocating 2 GiB.
+ */
+export function assertInt32Offset(next: number, column: string, limit: number = INT32_MAX): void {
+  if (next > limit) {
+    throw invalidCell(
+      column,
+      'a column under 2 GiB (Int32 offsets)',
+      `${next} bytes or items; lower writer.chunkTargetBytes`,
+    );
+  }
+}
+
+const ENCODER = new TextEncoder();
+
+/** UTF-8 bytes and Int32 offsets of the permuted strings (null cells are empty), written in one `encodeInto` pass. */
+function utf8Buffers(c: Cells): { offsets: Int32Array; bytes: Uint8Array } {
+  const n = c.perm.length;
+  const offsets = new Int32Array(n + 1);
+  let chars = 0;
+  for (let i = 0; i < n; i++) {
+    const v = c.col[c.perm[i] ?? 0];
+    if (typeof v === 'string') chars += v.length;
+  }
+  let bytes = new Uint8Array(Math.max(chars, 8));
+  let pos = 0;
+  for (let i = 0; i < n; i++) {
+    const v = c.col[c.perm[i] ?? 0] ?? null;
+    if (typeof v === 'string') {
+      setValid(c, i);
+      if (pos + v.length * 3 > bytes.length) {
+        // Grow only when the worst case (3 bytes per UTF-16 unit) might not fit.
+        const need = ENCODER.encode(v).length;
+        if (pos + need > bytes.length) {
+          const grown = new Uint8Array(Math.max(bytes.length * 2, pos + need));
+          grown.set(bytes.subarray(0, pos));
+          bytes = grown;
+        }
+      }
+      pos += ENCODER.encodeInto(v, bytes.subarray(pos)).written;
+    } else c.nullCount++;
+    assertInt32Offset(pos, c.name);
+    offsets[i + 1] = pos;
+  }
+  return { offsets, bytes: bytes.subarray(0, pos) };
+}
+
+function utf8Data(c: Cells): Data {
+  const n = c.perm.length;
+  const { offsets, bytes } = utf8Buffers(c);
+  return makeData({ type: new Utf8(), length: n, valueOffsets: offsets, data: bytes, ...validity(c, n) });
+}
+
+/** A dictionary column: indices in first-appearance order of the permuted values, like Arrow's dictionary builder. */
+function dictionaryData(c: Cells, type: DataType): Data {
+  const n = c.perm.length;
+  const index = new Map<string, number>();
+  const indices = new Int32Array(n);
+  for (let i = 0; i < n; i++) {
+    const v = c.col[c.perm[i] ?? 0] ?? null;
+    if (typeof v !== 'string') {
+      c.nullCount++;
+      continue;
+    }
+    setValid(c, i);
+    let k = index.get(v);
+    if (k === undefined) {
+      k = index.size;
+      index.set(v, k);
+    }
+    indices[i] = k;
+  }
+  const words = [...index.keys()];
+  const dict = utf8Data({
+    name: c.name,
+    col: words,
+    perm: words.map((_, i) => i),
+    valid: new Uint8Array((words.length + 7) >> 3),
+    nullCount: 0,
+  });
+  return makeData({
+    type,
+    length: n,
+    data: indices,
+    dictionary: makeVector(dict),
+    ...validity(c, n),
+  } as Parameters<typeof makeData>[0]);
+}
+
+function listData(c: Cells, item: 'float64' | 'int64'): Data {
+  const n = c.perm.length;
+  const offsets = new Int32Array(n + 1);
+  let total = 0;
+  for (let i = 0; i < n; i++) {
+    const v = c.col[c.perm[i] ?? 0] ?? null;
+    if (Array.isArray(v)) total += v.length;
+    assertInt32Offset(total, c.name);
+    offsets[i + 1] = total;
+  }
+  const f64 = new Float64Array(item === 'float64' ? total : 0);
+  const i64 = new BigInt64Array(item === 'int64' ? total : 0);
+  for (let i = 0; i < n; i++) {
+    const v = c.col[c.perm[i] ?? 0] ?? null;
+    if (!Array.isArray(v)) {
+      c.nullCount++;
+      continue;
+    }
+    setValid(c, i);
+    const at = offsets[i] ?? 0;
+    for (const [j, x] of v.entries()) {
+      if (item === 'float64') f64[at + j] = x as number;
+      else i64[at + j] = x as bigint;
+    }
+  }
+  const itemType = item === 'float64' ? new Float64() : new Int64();
+  const child = makeData({
+    type: itemType,
+    length: total,
+    data: item === 'float64' ? f64 : i64,
+  } as Parameters<typeof makeData>[0]);
+  return makeData({
+    type: new List(new Field('item', itemType, true)),
+    length: n,
+    valueOffsets: offsets,
+    child,
+    ...validity(c, n),
+  } as Parameters<typeof makeData>[0]);
+}
+
+function boolData(c: Cells): Data {
+  const n = c.perm.length;
+  const bits = new Uint8Array((n + 7) >> 3);
+  for (let i = 0; i < n; i++) {
+    const v = c.col[c.perm[i] ?? 0] ?? null;
+    if (v === null) c.nullCount++;
+    else {
+      setValid(c, i);
+      if (v === true) bits[i >> 3] = (bits[i >> 3] ?? 0) | (1 << (i & 7));
+    }
+  }
+  return makeData({ type: new Bool(), length: n, data: bits, ...validity(c, n) });
+}
+
+/** One column's Arrow data, filled in `perm` order straight from the column array. */
+function columnData(def: ColumnDef, type: DataType, col: readonly unknown[], perm: readonly number[]): Data {
+  const n = perm.length;
+  const c: Cells = { name: def.name, col, perm, valid: new Uint8Array((n + 7) >> 3), nullCount: 0 };
+  switch (def.type) {
+    case 'utf8':
+    case 'json':
+      return def.dictionary ? dictionaryData(c, type) : utf8Data(c);
+    case 'int32':
+      return fixedData(new Int32(), c, new Int32Array(n), (d, i, v) => {
+        d[i] = v as number;
+      });
+    case 'float64':
+      return fixedData(new Float64(), c, new Float64Array(n), (d, i, v) => {
+        d[i] = v as number;
+      });
+    case 'int64':
+      return fixedData(new Int64(), c, new BigInt64Array(n), (d, i, v) => {
+        d[i] = v as bigint;
+      });
+    case 'bool':
+      return boolData(c);
+    case 'list_float64':
+      return listData(c, 'float64');
+    case 'list_int64':
+      return listData(c, 'int64');
+  }
+}
+
+/**
+ * Sorts a batch by `SORT_COLUMNS[table]` (nulls last, stable) and encodes it as ZSTD Parquet. It does not check the
+ * cells: every row must have passed `checkRow` (a session checks each row when it accepts it; `encodeTable` checks).
+ */
+export function encodeColumns(table: Table, batch: ColumnBatch, opts: EncodeOptions): Uint8Array {
+  const perm = sortPermutation(table, batch);
   const schema = arrowSchema(table);
   const children: Data[] = [];
   for (const [i, def] of TABLE_COLUMNS[table].entries()) {
     const field = schema.fields[i];
     if (field === undefined) throw new Error(`no arrow field for ${table}.${def.name}`);
-    const values = sorted.map((r) => r[def.name] ?? null);
-    const vector = vectorFromArray(values, field.type);
-    children.push(...vector.data);
+    children.push(columnData(def, field.type, batch.cells[def.name] ?? [], perm));
   }
   const type = new Struct(schema.fields);
   const arrow =
-    sorted.length === 0
+    batch.length === 0
       ? new ArrowTable(schema)
       : new ArrowTable(
           schema,
-          new RecordBatch(schema, makeData({ type, length: sorted.length, nullCount: 0, children })),
+          new RecordBatch(schema, makeData({ type, length: batch.length, nullCount: 0, children })),
         );
   ensureParquetWasm();
   const wasm = WasmTable.fromIPCStream(tableToIPC(arrow, 'stream'));
@@ -148,6 +376,13 @@ export function encodeTable(table: Table, rows: readonly Row[], opts: EncodeOpti
     .setMaxRowGroupSize(opts.rowGroupRows)
     .build();
   return writeParquet(wasm, props);
+}
+
+/** Sorts `rows` by `SORT_COLUMNS[table]` (nulls last, stable) and encodes them as ZSTD Parquet. */
+export function encodeTable(table: Table, rows: readonly Row[], opts: EncodeOptions): Uint8Array {
+  // Validate in the caller's row order, so the row index in an error is the caller's.
+  for (const [r, row] of rows.entries()) checkRow(table, row, r);
+  return encodeColumns(table, batchFromRows(table, rows), opts);
 }
 
 function plain(value: unknown): unknown {

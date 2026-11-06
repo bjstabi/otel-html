@@ -1,14 +1,17 @@
 import { describe, expect, test } from 'vitest';
+import { batchFromRows } from '../../src/format/parquet/batch.js';
 import type { Row } from '../../src/format/parquet/rows.js';
 import { cutSample, Drain, template } from '../../src/rollups/drain.js';
 import { severityKey } from '../../src/semconv/severity.js';
-import { patternRows } from '../../src/writer/pattern-rows.js';
+import { patternRows as patternRowsOf } from '../../src/writer/pattern-rows.js';
 
 const log = (text: string, extra: Row = {}): Row => ({
   body: JSON.stringify(text),
   severity_number: 9n,
   ...extra,
 });
+const patternRows = (drain: Drain, logs: readonly Row[], epoch: bigint) =>
+  patternRowsOf(drain, batchFromRows('logs', logs), epoch);
 const cell = (r: Row, k: string): unknown => Reflect.get(r, k);
 
 describe('patternRows', () => {

@@ -37,6 +37,16 @@ export interface PointNormalization {
   readonly seriesId: string;
 }
 
+/**
+ * A count from the normalizer (a double; the normalizer rejects counts above 2^53, so a safe integer in practice) as an int64 cell.
+ * A non-integer or a value outside the signed int64 range cannot be stored and becomes null, never an exception.
+ */
+function countColumn(n: number | null): bigint | null {
+  if (n === null || !Number.isInteger(n)) return null;
+  const b = BigInt(n);
+  return b >= INT64_MIN && b <= INT64_MAX ? b : null;
+}
+
 /** A report-relative time as absolute unix nanoseconds: `epoch + t`. */
 export function absolute(t: RelNanos, epoch: UnixNanos): bigint {
   return epoch + BigInt(t);
@@ -257,6 +267,16 @@ function pointJsonColumn(point: unknown, key: string): string | null {
   return v === undefined ? null : doublesJson(v);
 }
 
+/** Sets the normalization cells of a row `pointRow` built with unnormalized deltas, in place. */
+export function applyNormalization(row: Row, norm: PointNormalization): void {
+  Object.assign(row, {
+    delta_value: norm.deltaValue,
+    delta_count: countColumn(norm.deltaCount),
+    reset: norm.reset,
+    out_of_order: norm.outOfOrder,
+  });
+}
+
 /**
  * A metric point's row: identity, time, attributes, resource and scope, the normalization columns, and the value
  * columns of the point's type (gauge/sum: `value_double`; histogram: count, sum, min, max, bounds, bucket counts;
@@ -267,7 +287,7 @@ function pointJsonColumn(point: unknown, key: string): string | null {
 export function pointRow(point: MetricPointRecord, norm: PointNormalization, ctx: Context): Row {
   const resource = ctx.resources(point.resource);
   const scope = ctx.scopes(point.scope);
-  return {
+  const row: Row = {
     metric_name: point.name,
     metric_description: point.description,
     metric_unit: point.unit,
@@ -283,10 +303,12 @@ export function pointRow(point: MetricPointRecord, norm: PointNormalization, ctx
     ...pointValues(point),
     quantiles: pointJsonColumn(point.point, 'quantileValues'),
     exemplars: pointJsonColumn(point.point, 'exemplars'),
-    flags: point.flags,
-    delta_value: norm.deltaValue,
-    delta_count: norm.deltaCount === null ? null : BigInt(norm.deltaCount),
-    reset: norm.reset,
-    out_of_order: norm.outOfOrder,
+    flags: BigInt(point.flags),
+    delta_value: null,
+    delta_count: null,
+    reset: false,
+    out_of_order: false,
   };
+  applyNormalization(row, norm);
+  return row;
 }

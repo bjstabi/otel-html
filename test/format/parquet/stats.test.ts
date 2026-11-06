@@ -1,17 +1,21 @@
 import { describe, expect, test } from 'vitest';
 import type { ResolvedDashboard } from '../../../src/config/schema.js';
 import { attributesToJson } from '../../../src/format/columns.js';
+import { batchFromRows } from '../../../src/format/parquet/batch.js';
 import type { Row } from '../../../src/format/parquet/rows.js';
+import type { Table } from '../../../src/format/parquet/schema.js';
 import { fileStatistics, statisticsKeysFor } from '../../../src/format/parquet/stats.js';
 import type { AnyValue } from '../../../src/model/anyvalue.js';
 
 const attrs = (o: Record<string, AnyValue>): string => attributesToJson(new Map(Object.entries(o)));
 const NAME = 'name';
+const stats = (table: Table, rows: readonly Row[], keys: readonly string[], cap: number) =>
+  fileStatistics(table, batchFromRows(table, rows), keys, cap);
 const s = (value: string): AnyValue => ({ kind: 'string', value });
 
 describe('fileStatistics', () => {
   test('empty rows give zero rows, null times and empty value lists', () => {
-    expect(fileStatistics('spans', [], ['service_name'], 10)).toEqual({
+    expect(stats('spans', [], ['service_name'], 10)).toEqual({
       rows: 0,
       timeMin: null,
       timeMax: null,
@@ -26,7 +30,7 @@ describe('fileStatistics', () => {
       { start_time_unix_nano: 1_700_000_000_000_000_009n },
       {},
     ];
-    const st = fileStatistics('spans', rows, [], 10);
+    const st = stats('spans', rows, [], 10);
     expect(st.rows).toBe(4);
     expect(st.timeMin).toBe('1700000000000000001');
     expect(st.timeMax).toBe('1700000000000000009');
@@ -38,24 +42,24 @@ describe('fileStatistics', () => {
       { observed_time_unix_nano: 10n },
       { time_unix_nano: 0n, observed_time_unix_nano: 99n },
     ];
-    const st = fileStatistics('logs', rows, [], 10);
+    const st = stats('logs', rows, [], 10);
     expect(st.timeMin).toBe('0');
     expect(st.timeMax).toBe('50');
   });
 
   test('distinct column values are sorted strings; numbers become decimal strings', () => {
     const rows: Row[] = [{ severity_number: 17 }, { severity_number: 9 }, { severity_number: 17 }, {}];
-    expect(fileStatistics('logs', rows, ['severity_number'], 10).values).toEqual({
+    expect(stats('logs', rows, ['severity_number'], 10).values).toEqual({
       severity_number: ['17', '9'],
     });
     const named: Row[] = [{ name: 'b' }, { name: 'a' }, { name: 'b' }];
-    expect(fileStatistics('spans', named, ['name'], 10).values[NAME]).toEqual(['a', 'b']);
+    expect(stats('spans', named, ['name'], 10).values[NAME]).toEqual(['a', 'b']);
   });
 
   test('more distinct values than the cap is null; exactly the cap is kept', () => {
     const rows: Row[] = [{ name: 'a' }, { name: 'b' }, { name: 'c' }];
-    expect(fileStatistics('spans', rows, ['name'], 3).values[NAME]).toEqual(['a', 'b', 'c']);
-    expect(fileStatistics('spans', rows, ['name'], 2).values[NAME]).toBeNull();
+    expect(stats('spans', rows, ['name'], 3).values[NAME]).toEqual(['a', 'b', 'c']);
+    expect(stats('spans', rows, ['name'], 2).values[NAME]).toBeNull();
   });
 
   test('resource: reads resource_attributes, attr: reads attributes', () => {
@@ -82,13 +86,13 @@ describe('fileStatistics', () => {
       },
       {},
     ];
-    const st = fileStatistics('spans', rows, ['resource:cicd.pipeline.run.id', 'attr:k'], 10);
+    const st = stats('spans', rows, ['resource:cicd.pipeline.run.id', 'attr:k'], 10);
     expect(st.values['resource:cicd.pipeline.run.id']).toEqual(['', 'r1', 'r2']);
     expect(st.values['attr:k']).toEqual(['1.5', '7', 'true']);
   });
 
   test('keys a table cannot answer give null, never an empty list', () => {
-    const st = fileStatistics(
+    const st = stats(
       'traces',
       [{ trace_id: 'a', resource_attributes: '{"a":1}' }],
       ['severity_number', 'bogus:x', 'attributes', 'attr:k', 'resource:k'],
@@ -101,9 +105,7 @@ describe('fileStatistics', () => {
       'attr:k': null,
       'resource:k': null,
     });
-    expect(
-      fileStatistics('spans', [{ attributes: '{"a":1}' }], ['attributes', 'unknown'], 10).values,
-    ).toEqual({
+    expect(stats('spans', [{ attributes: '{"a":1}' }], ['attributes', 'unknown'], 10).values).toEqual({
       attributes: null,
       unknown: null,
     });
@@ -111,11 +113,11 @@ describe('fileStatistics', () => {
 
   test('an empty string is a value; -0 is written as "-0"', () => {
     const rows: Row[] = [{ scope_name: '' }, { scope_name: 'x' }, { scope_name: null }, {}];
-    expect(fileStatistics('spans', rows, ['scope_name'], 10).values).toEqual({ scope_name: ['', 'x'] });
+    expect(stats('spans', rows, ['scope_name'], 10).values).toEqual({ scope_name: ['', 'x'] });
     const d: Row[] = [{ attributes: attrs({ k: { kind: 'double', value: -0 } }) }];
-    expect(fileStatistics('spans', d, ['attr:k'], 10).values['attr:k']).toEqual(['-0']);
+    expect(stats('spans', d, ['attr:k'], 10).values['attr:k']).toEqual(['-0']);
     const m: Row[] = [{ value_double: -0 }];
-    expect(fileStatistics('points', m, ['value_double'], 10).values).toEqual({ value_double: ['-0'] });
+    expect(stats('points', m, ['value_double'], 10).values).toEqual({ value_double: ['-0'] });
   });
 });
 

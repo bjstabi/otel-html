@@ -172,4 +172,19 @@ describe('parquet codec', () => {
   test('an empty row list encodes to a valid empty table', () => {
     expect(decodeTable('logs', encodeTable('logs', [], opts))).toEqual([]);
   });
+
+  test('logs with no time sort by observed time, and rows with neither come last', () => {
+    const rows: Row[] = [
+      { time_unix_nano: null, observed_time_unix_nano: 5n, body: 'a' },
+      { time_unix_nano: 3n, body: 'b' },
+      { time_unix_nano: null, observed_time_unix_nano: null, body: 'c' },
+      { time_unix_nano: 9n, body: 'd' },
+    ];
+    expect(decodeTable('logs', encodeTable('logs', rows, opts)).map((r) => Reflect.get(r, 'body'))).toEqual([
+      'b',
+      'a',
+      'd',
+      'c',
+    ]);
+  });
 });

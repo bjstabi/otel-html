@@ -1,6 +1,14 @@
 import type { PartitionEntry, PartitionFile } from '../format/manifest.js';
 import './parquet-wasm-source.js';
-import { encodeTable } from '../format/parquet/codec.js';
+import {
+  batchFromRows,
+  type ColumnBatch,
+  concatBatches,
+  emptyColumns,
+  type MutableBatch,
+  pushRow,
+} from '../format/parquet/batch.js';
+import { checkRow, encodeColumns } from '../format/parquet/codec.js';
 import type { Row } from '../format/parquet/rows.js';
 import { TABLES, type Table } from '../format/parquet/schema.js';
 import { fileStatistics } from '../format/parquet/stats.js';
@@ -15,7 +23,7 @@ export interface PartitionWriterOptions {
   facetValueCap: number;
   nextPartition: number;
   /** Derives rows for other tables from the rows a cut took; see `Derived`. */
-  derive?: (taken: Readonly<Record<Table, readonly Row[]>>) => Derived;
+  derive?: (taken: Readonly<Record<Table, ColumnBatch>>) => Derived;
 }
 
 /**
@@ -28,19 +36,22 @@ interface Derived {
 }
 
 const ROW_OVERHEAD_BYTES = 64;
+const LIST_ELEMENT_BYTES = 8;
 
-function emptyHeld(): Record<Table, Row[]> {
-  return { spans: [], logs: [], points: [], traces: [], patterns: [] };
+function emptyHeld(): Record<Table, MutableBatch> {
+  const held = {} as Record<Table, MutableBatch>;
+  for (const t of TABLES) held[t] = { length: 0, cells: emptyColumns(t) };
+  return held;
 }
 
 /**
- * Holds rows per table and writes them as one partition (a directory of Parquet files) on `cut`. It never touches
+ * Holds rows per table, as one array per column, and writes them as one partition (a directory of Parquet files) on `cut`. It never touches
  * the manifest or the session state: the caller commits the returned entry.
  */
 export class PartitionWriter {
   readonly #fs: FileSystem;
   readonly #opts: PartitionWriterOptions;
-  #held: Record<Table, Row[]> = emptyHeld();
+  #held: Record<Table, MutableBatch> = emptyHeld();
   #rows = 0;
   #bytes = 0;
   #next: number;
@@ -52,11 +63,20 @@ export class PartitionWriter {
     this.#next = opts.nextPartition;
   }
 
+  /**
+   * Holds a copy of the row's cells. The row must have passed `checkRow`: held rows are not checked again when they
+   * are encoded (derived rows are).
+   */
   add(table: Table, row: Row): void {
-    this.#held[table].push(row);
+    const h = this.#held[table];
+    pushRow(table, h.cells, row);
+    h.length++;
     this.#rows++;
     let bytes = ROW_OVERHEAD_BYTES;
-    for (const v of Object.values(row)) if (typeof v === 'string') bytes += v.length;
+    for (const v of Object.values(row)) {
+      if (typeof v === 'string') bytes += v.length;
+      else if (Array.isArray(v)) bytes += LIST_ELEMENT_BYTES * v.length;
+    }
     this.#bytes += bytes;
   }
 
@@ -65,7 +85,7 @@ export class PartitionWriter {
     return this.#rows;
   }
 
-  /** Estimated bytes held, for the flush-by-size rule (sum of string cell lengths plus 64 per row). */
+  /** Estimated bytes held, for the flush-by-size rule (string cell lengths, 8 per list element, and 64 per row). */
   get pendingBytes(): number {
     return this.#bytes;
   }
@@ -86,7 +106,8 @@ export class PartitionWriter {
     if (this.#rows === 0) return null;
     this.#cutting = true;
     const n = this.#next;
-    const taken = this.#held;
+    const taken = {} as Record<Table, ColumnBatch>;
+    for (const t of TABLES) taken[t] = this.#held[t];
     const takenRows = this.#rows;
     const takenBytes = this.#bytes;
     this.#held = emptyHeld();
@@ -95,32 +116,36 @@ export class PartitionWriter {
     try {
       // Synchronous, before any await: it sees exactly the rows this cut took. A throw restores them below.
       const derived = this.#opts.derive?.(taken);
-      const encoded: { table: Table; rows: Row[]; bytes: Uint8Array }[] = [];
+      const encoded: { table: Table; batch: ColumnBatch; bytes: Uint8Array }[] = [];
       for (const table of TABLES) {
-        const rows = [...taken[table], ...(derived?.rows[table] ?? [])];
-        if (rows.length === 0) continue;
+        // Held rows were checked when the session accepted them; derived rows were not.
+        const derivedRows = derived?.rows[table] ?? [];
+        for (const [i, row] of derivedRows.entries()) checkRow(table, row, i);
+        const extra = batchFromRows(table, derivedRows);
+        const batch = extra.length === 0 ? taken[table] : concatBatches(table, taken[table], extra);
+        if (batch.length === 0) continue;
         encoded.push({
           table,
-          rows,
-          bytes: encodeTable(table, rows, { rowGroupRows: this.#opts.rowGroupRows }),
+          batch,
+          bytes: encodeColumns(table, batch, { rowGroupRows: this.#opts.rowGroupRows }),
         });
       }
       await this.#fs.mkdirp(at(this.#opts.out, partitionDir(n)));
       const files: Partial<Record<Table, PartitionFile>> = {};
-      for (const { table, rows, bytes } of encoded) {
+      for (const { table, batch, bytes } of encoded) {
         const path = partitionFilePath(n, table);
         await this.#fs.writeBytes(at(this.#opts.out, path), bytes);
         files[table] = {
           path,
           bytes: bytes.length,
-          ...fileStatistics(table, rows, this.#opts.statisticsKeys[table], this.#opts.facetValueCap),
+          ...fileStatistics(table, batch, this.#opts.statisticsKeys[table], this.#opts.facetValueCap),
         };
       }
       derived?.commit?.(); // before the number advances: a throw here leaves the cut retryable
       this.#next = n + 1;
       return { n, source, files };
     } catch (e) {
-      for (const table of TABLES) this.#held[table] = [...taken[table], ...this.#held[table]];
+      for (const table of TABLES) this.#held[table] = concatBatches(table, taken[table], this.#held[table]);
       this.#rows += takenRows;
       this.#bytes += takenBytes;
       throw e;

@@ -208,6 +208,14 @@ describe('row mapping', () => {
     expect(cell(row, 'event_name')).toBe('user.login');
   });
 
+  test('a delta count that cannot be an int64 becomes null instead of throwing', () => {
+    const n = { deltaValue: null, reset: false, outOfOrder: false, seriesId: 's' };
+    expect(cell(pointRow(point(), { ...n, deltaCount: 2 ** 60 }, ctx), 'delta_count')).toBe(2n ** 60n);
+    for (const bad of [1.5, 2 ** 70, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(cell(pointRow(point(), { ...n, deltaCount: bad }, ctx), 'delta_count')).toBeNull();
+    }
+  });
+
   test('a point row carries the normalization columns verbatim', () => {
     const row = pointRow(
       point(),

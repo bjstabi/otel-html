@@ -89,10 +89,16 @@ describe('PartitionWriter', () => {
     expect(w.pendingBytes).toBe(4 + 2 + 3 + 64);
   });
 
+  test('pendingBytes counts 8 bytes per list element on top of the strings and the row overhead', () => {
+    const { w } = make();
+    w.add('points', { metric_name: 'm', explicit_bounds: [1, 2, 3], bucket_counts: [1n, 2n, 3n, 4n] });
+    expect(w.pendingBytes).toBe(1 + 64 + 8 * 7);
+  });
+
   test('a failed encode keeps the rows held and the partition number', async () => {
-    const { fs, w } = make();
+    const { fs, w } = make(0, () => ({ rows: { traces: [{ trace_id: 5 }] } }));
     w.add('spans', span(1, 'a', 100n));
-    w.add('logs', { time_unix_nano: 'not a bigint', body: 'b', scope_name: 'a', service_name: 'svc' });
+    w.add('logs', log(1, 'a'));
     await expect(w.cut('flush:1')).rejects.toThrow();
     expect(w.pendingRows).toBe(2);
     expect(w.nextPartition).toBe(0);
@@ -120,6 +126,7 @@ describe('PartitionWriter', () => {
 
   test('a write failure puts the taken rows back in front and a retry numbers the partition the same', async () => {
     const { fs, w } = make();
+    // Equal sort keys, so the output order is the order the rows were held in.
     w.add('spans', span(1, 'a', 100n));
     w.add('logs', log(1, 'a'));
     fs.failNextWrite('000000/logs.parquet');
@@ -127,7 +134,7 @@ describe('PartitionWriter', () => {
     const cut = w.cut('flush:1');
     const failed = cut.catch((e: unknown) => e);
     await gate.reached;
-    w.add('spans', span(2, 'a', 200n));
+    w.add('spans', span(2, 'a', 100n));
     gate.release();
     expect(await failed).toBeInstanceOf(Error);
     expect(w.pendingRows).toBe(3);
@@ -195,6 +202,31 @@ describe('PartitionWriter', () => {
       await expect(w.cut('flush:1')).rejects.toThrow('commit failed');
       expect(w.nextPartition).toBe(0);
       expect(w.pendingRows).toBe(1);
+    });
+
+    test('a derived row the codec cannot store fails the cut; the held rows come back in order', async () => {
+      let bad = true;
+      const { fs, w } = make(0, () => ({
+        rows: { traces: [bad ? { ...trace('a'), span_count: 'x' } : trace('a')] },
+      }));
+      w.add('spans', span(2, 'a', 100n)); // equal sort keys: the output order is the held order
+      await expect(w.cut('flush:1')).rejects.toThrow();
+      w.add('spans', span(1, 'a', 100n));
+      expect(w.pendingRows).toBe(2);
+      bad = false;
+      const e = await w.cut('flush:1');
+      expect(e?.files.spans?.rows).toBe(2);
+      const rows = decodeTable('spans', await fs.readBytes('/out/data/partitions/000000/spans.parquet'));
+      expect(rows.map((r) => Reflect.get(r, 'trace_id'))).toEqual(['t2', 't1']);
+    });
+
+    test('a derived row with a column outside the table fails the cut instead of dropping the cell', async () => {
+      const { fs, w } = make(0, () => ({ rows: { traces: [{ ...trace('a'), span_cuont: 1 }] } }));
+      w.add('spans', span(1, 'a', 100n));
+      await expect(w.cut('flush:1')).rejects.toThrow(/unknown column/);
+      expect(w.pendingRows).toBe(1);
+      expect(w.nextPartition).toBe(0);
+      expect(await fs.exists('/out/data/partitions/000000/traces.parquet')).toBe(false);
     });
   });
 });

@@ -265,13 +265,9 @@ describe('PartitionSession', () => {
     expect(manifest(w).totals).toEqual({ spans: 1, logs: 0, metrics: 0 });
   });
 
-  test('metrics are rejected and merge input is not supported yet', async () => {
+  test('merge input is not supported yet', async () => {
     const w = createTestWriter();
     const s = await open(w);
-    const metrics = otlp({ resourceMetrics: [] });
-    const e = await failure(s.add(metrics, 'm.json'));
-    expect(e.code).toBe('usage');
-    expect(e.message).toContain('metrics are not written in format 4 yet');
     const r = await failure(
       s.addRecords({ signal: 'spans', rows: [], resources: [], scopes: [], epoch: 0n as never }),
     );
