@@ -137,8 +137,8 @@ const POINTS: readonly ColumnDef[] = [
 
 const TRACES: readonly ColumnDef[] = [
   required('trace_id', 'utf8'),
-  required('start_time_unix_nano', 'int64'),
-  required('end_time_unix_nano', 'int64'),
+  col('start_time_unix_nano', 'int64'),
+  col('end_time_unix_nano', 'int64'),
   required('span_count', 'int32'),
   required('error_count', 'int32'),
   col('root_service', 'utf8'),
@@ -151,8 +151,8 @@ const PATTERNS: readonly ColumnDef[] = [
   required('cluster_id', 'int64'),
   required('template', 'utf8'),
   required('count', 'int64'),
-  required('first_time_unix_nano', 'int64'),
-  required('last_time_unix_nano', 'int64'),
+  col('first_time_unix_nano', 'int64'),
+  col('last_time_unix_nano', 'int64'),
   col('severity_counts', 'json'),
   col('sample', 'utf8'),
 ];

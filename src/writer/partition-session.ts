@@ -19,6 +19,7 @@ import {
 import type { OtlpRequest } from '../model/otlp-json.js';
 import { type LogRecordRecord, logTime, type SpanRecord } from '../model/records.js';
 import type { LogTarget, SpanTarget } from '../ottl/contexts.js';
+import { Drain } from '../rollups/drain.js';
 import { severityKey } from '../semconv/severity.js';
 import {
   at,
@@ -33,6 +34,7 @@ import { inheritDashboards } from './inherit-config.js';
 import { acquireLock, type LockHandle } from './lock.js';
 import { DEFAULT_TITLE, type Drops, type FolderState, iso } from './open-common.js';
 import { PartitionWriter } from './partition-writer.js';
+import { patternRows } from './pattern-rows.js';
 import type { SpanHandle } from './ports.js';
 import type {
   AddOptions,
@@ -43,6 +45,7 @@ import type {
   WriterDeps,
   WriterSession,
 } from './session.js';
+import { traceRows } from './trace-summaries.js';
 import { writeViewerAssets } from './viewer-assets.js';
 
 /** The DuckDB-WASM version the report's engine files must match; Task 7.1 moves this to `engine-assets.ts`. */
@@ -52,6 +55,7 @@ interface Restored {
   lock: LockHandle;
   epoch: UnixNanos | null;
   dedupe: DedupeSet;
+  drain: Drain;
   nextPartition: number;
   checkpoint: number;
   flushed: number[];
@@ -86,6 +90,7 @@ export async function openPartitionSession(
         lock,
         epoch: null,
         dedupe: new DedupeSet(config.writer.dedupeCapacity),
+        drain: new Drain(),
         nextPartition: 0,
         checkpoint: 0,
         flushed: [],
@@ -108,6 +113,7 @@ export async function openPartitionSession(
             ? null
             : parseUnixNanos(cp.state.epochUnixNano, 'state.epochUnixNano'),
         dedupe: DedupeSet.from(cp.state.dedupe, config.writer.dedupeCapacity),
+        drain: cp.state.drain === null ? new Drain() : Drain.from(cp.state.drain, 'state.drain'),
         nextPartition: cp.state.nextPartition,
         checkpoint: cp.state.checkpoint,
         // A report left incomplete was interrupted: its flush partitions still await compaction. A closed one
@@ -156,6 +162,8 @@ class PartitionSession implements WriterSession {
   readonly #drop: Drops;
   readonly #lock: LockHandle;
   readonly #dedupe: DedupeSet;
+  /** The committed log-template state: swapped in only after a cut's files were written. */
+  #drain: Drain;
   readonly #writer: PartitionWriter;
   readonly #statisticsKeys: Record<Table, string[]>;
   readonly #createdAt: string;
@@ -192,6 +200,7 @@ class PartitionSession implements WriterSession {
     this.#drop = drop;
     this.#lock = r.lock;
     this.#dedupe = r.dedupe;
+    this.#drain = r.drain;
     this.#statisticsKeys = Object.fromEntries(TABLES.map((t) => [t, statisticsKeysFor(t, config)])) as Record<
       Table,
       string[]
@@ -202,6 +211,15 @@ class PartitionSession implements WriterSession {
       statisticsKeys: this.#statisticsKeys,
       facetValueCap: config.writer.facetValueCap,
       nextPartition: r.nextPartition,
+      derive: (taken) => {
+        const p = patternRows(this.#drain, taken.logs, this.#epoch ?? 0n);
+        return {
+          rows: { traces: traceRows(taken.spans, taken.logs), patterns: p.rows },
+          commit: () => {
+            this.#drain = p.drain;
+          },
+        };
+      },
     });
     this.#createdAt = r.createdAt;
     this.#title = r.title;
@@ -697,7 +715,7 @@ class PartitionSession implements WriterSession {
       flushPartitions: [...this.#flushed],
       dedupe: s.dedupe,
       metricStreams: null,
-      drain: null,
+      drain: this.#drain.toJSON(),
       statisticsKeys: this.#statisticsKeys,
     };
   }
