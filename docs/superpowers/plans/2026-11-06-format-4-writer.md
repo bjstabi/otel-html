@@ -24,8 +24,28 @@
 
 ## Kickoff prompts for the sessions that follow
 
-Each is pasted into a fresh session after `/clear`, in order; each waits for the previous plan to have merged to
-`feat/format-4`. They are kept here so no session has to remember them.
+The maintainer works from the console only and does not open files, so a fresh session finds its own job here.
+**Which session is next** is decided by what exists on `feat/format-4` (`git fetch origin && git log origin/feat/format-4`,
+`ls docs/superpowers/plans/`, `gh pr list --base feat/format-4 --state all`):
+
+1. No PR with title prefix `feat(format): Arrow schemas` merged → **session A** (execute this plan; resume at the first
+   plan task whose PR is not merged).
+2. This plan's nine PRs merged and no `*-format-4-viewer.md` plan → **session B**.
+3. The viewer plan exists and its PRs are not all merged → **session C** (execute it; its prompt is in this section once
+   session B adds it).
+4. The viewer plan is merged and no `*-format-4-metrics.md` → **session D**; metrics plan exists, not merged → execute it.
+5. Metrics merged and no `*-format-4-host.md` → **session E**; host plan exists, not merged → execute it.
+6. Plans 1–3 merged and no PR from `feat/format-4` to `main` → **session F**.
+7. The publishing plan is written only after session C's plan is merged (**session G**), and executed after that.
+
+A session says which one it picked and why before starting. The universal prompt the maintainer pastes after every
+`/clear` is `/format-4` (the project skill in `.claude/skills/format-4/SKILL.md`), or, without the skill:
+
+```
+Continue the format-4 work. Read the "Kickoff prompts" section of docs/superpowers/plans/2026-11-06-format-4-writer.md on branch feat/format-4, decide which session is next from the rules there, say which and why, then run that session's prompt exactly as written.
+```
+
+Each prompt below is what that session runs; each waits for the previous plan to have merged to `feat/format-4`.
 
 **Session A, this plan:**
 
