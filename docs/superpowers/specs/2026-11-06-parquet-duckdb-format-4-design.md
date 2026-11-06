@@ -59,6 +59,8 @@ Anti-goals (a result that works but fails the design)
 - Engineering standards of design 2026-10-25 §11.1: strongly typed, fail fast, dependencies injected, declarative.
 - DuckDB-WASM is the engine (`@duckdb/duckdb-wasm`, stable releases only; the `latest` npm tag points at dev builds and
   must be pinned past). Its binary is ~34 MB raw, ~8 MB gzipped, ~10 MB as base64 of gzip.
+- Mosaic (`@uwdata/mosaic-core`, `@uwdata/mosaic-sql`) is 0.x: pinned exact, wrapped in `src/viewer/data/`, never
+  imported by components, so an API change is one module's problem.
 
 ## 4. Approaches considered
 
@@ -226,49 +228,64 @@ using it beyond `service_name`, `resource_name`, `host_name`.
 
 ## 7. The viewer
 
-### 7.1 Data source
+### 7.1 Mosaic inside the data layer
 
-`DataSource` (`src/viewer/data/data-source.ts`) stays the only interface pages and widgets call. Its two
-implementations become:
+The viewer adopts **Mosaic** (`@uwdata/mosaic-core`, `@uwdata/mosaic-sql`; UW Interactive Data Lab, BSD, pinned exact)
+as its query layer, confined to `src/viewer/data/` and `src/query/sql/`:
 
-- `DuckDbDataSource`: starts DuckDB-WASM (§7.4), registers the report's files (buffers from the base64 wrappers in
-  `local` format, URLs with `forceFullHTTPReads: false` in `site` format), and runs SQL built by the query generator.
-- `RemoteDataSource`: posts the same query spec as JSON to the served endpoint (§8) and reads the same result shapes.
+- A Mosaic **Coordinator** owns the connection: the `wasmConnector` over DuckDB-WASM in the page (both output formats),
+  or the REST connector to a host (§8). It consolidates concurrent queries, caches results, and runs its
+  pre-aggregation for clients that opt in (the timeline brush).
+- Every page and widget is a **MosaicClient** behind a small React hook (`useMosaicQuery(build, { filterBy })`):
+  `build` returns a mosaic-sql `Query`, the hook delivers the Arrow result mapped into the result types the components
+  consume today (facet counts, time buckets, RED series, histograms, rows). Components never import Mosaic.
+- Shared filters are Mosaic **Selections**: the explorer's filter (condition, text, window), a dashboard scope's
+  condition, window and trace filter, and the brush. A client declares `filterBy`, and the Coordinator re-queries the
+  whole filter group when a Selection changes. Selection clauses are mosaic-sql predicates produced by the OTTL
+  translator (§7.3).
 
-The eager and windowed strategies, `chunk-window.ts`, `eager.ts`, `windowed.ts`, the log equivalents, `load.ts` and
-the span/log scan runs are deleted. `partial` results and "Scan entire run" disappear from the UI: every answer is
-exact over the pruned set, and the pruned set is the whole report.
+`DataSource` stays the boundary pages see for everything that is not a query (manifest, trace detail loading, metric
+catalog); its two implementations differ only in the connector they hand the Coordinator. The eager and windowed
+strategies, `chunk-window.ts`, `eager.ts`, `windowed.ts`, the log equivalents, `load.ts` and the span/log scan runs are
+deleted. `partial` results and "Scan entire run" disappear from the UI: every answer is exact.
 
-### 7.2 The query spec
+### 7.2 Query construction
 
-The existing span and log query objects generalize into one spec every page and widget uses:
-
-```
-{ signal: 'spans' | 'logs' | 'points' | 'traces',
-  condition: OTTL | null, text: string, window: TimeWindow | null,
-  group: GroupKey[],              // facet paths, time_bucket(width), trace_id
-  aggregates: Aggregate[],        // count, count_if(...), sum/avg/min/max/pNN(column), distinct_count(...)
-  sort, limit, columns }          // for row lists
-```
-
-The generator turns a spec into SQL in one module (`src/query/sql/`), shared by the viewer and the served engine.
-Results come back as Arrow tables and are mapped into the result types the components already consume (facet counts,
-time buckets, RED series, histograms, rows). Metric queries (`{ metric, show, by, where, fn }` and formulas) compile
-through the same generator; `fn` (rate, increase, …) and formulas become SQL window functions or post-processing,
+There is no home-grown spec-to-SQL string generator. `src/query/sql/` holds typed builders on mosaic-sql for the
+shapes the product needs (facet counts with caps and "other", time buckets at a width, RED series, duration
+percentiles, trace rows, row lists with sort and limit, metric queries with `by`, `where`, `fn` and formulas) and the
+OTTL translator. Builders return mosaic-sql `Query` objects, so escaping and dialect belong to the library. Metric
+`fn`s (rate, increase, …) become window functions where SQL expresses them and post-processing where it does not,
 the builder's call per function.
 
 ### 7.3 OTTL to SQL
 
-The viewer's OTTL parser already yields an AST. A translator covers: comparisons on paths (`name`, `kind`,
-`status.code`, `severity_number`, `attributes[...]`, `resource.attributes[...]`, `instrumentation_scope.name`, span
-duration, trace and span ids), string and numeric literals, `and`/`or`/`not`, `IsMatch` (to `regexp_matches`), `nil`
-checks, `IsRootSpan()`, and the converters the UI's filter tokens emit today. A condition that uses a converter
-outside this set is not rejected: the translatable part becomes the SQL `WHERE`, and the whole condition is
-re-evaluated in JS over the rows that come back (row lists) or the query falls back to fetching the matching rows'
-ids first (aggregates). The translator reports which path it took, and the UI shows a small "evaluated in the
-browser" note so a slow query explains itself.
+The viewer's OTTL parser already yields an AST. A translator emits mosaic-sql expression nodes for: comparisons on
+paths (`name`, `kind`, `status.code`, `severity_number`, `attributes[...]`, `resource.attributes[...]`,
+`instrumentation_scope.name`, span duration, trace and span ids), string and numeric literals, `and`/`or`/`not`,
+`IsMatch` (to `regexp_matches`), `nil` checks, `IsRootSpan()`, and the converters the UI's filter tokens emit today.
+A condition that uses a converter outside this set is not rejected: the translatable part becomes the predicate, and
+the whole condition is re-evaluated in JS over the rows that come back (row lists) or the query falls back to fetching
+the matching rows' ids first (aggregates). The translator reports which path it took, and the UI shows a small
+"evaluated in the browser" note so a slow query explains itself.
 
-### 7.4 Starting the engine
+### 7.4 The schema contract: views
+
+Queries name only five **views**: `spans`, `logs`, `points`, `traces`, `patterns`, never files. The viewer creates them
+after registering the report's files, as `read_parquet([...])` over the partitions the manifest lists (after pruning,
+a query may use a narrower temporary view over the pruned files; the builder decides whether pruning is a view per
+query or a `WHERE` on a `filename` column). A host creates the same views server-side. Column names follow
+OpenTelemetry Arrow where it has a name (§6.1). The `spans` view also resolves **span versions**: for one
+`(trace_id, span_id)` it keeps the latest row whose `provisional` attribute is unset, else the latest provisional row
+(`QUALIFY row_number() OVER (PARTITION BY trace_id, span_id ORDER BY provisional, time_unix_nano DESC) = 1`), so a
+span re-emitted with better information supersedes the earlier one without rewriting a partition (used by incremental
+CI publishing, separate design). Compaction drops superseded rows for good.
+
+The views, their columns and the version rule are **the contract between the viewer and any backend**: a store that
+holds telemetry differently satisfies it by defining the same views. They are documented in a generated page under
+`docs/format/`, checked by a golden test, and versioned with the format version.
+
+### 7.5 Starting the engine
 
 Site format: the worker is created from the worker file's URL and the engine from the `.wasm` URL. Local format: the
 base64 scripts register through `__OH__.push` like data files; the page gunzips the engine with
@@ -277,33 +294,37 @@ worker at `file://`, §12), and creates the worker from a blob URL of its text. 
 `filesystem: { forceFullHTTPReads: false }` in site format. Base64 strings and decoded buffers are released once
 registered (the spike held them and sat at 240 MB of JS heap).
 
-### 7.5 Pages and widgets
+### 7.6 Pages and widgets
 
-Every page and widget expresses its needs as specs. Specifically: the Services page becomes one grouped query plus
-one time-bucketed query (today it issues one scan per service); the dashboard's toplist, table, traces and logs
-widgets send specs that share their scope's condition and window; the trace panel reads the `traces` row and then the
-spans with that `trace_id`; the Logs explorer's patterns view reads `patterns`. Concurrent specs with the same
-`condition` and `window` are consolidated by the data source into one connection and DuckDB's own caching; no bespoke
-sharing code.
+Every page and widget is a client with a query and a `filterBy`. Specifically: the Services page becomes one grouped
+query plus one time-bucketed query (today it issues one scan per service); the dashboard's toplist, table, traces and
+logs widgets share the scope Selection; the trace panel reads the `traces` row and then the spans with that
+`trace_id`; the Logs explorer's patterns view reads `patterns`. Sharing between concurrent clients is the
+Coordinator's job; no bespoke code.
 
-## 8. Serving: one protocol, pluggable backends
+## 8. Serving: SQL on the wire, a locked-down engine
 
 `otel-html host <report> [--port]` (new command; name is the designer's call) serves a report folder over HTTP with:
 
 - the static files (so the viewer loads as from any host), and
-- `POST /query`: body is a query spec (§7.2), response is Arrow IPC (or JSON for small results; builder's call,
-  one of the two). Never raw SQL: the server generates SQL with the shared generator, so the browser's protocol is
-  the spec, and a backend that is not DuckDB implements the spec, not a dialect.
+- **Mosaic's REST connector protocol**: a JSON request carrying SQL, an Arrow IPC (or JSON) response, exactly as
+  Mosaic's own servers answer it, so the viewer uses the stock connector and `otel-html host` is interchangeable with
+  Mosaic's Python, Rust or Go servers given the same views over the same files.
 
-The server-side `QueryBackend` interface mirrors `DataSource` at the spec level. The one implementation here runs
-DuckDB over the report's partitions (through the same WASM build in Node, or the native `@duckdb/node-api` as an
-optional peer dependency for speed; the builder measures and picks, keeping the WASM path as the default so the
-package stays free of native dependencies). The receiver (`serve`, `run`) may expose the same endpoint over the
-report it is writing, reading committed partitions only; that is optional and deferred to the plan if it costs more
-than a flag.
+The **engine policy** is part of the contract: DuckDB opened read-only, `enable_external_access = false` and the
+configuration locked, a statement timeout, a result-size cap, and no `exec` requests from clients (the views are
+created by the server at startup from the manifest, and that is the only DDL). SQL on the wire is acceptable only
+under this policy, and the tests assert it (a query that reads a local file or writes is refused).
 
-A `RemoteDataSource` in the viewer is selected when `index.html` is loaded from a host that answers `/query` (a
-`<meta>` written by `host`, or a probe; builder's call), otherwise the viewer runs the engine itself.
+Backend plurality is DuckDB's: `ATTACH` reaches Postgres, MySQL, SQLite, Iceberg, Delta and object stores, and the
+views over an attached store are a configuration matter, not viewer code. `host --attach` is out of scope here;
+the views make it possible. The engine in `host` is the same WASM build run in Node by default (no native
+dependency), with the native `@duckdb/node-api` as an optional peer dependency for speed; the builder measures and
+picks the default. The receiver (`serve`, `run`) may expose the same endpoint over the report it is writing, reading
+committed partitions only; optional, deferred to the plan if it costs more than a flag.
+
+The viewer picks the REST connector when `index.html` carries a `<meta name="otel-html-host">` tag that `host` writes
+into the page it serves, otherwise it runs the engine itself.
 
 ## 9. Writer
 
@@ -383,7 +404,8 @@ Real CI report, 2.17M spans, `@duckdb/duckdb-wasm` 1.32.0, headless browsers on 
 - Opening from disk stays supported. The user chooses the output format: base64 scripts for local use and
   development, plain Parquet with range reads for GitHub Actions and static sites.
 - DuckDB-WASM in the browser, DuckDB behind `otel-html` when served, one SQL generation path.
-- The browser speaks `otel-html`'s protocol; vendor-neutral backends plug in on the server side.
+- Mosaic (core and sql) is the viewer's query layer; SQL travels on the wire to a locked-down engine; the five views
+  are the schema contract; vendor plurality is DuckDB `ATTACH` behind the same views (2026-11-06).
 - Partitions per flush, append-only, retention by deletion; merge by copy.
 
 ## 14. Designer's calls (flag if wrong)
@@ -392,7 +414,8 @@ Real CI report, 2.17M spans, `@duckdb/duckdb-wasm` 1.32.0, headless browsers on 
 - Attributes as tagged JSON text, with only `service_name`, `resource_name`, `host_name` promoted.
 - `traces` and `patterns` as writer-maintained tables rather than derived at query time.
 - Metric levels dropped unless the scale budget forces a downsampled table.
-- `host` as the command name; `/query` takes the spec, never SQL.
+- `host` as the command name; it speaks Mosaic's REST connector protocol under the engine policy of §8.
+- The span version rule lives in the `spans` view (query time), not in the writer.
 - OTTL conditions outside the translatable subset fall back to browser evaluation rather than erroring.
 - Milestones 1–3 ship together as one format bump.
 - The publisher keeps rebuilding the rolling report from the retained runs (merge by copy, then `--compact`) rather
@@ -404,7 +427,7 @@ Real CI report, 2.17M spans, `@duckdb/duckdb-wasm` 1.32.0, headless browsers on 
 
 - The Parquet encoder library (§9) and the row-group size within 50k–100k rows.
 - The exact OTel Arrow column names adopted and the documented departures.
-- Arrow IPC versus JSON for `/query` responses, and how the viewer detects a `host`.
+- Pruning as a per-query temporary view or a `filename` predicate; the shape of the React hook over `MosaicClient`;
+  which clients opt into pre-aggregation.
 - Which metric `fn`s become SQL and which post-process.
-- How specs with the same condition and window share work inside `DuckDbDataSource`.
 - The e2e static server's range implementation and the re-baselined budgets.
