@@ -287,7 +287,7 @@ export function applyNormalization(row: Row, norm: PointNormalization): void {
 export function pointRow(point: MetricPointRecord, norm: PointNormalization, ctx: Context): Row {
   const resource = ctx.resources(point.resource);
   const scope = ctx.scopes(point.scope);
-  return {
+  const row: Row = {
     metric_name: point.name,
     metric_description: point.description,
     metric_unit: point.unit,
@@ -304,9 +304,11 @@ export function pointRow(point: MetricPointRecord, norm: PointNormalization, ctx
     quantiles: pointJsonColumn(point.point, 'quantileValues'),
     exemplars: pointJsonColumn(point.point, 'exemplars'),
     flags: BigInt(point.flags),
-    delta_value: norm.deltaValue,
-    delta_count: countColumn(norm.deltaCount),
-    reset: norm.reset,
-    out_of_order: norm.outOfOrder,
+    delta_value: null,
+    delta_count: null,
+    reset: false,
+    out_of_order: false,
   };
+  applyNormalization(row, norm);
+  return row;
 }

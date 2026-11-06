@@ -10,17 +10,18 @@ export interface ColumnBatch {
   readonly cells: Readonly<Record<string, readonly unknown[]>>;
 }
 
-/** The arrays a writer appends to; `snapshot` views them as a `ColumnBatch`. */
 export type MutableColumns = Record<string, unknown[]>;
+
+/** A `ColumnBatch` whose arrays a writer still appends to. */
+export interface MutableBatch {
+  length: number;
+  cells: MutableColumns;
+}
 
 export function emptyColumns(table: Table): MutableColumns {
   const cells: MutableColumns = {};
   for (const c of TABLE_COLUMNS[table]) cells[c.name] = [];
   return cells;
-}
-
-export function emptyBatch(table: Table): ColumnBatch {
-  return { length: 0, cells: emptyColumns(table) };
 }
 
 /** Copies one row's cells onto the column arrays (a column the row lacks gets `null`; unknown keys are ignored). */
@@ -35,20 +36,9 @@ export function batchFromRows(table: Table, rows: readonly Row[]): ColumnBatch {
 }
 
 /** `a`'s rows followed by `b`'s, as a new batch. */
-export function concatBatches(
-  table: Table,
-  a: ColumnBatch,
-  b: ColumnBatch,
-): { length: number; cells: MutableColumns } {
+export function concatBatches(table: Table, a: ColumnBatch, b: ColumnBatch): MutableBatch {
   const cells: MutableColumns = {};
   for (const c of TABLE_COLUMNS[table])
     cells[c.name] = [...(a.cells[c.name] ?? []), ...(b.cells[c.name] ?? [])];
   return { length: a.length + b.length, cells };
-}
-
-/** Row `i` of a batch as a row object (every column present). For checks and tests; not for bulk use. */
-export function rowAt(table: Table, batch: ColumnBatch, i: number): Row {
-  const row: Row = {};
-  for (const c of TABLE_COLUMNS[table]) row[c.name] = batch.cells[c.name]?.[i] ?? null;
-  return row;
 }

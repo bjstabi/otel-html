@@ -11,16 +11,74 @@ import {
 import { Compression, Table as WasmTable, WriterPropertiesBuilder, writeParquet } from 'parquet-wasm/esm';
 import { describe, expect, test } from 'vitest';
 import { batchFromRows } from '../../../src/format/parquet/batch.js';
-import { encodeColumns } from '../../../src/format/parquet/codec.js';
+import { assertInt32Offset, encodeColumns } from '../../../src/format/parquet/codec.js';
 import type { Row } from '../../../src/format/parquet/rows.js';
-import { arrowSchema, SORT_COLUMNS, TABLE_COLUMNS } from '../../../src/format/parquet/schema.js';
+import {
+  arrowSchema,
+  type ColumnDef,
+  SORT_COLUMNS,
+  TABLE_COLUMNS,
+  TABLES,
+  type Table,
+} from '../../../src/format/parquet/schema.js';
 import { ensureParquetWasm } from '../../../src/format/parquet/wasm.js';
 
 const OBS = 'observed_time_unix_nano';
-const opts = { rowGroupRows: 50_000 };
+const ROW_GROUP_ROWS = 7; // several row groups per file
 
-/** The encoder `encodeColumns` replaced: Arrow builders over the sorted rows. The bytes must not differ. */
-function reference(table: 'points' | 'logs', rows: readonly Row[]): Uint8Array {
+/** mulberry32: a small seeded generator, so a failure is reproducible. */
+function rng(seed: number): () => number {
+  let a = seed;
+  return () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// Small pools, so sort keys tie often; the strings mix empty, ASCII, accents, CJK and emoji.
+const STRINGS = ['', 'a', 'b', 'é', '日本', '😀', 'svc-é-日本', 'x'.repeat(300)];
+const INT32S = [0, 1, -1, 2 ** 31 - 1, -(2 ** 31)];
+const INT64S = [0n, 1n, 2n, -5n, 2n ** 63n - 1n, -(2n ** 63n)];
+const FLOATS = [0, -0, 1.5, -2.25, Number.NaN, Number.POSITIVE_INFINITY];
+
+function cell(def: ColumnDef, r: () => number): unknown {
+  const pick = <T>(xs: readonly T[]): T => xs[Math.floor(r() * xs.length)] as T;
+  switch (def.type) {
+    case 'utf8':
+    case 'json':
+      return pick(STRINGS);
+    case 'int32':
+      return pick(INT32S);
+    case 'int64':
+      return pick(INT64S);
+    case 'float64':
+      return pick(FLOATS);
+    case 'bool':
+      return r() < 0.5;
+    case 'list_float64':
+      return Array.from({ length: Math.floor(r() * 4) }, () => pick(FLOATS));
+    case 'list_int64':
+      return Array.from({ length: Math.floor(r() * 4) }, () => pick(INT64S));
+  }
+}
+
+function rowsOf(table: Table, seed: number, count: number): Row[] {
+  const r = rng(seed);
+  return Array.from({ length: count }, () => {
+    const row: Row = {};
+    for (const def of TABLE_COLUMNS[table]) {
+      const missing = def.nullable && r() < 0.25;
+      if (!missing) row[def.name] = cell(def, r);
+      else if (r() < 0.5) row[def.name] = null;
+    }
+    return row;
+  });
+}
+
+/** The encoder `encodeColumns` replaced: Arrow builders over rows sorted by `Array.prototype.sort`. */
+function reference(table: Table, rows: readonly Row[]): Uint8Array {
   const cmp = (a: unknown, b: unknown): number => {
     if (a == null || b == null) return a == null ? (b == null ? 0 : 1) : -1;
     return (a as bigint | string) < (b as bigint | string)
@@ -29,8 +87,8 @@ function reference(table: 'points' | 'logs', rows: readonly Row[]): Uint8Array {
         ? 1
         : 0;
   };
-  const key = (r: Row, c: string): unknown =>
-    r[c] ?? (table === 'logs' && c === 'time_unix_nano' ? r[OBS] : null);
+  const key = (row: Row, c: string): unknown =>
+    row[c] ?? (table === 'logs' && c === 'time_unix_nano' ? row[OBS] : null);
   const sorted = [...rows].sort((x, y) => {
     for (const c of SORT_COLUMNS[table]) {
       const d = cmp(key(x, c), key(y, c));
@@ -45,65 +103,55 @@ function reference(table: 'points' | 'logs', rows: readonly Row[]): Uint8Array {
     if (field === undefined) throw new Error('field');
     children.push(
       ...vectorFromArray(
-        sorted.map((r) => r[def.name] ?? null),
+        sorted.map((row) => row[def.name] ?? null),
         field.type,
       ).data,
     );
   }
-  const arrow = new ArrowTable(
-    schema,
-    new RecordBatch(
-      schema,
-      makeData({ type: new Struct(schema.fields), length: sorted.length, nullCount: 0, children }),
-    ),
-  );
+  const arrow =
+    sorted.length === 0
+      ? new ArrowTable(schema)
+      : new ArrowTable(
+          schema,
+          new RecordBatch(
+            schema,
+            makeData({ type: new Struct(schema.fields), length: sorted.length, nullCount: 0, children }),
+          ),
+        );
   ensureParquetWasm();
   return writeParquet(
     WasmTable.fromIPCStream(tableToIPC(arrow, 'stream')),
-    new WriterPropertiesBuilder()
-      .setCompression(Compression.ZSTD)
-      .setMaxRowGroupSize(opts.rowGroupRows)
-      .build(),
+    new WriterPropertiesBuilder().setCompression(Compression.ZSTD).setMaxRowGroupSize(ROW_GROUP_ROWS).build(),
   );
 }
 
 describe('encodeColumns against the Arrow-builder encoder', () => {
-  test('points: every column type, nulls, empty and non-ASCII strings, lists, dictionaries', () => {
-    const rows: Row[] = [];
-    for (let i = 0; i < 40; i++) {
-      rows.push({
-        metric_name: `m${i % 3}`,
-        point_type: i % 2 ? 'gauge' : 'histogram',
-        time_unix_nano: BigInt(100 - i),
-        series_id: `s${i}`,
-        scope_name: i % 4 === 0 ? null : `sc${i % 2}`,
-        service_name: i % 5 === 0 ? '' : 'svc-é-日本',
-        attributes: i % 3 ? `{"k":"v${i % 4}"}` : null,
-        aggregation_temporality: i % 6 === 0 ? null : i,
-        is_monotonic: i % 3 === 0 ? null : i % 2 === 0,
-        value_double: i % 7 === 0 ? null : i / 3,
-        count: i % 2 ? 2n ** 62n + BigInt(i) : null,
-        explicit_bounds: i % 2 ? [0.5, 1.5, i] : i % 3 === 0 ? [] : null,
-        bucket_counts: i % 2 ? [1n, -2n, BigInt(i)] : null,
-        reset: i % 5 === 0,
-        out_of_order: false,
-        flags: 0n,
-        delta_value: -0,
-      });
-    }
-    const got = encodeColumns('points', batchFromRows('points', rows), opts, { checked: false });
-    expect(Buffer.from(got).equals(Buffer.from(reference('points', rows)))).toBe(true);
-  });
+  for (const table of TABLES) {
+    test(`${table}: seeded rows with ties, nulls, non-ASCII, lists and dictionaries are byte-identical`, () => {
+      for (let seed = 1; seed <= 12; seed++) {
+        const rows = rowsOf(table, seed * 7919, seed === 1 ? 0 : seed * 5);
+        const got = encodeColumns(table, batchFromRows(table, rows), { rowGroupRows: ROW_GROUP_ROWS });
+        expect(Buffer.from(got).equals(Buffer.from(reference(table, rows))), `seed ${seed}`).toBe(true);
+      }
+    });
+  }
 
-  test('logs: observed-time fallback, a long string and an empty table', () => {
+  test('logs sort by observed time when time is missing', () => {
     const rows: Row[] = [
-      { time_unix_nano: null, observed_time_unix_nano: 5n, body: 'x'.repeat(100_000), severity_number: 9 },
-      { time_unix_nano: 3n, body: '😀', scope_name: 'a' },
-      { body: '' },
+      { time_unix_nano: null, [OBS]: 5n, body: 'a' },
+      { time_unix_nano: 3n, body: 'b' },
+      { body: 'c' },
     ];
-    const got = encodeColumns('logs', batchFromRows('logs', rows), opts, { checked: false });
+    const got = encodeColumns('logs', batchFromRows('logs', rows), { rowGroupRows: ROW_GROUP_ROWS });
     expect(Buffer.from(got).equals(Buffer.from(reference('logs', rows)))).toBe(true);
-    const none = encodeColumns('logs', batchFromRows('logs', []), opts, { checked: true });
-    expect(Buffer.from(none).equals(Buffer.from(reference('logs', [])))).toBe(true);
+  });
+});
+
+describe('assertInt32Offset', () => {
+  test('passes up to the limit and throws one past it, naming the column', () => {
+    expect(() => assertInt32Offset(10, 'body', 10)).not.toThrow();
+    expect(() => assertInt32Offset(11, 'body', 10)).toThrowError(/body/);
+    expect(() => assertInt32Offset(2 ** 31 - 1, 'body')).not.toThrow();
+    expect(() => assertInt32Offset(2 ** 31, 'body')).toThrow();
   });
 });

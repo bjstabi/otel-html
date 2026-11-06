@@ -5,10 +5,10 @@ import {
   type ColumnBatch,
   concatBatches,
   emptyColumns,
-  type MutableColumns,
+  type MutableBatch,
   pushRow,
 } from '../format/parquet/batch.js';
-import { checkBatch, encodeColumns } from '../format/parquet/codec.js';
+import { checkRow, encodeColumns } from '../format/parquet/codec.js';
 import type { Row } from '../format/parquet/rows.js';
 import { TABLES, type Table } from '../format/parquet/schema.js';
 import { fileStatistics } from '../format/parquet/stats.js';
@@ -37,13 +37,8 @@ interface Derived {
 
 const ROW_OVERHEAD_BYTES = 64;
 
-interface Held {
-  length: number;
-  cells: MutableColumns;
-}
-
-function emptyHeld(): Record<Table, Held> {
-  const held = {} as Record<Table, Held>;
+function emptyHeld(): Record<Table, MutableBatch> {
+  const held = {} as Record<Table, MutableBatch>;
   for (const t of TABLES) held[t] = { length: 0, cells: emptyColumns(t) };
   return held;
 }
@@ -55,7 +50,7 @@ function emptyHeld(): Record<Table, Held> {
 export class PartitionWriter {
   readonly #fs: FileSystem;
   readonly #opts: PartitionWriterOptions;
-  #held: Record<Table, Held> = emptyHeld();
+  #held: Record<Table, MutableBatch> = emptyHeld();
   #rows = 0;
   #bytes = 0;
   #next: number;
@@ -67,6 +62,10 @@ export class PartitionWriter {
     this.#next = opts.nextPartition;
   }
 
+  /**
+   * Holds a copy of the row's cells. The row must have passed `checkRow`: held rows are not checked again when they
+   * are encoded (derived rows are).
+   */
   add(table: Table, row: Row): void {
     const h = this.#held[table];
     pushRow(table, h.cells, row);
@@ -116,14 +115,15 @@ export class PartitionWriter {
       const encoded: { table: Table; batch: ColumnBatch; bytes: Uint8Array }[] = [];
       for (const table of TABLES) {
         // Held rows were checked when the session accepted them; derived rows were not.
-        const extra = batchFromRows(table, derived?.rows[table] ?? []);
-        checkBatch(table, extra);
+        const derivedRows = derived?.rows[table] ?? [];
+        for (const [i, row] of derivedRows.entries()) checkRow(table, row, i);
+        const extra = batchFromRows(table, derivedRows);
         const batch = extra.length === 0 ? taken[table] : concatBatches(table, taken[table], extra);
         if (batch.length === 0) continue;
         encoded.push({
           table,
           batch,
-          bytes: encodeColumns(table, batch, { rowGroupRows: this.#opts.rowGroupRows }, { checked: true }),
+          bytes: encodeColumns(table, batch, { rowGroupRows: this.#opts.rowGroupRows }),
         });
       }
       await this.#fs.mkdirp(at(this.#opts.out, partitionDir(n)));
@@ -141,10 +141,7 @@ export class PartitionWriter {
       this.#next = n + 1;
       return { n, source, files };
     } catch (e) {
-      for (const table of TABLES) {
-        const back = concatBatches(table, taken[table], this.#held[table]);
-        this.#held[table] = back;
-      }
+      for (const table of TABLES) this.#held[table] = concatBatches(table, taken[table], this.#held[table]);
       this.#rows += takenRows;
       this.#bytes += takenBytes;
       throw e;

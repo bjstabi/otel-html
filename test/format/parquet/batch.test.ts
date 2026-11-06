@@ -1,11 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import {
-  batchFromRows,
-  type ColumnBatch,
-  concatBatches,
-  emptyBatch,
-  rowAt,
-} from '../../../src/format/parquet/batch.js';
+import { batchFromRows, type ColumnBatch, concatBatches } from '../../../src/format/parquet/batch.js';
 
 const col = (b: ColumnBatch, name: string): readonly unknown[] | undefined => b.cells[name];
 
@@ -33,11 +27,10 @@ describe('ColumnBatch', () => {
     expect(col(b, 'body')).toEqual(['b', 'c']);
   });
 
-  test('an empty batch concatenates as the identity and rowAt rebuilds a row', () => {
+  test('concatenating with an empty batch is the identity', () => {
     const a = batchFromRows('logs', [{ body: 'a', time_unix_nano: 1n }]);
-    expect(col(concatBatches('logs', emptyBatch('logs'), a), 'body')).toEqual(['a']);
-    expect(rowAt('logs', a, 0)).toEqual(
-      expect.objectContaining({ body: 'a', time_unix_nano: 1n, severity_number: null }),
-    );
+    const empty = batchFromRows('logs', []);
+    expect(col(concatBatches('logs', empty, a), 'body')).toEqual(['a']);
+    expect(col(concatBatches('logs', a, empty), 'time_unix_nano')).toEqual([1n]);
   });
 });

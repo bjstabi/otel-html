@@ -3,7 +3,6 @@ import {
   Bool,
   type Data,
   type DataType,
-  Dictionary,
   Field,
   Float64,
   Int32,
@@ -26,7 +25,7 @@ import {
   writeParquet,
 } from 'parquet-wasm/esm';
 import { OtelHtmlError } from '../../model/errors.js';
-import { batchFromRows, type ColumnBatch, rowAt } from './batch.js';
+import { batchFromRows, type ColumnBatch } from './batch.js';
 import type { Row } from './rows.js';
 import {
   arrowSchema,
@@ -140,6 +139,7 @@ export function checkRow(table: Table, row: Row, index = 0): void {
 }
 
 interface Cells {
+  readonly name: string;
   readonly col: readonly unknown[];
   readonly perm: readonly number[];
   readonly valid: Uint8Array;
@@ -175,6 +175,20 @@ function fixedData<T extends Float64Array | Int32Array | BigInt64Array>(
   return makeData({ type, length: n, data, ...validity(c, n) } as Parameters<typeof makeData>[0]);
 }
 
+/**
+ * Arrow offsets are Int32: a column of strings or list items past 2^31-1 would wrap into negative offsets and
+ * corrupt the file, so it is an error. `limit` is a parameter so a test can hit it without allocating 2 GiB.
+ */
+export function assertInt32Offset(next: number, column: string, limit: number = INT32_MAX): void {
+  if (next > limit) {
+    throw invalidCell(
+      column,
+      'a column under 2 GiB (Int32 offsets)',
+      `${next} bytes or items; lower writer.chunkTargetBytes`,
+    );
+  }
+}
+
 const ENCODER = new TextEncoder();
 
 /** UTF-8 bytes and Int32 offsets of the permuted strings (null cells are empty), written in one `encodeInto` pass. */
@@ -203,6 +217,7 @@ function utf8Buffers(c: Cells): { offsets: Int32Array; bytes: Uint8Array } {
       }
       pos += ENCODER.encodeInto(v, bytes.subarray(pos)).written;
     } else c.nullCount++;
+    assertInt32Offset(pos, c.name);
     offsets[i + 1] = pos;
   }
   return { offsets, bytes: bytes.subarray(0, pos) };
@@ -215,7 +230,7 @@ function utf8Data(c: Cells): Data {
 }
 
 /** A dictionary column: indices in first-appearance order of the permuted values, like Arrow's dictionary builder. */
-function dictionaryData(c: Cells): Data {
+function dictionaryData(c: Cells, type: DataType): Data {
   const n = c.perm.length;
   const index = new Map<string, number>();
   const indices = new Int32Array(n);
@@ -235,13 +250,14 @@ function dictionaryData(c: Cells): Data {
   }
   const words = [...index.keys()];
   const dict = utf8Data({
+    name: c.name,
     col: words,
     perm: words.map((_, i) => i),
-    valid: new Uint8Array((words.length >> 3) + 1),
+    valid: new Uint8Array((words.length + 7) >> 3),
     nullCount: 0,
   });
   return makeData({
-    type: new Dictionary(new Utf8(), new Int32()),
+    type,
     length: n,
     data: indices,
     dictionary: makeVector(dict),
@@ -256,6 +272,7 @@ function listData(c: Cells, item: 'float64' | 'int64'): Data {
   for (let i = 0; i < n; i++) {
     const v = c.col[c.perm[i] ?? 0] ?? null;
     if (Array.isArray(v)) total += v.length;
+    assertInt32Offset(total, c.name);
     offsets[i + 1] = total;
   }
   const f64 = new Float64Array(item === 'float64' ? total : 0);
@@ -303,13 +320,13 @@ function boolData(c: Cells): Data {
 }
 
 /** One column's Arrow data, filled in `perm` order straight from the column array. */
-function columnData(def: ColumnDef, col: readonly unknown[], perm: readonly number[]): Data {
+function columnData(def: ColumnDef, type: DataType, col: readonly unknown[], perm: readonly number[]): Data {
   const n = perm.length;
-  const c: Cells = { col, perm, valid: new Uint8Array((n + 7) >> 3), nullCount: 0 };
+  const c: Cells = { name: def.name, col, perm, valid: new Uint8Array((n + 7) >> 3), nullCount: 0 };
   switch (def.type) {
     case 'utf8':
     case 'json':
-      return def.dictionary ? dictionaryData(c) : utf8Data(c);
+      return def.dictionary ? dictionaryData(c, type) : utf8Data(c);
     case 'int32':
       return fixedData(new Int32(), c, new Int32Array(n), (d, i, v) => {
         d[i] = v as number;
@@ -331,26 +348,19 @@ function columnData(def: ColumnDef, col: readonly unknown[], perm: readonly numb
   }
 }
 
-/** Runs `checkRow` on every row of a batch (the error names the row's index in the batch). */
-export function checkBatch(table: Table, batch: ColumnBatch): void {
-  for (let i = 0; i < batch.length; i++) checkRow(table, rowAt(table, batch, i), i);
-}
-
 /**
- * Sorts a batch by `SORT_COLUMNS[table]` (nulls last, stable) and encodes it as ZSTD Parquet. `checked: true` says
- * the caller ran `checkRow` on every row already (a session does when it accepts one), so they are not checked again.
+ * Sorts a batch by `SORT_COLUMNS[table]` (nulls last, stable) and encodes it as ZSTD Parquet. It does not check the
+ * cells: every row must have passed `checkRow` (a session checks each row when it accepts it; `encodeTable` checks).
  */
-export function encodeColumns(
-  table: Table,
-  batch: ColumnBatch,
-  opts: EncodeOptions,
-  { checked }: { checked: boolean },
-): Uint8Array {
-  if (!checked) checkBatch(table, batch);
+export function encodeColumns(table: Table, batch: ColumnBatch, opts: EncodeOptions): Uint8Array {
   const perm = sortPermutation(table, batch);
   const schema = arrowSchema(table);
   const children: Data[] = [];
-  for (const def of TABLE_COLUMNS[table]) children.push(columnData(def, batch.cells[def.name] ?? [], perm));
+  for (const [i, def] of TABLE_COLUMNS[table].entries()) {
+    const field = schema.fields[i];
+    if (field === undefined) throw new Error(`no arrow field for ${table}.${def.name}`);
+    children.push(columnData(def, field.type, batch.cells[def.name] ?? [], perm));
+  }
   const type = new Struct(schema.fields);
   const arrow =
     batch.length === 0
@@ -372,7 +382,7 @@ export function encodeColumns(
 export function encodeTable(table: Table, rows: readonly Row[], opts: EncodeOptions): Uint8Array {
   // Validate in the caller's row order, so the row index in an error is the caller's.
   for (const [r, row] of rows.entries()) checkRow(table, row, r);
-  return encodeColumns(table, batchFromRows(table, rows), opts, { checked: true });
+  return encodeColumns(table, batchFromRows(table, rows), opts);
 }
 
 function plain(value: unknown): unknown {
