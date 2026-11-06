@@ -98,4 +98,44 @@ describe('PartitionWriter', () => {
     expect(TABLES.length).toBe(5);
     expect(await fs.exists('/out/data/partitions/000000/spans.parquet')).toBe(false);
   });
+
+  test('rows added while a cut is writing land in the next partition', async () => {
+    const { fs, w } = make();
+    w.add('spans', span(1, 'a', 100n));
+    const gate = fs.holdNextWrite('000000/spans.parquet');
+    const cut = w.cut('flush:1');
+    await gate.reached;
+    expect(w.pendingRows).toBe(0);
+    w.add('spans', span(2, 'a', 200n));
+    expect(w.pendingRows).toBe(1);
+    gate.release();
+    const first = await cut;
+    expect(first?.files.spans?.rows).toBe(1);
+    expect(w.pendingRows).toBe(1);
+    const second = await w.cut('flush:2');
+    expect(second?.n).toBe(1);
+    const rows = decodeTable('spans', await fs.readBytes('/out/data/partitions/000001/spans.parquet'));
+    expect(rows.map((r) => Reflect.get(r, 'span_id'))).toEqual(['s2']);
+  });
+
+  test('a write failure puts the taken rows back in front and a retry numbers the partition the same', async () => {
+    const { fs, w } = make();
+    w.add('spans', span(1, 'a', 100n));
+    w.add('logs', log(1, 'a'));
+    fs.failNextWrite('000000/logs.parquet');
+    const gate = fs.holdNextWrite('000000/spans.parquet');
+    const cut = w.cut('flush:1');
+    const failed = cut.catch((e: unknown) => e);
+    await gate.reached;
+    w.add('spans', span(2, 'a', 200n));
+    gate.release();
+    expect(await failed).toBeInstanceOf(Error);
+    expect(w.pendingRows).toBe(3);
+    expect(w.nextPartition).toBe(0);
+    const e = await w.cut('flush:1');
+    expect(e?.n).toBe(0);
+    expect(e?.files.spans?.rows).toBe(2);
+    const rows = decodeTable('spans', await fs.readBytes('/out/data/partitions/000000/spans.parquet'));
+    expect(rows.map((r) => Reflect.get(r, 'span_id'))).toEqual(['s1', 's2']);
+  });
 });
