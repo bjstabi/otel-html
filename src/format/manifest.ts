@@ -140,12 +140,12 @@ export function parseManifest(input: unknown): Manifest {
   return parseWith(ManifestSchema, input, 'manifest');
 }
 
-interface PartitionFile extends FileStatistics {
+export interface PartitionFile extends FileStatistics {
   path: string;
   bytes: number;
 }
 
-interface PartitionEntry {
+export interface PartitionEntry {
   n: number;
   source: string;
   files: Partial<Record<Table, PartitionFile>>;
