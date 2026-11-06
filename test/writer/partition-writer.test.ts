@@ -196,6 +196,22 @@ describe('PartitionWriter', () => {
       expect(w.nextPartition).toBe(0);
       expect(w.pendingRows).toBe(1);
     });
+
+    test('a derived row the codec cannot store fails the cut; the held rows come back in order', async () => {
+      let bad = true;
+      const { fs, w } = make(0, () => ({
+        rows: { traces: [bad ? { ...trace('a'), span_count: 'x' } : trace('a')] },
+      }));
+      w.add('spans', span(2, 'b', 200n));
+      await expect(w.cut('flush:1')).rejects.toThrow();
+      w.add('spans', span(1, 'a', 100n));
+      expect(w.pendingRows).toBe(2);
+      bad = false;
+      const e = await w.cut('flush:1');
+      expect(e?.files.spans?.rows).toBe(2);
+      const rows = decodeTable('spans', await fs.readBytes('/out/data/partitions/000000/spans.parquet'));
+      expect(rows.map((r) => Reflect.get(r, 'trace_id'))).toEqual(['t1', 't2']);
+    });
   });
 });
 

@@ -1,7 +1,7 @@
 import type { ResolvedDashboard } from '../../config/schema.js';
 import type { AnyValue, Attributes } from '../../model/anyvalue.js';
 import { attributesFromJson } from '../columns.js';
-import type { Row } from './rows.js';
+import type { ColumnBatch } from './batch.js';
 import { FIXED_STATISTICS_COLUMNS, TABLE_COLUMNS, type Table, TIME_COLUMN } from './schema.js';
 
 export interface FileStatistics {
@@ -61,8 +61,9 @@ function anyValueText(v: AnyValue | undefined): string | null {
 const PARSE_CACHE_CAP = 4_096;
 const OBSERVED = 'observed_time_unix_nano';
 
-function effectiveTime(table: Table, row: Row): bigint | null {
-  const t = row[TIME_COLUMN[table]] ?? (table === 'logs' ? row[OBSERVED] : undefined);
+function effectiveTime(table: Table, batch: ColumnBatch, i: number): bigint | null {
+  const t =
+    batch.cells[TIME_COLUMN[table]]?.[i] ?? (table === 'logs' ? batch.cells[OBSERVED]?.[i] : undefined);
   return typeof t === 'bigint' ? t : null;
 }
 
@@ -74,7 +75,7 @@ function effectiveTime(table: Table, row: Row): bigint | null {
  */
 export function fileStatistics(
   table: Table,
-  rows: readonly Row[],
+  batch: ColumnBatch,
   keys: readonly string[],
   cap: number,
 ): FileStatistics {
@@ -92,8 +93,8 @@ export function fileStatistics(
   };
   let min: bigint | null = null;
   let max: bigint | null = null;
-  for (const row of rows) {
-    const t = effectiveTime(table, row);
+  for (let r = 0; r < batch.length; r++) {
+    const t = effectiveTime(table, batch, r);
     if (t !== null) {
       if (min === null || t < min) min = t;
       if (max === null || t > max) max = t;
@@ -103,9 +104,9 @@ export function fileStatistics(
       const src = sources[i];
       if (set === null || set === undefined || src === null || src === undefined) continue;
       let text: string | null;
-      if (src.kind === 'column') text = scalarText(row[src.name]);
+      if (src.kind === 'column') text = scalarText(batch.cells[src.name]?.[r]);
       else {
-        const json = row[src.json];
+        const json = batch.cells[src.json]?.[r];
         text = typeof json === 'string' && json !== '' ? anyValueText(parse(json).get(src.name)) : null;
       }
       if (text === null) continue;
@@ -119,7 +120,7 @@ export function fileStatistics(
     values[k] = set === null || set === undefined ? null : [...set].sort();
   });
   return {
-    rows: rows.length,
+    rows: batch.length,
     timeMin: min === null ? null : min.toString(),
     timeMax: max === null ? null : max.toString(),
     values,

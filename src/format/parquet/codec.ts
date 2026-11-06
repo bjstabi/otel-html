@@ -17,6 +17,7 @@ import {
   writeParquet,
 } from 'parquet-wasm/esm';
 import { OtelHtmlError } from '../../model/errors.js';
+import { batchFromRows, type ColumnBatch, rowAt } from './batch.js';
 import type { Row } from './rows.js';
 import { arrowSchema, type ColumnType, SORT_COLUMNS, TABLE_COLUMNS, TABLES, type Table } from './schema.js';
 import { ensureParquetWasm } from './wasm.js';
@@ -26,14 +27,6 @@ export interface EncodeOptions {
 }
 
 const OBSERVED = 'observed_time_unix_nano';
-
-/** The value a column is sorted by; logs sort by `time_unix_nano ?? observed_time_unix_nano` (the column keeps its null). */
-function sortKey(table: Table, row: Row, column: string): unknown {
-  const v = row[column];
-  if (v !== undefined && v !== null) return v;
-  if (table === 'logs' && column === 'time_unix_nano') return row[OBSERVED] ?? null;
-  return null;
-}
 
 function compareKeys(a: unknown, b: unknown): number {
   const aNull = a === undefined || a === null;
@@ -46,12 +39,22 @@ function compareKeys(a: unknown, b: unknown): number {
       : 0;
 }
 
-function sortedRows(table: Table, rows: readonly Row[]): Row[] {
-  const columns = SORT_COLUMNS[table];
+/**
+ * The stable permutation that sorts a batch by `SORT_COLUMNS[table]` (nulls last); logs sort by
+ * `time_unix_nano ?? observed_time_unix_nano` (the column keeps its null).
+ */
+function sortPermutation(table: Table, batch: ColumnBatch): number[] {
+  const keys = SORT_COLUMNS[table].map((c): readonly unknown[] => {
+    const col = batch.cells[c] ?? [];
+    if (!(table === 'logs' && c === 'time_unix_nano')) return col;
+    const observed = batch.cells[OBSERVED] ?? [];
+    return col.map((v, i) => v ?? observed[i] ?? null);
+  });
+  const order = Array.from({ length: batch.length }, (_, i) => i);
   // Array.prototype.sort is stable.
-  return [...rows].sort((x, y) => {
-    for (const c of columns) {
-      const d = compareKeys(sortKey(table, x, c), sortKey(table, y, c));
+  return order.sort((x, y) => {
+    for (const k of keys) {
+      const d = compareKeys(k[x], k[y]);
       if (d !== 0) return d;
     }
     return 0;
@@ -119,27 +122,40 @@ export function checkRow(table: Table, row: Row, index = 0): void {
   }
 }
 
-/** Sorts `rows` by `SORT_COLUMNS[table]` (nulls last, stable) and encodes them as ZSTD Parquet. */
-export function encodeTable(table: Table, rows: readonly Row[], opts: EncodeOptions): Uint8Array {
-  // Validate in the caller's row order, so the row index in an error is the caller's.
-  for (const [r, row] of rows.entries()) checkRow(table, row, r);
-  const sorted = sortedRows(table, rows);
+/** Runs `checkRow` on every row of a batch (the error names the row's index in the batch). */
+export function checkBatch(table: Table, batch: ColumnBatch): void {
+  for (let i = 0; i < batch.length; i++) checkRow(table, rowAt(table, batch, i), i);
+}
+
+/**
+ * Sorts a batch by `SORT_COLUMNS[table]` (nulls last, stable) and encodes it as ZSTD Parquet. `checked: true` says
+ * the caller ran `checkRow` on every row already (a session does when it accepts one), so they are not checked again.
+ */
+export function encodeColumns(
+  table: Table,
+  batch: ColumnBatch,
+  opts: EncodeOptions,
+  { checked }: { checked: boolean },
+): Uint8Array {
+  if (!checked) checkBatch(table, batch);
+  const perm = sortPermutation(table, batch);
   const schema = arrowSchema(table);
   const children: Data[] = [];
   for (const [i, def] of TABLE_COLUMNS[table].entries()) {
     const field = schema.fields[i];
     if (field === undefined) throw new Error(`no arrow field for ${table}.${def.name}`);
-    const values = sorted.map((r) => r[def.name] ?? null);
+    const col = batch.cells[def.name] ?? [];
+    const values = perm.map((r) => col[r] ?? null);
     const vector = vectorFromArray(values, field.type);
     children.push(...vector.data);
   }
   const type = new Struct(schema.fields);
   const arrow =
-    sorted.length === 0
+    batch.length === 0
       ? new ArrowTable(schema)
       : new ArrowTable(
           schema,
-          new RecordBatch(schema, makeData({ type, length: sorted.length, nullCount: 0, children })),
+          new RecordBatch(schema, makeData({ type, length: batch.length, nullCount: 0, children })),
         );
   ensureParquetWasm();
   const wasm = WasmTable.fromIPCStream(tableToIPC(arrow, 'stream'));
@@ -148,6 +164,13 @@ export function encodeTable(table: Table, rows: readonly Row[], opts: EncodeOpti
     .setMaxRowGroupSize(opts.rowGroupRows)
     .build();
   return writeParquet(wasm, props);
+}
+
+/** Sorts `rows` by `SORT_COLUMNS[table]` (nulls last, stable) and encodes them as ZSTD Parquet. */
+export function encodeTable(table: Table, rows: readonly Row[], opts: EncodeOptions): Uint8Array {
+  // Validate in the caller's row order, so the row index in an error is the caller's.
+  for (const [r, row] of rows.entries()) checkRow(table, row, r);
+  return encodeColumns(table, batchFromRows(table, rows), opts, { checked: true });
 }
 
 function plain(value: unknown): unknown {

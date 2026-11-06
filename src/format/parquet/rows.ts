@@ -267,6 +267,16 @@ function pointJsonColumn(point: unknown, key: string): string | null {
   return v === undefined ? null : doublesJson(v);
 }
 
+/** Sets the normalization cells of a row `pointRow` built with unnormalized deltas, in place. */
+export function applyNormalization(row: Row, norm: PointNormalization): void {
+  Object.assign(row, {
+    delta_value: norm.deltaValue,
+    delta_count: countColumn(norm.deltaCount),
+    reset: norm.reset,
+    out_of_order: norm.outOfOrder,
+  });
+}
+
 /**
  * A metric point's row: identity, time, attributes, resource and scope, the normalization columns, and the value
  * columns of the point's type (gauge/sum: `value_double`; histogram: count, sum, min, max, bounds, bucket counts;

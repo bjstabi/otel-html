@@ -1,7 +1,14 @@
 import type { ResolvedConfig } from '../config/schema.js';
 import type { ManifestV4, PartitionEntry } from '../format/manifest.js';
 import { checkRow } from '../format/parquet/codec.js';
-import { logRow, type PointNormalization, pointRow, type Row, spanRow } from '../format/parquet/rows.js';
+import {
+  applyNormalization,
+  logRow,
+  type PointNormalization,
+  pointRow,
+  type Row,
+  spanRow,
+} from '../format/parquet/rows.js';
 import { TABLES, type Table } from '../format/parquet/schema.js';
 import { statisticsKeysFor } from '../format/parquet/stats.js';
 import { LOCK_PATH, type Signal, STATE_DIR, type StateSlot } from '../format/paths.js';
@@ -466,6 +473,7 @@ class PartitionSession implements WriterSession {
     const staged: {
       point: MetricPointRecord;
       seriesId: string;
+      row: Row;
       step: ReturnType<StreamNormalizer['prepare']>;
     }[] = [];
     for (const point of points) {
@@ -477,12 +485,12 @@ class PartitionSession implements WriterSession {
       }
       const seriesId = seriesIdOf(point, resource, scope);
       const step = this.#normalizer.prepare(point);
-      this.#checked('points', pointRow(point, { ...UNNORMALIZED, seriesId }, rowCtx));
-      staged.push({ point, seriesId, step });
+      const row = this.#checked('points', pointRow(point, { ...UNNORMALIZED, seriesId }, rowCtx));
+      staged.push({ point, seriesId, row, step });
     }
-    for (const { point, seriesId, step } of staged) {
-      const n = step(seriesId);
-      this.#writer.add('points', pointRow(point, normalization(point, n, seriesId), rowCtx));
+    for (const { point, seriesId, row, step } of staged) {
+      applyNormalization(row, normalization(point, step(seriesId), seriesId));
+      this.#writer.add('points', row);
       this.#totals.metrics++;
       this.#extend(ctx, point.time, point.time);
     }

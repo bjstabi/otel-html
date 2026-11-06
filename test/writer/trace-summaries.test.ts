@@ -1,6 +1,10 @@
 import { describe, expect, test } from 'vitest';
+import { batchFromRows } from '../../src/format/parquet/batch.js';
 import type { Row } from '../../src/format/parquet/rows.js';
-import { traceRows } from '../../src/writer/trace-summaries.js';
+import { traceRows as traceRowsOf } from '../../src/writer/trace-summaries.js';
+
+const traceRows = (spans: readonly Row[], logs: readonly Row[]): Row[] =>
+  traceRowsOf(batchFromRows('spans', spans), batchFromRows('logs', logs));
 
 function span(trace: string, id: string, start: bigint, end: bigint, extra: Row = {}): Row {
   return {

@@ -1,6 +1,7 @@
 import '../../../src/writer/parquet-wasm-source.js';
 import { describe, expect, test } from 'vitest';
-import { decodeTable, encodeTable } from '../../../src/format/parquet/codec.js';
+import { batchFromRows } from '../../../src/format/parquet/batch.js';
+import { decodeTable, encodeColumns, encodeTable } from '../../../src/format/parquet/codec.js';
 import type { Row } from '../../../src/format/parquet/rows.js';
 import { TABLE_COLUMNS, type Table } from '../../../src/format/parquet/schema.js';
 import { parquetMetadata } from '../../../test-support/parquet-metadata.js';
@@ -171,5 +172,36 @@ describe('parquet codec', () => {
 
   test('an empty row list encodes to a valid empty table', () => {
     expect(decodeTable('logs', encodeTable('logs', [], opts))).toEqual([]);
+  });
+
+  describe('encodeColumns', () => {
+    test('gives the bytes encodeTable gives for the same spans, unsorted with nulls', () => {
+      const rows = [
+        span(3, 'b', 'x', 30n),
+        span(1, 'a', 'y', 10n),
+        { ...span(2, 'a', 'x', 20n), parent_span_id: 'p' },
+      ];
+      const bytes = encodeColumns('spans', batchFromRows('spans', rows), opts, { checked: false });
+      expect(Buffer.from(bytes).equals(Buffer.from(encodeTable('spans', rows, opts)))).toBe(true);
+    });
+
+    test('gives the same bytes for logs, which sort by observed time when time is null', () => {
+      const rows: Row[] = [
+        { time_unix_nano: null, observed_time_unix_nano: 5n, body: 'a' },
+        { time_unix_nano: 3n, body: 'b' },
+        { time_unix_nano: null, observed_time_unix_nano: null, body: 'c' },
+        { time_unix_nano: 9n, body: 'd' },
+      ];
+      const bytes = encodeColumns('logs', batchFromRows('logs', rows), opts, { checked: true });
+      expect(Buffer.from(bytes).equals(Buffer.from(encodeTable('logs', rows, opts)))).toBe(true);
+      expect(decodeTable('logs', bytes).map((r) => Reflect.get(r, 'body'))).toEqual(['b', 'a', 'd', 'c']);
+    });
+
+    test('checks the cells unless the caller says it did', () => {
+      const bad = batchFromRows('spans', [{ ...span(1, 'a', 'x', 1n), duration_ns: 'nope' }]);
+      expect(() => encodeColumns('spans', bad, opts, { checked: false })).toThrowError(
+        /invalid-report|duration_ns/,
+      );
+    });
   });
 });

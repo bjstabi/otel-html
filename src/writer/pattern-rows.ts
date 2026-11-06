@@ -1,4 +1,5 @@
 import { anyValueFromJson } from '../format/columns.js';
+import type { ColumnBatch } from '../format/parquet/batch.js';
 import type { Row } from '../format/parquet/rows.js';
 import { anyValueToDisplay } from '../model/anyvalue.js';
 import type { RelNanos } from '../model/ids.js';
@@ -14,11 +15,12 @@ interface Group {
   sample: string;
 }
 
+const cellOf = (b: ColumnBatch, name: string, i: number): unknown => b.cells[name]?.[i];
 const big = (v: unknown): bigint | null => (typeof v === 'bigint' ? v : null);
 
 /** The text Drain sees for a log row: the same display text the log rollup uses for the record's body. */
-function bodyText(row: Row): string {
-  const json = Reflect.get(row, 'body');
+function bodyText(logs: ColumnBatch, i: number): string {
+  const json = cellOf(logs, 'body', i);
   return typeof json === 'string' ? anyValueToDisplay(anyValueFromJson(json)) : '';
 }
 
@@ -31,18 +33,14 @@ function bodyText(row: Row): string {
  *
  * The copy goes through `toJSON`/`Drain.from` (the clone Drain has): cost grows with the clusters (at most 2000).
  */
-export function patternRows(
-  drain: Drain,
-  logs: readonly Row[],
-  epoch: bigint,
-): { rows: Row[]; drain: Drain } {
+export function patternRows(drain: Drain, logs: ColumnBatch, epoch: bigint): { rows: Row[]; drain: Drain } {
   if (logs.length === 0) return { rows: [], drain }; // nothing to cluster: no copy, the commit re-adopts `drain`
   const copy = Drain.from(drain.toJSON(), 'drain');
   const groups = new Map<number, Group>();
-  for (const l of logs) {
-    const text = bodyText(l);
-    const sev = Number(Reflect.get(l, 'severity_number') ?? 0);
-    const t = big(Reflect.get(l, 'time_unix_nano')) ?? big(Reflect.get(l, 'observed_time_unix_nano'));
+  for (let l = 0; l < logs.length; l++) {
+    const text = bodyText(logs, l);
+    const sev = Number(cellOf(logs, 'severity_number', l) ?? 0);
+    const t = big(cellOf(logs, 'time_unix_nano', l)) ?? big(cellOf(logs, 'observed_time_unix_nano', l));
     const id = copy.add(text, severityKey(sev), Number((t ?? epoch) - epoch) as RelNanos);
     if (id < 0) continue;
     let g = groups.get(id);
