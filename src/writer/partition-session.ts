@@ -279,7 +279,7 @@ class PartitionSession implements WriterSession {
       this.#assertOpen();
       this.#disarmIdle();
       await this.#checkpoint(false);
-      await this.#writeShell();
+      if (!this.#shellWritten) await this.#writeShell();
       await this.#checkpoint(true);
       this.#closed = this.#summary();
       await this.#lock.release();
@@ -523,10 +523,18 @@ class PartitionSession implements WriterSession {
     this.#replacing = false;
   }
 
+  /**
+   * With the default base the report carries its own `assets/`. A shared base (a site that publishes the viewer
+   * once for many reports) is the publisher's to upload, so no copy is written beside the report.
+   */
   async #writeShell(): Promise<void> {
     const { fs, viewerAssets } = this.#deps;
-    await writeViewerAssets(fs, this.#out, viewerAssets);
-    await fs.writeTextAtomic(at(this.#out, 'index.html'), renderIndexHtml(viewerAssets.entry(), this.#title));
+    const { assetsBase } = this.#config.writer;
+    if (assetsBase === 'assets/') await writeViewerAssets(fs, this.#out, viewerAssets);
+    await fs.writeTextAtomic(
+      at(this.#out, 'index.html'),
+      renderIndexHtml(viewerAssets.entry(), this.#title, { assetsBase }),
+    );
     await fs.writeTextAtomic(at(this.#out, '.nojekyll'), '');
     this.#shellWritten = true;
   }

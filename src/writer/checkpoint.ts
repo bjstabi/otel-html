@@ -138,8 +138,9 @@ export async function writeStateSlotV2(
   slot: StateSlot,
   state: SessionStateV2,
 ): Promise<void> {
-  parseAnySessionState(JSON.parse(JSON.stringify(state))); // never write a state the next open would reject
-  await fs.writeTextAtomic(at(out, statePath(slot)), JSON.stringify(state));
+  const text = JSON.stringify(state);
+  parseAnySessionState(JSON.parse(text)); // never write a state the next open would reject
+  await fs.writeTextAtomic(at(out, statePath(slot)), text);
 }
 
 function chunkCounts(manifest: Manifest): Record<Signal, number> | null {
