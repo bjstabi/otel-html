@@ -13,18 +13,31 @@ export interface FileStatistics {
 
 type Source = { kind: 'column'; name: string } | { kind: 'attr'; json: string; name: string } | null;
 
+const hasColumn = (table: Table, name: string): boolean => TABLE_COLUMNS[table].some((c) => c.name === name);
+
+/** Where a key's values are read from in `table`, or null when the table cannot answer it. */
 function sourceOf(table: Table, key: string): Source {
-  if (key.startsWith('attr:')) return { kind: 'attr', json: 'attributes', name: key.slice(5) };
-  if (key.startsWith('resource:')) return { kind: 'attr', json: 'resource_attributes', name: key.slice(9) };
-  return TABLE_COLUMNS[table].some((c) => c.name === key) ? { kind: 'column', name: key } : null;
+  if (key.startsWith('attr:')) {
+    return hasColumn(table, 'attributes') ? { kind: 'attr', json: 'attributes', name: key.slice(5) } : null;
+  }
+  if (key.startsWith('resource:')) {
+    return hasColumn(table, 'resource_attributes')
+      ? { kind: 'attr', json: 'resource_attributes', name: key.slice(9) }
+      : null;
+  }
+  return TABLE_COLUMNS[table].some((c) => c.name === key && c.type !== 'json')
+    ? { kind: 'column', name: key }
+    : null;
 }
 
+/** A scalar's text; an empty string is a value, null/undefined and non-scalars contribute nothing. */
 function scalarText(v: unknown): string | null {
   switch (typeof v) {
     case 'string':
-      return v === '' ? null : v;
-    case 'bigint':
+      return v;
     case 'number':
+      return Object.is(v, -0) ? '-0' : String(v);
+    case 'bigint':
     case 'boolean':
       return String(v);
     default:
@@ -54,8 +67,9 @@ function effectiveTime(table: Table, row: Row): bigint | null {
 
 /**
  * `keys`: column names and `attr:<key>` / `resource:<key>` paths read from the json columns; a key with more than
- * `cap` distinct values is `null`. A key naming nothing in this table gives `[]` (the same key list serves every
- * table). Times are decimal strings (int64).
+ * `cap` distinct values is `null`, and so is a key this table cannot read (unknown column, a json column named
+ * plainly, `attr:`/`resource:` without the source column): `null` is "unknown, prune nothing", `[]` is "no value".
+ * Times are decimal strings (int64).
  */
 export function fileStatistics(
   table: Table,
@@ -64,7 +78,7 @@ export function fileStatistics(
   cap: number,
 ): FileStatistics {
   const sources = keys.map((k) => sourceOf(table, k));
-  const sets: (Set<string> | null)[] = keys.map(() => new Set<string>());
+  const sets: (Set<string> | null)[] = sources.map((src) => (src === null ? null : new Set<string>()));
   const parsed = new Map<string, Attributes>();
   const parse = (text: string): Attributes => {
     let a = parsed.get(text);
@@ -110,6 +124,7 @@ export function fileStatistics(
   };
 }
 
+/** The statistics keys for `table`: only keys the table can answer (others would be `null`, i.e. not listed). */
 export function statisticsKeysFor(
   table: Table,
   config: { dashboards: readonly ResolvedDashboard[]; writer: { statisticsKeys: readonly string[] } },
@@ -117,5 +132,5 @@ export function statisticsKeysFor(
   const out = new Set<string>(FIXED_STATISTICS_COLUMNS[table]);
   for (const d of config.dashboards) for (const v of d.dashboard.variables) out.add(`resource:${v.key}`);
   for (const k of config.writer.statisticsKeys) out.add(k);
-  return [...out];
+  return [...out].filter((k) => sourceOf(table, k) !== null);
 }

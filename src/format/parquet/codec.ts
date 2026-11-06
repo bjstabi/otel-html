@@ -12,7 +12,7 @@ import {
 import parquet from 'parquet-wasm';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { Row } from './rows.js';
-import { arrowSchema, SORT_COLUMNS, TABLE_COLUMNS, type Table } from './schema.js';
+import { arrowSchema, type ColumnType, SORT_COLUMNS, TABLE_COLUMNS, type Table } from './schema.js';
 
 export interface EncodeOptions {
   readonly rowGroupRows: number;
@@ -54,8 +54,61 @@ function sortedRows(table: Table, rows: readonly Row[]): Row[] {
   });
 }
 
+const INT32_MIN = -(2 ** 31);
+const INT32_MAX = 2 ** 31 - 1;
+const INT64_MIN = -(2n ** 63n);
+const INT64_MAX = 2n ** 63n - 1n;
+
+/** Whether a non-null cell has the JS type (and range) its column type stores; the one pass `encodeTable` makes. */
+function cellFits(type: ColumnType, v: unknown): boolean {
+  switch (type) {
+    case 'utf8':
+    case 'json':
+      return typeof v === 'string';
+    case 'int32':
+      return typeof v === 'number' && Number.isInteger(v) && v >= INT32_MIN && v <= INT32_MAX;
+    case 'int64':
+      return typeof v === 'bigint' && v >= INT64_MIN && v <= INT64_MAX;
+    case 'float64':
+      return typeof v === 'number';
+    case 'bool':
+      return typeof v === 'boolean';
+    case 'list_float64':
+      return Array.isArray(v) && v.every((x) => typeof x === 'number');
+    case 'list_int64':
+      return Array.isArray(v) && v.every((x) => typeof x === 'bigint' && x >= INT64_MIN && x <= INT64_MAX);
+  }
+}
+
+function invalidCell(path: string, expected: string, actual: string): OtelHtmlError {
+  return new OtelHtmlError('invalid-report', { path, expected, actual });
+}
+
 /** Sorts `rows` by `SORT_COLUMNS[table]` (nulls last, stable) and encodes them as ZSTD Parquet. */
 export function encodeTable(table: Table, rows: readonly Row[], opts: EncodeOptions): Uint8Array {
+  // Validate in the caller's row order, so the row index in an error is the caller's.
+  const columns = TABLE_COLUMNS[table];
+  const known = new Set(columns.map((c) => c.name));
+  for (const [r, row] of rows.entries()) {
+    for (const k of Object.keys(row)) {
+      if (!known.has(k))
+        throw invalidCell(`${table}.${k}`, 'a column of the table', `unknown column in row ${r}`);
+    }
+    for (const def of columns) {
+      const v = row[def.name] ?? null;
+      if (v === null) {
+        if (!def.nullable) {
+          throw invalidCell(
+            `${table}.${def.name}`,
+            'a value in a non-nullable column',
+            `null or missing in row ${r}`,
+          );
+        }
+      } else if (!cellFits(def.type, v)) {
+        throw invalidCell(`${table}.${def.name}`, `a ${def.type} value`, `${typeof v} in row ${r}`);
+      }
+    }
+  }
   const sorted = sortedRows(table, rows);
   const schema = arrowSchema(table);
   const children: Data[] = [];
@@ -63,13 +116,6 @@ export function encodeTable(table: Table, rows: readonly Row[], opts: EncodeOpti
     const field = schema.fields[i];
     if (field === undefined) throw new Error(`no arrow field for ${table}.${def.name}`);
     const values = sorted.map((r) => r[def.name] ?? null);
-    if (!def.nullable && values.includes(null)) {
-      throw new OtelHtmlError('invalid-report', {
-        path: `${table}.${def.name}`,
-        expected: 'a value in a non-nullable column',
-        actual: 'null or missing',
-      });
-    }
     const vector = vectorFromArray(values, field.type);
     children.push(...vector.data);
   }

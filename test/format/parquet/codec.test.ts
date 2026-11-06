@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { decodeTable, encodeTable } from '../../../src/format/parquet/codec.js';
 import type { Row } from '../../../src/format/parquet/rows.js';
+import { TABLE_COLUMNS, type Table } from '../../../src/format/parquet/schema.js';
 import { parquetMetadata } from '../../../test-support/parquet-metadata.js';
 
 const SPAN_ID = 'span_id';
@@ -37,6 +38,24 @@ function manySpans(n: number): Row[] {
     rows.push(span(i, `scope${i % 3}`, `svc${i % 5}`, 1_700_000_000_000_000_000n + BigInt(n - i)));
   }
   return rows;
+}
+
+const SAMPLE = {
+  utf8: 'x',
+  json: '{}',
+  int32: 1,
+  int64: 1n,
+  float64: 1,
+  bool: true,
+  list_float64: [1],
+  list_int64: [1n],
+} as const;
+
+/** A row with every required column set to a valid value. */
+function filled(table: Table): Row {
+  const r: Row = {};
+  for (const c of TABLE_COLUMNS[table]) if (!c.nullable) r[c.name] = SAMPLE[c.type];
+  return r;
 }
 
 describe('parquet codec', () => {
@@ -114,6 +133,38 @@ describe('parquet codec', () => {
     delete bad[SPAN_ID];
     expect(() => encodeTable('spans', [bad], opts)).toThrowError(
       expect.objectContaining({ code: 'invalid-report', path: 'spans.span_id' }),
+    );
+  });
+
+  test.each([
+    ['int32 outside int32', 'logs', 'flags', 0xffffffff],
+    ['int32 given a string', 'logs', 'severity_number', '2'],
+    ['int32 given a fraction', 'logs', 'severity_number', 1.5],
+    ['int64 given a number', 'logs', 'time_unix_nano', 5],
+    ['int64 outside int64', 'logs', 'time_unix_nano', 2n ** 63n],
+    ['utf8 given a number', 'logs', 'severity_text', 3],
+    ['bool given a number', 'points', 'reset', 1],
+    ['float64 given a string', 'points', 'sum', '1'],
+    ['list_float64 given a bigint list', 'points', 'explicit_bounds', [1n]],
+    ['list_int64 given numbers', 'points', 'bucket_counts', [1]],
+    ['list_int64 outside int64', 'points', 'bucket_counts', [2n ** 64n - 1n]],
+  ] as const)(
+    'a mistyped cell (%s) is an invalid-report error naming table.column and row',
+    (_n, table, col, v) => {
+      const rows: Row[] = [filled(table), { ...filled(table), [col]: v }];
+      expect(() => encodeTable(table, rows, opts)).toThrowError(
+        expect.objectContaining({
+          code: 'invalid-report',
+          path: `${table}.${col}`,
+          actual: expect.stringContaining('row 1'),
+        }),
+      );
+    },
+  );
+
+  test('a row key outside the table schema is an invalid-report error', () => {
+    expect(() => encodeTable('logs', [{ bogus: 1 }], opts)).toThrowError(
+      expect.objectContaining({ code: 'invalid-report', path: 'logs.bogus' }),
     );
   });
 

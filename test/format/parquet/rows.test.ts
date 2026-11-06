@@ -356,6 +356,8 @@ describe('point value columns', () => {
     expect(cell(row({ type: 'gauge', point: { asDouble: 'NaN' } }), 'value_double')).toBeNaN();
     expect(cell(row({ type: 'gauge', point: {} }), 'value_double')).toBeNull();
     expectKeys(g, 'points');
+    expect(cell(g, 'point_type')).toBe('gauge');
+    expect(cell(row({ type: 'sum', point: {} }), 'point_type')).toBe('sum');
   });
 
   test('a histogram carries count, sum, min, max, bounds and bucket counts', () => {
@@ -367,7 +369,7 @@ describe('point value columns', () => {
         min: 0.5,
         max: 9,
         explicitBounds: [1, 5, 'Infinity'],
-        bucketCounts: ['1', '2', '3', '18446744073709551615'],
+        bucketCounts: ['1', '2', '3', '9223372036854775807'],
       },
     });
     expect(cell(r, 'count')).toBe(6n);
@@ -375,7 +377,11 @@ describe('point value columns', () => {
     expect(cell(r, 'min')).toBe(0.5);
     expect(cell(r, 'max')).toBe(9);
     expect(cell(r, 'explicit_bounds')).toEqual([1, 5, Number.POSITIVE_INFINITY]);
-    expect(cell(r, 'bucket_counts')).toEqual([1n, 2n, 3n, 18446744073709551615n]);
+    expect(cell(r, 'bucket_counts')).toEqual([1n, 2n, 3n, 9223372036854775807n]);
+    expect(cell(r, 'point_type')).toBe('histogram');
+    expect(() => row({ type: 'histogram', point: { bucketCounts: ['18446744073709551615'] } })).toThrowError(
+      expect.objectContaining({ code: 'invalid-report' }),
+    );
     expectKeys(r, 'points');
   });
 
@@ -408,6 +414,7 @@ describe('point value columns', () => {
     expect(cell(row({ type: 'histogram', point: {} }), 'zero_threshold')).toBeUndefined();
     expect(cell(none, 'positive_offset')).toBeNull();
     expect(cell(none, 'positive_counts')).toBeNull();
+    expect(cell(r, 'point_type')).toBe('exp_histogram');
   });
 
   test('a summary carries count, sum and tagged quantiles', () => {
@@ -417,6 +424,7 @@ describe('point value columns', () => {
     });
     expect(cell(r, 'count')).toBe(4n);
     expect(cell(r, 'sum')).toBe(10);
+    expect(cell(r, 'point_type')).toBe('summary');
     expect(JSON.parse(cell(r, 'quantiles') as string)).toEqual([
       { quantile: 0.5, value: { $d: '2' } },
       { value: { $d: '-0' } },

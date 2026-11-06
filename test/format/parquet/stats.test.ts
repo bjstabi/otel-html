@@ -83,13 +83,39 @@ describe('fileStatistics', () => {
       {},
     ];
     const st = fileStatistics('spans', rows, ['resource:cicd.pipeline.run.id', 'attr:k'], 10);
-    expect(st.values['resource:cicd.pipeline.run.id']).toEqual(['r1', 'r2']);
+    expect(st.values['resource:cicd.pipeline.run.id']).toEqual(['', 'r1', 'r2']);
     expect(st.values['attr:k']).toEqual(['1.5', '7', 'true']);
   });
 
-  test('keys that name nothing in the table give an empty list', () => {
-    const st = fileStatistics('traces', [{ trace_id: 'a' }], ['severity_number', 'bogus:x'], 10);
-    expect(st.values).toEqual({ severity_number: [], 'bogus:x': [] });
+  test('keys a table cannot answer give null, never an empty list', () => {
+    const st = fileStatistics(
+      'traces',
+      [{ trace_id: 'a', resource_attributes: '{"a":1}' }],
+      ['severity_number', 'bogus:x', 'attributes', 'attr:k', 'resource:k'],
+      10,
+    );
+    expect(st.values).toEqual({
+      severity_number: null,
+      'bogus:x': null,
+      attributes: null,
+      'attr:k': null,
+      'resource:k': null,
+    });
+    expect(
+      fileStatistics('spans', [{ attributes: '{"a":1}' }], ['attributes', 'unknown'], 10).values,
+    ).toEqual({
+      attributes: null,
+      unknown: null,
+    });
+  });
+
+  test('an empty string is a value; -0 is written as "-0"', () => {
+    const rows: Row[] = [{ scope_name: '' }, { scope_name: 'x' }, { scope_name: null }, {}];
+    expect(fileStatistics('spans', rows, ['scope_name'], 10).values).toEqual({ scope_name: ['', 'x'] });
+    const d: Row[] = [{ attributes: attrs({ k: { kind: 'double', value: -0 } }) }];
+    expect(fileStatistics('spans', d, ['attr:k'], 10).values['attr:k']).toEqual(['-0']);
+    const m: Row[] = [{ value_double: -0 }];
+    expect(fileStatistics('points', m, ['value_double'], 10).values).toEqual({ value_double: ['-0'] });
   });
 });
 
@@ -119,5 +145,23 @@ describe('statisticsKeysFor', () => {
       'resource:host.name',
       'attr:x',
     ]);
+  });
+
+  test('tables drop keys they cannot answer', () => {
+    const config = {
+      dashboards: [dashboard(['cicd.pipeline.run.id'])],
+      writer: { statisticsKeys: ['attr:x', 'attributes', 'bogus', 'name'] },
+    };
+    expect(statisticsKeysFor('traces', config)).not.toContainEqual(
+      expect.stringMatching(/^(resource|attr):/),
+    );
+    expect(statisticsKeysFor('patterns', config)).not.toContainEqual(
+      expect.stringMatching(/^(resource|attr):/),
+    );
+    const spans = statisticsKeysFor('spans', config);
+    expect(spans).toContain('resource:cicd.pipeline.run.id');
+    expect(spans).toContain('attr:x');
+    expect(spans).not.toContain('attributes');
+    expect(spans).not.toContain('bogus');
   });
 });

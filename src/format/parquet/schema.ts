@@ -14,6 +14,7 @@ export type ColumnType =
   | 'list_float64'
   | 'list_int64';
 
+// OTLP uint32 fields (flags, dropped counts) are stored as int32; values >= 2^31 are rejected by encodeTable.
 export interface ColumnDef {
   readonly name: string;
   readonly type: ColumnType;

@@ -46,6 +46,14 @@ function absoluteOrNull(t: RelNanos | null, epoch: UnixNanos): bigint | null {
   return t === null ? null : absolute(t, epoch);
 }
 
+const POINT_TYPE = {
+  gauge: 'gauge',
+  sum: 'sum',
+  histogram: 'histogram',
+  exponentialHistogram: 'exp_histogram',
+  summary: 'summary',
+} as const;
+
 const TEMPORALITY_NUMBER = { unspecified: 0, delta: 1, cumulative: 2 } as const;
 
 const SAFE_MAX = BigInt(Number.MAX_SAFE_INTEGER);
@@ -156,10 +164,20 @@ function double(v: unknown, path: string): number | null {
   throw bad(path, 'a number or "NaN" | "Infinity" | "-Infinity"', v);
 }
 
-/** An int64 field: a decimal string (a missing one is the protobuf default, `absent`). */
+const INT64_MIN = -(2n ** 63n);
+const INT64_MAX = 2n ** 63n - 1n;
+
+/**
+ * An int64 field: a decimal string (a missing one is the protobuf default, `absent`). A value outside the signed int64
+ * range (a uint64 above 2^63-1) is rejected, not clamped.
+ */
 function int64(v: unknown, path: string, absent: bigint | null): bigint | null {
   if (v === undefined) return absent;
-  if (typeof v === 'string' && /^-?[0-9]+$/.test(v)) return BigInt(v);
+  if (typeof v === 'string' && /^-?[0-9]+$/.test(v)) {
+    const n = BigInt(v);
+    if (n >= INT64_MIN && n <= INT64_MAX) return n;
+    throw bad(path, 'an integer within the signed int64 range', v);
+  }
   throw bad(path, 'a decimal integer string', v);
 }
 
@@ -253,7 +271,7 @@ export function pointRow(point: MetricPointRecord, norm: PointNormalization, ctx
     metric_name: point.name,
     metric_description: point.description,
     metric_unit: point.unit,
-    point_type: point.type,
+    point_type: POINT_TYPE[point.type],
     aggregation_temporality: TEMPORALITY_NUMBER[point.temporality],
     is_monotonic: point.monotonic,
     start_time_unix_nano: absoluteOrNull(point.start, ctx.epoch),
