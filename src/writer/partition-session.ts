@@ -43,6 +43,7 @@ import type {
   WriterDeps,
   WriterSession,
 } from './session.js';
+import { traceRows } from './trace-summaries.js';
 import { writeViewerAssets } from './viewer-assets.js';
 
 /** The DuckDB-WASM version the report's engine files must match; Task 7.1 moves this to `engine-assets.ts`. */
@@ -202,6 +203,7 @@ class PartitionSession implements WriterSession {
       statisticsKeys: this.#statisticsKeys,
       facetValueCap: config.writer.facetValueCap,
       nextPartition: r.nextPartition,
+      derive: (taken) => ({ rows: { traces: traceRows(taken.spans, taken.logs) } }),
     });
     this.#createdAt = r.createdAt;
     this.#title = r.title;

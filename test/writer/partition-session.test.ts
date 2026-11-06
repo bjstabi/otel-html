@@ -16,7 +16,7 @@ import {
   type TestWriter,
   testConfig,
 } from '../../test-support/writer-deps.js';
-import { spanIdOf, spansRequest } from './helpers.js';
+import { spanIdOf, spansRequest, traceIdOf } from './helpers.js';
 
 const OUT = 'r';
 
@@ -97,7 +97,7 @@ describe('PartitionSession', () => {
     await s.add(spans(2), 'a.json');
     await s.flush();
     const entry = manifest(w).partitions[0];
-    expect(Object.keys(entry?.files ?? {})).toEqual(['spans']);
+    expect(Object.keys(entry?.files ?? {})).toEqual(['spans', 'traces']);
     expect(await w.fs.exists(`${OUT}/data/partitions/000000/logs.parquet`)).toBe(false);
     await s.close();
   });
@@ -486,5 +486,58 @@ describe('format mismatches', () => {
     await s.close();
     expect(manifest(w).formatVersion).toBe(4);
     expect([...w.fs.snapshot().keys()].some((k) => k.includes('data/chunks/spans/0'))).toBe(false);
+  });
+});
+
+describe('trace summaries per partition', () => {
+  async function traceIds(w: TestWriter, n: number): Promise<string[]> {
+    const bytes = await w.fs.readBytes(`${OUT}/data/partitions/${String(n).padStart(6, '0')}/traces.parquet`);
+    return decodeTable('traces', bytes).map((r) => String(Reflect.get(r, 'trace_id')));
+  }
+
+  test('a partition with spans and logs lists a traces file with one row per distinct trace', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    await s.add(spans(2), 'a.json');
+    await s.add(
+      otlp(
+        logsRequest([
+          logRecord({ traceId: traceIdOf(0) }),
+          logRecord({ traceId: traceIdOf(7) }),
+          logRecord(),
+        ]),
+      ),
+      'l.json',
+    );
+    await s.flush();
+    const file = manifest(w).partitions[0]?.files.traces;
+    expect(file?.path).toBe('data/partitions/000000/traces.parquet');
+    expect(file?.rows).toBe(3);
+    expect((await traceIds(w, 0)).sort()).toEqual([traceIdOf(0), traceIdOf(1), traceIdOf(7)].sort());
+    await s.close();
+  });
+
+  test('the same trace in the next flush is a second row in the next partition', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    await s.add(spans(1), 'a.json');
+    await s.flush();
+    await s.add(otlp(logsRequest([logRecord({ traceId: traceIdOf(0) })])), 'l.json');
+    await s.flush();
+    expect(await traceIds(w, 0)).toEqual([traceIdOf(0)]);
+    expect(await traceIds(w, 1)).toEqual([traceIdOf(0)]);
+    await s.close();
+  });
+
+  test('a cut that fails and then succeeds writes one traces row per trace', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    await s.add(spans(2), 'a.json');
+    w.fs.failNextWrite('000000/spans.parquet');
+    await expect(s.flush()).rejects.toThrow();
+    await s.flush();
+    expect(manifest(w).partitions[0]?.files.traces?.rows).toBe(2);
+    expect(await traceIds(w, 0)).toHaveLength(2);
+    await s.close();
   });
 });

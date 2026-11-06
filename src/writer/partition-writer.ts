@@ -14,6 +14,17 @@ export interface PartitionWriterOptions {
   statisticsKeys: Record<Table, string[]>;
   facetValueCap: number;
   nextPartition: number;
+  /** Derives rows for other tables from the rows a cut took; see `Derived`. */
+  derive?: (taken: Readonly<Record<Table, readonly Row[]>>) => Derived;
+}
+
+/**
+ * What a derive hook returns. `rows` are written with the cut's own rows (they need not be held). `commit` runs
+ * once, only after every file of the cut was written, so a stateful deriver changes its state only on success.
+ */
+interface Derived {
+  rows: Partial<Record<Table, readonly Row[]>>;
+  commit?: () => void;
 }
 
 const ROW_OVERHEAD_BYTES = 64;
@@ -79,9 +90,11 @@ export class PartitionWriter {
     this.#rows = 0;
     this.#bytes = 0;
     try {
+      // Synchronous, before any await: it sees exactly the rows this cut took. A throw restores them below.
+      const derived = this.#opts.derive?.(taken);
       const encoded: { table: Table; rows: Row[]; bytes: Uint8Array }[] = [];
       for (const table of TABLES) {
-        const rows = taken[table];
+        const rows = [...taken[table], ...(derived?.rows[table] ?? [])];
         if (rows.length === 0) continue;
         encoded.push({
           table,
@@ -101,6 +114,7 @@ export class PartitionWriter {
         };
       }
       this.#next = n + 1;
+      derived?.commit?.();
       return { n, source, files };
     } catch (e) {
       for (const table of TABLES) this.#held[table] = [...taken[table], ...this.#held[table]];
