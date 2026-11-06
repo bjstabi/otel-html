@@ -22,6 +22,49 @@
 | 4 | §8: `host`, REST connector, engine policy | after plan 3 |
 | publishing | `2026-11-06-incremental-ci-publishing-design.md` | after plan 2 (needs the publisher on format 4) |
 
+## Kickoff prompts for the sessions that follow
+
+Each is pasted into a fresh session after `/clear`, in order; each waits for the previous plan to have merged to
+`feat/format-4`. They are kept here so no session has to remember them.
+
+**Session A, this plan:**
+
+```
+Execute docs/superpowers/plans/2026-11-06-format-4-writer.md with superpowers:subagent-driven-development.
+
+Context: this is plan 1 of the format-4 design (docs/superpowers/specs/2026-11-06-parquet-duckdb-format-4-design.md, approved). The PR process is unattended (docs/agents/process-unattended.md) with one change the plan states: every PR targets the long-lived branch feat/format-4, not main, and the next PR branches from the updated feat/format-4. Per CLAUDE.md, implementers and task reviewers run on Sonnet 5.5 and the whole-branch review on Opus 5.5; say which model each review ran on. Start at PR 1, Task 1.1, from `git switch feat/format-4`. Stop and ask only where the process or the plan says to.
+```
+
+**Session B, write plan 2 (the viewer):**
+
+```
+Write plan 2 of the format-4 spec (docs/superpowers/specs/2026-11-06-parquet-duckdb-format-4-design.md §7: the Mosaic data layer, the five views, OTTL to SQL, Traces and Logs pages, Services, the dashboards' span and log widgets, deleting the scan code, flipping writer.format's default to local and removing chunks, the e2e re-baseline in site format, and the publisher switch) with superpowers:writing-plans. Skip brainstorming: the spec is approved. Read docs/superpowers/plans/2026-11-06-format-4-writer.md first for the interfaces plan 1 produced and for the "Kickoff prompts" section, run the builder check, and save as docs/superpowers/plans/<date>-format-4-viewer.md on feat/format-4, adding its own execution prompt to that section. Same process: unattended, PRs target feat/format-4.
+```
+
+**Session C, execute plan 2:** the prompt session B adds here.
+
+**Session D, write plan 3 (metrics in the viewer):**
+
+```
+Write plan 3 of the format-4 spec (§6.4 and §7.2 for metrics: `points` queries through mosaic-sql, metric `fn`s and formulas, the Metrics explorer, catalog and metric dashboard widgets, downsampled tables only if the metrics-scale budget demands them) with superpowers:writing-plans. Skip brainstorming. Read the format-4 writer and viewer plans first, run the builder check, save as docs/superpowers/plans/<date>-format-4-metrics.md on feat/format-4 and add its execution prompt to the writer plan's "Kickoff prompts" section. Unattended; PRs target feat/format-4.
+```
+
+**Session E, write plan 4 (`host`):**
+
+```
+Write plan 4 of the format-4 spec (§8: `otel-html host`, Mosaic's REST connector protocol, the engine policy and its tests, the REST connector path in the viewer) with superpowers:writing-plans. Skip brainstorming. Read the earlier format-4 plans first, run the builder check, save as docs/superpowers/plans/<date>-format-4-host.md on feat/format-4 and add its execution prompt to the writer plan's "Kickoff prompts" section. Unattended; PRs target feat/format-4.
+```
+
+**Session F, the format-4 release:** once plans 1–3 are merged on `feat/format-4`, open the PR from `feat/format-4` to
+`main` titled `feat!: format 4, Parquet partitions queried by DuckDB in the browser` (reviewed by the maintainer: it is
+the format bump), with the frozen format-4 fixture added as the compatibility rule asks when the release is cut.
+
+**Session G, write the publishing plan** (after the publisher runs on format 4, i.e. plan 2 shipped):
+
+```
+Write the implementation plan for docs/superpowers/specs/2026-11-06-incremental-ci-publishing-design.md with superpowers:writing-plans. Skip brainstorming: the spec is approved and the maintainer's decisions are in its §10. Run the builder check, save as docs/superpowers/plans/<date>-incremental-ci-publishing.md. The PR process is unattended, but the plan must mark every task that touches ci-report.yml, pages-deploy.yml, the otel-html-publish action or anything running with a write token as "stop and ask" per docs/agents/process-unattended.md.
+```
+
 ## Global Constraints
 
 - No native dependency in the package or the binaries: `parquet-wasm`, `apache-arrow` and `@duckdb/duckdb-wasm` only; `@duckdb/node-api` is not a dependency.
