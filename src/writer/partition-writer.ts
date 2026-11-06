@@ -36,6 +36,7 @@ interface Derived {
 }
 
 const ROW_OVERHEAD_BYTES = 64;
+const LIST_ELEMENT_BYTES = 8;
 
 function emptyHeld(): Record<Table, MutableBatch> {
   const held = {} as Record<Table, MutableBatch>;
@@ -72,7 +73,10 @@ export class PartitionWriter {
     h.length++;
     this.#rows++;
     let bytes = ROW_OVERHEAD_BYTES;
-    for (const v of Object.values(row)) if (typeof v === 'string') bytes += v.length;
+    for (const v of Object.values(row)) {
+      if (typeof v === 'string') bytes += v.length;
+      else if (Array.isArray(v)) bytes += LIST_ELEMENT_BYTES * v.length;
+    }
     this.#bytes += bytes;
   }
 
@@ -81,7 +85,7 @@ export class PartitionWriter {
     return this.#rows;
   }
 
-  /** Estimated bytes held, for the flush-by-size rule (sum of string cell lengths plus 64 per row). */
+  /** Estimated bytes held, for the flush-by-size rule (string cell lengths, 8 per list element, and 64 per row). */
   get pendingBytes(): number {
     return this.#bytes;
   }

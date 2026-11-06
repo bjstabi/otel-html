@@ -18,22 +18,40 @@ const HASHES: readonly (readonly [number, number])[] = [
  * with their attributes (keys sorted), not their report-local ids.
  */
 export function seriesIdOf(p: MetricPointRecord, resource: ResourceRecord, scope: ScopeRecord): string {
-  const identity = JSON.stringify([
-    p.name,
-    p.type,
-    p.unit,
-    p.temporality,
-    p.monotonic,
-    boundsOf(p),
-    [resource.schemaUrl, resource.droppedAttributesCount, canonicalAttributesKey(resource.attributes)],
-    [
+  const head = JSON.stringify([p.name, p.type, p.unit, p.temporality, p.monotonic, boundsOf(p)]).slice(1, -1);
+  const identity = `[${head},${resourcePart(resource)},${scopePart(scope)},${JSON.stringify(canonicalAttributesKey(p.attributes))}]`;
+  return HASHES.map(([basis, prime]) => hash32(identity, basis, prime)).join('');
+}
+
+// The resource and scope parts are the same for every point of a resource or scope, and they are most of the
+// identity. A record is interned for the session, so its part is built once; a weak key lets it go with the record.
+const RESOURCE_PARTS = new WeakMap<ResourceRecord, string>();
+const SCOPE_PARTS = new WeakMap<ScopeRecord, string>();
+
+function resourcePart(resource: ResourceRecord): string {
+  let part = RESOURCE_PARTS.get(resource);
+  if (part === undefined) {
+    part = JSON.stringify([
+      resource.schemaUrl,
+      resource.droppedAttributesCount,
+      canonicalAttributesKey(resource.attributes),
+    ]);
+    RESOURCE_PARTS.set(resource, part);
+  }
+  return part;
+}
+
+function scopePart(scope: ScopeRecord): string {
+  let part = SCOPE_PARTS.get(scope);
+  if (part === undefined) {
+    part = JSON.stringify([
       scope.name,
       scope.version,
       scope.schemaUrl,
       scope.droppedAttributesCount,
       canonicalAttributesKey(scope.attributes),
-    ],
-    canonicalAttributesKey(p.attributes),
-  ]);
-  return HASHES.map(([basis, prime]) => hash32(identity, basis, prime)).join('');
+    ]);
+    SCOPE_PARTS.set(scope, part);
+  }
+  return part;
 }

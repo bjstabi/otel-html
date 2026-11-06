@@ -111,13 +111,62 @@ describe('points table', () => {
     await s.close();
   });
 
-  test('a delta-temporality sum has no delta columns', async () => {
+  test('a delta-temporality sum writes its own value as the delta (R39)', async () => {
     const w = createTestWriter();
     const s = await open(w);
     await s.add(sum('c', 4, 1, { aggregationTemporality: 1 }), 'a.json');
     await s.flush();
     const [row] = await points(w, 0);
-    expect(row).toMatchObject({ value_double: 4, delta_value: null, delta_count: null });
+    expect(row).toMatchObject({ value_double: 4, delta_value: 4, delta_count: null, reset: false });
+    await s.close();
+  });
+
+  test('a delta-temporality histogram writes its own count and sum as the deltas (R39)', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    await s.add(
+      metricsRequestOf({
+        name: 'lat',
+        histogram: {
+          aggregationTemporality: 1,
+          dataPoints: [
+            {
+              startTimeUnixNano: T0,
+              timeUnixNano: T(1),
+              count: '3',
+              sum: 10,
+              bucketCounts: ['1', '1', '1'],
+              explicitBounds: [1, 5],
+            },
+          ],
+        },
+      }),
+      'a.json',
+    );
+    await s.flush();
+    const [row] = await points(w, 0);
+    expect(row).toMatchObject({ count: 3n, sum: 10, delta_count: 3n, delta_value: 10 });
+    await s.close();
+  });
+
+  test('a gauge and a non-monotonic sum have no deltas, even with delta temporality', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    await s.add(sum('up', 4, 1, { aggregationTemporality: 1, isMonotonic: false }), 'a.json');
+    await s.flush();
+    const [row] = await points(w, 0);
+    expect(row).toMatchObject({ delta_value: null, delta_count: null });
+    await s.close();
+  });
+
+  test('the report range of a point starts at its start time', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    await s.add(sum('c', 1, 100), 'a.json'); // start T0, time T0 + 100 s
+    await s.flush();
+    const range = manifestOf(w).range;
+    expect(BigInt(range?.start ?? 0)).toBe(BigInt(T0));
+    expect(BigInt(range?.end ?? 0)).toBe(BigInt(T(100)));
     await s.close();
   });
 

@@ -89,6 +89,12 @@ describe('PartitionWriter', () => {
     expect(w.pendingBytes).toBe(4 + 2 + 3 + 64);
   });
 
+  test('pendingBytes counts 8 bytes per list element on top of the strings and the row overhead', () => {
+    const { w } = make();
+    w.add('points', { metric_name: 'm', explicit_bounds: [1, 2, 3], bucket_counts: [1n, 2n, 3n, 4n] });
+    expect(w.pendingBytes).toBe(1 + 64 + 8 * 7);
+  });
+
   test('a failed encode keeps the rows held and the partition number', async () => {
     const { fs, w } = make(0, () => ({ rows: { traces: [{ trace_id: 5 }] } }));
     w.add('spans', span(1, 'a', 100n));
