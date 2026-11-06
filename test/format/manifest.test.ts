@@ -10,7 +10,7 @@ import {
   traceShardPath,
 } from '../../src/format/paths.js';
 import { parseSessionState, SessionStateSchema } from '../../src/format/state.js';
-import { FORMAT_VERSION, REGISTRATION_GLOBAL } from '../../src/format/version.js';
+import { CHUNK_FORMAT_VERSION, REGISTRATION_GLOBAL } from '../../src/format/version.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { parseTraceId } from '../../src/model/ids.js';
 import { TRACE_ID } from '../../test-support/otlp-builders.js';
@@ -61,7 +61,7 @@ function failure(fn: () => unknown): OtelHtmlError {
 
 describe('paths', () => {
   test('constants and helpers', () => {
-    expect(FORMAT_VERSION).toBe(3);
+    expect(CHUNK_FORMAT_VERSION).toBe(3);
     expect(REGISTRATION_GLOBAL).toBe('__OH__');
     expect(chunkPath('spans', 12)).toBe('data/chunks/spans/000012.js');
     expect(chunkPath('metrics', 1234567)).toBe('data/chunks/metrics/1234567.js');

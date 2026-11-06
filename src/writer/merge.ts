@@ -4,7 +4,7 @@ import { reviveDataJson, unwrapDataFile } from '../format/data-file.js';
 import { type Manifest, type ManifestChunk, parseManifest } from '../format/manifest.js';
 import { MANIFEST_KEY, MANIFEST_PATH, type Signal } from '../format/paths.js';
 import { LOG_COLUMNS, METRIC_COLUMNS, SPAN_COLUMNS } from '../format/specs.js';
-import { READABLE_FORMAT_VERSIONS } from '../format/version.js';
+import { CHUNK_READABLE_FORMAT_VERSIONS } from '../format/version.js';
 import { OtelHtmlError } from '../model/errors.js';
 import { parseUnixNanos, type UnixNanos } from '../model/ids.js';
 import { at } from './checkpoint.js';
@@ -70,11 +70,11 @@ export async function readReportManifest(fs: FileSystem, rawDir: string, verb = 
     typeof raw === 'object' &&
     raw !== null &&
     'formatVersion' in raw &&
-    !READABLE_FORMAT_VERSIONS.some((v) => v === raw.formatVersion)
+    !CHUNK_READABLE_FORMAT_VERSIONS.some((v) => v === raw.formatVersion)
   ) {
     // merge replays chunks, which every readable version lays out alike.
     throw new OtelHtmlError('version-mismatch', {
-      message: `${file}: unsupported report formatVersion ${JSON.stringify(raw.formatVersion)}; this otel-html reads formatVersion ${READABLE_FORMAT_VERSIONS.join(' or ')}`,
+      message: `${file}: unsupported report formatVersion ${JSON.stringify(raw.formatVersion)}; this otel-html reads formatVersion ${CHUNK_READABLE_FORMAT_VERSIONS.join(' or ')}`,
       hint: 'merge the report with the otel-html version that wrote it, or regenerate it from its OTLP input',
     });
   }

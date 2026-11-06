@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { mergeWith } from '../../src/api/convert.js';
-import { FORMAT_VERSION } from '../../src/format/version.js';
+import { CHUNK_FORMAT_VERSION } from '../../src/format/version.js';
 import { createTestWriter, type TestWriter } from '../../test-support/writer-deps.js';
 import { manifestOf } from '../writer/helpers.js';
 
@@ -39,6 +39,6 @@ describe.each([
     expect(summary.totals).toEqual(expected.totals);
     expect(summary.totals.spans).toBeGreaterThan(0);
     expect(summary.totals.metrics).toBeGreaterThan(0);
-    expect(manifestOf(w, 'm').formatVersion).toBe(FORMAT_VERSION);
+    expect(manifestOf(w, 'm').formatVersion).toBe(CHUNK_FORMAT_VERSION);
   });
 });
