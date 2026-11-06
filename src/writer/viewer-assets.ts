@@ -13,7 +13,7 @@ export interface ViewerAssets {
 }
 
 /** The file name the binary build embeds parquet-wasm's WASM under (see `scripts/build-binaries.ts`); not a viewer asset. */
-export const PARQUET_WASM_FILE = 'parquet_wasm_bg.wasm';
+const PARQUET_WASM_FILE = 'parquet_wasm_bg.wasm';
 
 const SAFE_SEGMENT = /^[A-Za-z0-9.][A-Za-z0-9._-]*$/;
 

@@ -6,7 +6,11 @@ import { setParquetWasmSource } from '../format/parquet/wasm.js';
 // (`registerEmbeddedParquetWasm`), because a path inlined at build time would not exist on the user's machine.
 let embeddedPath: string | undefined;
 
-/** Called by the binary build entry with the path of the embedded `parquet_wasm_bg.wasm`. */
+/**
+ * Called by the binary build entry (generated in `scripts/build-binaries.ts`, so invisible to knip) with the path of
+ * the embedded `parquet_wasm_bg.wasm`.
+ * @public
+ */
 export function registerEmbeddedParquetWasm(path: string): void {
   embeddedPath = path;
 }
