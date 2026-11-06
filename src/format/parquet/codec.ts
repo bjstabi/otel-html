@@ -18,7 +18,7 @@ import {
 } from 'parquet-wasm/esm';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { Row } from './rows.js';
-import { arrowSchema, type ColumnType, SORT_COLUMNS, TABLE_COLUMNS, type Table } from './schema.js';
+import { arrowSchema, type ColumnType, SORT_COLUMNS, TABLE_COLUMNS, TABLES, type Table } from './schema.js';
 import { ensureParquetWasm } from './wasm.js';
 
 export interface EncodeOptions {
@@ -88,6 +88,10 @@ function invalidCell(path: string, expected: string, actual: string): OtelHtmlEr
   return new OtelHtmlError('invalid-report', { path, expected, actual });
 }
 
+const COLUMN_NAMES = new Map<Table, ReadonlySet<string>>(
+  TABLES.map((t) => [t, new Set(TABLE_COLUMNS[t].map((c) => c.name))]),
+);
+
 /**
  * Throws `invalid-report` unless `row` holds only columns of `table`, a value in every non-nullable column, and for
  * every cell the JS type and range its column stores. `encodeTable` runs it on every row; a session runs it on rows
@@ -96,7 +100,7 @@ function invalidCell(path: string, expected: string, actual: string): OtelHtmlEr
 export function checkRow(table: Table, row: Row, index = 0): void {
   const columns = TABLE_COLUMNS[table];
   for (const k of Object.keys(row)) {
-    if (!columns.some((c) => c.name === k))
+    if (!COLUMN_NAMES.get(table)?.has(k))
       throw invalidCell(`${table}.${k}`, 'a column of the table', `unknown column in row ${index}`);
   }
   for (const def of columns) {

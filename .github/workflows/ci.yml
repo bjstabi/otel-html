@@ -373,9 +373,11 @@ jobs:
           tmp="$(mktemp -d)"
           cp "$BIN" "$tmp/otel-html${{ matrix.ext }}"
           cp fixtures/linked-traces.otlp.json "$tmp/in.otlp.json"
-          # The checkout's node_modules is where the inlined path would point; move it away for the run.
-          mv node_modules "$tmp/node_modules.away"
-          trap 'mv "$tmp/node_modules.away" "$GITHUB_WORKSPACE/node_modules"' EXIT
+          # The checkout's node_modules is where the inlined path would point; rename it (in place: a move across
+          # drives would copy the tree on Windows) for the run. The trap goes first so a failure restores it.
+          root="$PWD"
+          trap '[ -d "$root/node_modules.away" ] && mv "$root/node_modules.away" "$root/node_modules"' EXIT
+          mv node_modules node_modules.away
           cd "$tmp"
           OTEL_HTML_FORMAT=site ./otel-html${{ matrix.ext }} convert in.otlp.json -o out
           test -s out/data/partitions/000000/spans.parquet
