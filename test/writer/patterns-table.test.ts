@@ -7,7 +7,7 @@ import { MANIFEST_KEY } from '../../src/format/paths.js';
 import { Drain, template } from '../../src/rollups/drain.js';
 import { severityKey } from '../../src/semconv/severity.js';
 import { openSession } from '../../src/writer/session.js';
-import { logRecord, logsRequest } from '../../test-support/otlp-builders.js';
+import { logRecord, logsRequest, span, traceRequest } from '../../test-support/otlp-builders.js';
 import { createTestWriter, otlp, type TestWriter, testConfig } from '../../test-support/writer-deps.js';
 
 const OUT = 'r';
@@ -104,6 +104,19 @@ describe('patterns per partition', () => {
     const expected = d.clusters().map((c) => template(c));
     const got = (await patterns(w, 0)).map((r) => String(cell(r, 'template')));
     expect(got.sort()).toEqual(expected.sort());
+    await s.close();
+  });
+});
+
+describe('patterns and the Drain without logs', () => {
+  test('a spans-only flush writes no patterns file', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    await s.add(logs(body('user 17 logged in')), 'a.json');
+    await s.flush();
+    await s.add(otlp(traceRequest([span()])), 'b.json');
+    await s.flush();
+    expect(manifest(w).partitions[1]?.files.patterns).toBeUndefined();
     await s.close();
   });
 });

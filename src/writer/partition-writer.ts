@@ -44,6 +44,7 @@ export class PartitionWriter {
   #rows = 0;
   #bytes = 0;
   #next: number;
+  #cutting = false;
 
   constructor(fs: FileSystem, opts: PartitionWriterOptions) {
     this.#fs = fs;
@@ -77,11 +78,13 @@ export class PartitionWriter {
    * Takes the held rows at its start, so rows added while the files are being written land in the next partition.
    * Encodes every table first, then writes the files, so an encoding error writes nothing. If anything throws
    * (encoding or a write), the taken rows go back in front of the rows added since and `nextPartition` is
-   * unchanged: the caller may abort or retry, and a retry rewrites the same partition directory. Callers run one cut
-   * at a time. Tables with no rows get no file and no key in `files`. Returns null when nothing is held.
+   * unchanged: the caller may abort or retry, and a retry rewrites the same partition directory. Cuts must not
+   * overlap: a call while another cut is in progress throws. Tables with no rows get no file and no key in `files`. Returns null when nothing is held.
    */
   async cut(source: string): Promise<PartitionEntry | null> {
+    if (this.#cutting) throw new Error('PartitionWriter.cut called while another cut is in progress');
     if (this.#rows === 0) return null;
+    this.#cutting = true;
     const n = this.#next;
     const taken = this.#held;
     const takenRows = this.#rows;
@@ -121,6 +124,8 @@ export class PartitionWriter {
       this.#rows += takenRows;
       this.#bytes += takenBytes;
       throw e;
+    } finally {
+      this.#cutting = false;
     }
   }
 }

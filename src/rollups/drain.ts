@@ -58,7 +58,7 @@ export function template(c: DrainCluster): string {
 }
 
 /** The first body seen, cut to `SAMPLE_CHARS` without splitting a surrogate pair. */
-function cutSample(body: string): string {
+export function cutSample(body: string): string {
   let end = SAMPLE_CHARS;
   const last = body.charCodeAt(end - 1);
   if (body.length > end && last >= 0xd800 && last <= 0xdbff) end--;

@@ -198,3 +198,19 @@ describe('PartitionWriter', () => {
     });
   });
 });
+
+describe('PartitionWriter overlapping cuts', () => {
+  test('a cut while another is writing throws, and neither the first nor the next cut is harmed', async () => {
+    const { fs, w } = make();
+    w.add('spans', span(1, 'a', 100n));
+    const gate = fs.holdNextWrite('000000/spans.parquet');
+    const first = w.cut('flush:1');
+    await gate.reached;
+    w.add('spans', span(2, 'a', 200n));
+    await expect(w.cut('flush:2')).rejects.toThrow(/in progress/);
+    expect(w.pendingRows).toBe(1);
+    gate.release();
+    expect((await first)?.n).toBe(0);
+    expect((await w.cut('flush:2'))?.n).toBe(1);
+  });
+});

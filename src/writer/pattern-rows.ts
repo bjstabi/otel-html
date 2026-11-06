@@ -2,7 +2,7 @@ import { anyValueFromJson } from '../format/columns.js';
 import type { Row } from '../format/parquet/rows.js';
 import { anyValueToDisplay } from '../model/anyvalue.js';
 import type { RelNanos } from '../model/ids.js';
-import { Drain, template } from '../rollups/drain.js';
+import { cutSample, Drain, template } from '../rollups/drain.js';
 import { severityKey } from '../semconv/severity.js';
 
 interface Group {
@@ -27,7 +27,7 @@ function bodyText(row: Row): string {
  * `drain` itself is not touched: the caller adopts the copy only after the cut's files were written, so a retried
  * cut derives the same rows and ids once. One row per cluster that got a log in this cut: `count` is this cut's
  * logs, times are the min/max effective log time (`time_unix_nano`, else observed; null when none), `template` is
- * the cluster's template after the cut, `sample` the first body (taken order) of the cut.
+ * the cluster's template after the cut, `sample` the first body (taken order) of the cut, cut to the Drain's sample length.
  *
  * The copy goes through `toJSON`/`Drain.from` (the clone Drain has): cost grows with the clusters (at most 2000).
  */
@@ -36,6 +36,7 @@ export function patternRows(
   logs: readonly Row[],
   epoch: bigint,
 ): { rows: Row[]; drain: Drain } {
+  if (logs.length === 0) return { rows: [], drain }; // nothing to cluster: no copy, the commit re-adopts `drain`
   const copy = Drain.from(drain.toJSON(), 'drain');
   const groups = new Map<number, Group>();
   for (const l of logs) {
@@ -46,7 +47,7 @@ export function patternRows(
     if (id < 0) continue;
     let g = groups.get(id);
     if (g === undefined) {
-      g = { id, count: 0, first: null, last: null, severities: {}, sample: text };
+      g = { id, count: 0, first: null, last: null, severities: {}, sample: cutSample(text) };
       groups.set(id, g);
     }
     g.count++;
