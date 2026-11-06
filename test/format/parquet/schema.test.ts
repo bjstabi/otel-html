@@ -37,6 +37,18 @@ describe('parquet table schemas', () => {
     }
   });
 
+  test('logs may have no time and carry an event_name dictionary column', () => {
+    const logs = TABLE_COLUMNS.logs;
+    expect(logs.find((c) => c.name === 'time_unix_nano')).toMatchObject({ type: 'int64', nullable: true });
+    expect(logs.find((c) => c.name === 'event_name')).toMatchObject({
+      type: 'utf8',
+      nullable: true,
+      dictionary: true,
+    });
+    const names = logs.map((c) => c.name);
+    expect(names.indexOf('event_name')).toBe(names.indexOf('severity_text') + 1);
+  });
+
   test('arrow types follow the column types', () => {
     const points = arrowSchema('points');
     expect(String(points.fields.find((f) => f.name === 'explicit_bounds')?.type)).toBe('List<Float64>');

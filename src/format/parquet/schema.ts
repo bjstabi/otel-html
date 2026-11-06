@@ -34,6 +34,7 @@ const DICTIONARY_COLUMNS: ReadonlySet<string> = new Set([
   'parent_span_id',
   'status_message',
   'severity_text',
+  'event_name',
   'scope_version',
   'template',
 ]);
@@ -81,10 +82,11 @@ const SPANS: readonly ColumnDef[] = [
 ];
 
 const LOGS: readonly ColumnDef[] = [
-  required('time_unix_nano', 'int64'),
+  col('time_unix_nano', 'int64'),
   col('observed_time_unix_nano', 'int64'),
   col('severity_number', 'int32'),
   col('severity_text', 'utf8'),
+  col('event_name', 'utf8'),
   col('body', 'json'),
   col('attributes', 'json'),
   col('dropped_attributes_count', 'int32'),
