@@ -1,8 +1,10 @@
 import { z } from 'zod';
+import { OtelHtmlError } from '../model/errors.js';
 import type { JsonValue } from './columns.js';
+import type { Table } from './parquet/schema.js';
 import type { SIGNALS } from './paths.js';
 import { type TraceShard, TraceShardSchema } from './trace-shard.js';
-import { parseWith } from './validate.js';
+import { describe, parseWith } from './validate.js';
 
 /**
  * Serialized rollups: per-signal (or per-rollup) JSON values. Permissive on purpose: the rollup
@@ -59,4 +61,74 @@ export const SessionStateSchema: z.ZodType<SessionState> = z.strictObject({
 
 export function parseSessionState(input: unknown): SessionState {
   return parseWith(SessionStateSchema, input, 'state');
+}
+
+/** The format-4 writer's checkpoint: partitions replace chunks, so there are no chunk counters, rollups or trace index. */
+export interface SessionStateV2 {
+  formatVersion: 2;
+  otelHtmlVersion: string;
+  epochUnixNano: string | null;
+  nextPartition: number;
+  /** Partitions written since open that `close()` compacts: strictly increasing, each below `nextPartition`. */
+  flushPartitions: number[];
+  dedupe: string[];
+  /** The metric stream normalizer's state; `null` when it has none. Its owner validates the shape. */
+  metricStreams: unknown;
+  /** The drain log-template state; `null` when it has none. Its owner validates the shape. */
+  drain: unknown;
+  statisticsKeys: Record<Table, string[]>;
+}
+
+// Required but opaque: any JSON value, `null` for none, never absent.
+const opaque = z.custom<unknown>((v) => v !== undefined, 'a JSON value (null when there is none)');
+
+const SessionStateV2Schema: z.ZodType<SessionStateV2> = z
+  .strictObject({
+    formatVersion: z.literal(2),
+    otelHtmlVersion: z.string(),
+    epochUnixNano: z
+      .string()
+      .regex(/^[0-9]+$/, 'decimal nanoseconds')
+      .nullable(),
+    nextPartition: nonNegInt,
+    flushPartitions: z.array(nonNegInt),
+    dedupe: z.array(z.string()),
+    metricStreams: opaque,
+    drain: opaque,
+    statisticsKeys: z.strictObject({
+      spans: z.array(z.string()),
+      logs: z.array(z.string()),
+      points: z.array(z.string()),
+      traces: z.array(z.string()),
+      patterns: z.array(z.string()),
+    }),
+  })
+  .superRefine((s, ctx) => {
+    s.flushPartitions.forEach((n, i) => {
+      const prev = s.flushPartitions[i - 1];
+      if (prev !== undefined && n <= prev) {
+        ctx.addIssue({ code: 'custom', path: ['flushPartitions', i], message: `a number above ${prev}` });
+      } else if (n >= s.nextPartition) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['flushPartitions', i],
+          message: `a number below nextPartition (${s.nextPartition})`,
+        });
+      }
+    });
+  });
+
+export type AnySessionState = SessionState | SessionStateV2;
+
+/** Dispatch on `formatVersion`: 1 is a chunk-format state, 2 a partition-format state. */
+export function parseAnySessionState(input: unknown): AnySessionState {
+  const v =
+    typeof input === 'object' && input !== null && 'formatVersion' in input ? input.formatVersion : undefined;
+  if (v === 1) return parseSessionState(input);
+  if (v === 2) return parseWith(SessionStateV2Schema, input, 'state');
+  throw new OtelHtmlError('invalid-report', {
+    path: 'state.formatVersion',
+    expected: '1 | 2',
+    actual: describe(typeof input === 'object' && input !== null ? v : input),
+  });
 }

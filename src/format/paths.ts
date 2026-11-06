@@ -1,5 +1,6 @@
 import { OtelHtmlError } from '../model/errors.js';
 import type { TraceId } from '../model/ids.js';
+import type { Table } from './parquet/schema.js';
 
 export const SIGNALS = ['spans', 'logs', 'metrics'] as const;
 export type Signal = (typeof SIGNALS)[number];
@@ -57,3 +58,41 @@ export function rollupKey(name: string): string {
 export function shardOf(traceId: TraceId): string {
   return traceId.slice(0, 2);
 }
+
+export function partitionDir(n: number): string {
+  if (!Number.isSafeInteger(n) || n < 0) {
+    throw new OtelHtmlError('invalid-report', {
+      path: 'partitionDir',
+      expected: 'a non-negative integer partition number',
+      actual: String(n),
+    });
+  }
+  return `data/partitions/${String(n).padStart(6, '0')}`;
+}
+
+export function partitionFilePath(n: number, table: Table): string {
+  return `${partitionDir(n)}/${table}.parquet`;
+}
+
+/** The base64 script next to a Parquet file in the local format. */
+export function partitionWrapperPath(n: number, table: Table): string {
+  return `${partitionFilePath(n, table)}.js`;
+}
+
+export function partitionKey(n: number, table: Table): string {
+  return `${partitionDir(n).slice('data/'.length)}/${table}`;
+}
+
+/** A manifest-listed partition file: six digits minimum, wider for n >= 10^6. */
+export const PARTITION_FILE_RE: RegExp =
+  /^data\/partitions\/[0-9]{6,}\/(?:spans|logs|points|traces|patterns)\.parquet$/;
+
+const ENGINE_VERSION_SOURCE = '[0-9][A-Za-z0-9.-]*';
+
+/** A DuckDB engine version as it appears in file names: no `/`, no leading `.` or `_`. */
+export const ENGINE_VERSION_RE: RegExp = new RegExp(`^${ENGINE_VERSION_SOURCE}$`);
+
+/** A DuckDB engine file under `assets/`, named by engine version. */
+export const ENGINE_ASSET_RE: RegExp = new RegExp(
+  `^assets/duckdb\\.${ENGINE_VERSION_SOURCE}\\.(?:wasm|worker\\.js|wasm\\.gz\\.b64\\.js|worker\\.b64\\.js)$`,
+);
