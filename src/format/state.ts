@@ -69,6 +69,8 @@ export interface SessionStateV2 {
   otelHtmlVersion: string;
   epochUnixNano: string | null;
   nextPartition: number;
+  /** Counts the state writes of the report (+1 each, across sessions); of two slots that match the manifest, the higher is newer. */
+  checkpoint: number;
   /** Partitions written since open that `close()` compacts: strictly increasing, each below `nextPartition`. */
   flushPartitions: number[];
   dedupe: string[];
@@ -91,6 +93,7 @@ const SessionStateV2Schema: z.ZodType<SessionStateV2> = z
       .regex(/^[0-9]+$/, 'decimal nanoseconds')
       .nullable(),
     nextPartition: nonNegInt,
+    checkpoint: nonNegInt,
     flushPartitions: z.array(nonNegInt),
     dedupe: z.array(z.string()),
     metricStreams: opaque,

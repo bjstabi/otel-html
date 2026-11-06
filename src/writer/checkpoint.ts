@@ -193,8 +193,11 @@ async function pickState<S extends { otelHtmlVersion: string }>(
   version: string,
   accept: (state: unknown) => S | null,
   matches: (state: S) => boolean,
+  /** With it, the matching slot of the highest rank wins; without it, the first match. */
+  rank?: (state: S) => number,
 ): Promise<{ state: S; slot: StateSlot }> {
   const problems: string[] = [];
+  let best: { state: S; slot: StateSlot } | null = null;
   for (const slot of STATE_SLOTS) {
     const p = statePath(slot);
     if (!(await fs.exists(at(out, p)))) continue;
@@ -212,9 +215,14 @@ async function pickState<S extends { otelHtmlVersion: string }>(
     if (state.otelHtmlVersion !== version) {
       throw versionMismatch(out, `${p} otelHtmlVersion`, state.otelHtmlVersion, version);
     }
-    if (matches(state)) return { state, slot };
+    if (matches(state)) {
+      if (rank === undefined) return { state, slot };
+      if (best === null || rank(state) > rank(best.state)) best = { state, slot };
+      continue;
+    }
     problems.push(`${p}: does not match the committed manifest`);
   }
+  if (best !== null) return best;
   throw new OtelHtmlError('invalid-report', {
     path: 'data/state',
     expected: 'a session checkpoint matching data/manifest.js',
@@ -257,7 +265,8 @@ export async function loadCheckpoint(fs: FileSystem, out: string, version: strin
  * The format-4 counterpart of `loadCheckpoint`. The matching state is the one whose `nextPartition` follows the
  * manifest's last partition (0 with none) and whose epoch equals the manifest's: after a crash between the state
  * write and the manifest commit, the state that ran ahead lists a partition the manifest does not, and the other
- * slot is picked. A format 1-3 report fails `version-mismatch`.
+ * slot is picked. When both slots match (an append after a close that wrote no data, then a crash), the one with the
+ * higher `checkpoint` is the newer. A format 1-3 report fails `version-mismatch`.
  */
 export async function loadPartitionCheckpoint(
   fs: FileSystem,
@@ -286,6 +295,7 @@ export async function loadPartitionCheckpoint(
       return s.formatVersion === 2 ? s : null;
     },
     (s) => s.nextPartition === next && (s.epochUnixNano ?? '0') === manifest.epochUnixNano,
+    (s) => s.checkpoint,
   );
   return { manifest, state, slot };
 }

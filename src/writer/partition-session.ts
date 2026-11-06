@@ -53,6 +53,7 @@ interface Restored {
   epoch: UnixNanos | null;
   dedupe: DedupeSet;
   nextPartition: number;
+  checkpoint: number;
   flushed: number[];
   committed: PartitionEntry[];
   totals: Record<Signal, number>;
@@ -86,6 +87,7 @@ export async function openPartitionSession(
         epoch: null,
         dedupe: new DedupeSet(config.writer.dedupeCapacity),
         nextPartition: 0,
+        checkpoint: 0,
         flushed: [],
         committed: [],
         totals: { spans: 0, logs: 0, metrics: 0 },
@@ -107,6 +109,7 @@ export async function openPartitionSession(
             : parseUnixNanos(cp.state.epochUnixNano, 'state.epochUnixNano'),
         dedupe: DedupeSet.from(cp.state.dedupe, config.writer.dedupeCapacity),
         nextPartition: cp.state.nextPartition,
+        checkpoint: cp.state.checkpoint,
         // A report left incomplete was interrupted: its flush partitions still await compaction. A closed one
         // handed them over already, so this session's list starts empty.
         flushed: cp.manifest.complete ? [] : [...cp.state.flushPartitions],
@@ -175,6 +178,8 @@ class PartitionSession implements WriterSession {
   #aborted = false;
   #replacing: boolean;
   #partial = false;
+  /** The `checkpoint` counter of the last committed state write. */
+  #checkpointSeq: number;
   #tail: Promise<unknown> = Promise.resolve();
   #inflight: Promise<void> | null = null;
   #sinceCheckpoint = false;
@@ -207,6 +212,7 @@ class PartitionSession implements WriterSession {
     this.#totals = r.totals;
     this.#range = r.range;
     this.#slot = r.slot;
+    this.#checkpointSeq = r.checkpoint;
     this.#dirty = r.resumed;
     this.#replacing = r.replacing;
     this.#everCommitted = r.resumed;
@@ -644,10 +650,13 @@ class PartitionSession implements WriterSession {
       }
       if (!this.#shellWritten && !p.complete) await this.#writeShell();
       if (p.state !== null) {
-        await writeStateSlotV2(fs, this.#out, p.slot, this.#state(p.state));
+        await writeStateSlotV2(fs, this.#out, p.slot, this.#state(p.state, this.#checkpointSeq + 1));
       }
       await writeManifest(fs, this.#out, this.#manifest(p));
-      if (p.state !== null) this.#slot = p.slot;
+      if (p.state !== null) {
+        this.#slot = p.slot;
+        this.#checkpointSeq++;
+      }
       this.#committed.push(...this.#pending);
       this.#pending = [];
       this.#everCommitted = true;
@@ -678,12 +687,13 @@ class PartitionSession implements WriterSession {
     }
   }
 
-  #state(s: { epoch: string | null; dedupe: string[] }): SessionStateV2 {
+  #state(s: { epoch: string | null; dedupe: string[] }, checkpoint: number): SessionStateV2 {
     return {
       formatVersion: 2,
       otelHtmlVersion: this.#deps.version,
       epochUnixNano: s.epoch,
       nextPartition: this.#writer.nextPartition,
+      checkpoint,
       flushPartitions: [...this.#flushed],
       dedupe: s.dedupe,
       metricStreams: null,

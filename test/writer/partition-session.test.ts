@@ -374,6 +374,25 @@ describe('a partial input larger than the target', () => {
 });
 
 describe('statistics keys and state validation', () => {
+  test('of two state slots that match the manifest, the one with the higher checkpoint is resumed', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    await s.add(spans(1), 'a.json');
+    await s.flush();
+    await s.abort();
+    const old = state(w, 0);
+    expect(old).toMatchObject({ checkpoint: 1, flushPartitions: [0] });
+    // Same nextPartition and epoch, so both slots match; only the newer one knows partition 0 is already compacted.
+    await writeStateSlotV2(w.fs, OUT, 1, { ...old, checkpoint: 2, flushPartitions: [] });
+    const r = await open(w, cfg(), 'append');
+    await r.add(spans(1, 0, 5), 'b.json');
+    await r.flush();
+    await r.close();
+    const next = state(w, 0);
+    expect(next.checkpoint).toBe(3);
+    expect(next.flushPartitions).toEqual([1]);
+  });
+
   test('append with an added statistics key marks older partitions unknown for it', async () => {
     const w = createTestWriter();
     const s = await open(w);
