@@ -1,5 +1,6 @@
 import type { ResolvedConfig } from '../config/schema.js';
 import type { ManifestV4, PartitionEntry } from '../format/manifest.js';
+import { checkRow } from '../format/parquet/codec.js';
 import { logRow, type Row, spanRow } from '../format/parquet/rows.js';
 import { TABLES, type Table } from '../format/parquet/schema.js';
 import { statisticsKeysFor } from '../format/parquet/stats.js';
@@ -384,7 +385,7 @@ class PartitionSession implements WriterSession {
         continue;
       }
       seenInRequest.add(key);
-      staged.push({ span, row: spanRow(span, rowCtx) });
+      staged.push({ span, row: this.#checked('spans', spanRow(span, rowCtx)) });
     }
     for (const { span, row } of staged) {
       this.#dedupe.seen(span.traceId, span.spanId);
@@ -394,6 +395,24 @@ class PartitionSession implements WriterSession {
     }
     if (staged.length > 0) this.#dirty = true;
     return { accepted: staged.length, dropped, duplicates };
+  }
+
+  /**
+   * A row the codec could not encode would fail every later cut and lose the records accepted after it, so it is
+   * rejected here with its request (nothing of the request is committed yet).
+   */
+  #checked(table: Table, row: Row): Row {
+    try {
+      checkRow(table, row);
+    } catch (e) {
+      if (!(e instanceof OtelHtmlError)) throw e;
+      throw new OtelHtmlError('invalid-otlp', {
+        path: `${table} record`,
+        expected: 'a record the report format can store',
+        actual: e.message,
+      });
+    }
+    return row;
   }
 
   #acceptLogs(rows: readonly LogRecordRecord[], source: string): AddResult {
@@ -427,7 +446,7 @@ class PartitionSession implements WriterSession {
         dropped++;
         continue;
       }
-      staged.push({ log, row: logRow(log, rowCtx) });
+      staged.push({ log, row: this.#checked('logs', logRow(log, rowCtx)) });
     }
     for (const { log, row } of staged) {
       const t = logTime(log);

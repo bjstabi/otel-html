@@ -8,7 +8,7 @@ import { parseAnySessionState, type SessionStateV2 } from '../../src/format/stat
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { writeStateSlotV2 } from '../../src/writer/checkpoint.js';
 import { openSession, type WriterSession } from '../../src/writer/session.js';
-import { logRecord, logsRequest } from '../../test-support/otlp-builders.js';
+import { logRecord, logsRequest, span, traceRequest } from '../../test-support/otlp-builders.js';
 import {
   createTestWriter,
   EPOCH_NS,
@@ -288,6 +288,54 @@ describe('PartitionSession', () => {
     await s.endInput();
     await s.flush();
     expect(manifest(w).totals.spans).toBe(1);
+    await s.close();
+  });
+});
+
+describe('rows that do not fit their columns', () => {
+  test('uint32 flags and dropped counts are stored and round-trip', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    const big = {
+      flags: 0xffffffff,
+      droppedAttributesCount: 4294967295,
+      droppedEventsCount: 2147483648,
+      droppedLinksCount: 3000000000,
+    };
+    await s.add(otlp(traceRequest([span(big)])), 'a.json');
+    await s.add(
+      otlp(logsRequest([logRecord({ flags: 0xffffffff, droppedAttributesCount: 4294967295 })])),
+      'l.json',
+    );
+    await s.flush();
+    const sp = decodeTable('spans', await w.fs.readBytes(`${OUT}/data/partitions/000000/spans.parquet`));
+    expect(sp[0]).toMatchObject({
+      flags: 4294967295n,
+      dropped_attributes_count: 4294967295n,
+      dropped_events_count: 2147483648n,
+      dropped_links_count: 3000000000n,
+    });
+    const lg = decodeTable('logs', await w.fs.readBytes(`${OUT}/data/partitions/000000/logs.parquet`));
+    expect(lg[0]).toMatchObject({ flags: 4294967295n, dropped_attributes_count: 4294967295n });
+    await s.close();
+  });
+
+  test('a record the codec cannot encode is rejected with its request and later flushes still succeed', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    await s.add(spans(1), 'a.json');
+    // `kind` is an int32 column and the JSON parser only admits enum values, so the request is edited after parsing.
+    const bad = otlp(traceRequest([span({ spanId: spanIdOf(9) }), span({ spanId: spanIdOf(10) })]));
+    if (bad.signal !== 'traces') throw new Error('expected traces');
+    const first = bad.request.resourceSpans[0]?.scopeSpans[0]?.spans[1];
+    if (first === undefined) throw new Error('no span');
+    Reflect.set(first, 'kind', 3000000000);
+    const e = await failure(s.add(bad, 'bad.json'));
+    expect(e.code).toBe('invalid-otlp');
+    await s.add(spans(1, 0, 5), 'b.json');
+    await s.flush();
+    expect(manifest(w).totals.spans).toBe(2);
+    expect(await spanIds(w, 0)).toHaveLength(2);
     await s.close();
   });
 });

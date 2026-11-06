@@ -88,31 +88,37 @@ function invalidCell(path: string, expected: string, actual: string): OtelHtmlEr
   return new OtelHtmlError('invalid-report', { path, expected, actual });
 }
 
+/**
+ * Throws `invalid-report` unless `row` holds only columns of `table`, a value in every non-nullable column, and for
+ * every cell the JS type and range its column stores. `encodeTable` runs it on every row; a session runs it on rows
+ * it is about to accept, so a row that cannot be encoded never reaches a cut. `index` names the row in the error.
+ */
+export function checkRow(table: Table, row: Row, index = 0): void {
+  const columns = TABLE_COLUMNS[table];
+  for (const k of Object.keys(row)) {
+    if (!columns.some((c) => c.name === k))
+      throw invalidCell(`${table}.${k}`, 'a column of the table', `unknown column in row ${index}`);
+  }
+  for (const def of columns) {
+    const v = row[def.name] ?? null;
+    if (v === null) {
+      if (!def.nullable) {
+        throw invalidCell(
+          `${table}.${def.name}`,
+          'a value in a non-nullable column',
+          `null or missing in row ${index}`,
+        );
+      }
+    } else if (!cellFits(def.type, v)) {
+      throw invalidCell(`${table}.${def.name}`, `a ${def.type} value`, `${typeof v} in row ${index}`);
+    }
+  }
+}
+
 /** Sorts `rows` by `SORT_COLUMNS[table]` (nulls last, stable) and encodes them as ZSTD Parquet. */
 export function encodeTable(table: Table, rows: readonly Row[], opts: EncodeOptions): Uint8Array {
   // Validate in the caller's row order, so the row index in an error is the caller's.
-  const columns = TABLE_COLUMNS[table];
-  const known = new Set(columns.map((c) => c.name));
-  for (const [r, row] of rows.entries()) {
-    for (const k of Object.keys(row)) {
-      if (!known.has(k))
-        throw invalidCell(`${table}.${k}`, 'a column of the table', `unknown column in row ${r}`);
-    }
-    for (const def of columns) {
-      const v = row[def.name] ?? null;
-      if (v === null) {
-        if (!def.nullable) {
-          throw invalidCell(
-            `${table}.${def.name}`,
-            'a value in a non-nullable column',
-            `null or missing in row ${r}`,
-          );
-        }
-      } else if (!cellFits(def.type, v)) {
-        throw invalidCell(`${table}.${def.name}`, `a ${def.type} value`, `${typeof v} in row ${r}`);
-      }
-    }
-  }
+  for (const [r, row] of rows.entries()) checkRow(table, row, r);
   const sorted = sortedRows(table, rows);
   const schema = arrowSchema(table);
   const children: Data[] = [];
