@@ -117,11 +117,24 @@ The run report's manifest while the run is going has `complete: false` and an `u
   partitions; at a step's end: the compacted one replacing them; `complete` toggling per step is not a signal), then
   runs one leased `ci push`. It dies with the job; the collect step's final push covers what it missed. A failing push is logged to the pusher's file and retried on the
   next tick, never to the job's step output, so the steps are unaffected and a broken pusher cannot fail a job.
-- **Token:** both need `contents: write` on the job. In this repo the jobs that produce reports declare
-  `permissions: { contents: write, actions: read }`; every other job keeps read-only. A fork pull request's run has a
-  read-only token whatever the workflow declares, the actions detect that (no write permission on the repository) and
-  skip pushing with a notice; its report arrives from the end-of-run publisher as today. This is a widening of what a
-  same-repo CI job may do (push to gh-pages) and is the designer's call to flag first (§10).
+- **Destination, chosen per run.** The pusher has two destinations with one sync behind them. **Branch**: check out
+  gh-pages under the lease and push (needs `contents: write` on the job). **Artifact**: upload the batch of new
+  partitions as a run artifact (`otel-html-push-<job id>-<n>`; needs no repository permission, only the runtime token
+  every job has) and let the publisher apply it (§5.3a). The actions pick the branch destination only when the job's
+  token has write permission on the repository **and** the run's actor is a person (not a bot such as Renovate); every
+  other run, fork pull requests and bot branches included, uses the artifact destination. In this repo the
+  report-producing jobs declare `permissions: { contents: write, actions: read }`; because bot runs never take the
+  branch path, the code those tokens run beside is the repository's own. Decided by the maintainer on 2026-11-06.
+
+### 5.3a The publisher tick (artifact destination)
+
+`ci-report.yml` gains a second trigger beside `workflow_run: completed`: `workflow_run: in_progress` (one early tick
+when a run starts) and a `schedule` every five minutes. A tick lists the runs in progress for the configured
+workflows, downloads their `otel-html-push-*` artifacts not yet applied (the run report's manifest `source` entries say
+which), runs the same `ci push` sync for each job, and pushes once under the lease. With nothing in progress it exits
+in seconds. Its latency is GitHub's schedule (five minutes nominal, often delayed) plus the Pages deploy; the branch
+destination's is the push interval plus the deploy. The end-of-run pass applies whatever the ticks missed, so the
+artifact path can only be late, never lossy.
 
 ### 5.3 Deploying Pages after a push
 
@@ -200,7 +213,8 @@ is the third shape and needs no target code at all.
 | --- | --- | --- |
 | Today | the rest of the run plus 2 to 5 min | the end-of-run publisher |
 | B, job end | the rest of the job plus about 1 min | the Pages deploy |
-| C, pusher | about 1 to 2 min | the push interval plus the Pages deploy |
+| C, pusher, branch destination | about 1 to 2 min | the push interval plus the Pages deploy |
+| C, pusher, artifact destination | about 5 to 10 min | GitHub's schedule plus the Pages deploy |
 | E, object store | seconds | the push interval |
 | E, `host` | the flush interval (5 s default) | nothing else |
 
@@ -208,13 +222,11 @@ is the third shape and needs no target code at all.
 
 - The job token widening (§5.2) is the one new right: a same-repo job can push gh-pages. Fork runs cannot, and the
   publisher never runs their code with a write token, as today.
-- **Open for the maintainer:** bot branches (Renovate) are same-repo, so their jobs would run third-party dependency
-  code under a token that can push `gh-pages` and any branch a ruleset does not protect. `ci-report.yml` today avoids
-  exactly that by running the default branch's otel-html for bot runs. Job-level `permissions` cannot be conditional,
-  so the options are: accept the exposure (with `main` protected by its ruleset, the exposure is the site and
-  unprotected branches); keep bot runs on the end-of-run path by giving the report-producing jobs their write token
-  through a reusable workflow that bot runs call with read-only permissions; or use approach D for bot runs. Decided in
-  §10 once answered.
+- Bot branches (Renovate) are same-repo and would otherwise run third-party dependency code under the job's write
+  token. They never take the branch destination (§5.2): the actor check routes them to artifacts, so the token is held
+  only while the repository's own code runs. Job-level `permissions` cannot be conditional, so the token exists on bot
+  runs too; what the design guarantees is that otel-html never uses it there, not that the dependency code could not.
+  The maintainer accepted that residual on 2026-11-06, with `main` protected by its ruleset.
 - Provisional spans are plain spans; a consumer that ignores the attribute sees duplicates, not corruption.
 - OTLP fan-out sends telemetry to an endpoint the operator configured; the endpoint is never taken from a request.
 - `ci push` writes only under `<channel>/runs/<run id>/` and the run's `index.json` entry; paths are validated as the
@@ -238,8 +250,8 @@ is the third shape and needs no target code at all.
 3. OTLP fan-out.
 4. The object store target.
 
-If write tokens on jobs are refused (§10), milestone 1 is rebuilt as approach D (mid-run artifact uploads from the
-pusher and a `schedule`d publisher tick) with the latency that implies.
+Milestone 1 includes both destinations and the publisher tick (§5.3a), since the per-run choice is what makes the
+token decision acceptable.
 
 ## 10. Decisions settled in conversation
 
@@ -248,10 +260,12 @@ pusher and a `schedule`d publisher tick) with the latency that implies.
 - The workflow trace is "opened" at run start as OTel does it (ids fixed and propagated); parent spans are emitted
   provisionally and superseded by replacing the partition that holds them.
 - Maintainer action: admit `gh-pages` in the `github-pages` environment's deployment branch policy (§5.3).
+- Destination per run: branch push for a person's same-repo run, artifact plus publisher tick for everything else
+  (2026-11-06).
 
 ## 11. Designer's calls (flag if wrong)
 
-- Same-repo report-producing jobs get `contents: write`; fork runs fall back to the end-of-run path.
+- Report-producing jobs declare `contents: write`; the actions use it only for a person's same-repo run.
 - `ci push` is a CLI subcommand invoked by the actions under the existing lease script, not a new action; it syncs a
   job's live partition set rather than appending (builder check: a step's `close()` compaction would otherwise double
   every row the pusher shipped mid-step).
