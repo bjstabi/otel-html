@@ -340,6 +340,39 @@ describe('rows that do not fit their columns', () => {
   });
 });
 
+describe('a partial input larger than the target', () => {
+  test('is cut into several partitions as it is read, and nothing is listed before the input completes', async () => {
+    const w = createTestWriter();
+    const s = await open(w, cfg({ chunkTargetBytes: 2000 }));
+    for (let i = 0; i < 6; i++) await s.add(spans(10, 0, i * 10), 'in.json', { partial: true });
+    expect(w.fs.snapshot().has(`${OUT}/data/manifest.js`)).toBe(false);
+    const files = [...w.fs.snapshot().keys()].filter((k) => k.endsWith('spans.parquet'));
+    expect(files.length).toBeGreaterThan(1);
+    await s.endInput();
+    await s.flush();
+    const m = manifest(w);
+    expect(m.partitions.length).toBeGreaterThan(1);
+    expect(m.partitions.map((p) => p.n)).toEqual(m.partitions.map((_, i) => i));
+    expect(m.totals.spans).toBe(60);
+    expect(m.partitions.reduce((n, p) => n + (p.files.spans?.rows ?? 0), 0)).toBe(60);
+    await s.close();
+  });
+
+  test('a replacing input still holds its rows until the input completes', async () => {
+    const w = createTestWriter();
+    const first = await open(w);
+    await first.add(spans(1), 'old.json');
+    await first.close();
+    const s = await open(w, cfg({ chunkTargetBytes: 1 }));
+    await s.add(spans(10, 0, 100), 'in.json', { partial: true });
+    expect(await w.fs.exists(`${OUT}/data/partitions/000000/spans.parquet`)).toBe(true);
+    expect(manifest(w).totals.spans).toBe(1);
+    await s.endInput();
+    await s.close();
+    expect(manifest(w).totals.spans).toBe(10);
+  });
+});
+
 describe('statistics keys and state validation', () => {
   test('append with an added statistics key marks older partitions unknown for it', async () => {
     const w = createTestWriter();

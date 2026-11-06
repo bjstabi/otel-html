@@ -239,6 +239,7 @@ class PartitionSession implements WriterSession {
       }
       if (result.accepted > 0) this.#sinceCheckpoint = true;
       if (!this.#partial) await this.#maybeCheckpoint();
+      else if (!this.#replacing) await this.#cutPartial();
       this.#armIdle();
       return result;
     });
@@ -471,6 +472,30 @@ class PartitionSession implements WriterSession {
       now - this.#lastFlushMs >= this.#config.writer.flushIntervalMs ||
       this.#writer.pendingBytes >= this.#config.writer.chunkTargetBytes;
     if (due) await this.#startBackgroundCheckpoint();
+  }
+
+  /**
+   * During a partial input (a `convert` file read entry by entry) that replaces no report, rows are cut into
+   * partition files at the size rule, so memory stays bounded by the target. No state or manifest is written until
+   * the input completes: the next commit lists these partitions, and an abandoned input leaves them unlisted.
+   */
+  async #cutPartial(): Promise<void> {
+    if (this.#writer.pendingBytes < this.#config.writer.chunkTargetBytes) return;
+    // A background checkpoint numbers and lists its partition first, so the list stays in order.
+    await this.#inflight;
+    try {
+      const entry = await this.#writer.cut(`flush:${this.#writer.nextPartition}`);
+      if (entry !== null) {
+        this.#pending.push(entry);
+        this.#flushed.push(entry.n);
+        this.#sinceCheckpoint = true;
+      }
+    } catch (e) {
+      // The records are accepted already, so the request must not fail; the rows are held again for the next cut.
+      this.#deps.logger.error('partition cut failed; will retry', {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
   }
 
   async #startBackgroundCheckpoint(): Promise<void> {
