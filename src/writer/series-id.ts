@@ -1,5 +1,6 @@
 import { canonicalAttributesKey } from '../model/interner.js';
 import type { MetricPointRecord, ResourceRecord, ScopeRecord } from '../model/records.js';
+import { boundsOf } from '../rollups/metric-catalog.js';
 import { hash32 } from '../rollups/metric-streams.js';
 
 // Four independent 32-bit xor-multiply hashes (FNV-1a basis and prime first), concatenated: 128 bits.
@@ -12,7 +13,7 @@ const HASHES: readonly (readonly [number, number])[] = [
 
 /**
  * The `series_id` of a metric point: a hash of the series' identity, which is its metric (name, type, unit,
- * temporality, monotonicity), resource, scope and point attributes. It depends on nothing but the point, so it is the
+ * temporality, monotonicity, and for an explicit histogram its bucket bounds), resource, scope and point attributes. It depends on nothing but the point, so it is the
  * same in every session and partition and the normalizer's saved state needs no catalog. Resource and scope enter
  * with their attributes (keys sorted), not their report-local ids.
  */
@@ -23,6 +24,7 @@ export function seriesIdOf(p: MetricPointRecord, resource: ResourceRecord, scope
     p.unit,
     p.temporality,
     p.monotonic,
+    boundsOf(p),
     [resource.schemaUrl, resource.droppedAttributesCount, canonicalAttributesKey(resource.attributes)],
     [
       scope.name,

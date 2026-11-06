@@ -353,4 +353,93 @@ describe('points table', () => {
     expect(rows.map((r) => cell(r, 'delta_value'))).toEqual([5, 5]);
     expect(manifestOf(w).totals.metrics).toBe(3);
   });
+
+  test('a histogram series with other bounds is another series, not a reset', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    const h = (bounds: number[], t: number) =>
+      metricsRequestOf({
+        name: 'lat',
+        histogram: {
+          aggregationTemporality: 2,
+          dataPoints: [
+            {
+              startTimeUnixNano: T0,
+              timeUnixNano: T(t),
+              count: '2',
+              sum: 3,
+              bucketCounts: bounds.map(() => '1').concat('0'),
+              explicitBounds: bounds,
+            },
+          ],
+        },
+      });
+    await s.add(h([1, 5], 1), 'a.json');
+    await s.add(h([1, 6], 2), 'a.json');
+    await s.flush();
+    const rows = await points(w, 0);
+    expect(new Set(rows.map((r) => cell(r, 'series_id'))).size).toBe(2);
+    expect(rows.map((r) => cell(r, 'reset'))).toEqual([false, false]);
+    await s.close();
+  });
+
+  test('series_id of a known point is pinned', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    await s.add(sum('requests', 1, 1, {}, { attributes: [attr('k', { stringValue: 'a' })] }), 'a.json');
+    await s.flush();
+    const [row] = await points(w, 0);
+    expect(cell(row ?? {}, 'series_id')).toBe('7ab145ac3d2248e9d840b81f5b3284fc');
+    await s.close();
+  });
+
+  test('the stream state in a checkpoint is frozen with the cut, not read at write time', async () => {
+    const w = createTestWriter();
+    const s = await openSession(w.deps, { out: OUT, config: cfg({ chunkTargetBytes: 1 }), mode: 'replace' });
+    const gate = w.fs.holdNextWrite('000000/points.parquet');
+    await s.add(sum('c', 10, 1), 'a.json');
+    await gate.reached;
+    await s.add(sum('c', 15, 2), 'a.json');
+    gate.release();
+    await s.flush();
+    const text = w.fs.snapshot().get(`${OUT}/data/state/session.0.json`);
+    const streams = JSON.parse(text ?? '{}').metricStreams as { lasts: number[] };
+    expect(streams.lasts).toEqual([10]);
+    await s.close();
+  });
+
+  test('a rejected request leaves the streams untouched', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    await s.add(sum('c', 10, 1), 'a.json');
+    const mixed = otlp(
+      metricsRequest([
+        {
+          name: 'c',
+          unit: 'By',
+          sum: {
+            aggregationTemporality: 2,
+            isMonotonic: true,
+            dataPoints: [{ asInt: '50', startTimeUnixNano: T0, timeUnixNano: T(2) }],
+          },
+        },
+        {
+          name: 'bad',
+          histogram: {
+            aggregationTemporality: 1,
+            dataPoints: [{ timeUnixNano: T(2), count: '7', sum: 1, bucketCounts: ['1'] }],
+          },
+        },
+      ]),
+    );
+    await expect(s.add(mixed, 'a.json')).rejects.toMatchObject({ code: 'invalid-otlp' });
+    await s.add(sum('c', 15, 3), 'a.json');
+    await s.flush();
+    const rows = (await points(w, 0)).sort(
+      (a, b) => Number(cell(a, 'delta_value')) - Number(cell(b, 'delta_value')),
+    );
+    expect(rows.map((r) => cell(r, 'delta_value'))).toEqual([5, 10]);
+    expect(manifestOf(w).totals.metrics).toBe(2);
+    await s.close();
+  });
 });

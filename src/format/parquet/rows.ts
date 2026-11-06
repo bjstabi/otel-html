@@ -38,7 +38,7 @@ export interface PointNormalization {
 }
 
 /**
- * A count from the normalizer (a double: counts above 2^53 already lost their low bits when read) as an int64 cell.
+ * A count from the normalizer (a double; the normalizer rejects counts above 2^53, so a safe integer in practice) as an int64 cell.
  * A non-integer or a value outside the signed int64 range cannot be stored and becomes null, never an exception.
  */
 function countColumn(n: number | null): bigint | null {
