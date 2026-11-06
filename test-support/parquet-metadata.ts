@@ -5,8 +5,9 @@ export interface ColumnChunkMetadata {
   readonly path_in_schema: string;
   readonly row_group_id: number;
   readonly compression: string;
-  readonly stats_min: unknown;
-  readonly stats_max: unknown;
+  readonly row_group_num_rows: number;
+  readonly stats_min_value: string | null;
+  readonly stats_max_value: string | null;
 }
 
 /** The slice of DuckDB-WASM's Node blocking build used here (its own typings need Emscripten and DOM types). */
@@ -48,7 +49,18 @@ export async function parquetMetadata(bytes: Uint8Array): Promise<ColumnChunkMet
     return conn
       .query("SELECT * FROM parquet_metadata('f.parquet')")
       .toArray()
-      .map((r) => r.toJSON() as ColumnChunkMetadata);
+      .map((r) => {
+        const row = r.toJSON() as Omit<ColumnChunkMetadata, 'row_group_id' | 'row_group_num_rows'> & {
+          row_group_id: bigint;
+          row_group_num_rows: bigint;
+        };
+        // DuckDB hands BIGINT columns back as bigint
+        return {
+          ...row,
+          row_group_id: Number(row.row_group_id),
+          row_group_num_rows: Number(row.row_group_num_rows),
+        } as ColumnChunkMetadata;
+      });
   } finally {
     conn.close();
   }

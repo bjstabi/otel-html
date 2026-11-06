@@ -100,7 +100,13 @@ describe('parquet codec', () => {
     const meta = await parquetMetadata(bytes);
     expect(new Set(meta.map((m) => m.compression))).toEqual(new Set(['ZSTD']));
     expect(new Set(meta.map((m) => m.row_group_id)).size).toBe(3);
-    expect(meta.find((m) => m.path_in_schema === 'scope_name')?.stats_min).toBeDefined();
+    const scope = meta
+      .filter((m) => m.path_in_schema === 'scope_name')
+      .sort((a, b) => a.row_group_id - b.row_group_id);
+    expect(scope.map((m) => m.row_group_num_rows)).toEqual([50_000, 50_000, 20_000]);
+    // sorted by scope_name: scope0 fills rows 0-39999, scope1 the next 40000, scope2 the rest
+    expect(scope.map((m) => m.stats_min_value)).toEqual(['scope0', 'scope1', 'scope2']);
+    expect(scope.map((m) => m.stats_max_value)).toEqual(['scope1', 'scope2', 'scope2']);
   });
 
   test('a missing non-nullable column is an invalid-report error naming the column', () => {
