@@ -4,8 +4,7 @@ import { anyValueToDisplay } from '../model/anyvalue.js';
 import { OtelHtmlError } from '../model/errors.js';
 import { logTime } from '../model/records.js';
 import type { LogTarget } from '../ottl/contexts.js';
-import { ATTR_HOST_NAME, ATTR_SERVICE_NAME } from '../semconv/attributes.js';
-import { serviceName } from '../semconv/resource-name.js';
+import { DEFAULT_LOG_FACETS, LOG_RESOURCE_FACET_KEYS } from '../query/sql/facets.js';
 import { LOG_SEVERITY_KEYS, type LogSeverityKey, severityKey } from '../semconv/severity.js';
 import { Drain, type SerializedDrain } from './drain.js';
 import { addFacet, facetableAttributes } from './facet-values.js';
@@ -13,47 +12,10 @@ import { FacetCounts } from './facets.js';
 import type { SpanRollupOptions } from './span-rollups.js';
 import { TimeBuckets } from './time-buckets.js';
 
-export interface LogCoreFacet {
-  readonly key: string;
-  readonly label: string;
-  /** Where the key lives in the data: a resource attribute, or a core log field. */
-  readonly scope: 'core' | 'resource';
-  /** `undefined` leaves the log out of this facet. */
-  readonly value: (t: LogTarget) => string | undefined;
-}
-
-/** Always-tracked log facets (exempt from the key cap), in display order. */
-export const DEFAULT_LOG_FACETS: readonly LogCoreFacet[] = [
-  { key: 'severity', label: 'Severity', scope: 'core', value: (t) => severityKey(t.log.severityNumber) },
-  { key: ATTR_SERVICE_NAME, label: 'Service', scope: 'core', value: (t) => serviceName(t.resource) },
-  {
-    key: ATTR_HOST_NAME,
-    label: 'Host',
-    scope: 'resource',
-    value: (t) => {
-      const v = t.resource.attributes.get(ATTR_HOST_NAME);
-      return v === undefined ? undefined : anyValueToDisplay(v);
-    },
-  },
-  { key: 'instrumentation_scope.name', label: 'Scope', scope: 'core', value: (t) => t.scope.name },
-  {
-    key: 'event.name',
-    label: 'Event name',
-    scope: 'core',
-    value: (t) => (t.log.eventName === '' ? undefined : t.log.eventName),
-  },
-  {
-    key: 'trace.present',
-    label: 'Has trace',
-    scope: 'core',
-    value: (t) => (t.log.traceId === null ? 'no' : 'yes'),
-  },
-];
+// The facet definitions live in src/query/sql/facets.ts (D16); the chunk writer reads them from here until the chunks go.
+export { DEFAULT_LOG_FACETS, LOG_RESOURCE_FACET_KEYS };
 
 const CORE_KEYS: ReadonlySet<string> = new Set(DEFAULT_LOG_FACETS.map((f) => f.key));
-/** Default facets whose values are resource attributes (log attributes of these names are not faceted). */
-export const LOG_RESOURCE_FACET_KEYS: ReadonlySet<string> = new Set([ATTR_SERVICE_NAME, ATTR_HOST_NAME]);
-
 const SerializedLogRollupsSchema = z.strictObject({
   buckets: z.unknown(),
   facets: z.unknown(),

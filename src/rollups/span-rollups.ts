@@ -2,13 +2,8 @@ import { z } from 'zod';
 import { parseWith } from '../format/validate.js';
 import { anyValueToDisplay } from '../model/anyvalue.js';
 import { OtelHtmlError } from '../model/errors.js';
-import { SpanKind, StatusCode } from '../model/records.js';
 import type { SpanTarget } from '../ottl/contexts.js';
-import {
-  ATTR_DEPLOYMENT_ENVIRONMENT_NAME,
-  ATTR_HOST_NAME,
-  ATTR_SERVICE_NAME,
-} from '../semconv/attributes.js';
+import { DEFAULT_SPAN_FACETS, SPAN_RESOURCE_FACET_KEYS, statusKey } from '../query/sql/facets.js';
 import { resourceName, serviceName } from '../semconv/resource-name.js';
 import { ExpHistogram } from './exp-histogram.js';
 import { addFacet, facetableAttributes, scalarKind, truncateFacetValue } from './facet-values.js';
@@ -22,68 +17,10 @@ export type SpanStatusKey = (typeof SPAN_STATUS_KEYS)[number];
 /** Distinct (service, resource) duration histograms kept; further groups are counted in `droppedDurationGroups`. */
 const MAX_DURATION_GROUPS = 10_000;
 
-function spanKindName(k: SpanKind): string {
-  switch (k) {
-    case SpanKind.UNSPECIFIED:
-      return 'unspecified';
-    case SpanKind.INTERNAL:
-      return 'internal';
-    case SpanKind.SERVER:
-      return 'server';
-    case SpanKind.CLIENT:
-      return 'client';
-    case SpanKind.PRODUCER:
-      return 'producer';
-    case SpanKind.CONSUMER:
-      return 'consumer';
-  }
-}
-
-function statusKey(c: StatusCode): SpanStatusKey {
-  switch (c) {
-    case StatusCode.OK:
-      return 'ok';
-    case StatusCode.ERROR:
-      return 'error';
-    case StatusCode.UNSET:
-      return 'unset';
-  }
-}
-
-function resourceAttr(t: SpanTarget, key: string): string | undefined {
-  const v = t.resource.attributes.get(key);
-  return v === undefined ? undefined : anyValueToDisplay(v);
-}
-
-export interface CoreFacet {
-  readonly key: string;
-  readonly label: string;
-  readonly value: (t: SpanTarget) => string | undefined;
-}
-
-/** Always-tracked facets (exempt from the key cap), in display order. */
-export const DEFAULT_SPAN_FACETS: readonly CoreFacet[] = [
-  { key: ATTR_SERVICE_NAME, label: 'Service', value: (t) => serviceName(t.resource) },
-  { key: 'span.name', label: 'Span name', value: (t) => t.span.name },
-  { key: 'span.kind', label: 'Kind', value: (t) => spanKindName(t.span.kind) },
-  { key: 'status.code', label: 'Status', value: (t) => statusKey(t.span.status.code) },
-  { key: 'resource', label: 'Resource', value: (t) => resourceName(t.span) },
-  { key: 'instrumentation_scope.name', label: 'Scope', value: (t) => t.scope.name },
-  { key: ATTR_HOST_NAME, label: 'Host', value: (t) => resourceAttr(t, ATTR_HOST_NAME) },
-  {
-    key: ATTR_DEPLOYMENT_ENVIRONMENT_NAME,
-    label: 'Environment',
-    value: (t) => resourceAttr(t, ATTR_DEPLOYMENT_ENVIRONMENT_NAME),
-  },
-];
+// The facet definitions live in src/query/sql/facets.ts (D16); the chunk writer reads them from here until the chunks go.
+export { DEFAULT_SPAN_FACETS, SPAN_RESOURCE_FACET_KEYS };
 
 const CORE_KEYS: ReadonlySet<string> = new Set(DEFAULT_SPAN_FACETS.map((f) => f.key));
-/** Default facets whose values are resource attributes (span attributes of these names are not faceted). */
-export const SPAN_RESOURCE_FACET_KEYS: ReadonlySet<string> = new Set([
-  ATTR_SERVICE_NAME,
-  ATTR_HOST_NAME,
-  ATTR_DEPLOYMENT_ENVIRONMENT_NAME,
-]);
 /**
  * A reader for the value a span has for a facet key: the default facet's value for a core key, else the span
  * attribute of that name, truncated as `addFacet` truncates. The key is resolved once; the reader returns
