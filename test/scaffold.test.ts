@@ -39,7 +39,7 @@ test('runtime dependencies are exactly what the library and CLI import', () => {
   }
   for (const name of imported)
     expect(runtime.has(name), `${name} is imported but not a dependency`).toBe(true);
-  // Task 1.5 removes this exemption: src/query/sql imports @uwdata/mosaic-sql from then on.
+  // Task 2.1 removes this exemption: src/query/sql imports @uwdata/mosaic-sql from then on (until then only src/viewer does).
   const notYetImported = new Set(['@uwdata/mosaic-sql']);
   for (const name of Object.keys(pkg.dependencies).filter((n) => !notYetImported.has(n)))
     expect(imported.has(name), `${name} is never imported`).toBe(true);

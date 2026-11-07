@@ -17,12 +17,6 @@
     "e2e/**/*.ts",
     "test-support/otel/**/*.ts"
   ],
-  "ignoreDependencies": [
-    "@commitlint/cli",
-    "@opentelemetry/exporter-trace-otlp-(grpc|http|proto)",
-    "@uwdata/mosaic-sql",
-    "@uwdata/mosaic-core",
-    "@uwdata/flechette"
-  ],
+  "ignoreDependencies": ["@commitlint/cli", "@opentelemetry/exporter-trace-otlp-(grpc|http|proto)"],
   "ignoreBinaries": ["mise"]
 }
