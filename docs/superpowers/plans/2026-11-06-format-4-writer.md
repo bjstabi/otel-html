@@ -561,7 +561,7 @@ Branch `feat/format-4-schema-doc`. Title: `docs(format): the format-4 tables and
 
 ## Record: rulings and notes for plan 2
 
-Written after plan 1 finished (branch `feat/format-4`, PRs #209 to #215), because the rulings and notes lived only in a
+Written after plan 1 finished (branch `feat/format-4`, PRs #204 to #215), because the rulings and notes lived only in a
 git-ignored ledger. Where this record and the spec disagree, this record wins. Column names and types: [docs/format/schema.md](../../format/schema.md).
 
 ### Rulings
@@ -608,7 +608,7 @@ Format: `R<n>`: what was decided; why.
 | R36 | Counts above 2^53 stay rejected `invalid-otlp` (the normalizer, as on the chunk path); summaries write null deltas.                                                                                       | Parity with the chunk path.                                                                 |
 | R37 | `series_id` includes explicit-histogram bucket bounds.                                                                                                                                                    | Design 2026-10-27 §5.1 and the chunk catalog key include them.                              |
 | R38 | Keep the two arrow-js encoding speedups (3475879c, 0a4a3fef; 14.8 to 12.4 s wall), byte-identical, guarded by the reference test.                                                                         | Throughput; about 200 lines to maintain across arrow-js upgrades.                           |
-| R39 | Delta-temporality sums and histograms write `delta_value`/`delta_count` from the point's own value; readers must read the temporality column.                                                             | Spec §6.1: SQL sums deltas without re-deriving them.                                        |
+| R39 | `delta_value`/`delta_count` are filled for every counter (any temporality), every delta-temporality sum and every histogram; delta-temporality points take the point's own value.                                                           | Spec §6.1: SQL sums deltas without re-deriving them.                                        |
 | R40 | No per-bucket histogram delta columns in plan 1.                                                                                                                                                          | The plan did not state them; plan 2 re-derives in SQL or adds columns before release.       |
 | R41 | A compaction failure in `close()` is logged and the report closes with its flush partitions (valid, `complete` still set).                                                                                | An optimisation must not lose a report.                                                     |
 | R42 | After `close()` releases state, add/flush/endInput reject; a `close()` retry works.                                                                                                                       | Nothing legitimate adds after close.                                                        |
@@ -620,7 +620,7 @@ Format: `R<n>`: what was decided; why.
 | R48 | Appending to a v4 report with a `writer.format` different from the manifest's `engine.format` fails `usage` (use the report's `--format`, or merge to convert).                                           | Smaller than rewriting wrappers and swapping engines.                                       |
 | R49 | The R48 check stays under the lock, before any data write.                                                                                                                                                | The read under the lock is the consistent one.                                              |
 | R50 | An append moving a report from `assets/` to a shared `assetsBase` fails `usage`; shared to `assets/` writes the assets.                                                                                   | Reconvert or `upgrade` instead.                                                             |
-| R51 | `writer.assetsBase` other than `assets/` with `writer.format chunks` fails `usage` at config resolution.                                                                                                  | Unreleased option; a silently ignored flag is worse.                                        |
+| R51 | `writer.assetsBase` other than `assets/` with `writer.format chunks` fails `invalid-config` at config resolution.                                                                                                  | Unreleased option; a silently ignored flag is worse.                                        |
 | R52 | The local size warning fires once, at close, on the compacted result.                                                                                                                                     | A mid-session count over-reports.                                                           |
 | R53 | A chunk session opening a v4 report keeps `version-mismatch`, exit 1; R48/R50 are `usage`, exit 2.                                                                                                        | The chunk path's existing contract.                                                         |
 | R54 | Merging into an existing v4 report with `chunks` (or `site` into v3) keeps `version-mismatch`, not `usage`.                                                                                               | Consistent with R53.                                                                        |
@@ -687,5 +687,4 @@ Spec file: `docs/superpowers/specs/2026-11-06-parquet-duckdb-format-4-design.md`
 - Compaction: `replace` leaves empty partition directories until the next open prunes them; `PARTITION_FILE_RE` accepts non-canonical folders (the writer never writes them).
 - Untested: the logged prune failure at close and the compaction cleanup failure; the first Windows binary compaction runs in CI.
 - Merge: a corrupt existing manifest gives `invalid-report` instead of a `usage` hint (nothing is written); the pre-check does a full `readBytes` on file systems without `readChunks`.
-- Upgrade: the README sentence "going to local warns" understates (it warns whenever the result is local); the `--compact` message says "drop --compact" even when the source is a config file; `merge.ts` has a stale doc comment near line 84.
 - `pointRow` is built twice per point (Task 5.1 M3); revisit only if throughput shows it.
