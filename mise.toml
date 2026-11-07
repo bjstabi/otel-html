@@ -302,7 +302,7 @@ cache = { enabled = true }
 run = "pnpm exec knip"
 
 [tasks.gen]
-description = """protobuf-es, the config schema and the OTTL grammar; also rewrites the README's generated task section
+description = """protobuf-es, the config schema, the OTTL grammar and docs/format/schema.md; also rewrites the README's generated task section
 `mise run --force gen` restores a hand-edited generated file (gen:check does this)."""
 # The two scripts import src/config (schema.ts and what it pulls in) and read src/ottl/ottl.grammar.
 sources = [
@@ -311,6 +311,7 @@ sources = [
   "buf.gen.yaml",
   "scripts/gen-schema.ts",
   "scripts/gen-ottl.ts",
+  "scripts/gen-schema-doc.ts",
   "src/**",
   "!src/viewer/**",
   "!src/model/gen/**",
@@ -322,11 +323,13 @@ outputs = [
   "src/model/gen/**",
   "src/ottl/*.gen.terms.ts",
   "src/ottl/*.gen.ts",
+  "docs/format/schema.md",
 ]
 run = [
   "pnpm exec buf generate",
   "bun scripts/gen-schema.ts",
   "bun scripts/gen-ottl.ts",
+  "bun scripts/gen-schema-doc.ts",
   "mise generate task-docs --inject --output README.md",
 ]
 

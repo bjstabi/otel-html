@@ -788,7 +788,7 @@ Fix formatting with biome
 
 - **Usage:** `gen`
 
-protobuf-es, the config schema and the OTTL grammar; also rewrites the README's generated task section
+protobuf-es, the config schema, the OTTL grammar and docs/format/schema.md; also rewrites the README's generated task section
 `mise run --force gen` restores a hand-edited generated file (gen:check does this).
 
 ## `gen:check`
