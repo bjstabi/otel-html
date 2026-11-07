@@ -30,7 +30,11 @@ export {
   ORPHAN_EXEMPLAR_TRACE,
 } from '../test-support/fixture-ids.js';
 
+export type UrlKind = 'file' | 'http';
+
 export const REPORTS_DIR: URL = new URL('./.reports/', import.meta.url);
+/** The `site`-format copy of every mounted report (`otel-html upgrade --format site`), served over HTTP for the `@http` tests. */
+export const REPORTS_SITE_DIR: URL = new URL('./.reports-site/', import.meta.url);
 /**
  * Where the on-demand metrics scale report lives: outside `REPORTS_DIR`, which is the `e2e:fixtures` task's declared
  * output, so writing it does not make the fixtures look out of date. `e2e/build-fixtures.ts` removes it.
@@ -152,9 +156,11 @@ export function scaleMetricEmitted(m: number, i: number): boolean {
   return m === SCALE_CHARTED_METRIC || i === 0 || i === SCALE_METRIC_POINTS - 1;
 }
 
-export function reportDir(name: ReportName): URL {
+/** Where a report lives: `file` is the local-format build under `.reports/`, `http` its site-format copy under `.reports-site/`. */
+export function reportDir(name: ReportName, kind: UrlKind = 'file'): URL {
   if (name === 'metrics-scale') return METRICS_SCALE_DIR;
-  return new URL(`${name}/`, name === 'scale' || name === 'huge' ? SCALE_REPORTS_DIR : REPORTS_DIR);
+  if (name === 'scale' || name === 'huge') return new URL(`${name}/`, SCALE_REPORTS_DIR);
+  return new URL(`${name}/`, kind === 'http' ? REPORTS_SITE_DIR : REPORTS_DIR);
 }
 
 /** The committed OTLP/JSON files a fixture report is built from. */
@@ -268,8 +274,6 @@ export function perfFactor(): number {
   return Math.round((positiveEnv(PERF_ENV) ?? 1) * runnerFactor() * 100) / 100;
 }
 
-export type UrlKind = 'file' | 'http';
-
 /** Where a report is mounted under the static server. */
 export function httpSubpath(name: ReportName): string {
   if (name === 'main') return HTTP_SUBPATH;
@@ -279,7 +283,7 @@ export function httpSubpath(name: ReportName): string {
 
 /** Base URL of the report, without a trailing slash. */
 export function baseUrlFor(kind: UrlKind, report: ReportName = 'main'): string {
-  if (kind === 'file') return reportDir(report).href.replace(/\/$/, '');
+  if (kind === 'file') return reportDir(report, 'file').href.replace(/\/$/, '');
   const port = process.env[PORT_ENV];
   if (port === undefined) throw new Error(`${PORT_ENV} is not set: globalSetup did not start the server`);
   return `http://127.0.0.1:${port}${httpSubpath(report)}`;

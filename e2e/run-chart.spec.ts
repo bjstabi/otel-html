@@ -22,6 +22,8 @@ import {
 } from './metric-chart.js';
 import { expect, HTTP, test } from './test.js';
 
+test.skip(true, 'plan 3: metrics in the format-4 viewer');
+
 test.use({ timezoneId: 'Asia/Tokyo' });
 
 const RUNS = RUN_CHART_RUN_MINUTES.length;

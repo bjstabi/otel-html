@@ -428,7 +428,7 @@ outputs = ["e2e/.cache/otel-recorder.js"]
 run = "bun build e2e/otel-page/recorder.ts --target browser --format iife --minify --outfile e2e/.cache/otel-recorder.js"
 
 [tasks."e2e:fixtures"]
-description = """Build the e2e fixture reports into e2e/.reports/ (skipped while up to date; --force rebuilds)
+description = """Build the e2e fixture reports into e2e/.reports/ and their site copies into e2e/.reports-site/ (skipped while up to date)
 All but `scale` and `huge`, which e2e:fixtures:scale builds; about a second after `build`."""
 depends = ["build", "e2e:otel-recorder"]
 sources = [
@@ -445,7 +445,7 @@ sources = [
   "test-support/fixture-ids.ts",
   "fixtures/**",
 ]
-outputs = ["e2e/.reports/**"]
+outputs = ["e2e/.reports-site/**", "e2e/.reports/**"]
 run = "bun e2e/build-fixtures.ts"
 
 # The scale reports are split from their viewer: the data needs the writer (the build:lib outputs) and the generators,

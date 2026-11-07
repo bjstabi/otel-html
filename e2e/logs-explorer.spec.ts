@@ -77,7 +77,22 @@ test(
     await paymentsRow.getByRole('button', { name: 'Only payments' }).click();
     await expect(page).toHaveURL(/q=[^&]*service\.name/);
     await expect(count).not.toHaveText(new RegExp(`^${LINKED_LOG_COUNT} logs`));
-    const payments = (await count.textContent())?.match(/^(\d+) logs/)?.[1];
+    // The count shows the previous result while the new query runs (here the window's logs, before the filter
+    // applies); read it once it has stopped changing and nothing is loading.
+    let shown = '';
+    await expect(async () => {
+      const before = (await count.textContent()) ?? '';
+      await page.waitForTimeout(400);
+      expect(
+        await page
+          .getByRole('status')
+          .filter({ hasText: /^Loading$/ })
+          .count(),
+      ).toBe(0);
+      expect(await count.textContent()).toBe(before);
+      shown = before;
+    }).toPass();
+    const payments = shown.match(/^(\d+) logs/)?.[1];
     expect(Number(payments)).toBeLessThan(LINKED_LOG_COUNT);
     await page.locator('body').click({ position: { x: 1, y: 1 } });
     await page.keyboard.press('g');

@@ -4,6 +4,7 @@ dist/
 coverage/
 *.tsbuildinfo
 e2e/.reports/
+e2e/.reports-site/
 e2e/.reports-scale/
 e2e/.metrics-scale/
 e2e/.metrics-scale.tmp-*/

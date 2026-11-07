@@ -41,7 +41,19 @@ test('browser spans join the test span', HTTP, async ({ browser, reportUrl }) =>
   expect(load?.spanContext().traceId).toBe(parent.spanContext().traceId);
   expect(load?.parentSpanContext?.spanId).toBe(parent.spanContext().spanId);
   expect(load?.resource.attributes['service.name']).toBe('otel-html-viewer');
-  expect(finished(exporter, 'viewer.script.load').length).toBeGreaterThan(0);
+  const [engine] = finished(exporter, 'viewer.engine.start');
+  expect(engine?.parentSpanContext?.spanId).toBe(load?.spanContext().spanId);
+  await expect.poll(() => finished(exporter, 'viewer.query').length).toBeGreaterThan(0);
+  const [first] = finished(exporter, 'viewer.query');
+  expect(first?.attributes['otel_html.query.kind']).toBeDefined();
+  if (engine !== undefined)
+    test.info().annotations.push({
+      type: 'engine start ms',
+      description: (
+        (engine.endTime[0] - engine.startTime[0]) * 1e3 +
+        (engine.endTime[1] - engine.startTime[1]) / 1e6
+      ).toFixed(0),
+    });
   await context.close();
 });
 

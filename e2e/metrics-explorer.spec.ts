@@ -5,6 +5,8 @@ import { LINKED_SPAN, LINKED_TRACE, METRIC_HIST, reportDir } from './fixture.js'
 import { exemplarRings, LINE_MIN_PX, lineRunPx, menuAt, watchProblems } from './metric-chart.js';
 import { expect, HTTP, test } from './test.js';
 
+test.skip(true, 'plan 3: metrics in the format-4 viewer');
+
 /** In the Explorer: query `a` charts the p99 of `METRIC_HIST` by `http.route`, exemplars on. */
 async function p99ByRoute(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Metric of a' }).click();

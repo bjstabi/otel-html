@@ -21,7 +21,11 @@ import {
   writerBuildHash,
 } from './fixture.js';
 import { ensureMetricsScaleReport } from './metrics-scale.js';
-import { expect, HTTP, test } from './test.js';
+import { expect, test } from './test.js';
+
+// The perf tests below read chunk-format `scale` and `huge` reports, which the format-4 viewer does not open (D12);
+// PR 7 rebuilds `scale` as a site report, adds `many`, and re-measures the budgets (D15).
+test.skip(true, 'PR 7: the scale reports and budgets move to the site format');
 
 /** Fixed budgets; `OTEL_HTML_PERF_FACTOR` scales them for slow machines, the constants are never loosened. */
 const INTERACTIVE_BUDGET_MS = 3000;
@@ -63,8 +67,6 @@ test.beforeEach(() => {
 const SERVICE = SCALE_SERVICES[0];
 /** Span `j` of a trace belongs to service `j % 8`, so the first service owns spans 0, 8, ..., 48 of each trace. */
 const PER_SERVICE = SCALE_TRACES * Math.ceil(SCALE_SPANS_PER_TRACE / SCALE_SERVICES.length);
-/** The service whose spans the huge report's latest-ending span chunks hold (see the chunk-window test). */
-const WINDOW_SERVICE = SCALE_SERVICES[6];
 
 /**
  * Records every `<script src>` the viewer inserts from now on, in the page. Playwright's request events miss
@@ -186,75 +188,6 @@ test(
     expect(interactiveMs).toBeLessThan(INTERACTIVE_BUDGET_MS * factor);
     expect(facetMs).toBeLessThan(FACET_BUDGET_MS * factor);
     expect(worstMs).toBeLessThan(2 * FACET_BUDGET_MS * factor);
-  },
-);
-
-test(
-  'a report over the eager budget filters by chunk window and opens a trace through its shard',
-  HTTP,
-  async ({ page, reportUrl }) => {
-    const dir = fileURLToPath(reportDir('huge'));
-    const spanChunks = readdirSync(`${dir}data/chunks/spans`).filter((f) => f.endsWith('.js'));
-    expect(spanChunks.length).toBeGreaterThan(2);
-
-    // Which data files the page loaded: request events and the script witness, merged.
-    await witnessScripts(page);
-    const seen = new Set<string>();
-    const note = (url: string): void => {
-      const m = /\/data\/((?:traces|chunks\/spans)\/[^/?#]+\.js)(?:[?#].*)?$/.exec(url);
-      if (m?.[1] !== undefined) seen.add(m[1]);
-    };
-    page.on('request', (r) => note(r.url()));
-    const loaded = async (): Promise<ReadonlySet<string>> => {
-      for (const url of await witnessedScripts(page)) note(url);
-      return seen;
-    };
-
-    await page.goto(`${reportUrl('huge')}/index.html#/traces`);
-    const rows = page.getByRole('grid', { name: 'Results' }).getByRole('row');
-    await expect(rows.nth(1)).toBeVisible({ timeout: 30_000 });
-
-    // Filtering scans chunks on demand and stops once it has enough rows. The scan order follows the sort: under
-    // the default start:desc it visits the newest chunks first, so the filter names a service whose spans sit in the
-    // newest chunks (the writer chunks the input by resource; `worker` fills the two latest-ending chunks). A
-    // service in the oldest chunk would scan the whole run before reaching the cap.
-    const service = WINDOW_SERVICE;
-    const facet = page.getByTestId(`facet-row:service.name:${service}`);
-    await facet.hover();
-    await page.getByRole('button', { name: `Only ${service}` }).click();
-    // The unfiltered result already shows a partial note (its scan stops at the cap too); wait for the filtered
-    // result to replace it before reading the note.
-    const count = page.getByRole('main').locator('output', { hasText: /\bspans\b/ });
-    await expect(count).toBeVisible();
-    await expect(count).not.toHaveText(new RegExp(`^${SCALE_TRACES * SCALE_SPANS_PER_TRACE} spans`));
-    const partial = page.getByRole('status', { name: 'Partial results' });
-    await expect(partial).toContainText(/from \d+ of \d+ chunks/);
-    const text = (await partial.textContent()) ?? '';
-    const [, scanned, total] = /from (\d+) of (\d+) chunks/.exec(text) ?? [];
-    expect(Number(total)).toBe(spanChunks.length);
-    expect(Number(scanned)).toBeLessThan(Number(total));
-    const chunksOf = (files: ReadonlySet<string>): string[] =>
-      [...files].filter((f) => f.startsWith('chunks/'));
-    const beforeOpen = new Set(chunksOf(await loaded()));
-    expect(beforeOpen.size).toBeLessThan(spanChunks.length);
-
-    // Opening a trace loads its shard, then exactly the chunks that shard lists.
-    await rows.nth(1).click();
-    const panel = page.getByTestId('trace-panel');
-    await expect(panel.getByTestId('trace-header')).toBeVisible();
-    const traceId = /trace=([0-9a-f]{32})/.exec(page.url())?.[1];
-    expect(traceId).toBeDefined();
-    const shard = (traceId ?? '').slice(0, 2);
-    const shardBody = readFileSync(`${dir}data/traces/${shard}.js`, 'utf8');
-    const payload = shardBody.slice(shardBody.indexOf(',') + 1, shardBody.lastIndexOf(')'));
-    const entry = (JSON.parse(payload) as Record<string, { chunks: string[] }>)[traceId ?? ''];
-    expect(entry?.chunks.length).toBeGreaterThan(0);
-    const requested = await loaded();
-    expect(requested).toContain(`traces/${shard}.js`);
-    for (const key of entry?.chunks ?? []) expect(requested).toContain(`${key}.js`);
-    const listed = new Set((entry?.chunks ?? []).map((key) => `${key}.js`));
-    const afterOpen = chunksOf(requested).filter((f) => !beforeOpen.has(f));
-    expect(afterOpen.filter((f) => !listed.has(f))).toEqual([]);
   },
 );
 

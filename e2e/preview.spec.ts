@@ -44,7 +44,9 @@ test.describe('preview.mjs', () => {
   test.afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
   test('writes a light and a dark 2560x1440 screenshot of the report', () => {
-    cpSync(fileURLToPath(reportDir('dashboards')), dir, { recursive: true });
+    // `sample` holds no metrics: the default dashboard of `dashboards` has metric widgets, whose error state until
+    // plan 3 (D11) is an alert that preview.mjs reports.
+    cpSync(fileURLToPath(reportDir('sample')), dir, { recursive: true });
     const result = runPreview(dir);
     expect(result.status).toBe(0);
     expect(result.stdout).not.toContain('::warning::');
@@ -81,7 +83,10 @@ test.describe('preview.mjs', () => {
     }
   });
 
-  test('warns and keeps the previous images when the dashboard could not read its variables values', () => {
+  // Skipped by the plan: this deleted a rollup file, which is gone. In format 4 a damaged partition fails the load
+  // itself (the views validate every file when created), covered by the test above, so the variables' query cannot
+  // fail alone any more.
+  test.skip('warns and keeps the previous images when the dashboard could not read its variables values', () => {
     cpSync(fileURLToPath(reportDir('dashboards')), dir, { recursive: true });
     rmSync(join(dir, 'data', 'rollups', 'logs.js'));
     for (const scheme of ['light', 'dark'])

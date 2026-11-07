@@ -743,7 +743,7 @@ refuses to run in CI.
 
 - **Usage:** `e2e:fixtures`
 
-Build the e2e fixture reports into e2e/.reports/ (skipped while up to date; --force rebuilds)
+Build the e2e fixture reports into e2e/.reports/ and their site copies into e2e/.reports-site/ (skipped while up to date)
 All but `scale` and `huge`, which e2e:fixtures:scale builds; about a second after `build`.
 
 ## `e2e:fixtures:scale`
