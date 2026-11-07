@@ -4,7 +4,7 @@ import { checkRow } from '../format/parquet/codec.js';
 import { applyNormalization, logRow, pointRow, type Row, spanRow } from '../format/parquet/rows.js';
 import { TABLES, type Table } from '../format/parquet/schema.js';
 import { statisticsKeysFor } from '../format/parquet/stats.js';
-import { LOCK_PATH, type Signal, STATE_DIR, type StateSlot } from '../format/paths.js';
+import { DEFAULT_ASSETS_BASE, LOCK_PATH, type Signal, STATE_DIR, type StateSlot } from '../format/paths.js';
 import { OtelHtmlError } from '../model/errors.js';
 import { parseUnixNanos, type UnixNanos } from '../model/ids.js';
 import {
@@ -650,7 +650,9 @@ class PartitionSession implements WriterSession {
   async #writeShell(): Promise<void> {
     const { fs, viewerAssets } = this.#deps;
     const { assetsBase } = this.#config.writer;
-    if (assetsBase === 'assets/') await writeViewerAssets(fs, this.#out, viewerAssets);
+    if (assetsBase === DEFAULT_ASSETS_BASE) {
+      await writeViewerAssets(fs, this.#out, viewerAssets, this.#config.writer.format);
+    }
     await fs.writeTextAtomic(
       at(this.#out, 'index.html'),
       renderIndexHtml(viewerAssets.entry(), this.#title, { assetsBase }),

@@ -17,10 +17,6 @@
     "e2e/**/*.ts",
     "test-support/otel/**/*.ts"
   ],
-  "ignoreDependencies": [
-    "@commitlint/cli",
-    "@duckdb/duckdb-wasm",
-    "@opentelemetry/exporter-trace-otlp-(grpc|http|proto)"
-  ],
+  "ignoreDependencies": ["@commitlint/cli", "@opentelemetry/exporter-trace-otlp-(grpc|http|proto)"],
   "ignoreBinaries": ["mise"]
 }

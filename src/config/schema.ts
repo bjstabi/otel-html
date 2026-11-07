@@ -7,7 +7,7 @@ import {
   type ViewInput,
   ViewListSchema,
 } from '../dashboards/schema.js';
-import { ASSETS_BASE_RE } from '../format/paths.js';
+import { ASSETS_BASE_RE, DEFAULT_ASSETS_BASE } from '../format/paths.js';
 
 // Explicit input/output types keep `isolatedDeclarations` satisfied (Zod's inferred
 // builder types cannot be emitted per-file). The schemas below are the source of truth;
@@ -132,7 +132,7 @@ const WriterSchema = z
     assetsBase: z
       .string()
       .regex(ASSETS_BASE_RE, 'assets/ or a relative path like ../../assets/0.3.0/')
-      .default('assets/'),
+      .default(DEFAULT_ASSETS_BASE),
     chunkTargetBytes: posInt.default(4_000_000),
     flushIntervalMs: posInt.default(5_000),
     dedupeCapacity: posInt.default(200_000),

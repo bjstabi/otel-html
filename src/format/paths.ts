@@ -93,6 +93,9 @@ export function partitionKey(n: number, table: Table): string {
 export const PARTITION_FILE_RE: RegExp =
   /^data\/partitions\/[0-9]{6,}\/(?:spans|logs|points|traces|patterns)\.parquet$/;
 
+/** The report's own viewer files folder: the default `writer.assetsBase`. */
+export const DEFAULT_ASSETS_BASE = 'assets/';
+
 const ENGINE_VERSION_SOURCE = '[0-9][A-Za-z0-9.-]*';
 
 /** A DuckDB engine version as it appears in file names: no `/`, no leading `.` or `_`. */

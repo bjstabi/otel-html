@@ -389,7 +389,7 @@ outputs = [
 run = "pnpm exec tsdown"
 
 [tasks."build:viewer"]
-description = "Build the viewer into dist/viewer (skipped while up to date)"
+description = "Build the viewer and the DuckDB engine files into dist/viewer (skipped while up to date)"
 # The lib build cleans dist/, so the viewer builds after it; mise re-runs this task whenever build:lib ran.
 depends = ["build:lib"]
 sources = [
@@ -402,12 +402,15 @@ sources = [
   "src/rollups/**",
   "src/semconv/**",
   "src/viewer/**",
+  "scripts/engine-assets.ts",
+  "src/writer/engine-assets.ts",
   "tsconfig.base.json",
   "tsconfig.viewer.json",
   "vite.config.ts",
 ]
-outputs = ["dist/viewer/**"]
-run = "pnpm exec vite build"
+# The DuckDB engine files come from @duckdb/duckdb-wasm, whose version is in package.json (@group:deps).
+outputs = ["dist/viewer/**", "dist/viewer/assets/duckdb.*"]
+run = ["pnpm exec vite build", "bun scripts/engine-assets.ts"]
 
 [tasks.build]
 description = "Build the library, then the viewer, into dist/"

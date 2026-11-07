@@ -1,10 +1,16 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { OtelHtmlError } from '../model/errors.js';
-import { type ViewerAsset, type ViewerAssets, viewerEntryNames } from '../writer/viewer-assets.js';
+import {
+  type ViewerAsset,
+  type ViewerAssets,
+  viewerEntryNames,
+  wantsAsset,
+} from '../writer/viewer-assets.js';
 
 interface Loaded {
-  files: ViewerAsset[];
+  dir: URL;
+  names: string[];
   script: string;
   style: string | null;
 }
@@ -51,17 +57,22 @@ export function packageDirViewerAssets(dirs: URL | readonly URL[]): ViewerAssets
     const script = pick(names, 'js', where, true);
     if (script === null) throw usage(`viewer assets at ${where} contain no viewer.<hash>.js entry`);
     const style = pick(names, 'css', where, false);
-    const files = names.map((n) => ({
-      path: `assets/${n}`,
-      contents: new Uint8Array(readFileSync(new URL(n, assetsDir))),
-    }));
-    cache = { files, script, style };
+    cache = { dir: assetsDir, names, script, style };
     return cache;
   };
 
   return {
-    async files() {
-      return load().files;
+    async files(format) {
+      // Read per call: the engine files are 44 MB and most reports take none or half of them.
+      const { dir, names } = load();
+      return names
+        .filter((n) => wantsAsset(`assets/${n}`, format))
+        .map(
+          (n): ViewerAsset => ({
+            path: `assets/${n}`,
+            contents: new Uint8Array(readFileSync(new URL(n, dir))),
+          }),
+        );
     },
     entry() {
       const { script, style } = load();

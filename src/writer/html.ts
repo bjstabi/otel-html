@@ -1,4 +1,4 @@
-import { ASSETS_BASE_RE } from '../format/paths.js';
+import { ASSETS_BASE_RE, DEFAULT_ASSETS_BASE } from '../format/paths.js';
 import { OtelHtmlError } from '../model/errors.js';
 
 export interface ViewerEntry {
@@ -25,7 +25,7 @@ function assetUrl(p: string, what: string, base: string): string {
       actual: JSON.stringify(p),
     });
   }
-  return escapeHtml(base + p.slice('assets/'.length));
+  return escapeHtml(base + p.slice(DEFAULT_ASSETS_BASE.length));
 }
 
 /**
@@ -38,7 +38,7 @@ export function renderIndexHtml(
   title: string,
   opts: { assetsBase?: string } = {},
 ): string {
-  const base = opts.assetsBase ?? 'assets/';
+  const base = opts.assetsBase ?? DEFAULT_ASSETS_BASE;
   if (!ASSETS_BASE_RE.test(base)) {
     throw new OtelHtmlError('invalid-report', {
       path: 'assetsBase',

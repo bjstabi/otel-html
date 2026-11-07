@@ -661,7 +661,7 @@ Build the library and CLI into dist/ (skipped while up to date)
 
 - **Usage:** `build:viewer`
 
-Build the viewer into dist/viewer (skipped while up to date)
+Build the viewer and the DuckDB engine files into dist/viewer (skipped while up to date)
 
 ## `check`
 
