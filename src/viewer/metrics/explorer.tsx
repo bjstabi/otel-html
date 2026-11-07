@@ -1,5 +1,5 @@
 import { type JSX, useCallback, useEffect, useMemo, useState } from 'react';
-import type { Manifest } from '../../format/manifest.js';
+import type { ManifestV4 } from '../../format/manifest.js';
 import { MAX_METRIC_QUERIES, type MetricPageState } from '../../query/metric-query.js';
 import type { MetricEntry } from '../../rollups/metric-catalog.js';
 import { ErrorCard, LoadingNote, PILL } from '../components/explorer-states.js';
@@ -7,7 +7,8 @@ import { downloadBlob } from '../components/export.js';
 import { type ChartPick, MetricChartCard } from '../components/metric-chart-card.js';
 import { seriesColorKey } from '../components/metric-chart-option.js';
 import { copyWidgetItem } from '../dashboards/copy-widget.js';
-import { catalogOf, type LegacyDataSource } from '../data/legacy-data-source.js';
+import type { DataSource } from '../data/data-source.js';
+import { manifestRange } from '../data/manifest-range.js';
 import { defaultShow, kindOf, type MetricQuery, resolveMetric, SHOW_BY_KIND } from '../data/metric-query.js';
 import type { TimeWindow } from '../data/span-query.js';
 import { useGoTo } from '../shell/go-to.js';
@@ -20,6 +21,7 @@ import { seriesToken } from '../theme/palette.js';
 import { exemplarTraceLookup, openChartPick } from './chart-pick.js';
 import { DisplayBar } from './display-bar.js';
 import { exportMetricCsv, exportMetricJson } from './export.js';
+import { catalogOf } from './metric-grid.js';
 import { buildPlots, formulaPrefix, layoutCharts, queryPrefix } from './plots.js';
 import { FormulaRow, QueryRow, type Resolution } from './query-row.js';
 import { useMetricQueries } from './use-metric-query.js';
@@ -28,7 +30,7 @@ const QUERY_IDS = 'abcdefghijklmnopqrstuvwxyz'.split('');
 /** Card widths are measured in steps of this many px, so a resize re-runs the queries only now and then. */
 const WIDTH_STEP_PX = 100;
 
-function ZeroMetrics({ manifest }: { manifest: Manifest }): JSX.Element {
+function ZeroMetrics({ manifest }: { manifest: ManifestV4 }): JSX.Element {
   return (
     <section className="max-w-xl rounded-card border border-hairline bg-surface p-6">
       <h2 className="text-base font-semibold">This report has no metrics</h2>
@@ -41,19 +43,20 @@ function ZeroMetrics({ manifest }: { manifest: Manifest }): JSX.Element {
 }
 
 /** Mockup 04, screen 1: query rows, formulas, the display bar and the chart cards. */
-export function MetricsExplorer(props: { dataSource: LegacyDataSource }): JSX.Element {
+export function MetricsExplorer(props: { dataSource: DataSource }): JSX.Element {
   const { manifest } = props.dataSource;
-  if (manifest.totals.metrics === 0 || manifest.range === null) {
+  const range = manifestRange(manifest);
+  if (manifest.totals.metrics === 0 || range === null) {
     return (
       <PageChrome title="Metrics" manifest={manifest} page="metrics">
         <ZeroMetrics manifest={manifest} />
       </PageChrome>
     );
   }
-  return <ExplorerBody dataSource={props.dataSource} range={manifest.range} />;
+  return <ExplorerBody dataSource={props.dataSource} range={range} />;
 }
 
-function ExplorerBody(props: { dataSource: LegacyDataSource; range: TimeWindow }): JSX.Element {
+function ExplorerBody(props: { dataSource: DataSource; range: TimeWindow }): JSX.Element {
   const { dataSource } = props;
   const manifest = dataSource.manifest;
   const sel = useSelection((s) => s);

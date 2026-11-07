@@ -145,9 +145,10 @@ function sortOf<C extends string>(
   return { column, dir: sort.dir };
 }
 
-function planThree(what: string): OtelHtmlError {
+/** The D11 error: the Metrics pages show its message as their error state. */
+function planThree(): OtelHtmlError {
   return new OtelHtmlError('usage', {
-    message: `${what} are not available in this viewer yet: metrics over format 4 arrive with plan 3 (D11)`,
+    message: 'Metrics are not available in this build yet; they arrive with format-4 plan 3',
   });
 }
 
@@ -731,9 +732,9 @@ export function createDuckDbDataSource(opts: {
         caps.facetValueCap,
       );
     },
-    metricCatalog: () => Promise.reject(planThree('The metric catalog')),
-    metric: () => Promise.reject(planThree('Metrics')),
-    metricsForResources: () => Promise.reject(planThree('Metrics')),
+    metricCatalog: () => Promise.reject(planThree()),
+    metric: () => Promise.reject(planThree()),
+    metricsForResources: () => Promise.reject(planThree()),
     close: () => engine.close(),
   };
 }

@@ -1,11 +1,11 @@
 import { type JSX, useCallback, useDeferredValue, useMemo, useState } from 'react';
-import type { Manifest } from '../../format/manifest.js';
+import type { ManifestV4 } from '../../format/manifest.js';
 import { parseUnixNanos } from '../../model/ids.js';
 import type { MetricPageState } from '../../query/metric-query.js';
 import type { MetricEntry } from '../../rollups/metric-catalog.js';
 import { ErrorCard } from '../components/explorer-states.js';
 import { ResultsTable } from '../components/results-table.js';
-import { catalogOf, type LegacyDataSource } from '../data/legacy-data-source.js';
+import type { DataSource } from '../data/data-source.js';
 import { metricTypeLabel } from '../data/metric-tables.js';
 import { useGoTo } from '../shell/go-to.js';
 import { PageChrome } from '../shell/page-chrome.js';
@@ -16,6 +16,7 @@ import { formatWindow, serializeUrlState } from '../state/url-state.js';
 import { useKeyedAsync } from '../state/use-keyed-async.js';
 import type { ColumnUi } from '../traces/columns.js';
 import { Sparkline } from '../traces/sparkline.js';
+import { catalogOf } from './metric-grid.js';
 
 const BADGE = 'rounded-full border border-hairline px-2 py-0.5 text-xs text-ink-2';
 const SHOWN_ATTRIBUTES = 2;
@@ -102,7 +103,7 @@ function explorerState(e: MetricEntry): MetricPageState {
 // Module-level so it is stable: `useKeyedAsync` reloads on a new `load`, and a fresh closure per render would start a
 // new load after every settled one.
 
-function ZeroMetrics({ manifest }: { manifest: Manifest }): JSX.Element {
+function ZeroMetrics({ manifest }: { manifest: ManifestV4 }): JSX.Element {
   return (
     <section className="max-w-xl rounded-card border border-hairline bg-surface p-6">
       <h2 className="text-base font-semibold">This report has no metrics</h2>
@@ -115,7 +116,7 @@ function ZeroMetrics({ manifest }: { manifest: Manifest }): JSX.Element {
 }
 
 /** Mockup 04, screen 2: every metric definition in the report; a row opens the Explorer on it. */
-export function MetricsCatalog(props: { dataSource: LegacyDataSource }): JSX.Element {
+export function MetricsCatalog(props: { dataSource: DataSource }): JSX.Element {
   const { manifest } = props.dataSource;
   const goTo = useGoTo();
   const load = useKeyedAsync(props.dataSource, catalogOf);

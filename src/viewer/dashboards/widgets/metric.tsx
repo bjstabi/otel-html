@@ -9,12 +9,13 @@ import { ErrorCard, LoadingNote } from '../../components/explorer-states.js';
 import { type ChartPick, MetricChartCard } from '../../components/metric-chart-card.js';
 import { METRIC_CHART_HEIGHT, type MetricSize } from '../../components/metric-chart-option.js';
 import { RunChartCard } from '../../components/run-chart-card.js';
-import { catalogOf, type LegacyDataSource } from '../../data/legacy-data-source.js';
+import type { DataSource } from '../../data/data-source.js';
+import { manifestRange } from '../../data/manifest-range.js';
 import { type MetricQuery, resolveMetric } from '../../data/metric-query.js';
 import { runMetricRunQuery } from '../../data/metric-run-query.js';
 import type { TimeWindow } from '../../data/span-query.js';
 import { exemplarTraceLookup, openChartPick } from '../../metrics/chart-pick.js';
-import { explorerFilter, MetricGrid, type MetricGridOrigin } from '../../metrics/metric-grid.js';
+import { catalogOf, explorerFilter, MetricGrid, type MetricGridOrigin } from '../../metrics/metric-grid.js';
 import { buildPlots, layoutCharts } from '../../metrics/plots.js';
 import { useMetricQueries } from '../../metrics/use-metric-query.js';
 import { useGoTo } from '../../shell/go-to.js';
@@ -49,7 +50,7 @@ const OFF: Narrowing = { status: 'off' };
  * The trace's resources and the `where` that names them (`explorerFilter` against every catalog resource).
  * `null` is no trace: nothing loads. A change of trace is `loading` until its own resources arrive.
  */
-export function useNarrowing(dataSource: LegacyDataSource, traceId: TraceId | null): Narrowing {
+export function useNarrowing(dataSource: DataSource, traceId: TraceId | null): Narrowing {
   const load = useCallback(
     async (
       id: TraceId,
@@ -102,10 +103,7 @@ function Empty(props: { title: string; message: string }): JSX.Element {
   );
 }
 
-/** The metrics bridge (D11, until 5.5): the widget's props with the legacy source the metric code still reads. */
-type Body = (
-  props: Omit<Parameters<WidgetRenderer>[0], 'dataSource'> & { dataSource: LegacyDataSource },
-) => JSX.Element;
+type Body = WidgetRenderer;
 
 /** The M3 chart card over the widget's queries, narrowed by the variables and the selected trace's resources. */
 const QueriesBody: Body = ({ widget, scope, height, dataSource, actions, variables }) => {
@@ -116,7 +114,7 @@ const QueriesBody: Body = ({ widget, scope, height, dataSource, actions, variabl
   const goTo = useGoTo();
   const narrowing = useNarrowing(dataSource, scope.highlightTrace);
   const catalog = useKeyedAsync(dataSource, catalogOf);
-  const run = dataSource.manifest.range;
+  const run = manifestRange(dataSource.manifest);
   const win = scope.window ?? run ?? FALLBACK_WINDOW;
   const [actionError, setActionError] = useState<string | null>(null);
   const hasTrace = useMemo(() => exemplarTraceLookup(dataSource), [dataSource]);
@@ -268,7 +266,7 @@ const RunBody: Body = ({ widget, scope, dashboard, height, dataSource, actions, 
   const dashboardId = dashboard.dashboard.id;
   const narrowing = useNarrowing(dataSource, scope.highlightTrace);
   const catalog = useKeyedAsync(dataSource, catalogOf);
-  const run = dataSource.manifest.range;
+  const run = manifestRange(dataSource.manifest);
   const { start, end } = scope.window ?? run ?? FALLBACK_WINDOW;
 
   const filter = narrowing.status === 'ready' ? narrowing.where : null;
@@ -352,7 +350,7 @@ const RunBody: Body = ({ widget, scope, dashboard, height, dataSource, actions, 
 const GridBody: Body = ({ scope, height, dataSource, actions, variables }) => {
   const narrowing = useNarrowing(dataSource, scope.highlightTrace);
   const catalog = useKeyedAsync(dataSource, catalogOf);
-  const run = dataSource.manifest.range;
+  const run = manifestRange(dataSource.manifest);
   const start = scope.window?.start ?? run?.start;
   const end = scope.window?.end ?? run?.end;
   const resources = narrowing.status === 'ready' ? narrowing.resources : null;
@@ -402,8 +400,7 @@ const GridBody: Body = ({ scope, height, dataSource, actions, variables }) => {
 /** The Metrics widget: chart cards over its `queries`, or (without them) the resource Metric grid. */
 export const MetricWidget: WidgetRenderer = (renderProps) => {
   const { widget } = renderProps;
-  // The metric code still takes the legacy source type; the format-4 source's metric stubs are what it gets (D11).
-  const props = { ...renderProps, dataSource: renderProps.dataSource as unknown as LegacyDataSource };
+  const props = renderProps;
   if (widget.type !== 'metric') {
     throw new OtelHtmlError('usage', { path: 'widget.type', expected: 'metric', actual: widget.type });
   }

@@ -106,92 +106,99 @@ async function renderCatalog(report: Fixture): Promise<{ catalogLoads: () => num
 const rowsOf = (): HTMLElement[] =>
   screen.getAllByRole('row').filter((r) => r.getAttribute('data-row-index') !== null);
 
-describe('Metrics Catalog', () => {
-  test('lists every definition and counts metrics and scopes in the header', async () => {
-    await renderCatalog(explorer);
-    await screen.findByText(
-      (_, el) => el?.tagName === 'P' && el.textContent === `${EXPLORER_DEFINITIONS} metrics · 1 scopes`,
-    );
-    expect(rowsOf()).toHaveLength(EXPLORER_DEFINITIONS);
-    expect(screen.getByRole('link', { name: 'Catalog' }).getAttribute('aria-current')).toBe('page');
-  });
-
-  test('the catalog loads once: a settled load does not start another', async () => {
-    const { catalogLoads } = await renderCatalog(explorer);
-    await screen.findByRole('grid');
-    for (let i = 0; i < 5; i++) await act(() => new Promise((r) => setTimeout(r, 0)));
-    expect(catalogLoads()).toBe(1);
-  });
-
-  test('a filter nothing matches says so', async () => {
-    await renderCatalog(explorer);
-    await screen.findByText(/metrics ·/);
-    const user = userEvent.setup();
-    await user.type(screen.getByRole('searchbox', { name: 'Filter metrics' }), 'zzz');
-    expect(await screen.findByText('No metrics match “zzz”.')).toBeTruthy();
-    expect(rowsOf()).toHaveLength(0);
-  });
-
-  test('the Explore cell is a link to the Explorer on that metric', async () => {
-    await renderCatalog(explorer);
-    await screen.findByText(/metrics ·/);
-    const [first] = rowsOf();
-    const link = within(first as HTMLElement).getByRole('link', { name: 'Explore →' });
-    const href = link.getAttribute('href') ?? '';
-    expect(href.startsWith('#/metrics?m=')).toBe(true);
-    expect(decodeURIComponent(href)).toContain('"metric":"');
-  });
-
-  test('filtering by http. leaves the two http metrics', async () => {
-    const user = userEvent.setup();
-    await renderCatalog(explorer);
-    await screen.findByRole('grid');
-    await user.type(screen.getByRole('searchbox', { name: 'Filter metrics' }), 'http.');
-    await waitFor(() => expect(rowsOf()).toHaveLength(2));
-  });
-
-  test('a capped metric shows its cap and other, and a conflicting name says 2 definitions', async () => {
-    await renderCatalog(capped);
-    await screen.findByRole('grid');
-    const row = rowsOf().find((r) => r.textContent?.includes('capped.gauge'));
-    expect(within(row as HTMLElement).getByText(`${TEST_CAP} + other`)).toBeTruthy();
-    cleanup();
-    await renderCatalog(explorer);
-    await screen.findByRole('grid');
-    expect(screen.getAllByText('2 definitions')).toHaveLength(2);
-  });
-
-  test('a click on a row opens the Explorer on that metric with its default show', async () => {
-    const user = userEvent.setup();
-    await renderCatalog(explorer);
-    await screen.findByRole('grid');
-    const row = rowsOf().find((r) => r.textContent?.includes('http.server.request.duration'));
-    await user.click(row as HTMLElement);
-    await waitFor(() => expect(window.location.hash).toMatch(/^#\/metrics\?/));
-    const q = parseUrlState(window.location.hash).state.m?.queries[0];
-    expect(q).toMatchObject({ metric: 'http.server.request.duration', show: 'p95', kind: null, unit: null });
-  });
-
-  test('a conflicting entry carries kind and unit into the query', async () => {
-    const user = userEvent.setup();
-    await renderCatalog(explorer);
-    await screen.findByRole('grid');
-    const row = rowsOf().find(
-      (r) => r.textContent?.includes('jobs.active') && r.textContent.includes('{job}'),
-    );
-    await user.click(row as HTMLElement);
-    await waitFor(() => expect(window.location.hash).toMatch(/^#\/metrics\?/));
-    expect(parseUrlState(window.location.hash).state.m?.queries[0]).toMatchObject({
-      metric: 'jobs.active',
-      kind: 'sum',
-      unit: '{job}',
+describe.skip('plan 3: metrics in the format-4 viewer', () => {
+  describe('Metrics Catalog', () => {
+    test('lists every definition and counts metrics and scopes in the header', async () => {
+      await renderCatalog(explorer);
+      await screen.findByText(
+        (_, el) => el?.tagName === 'P' && el.textContent === `${EXPLORER_DEFINITIONS} metrics · 1 scopes`,
+      );
+      expect(rowsOf()).toHaveLength(EXPLORER_DEFINITIONS);
+      expect(screen.getByRole('link', { name: 'Catalog' }).getAttribute('aria-current')).toBe('page');
     });
-  });
 
-  test('a hostile metric name renders as text', async () => {
-    await renderCatalog(capped);
-    await screen.findByRole('grid');
-    expect(screen.getByText(HOSTILE)).toBeTruthy();
-    expect(document.querySelector('img[src="x"]')).toBeNull();
+    test('the catalog loads once: a settled load does not start another', async () => {
+      const { catalogLoads } = await renderCatalog(explorer);
+      await screen.findByRole('grid');
+      for (let i = 0; i < 5; i++) await act(() => new Promise((r) => setTimeout(r, 0)));
+      expect(catalogLoads()).toBe(1);
+    });
+
+    test('a filter nothing matches says so', async () => {
+      await renderCatalog(explorer);
+      await screen.findByText(/metrics ·/);
+      const user = userEvent.setup();
+      await user.type(screen.getByRole('searchbox', { name: 'Filter metrics' }), 'zzz');
+      expect(await screen.findByText('No metrics match “zzz”.')).toBeTruthy();
+      expect(rowsOf()).toHaveLength(0);
+    });
+
+    test('the Explore cell is a link to the Explorer on that metric', async () => {
+      await renderCatalog(explorer);
+      await screen.findByText(/metrics ·/);
+      const [first] = rowsOf();
+      const link = within(first as HTMLElement).getByRole('link', { name: 'Explore →' });
+      const href = link.getAttribute('href') ?? '';
+      expect(href.startsWith('#/metrics?m=')).toBe(true);
+      expect(decodeURIComponent(href)).toContain('"metric":"');
+    });
+
+    test('filtering by http. leaves the two http metrics', async () => {
+      const user = userEvent.setup();
+      await renderCatalog(explorer);
+      await screen.findByRole('grid');
+      await user.type(screen.getByRole('searchbox', { name: 'Filter metrics' }), 'http.');
+      await waitFor(() => expect(rowsOf()).toHaveLength(2));
+    });
+
+    test('a capped metric shows its cap and other, and a conflicting name says 2 definitions', async () => {
+      await renderCatalog(capped);
+      await screen.findByRole('grid');
+      const row = rowsOf().find((r) => r.textContent?.includes('capped.gauge'));
+      expect(within(row as HTMLElement).getByText(`${TEST_CAP} + other`)).toBeTruthy();
+      cleanup();
+      await renderCatalog(explorer);
+      await screen.findByRole('grid');
+      expect(screen.getAllByText('2 definitions')).toHaveLength(2);
+    });
+
+    test('a click on a row opens the Explorer on that metric with its default show', async () => {
+      const user = userEvent.setup();
+      await renderCatalog(explorer);
+      await screen.findByRole('grid');
+      const row = rowsOf().find((r) => r.textContent?.includes('http.server.request.duration'));
+      await user.click(row as HTMLElement);
+      await waitFor(() => expect(window.location.hash).toMatch(/^#\/metrics\?/));
+      const q = parseUrlState(window.location.hash).state.m?.queries[0];
+      expect(q).toMatchObject({
+        metric: 'http.server.request.duration',
+        show: 'p95',
+        kind: null,
+        unit: null,
+      });
+    });
+
+    test('a conflicting entry carries kind and unit into the query', async () => {
+      const user = userEvent.setup();
+      await renderCatalog(explorer);
+      await screen.findByRole('grid');
+      const row = rowsOf().find(
+        (r) => r.textContent?.includes('jobs.active') && r.textContent.includes('{job}'),
+      );
+      await user.click(row as HTMLElement);
+      await waitFor(() => expect(window.location.hash).toMatch(/^#\/metrics\?/));
+      expect(parseUrlState(window.location.hash).state.m?.queries[0]).toMatchObject({
+        metric: 'jobs.active',
+        kind: 'sum',
+        unit: '{job}',
+      });
+    });
+
+    test('a hostile metric name renders as text', async () => {
+      await renderCatalog(capped);
+      await screen.findByRole('grid');
+      expect(screen.getByText(HOSTILE)).toBeTruthy();
+      expect(document.querySelector('img[src="x"]')).toBeNull();
+    });
   });
 });

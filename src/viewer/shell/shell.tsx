@@ -9,7 +9,6 @@ import { DashboardsListPage } from '../dashboards/list-page.js';
 import { defaultDashboardRoute } from '../dashboards/registry.js';
 import { RunSessionProvider } from '../dashboards/run-session.js';
 import type { DataSource } from '../data/data-source.js';
-import type { LegacyDataSource } from '../data/legacy-data-source.js';
 import { LogsExplorer } from '../logs/explorer.js';
 import { MetricsCatalog } from '../metrics/catalog.js';
 import { MetricsExplorer } from '../metrics/explorer.js';
@@ -211,9 +210,6 @@ function homeRoute(manifest: AnyManifest): string {
 
 function RoutedPage({ dataSource }: { dataSource: DataSource }): JSX.Element {
   const manifest = dataSource.manifest;
-  // The metrics pages still read the legacy source type (D11); the format-4 source's metric stubs are what they get.
-  // Removed with the metrics pages' move (5.5).
-  const metricSource = dataSource as unknown as LegacyDataSource;
   const [route] = useRoute();
   return (
     <Switch>
@@ -236,10 +232,10 @@ function RoutedPage({ dataSource }: { dataSource: DataSource }): JSX.Element {
         <LogsExplorer dataSource={dataSource} />
       </Route>
       <Route path="/metrics/catalog">
-        <MetricsCatalog dataSource={metricSource} />
+        <MetricsCatalog dataSource={dataSource} />
       </Route>
       <Route path="/metrics">
-        <MetricsExplorer dataSource={metricSource} />
+        <MetricsExplorer dataSource={dataSource} />
       </Route>
       <Route path="/dashboards">
         <DashboardsListPage manifest={manifest} />

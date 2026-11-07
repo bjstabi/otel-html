@@ -4,7 +4,6 @@ import { type JSX, useCallback, useMemo, useState, useSyncExternalStore } from '
 import type { RunControls, Widget, WidgetLayout, WidgetType } from '../../dashboards/schema.js';
 import { parseUnixNanos, type TraceId } from '../../model/ids.js';
 import type { DataSource, ResourceValues } from '../data/data-source.js';
-import type { LegacyDataSource } from '../data/legacy-data-source.js';
 import type { TimeWindow } from '../data/time-window.js';
 import { LogPanel } from '../logs/log-panel.js';
 import { CONTROL, POPUP } from '../shell/controls.js';
@@ -280,8 +279,7 @@ function DashboardView(props: {
   const outside = [...scopes.values()].some((s) => s.scope.outside);
   // Open in Metrics needs the selected trace's resources, as the metric widgets read them.
   const narrowing = useNarrowing(
-    // The metrics bridge (D11, until 5.5).
-    dataSource as unknown as LegacyDataSource,
+    dataSource,
     d.widgets.some((w) => w.type === 'metric' && w.queries !== null && following(w, state))
       ? state.sel.trace
       : null,

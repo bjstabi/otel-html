@@ -119,10 +119,6 @@ export interface SpanStrategy extends Pick<LegacyDataSource, 'querySpans' | 'has
 /** What each log strategy provides; `createDataSource` adds the landing. */
 export type LogStrategy = Pick<LegacyDataSource, 'queryLogs' | 'getLog' | 'traceLogs' | 'surroundingLogs'>;
 
-/** `ds.metricCatalog()` as a stable function, for `useKeyedAsync(dataSource, catalogOf)`. */
-export const catalogOf = (ds: Pick<LegacyDataSource, 'metricCatalog'>): Promise<MetricCatalog> =>
-  ds.metricCatalog();
-
 /** Metrics kept decoded in memory. */
 const METRIC_LRU_SIZE = 32;
 

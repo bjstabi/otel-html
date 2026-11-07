@@ -4,13 +4,13 @@ import { anyValueToDisplay } from '../../model/anyvalue.js';
 import type { RelNanos, TraceId } from '../../model/ids.js';
 import type { ResourceRecord } from '../../model/records.js';
 import { MAX_METRIC_QUERIES, type MetricPageState } from '../../query/metric-query.js';
-import type { MetricEntry } from '../../rollups/metric-catalog.js';
+import type { MetricCatalog, MetricEntry } from '../../rollups/metric-catalog.js';
 import { compareNamespaces, metricNamespace } from '../../semconv/metric-namespaces.js';
 import { tokenValue } from '../components/attribute-filter.js';
 import { ErrorCard, PILL } from '../components/explorer-states.js';
 import { type ChartPick, MetricChartCard } from '../components/metric-chart-card.js';
 import { METRIC_CHART_HEIGHT, type MetricSize } from '../components/metric-chart-option.js';
-import { catalogOf, type LegacyDataSource } from '../data/legacy-data-source.js';
+import type { DataSource } from '../data/data-source.js';
 import { type LoadedMetric, resourceKey } from '../data/metric-load.js';
 import {
   defaultShow,
@@ -174,11 +174,12 @@ function distinctResources(resources: readonly ResourceRecord[]): ResourceRecord
   return [...seen.values()];
 }
 
-/** What the grid reads of a data source: both the legacy and the format-4 source provide it (until 5.5). */
-export type MetricSource = Pick<
-  LegacyDataSource,
-  'metricCatalog' | 'metric' | 'metricsForResources' | 'hasTrace'
->;
+/** What the grid reads of a data source. */
+export type MetricSource = Pick<DataSource, 'metricCatalog' | 'metric' | 'metricsForResources' | 'hasTrace'>;
+
+/** `ds.metricCatalog()` as a stable function, for `useKeyedAsync(dataSource, catalogOf)`. */
+export const catalogOf = (ds: Pick<DataSource, 'metricCatalog'>): Promise<MetricCatalog> =>
+  ds.metricCatalog();
 
 /** Whether any of `resources` has metric series; false while the lookup runs or after it failed. */
 export function useHasMetrics(

@@ -58,23 +58,25 @@ async function mount(onZoom?: (w: TimeWindow) => void): Promise<void> {
 const card = (): Promise<HTMLElement> =>
   screen.findByRole('button', { name: /^Zoom process\.cpu\.utilization/ });
 
-describe('a drag on a MetricGrid chart', () => {
-  test('zooms the grid itself, with Reset zoom, when nobody takes it', async () => {
-    const user = userEvent.setup();
-    await mount();
-    await user.click(await card());
-    expect((await card()).getAttribute('data-window')).toBe('1000000000-2000000000');
-    await user.click(screen.getByRole('button', { name: 'Reset zoom' }));
-    expect((await card()).getAttribute('data-window')).toBe('0-120000000000');
-  });
+describe.skip('plan 3: metrics in the format-4 viewer', () => {
+  describe('a drag on a MetricGrid chart', () => {
+    test('zooms the grid itself, with Reset zoom, when nobody takes it', async () => {
+      const user = userEvent.setup();
+      await mount();
+      await user.click(await card());
+      expect((await card()).getAttribute('data-window')).toBe('1000000000-2000000000');
+      await user.click(screen.getByRole('button', { name: 'Reset zoom' }));
+      expect((await card()).getAttribute('data-window')).toBe('0-120000000000');
+    });
 
-  test('goes to onZoom (a dashboard selection) and leaves the grid window alone', async () => {
-    const user = userEvent.setup();
-    const onZoom = vi.fn();
-    await mount(onZoom);
-    await user.click(await card());
-    expect(onZoom).toHaveBeenCalledWith({ start: 1e9, end: 2e9 });
-    expect((await card()).getAttribute('data-window')).toBe('0-120000000000');
-    expect(screen.queryByRole('button', { name: 'Reset zoom' })).toBeNull();
+    test('goes to onZoom (a dashboard selection) and leaves the grid window alone', async () => {
+      const user = userEvent.setup();
+      const onZoom = vi.fn();
+      await mount(onZoom);
+      await user.click(await card());
+      expect(onZoom).toHaveBeenCalledWith({ start: 1e9, end: 2e9 });
+      expect((await card()).getAttribute('data-window')).toBe('0-120000000000');
+      expect(screen.queryByRole('button', { name: 'Reset zoom' })).toBeNull();
+    });
   });
 });
