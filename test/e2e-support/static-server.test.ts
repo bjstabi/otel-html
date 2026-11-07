@@ -85,10 +85,16 @@ it('types .wasm, 404s unknown paths and records every request path', async () =>
 it('lists the requests with their Range headers at /__requests, leaving its own request out', async () => {
   await get('/m/a.parquet', { headers: { range: 'bytes=0-9' } });
   await get('/m/e.wasm');
-  const body = (await (await get('/__requests')).json()) as { path: string; range: string | null }[];
-  expect(body.slice(-2)).toEqual([
-    { path: '/m/a.parquet', range: 'bytes=0-9' },
-    { path: '/m/e.wasm', range: null },
+  await get('/m/a.parquet', { method: 'HEAD' });
+  const body = (await (await get('/__requests')).json()) as {
+    path: string;
+    range: string | null;
+    method: string;
+  }[];
+  expect(body.slice(-3)).toEqual([
+    { path: '/m/a.parquet', range: 'bytes=0-9', method: 'GET' },
+    { path: '/m/e.wasm', range: null, method: 'GET' },
+    { path: '/m/a.parquet', range: null, method: 'HEAD' },
   ]);
   expect(server.requests()).not.toContain('/__requests');
 });

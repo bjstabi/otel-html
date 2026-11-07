@@ -34,13 +34,15 @@ function parseRange(
  * Serves folders over HTTP on a free loopback port: each mount's files appear under its URL prefix. Answers `Range`
  * (a single range, 206 or 416) and `HEAD`; HEAD never carries `Content-Range`, as on GitHub Pages (spec §12).
  * `requests()` lists every request path in arrival order. The server also answers `GET /__requests` with every request
- * seen so far as JSON (`RequestRecord[]`: path and `Range` header, the endpoint's own requests left out), so a test
+ * seen so far as JSON (`RequestRecord[]`: path, `Range` header and method, the endpoint's own requests left out), so a test
  * worker, which runs in another process than global setup's server, can read what its page asked for.
  */
 export interface RequestRecord {
   path: string;
   /** The `Range` header as sent, or `null`. */
   range: string | null;
+  /** The request method (`GET` or `HEAD`). */
+  method: string;
 }
 
 /** The reserved path under which the server lists the requests it has seen. */
@@ -59,7 +61,7 @@ export async function serve(mounts: readonly { prefix: string; root: string }[])
       res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(seen));
       return;
     }
-    seen.push({ path: rel, range: req.headers.range ?? null });
+    seen.push({ path: rel, range: req.headers.range ?? null, method: req.method ?? 'GET' });
     const head = req.method === 'HEAD';
     const mount = mounts.find((m) => rel.startsWith(`${m.prefix}/`));
     const file = mount === undefined ? null : normalize(join(mount.root, rel.slice(mount.prefix.length)));
