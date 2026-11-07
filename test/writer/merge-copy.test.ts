@@ -14,7 +14,7 @@ import { openSession } from '../../src/writer/session.js';
 import { logRecord, logsRequest } from '../../test-support/otlp-builders.js';
 import { perfFactor } from '../../test-support/perf-inject.js';
 import { createTestWriter, otlp, type TestWriter, testConfig } from '../../test-support/writer-deps.js';
-import { spansRequest } from './helpers.js';
+import { manifestOf, spansRequest } from './helpers.js';
 
 type Format = 'local' | 'site';
 const cfg = (format: Format, extra: object = {}) => ({ writer: { format, ...extra } });
@@ -288,6 +288,27 @@ describe('merge copies format-4 partitions', () => {
       const before = snapshotOf(w);
       const e = await mergeWith(
         { inputs: ['v3', 'a'], out: 'm', config: cfg('site'), replace: true },
+        w.deps,
+      ).catch((x: unknown) => x);
+      expect(e).toMatchObject({ code: 'invalid-report' });
+      expect(snapshotOf(w)).toEqual(before);
+    });
+
+    test('a chunks input that sorts after a v4 input and lists a directory as a chunk', async () => {
+      const w = createTestWriter();
+      await oldReport(w);
+      await v4Report(w, 'a', [spansRequest(1, 0, 9)]);
+      const s = await openSession(w.deps, { out: 'v3', config: testConfig(), mode: 'replace' });
+      await s.add(otlp(spansRequest(1, 0, 20)), 'v3.json');
+      await s.close();
+      const chunk = manifestOf(w, 'v3').chunks[0];
+      if (chunk === undefined) throw new Error('no chunk');
+      await w.deps.fs.remove(`v3/${chunk.path}`);
+      await w.deps.fs.writeBytes(`v3/${chunk.path}/inner`, new Uint8Array([1]));
+      expect(v4Manifest(w, 'a').epochUnixNano).toBe(manifestOf(w, 'v3').epochUnixNano);
+      const before = snapshotOf(w);
+      const e = await mergeWith(
+        { inputs: ['a', 'v3'], out: 'm', config: cfg('site'), replace: true },
         w.deps,
       ).catch((x: unknown) => x);
       expect(e).toMatchObject({ code: 'invalid-report' });

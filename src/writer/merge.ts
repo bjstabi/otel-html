@@ -85,7 +85,7 @@ async function locateManifest(fs: FileSystem, rawDir: string, verb: string): Pro
 async function assertReadable(fs: FileSystem, file: string, listed: string): Promise<void> {
   const fail = (why: string): OtelHtmlError =>
     new OtelHtmlError('invalid-report', {
-      message: `${file}: cannot read partition file ${listed} listed in the manifest (${why})`,
+      message: `${file}: cannot read ${listed} listed in the manifest (${why})`,
     });
   const kind = await fs.entryKind(file);
   if (kind === 'missing') throw fail('it is missing');
@@ -266,14 +266,13 @@ export async function mergeReports(
       hint: `merge with ${existing === undefined ? '--format local or --format site' : `--format ${existing}`}`,
     });
   }
-  // Also before it: a replace wipes the old report at the session's first write, so every file an input lists must be there.
+  // Also before it: a replace wipes the old report at the session's first write, so every partition file and chunk an input lists must open.
   for (const input of loaded) {
-    if (input.kind !== 'partitions') continue;
-    for (const entry of input.manifest.partitions) {
-      for (const f of Object.values(entry.files)) {
-        await assertReadable(deps.fs, at(input.dir, f.path), f.path);
-      }
-    }
+    const listed =
+      input.kind === 'partitions'
+        ? input.manifest.partitions.flatMap((e) => Object.values(e.files).map((f) => f.path))
+        : input.manifest.chunks.map((c) => c.path);
+    for (const path of listed) await assertReadable(deps.fs, at(input.dir, path), path);
   }
   const first = loaded[0];
   const titled =
