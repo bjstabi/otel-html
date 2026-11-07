@@ -2,7 +2,7 @@ import { Info } from 'lucide-react';
 import { type JSX, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { RunControls } from '../../dashboards/schema.js';
 import type { RunInfo, RunQueryResult } from '../data/metric-run-query.js';
-import type { TimeWindow } from '../data/span-query.js';
+import type { TimeWindow } from '../data/time-window.js';
 import { useRunLineColorAssigner } from '../theme/colors-context.js';
 import { Chart, type EChartsType } from './chart.js';
 import { plotRects } from './run-chart-layout.js';

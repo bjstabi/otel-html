@@ -128,7 +128,7 @@ function source(over: Partial<DataSource> = {}): DataSource {
     hasTrace: () => Promise.resolve(false),
     percentileOf: () => 90,
     ...over,
-  } as DataSource;
+  } as unknown as DataSource;
 }
 
 function mountSection(detail: TraceDetail, spanId: SpanId, ds: DataSource = source(), init = {}) {
@@ -171,9 +171,11 @@ describe('SpanSection', () => {
     expect(screen.getByText(/Select a span/)).toBeTruthy();
   });
 
-  test('header shows name, service, percentile, duration and share of trace', () => {
+  test('header shows name, service, percentile, duration and share of trace', async () => {
     mountSection(withSpan({ name: 'GET /cart' }), spanIdOf(1));
     const header = screen.getByTestId('span-header');
+    // The percentile is a query of its own and lands after the first paint.
+    await waitFor(() => expect(header.textContent).toContain('p90'));
     expect(header.textContent).toContain('GET /cart');
     expect(header.textContent).toContain('web');
     expect(header.textContent).toContain('p90');

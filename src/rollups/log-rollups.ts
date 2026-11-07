@@ -4,7 +4,7 @@ import { anyValueToDisplay } from '../model/anyvalue.js';
 import { OtelHtmlError } from '../model/errors.js';
 import { logTime } from '../model/records.js';
 import type { LogTarget } from '../ottl/contexts.js';
-import { DEFAULT_LOG_FACETS, LOG_RESOURCE_FACET_KEYS } from '../semconv/default-facets.js';
+import { DEFAULT_LOG_FACETS } from '../semconv/default-facets.js';
 import { LOG_SEVERITY_KEYS, type LogSeverityKey, severityKey } from '../semconv/severity.js';
 import { Drain, type SerializedDrain } from './drain.js';
 import { addFacet, facetableAttributes } from './facet-values.js';
@@ -13,7 +13,7 @@ import type { SpanRollupOptions } from './span-rollups.js';
 import { TimeBuckets } from './time-buckets.js';
 
 // The facet definitions live in src/semconv/default-facets.ts (D16); the chunk writer reads them from here until the chunks go.
-export { DEFAULT_LOG_FACETS, LOG_RESOURCE_FACET_KEYS };
+export { DEFAULT_LOG_FACETS };
 
 const CORE_KEYS: ReadonlySet<string> = new Set(DEFAULT_LOG_FACETS.map((f) => f.key));
 const SerializedLogRollupsSchema = z.strictObject({

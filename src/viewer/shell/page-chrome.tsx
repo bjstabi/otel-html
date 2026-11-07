@@ -2,7 +2,7 @@ import { Dialog } from '@base-ui/react/dialog';
 import { Menu } from '@base-ui/react/menu';
 import { Download, Link2 } from 'lucide-react';
 import { type JSX, type ReactNode, useEffect, useRef, useState } from 'react';
-import type { Manifest } from '../../format/manifest.js';
+import type { AnyManifest } from '../../format/manifest.js';
 import type { ExplorerPage } from '../../query/pages.js';
 import type { FacetSignal } from '../components/filter-tokens.js';
 import { QueryBar } from '../components/query-bar.js';
@@ -205,7 +205,7 @@ export function PageChrome(props: {
   title: string;
   /** Which OTTL context the query bar compiles in; spans or log records. Without one there is no query bar (Metrics filters per query). */
   signal?: FacetSignal;
-  manifest: Manifest;
+  manifest: AnyManifest;
   /** An explorer page: shows its Views menu. */
   page?: ExplorerPage;
   exportItems?: readonly ExportItem[];

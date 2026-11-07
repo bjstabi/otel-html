@@ -4,7 +4,7 @@ import { compileCondition } from '../../ottl/compile.js';
 import type { OttlContextName } from '../../ottl/contexts.js';
 import { parseCondition } from '../../ottl/parse.js';
 import type { MetricQuery } from '../data/metric-query.js';
-import type { TimeWindow } from '../data/span-query.js';
+import type { TimeWindow } from '../data/time-window.js';
 import { defaultMetricState } from './metric-state.js';
 import { PAGE_OPTIONS, type Page } from './page-options.js';
 import { type SelectionData, selectionToUrlState } from './selection.js';

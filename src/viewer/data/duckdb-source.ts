@@ -49,7 +49,7 @@ import { FacetCounts } from '../../rollups/facets.js';
 import { TimeBuckets } from '../../rollups/time-buckets.js';
 import { LOG_SEVERITY_KEYS } from '../../semconv/severity.js';
 import { durationAxis } from '../traces/views.js';
-import type { TraceDetail } from './data-source.js';
+import type { DataSource, TraceDetail } from './data-source.js';
 import { checkSurroundingCount, type LogRef, type LogRow } from './log-query.js';
 import {
   type LogRowEntry,
@@ -61,11 +61,11 @@ import {
   pointBuckets,
   resourceValueResult,
 } from './log-results.js';
+import { manifestRange } from './manifest-range.js';
 import { DEFAULT_FACET_CAPS, type FacetCaps, throwIfAborted } from './query-common.js';
 import type { QueryEngine } from './query-engine.js';
 import { dropResidualTable, residualIdTable, residualRows } from './residual.js';
 import type {
-  DataSource,
   LogNeed,
   LogQuery,
   LogQueryResult,
@@ -79,7 +79,6 @@ import type {
   SpanRow,
   SurroundingLogs,
 } from './results.js';
-import type { TimeWindow } from './span-query.js';
 import {
   cell,
   durationBins,
@@ -96,6 +95,7 @@ import {
   toNumber,
   traceRows,
 } from './span-results.js';
+import type { TimeWindow } from './time-window.js';
 import { traceNotFound } from './trace-detail.js';
 import { buildTraceTree, exclusiveTimeByService } from './trace-tree.js';
 
@@ -145,13 +145,14 @@ function sortOf<C extends string>(
   return { column, dir: sort.dir };
 }
 
-function planThree(what: string): OtelHtmlError {
+/** The D11 error: the Metrics pages show its message as their error state. */
+function planThree(): OtelHtmlError {
   return new OtelHtmlError('usage', {
-    message: `${what} are not available in this viewer yet: metrics over format 4 arrive with plan 3 (D11)`,
+    message: 'Metrics are not available in this build yet; they arrive with format-4 plan 3',
   });
 }
 
-function emptyResult(caps: typeof DEFAULT_FACET_CAPS, residual: boolean): SpanQueryResult {
+function emptyResult(caps: typeof DEFAULT_FACET_CAPS, residual: string | null): SpanQueryResult {
   return {
     rows: [],
     total: 0,
@@ -176,7 +177,7 @@ function residualTest(compiled: CompiledCondition<'span'>, epoch: bigint): (e: S
     });
 }
 
-function emptyLogResult(caps: FacetCaps, residual: boolean, mode: LogQuery['mode']): LogQueryResult {
+function emptyLogResult(caps: FacetCaps, residual: string | null, mode: LogQuery['mode']): LogQueryResult {
   const base = {
     total: 0,
     matched: 0,
@@ -204,6 +205,17 @@ function logResidualTest(
 const noSuchLog = (ref: LogRef): OtelHtmlError =>
   new OtelHtmlError('usage', { path: `log ${ref}`, expected: 'a log of this report', actual: 'no such log' });
 
+/** A row limit is a non-negative integer. */
+function checkLimit(limit: number): void {
+  if (!Number.isInteger(limit) || limit < 0) {
+    throw new OtelHtmlError('usage', {
+      path: 'query.limit',
+      expected: 'a non-negative integer',
+      actual: String(limit),
+    });
+  }
+}
+
 /** The format-4 data source over a query engine (D19): no Mosaic type appears here. `close()` is `engine.close()`. */
 export function createDuckDbDataSource(opts: {
   engine: QueryEngine;
@@ -216,13 +228,7 @@ export function createDuckDbDataSource(opts: {
   const { engine, manifest } = opts;
   const epoch = BigInt(manifest.epochUnixNano);
   const caps = opts.caps ?? DEFAULT_FACET_CAPS;
-  const range =
-    manifest.range === null
-      ? null
-      : {
-          start: toNumber(BigInt(manifest.range.start) - epoch, 'range.start'),
-          end: toNumber(BigInt(manifest.range.end) - epoch, 'range.end'),
-        };
+  const range = manifestRange(manifest);
 
   /**
    * Narrows `filter` to the rows the residual terms accept, through a temp table of their ids (D5). `candidates` reads
@@ -277,6 +283,7 @@ export function createDuckDbDataSource(opts: {
 
   async function querySpans(q: SpanQuery, signal?: AbortSignal): Promise<SpanQueryResult> {
     throwIfAborted(signal);
+    checkLimit(q.limit);
     const { filter, residual } = buildFilter({
       manifest,
       table: 'spans',
@@ -285,7 +292,7 @@ export function createDuckDbDataSource(opts: {
       window: q.window,
     });
     const browser = residual !== null;
-    if (filter.files.files.length === 0) return emptyResult(caps, browser);
+    if (filter.files.files.length === 0) return emptyResult(caps, residual);
     const needs = new Set(q.needs);
     const aggregates = AGGREGATE_NEEDS.some((n) => needs.has(n));
     const spanSort = q.mode === 'spans' ? sortOf(SPAN_SORTS, q.sort, 'spans') : null;
@@ -294,7 +301,7 @@ export function createDuckDbDataSource(opts: {
     const test = residual === null ? null : residualTest(compileCondition(residual, 'span'), epoch);
 
     const run = async (f: SqlFilter): Promise<SpanQueryResult> => {
-      const result = emptyResult(caps, browser);
+      const result = emptyResult(caps, residual);
       const spec = bucketSpec(q.window, range);
       const parts: Promise<void>[] = [];
 
@@ -372,11 +379,14 @@ export function createDuckDbDataSource(opts: {
           (async () => {
             const summary = durationSummary(await engine.query(durationSummaryQuery(f), signal));
             if (summary === null) return;
+            // A caller's axis (the explorer keeps one while a duration filter is set) wins over the derived one.
             const edges = durationAxis(
               [{ durationNs: summary.min }, { durationNs: summary.max }],
               DURATION_BIN_COUNT,
             );
-            const axis = edges.slice(0, -1).map((from, i) => ({ fromNs: from, toNs: edges[i + 1] ?? from }));
+            const axis =
+              q.durationAxis ??
+              edges.slice(0, -1).map((from, i) => ({ fromNs: from, toNs: edges[i + 1] ?? from }));
             const bins = durationBins(await engine.query(durationBinsQuery(f, axis), signal), axis);
             result.durations = { summary, bins };
           })(),
@@ -437,6 +447,7 @@ export function createDuckDbDataSource(opts: {
 
   async function queryLogs(q: LogQuery, signal?: AbortSignal): Promise<LogQueryResult> {
     throwIfAborted(signal);
+    checkLimit(q.limit);
     if ((q.mode as string) === 'patterns') {
       throw new OtelHtmlError('usage', {
         path: 'query.mode',
@@ -455,7 +466,7 @@ export function createDuckDbDataSource(opts: {
         : { traceId: q.traceId, traceFiles: (await logTraceFiles(q.traceId, signal)) ?? allLogsFiles }),
     });
     const browser = residual !== null;
-    if (filter.files.files.length === 0) return emptyLogResult(caps, browser, q.mode);
+    if (filter.files.files.length === 0) return emptyLogResult(caps, residual, q.mode);
     const needs = new Set(q.needs);
     const aggregates = LOG_AGGREGATE_NEEDS.some((n) => needs.has(n));
     const logSort = q.mode === 'logs' ? sortOf(LOG_SORTS, q.sort, 'logs') : null;
@@ -464,7 +475,7 @@ export function createDuckDbDataSource(opts: {
     const test = residual === null ? null : logResidualTest(compileCondition(residual, 'log_record'), epoch);
 
     const run = async (f: SqlFilter): Promise<LogQueryResult> => {
-      const result = emptyLogResult(caps, browser, q.mode);
+      const result = emptyLogResult(caps, residual, q.mode);
       const spec = bucketSpec(q.window, range);
       const parts: Promise<void>[] = [];
 
@@ -500,11 +511,7 @@ export function createDuckDbDataSource(opts: {
               const total = exhausted ? rows.length : Math.max(candidates, rows.length);
               Object.assign(result, { rows: rows.map((e) => e.row), total, matched: total });
             } else if (logSort !== null) {
-              const { rows, total } = logRows(
-                await engine.query(logRowsQuery(f, logSort, q.limit), signal),
-                epoch,
-                manifest,
-              );
+              const { rows, total } = logRows(await engine.query(logRowsQuery(f, logSort, q.limit), signal));
               Object.assign(result, { rows, total, matched: total });
             }
           })(),
@@ -594,7 +601,7 @@ export function createDuckDbDataSource(opts: {
             return path === undefined ? [] : [path];
           });
     if (files?.length === 0) return [];
-    return logRows(await engine.query(traceLogsQuery(traceId, files, epoch), signal), epoch, manifest).rows;
+    return logRows(await engine.query(traceLogsQuery(traceId, files, epoch), signal)).rows;
   }
 
   async function surroundingLogs(ref: LogRef, n: number): Promise<SurroundingLogs> {
@@ -639,8 +646,9 @@ export function createDuckDbDataSource(opts: {
   async function readTrace(
     traceId: TraceId,
     withLogs: boolean,
+    signal?: AbortSignal,
   ): Promise<{ rows: SpanRow[]; tables: RowTables; logCount: number }> {
-    const partitions = rowsOf(await engine.query(tracePartitionsQuery(traceId))).map((r) =>
+    const partitions = rowsOf(await engine.query(tracePartitionsQuery(traceId), signal)).map((r) =>
       String(cell(r, 'filename')),
     );
     if (partitions.length === 0) throw traceNotFound(traceId);
@@ -656,8 +664,8 @@ export function createDuckDbDataSource(opts: {
     const files = filter.files.files;
     if (files.length === 0) throw traceNotFound(traceId);
     const [spans, summary] = await Promise.all([
-      engine.query(traceSpansQuery(traceId, files, epoch)),
-      withLogs ? engine.query(traceSummaryQuery(traceId)) : null,
+      engine.query(traceSpansQuery(traceId, files, epoch), signal),
+      withLogs ? engine.query(traceSummaryQuery(traceId), signal) : null,
     ]);
     const { rows, tables } = spanRows(spans, epoch);
     if (rows.length === 0) throw traceNotFound(traceId);
@@ -714,9 +722,9 @@ export function createDuckDbDataSource(opts: {
       if (r === undefined || toNumber(cell(r, 'n'), 'n') === 0) return null;
       return Number(cell(r, 'percentile'));
     },
-    async serviceShare(traceId) {
+    async serviceShare(traceId, signal) {
       // its own load: the open trace's memo stays, and the log summary is not read
-      return exclusiveTimeByService(buildTraceTree((await readTrace(traceId, false)).rows));
+      return exclusiveTimeByService(buildTraceTree((await readTrace(traceId, false, signal)).rows));
     },
     services,
     queryLogs,
@@ -734,9 +742,9 @@ export function createDuckDbDataSource(opts: {
         caps.facetValueCap,
       );
     },
-    metricCatalog: () => Promise.reject(planThree('The metric catalog')),
-    metric: () => Promise.reject(planThree('Metrics')),
-    metricsForResources: () => Promise.reject(planThree('Metrics')),
+    metricCatalog: () => Promise.reject(planThree()),
+    metric: () => Promise.reject(planThree()),
+    metricsForResources: () => Promise.reject(planThree()),
     close: () => engine.close(),
   };
 }

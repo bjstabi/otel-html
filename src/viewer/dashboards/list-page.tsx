@@ -1,6 +1,6 @@
 import { Search, Star } from 'lucide-react';
 import { type JSX, useMemo, useState } from 'react';
-import type { Manifest } from '../../format/manifest.js';
+import type { AnyManifest } from '../../format/manifest.js';
 import { PageChrome } from '../shell/page-chrome.js';
 import { DashboardLink } from './dashboard-link.js';
 import { type DashboardEntry, dashboardsOf } from './registry.js';
@@ -14,7 +14,7 @@ function matches(e: DashboardEntry, needle: string): boolean {
 }
 
 /** Every dashboard in the report: Fusion first, then the configured ones, filterable by name or description. */
-export function DashboardsListPage(props: { manifest: Manifest }): JSX.Element {
+export function DashboardsListPage(props: { manifest: AnyManifest }): JSX.Element {
   const entries = useMemo(() => dashboardsOf(props.manifest), [props.manifest]);
   const [filter, setFilter] = useState('');
   const needle = filter.trim().toLowerCase();

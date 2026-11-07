@@ -2,8 +2,8 @@ import { describe, expect, test } from 'vitest';
 import type { RelNanos, SpanId, TraceId, UnixNanos } from '../../src/model/ids.js';
 import type { ResourceRef, ScopeRef, SpanRecord } from '../../src/model/records.js';
 import { StatusCode } from '../../src/model/records.js';
+import type { SpanTarget } from '../../src/ottl/contexts.js';
 import { facetReader, facetValueOf, GroupDurations } from '../../src/rollups/span-rollups.js';
-import { toEntries } from '../../src/viewer/data/span-query.js';
 
 const span: SpanRecord = {
   traceId: '1'.padStart(32, '0') as TraceId,
@@ -25,26 +25,16 @@ const span: SpanRecord = {
   resource: 0 as ResourceRef,
   scope: 0 as ScopeRef,
 };
-const [entry] = toEntries(
-  {
-    n: 0,
-    resources: [
-      {
-        attributes: new Map([['service.name', { kind: 'string' as const, value: 'api' }]]),
-        droppedAttributesCount: 0,
-        schemaUrl: '',
-      },
-    ],
-    scopes: [{ name: 's', version: '', attributes: new Map(), droppedAttributesCount: 0, schemaUrl: '' }],
+const target: SpanTarget = {
+  span,
+  resource: {
+    attributes: new Map([['service.name', { kind: 'string' as const, value: 'api' }]]),
+    droppedAttributesCount: 0,
+    schemaUrl: '',
   },
-  [span],
-  0n as UnixNanos,
-  'x',
-);
-const target = (() => {
-  if (entry === undefined) throw new Error('no entry');
-  return entry.target;
-})();
+  scope: { name: 's', version: '', attributes: new Map(), droppedAttributesCount: 0, schemaUrl: '' },
+  epoch: 0n as UnixNanos,
+};
 
 describe('facetValueOf', () => {
   test('a core key, an attribute key and an absent key', () => {

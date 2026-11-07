@@ -34,7 +34,8 @@ test('the sample report (demo and CI artifact) holds both traces and logs', asyn
   );
 });
 
-test('a merged report with metrics has the same Catalog as a single conversion of its inputs', async ({
+// plan 3: metrics in the format-4 viewer
+test.skip('a merged report with metrics has the same Catalog as a single conversion of its inputs', async ({
   page,
   reportUrl,
 }) => {

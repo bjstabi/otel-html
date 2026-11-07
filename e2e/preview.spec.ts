@@ -44,7 +44,9 @@ test.describe('preview.mjs', () => {
   test.afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
   test('writes a light and a dark 2560x1440 screenshot of the report', () => {
-    cpSync(fileURLToPath(reportDir('dashboards')), dir, { recursive: true });
+    // `sample` holds no metrics: the default dashboard of `dashboards` has metric widgets, whose error state until
+    // plan 3 (D11) is an alert that preview.mjs reports.
+    cpSync(fileURLToPath(reportDir('sample')), dir, { recursive: true });
     const result = runPreview(dir);
     expect(result.status).toBe(0);
     expect(result.stdout).not.toContain('::warning::');
@@ -81,15 +83,15 @@ test.describe('preview.mjs', () => {
     }
   });
 
-  test('warns and keeps the previous images when the dashboard could not read its variables values', () => {
-    cpSync(fileURLToPath(reportDir('dashboards')), dir, { recursive: true });
-    rmSync(join(dir, 'data', 'rollups', 'logs.js'));
+  test('warns naming the failure and keeps the previous images when a partition file is missing', () => {
+    cpSync(fileURLToPath(reportDir('sample')), dir, { recursive: true });
+    rmSync(join(dir, 'data', 'partitions', '000000', 'spans.parquet.js'));
     for (const scheme of ['light', 'dark'])
       writeFileSync(join(dir, `preview-${scheme}.png`), `previous ${scheme}`);
     const result = runPreview(dir);
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('::warning::otel-html preview:');
-    expect(result.stdout).toContain('Could not read the variables');
+    expect(result.stdout).toContain('spans.parquet.js');
     for (const scheme of ['light', 'dark']) {
       expect(readFileSync(join(dir, `preview-${scheme}.png`), 'utf8')).toBe(`previous ${scheme}`);
       expect(existsSync(join(dir, `preview-${scheme}.png.tmp`))).toBe(false);

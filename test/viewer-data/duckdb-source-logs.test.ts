@@ -2,11 +2,12 @@ import { beforeAll, describe, expect, test } from 'vitest';
 import { anyValueToDisplay } from '../../src/model/anyvalue.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { parseTraceId } from '../../src/model/ids.js';
+import type { DataSource } from '../../src/viewer/data/data-source.js';
 import { createDuckDbDataSource } from '../../src/viewer/data/duckdb-source.js';
 import { type LogRef, type LogRow, type LogTraceRow, logRef } from '../../src/viewer/data/log-query.js';
 import { createCoordinator, mosaicQueryEngine } from '../../src/viewer/data/mosaic.js';
 import type { QueryEngine } from '../../src/viewer/data/query-engine.js';
-import type { DataSource, LogQuery } from '../../src/viewer/data/results.js';
+import type { LogQuery } from '../../src/viewer/data/results.js';
 import type { TestDb } from '../../test-support/duckdb-node.js';
 import {
   buildFormat4Report,
@@ -183,7 +184,7 @@ describe('queryLogs', () => {
     expect(ids(q.rows as LogRow[])).toEqual(['a2', 'c1', 'c2', 'a4']);
     expect(q.total).toBe(4);
     expect(q.matched).toBe(4);
-    expect(q.residual).toBe(false);
+    expect(q.residual).toBeNull();
     expect(q.facets.top('severity', 5)).toEqual([
       { value: 'error', count: 2 },
       { value: 'fatal', count: 2 },
@@ -262,14 +263,14 @@ describe('queryLogs', () => {
   test('a residual condition re-checks logs in the browser and marks the result', async () => {
     const condition = 'Len(body.string) > 20';
     const rowsOnly = await counted(() => fresh().queryLogs(query({ condition, needs: ['rows'] })));
-    expect(rowsOnly.value.residual).toBe(true);
+    expect(rowsOnly.value.residual).toBe('Len(body.string) > 20');
     expect(ids(rowsOnly.value.rows as LogRow[])).toEqual(['a2', 'b2', 'b4', 'a4']);
     expect(rowsOnly.value.total).toBe(4);
     expect(rowsOnly.value.matched).toBe(4);
     expect(rowsOnly.exec).toBe(0);
 
     const all = await counted(() => fresh().queryLogs(query({ condition })));
-    expect(all.value.residual).toBe(true);
+    expect(all.value.residual).toBe('Len(body.string) > 20');
     expect(all.value.total).toBe(4);
     expect(all.value.facets.top('severity', 5)).toEqual([
       { value: 'error', count: 2 },
@@ -444,7 +445,7 @@ describe('patterns', () => {
     expect(failed?.severities).toMatchObject({ error: 2, warn: 1, info: 1 });
     for (const row of rows) expect(new RegExp(row.regex).test(row.sample)).toBe(true);
     // a template whose logs have no time sits at 0
-    expect(rows.find((x) => x.template === '{"k":"v"}')).toMatchObject({ first: 0, last: 0 });
+    expect(rows.find((x) => x.template === '{"k":"v"}')).toMatchObject({ first: null, last: null });
   });
 
   test('a window keeps the templates whose combined range overlaps it; sort and limit apply', async () => {

@@ -2,11 +2,12 @@ import { type JSX, useMemo, useState } from 'react';
 import { andConditions } from '../../../dashboards/conditions.js';
 import { OtelHtmlError } from '../../../model/errors.js';
 import type { TraceId } from '../../../model/ids.js';
-import { ErrorCard, LoadingNote, NoMatch, PartialNote } from '../../components/explorer-states.js';
+import { ErrorCard, LoadingNote, NoMatch } from '../../components/explorer-states.js';
 import { LogList } from '../../components/log-list.js';
 import type { SortState } from '../../components/results-table.js';
 import type { DataSource } from '../../data/data-source.js';
-import type { LogQuery, LogQueryResult, LogRow } from '../../data/log-query.js';
+import type { LogRow } from '../../data/log-query.js';
+import type { LogQuery, LogQueryResult } from '../../data/results.js';
 import { useLogQuery } from '../../logs/use-log-query.js';
 import { useSelection, useSelectionStore } from '../../state/selection-context.js';
 import type { QueryHandle } from '../../state/use-query.js';
@@ -75,7 +76,8 @@ function logQuery(
     mode: 'logs',
     sort: { column: sort.column, dir: sort.dir },
     limit: ROWS,
-    scanAll: false,
+    needs: ['rows'],
+    facetKeys: null,
   };
 }
 
@@ -96,8 +98,7 @@ function ListBody(props: {
   const { state } = handle;
   return (
     <div className="flex flex-col gap-1">
-      {shown !== null && <PartialNote partial={shown.partial} onScanAll={handle.scanAll} />}
-      {state.status === 'loading' && <LoadingNote progress={state.progress} />}
+      {state.status === 'loading' && <LoadingNote />}
       {state.status === 'error' && <ErrorCard title="The query could not run" message={state.message} />}
       {shown !== null &&
         (shown.total === 0 ? (
@@ -133,8 +134,7 @@ function ContextView(props: {
   const handle = useLogQuery(props.dataSource, props.context);
   const { matched } = props;
   // The first ROWS matches are enough: both lists share the sort, so the matches among the first ROWS logs are the
-  // first ones of the matches. A partial scan does not break that: the context list fills its rows from no more
-  // chunks than the (sparser) matches needed.
+  // first ones of the matches.
   const highlighted = useMemo(
     () => (matched === null ? undefined : new Set<string>(matched.rows.map((r) => r.ref))),
     [matched],

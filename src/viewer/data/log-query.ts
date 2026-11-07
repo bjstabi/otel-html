@@ -1,36 +1,9 @@
-import { anyValueToDisplay } from '../../model/anyvalue.js';
 import { OtelHtmlError } from '../../model/errors.js';
-import type { RelNanos, TraceId, UnixNanos } from '../../model/ids.js';
-import {
-  type LogRecordRecord,
-  logTime,
-  logTimeSource,
-  type ResourceRecord,
-  type ScopeRecord,
-} from '../../model/records.js';
-import { type CompiledCondition, compileCondition } from '../../ottl/compile.js';
+import type { RelNanos, TraceId } from '../../model/ids.js';
+import type { LogRecordRecord, ResourceRecord, ScopeRecord } from '../../model/records.js';
 import type { LogTarget } from '../../ottl/contexts.js';
-import { logTextFields, matchesText } from '../../ottl/text.js';
-import { type Drain, type DrainCluster, template, templateToRegex } from '../../rollups/drain.js';
-import type { FacetCounts } from '../../rollups/facets.js';
-import { LogRollups } from '../../rollups/log-rollups.js';
-import type { TimeBuckets } from '../../rollups/time-buckets.js';
-import { ATTR_HOST_NAME } from '../../semconv/attributes.js';
-import { serviceName } from '../../semconv/resource-name.js';
 import type { LogSeverityKey } from '../../semconv/severity.js';
-import {
-  AbortTicker,
-  checkLimit,
-  cmp,
-  DEFAULT_FACET_CAPS,
-  type FacetCaps,
-  ordered,
-  sortFor,
-  throwIfAborted,
-  visitInBlocks,
-} from './query-common.js';
-import type { LoadedChunk, TimeWindow } from './span-query.js';
-import { TopKBuffer, topK } from './top-k.js';
+import { cmp } from './query-common.js';
 
 declare const logRefBrand: unique symbol;
 /** `<partition n>.<file_row_number>`: stable while the partition exists (D8), and the URL key `log=`. */
@@ -58,14 +31,11 @@ export function refParts(r: LogRef): { n: number; i: number } {
   return { n: Number(n), i: Number(i) };
 }
 
-/** The part of a decoded log chunk that rows need: its number and the resource and scope tables. */
-export type LoadedLogChunk = LoadedChunk;
-
 export interface LogRow {
   ref: LogRef;
-  /** The ref's chunk number. */
+  /** The ref's partition number. */
   n: number;
-  /** The ref's row index in that chunk. */
+  /** The ref's row index in that partition. */
   i: number;
   log: LogRecordRecord;
   resource: ResourceRecord;
@@ -84,29 +54,15 @@ export interface LogEntry {
 
 export type LogMode = 'logs' | 'patterns' | 'traces';
 
-export interface LogQuery {
-  condition: string | null;
-  text: string;
-  window: TimeWindow | null;
-  mode: LogMode;
-  sort: { column: string; dir: 'asc' | 'desc' };
-  limit: number;
-  scanAll: boolean;
-  /**
-   * Only this trace's logs (on top of `condition`). A windowed source then reads only the log chunks the trace index
-   * lists for it instead of every chunk in the window.
-   */
-  traceId?: TraceId | null;
-}
-
 export interface PatternRow {
   id: number;
   template: string;
   regex: string;
   count: number;
   severities: Record<LogSeverityKey, number>;
-  first: number;
-  last: number;
+  /** Relative time of the template's first and last log; null when none of its logs has a time. */
+  first: number | null;
+  last: number | null;
   sample: string;
 }
 
@@ -122,84 +78,8 @@ export interface LogTraceRow {
   services: readonly string[];
 }
 
-export type LogQueryResult = {
-  /** Matched logs; patterns in patterns mode; traces in traces mode. */
-  total: number;
-  /**
-   * Logs that matched the filter (`total` counts patterns or traces in those modes). In traces mode it counts only
-   * matching logs that carry a trace id; logs without one are not grouped and not counted.
-   */
-  matched: number;
-  facets: FacetCounts;
-  buckets: TimeBuckets<LogSeverityKey>;
-  /** Chunks scanned of all chunks; null when the result is exact. */
-  partial: { scanned: number; total: number } | null;
-} & (
-  | { mode: 'logs'; rows: readonly LogRow[] }
-  | {
-      mode: 'patterns';
-      rows: readonly PatternRow[];
-      /** Matched logs Drain could not cluster (cluster cap reached); they are in `matched` but in no pattern. */
-      unclustered: number;
-    }
-  | { mode: 'traces'; rows: readonly LogTraceRow[] }
-);
-
-export function toLogEntries(
-  chunk: LoadedLogChunk,
-  logs: readonly LogRecordRecord[],
-  epoch: UnixNanos,
-  path: string,
-): LogEntry[] {
-  return logs.map((log, i) => {
-    const resource = chunk.resources[log.resource];
-    const scope = chunk.scopes[log.scope];
-    if (resource === undefined || scope === undefined) {
-      throw new OtelHtmlError('invalid-report', {
-        path: `${path}[${i}]`,
-        expected: 'resource and scope refs inside the chunk tables',
-        actual: `resource ${log.resource}, scope ${log.scope}`,
-      });
-    }
-    const hostValue = resource.attributes.get(ATTR_HOST_NAME);
-    return {
-      row: {
-        ref: logRef(chunk.n, i),
-        n: chunk.n,
-        i,
-        log,
-        resource,
-        scope,
-        time: logTime(log),
-        timeSource: logTimeSource(log),
-        service: serviceName(resource),
-        host: hostValue === undefined ? null : anyValueToDisplay(hostValue),
-      },
-      target: { log, resource, scope, epoch },
-    };
-  });
-}
-
-export function patternRowsOf(d: Drain): PatternRow[] {
-  return d.clusters().map((c: DrainCluster) => ({
-    id: c.id,
-    template: template(c),
-    regex: templateToRegex(c),
-    count: c.count,
-    severities: c.severities,
-    first: c.first,
-    last: c.last,
-    sample: c.sample,
-  }));
-}
-
 /** Time order with the ref as tiebreak: the order of a trace's logs and of Surrounding logs. */
 export const byTimeThenRef = (a: LogRow, b: LogRow): number => a.time - b.time || a.n - b.n || a.i - b.i;
-
-/** Logs from the same stream as `target`: same service and same host. */
-function sameStream(target: LogRow, row: LogRow): boolean {
-  return row.service === target.service && row.host === target.host;
-}
 
 /** Surrounding logs per side: a non-negative integer (NaN, negative and fractional counts are usage errors). */
 export function checkSurroundingCount(n: number): void {
@@ -212,29 +92,6 @@ export function checkSurroundingCount(n: number): void {
   }
 }
 
-/**
- * The `n` same-stream logs on each side of `target` among `rows` (any order; `target` itself may be among them),
- * in time order with the ref as tiebreak.
- */
-export function surroundingIn(
-  target: LogRow,
-  rows: readonly LogRow[],
-  n: number,
-): { before: LogRow[]; after: LogRow[] } {
-  checkSurroundingCount(n);
-  const before: LogRow[] = [];
-  const after: LogRow[] = [];
-  for (const r of rows) {
-    if (!sameStream(target, r)) continue;
-    const c = byTimeThenRef(r, target);
-    if (c < 0) before.push(r);
-    else if (c > 0) after.push(r);
-  }
-  before.sort(byTimeThenRef);
-  after.sort(byTimeThenRef);
-  return { before: n === 0 ? [] : before.slice(-n), after: after.slice(0, n) };
-}
-
 /** Log comparators by sort column (the Logs Explorer's and the trace Logs tab's). */
 export const LOG_SORTS: Readonly<Record<string, (a: LogRow, b: LogRow) => number>> & {
   readonly time: (a: LogRow, b: LogRow) => number;
@@ -243,210 +100,3 @@ export const LOG_SORTS: Readonly<Record<string, (a: LogRow, b: LogRow) => number
   severity: (a, b) => a.log.severityNumber - b.log.severityNumber,
   service: (a, b) => cmp(a.service, b.service),
 };
-
-const PATTERN_SORTS: Readonly<Record<string, (a: PatternRow, b: PatternRow) => number>> = {
-  count: (a, b) => a.count - b.count,
-  first: (a, b) => a.first - b.first,
-  last: (a, b) => a.last - b.last,
-};
-
-const TRACE_SORTS: Readonly<Record<string, (a: LogTraceRow, b: LogTraceRow) => number>> = {
-  first: (a, b) => a.first - b.first,
-  logs: (a, b) => a.logs - b.logs,
-  severity: (a, b) => a.maxSeverity - b.maxSeverity,
-};
-
-/** The sort comparator of the query's mode, tagged by that mode (a column is validated per mode). */
-type ModeSort =
-  | { readonly mode: 'logs'; readonly compare: (a: LogRow, b: LogRow) => number }
-  | { readonly mode: 'patterns'; readonly compare: (a: PatternRow, b: PatternRow) => number }
-  | { readonly mode: 'traces'; readonly compare: (a: LogTraceRow, b: LogTraceRow) => number };
-
-function modeSort({ mode, sort }: LogQuery): ModeSort {
-  switch (mode) {
-    case 'logs':
-      return { mode, compare: sortFor(LOG_SORTS, sort.column, mode) };
-    case 'patterns':
-      return { mode, compare: sortFor(PATTERN_SORTS, sort.column, mode) };
-    case 'traces':
-      return { mode, compare: sortFor(TRACE_SORTS, sort.column, mode) };
-    default: {
-      const never: never = mode;
-      throw new OtelHtmlError('usage', {
-        path: 'query.mode',
-        expected: 'logs, patterns or traces',
-        actual: String(never),
-      });
-    }
-  }
-}
-
-interface TraceGroup {
-  logs: number;
-  first: number;
-  last: number;
-  maxSeverity: number;
-  services: Set<string>;
-}
-
-/**
- * One filtered pass over log entries, shared by the eager (all entries) and windowed (chunk by chunk)
- * strategies. Feed every candidate entry to `visit`, then call `finish`. Holds no state outside itself, so an
- * abandoned or aborted run leaves nothing behind.
- */
-export class LogQueryRun {
-  readonly #q: LogQuery;
-  readonly #signal: AbortSignal | undefined;
-  readonly #ticker: AbortTicker;
-  readonly #condition: CompiledCondition<'log_record'> | null;
-  readonly #window: TimeWindow | null;
-  readonly #rollups: LogRollups;
-  /** Logs mode: the best `limit` matched rows so far plus compaction slack; null in other modes. */
-  readonly #matched: TopKBuffer<LogRow> | null;
-  readonly #traces = new Map<TraceId, TraceGroup>();
-  readonly #sort: ModeSort;
-  #count = 0;
-
-  constructor(q: LogQuery, signal: AbortSignal | undefined, caps: FacetCaps) {
-    checkLimit(q.limit);
-    this.#q = q;
-    // Drain is the costly part of the rollups; only patterns mode reads it.
-    this.#rollups = new LogRollups(caps, { cluster: q.mode === 'patterns' });
-    // "Scan entire run" means the whole run, whatever window the view had.
-    this.#window = q.scanAll ? null : q.window;
-    this.#signal = signal;
-    this.#ticker = new AbortTicker(signal);
-    this.#condition = q.condition === null ? null : compileCondition(q.condition, 'log_record');
-    this.#sort = modeSort(q);
-    this.#matched =
-      this.#sort.mode === 'logs'
-        ? new TopKBuffer(q.limit, ordered(q.sort.dir, this.#sort.compare, byTimeThenRef))
-        : null;
-    throwIfAborted(signal);
-  }
-
-  /** @internal for tests: how many matched rows the run holds right now. */
-  get heldRows(): number {
-    return this.#matched?.size ?? 0;
-  }
-
-  /** What a scan's cap counts: matched logs, or matched traces in traces mode. */
-  get units(): number {
-    return this.#q.mode === 'traces' ? this.#traces.size : this.#count;
-  }
-
-  visit(e: LogEntry): void {
-    this.#ticker.tick();
-    const { row } = e;
-    const window = this.#window;
-    if (window !== null && (row.time < window.start || row.time > window.end)) return;
-    if (this.#q.traceId != null && row.log.traceId !== this.#q.traceId) return;
-    if (this.#condition !== null && !this.#condition.test(e.target)) return;
-    if (this.#q.text !== '' && !matchesText(this.#q.text, logTextFields(e.target))) return;
-    if (this.#q.mode === 'traces') {
-      const id = row.log.traceId;
-      if (id === null) return;
-      this.#group(id, row);
-    } else {
-      this.#matched?.push(row);
-    }
-    this.#count++;
-    this.#rollups.add(e.target);
-  }
-
-  #group(id: TraceId, row: LogRow): void {
-    let g = this.#traces.get(id);
-    if (g === undefined) {
-      g = { logs: 0, first: row.time, last: row.time, maxSeverity: 0, services: new Set() };
-      this.#traces.set(id, g);
-    }
-    g.logs++;
-    g.first = Math.min(g.first, row.time);
-    g.last = Math.max(g.last, row.time);
-    g.maxSeverity = Math.max(g.maxSeverity, row.log.severityNumber);
-    g.services.add(row.service);
-  }
-
-  /** Patterns-mode rows of `d` in this query's sort and limit (the run's own clusters, or the writer's rollup). */
-  patternsOf(d: Drain): { mode: 'patterns'; rows: PatternRow[]; total: number; unclustered: number } {
-    const sort = this.#sort;
-    if (sort.mode !== 'patterns') {
-      throw new OtelHtmlError('usage', { path: 'query.mode', expected: 'patterns', actual: sort.mode });
-    }
-    const all = patternRowsOf(d);
-    const rows = topK(
-      all,
-      this.#q.limit,
-      ordered(this.#q.sort.dir, sort.compare, (a, b) => a.id - b.id),
-    );
-    return { mode: 'patterns', rows, total: all.length, unclustered: d.unclustered };
-  }
-
-  finish(partial: LogQueryResult['partial']): LogQueryResult {
-    throwIfAborted(this.#signal);
-    const { limit, sort: order } = this.#q;
-    const sort = this.#sort;
-    const common = {
-      matched: this.#count,
-      facets: this.#rollups.facets,
-      buckets: this.#rollups.buckets,
-      partial,
-    };
-    switch (sort.mode) {
-      case 'logs': {
-        const rows = this.#matched?.take() ?? [];
-        return { ...common, mode: sort.mode, rows, total: this.#count };
-      }
-      case 'patterns':
-        return { ...common, ...this.patternsOf(this.#rollups.patterns) };
-      case 'traces': {
-        const all: LogTraceRow[] = [...this.#traces].map(([traceId, g]) => ({
-          traceId,
-          logs: g.logs,
-          first: g.first,
-          last: g.last,
-          maxSeverity: g.maxSeverity,
-          services: [...g.services].sort(),
-        }));
-        const rows = topK(
-          all,
-          limit,
-          ordered(order.dir, sort.compare, (a, b) => a.first - b.first || cmp(a.traceId, b.traceId)),
-        );
-        return { ...common, mode: sort.mode, rows, total: all.length };
-      }
-      default: {
-        const never: never = sort;
-        throw new OtelHtmlError('usage', {
-          path: 'query.mode',
-          expected: 'logs, patterns or traces',
-          actual: JSON.stringify(never),
-        });
-      }
-    }
-  }
-}
-
-/** Run a query over entries that are all in memory (the eager strategy, and the perf test). */
-export function queryLogEntries(
-  entries: readonly LogEntry[],
-  q: LogQuery,
-  signal?: AbortSignal,
-  caps: FacetCaps = DEFAULT_FACET_CAPS,
-): LogQueryResult {
-  const run = new LogQueryRun(q, signal, caps);
-  for (const e of entries) run.visit(e);
-  return run.finish(null);
-}
-
-/** `queryLogEntries`, yielding to events between blocks so an abort that arrives meanwhile is seen. */
-export async function scanLogEntries(
-  entries: readonly LogEntry[],
-  q: LogQuery,
-  signal?: AbortSignal,
-  caps: FacetCaps = DEFAULT_FACET_CAPS,
-): Promise<LogQueryResult> {
-  const run = new LogQueryRun(q, signal, caps);
-  await visitInBlocks(entries, run, signal);
-  return run.finish(null);
-}

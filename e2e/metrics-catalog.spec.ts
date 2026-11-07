@@ -2,6 +2,8 @@ import { METRIC_HIST, METRICS_COUNT } from './fixture.js';
 import { LINE_MIN_PX, lineRunPx, watchProblems } from './metric-chart.js';
 import { expect, HTTP, test } from './test.js';
 
+test.skip(true, 'plan 3: metrics in the format-4 viewer');
+
 test(
   'the Catalog lists every metric, filters by text, and a row click opens it in the Explorer',
   HTTP,

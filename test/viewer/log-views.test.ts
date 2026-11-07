@@ -4,7 +4,8 @@ import { FacetCounts } from '../../src/rollups/facets.js';
 import { TimeBuckets } from '../../src/rollups/time-buckets.js';
 import { LOG_SEVERITY_KEYS, type LogSeverityKey } from '../../src/semconv/severity.js';
 import { SEVERITY_SERIES } from '../../src/viewer/components/histogram-card.js';
-import { type LogQueryResult, type LogRow, logRef } from '../../src/viewer/data/log-query.js';
+import { type LogRow, logRef } from '../../src/viewer/data/log-query.js';
+import type { LogQueryResult } from '../../src/viewer/data/results.js';
 import { LOG_VIEW_BUILDERS, scatter, timeseries } from '../../src/viewer/logs/views.js';
 import { createColorAssigner } from '../../src/viewer/theme/palette.js';
 
@@ -27,7 +28,7 @@ function result(rows: LogRow[]): LogQueryResult {
     matched: rows.length,
     facets: new FacetCounts(10, 10),
     buckets,
-    partial: null,
+    residual: null,
   };
 }
 

@@ -7,7 +7,7 @@ import {
 } from '@opentelemetry/sdk-trace-base';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { DataSource } from '../../src/viewer/data/data-source.js';
-import type { SpanQueryResult } from '../../src/viewer/data/span-query.js';
+import type { ServicesResult, SpanQueryResult } from '../../src/viewer/data/results.js';
 import { tracedDataSource, tracedLoader } from '../../src/viewer/data/traced.js';
 import { watchNavigation } from '../../src/viewer/telemetry.js';
 import { createScriptedLoader } from '../../test-support/scripted-loader.js';
@@ -45,7 +45,7 @@ describe('tracedLoader', () => {
   test('records a chunk load span', async () => {
     const loader = tracedLoader(createScriptedLoader(new Map([['data/a.js', '__OH__.push("k", 7);']])));
     await expect(loader.load('data/a.js', 'k')).resolves.toBe(7);
-    const [span] = spansNamed('viewer.chunk.load');
+    const [span] = spansNamed('viewer.script.load');
     expect(span?.attributes['otel_html.path']).toBe('data/a.js');
     expect(span?.attributes['otel_html.key']).toBe('k');
     expect(span?.status.code).toBe(SpanStatusCode.UNSET);
@@ -55,7 +55,7 @@ describe('tracedLoader', () => {
     const failure = new Error('boom');
     const loader = tracedLoader({ load: () => Promise.reject(failure) });
     await expect(loader.load('data/a.js', 'k')).rejects.toBe(failure);
-    const [span] = spansNamed('viewer.chunk.load');
+    const [span] = spansNamed('viewer.script.load');
     expect(span?.status.code).toBe(SpanStatusCode.ERROR);
     expect(span?.events.map((e) => e.name)).toContain('exception');
   });
@@ -81,9 +81,18 @@ describe('tracedDataSource', () => {
     expect(span?.attributes['otel_html.query.aborted']).toBe(true);
   });
 
-  test('other methods pass through untraced', () => {
-    const ds = tracedDataSource(fakeSource({ percentileOf: () => 5 }));
-    expect(ds.percentileOf('a', 'b', 1)).toBe(5);
+  test('records services with its kind and count', async () => {
+    const services = { services: [{}, {}], total: 2 } as unknown as ServicesResult;
+    const ds = tracedDataSource(fakeSource({ services: () => Promise.resolve(services) }));
+    await ds.services({ window: null, condition: null, limit: 50 });
+    const [span] = spansNamed('viewer.query');
+    expect(span?.attributes['otel_html.query.kind']).toBe('services');
+    expect(span?.attributes['otel_html.query.result_count']).toBe(2);
+  });
+
+  test('other methods pass through untraced', async () => {
+    const ds = tracedDataSource(fakeSource({ percentileOf: () => Promise.resolve(5) }));
+    await expect(ds.percentileOf('a', 'b', 1)).resolves.toBe(5);
     expect(exporter.getFinishedSpans()).toEqual([]);
   });
 });

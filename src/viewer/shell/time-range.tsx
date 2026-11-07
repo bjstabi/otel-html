@@ -1,9 +1,10 @@
 import { ChevronLeft, ChevronRight, ZoomOut } from 'lucide-react';
 import type { JSX } from 'react';
-import type { Manifest } from '../../format/manifest.js';
+import type { AnyManifest, Manifest } from '../../format/manifest.js';
 import { parseUnixNanos, type RelNanos, type UnixNanos } from '../../model/ids.js';
 import { formatTime } from '../../semconv/formatters.js';
-import type { TimeWindow } from '../data/span-query.js';
+import { manifestRange } from '../data/manifest-range.js';
+import type { TimeWindow } from '../data/time-window.js';
 import { useSelection } from '../state/selection-context.js';
 import { Tip } from './tip.js';
 
@@ -58,10 +59,10 @@ function activePreset(w: TimeWindow | null, range: Range): string | null {
 const BUTTON =
   'rounded-full p-1.5 text-ink-2 hover:bg-hairline disabled:opacity-40 disabled:hover:bg-transparent';
 
-export function TimeRange({ manifest }: { manifest: Manifest }): JSX.Element {
+export function TimeRange({ manifest }: { manifest: AnyManifest }): JSX.Element {
   const win = useSelection((s) => s.window);
   const setWindow = useSelection((s) => s.setWindow);
-  const range = manifest.range;
+  const range = manifestRange(manifest);
   if (range === null) {
     return (
       <output aria-label="Absolute range" className="text-sm text-muted">

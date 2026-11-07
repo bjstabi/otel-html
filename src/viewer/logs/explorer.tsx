@@ -1,18 +1,11 @@
 import { type JSX, useMemo, useState } from 'react';
-import type { Manifest } from '../../format/manifest.js';
+import type { ManifestV4 } from '../../format/manifest.js';
 import { parseUnixNanos, type TraceId } from '../../model/ids.js';
 import { DEFAULT_LOG_FACETS } from '../../rollups/log-rollups.js';
 import { Chart } from '../components/chart.js';
 import { ColumnPicker } from '../components/column-picker.js';
 import { ExplorerControls } from '../components/explorer-controls.js';
-import {
-  ErrorCard,
-  LoadingNote,
-  NoMatch,
-  PartialNote,
-  parseSort,
-  sortableOf,
-} from '../components/explorer-states.js';
+import { ErrorCard, NoMatch, parseSort, QueryNote, sortableOf } from '../components/explorer-states.js';
 import { downloadBlob, type ExportFormat, exportFileName, exportLogs } from '../components/export.js';
 import { FacetPanel } from '../components/facet-panel.js';
 import { withToken } from '../components/filter-tokens.js';
@@ -22,7 +15,9 @@ import { LogList } from '../components/log-list.js';
 import { ResultsTable, type SortState } from '../components/results-table.js';
 import { copyWidgetItem } from '../dashboards/copy-widget.js';
 import type { DataSource } from '../data/data-source.js';
-import type { LogMode, LogQuery, LogRef, LogRow, LogTraceRow, PatternRow } from '../data/log-query.js';
+import type { LogMode, LogRef, LogRow, LogTraceRow, PatternRow } from '../data/log-query.js';
+import { manifestRange } from '../data/manifest-range.js';
+import type { PatternQuery, PatternsResult } from '../data/results.js';
 import { PageChrome, useWidgetCopy } from '../shell/page-chrome.js';
 import { PageOptionNotice } from '../shell/page-option-notice.js';
 import {
@@ -40,7 +35,7 @@ import { cssTokenReader, GROUPED_VIEWS, resolveCssVars } from '../traces/views.j
 import { LOG_COLUMNS_UI, LOG_TRACE_COLUMNS_UI } from './columns.js';
 import { LogPanel } from './log-panel.js';
 import { PATTERN_COLUMNS_UI, PatternsTable } from './patterns-table.js';
-import { useLogQuery } from './use-log-query.js';
+import { type LogsPageQuery, useLogsPage } from './use-log-query.js';
 import { LOG_VIEW_BUILDERS, type LogChartView } from './views.js';
 
 const LOGS = PAGE_OPTIONS.logs;
@@ -84,9 +79,21 @@ const VIEW_LABEL: Record<PageView<'logs'>, string> = {
 const BODY_PATH = 'log.body.string';
 /** Unprefixed, as the trace panel's Logs tab writes it: compiles in span and log_record contexts, so `g t` carries it. */
 const TRACE_ID_PATH = 'trace_id.string';
+const PATTERN_SORTS: ReadonlySet<string> = new Set(['count', 'first', 'last']);
+
+function patternQuery(
+  window: PatternQuery['window'],
+  sortColumn: string,
+  dir: SortState['dir'],
+  limit: number,
+): PatternQuery {
+  const column = PATTERN_SORTS.has(sortColumn) ? (sortColumn as PatternQuery['sort']['column']) : 'count';
+  return { window, sort: { column, dir }, limit };
+}
+
 const CORE_FACET_KEYS: ReadonlySet<string> = new Set(DEFAULT_LOG_FACETS.map((f) => f.key));
 
-function ZeroLogs({ manifest }: { manifest: Manifest }): JSX.Element {
+function ZeroLogs({ manifest }: { manifest: ManifestV4 }): JSX.Element {
   return (
     <section className="max-w-xl rounded-card border border-hairline bg-surface p-6">
       <h2 className="text-base font-semibold">This report has no logs</h2>
@@ -136,27 +143,40 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
   const { view } = resolvePageView('logs', sel.view);
   const { resolved } = useTheme();
   const colors = useColorAssigner();
+  const range = useMemo(() => manifestRange(manifest), [manifest]);
   const epoch = useMemo(() => parseUnixNanos(manifest.epochUnixNano, 'manifest.epochUnixNano'), [manifest]);
   const [extraColumns, setExtraColumns] = useState<readonly string[]>([]);
   const [actionError, setActionError] = useState<{ title: string; message: string } | null>(null);
   const listCap = manifest.config.viewer.listCap;
 
+  const noun = MODES[mode].noun;
   const sort = parseSort(sel.sort, MODES[mode].sortable, MODES[mode].sort);
-  const query = useMemo<LogQuery>(
-    () => ({
-      condition: sel.condition,
-      text: sel.text,
-      window: sel.window,
-      mode,
-      sort: { column: sort.column, dir: sort.dir },
-      limit: listCap,
-      scanAll: false,
-    }),
+  // Patterns ignore the filter (D9): their query carries only the window, so a filter edit does not rerun it.
+  const query = useMemo<LogsPageQuery>(
+    () =>
+      mode === 'patterns'
+        ? { kind: 'patterns', query: patternQuery(sel.window, sort.column, sort.dir, listCap) }
+        : {
+            kind: 'rows',
+            query: {
+              condition: sel.condition,
+              text: sel.text,
+              window: sel.window,
+              mode,
+              sort: { column: sort.column, dir: sort.dir },
+              limit: listCap,
+              needs: ['rows', 'facets', 'timeline'],
+              facetKeys: null,
+            },
+          },
     [sel.condition, sel.text, sel.window, mode, sort.column, sort.dir, listCap],
   );
-  const { state, scanAll } = useLogQuery(dataSource, query);
-  const result = state.status === 'ready' ? state.result : state.status === 'loading' ? state.previous : null;
-  const noun = MODES[mode].noun;
+  const { state } = useLogsPage(dataSource, query);
+  const shown = state.status === 'ready' ? state.result : state.status === 'loading' ? state.previous : null;
+  // The result of the other kind (kept as `previous` across a mode switch) is not this mode's.
+  const result = shown?.kind === 'rows' && mode !== 'patterns' ? shown.result : null;
+  const patterns = shown?.kind === 'patterns' && mode === 'patterns' ? shown.result : null;
+  const counted = result ?? patterns;
 
   const fail = (title: string, e: unknown): void =>
     setActionError({ title, message: e instanceof Error ? e.message : String(e) });
@@ -209,8 +229,9 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
             : `Export is unavailable because the last query failed: ${state.message}`,
         );
       }
-      const r = state.result;
-      if (r.mode !== 'logs') throw new Error('Export lists logs; switch Group into back to Logs.');
+      const r = state.result.kind === 'rows' ? state.result.result : null;
+      if (r === null || r.mode !== 'logs')
+        throw new Error('Export lists logs; switch Group into back to Logs.');
       downloadBlob(exportLogs(r.rows, format, epoch), exportFileName('logs', r.rows.length, r.total, format));
     } catch (e) {
       fail('The export failed', e);
@@ -263,7 +284,22 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
     [result],
   );
 
+  const patternResults = (r: PatternsResult): JSX.Element => {
+    if (r.total === 0) return <NoMatch noun={noun} onClear={clearFilters} />;
+    return (
+      <PatternsTable
+        rows={r.rows}
+        sort={sort}
+        onSort={onSort}
+        onRowClick={onPatternClick}
+        epoch={epoch}
+        moveEnabled={sel.logRef === null && sel.traceId === null}
+      />
+    );
+  };
+
   const results = (): JSX.Element | null => {
+    if (patterns !== null) return patternResults(patterns);
     if (result === null) return null;
     if (result.total === 0) return <NoMatch noun={noun} onClear={clearFilters} />;
     if (view === 'scatter' && result.mode !== 'logs')
@@ -301,25 +337,6 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
               extraColumns={extraColumns}
               moveEnabled={moveEnabled}
               hasTrace={dataSource.hasTrace}
-            />
-          </div>
-        );
-      case 'patterns':
-        return (
-          <div className="flex flex-col gap-2">
-            {result.unclustered > 0 && (
-              <p className="text-xs text-muted">
-                <span className="font-mono tabular-nums">{result.unclustered}</span> matched logs are in no
-                pattern (the cluster limit was reached)
-              </p>
-            )}
-            <PatternsTable
-              rows={result.rows}
-              sort={sort}
-              onSort={onSort}
-              onRowClick={onPatternClick}
-              epoch={epoch}
-              moveEnabled={moveEnabled}
             />
           </div>
         );
@@ -366,17 +383,30 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
           grouped={grouped}
           groupByTitle={`Not used by the ${VIEW_LABEL[view]} view`}
         >
-          {result !== null && (
+          {counted !== null && (
             <output className="ml-auto font-mono text-xs tabular-nums text-muted">
-              {result.total} {noun}
-              {result.total > result.rows.length ? ` · showing ${result.rows.length}` : ''}
+              {counted.total} {noun}
+              {counted.total > counted.rows.length ? ` · showing ${counted.rows.length}` : ''}
             </output>
           )}
         </ExplorerControls>
-        {result !== null && <PartialNote partial={result.partial} onScanAll={scanAll} />}
-        {state.status === 'loading' && <LoadingNote progress={state.progress} />}
+        <QueryNote loading={state.status === 'loading'} residual={result?.residual ?? null} />
+        {mode === 'patterns' && (
+          <p role="note" className="text-sm text-ink-2">
+            Patterns are computed over every log when the report is written; the time range applies, filters
+            do not.
+          </p>
+        )}
         {actionError !== null && <ErrorCard title={actionError.title} message={actionError.message} />}
         {state.status === 'error' && <ErrorCard title="The query could not run" message={state.message} />}
+        {patterns !== null && (
+          <div
+            aria-busy={state.status === 'loading'}
+            className={`min-w-0 ${state.status === 'loading' ? 'opacity-60' : ''}`}
+          >
+            {results()}
+          </div>
+        )}
         {result !== null && (
           <div
             aria-busy={state.status === 'loading'}
@@ -386,8 +416,13 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
               buckets={result.buckets}
               series={SEVERITY_SERIES}
               title={`${result.matched} logs by severity`}
-              {...(manifest.range === null ? {} : { rangeEnd: manifest.range.end })}
+              {...(range === null ? {} : { rangeEnd: range.end })}
             />
+            {sel.window === null && (
+              <p className="-mt-2 text-xs text-muted">
+                Logs with no time are counted in the first bar; a time range leaves them out.
+              </p>
+            )}
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-[16rem_minmax(0,1fr)]">
               <div className="min-w-0">
                 <FacetPanel signal="log" facets={result.facets} />

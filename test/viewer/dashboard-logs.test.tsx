@@ -1,28 +1,26 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { createScriptedLoader } from '../../test-support/scripted-loader.js';
 
 vi.mock('../../src/viewer/components/chart.js', () => ({
   Chart: (p: { ariaLabel: string }): React.JSX.Element => <div role="img" aria-label={p.ariaLabel} />,
 }));
 
 import { DashboardSchema } from '../../src/dashboards/schema.js';
-import { FacetCounts } from '../../src/rollups/facets.js';
-import { TimeBuckets } from '../../src/rollups/time-buckets.js';
-import { LOG_SEVERITY_KEYS } from '../../src/semconv/severity.js';
 import type { WidgetActions } from '../../src/viewer/dashboards/dashboard-page.js';
 import type { WidgetScope } from '../../src/viewer/dashboards/scope.js';
 import { LogsWidget } from '../../src/viewer/dashboards/widgets/logs.js';
-import { createDataSource, type DataSource } from '../../src/viewer/data/data-source.js';
-import type { LogQueryResult } from '../../src/viewer/data/log-query.js';
+import type { DataSource } from '../../src/viewer/data/data-source.js';
+import type { LogQuery, LogQueryResult } from '../../src/viewer/data/results.js';
 import { EMPTY_DASHBOARD_STATE } from '../../src/viewer/state/dashboard-state.js';
 import { createSelectionStore } from '../../src/viewer/state/selection.js';
 import { SelectionProvider } from '../../src/viewer/state/selection-context.js';
 import { parseUrlState } from '../../src/viewer/state/url-state.js';
 import { ThemeProvider } from '../../src/viewer/theme/theme-provider.js';
-import { baseManifest, currentD, dataSourceOf, renderShell } from './dashboard-shell.js';
-import { buildEmbeddedMetricsReport, LINKED_TRACE } from './report-fixture.js';
+import { baseManifest, currentD, dataSourceOf, emptyLogResult, renderShell } from './dashboard-shell.js';
+import { FIXTURE_TRACE, fusionSource } from './fusion-source.js';
+
+const LINKED_TRACE = FIXTURE_TRACE;
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -31,10 +29,7 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
-async function linked(): Promise<DataSource> {
-  const report = await buildEmbeddedMetricsReport();
-  return createDataSource(createScriptedLoader(report.files), report.manifest, 1);
-}
+const linked = (): Promise<DataSource> => Promise.resolve(fusionSource());
 
 /** The widget frame by its id (the sidebar has regions with the same names). */
 function regionEl(name: string): HTMLElement {
@@ -168,16 +163,6 @@ function mount(
   return actions;
 }
 
-const emptyLogs = (partial: LogQueryResult['partial'] = null): LogQueryResult => ({
-  mode: 'logs',
-  rows: [],
-  total: 0,
-  matched: 0,
-  facets: new FacetCounts(10, 10),
-  buckets: new TimeBuckets(LOG_SEVERITY_KEYS, 8),
-  partial,
-});
-
 describe('the Logs widget states', () => {
   test('loading shows a status and no rows', () => {
     mount({ ...dataSourceOf(baseManifest), queryLogs: () => new Promise<LogQueryResult>(() => {}) });
@@ -190,19 +175,20 @@ describe('the Logs widget states', () => {
     expect((await screen.findByRole('heading', { name: 'No logs match' })).tagName).toBe('H3');
   });
 
-  test('a partial scan says how much was read and Scan entire run rereads everything', async () => {
-    const calls: boolean[] = [];
+  test('asks for the rows only, with a signal and no progress function', async () => {
+    const calls: unknown[][] = [];
     mount({
       ...dataSourceOf(baseManifest),
-      queryLogs: (q) => {
-        calls.push(q.scanAll);
-        return Promise.resolve(emptyLogs(q.scanAll ? null : { scanned: 2, total: 5 }));
+      queryLogs: (...args) => {
+        calls.push(args);
+        return Promise.resolve(emptyLogResult());
       },
     });
-    expect(await screen.findByText(/from 2 of 5 chunks/)).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Scan entire run' }));
-    await waitFor(() => expect(screen.queryByText(/from 2 of 5 chunks/)).toBeNull());
-    expect(calls).toEqual([false, true]);
+    await screen.findByRole('heading', { name: 'No logs match' });
+    const [q, signal] = calls[0] as [LogQuery, unknown];
+    expect(q).toMatchObject({ needs: ['rows'], limit: 200, mode: 'logs' });
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(calls[0]).toHaveLength(2);
   });
 
   test('a failing query shows the error, in either view', async () => {
@@ -223,9 +209,9 @@ describe('the Logs widget states', () => {
     mount(
       {
         ...real,
-        queryLogs: (q, p, s) =>
+        queryLogs: (q, s) =>
           q.text === '' && q.condition === null
-            ? real.queryLogs(q, p, s)
+            ? real.queryLogs(q, s)
             : Promise.reject(new Error('matches broke')),
       },
       { logView: 'context', scope: { condition: 'severity_number >= 1' } },
@@ -240,5 +226,18 @@ describe('the Logs widget states', () => {
     cleanup();
     const second = mount(ds, { scope: { condition: 'trace_id.string != ""' } });
     await waitFor(() => expect(second.setSubtitle).toHaveBeenCalledWith('1 log'));
+  });
+
+  test('the scope condition filters the rows: only the web log matches a web condition', async () => {
+    const ds = await linked();
+    const actions = mount(ds, { scope: { condition: 'resource.attributes["service.name"] == "web"' } });
+    await waitFor(() => expect(actions.setSubtitle).toHaveBeenCalledWith('1 log'));
+    expect(screen.getByText('web log')).toBeTruthy();
+    expect(screen.queryByText('charge declined')).toBeNull();
+  });
+
+  test('a condition that does not compile fails the query', async () => {
+    mount(await linked(), { scope: { condition: 'severity_number >=' } });
+    expect(await screen.findByRole('alert')).toBeTruthy();
   });
 });

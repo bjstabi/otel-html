@@ -1,6 +1,6 @@
 import { Tabs } from '@base-ui/react/tabs';
 import { ChevronRight } from 'lucide-react';
-import { type JSX, useMemo, useState } from 'react';
+import { type JSX, useCallback, useMemo, useState } from 'react';
 import { anyValueToDisplay } from '../../model/anyvalue.js';
 import type { SpanId, UnixNanos } from '../../model/ids.js';
 import { type SpanEventRecord, SpanKind, type SpanRecord, StatusCode } from '../../model/records.js';
@@ -12,6 +12,7 @@ import type { DataSource, TraceDetail } from '../data/data-source.js';
 import type { LogRow } from '../data/log-query.js';
 import { useHasMetrics } from '../metrics/metric-grid.js';
 import { useSelection } from '../state/selection-context.js';
+import { useKeyedAsync } from '../state/use-keyed-async.js';
 import { useColorAssigner } from '../theme/colors-context.js';
 import { ServiceChip, StatusDot } from './columns.js';
 import { EventsTab, formatOffset, LinksTab, Muted, SpanMetricsTab } from './span-detail-tabs.js';
@@ -141,6 +142,18 @@ export function SpanSection(props: SpanSectionProps): JSX.Element {
   );
   const spanResources = useMemo(() => (spanResource === null ? null : [spanResource]), [spanResource]);
   const hasMetrics = useHasMetrics(dataSource, spanResources);
+  const loadPercentile = useCallback(
+    () =>
+      row === null
+        ? Promise.resolve(null)
+        : Promise.resolve(dataSource.percentileOf(row.service, row.resource, row.durationNs)),
+    [dataSource, row],
+  );
+  const percentileState = useKeyedAsync(
+    row === null ? null : `${detail.traceId}/${row.span.spanId}`,
+    loadPercentile,
+  );
+  const percentile = percentileState.status === 'ready' ? percentileState.value : null;
   const spanLogs = useMemo(
     () => (logs === null ? [] : logs.filter((l) => l.log.spanId === spanId)),
     [logs, spanId],
@@ -170,7 +183,6 @@ export function SpanSection(props: SpanSectionProps): JSX.Element {
   const tabs = availableSpanTabs(span, { logSpanIds, logsError, hasMetrics });
   const wanted = sel.tabs.span;
   const active: SpanTabId = tabs.find((t) => t.id === wanted)?.id ?? 'overview';
-  const percentile = dataSource.percentileOf(row.service, row.resource, row.durationNs);
   const share =
     facts.durationNs > 0
       ? `${Math.min(100, Math.round((row.durationNs / facts.durationNs) * 100))}% of trace`

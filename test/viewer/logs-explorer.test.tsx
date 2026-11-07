@@ -2,7 +2,6 @@ import { Tooltip } from '@base-ui/react/tooltip';
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import type { Manifest } from '../../src/format/manifest.js';
 import { parseUnixNanos, type RelNanos, type TraceId } from '../../src/model/ids.js';
 import { createNormalizeContext, normalizeLogs } from '../../src/model/normalize.js';
 import { parseOtlpJson } from '../../src/model/otlp-json.js';
@@ -11,22 +10,22 @@ import { TimeBuckets } from '../../src/rollups/time-buckets.js';
 import { LOG_SEVERITY_KEYS, type LogSeverityKey } from '../../src/semconv/severity.js';
 import { tokensToOttl } from '../../src/viewer/components/filter-tokens.js';
 import type { DataSource } from '../../src/viewer/data/data-source.js';
-import {
-  type LogQuery,
-  type LogQueryResult,
-  type LogRef,
-  type LogRow,
-  type LogTraceRow,
-  type PatternRow,
-  toLogEntries,
-} from '../../src/viewer/data/log-query.js';
+import type { LogRef, LogRow, LogTraceRow, PatternRow } from '../../src/viewer/data/log-query.js';
 import { DEFAULT_FACET_CAPS } from '../../src/viewer/data/query-common.js';
+import type {
+  LogQuery,
+  LogQueryResult,
+  PatternQuery,
+  PatternsResult,
+} from '../../src/viewer/data/results.js';
 import { LogsExplorer } from '../../src/viewer/logs/explorer.js';
 import { MOVE_EVENT } from '../../src/viewer/shell/move-event.js';
 import { createSelectionStore } from '../../src/viewer/state/selection.js';
 import { SelectionProvider } from '../../src/viewer/state/selection-context.js';
 import { ThemeProvider } from '../../src/viewer/theme/theme-provider.js';
 import { attr, logRecord, logsRequest, T0 } from '../../test-support/otlp-builders.js';
+import { toLogEntries } from './log-entries.js';
+import { manifestV4 } from './v4-manifest.js';
 
 vi.mock('../../src/viewer/components/chart.js', () => ({ Chart: (): null => null }));
 const downloads: { blob: Blob; name: string }[] = [];
@@ -43,33 +42,7 @@ afterEach(() => {
 const epoch = parseUnixNanos(T0, 'epoch');
 const TRACE = '5134a3f57d52d9e9822e617916d38b35' as TraceId;
 
-const manifest = (logs: number): Manifest => ({
-  formatVersion: 1,
-  otelHtmlVersion: '0.0.0',
-  title: 'run',
-  epochUnixNano: T0,
-  createdAt: '2023-11-14T22:13:20.000Z',
-  updatedAt: '2023-11-14T22:13:20.000Z',
-  complete: true,
-  range: { start: 0, end: 1_000_000_000 },
-  totals: { spans: 12, logs, metrics: 7 },
-  decodedBytes: 1,
-  chunks: [],
-  rollups: [],
-  traceShards: [],
-  metricFiles: [],
-  config: {
-    viewer: {
-      eagerBudgetBytes: 1,
-      listCap: 100,
-      theme: 'system',
-      defaultDashboard: 'fusion',
-      home: 'traces',
-    },
-    dashboards: [],
-    views: [],
-  },
-});
+const manifest = (logs: number) => ({ ...manifestV4(12), totals: { spans: 12, logs, metrics: 7 } });
 
 /** Real log rows: OTLP JSON through `normalizeLogs`, so the export can be read back the same way. */
 function logRows(bodies: readonly string[]): LogRow[] {
@@ -110,7 +83,7 @@ function landingBuckets(): TimeBuckets<LogSeverityKey> {
 
 function logsResult(rows: LogRow[], total = rows.length): LogQueryResult {
   const r = rollupsOf(rows);
-  return { mode: 'logs', rows, total, matched: total, facets: r.facets, buckets: r.buckets, partial: null };
+  return { mode: 'logs', rows, total, matched: total, facets: r.facets, buckets: r.buckets, residual: null };
 }
 
 const DECLINED: PatternRow = {
@@ -124,18 +97,10 @@ const DECLINED: PatternRow = {
   sample: 'card declined: 402 decline_code=x',
 };
 
-function patternsResult(): LogQueryResult {
-  const r = rollupsOf([]);
-  return {
-    mode: 'patterns',
-    rows: [DECLINED],
-    total: 1,
-    matched: 6,
-    unclustered: 0,
-    facets: r.facets,
-    buckets: r.buckets,
-    partial: null,
-  };
+const NO_TIME: PatternRow = { ...DECLINED, id: 4, template: 'heartbeat <*>', first: null, last: null };
+
+function patternsResult(): PatternsResult {
+  return { rows: [DECLINED, NO_TIME], total: 2 };
 }
 
 const TRACE_ROW: LogTraceRow = {
@@ -156,7 +121,7 @@ function tracesResult(): LogQueryResult {
     matched: 7,
     facets: r.facets,
     buckets: r.buckets,
-    partial: null,
+    residual: null,
   };
 }
 
@@ -165,7 +130,7 @@ function scripted(q: LogQuery): LogQueryResult {
     case 'logs':
       return logsResult(logRows(['card declined: 402 decline_code=a', 'retrying charge']));
     case 'patterns':
-      return patternsResult();
+      throw new Error('queryLogs rejects patterns');
     case 'traces':
       return tracesResult();
   }
@@ -176,18 +141,25 @@ function setup(
     logs?: number;
     initial?: Parameters<typeof createSelectionStore>[0];
     queryLogs?: (q: LogQuery) => Promise<LogQueryResult>;
+    patterns?: (q: PatternQuery) => Promise<PatternsResult>;
     hasTrace?: (id: TraceId) => Promise<boolean>;
   } = {},
 ) {
   const calls: LogQuery[] = [];
+  const patternCalls: PatternQuery[] = [];
+  const queryArgs: unknown[][] = [];
   const queryLogs = opts.queryLogs ?? ((q: LogQuery) => Promise.resolve(scripted(q)));
   const ds = {
     manifest: manifest(opts.logs ?? 1204),
-    strategy: 'eager',
-    logStrategy: 'eager',
-    queryLogs: (q: LogQuery) => {
+    epoch: BigInt(T0),
+    queryLogs: (q: LogQuery, ...rest: unknown[]) => {
       calls.push(q);
+      queryArgs.push([q, ...rest]);
       return queryLogs(q);
+    },
+    patterns: (q: PatternQuery) => {
+      patternCalls.push(q);
+      return (opts.patterns ?? (() => Promise.resolve(patternsResult())))(q);
     },
     hasTrace: opts.hasTrace ?? (() => Promise.resolve(true)),
     // The trace panel opens on a trace click; its load never settles in these tests.
@@ -205,7 +177,7 @@ function setup(
       </SelectionProvider>
     </ThemeProvider>,
   );
-  return { store, calls };
+  return { store, calls, patternCalls, queryArgs };
 }
 
 describe('LogsExplorer', () => {
@@ -239,7 +211,7 @@ describe('LogsExplorer', () => {
 
   test('Group into Patterns lists the template; a click filters on its regex and goes back to logs', async () => {
     const user = userEvent.setup();
-    const { store, calls } = setup();
+    const { store, calls, patternCalls } = setup();
     await screen.findByRole('grid', { name: 'Results' });
     await user.click(screen.getByRole('button', { name: 'Patterns' }));
     expect(store.getState().mode).toBe('patterns');
@@ -247,7 +219,8 @@ describe('LogsExplorer', () => {
     const row = cell.closest('[role="row"]');
     if (!(row instanceof HTMLElement)) throw new Error('the template is in a row');
     expect(within(row).getByText('6')).toBeTruthy();
-    expect(calls.at(-1)?.sort).toEqual({ column: 'count', dir: 'desc' });
+    expect(patternCalls.at(-1)?.sort).toEqual({ column: 'count', dir: 'desc' });
+    expect(calls.every((c) => c.mode !== 'patterns')).toBe(true);
     await user.click(cell);
     expect(store.getState().condition).toBe(
       tokensToOttl([{ key: 'log.body.string', op: 'matches', value: DECLINED.regex }]),
@@ -255,6 +228,84 @@ describe('LogsExplorer', () => {
     expect(store.getState().condition).toMatch(/^IsMatch\(log\.body\.string, "/);
     expect(store.getState().mode).toBeNull();
     expect(screen.getByRole('button', { name: 'Logs' }).getAttribute('aria-pressed')).toBe('true');
+  });
+
+  test('Patterns: the D9 note, no facet panel, the window applies and filters do not rerun the query', async () => {
+    const { store, patternCalls } = setup({
+      initial: { mode: 'patterns', q: 'log.severity_number > 3', t: '100~900' },
+    });
+    await screen.findByText('card declined: <*> <*>');
+    expect(
+      screen.getByText(
+        'Patterns are computed over every log when the report is written; the time range applies, filters do not.',
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByRole('region', { name: /logs by severity/ })).toBeNull();
+    expect(screen.queryByText('Facets')).toBeNull();
+    expect(patternCalls).toEqual([
+      { window: { start: 100, end: 900 }, sort: { column: 'count', dir: 'desc' }, limit: 100 },
+    ]);
+    act(() => store.getState().setCondition('log.severity_number > 5'));
+    await waitFor(() => expect(store.getState().condition).toBe('log.severity_number > 5'));
+    expect(patternCalls).toHaveLength(1);
+    act(() => store.getState().setSort('last:asc'));
+    await waitFor(() => expect(patternCalls).toHaveLength(2));
+    expect(patternCalls[1]?.sort).toEqual({ column: 'last', dir: 'asc' });
+  });
+
+  test('the D9 note is not shown in logs mode', async () => {
+    setup();
+    await screen.findByRole('grid', { name: 'Results' });
+    expect(screen.queryByText(/Patterns are computed over every log/)).toBeNull();
+  });
+
+  test('a template at relative time 0 shows its time; only a null time says "no time"', async () => {
+    setup({
+      initial: { mode: 'patterns' },
+      patterns: () =>
+        Promise.resolve({ rows: [{ ...DECLINED, template: 'startup <*>', first: 0, last: 0 }], total: 1 }),
+    });
+    const row = (await screen.findByText('startup <*>')).closest('[role="row"]');
+    expect(row?.textContent).not.toContain('no time');
+    expect(row?.textContent).toContain('2023-11-14');
+  });
+
+  test('a template whose logs have no time says "no time", not the epoch', async () => {
+    setup({ initial: { mode: 'patterns' } });
+    const cell = await screen.findByText('heartbeat <*>');
+    const row = cell.closest('[role="row"]');
+    if (!(row instanceof HTMLElement)) throw new Error('the template is in a row');
+    expect(within(row).getAllByText('no time')).toHaveLength(2);
+    const timed = screen.getByText('card declined: <*> <*>').closest('[role="row"]');
+    expect(timed?.textContent).not.toContain('no time');
+  });
+
+  test('queryLogs gets no progress function and asks for rows, facets and the timeline', async () => {
+    const { queryArgs } = setup();
+    await screen.findByRole('grid', { name: 'Results' });
+    const [q, signal, ...extra] = queryArgs[0] ?? [];
+    expect((q as LogQuery).needs).toEqual(['rows', 'facets', 'timeline']);
+    expect((q as LogQuery).facetKeys).toBeNull();
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(extra).toEqual([]);
+  });
+
+  test('a residual condition is noted: evaluated in the browser', async () => {
+    setup({
+      queryLogs: () =>
+        Promise.resolve({ ...logsResult(logRows(['a'])), residual: 'Len(log.body.string) > 3' }),
+    });
+    const note = await screen.findByRole('status', { name: 'Evaluated in the browser' });
+    expect(note.textContent).toBe('Evaluated in the browser: Len(log.body.string) > 3');
+  });
+
+  test('the timeline says untimed logs sit in the first bar, until a range is chosen', async () => {
+    setup();
+    expect(await screen.findByText(/Logs with no time are counted in the first bar/)).toBeTruthy();
+    cleanup();
+    setup({ initial: { t: '0~500' } });
+    await screen.findByRole('grid', { name: 'Results' });
+    expect(screen.queryByText(/Logs with no time are counted/)).toBeNull();
   });
 
   test('a pattern click keeps the filter tokens already there', async () => {
@@ -343,7 +394,7 @@ describe('LogsExplorer', () => {
   });
 
   test('Scatter outside logs mode says it plots individual logs instead of drawing an empty chart', async () => {
-    setup({ initial: { mode: 'patterns', view: 'scatter' } });
+    setup({ initial: { mode: 'traces', view: 'scatter' } });
     expect(
       await screen.findByText('Scatter plots individual logs; switch Group into back to Logs.'),
     ).toBeTruthy();

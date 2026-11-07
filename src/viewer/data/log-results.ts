@@ -1,5 +1,4 @@
 import type { Table } from '@uwdata/flechette';
-import type { ManifestV4 } from '../../format/manifest.js';
 import { logFromRow, type ResultRow } from '../../format/parquet/decode.js';
 import type { TraceId } from '../../model/ids.js';
 import { logTime, logTimeSource } from '../../model/records.js';
@@ -10,8 +9,9 @@ import { TimeBuckets } from '../../rollups/time-buckets.js';
 import { LOG_SEVERITY_KEYS, type LogSeverityKey } from '../../semconv/severity.js';
 import type { FacetValueKind } from '../components/filter-tokens.js';
 import type { ResourceValues } from './data-source.js';
+import { gridOf, MAX_BUCKETS, slot, zeros } from './grid.js';
 import { type LogRow, type LogTraceRow, logRef, type PatternRow } from './log-query.js';
-import { cell, gridOf, MAX_BUCKETS, rowsOf, slot, toNumber, zeros } from './span-results.js';
+import { cell, rowsOf, toNumber } from './span-results.js';
 
 const text = (v: unknown): string => (typeof v === 'string' ? v : '');
 
@@ -64,8 +64,8 @@ export function logEntries(t: Table): { entries: LogRowEntry[]; total: number } 
   };
 }
 
-/** `logEntries` as the rows the viewer shows; `epoch` is kept for symmetry with the span mappers (the SQL already made times relative). */
-export function logRows(t: Table, _epoch: bigint, _manifest: ManifestV4): { rows: LogRow[]; total: number } {
+/** `logEntries` as the rows the viewer shows (the SQL already made times relative). */
+export function logRows(t: Table): { rows: LogRow[]; total: number } {
   const { entries, total } = logEntries(t);
   return { rows: entries.map((e) => e.row), total };
 }
@@ -122,8 +122,8 @@ export function patternRows(t: Table): { rows: PatternRow[]; total: number } {
       regex: templateStringToRegex(template),
       count: toNumber(cell(r, 'count'), 'count'),
       severities,
-      first: cell(r, 'first_ns') == null ? 0 : toNumber(cell(r, 'first_ns'), 'first_ns'),
-      last: cell(r, 'last_ns') == null ? 0 : toNumber(cell(r, 'last_ns'), 'last_ns'),
+      first: cell(r, 'first_ns') == null ? null : toNumber(cell(r, 'first_ns'), 'first_ns'),
+      last: cell(r, 'last_ns') == null ? null : toNumber(cell(r, 'last_ns'), 'last_ns'),
       sample: text(cell(r, 'sample')),
     };
   });

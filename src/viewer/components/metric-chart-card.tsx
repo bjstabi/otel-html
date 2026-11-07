@@ -4,7 +4,7 @@ import { type JSX, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import { parseTraceId, type TraceId } from '../../model/ids.js';
 import type { METRIC_DISPLAYS, METRIC_SCALES } from '../../query/metric-query.js';
 import type { MetricQueryResult } from '../data/metric-query.js';
-import type { TimeWindow } from '../data/span-query.js';
+import type { TimeWindow } from '../data/time-window.js';
 import { useColorAssigner } from '../theme/colors-context.js';
 import { Chart, type EChartsType } from './chart.js';
 import {

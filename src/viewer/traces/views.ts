@@ -2,8 +2,7 @@ import type { EChartsOption } from 'echarts';
 import { formatDuration } from '../../semconv/formatters.js';
 import { bar, type FacetViewContext, pie, toplist, treemap } from '../components/facet-views.js';
 import { seconds } from '../components/histogram-card.js';
-import type { DurationBin } from '../data/results.js';
-import type { SpanQueryResult, SpanRow, TraceRow } from '../data/span-query.js';
+import type { SpanQueryResult, SpanRow, TraceRow } from '../data/results.js';
 import type { ExplorerView } from '../state/explorer-view.js';
 import type { PageView } from '../state/page-options.js';
 
@@ -39,19 +38,19 @@ const STATUS_VARS = {
 };
 
 function latencySeries(result: SpanQueryResult): NonNullable<EChartsOption['series']> {
-  const hists = result.red.histograms;
-  const line = (name: string, q: number, color: string) => ({
+  const red = result.red;
+  const line = (name: string, data: readonly (number | null)[] | undefined, color: string) => ({
     name,
     type: 'line' as const,
     showSymbol: false,
     itemStyle: { color },
     lineStyle: { color },
-    data: hists.map((h) => (h === undefined ? null : h.quantile(q))),
+    data: [...(data ?? [])],
   });
   return [
-    line('p50', 0.5, 'var(--oh-series-1)'),
-    line('p95', 0.95, 'var(--oh-series-4)'),
-    line('p99', 0.99, 'var(--oh-critical)'),
+    line('p50', red?.p50, 'var(--oh-series-1)'),
+    line('p95', red?.p95, 'var(--oh-series-4)'),
+    line('p99', red?.p99, 'var(--oh-critical)'),
   ];
 }
 
@@ -242,30 +241,4 @@ export function paddedAxis(
     ...edges,
     ...(hi === undefined || last === undefined ? [] : [Math.round(last * r)]),
   ];
-}
-
-/** Counts rows into the `[from, to)` bins between `edges`; a row below the first edge counts in the first bin, one at or above the last in the last. */
-export function binsOnAxis(rows: readonly { durationNs: number }[], edges: readonly number[]): DurationBin[] {
-  const n = edges.length - 1;
-  if (n < 1) return [];
-  const bins = Array.from({ length: n }, (_, i) => ({
-    fromNs: edges[i] ?? 0,
-    toNs: edges[i + 1] ?? 0,
-    count: 0,
-  }));
-  for (const r of rows) {
-    let i = 0;
-    while (i < n - 1 && r.durationNs >= (edges[i + 1] ?? Number.POSITIVE_INFINITY)) i++;
-    const bin = bins[i];
-    if (bin !== undefined) bin.count++;
-  }
-  return bins;
-}
-
-/**
- * Log-spaced duration bins over the durations of the returned rows (the filtered set when `total` fits the list
- * limit, the leading rows of it otherwise), `[from, to)` with contiguous edges; every row lands in exactly one bin.
- */
-export function durationBins(rows: readonly { durationNs: number }[], binCount: number): DurationBin[] {
-  return binsOnAxis(rows, durationAxis(rows, binCount));
 }

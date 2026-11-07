@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import type { RelNanos, SpanId, TraceId } from '../../src/model/ids.js';
 import { type ResourceRef, type ScopeRef, type SpanRecord, StatusCode } from '../../src/model/records.js';
-import type { SpanRow } from '../../src/viewer/data/span-query.js';
+import type { SpanRow } from '../../src/viewer/data/results.js';
 import { buildTraceTree, exclusiveTimeByService } from '../../src/viewer/data/trace-tree.js';
 
 const id = (n: number): SpanId => n.toString(16).padStart(16, '0') as SpanId;

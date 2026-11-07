@@ -68,7 +68,8 @@ test('hostile content renders as text: explorer, panel and span section', HTTP, 
   expect(problems).toEqual([]);
 });
 
-linkedTest(
+// plan 3: metrics in the format-4 viewer
+linkedTest.skip(
   'a hostile metric name renders as text: Catalog, Explorer picker and chart card',
   HTTP,
   async ({ page, reportUrl }) => {

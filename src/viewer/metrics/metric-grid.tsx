@@ -4,13 +4,13 @@ import { anyValueToDisplay } from '../../model/anyvalue.js';
 import type { RelNanos, TraceId } from '../../model/ids.js';
 import type { ResourceRecord } from '../../model/records.js';
 import { MAX_METRIC_QUERIES, type MetricPageState } from '../../query/metric-query.js';
-import type { MetricEntry } from '../../rollups/metric-catalog.js';
+import type { MetricCatalog, MetricEntry } from '../../rollups/metric-catalog.js';
 import { compareNamespaces, metricNamespace } from '../../semconv/metric-namespaces.js';
 import { tokenValue } from '../components/attribute-filter.js';
 import { ErrorCard, PILL } from '../components/explorer-states.js';
 import { type ChartPick, MetricChartCard } from '../components/metric-chart-card.js';
 import { METRIC_CHART_HEIGHT, type MetricSize } from '../components/metric-chart-option.js';
-import { catalogOf, type DataSource } from '../data/data-source.js';
+import type { DataSource } from '../data/data-source.js';
 import { type LoadedMetric, resourceKey } from '../data/metric-load.js';
 import {
   defaultShow,
@@ -18,7 +18,7 @@ import {
   type MetricQueryResult,
   runMetricQuery,
 } from '../data/metric-query.js';
-import type { TimeWindow } from '../data/span-query.js';
+import type { TimeWindow } from '../data/time-window.js';
 import { CONTROL } from '../shell/controls.js';
 import { useGoTo } from '../shell/go-to.js';
 import { formatWindow } from '../state/url-state.js';
@@ -74,7 +74,7 @@ const MARKER_LABEL: Readonly<Record<MetricGridOrigin['kind'], string | null>> = 
   dashboard: null,
 };
 const QUERY_IDS = 'abcdefghijklmnopqrstuvwxyz';
-export const OTHER_LEFT_OUT =
+const OTHER_LEFT_OUT =
   'partial: series beyond the cap are folded into "other", which spans resources and is left out here (see the Explorer)';
 const SERVICE_PATH = 'resource.attributes["service.name"]';
 
@@ -174,8 +174,18 @@ function distinctResources(resources: readonly ResourceRecord[]): ResourceRecord
   return [...seen.values()];
 }
 
+/** What the grid reads of a data source. */
+export type MetricSource = Pick<DataSource, 'metricCatalog' | 'metric' | 'metricsForResources' | 'hasTrace'>;
+
+/** `ds.metricCatalog()` as a stable function, for `useKeyedAsync(dataSource, catalogOf)`. */
+export const catalogOf = (ds: Pick<DataSource, 'metricCatalog'>): Promise<MetricCatalog> =>
+  ds.metricCatalog();
+
 /** Whether any of `resources` has metric series; false while the lookup runs or after it failed. */
-export function useHasMetrics(dataSource: DataSource, resources: readonly ResourceRecord[] | null): boolean {
+export function useHasMetrics(
+  dataSource: MetricSource,
+  resources: readonly ResourceRecord[] | null,
+): boolean {
   const load = useCallback(
     (rs: readonly ResourceRecord[]) => dataSource.metricsForResources(rs),
     [dataSource],
@@ -256,7 +266,7 @@ interface ChartRun {
 }
 
 function GridChart(props: {
-  dataSource: DataSource;
+  dataSource: MetricSource;
   entry: MetricEntry;
   /** The origin's resources (canonical keys): only their series are charted. */
   resourceKeys: ReadonlySet<string>;
@@ -388,7 +398,7 @@ const SEG = 'rounded-full px-2 py-0.5 text-xs';
  * (only the first group starts expanded; charts render as they scroll into view), over the origin's moment ± 5 min.
  */
 export function MetricGrid(
-  props: { dataSource: DataSource; origin: MetricGridOrigin } & MetricGridExtras,
+  props: { dataSource: MetricSource; origin: MetricGridOrigin } & MetricGridExtras,
 ): JSX.Element {
   const { dataSource, origin } = props;
   const goTo = useGoTo();

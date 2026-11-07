@@ -4,6 +4,7 @@ import type { ResourceRecord, SpanEventRecord, SpanLinkRecord, SpanRecord } from
 import { formatDuration } from '../../semconv/formatters.js';
 import { AttributeGroups } from '../components/attribute-groups.js';
 import type { DataSource } from '../data/data-source.js';
+import { manifestRange } from '../data/manifest-range.js';
 import { gridWindow, MetricGrid, type MetricGridOrigin } from '../metrics/metric-grid.js';
 import { navigateRoute } from '../shell/use-route.js';
 import { selectionToUrlState } from '../state/selection.js';
@@ -168,7 +169,7 @@ export function SpanMetricsTab(props: {
   dataSource: DataSource;
 }): JSX.Element {
   const { span, resource, dataSource } = props;
-  const range = dataSource.manifest.range;
+  const range = useMemo(() => manifestRange(dataSource.manifest), [dataSource]);
   const origin = useMemo(
     (): MetricGridOrigin => ({
       kind: 'span',

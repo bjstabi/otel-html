@@ -1,11 +1,12 @@
 import { type JSX, useCallback, useMemo, useState } from 'react';
 import { OtelHtmlError } from '../../../model/errors.js';
 import type { SpanId, TraceId } from '../../../model/ids.js';
-import { ErrorCard, LoadingNote, NoMatch, PartialNote } from '../../components/explorer-states.js';
+import { ErrorCard, LoadingNote, NoMatch } from '../../components/explorer-states.js';
 import { isSpanRow } from '../../components/export.js';
 import { FlameGraph } from '../../components/flame-graph.js';
 import { ResultsTable, type SortState } from '../../components/results-table.js';
-import type { DataSource, SpanQuery, SpanRow, TraceRow } from '../../data/data-source.js';
+import type { DataSource } from '../../data/data-source.js';
+import type { SpanQuery, SpanRow, TraceRow } from '../../data/results.js';
 import { useSelectionStore } from '../../state/selection-context.js';
 import { useKeyedAsync } from '../../state/use-keyed-async.js';
 import { useColorAssigner } from '../../theme/colors-context.js';
@@ -19,7 +20,7 @@ const MIN_PX = 96;
 const LIST_SHARE = 0.6;
 /** The table's own header row. */
 const TABLE_HEADER_PX = 40;
-const PARTIAL_NOTE_PX = 24;
+const LOADING_NOTE_PX = 24;
 const ROWS = 200;
 /** The explorer's default order. */
 const DEFAULT_SORT: SortState = { column: 'start', dir: 'desc' };
@@ -45,7 +46,7 @@ function TraceFlame(props: {
       >
         open trace panel →
       </button>
-      {detail.status === 'loading' && <LoadingNote progress={null} />}
+      {detail.status === 'loading' && <LoadingNote />}
       {detail.status === 'error' && <ErrorCard title="Could not load the trace" message={detail.message} />}
       {detail.status === 'ready' && (
         <FlameGraph
@@ -81,11 +82,12 @@ export const TracesWidget: WidgetRenderer = ({ widget, scope, height, dataSource
       limit: ROWS,
       groupBy: null,
       measureBy: null,
-      scanAll: false,
+      needs: ['rows'],
+      facetKeys: null,
     }),
     [scope.condition, scope.window, text, mode, sort],
   );
-  const { state, scanAll } = useSpanQuery(dataSource, query);
+  const { state } = useSpanQuery(dataSource, query);
   // Only a finished result: rows of the previous inputs are never shown as if they were current.
   const result = state.status === 'ready' ? state.result : null;
 
@@ -98,22 +100,17 @@ export const TracesWidget: WidgetRenderer = ({ widget, scope, height, dataSource
   const spanRows: SpanRow[] = result?.rows.filter(isSpanRow) ?? [];
   const traceRows: TraceRow[] = result?.rows.filter((r): r is TraceRow => !isSpanRow(r)) ?? [];
   const followed = scope.highlightTrace;
-  const partial = result?.partial ?? null;
 
   const body = Math.max(
     MIN_PX,
-    height -
-      FRAME_CHROME_PX -
-      (partial === null ? 0 : PARTIAL_NOTE_PX) -
-      (state.status === 'loading' ? PARTIAL_NOTE_PX : 0),
+    height - FRAME_CHROME_PX - (state.status === 'loading' ? LOADING_NOTE_PX : 0),
   );
   const listPx = followed === null ? body : Math.round(body * LIST_SHARE);
   const tableHeight = Math.max(MIN_PX - TABLE_HEADER_PX, listPx - TABLE_HEADER_PX);
 
   return (
     <div className="flex flex-col gap-1">
-      {result !== null && <PartialNote partial={partial} onScanAll={scanAll} />}
-      {state.status === 'loading' && <LoadingNote progress={state.progress} />}
+      {state.status === 'loading' && <LoadingNote />}
       {state.status === 'error' && <ErrorCard title="The query could not run" message={state.message} />}
       {result !== null &&
         (result.total === 0 ? (
@@ -136,6 +133,7 @@ export const TracesWidget: WidgetRenderer = ({ widget, scope, height, dataSource
           <ResultsTable
             rows={traceRows}
             columns={TRACE_COLUMNS_UI}
+            serviceShare={dataSource.serviceShare}
             rowId={(r) => r.traceId}
             sort={sort}
             onSort={setSort}

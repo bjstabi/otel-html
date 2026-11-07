@@ -33,10 +33,14 @@ async function assertReportsBuilt(mounted: readonly ReportName[]): Promise<void>
     if (name === 'metrics-scale' || name === 'scale' || name === 'huge') continue;
     // `no-manifest` is a copy of `main` without its manifest, by design.
     const probe = name === 'no-manifest' ? 'index.html' : 'data/manifest.js';
-    try {
-      await stat(new URL(probe, reportDir(name)));
-    } catch {
-      throw new Error(`the e2e fixture reports are missing: run \`mise run e2e:fixtures\` (${name})`);
+    for (const kind of ['file', 'http'] as const) {
+      try {
+        await stat(new URL(probe, reportDir(name, kind)));
+      } catch {
+        throw new Error(
+          `the e2e fixture reports are missing: run \`mise run e2e:fixtures\` (${name}, ${kind})`,
+        );
+      }
     }
   }
 }
@@ -67,7 +71,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   // The load spec serves its own report (`dist/load-receiver`) and runs without the fixture reports built.
   if (process.env[LOAD_REPORT_ENV] === undefined) await assertReportsBuilt(mounted);
   const server = await serve(
-    mounted.map((name) => ({ prefix: httpSubpath(name), root: dir(reportDir(name)) })),
+    mounted.map((name) => ({ prefix: httpSubpath(name), root: dir(reportDir(name, 'http')) })),
   );
   process.env[PORT_ENV] = String(server.port);
   return () => server.close();

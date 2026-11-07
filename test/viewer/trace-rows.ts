@@ -9,7 +9,7 @@ import {
   StatusCode,
 } from '../../src/model/records.js';
 import type { TraceDetail } from '../../src/viewer/data/data-source.js';
-import type { SpanRow } from '../../src/viewer/data/span-query.js';
+import type { SpanRow } from '../../src/viewer/data/results.js';
 import { buildTraceTree } from '../../src/viewer/data/trace-tree.js';
 
 export const TRACE_ID = 'a'.repeat(32) as TraceId;

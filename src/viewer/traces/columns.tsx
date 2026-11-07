@@ -1,16 +1,25 @@
 import type { JSX, ReactNode } from 'react';
 import { anyValueToDisplay } from '../../model/anyvalue.js';
-import type { UnixNanos } from '../../model/ids.js';
+import type { TraceId, UnixNanos } from '../../model/ids.js';
 import { StatusCode } from '../../model/records.js';
 import { formatDuration } from '../../semconv/formatters.js';
-import type { SpanRow, TraceRow } from '../data/span-query.js';
+import type { SpanRow, TraceRow } from '../data/results.js';
 import { absoluteTime } from '../shell/time-range.js';
+import { useKeyedAsync } from '../state/use-keyed-async.js';
 import type { ColorAssigner } from '../theme/palette.js';
 import { seriesVar } from '../theme/palette.js';
+
+/** Exclusive time per service of one trace, largest first (`DataSource.serviceShare`). */
+export type ServiceShareLoader = (
+  traceId: TraceId,
+  signal?: AbortSignal,
+) => Promise<readonly { service: string; ns: number }[]>;
 
 interface CellContext {
   epoch: UnixNanos;
   colors: ColorAssigner;
+  /** Loads the trace list's share cell. Tables of trace rows must supply it (`ResultsTableProps`). */
+  serviceShare: ServiceShareLoader;
 }
 
 /** A results-table column as data: the table renders whatever it is given. `sort` is the data layer's sort column. */
@@ -152,27 +161,32 @@ export const SPAN_COLUMNS_UI: readonly ColumnUi<SpanRow>[] = [
   },
 ];
 
-/** Stacked bar of exclusive time per service; a labelled "partial" cell when the share is not whole-trace. */
-function ServiceShare({ row, colors }: { row: TraceRow; colors: ColorAssigner }): JSX.Element {
-  if (!row.shareComplete) {
+/** Stacked bar of exclusive time per service, loaded for this row's trace when the row is drawn. */
+function ServiceShare(props: {
+  traceId: TraceId;
+  load: ServiceShareLoader;
+  colors: ColorAssigner;
+}): JSX.Element {
+  const { colors } = props;
+  const state = useKeyedAsync(props.traceId, props.load);
+  if (state.status === 'loading') return <span className="text-xs text-muted">...</span>;
+  if (state.status === 'error') {
     return (
-      <span
-        className="text-xs text-muted"
-        title="Only part of this trace was scanned, so the split is unknown"
-      >
-        partial
+      <span className="text-xs text-muted" title={state.message}>
+        unavailable
       </span>
     );
   }
-  const total = row.serviceShare.reduce((a, s) => a + s.ns, 0);
+  const share = state.value;
+  const total = share.reduce((a, s) => a + s.ns, 0);
   if (total === 0) return dash;
   return (
     <span
       role="img"
-      aria-label={row.serviceShare.map((s) => `${s.service} ${formatDuration(s.ns)}`).join(', ')}
+      aria-label={share.map((s) => `${s.service} ${formatDuration(s.ns)}`).join(', ')}
       className="flex h-2.5 w-full overflow-hidden rounded-sm bg-hairline"
     >
-      {row.serviceShare.map((s) => (
+      {share.map((s) => (
         <span
           key={s.service}
           title={`${s.service}: ${formatDuration(s.ns)}`}
@@ -205,7 +219,7 @@ export const TRACE_COLUMNS_UI: readonly ColumnUi<TraceRow>[] = [
     sort: 'service',
     width: 140,
     cell: (r, c) => {
-      const s = r.root?.service ?? r.rootSummary?.service;
+      const s = r.rootSummary?.service;
       return s === undefined ? dash : <ServiceChip service={s} colors={c.colors} />;
     },
   },
@@ -214,7 +228,7 @@ export const TRACE_COLUMNS_UI: readonly ColumnUi<TraceRow>[] = [
     header: 'Resource',
     sort: 'resource',
     width: 220,
-    cell: (r) => r.root?.resource ?? r.rootSummary?.resource ?? dash,
+    cell: (r) => r.rootSummary?.resource ?? dash,
   },
   {
     id: 'duration',
@@ -229,7 +243,7 @@ export const TRACE_COLUMNS_UI: readonly ColumnUi<TraceRow>[] = [
     id: 'share',
     header: 'Latency by service',
     width: 200,
-    cell: (r, c) => <ServiceShare row={r} colors={c.colors} />,
+    cell: (r, c) => <ServiceShare traceId={r.traceId} load={c.serviceShare} colors={c.colors} />,
   },
 ];
 

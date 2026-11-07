@@ -9,12 +9,13 @@ import { ErrorCard, LoadingNote } from '../../components/explorer-states.js';
 import { type ChartPick, MetricChartCard } from '../../components/metric-chart-card.js';
 import { METRIC_CHART_HEIGHT, type MetricSize } from '../../components/metric-chart-option.js';
 import { RunChartCard } from '../../components/run-chart-card.js';
-import { catalogOf, type DataSource } from '../../data/data-source.js';
+import type { DataSource } from '../../data/data-source.js';
+import { manifestRange } from '../../data/manifest-range.js';
 import { type MetricQuery, resolveMetric } from '../../data/metric-query.js';
 import { runMetricRunQuery } from '../../data/metric-run-query.js';
-import type { TimeWindow } from '../../data/span-query.js';
+import type { TimeWindow } from '../../data/time-window.js';
 import { exemplarTraceLookup, openChartPick } from '../../metrics/chart-pick.js';
-import { explorerFilter, MetricGrid, type MetricGridOrigin } from '../../metrics/metric-grid.js';
+import { catalogOf, explorerFilter, MetricGrid, type MetricGridOrigin } from '../../metrics/metric-grid.js';
 import { buildPlots, layoutCharts } from '../../metrics/plots.js';
 import { useMetricQueries } from '../../metrics/use-metric-query.js';
 import { useGoTo } from '../../shell/go-to.js';
@@ -102,7 +103,7 @@ function Empty(props: { title: string; message: string }): JSX.Element {
   );
 }
 
-type Body = (props: Parameters<WidgetRenderer>[0]) => JSX.Element;
+type Body = WidgetRenderer;
 
 /** The M3 chart card over the widget's queries, narrowed by the variables and the selected trace's resources. */
 const QueriesBody: Body = ({ widget, scope, height, dataSource, actions, variables }) => {
@@ -113,7 +114,7 @@ const QueriesBody: Body = ({ widget, scope, height, dataSource, actions, variabl
   const goTo = useGoTo();
   const narrowing = useNarrowing(dataSource, scope.highlightTrace);
   const catalog = useKeyedAsync(dataSource, catalogOf);
-  const run = dataSource.manifest.range;
+  const run = manifestRange(dataSource.manifest);
   const win = scope.window ?? run ?? FALLBACK_WINDOW;
   const [actionError, setActionError] = useState<string | null>(null);
   const hasTrace = useMemo(() => exemplarTraceLookup(dataSource), [dataSource]);
@@ -162,7 +163,7 @@ const QueriesBody: Body = ({ widget, scope, height, dataSource, actions, variabl
   if (result.failure !== null)
     return <ErrorCard title="The queries could not run" message={result.failure} />;
   if (catalog.status === 'loading' || narrowing.status === 'loading' || result.loading) {
-    return <LoadingNote progress={null} />;
+    return <LoadingNote />;
   }
   if (missing.size === queries.length) {
     const verb = missingNames.length === 1 ? 'is' : 'are';
@@ -265,7 +266,7 @@ const RunBody: Body = ({ widget, scope, dashboard, height, dataSource, actions, 
   const dashboardId = dashboard.dashboard.id;
   const narrowing = useNarrowing(dataSource, scope.highlightTrace);
   const catalog = useKeyedAsync(dataSource, catalogOf);
-  const run = dataSource.manifest.range;
+  const run = manifestRange(dataSource.manifest);
   const { start, end } = scope.window ?? run ?? FALLBACK_WINDOW;
 
   const filter = narrowing.status === 'ready' ? narrowing.where : null;
@@ -322,7 +323,7 @@ const RunBody: Body = ({ widget, scope, dashboard, height, dataSource, actions, 
   if (result.status === 'error') {
     return <ErrorCard title={`Query ${own.id} could not run`} message={result.message} />;
   }
-  if (result.status === 'loading') return <LoadingNote progress={null} />;
+  if (result.status === 'loading') return <LoadingNote />;
 
   const note = narrowing.status === 'ready' ? narrowingNote(narrowing) : null;
   return (
@@ -349,7 +350,7 @@ const RunBody: Body = ({ widget, scope, dashboard, height, dataSource, actions, 
 const GridBody: Body = ({ scope, height, dataSource, actions, variables }) => {
   const narrowing = useNarrowing(dataSource, scope.highlightTrace);
   const catalog = useKeyedAsync(dataSource, catalogOf);
-  const run = dataSource.manifest.range;
+  const run = manifestRange(dataSource.manifest);
   const start = scope.window?.start ?? run?.start;
   const end = scope.window?.end ?? run?.end;
   const resources = narrowing.status === 'ready' ? narrowing.resources : null;
@@ -379,7 +380,7 @@ const GridBody: Body = ({ scope, height, dataSource, actions, variables }) => {
     return <ErrorCard title="The selected trace could not be read" message={narrowing.message} />;
   if (catalog.status === 'error')
     return <ErrorCard title="The metric catalog could not be loaded" message={catalog.message} />;
-  if (origin === null) return <LoadingNote progress={null} />;
+  if (origin === null) return <LoadingNote />;
   if (origin.resources.length === 0) {
     return <Empty title="No matching resources" message="No resource matches the chosen variables." />;
   }
@@ -397,8 +398,9 @@ const GridBody: Body = ({ scope, height, dataSource, actions, variables }) => {
 };
 
 /** The Metrics widget: chart cards over its `queries`, or (without them) the resource Metric grid. */
-export const MetricWidget: WidgetRenderer = (props) => {
-  const { widget } = props;
+export const MetricWidget: WidgetRenderer = (renderProps) => {
+  const { widget } = renderProps;
+  const props = renderProps;
   if (widget.type !== 'metric') {
     throw new OtelHtmlError('usage', { path: 'widget.type', expected: 'metric', actual: widget.type });
   }

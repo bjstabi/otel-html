@@ -1,11 +1,12 @@
 import { beforeAll, describe, expect, test } from 'vitest';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { parseTraceId } from '../../src/model/ids.js';
+import type { DataSource } from '../../src/viewer/data/data-source.js';
 import { createDuckDbDataSource } from '../../src/viewer/data/duckdb-source.js';
 import { createCoordinator, mosaicQueryEngine } from '../../src/viewer/data/mosaic.js';
 import type { QueryEngine } from '../../src/viewer/data/query-engine.js';
 import { residualRows } from '../../src/viewer/data/residual.js';
-import type { DataSource, SpanQuery, SpanRow, TraceRow } from '../../src/viewer/data/results.js';
+import type { SpanQuery, SpanRow, TraceRow } from '../../src/viewer/data/results.js';
 import { toNumber } from '../../src/viewer/data/span-results.js';
 import type { TestDb } from '../../test-support/duckdb-node.js';
 import {
@@ -156,11 +157,19 @@ const spanRows = (rows: readonly (SpanRow | TraceRow)[]): SpanRow[] => rows as S
 const traceRows = (rows: readonly (SpanRow | TraceRow)[]): TraceRow[] => rows as TraceRow[];
 
 describe('querySpans', () => {
+  test('a negative or fractional limit is a usage error', async () => {
+    for (const limit of [-1, 1.5, Number.NaN]) {
+      await expect(ds.querySpans(query({ limit }))).rejects.toMatchObject({
+        code: 'usage',
+      });
+    }
+  });
+
   test('an error condition returns exactly the error spans, facets over them, exact buckets and no residual', async () => {
     const r = await ds.querySpans(query({ condition: 'status.code == 2' }));
     expect(spanRows(r.rows).map((x) => x.span.name)).toEqual(['COMMIT', 'POST /orders']);
     expect(r.total).toBe(2);
-    expect(r.residual).toBe(false);
+    expect(r.residual).toBeNull();
     expect(r.facets.top('status.code', 5)).toEqual([{ value: 'error', count: 2 }]);
     expect(r.facets.top('service.name', 5).map((x) => x.count)).toEqual([1, 1]);
     expect(r.facets.top('k.s', 5)).toEqual([{ value: 'y', count: 1 }]);
@@ -233,10 +242,25 @@ describe('querySpans', () => {
     expect((await ds.getTrace(T3)).logCount).toBe(0);
   });
 
+  test('a given duration axis is counted into exactly, bin by bin', async () => {
+    const base = await ds.querySpans(query({ condition: 'status.code == 2' }));
+    const { min, max } = base.durations.summary ?? { min: 0, max: 0 };
+    expect(max).toBeGreaterThan(min);
+    // two spans: one at the minimum, one at the maximum; an axis with three bins puts them in the first and last
+    const axis = [
+      { fromNs: 0, toNs: min + 1 },
+      { fromNs: min + 1, toNs: max },
+      { fromNs: max, toNs: max + 1 },
+    ];
+    const r = await ds.querySpans(query({ condition: 'status.code == 2', durationAxis: axis }));
+    expect(r.durations.bins).toEqual(axis.map((b, i) => ({ ...b, count: [1, 0, 1][i] })));
+    expect(r.durations.summary).toEqual(base.durations.summary);
+  });
+
   test('a residual condition (Len) re-checks rows in the browser and marks the result', async () => {
     const condition = 'Len(name) > 7';
     const rowsOnly = await counted(() => ds.querySpans(query({ condition, needs: ['rows'] })));
-    expect(rowsOnly.value.residual).toBe(true);
+    expect(rowsOnly.value.residual).toBe('Len(name) > 7');
     expect(spanRows(rowsOnly.value.rows).map((x) => x.span.name)).toEqual([
       'GET /users',
       'POST /orders',
@@ -248,7 +272,7 @@ describe('querySpans', () => {
     const all = await counted(() =>
       ds.querySpans(query({ condition, needs: [...ALL], measureBy: 'span.name' })),
     );
-    expect(all.value.residual).toBe(true);
+    expect(all.value.residual).toBe('Len(name) > 7');
     expect(all.value.total).toBe(3);
     expect(all.value.facets.top('span.name', 5)).toEqual([
       { value: 'GET /users', count: 2 },
@@ -371,6 +395,13 @@ describe('the other questions', () => {
     const again = await counted(() => fresh.getTrace(T1));
     expect(again.arrow).toBe(0);
     expect(again.value).toBe(open.value);
+  });
+
+  test('serviceShare takes a signal: an aborted load rejects with AbortError', async () => {
+    const ctl = new AbortController();
+    const p = ds.serviceShare(T3, ctl.signal);
+    ctl.abort();
+    await expect(p).rejects.toMatchObject({ name: 'AbortError' });
   });
 
   test('getTrace is memoised for the last id, hasTrace is a bound method', async () => {

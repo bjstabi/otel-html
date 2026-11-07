@@ -1,0 +1,8 @@
+{
+  "core": "v1.4.3",
+  "platform": "wasm_eh",
+  "sha256": {
+    "parquet": "22765c8f7dc741cda2b571a66ac7bb355295d7d69a6c37e5315b265672984f55",
+    "json": "b997276c8e15cc3ebdeda340d73d15dc1c4f4755ad281280451cb0a2f79302e9"
+  }
+}

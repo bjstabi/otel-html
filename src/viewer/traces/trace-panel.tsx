@@ -17,6 +17,7 @@ import { downloadBlob, otlpBlob } from '../components/export.js';
 import { FlameGraph } from '../components/flame-graph.js';
 import { Waterfall } from '../components/waterfall.js';
 import type { DataSource, TraceDetail } from '../data/data-source.js';
+import type { LogRow } from '../data/log-query.js';
 import { useHasMetrics } from '../metrics/metric-grid.js';
 import { CONTROL } from '../shell/controls.js';
 import { MOVE_EVENT } from '../shell/move-event.js';
@@ -76,6 +77,16 @@ function LoadError(props: { traceId: TraceId; message: string }): JSX.Element {
   );
 }
 
+/** Under a failed trace load: the trace's own logs, when it has any (a log-only trace has no spans to load). */
+function LogsBelowError(props: { traceId: TraceId; rows: readonly LogRow[]; epoch: UnixNanos }): JSX.Element {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col gap-3 p-4">
+      <p className="text-sm text-ink-2">The trace's logs, which could be read without its spans:</p>
+      <TraceLogsTab rows={props.rows} scope={{ traceId: props.traceId }} epoch={props.epoch} />
+    </div>
+  );
+}
+
 function Fact(props: { label: string; children: ReactNode }): JSX.Element {
   return (
     <div className="flex flex-col">
@@ -123,8 +134,15 @@ function Header(props: { detail: TraceDetail; dataSource: DataSource; epoch: Uni
   const { detail, dataSource, epoch } = props;
   const f = useMemo(() => traceFacts(detail), [detail]);
   const root = f.root;
-  const percentile =
-    root === null ? null : dataSource.percentileOf(root.service, root.resource, root.durationNs);
+  const loadPercentile = useCallback(
+    () =>
+      root === null
+        ? Promise.resolve(null)
+        : Promise.resolve(dataSource.percentileOf(root.service, root.resource, root.durationNs)),
+    [dataSource, root],
+  );
+  const percentileState = useKeyedAsync(detail.traceId, loadPercentile);
+  const percentile = percentileState.status === 'ready' ? percentileState.value : null;
   return (
     <div className="flex flex-col gap-2" data-testid="trace-header">
       <h2 className="flex flex-wrap items-center gap-x-2 gap-y-1 text-base font-semibold">
@@ -193,7 +211,8 @@ export function TracePanel(props: TracePanelProps): JSX.Element {
   );
   const [exportError, setExportError] = useState<string | null>(null);
   const logCount = load.status === 'ready' ? load.value.logCount : 0;
-  const logs = useTraceLogs(dataSource, traceId, logCount > 0);
+  // A trace the report holds only logs for has no spans, so `getTrace` rejects; its logs still show (below).
+  const logs = useTraceLogs(dataSource, traceId, logCount > 0 || load.status === 'error');
   const resources = useMemo(() => (load.status === 'ready' ? traceResources(load.value) : null), [load]);
   const hasMetrics = useHasMetrics(dataSource, resources);
 
@@ -352,6 +371,9 @@ export function TracePanel(props: TracePanelProps): JSX.Element {
       )}
       {load.status === 'loading' && <Skeleton traceId={traceId} />}
       {load.status === 'error' && <LoadError traceId={traceId} message={load.message} />}
+      {load.status === 'error' && logs.rows !== null && logs.rows.length > 0 && (
+        <LogsBelowError traceId={traceId} rows={logs.rows} epoch={epoch} />
+      )}
       {load.status === 'ready' && active !== null && (
         <div className="flex min-h-0 flex-1 flex-col gap-3 p-4">
           <div className="rounded-card border border-hairline bg-surface p-4">

@@ -2,7 +2,6 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, beforeAll, describe, expect, test, vi } from 'vitest';
 import type { RelNanos } from '../../src/model/ids.js';
 import { TimeBuckets } from '../../src/rollups/time-buckets.js';
-import { createScriptedLoader } from '../../test-support/scripted-loader.js';
 
 vi.mock('../../src/viewer/components/chart.js', () => ({
   Chart: (p: { ariaLabel: string; option: unknown }): React.JSX.Element => (
@@ -11,8 +10,6 @@ vi.mock('../../src/viewer/components/chart.js', () => ({
 }));
 
 import { DashboardSchema } from '../../src/dashboards/schema.js';
-import { FacetCounts } from '../../src/rollups/facets.js';
-import { RedSeries } from '../../src/rollups/red.js';
 import {
   alignLanes,
   FusionTimeline,
@@ -21,12 +18,13 @@ import {
 import { SEVERITY_SERIES, SPAN_STATUS_SERIES } from '../../src/viewer/components/histogram-card.js';
 import type { WidgetActions } from '../../src/viewer/dashboards/dashboard-page.js';
 import { TimelineWidget } from '../../src/viewer/dashboards/widgets/timeline.js';
-import type { DataSource, SpanQueryResult } from '../../src/viewer/data/data-source.js';
-import { createDataSource } from '../../src/viewer/data/data-source.js';
-import type { TimeWindow } from '../../src/viewer/data/span-query.js';
+import type { DataSource } from '../../src/viewer/data/data-source.js';
+import { manifestRange } from '../../src/viewer/data/manifest-range.js';
+import type { LogQuery, SpanQuery, SpanQueryResult } from '../../src/viewer/data/results.js';
+import type { TimeWindow } from '../../src/viewer/data/time-window.js';
 import { EMPTY_DASHBOARD_STATE } from '../../src/viewer/state/dashboard-state.js';
-import { baseManifest, dataSourceOf } from './dashboard-shell.js';
-import { buildEmbeddedMetricsReport } from './report-fixture.js';
+import { baseManifest, dataSourceOf, emptyLogResult, emptySpanResult } from './dashboard-shell.js';
+import { fusionSource } from './fusion-source.js';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 afterEach(cleanup);
@@ -246,8 +244,7 @@ describe('TimelineWidget on the linked fixture', () => {
     variables: { key: string; value: string; kind: 'string' }[],
     window: TimeWindow | null = null,
   ) {
-    const linked = await buildEmbeddedMetricsReport();
-    const ds = await createDataSource(createScriptedLoader(linked.files), linked.manifest, 1);
+    const ds = fusionSource();
     const dashboard = DashboardSchema.parse({
       id: 'd',
       title: 'D',
@@ -298,21 +295,19 @@ describe('TimelineWidget on the linked fixture', () => {
   });
 
   test('a window that cuts a bucket of metric points marks the total ~', async () => {
-    const linked = await buildEmbeddedMetricsReport();
-    const ds = await createDataSource(createScriptedLoader(linked.files), linked.manifest, 1);
+    const ds = fusionSource();
     const points = await ds.metricPoints();
     const i = points.counts('points').findIndex((c) => c > 0);
-    const from = Math.max(points.startNs + i * points.widthNs, linked.manifest.range?.start ?? 0);
+    const from = Math.max(points.startNs + i * points.widthNs, manifestRange(ds.manifest)?.start ?? 0);
     await widget([], { start: from + 1, end: from + 2 });
     expect(await screen.findByText(/^Metric points ~\d+$/)).toBeTruthy();
   });
 
   test('a metric point in the bucket at an aligned window end is counted', async () => {
-    const linked = await buildEmbeddedMetricsReport();
-    const ds = await createDataSource(createScriptedLoader(linked.files), linked.manifest, 1);
+    const ds = fusionSource();
     const points = await ds.metricPoints();
     const counts = points.counts('points');
-    const range = linked.manifest.range;
+    const range = manifestRange(ds.manifest);
     if (range === undefined || range === null) throw new Error('no range');
     // The fixture's range end falls inside its last bucket, so end the window where that bucket starts: the window
     // end is aligned, as it is whenever a report's range end sits on a bucket edge.
@@ -373,30 +368,32 @@ describe('TimelineWidget states', () => {
     );
   }
 
-  const spansResult = (partial: SpanQueryResult['partial']): SpanQueryResult => ({
-    rows: [],
-    total: 0,
-    facets: new FacetCounts(10, 10),
-    buckets: new TimeBuckets(['ok', 'error', 'unset'], 8),
-    red: new RedSeries(8),
-    groups: null,
-    partial,
-  });
-
-  test('a partial scan says how much was read and Scan entire run rereads everything', async () => {
-    const base = dataSourceOf(baseManifest);
-    const calls: boolean[] = [];
+  test('asks each signal for the timeline only, with a signal and no progress function', async () => {
+    const calls: { spans: unknown[][]; logs: unknown[][] } = { spans: [], logs: [] };
     mount({
-      ...base,
-      querySpans: (q) => {
-        calls.push(q.scanAll);
-        return Promise.resolve(spansResult(q.scanAll ? null : { scanned: 2, total: 5 }));
+      ...dataSourceOf(baseManifest),
+      querySpans: (...args) => {
+        calls.spans.push(args);
+        return Promise.resolve(emptySpanResult());
+      },
+      queryLogs: (...args) => {
+        calls.logs.push(args);
+        return Promise.resolve({ ...emptyLogResult() });
       },
     });
-    expect(await screen.findByText(/from 2 of 5 chunks/)).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Scan entire run' }));
-    await waitFor(() => expect(screen.queryByText(/from 2 of 5 chunks/)).toBeNull());
-    expect(calls).toEqual([false, true]);
+    await screen.findByText('Metric points 0');
+    expect((calls.spans[0] as [SpanQuery])[0].needs).toEqual(['timeline']);
+    expect((calls.logs[0] as [LogQuery])[0].needs).toEqual(['timeline']);
+    expect(calls.spans[0]?.[1]).toBeInstanceOf(AbortSignal);
+    expect(calls.spans[0]).toHaveLength(2);
+    expect(calls.logs[0]).toHaveLength(2);
+  });
+
+  test('draws no chunk note and no Scan entire run button', async () => {
+    mount(dataSourceOf(baseManifest));
+    await screen.findByText('Metric points 0');
+    expect(screen.queryByText(/chunks/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Scan entire run' })).toBeNull();
   });
 
   test('a failing query shows the error', async () => {
@@ -409,19 +406,6 @@ describe('TimelineWidget states', () => {
     const base = dataSourceOf(baseManifest);
     mount({ ...base, querySpans: () => new Promise<SpanQueryResult>(() => {}) });
     expect(screen.getByRole('status').textContent).toBe('Loading');
-  });
-
-  test('loading counts the log scan too', async () => {
-    const base = dataSourceOf(baseManifest);
-    mount({
-      ...base,
-      querySpans: () => new Promise<SpanQueryResult>(() => {}),
-      queryLogs: (_q, onProgress) => {
-        onProgress?.(2, 5);
-        return new Promise(() => {});
-      },
-    });
-    expect((await screen.findByText(/Scanning/)).textContent).toBe('Scanning 2 of 5 chunks');
   });
 
   test('an empty lane still draws, saying there is nothing in it', async () => {

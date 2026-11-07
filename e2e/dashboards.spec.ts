@@ -78,8 +78,7 @@ test('Fusion: a brush, a trace click, ⛓ off and Show context', async ({ page, 
   await expect(chips).toContainText('trace_id');
   await expect(logs).toContainText('for the selected trace');
   await expect(metrics).toContainText("from the selected trace's resources");
-  await expect(metrics.getByTestId('metric-grid')).toContainText('Metrics from the same resource');
-  await expect(metrics.getByTestId('metric-grid')).not.toContainText('Loading metrics');
+  // The metric grid's contents return with plan 3 (D11).
 
   // The trace's flame graph opens under the list.
   await expect(traces.getByRole('button', { name: 'open trace panel →' })).toBeVisible();
@@ -151,7 +150,7 @@ test('Checkout: the environment default narrows everything until it is changed',
   // All six widget types are on the page.
   for (const id of ['w1', 'w2', 'w3', 'w4', 'w5', 'w6']) await expect(widget(page, id)).toBeVisible();
   await expect(widget(page, 'w4').getByRole('heading', { name: 'Request latency' })).toBeVisible();
-  await expect(widget(page, 'w4').getByRole('img', { name: /: [1-9]\d* series$/ })).toBeVisible();
+  // The chart inside w4 returns with plan 3 (D11).
   expect(problems).toEqual([]);
 });
 

@@ -18,6 +18,8 @@ import {
   METRICS_SCALE_DIR,
   REPORT_DIR,
   REPORTS_DIR,
+  REPORTS_SITE_DIR,
+  type ReportName,
   RUN_CHART_FAILED_JOB,
   RUN_CHART_FAILED_RUN,
   RUN_CHART_HOSTILE_JOB,
@@ -167,6 +169,8 @@ async function convertTo(
       fileURLToPath(out),
       '--title',
       title,
+      '--format',
+      'local',
       ...(config === undefined ? [] : ['--config', config]),
     ],
     env,
@@ -387,6 +391,8 @@ async function buildFixtureReports(): Promise<void> {
     fileURLToPath(reportDir('orphans')),
     '--out',
     fileURLToPath(reportDir('merged')),
+    '--format',
+    'local',
   ]);
 }
 
@@ -418,6 +424,8 @@ async function buildMetricsMergeReports(): Promise<void> {
       ...parts.map((part) => fileURLToPath(new URL(`metrics-${part}/`, REPORTS_DIR))),
       '--out',
       fileURLToPath(reportDir('metrics-merged')),
+      '--format',
+      'local',
     ]),
     convertTo(reportDir('metrics-single'), [fileURLToPath(fixture)], 'metrics fixture'),
   ]);
@@ -434,6 +442,7 @@ async function buildUnfinishedReport(): Promise<void> {
   const report = await Report.create({
     out: fileURLToPath(reportDir('unfinished')),
     title: 'unfinished run',
+    format: 'local',
   });
   await report.addSpans(traces ?? {});
   await report.addLogs(logs ?? {});
@@ -444,20 +453,60 @@ async function buildUnfinishedReport(): Promise<void> {
 }
 
 /**
- * The frozen data folders (`fixtures/reports/format-<n>/`, never edited) completed into reports by
- * `otel-html upgrade`, which writes the current viewer beside the data.
+ * The frozen data folders (`fixtures/reports/format-<n>/`, never edited) converted into format-4 reports by
+ * `otel-html merge`, which writes the current viewer beside the data (D12: the viewer reads format 4 only).
  */
 async function buildFrozenReports(): Promise<void> {
   for (const n of [1, 2, 3] as const) {
-    const dir = fileURLToPath(reportDir(`frozen-format-${n}`));
-    await cp(fileURLToPath(new URL(`../fixtures/reports/format-${n}/data`, import.meta.url)), `${dir}data`, {
-      recursive: true,
-    });
-    await cli(['upgrade', dir]);
+    await cli([
+      'merge',
+      fileURLToPath(new URL(`../fixtures/reports/format-${n}`, import.meta.url)),
+      '--out',
+      fileURLToPath(reportDir(`frozen-format-${n}`)),
+      '--format',
+      'local',
+    ]);
   }
 }
 
+/** The reports `e2e/global-setup.ts` mounts over HTTP that are built into `REPORTS_DIR` (`large` is file only). */
+const SITE_REPORTS: readonly ReportName[] = [
+  'main',
+  'hostile',
+  'merged',
+  'metrics-merged',
+  'metrics-single',
+  'unfinished',
+  'dashboards',
+  'dashboards-hostile',
+  'run-charts',
+  'frozen-format-1',
+  'frozen-format-2',
+  'frozen-format-3',
+  ...FIXTURE_REPORTS,
+];
+
+/**
+ * A `site` copy of every mounted report under `REPORTS_SITE_DIR` (a plain copy, then `upgrade --format site`), so
+ * the `@http` tests read partitions with Range requests. `no-manifest` is the copy of `main` without its manifest.
+ */
+async function buildSiteCopies(): Promise<void> {
+  await Promise.all(
+    SITE_REPORTS.map(async (name) => {
+      const dest = fileURLToPath(reportDir(name, 'http'));
+      await cp(fileURLToPath(reportDir(name)), dest, { recursive: true });
+      // `unfinished` is never closed, so its writer's lock names this (live) process; the copy is a snapshot.
+      await rm(`${dest}data/state/lock.json`, { force: true });
+      await cli(['upgrade', dest, '--format', 'site']);
+    }),
+  );
+  const noManifest = reportDir('no-manifest', 'http');
+  await cp(reportDir('main', 'http'), noManifest, { recursive: true });
+  await rm(new URL('data/manifest.js', noManifest));
+}
+
 await rm(REPORTS_DIR, { recursive: true, force: true });
+await rm(REPORTS_SITE_DIR, { recursive: true, force: true });
 // The on-demand metrics scale report is built from `dist`, which a rebuild of the fixtures may have changed.
 await rm(METRICS_SCALE_DIR, { recursive: true, force: true });
 await Promise.all([
@@ -470,3 +519,4 @@ await Promise.all([
   buildRunChartReport(),
   buildFrozenReports(),
 ]);
+await buildSiteCopies();

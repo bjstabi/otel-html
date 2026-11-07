@@ -3,7 +3,7 @@ import type { LevelData, LoadedMetric, LoadedSeries } from './metric-load.js';
 import { coarsenedTo, type MetricQuery, runAtLevel } from './metric-query.js';
 import { checkShow, kindOf } from './metric-tables.js';
 import { compileSelector, targetOf } from './metric-where.js';
-import type { TimeWindow } from './span-query.js';
+import type { TimeWindow } from './time-window.js';
 
 // One value per line per run of a metric (spec §6): the data of a run chart.
 

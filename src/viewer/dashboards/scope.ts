@@ -12,7 +12,7 @@ import {
   facetToken,
   tokensToOttl,
 } from '../components/filter-tokens.js';
-import type { TimeWindow } from '../data/span-query.js';
+import type { TimeWindow } from '../data/time-window.js';
 import type { DashboardPageState } from '../state/dashboard-state.js';
 
 export interface VariableBinding {
