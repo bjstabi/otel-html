@@ -81,16 +81,28 @@ export function jsonPointer(keys: readonly (string | number)[]): string {
   return keys.map((k) => `/${String(k).replaceAll('~', '~0').replaceAll('/', '~1')}`).join('');
 }
 
-/** `json_extract(<col>, '<pointer>')` (JSON typed); no keys is the whole document. */
-export function jsonAt(col: string, keys: readonly (string | number)[]): ExprNode {
-  if (keys.length === 0) return sql`CAST(${column(col)} AS JSON)`;
-  return sql`json_extract(${column(col)}, ${literal(jsonPointer(keys))})`;
+/**
+ * One step into a JSON value. An object that holds a `$`-prefixed or `__proto__` key is stored as the pairs form
+ * `{"$m": [[key, value], ...]}` (format 4), so a string key is looked up in the object and, failing that, in the pairs.
+ * A missing key is SQL NULL, a JSON null stays JSON null.
+ */
+function jsonStep(base: ExprNode, key: string | number): ExprNode {
+  const plain = sql`json_extract(${base}, ${literal(jsonPointer([key]))})`;
+  if (typeof key !== 'string') return plain;
+  const pairs = sql`list_extract(list_transform(list_filter(from_json(json_extract(${base}, '/$m'), '["JSON"]'), (x) -> json_extract_string(x, '/0') = ${literal(key)}), (x) -> json_extract(x, '/1')), 1)`;
+  return sql`coalesce(${plain}, ${pairs})`;
 }
 
-/** `json_extract_string(<col>, '<pointer>')` (VARCHAR); a JSON null or a missing key is NULL. */
+/** The JSON value at `keys` (JSON typed, reading the `$m` pairs form at every level); no keys is the whole document. */
+export function jsonAt(col: string, keys: readonly (string | number)[]): ExprNode {
+  let node: ExprNode = sql`CAST(${column(col)} AS JSON)`;
+  for (const k of keys) node = jsonStep(node, k);
+  return node;
+}
+
+/** `json_extract_string` of the same value (VARCHAR); a JSON null or a missing key is NULL. */
 export function jsonStringAt(col: string, keys: readonly (string | number)[]): ExprNode {
-  if (keys.length === 0) return sql`json_extract_string(${column(col)}, '$')`;
-  return sql`json_extract_string(${column(col)}, ${literal(jsonPointer(keys))})`;
+  return sql`json_extract_string(${jsonAt(col, keys)}, '$')`;
 }
 
 /** A JSON value as DOUBLE: plain numbers directly, `{"$i"}` / `{"$d"}` through TRY_CAST of the tag text, else NULL. */

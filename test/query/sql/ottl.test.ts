@@ -9,7 +9,10 @@ const NUM = (at: string) => `CASE json_type(${at})
     WHEN 'DOUBLE' THEN TRY_CAST(${at} AS DOUBLE)
     WHEN 'OBJECT' THEN TRY_CAST(COALESCE(json_extract_string(${at}, '/$i'), json_extract_string(${at}, '/$d')) AS DOUBLE)
     ELSE NULL END`;
-const AT = `json_extract("attributes", '/http.status_code')`;
+/** One key read from a JSON column: the object member, else the `{"$m": [[k, v], ...]}` pair. */
+const STEP = (col: string, key: string) =>
+  `coalesce(json_extract(CAST("${col}" AS JSON), '/${key}'), list_extract(list_transform(list_filter(from_json(json_extract(CAST("${col}" AS JSON), '/$m'), '["JSON"]'), (x) -> json_extract_string(x, '/0') = '${key}'), (x) -> json_extract(x, '/1')), 1))`;
+const AT = STEP('attributes', 'http.status_code');
 const NUM_GE_500 = `coalesce(((NOT isnan(${NUM(AT)})) AND (${NUM(AT)} >= 500)), FALSE)`;
 
 const cases: [string, SqlContext, string, string | null][] = [
@@ -19,7 +22,7 @@ const cases: [string, SqlContext, string, string | null][] = [
   [
     'resource.attributes["service.name"] == "web" and IsMatch(name, "^GET")',
     'span',
-    `(coalesce(((json_type(json_extract("resource_attributes", '/service.name')) = 'VARCHAR') AND (json_extract_string("resource_attributes", '/service.name') = 'web')), FALSE) AND regexp_matches(coalesce("name", ''), '^GET'))`,
+    `(coalesce(((json_type(${STEP('resource_attributes', 'service.name')}) = 'VARCHAR') AND (json_extract_string(${STEP('resource_attributes', 'service.name')}, '$') = 'web')), FALSE) AND regexp_matches(coalesce("name", ''), '^GET'))`,
     null,
   ],
   [

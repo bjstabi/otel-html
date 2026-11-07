@@ -135,8 +135,8 @@ const isTime = (o: Operand): boolean => o.canon !== DIFF && o.canon.endsWith('_t
  * The JSON value at an operand's keys. Refused (so the term stays in the browser): keys whose JSON Pointer reading
  * differs from OTTL's (digit-only and `-` segments index arrays in a pointer; a first attribute key must be a
  * string) and keys that the writer stores as a `{"$m":[[k,v],...]}` map (`$`-prefixed or `__proto__`).
- * Known gap, accepted: a map elsewhere in a row that has such a key is stored as `$m`, so a lookup by any other
- * key in that map misses; a numeric key into an object (OTTL nil) reads the member named like the number.
+ * A map elsewhere in a row that has such a key is stored as `$m` too; `jsonAt` reads both forms. A numeric key into an
+ * object (OTTL nil) reads the member named like the number.
  */
 function jsonOperand(o: Operand): ExprNode {
   if (o.canon === 'body.string')
