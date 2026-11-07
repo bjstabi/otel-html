@@ -174,7 +174,7 @@ jobs:
       # Each browser reports on its own; one failing browser must not hide the others' results.
       fail-fast: false
       matrix:
-        # Only the chromium leg runs the @perf pass, the HTTP project and e2e/scale.spec.ts (playwright.config.ts).
+        # Only the chromium leg runs the HTTP project and the @perf passes (-perf-file, and -perf-http with e2e/scale.spec.ts).
         project: [chromium, firefox, webkit]
     runs-on: ubuntu-latest
     # The official image ships all three browsers and their OS libraries, matching @playwright/test (keep this tag
@@ -213,7 +213,7 @@ jobs:
       # --skip-deps also skips e2e:fixtures' own e2e:otel-recorder dependency, which e2e/otel.spec.ts needs.
       - run: mise run --skip-deps e2e:otel-recorder
       - run: mise run --skip-deps e2e:fixtures
-      # `--browser` selects the `<browser>-file` and (chromium) `-http` projects, then the chromium `-perf-file` pass.
+      # `--browser` selects the `<browser>-file` and (chromium) `-http` projects, then the chromium `-perf-file` and `-perf-http` passes.
       - run: mise run --skip-deps test:e2e --browser ${{ matrix.project }}
       # The reporter is `list`, so failure traces and screenshots land in test-results/.
       - if: always()
