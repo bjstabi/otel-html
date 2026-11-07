@@ -1,9 +1,8 @@
 import { AsyncDuckDB, type AsyncDuckDBConnection, VoidLogger } from '@duckdb/duckdb-wasm';
 import { ENGINE_WASM_KEY, ENGINE_WORKER_KEY, engineAssetNames } from '../../../format/engine.js';
 import type { ManifestV4 } from '../../../format/manifest.js';
-import { OtelHtmlError } from '../../../model/errors.js';
 import type { ScriptLoader } from '../script-loader.js';
-import { fromBase64, gunzip, toBase64 } from './bytes.js';
+import { fromBase64, gunzip, loadText, toBase64 } from './bytes.js';
 
 export interface EngineDeps {
   loader: ScriptLoader;
@@ -28,19 +27,6 @@ export function engineUrls(engine: ManifestV4['engine'], baseUrl: string): { was
     (name) => new URL(engine.assetsBase + name, baseUrl).href,
   );
   return { wasm: wasm as string, worker: worker as string };
-}
-
-async function loadText(loader: ScriptLoader, path: string, key: string): Promise<string> {
-  const payload = await loader.load(path, key);
-  // The wrapper pushes its base64 payload as a string; anything else is a broken wrapper.
-  if (typeof payload !== 'string') {
-    throw new OtelHtmlError('invalid-report', {
-      path,
-      expected: 'a base64 string',
-      actual: typeof payload,
-    });
-  }
-  return payload;
 }
 
 async function startLocal(urls: { wasm: string; worker: string }, deps: EngineDeps) {

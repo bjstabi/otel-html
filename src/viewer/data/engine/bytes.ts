@@ -1,3 +1,6 @@
+import { OtelHtmlError } from '../../../model/errors.js';
+import type { ScriptLoader } from '../script-loader.js';
+
 /** `Uint8Array.fromBase64` and `#toBase64` are not in every supported browser yet; fall back to atob/btoa. */
 interface Base64Bytes {
   fromBase64?: (s: string) => Uint8Array;
@@ -28,4 +31,18 @@ export function toBase64(bytes: Uint8Array): string {
 export async function gunzip(bytes: Uint8Array): Promise<Uint8Array> {
   const stream = new Blob([bytes as BlobPart]).stream().pipeThrough(new DecompressionStream('gzip'));
   return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+/** Loads a base64 wrapper and narrows its payload to a string; invalid-report naming the file otherwise. */
+export async function loadText(loader: ScriptLoader, path: string, key: string): Promise<string> {
+  const payload = await loader.load(path, key);
+  // The wrapper pushes its base64 payload as a string; anything else is a broken wrapper.
+  if (typeof payload !== 'string') {
+    throw new OtelHtmlError('invalid-report', {
+      path,
+      expected: 'a base64 string',
+      actual: typeof payload,
+    });
+  }
+  return payload;
 }
