@@ -178,6 +178,10 @@ export function createMemoryFileSystem(options: { pieces?: boolean } = {}): File
       for (const f of [...files.keys()]) if (f === p || f.startsWith(prefix)) files.delete(f);
       for (const d of [...dirs]) if (d === p || d.startsWith(prefix)) dirs.delete(d);
     },
+    async entryKind(rawP) {
+      const p = norm(rawP);
+      return files.has(p) ? 'file' : isDir(p) ? 'dir' : 'missing';
+    },
     async realpath(rawP) {
       const p = norm(rawP);
       return p;

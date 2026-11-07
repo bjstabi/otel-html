@@ -921,7 +921,9 @@ class Session implements WriterSession {
     const { fs, viewerAssets } = this.#deps;
     await writeViewerAssets(fs, this.#out, viewerAssets);
     // A report replaced from format 4 may still hold its engine files.
-    await pruneOwnAssets(fs, this.#out, { format: 'chunks', sharedBase: false });
+    if (!(await pruneOwnAssets(fs, this.#out, { format: 'chunks', sharedBase: false }))) {
+      this.#deps.logger.debug('assets/ links out of the report; left alone', { out: this.#out });
+    }
     await fs.writeTextAtomic(at(this.#out, 'index.html'), renderIndexHtml(viewerAssets.entry(), this.#title));
     await fs.writeTextAtomic(at(this.#out, '.nojekyll'), '');
     this.#shellWritten = true;

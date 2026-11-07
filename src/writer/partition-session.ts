@@ -676,7 +676,9 @@ class PartitionSession implements WriterSession {
     if (!sharedBase) await writeViewerAssets(fs, this.#out, viewerAssets, format);
     // Files an earlier session left that this one does not load (engine files of another format or version; with a
     // shared base, the viewer files too) are dead weight, tens of MB.
-    await pruneOwnAssets(fs, this.#out, { format, sharedBase });
+    if (!(await pruneOwnAssets(fs, this.#out, { format, sharedBase }))) {
+      this.#deps.logger.debug('assets/ links out of the report; left alone', { out: this.#out });
+    }
     await fs.writeTextAtomic(
       at(this.#out, 'index.html'),
       renderIndexHtml(viewerAssets.entry(), this.#title, { assetsBase }),
