@@ -123,7 +123,7 @@ describe('log refs', () => {
   test.each(['', '12', '12.', '.3', 'a.b', '1.2.3', '-1.2', '01.2x'])('rejects %j', (s) => {
     expect(() => parseLogRef(s, 'url.log')).toThrowError(/url\.log/);
   });
-  test('toLogEntries assigns <chunk>.<row> refs', () => {
+  test('toLogEntries assigns <partition>.<row> refs', () => {
     const e = entriesOf([log(), log()], 7);
     expect(e.map((x) => x.row.ref)).toEqual(['7.0', '7.1']);
   });

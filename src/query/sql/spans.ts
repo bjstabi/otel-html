@@ -291,7 +291,7 @@ export function serviceBucketsQuery(f: SqlFilter, services: readonly string[], s
 
 const SCALAR_KINDS = verbatim(`('string', 'int', 'double', 'bool')`);
 
-/** The distinct scalar values (`value`, `kind`) a resource attribute takes over spans, logs and points; `cap + 1` rows. */
+/** The distinct scalar values of a resource attribute over spans, logs and points: (`value`, `kind`), `kind` `mixed` when the value's text appears under several kinds; `cap + 1` rows by value. */
 export function resourceValuesQuery(key: string, cap: number): Query {
   const of = (table: 'spans' | 'logs' | 'points'): Query =>
     Query.from(table)
@@ -302,8 +302,12 @@ export function resourceValuesQuery(key: string, cap: number): Query {
       .distinct();
   const all = Query.union(of('spans'), of('logs'), of('points'));
   return Query.from({ u: all })
-    .select('value', 'kind')
+    .select({
+      value: column('value'),
+      kind: sql`CASE WHEN min(kind) = max(kind) THEN min(kind) ELSE 'mixed' END`,
+    })
     .where(sql`value IS NOT NULL AND kind IN ${SCALAR_KINDS}`)
-    .orderby('value', 'kind')
+    .groupby('value')
+    .orderby('value')
     .limit(cap + 1);
 }
