@@ -31,8 +31,8 @@ The maintainer works from the console only and does not open files, so a fresh s
 1. No PR with title prefix `feat(format): Arrow schemas` merged → **session A** (execute this plan; resume at the first
    plan task whose PR is not merged).
 2. This plan's nine PRs merged and no `*-format-4-viewer.md` plan → **session B**.
-3. The viewer plan exists and its PRs are not all merged → **session C** (execute it; its prompt is in this section once
-   session B adds it).
+3. The viewer plan exists and its nine PRs (the first titled `feat(viewer): DuckDB-WASM engine start`, the last
+   `docs(format): the five views are the viewer's contract`) are not all merged → **session C** (execute it).
 4. The viewer plan is merged and no `*-format-4-metrics.md` → **session D**; metrics plan exists, not merged → execute it.
 5. Metrics merged and no `*-format-4-host.md` → **session E**; host plan exists, not merged → execute it.
 6. Plans 1–3 merged and no PR from `feat/format-4` to `main` → **session F**.
@@ -61,7 +61,13 @@ Context: this is plan 1 of the format-4 design (docs/superpowers/specs/2026-11-0
 Write plan 2 of the format-4 spec (docs/superpowers/specs/2026-11-06-parquet-duckdb-format-4-design.md §7: the Mosaic data layer, the five views, OTTL to SQL, Traces and Logs pages, Services, the dashboards' span and log widgets, deleting the scan code, flipping writer.format's default to local and removing chunks, the e2e re-baseline in site format, and the publisher switch) with superpowers:writing-plans. Skip brainstorming: the spec is approved. Read docs/superpowers/plans/2026-11-06-format-4-writer.md first for the interfaces plan 1 produced and for the "Kickoff prompts" section, run the builder check, and save as docs/superpowers/plans/<date>-format-4-viewer.md on feat/format-4, adding its own execution prompt to that section. Same process: unattended, PRs target feat/format-4.
 ```
 
-**Session C, execute plan 2:** the prompt session B adds here.
+**Session C, execute plan 2 (the viewer):**
+
+```
+Execute docs/superpowers/plans/2026-11-07-format-4-viewer.md with superpowers:subagent-driven-development.
+
+Context: this is plan 2 of the format-4 design (docs/superpowers/specs/2026-11-06-parquet-duckdb-format-4-design.md §7, read with the "Record: rulings and notes for plan 2" at the end of docs/superpowers/plans/2026-11-06-format-4-writer.md, which wins over the spec). The plan's "Decisions this plan makes" section (D1 to D18) is approved with the plan; apply them without re-deciding. The PR process is unattended (docs/agents/process-unattended.md): every PR targets feat/format-4, not main, and the next PR branches from the updated feat/format-4. PR 8 edits the publisher action and CI config: stop and ask before its Tasks 8.2 and 8.3, as the plan says. Per CLAUDE.md, implementers and task reviewers run on Sonnet 5.5 and the branch review on Opus 5.5; say which model each review ran on. Resume at the first plan task whose PR is not merged (`gh pr list --base feat/format-4 --state all`), from `git switch feat/format-4`. Stop and ask only where the process or the plan says to.
+```
 
 **Session D, write plan 3 (metrics in the viewer):**
 
