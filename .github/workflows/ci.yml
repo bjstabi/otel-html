@@ -363,7 +363,7 @@ jobs:
           OTEL_HTML_BINARY: dist/bin/otel-html-${{ matrix.target }}${{ matrix.ext }}
         run: pnpm exec vitest run test/cli/binary.test.ts
       # The binary run from a directory outside the checkout, so a path baked in at build time (parquet-wasm's WASM)
-      # cannot be found: a site-format convert must still write a Parquet partition.
+      # cannot be found: a site-format convert must still write a Parquet partition, and a compaction must still run.
       - name: Binary runs outside the checkout (format site)
         shell: bash
         env:
@@ -373,6 +373,8 @@ jobs:
           tmp="$(mktemp -d)"
           cp "$BIN" "$tmp/otel-html${{ matrix.ext }}"
           cp fixtures/linked-traces.otlp.json "$tmp/in.otlp.json"
+          for f in linked-logs logs-only small metrics ci; do cp "fixtures/$f.otlp.json" "$tmp/$f.otlp.json"; done
+          printf 'writer:\n  format: site\n  chunkTargetBytes: 2000\n' > "$tmp/small-chunks.yaml"
           # The checkout's node_modules is where the inlined path would point; rename it (in place: a move across
           # drives would copy the tree on Windows) for the run. The trap goes first so a failure restores it.
           root="$PWD"
@@ -381,6 +383,12 @@ jobs:
           cd "$tmp"
           OTEL_HTML_FORMAT=site ./otel-html${{ matrix.ext }} convert in.otlp.json -o out
           test -s out/data/partitions/000000/spans.parquet
+          # A small chunk target makes hundreds of flush partitions, which close compacts into one: that runs the
+          # streaming reader and writer, the merge rounds and the directory removal inside the binary.
+          ./otel-html${{ matrix.ext }} convert --config small-chunks.yaml in.otlp.json linked-logs.otlp.json \
+            logs-only.otlp.json small.otlp.json metrics.otlp.json ci.otlp.json -o out2
+          test "$(ls out2/data/partitions | wc -l | tr -d ' ')" = 1
+          grep -q '"source":"compact:' out2/data/manifest.js
       - if: always()
         uses: ./.github/actions/otel-html-collect
         with:
