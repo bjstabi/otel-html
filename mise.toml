@@ -452,8 +452,8 @@ outputs = ["e2e/.reports-site/**", "e2e/.reports/**"]
 run = "bun e2e/build-fixtures.ts"
 
 # The scale reports are split from their viewer: the data needs the writer (the build:lib outputs) and the generators,
-# the viewer only dist/viewer. A viewer change runs `upgrade` (byte-identical to a fresh convert) instead of converting
-# 1M logs twice again.
+# the viewer only dist/viewer. A viewer change runs `upgrade` (byte-identical to a fresh convert) instead of writing
+# 1M logs again.
 [tasks."e2e:fixtures:scale:data"]
 description = """Write the e2e `scale` and `many` reports (site format) into e2e/.reports-scale/ (skipped while up to date)
 100k spans and 1M logs, converted once (`scale`) and written through the library in 100 flushes (`many`) (~1 GB of memory). Its sources are the writer's build output,
@@ -470,7 +470,6 @@ sources = [
   "test-support/fixture-ids.ts",
   "test-support/otlp-builders.ts",
   "test-support/scale-logs.ts",
-  "test-support/scale-metrics.ts",
 ]
 outputs = ["e2e/.reports-scale/**"]
 run = "bun e2e/build-scale-fixtures.ts"

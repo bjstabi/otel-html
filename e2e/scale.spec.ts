@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { wantsAsset } from '../src/writer/viewer-assets.js';
-import { LOG_STEP_NS } from '../test-support/scale-logs.js';
+import { LOG_STEP_NS, LOGS_PER_TRACE_SLOT, scaleLogTrace } from '../test-support/scale-logs.js';
 import { scaleMetricName } from '../test-support/scale-metrics.js';
 import {
   FUSION_INTERACTIVE_BUDGET_MS,
@@ -10,6 +10,7 @@ import {
   perfFactor,
   reportDir,
   SCALE_CHARTED_METRIC,
+  SCALE_LOG_IDS,
   SCALE_LOGS,
   SCALE_METRIC_SERIES,
   SCALE_METRICS,
@@ -186,7 +187,7 @@ async function loadSamples<T>(
 
 for (const name of ['scale', 'many'] as const) {
   test(
-    `100k spans (${name}): the explorer is interactive within 3 s (median)`,
+    `100k spans (${name}): the explorer is interactive within ${EXPLORER_BUDGET_MS[name]} ms (median)`,
     PERF_HTTP,
     async ({ page, reportUrl, browserName }, testInfo) => {
       const factor = perfFactor();
@@ -205,7 +206,7 @@ for (const name of ['scale', 'many'] as const) {
 }
 
 test(
-  '100k spans: a facet toggle repaints within 150 ms (median)',
+  `100k spans: a facet toggle repaints within ${FACET_BUDGET_MS} ms (median)`,
   PERF_HTTP,
   async ({ page, reportUrl, browserName }, testInfo) => {
     const factor = perfFactor();
@@ -287,7 +288,7 @@ test(
 const WARN_UP = 'log.severity_number >= SEVERITY_NUMBER_WARN';
 
 test(
-  '1M logs: the Logs landing is interactive within 3 s (median)',
+  `1M logs: the Logs landing is interactive within ${LOGS_LANDING_BUDGET_MS} ms (median)`,
   PERF_HTTP,
   async ({ page, reportUrl, browserName }, testInfo) => {
     const factor = perfFactor();
@@ -307,7 +308,7 @@ test(
 );
 
 test(
-  '1M logs: a one-minute window of warn-and-above logs is ready within 1 s (median)',
+  `1M logs: a one-minute window of warn-and-above logs is ready within ${LOGS_WINDOW_BUDGET_MS} ms (median)`,
   PERF_HTTP,
   async ({ page, reportUrl, browserName }, testInfo) => {
     const factor = perfFactor();
@@ -341,20 +342,23 @@ interface PartitionEntry {
   files: { [table in 'traces' | 'logs']?: { path: string; timeMin: string; timeMax: string } };
 }
 
-function manifestPartitions(name: 'scale' | 'many'): PartitionEntry[] {
+function readManifest(name: 'scale' | 'many'): { complete: boolean; partitions: PartitionEntry[] } {
   const body = readFileSync(new URL('data/manifest.js', reportDir(name, 'http')), 'utf8');
-  const manifest = JSON.parse(body.slice(body.indexOf(',') + 1, body.lastIndexOf(')'))) as {
+  return JSON.parse(body.slice(body.indexOf(',') + 1, body.lastIndexOf(')'))) as {
+    complete: boolean;
     partitions: PartitionEntry[];
   };
-  return manifest.partitions;
 }
 
 test(
   '1M logs: a trace Logs tab reads only the partitions the traces table names',
   PERF_HTTP,
   async ({ page, reportUrl }, testInfo) => {
-    const partitions = manifestPartitions('many');
+    // `many` is the never-closed report of about 100 uncompacted partitions (build-scale-fixtures.ts).
+    const { complete, partitions } = readManifest('many');
+    expect(complete).toBe(false);
     expect(partitions.length).toBeGreaterThanOrEqual(100);
+    expect(partitions.length).toBeLessThanOrEqual(110);
     // A trace in the middle of the run: its row sits in one partition, and so do its logs (the writer flushes a
     // trace's spans and logs together; `many` flushes every 20 traces and the 10 000 logs that go with them).
     const index = Math.floor(SCALE_TRACES / 2);
@@ -370,6 +374,8 @@ test(
     const allowed = [...own, ...partitions.slice(0, 1)].flatMap((p) =>
       p.files.logs ? [p.files.logs.path] : [],
     );
+    // `/__requests` is append-only and shared by every test of the server, so what a test reads after a run is its own
+    // only because the perf projects run with `--workers=1` (`test:e2e`'s perf pass; `workers` is not a project option).
     const port = process.env[PORT_ENV];
     const base = `http://127.0.0.1:${port}`;
     const seen = async (): Promise<RequestRecord[]> =>
@@ -379,7 +385,12 @@ test(
     await page.goto(`${reportUrl('many')}/index.html#/traces?trace=${traceId}&tab=logs`);
     const tab = page.getByTestId('trace-logs-tab');
     await expect(tab.getByRole('row').nth(1)).toBeVisible({ timeout: 30_000 });
-    await expect(tab).toContainText(/\d+ logs/);
+    // The logs the generator gives this trace, which the viewer must list whole.
+    let expected = 0;
+    for (let i = index * LOGS_PER_TRACE_SLOT; i < (index + 1) * LOGS_PER_TRACE_SLOT; i++)
+      if (scaleLogTrace(i, SCALE_LOG_IDS) === index) expected++;
+    expect(expected).toBeGreaterThan(0);
+    await expect(tab).toContainText(`${expected} logs`);
 
     const prefix = new URL(reportUrl('many')).pathname;
     const mine = (await seen()).slice(before).filter((r) => r.path.startsWith(`${prefix}/data/partitions/`));
@@ -401,7 +412,7 @@ test(
  * Logs says it shows the selected trace and is not loading. The Metrics frame is left out until the metrics plan.
  */
 test(
-  '100k spans, 1M logs: Fusion is interactive within 3 s and a trace click updates Logs within 1 s',
+  `100k spans, 1M logs: Fusion is interactive within ${FUSION_INTERACTIVE_BUDGET_MS} ms and a trace click updates Logs within ${FUSION_SELECTION_BUDGET_MS} ms`,
   PERF_HTTP,
   async ({ page, reportUrl, browserName }, testInfo) => {
     const factor = perfFactor();
