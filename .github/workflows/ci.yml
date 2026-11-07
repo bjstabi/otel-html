@@ -387,7 +387,7 @@ jobs:
           # streaming reader and writer, the merge rounds and the directory removal inside the binary.
           ./otel-html${{ matrix.ext }} convert --config small-chunks.yaml in.otlp.json linked-logs.otlp.json \
             logs-only.otlp.json small.otlp.json metrics.otlp.json ci.otlp.json -o out2
-          test "$(ls out2/data/partitions | wc -l | tr -d ' ')" = 1
+          test "$(find out2/data/partitions -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')" = 1
           grep -q '"source":"compact:' out2/data/manifest.js
       - if: always()
         uses: ./.github/actions/otel-html-collect
