@@ -42,14 +42,25 @@ export async function residualIdTable(
   const name = `otel_residual_${++tables}`;
   const lines = ids.map((i) => `${csvCell(i.filename)},${i.row}`);
   await engine.registerText(`${name}.csv`, ['filename,file_row_number', ...lines].join('\n'));
-  await engine.exec(
-    `CREATE TEMP TABLE ${name} AS SELECT * FROM read_csv('${name}.csv', header = true, columns = {'filename': 'VARCHAR', 'file_row_number': 'BIGINT'})`,
-  );
+  try {
+    await engine.exec(
+      `CREATE TEMP TABLE ${name} AS SELECT * FROM read_csv('${name}.csv', header = true, columns = {'filename': 'VARCHAR', 'file_row_number': 'BIGINT'})`,
+    );
+  } catch (error) {
+    await engine.registerText(`${name}.csv`, '').catch(() => undefined); // do not leave the text registered
+    throw error;
+  }
   return name;
 }
 
-/** Drops a table `residualIdTable` made and empties its registered text. */
+/**
+ * Drops a table `residualIdTable` made and empties its registered text. Both steps always run; the first failure is
+ * rethrown after the second ran.
+ */
 export async function dropResidualTable(engine: QueryEngine, name: string): Promise<void> {
-  await engine.exec(`DROP TABLE IF EXISTS ${name}`);
-  await engine.registerText(`${name}.csv`, '');
+  const results = await Promise.allSettled([
+    engine.exec(`DROP TABLE IF EXISTS ${name}`),
+    engine.registerText(`${name}.csv`, ''),
+  ]);
+  for (const r of results) if (r.status === 'rejected') throw r.reason;
 }

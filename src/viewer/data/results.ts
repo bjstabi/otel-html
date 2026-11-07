@@ -56,6 +56,7 @@ export interface GroupStats {
 export interface GroupStatsResult {
   groups: readonly GroupStats[];
   cap: number;
+  /** 0 or 1: 1 means more groups than `cap` exist (the query cannot count them). */
   dropped: number;
 }
 
@@ -75,6 +76,7 @@ export interface ServiceStats {
 
 export interface ServicesResult {
   services: readonly ServiceStats[];
+  /** The services found; `limit + 1` when more than `limit` exist (the query does not count past that). */
   total: number;
 }
 
@@ -121,6 +123,10 @@ export interface RowTables {
 
 export interface SpanQueryResult {
   rows: readonly (SpanRow | TraceRow)[];
+  /**
+   * Matches before the row limit. With a residual condition in spans mode it is exact when every candidate was read;
+   * when the page budget (8 pages of `limit`) ended first it is the candidate count, an upper bound.
+   */
   total: number;
   facets: FacetCounts;
   buckets: TimeBuckets<SpanStatusKey>;

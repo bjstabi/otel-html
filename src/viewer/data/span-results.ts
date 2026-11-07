@@ -56,7 +56,7 @@ function real(v: unknown, path: string): number | null {
 }
 
 /** One cell of a result row. */
-export const c = (row: ResultRow, name: string): unknown => row[name];
+export const cell = (row: ResultRow, name: string): unknown => row[name];
 
 const text = (v: unknown): string => (typeof v === 'string' ? v : '');
 
@@ -88,26 +88,26 @@ export function spanEntries(t: Table, epoch: bigint): { entries: SpanEntry[]; to
   const rows = rowsOf(t);
   const entries = rows.map((row): SpanEntry => {
     const { span, shared } = spanFromRow(
-      { ...row, start_time_unix_nano: c(row, 'start_ns'), end_time_unix_nano: c(row, 'end_ns') },
+      { ...row, start_time_unix_nano: cell(row, 'start_ns'), end_time_unix_nano: cell(row, 'end_ns') },
       epoch,
     );
     return {
       span,
-      service: text(c(row, 'service_name')),
-      resource: text(c(row, 'resource_name')),
-      durationNs: toNumber(c(row, 'duration_ns'), 'duration_ns'),
+      service: text(cell(row, 'service_name')),
+      resource: text(cell(row, 'resource_name')),
+      durationNs: toNumber(cell(row, 'duration_ns'), 'duration_ns'),
       shared,
-      filename: text(c(row, 'filename')),
-      fileRow: toNumber(c(row, 'file_row_number'), 'file_row_number'),
+      filename: text(cell(row, 'filename')),
+      fileRow: toNumber(cell(row, 'file_row_number'), 'file_row_number'),
     };
   });
   const first = rows[0];
   return {
     entries,
     total:
-      first === undefined || c(first, 'total') === undefined
+      first === undefined || cell(first, 'total') === undefined
         ? entries.length
-        : toNumber(c(first, 'total'), 'total'),
+        : toNumber(cell(first, 'total'), 'total'),
   };
 }
 
@@ -139,23 +139,23 @@ export function traceRows(t: Table): { rows: TraceRow[]; total: number } {
   const rows = rowsOf(t);
   const out = rows.map(
     (r): TraceRow => ({
-      traceId: text(c(r, 'trace_id')) as TraceId,
+      traceId: text(cell(r, 'trace_id')) as TraceId,
       rootSummary:
-        typeof c(r, 'root_name') === 'string'
+        typeof cell(r, 'root_name') === 'string'
           ? {
-              service: text(c(r, 'root_service')),
-              name: text(c(r, 'root_name')),
-              resource: text(c(r, 'root_resource')),
+              service: text(cell(r, 'root_service')),
+              name: text(cell(r, 'root_name')),
+              resource: text(cell(r, 'root_resource')),
             }
           : null,
-      start: real(c(r, 'start_ns'), 'start_ns') ?? 0,
-      durationNs: real(c(r, 'duration_ns'), 'duration_ns') ?? 0,
-      spans: toNumber(c(r, 'span_count'), 'span_count'),
-      errors: toNumber(c(r, 'error_count'), 'error_count'),
+      start: real(cell(r, 'start_ns'), 'start_ns') ?? 0,
+      durationNs: real(cell(r, 'duration_ns'), 'duration_ns') ?? 0,
+      spans: toNumber(cell(r, 'span_count'), 'span_count'),
+      errors: toNumber(cell(r, 'error_count'), 'error_count'),
     }),
   );
   const first = rows[0];
-  return { rows: out, total: first === undefined ? 0 : toNumber(c(first, 'total'), 'total') };
+  return { rows: out, total: first === undefined ? 0 : toNumber(cell(first, 'total'), 'total') };
 }
 
 /**
@@ -180,28 +180,34 @@ export function facetCounts(
   const keys = new Map<string, Key>();
   const coreKeys = new Set<string>();
   for (const r of core === null ? [] : rowsOf(core)) {
-    const key = text(c(r, 'key'));
+    const key = text(cell(r, 'key'));
     if (only !== null && !only.has(key)) continue;
     coreKeys.add(key);
-    const n = toNumber(c(r, 'n'), 'n');
+    const n = toNumber(cell(r, 'n'), 'n');
     let k = keys.get(key);
     if (k === undefined) {
       k = { key, kind: 'string', total: 0, other: 0, values: [] };
       keys.set(key, k);
     }
     k.total += n;
-    if (k.values.length < caps.facetValueCap) k.values.push([text(c(r, 'value')), n]);
+    if (k.values.length < caps.facetValueCap) k.values.push([text(cell(r, 'value')), n]);
     else k.other += n;
   }
   for (const r of attrs === null ? [] : rowsOf(attrs)) {
-    const key = text(c(r, 'key'));
+    const key = text(cell(r, 'key'));
     if ((only !== null && !only.has(key)) || coreKeys.has(key)) continue;
     let k = keys.get(key);
     if (k === undefined) {
-      k = { key, kind: kindOf(c(r, 'kind')), total: toNumber(c(r, 'total'), 'total'), other: 0, values: [] };
+      k = {
+        key,
+        kind: kindOf(cell(r, 'kind')),
+        total: toNumber(cell(r, 'total'), 'total'),
+        other: 0,
+        values: [],
+      };
       keys.set(key, k);
     }
-    k.values.push([text(c(r, 'value')), toNumber(c(r, 'n'), 'n')]);
+    k.values.push([text(cell(r, 'value')), toNumber(cell(r, 'n'), 'n')]);
   }
   for (const k of keys.values()) {
     const listed = k.values.reduce((s, [, n]) => s + n, 0);
@@ -253,7 +259,7 @@ export function timeline(
 ): { buckets: TimeBuckets<SpanStatusKey>; red: RedBuckets } {
   const rows = rowsOf(t);
   const width = spec.widthNs;
-  const at = rows.map((r) => toNumber(c(r, 'bucket'), 'bucket'));
+  const at = rows.map((r) => toNumber(cell(r, 'bucket'), 'bucket'));
   const grid = gridOf(at, width);
   if (grid === null) {
     return {
@@ -289,13 +295,13 @@ export function timeline(
   const max = red.max as (number | null)[];
   rows.forEach((r, k) => {
     const i = slot(at[k] as number, grid, width);
-    counts[i] = toNumber(c(r, 'n'), 'n');
-    errors[i] = toNumber(c(r, 'errors'), 'errors');
-    [p50[i], p95[i], p99[i]] = quantiles(c(r, 'quantiles'), 'quantiles');
-    max[i] = real(c(r, 'max_duration_ns'), 'max_duration_ns');
-    (status[0] as number[])[i] = toNumber(c(r, 'ok'), 'ok');
-    (status[1] as number[])[i] = toNumber(c(r, 'error'), 'error');
-    (status[2] as number[])[i] = toNumber(c(r, 'unset'), 'unset');
+    counts[i] = toNumber(cell(r, 'n'), 'n');
+    errors[i] = toNumber(cell(r, 'errors'), 'errors');
+    [p50[i], p95[i], p99[i]] = quantiles(cell(r, 'quantiles'), 'quantiles');
+    max[i] = real(cell(r, 'max_duration_ns'), 'max_duration_ns');
+    (status[0] as number[])[i] = toNumber(cell(r, 'ok'), 'ok');
+    (status[1] as number[])[i] = toNumber(cell(r, 'error'), 'error');
+    (status[2] as number[])[i] = toNumber(cell(r, 'unset'), 'unset');
   });
   const buckets = TimeBuckets.from(
     { maxBuckets: MAX_BUCKETS, widthNs: width, startNs: grid.start, keys: [...STATUS_KEYS], counts: status },
@@ -309,14 +315,14 @@ export function timeline(
 export function durationSummary(t: Table): DurationSummary | null {
   const r = rowsOf(t)[0];
   if (r === undefined) return null;
-  const count = toNumber(c(r, 'n'), 'n');
+  const count = toNumber(cell(r, 'n'), 'n');
   if (count === 0) return null;
-  const [p50, p95, p99] = quantiles(c(r, 'quantiles'), 'quantiles');
+  const [p50, p95, p99] = quantiles(cell(r, 'quantiles'), 'quantiles');
   return {
     count,
-    min: real(c(r, 'min_duration_ns'), 'min_duration_ns') ?? 0,
-    max: real(c(r, 'max_duration_ns'), 'max_duration_ns') ?? 0,
-    sum: real(c(r, 'sum_duration_ns'), 'sum_duration_ns') ?? 0,
+    min: real(cell(r, 'min_duration_ns'), 'min_duration_ns') ?? 0,
+    max: real(cell(r, 'max_duration_ns'), 'max_duration_ns') ?? 0,
+    sum: real(cell(r, 'sum_duration_ns'), 'sum_duration_ns') ?? 0,
     p50: p50 ?? 0,
     p95: p95 ?? 0,
     p99: p99 ?? 0,
@@ -327,9 +333,9 @@ export function durationSummary(t: Table): DurationSummary | null {
 export function durationBins(t: Table, axis: readonly { fromNs: number; toNs: number }[]): DurationBin[] {
   const bins: DurationBin[] = axis.map((b) => ({ ...b, count: 0 }));
   for (const r of rowsOf(t)) {
-    const bin = bins[toNumber(c(r, 'bin'), 'bin')];
-    if (bin === undefined) throw bad('bin', 'an index into the axis', c(r, 'bin'));
-    bin.count = toNumber(c(r, 'n'), 'n');
+    const bin = bins[toNumber(cell(r, 'bin'), 'bin')];
+    if (bin === undefined) throw bad('bin', 'an index into the axis', cell(r, 'bin'));
+    bin.count = toNumber(cell(r, 'n'), 'n');
   }
   return bins;
 }
@@ -338,15 +344,15 @@ export function durationBins(t: Table, axis: readonly { fromNs: number; toNs: nu
 export function groupStats(t: Table, cap: number): GroupStatsResult {
   const rows = rowsOf(t);
   const groups = rows.slice(0, cap).map((r): GroupStats => {
-    const count = toNumber(c(r, 'n'), 'n');
-    const sum = real(c(r, 'sum_duration_ns'), 'sum_duration_ns') ?? 0;
-    const [, p95, p99] = quantiles(c(r, 'quantiles'), 'quantiles');
+    const count = toNumber(cell(r, 'n'), 'n');
+    const sum = real(cell(r, 'sum_duration_ns'), 'sum_duration_ns') ?? 0;
+    const [, p95, p99] = quantiles(cell(r, 'quantiles'), 'quantiles');
     return {
-      group: text(c(r, 'value')),
+      group: text(cell(r, 'value')),
       count,
       sum,
       avg: count === 0 ? 0 : sum / count,
-      max: real(c(r, 'max_duration_ns'), 'max_duration_ns') ?? 0,
+      max: real(cell(r, 'max_duration_ns'), 'max_duration_ns') ?? 0,
       p95: p95 ?? 0,
       p99: p99 ?? 0,
     };
@@ -368,31 +374,31 @@ export function serviceStats(
   const kept = rows.slice(0, limit);
   const bucketRows = buckets === null ? [] : rowsOf(buckets);
   const width = spec.widthNs;
-  const at = bucketRows.map((r) => toNumber(c(r, 'bucket'), 'bucket'));
+  const at = bucketRows.map((r) => toNumber(cell(r, 'bucket'), 'bucket'));
   const grid = gridOf(at, width);
   const series = new Map<string, number[]>();
   bucketRows.forEach((r, k) => {
     if (grid === null) return;
-    const name = text(c(r, 'service_name'));
+    const name = text(cell(r, 'service_name'));
     let counts = series.get(name);
     if (counts === undefined) {
       counts = zeros(grid.length);
       series.set(name, counts);
     }
-    counts[slot(at[k] as number, grid, width)] = toNumber(c(r, 'n'), 'n');
+    counts[slot(at[k] as number, grid, width)] = toNumber(cell(r, 'n'), 'n');
   });
   const out = kept.map((r): ServiceStats => {
-    const name = text(c(r, 'service_name'));
-    const [p50, p95, p99] = quantiles(c(r, 'quantiles'), 'quantiles');
+    const name = text(cell(r, 'service_name'));
+    const [p50, p95, p99] = quantiles(cell(r, 'quantiles'), 'quantiles');
     const counts = series.get(name);
     return {
       service: name,
-      requests: toNumber(c(r, 'n'), 'n'),
-      errors: toNumber(c(r, 'errors'), 'errors'),
+      requests: toNumber(cell(r, 'n'), 'n'),
+      errors: toNumber(cell(r, 'errors'), 'errors'),
       p50: p50 ?? 0,
       p95: p95 ?? 0,
       p99: p99 ?? 0,
-      max: real(c(r, 'max_duration_ns'), 'max_duration_ns') ?? 0,
+      max: real(cell(r, 'max_duration_ns'), 'max_duration_ns') ?? 0,
       buckets:
         grid === null || counts === undefined
           ? new TimeBuckets(['count'], MAX_BUCKETS)

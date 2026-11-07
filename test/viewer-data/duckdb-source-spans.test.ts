@@ -3,6 +3,7 @@ import { OtelHtmlError } from '../../src/model/errors.js';
 import { parseTraceId } from '../../src/model/ids.js';
 import { createDuckDbDataSource } from '../../src/viewer/data/duckdb-source.js';
 import { createCoordinator, mosaicQueryEngine } from '../../src/viewer/data/mosaic.js';
+import type { QueryEngine } from '../../src/viewer/data/query-engine.js';
 import { residualRows } from '../../src/viewer/data/residual.js';
 import type { DataSource, SpanQuery, SpanRow, TraceRow } from '../../src/viewer/data/results.js';
 import { toNumber } from '../../src/viewer/data/span-results.js';
@@ -408,5 +409,95 @@ describe('helpers', () => {
     expect(calls).toHaveLength(8);
     const end = await residualRows({ fetch, test: (n) => n >= 98, limit: 50 });
     expect(end).toEqual({ rows: [98, 99], exhausted: true });
+  });
+});
+
+describe('residual cleanup', () => {
+  const leftovers = (): unknown[] =>
+    db.rows("SELECT table_name FROM duckdb_tables() WHERE table_name LIKE 'otel_residual%'");
+
+  /** The real engine with hooks: `query` and `exec` see the call number first; `texts` records every registered text. */
+  function hooked(hooks: {
+    query?: (n: number, run: () => ReturnType<QueryEngine['query']>) => ReturnType<QueryEngine['query']>;
+    exec?: (sql: string, run: () => Promise<void>) => Promise<void>;
+  }) {
+    const base = mosaicQueryEngine(createCoordinator(db.connector, silentLogger), db);
+    const texts = new Map<string, string>();
+    let n = 0;
+    const engine: QueryEngine = {
+      ...base,
+      query: (q, signal) => {
+        n += 1;
+        const run = () => base.query(q, signal);
+        return hooks.query === undefined ? run() : hooks.query(n, run);
+      },
+      exec: (sql) => {
+        const run = () => base.exec(sql);
+        return hooks.exec === undefined ? run() : hooks.exec(sql, run);
+      },
+      registerText: async (name, text) => {
+        texts.set(name, text);
+        await base.registerText(name, text);
+      },
+    };
+    const warnings: string[] = [];
+    const source = createDuckDbDataSource({
+      engine,
+      manifest: f.manifest,
+      logger: { warn: (m: string) => void warnings.push(m) },
+    });
+    return { source, texts, warnings };
+  }
+  const residualQuery = (text: string): SpanQuery =>
+    query({ condition: 'Len(name) > 7', needs: [...ALL], text });
+
+  test('a query failing after the id table exists rejects and leaves no table or text', async () => {
+    const h = hooked({ query: (n, run) => (n >= 2 ? Promise.reject(new Error('boom')) : run()) });
+    await expect(h.source.querySpans(residualQuery(''))).rejects.toThrow();
+    expect(leftovers()).toEqual([]);
+    expect([...h.texts.values()]).toEqual(['']);
+  });
+
+  test('an abort after the id table exists rejects with AbortError and leaves no table or text', async () => {
+    const ctl = new AbortController();
+    const h = hooked({
+      query: (n, run) => {
+        if (n === 2) ctl.abort();
+        return run();
+      },
+    });
+    await expect(h.source.querySpans(residualQuery(''), ctl.signal)).rejects.toMatchObject({
+      name: 'AbortError',
+    });
+    expect(leftovers()).toEqual([]);
+    expect([...h.texts.values()]).toEqual(['']);
+  });
+
+  test('a failing CREATE empties the registered text', async () => {
+    const h = hooked({
+      exec: (sql, run) => (sql.startsWith('CREATE') ? Promise.reject(new Error('no create')) : run()),
+    });
+    await expect(h.source.querySpans(residualQuery(''))).rejects.toThrow();
+    expect(leftovers()).toEqual([]);
+    expect([...h.texts.values()]).toEqual(['']);
+  });
+
+  test('a failing DROP still empties the text, is logged, and does not fail the query', async () => {
+    const h = hooked({
+      exec: (sql, run) => (sql.startsWith('DROP') ? Promise.reject(new Error('no drop')) : run()),
+    });
+    const r = await h.source.querySpans(residualQuery(''));
+    expect(r.total).toBe(3);
+    expect([...h.texts.values()]).toEqual(['']);
+    expect(h.warnings).toHaveLength(1);
+    expect(h.warnings[0]).toMatch(/otel_residual_\d+/);
+    db.exec(`DROP TABLE IF EXISTS ${/otel_residual_\d+/.exec(h.warnings[0] ?? '')?.[0]}`);
+    expect(leftovers()).toEqual([]);
+  });
+
+  test('over the page budget, total is the candidate count, an upper bound', async () => {
+    const r = await ds.querySpans(query({ condition: 'Len(name) > 7', needs: ['rows'], limit: 1 }));
+    expect(spanRows(r.rows)).toHaveLength(1);
+    expect(r.total).toBe(6); // 3 spans match; the 6 candidates are all that is known
   });
 });

@@ -33,7 +33,7 @@ import { dropResidualTable, residualIdTable, residualRows } from './residual.js'
 import type { DataSource, ServicesResult, SpanNeed, SpanQuery, SpanQueryResult } from './results.js';
 import type { TimeWindow } from './span-query.js';
 import {
-  c,
+  cell,
   durationBins,
   durationSummary,
   facetCounts,
@@ -124,7 +124,12 @@ function residualTest(compiled: CompiledCondition<'span'>, epoch: bigint): (e: S
 }
 
 /** The format-4 data source over a query engine (D19): no Mosaic type appears here. `close()` is `engine.close()`. */
-export function createDuckDbDataSource(opts: { engine: QueryEngine; manifest: ManifestV4 }): DataSource {
+export function createDuckDbDataSource(opts: {
+  engine: QueryEngine;
+  manifest: ManifestV4;
+  /** Where a failed cleanup of the D5 temp table is reported; silent without one. */
+  logger?: Pick<Console, 'warn'>;
+}): DataSource {
   const { engine, manifest } = opts;
   const epoch = BigInt(manifest.epochUnixNano);
   const caps = DEFAULT_FACET_CAPS;
@@ -166,7 +171,9 @@ export function createDuckDbDataSource(opts: { engine: QueryEngine; manifest: Ma
         predicate: filter.predicate === null ? ids : and(filter.predicate, ids),
       });
     } finally {
-      await dropResidualTable(engine, table).catch(() => undefined);
+      await dropResidualTable(engine, table).catch((error: unknown) => {
+        opts.logger?.warn(`could not clean up the temp table ${table}`, error);
+      });
     }
   }
 
@@ -315,7 +322,7 @@ export function createDuckDbDataSource(opts: { engine: QueryEngine; manifest: Ma
       const found = await engine.query(servicesQuery(f, o.limit + 1), signal);
       const names = rowsOf(found)
         .slice(0, o.limit)
-        .map((r) => String(c(r, 'service_name')));
+        .map((r) => String(cell(r, 'service_name')));
       const buckets =
         names.length === 0 ? null : await engine.query(serviceBucketsQuery(f, names, spec), signal);
       return serviceStats(found, buckets, spec, o.limit);
@@ -325,7 +332,7 @@ export function createDuckDbDataSource(opts: { engine: QueryEngine; manifest: Ma
 
   async function loadTrace(traceId: TraceId): Promise<TraceDetail> {
     const partitions = rowsOf(await engine.query(tracePartitionsQuery(traceId))).map((r) =>
-      String(c(r, 'filename')),
+      String(cell(r, 'filename')),
     );
     if (partitions.length === 0) throw traceNotFound(traceId);
     const { filter } = buildFilter({
@@ -345,7 +352,7 @@ export function createDuckDbDataSource(opts: { engine: QueryEngine; manifest: Ma
     ]);
     const { rows, tables } = spanRows(spans, epoch);
     if (rows.length === 0) throw traceNotFound(traceId);
-    const logCount = toNumber(c(rowsOf(summary)[0] ?? {}, 'log_count') ?? 0n, 'log_count');
+    const logCount = toNumber(cell(rowsOf(summary)[0] ?? {}, 'log_count') ?? 0n, 'log_count');
     const lookup =
       <T>(list: readonly T[], what: string) =>
       (ref: number): T => {
@@ -389,8 +396,8 @@ export function createDuckDbDataSource(opts: { engine: QueryEngine; manifest: Ma
     hasTrace: async (traceId) => (await engine.query(tracePartitionsQuery(traceId))).numRows > 0,
     async percentileOf(service, resource, durationNs) {
       const r = rowsOf(await engine.query(percentileQuery(service, resource, durationNs)))[0];
-      if (r === undefined || toNumber(c(r, 'n'), 'n') === 0) return null;
-      return Number(c(r, 'percentile'));
+      if (r === undefined || toNumber(cell(r, 'n'), 'n') === 0) return null;
+      return Number(cell(r, 'percentile'));
     },
     async serviceShare(traceId) {
       return exclusiveTimeByService((await getTrace(traceId)).tree);
