@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { engineAssetNames } from '../../src/writer/engine-assets.js';
+import { engineAssetNames } from '../../src/format/engine.js';
 import {
   type BunLike,
   bunEmbeddedViewerAssets,

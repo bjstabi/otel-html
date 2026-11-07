@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { OtelHtmlError } from '../model/errors.js';
 import type { JsonValue } from './columns.js';
-import type { Table } from './parquet/schema.js';
+import type { Table } from './parquet/columns.js';
 import type { SIGNALS } from './paths.js';
 import { type TraceShard, TraceShardSchema } from './trace-shard.js';
 import { describe, parseWith } from './validate.js';

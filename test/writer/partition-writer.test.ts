@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { decodeTable } from '../../src/format/parquet/codec.js';
+import type { Table } from '../../src/format/parquet/columns.js';
 import type { Row } from '../../src/format/parquet/rows.js';
-import type { Table } from '../../src/format/parquet/schema.js';
 import { PartitionWriter, type PartitionWriterOptions } from '../../src/writer/partition-writer.js';
 import { createMemoryFileSystem } from '../../test-support/memory-fs.js';
 

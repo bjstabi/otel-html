@@ -2,7 +2,7 @@ import type { ResolvedDashboard } from '../../config/schema.js';
 import type { AnyValue, Attributes } from '../../model/anyvalue.js';
 import { attributesFromJson } from '../columns.js';
 import type { ColumnBatch } from './batch.js';
-import { FIXED_STATISTICS_COLUMNS, TABLE_COLUMNS, type Table, TIME_COLUMN } from './schema.js';
+import { FIXED_STATISTICS_COLUMNS, TABLE_COLUMNS, type Table, TIME_COLUMN } from './columns.js';
 
 export interface FileStatistics {
   rows: number;

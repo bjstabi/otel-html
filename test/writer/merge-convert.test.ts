@@ -6,7 +6,7 @@ import { decodeColumns } from '../../src/format/columns.js';
 import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
 import { isV4, type ManifestV4, parseAnyManifest } from '../../src/format/manifest.js';
 import { decodeTable } from '../../src/format/parquet/codec.js';
-import type { Table } from '../../src/format/parquet/schema.js';
+import type { Table } from '../../src/format/parquet/columns.js';
 import { MANIFEST_KEY } from '../../src/format/paths.js';
 import { SPAN_COLUMNS } from '../../src/format/specs.js';
 import { OtelHtmlError } from '../../src/model/errors.js';

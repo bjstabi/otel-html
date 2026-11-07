@@ -1,11 +1,11 @@
 import { describe, expect, test } from 'vitest';
 import { runCli } from '../../src/cli/program.js';
 import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
+import { ENGINE_VERSION, engineAssetNames } from '../../src/format/engine.js';
 import { isV4, type ManifestV4, parseAnyManifest } from '../../src/format/manifest.js';
 import { decodeTable } from '../../src/format/parquet/codec.js';
 import { MANIFEST_KEY, partitionWrapperPath } from '../../src/format/paths.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
-import { ENGINE_VERSION, engineAssetNames } from '../../src/writer/engine-assets.js';
 import { openSession } from '../../src/writer/session.js';
 import { upgradeReport } from '../../src/writer/upgrade.js';
 import { createTestWriter, otlp, type TestWriter, testConfig } from '../../test-support/writer-deps.js';

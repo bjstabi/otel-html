@@ -6,7 +6,7 @@ import { mergeWith } from '../../src/api/convert.js';
 import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
 import { isV4, type ManifestV4, parseAnyManifest } from '../../src/format/manifest.js';
 import { decodeTable } from '../../src/format/parquet/codec.js';
-import { TABLES, type Table } from '../../src/format/parquet/schema.js';
+import { TABLES, type Table } from '../../src/format/parquet/columns.js';
 import { MANIFEST_KEY, partitionWrapperPath } from '../../src/format/paths.js';
 import type { OtelHtmlError } from '../../src/model/errors.js';
 import { mergeReports } from '../../src/writer/merge.js';

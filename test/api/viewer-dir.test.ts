@@ -4,8 +4,8 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { packageDirViewerAssets } from '../../src/api/viewer-dir.js';
+import { engineAssetNames } from '../../src/format/engine.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
-import { engineAssetNames } from '../../src/writer/engine-assets.js';
 
 let root: string;
 beforeEach(async () => {

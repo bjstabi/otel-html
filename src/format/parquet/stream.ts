@@ -13,7 +13,8 @@ import {
 import { OtelHtmlError } from '../../model/errors.js';
 import type { ColumnBatch } from './batch.js';
 import { columnsOfBatch, columnsToArrow, type EncodeOptions, writerProperties } from './codec.js';
-import { arrowSchema, TABLE_COLUMNS, type Table } from './schema.js';
+import { TABLE_COLUMNS, type Table } from './columns.js';
+import { arrowSchema } from './schema.js';
 import { ensureParquetWasm } from './wasm.js';
 
 /** Rows per record batch a reader takes from a file. Larger is better: each batch carries its columns' whole dictionaries through Arrow IPC, and many small batches of a big row group made garbage that raised the peak (measured). */

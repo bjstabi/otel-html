@@ -27,16 +27,16 @@ import {
 } from 'parquet-wasm/esm';
 import { OtelHtmlError } from '../../model/errors.js';
 import { batchFromRows, type ColumnBatch } from './batch.js';
-import type { Row } from './rows.js';
 import {
-  arrowSchema,
   type ColumnDef,
   type ColumnType,
   SORT_COLUMNS,
   TABLE_COLUMNS,
   TABLES,
   type Table,
-} from './schema.js';
+} from './columns.js';
+import type { Row } from './rows.js';
+import { arrowSchema } from './schema.js';
 import { ensureParquetWasm } from './wasm.js';
 
 export interface EncodeOptions {

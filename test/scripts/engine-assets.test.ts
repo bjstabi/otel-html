@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 import { afterEach, expect, test } from 'vitest';
 import { buildEngineAssets } from '../../scripts/engine-assets.js';
-import { ENGINE_VERSION, engineAssetNames } from '../../src/writer/engine-assets.js';
+import { ENGINE_VERSION, engineAssetNames } from '../../src/format/engine.js';
 
 const dirs: string[] = [];
 afterEach(() => {

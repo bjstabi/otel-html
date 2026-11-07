@@ -9,7 +9,7 @@ import {
 } from '../dashboards/schema.js';
 import { OtelHtmlError } from '../model/errors.js';
 import { METRIC_FILE_PATH } from './metric-files.js';
-import { TABLES, type Table } from './parquet/schema.js';
+import { TABLES, type Table } from './parquet/columns.js';
 import type { FileStatistics } from './parquet/stats.js';
 import {
   ASSETS_BASE_RE,

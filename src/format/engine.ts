@@ -15,3 +15,7 @@ export function engineAssetNames(format: 'local' | 'site'): string[] {
     ? [`${base}.wasm`, `${base}.worker.js`]
     : [`${base}.wasm.gz.b64.js`, `${base}.worker.b64.js`];
 }
+
+/** The keys under which the `local` wrappers push the gzipped WASM and the worker onto `__OH__`. */
+export const ENGINE_WASM_KEY = 'engine/wasm.gz';
+export const ENGINE_WORKER_KEY = 'engine/worker';

@@ -1,13 +1,14 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import {
-  arrowSchema,
   type ColumnType,
   FIXED_STATISTICS_COLUMNS,
   SORT_COLUMNS,
   TABLE_COLUMNS,
   TABLES,
   TIME_COLUMN,
-} from '../../../src/format/parquet/schema.js';
+} from '../../../src/format/parquet/columns.js';
+import { arrowSchema } from '../../../src/format/parquet/schema.js';
 
 describe('parquet table schemas', () => {
   test('every table has its sort and time columns and no duplicate names', () => {
@@ -73,4 +74,9 @@ describe('parquet table schemas', () => {
     expect(String(points.fields.find((f) => f.name === 'metric_name')?.type)).toBe('Dictionary<Int32, Utf8>');
     expect(String(points.fields.find((f) => f.name === 'reset')?.type)).toBe('Bool');
   });
+});
+
+test('columns.ts carries no apache-arrow import', () => {
+  const src = readFileSync(new URL('../../../src/format/parquet/columns.ts', import.meta.url), 'utf8');
+  expect(src).not.toMatch(/from 'apache-arrow'/);
 });

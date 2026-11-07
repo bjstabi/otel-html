@@ -1,6 +1,6 @@
 import { OtelHtmlError } from '../model/errors.js';
 import type { TraceId } from '../model/ids.js';
-import type { Table } from './parquet/schema.js';
+import type { Table } from './parquet/columns.js';
 
 export const SIGNALS = ['spans', 'logs', 'metrics'] as const;
 export type Signal = (typeof SIGNALS)[number];

@@ -5,6 +5,7 @@ import {
   attributesFromJson,
   attributesToJson,
 } from '../../../src/format/columns.js';
+import { TABLE_COLUMNS } from '../../../src/format/parquet/columns.js';
 import {
   absolute,
   type Context,
@@ -13,7 +14,6 @@ import {
   type Row,
   spanRow,
 } from '../../../src/format/parquet/rows.js';
-import { TABLE_COLUMNS } from '../../../src/format/parquet/schema.js';
 import type { AnyValue, Attributes } from '../../../src/model/anyvalue.js';
 import { OtelHtmlError } from '../../../src/model/errors.js';
 import type { RelNanos, SpanId, TraceId, UnixNanos } from '../../../src/model/ids.js';
