@@ -7,7 +7,7 @@ import { LogList } from '../components/log-list.js';
 import { ResourceTab } from '../components/resource-tab.js';
 import { useFilterActions } from '../components/use-filter-actions.js';
 import { Waterfall } from '../components/waterfall.js';
-import type { DataSource } from '../data/data-source.js';
+import type { LegacyDataSource } from '../data/legacy-data-source.js';
 import type { LogRef, LogRow } from '../data/log-query.js';
 import { gridWindow, MetricGrid, type MetricGridOrigin } from '../metrics/metric-grid.js';
 import { CONTROL } from '../shell/controls.js';
@@ -77,7 +77,7 @@ const VIEW_BTN = 'rounded-full px-3 py-0.5 text-sm';
  * The log's trace as the shared flame graph (or waterfall) with the emitting span outlined and a dashed "this log"
  * line at the log's time. Clicking a span opens the trace overlay over the Logs Explorer.
  */
-export function LogTraceTab(props: { dataSource: DataSource; row: LogRow }): JSX.Element {
+export function LogTraceTab(props: { dataSource: LegacyDataSource; row: LogRow }): JSX.Element {
   const { dataSource, row } = props;
   const openSpanFromLog = useSelection((s) => s.openSpanFromLog);
   const goTo = useGoTo();
@@ -173,7 +173,7 @@ export function LogTraceTab(props: { dataSource: DataSource; row: LogRow }): JSX
 }
 
 /** The embedded metric grid on the log's resource, around the log's time (the whole run for a log without one). */
-export function LogMetricsTab(props: { dataSource: DataSource; row: LogRow }): JSX.Element {
+export function LogMetricsTab(props: { dataSource: LegacyDataSource; row: LogRow }): JSX.Element {
   const { dataSource, row } = props;
   const range = dataSource.manifest.range;
   const origin = useMemo((): MetricGridOrigin => {
@@ -206,7 +206,7 @@ export function LogResourceTab(props: { row: LogRow }): JSX.Element {
 }
 
 export function SurroundingTab(props: {
-  dataSource: DataSource;
+  dataSource: LegacyDataSource;
   row: LogRow;
   epoch: UnixNanos;
 }): JSX.Element {

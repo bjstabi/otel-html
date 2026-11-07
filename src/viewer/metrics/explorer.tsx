@@ -7,7 +7,7 @@ import { downloadBlob } from '../components/export.js';
 import { type ChartPick, MetricChartCard } from '../components/metric-chart-card.js';
 import { seriesColorKey } from '../components/metric-chart-option.js';
 import { copyWidgetItem } from '../dashboards/copy-widget.js';
-import { catalogOf, type DataSource } from '../data/data-source.js';
+import { catalogOf, type LegacyDataSource } from '../data/legacy-data-source.js';
 import { defaultShow, kindOf, type MetricQuery, resolveMetric, SHOW_BY_KIND } from '../data/metric-query.js';
 import type { TimeWindow } from '../data/span-query.js';
 import { useGoTo } from '../shell/go-to.js';
@@ -41,7 +41,7 @@ function ZeroMetrics({ manifest }: { manifest: Manifest }): JSX.Element {
 }
 
 /** Mockup 04, screen 1: query rows, formulas, the display bar and the chart cards. */
-export function MetricsExplorer(props: { dataSource: DataSource }): JSX.Element {
+export function MetricsExplorer(props: { dataSource: LegacyDataSource }): JSX.Element {
   const { manifest } = props.dataSource;
   if (manifest.totals.metrics === 0 || manifest.range === null) {
     return (
@@ -53,7 +53,7 @@ export function MetricsExplorer(props: { dataSource: DataSource }): JSX.Element 
   return <ExplorerBody dataSource={props.dataSource} range={manifest.range} />;
 }
 
-function ExplorerBody(props: { dataSource: DataSource; range: TimeWindow }): JSX.Element {
+function ExplorerBody(props: { dataSource: LegacyDataSource; range: TimeWindow }): JSX.Element {
   const { dataSource } = props;
   const manifest = dataSource.manifest;
   const sel = useSelection((s) => s);

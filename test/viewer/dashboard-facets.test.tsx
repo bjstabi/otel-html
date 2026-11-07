@@ -20,11 +20,8 @@ import type { WidgetActions } from '../../src/viewer/dashboards/dashboard-page.j
 import type { WidgetScope } from '../../src/viewer/dashboards/scope.js';
 import { FacetChartWidget, suggestKeys } from '../../src/viewer/dashboards/widgets/facet-chart.js';
 import { count } from '../../src/viewer/dashboards/widgets/subtitle.js';
-import {
-  createDataSource,
-  type DataSource,
-  type SpanQueryResult,
-} from '../../src/viewer/data/data-source.js';
+import { createDataSource, type LegacyDataSource } from '../../src/viewer/data/legacy-data-source.js';
+import type { SpanQueryResult } from '../../src/viewer/data/span-query.js';
 import { EMPTY_DASHBOARD_STATE } from '../../src/viewer/state/dashboard-state.js';
 import { createSelectionStore } from '../../src/viewer/state/selection.js';
 import { SelectionProvider } from '../../src/viewer/state/selection-context.js';
@@ -40,7 +37,7 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
-async function linked(): Promise<DataSource> {
+async function linked(): Promise<LegacyDataSource> {
   const report = await buildEmbeddedMetricsReport();
   return createDataSource(createScriptedLoader(report.files), report.manifest, 1);
 }
@@ -65,7 +62,7 @@ function dashboardOf(widget: Input): Dashboard {
   });
 }
 
-function mount(ds: DataSource, widget: Input, scope: Partial<WidgetScope> = {}): WidgetActions {
+function mount(ds: LegacyDataSource, widget: Input, scope: Partial<WidgetScope> = {}): WidgetActions {
   const dashboard = dashboardOf(widget);
   const w = dashboard.widgets[0];
   if (w === undefined) throw new Error('no widget');
@@ -138,7 +135,7 @@ function spansMeasured(dropped: number): SpanQueryResult {
 describe('the cap note of a duration measure', () => {
   const widget = (measure: 'count' | 'duration.max') =>
     ({ type: 'toplist', signal: 'spans', groupBy: 'service.name', measure }) as const;
-  const over = (dropped: number): DataSource => ({
+  const over = (dropped: number): LegacyDataSource => ({
     ...dataSourceOf(baseManifest),
     querySpans: () => Promise.resolve(spansMeasured(dropped)),
   });
@@ -312,7 +309,7 @@ describe('the Top list and Table widgets', () => {
   test('a pinned facet with no observations keeps the empty message', async () => {
     const base = await linked();
     const landing = await base.landing();
-    const ds: DataSource = {
+    const ds: LegacyDataSource = {
       ...base,
       landing: () =>
         Promise.resolve({ ...landing, facets: new FacetCounts(10, 10, ['deployment.environment.name']) }),
@@ -327,7 +324,7 @@ describe('the Top list and Table widgets', () => {
     const [landing, logLanding] = await Promise.all([base.landing(), base.logLanding()]);
     const window = { start: 1, end: 2 };
     const caps = { facetValueCap: 10, facetKeyCap: 10 };
-    const ds: DataSource = {
+    const ds: LegacyDataSource = {
       ...base,
       landing: () => Promise.resolve({ ...landing, facets: new SpanRollups(caps).facets }),
       logLanding: () => Promise.resolve({ ...logLanding, facets: new LogRollups(caps).facets }),
@@ -347,7 +344,7 @@ describe('the Top list and Table widgets', () => {
     const gate = new Promise<void>((r) => {
       release = r;
     });
-    const ds: DataSource = { ...base, landing: () => gate.then(() => base.landing()) };
+    const ds: LegacyDataSource = { ...base, landing: () => gate.then(() => base.landing()) };
     mount(ds, { type: 'toplist', signal: 'spans', groupBy: 'name' });
     await waitFor(() => expect(screen.queryByRole('status')).toBeNull());
     await new Promise((r) => setTimeout(r, 50));
@@ -433,7 +430,7 @@ describe('the Top list and Table widget states', () => {
   });
 
   test('no stale facets are shown as current while an input change reloads', async () => {
-    const ds: DataSource = {
+    const ds: LegacyDataSource = {
       ...dataSourceOf(baseManifest),
       querySpans: (q) =>
         q.text === '' ? Promise.resolve(spansWith()) : new Promise<SpanQueryResult>(() => {}),

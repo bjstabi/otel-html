@@ -1,7 +1,7 @@
 import type { JSX } from 'react';
 import { OtelHtmlError } from '../../model/errors.js';
 import { parseTraceId } from '../../model/ids.js';
-import type { DataSource } from '../data/data-source.js';
+import type { LegacyDataSource } from '../data/legacy-data-source.js';
 import { navigateRoute } from '../shell/use-route.js';
 import { type Selection, selectionToUrlState } from '../state/selection.js';
 import { useSelection } from '../state/selection-context.js';
@@ -17,7 +17,7 @@ export function leaveTracePage(win: Window, state: Selection): void {
 
 /** The `#/traces/trace/<id>` route: the same panel, full width. */
 export function TracePage(props: {
-  dataSource: DataSource;
+  dataSource: LegacyDataSource;
   id: string;
   renderSpanSection?: TracePanelProps['renderSpanSection'];
 }): JSX.Element {

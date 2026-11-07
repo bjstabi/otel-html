@@ -15,11 +15,8 @@ import { TimeBuckets } from '../../src/rollups/time-buckets.js';
 import type { WidgetActions } from '../../src/viewer/dashboards/dashboard-page.js';
 import type { WidgetScope } from '../../src/viewer/dashboards/scope.js';
 import { TracesWidget } from '../../src/viewer/dashboards/widgets/traces.js';
-import {
-  createDataSource,
-  type DataSource,
-  type SpanQueryResult,
-} from '../../src/viewer/data/data-source.js';
+import { createDataSource, type LegacyDataSource } from '../../src/viewer/data/legacy-data-source.js';
+import type { SpanQueryResult } from '../../src/viewer/data/span-query.js';
 import { EMPTY_DASHBOARD_STATE } from '../../src/viewer/state/dashboard-state.js';
 import { createSelectionStore } from '../../src/viewer/state/selection.js';
 import { SelectionProvider } from '../../src/viewer/state/selection-context.js';
@@ -35,7 +32,7 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
-async function linked(): Promise<DataSource> {
+async function linked(): Promise<LegacyDataSource> {
   const report = await buildEmbeddedMetricsReport();
   return createDataSource(createScriptedLoader(report.files), report.manifest, 1);
 }
@@ -148,7 +145,7 @@ const SCOPE: WidgetScope = {
 };
 
 function mount(
-  ds: DataSource,
+  ds: LegacyDataSource,
   opts: { over?: object; scope?: Partial<WidgetScope>; actions?: WidgetActions } = {},
 ): WidgetActions {
   const { dashboard, w } = widgetOf(opts.over);
@@ -221,7 +218,7 @@ describe('the Traces widget states', () => {
   test('rows of the previous inputs are not shown while the new query runs', async () => {
     const real = await linked();
     let release: (() => void) | null = null;
-    const ds: DataSource = {
+    const ds: LegacyDataSource = {
       ...real,
       querySpans: (q, onProgress, signal) =>
         q.sort.dir === 'asc'

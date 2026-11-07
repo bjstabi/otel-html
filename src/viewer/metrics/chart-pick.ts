@@ -1,6 +1,6 @@
 import { parseSpanId, parseTraceId } from '../../model/ids.js';
 import type { ChartPick } from '../components/metric-chart-card.js';
-import type { DataSource } from '../data/data-source.js';
+import type { LegacyDataSource } from '../data/legacy-data-source.js';
 import type { MetricQuery } from '../data/metric-query.js';
 import type { TimeWindow } from '../data/span-query.js';
 import type { GoTo } from '../shell/go-to.js';
@@ -8,7 +8,9 @@ import { metricWindowLink } from '../state/carry.js';
 import { formatWindow } from '../state/url-state.js';
 
 /** The chart card's `hasTrace`: an exemplar's trace id looked up in the report. */
-export function exemplarTraceLookup(ds: Pick<DataSource, 'hasTrace'>): (traceId: string) => Promise<boolean> {
+export function exemplarTraceLookup(
+  ds: Pick<LegacyDataSource, 'hasTrace'>,
+): (traceId: string) => Promise<boolean> {
   return async (traceId) => ds.hasTrace(parseTraceId(traceId, 'exemplar.traceId'));
 }
 

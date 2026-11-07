@@ -4,7 +4,7 @@ import type { TraceShard } from '../../format/trace-shard.js';
 import type { TraceId } from '../../model/ids.js';
 import type { SpanRollups } from '../../rollups/span-rollups.js';
 import { CHUNK_LRU_SIZE, Lru, SignalChunks, scanChunks } from './chunk-window.js';
-import type { SpanStrategy } from './data-source.js';
+import type { SpanStrategy } from './legacy-data-source.js';
 import { epochOf, loadSpanChunk, type TraceIndex } from './load.js';
 import { capsOf, throwIfAborted } from './query-common.js';
 import type { ScriptLoader } from './script-loader.js';

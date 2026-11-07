@@ -14,7 +14,7 @@ import { LOG_SEVERITY_KEYS } from '../../src/semconv/severity.js';
 import type { WidgetActions } from '../../src/viewer/dashboards/dashboard-page.js';
 import type { WidgetScope } from '../../src/viewer/dashboards/scope.js';
 import { LogsWidget } from '../../src/viewer/dashboards/widgets/logs.js';
-import { createDataSource, type DataSource } from '../../src/viewer/data/data-source.js';
+import { createDataSource, type LegacyDataSource } from '../../src/viewer/data/legacy-data-source.js';
 import type { LogQueryResult } from '../../src/viewer/data/log-query.js';
 import { EMPTY_DASHBOARD_STATE } from '../../src/viewer/state/dashboard-state.js';
 import { createSelectionStore } from '../../src/viewer/state/selection.js';
@@ -31,7 +31,7 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
-async function linked(): Promise<DataSource> {
+async function linked(): Promise<LegacyDataSource> {
   const report = await buildEmbeddedMetricsReport();
   return createDataSource(createScriptedLoader(report.files), report.manifest, 1);
 }
@@ -126,7 +126,7 @@ const SCOPE: WidgetScope = {
 };
 
 function mount(
-  ds: DataSource,
+  ds: LegacyDataSource,
   opts: { scope?: Partial<WidgetScope>; logView?: 'matches' | 'context' } = {},
 ): WidgetActions {
   const dashboard = DashboardSchema.parse({

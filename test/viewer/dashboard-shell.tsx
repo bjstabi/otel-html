@@ -6,7 +6,8 @@ import { FacetCounts } from '../../src/rollups/facets.js';
 import { RedSeries } from '../../src/rollups/red.js';
 import { TimeBuckets } from '../../src/rollups/time-buckets.js';
 import { LOG_SEVERITY_KEYS } from '../../src/semconv/severity.js';
-import type { DataSource, ResourceValues } from '../../src/viewer/data/data-source.js';
+import type { ResourceValues } from '../../src/viewer/data/data-source.js';
+import type { LegacyDataSource } from '../../src/viewer/data/legacy-data-source.js';
 import { Shell } from '../../src/viewer/shell/shell.js';
 import { createHashHistory } from '../../src/viewer/state/hash-history.js';
 import { parseUrlState } from '../../src/viewer/state/url-state.js';
@@ -81,7 +82,7 @@ function unused(): never {
 export function dataSourceOf(
   manifest: Manifest,
   values: Readonly<Record<string, ResourceValues>> = {},
-): DataSource {
+): LegacyDataSource {
   return {
     manifest,
     strategy: 'eager',
@@ -128,7 +129,7 @@ export function dataSourceOf(
   };
 }
 
-export function renderShell(hash: string, ds: DataSource): void {
+export function renderShell(hash: string, ds: LegacyDataSource): void {
   window.location.hash = hash;
   render(
     <ThemeProvider>

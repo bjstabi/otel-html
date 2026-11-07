@@ -1,7 +1,7 @@
 import { OtelHtmlError } from '../../model/errors.js';
 import type { TraceId } from '../../model/ids.js';
 import type { ResourceRecord, ResourceRef, ScopeRecord, ScopeRef } from '../../model/records.js';
-import type { SpanTrace } from './data-source.js';
+import type { SpanTrace } from './legacy-data-source.js';
 import type { LoadedChunk, SpanEntry, SpanRow } from './span-query.js';
 import { buildTraceTree } from './trace-tree.js';
 

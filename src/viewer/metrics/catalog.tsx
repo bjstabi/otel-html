@@ -5,7 +5,7 @@ import type { MetricPageState } from '../../query/metric-query.js';
 import type { MetricEntry } from '../../rollups/metric-catalog.js';
 import { ErrorCard } from '../components/explorer-states.js';
 import { ResultsTable } from '../components/results-table.js';
-import { catalogOf, type DataSource } from '../data/data-source.js';
+import { catalogOf, type LegacyDataSource } from '../data/legacy-data-source.js';
 import { metricTypeLabel } from '../data/metric-tables.js';
 import { useGoTo } from '../shell/go-to.js';
 import { PageChrome } from '../shell/page-chrome.js';
@@ -115,7 +115,7 @@ function ZeroMetrics({ manifest }: { manifest: Manifest }): JSX.Element {
 }
 
 /** Mockup 04, screen 2: every metric definition in the report; a row opens the Explorer on it. */
-export function MetricsCatalog(props: { dataSource: DataSource }): JSX.Element {
+export function MetricsCatalog(props: { dataSource: LegacyDataSource }): JSX.Element {
   const { manifest } = props.dataSource;
   const goTo = useGoTo();
   const load = useKeyedAsync(props.dataSource, catalogOf);

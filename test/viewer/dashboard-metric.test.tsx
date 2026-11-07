@@ -78,7 +78,7 @@ import type { WidgetActions } from '../../src/viewer/dashboards/dashboard-page.j
 import { RunSessionProvider } from '../../src/viewer/dashboards/run-session.js';
 import type { VariableBinding, WidgetScope } from '../../src/viewer/dashboards/scope.js';
 import { MetricWidget } from '../../src/viewer/dashboards/widgets/metric.js';
-import { createDataSource, type DataSource } from '../../src/viewer/data/data-source.js';
+import { createDataSource, type LegacyDataSource } from '../../src/viewer/data/legacy-data-source.js';
 import { GoToContext } from '../../src/viewer/shell/go-to.js';
 import { EMPTY_DASHBOARD_STATE } from '../../src/viewer/state/dashboard-state.js';
 import { createSelectionStore } from '../../src/viewer/state/selection.js';
@@ -107,7 +107,7 @@ afterEach(cleanup);
 const S = 1_000_000_000;
 const TRACE = parseTraceId(LINKED_TRACE, 'LINKED_TRACE');
 
-async function linked(manifest: Manifest = report.manifest): Promise<DataSource> {
+async function linked(manifest: Manifest = report.manifest): Promise<LegacyDataSource> {
   return createDataSource(createScriptedLoader(report.files), manifest, 1);
 }
 
@@ -137,11 +137,11 @@ function actionsOf(): WidgetActions {
 
 interface Mounted {
   actions: WidgetActions;
-  update(next: { scope?: Partial<WidgetScope>; ds?: DataSource }): void;
+  update(next: { scope?: Partial<WidgetScope>; ds?: LegacyDataSource }): void;
 }
 
 function mount(
-  ds: DataSource,
+  ds: LegacyDataSource,
   over: {
     widget?: object;
     scope?: Partial<WidgetScope>;
@@ -160,7 +160,7 @@ function mount(
   const w = dashboard.widgets[0];
   if (w === undefined) throw new Error('no widget');
   const actions = actionsOf();
-  const tree = (source: DataSource, scope: Partial<WidgetScope>): React.JSX.Element => (
+  const tree = (source: LegacyDataSource, scope: Partial<WidgetScope>): React.JSX.Element => (
     <ThemeProvider>
       <GoToContext.Provider value={vi.fn()}>
         <SelectionProvider store={createSelectionStore({})}>
@@ -190,10 +190,10 @@ function mount(
  * catalog is a proxy, so everything else (and its private state) is the real one.
  */
 async function withResources(
-  ds: DataSource,
+  ds: LegacyDataSource,
   trace: (r: ResourceRecord) => ResourceRecord,
   catalog: (all: readonly ResourceRecord[]) => ResourceRecord[],
-): Promise<DataSource> {
+): Promise<LegacyDataSource> {
   const real = await ds.metricCatalog();
   const resources = catalog(real.resources());
   const proxied = new Proxy(real, {
@@ -379,7 +379,7 @@ describe('the Metrics widget with queries', () => {
   test('the previous result is not shown as current while a changed window loads', async () => {
     const real = await linked();
     let hang = false;
-    const ds: DataSource = {
+    const ds: LegacyDataSource = {
       ...real,
       metric: (id) => (hang ? new Promise(() => {}) : real.metric(id)),
     };
@@ -404,10 +404,10 @@ describe('the Metrics widget without queries', () => {
     return { lookups: [] };
   }
 
-  async function fusion(): Promise<{ ds: DataSource; seen: ReturnType<typeof gridPage> }> {
+  async function fusion(): Promise<{ ds: LegacyDataSource; seen: ReturnType<typeof gridPage> }> {
     const real = await linked();
     const seen = gridPage();
-    const ds: DataSource = {
+    const ds: LegacyDataSource = {
       ...real,
       metricsForResources: (rs) => {
         seen.lookups.push(rs.length);
@@ -740,7 +740,7 @@ describe('the Metrics widget with runBy', () => {
         },
       ],
     });
-    const page = (): Promise<DataSource> =>
+    const page = (): Promise<LegacyDataSource> =>
       linked({
         ...report.manifest,
         config: { ...report.manifest.config, dashboards: [{ source: 'otel-html.yaml', dashboard: DASH }] },
@@ -789,7 +789,7 @@ describe('the Metrics widget with runBy', () => {
           },
         ],
       });
-      const viewPage = (): Promise<DataSource> =>
+      const viewPage = (): Promise<LegacyDataSource> =>
         linked({
           ...report.manifest,
           config: {

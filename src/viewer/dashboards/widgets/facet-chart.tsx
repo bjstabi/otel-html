@@ -9,7 +9,7 @@ import { ErrorCard, LoadingNote, PartialNote } from '../../components/explorer-s
 import { type FacetSource, toplist } from '../../components/facet-views.js';
 import { GroupTable } from '../../components/group-table.js';
 import { mergeEchartsOption } from '../../components/metric-chart-option.js';
-import type { DataSource } from '../../data/data-source.js';
+import type { LegacyDataSource } from '../../data/legacy-data-source.js';
 import type { LogQuery } from '../../data/log-query.js';
 import type { SpanQuery } from '../../data/span-query.js';
 import { useLogQuery } from '../../logs/use-log-query.js';
@@ -66,8 +66,8 @@ export function suggestKeys(known: readonly string[], typed: string, max = 3): s
 // Module-level so they are stable: `useKeyedAsync` reloads on a new `load`.
 // A pinned key is known before its first observation, so a report without it still says "no values".
 const knownKeys = (f: FacetCounts): string[] => [...new Set([...f.keys(), ...f.pinned])];
-const spanKeys = (d: DataSource): Promise<string[]> => d.landing().then((l) => knownKeys(l.facets));
-const logKeys = (d: DataSource): Promise<string[]> => d.logLanding().then((l) => knownKeys(l.facets));
+const spanKeys = (d: LegacyDataSource): Promise<string[]> => d.landing().then((l) => knownKeys(l.facets));
+const logKeys = (d: LegacyDataSource): Promise<string[]> => d.logLanding().then((l) => knownKeys(l.facets));
 
 /**
  * A duration measure keeps a bounded number of groups; says how many spans fell in the groups left out. One
@@ -107,7 +107,7 @@ function UnknownKey(props: { groupBy: string; known: readonly string[] }): JSX.E
 }
 
 function FacetBody<R extends Facets>(
-  props: Shared & { handle: QueryHandle<R>; dataSource: DataSource },
+  props: Shared & { handle: QueryHandle<R>; dataSource: LegacyDataSource },
 ): JSX.Element {
   const { handle, groupBy, measure } = props;
   const keys = useKeyedAsync(props.dataSource, props.noun === 'Spans' ? spanKeys : logKeys);
@@ -177,7 +177,7 @@ interface Filter {
 }
 
 // Only the facet counts are drawn, so no rows are read.
-function SpanFacets(props: Shared & { dataSource: DataSource; filter: Filter }): JSX.Element {
+function SpanFacets(props: Shared & { dataSource: LegacyDataSource; filter: Filter }): JSX.Element {
   const { dataSource, filter, ...rest } = props;
   const { condition, text, window } = filter;
   const { measure, groupBy } = rest;
@@ -194,7 +194,7 @@ function SpanFacets(props: Shared & { dataSource: DataSource; filter: Filter }):
   return <FacetBody {...rest} dataSource={dataSource} handle={useSpanQuery(dataSource, query)} />;
 }
 
-function LogFacets(props: Shared & { dataSource: DataSource; filter: Filter }): JSX.Element {
+function LogFacets(props: Shared & { dataSource: LegacyDataSource; filter: Filter }): JSX.Element {
   const { dataSource, filter, ...rest } = props;
   const { condition, text, window, traceId } = filter;
   const query = useMemo<LogQuery>(

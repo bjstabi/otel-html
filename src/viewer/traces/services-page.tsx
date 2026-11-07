@@ -7,7 +7,8 @@ import type { TimeBuckets } from '../../rollups/time-buckets.js';
 import { formatDuration } from '../../semconv/formatters.js';
 import { PartialNote } from '../components/explorer-states.js';
 import { facetKeyToPath, tokensToOttl } from '../components/filter-tokens.js';
-import type { DataSource, Landing, SpanQuery, SpanQueryResult } from '../data/data-source.js';
+import type { Landing, LegacyDataSource } from '../data/legacy-data-source.js';
+import type { SpanQuery, SpanQueryResult } from '../data/span-query.js';
 import { PageChrome } from '../shell/page-chrome.js';
 import { navigateRoute } from '../shell/use-route.js';
 import { selectionToUrlState } from '../state/selection.js';
@@ -84,7 +85,7 @@ interface Loaded {
 
 type Load = { status: 'loading' } | { status: 'ready'; data: Loaded } | { status: 'error'; message: string };
 
-function useServices(dataSource: DataSource, scanAll: boolean): Load {
+function useServices(dataSource: LegacyDataSource, scanAll: boolean): Load {
   const [load, setLoad] = useState<Load>({ status: 'loading' });
   useEffect(() => {
     const controller = new AbortController();
@@ -136,7 +137,7 @@ const TH = 'py-2 text-left text-xs font-semibold text-ink-2';
 const NUM = 'py-2 text-right font-mono text-sm tabular-nums';
 
 /** Per-service table from the rollups. Clicking a row opens the explorer filtered on that service. */
-export function ServicesPage(props: { dataSource: DataSource }): JSX.Element {
+export function ServicesPage(props: { dataSource: LegacyDataSource }): JSX.Element {
   const [scanAll, setScanAll] = useState(false);
   const load = useServices(props.dataSource, scanAll);
   const selection = useSelection((s) => s);

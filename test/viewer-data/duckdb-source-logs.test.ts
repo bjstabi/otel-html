@@ -2,11 +2,12 @@ import { beforeAll, describe, expect, test } from 'vitest';
 import { anyValueToDisplay } from '../../src/model/anyvalue.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { parseTraceId } from '../../src/model/ids.js';
+import type { DataSource } from '../../src/viewer/data/data-source.js';
 import { createDuckDbDataSource } from '../../src/viewer/data/duckdb-source.js';
 import { type LogRef, type LogRow, type LogTraceRow, logRef } from '../../src/viewer/data/log-query.js';
 import { createCoordinator, mosaicQueryEngine } from '../../src/viewer/data/mosaic.js';
 import type { QueryEngine } from '../../src/viewer/data/query-engine.js';
-import type { DataSource, LogQuery } from '../../src/viewer/data/results.js';
+import type { LogQuery } from '../../src/viewer/data/results.js';
 import type { TestDb } from '../../test-support/duckdb-node.js';
 import {
   buildFormat4Report,

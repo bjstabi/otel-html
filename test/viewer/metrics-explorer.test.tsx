@@ -30,7 +30,7 @@ vi.mock('../../src/viewer/components/chart.js', async () => {
 });
 
 import type { MetricPageState } from '../../src/query/metric-query.js';
-import { createDataSource } from '../../src/viewer/data/data-source.js';
+import { createDataSource } from '../../src/viewer/data/legacy-data-source.js';
 import { Shell } from '../../src/viewer/shell/shell.js';
 import { createHashHistory } from '../../src/viewer/state/hash-history.js';
 import { defaultMetricState } from '../../src/viewer/state/metric-state.js';

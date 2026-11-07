@@ -1,6 +1,6 @@
 import type { Manifest } from '../../format/manifest.js';
 import type { TraceId } from '../../model/ids.js';
-import type { LogStrategy } from './data-source.js';
+import type { LogStrategy } from './legacy-data-source.js';
 import { epochOf } from './load.js';
 import { loadLogChunk, logNotFound } from './log-load.js';
 import {

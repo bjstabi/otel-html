@@ -1,10 +1,12 @@
 import { type JSX, useEffect, useState } from 'react';
 import type { DataSource } from './data/data-source.js';
+import type { LegacyDataSource } from './data/legacy-data-source.js';
+import type { LoadProgress } from './data/open-report.js';
 import { Shell } from './shell/shell.js';
 import type { HistoryPort } from './state/selection.js';
 
 type Load =
-  | { status: 'loading' }
+  | { status: 'loading'; progress: LoadProgress | null }
   | { status: 'ready'; dataSource: DataSource }
   | { status: 'failed'; message: string };
 
@@ -22,14 +24,35 @@ function LoadFailure({ message }: { message: string }): JSX.Element {
   );
 }
 
+/** The loading line for each phase of `LoadProgress`. */
+function progressText(p: LoadProgress | null): string {
+  if (p === null) return 'Loading report';
+  switch (p.phase) {
+    case 'engine':
+      return 'Starting the query engine';
+    case 'partitions':
+      return p.total === undefined || p.done === undefined
+        ? 'Loading partitions'
+        : `Loading partition ${Math.min(p.done + 1, p.total)} of ${p.total}`;
+    case 'views':
+      return 'Preparing views';
+  }
+}
+
 /** `load` is the composition root's registry -> manifest -> data source chain; failures are shown, never swallowed. */
-export function App(props: { load: () => Promise<DataSource>; history: HistoryPort }): JSX.Element {
+export function App(props: {
+  load: (onProgress: (p: LoadProgress) => void) => Promise<DataSource>;
+  history: HistoryPort;
+}): JSX.Element {
   const { load, history } = props;
-  const [state, setState] = useState<Load>({ status: 'loading' });
+  const [state, setState] = useState<Load>({ status: 'loading', progress: null });
 
   useEffect(() => {
     let live = true;
-    load().then(
+    const onProgress = (progress: LoadProgress): void => {
+      if (live) setState({ status: 'loading', progress });
+    };
+    load(onProgress).then(
       (dataSource) => live && setState({ status: 'ready', dataSource }),
       (e: unknown) =>
         live && setState({ status: 'failed', message: e instanceof Error ? e.message : String(e) }),
@@ -43,13 +66,14 @@ export function App(props: { load: () => Promise<DataSource>; history: HistoryPo
     case 'loading':
       return (
         <p role="status" className="p-8 text-sm text-muted">
-          Loading report
+          {progressText(state.progress)}
         </p>
       );
     case 'failed':
       return <LoadFailure message={state.message} />;
     case 'ready':
-      return <Shell dataSource={state.dataSource} history={history} />;
+      // Bridge until Tasks 5.2-5.5 move the pages to the format-4 source: they still take the chunk-era shape.
+      return <Shell dataSource={state.dataSource as unknown as LegacyDataSource} history={history} />;
     default: {
       const never: never = state;
       throw new Error(`unhandled load state ${JSON.stringify(never)}`);

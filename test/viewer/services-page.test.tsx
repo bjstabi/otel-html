@@ -7,7 +7,8 @@ import { ExpHistogram } from '../../src/rollups/exp-histogram.js';
 import { FacetCounts } from '../../src/rollups/facets.js';
 import { RedSeries } from '../../src/rollups/red.js';
 import { TimeBuckets } from '../../src/rollups/time-buckets.js';
-import type { DataSource, SpanQuery, SpanQueryResult } from '../../src/viewer/data/data-source.js';
+import type { LegacyDataSource } from '../../src/viewer/data/legacy-data-source.js';
+import type { SpanQuery, SpanQueryResult } from '../../src/viewer/data/span-query.js';
 import { GoToContext } from '../../src/viewer/shell/go-to.js';
 import { createSelectionStore } from '../../src/viewer/state/selection.js';
 import { SelectionProvider } from '../../src/viewer/state/selection-context.js';
@@ -60,7 +61,7 @@ function result(errors: number, partial: SpanQueryResult['partial']): SpanQueryR
 }
 
 /** Windowed-like: unscanned queries find 1 error of the true 4 and report partial; scanAll finds all 4. */
-function windowed(spans = 10): { ds: DataSource; calls: SpanQuery[] } {
+function windowed(spans = 10): { ds: LegacyDataSource; calls: SpanQuery[] } {
   const calls: SpanQuery[] = [];
   const facets = new FacetCounts(10, 10, ['service.name']);
   for (let i = 0; i < 10; i++) facets.add('service.name', 'web');
@@ -80,11 +81,11 @@ function windowed(spans = 10): { ds: DataSource; calls: SpanQuery[] } {
       calls.push(q);
       return Promise.resolve(q.scanAll ? result(4, null) : result(1, { scanned: 2, total: 8 }));
     },
-  } as unknown as DataSource;
+  } as unknown as LegacyDataSource;
   return { ds, calls };
 }
 
-function mount(ds: DataSource): void {
+function mount(ds: LegacyDataSource): void {
   render(
     <ThemeProvider>
       <SelectionProvider store={createSelectionStore({})}>
@@ -134,7 +135,7 @@ describe('ServicesPage', () => {
         signals.push(signal);
         return new Promise<SpanQueryResult>(() => undefined);
       },
-    } as unknown as DataSource;
+    } as unknown as LegacyDataSource;
     mount(slow);
     await waitFor(() => expect(signals).toHaveLength(1));
     cleanup();
@@ -152,7 +153,7 @@ describe('ServicesPage', () => {
           red: new RedSeries(8),
           durations: new Map(),
         }),
-    } as DataSource;
+    } as LegacyDataSource;
     mount(empty);
     expect(await screen.findByText('This report has no spans')).toBeTruthy();
     expect(screen.getByText('56')).toBeTruthy();

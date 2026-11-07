@@ -21,9 +21,9 @@ import {
 import { SEVERITY_SERIES, SPAN_STATUS_SERIES } from '../../src/viewer/components/histogram-card.js';
 import type { WidgetActions } from '../../src/viewer/dashboards/dashboard-page.js';
 import { TimelineWidget } from '../../src/viewer/dashboards/widgets/timeline.js';
-import type { DataSource, SpanQueryResult } from '../../src/viewer/data/data-source.js';
-import { createDataSource } from '../../src/viewer/data/data-source.js';
-import type { TimeWindow } from '../../src/viewer/data/span-query.js';
+import type { LegacyDataSource } from '../../src/viewer/data/legacy-data-source.js';
+import { createDataSource } from '../../src/viewer/data/legacy-data-source.js';
+import type { SpanQueryResult, TimeWindow } from '../../src/viewer/data/span-query.js';
 import { EMPTY_DASHBOARD_STATE } from '../../src/viewer/state/dashboard-state.js';
 import { baseManifest, dataSourceOf } from './dashboard-shell.js';
 import { buildEmbeddedMetricsReport } from './report-fixture.js';
@@ -347,7 +347,7 @@ describe('TimelineWidget states', () => {
     setControls: vi.fn(),
   };
 
-  function mount(ds: DataSource): void {
+  function mount(ds: LegacyDataSource): void {
     const w = dashboard.widgets[0];
     if (w === undefined) throw new Error('no widget');
     render(

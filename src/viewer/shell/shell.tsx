@@ -8,7 +8,7 @@ import { DashboardPage } from '../dashboards/dashboard-page.js';
 import { DashboardsListPage } from '../dashboards/list-page.js';
 import { defaultDashboardRoute } from '../dashboards/registry.js';
 import { RunSessionProvider } from '../dashboards/run-session.js';
-import type { DataSource } from '../data/data-source.js';
+import type { LegacyDataSource } from '../data/legacy-data-source.js';
 import { LogsExplorer } from '../logs/explorer.js';
 import { MetricsCatalog } from '../metrics/catalog.js';
 import { MetricsExplorer } from '../metrics/explorer.js';
@@ -110,7 +110,7 @@ function PatternsRedirect(): null {
   return null;
 }
 
-export function Shell(props: { dataSource: DataSource; history: HistoryPort }): JSX.Element {
+export function Shell(props: { dataSource: LegacyDataSource; history: HistoryPort }): JSX.Element {
   const { dataSource, history } = props;
   const manifest = dataSource.manifest;
   const store = useMemo(() => createSelectionStore(parseUrlState(history.read()).state), [history]);
@@ -208,7 +208,7 @@ function homeRoute(manifest: Manifest): string {
   return home === 'dashboards' ? defaultDashboardRoute(manifest) : `/${home}`;
 }
 
-function RoutedPage({ dataSource }: { dataSource: DataSource }): JSX.Element {
+function RoutedPage({ dataSource }: { dataSource: LegacyDataSource }): JSX.Element {
   const manifest = dataSource.manifest;
   const [route] = useRoute();
   return (

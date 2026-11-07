@@ -3,7 +3,7 @@ import { describe, expect, test } from 'vitest';
 import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
 import { parseManifest } from '../../src/format/manifest.js';
 import { MANIFEST_KEY } from '../../src/format/paths.js';
-import { createDataSource } from '../../src/viewer/data/data-source.js';
+import { createDataSource } from '../../src/viewer/data/legacy-data-source.js';
 import { createScriptedLoader } from '../../test-support/scripted-loader.js';
 
 const BUDGET = 64_000_000;

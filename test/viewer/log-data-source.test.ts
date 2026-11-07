@@ -3,7 +3,11 @@ import type { Manifest, ManifestChunk } from '../../src/format/manifest.js';
 import { anyValueToDisplay } from '../../src/model/anyvalue.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import type { TraceId } from '../../src/model/ids.js';
-import { createDataSource, type DataSource, signalBudgets } from '../../src/viewer/data/data-source.js';
+import {
+  createDataSource,
+  type LegacyDataSource,
+  signalBudgets,
+} from '../../src/viewer/data/legacy-data-source.js';
 import { type LogQuery, type LogRef, type LogRow, parseLogRef } from '../../src/viewer/data/log-query.js';
 import { SURROUNDING_CHUNKS_PER_SIDE } from '../../src/viewer/data/log-windowed.js';
 import { createScriptedLoader, type ScriptedLoader } from '../../test-support/scripted-loader.js';
@@ -25,7 +29,7 @@ const MB = 1_000_000;
 const logChunk = (n: number): string => `data/chunks/logs/${String(n).padStart(6, '0')}.js`;
 const bodyOf = (r: LogRow): string => anyValueToDisplay(r.log.body);
 const bodies = (rows: readonly LogRow[]): string[] => rows.map(bodyOf);
-const asLogs = (r: Awaited<ReturnType<DataSource['queryLogs']>>): readonly LogRow[] => {
+const asLogs = (r: Awaited<ReturnType<LegacyDataSource['queryLogs']>>): readonly LogRow[] => {
   if (r.mode !== 'logs') throw new Error(`expected a logs-mode result, got ${r.mode}`);
   return r.rows;
 };
@@ -46,7 +50,7 @@ beforeAll(async () => {
   rep = await buildLogReport();
 });
 
-async function open(budget: number): Promise<{ ds: DataSource; loader: ScriptedLoader }> {
+async function open(budget: number): Promise<{ ds: LegacyDataSource; loader: ScriptedLoader }> {
   const loader = createScriptedLoader(rep.files);
   const ds = await createDataSource(loader, rep.manifest, budget);
   return { ds, loader };
@@ -397,7 +401,7 @@ describe.each([
 });
 
 describe('windowed logs', () => {
-  async function windowed(): Promise<{ ds: DataSource; loader: ScriptedLoader }> {
+  async function windowed(): Promise<{ ds: LegacyDataSource; loader: ScriptedLoader }> {
     const o = await open(1);
     await o.ds.logLanding();
     o.loader.reset();

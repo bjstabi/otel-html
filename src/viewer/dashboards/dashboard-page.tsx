@@ -3,7 +3,8 @@ import { ChevronDown, Copy, LayoutDashboard, Pencil } from 'lucide-react';
 import { type JSX, useCallback, useMemo, useState, useSyncExternalStore } from 'react';
 import type { RunControls, Widget, WidgetLayout, WidgetType } from '../../dashboards/schema.js';
 import { parseUnixNanos, type TraceId } from '../../model/ids.js';
-import type { DataSource, ResourceValues } from '../data/data-source.js';
+import type { ResourceValues } from '../data/data-source.js';
+import type { LegacyDataSource } from '../data/legacy-data-source.js';
 import type { TimeWindow } from '../data/span-query.js';
 import { LogPanel } from '../logs/log-panel.js';
 import { CONTROL, POPUP } from '../shell/controls.js';
@@ -52,7 +53,7 @@ export type WidgetRenderer = (props: {
   scope: WidgetScope;
   dashboard: DashboardEntry;
   height: number;
-  dataSource: DataSource;
+  dataSource: LegacyDataSource;
   actions: WidgetActions;
   /** The variables bound on the page (empty when every variable is all or unset). */
   variables: readonly VariableBinding[];
@@ -197,7 +198,7 @@ function DashboardSwitcher(props: { entries: readonly DashboardEntry[] }): JSX.E
   );
 }
 
-function NotFound(props: { id: string; manifest: DataSource['manifest'] }): JSX.Element {
+function NotFound(props: { id: string; manifest: LegacyDataSource['manifest'] }): JSX.Element {
   return (
     <PageChrome title="Dashboards" manifest={props.manifest}>
       <section className={CARD}>
@@ -217,7 +218,7 @@ type ValuesByKey = Readonly<Record<string, ResourceValues>>;
 
 function DashboardView(props: {
   entry: DashboardEntry;
-  dataSource: DataSource;
+  dataSource: LegacyDataSource;
   /** The grid positions as edited on this page; the config's when absent. Never persisted. */
   layout: WidgetLayout[] | undefined;
   onLayout(layout: WidgetLayout[] | undefined): void;
@@ -433,7 +434,7 @@ function DashboardView(props: {
 }
 
 /** `#/dashboards/<id>`: the dashboard, or a not-found card that links to the list. */
-export function DashboardPage(props: { dataSource: DataSource; id: string }): JSX.Element {
+export function DashboardPage(props: { dataSource: LegacyDataSource; id: string }): JSX.Element {
   const { dataSource, id } = props;
   const entry = findDashboard(dashboardsOf(dataSource.manifest), id);
   // Edited positions live here, keyed by dashboard, so switching away and back keeps them; a reload drops them.

@@ -1,6 +1,6 @@
 import type { Manifest } from '../../format/manifest.js';
 import type { TraceId } from '../../model/ids.js';
-import type { SpanStrategy } from './data-source.js';
+import type { SpanStrategy } from './legacy-data-source.js';
 import { epochOf, loadSpanChunk } from './load.js';
 import type { FacetCaps } from './query-common.js';
 import type { ScriptLoader } from './script-loader.js';

@@ -9,7 +9,8 @@ import type { SpanLinkRecord } from '../../src/model/records.js';
 import { addAttributeFilter } from '../../src/viewer/components/attribute-filter.js';
 import { AttributeGroups, PINS_STORAGE_KEY } from '../../src/viewer/components/attribute-groups.js';
 import { ottlToTokens } from '../../src/viewer/components/filter-tokens.js';
-import type { DataSource, TraceDetail } from '../../src/viewer/data/data-source.js';
+import type { TraceDetail } from '../../src/viewer/data/data-source.js';
+import type { LegacyDataSource } from '../../src/viewer/data/legacy-data-source.js';
 import { createSelectionStore } from '../../src/viewer/state/selection.js';
 import { SelectionProvider } from '../../src/viewer/state/selection-context.js';
 import { ThemeProvider } from '../../src/viewer/theme/theme-provider.js';
@@ -120,7 +121,7 @@ const manifest = {
   epochUnixNano: '1700000000000000000',
 } as unknown as Manifest;
 
-function source(over: Partial<DataSource> = {}): DataSource {
+function source(over: Partial<LegacyDataSource> = {}): LegacyDataSource {
   return {
     manifest,
     strategy: 'eager',
@@ -128,10 +129,10 @@ function source(over: Partial<DataSource> = {}): DataSource {
     hasTrace: () => Promise.resolve(false),
     percentileOf: () => 90,
     ...over,
-  } as DataSource;
+  } as LegacyDataSource;
 }
 
-function mountSection(detail: TraceDetail, spanId: SpanId, ds: DataSource = source(), init = {}) {
+function mountSection(detail: TraceDetail, spanId: SpanId, ds: LegacyDataSource = source(), init = {}) {
   const store = createSelectionStore({ span: spanId, ...init });
   render(
     <ThemeProvider>

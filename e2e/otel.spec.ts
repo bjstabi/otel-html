@@ -41,7 +41,7 @@ test('browser spans join the test span', HTTP, async ({ browser, reportUrl }) =>
   expect(load?.spanContext().traceId).toBe(parent.spanContext().traceId);
   expect(load?.parentSpanContext?.spanId).toBe(parent.spanContext().spanId);
   expect(load?.resource.attributes['service.name']).toBe('otel-html-viewer');
-  expect(finished(exporter, 'viewer.chunk.load').length).toBeGreaterThan(0);
+  expect(finished(exporter, 'viewer.script.load').length).toBeGreaterThan(0);
   await context.close();
 });
 

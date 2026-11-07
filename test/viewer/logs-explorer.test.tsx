@@ -10,7 +10,7 @@ import { LogRollups } from '../../src/rollups/log-rollups.js';
 import { TimeBuckets } from '../../src/rollups/time-buckets.js';
 import { LOG_SEVERITY_KEYS, type LogSeverityKey } from '../../src/semconv/severity.js';
 import { tokensToOttl } from '../../src/viewer/components/filter-tokens.js';
-import type { DataSource } from '../../src/viewer/data/data-source.js';
+import type { LegacyDataSource } from '../../src/viewer/data/legacy-data-source.js';
 import {
   type LogQuery,
   type LogQueryResult,
@@ -194,7 +194,7 @@ function setup(
     getTrace: () => new Promise(() => {}),
     // The log panel opens on log=; its load never settles in these tests.
     getLog: () => new Promise(() => {}),
-  } as unknown as DataSource;
+  } as unknown as LegacyDataSource;
   const store = createSelectionStore(opts.initial ?? {});
   render(
     <ThemeProvider>

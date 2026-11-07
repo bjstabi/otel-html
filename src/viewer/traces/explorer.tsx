@@ -27,7 +27,8 @@ import { GroupTable } from '../components/group-table.js';
 import { HistogramCard, SPAN_STATUS_SERIES } from '../components/histogram-card.js';
 import { ResultsTable, type SortState } from '../components/results-table.js';
 import { copyWidgetItem } from '../dashboards/copy-widget.js';
-import type { DataSource, SpanQuery, SpanRow, TraceRow } from '../data/data-source.js';
+import type { LegacyDataSource } from '../data/legacy-data-source.js';
+import type { SpanQuery, SpanRow, TraceRow } from '../data/span-query.js';
 import { useGoTo } from '../shell/go-to.js';
 import { PageChrome, useWidgetCopy } from '../shell/page-chrome.js';
 import { PageOptionNotice } from '../shell/page-option-notice.js';
@@ -101,7 +102,7 @@ export function ZeroSpans({ manifest }: { manifest: Manifest }): JSX.Element {
 }
 
 /** Mockup 01: query bar, mode / group-by / view controls, RED strip, histogram, facets left and results right. */
-export function TracesExplorer(props: { dataSource: DataSource }): JSX.Element {
+export function TracesExplorer(props: { dataSource: LegacyDataSource }): JSX.Element {
   const { manifest } = props.dataSource;
   if (manifest.totals.spans === 0) {
     return (
@@ -113,7 +114,7 @@ export function TracesExplorer(props: { dataSource: DataSource }): JSX.Element {
   return <ExplorerBody dataSource={props.dataSource} />;
 }
 
-function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
+function ExplorerBody(props: { dataSource: LegacyDataSource }): JSX.Element {
   const { dataSource } = props;
   const manifest = dataSource.manifest;
   const sel = useSelection((s) => s);

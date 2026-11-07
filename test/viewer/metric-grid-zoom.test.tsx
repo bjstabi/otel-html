@@ -20,7 +20,7 @@ vi.mock('../../src/viewer/components/metric-chart-card.js', () => ({
 }));
 
 import type { TimeWindow } from '../../src/viewer/data/data-source.js';
-import { createDataSource, type DataSource } from '../../src/viewer/data/data-source.js';
+import { createDataSource, type LegacyDataSource } from '../../src/viewer/data/legacy-data-source.js';
 import { MetricGrid } from '../../src/viewer/metrics/metric-grid.js';
 import { GoToContext } from '../../src/viewer/shell/go-to.js';
 import { ThemeProvider } from '../../src/viewer/theme/theme-provider.js';
@@ -36,7 +36,7 @@ beforeAll(async () => {
 afterEach(cleanup);
 
 async function mount(onZoom?: (w: TimeWindow) => void): Promise<void> {
-  const ds: DataSource = await createDataSource(
+  const ds: LegacyDataSource = await createDataSource(
     createScriptedLoader(report.files),
     report.manifest,
     10_000_000,

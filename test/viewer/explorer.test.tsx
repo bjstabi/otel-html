@@ -7,7 +7,8 @@ import { FacetCounts } from '../../src/rollups/facets.js';
 import { RedSeries } from '../../src/rollups/red.js';
 import { TimeBuckets } from '../../src/rollups/time-buckets.js';
 import { formatDuration } from '../../src/semconv/formatters.js';
-import type { DataSource, SpanQuery, SpanQueryResult, SpanRow } from '../../src/viewer/data/data-source.js';
+import type { LegacyDataSource } from '../../src/viewer/data/legacy-data-source.js';
+import type { SpanQuery, SpanQueryResult, SpanRow } from '../../src/viewer/data/span-query.js';
 import { type GoTo, GoToContext } from '../../src/viewer/shell/go-to.js';
 import { createSelectionStore } from '../../src/viewer/state/selection.js';
 import { SelectionProvider } from '../../src/viewer/state/selection-context.js';
@@ -83,11 +84,11 @@ function resultOf(rows: SpanRow[], partial: SpanQueryResult['partial'] = null): 
 }
 
 function setup(
-  querySpans: DataSource['querySpans'],
+  querySpans: LegacyDataSource['querySpans'],
   spans = 10,
   initial: Parameters<typeof createSelectionStore>[0] = {},
 ) {
-  const ds = { manifest: manifest(spans), strategy: 'eager', querySpans } as DataSource;
+  const ds = { manifest: manifest(spans), strategy: 'eager', querySpans } as LegacyDataSource;
   const store = createSelectionStore(initial);
   const goTo = vi.fn<GoTo>();
   render(
@@ -277,7 +278,7 @@ describe('TracesExplorer duration facet', () => {
   const DUR = 'span.end_time_unix_nano - span.start_time_unix_nano';
   const ROWS = [1e3, 5e3, 2e4, 1e5, 4e5, 2e6, 9e6, 3e7, 2e8, 1e9].map((d, i) => row('s', 'svc', d, `d${i}`));
   /** A data source that applies the duration bounds in the condition like the real one. */
-  const filtering: DataSource['querySpans'] = (q) => {
+  const filtering: LegacyDataSource['querySpans'] = (q) => {
     const lo = />= (\d+(?:\.\d+)?)/.exec(q.condition ?? '')?.[1];
     const hi = /<= (\d+(?:\.\d+)?)/.exec(q.condition ?? '')?.[1];
     return Promise.resolve(

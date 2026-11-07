@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { DataSource } from '../data/data-source.js';
+import type { LegacyDataSource } from '../data/legacy-data-source.js';
 
 export interface QueryProgress {
   scanned: number;
@@ -19,7 +19,7 @@ export interface QueryHandle<R> {
 
 /** One data-source query method: what `useQuery` calls (spans, logs). */
 export type QueryRunner<Q, R> = (
-  dataSource: DataSource,
+  dataSource: LegacyDataSource,
   q: Q,
   onProgress: (scanned: number, total: number) => void,
   signal: AbortSignal,
@@ -35,7 +35,7 @@ function isAbort(e: unknown): boolean {
  * available as `previous`. `run` must be a stable (module-level) function.
  */
 export function useQuery<Q extends { scanAll: boolean }, R>(
-  dataSource: DataSource,
+  dataSource: LegacyDataSource,
   query: Q,
   run: QueryRunner<Q, R>,
 ): QueryHandle<R> {

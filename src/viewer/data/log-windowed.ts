@@ -2,7 +2,7 @@ import type { Manifest, ManifestChunk } from '../../format/manifest.js';
 import type { TraceId } from '../../model/ids.js';
 import type { LogRollups } from '../../rollups/log-rollups.js';
 import { CHUNK_LRU_SIZE, Lru, SignalChunks, scanChunks } from './chunk-window.js';
-import type { LogStrategy } from './data-source.js';
+import type { LogStrategy } from './legacy-data-source.js';
 import { epochOf, type TraceIndex } from './load.js';
 import { loadLogChunk, logNotFound } from './log-load.js';
 import {

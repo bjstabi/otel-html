@@ -2,7 +2,7 @@ import { useCallback, useMemo, useRef } from 'react';
 import { formulaRefs, parseFormula } from '../../query/metric-formula.js';
 import type { MetricFormula, MetricPageState } from '../../query/metric-query.js';
 import type { MetricEntry } from '../../rollups/metric-catalog.js';
-import type { DataSource } from '../data/data-source.js';
+import type { LegacyDataSource } from '../data/legacy-data-source.js';
 import { evaluateFormula, formulaWidth } from '../data/metric-formula.js';
 import type { LoadedMetric } from '../data/metric-load.js';
 import {
@@ -63,7 +63,7 @@ function definitionText(q: MetricQuery): string {
   return parts.length === 0 ? '' : ` (${parts.join(', ')})`;
 }
 
-async function run(ds: DataSource, input: Input, signal: AbortSignal): Promise<Outcome> {
+async function run(ds: LegacyDataSource, input: Input, signal: AbortSignal): Promise<Outcome> {
   const out: Outcome = {
     results: new Map(),
     errors: new Map(),
@@ -144,7 +144,7 @@ const EMPTY: Outcome = {
  * `widthPx` is the chart card's width, which sets the bucket count (`DEFAULT_MAX_POINTS` until measured).
  */
 export function useMetricQueries(
-  dataSource: DataSource,
+  dataSource: LegacyDataSource,
   state: MetricPageState,
   window: TimeWindow,
   widthPx: number | null = null,

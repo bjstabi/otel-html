@@ -12,7 +12,7 @@ vi.mock('../../src/viewer/components/chart.js', () => ({
 
 import type { AnyValue } from '../../src/model/anyvalue.js';
 import type { ResourceRecord } from '../../src/model/records.js';
-import { createDataSource, type DataSource } from '../../src/viewer/data/data-source.js';
+import { createDataSource, type LegacyDataSource } from '../../src/viewer/data/legacy-data-source.js';
 import { explorerFilter, MetricGrid, OTHER_LEFT_OUT } from '../../src/viewer/metrics/metric-grid.js';
 import { GoToContext } from '../../src/viewer/shell/go-to.js';
 import { Shell } from '../../src/viewer/shell/shell.js';
@@ -48,10 +48,10 @@ afterEach(() => {
 /** Every `metricsForResources` lookup the panels started, so a test can wait for them to settle. */
 let lookups: Promise<unknown>[] = [];
 
-async function renderAt(hash: string, over: Partial<DataSource> = {}): Promise<void> {
+async function renderAt(hash: string, over: Partial<LegacyDataSource> = {}): Promise<void> {
   const real = await createDataSource(createScriptedLoader(report.files), report.manifest, 10_000_000);
   lookups = [];
-  const ds: DataSource = {
+  const ds: LegacyDataSource = {
     ...real,
     ...over,
     metricsForResources: (rs: Parameters<typeof real.metricsForResources>[0]) => {
@@ -227,7 +227,7 @@ describe('MetricGrid', () => {
   test('a failed metric listing shows the error card, not an empty grid', async () => {
     const real = await createDataSource(createScriptedLoader(report.files), report.manifest, 10_000_000);
     const rs = (await real.metricCatalog()).resources();
-    const failing: DataSource = {
+    const failing: LegacyDataSource = {
       ...real,
       metricsForResources: () => Promise.reject(new Error('listing boom')),
     };
@@ -289,7 +289,7 @@ describe('MetricGrid', () => {
 
   test('a metric with a cap-folded other series says it is left out', async () => {
     const real = await createDataSource(createScriptedLoader(report.files), report.manifest, 10_000_000);
-    const metric: DataSource['metric'] = async (id) => {
+    const metric: LegacyDataSource['metric'] = async (id) => {
       const m = await real.metric(id);
       const [first] = m.series;
       if (first === undefined) return m;

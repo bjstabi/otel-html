@@ -5,7 +5,8 @@ import { ErrorCard, LoadingNote, NoMatch, PartialNote } from '../../components/e
 import { isSpanRow } from '../../components/export.js';
 import { FlameGraph } from '../../components/flame-graph.js';
 import { ResultsTable, type SortState } from '../../components/results-table.js';
-import type { DataSource, SpanQuery, SpanRow, TraceRow } from '../../data/data-source.js';
+import type { LegacyDataSource } from '../../data/legacy-data-source.js';
+import type { SpanQuery, SpanRow, TraceRow } from '../../data/span-query.js';
 import { useSelectionStore } from '../../state/selection-context.js';
 import { useKeyedAsync } from '../../state/use-keyed-async.js';
 import { useColorAssigner } from '../../theme/colors-context.js';
@@ -26,7 +27,7 @@ const DEFAULT_SORT: SortState = { column: 'start', dir: 'desc' };
 
 /** The selected trace's compact flame graph, with a way into the full panel. */
 function TraceFlame(props: {
-  dataSource: DataSource;
+  dataSource: LegacyDataSource;
   traceId: TraceId;
   height: number;
   onOpenPanel(): void;

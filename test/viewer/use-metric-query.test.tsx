@@ -2,7 +2,7 @@ import { act, cleanup, render } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, test } from 'vitest';
 import type { MetricPageState } from '../../src/query/metric-query.js';
 import type { MetricCatalog } from '../../src/rollups/metric-catalog.js';
-import { createDataSource, type DataSource } from '../../src/viewer/data/data-source.js';
+import { createDataSource, type LegacyDataSource } from '../../src/viewer/data/legacy-data-source.js';
 import { type MetricQueries, useMetricQueries } from '../../src/viewer/metrics/use-metric-query.js';
 import { defaultMetricState } from '../../src/viewer/state/metric-state.js';
 import { createScriptedLoader } from '../../test-support/scripted-loader.js';
@@ -23,7 +23,7 @@ const STATE: MetricPageState = {
   queries: seed.queries.map((q) => ({ ...q, metric: 'http.server.requests', show: 'increase' })),
 };
 
-function Probe(props: { ds: DataSource; end: number; onState(s: MetricQueries): void }): null {
+function Probe(props: { ds: LegacyDataSource; end: number; onState(s: MetricQueries): void }): null {
   props.onState(useMetricQueries(props.ds, STATE, { start: 0, end: props.end }));
   return null;
 }
@@ -32,7 +32,7 @@ describe('useMetricQueries', () => {
   test('after a failed run, the next run shows nothing from before the failure while it loads', async () => {
     const real = await createDataSource(createScriptedLoader(report.files), report.manifest, 10_000_000);
     let catalog: () => Promise<MetricCatalog> = () => real.metricCatalog();
-    const ds: DataSource = { ...real, metricCatalog: () => catalog(), metric: (id) => real.metric(id) };
+    const ds: LegacyDataSource = { ...real, metricCatalog: () => catalog(), metric: (id) => real.metric(id) };
     const seen: { latest: MetricQueries | null } = { latest: null };
     const onState = (s: MetricQueries): void => {
       seen.latest = s;

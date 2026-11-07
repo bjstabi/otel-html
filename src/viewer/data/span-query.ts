@@ -21,14 +21,11 @@ import {
   throwIfAborted,
   visitInBlocks,
 } from './query-common.js';
+import type { TimeWindow } from './time-window.js';
 import { TopKBuffer, topK } from './top-k.js';
 import { buildTraceTree, exclusiveTimeByService } from './trace-tree.js';
 
-/** Nanoseconds relative to the report epoch (same unit and range as `SpanRecord.start`). */
-export interface TimeWindow {
-  start: number;
-  end: number;
-}
+export type { TimeWindow };
 
 export interface SpanQuery {
   condition: string | null;

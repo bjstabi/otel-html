@@ -49,7 +49,7 @@ import { FacetCounts } from '../../rollups/facets.js';
 import { TimeBuckets } from '../../rollups/time-buckets.js';
 import { LOG_SEVERITY_KEYS } from '../../semconv/severity.js';
 import { durationAxis } from '../traces/views.js';
-import type { TraceDetail } from './data-source.js';
+import type { DataSource, TraceDetail } from './data-source.js';
 import { checkSurroundingCount, type LogRef, type LogRow } from './log-query.js';
 import {
   type LogRowEntry,
@@ -65,7 +65,6 @@ import { DEFAULT_FACET_CAPS, type FacetCaps, throwIfAborted } from './query-comm
 import type { QueryEngine } from './query-engine.js';
 import { dropResidualTable, residualIdTable, residualRows } from './residual.js';
 import type {
-  DataSource,
   LogNeed,
   LogQuery,
   LogQueryResult,

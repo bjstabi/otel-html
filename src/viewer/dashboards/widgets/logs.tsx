@@ -5,7 +5,7 @@ import type { TraceId } from '../../../model/ids.js';
 import { ErrorCard, LoadingNote, NoMatch, PartialNote } from '../../components/explorer-states.js';
 import { LogList } from '../../components/log-list.js';
 import type { SortState } from '../../components/results-table.js';
-import type { DataSource } from '../../data/data-source.js';
+import type { LegacyDataSource } from '../../data/legacy-data-source.js';
 import type { LogQuery, LogQueryResult, LogRow } from '../../data/log-query.js';
 import { useLogQuery } from '../../logs/use-log-query.js';
 import { useSelection, useSelectionStore } from '../../state/selection-context.js';
@@ -81,7 +81,7 @@ function logQuery(
 
 /** The list over a query's logs; the notes and states of the explorers sit above it. */
 function ListBody(props: {
-  dataSource: DataSource;
+  dataSource: LegacyDataSource;
   handle: QueryHandle<LogQueryResult>;
   shown: LogsResult | null;
   highlighted?: ReadonlySet<string>;
@@ -123,7 +123,7 @@ function ListBody(props: {
 
 /** Every log in the window (the variables still apply), with the matches marked. */
 function ContextView(props: {
-  dataSource: DataSource;
+  dataSource: LegacyDataSource;
   context: LogQuery;
   matched: LogsResult | null;
   sort: SortState;

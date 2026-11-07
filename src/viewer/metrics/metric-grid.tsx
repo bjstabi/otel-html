@@ -10,7 +10,7 @@ import { tokenValue } from '../components/attribute-filter.js';
 import { ErrorCard, PILL } from '../components/explorer-states.js';
 import { type ChartPick, MetricChartCard } from '../components/metric-chart-card.js';
 import { METRIC_CHART_HEIGHT, type MetricSize } from '../components/metric-chart-option.js';
-import { catalogOf, type DataSource } from '../data/data-source.js';
+import { catalogOf, type LegacyDataSource } from '../data/legacy-data-source.js';
 import { type LoadedMetric, resourceKey } from '../data/metric-load.js';
 import {
   defaultShow,
@@ -175,7 +175,10 @@ function distinctResources(resources: readonly ResourceRecord[]): ResourceRecord
 }
 
 /** Whether any of `resources` has metric series; false while the lookup runs or after it failed. */
-export function useHasMetrics(dataSource: DataSource, resources: readonly ResourceRecord[] | null): boolean {
+export function useHasMetrics(
+  dataSource: LegacyDataSource,
+  resources: readonly ResourceRecord[] | null,
+): boolean {
   const load = useCallback(
     (rs: readonly ResourceRecord[]) => dataSource.metricsForResources(rs),
     [dataSource],
@@ -256,7 +259,7 @@ interface ChartRun {
 }
 
 function GridChart(props: {
-  dataSource: DataSource;
+  dataSource: LegacyDataSource;
   entry: MetricEntry;
   /** The origin's resources (canonical keys): only their series are charted. */
   resourceKeys: ReadonlySet<string>;
@@ -388,7 +391,7 @@ const SEG = 'rounded-full px-2 py-0.5 text-xs';
  * (only the first group starts expanded; charts render as they scroll into view), over the origin's moment ± 5 min.
  */
 export function MetricGrid(
-  props: { dataSource: DataSource; origin: MetricGridOrigin } & MetricGridExtras,
+  props: { dataSource: LegacyDataSource; origin: MetricGridOrigin } & MetricGridExtras,
 ): JSX.Element {
   const { dataSource, origin } = props;
   const goTo = useGoTo();

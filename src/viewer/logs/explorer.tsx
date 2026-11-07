@@ -21,7 +21,7 @@ import { HistogramCard, SEVERITY_SERIES } from '../components/histogram-card.js'
 import { LogList } from '../components/log-list.js';
 import { ResultsTable, type SortState } from '../components/results-table.js';
 import { copyWidgetItem } from '../dashboards/copy-widget.js';
-import type { DataSource } from '../data/data-source.js';
+import type { LegacyDataSource } from '../data/legacy-data-source.js';
 import type { LogMode, LogQuery, LogRef, LogRow, LogTraceRow, PatternRow } from '../data/log-query.js';
 import { PageChrome, useWidgetCopy } from '../shell/page-chrome.js';
 import { PageOptionNotice } from '../shell/page-option-notice.js';
@@ -112,7 +112,7 @@ function OptionNotices(): JSX.Element {
 }
 
 /** Mockup 03, screen 1: Group into / View controls, severity histogram, facets left and results right. */
-export function LogsExplorer(props: { dataSource: DataSource }): JSX.Element {
+export function LogsExplorer(props: { dataSource: LegacyDataSource }): JSX.Element {
   const { manifest } = props.dataSource;
   if (manifest.totals.logs === 0) {
     return (
@@ -127,7 +127,7 @@ export function LogsExplorer(props: { dataSource: DataSource }): JSX.Element {
   return <ExplorerBody dataSource={props.dataSource} />;
 }
 
-function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
+function ExplorerBody(props: { dataSource: LegacyDataSource }): JSX.Element {
   const { dataSource } = props;
   const manifest = dataSource.manifest;
   const sel = useSelection((s) => s);

@@ -3,7 +3,8 @@ import { afterEach, describe, expect, test } from 'vitest';
 import { FacetCounts } from '../../src/rollups/facets.js';
 import { RedSeries } from '../../src/rollups/red.js';
 import { TimeBuckets } from '../../src/rollups/time-buckets.js';
-import type { DataSource, SpanQuery, SpanQueryResult } from '../../src/viewer/data/data-source.js';
+import type { LegacyDataSource } from '../../src/viewer/data/legacy-data-source.js';
+import type { SpanQuery, SpanQueryResult } from '../../src/viewer/data/span-query.js';
 import { useSpanQuery } from '../../src/viewer/traces/use-span-query.js';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -40,18 +41,18 @@ interface Call {
 }
 
 /** A data source whose queries stay pending until the test settles them, in any order. */
-function scripted(): { ds: DataSource; calls: Call[] } {
+function scripted(): { ds: LegacyDataSource; calls: Call[] } {
   const calls: Call[] = [];
   const ds = {
     querySpans: (q, onProgress, signal) =>
       new Promise<SpanQueryResult>((resolve, reject) => {
         calls.push({ q, signal, onProgress, resolve, reject });
       }),
-  } as DataSource;
+  } as LegacyDataSource;
   return { ds, calls };
 }
 
-function Probe(props: { ds: DataSource; q: SpanQuery }): React.JSX.Element {
+function Probe(props: { ds: LegacyDataSource; q: SpanQuery }): React.JSX.Element {
   const { state, scanAll } = useSpanQuery(props.ds, props.q);
   return (
     <div>

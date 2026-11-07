@@ -8,7 +8,8 @@ import { formatDuration, formatTime } from '../../semconv/formatters.js';
 import { AttributeGroups, loadPins, savePins } from '../components/attribute-groups.js';
 import { type AttributeActions, ResourceTab } from '../components/resource-tab.js';
 import { useFilterActions } from '../components/use-filter-actions.js';
-import type { DataSource, TraceDetail } from '../data/data-source.js';
+import type { TraceDetail } from '../data/data-source.js';
+import type { LegacyDataSource } from '../data/legacy-data-source.js';
 import type { LogRow } from '../data/log-query.js';
 import { useHasMetrics } from '../metrics/metric-grid.js';
 import { useSelection } from '../state/selection-context.js';
@@ -24,7 +25,7 @@ export interface SpanSectionProps {
   detail: TraceDetail;
   spanId: SpanId | null;
   epoch: UnixNanos;
-  dataSource: DataSource;
+  dataSource: LegacyDataSource;
   /** The trace's logs (time-ascending), or null while they load or when the trace has none. */
   logs?: readonly LogRow[] | null;
   /** Why the trace's logs failed to load; the Logs tab then stays visible and shows it. */

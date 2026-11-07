@@ -4,14 +4,9 @@ import type { TraceId } from '../../src/model/ids.js';
 import type { ResourceRecord } from '../../src/model/records.js';
 import { FacetCounts } from '../../src/rollups/facets.js';
 import type { MetricCatalog } from '../../src/rollups/metric-catalog.js';
-import {
-  createDataSource,
-  resourceValuesOf,
-  type SpanQuery,
-  type SpanRow,
-  type TraceRow,
-} from '../../src/viewer/data/data-source.js';
+import { createDataSource, resourceValuesOf } from '../../src/viewer/data/legacy-data-source.js';
 import { loadSpanRollups } from '../../src/viewer/data/load.js';
+import type { SpanQuery, SpanRow, TraceRow } from '../../src/viewer/data/span-query.js';
 import { CHUNK_LRU_SIZE } from '../../src/viewer/data/windowed.js';
 import { createScriptedLoader } from '../../test-support/scripted-loader.js';
 import {

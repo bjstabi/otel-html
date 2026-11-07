@@ -7,7 +7,7 @@ import { OtelHtmlError } from '../../src/model/errors.js';
 import type { RelNanos, SpanId, TraceId } from '../../src/model/ids.js';
 import type { ResourceRecord, ScopeRecord } from '../../src/model/records.js';
 import { formatBytes } from '../../src/semconv/formatters.js';
-import type { DataSource } from '../../src/viewer/data/data-source.js';
+import type { LegacyDataSource } from '../../src/viewer/data/legacy-data-source.js';
 import { type LogRef, type LogRow, logRef } from '../../src/viewer/data/log-query.js';
 import { LogPanel } from '../../src/viewer/logs/log-panel.js';
 import { GoToContext } from '../../src/viewer/shell/go-to.js';
@@ -117,7 +117,7 @@ const UNTIMED_ROW = {
   ref: logRef(0, 5),
 };
 
-function source(): DataSource {
+function source(): LegacyDataSource {
   const byRef = (ref: LogRef): LogRow => {
     const r = [...ROWS, LINKED_ROW, UNTIMED_ROW].find((x) => x.ref === ref);
     if (r === undefined)
@@ -148,7 +148,7 @@ function source(): DataSource {
         partial: true,
       });
     },
-  } as unknown as DataSource;
+  } as unknown as LegacyDataSource;
 }
 
 function mount(ref: string, initial: Parameters<typeof createSelectionStore>[0] = {}, ds = source()) {
@@ -213,7 +213,7 @@ describe('LogPanel', () => {
     const ds = {
       ...source(),
       getLog: () => Promise.resolve(row(0, { time: null, observed: false })),
-    } as unknown as DataSource;
+    } as unknown as LegacyDataSource;
     render(
       <SelectionProvider store={store}>
         <LogPanel dataSource={ds} logRef={'0.0' as LogRef} onClose={() => {}} />
@@ -227,7 +227,7 @@ describe('LogPanel', () => {
     const ds = {
       ...source(),
       getLog: () => Promise.resolve(row(0, { time: null })),
-    } as unknown as DataSource;
+    } as unknown as LegacyDataSource;
     render(
       <SelectionProvider store={store}>
         <LogPanel dataSource={ds} logRef={'0.0' as LogRef} onClose={() => {}} />
@@ -311,7 +311,7 @@ describe('LogPanel', () => {
     const ds = {
       ...base,
       getLog: (ref: LogRef) => (ref === ROWS[1]?.ref ? gate.then(() => base.getLog(ref)) : base.getLog(ref)),
-    } as DataSource;
+    } as LegacyDataSource;
     const store = createSelectionStore({ log: '0.0' as LogRef });
     const panelFor = (ref: string) => (
       <ThemeProvider>
@@ -357,7 +357,7 @@ describe('LogPanel', () => {
   });
 
   test('while the first log loads there is a skeleton, and Export and Surrounding logs are disabled', async () => {
-    const ds = { ...source(), getLog: () => new Promise<LogRow>(() => {}) } as unknown as DataSource;
+    const ds = { ...source(), getLog: () => new Promise<LogRow>(() => {}) } as unknown as LegacyDataSource;
     mount('0.0', {}, ds);
     const status = await screen.findByRole('status', { name: 'Loading log' });
     expect(status.textContent).toContain('0.0');
@@ -369,7 +369,7 @@ describe('LogPanel', () => {
     const ds = {
       ...source(),
       hasTrace: () => Promise.reject(new Error('shard failed')),
-    } as unknown as DataSource;
+    } as unknown as LegacyDataSource;
     mount('0.1', {}, ds);
     const panel = await screen.findByTestId('log-panel');
     expect(await within(panel).findByText('could not check the trace')).toBeTruthy();

@@ -3,7 +3,7 @@ import type { RelNanos, SpanId, TraceId } from '../../model/ids.js';
 import type { ResourceRecord, SpanEventRecord, SpanLinkRecord, SpanRecord } from '../../model/records.js';
 import { formatDuration } from '../../semconv/formatters.js';
 import { AttributeGroups } from '../components/attribute-groups.js';
-import type { DataSource } from '../data/data-source.js';
+import type { LegacyDataSource } from '../data/legacy-data-source.js';
 import { gridWindow, MetricGrid, type MetricGridOrigin } from '../metrics/metric-grid.js';
 import { navigateRoute } from '../shell/use-route.js';
 import { selectionToUrlState } from '../state/selection.js';
@@ -110,7 +110,7 @@ function LinkTarget(props: {
 
 export function LinksTab(props: {
   span: SpanRecord;
-  dataSource: DataSource;
+  dataSource: LegacyDataSource;
   onSelectSpan(id: SpanId): void;
 }): JSX.Element {
   const cache = useRef(new Map<TraceId, Promise<boolean>>());
@@ -165,7 +165,7 @@ export function LinksTab(props: {
 export function SpanMetricsTab(props: {
   span: SpanRecord;
   resource: ResourceRecord;
-  dataSource: DataSource;
+  dataSource: LegacyDataSource;
 }): JSX.Element {
   const { span, resource, dataSource } = props;
   const range = dataSource.manifest.range;

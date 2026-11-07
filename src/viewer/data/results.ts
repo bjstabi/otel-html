@@ -1,15 +1,11 @@
-import type { ManifestV4 } from '../../format/manifest.js';
 import type { TraceId } from '../../model/ids.js';
 import type { ResourceRecord, ScopeRecord, SpanRecord } from '../../model/records.js';
 import type { FacetCounts } from '../../rollups/facets.js';
-import type { MetricCatalog, MetricEntry } from '../../rollups/metric-catalog.js';
 import type { SpanStatusKey } from '../../rollups/span-rollups.js';
 import type { TimeBuckets } from '../../rollups/time-buckets.js';
 import type { LogSeverityKey } from '../../semconv/severity.js';
-import type { ResourceValues, TraceDetail } from './data-source.js';
-import type { LogMode, LogRef, LogRow, LogTraceRow, PatternRow } from './log-query.js';
-import type { LoadedMetric } from './metric-load.js';
-import type { TimeWindow } from './span-query.js';
+import type { LogMode, LogRow, LogTraceRow, PatternRow } from './log-query.js';
+import type { TimeWindow } from './time-window.js';
 
 /** Request-rate, error and latency-percentile series on a shared bucket grid (the RED view). */
 export interface RedBuckets {
@@ -188,45 +184,4 @@ export interface PatternsResult {
   rows: readonly PatternRow[];
   /** The templates before the limit. */
   total: number;
-}
-
-/**
- * The format-4 data source: the span half, the log half (`queryLogs`, `getLog`, `traceLogs`, `surroundingLogs`,
- * `patterns`, `metricPoints`, `resourceValues`) and the stubs the viewer needs until plan 3 (D11).
- */
-export interface DataSource {
-  readonly manifest: ManifestV4;
-  readonly epoch: bigint;
-  querySpans(q: SpanQuery, signal?: AbortSignal): Promise<SpanQueryResult>;
-  /** Memoised for the last id. Rejects with a `usage` error for a trace the report does not hold. */
-  getTrace(traceId: TraceId): Promise<TraceDetail>;
-  /** Bound: consumers pass it unbound. */
-  hasTrace(traceId: TraceId): Promise<boolean>;
-  /** 0 to 100 within the unfiltered spans of that service and resource; null when there are none. */
-  percentileOf(service: string, resource: string, durationNs: number): Promise<number | null>;
-  /** Exclusive time per service of one trace, largest first (D7). */
-  serviceShare(traceId: TraceId): Promise<readonly { service: string; ns: number }[]>;
-  /** The busiest `limit` services; `total` is `limit + 1` when more exist. */
-  services(
-    opts: { window: TimeWindow | null; condition: string | null; limit: number },
-    signal?: AbortSignal,
-  ): Promise<ServicesResult>;
-  queryLogs(q: LogQuery, signal?: AbortSignal): Promise<LogQueryResult>;
-  /** Rejects with a `usage` error when the report has no such log. */
-  getLog(ref: LogRef): Promise<LogRow>;
-  /** The trace's logs, time-ascending (ref tiebreak); [] when there are none. Works for traces without spans. */
-  traceLogs(traceId: TraceId, signal?: AbortSignal): Promise<readonly LogRow[]>;
-  /** Up to `n` logs on each side of `ref` from the same service and host, in time order with the ref tiebreak. */
-  surroundingLogs(ref: LogRef, n: number): Promise<SurroundingLogs>;
-  /** Log patterns combined by template across partitions. */
-  patterns(q: PatternQuery, signal?: AbortSignal): Promise<PatternsResult>;
-  /** Data points over time across every resource (the unfiltered table). */
-  metricPoints(signal?: AbortSignal): Promise<TimeBuckets<'points'>>;
-  /** The values of one resource attribute over spans, logs and points, sorted; `capped` when more than the cap exist. */
-  resourceValues(key: string, signal?: AbortSignal): Promise<ResourceValues>;
-  /** Rejects with a `usage` error naming plan 3 until metrics are queryable (D11). */
-  metricCatalog(): Promise<MetricCatalog>;
-  metric(id: number): Promise<LoadedMetric>;
-  metricsForResources(resources: readonly ResourceRecord[]): Promise<readonly MetricEntry[]>;
-  close(): Promise<void>;
 }

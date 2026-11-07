@@ -8,13 +8,10 @@ import { compileCondition } from '../../src/ottl/compile.js';
 import { FacetCounts } from '../../src/rollups/facets.js';
 import { RedSeries } from '../../src/rollups/red.js';
 import { TimeBuckets } from '../../src/rollups/time-buckets.js';
-import type {
-  DataSource,
-  SpanQueryResult,
-  TraceDetail,
-  TraceRow,
-} from '../../src/viewer/data/data-source.js';
+import type { TraceDetail } from '../../src/viewer/data/data-source.js';
+import type { LegacyDataSource } from '../../src/viewer/data/legacy-data-source.js';
 import { type LogRow, logRef } from '../../src/viewer/data/log-query.js';
+import type { SpanQueryResult, TraceRow } from '../../src/viewer/data/span-query.js';
 import { type GoTo, GoToContext } from '../../src/viewer/shell/go-to.js';
 import { MOVE_EVENT } from '../../src/viewer/shell/move-event.js';
 import { applyPatch, carryTo } from '../../src/viewer/state/carry.js';
@@ -85,14 +82,14 @@ const errDetail = (): TraceDetail =>
     traceRow(2, 1, 10, 50, { service: 'db', name: 'db.query', error: true }),
   ]);
 
-function source(over: Partial<DataSource> = {}): DataSource {
+function source(over: Partial<LegacyDataSource> = {}): LegacyDataSource {
   return {
     manifest,
     strategy: 'eager',
     getTrace: () => Promise.resolve(okDetail()),
     percentileOf: () => 97.2,
     ...over,
-  } as DataSource;
+  } as LegacyDataSource;
 }
 
 function mount(
@@ -474,7 +471,7 @@ describe('TracePanel Logs tabs', () => {
     logRow(2, 30, spanIdOf(2).toString(), 'third'),
     logRow(3, 40, 'deadbeefdeadbeef', 'dangling'),
   ];
-  const withLogs = (logs: readonly LogRow[]): DataSource =>
+  const withLogs = (logs: readonly LogRow[]): LegacyDataSource =>
     source({
       getTrace: () => Promise.resolve({ ...okDetail(), logCount: logs.length }),
       traceLogs: () => Promise.resolve(logs),

@@ -7,7 +7,7 @@ vi.mock('../../src/viewer/components/chart.js', () => ({
   Chart: (p: { ariaLabel: string }): React.JSX.Element => <div role="img" aria-label={p.ariaLabel} />,
 }));
 
-import { createDataSource } from '../../src/viewer/data/data-source.js';
+import { createDataSource } from '../../src/viewer/data/legacy-data-source.js';
 import { Shell } from '../../src/viewer/shell/shell.js';
 import { createHashHistory } from '../../src/viewer/state/hash-history.js';
 import { parseUrlState } from '../../src/viewer/state/url-state.js';

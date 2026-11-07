@@ -8,8 +8,10 @@ import { RedSeries } from '../../src/rollups/red.js';
 import { TimeBuckets } from '../../src/rollups/time-buckets.js';
 import { LOG_SEVERITY_KEYS } from '../../src/semconv/severity.js';
 import { App } from '../../src/viewer/app.js';
-import type { DataSource, SpanQueryResult } from '../../src/viewer/data/data-source.js';
+import type { DataSource } from '../../src/viewer/data/data-source.js';
+import type { LegacyDataSource } from '../../src/viewer/data/legacy-data-source.js';
 import { type LogQueryResult, type LogRow, logRef } from '../../src/viewer/data/log-query.js';
+import type { SpanQueryResult } from '../../src/viewer/data/span-query.js';
 import { Shell } from '../../src/viewer/shell/shell.js';
 import { stepWindow } from '../../src/viewer/shell/time-range.js';
 import { createHashHistory } from '../../src/viewer/state/hash-history.js';
@@ -71,7 +73,7 @@ const emptyLogs = (): LogQueryResult => ({
   buckets: new TimeBuckets(LOG_SEVERITY_KEYS, 8),
   partial: null,
 });
-const dataSource: DataSource = {
+const dataSource: LegacyDataSource = {
   manifest,
   strategy: 'eager',
   landing: () =>
@@ -98,7 +100,7 @@ const dataSource: DataSource = {
   resourceValues: unused,
 };
 
-function renderShell(hash: string, ds: DataSource = dataSource): void {
+function renderShell(hash: string, ds: LegacyDataSource = dataSource): void {
   window.location.hash = hash;
   render(
     <ThemeProvider>
@@ -411,7 +413,10 @@ describe('App loading', () => {
     window.location.hash = '#/traces';
     render(
       <ThemeProvider>
-        <App load={() => Promise.resolve(dataSource)} history={createHashHistory(window)} />
+        <App
+          load={() => Promise.resolve(dataSource as unknown as DataSource)}
+          history={createHashHistory(window)}
+        />
       </ThemeProvider>,
     );
     expect(screen.getByRole('status').textContent).toContain('Loading');
@@ -560,7 +565,7 @@ describe('overlays own the keyboard', () => {
 });
 
 describe('full-page trace route', () => {
-  const traceDs = (): DataSource => ({
+  const traceDs = (): LegacyDataSource => ({
     ...dataSource,
     getTrace: () =>
       Promise.resolve(detailOf([traceRow(1, null, 0, 1000, { service: 'checkout', name: 'GET /' })])),
@@ -580,7 +585,7 @@ describe('full-page trace route', () => {
 
   test('Open in Logs Explorer replaces a span-only filter and raises no dropped-filter notice', async () => {
     const user = userEvent.setup();
-    const ds: DataSource = {
+    const ds: LegacyDataSource = {
       ...traceDs(),
       getTrace: () =>
         Promise.resolve({
@@ -624,7 +629,7 @@ describe('full-page trace route', () => {
       service: 'checkout',
       host: null,
     } as unknown as LogRow;
-    const ds: DataSource = {
+    const ds: LegacyDataSource = {
       ...traceDs(),
       getTrace: () =>
         Promise.resolve({

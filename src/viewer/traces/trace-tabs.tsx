@@ -5,7 +5,8 @@ import type { SpanId, UnixNanos } from '../../model/ids.js';
 import { type ResourceRecord, StatusCode } from '../../model/records.js';
 import { formatDuration } from '../../semconv/formatters.js';
 import { ResultsTable, type SortState } from '../components/results-table.js';
-import type { DataSource, TraceDetail } from '../data/data-source.js';
+import type { TraceDetail } from '../data/data-source.js';
+import type { LegacyDataSource } from '../data/legacy-data-source.js';
 import type { SpanRow } from '../data/span-query.js';
 import { exclusiveTimeByService } from '../data/trace-tree.js';
 import { gridWindow, MetricGrid, type MetricGridOrigin } from '../metrics/metric-grid.js';
@@ -207,7 +208,7 @@ export function traceResources(detail: TraceDetail): ResourceRecord[] {
 export function TraceMetricsTab(props: {
   detail: TraceDetail;
   resources: readonly ResourceRecord[];
-  dataSource: DataSource;
+  dataSource: LegacyDataSource;
 }): JSX.Element {
   const { detail, resources, dataSource } = props;
   const range = dataSource.manifest.range;

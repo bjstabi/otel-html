@@ -9,7 +9,7 @@ import { ErrorCard, LoadingNote } from '../../components/explorer-states.js';
 import { type ChartPick, MetricChartCard } from '../../components/metric-chart-card.js';
 import { METRIC_CHART_HEIGHT, type MetricSize } from '../../components/metric-chart-option.js';
 import { RunChartCard } from '../../components/run-chart-card.js';
-import { catalogOf, type DataSource } from '../../data/data-source.js';
+import { catalogOf, type LegacyDataSource } from '../../data/legacy-data-source.js';
 import { type MetricQuery, resolveMetric } from '../../data/metric-query.js';
 import { runMetricRunQuery } from '../../data/metric-run-query.js';
 import type { TimeWindow } from '../../data/span-query.js';
@@ -49,7 +49,7 @@ const OFF: Narrowing = { status: 'off' };
  * The trace's resources and the `where` that names them (`explorerFilter` against every catalog resource).
  * `null` is no trace: nothing loads. A change of trace is `loading` until its own resources arrive.
  */
-export function useNarrowing(dataSource: DataSource, traceId: TraceId | null): Narrowing {
+export function useNarrowing(dataSource: LegacyDataSource, traceId: TraceId | null): Narrowing {
   const load = useCallback(
     async (
       id: TraceId,

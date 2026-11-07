@@ -9,7 +9,7 @@ import {
   SEVERITY_SERIES,
   SPAN_STATUS_SERIES,
 } from '../../components/histogram-card.js';
-import type { DataSource } from '../../data/data-source.js';
+import type { LegacyDataSource } from '../../data/legacy-data-source.js';
 import type { TimeWindow } from '../../data/span-query.js';
 import { useLogQuery } from '../../logs/use-log-query.js';
 import { useKeyedAsync } from '../../state/use-keyed-async.js';
@@ -84,7 +84,7 @@ function notes(parts: readonly (string | null)[]): string | null {
 const partialNote = (p: ChunkCount | null): string | null =>
   p === null ? null : `from ${p.scanned} of ${p.total} chunks`;
 
-const loadPoints = (ds: DataSource): Promise<TimeBuckets<'points'>> =>
+const loadPoints = (ds: LegacyDataSource): Promise<TimeBuckets<'points'>> =>
   ds.manifest.totals.metrics === 0 ? Promise.resolve(new TimeBuckets(METRIC_KEYS)) : ds.metricPoints();
 
 /** The Fusion timeline: spans, logs and metric points over the page's window; a drag sets the selection window. */

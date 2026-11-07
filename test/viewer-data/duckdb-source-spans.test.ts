@@ -1,11 +1,12 @@
 import { beforeAll, describe, expect, test } from 'vitest';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { parseTraceId } from '../../src/model/ids.js';
+import type { DataSource } from '../../src/viewer/data/data-source.js';
 import { createDuckDbDataSource } from '../../src/viewer/data/duckdb-source.js';
 import { createCoordinator, mosaicQueryEngine } from '../../src/viewer/data/mosaic.js';
 import type { QueryEngine } from '../../src/viewer/data/query-engine.js';
 import { residualRows } from '../../src/viewer/data/residual.js';
-import type { DataSource, SpanQuery, SpanRow, TraceRow } from '../../src/viewer/data/results.js';
+import type { SpanQuery, SpanRow, TraceRow } from '../../src/viewer/data/results.js';
 import { toNumber } from '../../src/viewer/data/span-results.js';
 import type { TestDb } from '../../test-support/duckdb-node.js';
 import {
