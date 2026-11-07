@@ -75,6 +75,8 @@ interface S {
 
 const hex = (n: number, width: number): string => n.toString(16).padStart(width, '0');
 const BASE = BigInt(EPOCH_NS);
+// The earliest span becomes the report epoch: starting it 123456 ns off a millisecond keeps the epoch unaligned to every bucket width.
+const OFFSET = 123_456n;
 const ns = (ms: number): bigint => BigInt(Math.round(ms * 1e6));
 const str = (v: string): JsonObject => ({ stringValue: v });
 
@@ -89,8 +91,8 @@ function request(spans: S[]): ReturnType<typeof otlp> {
           spanId: hex(s.id, 16),
           ...(s.parent === undefined ? {} : { parentSpanId: hex(s.parent, 16) }),
           name: s.name,
-          startTimeUnixNano: String(BASE + ns(s.startMs)),
-          endTimeUnixNano: String(BASE + ns(s.startMs + s.durMs)),
+          startTimeUnixNano: String(BASE + OFFSET + ns(s.startMs)),
+          endTimeUnixNano: String(BASE + OFFSET + ns(s.startMs) + ns(s.durMs)),
           ...(s.error === true ? { status: { code: 2 } } : {}),
           attributes: s.attrs ?? [],
         }),
@@ -127,7 +129,7 @@ const P0: S[] = [
     parent: 1,
     svc: 'svc-b',
     name: 'SELECT',
-    startMs: 20,
+    startMs: 19.999999,
     durMs: 5,
     error: true,
     attrs: [attr('k.mixed', str('seven'))],
@@ -180,8 +182,8 @@ beforeAll(async () => {
   db = await openFixtureDb(f);
 });
 
-const rel = (ms: number): number => Number(BASE + ns(ms) - f.epoch);
-const relBig = (ms: number): bigint => BASE + ns(ms) - f.epoch;
+const relBig = (ms: number): bigint => BASE + OFFSET + ns(ms) - f.epoch;
+const rel = (ms: number): number => Number(relBig(ms));
 const run = (q: { toString(): string }): Row[] => db.rows(q.toString());
 const col = (rows: Row[], name: string): unknown[] => rows.map((r) => r[name]);
 
@@ -203,6 +205,9 @@ function filter(
 }
 
 describe('time buckets', () => {
+  test('the fixture epoch is not aligned to a bucket width', () => {
+    expect(f.epoch % 1_000_000n).toBe(123_456n);
+  });
   test('bucketSpec picks the smallest 1 ms * 2^k width that fits 4096 buckets', () => {
     expect(bucketSpec({ start: 0, end: 4095e6 }, null).widthNs).toBe(1e6);
     expect(bucketSpec({ start: 0, end: 4096e6 }, null).widthNs).toBe(2e6);
@@ -428,9 +433,9 @@ describe('timeline and durations', () => {
     const spec = bucketSpec(window, null);
     const rows = run(timelineQuery(w, spec));
     expect(rows.map((r) => [r.bucket, r.n, r.errors])).toEqual([
-      [relBig(15), 2n, 0n],
-      [relBig(20), 1n, 1n],
-      [relBig(60), 1n, 0n],
+      [15_000_000n, 2n, 0n],
+      [19_000_000n, 1n, 1n], // 1 ns before the 20 ms boundary
+      [60_000_000n, 1n, 0n],
     ]);
     expect(rows[0]).toMatchObject({ ok: 0n, error: 0n, unset: 2n });
     expect(rows[0]?.max_duration_ns).toBe(ns(100));
@@ -487,6 +492,8 @@ describe('services', () => {
     expect(rows[0]).toHaveProperty('quantiles');
     expect(col(run(servicesQuery(w, 1)), 'service_name')).toEqual(['svc-b']);
     const spec = bucketSpec(null, { start: rel(0), end: rel(1010) });
+    const b = run(serviceBucketsQuery(w, ['svc-b'], bucketSpec(null, { start: rel(0), end: rel(1010) })));
+    expect(col(b, 'bucket')).toEqual([10_000_000n, 19_000_000n, 60_000_000n, 1_002_000_000n]);
     const buckets = run(serviceBucketsQuery(w, ['svc-a'], spec));
     expect(new Set(col(buckets, 'service_name'))).toEqual(new Set(['svc-a']));
     expect(buckets.reduce((a, r) => a + Number(r.n), 0)).toBe(3);

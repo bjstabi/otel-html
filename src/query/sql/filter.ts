@@ -1,5 +1,6 @@
 import { and, column, type ExprNode, eq, gte, isIn, literal, lte, sql, verbatim } from '@uwdata/mosaic-sql';
 import type { ManifestV4 } from '../../format/manifest.js';
+import { OtelHtmlError } from '../../model/errors.js';
 import type { TraceId } from '../../model/ids.js';
 import { textPredicate, translateCondition } from './ottl.js';
 import { type AbsWindow, absWindow, type Pruned, prunePartitions, type RelWindow } from './prune.js';
@@ -40,6 +41,11 @@ export function buildFilter(opts: FilterOptions): { filter: SqlFilter; residual:
   const epoch = BigInt(opts.manifest.epochUnixNano);
   const window = absWindow(opts.window, epoch);
   const hints = t?.hints ?? new Map();
+  if (opts.traceId != null && opts.traceFiles === undefined) {
+    throw new OtelHtmlError('usage', {
+      message: 'buildFilter: traceId needs traceFiles (the traces files tracePartitionsQuery names)',
+    });
+  }
   let files = prunePartitions(opts.manifest, opts.table, hints, window);
   if (opts.traceId != null && opts.traceFiles !== undefined) {
     const wanted = new Set(opts.traceFiles.map(partitionOfFilename));

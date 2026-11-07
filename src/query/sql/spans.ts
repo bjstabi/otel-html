@@ -13,9 +13,8 @@ import {
 } from '@uwdata/mosaic-sql';
 import { TABLE_COLUMNS } from '../../format/parquet/columns.js';
 import type { TraceId } from '../../model/ids.js';
-import { MAX_FACET_VALUE_LENGTH } from '../../rollups/facet-values.js';
 import { jsonAt, jsonKind, jsonStringAt, relTime } from './columns.js';
-import { CORE_SPAN_FACETS } from './facets.js';
+import { CORE_SPAN_FACETS, truncated } from './facets.js';
 import { filenameTerm, type SqlFilter, whereOf } from './filter.js';
 import { type BucketSpec, bucketExpr } from './time.js';
 
@@ -175,8 +174,6 @@ export function durationBinsQuery(f: SqlFilter, axis: readonly { fromNs: number;
     .orderby(sql`bin`);
   return axis.length === 0 ? q.where(literal(false)) : q;
 }
-
-const truncated = (e: ExprNode): ExprNode => sql`left(${e}, ${verbatim(String(MAX_FACET_VALUE_LENGTH))})`;
 
 /**
  * Per value of facet `key` (a core facet, else the span attribute of that name): `n`, `errors`, `quantiles`,

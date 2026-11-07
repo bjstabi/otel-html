@@ -3,7 +3,7 @@ import { parseWith } from '../format/validate.js';
 import { anyValueToDisplay } from '../model/anyvalue.js';
 import { OtelHtmlError } from '../model/errors.js';
 import type { SpanTarget } from '../ottl/contexts.js';
-import { DEFAULT_SPAN_FACETS, SPAN_RESOURCE_FACET_KEYS, statusKey } from '../query/sql/facets.js';
+import { DEFAULT_SPAN_FACETS, SPAN_RESOURCE_FACET_KEYS, statusKey } from '../semconv/default-facets.js';
 import { resourceName, serviceName } from '../semconv/resource-name.js';
 import { ExpHistogram } from './exp-histogram.js';
 import { addFacet, facetableAttributes, scalarKind, truncateFacetValue } from './facet-values.js';
@@ -17,7 +17,7 @@ export type SpanStatusKey = (typeof SPAN_STATUS_KEYS)[number];
 /** Distinct (service, resource) duration histograms kept; further groups are counted in `droppedDurationGroups`. */
 const MAX_DURATION_GROUPS = 10_000;
 
-// The facet definitions live in src/query/sql/facets.ts (D16); the chunk writer reads them from here until the chunks go.
+// The facet definitions live in src/semconv/default-facets.ts (D16); the chunk writer reads them from here until the chunks go.
 export { DEFAULT_SPAN_FACETS, SPAN_RESOURCE_FACET_KEYS };
 
 const CORE_KEYS: ReadonlySet<string> = new Set(DEFAULT_SPAN_FACETS.map((f) => f.key));

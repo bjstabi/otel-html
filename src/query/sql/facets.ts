@@ -1,15 +1,18 @@
 import { column, type ExprNode, literal, Query, sql, verbatim } from '@uwdata/mosaic-sql';
-import { anyValueToDisplay } from '../../model/anyvalue.js';
-import { SpanKind, StatusCode } from '../../model/records.js';
-import type { LogTarget, SpanTarget } from '../../ottl/contexts.js';
 import { MAX_FACET_VALUE_LENGTH } from '../../rollups/facet-values.js';
 import {
   ATTR_DEPLOYMENT_ENVIRONMENT_NAME,
   ATTR_HOST_NAME,
   ATTR_SERVICE_NAME,
 } from '../../semconv/attributes.js';
-import { resourceName, serviceName } from '../../semconv/resource-name.js';
-import { LOG_SEVERITY_KEYS, SEVERITY_BANDS, severityKey } from '../../semconv/severity.js';
+import {
+  DEFAULT_LOG_FACETS,
+  DEFAULT_SPAN_FACETS,
+  type LogFacetKey,
+  SPAN_KIND_NAMES,
+  type SpanFacetKey,
+} from '../../semconv/default-facets.js';
+import { LOG_SEVERITY_KEYS, SEVERITY_BANDS } from '../../semconv/severity.js';
 import { bindOnce, jsonKind, jsonStringAt } from './columns.js';
 import { type SqlFilter, whereOf } from './filter.js';
 
@@ -29,113 +32,9 @@ export interface CoreFacet {
 }
 
 /** A default facet as the chunk writer's rollups read it: key, label and the value of one record. */
-export interface DefaultSpanFacet {
-  readonly key: string;
-  readonly label: string;
-  readonly scope: 'core' | 'resource';
-  readonly value: (t: SpanTarget) => string | undefined;
-}
-export interface DefaultLogFacet {
-  readonly key: string;
-  readonly label: string;
-  /** Where the key lives in the data: a resource attribute, or a core log field. */
-  readonly scope: 'core' | 'resource';
-  /** `undefined` leaves the log out of this facet. */
-  readonly value: (t: LogTarget) => string | undefined;
-}
-
-function spanKindName(k: SpanKind): string {
-  switch (k) {
-    case SpanKind.UNSPECIFIED:
-      return 'unspecified';
-    case SpanKind.INTERNAL:
-      return 'internal';
-    case SpanKind.SERVER:
-      return 'server';
-    case SpanKind.CLIENT:
-      return 'client';
-    case SpanKind.PRODUCER:
-      return 'producer';
-    case SpanKind.CONSUMER:
-      return 'consumer';
-  }
-}
-
-/** `ok` | `error` | `unset` of a status code. */
-export function statusKey(c: StatusCode): 'ok' | 'error' | 'unset' {
-  switch (c) {
-    case StatusCode.OK:
-      return 'ok';
-    case StatusCode.ERROR:
-      return 'error';
-    case StatusCode.UNSET:
-      return 'unset';
-  }
-}
-
-function resourceAttr(t: SpanTarget, key: string): string | undefined {
-  const v = t.resource.attributes.get(key);
-  return v === undefined ? undefined : anyValueToDisplay(v);
-}
-
-/** Always-tracked span facets (exempt from the key cap), in display order. */
-export const DEFAULT_SPAN_FACETS: readonly DefaultSpanFacet[] = [
-  { key: ATTR_SERVICE_NAME, label: 'Service', scope: 'resource', value: (t) => serviceName(t.resource) },
-  { key: 'span.name', label: 'Span name', scope: 'core', value: (t) => t.span.name },
-  { key: 'span.kind', label: 'Kind', scope: 'core', value: (t) => spanKindName(t.span.kind) },
-  { key: 'status.code', label: 'Status', scope: 'core', value: (t) => statusKey(t.span.status.code) },
-  { key: 'resource', label: 'Resource', scope: 'core', value: (t) => resourceName(t.span) },
-  { key: 'instrumentation_scope.name', label: 'Scope', scope: 'core', value: (t) => t.scope.name },
-  { key: ATTR_HOST_NAME, label: 'Host', scope: 'resource', value: (t) => resourceAttr(t, ATTR_HOST_NAME) },
-  {
-    key: ATTR_DEPLOYMENT_ENVIRONMENT_NAME,
-    label: 'Environment',
-    scope: 'resource',
-    value: (t) => resourceAttr(t, ATTR_DEPLOYMENT_ENVIRONMENT_NAME),
-  },
-];
-
-/** Always-tracked log facets (exempt from the key cap), in display order. */
-export const DEFAULT_LOG_FACETS: readonly DefaultLogFacet[] = [
-  { key: 'severity', label: 'Severity', scope: 'core', value: (t) => severityKey(t.log.severityNumber) },
-  { key: ATTR_SERVICE_NAME, label: 'Service', scope: 'core', value: (t) => serviceName(t.resource) },
-  {
-    key: ATTR_HOST_NAME,
-    label: 'Host',
-    scope: 'resource',
-    value: (t) => {
-      const v = t.resource.attributes.get(ATTR_HOST_NAME);
-      return v === undefined ? undefined : anyValueToDisplay(v);
-    },
-  },
-  { key: 'instrumentation_scope.name', label: 'Scope', scope: 'core', value: (t) => t.scope.name },
-  {
-    key: 'event.name',
-    label: 'Event name',
-    scope: 'core',
-    value: (t) => (t.log.eventName === '' ? undefined : t.log.eventName),
-  },
-  {
-    key: 'trace.present',
-    label: 'Has trace',
-    scope: 'core',
-    value: (t) => (t.log.traceId === null ? 'no' : 'yes'),
-  },
-];
-
-/** Default facets whose values are resource attributes (span attributes of these names are not faceted). */
-export const SPAN_RESOURCE_FACET_KEYS: ReadonlySet<string> = new Set([
-  ATTR_SERVICE_NAME,
-  ATTR_HOST_NAME,
-  ATTR_DEPLOYMENT_ENVIRONMENT_NAME,
-]);
-/** Default facets whose values are resource attributes (log attributes of these names are not faceted). */
-export const LOG_RESOURCE_FACET_KEYS: ReadonlySet<string> = new Set([ATTR_SERVICE_NAME, ATTR_HOST_NAME]);
-
 const col = (name: string): ExprNode => column(name);
-const KIND_NAMES = ['unspecified', 'internal', 'server', 'client', 'producer', 'consumer'];
 const kindCase = sql`CASE coalesce(${col('kind')}, 0) ${verbatim(
-  KIND_NAMES.map((n, i) => `WHEN ${i} THEN '${n}'`).join(' '),
+  SPAN_KIND_NAMES.map((n, i) => `WHEN ${i} THEN '${n}'`).join(' '),
 )} END`;
 const statusCase = sql`CASE coalesce(${col('status_code')}, 0) WHEN 1 THEN 'ok' WHEN 2 THEN 'error' ELSE 'unset' END`;
 const severityCase = sql`CASE ${verbatim(
@@ -145,7 +44,7 @@ const severityCase = sql`CASE ${verbatim(
   ).join(' '),
 )} END`;
 
-const SPAN_EXPRS: Readonly<Record<string, ExprNode>> = {
+const SPAN_EXPRS: Readonly<Record<SpanFacetKey, ExprNode>> = {
   [ATTR_SERVICE_NAME]: col('service_name'),
   'span.name': col('name'),
   'span.kind': kindCase,
@@ -155,7 +54,7 @@ const SPAN_EXPRS: Readonly<Record<string, ExprNode>> = {
   [ATTR_HOST_NAME]: jsonStringAt('resource_attributes', [ATTR_HOST_NAME]),
   [ATTR_DEPLOYMENT_ENVIRONMENT_NAME]: jsonStringAt('resource_attributes', [ATTR_DEPLOYMENT_ENVIRONMENT_NAME]),
 };
-const LOG_EXPRS: Readonly<Record<string, ExprNode>> = {
+const LOG_EXPRS: Readonly<Record<LogFacetKey, ExprNode>> = {
   severity: severityCase,
   [ATTR_SERVICE_NAME]: col('service_name'),
   [ATTR_HOST_NAME]: col('host_name'),
@@ -164,15 +63,15 @@ const LOG_EXPRS: Readonly<Record<string, ExprNode>> = {
   'trace.present': sql`CASE WHEN ${col('trace_id')} IS NULL THEN 'no' ELSE 'yes' END`,
 };
 
-function coreOf(
-  defaults: readonly { key: string; label: string; scope: 'core' | 'resource' }[],
-  exprs: Readonly<Record<string, ExprNode>>,
+function coreOf<K extends string>(
+  defaults: readonly { key: K; label: string; scope: 'core' | 'resource' }[],
+  exprs: Readonly<Record<K, ExprNode>>,
 ): CoreFacet[] {
   return defaults.map((d) => ({
     key: d.key,
     label: d.label,
     scope: d.scope,
-    expr: exprs[d.key] ?? literal(null),
+    expr: exprs[d.key],
     kind: 'string',
   }));
 }
@@ -180,7 +79,8 @@ function coreOf(
 export const CORE_SPAN_FACETS: readonly CoreFacet[] = coreOf(DEFAULT_SPAN_FACETS, SPAN_EXPRS);
 export const CORE_LOG_FACETS: readonly CoreFacet[] = coreOf(DEFAULT_LOG_FACETS, LOG_EXPRS);
 
-const truncated = (e: ExprNode): ExprNode => sql`left(${e}, ${verbatim(String(MAX_FACET_VALUE_LENGTH))})`;
+export const truncated = (e: ExprNode): ExprNode =>
+  sql`left(${e}, ${verbatim(String(MAX_FACET_VALUE_LENGTH))})`;
 
 /**
  * One query: `GROUP BY GROUPING SETS ((f1), (f2), ...)` over the chosen core facets. Rows (key, value, n); a row with no
