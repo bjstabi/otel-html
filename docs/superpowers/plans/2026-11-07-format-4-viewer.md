@@ -32,8 +32,9 @@ The spec leaves these to the builder or says something plan 1's record or the co
 - **D14 Config.** `writer.format` becomes `'local' | 'site'`, default `local`; `chunks` is `invalid-config` with a hint; `viewer.eagerBudgetBytes` and `OTEL_HTML_EAGER_BUDGET_BYTES` are removed (R19); v1 to v3 manifests keep their config schema for reading. `--format chunks` is gone from the CLI.
 - **D15 e2e.** The fixture reports are built in `local` format and opened from `file://`; a `site` copy of each mounted report (`upgrade --format site` into `e2e/.reports-site/`) is served over HTTP for the `@http` tests by a static server that answers `Range` and `HEAD`. The scale reports are `site` only, under a new `chromium-perf-http` project; `huge` (an over-budget report) is replaced by `many` (the same data left uncompacted in about a hundred partitions, note 10). Budgets are re-measured on the new path and set at twice the measured median, never above today's.
 - **D16 Shared facet definitions.** The core facets of spans and logs (key, label, scope, SQL expression) live in `src/query/sql/facets.ts`; `DEFAULT_SPAN_FACETS` and `DEFAULT_LOG_FACETS` move there and the rollup modules go.
-- **D18 No dedupe in SQL.** `span_id` is not unique across partitions after a merge of a report with its own converted ancestor (R55, note 3). The views carry no deduplication (spec §7.4); a trace with duplicate spans shows them twice (`buildTraceTree` tolerates duplicate ids) and counts them twice. Dedupe stays the writer's and the publisher's concern.
 - **D17 Publisher.** `ci report` and `ci site` write `site` reports, `ci site` compacts the rolling report (`compactOnMerge`) and passes a shared `assetsBase` of `<site>/assets/<otel-html version>/`, uploading that folder once per version; the README preview is rendered over a loopback HTTP server. Workflow, action and CI config edits stop and ask.
+- **D18 No dedupe in SQL.** `span_id` is not unique across partitions after a merge of a report with its own converted ancestor (R55, note 3). The views carry no deduplication (spec §7.4); a trace with duplicate spans shows them twice (`buildTraceTree` tolerates duplicate ids) and counts them twice. Dedupe stays the writer's and the publisher's concern.
+- **D19 One query-engine seam.** `src/viewer/data/query-engine.ts` defines `QueryEngine` (`query(q, signal)`, `exec(sql)`, `registerText(name, text)`, `close()`); `createDuckDbDataSource` and `residualIdTable` take a `QueryEngine`, never a `Coordinator`. `src/viewer/data/mosaic.ts` is the only module that imports `@uwdata/mosaic-core`: it builds the Coordinator over a hand-written `Connector` (`connection.useUnsafe` then `runQuery`, the shape Task 1.2's Node connector already has), not mosaic-core's `DuckDBWASMConnector`, so mosaic-core never calls duckdb-wasm, the pnpm override only prevents a second install, and the viewer's dependence on mosaic-core is one file. Plan 4's REST path is another `Connector` behind the same seam; a Mosaic-free `QueryEngine` over a bare connection would be another implementation of the same interface. `@uwdata/mosaic-sql` stays the SQL AST of every builder and of the OTTL translator: that is the deliberate, deeper investment. Agreed with the maintainer on 2026-11-07.
 
 ## Plans for this spec
 
@@ -42,7 +43,7 @@ Unchanged from plan 1: this is plan 2 (§7); plan 3 covers metrics in the viewer
 ## Global Constraints
 
 - Mosaic pinned exact: `@uwdata/mosaic-sql` **0.35.0** (dependency), `@uwdata/mosaic-core` **0.35.0**, `@uwdata/flechette` **2.7.1** (devDependencies). `@duckdb/duckdb-wasm` stays **1.32.0** (R47), enforced by `overrides` in `pnpm-workspace.yaml`. No `@duckdb/node-api`, no `@uwdata/mosaic-duckdb`.
-- Mosaic is imported only under `src/query/sql/` and `src/viewer/data/`; components, pages and state never import `@uwdata/*` or `@duckdb/*` (biome `noRestrictedImports` enforces it). `apache-arrow` values are never imported under `src/viewer/` or `src/query/` (note 11; duckdb-wasm brings apache-arrow 17).
+- Import boundaries, each enforced by a biome `noRestrictedImports` override (D19): `@uwdata/mosaic-sql` only under `src/query/sql/` and `src/viewer/data/`; `@uwdata/mosaic-core` only in `src/viewer/data/mosaic.ts`; `@uwdata/flechette` only under `src/viewer/data/` (values in `mosaic.ts`, the `Table` type anywhere there); `@duckdb/duckdb-wasm` only under `src/viewer/data/engine/` and in `mosaic.ts`. Components, pages and state never import `@uwdata/*` or `@duckdb/*`. `apache-arrow` values are never imported under `src/viewer/` or `src/query/` (note 11; duckdb-wasm brings apache-arrow 17).
 - `file://` rules: no `fetch` of report files, no ES modules, no worker loaded by URL in `local`; the worker comes from a blob URL and the engine binary reaches it as a data: URL (§3, §12).
 - Queries name only the five views and the two virtual columns `filename` and `file_row_number`; never a file path in a FROM clause (§7.4).
 - Every time column is selected relative to the epoch (D2); no SQL result carries an absolute time.
@@ -103,7 +104,7 @@ overrides:
   "@duckdb/duckdb-wasm": "1.32.0"
 ```
 
-  Check with `pnpm why @duckdb/duckdb-wasm` that one version is installed. Split `schema.ts` as the Interfaces block says; move `ENGINE_VERSION` and `engineAssetNames` to `src/format/engine.ts` with the two key constants, and make `scripts/engine-assets.ts` use the constants instead of its literals (M2). Add a biome override: for `src/viewer/**` and `src/query/**`, `noRestrictedImports` on `apache-arrow` ("type-only imports allowed; the viewer bundles duckdb-wasm's apache-arrow 17"); for `src/viewer/**` except `src/viewer/data/**`, on `@uwdata/mosaic-core`, `@uwdata/mosaic-sql`, `@uwdata/flechette` and `@duckdb/duckdb-wasm` ("the data layer wraps the query engine").
+  Check with `pnpm why @duckdb/duckdb-wasm` that one version is installed. Split `schema.ts` as the Interfaces block says; move `ENGINE_VERSION` and `engineAssetNames` to `src/format/engine.ts` with the two key constants, and make `scripts/engine-assets.ts` use the constants instead of its literals (M2). Add the biome overrides of the Global Constraints (D19): for `src/viewer/**` and `src/query/**`, `noRestrictedImports` on `apache-arrow` ("type-only imports allowed; the viewer bundles duckdb-wasm's apache-arrow 17"); for `src/viewer/**` except `src/viewer/data/**`, on `@uwdata/mosaic-core`, `@uwdata/mosaic-sql`, `@uwdata/flechette` and `@duckdb/duckdb-wasm` ("the data layer wraps the query engine"); for `src/viewer/data/**` except `src/viewer/data/mosaic.ts`, on `@uwdata/mosaic-core` ("mosaic.ts is the only Mosaic coordinator seam, D19"); for `src/viewer/data/**` except `src/viewer/data/engine/**` and `mosaic.ts`, on `@duckdb/duckdb-wasm` ("the engine folder wraps duckdb-wasm").
 - [ ] **Step 4: Run `mise run check`; expected PASS** (knip must not report the new packages: they are imported by the end of this PR; until Task 1.5 lands, list them in a `// knip` ignore only if check fails, and remove the ignore in Task 1.5).
 - [ ] **Step 5: Commit** `chore(viewer): mosaic-sql, mosaic-core and flechette pinned; engine names and column defs move to src/format`
 
@@ -134,10 +135,12 @@ overrides:
   // test-support/duckdb-node.ts (tests only; the DuckDB Node blocking build, loaded as parquet-metadata.ts does)
   export interface TestDb {
     registerFile(name: string, bytes: Uint8Array): void;
+    /** `db.registerFileText`; makes TestDb an `EngineFiles` (Task 1.5). */
+    registerText(name: string, text: string): void;
     exec(sql: string): void;
     rows(sql: string): Record<string, unknown>[];
-    /** A mosaic Connector over this database: `type: 'arrow'` returns the IPC bytes of `bindings.runQuery(conn, sql)`. */
-    connector: Connector;
+    /** A mosaic Connector over this database: `type: 'arrow'` returns the IPC bytes of `bindings.runQuery(conn, sql)`; it records every request in `requests` (tests count statements). */
+    connector: Connector & { readonly requests: readonly { type: string; sql: string }[] };
     close(): void;
   }
   export async function openTestDb(): Promise<TestDb>;
@@ -219,6 +222,8 @@ test('viewStatements of an empty manifest creates five empty views', () => {
     readonly db: AsyncDuckDB;
     readonly connection: AsyncDuckDBConnection;
     readonly format: 'local' | 'site';
+    /** `db.registerFileText` (D5's id table); makes Engine an `EngineFiles` (Task 1.5). */
+    registerText(name: string, text: string): Promise<void>;
     close(): Promise<void>; // connection.close(), db.terminate()
   }
   /** `assetsBase + name` resolved against `baseUrl`, for the two engine files of `format`. */
@@ -317,58 +322,100 @@ test('local loads each wrapper under its partition key and registers the bytes, 
 - [ ] **Step 4: Run; expected PASS**
 - [ ] **Step 5: Commit** `feat(viewer): register the manifest's partitions by URL or from their wrappers and create the views`
 
-### Task 1.5: The coordinator
+### Task 1.5: The query-engine seam and its Mosaic implementation
 
 **Files:**
-- Create: `src/viewer/data/mosaic.ts`
+- Create: `src/viewer/data/query-engine.ts`, `src/viewer/data/mosaic.ts`
 - Test: `test/viewer-data/mosaic.test.ts`
 
 **Interfaces:**
-- Consumes: `Coordinator`, `DuckDBWASMConnector`, `Connector`, `QueryResult` (`@uwdata/mosaic-core`), `Table` (`@uwdata/flechette`), `Query` (`@uwdata/mosaic-sql`), `Engine`.
+- Consumes: `Coordinator`, `Connector`, `QueryResult` (`@uwdata/mosaic-core`; this file and its test are the only importers, D19), `AsyncDuckDBConnection` (`@duckdb/duckdb-wasm`), `Table` (`@uwdata/flechette`), `Query` (`@uwdata/mosaic-sql`), `Engine` (Task 1.3), `TestDb` (Task 1.2).
 - Produces:
   ```ts
+  // query-engine.ts: the one seam between the data source and whatever runs SQL (D19). No Mosaic import.
+  export interface QueryEngine {
+    /** Runs one query; int64 columns decode as bigint. An aborted signal rejects with `DOMException('AbortError')`. */
+    query(q: Query, signal?: AbortSignal): Promise<Table>;
+    /** A statement without a result: the view creation at start, the D5 temp table. */
+    exec(sql: string): Promise<void>;
+    /** Registers a text file a later statement reads (D5: `read_csv`). */
+    registerText(name: string, text: string): Promise<void>;
+    close(): Promise<void>;
+  }
+  /** What the engine does besides SQL; `Engine` and `TestDb` both satisfy it. */
+  export interface EngineFiles {
+    registerText(name: string, text: string): void | Promise<void>;
+    close(): void | Promise<void>;
+  }
+
+  // mosaic.ts
   export type Logger = Pick<Console, 'debug' | 'info' | 'warn' | 'error'>;
+  /**
+   * A hand-written mosaic Connector over a duckdb-wasm connection, not `DuckDBWASMConnector` (D19): `type: 'arrow'`
+   * returns the IPC bytes of `connection.useUnsafe((bindings, id) => bindings.runQuery(id, sql))`; `type: 'exec'` runs
+   * the same and resolves undefined; `type: 'json'` is rejected with `invalid-report` (never requested).
+   */
+  export function engineConnector(connection: AsyncDuckDBConnection): Connector;
   /** `new Coordinator(connector, { logger, cache: true, consolidate: true, ipc: { useBigInt: true, useDate: false }, preagg: { enabled: false } })`. */
   export function createCoordinator(connector: Connector, logger: Logger): Coordinator;
-  /** `new DuckDBWASMConnector({ connection: engine.connection })`. */
-  export function engineConnector(engine: Engine): Connector;
   /**
-   * `coordinator.query(q)`; an aborted signal rejects with `DOMException('AbortError')` and cancels the request if it is
-   * still queued (`coordinator.cancel([result])`). The generated SQL is attached to a failure as `OtelHtmlError('invalid-report',
-   * { path: 'query', expected: 'a query the engine accepts', actual: <engine message>, hint: <sql> })`.
+   * The `QueryEngine` over a coordinator. `query` is `coordinator.query(q)`; an aborted signal rejects with
+   * `DOMException('AbortError')` and cancels the request if it is still queued (`coordinator.cancel([result])`); the
+   * generated SQL is attached to a failure as `OtelHtmlError('invalid-report', { path: 'query', expected: 'a query the
+   * engine accepts', actual: <engine message>, hint: <sql> })`. `exec` sends `{ type: 'exec', sql }` through the
+   * coordinator (so its cache sees the DDL); `registerText` and `close` delegate to `files`.
    */
-  export function runQuery(coordinator: Coordinator, q: Query, signal?: AbortSignal): Promise<Table>;
+  export function mosaicQueryEngine(coordinator: Coordinator, files: EngineFiles): QueryEngine;
   ```
 
-- [ ] **Step 1: Write the failing tests** (the fake connector answers with flechette `tableToIPC(tableFromArrays(...))` bytes and records the SQL it saw)
+- [ ] **Step 1: Write the failing tests** (the fake connector answers with flechette `tableToIPC(tableFromArrays(...))` bytes and records every request it saw; `fakeFiles()` records texts)
 
 ```ts
-test('runQuery decodes int64 as bigint and caches the same SQL', async () => {
+test('query decodes int64 as bigint and the coordinator caches the same SQL', async () => {
   const conn = fakeConnector({ n: [5n] });
-  const c = createCoordinator(conn, silentLogger);
-  const t1 = await runQuery(c, Query.from('spans').select({ n: count() }));
+  const qe = mosaicQueryEngine(createCoordinator(conn, silentLogger), fakeFiles());
+  const t1 = await qe.query(Query.from('spans').select({ n: count() }));
   expect(t1.getChild('n')?.at(0)).toBe(5n);
-  await runQuery(c, Query.from('spans').select({ n: count() }));
-  expect(conn.sqls).toHaveLength(1);
+  await qe.query(Query.from('spans').select({ n: count() }));
+  expect(conn.requests).toHaveLength(1);
 });
 test('an aborted signal rejects with AbortError', async () => {
   const ctl = new AbortController(); ctl.abort();
-  await expect(runQuery(createCoordinator(fakeConnector({}), silentLogger), Query.from('spans').select('x'), ctl.signal)).rejects.toMatchObject({ name: 'AbortError' });
+  const qe = mosaicQueryEngine(createCoordinator(fakeConnector({}), silentLogger), fakeFiles());
+  await expect(qe.query(Query.from('spans').select('x'), ctl.signal)).rejects.toMatchObject({ name: 'AbortError' });
 });
 test('an engine error carries the SQL as its hint', async () => {
-  await expect(runQuery(createCoordinator(failingConnector('Binder Error: x'), silentLogger), Query.from('spans').select('x'))).rejects.toMatchObject({ code: 'invalid-report', hint: expect.stringContaining('SELECT') });
+  const qe = mosaicQueryEngine(createCoordinator(failingConnector('Binder Error: x'), silentLogger), fakeFiles());
+  await expect(qe.query(Query.from('spans').select('x'))).rejects.toMatchObject({ code: 'invalid-report', hint: expect.stringContaining('SELECT') });
 });
-test('the real wasm connector shape runs against the Node engine', async () => {
+test('exec is an exec request and registerText reaches the engine files', async () => {
+  const conn = fakeConnector({}); const files = fakeFiles();
+  const qe = mosaicQueryEngine(createCoordinator(conn, silentLogger), files);
+  await qe.exec('CREATE TEMP TABLE t AS SELECT 1');
+  expect(conn.requests.at(-1)).toMatchObject({ type: 'exec', sql: expect.stringContaining('CREATE TEMP TABLE') });
+  await qe.registerText('ids.csv', 'filename,row\n');
+  expect(files.texts.get('ids.csv')).toBe('filename,row\n');
+});
+test('engineConnector runs arrow and exec requests through useUnsafe/runQuery', async () => {
+  const seen: string[] = [];
+  const connection = fakeConnection((sql) => { seen.push(sql); return ipcBytes({ n: [1n] }); }); // { useUnsafe(f) { return f({ runQuery: async (_id, sql) => ... }, 1); } }
+  const c = engineConnector(connection);
+  const bytes = await c.query({ type: 'arrow', sql: 'SELECT 1 AS n' });
+  expect(bytes).toBeInstanceOf(Uint8Array);
+  await expect(c.query({ type: 'exec', sql: 'CREATE VIEW v AS SELECT 1' })).resolves.toBeUndefined();
+  expect(seen).toEqual(['SELECT 1 AS n', 'CREATE VIEW v AS SELECT 1']);
+});
+test('the same connector shape runs against the Node engine', async () => {
   const db = await openFixtureDb(await buildFormat4Report([spansOnlyRequest(3)]));
-  const t = await runQuery(createCoordinator(db.connector, silentLogger), Query.from('spans').select({ n: count() }));
+  const t = await mosaicQueryEngine(createCoordinator(db.connector, silentLogger), db).query(Query.from('spans').select({ n: count() }));
   expect(t.getChild('n')?.at(0)).toBe(3n);
 });
 ```
 
 - [ ] **Step 2: Run; expected FAIL**
-- [ ] **Step 3: Implement** `mosaic.ts`. Remove any knip ignore added in Task 1.1.
+- [ ] **Step 3: Implement** `query-engine.ts` and `mosaic.ts`. Remove any knip ignore added in Task 1.1. `mise run check` must show the D19 biome override holding: a deliberate `import { Coordinator } from '@uwdata/mosaic-core'` in `duckdb-source.ts` is reported (try it, then revert).
 - [ ] **Step 4: Run; expected PASS. Run `mise run check`; expected PASS.**
-- [ ] **Step 5: Commit** `feat(viewer): a Mosaic coordinator over the engine connection; runQuery with abort and SQL-bearing errors`
+- [ ] **Step 5: Commit** `feat(viewer): the QueryEngine seam, a hand-written duckdb-wasm connector and its Mosaic coordinator implementation`
 
 ### PR 1 close
 
@@ -710,7 +757,7 @@ test('percentileQuery is 100 at the maximum and 0 below the minimum', ...);
 - Test: `test/viewer-data/duckdb-source-spans.test.ts`
 
 **Interfaces:**
-- Consumes: Tasks 1.5, 2.x, 3.1 to 3.3; `FacetCounts.from`, `TimeBuckets.from`; `compileCondition` (`src/ottl/compile.ts`); `buildTraceTree`, `exclusiveTimeByService` (`src/viewer/data/trace-tree.ts`).
+- Consumes: `QueryEngine` (Task 1.5; `duckdb-source.ts`, `span-results.ts` and `residual.ts` import nothing from `@uwdata/mosaic-core`, D19), Tasks 2.x, 3.1 to 3.3; `FacetCounts.from`, `TimeBuckets.from`; `compileCondition` (`src/ottl/compile.ts`); `buildTraceTree`, `exclusiveTimeByService` (`src/viewer/data/trace-tree.ts`).
 - Produces:
   ```ts
   // data-source.ts (the interface after this plan; the log half is Task 4.3)
@@ -738,7 +785,8 @@ test('percentileQuery is 100 at the maximum and 0 below the minimum', ...);
     close(): Promise<void>;
   }
   // duckdb-source.ts
-  export function createDuckDbDataSource(opts: { coordinator: Coordinator; manifest: ManifestV4; close: () => Promise<void> }): DataSource;
+  /** Over a `QueryEngine` (D19): no Mosaic type in this signature; `close()` is `engine.close()`. */
+  export function createDuckDbDataSource(opts: { engine: QueryEngine; manifest: ManifestV4 }): DataSource;
   // span-results.ts: Table → result types
   export function spanRows(t: Table, epoch: bigint): { rows: SpanRow[]; total: number; tables: RowTables };
   export function traceRows(t: Table, epoch: bigint): { rows: TraceRow[]; total: number };
@@ -749,11 +797,11 @@ test('percentileQuery is 100 at the maximum and 0 below the minimum', ...);
   export function toNumber(v: unknown, path: string): number;
   // residual.ts (D5)
   export function residualRows<T>(opts: { fetch: (limit: number, offset: number) => Promise<T[]>; test: (row: T) => boolean; limit: number }): Promise<{ rows: T[]; exhausted: boolean }>;
-  export function residualIdTable(coordinator: Coordinator, engine: { registerFileText(name: string, text: string): Promise<void> }, ids: readonly { filename: string; row: number }[]): Promise<string>; // the temp table's name
+  export function residualIdTable(engine: QueryEngine, ids: readonly { filename: string; row: number }[]): Promise<string>; // `registerText` then `exec(CREATE TEMP TABLE ... AS SELECT * FROM read_csv(...))`; the temp table's name
   ```
   `querySpans` runs, in parallel for the requested `needs`, the rows query (spans or traces mode), the two facet queries (restricted by `facetKeys`), the timeline query, the duration summary then bins, and the group stats; an empty `Pruned` short-circuits to empty results; a `residual` applies D5.
 
-- [ ] **Step 1: Write the failing tests** over `openFixtureDb` fixtures (the fake-free path: a real Coordinator over `db.connector`):
+- [ ] **Step 1: Write the failing tests** over `openFixtureDb` fixtures (the fake-free path: `mosaicQueryEngine(createCoordinator(db.connector, silentLogger), db)`; the statement-counting tests read `db.connector`'s recorded requests):
 
 ```ts
 test('querySpans with an error condition returns exactly the error spans, facets over them, exact buckets and no residual', ...);
@@ -768,7 +816,7 @@ test('a signal aborted mid-flight rejects with AbortError and leaves no state', 
 ```
 
 - [ ] **Step 2: Run; expected FAIL** · **Step 3: Implement** · **Step 4: Run; expected PASS; `mise run check` PASS** (the old `createDataSource` and consumers still compile with the adjusted types; PR 5 switches them)
-- [ ] **Step 5: Commit** `feat(viewer): the format-4 data source answers span, trace and service queries through the coordinator`
+- [ ] **Step 5: Commit** `feat(viewer): the format-4 data source answers span, trace and service queries through the QueryEngine seam`
 
 ### PR 3 close
 
@@ -860,7 +908,7 @@ This PR is large by nature: the viewer switches formats in one step so every e2e
   ```ts
   // main.tsx
   export interface LoadProgress { phase: 'engine' | 'partitions' | 'views'; done?: number; total?: number }
-  /** parseAnyManifest; a non-4 manifest throws invalid-report with the D12 message; then startEngine, registerPartitions, createCoordinator, createDuckDbDataSource; traced as `viewer.load` with `viewer.engine.start` and `viewer.partitions.register` child spans (attributes: format, partitions, bytes). */
+  /** parseAnyManifest; a non-4 manifest throws invalid-report with the D12 message; then startEngine, registerPartitions, `mosaicQueryEngine(createCoordinator(engineConnector(engine.connection), logger), engine)`, createDuckDbDataSource; traced as `viewer.load` with `viewer.engine.start` and `viewer.partitions.register` child spans (attributes: format, partitions, bytes). */
   async function load(onProgress: (p: LoadProgress) => void): Promise<DataSource>;
   ```
   `App` shows the phase while loading ("Starting the query engine", "Loading partition 12 of 89", "Preparing views"). `tracedDataSource` wraps `querySpans`, `queryLogs`, `getTrace`, `traceLogs`, `surroundingLogs`, `services`, `patterns` as `viewer.query` spans with `otel_html.query.kind`; `tracedLoader` keeps its name but the span is `viewer.script.load`.
