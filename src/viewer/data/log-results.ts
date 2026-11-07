@@ -122,8 +122,8 @@ export function patternRows(t: Table): { rows: PatternRow[]; total: number } {
       regex: templateStringToRegex(template),
       count: toNumber(cell(r, 'count'), 'count'),
       severities,
-      first: cell(r, 'first_ns') == null ? 0 : toNumber(cell(r, 'first_ns'), 'first_ns'),
-      last: cell(r, 'last_ns') == null ? 0 : toNumber(cell(r, 'last_ns'), 'last_ns'),
+      first: cell(r, 'first_ns') == null ? null : toNumber(cell(r, 'first_ns'), 'first_ns'),
+      last: cell(r, 'last_ns') == null ? null : toNumber(cell(r, 'last_ns'), 'last_ns'),
       sample: text(cell(r, 'sample')),
     };
   });

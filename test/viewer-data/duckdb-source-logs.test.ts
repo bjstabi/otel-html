@@ -445,7 +445,7 @@ describe('patterns', () => {
     expect(failed?.severities).toMatchObject({ error: 2, warn: 1, info: 1 });
     for (const row of rows) expect(new RegExp(row.regex).test(row.sample)).toBe(true);
     // a template whose logs have no time sits at 0
-    expect(rows.find((x) => x.template === '{"k":"v"}')).toMatchObject({ first: 0, last: 0 });
+    expect(rows.find((x) => x.template === '{"k":"v"}')).toMatchObject({ first: null, last: null });
   });
 
   test('a window keeps the templates whose combined range overlaps it; sort and limit apply', async () => {

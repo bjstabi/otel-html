@@ -185,7 +185,7 @@ export interface PatternQuery {
 }
 
 export interface PatternsResult {
-  /** `id` is the row's position in the whole sorted list; a template without a time has `first` and `last` 0. */
+  /** `id` is the row's position in the whole sorted list; a template without a time has `first` and `last` null. */
   rows: readonly PatternRow[];
   /** The templates before the limit. */
   total: number;

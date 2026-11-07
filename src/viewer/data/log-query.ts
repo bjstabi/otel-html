@@ -105,8 +105,9 @@ export interface PatternRow {
   regex: string;
   count: number;
   severities: Record<LogSeverityKey, number>;
-  first: number;
-  last: number;
+  /** Relative time of the template's first and last log; null when none of its logs has a time. */
+  first: number | null;
+  last: number | null;
   sample: string;
 }
 
@@ -246,8 +247,8 @@ export const LOG_SORTS: Readonly<Record<string, (a: LogRow, b: LogRow) => number
 
 const PATTERN_SORTS: Readonly<Record<string, (a: PatternRow, b: PatternRow) => number>> = {
   count: (a, b) => a.count - b.count,
-  first: (a, b) => a.first - b.first,
-  last: (a, b) => a.last - b.last,
+  first: (a, b) => (a.first ?? 0) - (b.first ?? 0),
+  last: (a, b) => (a.last ?? 0) - (b.last ?? 0),
 };
 
 const TRACE_SORTS: Readonly<Record<string, (a: LogTraceRow, b: LogTraceRow) => number>> = {

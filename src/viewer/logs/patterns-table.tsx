@@ -30,9 +30,9 @@ function SeverityStack(props: { row: PatternRow }): JSX.Element {
   );
 }
 
-/** A template whose logs carry no time has `first` and `last` 0 (the result's contract): say so, not the epoch. */
-function patternTime(r: PatternRow, at: number, epoch: UnixNanos): string {
-  return r.first === 0 && r.last === 0 ? 'no time' : absoluteTime(at, epoch);
+/** A template whose logs carry no time has `first` and `last` null: say so. Relative 0 is a real time. */
+function patternTime(at: number | null, epoch: UnixNanos): string {
+  return at === null ? 'no time' : absoluteTime(at, epoch);
 }
 
 export const PATTERN_COLUMNS_UI: readonly ColumnUi<PatternRow>[] = [
@@ -55,7 +55,7 @@ export const PATTERN_COLUMNS_UI: readonly ColumnUi<PatternRow>[] = [
     sort: 'first',
     width: 170,
     mono: true,
-    cell: (r, c) => patternTime(r, r.first, c.epoch),
+    cell: (r, c) => patternTime(r.first, c.epoch),
   },
   {
     id: 'last',
@@ -63,7 +63,7 @@ export const PATTERN_COLUMNS_UI: readonly ColumnUi<PatternRow>[] = [
     sort: 'last',
     width: 170,
     mono: true,
-    cell: (r, c) => patternTime(r, r.last, c.epoch),
+    cell: (r, c) => patternTime(r.last, c.epoch),
   },
 ];
 

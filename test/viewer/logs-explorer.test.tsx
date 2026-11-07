@@ -102,7 +102,7 @@ const DECLINED: PatternRow = {
   sample: 'card declined: 402 decline_code=x',
 };
 
-const NO_TIME: PatternRow = { ...DECLINED, id: 4, template: 'heartbeat <*>', first: 0, last: 0 };
+const NO_TIME: PatternRow = { ...DECLINED, id: 4, template: 'heartbeat <*>', first: null, last: null };
 
 function patternsResult(): PatternsResult {
   return { rows: [DECLINED, NO_TIME], total: 2 };
@@ -262,6 +262,17 @@ describe('LogsExplorer', () => {
     setup();
     await screen.findByRole('grid', { name: 'Results' });
     expect(screen.queryByText(/Patterns are computed over every log/)).toBeNull();
+  });
+
+  test('a template at relative time 0 shows its time; only a null time says "no time"', async () => {
+    setup({
+      initial: { mode: 'patterns' },
+      patterns: () =>
+        Promise.resolve({ rows: [{ ...DECLINED, template: 'startup <*>', first: 0, last: 0 }], total: 1 }),
+    });
+    const row = (await screen.findByText('startup <*>')).closest('[role="row"]');
+    expect(row?.textContent).not.toContain('no time');
+    expect(row?.textContent).toContain('2023-11-14');
   });
 
   test('a template whose logs have no time says "no time", not the epoch', async () => {
