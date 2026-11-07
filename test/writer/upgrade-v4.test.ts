@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 import { runCli } from '../../src/cli/program.js';
 import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
 import { isV4, type ManifestV4, parseAnyManifest } from '../../src/format/manifest.js';
+import { decodeTable } from '../../src/format/parquet/codec.js';
 import { MANIFEST_KEY, partitionWrapperPath } from '../../src/format/paths.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { ENGINE_VERSION, engineAssetNames } from '../../src/writer/engine-assets.js';
@@ -116,7 +117,9 @@ describe('upgradeReport on a format-4 report', () => {
     expect(manifestV4(w, 'r').engine.format).toBe('site');
     for (const f of listed(manifestV4(w, 'r'))) expect(w.fs.snapshot().has(`r/${f.path}.js`)).toBe(true);
     expect(files(w, 'r/assets/duckdb')).toEqual(
-      expect.arrayContaining(engineAssetNames('site').map((n) => `r/assets/${n}`)),
+      expect.arrayContaining(
+        [...engineAssetNames('site'), ...engineAssetNames('local')].map((n) => `r/assets/${n}`),
+      ),
     );
     expect(files(w, 'r/data/state/lock')).toEqual([]);
   });
@@ -182,6 +185,114 @@ describe('upgradeReport on a format-4 report', () => {
   });
 });
 
+describe('upgradeReport fix round 1', () => {
+  test('an append that commits between the first read and the lock survives the upgrade', async () => {
+    const w = createTestWriter();
+    await v4Report(w, 'r', 'site');
+    const count = async (): Promise<number> => {
+      let n = 0;
+      for (const p of manifestV4(w, 'r').partitions) {
+        const f = p.files.spans;
+        if (f !== undefined) n += decodeTable('spans', await w.fs.readBytes(`r/${f.path}`)).length;
+      }
+      return n;
+    };
+    const before = await count();
+    let appended = false;
+    const fs = {
+      ...w.fs,
+      async createExclusive(p: string, text: string) {
+        if (!appended && p.endsWith('lock.json')) {
+          appended = true;
+          const s = await openSession(w.deps, {
+            out: 'r',
+            config: testConfig({ writer: { format: 'site' } }),
+            mode: 'append',
+          });
+          await s.add(otlp(spansRequest(4, 50_000, 30)), 'late.json');
+          await s.close();
+        }
+        return w.fs.createExclusive(p, text);
+      },
+    };
+    await upgradeReport({ ...w.deps, fs }, 'r', { format: 'local' });
+    expect(appended).toBe(true);
+    expect(await count()).toBe(before + 4);
+    for (const f of listed(manifestV4(w, 'r'))) {
+      expect(w.fs.snapshot().has(`r/${f.path}`)).toBe(true);
+      expect(w.fs.snapshot().has(`r/${f.path}.js`)).toBe(true);
+    }
+  });
+
+  test.each([
+    ['upgrade --format site', { format: 'site' as const }],
+    ['a plain upgrade', {}],
+  ])('%s removes wrappers a crashed local-to-site upgrade left', async (_n, opts) => {
+    const w = createTestWriter();
+    await v4Report(w, 'r', 'local');
+    const wrappers = listed(manifestV4(w, 'r')).map((f) => `r/${f.path}.js`);
+    // The crash: the manifest says site, the wrappers are still there.
+    await upgradeReport(w.deps, 'r', { format: 'site' });
+    for (const p of wrappers) await w.fs.writeTextAtomic(p, 'stray');
+    await upgradeReport(w.deps, 'r', opts);
+    for (const p of wrappers) expect(w.fs.snapshot().has(p)).toBe(false);
+  });
+
+  test('older viewer files are removed from the default base and a subfolder is kept', async () => {
+    const w = createTestWriter();
+    await v4Report(w, 'r', 'site');
+    await w.fs.writeBytes('r/assets/viewer.OLDHASH.js', new Uint8Array([1]));
+    await w.fs.writeBytes('r/assets/viewer.OLDHASH.css', new Uint8Array([1]));
+    await w.fs.writeBytes('r/assets/0.3.0/viewer.x.js', new Uint8Array([1]));
+    await upgradeReport(w.deps, 'r');
+    const names = files(w, 'r/assets/');
+    expect(names).not.toContain('r/assets/viewer.OLDHASH.js');
+    expect(names).not.toContain('r/assets/viewer.OLDHASH.css');
+    expect(names).toContain('r/assets/viewer.abc123.js');
+    expect(names).toContain('r/assets/0.3.0/viewer.x.js');
+  });
+
+  test('a report on a shared base needs --assets-base, and nothing is written without it', async () => {
+    const w = createTestWriter();
+    await v4Report(w, 'r', 'site', { assetsBase: '../assets/' });
+    const before = new Map(w.fs.snapshot());
+    const e = await failure(upgradeReport(w.deps, 'r', { format: 'local' }));
+    expect(e.code).toBe('usage');
+    expect(e.hint).toContain('--assets-base');
+    expect(w.fs.snapshot()).toEqual(before);
+    await upgradeReport(w.deps, 'r', { assetsBase: '../assets/' });
+    expect(manifestV4(w, 'r').engine.assetsBase).toBe('../assets/');
+    expect(files(w, 'r/assets/')).toEqual([]);
+  });
+
+  test('a symlinked assets folder is refused and nothing is written', async () => {
+    const w = createTestWriter();
+    await v4Report(w, 'r', 'site');
+    const before = new Map(w.fs.snapshot());
+    const fs = {
+      ...w.fs,
+      realpath: async (p: string) => (p === 'r/assets' ? '/elsewhere/assets' : w.fs.realpath(p)),
+    };
+    const e = await failure(upgradeReport({ ...w.deps, fs }, 'r', { format: 'local' }));
+    expect(e.code).toBe('invalid-report');
+    expect(w.fs.snapshot()).toEqual(before);
+  });
+
+  test('a crash partway through the wrappers is finished by running the upgrade again', async () => {
+    const w = createTestWriter();
+    await v4Report(w, 'r', 'site');
+    const all = listed(manifestV4(w, 'r'));
+    expect(all.length).toBeGreaterThan(1);
+    w.fs.failNextWrite(`${all[1]?.path}.js`);
+    await expect(upgradeReport(w.deps, 'r', { format: 'local' })).rejects.toThrow();
+    expect(manifestV4(w, 'r').engine.format).toBe('site');
+    await upgradeReport(w.deps, 'r', { format: 'local' });
+    expect(manifestV4(w, 'r').engine.format).toBe('local');
+    for (const f of all) expect(w.fs.snapshot().has(`r/${f.path}.js`)).toBe(true);
+    expect(files(w, 'r/data/state/lock')).toEqual([]);
+  });
+});
+
 describe('upgradeReport on a chunks report', () => {
   test('--format and --assets-base are a usage error that points to merge', async () => {
     const w = createTestWriter();
@@ -208,6 +319,7 @@ describe('upgradeReport on a chunks report', () => {
     const e = await failure(upgradeReport(w.deps, 'c'));
     expect(e.code).toBe('version-mismatch');
     expect(e.hint).not.toMatch(/merge/);
+    expect(e.message).toContain('1, 2, 3, 4');
   });
 });
 

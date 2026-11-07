@@ -77,6 +77,17 @@ export async function upgradeReport(
       hint: 'use assets/ or a relative path like ../../assets/0.3.0/',
     });
   }
+  if (
+    report.kind === 'partitions' &&
+    opts.assetsBase === undefined &&
+    report.manifest.engine.assetsBase !== DEFAULT_ASSETS_BASE
+  ) {
+    // The shared copy is the publisher's: upgrade cannot know it holds this version's files, so it must be told.
+    throw new OtelHtmlError('usage', {
+      message: `cannot upgrade ${report.dir}: it loads its viewer files from ${report.manifest.engine.assetsBase}`,
+      hint: "pass --assets-base <base holding this version's files>, or --assets-base assets/ to copy them into the report",
+    });
+  }
   await assertAssetsInside(fs, report.dir);
   // Holding the writer lock for the rewrite also keeps a writer from starting underneath it.
   const lock = await acquireLock(deps, at(report.dir, LOCK_PATH)).catch((e: unknown) => {
@@ -89,8 +100,16 @@ export async function upgradeReport(
     throw e;
   });
   try {
-    if (report.kind === 'partitions') await upgradePartitioned(deps, report.dir, report.manifest, opts);
-    else {
+    if (report.kind === 'partitions') {
+      // An append may have committed between the first read and the lock; only the copy read under the lock is current.
+      const current = await readMergeInput(fs, report.dir, 'upgrade');
+      if (current.kind !== 'partitions') {
+        throw new OtelHtmlError('usage', {
+          message: `cannot upgrade ${report.dir}: its format changed while it was read`,
+        });
+      }
+      await upgradePartitioned(deps, report.dir, current.manifest, opts);
+    } else {
       const written = new Set<string>();
       for (const f of await viewerAssets.files()) written.add(f.path.split('/')[1] ?? '');
       await writeViewerAssets(fs, report.dir, viewerAssets);
@@ -141,7 +160,6 @@ async function upgradePartitioned(
   const assetsBase = opts.assetsBase ?? manifest.engine.assetsBase;
   const sharedBase = assetsBase !== DEFAULT_ASSETS_BASE;
   const toLocal = format === 'local' && manifest.engine.format === 'site';
-  const toSite = format === 'site' && manifest.engine.format === 'local';
   if (toLocal) await addWrappers(fs, dir, manifest);
   if (!sharedBase) await writeViewerAssets(fs, dir, viewerAssets, format);
   await fs.writeTextAtomic(
@@ -153,6 +171,9 @@ async function upgradePartitioned(
   if (JSON.stringify(engine) !== JSON.stringify(manifest.engine)) {
     await writeManifest(fs, dir, { ...manifest, engine });
   }
-  if (toSite) await removeWrappers(fs, dir, manifest);
-  await pruneOwnAssets(fs, dir, { format, sharedBase });
+  // Also for a site report that is already site: an earlier upgrade may have died after its manifest write.
+  if (format === 'site') await removeWrappers(fs, dir, manifest);
+  const viewerFiles = new Set<string>();
+  for (const f of await viewerAssets.files()) viewerFiles.add(f.path.split('/')[1] ?? '');
+  await pruneOwnAssets(fs, dir, { format, sharedBase, viewerFiles });
 }

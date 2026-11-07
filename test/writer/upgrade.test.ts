@@ -21,9 +21,9 @@ import { createProcess, createTestWriter } from '../../test-support/writer-deps.
 
 const FIXTURE = join(import.meta.dirname, '../../fixtures/reports/format-2');
 
-function copyReport(): string {
+function copyReport(fixture = FIXTURE): string {
   const dir = mkdtempSync(join(tmpdir(), 'upgrade-'));
-  cpSync(FIXTURE, dir, { recursive: true });
+  cpSync(fixture, dir, { recursive: true });
   return dir;
 }
 
@@ -69,6 +69,14 @@ describe('upgradeReport', () => {
     expect(readFileSync(join(dir, 'index.html'), 'utf8')).toContain('assets/viewer.abc123.js');
     expect(readdirSync(join(dir, 'assets')).sort()).toEqual(['viewer.abc123.css', 'viewer.abc123.js']);
     expect(readdirSync(join(dir, 'data/state'))).not.toContain('lock.json');
+  });
+
+  test('a format 3 report with no options is rewritten as before: viewer replaced, data byte-identical', async () => {
+    const dir = copyReport(join(import.meta.dirname, '../../fixtures/reports/format-3'));
+    const before = hashTree(dir, 'data');
+    expect((await upgradeReport(deps(), dir)).formatVersion).toBe(3);
+    expect(hashTree(dir, 'data')).toEqual(before);
+    expect(readdirSync(join(dir, 'assets')).sort()).toEqual(['viewer.abc123.css', 'viewer.abc123.js']);
   });
 
   // An untrusted report may carry symlinks at the viewer's paths. Symlinks on Windows need a privilege.

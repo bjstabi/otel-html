@@ -114,8 +114,8 @@ function chunkInput({ dir, file, raw }: Located, verb: string): Input {
   ) {
     // Chunk reports of every readable version lay out alike; anything else is another otel-html's to read.
     throw new OtelHtmlError('version-mismatch', {
-      message: `${file}: unsupported report formatVersion ${JSON.stringify(raw.formatVersion)}; this otel-html reads formatVersion ${CHUNK_READABLE_FORMAT_VERSIONS.join(' or ')}`,
-      hint: `${verb} the report with the otel-html version that wrote it, or regenerate it from its OTLP input`,
+      message: `${file}: unsupported report formatVersion ${JSON.stringify(raw.formatVersion)}; this otel-html reads formatVersion ${[...CHUNK_READABLE_FORMAT_VERSIONS, 4].join(', ')}`,
+      hint: `run ${verb} with the otel-html version that wrote the report, or regenerate it from its OTLP input`,
     });
   }
   const manifest = inFile(file, () => parseManifest(raw));
@@ -127,7 +127,7 @@ function chunkInput({ dir, file, raw }: Located, verb: string): Input {
 }
 
 /** A merge input: a chunk report to replay, or a format-4 report whose partitions are copied. */
-export type MergeInput = ({ kind: 'chunks' } & Input) | ({ kind: 'partitions' } & PartitionInput);
+type MergeInput = ({ kind: 'chunks' } & Input) | ({ kind: 'partitions' } & PartitionInput);
 
 interface PartitionInput {
   dir: string;
