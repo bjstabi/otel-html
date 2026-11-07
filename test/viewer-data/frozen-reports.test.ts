@@ -22,6 +22,9 @@ function filesUnder(dir: string): string[] {
     .map((e) => join(e.parentPath, e.name).slice(dir.length + 1));
 }
 
+/** Distinct trace ids in each frozen fixture (the three share one scenario; the count is the same in all). */
+const FROZEN_TRACES = 80;
+
 const query = (over: Partial<SpanQuery>): SpanQuery => ({
   condition: null,
   text: '',
@@ -83,8 +86,7 @@ describe.each([
       expect(spans.total).toBeGreaterThan(0);
 
       const traces = await ds.querySpans(query({ mode: 'traces' }));
-      expect(traces.total).toBeGreaterThan(0);
-      expect(traces.total).toBeLessThanOrEqual(src.totals.spans);
+      expect(traces.total).toBe(FROZEN_TRACES);
       const first = traces.rows[0] as TraceRow | undefined;
       if (first === undefined) throw new Error('no trace row');
       const trace = await ds.getTrace(first.traceId);

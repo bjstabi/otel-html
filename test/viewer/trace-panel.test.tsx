@@ -93,7 +93,7 @@ describe('TracePanel header', () => {
     expect(header.querySelector('h2')?.textContent).toContain('web');
     expect(header.querySelector('h2')?.textContent).toContain('/r');
     expect(header.querySelector('h2')?.textContent).toContain(TRACE_ID);
-    expect(within(header).getByText('p97')).toBeTruthy();
+    expect(await within(header).findByText('p97')).toBeTruthy();
     expect(within(header).getByText('50.0 ms'.replace('.0', ''))).toBeTruthy();
     expect(within(header).getByText('GET /cart?id=7')).toBeTruthy();
     expect(within(header).getByText('200')).toBeTruthy();
