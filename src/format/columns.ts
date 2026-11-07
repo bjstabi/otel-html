@@ -126,11 +126,6 @@ function bytesTag(v: unknown, path: string): Uint8Array | null {
   return base64ToBytes(s, path);
 }
 
-function doubleToJson(x: number): JsonValue {
-  if (Number.isFinite(x) && !Object.is(x, -0)) return x;
-  return Object.is(x, -0) ? '-0' : String(x);
-}
-
 function jsonToDouble(v: unknown, path: string): number {
   if (typeof v === 'number' && Number.isFinite(v)) return v;
   if (v === '-0') return -0;
@@ -139,9 +134,6 @@ function jsonToDouble(v: unknown, path: string): number {
   if (v === '-Infinity') return Number.NEGATIVE_INFINITY;
   throw bad(path, 'a finite number or "-0" | "NaN" | "Infinity" | "-Infinity"', v);
 }
-
-/** Interning function: encode passes call it; pass 1 counts, pass 2 returns the final index. */
-type Intern = (s: string) => number;
 
 function decodeJson(v: unknown, path: string): unknown {
   if (typeof v !== 'object' || v === null) return v;
@@ -176,46 +168,6 @@ function decodeJson(v: unknown, path: string): unknown {
 // ---------------------------------------------------------------------------------------------
 // string -> dict index (a bare number); bool -> bool; empty -> null; int -> [0, n] (or {"$i"} beyond
 // 2^53); double -> [1, x]; array -> [2, [...]]; kvlist -> [3, [k, v, k, v, ...]]; bytes -> {"$b"}.
-
-function encodeAny(v: AnyValue, d: Intern, path: Path): JsonValue {
-  switch (v.kind) {
-    case 'string':
-      return d(v.value);
-    case 'bool':
-      return v.value;
-    case 'empty':
-      return null;
-    case 'int':
-      return v.value >= BigInt(Number.MIN_SAFE_INTEGER) && v.value <= BigInt(Number.MAX_SAFE_INTEGER)
-        ? [0, Number(v.value)]
-        : { $i: v.value.toString() };
-    case 'double':
-      return [1, doubleToJson(v.value)];
-    case 'bytes':
-      return { $b: bytesToBase64(v.value) };
-    case 'array':
-      return [2, v.values.map((x, i) => encodeAny(x, d, () => `${pathText(path)}[${i}]`))];
-    case 'kvlist':
-      return [3, encodeAttrs(v.values, d, path)];
-    default:
-      return assertNever(v, pathText(path));
-  }
-}
-
-function encodeAttrs(a: Attributes, d: Intern, path: Path): JsonValue[] {
-  // Sized up front: a chunk keeps one per row until it is encoded, and grown arrays carry spare capacity.
-  const out: JsonValue[] = new Array(a.size * 2);
-  let i = 0;
-  for (const [k, v] of a) {
-    // Only a nested value can fail (and then names `[key]` in its path); a string, bool, int, double, bytes or empty
-    // value always encodes, so building a path for it would be wasted work per cell.
-    const at =
-      v.kind === 'array' || v.kind === 'kvlist' ? () => `${pathText(path)}[${JSON.stringify(k)}]` : path;
-    out[i++] = d(k);
-    out[i++] = encodeAny(v, d, at);
-  }
-  return out;
-}
 
 function dictString(dict: readonly string[], idx: unknown, path: string): string {
   const s = typeof idx === 'number' && Number.isInteger(idx) ? dict[idx] : undefined;
@@ -499,25 +451,6 @@ function safeInt(v: unknown, path: Path): number {
 function hexId(v: unknown, re: RegExp, what: string, path: Path): string {
   if (typeof v !== 'string' || !re.test(v)) throw bad(path, what, v);
   return v;
-}
-
-/** A provisional dictionary id's final index (`remapAny` walks encoded AnyValues: bare numbers are dict ids). */
-function remapAny(v: JsonValue, perm: Int32Array): JsonValue {
-  if (typeof v === 'number') return perm[v] ?? -1;
-  if (!Array.isArray(v)) return v; // bool, null, {"$i"}, {"$b"}
-  const body = v[1] ?? null;
-  if (v[0] === 2 && Array.isArray(body)) return [2, body.map((x) => remapAny(x, perm))];
-  if (v[0] === 3 && Array.isArray(body)) return [3, remapAttrs(body, perm)];
-  return v; // [0, int], [1, double]
-}
-
-function remapAttrs(a: JsonValue[], perm: Int32Array): JsonValue[] {
-  const out: JsonValue[] = new Array(a.length);
-  for (let i = 0; i < a.length; i += 2) {
-    out[i] = perm[a[i] as number] ?? -1;
-    out[i + 1] = remapAny(a[i + 1] ?? null, perm);
-  }
-  return out;
 }
 
 // ---------------------------------------------------------------------------------------------
