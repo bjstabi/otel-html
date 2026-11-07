@@ -1,12 +1,16 @@
-import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, render, screen, within } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { createRoot } from 'react-dom/client';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { parseUnixNanos } from '../../src/model/ids.js';
-import { ResultsTable, tabStop } from '../../src/viewer/components/results-table.js';
+import { ResultsTable, type ResultsTableProps, tabStop } from '../../src/viewer/components/results-table.js';
 import type { SpanRow, TraceRow } from '../../src/viewer/data/results.js';
 import { MOVE_EVENT } from '../../src/viewer/shell/move-event.js';
-import { SPAN_COLUMNS_UI, TRACE_COLUMNS_UI } from '../../src/viewer/traces/columns.js';
+import {
+  type ServiceShareLoader,
+  SPAN_COLUMNS_UI,
+  TRACE_COLUMNS_UI,
+} from '../../src/viewer/traces/columns.js';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 afterEach(cleanup);
@@ -35,7 +39,12 @@ function row(id: string, name: string, dur: number, over: { code?: number; http?
 const rows = [row('s1', 'fast', 1_000), row('s2', 'slow', 9_000_000), row('s3', 'mid', 50_000)];
 const rowId = (r: SpanRow | TraceRow): string => ('span' in r ? r.span.spanId : r.traceId);
 
-function mount(over: Partial<Parameters<typeof ResultsTable>[0]> = {}) {
+/** Span rows by default; a test that mounts trace rows overrides `rows`, `columns` and `serviceShare` together. */
+function mount(
+  over: Partial<Omit<ResultsTableProps<unknown>, 'serviceShare'>> & {
+    serviceShare?: ServiceShareLoader;
+  } = {},
+) {
   const onSort = vi.fn();
   const onRowClick = vi.fn();
   render(
@@ -48,7 +57,7 @@ function mount(over: Partial<Parameters<typeof ResultsTable>[0]> = {}) {
       onRowClick={onRowClick}
       selectedId={null}
       epoch={parseUnixNanos('0', 'epoch')}
-      {...over}
+      {...(over as object)}
     />,
   );
   return { onSort, onRowClick };
@@ -174,12 +183,6 @@ describe('ResultsTable', () => {
       });
       expect(await screen.findByText('unavailable')).toBeTruthy();
       expect(screen.getByText('GET /')).toBeTruthy();
-    });
-
-    test('without a loader the cell is empty', async () => {
-      mount({ rows: [t], columns: TRACE_COLUMNS_UI });
-      await waitFor(() => expect(screen.queryByText('...')).toBeNull());
-      expect(screen.queryByRole('img')).toBeNull();
     });
   });
 

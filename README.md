@@ -359,7 +359,7 @@ Every data file is a classic script that registers its payload with a global, so
 
 The viewer reads this format, through DuckDB-WASM: it creates one view per table over the partition files and runs SQL against them. The tables and columns are listed in [docs/format/schema.md](docs/format/schema.md) (generated from the schema). The format-3 layout above is what older otel-html versions wrote; the viewer no longer opens it (see [Report format compatibility](#report-format-compatibility)).
 
-Metrics pages are not yet available for format-4 reports: the Metrics explorer and catalog show an error naming the metrics plan, and so does every metric widget and the metric charts in the log, span and trace panels; the Fusion timeline keeps its metric lane. This holds until that work lands on this branch. Spans, traces and logs are complete.
+Metrics pages are not yet available for format-4 reports: the Metrics explorer and catalog show an error naming the metrics plan, and so does every metric widget; the log, span and trace panels do not offer their Metrics tabs; the Fusion timeline keeps its metric lane. This holds until that work lands on this branch. Spans, traces and logs are complete.
 
 ```
 report/

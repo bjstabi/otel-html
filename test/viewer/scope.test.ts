@@ -21,8 +21,8 @@ import {
   variableCondition,
   WIDGET_SCOPE,
 } from '../../src/viewer/dashboards/scope.js';
-import { toLogEntries } from '../../src/viewer/data/log-query.js';
 import { EMPTY_DASHBOARD_STATE } from '../../src/viewer/state/dashboard-state.js';
+import { toLogEntries } from './log-entries.js';
 
 const TRACE = 'c'.repeat(32) as TraceId;
 const PAGE = { start: 100, end: 200 };

@@ -5,7 +5,7 @@ import { parseCondition } from '../../ottl/parse.js';
 import { MetricPageStateSchema } from '../../query/metric-query.js';
 import { EXPLORER_VIEWS, SELECTION_MODES } from '../../query/pages.js';
 import { type LogRef, parseLogRef } from '../data/log-query.js';
-import type { TimeWindow } from '../data/span-query.js';
+import type { TimeWindow } from '../data/time-window.js';
 import { LOG_TAB_IDS } from '../logs/tabs.js';
 import { TRACE_TAB_IDS } from '../traces/tabs.js';
 import { DashboardPageStateSchema, parseDashboardParam } from './dashboard-state.js';

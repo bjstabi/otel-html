@@ -13,6 +13,7 @@ const fake = vi.hoisted(() => ({
   failInstantiate: false,
   failOpen: false,
   failConnect: false,
+  failConnectionClose: false,
 }));
 
 vi.mock('@duckdb/duckdb-wasm', () => ({
@@ -30,6 +31,7 @@ vi.mock('@duckdb/duckdb-wasm', () => ({
       if (fake.failConnect) throw new Error('connect failed');
       return {
         close: async () => {
+          if (fake.failConnectionClose) throw new Error('close failed');
           fake.events.push('connection.close');
         },
       };
@@ -44,6 +46,7 @@ vi.mock('@duckdb/duckdb-wasm', () => ({
 }));
 
 beforeEach(() => {
+  fake.failConnectionClose = false;
   fake.instantiated.length = 0;
   fake.opened.length = 0;
   fake.events.length = 0;
@@ -121,6 +124,13 @@ test('registerText and close reach the database and connection', async () => {
   await engine.close();
   expect(fake.events).toContain('register:ids.csv:a,b');
   expect(fake.events.slice(-2)).toEqual(['connection.close', 'db.terminate']);
+});
+
+test('close still terminates the database when the connection will not close, and the error surfaces', async () => {
+  const engine = await startEngine(siteEngine, deps({ load: vi.fn() }));
+  fake.failConnectionClose = true;
+  await expect(engine.close()).rejects.toThrow('close failed');
+  expect(fake.events).toContain('db.terminate');
 });
 
 test.each([

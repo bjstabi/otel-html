@@ -52,7 +52,7 @@ export interface DataSource {
   /** 0 to 100 within the unfiltered spans of that service and resource; null when there are none. */
   percentileOf(service: string, resource: string, durationNs: number): Promise<number | null>;
   /** Exclusive time per service of one trace, largest first (D7). */
-  serviceShare(traceId: TraceId): Promise<readonly { service: string; ns: number }[]>;
+  serviceShare(traceId: TraceId, signal?: AbortSignal): Promise<readonly { service: string; ns: number }[]>;
   /** The busiest `limit` services; `total` is `limit + 1` when more exist. */
   services(
     opts: { window: TimeWindow | null; condition: string | null; limit: number },

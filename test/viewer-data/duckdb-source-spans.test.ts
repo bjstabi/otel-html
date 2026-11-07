@@ -397,6 +397,13 @@ describe('the other questions', () => {
     expect(again.value).toBe(open.value);
   });
 
+  test('serviceShare takes a signal: an aborted load rejects with AbortError', async () => {
+    const ctl = new AbortController();
+    const p = ds.serviceShare(T3, ctl.signal);
+    ctl.abort();
+    await expect(p).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
   test('getTrace is memoised for the last id, hasTrace is a bound method', async () => {
     const a = ds.getTrace(T1);
     expect(ds.getTrace(T1)).toBe(a);

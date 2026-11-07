@@ -133,6 +133,7 @@ export const TracesWidget: WidgetRenderer = ({ widget, scope, height, dataSource
           <ResultsTable
             rows={traceRows}
             columns={TRACE_COLUMNS_UI}
+            serviceShare={dataSource.serviceShare}
             rowId={(r) => r.traceId}
             sort={sort}
             onSort={setSort}

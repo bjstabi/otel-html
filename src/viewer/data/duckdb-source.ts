@@ -79,7 +79,6 @@ import type {
   SpanRow,
   SurroundingLogs,
 } from './results.js';
-import type { TimeWindow } from './span-query.js';
 import {
   cell,
   durationBins,
@@ -96,6 +95,7 @@ import {
   toNumber,
   traceRows,
 } from './span-results.js';
+import type { TimeWindow } from './time-window.js';
 import { traceNotFound } from './trace-detail.js';
 import { buildTraceTree, exclusiveTimeByService } from './trace-tree.js';
 
@@ -205,7 +205,6 @@ function logResidualTest(
 const noSuchLog = (ref: LogRef): OtelHtmlError =>
   new OtelHtmlError('usage', { path: `log ${ref}`, expected: 'a log of this report', actual: 'no such log' });
 
-/** The format-4 data source over a query engine (D19): no Mosaic type appears here. `close()` is `engine.close()`. */
 /** A row limit is a non-negative integer. */
 function checkLimit(limit: number): void {
   if (!Number.isInteger(limit) || limit < 0) {
@@ -217,6 +216,7 @@ function checkLimit(limit: number): void {
   }
 }
 
+/** The format-4 data source over a query engine (D19): no Mosaic type appears here. `close()` is `engine.close()`. */
 export function createDuckDbDataSource(opts: {
   engine: QueryEngine;
   manifest: ManifestV4;
@@ -646,8 +646,9 @@ export function createDuckDbDataSource(opts: {
   async function readTrace(
     traceId: TraceId,
     withLogs: boolean,
+    signal?: AbortSignal,
   ): Promise<{ rows: SpanRow[]; tables: RowTables; logCount: number }> {
-    const partitions = rowsOf(await engine.query(tracePartitionsQuery(traceId))).map((r) =>
+    const partitions = rowsOf(await engine.query(tracePartitionsQuery(traceId), signal)).map((r) =>
       String(cell(r, 'filename')),
     );
     if (partitions.length === 0) throw traceNotFound(traceId);
@@ -663,8 +664,8 @@ export function createDuckDbDataSource(opts: {
     const files = filter.files.files;
     if (files.length === 0) throw traceNotFound(traceId);
     const [spans, summary] = await Promise.all([
-      engine.query(traceSpansQuery(traceId, files, epoch)),
-      withLogs ? engine.query(traceSummaryQuery(traceId)) : null,
+      engine.query(traceSpansQuery(traceId, files, epoch), signal),
+      withLogs ? engine.query(traceSummaryQuery(traceId), signal) : null,
     ]);
     const { rows, tables } = spanRows(spans, epoch);
     if (rows.length === 0) throw traceNotFound(traceId);
@@ -721,9 +722,9 @@ export function createDuckDbDataSource(opts: {
       if (r === undefined || toNumber(cell(r, 'n'), 'n') === 0) return null;
       return Number(cell(r, 'percentile'));
     },
-    async serviceShare(traceId) {
+    async serviceShare(traceId, signal) {
       // its own load: the open trace's memo stays, and the log summary is not read
-      return exclusiveTimeByService(buildTraceTree((await readTrace(traceId, false)).rows));
+      return exclusiveTimeByService(buildTraceTree((await readTrace(traceId, false, signal)).rows));
     },
     services,
     queryLogs,

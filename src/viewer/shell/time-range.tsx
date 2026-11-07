@@ -4,7 +4,7 @@ import type { AnyManifest, Manifest } from '../../format/manifest.js';
 import { parseUnixNanos, type RelNanos, type UnixNanos } from '../../model/ids.js';
 import { formatTime } from '../../semconv/formatters.js';
 import { manifestRange } from '../data/manifest-range.js';
-import type { TimeWindow } from '../data/span-query.js';
+import type { TimeWindow } from '../data/time-window.js';
 import { useSelection } from '../state/selection-context.js';
 import { Tip } from './tip.js';
 

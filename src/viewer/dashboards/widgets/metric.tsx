@@ -13,7 +13,7 @@ import type { DataSource } from '../../data/data-source.js';
 import { manifestRange } from '../../data/manifest-range.js';
 import { type MetricQuery, resolveMetric } from '../../data/metric-query.js';
 import { runMetricRunQuery } from '../../data/metric-run-query.js';
-import type { TimeWindow } from '../../data/span-query.js';
+import type { TimeWindow } from '../../data/time-window.js';
 import { exemplarTraceLookup, openChartPick } from '../../metrics/chart-pick.js';
 import { catalogOf, explorerFilter, MetricGrid, type MetricGridOrigin } from '../../metrics/metric-grid.js';
 import { buildPlots, layoutCharts } from '../../metrics/plots.js';

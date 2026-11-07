@@ -10,13 +10,7 @@ import { TimeBuckets } from '../../src/rollups/time-buckets.js';
 import { LOG_SEVERITY_KEYS, type LogSeverityKey } from '../../src/semconv/severity.js';
 import { tokensToOttl } from '../../src/viewer/components/filter-tokens.js';
 import type { DataSource } from '../../src/viewer/data/data-source.js';
-import {
-  type LogRef,
-  type LogRow,
-  type LogTraceRow,
-  type PatternRow,
-  toLogEntries,
-} from '../../src/viewer/data/log-query.js';
+import type { LogRef, LogRow, LogTraceRow, PatternRow } from '../../src/viewer/data/log-query.js';
 import { DEFAULT_FACET_CAPS } from '../../src/viewer/data/query-common.js';
 import type {
   LogQuery,
@@ -30,6 +24,7 @@ import { createSelectionStore } from '../../src/viewer/state/selection.js';
 import { SelectionProvider } from '../../src/viewer/state/selection-context.js';
 import { ThemeProvider } from '../../src/viewer/theme/theme-provider.js';
 import { attr, logRecord, logsRequest, T0 } from '../../test-support/otlp-builders.js';
+import { toLogEntries } from './log-entries.js';
 import { manifestV4 } from './v4-manifest.js';
 
 vi.mock('../../src/viewer/components/chart.js', () => ({ Chart: (): null => null }));

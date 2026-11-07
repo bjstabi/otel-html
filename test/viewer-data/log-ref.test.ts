@@ -14,8 +14,8 @@ import {
   logRef,
   parseLogRef,
   refParts,
-  toLogEntries,
 } from '../../src/viewer/data/log-query.js';
+import { toLogEntries } from '../viewer/log-entries.js';
 
 const str = (value: string): AnyValue => ({ kind: 'string', value });
 const resource = (service: string, host?: string): ResourceRecord => ({

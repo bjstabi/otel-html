@@ -58,6 +58,18 @@ describe('the Traces widget', () => {
     expect(traces.queryByTestId('flame-graph')).toBeNull();
   });
 
+  test('the trace rows load their "Latency by service" share from the data source', async () => {
+    const serviceShare = vi.fn(() => Promise.resolve([{ service: 'web', ns: 70 }]));
+    renderShell('#/dashboards/fusion', fusionSource({ serviceShare }));
+    const traces = await waitFor(() => {
+      const r = region('Traces');
+      expect(r.getAllByRole('row').length).toBeGreaterThan(1);
+      return r;
+    });
+    expect(await traces.findByRole('img', { name: 'web 70 ns' })).toBeTruthy();
+    expect(serviceShare).toHaveBeenCalledWith(LINKED_TRACE, expect.any(AbortSignal));
+  });
+
   test('a row click sets d.sel.trace and renders a compact flame graph without minimap, legend or color-by', async () => {
     const user = userEvent.setup();
     const traces = await tracesWidget();

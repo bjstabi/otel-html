@@ -4,7 +4,7 @@ import { canonicalAttributesKey } from '../../model/interner.js';
 import type { ResourceRecord, ScopeRecord } from '../../model/records.js';
 import type { BucketAgg } from '../../rollups/metric-agg.js';
 import type { MetricEntry, SeriesDef } from '../../rollups/metric-catalog.js';
-import type { TimeWindow } from './span-query.js';
+import type { TimeWindow } from './time-window.js';
 
 export interface LoadedSeries {
   def: SeriesDef;

@@ -28,7 +28,7 @@ import {
 } from './metric-tables.js';
 import { compileSelector, targetOf } from './metric-where.js';
 import { throwIfAborted } from './query-common.js';
-import type { TimeWindow } from './span-query.js';
+import type { TimeWindow } from './time-window.js';
 
 const ABORT_CHECK_EVERY = 4096;
 

@@ -10,13 +10,16 @@ import type { ColorAssigner } from '../theme/palette.js';
 import { seriesVar } from '../theme/palette.js';
 
 /** Exclusive time per service of one trace, largest first (`DataSource.serviceShare`). */
-export type ServiceShareLoader = (traceId: TraceId) => Promise<readonly { service: string; ns: number }[]>;
+export type ServiceShareLoader = (
+  traceId: TraceId,
+  signal?: AbortSignal,
+) => Promise<readonly { service: string; ns: number }[]>;
 
 interface CellContext {
   epoch: UnixNanos;
   colors: ColorAssigner;
-  /** Loads the trace list's share cell; without it the cell is empty. */
-  serviceShare?: ServiceShareLoader | undefined;
+  /** Loads the trace list's share cell. Tables of trace rows must supply it (`ResultsTableProps`). */
+  serviceShare: ServiceShareLoader;
 }
 
 /** A results-table column as data: the table renders whatever it is given. `sort` is the data layer's sort column. */
@@ -158,16 +161,14 @@ export const SPAN_COLUMNS_UI: readonly ColumnUi<SpanRow>[] = [
   },
 ];
 
-const NO_SHARE: ServiceShareLoader = () => Promise.resolve([]);
-
 /** Stacked bar of exclusive time per service, loaded for this row's trace when the row is drawn. */
 function ServiceShare(props: {
   traceId: TraceId;
-  load: ServiceShareLoader | undefined;
+  load: ServiceShareLoader;
   colors: ColorAssigner;
 }): JSX.Element {
   const { colors } = props;
-  const state = useKeyedAsync(props.traceId, props.load ?? NO_SHARE);
+  const state = useKeyedAsync(props.traceId, props.load);
   if (state.status === 'loading') return <span className="text-xs text-muted">...</span>;
   if (state.status === 'error') {
     return (

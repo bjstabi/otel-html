@@ -84,8 +84,12 @@ export async function startEngine(engine: ManifestV4['engine'], deps: EngineDeps
     format: engine.format,
     registerText: (name, text) => db.registerFileText(name, text),
     async close() {
-      await connection.close();
-      await db.terminate();
+      // the worker is released even when the connection will not close; that error still surfaces
+      try {
+        await connection.close();
+      } finally {
+        await db.terminate();
+      }
     },
   };
 }

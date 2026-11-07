@@ -116,4 +116,22 @@ describe('a failed load', () => {
     act(() => report({ phase: 'partitions', done: 0, total: 1 }));
     expect(screen.getByRole('alert').textContent).toContain('spans.parquet.js');
   });
+
+  test('the moved-or-incomplete hint is not shown for the format refusal', async () => {
+    const refusal = new Error('This report is format 3; this viewer reads format 4. Convert it.');
+    render(<Root load={() => Promise.reject(refusal)} history={createHashHistory(window)} />);
+    await screen.findByText('This report could not be loaded');
+    expect(screen.getByRole('alert').textContent).not.toContain('incomplete or moved');
+  });
+
+  test('other failures keep the hint', async () => {
+    render(
+      <Root
+        load={() => Promise.reject(new Error('spans.parquet: missing'))}
+        history={createHashHistory(window)}
+      />,
+    );
+    await screen.findByText('This report could not be loaded');
+    expect(screen.getByRole('alert').textContent).toContain('incomplete or moved');
+  });
 });

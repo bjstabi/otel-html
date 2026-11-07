@@ -17,7 +17,7 @@ import {
   tokensToOttl,
 } from '../components/filter-tokens.js';
 import type { LogRef } from '../data/log-query.js';
-import type { TimeWindow } from '../data/span-query.js';
+import type { TimeWindow } from '../data/time-window.js';
 import { isLogTabId, LOG_TAB_IDS, type LogTabId } from '../logs/tabs.js';
 import { isTraceTabId, TRACE_TAB_IDS, type TraceTabId } from '../traces/tabs.js';
 import { type DashboardPageState, isPristine } from './dashboard-state.js';

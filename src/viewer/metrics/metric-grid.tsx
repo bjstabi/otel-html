@@ -18,7 +18,7 @@ import {
   type MetricQueryResult,
   runMetricQuery,
 } from '../data/metric-query.js';
-import type { TimeWindow } from '../data/span-query.js';
+import type { TimeWindow } from '../data/time-window.js';
 import { CONTROL } from '../shell/controls.js';
 import { useGoTo } from '../shell/go-to.js';
 import { formatWindow } from '../state/url-state.js';

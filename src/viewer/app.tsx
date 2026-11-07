@@ -9,15 +9,20 @@ type Load =
   | { status: 'ready'; dataSource: DataSource }
   | { status: 'failed'; message: string };
 
+/** The hint under the error: only for failures that a moved or partial report explains, not for D12 or engine errors. */
+const STALE_FORMAT = /this viewer reads format 4/;
+
 function LoadFailure({ message }: { message: string }): JSX.Element {
   return (
     <main className="mx-auto max-w-xl p-8">
       <div role="alert" className="rounded-card border border-hairline bg-surface p-6">
         <h1 className="text-xl font-semibold text-critical">This report could not be loaded</h1>
         <p className="mt-2 font-mono text-sm break-words text-ink-2">{message}</p>
-        <p className="mt-3 text-sm text-muted">
-          The report folder may be incomplete or moved. Open it again from its original location.
-        </p>
+        {!STALE_FORMAT.test(message) && (
+          <p className="mt-3 text-sm text-muted">
+            The report folder may be incomplete or moved. Open it again from its original location.
+          </p>
+        )}
       </div>
     </main>
   );
@@ -79,7 +84,6 @@ export function App(props: {
     case 'failed':
       return <LoadFailure message={state.message} />;
     case 'ready':
-      // Bridge until Tasks 5.2-5.5 move the pages to the format-4 source: they still take the chunk-era shape.
       return <Shell dataSource={state.dataSource} history={history} />;
     default: {
       const never: never = state;

@@ -13,7 +13,7 @@ import {
   runMetricQueryAtWidth,
   showOptions,
 } from '../data/metric-query.js';
-import type { TimeWindow } from '../data/span-query.js';
+import type { TimeWindow } from '../data/time-window.js';
 import { useKeyedAsync } from '../state/use-keyed-async.js';
 
 /** Buckets per chart when the card has not been measured (no layout, as in tests). */
