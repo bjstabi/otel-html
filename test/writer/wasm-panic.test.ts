@@ -105,9 +105,9 @@ describe('watchWasmPanics', () => {
   });
 
   test('a host listener added with once still handles a non-panic error: nothing is rethrown', () => {
-    const w = watchWasmPanics();
     const seen: unknown[] = [];
     process.once('uncaughtException', (e) => seen.push(e));
+    const w = watchWasmPanics(); // the host's once listener is registered first: the case the prepend exists for
     const later = vi.spyOn(globalThis, 'setImmediate');
     const boom = new Error('first');
     emit(boom);

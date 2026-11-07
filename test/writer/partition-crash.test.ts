@@ -81,6 +81,49 @@ async function appendAndClose(w: TestWriter): Promise<void> {
 }
 
 describe('prune on open', () => {
+  test('a listed Parquet file keeps its local-format wrapper while a stray file beside it goes', async () => {
+    const w = createTestWriter();
+    const s = await open(w, 'replace');
+    await s.add(spans(2), 'a.json');
+    await s.close();
+    await w.fs.writeBytes(`${OUT}/data/partitions/000000/spans.parquet.js`, new Uint8Array([1]));
+    await w.fs.writeBytes(`${OUT}/data/partitions/000000/spans.parquet.js.bak`, new Uint8Array([1]));
+    await w.fs.writeBytes(`${OUT}/data/partitions/000000/stray.js`, new Uint8Array([1]));
+    const a = await open(w, 'append');
+    const files = onDisk(w).filter((p) => p.startsWith('000000/'));
+    expect(files).toContain('000000/spans.parquet.js');
+    expect(files).not.toContain('000000/stray.js');
+    expect(files).not.toContain('000000/spans.parquet.js.bak');
+    await a.abort();
+  });
+
+  test('open on an existing report prunes too, not only append', async () => {
+    const w = createTestWriter();
+    const s = await open(w, 'replace');
+    await flushes(s, 1);
+    await s.close();
+    await w.fs.writeBytes(`${OUT}/data/partitions/000009/logs.parquet`, new Uint8Array([1]));
+    const a = await open(w, 'open');
+    expect(onDisk(w).some((p) => p.startsWith('000009/'))).toBe(false);
+    await a.abort();
+  });
+
+  test('a removal error during prune fails the open, and the lock is released so a second open succeeds', async () => {
+    const w = createTestWriter();
+    const s = await open(w, 'replace');
+    await flushes(s, 1);
+    await s.add(spans(2, 50), 'x.json');
+    w.fs.failNextWrite('data/manifest.js');
+    await expect(s.flush()).rejects.toThrow();
+    await s.abort();
+    const dying = { ...w.deps, fs: dyingRemovals(w.fs, ['000001']) };
+    await expect(open(w, 'append', dying)).rejects.toThrow('died before the removal');
+    expect(await w.fs.exists(`${OUT}/data/state/lock.json`)).toBe(false);
+    const again = await open(w, 'append');
+    expect(onDisk(w).some((p) => p.startsWith('000001/'))).toBe(false);
+    await again.abort();
+  });
+
   test('a cut whose manifest write failed leaves an orphan folder; the next append open removes it first', async () => {
     const w = createTestWriter();
     const s = await open(w, 'replace');
@@ -160,7 +203,7 @@ describe('a crash in close()', () => {
     await appendAndClose(w);
   });
 
-  test('while writing the compacted file: the flush partitions stay listed and the half-written folder is pruned', async () => {
+  test('an in-process failure while writing the compacted file: the flush partitions stay listed and the half-written folder is pruned', async () => {
     const w = createTestWriter();
     const dying = { ...w.deps, fs: dyingRemovals(w.fs, ['000003']) };
     const s = await open(w, 'replace', dying);

@@ -1,11 +1,9 @@
 import type { PartitionEntry } from '../format/manifest.js';
+import { PARTITION_DIR_RE } from '../format/paths.js';
 import { at } from './checkpoint.js';
 import type { FileSystem } from './ports.js';
 
 const PARTITIONS_DIR = 'data/partitions';
-
-/** `partitionDir`'s names: six digits, or more without a leading zero for n >= 10^6. Nothing else is ours. */
-const CANONICAL = /^(?:[0-9]{6}|[1-9][0-9]{6,})$/;
 
 /**
  * Removes what an interrupted session left under `data/partitions/` that the manifest does not list, so a later cut
@@ -14,6 +12,7 @@ const CANONICAL = /^(?:[0-9]{6}|[1-9][0-9]{6,})$/;
  * - a canonical folder (`<p6>`) of no listed partition, with everything in it (a cut whose manifest write failed, a
  *   half-written compaction, the flush partitions a compaction replaced);
  * - in a listed folder, every file or folder the manifest does not list for it (a stale table file, `.merge-*`).
+ *   A listed Parquet file's `.js` wrapper (`partitionWrapperPath`) counts as listed.
  *
  * Anything that is not a canonical folder name is left alone. Runs at open, under the report's lock, before the
  * session's first write. Returns how many entries it removed.
@@ -37,6 +36,7 @@ export async function prunePartitions(
         keep.set(folder, names);
       }
       names.add(file);
+      names.add(`${file}.js`); // the local format's base64 wrapper beside a listed Parquet file
     }
     // A listed partition with no files still owns its (empty) folder.
     const folder = String(e.n).padStart(6, '0');
@@ -44,7 +44,7 @@ export async function prunePartitions(
   }
   let removed = 0;
   for (const name of await fs.list(at(out, PARTITIONS_DIR))) {
-    if (!CANONICAL.test(name)) continue;
+    if (!PARTITION_DIR_RE.test(name)) continue;
     const dir = at(out, `${PARTITIONS_DIR}/${name}`);
     const wanted = keep.get(name);
     if (wanted === undefined) {

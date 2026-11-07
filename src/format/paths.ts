@@ -77,6 +77,9 @@ export function partitionFilePath(n: number, table: Table): string {
   return `${partitionDir(n)}/${table}.parquet`;
 }
 
+/** A partition folder name as `partitionDir` writes it: six digits, or seven or more without a leading zero (n >= 10^6). */
+export const PARTITION_DIR_RE: RegExp = /^(?:[0-9]{6}|[1-9][0-9]{6,})$/;
+
 /** The base64 script next to a Parquet file in the local format. */
 export function partitionWrapperPath(n: number, table: Table): string {
   return `${partitionFilePath(n, table)}.js`;
