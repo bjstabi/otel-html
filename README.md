@@ -594,6 +594,8 @@ Config is a YAML or JSON file (`otel-html.yaml` by default), or an object passed
 
 ## Development
 
+Clone with `git clone --single-branch https://github.com/bjstabi/otel-html.git` (about 4 MB of git data). A plain clone also fetches the `gh-pages` branch, the published report site (about 150 MB), which development never needs. An existing clone drops it with `git config --add remote.origin.fetch '^refs/heads/gh-pages'`, `git branch -rd origin/gh-pages` and `git gc --prune=now`.
+
 Tasks are defined in `mise.toml`; CI runs the same ones. The Linux binaries (`linux-x64`, `linux-arm64`) are built and smoke-tested on every PR by the `binary` job (`test/cli/binary.test.ts` against the compiled binary: `convert`, `serve` over HTTP and gRPC, `run`, a SIGINT exit 0 and a bad-port exit 2); the release workflow smoke-tests the artefacts it uploads. Tasks with `sources` are skipped while up to date; `mise run --force <task>` overrides.
 
 ### Test and viewer spans
