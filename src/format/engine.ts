@@ -9,14 +9,14 @@ export const ENGINE_EXTENSIONS = ['parquet', 'json'] as const;
 export type EngineExtension = (typeof ENGINE_EXTENSIONS)[number];
 
 /**
- * The file a report carries an extension as. A `site` report serves the signed binary as it is; DuckDB derives the
- * extension's entry point from the last URL segment, so the name must be `<extension>.duckdb_extension.wasm`. A
- * `local` report opens from `file://`, where only classic scripts load, and takes a gzipped base64 wrapper named by
- * the engine version.
+ * The file a report carries an extension as. A `site` report serves the signed binary as it is, named
+ * `<extension>.<engine version>.duckdb_extension.wasm` (DuckDB takes the extension name, hence its entry point,
+ * from the part of the last URL segment before the first dot, so the version may follow it). A `local` report opens
+ * from `file://`, where only classic scripts load, and takes a gzipped base64 wrapper named by the engine version.
  */
 export function engineExtensionName(format: 'local' | 'site', extension: EngineExtension): string {
   return format === 'site'
-    ? `${extension}.duckdb_extension.wasm`
+    ? `${extension}.${ENGINE_VERSION}.duckdb_extension.wasm`
     : `duckdb.${ENGINE_VERSION}.${extension}.ext.gz.b64.js`;
 }
 

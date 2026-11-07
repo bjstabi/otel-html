@@ -1,6 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
-import { ENGINE_VERSION, engineAssetNames } from '../../src/format/engine.js';
+import {
+  ENGINE_EXTENSIONS,
+  ENGINE_VERSION,
+  engineAssetNames,
+  engineExtensionName,
+} from '../../src/format/engine.js';
 import { ENGINE_ASSET_RE } from '../../src/format/paths.js';
 import { openSession } from '../../src/writer/session.js';
 import { type ViewerAsset, withEngineFiles } from '../../src/writer/viewer-assets.js';
@@ -26,6 +31,13 @@ describe('engine assets', () => {
     expect(pins.platform).toBe('wasm_eh');
   });
 
+  test('DuckDB names an extension by the part of the file name before the first dot', () => {
+    for (const e of ENGINE_EXTENSIONS) {
+      expect(engineExtensionName('site', e).split('.')[0]).toBe(e);
+      expect(engineExtensionName('site', e)).toContain(`.${ENGINE_VERSION}.`);
+    }
+  });
+
   test('ENGINE_VERSION is the installed @duckdb/duckdb-wasm version, pinned in package.json', () => {
     expect(pkg.devDependencies['@duckdb/duckdb-wasm']).toBe(ENGINE_VERSION);
     const installed = JSON.parse(
@@ -38,8 +50,8 @@ describe('engine assets', () => {
     expect(engineAssetNames('site')).toEqual([
       `duckdb.${ENGINE_VERSION}.wasm`,
       `duckdb.${ENGINE_VERSION}.worker.js`,
-      'parquet.duckdb_extension.wasm',
-      'json.duckdb_extension.wasm',
+      `parquet.${ENGINE_VERSION}.duckdb_extension.wasm`,
+      `json.${ENGINE_VERSION}.duckdb_extension.wasm`,
     ]);
     expect(engineAssetNames('local')).toEqual([
       `duckdb.${ENGINE_VERSION}.wasm.gz.b64.js`,

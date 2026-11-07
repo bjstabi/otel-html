@@ -237,8 +237,8 @@ test('extensionUrls resolves the two extension files for each format', () => {
     json: 'file:///r/assets/duckdb.1.32.0.json.ext.gz.b64.js',
   });
   expect(extensionUrls(siteEngine, 'https://x.test/s/index.html')).toEqual({
-    parquet: 'https://x.test/s/assets/parquet.duckdb_extension.wasm',
-    json: 'https://x.test/s/assets/json.duckdb_extension.wasm',
+    parquet: 'https://x.test/s/assets/parquet.1.32.0.duckdb_extension.wasm',
+    json: 'https://x.test/s/assets/json.1.32.0.duckdb_extension.wasm',
   });
 });
 
@@ -247,8 +247,10 @@ test('site start turns autoload off and loads both extensions from the assets be
   expect(fake.statements).toEqual([
     'SET autoinstall_known_extensions = false',
     'SET autoload_known_extensions = false',
-    "LOAD 'file:///r/assets/parquet.duckdb_extension.wasm'",
-    "LOAD 'file:///r/assets/json.duckdb_extension.wasm'",
+    "LOAD 'file:///r/assets/parquet.1.32.0.duckdb_extension.wasm'",
+    "LOAD 'file:///r/assets/json.1.32.0.duckdb_extension.wasm'",
+    "SET autoinstall_extension_repository = 'file:///r/assets/no-extensions'",
+    "SET custom_extension_repository = 'file:///r/assets/no-extensions'",
   ]);
 });
 
@@ -259,16 +261,18 @@ test('local start loads both extensions through the embedded address, after the 
     'SET autoload_known_extensions = false',
     "LOAD 'https://oh-engine.invalid/parquet.duckdb_extension.wasm'",
     "LOAD 'https://oh-engine.invalid/json.duckdb_extension.wasm'",
+    "SET autoinstall_extension_repository = 'https://oh-engine.invalid/no-extensions'",
+    "SET custom_extension_repository = 'https://oh-engine.invalid/no-extensions'",
   ]);
 });
 
 test.each([
   ['local', localEngine, 'file:///r/assets/duckdb.1.32.0.json.ext.gz.b64.js'],
-  ['site', siteEngine, 'file:///r/assets/json.duckdb_extension.wasm'],
+  ['site', siteEngine, 'file:///r/assets/json.1.32.0.duckdb_extension.wasm'],
 ] as const)(
   '%s: a failed extension load is an invalid-report naming the file, and ends the engine',
   async (_f, spec, url) => {
-    fake.failLoad = 'json.duckdb_extension';
+    fake.failLoad = 'json.';
     const err = await startEngine(spec, deps(localLoader())).catch((e: unknown) => e);
     expect(err).toMatchObject({ code: 'invalid-report', path: url });
     expect((err as Error).message).toContain('DuckDB json extension');
@@ -290,11 +294,12 @@ test('the worker shim answers the embedded address from the data URL and leaves 
   );
   const x = new FakeXhr();
   x.open('GET', 'https://oh-engine.invalid/parquet.duckdb_extension.wasm', false);
-  x.open('GET', 'https://oh-engine.invalid/other.wasm', false);
+  expect(() => x.open('GET', 'https://oh-engine.invalid/icu.duckdb_extension.wasm', false)).toThrow(
+    'DuckDB extension icu.duckdb_extension.wasm is not shipped with this report',
+  );
   x.open('GET', 'https://example.test/parquet.duckdb_extension.wasm', false);
   expect(opened).toEqual([
     ['GET', 'data:x;base64,UFE=', false],
-    ['GET', 'https://oh-engine.invalid/other.wasm', false],
     ['GET', 'https://example.test/parquet.duckdb_extension.wasm', false],
   ]);
 });
