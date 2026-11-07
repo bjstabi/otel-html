@@ -103,3 +103,17 @@ describe('unmount during load', () => {
     expect(close).toHaveBeenCalledOnce();
   });
 });
+
+describe('a failed load', () => {
+  test('progress that arrives after the failure does not replace the error', async () => {
+    let report: (p: LoadProgress) => void = () => undefined;
+    const load = (onProgress: (p: LoadProgress) => void): Promise<DataSource> => {
+      report = onProgress;
+      return Promise.reject(new Error('spans.parquet.js: the script failed to load'));
+    };
+    render(<Root load={load} history={createHashHistory(window)} />);
+    await screen.findByText('This report could not be loaded');
+    act(() => report({ phase: 'partitions', done: 0, total: 1 }));
+    expect(screen.getByRole('alert').textContent).toContain('spans.parquet.js');
+  });
+});

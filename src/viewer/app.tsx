@@ -48,16 +48,21 @@ export function App(props: {
 
   useEffect(() => {
     let live = true;
+    // Progress from registrations still in flight can arrive after the load failed; it must not undo the error.
+    let settled = false;
     const onProgress = (progress: LoadProgress): void => {
-      if (live) setState({ status: 'loading', progress });
+      if (live && !settled) setState({ status: 'loading', progress });
     };
     load(onProgress).then(
       (dataSource) => {
+        settled = true;
         if (live) setState({ status: 'ready', dataSource });
         else void dataSource.close().catch(() => undefined); // unmounted mid-load: release the engine
       },
-      (e: unknown) =>
-        live && setState({ status: 'failed', message: e instanceof Error ? e.message : String(e) }),
+      (e: unknown) => {
+        settled = true;
+        if (live) setState({ status: 'failed', message: e instanceof Error ? e.message : String(e) });
+      },
     );
     return () => {
       live = false;

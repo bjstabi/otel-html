@@ -16,6 +16,13 @@ function parseRange(
   header: string | undefined,
   size: number,
 ): { start: number; end: number } | 'unsatisfiable' | null {
+  // `bytes=-n` is the last n bytes (RFC 9110). A multi-range request is answered with the whole file (200), which
+  // the RFC allows.
+  const suffix = /^bytes=-(\d+)$/.exec(header ?? '');
+  if (suffix !== null) {
+    const n = Number(suffix[1]);
+    return n === 0 || size === 0 ? 'unsatisfiable' : { start: Math.max(0, size - n), end: size - 1 };
+  }
   const m = /^bytes=(\d+)-(\d*)$/.exec(header ?? '');
   if (m === null) return null;
   const start = Number(m[1]);

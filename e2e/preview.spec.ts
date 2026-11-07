@@ -83,18 +83,15 @@ test.describe('preview.mjs', () => {
     }
   });
 
-  // Skipped by the plan: this deleted a rollup file, which is gone. In format 4 a damaged partition fails the load
-  // itself (the views validate every file when created), covered by the test above, so the variables' query cannot
-  // fail alone any more.
-  test.skip('warns and keeps the previous images when the dashboard could not read its variables values', () => {
-    cpSync(fileURLToPath(reportDir('dashboards')), dir, { recursive: true });
-    rmSync(join(dir, 'data', 'rollups', 'logs.js'));
+  test('warns naming the failure and keeps the previous images when a partition file is missing', () => {
+    cpSync(fileURLToPath(reportDir('sample')), dir, { recursive: true });
+    rmSync(join(dir, 'data', 'partitions', '000000', 'spans.parquet.js'));
     for (const scheme of ['light', 'dark'])
       writeFileSync(join(dir, `preview-${scheme}.png`), `previous ${scheme}`);
     const result = runPreview(dir);
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('::warning::otel-html preview:');
-    expect(result.stdout).toContain('Could not read the variables');
+    expect(result.stdout).toContain('spans.parquet.js');
     for (const scheme of ['light', 'dark']) {
       expect(readFileSync(join(dir, `preview-${scheme}.png`), 'utf8')).toBe(`previous ${scheme}`);
       expect(existsSync(join(dir, `preview-${scheme}.png.tmp`))).toBe(false);

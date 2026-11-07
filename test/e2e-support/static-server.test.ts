@@ -48,6 +48,18 @@ it('serves an open range, and clamps an end past the file', async () => {
   expect(clamped.headers.get('content-range')).toBe('bytes 95-99/100');
 });
 
+it('serves a suffix range as the last n bytes, and a multi-range as the whole file', async () => {
+  const tail = await get('/m/a.parquet', { headers: { range: 'bytes=-10' } });
+  expect(tail.status).toBe(206);
+  expect(tail.headers.get('content-range')).toBe('bytes 90-99/100');
+  expect(new Uint8Array(await tail.arrayBuffer())).toEqual(bytes.slice(90));
+  expect((await get('/m/a.parquet', { headers: { range: 'bytes=-500' } })).headers.get('content-range')).toBe(
+    'bytes 0-99/100',
+  );
+  const multi = await get('/m/a.parquet', { headers: { range: 'bytes=0-1,5-6' } });
+  expect(multi.status).toBe(200);
+});
+
 it('answers an unsatisfiable range with 416 and the size', async () => {
   const res = await get('/m/a.parquet', { headers: { range: 'bytes=100-' } });
   expect(res.status).toBe(416);

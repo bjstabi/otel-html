@@ -73,25 +73,19 @@ test(
     // A resource filter survives g t then g l.
     await nav.getByRole('region', { name: 'Logs' }).getByRole('link', { name: 'Explorer' }).click();
     const paymentsRow = page.getByTestId('facet-row:service.name:payments');
+    const idle = page.locator('[aria-busy="true"]');
+    await expect(paymentsRow).toBeVisible();
+    await expect(idle).toHaveCount(0);
+    const previous = (await count.textContent()) ?? '';
     await paymentsRow.hover();
     await paymentsRow.getByRole('button', { name: 'Only payments' }).click();
     await expect(page).toHaveURL(/q=[^&]*service\.name/);
+    // The count shows the previous result while the new query runs: wait for it to change, then for the list to
+    // stop being busy.
+    await expect(count).not.toHaveText(previous);
+    await expect(idle).toHaveCount(0);
     await expect(count).not.toHaveText(new RegExp(`^${LINKED_LOG_COUNT} logs`));
-    // The count shows the previous result while the new query runs (here the window's logs, before the filter
-    // applies); read it once it has stopped changing and nothing is loading.
-    let shown = '';
-    await expect(async () => {
-      const before = (await count.textContent()) ?? '';
-      await page.waitForTimeout(400);
-      expect(
-        await page
-          .getByRole('status')
-          .filter({ hasText: /^Loading$/ })
-          .count(),
-      ).toBe(0);
-      expect(await count.textContent()).toBe(before);
-      shown = before;
-    }).toPass();
+    const shown = (await count.textContent()) ?? '';
     const payments = shown.match(/^(\d+) logs/)?.[1];
     expect(Number(payments)).toBeLessThan(LINKED_LOG_COUNT);
     await page.locator('body').click({ position: { x: 1, y: 1 } });
