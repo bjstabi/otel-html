@@ -28,12 +28,12 @@ function shiftOrNull(t: RelNanos | null, shift: bigint, path: string): RelNanos 
   return t === null ? null : shiftNanos(t, shift, path);
 }
 
-export interface Refs {
+interface Refs {
   resource: ResourceRef;
   scope: ScopeRef;
 }
 
-export function rebaseSpan(s: SpanRecord, shift: bigint, refs: Refs, path: string): SpanRecord {
+function rebaseSpan(s: SpanRecord, shift: bigint, refs: Refs, path: string): SpanRecord {
   return {
     ...s,
     start: shiftNanos(s.start, shift, `${path}.start`),
@@ -43,7 +43,7 @@ export function rebaseSpan(s: SpanRecord, shift: bigint, refs: Refs, path: strin
   };
 }
 
-export function rebaseLog(l: LogRecordRecord, shift: bigint, refs: Refs, path: string): LogRecordRecord {
+function rebaseLog(l: LogRecordRecord, shift: bigint, refs: Refs, path: string): LogRecordRecord {
   return {
     ...l,
     time: shiftOrNull(l.time, shift, `${path}.time`),
@@ -52,12 +52,7 @@ export function rebaseLog(l: LogRecordRecord, shift: bigint, refs: Refs, path: s
   };
 }
 
-export function rebasePoint(
-  p: MetricPointRecord,
-  shift: bigint,
-  refs: Refs,
-  path: string,
-): MetricPointRecord {
+function rebasePoint(p: MetricPointRecord, shift: bigint, refs: Refs, path: string): MetricPointRecord {
   return {
     ...p,
     start: shiftOrNull(p.start, shift, `${path}.start`),
