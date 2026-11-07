@@ -1,6 +1,7 @@
 import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import type { ManifestV4, PartitionFile } from '../src/format/manifest.js';
 import {
   arrowSchema,
   FIXED_STATISTICS_COLUMNS,
@@ -23,6 +24,39 @@ const TABLE_NOTES: Readonly<Record<Table, string>> = {
     'Log pattern clusters (Drain) with their counts in the partition. See [Patterns](#patterns) for how rows combine.',
 };
 
+const MANIFEST_FIELDS = {
+  formatVersion: '`4`',
+  otelHtmlVersion: 'the version of otel-html that wrote the report',
+  title: 'the report title',
+  epochUnixNano: "decimal nanoseconds of the report's epoch",
+  createdAt: 'ISO timestamp',
+  updatedAt: 'ISO timestamp',
+  complete: 'false while a writer holds the report open',
+  range: '`{ start, end }` as int64 nanosecond text, or null when the report holds no data',
+  totals: 'row counts per signal: `spans`, `logs`, `metrics`',
+  partitions: 'the partition list, see below',
+  statisticsKeys:
+    "per table, the columns and `attr:<key>` / `resource:<key>` keys whose values are kept in each file's `values`; it includes the fixed statistics columns above",
+  engine:
+    '`{ format, version, assetsBase }`: `format` is `local` or `site`, `version` the DuckDB engine version, `assetsBase` where the viewer and engine files load from',
+  config: 'the viewer settings, dashboards and views',
+} satisfies Record<keyof ManifestV4, string>;
+
+const PARTITION_FILE_FIELDS = {
+  path: 'the file, relative to the report',
+  bytes: 'its size in bytes',
+  rows: 'its row count',
+  timeMin: "the smallest value of the table's time column, as int64 text, or null when there are no rows",
+  timeMax: "the largest value of the table's time column, as int64 text, or null when there are no rows",
+  values:
+    'maps each statistics key to its distinct values in the file, or to null when the file has more than the cap (or the table cannot answer the key)',
+} satisfies Record<keyof PartitionFile, string>;
+
+const fieldRows = (fields: Readonly<Record<string, string>>): string =>
+  Object.entries(fields)
+    .map(([k, v]) => `| \`${k}\` | ${v} |`)
+    .join('\n');
+
 const esc = (s: string): string => s.replaceAll('|', '\\|');
 
 function tableSection(table: Table): string {
@@ -40,7 +74,7 @@ function tableSection(table: Table): string {
     TABLE_NOTES[table],
     '',
     `- Sorted by: ${list(SORT_COLUMNS[table])}`,
-    `- Time column (for the partition's \`timeMin\` and \`timeMax\`): \`${TIME_COLUMN[table]}\``,
+    `- Time column (for the partition's \`timeMin\` and \`timeMax\`): \`${TIME_COLUMN[table]}\`${table === 'logs' ? ', or \`observed_time_unix_nano\` for a row where it is null' : ''}`,
     `- Fixed statistics columns: ${list(fixed)}`,
     '',
     '| column | Arrow type | logical type | nullable |',
@@ -66,9 +100,11 @@ stored as \`int64\`. Times are absolute Unix nanoseconds as \`int64\`; the manif
     ...TABLES.map(tableSection),
     `## Points: delta columns and series identity
 
-\`delta_value\`, \`delta_count\`, \`reset\` and \`out_of_order\` hold the normalized increase of a series since its
-previous point. They are filled for delta-temporality sums (up-down counters included) and for histograms; other
-point types leave them null. \`series_id\` is a 128-bit hash (hex text) of the series identity: the metric (name, type, unit,
+\`delta_value\` and \`delta_count\` hold the normalized increase of a series since its previous point. They are filled for
+every counter (a monotonic sum, of any temporality), every delta-temporality sum (up-down counters included) and every
+histogram and exponential histogram. For every other point (gauges, summaries, cumulative non-monotonic sums, and
+points the normalizer skipped) they are null, and \`reset\` and \`out_of_order\` are false (\`out_of_order\` is true
+for a skipped out-of-order point). \`series_id\` is a 128-bit hash (hex text) of the series identity: the metric (name, type, unit,
 temporality, monotonicity and, for an explicit histogram, its bounds), the resource, the scope and the point's attributes.
 A series whose histogram bounds change is a new series.`,
     `## Patterns
@@ -84,22 +120,13 @@ The manifest is a script that registers its JSON payload. Its fields:
 
 | field | meaning |
 |---|---|
-| \`formatVersion\` | \`4\` |
-| \`otelHtmlVersion\` | the version of otel-html that wrote the report |
-| \`title\` | the report title |
-| \`epochUnixNano\` | decimal nanoseconds of the report's epoch |
-| \`createdAt\`, \`updatedAt\` | ISO timestamps |
-| \`complete\` | false while a writer holds the report open |
-| \`range\` | \`{ start, end }\` as int64 nanosecond text, or null when the report holds no data |
-| \`totals\` | row counts per signal: \`spans\`, \`logs\`, \`metrics\` |
-| \`partitions\` | the partition list, see below |
-| \`statisticsKeys\` | per table, the columns and \`attr:<key>\` / \`resource:<key>\` keys whose values are kept in each file's \`values\`; it includes the fixed statistics columns above |
-| \`engine\` | \`{ format, version, assetsBase }\`: \`format\` is \`local\` or \`site\`, \`version\` the DuckDB engine version, \`assetsBase\` where the viewer and engine files load from |
-| \`config\` | the viewer settings, dashboards and views |
+${fieldRows(MANIFEST_FIELDS)}
 
-Each \`partitions\` entry is \`{ n, source, files }\`. \`files\` has an entry per table the partition holds:
-\`{ path, bytes, rows, timeMin, timeMax, values }\`, where \`values\` maps each statistics key to its distinct values in
-the file, or to null when the file has more than the cap (or the table cannot answer the key).
+Each \`partitions\` entry is \`{ n, source, files }\`. \`files\` has an entry per table the partition holds, with these fields:
+
+| field | meaning |
+|---|---|
+${fieldRows(PARTITION_FILE_FIELDS)}
 
 ### \`source\`
 
@@ -109,7 +136,8 @@ Where a partition came from:
 - \`compact:<first>..<last>\`: the result of compacting partitions \`first\` to \`last\`.
 - \`merge:<input>#<n>\`: a partition copied by merge. \`<input>\` is the input's index after the inputs are sorted by
   epoch, oldest first; \`<n>\` is the partition's number in that input.
-- \`job:<id>\` and \`ci:<id>\`: also accepted by the manifest schema; the writer does not produce them yet.`,
+
+The \`flush\`, \`compact\` and \`merge\` forms are what this writer produces. The schema also accepts the reserved prefixes \`job:\` and \`ci:\` (e.g. \`job:<id>#<n>\`), which this writer does not produce; it checks only the prefix and the character set.`,
   ];
   return `${parts.join('\n\n')}\n`;
 }

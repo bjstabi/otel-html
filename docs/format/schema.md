@@ -54,7 +54,7 @@ One row per span.
 One row per log record. Rows sort by `time_unix_nano`, falling back to `observed_time_unix_nano` when it is null.
 
 - Sorted by: `scope_name`, `service_name`, `time_unix_nano`
-- Time column (for the partition's `timeMin` and `timeMax`): `time_unix_nano`
+- Time column (for the partition's `timeMin` and `timeMax`): `time_unix_nano`, or `observed_time_unix_nano` for a row where it is null
 - Fixed statistics columns: `scope_name`, `service_name`, `severity_number`
 
 | column | Arrow type | logical type | nullable |
@@ -172,9 +172,11 @@ Log pattern clusters (Drain) with their counts in the partition. See [Patterns](
 
 ## Points: delta columns and series identity
 
-`delta_value`, `delta_count`, `reset` and `out_of_order` hold the normalized increase of a series since its
-previous point. They are filled for delta-temporality sums (up-down counters included) and for histograms; other
-point types leave them null. `series_id` is a 128-bit hash (hex text) of the series identity: the metric (name, type, unit,
+`delta_value` and `delta_count` hold the normalized increase of a series since its previous point. They are filled for
+every counter (a monotonic sum, of any temporality), every delta-temporality sum (up-down counters included) and every
+histogram and exponential histogram. For every other point (gauges, summaries, cumulative non-monotonic sums, and
+points the normalizer skipped) they are null, and `reset` and `out_of_order` are false (`out_of_order` is true
+for a skipped out-of-order point). `series_id` is a 128-bit hash (hex text) of the series identity: the metric (name, type, unit,
 temporality, monotonicity and, for an explicit histogram, its bounds), the resource, the scope and the point's attributes.
 A series whose histogram bounds change is a new series.
 
@@ -196,7 +198,8 @@ The manifest is a script that registers its JSON payload. Its fields:
 | `otelHtmlVersion` | the version of otel-html that wrote the report |
 | `title` | the report title |
 | `epochUnixNano` | decimal nanoseconds of the report's epoch |
-| `createdAt`, `updatedAt` | ISO timestamps |
+| `createdAt` | ISO timestamp |
+| `updatedAt` | ISO timestamp |
 | `complete` | false while a writer holds the report open |
 | `range` | `{ start, end }` as int64 nanosecond text, or null when the report holds no data |
 | `totals` | row counts per signal: `spans`, `logs`, `metrics` |
@@ -205,9 +208,16 @@ The manifest is a script that registers its JSON payload. Its fields:
 | `engine` | `{ format, version, assetsBase }`: `format` is `local` or `site`, `version` the DuckDB engine version, `assetsBase` where the viewer and engine files load from |
 | `config` | the viewer settings, dashboards and views |
 
-Each `partitions` entry is `{ n, source, files }`. `files` has an entry per table the partition holds:
-`{ path, bytes, rows, timeMin, timeMax, values }`, where `values` maps each statistics key to its distinct values in
-the file, or to null when the file has more than the cap (or the table cannot answer the key).
+Each `partitions` entry is `{ n, source, files }`. `files` has an entry per table the partition holds, with these fields:
+
+| field | meaning |
+|---|---|
+| `path` | the file, relative to the report |
+| `bytes` | its size in bytes |
+| `rows` | its row count |
+| `timeMin` | the smallest value of the table's time column, as int64 text, or null when there are no rows |
+| `timeMax` | the largest value of the table's time column, as int64 text, or null when there are no rows |
+| `values` | maps each statistics key to its distinct values in the file, or to null when the file has more than the cap (or the table cannot answer the key) |
 
 ### `source`
 
@@ -217,4 +227,5 @@ Where a partition came from:
 - `compact:<first>..<last>`: the result of compacting partitions `first` to `last`.
 - `merge:<input>#<n>`: a partition copied by merge. `<input>` is the input's index after the inputs are sorted by
   epoch, oldest first; `<n>` is the partition's number in that input.
-- `job:<id>` and `ci:<id>`: also accepted by the manifest schema; the writer does not produce them yet.
+
+The `flush`, `compact` and `merge` forms are what this writer produces. The schema also accepts the reserved prefixes `job:` and `ci:` (e.g. `job:<id>#<n>`), which this writer does not produce; it checks only the prefix and the character set.

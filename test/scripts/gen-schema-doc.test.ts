@@ -58,6 +58,12 @@ test('the source grammar, patterns semantics, delta columns and manifest fields 
     '`engine`',
     '`assetsBase`',
     '`partitions`',
+    'every counter',
+    'exponential histogram',
+    'reserved prefixes `job:` and `ci:`',
+    '`observed_time_unix_nano` for a row where it is null',
+    '`timeMin`',
+    '`values`',
   ]) {
     expect(doc, s).toContain(s);
   }
