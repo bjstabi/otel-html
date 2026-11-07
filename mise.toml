@@ -432,7 +432,7 @@ run = "bun build e2e/otel-page/recorder.ts --target browser --format iife --mini
 
 [tasks."e2e:fixtures"]
 description = """Build the e2e fixture reports into e2e/.reports/ and their site copies into e2e/.reports-site/ (skipped while up to date)
-All but `scale` and `huge`, which e2e:fixtures:scale builds; about a second after `build`."""
+All but `scale` and `many`, which e2e:fixtures:scale builds; about a second after `build`."""
 depends = ["build", "e2e:otel-recorder"]
 sources = [
   "@group:deps",
@@ -455,8 +455,8 @@ run = "bun e2e/build-fixtures.ts"
 # the viewer only dist/viewer. A viewer change runs `upgrade` (byte-identical to a fresh convert) instead of converting
 # 1M logs twice again.
 [tasks."e2e:fixtures:scale:data"]
-description = """Convert the e2e `scale` and `huge` reports into e2e/.reports-scale/ (skipped while up to date)
-100k spans, 1M logs and metrics, converted twice (~15 s, ~1 GB of memory). Its sources are the writer's build output,
+description = """Write the e2e `scale` and `many` reports (site format) into e2e/.reports-scale/ (skipped while up to date)
+100k spans and 1M logs, converted once (`scale`) and written through the library in 100 flushes (`many`) (~1 GB of memory). Its sources are the writer's build output,
 not the viewer's: a viewer change only reruns e2e:fixtures:scale."""
 depends = ["build"]
 sources = [
@@ -476,11 +476,11 @@ outputs = ["e2e/.reports-scale/**"]
 run = "bun e2e/build-scale-fixtures.ts"
 
 [tasks."e2e:fixtures:scale"]
-description = """The e2e `scale` and `huge` reports with the current viewer (only e2e/scale.spec.ts reads them)
+description = """The e2e `scale` and `many` reports with the current viewer (only e2e/scale.spec.ts reads them)
 Depends on e2e:fixtures:scale:data; `otel-html upgrade` then swaps in the current dist/viewer (~0.3 s, every run: a
 freshness record of its own could miss a viewer that :data wrote in between), so a viewer change never converts again."""
 depends = ["e2e:fixtures:scale:data"]
-run = "node dist/cli/main.js upgrade e2e/.reports-scale/scale && node dist/cli/main.js upgrade e2e/.reports-scale/huge"
+run = "node dist/cli/main.js upgrade e2e/.reports-scale/scale && node dist/cli/main.js upgrade e2e/.reports-scale/many"
 
 # Budgets scale with OTEL_HTML_PERF_FACTOR on slow machines; they are never edited.
 # CI runs in the official Playwright image and sets OTEL_HTML_SKIP_BROWSER_INSTALL to skip the browser download.
@@ -489,7 +489,7 @@ run = "node dist/cli/main.js upgrade e2e/.reports-scale/scale && node dist/cli/m
 [tasks."test:e2e"]
 description = """Playwright over the fixture reports, per browser (--browser chromium|firefox|webkit, default all)
 Two passes: the `<browser>-file` and `<browser>-http` projects in parallel (`-http` runs only specs tagged HTTP), then the
-`<browser>-perf-file` project (@perf tests) alone with one worker. Only Chromium has `-http` and `-perf-file`, and
+`<browser>-perf-file` and `<browser>-perf-http` projects (@perf tests) alone with one worker. Only Chromium has `-http` and the perf projects, and
 Firefox and WebKit leave out e2e/scale.spec.ts (playwright.config.ts). Both passes run; the task fails if either does.
 The perf pass is skipped for a browser without a `-perf-file` project. The perf pass writes its artifacts to test-results/perf, so it does not clear the first pass's failures. Playwright args after `--` go to both passes (`mise run test:e2e --browser chromium -- e2e/scale.spec.ts`);
 narrow the browsers with `--browser`, not `--project`, which would add to the two passes' own projects.
@@ -536,10 +536,10 @@ arg "[args]" var=#true
 run = """
 eval "set -- $usage_args"
 rc=0
-# Only Chromium has `-http` and `-perf-file` projects; Playwright refuses a --project that matches none, but not a
+# Only Chromium has `-http` and `-perf-file`/`-perf-http` projects; Playwright refuses a --project that matches none, but not a
 # wildcard beside one that matches, hence the trailing `*`.
 http="${usage_browser}-http*"
-perf="${usage_browser}-perf-file*"
+perf="${usage_browser}-perf-*"
 # The scale reports only when a selected test is in e2e/scale.spec.ts (the listing is both passes' projects); a listing
 # that fails builds them too, and the passes below report its error. --skip-deps: dist/ is already built (and in CI it
 # must not be rebuilt under the job shell).

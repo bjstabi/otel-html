@@ -19,16 +19,19 @@ const config: PlaywrightTestConfig = defineConfig({
   fullyParallel: true,
   ...(CI ? { workers: 4 } : {}),
   // Per browser, `-file` runs every spec over file:// (Firefox and WebKit leave out scale.spec.ts, so they need no scale
-  // reports). Chromium alone has `-http`, the specs tagged `HTTP` (e2e/test.ts) over HTTP, and `-perf-file`, the `@perf`
-  // ones, which `test:e2e` runs alone with one worker: loading over HTTP does not depend on the browser, and Linux
-  // Firefox and WebKit are too slow for a budget to say much. `kindOf` (e2e/test.ts) reads the last `-` segment, so
-  // `perf-file` is `file`.
+  // reports). Chromium alone has `-http`, the specs tagged `HTTP` (e2e/test.ts) over HTTP, and the `@perf` ones, which
+  // `test:e2e` runs alone with one worker: `-perf-file` for the file:// ones and `-perf-http` for the `@perf @http`
+  // ones (the scale reports, site format). Loading over HTTP does not depend on the browser, and Linux Firefox and
+  // WebKit are too slow for a budget to say much. `kindOf` (e2e/test.ts) reads the last `-` segment, so `perf-file`
+  // is `file` and `perf-http` is `http`.
   projects: browsers.flatMap((b): Project[] =>
     b.name === 'chromium'
       ? [
           { name: `${b.name}-file`, use: b.device, grepInvert: /@perf/ },
           { name: `${b.name}-http`, use: b.device, grep: /@http/, grepInvert: /@perf/ },
-          { name: `${b.name}-perf-file`, use: b.device, grep: /@perf/ },
+          { name: `${b.name}-perf-file`, use: b.device, grep: /@perf/, grepInvert: /@http/ },
+          // `@perf` and `@http` both, in either order (the tag list of a title).
+          { name: `${b.name}-perf-http`, use: b.device, grep: /(?=.*@perf)(?=.*@http)/ },
         ]
       : [
           {
