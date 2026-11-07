@@ -1,6 +1,6 @@
 import type { ResolvedConfig } from '../config/schema.js';
 import { wrapDataFile } from '../format/data-file.js';
-import type { Manifest, ManifestChunk } from '../format/manifest.js';
+import type { Manifest, ManifestChunk, PartitionEntry } from '../format/manifest.js';
 import {
   LOCK_PATH,
   rollupKey,
@@ -89,6 +89,19 @@ export interface WriterDeps {
 /** `open` appends when the folder holds a report and creates one otherwise; `replace` starts a new report over any report. */
 export type SessionMode = OpenMode;
 
+/** The partitions of one format-4 merge input, as `WriterSession.copyPartitions` takes them. */
+export interface PartitionCopy {
+  /** The input's position among the sorted merge inputs; it names the copies' `source` and groups `--compact`. */
+  origin: number;
+  /** The input report's folder: where its partition files are read from. */
+  dir: string;
+  epoch: UnixNanos;
+  totals: Record<Signal, number>;
+  /** Absolute int64 nanosecond text, as in the manifest. */
+  range: { start: string; end: string } | null;
+  partitions: readonly PartitionEntry[];
+}
+
 export interface SessionOptions {
   out: string;
   config: ResolvedConfig;
@@ -157,6 +170,11 @@ export interface WriterSession {
   /** The input fed through `partial` adds is complete: write held chunks and checkpoint if one is due. */
   endInput(): Promise<void>;
   addRecords(batch: RecordBatch): Promise<AddResult>;
+  /**
+   * Merge only: adopts a format-4 report's partitions into this one, copying their files byte for byte. Only the
+   * partition session has it; merge refuses a format-4 input into a chunks output before it opens a session.
+   */
+  copyPartitions?(copy: PartitionCopy): Promise<void>;
   flush(): Promise<void>;
   close(): Promise<ReportSummary>;
   /**

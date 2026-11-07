@@ -1,10 +1,20 @@
 import type { ResolvedConfig } from '../config/schema.js';
-import type { PartitionEntry } from '../format/manifest.js';
+import type { PartitionEntry, PartitionFile } from '../format/manifest.js';
 import { checkRow } from '../format/parquet/codec.js';
 import { applyNormalization, logRow, pointRow, type Row, spanRow } from '../format/parquet/rows.js';
 import { TABLES, type Table } from '../format/parquet/schema.js';
 import { statisticsKeysFor } from '../format/parquet/stats.js';
-import { DEFAULT_ASSETS_BASE, LOCK_PATH, type Signal, STATE_DIR, type StateSlot } from '../format/paths.js';
+import {
+  DEFAULT_ASSETS_BASE,
+  LOCK_PATH,
+  partitionDir,
+  partitionFilePath,
+  partitionKey,
+  partitionWrapperPath,
+  type Signal,
+  STATE_DIR,
+  type StateSlot,
+} from '../format/paths.js';
 import { OtelHtmlError } from '../model/errors.js';
 import { parseUnixNanos, type UnixNanos } from '../model/ids.js';
 import {
@@ -50,6 +60,7 @@ import { seriesIdOf } from './series-id.js';
 import type {
   AddOptions,
   AddResult,
+  PartitionCopy,
   RecordBatch,
   ReportSummary,
   SessionOptions,
@@ -58,6 +69,7 @@ import type {
 } from './session.js';
 import { traceRows } from './trace-summaries.js';
 import { writeViewerAssets } from './viewer-assets.js';
+import { writeWrapper } from './wrapper-file.js';
 
 interface Restored {
   lock: LockHandle;
@@ -198,6 +210,8 @@ class PartitionSession implements WriterSession {
   /** Cut partitions the committed manifest does not list yet (a checkpoint failed after the cut). */
   #pending: PartitionEntry[] = [];
   #flushed: number[];
+  /** The partition numbers `copyPartitions` took, by merge input: what `writer.compactOnMerge` compacts, per input. */
+  readonly #copied = new Map<number, number[]>();
   #totals: Record<Signal, number>;
   #range: { start: bigint; end: bigint } | null;
   #slot: StateSlot;
@@ -329,6 +343,40 @@ class PartitionSession implements WriterSession {
       await this.#maybeCheckpoint();
       this.#armIdle();
       return result;
+    });
+  }
+
+  copyPartitions(copy: PartitionCopy): Promise<void> {
+    return this.#serial(async () => {
+      this.#assertOpen();
+      this.#partial = false;
+      // A background write may be cutting: partition numbers are taken only between cuts.
+      await this.#inflight;
+      await this.#wipeReplaced();
+      this.#ensureEpoch(copy.epoch);
+      const taken = this.#copied.get(copy.origin) ?? [];
+      this.#copied.set(copy.origin, taken);
+      for (const src of copy.partitions) {
+        const n = this.#writer.nextPartition;
+        const entry = await this.#copyPartition(copy, src, n);
+        this.#writer.skipTo(n + 1);
+        this.#pending.push(entry);
+        taken.push(n);
+      }
+      for (const signal of ['spans', 'logs', 'metrics'] as const) this.#totals[signal] += copy.totals[signal];
+      if (copy.range !== null) {
+        const start = BigInt(copy.range.start);
+        const end = BigInt(copy.range.end);
+        if (this.#range === null) this.#range = { start, end };
+        else {
+          if (start < this.#range.start) this.#range.start = start;
+          if (end > this.#range.end) this.#range.end = end;
+        }
+      }
+      this.#dirty = true;
+      this.#sinceCheckpoint = true;
+      await this.#maybeCheckpoint();
+      this.#armIdle();
     });
   }
 
@@ -744,15 +792,80 @@ class PartitionSession implements WriterSession {
   }
 
   /**
-   * Compacts this session's flush partitions into one when there are two or more (a copy made by merge is never one
-   * of them), as `compactPartitions` says. Writes only the new partition's folder; the next checkpoint commits it, in
-   * this order: the state (numbering past it, no flush partitions left), then the manifest (listing it in place of the
-   * flush partitions). The folders it replaces are removed by `#pruneCommitted` after that commit.
-   * Compaction is an optimisation, so a failure keeps the flush partitions and is logged.
+   * One partition of a merge input, copied under partition number `n`: each file's bytes as they are (never decoded),
+   * its wrapper written afterwards in a `local` report (the key names the new number, so a copied wrapper would be
+   * wrong), and its statistics cut to this report's keys (a key the input did not keep is unknown). The entry is the
+   * caller's to list; the folder is removed again if a file fails.
+   */
+  async #copyPartition(copy: PartitionCopy, src: PartitionEntry, n: number): Promise<PartitionEntry> {
+    const { fs } = this.#deps;
+    const files: Partial<Record<Table, PartitionFile>> = {};
+    let made = false;
+    try {
+      for (const table of TABLES) {
+        const f = src.files[table];
+        if (f === undefined) continue;
+        const from = at(copy.dir, f.path);
+        let bytes: Uint8Array;
+        try {
+          bytes = await fs.readBytes(from);
+        } catch (e) {
+          throw new OtelHtmlError('invalid-report', {
+            message: `${from}: cannot read partition file ${f.path} listed in the manifest (${e instanceof Error ? e.message : String(e)})`,
+          });
+        }
+        if (!made) {
+          await fs.mkdirp(at(this.#out, partitionDir(n)));
+          made = true;
+        }
+        const path = partitionFilePath(n, table);
+        await fs.writeBytes(at(this.#out, path), bytes);
+        if (this.#config.writer.format === 'local') {
+          await writeWrapper(
+            fs,
+            at(this.#out, partitionWrapperPath(n, table)),
+            partitionKey(n, table),
+            bytes,
+          );
+        }
+        const values: Record<string, string[] | null> = Object.create(null) as Record<
+          string,
+          string[] | null
+        >;
+        for (const k of this.#statisticsKeys[table]) values[k] = f.values[k] ?? null;
+        files[table] = { path, bytes: f.bytes, rows: f.rows, timeMin: f.timeMin, timeMax: f.timeMax, values };
+      }
+    } catch (e) {
+      if (made) await fs.removeDir(at(this.#out, partitionDir(n))).catch(() => undefined);
+      throw e;
+    }
+    return { n, source: `merge:${copy.origin}#${src.n}`, files };
+  }
+
+  /**
+   * At close, after the held rows and any copies are committed: compacts the flush partitions, and with
+   * `writer.compactOnMerge` each merge input's copies (one compacted partition per input, so a lineage is never
+   * summed with another's; see `#compactGroup`).
    */
   async #compact(): Promise<void> {
     const flushed = new Set(this.#flushed);
-    const picks = this.#committed.filter((e) => flushed.has(e.n) && e.source.startsWith('flush:'));
+    await this.#compactGroup(
+      this.#committed.filter((e) => flushed.has(e.n) && e.source.startsWith('flush:')),
+    );
+    if (!this.#config.writer.compactOnMerge) return;
+    for (const group of this.#copied.values()) {
+      const taken = new Set(group);
+      await this.#compactGroup(this.#committed.filter((e) => taken.has(e.n)));
+    }
+  }
+
+  /**
+   * Compacts `picks` into one partition when there are two or more, as `compactPartitions` says. Writes only the new
+   * partition's folder; the next checkpoint commits it, in this order: the state (numbering past it, no flush
+   * partitions left), then the manifest (listing it in place of the picks). The folders it replaces are removed by
+   * `#pruneCommitted` after that commit. Compaction is an optimisation, so a failure keeps the picks and is logged.
+   */
+  async #compactGroup(picks: readonly PartitionEntry[]): Promise<void> {
     const first = picks[0];
     const last = picks.at(-1);
     if (first === undefined || last === undefined || picks.length < 2) return;
@@ -777,7 +890,7 @@ class PartitionSession implements WriterSession {
       this.#dirty = true;
     } catch (e) {
       span.recordError(e);
-      this.#deps.logger.error('compaction failed; keeping the flush partitions', {
+      this.#deps.logger.error('compaction failed; keeping the partitions it would replace', {
         error: e instanceof Error ? e.message : String(e),
       });
     } finally {

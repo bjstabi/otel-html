@@ -1,7 +1,14 @@
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { decodeColumns } from '../format/columns.js';
 import { reviveDataJson, unwrapDataFile } from '../format/data-file.js';
-import { type Manifest, type ManifestChunk, parseManifest } from '../format/manifest.js';
+import {
+  isV4,
+  type Manifest,
+  type ManifestChunk,
+  type ManifestV4,
+  parseAnyManifest,
+  parseManifest,
+} from '../format/manifest.js';
 import { MANIFEST_KEY, MANIFEST_PATH, type Signal } from '../format/paths.js';
 import { LOG_COLUMNS, METRIC_COLUMNS, SPAN_COLUMNS } from '../format/specs.js';
 import { CHUNK_READABLE_FORMAT_VERSIONS } from '../format/version.js';
@@ -54,8 +61,14 @@ async function readFile(fs: FileSystem, file: string, what: string): Promise<str
   }
 }
 
-/** The report at `rawDir`: its manifest and epoch. `verb` names the command in the usage error when there is no report. */
-export async function readReportManifest(fs: FileSystem, rawDir: string, verb = 'merge'): Promise<Input> {
+interface Located {
+  dir: string;
+  file: string;
+  raw: unknown;
+}
+
+/** The report's manifest, unwrapped but not parsed. `verb` names the command in the usage error when there is no report. */
+async function locateManifest(fs: FileSystem, rawDir: string, verb: string): Promise<Located> {
   const dir = trimSlashes(rawDir);
   const file = at(dir, MANIFEST_PATH);
   if (!(await fs.exists(file))) {
@@ -65,7 +78,10 @@ export async function readReportManifest(fs: FileSystem, rawDir: string, verb = 
     });
   }
   const text = await readFile(fs, file, 'the manifest');
-  const raw = inFile(file, () => reviveDataJson(unwrapDataFile(text, MANIFEST_KEY)));
+  return { dir, file, raw: inFile(file, () => reviveDataJson(unwrapDataFile(text, MANIFEST_KEY))) };
+}
+
+function chunkInput({ dir, file, raw }: Located): Input {
   if (
     typeof raw === 'object' &&
     raw !== null &&
@@ -84,6 +100,36 @@ export async function readReportManifest(fs: FileSystem, rawDir: string, verb = 
     manifest,
     epoch: inFile(file, () => parseUnixNanos(manifest.epochUnixNano, 'epochUnixNano')),
   };
+}
+
+/** The format 1-3 report at `rawDir`: its manifest and epoch. `verb` names the command in the usage error when there is no report. */
+export async function readReportManifest(fs: FileSystem, rawDir: string, verb = 'merge'): Promise<Input> {
+  return chunkInput(await locateManifest(fs, rawDir, verb));
+}
+
+/** A merge input: a chunk report to replay, or a format-4 report whose partitions are copied. */
+type MergeInput = ({ kind: 'chunks' } & Input) | ({ kind: 'partitions' } & PartitionInput);
+
+interface PartitionInput {
+  dir: string;
+  manifest: ManifestV4;
+  epoch: UnixNanos;
+}
+
+async function readMergeInput(fs: FileSystem, rawDir: string): Promise<MergeInput> {
+  const located = await locateManifest(fs, rawDir, 'merge');
+  const { raw, file, dir } = located;
+  if (typeof raw === 'object' && raw !== null && 'formatVersion' in raw && raw.formatVersion === 4) {
+    const manifest = inFile(file, () => parseAnyManifest(raw));
+    if (!isV4(manifest)) throw new Error('invariant violated: a format-4 manifest parsed as another format');
+    return {
+      kind: 'partitions',
+      dir,
+      manifest,
+      epoch: inFile(file, () => parseUnixNanos(manifest.epochUnixNano, 'epochUnixNano')),
+    };
+  }
+  return { kind: 'chunks', ...chunkInput(located) };
 }
 
 async function readChunk(fs: FileSystem, input: Input, chunk: ManifestChunk): Promise<RecordBatch> {
@@ -177,13 +223,21 @@ export async function mergeReports(
   const out = trimSlashes(options.out);
   const dirs = inputs.map(trimSlashes);
   for (const dir of dirs) await assertDisjoint(deps.fs, out, dir);
-  const loaded: Input[] = [];
-  for (const dir of dirs) loaded.push(await readReportManifest(deps.fs, dir));
+  const loaded: MergeInput[] = [];
+  for (const dir of dirs) loaded.push(await readMergeInput(deps.fs, dir));
   loaded.sort((a, b) => (a.epoch < b.epoch ? -1 : a.epoch > b.epoch ? 1 : 0));
   for (const input of loaded) {
     if (!input.manifest.complete) {
       deps.logger.warn(`merging ${input.dir}, which was not closed cleanly; it may be missing recent data`);
     }
+  }
+  // Before the output is touched: a chunks report has no partitions to copy, and decoding them is not merge's job.
+  const partitioned = loaded.find((i) => i.kind === 'partitions');
+  if (partitioned !== undefined && options.config.writer.format === 'chunks') {
+    throw new OtelHtmlError('usage', {
+      message: `cannot merge the format-4 report ${partitioned.dir} into a chunks report`,
+      hint: 'merge with --format local or --format site',
+    });
   }
   // An existing report at `out` is the base; the session's append branch inherits its title and dashboards.
   const intoExisting = options.mode !== 'replace' && (await deps.fs.exists(at(out, MANIFEST_PATH)));
@@ -197,6 +251,20 @@ export async function mergeReports(
   const session = await openSession(deps, { ...options, out, config });
   try {
     for (const [origin, input] of loaded.entries()) {
+      if (input.kind === 'partitions') {
+        if (session.copyPartitions === undefined) {
+          throw new Error('invariant violated: a partition input reached a session that cannot copy it');
+        }
+        await session.copyPartitions({
+          origin,
+          dir: input.dir,
+          epoch: input.epoch,
+          totals: input.manifest.totals,
+          range: input.manifest.range,
+          partitions: input.manifest.partitions,
+        });
+        continue;
+      }
       for (const signal of SIGNAL_ORDER) {
         for (const chunk of input.manifest.chunks) {
           if (chunk.signal !== signal) continue;

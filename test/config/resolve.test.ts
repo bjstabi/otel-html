@@ -38,6 +38,7 @@ describe('resolveConfig', () => {
     expect(config.writer.rowGroupRows).toBe(50_000);
     expect(config.writer.statisticsKeys).toEqual([]);
     expect(config.writer.localWarnBytes).toBe(256_000_000);
+    expect(config.writer.compactOnMerge).toBe(false);
     expect(config.writer.assetsBase).toBe('assets/');
     const bad = (writer: object) => failure(() => resolveConfig({ file: { writer }, env: {} }));
     expect(bad({ rowGroupRows: 10 }).message).toContain('writer.rowGroupRows');

@@ -113,7 +113,9 @@ Combines report folders into one, for example the reports of parallel CI jobs. I
 otel-html merge ./job-1 ./job-2 -o ./combined
 ```
 
-Options: `-o, --out <dir>`, `--config <file>`, `--append`, `--replace` (as for `convert`), and `--format` and `--assets-base`, which the CLI accepts but which are not usable with merge yet: merge writes `chunks`, merging into a `local` or `site` report is not supported yet, and `--assets-base` applies to format 4 only. When `-o` already holds a report, `merge` adds its inputs to it.
+Options: `-o, --out <dir>`, `--config <file>`, `--append`, `--replace` (as for `convert`), `--format` and `--assets-base`, and `--compact`. When `-o` already holds a report, `merge` adds its inputs to it.
+
+With `--format local` or `--format site`, `merge` writes a format-4 report. A format 1-3 input is converted row by row, as `convert` would write it. A format-4 input is copied: each of its partition folders is added to the output under the next free number, with its Parquet files byte for byte (nothing is decoded), its statistics cut to the output's `writer.statisticsKeys` (a key the input did not keep is unknown), and `source` `merge:<input>#<n>`. Copying into `local` writes every file's `.parquet.js` wrapper afresh, whichever format the input had; copying into `site` writes none. Copies are not deduplicated against other inputs' rows, and patterns are never summed across inputs. `--compact` (config `writer.compactOnMerge`) then compacts each input's copied partitions into one partition, so the output has one partition per format-4 input (an input with a single partition is left as copied). A format-4 input cannot be merged into a `chunks` report: pass `--format local` or `--format site`.
 
 ### `upgrade <report>`
 
@@ -579,6 +581,7 @@ Config is a YAML or JSON file (`otel-html.yaml` by default), or an object passed
 | `writer.rowGroupRows` | 50000 | Rows per Parquet row group in format 4 (50000 to 100000). |
 | `writer.statisticsKeys` | `[]` | Extra columns whose statistics are kept per partition file in format 4, beyond those the dashboards and views use. Each entry is a column name, `attr:<key>` (a span, log or metric point attribute) or `resource:<key>` (a resource attribute); a bare attribute key is accepted but matches nothing, so it prunes nothing. |
 | `writer.localWarnBytes` | 256000000 | The size, in bytes of Parquet, past which a `local` report warns (once per session) that `--format site` serves large reports better. The base64 scripts a `local` report loads are about a third larger. |
+| `writer.compactOnMerge` | `false` | With `merge` into a `local` or `site` report: compact each format-4 input's copied partitions into one partition (`merge --compact`). Without it they are copied as they are. |
 | `writer.assetsBase` | `assets/` | Where a format-4 report loads the viewer assets from: `assets/`, or a relative path such as `../../assets/0.3.0/`. Only with `writer.format` `local` or `site`; any other value with `chunks` is a configuration error. |
 | `writer.chunkTargetBytes` | 4000000 | Target size of a data chunk. With `writer.format: local` or `site` it is the size at which held rows are cut into a flush partition (spans, logs and metric points alike); a closed report compacts those flush partitions when there are two or more (see `writer.format`). |
 | `writer.flushIntervalMs` | 5000 | Checkpoint interval. Also checkpoints once after this long idle with new records. |

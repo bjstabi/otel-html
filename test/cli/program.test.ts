@@ -55,6 +55,22 @@ describe('cli --format and --assets-base', () => {
     expect(files.some((k) => /^out\/assets\/duckdb\..*\.wasm$/.test(k))).toBe(true);
   });
 
+  test('merge --compact leaves one partition per format-4 input', async () => {
+    const w = createTestWriter();
+    await put(w, 'in/a.json', JSON.stringify(spansRequest(2)));
+    await put(w, 'in/b.json', JSON.stringify(spansRequest(2, 10_000, 10)));
+    expect((await run(w, ['convert', 'in/a.json', '-o', 'a', '--format', 'site'])).code).toBe(0);
+    expect((await run(w, ['convert', 'in/b.json', '-o', 'b', '--format', 'site'])).code).toBe(0);
+    expect((await run(w, ['convert', 'in/a.json', '-o', 'a', '--format', 'site', '--append'])).code).toBe(0);
+    const r = await run(w, ['merge', 'a', 'b', '-o', 'm', '--format', 'site', '--compact']);
+    expect(r.code).toBe(0);
+    const sources = [...w.fs.snapshot().keys()].filter((k) =>
+      /^m\/data\/partitions\/\d+\/spans\.parquet$/.test(k),
+    );
+    // a has two partitions and is compacted into one; b has one and is copied: two spans files.
+    expect(sources).toHaveLength(2);
+  });
+
   test('--assets-base is validated by the config schema and writes no own assets/', async () => {
     const w = createTestWriter();
     await put(w, 'in/a.json', JSON.stringify(spansRequest(2)));

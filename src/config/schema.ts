@@ -31,6 +31,7 @@ interface WriterOut {
   rowGroupRows: number;
   statisticsKeys: string[];
   localWarnBytes: number;
+  compactOnMerge: boolean;
   assetsBase: string;
   chunkTargetBytes: number;
   flushIntervalMs: number;
@@ -46,6 +47,7 @@ interface WriterIn {
   rowGroupRows?: number | undefined;
   statisticsKeys?: string[] | undefined;
   localWarnBytes?: number | undefined;
+  compactOnMerge?: boolean | undefined;
   assetsBase?: string | undefined;
   chunkTargetBytes?: number | undefined;
   flushIntervalMs?: number | undefined;
@@ -132,6 +134,7 @@ const WriterSchema = z
     rowGroupRows: z.number().int().min(50_000).max(100_000).default(50_000),
     statisticsKeys: z.array(z.string()).default([]),
     localWarnBytes: posInt.default(256_000_000),
+    compactOnMerge: z.boolean().default(false),
     assetsBase: z
       .string()
       .regex(ASSETS_BASE_RE, 'assets/ or a relative path like ../../assets/0.3.0/')
