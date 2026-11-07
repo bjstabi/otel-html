@@ -6,7 +6,7 @@ import type { WriterDeps } from '../../writer/session.js';
 import type { CliIo, ConfigFlags } from '../io.js';
 import { resolveCliConfig } from './config-print.js';
 import { describeSummary } from './convert.js';
-import { addReportModeOptions } from './report-mode.js';
+import { addReportFormatOptions, addReportModeOptions } from './report-mode.js';
 
 interface MergeFlags extends ConfigFlags {
   out: string;
@@ -19,7 +19,7 @@ export function addMergeCommand(program: Command, io: CliIo, deps: Partial<Write
     .argument('<reports...>', 'report folders')
     .requiredOption('-o, --out <dir>', 'report folder to write or add to')
     .option('--config <file>', 'config file (default: $OTEL_HTML_CONFIG or ./otel-html.yaml)');
-  addReportModeOptions(merge).action(async (reports: string[], flags: MergeFlags) => {
+  addReportFormatOptions(addReportModeOptions(merge)).action(async (reports: string[], flags: MergeFlags) => {
     const fs = deps.fs ?? createNodeFileSystem();
     const { config } = await resolveCliConfig(io, fs, flags);
     io.stdout(

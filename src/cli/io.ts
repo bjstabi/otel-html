@@ -24,6 +24,10 @@ export interface ConfigFlags {
   append?: boolean;
   /** `--replace`: start the report over. */
   replace?: boolean;
+  /** `--format`: the report format to write (`writer.format`). */
+  format?: 'chunks' | 'local' | 'site';
+  /** `--assets-base`: where the report loads its viewer files from (`writer.assetsBase`). */
+  assetsBase?: string;
 }
 
 /** Receiver flags; a port of `false` is `--no-http` / `--no-grpc`. */
@@ -39,7 +43,14 @@ function listenerOf(port: number | false | undefined): { enabled: boolean; port?
 }
 
 export function configInputOf(flags: ConfigFlags | ReceiverFlags): ConfigInput {
-  const input: ConfigInput = flags.title === undefined ? {} : { title: flags.title };
+  const writer = {
+    ...(flags.format === undefined ? {} : { format: flags.format }),
+    ...(flags.assetsBase === undefined ? {} : { assetsBase: flags.assetsBase }),
+  };
+  const input: ConfigInput = {
+    ...(flags.title === undefined ? {} : { title: flags.title }),
+    ...(Object.keys(writer).length === 0 ? {} : { writer }),
+  };
   if (!('host' in flags || 'http' in flags || 'grpc' in flags)) return input;
   const http = listenerOf(flags.http);
   const grpc = listenerOf(flags.grpc);

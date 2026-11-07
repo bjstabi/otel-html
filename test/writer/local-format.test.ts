@@ -3,13 +3,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import type { ConfigInput } from '../../src/config/schema.js';
-import { WRAPPER_SLICE_BYTES, wrapBinaryDataFile } from '../../src/format/data-file.js';
+import { WRAPPER_SLICE_BYTES } from '../../src/format/data-file.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { engineAssetNames } from '../../src/writer/engine-assets.js';
 import { createNodeFileSystem } from '../../src/writer/node-fs.js';
 import { openSession } from '../../src/writer/session.js';
 import { writeWrapper } from '../../src/writer/wrapper-file.js';
 import { logRecord, logsRequest } from '../../test-support/otlp-builders.js';
+import { perfFactor } from '../../test-support/perf-inject.js';
 import { createTestWriter, otlp, type TestWriter, testConfig } from '../../test-support/writer-deps.js';
 import { spansRequest } from './helpers.js';
 
@@ -31,10 +32,12 @@ const listedFiles = (w: TestWriter): string[] => {
   return [...text.matchAll(/data\/partitions\/\d+\/\w+\.parquet/g)].map((m) => `${OUT}/${m[0]}`);
 };
 
-describe('wrapBinaryDataFile', () => {
-  test('is a script that pushes the key and base64 only, with no < anywhere', () => {
+describe('the wrapper file', () => {
+  test('is a script that pushes the key and base64 only, with no < anywhere', async () => {
+    const w = createTestWriter();
     const bytes = new Uint8Array(3_000_000).map((_, i) => (i * 31) % 256);
-    const text = wrapBinaryDataFile('partitions/000000/spans', bytes);
+    await writeWrapper(w.fs, 'x.js', 'partitions/000000/spans', bytes);
+    const text = w.fs.snapshot().get('x.js') ?? '';
     const m = /^__OH__\.push\("partitions\/000000\/spans","([^"]*)"\);\n$/.exec(text);
     expect(m).not.toBeNull();
     const payload = m?.[1] ?? '';
@@ -58,26 +61,64 @@ describe('streamed wrappers', () => {
       await writeWrapper(w.fs, 'x.js', 'partitions/000000/spans', bytes);
       const text = w.fs.snapshot().get('x.js');
       expect(text === reference(bytes)).toBe(true);
-      expect(wrapBinaryDataFile('partitions/000000/spans', bytes) === text).toBe(true);
     },
   );
 
-  test('a 64 MB partition wraps in bounded time and memory on Node', async () => {
+  test('writes through writePiecesAtomic in pieces of at most one slice of base64, never as one string', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'wrap-'));
+    try {
+      const real = createNodeFileSystem();
+      const longest: number[] = [];
+      const fs = {
+        ...real,
+        writeTextAtomic: async (p: string, text: string) => {
+          if (p.endsWith('.js')) throw new Error(`a wrapper was written as one string: ${p}`);
+          await real.writeTextAtomic(p, text);
+        },
+        writePiecesAtomic: async (p: string, pieces: Iterable<string>) => {
+          const seen = [...pieces];
+          longest.push(Math.max(...seen.map((x) => x.length)));
+          await real.writePiecesAtomic?.(p, seen);
+        },
+      };
+      await writeWrapper(fs, join(dir, 'x.parquet.js'), 'partitions/000000/spans', sample(2 * S + 2));
+      expect(longest).toHaveLength(1);
+      expect(longest[0]).toBeLessThanOrEqual((4 * S) / 3);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('uses the native toBase64 where the runtime has it', async () => {
+    const proto = Uint8Array.prototype as Uint8Array & { toBase64?: () => string };
+    let calls = 0;
+    proto.toBase64 = function (this: Uint8Array) {
+      calls++;
+      return Buffer.from(this).toString('base64');
+    };
+    try {
+      const w = createTestWriter();
+      const bytes = sample(S + 5);
+      await writeWrapper(w.fs, 'x.js', 'partitions/000000/spans', bytes);
+      expect(calls).toBe(2);
+      expect(w.fs.snapshot().get('x.js') === reference(bytes)).toBe(true);
+    } finally {
+      delete proto.toBase64;
+    }
+  });
+
+  test('a 64 MB partition wraps within the time budget on Node @perf', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'wrap-'));
     try {
       const bytes = sample(64 * 1024 * 1024);
-      const before = process.resourceUsage().maxRSS;
       const started = performance.now();
       await writeWrapper(createNodeFileSystem(), join(dir, 'big.js'), 'partitions/000000/spans', bytes);
       const ms = performance.now() - started;
-      const growthMb = (process.resourceUsage().maxRSS - before) / 1024;
-      // The one-string encoder took 3.9 s and 2.75 GB at 60 MB.
-      expect(ms).toBeLessThan(2000);
-      expect(growthMb).toBeLessThan(400);
+      // The protobuf encoder took 3.9 s at 60 MB; the slice encoder about 70 ms.
+      expect(ms).toBeLessThan(1500 * perfFactor());
       expect(statSync(join(dir, 'big.js')).size).toBe(
         Math.ceil(bytes.length / 3) * 4 + reference(new Uint8Array(0)).length,
       );
-      process.stderr.write(`wrap 64 MB: ${ms.toFixed(0)} ms, maxRSS growth ${growthMb.toFixed(0)} MB\n`);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -260,6 +301,35 @@ describe('engine files in the report assets', () => {
     await b.add(spans(1, 0, 5), 'b.json');
     await b.close();
     expect(w.fs.snapshot().has(`${OUT}/assets/duckdb.0.9.0.wasm`)).toBe(true);
+  });
+});
+
+describe('appending with another assets base', () => {
+  const shared = { format: 'site', assetsBase: '../../assets/1/' } as const;
+  test('a report with its own assets/ cannot move to a shared base on append', async () => {
+    const w = createTestWriter();
+    const s = await open(w, { format: 'site' });
+    await s.add(spans(1), 'a.json');
+    await s.close();
+    const e = await open(w, shared, 'append').then(
+      () => null,
+      (err: unknown) => err,
+    );
+    expect(e).toBeInstanceOf(OtelHtmlError);
+    expect((e as OtelHtmlError).code).toBe('usage');
+    expect((e as OtelHtmlError).hint).toContain('--assets-base assets/');
+  });
+
+  test('a shared base can go back to assets/, which writes the assets as usual', async () => {
+    const w = createTestWriter();
+    const s = await open(w, shared);
+    await s.add(spans(1), 'a.json');
+    await s.close();
+    expect(keys(w, 'assets/')).toEqual([]);
+    const b = await open(w, { format: 'site' }, 'append');
+    await b.add(spans(1, 0, 5), 'b.json');
+    await b.close();
+    expect(keys(w, 'assets/').length).toBeGreaterThan(0);
   });
 });
 

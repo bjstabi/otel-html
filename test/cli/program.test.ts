@@ -44,6 +44,53 @@ async function put(w: TestWriter, path: string, text: string | Uint8Array): Prom
   await w.fs.writeBytes(path, typeof text === 'string' ? enc.encode(text) : text);
 }
 
+describe('cli --format and --assets-base', () => {
+  test('--format site writes a format-4 report with the engine files', async () => {
+    const w = createTestWriter();
+    await put(w, 'in/a.json', JSON.stringify(spansRequest(2)));
+    const r = await run(w, ['convert', 'in/a.json', '-o', 'out', '--format', 'site']);
+    expect(r.code).toBe(0);
+    const files = [...w.fs.snapshot().keys()];
+    expect(files.some((k) => k.startsWith('out/data/partitions/'))).toBe(true);
+    expect(files.some((k) => /^out\/assets\/duckdb\..*\.wasm$/.test(k))).toBe(true);
+  });
+
+  test('--assets-base is validated by the config schema and writes no own assets/', async () => {
+    const w = createTestWriter();
+    await put(w, 'in/a.json', JSON.stringify(spansRequest(2)));
+    const ok = await run(w, [
+      'convert',
+      'in/a.json',
+      '-o',
+      'out',
+      '--format',
+      'site',
+      '--assets-base',
+      '../../assets/1/',
+    ]);
+    expect(ok.code).toBe(0);
+    expect([...w.fs.snapshot().keys()].some((k) => k.startsWith('out/assets/'))).toBe(false);
+    expect(w.fs.snapshot().get('out/index.html')).toContain('../../assets/1/');
+    const bad = await run(w, ['convert', 'in/a.json', '-o', 'out2', '--assets-base', '/etc']);
+    expect(bad.code).not.toBe(0);
+  });
+
+  test('an unknown --format exits 2 and names the three allowed values', async () => {
+    const w = createTestWriter();
+    await put(w, 'in/a.json', JSON.stringify(spansRequest(2)));
+    const r = await run(w, ['convert', 'in/a.json', '-o', 'out', '--format', 'parquet']);
+    expect(r.code).toBe(2);
+    for (const v of ['chunks', 'local', 'site']) expect(r.stderr).toContain(v);
+  });
+
+  test.each(['convert', 'merge', 'serve', 'run'])('%s takes both flags', async (command) => {
+    const w = createTestWriter();
+    const r = await run(w, [command, '--help']);
+    expect(r.stdout).toContain('--format <format>');
+    expect(r.stdout).toContain('--assets-base <path>');
+  });
+});
+
 describe('cli', () => {
   test('convert writes a report and prints the totals with thousands separators', async () => {
     const w = createTestWriter();

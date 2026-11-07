@@ -10,7 +10,7 @@ import { parseTraceparent } from '../../run/traceparent.js';
 import type { CliIo } from '../io.js';
 import { type CliDeps, CliExit } from '../program.js';
 import { addReceiverOptions, finishReceiver, openReceiver, type ReceiveFlags } from './receive.js';
-import { addReportModeOptions } from './report-mode.js';
+import { addReportFormatOptions, addReportModeOptions } from './report-mode.js';
 
 const TRACE_ID_BYTES = 16;
 const SPAN_ID_BYTES = 8;
@@ -99,97 +99,99 @@ export function addRunCommand(program: Command, io: CliIo, deps: CliDeps): void 
     .option('--config <file>', 'config file (default: $OTEL_HTML_CONFIG or ./otel-html.yaml)')
     .option('--title <title>', 'report title')
     .option('--traceparent <value>', 'join this W3C trace context (default: $TRACEPARENT)');
-  addReceiverOptions(addReportModeOptions(command)).action(async (argv: string[], flags: RunFlags) => {
-    const [executable, ...args] = argv;
-    if (executable === undefined || executable === '')
-      throw new OtelHtmlError('usage', { message: 'no command to run' });
-    // A malformed context fails before anything is created, bound or spawned.
-    const { TRACEPARENT: inheritedTraceparent } = io.env;
-    const { traceId, spanId, parentSpanId } = idsOf(flags.traceparent, inheritedTraceparent);
-    // Before the receiver opens: once it has returned, only `run`'s own forwarder handles a stop signal, and that is
-    // installed after the child starts, so a slow async detector here would leave a window with the lock taken.
-    const resource = await detectRunResource(argv);
-    let opened: Awaited<ReturnType<typeof openReceiver>>;
-    try {
-      opened = await openReceiver(io, deps, flags, (enabled) => {
-        const protocol = checkedProtocol(io.env, enabled); // before anything is created or bound
-        // The transport the child will not use stays unbound unless an explicit port flag asked for it.
-        if (protocol === 'grpc') return flags.http === undefined ? { http: false } : undefined;
-        return flags.grpc === undefined ? { grpc: false } : undefined;
-      });
-    } catch (e) {
-      if (propagates(e)) throw e;
-      return runWithoutReport(io, executable, args, e);
-    }
-    const { report, receiver } = opened;
-    const abandon = async (e: unknown): Promise<never> => {
-      await receiver.close().catch(() => undefined);
-      await report.abort().catch(() => undefined); // never mask the original error
-      throw e;
-    };
+  addReceiverOptions(addReportFormatOptions(addReportModeOptions(command))).action(
+    async (argv: string[], flags: RunFlags) => {
+      const [executable, ...args] = argv;
+      if (executable === undefined || executable === '')
+        throw new OtelHtmlError('usage', { message: 'no command to run' });
+      // A malformed context fails before anything is created, bound or spawned.
+      const { TRACEPARENT: inheritedTraceparent } = io.env;
+      const { traceId, spanId, parentSpanId } = idsOf(flags.traceparent, inheritedTraceparent);
+      // Before the receiver opens: once it has returned, only `run`'s own forwarder handles a stop signal, and that is
+      // installed after the child starts, so a slow async detector here would leave a window with the lock taken.
+      const resource = await detectRunResource(argv);
+      let opened: Awaited<ReturnType<typeof openReceiver>>;
+      try {
+        opened = await openReceiver(io, deps, flags, (enabled) => {
+          const protocol = checkedProtocol(io.env, enabled); // before anything is created or bound
+          // The transport the child will not use stays unbound unless an explicit port flag asked for it.
+          if (protocol === 'grpc') return flags.http === undefined ? { http: false } : undefined;
+          return flags.grpc === undefined ? { grpc: false } : undefined;
+        });
+      } catch (e) {
+        if (propagates(e)) throw e;
+        return runWithoutReport(io, executable, args, e);
+      }
+      const { report, receiver } = opened;
+      const abandon = async (e: unknown): Promise<never> => {
+        await receiver.close().catch(() => undefined);
+        await report.abort().catch(() => undefined); // never mask the original error
+        throw e;
+      };
 
-    let env: Record<string, string | undefined>;
-    try {
-      env = childEnvironment({
-        env: io.env,
-        http: receiver.http,
-        grpc: receiver.grpc,
-        traceparent: traceparentOf(traceId, spanId),
-      });
-    } catch (e) {
-      return abandon(e);
-    }
-    const { OTEL_EXPORTER_OTLP_ENDPOINT: userEndpoint } = io.env;
-    if (userEndpoint !== undefined) {
-      io.stderr(
-        `warning: OTEL_EXPORTER_OTLP_ENDPOINT is already set (${userEndpoint}); the command will not send to this receiver\n`,
-      );
-    }
-
-    let child: ChildProcess;
-    let exit: ChildExit;
-    let start: UnixNanos;
-    try {
-      start = wallClockNow();
-      child = io.spawn(executable, args, { stdio: 'inherit', env: { ...io.env, ...env } });
-    } catch (e) {
-      return abandon(e);
-    }
-    const exiting = exitOf(child, executable);
-    const forward = io.signals.on((signal) => {
-      child.kill(signal);
-    });
-    try {
-      exit = await exiting;
-    } catch (e) {
-      return abandon(e);
-    } finally {
-      forward();
-    }
-    const end = wallClockNow();
-
-    const code = exitCodeOf(exit);
-    try {
-      await finishReceiver(io, opened, async () => {
-        await report.addSpans(
-          rootSpanRequest({
-            traceId,
-            spanId,
-            ...(parentSpanId === undefined ? {} : { parentSpanId }),
-            command: argv,
-            pid: child.pid ?? 0,
-            start,
-            end,
-            exit,
-            resource,
-          }),
+      let env: Record<string, string | undefined>;
+      try {
+        env = childEnvironment({
+          env: io.env,
+          http: receiver.http,
+          grpc: receiver.grpc,
+          traceparent: traceparentOf(traceId, spanId),
+        });
+      } catch (e) {
+        return abandon(e);
+      }
+      const { OTEL_EXPORTER_OTLP_ENDPOINT: userEndpoint } = io.env;
+      if (userEndpoint !== undefined) {
+        io.stderr(
+          `warning: OTEL_EXPORTER_OTLP_ENDPOINT is already set (${userEndpoint}); the command will not send to this receiver\n`,
         );
+      }
+
+      let child: ChildProcess;
+      let exit: ChildExit;
+      let start: UnixNanos;
+      try {
+        start = wallClockNow();
+        child = io.spawn(executable, args, { stdio: 'inherit', env: { ...io.env, ...env } });
+      } catch (e) {
+        return abandon(e);
+      }
+      const exiting = exitOf(child, executable);
+      const forward = io.signals.on((signal) => {
+        child.kill(signal);
       });
-    } catch (e) {
-      // The command's exit code is the step's result; a report failure is told, never counted.
-      if (e instanceof CliExit) throw e;
-      io.stderr(`error: ${e instanceof Error ? e.message : String(e)}\n`);
-    }
-    if (code !== 0) throw new CliExit(code);
-  });
+      try {
+        exit = await exiting;
+      } catch (e) {
+        return abandon(e);
+      } finally {
+        forward();
+      }
+      const end = wallClockNow();
+
+      const code = exitCodeOf(exit);
+      try {
+        await finishReceiver(io, opened, async () => {
+          await report.addSpans(
+            rootSpanRequest({
+              traceId,
+              spanId,
+              ...(parentSpanId === undefined ? {} : { parentSpanId }),
+              command: argv,
+              pid: child.pid ?? 0,
+              start,
+              end,
+              exit,
+              resource,
+            }),
+          );
+        });
+      } catch (e) {
+        // The command's exit code is the step's result; a report failure is told, never counted.
+        if (e instanceof CliExit) throw e;
+        io.stderr(`error: ${e instanceof Error ? e.message : String(e)}\n`);
+      }
+      if (code !== 0) throw new CliExit(code);
+    },
+  );
 }

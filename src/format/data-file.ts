@@ -99,9 +99,6 @@ function stringify(v: unknown): string {
  * A binary data file for the local format: `__OH__.push("<key>","<base64>");\n`. The payload is base64 only, so no
  * `<` (and nothing else a script parser could mistake) can appear in it.
  */
-export function wrapBinaryDataFile(key: string, bytes: Uint8Array): string {
-  return [...wrapBinaryDataFilePieces(key, bytes, bytesToBase64)].join('');
-}
 
 /** Bytes per base64 slice of a streamed wrapper: a multiple of 3, so every slice but the last encodes without padding. */
 export const WRAPPER_SLICE_BYTES: number = 3 * 1024 * 1024;

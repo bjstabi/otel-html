@@ -115,6 +115,16 @@ export async function openPartitionSession(
       const cp = await loadPartitionCheckpoint(fs, out, deps.version);
       config = inheritDashboards(config, cp.manifest.config);
       // The partitions already written have (local) or lack (site) their base64 scripts, and the engine files differ.
+      // The report's own assets/ (about 46 MB of engine files) would be left behind, and index.html rewritten past it.
+      if (
+        cp.manifest.engine.assetsBase === DEFAULT_ASSETS_BASE &&
+        config.writer.assetsBase !== DEFAULT_ASSETS_BASE
+      ) {
+        throw new OtelHtmlError('usage', {
+          message: `cannot append with writer.assetsBase ${config.writer.assetsBase} to a report that carries its own assets/`,
+          hint: `append with --assets-base ${DEFAULT_ASSETS_BASE}`,
+        });
+      }
       if (cp.manifest.engine.format !== config.writer.format) {
         throw new OtelHtmlError('usage', {
           message: `cannot append as writer.format ${config.writer.format} to a ${cp.manifest.engine.format} report`,
