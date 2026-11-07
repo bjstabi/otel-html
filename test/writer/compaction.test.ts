@@ -1,3 +1,6 @@
+import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import type { PartitionEntry } from '../../src/format/manifest.js';
 import { batchFromRows } from '../../src/format/parquet/batch.js';
@@ -7,7 +10,9 @@ import type { Table } from '../../src/format/parquet/schema.js';
 import { fileStatistics } from '../../src/format/parquet/stats.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { compactPartitions } from '../../src/writer/compaction.js';
+import { createNodeFileSystem } from '../../src/writer/node-fs.js';
 import { PartitionWriter } from '../../src/writer/partition-writer.js';
+import type { FileSystem } from '../../src/writer/ports.js';
 import { createMemoryFileSystem } from '../../test-support/memory-fs.js';
 
 const OUT = '/out';
@@ -77,12 +82,13 @@ const MAKE = { spans: spanRow, logs: logRow, points: pointRow } as const;
 
 /** Writes `parts` as partitions 0.. (each a sorted file per table) and returns their entries. */
 async function writeParts(
-  fs: ReturnType<typeof createMemoryFileSystem>,
+  fs: FileSystem,
   parts: readonly Partial<Record<Table, Row[]>>[],
   rowGroupRows = ROW_GROUP,
+  out = OUT,
 ): Promise<PartitionEntry[]> {
   const w = new PartitionWriter(fs, {
-    out: OUT,
+    out,
     rowGroupRows,
     statisticsKeys: KEYS,
     facetValueCap: 100,
@@ -99,15 +105,15 @@ async function writeParts(
   return entries;
 }
 
-const opts = (nextPartition: number, rowGroupRows = ROW_GROUP) => ({
+const opts = (nextPartition: number, rowGroupRows = ROW_GROUP, facetValueCap = 100) => ({
   nextPartition,
   rowGroupRows,
   statisticsKeys: KEYS,
-  facetValueCap: 100,
+  facetValueCap,
   source: `compact:0..${nextPartition - 1}`,
 });
 
-async function bytesOf(fs: ReturnType<typeof createMemoryFileSystem>, entry: PartitionEntry, t: Table) {
+async function bytesOf(fs: FileSystem, entry: PartitionEntry, t: Table) {
   const f = entry.files[t];
   if (f === undefined) throw new Error(`no ${t} file`);
   return fs.readBytes(`${OUT}/${f.path}`);
@@ -178,6 +184,68 @@ describe('compactPartitions: merged tables', () => {
       expect(stats).toEqual(fileStatistics('logs', batchFromRows('logs', rowsPer.flat()), KEYS.logs, 100));
     },
   );
+
+  test('a facet cap exceeded only across merge chunks makes the key unknown, as in one pass', async () => {
+    const mk = (i: number, svc: number): Row => ({
+      time_unix_nano: BigInt(i),
+      body: '"b"',
+      scope_name: 'x',
+      service_name: `svc${svc}`,
+    });
+    const rowsPer = [0, 1].map((p) =>
+      Array.from({ length: 5000 }, (_, i) => mk(p * 5000 + i, Math.floor((p * 5000 + i) / 2000))),
+    );
+    const fs = createMemoryFileSystem();
+    const entries = await writeParts(
+      fs,
+      rowsPer.map((logs) => ({ logs })),
+      50_000,
+    );
+    const out = await compactPartitions(fs, OUT, entries, opts(2, 50_000, 3));
+    const whole = fileStatistics('logs', batchFromRows('logs', rowsPer.flat()), KEYS.logs, 3);
+    expect(Reflect.get(whole.values, 'service_name')).toBeNull();
+    expect(Reflect.get(out.files.logs?.values ?? {}, 'service_name')).toBeNull();
+    expect(out.files.logs?.rows).toBe(10_000);
+  });
+
+  test('a failure in a merge round removes the folder with its temporary files', async () => {
+    const r = lcg(4);
+    let id = 0;
+    const rowsPer = Array.from({ length: 20 }, () => Array.from({ length: 3 }, () => logRow(id++, r)));
+    const fs = createMemoryFileSystem();
+    const entries = await writeParts(
+      fs,
+      rowsPer.map((logs) => ({ logs })),
+    );
+    fs.failNextWrite('.merge-logs-0-1.parquet');
+    await expect(compactPartitions(fs, OUT, entries, opts(20))).rejects.toThrow('injected write failure');
+    expect(await fs.exists(`${OUT}/data/partitions/000020`)).toBe(false);
+  });
+
+  test('a corrupt row group rejects the compaction instead of hanging it', async () => {
+    const r = lcg(8);
+    let id = 0;
+    const rowsPer = [0, 1].map(() => Array.from({ length: 20_000 }, () => logRow(id++, r)));
+    const fs = createMemoryFileSystem();
+    const entries = await writeParts(
+      fs,
+      rowsPer.map((logs) => ({ logs })),
+      5000,
+    );
+    const f = entries[1]?.files.logs;
+    if (f === undefined) throw new Error('no file');
+    const bad = await fs.readBytes(`${OUT}/${f.path}`);
+    const from = Math.floor(bad.length * 0.6);
+    for (let i = from; i < from + 200; i++) bad[i] = (bad[i] ?? 0) ^ 0xff;
+    await fs.writeBytes(`${OUT}/${f.path}`, bad);
+    await expect(compactPartitions(fs, OUT, entries, opts(2, 5000))).rejects.toMatchObject({
+      code: 'invalid-report',
+    });
+    expect(await fs.exists(`${OUT}/data/partitions/000002`)).toBe(false);
+    // The wasm instance still serves a good file afterwards.
+    const again = encodeTable('logs', rowsPer[0]?.slice(0, 10) ?? [], { rowGroupRows: 5 });
+    expect(decodeTable('logs', again)).toHaveLength(10);
+  });
 
   test('the statistics are those of the merged rows', async () => {
     const r = lcg(3);
@@ -478,5 +546,31 @@ describe('compactPartitions: patterns', () => {
     const out = await compactPartitions(fs, OUT, entries, opts(2));
     const rows = decodeTable('patterns', await bytesOf(fs, out, 'patterns'));
     expect(rows.map((x) => Reflect.get(x, 'sample'))).toEqual(['p0', 'dated']);
+  });
+});
+
+describe('compactPartitions on the real file system', () => {
+  test('more than one round of inputs merges through blobs on disk to the same bytes, leaving no temporary file', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'otel-html-compact-'));
+    try {
+      const fs = createNodeFileSystem();
+      expect(fs.openBlob).toBeDefined();
+      const r = lcg(21);
+      let id = 0;
+      const rowsPer = Array.from({ length: 20 }, () => Array.from({ length: 7 }, () => logRow(id++, r)));
+      const entries = await writeParts(
+        fs,
+        rowsPer.map((logs) => ({ logs })),
+        ROW_GROUP,
+        dir,
+      );
+      const out = await compactPartitions(fs, dir, entries, opts(20));
+      const expected = encodeTable('logs', rowsPer.flat(), { rowGroupRows: ROW_GROUP });
+      const got = await fs.readBytes(join(dir, out.files.logs?.path ?? ''));
+      expect(Buffer.from(got).equals(Buffer.from(expected))).toBe(true);
+      expect(await readdir(join(dir, 'data/partitions/000020'))).toEqual(['logs.parquet']);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

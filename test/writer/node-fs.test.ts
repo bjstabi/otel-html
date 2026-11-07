@@ -175,6 +175,17 @@ describe.each([
   });
 });
 
+test('node openBlob reads pieces of the file on demand', async () => {
+  const f = createNodeFileSystem();
+  await f.writeBytes(join(dir, 'b.bin'), new Uint8Array([1, 2, 3, 4, 5, 6]));
+  const blob = await f.openBlob?.(join(dir, 'b.bin'));
+  if (blob === undefined) throw new Error('no openBlob');
+  expect(blob.size).toBe(6);
+  expect([...new Uint8Array(await blob.slice(2, 5).arrayBuffer())]).toEqual([3, 4, 5]);
+  await f.remove(join(dir, 'b.bin'));
+  expect(await f.exists(join(dir, 'b.bin'))).toBe(false);
+});
+
 test('node atomic write leaves no .tmp- file on disk', async () => {
   await createNodeFileSystem().writeTextAtomic(join(dir, 'x'), 'v');
   expect((await readdir(dir)).filter((n) => n.includes('.tmp-'))).toEqual([]);

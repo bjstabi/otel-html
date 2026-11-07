@@ -8,7 +8,13 @@ import { parseAnySessionState, type SessionStateV2 } from '../../src/format/stat
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { writeManifest, writeStateSlotV2 } from '../../src/writer/checkpoint.js';
 import { openSession, type WriterSession } from '../../src/writer/session.js';
-import { logRecord, logsRequest, span, traceRequest } from '../../test-support/otlp-builders.js';
+import {
+  logRecord,
+  logsRequest,
+  metricsRequest,
+  span,
+  traceRequest,
+} from '../../test-support/otlp-builders.js';
 import {
   createTestWriter,
   EPOCH_NS,
@@ -16,6 +22,19 @@ import {
   type TestWriter,
   testConfig,
 } from '../../test-support/writer-deps.js';
+
+const columnsFault = vi.hoisted(() => ({ fail: (): boolean => false }));
+vi.mock('../../src/format/parquet/codec.js', async (original) => {
+  const real = await original<typeof import('../../src/format/parquet/codec.js')>();
+  return {
+    ...real,
+    columnsOfBatch: (...args: Parameters<typeof real.columnsOfBatch>) => {
+      if (columnsFault.fail()) throw new Error('injected read fault');
+      return real.columnsOfBatch(...args);
+    },
+  };
+});
+
 import { spanIdOf, spansRequest, traceIdOf } from './helpers.js';
 
 const OUT = 'r';
@@ -558,6 +577,26 @@ describe('trace summaries per partition', () => {
   });
 });
 
+const counter = (value: number, t: number) =>
+  otlp(
+    metricsRequest([
+      {
+        name: 'c',
+        sum: {
+          aggregationTemporality: 2,
+          isMonotonic: true,
+          dataPoints: [
+            {
+              asInt: String(value),
+              startTimeUnixNano: EPOCH_NS,
+              timeUnixNano: (BigInt(EPOCH_NS) + BigInt(t) * 1_000_000_000n).toString(),
+            },
+          ],
+        },
+      } as never,
+    ]),
+  );
+
 describe('close compacts the flush partitions', () => {
   const partitionDirs = (w: TestWriter): string[] => [
     ...new Set([...w.fs.snapshot().keys()].flatMap((p) => p.match(/data\/partitions\/(\d{6})\//)?.[1] ?? [])),
@@ -567,6 +606,7 @@ describe('close compacts the flush partitions', () => {
     for (let i = 0; i < batches; i++) {
       await s.add(spans(2, 0, i * 10), `s${i}.json`);
       await s.add(logs(3), `l${i}.json`);
+      await s.add(counter(10 * (i + 1), i + 1), `m${i}.json`);
       await s.flush();
     }
   }
@@ -644,10 +684,70 @@ describe('close compacts the flush partitions', () => {
     if (before === undefined || after === undefined) throw new Error('no state');
     expect(after.checkpoint).toBeGreaterThan(before.checkpoint);
     expect(before.dedupe.length).toBeGreaterThan(0);
+    expect(JSON.stringify(before.metricStreams).length).toBeGreaterThan(10);
+    expect(JSON.stringify(before.drain).length).toBeGreaterThan(10);
     const { checkpoint: _c, nextPartition: _n, flushPartitions: _f, ...rest } = after;
     const { checkpoint: _c2, nextPartition: _n2, flushPartitions: _f2, ...restBefore } = before;
     expect(rest).toEqual(restBefore);
     expect(after).toMatchObject({ nextPartition: 4, flushPartitions: [] });
+  });
+
+  test('once close has released the state, add, flush and endInput reject, and a retried close completes', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    await flushed(s, 3);
+    w.fs.failNextWrite('data/manifest.js');
+    await expect(s.close()).rejects.toThrow();
+    for (const call of [
+      () => s.add(spans(1, 0, 90), 'x.json'),
+      () => s.add(logs(1), 'y.json'),
+      () => s.flush(),
+      () => s.endInput(),
+    ]) {
+      await expect(call()).rejects.toThrow(`session for ${OUT} is closing`);
+    }
+    const summary = await s.close();
+    expect(summary).toBeDefined();
+    const m = manifest(w);
+    expect(m.complete).toBe(true);
+    expect(m.partitions.map((p) => [p.n, p.source])).toEqual([[3, 'compact:0..2']]);
+    expect(Number(m.epochUnixNano)).toBe(Number(EPOCH_NS));
+  });
+
+  test('the manifest lists partitions in ascending n even when a copied one lies between the compacted ones', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    await flushed(s, 3);
+    await s.abort();
+    const left = manifest(w);
+    const partitions = left.partitions.map((p) => (p.n === 1 ? { ...p, source: 'merge:other' } : p));
+    await writeManifest(w.fs, OUT, { ...left, partitions });
+    const a = await open(w, cfg(), 'append');
+    await a.close();
+    const m = manifest(w);
+    expect(m.partitions.map((p) => [p.n, p.source])).toEqual([
+      [1, 'merge:other'],
+      [3, 'compact:0..2'],
+    ]);
+  });
+
+  test('a compaction that fails midway through reading keeps every flush partition and deletes none', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    await flushed(s, 2);
+    let calls = 0;
+    columnsFault.fail = () => ++calls === 6;
+    try {
+      await s.close();
+    } finally {
+      columnsFault.fail = () => false;
+    }
+    expect(calls).toBeGreaterThanOrEqual(6);
+    const m = manifest(w);
+    expect(m.complete).toBe(true);
+    expect(m.partitions.map((p) => p.source)).toEqual(['flush:0', 'flush:1']);
+    expect(partitionDirs(w)).toEqual(['000000', '000001']);
+    expect(w.logs.some((l) => l.level === 'error' && l.msg.includes('compaction failed'))).toBe(true);
   });
 
   test('a compaction that fails keeps the flush partitions, closes the report and removes what it wrote', async () => {

@@ -5,10 +5,12 @@ import { checkRow, compareKeys, encodeColumns, sortKeyOf } from '../format/parqu
 import type { Row } from '../format/parquet/rows.js';
 import { TABLE_COLUMNS, TABLES, type Table } from '../format/parquet/schema.js';
 import { type FileStatistics, fileStatistics } from '../format/parquet/stats.js';
-import { encodeBatches, readColumns } from '../format/parquet/stream.js';
+import { encodeBatches, type PanicGuard, readColumns } from '../format/parquet/stream.js';
 import { partitionDir, partitionFilePath } from '../format/paths.js';
+import { OtelHtmlError } from '../model/errors.js';
 import { at } from './checkpoint.js';
 import type { FileSystem } from './ports.js';
+import { watchWasmPanics } from './wasm-panic.js';
 
 export interface CompactOptions {
   /** The partition number the compacted files are written to. */
@@ -125,7 +127,7 @@ function siftDown(heap: Cursor[], from: number): void {
 
 /**
  * Merges sorted inputs into batches of `MERGE_CHUNK_ROWS` rows. Every input is read a record batch at a time, so what
- * is held is one small batch per input plus the chunk being built.
+ * is held is one record batch (up to 32768 rows) per input plus the chunk being built.
  */
 async function* mergeSorted(table: Table, inputs: readonly Cursor[]): AsyncGenerator<ColumnBatch> {
   const names = TABLE_COLUMNS[table].map((c) => c.name);
@@ -228,9 +230,9 @@ interface Located {
   row: Row;
 }
 
-async function* rowsOf(table: Table, blob: Blob, path: string): AsyncGenerator<Row> {
+async function* rowsOf(table: Table, blob: Blob, path: string, guard: PanicGuard): AsyncGenerator<Row> {
   const names = TABLE_COLUMNS[table].map((c) => c.name);
-  for await (const cols of readColumns(table, blob, path)) {
+  for await (const cols of readColumns(table, blob, path, undefined, guard)) {
     const n = cols[0]?.length ?? 0;
     for (let r = 0; r < n; r++) {
       const row: Row = {};
@@ -417,6 +419,7 @@ async function mergeFiles(
   table: Table,
   paths: readonly string[],
   rowGroupRows: number,
+  guard: PanicGuard,
   onChunk?: (chunk: ColumnBatch) => void,
 ): Promise<Uint8Array> {
   const names = new Map(TABLE_COLUMNS[table].map((c, i) => [c.name, i]));
@@ -424,7 +427,7 @@ async function mergeFiles(
   const cursors: Cursor[] = [];
   try {
     for (const [i, p] of paths.entries()) {
-      const g = readColumns(table, await blobOf(fs, p), p);
+      const g = readColumns(table, await blobOf(fs, p), p, undefined, guard);
       generators.push(g);
       cursors.push(new Cursor(table, i, g, names));
     }
@@ -434,7 +437,7 @@ async function mergeFiles(
         yield chunk;
       }
     }
-    return await encodeBatches(table, chunks(), { rowGroupRows });
+    return await encodeBatches(table, chunks(), { rowGroupRows }, guard);
   } finally {
     await Promise.all(generators.map((g) => g.return(undefined).catch(() => undefined)));
   }
@@ -451,6 +454,7 @@ async function mergeTable(
   table: Table,
   inputs: readonly string[],
   opts: CompactOptions,
+  guard: PanicGuard,
 ): Promise<{ bytes: Uint8Array; stats: FileStatistics }> {
   const keys = opts.statisticsKeys[table];
   let level: string[] = [...inputs];
@@ -465,7 +469,7 @@ async function mergeTable(
         continue;
       }
       const path = at(dir, `.merge-${table}-${round}-${g / FANOUT}.parquet`);
-      await fs.writeBytes(path, await mergeFiles(fs, table, group, ROUND_ROW_GROUP_ROWS));
+      await fs.writeBytes(path, await mergeFiles(fs, table, group, ROUND_ROW_GROUP_ROWS, guard));
       temporary.push(path);
       next.push(path);
       for (const used of group) {
@@ -475,7 +479,7 @@ async function mergeTable(
     level = next;
   }
   const fold = new StatisticsFold(keys, opts.facetValueCap);
-  const bytes = await mergeFiles(fs, table, level, opts.rowGroupRows, (chunk) =>
+  const bytes = await mergeFiles(fs, table, level, opts.rowGroupRows, guard, (chunk) =>
     fold.add(fileStatistics(table, chunk, keys, opts.facetValueCap)),
   );
   for (const used of level) {
@@ -509,6 +513,8 @@ export async function compactPartitions(
   const dir = at(out, partitionDir(n));
   const files: Partial<Record<Table, PartitionFile>> = {};
   let created = false;
+  const watch = watchWasmPanics();
+  const { guard } = watch;
   try {
     for (const table of TABLES) {
       const inputs = inputsOf(entries, table);
@@ -523,7 +529,7 @@ export async function compactPartitions(
       if (table === 'traces' || table === 'patterns') {
         const located: Located[] = [];
         for (const [part, f] of inputs.entries()) {
-          for await (const row of rowsOf(table, await blobOf(fs, at(out, f.path)), f.path)) {
+          for await (const row of rowsOf(table, await blobOf(fs, at(out, f.path)), f.path, guard)) {
             located.push({ part, row });
           }
         }
@@ -539,7 +545,16 @@ export async function compactPartitions(
           table,
           inputs.map((f) => at(out, f.path)),
           opts,
+          guard,
         ));
+        const expected = inputs.reduce((sum, f) => sum + f.rows, 0);
+        if (stats.rows !== expected) {
+          throw new OtelHtmlError('invalid-report', {
+            path: partitionFilePath(n, table),
+            expected: `${expected} rows, as the inputs list`,
+            actual: `${stats.rows} rows merged`,
+          });
+        }
       }
       const path = partitionFilePath(n, table);
       await fs.writeBytes(at(out, path), bytes);
@@ -548,6 +563,8 @@ export async function compactPartitions(
   } catch (e) {
     if (created) await fs.removeDir(dir).catch(() => undefined);
     throw e;
+  } finally {
+    watch.stop();
   }
   return { n, source: opts.source, files };
 }

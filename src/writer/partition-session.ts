@@ -205,6 +205,8 @@ class PartitionSession implements WriterSession {
   #backoffUntilMs = 0;
   #closed: ReportSummary | null = null;
   #aborted = false;
+  /** Set when close released the live state: only `close` (again) and `abort` remain. */
+  #closing = false;
   #replacing: boolean;
   #partial = false;
   /** The `checkpoint` counter of the last committed state write. */
@@ -322,7 +324,7 @@ class PartitionSession implements WriterSession {
   close(): Promise<ReportSummary> {
     return this.#serial(async () => {
       if (this.#closed !== null) return this.#closed;
-      this.#assertOpen();
+      if (!this.#closing) this.#assertOpen();
       this.#disarmIdle();
       await this.#checkpoint(false);
       if (!this.#shellWritten) await this.#writeShell();
@@ -356,6 +358,7 @@ class PartitionSession implements WriterSession {
 
   #assertOpen(): void {
     if (this.#closed !== null || this.#aborted) throw new Error(`session for ${this.#out} is closed`);
+    if (this.#closing) throw new Error(`session for ${this.#out} is closing`);
   }
 
   #summary(): ReportSummary {
@@ -687,6 +690,7 @@ class PartitionSession implements WriterSession {
       metricStreams: JSON.stringify(this.#live(this.#normalizer).toJSON()),
       drain: JSON.stringify(this.#live(this.#drain).toJSON()),
     };
+    this.#closing = true;
     this.#dedupe = null;
     this.#normalizer = null;
     this.#drain = null;
@@ -718,8 +722,9 @@ class PartitionSession implements WriterSession {
       });
       this.#writer.skipTo(n + 1);
       const replaced = new Set(picks.map((e) => e.n));
-      this.#committed = this.#committed.flatMap((e) =>
-        e.n === first.n ? [entry] : replaced.has(e.n) ? [] : [e],
+      // Ascending n, as the manifest requires: the compacted partition is the newest number.
+      this.#committed = [...this.#committed.filter((e) => !replaced.has(e.n)), entry].sort(
+        (a, b) => a.n - b.n,
       );
       this.#flushed = this.#flushed.filter((p) => !replaced.has(p));
       this.#dirty = true;

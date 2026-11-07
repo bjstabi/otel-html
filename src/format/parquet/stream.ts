@@ -19,12 +19,32 @@ import { ensureParquetWasm } from './wasm.js';
 /** Rows per record batch a reader takes from a file. Larger is better: each batch carries its columns' whole dictionaries through Arrow IPC, and many small batches of a big row group made garbage that raised the peak (measured). */
 const READ_BATCH_ROWS = 32_768;
 
+interface FieldLike {
+  name: string;
+  type: { toString(): string; children?: readonly FieldLike[] };
+  nullable: boolean;
+}
+
+/** A field as text: name, type with the names, types and nullability of its children (a list's item), nullability. */
+function show(f: FieldLike | undefined): string {
+  if (f === undefined) return 'no column';
+  const kids = f.type.children ?? [];
+  const inner = kids.length === 0 ? '' : `[${kids.map(show).join(',')}]`;
+  return `${f.name}:${f.type.toString()}${inner}${f.nullable ? '?' : ''}`;
+}
+
+/**
+ * Wraps a wasm-backed wait so a panic inside parquet-wasm (which it does not report through the stream, see
+ * `src/writer/wasm-panic.ts`) rejects it. The default waits for the promise as it is.
+ */
+export type PanicGuard = <T>(wait: Promise<T>) => Promise<T>;
+
+const unguarded: PanicGuard = (wait) => wait;
+
 /** Throws `invalid-report` unless `actual` has exactly the columns, types and nullability `arrowSchema(table)` has. */
-function checkSchema(table: Table, actual: ArrowSchema, path: string): void {
+export function checkSchema(table: Table, actual: ArrowSchema, path: string): void {
   const want = arrowSchema(table).fields;
   const got = actual.fields;
-  const show = (f: { name: string; type: { toString(): string }; nullable: boolean } | undefined): string =>
-    f === undefined ? 'no column' : `${f.name}:${f.type.toString()}${f.nullable ? '?' : ''}`;
   for (let i = 0; i < Math.max(want.length, got.length); i++) {
     const w = want[i];
     const g = got[i];
@@ -49,6 +69,7 @@ export async function* readColumns(
   blob: Blob,
   path: string,
   batchRows: number = READ_BATCH_ROWS,
+  guard: PanicGuard = unguarded,
 ): AsyncGenerator<unknown[][]> {
   ensureParquetWasm();
   const width = TABLE_COLUMNS[table].length;
@@ -69,14 +90,19 @@ export async function* readColumns(
       await file.stream({ batchSize: batchRows })
     ).getReader() as ReadableStreamDefaultReader<WasmRecordBatch>;
     for (;;) {
-      const { done, value } = await reader.read();
+      const { done, value } = await guard(reader.read());
       if (done) return;
       const batch: ArrowRecordBatch | undefined = tableFromIPC(value.intoIPCStream()).batches[0];
       if (batch !== undefined && batch.numRows > 0) yield columnsOfBatch(batch, width);
     }
   } finally {
-    await reader?.cancel().catch(() => undefined);
-    file.free();
+    // Not awaited: after a panic the stream never settles. A free that fails then is not worth hiding the cause.
+    void reader?.cancel().catch(() => undefined);
+    try {
+      file.free();
+    } catch {
+      // the instance is in an unknown state after a panic
+    }
   }
 }
 
@@ -101,6 +127,7 @@ export async function encodeBatches(
   table: Table,
   batches: AsyncIterable<ColumnBatch>,
   opts: EncodeOptions,
+  guard: PanicGuard = unguarded,
 ): Promise<Uint8Array> {
   ensureParquetWasm();
   const it = batches[Symbol.asyncIterator]();
@@ -118,8 +145,11 @@ export async function encodeBatches(
         const wasm = WasmTable.fromIPCStream(
           tableToIPC(columnsToArrow(table, next.value, identity), 'stream'),
         );
-        for (const b of wasm.recordBatches()) controller.enqueue(b);
-        wasm.free(); // wasm memory is not garbage collected promptly: free what we are done with
+        try {
+          for (const b of wasm.recordBatches()) controller.enqueue(b);
+        } finally {
+          wasm.free(); // wasm memory is not garbage collected promptly: free what we are done with
+        }
       } catch (error) {
         failure = { error };
         throw error;
@@ -132,11 +162,15 @@ export async function encodeBatches(
   const parts: Uint8Array[] = [];
   try {
     const reader = (
-      await transformParquetStream(source, writerProperties(opts))
+      await guard(transformParquetStream(source, writerProperties(opts)))
     ).getReader() as ReadableStreamDefaultReader<Uint8Array>;
     for (;;) {
-      const { done, value } = await reader.read();
-      if (done) return concat(parts);
+      const { done, value } = await guard(reader.read());
+      if (done) {
+        // The writer finishes a valid file from the batches it got when the source fails: that file is truncated.
+        if (failure !== undefined) throw failure.error;
+        return concat(parts);
+      }
       parts.push(value);
     }
   } catch (error) {
