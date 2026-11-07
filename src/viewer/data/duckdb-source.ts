@@ -30,7 +30,15 @@ import type { TraceDetail } from './data-source.js';
 import { DEFAULT_FACET_CAPS, throwIfAborted } from './query-common.js';
 import type { QueryEngine } from './query-engine.js';
 import { dropResidualTable, residualIdTable, residualRows } from './residual.js';
-import type { DataSource, ServicesResult, SpanNeed, SpanQuery, SpanQueryResult } from './results.js';
+import type {
+  DataSource,
+  RowTables,
+  ServicesResult,
+  SpanNeed,
+  SpanQuery,
+  SpanQueryResult,
+  SpanRow,
+} from './results.js';
 import type { TimeWindow } from './span-query.js';
 import {
   cell,
@@ -144,11 +152,10 @@ export function createDuckDbDataSource(opts: {
   /** Narrows `filter` to the rows the residual terms accept, through a temp table of their ids (D5). */
   async function withResidualIds<T>(
     filter: SqlFilter,
-    residual: string,
+    test: (e: SpanEntry) => boolean,
     signal: AbortSignal | undefined,
     run: (f: SqlFilter) => Promise<T>,
   ): Promise<T> {
-    const test = residualTest(compileCondition(residual, 'span'), epoch);
     const candidates = await engine.query(
       spanRowsQuery(filter, { column: 'start', dir: 'asc' }, RESIDUAL_CANDIDATE_CAP + 1),
       signal,
@@ -245,7 +252,7 @@ export function createDuckDbDataSource(opts: {
                 : CORE_SPAN_FACETS.filter((c) => q.facetKeys?.includes(c.key));
             const wantAttrs = q.facetKeys === null || q.facetKeys.some((k) => !CORE_KEYS.has(k));
             const [core, attrs] = await Promise.all([
-              keys.length === 0 ? null : engine.query(coreFacetsQuery(f, 'spans', keys), signal),
+              keys.length === 0 ? null : engine.query(coreFacetsQuery(f, 'spans', keys, caps), signal),
               wantAttrs ? engine.query(attributeFacetsQuery(f, 'spans', caps, [...CORE_KEYS]), signal) : null,
             ]);
             result.facets = facetCounts(
@@ -301,7 +308,7 @@ export function createDuckDbDataSource(opts: {
       return result;
     };
 
-    return residual !== null && useIds ? withResidualIds(filter, residual, signal, run) : run(filter);
+    return test !== null && useIds ? withResidualIds(filter, test, signal, run) : run(filter);
   }
 
   async function services(
@@ -327,10 +334,16 @@ export function createDuckDbDataSource(opts: {
         names.length === 0 ? null : await engine.query(serviceBucketsQuery(f, names, spec), signal);
       return serviceStats(found, buckets, spec, o.limit);
     };
-    return residual === null ? run(filter) : withResidualIds(filter, residual, signal, run);
+    return residual === null
+      ? run(filter)
+      : withResidualIds(filter, residualTest(compileCondition(residual, 'span'), epoch), signal, run);
   }
 
-  async function loadTrace(traceId: TraceId): Promise<TraceDetail> {
+  /** The trace's spans (and, with `withLogs`, its summed log count): the partitions first, then the spans in them. */
+  async function readTrace(
+    traceId: TraceId,
+    withLogs: boolean,
+  ): Promise<{ rows: SpanRow[]; tables: RowTables; logCount: number }> {
     const partitions = rowsOf(await engine.query(tracePartitionsQuery(traceId))).map((r) =>
       String(cell(r, 'filename')),
     );
@@ -348,11 +361,17 @@ export function createDuckDbDataSource(opts: {
     if (files.length === 0) throw traceNotFound(traceId);
     const [spans, summary] = await Promise.all([
       engine.query(traceSpansQuery(traceId, files, epoch)),
-      engine.query(traceSummaryQuery(traceId)),
+      withLogs ? engine.query(traceSummaryQuery(traceId)) : null,
     ]);
     const { rows, tables } = spanRows(spans, epoch);
     if (rows.length === 0) throw traceNotFound(traceId);
-    const logCount = toNumber(cell(rowsOf(summary)[0] ?? {}, 'log_count') ?? 0n, 'log_count');
+    const logCount =
+      summary === null ? 0 : toNumber(cell(rowsOf(summary)[0] ?? {}, 'log_count') ?? 0n, 'log_count');
+    return { rows, tables, logCount };
+  }
+
+  async function loadTrace(traceId: TraceId): Promise<TraceDetail> {
+    const { rows, tables, logCount } = await readTrace(traceId, true);
     const lookup =
       <T>(list: readonly T[], what: string) =>
       (ref: number): T => {
@@ -400,7 +419,8 @@ export function createDuckDbDataSource(opts: {
       return Number(cell(r, 'percentile'));
     },
     async serviceShare(traceId) {
-      return exclusiveTimeByService((await getTrace(traceId)).tree);
+      // its own load: the open trace's memo stays, and the log summary is not read
+      return exclusiveTimeByService(buildTraceTree((await readTrace(traceId, false)).rows));
     },
     services,
     metricCatalog: () => Promise.reject(planThree('The metric catalog')),

@@ -1,5 +1,5 @@
 import { anyValueToDisplay } from '../model/anyvalue.js';
-import { SpanKind, StatusCode } from '../model/records.js';
+import { type SpanKind, StatusCode } from '../model/records.js';
 import type { LogTarget, SpanTarget } from '../ottl/contexts.js';
 import { ATTR_DEPLOYMENT_ENVIRONMENT_NAME, ATTR_HOST_NAME, ATTR_SERVICE_NAME } from './attributes.js';
 import { resourceName, serviceName } from './resource-name.js';
@@ -50,20 +50,7 @@ export const SPAN_KIND_NAMES: readonly string[] = [
 ];
 
 function spanKindName(k: SpanKind): string {
-  switch (k) {
-    case SpanKind.UNSPECIFIED:
-      return 'unspecified';
-    case SpanKind.INTERNAL:
-      return 'internal';
-    case SpanKind.SERVER:
-      return 'server';
-    case SpanKind.CLIENT:
-      return 'client';
-    case SpanKind.PRODUCER:
-      return 'producer';
-    case SpanKind.CONSUMER:
-      return 'consumer';
-  }
+  return SPAN_KIND_NAMES[k] ?? SPAN_KIND_NAMES[0] ?? 'unspecified';
 }
 
 /** `ok` | `error` | `unset` of a status code. */
@@ -85,7 +72,8 @@ function resourceAttr(t: SpanTarget, key: string): string | undefined {
 
 /** Always-tracked span facets (exempt from the key cap), in display order. */
 export const DEFAULT_SPAN_FACETS: readonly DefaultSpanFacet[] = [
-  { key: ATTR_SERVICE_NAME, label: 'Service', scope: 'resource', value: (t) => serviceName(t.resource) },
+  // scope 'core' as in the log facets and facet-panel.tsx: the service is filtered as `service.name`, not `resource.attributes[...]`
+  { key: ATTR_SERVICE_NAME, label: 'Service', scope: 'core', value: (t) => serviceName(t.resource) },
   { key: 'span.name', label: 'Span name', scope: 'core', value: (t) => t.span.name },
   { key: 'span.kind', label: 'Kind', scope: 'core', value: (t) => spanKindName(t.span.kind) },
   { key: 'status.code', label: 'Status', scope: 'core', value: (t) => statusKey(t.span.status.code) },

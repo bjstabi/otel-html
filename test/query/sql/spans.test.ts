@@ -360,7 +360,7 @@ describe('trace rows', () => {
 describe('facets', () => {
   test('coreFacetsQuery counts every core facet in one statement and skips nulls', () => {
     const { filter: w } = filter();
-    const rows = run(coreFacetsQuery(w, 'spans', CORE_SPAN_FACETS));
+    const rows = run(coreFacetsQuery(w, 'spans', CORE_SPAN_FACETS, { facetValueCap: 100 }));
     const of = (key: string): Record<string, bigint> =>
       Object.fromEntries(rows.filter((r) => r.key === key).map((r) => [String(r.value), r.n as bigint]));
     expect(of('service.name')).toEqual({ 'svc-a': 3n, 'svc-b': 4n });
@@ -388,7 +388,9 @@ describe('facets', () => {
     ]);
     const ldb = await openFixtureDb(lf);
     const w = buildFilter({ manifest: lf.manifest, table: 'logs', condition: null, text: '', window: null });
-    const rows: Row[] = ldb.rows(coreFacetsQuery(w.filter, 'logs', CORE_LOG_FACETS).toString());
+    const rows: Row[] = ldb.rows(
+      coreFacetsQuery(w.filter, 'logs', CORE_LOG_FACETS, { facetValueCap: 100 }).toString(),
+    );
     const of = (key: string): Record<string, bigint> =>
       Object.fromEntries(rows.filter((r) => r.key === key).map((r) => [String(r.value), r.n as bigint]));
     expect(of('severity')).toEqual({ info: 1n, error: 2n });
@@ -402,7 +404,7 @@ describe('facets', () => {
       attributeFacetsQuery(w, 'spans', { facetValueCap: 1, facetKeyCap: 100 }, ['service.name']),
     );
     const forKey = (k: string): Row[] => rows.filter((r) => r.key === k);
-    expect(forKey('k.s')).toEqual([{ key: 'k.s', kind: 'string', value: 'x', n: 1n, total: 2n }]);
+    expect(forKey('k.s')).toMatchObject([{ key: 'k.s', kind: 'string', value: 'x', n: 1n, total: 2n }]);
     expect(forKey('k.mixed').map((r) => r.kind)).toEqual(['mixed']);
     expect(forKey('k.mixed')[0]?.total).toBe(2n);
     expect(forKey('k.d')[0]).toMatchObject({ kind: 'double', value: '1.5' });
@@ -506,5 +508,111 @@ describe('services', () => {
   });
   test('absWindow is what the spans window compares against', () => {
     expect(absWindow({ start: 1, end: 2 }, f.epoch)).toEqual({ start: f.epoch + 1n, end: f.epoch + 2n });
+  });
+});
+
+describe('a trace split over three partitions, mixed kinds and caps', () => {
+  const many = (n: number, first: number): S[] =>
+    Array.from({ length: n }, (_, i) => ({
+      trace: 10 + first + i,
+      id: 100 + first + i,
+      svc: 'svc-a',
+      name: `many-${first + i}`,
+      startMs: 300 + i,
+      durMs: 1,
+      attrs: [attr('k.many', str(`v${first + i}`))],
+    }));
+  // T1: partition 0 (0-100 ms), partition 1 (10-60 ms), partition 2 (5000-5100 ms, after the window below)
+  const Q0: S[] = [
+    {
+      trace: 1,
+      id: 1,
+      svc: 'svc-a',
+      name: 'root',
+      startMs: 0,
+      durMs: 100,
+      attrs: [attr('k.m', { intValue: '3' })],
+    },
+    ...many(6, 0),
+  ];
+  const Q1: S[] = [
+    {
+      trace: 1,
+      id: 2,
+      parent: 1,
+      svc: 'svc-b',
+      name: 'child',
+      startMs: 10,
+      durMs: 50,
+      attrs: [attr('k.m', str('3'))],
+    },
+  ];
+  const Q2: S[] = [{ trace: 1, id: 3, parent: 1, svc: 'svc-b', name: 'late', startMs: 5000, durMs: 100 }];
+  let g: Format4Fixture;
+  let gdb: TestDb;
+
+  beforeAll(async () => {
+    g = await buildFormat4Report([request(Q0), request(Q1), request(Q2)], { close: false });
+    gdb = await openFixtureDb(g);
+  });
+  const grel = (ms: number): bigint => BASE + OFFSET + ns(ms) - g.epoch;
+  const grun = (q: { toString(): string }): Row[] => gdb.rows(q.toString());
+  const gfilter = (window: { start: number; end: number } | null = null) =>
+    buildFilter({ manifest: g.manifest, table: 'spans', condition: null, text: '', window }).filter;
+
+  test('a window that excludes the last partition leaves the trace row whole: summed counts, overall end', () => {
+    const w = gfilter({ start: 0, end: Number(grel(200)) });
+    expect(w.files.files.length).toBeLessThan(3);
+    const spans = grun(spanRowsQuery(w, { column: 'start', dir: 'asc' }, 100));
+    expect(col(spans, 'name')).not.toContain('late');
+    const rows = grun(traceRowsQuery(w, { column: 'start', dir: 'asc' }, 100));
+    const t1 = rows.find((r) => r.trace_id === hex(1, 32));
+    expect(t1).toMatchObject({
+      span_count: 3n,
+      start_ns: grel(0),
+      end_ns: grel(5100),
+      duration_ns: ns(5100),
+    });
+    expect(
+      grun(traceRowsQuery(gfilter(null), { column: 'start', dir: 'asc' }, 100)).find(
+        (r) => r.trace_id === hex(1, 32),
+      ),
+    ).toEqual({ ...t1, total: expect.anything() });
+  });
+
+  test('an int 3 and a string "3" under one key are one value with the summed count and a mixed key', () => {
+    const rows = grun(attributeFacetsQuery(gfilter(), 'spans', { facetValueCap: 10, facetKeyCap: 100 }, []));
+    expect(rows.filter((r) => r.key === 'k.m')).toMatchObject([
+      { key: 'k.m', kind: 'mixed', value: '3', n: 2n, total: 2n },
+    ]);
+  });
+
+  test('past valueCap the rest is in total, not in the rows; keys_total counts the keys before the key cap', () => {
+    const rows = grun(attributeFacetsQuery(gfilter(), 'spans', { facetValueCap: 4, facetKeyCap: 100 }, []));
+    const many4 = rows.filter((r) => r.key === 'k.many');
+    expect(many4).toHaveLength(4);
+    expect(many4.every((r) => r.total === 6n)).toBe(true);
+    const listed = many4.reduce((a, r) => a + Number(r.n), 0);
+    expect(Number(many4[0]?.total) - listed).toBe(2); // what `other` becomes
+    expect(new Set(col(rows, 'keys_total'))).toEqual(new Set([2n]));
+    const capped = grun(attributeFacetsQuery(gfilter(), 'spans', { facetValueCap: 4, facetKeyCap: 1 }, []));
+    expect(new Set(col(capped, 'key'))).toEqual(new Set(['k.many']));
+    expect(new Set(col(capped, 'keys_total'))).toEqual(new Set([2n]));
+  });
+
+  test('coreFacetsQuery caps the values per key in SQL and keeps the key total', () => {
+    const names = CORE_SPAN_FACETS.filter((c) => c.key === 'span.name');
+    const rows = grun(coreFacetsQuery(gfilter(), 'spans', names, { facetValueCap: 3 }));
+    expect(rows).toHaveLength(3);
+    expect(new Set(col(rows, 'total'))).toEqual(new Set([9n])); // 6 many-* + root + child + late
+  });
+
+  test('spanRowsQuery counts with a scalar subquery and breaks ties by file and row', () => {
+    const sqlText = spanRowsQuery(gfilter(), { column: 'start', dir: 'asc' }, 2).toString();
+    expect(sqlText).not.toMatch(/OVER \(\)/);
+    expect(sqlText).toMatch(/ORDER BY .*"span_id" ASC, "filename" ASC, "file_row_number" ASC/s);
+    expect(new Set(col(grun(spanRowsQuery(gfilter(), { column: 'start', dir: 'asc' }, 2)), 'total'))).toEqual(
+      new Set([9n]),
+    );
   });
 });

@@ -15,7 +15,7 @@ import { TABLE_COLUMNS } from '../../format/parquet/columns.js';
 import type { TraceId } from '../../model/ids.js';
 import { jsonAt, jsonKind, jsonStringAt, relTime } from './columns.js';
 import { CORE_SPAN_FACETS, truncated } from './facets.js';
-import { filenameTerm, type SqlFilter, whereOf } from './filter.js';
+import { type SqlFilter, whereOf } from './filter.js';
 import { type BucketSpec, bucketExpr } from './time.js';
 
 export interface SpanSort {
@@ -69,16 +69,27 @@ function spanColumns(epoch: bigint): Record<string, ExprNode> {
 
 /** Spans of the filtered set (columns of `spanColumns` plus `total`, the matches before LIMIT), sorted, with a start/span_id tiebreak. */
 export function spanRowsQuery(f: SqlFilter, sort: SpanSort, limit: number): Query {
+  const terms = whereOf(f, 'spans');
+  // a scalar subquery, not `count(*) OVER ()`: the window function would materialise every matching row before the top-N
+  const total = Query.from('spans')
+    .select({ n: sql`count(*)` })
+    .where(...terms);
   return Query.from('spans')
-    .select(spanColumns(f.epoch), { total: sql`count(*) OVER ()` })
-    .where(...whereOf(f, 'spans'))
-    .orderby(dirOf(SPAN_SORT[sort.column], sort.dir), asc('start_time_unix_nano'), asc('span_id'))
+    .select(spanColumns(f.epoch), { total: sql`(${total})` })
+    .where(...terms)
+    .orderby(
+      dirOf(SPAN_SORT[sort.column], sort.dir),
+      asc('start_time_unix_nano'),
+      asc('span_id'),
+      asc('filename'),
+      asc('file_row_number'),
+    )
     .limit(limit);
 }
 
 /**
- * The traces of the matching spans: `traces` aggregated per trace_id over the files the window leaves (a trace split
- * across partitions is one row): `span_count`, `error_count`, `log_count` summed, `start_ns` / `end_ns` the min and
+ * The traces of the matching spans: `traces` aggregated per trace_id over every `traces` file, for the traces with a matching span
+ * (a trace split across partitions is one row, whatever the window): `span_count`, `error_count`, `log_count` summed, `start_ns` / `end_ns` the min and
  * max over rows with spans and a time (R33), the root from the row with the smallest start whose `root_name` is set,
  * the lower partition on a tie (R35). Also `duration_ns` and `total`.
  */
@@ -99,10 +110,7 @@ export function traceRowsQuery(f: SqlFilter, sort: TraceSort, limit: number): Qu
       end_ns: sql`max(${relTime('end_time_unix_nano', f.epoch)}) FILTER (WHERE ${timed})`,
       root: sql`arg_min({'service': root_service, 'name': root_name, 'resource': root_resource}, (start_time_unix_nano, filename)) FILTER (WHERE ${rooted})`,
     })
-    .where(
-      sql`trace_id IN (${matching})`,
-      ...(filenameTerm(f.tracesFiles) === null ? [] : [filenameTerm(f.tracesFiles) as ExprNode]),
-    )
+    .where(sql`trace_id IN (${matching})`)
     .groupby('trace_id');
   const withDuration = Query.from({ agg }).select({
     trace_id: column('trace_id'),

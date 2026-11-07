@@ -356,6 +356,23 @@ describe('the other questions', () => {
     ]);
   });
 
+  test('serviceShare takes its own two statements and leaves the open trace in the memo', async () => {
+    // a fresh coordinator: the shared one caches by SQL text, which would hide the statements
+    const fresh = createDuckDbDataSource({
+      engine: mosaicQueryEngine(createCoordinator(db.connector, silentLogger), db),
+      manifest: f.manifest,
+    });
+    const open = await counted(() => fresh.getTrace(T1));
+    expect(open.arrow).toBe(3); // trace partitions, then spans and summary
+    const share = await counted(() => fresh.serviceShare(T3));
+    expect(share.arrow).toBe(2); // trace partitions, spans: no summary
+    expect(share.exec).toBe(0);
+    expect(share.value.map((x) => x.service).sort()).toEqual(['svc-a', 'svc-b']);
+    const again = await counted(() => fresh.getTrace(T1));
+    expect(again.arrow).toBe(0);
+    expect(again.value).toBe(open.value);
+  });
+
   test('getTrace is memoised for the last id, hasTrace is a bound method', async () => {
     const a = ds.getTrace(T1);
     expect(ds.getTrace(T1)).toBe(a);

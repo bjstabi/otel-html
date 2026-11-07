@@ -13,8 +13,6 @@ export interface SqlFilter {
   text: ExprNode | null;
   /** The files of the filtered table the query reads. Hints from a condition prune this table only. */
   files: Pruned;
-  /** The `traces` files a trace-mode query reads: pruned by the window only. */
-  tracesFiles: Pruned;
   window: AbsWindow | null;
   epoch: bigint;
 }
@@ -61,7 +59,6 @@ export function buildFilter(opts: FilterOptions): { filter: SqlFilter; residual:
       predicate,
       text: textPredicate(opts.text, context),
       files,
-      tracesFiles: prunePartitions(opts.manifest, 'traces', new Map(), window),
       window,
       epoch,
     },
@@ -70,7 +67,7 @@ export function buildFilter(opts: FilterOptions): { filter: SqlFilter; residual:
 }
 
 /** `filename IN (...)` unless every file is read; a table with no kept file is `false`. */
-export function filenameTerm(files: Pruned): ExprNode | null {
+function filenameTerm(files: Pruned): ExprNode | null {
   if (files.all && files.files.length > 0) return null;
   if (files.files.length === 0) return literal(false);
   return isIn(
@@ -82,15 +79,12 @@ export function filenameTerm(files: Pruned): ExprNode | null {
 /**
  * The WHERE terms: predicate, text, `filename IN (...)` unless all files are read, and the window: spans (and
  * traces) overlapping it, `end >= start_abs AND start <= end_abs`, logs `coalesce(time, observed) BETWEEN`.
- * For `traces` the files are the `tracesFiles`, with no predicate or text.
  */
-export function whereOf(f: SqlFilter, table: 'spans' | 'logs' | 'traces'): ExprNode[] {
+export function whereOf(f: SqlFilter, table: 'spans' | 'logs'): ExprNode[] {
   const terms: ExprNode[] = [];
-  if (table !== 'traces') {
-    if (f.predicate !== null) terms.push(f.predicate);
-    if (f.text !== null) terms.push(f.text);
-  }
-  const files = filenameTerm(table === 'traces' ? f.tracesFiles : f.files);
+  if (f.predicate !== null) terms.push(f.predicate);
+  if (f.text !== null) terms.push(f.text);
+  const files = filenameTerm(f.files);
   if (files !== null) terms.push(files);
   if (f.window !== null) {
     const lo = verbatim(`${f.window.start}::BIGINT`);

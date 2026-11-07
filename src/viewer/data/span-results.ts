@@ -159,9 +159,9 @@ export function traceRows(t: Table): { rows: TraceRow[]; total: number } {
 }
 
 /**
- * `FacetCounts` from the core facet rows (key, value, n) and the attribute rows (key, kind, value, n, total). Core
- * values past `valueCap` count under `other`; attribute rows are already capped by the query (`other` is `total` minus
- * what is listed). `only` keeps just those keys.
+ * `FacetCounts` from the core facet rows (key, value, n, total) and the attribute rows (key, kind, value, n, total, keys_total). Core
+ * and attribute rows are already capped by the query (`other` is `total` minus what is listed). `skippedKeyAdds` is the
+ * number of attribute keys the key cap dropped. `only` keeps just those keys.
  */
 export function facetCounts(
   core: Table | null,
@@ -189,13 +189,14 @@ export function facetCounts(
       k = { key, kind: 'string', total: 0, other: 0, values: [] };
       keys.set(key, k);
     }
-    k.total += n;
-    if (k.values.length < caps.facetValueCap) k.values.push([text(cell(r, 'value')), n]);
-    else k.other += n;
+    k.total = toNumber(cell(r, 'total'), 'total'); // the query caps the values; `total` counts them all
+    k.values.push([text(cell(r, 'value')), n]);
   }
+  let attrKeysTotal = 0;
   for (const r of attrs === null ? [] : rowsOf(attrs)) {
     const key = text(cell(r, 'key'));
     if ((only !== null && !only.has(key)) || coreKeys.has(key)) continue;
+    attrKeysTotal = Math.max(attrKeysTotal, toNumber(cell(r, 'keys_total'), 'keys_total'));
     let k = keys.get(key);
     if (k === undefined) {
       k = {
@@ -211,15 +212,16 @@ export function facetCounts(
   }
   for (const k of keys.values()) {
     const listed = k.values.reduce((s, [, n]) => s + n, 0);
-    // attribute keys carry the query's total; core keys were summed above
     if (k.total > listed + k.other) k.other = k.total - listed;
   }
+  const attrKeysListed = [...keys.keys()].filter((key) => !coreKeys.has(key)).length;
   return FacetCounts.from(
     {
       valueCap: caps.facetValueCap,
       keyCap: caps.facetKeyCap,
       pinned: [...pinned],
-      skippedKeyAdds: 0,
+      // the number of attribute keys the key cap dropped (the rollup counts occurrences; here the query knows keys)
+      skippedKeyAdds: Math.max(0, attrKeysTotal - attrKeysListed),
       keys: [...keys.values()],
     },
     'facets',

@@ -84,9 +84,15 @@ export const truncated = (e: ExprNode): ExprNode =>
 
 /**
  * One query: `GROUP BY GROUPING SETS ((f1), (f2), ...)` over the chosen core facets. Rows (key, value, n); a row with no
- * value for a facet is skipped. Values are cut to `MAX_FACET_VALUE_LENGTH`.
+ * value for a facet is skipped. Values are cut to `MAX_FACET_VALUE_LENGTH`. Rows (key, value, n, total): `valueCap`
+ * values per key by count then text; `total` counts every value of the key, so `total - sum(n)` is what the cap dropped.
  */
-export function coreFacetsQuery(f: SqlFilter, table: 'spans' | 'logs', keys: readonly CoreFacet[]): Query {
+export function coreFacetsQuery(
+  f: SqlFilter,
+  table: 'spans' | 'logs',
+  keys: readonly CoreFacet[],
+  caps: Pick<FacetCaps, 'facetValueCap'>,
+): Query {
   const names = keys.map((_, i) => `f${i}`);
   const inner = Query.from(table)
     .select(Object.fromEntries(keys.map((k, i) => [names[i] as string, truncated(k.expr)])))
@@ -95,18 +101,28 @@ export function coreFacetsQuery(f: SqlFilter, table: 'spans' | 'logs', keys: rea
     keys.map((k, i) => `WHEN grouping(f${i}) = 0 THEN ${literal(k.key)}`).join(' '),
   )} END`;
   const value = sql`coalesce(${verbatim(names.join(', '))})`;
-  return Query.from({ s: inner })
+  const grouped = Query.from({ s: inner })
     .select({ key: which, value, n: sql`count(*)` })
     .groupby(sql`GROUPING SETS (${verbatim(names.map((n) => `(${n})`).join(', '))})`)
-    .having(sql`${value} IS NOT NULL`)
+    .having(sql`${value} IS NOT NULL`);
+  return Query.from({ grouped })
+    .select({
+      key: col('key'),
+      value: col('value'),
+      n: col('n'),
+      total: sql`CAST(sum(n) OVER (PARTITION BY key) AS BIGINT)`,
+    })
+    .qualify(
+      sql`row_number() OVER (PARTITION BY key ORDER BY n DESC, value) <= ${literal(caps.facetValueCap)}`,
+    )
     .orderby(sql`key`, sql`n DESC`, sql`value`);
 }
 
 const SCALARS = verbatim(`('string', 'int', 'double', 'bool')`);
 
 /**
- * The (key, value) entries of an attributes JSON text as a list of structs: a plain object through a MAP, the `$m`
- * pairs form through its pair list (a record that holds a `$`-prefixed key is stored that way, and
+ * The (key, value) entries of an attributes JSON text as a list of structs: a plain object parsed once into a MAP (a JSON cast), the
+ * `$m` pairs form through its pair list (a record that holds a `$`-prefixed key is stored that way, and
  * `json_keys` would only see "$m").
  */
 const ENTRIES = bindOnce(
@@ -114,14 +130,15 @@ const ENTRIES = bindOnce(
   'a',
   (a) => sql`CASE
   WHEN json_exists(${a}, '/$m') THEN list_transform(from_json(json_extract(${a}, '/$m'), '["JSON"]'), (x) -> {'key': json_extract_string(x, '/0'), 'value': json_extract(x, '/1')})
-  ELSE list_transform(json_keys(${a}), (k) -> {'key': k, 'value': json_extract(${a}, '/' || replace(replace(k, '~', '~0'), '/', '~1'))}) END`,
+  ELSE map_entries(CAST(${a} AS MAP(VARCHAR, JSON))) END`,
 );
 
 /**
  * Attribute facets in one query over `table`: every attribute key with a scalar value (a key in `excludeKeys` is left
  * out), value text and kind (`mixed` when a key holds more than one kind), `valueCap` values per key by count then
- * text, the `facetKeyCap` keys with the most occurrences. Rows (key, kind, value, n, total): `total` counts every
- * occurrence of the key, so `total - sum(n)` is what the value cap dropped.
+ * text, the `facetKeyCap` keys with the most occurrences. Rows (key, kind, value, n, total, keys_total): `total` counts every
+ * occurrence of the key, so `total - sum(n)` is what the value cap dropped; `keys_total` is the number of distinct keys
+ * before the key cap, so `keys_total` minus the keys listed is what the key cap dropped.
  */
 export function attributeFacetsQuery(
   f: SqlFilter,
@@ -151,21 +168,28 @@ export function attributeFacetsQuery(
       ),
     ),
   });
+  // one row per (key, text): an int 3 and a string "3" are one value; the kind is the key's (`mixed` when it holds several)
   const grouped = Query.from({ typed })
-    .select({ k: col('k'), kind: col('kind'), txt: col('txt'), n: sql`count(*)` })
+    .select({ k: col('k'), txt: col('txt'), n: sql`count(*)`, kmin: sql`min(kind)`, kmax: sql`max(kind)` })
     .where(sql`kind IN ${SCALARS} AND txt IS NOT NULL`)
-    .groupby(col('k'), col('kind'), col('txt'));
+    .groupby(col('k'), col('txt'));
   const perKey = Query.from({ grouped })
     .select({
       key: col('k'),
-      kind: sql`CASE WHEN min(kind) OVER (PARTITION BY k) = max(kind) OVER (PARTITION BY k) THEN kind ELSE 'mixed' END`,
+      kind: sql`CASE WHEN min(kmin) OVER (PARTITION BY k) = max(kmax) OVER (PARTITION BY k) THEN min(kmin) OVER (PARTITION BY k) ELSE 'mixed' END`,
       value: col('txt'),
       n: col('n'),
       total: sql`CAST(sum(n) OVER (PARTITION BY k) AS BIGINT)`,
     })
     .qualify(sql`row_number() OVER (PARTITION BY k ORDER BY n DESC, txt) <= ${literal(caps.facetValueCap)}`);
-  return Query.from({ perKey })
-    .select('key', 'kind', 'value', 'n', 'total')
-    .qualify(sql`dense_rank() OVER (ORDER BY total DESC, key) <= ${literal(caps.facetKeyCap)}`)
+  const ranked = Query.from({ perKey }).select('key', 'kind', 'value', 'n', 'total', {
+    key_rank: sql`dense_rank() OVER (ORDER BY total DESC, key)`,
+  });
+  const counted = Query.from({ ranked }).select('key', 'kind', 'value', 'n', 'total', 'key_rank', {
+    keys_total: sql`max(key_rank) OVER ()`,
+  });
+  return Query.from({ counted })
+    .select('key', 'kind', 'value', 'n', 'total', 'keys_total')
+    .where(sql`key_rank <= ${literal(caps.facetKeyCap)}`)
     .orderby(sql`total DESC`, sql`key`, sql`n DESC`, sql`value`);
 }
