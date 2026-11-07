@@ -88,3 +88,18 @@ describe('the format gate (D12)', () => {
     expect(alert.textContent).toContain('This report is format 3; this viewer reads format 4.');
   });
 });
+
+describe('unmount during load', () => {
+  test('the data source that arrives after unmount is closed', async () => {
+    let finish: (d: DataSource) => void = () => undefined;
+    const load = (): Promise<DataSource> =>
+      new Promise((resolve) => {
+        finish = resolve;
+      });
+    const { unmount } = render(<Root load={load} history={createHashHistory(window)} />);
+    unmount();
+    const close = vi.fn(() => Promise.resolve());
+    await act(async () => finish({ ...dataSource('system'), close } as DataSource));
+    expect(close).toHaveBeenCalledOnce();
+  });
+});

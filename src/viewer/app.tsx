@@ -53,7 +53,10 @@ export function App(props: {
       if (live) setState({ status: 'loading', progress });
     };
     load(onProgress).then(
-      (dataSource) => live && setState({ status: 'ready', dataSource }),
+      (dataSource) => {
+        if (live) setState({ status: 'ready', dataSource });
+        else void dataSource.close().catch(() => undefined); // unmounted mid-load: release the engine
+      },
       (e: unknown) =>
         live && setState({ status: 'failed', message: e instanceof Error ? e.message : String(e) }),
     );
