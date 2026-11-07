@@ -4,7 +4,7 @@ import { OtelHtmlError } from '../model/errors.js';
 import type { CompiledCondition } from '../ottl/compile.js';
 import { compileAny } from '../ottl/compile.js';
 import { at, isReportFolder } from './checkpoint.js';
-import type { Clock, FileSystem } from './ports.js';
+import type { Clock, FileSystem, Logger } from './ports.js';
 
 export const DEFAULT_TITLE = 'otel-html report';
 
@@ -19,6 +19,19 @@ export interface Drops {
 
 export function iso(clock: Clock): string {
   return new Date(Number(clock.nowUnixNano() / 1_000_000n)).toISOString();
+}
+
+/**
+ * A `local` report loads every partition into the page at once, so one past `localWarnBytes` of Parquet is better
+ * served as a `site` report. True when it warned.
+ */
+export function warnIfLocalLarge(logger: Logger, bytes: number, localWarnBytes: number): boolean {
+  if (bytes <= localWarnBytes) return false;
+  logger.warn(
+    `this local report's partitions total ${bytes} bytes of Parquet (their base64 scripts add about a third on top); it loads them all when opened. Use --format site and serve the report over http for large reports`,
+    { bytes, localWarnBytes },
+  );
+  return true;
 }
 
 /** Bad OTTL must fail before anything is written (or locked). */

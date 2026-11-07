@@ -24,6 +24,12 @@ export interface CompactOptions {
   format?: ReportFormat;
   /** The entry's `source`, `compact:<first>..<last>`. */
   source: string;
+  /**
+   * How `patterns` rows are matched across the partitions. `cluster` (the default) is one Drain lineage: rows of one
+   * cluster id are summed and the latest template wins. `cluster-template` is for partitions of different lineages
+   * (a merge's copies), whose ids collide: only rows with the same id and template are summed.
+   */
+  patternKey?: 'cluster' | 'cluster-template';
 }
 
 /** Rows a merge holds before it hands them to the writer; the Parquet writer still cuts row groups of `rowGroupRows`. */
@@ -356,18 +362,19 @@ function severityCounts(json: unknown): [number, number][] {
 }
 
 /**
- * Per cluster id (one Drain lineage): counts summed; first the minimum and last the maximum; the template from the
+ * Per cluster id (one Drain lineage), or with `byTemplate` per id and template (different lineages): counts summed; first the minimum and last the maximum; the template from the
  * highest partition; the sample from the row with the smallest first time (the lower partition on a tie).
  */
-async function aggregatePatterns(rows: AsyncIterable<Located>): Promise<Row[]> {
-  const acc = new Map<bigint, PatternAcc>();
+async function aggregatePatterns(rows: AsyncIterable<Located>, byTemplate: boolean): Promise<Row[]> {
+  const acc = new Map<string, PatternAcc & { id: bigint }>();
   for await (const l of rows) {
     const id = big(cell(l.row, 'cluster_id'));
     if (id === null) continue;
-    let a = acc.get(id);
+    const key = byTemplate ? `${id}\u0000${text(cell(l.row, 'template')) ?? ''}` : String(id);
+    let a = acc.get(key);
     if (a === undefined) {
-      a = { template: '', count: 0n, first: null, last: null, severities: new Map(), sample: null };
-      acc.set(id, a);
+      a = { id, template: '', count: 0n, first: null, last: null, severities: new Map(), sample: null };
+      acc.set(key, a);
     }
     a.template = text(cell(l.row, 'template')) ?? a.template; // rows arrive in partition order: the last wins
     a.count += big(cell(l.row, 'count')) ?? 0n;
@@ -383,15 +390,15 @@ async function aggregatePatterns(rows: AsyncIterable<Located>): Promise<Row[]> {
       if (first !== null && (cur === null || first < cur)) a.sample = l;
     }
   }
-  return [...acc]
-    .sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0))
-    .map(([id, a]): Row => {
+  return [...acc.values()]
+    .sort((x, y) => (x.id < y.id ? -1 : x.id > y.id ? 1 : 0))
+    .map((a): Row => {
       const severities: Record<string, number> = {};
       for (const sev of [...a.severities.keys()].sort((x, y) => x - y)) {
         severities[String(sev)] = a.severities.get(sev) ?? 0;
       }
       return {
-        cluster_id: id,
+        cluster_id: a.id,
         template: a.template,
         count: a.count,
         first_time_unix_nano: a.first,
@@ -539,7 +546,10 @@ export async function compactPartitions(
           }
         }
         // Each row is folded into its trace's or cluster's accumulator as it is read.
-        const rows = await (table === 'traces' ? aggregateTraces(located()) : aggregatePatterns(located()));
+        const byTemplate = opts.patternKey === 'cluster-template';
+        const rows = await (table === 'traces'
+          ? aggregateTraces(located())
+          : aggregatePatterns(located(), byTemplate));
         for (const [i, row] of rows.entries()) checkRow(table, row, i);
         const batch = batchFromRows(table, rows);
         bytes = encodeColumns(table, batch, { rowGroupRows: opts.rowGroupRows });

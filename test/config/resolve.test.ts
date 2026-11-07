@@ -38,11 +38,21 @@ describe('resolveConfig', () => {
     expect(config.writer.rowGroupRows).toBe(50_000);
     expect(config.writer.statisticsKeys).toEqual([]);
     expect(config.writer.localWarnBytes).toBe(256_000_000);
+    expect(config.writer.compactOnMerge).toBe(false);
     expect(config.writer.assetsBase).toBe('assets/');
     const bad = (writer: object) => failure(() => resolveConfig({ file: { writer }, env: {} }));
     expect(bad({ rowGroupRows: 10 }).message).toContain('writer.rowGroupRows');
     expect(bad({ rowGroupRows: 100_001 }).message).toContain('writer.rowGroupRows');
     expect(bad({ format: 'site', assetsBase: '/x' }).message).toContain('assets/ or a relative path');
+    expect(bad({ compactOnMerge: true }).message).toContain('writer.compactOnMerge');
+    expect(bad({ format: 'chunks', compactOnMerge: true }).message).toContain('--format local|site');
+    expect(
+      resolveConfig({ file: { writer: { format: 'site', compactOnMerge: true } }, env: {} }).config.writer
+        .compactOnMerge,
+    ).toBe(true);
+    expect(() =>
+      resolveConfig({ file: { writer: { compactOnMerge: true } }, env: { OTEL_HTML_FORMAT: 'chunks' } }),
+    ).toThrow('writer.compactOnMerge');
     const f = bad({ format: 'parquet' }).message;
     expect(f).toContain('writer.format');
     for (const v of ['chunks', 'local', 'site']) expect(f).toContain(v);

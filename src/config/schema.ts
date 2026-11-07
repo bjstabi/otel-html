@@ -23,6 +23,9 @@ interface DropIn {
   logs?: { log_record?: string[] | undefined } | undefined;
   metrics?: { datapoint?: string[] | undefined } | undefined;
 }
+/** The default `writer.localWarnBytes`: the Parquet size past which a `local` report warns. */
+export const DEFAULT_LOCAL_WARN_BYTES = 256_000_000;
+
 /** The report formats `writer.format` names. */
 export type ReportFormat = 'chunks' | 'local' | 'site';
 
@@ -31,6 +34,7 @@ interface WriterOut {
   rowGroupRows: number;
   statisticsKeys: string[];
   localWarnBytes: number;
+  compactOnMerge: boolean;
   assetsBase: string;
   chunkTargetBytes: number;
   flushIntervalMs: number;
@@ -46,6 +50,7 @@ interface WriterIn {
   rowGroupRows?: number | undefined;
   statisticsKeys?: string[] | undefined;
   localWarnBytes?: number | undefined;
+  compactOnMerge?: boolean | undefined;
   assetsBase?: string | undefined;
   chunkTargetBytes?: number | undefined;
   flushIntervalMs?: number | undefined;
@@ -131,7 +136,8 @@ const WriterSchema = z
     format: z.enum(['chunks', 'local', 'site']).default('chunks'),
     rowGroupRows: z.number().int().min(50_000).max(100_000).default(50_000),
     statisticsKeys: z.array(z.string()).default([]),
-    localWarnBytes: posInt.default(256_000_000),
+    localWarnBytes: posInt.default(DEFAULT_LOCAL_WARN_BYTES),
+    compactOnMerge: z.boolean().default(false),
     assetsBase: z
       .string()
       .regex(ASSETS_BASE_RE, 'assets/ or a relative path like ../../assets/0.3.0/')
@@ -187,6 +193,14 @@ export const ConfigSchema: z.ZodType<ResolvedConfig, ConfigInput> = z
         code: 'custom',
         path: ['writer', 'assetsBase'],
         message: `applies to writer.format local or site (--format local|site), not chunks; use ${DEFAULT_ASSETS_BASE} or set the format`,
+      });
+    }
+    if (c.writer.format === 'chunks' && c.writer.compactOnMerge) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['writer', 'compactOnMerge'],
+        message:
+          'applies to writer.format local or site (--format local|site), not chunks; set the format or drop --compact',
       });
     }
     const id = c.viewer.defaultDashboard;

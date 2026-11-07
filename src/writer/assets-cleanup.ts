@@ -27,6 +27,8 @@ export async function assetsInside(fs: FileSystem, dir: string): Promise<boolean
  * - with `sharedBase`, every engine file and the viewer's own `viewer.*` files: the report loads them from
  *   elsewhere, so what an earlier session left here is dead weight.
  *
+ * - with `viewerFiles` (the names this build wrote), the `viewer.*` files not among them: an older viewer's.
+ *
  * Only top-level names that are regular files are considered: a subfolder (`assets/<v>/` is a legal base, even one
  * named like `viewer.0.3.0`) and a symbolic link are skipped. A shared base outside the report is never visited, and
  * an `assets/` that links out of the report is not touched at all (returns false). A missing `assets/` is fine.
@@ -34,7 +36,7 @@ export async function assetsInside(fs: FileSystem, dir: string): Promise<boolean
 export async function pruneOwnAssets(
   fs: FileSystem,
   out: string,
-  opts: { format: ReportFormat; sharedBase: boolean },
+  opts: { format: ReportFormat; sharedBase: boolean; viewerFiles?: ReadonlySet<string> },
 ): Promise<boolean> {
   if (!(await assetsInside(fs, out))) return false;
   const dir = at(out, 'assets');
@@ -42,7 +44,9 @@ export async function pruneOwnAssets(
   for (const name of await fs.list(dir)) {
     const path = `assets/${name}`;
     const deadEngine = ENGINE_ASSET_RE.test(path) && (opts.sharedBase || !wantsAsset(path, opts.format));
-    const deadViewer = opts.sharedBase && VIEWER_FILE_RE.test(name);
+    const deadViewer =
+      VIEWER_FILE_RE.test(name) &&
+      (opts.sharedBase || (opts.viewerFiles !== undefined && !opts.viewerFiles.has(name)));
     if ((deadEngine || deadViewer) && (await fs.entryKind(at(dir, name))) === 'file') {
       await fs.remove(at(dir, name));
     }

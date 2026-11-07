@@ -28,6 +28,8 @@ export interface ConfigFlags {
   format?: ReportFormat;
   /** `--assets-base`: where the report loads its viewer files from (`writer.assetsBase`). */
   assetsBase?: string;
+  /** `merge --compact`: compact each format-4 input's copied partitions (`writer.compactOnMerge`). */
+  compact?: boolean;
 }
 
 /** Receiver flags; a port of `false` is `--no-http` / `--no-grpc`. */
@@ -46,6 +48,7 @@ export function configInputOf(flags: ConfigFlags | ReceiverFlags): ConfigInput {
   const writer = {
     ...(flags.format === undefined ? {} : { format: flags.format }),
     ...(flags.assetsBase === undefined ? {} : { assetsBase: flags.assetsBase }),
+    ...(flags.compact === true ? { compactOnMerge: true } : {}),
   };
   const input: ConfigInput = {
     ...(flags.title === undefined ? {} : { title: flags.title }),
