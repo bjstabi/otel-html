@@ -79,8 +79,7 @@ describe('withEngineFiles', () => {
   ];
   const paths = (xs: readonly ViewerAsset[]) => xs.map((x) => x.path);
 
-  test('chunks and an unspecified format keep only the viewer files', () => {
-    expect(paths(withEngineFiles(all, 'chunks'))).toEqual(['assets/viewer.abc.js', 'assets/viewer.abc.css']);
+  test('an unspecified format keeps only the viewer files', () => {
     expect(paths(withEngineFiles(all, undefined))).toEqual(['assets/viewer.abc.js', 'assets/viewer.abc.css']);
   });
 
@@ -99,7 +98,7 @@ describe('withEngineFiles', () => {
 });
 
 describe('a session copies the engine files its format loads', () => {
-  const assetFiles = async (format: 'chunks' | 'local' | 'site') => {
+  const assetFiles = async (format: 'local' | 'site') => {
     const w = createTestWriter();
     const s = await openSession(w.deps, {
       out: 'r',
@@ -118,8 +117,5 @@ describe('a session copies the engine files its format loads', () => {
   });
   test('site: the viewer files and the two plain files', async () => {
     expect(await assetFiles('site')).toEqual([...named('site'), ...viewer].sort());
-  });
-  test('chunks: the viewer files only', async () => {
-    expect(await assetFiles('chunks')).toEqual(viewer);
   });
 });

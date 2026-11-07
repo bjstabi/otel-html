@@ -13,7 +13,7 @@ export interface ViewerAsset {
 export interface ViewerAssets {
   /**
    * The files to copy beside a report of this format: the viewer's own, plus the DuckDB engine files that format
-   * loads (`local` the base64 wrappers, `site` the plain files). `chunks` or no format means no engine files.
+   * loads (`local` the base64 wrappers, `site` the plain files). No format means no engine files.
    */
   files(format?: ReportFormat): Promise<readonly ViewerAsset[]>;
   entry(): ViewerEntry;
@@ -25,7 +25,7 @@ const PARQUET_WASM_FILE = 'parquet_wasm_bg.wasm';
 /** False for an engine file a report of this format does not load; true for every other path. */
 export function wantsAsset(path: string, format?: ReportFormat): boolean {
   if (!ENGINE_ASSET_RE.test(path)) return true;
-  if (format === undefined || format === 'chunks') return false;
+  if (format === undefined) return false;
   return engineAssetNames(format).includes(assetFileName(path));
 }
 

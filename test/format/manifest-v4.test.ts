@@ -6,7 +6,6 @@ import { OtelHtmlError } from '../../src/model/errors.js';
 
 const config = {
   viewer: {
-    eagerBudgetBytes: 75_000_000,
     listCap: 10_000,
     theme: 'system',
     defaultDashboard: 'fusion',
@@ -65,6 +64,17 @@ describe('manifest v4', () => {
     expect(isV4(m)).toBe(true);
   });
 
+  test('the facet caps round-trip, and are optional', () => {
+    const m = v4();
+    const capped: ManifestV4 = {
+      ...m,
+      config: { ...m.config, viewer: { ...m.config.viewer, facetValueCap: 7, facetKeyCap: 3 } },
+    };
+    const parsed = parseAnyManifest(capped);
+    expect(isV4(parsed) && parsed.config.viewer).toMatchObject({ facetValueCap: 7, facetKeyCap: 3 });
+    expect(parseAnyManifest(v4())).toEqual(v4());
+  });
+
   test('a v3 manifest still parses through parseAnyManifest', () => {
     const v3 = {
       formatVersion: 3,
@@ -81,11 +91,24 @@ describe('manifest v4', () => {
       rollups: [],
       traceShards: [],
       metricFiles: [],
-      config,
+      config: { ...config, viewer: { ...config.viewer, eagerBudgetBytes: 75_000_000 } },
     };
     const m = parseAnyManifest(v3);
     expect(isV4(m)).toBe(false);
     expect(m).toEqual(parseManifest(v3));
+  });
+
+  test('viewer.eagerBudgetBytes is an unknown key in a v4 manifest', () => {
+    const m = v4();
+    const e = failure(() =>
+      parseAnyManifest({
+        ...m,
+        config: { ...m.config, viewer: { ...m.config.viewer, eagerBudgetBytes: 1 } },
+      }),
+    );
+    expect(e.code).toBe('invalid-report');
+    expect(e.path).toBe('manifest.config.viewer');
+    expect(e.actual).toContain('eagerBudgetBytes');
   });
 
   test('an unknown formatVersion is invalid-report at formatVersion', () => {

@@ -1,10 +1,3 @@
-/**
- * On-disk report format version the writer writes. Bumped for changes an older reader cannot read; readers fail fast
- * on a version they do not know. 2: `series.js` carries each series' point gaps and coarse levels have their own
- * `ex<k>.js` exemplar files. 3: a level or exemplar file spanning more than one page of buckets is written per page
- * (`l<k>-<p6>.js`, `ex-<p6>.js`, `ex<k>-<p6>.js`), so a zoomed chart reads only the pages under its window.
- */
-export const CHUNK_FORMAT_VERSION = 3;
 /** 4: data lives in Parquet partitions (`data/partitions/<p6>/<table>.parquet`), read through DuckDB-WASM. */
 export const PARTITION_FORMAT_VERSION = 4;
 /**
@@ -19,3 +12,11 @@ export const READABLE_FORMAT_VERSIONS = [1, 2, 3, 4] as const;
 
 /** The global every data file registers into: `__OH__.push("<key>", <payload>);`. */
 export const REGISTRATION_GLOBAL = '__OH__';
+
+/** The D12 message: the viewer and `upgrade` read format 4 only; `merge` converts an older report. */
+export const oldFormatMessage = (formatVersion: number): string =>
+  `This report is format ${formatVersion}; this viewer reads format 4. \`otel-html merge <report> --out <new>\` converts it.`;
+
+/** What `writer.format: chunks` (or `--format chunks`) now fails with. */
+export const CHUNKS_GONE =
+  'format 3 (chunks) is no longer written; use local or site (otel-html merge converts an older report)';

@@ -39,6 +39,8 @@ export interface WriteGate {
  */
 export function createMemoryFileSystem(options: { pieces?: boolean } = {}): FileSystem & {
   snapshot(): Map<string, string>;
+  /** Every file's bytes (a copy), for tests that decode binary files synchronously. */
+  snapshotBytes(): Map<string, Uint8Array>;
   failNextWrite(pathSuffix: string): void;
   holdNextWrite(pathSuffix: string): WriteGate;
 } {
@@ -196,6 +198,9 @@ export function createMemoryFileSystem(options: { pieces?: boolean } = {}): File
     },
     snapshot() {
       return new Map([...files].map(([k, v]) => [k, dec.decode(v)]));
+    },
+    snapshotBytes() {
+      return new Map([...files].map(([k, v]) => [k, v.slice()]));
     },
     failNextWrite(pathSuffix) {
       failures.push(norm(pathSuffix));

@@ -31,7 +31,7 @@ export interface CoreFacet {
   readonly kind: 'string' | 'int' | 'double' | 'bool';
 }
 
-/** A default facet as the chunk writer's rollups read it: key, label and the value of one record. */
+/** A default facet: key, label and the value of one record. */
 const col = (name: string): ExprNode => column(name);
 const kindCase = sql`CASE coalesce(${col('kind')}, 0) ${verbatim(
   SPAN_KIND_NAMES.map((n, i) => `WHEN ${i} THEN '${n}'`).join(' '),

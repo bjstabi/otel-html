@@ -75,7 +75,7 @@ describe('OtelHtmlLogRecordExporter', () => {
     const exporter = new OtelHtmlLogRecordExporter({ report });
     await exportOnce(exporter);
     await exporter.forceFlush();
-    expect(manifestOf(w, 'r').chunks.length).toBeGreaterThan(0);
+    expect(manifestOf(w, 'r').partitions.length).toBeGreaterThan(0);
     await report.close();
   });
 });

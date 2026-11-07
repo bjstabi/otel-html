@@ -73,7 +73,7 @@ function badRef(path: string, ref: number, len: number): OtelHtmlError {
 export type Rebased =
   | { signal: 'spans'; rows: readonly SpanRecord[] }
   | { signal: 'logs'; rows: readonly LogRecordRecord[] }
-  /** Lazy: a bad ref or time surfaces while the points are consumed, as the chunk session always had it. */
+  /** Lazy: a bad ref or time surfaces while the points are consumed, as before. */
   | { signal: 'metrics'; rows: () => Iterable<MetricPointRecord> };
 
 /**

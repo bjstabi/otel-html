@@ -1,10 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import {
-  reviveDataJson,
-  unwrapDataFile,
-  wrapDataFile,
-  wrapDataFilePieces,
-} from '../../src/format/data-file.js';
+import { reviveDataJson, unwrapDataFile, wrapDataFile } from '../../src/format/data-file.js';
 import { REGISTRATION_GLOBAL } from '../../src/format/version.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 
@@ -96,7 +91,6 @@ describe('data files', () => {
     cyclic.self = cyclic;
     cyclic.list.push(cyclic);
     expect(() => wrapDataFile('k', cyclic)).toThrowError(TypeError);
-    expect(() => [...wrapDataFilePieces('k', {}, 'items', [cyclic])]).toThrowError(TypeError);
     // Deep but finite payloads are still written plain.
     let deep: unknown = 1;
     for (let i = 0; i < 200; i++) deep = [deep];
@@ -127,9 +121,6 @@ describe('data files', () => {
         (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`,
       );
       expect(wrapDataFile('k', p)).toBe(`${REGISTRATION_GLOBAL}.push("k",${json});\n`);
-      expect([...wrapDataFilePieces('k', { h: 1 }, 'items', [p])].join('')).toBe(
-        wrapDataFile('k', { h: 1, items: [p] }),
-      );
     }
     // A value JSON cannot carry fails the same way wherever it hides, naming its key.
     for (const bad of [Number.POSITIVE_INFINITY, Number.NaN, -Number.MAX_VALUE * 2]) {
@@ -140,15 +131,5 @@ describe('data files', () => {
     expect(() => wrapDataFile('k', [{ f: Symbol('s') }])).toThrowError(
       expect.objectContaining({ path: 'f', expected: 'a JSON-serializable value' }),
     );
-  });
-
-  test('wrapDataFilePieces joins to exactly wrapDataFile of the whole payload', () => {
-    const items = [{ id: 0, s: HOSTILE }, { id: 1, n: 2n ** 70n, b: new Uint8Array([1, 2]) }, { id: 2 }];
-    const head = { metric: 3, level: 1, widthNs: 8 };
-    const pieces = [...wrapDataFilePieces('k<', head, 'series', items)];
-    expect(pieces.length).toBeGreaterThan(items.length);
-    expect(pieces.join('')).toBe(wrapDataFile('k<', { ...head, series: items }));
-    expect([...wrapDataFilePieces('k', {}, 'series', [])].join('')).toBe(wrapDataFile('k', { series: [] }));
-    expect(() => [...wrapDataFilePieces('k', head, 'series', [{ x: Number.NaN }])]).toThrow(OtelHtmlError);
   });
 });

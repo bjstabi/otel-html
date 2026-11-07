@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { createReportWith } from '../../../src/api/report.js';
 import { runCli } from '../../../src/cli/program.js';
 import { reviveDataJson, unwrapDataFile } from '../../../src/format/data-file.js';
-import { parseManifest } from '../../../src/format/manifest.js';
+import { isV4, parseAnyManifest } from '../../../src/format/manifest.js';
 import { MANIFEST_KEY } from '../../../src/format/paths.js';
 import { createNodeFileSystem } from '../../../src/writer/node-fs.js';
 import { span, traceRequest } from '../../../test-support/otlp-builders.js';
@@ -357,12 +357,14 @@ describe('otel-html ci site and cleanup', { timeout: 60_000 }, () => {
     expect(readFileSync(join(site, 'index.html'), 'utf8')).toContain('href="branch/main/"');
   });
 
+  const parseV4 = (input: unknown) => {
+    const m = parseAnyManifest(input);
+    if (!isV4(m)) throw new Error('not a v4 manifest');
+    return m;
+  };
   const totalsOf = (dirPath: string): { spans: number; logs: number; metrics: number } => {
     const text = readFileSync(join(dirPath, 'data/manifest.js'), 'utf8');
-    const manifest = parseManifest(reviveDataJson(unwrapDataFile(text, MANIFEST_KEY)));
-    const sum = { spans: 0, logs: 0, metrics: 0 };
-    for (const c of manifest.chunks) sum[c.signal] += c.count;
-    return sum;
+    return { ...parseV4(reviveDataJson(unwrapDataFile(text, MANIFEST_KEY))).totals };
   };
   const withReport = (args: string[], to: string): string[] => args.map((a) => (a === report ? to : a));
 

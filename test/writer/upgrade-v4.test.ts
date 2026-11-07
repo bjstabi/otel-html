@@ -5,11 +5,12 @@ import { ENGINE_VERSION, engineAssetNames } from '../../src/format/engine.js';
 import { isV4, type ManifestV4, parseAnyManifest } from '../../src/format/manifest.js';
 import { decodeTable } from '../../src/format/parquet/codec.js';
 import { ENGINE_ASSET_RE, MANIFEST_KEY, partitionWrapperPath } from '../../src/format/paths.js';
+import { oldFormatMessage } from '../../src/format/version.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { openSession } from '../../src/writer/session.js';
 import { upgradeReport } from '../../src/writer/upgrade.js';
 import { createTestWriter, otlp, type TestWriter, testConfig } from '../../test-support/writer-deps.js';
-import { spansRequest } from './helpers.js';
+import { copyFrozenReport, spansRequest } from './helpers.js';
 
 type Format = 'local' | 'site';
 
@@ -313,24 +314,6 @@ describe('upgradeReport fix round 2', () => {
     };
   }
 
-  test('a chunks report replaced by a format-4 one before the lock is refused and its assets are untouched', async () => {
-    const w = createTestWriter();
-    const s = await openSession(w.deps, { out: 'r', config: testConfig(), mode: 'replace' });
-    await s.add(otlp(spansRequest(1)), 'in.json');
-    await s.close();
-    let after = new Map<string, string>();
-    const fs = racing(w, async () => {
-      await v4Report(w, 'r', 'site');
-      after = new Map(w.fs.snapshot());
-    });
-    const e = await failure(upgradeReport({ ...w.deps, fs }, 'r'));
-    expect(e.code).toBe('usage');
-    expect(e.hint).toContain('run upgrade again');
-    expect(w.fs.snapshot()).toEqual(after);
-    expect(engineFiles(w).length).toBeGreaterThan(0);
-    expect(files(w, 'r/data/state/lock')).toEqual([]);
-  });
-
   test('a base that became shared before the lock needs --assets-base and the lock is released', async () => {
     const w = createTestWriter();
     await v4Report(w, 'r', 'site');
@@ -348,23 +331,21 @@ describe('upgradeReport fix round 2', () => {
 });
 
 describe('upgradeReport on a chunks report', () => {
-  test('--format and --assets-base are a usage error that points to merge', async () => {
+  test('any upgrade is a usage error carrying the D12 message, and nothing is written', async () => {
     const w = createTestWriter();
-    const s = await openSession(w.deps, { out: 'c', config: testConfig(), mode: 'replace' });
-    await s.add(otlp(spansRequest(1)), 'in.json');
-    await s.close();
+    await copyFrozenReport(w, 'c');
     const before = new Map(w.fs.snapshot());
-    const e = await failure(upgradeReport(w.deps, 'c', { format: 'site' }));
-    expect(e.code).toBe('usage');
-    expect(e.hint).toContain('merge');
-    expect((await failure(upgradeReport(w.deps, 'c', { assetsBase: '../assets/' }))).code).toBe('usage');
+    for (const opts of [{}, { format: 'site' as const }, { assetsBase: '../assets/' }]) {
+      const e = await failure(upgradeReport(w.deps, 'c', opts));
+      expect(e.code).toBe('usage');
+      expect(e.message).toBe(oldFormatMessage(3));
+    }
     expect(w.fs.snapshot()).toEqual(before);
   });
 
   test('an unreadable formatVersion does not tell upgrade to merge', async () => {
     const w = createTestWriter();
-    const s = await openSession(w.deps, { out: 'c', config: testConfig(), mode: 'replace' });
-    await s.close();
+    await copyFrozenReport(w, 'c');
     const text = w.fs.snapshot().get('c/data/manifest.js') ?? '';
     await w.fs.writeTextAtomic(
       'c/data/manifest.js',

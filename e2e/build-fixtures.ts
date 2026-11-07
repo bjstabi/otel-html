@@ -154,6 +154,7 @@ async function cli(args: string[], env?: Record<string, string>): Promise<void> 
   });
 }
 
+/** Every convert and merge here names `--format local` although it is the default: the fixtures state the format they test. */
 async function convertTo(
   out: URL,
   inputs: readonly string[],

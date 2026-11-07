@@ -102,7 +102,6 @@ export function emptyManifest(): ManifestV4 {
     engine: { version: ENGINE_VERSION, format: 'site', assetsBase: 'assets/' },
     config: {
       viewer: {
-        eagerBudgetBytes: 75_000_000,
         listCap: 10_000,
         theme: 'system',
         defaultDashboard: 'fusion',

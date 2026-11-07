@@ -77,7 +77,6 @@ const file = (n: number, table: 'spans' | 'logs', bytes: number) => ({
 
 const config = {
   viewer: {
-    eagerBudgetBytes: 75_000_000,
     listCap: 10_000,
     theme: 'system',
     defaultDashboard: 'fusion',
@@ -124,7 +123,7 @@ const manifest3 = {
   rollups: [],
   traceShards: [],
   metricFiles: [],
-  config,
+  config: { ...config, viewer: { ...config.viewer, eagerBudgetBytes: 75_000_000 } },
 };
 
 function setup(overrides: Partial<OpenParts> = {}) {

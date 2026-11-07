@@ -15,16 +15,6 @@ const v2 = (): SessionStateV2 => ({
   statisticsKeys: { spans: ['name'], logs: [], points: [], traces: [], patterns: [] },
 });
 
-const v1 = (): unknown => ({
-  formatVersion: 1,
-  otelHtmlVersion: '0.1.0',
-  epochUnixNano: null,
-  nextChunk: { spans: 0, logs: 0, metrics: 0 },
-  rollups: {},
-  dedupe: [],
-  traceIndex: {},
-});
-
 function failure(fn: () => unknown): OtelHtmlError {
   try {
     fn();
@@ -36,9 +26,13 @@ function failure(fn: () => unknown): OtelHtmlError {
 }
 
 describe('writer state v2', () => {
-  test('parses, and a v1 state still parses through parseAnySessionState', () => {
+  test('parses, and a v1 (chunk writer) state is an invalid report', () => {
     expect(parseAnySessionState(v2())).toEqual(v2());
-    expect(parseAnySessionState(v1())).toMatchObject({ formatVersion: 1, nextChunk: { spans: 0 } });
+    const e = failure(() =>
+      parseAnySessionState({ formatVersion: 1, otelHtmlVersion: '0.1.0', epochUnixNano: null }),
+    );
+    expect(e.code).toBe('invalid-report');
+    expect(e.path).toBe('state.formatVersion');
   });
 
   test('flushPartitions must be strictly increasing and below nextPartition', () => {

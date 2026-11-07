@@ -37,10 +37,9 @@ describe('packageDirViewerAssets engine files', () => {
     const e = engineAssetNames;
     await populate(root, ['viewer.abc.js', ...e('site'), ...e('local')]);
     const assets = packageDirViewerAssets(urlOf(root));
-    const names = async (f?: 'chunks' | 'local' | 'site') =>
+    const names = async (f?: 'local' | 'site') =>
       (await assets.files(f)).map((x) => x.path.slice('assets/'.length)).sort();
     expect(await names()).toEqual(['viewer.abc.js']);
-    expect(await names('chunks')).toEqual(['viewer.abc.js']);
     expect(await names('site')).toEqual(['viewer.abc.js', ...e('site')].sort());
     expect(await names('local')).toEqual(['viewer.abc.js', ...e('local')].sort());
   });

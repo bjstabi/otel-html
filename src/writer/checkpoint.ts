@@ -1,39 +1,22 @@
 import { reviveDataJson, unwrapDataFile, wrapDataFile } from '../format/data-file.js';
+import { type AnyManifest, isV4, type ManifestV4, parseAnyManifest } from '../format/manifest.js';
 import {
-  type AnyManifest,
-  isV4,
-  type Manifest,
-  type ManifestV4,
-  parseAnyManifest,
-} from '../format/manifest.js';
-import {
-  DEFAULT_ASSETS_BASE,
   LOCK_PATH,
   MANIFEST_KEY,
   MANIFEST_PATH,
   PARTITION_DIR_RE,
-  SIGNALS,
-  type Signal,
   STATE_DIR,
   STATE_SLOTS,
   type StateSlot,
   statePath,
 } from '../format/paths.js';
-import { parseAnySessionState, type SessionState, type SessionStateV2 } from '../format/state.js';
-import type { TraceShard } from '../format/trace-shard.js';
+import { parseAnySessionState, type SessionStateV2 } from '../format/state.js';
 import { OtelHtmlError } from '../model/errors.js';
 import type { FileSystem } from './ports.js';
 
 /** `out` + relative report path, tolerating a trailing slash on `out`. */
 export function at(out: string, rel: string): string {
   return `${out.replace(/\/+$/, '')}/${rel}`;
-}
-
-export interface Checkpoint {
-  manifest: Manifest;
-  state: SessionState;
-  /** The slot holding `state`; the next checkpoint goes to the other one. */
-  slot: StateSlot;
 }
 
 export interface PartitionCheckpoint {
@@ -47,92 +30,6 @@ export async function writeManifest(fs: FileSystem, out: string, manifest: AnyMa
   await fs.writeTextAtomic(at(out, MANIFEST_PATH), wrapDataFile(MANIFEST_KEY, manifest));
 }
 
-/** The state fields that stay small; `dedupe` and `traceIndex` hold the bulk and are streamed separately. */
-export type StateHead = Omit<SessionState, 'dedupe' | 'traceIndex'>;
-
-/**
- * The head fields already stringified (`undefined` where `JSON.stringify` would drop the field). A background
- * checkpoint takes these at prepare time: the rollups and metric streams are live structures that go on changing
- * while the state is written.
- */
-export interface StringifiedHead {
-  readonly fields: { readonly [K in keyof StateHead]: string | undefined };
-}
-
-export function stringifyHead(head: StateHead): StringifiedHead {
-  const entries = (Object.keys(head) as (keyof StateHead)[]).map((k) => [k, JSON.stringify(head[k])]);
-  return { fields: Object.fromEntries(entries) as StringifiedHead['fields'] };
-}
-
-/**
- * Where each head field sits around `dedupe` and `traceIndex` in `SessionState` order (listed in that order). Typed
- * as a record over every head field, so a new `SessionState` field fails to compile until it is placed here.
- */
-const HEAD_SIDE = {
-  formatVersion: 'before',
-  otelHtmlVersion: 'before',
-  epochUnixNano: 'before',
-  nextChunk: 'before',
-  rollups: 'before',
-  metricStreams: 'after',
-  nextSegment: 'after',
-} satisfies Record<keyof StateHead, 'before' | 'after'>;
-
-/**
- * Shard names in the order `JSON.stringify` gives an object keyed by them: canonical integer names ("12", "99")
- * first in numeric order, then the rest in the given order. The state slot has always been written from such an
- * object, and its bytes must not change.
- */
-export function jsObjectKeyOrder(names: readonly string[]): string[] {
-  return Object.keys(Object.fromEntries(names.map((n) => [n, 0])));
-}
-
-/** Dedupe keys stringified per piece. */
-const DEDUPE_SLICE = 1000;
-
-/**
- * The bytes of `JSON.stringify(state)` as pieces, so the full string (and a Buffer copy of it) never exists: the
- * state embeds the whole trace index, which is hundreds of megabytes under load. Field order is the
- * `SessionState` order; the head arrives stringified (see `stringifyHead`).
- */
-export function* stateSlotPieces(
-  head: StringifiedHead,
-  dedupe: readonly string[],
-  shards: Iterable<[string, Readonly<TraceShard>]>,
-): Generator<string> {
-  const field = (k: keyof StateHead): string | undefined => {
-    const v = head.fields[k];
-    return v === undefined ? undefined : `${JSON.stringify(k)}:${v}`; // JSON.stringify drops undefined fields
-  };
-  const keys = Object.keys(HEAD_SIDE) as (keyof StateHead)[];
-  const before = keys.filter((k) => HEAD_SIDE[k] === 'before').map(field);
-  const after = keys.filter((k) => HEAD_SIDE[k] === 'after').map(field);
-  yield `{${before.filter((f) => f !== undefined).join(',')},"dedupe":[`;
-  for (let i = 0; i < dedupe.length; i += DEDUPE_SLICE)
-    yield (i > 0 ? ',' : '') + JSON.stringify(dedupe.slice(i, i + DEDUPE_SLICE)).slice(1, -1);
-  yield '],"traceIndex":{';
-  let first = true;
-  for (const [shard, view] of shards) {
-    yield `${first ? '' : ','}${JSON.stringify(shard)}:${JSON.stringify(view)}`;
-    first = false;
-  }
-  yield `}${after.map((f) => (f === undefined ? '' : `,${f}`)).join('')}}`;
-}
-
-export async function writeStateSlot(
-  fs: FileSystem,
-  out: string,
-  slot: StateSlot,
-  head: StringifiedHead,
-  dedupe: readonly string[],
-  shards: Iterable<[string, Readonly<TraceShard>]>,
-): Promise<void> {
-  const path = at(out, statePath(slot));
-  const pieces = stateSlotPieces(head, dedupe, shards);
-  if (fs.writePiecesAtomic !== undefined) await fs.writePiecesAtomic(path, pieces);
-  else await fs.writeTextAtomic(path, [...pieces].join(''));
-}
-
 /** The format-4 state is small (no rollups, no trace index): one atomic write. */
 export async function writeStateSlotV2(
   fs: FileSystem,
@@ -143,25 +40,6 @@ export async function writeStateSlotV2(
   const text = JSON.stringify(state);
   parseAnySessionState(JSON.parse(text)); // never write a state the next open would reject
   await fs.writeTextAtomic(at(out, statePath(slot)), text);
-}
-
-function chunkCounts(manifest: Manifest): Record<Signal, number> | null {
-  const counts: Record<Signal, number> = { spans: 0, logs: 0, metrics: 0 };
-  for (const s of SIGNALS) {
-    const ns = manifest.chunks.filter((c) => c.signal === s).map((c) => c.n);
-    if (ns.some((n, i) => n !== i)) return null; // chunk numbers must run 0..k-1 in order
-    counts[s] = ns.length;
-  }
-  return counts;
-}
-
-function consistent(state: SessionState, manifest: Manifest): boolean {
-  const counts = chunkCounts(manifest);
-  return (
-    counts !== null &&
-    SIGNALS.every((s) => state.nextChunk[s] === counts[s]) &&
-    (state.epochUnixNano ?? '0') === manifest.epochUnixNano
-  );
 }
 
 function versionMismatch(
@@ -234,41 +112,7 @@ async function pickState<S extends { otelHtmlVersion: string }>(
 }
 
 /**
- * Load the committed manifest and the state checkpoint that matches it. A flush interrupted after the
- * state write but before the manifest commit leaves the previous state in the other slot, which is the one
- * picked. A format-4 report is not this session's to open: it fails `version-mismatch`.
- */
-export async function loadCheckpoint(fs: FileSystem, out: string, version: string): Promise<Checkpoint> {
-  const manifest = await readManifest(fs, out);
-  if (isV4(manifest)) {
-    throw new OtelHtmlError('version-mismatch', {
-      message: `cannot append: the report at ${out} is format 4 (Parquet partitions); this session writes the chunk format`,
-      path: 'manifest.formatVersion',
-      hint: `append with --format ${manifest.engine.format}${
-        manifest.engine.assetsBase === DEFAULT_ASSETS_BASE
-          ? ''
-          : ` --assets-base ${manifest.engine.assetsBase}`
-      }`,
-    });
-  }
-  if (manifest.otelHtmlVersion !== version) {
-    throw versionMismatch(out, 'manifest.otelHtmlVersion', manifest.otelHtmlVersion, version);
-  }
-  const { state, slot } = await pickState<SessionState>(
-    fs,
-    out,
-    version,
-    (raw) => {
-      const s = parseAnySessionState(raw);
-      return s.formatVersion === 1 ? s : null;
-    },
-    (s) => consistent(s, manifest),
-  );
-  return { manifest, state, slot };
-}
-
-/**
- * The format-4 counterpart of `loadCheckpoint`. The matching state is the one whose `nextPartition` follows the
+ * Loads the committed format-4 manifest and the state checkpoint that matches it. The matching state is the one whose `nextPartition` follows the
  * manifest's last partition (0 with none) and whose epoch equals the manifest's: after a crash between the state
  * write and the manifest commit, the state that ran ahead lists a partition the manifest does not, and the other
  * slot is picked. When both slots match (an append after a close that wrote no data, then a crash), the one with the

@@ -1,56 +1,39 @@
-import { decodeColumns } from '../../src/format/columns.js';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
-import { type Manifest, parseManifest } from '../../src/format/manifest.js';
-import {
-  groupMetricFiles,
-  type LevelFile,
-  mergeBucketSeries,
-  metricLevelFilePath,
-  parseLevelFile,
-} from '../../src/format/metric-files.js';
-import { chunkKey, MANIFEST_KEY, rollupKey, type Signal } from '../../src/format/paths.js';
-import { LOG_COLUMNS, METRIC_COLUMNS, SPAN_COLUMNS } from '../../src/format/specs.js';
-import type { LogRecordRecord, MetricPointRecord, SpanRecord } from '../../src/model/records.js';
-import { LogRollups } from '../../src/rollups/log-rollups.js';
-import { MetricCatalog } from '../../src/rollups/metric-catalog.js';
-import { DEFAULT_FACET_CAPS } from '../../src/viewer/data/query-common.js';
+import { isV4, type ManifestV4, parseAnyManifest } from '../../src/format/manifest.js';
+import { decodeTable } from '../../src/format/parquet/codec.js';
+import type { Table } from '../../src/format/parquet/columns.js';
+import type { Row } from '../../src/format/parquet/rows.js';
+import { MANIFEST_KEY } from '../../src/format/paths.js';
 import type { JsonObject } from '../../test-support/otlp-builders.js';
 import { span, traceRequest } from '../../test-support/otlp-builders.js';
 import type { TestWriter } from '../../test-support/writer-deps.js';
 import { EPOCH_NS } from '../../test-support/writer-deps.js';
 
-export function manifestOf(w: TestWriter, out: string): Manifest {
+export function manifestOf(w: TestWriter, out: string): ManifestV4 {
   const text = w.fs.snapshot().get(`${out}/data/manifest.js`);
   if (text === undefined) throw new Error('no manifest');
-  return parseManifest(reviveDataJson(unwrapDataFile(text, MANIFEST_KEY)));
+  const m = parseAnyManifest(reviveDataJson(unwrapDataFile(text, MANIFEST_KEY)));
+  if (!isV4(m)) throw new Error('not a v4 manifest');
+  return m;
 }
 
-export function readChunk<R>(w: TestWriter, out: string, signal: Signal, n: number): R[] {
-  const key = chunkKey(signal, n);
-  const text = w.fs.snapshot().get(`${out}/data/${key}.js`);
-  if (text === undefined) throw new Error(`no chunk ${key}`);
-  const payload = reviveDataJson(unwrapDataFile(text, key));
-  const spec = signal === 'spans' ? SPAN_COLUMNS : signal === 'logs' ? LOG_COLUMNS : METRIC_COLUMNS;
-  return decodeColumns(spec as never, payload).rows as R[];
+/** Every row of one table across the report's partitions, in partition order, as the Parquet files decode. */
+export function tableRowsOf(w: TestWriter, out: string, table: Table): Row[] {
+  const bytes = w.fs.snapshotBytes();
+  return manifestOf(w, out).partitions.flatMap((p) => {
+    const file = p.files[table];
+    if (file === undefined) return [];
+    const b = bytes.get(`${out}/${file.path}`);
+    if (b === undefined) throw new Error(`no partition file ${file.path}`);
+    return decodeTable(table, b);
+  });
 }
 
-export function allSpans(w: TestWriter, out: string): SpanRecord[] {
-  return manifestOf(w, out)
-    .chunks.filter((c) => c.signal === 'spans')
-    .flatMap((c) => readChunk<SpanRecord>(w, out, 'spans', c.n));
-}
-
-export function allLogs(w: TestWriter, out: string): LogRecordRecord[] {
-  return manifestOf(w, out)
-    .chunks.filter((c) => c.signal === 'logs')
-    .flatMap((c) => readChunk<LogRecordRecord>(w, out, 'logs', c.n));
-}
-
-export function allPoints(w: TestWriter, out: string): MetricPointRecord[] {
-  return manifestOf(w, out)
-    .chunks.filter((c) => c.signal === 'metrics')
-    .flatMap((c) => readChunk<MetricPointRecord>(w, out, 'metrics', c.n));
-}
+export const allSpans = (w: TestWriter, out: string): Row[] => tableRowsOf(w, out, 'spans');
+export const allLogs = (w: TestWriter, out: string): Row[] => tableRowsOf(w, out, 'logs');
+export const allPoints = (w: TestWriter, out: string): Row[] => tableRowsOf(w, out, 'points');
 
 const hex = (n: number, len: number): string => n.toString(16).padStart(len, '0');
 export const traceIdOf = (n: number): string => hex(n + 1, 32);
@@ -68,58 +51,6 @@ export function spansRequest(count: number, offsetNs = 0, firstIndex = 0): JsonO
     }),
   );
   return traceRequest(spans, [{ key: 'service.name', value: { stringValue: 'svc' } }]);
-}
-
-/** The report's `data/rollups/logs.js`, decoded the way the viewer will. */
-export function logRollupsOf(w: TestWriter, out: string): LogRollups {
-  const text = w.fs.snapshot().get(`${out}/data/rollups/logs.js`);
-  if (text === undefined) throw new Error('no log rollups');
-  return LogRollups.from(reviveDataJson(unwrapDataFile(text, rollupKey('logs'))), DEFAULT_FACET_CAPS);
-}
-
-/** A data file of the report by its layout path, unwrapped with the key the path implies. */
-export function readDataFile(w: TestWriter, out: string, path: string): unknown {
-  const text = w.fs.snapshot().get(`${out}/${path}`);
-  if (text === undefined) throw new Error(`no file ${path}`);
-  return reviveDataJson(unwrapDataFile(text, path.slice('data/'.length, -'.js'.length)));
-}
-
-/** Files on disk under `data/metrics/`, as layout paths. */
-export function metricFilesOnDisk(w: TestWriter, out: string): string[] {
-  return [...w.fs.snapshot().keys()]
-    .filter((k) => k.startsWith(`${out}/data/metrics/`))
-    .map((k) => k.slice(out.length + 1))
-    .sort();
-}
-
-/** The listed levels of metric `id`, decoded, finest first; a level written in pages (format 3) comes back whole. */
-export function levelsOf(w: TestWriter, out: string, id: number): LevelFile[] {
-  const files = groupMetricFiles(manifestOf(w, out).metricFiles).get(id);
-  if (files === undefined) return [];
-  return [...files.levels]
-    .sort(([a], [b]) => a - b)
-    .map(([level, pages]) => {
-      const parts = (pages ?? [null]).map((page) => {
-        const p = metricLevelFilePath(id, level, page);
-        return parseLevelFile(readDataFile(w, out, p), p);
-      });
-      const [first] = parts;
-      if (first === undefined) throw new Error(`level ${level} of metric ${id} has no file`);
-      const { page: _page, ...whole } = first;
-      return {
-        ...whole,
-        series: mergeBucketSeries(
-          parts.map((f) => f.series),
-          `metric ${id}`,
-        ),
-      };
-    });
-}
-
-export function metricCatalogOf(w: TestWriter, out: string): MetricCatalog {
-  const raw = readDataFile(w, out, 'data/rollups/metrics.js');
-  const catalog = typeof raw === 'object' && raw !== null ? Reflect.get(raw, 'catalog') : undefined;
-  return MetricCatalog.from(catalog, { seriesCap: 1000 });
 }
 
 const SEC = 1_000_000_000n;
@@ -181,9 +112,18 @@ export function cumulativeRequest(
   return json;
 }
 
-/** `req` (one metric, as built above) with `exemplars` on its data point `i`. */
-export function withExemplars(req: JsonObject, i: number, exemplars: readonly JsonObject[]): JsonObject {
-  const json = JSON.parse(JSON.stringify(req));
-  json.resourceMetrics[0].scopeMetrics[0].metrics[0].sum.dataPoints[i].exemplars = exemplars;
-  return json;
+const REPORTS = join(import.meta.dirname, '../../fixtures/reports');
+
+/** Copies the frozen `fixtures/reports/<fixture>` report (format 1 to 3, chunks) into the writer's file system at `out`. */
+export async function copyFrozenReport(w: TestWriter, out: string, fixture = 'format-3'): Promise<void> {
+  const root = join(REPORTS, fixture, 'data');
+  for (const e of readdirSync(root, { recursive: true, withFileTypes: true })) {
+    if (!e.isFile()) continue;
+    const rel = join(e.parentPath, e.name).slice(root.length + 1);
+    await w.deps.fs.writeBytes(`${out}/data/${rel}`, readFileSync(join(root, rel)));
+  }
 }
+
+/** One cell of a decoded table row. */
+export const cell = (row: Row | undefined, column: string): unknown =>
+  row === undefined ? undefined : Reflect.get(row, column);

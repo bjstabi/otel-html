@@ -2,12 +2,15 @@ import { Tooltip } from '@base-ui/react/tooltip';
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { afterEach, describe, expect, test, vi } from 'vitest';
+import { anyValueToDisplay } from '../../src/model/anyvalue.js';
 import { parseUnixNanos, type RelNanos, type TraceId } from '../../src/model/ids.js';
 import { createNormalizeContext, normalizeLogs } from '../../src/model/normalize.js';
 import { parseOtlpJson } from '../../src/model/otlp-json.js';
-import { LogRollups } from '../../src/rollups/log-rollups.js';
+import { logTime } from '../../src/model/records.js';
+import { FacetCounts } from '../../src/rollups/facets.js';
 import { TimeBuckets } from '../../src/rollups/time-buckets.js';
-import { LOG_SEVERITY_KEYS, type LogSeverityKey } from '../../src/semconv/severity.js';
+import { DEFAULT_LOG_FACETS } from '../../src/semconv/default-facets.js';
+import { LOG_SEVERITY_KEYS, type LogSeverityKey, severityKey } from '../../src/semconv/severity.js';
 import { tokensToOttl } from '../../src/viewer/components/filter-tokens.js';
 import type { DataSource } from '../../src/viewer/data/data-source.js';
 import type { LogRef, LogRow, LogTraceRow, PatternRow } from '../../src/viewer/data/log-query.js';
@@ -67,10 +70,25 @@ function logRows(bodies: readonly string[]): LogRow[] {
   return toLogEntries(chunk, logs, epoch, 'test').map((e) => e.row);
 }
 
-function rollupsOf(rows: readonly LogRow[]): LogRollups {
-  const r = new LogRollups(DEFAULT_FACET_CAPS, { cluster: false });
-  for (const row of rows) r.add({ log: row.log, resource: row.resource, scope: row.scope, epoch });
-  return r;
+function rollupsOf(rows: readonly LogRow[]): { facets: FacetCounts; buckets: TimeBuckets<LogSeverityKey> } {
+  const facets = new FacetCounts(
+    DEFAULT_FACET_CAPS.facetValueCap,
+    DEFAULT_FACET_CAPS.facetKeyCap,
+    DEFAULT_LOG_FACETS.map((f) => f.key),
+  );
+  const buckets = new TimeBuckets<LogSeverityKey>(LOG_SEVERITY_KEYS);
+  for (const row of rows) {
+    const t = { log: row.log, resource: row.resource, scope: row.scope, epoch };
+    buckets.add(logTime(row.log), severityKey(row.log.severityNumber));
+    for (const f of DEFAULT_LOG_FACETS) {
+      const v = f.value(t);
+      if (v !== undefined) facets.add(f.key, v, 'string');
+    }
+    for (const [key, v] of row.log.attributes) {
+      if (v.kind === 'string') facets.add(key, anyValueToDisplay(v), 'string');
+    }
+  }
+  return { facets, buckets };
 }
 
 /** The landing rollup of a 1204-log run: ERROR 122, WARN 310, INFO 702, DEBUG 70. */

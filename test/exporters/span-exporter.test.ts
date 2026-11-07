@@ -4,7 +4,7 @@ import { createReportWith } from '../../src/api/report.js';
 import { OtelHtmlSpanExporter } from '../../src/exporters/span-exporter.js';
 import { readableSpan } from '../../test-support/decode.js';
 import { createTestWriter } from '../../test-support/writer-deps.js';
-import { allSpans, manifestOf } from '../writer/helpers.js';
+import { allSpans, cell, manifestOf } from '../writer/helpers.js';
 
 function emitSpans(exporter: OtelHtmlSpanExporter, names: string[]): BasicTracerProvider {
   const provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
@@ -29,7 +29,7 @@ describe('OtelHtmlSpanExporter', () => {
     await report.close();
     expect(
       allSpans(w, 'r')
-        .map((s) => s.name)
+        .map((s) => cell(s, 'name'))
         .sort(),
     ).toEqual(['a', 'b']);
   });
@@ -68,7 +68,7 @@ describe('OtelHtmlSpanExporter', () => {
     await exportOnce(exporter);
     expect(() => manifestOf(w, 'r')).toThrow('no manifest');
     await exporter.forceFlush();
-    expect(manifestOf(w, 'r').chunks.length).toBeGreaterThan(0);
+    expect(manifestOf(w, 'r').partitions.length).toBeGreaterThan(0);
     await report.close();
   });
 });

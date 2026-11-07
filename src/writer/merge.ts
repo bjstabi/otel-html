@@ -119,13 +119,6 @@ async function sizeOf(fs: FileSystem, file: string, exact: boolean): Promise<num
   return n;
 }
 
-/** The `engine.format` of the format-4 report at `dir`, or undefined when it is a chunks report. */
-async function existingFormat(fs: FileSystem, dir: string): Promise<'local' | 'site' | undefined> {
-  const { raw, file } = await locateManifest(fs, dir, 'merge');
-  const m = inFile(file, () => parseAnyManifest(raw));
-  return isV4(m) ? m.engine.format : undefined;
-}
-
 function chunkInput({ dir, file, raw }: Located, verb: string): Input {
   if (
     typeof raw === 'object' &&
@@ -274,18 +267,6 @@ export async function mergeReports(
   }
   // An existing report at `out` is the base; the session's append branch inherits its title and dashboards.
   const intoExisting = options.mode !== 'replace' && (await deps.fs.exists(at(out, MANIFEST_PATH)));
-  // Before the output is touched: a chunks report has no partitions to copy, and decoding them is not merge's job.
-  const partitioned = loaded.find((i) => i.kind === 'partitions');
-  if (partitioned !== undefined && options.config.writer.format === 'chunks') {
-    const existing = intoExisting ? await existingFormat(deps.fs, out) : undefined;
-    throw new OtelHtmlError('usage', {
-      message:
-        existing === undefined
-          ? `cannot merge the format-4 report ${partitioned.dir} into a chunks report`
-          : `cannot merge the format-4 report ${partitioned.dir} into the ${existing} report at ${out} without --format`,
-      hint: `merge with ${existing === undefined ? '--format local or --format site' : `--format ${existing}`}`,
-    });
-  }
   // Also before it: a replace wipes the old report at the session's first write, so every partition file and chunk an input lists must open.
   for (const input of loaded) {
     // Chunk inputs list no sizes; partition files do, and a truncated one would fail the copy after the wipe.

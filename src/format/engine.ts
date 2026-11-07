@@ -23,7 +23,7 @@ export function engineExtensionName(format: 'local' | 'site', extension: EngineE
 /**
  * The engine files a report of this format copies into its `assets/`, as file names: the WASM, the worker, then
  * one file per extension. A `site` report is served over http and takes the plain files; a `local` report opens
- * from `file://`, where only classic scripts load, and takes the base64 wrappers. A `chunks` report has no engine.
+ * from `file://`, where only classic scripts load, and takes the base64 wrappers.
  */
 export function engineAssetNames(format: 'local' | 'site'): string[] {
   const base = `duckdb.${ENGINE_VERSION}`;

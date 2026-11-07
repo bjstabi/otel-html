@@ -36,7 +36,7 @@ export async function assetsInside(fs: FileSystem, dir: string): Promise<boolean
 export async function pruneOwnAssets(
   fs: FileSystem,
   out: string,
-  opts: { format: ReportFormat; sharedBase: boolean; viewerFiles?: ReadonlySet<string> },
+  opts: { format: ReportFormat | undefined; sharedBase: boolean; viewerFiles?: ReadonlySet<string> },
 ): Promise<boolean> {
   if (!(await assetsInside(fs, out))) return false;
   const dir = at(out, 'assets');

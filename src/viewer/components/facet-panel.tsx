@@ -1,7 +1,7 @@
 import { type JSX, type ReactNode, useState } from 'react';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { FacetCounts } from '../../rollups/facets.js';
-import { DEFAULT_LOG_FACETS } from '../../rollups/log-rollups.js';
+import { DEFAULT_LOG_FACETS } from '../../semconv/default-facets.js';
 import { formatDuration } from '../../semconv/formatters.js';
 import { LOG_SEVERITY_KEYS, type LogSeverityKey } from '../../semconv/severity.js';
 import type { DurationBin } from '../data/results.js';
