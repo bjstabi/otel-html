@@ -162,6 +162,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+overrides:
+  '@duckdb/duckdb-wasm': 1.32.0
+
 importers:
 
   .:
@@ -184,6 +187,9 @@ importers:
       '@opentelemetry/resources':
         specifier: 2.12.0
         version: 2.12.0(@opentelemetry/api@1.10.0)
+      '@uwdata/mosaic-sql':
+        specifier: 0.35.0
+        version: 0.35.0
       apache-arrow:
         specifier: 21.2.0
         version: 21.2.0
@@ -287,6 +293,12 @@ importers:
       '@types/react-dom':
         specifier: 19.3.0
         version: 19.3.0(@types/react@19.3.0)
+      '@uwdata/flechette':
+        specifier: 2.7.1
+        version: 2.7.1
+      '@uwdata/mosaic-core':
+        specifier: 0.35.0
+        version: 0.35.0
       '@vitejs/plugin-react':
         specifier: 6.1.2
         version: 6.1.2(vite@8.3.5(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1))
@@ -1644,6 +1656,23 @@ packages:
     resolution: {integrity: sha512-gobLHQLmvQGJInFk31NvgMd1uYzRXsd8qgnOssyLD055R2QPnw1ubRbBQ4+T+5qC7IQVuYXdvNDE2G7tMDVHgw==}
     peerDependencies:
       typescript: '*'
+
+  '@uwdata/flechette@2.7.1':
+    resolution: {integrity: sha512-7rj4kkFmeePTuspAz5r/k0Esa18JplC5c5uLsaKQWmSBY2+SGdKRJRSqiRaA8HI19lfjh6+VSBXXyne0iVG68Q==}
+
+  '@uwdata/mosaic-core@0.35.0':
+    resolution: {integrity: sha512-lTcEio+6FwdPA/Z2nt6SBmvCkku9aNRxPSbgPIlMgHKfmQDyE0RYf0J4Xpd6wTNPN0cx9YIYHk378wKMpoTr8g==}
+    peerDependencies:
+      '@uwdata/mosaic-duckdb': ^0.35.0
+    peerDependenciesMeta:
+      '@uwdata/mosaic-duckdb':
+        optional: true
+
+  '@uwdata/mosaic-sql@0.35.0':
+    resolution: {integrity: sha512-KDE3dt7bZu4fH5AvNzHe6lpiKvi2BFmSry8jQSwS419sxqAToE//rfFDmCmuhlNi3kcBNYQnytR0YaH6NEHvaA==}
+
+  '@uwdata/wk-geojson@0.0.1':
+    resolution: {integrity: sha512-4RpnKbdrphwzP+BwgzuGRqA/s03oT1rzHAKdU43Ozn8J1BCTwS+2iAGQ7YQAnrCkCi213WtQ7VYaFjVtvZotPQ==}
 
   '@vitejs/plugin-react@6.1.2':
     resolution: {integrity: sha512-fhJNGUdscQa4HkI0xFxwonWyhnVReCPDbXI7FH7jmzpnVCrFQI7PRrhWecO263610vOrs9tr2Y4xcf8uAdFxbw==}
@@ -4089,6 +4118,20 @@ snapshots:
       typescript: 5.4.5
     transitivePeerDependencies:
       - supports-color
+
+  '@uwdata/flechette@2.7.1':
+    dependencies:
+      '@uwdata/wk-geojson': 0.0.1
+
+  '@uwdata/mosaic-core@0.35.0':
+    dependencies:
+      '@duckdb/duckdb-wasm': 1.32.0
+      '@uwdata/flechette': 2.7.1
+      '@uwdata/mosaic-sql': 0.35.0
+
+  '@uwdata/mosaic-sql@0.35.0': {}
+
+  '@uwdata/wk-geojson@0.0.1': {}
 
   '@vitejs/plugin-react@6.1.2(vite@8.3.5(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1))':
     dependencies:

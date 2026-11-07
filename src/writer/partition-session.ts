@@ -1,8 +1,8 @@
 import type { ResolvedConfig } from '../config/schema.js';
 import type { PartitionEntry, PartitionFile } from '../format/manifest.js';
 import { checkRow } from '../format/parquet/codec.js';
+import { TABLES, type Table } from '../format/parquet/columns.js';
 import { applyNormalization, logRow, pointRow, type Row, spanRow } from '../format/parquet/rows.js';
-import { TABLES, type Table } from '../format/parquet/schema.js';
 import { statisticsKeysFor } from '../format/parquet/stats.js';
 import {
   DEFAULT_ASSETS_BASE,

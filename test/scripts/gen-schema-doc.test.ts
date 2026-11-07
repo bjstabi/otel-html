@@ -6,7 +6,7 @@ import {
   SORT_COLUMNS,
   TABLE_COLUMNS,
   TABLES,
-} from '../../src/format/parquet/schema.js';
+} from '../../src/format/parquet/columns.js';
 
 const doc = renderSchemaDoc();
 

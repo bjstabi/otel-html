@@ -1,6 +1,7 @@
 import { DEFAULT_LOCAL_WARN_BYTES } from '../config/schema.js';
+import { ENGINE_VERSION } from '../format/engine.js';
 import type { ManifestV4 } from '../format/manifest.js';
-import type { Table } from '../format/parquet/schema.js';
+import type { Table } from '../format/parquet/columns.js';
 import {
   ASSETS_BASE_RE,
   DEFAULT_ASSETS_BASE,
@@ -11,7 +12,6 @@ import {
 import { OtelHtmlError } from '../model/errors.js';
 import { assetsInside, pruneOwnAssets } from './assets-cleanup.js';
 import { at, writeManifest } from './checkpoint.js';
-import { ENGINE_VERSION } from './engine-assets.js';
 import { renderIndexHtml } from './html.js';
 import { acquireLock } from './lock.js';
 import { readMergeInput } from './merge.js';

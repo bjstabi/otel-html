@@ -1,14 +1,14 @@
 import type { ResolvedConfig } from '../config/schema.js';
+import { ENGINE_VERSION } from '../format/engine.js';
 import type { ManifestV4, PartitionEntry } from '../format/manifest.js';
+import { TABLES, type Table } from '../format/parquet/columns.js';
 import type { PointNormalization } from '../format/parquet/rows.js';
-import { TABLES, type Table } from '../format/parquet/schema.js';
 import type { Signal, StateSlot } from '../format/paths.js';
 import type { SessionStateV2 } from '../format/state.js';
 import { PARTITION_FORMAT_VERSION } from '../format/version.js';
 import type { MetricPointRecord } from '../model/records.js';
 import type { Drain } from '../rollups/drain.js';
 import type { Normalized } from '../rollups/metric-streams.js';
-import { ENGINE_VERSION } from './engine-assets.js';
 import type { SpanHandle } from './ports.js';
 
 /** What a checkpoint writes, decided at prepare time under the serial queue. */

@@ -1,8 +1,8 @@
 import { type ConfigInput, ConfigSchema, type ResolvedConfig } from '../src/config/schema.js';
+import { engineAssetNames } from '../src/format/engine.js';
 import { parseUnixNanos } from '../src/model/ids.js';
 import type { OtlpRequest } from '../src/model/otlp-json.js';
 import { parseOtlpJson } from '../src/model/otlp-json.js';
-import { engineAssetNames } from '../src/writer/engine-assets.js';
 import type { Logger, ProcessInfo, SpanHandle, Tracer } from '../src/writer/ports.js';
 import type { WriterDeps } from '../src/writer/session.js';
 import { type ViewerAssets, withEngineFiles } from '../src/writer/viewer-assets.js';

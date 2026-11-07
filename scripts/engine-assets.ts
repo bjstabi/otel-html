@@ -8,7 +8,12 @@ import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { gzipSync } from 'node:zlib';
-import { ENGINE_VERSION, engineAssetNames } from '../src/writer/engine-assets.js';
+import {
+  ENGINE_VERSION,
+  ENGINE_WASM_KEY,
+  ENGINE_WORKER_KEY,
+  engineAssetNames,
+} from '../src/format/engine.js';
 
 const WASM = 'duckdb-eh.wasm';
 const WORKER = 'duckdb-browser-eh.worker.js';
@@ -37,8 +42,8 @@ export function buildEngineAssets(opts: { distDir?: string; outDir: string }): s
   copyFileSync(join(distDir, WASM), join(opts.outDir, plainWasm));
   copyFileSync(join(distDir, WORKER), join(opts.outDir, plainWorker));
   const wasm = readFileSync(join(distDir, WASM));
-  writeFileSync(join(opts.outDir, wrapWasm), push('engine/wasm.gz', gzipSync(wasm, { level: 9 })));
-  writeFileSync(join(opts.outDir, wrapWorker), push('engine/worker', readFileSync(join(distDir, WORKER))));
+  writeFileSync(join(opts.outDir, wrapWasm), push(ENGINE_WASM_KEY, gzipSync(wasm, { level: 9 })));
+  writeFileSync(join(opts.outDir, wrapWorker), push(ENGINE_WORKER_KEY, readFileSync(join(distDir, WORKER))));
   return [plainWasm, plainWorker, wrapWasm, wrapWorker];
 }
 

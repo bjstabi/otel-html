@@ -1,5 +1,5 @@
+import { TABLE_COLUMNS, type Table } from './columns.js';
 import type { Row } from './rows.js';
-import { TABLE_COLUMNS, type Table } from './schema.js';
 
 /**
  * Rows of one table as one array per column (`null` for a missing cell), in `TABLE_COLUMNS[table]` order. Holding

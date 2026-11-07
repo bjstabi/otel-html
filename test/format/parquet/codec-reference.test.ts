@@ -12,15 +12,15 @@ import { Compression, Table as WasmTable, WriterPropertiesBuilder, writeParquet 
 import { describe, expect, test } from 'vitest';
 import { batchFromRows } from '../../../src/format/parquet/batch.js';
 import { assertInt32Offset, encodeColumns } from '../../../src/format/parquet/codec.js';
-import type { Row } from '../../../src/format/parquet/rows.js';
 import {
-  arrowSchema,
   type ColumnDef,
   SORT_COLUMNS,
   TABLE_COLUMNS,
   TABLES,
   type Table,
-} from '../../../src/format/parquet/schema.js';
+} from '../../../src/format/parquet/columns.js';
+import type { Row } from '../../../src/format/parquet/rows.js';
+import { arrowSchema } from '../../../src/format/parquet/schema.js';
 import { ensureParquetWasm } from '../../../src/format/parquet/wasm.js';
 
 const OBS = 'observed_time_unix_nano';

@@ -1,8 +1,8 @@
 import '../../../src/writer/parquet-wasm-source.js';
 import { describe, expect, test } from 'vitest';
 import { decodeTable, encodeTable } from '../../../src/format/parquet/codec.js';
+import { TABLE_COLUMNS, type Table } from '../../../src/format/parquet/columns.js';
 import type { Row } from '../../../src/format/parquet/rows.js';
-import { TABLE_COLUMNS, type Table } from '../../../src/format/parquet/schema.js';
 import { parquetMetadata } from '../../../test-support/parquet-metadata.js';
 
 const SPAN_ID = 'span_id';

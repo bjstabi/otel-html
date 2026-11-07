@@ -10,8 +10,8 @@ import {
   pushRow,
 } from '../format/parquet/batch.js';
 import { checkRow, encodeColumns } from '../format/parquet/codec.js';
+import { TABLES, type Table } from '../format/parquet/columns.js';
 import type { Row } from '../format/parquet/rows.js';
-import { TABLES, type Table } from '../format/parquet/schema.js';
 import { fileStatistics } from '../format/parquet/stats.js';
 import { partitionDir, partitionFilePath, partitionKey, partitionWrapperPath } from '../format/paths.js';
 import { at } from './checkpoint.js';

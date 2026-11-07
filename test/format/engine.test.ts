@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
+import { ENGINE_VERSION, engineAssetNames } from '../../src/format/engine.js';
 import { ENGINE_ASSET_RE } from '../../src/format/paths.js';
-import { ENGINE_VERSION, engineAssetNames } from '../../src/writer/engine-assets.js';
 import { openSession } from '../../src/writer/session.js';
 import { type ViewerAsset, withEngineFiles } from '../../src/writer/viewer-assets.js';
 import { logRecord, logsRequest } from '../../test-support/otlp-builders.js';

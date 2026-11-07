@@ -2,8 +2,8 @@ import { describe, expect, test } from 'vitest';
 import type { ResolvedDashboard } from '../../../src/config/schema.js';
 import { attributesToJson } from '../../../src/format/columns.js';
 import { batchFromRows } from '../../../src/format/parquet/batch.js';
+import type { Table } from '../../../src/format/parquet/columns.js';
 import type { Row } from '../../../src/format/parquet/rows.js';
-import type { Table } from '../../../src/format/parquet/schema.js';
 import { fileStatistics, statisticsKeysFor } from '../../../src/format/parquet/stats.js';
 import type { AnyValue } from '../../../src/model/anyvalue.js';
 

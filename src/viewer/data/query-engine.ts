@@ -1,0 +1,19 @@
+import type { Table } from '@uwdata/flechette';
+import type { Query } from '@uwdata/mosaic-sql';
+
+/** The one seam between the data source and whatever runs SQL (D19). No Mosaic value is imported here. */
+export interface QueryEngine {
+  /** Runs one query; int64 columns decode as bigint. An aborted signal rejects with `DOMException('AbortError')`. */
+  query(q: Query, signal?: AbortSignal): Promise<Table>;
+  /** A statement without a result: the view creation at start, the D5 temp table. */
+  exec(sql: string): Promise<void>;
+  /** Registers a text file a later statement reads (D5: `read_csv`). */
+  registerText(name: string, text: string): Promise<void>;
+  close(): Promise<void>;
+}
+
+/** What the engine does besides SQL; `Engine` and `TestDb` both satisfy it. */
+export interface EngineFiles {
+  registerText(name: string, text: string): void | Promise<void>;
+  close(): void | Promise<void>;
+}

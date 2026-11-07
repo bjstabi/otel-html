@@ -918,7 +918,7 @@ The @perf unit tests alone, one file at a time (never cached: timing)
 
 - **Usage:** `typecheck`
 
-tsc on the node, viewer and e2e projects
+tsc on the node, viewer, viewer-data and e2e projects
 
 ## `verify`
 

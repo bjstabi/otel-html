@@ -1,7 +1,7 @@
 import type { ReportFormat } from '../config/schema.js';
+import { engineAssetNames } from '../format/engine.js';
 import { assetFileName, ENGINE_ASSET_RE } from '../format/paths.js';
 import { OtelHtmlError } from '../model/errors.js';
-import { engineAssetNames } from './engine-assets.js';
 import type { ViewerEntry } from './html.js';
 import type { FileSystem } from './ports.js';
 

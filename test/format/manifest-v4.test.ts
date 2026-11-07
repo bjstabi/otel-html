@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { isV4, type ManifestV4, parseAnyManifest, parseManifest } from '../../src/format/manifest.js';
-import { TABLES } from '../../src/format/parquet/schema.js';
+import { TABLES } from '../../src/format/parquet/columns.js';
 import { PARTITION_FILE_RE, partitionFilePath } from '../../src/format/paths.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 
