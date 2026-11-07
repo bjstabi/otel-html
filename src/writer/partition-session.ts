@@ -1,19 +1,10 @@
 import type { ResolvedConfig } from '../config/schema.js';
-import type { ManifestV4, PartitionEntry } from '../format/manifest.js';
+import type { PartitionEntry } from '../format/manifest.js';
 import { checkRow } from '../format/parquet/codec.js';
-import {
-  applyNormalization,
-  logRow,
-  type PointNormalization,
-  pointRow,
-  type Row,
-  spanRow,
-} from '../format/parquet/rows.js';
+import { applyNormalization, logRow, pointRow, type Row, spanRow } from '../format/parquet/rows.js';
 import { TABLES, type Table } from '../format/parquet/schema.js';
 import { statisticsKeysFor } from '../format/parquet/stats.js';
 import { LOCK_PATH, type Signal, STATE_DIR, type StateSlot } from '../format/paths.js';
-import type { SessionStateV2 } from '../format/state.js';
-import { PARTITION_FORMAT_VERSION } from '../format/version.js';
 import { OtelHtmlError } from '../model/errors.js';
 import { parseUnixNanos, type UnixNanos } from '../model/ids.js';
 import {
@@ -28,7 +19,7 @@ import { metricPointsOf } from '../model/otlp-json-metrics.js';
 import { type LogRecordRecord, logTime, type MetricPointRecord, type SpanRecord } from '../model/records.js';
 import type { LogTarget, SpanTarget } from '../ottl/contexts.js';
 import { Drain } from '../rollups/drain.js';
-import { type Normalized, StreamNormalizer } from '../rollups/metric-streams.js';
+import { StreamNormalizer } from '../rollups/metric-streams.js';
 import { severityKey } from '../semconv/severity.js';
 import {
   at,
@@ -43,9 +34,15 @@ import { renderIndexHtml } from './html.js';
 import { inheritDashboards } from './inherit-config.js';
 import { acquireLock, type LockHandle } from './lock.js';
 import { DEFAULT_TITLE, type Drops, type FolderState, iso } from './open-common.js';
+import {
+  buildManifest,
+  buildState,
+  type Prepared,
+  pointNormalization,
+  UNNORMALIZED,
+} from './partition-checkpoint.js';
 import { PartitionWriter } from './partition-writer.js';
 import { patternRows } from './pattern-rows.js';
-import type { SpanHandle } from './ports.js';
 import { prunePartitions } from './prune.js';
 import { seriesIdOf } from './series-id.js';
 import type {
@@ -59,9 +56,6 @@ import type {
 } from './session.js';
 import { traceRows } from './trace-summaries.js';
 import { writeViewerAssets } from './viewer-assets.js';
-
-/** The DuckDB-WASM version the report's engine files must match; Task 7.1 moves this to `engine-assets.ts`. */
-const ENGINE_VERSION = '1.32.0';
 
 interface Restored {
   lock: LockHandle;
@@ -160,21 +154,6 @@ export async function openPartitionSession(
     await lock.release();
     throw e;
   }
-}
-
-/** What a checkpoint writes, decided at prepare time under the serial queue. */
-interface Prepared {
-  complete: boolean;
-  span: SpanHandle;
-  /** Started at prepare, which takes the held rows; awaited by the write. */
-  cut: Promise<PartitionEntry | null>;
-  slot: StateSlot;
-  /** `null` when nothing but the manifest changed. */
-  state: { epoch: string | null; dedupe: string[]; metricStreams: unknown } | null;
-  updatedAt: string;
-  epoch: string;
-  totals: Record<Signal, number>;
-  range: { start: bigint; end: bigint } | null;
 }
 
 class PartitionSession implements WriterSession {
@@ -504,7 +483,7 @@ class PartitionSession implements WriterSession {
       staged.push({ point, seriesId, row, step });
     }
     for (const { point, seriesId, row, step } of staged) {
-      applyNormalization(row, normalization(point, step(seriesId), seriesId));
+      applyNormalization(row, pointNormalization(point, step(seriesId), seriesId));
       this.#writer.add('points', row);
       this.#totals.metrics++;
       this.#extend(ctx, Math.min(point.start ?? point.time, point.time), point.time);
@@ -834,9 +813,41 @@ class PartitionSession implements WriterSession {
       }
       if (!this.#shellWritten && !p.complete) await this.#writeShell();
       if (p.state !== null) {
-        await writeStateSlotV2(fs, this.#out, p.slot, this.#state(p.state, this.#checkpointSeq + 1));
+        await writeStateSlotV2(
+          fs,
+          this.#out,
+          p.slot,
+          buildState(
+            {
+              version: this.#deps.version,
+              nextPartition: this.#writer.nextPartition,
+              flushed: this.#flushed,
+              drain:
+                this.#frozen === null
+                  ? this.#live(this.#drain).toJSON()
+                  : (JSON.parse(this.#frozen.drain) as ReturnType<Drain['toJSON']>),
+              statisticsKeys: this.#statisticsKeys,
+            },
+            p.state,
+            this.#checkpointSeq + 1,
+          ),
+        );
       }
-      await writeManifest(fs, this.#out, this.#manifest(p));
+      await writeManifest(
+        fs,
+        this.#out,
+        buildManifest(
+          {
+            version: this.#deps.version,
+            title: this.#title,
+            createdAt: this.#createdAt,
+            partitions: [...this.#committed, ...this.#pending],
+            statisticsKeys: this.#statisticsKeys,
+            config: this.#config,
+          },
+          p,
+        ),
+      );
       if (p.state !== null) {
         this.#slot = p.slot;
         this.#checkpointSeq++;
@@ -870,87 +881,4 @@ class PartitionSession implements WriterSession {
       }
     }
   }
-
-  #state(
-    s: { epoch: string | null; dedupe: string[]; metricStreams: unknown },
-    checkpoint: number,
-  ): SessionStateV2 {
-    return {
-      formatVersion: 2,
-      otelHtmlVersion: this.#deps.version,
-      epochUnixNano: s.epoch,
-      nextPartition: this.#writer.nextPartition,
-      checkpoint,
-      flushPartitions: [...this.#flushed],
-      dedupe: s.dedupe,
-      metricStreams: s.metricStreams,
-      drain:
-        this.#frozen === null
-          ? this.#live(this.#drain).toJSON()
-          : (JSON.parse(this.#frozen.drain) as ReturnType<Drain['toJSON']>),
-      statisticsKeys: this.#statisticsKeys,
-    };
-  }
-
-  /**
-   * Earlier partitions (an append under another config) may lack values for a listed key: they get `null`, which
-   * means unknown and prunes nothing. Values for keys no longer listed stay. Only the manifest entry changes.
-   */
-  #withKeys(e: PartitionEntry): PartitionEntry {
-    const files: PartitionEntry['files'] = {};
-    for (const t of TABLES) {
-      const f = e.files[t];
-      if (f === undefined) continue;
-      const values = { ...f.values };
-      for (const k of this.#statisticsKeys[t]) if (!(k in values)) values[k] = null;
-      files[t] = { ...f, values };
-    }
-    return { ...e, files };
-  }
-
-  #manifest(p: Prepared): ManifestV4 {
-    return {
-      formatVersion: PARTITION_FORMAT_VERSION,
-      otelHtmlVersion: this.#deps.version,
-      title: this.#title,
-      epochUnixNano: p.epoch,
-      createdAt: this.#createdAt,
-      updatedAt: p.updatedAt,
-      complete: p.complete,
-      range: p.range === null ? null : { start: p.range.start.toString(), end: p.range.end.toString() },
-      totals: p.totals,
-      partitions: [...this.#committed, ...this.#pending].map((e) => this.#withKeys(e)),
-      statisticsKeys: this.#statisticsKeys,
-      engine: {
-        version: ENGINE_VERSION,
-        format: this.#config.writer.format === 'site' ? 'site' : 'local',
-        assetsBase: this.#config.writer.assetsBase,
-      },
-      config: {
-        viewer: { ...this.#config.viewer },
-        dashboards: this.#config.dashboards,
-        views: this.#config.views,
-      },
-    };
-  }
-}
-
-const UNNORMALIZED = { deltaValue: null, deltaCount: null, reset: false, outOfOrder: false } as const;
-
-/**
- * The normalization columns of a point from what the stream normalizer reported. Deltas exist for every counter (the
- * counter delta), every histogram (the count and sum deltas) and every delta-temporality sum, monotonic or not (its
- * own value); a reset restarts them at the point's own value, as the normalizer says. Gauges, summaries, and
- * cumulative or unspecified non-monotonic sums have none, and neither does a skipped point.
- */
-function normalization(point: MetricPointRecord, n: Normalized, seriesId: string): PointNormalization {
-  if (n.kind === 'skip') return { ...UNNORMALIZED, seriesId, outOfOrder: n.reason === 'out-of-order' };
-  const { agg } = n;
-  const base = { ...UNNORMALIZED, seriesId, reset: n.reset };
-  if (agg.k === 'counter') return { ...base, deltaValue: agg.delta };
-  if (agg.k === 'hist' || agg.k === 'exp') return { ...base, deltaValue: agg.sum, deltaCount: agg.count };
-  if (agg.k === 'number' && point.type === 'sum' && point.temporality === 'delta') {
-    return { ...base, deltaValue: agg.sum };
-  }
-  return base;
 }
