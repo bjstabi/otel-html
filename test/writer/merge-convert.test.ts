@@ -239,7 +239,7 @@ describe('overlapping shards of one cumulative series', () => {
 });
 
 describe('format mismatch with an existing output (R54)', () => {
-  test('merge as local into an existing site report is a version-mismatch with the append hint', async () => {
+  test('merge as local into an existing site report is a usage error with the append hint', async () => {
     const w = createTestWriter();
     await partitionReport(w, 'in', [spansRequest(1)]);
     await mergeWith({ inputs: ['in'], out: 'out', config }, w.deps);
@@ -247,7 +247,10 @@ describe('format mismatch with an existing output (R54)', () => {
       (x: unknown) => x,
     );
     expect(e).toBeInstanceOf(OtelHtmlError);
-    expect(e).toMatchObject({ hint: expect.stringContaining('append with --format site') });
+    expect(e).toMatchObject({
+      code: 'usage',
+      hint: expect.stringContaining('append with --format site'),
+    });
   });
 });
 

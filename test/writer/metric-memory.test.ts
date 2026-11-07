@@ -153,7 +153,7 @@ describe('metric series memory', () => {
   );
 
   // #14: the library API has no V8 flag to lean on, so its peak is higher than the CLI's (about 770 MB against
-  // 450 MB on an Apple M-series Mac; README.md Limits). The figure is reported, and the 512 MB target asserted
+  // 450 MB on an Apple M-series Mac, measured on the chunk writer). The figure is reported, and the 512 MB target asserted
   // only on the CLI above, until the API path is brought under it.
   test.skipIf(process.env[LOAD_ENV] !== '1')(
     `Report.addMetrics on the same workload reports its peak RSS (the 512 MB target is the CLI's)`,

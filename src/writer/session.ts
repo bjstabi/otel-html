@@ -93,11 +93,11 @@ export interface AddOptions {
   /**
    * More of the same input follows (a file read one resource entry at a time). Until `endInput`, no periodic
    * checkpoint runs and a report being replaced is not wiped, so a bad entry later in the input leaves the
-   * committed report as it was. In append and fresh-create mode, chunks written before a failing entry stay on disk
-   * outside the manifest: harmless, never read, and overwritten by the next append.
+   * committed report as it was. In append and fresh-create mode, partitions written before a failing entry stay on
+   * disk outside the manifest: never read, and pruned when the next session opens the report.
    *
-   * While a partial input goes into a report being replaced, no chunk, spill or checkpoint is written before
-   * `endInput`: every accepted chunk and metric bucket stays in memory, outside the chunk and metric buffer budgets.
+   * While a partial input goes into a report being replaced, no partition or checkpoint is written before
+   * `endInput`: every accepted row stays in memory, outside the flush budget.
    * `endInput` then wipes the replaced report, so only the first input is held; later inputs are written as they
    * arrive. The first input into a replaced report should therefore fit in memory; otherwise empty the folder first.
    */
@@ -107,13 +107,14 @@ export interface AddOptions {
 export interface ReportSummary {
   out: string;
   totals: Record<Signal, number>;
+  /** The number of partitions the report lists. */
   chunks: number;
   bytes: number;
 }
 
 export interface WriterSession {
   add(input: OtlpRequest, source: string, options?: AddOptions): Promise<AddResult>;
-  /** The input fed through `partial` adds is complete: write held chunks and checkpoint if one is due. */
+  /** The input fed through `partial` adds is complete: write held rows and checkpoint if one is due. */
   endInput(): Promise<void>;
   addRecords(batch: RecordBatch): Promise<AddResult>;
   /**

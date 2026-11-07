@@ -39,7 +39,7 @@ describe('log size', () => {
 
   // The real pipeline: 10 OTLP files of 100k logs converted by the built library in a child process, whose own
   // high-water resident set size (process.resourceUsage().maxRSS, kilobytes) is the figure. Input is read in pieces
-  // and parsed one resource entry at a time (OtlpJsonStream); measured about 300-320 MB on an Apple M-series Mac.
+  // and parsed one resource entry at a time (OtlpJsonStream); measured about 300-320 MB on an Apple M-series Mac with the chunk writer (format 4: about 562 MB, README Limits).
   // Run with OTEL_HTML_LOAD=1 after `mise run build`.
   test.skipIf(process.env[LOAD_ENV] !== '1')(
     'converting 1M logs from 10 files keeps peak RSS under 512 MB',
