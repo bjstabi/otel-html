@@ -51,13 +51,11 @@ export function QueryNote(props: { loading: boolean; residual: string | null }):
   );
 }
 
-/** Legacy (until 5.3-5.5): "Loading", or how far a chunk scan has got. */
-export function LoadingNote(props: { progress: { scanned: number; total: number } | null }): JSX.Element {
+/** The loading note of a query that has not answered yet. */
+export function LoadingNote(): JSX.Element {
   return (
     <p role="status" className="text-sm text-muted">
-      {props.progress === null
-        ? 'Loading'
-        : `Scanning ${props.progress.scanned} of ${props.progress.total} chunks`}
+      Loading
     </p>
   );
 }

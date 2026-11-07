@@ -20,8 +20,6 @@ import type {
 import type { TimeWindow } from './time-window.js';
 import type { TraceTree } from './trace-tree.js';
 
-export type { TimeWindow };
-
 /** A trace with report-wide resource and scope refs. */
 export interface TraceDetail {
   traceId: TraceId;

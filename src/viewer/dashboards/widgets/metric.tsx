@@ -163,7 +163,7 @@ const QueriesBody: Body = ({ widget, scope, height, dataSource, actions, variabl
   if (result.failure !== null)
     return <ErrorCard title="The queries could not run" message={result.failure} />;
   if (catalog.status === 'loading' || narrowing.status === 'loading' || result.loading) {
-    return <LoadingNote progress={null} />;
+    return <LoadingNote />;
   }
   if (missing.size === queries.length) {
     const verb = missingNames.length === 1 ? 'is' : 'are';
@@ -323,7 +323,7 @@ const RunBody: Body = ({ widget, scope, dashboard, height, dataSource, actions, 
   if (result.status === 'error') {
     return <ErrorCard title={`Query ${own.id} could not run`} message={result.message} />;
   }
-  if (result.status === 'loading') return <LoadingNote progress={null} />;
+  if (result.status === 'loading') return <LoadingNote />;
 
   const note = narrowing.status === 'ready' ? narrowingNote(narrowing) : null;
   return (
@@ -380,7 +380,7 @@ const GridBody: Body = ({ scope, height, dataSource, actions, variables }) => {
     return <ErrorCard title="The selected trace could not be read" message={narrowing.message} />;
   if (catalog.status === 'error')
     return <ErrorCard title="The metric catalog could not be loaded" message={catalog.message} />;
-  if (origin === null) return <LoadingNote progress={null} />;
+  if (origin === null) return <LoadingNote />;
   if (origin.resources.length === 0) {
     return <Empty title="No matching resources" message="No resource matches the chosen variables." />;
   }

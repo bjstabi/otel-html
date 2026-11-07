@@ -6,7 +6,6 @@ import { FacetCounts } from '../../src/rollups/facets.js';
 import { TimeBuckets } from '../../src/rollups/time-buckets.js';
 import { LOG_SEVERITY_KEYS } from '../../src/semconv/severity.js';
 import type { DataSource, ResourceValues } from '../../src/viewer/data/data-source.js';
-import type { LegacyDataSource } from '../../src/viewer/data/legacy-data-source.js';
 import type { LogQueryResult, SpanQueryResult } from '../../src/viewer/data/results.js';
 import { Shell } from '../../src/viewer/shell/shell.js';
 import { createHashHistory } from '../../src/viewer/state/hash-history.js';
@@ -110,26 +109,6 @@ export function dataSourceOf(
     close: () => Promise.resolve(),
   };
 }
-
-/**
- * A legacy source (the metrics tests' real one) as the dashboards' source: its metric methods stay, and the span and
- * log queries the Fusion dashboard asks of the new interface answer empty (D11, until 5.5).
- */
-export function asDashboardSource(ds: LegacyDataSource): DataSource {
-  const known = bridged.get(ds);
-  if (known !== undefined) return known;
-  const bridge = {
-    ...ds,
-    epoch: BigInt(ds.manifest.epochUnixNano),
-    querySpans: () => Promise.resolve(emptySpanResult()),
-    queryLogs: () => Promise.resolve(emptyLogResult()),
-  } as unknown as DataSource;
-  bridged.set(ds, bridge);
-  return bridge;
-}
-
-/** One bridge per source, so a re-render hands the widgets the same object. */
-const bridged = new WeakMap<LegacyDataSource, DataSource>();
 
 export function renderShell(hash: string, ds: DataSource): void {
   window.location.hash = hash;

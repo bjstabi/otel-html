@@ -74,7 +74,7 @@ const MARKER_LABEL: Readonly<Record<MetricGridOrigin['kind'], string | null>> = 
   dashboard: null,
 };
 const QUERY_IDS = 'abcdefghijklmnopqrstuvwxyz';
-export const OTHER_LEFT_OUT =
+const OTHER_LEFT_OUT =
   'partial: series beyond the cap are folded into "other", which spans resources and is left out here (see the Explorer)';
 const SERVICE_PATH = 'resource.attributes["service.name"]';
 

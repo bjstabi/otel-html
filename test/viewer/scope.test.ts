@@ -10,6 +10,7 @@ import type {
   ScopeRecord,
   ScopeRef,
 } from '../../src/model/records.js';
+import { compileCondition } from '../../src/ottl/compile.js';
 import {
   bindings,
   following,
@@ -20,7 +21,7 @@ import {
   variableCondition,
   WIDGET_SCOPE,
 } from '../../src/viewer/dashboards/scope.js';
-import { type LogQuery, queryLogEntries, toLogEntries } from '../../src/viewer/data/log-query.js';
+import { toLogEntries } from '../../src/viewer/data/log-query.js';
 import { EMPTY_DASHBOARD_STATE } from '../../src/viewer/state/dashboard-state.js';
 
 const TRACE = 'c'.repeat(32) as TraceId;
@@ -224,16 +225,6 @@ describe('variableCondition', () => {
     resource: r as ResourceRef,
     scope: 0 as ScopeRef,
   });
-  const base: LogQuery = {
-    condition: null,
-    text: '',
-    window: null,
-    mode: 'logs',
-    sort: { column: 'time', dir: 'asc' },
-    limit: 10,
-    scanAll: false,
-  };
-
   test('quoting survives a round trip through the evaluator', () => {
     const value = 'a"b\\c';
     const condition = variableCondition([{ key: 'k', value, kind: 'string' }], 'log');
@@ -243,7 +234,9 @@ describe('variableCondition', () => {
       0n as UnixNanos,
       'test',
     );
-    expect(queryLogEntries(entries, { ...base, condition }).total).toBe(1);
+    if (condition === null) throw new Error('no condition');
+    const compiled = compileCondition(condition, 'log_record');
+    expect(entries.filter((e) => compiled.test(e.target))).toHaveLength(1);
   });
 
   test('none gives null; a typed value gives a literal; datapoint uses the same path', () => {

@@ -146,7 +146,7 @@ export const TimelineWidget: WidgetRenderer = ({ scope, height, dataSource, acti
   if (failed?.status === 'error')
     return <ErrorCard title="Could not load the timeline" message={failed.message} />;
   if (lanes === null) {
-    return <LoadingNote progress={null} />;
+    return <LoadingNote />;
   }
   return (
     <FusionTimeline

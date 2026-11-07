@@ -115,12 +115,3 @@ export const DEFAULT_LOG_FACETS: readonly DefaultLogFacet[] = [
     value: (t) => (t.log.traceId === null ? 'no' : 'yes'),
   },
 ];
-
-/** Default facets whose values are resource attributes (span attributes of these names are not faceted). */
-export const SPAN_RESOURCE_FACET_KEYS: ReadonlySet<string> = new Set([
-  ATTR_SERVICE_NAME,
-  ATTR_HOST_NAME,
-  ATTR_DEPLOYMENT_ENVIRONMENT_NAME,
-]);
-/** Default facets whose values are resource attributes (log attributes of these names are not faceted). */
-export const LOG_RESOURCE_FACET_KEYS: ReadonlySet<string> = new Set([ATTR_SERVICE_NAME, ATTR_HOST_NAME]);

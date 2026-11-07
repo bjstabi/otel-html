@@ -98,7 +98,7 @@ function ListBody(props: {
   const { state } = handle;
   return (
     <div className="flex flex-col gap-1">
-      {state.status === 'loading' && <LoadingNote progress={null} />}
+      {state.status === 'loading' && <LoadingNote />}
       {state.status === 'error' && <ErrorCard title="The query could not run" message={state.message} />}
       {shown !== null &&
         (shown.total === 0 ? (

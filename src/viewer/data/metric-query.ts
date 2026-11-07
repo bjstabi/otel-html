@@ -27,10 +27,26 @@ import {
   SUMMARY_TOP_QUANTILE,
 } from './metric-tables.js';
 import { compileSelector, targetOf } from './metric-where.js';
-import { AbortTicker } from './query-common.js';
+import { throwIfAborted } from './query-common.js';
 import type { TimeWindow } from './span-query.js';
 
-export { DEFAULT_SHOW, kindOf, metricTypeLabel, NOTES, SHOW_BY_KIND } from './metric-tables.js';
+const ABORT_CHECK_EVERY = 4096;
+
+/** Counts visited entries and checks the abort signal every `ABORT_CHECK_EVERY` of them. */
+class AbortTicker {
+  readonly #signal: AbortSignal | undefined;
+  #visited = 0;
+
+  constructor(signal: AbortSignal | undefined) {
+    this.#signal = signal;
+  }
+
+  tick(): void {
+    if (++this.#visited % ABORT_CHECK_EVERY === 0) throwIfAborted(this.#signal);
+  }
+}
+
+export { DEFAULT_SHOW, kindOf, metricTypeLabel, SHOW_BY_KIND } from './metric-tables.js';
 export type { MetricFn, MetricQuery };
 
 // ---------------------------------------------------------------------------------------------

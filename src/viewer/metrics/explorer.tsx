@@ -294,7 +294,7 @@ function ExplorerBody(props: { dataSource: DataSource; range: TimeWindow }): JSX
           onExemplars={(exemplars) => update((s) => ({ ...s, exemplars }))}
           onSplit={(v) => update((s) => ({ ...s, split: v }))}
         />
-        {(run.loading || catalogState.status === 'loading') && <LoadingNote progress={null} />}
+        {(run.loading || catalogState.status === 'loading') && <LoadingNote />}
         {actionError !== null && <ErrorCard title={actionError.title} message={actionError.message} />}
         {catalogState.status === 'error' && (
           <ErrorCard title="The metric catalog could not be loaded" message={catalogState.message} />

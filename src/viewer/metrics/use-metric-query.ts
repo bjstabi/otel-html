@@ -22,7 +22,7 @@ const MIN_POINTS = 60;
 const MAX_POINTS = 2000;
 
 /** About one bucket per pixel of card width. */
-export function maxPointsFor(widthPx: number | null): number {
+function maxPointsFor(widthPx: number | null): number {
   if (widthPx === null || !Number.isFinite(widthPx) || widthPx <= 0) return DEFAULT_MAX_POINTS;
   return Math.min(MAX_POINTS, Math.max(MIN_POINTS, Math.round(widthPx)));
 }
