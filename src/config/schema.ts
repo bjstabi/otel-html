@@ -200,7 +200,7 @@ export const ConfigSchema: z.ZodType<ResolvedConfig, ConfigInput> = z
         code: 'custom',
         path: ['writer', 'compactOnMerge'],
         message:
-          'applies to writer.format local or site (--format local|site), not chunks; set the format or drop --compact',
+          'applies to writer.format local or site (--format local|site), not chunks; set the format, or drop --compact (writer.compactOnMerge)',
       });
     }
     const id = c.viewer.defaultDashboard;

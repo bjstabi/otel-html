@@ -46,6 +46,9 @@ describe('resolveConfig', () => {
     expect(bad({ format: 'site', assetsBase: '/x' }).message).toContain('assets/ or a relative path');
     expect(bad({ compactOnMerge: true }).message).toContain('writer.compactOnMerge');
     expect(bad({ format: 'chunks', compactOnMerge: true }).message).toContain('--format local|site');
+    expect(bad({ format: 'chunks', compactOnMerge: true }).message).toContain(
+      '--compact (writer.compactOnMerge)',
+    );
     expect(
       resolveConfig({ file: { writer: { format: 'site', compactOnMerge: true } }, env: {} }).config.writer
         .compactOnMerge,
