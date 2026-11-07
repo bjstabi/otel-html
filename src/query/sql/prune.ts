@@ -11,7 +11,7 @@ export interface AbsWindow {
 export interface Pruned {
   /** Kept files under the names `resolve` gives them (the view's `filename` values), in manifest order. */
   files: readonly string[];
-  /** All files kept: no `filename` predicate is needed. */
+  /** All files kept: no `filename` predicate is needed. Also true when the table has no file; treat `files.length === 0` as "send nothing". */
   all: boolean;
   total: number;
 }
@@ -23,7 +23,9 @@ export interface RelWindow {
 }
 
 export function absWindow(w: RelWindow | null, epoch: bigint): AbsWindow | null {
-  return w === null ? null : { start: BigInt(w.start) + epoch, end: BigInt(w.end) + epoch };
+  return w === null
+    ? null
+    : { start: BigInt(Math.floor(w.start)) + epoch, end: BigInt(Math.ceil(w.end)) + epoch };
 }
 
 const identity = (path: string): string => path;

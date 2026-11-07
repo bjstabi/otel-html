@@ -4,7 +4,8 @@ import type { Table } from '../../../src/format/parquet/columns.js';
 import { absWindow, prunePartitions } from '../../../src/query/sql/prune.js';
 import { emptyManifest } from '../../../test-support/format4-fixture.js';
 
-const file = (i: number): string => `partitions/${String(i).padStart(6, '0')}/spans.parquet`;
+const file = (i: number, table = 'spans'): string =>
+  `partitions/${String(i).padStart(6, '0')}/${table}.parquet`;
 
 interface Stat {
   timeMin?: string | null;
@@ -71,6 +72,33 @@ describe('prunePartitions', () => {
     );
     expect(prunePartitions(logs, 'logs', new Map(), w).files).toEqual([]);
   });
+  test('a file overlapping the window, or touching its start, is kept (logs)', () => {
+    const logs = manifestWith(
+      [
+        { timeMin: '250', timeMax: '350' },
+        { timeMin: '100', timeMax: '300' },
+        { timeMin: '100', timeMax: '299' },
+      ],
+      { table: 'logs' },
+    );
+    expect(prunePartitions(logs, 'logs', new Map(), { start: 300n, end: 400n }).files).toEqual([
+      file(0, 'logs'),
+      file(1, 'logs'),
+    ]);
+  });
+  test('points prune on both bounds', () => {
+    const points = manifestWith(
+      [
+        { timeMin: '100', timeMax: '200' },
+        { timeMin: '250', timeMax: '350' },
+        { timeMin: '500', timeMax: '600' },
+      ],
+      { table: 'points' },
+    );
+    expect(prunePartitions(points, 'points', new Map(), { start: 300n, end: 400n }).files).toEqual([
+      file(1, 'points'),
+    ]);
+  });
   test('times compare as bigint beyond 2^53; null times and missing keys keep the file', () => {
     const m = manifestWith([
       { timeMin: '9007199254740993', timeMax: '9007199254740993' },
@@ -97,5 +125,9 @@ describe('absWindow', () => {
   test('adds the epoch; null stays null', () => {
     expect(absWindow(null, 5n)).toBeNull();
     expect(absWindow({ start: 10, end: 20 }, 5n)).toEqual({ start: 15n, end: 25n });
+  });
+  test('fractional bounds widen to whole nanoseconds', () => {
+    expect(absWindow({ start: 10.5, end: 20.2 }, 5n)).toEqual({ start: 15n, end: 26n });
+    expect(absWindow({ start: -0.5, end: 1e3 + 0.5 }, 0n)).toEqual({ start: -1n, end: 1001n });
   });
 });

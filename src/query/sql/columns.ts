@@ -32,7 +32,7 @@ const SHARED: readonly (readonly [string, PathColumn])[] = [
 
 /**
  * Canonical OTTL path (context prefix stripped, as `CONTEXTS[c].paths` keys it) to view column. Ids are VARCHAR hex
- * columns, so `trace_id.string` and friends are plain strings;
+ * columns, so `trace_id.string` and friends are plain strings.
  */
 export const PATH_COLUMNS: Readonly<Record<SqlContext, ReadonlyMap<string, PathColumn>>> = {
   span: new Map<string, PathColumn>([
@@ -82,22 +82,36 @@ export function jsonPointer(keys: readonly (string | number)[]): string {
 }
 
 /**
+ * Binds `value` once to the lambda parameter `name` and builds `body` over it, so an operand is written a single time
+ * however often the body reads it (SQL size stays linear in the number of keys).
+ */
+export function bindOnce(value: ExprNode, name: string, body: (ref: ExprNode) => ExprNode): ExprNode {
+  return sql`list_extract(list_transform([${value}], (${verbatim(name)}) -> ${body(verbatim(name))}), 1)`;
+}
+
+/**
  * One step into a JSON value. An object that holds a `$`-prefixed or `__proto__` key is stored as the pairs form
  * `{"$m": [[key, value], ...]}` (format 4), so a string key is looked up in the object and, failing that, in the pairs.
- * A missing key is SQL NULL, a JSON null stays JSON null. A duplicate key never reaches the pairs: the normalizer keeps
- * the last occurrence (a `Map`), as the browser evaluator sees it, so the first matching pair is the only one.
+ * A numeric key reads arrays only (OTTL gives nil for a numeric key on a map). A missing key is SQL NULL, a JSON null
+ * stays JSON null. A duplicate key never reaches the pairs: the normalizer keeps the last occurrence (a `Map`), as the
+ * browser evaluator sees it, so the first matching pair is the only one.
  */
-function jsonStep(base: ExprNode, key: string | number): ExprNode {
-  const plain = sql`json_extract(${base}, ${literal(jsonPointer([key]))})`;
-  if (typeof key !== 'string') return plain;
-  const pairs = sql`list_extract(list_transform(list_filter(from_json(json_extract(${base}, '/$m'), '["JSON"]'), (x) -> json_extract_string(x, '/0') = ${literal(key)}), (x) -> json_extract(x, '/1')), 1)`;
-  return sql`coalesce(${plain}, ${pairs})`;
+function jsonStep(base: ExprNode, key: string | number, depth: number): ExprNode {
+  return bindOnce(base, `b${depth}`, (b) => {
+    const ptr = literal(jsonPointer([key]));
+    if (typeof key !== 'string')
+      return sql`CASE WHEN json_type(${b}) = 'ARRAY' THEN json_extract(${b}, ${ptr}) END`;
+    const pairs = sql`list_extract(list_transform(list_filter(from_json(json_extract(${b}, '/$m'), '["JSON"]'), (x) -> json_extract_string(x, '/0') = ${literal(key)}), (x) -> json_extract(x, '/1')), 1)`;
+    return sql`coalesce(json_extract(${b}, ${ptr}), ${pairs})`;
+  });
 }
 
 /** The JSON value at `keys` (JSON typed, reading the `$m` pairs form at every level); no keys is the whole document. */
 export function jsonAt(col: string, keys: readonly (string | number)[]): ExprNode {
   let node: ExprNode = sql`CAST(${column(col)} AS JSON)`;
-  for (const k of keys) node = jsonStep(node, k);
+  keys.forEach((k, i) => {
+    node = jsonStep(node, k, i);
+  });
   return node;
 }
 
@@ -108,12 +122,16 @@ export function jsonStringAt(col: string, keys: readonly (string | number)[]): E
 
 /** A JSON value as DOUBLE: plain numbers directly, `{"$i"}` / `{"$d"}` through TRY_CAST of the tag text, else NULL. */
 export function jsonNumber(json: ExprNode): ExprNode {
-  return sql`CASE json_type(${json})
-    WHEN 'BIGINT' THEN TRY_CAST(${json} AS DOUBLE)
-    WHEN 'UBIGINT' THEN TRY_CAST(${json} AS DOUBLE)
-    WHEN 'DOUBLE' THEN TRY_CAST(${json} AS DOUBLE)
-    WHEN 'OBJECT' THEN TRY_CAST(COALESCE(json_extract_string(${json}, '/$i'), json_extract_string(${json}, '/$d')) AS DOUBLE)
-    ELSE NULL END`;
+  return bindOnce(
+    json,
+    'n',
+    (j) => sql`CASE json_type(${j})
+    WHEN 'BIGINT' THEN TRY_CAST(${j} AS DOUBLE)
+    WHEN 'UBIGINT' THEN TRY_CAST(${j} AS DOUBLE)
+    WHEN 'DOUBLE' THEN TRY_CAST(${j} AS DOUBLE)
+    WHEN 'OBJECT' THEN TRY_CAST(COALESCE(json_extract_string(${j}, '/$i'), json_extract_string(${j}, '/$d')) AS DOUBLE)
+    ELSE NULL END`,
+  );
 }
 
 /**
@@ -121,7 +139,10 @@ export function jsonNumber(json: ExprNode): ExprNode {
  * A SQL NULL input (a missing key) stays NULL; a JSON null is 'nil'.
  */
 export function jsonKind(json: ExprNode): ExprNode {
-  return sql`CASE json_type(${json})
+  return bindOnce(
+    json,
+    'k',
+    (j) => sql`CASE json_type(${j})
     WHEN 'VARCHAR' THEN 'string'
     WHEN 'BOOLEAN' THEN 'bool'
     WHEN 'BIGINT' THEN 'int'
@@ -130,11 +151,12 @@ export function jsonKind(json: ExprNode): ExprNode {
     WHEN 'ARRAY' THEN 'list'
     WHEN 'NULL' THEN 'nil'
     WHEN 'OBJECT' THEN CASE
-      WHEN json_exists(${json}, '/$i') THEN 'int'
-      WHEN json_exists(${json}, '/$d') THEN 'double'
-      WHEN json_exists(${json}, '/$b') THEN 'bytes'
+      WHEN json_exists(${j}, '/$i') THEN 'int'
+      WHEN json_exists(${j}, '/$d') THEN 'double'
+      WHEN json_exists(${j}, '/$b') THEN 'bytes'
       ELSE 'map' END
-    END`;
+    END`,
+  );
 }
 
 /** `<col> - <epoch>::BIGINT`. */

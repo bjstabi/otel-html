@@ -24,10 +24,10 @@ import { compileCondition } from '../../ottl/compile.js';
 import { CONTEXTS, ENUMS } from '../../ottl/contexts.js';
 import { parseCondition, printCondition } from '../../ottl/parse.js';
 import {
+  bindOnce,
   jsonAt,
   jsonKind,
   jsonNumber,
-  jsonStringAt,
   PATH_COLUMNS,
   type PathColumn,
   type SqlContext,
@@ -135,12 +135,15 @@ const isTime = (o: Operand): boolean => o.canon !== DIFF && o.canon.endsWith('_t
  * The JSON value at an operand's keys. Refused (so the term stays in the browser): keys whose JSON Pointer reading
  * differs from OTTL's (digit-only and `-` segments index arrays in a pointer; a first attribute key must be a
  * string) and keys that the writer stores as a `{"$m":[[k,v],...]}` map (`$`-prefixed or `__proto__`).
- * A map elsewhere in a row that has such a key is stored as `$m` too; `jsonAt` reads both forms. A numeric key into an
- * object (OTTL nil) reads the member named like the number.
+ * A map elsewhere in a row that has such a key is stored as `$m` too; `jsonAt` reads both forms. A numeric key reads
+ * arrays only (a map gives OTTL nil). More than MAX_JSON_KEYS keys stay in the browser.
  */
+const MAX_JSON_KEYS = 32;
+
 function jsonOperand(o: Operand): ExprNode {
   if (o.canon === 'body.string')
     return untranslatable('body.string: the JSON text differs from its display string');
+  if (o.keys.length > MAX_JSON_KEYS) return untranslatable('path deeper than 32 keys');
   const first = o.keys[0];
   if (first !== undefined && typeof first !== 'string' && o.canon !== 'body')
     return untranslatable('a numeric first attribute key');
@@ -204,24 +207,33 @@ function cmpJson(op: CmpOp, o: Operand, c: Const): ExprNode {
   if (typeof c === 'string') {
     // json_extract_string also renders numbers and booleans as text; OTTL compares strings to strings only.
     return same(
-      and(eq(jsonType(at), literal('VARCHAR')), compare(pos, jsonStringAt(o.pc.column, o.keys), literal(c))),
+      bindOnce(at, 'v', (v) =>
+        and(
+          eq(jsonType(v), literal('VARCHAR')),
+          compare(pos, sql`json_extract_string(${v}, '$')`, literal(c)),
+        ),
+      ),
     );
   }
   if (typeof c === 'bigint' || typeof c === 'number') {
     const n = Number(c);
     if (!Number.isFinite(n) || Math.abs(n) >= SAFE) return untranslatable('number beyond 2^53');
-    const num = jsonNumber(at);
     // DuckDB orders NaN above everything and equal to itself; OTTL leaves it unordered.
-    return same(and(not(sql`isnan(${num})`), compare(pos, num, literal(n))));
+    return same(
+      bindOnce(jsonNumber(at), 'd', (d) => and(not(sql`isnan(${d})`), compare(pos, d, literal(n)))),
+    );
   }
   if (typeof c === 'boolean') {
     if (pos !== '==') return op === '!=' ? TRUE : FALSE;
     return same(eq(at, verbatim(`'${c}'::JSON`)));
   }
   // nil: a missing key and a JSON null both read as nil.
-  if (pos !== '==') return op === '!=' ? same(or(isNull(at), eq(jsonType(at), literal('NULL')))) : FALSE;
-  return same(or(isNull(at), eq(jsonType(at), literal('NULL'))));
+  if (pos !== '==') return op === '!=' ? same(isNil(at)) : FALSE;
+  return same(isNil(at));
 }
+
+const isNil = (at: ExprNode): ExprNode =>
+  bindOnce(at, 'v', (v) => or(isNull(v), eq(jsonType(v), literal('NULL'))));
 
 function translateCmp(e: Extract<Expr, { type: 'cmp' }>, context: SqlContext): ExprNode {
   let op = e.op;
@@ -247,6 +259,7 @@ function translateCmp(e: Extract<Expr, { type: 'cmp' }>, context: SqlContext): E
  */
 function re2Compatible(pattern: string): boolean {
   const body = pattern.replace(/^\(\?[is]+\)/, '');
+  if (/\[[^\]]*\\b/.test(body)) return false; // `[\b]` is a backspace in JS, an error in RE2
   if (/\\[^dDwWbBnrtfv.\\^$|?*+()[\]{}/-]/.test(body)) return false;
   if (/\(\?(?!:)/.test(body)) return false;
   for (const m of body.matchAll(/\{(\d+)(?:,(\d*))?\}/g)) {
@@ -274,11 +287,12 @@ function translateCall(v: Extract<Value, { type: 'call' }>, context: SqlContext)
       return regexp_matches(coalesce(column(o.pc.column), literal('')), literal(re));
     }
     if (o.pc.kind === 'json') {
-      const at = jsonOperand(o);
       return coalesce(
-        and(
-          eq(jsonType(at), literal('VARCHAR')),
-          regexp_matches(jsonStringAt(o.pc.column, o.keys), literal(re)),
+        bindOnce(jsonOperand(o), 'v', (v) =>
+          and(
+            eq(jsonType(v), literal('VARCHAR')),
+            regexp_matches(sql`json_extract_string(${v}, '$')`, literal(re)),
+          ),
         ),
         FALSE,
       );
@@ -345,12 +359,18 @@ interface Hint {
   readonly values: ReadonlySet<string>;
 }
 
-function hintText(c: Const | undefined, numeric: boolean): string | undefined {
-  if (typeof c === 'string') return numeric ? undefined : c;
-  if (typeof c === 'bigint') return c > -BigInt(SAFE) && c < BigInt(SAFE) ? c.toString() : undefined;
-  if (typeof c === 'number')
-    return Number.isFinite(c) && Math.abs(c) < SAFE && !Object.is(c, -0) ? String(c) : undefined;
-  if (typeof c === 'boolean') return numeric ? undefined : String(c);
+/** The statistic texts a literal can match; zero is "0" and "-0" (a double -0 is stored as "-0", and 0 == -0.0). */
+function hintText(c: Const | undefined, numeric: boolean): string[] | undefined {
+  if (typeof c === 'string') return numeric ? undefined : [c];
+  if (typeof c === 'bigint') {
+    if (c === 0n) return ['0', '-0'];
+    return c > -BigInt(SAFE) && c < BigInt(SAFE) ? [c.toString()] : undefined;
+  }
+  if (typeof c === 'number') {
+    if (!Number.isFinite(c) || Math.abs(c) >= SAFE) return undefined;
+    return c === 0 ? ['0', '-0'] : [String(c)];
+  }
+  if (typeof c === 'boolean') return numeric ? undefined : [String(c)];
   return undefined;
 }
 
@@ -376,7 +396,7 @@ function eqHint(e: Expr, context: SqlContext): Hint | undefined {
   // so only a non-empty string literal is a safe hint. Other resource keys store scalar texts (R16) as hintText gives.
   if (key === 'service_name' && (typeof c !== 'string' || c === '')) return undefined;
   const text = hintText(c, numeric);
-  return key === undefined || text === undefined ? undefined : { key, values: new Set([text]) };
+  return key === undefined || text === undefined ? undefined : { key, values: new Set(text) };
 }
 
 function termHint(term: Expr, context: SqlContext): Hint | undefined {
@@ -407,8 +427,8 @@ function termHint(term: Expr, context: SqlContext): Hint | undefined {
  * Translate an OTTL condition. Throws the same `invalid-ottl` error `compileCondition` does for a condition that does
  * not compile; a term SQL cannot express exactly goes to `residual`.
  */
-// Columns not marked nullAsEmpty in columns.ts are assumed always written (non-NULL) by the writer.
 export function translateCondition(src: string, context: SqlContext): Translation {
+  // Columns not marked nullAsEmpty in columns.ts are assumed always written (non-NULL) by the writer.
   compileCondition(src, context);
   const terms = topTerms(parseCondition(src));
   const predicates: ExprNode[] = [];

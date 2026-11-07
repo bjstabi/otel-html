@@ -3,17 +3,28 @@ import type { SqlContext } from '../../../src/query/sql/columns.js';
 import { textPredicate, toSql, translateCondition } from '../../../src/query/sql/ottl.js';
 import { openTestDb } from '../../../test-support/duckdb-node.js';
 
-const NUM = (at: string) => `CASE json_type(${at})
-    WHEN 'BIGINT' THEN TRY_CAST(${at} AS DOUBLE)
-    WHEN 'UBIGINT' THEN TRY_CAST(${at} AS DOUBLE)
-    WHEN 'DOUBLE' THEN TRY_CAST(${at} AS DOUBLE)
-    WHEN 'OBJECT' THEN TRY_CAST(COALESCE(json_extract_string(${at}, '/$i'), json_extract_string(${at}, '/$d')) AS DOUBLE)
-    ELSE NULL END`;
-/** One key read from a JSON column: the object member, else the `{"$m": [[k, v], ...]}` pair. */
+const bind = (value: string, name: string, body: string) =>
+  `list_extract(list_transform([${value}], (${name}) -> ${body}), 1)`;
+const NUM = (at: string) =>
+  bind(
+    at,
+    'n',
+    `CASE json_type(n)
+    WHEN 'BIGINT' THEN TRY_CAST(n AS DOUBLE)
+    WHEN 'UBIGINT' THEN TRY_CAST(n AS DOUBLE)
+    WHEN 'DOUBLE' THEN TRY_CAST(n AS DOUBLE)
+    WHEN 'OBJECT' THEN TRY_CAST(COALESCE(json_extract_string(n, '/$i'), json_extract_string(n, '/$d')) AS DOUBLE)
+    ELSE NULL END`,
+  );
+/** One key read from a JSON column: the object member, else the `{"$m": [[k, v], ...]}` pair; the base bound once. */
 const STEP = (col: string, key: string) =>
-  `coalesce(json_extract(CAST("${col}" AS JSON), '/${key}'), list_extract(list_transform(list_filter(from_json(json_extract(CAST("${col}" AS JSON), '/$m'), '["JSON"]'), (x) -> json_extract_string(x, '/0') = '${key}'), (x) -> json_extract(x, '/1')), 1))`;
+  bind(
+    `CAST("${col}" AS JSON)`,
+    'b0',
+    `coalesce(json_extract(b0, '/${key}'), list_extract(list_transform(list_filter(from_json(json_extract(b0, '/$m'), '["JSON"]'), (x) -> json_extract_string(x, '/0') = '${key}'), (x) -> json_extract(x, '/1')), 1))`,
+  );
 const AT = STEP('attributes', 'http.status_code');
-const NUM_GE_500 = `coalesce(((NOT isnan(${NUM(AT)})) AND (${NUM(AT)} >= 500)), FALSE)`;
+const NUM_GE_500 = `coalesce(${bind(NUM(AT), 'd', '((NOT isnan(d)) AND (d >= 500))')}, FALSE)`;
 
 const cases: [string, SqlContext, string, string | null][] = [
   ['name == "GET /"', 'span', `("name" = 'GET /')`, null],
@@ -22,7 +33,7 @@ const cases: [string, SqlContext, string, string | null][] = [
   [
     'resource.attributes["service.name"] == "web" and IsMatch(name, "^GET")',
     'span',
-    `(coalesce(((json_type(${STEP('resource_attributes', 'service.name')}) = 'VARCHAR') AND (json_extract_string(${STEP('resource_attributes', 'service.name')}, '$') = 'web')), FALSE) AND regexp_matches(coalesce("name", ''), '^GET'))`,
+    `(coalesce(${bind(STEP('resource_attributes', 'service.name'), 'v', `((json_type(v) = 'VARCHAR') AND (json_extract_string(v, '$') = 'web'))`)}, FALSE) AND regexp_matches(coalesce("name", ''), '^GET'))`,
     null,
   ],
   [
@@ -169,6 +180,8 @@ describe('residuals', () => {
     ],
     ['span', 'name == attributes["x"]', 'name == attributes["x"]'],
     ['span', 'IsMatch(name, "a{2000}")', 'IsMatch(name, "a{2000}")'],
+    ['span', 'IsMatch(name, "[\\\\b]")', 'IsMatch(name, "[\\\\b]")'],
+    ['span', `attributes${'["k"]'.repeat(33)} == 1`, `attributes${'["k"]'.repeat(33)} == 1`],
     ['log_record', 'body.string == "x"', 'body.string == "x"'],
     ['log_record', 'IsMatch(body.string, "x")', 'IsMatch(body.string, "x")'],
     ['log_record', 'IsString(body.string)', 'IsString(body.string)'],
@@ -226,4 +239,22 @@ test('end before start is the signed difference, not the clamped duration_ns', a
   } finally {
     db.close();
   }
+});
+
+describe('size and hints', () => {
+  const deep = (n: number) => `attributes${'["k"]'.repeat(n)} == "x"`;
+  test('the SQL of a deep path stays linear in its depth and translates up to 32 keys', () => {
+    const len = (n: number) => toSql(translateCondition(deep(n), 'span').predicate as never).length;
+    expect(len(10)).toBeLessThan(20_000);
+    expect(len(32)).toBeLessThan(40_000);
+    expect(translateCondition(deep(32), 'span').residual).toBeNull();
+    expect(translateCondition(deep(33), 'span').residual).not.toBeNull();
+  });
+  test('a zero literal hints both zeros', () => {
+    const v = (src: string) => [...(translateCondition(src, 'span').hints.get('resource:z') ?? [])].sort();
+    expect(v('resource.attributes["z"] == 0')).toEqual(['-0', '0']);
+    expect(v('resource.attributes["z"] == -0.0')).toEqual(['-0', '0']);
+    expect(v('resource.attributes["z"] == 0.0')).toEqual(['-0', '0']);
+    expect(v('resource.attributes["z"] == 7')).toEqual(['7']);
+  });
 });

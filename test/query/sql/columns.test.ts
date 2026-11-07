@@ -120,3 +120,11 @@ describe('epoch-relative times', () => {
     }
   });
 });
+
+describe('SQL size', () => {
+  const keys = (n: number) => Array.from({ length: n }, (_, i) => `k${i}`);
+  test.each([3, 10, 16])('jsonAt and jsonNumber over %i keys stay linear', (n) => {
+    expect(toSql(jsonAt('attributes', keys(n))).length).toBeLessThan(20_000);
+    expect(toSql(jsonNumber(jsonAt('attributes', keys(n)))).length).toBeLessThan(20_000);
+  });
+});

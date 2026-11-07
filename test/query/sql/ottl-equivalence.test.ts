@@ -62,6 +62,8 @@ function attrs(i: number): JsonObject[] {
   else if (i % 6 === 2) out.push(str('m', 'plain'));
   if (i % 4 === 0)
     out.push(attr('arr', { arrayValue: { values: [{ stringValue: 'a' }, { intValue: '2' }] } }));
+  if (i % 3 !== 1) out.push(str('a~b', i % 2 === 0 ? 'x' : 'y'));
+  if (i % 5 === 2) out.push(attr('m0', { kvlistValue: { values: [str('0', 'v')] } }));
   if (i % 7 === 0) out.push(attr('by', { bytesValue: 'AQID' }));
   if (i % 5 === 1) out.push(str('e', ''));
   if (i % 8 === 0) {
@@ -169,6 +171,9 @@ const spanConditions = [
   'parent_span_id.string == ""',
   'start_time_unix_nano < 6',
   'attributes["a/b"] == "x"',
+  'attributes["a~b"] == "x"',
+  'attributes["m0"][0] == "v"',
+  'attributes["arr"][0] == "a"',
   'attributes["q\\"x"] == "quoted"',
   'attributes["$weird"] == 4',
   'attributes["n"] == 9007199254740993',
@@ -227,6 +232,7 @@ const logConditions = [
   'attributes["m"]["k"] == "v"',
   'attributes["missing"] == nil',
   'attributes["a/b"] == "x" and severity_number > 5',
+  'attributes["a~b"] == "x"',
   'resource.attributes["service.name"] == "web"',
   'severity_text == "" or attributes["b"] == true',
 ];
@@ -251,6 +257,7 @@ const RESIDUAL = new Set([
 ]);
 /** Conditions whose result is legitimately empty or all rows on this fixture (every other one must select some rows, not all). */
 const TRIVIAL = new Set([
+  'span:attributes["m0"][0] == "v"',
   'span:attributes["n"] == nil',
   'span:attributes["n"] != nil',
   'span:attributes["missing"] == nil',
