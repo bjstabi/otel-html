@@ -25,7 +25,7 @@ const cases: [string, SqlContext, string, string | null][] = [
   [
     'span.end_time_unix_nano - span.start_time_unix_nano > 1000000',
     'span',
-    `("duration_ns" > 1000000::BIGINT)`,
+    `((CAST("end_time_unix_nano" AS BIGINT) - CAST("start_time_unix_nano" AS BIGINT)) > 1000000::BIGINT)`,
     null,
   ],
   ['IsRootSpan()', 'span', `("parent_span_id" IS NULL)`, null],
@@ -59,6 +59,29 @@ describe('translateCondition', () => {
       new Map([['resource:cicd.pipeline.run.id', new Set(['42'])]]),
     );
     expect(translateCondition('name != "a" or name == "b"', 'span').hints.size).toBe(0);
+    expect(translateCondition('name == "a" or name == "b"', 'span').hints).toEqual(
+      new Map([['name', new Set(['a', 'b'])]]),
+    );
+    expect(translateCondition('name == "a" and name == "b"', 'span').hints).toEqual(
+      new Map([['name', new Set<string>()]]),
+    );
+    expect(translateCondition('name == "a" or Len(name) > 1', 'span').hints.size).toBe(0);
+    expect(
+      translateCondition('resource.attributes["service.name"] == 42', 'span').hints.has('service_name'),
+    ).toBe(false);
+    expect(
+      translateCondition('resource.attributes["service.name"] == ""', 'span').hints.has('service_name'),
+    ).toBe(false);
+    expect(
+      translateCondition('resource.attributes["service.name"] == true', 'span').hints.has('service_name'),
+    ).toBe(false);
+  });
+  test('a residual keeps its grouping and re-parses', () => {
+    const t = translateCondition('(name == "a" or kind == 1) and Len(name) > 1', 'span');
+    expect(t.residual).toBe('Len(name) > 1');
+    const u = translateCondition('Len(name) > 1 and (Len(name) < 5 or Len(name) == 7)', 'span');
+    expect(u.residual).toBe('Len(name) > 1 and (Len(name) < 5 or Len(name) == 7)');
+    expect(() => translateCondition(u.residual as string, 'span')).not.toThrow();
   });
 });
 test('textPredicate', () => {
@@ -171,6 +194,29 @@ test('a log condition runs in DuckDB: absent times read as 0, ids as empty strin
       const where = toSql(t.predicate as never);
       expect(
         db.rows(`SELECT id FROM logs WHERE ${where} ORDER BY id`).map(({ id }) => Number(id)),
+        src,
+      ).toEqual(want);
+    }
+  } finally {
+    db.close();
+  }
+});
+
+test('end before start is the signed difference, not the clamped duration_ns', async () => {
+  const db = await openTestDb();
+  try {
+    db.exec(
+      `CREATE TABLE spans AS SELECT * FROM (VALUES (1, 5, 3, 0), (2, 5, 9, 4), (3, 5, 5, 0)) t(id, start_time_unix_nano, end_time_unix_nano, duration_ns)`,
+    );
+    for (const [src, want] of [
+      ['span.end_time_unix_nano - span.start_time_unix_nano < 0', [1]],
+      ['span.end_time_unix_nano - span.start_time_unix_nano == 0', [3]],
+      ['span.end_time_unix_nano - span.start_time_unix_nano >= 0', [2, 3]],
+    ] as const) {
+      const t = translateCondition(src, 'span');
+      const where = toSql(t.predicate as never);
+      expect(
+        db.rows(`SELECT id FROM spans WHERE ${where} ORDER BY id`).map(({ id }) => Number(id)),
         src,
       ).toEqual(want);
     }

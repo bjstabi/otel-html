@@ -100,14 +100,19 @@ function constOf(v: Value): Const | undefined {
   return undefined;
 }
 
-/** `end_time_unix_nano - start_time_unix_nano` of a span is the `duration_ns` column. */
+const DIFF = 'end_time_unix_nano - start_time_unix_nano';
+
+/**
+ * `end_time_unix_nano - start_time_unix_nano` of a span: the signed difference of the two columns, not `duration_ns`
+ * (the writer clamps that to 0 when end < start). Both are non-negative int64, so the difference cannot overflow.
+ */
 function durationOf(v: Value, context: SqlContext): Operand | undefined {
   if (v.type !== 'math' || v.op !== '-' || context !== 'span') return undefined;
   const l = pathOf(v.left, context);
   const r = pathOf(v.right, context);
   if (l?.canon !== 'end_time_unix_nano' || r?.canon !== 'start_time_unix_nano') return undefined;
   if (l.keys.length > 0 || r.keys.length > 0) return undefined;
-  return { canon: 'duration_ns', pc: { column: 'duration_ns', kind: 'int' }, keys: [] };
+  return { canon: DIFF, pc: { column: DIFF, kind: 'int' }, keys: [] };
 }
 
 function pathOf(v: Value, context: SqlContext): Operand | undefined {
@@ -124,7 +129,7 @@ function operandOf(v: Value, context: SqlContext): Operand | undefined {
   return pathOf(v, context) ?? durationOf(v, context);
 }
 
-const isTime = (o: Operand): boolean => o.canon.endsWith('_time_unix_nano');
+const isTime = (o: Operand): boolean => o.canon !== DIFF && o.canon.endsWith('_time_unix_nano');
 
 /**
  * The JSON value at an operand's keys. Refused (so the term stays in the browser): keys whose JSON Pointer reading
@@ -164,7 +169,10 @@ const mismatch = (op: CmpOp): ExprNode => (op === '!=' ? TRUE : FALSE);
 
 function cmpColumn(op: CmpOp, o: Operand, c: Const): ExprNode {
   if (o.keys.length > 0) return untranslatable('keys on a scalar path');
-  const col = column(o.pc.column);
+  const col =
+    o.canon === DIFF
+      ? sql`(CAST(${column('end_time_unix_nano')} AS BIGINT) - CAST(${column('start_time_unix_nano')} AS BIGINT))`
+      : column(o.pc.column);
   if (o.pc.kind === 'string') {
     if (o.canon === 'body.string') return untranslatable('body.string');
     if (typeof c !== 'string') return mismatch(op);
@@ -364,6 +372,9 @@ function eqHint(e: Expr, context: SqlContext): Hint | undefined {
   } else if (o.canon === 'resource.attributes' && o.keys.length === 1 && typeof o.keys[0] === 'string') {
     key = o.keys[0] === 'service.name' ? 'service_name' : `resource:${o.keys[0]}`;
   }
+  // service_name is serviceName(resource): `unknown_service...` when service.name is absent, not a string or empty,
+  // so only a non-empty string literal is a safe hint. Other resource keys store scalar texts (R16) as hintText gives.
+  if (key === 'service_name' && (typeof c !== 'string' || c === '')) return undefined;
   const text = hintText(c, numeric);
   return key === undefined || text === undefined ? undefined : { key, values: new Set([text]) };
 }
@@ -396,6 +407,7 @@ function termHint(term: Expr, context: SqlContext): Hint | undefined {
  * Translate an OTTL condition. Throws the same `invalid-ottl` error `compileCondition` does for a condition that does
  * not compile; a term SQL cannot express exactly goes to `residual`.
  */
+// Columns not marked nullAsEmpty in columns.ts are assumed always written (non-NULL) by the writer.
 export function translateCondition(src: string, context: SqlContext): Translation {
   compileCondition(src, context);
   const terms = topTerms(parseCondition(src));
