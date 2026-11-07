@@ -1,6 +1,7 @@
 import { AsyncDuckDB, type AsyncDuckDBConnection, VoidLogger } from '@duckdb/duckdb-wasm';
 import { ENGINE_WASM_KEY, ENGINE_WORKER_KEY, engineAssetNames } from '../../../format/engine.js';
 import type { ManifestV4 } from '../../../format/manifest.js';
+import { OtelHtmlError } from '../../../model/errors.js';
 import type { ScriptLoader } from '../script-loader.js';
 import { fromBase64, gunzip, toBase64 } from './bytes.js';
 
@@ -29,23 +30,43 @@ export function engineUrls(engine: ManifestV4['engine'], baseUrl: string): { was
   return { wasm: wasm as string, worker: worker as string };
 }
 
+async function loadText(loader: ScriptLoader, path: string, key: string): Promise<string> {
+  const payload = await loader.load(path, key);
+  // The wrapper pushes its base64 payload as a string; anything else is a broken wrapper.
+  if (typeof payload !== 'string') {
+    throw new OtelHtmlError('invalid-report', {
+      path,
+      expected: 'a base64 string',
+      actual: typeof payload,
+    });
+  }
+  return payload;
+}
+
 async function startLocal(urls: { wasm: string; worker: string }, deps: EngineDeps) {
-  let wasmB64: unknown = await deps.loader.load(urls.wasm, ENGINE_WASM_KEY);
-  let wasmBytes: Uint8Array | null = await gunzip(fromBase64(String(wasmB64)));
-  wasmB64 = null;
+  let wasmBytes: Uint8Array | null = await gunzip(
+    fromBase64(await loadText(deps.loader, urls.wasm, ENGINE_WASM_KEY)),
+  );
   let wasmUrl: string | null = `data:application/wasm;base64,${toBase64(wasmBytes)}`;
   wasmBytes = null;
-  const workerB64 = await deps.loader.load(urls.worker, ENGINE_WORKER_KEY);
-  const workerText = new TextDecoder().decode(fromBase64(String(workerB64)));
-  const blobUrl = deps.blobUrl.create(new Blob([workerText], { type: 'text/javascript' }));
-  const db = new AsyncDuckDB(new VoidLogger(), deps.createWorker(blobUrl));
+  let blob: Blob | null = new Blob(
+    [fromBase64(await loadText(deps.loader, urls.worker, ENGINE_WORKER_KEY)) as BlobPart],
+    { type: 'text/javascript' },
+  );
+  const blobUrl = deps.blobUrl.create(blob);
+  blob = null;
+  let db: AsyncDuckDB | undefined;
   try {
+    db = new AsyncDuckDB(new VoidLogger(), deps.createWorker(blobUrl));
     await db.instantiate(wasmUrl);
+    return db;
+  } catch (error) {
+    await db?.terminate().catch(() => undefined);
+    throw error;
   } finally {
     wasmUrl = null;
     deps.blobUrl.revoke(blobUrl);
   }
-  return db;
 }
 
 async function startSite(urls: { wasm: string; worker: string }, deps: EngineDeps) {

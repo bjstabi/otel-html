@@ -10,12 +10,14 @@ const fake = vi.hoisted(() => ({
   instantiated: [] as string[],
   opened: [] as unknown[],
   events: [] as string[],
+  failInstantiate: false,
 }));
 
 vi.mock('@duckdb/duckdb-wasm', () => ({
   VoidLogger: class {},
   AsyncDuckDB: class {
     async instantiate(url: string): Promise<void> {
+      if (fake.failInstantiate) throw new Error('boom');
       fake.instantiated.push(url);
     }
     async open(config: unknown): Promise<void> {
@@ -127,5 +129,41 @@ test('a missing wrapper fails with the file name', async () => {
   await expect(startEngine(localEngine, deps(loader))).rejects.toMatchObject({
     code: 'invalid-report',
     path: file,
+  });
+});
+
+const localLoader = (): ScriptLoader =>
+  scriptedLoader({
+    [ENGINE_WASM_KEY]: toBase64(gzipSync(Buffer.from('WASM'))),
+    [ENGINE_WORKER_KEY]: toBase64(Buffer.from('self.x=1')),
+  });
+
+test('the blob URL is revoked when createWorker throws', async () => {
+  const revoked: string[] = [];
+  const d = deps(localLoader(), [], revoked);
+  d.createWorker = () => {
+    throw new Error('no worker');
+  };
+  await expect(startEngine(localEngine, d)).rejects.toThrow('no worker');
+  expect(revoked).toEqual(['blob:fake-1']);
+});
+
+test('instantiate failure revokes the blob URL and terminates the database', async () => {
+  const revoked: string[] = [];
+  fake.failInstantiate = true;
+  try {
+    await expect(startEngine(localEngine, deps(localLoader(), [], revoked))).rejects.toThrow('boom');
+  } finally {
+    fake.failInstantiate = false;
+  }
+  expect(revoked).toEqual(['blob:fake-1']);
+  expect(fake.events).toContain('db.terminate');
+});
+
+test('a non-string wrapper payload is an invalid-report naming the file', async () => {
+  const loader: ScriptLoader = { load: async () => 42 };
+  await expect(startEngine(localEngine, deps(loader))).rejects.toMatchObject({
+    code: 'invalid-report',
+    path: 'file:///r/assets/duckdb.1.32.0.wasm.gz.b64.js',
   });
 });

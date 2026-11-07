@@ -66,6 +66,7 @@ e2e = [
   "fixtures/**",
   "playwright.config.ts",
   "tsconfig.e2e.json",
+  "tsconfig.viewer-data.json",
 ]
 scripts = ["proto/**", "schema/**", "scripts/**", "buf.gen.yaml"]
 # What biome, tsc, actionlint and knip read besides the code: every root config file (biome.json, knip.json, tsconfig*.json,
@@ -203,7 +204,7 @@ description = "Fix formatting with biome"
 run = "pnpm exec biome format --write ."
 
 [tasks.typecheck]
-description = "tsc on the node, viewer and e2e projects"
+description = "tsc on the node, viewer, viewer-data and e2e projects"
 sources = [
   "@group:config",
   "@group:deps",
@@ -217,6 +218,7 @@ cache = { enabled = true }
 run = [
   "pnpm exec tsc -p tsconfig.json --noEmit",
   "pnpm exec tsc -p tsconfig.viewer.json --noEmit",
+  "pnpm exec tsc -p tsconfig.viewer-data.json --noEmit",
   "pnpm exec tsc -p tsconfig.e2e.json --noEmit",
 ]
 
