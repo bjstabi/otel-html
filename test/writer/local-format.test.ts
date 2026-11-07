@@ -318,6 +318,19 @@ describe('appending with another assets base', () => {
     expect(e).toBeInstanceOf(OtelHtmlError);
     expect((e as OtelHtmlError).code).toBe('usage');
     expect((e as OtelHtmlError).hint).toContain('--assets-base assets/');
+    expect((e as OtelHtmlError).hint).toContain('--replace');
+  });
+
+  test('a shared base can change to another shared base, and the manifest follows', async () => {
+    const w = createTestWriter();
+    const s = await open(w, shared);
+    await s.add(spans(1), 'a.json');
+    await s.close();
+    const b = await open(w, { format: 'site', assetsBase: '../../assets/2/' }, 'append');
+    await b.add(spans(1, 0, 5), 'b.json');
+    await b.close();
+    expect(w.fs.snapshot().get(`${OUT}/data/manifest.js`)).toContain('"assetsBase":"../../assets/2/"');
+    expect(keys(w, 'assets/')).toEqual([]);
   });
 
   test('a shared base can go back to assets/, which writes the assets as usual', async () => {
@@ -349,5 +362,6 @@ describe('appending in another format', () => {
     expect(e).toBeInstanceOf(OtelHtmlError);
     expect((e as OtelHtmlError).code).toBe('usage');
     expect((e as OtelHtmlError).hint).toContain(`--format ${first}`);
+    expect((e as OtelHtmlError).hint).toContain('--replace');
   });
 });

@@ -23,8 +23,11 @@ interface DropIn {
   logs?: { log_record?: string[] | undefined } | undefined;
   metrics?: { datapoint?: string[] | undefined } | undefined;
 }
+/** The report formats `writer.format` names. */
+export type ReportFormat = 'chunks' | 'local' | 'site';
+
 interface WriterOut {
-  format: 'chunks' | 'local' | 'site';
+  format: ReportFormat;
   rowGroupRows: number;
   statisticsKeys: string[];
   localWarnBytes: number;
@@ -39,7 +42,7 @@ interface WriterOut {
   drop: DropOut;
 }
 interface WriterIn {
-  format?: 'chunks' | 'local' | 'site' | undefined;
+  format?: ReportFormat | undefined;
   rowGroupRows?: number | undefined;
   statisticsKeys?: string[] | undefined;
   localWarnBytes?: number | undefined;
@@ -179,6 +182,13 @@ export const ConfigSchema: z.ZodType<ResolvedConfig, ConfigInput> = z
     views: ViewListSchema.default([]),
   })
   .superRefine((c, ctx) => {
+    if (c.writer.format === 'chunks' && c.writer.assetsBase !== DEFAULT_ASSETS_BASE) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['writer', 'assetsBase'],
+        message: `must be ${DEFAULT_ASSETS_BASE} with writer.format chunks; --assets-base applies to --format local|site`,
+      });
+    }
     const id = c.viewer.defaultDashboard;
     if (id !== 'fusion' && !c.dashboards.some((d) => d.dashboard.id === id)) {
       ctx.addIssue({

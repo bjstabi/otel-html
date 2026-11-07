@@ -72,7 +72,21 @@ describe('cli --format and --assets-base', () => {
     expect([...w.fs.snapshot().keys()].some((k) => k.startsWith('out/assets/'))).toBe(false);
     expect(w.fs.snapshot().get('out/index.html')).toContain('../../assets/1/');
     const bad = await run(w, ['convert', 'in/a.json', '-o', 'out2', '--assets-base', '/etc']);
-    expect(bad.code).not.toBe(0);
+    expect(bad.code).toBe(2);
+    expect(bad.stderr).toContain('writer.assetsBase');
+  });
+
+  test('--assets-base with the chunks format exits 2 and says it applies to --format local|site', async () => {
+    const w = createTestWriter();
+    await put(w, 'in/a.json', JSON.stringify(spansRequest(2)));
+    const r = await run(w, ['convert', 'in/a.json', '-o', 'out', '--assets-base', '../assets/x/']);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain('writer.assetsBase');
+    expect(r.stderr).toContain('--format local|site');
+    const viaEnv = await run(w, ['convert', 'in/a.json', '-o', 'out', '--assets-base', '../assets/x/'], {
+      OTEL_HTML_FORMAT: 'site',
+    });
+    expect(viaEnv.code).toBe(0);
   });
 
   test('an unknown --format exits 2 and names the three allowed values', async () => {

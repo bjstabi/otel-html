@@ -1,3 +1,4 @@
+import type { ReportFormat } from '../config/schema.js';
 import type { PartitionEntry, PartitionFile } from '../format/manifest.js';
 import './parquet-wasm-source.js';
 import {
@@ -24,7 +25,7 @@ export interface PartitionWriterOptions {
   facetValueCap: number;
   nextPartition: number;
   /** `local` also writes each Parquet file's base64 script (`<table>.parquet.js`) after the file. */
-  format?: 'chunks' | 'local' | 'site';
+  format?: ReportFormat;
   /** Derives rows for other tables from the rows a cut took; see `Derived`. */
   derive?: (taken: Readonly<Record<Table, ColumnBatch>>) => Derived;
 }

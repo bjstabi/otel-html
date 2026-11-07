@@ -122,13 +122,13 @@ export async function openPartitionSession(
       ) {
         throw new OtelHtmlError('usage', {
           message: `cannot append with writer.assetsBase ${config.writer.assetsBase} to a report that carries its own assets/`,
-          hint: `append with --assets-base ${DEFAULT_ASSETS_BASE}`,
+          hint: `append with --assets-base ${DEFAULT_ASSETS_BASE}, or start the report over with --replace`,
         });
       }
       if (cp.manifest.engine.format !== config.writer.format) {
         throw new OtelHtmlError('usage', {
           message: `cannot append as writer.format ${config.writer.format} to a ${cp.manifest.engine.format} report`,
-          hint: `append with --format ${cp.manifest.engine.format}`,
+          hint: `append with --format ${cp.manifest.engine.format}, or start the report over with --replace`,
         });
       }
       // Before any write: what an interrupted session left unlisted must not meet this session's cuts.
@@ -310,8 +310,8 @@ class PartitionSession implements WriterSession {
       this.#assertOpen();
       return Promise.reject(
         new OtelHtmlError('usage', {
-          message: 'not supported yet',
-          hint: 'merging into a format-4 report is not available yet',
+          message: 'merging into a format-4 report is not supported yet',
+          hint: 'use --format chunks until format-4 merge arrives',
         }),
       );
     });

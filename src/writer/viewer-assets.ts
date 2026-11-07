@@ -1,3 +1,4 @@
+import type { ReportFormat } from '../config/schema.js';
 import { assetFileName, ENGINE_ASSET_RE } from '../format/paths.js';
 import { OtelHtmlError } from '../model/errors.js';
 import { engineAssetNames } from './engine-assets.js';
@@ -8,8 +9,6 @@ export interface ViewerAsset {
   path: string;
   contents: Uint8Array;
 }
-
-export type ReportFormat = 'chunks' | 'local' | 'site';
 
 export interface ViewerAssets {
   /**

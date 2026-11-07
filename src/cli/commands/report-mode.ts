@@ -11,11 +11,13 @@ export function addReportModeOptions(command: Command): Command {
 export function addReportFormatOptions(command: Command): Command {
   return command
     .addOption(
-      new Option('--format <format>', 'report format to write (default chunks)').choices([
-        'chunks',
-        'local',
-        'site',
-      ]),
+      new Option(
+        '--format <format>',
+        'report format to write (default chunks; also config writer.format, OTEL_HTML_FORMAT)',
+      ).choices(['chunks', 'local', 'site']),
     )
-    .option('--assets-base <path>', 'load the viewer files from this relative path (default assets/)');
+    .option(
+      '--assets-base <path>',
+      'with --format local|site: load the viewer files from assets/ or a relative path like ../../assets/0.3.0/',
+    );
 }

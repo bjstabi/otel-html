@@ -48,9 +48,14 @@ describe('resolveConfig', () => {
     for (const v of ['chunks', 'local', 'site']) expect(f).toContain(v);
     expect(resolveConfig({ env: { OTEL_HTML_FORMAT: 'site' } }).config.writer.format).toBe('site');
     expect(
-      resolveConfig({ file: { writer: { assetsBase: '../../assets/0.3.0/' } }, env: {} }).config.writer
-        .assetsBase,
+      resolveConfig({
+        file: { writer: { assetsBase: '../../assets/0.3.0/' } },
+        env: { OTEL_HTML_FORMAT: 'site' },
+      }).config.writer.assetsBase,
     ).toBe('../../assets/0.3.0/');
+    expect(() => resolveConfig({ file: { writer: { assetsBase: '../../assets/0.3.0/' } }, env: {} })).toThrow(
+      /--format local\|site/,
+    );
   });
 
   test('flag > env > file > default', () => {

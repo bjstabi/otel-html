@@ -1,5 +1,5 @@
 import type { spawn } from 'node:child_process';
-import type { ConfigInput } from '../config/schema.js';
+import type { ConfigInput, ReportFormat } from '../config/schema.js';
 
 export type StopSignal = 'SIGINT' | 'SIGTERM';
 
@@ -25,7 +25,7 @@ export interface ConfigFlags {
   /** `--replace`: start the report over. */
   replace?: boolean;
   /** `--format`: the report format to write (`writer.format`). */
-  format?: 'chunks' | 'local' | 'site';
+  format?: ReportFormat;
   /** `--assets-base`: where the report loads its viewer files from (`writer.assetsBase`). */
   assetsBase?: string;
 }

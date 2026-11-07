@@ -6,7 +6,7 @@ import type { ReadableSpan } from '@opentelemetry/sdk-trace-base';
 import pkg from '../../package.json' with { type: 'json' };
 import { loadConfigFile } from '../config/load.js';
 import { resolveConfig } from '../config/resolve.js';
-import type { ConfigInput, ResolvedConfig } from '../config/schema.js';
+import type { ConfigInput, ReportFormat, ResolvedConfig } from '../config/schema.js';
 import { OtelHtmlError } from '../model/errors.js';
 import type { ExportLogsServiceRequest } from '../model/gen/opentelemetry/proto/collector/logs/v1/logs_service_pb.js';
 import { ExportLogsServiceRequestSchema } from '../model/gen/opentelemetry/proto/collector/logs/v1/logs_service_pb.js';
@@ -93,7 +93,7 @@ export async function resolveApiConfig(
   deps: WriterDeps,
   config: ConfigInput | string | undefined,
   title: string | undefined,
-  writer?: { format?: 'chunks' | 'local' | 'site' | undefined; assetsBase?: string | undefined },
+  writer?: { format?: ReportFormat | undefined; assetsBase?: string | undefined },
 ): Promise<ResolvedConfig> {
   const file = typeof config === 'string' ? await loadConfigFile(deps.fs, config) : undefined;
   const object = typeof config === 'string' ? undefined : config;
@@ -118,7 +118,7 @@ export interface ReportOptions {
   out: string;
   title?: string;
   /** The report format to write; overrides `config.writer.format`. */
-  format?: 'chunks' | 'local' | 'site';
+  format?: ReportFormat;
   /** Where the report loads its viewer files from; overrides `config.writer.assetsBase`. */
   assetsBase?: string;
   /** A config object, or the path of an `otel-html.yaml`. Environment variables are not read. */

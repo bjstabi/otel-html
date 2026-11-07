@@ -1,3 +1,4 @@
+import type { ReportFormat } from '../config/schema.js';
 import type { PartitionEntry, PartitionFile } from '../format/manifest.js';
 import './parquet-wasm-source.js';
 import { batchFromRows, type ColumnBatch } from '../format/parquet/batch.js';
@@ -20,7 +21,7 @@ export interface CompactOptions {
   statisticsKeys: Record<Table, string[]>;
   facetValueCap: number;
   /** `local` also writes each final file's base64 script after it (never for the merge temporaries). */
-  format?: 'chunks' | 'local' | 'site';
+  format?: ReportFormat;
   /** The entry's `source`, `compact:<first>..<last>`. */
   source: string;
 }
