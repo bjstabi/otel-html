@@ -93,6 +93,11 @@ export function partitionKey(n: number, table: Table): string {
 export const PARTITION_FILE_RE: RegExp =
   /^data\/partitions\/[0-9]{6,}\/(?:spans|logs|points|traces|patterns)\.parquet$/;
 
+/** A viewer asset's report-relative path is `assets/<file>`; this is the file part. */
+export function assetFileName(path: string): string {
+  return path.slice('assets/'.length);
+}
+
 /** The report's own viewer files folder: the default `writer.assetsBase`. */
 export const DEFAULT_ASSETS_BASE = 'assets/';
 

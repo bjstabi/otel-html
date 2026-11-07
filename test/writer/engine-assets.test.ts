@@ -8,12 +8,12 @@ import { logRecord, logsRequest } from '../../test-support/otlp-builders.js';
 import { createTestWriter, otlp, testConfig } from '../../test-support/writer-deps.js';
 
 const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')) as {
-  dependencies: Record<string, string>;
+  devDependencies: Record<string, string>;
 };
 
 describe('engine assets', () => {
-  test('ENGINE_VERSION is the installed @duckdb/duckdb-wasm version, a runtime dependency', () => {
-    expect(pkg.dependencies['@duckdb/duckdb-wasm']).toBe(ENGINE_VERSION);
+  test('ENGINE_VERSION is the installed @duckdb/duckdb-wasm version, pinned in package.json', () => {
+    expect(pkg.devDependencies['@duckdb/duckdb-wasm']).toBe(ENGINE_VERSION);
     const installed = JSON.parse(
       readFileSync(new URL('../../node_modules/@duckdb/duckdb-wasm/package.json', import.meta.url), 'utf8'),
     ) as { version: string };

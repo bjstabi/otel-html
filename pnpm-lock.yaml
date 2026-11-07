@@ -169,9 +169,6 @@ importers:
       '@bufbuild/protobuf':
         specifier: 2.16.0
         version: 2.16.0
-      '@duckdb/duckdb-wasm':
-        specifier: 1.32.0
-        version: 1.32.0
       '@grpc/grpc-js':
         specifier: 1.14.6
         version: 1.14.6
@@ -224,6 +221,9 @@ importers:
       '@commitlint/config-conventional':
         specifier: 21.2.4
         version: 21.2.4
+      '@duckdb/duckdb-wasm':
+        specifier: 1.32.0
+        version: 1.32.0
       '@lezer/generator':
         specifier: 1.8.1
         version: 1.8.1

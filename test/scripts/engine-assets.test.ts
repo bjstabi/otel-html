@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 import { afterEach, expect, test } from 'vitest';
 import { buildEngineAssets } from '../../scripts/engine-assets.js';
@@ -46,6 +46,18 @@ test('the b64 wrappers push gzip (wasm) and plain (worker) base64 under the engi
   const worker = readFileSync(join(out, `duckdb.${ENGINE_VERSION}.worker.b64.js`), 'utf8');
   const w = /^__OH__\.push\("engine\/worker","([A-Za-z0-9+/=]+)"\);?\n?$/.exec(worker);
   expect(Buffer.from(w?.[1] ?? '', 'base64').toString('utf8')).toBe('console.log("worker");');
+});
+
+test('the gzip is deterministic: mtime 0 and identical bytes on every run', () => {
+  const { dist, out } = fakeDist();
+  const out2 = join(dirname(out), 'assets2');
+  buildEngineAssets({ distDir: dist, outDir: out });
+  buildEngineAssets({ distDir: dist, outDir: out2 });
+  const file = `duckdb.${ENGINE_VERSION}.wasm.gz.b64.js`;
+  const a = readFileSync(join(out, file), 'utf8');
+  expect(a).toBe(readFileSync(join(out2, file), 'utf8'));
+  const gz = Buffer.from(/"engine\/wasm\.gz","([^"]+)"/.exec(a)?.[1] ?? '', 'base64');
+  expect(gz.readUInt32LE(4)).toBe(0);
 });
 
 test('the real package files stay near the spike sizes (9.8 MB gzip+base64, 34 MB plain)', () => {

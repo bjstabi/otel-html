@@ -39,13 +39,10 @@ test('runtime dependencies are exactly what the library and CLI import', () => {
   }
   for (const name of imported)
     expect(runtime.has(name), `${name} is imported but not a dependency`).toBe(true);
-  // Shipped as files, never imported: scripts/engine-assets.ts copies its WASM and worker into the viewer assets.
-  const shippedAsFiles = new Set(['@duckdb/duckdb-wasm']);
   for (const name of Object.keys(pkg.dependencies))
-    expect(imported.has(name) || shippedAsFiles.has(name), `${name} is never imported`).toBe(true);
+    expect(imported.has(name), `${name} is never imported`).toBe(true);
   expect(Object.keys(pkg.dependencies).sort()).toEqual([
     '@bufbuild/protobuf',
-    '@duckdb/duckdb-wasm',
     '@grpc/grpc-js',
     '@lezer/common',
     '@lezer/lr',

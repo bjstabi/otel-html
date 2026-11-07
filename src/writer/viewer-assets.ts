@@ -1,4 +1,4 @@
-import { ENGINE_ASSET_RE } from '../format/paths.js';
+import { assetFileName, ENGINE_ASSET_RE } from '../format/paths.js';
 import { OtelHtmlError } from '../model/errors.js';
 import { engineAssetNames } from './engine-assets.js';
 import type { ViewerEntry } from './html.js';
@@ -27,7 +27,7 @@ const PARQUET_WASM_FILE = 'parquet_wasm_bg.wasm';
 export function wantsAsset(path: string, format?: ReportFormat): boolean {
   if (!ENGINE_ASSET_RE.test(path)) return true;
   if (format === undefined || format === 'chunks') return false;
-  return engineAssetNames(format).includes(path.slice('assets/'.length));
+  return engineAssetNames(format).includes(assetFileName(path));
 }
 
 /** Drops the engine files a report of this format does not load; every other file stays. */
@@ -111,14 +111,13 @@ export function bunEmbeddedViewerAssets(bun: BunLike | undefined = bunGlobal()):
   return {
     async files(format) {
       // Filtered before reading, so the 44 MB of engine files stay unread for a report that does not take them.
-      return Promise.all(
-        embedded
-          .filter((f) => wantsAsset(`assets/${f.name}`, format))
-          .map(async (f) => ({
-            path: `assets/${f.name}`,
-            contents: new Uint8Array(await f.arrayBuffer()),
-          })),
-      );
+      // One at a time, so a read finishes before the next starts.
+      const out: ViewerAsset[] = [];
+      for (const f of embedded) {
+        if (!wantsAsset(`assets/${f.name}`, format)) continue;
+        out.push({ path: `assets/${f.name}`, contents: new Uint8Array(await f.arrayBuffer()) });
+      }
+      return out;
     },
     entry() {
       const script = embeddedEntry(names, 'js', true);

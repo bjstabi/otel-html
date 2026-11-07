@@ -1,4 +1,4 @@
-import { ASSETS_BASE_RE, DEFAULT_ASSETS_BASE } from '../format/paths.js';
+import { ASSETS_BASE_RE, assetFileName, DEFAULT_ASSETS_BASE } from '../format/paths.js';
 import { OtelHtmlError } from '../model/errors.js';
 
 export interface ViewerEntry {
@@ -25,7 +25,7 @@ function assetUrl(p: string, what: string, base: string): string {
       actual: JSON.stringify(p),
     });
   }
-  return escapeHtml(base + p.slice(DEFAULT_ASSETS_BASE.length));
+  return escapeHtml(base + assetFileName(p));
 }
 
 /**

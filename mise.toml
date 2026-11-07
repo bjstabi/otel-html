@@ -409,7 +409,7 @@ sources = [
   "vite.config.ts",
 ]
 # The DuckDB engine files come from @duckdb/duckdb-wasm, whose version is in package.json (@group:deps).
-outputs = ["dist/viewer/**", "dist/viewer/assets/duckdb.*"]
+outputs = ["dist/viewer/**"]
 run = ["pnpm exec vite build", "bun scripts/engine-assets.ts"]
 
 [tasks.build]
