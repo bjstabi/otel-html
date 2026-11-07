@@ -284,14 +284,17 @@ describe('PartitionSession', () => {
     expect(manifest(w).totals).toEqual({ spans: 1, logs: 0, metrics: 0 });
   });
 
-  test('merge input is not supported yet', async () => {
+  test('an empty merge batch accepts nothing', async () => {
     const w = createTestWriter();
     const s = await open(w);
-    const r = await failure(
-      s.addRecords({ signal: 'spans', rows: [], resources: [], scopes: [], epoch: 0n as never }),
-    );
-    expect(r.code).toBe('usage');
-    expect(r.message).toContain('not supported yet');
+    const r = await s.addRecords({
+      signal: 'spans',
+      rows: [],
+      resources: [],
+      scopes: [],
+      epoch: 0n as never,
+    });
+    expect(r).toEqual({ accepted: 0, dropped: 0, duplicates: 0 });
     await s.abort();
   });
 

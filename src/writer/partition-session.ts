@@ -16,7 +16,14 @@ import {
 } from '../model/normalize.js';
 import type { OtlpRequest } from '../model/otlp-json.js';
 import { metricPointsOf } from '../model/otlp-json-metrics.js';
-import { type LogRecordRecord, logTime, type MetricPointRecord, type SpanRecord } from '../model/records.js';
+import {
+  type LogRecordRecord,
+  logTime,
+  type MetricPointRecord,
+  type ResourceRef,
+  type ScopeRef,
+  type SpanRecord,
+} from '../model/records.js';
 import type { LogTarget, SpanTarget } from '../ottl/contexts.js';
 import { Drain } from '../rollups/drain.js';
 import { StreamNormalizer } from '../rollups/metric-streams.js';
@@ -45,6 +52,7 @@ import {
 import { PartitionWriter } from './partition-writer.js';
 import { patternRows } from './pattern-rows.js';
 import { prunePartitions } from './prune.js';
+import { type Refs, rebaseLog, rebasePoint, rebaseSpan } from './rebase.js';
 import { seriesIdOf } from './series-id.js';
 import type {
   AddOptions,
@@ -306,15 +314,62 @@ class PartitionSession implements WriterSession {
     });
   }
 
-  addRecords(_batch: RecordBatch): Promise<AddResult> {
-    return this.#serial(() => {
+  addRecords(batch: RecordBatch): Promise<AddResult> {
+    return this.#serial(async () => {
       this.#assertOpen();
-      return Promise.reject(
-        new OtelHtmlError('usage', {
-          message: 'merging into a format-4 report is not supported yet',
-          hint: 'use --format chunks until format-4 merge arrives',
-        }),
-      );
+      this.#partial = false;
+      if (batch.rows.length === 0) return { accepted: 0, dropped: 0, duplicates: 0 };
+      const ctx = this.#ensureEpoch(batch.epoch);
+      const shift = batch.epoch - ctx.epoch;
+      const resources = new Map<number, ResourceRef>();
+      const scopes = new Map<number, ScopeRef>();
+      const refsOf = (r: number, s: number, path: string): Refs => {
+        let resource = resources.get(r);
+        if (resource === undefined) {
+          const rec = batch.resources[r];
+          if (rec === undefined) throw badRef(`${path}.resource`, r, batch.resources.length);
+          resource = ctx.resources.intern(rec) as ResourceRef;
+          resources.set(r, resource);
+        }
+        let scope = scopes.get(s);
+        if (scope === undefined) {
+          const rec = batch.scopes[s];
+          if (rec === undefined) throw badRef(`${path}.scope`, s, batch.scopes.length);
+          scope = ctx.scopes.intern(rec) as ScopeRef;
+          scopes.set(s, scope);
+        }
+        return { resource, scope };
+      };
+      let result: AddResult;
+      switch (batch.signal) {
+        case 'spans':
+          result = this.#acceptSpans(
+            batch.rows.map((s, i) =>
+              rebaseSpan(s, shift, refsOf(s.resource, s.scope, `rows[${i}]`), `rows[${i}]`),
+            ),
+          );
+          break;
+        case 'logs':
+          result = this.#acceptLogs(
+            batch.rows.map((l, i) =>
+              rebaseLog(l, shift, refsOf(l.resource, l.scope, `rows[${i}]`), `rows[${i}]`),
+            ),
+            'records',
+          );
+          break;
+        case 'metrics':
+          result = this.#acceptPoints(
+            batch.rows.map((p, i) =>
+              rebasePoint(p, shift, refsOf(p.resource, p.scope, `rows[${i}]`), `rows[${i}]`),
+            ),
+            batch.origin,
+          );
+          break;
+      }
+      if (result.accepted > 0) this.#sinceCheckpoint = true;
+      await this.#maybeCheckpoint();
+      this.#armIdle();
+      return result;
     });
   }
 
@@ -477,7 +532,7 @@ class PartitionSession implements WriterSession {
    * restores its rows without touching it. All or nothing: parsing and the row check run on the whole request before
    * any stream is stepped (the check uses a row without deltas, which only the stepped normalizer can fill in).
    */
-  #acceptPoints(points: readonly MetricPointRecord[]): AddResult {
+  #acceptPoints(points: readonly MetricPointRecord[], origin?: number): AddResult {
     const ctx = this.#context();
     const rowCtx = {
       epoch: ctx.epoch,
@@ -489,7 +544,7 @@ class PartitionSession implements WriterSession {
       point: MetricPointRecord;
       seriesId: string;
       row: Row;
-      step: ReturnType<StreamNormalizer['prepare']>;
+      step: (id: string) => ReturnType<ReturnType<StreamNormalizer['prepare']>>;
     }[] = [];
     for (const point of points) {
       const resource = ctx.resources.get(point.resource);
@@ -499,7 +554,8 @@ class PartitionSession implements WriterSession {
         continue;
       }
       const seriesId = seriesIdOf(point, resource, scope);
-      const step = this.#live(this.#normalizer).prepare(point);
+      const prepared = this.#live(this.#normalizer).prepare(point);
+      const step = (id: string) => prepared({ series: id, origin });
       const row = this.#checked('points', pointRow(point, { ...UNNORMALIZED, seriesId }, rowCtx));
       staged.push({ point, seriesId, row, step });
     }
@@ -928,4 +984,12 @@ class PartitionSession implements WriterSession {
       }
     }
   }
+}
+
+function badRef(path: string, ref: number, len: number): OtelHtmlError {
+  return new OtelHtmlError('invalid-report', {
+    path,
+    expected: `a ref in [0, ${len})`,
+    actual: String(ref),
+  });
 }
