@@ -36,7 +36,7 @@ import {
 export { toSql } from './columns.js';
 
 /** Statistics key to the values a matching row must have (strings as R16 stores them). */
-type PruneHints = ReadonlyMap<string, ReadonlySet<string>>;
+export type PruneHints = ReadonlyMap<string, ReadonlySet<string>>;
 
 export interface Translation {
   /** The translatable terms of the top-level `and`, or null when none. */
