@@ -23,7 +23,6 @@ function isWasmPanic(e: unknown): e is Error {
 
 /** One failing function per active watch. The listener below is shared, so there is one however many compactions run. */
 const active = new Set<(panic: Error) => void>();
-let installed = false;
 
 function onUncaught(e: unknown): void {
   if (isWasmPanic(e)) {
@@ -39,9 +38,14 @@ function onUncaught(e: unknown): void {
 }
 
 function uninstall(): void {
-  if (!installed) return;
   process.off('uncaughtException', onUncaught);
-  installed = false;
+}
+
+/** Asks the process, not a flag: something may have removed every listener since the last watch started. */
+function install(): void {
+  if (process.listeners('uncaughtException').includes(onUncaught)) return;
+  // First in line, so a host's `once` listener, which Node removes just before calling it, is still counted when this runs.
+  process.prependListener('uncaughtException', onUncaught);
 }
 
 /**
@@ -65,10 +69,7 @@ export function watchWasmPanics(): PanicWatch {
   });
   panicked.catch(() => undefined); // only a guarded wait observes it
   active.add(fail);
-  if (!installed) {
-    process.on('uncaughtException', onUncaught);
-    installed = true;
-  }
+  install();
   const guard: PanicGuard = (wait, what) =>
     new Promise((resolve, reject) => {
       wait.then(resolve, reject);

@@ -103,4 +103,29 @@ describe('watchWasmPanics', () => {
     w.stop();
     expect(count()).toBe(0);
   });
+
+  test('a host listener added with once still handles a non-panic error: nothing is rethrown', () => {
+    const w = watchWasmPanics();
+    const seen: unknown[] = [];
+    process.once('uncaughtException', (e) => seen.push(e));
+    const later = vi.spyOn(globalThis, 'setImmediate');
+    const boom = new Error('first');
+    emit(boom);
+    expect(seen).toEqual([boom]);
+    expect(later).not.toHaveBeenCalled();
+    w.stop();
+  });
+
+  test('a watch started after something removed every listener installs it again', async () => {
+    const a = watchWasmPanics();
+    process.removeAllListeners('uncaughtException');
+    const b = watchWasmPanics();
+    expect(count()).toBe(1);
+    const wait = b.guard(never(), 'f');
+    emit(runtimeError('unreachable'));
+    await expect(wait).rejects.toMatchObject({ code: 'invalid-report' });
+    a.stop();
+    b.stop();
+    expect(count()).toBe(0);
+  });
 });
