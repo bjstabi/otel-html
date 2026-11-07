@@ -463,8 +463,7 @@ describe('format mismatches', () => {
       openSession(w.deps, { out: OUT, config: testConfig(), mode: 'open' }) as Promise<WriterSession>,
     );
     expect(e.code).toBe('version-mismatch');
-    expect(e.hint).toContain('writer.format');
-    expect(e.hint).toContain('local or site');
+    expect(e.hint).toContain('--format site');
   });
 
   test('the chunk session replacing a format-4 report removes its partitions', async () => {

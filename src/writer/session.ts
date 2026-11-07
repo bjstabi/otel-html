@@ -46,6 +46,7 @@ import {
   serializeRollups,
 } from '../rollups/report-rollups.js';
 import { severityKey } from '../semconv/severity.js';
+import { pruneOwnAssets } from './assets-cleanup.js';
 import {
   at,
   jsObjectKeyOrder,
@@ -919,6 +920,8 @@ class Session implements WriterSession {
   async #writeShell(): Promise<void> {
     const { fs, viewerAssets } = this.#deps;
     await writeViewerAssets(fs, this.#out, viewerAssets);
+    // A report replaced from format 4 may still hold its engine files.
+    await pruneOwnAssets(fs, this.#out, { format: 'chunks', sharedBase: false });
     await fs.writeTextAtomic(at(this.#out, 'index.html'), renderIndexHtml(viewerAssets.entry(), this.#title));
     await fs.writeTextAtomic(at(this.#out, '.nojekyll'), '');
     this.#shellWritten = true;

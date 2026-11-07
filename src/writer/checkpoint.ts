@@ -243,7 +243,7 @@ export async function loadCheckpoint(fs: FileSystem, out: string, version: strin
     throw new OtelHtmlError('version-mismatch', {
       message: `cannot append: the report at ${out} is format 4 (Parquet partitions); this session writes the chunk format`,
       path: 'manifest.formatVersion',
-      hint: 'set writer.format to local or site to append to it',
+      hint: `append with --format ${manifest.engine.format}`,
     });
   }
   if (manifest.otelHtmlVersion !== version) {

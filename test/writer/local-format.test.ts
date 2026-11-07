@@ -32,6 +32,14 @@ const listedFiles = (w: TestWriter): string[] => {
   return [...text.matchAll(/data\/partitions\/\d+\/\w+\.parquet/g)].map((m) => `${OUT}/${m[0]}`);
 };
 
+const listedBytes = (w: TestWriter): number => {
+  const text = w.fs.snapshot().get(`${OUT}/data/manifest.js`) ?? '';
+  const json = JSON.parse(text.slice(text.indexOf(',') + 1, text.lastIndexOf(')'))) as {
+    partitions: { files: Record<string, { bytes: number }> }[];
+  };
+  return json.partitions.flatMap((p) => Object.values(p.files)).reduce((sum, f) => sum + f.bytes, 0);
+};
+
 describe('the wrapper file', () => {
   test('is a script that pushes the key and base64 only, with no < anywhere', async () => {
     const w = createTestWriter();
@@ -214,14 +222,6 @@ describe('local format', () => {
 });
 
 describe('local format ordering and bounds', () => {
-  const listedBytes = (w: TestWriter): number => {
-    const text = w.fs.snapshot().get(`${OUT}/data/manifest.js`) ?? '';
-    const json = JSON.parse(text.slice(text.indexOf(',') + 1, text.lastIndexOf(')'))) as {
-      partitions: { files: Record<string, { bytes: number }> }[];
-    };
-    return json.partitions.flatMap((p) => Object.values(p.files)).reduce((sum, f) => sum + f.bytes, 0);
-  };
-
   test('the Parquet file is written before its wrapper', async () => {
     const w = createTestWriter();
     const s = await open(w, { format: 'local' });
@@ -246,13 +246,15 @@ describe('local format ordering and bounds', () => {
     expect([...dirs].sort()).toEqual(['000000', '000001']);
     expect(listedFiles(w).every((f) => w.fs.snapshot().has(`${f}.js`))).toBe(true);
   });
+});
 
-  test('the warning counts the compacted bytes, not the flush partitions plus the compacted one', async () => {
+describe('the size warning after a compacting close', () => {
+  test('warns only when the final total passes the threshold, not the flush total', async () => {
     const run = async (localWarnBytes: number) => {
       const w = createTestWriter();
       const s = await open(w, { format: 'local', localWarnBytes });
       let flushBytes = 0;
-      for (let i = 0; i < 3; i++) {
+      for (let i = 0; i < 4; i++) {
         await s.add(spans(3, 0, i * 3), `${i}.json`);
         await s.flush();
         flushBytes = Math.max(flushBytes, listedBytes(w));
@@ -261,12 +263,11 @@ describe('local format ordering and bounds', () => {
       return { w, flushBytes, compacted: listedBytes(w) };
     };
     const probe = await run(1_000_000_000);
-    const threshold = Math.max(probe.flushBytes, probe.compacted);
-    expect(probe.flushBytes + probe.compacted).toBeGreaterThan(threshold);
-    const quiet = await run(threshold);
-    expect(quiet.w.logs.some((l) => l.level === 'warn')).toBe(false);
-    const loud = await run(threshold - 1);
-    expect(loud.w.logs.filter((l) => l.level === 'warn' && String(l.msg).includes('third'))).toHaveLength(1);
+    expect(probe.compacted).toBeLessThan(probe.flushBytes);
+    // Between the totals, and above the flush total of every flush before the last: the check waits for the final one.
+    const warned = (r: Awaited<ReturnType<typeof run>>) => r.w.logs.filter((l) => l.level === 'warn');
+    expect(warned(await run(probe.compacted))).toHaveLength(0);
+    expect(warned(await run(probe.compacted - 1))).toHaveLength(1);
   });
 });
 
@@ -290,17 +291,19 @@ describe('engine files in the report assets', () => {
     );
   });
 
-  test('a shared assets base is never touched', async () => {
+  test("with a shared base, only the report's own top-level engine and viewer files are removed", async () => {
     const w = createTestWriter();
     const writer = { format: 'site', assetsBase: '../../assets/1/' } as const;
     const s = await open(w, writer);
     await s.add(spans(1), 'a.json');
     await s.close();
     await w.fs.writeBytes(`${OUT}/assets/duckdb.0.9.0.wasm`, new Uint8Array(1));
+    await w.fs.writeBytes(`${OUT}/assets/1/keep.js`, new Uint8Array(1));
     const b = await open(w, writer, 'append');
     await b.add(spans(1, 0, 5), 'b.json');
     await b.close();
-    expect(w.fs.snapshot().has(`${OUT}/assets/duckdb.0.9.0.wasm`)).toBe(true);
+    expect(w.fs.snapshot().has(`${OUT}/assets/duckdb.0.9.0.wasm`)).toBe(false);
+    expect(w.fs.snapshot().has(`${OUT}/assets/1/keep.js`)).toBe(true);
   });
 });
 

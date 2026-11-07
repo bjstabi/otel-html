@@ -21,6 +21,7 @@ import type { LogTarget, SpanTarget } from '../ottl/contexts.js';
 import { Drain } from '../rollups/drain.js';
 import { StreamNormalizer } from '../rollups/metric-streams.js';
 import { severityKey } from '../semconv/severity.js';
+import { pruneOwnAssets } from './assets-cleanup.js';
 import {
   at,
   loadPartitionCheckpoint,
@@ -55,7 +56,7 @@ import type {
   WriterSession,
 } from './session.js';
 import { traceRows } from './trace-summaries.js';
-import { wantsAsset, writeViewerAssets } from './viewer-assets.js';
+import { writeViewerAssets } from './viewer-assets.js';
 
 interface Restored {
   lock: LockHandle;
@@ -335,6 +336,7 @@ class PartitionSession implements WriterSession {
       this.#release();
       await this.#compact();
       await this.#checkpoint(true);
+      this.#warnIfLarge(); // after the compaction is committed: the total close leaves behind
       await this.#pruneCommitted();
       this.#closed = this.#summary();
       await this.#lock.release();
@@ -669,15 +671,12 @@ class PartitionSession implements WriterSession {
   async #writeShell(): Promise<void> {
     const { fs, viewerAssets } = this.#deps;
     const { assetsBase } = this.#config.writer;
-    if (assetsBase === DEFAULT_ASSETS_BASE) {
-      const { format } = this.#config.writer;
-      await writeViewerAssets(fs, this.#out, viewerAssets, format);
-      // Engine files of another format or ENGINE_VERSION, left by an earlier session, are dead weight (tens of MB).
-      const assets = at(this.#out, 'assets');
-      for (const name of await fs.list(assets)) {
-        if (!wantsAsset(`assets/${name}`, format)) await fs.remove(at(assets, name));
-      }
-    }
+    const { format } = this.#config.writer;
+    const sharedBase = assetsBase !== DEFAULT_ASSETS_BASE;
+    if (!sharedBase) await writeViewerAssets(fs, this.#out, viewerAssets, format);
+    // Files an earlier session left that this one does not load (engine files of another format or version; with a
+    // shared base, the viewer files too) are dead weight, tens of MB.
+    await pruneOwnAssets(fs, this.#out, { format, sharedBase });
     await fs.writeTextAtomic(
       at(this.#out, 'index.html'),
       renderIndexHtml(viewerAssets.entry(), this.#title, { assetsBase }),
@@ -688,7 +687,8 @@ class PartitionSession implements WriterSession {
 
   /**
    * A `local` report loads every partition into the page at once, so one past `localWarnBytes` is better served as a
-   * `site` report. Warns once. Counts the listed partitions, so a compaction's output replaces the flush partitions it merged.
+   * `site` report. Called once close has committed the final manifest, so it counts what the report holds then (a
+   * compaction's output, not the flush partitions it merged).
    */
   #warnIfLarge(): void {
     const { format, localWarnBytes } = this.#config.writer;
@@ -900,7 +900,6 @@ class PartitionSession implements WriterSession {
       this.#committed.push(...this.#pending);
       this.#pending = [];
       this.#everCommitted = true;
-      this.#warnIfLarge();
       this.#lastFlushMs = clock.monotonicMs();
       try {
         p.span.setAttributes({

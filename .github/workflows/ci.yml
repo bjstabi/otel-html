@@ -389,6 +389,17 @@ jobs:
             logs-only.otlp.json small.otlp.json metrics.otlp.json ci.otlp.json -o out2
           test "$(find out2/data/partitions -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')" = 1
           grep -q '"source":"compact:' out2/data/manifest.js
+          # The local format: the embedded base64 engine files and the Bun-native base64 of the wrappers.
+          ./otel-html${{ matrix.ext }} convert --format local --config small-chunks.yaml in.otlp.json -o out3
+          test -s out3/assets/duckdb.*.wasm.gz.b64.js
+          test -s out3/assets/duckdb.*.worker.b64.js
+          test -z "$(find out3/assets -name 'duckdb.*.wasm')"
+          grep -o 'data/partitions/[0-9]*/[a-z]*\.parquet' out3/data/manifest.js | sort -u | while read -r p; do
+            test -s "out3/$p.js"
+          done
+          # One wrapper's payload decodes to Parquet: the magic "PAR1" opens the file.
+          w="$(find out3/data/partitions -name spans.parquet.js | head -n 1)"
+          test "$(sed -e 's/^[^,]*,"//' -e 's/".*$//' "$w" | base64 -d | head -c 4)" = PAR1
       - if: always()
         uses: ./.github/actions/otel-html-collect
         with:
