@@ -1,4 +1,4 @@
-import { lstat, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
@@ -205,6 +205,16 @@ describe.skipIf(process.platform === 'win32')('node writes never follow a symlin
     expect(await readFile(outside(), 'utf8')).toBe('precious');
     expect((await lstat(join(dir, 'x'))).isSymbolicLink()).toBe(false);
     expect(await readFile(join(dir, 'x'), 'utf8')).toBe('new');
+  });
+
+  test('removeDir removes a symlink inside the directory and leaves its target alone', async () => {
+    await mkdir(join(dir, 'target'));
+    await writeFile(join(dir, 'target/keep'), 'precious');
+    await mkdir(join(dir, 'p'));
+    await symlink(join(dir, 'target'), join(dir, 'p/link'));
+    await createNodeFileSystem().removeDir(join(dir, 'p'));
+    expect(await readdir(dir)).not.toContain('p');
+    expect(await readFile(join(dir, 'target/keep'), 'utf8')).toBe('precious');
   });
 
   test('writeBytes replaces a dangling symlink instead of creating its target', async () => {

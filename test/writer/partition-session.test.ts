@@ -734,21 +734,27 @@ describe('close compacts the flush partitions', () => {
   test('a compaction that fails midway through reading keeps every flush partition and deletes none', async () => {
     const w = createTestWriter();
     const s = await open(w);
-    await flushed(s, 2);
+    // Two files larger than one read batch (32768 rows) and than one merge chunk, so rows are written before the fault.
+    for (let i = 0; i < 2; i++) {
+      await s.add(logs(33_000), `l${i}.json`);
+      await s.flush();
+    }
     let calls = 0;
-    columnsFault.fail = () => ++calls === 6;
+    columnsFault.fail = () => ++calls === 3; // the second batch of the first input, mid-merge
     try {
       await s.close();
     } finally {
       columnsFault.fail = () => false;
     }
-    expect(calls).toBeGreaterThanOrEqual(6);
+    expect(calls).toBeGreaterThanOrEqual(3);
     const m = manifest(w);
     expect(m.complete).toBe(true);
     expect(m.partitions.map((p) => p.source)).toEqual(['flush:0', 'flush:1']);
     expect(partitionDirs(w)).toEqual(['000000', '000001']);
-    expect(w.logs.some((l) => l.level === 'error' && l.msg.includes('compaction failed'))).toBe(true);
-  });
+    // The log names the read fault itself: a truncated file would only have been caught later, by the row count.
+    const failed = w.logs.find((l) => l.level === 'error' && l.msg.includes('compaction failed'));
+    expect(String(Reflect.get(failed?.attrs ?? {}, 'error'))).toContain('injected read fault');
+  }, 60_000);
 
   test('a compaction that fails keeps the flush partitions, closes the report and removes what it wrote', async () => {
     const w = createTestWriter();

@@ -37,7 +37,7 @@ function show(f: FieldLike | undefined): string {
  * Wraps a wasm-backed wait so a panic inside parquet-wasm (which it does not report through the stream, see
  * `src/writer/wasm-panic.ts`) rejects it. The default waits for the promise as it is.
  */
-export type PanicGuard = <T>(wait: Promise<T>) => Promise<T>;
+export type PanicGuard = <T>(wait: Promise<T>, what?: string) => Promise<T>;
 
 const unguarded: PanicGuard = (wait) => wait;
 
@@ -90,14 +90,18 @@ export async function* readColumns(
       await file.stream({ batchSize: batchRows })
     ).getReader() as ReadableStreamDefaultReader<WasmRecordBatch>;
     for (;;) {
-      const { done, value } = await guard(reader.read());
+      const { done, value } = await guard(reader.read(), path);
       if (done) return;
       const batch: ArrowRecordBatch | undefined = tableFromIPC(value.intoIPCStream()).batches[0];
       if (batch !== undefined && batch.numRows > 0) yield columnsOfBatch(batch, width);
     }
   } finally {
     // Not awaited: after a panic the stream never settles. A free that fails then is not worth hiding the cause.
-    void reader?.cancel().catch(() => undefined);
+    try {
+      void reader?.cancel().catch(() => undefined);
+    } catch {
+      // as above
+    }
     try {
       file.free();
     } catch {

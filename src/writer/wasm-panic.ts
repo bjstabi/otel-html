@@ -2,24 +2,61 @@ import type { PanicGuard } from '../format/parquet/stream.js';
 import { OtelHtmlError } from '../model/errors.js';
 
 export interface PanicWatch {
-  /** Waits for a promise, but rejects as soon as parquet-wasm panics meanwhile. */
+  /** Waits for a promise, but rejects as soon as parquet-wasm panics meanwhile. `what` names the file being read. */
   guard: PanicGuard;
   /** Stops watching; call it in a `finally`. */
   stop(): void;
 }
 
-/** A `WebAssembly.RuntimeError` (the global is not in this project's type libraries, so it is recognised by name). */
+/** The global `WebAssembly.RuntimeError` class, which this project's type libraries lack. */
+function runtimeErrorClass(): (new (...args: never[]) => Error) | undefined {
+  const wasm: unknown = Reflect.get(globalThis, 'WebAssembly');
+  const cls: unknown =
+    typeof wasm === 'object' && wasm !== null ? Reflect.get(wasm, 'RuntimeError') : undefined;
+  return typeof cls === 'function' ? (cls as new (...args: never[]) => Error) : undefined;
+}
+
 function isWasmPanic(e: unknown): e is Error {
-  return e instanceof Error && e.name === 'RuntimeError';
+  const cls = runtimeErrorClass();
+  return cls !== undefined && e instanceof cls;
+}
+
+/** One failing function per active watch. The listener below is shared, so there is one however many compactions run. */
+const active = new Set<(panic: Error) => void>();
+let installed = false;
+
+function onUncaught(e: unknown): void {
+  if (isWasmPanic(e)) {
+    for (const fail of [...active]) fail(e);
+    return;
+  }
+  // Not ours. With another listener on the process the host handles it; otherwise it must crash as it would have.
+  if (process.listenerCount('uncaughtException') > 1) return;
+  uninstall();
+  setImmediate(() => {
+    throw e;
+  });
+}
+
+function uninstall(): void {
+  if (!installed) return;
+  process.off('uncaughtException', onUncaught);
+  installed = false;
 }
 
 /**
  * parquet-wasm does not report a panic (a corrupt row group in a streamed read) through the stream: the stream's
- * pending `read()` never settles, and the panic surfaces as an uncaught `WebAssembly.RuntimeError` (an
- * `uncaughtException` on Node and Bun). While a watch is on, such an error rejects the guarded wait with
- * `invalid-report`, so the caller fails instead of hanging. Any other uncaught error is rethrown as it would have
- * been. After a panic the wasm instance still served new files in the checks made (Node 24, Bun 1.4.4), but a read
- * that panicked is abandoned, not resumed.
+ * pending `read()` never settles, and the panic surfaces only as an uncaught `WebAssembly.RuntimeError`
+ * (`uncaughtException` on Node and Bun; checked on Node 24 and Bun 1.4.4). While a watch is on, such an error rejects
+ * the guarded wait with `invalid-report`, so the caller fails instead of hanging.
+ *
+ * - One `uncaughtException` listener is shared by all watches: installed with the first, removed after the last.
+ * - A panic cannot be attributed to one stream, so it fails every watch active at that moment, every compaction
+ *   running at the same time included. That is accepted: a compaction that fails keeps its flush partitions.
+ * - An uncaught error that is not a `WebAssembly.RuntimeError` is left to the host's own listeners when it has any,
+ *   and otherwise rethrown, so the process crashes as it would without the watch.
+ * - After a panic the wasm instance still served new files in the checks made, but a read that panicked is
+ *   abandoned, not resumed; its `cancel()` is started and its outcome ignored.
  */
 export function watchWasmPanics(): PanicWatch {
   let fail: (e: Error) => void = () => undefined;
@@ -27,27 +64,29 @@ export function watchWasmPanics(): PanicWatch {
     fail = reject;
   });
   panicked.catch(() => undefined); // only a guarded wait observes it
-  const onError = (e: unknown): void => {
-    if (isWasmPanic(e)) {
-      fail(
-        new OtelHtmlError('invalid-report', {
-          path: 'data/partitions',
-          expected: 'a readable Parquet file',
-          actual: `parquet-wasm panicked: ${e.message}`,
-        }),
-      );
-      return;
-    }
-    stop();
-    setImmediate(() => {
-      throw e;
+  active.add(fail);
+  if (!installed) {
+    process.on('uncaughtException', onUncaught);
+    installed = true;
+  }
+  const guard: PanicGuard = (wait, what) =>
+    new Promise((resolve, reject) => {
+      wait.then(resolve, reject);
+      panicked.catch((e: unknown) => {
+        reject(
+          new OtelHtmlError('invalid-report', {
+            path: what ?? 'data/partitions',
+            expected: 'a readable Parquet file',
+            actual: `parquet-wasm panicked: ${e instanceof Error ? e.message : String(e)}`,
+          }),
+        );
+      });
     });
+  return {
+    guard,
+    stop() {
+      active.delete(fail);
+      if (active.size === 0) uninstall();
+    },
   };
-  const stop = (): void => {
-    process.off('uncaughtException', onError);
-    process.off('unhandledRejection', onError);
-  };
-  process.on('uncaughtException', onError);
-  process.on('unhandledRejection', onError);
-  return { guard: (wait) => Promise.race([wait, panicked]), stop };
 }
