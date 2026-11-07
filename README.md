@@ -113,7 +113,7 @@ Combines report folders into one, for example the reports of parallel CI jobs. I
 otel-html merge ./job-1 ./job-2 -o ./combined
 ```
 
-Options: `-o, --out <dir>`, `--config <file>`, `--append`, `--replace` (as for `convert`), and `--format` and `--assets-base`, which the CLI accepts but which only `chunks` supports for now: merging into a `local` or `site` report is not supported yet. When `-o` already holds a report, `merge` adds its inputs to it.
+Options: `-o, --out <dir>`, `--config <file>`, `--append`, `--replace` (as for `convert`), and `--format` and `--assets-base`, which the CLI accepts but which are not usable with merge yet: merge writes `chunks`, merging into a `local` or `site` report is not supported yet, and `--assets-base` applies to format 4 only. When `-o` already holds a report, `merge` adds its inputs to it.
 
 ### `upgrade <report>`
 
@@ -131,7 +131,7 @@ Prints the resolved configuration and where each value came from (default, file,
 otel-html config print --config otel-html.yaml
 ```
 
-Options: `--config <file>` and `--title <title>`.
+Options: `--config <file>`, `--title <title>`, `--format` and `--assets-base` (as for `convert`).
 
 ## Library API
 

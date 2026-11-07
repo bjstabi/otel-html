@@ -186,7 +186,7 @@ export const ConfigSchema: z.ZodType<ResolvedConfig, ConfigInput> = z
       ctx.addIssue({
         code: 'custom',
         path: ['writer', 'assetsBase'],
-        message: `must be ${DEFAULT_ASSETS_BASE} with writer.format chunks; --assets-base applies to --format local|site`,
+        message: `applies to writer.format local or site (--format local|site), not chunks; use ${DEFAULT_ASSETS_BASE} or set the format`,
       });
     }
     const id = c.viewer.defaultDashboard;

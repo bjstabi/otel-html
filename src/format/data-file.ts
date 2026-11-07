@@ -99,8 +99,9 @@ function stringify(v: unknown): string {
 export const WRAPPER_SLICE_BYTES: number = 3 * 1024 * 1024;
 
 /**
- * A binary data file for the local format, `__OH__.push("<key>","<base64>");\n`, in pieces: the prefix, the base64 of each `WRAPPER_SLICE_BYTES` slice, the suffix. The payload
- * is base64 only, so no `<` can appear in it. Written with `writePiecesAtomic`, a large file is never one string (V8 caps a string near 512 M characters). `encode` is
+ * A binary data file for the local format, `__OH__.push("<key>","<base64>");\n`, in pieces: the prefix, the base64
+ * of each `WRAPPER_SLICE_BYTES` slice, the suffix. The payload is base64 only, so no `<` can appear in it. Written
+ * with `writePiecesAtomic`, a large file is never one string (V8 caps a string near 512 M characters). `encode` is
  * the caller's fast base64 of a slice, since this folder carries no Node imports.
  */
 export function* wrapBinaryDataFilePieces(

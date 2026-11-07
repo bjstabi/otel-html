@@ -71,9 +71,18 @@ describe('cli --format and --assets-base', () => {
     expect(ok.code).toBe(0);
     expect([...w.fs.snapshot().keys()].some((k) => k.startsWith('out/assets/'))).toBe(false);
     expect(w.fs.snapshot().get('out/index.html')).toContain('../../assets/1/');
-    const bad = await run(w, ['convert', 'in/a.json', '-o', 'out2', '--assets-base', '/etc']);
+    const bad = await run(w, [
+      'convert',
+      'in/a.json',
+      '-o',
+      'out2',
+      '--format',
+      'site',
+      '--assets-base',
+      '/etc',
+    ]);
     expect(bad.code).toBe(2);
-    expect(bad.stderr).toContain('writer.assetsBase');
+    expect(bad.stderr).toContain('assets/ or a relative path');
   });
 
   test('--assets-base with the chunks format exits 2 and says it applies to --format local|site', async () => {
@@ -102,6 +111,19 @@ describe('cli --format and --assets-base', () => {
     const r = await run(w, [command, '--help']);
     expect(r.stdout).toContain('--format <format>');
     expect(r.stdout).toContain('--assets-base <path>');
+  });
+});
+
+describe('cli config print with the format flags', () => {
+  test('--format site makes a file that sets writer.assetsBase valid, and it prints', async () => {
+    const w = createTestWriter();
+    await put(w, '/work/otel-html.yaml', 'writer:\n  assetsBase: ../assets/x/\n');
+    const without = await run(w, ['config', 'print']);
+    expect(without.code).toBe(2);
+    const r = await run(w, ['config', 'print', '--format', 'site']);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain('format: site # from: flag');
+    expect(r.stdout).toContain('../assets/x/');
   });
 });
 
