@@ -35,7 +35,7 @@ vi.mock('../../src/format/parquet/codec.js', async (original) => {
   };
 });
 
-import { spanIdOf, spansRequest, traceIdOf } from './helpers.js';
+import { copyFrozenReport, spanIdOf, spansRequest, traceIdOf } from './helpers.js';
 
 const OUT = 'r';
 
@@ -436,11 +436,7 @@ describe('statistics keys and state validation', () => {
 });
 
 describe('format mismatches', () => {
-  async function chunkReport(w: TestWriter): Promise<void> {
-    const s = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'replace' });
-    await s.add(otlp(spansRequest(1)), 'a.json');
-    await s.close();
-  }
+  const chunkReport = (w: TestWriter): Promise<void> => copyFrozenReport(w, OUT);
 
   test('open on a format-3 report with format site fails version-mismatch: use merge to convert', async () => {
     const w = createTestWriter();
@@ -457,45 +453,39 @@ describe('format mismatches', () => {
     expect((await failure(open(w, cfg(), 'append'))).code).toBe('version-mismatch');
   });
 
-  test('the chunk session opening a format-4 report fails and names writer.format local or site', async () => {
+  test('opening a format-4 report as the other format fails and names writer.format local or site', async () => {
     const w = createTestWriter();
     const s = await open(w);
     await s.add(spans(1), 'a.json');
     await s.close();
-    const e = await failure(
-      openSession(w.deps, { out: OUT, config: testConfig(), mode: 'open' }) as Promise<WriterSession>,
-    );
-    expect(e.code).toBe('version-mismatch');
+    const e = await failure(open(w, cfg({ format: 'local' }), 'open'));
+    expect(e.code).toBe('usage');
     expect(e.hint).toContain('--format site');
     expect(e.hint).not.toContain('--assets-base');
   });
 
-  test('the chunk session hint on a shared-base report names both --format and --assets-base', async () => {
+  test('the hint on a shared-base report offers upgrade', async () => {
     const w = createTestWriter();
     const s = await open(w, cfg({ assetsBase: '../../assets/0.3.0/' }));
     await s.add(spans(1), 'a.json');
     await s.close();
-    const e = await failure(
-      openSession(w.deps, { out: OUT, config: testConfig(), mode: 'open' }) as Promise<WriterSession>,
-    );
-    expect(e.hint).toContain('--format site --assets-base ../../assets/0.3.0/');
+    const e = await failure(open(w, cfg({ format: 'local' }), 'open'));
+    expect(e.hint).toContain('--format site');
+    expect(e.hint).toContain('upgrade');
   });
 
-  test('the chunk session replacing a format-4 report removes its partitions', async () => {
+  test('replacing a format-4 report as the other format removes its partitions', async () => {
     const w = createTestWriter();
     const s = await open(w);
     await s.add(spans(2), 'a.json');
     await s.close();
     expect(await w.fs.exists(`${OUT}/data/partitions/000000/spans.parquet`)).toBe(true);
-    const r = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'replace' });
+    const r = await open(w, cfg({ format: 'local' }), 'replace');
     await r.add(spans(1, 0, 7), 'b.json');
     await r.close();
-    expect([...w.fs.snapshot().keys()].some((k) => k.includes('data/partitions'))).toBe(false);
-    expect(
-      parseAnyManifest(
-        reviveDataJson(unwrapDataFile(w.fs.snapshot().get(`${OUT}/data/manifest.js`) ?? '', MANIFEST_KEY)),
-      ).formatVersion,
-    ).toBe(3);
+    expect(manifest(w).engine.format).toBe('local');
+    expect(manifest(w).totals.spans).toBe(1);
+    expect(manifest(w).partitions).toHaveLength(1);
   });
 
   test('format local is recorded in manifest.engine', async () => {

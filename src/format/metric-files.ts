@@ -185,16 +185,6 @@ export function metricExemplarPagePath(id: number, p: number): string {
 export function metricLevelExemplarPagePath(id: number, k: number, p: number): string {
   return `${metricDir(id)}/ex${exemplarLevel(k)}-${sixDigits(p, 'page')}.js`;
 }
-/** The exemplar file (whole or page `p`) of level `k`: `ex.js` up to EXEMPLAR_BASE_LEVEL, else `ex<k>.js`. */
-export function metricExemplarFilePath(id: number, k: number, p: number | null): string {
-  if (k <= EXEMPLAR_BASE_LEVEL) return p === null ? metricExemplarPath(id) : metricExemplarPagePath(id, p);
-  return p === null ? metricLevelExemplarPath(id, k) : metricLevelExemplarPagePath(id, k, p);
-}
-/** The level file (whole or page `p`) of level `k`. */
-export function metricLevelFilePath(id: number, k: number, p: number | null): string {
-  return p === null ? metricLevelPath(id, k) : metricLevelPagePath(id, k, p);
-}
-
 function exemplarLevel(k: number): number {
   if (!Number.isInteger(k) || k <= EXEMPLAR_BASE_LEVEL || k > MAX_LEVEL) {
     throw new OtelHtmlError('invalid-report', {
@@ -207,7 +197,7 @@ function exemplarLevel(k: number): number {
 }
 
 /** Registration key of a data file: its path without `data/` and `.js`. */
-export const dataFileKey = (path: string): string => path.slice('data/'.length, -'.js'.length);
+const dataFileKey = (path: string): string => path.slice('data/'.length, -'.js'.length);
 export const metricSeriesKey = (id: number): string => dataFileKey(metricSeriesPath(id));
 export const metricSegmentKey = (id: number, n: number): string => dataFileKey(metricSegmentPath(id, n));
 export const metricLevelKey = (id: number, k: number): string => dataFileKey(metricLevelPath(id, k));
@@ -224,7 +214,7 @@ export function levelWidthNs(k: number): number {
 }
 
 /** Index of the bucket of width `widthNs` holding `time`. */
-export function bucketIndex(time: number, widthNs: number): number {
+function bucketIndex(time: number, widthNs: number): number {
   return Math.floor(time / widthNs);
 }
 
@@ -245,19 +235,6 @@ export interface BucketSeries {
   id: number;
   t: number[];
   a: BucketAgg[];
-}
-
-/** First and last bucket index over all series, or null when there are no buckets. */
-export function bucketRange(series: readonly BucketSeries[]): { min: number; max: number } | null {
-  let min = Number.POSITIVE_INFINITY;
-  let max = Number.NEGATIVE_INFINITY;
-  for (const s of series) {
-    const first = s.t[0];
-    const last = s.t[s.t.length - 1];
-    if (first !== undefined && first < min) min = first;
-    if (last !== undefined && last > max) max = last;
-  }
-  return min > max ? null : { min, max };
 }
 
 /** Level-0 series coarsened to `factor`× wider buckets, merging in time order. */
@@ -289,7 +266,7 @@ export function deriveLevels(l0: readonly BucketSeries[], count: number): Bucket
 }
 
 /** Level `k` from level `k - 1` (`deriveLevels` one step at a time). */
-export function nextLevel(previous: readonly BucketSeries[], k: number): BucketSeries[] {
+function nextLevel(previous: readonly BucketSeries[], k: number): BucketSeries[] {
   return coarsen(previous, LEVEL_FACTOR, `level ${k}`);
 }
 
@@ -442,22 +419,6 @@ export function selectExemplars(list: readonly StoredExemplar[], n: number): Sto
     );
   }
   return picked.sort(byTime);
-}
-
-/** `selectExemplars` applied per series per bucket of `widthNs` (EXEMPLAR_WIDTH_NS by default). */
-export function capExemplars(
-  list: readonly StoredExemplar[],
-  n: number,
-  widthNs: number = EXEMPLAR_WIDTH_NS,
-): StoredExemplar[] {
-  const groups = new Map<string, StoredExemplar[]>();
-  for (const e of list) {
-    const key = `${e.series}:${bucketIndex(e.time, widthNs)}`;
-    const g = groups.get(key);
-    if (g === undefined) groups.set(key, [e]);
-    else g.push(e);
-  }
-  return [...groups.values()].flatMap((g) => selectExemplars(g, n)).sort(byTime);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -728,17 +689,6 @@ export function encodeSegmentFile(f: SegmentFile): SerializedSegmentFile {
 
 export function parseSegmentFile(input: unknown, root: string): SegmentFile {
   const f = parseWith(SegmentFileSchema, input, root);
-  return { ...f, exemplars: decodeExemplars(f.exemplars, `${root}.exemplars`) };
-}
-
-/**
- * A segment file the running writer wrote itself, read back for compaction: decoded like `parseSegmentFile` without
- * validating it again (it was encoded from validated buckets moments before). Segments of an earlier session, read on
- * append or merge, go through `parseSegmentFile`. Demoted segments count as this session's own too: they are built
- * from level and exemplar files that were zod-validated when read, so skipping validation stays sound.
- */
-export function decodeOwnSegmentFile(input: unknown, root: string): SegmentFile {
-  const f = input as SerializedSegmentFile;
   return { ...f, exemplars: decodeExemplars(f.exemplars, `${root}.exemplars`) };
 }
 

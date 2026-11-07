@@ -1,8 +1,7 @@
 import { spawn } from 'node:child_process';
-import { afterEach, beforeEach, describe, expect, test } from 'vitest';
+import { describe, expect, test } from 'vitest';
 import type { CliDeps } from '../../src/cli/program.js';
 import { runCli } from '../../src/cli/program.js';
-import { legacyDefaultFormat } from '../../src/config/schema.js';
 import { logRecord, logsRequest } from '../../test-support/otlp-builders.js';
 import { createTestWriter, type TestWriter } from '../../test-support/writer-deps.js';
 import { manifestOf, spansRequest } from '../writer/helpers.js';
@@ -124,14 +123,6 @@ describe('cli --format and --assets-base', () => {
   });
 
   describe('the default format', () => {
-    // The unit-test setup turns the legacy chunk default on until Task 6.2; these tests want the real default.
-    beforeEach(() => {
-      legacyDefaultFormat.chunks = false;
-    });
-    afterEach(() => {
-      legacyDefaultFormat.chunks = true;
-    });
-
     test('convert without --format writes a local format-4 report', async () => {
       const w = createTestWriter();
       await put(w, 'in/a.json', JSON.stringify(spansRequest(2)));

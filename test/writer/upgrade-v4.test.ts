@@ -10,7 +10,7 @@ import { OtelHtmlError } from '../../src/model/errors.js';
 import { openSession } from '../../src/writer/session.js';
 import { upgradeReport } from '../../src/writer/upgrade.js';
 import { createTestWriter, otlp, type TestWriter, testConfig } from '../../test-support/writer-deps.js';
-import { spansRequest } from './helpers.js';
+import { copyFrozenReport, spansRequest } from './helpers.js';
 
 type Format = 'local' | 'site';
 
@@ -333,9 +333,7 @@ describe('upgradeReport fix round 2', () => {
 describe('upgradeReport on a chunks report', () => {
   test('any upgrade is a usage error carrying the D12 message, and nothing is written', async () => {
     const w = createTestWriter();
-    const s = await openSession(w.deps, { out: 'c', config: testConfig(), mode: 'replace' });
-    await s.add(otlp(spansRequest(1)), 'in.json');
-    await s.close();
+    await copyFrozenReport(w, 'c');
     const before = new Map(w.fs.snapshot());
     for (const opts of [{}, { format: 'site' as const }, { assetsBase: '../assets/' }]) {
       const e = await failure(upgradeReport(w.deps, 'c', opts));
@@ -347,8 +345,7 @@ describe('upgradeReport on a chunks report', () => {
 
   test('an unreadable formatVersion does not tell upgrade to merge', async () => {
     const w = createTestWriter();
-    const s = await openSession(w.deps, { out: 'c', config: testConfig(), mode: 'replace' });
-    await s.close();
+    await copyFrozenReport(w, 'c');
     const text = w.fs.snapshot().get('c/data/manifest.js') ?? '';
     await w.fs.writeTextAtomic(
       'c/data/manifest.js',

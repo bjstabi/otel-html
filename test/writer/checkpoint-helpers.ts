@@ -14,9 +14,8 @@ import { spanIdOf, traceIdOf } from './helpers.js';
 export const OUT = 'r';
 const INTERVAL_MS = 5_000;
 export const STATE_0 = 'data/state/session.0.json';
-// One chunk per span, so chunk numbers show which checkpoint listed what.
 export const config: ResolvedConfig = testConfig({
-  writer: { chunkTargetBytes: 1, flushIntervalMs: INTERVAL_MS },
+  writer: { flushIntervalMs: INTERVAL_MS },
 });
 
 export const one = (trace: number, spanN: number): ReturnType<typeof otlp> =>

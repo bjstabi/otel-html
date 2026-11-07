@@ -4,7 +4,7 @@ import { describe, expect, test } from 'vitest';
 import { createReportWith } from '../../src/api/report.js';
 import { OtelHtmlMetricExporter } from '../../src/exporters/metric-exporter.js';
 import { createTestWriter } from '../../test-support/writer-deps.js';
-import { allPoints } from '../writer/helpers.js';
+import { allPoints, cell } from '../writer/helpers.js';
 
 describe('OtelHtmlMetricExporter', () => {
   test('a periodic reader delivers its points into the report', async () => {
@@ -20,7 +20,7 @@ describe('OtelHtmlMetricExporter', () => {
     await provider.shutdown();
     await report.close();
     // forceFlush and shutdown each collect, so a name can repeat; the set of names is what is asserted.
-    expect([...new Set(allPoints(w, 'r').map((p) => p.name))].sort()).toEqual(['c', 'h']);
+    expect([...new Set(allPoints(w, 'r').map((p) => cell(p, 'metric_name')))].sort()).toEqual(['c', 'h']);
   });
 
   test('temporality defaults to cumulative (1) and delta selects 0', async () => {

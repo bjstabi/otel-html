@@ -17,7 +17,7 @@ export type SpanStatusKey = (typeof SPAN_STATUS_KEYS)[number];
 /** Distinct (service, resource) duration histograms kept; further groups are counted in `droppedDurationGroups`. */
 const MAX_DURATION_GROUPS = 10_000;
 
-// The facet definitions live in src/semconv/default-facets.ts (D16); the chunk writer reads them from here until the chunks go.
+// The facet definitions live in src/semconv/default-facets.ts (D16); viewer modules still import them from here until the metrics plan.
 export { DEFAULT_SPAN_FACETS };
 
 const CORE_KEYS: ReadonlySet<string> = new Set(DEFAULT_SPAN_FACETS.map((f) => f.key));

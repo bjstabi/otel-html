@@ -175,9 +175,9 @@ describe.skipIf(binaryEnv === undefined)('compiled binary', () => {
     const out = join(dir, 'big');
     await writeFile(input, INT64_REQUEST);
     await run(binary, ['convert', input, '--out', out]);
-    const chunk = await readFile(join(out, 'data', 'chunks', 'spans', '000000.js'), 'utf8');
-    expect(chunk).toContain('"9007199254740993"');
-    expect(chunk).toContain('[998]');
+    // The manifest's range is the absolute int64 nanosecond text of the spans' times: 2^53 + 1 and beyond survive.
+    const manifest = await readFile(join(out, 'data', 'manifest.js'), 'utf8');
+    expect(manifest).toContain('"range":{"start":"1700000000000000001","end":"1700000000000000999"}');
   });
 
   test('serve receives OTLP over HTTP and gRPC and finishes on SIGINT', async () => {
@@ -203,9 +203,9 @@ describe.skipIf(binaryEnv === undefined)('compiled binary', () => {
     expect(result.code).toBe(0);
     const manifest = await readFile(join(out, 'data', 'manifest.js'), 'utf8');
     expect(manifest).toContain('"totals":{"spans":2,');
-    const spans = await readFile(join(out, 'data', 'chunks', 'spans', '000000.js'), 'utf8');
-    expect(spans).toContain('over-http');
-    expect(spans).toContain('over-grpc');
+    // The span-name statistics of the partition files list both spans.
+    expect(manifest).toContain('over-http');
+    expect(manifest).toContain('over-grpc');
   }, 60_000);
 
   test('a bad port is a usage error: exit 2, the reason on stderr, nothing on stdout', async () => {

@@ -12,7 +12,7 @@ import { FacetCounts } from './facets.js';
 import type { SpanRollupOptions } from './span-rollups.js';
 import { TimeBuckets } from './time-buckets.js';
 
-// The facet definitions live in src/semconv/default-facets.ts (D16); the chunk writer reads them from here until the chunks go.
+// The facet definitions live in src/semconv/default-facets.ts (D16); viewer modules still import them from here until the metrics plan.
 export { DEFAULT_LOG_FACETS };
 
 const CORE_KEYS: ReadonlySet<string> = new Set(DEFAULT_LOG_FACETS.map((f) => f.key));

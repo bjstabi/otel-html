@@ -38,7 +38,7 @@ describe('the shell a session writes', () => {
     return w.fs.snapshot();
   };
 
-  test('the chunk session output is unchanged', async () => {
+  test('the default (local) session output is the shared index.html', async () => {
     const files = await run(testConfig());
     expect(files.get('r/index.html')).toBe(renderIndexHtml(entry, 'otel-html report'));
   });

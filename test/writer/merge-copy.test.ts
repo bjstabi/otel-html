@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { mergeWith } from '../../src/api/convert.js';
 import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
-import { isV4, type ManifestV4, parseAnyManifest } from '../../src/format/manifest.js';
+import { isV4, type ManifestV4, parseAnyManifest, parseManifest } from '../../src/format/manifest.js';
 import { decodeTable } from '../../src/format/parquet/codec.js';
 import { TABLES, type Table } from '../../src/format/parquet/columns.js';
 import { MANIFEST_KEY, partitionWrapperPath } from '../../src/format/paths.js';
@@ -15,7 +15,7 @@ import { openSession } from '../../src/writer/session.js';
 import { logRecord, logsRequest } from '../../test-support/otlp-builders.js';
 import { perfFactor } from '../../test-support/perf-inject.js';
 import { createTestWriter, otlp, type TestWriter, testConfig } from '../../test-support/writer-deps.js';
-import { manifestOf, spansRequest } from './helpers.js';
+import { spansRequest } from './helpers.js';
 
 type Format = 'local' | 'site';
 const cfg = (format: Format, extra: object = {}) => ({ writer: { format, ...extra } });
@@ -45,6 +45,19 @@ async function v4Report(
     await s.add(otlp(r), `in-${i}.json`);
     await s.close();
   }
+}
+
+const FIXTURE = join(import.meta.dirname, '../../fixtures/reports/format-3/data');
+
+/** Copies the frozen format-3 (chunks) report into `name`; returns its manifest. */
+async function chunksInput(w: TestWriter, name: string) {
+  for (const e of readdirSync(FIXTURE, { recursive: true, withFileTypes: true })) {
+    if (!e.isFile()) continue;
+    const rel = join(e.parentPath, e.name).slice(FIXTURE.length + 1);
+    await w.deps.fs.writeBytes(`${name}/data/${rel}`, readFileSync(join(FIXTURE, rel)));
+  }
+  const text = w.fs.snapshot().get(`${name}/data/manifest.js`) ?? '';
+  return parseManifest(reviveDataJson(unwrapDataFile(text, MANIFEST_KEY)));
 }
 
 const cell = (row: object, key: string): unknown => Reflect.get(row, key);
@@ -182,15 +195,13 @@ describe('merge copies format-4 partitions', () => {
 
   test('mixed inputs: format-4 partitions are copied and a chunks report is converted in the same run', async () => {
     const w = createTestWriter();
-    // A chunks-format report is the format-3 input.
-    const s = await openSession(w.deps, { out: 'v3', config: testConfig(), mode: 'replace' });
-    await s.add(otlp(spansRequest(3, 50_000, 40)), 'v3.json');
-    await s.close();
+    // The frozen format-3 report is the chunks input.
+    const v3 = await chunksInput(w, 'v3');
     await v4Report(w, 'v4', [spansRequest(2), spansRequest(2, 10_000, 10)]);
     await mergeWith({ inputs: ['v4', 'v3'], out: 'm', config: cfg('site') }, w.deps);
     const m = v4Manifest(w, 'm');
-    expect(m.totals.spans).toBe(7);
-    expect(await rows(w, 'm', 'spans')).toBe(7);
+    expect(m.totals.spans).toBe(4 + v3.totals.spans);
+    expect(await rows(w, 'm', 'spans')).toBe(4 + v3.totals.spans);
     expect(m.partitions.map((p) => p.source).filter((s) => s.startsWith('merge:'))).toEqual([
       'merge:0#0',
       'merge:0#1',
@@ -293,9 +304,7 @@ describe('merge copies format-4 partitions', () => {
     test('the same with a chunks input in the mix', async () => {
       const w = createTestWriter();
       await oldReport(w);
-      const s = await openSession(w.deps, { out: 'v3', config: testConfig(), mode: 'replace' });
-      await s.add(otlp(spansRequest(1, 0, 20)), 'v3.json');
-      await s.close();
+      await chunksInput(w, 'v3');
       await dirInput(w);
       const before = snapshotOf(w);
       const e = await mergeWith(
@@ -310,14 +319,13 @@ describe('merge copies format-4 partitions', () => {
       const w = createTestWriter();
       await oldReport(w);
       await v4Report(w, 'a', [spansRequest(1, 0, 9)]);
-      const s = await openSession(w.deps, { out: 'v3', config: testConfig(), mode: 'replace' });
-      await s.add(otlp(spansRequest(1, 0, 20)), 'v3.json');
-      await s.close();
-      const chunk = manifestOf(w, 'v3').chunks[0];
+      const chunk = (await chunksInput(w, 'v3')).chunks[0];
       if (chunk === undefined) throw new Error('no chunk');
       await w.deps.fs.remove(`v3/${chunk.path}`);
       await w.deps.fs.writeBytes(`v3/${chunk.path}/inner`, new Uint8Array([1]));
-      expect(v4Manifest(w, 'a').epochUnixNano).toBe(manifestOf(w, 'v3').epochUnixNano);
+      expect(BigInt(v4Manifest(w, 'a').epochUnixNano)).toBeLessThan(
+        BigInt((await chunksInput(w, 'v3x')).epochUnixNano),
+      );
       const before = snapshotOf(w);
       const e = await mergeWith(
         { inputs: ['a', 'v3'], out: 'm', config: cfg('site'), replace: true },
@@ -420,14 +428,8 @@ describe('--compact and patterns (R56)', () => {
     await v4Report(w, 'x', [logs('disk full on sda', 'disk full on sdb', 'disk full on sdc')]);
     await v4Report(w, 'y', [logs('user 1 logged in', 'user 2 logged in', 'user 3 logged in')]);
     await mergeWith({ inputs: ['x', 'y'], out: 'm1', config: cfg('site') }, w.deps);
-    const chunks = await openSession(w.deps, {
-      out: 'v3',
-      config: testConfig({ writer: { chunkTargetBytes: 1 } }),
-      mode: 'replace',
-    });
-    await chunks.add(otlp(logs('connection from alpha closed by peer')), 'a.json');
-    await chunks.add(otlp(logs('connection from beta closed by peer')), 'b.json');
-    await chunks.close();
+    // Converted rows (spans and points of the frozen format-3 report) flush beside the copied log lineages.
+    await chunksInput(w, 'v3');
     await mergeWith(
       {
         inputs: ['v3', 'm1'],
@@ -438,7 +440,6 @@ describe('--compact and patterns (R56)', () => {
     );
     const sorted = (await patterns(w, 'm2')).sort((a, b) => String(a[1]).localeCompare(String(b[1])));
     expect(sorted).toEqual([
-      [0n, 'connection from <*> closed by peer', 2n],
       [0n, 'disk full on <*>', 3n],
       [0n, 'user <*> logged in', 3n],
     ]);
@@ -455,13 +456,11 @@ describe('an empty format-4 input', () => {
   test("does not fix the epoch: a chunks input after it merges, and the epoch is that input's", async () => {
     const w = createTestWriter();
     await emptyReport(w, 'e');
-    const s = await openSession(w.deps, { out: 'v3', config: testConfig(), mode: 'replace' });
-    await s.add(otlp(spansRequest(2)), 'v3.json');
-    await s.close();
+    const v3 = await chunksInput(w, 'v3');
     await mergeWith({ inputs: ['e', 'v3'], out: 'm', config: cfg('site') }, w.deps);
     const m = v4Manifest(w, 'm');
-    expect(m.epochUnixNano).toBe(manifestOf(w, 'v3').epochUnixNano);
-    expect(m.totals.spans).toBe(2);
+    expect(m.epochUnixNano).toBe(v3.epochUnixNano);
+    expect(m.totals.spans).toBe(v3.totals.spans);
   });
 
   test("merge E A then an append keeps A's epoch", async () => {

@@ -227,6 +227,8 @@ class PartitionSession implements WriterSession {
   #closing = false;
   #replacing: boolean;
   #partial = false;
+  /** `WriterDeps.beforeMetrics` runs once, when the first metric points arrive. */
+  #metricsSeen = false;
   /** The `checkpoint` counter of the last committed state write. */
   #checkpointSeq: number;
   #tail: Promise<unknown> = Promise.resolve();
@@ -280,6 +282,12 @@ class PartitionSession implements WriterSession {
     this.#lastFlushMs = deps.clock.monotonicMs();
   }
 
+  #beforeMetrics(): void {
+    if (this.#metricsSeen) return;
+    this.#metricsSeen = true;
+    this.#deps.beforeMetrics?.();
+  }
+
   // -- public API ------------------------------------------------------------------------------
 
   add(input: OtlpRequest, source: string, options?: AddOptions): Promise<AddResult> {
@@ -290,6 +298,7 @@ class PartitionSession implements WriterSession {
       const first = input.first ?? 0;
       let result: AddResult;
       if (input.signal === 'metrics') {
+        this.#beforeMetrics();
         const points = [...metricPointsOf(input, ctx, source)];
         this.#settleEpoch(points.length);
         result = this.#acceptPoints(points);
@@ -336,6 +345,7 @@ class PartitionSession implements WriterSession {
           result = this.#acceptLogs(rebased.rows, 'records');
           break;
         case 'metrics':
+          this.#beforeMetrics();
           result = this.#acceptPoints(Array.from(rebased.rows()), batch.origin);
           break;
       }
@@ -437,7 +447,7 @@ class PartitionSession implements WriterSession {
     return { out: this.#out, totals: { ...this.#totals }, chunks: all.length, bytes };
   }
 
-  /** The epoch rule of the chunk session: the earliest timestamp of the first data that has one, never changed. */
+  /** The epoch rule: the earliest timestamp of the first data that has one, never changed. */
   #ensureEpoch(candidate: UnixNanos | null): NormalizeContext {
     if (this.#epoch !== null && this.#ctx !== null) return this.#ctx;
     if (candidate === null) {

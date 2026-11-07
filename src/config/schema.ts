@@ -27,13 +27,6 @@ interface DropIn {
 /** The default `writer.localWarnBytes`: the Parquet size past which a `local` report warns. */
 export const DEFAULT_LOCAL_WARN_BYTES = 256_000_000;
 
-/**
- * Task 6.2 deletes this with the chunk session. A unit-test seam (`test-support/legacy-chunks.ts`): while on, the
- * default `writer.format` is the retired `chunks`, so the chunk-writer tests keep running until 6.2 deletes or ports
- * them. Config, env and flags still reject `chunks`; nothing in `src/` sets this.
- */
-export const legacyDefaultFormat: { chunks: boolean } = { chunks: false };
-
 /** The report formats `writer.format` names. */
 export type ReportFormat = 'local' | 'site';
 
@@ -49,8 +42,6 @@ interface WriterOut {
   dedupeCapacity: number;
   facetValueCap: number;
   facetKeyCap: number;
-  metricSeriesCap: number;
-  metricExemplars: number;
   drop: DropOut;
 }
 interface WriterIn {
@@ -65,8 +56,6 @@ interface WriterIn {
   dedupeCapacity?: number | undefined;
   facetValueCap?: number | undefined;
   facetKeyCap?: number | undefined;
-  metricSeriesCap?: number | undefined;
-  metricExemplars?: number | undefined;
   drop?: DropIn | undefined;
 }
 interface ListenerOut {
@@ -141,7 +130,7 @@ const WriterSchema = z
   .strictObject({
     format: z
       .enum(['local', 'site'], { error: (i) => (i.input === 'chunks' ? CHUNKS_GONE : undefined) })
-      .default(() => (legacyDefaultFormat.chunks ? ('chunks' as ReportFormat) : 'local')),
+      .default('local'),
     rowGroupRows: z.number().int().min(50_000).max(100_000).default(50_000),
     statisticsKeys: z.array(z.string()).default([]),
     localWarnBytes: posInt.default(DEFAULT_LOCAL_WARN_BYTES),
@@ -155,8 +144,6 @@ const WriterSchema = z
     dedupeCapacity: posInt.default(200_000),
     facetValueCap: posInt.default(1_000),
     facetKeyCap: posInt.default(500),
-    metricSeriesCap: posInt.default(1_000),
-    metricExemplars: posInt.default(4),
     drop: DropSchema,
   })
   .prefault({});

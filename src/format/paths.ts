@@ -37,24 +37,12 @@ export function chunkPath(signal: Signal, n: number): string {
   return `data/chunks/${signal}/${String(n).padStart(6, '0')}.js`;
 }
 
-export function chunkKey(signal: Signal, n: number): string {
-  return chunkPath(signal, n).slice('data/'.length, -'.js'.length);
-}
-
 export function traceShardPath(shard: string): string {
   return `data/traces/${shard}.js`;
 }
 
-export function traceShardKey(shard: string): string {
-  return `traces/${shard}`;
-}
-
 export function rollupPath(name: string): string {
   return `data/rollups/${name}.js`;
-}
-
-export function rollupKey(name: string): string {
-  return `rollups/${name}`;
 }
 
 /** The trace-index shard a trace belongs to: the first two hex characters of its id. */

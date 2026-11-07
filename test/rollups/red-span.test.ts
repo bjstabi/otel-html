@@ -1,14 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { RelNanos } from '../../src/model/ids.js';
 import { SpanKind, StatusCode } from '../../src/model/records.js';
-import { LogRollups } from '../../src/rollups/log-rollups.js';
-import { MetricCatalog } from '../../src/rollups/metric-catalog.js';
 import { RedSeries } from '../../src/rollups/red.js';
-import { createRollups, deserializeRollups, serializeRollups } from '../../src/rollups/report-rollups.js';
-import { METRIC_KEYS, SignalCounts } from '../../src/rollups/signal-counts.js';
+import { SignalCounts } from '../../src/rollups/signal-counts.js';
 import { DEFAULT_SPAN_FACETS, SpanRollups } from '../../src/rollups/span-rollups.js';
 import { severityKey } from '../../src/semconv/severity.js';
-import { logTarget, spanTarget } from '../ottl/fixtures.js';
+import { spanTarget } from '../ottl/fixtures.js';
 
 const t = (n: number): RelNanos => n as RelNanos;
 const opts = { facetValueCap: 4, facetKeyCap: 50 };
@@ -86,7 +83,7 @@ describe('SpanRollups', () => {
     expect(s.red.counts.reduce((a, b) => a + b, 0)).toBe(2);
     expect(s.red.errors.reduce((a, b) => a + b, 0)).toBe(1);
   });
-  it('is deterministic and round-trips via serializeRollups', () => {
+  it('is deterministic', () => {
     const mk = (): SpanRollups => {
       const s = new SpanRollups(opts);
       for (let i = 0; i < 20; i++)
@@ -94,26 +91,5 @@ describe('SpanRollups', () => {
       return s;
     };
     expect(mk().toJSON()).toEqual(mk().toJSON());
-    const logs = new LogRollups(opts);
-    logs.add(logTarget({ time: t(3_000_000) }));
-    const rollups = {
-      spans: mk(),
-      logs,
-      metrics: { buckets: new SignalCounts(METRIC_KEYS), catalog: new MetricCatalog({ seriesCap: 10 }) },
-    };
-    const ser = serializeRollups(rollups);
-    const back = deserializeRollups(JSON.parse(JSON.stringify(ser)), { ...opts, metricSeriesCap: 10 });
-    expect(serializeRollups(back)).toEqual(ser);
-  });
-  it('fails fast on malformed rollups', () => {
-    expect(() =>
-      deserializeRollups({ spans: 1, logs: {}, metrics: {} }, { ...opts, metricSeriesCap: 10 }),
-    ).toThrow(/rollups.spans/);
-    const ok = serializeRollups(createRollups({ ...opts, metricSeriesCap: 10 }));
-    const bad = { ...ok, metrics: { buckets: new SignalCounts(METRIC_KEYS).toJSON(), catalog: { x: 1 } } };
-    expect(() => deserializeRollups(bad, { ...opts, metricSeriesCap: 10 })).toThrow(
-      /rollups\.metrics\.catalog/,
-    );
-    expect(() => deserializeRollups({}, { ...opts, metricSeriesCap: 10 })).toThrow(/spans/);
   });
 });

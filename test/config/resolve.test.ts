@@ -1,8 +1,7 @@
 import { readFileSync } from 'node:fs';
-import { afterEach, beforeEach, describe, expect, onTestFinished, test } from 'vitest';
+import { describe, expect, test } from 'vitest';
 import { writeJsonSchema } from '../../src/config/json-schema.js';
 import { formatConfig, resolveConfig } from '../../src/config/resolve.js';
-import { legacyDefaultFormat } from '../../src/config/schema.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 
 function failure(fn: () => unknown): OtelHtmlError {
@@ -24,13 +23,12 @@ describe('resolveConfig', () => {
     expect(sources.get('viewer.theme')).toBe('default');
   });
 
-  test('metric writer defaults and validation', () => {
-    const { config } = resolveConfig({ env: {} });
-    expect(config.writer.metricSeriesCap).toBe(1_000);
-    expect(config.writer.metricExemplars).toBe(4);
-    const e = failure(() => resolveConfig({ file: { writer: { metricSeriesCap: 0 } }, env: {} }));
-    expect(e.code).toBe('invalid-config');
-    expect(e.message).toContain('writer.metricSeriesCap');
+  test('the chunk writer metric keys are gone: writer.metricSeriesCap and metricExemplars are unknown', () => {
+    for (const key of ['metricSeriesCap', 'metricExemplars']) {
+      const e = failure(() => resolveConfig({ file: { writer: { [key]: 1 } }, env: {} }));
+      expect(e.code).toBe('invalid-config');
+      expect(e.message).toContain(key);
+    }
   });
 
   test('format-4 writer keys: defaults, bounds and the env binding', () => {
@@ -143,11 +141,6 @@ describe('resolveConfig', () => {
 
 describe('JSON Schema', () => {
   test('committed schema is fresh', () => {
-    // The unit-test setup turns the legacy chunk default on until Task 6.2; the schema documents the real one.
-    legacyDefaultFormat.chunks = false;
-    onTestFinished(() => {
-      legacyDefaultFormat.chunks = true;
-    });
     const committed = readFileSync(new URL('../../schema/otel-html.schema.json', import.meta.url), 'utf8');
     expect(committed).toBe(writeJsonSchema());
   });
@@ -169,14 +162,6 @@ describe('prototype pollution', () => {
 });
 
 describe('writer.format after the chunk format', () => {
-  // The unit-test setup turns the legacy chunk default on until Task 6.2; these tests want the real default.
-  beforeEach(() => {
-    legacyDefaultFormat.chunks = false;
-  });
-  afterEach(() => {
-    legacyDefaultFormat.chunks = true;
-  });
-
   const CHUNKS_MESSAGE =
     'format 3 (chunks) is no longer written; use local or site (otel-html merge converts an older report)';
 

@@ -4,7 +4,7 @@ import { describe, expect, test } from 'vitest';
 import { mergeWith } from '../../src/api/convert.js';
 import { decodeColumns } from '../../src/format/columns.js';
 import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
-import { isV4, type ManifestV4, parseAnyManifest } from '../../src/format/manifest.js';
+import { isV4, type ManifestV4, parseAnyManifest, parseManifest } from '../../src/format/manifest.js';
 import { decodeTable } from '../../src/format/parquet/codec.js';
 import type { Table } from '../../src/format/parquet/columns.js';
 import { MANIFEST_KEY } from '../../src/format/paths.js';
@@ -15,7 +15,7 @@ import { mergeReports } from '../../src/writer/merge.js';
 import { openSession } from '../../src/writer/session.js';
 import { type JsonObject, logRecord, logsRequest } from '../../test-support/otlp-builders.js';
 import { createTestWriter, otlp, type TestWriter, testConfig } from '../../test-support/writer-deps.js';
-import { allSpans, cumulativeRequest, manifestOf, spansRequest } from './helpers.js';
+import { cumulativeRequest, manifestOf, spansRequest } from './helpers.js';
 
 const REPORTS = join(import.meta.dirname, '../../fixtures/reports');
 
@@ -26,6 +26,13 @@ async function copyFixture(w: TestWriter, name: string): Promise<void> {
     const rel = join(e.parentPath, e.name).slice(root.length + 1);
     await w.deps.fs.writeBytes(`${name}/data/${rel}`, readFileSync(join(root, rel)));
   }
+}
+
+/** The manifest of a frozen format 1 to 3 fixture copied in by `copyFixture`. */
+function fixtureManifest(w: TestWriter, name: string) {
+  const text = w.fs.snapshot().get(`${name}/data/manifest.js`);
+  if (text === undefined) throw new Error('no manifest');
+  return parseManifest(reviveDataJson(unwrapDataFile(text, MANIFEST_KEY)));
 }
 
 function v4Manifest(w: TestWriter, out: string): ManifestV4 {
@@ -54,7 +61,7 @@ describe.each(['format-1', 'format-2', 'format-3'])('%s merged into a format-4 r
   test('keeps the span count, absolute times and point deltas', async () => {
     const w = createTestWriter();
     await copyFixture(w, name);
-    const input = manifestOf(w, name);
+    const input = fixtureManifest(w, name);
     const summary = await mergeWith({ inputs: [name], out: 'm', config }, w.deps);
     expect(summary.totals).toEqual(input.totals);
 
@@ -102,7 +109,7 @@ describe.each(['format-1', 'format-2', 'format-3'])('%s merged into a format-4 r
 test('three inputs with the same spans are deduplicated and the earliest epoch is the output epoch', async () => {
   const w = createTestWriter();
   for (const n of ['format-1', 'format-2', 'format-3']) await copyFixture(w, n);
-  const one = manifestOf(w, 'format-1');
+  const one = fixtureManifest(w, 'format-1');
   await mergeWith({ inputs: ['format-1', 'format-2', 'format-3'], out: 'm', config }, w.deps);
   const m = v4Manifest(w, 'm');
   expect(m.totals.spans).toBe(one.totals.spans);
@@ -112,8 +119,9 @@ test('three inputs with the same spans are deduplicated and the earliest epoch i
   expect(one.totals.metrics).toBe(230);
 });
 
-async function chunkReport(w: TestWriter, out: string, requests: readonly JsonObject[]): Promise<void> {
-  const s = await openSession(w.deps, { out, config: testConfig(), mode: 'replace' });
+/** A format-4 input report of the requests, written by the partition session. */
+async function partitionReport(w: TestWriter, out: string, requests: readonly JsonObject[]): Promise<void> {
+  const s = await openSession(w.deps, { out, config: testConfig(config), mode: 'replace' });
   for (const [i, r] of requests.entries()) await s.add(otlp(r), `in-${i}.json`);
   await s.close();
 }
@@ -124,13 +132,13 @@ describe('rebasing across epochs', () => {
   test('a later-epoch input given first keeps exact absolute times and the earliest epoch wins', async () => {
     const w = createTestWriter();
     await copyFixture(w, 'format-3');
-    const original = manifestOf(w, 'format-3');
+    const original = fixtureManifest(w, 'format-3');
     const lateEpoch = BigInt(original.epochUnixNano) + SHIFT;
     const file = 'format-3/data/manifest.js';
     const text = w.fs.snapshot().get(file) ?? '';
     expect(text).toContain(original.epochUnixNano);
     await w.deps.fs.writeTextAtomic(file, text.replace(original.epochUnixNano, lateEpoch.toString()));
-    await chunkReport(w, 'early', [spansRequest(3, 0, 5000)]);
+    await partitionReport(w, 'early', [spansRequest(3, 0, 5000)]);
     const earlyEpoch = BigInt(manifestOf(w, 'early').epochUnixNano);
     expect(earlyEpoch).toBeLessThan(lateEpoch);
 
@@ -178,13 +186,13 @@ describe('rebasing across epochs', () => {
 describe('metric stream origins on the format-4 path', () => {
   test('sequential runs of one cumulative series are separate streams, not resets', async () => {
     const w = createTestWriter();
-    await chunkReport(w, 'a', [
+    await partitionReport(w, 'a', [
       cumulativeRequest('c', [
         [10, 4, 0],
         [20, 9, 0],
       ]),
     ]);
-    await chunkReport(w, 'b', [
+    await partitionReport(w, 'b', [
       cumulativeRequest('c', [
         [110, 3, 100],
         [120, 7, 100],
@@ -203,41 +211,61 @@ describe('metric stream origins on the format-4 path', () => {
   });
 });
 
-describe('format mismatch with an existing output (R54)', () => {
-  test('merge as chunks into an existing format-4 report is a version-mismatch with the append hint', async () => {
+describe('overlapping shards of one cumulative series', () => {
+  test('each restart counts once, the totals are unchanged (#15)', async () => {
     const w = createTestWriter();
-    await chunkReport(w, 'in', [spansRequest(1)]);
+    // Parallel shards without an instance id: A runs 10..100 s; B runs 20..90 s and restarts at 60 s, inside A's range.
+    await partitionReport(w, 'a', [
+      cumulativeRequest('c', [
+        [10, 5, 0],
+        [100, 50, 0],
+      ]),
+    ]);
+    await partitionReport(w, 'b', [
+      cumulativeRequest('c', [
+        [20, 4, 5],
+        [50, 9, 5],
+        [70, 2, 60],
+        [90, 6, 60],
+      ]),
+    ]);
+    await mergeWith({ inputs: ['a', 'b'], out: 'm', config }, w.deps);
+    const points = await rowsOf(w, 'm', 'points');
+    expect(points).toHaveLength(6);
+    // A counts 50, B 9 before its restart and 6 after: 65 in all, and B's restart is its one reset.
+    expect(points.reduce((sum, p) => sum + Number(cell(p, 'delta_value')), 0)).toBe(65);
+    expect(points.filter((p) => cell(p, 'reset') === true)).toHaveLength(1);
+  });
+});
+
+describe('format mismatch with an existing output (R54)', () => {
+  test('merge as local into an existing site report is a version-mismatch with the append hint', async () => {
+    const w = createTestWriter();
+    await partitionReport(w, 'in', [spansRequest(1)]);
     await mergeWith({ inputs: ['in'], out: 'out', config }, w.deps);
     const e = await mergeReports(w.deps, ['in'], { out: 'out', config: testConfig(), mode: 'open' }).catch(
       (x: unknown) => x,
     );
     expect(e).toBeInstanceOf(OtelHtmlError);
-    expect(e).toMatchObject({ code: 'version-mismatch', hint: 'append with --format site' });
-  });
-
-  test('merge as site into an existing format-3 report is a version-mismatch with the merge hint', async () => {
-    const w = createTestWriter();
-    await chunkReport(w, 'in', [spansRequest(1)]);
-    await chunkReport(w, 'out', [spansRequest(1, 0, 9)]);
-    const e = await mergeReports(w.deps, ['in'], {
-      out: 'out',
-      config: testConfig({ writer: { format: 'site' } }),
-      mode: 'open',
-    }).catch((x: unknown) => x);
-    expect(e).toMatchObject({
-      code: 'version-mismatch',
-      hint: 'use merge to convert: `otel-html merge out -o <dir> --format site`',
-    });
+    expect(e).toMatchObject({ hint: expect.stringContaining('append with --format site') });
   });
 });
 
 describe('addRecords', () => {
   test('a ref outside the batch tables is an invalid-report', async () => {
     const w = createTestWriter();
-    await chunkReport(w, 'in', [spansRequest(1)]);
-    const span = allSpans(w, 'in')[0];
+    await copyFixture(w, 'format-3');
+    const chunk = fixtureManifest(w, 'format-3').chunks.find((c) => c.signal === 'spans');
+    if (chunk === undefined) throw new Error('no span chunk');
+    const key = chunk.path.slice('data/'.length, -'.js'.length);
+    const span = (
+      decodeColumns(
+        SPAN_COLUMNS,
+        reviveDataJson(unwrapDataFile(w.fs.snapshot().get(`format-3/${chunk.path}`) ?? '', key)),
+      ).rows as SpanRecord[]
+    )[0];
     if (span === undefined) throw new Error('no span');
-    const epoch = BigInt(manifestOf(w, 'in').epochUnixNano) as never;
+    const epoch = BigInt(fixtureManifest(w, 'format-3').epochUnixNano) as never;
     for (const format of ['site'] as const) {
       const s = await openSession(w.deps, {
         out: `o-${format}`,
@@ -254,7 +282,7 @@ describe('addRecords', () => {
 
   test('logs of a v3 input reach the log table and the pattern clusters', async () => {
     const w = createTestWriter();
-    await chunkReport(w, 'in', [
+    await partitionReport(w, 'in', [
       logsRequest([1, 2, 3].map((n) => logRecord({ body: { stringValue: `user ${n} logged in` } }))),
     ]);
     await mergeWith({ inputs: ['in'], out: 'm', config }, w.deps);

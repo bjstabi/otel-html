@@ -3,7 +3,6 @@ import { type SerializedTimeBuckets, TimeBuckets } from './time-buckets.js';
 
 /** Metric rollups count data points. */
 export const METRIC_KEYS = ['points'] as const;
-export type MetricKey = (typeof METRIC_KEYS)[number];
 
 /** Per-key counts over time for logs (by severity range) and metrics (points). */
 export class SignalCounts<K extends string> {
