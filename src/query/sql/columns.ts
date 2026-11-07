@@ -159,14 +159,14 @@ export function jsonKind(json: ExprNode): ExprNode {
   );
 }
 
-/** `<col> - <epoch>::BIGINT`. */
+/** `(<col> - <epoch>::BIGINT)`, parenthesised so a caller can put any operator next to it. */
 export function relTime(col: string, epoch: bigint): ExprNode {
-  return sql`${column(col)} - ${verbatim(`${epoch}::BIGINT`)}`;
+  return sql`(${column(col)} - ${verbatim(`${epoch}::BIGINT`)})`;
 }
 
-/** `<epoch>::BIGINT + <rel>` for a literal relative time. */
+/** `(<epoch>::BIGINT + <rel>)` for a literal relative time. */
 export function absLiteral(rel: number, epoch: bigint): ExprNode {
-  return sql`${verbatim(`${epoch}::BIGINT`)} + ${literal(rel)}`;
+  return sql`(${verbatim(`${epoch}::BIGINT`)} + ${literal(rel)})`;
 }
 
 /** DuckDB SQL text of an expression (mosaic-sql's DuckDB code generator), for tests and error hints. */

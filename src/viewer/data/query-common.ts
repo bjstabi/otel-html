@@ -1,6 +1,6 @@
 import { OtelHtmlError } from '../../model/errors.js';
 
-/** The caps a filtered set's facets are rebuilt with: the report's own, as the writer serialized them. */
+/** The caps a filtered set's facets are built with: format 4 uses `DEFAULT_FACET_CAPS` (the manifest records no writer caps and facets are computed at view time); the old chunk readers take the caps the writer serialized. */
 export interface FacetCaps {
   readonly facetValueCap: number;
   readonly facetKeyCap: number;
