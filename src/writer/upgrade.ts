@@ -14,16 +14,21 @@ import { ENGINE_VERSION } from './engine-assets.js';
 import { renderIndexHtml } from './html.js';
 import { acquireLock } from './lock.js';
 import { readMergeInput } from './merge.js';
+import { warnIfLocalLarge } from './open-common.js';
 import type { FileSystem } from './ports.js';
 import type { WriterDeps } from './session.js';
 import { writeViewerAssets } from './viewer-assets.js';
 import { writeWrapper } from './wrapper-file.js';
+
+const DEFAULT_LOCAL_WARN_BYTES = 256_000_000; // the schema default of writer.localWarnBytes
 
 export interface UpgradeOptions {
   /** Format 4 only: switch the report between `local` (base64 wrappers, opens from `file://`) and `site`. */
   format?: 'local' | 'site';
   /** Format 4 only: where the report loads its viewer files from (`assets/` or a relative path like `../../assets/0.3.0/`). */
   assetsBase?: string;
+  /** With `format: 'local'`: the Parquet size past which the report is better served as `site` (`writer.localWarnBytes`, default 256000000). */
+  localWarnBytes?: number;
 }
 
 /** Refuses an `assets` folder that is a link out of the report: the viewer files would land wherever it points. */
@@ -166,6 +171,11 @@ async function upgradePartitioned(
   const assetsBase = opts.assetsBase ?? manifest.engine.assetsBase;
   const sharedBase = assetsBase !== DEFAULT_ASSETS_BASE;
   const toLocal = format === 'local' && manifest.engine.format === 'site';
+  if (format === 'local') {
+    let bytes = 0;
+    for (const p of manifest.partitions) for (const f of Object.values(p.files)) bytes += f.bytes;
+    warnIfLocalLarge(deps.logger, bytes, opts.localWarnBytes ?? DEFAULT_LOCAL_WARN_BYTES);
+  }
   if (toLocal) await addWrappers(fs, dir, manifest);
   if (!sharedBase) await writeViewerAssets(fs, dir, viewerAssets, format);
   await fs.writeTextAtomic(

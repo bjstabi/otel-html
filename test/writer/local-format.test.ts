@@ -321,7 +321,7 @@ describe('appending with another assets base', () => {
     expect(e).toBeInstanceOf(OtelHtmlError);
     expect((e as OtelHtmlError).code).toBe('usage');
     expect((e as OtelHtmlError).hint).toContain('--assets-base assets/');
-    expect((e as OtelHtmlError).hint).toContain('--replace');
+    expect((e as OtelHtmlError).hint).toContain('otel-html upgrade');
   });
 
   test('a shared base can change to another shared base, and the manifest follows', async () => {
@@ -365,6 +365,6 @@ describe('appending in another format', () => {
     expect(e).toBeInstanceOf(OtelHtmlError);
     expect((e as OtelHtmlError).code).toBe('usage');
     expect((e as OtelHtmlError).hint).toContain(`--format ${first}`);
-    expect((e as OtelHtmlError).hint).toContain('--replace');
+    expect((e as OtelHtmlError).hint).toContain('otel-html upgrade');
   });
 });

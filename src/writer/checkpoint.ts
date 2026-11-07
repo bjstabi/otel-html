@@ -278,13 +278,15 @@ export async function loadPartitionCheckpoint(
   fs: FileSystem,
   out: string,
   version: string,
+  /** The format the caller writes: the merge hint names it. */
+  format: string,
 ): Promise<PartitionCheckpoint> {
   const manifest = await readManifest(fs, out);
   if (!isV4(manifest)) {
     throw new OtelHtmlError('version-mismatch', {
       message: `cannot append: the report at ${out} is format ${manifest.formatVersion}; writer.format local or site writes format 4`,
       path: 'manifest.formatVersion',
-      hint: `use merge to convert: \`otel-html merge ${out} -o <dir>\``,
+      hint: `use merge to convert: \`otel-html merge ${out} -o <dir> --format ${format}\``,
     });
   }
   if (manifest.otelHtmlVersion !== version) {

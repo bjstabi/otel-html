@@ -399,3 +399,48 @@ describe('otel-html upgrade --format --assets-base', () => {
     expect(manifestV4(w, 'r').engine).toMatchObject({ format: 'local', assetsBase: '../../assets/0.3.0/' });
   });
 });
+
+describe('upgrade --format local size warning (R52)', () => {
+  const warns = (w: TestWriter) => w.logs.filter((l) => l.level === 'warn' && l.msg.includes('local report'));
+
+  test('warns when the Parquet bytes pass localWarnBytes, and not when they do not', async () => {
+    const w = createTestWriter();
+    await v4Report(w, 'r', 'site');
+    await upgradeReport(w.deps, 'r', { format: 'local' });
+    expect(warns(w)).toHaveLength(0);
+    const w2 = createTestWriter();
+    await v4Report(w2, 'r', 'site');
+    await upgradeReport(w2.deps, 'r', { format: 'local', localWarnBytes: 1 });
+    expect(warns(w2)).toHaveLength(1);
+    expect(warns(w2)[0]?.msg).toContain('--format site');
+  });
+
+  test('a site upgrade never warns', async () => {
+    const w = createTestWriter();
+    await v4Report(w, 'r', 'local');
+    await upgradeReport(w.deps, 'r', { format: 'site', localWarnBytes: 1 });
+    expect(warns(w)).toHaveLength(0);
+  });
+
+  test('the CLI reads writer.localWarnBytes from --config', async () => {
+    const w = createTestWriter();
+    await v4Report(w, 'r', 'site');
+    await w.fs.writeTextAtomic('cfg.yaml', 'writer:\n  localWarnBytes: 1\n');
+    const code = await runCli(
+      ['upgrade', 'r', '--format', 'local', '--config', 'cfg.yaml'],
+      {
+        stdout: () => undefined,
+        stderr: () => undefined,
+        env: {},
+        cwd: '/work',
+        signals: { on: () => () => undefined },
+        spawn: () => {
+          throw new Error('no spawn');
+        },
+      },
+      w.deps,
+    );
+    expect(code).toBe(0);
+    expect(warns(w)).toHaveLength(1);
+  });
+});

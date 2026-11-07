@@ -71,6 +71,18 @@ describe('cli --format and --assets-base', () => {
     expect(sources).toHaveLength(2);
   });
 
+  test('merge --compact with the chunks format exits 2 and says it applies to --format local|site', async () => {
+    const w = createTestWriter();
+    await put(w, 'in/a.json', JSON.stringify(spansRequest(2)));
+    expect((await run(w, ['convert', 'in/a.json', '-o', 'a'])).code).toBe(0);
+    const r = await run(w, ['merge', 'a', '-o', 'm', '--compact']);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain('writer.compactOnMerge');
+    expect(r.stderr).toContain('--format local|site');
+    const viaEnv = await run(w, ['merge', 'a', '-o', 'm2', '--compact'], { OTEL_HTML_FORMAT: 'chunks' });
+    expect(viaEnv.code).toBe(2);
+  });
+
   test('--assets-base is validated by the config schema and writes no own assets/', async () => {
     const w = createTestWriter();
     await put(w, 'in/a.json', JSON.stringify(spansRequest(2)));

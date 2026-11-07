@@ -82,7 +82,7 @@ async function locateManifest(fs: FileSystem, rawDir: string, verb: string): Pro
 }
 
 /** Fails like the copy would: the path must be a file (or a link) that opens and yields its first bytes. Reads one piece, not the file. */
-async function assertReadable(fs: FileSystem, file: string, listed: string): Promise<void> {
+async function assertReadable(fs: FileSystem, file: string, listed: string, bytes?: number): Promise<void> {
   const fail = (why: string): OtelHtmlError =>
     new OtelHtmlError('invalid-report', {
       message: `${file}: cannot read ${listed} listed in the manifest (${why})`,
@@ -91,11 +91,32 @@ async function assertReadable(fs: FileSystem, file: string, listed: string): Pro
   if (kind === 'missing') throw fail('it is missing');
   if (kind === 'dir' || kind === 'other') throw fail('it is not a file');
   try {
-    if (fs.readChunks === undefined) await fs.readBytes(file);
-    else for await (const _piece of fs.readChunks(file)) break;
+    const size = await sizeOf(fs, file, bytes !== undefined);
+    if (bytes !== undefined && size !== bytes) {
+      throw new OtelHtmlError('invalid-report', {
+        message: `${file}: ${listed} is ${size} bytes, the manifest lists ${bytes}`,
+      });
+    }
   } catch (e) {
+    if (e instanceof OtelHtmlError) throw e;
     throw fail(e instanceof Error ? e.message : String(e));
   }
+}
+
+/** The file's size when `exact`, else only that its first bytes read. Streams or slices: a partition is never held whole when the port can avoid it. */
+async function sizeOf(fs: FileSystem, file: string, exact: boolean): Promise<number> {
+  if (exact && fs.openBlob !== undefined) {
+    const blob = await fs.openBlob(file);
+    await blob.slice(0, 1).arrayBuffer(); // opens for real
+    return blob.size;
+  }
+  if (fs.readChunks === undefined) return (await fs.readBytes(file)).length;
+  let n = 0;
+  for await (const piece of fs.readChunks(file)) {
+    n += piece.length;
+    if (!exact) break;
+  }
+  return n;
 }
 
 /** The `engine.format` of the format-4 report at `dir`, or undefined when it is a chunks report. */
@@ -258,17 +279,23 @@ export async function mergeReports(
   if (partitioned !== undefined && options.config.writer.format === 'chunks') {
     const existing = intoExisting ? await existingFormat(deps.fs, out) : undefined;
     throw new OtelHtmlError('usage', {
-      message: `cannot merge the format-4 report ${partitioned.dir} into a chunks report`,
+      message:
+        existing === undefined
+          ? `cannot merge the format-4 report ${partitioned.dir} into a chunks report`
+          : `cannot merge the format-4 report ${partitioned.dir} into the ${existing} report at ${out} without --format`,
       hint: `merge with ${existing === undefined ? '--format local or --format site' : `--format ${existing}`}`,
     });
   }
   // Also before it: a replace wipes the old report at the session's first write, so every partition file and chunk an input lists must open.
   for (const input of loaded) {
+    // Chunk inputs list no sizes; partition files do, and a truncated one would fail the copy after the wipe.
     const listed =
       input.kind === 'partitions'
-        ? input.manifest.partitions.flatMap((e) => Object.values(e.files).map((f) => f.path))
-        : input.manifest.chunks.map((c) => c.path);
-    for (const path of listed) await assertReadable(deps.fs, at(input.dir, path), path);
+        ? input.manifest.partitions.flatMap((e) =>
+            Object.values(e.files).map((f) => ({ path: f.path, bytes: f.bytes })),
+          )
+        : input.manifest.chunks.map((c) => ({ path: c.path, bytes: undefined }));
+    for (const { path, bytes } of listed) await assertReadable(deps.fs, at(input.dir, path), path, bytes);
   }
   const first = loaded[0];
   const titled =

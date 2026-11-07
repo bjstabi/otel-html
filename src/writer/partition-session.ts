@@ -44,7 +44,7 @@ import { DedupeSet } from './dedupe.js';
 import { renderIndexHtml } from './html.js';
 import { inheritDashboards } from './inherit-config.js';
 import { acquireLock, type LockHandle } from './lock.js';
-import { DEFAULT_TITLE, type Drops, type FolderState, iso } from './open-common.js';
+import { DEFAULT_TITLE, type Drops, type FolderState, iso, warnIfLocalLarge } from './open-common.js';
 import {
   buildManifest,
   buildState,
@@ -126,7 +126,7 @@ export async function openPartitionSession(
         replacing: folder.preexisting,
       };
     } else {
-      const cp = await loadPartitionCheckpoint(fs, out, deps.version);
+      const cp = await loadPartitionCheckpoint(fs, out, deps.version, config.writer.format);
       config = inheritDashboards(config, cp.manifest.config);
       // The partitions already written have (local) or lack (site) their base64 scripts, and the engine files differ.
       // The report's own assets/ (about 46 MB of engine files) would be left behind, and index.html rewritten past it.
@@ -136,13 +136,13 @@ export async function openPartitionSession(
       ) {
         throw new OtelHtmlError('usage', {
           message: `cannot append with writer.assetsBase ${config.writer.assetsBase} to a report that carries its own assets/`,
-          hint: `append with --assets-base ${DEFAULT_ASSETS_BASE}, or start the report over with --replace`,
+          hint: `append with --assets-base ${DEFAULT_ASSETS_BASE}, or move the report with \`otel-html upgrade ${out} --assets-base ${config.writer.assetsBase}\``,
         });
       }
       if (cp.manifest.engine.format !== config.writer.format) {
         throw new OtelHtmlError('usage', {
           message: `cannot append as writer.format ${config.writer.format} to a ${cp.manifest.engine.format} report`,
-          hint: `append with --format ${cp.manifest.engine.format}, or start the report over with --replace`,
+          hint: `append with --format ${cp.manifest.engine.format}, or switch the report with \`otel-html upgrade ${out} --format ${config.writer.format}\``,
         });
       }
       // Before any write: what an interrupted session left unlisted must not meet this session's cuts.
@@ -353,7 +353,8 @@ class PartitionSession implements WriterSession {
       // A background write may be cutting: partition numbers are taken only between cuts.
       await this.#inflight;
       await this.#wipeReplaced();
-      this.#ensureEpoch(copy.epoch);
+      // An empty report's epoch is 0 and means "none": it must not become this report's.
+      if (copy.partitions.length > 0) this.#ensureEpoch(copy.epoch);
       const taken = this.#copied.get(copy.origin) ?? [];
       this.#copied.set(copy.origin, taken);
       for (const src of copy.partitions) {
@@ -760,12 +761,7 @@ class PartitionSession implements WriterSession {
     if (format !== 'local' || this.#warnedLarge) return;
     let bytes = 0;
     for (const e of this.#committed) for (const f of Object.values(e.files)) bytes += f.bytes;
-    if (bytes <= localWarnBytes) return;
-    this.#warnedLarge = true;
-    this.#deps.logger.warn(
-      `this local report's partitions total ${bytes} bytes of Parquet (their base64 scripts add about a third on top); it loads them all when opened. Use --format site and serve the report over http for large reports`,
-      { bytes, localWarnBytes },
-    );
+    this.#warnedLarge = warnIfLocalLarge(this.#deps.logger, bytes, localWarnBytes);
   }
 
   #live<T>(v: T | null): T {

@@ -8,6 +8,7 @@ import { isV4, type ManifestV4, parseAnyManifest } from '../../src/format/manife
 import { decodeTable } from '../../src/format/parquet/codec.js';
 import { TABLES, type Table } from '../../src/format/parquet/schema.js';
 import { MANIFEST_KEY, partitionWrapperPath } from '../../src/format/paths.js';
+import type { OtelHtmlError } from '../../src/model/errors.js';
 import { mergeReports } from '../../src/writer/merge.js';
 import { createNodeFileSystem } from '../../src/writer/node-fs.js';
 import { openSession } from '../../src/writer/session.js';
@@ -219,12 +220,33 @@ describe('merge copies format-4 partitions', () => {
     expect(String((e as Error).message)).toContain(`a/${f.path}`);
   });
 
+  test('a partition file whose size differs from the manifest is an invalid-report, before anything is wiped', async () => {
+    const w = createTestWriter();
+    await v4Report(w, 'old', [spansRequest(2)]);
+    await mergeWith({ inputs: ['old'], out: 'm', config: cfg('site') }, w.deps);
+    const logs = (body: string) => logsRequest([logRecord({ body: { stringValue: body } })]);
+    await v4Report(w, 'a', [logs('one'), logs('two')]);
+    const f = v4Manifest(w, 'a').partitions[0]?.files.logs;
+    if (f === undefined) throw new Error('no logs file');
+    const full = await bytesOf(w, `a/${f.path}`);
+    await w.deps.fs.writeBytes(`a/${f.path}`, full.slice(0, full.length - 10));
+    const before = [...w.fs.snapshot()].filter(([k]) => k.startsWith('m/'));
+    const e = await mergeWith({ inputs: ['a'], out: 'm', config: cfg('site'), replace: true }, w.deps).catch(
+      (x: unknown) => x,
+    );
+    expect(e).toMatchObject({ code: 'invalid-report' });
+    expect(String((e as Error).message)).toContain(
+      `${full.length - 10} bytes, the manifest lists ${f.bytes}`,
+    );
+    expect([...w.fs.snapshot()].filter(([k]) => k.startsWith('m/'))).toEqual(before);
+  });
+
   test('the files are copied as bytes: a listed file of arbitrary content arrives unchanged (no decode)', async () => {
     const w = createTestWriter();
     await v4Report(w, 'a', [spansRequest(2)]);
     const f = v4Manifest(w, 'a').partitions[0]?.files.spans;
     if (f === undefined) throw new Error('no spans file');
-    const junk = new Uint8Array([0, 1, 2, 3, 250, 251, 252, 253, 254, 255]);
+    const junk = Uint8Array.from({ length: f.bytes }, (_, i) => (i * 7) % 256); // the listed size, not Parquet
     await w.deps.fs.writeBytes(`a/${f.path}`, junk);
     await mergeWith({ inputs: ['a'], out: 'm', config: cfg('site') }, w.deps);
     const out = v4Manifest(w, 'm').partitions[0]?.files.spans;
@@ -358,6 +380,7 @@ describe('merge copies format-4 partitions', () => {
       (x: unknown) => x,
     );
     expect(e).toMatchObject({ code: 'usage', hint: 'merge with --format local' });
+    expect((e as OtelHtmlError).message).toContain('into the local report at m without --format');
   });
 });
 
@@ -428,5 +451,64 @@ describe('--compact and patterns (R56)', () => {
       [0n, 'disk full on <*>', 3n],
       [0n, 'user <*> logged in', 3n],
     ]);
+  });
+});
+
+describe('an empty format-4 input', () => {
+  async function emptyReport(w: TestWriter, out: string): Promise<void> {
+    const s = await openSession(w.deps, { out, config: testConfig(cfg('site')), mode: 'replace' });
+    await s.close();
+    expect(v4Manifest(w, out).epochUnixNano).toBe('0');
+  }
+
+  test("does not fix the epoch: a chunks input after it merges, and the epoch is that input's", async () => {
+    const w = createTestWriter();
+    await emptyReport(w, 'e');
+    const s = await openSession(w.deps, { out: 'v3', config: testConfig(), mode: 'replace' });
+    await s.add(otlp(spansRequest(2)), 'v3.json');
+    await s.close();
+    await mergeWith({ inputs: ['e', 'v3'], out: 'm', config: cfg('site') }, w.deps);
+    const m = v4Manifest(w, 'm');
+    expect(m.epochUnixNano).toBe(manifestOf(w, 'v3').epochUnixNano);
+    expect(m.totals.spans).toBe(2);
+  });
+
+  test("merge E A then an append keeps A's epoch", async () => {
+    const w = createTestWriter();
+    await emptyReport(w, 'e');
+    await v4Report(w, 'a', [spansRequest(2)]);
+    await mergeWith({ inputs: ['e', 'a'], out: 'ea', config: cfg('site') }, w.deps);
+    expect(v4Manifest(w, 'ea').epochUnixNano).toBe(v4Manifest(w, 'a').epochUnixNano);
+    const s = await openSession(w.deps, { out: 'ea', config: testConfig(cfg('site')), mode: 'append' });
+    await s.add(otlp(spansRequest(1, 5000, 50)), 'more.json');
+    await s.close();
+    const m = v4Manifest(w, 'ea');
+    expect(m.epochUnixNano).toBe(v4Manifest(w, 'a').epochUnixNano);
+    expect(m.totals.spans).toBe(3);
+  });
+});
+
+describe('refusals point to the lossless path', () => {
+  test('appending as another format names upgrade --format', async () => {
+    const w = createTestWriter();
+    await v4Report(w, 'a', [spansRequest(1)], 'site');
+    const e = await openSession(w.deps, { out: 'a', config: testConfig(cfg('local')), mode: 'append' }).catch(
+      (x: unknown) => x,
+    );
+    expect(e).toMatchObject({ code: 'usage' });
+    expect((e as OtelHtmlError).hint).toContain('otel-html upgrade a --format local');
+    expect((e as OtelHtmlError).hint).not.toContain('--replace');
+  });
+
+  test('appending with a shared base to a report with its own assets names upgrade --assets-base', async () => {
+    const w = createTestWriter();
+    await v4Report(w, 'a', [spansRequest(1)], 'site');
+    const e = await openSession(w.deps, {
+      out: 'a',
+      config: testConfig(cfg('site', { assetsBase: '../../assets/1/' })),
+      mode: 'append',
+    }).catch((x: unknown) => x);
+    expect(e).toMatchObject({ code: 'usage' });
+    expect((e as OtelHtmlError).hint).toContain('otel-html upgrade a --assets-base ../../assets/1/');
   });
 });

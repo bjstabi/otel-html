@@ -192,6 +192,14 @@ export const ConfigSchema: z.ZodType<ResolvedConfig, ConfigInput> = z
         message: `applies to writer.format local or site (--format local|site), not chunks; use ${DEFAULT_ASSETS_BASE} or set the format`,
       });
     }
+    if (c.writer.format === 'chunks' && c.writer.compactOnMerge) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['writer', 'compactOnMerge'],
+        message:
+          'applies to writer.format local or site (--format local|site), not chunks; set the format or drop --compact',
+      });
+    }
     const id = c.viewer.defaultDashboard;
     if (id !== 'fusion' && !c.dashboards.some((d) => d.dashboard.id === id)) {
       ctx.addIssue({

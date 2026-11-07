@@ -226,7 +226,7 @@ describe('format mismatch with an existing output (R54)', () => {
     }).catch((x: unknown) => x);
     expect(e).toMatchObject({
       code: 'version-mismatch',
-      hint: 'use merge to convert: `otel-html merge out -o <dir>`',
+      hint: 'use merge to convert: `otel-html merge out -o <dir> --format site`',
     });
   });
 });
