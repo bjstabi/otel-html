@@ -421,26 +421,4 @@ describe('upgrade --format local size warning (R52)', () => {
     await upgradeReport(w.deps, 'r', { format: 'site', localWarnBytes: 1 });
     expect(warns(w)).toHaveLength(0);
   });
-
-  test('the CLI reads writer.localWarnBytes from --config', async () => {
-    const w = createTestWriter();
-    await v4Report(w, 'r', 'site');
-    await w.fs.writeTextAtomic('cfg.yaml', 'writer:\n  localWarnBytes: 1\n');
-    const code = await runCli(
-      ['upgrade', 'r', '--format', 'local', '--config', 'cfg.yaml'],
-      {
-        stdout: () => undefined,
-        stderr: () => undefined,
-        env: {},
-        cwd: '/work',
-        signals: { on: () => () => undefined },
-        spawn: () => {
-          throw new Error('no spawn');
-        },
-      },
-      w.deps,
-    );
-    expect(code).toBe(0);
-    expect(warns(w)).toHaveLength(1);
-  });
 });

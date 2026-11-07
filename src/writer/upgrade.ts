@@ -1,3 +1,4 @@
+import { DEFAULT_LOCAL_WARN_BYTES } from '../config/schema.js';
 import type { ManifestV4 } from '../format/manifest.js';
 import type { Table } from '../format/parquet/schema.js';
 import {
@@ -20,14 +21,12 @@ import type { WriterDeps } from './session.js';
 import { writeViewerAssets } from './viewer-assets.js';
 import { writeWrapper } from './wrapper-file.js';
 
-const DEFAULT_LOCAL_WARN_BYTES = 256_000_000; // the schema default of writer.localWarnBytes
-
 export interface UpgradeOptions {
   /** Format 4 only: switch the report between `local` (base64 wrappers, opens from `file://`) and `site`. */
   format?: 'local' | 'site';
   /** Format 4 only: where the report loads its viewer files from (`assets/` or a relative path like `../../assets/0.3.0/`). */
   assetsBase?: string;
-  /** With `format: 'local'`: the Parquet size past which the report is better served as `site` (`writer.localWarnBytes`, default 256000000). */
+  /** With `format: 'local'`: the Parquet size past which the report is better served as `site` (default: the schema's `writer.localWarnBytes`). */
   localWarnBytes?: number;
 }
 

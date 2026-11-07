@@ -23,6 +23,9 @@ interface DropIn {
   logs?: { log_record?: string[] | undefined } | undefined;
   metrics?: { datapoint?: string[] | undefined } | undefined;
 }
+/** The default `writer.localWarnBytes`: the Parquet size past which a `local` report warns. */
+export const DEFAULT_LOCAL_WARN_BYTES = 256_000_000;
+
 /** The report formats `writer.format` names. */
 export type ReportFormat = 'chunks' | 'local' | 'site';
 
@@ -133,7 +136,7 @@ const WriterSchema = z
     format: z.enum(['chunks', 'local', 'site']).default('chunks'),
     rowGroupRows: z.number().int().min(50_000).max(100_000).default(50_000),
     statisticsKeys: z.array(z.string()).default([]),
-    localWarnBytes: posInt.default(256_000_000),
+    localWarnBytes: posInt.default(DEFAULT_LOCAL_WARN_BYTES),
     compactOnMerge: z.boolean().default(false),
     assetsBase: z
       .string()
