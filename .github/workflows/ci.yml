@@ -383,6 +383,9 @@ jobs:
           cd "$tmp"
           OTEL_HTML_FORMAT=site ./otel-html${{ matrix.ext }} convert in.otlp.json -o out
           test -s out/data/partitions/000000/spans.parquet
+          # The engine's parquet and json extensions travel with the report, so it opens offline.
+          test -s out/assets/parquet.duckdb_extension.wasm
+          test -s out/assets/json.duckdb_extension.wasm
           # A small chunk target makes hundreds of flush partitions, which close compacts into one: that runs the
           # streaming reader and writer, the merge rounds and the directory removal inside the binary.
           ./otel-html${{ matrix.ext }} convert --config small-chunks.yaml in.otlp.json linked-logs.otlp.json \
@@ -393,6 +396,8 @@ jobs:
           ./otel-html${{ matrix.ext }} convert --format local --config small-chunks.yaml in.otlp.json -o out3
           test -s out3/assets/duckdb.*.wasm.gz.b64.js
           test -s out3/assets/duckdb.*.worker.b64.js
+          test -s out3/assets/duckdb.*.parquet.ext.gz.b64.js
+          test -s out3/assets/duckdb.*.json.ext.gz.b64.js
           test -z "$(find out3/assets -name 'duckdb.*.wasm')"
           grep -o 'data/partitions/[0-9]*/[a-z]*\.parquet' out3/data/manifest.js | sort -u | while read -r p; do
             test -s "out3/$p.js"

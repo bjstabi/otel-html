@@ -407,13 +407,16 @@ sources = [
   "src/rollups/**",
   "src/semconv/**",
   "src/viewer/**",
+  "scripts/duckdb-extensions.json",
   "scripts/engine-assets.ts",
   "src/writer/engine-assets.ts",
   "tsconfig.base.json",
   "tsconfig.viewer.json",
   "vite.config.ts",
 ]
-# The DuckDB engine files come from @duckdb/duckdb-wasm, whose version is in package.json (@group:deps).
+# The DuckDB engine files come from @duckdb/duckdb-wasm, whose version is in package.json (@group:deps); the parquet
+# and json extensions come from extensions.duckdb.org (pinned by hash in scripts/duckdb-extensions.json) and are cached
+# in .cache/duckdb-extensions, so only the first build needs the network (OTEL_HTML_DUCKDB_EXTENSIONS_DIR: offline).
 outputs = ["dist/viewer/**"]
 run = ["pnpm exec vite build", "bun scripts/engine-assets.ts"]
 

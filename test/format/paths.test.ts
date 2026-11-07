@@ -50,6 +50,12 @@ describe('partition paths', () => {
     for (const s of ['wasm', 'worker.js', 'wasm.gz.b64.js', 'worker.b64.js']) {
       expect(ENGINE_ASSET_RE.test(`assets/duckdb.1.4.1-abc.${s}`)).toBe(true);
     }
+    for (const e of ['parquet', 'json']) {
+      expect(ENGINE_ASSET_RE.test(`assets/duckdb.1.4.1.${e}.ext.gz.b64.js`)).toBe(true);
+      expect(ENGINE_ASSET_RE.test(`assets/${e}.duckdb_extension.wasm`)).toBe(true);
+    }
+    expect(ENGINE_ASSET_RE.test('assets/other.duckdb_extension.wasm')).toBe(false);
+    expect(ENGINE_ASSET_RE.test('assets/../parquet.duckdb_extension.wasm')).toBe(false);
     expect(ENGINE_ASSET_RE.test('assets/duckdb.1.4.1.exe')).toBe(false);
     expect(ENGINE_ASSET_RE.test('assets/duckdb..wasm')).toBe(false);
     expect(ENGINE_ASSET_RE.test('assets/../duckdb.1.wasm')).toBe(false);

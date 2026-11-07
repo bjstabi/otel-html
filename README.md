@@ -373,8 +373,8 @@ report/
     state/                writer checkpoint
 ```
 
-- `site` is for a report served over http: the viewer reads the `.parquet` files and loads `assets/duckdb.<v>.wasm` and `duckdb.<v>.worker.js`.
-- `local` opens from `file://`, where nothing can be fetched: every `.parquet.js` wrapper and the engine's `duckdb.<v>.wasm.gz.b64.js` and `duckdb.<v>.worker.b64.js` are classic scripts that register their bytes. Wrappers are a third larger than the Parquet, so a large report is better served as `site` (the writer warns past `writer.localWarnBytes`).
+- `site` is for a report served over http: the viewer reads the `.parquet` files and loads `assets/duckdb.<v>.wasm`, `duckdb.<v>.worker.js` and DuckDB's signed `parquet.duckdb_extension.wasm` and `json.duckdb_extension.wasm`.
+- `local` opens from `file://`, where nothing can be fetched: every `.parquet.js` wrapper and the engine's `duckdb.<v>.wasm.gz.b64.js`, `duckdb.<v>.worker.b64.js` and the two extensions' `duckdb.<v>.parquet.ext.gz.b64.js` and `duckdb.<v>.json.ext.gz.b64.js` are classic scripts that register their bytes. Wrappers are a third larger than the Parquet, so a large report is better served as `site` (the writer warns past `writer.localWarnBytes`). Either way a report makes no network request: the extensions DuckDB would otherwise download at first use travel in `assets/` (about 3.9 MB plain, 1.2 MB wrapped).
 - Closing a report compacts its flush partitions into one sorted partition when there are two or more.
 - `assetsBase` (default `assets/`) names where the viewer and engine files load from. A site that publishes them once for many reports sets it to a shared relative path such as `../../assets/0.3.0/`, and the report then carries no `assets/` of its own.
 

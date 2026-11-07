@@ -4,7 +4,7 @@ import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
 import { ENGINE_VERSION, engineAssetNames } from '../../src/format/engine.js';
 import { isV4, type ManifestV4, parseAnyManifest } from '../../src/format/manifest.js';
 import { decodeTable } from '../../src/format/parquet/codec.js';
-import { MANIFEST_KEY, partitionWrapperPath } from '../../src/format/paths.js';
+import { ENGINE_ASSET_RE, MANIFEST_KEY, partitionWrapperPath } from '../../src/format/paths.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { openSession } from '../../src/writer/session.js';
 import { upgradeReport } from '../../src/writer/upgrade.js';
@@ -12,6 +12,10 @@ import { createTestWriter, otlp, type TestWriter, testConfig } from '../../test-
 import { spansRequest } from './helpers.js';
 
 type Format = 'local' | 'site';
+
+/** The report's engine files (the wasm, the worker and the extensions), sorted. */
+const engineFiles = (w: TestWriter): string[] =>
+  [...w.fs.snapshot().keys()].filter((k) => ENGINE_ASSET_RE.test(k.slice('r/'.length))).sort();
 
 async function v4Report(w: TestWriter, out: string, format: Format, extra: object = {}): Promise<void> {
   for (const [i, r] of [spansRequest(3), spansRequest(2, 10_000, 10)].entries()) {
@@ -84,7 +88,7 @@ describe('upgradeReport on a format-4 report', () => {
       expect(await w.fs.readBytes(`r/${f.path}`)).toEqual(parquet[i]);
       expect(`${f.path}.js`).toBe(partitionWrapperPath(f.n, f.table as never));
     }
-    const assets = files(w, 'r/assets/duckdb');
+    const assets = engineFiles(w);
     expect(assets).toEqual(
       engineAssetNames('local')
         .map((n) => `r/assets/${n}`)
@@ -102,7 +106,7 @@ describe('upgradeReport on a format-4 report', () => {
     expect(files(w, 'r/data/partitions').filter((p) => p.endsWith('.parquet')).length).toBe(
       listed(manifestV4(w, 'r')).length,
     );
-    expect(files(w, 'r/assets/duckdb')).toEqual(
+    expect(engineFiles(w)).toEqual(
       engineAssetNames('site')
         .map((n) => `r/assets/${n}`)
         .sort(),
@@ -116,7 +120,7 @@ describe('upgradeReport on a format-4 report', () => {
     await expect(upgradeReport(w.deps, 'r', { format: 'local' })).rejects.toThrow();
     expect(manifestV4(w, 'r').engine.format).toBe('site');
     for (const f of listed(manifestV4(w, 'r'))) expect(w.fs.snapshot().has(`r/${f.path}.js`)).toBe(true);
-    expect(files(w, 'r/assets/duckdb')).toEqual(
+    expect(engineFiles(w)).toEqual(
       expect.arrayContaining(
         [...engineAssetNames('site'), ...engineAssetNames('local')].map((n) => `r/assets/${n}`),
       ),
@@ -323,7 +327,7 @@ describe('upgradeReport fix round 2', () => {
     expect(e.code).toBe('usage');
     expect(e.hint).toContain('run upgrade again');
     expect(w.fs.snapshot()).toEqual(after);
-    expect(files(w, 'r/assets/duckdb').length).toBeGreaterThan(0);
+    expect(engineFiles(w).length).toBeGreaterThan(0);
     expect(files(w, 'r/data/state/lock')).toEqual([]);
   });
 

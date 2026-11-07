@@ -1,8 +1,15 @@
 import type { Span } from '@opentelemetry/api';
-import { test as playwrightTest, type TestInfo } from '@playwright/test';
+import { expect, test as playwrightTest, type TestInfo } from '@playwright/test';
 import { startTestSdk, type TestTracing } from '../test-support/otel/sdk.js';
 import { baseUrlFor, type ReportName, type UrlKind } from './fixture.js';
 import { endTestSpan, instrumentContext, recordsViewer, startTestSpan, type TestSpanInfo } from './otel.js';
+
+/** True for an http(s) or ws(s) URL whose host is not loopback. */
+export function isOffMachine(url: string): boolean {
+  const u = new URL(url);
+  if (!/^(?:https?|wss?):$/.test(u.protocol)) return false;
+  return !['127.0.0.1', 'localhost', '[::1]'].includes(u.hostname);
+}
 
 function kindOf(projectName: string): UrlKind {
   const kind = projectName.split('-').at(-1);
@@ -22,7 +29,7 @@ function spanInfo(testInfo: TestInfo): TestSpanInfo {
 
 /** The base `test` plus the OpenTelemetry fixtures: a worker SDK and a span per test (both undefined without an endpoint). */
 const base = playwrightTest.extend<
-  { otelTestSpan: Span | undefined },
+  { otelTestSpan: Span | undefined; ownOriginOnly: undefined },
   { otelTracing: TestTracing | undefined }
 >({
   otelTracing: [
@@ -32,6 +39,19 @@ const base = playwrightTest.extend<
       await tracing?.shutdown();
     },
     { scope: 'worker', auto: true },
+  ],
+  // A report never touches the network: it fails any test whose pages (or their workers) request an http(s) or
+  // ws(s) origin that is not this machine (the static server). file:, data: and blob: are the report's own.
+  ownOriginOnly: [
+    async ({ context }, use) => {
+      const outside: string[] = [];
+      context.on('request', (request) => {
+        if (isOffMachine(request.url())) outside.push(request.url());
+      });
+      await use(undefined);
+      expect(outside, 'a report must not request anything outside its own origin').toEqual([]);
+    },
+    { auto: true },
   ],
   otelTestSpan: [
     async ({ otelTracing }, use, testInfo) => {
@@ -66,7 +86,7 @@ export const test = base.extend<{ reportUrl: (name: ReportName) => string }>({
     await use((name) => baseUrlFor(kindOf(testInfo.project.name), name));
   },
 });
-export { expect } from '@playwright/test';
+export { expect };
 
 /** Test options for a spec that also runs over HTTP: `test('title', HTTP, async ...)`. Untagged tests run over file:// only. */
 export const HTTP = { tag: '@http' } as const;
