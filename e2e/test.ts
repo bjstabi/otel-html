@@ -50,9 +50,13 @@ async function waitForReportLoaded(page: Page): Promise<void> {
 /**
  * Makes `goto`, `reload`, `goBack` and `goForward` of every page of `context` (present and future) wait for the
  * report to finish loading, so a slow engine start on a loaded CI runner is not mistaken for a broken viewer. A
- * navigation that asks for `waitUntil: 'commit'` is measuring the load itself and is not waited on.
+ * navigation that asks for `waitUntil: 'commit'` is measuring the load itself and is not waited on. The time spent
+ * waiting is added to the test's timeout: the load is not part of the test's own budget. Call it inside a test.
  */
-export function waitForReportAfterNavigation(context: BrowserContext): void {
+export function waitForReportAfterNavigation(
+  context: BrowserContext,
+  testInfo: TestInfo = playwrightTest.info(),
+): void {
   const patched = new WeakSet<Page>();
   const patch = (page: Page): void => {
     if (patched.has(page)) return;
@@ -62,7 +66,10 @@ export function waitForReportAfterNavigation(context: BrowserContext): void {
       (page as unknown as Record<string, unknown>)[method] = async (...args: unknown[]) => {
         const result = await original(...args);
         const options = args.at(method === 'goto' ? 1 : 0) as { waitUntil?: string } | undefined;
-        if (options?.waitUntil !== 'commit') await waitForReportLoaded(page);
+        if (options?.waitUntil === 'commit') return result;
+        const started = Date.now();
+        await waitForReportLoaded(page);
+        testInfo.setTimeout(testInfo.timeout + (Date.now() - started));
         return result;
       };
     }
@@ -100,10 +107,11 @@ const base = playwrightTest.extend<
     },
     { scope: 'worker', auto: true },
   ],
-  // A report never touches the network: it fails any test whose pages (or their workers) request an http(s) or
+  // Every navigation waits for the report to load (see waitForReportAfterNavigation). A report never touches the network: it fails any test whose pages (or their workers) request an http(s) or
   // ws(s) origin that is not this machine (the static server). file:, data: and blob: are the report's own.
   ownOriginOnly: [
-    async ({ context }, use) => {
+    async ({ context }, use, testInfo) => {
+      waitForReportAfterNavigation(context, testInfo);
       const check = guardContext(context);
       await use(undefined);
       check();
@@ -126,7 +134,6 @@ export const test = base.extend<{ reportUrl: (name: ReportName) => string }>({
   // The viewer's spans are recorded in every page of the test's context, as children of the test span. The recorder
   // settles before the base `context` closes it, which is before the test span ends (fixtures tear down in reverse).
   context: async ({ context, otelTracing, otelTestSpan }, use, testInfo) => {
-    waitForReportAfterNavigation(context);
     const info = spanInfo(testInfo);
     if (otelTracing === undefined || otelTestSpan === undefined || !recordsViewer(info)) {
       await use(context);
