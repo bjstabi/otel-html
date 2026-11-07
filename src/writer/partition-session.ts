@@ -46,6 +46,7 @@ import { DEFAULT_TITLE, type Drops, type FolderState, iso } from './open-common.
 import { PartitionWriter } from './partition-writer.js';
 import { patternRows } from './pattern-rows.js';
 import type { SpanHandle } from './ports.js';
+import { prunePartitions } from './prune.js';
 import { seriesIdOf } from './series-id.js';
 import type {
   AddOptions,
@@ -119,6 +120,10 @@ export async function openPartitionSession(
     } else {
       const cp = await loadPartitionCheckpoint(fs, out, deps.version);
       config = inheritDashboards(config, cp.manifest.config);
+      // Before any write: what an interrupted session left unlisted must not meet this session's cuts.
+      const pruned = await prunePartitions(fs, out, cp.manifest.partitions);
+      if (pruned > 0)
+        deps.logger.info('removed unlisted partition data left by an interrupted session', { pruned });
       restored = {
         lock,
         epoch:
