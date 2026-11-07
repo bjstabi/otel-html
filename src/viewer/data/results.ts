@@ -5,7 +5,9 @@ import type { FacetCounts } from '../../rollups/facets.js';
 import type { MetricCatalog, MetricEntry } from '../../rollups/metric-catalog.js';
 import type { SpanStatusKey } from '../../rollups/span-rollups.js';
 import type { TimeBuckets } from '../../rollups/time-buckets.js';
+import type { LogSeverityKey } from '../../semconv/severity.js';
 import type { TraceDetail } from './data-source.js';
+import type { LogMode, LogRow, LogTraceRow } from './log-query.js';
 import type { LoadedMetric } from './metric-load.js';
 import type { TimeWindow } from './span-query.js';
 
@@ -62,6 +64,35 @@ export interface GroupStatsResult {
 
 /** Which parts of a `SpanQueryResult` to compute; absent parts come back empty. */
 export type SpanNeed = 'rows' | 'facets' | 'timeline' | 'durations' | 'groups';
+
+/** Which parts of a `LogQueryResult` to compute; absent parts come back empty. */
+export type LogNeed = 'rows' | 'facets' | 'timeline';
+
+export interface LogQuery {
+  condition: string | null;
+  text: string;
+  window: TimeWindow | null;
+  mode: LogMode;
+  sort: { column: string; dir: 'asc' | 'desc' };
+  limit: number;
+  /** Only this trace's logs (on top of `condition`). */
+  traceId?: TraceId | null;
+  /** What to compute; absent parts are empty. */
+  needs: readonly LogNeed[];
+  /** Restrict facets to these keys; null means every core facet plus attributes. */
+  facetKeys: readonly string[] | null;
+}
+
+export type LogQueryResult = {
+  /** Matched logs; traces in traces mode. */
+  total: number;
+  /** Logs that matched the filter; in traces mode only those carrying a trace id. */
+  matched: number;
+  facets: FacetCounts;
+  buckets: TimeBuckets<LogSeverityKey>;
+  /** True when the residual OTTL terms (D5) were applied to the result. */
+  residual: boolean;
+} & ({ mode: 'logs'; rows: readonly LogRow[] } | { mode: 'traces'; rows: readonly LogTraceRow[] });
 
 export interface ServiceStats {
   service: string;
