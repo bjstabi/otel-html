@@ -1,5 +1,6 @@
 import { DuckDBDataProtocol } from '@duckdb/duckdb-wasm';
 import type { ManifestV4 } from '../../../format/manifest.js';
+import type { Table } from '../../../format/parquet/columns.js';
 import { partitionKey, partitionWrapperPath } from '../../../format/paths.js';
 import { viewStatements } from '../../../query/sql/views.js';
 import { fromBase64, loadText } from './bytes.js';
@@ -26,7 +27,7 @@ export async function registerPartitions(
   const entries = manifest.partitions.flatMap((partition) =>
     Object.entries(partition.files).map(([table, file]) => ({
       n: partition.n,
-      table: table as keyof typeof partition.files & string,
+      table: table as Table,
       path: file.path,
     })),
   );
@@ -44,15 +45,21 @@ export async function registerPartitions(
     }
   } else {
     let next = 0;
+    let failed = false;
     const worker = async (): Promise<void> => {
-      while (next < entries.length) {
+      while (!failed && next < entries.length) {
         const entry = entries[next++];
         if (entry === undefined) return;
-        const url = new URL(partitionWrapperPath(entry.n, entry.table), deps.baseUrl).href;
-        // The base64 string is local to this call: only the registered bytes outlive it.
-        const bytes = fromBase64(await loadText(deps.loader, url, partitionKey(entry.n, entry.table)));
-        await engine.db.registerFileBuffer(entry.path, bytes);
-        finish();
+        try {
+          const url = new URL(partitionWrapperPath(entry.n, entry.table), deps.baseUrl).href;
+          // The base64 string is local to this call: only the registered bytes outlive it.
+          const bytes = fromBase64(await loadText(deps.loader, url, partitionKey(entry.n, entry.table)));
+          await engine.db.registerFileBuffer(entry.path, bytes);
+          finish();
+        } catch (error) {
+          failed = true;
+          throw error;
+        }
       }
     };
     await Promise.all(Array.from({ length: Math.min(LOCAL_CONCURRENCY, total) }, worker));

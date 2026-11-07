@@ -88,8 +88,7 @@ test('local loads each wrapper under its partition key and registers the bytes, 
     progress.push(p),
   );
   expect(loader.calls).toContain('file:///r/data/partitions/000000/spans.parquet.js');
-  expect(progress.at(-1)).toEqual({ done: 4, total: 4 });
-  expect(progress).toHaveLength(4);
+  expect(progress).toEqual([1, 2, 3, 4].map((done) => ({ done, total: 4 })));
   expect(engine.calls.registerFileBuffer.map((c) => c[0]).sort()).toEqual([
     'data/partitions/000000/logs.parquet',
     'data/partitions/000000/spans.parquet',
@@ -131,4 +130,35 @@ test('a non-string wrapper payload is an invalid-report naming the wrapper', asy
       baseUrl: 'file:///r/index.html',
     }),
   ).rejects.toMatchObject({ code: 'invalid-report' });
+});
+
+test('a failed load stops the other workers and no views are created', async () => {
+  let calls = 0;
+  const loader: ScriptLoader = {
+    load: async () => {
+      calls++;
+      if (calls === 2) throw new Error('load failed');
+      await new Promise((r) => setTimeout(r, 5));
+      return toBase64(PARQUET_BYTES);
+    },
+  };
+  const many = {
+    partitions: Array.from({ length: 12 }, (_, n) => ({
+      n,
+      source: `flush:${n}`,
+      files: { spans: file(n, 'spans') },
+    })),
+  } as unknown as ManifestV4;
+  const engine = fakeEngine('local');
+  const progress: RegisterProgress[] = [];
+  await expect(
+    registerPartitions(engine, many, { loader, baseUrl: 'file:///r/index.html' }, (p) => progress.push(p)),
+  ).rejects.toThrow('load failed');
+  await new Promise((r) => setTimeout(r, 30));
+  expect(calls).toBeLessThanOrEqual(4);
+  expect(engine.calls.exec).toEqual([]);
+  expect(progress.length).toBeLessThanOrEqual(3);
+  const seen = progress.length;
+  await new Promise((r) => setTimeout(r, 30));
+  expect(progress).toHaveLength(seen);
 });
