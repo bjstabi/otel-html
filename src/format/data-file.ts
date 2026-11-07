@@ -95,6 +95,14 @@ function stringify(v: unknown): string {
   return isPlainJson(v) ? JSON.stringify(v) : JSON.stringify(v, replacer);
 }
 
+/**
+ * A binary data file for the local format: `__OH__.push("<key>","<base64>");\n`. The payload is base64 only, so no
+ * `<` (and nothing else a script parser could mistake) can appear in it.
+ */
+export function wrapBinaryDataFile(key: string, bytes: Uint8Array): string {
+  return `${REGISTRATION_GLOBAL}.push(${escapeHostile(JSON.stringify(key))},"${bytesToBase64(bytes)}"${SUFFIX}`;
+}
+
 export function wrapDataFile(key: string, payload: unknown): string {
   const json = stringify(payload);
   if (json === undefined) {

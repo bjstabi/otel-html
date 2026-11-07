@@ -1,12 +1,13 @@
 import type { PartitionEntry, PartitionFile } from '../format/manifest.js';
 import './parquet-wasm-source.js';
+import { wrapBinaryDataFile } from '../format/data-file.js';
 import { batchFromRows, type ColumnBatch } from '../format/parquet/batch.js';
 import { checkRow, compareKeys, encodeColumns, sortKeyOf } from '../format/parquet/codec.js';
 import type { Row } from '../format/parquet/rows.js';
 import { TABLE_COLUMNS, TABLES, type Table } from '../format/parquet/schema.js';
 import { type FileStatistics, fileStatistics } from '../format/parquet/stats.js';
 import { encodeBatches, type PanicGuard, readColumns } from '../format/parquet/stream.js';
-import { partitionDir, partitionFilePath } from '../format/paths.js';
+import { partitionDir, partitionFilePath, partitionKey, partitionWrapperPath } from '../format/paths.js';
 import { OtelHtmlError } from '../model/errors.js';
 import { at } from './checkpoint.js';
 import type { FileSystem } from './ports.js';
@@ -18,6 +19,8 @@ export interface CompactOptions {
   rowGroupRows: number;
   statisticsKeys: Record<Table, string[]>;
   facetValueCap: number;
+  /** `local` also writes each final file's base64 script after it (never for the merge temporaries). */
+  format?: 'chunks' | 'local' | 'site';
   /** The entry's `source`, `compact:<first>..<last>`. */
   source: string;
 }
@@ -560,6 +563,12 @@ export async function compactPartitions(
       }
       const path = partitionFilePath(n, table);
       await fs.writeBytes(at(out, path), bytes);
+      if (opts.format === 'local') {
+        await fs.writeTextAtomic(
+          at(out, partitionWrapperPath(n, table)),
+          wrapBinaryDataFile(partitionKey(n, table), bytes),
+        );
+      }
       files[table] = { path, bytes: bytes.length, ...keepUnknown(stats, inputs, keys) };
     }
   } catch (e) {

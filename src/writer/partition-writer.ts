@@ -1,5 +1,6 @@
 import type { PartitionEntry, PartitionFile } from '../format/manifest.js';
 import './parquet-wasm-source.js';
+import { wrapBinaryDataFile } from '../format/data-file.js';
 import {
   batchFromRows,
   type ColumnBatch,
@@ -12,7 +13,7 @@ import { checkRow, encodeColumns } from '../format/parquet/codec.js';
 import type { Row } from '../format/parquet/rows.js';
 import { TABLES, type Table } from '../format/parquet/schema.js';
 import { fileStatistics } from '../format/parquet/stats.js';
-import { partitionDir, partitionFilePath } from '../format/paths.js';
+import { partitionDir, partitionFilePath, partitionKey, partitionWrapperPath } from '../format/paths.js';
 import { at } from './checkpoint.js';
 import type { FileSystem } from './ports.js';
 
@@ -22,6 +23,8 @@ export interface PartitionWriterOptions {
   statisticsKeys: Record<Table, string[]>;
   facetValueCap: number;
   nextPartition: number;
+  /** `local` also writes each Parquet file's base64 script (`<table>.parquet.js`) after the file. */
+  format?: 'chunks' | 'local' | 'site';
   /** Derives rows for other tables from the rows a cut took; see `Derived`. */
   derive?: (taken: Readonly<Record<Table, ColumnBatch>>) => Derived;
 }
@@ -141,6 +144,12 @@ export class PartitionWriter {
       for (const { table, batch, bytes } of encoded) {
         const path = partitionFilePath(n, table);
         await this.#fs.writeBytes(at(this.#opts.out, path), bytes);
+        if (this.#opts.format === 'local') {
+          await this.#fs.writeTextAtomic(
+            at(this.#opts.out, partitionWrapperPath(n, table)),
+            wrapBinaryDataFile(partitionKey(n, table), bytes),
+          );
+        }
         files[table] = {
           path,
           bytes: bytes.length,

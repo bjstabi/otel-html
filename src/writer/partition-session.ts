@@ -55,7 +55,7 @@ import type {
   WriterSession,
 } from './session.js';
 import { traceRows } from './trace-summaries.js';
-import { writeViewerAssets } from './viewer-assets.js';
+import { wantsAsset, writeViewerAssets } from './viewer-assets.js';
 
 interface Restored {
   lock: LockHandle;
@@ -114,6 +114,13 @@ export async function openPartitionSession(
     } else {
       const cp = await loadPartitionCheckpoint(fs, out, deps.version);
       config = inheritDashboards(config, cp.manifest.config);
+      // The partitions already written have (local) or lack (site) their base64 scripts, and the engine files differ.
+      if (cp.manifest.engine.format !== config.writer.format) {
+        throw new OtelHtmlError('usage', {
+          message: `cannot append as writer.format ${config.writer.format} to a ${cp.manifest.engine.format} report`,
+          hint: `append with --format ${cp.manifest.engine.format}, or convert the report with merge`,
+        });
+      }
       // Before any write: what an interrupted session left unlisted must not meet this session's cuts.
       const pruned = await prunePartitions(fs, out, cp.manifest.partitions);
       if (pruned > 0)
@@ -185,6 +192,7 @@ class PartitionSession implements WriterSession {
   #dirty: boolean;
   #everCommitted: boolean;
   #shellWritten = false;
+  #warnedLarge = false;
   #lastFlushMs: number;
   #backoffUntilMs = 0;
   #closed: ReportSummary | null = null;
@@ -219,6 +227,7 @@ class PartitionSession implements WriterSession {
       statisticsKeys: this.#statisticsKeys,
       facetValueCap: config.writer.facetValueCap,
       nextPartition: r.nextPartition,
+      format: config.writer.format,
       derive: (taken) => {
         const p = patternRows(this.#live(this.#drain), taken.logs, this.#epoch ?? 0n);
         return {
@@ -651,7 +660,13 @@ class PartitionSession implements WriterSession {
     const { fs, viewerAssets } = this.#deps;
     const { assetsBase } = this.#config.writer;
     if (assetsBase === DEFAULT_ASSETS_BASE) {
-      await writeViewerAssets(fs, this.#out, viewerAssets, this.#config.writer.format);
+      const { format } = this.#config.writer;
+      await writeViewerAssets(fs, this.#out, viewerAssets, format);
+      // Engine files of another format or ENGINE_VERSION, left by an earlier session, are dead weight (tens of MB).
+      const assets = at(this.#out, 'assets');
+      for (const name of await fs.list(assets)) {
+        if (!wantsAsset(`assets/${name}`, format)) await fs.remove(at(assets, name));
+      }
     }
     await fs.writeTextAtomic(
       at(this.#out, 'index.html'),
@@ -659,6 +674,23 @@ class PartitionSession implements WriterSession {
     );
     await fs.writeTextAtomic(at(this.#out, '.nojekyll'), '');
     this.#shellWritten = true;
+  }
+
+  /**
+   * A `local` report loads every partition into the page at once, so one past `localWarnBytes` is better served as a
+   * `site` report. Warns once. Counts the listed partitions, so a compaction's output replaces the flush partitions it merged.
+   */
+  #warnIfLarge(): void {
+    const { format, localWarnBytes } = this.#config.writer;
+    if (format !== 'local' || this.#warnedLarge) return;
+    let bytes = 0;
+    for (const e of this.#committed) for (const f of Object.values(e.files)) bytes += f.bytes;
+    if (bytes <= localWarnBytes) return;
+    this.#warnedLarge = true;
+    this.#deps.logger.warn(
+      `this local report's partitions total ${bytes} bytes; it loads them all when opened. Use --format site and serve the report over http for large reports`,
+      { bytes, localWarnBytes },
+    );
   }
 
   #live<T>(v: T | null): T {
@@ -705,6 +737,7 @@ class PartitionSession implements WriterSession {
         rowGroupRows: this.#config.writer.rowGroupRows,
         statisticsKeys: this.#statisticsKeys,
         facetValueCap: this.#config.writer.facetValueCap,
+        format: this.#config.writer.format,
         source: `compact:${first.n}..${last.n}`,
       });
       this.#writer.skipTo(n + 1);
@@ -857,6 +890,7 @@ class PartitionSession implements WriterSession {
       this.#committed.push(...this.#pending);
       this.#pending = [];
       this.#everCommitted = true;
+      this.#warnIfLarge();
       this.#lastFlushMs = clock.monotonicMs();
       try {
         p.span.setAttributes({
