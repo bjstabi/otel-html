@@ -294,12 +294,11 @@ test('the worker shim answers the embedded address from the data URL and leaves 
   );
   const x = new FakeXhr();
   x.open('GET', 'https://oh-engine.invalid/parquet.duckdb_extension.wasm', false);
-  expect(() => x.open('GET', 'https://oh-engine.invalid/icu.duckdb_extension.wasm', false)).toThrow(
-    'DuckDB extension icu.duckdb_extension.wasm is not shipped with this report',
-  );
+  x.open('GET', 'https://oh-engine.invalid/icu.duckdb_extension.wasm', false);
   x.open('GET', 'https://example.test/parquet.duckdb_extension.wasm', false);
   expect(opened).toEqual([
     ['GET', 'data:x;base64,UFE=', false],
+    ['GET', 'data:,', false],
     ['GET', 'https://example.test/parquet.duckdb_extension.wasm', false],
   ]);
 });

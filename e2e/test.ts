@@ -1,5 +1,5 @@
 import type { Span } from '@opentelemetry/api';
-import { expect, test as playwrightTest, type TestInfo } from '@playwright/test';
+import { type BrowserContext, expect, test as playwrightTest, type TestInfo } from '@playwright/test';
 import { startTestSdk, type TestTracing } from '../test-support/otel/sdk.js';
 import { baseUrlFor, type ReportName, type UrlKind } from './fixture.js';
 import { endTestSpan, instrumentContext, recordsViewer, startTestSpan, type TestSpanInfo } from './otel.js';
@@ -9,6 +9,18 @@ export function isOffMachine(url: string): boolean {
   const u = new URL(url);
   if (!/^(?:https?|wss?):$/.test(u.protocol)) return false;
   return !['127.0.0.1', 'localhost', '[::1]'].includes(u.hostname);
+}
+
+/**
+ * Watches every request of `context`; the returned function fails the test if one went off this machine. The
+ * fixture applies it to the test's own context; a test that opens a context of its own calls it on that one.
+ */
+export function guardContext(context: BrowserContext): () => void {
+  const outside: string[] = [];
+  context.on('request', (request) => {
+    if (isOffMachine(request.url())) outside.push(request.url());
+  });
+  return () => expect(outside, 'a report must not request anything outside its own origin').toEqual([]);
 }
 
 function kindOf(projectName: string): UrlKind {
@@ -44,12 +56,9 @@ const base = playwrightTest.extend<
   // ws(s) origin that is not this machine (the static server). file:, data: and blob: are the report's own.
   ownOriginOnly: [
     async ({ context }, use) => {
-      const outside: string[] = [];
-      context.on('request', (request) => {
-        if (isOffMachine(request.url())) outside.push(request.url());
-      });
+      const check = guardContext(context);
       await use(undefined);
-      expect(outside, 'a report must not request anything outside its own origin').toEqual([]);
+      check();
     },
     { auto: true },
   ],

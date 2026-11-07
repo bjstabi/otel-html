@@ -50,7 +50,8 @@ export function extensionUrls(
 
 /**
  * The address a `local` report's extensions are loaded from. Nothing answers there: the worker's shim (below)
- * rewrites a request for it to the embedded bytes. A shim that fails shows as a failed load; the name never resolves. DuckDB reads the extension's name from the last path segment.
+ * rewrites a request for it to the embedded bytes. A shim that fails shows as a failed load; the name never
+ * resolves. DuckDB reads the extension's name from the last path segment.
  */
 const EMBEDDED_HOST = 'https://oh-engine.invalid/';
 /** Where DuckDB looks for an extension it does not have (ICU, say) once the two are loaded: nowhere that answers. */
@@ -59,10 +60,12 @@ const NO_REPOSITORY = 'no-extensions';
 /**
  * Classic-script source run first in a `local` worker. DuckDB-WASM fetches an extension with a synchronous
  * XMLHttpRequest from inside the worker; `file://` pages cannot fetch, and registered buffers are not consulted for
- * extensions, so the request for `EMBEDDED_HOST + <file>` is pointed at a data: URL holding the extension.
+ * extensions, so the request for `EMBEDDED_HOST + <file>` is pointed at a data: URL holding the extension. A
+ * request for any other file there (ICU, say) is pointed at an empty `data:,`: no request leaves the worker, and
+ * DuckDB reports a clean load error. Throwing from `open` instead would trap inside the WASM call.
  */
 export function extensionShim(dataUrls: Record<string, string>): string {
-  return `(function(){var m=${JSON.stringify(dataUrls)};var h=${JSON.stringify(EMBEDDED_HOST)};var o=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(){var a=Array.prototype.slice.call(arguments);var k=String(a[1]);if(k.indexOf(h)===0){var f=k.slice(h.length);if(!Object.prototype.hasOwnProperty.call(m,f))throw new Error('DuckDB extension '+f+' is not shipped with this report');a[1]=m[f];}return o.apply(this,a);};})();\n`;
+  return `(function(){var m=${JSON.stringify(dataUrls)};var h=${JSON.stringify(EMBEDDED_HOST)};var o=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(){var a=Array.prototype.slice.call(arguments);var k=String(a[1]);if(k.indexOf(h)===0){var f=k.slice(h.length);a[1]=Object.prototype.hasOwnProperty.call(m,f)?m[f]:'data:,';}return o.apply(this,a);};})();\n`;
 }
 
 async function embeddedExtensions(
@@ -150,7 +153,7 @@ async function loadExtensions(
   }
   // The two SETs above do not stop DuckDB-WASM from installing a further extension (ICU, for timezone functions)
   // from extensions.duckdb.org, so the repositories point where nothing can answer: `local` at the embedded host,
-  // whose shim refuses every extension but the two; `site` at a path under the report's own assets (a 404).
+  // whose shim answers every extension but the two with nothing; `site` at a path under the report's own assets (a 404).
   const repository =
     engine.format === 'local'
       ? `${EMBEDDED_HOST}${NO_REPOSITORY}`

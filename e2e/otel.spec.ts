@@ -4,7 +4,7 @@ import type { BrowserContext } from '@playwright/test';
 import { inMemoryTracing } from '../test-support/otel/sdk.js';
 import { instrumentContext } from './otel.js';
 import { RECORDER_PATH } from './otel-page/span-json.js';
-import { expect, HTTP, test } from './test.js';
+import { expect, guardContext, HTTP, test } from './test.js';
 
 /**
  * The in-page recorder end to end: a real browser context, the real viewer, an in-memory worker-side tracing. It
@@ -22,7 +22,7 @@ async function setup(context: BrowserContext, limit?: number) {
   const { tracing, exporter } = inMemoryTracing();
   const parent: Span = tracing.tracer.startSpan('parent');
   const recorder = await instrumentContext(context, tracing, parent, limit);
-  return { exporter, parent, recorder };
+  return { exporter, parent, recorder, assertOwnOrigin: guardContext(context) };
 }
 
 const finished = (exporter: ReturnType<typeof inMemoryTracing>['exporter'], name: string) =>
@@ -30,7 +30,7 @@ const finished = (exporter: ReturnType<typeof inMemoryTracing>['exporter'], name
 
 test('browser spans join the test span', HTTP, async ({ browser, reportUrl }) => {
   const context = await browser.newContext();
-  const { exporter, parent, recorder } = await setup(context);
+  const { exporter, parent, recorder, assertOwnOrigin } = await setup(context);
   const page = await context.newPage();
   await page.goto(`${reportUrl('small')}/index.html#/traces`);
   await expect(page.getByRole('grid', { name: 'Results' })).toBeVisible();
@@ -55,11 +55,12 @@ test('browser spans join the test span', HTTP, async ({ browser, reportUrl }) =>
       ).toFixed(0),
     });
   await context.close();
+  assertOwnOrigin();
 });
 
 test('a reload keeps recording', HTTP, async ({ browser, reportUrl }) => {
   const context = await browser.newContext();
-  const { exporter, recorder } = await setup(context);
+  const { exporter, recorder, assertOwnOrigin } = await setup(context);
   const page = await context.newPage();
   const grid = page.getByRole('grid', { name: 'Results' });
   await page.goto(`${reportUrl('small')}/index.html#/traces`);
@@ -70,11 +71,12 @@ test('a reload keeps recording', HTTP, async ({ browser, reportUrl }) => {
 
   await expect.poll(() => finished(exporter, 'viewer.load')).toHaveLength(2);
   await context.close();
+  assertOwnOrigin();
 });
 
 test('the cap drops and counts', HTTP, async ({ browser, reportUrl }) => {
   const context = await browser.newContext();
-  const { exporter, recorder } = await setup(context, 1);
+  const { exporter, recorder, assertOwnOrigin } = await setup(context, 1);
   const page = await context.newPage();
   await page.goto(`${reportUrl('small')}/index.html#/traces`);
   await expect(page.getByRole('grid', { name: 'Results' })).toBeVisible();
@@ -83,4 +85,5 @@ test('the cap drops and counts', HTTP, async ({ browser, reportUrl }) => {
   await expect.poll(() => exporter.getFinishedSpans().length).toBe(1);
   expect(dropped).toBeGreaterThanOrEqual(1);
   await context.close();
+  assertOwnOrigin();
 });

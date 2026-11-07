@@ -38,7 +38,8 @@ test(
       "SELECT timezone('America/New_York', TIMESTAMPTZ '2026-01-01 00:00:00+00')",
     );
     expect(result.type).toBe('ERROR');
-    expect(result.message).not.toBe('');
+    expect(result.message).toMatch(/Extension Autoloading Error.*'icu'/s);
+    expect(result.message).not.toMatch(/out of bounds/i);
     const reply = await runWorkerSql(page, 'SELECT 1 AS one');
     expect(reply.type).not.toBe('ERROR');
   },
