@@ -1,6 +1,5 @@
 import type { PartitionEntry, PartitionFile } from '../format/manifest.js';
 import './parquet-wasm-source.js';
-import { wrapBinaryDataFile } from '../format/data-file.js';
 import { batchFromRows, type ColumnBatch } from '../format/parquet/batch.js';
 import { checkRow, compareKeys, encodeColumns, sortKeyOf } from '../format/parquet/codec.js';
 import type { Row } from '../format/parquet/rows.js';
@@ -12,6 +11,7 @@ import { OtelHtmlError } from '../model/errors.js';
 import { at } from './checkpoint.js';
 import type { FileSystem } from './ports.js';
 import { watchWasmPanics } from './wasm-panic.js';
+import { writeWrapper } from './wrapper-file.js';
 
 export interface CompactOptions {
   /** The partition number the compacted files are written to. */
@@ -564,10 +564,7 @@ export async function compactPartitions(
       const path = partitionFilePath(n, table);
       await fs.writeBytes(at(out, path), bytes);
       if (opts.format === 'local') {
-        await fs.writeTextAtomic(
-          at(out, partitionWrapperPath(n, table)),
-          wrapBinaryDataFile(partitionKey(n, table), bytes),
-        );
+        await writeWrapper(fs, at(out, partitionWrapperPath(n, table)), partitionKey(n, table), bytes);
       }
       files[table] = { path, bytes: bytes.length, ...keepUnknown(stats, inputs, keys) };
     }

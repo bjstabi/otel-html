@@ -100,7 +100,27 @@ function stringify(v: unknown): string {
  * `<` (and nothing else a script parser could mistake) can appear in it.
  */
 export function wrapBinaryDataFile(key: string, bytes: Uint8Array): string {
-  return `${REGISTRATION_GLOBAL}.push(${escapeHostile(JSON.stringify(key))},"${bytesToBase64(bytes)}"${SUFFIX}`;
+  return [...wrapBinaryDataFilePieces(key, bytes, bytesToBase64)].join('');
+}
+
+/** Bytes per base64 slice of a streamed wrapper: a multiple of 3, so every slice but the last encodes without padding. */
+export const WRAPPER_SLICE_BYTES: number = 3 * 1024 * 1024;
+
+/**
+ * `wrapBinaryDataFile` in pieces: the prefix, the base64 of each `WRAPPER_SLICE_BYTES` slice, the suffix. Written
+ * with `writePiecesAtomic`, a large file is never one string (V8 caps a string near 512 M characters). `encode` is
+ * the caller's fast base64 of a slice, since this folder carries no Node imports.
+ */
+export function* wrapBinaryDataFilePieces(
+  key: string,
+  bytes: Uint8Array,
+  encode: (slice: Uint8Array) => string,
+): Generator<string> {
+  yield `${REGISTRATION_GLOBAL}.push(${escapeHostile(JSON.stringify(key))},"`;
+  for (let at = 0; at < bytes.length; at += WRAPPER_SLICE_BYTES) {
+    yield encode(bytes.subarray(at, at + WRAPPER_SLICE_BYTES));
+  }
+  yield `"${SUFFIX}`;
 }
 
 export function wrapDataFile(key: string, payload: unknown): string {

@@ -118,7 +118,7 @@ export async function openPartitionSession(
       if (cp.manifest.engine.format !== config.writer.format) {
         throw new OtelHtmlError('usage', {
           message: `cannot append as writer.format ${config.writer.format} to a ${cp.manifest.engine.format} report`,
-          hint: `append with --format ${cp.manifest.engine.format}, or convert the report with merge`,
+          hint: `append with --format ${cp.manifest.engine.format}`,
         });
       }
       // Before any write: what an interrupted session left unlisted must not meet this session's cuts.
@@ -688,7 +688,7 @@ class PartitionSession implements WriterSession {
     if (bytes <= localWarnBytes) return;
     this.#warnedLarge = true;
     this.#deps.logger.warn(
-      `this local report's partitions total ${bytes} bytes; it loads them all when opened. Use --format site and serve the report over http for large reports`,
+      `this local report's partitions total ${bytes} bytes of Parquet (their base64 scripts add about a third on top); it loads them all when opened. Use --format site and serve the report over http for large reports`,
       { bytes, localWarnBytes },
     );
   }

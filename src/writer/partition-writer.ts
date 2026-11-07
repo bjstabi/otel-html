@@ -1,6 +1,5 @@
 import type { PartitionEntry, PartitionFile } from '../format/manifest.js';
 import './parquet-wasm-source.js';
-import { wrapBinaryDataFile } from '../format/data-file.js';
 import {
   batchFromRows,
   type ColumnBatch,
@@ -16,6 +15,7 @@ import { fileStatistics } from '../format/parquet/stats.js';
 import { partitionDir, partitionFilePath, partitionKey, partitionWrapperPath } from '../format/paths.js';
 import { at } from './checkpoint.js';
 import type { FileSystem } from './ports.js';
+import { writeWrapper } from './wrapper-file.js';
 
 export interface PartitionWriterOptions {
   out: string;
@@ -145,9 +145,11 @@ export class PartitionWriter {
         const path = partitionFilePath(n, table);
         await this.#fs.writeBytes(at(this.#opts.out, path), bytes);
         if (this.#opts.format === 'local') {
-          await this.#fs.writeTextAtomic(
+          await writeWrapper(
+            this.#fs,
             at(this.#opts.out, partitionWrapperPath(n, table)),
-            wrapBinaryDataFile(partitionKey(n, table), bytes),
+            partitionKey(n, table),
+            bytes,
           );
         }
         files[table] = {

@@ -1,9 +1,15 @@
+import { mkdtempSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import type { ConfigInput } from '../../src/config/schema.js';
-import { wrapBinaryDataFile } from '../../src/format/data-file.js';
+import { WRAPPER_SLICE_BYTES, wrapBinaryDataFile } from '../../src/format/data-file.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { engineAssetNames } from '../../src/writer/engine-assets.js';
+import { createNodeFileSystem } from '../../src/writer/node-fs.js';
 import { openSession } from '../../src/writer/session.js';
+import { writeWrapper } from '../../src/writer/wrapper-file.js';
+import { logRecord, logsRequest } from '../../test-support/otlp-builders.js';
 import { createTestWriter, otlp, type TestWriter, testConfig } from '../../test-support/writer-deps.js';
 import { spansRequest } from './helpers.js';
 
@@ -36,6 +42,46 @@ describe('wrapBinaryDataFile', () => {
     expect(text).not.toContain('<');
     expect(Buffer.from(payload, 'base64').equals(bytes)).toBe(true);
   });
+});
+
+describe('streamed wrappers', () => {
+  const S = WRAPPER_SLICE_BYTES;
+  const reference = (bytes: Uint8Array) =>
+    `__OH__.push("partitions/000000/spans","${Buffer.from(bytes).toString('base64')}");\n`;
+  const sample = (n: number) => new Uint8Array(n).map((_, i) => (i * 7 + 13) % 256);
+
+  test.each([0, 1, 2, 3, S - 1, S, S + 1, 2 * S + 2])(
+    'the file of %i bytes equals the one-string wrapper, across slice boundaries',
+    async (size) => {
+      const w = createTestWriter();
+      const bytes = sample(size);
+      await writeWrapper(w.fs, 'x.js', 'partitions/000000/spans', bytes);
+      const text = w.fs.snapshot().get('x.js');
+      expect(text === reference(bytes)).toBe(true);
+      expect(wrapBinaryDataFile('partitions/000000/spans', bytes) === text).toBe(true);
+    },
+  );
+
+  test('a 64 MB partition wraps in bounded time and memory on Node', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'wrap-'));
+    try {
+      const bytes = sample(64 * 1024 * 1024);
+      const before = process.resourceUsage().maxRSS;
+      const started = performance.now();
+      await writeWrapper(createNodeFileSystem(), join(dir, 'big.js'), 'partitions/000000/spans', bytes);
+      const ms = performance.now() - started;
+      const growthMb = (process.resourceUsage().maxRSS - before) / 1024;
+      // The one-string encoder took 3.9 s and 2.75 GB at 60 MB.
+      expect(ms).toBeLessThan(2000);
+      expect(growthMb).toBeLessThan(400);
+      expect(statSync(join(dir, 'big.js')).size).toBe(
+        Math.ceil(bytes.length / 3) * 4 + reference(new Uint8Array(0)).length,
+      );
+      process.stderr.write(`wrap 64 MB: ${ms.toFixed(0)} ms, maxRSS growth ${growthMb.toFixed(0)} MB\n`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
 });
 
 describe('local format', () => {
@@ -126,17 +172,76 @@ describe('local format', () => {
   });
 });
 
+describe('local format ordering and bounds', () => {
+  const listedBytes = (w: TestWriter): number => {
+    const text = w.fs.snapshot().get(`${OUT}/data/manifest.js`) ?? '';
+    const json = JSON.parse(text.slice(text.indexOf(',') + 1, text.lastIndexOf(')'))) as {
+      partitions: { files: Record<string, { bytes: number }> }[];
+    };
+    return json.partitions.flatMap((p) => Object.values(p.files)).reduce((sum, f) => sum + f.bytes, 0);
+  };
+
+  test('the Parquet file is written before its wrapper', async () => {
+    const w = createTestWriter();
+    const s = await open(w, { format: 'local' });
+    await s.add(spans(2), 'a.json');
+    w.fs.failNextWrite('000000/spans.parquet.js');
+    await s.flush().catch(() => undefined);
+    expect(w.fs.snapshot().has(`${OUT}/data/partitions/000000/spans.parquet`)).toBe(true);
+    expect(w.fs.snapshot().has(`${OUT}/data/partitions/000000/spans.parquet.js`)).toBe(false);
+  });
+
+  test('a compaction that fails after a wrapper was written removes its folder and keeps the flush partitions', async () => {
+    const w = createTestWriter();
+    const s = await open(w, { format: 'local' });
+    for (let i = 0; i < 2; i++) {
+      await s.add(spans(2, 0, i * 2), `${i}.json`);
+      await s.add(otlp(logsRequest([logRecord()])), `l${i}.json`);
+      await s.flush();
+    }
+    w.fs.failNextWrite('000002/logs.parquet.js');
+    await s.close();
+    const dirs = new Set(keys(w, 'data/partitions/').map((k) => /partitions\/(\d{6})\//.exec(k)?.[1] ?? ''));
+    expect([...dirs].sort()).toEqual(['000000', '000001']);
+    expect(listedFiles(w).every((f) => w.fs.snapshot().has(`${f}.js`))).toBe(true);
+  });
+
+  test('the warning counts the compacted bytes, not the flush partitions plus the compacted one', async () => {
+    const run = async (localWarnBytes: number) => {
+      const w = createTestWriter();
+      const s = await open(w, { format: 'local', localWarnBytes });
+      let flushBytes = 0;
+      for (let i = 0; i < 3; i++) {
+        await s.add(spans(3, 0, i * 3), `${i}.json`);
+        await s.flush();
+        flushBytes = Math.max(flushBytes, listedBytes(w));
+      }
+      await s.close();
+      return { w, flushBytes, compacted: listedBytes(w) };
+    };
+    const probe = await run(1_000_000_000);
+    const threshold = Math.max(probe.flushBytes, probe.compacted);
+    expect(probe.flushBytes + probe.compacted).toBeGreaterThan(threshold);
+    const quiet = await run(threshold);
+    expect(quiet.w.logs.some((l) => l.level === 'warn')).toBe(false);
+    const loud = await run(threshold - 1);
+    expect(loud.w.logs.filter((l) => l.level === 'warn' && String(l.msg).includes('third'))).toHaveLength(1);
+  });
+});
+
 describe('engine files in the report assets', () => {
   test('an append removes engine files the format or version no longer wants', async () => {
     const w = createTestWriter();
     const s = await open(w, { format: 'local' });
     await s.add(spans(1), 'a.json');
     await s.close();
+    await w.fs.writeBytes(`${OUT}/assets/viewer.old.js`, new Uint8Array(1));
     await w.fs.writeBytes(`${OUT}/assets/duckdb.0.9.0.wasm`, new Uint8Array(1));
     await w.fs.writeBytes(`${OUT}/assets/${engineAssetNames('site')[0]}`, new Uint8Array(1));
     const b = await open(w, { format: 'local' }, 'append');
     await b.add(spans(1, 0, 5), 'b.json');
     await b.close();
+    expect(w.fs.snapshot().has(`${OUT}/assets/viewer.old.js`)).toBe(true);
     expect(keys(w, 'assets/').filter((k) => k.includes('duckdb'))).toEqual(
       engineAssetNames('local')
         .map((n) => `${OUT}/assets/${n}`)
