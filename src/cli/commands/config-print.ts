@@ -5,6 +5,7 @@ import { formatConfig, type ResolveResult, resolveConfig } from '../../config/re
 import { createNodeFileSystem } from '../../writer/node-fs.js';
 import type { FileSystem } from '../../writer/ports.js';
 import { type CliIo, type ConfigFlags, configInputOf } from '../io.js';
+import { addReportFormatOptions } from './report-mode.js';
 
 /** defaults < config file (`--config`, OTEL_HTML_CONFIG or ./otel-html.yaml) < environment < flags. */
 export async function resolveCliConfig(
@@ -23,12 +24,12 @@ export async function resolveCliConfig(
 
 export function addConfigCommand(program: Command, io: CliIo, fs: FileSystem = createNodeFileSystem()): void {
   const config = program.command('config').description('inspect configuration');
-  config
+  const print = config
     .command('print')
     .description('print the resolved configuration and where each value came from')
     .option('--config <file>', 'config file (default: $OTEL_HTML_CONFIG or ./otel-html.yaml)')
-    .option('--title <title>', 'report title')
-    .action(async (flags: ConfigFlags) => {
-      io.stdout(formatConfig(await resolveCliConfig(io, fs, flags)));
-    });
+    .option('--title <title>', 'report title');
+  addReportFormatOptions(print).action(async (flags: ConfigFlags) => {
+    io.stdout(formatConfig(await resolveCliConfig(io, fs, flags)));
+  });
 }

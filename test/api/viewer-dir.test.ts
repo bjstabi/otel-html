@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { packageDirViewerAssets } from '../../src/api/viewer-dir.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
+import { engineAssetNames } from '../../src/writer/engine-assets.js';
 
 let root: string;
 beforeEach(async () => {
@@ -30,6 +31,20 @@ async function usageError(p: () => unknown): Promise<OtelHtmlError> {
   }
   throw new Error('expected failure');
 }
+
+describe('packageDirViewerAssets engine files', () => {
+  test('files(format) reads only the engine files that format loads', async () => {
+    const e = engineAssetNames;
+    await populate(root, ['viewer.abc.js', ...e('site'), ...e('local')]);
+    const assets = packageDirViewerAssets(urlOf(root));
+    const names = async (f?: 'chunks' | 'local' | 'site') =>
+      (await assets.files(f)).map((x) => x.path.slice('assets/'.length)).sort();
+    expect(await names()).toEqual(['viewer.abc.js']);
+    expect(await names('chunks')).toEqual(['viewer.abc.js']);
+    expect(await names('site')).toEqual(['viewer.abc.js', ...e('site')].sort());
+    expect(await names('local')).toEqual(['viewer.abc.js', ...e('local')].sort());
+  });
+});
 
 describe('packageDirViewerAssets', () => {
   test('selects the hashed entry script and style and serves every asset', async () => {

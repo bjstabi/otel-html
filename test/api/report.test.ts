@@ -192,6 +192,33 @@ describe('Report', () => {
     expect(e.message).toContain('cannot append');
   });
 
+  test('assetsBase without a local or site format is a config error', async () => {
+    const w = createTestWriter();
+    await expect(createReportWith({ out: 'r', assetsBase: '../assets/a/' }, w.deps)).rejects.toThrow(
+      /writer\.assetsBase.*--format local\|site/,
+    );
+    await expect(
+      createReportWith({ out: 'r', config: { writer: { assetsBase: '../assets/a/' } } }, w.deps),
+    ).rejects.toThrow(/writer\.assetsBase/);
+  });
+
+  test('format and assetsBase options map into writer config and win over config.writer', async () => {
+    const w = createTestWriter();
+    const report = await createReportWith(
+      {
+        out: 'r',
+        format: 'local',
+        assetsBase: '../assets/a/',
+        config: { writer: { format: 'site', rowGroupRows: 60_000 } },
+      },
+      w.deps,
+    );
+    await report.close();
+    const manifest = w.fs.snapshot().get('r/data/manifest.js') ?? '';
+    expect(manifest).toContain('"format":"local"');
+    expect(manifest).toContain('"assetsBase":"../assets/a/"');
+  });
+
   test('config as an object and as a file path; the title option wins', async () => {
     const w = createTestWriter();
     await w.fs.writeBytes(

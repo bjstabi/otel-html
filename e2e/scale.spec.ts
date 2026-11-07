@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { Page } from '@playwright/test';
+import { wantsAsset } from '../src/writer/viewer-assets.js';
 import { LOG_STEP_NS } from '../test-support/scale-logs.js';
 import { scaleMetricName } from '../test-support/scale-metrics.js';
 import {
@@ -37,7 +38,9 @@ const LOAD_SAMPLES = 3;
 // report and run without them (CI's `e2e-metrics-scale` job; the title prefix is that describe's).
 test.beforeEach(() => {
   if (test.info().titlePath.some((t) => t.startsWith('metrics scale'))) return;
+  // The engine files ship in dist/viewer/assets but only site and local reports copy them; these are chunk reports.
   const viewer = readdirSync(new URL('../dist/viewer/assets/', import.meta.url))
+    .filter((n) => wantsAsset(`assets/${n}`, 'chunks'))
     .sort()
     .join();
   for (const name of ['scale', 'huge'] as const) {

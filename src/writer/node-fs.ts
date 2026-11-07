@@ -1,5 +1,16 @@
 import { createReadStream, openAsBlob } from 'node:fs';
-import { mkdir, open, readdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
+import {
+  lstat,
+  mkdir,
+  open,
+  readdir,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import { dirname } from 'node:path';
 import type { FileSystem } from './ports.js';
 
@@ -75,6 +86,15 @@ export function createNodeFileSystem(): FileSystem {
       }
     },
     realpath: (p) => realpath(p),
+    async entryKind(p) {
+      try {
+        const s = await lstat(p);
+        return s.isSymbolicLink() ? 'link' : s.isFile() ? 'file' : s.isDirectory() ? 'dir' : 'other';
+      } catch (e) {
+        if (e instanceof Error && 'code' in e && e.code === 'ENOENT') return 'missing';
+        throw e;
+      }
+    },
     async list(dir) {
       return (await readdir(dir)).sort();
     },

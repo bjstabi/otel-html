@@ -95,6 +95,27 @@ function stringify(v: unknown): string {
   return isPlainJson(v) ? JSON.stringify(v) : JSON.stringify(v, replacer);
 }
 
+/** Bytes per base64 slice of a streamed wrapper: a multiple of 3, so every slice but the last encodes without padding. */
+export const WRAPPER_SLICE_BYTES: number = 3 * 1024 * 1024;
+
+/**
+ * A binary data file for the local format, `__OH__.push("<key>","<base64>");\n`, in pieces: the prefix, the base64
+ * of each `WRAPPER_SLICE_BYTES` slice, the suffix. The payload is base64 only, so no `<` can appear in it. Written
+ * with `writePiecesAtomic`, a large file is never one string (V8 caps a string near 512 M characters). `encode` is
+ * the caller's fast base64 of a slice, since this folder carries no Node imports.
+ */
+export function* wrapBinaryDataFilePieces(
+  key: string,
+  bytes: Uint8Array,
+  encode: (slice: Uint8Array) => string,
+): Generator<string> {
+  yield `${REGISTRATION_GLOBAL}.push(${escapeHostile(JSON.stringify(key))},"`;
+  for (let at = 0; at < bytes.length; at += WRAPPER_SLICE_BYTES) {
+    yield encode(bytes.subarray(at, at + WRAPPER_SLICE_BYTES));
+  }
+  yield `"${SUFFIX}`;
+}
+
 export function wrapDataFile(key: string, payload: unknown): string {
   const json = stringify(payload);
   if (json === undefined) {

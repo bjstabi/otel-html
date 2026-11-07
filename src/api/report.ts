@@ -6,7 +6,7 @@ import type { ReadableSpan } from '@opentelemetry/sdk-trace-base';
 import pkg from '../../package.json' with { type: 'json' };
 import { loadConfigFile } from '../config/load.js';
 import { resolveConfig } from '../config/resolve.js';
-import type { ConfigInput, ResolvedConfig } from '../config/schema.js';
+import type { ConfigInput, ReportFormat, ResolvedConfig } from '../config/schema.js';
 import { OtelHtmlError } from '../model/errors.js';
 import type { ExportLogsServiceRequest } from '../model/gen/opentelemetry/proto/collector/logs/v1/logs_service_pb.js';
 import { ExportLogsServiceRequestSchema } from '../model/gen/opentelemetry/proto/collector/logs/v1/logs_service_pb.js';
@@ -93,10 +93,19 @@ export async function resolveApiConfig(
   deps: WriterDeps,
   config: ConfigInput | string | undefined,
   title: string | undefined,
+  writer?: { format?: ReportFormat | undefined; assetsBase?: string | undefined },
 ): Promise<ResolvedConfig> {
   const file = typeof config === 'string' ? await loadConfigFile(deps.fs, config) : undefined;
   const object = typeof config === 'string' ? undefined : config;
-  const flags: ConfigInput | undefined = title === undefined ? object : { ...object, title };
+  const given = {
+    ...(writer?.format === undefined ? {} : { format: writer.format }),
+    ...(writer?.assetsBase === undefined ? {} : { assetsBase: writer.assetsBase }),
+  };
+  const withTitle: ConfigInput | undefined = title === undefined ? object : { ...object, title };
+  const flags: ConfigInput | undefined =
+    Object.keys(given).length === 0
+      ? withTitle
+      : { ...withTitle, writer: { ...withTitle?.writer, ...given } };
   return resolveConfig({
     ...(file === undefined || typeof config !== 'string' ? {} : { file, fileLabel: basename(config) }),
     env: {},
@@ -108,6 +117,10 @@ export interface ReportOptions {
   /** The report folder. */
   out: string;
   title?: string;
+  /** The report format to write; overrides `config.writer.format`. */
+  format?: ReportFormat;
+  /** Where the report loads its viewer files from; overrides `config.writer.assetsBase`. */
+  assetsBase?: string;
   /** A config object, or the path of an `otel-html.yaml`. Environment variables are not read. */
   config?: ConfigInput | string;
   /** Require a report at `out` (fail when there is none). */
@@ -172,7 +185,11 @@ const NOTHING: AddResult = { accepted: 0, dropped: 0, duplicates: 0 };
 /** Internal: like `Report.create`, with every writer dependency injectable (tests, the CLI). */
 export async function createReportWith(options: ReportOptions, deps?: Partial<WriterDeps>): Promise<Report> {
   const full = await resolveDeps(deps);
-  return createResolvedReport(options, await resolveApiConfig(full, options.config, options.title), full);
+  return createResolvedReport(
+    options,
+    await resolveApiConfig(full, options.config, options.title, options),
+    full,
+  );
 }
 
 /** Internal (the CLI): like `createReportWith`, with config already resolved so dashboard sources are kept. */

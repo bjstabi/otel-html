@@ -4,7 +4,7 @@ import { checkRow } from '../format/parquet/codec.js';
 import { applyNormalization, logRow, pointRow, type Row, spanRow } from '../format/parquet/rows.js';
 import { TABLES, type Table } from '../format/parquet/schema.js';
 import { statisticsKeysFor } from '../format/parquet/stats.js';
-import { LOCK_PATH, type Signal, STATE_DIR, type StateSlot } from '../format/paths.js';
+import { DEFAULT_ASSETS_BASE, LOCK_PATH, type Signal, STATE_DIR, type StateSlot } from '../format/paths.js';
 import { OtelHtmlError } from '../model/errors.js';
 import { parseUnixNanos, type UnixNanos } from '../model/ids.js';
 import {
@@ -21,6 +21,7 @@ import type { LogTarget, SpanTarget } from '../ottl/contexts.js';
 import { Drain } from '../rollups/drain.js';
 import { StreamNormalizer } from '../rollups/metric-streams.js';
 import { severityKey } from '../semconv/severity.js';
+import { pruneOwnAssets } from './assets-cleanup.js';
 import {
   at,
   loadPartitionCheckpoint,
@@ -114,6 +115,23 @@ export async function openPartitionSession(
     } else {
       const cp = await loadPartitionCheckpoint(fs, out, deps.version);
       config = inheritDashboards(config, cp.manifest.config);
+      // The partitions already written have (local) or lack (site) their base64 scripts, and the engine files differ.
+      // The report's own assets/ (about 46 MB of engine files) would be left behind, and index.html rewritten past it.
+      if (
+        cp.manifest.engine.assetsBase === DEFAULT_ASSETS_BASE &&
+        config.writer.assetsBase !== DEFAULT_ASSETS_BASE
+      ) {
+        throw new OtelHtmlError('usage', {
+          message: `cannot append with writer.assetsBase ${config.writer.assetsBase} to a report that carries its own assets/`,
+          hint: `append with --assets-base ${DEFAULT_ASSETS_BASE}, or start the report over with --replace`,
+        });
+      }
+      if (cp.manifest.engine.format !== config.writer.format) {
+        throw new OtelHtmlError('usage', {
+          message: `cannot append as writer.format ${config.writer.format} to a ${cp.manifest.engine.format} report`,
+          hint: `append with --format ${cp.manifest.engine.format}, or start the report over with --replace`,
+        });
+      }
       // Before any write: what an interrupted session left unlisted must not meet this session's cuts.
       const pruned = await prunePartitions(fs, out, cp.manifest.partitions);
       if (pruned > 0)
@@ -185,6 +203,7 @@ class PartitionSession implements WriterSession {
   #dirty: boolean;
   #everCommitted: boolean;
   #shellWritten = false;
+  #warnedLarge = false;
   #lastFlushMs: number;
   #backoffUntilMs = 0;
   #closed: ReportSummary | null = null;
@@ -219,6 +238,7 @@ class PartitionSession implements WriterSession {
       statisticsKeys: this.#statisticsKeys,
       facetValueCap: config.writer.facetValueCap,
       nextPartition: r.nextPartition,
+      format: config.writer.format,
       derive: (taken) => {
         const p = patternRows(this.#live(this.#drain), taken.logs, this.#epoch ?? 0n);
         return {
@@ -291,8 +311,8 @@ class PartitionSession implements WriterSession {
       this.#assertOpen();
       return Promise.reject(
         new OtelHtmlError('usage', {
-          message: 'not supported yet',
-          hint: 'merging into a format-4 report is not available yet',
+          message: 'merging into a format-4 report is not supported yet',
+          hint: 'use --format chunks until format-4 merge arrives',
         }),
       );
     });
@@ -316,6 +336,7 @@ class PartitionSession implements WriterSession {
       this.#release();
       await this.#compact();
       await this.#checkpoint(true);
+      this.#warnIfLarge(); // after the compaction is committed: the total close leaves behind
       await this.#pruneCommitted();
       this.#closed = this.#summary();
       await this.#lock.release();
@@ -650,13 +671,38 @@ class PartitionSession implements WriterSession {
   async #writeShell(): Promise<void> {
     const { fs, viewerAssets } = this.#deps;
     const { assetsBase } = this.#config.writer;
-    if (assetsBase === 'assets/') await writeViewerAssets(fs, this.#out, viewerAssets);
+    const { format } = this.#config.writer;
+    const sharedBase = assetsBase !== DEFAULT_ASSETS_BASE;
+    if (!sharedBase) await writeViewerAssets(fs, this.#out, viewerAssets, format);
+    // Files an earlier session left that this one does not load (engine files of another format or version; with a
+    // shared base, the viewer files too) are dead weight, tens of MB.
+    if (!(await pruneOwnAssets(fs, this.#out, { format, sharedBase }))) {
+      this.#deps.logger.debug('assets/ links out of the report; left alone', { out: this.#out });
+    }
     await fs.writeTextAtomic(
       at(this.#out, 'index.html'),
       renderIndexHtml(viewerAssets.entry(), this.#title, { assetsBase }),
     );
     await fs.writeTextAtomic(at(this.#out, '.nojekyll'), '');
     this.#shellWritten = true;
+  }
+
+  /**
+   * A `local` report loads every partition into the page at once, so one past `localWarnBytes` is better served as a
+   * `site` report. Called once close has committed the final manifest, so it counts what the report holds then (a
+   * compaction's output, not the flush partitions it merged).
+   */
+  #warnIfLarge(): void {
+    const { format, localWarnBytes } = this.#config.writer;
+    if (format !== 'local' || this.#warnedLarge) return;
+    let bytes = 0;
+    for (const e of this.#committed) for (const f of Object.values(e.files)) bytes += f.bytes;
+    if (bytes <= localWarnBytes) return;
+    this.#warnedLarge = true;
+    this.#deps.logger.warn(
+      `this local report's partitions total ${bytes} bytes of Parquet (their base64 scripts add about a third on top); it loads them all when opened. Use --format site and serve the report over http for large reports`,
+      { bytes, localWarnBytes },
+    );
   }
 
   #live<T>(v: T | null): T {
@@ -703,6 +749,7 @@ class PartitionSession implements WriterSession {
         rowGroupRows: this.#config.writer.rowGroupRows,
         statisticsKeys: this.#statisticsKeys,
         facetValueCap: this.#config.writer.facetValueCap,
+        format: this.#config.writer.format,
         source: `compact:${first.n}..${last.n}`,
       });
       this.#writer.skipTo(n + 1);

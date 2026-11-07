@@ -42,15 +42,20 @@ describe('resolveConfig', () => {
     const bad = (writer: object) => failure(() => resolveConfig({ file: { writer }, env: {} }));
     expect(bad({ rowGroupRows: 10 }).message).toContain('writer.rowGroupRows');
     expect(bad({ rowGroupRows: 100_001 }).message).toContain('writer.rowGroupRows');
-    expect(bad({ assetsBase: '/x' }).message).toContain('writer.assetsBase');
+    expect(bad({ format: 'site', assetsBase: '/x' }).message).toContain('assets/ or a relative path');
     const f = bad({ format: 'parquet' }).message;
     expect(f).toContain('writer.format');
     for (const v of ['chunks', 'local', 'site']) expect(f).toContain(v);
     expect(resolveConfig({ env: { OTEL_HTML_FORMAT: 'site' } }).config.writer.format).toBe('site');
     expect(
-      resolveConfig({ file: { writer: { assetsBase: '../../assets/0.3.0/' } }, env: {} }).config.writer
-        .assetsBase,
+      resolveConfig({
+        file: { writer: { assetsBase: '../../assets/0.3.0/' } },
+        env: { OTEL_HTML_FORMAT: 'site' },
+      }).config.writer.assetsBase,
     ).toBe('../../assets/0.3.0/');
+    expect(() => resolveConfig({ file: { writer: { assetsBase: '../../assets/0.3.0/' } }, env: {} })).toThrow(
+      /--format local\|site/,
+    );
   });
 
   test('flag > env > file > default', () => {

@@ -463,8 +463,19 @@ describe('format mismatches', () => {
       openSession(w.deps, { out: OUT, config: testConfig(), mode: 'open' }) as Promise<WriterSession>,
     );
     expect(e.code).toBe('version-mismatch');
-    expect(e.hint).toContain('writer.format');
-    expect(e.hint).toContain('local or site');
+    expect(e.hint).toContain('--format site');
+    expect(e.hint).not.toContain('--assets-base');
+  });
+
+  test('the chunk session hint on a shared-base report names both --format and --assets-base', async () => {
+    const w = createTestWriter();
+    const s = await open(w, cfg({ assetsBase: '../../assets/0.3.0/' }));
+    await s.add(spans(1), 'a.json');
+    await s.close();
+    const e = await failure(
+      openSession(w.deps, { out: OUT, config: testConfig(), mode: 'open' }) as Promise<WriterSession>,
+    );
+    expect(e.hint).toContain('--format site --assets-base ../../assets/0.3.0/');
   });
 
   test('the chunk session replacing a format-4 report removes its partitions', async () => {

@@ -8,10 +8,8 @@ import { PARTITION_FORMAT_VERSION } from '../format/version.js';
 import type { MetricPointRecord } from '../model/records.js';
 import type { Drain } from '../rollups/drain.js';
 import type { Normalized } from '../rollups/metric-streams.js';
+import { ENGINE_VERSION } from './engine-assets.js';
 import type { SpanHandle } from './ports.js';
-
-/** The DuckDB-WASM version the report's engine files must match; Task 7.1 moves this to `engine-assets.ts`. */
-const ENGINE_VERSION = '1.32.0';
 
 /** What a checkpoint writes, decided at prepare time under the serial queue. */
 export interface Prepared {

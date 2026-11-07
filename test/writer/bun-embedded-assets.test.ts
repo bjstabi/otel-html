@@ -1,4 +1,5 @@
 import { expect, test } from 'vitest';
+import { engineAssetNames } from '../../src/writer/engine-assets.js';
 import {
   type BunLike,
   bunEmbeddedViewerAssets,
@@ -53,4 +54,29 @@ test('viewerEntryNames keeps only viewer.<hash>.<ext>', () => {
 test("the codec's embedded WASM is not copied into a report's assets", async () => {
   const files = await bunEmbeddedViewerAssets(bunWith('viewer.abc.js', 'parquet_wasm_bg.wasm')).files();
   expect(files.map((f) => f.path)).toEqual(['assets/viewer.abc.js']);
+});
+
+test('files(format) never reads an engine file the format does not load', async () => {
+  const reads: string[] = [];
+  const blob = (name: string) => {
+    const b = Object.assign(new Blob([name]), { name });
+    const real = b.arrayBuffer.bind(b);
+    b.arrayBuffer = () => {
+      reads.push(name);
+      return real();
+    };
+    return b;
+  };
+  const names = ['viewer.abc.js', ...engineAssetNames('site'), ...engineAssetNames('local')];
+  const assets = bunEmbeddedViewerAssets({ embeddedFiles: names.map(blob) });
+  expect((await assets.files()).map((f) => f.path)).toEqual(['assets/viewer.abc.js']);
+  expect((await assets.files('chunks')).map((f) => f.path)).toEqual(['assets/viewer.abc.js']);
+  expect(reads).toEqual(['viewer.abc.js', 'viewer.abc.js']);
+  reads.length = 0;
+  const site = await assets.files('site');
+  expect(site.map((f) => f.path)).toEqual([
+    'assets/viewer.abc.js',
+    ...engineAssetNames('site').map((n) => `assets/${n}`),
+  ]);
+  expect(reads.sort()).toEqual(['viewer.abc.js', ...engineAssetNames('site')].sort());
 });

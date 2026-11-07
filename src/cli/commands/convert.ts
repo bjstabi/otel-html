@@ -6,7 +6,7 @@ import { createNodeFileSystem } from '../../writer/node-fs.js';
 import type { ReportSummary, WriterDeps } from '../../writer/session.js';
 import type { CliIo, ConfigFlags } from '../io.js';
 import { resolveCliConfig } from './config-print.js';
-import { addReportModeOptions } from './report-mode.js';
+import { addReportFormatOptions, addReportModeOptions } from './report-mode.js';
 
 const SIGNALS: readonly OtlpSignal[] = ['traces', 'logs', 'metrics'];
 const COUNT = new Intl.NumberFormat('en-US');
@@ -32,20 +32,22 @@ export function addConvertCommand(program: Command, io: CliIo, deps: Partial<Wri
     .addOption(
       new Option('--signal <signal>', 'signal of protobuf (.pb) inputs, which do not say').choices(SIGNALS),
     );
-  addReportModeOptions(convert).action(async (files: string[], flags: ConvertFlags) => {
-    const fs = deps.fs ?? createNodeFileSystem();
-    const { config } = await resolveCliConfig(io, fs, flags);
-    const summary = await convertResolved(
-      {
-        input: files,
-        out: flags.out,
-        config,
-        ...(flags.append === true ? { append: true } : {}),
-        ...(flags.replace === true ? { replace: true } : {}),
-        ...(flags.signal === undefined ? {} : { signal: flags.signal }),
-      },
-      await resolveDeps(deps),
-    );
-    io.stdout(describeSummary(summary));
-  });
+  addReportFormatOptions(addReportModeOptions(convert)).action(
+    async (files: string[], flags: ConvertFlags) => {
+      const fs = deps.fs ?? createNodeFileSystem();
+      const { config } = await resolveCliConfig(io, fs, flags);
+      const summary = await convertResolved(
+        {
+          input: files,
+          out: flags.out,
+          config,
+          ...(flags.append === true ? { append: true } : {}),
+          ...(flags.replace === true ? { replace: true } : {}),
+          ...(flags.signal === undefined ? {} : { signal: flags.signal }),
+        },
+        await resolveDeps(deps),
+      );
+      io.stdout(describeSummary(summary));
+    },
+  );
 }

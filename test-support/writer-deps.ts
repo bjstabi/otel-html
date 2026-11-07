@@ -2,9 +2,10 @@ import { type ConfigInput, ConfigSchema, type ResolvedConfig } from '../src/conf
 import { parseUnixNanos } from '../src/model/ids.js';
 import type { OtlpRequest } from '../src/model/otlp-json.js';
 import { parseOtlpJson } from '../src/model/otlp-json.js';
+import { engineAssetNames } from '../src/writer/engine-assets.js';
 import type { Logger, ProcessInfo, SpanHandle, Tracer } from '../src/writer/ports.js';
 import type { WriterDeps } from '../src/writer/session.js';
-import type { ViewerAssets } from '../src/writer/viewer-assets.js';
+import { type ViewerAssets, withEngineFiles } from '../src/writer/viewer-assets.js';
 import { createFakeTimers } from './fake-timers.js';
 import { createFixedClock } from './fixed-clock.js';
 import { createMemoryFileSystem } from './memory-fs.js';
@@ -42,11 +43,20 @@ export const EPOCH_NS = '1700000000000000000';
 
 export function fakeViewerAssets(): ViewerAssets {
   return {
-    async files() {
-      return [
-        { path: 'assets/viewer.abc123.js', contents: new TextEncoder().encode('/* viewer */') },
-        { path: 'assets/viewer.abc123.css', contents: new TextEncoder().encode('/* css */') },
-      ];
+    async files(format) {
+      const bytes = (s: string) => new TextEncoder().encode(s);
+      // Both kinds of engine file are on hand, as in a built dist/viewer; the format picks.
+      return withEngineFiles(
+        [
+          { path: 'assets/viewer.abc123.js', contents: bytes('/* viewer */') },
+          { path: 'assets/viewer.abc123.css', contents: bytes('/* css */') },
+          ...[...engineAssetNames('site'), ...engineAssetNames('local')].map((n) => ({
+            path: `assets/${n}`,
+            contents: bytes(n),
+          })),
+        ],
+        format,
+      );
     },
     entry: () => ({ script: 'assets/viewer.abc123.js', style: 'assets/viewer.abc123.css' }),
   };

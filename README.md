@@ -53,6 +53,8 @@ Turns OTLP files into a report. Inputs can be OTLP JSON (field names in lowerCam
 | `--title <title>` | Report title. |
 | `--append` | Require a report at `-o` and add to it (fails when there is none; useful in CI to catch a wrong path). |
 | `--replace` | Start the report over. Without either flag, `-o` is appended to when it already holds a report written by the same otel-html version and created otherwise. An existing report is wiped only once the first input file has been read without error, so that file is held in memory until then (see Limits). |
+| `--format <format>` | Report format: `chunks` (default), `local` or `site` (format 4: Parquet partitions; see [Report layout and hosting](#report-layout-and-hosting)). Sets `writer.format`. The viewer cannot open format-4 reports yet. Appending needs the report's own format. |
+| `--assets-base <path>` | Only with `--format local` or `site` (an error with `chunks`). Where the report loads its viewer files from: `assets/` (default; the report carries them) or a relative path such as `../../assets/0.3.0/` (`../` segments, then `assets/` and at most one more folder), in which case no `assets/` is written beside the report. Sets `writer.assetsBase`. A report that carries its own `assets/` cannot move to a shared base on append. |
 | `--signal <signal>` | `traces`, `logs` or `metrics`. Needed for protobuf (`.pb`) inputs, which do not say what they hold. |
 
 ### `serve`
@@ -72,6 +74,7 @@ otel-html serve -o ./report
 | `--grpc <port>`, `--no-grpc` | OTLP/gRPC port (default 4317), or turn it off. Port 0 picks a free port. |
 | `--append` | Require a report at `-o` and add to it (fails when there is none; useful in CI to catch a wrong path). |
 | `--replace` | Start the report over. Without either flag, `-o` is appended to when it already holds a report written by the same otel-html version and created otherwise. The same applies here: the existing report is wiped only once the first request has been read without error, so that request is held in memory until then (see Limits). |
+| `--format <format>`, `--assets-base <path>` | As for `convert`. |
 | `--config <file>`, `--title <title>` | As for `convert`. |
 
 Turning off both transports is a usage error (exit 2). A port that is already in use exits 1 with the system's `EADDRINUSE` message and a hint to pass `--http <port>` or `--grpc <port>`, or to turn that transport off (other bind errors get a hint for their cause: privileges for ports below 1024, `--host` for an address that is not this machine's).
@@ -86,7 +89,7 @@ Runs a command with its OpenTelemetry SDK pointed at a receiver, wraps the run i
 otel-html run -o ./report -- pytest -q
 ```
 
-Everything before `--` is an `otel-html` flag: the `serve` flags (`-o`, `--host`, `--http`, `--no-http`, `--grpc`, `--no-grpc`, `--config`, `--title`, `--append`, `--replace`). `run` binds only the transport the command's protocol needs: OTLP/HTTP on 4318 by default, or OTLP/gRPC on 4317 when `OTEL_EXPORTER_OTLP_PROTOCOL=grpc`; an explicit `--http <port>` or `--grpc <port>` binds that transport as well (a transport enabled only in the config file is not bound by `run`). A local collector on 4317 therefore does not get in the way. The receiver starts first, then the command runs with its stdio inherited and these variables added to its environment:
+Everything before `--` is an `otel-html` flag: the `serve` flags (`-o`, `--host`, `--http`, `--no-http`, `--grpc`, `--no-grpc`, `--config`, `--title`, `--append`, `--replace`, `--format`, `--assets-base`). `run` binds only the transport the command's protocol needs: OTLP/HTTP on 4318 by default, or OTLP/gRPC on 4317 when `OTEL_EXPORTER_OTLP_PROTOCOL=grpc`; an explicit `--http <port>` or `--grpc <port>` binds that transport as well (a transport enabled only in the config file is not bound by `run`). A local collector on 4317 therefore does not get in the way. The receiver starts first, then the command runs with its stdio inherited and these variables added to its environment:
 
 | Variable | Value |
 | --- | --- |
@@ -110,7 +113,7 @@ Combines report folders into one, for example the reports of parallel CI jobs. I
 otel-html merge ./job-1 ./job-2 -o ./combined
 ```
 
-Options: `-o, --out <dir>`, `--config <file>`, `--append` and `--replace` (as for `convert`). When `-o` already holds a report, `merge` adds its inputs to it.
+Options: `-o, --out <dir>`, `--config <file>`, `--append`, `--replace` (as for `convert`), and `--format` and `--assets-base`, which the CLI accepts but which are not usable with merge yet: merge writes `chunks`, merging into a `local` or `site` report is not supported yet, and `--assets-base` applies to format 4 only. When `-o` already holds a report, `merge` adds its inputs to it.
 
 ### `upgrade <report>`
 
@@ -128,11 +131,13 @@ Prints the resolved configuration and where each value came from (default, file,
 otel-html config print --config otel-html.yaml
 ```
 
-Options: `--config <file>` and `--title <title>`.
+Options: `--config <file>`, `--title <title>`, `--format` and `--assets-base` (as for `convert`).
 
 ## Library API
 
 The package exports `convert`, `merge`, `Report` and `OtelHtmlError`, plus types (`ConfigInput`, `ConvertOptions`, `MergeOptions`, `ReportOptions`, `ReportSummary`, `AddResult` and others).
+
+`Report.create` also takes `format` (`chunks`, `local` or `site`) and `assetsBase`, which override `config.writer.format` and `config.writer.assetsBase`.
 
 `Report.create`, `convert` and `merge` append when `out` already holds a report written by the same otel-html version; `replace: true` starts over (and, as with `--replace`, holds the first input in memory until it has been read without error; see Limits), `append: true` requires the report to be there. A report from another version fails with a message naming `--replace` and `merge`.
 
@@ -324,6 +329,8 @@ A `metric` widget with `runBy` is a run chart: one point per CI run instead of o
 
 ## Report layout and hosting
 
+### Format 3 (`--format chunks`, the default)
+
 ```
 report/
   index.html            shell; classic <script> tags only
@@ -342,7 +349,30 @@ report/
 
 Every data file is a classic script that registers its payload with a global, so the report works without `fetch`, ES modules or workers. All paths are relative and navigation uses the URL hash.
 
-- Local disk: open `index.html` directly (`file://`).
+### Format 4 (`--format local` or `site`)
+
+The viewer cannot open format-4 reports yet; the layout below is what the writer produces so far. It sits beside the format-3 layout above until the viewer reads it.
+
+```
+report/
+  index.html
+  .nojekyll
+  assets/                 viewer.<hash>.js and .css, plus the DuckDB engine files for this format (omitted when assetsBase is shared)
+  data/
+    manifest.js           run metadata, the partition list with per-file statistics, and `engine` (version, format, assetsBase)
+    partitions/<p6>/      <table>.parquet for spans, logs, points, traces and patterns (000000/, 000001/, ...)
+                          and, for `local`, <table>.parquet.js beside each: the same bytes as a base64 script
+    state/                writer checkpoint
+```
+
+- `site` is for a report served over http: the viewer reads the `.parquet` files and loads `assets/duckdb.<v>.wasm` and `duckdb.<v>.worker.js`.
+- `local` opens from `file://`, where nothing can be fetched: every `.parquet.js` wrapper and the engine's `duckdb.<v>.wasm.gz.b64.js` and `duckdb.<v>.worker.b64.js` are classic scripts that register their bytes. Wrappers are a third larger than the Parquet, so a large report is better served as `site` (the writer warns past `writer.localWarnBytes`).
+- Closing a report compacts its flush partitions into one sorted partition when there are two or more.
+- `assetsBase` (default `assets/`) names where the viewer and engine files load from. A site that publishes them once for many reports sets it to a shared relative path such as `../../assets/0.3.0/`, and the report then carries no `assets/` of its own.
+
+### Hosting
+
+- Format 3 and `local` reports: open `index.html` directly from disk (`file://`). A `site` report needs a web server, since the viewer fetches its Parquet files and engine.
 - GitHub Pages and GitLab Pages: publish the folder as it is. It works under a subpath such as `https://user.github.io/repo/report/`.
 - Any other static host or subpath works the same way.
 - CI: upload the folder as a build artifact.
@@ -548,8 +578,8 @@ Config is a YAML or JSON file (`otel-html.yaml` by default), or an object passed
 | `writer.format` | `chunks` | Report format: `chunks` (the current format), or `local` / `site`, which write format 4 (Parquet partitions; `site` is for a published site with shared assets). With `local` or `site`, closing the report compacts its flush partitions into one sorted partition when there are two or more; if the compaction fails, the failure is logged and the report keeps its flush partitions, still complete and valid. Format 4 is not yet readable by the viewer, so `chunks` stays the default for now. Env: `OTEL_HTML_FORMAT`. |
 | `writer.rowGroupRows` | 50000 | Rows per Parquet row group in format 4 (50000 to 100000). |
 | `writer.statisticsKeys` | `[]` | Extra columns whose statistics are kept per partition file in format 4, beyond those the dashboards and views use. Each entry is a column name, `attr:<key>` (a span, log or metric point attribute) or `resource:<key>` (a resource attribute); a bare attribute key is accepted but matches nothing, so it prunes nothing. |
-| `writer.localWarnBytes` | 256000000 | The size past which a `local` report will warn. The warning arrives with the local format's wrappers and is not implemented yet; nothing reads this key today. |
-| `writer.assetsBase` | `assets/` | Where a format-4 report loads the viewer assets from: `assets/`, or a relative path such as `../../assets/0.3.0/`. |
+| `writer.localWarnBytes` | 256000000 | The size, in bytes of Parquet, past which a `local` report warns (once per session) that `--format site` serves large reports better. The base64 scripts a `local` report loads are about a third larger. |
+| `writer.assetsBase` | `assets/` | Where a format-4 report loads the viewer assets from: `assets/`, or a relative path such as `../../assets/0.3.0/`. Only with `writer.format` `local` or `site`; any other value with `chunks` is a configuration error. |
 | `writer.chunkTargetBytes` | 4000000 | Target size of a data chunk. With `writer.format: local` or `site` it is the size at which held rows are cut into a flush partition (spans, logs and metric points alike); a closed report compacts those flush partitions when there are two or more (see `writer.format`). |
 | `writer.flushIntervalMs` | 5000 | Checkpoint interval. Also checkpoints once after this long idle with new records. |
 | `writer.dedupeCapacity` | 200000 | Recent span IDs remembered for de-duplication. |
@@ -661,7 +691,7 @@ Build the library and CLI into dist/ (skipped while up to date)
 
 - **Usage:** `build:viewer`
 
-Build the viewer into dist/viewer (skipped while up to date)
+Build the viewer and the DuckDB engine files into dist/viewer (skipped while up to date)
 
 ## `check`
 

@@ -13,6 +13,8 @@ export interface FileSystem {
   exists(p: string): Promise<boolean>;
   /** Canonical form of an existing path (symlinks resolved, on-disk case); rejects when it does not exist. */
   realpath(p: string): Promise<string>;
+  /** What `p` is itself, without following a link: a symbolic link (or junction) is `link`, not its target's kind. */
+  entryKind(p: string): Promise<'file' | 'dir' | 'link' | 'other' | 'missing'>;
   list(dir: string): Promise<string[]>;
   remove(p: string): Promise<void>;
   /** Removes a directory with everything under it; a missing path is a no-op. Symbolic links are removed, not followed. */

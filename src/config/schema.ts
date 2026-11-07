@@ -7,7 +7,7 @@ import {
   type ViewInput,
   ViewListSchema,
 } from '../dashboards/schema.js';
-import { ASSETS_BASE_RE } from '../format/paths.js';
+import { ASSETS_BASE_RE, DEFAULT_ASSETS_BASE } from '../format/paths.js';
 
 // Explicit input/output types keep `isolatedDeclarations` satisfied (Zod's inferred
 // builder types cannot be emitted per-file). The schemas below are the source of truth;
@@ -23,8 +23,11 @@ interface DropIn {
   logs?: { log_record?: string[] | undefined } | undefined;
   metrics?: { datapoint?: string[] | undefined } | undefined;
 }
+/** The report formats `writer.format` names. */
+export type ReportFormat = 'chunks' | 'local' | 'site';
+
 interface WriterOut {
-  format: 'chunks' | 'local' | 'site';
+  format: ReportFormat;
   rowGroupRows: number;
   statisticsKeys: string[];
   localWarnBytes: number;
@@ -39,7 +42,7 @@ interface WriterOut {
   drop: DropOut;
 }
 interface WriterIn {
-  format?: 'chunks' | 'local' | 'site' | undefined;
+  format?: ReportFormat | undefined;
   rowGroupRows?: number | undefined;
   statisticsKeys?: string[] | undefined;
   localWarnBytes?: number | undefined;
@@ -132,7 +135,7 @@ const WriterSchema = z
     assetsBase: z
       .string()
       .regex(ASSETS_BASE_RE, 'assets/ or a relative path like ../../assets/0.3.0/')
-      .default('assets/'),
+      .default(DEFAULT_ASSETS_BASE),
     chunkTargetBytes: posInt.default(4_000_000),
     flushIntervalMs: posInt.default(5_000),
     dedupeCapacity: posInt.default(200_000),
@@ -179,6 +182,13 @@ export const ConfigSchema: z.ZodType<ResolvedConfig, ConfigInput> = z
     views: ViewListSchema.default([]),
   })
   .superRefine((c, ctx) => {
+    if (c.writer.format === 'chunks' && c.writer.assetsBase !== DEFAULT_ASSETS_BASE) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['writer', 'assetsBase'],
+        message: `applies to writer.format local or site (--format local|site), not chunks; use ${DEFAULT_ASSETS_BASE} or set the format`,
+      });
+    }
     const id = c.viewer.defaultDashboard;
     if (id !== 'fusion' && !c.dashboards.some((d) => d.dashboard.id === id)) {
       ctx.addIssue({
