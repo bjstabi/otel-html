@@ -1,5 +1,7 @@
 # Format 4: Parquet partitions, one query engine, two hosts
 
+Plan 1 decided several points differently; see [the record at the end of plan 1](../plans/2026-11-06-format-4-writer.md#record-rulings-and-notes-for-plan-2). Where they disagree, the record wins.
+
 Status: design, approved in conversation on 2026-11-06. Informed by the spike on branch `spike/duckdb-wasm-file`
 (see §12) and the performance diagnosis of the rolling CI report (§1).
 
