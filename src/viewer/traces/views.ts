@@ -1,8 +1,8 @@
 import type { EChartsOption } from 'echarts';
 import { formatDuration } from '../../semconv/formatters.js';
-import type { DurationBin } from '../components/facet-panel.js';
 import { bar, type FacetViewContext, pie, toplist, treemap } from '../components/facet-views.js';
 import { seconds } from '../components/histogram-card.js';
+import type { DurationBin } from '../data/results.js';
 import type { SpanQueryResult, SpanRow, TraceRow } from '../data/span-query.js';
 import type { ExplorerView } from '../state/explorer-view.js';
 import type { PageView } from '../state/page-options.js';

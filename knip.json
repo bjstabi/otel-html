@@ -8,7 +8,7 @@
     "e2e/otel-page/recorder.ts",
     "test-support/otel/vitest-sdk.ts"
   ],
-  "ignore": ["src/model/gen/**"],
+  "ignore": ["src/model/gen/**", "src/viewer/data/results.ts"],
   "project": [
     "scripts/**/*.ts",
     "src/**/*.{ts,tsx,css}",
