@@ -16,14 +16,7 @@ import {
 } from '../model/normalize.js';
 import type { OtlpRequest } from '../model/otlp-json.js';
 import { metricPointsOf } from '../model/otlp-json-metrics.js';
-import {
-  type LogRecordRecord,
-  logTime,
-  type MetricPointRecord,
-  type ResourceRef,
-  type ScopeRef,
-  type SpanRecord,
-} from '../model/records.js';
+import { type LogRecordRecord, logTime, type MetricPointRecord, type SpanRecord } from '../model/records.js';
 import type { LogTarget, SpanTarget } from '../ottl/contexts.js';
 import { Drain } from '../rollups/drain.js';
 import { StreamNormalizer } from '../rollups/metric-streams.js';
@@ -52,7 +45,7 @@ import {
 import { PartitionWriter } from './partition-writer.js';
 import { patternRows } from './pattern-rows.js';
 import { prunePartitions } from './prune.js';
-import { type Refs, rebaseLog, rebasePoint, rebaseSpan } from './rebase.js';
+import { rebaseBatch } from './rebase.js';
 import { seriesIdOf } from './series-id.js';
 import type {
   AddOptions,
@@ -318,52 +311,18 @@ class PartitionSession implements WriterSession {
     return this.#serial(async () => {
       this.#assertOpen();
       this.#partial = false;
-      if (batch.rows.length === 0) return { accepted: 0, dropped: 0, duplicates: 0 };
-      const ctx = this.#ensureEpoch(batch.epoch);
-      const shift = batch.epoch - ctx.epoch;
-      const resources = new Map<number, ResourceRef>();
-      const scopes = new Map<number, ScopeRef>();
-      const refsOf = (r: number, s: number, path: string): Refs => {
-        let resource = resources.get(r);
-        if (resource === undefined) {
-          const rec = batch.resources[r];
-          if (rec === undefined) throw badRef(`${path}.resource`, r, batch.resources.length);
-          resource = ctx.resources.intern(rec) as ResourceRef;
-          resources.set(r, resource);
-        }
-        let scope = scopes.get(s);
-        if (scope === undefined) {
-          const rec = batch.scopes[s];
-          if (rec === undefined) throw badRef(`${path}.scope`, s, batch.scopes.length);
-          scope = ctx.scopes.intern(rec) as ScopeRef;
-          scopes.set(s, scope);
-        }
-        return { resource, scope };
-      };
+      const rebased = rebaseBatch(batch, (epoch) => this.#ensureEpoch(epoch));
+      if (rebased === null) return { accepted: 0, dropped: 0, duplicates: 0 };
       let result: AddResult;
-      switch (batch.signal) {
+      switch (rebased.signal) {
         case 'spans':
-          result = this.#acceptSpans(
-            batch.rows.map((s, i) =>
-              rebaseSpan(s, shift, refsOf(s.resource, s.scope, `rows[${i}]`), `rows[${i}]`),
-            ),
-          );
+          result = this.#acceptSpans(rebased.rows);
           break;
         case 'logs':
-          result = this.#acceptLogs(
-            batch.rows.map((l, i) =>
-              rebaseLog(l, shift, refsOf(l.resource, l.scope, `rows[${i}]`), `rows[${i}]`),
-            ),
-            'records',
-          );
+          result = this.#acceptLogs(rebased.rows, 'records');
           break;
         case 'metrics':
-          result = this.#acceptPoints(
-            batch.rows.map((p, i) =>
-              rebasePoint(p, shift, refsOf(p.resource, p.scope, `rows[${i}]`), `rows[${i}]`),
-            ),
-            batch.origin,
-          );
+          result = this.#acceptPoints(Array.from(rebased.rows()), batch.origin);
           break;
       }
       if (result.accepted > 0) this.#sinceCheckpoint = true;
@@ -984,12 +943,4 @@ class PartitionSession implements WriterSession {
       }
     }
   }
-}
-
-function badRef(path: string, ref: number, len: number): OtelHtmlError {
-  return new OtelHtmlError('invalid-report', {
-    path,
-    expected: `a ref in [0, ${len})`,
-    actual: String(ref),
-  });
 }

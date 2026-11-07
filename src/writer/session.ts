@@ -31,9 +31,7 @@ import {
   logTime,
   type MetricPointRecord,
   type ResourceRecord,
-  type ResourceRef,
   type ScopeRecord,
-  type ScopeRef,
   type SpanRecord,
 } from '../model/records.js';
 import type { LogTarget, SpanTarget } from '../ottl/contexts.js';
@@ -66,7 +64,7 @@ import { acquireLock, type LockHandle } from './lock.js';
 import { MetricSeriesWriter, restoreCatalogSeries } from './metric-series-writer.js';
 import { compileDrops, DEFAULT_TITLE, type Drops, inspectFolder, iso, type OpenMode } from './open-common.js';
 import type { Clock, FileSystem, Logger, ProcessInfo, SpanHandle, Timers, Tracer } from './ports.js';
-import { type Refs, rebaseLog, rebasePoint, rebaseSpan } from './rebase.js';
+import { rebaseBatch } from './rebase.js';
 import { TraceIndex, type TraceIndexSnapshot } from './trace-index.js';
 import { type ViewerAssets, writeViewerAssets } from './viewer-assets.js';
 
@@ -430,54 +428,18 @@ class Session implements WriterSession {
     return this.#serial(async () => {
       this.#assertOpen();
       this.#partial = false;
-      if (batch.rows.length === 0) return { accepted: 0, dropped: 0, duplicates: 0 };
-      const ctx = this.#ensureEpoch(batch.epoch);
-      const shift = batch.epoch - ctx.epoch;
-      const resources = new Map<number, ResourceRef>();
-      const scopes = new Map<number, ScopeRef>();
-      const refsOf = (r: number, s: number, path: string): Refs => {
-        let resource = resources.get(r);
-        if (resource === undefined) {
-          const rec = batch.resources[r];
-          if (rec === undefined) throw badRef(`${path}.resource`, r, batch.resources.length);
-          resource = ctx.resources.intern(rec) as ResourceRef;
-          resources.set(r, resource);
-        }
-        let scope = scopes.get(s);
-        if (scope === undefined) {
-          const rec = batch.scopes[s];
-          if (rec === undefined) throw badRef(`${path}.scope`, s, batch.scopes.length);
-          scope = ctx.scopes.intern(rec) as ScopeRef;
-          scopes.set(s, scope);
-        }
-        return { resource, scope };
-      };
+      const rebased = rebaseBatch(batch, (epoch) => this.#ensureEpoch(epoch));
+      if (rebased === null) return { accepted: 0, dropped: 0, duplicates: 0 };
       let result: AddResult;
-      switch (batch.signal) {
+      switch (rebased.signal) {
         case 'spans':
-          result = await this.#acceptSpans(
-            batch.rows.map((s, i) =>
-              rebaseSpan(s, shift, refsOf(s.resource, s.scope, `rows[${i}]`), `rows[${i}]`),
-            ),
-          );
+          result = await this.#acceptSpans(rebased.rows);
           break;
         case 'logs':
-          result = await this.#acceptLogs(
-            batch.rows.map((l, i) =>
-              rebaseLog(l, shift, refsOf(l.resource, l.scope, `rows[${i}]`), `rows[${i}]`),
-            ),
-            'records',
-          );
+          result = await this.#acceptLogs(rebased.rows, 'records');
           break;
         case 'metrics':
-          result = await this.#acceptPoints(
-            function* () {
-              for (const [i, p] of batch.rows.entries()) {
-                yield rebasePoint(p, shift, refsOf(p.resource, p.scope, `rows[${i}]`), `rows[${i}]`);
-              }
-            },
-            { origin: batch.origin },
-          );
+          result = await this.#acceptPoints(rebased.rows, { origin: batch.origin });
           break;
       }
       if (result.accepted > 0) this.#sinceCheckpoint = true;
@@ -1118,12 +1080,4 @@ interface PreparedCheckpoint {
 /** The snapshot's shards in the state's object-key order, one view at a time. */
 function* snapshotViews(snapshot: TraceIndexSnapshot): Generator<[string, Readonly<TraceShard>]> {
   for (const s of jsObjectKeyOrder(snapshot.shardNames)) yield [s, Object.fromEntries(snapshot.entries(s))];
-}
-
-function badRef(path: string, ref: number, len: number): OtelHtmlError {
-  return new OtelHtmlError('invalid-report', {
-    path,
-    expected: `a ref in [0, ${len})`,
-    actual: String(ref),
-  });
 }
