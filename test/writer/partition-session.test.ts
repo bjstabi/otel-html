@@ -712,6 +712,22 @@ describe('close compacts the flush partitions', () => {
     expect(m.complete).toBe(true);
     expect(m.partitions.map((p) => [p.n, p.source])).toEqual([[3, 'compact:0..2']]);
     expect(Number(m.epochUnixNano)).toBe(Number(EPOCH_NS));
+    // The replaced flush folders go in the same session, though the first close lost its list of them.
+    expect(partitionDirs(w)).toEqual(['000003']);
+  });
+
+  test('a close after an abort rejects and writes nothing, even when the first close failed past the release', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    await flushed(s, 3);
+    w.fs.failNextWrite('data/manifest.js');
+    await expect(s.close()).rejects.toThrow();
+    await s.abort();
+    const a = await open(w, cfg(), 'append');
+    const before = w.fs.snapshot();
+    await expect(s.close()).rejects.toThrow(`session for ${OUT} is closed`);
+    expect(w.fs.snapshot()).toEqual(before);
+    await a.abort();
   });
 
   test('the manifest lists partitions in ascending n even when a copied one lies between the compacted ones', async () => {

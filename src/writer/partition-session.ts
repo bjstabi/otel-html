@@ -11,7 +11,7 @@ import {
 } from '../format/parquet/rows.js';
 import { TABLES, type Table } from '../format/parquet/schema.js';
 import { statisticsKeysFor } from '../format/parquet/stats.js';
-import { LOCK_PATH, partitionDir, type Signal, STATE_DIR, type StateSlot } from '../format/paths.js';
+import { LOCK_PATH, type Signal, STATE_DIR, type StateSlot } from '../format/paths.js';
 import type { SessionStateV2 } from '../format/state.js';
 import { PARTITION_FORMAT_VERSION } from '../format/version.js';
 import { OtelHtmlError } from '../model/errors.js';
@@ -329,14 +329,15 @@ class PartitionSession implements WriterSession {
   close(): Promise<ReportSummary> {
     return this.#serial(async () => {
       if (this.#closed !== null) return this.#closed;
+      if (this.#aborted) throw new Error(`session for ${this.#out} is closed`);
       if (!this.#closing) this.#assertOpen();
       this.#disarmIdle();
       await this.#checkpoint(false);
       if (!this.#shellWritten) await this.#writeShell();
       this.#release();
-      const compacted = await this.#compact();
+      await this.#compact();
       await this.#checkpoint(true);
-      await this.#removePartitions(compacted);
+      await this.#pruneCommitted();
       this.#closed = this.#summary();
       await this.#lock.release();
       return this.#closed;
@@ -706,15 +707,15 @@ class PartitionSession implements WriterSession {
    * Compacts this session's flush partitions into one when there are two or more (a copy made by merge is never one
    * of them), as `compactPartitions` says. Writes only the new partition's folder; the next checkpoint commits it, in
    * this order: the state (numbering past it, no flush partitions left), then the manifest (listing it in place of the
-   * flush partitions). Returns the partitions that commit replaces, whose folders the caller removes afterwards.
+   * flush partitions). The folders it replaces are removed by `#pruneCommitted` after that commit.
    * Compaction is an optimisation, so a failure keeps the flush partitions and is logged.
    */
-  async #compact(): Promise<PartitionEntry[]> {
+  async #compact(): Promise<void> {
     const flushed = new Set(this.#flushed);
     const picks = this.#committed.filter((e) => flushed.has(e.n) && e.source.startsWith('flush:'));
     const first = picks[0];
     const last = picks.at(-1);
-    if (first === undefined || last === undefined || picks.length < 2) return [];
+    if (first === undefined || last === undefined || picks.length < 2) return;
     const span = this.#deps.tracer.startSpan('otel-html.compact', { partitions: picks.length });
     try {
       const n = this.#writer.nextPartition;
@@ -733,29 +734,31 @@ class PartitionSession implements WriterSession {
       );
       this.#flushed = this.#flushed.filter((p) => !replaced.has(p));
       this.#dirty = true;
-      return picks;
     } catch (e) {
       span.recordError(e);
       this.#deps.logger.error('compaction failed; keeping the flush partitions', {
         error: e instanceof Error ? e.message : String(e),
       });
-      return [];
     } finally {
       span.end();
     }
   }
 
-  /** Removes the folders of partitions the manifest no longer lists; one that stays is pruned when the report is opened. */
-  async #removePartitions(entries: readonly PartitionEntry[]): Promise<void> {
-    for (const e of entries) {
-      try {
-        await this.#deps.fs.removeDir(at(this.#out, partitionDir(e.n)));
-      } catch (error) {
-        this.#deps.logger.warn('could not remove a compacted partition', {
-          partition: e.n,
+  /**
+   * After the final manifest commit: removes what it does not list (the folders a compaction replaced, a half-written
+   * one, leftovers of a failed earlier attempt), so a report that is never reopened carries no dead data. The report
+   * is committed already, so a failure is logged.
+   */
+  async #pruneCommitted(): Promise<void> {
+    try {
+      await prunePartitions(this.#deps.fs, this.#out, this.#committed);
+    } catch (error) {
+      this.#deps.logger.warn(
+        'could not remove unlisted partition data; it is pruned when the report is opened',
+        {
           error: error instanceof Error ? error.message : String(error),
-        });
-      }
+        },
+      );
     }
   }
 
