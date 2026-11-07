@@ -74,7 +74,7 @@ function tableSection(table: Table): string {
     TABLE_NOTES[table],
     '',
     `- Sorted by: ${list(SORT_COLUMNS[table])}`,
-    `- Time column (for the partition's \`timeMin\` and \`timeMax\`): \`${TIME_COLUMN[table]}\`${table === 'logs' ? ', or \`observed_time_unix_nano\` for a row where it is null' : ''}`,
+    `- Time column (for the partition's \`timeMin\` and \`timeMax\`): \`${TIME_COLUMN[table]}\`${table === 'logs' ? ', or `observed_time_unix_nano` for a row where it is null' : ''}`,
     `- Fixed statistics columns: ${list(fixed)}`,
     '',
     '| column | Arrow type | logical type | nullable |',
