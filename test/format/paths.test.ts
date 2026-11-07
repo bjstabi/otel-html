@@ -9,7 +9,6 @@ import {
   partitionWrapperPath,
 } from '../../src/format/paths.js';
 import {
-  CHUNK_FORMAT_VERSION,
   CHUNK_READABLE_FORMAT_VERSIONS,
   PARTITION_FORMAT_VERSION,
   READABLE_FORMAT_VERSIONS,
@@ -18,7 +17,6 @@ import {
 describe('partition paths', () => {
   test('versions', () => {
     expect(PARTITION_FORMAT_VERSION).toBe(4);
-    expect(CHUNK_FORMAT_VERSION).toBe(3);
     expect(CHUNK_READABLE_FORMAT_VERSIONS).toEqual([1, 2, 3]);
     expect(READABLE_FORMAT_VERSIONS).toEqual([1, 2, 3, 4]);
   });

@@ -1,5 +1,4 @@
 import { OtelHtmlError } from '../model/errors.js';
-import type { TraceId } from '../model/ids.js';
 import type { Table } from './parquet/columns.js';
 
 export const SIGNALS = ['spans', 'logs', 'metrics'] as const;
@@ -35,19 +34,6 @@ export function chunkPath(signal: Signal, n: number): string {
     });
   }
   return `data/chunks/${signal}/${String(n).padStart(6, '0')}.js`;
-}
-
-export function traceShardPath(shard: string): string {
-  return `data/traces/${shard}.js`;
-}
-
-export function rollupPath(name: string): string {
-  return `data/rollups/${name}.js`;
-}
-
-/** The trace-index shard a trace belongs to: the first two hex characters of its id. */
-export function shardOf(traceId: TraceId): string {
-  return traceId.slice(0, 2);
 }
 
 export function partitionDir(n: number): string {

@@ -377,7 +377,6 @@ export class MetricCatalog {
       return;
     }
     if (n.reset) e.resets++;
-    if (n.evicted === true) e.foldedEvicted++;
     const v = sparkValue(n.agg);
     if (Number.isFinite(v)) e.spark.add(t, v);
   }

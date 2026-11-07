@@ -54,7 +54,7 @@ function spanKindName(k: SpanKind): string {
 }
 
 /** `ok` | `error` | `unset` of a status code. */
-export function statusKey(c: StatusCode): 'ok' | 'error' | 'unset' {
+function statusKey(c: StatusCode): 'ok' | 'error' | 'unset' {
   switch (c) {
     case StatusCode.OK:
       return 'ok';

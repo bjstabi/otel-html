@@ -1,18 +1,8 @@
 import { describe, expect, test } from 'vitest';
 import { type Manifest, ManifestSchema, parseManifest } from '../../src/format/manifest.js';
-import {
-  chunkPath,
-  LOCK_PATH,
-  MANIFEST_PATH,
-  rollupPath,
-  STATE_DIR,
-  shardOf,
-  traceShardPath,
-} from '../../src/format/paths.js';
-import { CHUNK_FORMAT_VERSION, REGISTRATION_GLOBAL } from '../../src/format/version.js';
+import { chunkPath, LOCK_PATH, MANIFEST_PATH, STATE_DIR } from '../../src/format/paths.js';
+import { REGISTRATION_GLOBAL } from '../../src/format/version.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
-import { parseTraceId } from '../../src/model/ids.js';
-import { TRACE_ID } from '../../test-support/otlp-builders.js';
 
 const manifest = (): Manifest => ({
   formatVersion: 1,
@@ -60,16 +50,12 @@ function failure(fn: () => unknown): OtelHtmlError {
 
 describe('paths', () => {
   test('constants and helpers', () => {
-    expect(CHUNK_FORMAT_VERSION).toBe(3);
     expect(REGISTRATION_GLOBAL).toBe('__OH__');
     expect(chunkPath('spans', 12)).toBe('data/chunks/spans/000012.js');
     expect(chunkPath('metrics', 1234567)).toBe('data/chunks/metrics/1234567.js');
-    expect(traceShardPath('5b')).toBe('data/traces/5b.js');
-    expect(rollupPath('logs')).toBe('data/rollups/logs.js');
     expect(MANIFEST_PATH).toBe('data/manifest.js');
     expect(STATE_DIR).toBe('data/state');
     expect(LOCK_PATH).toBe('data/state/lock.json');
-    expect(shardOf(parseTraceId(TRACE_ID, 't'))).toBe('5b');
   });
   test('chunkPath rejects a bad chunk number', () => {
     expect(() => chunkPath('spans', -1)).toThrowError(/chunk number/);

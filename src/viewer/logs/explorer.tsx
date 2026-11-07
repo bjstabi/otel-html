@@ -1,7 +1,7 @@
 import { type JSX, useMemo, useState } from 'react';
 import type { ManifestV4 } from '../../format/manifest.js';
 import { parseUnixNanos, type TraceId } from '../../model/ids.js';
-import { DEFAULT_LOG_FACETS } from '../../rollups/log-rollups.js';
+import { DEFAULT_LOG_FACETS } from '../../semconv/default-facets.js';
 import { Chart } from '../components/chart.js';
 import { ColumnPicker } from '../components/column-picker.js';
 import { ExplorerControls } from '../components/explorer-controls.js';
