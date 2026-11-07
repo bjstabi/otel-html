@@ -86,7 +86,12 @@ const ConfigSchema = z.strictObject({
 
 /** The v4 config: no `eagerBudgetBytes` (the format-4 viewer has no eager mode). */
 const ConfigSchemaV4 = z.strictObject({
-  viewer: z.strictObject(viewerShape),
+  viewer: z.strictObject({
+    ...viewerShape,
+    // The writer's facet caps, which the viewer applies to its facet results; absent in a report that predates them.
+    facetValueCap: z.exactOptional(z.number().int().positive()),
+    facetKeyCap: z.exactOptional(z.number().int().positive()),
+  }),
   dashboards: ConfigSchema.shape.dashboards,
   views: ConfigSchema.shape.views,
 });
@@ -182,7 +187,11 @@ export interface ManifestV4 {
   partitions: PartitionEntry[];
   statisticsKeys: Record<Table, string[]>;
   engine: { version: string; format: 'local' | 'site'; assetsBase: string };
-  config: { viewer: ResolvedConfig['viewer']; dashboards: ResolvedDashboard[]; views: View[] };
+  config: {
+    viewer: ResolvedConfig['viewer'] & { facetValueCap?: number; facetKeyCap?: number };
+    dashboards: ResolvedDashboard[];
+    views: View[];
+  };
 }
 
 export type AnyManifest = Manifest | ManifestV4;

@@ -549,3 +549,42 @@ describe('residual cleanup', () => {
     expect(r.total).toBe(6); // 3 spans match; the 6 candidates are all that is known
   });
 });
+
+describe('facet caps from the manifest', () => {
+  const many: S[] = [1, 2, 3, 4].map((i) => ({
+    trace: i,
+    id: i,
+    svc: 'svc-a',
+    name: 'op',
+    startMs: i,
+    durMs: 1,
+    attrs: [attr(`key.${i}`, str('v'))],
+  }));
+  const attrKeys = async (source: DataSource): Promise<string[]> => {
+    const r = await source.querySpans(query({ needs: ['facets'] }));
+    return r.facets.keys().filter((k) => k.startsWith('key.'));
+  };
+
+  test('a report written with facetKeyCap 2 shows at most 2 attribute keys', async () => {
+    const capped = await buildFormat4Report([request(many)], { config: { writer: { facetKeyCap: 2 } } });
+    expect(capped.manifest.config.viewer.facetKeyCap).toBe(2);
+    const cdb = await openFixtureDb(capped);
+    const source = createDuckDbDataSource({
+      engine: mosaicQueryEngine(createCoordinator(cdb.connector, silentLogger), cdb),
+      manifest: capped.manifest,
+    });
+    expect((await attrKeys(source)).length).toBe(2);
+  });
+
+  test('a manifest without the caps uses the defaults', async () => {
+    const plain = await buildFormat4Report([request(many)]);
+    const { facetValueCap: _v, facetKeyCap: _k, ...viewer } = plain.manifest.config.viewer;
+    const manifest = { ...plain.manifest, config: { ...plain.manifest.config, viewer } };
+    const pdb = await openFixtureDb(plain);
+    const source = createDuckDbDataSource({
+      engine: mosaicQueryEngine(createCoordinator(pdb.connector, silentLogger), pdb),
+      manifest,
+    });
+    expect((await attrKeys(source)).length).toBe(4);
+  });
+});

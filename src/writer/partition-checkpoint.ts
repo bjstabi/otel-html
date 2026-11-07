@@ -100,7 +100,11 @@ export function buildManifest(m: ManifestInputs, p: Prepared): ManifestV4 {
       assetsBase: m.config.writer.assetsBase,
     },
     config: {
-      viewer: { ...m.config.viewer },
+      viewer: {
+        ...m.config.viewer,
+        facetValueCap: m.config.writer.facetValueCap,
+        facetKeyCap: m.config.writer.facetKeyCap,
+      },
       dashboards: m.config.dashboards,
       views: m.config.views,
     },

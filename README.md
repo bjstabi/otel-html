@@ -595,8 +595,8 @@ Config is a YAML or JSON file (`otel-html.yaml` by default), or an object passed
 | `writer.chunkTargetBytes` | 4000000 | The size at which held rows are cut into a flush partition (spans, logs and metric points alike); a closed report compacts those flush partitions when there are two or more (see `writer.format`). |
 | `writer.flushIntervalMs` | 5000 | Checkpoint interval. Also checkpoints once after this long idle with new records. |
 | `writer.dedupeCapacity` | 200000 | Recent span IDs remembered for de-duplication. |
-| `writer.facetValueCap` | 1000 | Distinct values kept per facet key; also bounds the viewer's filtered facets. |
-| `writer.facetKeyCap` | 500 | Facet keys kept. |
+| `writer.facetValueCap` | 1000 | Distinct values kept per column in a partition file's statistics, and the most values the viewer lists per facet key. The report records it in its manifest. |
+| `writer.facetKeyCap` | 500 | The most attribute keys the viewer lists in a filtered facet panel. The report records it in its manifest; a report without it uses 500. |
 | `writer.drop.traces.span` | `[]` | OTTL conditions; matching spans are dropped at write time. |
 | `writer.drop.logs.log_record` | `[]` | Same, for log records. |
 | `writer.drop.metrics.datapoint` | `[]` | Same, for metric data points. |

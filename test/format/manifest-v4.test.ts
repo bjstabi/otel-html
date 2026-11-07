@@ -64,6 +64,17 @@ describe('manifest v4', () => {
     expect(isV4(m)).toBe(true);
   });
 
+  test('the facet caps round-trip, and are optional', () => {
+    const m = v4();
+    const capped: ManifestV4 = {
+      ...m,
+      config: { ...m.config, viewer: { ...m.config.viewer, facetValueCap: 7, facetKeyCap: 3 } },
+    };
+    const parsed = parseAnyManifest(capped);
+    expect(isV4(parsed) && parsed.config.viewer).toMatchObject({ facetValueCap: 7, facetKeyCap: 3 });
+    expect(parseAnyManifest(v4())).toEqual(v4());
+  });
+
   test('a v3 manifest still parses through parseAnyManifest', () => {
     const v3 = {
       formatVersion: 3,

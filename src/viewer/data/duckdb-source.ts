@@ -222,12 +222,16 @@ export function createDuckDbDataSource(opts: {
   manifest: ManifestV4;
   /** Where a failed cleanup of the D5 temp table is reported; silent without one. */
   logger?: Pick<Console, 'warn'>;
-  /** The facet and resource-value caps; the writer's defaults without one. */
+  /** The facet and resource-value caps; the manifest's (the writer's), or the defaults for a report without them. */
   caps?: FacetCaps;
 }): DataSource {
   const { engine, manifest } = opts;
   const epoch = BigInt(manifest.epochUnixNano);
-  const caps = opts.caps ?? DEFAULT_FACET_CAPS;
+  const { facetValueCap, facetKeyCap } = manifest.config.viewer;
+  const caps: FacetCaps = opts.caps ?? {
+    facetValueCap: facetValueCap ?? DEFAULT_FACET_CAPS.facetValueCap,
+    facetKeyCap: facetKeyCap ?? DEFAULT_FACET_CAPS.facetKeyCap,
+  };
   const range = manifestRange(manifest);
 
   /**
