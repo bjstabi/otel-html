@@ -227,4 +227,17 @@ describe('the Logs widget states', () => {
     const second = mount(ds, { scope: { condition: 'trace_id.string != ""' } });
     await waitFor(() => expect(second.setSubtitle).toHaveBeenCalledWith('1 log'));
   });
+
+  test('the scope condition filters the rows: only the web log matches a web condition', async () => {
+    const ds = await linked();
+    const actions = mount(ds, { scope: { condition: 'resource.attributes["service.name"] == "web"' } });
+    await waitFor(() => expect(actions.setSubtitle).toHaveBeenCalledWith('1 log'));
+    expect(screen.getByText('web log')).toBeTruthy();
+    expect(screen.queryByText('charge declined')).toBeNull();
+  });
+
+  test('a condition that does not compile fails the query', async () => {
+    mount(await linked(), { scope: { condition: 'severity_number >=' } });
+    expect(await screen.findByRole('alert')).toBeTruthy();
+  });
 });

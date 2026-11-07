@@ -247,4 +247,13 @@ describe('the Traces widget in spans mode', () => {
     expect(actions.selectTrace).toHaveBeenCalledWith(LINKED_TRACE);
     await waitFor(() => expect(actions.setSubtitle).toHaveBeenCalledWith('2 spans'));
   });
+
+  test('the scope condition filters the spans: one span matches a name condition', async () => {
+    const actions = mount(await linked(), {
+      over: { mode: 'spans' },
+      scope: { condition: 'name == "charge"' },
+    });
+    await waitFor(() => expect(actions.setSubtitle).toHaveBeenCalledWith('1 span'));
+    expect(screen.getAllByRole('row')).toHaveLength(2); // header + the one span
+  });
 });

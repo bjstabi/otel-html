@@ -1,4 +1,4 @@
-import type { RelNanos, SpanId, TraceId } from '../../src/model/ids.js';
+import { parseUnixNanos, type RelNanos, type SpanId, type TraceId } from '../../src/model/ids.js';
 import type {
   LogRecordRecord,
   ResourceRecord,
@@ -6,6 +6,8 @@ import type {
   ScopeRecord,
   ScopeRef,
 } from '../../src/model/records.js';
+import { StatusCode } from '../../src/model/records.js';
+import { compileCondition } from '../../src/ottl/compile.js';
 import { FacetCounts } from '../../src/rollups/facets.js';
 import { TimeBuckets } from '../../src/rollups/time-buckets.js';
 import { LOG_SEVERITY_KEYS } from '../../src/semconv/severity.js';
@@ -112,13 +114,25 @@ function within(w: TimeWindow | null, start: number, end: number): boolean {
   return w === null || (start <= w.end && end >= w.start);
 }
 
-/** The conditions the dashboard tests use: a trace id equality, `!= ""`, and anything else matches all. */
-function conditionHolds(condition: string | null, traceId: TraceId | null): boolean {
+const EPOCH = parseUnixNanos(baseManifest.epochUnixNano, 'epoch');
+
+/** A resource carrying the row's service, so conditions on `resource.attributes["service.name"]` filter. */
+const resourceOf = (service: string): ResourceRecord => ({
+  ...RESOURCE,
+  attributes: new Map([['service.name', { kind: 'string', value: service }]]),
+});
+
+/** Real OTTL evaluation, as the legacy query did; a condition that does not compile throws. */
+function spanHolds(condition: string | null, r: SpanRow): boolean {
   if (condition === null) return true;
-  const eq = /trace_id\.string == "([0-9a-f]+)"/.exec(condition);
-  if (eq !== null) return traceId === eq[1];
-  if (condition.includes('trace_id.string != ""')) return traceId !== null;
-  return true;
+  const target = { span: r.span, resource: resourceOf(r.service), scope: SCOPE, epoch: EPOCH };
+  return compileCondition(condition, 'span').test(target);
+}
+
+function logHolds(condition: string | null, r: LogRow): boolean {
+  if (condition === null) return true;
+  const target = { log: r.log, resource: resourceOf(r.service), scope: SCOPE, epoch: EPOCH };
+  return compileCondition(condition, 'log_record').test(target);
 }
 
 function sorted<T>(rows: readonly T[], dir: 'asc' | 'desc', key: (r: T) => number): T[] {
@@ -149,9 +163,7 @@ function groupStats(rows: readonly SpanRow[], key: string): GroupStats[] {
 
 function spanResult(q: SpanQuery): SpanQueryResult {
   const needs = new Set(q.needs);
-  const kept = SPANS.filter(
-    (r) => within(q.window, r.span.start, r.span.end) && conditionHolds(q.condition, r.span.traceId),
-  );
+  const kept = SPANS.filter((r) => within(q.window, r.span.start, r.span.end) && spanHolds(q.condition, r));
   const facets = new FacetCounts(10, 10);
   const buckets = new TimeBuckets<'ok' | 'error' | 'unset'>(['ok', 'error', 'unset'], 8);
   const wanted = (k: string): boolean => q.facetKeys === null || q.facetKeys.includes(k);
@@ -179,19 +191,21 @@ function spanResult(q: SpanQuery): SpanQueryResult {
       result.rows = sorted(kept, q.sort.dir, (r) => r.span.start).slice(0, q.limit);
     } else {
       const root = kept.find((r) => r.span.parentSpanId === null);
+      const start = Math.min(...kept.map((r) => r.span.start));
+      const end = Math.max(...kept.map((r) => r.span.end));
       const trace: TraceRow = {
         traceId: FIXTURE_TRACE,
         rootSummary:
           root === undefined
             ? null
             : { service: root.service, name: root.span.name, resource: root.resource },
-        start: 60 * S,
-        durationNs: 0.5 * S,
+        start,
+        durationNs: end - start,
         spans: kept.length,
-        errors: 0,
+        errors: kept.filter((r) => r.span.status.code === StatusCode.ERROR).length,
       };
       result.rows = kept.length === 0 ? [] : [trace];
-      result.total = kept.length === 0 ? 0 : 1;
+      result.total = result.rows.length;
     }
   }
   if (needs.has('groups') && q.measureBy !== null) {
@@ -206,7 +220,7 @@ function logResult(q: LogQuery): LogQueryResult {
     (r) =>
       within(q.window, r.time, r.time) &&
       (q.traceId == null || r.log.traceId === q.traceId) &&
-      conditionHolds(q.condition, r.log.traceId),
+      logHolds(q.condition, r),
   );
   const facets = new FacetCounts(10, 10);
   const buckets = new TimeBuckets(LOG_SEVERITY_KEYS, 8);

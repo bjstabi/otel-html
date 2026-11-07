@@ -205,7 +205,7 @@ interface Filter {
   traceId: TraceId | null;
 }
 
-// Only the facet counts are drawn, so no rows are read.
+// Only the facet counts are drawn; one row is read so the result carries the match count the subtitle shows.
 function SpanFacets(props: Shared & { dataSource: DataSource; filter: Filter }): JSX.Element {
   const { dataSource, filter, ...rest } = props;
   const { condition, text, window } = filter;
