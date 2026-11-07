@@ -78,14 +78,11 @@ function LoadError(props: { traceId: TraceId; message: string }): JSX.Element {
   );
 }
 
-/** A trace the report holds logs for but no spans: the logs are all there is to show. */
-function LogsOnly(props: { traceId: TraceId; rows: readonly LogRow[]; epoch: UnixNanos }): JSX.Element {
+/** Under a failed trace load: the trace's own logs, when it has any (a log-only trace has no spans to load). */
+function LogsBelowError(props: { traceId: TraceId; rows: readonly LogRow[]; epoch: UnixNanos }): JSX.Element {
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3 p-4">
-      <p role="status" className="text-sm text-ink-2">
-        This report holds no spans for trace <span className="font-mono text-xs">{props.traceId}</span>, only
-        its logs.
-      </p>
+      <p className="text-sm text-ink-2">The trace's logs, which could be read without its spans:</p>
       <TraceLogsTab rows={props.rows} scope={{ traceId: props.traceId }} epoch={props.epoch} />
     </div>
   );
@@ -374,12 +371,10 @@ export function TracePanel(props: TracePanelProps): JSX.Element {
         </p>
       )}
       {load.status === 'loading' && <Skeleton traceId={traceId} />}
-      {load.status === 'error' &&
-        (logs.rows !== null && logs.rows.length > 0 ? (
-          <LogsOnly traceId={traceId} rows={logs.rows} epoch={epoch} />
-        ) : (
-          <LoadError traceId={traceId} message={load.message} />
-        ))}
+      {load.status === 'error' && <LoadError traceId={traceId} message={load.message} />}
+      {load.status === 'error' && logs.rows !== null && logs.rows.length > 0 && (
+        <LogsBelowError traceId={traceId} rows={logs.rows} epoch={epoch} />
+      )}
       {load.status === 'ready' && active !== null && (
         <div className="flex min-h-0 flex-1 flex-col gap-3 p-4">
           <div className="rounded-card border border-hairline bg-surface p-4">

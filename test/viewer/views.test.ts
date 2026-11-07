@@ -11,19 +11,13 @@ import {
   toplist,
   treemap,
 } from '../../src/viewer/components/facet-views.js';
-import type {
-  DurationBin,
-  GroupStatsResult,
-  SpanQueryResult,
-  SpanRow,
-} from '../../src/viewer/data/results.js';
+import type { GroupStatsResult, SpanQueryResult, SpanRow } from '../../src/viewer/data/results.js';
 import { createColorAssigner } from '../../src/viewer/theme/palette.js';
 import {
   durationAxis,
   GROUPED_VIEWS,
   groupSlices,
   paddedAxis,
-  rebinOnAxis,
   resolveCssVars,
   VIEW_BUILDERS,
 } from '../../src/viewer/traces/views.js';
@@ -50,7 +44,7 @@ function result(services: number, spans: Partial<Record<string, number>> = {}): 
     red: null,
     durations: { summary: null, bins: [] },
     groups: null,
-    residual: false,
+    residual: null,
     tables: { resources: [], scopes: [] },
   };
 }
@@ -268,29 +262,6 @@ describe('duration axis and bins', () => {
     expect(edges[0]).toBe(1);
     expect(edges[1]).toBeGreaterThan(1);
     expect(edges.at(-1)).toBe(1e4);
-  });
-
-  test('rebinOnAxis with the same edges returns the bins unchanged', () => {
-    const bins: DurationBin[] = [
-      { fromNs: 1, toNs: 10, count: 3 },
-      { fromNs: 10, toNs: 100, count: 0 },
-      { fromNs: 100, toNs: 1000, count: 2 },
-    ];
-    expect(rebinOnAxis(bins, [1, 10, 100, 1000])).toEqual(bins);
-  });
-
-  test('rebinOnAxis keeps the total, clamps outliers into the end bins and splits by midpoint', () => {
-    const bins: DurationBin[] = [
-      { fromNs: 1, toNs: 100, count: 4 }, // midpoint 10: the upper bin
-      { fromNs: 1000, toNs: 4000, count: 5 }, // midpoint ~2000: above the last edge
-      { fromNs: 0, toNs: 2, count: 1 }, // below the first edge
-    ];
-    const out = rebinOnAxis(bins, [5, 10, 100]);
-    expect(out).toEqual([
-      { fromNs: 5, toNs: 10, count: 1 },
-      { fromNs: 10, toNs: 100, count: 9 },
-    ]);
-    expect(rebinOnAxis(bins, [7])).toEqual([]);
   });
 });
 

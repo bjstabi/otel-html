@@ -33,13 +33,13 @@ export function ErrorCard(props: { title: string; message: string }): JSX.Elemen
  * What a running or finished query says about itself: "Loading" while it runs, and (D5) that part of the filter was
  * evaluated in the browser instead of the query engine; nothing otherwise.
  */
-export function QueryNote(props: { loading: boolean; residual: boolean }): JSX.Element | null {
-  if (!props.loading && !props.residual) return null;
+export function QueryNote(props: { loading: boolean; residual: string | null }): JSX.Element | null {
+  if (!props.loading && props.residual === null) return null;
   return (
     <div className="flex flex-col gap-1">
-      {props.residual && (
+      {props.residual !== null && (
         <p role="status" aria-label="Evaluated in the browser" className="text-sm text-ink-2">
-          Evaluated in the browser: some terms of this filter have no SQL form and are checked row by row.
+          Evaluated in the browser: {props.residual}
         </p>
       )}
       {props.loading && (

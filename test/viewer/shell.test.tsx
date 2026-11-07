@@ -63,7 +63,7 @@ const emptyResult = (): SpanQueryResult => ({
   red: null,
   durations: { summary: null, bins: [] },
   groups: null,
-  residual: false,
+  residual: null,
   tables: { resources: [], scopes: [] },
 });
 const emptyLogs = (): LogQueryResult => ({

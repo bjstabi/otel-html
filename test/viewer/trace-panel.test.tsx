@@ -331,7 +331,7 @@ describe('j/k ownership', () => {
       red: null,
       durations: { summary: null, bins: [] },
       groups: null,
-      residual: false,
+      residual: null,
       tables: { resources: [], scopes: [] },
     };
     const ds = source({
@@ -495,15 +495,15 @@ describe('TracePanel Logs tabs', () => {
     );
   };
 
-  test('a trace with logs but no spans (getTrace rejects) still shows its logs', async () => {
+  test('a failed trace load keeps its error and shows the trace logs below it, without claiming the trace has no spans', async () => {
     const ds = source({
       getTrace: () => Promise.reject(new Error('The report has no trace with this id')),
       traceLogs: () => Promise.resolve([LOGS[0] as LogRow]),
     });
     mountOnly(ds);
     expect(await screen.findByText('first')).toBeTruthy();
-    expect(screen.getByText(/holds no spans for trace/)).toBeTruthy();
-    expect(screen.queryByText('The trace could not be loaded')).toBeNull();
+    expect(screen.getByText('The trace could not be loaded')).toBeTruthy();
+    expect(screen.queryByText(/holds no spans/)).toBeNull();
   });
 
   test('a trace with neither spans nor logs is still the load error', async () => {

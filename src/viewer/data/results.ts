@@ -86,8 +86,8 @@ export type LogQueryResult = {
   matched: number;
   facets: FacetCounts;
   buckets: TimeBuckets<LogSeverityKey>;
-  /** True when the residual OTTL terms (D5) were applied to the result. */
-  residual: boolean;
+  /** The residual OTTL text (D5) evaluated in the browser; null when the whole condition ran in SQL. */
+  residual: string | null;
 } & ({ mode: 'logs'; rows: readonly LogRow[] } | { mode: 'traces'; rows: readonly LogTraceRow[] });
 
 export interface ServiceStats {
@@ -122,6 +122,11 @@ export interface SpanQuery {
   needs: readonly SpanNeed[];
   /** Restrict facets to these keys; null means every core facet plus attributes. */
   facetKeys: readonly string[] | null;
+  /**
+   * Contiguous `[fromNs, toNs)` bins the `durations` need counts into (exact per bin); absent, the bins span the
+   * matching spans' own min to max.
+   */
+  durationAxis?: readonly { fromNs: number; toNs: number }[];
 }
 
 /** `span`'s resource and scope refs index the `RowTables` returned beside the rows. */
@@ -160,8 +165,8 @@ export interface SpanQueryResult {
   red: RedBuckets | null;
   durations: Durations;
   groups: GroupStatsResult | null;
-  /** True when the residual OTTL terms (D5) were applied to the result. */
-  residual: boolean;
+  /** The residual OTTL text (D5) evaluated in the browser; null when the whole condition ran in SQL. */
+  residual: string | null;
   tables: RowTables;
 }
 

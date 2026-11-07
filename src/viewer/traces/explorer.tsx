@@ -1,4 +1,4 @@
-import { type JSX, useMemo, useRef, useState } from 'react';
+import { type JSX, useEffect, useMemo, useState } from 'react';
 import type { AnyManifest } from '../../format/manifest.js';
 import { parseUnixNanos, type SpanId, type TraceId } from '../../model/ids.js';
 import { Chart } from '../components/chart.js';
@@ -21,7 +21,7 @@ import { ResultsTable, type SortState } from '../components/results-table.js';
 import { copyWidgetItem } from '../dashboards/copy-widget.js';
 import type { DataSource } from '../data/data-source.js';
 import { manifestRange } from '../data/manifest-range.js';
-import type { SpanQuery, SpanRow, TraceRow } from '../data/results.js';
+import type { DurationBin, SpanQuery, SpanRow, TraceRow } from '../data/results.js';
 import { useGoTo } from '../shell/go-to.js';
 import { PageChrome, useWidgetCopy } from '../shell/page-chrome.js';
 import { PageOptionNotice } from '../shell/page-option-notice.js';
@@ -42,11 +42,9 @@ import { useSpanQuery } from './use-span-query.js';
 import {
   type ChartView,
   cssTokenReader,
-  durationAxis,
   GROUPED_VIEWS,
   type Measure,
   paddedAxis,
-  rebinOnAxis,
   resolveCssVars,
   VIEW_BUILDERS,
 } from './views.js';
@@ -67,6 +65,33 @@ const VIEW_LABEL: Record<PageView<'traces'>, string> = {
 
 const DEFAULT_SORT: SortState = { column: 'start', dir: 'desc' };
 const DURATION_BIN_COUNT = 24;
+
+function boundOf(bounds: readonly { op: string; value: unknown }[], op: '>=' | '<='): number | undefined {
+  const v = bounds.find((t) => t.op === op)?.value;
+  return typeof v === 'number' ? v : undefined;
+}
+
+/** Contiguous bins from edges, the shape the data source counts into. */
+function binsOf(edges: readonly number[]): { fromNs: number; toNs: number }[] {
+  return edges.slice(0, -1).map((from, i) => ({ fromNs: from, toNs: edges[i + 1] ?? from }));
+}
+
+/** An equal axis keeps its identity, so the effect that sets it settles. */
+function nextAxis(prev: readonly number[] | null, next: readonly number[] | null): readonly number[] | null {
+  return prev === next ||
+    (prev !== null && next !== null && prev.length === next.length && prev.every((e, i) => e === next[i]))
+    ? prev
+    : next;
+}
+
+function sameEdges(bins: readonly DurationBin[], edges: readonly number[]): boolean {
+  const last = bins[bins.length - 1];
+  return (
+    last !== undefined &&
+    edges.length === bins.length + 1 &&
+    edges.every((e, i) => e === (i < bins.length ? bins[i]?.fromNs : last.toNs))
+  );
+}
 
 function OpenLogs(): JSX.Element {
   const goTo = useGoTo();
@@ -128,6 +153,11 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
   const sortable = mode === 'spans' ? sortableOf(SPAN_COLUMNS_UI) : sortableOf(TRACE_COLUMNS_UI);
   const sort = parseSort(sel.sort, sortable, DEFAULT_SORT);
 
+  const [axis, setAxis] = useState<readonly number[] | null>(null);
+  const bounds = useMemo(() => {
+    const tokens = sel.condition === null ? null : ottlToTokens(sel.condition);
+    return (tokens ?? []).filter((t) => t.key === DURATION_KEY && typeof t.value === 'number');
+  }, [sel.condition]);
   const query = useMemo<SpanQuery>(
     () => ({
       condition: sel.condition,
@@ -142,8 +172,19 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
       // The overall RED quantiles need both the timeline and the durations.
       needs: ['rows', 'facets', 'timeline', 'durations'],
       facetKeys: null,
+      ...(bounds.length > 0 && axis !== null ? { durationAxis: binsOf(axis) } : {}),
     }),
-    [sel.condition, sel.text, sel.window, mode, sort.column, sort.dir, manifest.config.viewer.listCap],
+    [
+      sel.condition,
+      sel.text,
+      sel.window,
+      mode,
+      sort.column,
+      sort.dir,
+      manifest.config.viewer.listCap,
+      bounds.length,
+      axis,
+    ],
   );
   const { state } = useSpanQuery(dataSource, query);
   const result = state.status === 'ready' ? state.result : state.status === 'loading' ? state.previous : null;
@@ -232,49 +273,40 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
     return [...new Set(ids)];
   }, [result]);
 
-  // The Duration facet's axis comes from the current result's exact duration range and is kept while a duration filter
-  // is set, so the committed range stays addressable (the counts are then moved onto it); with a URL filter it comes
-  // from that range plus the padded bounds. Clearing the filter re-derives it.
-  const axisRef = useRef<readonly number[] | null>(null);
+  // The Duration facet's bins: while no duration filter is set they are the engine's own (min to max of the matching
+  // spans) and their edges are remembered. While a filter is set the query is asked to count into the remembered axis,
+  // so the committed range stays addressable and every bin is exact; a page opened with a filter has no remembered
+  // axis, so it takes one from the first result's range plus the padded bounds, and asks again.
   const bins = useMemo(() => {
     const exact = result?.durations.bins ?? [];
-    const summary = result?.durations.summary ?? null;
-    // The distribution's extremes as two stand-in rows: the axis depends on the min and the max alone.
-    const rows = summary === null ? [] : [{ durationNs: summary.min }, { durationNs: summary.max }];
-    const tokens = sel.condition === null ? null : ottlToTokens(sel.condition);
-    const bounds = (tokens ?? []).filter((t) => t.key === DURATION_KEY && typeof t.value === 'number');
-    const num = (op: '>=' | '<='): number | undefined => {
-      const v = bounds.find((t) => t.op === op)?.value;
-      return typeof v === 'number' ? v : undefined;
-    };
-    let axis: readonly number[];
+    return bounds.length === 0 || (axis !== null && sameEdges(exact, axis)) ? exact : [];
+  }, [result, bounds.length, axis]);
+  useEffect(() => {
+    if (result === null) return;
+    const summary = result.durations.summary;
     if (bounds.length === 0) {
-      axis = durationAxis(rows, DURATION_BIN_COUNT);
-      axisRef.current = axis.length === 0 ? null : axis;
-    } else if (axisRef.current !== null) {
-      // A hand-typed condition moving the bounds outside the stored axis keeps the old axis (accepted by the spec).
-      axis = axisRef.current;
-    } else if (rows.length === 0) {
-      axis = []; // nothing to anchor an axis on yet (loading, or the filter matched nothing): keep waiting
-    } else {
-      const lo = num('>=');
-      const hi = num('<=');
-      axis = paddedAxis(rows, DURATION_BIN_COUNT, {
-        ...(lo === undefined ? {} : { lo }),
-        ...(hi === undefined || (lo !== undefined && hi < lo) ? {} : { hi }),
-      });
-      axisRef.current = axis.length === 0 ? null : axis;
+      const first = result.durations.bins[0];
+      const last = result.durations.bins[result.durations.bins.length - 1];
+      setAxis((prev) =>
+        nextAxis(
+          prev,
+          first === undefined || last === undefined
+            ? null
+            : [...result.durations.bins.map((b) => b.fromNs), last.toNs],
+        ),
+      );
+    } else if (axis === null && summary !== null) {
+      const lo = boundOf(bounds, '>=');
+      const hi = boundOf(bounds, '<=');
+      // The distribution's extremes as two stand-in rows: the axis depends on the min and the max alone.
+      setAxis(
+        paddedAxis([{ durationNs: summary.min }, { durationNs: summary.max }], DURATION_BIN_COUNT, {
+          ...(lo === undefined ? {} : { lo }),
+          ...(hi === undefined || (lo !== undefined && hi < lo) ? {} : { hi }),
+        }),
+      );
     }
-    const first = exact[0];
-    const last = exact[exact.length - 1];
-    const same =
-      first !== undefined &&
-      last !== undefined &&
-      axis.length === exact.length + 1 &&
-      axis.every((e, i) => e === (i < exact.length ? exact[i]?.fromNs : last.toNs));
-    return same ? exact : rebinOnAxis(exact, axis);
-    // axisRef is a ref (stable); the memo is the one place it is written, so the axis survives re-derivations.
-  }, [result, sel.condition]);
+  }, [result, bounds, axis]);
 
   return (
     <PageChrome
@@ -316,7 +348,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
             </output>
           )}
         </ExplorerControls>
-        <QueryNote loading={state.status === 'loading'} residual={result?.residual === true} />
+        <QueryNote loading={state.status === 'loading'} residual={result?.residual ?? null} />
         {exportError !== null && <ErrorCard title="The export failed" message={exportError} />}
         {state.status === 'error' && <ErrorCard title="The query could not run" message={state.message} />}
         {result !== null && (

@@ -30,7 +30,7 @@ const resultOf = (total: number): SpanQueryResult => ({
   red: null,
   durations: { summary: null, bins: [] },
   groups: null,
-  residual: false,
+  residual: null,
   tables: { resources: [], scopes: [] },
 });
 

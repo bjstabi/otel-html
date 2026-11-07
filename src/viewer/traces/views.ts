@@ -2,7 +2,7 @@ import type { EChartsOption } from 'echarts';
 import { formatDuration } from '../../semconv/formatters.js';
 import { bar, type FacetViewContext, pie, toplist, treemap } from '../components/facet-views.js';
 import { seconds } from '../components/histogram-card.js';
-import type { DurationBin, SpanQueryResult, SpanRow, TraceRow } from '../data/results.js';
+import type { SpanQueryResult, SpanRow, TraceRow } from '../data/results.js';
 import type { ExplorerView } from '../state/explorer-view.js';
 import type { PageView } from '../state/page-options.js';
 
@@ -241,27 +241,4 @@ export function paddedAxis(
     ...edges,
     ...(hi === undefined || last === undefined ? [] : [Math.round(last * r)]),
   ];
-}
-
-/**
- * Moves exact bins onto another axis: each bin's count goes to the `[from, to)` bin holding its geometric midpoint (one
- * below the first edge counts in the first bin, one at or above the last in the last). The counts stay exact in total;
- * only where a bin straddles an edge is the split approximate. With the same edges the bins come back unchanged.
- */
-export function rebinOnAxis(bins: readonly DurationBin[], edges: readonly number[]): DurationBin[] {
-  const n = edges.length - 1;
-  if (n < 1) return [];
-  const out = Array.from({ length: n }, (_, i) => ({
-    fromNs: edges[i] ?? 0,
-    toNs: edges[i + 1] ?? 0,
-    count: 0,
-  }));
-  for (const b of bins) {
-    const mid = b.fromNs > 0 && b.toNs > 0 ? Math.sqrt(b.fromNs * b.toNs) : (b.fromNs + b.toNs) / 2;
-    let i = 0;
-    while (i < n - 1 && mid >= (edges[i + 1] ?? Number.POSITIVE_INFINITY)) i++;
-    const bin = out[i];
-    if (bin !== undefined) bin.count += b.count;
-  }
-  return out;
 }

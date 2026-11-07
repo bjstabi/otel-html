@@ -104,7 +104,7 @@ export function dataSourceOf(
         partial: null,
         // The format-4 fields the traces explorer reads, for `#/traces` routes through this same fake (until 5.4).
         durations: { summary: null, bins: [] },
-        residual: false,
+        residual: null,
         tables: { resources: [], scopes: [] },
       }),
     getTrace: unused,

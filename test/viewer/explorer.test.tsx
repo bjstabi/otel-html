@@ -47,17 +47,20 @@ function row(name: string, service: string, dur: number, id: string): SpanRow {
 }
 
 /** The exact duration distribution the engine returns for these durations (24 log-spaced bins over min..max). */
-function durationsOf(durs: readonly number[]): SpanQueryResult['durations'] {
+function durationsOf(
+  durs: readonly number[],
+  given?: readonly { fromNs: number; toNs: number }[],
+): SpanQueryResult['durations'] {
   if (durs.length === 0) return { summary: null, bins: [] };
   const min = Math.min(...durs);
   const max = Math.max(...durs);
   const edges = durationAxis([{ durationNs: min }, { durationNs: max }], 24);
-  const bins: DurationBin[] = edges
-    .slice(0, -1)
-    .map((from, i) => ({ fromNs: from, toNs: edges[i + 1] ?? from, count: 0 }));
+  const bins: DurationBin[] = (
+    given ?? edges.slice(0, -1).map((from, i) => ({ fromNs: from, toNs: edges[i + 1] ?? from }))
+  ).map((b) => ({ ...b, count: 0 }));
   for (const d of durs) {
     let i = 0;
-    while (i < bins.length - 1 && d >= (edges[i + 1] ?? Number.POSITIVE_INFINITY)) i++;
+    while (i < bins.length - 1 && d >= (bins[i]?.toNs ?? Number.POSITIVE_INFINITY)) i++;
     const bin = bins[i];
     if (bin !== undefined) bin.count++;
   }
@@ -85,7 +88,7 @@ function resultOf(rows: SpanRow[], over: Partial<SpanQueryResult> = {}): SpanQue
     },
     durations: durationsOf(rows.map((r) => r.durationNs)),
     groups: null,
-    residual: false,
+    residual: null,
     tables: { resources: [], scopes: [] },
     ...over,
   };
@@ -158,9 +161,9 @@ describe('TracesExplorer', () => {
   });
 
   test('a residual condition says it was evaluated in the browser; an ordinary result says nothing', async () => {
-    setup(() => Promise.resolve(resultOf([row('a', 's', 5, 's1')], { residual: true })));
+    setup(() => Promise.resolve(resultOf([row('a', 's', 5, 's1')], { residual: 'Len(name) > 7' })));
     const note = await screen.findByRole('status', { name: 'Evaluated in the browser' });
-    expect(note.textContent).toMatch(/^Evaluated in the browser: /);
+    expect(note.textContent).toBe('Evaluated in the browser: Len(name) > 7');
     cleanup();
     setup(() => Promise.resolve(resultOf([row('a', 's', 5, 's1')])));
     await screen.findByRole('grid', { name: 'Results' });
@@ -349,20 +352,48 @@ describe('TracesExplorer duration facet', () => {
   const DUR = 'span.end_time_unix_nano - span.start_time_unix_nano';
   const ROWS = [1e3, 5e3, 2e4, 1e5, 4e5, 2e6, 9e6, 3e7, 2e8, 1e9].map((d, i) => row('s', 'svc', d, `d${i}`));
   /** A data source that applies the duration bounds in the condition like the real one. */
+  const queries: SpanQuery[] = [];
   const filtering: DataSource['querySpans'] = (q) => {
     const lo = />= (\d+(?:\.\d+)?)/.exec(q.condition ?? '')?.[1];
     const hi = /<= (\d+(?:\.\d+)?)/.exec(q.condition ?? '')?.[1];
-    return Promise.resolve(
-      resultOf(
-        ROWS.filter(
-          (r) =>
-            (lo === undefined || r.durationNs >= Number(lo)) &&
-            (hi === undefined || r.durationNs <= Number(hi)),
-        ),
-      ),
+    const rows = ROWS.filter(
+      (r) =>
+        (lo === undefined || r.durationNs >= Number(lo)) && (hi === undefined || r.durationNs <= Number(hi)),
     );
+    queries.push(q);
+    // Like the engine: counts go into the caller's axis when it gives one.
+    return Promise.resolve({
+      ...resultOf(rows),
+      durations: durationsOf(
+        rows.map((r) => r.durationNs),
+        q.durationAxis,
+      ),
+    });
   };
+
   const edges = durationAxis(ROWS, 24);
+
+  test('under a duration filter the facet asks for the stored axis and every bin is exact', async () => {
+    const user = userEvent.setup();
+    const { store } = setup(filtering);
+    const min = await screen.findByRole('slider', { name: 'Minimum duration' });
+    expect(queries[0]?.durationAxis).toBeUndefined();
+    await user.click(min);
+    await user.keyboard('{ArrowRight}{ArrowRight}');
+    expect(store.getState().condition).toBe(`${DUR} >= ${edges[2]}`);
+    const stored = edges.slice(0, -1).map((from, i) => ({ fromNs: from, toNs: edges[i + 1] ?? from }));
+    await waitFor(() => expect(queries.at(-1)?.durationAxis).toEqual(stored));
+    const kept = ROWS.filter((r) => r.durationNs >= (edges[2] ?? 0)).map((r) => r.durationNs);
+    const expected = stored.map(
+      (b, i) => kept.filter((d) => d >= b.fromNs && (i === stored.length - 1 || d < b.toNs)).length,
+    );
+    await waitFor(() => {
+      const counts = [...document.querySelectorAll('[data-bin]')].map((b) =>
+        Number(/: (\d+)$/.exec(b.getAttribute('title') ?? '')?.[1]),
+      );
+      expect(counts).toEqual(expected);
+    });
+  });
 
   test('the duration axis stays put while a duration filter is set', async () => {
     const user = userEvent.setup();

@@ -1,4 +1,5 @@
 import { type AnyManifest, isV4 } from '../../format/manifest.js';
+import { toNumber } from './span-results.js';
 import type { TimeWindow } from './time-window.js';
 
 /**
@@ -10,7 +11,7 @@ export function manifestRange(manifest: AnyManifest): TimeWindow | null {
   if (manifest.range === null) return null;
   const epoch = BigInt(manifest.epochUnixNano);
   return {
-    start: Number(BigInt(manifest.range.start) - epoch),
-    end: Number(BigInt(manifest.range.end) - epoch),
+    start: toNumber(BigInt(manifest.range.start) - epoch, 'range.start'),
+    end: toNumber(BigInt(manifest.range.end) - epoch, 'range.end'),
   };
 }

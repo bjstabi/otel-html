@@ -184,7 +184,7 @@ describe('queryLogs', () => {
     expect(ids(q.rows as LogRow[])).toEqual(['a2', 'c1', 'c2', 'a4']);
     expect(q.total).toBe(4);
     expect(q.matched).toBe(4);
-    expect(q.residual).toBe(false);
+    expect(q.residual).toBeNull();
     expect(q.facets.top('severity', 5)).toEqual([
       { value: 'error', count: 2 },
       { value: 'fatal', count: 2 },
@@ -263,14 +263,14 @@ describe('queryLogs', () => {
   test('a residual condition re-checks logs in the browser and marks the result', async () => {
     const condition = 'Len(body.string) > 20';
     const rowsOnly = await counted(() => fresh().queryLogs(query({ condition, needs: ['rows'] })));
-    expect(rowsOnly.value.residual).toBe(true);
+    expect(rowsOnly.value.residual).toBe('Len(body.string) > 20');
     expect(ids(rowsOnly.value.rows as LogRow[])).toEqual(['a2', 'b2', 'b4', 'a4']);
     expect(rowsOnly.value.total).toBe(4);
     expect(rowsOnly.value.matched).toBe(4);
     expect(rowsOnly.exec).toBe(0);
 
     const all = await counted(() => fresh().queryLogs(query({ condition })));
-    expect(all.value.residual).toBe(true);
+    expect(all.value.residual).toBe('Len(body.string) > 20');
     expect(all.value.total).toBe(4);
     expect(all.value.facets.top('severity', 5)).toEqual([
       { value: 'error', count: 2 },

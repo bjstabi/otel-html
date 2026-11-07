@@ -61,6 +61,7 @@ import {
   pointBuckets,
   resourceValueResult,
 } from './log-results.js';
+import { manifestRange } from './manifest-range.js';
 import { DEFAULT_FACET_CAPS, type FacetCaps, throwIfAborted } from './query-common.js';
 import type { QueryEngine } from './query-engine.js';
 import { dropResidualTable, residualIdTable, residualRows } from './residual.js';
@@ -150,7 +151,7 @@ function planThree(what: string): OtelHtmlError {
   });
 }
 
-function emptyResult(caps: typeof DEFAULT_FACET_CAPS, residual: boolean): SpanQueryResult {
+function emptyResult(caps: typeof DEFAULT_FACET_CAPS, residual: string | null): SpanQueryResult {
   return {
     rows: [],
     total: 0,
@@ -175,7 +176,7 @@ function residualTest(compiled: CompiledCondition<'span'>, epoch: bigint): (e: S
     });
 }
 
-function emptyLogResult(caps: FacetCaps, residual: boolean, mode: LogQuery['mode']): LogQueryResult {
+function emptyLogResult(caps: FacetCaps, residual: string | null, mode: LogQuery['mode']): LogQueryResult {
   const base = {
     total: 0,
     matched: 0,
@@ -215,13 +216,7 @@ export function createDuckDbDataSource(opts: {
   const { engine, manifest } = opts;
   const epoch = BigInt(manifest.epochUnixNano);
   const caps = opts.caps ?? DEFAULT_FACET_CAPS;
-  const range =
-    manifest.range === null
-      ? null
-      : {
-          start: toNumber(BigInt(manifest.range.start) - epoch, 'range.start'),
-          end: toNumber(BigInt(manifest.range.end) - epoch, 'range.end'),
-        };
+  const range = manifestRange(manifest);
 
   /**
    * Narrows `filter` to the rows the residual terms accept, through a temp table of their ids (D5). `candidates` reads
@@ -284,7 +279,7 @@ export function createDuckDbDataSource(opts: {
       window: q.window,
     });
     const browser = residual !== null;
-    if (filter.files.files.length === 0) return emptyResult(caps, browser);
+    if (filter.files.files.length === 0) return emptyResult(caps, residual);
     const needs = new Set(q.needs);
     const aggregates = AGGREGATE_NEEDS.some((n) => needs.has(n));
     const spanSort = q.mode === 'spans' ? sortOf(SPAN_SORTS, q.sort, 'spans') : null;
@@ -293,7 +288,7 @@ export function createDuckDbDataSource(opts: {
     const test = residual === null ? null : residualTest(compileCondition(residual, 'span'), epoch);
 
     const run = async (f: SqlFilter): Promise<SpanQueryResult> => {
-      const result = emptyResult(caps, browser);
+      const result = emptyResult(caps, residual);
       const spec = bucketSpec(q.window, range);
       const parts: Promise<void>[] = [];
 
@@ -371,11 +366,14 @@ export function createDuckDbDataSource(opts: {
           (async () => {
             const summary = durationSummary(await engine.query(durationSummaryQuery(f), signal));
             if (summary === null) return;
+            // A caller's axis (the explorer keeps one while a duration filter is set) wins over the derived one.
             const edges = durationAxis(
               [{ durationNs: summary.min }, { durationNs: summary.max }],
               DURATION_BIN_COUNT,
             );
-            const axis = edges.slice(0, -1).map((from, i) => ({ fromNs: from, toNs: edges[i + 1] ?? from }));
+            const axis =
+              q.durationAxis ??
+              edges.slice(0, -1).map((from, i) => ({ fromNs: from, toNs: edges[i + 1] ?? from }));
             const bins = durationBins(await engine.query(durationBinsQuery(f, axis), signal), axis);
             result.durations = { summary, bins };
           })(),
@@ -454,7 +452,7 @@ export function createDuckDbDataSource(opts: {
         : { traceId: q.traceId, traceFiles: (await logTraceFiles(q.traceId, signal)) ?? allLogsFiles }),
     });
     const browser = residual !== null;
-    if (filter.files.files.length === 0) return emptyLogResult(caps, browser, q.mode);
+    if (filter.files.files.length === 0) return emptyLogResult(caps, residual, q.mode);
     const needs = new Set(q.needs);
     const aggregates = LOG_AGGREGATE_NEEDS.some((n) => needs.has(n));
     const logSort = q.mode === 'logs' ? sortOf(LOG_SORTS, q.sort, 'logs') : null;
@@ -463,7 +461,7 @@ export function createDuckDbDataSource(opts: {
     const test = residual === null ? null : logResidualTest(compileCondition(residual, 'log_record'), epoch);
 
     const run = async (f: SqlFilter): Promise<LogQueryResult> => {
-      const result = emptyLogResult(caps, browser, q.mode);
+      const result = emptyLogResult(caps, residual, q.mode);
       const spec = bucketSpec(q.window, range);
       const parts: Promise<void>[] = [];
 
