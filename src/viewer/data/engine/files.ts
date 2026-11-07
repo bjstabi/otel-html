@@ -38,6 +38,8 @@ export async function registerPartitions(
     onProgress?.({ done, total });
   };
 
+  if (total === 0) onProgress?.({ done: 0, total: 0 });
+
   if (engine.format === 'site') {
     for (const { path } of entries) {
       await engine.db.registerFileURL(path, new URL(path, deps.baseUrl).href, DuckDBDataProtocol.HTTP, false);

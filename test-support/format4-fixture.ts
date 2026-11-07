@@ -1,5 +1,6 @@
 import type { ConfigInput } from '../src/config/schema.js';
 import { reviveDataJson, unwrapDataFile } from '../src/format/data-file.js';
+import { ENGINE_VERSION } from '../src/format/engine.js';
 import { isV4, type ManifestV4, parseAnyManifest } from '../src/format/manifest.js';
 import { TABLES } from '../src/format/parquet/columns.js';
 import { MANIFEST_KEY } from '../src/format/paths.js';
@@ -98,7 +99,7 @@ export function emptyManifest(): ManifestV4 {
     totals: { spans: 0, logs: 0, metrics: 0 },
     partitions: [],
     statisticsKeys: { spans: [], logs: [], points: [], traces: [], patterns: [] },
-    engine: { version: '1.4.1', format: 'site', assetsBase: 'assets/' },
+    engine: { version: ENGINE_VERSION, format: 'site', assetsBase: 'assets/' },
     config: {
       viewer: {
         eagerBudgetBytes: 75_000_000,

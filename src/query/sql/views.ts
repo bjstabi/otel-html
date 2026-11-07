@@ -36,8 +36,8 @@ function viewStatement(manifest: ManifestV4, table: Table, resolve: (path: strin
   if (files.length === 0) {
     const columns = [
       ...TABLE_COLUMNS[table].map((c) => `NULL::${duckdbType(c.type)} AS ${quoteIdent(c.name)}`),
-      'NULL::VARCHAR AS filename',
       'NULL::BIGINT AS file_row_number',
+      'NULL::VARCHAR AS filename',
     ];
     return `CREATE OR REPLACE VIEW ${quoteIdent(table)} AS SELECT ${columns.join(', ')} WHERE false`;
   }
@@ -48,7 +48,8 @@ function viewStatement(manifest: ManifestV4, table: Table, resolve: (path: strin
 /**
  * One `CREATE OR REPLACE VIEW <table> AS SELECT * FROM read_parquet([...], filename = true, file_row_number = true,
  * union_by_name = false)` per table; a table with no file gets a typed empty view (`SELECT NULL::<type> AS <col>, ...,
- * NULL::VARCHAR AS filename, NULL::BIGINT AS file_row_number WHERE false`).
+ * NULL::BIGINT AS file_row_number, NULL::VARCHAR AS filename WHERE false`: the same columns in the same order as a
+ * populated view, whose virtual columns end `file_row_number, filename`).
  */
 export function viewStatements(manifest: ManifestV4, resolve: (path: string) => string): string[] {
   return TABLES.map((table) => viewStatement(manifest, table, resolve));

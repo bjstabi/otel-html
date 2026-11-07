@@ -56,16 +56,28 @@ async function startLocal(urls: { wasm: string; worker: string }, deps: EngineDe
 }
 
 async function startSite(urls: { wasm: string; worker: string }, deps: EngineDeps) {
-  const db = new AsyncDuckDB(new VoidLogger(), deps.createWorker(urls.worker));
-  await db.instantiate(urls.wasm);
-  await db.open({ filesystem: { forceFullHTTPReads: false, allowFullHTTPReads: true } });
-  return db;
+  let db: AsyncDuckDB | undefined;
+  try {
+    db = new AsyncDuckDB(new VoidLogger(), deps.createWorker(urls.worker));
+    await db.instantiate(urls.wasm);
+    await db.open({ filesystem: { forceFullHTTPReads: false, allowFullHTTPReads: true } });
+    return db;
+  } catch (error) {
+    await db?.terminate().catch(() => undefined);
+    throw error;
+  }
 }
 
 export async function startEngine(engine: ManifestV4['engine'], deps: EngineDeps): Promise<Engine> {
   const urls = engineUrls(engine, deps.baseUrl);
   const db = await (engine.format === 'site' ? startSite(urls, deps) : startLocal(urls, deps));
-  const connection = await db.connect();
+  let connection: AsyncDuckDBConnection;
+  try {
+    connection = await db.connect();
+  } catch (error) {
+    await db.terminate().catch(() => undefined);
+    throw error;
+  }
   return {
     db,
     connection,

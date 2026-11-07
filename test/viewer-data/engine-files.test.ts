@@ -162,3 +162,20 @@ test('a failed load stops the other workers and no views are created', async () 
   await new Promise((r) => setTimeout(r, 30));
   expect(progress).toHaveLength(seen);
 });
+
+test.each(['site', 'local'] as const)(
+  '%s with no files reports zero progress once and creates the views',
+  async (format) => {
+    const progress: RegisterProgress[] = [];
+    const engine = fakeEngine(format);
+    const empty = { partitions: [] } as unknown as ManifestV4;
+    await registerPartitions(
+      engine,
+      empty,
+      { loader: scriptedLoader({}), baseUrl: 'file:///r/index.html' },
+      (p) => progress.push(p),
+    );
+    expect(progress).toEqual([{ done: 0, total: 0 }]);
+    expect(engine.calls.exec).toHaveLength(5);
+  },
+);

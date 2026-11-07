@@ -11,6 +11,8 @@ const fake = vi.hoisted(() => ({
   opened: [] as unknown[],
   events: [] as string[],
   failInstantiate: false,
+  failOpen: false,
+  failConnect: false,
 }));
 
 vi.mock('@duckdb/duckdb-wasm', () => ({
@@ -21,9 +23,11 @@ vi.mock('@duckdb/duckdb-wasm', () => ({
       fake.instantiated.push(url);
     }
     async open(config: unknown): Promise<void> {
+      if (fake.failOpen) throw new Error('open failed');
       fake.opened.push(config);
     }
     async connect(): Promise<{ close(): Promise<void> }> {
+      if (fake.failConnect) throw new Error('connect failed');
       return {
         close: async () => {
           fake.events.push('connection.close');
@@ -119,17 +123,24 @@ test('registerText and close reach the database and connection', async () => {
   expect(fake.events.slice(-2)).toEqual(['connection.close', 'db.terminate']);
 });
 
-test('a missing wrapper fails with the file name', async () => {
-  const file = 'assets/duckdb.1.32.0.wasm.gz.b64.js';
+test.each([
+  ['wasm', 'file:///r/assets/duckdb.1.32.0.wasm.gz.b64.js'],
+  ['worker', 'file:///r/assets/duckdb.1.32.0.worker.b64.js'],
+])('a missing %s wrapper fails with its file name', async (which, url) => {
+  const requested: string[] = [];
   const loader: ScriptLoader = {
-    load: async (path) => {
-      throw new OtelHtmlError('invalid-report', { path: file, actual: `failed ${path}` });
+    load: async (path, key) => {
+      requested.push(path);
+      if (path === url) throw new OtelHtmlError('invalid-report', { path, actual: 'missing' });
+      return key === ENGINE_WASM_KEY ? toBase64(gzipSync(Buffer.from('WASM'))) : toBase64(Buffer.from('x'));
     },
   };
   await expect(startEngine(localEngine, deps(loader))).rejects.toMatchObject({
     code: 'invalid-report',
-    path: file,
+    path: url,
   });
+  expect(requested).toContain(url);
+  expect(which).toBeTruthy();
 });
 
 const localLoader = (): ScriptLoader =>
@@ -166,4 +177,23 @@ test('a non-string wrapper payload is an invalid-report naming the file', async 
     code: 'invalid-report',
     path: 'file:///r/assets/duckdb.1.32.0.wasm.gz.b64.js',
   });
+});
+
+test.each([
+  ['site', 'open', siteEngine],
+  ['site', 'instantiate', siteEngine],
+  ['site', 'connect', siteEngine],
+  ['local', 'connect', localEngine],
+] as const)('%s start: a failed %s terminates the database', async (_format, step, engineSpec) => {
+  const flag = { open: 'failOpen', instantiate: 'failInstantiate', connect: 'failConnect' }[step] as
+    | 'failOpen'
+    | 'failInstantiate'
+    | 'failConnect';
+  fake[flag] = true;
+  try {
+    await expect(startEngine(engineSpec, deps(localLoader()))).rejects.toThrow();
+  } finally {
+    fake[flag] = false;
+  }
+  expect(fake.events).toContain('db.terminate');
 });

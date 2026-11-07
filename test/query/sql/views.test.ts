@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
-import { TABLE_COLUMNS } from '../../../src/format/parquet/columns.js';
+import { TABLE_COLUMNS, TABLES } from '../../../src/format/parquet/columns.js';
 import { duckdbType, partitionOfFilename, tableFiles, viewStatements } from '../../../src/query/sql/views.js';
+import { openTestDb } from '../../../test-support/duckdb-node.js';
 import {
   buildFormat4Report,
   emptyManifest,
@@ -21,8 +22,8 @@ describe('format-4 views', () => {
     expect(db.rows('SELECT typeof(severity_number) AS t FROM logs LIMIT 1')).toEqual([]);
     expect(column(db.rows('DESCRIBE logs'), 'column_name')).toEqual([
       ...TABLE_COLUMNS.logs.map((c) => c.name),
-      'filename',
       'file_row_number',
+      'filename',
     ]);
   });
   test('filename and file_row_number name the partition and the row', async () => {
@@ -38,10 +39,33 @@ describe('format-4 views', () => {
     const [only] = tableFiles(f.manifest, 'spans', (p) => p).slice(1);
     expect(first(db.rows(`SELECT count(*) AS n FROM spans WHERE filename = '${only}'`), 'n')).toBe(5n);
   });
-  test('viewStatements of an empty manifest creates five empty views', () => {
+  test('viewStatements of an empty manifest creates five empty views', async () => {
     const stmts = viewStatements(emptyManifest(), (p) => p);
     expect(stmts).toHaveLength(5);
     for (const s of stmts) expect(s).toMatch(/WHERE false$/);
+    const db = await openTestDb();
+    for (const s of stmts) db.exec(s);
+    for (const table of TABLES) {
+      expect(first(db.rows(`SELECT count(*) AS n FROM ${table}`), 'n')).toBe(0n);
+    }
+    db.close();
+  });
+  test('a populated view and the empty view of the same table DESCRIBE alike', async () => {
+    const f = await buildFormat4Report([spansOnlyRequest(2)]);
+    const populated = await openFixtureDb(f);
+    const empty = await openFixtureDb({ ...f, manifest: emptyManifest(), files: new Map() });
+    const shape = (db: typeof populated, table: string) =>
+      db
+        .rows(`DESCRIBE ${table}`)
+        .map((r) => [(r as { column_name: string }).column_name, (r as { column_type: string }).column_type]);
+    const checked: string[] = [];
+    for (const table of TABLES) {
+      if (f.manifest.partitions.some((p) => p.files[table] !== undefined)) {
+        expect(shape(empty, table)).toEqual(shape(populated, table));
+        checked.push(table);
+      }
+    }
+    expect(checked).toEqual(expect.arrayContaining(['spans', 'traces']));
   });
   test('a single quote in a path doubles', () => {
     const m = emptyManifest();

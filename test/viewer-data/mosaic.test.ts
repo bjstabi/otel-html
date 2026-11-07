@@ -143,3 +143,19 @@ test('aborting after the request reached the connector rejects with AbortError',
   expect(await outcome).toMatchObject({ name: 'AbortError' });
   release();
 });
+
+test('close clears the coordinator before closing the files', async () => {
+  const events: string[] = [];
+  const coordinator = createCoordinator(fakeConnector({}), silentLogger);
+  const clear = coordinator.clear.bind(coordinator);
+  coordinator.clear = (...a: Parameters<typeof clear>) => {
+    events.push('clear');
+    clear(...a);
+  };
+  const qe = mosaicQueryEngine(coordinator, {
+    ...fakeFiles(),
+    close: () => void events.push('files.close'),
+  });
+  await qe.close();
+  expect(events).toEqual(['clear', 'files.close']);
+});

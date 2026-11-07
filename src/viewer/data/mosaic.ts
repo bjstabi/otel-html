@@ -63,7 +63,8 @@ function engineFailure(error: unknown, sql: string): OtelHtmlError {
 
 /**
  * The `QueryEngine` over a coordinator. `query` is `coordinator.query(q)`; an aborted signal rejects with
- * `DOMException('AbortError')` and cancels the request if it is still queued (`coordinator.cancel([result])`); the
+ * `DOMException('AbortError')` and calls `coordinator.cancel([result])`, which only reaches a request still queued in the
+ * manager (a query waiting in the consolidator, or already running, is not cancelled: its result is discarded); the
  * generated SQL is attached to a failure as an `invalid-report` `OtelHtmlError` (its hint). `exec` sends
  * `{ type: 'exec', sql }` through the coordinator (so its cache sees the DDL); `registerText` and `close` delegate to
  * `files`.
@@ -104,6 +105,8 @@ export function mosaicQueryEngine(coordinator: Coordinator, files: EngineFiles):
       await files.registerText(name, text);
     },
     async close(): Promise<void> {
+      // reject queued queries before the worker goes away
+      coordinator.clear();
       await files.close();
     },
   };

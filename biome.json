@@ -94,7 +94,11 @@
               "level": "error",
               "options": {
                 "paths": {
-                  "@opentelemetry/otlp-transformer": "Internal-use upstream package; test oracle only."
+                  "@opentelemetry/otlp-transformer": "Internal-use upstream package; test oracle only.",
+                  "@uwdata/mosaic-core": "mosaic.ts is the only Mosaic coordinator seam (D19).",
+                  "@uwdata/mosaic-sql": "SQL is built under src/query/sql and src/viewer/data only.",
+                  "@uwdata/flechette": "The data layer (src/viewer/data) wraps the query engine.",
+                  "@duckdb/duckdb-wasm": "The engine folder (src/viewer/data/engine) and mosaic.ts wrap duckdb-wasm."
                 }
               }
             }
