@@ -25,7 +25,7 @@ import {
   type WriterDeps,
 } from './session.js';
 
-export interface Input {
+interface Input {
   dir: string;
   manifest: Manifest;
   epoch: UnixNanos;
@@ -105,17 +105,17 @@ async function existingFormat(fs: FileSystem, dir: string): Promise<'local' | 's
   return isV4(m) ? m.engine.format : undefined;
 }
 
-function chunkInput({ dir, file, raw }: Located): Input {
+function chunkInput({ dir, file, raw }: Located, verb: string): Input {
   if (
     typeof raw === 'object' &&
     raw !== null &&
     'formatVersion' in raw &&
     !CHUNK_READABLE_FORMAT_VERSIONS.some((v) => v === raw.formatVersion)
   ) {
-    // merge replays chunks, which every readable version lays out alike.
+    // Chunk reports of every readable version lay out alike; anything else is another otel-html's to read.
     throw new OtelHtmlError('version-mismatch', {
       message: `${file}: unsupported report formatVersion ${JSON.stringify(raw.formatVersion)}; this otel-html reads formatVersion ${CHUNK_READABLE_FORMAT_VERSIONS.join(' or ')}`,
-      hint: 'merge the report with the otel-html version that wrote it, or regenerate it from its OTLP input',
+      hint: `${verb} the report with the otel-html version that wrote it, or regenerate it from its OTLP input`,
     });
   }
   const manifest = inFile(file, () => parseManifest(raw));
@@ -126,13 +126,8 @@ function chunkInput({ dir, file, raw }: Located): Input {
   };
 }
 
-/** The format 1-3 report at `rawDir`: its manifest and epoch. `verb` names the command in the usage error when there is no report. */
-export async function readReportManifest(fs: FileSystem, rawDir: string, verb = 'merge'): Promise<Input> {
-  return chunkInput(await locateManifest(fs, rawDir, verb));
-}
-
 /** A merge input: a chunk report to replay, or a format-4 report whose partitions are copied. */
-type MergeInput = ({ kind: 'chunks' } & Input) | ({ kind: 'partitions' } & PartitionInput);
+export type MergeInput = ({ kind: 'chunks' } & Input) | ({ kind: 'partitions' } & PartitionInput);
 
 interface PartitionInput {
   dir: string;
@@ -140,8 +135,9 @@ interface PartitionInput {
   epoch: UnixNanos;
 }
 
-async function readMergeInput(fs: FileSystem, rawDir: string): Promise<MergeInput> {
-  const located = await locateManifest(fs, rawDir, 'merge');
+/** The report at `rawDir` as merge (or, with another `verb`, that command) reads it: format 4 as partitions, anything else as chunks. */
+export async function readMergeInput(fs: FileSystem, rawDir: string, verb = 'merge'): Promise<MergeInput> {
+  const located = await locateManifest(fs, rawDir, verb);
   const { raw, file, dir } = located;
   if (typeof raw === 'object' && raw !== null && 'formatVersion' in raw && raw.formatVersion === 4) {
     const manifest = inFile(file, () => parseAnyManifest(raw));
@@ -153,7 +149,7 @@ async function readMergeInput(fs: FileSystem, rawDir: string): Promise<MergeInpu
       epoch: inFile(file, () => parseUnixNanos(manifest.epochUnixNano, 'epochUnixNano')),
     };
   }
-  return { kind: 'chunks', ...chunkInput(located) };
+  return { kind: 'chunks', ...chunkInput(located, verb) };
 }
 
 async function readChunk(fs: FileSystem, input: Input, chunk: ManifestChunk): Promise<RecordBatch> {

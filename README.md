@@ -119,11 +119,13 @@ With `--format local` or `--format site`, `merge` writes a format-4 report. A fo
 
 ### `upgrade <report>`
 
-Rewrites a report's viewer (`index.html` and `assets/`) with the one in this otel-html, so an old report opens with the current viewer. The report's `data/` is not touched, and viewer files in `assets/` that this version does not use are removed. It fails with exit 2, writing nothing, when the folder holds no report or another otel-html has the report open.
+Rewrites a report's viewer (`index.html` and `assets/`) with the one in this otel-html, so an old report opens with the current viewer. The report's data is not touched (a format-4 manifest's `engine` block is updated to this version's engine), and viewer files in `assets/` that this version does not use are removed. It fails with exit 2, writing nothing, when the folder holds no report or another otel-html has the report open.
 
 ```sh
 otel-html upgrade ./report
 ```
+
+A format-4 report can also be switched with `--format local|site` and `--assets-base <path>` (`assets/` or a relative path like `../../assets/0.3.0/`). Going to `local` writes the `.parquet.js` wrapper beside every listed Parquet file and the base64 engine files; going to `site` removes them and takes the plain engine files. With a shared `--assets-base` the report's own engine and `viewer.*` files are removed (a subfolder such as `assets/0.3.0/` is never touched), and `index.html` and the manifest's `engine.assetsBase` name the new base; the shared copy is the publisher's to upload. The Parquet data is not touched. The writes are ordered so that a crash leaves extra files rather than missing ones, and running `upgrade` again finishes the job. On a format 1-3 report the two options are a usage error: `merge --format` converts those.
 
 ### `config print`
 
