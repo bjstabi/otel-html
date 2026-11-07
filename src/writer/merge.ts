@@ -81,7 +81,7 @@ async function locateManifest(fs: FileSystem, rawDir: string, verb: string): Pro
   return { dir, file, raw: inFile(file, () => reviveDataJson(unwrapDataFile(text, MANIFEST_KEY))) };
 }
 
-/** Fails like the copy would: the path must be a file (or a link) that opens and yields its first bytes. Reads one piece, not the file. */
+/** Fails like the copy would: the path must be a file (or a link) that opens and yields its first bytes. Without `bytes` it reads one piece where the port can stream; with `bytes` the size is exact, and a port without `openBlob` streams (or reads) the whole file. */
 async function assertReadable(fs: FileSystem, file: string, listed: string, bytes?: number): Promise<void> {
   const fail = (why: string): OtelHtmlError =>
     new OtelHtmlError('invalid-report', {
