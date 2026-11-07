@@ -3,13 +3,14 @@
   "compilerOptions": {
     "lib": ["ES2024", "DOM", "DOM.Iterable"],
     "jsx": "react-jsx",
-    "types": [],
+    "types": ["node"],
     "isolatedDeclarations": false,
     "skipLibCheck": true
   },
   "include": [
     "src/viewer/**/*",
     "test/viewer/**/*",
+    "test/viewer-data/**/*",
     "test-support/scripted-loader.ts",
     "test-support/median-ms.ts",
     "test-support/perf-factor.ts",
