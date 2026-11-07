@@ -273,9 +273,9 @@ function upper(a: bigint | null, b: bigint | null): bigint | null {
  * Per trace id: counts summed; the range is that of the rows with spans, or of all rows when none has spans; the
  * root columns come from the root row with the smallest start (the lower partition on a tie).
  */
-function aggregateTraces(rows: readonly Located[]): Row[] {
+async function aggregateTraces(rows: AsyncIterable<Located>): Promise<Row[]> {
   const acc = new Map<string, TraceAcc>();
-  for (const l of rows) {
+  for await (const l of rows) {
     const id = text(cell(l.row, 'trace_id'));
     if (id === null) continue;
     let a = acc.get(id);
@@ -355,9 +355,9 @@ function severityCounts(json: unknown): [number, number][] {
  * Per cluster id (one Drain lineage): counts summed; first the minimum and last the maximum; the template from the
  * highest partition; the sample from the row with the smallest first time (the lower partition on a tie).
  */
-function aggregatePatterns(rows: readonly Located[]): Row[] {
+async function aggregatePatterns(rows: AsyncIterable<Located>): Promise<Row[]> {
   const acc = new Map<bigint, PatternAcc>();
-  for (const l of rows) {
+  for await (const l of rows) {
     const id = big(cell(l.row, 'cluster_id'));
     if (id === null) continue;
     let a = acc.get(id);
@@ -498,7 +498,7 @@ async function mergeTable(
  *   come. What is held is a small decoded batch per open file, one chunk of merged rows, and the compressed output.
  *   The bytes equal encoding the sorted union of the rows in one go (same sort, row groups and compression).
  * - traces, patterns: one row per trace or cluster across the partitions (see `aggregateTraces`,
- *   `aggregatePatterns`), held whole: their size follows the distinct traces and clusters, not the records.
+ *   `aggregatePatterns`), folded into one accumulator per trace or cluster as the rows are read: what is held follows the distinct traces and clusters, not the rows of the inputs.
  *
  * Every input file's schema is checked first (`invalid-report` for a foreign or old file); nothing is converted.
  * Statistics come from the merged rows, except that a key unknown in any input stays unknown.
@@ -527,13 +527,15 @@ export async function compactPartitions(
       let bytes: Uint8Array;
       let stats: FileStatistics;
       if (table === 'traces' || table === 'patterns') {
-        const located: Located[] = [];
-        for (const [part, f] of inputs.entries()) {
-          for await (const row of rowsOf(table, await blobOf(fs, at(out, f.path)), f.path, guard)) {
-            located.push({ part, row });
+        async function* located(): AsyncGenerator<Located> {
+          for (const [part, f] of inputs.entries()) {
+            for await (const row of rowsOf(table, await blobOf(fs, at(out, f.path)), f.path, guard)) {
+              yield { part, row };
+            }
           }
         }
-        const rows = table === 'traces' ? aggregateTraces(located) : aggregatePatterns(located);
+        // Each row is folded into its trace's or cluster's accumulator as it is read.
+        const rows = await (table === 'traces' ? aggregateTraces(located()) : aggregatePatterns(located()));
         for (const [i, row] of rows.entries()) checkRow(table, row, i);
         const batch = batchFromRows(table, rows);
         bytes = encodeColumns(table, batch, { rowGroupRows: opts.rowGroupRows });
