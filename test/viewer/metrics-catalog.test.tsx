@@ -17,6 +17,7 @@ import { attr, type JsonObject } from '../../test-support/otlp-builders.js';
 import { createScriptedLoader, reportFilesFromSnapshot } from '../../test-support/scripted-loader.js';
 import { createTestWriter, EPOCH_NS, otlp, testConfig } from '../../test-support/writer-deps.js';
 import { manifestOf } from '../writer/helpers.js';
+import { asShellSource } from './legacy-shell-source.js';
 import { buildMetricExplorerReport, type Fixture } from './report-fixture.js';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -96,7 +97,7 @@ async function renderCatalog(report: Fixture): Promise<{ catalogLoads: () => num
   window.location.hash = '#/metrics/catalog';
   render(
     <ThemeProvider>
-      <Shell dataSource={ds} history={createHashHistory(window)} />
+      <Shell dataSource={asShellSource(ds)} history={createHashHistory(window)} />
     </ThemeProvider>,
   );
   return { catalogLoads: () => loads };

@@ -1,6 +1,6 @@
 import { BarChart3, LayoutDashboard, Moon, ScrollText, Sun, SunMoon, Waypoints } from 'lucide-react';
 import type { JSX, ReactNode } from 'react';
-import type { Manifest } from '../../format/manifest.js';
+import type { AnyManifest } from '../../format/manifest.js';
 import { dashboardsOf } from '../dashboards/registry.js';
 import { applyPatch, carryTo, type UrlPatch } from '../state/carry.js';
 import { type Page, pageOfRoute } from '../state/page-options.js';
@@ -42,7 +42,7 @@ const ICON = { size: 16, 'aria-hidden': true } as const;
 /** Opening a dashboard starts from a clean `d`: the previous dashboard's selection does not follow. */
 const FRESH_DASHBOARD: UrlPatch = { d: null };
 
-function dashboardsSection(manifest: Manifest): NavSection {
+function dashboardsSection(manifest: AnyManifest): NavSection {
   const entry = dashboardsOf(manifest).find((e) => e.isDefault);
   return {
     title: 'Dashboards',
@@ -170,7 +170,7 @@ function ThemeToggle(): JSX.Element {
   );
 }
 
-export function Sidebar({ manifest }: { manifest: Manifest }): JSX.Element {
+export function Sidebar({ manifest }: { manifest: AnyManifest }): JSX.Element {
   const [current] = useRoute();
   const sections = [dashboardsSection(manifest), ...STATIC_SECTIONS];
   return (

@@ -2,14 +2,15 @@ import { type JSX, useMemo, useState } from 'react';
 import { andConditions } from '../../../dashboards/conditions.js';
 import { OtelHtmlError } from '../../../model/errors.js';
 import type { TraceId } from '../../../model/ids.js';
-import { ErrorCard, LoadingNote, NoMatch, PartialNote } from '../../components/explorer-states.js';
+import { ErrorCard, LoadingNote, NoMatch } from '../../components/explorer-states.js';
 import { LogList } from '../../components/log-list.js';
 import type { SortState } from '../../components/results-table.js';
-import type { LegacyDataSource } from '../../data/legacy-data-source.js';
-import type { LogQuery, LogQueryResult, LogRow } from '../../data/log-query.js';
-import { useLegacyLogQuery } from '../../logs/legacy-use-log-query.js';
-import type { LegacyQueryHandle } from '../../state/legacy-use-query.js';
+import type { DataSource } from '../../data/data-source.js';
+import type { LogRow } from '../../data/log-query.js';
+import type { LogQuery, LogQueryResult } from '../../data/results.js';
+import { useLogQuery } from '../../logs/use-log-query.js';
 import { useSelection, useSelectionStore } from '../../state/selection-context.js';
+import type { QueryHandle } from '../../state/use-query.js';
 import type { WidgetRenderer } from '../dashboard-page.js';
 import { variableCondition } from '../scope.js';
 import { FRAME_CHROME_PX, useEpoch } from './layout.js';
@@ -25,7 +26,7 @@ const ROWS = 200;
 
 type LogsResult = Extract<LogQueryResult, { mode: 'logs' }>;
 
-function logsOf(h: LegacyQueryHandle<LogQueryResult>): LogsResult | null {
+function logsOf(h: QueryHandle<LogQueryResult>): LogsResult | null {
   // Only a finished result: rows of the previous inputs are never shown as if they were current.
   const r = h.state.status === 'ready' ? h.state.result : null;
   return r !== null && r.mode === 'logs' ? r : null;
@@ -75,14 +76,15 @@ function logQuery(
     mode: 'logs',
     sort: { column: sort.column, dir: sort.dir },
     limit: ROWS,
-    scanAll: false,
+    needs: ['rows'],
+    facetKeys: null,
   };
 }
 
 /** The list over a query's logs; the notes and states of the explorers sit above it. */
 function ListBody(props: {
-  dataSource: LegacyDataSource;
-  handle: LegacyQueryHandle<LogQueryResult>;
+  dataSource: DataSource;
+  handle: QueryHandle<LogQueryResult>;
   shown: LogsResult | null;
   highlighted?: ReadonlySet<string>;
   sort: SortState;
@@ -96,8 +98,7 @@ function ListBody(props: {
   const { state } = handle;
   return (
     <div className="flex flex-col gap-1">
-      {shown !== null && <PartialNote partial={shown.partial} onScanAll={handle.scanAll} />}
-      {state.status === 'loading' && <LoadingNote progress={state.progress} />}
+      {state.status === 'loading' && <LoadingNote progress={null} />}
       {state.status === 'error' && <ErrorCard title="The query could not run" message={state.message} />}
       {shown !== null &&
         (shown.total === 0 ? (
@@ -123,18 +124,17 @@ function ListBody(props: {
 
 /** Every log in the window (the variables still apply), with the matches marked. */
 function ContextView(props: {
-  dataSource: LegacyDataSource;
+  dataSource: DataSource;
   context: LogQuery;
   matched: LogsResult | null;
   sort: SortState;
   onSort(s: SortState): void;
   height: number;
 }): JSX.Element {
-  const handle = useLegacyLogQuery(props.dataSource, props.context);
+  const handle = useLogQuery(props.dataSource, props.context);
   const { matched } = props;
   // The first ROWS matches are enough: both lists share the sort, so the matches among the first ROWS logs are the
-  // first ones of the matches. A partial scan does not break that: the context list fills its rows from no more
-  // chunks than the (sparser) matches needed.
+  // first ones of the matches.
   const highlighted = useMemo(
     () => (matched === null ? undefined : new Set<string>(matched.rows.map((r) => r.ref))),
     [matched],
@@ -177,7 +177,7 @@ export const LogsWidget: WidgetRenderer = ({
     () => logQuery(scope.window, contextCondition, '', sort, null),
     [scope.window, contextCondition, sort],
   );
-  const handle = useLegacyLogQuery(dataSource, matches);
+  const handle = useLogQuery(dataSource, matches);
   const matched = logsOf(handle);
   useSubtitle(actions, matched === null ? null : scopedCount(matched.total, 'log', scope));
   const listPx =

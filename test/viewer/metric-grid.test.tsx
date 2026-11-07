@@ -20,6 +20,7 @@ import { createHashHistory } from '../../src/viewer/state/hash-history.js';
 import { parseUrlState } from '../../src/viewer/state/url-state.js';
 import { ThemeProvider } from '../../src/viewer/theme/theme-provider.js';
 import { createScriptedLoader } from '../../test-support/scripted-loader.js';
+import { asShellSource } from './legacy-shell-source.js';
 import {
   buildEmbeddedMetricsReport,
   type Fixture,
@@ -63,7 +64,7 @@ async function renderAt(hash: string, over: Partial<LegacyDataSource> = {}): Pro
   window.location.hash = hash;
   render(
     <ThemeProvider>
-      <Shell dataSource={ds} history={createHashHistory(window)} />
+      <Shell dataSource={asShellSource(ds)} history={createHashHistory(window)} />
     </ThemeProvider>,
   );
 }

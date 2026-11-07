@@ -5,7 +5,7 @@ import type { SpanId, UnixNanos } from '../../model/ids.js';
 import { type ResourceRecord, StatusCode } from '../../model/records.js';
 import { formatDuration } from '../../semconv/formatters.js';
 import { ResultsTable, type SortState } from '../components/results-table.js';
-import type { TraceDetail } from '../data/data-source.js';
+import type { DataSource, TraceDetail } from '../data/data-source.js';
 import { manifestRange } from '../data/manifest-range.js';
 import type { SpanRow } from '../data/results.js';
 import { exclusiveTimeByService } from '../data/trace-tree.js';
@@ -13,7 +13,6 @@ import { gridWindow, MetricGrid, type MetricGridOrigin } from '../metrics/metric
 import type { ColorAssigner } from '../theme/palette.js';
 import { ServiceChip, SPAN_COLUMNS_UI } from './columns.js';
 import { traceFacts } from './trace-facts.js';
-import type { TraceSource } from './trace-source.js';
 
 const TH = 'p-2 text-left text-xs font-semibold text-ink-2';
 
@@ -209,7 +208,7 @@ export function traceResources(detail: TraceDetail): ResourceRecord[] {
 export function TraceMetricsTab(props: {
   detail: TraceDetail;
   resources: readonly ResourceRecord[];
-  dataSource: TraceSource;
+  dataSource: DataSource;
 }): JSX.Element {
   const { detail, resources, dataSource } = props;
   const range = useMemo(() => manifestRange(dataSource.manifest), [dataSource]);

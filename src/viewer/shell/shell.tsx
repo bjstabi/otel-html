@@ -2,7 +2,7 @@ import { Tooltip } from '@base-ui/react/tooltip';
 import { X } from 'lucide-react';
 import { type JSX, useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { Redirect, Route, Router, Switch } from 'wouter';
-import type { Manifest } from '../../format/manifest.js';
+import type { AnyManifest } from '../../format/manifest.js';
 import { SELECTION_MODES } from '../../query/pages.js';
 import { DashboardPage } from '../dashboards/dashboard-page.js';
 import { DashboardsListPage } from '../dashboards/list-page.js';
@@ -111,7 +111,7 @@ function PatternsRedirect(): null {
   return null;
 }
 
-export function Shell(props: { dataSource: LegacyDataSource; history: HistoryPort }): JSX.Element {
+export function Shell(props: { dataSource: DataSource; history: HistoryPort }): JSX.Element {
   const { dataSource, history } = props;
   const manifest = dataSource.manifest;
   const store = useMemo(() => createSelectionStore(parseUrlState(history.read()).state), [history]);
@@ -204,16 +204,16 @@ export function Shell(props: { dataSource: LegacyDataSource; history: HistoryPor
 }
 
 /** Where `#/` lands: the configured home page; `dashboards` opens the default dashboard. */
-function homeRoute(manifest: Manifest): string {
+function homeRoute(manifest: AnyManifest): string {
   const { home } = manifest.config.viewer;
   return home === 'dashboards' ? defaultDashboardRoute(manifest) : `/${home}`;
 }
 
-function RoutedPage({ dataSource }: { dataSource: LegacyDataSource }): JSX.Element {
+function RoutedPage({ dataSource }: { dataSource: DataSource }): JSX.Element {
   const manifest = dataSource.manifest;
-  // The traces explorer, services page and logs explorer read the format-4 source (the one app.tsx passes). Removed when the other
-  // pages move (5.3-5.5) and `Shell` takes `DataSource`.
-  const spanSource = dataSource as unknown as DataSource;
+  // The metrics pages still read the legacy source type (D11); the format-4 source's metric stubs are what they get.
+  // Removed with the metrics pages' move (5.5).
+  const metricSource = dataSource as unknown as LegacyDataSource;
   const [route] = useRoute();
   return (
     <Switch>
@@ -221,25 +221,25 @@ function RoutedPage({ dataSource }: { dataSource: LegacyDataSource }): JSX.Eleme
         <Redirect to={homeRoute(manifest)} replace />
       </Route>
       <Route path="/traces">
-        <TracesExplorer dataSource={spanSource} />
+        <TracesExplorer dataSource={dataSource} />
       </Route>
       <Route path="/traces/trace/:id">
         {(params) => <TracePage dataSource={dataSource} id={params.id} />}
       </Route>
       <Route path="/traces/services">
-        <ServicesPage dataSource={spanSource} />
+        <ServicesPage dataSource={dataSource} />
       </Route>
       <Route path="/logs/patterns">
         <PatternsRedirect />
       </Route>
       <Route path="/logs">
-        <LogsExplorer dataSource={spanSource} />
+        <LogsExplorer dataSource={dataSource} />
       </Route>
       <Route path="/metrics/catalog">
-        <MetricsCatalog dataSource={dataSource} />
+        <MetricsCatalog dataSource={metricSource} />
       </Route>
       <Route path="/metrics">
-        <MetricsExplorer dataSource={dataSource} />
+        <MetricsExplorer dataSource={metricSource} />
       </Route>
       <Route path="/dashboards">
         <DashboardsListPage manifest={manifest} />

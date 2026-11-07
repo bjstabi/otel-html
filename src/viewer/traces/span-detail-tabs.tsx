@@ -3,13 +3,13 @@ import type { RelNanos, SpanId, TraceId } from '../../model/ids.js';
 import type { ResourceRecord, SpanEventRecord, SpanLinkRecord, SpanRecord } from '../../model/records.js';
 import { formatDuration } from '../../semconv/formatters.js';
 import { AttributeGroups } from '../components/attribute-groups.js';
+import type { DataSource } from '../data/data-source.js';
 import { manifestRange } from '../data/manifest-range.js';
 import { gridWindow, MetricGrid, type MetricGridOrigin } from '../metrics/metric-grid.js';
 import { navigateRoute } from '../shell/use-route.js';
 import { selectionToUrlState } from '../state/selection.js';
 import { useSelection } from '../state/selection-context.js';
 import { serializeUrlState } from '../state/url-state.js';
-import type { TraceSource } from './trace-source.js';
 
 const ID = 'font-mono text-xs break-all';
 
@@ -111,7 +111,7 @@ function LinkTarget(props: {
 
 export function LinksTab(props: {
   span: SpanRecord;
-  dataSource: TraceSource;
+  dataSource: DataSource;
   onSelectSpan(id: SpanId): void;
 }): JSX.Element {
   const cache = useRef(new Map<TraceId, Promise<boolean>>());
@@ -166,7 +166,7 @@ export function LinksTab(props: {
 export function SpanMetricsTab(props: {
   span: SpanRecord;
   resource: ResourceRecord;
-  dataSource: TraceSource;
+  dataSource: DataSource;
 }): JSX.Element {
   const { span, resource, dataSource } = props;
   const range = useMemo(() => manifestRange(dataSource.manifest), [dataSource]);

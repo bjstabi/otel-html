@@ -1,6 +1,5 @@
 import { type JSX, useEffect, useState } from 'react';
 import type { DataSource } from './data/data-source.js';
-import type { LegacyDataSource } from './data/legacy-data-source.js';
 import type { LoadProgress } from './data/open-report.js';
 import { Shell } from './shell/shell.js';
 import type { HistoryPort } from './state/selection.js';
@@ -76,7 +75,7 @@ export function App(props: {
       return <LoadFailure message={state.message} />;
     case 'ready':
       // Bridge until Tasks 5.2-5.5 move the pages to the format-4 source: they still take the chunk-era shape.
-      return <Shell dataSource={state.dataSource as unknown as LegacyDataSource} history={history} />;
+      return <Shell dataSource={state.dataSource} history={history} />;
     default: {
       const never: never = state;
       throw new Error(`unhandled load state ${JSON.stringify(never)}`);

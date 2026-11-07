@@ -1,7 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { createScriptedLoader } from '../../test-support/scripted-loader.js';
 
 vi.mock('../../src/viewer/components/chart.js', () => ({
   Chart: (p: { ariaLabel: string }): React.JSX.Element => <div role="img" aria-label={p.ariaLabel} />,
@@ -9,21 +8,20 @@ vi.mock('../../src/viewer/components/chart.js', () => ({
 
 import { DashboardSchema } from '../../src/dashboards/schema.js';
 import type { TraceId } from '../../src/model/ids.js';
-import { FacetCounts } from '../../src/rollups/facets.js';
-import { RedSeries } from '../../src/rollups/red.js';
-import { TimeBuckets } from '../../src/rollups/time-buckets.js';
 import type { WidgetActions } from '../../src/viewer/dashboards/dashboard-page.js';
 import type { WidgetScope } from '../../src/viewer/dashboards/scope.js';
 import { TracesWidget } from '../../src/viewer/dashboards/widgets/traces.js';
-import { createDataSource, type LegacyDataSource } from '../../src/viewer/data/legacy-data-source.js';
-import type { SpanQueryResult } from '../../src/viewer/data/span-query.js';
+import type { DataSource } from '../../src/viewer/data/data-source.js';
+import type { SpanQuery, SpanQueryResult } from '../../src/viewer/data/results.js';
 import { EMPTY_DASHBOARD_STATE } from '../../src/viewer/state/dashboard-state.js';
 import { createSelectionStore } from '../../src/viewer/state/selection.js';
 import { SelectionProvider } from '../../src/viewer/state/selection-context.js';
 import { parseUrlState } from '../../src/viewer/state/url-state.js';
 import { ThemeProvider } from '../../src/viewer/theme/theme-provider.js';
-import { baseManifest, currentD, dataSourceOf, renderShell } from './dashboard-shell.js';
-import { buildEmbeddedMetricsReport, LINKED_TRACE } from './report-fixture.js';
+import { baseManifest, currentD, dataSourceOf, emptySpanResult, renderShell } from './dashboard-shell.js';
+import { FIXTURE_TRACE, fusionSource } from './fusion-source.js';
+
+const LINKED_TRACE = FIXTURE_TRACE;
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -32,10 +30,7 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
-async function linked(): Promise<LegacyDataSource> {
-  const report = await buildEmbeddedMetricsReport();
-  return createDataSource(createScriptedLoader(report.files), report.manifest, 1);
-}
+const linked = (): Promise<DataSource> => Promise.resolve(fusionSource());
 
 /** The widget frame by its id (the sidebar has regions with the same names). */
 function regionEl(name: string): HTMLElement {
@@ -145,7 +140,7 @@ const SCOPE: WidgetScope = {
 };
 
 function mount(
-  ds: LegacyDataSource,
+  ds: DataSource,
   opts: { over?: object; scope?: Partial<WidgetScope>; actions?: WidgetActions } = {},
 ): WidgetActions {
   const { dashboard, w } = widgetOf(opts.over);
@@ -170,16 +165,6 @@ function mount(
   return actions;
 }
 
-const emptySpans = (partial: SpanQueryResult['partial'] = null): SpanQueryResult => ({
-  rows: [],
-  total: 0,
-  facets: new FacetCounts(10, 10),
-  buckets: new TimeBuckets(['ok', 'error', 'unset'], 8),
-  red: new RedSeries(8),
-  groups: null,
-  partial,
-});
-
 describe('the Traces widget states', () => {
   test('loading shows a status and no rows', () => {
     mount({ ...dataSourceOf(baseManifest), querySpans: () => new Promise<SpanQueryResult>(() => {}) });
@@ -192,19 +177,20 @@ describe('the Traces widget states', () => {
     expect((await screen.findByRole('heading', { name: 'No traces match' })).tagName).toBe('H3');
   });
 
-  test('a partial scan says how much was read and Scan entire run rereads everything', async () => {
-    const calls: boolean[] = [];
+  test('asks for the rows only, limit 200, with a signal and no progress function', async () => {
+    const calls: unknown[][] = [];
     mount({
       ...dataSourceOf(baseManifest),
-      querySpans: (q) => {
-        calls.push(q.scanAll);
-        return Promise.resolve(emptySpans(q.scanAll ? null : { scanned: 2, total: 5 }));
+      querySpans: (...args) => {
+        calls.push(args);
+        return Promise.resolve(emptySpanResult());
       },
     });
-    expect(await screen.findByText(/from 2 of 5 chunks/)).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Scan entire run' }));
-    await waitFor(() => expect(screen.queryByText(/from 2 of 5 chunks/)).toBeNull());
-    expect(calls).toEqual([false, true]);
+    await screen.findByRole('heading', { name: 'No traces match' });
+    const [q, signal] = calls[0] as [SpanQuery, unknown];
+    expect(q).toMatchObject({ needs: ['rows'], limit: 200, mode: 'traces' });
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(calls[0]).toHaveLength(2);
   });
 
   test('a failing query shows the error', async () => {
@@ -218,14 +204,14 @@ describe('the Traces widget states', () => {
   test('rows of the previous inputs are not shown while the new query runs', async () => {
     const real = await linked();
     let release: (() => void) | null = null;
-    const ds: LegacyDataSource = {
+    const ds: DataSource = {
       ...real,
-      querySpans: (q, onProgress, signal) =>
+      querySpans: (q, signal) =>
         q.sort.dir === 'asc'
           ? new Promise<SpanQueryResult>((resolve) => {
-              release = () => resolve(emptySpans());
+              release = () => resolve(emptySpanResult());
             })
-          : real.querySpans(q, onProgress, signal),
+          : real.querySpans(q, signal),
     };
     mount(ds);
     await waitFor(() => expect(screen.getAllByRole('row').length).toBeGreaterThan(1));

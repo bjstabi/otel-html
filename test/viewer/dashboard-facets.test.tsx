@@ -1,6 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { createScriptedLoader } from '../../test-support/scripted-loader.js';
 
 /** The chart is replaced by its option so the tests read the bars. */
 vi.mock('../../src/viewer/components/chart.js', () => ({
@@ -12,23 +11,26 @@ vi.mock('../../src/viewer/components/chart.js', () => ({
 import { type Dashboard, DashboardSchema } from '../../src/dashboards/schema.js';
 import type { TraceId } from '../../src/model/ids.js';
 import { FacetCounts } from '../../src/rollups/facets.js';
-import { LogRollups } from '../../src/rollups/log-rollups.js';
-import { RedSeries } from '../../src/rollups/red.js';
-import { GroupDurations, SpanRollups } from '../../src/rollups/span-rollups.js';
-import { TimeBuckets } from '../../src/rollups/time-buckets.js';
 import type { WidgetActions } from '../../src/viewer/dashboards/dashboard-page.js';
 import type { WidgetScope } from '../../src/viewer/dashboards/scope.js';
 import { FacetChartWidget, suggestKeys } from '../../src/viewer/dashboards/widgets/facet-chart.js';
 import { count } from '../../src/viewer/dashboards/widgets/subtitle.js';
-import { createDataSource, type LegacyDataSource } from '../../src/viewer/data/legacy-data-source.js';
-import type { SpanQueryResult } from '../../src/viewer/data/span-query.js';
+import type { DataSource } from '../../src/viewer/data/data-source.js';
+import type { LogQuery, SpanQuery, SpanQueryResult } from '../../src/viewer/data/results.js';
 import { EMPTY_DASHBOARD_STATE } from '../../src/viewer/state/dashboard-state.js';
 import { createSelectionStore } from '../../src/viewer/state/selection.js';
 import { SelectionProvider } from '../../src/viewer/state/selection-context.js';
 import { parseUrlState } from '../../src/viewer/state/url-state.js';
 import { ThemeProvider } from '../../src/viewer/theme/theme-provider.js';
-import { baseManifest, dataSourceOf, manifestWith, renderShell } from './dashboard-shell.js';
-import { buildEmbeddedMetricsReport } from './report-fixture.js';
+import {
+  baseManifest,
+  dataSourceOf,
+  emptyLogResult,
+  emptySpanResult,
+  manifestWith,
+  renderShell,
+} from './dashboard-shell.js';
+import { fusionSource } from './fusion-source.js';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -37,10 +39,7 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
-async function linked(): Promise<LegacyDataSource> {
-  const report = await buildEmbeddedMetricsReport();
-  return createDataSource(createScriptedLoader(report.files), report.manifest, 1);
-}
+const linked = (): Promise<DataSource> => Promise.resolve(fusionSource());
 
 const SCOPE: WidgetScope = {
   window: null,
@@ -62,7 +61,7 @@ function dashboardOf(widget: Input): Dashboard {
   });
 }
 
-function mount(ds: LegacyDataSource, widget: Input, scope: Partial<WidgetScope> = {}): WidgetActions {
+function mount(ds: DataSource, widget: Input, scope: Partial<WidgetScope> = {}): WidgetActions {
   const dashboard = dashboardOf(widget);
   const w = dashboard.widgets[0];
   if (w === undefined) throw new Error('no widget');
@@ -106,75 +105,60 @@ async function bars(): Promise<Option['series'][number]['data']> {
   return option.series[0]?.data ?? [];
 }
 
-const emptySpans = (partial: SpanQueryResult['partial'] = null): SpanQueryResult => ({
-  rows: [],
-  total: 0,
-  facets: new FacetCounts(10, 10),
-  buckets: new TimeBuckets(['ok', 'error', 'unset'], 8),
-  red: new RedSeries(8),
-  groups: null,
-  partial,
-});
-
-function spansWith(partial: SpanQueryResult['partial'] = null): SpanQueryResult {
+function spansWith(): SpanQueryResult {
   const facets = new FacetCounts(10, 10);
   facets.add('service.name', 'checkout');
   facets.add('service.name', 'checkout');
   facets.add('service.name', 'payments');
-  return { ...emptySpans(partial), total: 3, facets };
+  return { ...emptySpanResult(), total: 3, facets };
 }
 
 function spansMeasured(dropped: number): SpanQueryResult {
-  const groups = new GroupDurations(2);
-  groups.add('checkout', 5);
-  groups.add('payments', 7);
-  for (let i = 0; i < dropped; i++) groups.add('other', 9);
-  return { ...spansWith(), groups };
+  const stat = (group: string, n: number) => ({
+    group,
+    count: n,
+    sum: n * 5,
+    avg: 5,
+    max: 7,
+    p95: 7,
+    p99: 7,
+  });
+  return {
+    ...spansWith(),
+    // A duration measure keeps `cap` groups; `dropped` says whether the query saw more.
+    groups: { groups: [stat('checkout', 1), stat('payments', 1)], cap: 2, dropped },
+  };
 }
 
 describe('the cap note of a duration measure', () => {
   const widget = (measure: 'count' | 'duration.max') =>
     ({ type: 'toplist', signal: 'spans', groupBy: 'service.name', measure }) as const;
-  const over = (dropped: number): LegacyDataSource => ({
+  const over = (dropped: number): DataSource => ({
     ...dataSourceOf(baseManifest),
     querySpans: () => Promise.resolve(spansMeasured(dropped)),
   });
 
-  test('says how many spans had values past the cap, on one line with the full sentence as its title', async () => {
-    mount(over(3), widget('duration.max'));
-    const note = await screen.findByText('3 spans past the first 2 values left out');
+  test('says spans with other values are left out, on one line with the full sentence as its title', async () => {
+    mount(over(1), widget('duration.max'));
+    const note = await screen.findByText('Spans past the first 2 values left out');
     expect(note.getAttribute('title')).toBe(
-      'Measured over the first 2 service.name values; 3 spans with other values are left out',
+      'Measured over the first 2 service.name values; spans with other values are left out',
     );
     expect(note.className).toContain('truncate');
   });
 
   test('the full sentence is the accessible name, so touch and screen readers get it', async () => {
-    mount(over(3), widget('duration.max'));
+    mount(over(1), widget('duration.max'));
     const note = await screen.findByRole('status', {
-      name: 'Measured over the first 2 service.name values; 3 spans with other values are left out',
+      name: 'Measured over the first 2 service.name values; spans with other values are left out',
     });
-    expect(note.textContent).toBe('3 spans past the first 2 values left out');
-    expect(note.getAttribute('aria-label')).toBe(
-      'Measured over the first 2 service.name values; 3 spans with other values are left out',
-    );
+    expect(note.textContent).toBe('Spans past the first 2 values left out');
     expect(note.className).toContain('truncate');
   });
 
   test('count() groups thousands', () => {
     expect(count(1000, 'span')).toBe('1,000 spans');
     expect(count(1, 'log')).toBe('1 log');
-  });
-
-  test('formats a thousand with a separator', async () => {
-    mount(over(1000), widget('duration.max'));
-    expect(await screen.findByText('1,000 spans past the first 2 values left out')).toBeTruthy();
-  });
-
-  test('one span reads in the singular', async () => {
-    mount(over(1), widget('duration.max'));
-    const note = await screen.findByText('1 span past the first 2 values left out');
-    expect(note.getAttribute('title')).toMatch(/1 span with other values is left out$/);
   });
 
   test('is absent when nothing was dropped', async () => {
@@ -184,7 +168,7 @@ describe('the cap note of a duration measure', () => {
   });
 
   test('is absent for a count measure', async () => {
-    mount(over(3), widget('count'));
+    mount(over(1), widget('count'));
     await bars();
     expect(screen.queryByText(/left out/)).toBeNull();
   });
@@ -219,7 +203,8 @@ describe('the Top list and Table widgets', () => {
       limit: 100000,
       groupBy: null,
       measureBy: null,
-      scanAll: true,
+      needs: ['rows'],
+      facetKeys: null,
     });
     const max = new Map<string, number>();
     for (const r of all.rows) {
@@ -307,12 +292,10 @@ describe('the Top list and Table widgets', () => {
   });
 
   test('a pinned facet with no observations keeps the empty message', async () => {
-    const base = await linked();
-    const landing = await base.landing();
-    const ds: LegacyDataSource = {
-      ...base,
-      landing: () =>
-        Promise.resolve({ ...landing, facets: new FacetCounts(10, 10, ['deployment.environment.name']) }),
+    const pinned = new FacetCounts(10, 10, ['deployment.environment.name']);
+    const ds: DataSource = {
+      ...fusionSource(),
+      querySpans: () => Promise.resolve({ ...emptySpanResult(), facets: pinned }),
     };
     mount(ds, { type: 'toplist', signal: 'spans', groupBy: 'deployment.environment.name' });
     expect(await screen.findByText(/values in this window/)).toBeTruthy();
@@ -320,14 +303,12 @@ describe('the Top list and Table widgets', () => {
   });
 
   test('a report with no spans or logs keeps the empty message for the core keys', async () => {
-    const base = await linked();
-    const [landing, logLanding] = await Promise.all([base.landing(), base.logLanding()]);
     const window = { start: 1, end: 2 };
-    const caps = { facetValueCap: 10, facetKeyCap: 10 };
-    const ds: LegacyDataSource = {
-      ...base,
-      landing: () => Promise.resolve({ ...landing, facets: new SpanRollups(caps).facets }),
-      logLanding: () => Promise.resolve({ ...logLanding, facets: new LogRollups(caps).facets }),
+    const core = (keys: string[]): FacetCounts => new FacetCounts(10, 10, keys);
+    const ds: DataSource = {
+      ...fusionSource(),
+      querySpans: () => Promise.resolve({ ...emptySpanResult(), facets: core(['span.name']) }),
+      queryLogs: () => Promise.resolve({ ...emptyLogResult(), facets: core(['severity']) }),
     };
     mount(ds, { type: 'toplist', signal: 'spans', groupBy: 'span.name' }, { window });
     expect(await screen.findByText(/values in this window/)).toBeTruthy();
@@ -338,20 +319,46 @@ describe('the Top list and Table widgets', () => {
     expect(screen.queryByText(/is not a facet/)).toBeNull();
   });
 
-  test('no message is shown until the report keys have loaded', async () => {
-    const base = await linked();
+  test('the report keys are read only when a widget has no values, and no message shows until they load', async () => {
+    const base = fusionSource();
+    const queries: SpanQuery[] = [];
     let release: () => void = () => {};
     const gate = new Promise<void>((r) => {
       release = r;
     });
-    const ds: LegacyDataSource = { ...base, landing: () => gate.then(() => base.landing()) };
+    const ds: DataSource = {
+      ...base,
+      querySpans: async (q, signal) => {
+        queries.push(q);
+        if (q.facetKeys === null) await gate;
+        return base.querySpans(q, signal);
+      },
+    };
     mount(ds, { type: 'toplist', signal: 'spans', groupBy: 'name' });
-    await waitFor(() => expect(screen.queryByRole('status')).toBeNull());
+    await waitFor(() => expect(queries.some((q) => q.facetKeys === null)).toBe(true));
     await new Promise((r) => setTimeout(r, 50));
     expect(screen.queryByText(/values in this window/)).toBeNull();
     expect(screen.queryByText(/is not a facet/)).toBeNull();
     release();
     expect(await screen.findByText(/is not a facet of this report/)).toBeTruthy();
+    // The keys query is the unfiltered one, and it asks for facets only.
+    const keys = queries.find((q) => q.facetKeys === null);
+    expect(keys).toMatchObject({ condition: null, window: null, needs: ['facets'] });
+  });
+
+  test('a widget with values never reads the report keys', async () => {
+    const base = fusionSource();
+    const queries: SpanQuery[] = [];
+    const ds: DataSource = {
+      ...base,
+      querySpans: (q, signal) => {
+        queries.push(q);
+        return base.querySpans(q, signal);
+      },
+    };
+    mount(ds, { type: 'toplist', signal: 'spans', groupBy: 'service.name' });
+    await bars();
+    expect(queries.every((q) => q.facetKeys !== null)).toBe(true);
   });
 
   test('suggestKeys puts suffix matches first, deduplicated and capped', () => {
@@ -377,7 +384,8 @@ describe('the Top list and Table widgets', () => {
     const scope = { window, narrowed: true, traceFilter: trace, condition: 'severity_number >= 9' };
     const a = mount(ds, { type: 'table', signal: 'logs', groupBy: 'service.name' }, scope);
     await waitFor(() => expect(a.setSubtitle).toHaveBeenCalledWith('0 logs for the selected trace'));
-    expect(queryLogs.mock.calls.at(-1)?.[0]).toMatchObject({
+    // The empty result also reads the report's keys, unfiltered; the widget's own query is the keyed one.
+    expect(queryLogs.mock.calls.find(([q]) => q.facetKeys !== null)?.[0]).toMatchObject({
       window,
       traceId: trace,
       condition: 'severity_number >= 9',
@@ -389,7 +397,7 @@ describe('the Top list and Table widgets', () => {
       { window, narrowed: true },
     );
     await waitFor(() => expect(b.setSubtitle).toHaveBeenCalledWith('0 spans in selected time'));
-    expect(querySpans.mock.calls.at(-1)?.[0]).toMatchObject({ window });
+    expect(querySpans.mock.calls.find(([q]) => q.facetKeys !== null)?.[0]).toMatchObject({ window });
   });
 });
 
@@ -403,22 +411,46 @@ describe('the Top list and Table widget states', () => {
     expect(screen.queryByRole('img')).toBeNull();
   });
 
-  test('a partial scan says how much was read and Scan entire run rereads everything', async () => {
-    const calls: boolean[] = [];
+  test.each([
+    ['count', ['rows', 'facets']],
+    ['duration.max', ['rows', 'facets', 'groups']],
+  ] as const)('with measure %s a span widget asks for %j, restricted to its key', async (measure, needs) => {
+    const calls: unknown[][] = [];
     mount(
       {
         ...dataSourceOf(baseManifest),
-        querySpans: (q) => {
-          calls.push(q.scanAll);
-          return Promise.resolve(spansWith(q.scanAll ? null : { scanned: 2, total: 5 }));
+        querySpans: (...args) => {
+          calls.push(args);
+          return Promise.resolve(spansWith());
         },
       },
-      { type: 'table', signal: 'spans', groupBy: 'service.name' },
+      { type: 'table', signal: 'spans', groupBy: 'service.name', measure },
     );
-    expect(await screen.findByText(/from 2 of 5 chunks/)).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Scan entire run' }));
-    await waitFor(() => expect(screen.queryByText(/from 2 of 5 chunks/)).toBeNull());
-    expect(calls).toEqual([false, true]);
+    await screen.findByRole('table');
+    const [q, signal] = calls[0] as [SpanQuery, unknown];
+    expect(q).toMatchObject({ needs, facetKeys: ['service.name'], limit: 1 });
+    expect(q.measureBy).toBe(measure === 'count' ? null : 'service.name');
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(calls[0]).toHaveLength(2);
+  });
+
+  test('a log widget asks for rows and facets, restricted to its key, with no progress function', async () => {
+    const calls: unknown[][] = [];
+    mount(
+      {
+        ...dataSourceOf(baseManifest),
+        queryLogs: (...args) => {
+          calls.push(args);
+          return Promise.resolve(emptyLogResult());
+        },
+      },
+      { type: 'table', signal: 'logs', groupBy: 'service.name' },
+    );
+    await waitFor(() => expect(calls.length).toBeGreaterThan(0));
+    const [q, signal] = calls[0] as [LogQuery, unknown];
+    expect(q).toMatchObject({ needs: ['rows', 'facets'], facetKeys: ['service.name'] });
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(calls[0]).toHaveLength(2);
   });
 
   test('a failing query shows the error', async () => {
@@ -430,7 +462,7 @@ describe('the Top list and Table widget states', () => {
   });
 
   test('no stale facets are shown as current while an input change reloads', async () => {
-    const ds: LegacyDataSource = {
+    const ds: DataSource = {
       ...dataSourceOf(baseManifest),
       querySpans: (q) =>
         q.text === '' ? Promise.resolve(spansWith()) : new Promise<SpanQueryResult>(() => {}),

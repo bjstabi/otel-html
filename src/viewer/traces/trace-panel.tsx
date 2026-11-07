@@ -16,7 +16,7 @@ import { formatDuration, formatTime } from '../../semconv/formatters.js';
 import { downloadBlob, otlpBlob } from '../components/export.js';
 import { FlameGraph } from '../components/flame-graph.js';
 import { Waterfall } from '../components/waterfall.js';
-import type { TraceDetail } from '../data/data-source.js';
+import type { DataSource, TraceDetail } from '../data/data-source.js';
 import type { LogRow } from '../data/log-query.js';
 import { useHasMetrics } from '../metrics/metric-grid.js';
 import { CONTROL } from '../shell/controls.js';
@@ -33,11 +33,10 @@ import { SplitPane } from './split-pane.js';
 import { availableTabs, isTraceTabId, type TraceTabId } from './tabs.js';
 import { traceFacts } from './trace-facts.js';
 import { TraceLogsTab, useTraceLogs } from './trace-logs-tab.js';
-import type { TraceSource } from './trace-source.js';
 import { ErrorsTab, ServicesTab, SpanListTab, TraceMetricsTab, traceResources } from './trace-tabs.js';
 
 export interface TracePanelProps {
-  dataSource: TraceSource;
+  dataSource: DataSource;
   traceId: TraceId;
   /** `overlay` slides over the explorer; `page` is the full-width `#/traces/trace/<id>` route. */
   layout: 'overlay' | 'page';
@@ -51,7 +50,7 @@ export interface TracePanelProps {
   renderSpanSection?: (props: SpanSectionProps) => ReactNode;
 }
 
-function useTraceDetail(dataSource: TraceSource, traceId: TraceId): KeyedState<TraceDetail> {
+function useTraceDetail(dataSource: DataSource, traceId: TraceId): KeyedState<TraceDetail> {
   const load = useCallback((id: TraceId) => dataSource.getTrace(id), [dataSource]);
   return useKeyedAsync(traceId, load);
 }
@@ -131,7 +130,7 @@ function CopyId(props: { id: string }): JSX.Element {
   );
 }
 
-function Header(props: { detail: TraceDetail; dataSource: TraceSource; epoch: UnixNanos }): JSX.Element {
+function Header(props: { detail: TraceDetail; dataSource: DataSource; epoch: UnixNanos }): JSX.Element {
   const { detail, dataSource, epoch } = props;
   const f = useMemo(() => traceFacts(detail), [detail]);
   const root = f.root;

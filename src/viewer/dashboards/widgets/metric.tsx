@@ -102,7 +102,10 @@ function Empty(props: { title: string; message: string }): JSX.Element {
   );
 }
 
-type Body = (props: Parameters<WidgetRenderer>[0]) => JSX.Element;
+/** The metrics bridge (D11, until 5.5): the widget's props with the legacy source the metric code still reads. */
+type Body = (
+  props: Omit<Parameters<WidgetRenderer>[0], 'dataSource'> & { dataSource: LegacyDataSource },
+) => JSX.Element;
 
 /** The M3 chart card over the widget's queries, narrowed by the variables and the selected trace's resources. */
 const QueriesBody: Body = ({ widget, scope, height, dataSource, actions, variables }) => {
@@ -397,8 +400,10 @@ const GridBody: Body = ({ scope, height, dataSource, actions, variables }) => {
 };
 
 /** The Metrics widget: chart cards over its `queries`, or (without them) the resource Metric grid. */
-export const MetricWidget: WidgetRenderer = (props) => {
-  const { widget } = props;
+export const MetricWidget: WidgetRenderer = (renderProps) => {
+  const { widget } = renderProps;
+  // The metric code still takes the legacy source type; the format-4 source's metric stubs are what it gets (D11).
+  const props = { ...renderProps, dataSource: renderProps.dataSource as unknown as LegacyDataSource };
   if (widget.type !== 'metric') {
     throw new OtelHtmlError('usage', { path: 'widget.type', expected: 'metric', actual: widget.type });
   }

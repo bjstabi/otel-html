@@ -5,38 +5,41 @@ import { OtelHtmlError } from '../../../model/errors.js';
 import type { TraceId } from '../../../model/ids.js';
 import type { FacetCounts } from '../../../rollups/facets.js';
 import { Chart } from '../../components/chart.js';
-import { ErrorCard, LoadingNote, PartialNote } from '../../components/explorer-states.js';
+import { ErrorCard, LoadingNote } from '../../components/explorer-states.js';
 import { type FacetSource, toplist } from '../../components/facet-views.js';
 import { GroupTable } from '../../components/group-table.js';
 import { mergeEchartsOption } from '../../components/metric-chart-option.js';
-import type { LegacyDataSource } from '../../data/legacy-data-source.js';
-import type { LogQuery } from '../../data/log-query.js';
-import type { SpanQuery } from '../../data/span-query.js';
-import { useLegacyLogQuery } from '../../logs/legacy-use-log-query.js';
-import type { LegacyQueryHandle } from '../../state/legacy-use-query.js';
+import type { DataSource } from '../../data/data-source.js';
+import type { LogQuery, SpanQuery, SpanQueryResult } from '../../data/results.js';
+import { useLogQuery } from '../../logs/use-log-query.js';
 import { useKeyedAsync } from '../../state/use-keyed-async.js';
+import type { QueryHandle } from '../../state/use-query.js';
 import { useColorAssigner } from '../../theme/colors-context.js';
 import { useTheme } from '../../theme/theme-provider.js';
-import { useLegacySpanQuery } from '../../traces/legacy-use-span-query.js';
+import { useSpanQuery } from '../../traces/use-span-query.js';
 import { cssTokenReader, resolveCssVars } from '../../traces/views.js';
 import type { WidgetRenderer } from '../dashboard-page.js';
 import type { WidgetScope } from '../scope.js';
 import { FRAME_CHROME_PX } from './layout.js';
 import { count, scopedCount, useSubtitle } from './subtitle.js';
 
-/** The partial, cap and loading notes. */
+/** The cap and loading notes. */
 const NOTE_PX = 24;
 const MIN_PX = 96;
 
-type Facets = FacetSource & { total: number; partial: { scanned: number; total: number } | null };
+type Facets = FacetSource & { total: number; groups?: SpanQueryResult['groups'] };
 
 const SORT = {
   spans: { column: 'start', dir: 'desc' },
   logs: { column: 'time', dir: 'desc' },
 } as const;
 
-function queryOf(condition: string | null, text: string, window: SpanQuery['window']) {
-  return { condition, text, window, limit: 1, scanAll: false };
+/**
+ * The statements a facet widget runs: the facet counts of its key (and, for a duration measure, the groups), plus one
+ * row so the result carries the match count the subtitle shows.
+ */
+function queryOf(condition: string | null, text: string, window: SpanQuery['window'], groupBy: string) {
+  return { condition, text, window, limit: 1, facetKeys: [groupBy] as readonly string[] };
 }
 
 interface Shared {
@@ -51,7 +54,7 @@ interface Shared {
 }
 
 /** Only a finished result: facets of the previous inputs are never shown as if they were current. */
-function readyOf<R extends Facets>(h: LegacyQueryHandle<R>): R | null {
+function readyOf<R extends Facets>(h: QueryHandle<R>): R | null {
   return h.state.status === 'ready' ? h.state.result : null;
 }
 
@@ -63,24 +66,44 @@ export function suggestKeys(known: readonly string[], typed: string, max = 3): s
   return [...new Set([...suffix, ...inside])].slice(0, max);
 }
 
+/** Every facet key of the report, unfiltered (the keys behind "did you mean"); read only when a widget shows no values. */
+const ALL_KEYS = {
+  limit: 1,
+  condition: null,
+  text: '',
+  window: null,
+  facetKeys: null,
+} as const;
+const spanKeys = async (d: DataSource): Promise<string[]> =>
+  knownKeys(
+    (
+      await d.querySpans({
+        ...ALL_KEYS,
+        mode: 'spans',
+        sort: SORT.spans,
+        groupBy: null,
+        measureBy: null,
+        needs: ['facets'],
+      })
+    ).facets,
+  );
+const logKeys = async (d: DataSource): Promise<string[]> =>
+  knownKeys((await d.queryLogs({ ...ALL_KEYS, mode: 'logs', sort: SORT.logs, needs: ['facets'] })).facets);
 // Module-level so they are stable: `useKeyedAsync` reloads on a new `load`.
 // A pinned key is known before its first observation, so a report without it still says "no values".
 const knownKeys = (f: FacetCounts): string[] => [...new Set([...f.keys(), ...f.pinned])];
-const spanKeys = (d: LegacyDataSource): Promise<string[]> => d.landing().then((l) => knownKeys(l.facets));
-const logKeys = (d: LegacyDataSource): Promise<string[]> => d.logLanding().then((l) => knownKeys(l.facets));
 
 /**
- * A duration measure keeps a bounded number of groups; says how many spans fell in the groups left out. One
- * truncated line, so the chart's `NOTE_PX` budget holds in a narrow widget; the full sentence is the title and the accessible name.
+ * A duration measure keeps a bounded number of groups; the query cannot count past the cap, so this says only that
+ * spans with other values are left out. One truncated line, so the chart's `NOTE_PX` budget holds in a narrow widget;
+ * the full sentence is the title and the accessible name.
  */
-function CapNote(props: { groupBy: string; cap: number; dropped: number }): JSX.Element {
-  const { dropped } = props;
+function CapNote(props: { groupBy: string; cap: number }): JSX.Element {
   const cap = props.cap.toLocaleString('en-US');
-  const spans = count(dropped, 'span');
-  const full = `Measured over the first ${cap} ${props.groupBy} values; ${spans} with other values ${dropped === 1 ? 'is' : 'are'} left out`;
+  const full = `Measured over the first ${cap} ${props.groupBy} values; spans with other values are left out`;
   return (
     <p role="status" title={full} aria-label={full} className="truncate text-sm text-ink-2">
-      {`${spans} past the first ${cap} values left out`}
+      {`Spans past the first ${cap} values left out`}
     </p>
   );
 }
@@ -106,12 +129,28 @@ function UnknownKey(props: { groupBy: string; known: readonly string[] }): JSX.E
   );
 }
 
+/** Why a widget has no values: the key is not a facet of the report (with near misses), or the window holds none. */
+function EmptyFacet(props: {
+  dataSource: DataSource;
+  noun: 'Spans' | 'Logs';
+  groupBy: string;
+}): JSX.Element | null {
+  const keys = useKeyedAsync(props.dataSource, props.noun === 'Spans' ? spanKeys : logKeys);
+  if (keys.status === 'loading') return null;
+  if (keys.status === 'ready' && !keys.value.includes(props.groupBy)) {
+    return <UnknownKey groupBy={props.groupBy} known={keys.value} />;
+  }
+  return (
+    <p className="rounded-card border border-hairline bg-surface p-4 text-sm text-ink-2">
+      No <span className="font-mono">{props.groupBy}</span> values in this window
+    </p>
+  );
+}
+
 function FacetBody<R extends Facets>(
-  props: Shared & { handle: LegacyQueryHandle<R>; dataSource: LegacyDataSource },
+  props: Shared & { handle: QueryHandle<R>; dataSource: DataSource },
 ): JSX.Element {
   const { handle, groupBy, measure } = props;
-  const keys = useKeyedAsync(props.dataSource, props.noun === 'Spans' ? spanKeys : logKeys);
-  const known = keys.status === 'ready' ? keys.value : null;
   const colors = useColorAssigner();
   const { resolved } = useTheme();
   const result = readyOf(handle);
@@ -127,26 +166,16 @@ function FacetBody<R extends Facets>(
   }, [result, empty, props.widgetType, groupBy, measure, colors, props.echarts, resolved]);
   const groups = measure === 'count' ? null : (result?.groups ?? null);
   const dropped = groups?.dropped ?? 0;
-  const notes =
-    (result?.partial == null ? 0 : NOTE_PX) +
-    (dropped > 0 ? NOTE_PX : 0) +
-    (state.status === 'loading' ? NOTE_PX : 0);
+  const notes = (dropped > 0 ? NOTE_PX : 0) + (state.status === 'loading' ? NOTE_PX : 0);
   const chartPx = Math.max(MIN_PX, props.height - FRAME_CHROME_PX - notes);
   return (
     <div className="flex flex-col gap-1">
-      {result !== null && <PartialNote partial={result.partial} onScanAll={handle.scanAll} />}
-      {groups !== null && dropped > 0 && <CapNote groupBy={groupBy} cap={groups.cap} dropped={dropped} />}
-      {state.status === 'loading' && <LoadingNote progress={state.progress} />}
+      {groups !== null && dropped > 0 && <CapNote groupBy={groupBy} cap={groups.cap} />}
+      {state.status === 'loading' && <LoadingNote progress={null} />}
       {state.status === 'error' && <ErrorCard title="The query could not run" message={state.message} />}
       {result !== null &&
         (empty ? (
-          keys.status === 'loading' ? null : known !== null && !known.includes(groupBy) ? (
-            <UnknownKey groupBy={groupBy} known={known} />
-          ) : (
-            <p className="rounded-card border border-hairline bg-surface p-4 text-sm text-ink-2">
-              No <span className="font-mono">{groupBy}</span> values in this window
-            </p>
-          )
+          <EmptyFacet dataSource={props.dataSource} noun={props.noun} groupBy={groupBy} />
         ) : option !== null ? (
           <Chart
             option={option}
@@ -177,31 +206,39 @@ interface Filter {
 }
 
 // Only the facet counts are drawn, so no rows are read.
-function SpanFacets(props: Shared & { dataSource: LegacyDataSource; filter: Filter }): JSX.Element {
+function SpanFacets(props: Shared & { dataSource: DataSource; filter: Filter }): JSX.Element {
   const { dataSource, filter, ...rest } = props;
   const { condition, text, window } = filter;
   const { measure, groupBy } = rest;
   const query = useMemo<SpanQuery>(
     () => ({
-      ...queryOf(condition, text, window),
+      ...queryOf(condition, text, window, groupBy),
       mode: 'spans',
       sort: SORT.spans,
       groupBy: null,
       measureBy: measure === 'count' ? null : groupBy,
+      needs: measure === 'count' ? ['rows', 'facets'] : ['rows', 'facets', 'groups'],
     }),
     [condition, text, window, measure, groupBy],
   );
-  return <FacetBody {...rest} dataSource={dataSource} handle={useLegacySpanQuery(dataSource, query)} />;
+  return <FacetBody {...rest} dataSource={dataSource} handle={useSpanQuery(dataSource, query)} />;
 }
 
-function LogFacets(props: Shared & { dataSource: LegacyDataSource; filter: Filter }): JSX.Element {
+function LogFacets(props: Shared & { dataSource: DataSource; filter: Filter }): JSX.Element {
   const { dataSource, filter, ...rest } = props;
   const { condition, text, window, traceId } = filter;
+  const { groupBy } = rest;
   const query = useMemo<LogQuery>(
-    () => ({ ...queryOf(condition, text, window), mode: 'logs', sort: SORT.logs, traceId }),
-    [condition, text, window, traceId],
+    () => ({
+      ...queryOf(condition, text, window, groupBy),
+      mode: 'logs',
+      sort: SORT.logs,
+      traceId,
+      needs: ['rows', 'facets'],
+    }),
+    [condition, text, window, traceId, groupBy],
   );
-  return <FacetBody {...rest} dataSource={dataSource} handle={useLegacyLogQuery(dataSource, query)} />;
+  return <FacetBody {...rest} dataSource={dataSource} handle={useLogQuery(dataSource, query)} />;
 }
 
 /** A span or log query's facet counts grouped by the widget's key: the explorers' top-list chart or group table. */

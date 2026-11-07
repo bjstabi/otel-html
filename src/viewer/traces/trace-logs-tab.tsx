@@ -3,11 +3,11 @@ import { type JSX, useCallback, useMemo, useState } from 'react';
 import type { SpanId, TraceId, UnixNanos } from '../../model/ids.js';
 import { LogList } from '../components/log-list.js';
 import type { SortState } from '../components/results-table.js';
+import type { DataSource } from '../data/data-source.js';
 import { byTimeThenRef, LOG_SORTS, type LogRow } from '../data/log-query.js';
 import { CONTROL } from '../shell/controls.js';
 import { useGoTo } from '../shell/go-to.js';
 import { useKeyedAsync } from '../state/use-keyed-async.js';
-import type { TraceSource } from './trace-source.js';
 
 export type TraceLogsState = { rows: readonly LogRow[]; error: null } | { rows: null; error: string | null };
 
@@ -15,7 +15,7 @@ export type TraceLogsState = { rows: readonly LogRow[]; error: null } | { rows: 
  * The trace's logs, time-ascending, loaded once per open trace (when it has any) and shared by the trace Logs tab
  * and the span Logs tab. `rows` is null while loading or after a failed load (then `error` is set).
  */
-export function useTraceLogs(dataSource: TraceSource, traceId: TraceId, enabled: boolean): TraceLogsState {
+export function useTraceLogs(dataSource: DataSource, traceId: TraceId, enabled: boolean): TraceLogsState {
   const load = useCallback(
     (id: TraceId, signal: AbortSignal) => dataSource.traceLogs(id, signal),
     [dataSource],

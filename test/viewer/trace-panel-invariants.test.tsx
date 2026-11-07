@@ -4,7 +4,7 @@ import { Component, type ReactNode } from 'react';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import type { Manifest } from '../../src/format/manifest.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
-import type { LegacyDataSource } from '../../src/viewer/data/legacy-data-source.js';
+import type { DataSource } from '../../src/viewer/data/data-source.js';
 import { createSelectionStore } from '../../src/viewer/state/selection.js';
 import { SelectionProvider } from '../../src/viewer/state/selection-context.js';
 import { ThemeProvider } from '../../src/viewer/theme/theme-provider.js';
@@ -46,7 +46,7 @@ describe('TracePanel invariants', () => {
       getTrace: () =>
         Promise.resolve(detailOf([traceRow(1, null, 0, 100, { service: 'web', name: 'GET /' })])),
       percentileOf: () => null,
-    } as unknown as LegacyDataSource;
+    } as unknown as DataSource;
     render(
       <ThemeProvider>
         <SelectionProvider store={createSelectionStore({})}>

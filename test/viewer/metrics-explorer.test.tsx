@@ -37,6 +37,7 @@ import { defaultMetricState } from '../../src/viewer/state/metric-state.js';
 import { parseUrlState, serializeUrlState } from '../../src/viewer/state/url-state.js';
 import { ThemeProvider } from '../../src/viewer/theme/theme-provider.js';
 import { createScriptedLoader } from '../../test-support/scripted-loader.js';
+import { asShellSource } from './legacy-shell-source.js';
 import { buildMetricExplorerReport, type Fixture } from './report-fixture.js';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -60,7 +61,7 @@ async function renderAt(hash: string): Promise<void> {
   window.location.hash = hash;
   render(
     <ThemeProvider>
-      <Shell dataSource={ds} history={createHashHistory(window)} />
+      <Shell dataSource={asShellSource(ds)} history={createHashHistory(window)} />
     </ThemeProvider>,
   );
 }

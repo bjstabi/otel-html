@@ -111,9 +111,9 @@ const dataSource = {
   querySpans: () => Promise.resolve(emptyResult()),
   services: (): Promise<ServicesResult> => Promise.resolve({ services: [], total: 0 }),
   serviceShare: () => Promise.resolve([]),
-} as unknown as LegacyDataSource;
+} as unknown as DataSource;
 
-function renderShell(hash: string, ds: LegacyDataSource = dataSource): void {
+function renderShell(hash: string, ds: DataSource = dataSource): void {
   window.location.hash = hash;
   render(
     <ThemeProvider>
@@ -578,11 +578,11 @@ describe('overlays own the keyboard', () => {
 });
 
 describe('full-page trace route', () => {
-  const traceDs = (): LegacyDataSource => ({
+  const traceDs = (): DataSource => ({
     ...dataSource,
     getTrace: () =>
       Promise.resolve(detailOf([traceRow(1, null, 0, 1000, { service: 'checkout', name: 'GET /' })])),
-    percentileOf: () => 91,
+    percentileOf: () => Promise.resolve(91),
   });
 
   test('#/traces/trace/<id> shows the same panel full width, with the header facts', async () => {
@@ -598,7 +598,7 @@ describe('full-page trace route', () => {
 
   test('Open in Logs Explorer replaces a span-only filter and raises no dropped-filter notice', async () => {
     const user = userEvent.setup();
-    const ds: LegacyDataSource = {
+    const ds: DataSource = {
       ...traceDs(),
       getTrace: () =>
         Promise.resolve({
@@ -642,7 +642,7 @@ describe('full-page trace route', () => {
       service: 'checkout',
       host: null,
     } as unknown as LogRow;
-    const ds: LegacyDataSource = {
+    const ds: DataSource = {
       ...traceDs(),
       getTrace: () =>
         Promise.resolve({

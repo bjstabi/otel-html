@@ -79,6 +79,7 @@ import { RunSessionProvider } from '../../src/viewer/dashboards/run-session.js';
 import type { VariableBinding, WidgetScope } from '../../src/viewer/dashboards/scope.js';
 import { MetricWidget } from '../../src/viewer/dashboards/widgets/metric.js';
 import { createDataSource, type LegacyDataSource } from '../../src/viewer/data/legacy-data-source.js';
+import type { TraceRow } from '../../src/viewer/data/results.js';
 import { GoToContext } from '../../src/viewer/shell/go-to.js';
 import { EMPTY_DASHBOARD_STATE } from '../../src/viewer/state/dashboard-state.js';
 import { createSelectionStore } from '../../src/viewer/state/selection.js';
@@ -86,7 +87,7 @@ import { SelectionProvider } from '../../src/viewer/state/selection-context.js';
 import { parseUrlState } from '../../src/viewer/state/url-state.js';
 import { ThemeProvider } from '../../src/viewer/theme/theme-provider.js';
 import { createScriptedLoader } from '../../test-support/scripted-loader.js';
-import { currentD, renderShell } from './dashboard-shell.js';
+import { asDashboardSource, currentD, emptySpanResult, renderShell } from './dashboard-shell.js';
 import { buildEmbeddedMetricsReport, type Fixture, LINKED_TRACE } from './report-fixture.js';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -170,7 +171,7 @@ function mount(
               scope={{ ...SCOPE, ...scope }}
               dashboard={{ dashboard, source: 'x', isDefault: false }}
               height={500}
-              dataSource={source}
+              dataSource={asDashboardSource(source)}
               actions={actions}
               variables={over.variables ?? []}
               controls={over.controls ?? null}
@@ -422,7 +423,7 @@ describe('the Metrics widget without queries', () => {
 
   test('with no selection it lists the catalog namespaces over every resource', async () => {
     const { ds, seen } = await fusion();
-    renderShell('#/dashboards/fusion', ds);
+    renderShell('#/dashboards/fusion', asDashboardSource(ds));
     const grid = await screen.findByTestId('metric-grid');
     expect(await within(grid).findByRole('button', { name: /^process/ })).toBeTruthy();
     expect(within(grid).getByRole('button', { name: /^http/ })).toBeTruthy();
@@ -435,7 +436,18 @@ describe('the Metrics widget without queries', () => {
   test('after selecting a trace it narrows to that trace resources', async () => {
     const user = userEvent.setup();
     const { ds, seen } = await fusion();
-    renderShell('#/dashboards/fusion', ds);
+    const oneTrace: TraceRow = {
+      traceId: TRACE,
+      rootSummary: { service: 'checkout', name: 'GET /checkout', resource: 'checkout/runner-1' },
+      start: 60_000_000_000,
+      durationNs: 500_000_000,
+      spans: 2,
+      errors: 0,
+    };
+    renderShell('#/dashboards/fusion', {
+      ...asDashboardSource(ds),
+      querySpans: () => Promise.resolve({ ...emptySpanResult(), total: 1, rows: [oneTrace] }),
+    });
     await screen.findByTestId('metric-grid');
     const traces = document.querySelector<HTMLElement>('[data-widget="traces"]');
     if (traces === null) throw new Error('no traces widget');
@@ -475,7 +487,7 @@ describe('the Metrics widget without queries', () => {
   });
 
   test('the grid body scrolls inside the widget height', async () => {
-    renderShell('#/dashboards/fusion', await linked());
+    renderShell('#/dashboards/fusion', asDashboardSource(await linked()));
     const grid = await screen.findByTestId('metric-grid');
     expect(grid.parentElement?.className).toContain('overflow-auto');
   });
@@ -747,7 +759,7 @@ describe('the Metrics widget with runBy', () => {
       });
 
     test('a click on a dot filters the page without re-running the chart or collapsing it', async () => {
-      renderShell('#/dashboards/runs', await page());
+      renderShell('#/dashboards/runs', asDashboardSource(await page()));
       const chart = await screen.findByRole('img', { name: /lines over/ });
       const before = chart.getAttribute('aria-label');
       const queried = runQueries.length;
@@ -761,7 +773,7 @@ describe('the Metrics widget with runBy', () => {
 
     test('a toggle lasts through a variable changing, and is not in the URL', async () => {
       const user = userEvent.setup();
-      renderShell('#/dashboards/runs', await page());
+      renderShell('#/dashboards/runs', asDashboardSource(await page()));
       await screen.findByRole('img', { name: /lines over/ });
       await user.click(toggle('Legend'));
       clickDot('payments');
@@ -857,7 +869,7 @@ describe('the Metrics widget with runBy', () => {
 
       test('zoom and hidden lines survive another variable changing, which reloads the card', async () => {
         const user = userEvent.setup();
-        renderShell(WIDE, await viewPage());
+        renderShell(WIDE, asDashboardSource(await viewPage()));
         const before = await chart();
         await user.click(slow());
         zoomToLastTwo();
@@ -872,7 +884,7 @@ describe('the Metrics widget with runBy', () => {
       test('zoom and hidden lines survive the grid crossing its stacking breakpoint', async () => {
         const user = userEvent.setup();
         const viewport = stubViewport();
-        renderShell(WIDE, await viewPage());
+        renderShell(WIDE, asDashboardSource(await viewPage()));
         const before = await chart();
         await user.click(slow());
         zoomToLastTwo();
@@ -884,7 +896,7 @@ describe('the Metrics widget with runBy', () => {
 
       test('toggles, zoom and hidden lines survive leaving to another route and back', async () => {
         const user = userEvent.setup();
-        renderShell(WIDE, await viewPage());
+        renderShell(WIDE, asDashboardSource(await viewPage()));
         await chart();
         await user.click(toggle('Slider'));
         await user.click(slow());
@@ -899,7 +911,7 @@ describe('the Metrics widget with runBy', () => {
 
       test('a window change clears the zoom and keeps the hidden lines', async () => {
         const user = userEvent.setup();
-        renderShell(WIDE, await viewPage());
+        renderShell(WIDE, asDashboardSource(await viewPage()));
         await chart();
         await user.click(slow());
         zoomToLastTwo();
@@ -913,7 +925,7 @@ describe('the Metrics widget with runBy', () => {
       test('Reset clears what is stored, so a remount comes back as configured', async () => {
         const user = userEvent.setup();
         const viewport = stubViewport();
-        renderShell(WIDE, await viewPage());
+        renderShell(WIDE, asDashboardSource(await viewPage()));
         await chart();
         await user.click(toggle('Slider'));
         await user.click(slow());
@@ -931,7 +943,7 @@ describe('the Metrics widget with runBy', () => {
     test('Open in Metrics opens the queries as they are, with the bound run in the where', async () => {
       const user = userEvent.setup();
       const d = encodeURIComponent(JSON.stringify({ vars: { 'service.name': 'payments' } }));
-      renderShell(`#/dashboards/runs?d=${d}`, await page());
+      renderShell(`#/dashboards/runs?d=${d}`, asDashboardSource(await page()));
       await screen.findByRole('img', { name: /lines over/ });
       await user.click(screen.getByRole('button', { name: /Open in Metrics/ }));
       await waitFor(() => expect(window.location.hash.startsWith('#/metrics')).toBe(true));
@@ -969,7 +981,7 @@ describe('Open in Metrics', () => {
       config: { ...report.manifest.config, dashboards: [{ source: 'otel-html.yaml', dashboard: DASH }] },
     });
     const d = encodeURIComponent(JSON.stringify({ vars: { 'service.name': 'payments' } }));
-    renderShell(`#/dashboards/svc?t=0~120000000000&d=${d}`, ds);
+    renderShell(`#/dashboards/svc?t=0~120000000000&d=${d}`, asDashboardSource(ds));
     await user.click(await screen.findByRole('button', { name: /Open in Metrics/ }));
     await waitFor(() => expect(window.location.hash.startsWith('#/metrics')).toBe(true));
     const url = parseUrlState(window.location.hash).state;
@@ -979,7 +991,7 @@ describe('Open in Metrics', () => {
   });
 
   test('the grid mode has no Open in Metrics', async () => {
-    renderShell('#/dashboards/fusion', await linked());
+    renderShell('#/dashboards/fusion', asDashboardSource(await linked()));
     await screen.findAllByRole('region');
     expect(screen.queryByRole('button', { name: /Open in Metrics/ })).toBeNull();
   });

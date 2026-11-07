@@ -18,3 +18,10 @@ const runLogsPage: QueryRunner<LogsPageQuery, LogsPageResult> = async (ds: DataS
 export function useLogsPage(dataSource: DataSource, query: LogsPageQuery): QueryHandle<LogsPageResult> {
   return useQuery(dataSource, query, runLogsPage);
 }
+
+const runLogs: QueryRunner<LogQuery, LogQueryResult> = (ds, q, signal) => ds.queryLogs(q, signal);
+
+/** `useQuery` over `queryLogs`, for the widgets that ask for rows or counts only. */
+export function useLogQuery(dataSource: DataSource, query: LogQuery): QueryHandle<LogQueryResult> {
+  return useQuery(dataSource, query, runLogs);
+}
