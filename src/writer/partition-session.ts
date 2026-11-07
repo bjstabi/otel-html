@@ -484,7 +484,7 @@ class PartitionSession implements WriterSession {
   }
 
   /**
-   * All or nothing, like the chunk session: everything that can fail (drop conditions, row conversion) runs on
+   * All or nothing: everything that can fail (drop conditions, row conversion) runs on
    * staged rows first; the commit that follows is synchronous.
    */
   #acceptSpans(rows: readonly SpanRecord[]): AddResult {

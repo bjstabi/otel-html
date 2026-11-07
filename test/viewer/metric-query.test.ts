@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { type SeriesGaps, type StoredExemplar, seriesGaps } from '../../src/format/metric-files.js';
+import { GAP_SAMPLE, type SeriesGaps, type StoredExemplar } from '../../src/format/metric-files.js';
 import type { AnyValue, Attributes } from '../../src/model/anyvalue.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import type { MetricPointRecord, ResourceRecord } from '../../src/model/records.js';
@@ -31,6 +31,14 @@ import {
 } from '../../src/viewer/data/metric-query.js';
 import { medianMsAsync } from '../../test-support/median-ms.js';
 import { perfFactor } from '../../test-support/perf-inject.js';
+
+/** `SeriesGaps` of one series' ascending level-0 bucket indexes (what the writer recorded; the viewer only reads it). */
+function seriesGaps(t: readonly number[]): SeriesGaps {
+  const gaps: number[] = [];
+  for (let j = 1; j < t.length && j <= GAP_SAMPLE; j++) gaps.push((t[j] ?? 0) - (t[j - 1] ?? 0));
+  gaps.sort((a, b) => a - b);
+  return { n: gaps.length, median: gaps[Math.floor(gaps.length / 2)] ?? 0 };
+}
 
 const S = 1e9;
 const str = (value: string): AnyValue => ({ kind: 'string', value });
