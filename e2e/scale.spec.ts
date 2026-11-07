@@ -42,9 +42,9 @@ const LOAD_SAMPLES = 3;
 // report and run without them (CI's `e2e-metrics-scale` job; the title prefix is that describe's).
 test.beforeEach(() => {
   if (test.info().titlePath.some((t) => t.startsWith('metrics scale'))) return;
-  // The engine files ship in dist/viewer/assets but only site and local reports copy them; these are chunk reports.
+  // The engine files ship in dist/viewer/assets; the default (local) report copies the base64 wrappers.
   const viewer = readdirSync(new URL('../dist/viewer/assets/', import.meta.url))
-    .filter((n) => wantsAsset(`assets/${n}`, 'chunks'))
+    .filter((n) => wantsAsset(`assets/${n}`, 'local'))
     .sort()
     .join();
   for (const name of ['scale', 'huge'] as const) {

@@ -19,7 +19,6 @@ export function manifestV4(spans: number, listCap = 100): ManifestV4 {
     engine: { version: '1.4.1', format: 'local', assetsBase: 'assets/' },
     config: {
       viewer: {
-        eagerBudgetBytes: 1,
         listCap,
         theme: 'system',
         defaultDashboard: 'fusion',

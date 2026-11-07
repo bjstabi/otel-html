@@ -217,8 +217,6 @@ export const FUSION_SELECTION_BUDGET_MS = 1000;
 export const SCALE_TRACES = 2000;
 export const SCALE_SPANS_PER_TRACE = 50;
 export const SCALE_SPAN_COUNT: number = SCALE_TRACES * SCALE_SPANS_PER_TRACE;
-/** The viewer's eager budget used to build `huge`, so the same input is served by the windowed strategy. */
-export const HUGE_EAGER_BUDGET_BYTES = 5_000_000;
 /** Scale traces use ids `scaleTraceId(i)`; the service of span `j` is `SCALE_SERVICES[j % 8]`. */
 export const SCALE_SERVICES = ['edge', 'api', 'auth', 'db', 'cache', 'queue', 'worker', 'search'] as const;
 export function scaleTraceId(i: number): string {

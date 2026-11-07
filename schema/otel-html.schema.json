@@ -10,10 +10,9 @@
       "type": "object",
       "properties": {
         "format": {
-          "default": "chunks",
+          "default": "local",
           "type": "string",
           "enum": [
-            "chunks",
             "local",
             "site"
           ]
@@ -202,12 +201,6 @@
       "default": {},
       "type": "object",
       "properties": {
-        "eagerBudgetBytes": {
-          "default": 75000000,
-          "type": "integer",
-          "exclusiveMinimum": 0,
-          "maximum": 9007199254740991
-        },
         "listCap": {
           "default": 10000,
           "type": "integer",

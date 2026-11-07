@@ -9,6 +9,7 @@ import {
   partitionKey,
   partitionWrapperPath,
 } from '../format/paths.js';
+import { oldFormatMessage } from '../format/version.js';
 import { OtelHtmlError } from '../model/errors.js';
 import { assetsInside, pruneOwnAssets } from './assets-cleanup.js';
 import { at, writeManifest } from './checkpoint.js';
@@ -66,14 +67,11 @@ export async function upgradeReport(
   dir: string,
   opts: UpgradeOptions = {},
 ): Promise<{ title: string; formatVersion: number }> {
-  const { fs, viewerAssets } = deps;
+  const { fs } = deps;
   const report = await readMergeInput(fs, dir, 'upgrade');
   const { manifest } = report;
-  if (report.kind === 'chunks' && (opts.format !== undefined || opts.assetsBase !== undefined)) {
-    throw new OtelHtmlError('usage', {
-      message: `cannot change the format or assets base of ${report.dir}: it is a format ${report.manifest.formatVersion} report`,
-      hint: 'convert it with `otel-html merge <report> -o <out> --format local|site`',
-    });
+  if (report.kind === 'chunks') {
+    throw new OtelHtmlError('usage', { message: oldFormatMessage(manifest.formatVersion) });
   }
   if (opts.assetsBase !== undefined && !ASSETS_BASE_RE.test(opts.assetsBase)) {
     throw new OtelHtmlError('usage', {
@@ -96,28 +94,14 @@ export async function upgradeReport(
   try {
     // Anything may have committed between the first read and the lock; only the copy read under it is current.
     const current = await readMergeInput(fs, report.dir, 'upgrade');
-    if (current.kind !== report.kind || current.manifest.formatVersion !== manifest.formatVersion) {
+    if (current.kind !== 'partitions' || current.manifest.formatVersion !== manifest.formatVersion) {
       throw new OtelHtmlError('usage', {
         message: `cannot upgrade ${report.dir}: the report changed while upgrade was starting`,
         hint: 'the report changed while upgrade was starting; run upgrade again',
       });
     }
-    if (current.kind === 'partitions') {
-      assertSharedBaseNamed(current, opts);
-      await upgradePartitioned(deps, report.dir, current.manifest, opts);
-    } else {
-      const written = new Set<string>();
-      for (const f of await viewerAssets.files()) written.add(f.path.split('/')[1] ?? '');
-      await writeViewerAssets(fs, report.dir, viewerAssets);
-      await fs.writeTextAtomic(
-        at(report.dir, 'index.html'),
-        renderIndexHtml(viewerAssets.entry(), manifest.title),
-      );
-      await fs.writeTextAtomic(at(report.dir, '.nojekyll'), '');
-      for (const name of await fs.list(at(report.dir, 'assets'))) {
-        if (!written.has(name)) await fs.remove(at(report.dir, `assets/${name}`));
-      }
-    }
+    assertSharedBaseNamed(current, opts);
+    await upgradePartitioned(deps, report.dir, current.manifest, opts);
   } finally {
     await lock.release();
   }
@@ -125,11 +109,8 @@ export async function upgradeReport(
 }
 
 /** A format-4 report on a shared base is upgraded only when told the base: the shared copy is the publisher's, so upgrade cannot know it holds this version's files. */
-function assertSharedBaseNamed(
-  report: { kind: 'chunks'; dir: string } | { kind: 'partitions'; dir: string; manifest: ManifestV4 },
-  opts: UpgradeOptions,
-): void {
-  if (report.kind !== 'partitions' || opts.assetsBase !== undefined) return;
+function assertSharedBaseNamed(report: { dir: string; manifest: ManifestV4 }, opts: UpgradeOptions): void {
+  if (opts.assetsBase !== undefined) return;
   const { assetsBase } = report.manifest.engine;
   if (assetsBase === DEFAULT_ASSETS_BASE) return;
   throw new OtelHtmlError('usage', {

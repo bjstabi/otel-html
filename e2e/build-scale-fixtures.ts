@@ -12,7 +12,6 @@ import { ExportMetricsServiceRequestSchema } from '../src/model/gen/opentelemetr
 import { scaleLogsRequest } from '../test-support/scale-logs.js';
 import { scaleMetrics } from '../test-support/scale-metrics.js';
 import {
-  HUGE_EAGER_BUDGET_BYTES,
   reportDir,
   SCALE_LOG_FILES,
   SCALE_LOG_IDS,
@@ -36,15 +35,9 @@ const str = (key: string, value: string): { key: string; value: { stringValue: s
 });
 
 /** `otel-html convert <inputs> --out <out> --title <title>` with the built CLI. */
-async function convertTo(
-  out: URL,
-  inputs: readonly string[],
-  title: string,
-  env?: Record<string, string>,
-): Promise<void> {
+async function convertTo(out: URL, inputs: readonly string[], title: string): Promise<void> {
   await run('node', [CLI, 'convert', ...inputs, '--out', fileURLToPath(out), '--title', title], {
     maxBuffer: 64 * 1024 * 1024,
-    ...(env === undefined ? {} : { env: { ...process.env, ...env } }),
   });
 }
 
@@ -112,8 +105,8 @@ async function writeScaleMetricsFile(dir: URL): Promise<string> {
 }
 
 /**
- * One input of 100k spans, 1M logs (10 files) and the scale run's metrics, converted twice: `scale` with default settings (spans eager, logs
- * windowed) and `huge` over a 5 MB eager budget (both windowed).
+ * One input of 100k spans, 1M logs (10 files) and the scale run's metrics, converted twice, with the default (local) format, as `scale` and
+ * `huge`. The two are the same until PR 7 rebuilds them (the eager budget that told them apart is gone).
  */
 async function buildScaleReports(): Promise<void> {
   const inputs = new URL('inputs/', SCALE_REPORTS_DIR);
@@ -123,9 +116,7 @@ async function buildScaleReports(): Promise<void> {
   const all = [file, ...(await writeScaleLogFiles(inputs)), await writeScaleMetricsFile(inputs)];
   await Promise.all([
     convertTo(reportDir('scale'), all, 'scale run'),
-    convertTo(reportDir('huge'), all, 'huge run', {
-      OTEL_HTML_EAGER_BUDGET_BYTES: String(HUGE_EAGER_BUDGET_BYTES),
-    }),
+    convertTo(reportDir('huge'), all, 'huge run'),
   ]);
 }
 

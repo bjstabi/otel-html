@@ -39,6 +39,7 @@ const config: ViteUserConfig = defineConfig({
         test: {
           name: 'node',
           environment: 'node',
+          setupFiles: ['test-support/legacy-chunks.ts'],
           include: perfPass ? perf.node : ['test/**/*.test.ts'],
           exclude: ['test/viewer/**', '**/node_modules/**'],
         },

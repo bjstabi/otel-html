@@ -6,7 +6,6 @@ import { OtelHtmlError } from '../../src/model/errors.js';
 
 const config = {
   viewer: {
-    eagerBudgetBytes: 75_000_000,
     listCap: 10_000,
     theme: 'system',
     defaultDashboard: 'fusion',
@@ -81,11 +80,24 @@ describe('manifest v4', () => {
       rollups: [],
       traceShards: [],
       metricFiles: [],
-      config,
+      config: { ...config, viewer: { ...config.viewer, eagerBudgetBytes: 75_000_000 } },
     };
     const m = parseAnyManifest(v3);
     expect(isV4(m)).toBe(false);
     expect(m).toEqual(parseManifest(v3));
+  });
+
+  test('viewer.eagerBudgetBytes is an unknown key in a v4 manifest', () => {
+    const m = v4();
+    const e = failure(() =>
+      parseAnyManifest({
+        ...m,
+        config: { ...m.config, viewer: { ...m.config.viewer, eagerBudgetBytes: 1 } },
+      }),
+    );
+    expect(e.code).toBe('invalid-report');
+    expect(e.path).toBe('manifest.config.viewer');
+    expect(e.actual).toContain('eagerBudgetBytes');
   });
 
   test('an unknown formatVersion is invalid-report at formatVersion', () => {

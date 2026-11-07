@@ -232,13 +232,13 @@ describe('format mismatch with an existing output (R54)', () => {
 });
 
 describe('addRecords', () => {
-  test('a ref outside the batch tables is an invalid-report on both sessions', async () => {
+  test('a ref outside the batch tables is an invalid-report', async () => {
     const w = createTestWriter();
     await chunkReport(w, 'in', [spansRequest(1)]);
     const span = allSpans(w, 'in')[0];
     if (span === undefined) throw new Error('no span');
     const epoch = BigInt(manifestOf(w, 'in').epochUnixNano) as never;
-    for (const format of ['chunks', 'site'] as const) {
+    for (const format of ['site'] as const) {
       const s = await openSession(w.deps, {
         out: `o-${format}`,
         config: testConfig({ writer: { format } }),

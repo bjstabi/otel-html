@@ -8,5 +8,4 @@ export interface EnvBinding {
 export const ENV_BINDINGS: readonly EnvBinding[] = [
   { env: 'OTEL_HTML_TITLE', path: 'title', parse: 'string' },
   { env: 'OTEL_HTML_FORMAT', path: 'writer.format', parse: 'string' },
-  { env: 'OTEL_HTML_EAGER_BUDGET_BYTES', path: 'viewer.eagerBudgetBytes', parse: 'int' },
 ];

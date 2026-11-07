@@ -197,16 +197,6 @@ describe('merge copies format-4 partitions', () => {
     ]);
   });
 
-  test('a format-4 input into a chunks output is a usage error that names --format, and writes nothing', async () => {
-    const w = createTestWriter();
-    await v4Report(w, 'a', [spansRequest(1)]);
-    const e = await mergeReports(w.deps, ['a'], { out: 'm', config: testConfig(), mode: 'replace' }).catch(
-      (x: unknown) => x,
-    );
-    expect(e).toMatchObject({ code: 'usage', hint: expect.stringContaining('--format local') });
-    expect(w.fs.snapshot().has('m/data/manifest.js')).toBe(false);
-  });
-
   test('a listed partition file that is missing is an invalid-report naming the input file', async () => {
     const w = createTestWriter();
     await v4Report(w, 'a', [spansRequest(1)]);
@@ -372,15 +362,16 @@ describe('merge copies format-4 partitions', () => {
     );
   });
 
-  test("a v4 input into an existing v4 output without --format names that report's format", async () => {
+  test("a v4 input into an existing v4 output of the other format names that report's format", async () => {
     const w = createTestWriter();
     await v4Report(w, 'a', [spansRequest(1)]);
-    await v4Report(w, 'm', [spansRequest(1, 0, 9)], 'local');
-    const e = await mergeReports(w.deps, ['a'], { out: 'm', config: testConfig(), mode: 'open' }).catch(
-      (x: unknown) => x,
-    );
-    expect(e).toMatchObject({ code: 'usage', hint: 'merge with --format local' });
-    expect((e as OtelHtmlError).message).toContain('into the local report at m without --format');
+    await v4Report(w, 'm', [spansRequest(1, 0, 9)], 'site');
+    const e = await mergeReports(w.deps, ['a'], {
+      out: 'm',
+      config: testConfig({ writer: { format: 'local' } }),
+      mode: 'open',
+    }).catch((x: unknown) => x);
+    expect(e).toMatchObject({ code: 'usage', hint: expect.stringContaining('append with --format site') });
   });
 });
 

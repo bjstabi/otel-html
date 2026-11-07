@@ -1,7 +1,8 @@
 import { spawn } from 'node:child_process';
-import { describe, expect, test } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import type { CliDeps } from '../../src/cli/program.js';
 import { runCli } from '../../src/cli/program.js';
+import { legacyDefaultFormat } from '../../src/config/schema.js';
 import { logRecord, logsRequest } from '../../test-support/otlp-builders.js';
 import { createTestWriter, type TestWriter } from '../../test-support/writer-deps.js';
 import { manifestOf, spansRequest } from '../writer/helpers.js';
@@ -71,18 +72,6 @@ describe('cli --format and --assets-base', () => {
     expect(sources).toHaveLength(2);
   });
 
-  test('merge --compact with the chunks format exits 2 and says it applies to --format local|site', async () => {
-    const w = createTestWriter();
-    await put(w, 'in/a.json', JSON.stringify(spansRequest(2)));
-    expect((await run(w, ['convert', 'in/a.json', '-o', 'a'])).code).toBe(0);
-    const r = await run(w, ['merge', 'a', '-o', 'm', '--compact']);
-    expect(r.code).toBe(2);
-    expect(r.stderr).toContain('writer.compactOnMerge');
-    expect(r.stderr).toContain('--format local|site');
-    const viaEnv = await run(w, ['merge', 'a', '-o', 'm2', '--compact'], { OTEL_HTML_FORMAT: 'chunks' });
-    expect(viaEnv.code).toBe(2);
-  });
-
   test('--assets-base is validated by the config schema and writes no own assets/', async () => {
     const w = createTestWriter();
     await put(w, 'in/a.json', JSON.stringify(spansRequest(2)));
@@ -113,25 +102,54 @@ describe('cli --format and --assets-base', () => {
     expect(bad.stderr).toContain('assets/ or a relative path');
   });
 
-  test('--assets-base with the chunks format exits 2 and says it applies to --format local|site', async () => {
+  test('--format chunks and OTEL_HTML_FORMAT=chunks exit 2 and say chunks is no longer written', async () => {
     const w = createTestWriter();
     await put(w, 'in/a.json', JSON.stringify(spansRequest(2)));
-    const r = await run(w, ['convert', 'in/a.json', '-o', 'out', '--assets-base', '../assets/x/']);
-    expect(r.code).toBe(2);
-    expect(r.stderr).toContain('writer.assetsBase');
-    expect(r.stderr).toContain('--format local|site');
-    const viaEnv = await run(w, ['convert', 'in/a.json', '-o', 'out', '--assets-base', '../assets/x/'], {
-      OTEL_HTML_FORMAT: 'site',
-    });
-    expect(viaEnv.code).toBe(0);
+    const flag = await run(w, ['convert', 'in/a.json', '-o', 'out', '--format', 'chunks']);
+    expect(flag.code).toBe(2);
+    expect(flag.stderr).toContain('Allowed choices are local, site');
+    const viaEnv = await run(w, ['convert', 'in/a.json', '-o', 'out'], { OTEL_HTML_FORMAT: 'chunks' });
+    expect(viaEnv.code).toBe(2);
+    expect(viaEnv.stderr).toContain('format 3 (chunks) is no longer written');
+    expect(w.fs.snapshot().has('out/data/manifest.js')).toBe(false);
   });
 
-  test('an unknown --format exits 2 and names the three allowed values', async () => {
+  test('an unknown --format exits 2 and names the two allowed values', async () => {
     const w = createTestWriter();
     await put(w, 'in/a.json', JSON.stringify(spansRequest(2)));
     const r = await run(w, ['convert', 'in/a.json', '-o', 'out', '--format', 'parquet']);
     expect(r.code).toBe(2);
-    for (const v of ['chunks', 'local', 'site']) expect(r.stderr).toContain(v);
+    for (const v of ['local', 'site']) expect(r.stderr).toContain(v);
+    expect(r.stderr).not.toContain('chunks');
+  });
+
+  describe('the default format', () => {
+    // The unit-test setup turns the legacy chunk default on until Task 6.2; these tests want the real default.
+    beforeEach(() => {
+      legacyDefaultFormat.chunks = false;
+    });
+    afterEach(() => {
+      legacyDefaultFormat.chunks = true;
+    });
+
+    test('convert without --format writes a local format-4 report', async () => {
+      const w = createTestWriter();
+      await put(w, 'in/a.json', JSON.stringify(spansRequest(2)));
+      expect((await run(w, ['convert', 'in/a.json', '-o', 'out'])).code).toBe(0);
+      const files = [...w.fs.snapshot().keys()];
+      expect(files.some((k) => k.startsWith('out/data/partitions/'))).toBe(true);
+      expect(files.some((k) => k.endsWith('.parquet.js'))).toBe(true);
+      expect(files.some((k) => k.startsWith('out/data/chunks/'))).toBe(false);
+    });
+
+    test('--assets-base and merge --compact work without naming a format', async () => {
+      const w = createTestWriter();
+      await put(w, 'in/a.json', JSON.stringify(spansRequest(2)));
+      const ok = await run(w, ['convert', 'in/a.json', '-o', 'out', '--assets-base', '../assets/x/']);
+      expect(ok.code).toBe(0);
+      expect((await run(w, ['convert', 'in/a.json', '-o', 'a'])).code).toBe(0);
+      expect((await run(w, ['merge', 'a', '-o', 'm', '--compact'])).code).toBe(0);
+    });
   });
 
   test.each(['convert', 'merge', 'serve', 'run'])('%s takes both flags', async (command) => {
@@ -143,11 +161,11 @@ describe('cli --format and --assets-base', () => {
 });
 
 describe('cli config print with the format flags', () => {
-  test('--format site makes a file that sets writer.assetsBase valid, and it prints', async () => {
+  test('a file that sets writer.assetsBase prints with and without --format', async () => {
     const w = createTestWriter();
     await put(w, '/work/otel-html.yaml', 'writer:\n  assetsBase: ../assets/x/\n');
     const without = await run(w, ['config', 'print']);
-    expect(without.code).toBe(2);
+    expect(without.code).toBe(0);
     const r = await run(w, ['config', 'print', '--format', 'site']);
     expect(r.code).toBe(0);
     expect(r.stdout).toContain('format: site # from: flag');
@@ -320,12 +338,12 @@ describe('cli', () => {
 
   test('config print layers file < env < flag', async () => {
     const w = createTestWriter();
-    await put(w, '/work/otel-html.yaml', 'title: from file\nviewer:\n  eagerBudgetBytes: 1000\n');
+    await put(w, '/work/otel-html.yaml', 'title: from file\nviewer:\n  listCap: 1000\n');
     const fileOnly = await run(w, ['config', 'print']);
     expect(fileOnly.stdout).toContain('title: from file # from: file');
     const env = await run(w, ['config', 'print'], { OTEL_HTML_TITLE: 'from env' });
     expect(env.stdout).toContain('title: from env # from: env');
-    expect(env.stdout).toContain('eagerBudgetBytes: 1000 # from: file');
+    expect(env.stdout).toContain('listCap: 1000 # from: file');
     const flag = await run(w, ['config', 'print', '--title', 'f'], { OTEL_HTML_TITLE: 'from env' });
     expect(flag.stdout).toContain('title: f # from: flag');
   });

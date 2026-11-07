@@ -70,8 +70,7 @@ test('files(format) never reads an engine file the format does not load', async 
   const names = ['viewer.abc.js', ...engineAssetNames('site'), ...engineAssetNames('local')];
   const assets = bunEmbeddedViewerAssets({ embeddedFiles: names.map(blob) });
   expect((await assets.files()).map((f) => f.path)).toEqual(['assets/viewer.abc.js']);
-  expect((await assets.files('chunks')).map((f) => f.path)).toEqual(['assets/viewer.abc.js']);
-  expect(reads).toEqual(['viewer.abc.js', 'viewer.abc.js']);
+  expect(reads).toEqual(['viewer.abc.js']);
   reads.length = 0;
   const site = await assets.files('site');
   expect(site.map((f) => f.path)).toEqual([

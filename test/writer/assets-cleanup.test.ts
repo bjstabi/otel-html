@@ -47,9 +47,6 @@ describe('--replace leaves no dead files in the report assets', () => {
   test('site with its own assets to a shared site base', async () => {
     expect(await replaceOver({ format: 'site' }, { format: 'site', assetsBase: shared })).toEqual([]);
   });
-  test('local to chunks: the viewer files stay, the engine files go', async () => {
-    expect(await replaceOver({ format: 'local' }, { format: 'chunks' })).toEqual(viewer);
-  });
   test('local to site with its own assets: only the site engine files', async () => {
     expect(await replaceOver({ format: 'local' }, { format: 'site' })).toEqual(
       [...viewer, ...engineAssetNames('site')].sort(),

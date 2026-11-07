@@ -241,7 +241,8 @@ export async function openSession(deps: WriterDeps, options: SessionOptions): Pr
   const { fs } = deps;
 
   const { appending, preexisting } = await inspectFolder(fs, out, options.mode);
-  if (config.writer.format !== 'chunks') {
+  // Task 6.2 deletes the chunk session below: only `legacyDefaultFormat` (a unit-test seam) can still select it.
+  if ((config.writer.format as string) !== 'chunks') {
     // Lazy: the partition session pulls in parquet-wasm, which the chunk format and every other command never need.
     const { openPartitionSession } = await import('./partition-session.js');
     return openPartitionSession(deps, { out, config, mode: options.mode }, drop, { appending, preexisting });
@@ -901,7 +902,7 @@ class Session implements WriterSession {
     const { fs, viewerAssets } = this.#deps;
     await writeViewerAssets(fs, this.#out, viewerAssets);
     // A report replaced from format 4 may still hold its engine files.
-    if (!(await pruneOwnAssets(fs, this.#out, { format: 'chunks', sharedBase: false }))) {
+    if (!(await pruneOwnAssets(fs, this.#out, { format: undefined, sharedBase: false }))) {
       this.#deps.logger.debug('assets/ links out of the report; left alone', { out: this.#out });
     }
     await fs.writeTextAtomic(at(this.#out, 'index.html'), renderIndexHtml(viewerAssets.entry(), this.#title));
@@ -1068,7 +1069,8 @@ class Session implements WriterSession {
       traceShards: shards.map((s) => traceShardPath(s)),
       metricFiles: this.#series.listed(),
       config: {
-        viewer: { ...this.#config.viewer },
+        // Task 6.2 deletes with the chunk session: a format 1-3 manifest still requires the retired budget.
+        viewer: { eagerBudgetBytes: 75_000_000, ...this.#config.viewer },
         dashboards: this.#config.dashboards,
         views: this.#config.views,
       },

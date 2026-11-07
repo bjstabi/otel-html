@@ -192,16 +192,6 @@ describe('Report', () => {
     expect(e.message).toContain('cannot append');
   });
 
-  test('assetsBase without a local or site format is a config error', async () => {
-    const w = createTestWriter();
-    await expect(createReportWith({ out: 'r', assetsBase: '../assets/a/' }, w.deps)).rejects.toThrow(
-      /writer\.assetsBase.*--format local\|site/,
-    );
-    await expect(
-      createReportWith({ out: 'r', config: { writer: { assetsBase: '../assets/a/' } } }, w.deps),
-    ).rejects.toThrow(/writer\.assetsBase/);
-  });
-
   test('format and assetsBase options map into writer config and win over config.writer', async () => {
     const w = createTestWriter();
     const report = await createReportWith(

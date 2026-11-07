@@ -19,3 +19,11 @@ export const READABLE_FORMAT_VERSIONS = [1, 2, 3, 4] as const;
 
 /** The global every data file registers into: `__OH__.push("<key>", <payload>);`. */
 export const REGISTRATION_GLOBAL = '__OH__';
+
+/** The D12 message: the viewer and `upgrade` read format 4 only; `merge` converts an older report. */
+export const oldFormatMessage = (formatVersion: number): string =>
+  `This report is format ${formatVersion}; this viewer reads format 4. \`otel-html merge <report> --out <new>\` converts it.`;
+
+/** What `writer.format: chunks` (or `--format chunks`) now fails with. */
+export const CHUNKS_GONE =
+  'format 3 (chunks) is no longer written; use local or site (otel-html merge converts an older report)';

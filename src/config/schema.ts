@@ -8,6 +8,7 @@ import {
   ViewListSchema,
 } from '../dashboards/schema.js';
 import { ASSETS_BASE_RE, DEFAULT_ASSETS_BASE } from '../format/paths.js';
+import { CHUNKS_GONE } from '../format/version.js';
 
 // Explicit input/output types keep `isolatedDeclarations` satisfied (Zod's inferred
 // builder types cannot be emitted per-file). The schemas below are the source of truth;
@@ -26,8 +27,15 @@ interface DropIn {
 /** The default `writer.localWarnBytes`: the Parquet size past which a `local` report warns. */
 export const DEFAULT_LOCAL_WARN_BYTES = 256_000_000;
 
+/**
+ * Task 6.2 deletes this with the chunk session. A unit-test seam (`test-support/legacy-chunks.ts`): while on, the
+ * default `writer.format` is the retired `chunks`, so the chunk-writer tests keep running until 6.2 deletes or ports
+ * them. Config, env and flags still reject `chunks`; nothing in `src/` sets this.
+ */
+export const legacyDefaultFormat: { chunks: boolean } = { chunks: false };
+
 /** The report formats `writer.format` names. */
-export type ReportFormat = 'chunks' | 'local' | 'site';
+export type ReportFormat = 'local' | 'site';
 
 interface WriterOut {
   format: ReportFormat;
@@ -84,14 +92,12 @@ interface ReceiverIn {
   inflightBudgetBytes?: number | undefined;
 }
 interface ViewerOut {
-  eagerBudgetBytes: number;
   listCap: number;
   theme: 'system' | 'light' | 'dark';
   defaultDashboard: string;
   home: 'traces' | 'logs' | 'metrics' | 'dashboards';
 }
 interface ViewerIn {
-  eagerBudgetBytes?: number | undefined;
   listCap?: number | undefined;
   theme?: 'system' | 'light' | 'dark' | undefined;
   defaultDashboard?: string | undefined;
@@ -133,7 +139,9 @@ const DropSchema = z
 
 const WriterSchema = z
   .strictObject({
-    format: z.enum(['chunks', 'local', 'site']).default('chunks'),
+    format: z
+      .enum(['local', 'site'], { error: (i) => (i.input === 'chunks' ? CHUNKS_GONE : undefined) })
+      .default(() => (legacyDefaultFormat.chunks ? ('chunks' as ReportFormat) : 'local')),
     rowGroupRows: z.number().int().min(50_000).max(100_000).default(50_000),
     statisticsKeys: z.array(z.string()).default([]),
     localWarnBytes: posInt.default(DEFAULT_LOCAL_WARN_BYTES),
@@ -167,7 +175,6 @@ const ReceiverSchema = z
 
 const ViewerSchema = z
   .strictObject({
-    eagerBudgetBytes: posInt.default(75_000_000),
     listCap: posInt.default(10_000),
     theme: z.enum(['system', 'light', 'dark']).default('system'),
     defaultDashboard: z.string().default('fusion'),
@@ -188,21 +195,6 @@ export const ConfigSchema: z.ZodType<ResolvedConfig, ConfigInput> = z
     views: ViewListSchema.default([]),
   })
   .superRefine((c, ctx) => {
-    if (c.writer.format === 'chunks' && c.writer.assetsBase !== DEFAULT_ASSETS_BASE) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['writer', 'assetsBase'],
-        message: `applies to writer.format local or site (--format local|site), not chunks; use ${DEFAULT_ASSETS_BASE} or set the format`,
-      });
-    }
-    if (c.writer.format === 'chunks' && c.writer.compactOnMerge) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['writer', 'compactOnMerge'],
-        message:
-          'applies to writer.format local or site (--format local|site), not chunks; set the format, or drop --compact (writer.compactOnMerge)',
-      });
-    }
     const id = c.viewer.defaultDashboard;
     if (id !== 'fusion' && !c.dashboards.some((d) => d.dashboard.id === id)) {
       ctx.addIssue({

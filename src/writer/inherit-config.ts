@@ -7,7 +7,12 @@ import type { Manifest } from '../format/manifest.js';
  * them. A resolved config cannot tell a default from the same value written out, so `viewer.home: traces` and
  * `viewer.defaultDashboard: fusion` count as unset here: they never override an earlier report's other choice.
  */
-export function inheritDashboards(config: ResolvedConfig, prior: Manifest['config']): ResolvedConfig {
+export function inheritDashboards(
+  config: ResolvedConfig,
+  prior: Pick<Manifest['config'], 'dashboards' | 'views'> & {
+    viewer: Pick<ResolvedConfig['viewer'], 'defaultDashboard' | 'home'>;
+  },
+): ResolvedConfig {
   const keepDashboards = config.dashboards.length === 0;
   const dashboards = keepDashboards ? prior.dashboards : config.dashboards;
   const views = config.views.length === 0 ? prior.views : config.views;

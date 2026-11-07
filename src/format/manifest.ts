@@ -53,7 +53,11 @@ export interface Manifest {
   traceShards: string[];
   /** Series files under `data/metrics/` (series, segments, levels, exemplars); absent before M3. */
   metricFiles: string[];
-  config: { viewer: ResolvedConfig['viewer']; dashboards: ResolvedDashboard[]; views: View[] };
+  config: {
+    viewer: ResolvedConfig['viewer'] & { eagerBudgetBytes: number };
+    dashboards: ResolvedDashboard[];
+    views: View[];
+  };
 }
 
 const nonNegInt = z.number().int().nonnegative();
@@ -65,20 +69,33 @@ const CHUNK_PATH = /^data\/chunks\/(spans|logs|metrics)\/[0-9]{6,}\.js$/;
 const ROLLUP_PATH = /^data\/rollups\/[a-z][a-z0-9-]*\.js$/;
 const TRACE_SHARD_PATH = /^data\/traces\/[0-9a-f]{2}\.js$/;
 
+const viewerShape = {
+  listCap: z.number().int().positive(),
+  theme: z.enum(['system', 'light', 'dark']),
+  defaultDashboard: z.string().default('fusion'),
+  home: z.enum(['traces', 'logs', 'metrics', 'dashboards']).default('traces'),
+};
+
+/** The v1 to v3 config: its viewer still carries `eagerBudgetBytes`. */
 const ConfigSchema = z.strictObject({
-  viewer: z.strictObject({
-    eagerBudgetBytes: z.number().int().positive(),
-    listCap: z.number().int().positive(),
-    theme: z.enum(['system', 'light', 'dark']),
-    defaultDashboard: z.string().default('fusion'),
-    home: z.enum(['traces', 'logs', 'metrics', 'dashboards']).default('traces'),
-  }),
+  viewer: z.strictObject({ eagerBudgetBytes: z.number().int().positive(), ...viewerShape }),
   dashboards: z.array(z.strictObject({ source: z.string(), dashboard: DashboardShapeSchema })).default([]),
   // Shape only: a report stored by an older build may hold a query this build's compiler rejects; the widget shows that error.
   views: ViewListShapeSchema.default([]),
 });
 
-function refineConfig(config: Manifest['config'], ctx: z.RefinementCtx, at: PropertyKey[]): void {
+/** The v4 config: no `eagerBudgetBytes` (the format-4 viewer has no eager mode). */
+const ConfigSchemaV4 = z.strictObject({
+  viewer: z.strictObject(viewerShape),
+  dashboards: ConfigSchema.shape.dashboards,
+  views: ConfigSchema.shape.views,
+});
+
+function refineConfig(
+  config: { viewer: { defaultDashboard: string }; dashboards: ResolvedDashboard[] },
+  ctx: z.RefinementCtx,
+  at: PropertyKey[],
+): void {
   listIssues(
     config.dashboards.map((d) => d.dashboard.id),
     RESERVED_DASHBOARD_IDS,
@@ -165,7 +182,7 @@ export interface ManifestV4 {
   partitions: PartitionEntry[];
   statisticsKeys: Record<Table, string[]>;
   engine: { version: string; format: 'local' | 'site'; assetsBase: string };
-  config: Manifest['config'];
+  config: { viewer: ResolvedConfig['viewer']; dashboards: ResolvedDashboard[]; views: View[] };
 }
 
 export type AnyManifest = Manifest | ManifestV4;
@@ -228,7 +245,7 @@ const ManifestV4Schema: z.ZodType<ManifestV4> = z
       format: z.enum(['local', 'site']),
       assetsBase: z.string().regex(ASSETS_BASE_RE, 'assets/ or a relative path like ../../assets/0.3.0/'),
     }),
-    config: ConfigSchema,
+    config: ConfigSchemaV4,
   })
   .superRefine((m, ctx) => {
     refineConfig(m.config, ctx, []);

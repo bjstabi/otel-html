@@ -1,4 +1,5 @@
 import { type AnyManifest, isV4, type ManifestV4, parseAnyManifest } from '../../format/manifest.js';
+import { oldFormatMessage } from '../../format/version.js';
 import { OtelHtmlError } from '../../model/errors.js';
 import { traced } from '../telemetry.js';
 import type { DataSource } from './data-source.js';
@@ -54,7 +55,7 @@ function partitionsDone(counts: readonly number[], files: number): number {
 export function requireFormat4(manifest: AnyManifest): ManifestV4 {
   if (isV4(manifest)) return manifest;
   throw new OtelHtmlError('invalid-report', {
-    message: `This report is format ${manifest.formatVersion}; this viewer reads format 4. \`otel-html merge <report> --out <new>\` converts it.`,
+    message: oldFormatMessage(manifest.formatVersion),
   });
 }
 

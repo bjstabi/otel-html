@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs';
-import { describe, expect, test } from 'vitest';
+import { afterEach, beforeEach, describe, expect, onTestFinished, test } from 'vitest';
 import { writeJsonSchema } from '../../src/config/json-schema.js';
 import { formatConfig, resolveConfig } from '../../src/config/resolve.js';
+import { legacyDefaultFormat } from '../../src/config/schema.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 
 function failure(fn: () => unknown): OtelHtmlError {
@@ -17,7 +18,7 @@ function failure(fn: () => unknown): OtelHtmlError {
 describe('resolveConfig', () => {
   test('defaults', () => {
     const { config, sources } = resolveConfig({ env: {} });
-    expect(config.viewer.eagerBudgetBytes).toBe(75_000_000);
+    expect(config.viewer).not.toHaveProperty('eagerBudgetBytes');
     expect(config.writer.chunkTargetBytes).toBe(4_000_000);
     expect(config.writer.drop.traces.span).toEqual([]);
     expect(sources.get('viewer.theme')).toBe('default');
@@ -34,7 +35,6 @@ describe('resolveConfig', () => {
 
   test('format-4 writer keys: defaults, bounds and the env binding', () => {
     const { config } = resolveConfig({ env: {} });
-    expect(config.writer.format).toBe('chunks');
     expect(config.writer.rowGroupRows).toBe(50_000);
     expect(config.writer.statisticsKeys).toEqual([]);
     expect(config.writer.localWarnBytes).toBe(256_000_000);
@@ -44,21 +44,13 @@ describe('resolveConfig', () => {
     expect(bad({ rowGroupRows: 10 }).message).toContain('writer.rowGroupRows');
     expect(bad({ rowGroupRows: 100_001 }).message).toContain('writer.rowGroupRows');
     expect(bad({ format: 'site', assetsBase: '/x' }).message).toContain('assets/ or a relative path');
-    expect(bad({ compactOnMerge: true }).message).toContain('writer.compactOnMerge');
-    expect(bad({ format: 'chunks', compactOnMerge: true }).message).toContain('--format local|site');
-    expect(bad({ format: 'chunks', compactOnMerge: true }).message).toContain(
-      '--compact (writer.compactOnMerge)',
-    );
     expect(
       resolveConfig({ file: { writer: { format: 'site', compactOnMerge: true } }, env: {} }).config.writer
         .compactOnMerge,
     ).toBe(true);
-    expect(() =>
-      resolveConfig({ file: { writer: { compactOnMerge: true } }, env: { OTEL_HTML_FORMAT: 'chunks' } }),
-    ).toThrow('writer.compactOnMerge');
     const f = bad({ format: 'parquet' }).message;
     expect(f).toContain('writer.format');
-    for (const v of ['chunks', 'local', 'site']) expect(f).toContain(v);
+    for (const v of ['local', 'site']) expect(f).toContain(v);
     expect(resolveConfig({ env: { OTEL_HTML_FORMAT: 'site' } }).config.writer.format).toBe('site');
     expect(
       resolveConfig({
@@ -66,9 +58,10 @@ describe('resolveConfig', () => {
         env: { OTEL_HTML_FORMAT: 'site' },
       }).config.writer.assetsBase,
     ).toBe('../../assets/0.3.0/');
-    expect(() => resolveConfig({ file: { writer: { assetsBase: '../../assets/0.3.0/' } }, env: {} })).toThrow(
-      /--format local\|site/,
-    );
+    expect(
+      resolveConfig({ file: { writer: { assetsBase: '../../assets/0.3.0/' } }, env: {} }).config.writer
+        .assetsBase,
+    ).toBe('../../assets/0.3.0/');
   });
 
   test('flag > env > file > default', () => {
@@ -89,12 +82,12 @@ describe('resolveConfig', () => {
   test('env overrides file for drop arrays only when set; file drop wins over default', () => {
     const r = resolveConfig({
       file: { writer: { drop: { traces: { span: ['name == "x"'] } } } },
-      env: { OTEL_HTML_EAGER_BUDGET_BYTES: '5' },
+      env: { OTEL_HTML_TITLE: 'from env' },
     });
     expect(r.config.writer.drop.traces.span).toEqual(['name == "x"']);
     expect(r.sources.get('writer.drop.traces.span')).toBe('file');
-    expect(r.config.viewer.eagerBudgetBytes).toBe(5);
-    expect(r.sources.get('viewer.eagerBudgetBytes')).toBe('env');
+    expect(r.config.title).toBe('from env');
+    expect(r.sources.get('title')).toBe('env');
   });
 
   test('flag drop beats file drop', () => {
@@ -130,17 +123,9 @@ describe('resolveConfig', () => {
   });
 
   test('a layer setting a path through a non-object reports the non-object (#176)', () => {
-    const e = failure(() =>
-      resolveConfig({ file: { viewer: 5 }, env: { OTEL_HTML_EAGER_BUDGET_BYTES: '7' } }),
-    );
+    const e = failure(() => resolveConfig({ file: { writer: 5 }, env: { OTEL_HTML_FORMAT: 'site' } }));
     expect(e.code).toBe('invalid-config');
-    expect(e.message).toContain('viewer: expected object, got 5');
-  });
-
-  test('bad env int names the variable', () => {
-    const e = failure(() => resolveConfig({ env: { OTEL_HTML_EAGER_BUDGET_BYTES: 'abc' } }));
-    expect(e.code).toBe('invalid-config');
-    expect(e.message).toContain('OTEL_HTML_EAGER_BUDGET_BYTES');
+    expect(e.message).toContain('writer: expected object, got 5');
   });
 
   test('invalid value reports path', () => {
@@ -150,7 +135,7 @@ describe('resolveConfig', () => {
 
   test('formatConfig annotates sources', () => {
     const out = formatConfig(resolveConfig({ file: { title: 'a' }, env: {} }));
-    expect(out).toContain('eagerBudgetBytes: 75000000 # from: default');
+    expect(out).toContain('listCap: 10000 # from: default');
     expect(out).toContain('title: a # from: file');
     expect(out).toContain('# from: default');
   });
@@ -158,6 +143,11 @@ describe('resolveConfig', () => {
 
 describe('JSON Schema', () => {
   test('committed schema is fresh', () => {
+    // The unit-test setup turns the legacy chunk default on until Task 6.2; the schema documents the real one.
+    legacyDefaultFormat.chunks = false;
+    onTestFinished(() => {
+      legacyDefaultFormat.chunks = true;
+    });
     const committed = readFileSync(new URL('../../schema/otel-html.schema.json', import.meta.url), 'utf8');
     expect(committed).toBe(writeJsonSchema());
   });
@@ -175,5 +165,54 @@ describe('prototype pollution', () => {
       expect(e.message).toContain('__proto__');
       expect(polluted()).toBe(false);
     }
+  });
+});
+
+describe('writer.format after the chunk format', () => {
+  // The unit-test setup turns the legacy chunk default on until Task 6.2; these tests want the real default.
+  beforeEach(() => {
+    legacyDefaultFormat.chunks = false;
+  });
+  afterEach(() => {
+    legacyDefaultFormat.chunks = true;
+  });
+
+  const CHUNKS_MESSAGE =
+    'format 3 (chunks) is no longer written; use local or site (otel-html merge converts an older report)';
+
+  test('defaults to local', () => {
+    const { config, sources } = resolveConfig({ env: {} });
+    expect(config.writer.format).toBe('local');
+    expect(sources.get('writer.format')).toBe('default');
+  });
+
+  test('chunks fails invalid-config with the retirement message, from file, env and flag', () => {
+    for (const input of [
+      { file: { writer: { format: 'chunks' } }, env: {} },
+      { env: { OTEL_HTML_FORMAT: 'chunks' } },
+      { flags: { writer: { format: 'chunks' } } as never, env: {} },
+    ]) {
+      const e = failure(() => resolveConfig(input));
+      expect(e.code).toBe('invalid-config');
+      expect(e.message).toContain(CHUNKS_MESSAGE);
+    }
+  });
+
+  test('assetsBase and compactOnMerge need no explicit format any more', () => {
+    const { config } = resolveConfig({
+      file: { writer: { assetsBase: '../../assets/0.3.0/', compactOnMerge: true } },
+      env: {},
+    });
+    expect(config.writer.assetsBase).toBe('../../assets/0.3.0/');
+    expect(config.writer.compactOnMerge).toBe(true);
+  });
+
+  test('viewer.eagerBudgetBytes is an unknown key, and OTEL_HTML_EAGER_BUDGET_BYTES is not read', () => {
+    const e = failure(() => resolveConfig({ file: { viewer: { eagerBudgetBytes: 5 } }, env: {} }));
+    expect(e.code).toBe('invalid-config');
+    expect(e.message).toContain('viewer.eagerBudgetBytes: unrecognized key');
+    expect(resolveConfig({ env: { OTEL_HTML_EAGER_BUDGET_BYTES: '5' } }).config.viewer).not.toHaveProperty(
+      'eagerBudgetBytes',
+    );
   });
 });
