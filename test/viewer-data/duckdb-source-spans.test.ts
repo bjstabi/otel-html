@@ -157,6 +157,14 @@ const spanRows = (rows: readonly (SpanRow | TraceRow)[]): SpanRow[] => rows as S
 const traceRows = (rows: readonly (SpanRow | TraceRow)[]): TraceRow[] => rows as TraceRow[];
 
 describe('querySpans', () => {
+  test('a negative or fractional limit is a usage error', async () => {
+    for (const limit of [-1, 1.5, Number.NaN]) {
+      await expect(ds.querySpans(query({ limit }))).rejects.toMatchObject({
+        code: 'usage',
+      });
+    }
+  });
+
   test('an error condition returns exactly the error spans, facets over them, exact buckets and no residual', async () => {
     const r = await ds.querySpans(query({ condition: 'status.code == 2' }));
     expect(spanRows(r.rows).map((x) => x.span.name)).toEqual(['COMMIT', 'POST /orders']);

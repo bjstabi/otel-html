@@ -12,6 +12,7 @@ import type { BucketSpec } from '../../query/sql/time.js';
 import { FacetCounts } from '../../rollups/facets.js';
 import type { SpanStatusKey } from '../../rollups/span-rollups.js';
 import { TimeBuckets } from '../../rollups/time-buckets.js';
+import { gridOf, MAX_BUCKETS, slot, zeros } from './grid.js';
 import type { FacetCaps } from './query-common.js';
 import type {
   DurationBin,
@@ -26,7 +27,6 @@ import type {
   TraceRow,
 } from './results.js';
 
-export const MAX_BUCKETS = 4096;
 const STATUS_KEYS: readonly SpanStatusKey[] = ['ok', 'error', 'unset'];
 
 const bad = (path: string, expected: string, actual: unknown): OtelHtmlError =>
@@ -240,26 +240,6 @@ function kindOf(v: unknown): 'string' | 'int' | 'double' | 'bool' | 'mixed' {
   return v === 'int' || v === 'double' || v === 'bool' || v === 'mixed' ? v : 'string';
 }
 
-export interface Grid {
-  start: number;
-  length: number;
-}
-
-/** The dense grid from the first to the last occupied bucket of `buckets` (relative ns, aligned to `width`). */
-export function gridOf(buckets: readonly number[], width: number): Grid | null {
-  if (buckets.length === 0) return null;
-  const lo = Math.min(...buckets);
-  const hi = Math.max(...buckets);
-  return { start: lo, length: (hi - lo) / width + 1 };
-}
-
-export function slot(bucket: number, grid: Grid, width: number): number {
-  const i = (bucket - grid.start) / width;
-  if (!Number.isInteger(i) || i < 0 || i >= grid.length) throw bad('bucket', 'a bucket on the grid', bucket);
-  return i;
-}
-
-export const zeros = (n: number): number[] => new Array<number>(n).fill(0);
 const nulls = (n: number): (number | null)[] => new Array<number | null>(n).fill(null);
 
 /** The rows of `timelineQuery` as status buckets (ok, error, unset) and the RED series on the same grid. */

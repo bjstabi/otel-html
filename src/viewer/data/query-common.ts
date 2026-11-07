@@ -1,4 +1,4 @@
-/** The caps a filtered set's facets are built with: format 4 uses `DEFAULT_FACET_CAPS` (the manifest records no writer caps and facets are computed at view time); the old chunk readers take the caps the writer serialized. */
+/** The caps a filtered set's facets are built with: format 4 uses `DEFAULT_FACET_CAPS` (the manifest records no writer caps and facets are computed at view time). */
 export interface FacetCaps {
   readonly facetValueCap: number;
   readonly facetKeyCap: number;

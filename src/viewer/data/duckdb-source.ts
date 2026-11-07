@@ -206,6 +206,17 @@ const noSuchLog = (ref: LogRef): OtelHtmlError =>
   new OtelHtmlError('usage', { path: `log ${ref}`, expected: 'a log of this report', actual: 'no such log' });
 
 /** The format-4 data source over a query engine (D19): no Mosaic type appears here. `close()` is `engine.close()`. */
+/** A row limit is a non-negative integer. */
+function checkLimit(limit: number): void {
+  if (!Number.isInteger(limit) || limit < 0) {
+    throw new OtelHtmlError('usage', {
+      path: 'query.limit',
+      expected: 'a non-negative integer',
+      actual: String(limit),
+    });
+  }
+}
+
 export function createDuckDbDataSource(opts: {
   engine: QueryEngine;
   manifest: ManifestV4;
@@ -272,6 +283,7 @@ export function createDuckDbDataSource(opts: {
 
   async function querySpans(q: SpanQuery, signal?: AbortSignal): Promise<SpanQueryResult> {
     throwIfAborted(signal);
+    checkLimit(q.limit);
     const { filter, residual } = buildFilter({
       manifest,
       table: 'spans',
@@ -435,6 +447,7 @@ export function createDuckDbDataSource(opts: {
 
   async function queryLogs(q: LogQuery, signal?: AbortSignal): Promise<LogQueryResult> {
     throwIfAborted(signal);
+    checkLimit(q.limit);
     if ((q.mode as string) === 'patterns') {
       throw new OtelHtmlError('usage', {
         path: 'query.mode',
@@ -498,11 +511,7 @@ export function createDuckDbDataSource(opts: {
               const total = exhausted ? rows.length : Math.max(candidates, rows.length);
               Object.assign(result, { rows: rows.map((e) => e.row), total, matched: total });
             } else if (logSort !== null) {
-              const { rows, total } = logRows(
-                await engine.query(logRowsQuery(f, logSort, q.limit), signal),
-                epoch,
-                manifest,
-              );
+              const { rows, total } = logRows(await engine.query(logRowsQuery(f, logSort, q.limit), signal));
               Object.assign(result, { rows, total, matched: total });
             }
           })(),
@@ -592,7 +601,7 @@ export function createDuckDbDataSource(opts: {
             return path === undefined ? [] : [path];
           });
     if (files?.length === 0) return [];
-    return logRows(await engine.query(traceLogsQuery(traceId, files, epoch), signal), epoch, manifest).rows;
+    return logRows(await engine.query(traceLogsQuery(traceId, files, epoch), signal)).rows;
   }
 
   async function surroundingLogs(ref: LogRef, n: number): Promise<SurroundingLogs> {
