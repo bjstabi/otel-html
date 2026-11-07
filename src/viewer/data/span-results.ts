@@ -26,7 +26,7 @@ import type {
   TraceRow,
 } from './results.js';
 
-const MAX_BUCKETS = 4096;
+export const MAX_BUCKETS = 4096;
 const STATUS_KEYS: readonly SpanStatusKey[] = ['ok', 'error', 'unset'];
 
 const bad = (path: string, expected: string, actual: unknown): OtelHtmlError =>
@@ -232,26 +232,26 @@ function kindOf(v: unknown): 'string' | 'int' | 'double' | 'bool' | 'mixed' {
   return v === 'int' || v === 'double' || v === 'bool' || v === 'mixed' ? v : 'string';
 }
 
-interface Grid {
+export interface Grid {
   start: number;
   length: number;
 }
 
 /** The dense grid from the first to the last occupied bucket of `buckets` (relative ns, aligned to `width`). */
-function gridOf(buckets: readonly number[], width: number): Grid | null {
+export function gridOf(buckets: readonly number[], width: number): Grid | null {
   if (buckets.length === 0) return null;
   const lo = Math.min(...buckets);
   const hi = Math.max(...buckets);
   return { start: lo, length: (hi - lo) / width + 1 };
 }
 
-function slot(bucket: number, grid: Grid, width: number): number {
+export function slot(bucket: number, grid: Grid, width: number): number {
   const i = (bucket - grid.start) / width;
   if (!Number.isInteger(i) || i < 0 || i >= grid.length) throw bad('bucket', 'a bucket on the grid', bucket);
   return i;
 }
 
-const zeros = (n: number): number[] => new Array<number>(n).fill(0);
+export const zeros = (n: number): number[] => new Array<number>(n).fill(0);
 const nulls = (n: number): (number | null)[] => new Array<number | null>(n).fill(null);
 
 /** The rows of `timelineQuery` as status buckets (ok, error, unset) and the RED series on the same grid. */

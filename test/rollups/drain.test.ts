@@ -6,6 +6,7 @@ import {
   Drain,
   type DrainCluster,
   template,
+  templateStringToRegex,
   templateToRegex,
   tokenize,
 } from '../../src/rollups/drain.js';
@@ -88,6 +89,21 @@ describe('Drain', () => {
     expect(() => new RegExp(src, 'u')).not.toThrow();
     expect(new RegExp(src, 'u').test('GET retry-after /api/v failed 3')).toBe(true);
     expect(() => compileCondition(`IsMatch(body, ${JSON.stringify(src)})`, 'log_record')).not.toThrow();
+  });
+
+  it('templateStringToRegex agrees with templateToRegex on the printed template', () => {
+    const bodies = [
+      'Receive from node 4',
+      'GET /a?x=1 (ok) 12',
+      'retry-after /api/v failed 1',
+      '',
+      'a|b (c) [d] ^e$ f.g',
+      Array.from({ length: 100 }, (_, i) => `w${i}`).join(' '),
+    ];
+    for (const body of bodies) {
+      const c = clusterOf(body);
+      expect(templateStringToRegex(template(c))).toBe(templateToRegex(c));
+    }
   });
 
   it('maxClusters caps clusters and counts the rest', () => {

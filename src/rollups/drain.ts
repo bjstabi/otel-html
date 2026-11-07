@@ -75,6 +75,19 @@ export function templateToRegex(c: DrainCluster): string {
   return c.truncated ? `^${body}` : `^${body}$`;
 }
 
+const TRUNCATION_MARK = ' …';
+
+/**
+ * `templateToRegex` for a template as `template(c)` prints it (and as the `patterns` table stores it): tokens joined by one
+ * space, ` …` after them when the body was cut. A template whose last token is itself `…` reads as truncated.
+ */
+export function templateStringToRegex(text: string): string {
+  const truncated = text.endsWith(TRUNCATION_MARK);
+  const tokens = (truncated ? text.slice(0, -TRUNCATION_MARK.length) : text).split(' ');
+  const body = tokens.map((t) => (t === WILDCARD ? '\\S+' : escapeRegex(t))).join('\\s+');
+  return truncated ? `^${body}` : `^${body}$`;
+}
+
 const nonNegInt: z.ZodNumber = z.number().int().nonnegative();
 
 const DrainClusterSchema: z.ZodType<DrainCluster> = z.strictObject({

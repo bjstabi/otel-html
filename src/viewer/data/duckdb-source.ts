@@ -1,16 +1,37 @@
-import { and, column, type ExprNode, sql } from '@uwdata/mosaic-sql';
+import { and, column, type ExprNode, Query, sql } from '@uwdata/mosaic-sql';
 import type { ManifestV4 } from '../../format/manifest.js';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { TraceId, UnixNanos } from '../../model/ids.js';
 import type { ResourceRecord, ResourceRef, ScopeRecord, ScopeRef } from '../../model/records.js';
 import { type CompiledCondition, compileCondition } from '../../ottl/compile.js';
-import { attributeFacetsQuery, CORE_SPAN_FACETS, coreFacetsQuery } from '../../query/sql/facets.js';
-import { buildFilter, type SqlFilter } from '../../query/sql/filter.js';
+import {
+  attributeFacetsQuery,
+  CORE_LOG_FACETS,
+  CORE_SPAN_FACETS,
+  type CoreFacet,
+  coreFacetsQuery,
+} from '../../query/sql/facets.js';
+import { buildFilter, type SqlFilter, whereOf } from '../../query/sql/filter.js';
+import {
+  type LogSort,
+  type LogTraceSort,
+  logByRefQuery,
+  logRowsQuery,
+  logTimelineQuery,
+  logTracesQuery,
+  type PatternSort,
+  patternsQuery,
+  pointsTimelineQuery,
+  surroundingQueries,
+  traceLogsQuery,
+} from '../../query/sql/logs.js';
+import { absWindow } from '../../query/sql/prune.js';
 import {
   durationBinsQuery,
   durationSummaryQuery,
   groupStatsQuery,
   percentileQuery,
+  resourceValuesQuery,
   type SpanSort,
   serviceBucketsQuery,
   servicesQuery,
@@ -23,21 +44,40 @@ import {
   traceSummaryQuery,
 } from '../../query/sql/spans.js';
 import { bucketSpec } from '../../query/sql/time.js';
+import { partitionOfFilename } from '../../query/sql/views.js';
 import { FacetCounts } from '../../rollups/facets.js';
 import { TimeBuckets } from '../../rollups/time-buckets.js';
+import { LOG_SEVERITY_KEYS } from '../../semconv/severity.js';
 import { durationAxis } from '../traces/views.js';
 import type { TraceDetail } from './data-source.js';
-import { DEFAULT_FACET_CAPS, throwIfAborted } from './query-common.js';
+import { checkSurroundingCount, type LogRef, type LogRow } from './log-query.js';
+import {
+  type LogRowEntry,
+  logEntries,
+  logRows,
+  logTimeline,
+  logTraceRows,
+  patternRows,
+  pointBuckets,
+  resourceValueResult,
+} from './log-results.js';
+import { DEFAULT_FACET_CAPS, type FacetCaps, throwIfAborted } from './query-common.js';
 import type { QueryEngine } from './query-engine.js';
 import { dropResidualTable, residualIdTable, residualRows } from './residual.js';
 import type {
   DataSource,
+  LogNeed,
+  LogQuery,
+  LogQueryResult,
+  PatternQuery,
+  PatternsResult,
   RowTables,
   ServicesResult,
   SpanNeed,
   SpanQuery,
   SpanQueryResult,
   SpanRow,
+  SurroundingLogs,
 } from './results.js';
 import type { TimeWindow } from './span-query.js';
 import {
@@ -83,6 +123,11 @@ const TRACE_SORTS: readonly TraceSort['column'][] = [
 /** The needs that read the whole filtered set (a residual condition narrows them through its id table). */
 const AGGREGATE_NEEDS: readonly SpanNeed[] = ['facets', 'timeline', 'durations', 'groups'];
 const CORE_KEYS: ReadonlySet<string> = new Set(CORE_SPAN_FACETS.map((c) => c.key));
+const LOG_SORTS: readonly LogSort['column'][] = ['time', 'severity', 'service'];
+const LOG_TRACE_SORTS: readonly LogTraceSort['column'][] = ['first', 'logs', 'severity'];
+const PATTERN_SORTS: readonly PatternSort['column'][] = ['count', 'first', 'last'];
+const LOG_AGGREGATE_NEEDS: readonly LogNeed[] = ['facets', 'timeline'];
+const CORE_LOG_KEYS: ReadonlySet<string> = new Set(CORE_LOG_FACETS.map((c) => c.key));
 
 function sortOf<C extends string>(
   allowed: readonly C[],
@@ -131,16 +176,46 @@ function residualTest(compiled: CompiledCondition<'span'>, epoch: bigint): (e: S
     });
 }
 
+function emptyLogResult(caps: FacetCaps, residual: boolean, mode: LogQuery['mode']): LogQueryResult {
+  const base = {
+    total: 0,
+    matched: 0,
+    facets: new FacetCounts(caps.facetValueCap, caps.facetKeyCap, [...CORE_LOG_KEYS]),
+    buckets: new TimeBuckets(LOG_SEVERITY_KEYS),
+    residual,
+  };
+  return mode === 'traces' ? { ...base, mode, rows: [] } : { ...base, mode: 'logs', rows: [] };
+}
+
+/** The residual terms (D5) as a test on a decoded log row. */
+function logResidualTest(
+  compiled: CompiledCondition<'log_record'>,
+  epoch: bigint,
+): (e: LogRowEntry) => boolean {
+  return (e) =>
+    compiled.test({
+      log: e.row.log,
+      resource: e.row.resource,
+      scope: e.row.scope,
+      epoch: epoch as UnixNanos,
+    });
+}
+
+const noSuchLog = (ref: LogRef): OtelHtmlError =>
+  new OtelHtmlError('usage', { path: `log ${ref}`, expected: 'a log of this report', actual: 'no such log' });
+
 /** The format-4 data source over a query engine (D19): no Mosaic type appears here. `close()` is `engine.close()`. */
 export function createDuckDbDataSource(opts: {
   engine: QueryEngine;
   manifest: ManifestV4;
   /** Where a failed cleanup of the D5 temp table is reported; silent without one. */
   logger?: Pick<Console, 'warn'>;
+  /** The facet and resource-value caps; the writer's defaults without one. */
+  caps?: FacetCaps;
 }): DataSource {
   const { engine, manifest } = opts;
   const epoch = BigInt(manifest.epochUnixNano);
-  const caps = DEFAULT_FACET_CAPS;
+  const caps = opts.caps ?? DEFAULT_FACET_CAPS;
   const range =
     manifest.range === null
       ? null
@@ -149,21 +224,20 @@ export function createDuckDbDataSource(opts: {
           end: toNumber(BigInt(manifest.range.end) - epoch, 'range.end'),
         };
 
-  /** Narrows `filter` to the rows the residual terms accept, through a temp table of their ids (D5). */
-  async function withResidualIds<T>(
+  /**
+   * Narrows `filter` to the rows the residual terms accept, through a temp table of their ids (D5). `candidates` reads
+   * up to the given number of rows of the filtered set.
+   */
+  async function withIds<E extends { filename: string; fileRow: number }, T>(
     filter: SqlFilter,
-    test: (e: SpanEntry) => boolean,
-    signal: AbortSignal | undefined,
+    candidates: (limit: number) => Promise<E[]>,
+    test: (e: E) => boolean,
     run: (f: SqlFilter) => Promise<T>,
   ): Promise<T> {
-    const candidates = await engine.query(
-      spanRowsQuery(filter, { column: 'start', dir: 'asc' }, RESIDUAL_CANDIDATE_CAP + 1),
-      signal,
-    );
-    const { entries } = spanEntries(candidates, epoch);
+    const entries = await candidates(RESIDUAL_CANDIDATE_CAP + 1);
     if (entries.length > RESIDUAL_CANDIDATE_CAP) {
       throw new OtelHtmlError('usage', {
-        message: `the condition needs the browser to evaluate part of it on more than ${RESIDUAL_CANDIDATE_CAP} spans; narrow the window or the rest of the condition`,
+        message: `the condition needs the browser to evaluate part of it on more than ${RESIDUAL_CANDIDATE_CAP} rows; narrow the window or the rest of the condition`,
       });
     }
     const survivors = entries.filter(test);
@@ -183,6 +257,23 @@ export function createDuckDbDataSource(opts: {
       });
     }
   }
+
+  const withResidualIds = <T>(
+    filter: SqlFilter,
+    test: (e: SpanEntry) => boolean,
+    signal: AbortSignal | undefined,
+    run: (f: SqlFilter) => Promise<T>,
+  ): Promise<T> =>
+    withIds(
+      filter,
+      async (limit) =>
+        spanEntries(
+          await engine.query(spanRowsQuery(filter, { column: 'start', dir: 'asc' }, limit), signal),
+          epoch,
+        ).entries,
+      test,
+      run,
+    );
 
   async function querySpans(q: SpanQuery, signal?: AbortSignal): Promise<SpanQueryResult> {
     throwIfAborted(signal);
@@ -339,6 +430,211 @@ export function createDuckDbDataSource(opts: {
       : withResidualIds(filter, residualTest(compileCondition(residual, 'span'), epoch), signal, run);
   }
 
+  /** A trace without a `traces` row may have logs in any partition. */
+  const allLogsFiles = manifest.partitions.flatMap((p) =>
+    p.files.logs === undefined ? [] : [p.files.logs.path],
+  );
+
+  async function queryLogs(q: LogQuery, signal?: AbortSignal): Promise<LogQueryResult> {
+    throwIfAborted(signal);
+    if ((q.mode as string) === 'patterns') {
+      throw new OtelHtmlError('usage', {
+        path: 'query.mode',
+        expected: "'logs' or 'traces' (patterns have their own method)",
+        actual: JSON.stringify(q.mode),
+      });
+    }
+    const { filter, residual } = buildFilter({
+      manifest,
+      table: 'logs',
+      condition: q.condition,
+      text: q.text,
+      window: q.window,
+      ...(q.traceId == null
+        ? {}
+        : { traceId: q.traceId, traceFiles: (await logTraceFiles(q.traceId)) ?? allLogsFiles }),
+    });
+    const browser = residual !== null;
+    if (filter.files.files.length === 0) return emptyLogResult(caps, browser, q.mode);
+    const needs = new Set(q.needs);
+    const aggregates = LOG_AGGREGATE_NEEDS.some((n) => needs.has(n));
+    const logSort = q.mode === 'logs' ? sortOf(LOG_SORTS, q.sort, 'logs') : null;
+    const traceSort = q.mode === 'traces' ? sortOf(LOG_TRACE_SORTS, q.sort, 'traces') : null;
+    const useIds = browser && (aggregates || (q.mode === 'traces' && needs.has('rows')));
+    const test = residual === null ? null : logResidualTest(compileCondition(residual, 'log_record'), epoch);
+
+    const run = async (f: SqlFilter): Promise<LogQueryResult> => {
+      const result = emptyLogResult(caps, browser, q.mode);
+      const spec = bucketSpec(q.window, range);
+      const parts: Promise<void>[] = [];
+
+      if (needs.has('rows')) {
+        parts.push(
+          (async () => {
+            if (traceSort !== null) {
+              const r = logTraceRows(await engine.query(logTracesQuery(f, traceSort, q.limit), signal));
+              const matching = await engine.query(
+                Query.from('logs')
+                  .select({ n: sql`count(*)` })
+                  .where(...whereOf(f, 'logs'), sql`trace_id IS NOT NULL`),
+                signal,
+              );
+              Object.assign(result, {
+                rows: r.rows,
+                total: r.total,
+                matched: toNumber(cell(rowsOf(matching)[0] ?? {}, 'n') ?? 0n, 'n'),
+              });
+            } else if (logSort !== null && !useIds && test !== null) {
+              let candidates = 0;
+              const { rows, exhausted } = await residualRows({
+                limit: q.limit,
+                fetch: async (limit, offset) => {
+                  const page = logEntries(
+                    await engine.query(logRowsQuery(f, logSort, limit).offset(offset), signal),
+                  );
+                  if (offset === 0) candidates = page.total;
+                  return page.entries;
+                },
+                test,
+              });
+              const total = exhausted ? rows.length : Math.max(candidates, rows.length);
+              Object.assign(result, { rows: rows.map((e) => e.row), total, matched: total });
+            } else if (logSort !== null) {
+              const { rows, total } = logRows(
+                await engine.query(logRowsQuery(f, logSort, q.limit), signal),
+                epoch,
+                manifest,
+              );
+              Object.assign(result, { rows, total, matched: total });
+            }
+          })(),
+        );
+      }
+
+      if (needs.has('facets')) {
+        parts.push(
+          (async () => {
+            const keys: readonly CoreFacet[] =
+              q.facetKeys === null
+                ? CORE_LOG_FACETS
+                : CORE_LOG_FACETS.filter((c) => q.facetKeys?.includes(c.key));
+            const wantAttrs = q.facetKeys === null || q.facetKeys.some((k) => !CORE_LOG_KEYS.has(k));
+            const [core, attrs] = await Promise.all([
+              keys.length === 0 ? null : engine.query(coreFacetsQuery(f, 'logs', keys, caps), signal),
+              wantAttrs
+                ? engine.query(attributeFacetsQuery(f, 'logs', caps, [...CORE_LOG_KEYS]), signal)
+                : null,
+            ]);
+            result.facets = facetCounts(
+              core,
+              attrs,
+              caps,
+              [...CORE_LOG_KEYS],
+              q.facetKeys === null ? null : new Set(q.facetKeys),
+            );
+          })(),
+        );
+      }
+
+      if (needs.has('timeline')) {
+        parts.push(
+          (async () => {
+            result.buckets = logTimeline(await engine.query(logTimelineQuery(f, spec), signal), spec);
+          })(),
+        );
+      }
+
+      await Promise.all(parts);
+      return result;
+    };
+
+    return test !== null && useIds
+      ? withIds(
+          filter,
+          async (limit) =>
+            logEntries(
+              await engine.query(logRowsQuery(filter, { column: 'time', dir: 'asc' }, limit), signal),
+            ).entries,
+          test,
+          run,
+        )
+      : run(filter);
+  }
+
+  /** The partitions the trace's `traces` rows name; none means the trace is not indexed and every logs file is read. */
+  async function logTraceFiles(traceId: TraceId): Promise<string[] | null> {
+    const partitions = rowsOf(await engine.query(tracePartitionsQuery(traceId))).map((r) =>
+      String(cell(r, 'filename')),
+    );
+    return partitions.length === 0 ? null : partitions;
+  }
+
+  async function getLog(ref: LogRef): Promise<LogRow> {
+    let query: Query;
+    try {
+      query = logByRefQuery(ref, manifest);
+    } catch (e) {
+      // a ref naming a partition without logs is a ref to no log
+      if (e instanceof OtelHtmlError && e.code === 'invalid-report') throw noSuchLog(ref);
+      throw e;
+    }
+    const found = logEntries(await engine.query(query)).entries[0];
+    if (found === undefined) throw noSuchLog(ref);
+    return found.row;
+  }
+
+  async function traceLogs(traceId: TraceId, signal?: AbortSignal): Promise<readonly LogRow[]> {
+    throwIfAborted(signal);
+    const partitions = await logTraceFiles(traceId);
+    const files =
+      partitions === null
+        ? null
+        : partitions.flatMap((p) => {
+            const path = manifest.partitions.find((x) => x.n === partitionOfFilename(p))?.files.logs?.path;
+            return path === undefined ? [] : [path];
+          });
+    if (files?.length === 0) return [];
+    return logRows(await engine.query(traceLogsQuery(traceId, files, epoch), signal), epoch, manifest).rows;
+  }
+
+  async function surroundingLogs(ref: LogRef, n: number): Promise<SurroundingLogs> {
+    checkSurroundingCount(n);
+    const log = await getLog(ref);
+    if (n === 0) return { before: [], log, after: [] };
+    const { before, after } = surroundingQueries(log, manifest, n, epoch);
+    const [b, a] = await Promise.all([engine.query(before), engine.query(after)]);
+    return {
+      before: logEntries(b)
+        .entries.map((e) => e.row)
+        .reverse(), // the query lists nearest first
+      log,
+      after: logEntries(a).entries.map((e) => e.row),
+    };
+  }
+
+  async function patterns(q: PatternQuery, signal?: AbortSignal): Promise<PatternsResult> {
+    throwIfAborted(signal);
+    const column = PATTERN_SORTS.find((c) => c === q.sort.column);
+    if (column === undefined) {
+      throw new OtelHtmlError('usage', {
+        path: 'query.sort.column',
+        expected: `one of ${PATTERN_SORTS.join(', ')}`,
+        actual: JSON.stringify(q.sort.column),
+      });
+    }
+    return patternRows(
+      await engine.query(
+        patternsQuery({
+          window: absWindow(q.window, epoch),
+          sort: { column, dir: q.sort.dir },
+          limit: q.limit,
+          epoch,
+        }),
+        signal,
+      ),
+    );
+  }
+
   /** The trace's spans (and, with `withLogs`, its summed log count): the partitions first, then the spans in them. */
   async function readTrace(
     traceId: TraceId,
@@ -423,6 +719,21 @@ export function createDuckDbDataSource(opts: {
       return exclusiveTimeByService(buildTraceTree((await readTrace(traceId, false)).rows));
     },
     services,
+    queryLogs,
+    getLog,
+    traceLogs,
+    surroundingLogs,
+    patterns,
+    async metricPoints(signal) {
+      const spec = bucketSpec(null, range);
+      return pointBuckets(await engine.query(pointsTimelineQuery(spec, epoch), signal), spec);
+    },
+    async resourceValues(key, signal) {
+      return resourceValueResult(
+        await engine.query(resourceValuesQuery(key, caps.facetValueCap), signal),
+        caps.facetValueCap,
+      );
+    },
     metricCatalog: () => Promise.reject(planThree('The metric catalog')),
     metric: () => Promise.reject(planThree('Metrics')),
     metricsForResources: () => Promise.reject(planThree('Metrics')),
