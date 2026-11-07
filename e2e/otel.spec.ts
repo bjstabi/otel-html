@@ -4,7 +4,7 @@ import type { BrowserContext } from '@playwright/test';
 import { inMemoryTracing } from '../test-support/otel/sdk.js';
 import { instrumentContext } from './otel.js';
 import { RECORDER_PATH } from './otel-page/span-json.js';
-import { expect, guardContext, HTTP, test } from './test.js';
+import { expect, guardContext, HTTP, test, waitForReportAfterNavigation } from './test.js';
 
 /**
  * The in-page recorder end to end: a real browser context, the real viewer, an in-memory worker-side tracing. It
@@ -19,6 +19,7 @@ test.beforeAll(() => {
 });
 
 async function setup(context: BrowserContext, limit?: number) {
+  waitForReportAfterNavigation(context);
   const { tracing, exporter } = inMemoryTracing();
   const parent: Span = tracing.tracer.startSpan('parent');
   const recorder = await instrumentContext(context, tracing, parent, limit);
