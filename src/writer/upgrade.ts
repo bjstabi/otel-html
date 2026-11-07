@@ -77,17 +77,7 @@ export async function upgradeReport(
       hint: 'use assets/ or a relative path like ../../assets/0.3.0/',
     });
   }
-  if (
-    report.kind === 'partitions' &&
-    opts.assetsBase === undefined &&
-    report.manifest.engine.assetsBase !== DEFAULT_ASSETS_BASE
-  ) {
-    // The shared copy is the publisher's: upgrade cannot know it holds this version's files, so it must be told.
-    throw new OtelHtmlError('usage', {
-      message: `cannot upgrade ${report.dir}: it loads its viewer files from ${report.manifest.engine.assetsBase}`,
-      hint: "pass --assets-base <base holding this version's files>, or --assets-base assets/ to copy them into the report",
-    });
-  }
+  assertSharedBaseNamed(report, opts);
   await assertAssetsInside(fs, report.dir);
   // Holding the writer lock for the rewrite also keeps a writer from starting underneath it.
   const lock = await acquireLock(deps, at(report.dir, LOCK_PATH)).catch((e: unknown) => {
@@ -100,14 +90,16 @@ export async function upgradeReport(
     throw e;
   });
   try {
-    if (report.kind === 'partitions') {
-      // An append may have committed between the first read and the lock; only the copy read under the lock is current.
-      const current = await readMergeInput(fs, report.dir, 'upgrade');
-      if (current.kind !== 'partitions') {
-        throw new OtelHtmlError('usage', {
-          message: `cannot upgrade ${report.dir}: its format changed while it was read`,
-        });
-      }
+    // Anything may have committed between the first read and the lock; only the copy read under it is current.
+    const current = await readMergeInput(fs, report.dir, 'upgrade');
+    if (current.kind !== report.kind || current.manifest.formatVersion !== manifest.formatVersion) {
+      throw new OtelHtmlError('usage', {
+        message: `cannot upgrade ${report.dir}: the report changed while upgrade was starting`,
+        hint: 'the report changed while upgrade was starting; run upgrade again',
+      });
+    }
+    if (current.kind === 'partitions') {
+      assertSharedBaseNamed(current, opts);
       await upgradePartitioned(deps, report.dir, current.manifest, opts);
     } else {
       const written = new Set<string>();
@@ -126,6 +118,20 @@ export async function upgradeReport(
     await lock.release();
   }
   return { title: manifest.title, formatVersion: manifest.formatVersion };
+}
+
+/** A format-4 report on a shared base is upgraded only when told the base: the shared copy is the publisher's, so upgrade cannot know it holds this version's files. */
+function assertSharedBaseNamed(
+  report: { kind: 'chunks'; dir: string } | { kind: 'partitions'; dir: string; manifest: ManifestV4 },
+  opts: UpgradeOptions,
+): void {
+  if (report.kind !== 'partitions' || opts.assetsBase !== undefined) return;
+  const { assetsBase } = report.manifest.engine;
+  if (assetsBase === DEFAULT_ASSETS_BASE) return;
+  throw new OtelHtmlError('usage', {
+    message: `cannot upgrade ${report.dir}: it loads its viewer files from ${assetsBase}`,
+    hint: "pass --assets-base <base holding this version's files>, or --assets-base assets/ to copy them into the report",
+  });
 }
 
 async function addWrappers(fs: FileSystem, dir: string, manifest: ManifestV4): Promise<void> {

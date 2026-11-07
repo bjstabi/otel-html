@@ -293,6 +293,56 @@ describe('upgradeReport fix round 1', () => {
   });
 });
 
+describe('upgradeReport fix round 2', () => {
+  /** A fs whose lock creation first runs `during`: the report changes between upgrade's first read and its lock. */
+  function racing(w: TestWriter, during: () => Promise<void>) {
+    let ran = false;
+    return {
+      ...w.fs,
+      async createExclusive(p: string, text: string) {
+        if (!ran && p.endsWith('lock.json')) {
+          ran = true;
+          await during();
+        }
+        return w.fs.createExclusive(p, text);
+      },
+    };
+  }
+
+  test('a chunks report replaced by a format-4 one before the lock is refused and its assets are untouched', async () => {
+    const w = createTestWriter();
+    const s = await openSession(w.deps, { out: 'r', config: testConfig(), mode: 'replace' });
+    await s.add(otlp(spansRequest(1)), 'in.json');
+    await s.close();
+    let after = new Map<string, string>();
+    const fs = racing(w, async () => {
+      await v4Report(w, 'r', 'site');
+      after = new Map(w.fs.snapshot());
+    });
+    const e = await failure(upgradeReport({ ...w.deps, fs }, 'r'));
+    expect(e.code).toBe('usage');
+    expect(e.hint).toContain('run upgrade again');
+    expect(w.fs.snapshot()).toEqual(after);
+    expect(files(w, 'r/assets/duckdb').length).toBeGreaterThan(0);
+    expect(files(w, 'r/data/state/lock')).toEqual([]);
+  });
+
+  test('a base that became shared before the lock needs --assets-base and the lock is released', async () => {
+    const w = createTestWriter();
+    await v4Report(w, 'r', 'site');
+    let after = new Map<string, string>();
+    const fs = racing(w, async () => {
+      await v4Report(w, 'r', 'site', { assetsBase: '../assets/' });
+      after = new Map(w.fs.snapshot());
+    });
+    const e = await failure(upgradeReport({ ...w.deps, fs }, 'r'));
+    expect(e.code).toBe('usage');
+    expect(e.hint).toContain('--assets-base');
+    expect(w.fs.snapshot()).toEqual(after);
+    expect(files(w, 'r/data/state/lock')).toEqual([]);
+  });
+});
+
 describe('upgradeReport on a chunks report', () => {
   test('--format and --assets-base are a usage error that points to merge', async () => {
     const w = createTestWriter();
