@@ -2,11 +2,14 @@ import { column, duckDBCodeGenerator, type ExprNode, literal, sql, verbatim } fr
 
 /** The two OTTL contexts that run as SQL; datapoint conditions are not translated. */
 export type SqlContext = 'span' | 'log_record';
-type ColumnKind = 'string' | 'int' | 'bool' | 'json' | 'bigid';
+type ColumnKind = 'string' | 'int' | 'bool' | 'json';
 export interface PathColumn {
   readonly column: string;
   readonly kind: ColumnKind;
-  /** The OTTL path reads a NULL column as `''` (strings) or `0` (times). */
+  /**
+   * The OTTL path reads a NULL column as `''` (strings) or `0` (times). The coalesce applies to the absolute column,
+   * before any epoch subtraction (for the log time paths OTTL reads absolute 0n).
+   */
   readonly nullAsEmpty?: true;
 }
 
@@ -29,7 +32,7 @@ const SHARED: readonly (readonly [string, PathColumn])[] = [
 
 /**
  * Canonical OTTL path (context prefix stripped, as `CONTEXTS[c].paths` keys it) to view column. Ids are VARCHAR hex
- * columns, so `trace_id.string` and friends are plain strings; `bigid` is reserved for a raw id path no context has.
+ * columns, so `trace_id.string` and friends are plain strings;
  */
 export const PATH_COLUMNS: Readonly<Record<SqlContext, ReadonlyMap<string, PathColumn>>> = {
   span: new Map<string, PathColumn>([
@@ -55,7 +58,7 @@ export const PATH_COLUMNS: Readonly<Record<SqlContext, ReadonlyMap<string, PathC
     ['observed_time_unix_nano', int('observed_time_unix_nano', true)],
     ['severity_number', int('severity_number')],
     ['severity_text', str('severity_text')],
-    ['event_name', str('event_name')],
+    ['event_name', str('event_name', true)],
     ['body', js('body')],
     ['body.string', { column: 'body', kind: 'json' }],
     ['attributes', js('attributes')],

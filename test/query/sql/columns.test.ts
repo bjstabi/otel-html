@@ -39,6 +39,7 @@ describe('OTTL path to column map', () => {
   test('null-reading paths are flagged', () => {
     expect(PATH_COLUMNS.span.get('parent_span_id.string')?.nullAsEmpty).toBe(true);
     expect(PATH_COLUMNS.log_record.get('observed_time_unix_nano')?.nullAsEmpty).toBe(true);
+    expect(PATH_COLUMNS.log_record.get('event_name')?.nullAsEmpty).toBe(true);
     expect(PATH_COLUMNS.span.get('name')?.nullAsEmpty).toBeUndefined();
   });
 });
@@ -74,6 +75,8 @@ describe('JSON access', () => {
       expect(v('true')).toBeNull();
       expect(v('null')).toBeNull();
       expect(v('{"a":1}')).toBeNull();
+      expect(v('{"$m":[["$i","x"]]}')).toBeNull();
+      expect(v('{"$m":[["$d","1"]]}')).toBeNull();
     } finally {
       db.close();
     }
@@ -91,6 +94,8 @@ describe('JSON access', () => {
       expect(k('true')).toBe('bool');
       expect(k('{"a":1}')).toBe('map');
       expect(k('{"$m":[["$k",1]]}')).toBe('map');
+      expect(k('{"$m":[["$i","x"]]}')).toBe('map');
+      expect(k('{"$m":[["$d","1"]]}')).toBe('map');
       expect(k('[1,2]')).toBe('list');
       expect(k('{"$b":"AAE="}')).toBe('bytes');
       expect(k('null')).toBe('nil');
