@@ -117,3 +117,29 @@ test('the same connector shape runs against the Node engine', async () => {
   );
   expect(t.getChild('n')?.at(0)).toBe(3n);
 });
+
+test('aborting after the request reached the connector rejects with AbortError', async () => {
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  let reached: () => void = () => undefined;
+  const sent = new Promise<void>((r) => {
+    reached = r;
+  });
+  const connector = {
+    query: async () => {
+      reached();
+      await gate;
+      return ipcBytes({ n: [1n] });
+    },
+  } as unknown as Connector;
+  const ctl = new AbortController();
+  const qe = mosaicQueryEngine(createCoordinator(connector, silentLogger), fakeFiles());
+  const pending = qe.query(Query.from('spans').select('x'), ctl.signal);
+  const outcome = pending.catch((e: unknown) => e);
+  await sent;
+  ctl.abort();
+  expect(await outcome).toMatchObject({ name: 'AbortError' });
+  release();
+});

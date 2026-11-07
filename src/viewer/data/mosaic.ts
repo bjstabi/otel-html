@@ -18,6 +18,7 @@ function runSql(connection: AsyncDuckDBConnection, sql: string): Promise<Uint8Ar
  * the same and resolves undefined; `type: 'json'` is rejected with `invalid-report` (never requested).
  */
 export function engineConnector(connection: AsyncDuckDBConnection): Connector {
+  // The mosaic `signal` option is ignored: duckdb-wasm cannot abort a running query, its result is discarded.
   async function query(request: { type: string; sql: string }): Promise<Uint8Array | undefined> {
     if (request.type === 'arrow') return await runSql(connection, request.sql);
     if (request.type === 'exec') {
@@ -75,15 +76,16 @@ export function mosaicQueryEngine(coordinator: Coordinator, files: EngineFiles):
       let onAbort: (() => void) | undefined;
       const aborted = new Promise<never>((_, reject) => {
         onAbort = () => {
-          coordinator.cancel([result]);
+          // reject first: cancel() synchronously rejects `result` with 'Canceled', which would win the race
           reject(abortError());
+          coordinator.cancel([result]);
         };
         signal?.addEventListener('abort', onAbort, { once: true });
       });
       try {
         return await Promise.race([result, aborted]);
       } catch (error) {
-        if (error instanceof DOMException && error.name === 'AbortError') throw error;
+        if (signal?.aborted) throw abortError();
         throw engineFailure(error, String(q));
       } finally {
         if (onAbort) signal?.removeEventListener('abort', onAbort);
