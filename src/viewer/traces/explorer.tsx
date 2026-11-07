@@ -1,18 +1,10 @@
 import { type JSX, useMemo, useRef, useState } from 'react';
-import type { Manifest } from '../../format/manifest.js';
+import type { AnyManifest } from '../../format/manifest.js';
 import { parseUnixNanos, type SpanId, type TraceId } from '../../model/ids.js';
 import { Chart } from '../components/chart.js';
 import { ColumnPicker } from '../components/column-picker.js';
 import { ExplorerControls } from '../components/explorer-controls.js';
-import {
-  ErrorCard,
-  LoadingNote,
-  NoMatch,
-  PartialNote,
-  PILL,
-  parseSort,
-  sortableOf,
-} from '../components/explorer-states.js';
+import { ErrorCard, NoMatch, PILL, parseSort, QueryNote, sortableOf } from '../components/explorer-states.js';
 import {
   downloadBlob,
   type ExportFormat,
@@ -27,8 +19,9 @@ import { GroupTable } from '../components/group-table.js';
 import { HistogramCard, SPAN_STATUS_SERIES } from '../components/histogram-card.js';
 import { ResultsTable, type SortState } from '../components/results-table.js';
 import { copyWidgetItem } from '../dashboards/copy-widget.js';
-import type { LegacyDataSource } from '../data/legacy-data-source.js';
-import type { SpanQuery, SpanRow, TraceRow } from '../data/span-query.js';
+import type { DataSource } from '../data/data-source.js';
+import { manifestRange } from '../data/manifest-range.js';
+import type { SpanQuery, SpanRow, TraceRow } from '../data/results.js';
 import { useGoTo } from '../shell/go-to.js';
 import { PageChrome, useWidgetCopy } from '../shell/page-chrome.js';
 import { PageOptionNotice } from '../shell/page-option-notice.js';
@@ -47,13 +40,13 @@ import { RedStrip } from './red-strip.js';
 import { TracePanel } from './trace-panel.js';
 import { useSpanQuery } from './use-span-query.js';
 import {
-  binsOnAxis,
   type ChartView,
   cssTokenReader,
   durationAxis,
   GROUPED_VIEWS,
   type Measure,
   paddedAxis,
+  rebinOnAxis,
   resolveCssVars,
   VIEW_BUILDERS,
 } from './views.js';
@@ -88,7 +81,7 @@ function OpenLogs(): JSX.Element {
   );
 }
 
-export function ZeroSpans({ manifest }: { manifest: Manifest }): JSX.Element {
+export function ZeroSpans({ manifest }: { manifest: AnyManifest }): JSX.Element {
   return (
     <section className="max-w-xl rounded-card border border-hairline bg-surface p-6">
       <h2 className="text-base font-semibold">This report has no spans</h2>
@@ -102,7 +95,7 @@ export function ZeroSpans({ manifest }: { manifest: Manifest }): JSX.Element {
 }
 
 /** Mockup 01: query bar, mode / group-by / view controls, RED strip, histogram, facets left and results right. */
-export function TracesExplorer(props: { dataSource: LegacyDataSource }): JSX.Element {
+export function TracesExplorer(props: { dataSource: DataSource }): JSX.Element {
   const { manifest } = props.dataSource;
   if (manifest.totals.spans === 0) {
     return (
@@ -114,7 +107,7 @@ export function TracesExplorer(props: { dataSource: LegacyDataSource }): JSX.Ele
   return <ExplorerBody dataSource={props.dataSource} />;
 }
 
-function ExplorerBody(props: { dataSource: LegacyDataSource }): JSX.Element {
+function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
   const { dataSource } = props;
   const manifest = dataSource.manifest;
   const sel = useSelection((s) => s);
@@ -122,6 +115,7 @@ function ExplorerBody(props: { dataSource: LegacyDataSource }): JSX.Element {
   const { view, invalid: invalidView } = resolvePageView('traces', sel.view);
   const { resolved } = useTheme();
   const colors = useColorAssigner();
+  const range = useMemo(() => manifestRange(manifest), [manifest]);
   const epoch = useMemo(() => parseUnixNanos(manifest.epochUnixNano, 'manifest.epochUnixNano'), [manifest]);
   const [measure, setMeasure] = useState<Measure>('requests');
   const [extraColumns, setExtraColumns] = useState<readonly string[]>([]);
@@ -145,11 +139,13 @@ function ExplorerBody(props: { dataSource: LegacyDataSource }): JSX.Element {
       // Grouping is a presentation concern in M1: group-by views are built from the result's facets.
       groupBy: null,
       measureBy: null,
-      scanAll: false,
+      // The overall RED quantiles need both the timeline and the durations.
+      needs: ['rows', 'facets', 'timeline', 'durations'],
+      facetKeys: null,
     }),
     [sel.condition, sel.text, sel.window, mode, sort.column, sort.dir, manifest.config.viewer.listCap],
   );
-  const { state, scanAll } = useSpanQuery(dataSource, query);
+  const { state } = useSpanQuery(dataSource, query);
   const result = state.status === 'ready' ? state.result : state.status === 'loading' ? state.previous : null;
 
   const clearFilters = (): void => {
@@ -236,13 +232,15 @@ function ExplorerBody(props: { dataSource: LegacyDataSource }): JSX.Element {
     return [...new Set(ids)];
   }, [result]);
 
-  const truncated = result !== null && result.total > result.rows.length;
-  // The Duration facet's axis is derived from the current result's rows (the leading rows when the result is
-  // truncated) and kept while a duration filter is set, so the committed range stays addressable; with a URL filter
-  // it comes from those rows plus the padded range. Clearing the filter re-derives it.
+  // The Duration facet's axis comes from the current result's exact duration range and is kept while a duration filter
+  // is set, so the committed range stays addressable (the counts are then moved onto it); with a URL filter it comes
+  // from that range plus the padded bounds. Clearing the filter re-derives it.
   const axisRef = useRef<readonly number[] | null>(null);
   const bins = useMemo(() => {
-    const rows = result?.rows ?? [];
+    const exact = result?.durations.bins ?? [];
+    const summary = result?.durations.summary ?? null;
+    // The distribution's extremes as two stand-in rows: the axis depends on the min and the max alone.
+    const rows = summary === null ? [] : [{ durationNs: summary.min }, { durationNs: summary.max }];
     const tokens = sel.condition === null ? null : ottlToTokens(sel.condition);
     const bounds = (tokens ?? []).filter((t) => t.key === DURATION_KEY && typeof t.value === 'number');
     const num = (op: '>=' | '<='): number | undefined => {
@@ -267,7 +265,14 @@ function ExplorerBody(props: { dataSource: LegacyDataSource }): JSX.Element {
       });
       axisRef.current = axis.length === 0 ? null : axis;
     }
-    return binsOnAxis(rows, axis);
+    const first = exact[0];
+    const last = exact[exact.length - 1];
+    const same =
+      first !== undefined &&
+      last !== undefined &&
+      axis.length === exact.length + 1 &&
+      axis.every((e, i) => e === (i < exact.length ? exact[i]?.fromNs : last.toNs));
+    return same ? exact : rebinOnAxis(exact, axis);
     // axisRef is a ref (stable); the memo is the one place it is written, so the axis survives re-derivations.
   }, [result, sel.condition]);
 
@@ -311,8 +316,7 @@ function ExplorerBody(props: { dataSource: LegacyDataSource }): JSX.Element {
             </output>
           )}
         </ExplorerControls>
-        {result !== null && <PartialNote partial={result.partial} onScanAll={scanAll} />}
-        {state.status === 'loading' && <LoadingNote progress={state.progress} />}
+        <QueryNote loading={state.status === 'loading'} residual={result?.residual === true} />
         {exportError !== null && <ErrorCard title="The export failed" message={exportError} />}
         {state.status === 'error' && <ErrorCard title="The query could not run" message={state.message} />}
         {result !== null && (
@@ -321,31 +325,23 @@ function ExplorerBody(props: { dataSource: LegacyDataSource }): JSX.Element {
             className={state.status === 'loading' ? 'opacity-60' : ''}
           >
             <div className="flex flex-col gap-4">
-              <RedStrip
-                red={result.red}
-                onAnalyze={(m) => {
-                  setMeasure(m);
-                  sel.setView('timeseries');
-                }}
-              />
+              {result.red !== null && (
+                <RedStrip
+                  red={result.red}
+                  durations={result.durations.summary}
+                  onAnalyze={(m) => {
+                    setMeasure(m);
+                    sel.setView('timeseries');
+                  }}
+                />
+              )}
               <HistogramCard
                 buckets={result.buckets}
                 series={SPAN_STATUS_SERIES}
-                {...(manifest.range === null ? {} : { rangeEnd: manifest.range.end })}
+                {...(range === null ? {} : { rangeEnd: range.end })}
               />
               <div className="grid grid-cols-1 gap-4 lg:grid-cols-[16rem_minmax(0,1fr)]">
                 <div className="flex min-w-0 flex-col gap-2">
-                  {truncated && (
-                    <p
-                      data-testid="duration-bins-note"
-                      className="rounded-md bg-page px-2 py-1 text-xs text-muted"
-                    >
-                      Duration distribution is from the first{' '}
-                      <span className="font-mono tabular-nums">{result.rows.length}</span> of{' '}
-                      <span className="font-mono tabular-nums">{result.total}</span>{' '}
-                      {mode === 'spans' ? 'spans' : 'traces'}
-                    </p>
-                  )}
                   <FacetPanel signal="span" facets={result.facets} durationBins={bins} />
                 </div>
                 <div className="min-w-0">
@@ -397,6 +393,7 @@ function ExplorerBody(props: { dataSource: LegacyDataSource }): JSX.Element {
                           selectedId={sel.traceId}
                           epoch={epoch}
                           colors={colors}
+                          serviceShare={dataSource.serviceShare}
                         />
                       )}
                     </div>

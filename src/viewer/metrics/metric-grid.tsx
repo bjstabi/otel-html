@@ -174,9 +174,15 @@ function distinctResources(resources: readonly ResourceRecord[]): ResourceRecord
   return [...seen.values()];
 }
 
+/** What the grid reads of a data source: both the legacy and the format-4 source provide it (until 5.5). */
+export type MetricSource = Pick<
+  LegacyDataSource,
+  'metricCatalog' | 'metric' | 'metricsForResources' | 'hasTrace'
+>;
+
 /** Whether any of `resources` has metric series; false while the lookup runs or after it failed. */
 export function useHasMetrics(
-  dataSource: LegacyDataSource,
+  dataSource: MetricSource,
   resources: readonly ResourceRecord[] | null,
 ): boolean {
   const load = useCallback(
@@ -259,7 +265,7 @@ interface ChartRun {
 }
 
 function GridChart(props: {
-  dataSource: LegacyDataSource;
+  dataSource: MetricSource;
   entry: MetricEntry;
   /** The origin's resources (canonical keys): only their series are charted. */
   resourceKeys: ReadonlySet<string>;
@@ -391,7 +397,7 @@ const SEG = 'rounded-full px-2 py-0.5 text-xs';
  * (only the first group starts expanded; charts render as they scroll into view), over the origin's moment ± 5 min.
  */
 export function MetricGrid(
-  props: { dataSource: LegacyDataSource; origin: MetricGridOrigin } & MetricGridExtras,
+  props: { dataSource: MetricSource; origin: MetricGridOrigin } & MetricGridExtras,
 ): JSX.Element {
   const { dataSource, origin } = props;
   const goTo = useGoTo();

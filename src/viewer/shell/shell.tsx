@@ -8,6 +8,7 @@ import { DashboardPage } from '../dashboards/dashboard-page.js';
 import { DashboardsListPage } from '../dashboards/list-page.js';
 import { defaultDashboardRoute } from '../dashboards/registry.js';
 import { RunSessionProvider } from '../dashboards/run-session.js';
+import type { DataSource } from '../data/data-source.js';
 import type { LegacyDataSource } from '../data/legacy-data-source.js';
 import { LogsExplorer } from '../logs/explorer.js';
 import { MetricsCatalog } from '../metrics/catalog.js';
@@ -210,6 +211,9 @@ function homeRoute(manifest: Manifest): string {
 
 function RoutedPage({ dataSource }: { dataSource: LegacyDataSource }): JSX.Element {
   const manifest = dataSource.manifest;
+  // The traces explorer and services page read the format-4 source (the one app.tsx passes). Removed when the other
+  // pages move (5.3-5.5) and `Shell` takes `DataSource`.
+  const spanSource = dataSource as unknown as DataSource;
   const [route] = useRoute();
   return (
     <Switch>
@@ -217,13 +221,13 @@ function RoutedPage({ dataSource }: { dataSource: LegacyDataSource }): JSX.Eleme
         <Redirect to={homeRoute(manifest)} replace />
       </Route>
       <Route path="/traces">
-        <TracesExplorer dataSource={dataSource} />
+        <TracesExplorer dataSource={spanSource} />
       </Route>
       <Route path="/traces/trace/:id">
         {(params) => <TracePage dataSource={dataSource} id={params.id} />}
       </Route>
       <Route path="/traces/services">
-        <ServicesPage dataSource={dataSource} />
+        <ServicesPage dataSource={spanSource} />
       </Route>
       <Route path="/logs/patterns">
         <PatternsRedirect />

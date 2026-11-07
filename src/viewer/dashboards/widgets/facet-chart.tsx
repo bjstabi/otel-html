@@ -13,11 +13,11 @@ import type { LegacyDataSource } from '../../data/legacy-data-source.js';
 import type { LogQuery } from '../../data/log-query.js';
 import type { SpanQuery } from '../../data/span-query.js';
 import { useLogQuery } from '../../logs/use-log-query.js';
+import type { LegacyQueryHandle } from '../../state/legacy-use-query.js';
 import { useKeyedAsync } from '../../state/use-keyed-async.js';
-import type { QueryHandle } from '../../state/use-query.js';
 import { useColorAssigner } from '../../theme/colors-context.js';
 import { useTheme } from '../../theme/theme-provider.js';
-import { useSpanQuery } from '../../traces/use-span-query.js';
+import { useLegacySpanQuery } from '../../traces/legacy-use-span-query.js';
 import { cssTokenReader, resolveCssVars } from '../../traces/views.js';
 import type { WidgetRenderer } from '../dashboard-page.js';
 import type { WidgetScope } from '../scope.js';
@@ -51,7 +51,7 @@ interface Shared {
 }
 
 /** Only a finished result: facets of the previous inputs are never shown as if they were current. */
-function readyOf<R extends Facets>(h: QueryHandle<R>): R | null {
+function readyOf<R extends Facets>(h: LegacyQueryHandle<R>): R | null {
   return h.state.status === 'ready' ? h.state.result : null;
 }
 
@@ -107,7 +107,7 @@ function UnknownKey(props: { groupBy: string; known: readonly string[] }): JSX.E
 }
 
 function FacetBody<R extends Facets>(
-  props: Shared & { handle: QueryHandle<R>; dataSource: LegacyDataSource },
+  props: Shared & { handle: LegacyQueryHandle<R>; dataSource: LegacyDataSource },
 ): JSX.Element {
   const { handle, groupBy, measure } = props;
   const keys = useKeyedAsync(props.dataSource, props.noun === 'Spans' ? spanKeys : logKeys);
@@ -191,7 +191,7 @@ function SpanFacets(props: Shared & { dataSource: LegacyDataSource; filter: Filt
     }),
     [condition, text, window, measure, groupBy],
   );
-  return <FacetBody {...rest} dataSource={dataSource} handle={useSpanQuery(dataSource, query)} />;
+  return <FacetBody {...rest} dataSource={dataSource} handle={useLegacySpanQuery(dataSource, query)} />;
 }
 
 function LogFacets(props: Shared & { dataSource: LegacyDataSource; filter: Filter }): JSX.Element {

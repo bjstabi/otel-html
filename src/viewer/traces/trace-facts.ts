@@ -2,7 +2,7 @@ import { anyValueToDisplay } from '../../model/anyvalue.js';
 import type { RelNanos } from '../../model/ids.js';
 import { StatusCode } from '../../model/records.js';
 import type { TraceDetail } from '../data/data-source.js';
-import type { SpanRow } from '../data/span-query.js';
+import type { SpanRow } from '../data/results.js';
 
 export interface TraceFacts {
   /** The root span: the earliest start among spans without a parent, else the earliest span of the trace. */

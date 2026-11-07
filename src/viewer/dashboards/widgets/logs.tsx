@@ -8,8 +8,8 @@ import type { SortState } from '../../components/results-table.js';
 import type { LegacyDataSource } from '../../data/legacy-data-source.js';
 import type { LogQuery, LogQueryResult, LogRow } from '../../data/log-query.js';
 import { useLogQuery } from '../../logs/use-log-query.js';
+import type { LegacyQueryHandle } from '../../state/legacy-use-query.js';
 import { useSelection, useSelectionStore } from '../../state/selection-context.js';
-import type { QueryHandle } from '../../state/use-query.js';
 import type { WidgetRenderer } from '../dashboard-page.js';
 import { variableCondition } from '../scope.js';
 import { FRAME_CHROME_PX, useEpoch } from './layout.js';
@@ -25,7 +25,7 @@ const ROWS = 200;
 
 type LogsResult = Extract<LogQueryResult, { mode: 'logs' }>;
 
-function logsOf(h: QueryHandle<LogQueryResult>): LogsResult | null {
+function logsOf(h: LegacyQueryHandle<LogQueryResult>): LogsResult | null {
   // Only a finished result: rows of the previous inputs are never shown as if they were current.
   const r = h.state.status === 'ready' ? h.state.result : null;
   return r !== null && r.mode === 'logs' ? r : null;
@@ -82,7 +82,7 @@ function logQuery(
 /** The list over a query's logs; the notes and states of the explorers sit above it. */
 function ListBody(props: {
   dataSource: LegacyDataSource;
-  handle: QueryHandle<LogQueryResult>;
+  handle: LegacyQueryHandle<LogQueryResult>;
   shown: LogsResult | null;
   highlighted?: ReadonlySet<string>;
   sort: SortState;

@@ -102,6 +102,10 @@ export function dataSourceOf(
         red: new RedSeries(8),
         groups: null,
         partial: null,
+        // The format-4 fields the traces explorer reads, for `#/traces` routes through this same fake (until 5.4).
+        durations: { summary: null, bins: [] },
+        residual: false,
+        tables: { resources: [], scopes: [] },
       }),
     getTrace: unused,
     hasTrace: unused,

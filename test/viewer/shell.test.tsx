@@ -11,7 +11,7 @@ import { App } from '../../src/viewer/app.js';
 import type { DataSource } from '../../src/viewer/data/data-source.js';
 import type { LegacyDataSource } from '../../src/viewer/data/legacy-data-source.js';
 import { type LogQueryResult, type LogRow, logRef } from '../../src/viewer/data/log-query.js';
-import type { SpanQueryResult } from '../../src/viewer/data/span-query.js';
+import type { ServicesResult, SpanQueryResult } from '../../src/viewer/data/results.js';
 import { Shell } from '../../src/viewer/shell/shell.js';
 import { stepWindow } from '../../src/viewer/shell/time-range.js';
 import { createHashHistory } from '../../src/viewer/state/hash-history.js';
@@ -60,9 +60,11 @@ const emptyResult = (): SpanQueryResult => ({
   total: 0,
   facets: new FacetCounts(10, 10),
   buckets: new TimeBuckets(['ok', 'error', 'unset'], 8),
-  red: new RedSeries(8),
+  red: null,
+  durations: { summary: null, bins: [] },
   groups: null,
-  partial: null,
+  residual: false,
+  tables: { resources: [], scopes: [] },
 });
 const emptyLogs = (): LogQueryResult => ({
   mode: 'logs',
@@ -73,7 +75,7 @@ const emptyLogs = (): LogQueryResult => ({
   buckets: new TimeBuckets(LOG_SEVERITY_KEYS, 8),
   partial: null,
 });
-const dataSource: LegacyDataSource = {
+const legacySource: LegacyDataSource = {
   manifest,
   strategy: 'eager',
   landing: () =>
@@ -83,7 +85,7 @@ const dataSource: LegacyDataSource = {
       red: new RedSeries(8),
       durations: new Map(),
     }),
-  querySpans: () => Promise.resolve(emptyResult()),
+  querySpans: unused,
   getTrace: unused,
   hasTrace: unused,
   percentileOf: unused,
@@ -99,6 +101,17 @@ const dataSource: LegacyDataSource = {
   metricsForResources: unused,
   resourceValues: unused,
 };
+
+/**
+ * The shell is handed one object that plays both sources until the logs, dashboards and metrics pages move (5.3-5.5):
+ * the legacy methods those pages call, and the format-4 ones the traces pages call.
+ */
+const dataSource = {
+  ...legacySource,
+  querySpans: () => Promise.resolve(emptyResult()),
+  services: (): Promise<ServicesResult> => Promise.resolve({ services: [], total: 0 }),
+  serviceShare: () => Promise.resolve([]),
+} as unknown as LegacyDataSource;
 
 function renderShell(hash: string, ds: LegacyDataSource = dataSource): void {
   window.location.hash = hash;

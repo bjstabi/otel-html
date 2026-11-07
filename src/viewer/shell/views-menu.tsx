@@ -3,7 +3,7 @@ import { Menu } from '@base-ui/react/menu';
 import { BookmarkPlus, ChevronDown, Trash2 } from 'lucide-react';
 import { type FormEvent, type JSX, useState } from 'react';
 import type { View } from '../../dashboards/schema.js';
-import type { Manifest } from '../../format/manifest.js';
+import type { AnyManifest } from '../../format/manifest.js';
 import { EXPLORER_VIEWS, type ExplorerPage, SELECTION_MODES } from '../../query/pages.js';
 import { serializeUrlState, type UrlState } from '../state/url-state.js';
 import { CONTROL, POPUP } from './controls.js';
@@ -113,7 +113,7 @@ const ITEM = 'rounded-md px-3 py-1.5 text-sm hover:bg-hairline';
 const HEADING = 'px-3 pt-2 text-xs font-semibold uppercase tracking-wide text-muted';
 
 /** Views ▾: the config views for this page, the ones saved in this browser, and saving the current one. */
-export function ViewsMenu(props: { page: ExplorerPage; manifest: Manifest }): JSX.Element {
+export function ViewsMenu(props: { page: ExplorerPage; manifest: AnyManifest }): JSX.Element {
   const { page } = props;
   const [storage] = useState(openStorage);
   const [all, setAll] = useState(() => readLocalViews(storage));

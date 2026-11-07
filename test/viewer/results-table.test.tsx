@@ -1,10 +1,10 @@
-import { act, cleanup, render, screen, within } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { createRoot } from 'react-dom/client';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { parseUnixNanos } from '../../src/model/ids.js';
 import { ResultsTable, tabStop } from '../../src/viewer/components/results-table.js';
-import type { SpanRow, TraceRow } from '../../src/viewer/data/span-query.js';
+import type { SpanRow, TraceRow } from '../../src/viewer/data/results.js';
 import { MOVE_EVENT } from '../../src/viewer/shell/move-event.js';
 import { SPAN_COLUMNS_UI, TRACE_COLUMNS_UI } from '../../src/viewer/traces/columns.js';
 
@@ -142,21 +142,45 @@ describe('ResultsTable', () => {
     expect(screen.getByText('error')).toBeTruthy();
   });
 
-  test('a trace table whose share is incomplete labels the cell partial instead of drawing a bar', () => {
+  describe('the trace table service share cell', () => {
     const t: TraceRow = {
       traceId: 'aa' as TraceRow['traceId'],
-      root: null,
       rootSummary: { service: 'web', name: 'GET /', resource: 'GET /' },
       start: 0,
       durationNs: 100,
       spans: 4,
       errors: 0,
-      shareComplete: false,
-      serviceShare: [],
     };
-    mount({ rows: [t], columns: TRACE_COLUMNS_UI });
-    expect(screen.getByText('partial')).toBeTruthy();
-    expect(screen.getByText('GET /')).toBeTruthy();
+
+    test("loads the share of that row's trace and draws a bar, never a partial label", async () => {
+      const serviceShare = vi.fn(() =>
+        Promise.resolve([
+          { service: 'web', ns: 70 },
+          { service: 'db', ns: 30 },
+        ]),
+      );
+      mount({ rows: [t], columns: TRACE_COLUMNS_UI, serviceShare });
+      expect(await screen.findByRole('img', { name: 'web 70 ns, db 30 ns' })).toBeTruthy();
+      expect(serviceShare).toHaveBeenCalledWith('aa', expect.any(AbortSignal));
+      expect(screen.queryByText('partial')).toBeNull();
+      expect(screen.getByText('GET /')).toBeTruthy();
+    });
+
+    test('a failed load says unavailable for that row only', async () => {
+      mount({
+        rows: [t],
+        columns: TRACE_COLUMNS_UI,
+        serviceShare: () => Promise.reject(new Error('engine stopped')),
+      });
+      expect(await screen.findByText('unavailable')).toBeTruthy();
+      expect(screen.getByText('GET /')).toBeTruthy();
+    });
+
+    test('without a loader the cell is empty', async () => {
+      mount({ rows: [t], columns: TRACE_COLUMNS_UI });
+      await waitFor(() => expect(screen.queryByText('...')).toBeNull());
+      expect(screen.queryByRole('img')).toBeNull();
+    });
   });
 
   test('a rowHeight change re-measures: rows move to the new pitch and the total follows', () => {

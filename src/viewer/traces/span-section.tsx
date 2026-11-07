@@ -1,6 +1,6 @@
 import { Tabs } from '@base-ui/react/tabs';
 import { ChevronRight } from 'lucide-react';
-import { type JSX, useMemo, useState } from 'react';
+import { type JSX, useCallback, useMemo, useState } from 'react';
 import { anyValueToDisplay } from '../../model/anyvalue.js';
 import type { SpanId, UnixNanos } from '../../model/ids.js';
 import { type SpanEventRecord, SpanKind, type SpanRecord, StatusCode } from '../../model/records.js';
@@ -9,23 +9,24 @@ import { AttributeGroups, loadPins, savePins } from '../components/attribute-gro
 import { type AttributeActions, ResourceTab } from '../components/resource-tab.js';
 import { useFilterActions } from '../components/use-filter-actions.js';
 import type { TraceDetail } from '../data/data-source.js';
-import type { LegacyDataSource } from '../data/legacy-data-source.js';
 import type { LogRow } from '../data/log-query.js';
 import { useHasMetrics } from '../metrics/metric-grid.js';
 import { useSelection } from '../state/selection-context.js';
+import { useKeyedAsync } from '../state/use-keyed-async.js';
 import { useColorAssigner } from '../theme/colors-context.js';
 import { ServiceChip, StatusDot } from './columns.js';
 import { EventsTab, formatOffset, LinksTab, Muted, SpanMetricsTab } from './span-detail-tabs.js';
 import { availableSpanTabs, isSpanTabId, type SpanTabId } from './tabs.js';
 import { traceFacts } from './trace-facts.js';
 import { TraceLogsTab } from './trace-logs-tab.js';
+import type { TraceSource } from './trace-source.js';
 
 /** What the span section receives to render the selected span. */
 export interface SpanSectionProps {
   detail: TraceDetail;
   spanId: SpanId | null;
   epoch: UnixNanos;
-  dataSource: LegacyDataSource;
+  dataSource: TraceSource;
   /** The trace's logs (time-ascending), or null while they load or when the trace has none. */
   logs?: readonly LogRow[] | null;
   /** Why the trace's logs failed to load; the Logs tab then stays visible and shows it. */
@@ -142,6 +143,18 @@ export function SpanSection(props: SpanSectionProps): JSX.Element {
   );
   const spanResources = useMemo(() => (spanResource === null ? null : [spanResource]), [spanResource]);
   const hasMetrics = useHasMetrics(dataSource, spanResources);
+  const loadPercentile = useCallback(
+    () =>
+      row === null
+        ? Promise.resolve(null)
+        : Promise.resolve(dataSource.percentileOf(row.service, row.resource, row.durationNs)),
+    [dataSource, row],
+  );
+  const percentileState = useKeyedAsync(
+    row === null ? null : `${detail.traceId}/${row.span.spanId}`,
+    loadPercentile,
+  );
+  const percentile = percentileState.status === 'ready' ? percentileState.value : null;
   const spanLogs = useMemo(
     () => (logs === null ? [] : logs.filter((l) => l.log.spanId === spanId)),
     [logs, spanId],
@@ -171,7 +184,6 @@ export function SpanSection(props: SpanSectionProps): JSX.Element {
   const tabs = availableSpanTabs(span, { logSpanIds, logsError, hasMetrics });
   const wanted = sel.tabs.span;
   const active: SpanTabId = tabs.find((t) => t.id === wanted)?.id ?? 'overview';
-  const percentile = dataSource.percentileOf(row.service, row.resource, row.durationNs);
   const share =
     facts.durationNs > 0
       ? `${Math.min(100, Math.round((row.durationNs / facts.durationNs) * 100))}% of trace`

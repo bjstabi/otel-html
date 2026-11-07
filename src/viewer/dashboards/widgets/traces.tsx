@@ -11,7 +11,7 @@ import { useSelectionStore } from '../../state/selection-context.js';
 import { useKeyedAsync } from '../../state/use-keyed-async.js';
 import { useColorAssigner } from '../../theme/colors-context.js';
 import { SPAN_COLUMNS_UI, TRACE_COLUMNS_UI } from '../../traces/columns.js';
-import { useSpanQuery } from '../../traces/use-span-query.js';
+import { useLegacySpanQuery } from '../../traces/legacy-use-span-query.js';
 import type { WidgetRenderer } from '../dashboard-page.js';
 import { FRAME_CHROME_PX, useEpoch } from './layout.js';
 import { scopedCount, useSubtitle } from './subtitle.js';
@@ -86,7 +86,7 @@ export const TracesWidget: WidgetRenderer = ({ widget, scope, height, dataSource
     }),
     [scope.condition, scope.window, text, mode, sort],
   );
-  const { state, scanAll } = useSpanQuery(dataSource, query);
+  const { state, scanAll } = useLegacySpanQuery(dataSource, query);
   // Only a finished result: rows of the previous inputs are never shown as if they were current.
   const result = state.status === 'ready' ? state.result : null;
 

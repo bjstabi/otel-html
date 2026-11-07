@@ -7,7 +7,7 @@ import { type JSX, type KeyboardEvent, useEffect, useLayoutEffect, useMemo, useR
 import type { UnixNanos } from '../../model/ids.js';
 import { MOVE_EVENT } from '../shell/move-event.js';
 import { type ColorAssigner, createColorAssigner } from '../theme/palette.js';
-import type { ColumnUi } from '../traces/columns.js';
+import type { ColumnUi, ServiceShareLoader } from '../traces/columns.js';
 
 export interface SortState {
   column: string;
@@ -24,6 +24,8 @@ export interface ResultsTableProps<R> {
   selectedId: string | null;
   epoch: UnixNanos;
   colors?: ColorAssigner;
+  /** Loads a trace's exclusive time per service for the trace list's share cell; stable (it keys a load). */
+  serviceShare?: ServiceShareLoader;
   /** Scroll viewport height in px (default 480). */
   height?: number;
   /**
@@ -71,7 +73,11 @@ export function ResultsTable<R>(props: ResultsTableProps<R>): JSX.Element {
   const height = props.height ?? 480;
   const rowHeight = props.rowHeight ?? ROW_HEIGHT;
   const fallbackColors = useMemo(() => createColorAssigner(), []);
-  const ctx = { epoch: props.epoch, colors: props.colors ?? fallbackColors };
+  const ctx = {
+    epoch: props.epoch,
+    colors: props.colors ?? fallbackColors,
+    serviceShare: props.serviceShare,
+  };
   const scroller = useRef<HTMLDivElement>(null);
   const pendingFocus = useRef<number | null>(null);
 

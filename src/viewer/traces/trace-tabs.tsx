@@ -6,13 +6,14 @@ import { type ResourceRecord, StatusCode } from '../../model/records.js';
 import { formatDuration } from '../../semconv/formatters.js';
 import { ResultsTable, type SortState } from '../components/results-table.js';
 import type { TraceDetail } from '../data/data-source.js';
-import type { LegacyDataSource } from '../data/legacy-data-source.js';
-import type { SpanRow } from '../data/span-query.js';
+import { manifestRange } from '../data/manifest-range.js';
+import type { SpanRow } from '../data/results.js';
 import { exclusiveTimeByService } from '../data/trace-tree.js';
 import { gridWindow, MetricGrid, type MetricGridOrigin } from '../metrics/metric-grid.js';
 import type { ColorAssigner } from '../theme/palette.js';
 import { ServiceChip, SPAN_COLUMNS_UI } from './columns.js';
 import { traceFacts } from './trace-facts.js';
+import type { TraceSource } from './trace-source.js';
 
 const TH = 'p-2 text-left text-xs font-semibold text-ink-2';
 
@@ -208,10 +209,10 @@ export function traceResources(detail: TraceDetail): ResourceRecord[] {
 export function TraceMetricsTab(props: {
   detail: TraceDetail;
   resources: readonly ResourceRecord[];
-  dataSource: LegacyDataSource;
+  dataSource: TraceSource;
 }): JSX.Element {
   const { detail, resources, dataSource } = props;
-  const range = dataSource.manifest.range;
+  const range = useMemo(() => manifestRange(dataSource.manifest), [dataSource]);
   const origin = useMemo((): MetricGridOrigin => {
     const f = traceFacts(detail);
     return {

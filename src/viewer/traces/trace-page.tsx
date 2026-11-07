@@ -1,12 +1,12 @@
 import type { JSX } from 'react';
 import { OtelHtmlError } from '../../model/errors.js';
 import { parseTraceId } from '../../model/ids.js';
-import type { LegacyDataSource } from '../data/legacy-data-source.js';
 import { navigateRoute } from '../shell/use-route.js';
 import { type Selection, selectionToUrlState } from '../state/selection.js';
 import { useSelection } from '../state/selection-context.js';
 import { serializeUrlState } from '../state/url-state.js';
 import { TracePanel, type TracePanelProps } from './trace-panel.js';
+import type { TraceSource } from './trace-source.js';
 
 /** Leave the full-page trace: drop the open trace from the selection and go back to the explorer, keeping filters. */
 export function leaveTracePage(win: Window, state: Selection): void {
@@ -17,7 +17,7 @@ export function leaveTracePage(win: Window, state: Selection): void {
 
 /** The `#/traces/trace/<id>` route: the same panel, full width. */
 export function TracePage(props: {
-  dataSource: LegacyDataSource;
+  dataSource: TraceSource;
   id: string;
   renderSpanSection?: TracePanelProps['renderSpanSection'];
 }): JSX.Element {

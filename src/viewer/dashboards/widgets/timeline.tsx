@@ -12,9 +12,9 @@ import {
 import type { LegacyDataSource } from '../../data/legacy-data-source.js';
 import type { TimeWindow } from '../../data/span-query.js';
 import { useLogQuery } from '../../logs/use-log-query.js';
+import type { LegacyQueryState, QueryProgress } from '../../state/legacy-use-query.js';
 import { useKeyedAsync } from '../../state/use-keyed-async.js';
-import type { QueryProgress, QueryState } from '../../state/use-query.js';
-import { useSpanQuery } from '../../traces/use-span-query.js';
+import { useLegacySpanQuery } from '../../traces/legacy-use-span-query.js';
 import type { WidgetRenderer } from '../dashboard-page.js';
 import { FRAME_CHROME_PX } from './layout.js';
 
@@ -65,7 +65,7 @@ function pointsWithin(
 }
 
 /** The scans still running, added up; null while none has reported. */
-function scanProgress(states: readonly QueryState<unknown>[]): QueryProgress | null {
+function scanProgress(states: readonly LegacyQueryState<unknown>[]): QueryProgress | null {
   let scanned = 0;
   let total = 0;
   for (const s of states) {
@@ -90,7 +90,7 @@ const loadPoints = (ds: LegacyDataSource): Promise<TimeBuckets<'points'>> =>
 /** The Fusion timeline: spans, logs and metric points over the page's window; a drag sets the selection window. */
 export const TimelineWidget: WidgetRenderer = ({ scope, height, dataSource, actions, variables }) => {
   const base = { condition: scope.condition, text: '', window: scope.window, limit: 1, scanAll: false };
-  const spans = useSpanQuery(dataSource, {
+  const spans = useLegacySpanQuery(dataSource, {
     ...base,
     mode: 'spans',
     sort: { column: 'start', dir: 'asc' },

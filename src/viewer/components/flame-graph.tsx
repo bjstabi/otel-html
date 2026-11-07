@@ -5,7 +5,7 @@ import { anyValueToDisplay } from '../../model/anyvalue.js';
 import type { RelNanos, SpanId } from '../../model/ids.js';
 import { formatDuration } from '../../semconv/formatters.js';
 import type { TraceDetail } from '../data/data-source.js';
-import type { SpanRow } from '../data/span-query.js';
+import type { SpanRow } from '../data/results.js';
 import { CATEGORICAL_LIGHT, type ColorAssigner, seriesToken, seriesVar } from '../theme/palette.js';
 import { useTheme } from '../theme/theme-provider.js';
 import { Chart, type EChartsType } from './chart.js';

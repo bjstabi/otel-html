@@ -2,53 +2,30 @@ import { Tooltip } from '@base-ui/react/tooltip';
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import type { Manifest } from '../../src/format/manifest.js';
 import { FacetCounts } from '../../src/rollups/facets.js';
-import { RedSeries } from '../../src/rollups/red.js';
 import { TimeBuckets } from '../../src/rollups/time-buckets.js';
 import { formatDuration } from '../../src/semconv/formatters.js';
-import type { LegacyDataSource } from '../../src/viewer/data/legacy-data-source.js';
-import type { SpanQuery, SpanQueryResult, SpanRow } from '../../src/viewer/data/span-query.js';
+import type { DataSource } from '../../src/viewer/data/data-source.js';
+import type {
+  DurationBin,
+  SpanQuery,
+  SpanQueryResult,
+  SpanRow,
+  TraceRow,
+} from '../../src/viewer/data/results.js';
 import { type GoTo, GoToContext } from '../../src/viewer/shell/go-to.js';
 import { createSelectionStore } from '../../src/viewer/state/selection.js';
 import { SelectionProvider } from '../../src/viewer/state/selection-context.js';
 import { ThemeProvider } from '../../src/viewer/theme/theme-provider.js';
 import { TracesExplorer } from '../../src/viewer/traces/explorer.js';
 import { durationAxis } from '../../src/viewer/traces/views.js';
+import { manifestV4 } from './v4-manifest.js';
 
 vi.mock('../../src/viewer/components/chart.js', () => ({ Chart: (): null => null }));
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 afterEach(cleanup);
 
 const HOSTILE = '</script><img src=x onerror=alert(1)> ';
-
-const manifest = (spans: number): Manifest => ({
-  formatVersion: 1,
-  otelHtmlVersion: '0.0.0',
-  title: 'run',
-  epochUnixNano: '1700000000000000000',
-  createdAt: '2023-11-14T22:13:20.000Z',
-  updatedAt: '2023-11-14T22:13:20.000Z',
-  complete: true,
-  range: { start: 0, end: 1_000_000_000 },
-  totals: { spans, logs: 56, metrics: 7 },
-  decodedBytes: 1,
-  chunks: [],
-  rollups: [],
-  traceShards: [],
-  metricFiles: [],
-  config: {
-    viewer: {
-      eagerBudgetBytes: 1,
-      listCap: 100,
-      theme: 'system',
-      defaultDashboard: 'fusion',
-      home: 'traces',
-    },
-    dashboards: [],
-    views: [],
-  },
-});
 
 function row(name: string, service: string, dur: number, id: string): SpanRow {
   return {
@@ -69,7 +46,26 @@ function row(name: string, service: string, dur: number, id: string): SpanRow {
   } as unknown as SpanRow;
 }
 
-function resultOf(rows: SpanRow[], partial: SpanQueryResult['partial'] = null): SpanQueryResult {
+/** The exact duration distribution the engine returns for these durations (24 log-spaced bins over min..max). */
+function durationsOf(durs: readonly number[]): SpanQueryResult['durations'] {
+  if (durs.length === 0) return { summary: null, bins: [] };
+  const min = Math.min(...durs);
+  const max = Math.max(...durs);
+  const edges = durationAxis([{ durationNs: min }, { durationNs: max }], 24);
+  const bins: DurationBin[] = edges
+    .slice(0, -1)
+    .map((from, i) => ({ fromNs: from, toNs: edges[i + 1] ?? from, count: 0 }));
+  for (const d of durs) {
+    let i = 0;
+    while (i < bins.length - 1 && d >= (edges[i + 1] ?? Number.POSITIVE_INFINITY)) i++;
+    const bin = bins[i];
+    if (bin !== undefined) bin.count++;
+  }
+  const sum = durs.reduce((a, b) => a + b, 0);
+  return { summary: { count: durs.length, min, max, sum, p50: min, p95: max, p99: max }, bins };
+}
+
+function resultOf(rows: SpanRow[], over: Partial<SpanQueryResult> = {}): SpanQueryResult {
   const facets = new FacetCounts(100, 50, ['service.name', 'status.code']);
   for (const r of rows) facets.add('service.name', r.service);
   return {
@@ -77,18 +73,31 @@ function resultOf(rows: SpanRow[], partial: SpanQueryResult['partial'] = null): 
     total: rows.length,
     facets,
     buckets: new TimeBuckets(['ok', 'error', 'unset'], 8),
-    red: new RedSeries(8),
+    red: {
+      startNs: 0,
+      widthNs: 1,
+      counts: [rows.length],
+      errors: [0],
+      p50: [null],
+      p95: [null],
+      p99: [null],
+      max: [null],
+    },
+    durations: durationsOf(rows.map((r) => r.durationNs)),
     groups: null,
-    partial,
+    residual: false,
+    tables: { resources: [], scopes: [] },
+    ...over,
   };
 }
 
 function setup(
-  querySpans: LegacyDataSource['querySpans'],
+  querySpans: DataSource['querySpans'],
   spans = 10,
   initial: Parameters<typeof createSelectionStore>[0] = {},
+  extra: Partial<DataSource> = {},
 ) {
-  const ds = { manifest: manifest(spans), strategy: 'eager', querySpans } as LegacyDataSource;
+  const ds = { manifest: manifestV4(spans), querySpans, ...extra } as unknown as DataSource;
   const store = createSelectionStore(initial);
   const goTo = vi.fn<GoTo>();
   render(
@@ -135,25 +144,35 @@ describe('TracesExplorer', () => {
     expect(store.getState().text).toBe('');
   });
 
-  test('partial results read "from N of M chunks" and Scan entire run re-queries with scanAll', async () => {
-    const user = userEvent.setup();
-    const calls: SpanQuery[] = [];
-    setup((q) => {
-      calls.push(q);
-      return Promise.resolve(resultOf([row('a', 's', 5, 's1')], q.scanAll ? null : { scanned: 3, total: 9 }));
-    });
-    const note = await screen.findByRole('status', { name: 'Partial results' });
-    expect(note.textContent).toBe('from 3 of 9 chunks · Scan entire run');
-    await user.click(screen.getByRole('button', { name: 'Scan entire run' }));
-    await waitFor(() => expect(calls.at(-1)?.scanAll).toBe(true));
-    await waitFor(() => expect(screen.queryByText(/from 3 of 9 chunks/)).toBeNull());
+  test('it asks for rows, facets, timeline and durations together, with a signal and no progress callback', async () => {
+    const querySpans = vi.fn<DataSource['querySpans']>(() =>
+      Promise.resolve(resultOf([row('a', 's', 5, 's1')])),
+    );
+    setup(querySpans);
+    await screen.findByRole('grid', { name: 'Results' });
+    const [q, signal, ...rest] = querySpans.mock.calls[0] ?? [];
+    expect(q?.needs).toEqual(['rows', 'facets', 'timeline', 'durations']);
+    expect(q?.measureBy).toBeNull();
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(rest).toEqual([]);
+  });
+
+  test('a residual condition says it was evaluated in the browser; an ordinary result says nothing', async () => {
+    setup(() => Promise.resolve(resultOf([row('a', 's', 5, 's1')], { residual: true })));
+    const note = await screen.findByRole('status', { name: 'Evaluated in the browser' });
+    expect(note.textContent).toMatch(/^Evaluated in the browser: /);
+    cleanup();
+    setup(() => Promise.resolve(resultOf([row('a', 's', 5, 's1')])));
+    await screen.findByRole('grid', { name: 'Results' });
+    expect(screen.queryByRole('status', { name: 'Evaluated in the browser' })).toBeNull();
+    expect(screen.queryByText(/Scan entire run|chunks/)).toBeNull();
   });
 
   test('a failing query renders a designed error with its message', async () => {
-    setup(() => Promise.reject(new Error('data/chunks/spans/000003.js: failed to load')));
+    setup(() => Promise.reject(new Error('partitions/000003.parquet: failed to load')));
     const alert = await screen.findByRole('alert');
     expect(within(alert).getByText('The query could not run')).toBeTruthy();
-    expect(alert.textContent).toContain('data/chunks/spans/000003.js: failed to load');
+    expect(alert.textContent).toContain('partitions/000003.parquet: failed to load');
   });
 
   test('the query never groups in the data layer', async () => {
@@ -210,17 +229,69 @@ describe('TracesExplorer', () => {
     expect(within(table).getByText('Other (value)')).toBeTruthy();
   });
 
-  test('the duration distribution is labelled with N and M when the rows are the first N of M', async () => {
+  test('the duration facet counts every matching span, not only the listed rows', async () => {
     const rows = [row('a', 's', 5, 's1'), row('b', 's', 50, 's2')];
-    setup(() => Promise.resolve({ ...resultOf(rows), total: 40 }));
-    const note = await screen.findByTestId('duration-bins-note');
-    expect(note.textContent).toBe('Duration distribution is from the first 2 of 40 spans');
+    const durations = durationsOf([
+      ...rows.map((r) => r.durationNs),
+      ...Array.from({ length: 38 }, () => 20),
+    ]);
+    setup(() => Promise.resolve({ ...resultOf(rows), total: 40, durations }));
+    await screen.findByRole('grid', { name: 'Results' });
+    const counts = [...document.querySelectorAll('[data-bin]')].map((b) =>
+      Number(/: (\d+)$/.exec(b.getAttribute('title') ?? '')?.[1]),
+    );
+    expect(counts.reduce((a, b) => a + b, 0)).toBe(40);
+    expect(screen.queryByTestId('duration-bins-note')).toBeNull();
+    expect(screen.queryByText(/Duration distribution is from the first/)).toBeNull();
   });
 
-  test('a complete result carries no duration caveat', async () => {
-    setup(() => Promise.resolve(resultOf([row('a', 's', 5, 's1')])));
-    await screen.findByRole('grid', { name: 'Results' });
-    expect(screen.queryByTestId('duration-bins-note')).toBeNull();
+  test('the RED strip shows the exact quantiles of the duration summary', async () => {
+    const rows = [row('a', 's', 5000, 's1')];
+    setup(() =>
+      Promise.resolve(
+        resultOf(rows, {
+          durations: {
+            summary: { count: 1, min: 5000, max: 9000, sum: 14000, p50: 6000, p95: 8000, p99: 8500 },
+            bins: [],
+          },
+        }),
+      ),
+    );
+    const strip = await screen.findByRole('region', { name: 'Requests, errors and latency' });
+    expect(strip.textContent).toContain(formatDuration(6000));
+    expect(strip.textContent).toContain(formatDuration(9000));
+  });
+
+  test('the service share cell loads per row, for the trace of that row', async () => {
+    const serviceShare = vi.fn((id: string) =>
+      Promise.resolve(
+        id === 't1'
+          ? [
+              { service: 'web', ns: 30 },
+              { service: 'db', ns: 10 },
+            ]
+          : [],
+      ),
+    );
+    const trace = (id: string): TraceRow => ({
+      traceId: id as TraceRow['traceId'],
+      rootSummary: { service: 'web', name: 'GET /', resource: 'GET /' },
+      start: 10,
+      durationNs: 40,
+      spans: 3,
+      errors: 0,
+    });
+    setup(
+      () => Promise.resolve({ ...resultOf([]), rows: [trace('t1'), trace('t2')], total: 2 }),
+      10,
+      { mode: 'traces' },
+      { serviceShare: serviceShare as unknown as DataSource['serviceShare'] },
+    );
+    const bar = await screen.findByRole('img', { name: /web .*, db / });
+    expect(bar).toBeTruthy();
+    await waitFor(() => expect(serviceShare).toHaveBeenCalledTimes(2));
+    expect(serviceShare.mock.calls.map((c) => c[0]).sort()).toEqual(['t1', 't2']);
+    expect(screen.queryByText('partial')).toBeNull();
   });
 
   test('export after a failed query says the query failed, not that one is running', async () => {
@@ -278,7 +349,7 @@ describe('TracesExplorer duration facet', () => {
   const DUR = 'span.end_time_unix_nano - span.start_time_unix_nano';
   const ROWS = [1e3, 5e3, 2e4, 1e5, 4e5, 2e6, 9e6, 3e7, 2e8, 1e9].map((d, i) => row('s', 'svc', d, `d${i}`));
   /** A data source that applies the duration bounds in the condition like the real one. */
-  const filtering: LegacyDataSource['querySpans'] = (q) => {
+  const filtering: DataSource['querySpans'] = (q) => {
     const lo = />= (\d+(?:\.\d+)?)/.exec(q.condition ?? '')?.[1];
     const hi = /<= (\d+(?:\.\d+)?)/.exec(q.condition ?? '')?.[1];
     return Promise.resolve(

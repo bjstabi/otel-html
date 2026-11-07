@@ -40,7 +40,7 @@ import type { ScriptLoader } from './script-loader.js';
 import type { SpanQuery, SpanQueryResult } from './span-query.js';
 import { createWindowedSource } from './windowed.js';
 
-export interface Landing {
+interface Landing {
   facets: FacetCounts;
   buckets: TimeBuckets<'ok' | 'error' | 'unset'>;
   red: RedSeries;
@@ -120,7 +120,8 @@ export interface SpanStrategy extends Pick<LegacyDataSource, 'querySpans' | 'has
 export type LogStrategy = Pick<LegacyDataSource, 'queryLogs' | 'getLog' | 'traceLogs' | 'surroundingLogs'>;
 
 /** `ds.metricCatalog()` as a stable function, for `useKeyedAsync(dataSource, catalogOf)`. */
-export const catalogOf = (ds: LegacyDataSource): Promise<MetricCatalog> => ds.metricCatalog();
+export const catalogOf = (ds: Pick<LegacyDataSource, 'metricCatalog'>): Promise<MetricCatalog> =>
+  ds.metricCatalog();
 
 /** Metrics kept decoded in memory. */
 const METRIC_LRU_SIZE = 32;

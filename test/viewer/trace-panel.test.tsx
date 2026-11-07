@@ -2,16 +2,13 @@ import { Tooltip } from '@base-ui/react/tooltip';
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import type { Manifest } from '../../src/format/manifest.js';
 import type { RelNanos, TraceId } from '../../src/model/ids.js';
 import { compileCondition } from '../../src/ottl/compile.js';
 import { FacetCounts } from '../../src/rollups/facets.js';
-import { RedSeries } from '../../src/rollups/red.js';
 import { TimeBuckets } from '../../src/rollups/time-buckets.js';
-import type { TraceDetail } from '../../src/viewer/data/data-source.js';
-import type { LegacyDataSource } from '../../src/viewer/data/legacy-data-source.js';
+import type { DataSource, TraceDetail } from '../../src/viewer/data/data-source.js';
 import { type LogRow, logRef } from '../../src/viewer/data/log-query.js';
-import type { SpanQueryResult, TraceRow } from '../../src/viewer/data/span-query.js';
+import type { SpanQueryResult, TraceRow } from '../../src/viewer/data/results.js';
 import { type GoTo, GoToContext } from '../../src/viewer/shell/go-to.js';
 import { MOVE_EVENT } from '../../src/viewer/shell/move-event.js';
 import { applyPatch, carryTo } from '../../src/viewer/state/carry.js';
@@ -23,6 +20,7 @@ import { TracesExplorer } from '../../src/viewer/traces/explorer.js';
 import { SPLIT_STORAGE_KEY } from '../../src/viewer/traces/split-pane.js';
 import { TracePanel, type TracePanelProps } from '../../src/viewer/traces/trace-panel.js';
 import { detailOf, spanIdOf, str, TRACE_ID, traceRow } from './trace-rows.js';
+import { manifestV4 } from './v4-manifest.js';
 
 vi.mock('../../src/viewer/components/chart.js', () => ({ Chart: (): null => null }));
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -35,34 +33,6 @@ afterEach(() => {
 });
 
 const HOSTILE = '</script><img src=x onerror=alert(1)> ';
-const manifest: Manifest = {
-  formatVersion: 1,
-  otelHtmlVersion: '0.0.0',
-  title: 'run',
-  epochUnixNano: '1700000000000000000',
-  createdAt: '2023-11-14T22:13:20.000Z',
-  updatedAt: '2023-11-14T22:13:20.000Z',
-  complete: true,
-  range: { start: 0, end: 1_000_000_000 },
-  totals: { spans: 6, logs: 0, metrics: 0 },
-  decodedBytes: 1,
-  chunks: [],
-  rollups: [],
-  traceShards: [],
-  metricFiles: [],
-  config: {
-    viewer: {
-      eagerBudgetBytes: 1,
-      listCap: 100,
-      theme: 'system',
-      defaultDashboard: 'fusion',
-      home: 'traces',
-    },
-    dashboards: [],
-    views: [],
-  },
-};
-
 const okDetail = (): TraceDetail =>
   detailOf([
     traceRow(1, null, 1_000_000, 51_000_000, {
@@ -82,14 +52,14 @@ const errDetail = (): TraceDetail =>
     traceRow(2, 1, 10, 50, { service: 'db', name: 'db.query', error: true }),
   ]);
 
-function source(over: Partial<LegacyDataSource> = {}): LegacyDataSource {
+function source(over: Partial<DataSource> = {}): DataSource {
   return {
-    manifest,
-    strategy: 'eager',
+    manifest: manifestV4(6),
     getTrace: () => Promise.resolve(okDetail()),
-    percentileOf: () => 97.2,
+    percentileOf: () => Promise.resolve(97.2),
+    serviceShare: () => Promise.resolve([]),
     ...over,
-  } as LegacyDataSource;
+  } as unknown as DataSource;
 }
 
 function mount(
@@ -136,7 +106,7 @@ describe('TracePanel header', () => {
   });
 
   test('an unknown percentile shows no badge, never a fake value', async () => {
-    mount({ dataSource: source({ percentileOf: () => null }) });
+    mount({ dataSource: source({ percentileOf: () => Promise.resolve(null) }) });
     const header = await screen.findByTestId('trace-header');
     expect(within(header).queryByText(/^p\d+$/)).toBeNull();
   });
@@ -345,14 +315,11 @@ describe('j/k ownership', () => {
   const ids = ['a', 'b', 'c'].map((c) => c.repeat(32) as TraceId);
   const traceRowOf = (id: TraceId, i: number): TraceRow => ({
     traceId: id,
-    root: null,
     rootSummary: { service: `svc-${i}`, name: `root-${i}`, resource: `res-${i}` },
     start: i * 1000,
     durationNs: 500,
     spans: 2,
     errors: 0,
-    shareComplete: false,
-    serviceShare: [],
   });
 
   function setup() {
@@ -361,9 +328,11 @@ describe('j/k ownership', () => {
       total: 3,
       facets: new FacetCounts(100, 50, ['service.name']),
       buckets: new TimeBuckets(['ok', 'error', 'unset'], 8),
-      red: new RedSeries(8),
+      red: null,
+      durations: { summary: null, bins: [] },
       groups: null,
-      partial: null,
+      residual: false,
+      tables: { resources: [], scopes: [] },
     };
     const ds = source({
       querySpans: () => Promise.resolve(result),
@@ -471,7 +440,7 @@ describe('TracePanel Logs tabs', () => {
     logRow(2, 30, spanIdOf(2).toString(), 'third'),
     logRow(3, 40, 'deadbeefdeadbeef', 'dangling'),
   ];
-  const withLogs = (logs: readonly LogRow[]): LegacyDataSource =>
+  const withLogs = (logs: readonly LogRow[]): DataSource =>
     source({
       getTrace: () => Promise.resolve({ ...okDetail(), logCount: logs.length }),
       traceLogs: () => Promise.resolve(logs),
@@ -511,6 +480,40 @@ describe('TracePanel Logs tabs', () => {
   }
   const decodedQuery = (hash: string | undefined): string | null =>
     new URLSearchParams((hash ?? '').split('?')[1] ?? '').get('q');
+
+  const mountOnly = (ds: DataSource): void => {
+    render(
+      <ThemeProvider>
+        <GoToContext.Provider value={() => undefined}>
+          <SelectionProvider store={createSelectionStore({})}>
+            <Tooltip.Provider>
+              <TracePanel dataSource={ds} traceId={TRACE_ID} layout="overlay" onClose={() => undefined} />
+            </Tooltip.Provider>
+          </SelectionProvider>
+        </GoToContext.Provider>
+      </ThemeProvider>,
+    );
+  };
+
+  test('a trace with logs but no spans (getTrace rejects) still shows its logs', async () => {
+    const ds = source({
+      getTrace: () => Promise.reject(new Error('The report has no trace with this id')),
+      traceLogs: () => Promise.resolve([LOGS[0] as LogRow]),
+    });
+    mountOnly(ds);
+    expect(await screen.findByText('first')).toBeTruthy();
+    expect(screen.getByText(/holds no spans for trace/)).toBeTruthy();
+    expect(screen.queryByText('The trace could not be loaded')).toBeNull();
+  });
+
+  test('a trace with neither spans nor logs is still the load error', async () => {
+    const ds = source({
+      getTrace: () => Promise.reject(new Error('The report has no trace with this id')),
+      traceLogs: () => Promise.resolve([]),
+    });
+    mountOnly(ds);
+    expect(await screen.findByText('The trace could not be loaded')).toBeTruthy();
+  });
 
   test('logs load once for both tabs, and a trace change aborts and drops the stale load', async () => {
     const user = userEvent.setup();

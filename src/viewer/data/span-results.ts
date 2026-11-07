@@ -195,8 +195,9 @@ export function facetCounts(
   let attrKeysTotal = 0;
   for (const r of attrs === null ? [] : rowsOf(attrs)) {
     const key = text(cell(r, 'key'));
-    if ((only !== null && !only.has(key)) || coreKeys.has(key)) continue;
+    if (coreKeys.has(key)) continue;
     attrKeysTotal = Math.max(attrKeysTotal, toNumber(cell(r, 'keys_total'), 'keys_total'));
+    if (only !== null && !only.has(key)) continue;
     let k = keys.get(key);
     if (k === undefined) {
       k = {
@@ -220,8 +221,15 @@ export function facetCounts(
       valueCap: caps.facetValueCap,
       keyCap: caps.facetKeyCap,
       pinned: [...pinned],
-      // the number of attribute keys the key cap dropped (the rollup counts occurrences; here the query knows keys)
-      skippedKeyAdds: Math.max(0, attrKeysTotal - attrKeysListed),
+      // the number of attribute keys the key cap dropped (the rollup counts occurrences; here the query knows keys).
+      // `keys_total` counts every key, so under `only` it cannot be compared with the kept keys: the requested keys
+      // that are missing count as dropped, and only when the cap was reached at all.
+      skippedKeyAdds:
+        only === null
+          ? Math.max(0, attrKeysTotal - attrKeysListed)
+          : attrKeysTotal > caps.facetKeyCap
+            ? [...only].filter((k) => !coreKeys.has(k) && !keys.has(k)).length
+            : 0,
       keys: [...keys.values()],
     },
     'facets',

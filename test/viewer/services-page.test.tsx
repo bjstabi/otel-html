@@ -1,94 +1,42 @@
 import { Tooltip } from '@base-ui/react/tooltip';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
-import { userEvent } from '@testing-library/user-event';
-import { afterEach, describe, expect, test } from 'vitest';
-import type { Manifest } from '../../src/format/manifest.js';
-import { ExpHistogram } from '../../src/rollups/exp-histogram.js';
-import { FacetCounts } from '../../src/rollups/facets.js';
-import { RedSeries } from '../../src/rollups/red.js';
+import { afterEach, describe, expect, test, vi } from 'vitest';
+import type { RelNanos } from '../../src/model/ids.js';
 import { TimeBuckets } from '../../src/rollups/time-buckets.js';
-import type { LegacyDataSource } from '../../src/viewer/data/legacy-data-source.js';
-import type { SpanQuery, SpanQueryResult } from '../../src/viewer/data/span-query.js';
+import type { DataSource } from '../../src/viewer/data/data-source.js';
+import type { ServiceStats, ServicesResult } from '../../src/viewer/data/results.js';
 import { GoToContext } from '../../src/viewer/shell/go-to.js';
 import { createSelectionStore } from '../../src/viewer/state/selection.js';
 import { SelectionProvider } from '../../src/viewer/state/selection-context.js';
 import { ThemeProvider } from '../../src/viewer/theme/theme-provider.js';
 import { ServicesPage } from '../../src/viewer/traces/services-page.js';
+import { manifestV4 } from './v4-manifest.js';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 afterEach(cleanup);
 
-const manifest = (spans: number): Manifest => ({
-  formatVersion: 1,
-  otelHtmlVersion: '0.0.0',
-  title: 'run',
-  epochUnixNano: '1700000000000000000',
-  createdAt: '2023-11-14T22:13:20.000Z',
-  updatedAt: '2023-11-14T22:13:20.000Z',
-  complete: true,
-  range: { start: 0, end: 1_000_000_000 },
-  totals: { spans, logs: 56, metrics: 7 },
-  decodedBytes: 1,
-  chunks: [],
-  rollups: [],
-  traceShards: [],
-  metricFiles: [],
-  config: {
-    viewer: {
-      eagerBudgetBytes: 1,
-      listCap: 100,
-      theme: 'system',
-      defaultDashboard: 'fusion',
-      home: 'traces',
-    },
-    dashboards: [],
-    views: [],
-  },
-});
-
-function result(errors: number, partial: SpanQueryResult['partial']): SpanQueryResult {
-  const facets = new FacetCounts(10, 10, ['service.name']);
-  for (let i = 0; i < errors; i++) facets.add('service.name', 'web');
-  return {
-    rows: [],
-    total: errors,
-    facets,
-    buckets: new TimeBuckets(['ok', 'error', 'unset'], 8),
-    red: new RedSeries(8),
-    groups: null,
-    partial,
-  };
+function stats(service: string, requests: number, errors: number): ServiceStats {
+  const buckets = new TimeBuckets(['count'], 4);
+  buckets.add(0 as RelNanos, 'count');
+  return { service, requests, errors, p50: 1000, p95: 2000, p99: 3000, max: 4000, buckets };
 }
 
-/** Windowed-like: unscanned queries find 1 error of the true 4 and report partial; scanAll finds all 4. */
-function windowed(spans = 10): { ds: LegacyDataSource; calls: SpanQuery[] } {
-  const calls: SpanQuery[] = [];
-  const facets = new FacetCounts(10, 10, ['service.name']);
-  for (let i = 0; i < 10; i++) facets.add('service.name', 'web');
-  const h = new ExpHistogram();
-  h.record(100);
-  const ds = {
-    manifest: manifest(spans),
-    strategy: 'windowed',
-    landing: () =>
-      Promise.resolve({
-        facets,
-        buckets: new TimeBuckets(['ok', 'error', 'unset'], 8),
-        red: new RedSeries(8),
-        durations: new Map([['web\u0000GET /', h]]),
-      }),
-    querySpans: (q: SpanQuery) => {
-      calls.push(q);
-      return Promise.resolve(q.scanAll ? result(4, null) : result(1, { scanned: 2, total: 8 }));
-    },
-  } as unknown as LegacyDataSource;
-  return { ds, calls };
+type ServicesCall = [{ window: unknown; condition: string | null; limit: number }, AbortSignal | undefined];
+
+function source(
+  result: ServicesResult,
+  spans = 10,
+): { ds: DataSource; services: ReturnType<typeof vi.fn<(...a: ServicesCall) => Promise<ServicesResult>>> } {
+  const services = vi.fn<(...a: ServicesCall) => Promise<ServicesResult>>(() => Promise.resolve(result));
+  return { ds: { manifest: manifestV4(spans), services } as unknown as DataSource, services };
 }
 
-function mount(ds: LegacyDataSource): void {
+function mount(ds: DataSource, window: { start: number; end: number } | null = null): void {
+  const store = createSelectionStore({});
+  if (window !== null) store.getState().setWindow(window);
   render(
     <ThemeProvider>
-      <SelectionProvider store={createSelectionStore({})}>
+      <SelectionProvider store={store}>
         <GoToContext.Provider value={() => {}}>
           <Tooltip.Provider>
             <ServicesPage dataSource={ds} />
@@ -100,62 +48,68 @@ function mount(ds: LegacyDataSource): void {
 }
 
 describe('ServicesPage', () => {
-  test('a partial scan labels errors, error rate and sparkline as partial and offers Scan entire run', async () => {
-    const { ds } = windowed();
+  test('one services call, exact figures, no partial marks and no scan button', async () => {
+    const { ds, services } = source({ services: [stats('web', 10, 4), stats('db', 5, 0)], total: 2 });
     mount(ds);
-    const note = await screen.findByRole('status', { name: 'Partial results' });
-    expect(note.textContent).toBe('from 2 of 8 chunks · Scan entire run');
-    const row = screen.getByRole('row', { name: /web/ });
+    const row = await screen.findByRole('row', { name: /web/ });
     const cells = within(row).getAllByRole('cell');
-    expect(cells[1]?.textContent).toBe('≥ 1partial'); // Errors
-    expect(cells[2]?.textContent).toBe('≥ 10.0%partial'); // Error rate
-    expect(cells.at(-1)?.textContent).toContain('partial'); // sparkline
-    expect(cells[0]?.textContent).toBe('10'); // requests stay exact
+    expect(cells.map((c) => c.textContent).slice(0, 3)).toEqual(['10', '4', '40.0%']);
+    expect(within(screen.getByRole('row', { name: /db/ })).getAllByRole('cell')[1]?.textContent).toBe('0');
+    expect(services).toHaveBeenCalledTimes(1);
+    expect(services.mock.calls[0]?.[0]).toEqual({ window: null, condition: null, limit: 50 });
+    expect(screen.queryByText(/partial/i)).toBeNull();
+    expect(screen.queryByText('≥', { exact: false })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Scan entire run' })).toBeNull();
   });
 
-  test('Scan entire run re-queries with scanAll and the cells become exact', async () => {
-    const user = userEvent.setup();
-    const { ds, calls } = windowed();
+  test('the selected time window is the query window', async () => {
+    const { ds, services } = source({ services: [stats('web', 1, 0)], total: 1 });
+    mount(ds, { start: 5, end: 9 });
+    await screen.findByRole('row', { name: /web/ });
+    expect(services.mock.calls[0]?.[0].window).toEqual({ start: 5, end: 9 });
+  });
+
+  test('more services than the limit says the list is the busiest 50', async () => {
+    const { ds } = source({ services: [stats('web', 1, 0)], total: 51 });
     mount(ds);
-    await user.click(await screen.findByRole('button', { name: 'Scan entire run' }));
-    await waitFor(() => expect(calls.some((q) => q.scanAll)).toBe(true));
-    await waitFor(() => expect(screen.queryByRole('status', { name: 'Partial results' })).toBeNull());
-    const cells = within(screen.getByRole('row', { name: /web/ })).getAllByRole('cell');
-    expect(cells[1]?.textContent).toBe('4');
-    expect(cells[2]?.textContent).toBe('40.0%');
-    expect(calls.filter((q) => q.scanAll).every((q) => q.groupBy === null)).toBe(true);
+    expect(await screen.findByText('Showing the 50 busiest services.')).toBeTruthy();
   });
 
-  test('unmounting aborts the in-flight queries of the page', async () => {
+  test('a failed query shows the message', async () => {
+    const ds = {
+      manifest: manifestV4(10),
+      services: () => Promise.reject(new Error('the engine stopped')),
+    } as unknown as DataSource;
+    mount(ds);
+    expect(await screen.findByText('the engine stopped')).toBeTruthy();
+  });
+
+  test('unmounting aborts the in-flight query', async () => {
     const signals: (AbortSignal | undefined)[] = [];
-    const { ds } = windowed();
-    const slow = {
-      ...ds,
-      querySpans: (_q: SpanQuery, _p?: unknown, signal?: AbortSignal) => {
+    const ds = {
+      manifest: manifestV4(10),
+      services: (_o: unknown, signal?: AbortSignal) => {
         signals.push(signal);
-        return new Promise<SpanQueryResult>(() => undefined);
+        return new Promise<ServicesResult>(() => undefined);
       },
-    } as unknown as LegacyDataSource;
-    mount(slow);
+    } as unknown as DataSource;
+    mount(ds);
     await waitFor(() => expect(signals).toHaveLength(1));
     cleanup();
     expect(signals[0]?.aborted).toBe(true);
   });
 
   test('a zero-span report shows the explorer empty state with the other signal counts', async () => {
-    const { ds } = windowed(0);
-    const empty = {
-      ...ds,
-      landing: () =>
-        Promise.resolve({
-          facets: new FacetCounts(10, 10),
-          buckets: new TimeBuckets(['ok', 'error', 'unset'], 8),
-          red: new RedSeries(8),
-          durations: new Map(),
-        }),
-    } as LegacyDataSource;
-    mount(empty);
+    const { ds } = source({ services: [], total: 0 }, 0);
+    mount(ds);
     expect(await screen.findByText('This report has no spans')).toBeTruthy();
     expect(screen.getByText('56')).toBeTruthy();
+  });
+
+  test('no services in a window of a report that has spans says so instead', async () => {
+    const { ds } = source({ services: [], total: 0 });
+    mount(ds, { start: 1, end: 2 });
+    expect(await screen.findByText('No spans in the selected time range.')).toBeTruthy();
+    expect(screen.queryByText('This report has no spans')).toBeNull();
   });
 });

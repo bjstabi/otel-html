@@ -1,8 +1,7 @@
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { type JSX, useState } from 'react';
-import { ExpHistogram } from '../../rollups/exp-histogram.js';
-import type { RedSeries } from '../../rollups/red.js';
 import { formatDuration } from '../../semconv/formatters.js';
+import type { DurationSummary, RedBuckets } from '../data/results.js';
 import { Sparkline } from './sparkline.js';
 import type { Measure } from './views.js';
 
@@ -19,21 +18,18 @@ export interface RedSummary {
 
 const sum = (xs: readonly number[]): number => xs.reduce((a, b) => a + b, 0);
 
-/** Totals and latency percentiles over every bucket of the series (histograms are merged, not averaged). */
-export function redSummary(red: RedSeries): RedSummary {
+/** Totals from the bucketed counts; the percentiles are the exact ones over every matching span (0 without any). */
+export function redSummary(red: RedBuckets, durations: DurationSummary | null): RedSummary {
   const requests = sum(red.counts);
   const errors = sum(red.errors);
-  const merged = new ExpHistogram();
-  for (const h of red.histograms) if (h !== undefined) merged.merge(h);
-  const q = (p: number): number => (merged.count === 0 ? 0 : merged.quantile(p));
   return {
     requests,
     errors,
     errorRate: requests === 0 ? 0 : errors / requests,
-    p50: q(0.5),
-    p95: q(0.95),
-    p99: q(0.99),
-    max: merged.count === 0 ? 0 : merged.max,
+    p50: durations?.p50 ?? 0,
+    p95: durations?.p95 ?? 0,
+    p99: durations?.p99 ?? 0,
+    max: durations?.max ?? 0,
   };
 }
 
@@ -64,9 +60,13 @@ function Analyze(props: { measure: Measure; onAnalyze(m: Measure): void }): JSX.
 }
 
 /** Requests / Errors / Latency for the filtered set; collapsible, with Analyze shortcuts into the time series. */
-export function RedStrip(props: { red: RedSeries; onAnalyze(measure: Measure): void }): JSX.Element {
+export function RedStrip(props: {
+  red: RedBuckets;
+  durations: DurationSummary | null;
+  onAnalyze(measure: Measure): void;
+}): JSX.Element {
   const [open, setOpen] = useState(true);
-  const s = redSummary(props.red);
+  const s = redSummary(props.red, props.durations);
   return (
     <section
       aria-label="Requests, errors and latency"

@@ -29,7 +29,29 @@ export function ErrorCard(props: { title: string; message: string }): JSX.Elemen
   );
 }
 
-/** A windowed scan that stopped early: how much it read, and a way to read everything. */
+/**
+ * What a running or finished query says about itself: "Loading" while it runs, and (D5) that part of the filter was
+ * evaluated in the browser instead of the query engine; nothing otherwise.
+ */
+export function QueryNote(props: { loading: boolean; residual: boolean }): JSX.Element | null {
+  if (!props.loading && !props.residual) return null;
+  return (
+    <div className="flex flex-col gap-1">
+      {props.residual && (
+        <p role="status" aria-label="Evaluated in the browser" className="text-sm text-ink-2">
+          Evaluated in the browser: some terms of this filter have no SQL form and are checked row by row.
+        </p>
+      )}
+      {props.loading && (
+        <p role="status" className="text-sm text-muted">
+          Loading
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Legacy (logs and dashboards, until 5.3/5.4): a windowed scan that stopped early: how much it read, and a way to read everything. */
 export function PartialNote(props: {
   partial: { scanned: number; total: number } | null;
   onScanAll(): void;
@@ -53,7 +75,7 @@ export function PartialNote(props: {
   );
 }
 
-/** "Loading", or how far a chunk scan has got. */
+/** Legacy (until 5.3-5.5): "Loading", or how far a chunk scan has got. */
 export function LoadingNote(props: { progress: { scanned: number; total: number } | null }): JSX.Element {
   return (
     <p role="status" className="text-sm text-muted">
