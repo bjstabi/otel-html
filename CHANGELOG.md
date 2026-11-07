@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.3.0](https://github.com/bjstabi/otel-html/compare/otel-html-v0.2.1...otel-html-v0.3.0) (2026-11-07)
+
+
+### ⚠ BREAKING CHANGES
+
+* **api:** the types Clock, FileSystem, Timers and WriterDeps are no longer exported; Report.createResolved is removed from the public class; the deps argument of Report.create, convert, merge and startReceiver is now Partial<ReportDeps> (logger and tracer only), and other keys are ignored.
+* **cli:** run exits with the command's exit code; a report failure is printed and never fails a passing command ([#111](https://github.com/bjstabi/otel-html/issues/111))
+
+### Features
+
+* **ci:** a live badge and screenshot of the default branch's report ([#131](https://github.com/bjstabi/otel-html/issues/131)) ([ffda2ef](https://github.com/bjstabi/otel-html/commit/ffda2ef29489f551b7340225bdc7d5446bd776c1))
+* **dashboards:** toplist and table widgets rank spans by a duration measure; the timeline counts points at the range end; an unknown groupBy names the report's facets ([#113](https://github.com/bjstabi/otel-html/issues/113)) ([08e2fba](https://github.com/bjstabi/otel-html/commit/08e2fbac8aa7e5143f4119707116b6f1fa545c76))
+* **demo:** made-up CI runs and the CI dashboard; the demo over SSH ([#126](https://github.com/bjstabi/otel-html/issues/126)) ([b6e265f](https://github.com/bjstabi/otel-html/commit/b6e265f2b19a43d542d53f459c5ced617b902dff))
+* OpenTelemetry spans from the viewer and a span per test ([#124](https://github.com/bjstabi/otel-html/issues/124)) ([ea17c25](https://github.com/bjstabi/otel-html/commit/ea17c2540b7d8a168afb1154b6548ddefe873de2))
+
+
+### Bug fixes
+
+* **api:** report.abort(), a public deps type of logger and tracer, viewer packages as devDependencies ([#194](https://github.com/bjstabi/otel-html/issues/194)) ([4a05c35](https://github.com/bjstabi/otel-html/commit/4a05c35ca962ef3762a915dafc940314c98d60f0))
+* **ci:** approximate job ids agree, retention keeps the published run, escaped names, install.sh latest path ([#200](https://github.com/bjstabi/otel-html/issues/200)) ([4cb8dad](https://github.com/bjstabi/otel-html/commit/4cb8dad887eb39cd93b1a43d620273d097f852e9))
+* **ci:** the Runs list keeps a job's runs, and skipped jobs chart no 0 s points ([#130](https://github.com/bjstabi/otel-html/issues/130)) ([17d95b8](https://github.com/bjstabi/otel-html/commit/17d95b8dfd148f6aec9f09c3f77950abf36af143))
+* **cli:** run exits with the command's exit code; a report failure is printed and never fails a passing command ([#111](https://github.com/bjstabi/otel-html/issues/111)) ([079807e](https://github.com/bjstabi/otel-html/commit/079807ebf8281e5c92de4b74857fe967acbf666b))
+* **model:** __proto__ keys, empty config files, dotted config keys, per-point where paths, id bytes, nested repetition ([#196](https://github.com/bjstabi/otel-html/issues/196)) ([dbd32ea](https://github.com/bjstabi/otel-html/commit/dbd32ea1b08992b4a0c6d5c634327ca1bd0139a3))
+* **model:** empty documents in a receiver body, nested bounded repetition, snake_case OTLP JSON ([#189](https://github.com/bjstabi/otel-html/issues/189)) ([441bf19](https://github.com/bjstabi/otel-html/commit/441bf19209755d4a0458dfc5c5535b08a176fb4a))
+* **viewer:** a measured whole-run scan keeps only the rows it lists and notes groups past the cap ([#132](https://github.com/bjstabi/otel-html/issues/132)) ([6e509f5](https://github.com/bjstabi/otel-html/commit/6e509f5f0d7de501349672bda473f09fc1f59a52))
+* **viewer:** a whole-run scan covers the run, scans follow the sort, facet caps come from the report ([#190](https://github.com/bjstabi/otel-html/issues/190)) ([0f48872](https://github.com/bjstabi/otel-html/commit/0f48872102154ad3d68a9c7d7f31be1c3394e125))
+* **viewer:** log row heights, Waterfall focus, flame-graph cost and clipping, chip drafts, duration labels ([#199](https://github.com/bjstabi/otel-html/issues/199)) ([f9a5eaf](https://github.com/bjstabi/otel-html/commit/f9a5eafbf51fabce89de0f79d07cb058bd4bf8a5))
+* **viewer:** rollup baselines, heatmap cell width, bounded level caches, run-chart cost, labels ([#197](https://github.com/bjstabi/otel-html/issues/197)) ([42844ef](https://github.com/bjstabi/otel-html/commit/42844ef13a299c99959be46aa35ae8739fe835ba))
+* **viewer:** the Duration facet keeps its axis while a duration filter is set ([#191](https://github.com/bjstabi/otel-html/issues/191)) ([a74749b](https://github.com/bjstabi/otel-html/commit/a74749bf52a1f6bbd48f18f1747a0e1398359eea))
+* **viewer:** traces-mode scans drop unmatched rows, abortable eager scans, cheaper hot paths ([#198](https://github.com/bjstabi/otel-html/issues/198)) ([0cb1eec](https://github.com/bjstabi/otel-html/commit/0cb1eecc849260d2f097d30eda60bb0671bec953))
+* **writer:** cumulative summaries, long-series merges without spread, close() after a failed prune ([#187](https://github.com/bjstabi/otel-html/issues/187)) ([6e08e90](https://github.com/bjstabi/otel-html/commit/6e08e9095ba016e6528e89ca0665b8c22efdd8e3))
+* **writer:** the buffer merge agrees with mergeAgg, MetricBuffer tests, the --replace memory note ([#192](https://github.com/bjstabi/otel-html/issues/192)) ([c21dbca](https://github.com/bjstabi/otel-html/commit/c21dbca1100179587dde36be09f05644515e7b24))
+
+
+### Documentation
+
+* clone with --single-branch to skip the gh-pages site ([#218](https://github.com/bjstabi/otel-html/issues/218)) ([1cc9243](https://github.com/bjstabi/otel-html/commit/1cc9243b7c932e276f8a9417ec3d752b04070bd1))
+
 ## [0.2.1](https://github.com/bjstabi/otel-html/compare/otel-html-v0.2.0...otel-html-v0.2.1) (2026-11-02)
 
 
