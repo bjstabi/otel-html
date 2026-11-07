@@ -33,7 +33,7 @@ import type { LoadedChunk, TimeWindow } from './span-query.js';
 import { TopKBuffer, topK } from './top-k.js';
 
 declare const logRefBrand: unique symbol;
-/** `<partition n>.<file_row_number>`: stable for a report folder, and the URL key `log=`. */
+/** `<partition n>.<file_row_number>`: stable while the partition exists (D8), and the URL key `log=`. */
 export type LogRef = string & { readonly [logRefBrand]: 'LogRef' };
 
 const LOG_REF = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;

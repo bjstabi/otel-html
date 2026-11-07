@@ -535,6 +535,49 @@ describe('resourceValues', () => {
       capped: false,
     });
     expect(await source.resourceValues('port')).toEqual({ values: ['80', '81'], kind: 'int', capped: false });
+    // one text under two kinds is one value: cap 2 over ('3' as int and string, 'a') keeps both, not capped
+    const t = (v: JsonObject) => [attr('service.name', str('s')), attr('host.name', v)];
+    const h = await buildFormat4Report(
+      [
+        otlp(
+          traceRequest([span({ traceId: hex(6, 32), spanId: hex(6, 16) })], t({ intValue: '3' })) as never,
+        ),
+        otlp(logsRequest([{ severityNumber: 9, body: str('x') }], t(str('3'))) as never),
+        otlp(logsRequest([{ severityNumber: 9, body: str('y') }], t(str('a'))) as never),
+      ],
+      { close: false },
+    );
+    const hdb = await openFixtureDb(h);
+    const two = createDuckDbDataSource({
+      engine: mosaicQueryEngine(createCoordinator(hdb.connector, silentLogger), hdb),
+      manifest: h.manifest,
+      caps: { facetValueCap: 2, facetKeyCap: 500 },
+    });
+    expect(await two.resourceValues('host.name')).toEqual({
+      values: ['3', 'a'],
+      kind: 'mixed',
+      capped: false,
+    });
     await source.close();
+  });
+
+  test('the partition lookup of traceLogs and a traceId query receives the abort signal', async () => {
+    const base = mosaicQueryEngine(createCoordinator(db.connector, silentLogger), db);
+    const signals: (AbortSignal | undefined)[] = [];
+    const source = createDuckDbDataSource({
+      engine: {
+        ...base,
+        query: (q, signal) => {
+          signals.push(signal);
+          return base.query(q, signal);
+        },
+      },
+      manifest: f.manifest,
+    });
+    const ctl = new AbortController();
+    await source.traceLogs(T1, ctl.signal);
+    await source.queryLogs(query({ traceId: T1, needs: ['rows'] }), ctl.signal);
+    expect(signals).toHaveLength(4);
+    expect(signals.every((x) => x === ctl.signal)).toBe(true);
   });
 });

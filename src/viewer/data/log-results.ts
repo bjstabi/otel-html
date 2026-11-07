@@ -149,26 +149,20 @@ export function pointBuckets(t: Table, spec: BucketSpec): TimeBuckets<'points'> 
   );
 }
 
-const SCALAR_KINDS: readonly FacetValueKind[] = ['string', 'int', 'double', 'bool'];
+const SCALAR_KINDS: readonly FacetValueKind[] = ['string', 'int', 'double', 'bool', 'mixed'];
 
 /**
- * `ResourceValues` from `resourceValuesQuery(key, cap)`: the first `cap` distinct values (sorted), `capped` when the
- * extra row came back, `kind` the shared kind of the rows kept and `mixed` when they disagree (`resourceValuesOf`'s rule).
+ * `ResourceValues` from `resourceValuesQuery(key, cap)`: one row per value, sorted; the first `cap` are kept, `capped`
+ * when the extra row came back, `kind` the shared kind of the values kept and `mixed` when they disagree.
  */
 export function resourceValueResult(t: Table, cap: number): ResourceValues {
   const rows = rowsOf(t);
   const kept = rows.slice(0, cap);
-  const kinds = new Set<FacetValueKind>();
-  for (const r of kept) {
-    const k = SCALAR_KINDS.find((x) => x === cell(r, 'kind'));
-    if (k !== undefined) kinds.add(k);
-  }
+  const kinds = new Set(kept.map((r) => SCALAR_KINDS.find((x) => x === cell(r, 'kind')) ?? 'string'));
   const [only] = [...kinds];
   return {
-    values: [...new Set(kept.map((r) => text(cell(r, 'value'))))].sort((a, b) =>
-      a < b ? -1 : a > b ? 1 : 0,
-    ),
-    kind: kinds.size === 1 && only !== undefined ? only : kinds.size === 0 ? 'string' : 'mixed',
+    values: kept.map((r) => text(cell(r, 'value'))),
+    kind: kinds.size === 0 ? 'string' : kinds.size === 1 && only !== undefined ? only : 'mixed',
     capped: rows.length > cap,
   };
 }

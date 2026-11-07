@@ -452,7 +452,7 @@ export function createDuckDbDataSource(opts: {
       window: q.window,
       ...(q.traceId == null
         ? {}
-        : { traceId: q.traceId, traceFiles: (await logTraceFiles(q.traceId)) ?? allLogsFiles }),
+        : { traceId: q.traceId, traceFiles: (await logTraceFiles(q.traceId, signal)) ?? allLogsFiles }),
     });
     const browser = residual !== null;
     if (filter.files.files.length === 0) return emptyLogResult(caps, browser, q.mode);
@@ -562,8 +562,8 @@ export function createDuckDbDataSource(opts: {
   }
 
   /** The partitions the trace's `traces` rows name; none means the trace is not indexed and every logs file is read. */
-  async function logTraceFiles(traceId: TraceId): Promise<string[] | null> {
-    const partitions = rowsOf(await engine.query(tracePartitionsQuery(traceId))).map((r) =>
+  async function logTraceFiles(traceId: TraceId, signal?: AbortSignal): Promise<string[] | null> {
+    const partitions = rowsOf(await engine.query(tracePartitionsQuery(traceId), signal)).map((r) =>
       String(cell(r, 'filename')),
     );
     return partitions.length === 0 ? null : partitions;
@@ -585,7 +585,7 @@ export function createDuckDbDataSource(opts: {
 
   async function traceLogs(traceId: TraceId, signal?: AbortSignal): Promise<readonly LogRow[]> {
     throwIfAborted(signal);
-    const partitions = await logTraceFiles(traceId);
+    const partitions = await logTraceFiles(traceId, signal);
     const files =
       partitions === null
         ? null
