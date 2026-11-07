@@ -1,3 +1,6 @@
+import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { mergeWith } from '../../src/api/convert.js';
 import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
@@ -6,6 +9,7 @@ import { decodeTable } from '../../src/format/parquet/codec.js';
 import { TABLES, type Table } from '../../src/format/parquet/schema.js';
 import { MANIFEST_KEY, partitionWrapperPath } from '../../src/format/paths.js';
 import { mergeReports } from '../../src/writer/merge.js';
+import { createNodeFileSystem } from '../../src/writer/node-fs.js';
 import { openSession } from '../../src/writer/session.js';
 import { logRecord, logsRequest } from '../../test-support/otlp-builders.js';
 import { perfFactor } from '../../test-support/perf-inject.js';
@@ -244,6 +248,87 @@ describe('merge copies format-4 partitions', () => {
     expect(await rows(w, 'm', 'spans')).toBe(2);
   });
 
+  describe('--replace never wipes unless every input file can be copied', () => {
+    const snapshotOf = (w: TestWriter) =>
+      [...w.fs.snapshot()].filter(([k]) => k.startsWith('m/')).sort(([a], [b]) => a.localeCompare(b));
+
+    async function oldReport(w: TestWriter): Promise<void> {
+      await v4Report(w, 'old', [spansRequest(2)]);
+      await mergeWith({ inputs: ['old'], out: 'm', config: cfg('site') }, w.deps);
+    }
+
+    async function dirInput(w: TestWriter): Promise<void> {
+      await v4Report(w, 'a', [spansRequest(1, 0, 9)]);
+      const f = v4Manifest(w, 'a').partitions[0]?.files.spans;
+      if (f === undefined) throw new Error('no spans file');
+      await w.deps.fs.remove(`a/${f.path}`);
+      await w.deps.fs.writeBytes(`a/${f.path}/inner`, new Uint8Array([1]));
+    }
+
+    test('a listed path that is a directory', async () => {
+      const w = createTestWriter();
+      await oldReport(w);
+      await dirInput(w);
+      const before = snapshotOf(w);
+      const e = await mergeWith(
+        { inputs: ['a'], out: 'm', config: cfg('site'), replace: true },
+        w.deps,
+      ).catch((x: unknown) => x);
+      expect(e).toMatchObject({ code: 'invalid-report' });
+      expect(snapshotOf(w)).toEqual(before);
+    });
+
+    test('the same with a chunks input in the mix', async () => {
+      const w = createTestWriter();
+      await oldReport(w);
+      const s = await openSession(w.deps, { out: 'v3', config: testConfig(), mode: 'replace' });
+      await s.add(otlp(spansRequest(1, 0, 20)), 'v3.json');
+      await s.close();
+      await dirInput(w);
+      const before = snapshotOf(w);
+      const e = await mergeWith(
+        { inputs: ['v3', 'a'], out: 'm', config: cfg('site'), replace: true },
+        w.deps,
+      ).catch((x: unknown) => x);
+      expect(e).toMatchObject({ code: 'invalid-report' });
+      expect(snapshotOf(w)).toEqual(before);
+    });
+
+    test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+      'a listed file with mode 000 (real file system)',
+      async () => {
+        const dir = mkdtempSync(join(tmpdir(), 'merge-copy-'));
+        try {
+          const w = createTestWriter();
+          const real = { ...w, deps: { ...w.deps, fs: createNodeFileSystem() } };
+          await v4Report(real, join(dir, 'old'), [spansRequest(2)]);
+          await mergeWith(
+            { inputs: [join(dir, 'old')], out: join(dir, 'm'), config: cfg('site') },
+            real.deps,
+          );
+          await v4Report(real, join(dir, 'a'), [spansRequest(1, 0, 9)]);
+          const text = readFileSync(join(dir, 'a/data/manifest.js'), 'utf8');
+          const m = parseAnyManifest(reviveDataJson(unwrapDataFile(text, MANIFEST_KEY)));
+          if (!isV4(m)) throw new Error('not v4');
+          const f = m.partitions[0]?.files.spans;
+          if (f === undefined) throw new Error('no spans file');
+          chmodSync(join(dir, 'a', f.path), 0o000);
+          const tree = (): string[] => readdirSync(join(dir, 'm'), { recursive: true }).map(String).sort();
+          const before = tree();
+          const e = await mergeWith(
+            { inputs: [join(dir, 'a')], out: join(dir, 'm'), config: cfg('site'), replace: true },
+            real.deps,
+          ).catch((x: unknown) => x);
+          expect(e).toMatchObject({ code: 'invalid-report' });
+          expect(tree()).toEqual(before);
+          chmodSync(join(dir, 'a', f.path), 0o600);
+        } finally {
+          rmSync(dir, { recursive: true, force: true });
+        }
+      },
+    );
+  });
+
   test("a v4 input into an existing v4 output without --format names that report's format", async () => {
     const w = createTestWriter();
     await v4Report(w, 'a', [spansRequest(1)]);
@@ -284,16 +369,43 @@ describe('--compact and patterns (R56)', () => {
     ]);
   });
 
-  test('closing a session still sums flush partitions by cluster id, with the latest template', async () => {
+  test('closing a session sums flush partitions by cluster id, with the generalised template', async () => {
     const w = createTestWriter();
     const s = await openSession(w.deps, { out: 'f', config: testConfig(cfg('site')), mode: 'replace' });
-    await s.add(otlp(logs('user 1 logged in')), 'a.json');
+    await s.add(otlp(logs('connection from alpha closed by peer')), 'a.json');
     await s.flush();
-    await s.add(otlp(logs('user 2 logged in', 'user 3 logged in')), 'b.json');
+    await s.add(otlp(logs('connection from beta closed by peer')), 'b.json');
     await s.close();
     expect(v4Manifest(w, 'f').partitions).toHaveLength(1);
-    const out = await patterns(w, 'f');
-    expect(out).toHaveLength(1);
-    expect(out[0]?.[2]).toBe(3n);
+    expect(await patterns(w, 'f')).toEqual([[0n, 'connection from <*> closed by peer', 2n]]);
+  });
+
+  test('a merge that flushes converted rows and copies lineages compacts each kind by its own key', async () => {
+    const w = createTestWriter();
+    await v4Report(w, 'x', [logs('disk full on sda', 'disk full on sdb', 'disk full on sdc')]);
+    await v4Report(w, 'y', [logs('user 1 logged in', 'user 2 logged in', 'user 3 logged in')]);
+    await mergeWith({ inputs: ['x', 'y'], out: 'm1', config: cfg('site') }, w.deps);
+    const chunks = await openSession(w.deps, {
+      out: 'v3',
+      config: testConfig({ writer: { chunkTargetBytes: 1 } }),
+      mode: 'replace',
+    });
+    await chunks.add(otlp(logs('connection from alpha closed by peer')), 'a.json');
+    await chunks.add(otlp(logs('connection from beta closed by peer')), 'b.json');
+    await chunks.close();
+    await mergeWith(
+      {
+        inputs: ['v3', 'm1'],
+        out: 'm2',
+        config: cfg('site', { compactOnMerge: true, chunkTargetBytes: 1 }),
+      },
+      w.deps,
+    );
+    const sorted = (await patterns(w, 'm2')).sort((a, b) => String(a[1]).localeCompare(String(b[1])));
+    expect(sorted).toEqual([
+      [0n, 'connection from <*> closed by peer', 2n],
+      [0n, 'disk full on <*>', 3n],
+      [0n, 'user <*> logged in', 3n],
+    ]);
   });
 });

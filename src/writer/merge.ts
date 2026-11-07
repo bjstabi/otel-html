@@ -81,6 +81,23 @@ async function locateManifest(fs: FileSystem, rawDir: string, verb: string): Pro
   return { dir, file, raw: inFile(file, () => reviveDataJson(unwrapDataFile(text, MANIFEST_KEY))) };
 }
 
+/** Fails like the copy would: the path must be a file (or a link) that opens and yields its first bytes. Reads one piece, not the file. */
+async function assertReadable(fs: FileSystem, file: string, listed: string): Promise<void> {
+  const fail = (why: string): OtelHtmlError =>
+    new OtelHtmlError('invalid-report', {
+      message: `${file}: cannot read partition file ${listed} listed in the manifest (${why})`,
+    });
+  const kind = await fs.entryKind(file);
+  if (kind === 'missing') throw fail('it is missing');
+  if (kind === 'dir' || kind === 'other') throw fail('it is not a file');
+  try {
+    if (fs.readChunks === undefined) await fs.readBytes(file);
+    else for await (const _piece of fs.readChunks(file)) break;
+  } catch (e) {
+    throw fail(e instanceof Error ? e.message : String(e));
+  }
+}
+
 /** The `engine.format` of the format-4 report at `dir`, or undefined when it is a chunks report. */
 async function existingFormat(fs: FileSystem, dir: string): Promise<'local' | 'site' | undefined> {
   const { raw, file } = await locateManifest(fs, dir, 'merge');
@@ -254,12 +271,7 @@ export async function mergeReports(
     if (input.kind !== 'partitions') continue;
     for (const entry of input.manifest.partitions) {
       for (const f of Object.values(entry.files)) {
-        const file = at(input.dir, f.path);
-        if (!(await deps.fs.exists(file))) {
-          throw new OtelHtmlError('invalid-report', {
-            message: `${file}: cannot read partition file ${f.path} listed in the manifest (it is missing)`,
-          });
-        }
+        await assertReadable(deps.fs, at(input.dir, f.path), f.path);
       }
     }
   }
