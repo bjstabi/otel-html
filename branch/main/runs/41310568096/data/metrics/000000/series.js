@@ -1,0 +1,1 @@
+__OH__.push("metrics/000000/series",{"metric":0,"series":[{"id":0,"resource":0,"scope":0,"attributes":[["cicd.pipeline.name","load"],["cicd.pipeline.result","success"]],"bounds":[1,5,10,30,60,120,300,600,1200,1800,3600],"other":false}],"gaps":[[0,0]]});

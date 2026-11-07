@@ -1,0 +1,1 @@
+__OH__.push("traces/ca",{"ca72e4241124b4e095a2b89dddf9a6b2":{"chunks":["chunks/spans/000004"],"logChunks":[],"start":44243000000,"end":44244042850,"spans":1,"logs":0,"errors":0,"root":{"service":"otel-html-tests","name":"vitest.test.runner.test.callback","resource":"vitest.test.runner.test.callback"}}});

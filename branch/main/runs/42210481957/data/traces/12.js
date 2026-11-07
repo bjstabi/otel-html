@@ -1,0 +1,1 @@
+__OH__.push("traces/12",{"120c9a2125a15413a734fd217d31adff":{"chunks":["chunks/spans/000004"],"logChunks":[],"start":74054000000,"end":74120474248,"spans":1,"logs":0,"errors":0,"root":{"service":"otel-html-tests","name":"otel-html.flush","resource":"otel-html.flush"}}});

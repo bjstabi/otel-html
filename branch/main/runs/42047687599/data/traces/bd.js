@@ -1,0 +1,1 @@
+__OH__.push("traces/bd",{"bdb3be6d6574c159697f6b6325cd4453":{"chunks":["chunks/spans/000004"],"logChunks":[],"start":82426000000,"end":82426051325,"spans":1,"logs":0,"errors":0,"root":{"service":"otel-html-tests","name":"vitest.runtime.environment.teardown","resource":"vitest.runtime.environment.teardown"}}});
