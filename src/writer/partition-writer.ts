@@ -94,6 +94,12 @@ export class PartitionWriter {
     return this.#next;
   }
 
+  /** Takes partition numbers below `n` as used, for a partition written by other means (compaction). Never goes back. */
+  skipTo(n: number): void {
+    if (this.#cutting) throw new Error('PartitionWriter.skipTo called while a cut is in progress');
+    this.#next = Math.max(this.#next, n);
+  }
+
   /**
    * Takes the held rows at its start, so rows added while the files are being written land in the next partition.
    * Encodes every table first, then writes the files, so an encoding error writes nothing. If anything throws

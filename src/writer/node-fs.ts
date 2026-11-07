@@ -1,4 +1,4 @@
-import { createReadStream } from 'node:fs';
+import { createReadStream, openAsBlob } from 'node:fs';
 import { mkdir, open, readdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import type { FileSystem } from './ports.js';
@@ -81,6 +81,10 @@ export function createNodeFileSystem(): FileSystem {
     async remove(p) {
       await rm(p, { force: true });
     },
+    async removeDir(p) {
+      await rm(p, { recursive: true, force: true });
+    },
+    openBlob: (p) => openAsBlob(p),
     async createExclusive(p, text) {
       let handle: Awaited<ReturnType<typeof open>>;
       try {

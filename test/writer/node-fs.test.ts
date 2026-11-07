@@ -1,4 +1,4 @@
-import { lstat, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
@@ -128,6 +128,24 @@ describe.each([
     await f.remove(join(dir, 'missing'));
   });
 
+  test('removeDir removes a directory with its files and subdirectories, and only that', async () => {
+    const f = fs();
+    await f.mkdirp(join(dir, 'p/000001/sub'));
+    await f.writeBytes(join(dir, 'p/000001/a.parquet'), new Uint8Array([1]));
+    await f.writeBytes(join(dir, 'p/000001/sub/b'), new Uint8Array([2]));
+    await f.writeBytes(join(dir, 'p/000002/c.parquet'), new Uint8Array([3]));
+    await f.removeDir(join(dir, 'p/000001'));
+    expect(await f.exists(join(dir, 'p/000001'))).toBe(false);
+    expect(await f.exists(join(dir, 'p/000001/a.parquet'))).toBe(false);
+    expect(await f.list(join(dir, 'p'))).toEqual(['000002']);
+  });
+
+  test('removeDir of a missing path is a no-op', async () => {
+    const f = fs();
+    await f.mkdirp(dir);
+    await f.removeDir(join(dir, 'missing'));
+  });
+
   test('createExclusive returns false the second time', async () => {
     const f = fs();
     await f.mkdirp(dir);
@@ -157,6 +175,17 @@ describe.each([
   });
 });
 
+test('node openBlob reads pieces of the file on demand', async () => {
+  const f = createNodeFileSystem();
+  await f.writeBytes(join(dir, 'b.bin'), new Uint8Array([1, 2, 3, 4, 5, 6]));
+  const blob = await f.openBlob?.(join(dir, 'b.bin'));
+  if (blob === undefined) throw new Error('no openBlob');
+  expect(blob.size).toBe(6);
+  expect([...new Uint8Array(await blob.slice(2, 5).arrayBuffer())]).toEqual([3, 4, 5]);
+  await f.remove(join(dir, 'b.bin'));
+  expect(await f.exists(join(dir, 'b.bin'))).toBe(false);
+});
+
 test('node atomic write leaves no .tmp- file on disk', async () => {
   await createNodeFileSystem().writeTextAtomic(join(dir, 'x'), 'v');
   expect((await readdir(dir)).filter((n) => n.includes('.tmp-'))).toEqual([]);
@@ -176,6 +205,16 @@ describe.skipIf(process.platform === 'win32')('node writes never follow a symlin
     expect(await readFile(outside(), 'utf8')).toBe('precious');
     expect((await lstat(join(dir, 'x'))).isSymbolicLink()).toBe(false);
     expect(await readFile(join(dir, 'x'), 'utf8')).toBe('new');
+  });
+
+  test('removeDir removes a symlink inside the directory and leaves its target alone', async () => {
+    await mkdir(join(dir, 'target'));
+    await writeFile(join(dir, 'target/keep'), 'precious');
+    await mkdir(join(dir, 'p'));
+    await symlink(join(dir, 'target'), join(dir, 'p/link'));
+    await createNodeFileSystem().removeDir(join(dir, 'p'));
+    expect(await readdir(dir)).not.toContain('p');
+    expect(await readFile(join(dir, 'target/keep'), 'utf8')).toBe('precious');
   });
 
   test('writeBytes replaces a dangling symlink instead of creating its target', async () => {

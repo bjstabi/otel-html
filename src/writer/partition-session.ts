@@ -1,19 +1,10 @@
 import type { ResolvedConfig } from '../config/schema.js';
-import type { ManifestV4, PartitionEntry } from '../format/manifest.js';
+import type { PartitionEntry } from '../format/manifest.js';
 import { checkRow } from '../format/parquet/codec.js';
-import {
-  applyNormalization,
-  logRow,
-  type PointNormalization,
-  pointRow,
-  type Row,
-  spanRow,
-} from '../format/parquet/rows.js';
+import { applyNormalization, logRow, pointRow, type Row, spanRow } from '../format/parquet/rows.js';
 import { TABLES, type Table } from '../format/parquet/schema.js';
 import { statisticsKeysFor } from '../format/parquet/stats.js';
 import { LOCK_PATH, type Signal, STATE_DIR, type StateSlot } from '../format/paths.js';
-import type { SessionStateV2 } from '../format/state.js';
-import { PARTITION_FORMAT_VERSION } from '../format/version.js';
 import { OtelHtmlError } from '../model/errors.js';
 import { parseUnixNanos, type UnixNanos } from '../model/ids.js';
 import {
@@ -28,7 +19,7 @@ import { metricPointsOf } from '../model/otlp-json-metrics.js';
 import { type LogRecordRecord, logTime, type MetricPointRecord, type SpanRecord } from '../model/records.js';
 import type { LogTarget, SpanTarget } from '../ottl/contexts.js';
 import { Drain } from '../rollups/drain.js';
-import { type Normalized, StreamNormalizer } from '../rollups/metric-streams.js';
+import { StreamNormalizer } from '../rollups/metric-streams.js';
 import { severityKey } from '../semconv/severity.js';
 import {
   at,
@@ -37,14 +28,22 @@ import {
   writeManifest,
   writeStateSlotV2,
 } from './checkpoint.js';
+import { compactPartitions } from './compaction.js';
 import { DedupeSet } from './dedupe.js';
 import { renderIndexHtml } from './html.js';
 import { inheritDashboards } from './inherit-config.js';
 import { acquireLock, type LockHandle } from './lock.js';
 import { DEFAULT_TITLE, type Drops, type FolderState, iso } from './open-common.js';
+import {
+  buildManifest,
+  buildState,
+  type Prepared,
+  pointNormalization,
+  UNNORMALIZED,
+} from './partition-checkpoint.js';
 import { PartitionWriter } from './partition-writer.js';
 import { patternRows } from './pattern-rows.js';
-import type { SpanHandle } from './ports.js';
+import { prunePartitions } from './prune.js';
 import { seriesIdOf } from './series-id.js';
 import type {
   AddOptions,
@@ -57,9 +56,6 @@ import type {
 } from './session.js';
 import { traceRows } from './trace-summaries.js';
 import { writeViewerAssets } from './viewer-assets.js';
-
-/** The DuckDB-WASM version the report's engine files must match; Task 7.1 moves this to `engine-assets.ts`. */
-const ENGINE_VERSION = '1.32.0';
 
 interface Restored {
   lock: LockHandle;
@@ -118,6 +114,10 @@ export async function openPartitionSession(
     } else {
       const cp = await loadPartitionCheckpoint(fs, out, deps.version);
       config = inheritDashboards(config, cp.manifest.config);
+      // Before any write: what an interrupted session left unlisted must not meet this session's cuts.
+      const pruned = await prunePartitions(fs, out, cp.manifest.partitions);
+      if (pruned > 0)
+        deps.logger.info('removed unlisted partition data left by an interrupted session', { pruned });
       restored = {
         lock,
         epoch:
@@ -156,32 +156,19 @@ export async function openPartitionSession(
   }
 }
 
-/** What a checkpoint writes, decided at prepare time under the serial queue. */
-interface Prepared {
-  complete: boolean;
-  span: SpanHandle;
-  /** Started at prepare, which takes the held rows; awaited by the write. */
-  cut: Promise<PartitionEntry | null>;
-  slot: StateSlot;
-  /** `null` when nothing but the manifest changed. */
-  state: { epoch: string | null; dedupe: string[]; metricStreams: unknown } | null;
-  updatedAt: string;
-  epoch: string;
-  totals: Record<Signal, number>;
-  range: { start: bigint; end: bigint } | null;
-}
-
 class PartitionSession implements WriterSession {
   readonly #deps: WriterDeps;
   readonly #out: string;
   readonly #config: ResolvedConfig;
   readonly #drop: Drops;
   readonly #lock: LockHandle;
-  readonly #dedupe: DedupeSet;
+  #dedupe: DedupeSet | null;
   /** Cumulative-stream state of the points accepted so far (held ones included); frozen at each prepare. */
-  readonly #normalizer: StreamNormalizer;
+  #normalizer: StreamNormalizer | null;
   /** The committed log-template state: swapped in only after a cut's files were written. */
-  #drain: Drain;
+  #drain: Drain | null;
+  /** The state `release` serialised before it dropped the live structures; the final checkpoint writes these. */
+  #frozen: { dedupe: string; metricStreams: string; drain: string } | null = null;
   readonly #writer: PartitionWriter;
   readonly #statisticsKeys: Record<Table, string[]>;
   readonly #createdAt: string;
@@ -202,6 +189,8 @@ class PartitionSession implements WriterSession {
   #backoffUntilMs = 0;
   #closed: ReportSummary | null = null;
   #aborted = false;
+  /** Set when close released the live state: only `close` (again) and `abort` remain. */
+  #closing = false;
   #replacing: boolean;
   #partial = false;
   /** The `checkpoint` counter of the last committed state write. */
@@ -231,7 +220,7 @@ class PartitionSession implements WriterSession {
       facetValueCap: config.writer.facetValueCap,
       nextPartition: r.nextPartition,
       derive: (taken) => {
-        const p = patternRows(this.#drain, taken.logs, this.#epoch ?? 0n);
+        const p = patternRows(this.#live(this.#drain), taken.logs, this.#epoch ?? 0n);
         return {
           rows: { traces: traceRows(taken.spans, taken.logs), patterns: p.rows },
           commit: () => {
@@ -319,11 +308,15 @@ class PartitionSession implements WriterSession {
   close(): Promise<ReportSummary> {
     return this.#serial(async () => {
       if (this.#closed !== null) return this.#closed;
-      this.#assertOpen();
+      if (this.#aborted) throw new Error(`session for ${this.#out} is closed`);
+      if (!this.#closing) this.#assertOpen();
       this.#disarmIdle();
       await this.#checkpoint(false);
       if (!this.#shellWritten) await this.#writeShell();
+      this.#release();
+      await this.#compact();
       await this.#checkpoint(true);
+      await this.#pruneCommitted();
       this.#closed = this.#summary();
       await this.#lock.release();
       return this.#closed;
@@ -350,6 +343,7 @@ class PartitionSession implements WriterSession {
 
   #assertOpen(): void {
     if (this.#closed !== null || this.#aborted) throw new Error(`session for ${this.#out} is closed`);
+    if (this.#closing) throw new Error(`session for ${this.#out} is closing`);
   }
 
   #summary(): ReportSummary {
@@ -422,7 +416,7 @@ class PartitionSession implements WriterSession {
         continue;
       }
       const key = span.traceId + span.spanId;
-      if (seenInRequest.has(key) || this.#dedupe.has(span.traceId, span.spanId)) {
+      if (seenInRequest.has(key) || this.#live(this.#dedupe).has(span.traceId, span.spanId)) {
         duplicates++;
         continue;
       }
@@ -430,7 +424,7 @@ class PartitionSession implements WriterSession {
       staged.push({ span, row: this.#checked('spans', spanRow(span, rowCtx)) });
     }
     for (const { span, row } of staged) {
-      this.#dedupe.seen(span.traceId, span.spanId);
+      this.#live(this.#dedupe).seen(span.traceId, span.spanId);
       this.#writer.add('spans', row);
       this.#totals.spans++;
       this.#extend(ctx, span.start, Math.max(span.start, span.end));
@@ -484,12 +478,12 @@ class PartitionSession implements WriterSession {
         continue;
       }
       const seriesId = seriesIdOf(point, resource, scope);
-      const step = this.#normalizer.prepare(point);
+      const step = this.#live(this.#normalizer).prepare(point);
       const row = this.#checked('points', pointRow(point, { ...UNNORMALIZED, seriesId }, rowCtx));
       staged.push({ point, seriesId, row, step });
     }
     for (const { point, seriesId, row, step } of staged) {
-      applyNormalization(row, normalization(point, step(seriesId), seriesId));
+      applyNormalization(row, pointNormalization(point, step(seriesId), seriesId));
       this.#writer.add('points', row);
       this.#totals.metrics++;
       this.#extend(ctx, Math.min(point.start ?? point.time, point.time), point.time);
@@ -665,6 +659,88 @@ class PartitionSession implements WriterSession {
     this.#shellWritten = true;
   }
 
+  #live<T>(v: T | null): T {
+    if (v === null) throw new Error('invariant violated: the session state was released');
+    return v;
+  }
+
+  /**
+   * Called at close, after the held rows are durable: keeps what the final state write needs as JSON text and drops
+   * the live dedupe set, Drain, stream normalizer and interners, so compaction runs without them. The state written
+   * is the same as without the release.
+   */
+  #release(): void {
+    this.#frozen ??= {
+      dedupe: JSON.stringify(this.#live(this.#dedupe).toJSON()),
+      metricStreams: JSON.stringify(this.#live(this.#normalizer).toJSON()),
+      drain: JSON.stringify(this.#live(this.#drain).toJSON()),
+    };
+    this.#closing = true;
+    this.#dedupe = null;
+    this.#normalizer = null;
+    this.#drain = null;
+    this.#ctx = null;
+  }
+
+  /**
+   * Compacts this session's flush partitions into one when there are two or more (a copy made by merge is never one
+   * of them), as `compactPartitions` says. Writes only the new partition's folder; the next checkpoint commits it, in
+   * this order: the state (numbering past it, no flush partitions left), then the manifest (listing it in place of the
+   * flush partitions). The folders it replaces are removed by `#pruneCommitted` after that commit.
+   * Compaction is an optimisation, so a failure keeps the flush partitions and is logged.
+   */
+  async #compact(): Promise<void> {
+    const flushed = new Set(this.#flushed);
+    const picks = this.#committed.filter((e) => flushed.has(e.n) && e.source.startsWith('flush:'));
+    const first = picks[0];
+    const last = picks.at(-1);
+    if (first === undefined || last === undefined || picks.length < 2) return;
+    const span = this.#deps.tracer.startSpan('otel-html.compact', { partitions: picks.length });
+    try {
+      const n = this.#writer.nextPartition;
+      const entry = await compactPartitions(this.#deps.fs, this.#out, picks, {
+        nextPartition: n,
+        rowGroupRows: this.#config.writer.rowGroupRows,
+        statisticsKeys: this.#statisticsKeys,
+        facetValueCap: this.#config.writer.facetValueCap,
+        source: `compact:${first.n}..${last.n}`,
+      });
+      this.#writer.skipTo(n + 1);
+      const replaced = new Set(picks.map((e) => e.n));
+      // Ascending n, as the manifest requires: the compacted partition is the newest number.
+      this.#committed = [...this.#committed.filter((e) => !replaced.has(e.n)), entry].sort(
+        (a, b) => a.n - b.n,
+      );
+      this.#flushed = this.#flushed.filter((p) => !replaced.has(p));
+      this.#dirty = true;
+    } catch (e) {
+      span.recordError(e);
+      this.#deps.logger.error('compaction failed; keeping the flush partitions', {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    } finally {
+      span.end();
+    }
+  }
+
+  /**
+   * After the final manifest commit: removes what it does not list (the folders a compaction replaced, a half-written
+   * one, leftovers of a failed earlier attempt), so a report that is never reopened carries no dead data. The report
+   * is committed already, so a failure is logged.
+   */
+  async #pruneCommitted(): Promise<void> {
+    try {
+      await prunePartitions(this.#deps.fs, this.#out, this.#committed);
+    } catch (error) {
+      this.#deps.logger.warn(
+        'could not remove unlisted partition data; it is pruned when the report is opened',
+        {
+          error: error instanceof Error ? error.message : String(error),
+        },
+      );
+    }
+  }
+
   /** A foreground flush: waits for a background write, then prepares and writes. */
   async #checkpoint(complete: boolean): Promise<void> {
     await this.#inflight;
@@ -692,9 +768,15 @@ class PartitionSession implements WriterSession {
         state: writeState
           ? {
               epoch: this.#epoch === null ? null : this.#epoch.toString(),
-              dedupe: this.#dedupe.toJSON(),
+              dedupe:
+                this.#frozen === null
+                  ? this.#live(this.#dedupe).toJSON()
+                  : (JSON.parse(this.#frozen.dedupe) as string[]),
               // With the cut below, in this synchronous segment: points accepted later are not in this state.
-              metricStreams: this.#normalizer.toJSON(),
+              metricStreams:
+                this.#frozen === null
+                  ? this.#live(this.#normalizer).toJSON()
+                  : (JSON.parse(this.#frozen.metricStreams) as unknown),
             }
           : null,
         updatedAt: iso(this.#deps.clock),
@@ -731,9 +813,41 @@ class PartitionSession implements WriterSession {
       }
       if (!this.#shellWritten && !p.complete) await this.#writeShell();
       if (p.state !== null) {
-        await writeStateSlotV2(fs, this.#out, p.slot, this.#state(p.state, this.#checkpointSeq + 1));
+        await writeStateSlotV2(
+          fs,
+          this.#out,
+          p.slot,
+          buildState(
+            {
+              version: this.#deps.version,
+              nextPartition: this.#writer.nextPartition,
+              flushed: this.#flushed,
+              drain:
+                this.#frozen === null
+                  ? this.#live(this.#drain).toJSON()
+                  : (JSON.parse(this.#frozen.drain) as ReturnType<Drain['toJSON']>),
+              statisticsKeys: this.#statisticsKeys,
+            },
+            p.state,
+            this.#checkpointSeq + 1,
+          ),
+        );
       }
-      await writeManifest(fs, this.#out, this.#manifest(p));
+      await writeManifest(
+        fs,
+        this.#out,
+        buildManifest(
+          {
+            version: this.#deps.version,
+            title: this.#title,
+            createdAt: this.#createdAt,
+            partitions: [...this.#committed, ...this.#pending],
+            statisticsKeys: this.#statisticsKeys,
+            config: this.#config,
+          },
+          p,
+        ),
+      );
       if (p.state !== null) {
         this.#slot = p.slot;
         this.#checkpointSeq++;
@@ -767,84 +881,4 @@ class PartitionSession implements WriterSession {
       }
     }
   }
-
-  #state(
-    s: { epoch: string | null; dedupe: string[]; metricStreams: unknown },
-    checkpoint: number,
-  ): SessionStateV2 {
-    return {
-      formatVersion: 2,
-      otelHtmlVersion: this.#deps.version,
-      epochUnixNano: s.epoch,
-      nextPartition: this.#writer.nextPartition,
-      checkpoint,
-      flushPartitions: [...this.#flushed],
-      dedupe: s.dedupe,
-      metricStreams: s.metricStreams,
-      drain: this.#drain.toJSON(),
-      statisticsKeys: this.#statisticsKeys,
-    };
-  }
-
-  /**
-   * Earlier partitions (an append under another config) may lack values for a listed key: they get `null`, which
-   * means unknown and prunes nothing. Values for keys no longer listed stay. Only the manifest entry changes.
-   */
-  #withKeys(e: PartitionEntry): PartitionEntry {
-    const files: PartitionEntry['files'] = {};
-    for (const t of TABLES) {
-      const f = e.files[t];
-      if (f === undefined) continue;
-      const values = { ...f.values };
-      for (const k of this.#statisticsKeys[t]) if (!(k in values)) values[k] = null;
-      files[t] = { ...f, values };
-    }
-    return { ...e, files };
-  }
-
-  #manifest(p: Prepared): ManifestV4 {
-    return {
-      formatVersion: PARTITION_FORMAT_VERSION,
-      otelHtmlVersion: this.#deps.version,
-      title: this.#title,
-      epochUnixNano: p.epoch,
-      createdAt: this.#createdAt,
-      updatedAt: p.updatedAt,
-      complete: p.complete,
-      range: p.range === null ? null : { start: p.range.start.toString(), end: p.range.end.toString() },
-      totals: p.totals,
-      partitions: [...this.#committed, ...this.#pending].map((e) => this.#withKeys(e)),
-      statisticsKeys: this.#statisticsKeys,
-      engine: {
-        version: ENGINE_VERSION,
-        format: this.#config.writer.format === 'site' ? 'site' : 'local',
-        assetsBase: this.#config.writer.assetsBase,
-      },
-      config: {
-        viewer: { ...this.#config.viewer },
-        dashboards: this.#config.dashboards,
-        views: this.#config.views,
-      },
-    };
-  }
-}
-
-const UNNORMALIZED = { deltaValue: null, deltaCount: null, reset: false, outOfOrder: false } as const;
-
-/**
- * The normalization columns of a point from what the stream normalizer reported. Deltas exist for every counter (the
- * counter delta), every histogram (the count and sum deltas) and every delta-temporality sum, monotonic or not (its
- * own value); a reset restarts them at the point's own value, as the normalizer says. Gauges, summaries, and
- * cumulative or unspecified non-monotonic sums have none, and neither does a skipped point.
- */
-function normalization(point: MetricPointRecord, n: Normalized, seriesId: string): PointNormalization {
-  if (n.kind === 'skip') return { ...UNNORMALIZED, seriesId, outOfOrder: n.reason === 'out-of-order' };
-  const { agg } = n;
-  const base = { ...UNNORMALIZED, seriesId, reset: n.reset };
-  if (agg.k === 'counter') return { ...base, deltaValue: agg.delta };
-  if (agg.k === 'hist' || agg.k === 'exp') return { ...base, deltaValue: agg.sum, deltaCount: agg.count };
-  if (agg.k === 'number' && point.type === 'sum' && point.temporality === 'delta') {
-    return { ...base, deltaValue: agg.sum };
-  }
-  return base;
 }

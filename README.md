@@ -545,12 +545,12 @@ Config is a YAML or JSON file (`otel-html.yaml` by default), or an object passed
 | Key | Default | Meaning |
 |---|---|---|
 | `title` | none | Report title. Env: `OTEL_HTML_TITLE`. |
-| `writer.format` | `chunks` | Report format: `chunks` (the current format), or `local` / `site`, which write format 4 (Parquet partitions; `site` is for a published site with shared assets). Format 4 is not yet readable by the viewer, so `chunks` stays the default for now. Env: `OTEL_HTML_FORMAT`. |
+| `writer.format` | `chunks` | Report format: `chunks` (the current format), or `local` / `site`, which write format 4 (Parquet partitions; `site` is for a published site with shared assets). With `local` or `site`, closing the report compacts its flush partitions into one sorted partition when there are two or more; if the compaction fails, the failure is logged and the report keeps its flush partitions, still complete and valid. Format 4 is not yet readable by the viewer, so `chunks` stays the default for now. Env: `OTEL_HTML_FORMAT`. |
 | `writer.rowGroupRows` | 50000 | Rows per Parquet row group in format 4 (50000 to 100000). |
 | `writer.statisticsKeys` | `[]` | Extra columns whose statistics are kept per partition file in format 4, beyond those the dashboards and views use. Each entry is a column name, `attr:<key>` (a span, log or metric point attribute) or `resource:<key>` (a resource attribute); a bare attribute key is accepted but matches nothing, so it prunes nothing. |
 | `writer.localWarnBytes` | 256000000 | The size past which a `local` report will warn. The warning arrives with the local format's wrappers and is not implemented yet; nothing reads this key today. |
 | `writer.assetsBase` | `assets/` | Where a format-4 report loads the viewer assets from: `assets/`, or a relative path such as `../../assets/0.3.0/`. |
-| `writer.chunkTargetBytes` | 4000000 | Target size of a data chunk. With `writer.format: local` or `site` it is the size at which held rows are cut into a partition (spans, logs and metric points alike). |
+| `writer.chunkTargetBytes` | 4000000 | Target size of a data chunk. With `writer.format: local` or `site` it is the size at which held rows are cut into a flush partition (spans, logs and metric points alike); a closed report compacts those flush partitions when there are two or more (see `writer.format`). |
 | `writer.flushIntervalMs` | 5000 | Checkpoint interval. Also checkpoints once after this long idle with new records. |
 | `writer.dedupeCapacity` | 200000 | Recent span IDs remembered for de-duplication. |
 | `writer.facetValueCap` | 1000 | Distinct values kept per facet key; also bounds the viewer's filtered facets. |

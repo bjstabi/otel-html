@@ -21,6 +21,7 @@ import {
   Compression,
   readParquet,
   Table as WasmTable,
+  type WriterProperties,
   WriterPropertiesBuilder,
   writeParquet,
 } from 'parquet-wasm/esm';
@@ -44,7 +45,7 @@ export interface EncodeOptions {
 
 const OBSERVED = 'observed_time_unix_nano';
 
-function compareKeys(a: unknown, b: unknown): number {
+export function compareKeys(a: unknown, b: unknown): number {
   const aNull = a === undefined || a === null;
   const bNull = b === undefined || b === null;
   if (aNull || bNull) return aNull === bNull ? 0 : aNull ? 1 : -1; // nulls last
@@ -53,6 +54,17 @@ function compareKeys(a: unknown, b: unknown): number {
     : (a as string | bigint | number) > (b as string | bigint | number)
       ? 1
       : 0;
+}
+
+/**
+ * The sort key of one row, `get` reading its cells by column name: `SORT_COLUMNS[table]`, with logs' time falling back
+ * to the observed time. Compare keys element by element with `compareKeys`. `sortPermutation` below sorts by the
+ * same key a column at a time.
+ */
+export function sortKeyOf(table: Table, get: (column: string) => unknown): unknown[] {
+  return SORT_COLUMNS[table].map((c) =>
+    table === 'logs' && c === 'time_unix_nano' ? (get(c) ?? get(OBSERVED) ?? null) : (get(c) ?? null),
+  );
 }
 
 /**
@@ -353,7 +365,14 @@ function columnData(def: ColumnDef, type: DataType, col: readonly unknown[], per
  * cells: every row must have passed `checkRow` (a session checks each row when it accepts it; `encodeTable` checks).
  */
 export function encodeColumns(table: Table, batch: ColumnBatch, opts: EncodeOptions): Uint8Array {
-  const perm = sortPermutation(table, batch);
+  const arrow = columnsToArrow(table, batch, sortPermutation(table, batch));
+  ensureParquetWasm();
+  const wasm = WasmTable.fromIPCStream(tableToIPC(arrow, 'stream'));
+  return writeParquet(wasm, writerProperties(opts));
+}
+
+/** The Arrow table of a batch, its rows in `perm` order (every row once). No sorting and no cell checks. */
+export function columnsToArrow(table: Table, batch: ColumnBatch, perm: readonly number[]): ArrowTable {
   const schema = arrowSchema(table);
   const children: Data[] = [];
   for (const [i, def] of TABLE_COLUMNS[table].entries()) {
@@ -362,20 +381,21 @@ export function encodeColumns(table: Table, batch: ColumnBatch, opts: EncodeOpti
     children.push(columnData(def, field.type, batch.cells[def.name] ?? [], perm));
   }
   const type = new Struct(schema.fields);
-  const arrow =
-    batch.length === 0
-      ? new ArrowTable(schema)
-      : new ArrowTable(
-          schema,
-          new RecordBatch(schema, makeData({ type, length: batch.length, nullCount: 0, children })),
-        );
+  return batch.length === 0
+    ? new ArrowTable(schema)
+    : new ArrowTable(
+        schema,
+        new RecordBatch(schema, makeData({ type, length: batch.length, nullCount: 0, children })),
+      );
+}
+
+/** ZSTD, row groups of `rowGroupRows`: the one set of properties every format-4 file is written with. */
+export function writerProperties(opts: EncodeOptions): WriterProperties {
   ensureParquetWasm();
-  const wasm = WasmTable.fromIPCStream(tableToIPC(arrow, 'stream'));
-  const props = new WriterPropertiesBuilder()
+  return new WriterPropertiesBuilder()
     .setCompression(Compression.ZSTD)
     .setMaxRowGroupSize(opts.rowGroupRows)
     .build();
-  return writeParquet(wasm, props);
 }
 
 /** Sorts `rows` by `SORT_COLUMNS[table]` (nulls last, stable) and encodes them as ZSTD Parquet. */
@@ -391,6 +411,21 @@ function plain(value: unknown): unknown {
     return Array.from((value as Vector).toArray() as ArrayLike<unknown>);
   }
   return value;
+}
+
+/** One Arrow record batch as one JS array per column (`null` for a null; dictionaries as strings, lists as arrays). */
+export function columnsOfBatch(
+  batch: { numRows: number; getChildAt(i: number): Vector | null },
+  width: number,
+): unknown[][] {
+  const out: unknown[][] = [];
+  for (let c = 0; c < width; c++) {
+    const vec = batch.getChildAt(c);
+    const col: unknown[] = new Array<unknown>(batch.numRows);
+    for (let i = 0; i < batch.numRows; i++) col[i] = plain(vec?.get(i));
+    out.push(col);
+  }
+  return out;
 }
 
 /** Decodes a partition file into rows: every schema column is present, `null` for a null; dictionaries as strings. */

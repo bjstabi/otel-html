@@ -10,6 +10,7 @@ import {
   LOCK_PATH,
   MANIFEST_KEY,
   MANIFEST_PATH,
+  PARTITION_DIR_RE,
   SIGNALS,
   type Signal,
   STATE_DIR,
@@ -314,7 +315,6 @@ const METRICS_DIR = 'data/metrics';
 const METRIC_DIR_NAME = /^[0-9]{6}$/;
 /** Holds one directory per partition (`data/partitions/<p6>/<table>.parquet`). */
 const PARTITIONS_DIR = 'data/partitions';
-const PARTITION_DIR_NAME = /^[0-9]{6,}$/;
 
 export async function isReportFolder(fs: FileSystem, out: string): Promise<boolean> {
   // A session that failed before its first checkpoint leaves only the state directory behind.
@@ -333,7 +333,7 @@ export async function wipeReportData(fs: FileSystem, out: string): Promise<void>
     }
   }
   await removeNested(fs, out, METRICS_DIR, METRIC_DIR_NAME);
-  await removeNested(fs, out, PARTITIONS_DIR, PARTITION_DIR_NAME);
+  await removeNested(fs, out, PARTITIONS_DIR, PARTITION_DIR_RE);
 }
 
 /** Remove the files of the directories under `root` whose names match `dirName`; stray entries are not ours. */
