@@ -1,8 +1,12 @@
+import type { ManifestV4 } from '../../format/manifest.js';
 import type { TraceId } from '../../model/ids.js';
 import type { ResourceRecord, ScopeRecord, SpanRecord } from '../../model/records.js';
 import type { FacetCounts } from '../../rollups/facets.js';
+import type { MetricCatalog, MetricEntry } from '../../rollups/metric-catalog.js';
 import type { SpanStatusKey } from '../../rollups/span-rollups.js';
 import type { TimeBuckets } from '../../rollups/time-buckets.js';
+import type { TraceDetail } from './data-source.js';
+import type { LoadedMetric } from './metric-load.js';
 import type { TimeWindow } from './span-query.js';
 
 /** Request-rate, error and latency-percentile series on a shared bucket grid (the RED view). */
@@ -34,7 +38,7 @@ export interface DurationBin {
   count: number;
 }
 
-export interface Durations {
+interface Durations {
   summary: DurationSummary | null;
   bins: readonly DurationBin[];
 }
@@ -126,4 +130,32 @@ export interface SpanQueryResult {
   /** True when the residual OTTL terms (D5) were applied to the result. */
   residual: boolean;
   tables: RowTables;
+}
+
+/**
+ * The format-4 data source. This is the span half plus the stubs the viewer needs until plan 3 (D11); the log half
+ * (`queryLogs`, `getLog`, `traceLogs`, `surroundingLogs`, `patterns`, `metricPoints`, `resourceValues`) is added in PR 4.
+ */
+export interface DataSource {
+  readonly manifest: ManifestV4;
+  readonly epoch: bigint;
+  querySpans(q: SpanQuery, signal?: AbortSignal): Promise<SpanQueryResult>;
+  /** Memoised for the last id. Rejects with a `usage` error for a trace the report does not hold. */
+  getTrace(traceId: TraceId): Promise<TraceDetail>;
+  /** Bound: consumers pass it unbound. */
+  hasTrace(traceId: TraceId): Promise<boolean>;
+  /** 0 to 100 within the unfiltered spans of that service and resource; null when there are none. */
+  percentileOf(service: string, resource: string, durationNs: number): Promise<number | null>;
+  /** Exclusive time per service of one trace, largest first (D7). */
+  serviceShare(traceId: TraceId): Promise<readonly { service: string; ns: number }[]>;
+  /** The busiest `limit` services; `total` is `limit + 1` when more exist. */
+  services(
+    opts: { window: TimeWindow | null; condition: string | null; limit: number },
+    signal?: AbortSignal,
+  ): Promise<ServicesResult>;
+  /** Rejects with a `usage` error naming plan 3 until metrics are queryable (D11). */
+  metricCatalog(): Promise<MetricCatalog>;
+  metric(id: number): Promise<LoadedMetric>;
+  metricsForResources(resources: readonly ResourceRecord[]): Promise<readonly MetricEntry[]>;
+  close(): Promise<void>;
 }

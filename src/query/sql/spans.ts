@@ -176,7 +176,7 @@ export function durationBinsQuery(f: SqlFilter, axis: readonly { fromNs: number;
 }
 
 /**
- * Per value of facet `key` (a core facet, else the span attribute of that name): `n`, `errors`, `quantiles`,
+ * Per value of facet `key` (a core facet, else the span attribute of that name): `n`, `errors`, `sum_duration_ns`, `quantiles`,
  * `max_duration_ns`; most frequent first, `cap + 1` rows (the extra one tells the mapper values were dropped).
  */
 export function groupStatsQuery(f: SqlFilter, _table: 'spans', key: string, cap: number): Query {
@@ -190,6 +190,7 @@ export function groupStatsQuery(f: SqlFilter, _table: 'spans', key: string, cap:
       value: column('value'),
       n: sql`count(*)`,
       errors: sql`count(*) FILTER (WHERE ${IS_ERROR})`,
+      sum_duration_ns: sql`CAST(sum(duration_ns) AS DOUBLE)`,
       quantiles: QUANTILES,
       max_duration_ns: sql`max(duration_ns)`,
     })

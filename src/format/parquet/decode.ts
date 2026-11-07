@@ -57,12 +57,13 @@ function unixNanos(v: unknown, col: string): UnixNanos {
   throw bad(col, 'an int64 time', v);
 }
 
-function rel(row: ResultRow, col: string, epoch: bigint): RelNanos {
-  return toRelNanos(unixNanos(row[col], col), epoch as UnixNanos, col);
+/** A top-level time column as the SQL selects it: already relative to the epoch (D2), a bigint that must fit a safe integer. */
+function rel(row: ResultRow, col: string): RelNanos {
+  return toRelNanos(unixNanos(row[col], col), 0n as UnixNanos, col);
 }
 
-function relOrNull(row: ResultRow, col: string, epoch: bigint): RelNanos | null {
-  return row[col] === null || row[col] === undefined ? null : rel(row, col, epoch);
+function relOrNull(row: ResultRow, col: string): RelNanos | null {
+  return row[col] === null || row[col] === undefined ? null : rel(row, col);
 }
 
 function isObject(v: unknown): v is Record<string, unknown> {
@@ -162,7 +163,9 @@ const PLACEHOLDER_RESOURCE = 0 as ResourceRef;
 const PLACEHOLDER_SCOPE = 0 as ScopeRef;
 
 /**
- * The inverse of `spanRow`: times relative to `epoch`, attributes/events/links from their JSON texts. `resource`/`scope`
+ * The inverse of `spanRow` over a query result: the top-level times (`start_time_unix_nano`, `end_time_unix_nano`) are
+ * already relative to the epoch (D2: the SQL selects them so); the event times in the events JSON are absolute and are
+ * made relative with `epoch`. Attributes/events/links come from their JSON texts. `resource`/`scope`
  * refs are 0 placeholders for the caller's interner. Lossy by design: `duration_ns` is derived (clamped at 0) and
  * ignored, the record has start/end; uint32 fields come back from int64 columns (R29).
  */
@@ -176,8 +179,8 @@ export function spanFromRow(row: ResultRow, epoch: bigint): { span: SpanRecord; 
     flags: int(row, 'flags'),
     name: str(row, 'name'),
     kind: int(row, 'kind') as SpanRecord['kind'],
-    start: rel(row, 'start_time_unix_nano', epoch),
-    end: rel(row, 'end_time_unix_nano', epoch),
+    start: rel(row, 'start_time_unix_nano'),
+    end: rel(row, 'end_time_unix_nano'),
     attributes: attributesFromJson(str(row, 'attributes')),
     droppedAttributesCount: int(row, 'dropped_attributes_count'),
     events: events(str(row, 'events'), epoch),
@@ -194,11 +197,11 @@ export function spanFromRow(row: ResultRow, epoch: bigint): { span: SpanRecord; 
   return { span, shared: shared(row) };
 }
 
-/** The inverse of `logRow`; a null `event_name` (R9) decodes to the empty string. */
-export function logFromRow(row: ResultRow, epoch: bigint): { log: LogRecordRecord; shared: DecodedShared } {
+/** The inverse of `logRow` over a query result (times already relative, D2); a null `event_name` (R9) decodes to the empty string. */
+export function logFromRow(row: ResultRow): { log: LogRecordRecord; shared: DecodedShared } {
   const log: LogRecordRecord = {
-    time: relOrNull(row, 'time_unix_nano', epoch),
-    observedTime: relOrNull(row, 'observed_time_unix_nano', epoch),
+    time: relOrNull(row, 'time_unix_nano'),
+    observedTime: relOrNull(row, 'observed_time_unix_nano'),
     severityNumber: int(row, 'severity_number'),
     severityText: str(row, 'severity_text'),
     body: anyValueFromJson(str(row, 'body')),

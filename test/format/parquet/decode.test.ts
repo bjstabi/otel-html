@@ -104,17 +104,34 @@ function log(over: Partial<LogRecordRecord> = {}): LogRecordRecord {
 
 const cell = (row: Record<string, unknown>, name: string): unknown => row[name];
 
+const TIME_COLUMNS = [
+  'start_time_unix_nano',
+  'end_time_unix_nano',
+  'time_unix_nano',
+  'observed_time_unix_nano',
+];
+
+/** What a query result delivers: the writer's row with its top-level time columns relative to the epoch (D2); the events JSON stays absolute. */
+function asQueried(row: Record<string, unknown>): ResultRow {
+  const out: Record<string, unknown> = { ...row };
+  for (const c of TIME_COLUMNS) {
+    const v = out[c];
+    if (typeof v === 'bigint') out[c] = v - EPOCH;
+  }
+  return out;
+}
+
 describe('spanFromRow', () => {
   test('is the inverse of spanRow, resource and scope refs excepted', () => {
     const s = span();
-    const { span: back, shared } = spanFromRow(spanRow(s, ctx) as ResultRow, EPOCH);
+    const { span: back, shared } = spanFromRow(asQueried(spanRow(s, ctx)), EPOCH);
     expect(back).toEqual({ ...s, resource: 0, scope: 0 });
     expect(shared.resource).toEqual(resource);
     expect(shared.scope).toEqual(scope);
   });
 
   test('a root span has a null parent', () => {
-    const { span: back } = spanFromRow(spanRow(span({ parentSpanId: null }), ctx), EPOCH);
+    const { span: back } = spanFromRow(asQueried(spanRow(span({ parentSpanId: null }), ctx)), EPOCH);
     expect(back.parentSpanId).toBeNull();
   });
 
@@ -122,20 +139,20 @@ describe('spanFromRow', () => {
     const s = span({ start: 20 as RelNanos, end: 10 as RelNanos });
     const row = spanRow(s, ctx);
     expect(cell(row, 'duration_ns')).toBe(0n);
-    const { span: back } = spanFromRow(row, EPOCH);
+    const { span: back } = spanFromRow(asQueried(row), EPOCH);
     expect(back.start).toBe(20);
     expect(back.end).toBe(10);
   });
 
   test('int columns may arrive as numbers (int32) or bigint (int64)', () => {
-    const row = { ...spanRow(span(), ctx), flags: 257, dropped_events_count: 4 };
+    const row = { ...asQueried(spanRow(span(), ctx)), flags: 257, dropped_events_count: 4 };
     const { span: back } = spanFromRow(row, EPOCH);
     expect(back.flags).toBe(257);
     expect(back.droppedEventsCount).toBe(4);
   });
 
   test('a time outside the safe range fails with time-out-of-range, not rounding', () => {
-    const row = { ...spanRow(span(), ctx), end_time_unix_nano: EPOCH + 2n ** 60n };
+    const row = { ...asQueried(spanRow(span(), ctx)), end_time_unix_nano: 2n ** 60n };
     expect(() => spanFromRow(row, EPOCH)).toThrow(OtelHtmlError);
     try {
       spanFromRow(row, EPOCH);
@@ -145,14 +162,14 @@ describe('spanFromRow', () => {
   });
 
   test('an event time beyond 2^53 relative fails too', () => {
-    const row = spanRow(span(), ctx);
+    const row = asQueried(spanRow(span(), ctx));
     const events = JSON.parse(cell(row, 'events') as string);
     events[0].time_unix_nano = { $i: (EPOCH + 2n ** 60n).toString() };
     expect(() => spanFromRow({ ...row, events: JSON.stringify(events) }, EPOCH)).toThrow(OtelHtmlError);
   });
 
   test('a missing or mistyped column is an invalid-report error', () => {
-    const { name: _n, ...rest } = spanRow(span(), ctx);
+    const { name: _n, ...rest } = asQueried(spanRow(span(), ctx));
     expect(() => spanFromRow(rest, EPOCH)).toThrow(OtelHtmlError);
   });
 });
@@ -160,7 +177,7 @@ describe('spanFromRow', () => {
 describe('logFromRow', () => {
   test('is the inverse of logRow, resource and scope refs excepted', () => {
     const l = log();
-    const { log: back, shared } = logFromRow(logRow(l, ctx) as ResultRow, EPOCH);
+    const { log: back, shared } = logFromRow(asQueried(logRow(l, ctx)));
     expect(back).toEqual({ ...l, resource: 0, scope: 0 });
     expect(shared.resource).toEqual(resource);
     expect(shared.scope).toEqual(scope);
@@ -169,18 +186,18 @@ describe('logFromRow', () => {
   test('an empty event name is stored as null (R9) and decodes back to the empty string', () => {
     const row = logRow(log({ eventName: '' }), ctx);
     expect(cell(row, 'event_name')).toBeNull();
-    expect(logFromRow(row, EPOCH).log.eventName).toBe('');
+    expect(logFromRow(asQueried(row)).log.eventName).toBe('');
   });
 
   test('null times and null ids stay null', () => {
     const l = log({ time: null, observedTime: null, traceId: null, spanId: null });
-    const { log: back } = logFromRow(logRow(l, ctx), EPOCH);
+    const { log: back } = logFromRow(asQueried(logRow(l, ctx)));
     expect(back).toEqual({ ...l, resource: 0, scope: 0 });
   });
 
   test('a string body round-trips', () => {
     const l = log({ body: str('hello') });
-    expect(logFromRow(logRow(l, ctx), EPOCH).log.body).toEqual(str('hello'));
+    expect(logFromRow(asQueried(logRow(l, ctx))).log.body).toEqual(str('hello'));
   });
 });
 
