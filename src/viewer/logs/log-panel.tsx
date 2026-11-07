@@ -18,7 +18,6 @@ import { formatTime } from '../../semconv/formatters.js';
 import { downloadBlob } from '../components/export.js';
 import { LogBody } from '../components/log-body.js';
 import { SeverityBadge } from '../components/severity.js';
-import type { LegacyDataSource } from '../data/legacy-data-source.js';
 import { type LogRef, type LogRow, refParts } from '../data/log-query.js';
 import { useHasMetrics } from '../metrics/metric-grid.js';
 import { CONTROL } from '../shell/controls.js';
@@ -26,18 +25,19 @@ import { MOVE_EVENT } from '../shell/move-event.js';
 import { CopyLink } from '../shell/page-chrome.js';
 import { useSelection, useSelectionStore } from '../state/selection-context.js';
 import { type KeyedState, useKeyedAsync } from '../state/use-keyed-async.js';
+import type { LogSource } from './log-source.js';
 import { AttributesTab, LogMetricsTab, LogResourceTab, LogTraceTab, SurroundingTab } from './log-tabs.js';
 import { availableLogTabs, isLogTabId, type LogTabId } from './tabs.js';
 
 export interface LogPanelProps {
-  dataSource: LegacyDataSource;
+  dataSource: LogSource;
   logRef: LogRef;
   /** The visible rows' refs in order: what j/k step through. */
   logRefs?: readonly LogRef[];
   onClose(): void;
 }
 
-function useLog(dataSource: LegacyDataSource, logRef: LogRef): KeyedState<LogRow> {
+function useLog(dataSource: LogSource, logRef: LogRef): KeyedState<LogRow> {
   const load = useCallback((ref: LogRef) => dataSource.getLog(ref), [dataSource]);
   return useKeyedAsync(logRef, load);
 }
@@ -45,7 +45,7 @@ function useLog(dataSource: LegacyDataSource, logRef: LogRef): KeyedState<LogRow
 type Presence = 'checking' | 'present' | 'absent' | 'unknown';
 
 /** Whether the log's trace has spans in the report: an index lookup only. */
-function useTracePresence(dataSource: LegacyDataSource, traceId: TraceId | null): Presence {
+function useTracePresence(dataSource: LogSource, traceId: TraceId | null): Presence {
   const [state, setState] = useState<{ traceId: TraceId; presence: Presence } | null>(null);
   useEffect(() => {
     if (traceId === null) return;

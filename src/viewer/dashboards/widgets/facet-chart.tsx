@@ -12,7 +12,7 @@ import { mergeEchartsOption } from '../../components/metric-chart-option.js';
 import type { LegacyDataSource } from '../../data/legacy-data-source.js';
 import type { LogQuery } from '../../data/log-query.js';
 import type { SpanQuery } from '../../data/span-query.js';
-import { useLogQuery } from '../../logs/use-log-query.js';
+import { useLegacyLogQuery } from '../../logs/legacy-use-log-query.js';
 import type { LegacyQueryHandle } from '../../state/legacy-use-query.js';
 import { useKeyedAsync } from '../../state/use-keyed-async.js';
 import { useColorAssigner } from '../../theme/colors-context.js';
@@ -201,7 +201,7 @@ function LogFacets(props: Shared & { dataSource: LegacyDataSource; filter: Filte
     () => ({ ...queryOf(condition, text, window), mode: 'logs', sort: SORT.logs, traceId }),
     [condition, text, window, traceId],
   );
-  return <FacetBody {...rest} dataSource={dataSource} handle={useLogQuery(dataSource, query)} />;
+  return <FacetBody {...rest} dataSource={dataSource} handle={useLegacyLogQuery(dataSource, query)} />;
 }
 
 /** A span or log query's facet counts grouped by the widget's key: the explorers' top-list chart or group table. */

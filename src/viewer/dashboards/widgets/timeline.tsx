@@ -11,7 +11,7 @@ import {
 } from '../../components/histogram-card.js';
 import type { LegacyDataSource } from '../../data/legacy-data-source.js';
 import type { TimeWindow } from '../../data/span-query.js';
-import { useLogQuery } from '../../logs/use-log-query.js';
+import { useLegacyLogQuery } from '../../logs/legacy-use-log-query.js';
 import type { LegacyQueryState, QueryProgress } from '../../state/legacy-use-query.js';
 import { useKeyedAsync } from '../../state/use-keyed-async.js';
 import { useLegacySpanQuery } from '../../traces/legacy-use-span-query.js';
@@ -97,7 +97,11 @@ export const TimelineWidget: WidgetRenderer = ({ scope, height, dataSource, acti
     groupBy: null,
     measureBy: null,
   });
-  const logs = useLogQuery(dataSource, { ...base, mode: 'logs', sort: { column: 'time', dir: 'desc' } });
+  const logs = useLegacyLogQuery(dataSource, {
+    ...base,
+    mode: 'logs',
+    sort: { column: 'time', dir: 'desc' },
+  });
   const points = useKeyedAsync(dataSource, loadPoints);
 
   const run = dataSource.manifest.range;

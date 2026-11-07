@@ -7,7 +7,7 @@ import { LogList } from '../../components/log-list.js';
 import type { SortState } from '../../components/results-table.js';
 import type { LegacyDataSource } from '../../data/legacy-data-source.js';
 import type { LogQuery, LogQueryResult, LogRow } from '../../data/log-query.js';
-import { useLogQuery } from '../../logs/use-log-query.js';
+import { useLegacyLogQuery } from '../../logs/legacy-use-log-query.js';
 import type { LegacyQueryHandle } from '../../state/legacy-use-query.js';
 import { useSelection, useSelectionStore } from '../../state/selection-context.js';
 import type { WidgetRenderer } from '../dashboard-page.js';
@@ -130,7 +130,7 @@ function ContextView(props: {
   onSort(s: SortState): void;
   height: number;
 }): JSX.Element {
-  const handle = useLogQuery(props.dataSource, props.context);
+  const handle = useLegacyLogQuery(props.dataSource, props.context);
   const { matched } = props;
   // The first ROWS matches are enough: both lists share the sort, so the matches among the first ROWS logs are the
   // first ones of the matches. A partial scan does not break that: the context list fills its rows from no more
@@ -177,7 +177,7 @@ export const LogsWidget: WidgetRenderer = ({
     () => logQuery(scope.window, contextCondition, '', sort, null),
     [scope.window, contextCondition, sort],
   );
-  const handle = useLogQuery(dataSource, matches);
+  const handle = useLegacyLogQuery(dataSource, matches);
   const matched = logsOf(handle);
   useSubtitle(actions, matched === null ? null : scopedCount(matched.total, 'log', scope));
   const listPx =

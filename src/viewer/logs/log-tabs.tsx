@@ -7,8 +7,8 @@ import { LogList } from '../components/log-list.js';
 import { ResourceTab } from '../components/resource-tab.js';
 import { useFilterActions } from '../components/use-filter-actions.js';
 import { Waterfall } from '../components/waterfall.js';
-import type { LegacyDataSource } from '../data/legacy-data-source.js';
 import type { LogRef, LogRow } from '../data/log-query.js';
+import { manifestRange } from '../data/manifest-range.js';
 import { gridWindow, MetricGrid, type MetricGridOrigin } from '../metrics/metric-grid.js';
 import { CONTROL } from '../shell/controls.js';
 import { useGoTo } from '../shell/go-to.js';
@@ -16,6 +16,7 @@ import { useSelection } from '../state/selection-context.js';
 import { useKeyedAsync } from '../state/use-keyed-async.js';
 import { useColorAssigner } from '../theme/colors-context.js';
 import { traceFacts } from '../traces/trace-facts.js';
+import type { LogSource } from './log-source.js';
 
 /** Neighbors requested on each side of the log in Surrounding logs. */
 const SURROUNDING_N = 10;
@@ -77,7 +78,7 @@ const VIEW_BTN = 'rounded-full px-3 py-0.5 text-sm';
  * The log's trace as the shared flame graph (or waterfall) with the emitting span outlined and a dashed "this log"
  * line at the log's time. Clicking a span opens the trace overlay over the Logs Explorer.
  */
-export function LogTraceTab(props: { dataSource: LegacyDataSource; row: LogRow }): JSX.Element {
+export function LogTraceTab(props: { dataSource: LogSource; row: LogRow }): JSX.Element {
   const { dataSource, row } = props;
   const openSpanFromLog = useSelection((s) => s.openSpanFromLog);
   const goTo = useGoTo();
@@ -173,9 +174,9 @@ export function LogTraceTab(props: { dataSource: LegacyDataSource; row: LogRow }
 }
 
 /** The embedded metric grid on the log's resource, around the log's time (the whole run for a log without one). */
-export function LogMetricsTab(props: { dataSource: LegacyDataSource; row: LogRow }): JSX.Element {
+export function LogMetricsTab(props: { dataSource: LogSource; row: LogRow }): JSX.Element {
   const { dataSource, row } = props;
-  const range = dataSource.manifest.range;
+  const range = useMemo(() => manifestRange(dataSource.manifest), [dataSource]);
   const origin = useMemo((): MetricGridOrigin => {
     const at = row.timeSource === 'none' ? null : row.time;
     return {
@@ -205,11 +206,7 @@ export function LogResourceTab(props: { row: LogRow }): JSX.Element {
   );
 }
 
-export function SurroundingTab(props: {
-  dataSource: LegacyDataSource;
-  row: LogRow;
-  epoch: UnixNanos;
-}): JSX.Element {
+export function SurroundingTab(props: { dataSource: LogSource; row: LogRow; epoch: UnixNanos }): JSX.Element {
   const { dataSource, row, epoch } = props;
   const sel = useSelection((s) => s);
   const ref = row.ref;
@@ -237,11 +234,6 @@ export function SurroundingTab(props: {
         Logs from {row.service}
         {row.host === null ? '' : ` on ${row.host}`} around this one, in time order.
       </p>
-      {current.value.partial && (
-        <p className="text-xs text-ink-2">
-          Partial: the scan stopped at its neighbor-chunk limit, so there may be more logs on a side.
-        </p>
-      )}
       <LogList
         rows={rows}
         sort={null}

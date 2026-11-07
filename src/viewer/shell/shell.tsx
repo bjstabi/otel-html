@@ -211,7 +211,7 @@ function homeRoute(manifest: Manifest): string {
 
 function RoutedPage({ dataSource }: { dataSource: LegacyDataSource }): JSX.Element {
   const manifest = dataSource.manifest;
-  // The traces explorer and services page read the format-4 source (the one app.tsx passes). Removed when the other
+  // The traces explorer, services page and logs explorer read the format-4 source (the one app.tsx passes). Removed when the other
   // pages move (5.3-5.5) and `Shell` takes `DataSource`.
   const spanSource = dataSource as unknown as DataSource;
   const [route] = useRoute();
@@ -233,7 +233,7 @@ function RoutedPage({ dataSource }: { dataSource: LegacyDataSource }): JSX.Eleme
         <PatternsRedirect />
       </Route>
       <Route path="/logs">
-        <LogsExplorer dataSource={dataSource} />
+        <LogsExplorer dataSource={spanSource} />
       </Route>
       <Route path="/metrics/catalog">
         <MetricsCatalog dataSource={dataSource} />
