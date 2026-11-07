@@ -64,12 +64,19 @@ function attrs(i: number): JsonObject[] {
     out.push(attr('arr', { arrayValue: { values: [{ stringValue: 'a' }, { intValue: '2' }] } }));
   if (i % 7 === 0) out.push(attr('by', { bytesValue: 'AQID' }));
   if (i % 5 === 1) out.push(str('e', ''));
-  if (i % 8 === 0)
-    out.push(
-      attr('nested', {
-        kvlistValue: { values: [attr('deep', { kvlistValue: { values: [int('x', '7')] } })] },
-      }),
-    );
+  if (i % 8 === 0) {
+    // the depth-3 map in plain and pairs form, at the middle and the top level, a string, and a duplicate key
+    // (the normalizer keeps the last, so no pair list ever repeats a key)
+    const x7 = int('x', '7');
+    const variant = i / 8;
+    const deep = (values: JsonObject[]): JsonObject => attr('deep', { kvlistValue: { values } });
+    const nested = (values: JsonObject[]): JsonObject => attr('nested', { kvlistValue: { values } });
+    if (variant === 0) out.push(nested([deep([x7])]));
+    else if (variant === 1) out.push(nested([deep([int('$k', '1'), x7])]));
+    else if (variant === 2) out.push(nested([int('$t', '1'), deep([x7])]));
+    else if (variant === 3) out.push(nested([deep([str('x', '7')])]));
+    else out.push(nested([deep([x7, int('x', '8')])]));
+  }
   out.push(
     i % 3 === 0
       ? int('http.status_code', i % 2 === 0 ? '500' : '200')
@@ -163,7 +170,7 @@ const spanConditions = [
   'start_time_unix_nano < 6',
   'attributes["a/b"] == "x"',
   'attributes["q\\"x"] == "quoted"',
-  'attributes["$weird"] == 3',
+  'attributes["$weird"] == 4',
   'attributes["n"] == 9007199254740993',
   'attributes["n"] > 9007199254740992',
   'attributes["n"] == -9007199254740993',
@@ -175,6 +182,12 @@ const spanConditions = [
   'attributes["m"]["k"] == "v"',
   'attributes["m"]["k"] == nil',
   'attributes["nested"]["deep"]["x"] == 7',
+  'attributes["nested"]["deep"]["x"] == nil',
+  'attributes["nested"]["deep"]["x"] == "7"',
+  'attributes["nested"]["deep"]["x"] == 8',
+  'attributes["nested"]["deep"]["x"] > 7',
+  'IsInt(attributes["nested"]["deep"]["x"])',
+  'IsMap(attributes["nested"]["deep"])',
   'IsMap(attributes["m"])',
   'IsMap(attributes["arr"])',
   'attributes["arr"] == nil',
@@ -217,6 +230,47 @@ const logConditions = [
   'resource.attributes["service.name"] == "web"',
   'severity_text == "" or attributes["b"] == true',
 ];
+
+/**
+ * Conditions that must stay (partly) in the browser: a number beyond 2^53, `$`-prefixed keys, `body.string`, `Len`, and
+ * a time column compared with another path. Everything else must translate completely.
+ */
+const RESIDUAL = new Set([
+  'span:attributes["$weird"] == 4',
+  'span:attributes["n"] == 9007199254740993',
+  'span:attributes["n"] > 9007199254740992',
+  'span:attributes["n"] == -9007199254740993',
+  'span:Len(name) > 3',
+  'log_record:log.severity_number >= SEVERITY_NUMBER_WARN and Len(body) > 3',
+  'log_record:IsMatch(body.string, "err.*")',
+  'log_record:body.string == "plain"',
+  'log_record:IsString(body.string)',
+  'log_record:Len(body) > 3',
+  'log_record:observed_time_unix_nano > time_unix_nano',
+  'log_record:attributes["n"] == 9007199254740993',
+]);
+/** Conditions whose result is legitimately empty or all rows on this fixture (every other one must select some rows, not all). */
+const TRIVIAL = new Set([
+  'span:attributes["n"] == nil',
+  'span:attributes["n"] != nil',
+  'span:attributes["missing"] == nil',
+  'span:attributes["d"] != 1',
+  'span:attributes["nan"] > 1',
+  'span:attributes["f"] > 1',
+  'span:attributes["s"] == 5',
+  'span:IsMap(attributes)',
+  'span:name == 5',
+  'span:name != 5',
+  'span:status.code == nil',
+  'span:start_time_unix_nano < 6',
+  'span:IsMap(attributes["arr"])',
+  'span:resource.attributes["cicd.pipeline.run.id"] == 42',
+  'log_record:IsString(body.string)',
+  'log_record:body == nil',
+  'log_record:observed_time_unix_nano > time_unix_nano',
+  'log_record:event_name == ""',
+  'log_record:attributes["missing"] == nil',
+]);
 
 describe('SQL and browser evaluation agree on the translatable OTTL subset', () => {
   let fixture: Format4Fixture;
@@ -266,6 +320,14 @@ describe('SQL and browser evaluation agree on the translatable OTTL subset', () 
   ) {
     const expected = jsIds(src);
     const t = translateCondition(src, context);
+    const label = `${context}:${src}`;
+    expect(t.residual !== null, `${label}: residual-ness`).toBe(RESIDUAL.has(label));
+    if (t.residual === null) expect(t.predicate, label).not.toBeNull();
+    if (TRIVIAL.has(label)) expect([0, N], label).toContain(expected.size);
+    else {
+      expect(expected.size, `${label}: empty expected set`).toBeGreaterThan(0);
+      expect(expected.size, `${label}: expected set is every row`).toBeLessThan(N);
+    }
     const where = t.predicate === null ? 'TRUE' : toSql(t.predicate);
     const got = new Set(sqlIds(where));
     if (t.residual === null) {

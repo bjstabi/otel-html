@@ -84,7 +84,8 @@ export function jsonPointer(keys: readonly (string | number)[]): string {
 /**
  * One step into a JSON value. An object that holds a `$`-prefixed or `__proto__` key is stored as the pairs form
  * `{"$m": [[key, value], ...]}` (format 4), so a string key is looked up in the object and, failing that, in the pairs.
- * A missing key is SQL NULL, a JSON null stays JSON null.
+ * A missing key is SQL NULL, a JSON null stays JSON null. A duplicate key never reaches the pairs: the normalizer keeps
+ * the last occurrence (a `Map`), as the browser evaluator sees it, so the first matching pair is the only one.
  */
 function jsonStep(base: ExprNode, key: string | number): ExprNode {
   const plain = sql`json_extract(${base}, ${literal(jsonPointer([key]))})`;
