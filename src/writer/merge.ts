@@ -81,6 +81,13 @@ async function locateManifest(fs: FileSystem, rawDir: string, verb: string): Pro
   return { dir, file, raw: inFile(file, () => reviveDataJson(unwrapDataFile(text, MANIFEST_KEY))) };
 }
 
+/** The `engine.format` of the format-4 report at `dir`, or undefined when it is a chunks report. */
+async function existingFormat(fs: FileSystem, dir: string): Promise<'local' | 'site' | undefined> {
+  const { raw, file } = await locateManifest(fs, dir, 'merge');
+  const m = inFile(file, () => parseAnyManifest(raw));
+  return isV4(m) ? m.engine.format : undefined;
+}
+
 function chunkInput({ dir, file, raw }: Located): Input {
   if (
     typeof raw === 'object' &&
@@ -231,16 +238,31 @@ export async function mergeReports(
       deps.logger.warn(`merging ${input.dir}, which was not closed cleanly; it may be missing recent data`);
     }
   }
+  // An existing report at `out` is the base; the session's append branch inherits its title and dashboards.
+  const intoExisting = options.mode !== 'replace' && (await deps.fs.exists(at(out, MANIFEST_PATH)));
   // Before the output is touched: a chunks report has no partitions to copy, and decoding them is not merge's job.
   const partitioned = loaded.find((i) => i.kind === 'partitions');
   if (partitioned !== undefined && options.config.writer.format === 'chunks') {
+    const existing = intoExisting ? await existingFormat(deps.fs, out) : undefined;
     throw new OtelHtmlError('usage', {
       message: `cannot merge the format-4 report ${partitioned.dir} into a chunks report`,
-      hint: 'merge with --format local or --format site',
+      hint: `merge with ${existing === undefined ? '--format local or --format site' : `--format ${existing}`}`,
     });
   }
-  // An existing report at `out` is the base; the session's append branch inherits its title and dashboards.
-  const intoExisting = options.mode !== 'replace' && (await deps.fs.exists(at(out, MANIFEST_PATH)));
+  // Also before it: a replace wipes the old report at the session's first write, so every file an input lists must be there.
+  for (const input of loaded) {
+    if (input.kind !== 'partitions') continue;
+    for (const entry of input.manifest.partitions) {
+      for (const f of Object.values(entry.files)) {
+        const file = at(input.dir, f.path);
+        if (!(await deps.fs.exists(file))) {
+          throw new OtelHtmlError('invalid-report', {
+            message: `${file}: cannot read partition file ${f.path} listed in the manifest (it is missing)`,
+          });
+        }
+      }
+    }
+  }
   const first = loaded[0];
   const titled =
     options.config.title === undefined && first !== undefined

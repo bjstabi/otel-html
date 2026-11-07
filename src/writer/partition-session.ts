@@ -855,7 +855,11 @@ class PartitionSession implements WriterSession {
     if (!this.#config.writer.compactOnMerge) return;
     for (const group of this.#copied.values()) {
       const taken = new Set(group);
-      await this.#compactGroup(this.#committed.filter((e) => taken.has(e.n)));
+      // Each input is its own Drain lineage: cluster ids collide across inputs, so patterns match by template too.
+      await this.#compactGroup(
+        this.#committed.filter((e) => taken.has(e.n)),
+        'cluster-template',
+      );
     }
   }
 
@@ -865,7 +869,10 @@ class PartitionSession implements WriterSession {
    * partitions left), then the manifest (listing it in place of the picks). The folders it replaces are removed by
    * `#pruneCommitted` after that commit. Compaction is an optimisation, so a failure keeps the picks and is logged.
    */
-  async #compactGroup(picks: readonly PartitionEntry[]): Promise<void> {
+  async #compactGroup(
+    picks: readonly PartitionEntry[],
+    patternKey: 'cluster' | 'cluster-template' = 'cluster',
+  ): Promise<void> {
     const first = picks[0];
     const last = picks.at(-1);
     if (first === undefined || last === undefined || picks.length < 2) return;
@@ -879,6 +886,7 @@ class PartitionSession implements WriterSession {
         facetValueCap: this.#config.writer.facetValueCap,
         format: this.#config.writer.format,
         source: `compact:${first.n}..${last.n}`,
+        patternKey,
       });
       this.#writer.skipTo(n + 1);
       const replaced = new Set(picks.map((e) => e.n));

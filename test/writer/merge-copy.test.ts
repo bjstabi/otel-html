@@ -8,6 +8,7 @@ import { MANIFEST_KEY, partitionWrapperPath } from '../../src/format/paths.js';
 import { mergeReports } from '../../src/writer/merge.js';
 import { openSession } from '../../src/writer/session.js';
 import { logRecord, logsRequest } from '../../test-support/otlp-builders.js';
+import { perfFactor } from '../../test-support/perf-inject.js';
 import { createTestWriter, otlp, type TestWriter, testConfig } from '../../test-support/writer-deps.js';
 import { spansRequest } from './helpers.js';
 
@@ -41,6 +42,7 @@ async function v4Report(
   }
 }
 
+const cell = (row: object, key: string): unknown => Reflect.get(row, key);
 const bytesOf = async (w: TestWriter, p: string) => w.deps.fs.readBytes(p);
 
 async function rows(w: TestWriter, out: string, table: Table): Promise<number> {
@@ -98,7 +100,7 @@ describe('merge copies format-4 partitions', () => {
     await mergeWith({ inputs: ['a'], out: 'm', config: cfg('site') }, w.deps);
     const ms = performance.now() - t0;
     expect(v4Manifest(w, 'm').partitions).toHaveLength(20);
-    expect(ms).toBeLessThan(1000);
+    expect(ms).toBeLessThan(1000 * perfFactor());
   });
 
   test('without --compact the copied partitions stay as they are', async () => {
@@ -211,5 +213,87 @@ describe('merge copies format-4 partitions', () => {
     );
     expect(e).toMatchObject({ code: 'invalid-report' });
     expect(String((e as Error).message)).toContain(`a/${f.path}`);
+  });
+
+  test('the files are copied as bytes: a listed file of arbitrary content arrives unchanged (no decode)', async () => {
+    const w = createTestWriter();
+    await v4Report(w, 'a', [spansRequest(2)]);
+    const f = v4Manifest(w, 'a').partitions[0]?.files.spans;
+    if (f === undefined) throw new Error('no spans file');
+    const junk = new Uint8Array([0, 1, 2, 3, 250, 251, 252, 253, 254, 255]);
+    await w.deps.fs.writeBytes(`a/${f.path}`, junk);
+    await mergeWith({ inputs: ['a'], out: 'm', config: cfg('site') }, w.deps);
+    const out = v4Manifest(w, 'm').partitions[0]?.files.spans;
+    expect(out && (await bytesOf(w, `m/${out.path}`))).toEqual(junk);
+  });
+
+  test('--replace with a v4 input that lists a missing file fails and leaves the existing report intact', async () => {
+    const w = createTestWriter();
+    await v4Report(w, 'old', [spansRequest(2)]);
+    await mergeWith({ inputs: ['old'], out: 'm', config: cfg('site') }, w.deps);
+    const before = v4Manifest(w, 'm');
+    await v4Report(w, 'a', [spansRequest(1, 0, 9)]);
+    const f = v4Manifest(w, 'a').partitions[0]?.files.spans;
+    if (f === undefined) throw new Error('no spans file');
+    await w.deps.fs.remove(`a/${f.path}`);
+    const e = await mergeWith({ inputs: ['a'], out: 'm', config: cfg('site'), replace: true }, w.deps).catch(
+      (x: unknown) => x,
+    );
+    expect(e).toMatchObject({ code: 'invalid-report' });
+    expect(v4Manifest(w, 'm')).toEqual(before);
+    expect(await rows(w, 'm', 'spans')).toBe(2);
+  });
+
+  test("a v4 input into an existing v4 output without --format names that report's format", async () => {
+    const w = createTestWriter();
+    await v4Report(w, 'a', [spansRequest(1)]);
+    await v4Report(w, 'm', [spansRequest(1, 0, 9)], 'local');
+    const e = await mergeReports(w.deps, ['a'], { out: 'm', config: testConfig(), mode: 'open' }).catch(
+      (x: unknown) => x,
+    );
+    expect(e).toMatchObject({ code: 'usage', hint: 'merge with --format local' });
+  });
+});
+
+describe('--compact and patterns (R56)', () => {
+  const logs = (...bodies: string[]) =>
+    logsRequest(bodies.map((b) => logRecord({ body: { stringValue: b } })));
+  const patterns = async (w: TestWriter, out: string) =>
+    (await patternRowsOf(w, out)).map((r) => [cell(r, 'cluster_id'), cell(r, 'template'), cell(r, 'count')]);
+
+  async function patternRowsOf(w: TestWriter, out: string): Promise<object[]> {
+    const all: object[] = [];
+    for (const p of v4Manifest(w, out).partitions) {
+      const f = p.files.patterns;
+      if (f !== undefined) all.push(...decodeTable('patterns', await bytesOf(w, `${out}/${f.path}`)));
+    }
+    return all;
+  }
+
+  test('lineages that share a cluster id keep both templates through a compacting merge', async () => {
+    const w = createTestWriter();
+    await v4Report(w, 'x', [logs('disk full on sda', 'disk full on sdb', 'disk full on sdc')]);
+    await v4Report(w, 'y', [logs('user 1 logged in', 'user 2 logged in', 'user 3 logged in')]);
+    await mergeWith({ inputs: ['x', 'y'], out: 'm1', config: cfg('site') }, w.deps);
+    await mergeWith({ inputs: ['m1'], out: 'm2', config: cfg('site', { compactOnMerge: true }) }, w.deps);
+    expect(v4Manifest(w, 'm2').partitions).toHaveLength(1);
+    const rowsOut = (await patterns(w, 'm2')).sort((a, b) => String(a[1]).localeCompare(String(b[1])));
+    expect(rowsOut).toEqual([
+      [0n, 'disk full on <*>', 3n],
+      [0n, 'user <*> logged in', 3n],
+    ]);
+  });
+
+  test('closing a session still sums flush partitions by cluster id, with the latest template', async () => {
+    const w = createTestWriter();
+    const s = await openSession(w.deps, { out: 'f', config: testConfig(cfg('site')), mode: 'replace' });
+    await s.add(otlp(logs('user 1 logged in')), 'a.json');
+    await s.flush();
+    await s.add(otlp(logs('user 2 logged in', 'user 3 logged in')), 'b.json');
+    await s.close();
+    expect(v4Manifest(w, 'f').partitions).toHaveLength(1);
+    const out = await patterns(w, 'f');
+    expect(out).toHaveLength(1);
+    expect(out[0]?.[2]).toBe(3n);
   });
 });
