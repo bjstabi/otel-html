@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, test } from 'vitest';
 import { OtelHtmlError } from '../../../src/model/errors.js';
 import { parseTraceId } from '../../../src/model/ids.js';
 import { buildFilter } from '../../../src/query/sql/filter.js';
+import type { SurroundingTarget } from '../../../src/query/sql/logs.js';
 import {
   logByRefQuery,
   logRowsQuery,
@@ -279,6 +280,11 @@ describe('logTimelineQuery', () => {
     );
   });
 
+  test('a window that includes the epoch still excludes a log with neither time', () => {
+    const w = filter({ window: { start: 0, end: rel(20) } });
+    const rows = run(logTimelineQuery(w.filter, spec));
+    expect(rows.reduce((a, r) => a + num(r.n), 0)).toBe(4);
+  });
   test('a window limits the counted logs', () => {
     const w = filter({ window: { start: rel(35), end: rel(65) } });
     const rows = run(logTimelineQuery(w.filter, spec));
@@ -337,6 +343,43 @@ describe('surroundingQueries', () => {
   });
 });
 
+describe('surroundingQueries across a tie', () => {
+  test('equal times in two partitions order by file, then row', async () => {
+    const rec = (id: string, ms: number): L => ({
+      id,
+      svc: 'svc-a',
+      host: 'host-1',
+      ms,
+      sev: 9,
+      body: user(1),
+    });
+    const g = await buildFormat4Report(
+      [logsOf([rec('t1', 5), rec('t2', 5)]), logsOf([rec('t3', 5), rec('t4', 9)])],
+      {
+        close: false,
+      },
+    );
+    const gdb = await openFixtureDb(g);
+    const rows = (q: { toString(): string }): string[] => labels(gdb.rows(q.toString()));
+    const all = gdb.rows(`SELECT filename, file_row_number, attributes FROM logs`);
+    const tgt = (id: string): SurroundingTarget => {
+      const r = all.find((x) => labelOf(x as Row) === id) as Row;
+      return {
+        n: partitionOfFilename(String(r.filename)),
+        i: num(r.file_row_number),
+        time: 0 as LogRow['time'],
+        service: 'svc-a',
+        host: 'host-1',
+      };
+    };
+    const eps = g.epoch;
+    const at = surroundingQueries(tgt('t3'), g.manifest, 10, eps);
+    // t1, t2 are in the earlier file, tied at the target's time: they come before it, nearest first
+    expect(rows(at.before)).toEqual(['t2', 't1']);
+    expect(rows(at.after)).toEqual(['t4']);
+  });
+});
+
 describe('traceLogsQuery', () => {
   test('every logs file for null, in time order', () => {
     expect(labels(run(traceLogsQuery(T1, null, f.epoch)))).toEqual(['a2', 'b2', 'b3']);
@@ -378,7 +421,34 @@ describe('patternsQuery', () => {
         window: absWindow({ start: rel(65), end: rel(80) }, f.epoch),
       }),
     );
-    expect(only.map((r) => String(r.template)).every((t) => t.startsWith('failed'))).toBe(true);
+    expect(only.map((r) => [String(r.template), num(r.count)])).toEqual([['failed to connect to db <*>', 4]]);
+    // [25, 35] ms overlaps no single partition row of the user and failed templates (their rows end at 10 / 20 and
+    // start at 40 / 55), only their combined range: the window must not prune files, so the counts stay whole
+    const mid = run(
+      patternsQuery({
+        ...opts,
+        epoch: f.epoch,
+        window: absWindow({ start: rel(25), end: rel(35) }, f.epoch),
+      }),
+    );
+    expect(mid.map((r) => [String(r.template), num(r.count)])).toEqual([
+      ['failed to connect to db <*>', 4],
+      ['user <*> logged in', 4],
+      ['<*>', 1],
+    ]);
+    expect(num(mid[1]?.first_ns)).toBe(rel(0));
+    expect(num(mid[1]?.last_ns)).toBe(rel(50));
+  });
+  test('a template whose rows have no time still has a sample, and is outside every window', () => {
+    const all = run(patternsQuery({ ...opts, epoch: f.epoch }));
+    const untimed = all.find((r) => r.first_ns === null);
+    expect(String(untimed?.sample)).toBe('{"k":"v"}');
+    const windowed = run(
+      patternsQuery({ ...opts, epoch: f.epoch, window: absWindow({ start: 0, end: rel(1000) }, f.epoch) }),
+    );
+    expect(windowed.map((r) => String(r.template))).not.toContain('{"k":"v"}');
+  });
+  test('sort and limit', () => {
     const first = run(
       patternsQuery({ ...opts, epoch: f.epoch, sort: { column: 'first', dir: 'desc' }, limit: 1 }),
     );

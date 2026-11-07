@@ -244,7 +244,7 @@ export function patternsQuery(opts: {
       first_abs: sql`min(first_time_unix_nano)`,
       last_abs: sql`max(last_time_unix_nano)`,
       ...bands,
-      sample: sql`arg_min(sample, first_time_unix_nano)`,
+      sample: sql`coalesce(arg_min(sample, first_time_unix_nano), any_value(sample))`,
     })
     .groupby('template');
   if (opts.window !== null) {
