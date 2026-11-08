@@ -51,7 +51,7 @@ export function metricDefsQuery(): Query {
       series: sql`count(DISTINCT series_id)`,
       resets: sql`count(*) FILTER (WHERE reset)`,
       out_of_order: sql`count(*) FILTER (WHERE out_of_order)`,
-      no_value: sql`count(*) FILTER (WHERE point_type IN ('gauge', 'sum') AND value_double IS NULL)`,
+      no_value: sql`count(*) FILTER (WHERE point_type IN ('gauge', 'sum') AND (value_double IS NULL OR NOT isfinite(value_double)))`,
       scopes: sql`list(DISTINCT scope_name ORDER BY scope_name)`,
     })
     .groupby(...IDENTITY_COLUMNS.map((c) => sql`${verbatim(c)}`))
@@ -83,8 +83,8 @@ export function metricIdentitiesQuery(): Query {
 export const SPARK_BUCKETS = 128;
 
 const NATURAL_VALUE = `CASE point_type
-  WHEN 'sum' THEN CASE WHEN is_monotonic THEN delta_value ELSE value_double END
-  WHEN 'gauge' THEN value_double
+  WHEN 'sum' THEN CASE WHEN is_monotonic THEN delta_value ELSE (CASE WHEN NOT isfinite(value_double) THEN NULL ELSE value_double END) END
+  WHEN 'gauge' THEN (CASE WHEN NOT isfinite(value_double) THEN NULL ELSE value_double END)
   WHEN 'summary' THEN count
   ELSE delta_count END`;
 
@@ -352,10 +352,10 @@ export function metricCellsQuery(opts: CellsOptions): Query {
           ...gSelect(n),
           cell: col('cell'),
           sid: col('sid'),
-          a: sql`avg(value_double)`,
-          mn: sql`min(value_double)`,
-          mx: sql`max(value_double)`,
-          lt: sql`arg_max(value_double, time_unix_nano) FILTER (WHERE value_double IS NOT NULL)`,
+          a: sql`avg(value_double) FILTER (WHERE isfinite(value_double))`,
+          mn: sql`min(value_double) FILTER (WHERE isfinite(value_double))`,
+          mx: sql`max(value_double) FILTER (WHERE isfinite(value_double))`,
+          lt: sql`arg_max(value_double, time_unix_nano) FILTER (WHERE isfinite(value_double))`,
         })
         .groupby(...keys, col('sid'));
       return Query.from({ q: per })

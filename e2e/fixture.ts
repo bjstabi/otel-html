@@ -211,10 +211,12 @@ export const METRICS_COUNT = 10;
 
 /**
  * Fusion on `scale` is interactive within twice its measured median, and a trace selection updates its Logs within
- * twice its (PR 7; the interactive median, 3.5 s, is above the 3 s the chunk format met).
+ * twice its (PR 7; the interactive median, 3.5 s, is above the 3 s the chunk format met). With the Metrics frame back
+ * (plan 3, PR 6) the interactive median is 3.9 s, whose double (7.9 s) is the budget (#229; the added time is the Metrics frame), and the
+ * trace click, now timed to Logs and Metrics, takes 148 ms.
  */
-export const FUSION_INTERACTIVE_BUDGET_MS = 7000;
-export const FUSION_SELECTION_BUDGET_MS = 700;
+export const FUSION_INTERACTIVE_BUDGET_MS = 7900;
+export const FUSION_SELECTION_BUDGET_MS = 300;
 
 /** The generated scale input: `SCALE_TRACES` traces of `SCALE_SPANS_PER_TRACE` spans each. */
 export const SCALE_TRACES = 2000;
@@ -228,6 +230,10 @@ export function scaleTraceId(i: number): string {
 
 /** The scale input also holds this many logs, in `SCALE_LOG_FILES` OTLP/JSON files of equal size. */
 export const SCALE_LOGS = 1_000_000;
+/** The `scale` and `many` runs' metrics: this many metrics × series on four of the scale services, at 0 s and 10 s. */
+export const SCALE_RUN_METRICS = 60;
+export const SCALE_RUN_METRIC_SERIES = 250;
+
 /** `many` flushes after every this many spans (and the logs that go with them): 100 partitions per signal. */
 export const SCALE_MANY_FLUSH_SPANS = 1_000;
 export const SCALE_LOG_FILES = 10;

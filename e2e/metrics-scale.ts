@@ -1,4 +1,4 @@
-import { mkdir, rename, rm, stat } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { Report } from '../src/api/index.js';
 import { scaleMetrics } from '../test-support/scale-metrics.js';
@@ -16,22 +16,21 @@ const FLUSH_EVERY = 6;
 
 /**
  * The metrics scale report (`fixture.ts`: 200 metrics × 1,000 series, 1 h at 10 s for the charted metric and the
- * first and last collection for the rest), written through the library API. It takes seconds, so it is written once
+ * first and last collection for the rest), written through the library API in the `site` format and read over HTTP. It takes seconds, so it is written once
  * per run, into `METRICS_SCALE_DIR` (outside the `e2e:fixtures` outputs, which `build-fixtures.ts` clears with the rest), by the specs that need it.
  */
 export async function ensureMetricsScaleReport(): Promise<void> {
   const dir = reportDir('metrics-scale');
-  const written = await stat(dir).then(
-    () => true,
-    () => false,
-  );
-  if (written) return;
+  // A report left by an older checkout (format 3, or format 4 in the local layout) is not read by the format-4 viewer: it is written again.
+  const manifest = await readFile(new URL('data/manifest.js', dir), 'utf8').catch(() => '');
+  if (/"formatVersion":\s*4\b/.test(manifest) && /"format":\s*"site"/.test(manifest)) return;
+  await rm(dir, { recursive: true, force: true });
   const started = Date.now();
   // Written aside and moved into place, so the folder exists only once the report is whole.
   const tmp = new URL(`../.metrics-scale.tmp-${process.pid}/`, METRICS_SCALE_DIR);
   await rm(tmp, { recursive: true, force: true });
   await mkdir(tmp, { recursive: true });
-  const report = await Report.create({ out: fileURLToPath(tmp), title: 'metrics scale run' });
+  const report = await Report.create({ out: fileURLToPath(tmp), title: 'metrics scale run', format: 'site' });
   for (let i = 0; i < SCALE_METRIC_POINTS; i++) {
     for (const request of scaleMetrics(SCALE_METRICS, SCALE_METRIC_SERIES, 1, i, scaleMetricEmitted))
       await report.addMetrics(request);

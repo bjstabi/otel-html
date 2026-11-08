@@ -68,8 +68,7 @@ test('hostile content renders as text: explorer, panel and span section', HTTP, 
   expect(problems).toEqual([]);
 });
 
-// plan 3: metrics in the format-4 viewer
-linkedTest.skip(
+linkedTest(
   'a hostile metric name renders as text: Catalog, Explorer picker and chart card',
   HTTP,
   async ({ page, reportUrl }) => {
@@ -93,11 +92,14 @@ linkedTest.skip(
     await expect(chart).toBeVisible();
     // Hovering the chart shows its HTML tooltip (the one place chart text reaches the DOM): the markup in the series
     // name and in the unit after the value is text, never an element.
-    await chart.hover();
     const tooltip = card.getByText(`a · avg · ${HOSTILE_METRIC_ATTR_VALUE}: 0.5 ${HOSTILE_METRIC_UNIT}`, {
       exact: true,
     });
-    await expect(tooltip).toBeVisible();
+    // The chart redraws as its query settles, which drops a hover made before: move again until the tooltip shows.
+    await expect(async () => {
+      await chart.hover();
+      await expect(tooltip).toBeVisible({ timeout: 1000 });
+    }).toPass();
     expect(await card.locator('img').count()).toBe(0);
 
     expect(await page.locator('img[src="x"]').count()).toBe(0);

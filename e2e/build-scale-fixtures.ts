@@ -10,8 +10,11 @@ import { execFile } from 'node:child_process';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { toJson } from '@bufbuild/protobuf';
 import { Report } from '../src/api/index.js';
+import { ExportMetricsServiceRequestSchema } from '../src/model/gen/opentelemetry/proto/collector/metrics/v1/metrics_service_pb.js';
 import { scaleLogsRequest } from '../test-support/scale-logs.js';
+import { scaleMetrics } from '../test-support/scale-metrics.js';
 import {
   reportDir,
   SCALE_LOG_FILES,
@@ -19,6 +22,8 @@ import {
   SCALE_LOGS,
   SCALE_MANY_FLUSH_SPANS,
   SCALE_REPORTS_DIR,
+  SCALE_RUN_METRIC_SERIES,
+  SCALE_RUN_METRICS,
   SCALE_SERVICES,
   SCALE_SPANS_PER_TRACE,
   SCALE_TRACES,
@@ -93,6 +98,20 @@ async function writeScaleLogFiles(dir: URL): Promise<string[]> {
 }
 
 /**
+ * Metrics on four of the scale services (`scaleMetrics`: `service.name` only, the spans' resources), so Fusion's
+ * Metrics frame has charts to narrow and draw when a trace is clicked. Two collections, 0 s and 10 s, keep the run
+ * inside the spans' ~10 s.
+ */
+async function writeScaleMetricsFile(dir: URL): Promise<string> {
+  const file = fileURLToPath(new URL('metrics.json', dir));
+  const requests = scaleMetrics(SCALE_RUN_METRICS, SCALE_RUN_METRIC_SERIES, 2).map(
+    (r) => toJson(ExportMetricsServiceRequestSchema, r) as { resourceMetrics: unknown[] },
+  );
+  await writeFile(file, JSON.stringify({ resourceMetrics: requests.flatMap((r) => r.resourceMetrics) }));
+  return file;
+}
+
+/**
  * `many`: the scale input through the library API, `SCALE_MANY_FLUSH_SPANS` spans and the logs that go with them per
  * flush, never closed. Its lock names this process, which exits; a reader ignores a lock whose writer is gone.
  */
@@ -105,6 +124,9 @@ async function buildManyReport(): Promise<void> {
     title: 'many run',
     format: 'site',
   });
+  // The metrics go in with the first flush's signals.
+  for (const request of scaleMetrics(SCALE_RUN_METRICS, SCALE_RUN_METRIC_SERIES, 2))
+    await report.addMetrics(request);
   for (let f = 0; f < flushes; f++) {
     await report.addSpans(scaleInput(f * tracesPerFlush, tracesPerFlush) as never);
     await report.addLogs(scaleLogsRequest(f * logsPerFlush, logsPerFlush, SCALE_LOG_IDS) as never);
@@ -112,13 +134,13 @@ async function buildManyReport(): Promise<void> {
   }
 }
 
-/** One input of 100k spans and 1M logs (10 files), written as `scale` (converted, closed) and `many` (flushed, open). */
+/** One input of 100k spans, 1M logs (10 files) and the metrics, written as `scale` (converted, closed) and `many` (flushed, open). */
 async function buildScaleReports(): Promise<void> {
   const inputs = new URL('inputs/', SCALE_REPORTS_DIR);
   await mkdir(inputs, { recursive: true });
   const file = fileURLToPath(new URL('traces.json', inputs));
   await writeFile(file, JSON.stringify(scaleInput(0, SCALE_TRACES)));
-  const all = [file, ...(await writeScaleLogFiles(inputs))];
+  const all = [file, ...(await writeScaleLogFiles(inputs)), await writeScaleMetricsFile(inputs)];
   await Promise.all([convertTo(reportDir('scale'), all, 'scale run'), buildManyReport()]);
 }
 

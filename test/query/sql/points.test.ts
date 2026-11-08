@@ -234,6 +234,17 @@ describe('metric sparkline buckets', () => {
             pointsAt(ms, (i) => ({ asDouble: [1, 3, 6, 10][i] ?? 0 })),
             { monotonic: true, temporality: 'cumulative' },
           ),
+          gauge(
+            'nv',
+            // OTLP JSON encodes a non-finite double as a string, which the builder's number type does not allow.
+            pointsAt(ms, (i) => ({ asDouble: [1, 'NaN', 3, 'Infinity'][i] ?? 0 }) as never),
+          ),
+          sum(
+            'uv',
+            // Non-monotonic, so the sum branch of the natural value reads `value_double`.
+            pointsAt(ms, (i) => ({ asDouble: [10, 'NaN', 30, '-Infinity'][i] ?? 0 }) as never),
+            { monotonic: false, temporality: 'cumulative' },
+          ),
           histogram(
             'h',
             pointsAt(ms, (i) => ({
@@ -277,6 +288,18 @@ describe('metric sparkline buckets', () => {
       [0, 5, 2],
       [16e6, 9, 2],
     ]);
+    // A NaN point has no value: it adds nothing to a bucket's sum or count (the sparkline would draw NaN).
+    expect(byBucket('nv')).toEqual([
+      [0, 1, 1],
+      [16e6, 3, 1],
+    ]);
+    expect(byBucket('uv')).toEqual([
+      [0, 10, 1],
+      [16e6, 30, 1],
+    ]);
+    const defs: Row[] = own.rows(metricDefsQuery().toString());
+    expect(num(defs.find((r) => r.metric_name === 'nv')?.no_value)).toBe(2);
+    expect(num(defs.find((r) => r.metric_name === 'uv')?.no_value)).toBe(2);
   });
 });
 
@@ -558,11 +581,28 @@ describe('metric cells, exemplars and runs', () => {
   );
   const RUNS2 = otlp(metricsRequest([runPoint(10_000, 'r1')], rev('x2')) as never);
 
+  // OTLP JSON encodes a non-finite double as a string, which the builder's number type does not allow.
+  const NONFINITE = otlp(
+    metricsRequest(
+      [
+        gauge(
+          'nf',
+          pointsAt(
+            [0, 10, 20, 30].map(sec),
+            (i) => ({ asDouble: [2, 'NaN', 'Infinity', 6][i] ?? 0 }) as never,
+            host('h1'),
+          ),
+        ),
+      ],
+      resA,
+    ) as never,
+  );
+
   let cf: Format4Fixture;
   let cdb: TestDb;
   const rowsOf = (query: string): Row[] => cdb.rows(query);
   beforeAll(async () => {
-    cf = await buildFormat4Report([MAIN, EXEM, RUNS1, RUNS2], { close: false });
+    cf = await buildFormat4Report([MAIN, EXEM, RUNS1, RUNS2, NONFINITE], { close: false });
     cdb = await openFixtureDb(cf);
   });
   const all = { files: ['all-files'], all: true, total: 1 } as const;
@@ -668,6 +708,18 @@ describe('metric cells, exemplars and runs', () => {
     ]);
     expect(at('min')[0]?.[1]).toBe(1);
     expect(at('max')[1]?.[1]).toBe(40);
+  });
+
+  test('a non-finite gauge point stays out of every number cell', () => {
+    const c0 = cellAt(0, W20);
+    const c1 = cellAt(20_000, W20);
+    for (const show of ['avg', 'min', 'max', 'last']) {
+      const got = cells('nf', 'number', { show, by: [] }).map((r) => [num(r.cell), num(r.value)]);
+      expect(got, show).toEqual([
+        [c0, 2],
+        [c1, 6],
+      ]);
+    }
   });
 
   test('hist cells sum bucket counts elementwise and keep a row per bounds set', () => {
