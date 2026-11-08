@@ -116,6 +116,34 @@ export function* wrapBinaryDataFilePieces(
   yield `"${SUFFIX}`;
 }
 
+/**
+ * `wrapBinaryDataFilePieces` of a file that arrives in chunks of any size: the same pieces, with the chunks cut into
+ * `WRAPPER_SLICE_BYTES` slices as they come, so the file is never held whole.
+ */
+export async function* wrapBinaryDataFilePiecesOf(
+  key: string,
+  chunks: AsyncIterable<Uint8Array>,
+  encode: (slice: Uint8Array) => string,
+): AsyncGenerator<string> {
+  yield `${REGISTRATION_GLOBAL}.push(${escapeHostile(JSON.stringify(key))},"`;
+  const slice = new Uint8Array(WRAPPER_SLICE_BYTES);
+  let filled = 0;
+  for await (const chunk of chunks) {
+    for (let at = 0; at < chunk.length; ) {
+      const n = Math.min(slice.length - filled, chunk.length - at);
+      slice.set(chunk.subarray(at, at + n), filled);
+      filled += n;
+      at += n;
+      if (filled === slice.length) {
+        yield encode(slice);
+        filled = 0;
+      }
+    }
+  }
+  if (filled > 0) yield encode(slice.subarray(0, filled));
+  yield `"${SUFFIX}`;
+}
+
 export function wrapDataFile(key: string, payload: unknown): string {
   const json = stringify(payload);
   if (json === undefined) {

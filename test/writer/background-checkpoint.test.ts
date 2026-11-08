@@ -1,9 +1,11 @@
 import { setImmediate } from 'node:timers/promises';
 import { describe, expect, test, vi } from 'vitest';
 import { StreamNormalizer } from '../../src/rollups/metric-streams.js';
+import { PartitionWriter } from '../../src/writer/partition-writer.js';
 import { openSession } from '../../src/writer/session.js';
 import { createMemoryFileSystem } from '../../test-support/memory-fs.js';
-import { createTestWriter } from '../../test-support/writer-deps.js';
+import { metricsRequest } from '../../test-support/otlp-builders.js';
+import { createTestWriter, EPOCH_NS, otlp, testConfig } from '../../test-support/writer-deps.js';
 import { config, heldCheckpoint, makeDue, OUT, one } from './checkpoint-helpers.js';
 import { allSpans, manifestOf } from './helpers.js';
 
@@ -160,4 +162,71 @@ describe('interval checkpoints run in the background', () => {
       if (call === 'flush') await s.close();
     },
   );
+});
+
+describe('back-pressure on the library path', () => {
+  const TARGET = 1_500;
+  const T0 = BigInt(EPOCH_NS);
+  const gauge = (i: number) =>
+    otlp(
+      metricsRequest([
+        {
+          name: `m${i}`,
+          unit: 'By',
+          gauge: { dataPoints: [{ asInt: String(i), timeUnixNano: String(T0 + BigInt(i)) }] },
+        },
+      ]),
+    );
+
+  test('add waits for the in-flight checkpoint once the held rows reach the target, and the hold stays bounded', async () => {
+    const w = createTestWriter({ fs: createMemoryFileSystem({ pieces: true }) });
+    const held: number[] = [];
+    const getter = Object.getOwnPropertyDescriptor(PartitionWriter.prototype, 'pendingBytes')?.get;
+    if (getter === undefined) throw new Error('pendingBytes getter missing');
+    let writer: PartitionWriter | null = null;
+    vi.spyOn(PartitionWriter.prototype, 'pendingBytes', 'get').mockImplementation(function (
+      this: PartitionWriter,
+    ) {
+      writer = this;
+      return getter.call(this);
+    });
+    const s = await openSession(w.deps, {
+      out: OUT,
+      config: testConfig({ writer: { format: 'site', chunkTargetBytes: TARGET } }),
+      mode: 'replace',
+    });
+    const observe = (): void => {
+      if (writer !== null) held.push(getter.call(writer));
+    };
+    const gate = w.fs.holdNextWrite('000000/points.parquet');
+    let reached = false;
+    void gate.reached.then(() => {
+      reached = true;
+    });
+    let i = 0;
+    let blocked: Promise<unknown> | null = null;
+    // add until one stays pending: the first to reach the target starts the checkpoint (held at its write), a later
+    // one reaches the target again while the write is in flight and must wait for it
+    for (; blocked === null && i < 200; i++) {
+      const add = s.add(gauge(i), 'a.json');
+      const winner = await Promise.race([add.then(() => 'added'), setImmediate('tick')]);
+      if (winner === 'tick') blocked = add;
+      else observe();
+    }
+    if (blocked === null) throw new Error('no add waited for the checkpoint');
+    expect(reached).toBe(true);
+    expect(Math.max(...held)).toBeLessThan(2 * TARGET);
+    // still pending after a further tick, until the held write is released
+    expect(await Promise.race([blocked.then(() => 'added'), setImmediate('tick')])).toBe('tick');
+    gate.release();
+    await blocked;
+    observe();
+    for (let k = 0; k < 20; k++) {
+      await s.add(gauge(i + k), 'a.json');
+      observe();
+    }
+    expect(Math.max(...held)).toBeLessThan(2 * TARGET);
+    await s.close();
+    vi.restoreAllMocks();
+  });
 });

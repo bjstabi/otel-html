@@ -1,3 +1,5 @@
+import { setFlagsFromString } from 'node:v8';
+import { runInNewContext } from 'node:vm';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { watchWasmPanics } from '../../src/writer/wasm-panic.js';
 
@@ -34,6 +36,49 @@ afterEach(() => {
 const never = (): Promise<never> => new Promise(() => undefined);
 
 describe('watchWasmPanics', () => {
+  test('a guard after a panic still observes its wait: a later rejection is not unhandled', async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (e: unknown): void => {
+      unhandled.push(e);
+    };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const w = watchWasmPanics();
+      const first = w.guard(never());
+      emit(runtimeError('unreachable'));
+      await expect(first).rejects.toMatchObject({ code: 'invalid-report' });
+      let rejectLate: (e: Error) => void = () => undefined;
+      const late = new Promise<never>((_, reject) => {
+        rejectLate = reject;
+      });
+      const after = w.guard(late);
+      await expect(after).rejects.toThrow('parquet-wasm panicked: unreachable');
+      rejectLate(new Error('abandoned read'));
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(unhandled).toEqual([]);
+      w.stop();
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
+
+  test('a settled wait does not keep its value alive while the watch is on', async () => {
+    setFlagsFromString('--expose-gc');
+    const gc = runInNewContext('gc') as () => void;
+    const w = watchWasmPanics();
+    const refs: WeakRef<object>[] = [];
+    for (let i = 0; i < 50; i++) {
+      const value = { i, bytes: new Uint8Array(1024) };
+      refs.push(new WeakRef(value));
+      await w.guard(Promise.resolve(value));
+    }
+    await new Promise((resolve) => setImmediate(resolve));
+    gc();
+    // The last value may still be on the stack; the bug kept all 50.
+    expect(refs.filter((r) => r.deref() !== undefined).length).toBeLessThanOrEqual(1);
+    w.stop();
+  });
+
   test('listens on uncaughtException only, and a rejection the host handles is unaffected', async () => {
     const rejections = process.listenerCount('unhandledRejection');
     const w = watchWasmPanics();

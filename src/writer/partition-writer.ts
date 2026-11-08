@@ -41,6 +41,8 @@ interface Derived {
 
 const ROW_OVERHEAD_BYTES = 64;
 const LIST_ELEMENT_BYTES = 8;
+/** A non-null number, bigint or boolean cell: the column's in-memory width (a null cell adds nothing). */
+const FIXED_CELL_BYTES = 8;
 
 function emptyHeld(): Record<Table, MutableBatch> {
   const held = {} as Record<Table, MutableBatch>;
@@ -79,6 +81,8 @@ export class PartitionWriter {
     let bytes = ROW_OVERHEAD_BYTES;
     for (const v of Object.values(row)) {
       if (typeof v === 'string') bytes += v.length;
+      else if (typeof v === 'number' || typeof v === 'bigint' || typeof v === 'boolean')
+        bytes += FIXED_CELL_BYTES;
       else if (Array.isArray(v)) bytes += LIST_ELEMENT_BYTES * v.length;
     }
     this.#bytes += bytes;
@@ -89,7 +93,7 @@ export class PartitionWriter {
     return this.#rows;
   }
 
-  /** Estimated bytes held, for the flush-by-size rule (string cell lengths, 8 per list element, and 64 per row). */
+  /** Estimated bytes held, for the flush-by-size rule (string cell lengths, 8 per non-null number, bigint or boolean cell, 8 per list element, and 64 per row). */
   get pendingBytes(): number {
     return this.#bytes;
   }

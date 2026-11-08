@@ -83,10 +83,24 @@ describe('PartitionWriter', () => {
     expect(await fs.exists('/out/data/partitions/000002')).toBe(false);
   });
 
-  test('pendingBytes is the string cell lengths plus 64 per row', () => {
+  test('pendingBytes is the string cell lengths, 8 per fixed-width cell, plus 64 per row', () => {
     const { w } = make();
     w.add('logs', { time_unix_nano: 1n, body: 'abcd', scope_name: 'xy', service_name: 'svc' });
-    expect(w.pendingBytes).toBe(4 + 2 + 3 + 64);
+    expect(w.pendingBytes).toBe(4 + 2 + 3 + 8 + 64);
+  });
+
+  test('a spans row grows by 8 per numeric cell', () => {
+    const { w } = make();
+    w.add('spans', span(1, 'a', 100n));
+    // strings: t1 s1 op {"a":1} a svc = 2+2+2+7+1+3; three bigint cells
+    expect(w.pendingBytes).toBe(17 + 8 * 3 + 64);
+  });
+
+  test('a points row with no strings beyond identity counts 8 per non-null fixed-width cell and none per null', () => {
+    const { w } = make();
+    w.add('points', { metric_name: 'm', value_double: 1.5, count: 3n, is_monotonic: true, sum: null });
+    expect(w.pendingBytes).toBeGreaterThanOrEqual(64 + 8 * 3);
+    expect(w.pendingBytes).toBe(1 + 64 + 8 * 3);
   });
 
   test('pendingBytes counts 8 bytes per list element on top of the strings and the row overhead', () => {

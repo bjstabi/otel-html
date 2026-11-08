@@ -1,5 +1,6 @@
 import { createReadStream, openAsBlob } from 'node:fs';
 import {
+  type FileHandle,
   lstat,
   mkdir,
   open,
@@ -16,6 +17,12 @@ import type { FileSystem } from './ports.js';
 
 /** Characters `writePiecesAtomic` gathers before writing them. */
 const PIECE_BATCH = 256 * 1024;
+
+/** Writes all of `bytes`: a write may store fewer bytes than it was given and reports how many. */
+async function writeAll(handle: FileHandle, bytes: Uint8Array): Promise<void> {
+  for (let off = 0; off < bytes.length; )
+    off += (await handle.write(bytes, off, bytes.length - off)).bytesWritten;
+}
 
 /**
  * Creates `p` afresh: whatever is there, a symlink included, is removed first and the file is opened exclusively, so
@@ -52,14 +59,31 @@ export function createNodeFileSystem(): FileSystem {
           // Pieces are often small (one series each): written in batches of about PIECE_BATCH characters, not one
           // write call per piece.
           let batch = '';
-          for (const piece of pieces) {
+          for await (const piece of pieces) {
             batch += piece;
             if (batch.length >= PIECE_BATCH) {
-              await handle.write(batch, null, 'utf8');
+              await writeAll(handle, Buffer.from(batch, 'utf8'));
               batch = '';
             }
           }
-          if (batch.length > 0) await handle.write(batch, null, 'utf8');
+          if (batch.length > 0) await writeAll(handle, Buffer.from(batch, 'utf8'));
+        } finally {
+          await handle.close();
+        }
+        await rename(tmp, p);
+      } catch (e) {
+        await rm(tmp, { force: true });
+        throw e;
+      }
+    },
+    async writeByteChunksAtomic(p, chunks) {
+      await mkdir(dirname(p), { recursive: true });
+      const tmp = `${p}.tmp-${process.pid}`;
+      try {
+        await rm(tmp, { force: true });
+        const handle = await open(tmp, 'wx');
+        try {
+          for await (const chunk of chunks) await writeAll(handle, chunk);
         } finally {
           await handle.close();
         }

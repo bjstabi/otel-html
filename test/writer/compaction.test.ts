@@ -1,13 +1,16 @@
 import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { ParquetFile } from 'parquet-wasm/esm';
 import { describe, expect, test } from 'vitest';
+import { wrapBinaryDataFilePieces } from '../../src/format/data-file.js';
 import type { PartitionEntry } from '../../src/format/manifest.js';
 import { batchFromRows } from '../../src/format/parquet/batch.js';
 import { decodeTable, encodeTable } from '../../src/format/parquet/codec.js';
 import type { Table } from '../../src/format/parquet/columns.js';
 import type { Row } from '../../src/format/parquet/rows.js';
 import { fileStatistics } from '../../src/format/parquet/stats.js';
+import { partitionKey, partitionWrapperPath } from '../../src/format/paths.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { compactPartitions } from '../../src/writer/compaction.js';
 import { createNodeFileSystem } from '../../src/writer/node-fs.js';
@@ -546,6 +549,132 @@ describe('compactPartitions: patterns', () => {
     const out = await compactPartitions(fs, OUT, entries, opts(2));
     const rows = decodeTable('patterns', await bytesOf(fs, out, 'patterns'));
     expect(rows.map((x) => Reflect.get(x, 'sample'))).toEqual(['p0', 'dated']);
+  });
+});
+
+describe('compactPartitions: chunked output', () => {
+  const build = async (chunks: boolean) => {
+    const fs = createMemoryFileSystem({ chunks });
+    const r = lcg(33);
+    let id = 0;
+    const rowsPer = Array.from({ length: 2 }, () => Array.from({ length: 4_096 }, () => logRow(id++, r)));
+    const entries = await writeParts(
+      fs,
+      rowsPer.map((logs) => ({ logs })),
+      1_000,
+    );
+    const out = await compactPartitions(fs, OUT, entries, opts(2, 1_000));
+    return { fs, out, rows: rowsPer.flat() };
+  };
+
+  test('a two-file merge written in chunks equals the collected path, in bytes and statistics', async () => {
+    const chunked = await build(true);
+    const collected = await build(false);
+    const path = chunked.out.files.logs?.path ?? '';
+    expect(chunked.fs.chunkCount(`${OUT}/${path}`)).toBeGreaterThan(1);
+    expect(collected.fs.chunkCount(`${OUT}/${path}`)).toBeUndefined();
+    const a = await chunked.fs.readBytes(`${OUT}/${path}`);
+    const b = await collected.fs.readBytes(`${OUT}/${path}`);
+    expect(Buffer.from(a).equals(Buffer.from(b))).toBe(true);
+    expect(
+      Buffer.from(a).equals(Buffer.from(encodeTable('logs', chunked.rows, { rowGroupRows: 1_000 }))),
+    ).toBe(true);
+    expect(chunked.out.files.logs).toEqual(collected.out.files.logs);
+    expect(chunked.out.files.logs?.rows).toBe(8_192);
+    expect(chunked.out.files.logs?.bytes).toBe(a.length);
+  });
+});
+
+describe('compactPartitions in the local format', () => {
+  test('the wrapper of the compacted file is written from the file in pieces, without reading it whole', async () => {
+    const base = createMemoryFileSystem({ pieces: true });
+    const wholeReads: string[] = [];
+    const fs: typeof base = {
+      ...base,
+      readBytes: (p) => {
+        wholeReads.push(p);
+        return base.readBytes(p);
+      },
+    };
+    const r = lcg(41);
+    let id = 0;
+    const rowsPer = Array.from({ length: 3 }, () => Array.from({ length: 700 }, () => logRow(id++, r)));
+    const entries = await writeParts(
+      fs,
+      rowsPer.map((logs) => ({ logs })),
+      ROW_GROUP,
+    );
+    wholeReads.length = 0;
+    const out = await compactPartitions(fs, OUT, entries, { ...opts(3), format: 'local' });
+    const path = `${OUT}/${out.files.logs?.path ?? ''}`;
+    expect(wholeReads).not.toContain(path);
+    const file = await base.readBytes(path);
+    const wrapper = await base.readText(`${OUT}/${partitionWrapperPath(3, 'logs')}`);
+    const base64 = (slice: Uint8Array): string => Buffer.from(slice).toString('base64');
+    expect(wrapper).toBe([...wrapBinaryDataFilePieces(partitionKey(3, 'logs'), file, base64)].join(''));
+  });
+});
+
+describe('compactPartitions: the files of the earlier rounds', () => {
+  // parquet-wasm holds the metadata of every row group a file has (about 30 KB each) while it writes or reads the
+  // file, so small row groups in a big temporary file cost memory in proportion to its rows (#227).
+  test('are written with row groups of the configured size, not smaller', async () => {
+    const base = createMemoryFileSystem();
+    const temporaries: Uint8Array[] = [];
+    const fs: typeof base = {
+      ...base,
+      writeByteChunksAtomic: async (p, chunks) => {
+        await base.writeByteChunksAtomic?.(p, chunks);
+        if (p.includes('.merge-')) temporaries.push(await base.readBytes(p));
+      },
+    };
+    const r = lcg(51);
+    let id = 0;
+    const rowsPer = Array.from({ length: 17 }, () => Array.from({ length: 600 }, () => logRow(id++, r)));
+    const entries = await writeParts(
+      fs,
+      rowsPer.map((logs) => ({ logs })),
+      1_000,
+    );
+    await compactPartitions(fs, OUT, entries, opts(17, 10_000));
+    expect(temporaries).toHaveLength(1); // the first 16 of the 17 files
+    const first = temporaries[0];
+    if (first === undefined) throw new Error('no temporary file');
+    const file = await ParquetFile.fromFile(new Blob([new Uint8Array(first)]));
+    try {
+      expect(file.metadata().numRowGroups()).toBe(1); // 9,600 rows; 4,096-row groups made three
+    } finally {
+      file.free();
+    }
+  });
+});
+
+describe('compactPartitions: fan-out', () => {
+  test('the first round merges 16 flush partitions at once, later rounds 8 files', async () => {
+    const base = createMemoryFileSystem();
+    const written: string[] = [];
+    const fs: typeof base = {
+      ...base,
+      writeByteChunksAtomic: async (p, chunks) => {
+        written.push(p.slice(p.lastIndexOf('/') + 1));
+        await base.writeByteChunksAtomic?.(p, chunks);
+      },
+    };
+    const r = lcg(61);
+    let id = 0;
+    const rowsPer = Array.from({ length: 144 }, () => Array.from({ length: 2 }, () => logRow(id++, r)));
+    const entries = await writeParts(
+      fs,
+      rowsPer.map((logs) => ({ logs })),
+      ROW_GROUP,
+    );
+    written.length = 0;
+    await compactPartitions(fs, OUT, entries, opts(144));
+    // 144 partitions: nine files of 16, then nine files in two groups (8 and 1, the single one passing through),
+    // then the last two merged into the result.
+    expect(written.filter((p) => p.startsWith('.merge-logs-0-'))).toHaveLength(9);
+    expect(written.filter((p) => p.startsWith('.merge-logs-1-'))).toHaveLength(1);
+    expect(written).toContain('logs.parquet');
   });
 });
 

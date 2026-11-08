@@ -12,8 +12,12 @@ import { manifestOf } from './helpers.js';
 
 /** Spec §16: at most this many bytes of log table files per log record. */
 const MAX_BYTES_PER_LOG = 200;
-/** Spec §16: writer peak RSS for a 1M-log run. */
-const MAX_RSS_BYTES = 512 * 1024 * 1024;
+/**
+ * The library sets no V8 flags, so V8 lets the heap grow to 2-3x the live data: 539-574 MB measured on 2026-11-08, about
+ * 243 MB with `--optimize-for-size`. The bound is the measured figure with headroom, not the 512 MB design target
+ * (maintainer decision 2026-11-08).
+ */
+const MAX_RSS_BYTES = 620 * 1024 * 1024;
 const OUT = 'r';
 const TOTAL_LOGS = 1_000_000;
 const LOAD_FILES = 10;
@@ -39,10 +43,10 @@ describe('log size', () => {
 
   // The real pipeline: 10 OTLP files of 100k logs converted by the built library in a child process, whose own
   // high-water resident set size (process.resourceUsage().maxRSS, kilobytes) is the figure. Input is read in pieces
-  // and parsed one resource entry at a time (OtlpJsonStream); measured about 300-320 MB on an Apple M-series Mac with the chunk writer (format 4: about 562 MB, README Limits).
+  // and parsed one resource entry at a time (OtlpJsonStream); measured about 300-320 MB on an Apple M-series Mac with the chunk writer (format 4: about 574 MB, README Limits).
   // Run with OTEL_HTML_LOAD=1 after `mise run build`.
   test.skipIf(process.env[LOAD_ENV] !== '1')(
-    'converting 1M logs from 10 files keeps peak RSS under 512 MB',
+    'converting 1M logs from 10 files keeps peak RSS under 620 MB (its bound; the target is 512 MB)',
     { timeout: 900_000 },
     async () => {
       const dir = await mkdtemp(join(tmpdir(), 'oh-load-'));

@@ -290,6 +290,13 @@ class PartitionSession implements WriterSession {
 
   // -- public API ------------------------------------------------------------------------------
 
+  /**
+   * Stages the request's rows and returns once they are accepted. Back-pressure: when the held rows reach
+   * `writer.chunkTargetBytes` while a background checkpoint is still being written, the call waits for that write
+   * (the held rows were taken by it, so the next checkpoint starts at once). While checkpoints succeed the writer therefore
+   * never holds more than `2 × chunkTargetBytes` plus one request's rows (a failed write is logged and retried after a
+   * back-off, and rows keep accumulating until one succeeds). A partial input is unchanged: it cuts at the size rule.
+   */
   add(input: OtlpRequest, source: string, options?: AddOptions): Promise<AddResult> {
     return this.#serial(async () => {
       this.#assertOpen();
@@ -312,8 +319,12 @@ class PartitionSession implements WriterSession {
         result = this.#acceptLogs(rows, source);
       }
       if (result.accepted > 0) this.#sinceCheckpoint = true;
-      if (!this.#partial) await this.#maybeCheckpoint();
-      else if (!this.#replacing) await this.#cutPartial();
+      if (!this.#partial) {
+        if (this.#inflight !== null && this.#writer.pendingBytes >= this.#config.writer.chunkTargetBytes) {
+          await this.#inflight; // never rejects: a failed write is logged and backed off, and its rows are held for the next checkpoint
+        }
+        await this.#maybeCheckpoint();
+      } else if (!this.#replacing) await this.#cutPartial();
       this.#armIdle();
       return result;
     });

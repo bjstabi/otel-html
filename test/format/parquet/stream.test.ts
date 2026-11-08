@@ -20,14 +20,48 @@ const batch = (from: number, n: number): ColumnBatch =>
     Array.from({ length: n }, (_, i) => log(from + i)),
   );
 
+async function collectBytes(chunks: AsyncIterable<Uint8Array>): Promise<Uint8Array> {
+  const parts: Uint8Array[] = [];
+  for await (const c of chunks) parts.push(c);
+  return new Uint8Array(Buffer.concat(parts));
+}
+
 describe('encodeBatches', () => {
+  test('stopping early cancels the source batches', async () => {
+    const total = 100;
+    let closed = false;
+    async function* source(): AsyncGenerator<ColumnBatch> {
+      try {
+        for (let i = 0; i < total; i++) {
+          yield batch(i * 4, 4);
+        }
+      } finally {
+        closed = true;
+      }
+    }
+    for await (const _chunk of encodeBatches('logs', source(), { rowGroupRows: 4 })) break;
+    for (let i = 0; i < 50 && !closed; i++) await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(closed).toBe(true);
+  });
+
   test('writes the batches as one file', async () => {
     async function* gen() {
       yield batch(0, 3);
       yield batch(3, 2);
     }
-    const bytes = await encodeBatches('logs', gen(), { rowGroupRows: 4 });
+    const bytes = await collectBytes(encodeBatches('logs', gen(), { rowGroupRows: 4 }));
     expect(decodeTable('logs', bytes)).toHaveLength(5);
+  });
+
+  test('yields the file in chunks that join to the bytes encodeTable writes', async () => {
+    const rows = Array.from({ length: 5_000 }, (_, i) => log(i));
+    async function* gen() {
+      yield batchFromRows('logs', rows);
+    }
+    const chunks: Uint8Array[] = [];
+    for await (const c of encodeBatches('logs', gen(), { rowGroupRows: 1_000 })) chunks.push(c);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(new Uint8Array(Buffer.concat(chunks))).toEqual(encodeTable('logs', rows, { rowGroupRows: 1_000 }));
   });
 
   test('a source that fails after its first batch rejects with its error, never a truncated file', async () => {
@@ -36,7 +70,7 @@ describe('encodeBatches', () => {
       yield batch(0, 3);
       throw boom;
     }
-    await expect(encodeBatches('logs', gen(), { rowGroupRows: 4 })).rejects.toBe(boom);
+    await expect(collectBytes(encodeBatches('logs', gen(), { rowGroupRows: 4 }))).rejects.toBe(boom);
   });
 
   test('a source that fails before its first batch rejects with its error', async () => {
@@ -45,7 +79,7 @@ describe('encodeBatches', () => {
     async function* gen(): AsyncGenerator<ColumnBatch> {
       throw boom;
     }
-    await expect(encodeBatches('logs', gen(), { rowGroupRows: 4 })).rejects.toBe(boom);
+    await expect(collectBytes(encodeBatches('logs', gen(), { rowGroupRows: 4 }))).rejects.toBe(boom);
   });
 });
 

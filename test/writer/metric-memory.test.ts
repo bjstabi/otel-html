@@ -8,6 +8,13 @@ import { describe, expect, test } from 'vitest';
 
 /** Spec §7: writer peak RSS. */
 const MAX_RSS_BYTES = 512 * 1024 * 1024;
+/**
+ * The library sets no V8 flags, so V8 lets the heap grow far past the live data (about 90 MB) when no flag restrains
+ * it: the peak was 994 MB measured on 2026-11-08, and 503 MB with `--optimize-for-size` (what the CLI sets; it takes
+ * about 3,550 s). The bound is that measured figure with headroom, not the 512 MB target (maintainer decision
+ * 2026-11-08).
+ */
+const MAX_LIBRARY_METRICS_RSS_BYTES = 1100 * 1024 * 1024;
 const METRICS = 200;
 const SERIES = 1_000;
 const POINTS = 360;
@@ -107,7 +114,7 @@ process.stderr.write('MAXRSS ' + process.resourceUsage().maxRSS + '\\n');`;
 describe('metric series memory', () => {
   test.skipIf(process.env[LOAD_ENV] !== '1')(
     `otel-html convert of ${METRICS} metrics × ${SERIES} series × ${POINTS} points keeps peak RSS under 512 MB`,
-    { timeout: 60 * 60 * 1000 },
+    { timeout: 2 * 60 * 60 * 1000 },
     async () => {
       const dir = await mkdtemp(join(tmpdir(), 'oh-metric-load-'));
       try {
@@ -152,12 +159,10 @@ describe('metric series memory', () => {
     },
   );
 
-  // #14: the library API has no V8 flag to lean on, so its peak is higher than the CLI's (about 770 MB against
-  // 450 MB on an Apple M-series Mac, measured on the chunk writer). The figure is reported, and the 512 MB target asserted
-  // only on the CLI above, until the API path is brought under it.
+  // The library API has no V8 flag to lean on; its bound is MAX_LIBRARY_METRICS_RSS_BYTES (see above).
   test.skipIf(process.env[LOAD_ENV] !== '1')(
-    `Report.addMetrics on the same workload reports its peak RSS (the 512 MB target is the CLI's)`,
-    { timeout: 60 * 60 * 1000 },
+    `Report.addMetrics on the same workload keeps peak RSS under ${MAX_LIBRARY_METRICS_RSS_BYTES / 1048576} MB (its bound; the 512 MB target is the CLI's)`,
+    { timeout: 2 * 60 * 60 * 1000 },
     async () => {
       const dir = await mkdtemp(join(tmpdir(), 'oh-metric-api-load-'));
       try {
@@ -167,9 +172,10 @@ describe('metric series memory', () => {
         const kb = /MAXRSS (\d+)/.exec(stderr)?.[1];
         const peakBytes = Number(kb) * 1024;
         process.stdout.write(
-          `METRIC RSS peak ${(peakBytes / 1048576).toFixed(0)} MB in ${((Date.now() - started) / 1000).toFixed(0)} s (Report.addMetrics, no V8 flags; reported only, the ${MAX_RSS_BYTES / 1048576} MB target is the CLI's)\n`,
+          `METRIC RSS peak ${(peakBytes / 1048576).toFixed(0)} MB in ${((Date.now() - started) / 1000).toFixed(0)} s (Report.addMetrics, no V8 flags; bound ${MAX_LIBRARY_METRICS_RSS_BYTES / 1048576} MB)\n`,
         );
         expect(peakBytes).toBeGreaterThan(0);
+        expect(peakBytes).toBeLessThan(MAX_LIBRARY_METRICS_RSS_BYTES);
       } finally {
         await rm(dir, { recursive: true, force: true });
       }

@@ -17,8 +17,12 @@ import { TABLE_COLUMNS, type Table } from './columns.js';
 import { arrowSchema } from './schema.js';
 import { ensureParquetWasm } from './wasm.js';
 
-/** Rows per record batch a reader takes from a file. Larger is better: each batch carries its columns' whole dictionaries through Arrow IPC, and many small batches of a big row group made garbage that raised the peak (measured). */
-const READ_BATCH_ROWS = 32_768;
+/**
+ * Rows per record batch a reader takes from a file. A merge holds one batch per input file, so this times the merge's
+ * fan-out is the reader memory (3.6 M `points` rows, 16 files merged at once: peak 315 MB at 2 048 rows, 373 MB at
+ * 8 192). Each batch carries its columns' whole dictionaries through Arrow IPC, so smaller costs a little time.
+ */
+const READ_BATCH_ROWS = 2_048;
 
 interface FieldLike {
   name: string;
@@ -111,29 +115,19 @@ export async function* readColumns(
   }
 }
 
-function concat(parts: readonly Uint8Array[]): Uint8Array {
-  let total = 0;
-  for (const p of parts) total += p.length;
-  const out = new Uint8Array(total);
-  let at = 0;
-  for (const p of parts) {
-    out.set(p, at);
-    at += p.length;
-  }
-  return out;
-}
-
 /**
  * Writes the batches, in the order given and already sorted, as one ZSTD Parquet file with row groups of
  * `opts.rowGroupRows`, taking them one at a time: the Parquet writer closes a row group when it is full, so the
- * batches need not match the row group size. The bytes equal `encodeColumns` of the rows in one batch.
+ * batches need not match the row group size. The file comes out in chunks as the encoder yields them (their
+ * concatenation equals `encodeColumns` of the rows in one batch); a failure of `batches` is thrown instead of the
+ * last chunk, so a caller that stops at the error never holds a truncated file as complete.
  */
-export async function encodeBatches(
+export async function* encodeBatches(
   table: Table,
   batches: AsyncIterable<ColumnBatch>,
   opts: EncodeOptions,
   guard: PanicGuard = unguarded,
-): Promise<Uint8Array> {
+): AsyncGenerator<Uint8Array> {
   ensureParquetWasm();
   const it = batches[Symbol.asyncIterator]();
   // An error from `batches` reaches the writer as a stream error, which parquet-wasm reports as "Dyn casting error".
@@ -164,9 +158,9 @@ export async function encodeBatches(
       await it.return?.();
     },
   });
-  const parts: Uint8Array[] = [];
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   try {
-    const reader = (
+    reader = (
       await guard(transformParquetStream(source, writerProperties(opts)))
     ).getReader() as ReadableStreamDefaultReader<Uint8Array>;
     for (;;) {
@@ -174,11 +168,19 @@ export async function encodeBatches(
       if (done) {
         // The writer finishes a valid file from the batches it got when the source fails: that file is truncated.
         if (failure !== undefined) throw failure.error;
-        return concat(parts);
+        return;
       }
-      parts.push(value);
+      yield value;
     }
   } catch (error) {
     throw failure === undefined ? error : failure.error;
+  } finally {
+    // Stopping early (a `return`, or an error) releases the writer and the source. Not awaited: after a panic the
+    // stream never settles.
+    try {
+      void reader?.cancel().catch(() => undefined);
+    } catch {
+      // as above
+    }
   }
 }
