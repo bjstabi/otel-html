@@ -236,6 +236,7 @@ describe('metric sparkline buckets', () => {
           ),
           gauge(
             'nv',
+            // OTLP JSON encodes a non-finite double as a string, which the builder's number type does not allow.
             pointsAt(ms, (i) => ({ asDouble: [1, 'NaN', 3, 'NaN'][i] ?? 0 }) as never),
           ),
           histogram(
@@ -569,11 +570,28 @@ describe('metric cells, exemplars and runs', () => {
   );
   const RUNS2 = otlp(metricsRequest([runPoint(10_000, 'r1')], rev('x2')) as never);
 
+  // OTLP JSON encodes a non-finite double as a string, which the builder's number type does not allow.
+  const NONFINITE = otlp(
+    metricsRequest(
+      [
+        gauge(
+          'nf',
+          pointsAt(
+            [0, 10, 20, 30].map(sec),
+            (i) => ({ asDouble: [2, 'NaN', 'Infinity', 6][i] ?? 0 }) as never,
+            host('h1'),
+          ),
+        ),
+      ],
+      resA,
+    ) as never,
+  );
+
   let cf: Format4Fixture;
   let cdb: TestDb;
   const rowsOf = (query: string): Row[] => cdb.rows(query);
   beforeAll(async () => {
-    cf = await buildFormat4Report([MAIN, EXEM, RUNS1, RUNS2], { close: false });
+    cf = await buildFormat4Report([MAIN, EXEM, RUNS1, RUNS2, NONFINITE], { close: false });
     cdb = await openFixtureDb(cf);
   });
   const all = { files: ['all-files'], all: true, total: 1 } as const;
@@ -679,6 +697,18 @@ describe('metric cells, exemplars and runs', () => {
     ]);
     expect(at('min')[0]?.[1]).toBe(1);
     expect(at('max')[1]?.[1]).toBe(40);
+  });
+
+  test('a non-finite gauge point stays out of every number cell', () => {
+    const c0 = cellAt(0, W20);
+    const c1 = cellAt(20_000, W20);
+    for (const show of ['avg', 'min', 'max', 'last']) {
+      const got = cells('nf', 'number', { show, by: [] }).map((r) => [num(r.cell), num(r.value)]);
+      expect(got, show).toEqual([
+        [c0, 2],
+        [c1, 6],
+      ]);
+    }
   });
 
   test('hist cells sum bucket counts elementwise and keep a row per bounds set', () => {

@@ -1,5 +1,4 @@
 import { readdir } from 'node:fs/promises';
-
 import type { Page } from '@playwright/test';
 import { LINKED_SPAN, LINKED_TRACE, METRIC_HIST, reportDir } from './fixture.js';
 import { exemplarRings, LINE_MIN_PX, lineRunPx, menuAt, watchProblems } from './metric-chart.js';
