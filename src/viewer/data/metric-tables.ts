@@ -84,8 +84,10 @@ export const NOTES = {
   foldedEvicted: (n: number) =>
     `other is approximate: ${n} folded series lost one change each when there were too many to track`,
   resets: (n: number) => `${n} counter reset${n === 1 ? '' : 's'} in range`,
+  residual: (term: string) => `Evaluated in the browser: ${term}`,
+  exemplarsCapped: 'exemplars capped: the oldest 5 000 exemplar points are shown',
   noValue: (n: number) => `${n} point${n === 1 ? '' : 's'} had no value`,
-  conflicting: (e: MetricEntry) =>
+  conflicting: (e: Pick<MetricEntry, 'name' | 'type' | 'unit'>) =>
     `${e.name} has conflicting definitions: showing ${e.type}${e.unit === '' ? '' : ` (${e.unit})`}`,
 } as const;
 

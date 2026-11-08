@@ -11,7 +11,8 @@ import { ErrorCard, PILL } from '../components/explorer-states.js';
 import { type ChartPick, MetricChartCard } from '../components/metric-chart-card.js';
 import { METRIC_CHART_HEIGHT, type MetricSize } from '../components/metric-chart-option.js';
 import type { DataSource } from '../data/data-source.js';
-import { type LoadedMetric, resourceKey } from '../data/metric-load.js';
+import { resourceKey } from '../data/metric-catalog.js';
+import type { LoadedMetric } from '../data/metric-load.js';
 import {
   defaultShow,
   type MetricQuery,

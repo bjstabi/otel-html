@@ -2,7 +2,7 @@ import { and, column, type ExprNode, eq, gte, isIn, literal, lte, sql, verbatim 
 import type { ManifestV4 } from '../../format/manifest.js';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { TraceId } from '../../model/ids.js';
-import { textPredicate, translateCondition } from './ottl.js';
+import { type PruneHints, textPredicate, translateCondition } from './ottl.js';
 import { type AbsWindow, absWindow, type Pruned, prunePartitions, type RelWindow } from './prune.js';
 import { partitionOfFilename } from './views.js';
 
@@ -26,6 +26,18 @@ export interface FilterOptions {
   /** Adds `trace_id = ?` and prunes to the partitions of `traceFiles` (the `traces` file names `tracePartitionsQuery` gives). */
   traceId?: TraceId | null;
   traceFiles?: readonly string[];
+  /** Statistics hints beside the condition's (a key both name keeps the values both allow), e.g. `metric_name` for a points query. */
+  hints?: PruneHints;
+}
+
+function mergeHints(own: PruneHints, extra: PruneHints | undefined): PruneHints {
+  if (extra === undefined) return own;
+  const out = new Map(own);
+  for (const [key, wanted] of extra) {
+    const have = out.get(key);
+    out.set(key, have === undefined ? wanted : new Set([...have].filter((v) => wanted.has(v))));
+  }
+  return out;
 }
 
 /**
@@ -38,7 +50,7 @@ export function buildFilter(opts: FilterOptions): { filter: SqlFilter; residual:
   const t = condition === null ? null : translateCondition(condition, context);
   const epoch = BigInt(opts.manifest.epochUnixNano);
   const window = absWindow(opts.window, epoch);
-  const hints = t?.hints ?? new Map();
+  const hints = mergeHints(t?.hints ?? new Map(), opts.hints);
   if (opts.traceId != null && opts.traceFiles === undefined) {
     throw new OtelHtmlError('usage', {
       message: 'buildFilter: traceId needs traceFiles (the traces files tracePartitionsQuery names)',

@@ -64,7 +64,7 @@ import {
 import { manifestRange } from './manifest-range.js';
 import { DEFAULT_FACET_CAPS, type FacetCaps, throwIfAborted } from './query-common.js';
 import type { QueryEngine } from './query-engine.js';
-import { dropResidualTable, residualIdTable, residualRows } from './residual.js';
+import { dropResidualTable, idTable, residualRows } from './residual.js';
 import type {
   LogNeed,
   LogQuery,
@@ -251,9 +251,10 @@ export function createDuckDbDataSource(opts: {
       });
     }
     const survivors = entries.filter(test);
-    const table = await residualIdTable(
+    const table = await idTable(
       engine,
-      survivors.map((e) => ({ filename: e.filename, row: e.fileRow })),
+      ['filename', 'file_row_number'],
+      survivors.map((e) => [e.filename, e.fileRow]),
     );
     try {
       const ids: ExprNode = sql`(filename, file_row_number) IN (SELECT filename, file_row_number FROM ${column(table)})`;
