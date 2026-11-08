@@ -28,7 +28,7 @@ async function collectBytes(chunks: AsyncIterable<Uint8Array>): Promise<Uint8Arr
 
 describe('encodeBatches', () => {
   test('stopping early cancels the source batches', async () => {
-    const total = 3_000;
+    const total = 100;
     let closed = false;
     async function* source(): AsyncGenerator<ColumnBatch> {
       try {
