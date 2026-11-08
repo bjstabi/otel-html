@@ -4,15 +4,17 @@
 //
 // The report is a `site`-format report (its viewer files live in a shared `assets/<version>/` folder beside the
 // channel folders, read over HTTP with Range requests), so the site root is served by a loopback static server for
-// the length of the run and the page is opened at http://127.0.0.1:<port>/<channel>/index.html. The server always closes.
+// the length of the run and the page is opened at http://127.0.0.1:<port>/<channel>/index.html. The server always
+// closes.
 //
-// Writes <site-dir>/<channel>/preview-light.png and preview-dark.png (1280x720 at device scale factor 2, so 2560x1440), each to
-// a `.tmp` file first and renamed only once both are taken, so a failure leaves the previous images intact. Any failure
-// (no index.html, no browser, a report still loading after 30 s, a page that shows an alert such as a report that failed to load) prints `::warning::otel-html preview: <message>` and
-// exits 0: a missing preview must not fail a publish.
+// Writes <site-dir>/<channel>/preview-light.png and preview-dark.png (1280x720 at device scale factor 2, so
+// 2560x1440), each to a `.tmp` file first and renamed only once both are taken, so a failure leaves the previous
+// images intact. Any failure (no index.html, no browser, a report still loading after 30 s, a page that shows an
+// alert such as a report that failed to load) prints `::warning::otel-html preview: <message>` and exits 0: a
+// missing preview must not fail a publish.
 //
-// Environment: PLAYWRIGHT_FROM, the path of a package.json (or any file) in the directory `@playwright/test` is installed under.
-// Nothing but Node built-ins is imported here.
+// Environment: PLAYWRIGHT_FROM, the path of a package.json (or any file) in the directory `@playwright/test` is
+// installed under. Nothing but Node built-ins is imported here.
 
 import { createReadStream, existsSync, renameSync, rmSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
@@ -81,14 +83,14 @@ async function serve(root) {
         } else if (range === null) {
           res.writeHead(200, { ...base, 'content-length': s.size });
           if (head) res.end();
-          else createReadStream(file).pipe(res);
+          else send(res, createReadStream(file));
         } else {
           res.writeHead(206, {
             ...base,
             'content-range': `bytes ${range.start}-${range.end}/${s.size}`,
             'content-length': range.end - range.start + 1,
           });
-          createReadStream(file, range).pipe(res);
+          send(res, createReadStream(file, range));
         }
       },
       () => res.writeHead(404).end(),
@@ -109,6 +111,15 @@ async function serve(root) {
         server.closeAllConnections();
       }),
   };
+}
+
+/** Pipes a file to the response; a read error ends the response with a 500, or drops the connection once begun. */
+function send(res, stream) {
+  stream.on('error', () => {
+    if (res.headersSent) res.destroy();
+    else res.writeHead(500).end();
+  });
+  stream.pipe(res);
 }
 
 async function main() {
@@ -159,8 +170,11 @@ async function main() {
     for (const [tmp] of taken) rmSync(tmp, { force: true });
     throw error;
   } finally {
-    await browser?.close();
-    await server.close();
+    try {
+      await browser?.close();
+    } finally {
+      await server.close();
+    }
   }
   for (const [tmp, final] of taken) renameSync(tmp, final);
 }
