@@ -75,6 +75,14 @@ Context: this is plan 2 of the format-4 design (docs/superpowers/specs/2026-11-0
 Write plan 3 of the format-4 spec (§6.4 and §7.2 for metrics: `points` queries through mosaic-sql, metric `fn`s and formulas, the Metrics explorer, catalog and metric dashboard widgets, downsampled tables only if the metrics-scale budget demands them) with superpowers:writing-plans. Skip brainstorming. Read the format-4 writer and viewer plans first, including the "Record: rulings and notes for plan 3" at the end of docs/superpowers/plans/2026-11-07-format-4-viewer.md (it wins over the spec, as plan 1's record did for plan 2), run the builder check, save as docs/superpowers/plans/<date>-format-4-metrics.md on feat/format-4 and add its execution prompt to the writer plan's "Kickoff prompts" section. Unattended; PRs target feat/format-4.
 ```
 
+**Execute plan 3 (metrics), the session after D:**
+
+```
+Execute docs/superpowers/plans/2026-11-08-format-4-metrics.md with superpowers:subagent-driven-development.
+
+Context: this is plan 3 of the format-4 design (docs/superpowers/specs/2026-11-06-parquet-duckdb-format-4-design.md §6.4 and §7.2, read with the "Record: rulings and notes for plan 3" at the end of docs/superpowers/plans/2026-11-07-format-4-viewer.md, which wins over the spec). The plan's "Decisions this plan makes" section (D20 to D34) is approved with the plan; apply them without re-deciding. The PR process is unattended (docs/agents/process-unattended.md): every PR targets feat/format-4, not main, and the next PR branches from the updated feat/format-4. The one decision the plan leaves open is D33 (a downsampled table only if PR 6's measurement forces it): stop and ask there, and wherever a measurement the PR body must carry misses the plan's target (PR 2's 512 MB, PR 6's budgets). Per CLAUDE.md, implementers and task reviewers run on Sonnet 5.5 and the branch review on Opus 5.5; say which model each review ran on. Resume at the first plan task whose PR is not merged (`gh pr list --base feat/format-4 --state all`), from `git switch feat/format-4`. Stop and ask only where the process or the plan says to.
+```
+
 **Session E, write plan 4 (`host`):**
 
 ```
