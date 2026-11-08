@@ -24,14 +24,14 @@ describe('OTTL path to column map', () => {
     expect(jsonPointer(['a/b~c', 0, 'x'])).toBe('/a~1b~0c/0/x');
   });
   test('every OTTL path CONTEXTS knows is mapped or listed as unmapped', () => {
-    for (const c of ['span', 'log_record'] as const) {
+    for (const c of ['span', 'log_record', 'datapoint'] as const) {
       for (const path of CONTEXTS[c].paths.keys())
         expect(PATH_COLUMNS[c].has(path) || UNMAPPED_PATHS[c].has(path), path).toBe(true);
     }
   });
   test('every mapped column exists in its table', () => {
-    const tables = { span: 'spans', log_record: 'logs' } as const;
-    for (const c of ['span', 'log_record'] as const) {
+    const tables = { span: 'spans', log_record: 'logs', datapoint: 'points' } as const;
+    for (const c of ['span', 'log_record', 'datapoint'] as const) {
       const names = new Set(TABLE_COLUMNS[tables[c]].map((col) => col.name));
       for (const [path, pc] of PATH_COLUMNS[c]) expect(names.has(pc.column), `${c} ${path}`).toBe(true);
     }
@@ -41,6 +41,15 @@ describe('OTTL path to column map', () => {
     expect(PATH_COLUMNS.log_record.get('observed_time_unix_nano')?.nullAsEmpty).toBe(true);
     expect(PATH_COLUMNS.log_record.get('event_name')?.nullAsEmpty).toBe(true);
     expect(PATH_COLUMNS.span.get('name')?.nullAsEmpty).toBeUndefined();
+    expect(PATH_COLUMNS.datapoint.get('metric.description')?.nullAsEmpty).toBe(true);
+    expect(PATH_COLUMNS.datapoint.get('metric.unit')?.nullAsEmpty).toBe(true);
+    expect(PATH_COLUMNS.datapoint.get('metric.name')?.nullAsEmpty).toBeUndefined();
+  });
+  test('the per-point datapoint paths are unmapped, never mapped', () => {
+    for (const p of ['start_time_unix_nano', 'time_unix_nano', 'flags']) {
+      expect(UNMAPPED_PATHS.datapoint.has(p), p).toBe(true);
+      expect(PATH_COLUMNS.datapoint.has(p), p).toBe(false);
+    }
   });
 });
 

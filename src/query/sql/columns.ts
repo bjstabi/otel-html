@@ -1,7 +1,7 @@
 import { column, duckDBCodeGenerator, type ExprNode, literal, sql, verbatim } from '@uwdata/mosaic-sql';
 
-/** The two OTTL contexts that run as SQL; datapoint conditions are not translated. */
-export type SqlContext = 'span' | 'log_record';
+/** The OTTL contexts that run as SQL; a datapoint condition runs over the `points` columns (one row per point). */
+export type SqlContext = 'span' | 'log_record' | 'datapoint';
 type ColumnKind = 'string' | 'int' | 'bool' | 'json';
 export interface PathColumn {
   readonly column: string;
@@ -68,12 +68,24 @@ export const PATH_COLUMNS: Readonly<Record<SqlContext, ReadonlyMap<string, PathC
     ['dropped_attributes_count', int('dropped_attributes_count')],
     ...SHARED,
   ]),
+  datapoint: new Map<string, PathColumn>([
+    ['metric.name', str('metric_name')],
+    ['metric.description', str('metric_description', true)],
+    ['metric.unit', str('metric_unit', true)],
+    ['attributes', js('attributes')],
+    ...SHARED,
+  ]),
 };
 
-/** Paths `CONTEXTS` knows that have no column. None today; the test keeps a new OTTL path from going unmapped silently. */
+/**
+ * Paths `CONTEXTS` knows that have no column. The datapoint time and flags paths are per point, not per series: the
+ * dashboard schema rejects them before translation (`rejectPerPointPaths`). The test keeps a new OTTL path from going
+ * unmapped silently.
+ */
 export const UNMAPPED_PATHS: Readonly<Record<SqlContext, ReadonlySet<string>>> = {
   span: new Set<string>(),
   log_record: new Set<string>(),
+  datapoint: new Set<string>(['start_time_unix_nano', 'time_unix_nano', 'flags']),
 };
 
 /** `/a~1b` for keys ['a/b']; a numeric key is an array index segment. */

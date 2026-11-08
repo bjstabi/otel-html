@@ -19,7 +19,7 @@ export interface SqlFilter {
 
 export interface FilterOptions {
   manifest: ManifestV4;
-  table: 'spans' | 'logs';
+  table: 'spans' | 'logs' | 'points';
   condition: string | null;
   text: string;
   window: RelWindow | null;
@@ -33,7 +33,7 @@ export interface FilterOptions {
  * for one table. Every user value goes through `literal`.
  */
 export function buildFilter(opts: FilterOptions): { filter: SqlFilter; residual: string | null } {
-  const context = opts.table === 'spans' ? 'span' : 'log_record';
+  const context = opts.table === 'spans' ? 'span' : opts.table === 'points' ? 'datapoint' : 'log_record';
   const condition = opts.condition === null || opts.condition.trim() === '' ? null : opts.condition;
   const t = condition === null ? null : translateCondition(condition, context);
   const epoch = BigInt(opts.manifest.epochUnixNano);
@@ -78,9 +78,9 @@ function filenameTerm(files: Pruned): ExprNode | null {
 
 /**
  * The WHERE terms: predicate, text, `filename IN (...)` unless all files are read, and the window: spans (and
- * traces) overlapping it, `end >= start_abs AND start <= end_abs`, logs `coalesce(time, observed) BETWEEN`.
+ * traces) overlapping it, `end >= start_abs AND start <= end_abs`, logs `coalesce(time, observed) BETWEEN`, points `time_unix_nano BETWEEN`.
  */
-export function whereOf(f: SqlFilter, table: 'spans' | 'logs'): ExprNode[] {
+export function whereOf(f: SqlFilter, table: 'spans' | 'logs' | 'points'): ExprNode[] {
   const terms: ExprNode[] = [];
   if (f.predicate !== null) terms.push(f.predicate);
   if (f.text !== null) terms.push(f.text);
@@ -91,6 +91,9 @@ export function whereOf(f: SqlFilter, table: 'spans' | 'logs'): ExprNode[] {
     const hi = verbatim(`${f.window.end}::BIGINT`);
     if (table === 'logs') {
       const t = sql`coalesce(${column('time_unix_nano')}, ${column('observed_time_unix_nano')})`;
+      terms.push(and(gte(t, lo), lte(t, hi)));
+    } else if (table === 'points') {
+      const t = column('time_unix_nano');
       terms.push(and(gte(t, lo), lte(t, hi)));
     } else {
       terms.push(gte(column('end_time_unix_nano'), lo), lte(column('start_time_unix_nano'), hi));
