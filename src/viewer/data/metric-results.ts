@@ -1,6 +1,7 @@
 import type { Table } from '@uwdata/flechette';
 import { attributesFromJson } from '../../format/columns.js';
 import type { ResultRow } from '../../format/parquet/decode.js';
+import type { Attributes } from '../../model/anyvalue.js';
 import { OtelHtmlError } from '../../model/errors.js';
 import { canonicalAttributesKey } from '../../model/interner.js';
 import type { ResourceRecord, ScopeRecord } from '../../model/records.js';
@@ -72,10 +73,10 @@ export interface RunQueryResult {
   notes: string[];
 }
 
-/** One decoded row of `seriesQuery`. */
+/** One decoded row of `seriesQuery`; `seriesId` is the stored hash text. */
 export interface SeriesRow {
-  seriesId: number;
-  attributes: Record<string, unknown>;
+  seriesId: string;
+  attributes: Attributes;
   resource: ResourceRecord;
   scope: ScopeRecord;
   bounds: number[] | null;

@@ -38,7 +38,7 @@ test('MetricDef is assignable both ways to the rollups MetricDef', () => {
 });
 
 test('SeriesRow has the decoded series columns', () => {
-  expectTypeOf<SeriesRow['seriesId']>().toEqualTypeOf<number>();
+  expectTypeOf<SeriesRow['seriesId']>().toEqualTypeOf<string>();
   expectTypeOf<SeriesRow['resource']>().toEqualTypeOf<ResourceRecord>();
   expectTypeOf<SeriesRow['scope']>().toEqualTypeOf<ScopeRecord>();
   expectTypeOf<SeriesRow['bounds']>().toEqualTypeOf<number[] | null>();
