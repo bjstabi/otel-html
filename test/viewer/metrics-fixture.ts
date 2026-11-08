@@ -1,4 +1,5 @@
 import { afterAll, beforeAll } from 'vitest';
+import type { OtlpRequest } from '../../src/model/otlp-json.js';
 import type { DataSource } from '../../src/viewer/data/data-source.js';
 import { createDuckDbDataSource } from '../../src/viewer/data/duckdb-source.js';
 import { createCoordinator, mosaicQueryEngine } from '../../src/viewer/data/mosaic.js';
@@ -41,7 +42,7 @@ const REQUEST = otlp(
 );
 
 /** A format-4 report with a two-series gauge and a summary, behind a data source over the Node engine. */
-export function metricsSource(): () => DataSource {
+export function metricsSource(requests: readonly OtlpRequest[] = [REQUEST]): () => DataSource {
   let db: TestDb | null = null;
   let source: DataSource | null = null;
   let xhr: unknown;
@@ -50,7 +51,7 @@ export function metricsSource(): () => DataSource {
     // fails ("null function"); hiding it for the file's duration selects the Node file path.
     xhr = g.XMLHttpRequest;
     g.XMLHttpRequest = undefined;
-    const f = await buildFormat4Report([REQUEST], { close: false });
+    const f = await buildFormat4Report(requests, { close: false });
     db = await openFixtureDb(f);
     source = createDuckDbDataSource({
       engine: mosaicQueryEngine(createCoordinator(db.connector, silentLogger), db),

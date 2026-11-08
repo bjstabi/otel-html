@@ -3,7 +3,7 @@ import { type JSX, useCallback, useMemo, useState } from 'react';
 import { anyValueToDisplay } from '../../model/anyvalue.js';
 import type { RelNanos, TraceId } from '../../model/ids.js';
 import type { ResourceRecord } from '../../model/records.js';
-import { MAX_METRIC_QUERIES, type MetricPageState } from '../../query/metric-query.js';
+import { MAX_METRIC_QUERIES, type MetricPageState, type MetricQuery } from '../../query/metric-query.js';
 import { compareNamespaces, metricNamespace } from '../../semconv/metric-namespaces.js';
 import { tokenValue } from '../components/attribute-filter.js';
 import { ErrorCard, PILL } from '../components/explorer-states.js';
@@ -12,13 +12,8 @@ import { METRIC_CHART_HEIGHT, type MetricSize } from '../components/metric-chart
 import type { DataSource } from '../data/data-source.js';
 import type { MetricCatalogData, MetricEntry } from '../data/metric-catalog.js';
 import { resourceKey } from '../data/metric-catalog.js';
-import type { LoadedMetric } from '../data/metric-load.js';
-import {
-  defaultShow,
-  type MetricQuery,
-  type MetricQueryResult,
-  runMetricQuery,
-} from '../data/metric-query.js';
+import type { MetricQueryResult } from '../data/metric-results.js';
+import { defaultShowOf, kindOf } from '../data/metric-tables.js';
 import type { TimeWindow } from '../data/time-window.js';
 import { CONTROL } from '../shell/controls.js';
 import { useGoTo } from '../shell/go-to.js';
@@ -75,8 +70,6 @@ const MARKER_LABEL: Readonly<Record<MetricGridOrigin['kind'], string | null>> = 
   dashboard: null,
 };
 const QUERY_IDS = 'abcdefghijklmnopqrstuvwxyz';
-const OTHER_LEFT_OUT =
-  'partial: series beyond the cap are folded into "other", which spans resources and is left out here (see the Explorer)';
 const SERVICE_PATH = 'resource.attributes["service.name"]';
 
 const resourcePath = (key: string): string => `resource.attributes[${JSON.stringify(key)}]`;
@@ -119,11 +112,6 @@ function resourceLines(resources: readonly ResourceRecord[]): string[] {
     })
     .sort();
   return [SERVICE_PATH, ...differing.map(resourcePath)];
-}
-
-/** `m` with only the series on one of `keys` (canonical `resourceKey`s): the grid charts exactly the origin's resources. */
-function seriesOnResources(m: LoadedMetric, keys: ReadonlySet<string>): LoadedMetric {
-  return { ...m, series: m.series.filter((s) => s.resource !== null && keys.has(resourceKey(s.resource))) };
 }
 
 export interface ExplorerFilter extends Pick<MetricQuery, 'where' | 'by'> {
@@ -176,7 +164,14 @@ function distinctResources(resources: readonly ResourceRecord[]): ResourceRecord
 }
 
 /** What the grid reads of a data source. */
-export type MetricSource = Pick<DataSource, 'metricCatalog' | 'metric' | 'metricsForResources' | 'hasTrace'>;
+export type MetricSource = Pick<
+  DataSource,
+  'metricCatalog' | 'metricShowOptions' | 'metricQuery' | 'metricsForResources' | 'hasTrace'
+>;
+
+/** The `show` a metric opens with, from its show options. */
+const defaultShowFor = async (ds: Pick<DataSource, 'metricShowOptions'>, e: MetricEntry): Promise<string> =>
+  defaultShowOf(kindOf(e), await ds.metricShowOptions(e.id));
 
 /** `ds.metricCatalog()` as a stable function, for `useKeyedAsync(dataSource, catalogOf)`. */
 export const catalogOf = (ds: Pick<DataSource, 'metricCatalog'>): Promise<MetricCatalogData> =>
@@ -216,7 +211,7 @@ function groupByNamespace(entries: readonly MetricEntry[]): Group[] {
     }));
 }
 
-/** A query on one metric: `show` is filled in once the metric is loaded (`defaultShow`). */
+/** A query on one metric: `show` is filled in once its options are known (`defaultShowFor`). */
 function gridQuery(e: MetricEntry, filter: Pick<MetricQuery, 'where' | 'by'>, id: string): MetricQuery {
   return {
     id,
@@ -256,7 +251,8 @@ function useInView(): [(el: HTMLElement | null) => (() => void) | undefined, boo
 interface ChartKey {
   entry: MetricEntry;
   query: MetricQuery;
-  resourceKeys: ReadonlySet<string>;
+  /** Catalog indexes of the origin's resources. */
+  resources: readonly number[];
   window: TimeWindow;
   maxPoints: number;
 }
@@ -269,8 +265,8 @@ interface ChartRun {
 function GridChart(props: {
   dataSource: MetricSource;
   entry: MetricEntry;
-  /** The origin's resources (canonical keys): only their series are charted. */
-  resourceKeys: ReadonlySet<string>;
+  /** The origin's resources as catalog indexes: only their series are charted; null until the catalog is read. */
+  resources: readonly number[] | null;
   /** One line per resource (`resourceLines`). */
   by: string[];
   /** The filter the click menu's Traces/Logs links carry (`explorerFilter`). */
@@ -284,30 +280,31 @@ function GridChart(props: {
   onPick(pick: ChartPick, query: MetricQuery): void;
   onZoom(w: TimeWindow): void;
 }): JSX.Element {
-  const { dataSource, entry, resourceKeys, by, window, size } = props;
+  const { dataSource, entry, resources, by, window, size } = props;
   const [ref, inView] = useInView();
   const maxPoints = GRID_MAX_POINTS[size];
   const key = useMemo<ChartKey | null>(
     () =>
-      inView
-        ? { entry, query: gridQuery(entry, { where: null, by }, 'a'), resourceKeys, window, maxPoints }
+      inView && resources !== null
+        ? { entry, query: gridQuery(entry, { where: null, by }, 'a'), resources, window, maxPoints }
         : null,
-    [inView, entry, by, resourceKeys, window, maxPoints],
+    [inView, entry, by, resources, window, maxPoints],
   );
   const load = useCallback(
     async (k: ChartKey, signal: AbortSignal): Promise<ChartRun> => {
-      const m = await dataSource.metric(k.entry.id);
+      const query = { ...k.query, show: await defaultShowFor(dataSource, k.entry) };
       signal.throwIfAborted();
-      const query = { ...k.query, show: await defaultShow(m) };
-      const result = await runMetricQuery(
-        seriesOnResources(m, k.resourceKeys),
-        query,
-        k.window,
-        k.maxPoints,
+      const result = await dataSource.metricQuery(
+        {
+          entry: k.entry,
+          query,
+          window: k.window,
+          maxPoints: k.maxPoints,
+          resources: k.resources,
+          exemplars: true,
+        },
         signal,
       );
-      // The cap-folded `other` series belongs to no single resource, so it cannot be charted here.
-      if (m.series.some((x) => x.def.other)) result.notes.push(OTHER_LEFT_OUT);
       return { query, result };
     },
     [dataSource],
@@ -404,7 +401,6 @@ export function MetricGrid(
   const { dataSource, origin } = props;
   const goTo = useGoTo();
   const resources = useMemo(() => distinctResources(origin.resources), [origin.resources]);
-  const resourceKeys = useMemo(() => new Set(resources.map(resourceKey)), [resources]);
   const by = useMemo(() => resourceLines(resources), [resources]);
   const catalogState = useKeyedAsync(dataSource, catalogOf);
   const loadEntries = useCallback(
@@ -423,6 +419,12 @@ export function MetricGrid(
       [...refs].flatMap((r) => (all[r] === undefined ? [] : [all[r]])),
     );
   }, [catalogState, listed, resources]);
+  // The origin's resources as catalog indexes, which the data layer narrows a query by (D29).
+  const resourceIndexes = useMemo((): readonly number[] | null => {
+    if (catalogState.status !== 'ready') return null;
+    const keys = new Set(resources.map(resourceKey));
+    return catalogState.value.resources.flatMap((r, i) => (keys.has(resourceKey(r)) ? [i] : []));
+  }, [catalogState, resources]);
   const [size, setSize] = useState<MetricSize>('S');
   const [expandedState, setExpanded] = useState<ReadonlySet<string> | null>(null);
   const [localZoom, setLocalZoom] = useState<TimeWindow | null>(null);
@@ -460,7 +462,7 @@ export function MetricGrid(
     const filter = linkFilter;
     const entries = linkGroup.entries.slice(0, MAX_METRIC_QUERIES);
     setActionError(null);
-    Promise.all(entries.map((e) => dataSource.metric(e.id).then(defaultShow))).then(
+    Promise.all(entries.map((e) => defaultShowFor(dataSource, e))).then(
       (shows) => {
         try {
           const queries = entries.map((e, i) => ({
@@ -579,7 +581,7 @@ export function MetricGrid(
                     key={e.id}
                     dataSource={dataSource}
                     entry={e}
-                    resourceKeys={resourceKeys}
+                    resources={resourceIndexes}
                     by={by}
                     linkWhere={linkFilter?.where ?? null}
                     window={shown}
