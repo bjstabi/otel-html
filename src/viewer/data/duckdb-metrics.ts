@@ -182,6 +182,13 @@ export function metricMethods(ctx: MetricContext): MetricMethods {
     }
   }
 
+  /** The series rows for labels; more than `RESIDUAL_SERIES_CAP` is the D5 error rather than silent missing labels. */
+  async function seriesRowsTable(series: Query, signal: AbortSignal | undefined) {
+    const t = await engine.query(series.clone().limit(RESIDUAL_SERIES_CAP + 1), signal);
+    if (t.numRows > RESIDUAL_SERIES_CAP) throw tooManySeries();
+    return t;
+  }
+
   /** `where` may not read per-point paths: a metric filter selects whole series. */
   const checkWhere = (where: string | null): void => {
     if (where !== null && where.trim() !== '') rejectPerPointPaths(pathsOf(parseCondition(where)));
@@ -210,16 +217,38 @@ export function metricMethods(ctx: MetricContext): MetricMethods {
     // A counter's running total needs the deltas before the window: neither the files nor the points are cut at its start.
     const baseline = kind === 'counter' && q.show === 'sum';
     const filterWindow: RelWindow = baseline ? { start: BEFORE_EVERYTHING, end: req.window.end } : req.window;
+    const texts = resourceTextsOf(cat, req.resources);
+    const scopeOf = (window: RelWindow) => ({
+      entry,
+      identity,
+      condition: q.where,
+      window,
+      resourceTexts: texts,
+      seriesIds: null,
+    });
+
+    // The bucket width comes from the points' interval over the requested window; the cells then read whole buckets.
+    const width =
+      req.widthNs ??
+      (await scoped(scopeOf(filterWindow), signal, async (scope) => {
+        const pick = pickWidthNs(req.window, req.maxPoints);
+        if (scope.files.files.length === 0) return pick;
+        const gaps = await engine.query(
+          pointIntervalQuery(identity, scope.seriesFor(by), scope.files, abs),
+          signal,
+        );
+        return chartWidthNs(pick, upperMedian(rowsOf(gaps).map((r) => toNumber(cell(r, 'gap'), 'gap'))));
+      }));
+    throwIfAborted(signal);
+    // Whole buckets (ruling 7): from the start of the first bucket to the end of the last; a baseline keeps its open start.
+    const whole: RelWindow = {
+      start: Math.floor(req.window.start / width) * width,
+      end: (Math.floor(req.window.end / width) + 1) * width - 1,
+    };
+    const readAbs = absWindow(whole, epoch);
 
     return scoped(
-      {
-        entry,
-        identity,
-        condition: q.where,
-        window: filterWindow,
-        resourceTexts: resourceTextsOf(cat, req.resources),
-        seriesIds: null,
-      },
+      scopeOf(baseline ? { start: BEFORE_EVERYTHING, end: whole.end } : whole),
       signal,
       async (scope) => {
         const empty = (widthNs: number): MetricQueryResult => ({
@@ -231,19 +260,8 @@ export function metricMethods(ctx: MetricContext): MetricMethods {
           distribution: null,
           notes: notesOf(entry, scope.residual),
         });
-        if (scope.files.files.length === 0)
-          return empty(req.widthNs ?? pickWidthNs(req.window, req.maxPoints));
+        if (scope.files.files.length === 0) return empty(width);
         const series = scope.seriesFor(by);
-        let widthNs = req.widthNs;
-        if (widthNs === undefined) {
-          const gaps = await engine.query(pointIntervalQuery(identity, series, scope.files, abs), signal);
-          widthNs = chartWidthNs(
-            pickWidthNs(req.window, req.maxPoints),
-            upperMedian(rowsOf(gaps).map((r) => toNumber(cell(r, 'gap'), 'gap'))),
-          );
-        }
-        throwIfAborted(signal);
-        const width = widthNs;
         const summary = kind === 'summary';
         const [cells, exemplarTable, groupInfo] = await Promise.all([
           engine.query(
@@ -253,7 +271,7 @@ export function metricMethods(ctx: MetricContext): MetricMethods {
               show: q.show,
               series,
               files: scope.files,
-              window: abs,
+              window: readAbs,
               cell: { kind: 'time', widthNs: width, baseline },
               epoch,
               byCount: by.length,
@@ -262,14 +280,20 @@ export function metricMethods(ctx: MetricContext): MetricMethods {
           ),
           req.exemplars
             ? engine.query(
-                exemplarsQuery(identity, series, scope.files, abs, epoch, EXEMPLAR_ROWS_CAP + 1, by.length),
+                exemplarsQuery(
+                  identity,
+                  series,
+                  scope.files,
+                  readAbs,
+                  epoch,
+                  EXEMPLAR_ROWS_CAP + 1,
+                  by.length,
+                ),
                 signal,
               )
             : null,
           // The chart colours by service; a summary draws a line per series, so it reads the series themselves.
-          summary
-            ? engine.query(series.clone().limit(RESIDUAL_SERIES_CAP), signal)
-            : engine.query(servicesQuery(series, by), signal),
+          summary ? seriesRowsTable(series, signal) : engine.query(servicesQuery(series, by), signal),
         ]);
         const srcs = by.map((b) => b.src);
         const exemplarPoints =
@@ -390,7 +414,7 @@ export function metricMethods(ctx: MetricContext): MetricMethods {
                     signal,
                   ),
               ),
-          summary ? engine.query(series.clone().limit(RESIDUAL_SERIES_CAP), signal) : null,
+          summary ? seriesRowsTable(series, signal) : null,
         ]);
         const rows = labelRows === null ? [] : seriesRowsFrom(labelRows, by.length);
         return runsFrom(runs, cells, failed, {

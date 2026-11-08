@@ -663,7 +663,10 @@ export function runsFrom(runs: Table, cells: Table, failed: Table | null, a: Run
       if (c.k === 'counter') resets += c.resets;
       if (c.k === 'summary' && c.points > 1 && quantile !== null) coarse = true;
       let value = showValue(c, q.show, quantile);
-      if (kind === 'counter' && q.show === 'rate') value /= Math.max(1, (info[i]?.time ?? 0) / 1e9);
+      // A run has no window of its own: the rate is the increase per second over [epoch, the run's last point], from
+      // that point's exact time (at least 1 ms). The old engine divided by the end of a rollup-level bucket; format 4 has
+      // no levels (D24), so that value cannot be reproduced.
+      if (kind === 'counter' && q.show === 'rate') value /= Math.max(1e6, info[i]?.time ?? 0) / 1e9;
       if (Number.isFinite(value)) points[i] = { value, failed: false };
     }
     lines.push({ key: g.key, label: g.label, unit, points });

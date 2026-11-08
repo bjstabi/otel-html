@@ -438,9 +438,9 @@ describe('counters', () => {
   test('sum is the running total including the deltas before the window, of both series shapes', async () => {
     // A straddles the window (0+20+30 before it), B lies wholly before it (7); the window sits in the second partition.
     const r = await chart(env, 'c', { show: 'sum' }, { start: 25 * S, end: 49.9 * S }, { widthNs: 10 * S });
-    expect(vals(r)).toEqual([97, 147]);
-    // no phantom bucket at 20 s for the point before the window
-    expect(times(r)).toEqual([30 * S, 40 * S]);
+    // the window starts mid-bucket: the 20 s bucket is read whole (A's 30 on top of 20 + 7 before it), none before it
+    expect(vals(r)).toEqual([57, 97, 147]);
+    expect(times(r)).toEqual([20 * S, 30 * S, 40 * S]);
   });
 
   test('sum by group draws only groups with data in the window, with their own baseline', async () => {
@@ -451,7 +451,20 @@ describe('counters', () => {
       { start: 25 * S, end: 49.9 * S },
       { widthNs: 10 * S },
     );
-    expect(r.series.map((s) => [s.label, vals(r, r.series.indexOf(s))])).toEqual([['a', [90, 140]]]);
+    expect(r.series.map((s) => [s.label, vals(r, r.series.indexOf(s))])).toEqual([['a', [50, 90, 140]]]);
+  });
+
+  test('a window starting mid-bucket reads the whole first bucket', async () => {
+    const r = await chart(
+      env,
+      'c',
+      { show: 'increase' },
+      { start: 25 * S, end: 45 * S },
+      { widthNs: 10 * S },
+    );
+    // the 20 s bucket holds A's delta 30 although its point lies before the window; the 40 s bucket is read to its end
+    expect(vals(r)).toEqual([30, 40, 50]);
+    expect(times(r)).toEqual([20 * S, 30 * S, 40 * S]);
   });
 
   test('a reset shows the reset point and gives the note', async () => {
@@ -1074,6 +1087,46 @@ describe('run charts', () => {
     expect(r.lines.map((l) => l.points[0]?.value)).toEqual([10, 20]);
   });
 
+  test('counter lines: rate, increase and sum per run, and a reset inside a run gives the note', async () => {
+    const cnt = (run: string, at: number[], vs: number[]) =>
+      otlp(
+        metricsRequest(
+          [
+            sum(
+              'cnt',
+              pointsAt(sec(...at), (i) => ({ asDouble: vs[i] ?? 0 })),
+              {
+                monotonic: true,
+                temporality: 'cumulative',
+              },
+            ),
+          ],
+          [attr('service.name', str('ci')), attr('cicd.pipeline.run.id', str(run))],
+        ) as never,
+      );
+    const e3 = await openEnv([
+      cnt('r1', [0, 10], [10, 30]),
+      cnt('r2', [90, 110], [5, 55]),
+      cnt('r3', [190, 200, 210], [100, 40, 70]),
+    ]);
+    const go = (show: string) =>
+      e3.m.metricRunQuery({
+        entry: e3.entry('cnt'),
+        query: req('cnt', { show }),
+        window: { start: 0, end: 1000 * S },
+        runBy: RUN,
+        failedWhen: null,
+      });
+    // r1: deltas 0 + 20 = 20 over 10 s; r2: 0 + 50 over 110 s; r3: 0 + 40 (reset, its own value) + 30 = 70 over 210 s
+    const inc = await go('increase');
+    expect(inc.lines.map((l) => l.points.map((p) => p?.value))).toEqual([[20, 50, 70]]);
+    expect(inc.notes).toContain('1 counter reset in range');
+    expect((await go('sum')).lines[0]?.points.map((p) => p?.value)).toEqual([20, 50, 70]);
+    const rate = (await go('rate')).lines[0];
+    expect(rate?.unit).toBe('1/s');
+    expect(rate?.points.map((p) => p?.value)).toEqual([2, 50 / 110, 70 / 210]);
+  });
+
   test('where narrows the series', async () => {
     const r = await runReq(env, { where: 'attributes["job"] == "check"' });
     expect(r.lines.map((l) => l.label)).toEqual(['check']);
@@ -1113,14 +1166,14 @@ describe('@perf the chart query', () => {
       ),
     ).flat();
     const env = await openEnv([otlp(metricsRequest([gauge('big', dataPoints)], resA) as never)]);
-    // The coordinator caches by SQL text: each run moves the window's end by 1 ns so none is a cache hit.
+    // The coordinator caches by SQL text: each run moves the window's end by 17 s (cells read whole buckets, so a smaller step repeats the SQL) so none is a cache hit.
     let n = 0;
     const run = () =>
       chart(
         env,
         'big',
         { by: ['attributes["host"]'], show: 'avg' },
-        { start: 0, end: ALL.end - ++n },
+        { start: 0, end: ALL.end - ++n * 17 * S },
         {
           maxPoints: 600,
         },
@@ -1129,7 +1182,7 @@ describe('@perf the chart query', () => {
     expect(result.series).toHaveLength(50);
     expect(result.widthNs).toBe(16.384 * S);
     // Median of 7 uncached runs on the development machine (Intel Core Ultra 7 265K, factor 1.00), over three
-    // invocations: 230.7, 232.0 and 230.1 ms. The budget is twice the median.
+    // invocations: 231.4, 229.7 and 229.7 ms. The budget is twice the median.
     expect(ms).toBeLessThan(460 * perfFactor());
   }, 300_000);
 });
