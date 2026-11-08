@@ -1,11 +1,10 @@
 import type { ManifestV4 } from '../../format/manifest.js';
 import type { TraceId } from '../../model/ids.js';
 import type { ResourceRecord, ResourceRef, ScopeRecord, ScopeRef } from '../../model/records.js';
-import type { MetricCatalog, MetricEntry } from '../../rollups/metric-catalog.js';
 import type { TimeBuckets } from '../../rollups/time-buckets.js';
 import type { FacetValueKind } from '../components/filter-tokens.js';
 import type { LogRef, LogRow } from './log-query.js';
-import type { LoadedMetric } from './metric-load.js';
+import type { MetricMethods } from './metric-results.js';
 import type {
   LogQuery,
   LogQueryResult,
@@ -39,9 +38,9 @@ export interface ResourceValues {
 
 /**
  * The format-4 data source: the span half, the log half (`queryLogs`, `getLog`, `traceLogs`, `surroundingLogs`,
- * `patterns`, `metricPoints`, `resourceValues`) and the stubs the viewer needs until plan 3 (D11).
+ * `patterns`, `metricPoints`, `resourceValues`) and the metric methods (`MetricMethods`, D30).
  */
-export interface DataSource {
+export interface DataSource extends MetricMethods {
   readonly manifest: ManifestV4;
   readonly epoch: bigint;
   querySpans(q: SpanQuery, signal?: AbortSignal): Promise<SpanQueryResult>;
@@ -71,9 +70,5 @@ export interface DataSource {
   metricPoints(signal?: AbortSignal): Promise<TimeBuckets<'points'>>;
   /** The values of one resource attribute over spans, logs and points, sorted; `capped` when more than the cap exist. */
   resourceValues(key: string, signal?: AbortSignal): Promise<ResourceValues>;
-  /** Rejects with a `usage` error naming plan 3 until metrics are queryable (D11). */
-  metricCatalog(): Promise<MetricCatalog>;
-  metric(id: number): Promise<LoadedMetric>;
-  metricsForResources(resources: readonly ResourceRecord[]): Promise<readonly MetricEntry[]>;
   close(): Promise<void>;
 }

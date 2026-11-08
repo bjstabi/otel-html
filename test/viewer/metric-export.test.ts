@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import type { MetricQueryResult, SeriesPoints } from '../../src/viewer/data/metric-query.js';
+import type { MetricQueryResult, SeriesPoints } from '../../src/viewer/data/metric-results.js';
 import { exportMetricCsv, exportMetricJson } from '../../src/viewer/metrics/export.js';
 
 const S = 1_000_000_000;

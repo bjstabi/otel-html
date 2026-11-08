@@ -8,7 +8,6 @@ import {
   ViewListShapeSchema,
 } from '../dashboards/schema.js';
 import { OtelHtmlError } from '../model/errors.js';
-import { METRIC_FILE_PATH } from './metric-files.js';
 import { TABLES, type Table } from './parquet/columns.js';
 import type { FileStatistics } from './parquet/stats.js';
 import {
@@ -66,6 +65,9 @@ const signal = z.enum(SIGNALS);
 // The viewer loads these entries as script sources, so each must be exactly a layout path: relative,
 // no scheme, no `..`, no leading `_`, nothing outside `data/`.
 const CHUNK_PATH = /^data\/chunks\/(spans|logs|metrics)\/[0-9]{6,}\.js$/;
+// A formats 1 to 3 metric data file: the metric id, then the file name (series, a flush segment, or a level and page).
+const METRIC_FILE_PATH =
+  /^data\/metrics\/([0-9]{6})\/(series|seg-([0-9]{6})|l([0-6])(?:-([0-9]{6}))?|ex([3-6])?(?:-([0-9]{6}))?)\.js$/;
 const ROLLUP_PATH = /^data\/rollups\/[a-z][a-z0-9-]*\.js$/;
 const TRACE_SHARD_PATH = /^data\/traces\/[0-9a-f]{2}\.js$/;
 

@@ -1,8 +1,8 @@
 import { Popover } from '@base-ui/react/popover';
 import { ChevronDown, Search } from 'lucide-react';
 import { type JSX, useMemo, useState } from 'react';
-import type { MetricEntry } from '../../rollups/metric-catalog.js';
-import { metricTypeLabel } from '../data/metric-query.js';
+import type { MetricEntry } from '../data/metric-catalog.js';
+import { metricTypeLabel } from '../data/metric-tables.js';
 
 export const FIELD =
   'inline-flex items-center gap-1.5 whitespace-nowrap rounded-md border border-hairline bg-surface px-2 py-1 text-sm';

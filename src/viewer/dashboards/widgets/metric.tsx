@@ -4,15 +4,14 @@ import { DEFAULT_RUN_CONTROLS } from '../../../dashboards/schema.js';
 import { OtelHtmlError } from '../../../model/errors.js';
 import type { TraceId } from '../../../model/ids.js';
 import type { ResourceRecord } from '../../../model/records.js';
-import type { MetricPageState } from '../../../query/metric-query.js';
+import type { MetricPageState, MetricQuery } from '../../../query/metric-query.js';
 import { ErrorCard, LoadingNote } from '../../components/explorer-states.js';
 import { type ChartPick, MetricChartCard } from '../../components/metric-chart-card.js';
 import { METRIC_CHART_HEIGHT, type MetricSize } from '../../components/metric-chart-option.js';
 import { RunChartCard } from '../../components/run-chart-card.js';
 import type { DataSource } from '../../data/data-source.js';
 import { manifestRange } from '../../data/manifest-range.js';
-import { type MetricQuery, resolveMetric } from '../../data/metric-query.js';
-import { runMetricRunQuery } from '../../data/metric-run-query.js';
+import { resolveMetric } from '../../data/metric-results.js';
 import type { TimeWindow } from '../../data/time-window.js';
 import { exemplarTraceLookup, openChartPick } from '../../metrics/chart-pick.js';
 import { catalogOf, explorerFilter, MetricGrid, type MetricGridOrigin } from '../../metrics/metric-grid.js';
@@ -57,7 +56,7 @@ export function useNarrowing(dataSource: DataSource, traceId: TraceId | null): N
     ): Promise<{ resources: readonly ResourceRecord[]; where: string | null; unexcluded: number }> => {
       const [detail, catalog] = await Promise.all([dataSource.getTrace(id), dataSource.metricCatalog()]);
       const resources = traceResources(detail);
-      const { where, unexcluded } = explorerFilter(resources, catalog.resources());
+      const { where, unexcluded } = explorerFilter(resources, catalog.resources);
       return { resources, where, unexcluded };
     },
     [dataSource],
@@ -286,16 +285,12 @@ const RunBody: Body = ({ widget, scope, dashboard, height, dataSource, actions, 
   const input = useMemo(
     () =>
       ready && entry !== null
-        ? { id: entry.id, q: { ...own, where }, window: { start, end }, runBy, failedWhen }
+        ? { entry, query: { ...own, where }, window: { start, end }, runBy, failedWhen }
         : null,
     [ready, entry, own, where, start, end, runBy, failedWhen],
   );
   const load = useCallback(
-    async (i: NonNullable<typeof input>, signal: AbortSignal) => {
-      const m = await dataSource.metric(i.id);
-      signal.throwIfAborted();
-      return runMetricRunQuery(m, i.q, i, signal);
-    },
+    (i: NonNullable<typeof input>, signal: AbortSignal) => dataSource.metricRunQuery(i, signal),
     [dataSource],
   );
   const result = useKeyedAsync(input, load);
@@ -354,7 +349,7 @@ const GridBody: Body = ({ scope, height, dataSource, actions, variables }) => {
   const start = scope.window?.start ?? run?.start;
   const end = scope.window?.end ?? run?.end;
   const resources = narrowing.status === 'ready' ? narrowing.resources : null;
-  const all = catalog.status === 'ready' ? catalog.value.resources() : null;
+  const all = catalog.status === 'ready' ? catalog.value.resources : null;
   const origin = useMemo((): MetricGridOrigin | null => {
     const wide = resources ?? (narrowing.status === 'off' ? all : null);
     const rs = wide === null ? null : resourcesMatching(wide, variables);

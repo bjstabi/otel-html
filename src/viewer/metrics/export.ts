@@ -1,5 +1,5 @@
 import { csvCell } from '../components/export.js';
-import type { MetricQueryResult } from '../data/metric-query.js';
+import type { MetricQueryResult } from '../data/metric-results.js';
 
 const HEADER = ['time', 'query', 'series', 'value'] as const;
 

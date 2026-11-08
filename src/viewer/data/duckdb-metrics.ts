@@ -429,18 +429,41 @@ export function metricMethods(ctx: MetricContext): MetricMethods {
     );
   }
 
+  // Show options do not depend on the window: one read per entry, dropped again when it fails.
+  const showOptions = new Map<number, Promise<readonly string[]>>();
+  async function showOptionsOf(entryId: number): Promise<readonly string[]> {
+    const cat = await metricCatalog();
+    const entry = cat.entries[entryId];
+    const identity = cat.identities[entryId];
+    if (entry === undefined || identity === undefined) {
+      throw usage('metric entry', 'an entry of the catalog', String(entryId));
+    }
+    const kind = kindOf(entry);
+    if (kind !== 'summary') return SHOW_BY_KIND[kind];
+    // `points` keeps `metric_name` statistics: a partition without the metric is not read.
+    const { filter } = buildFilter({
+      manifest,
+      table: 'points',
+      condition: null,
+      text: '',
+      window: null,
+      hints: new Map([['metric_name', new Set([identity.name])]]),
+    });
+    return summaryShowOptions(await engine.query(summaryQuantilesQuery(identity, filter.files)));
+  }
+
   return {
     metricCatalog,
-    async metricShowOptions(entryId) {
-      const cat = await metricCatalog();
-      const entry = cat.entries[entryId];
-      const identity = cat.identities[entryId];
-      if (entry === undefined || identity === undefined) {
-        throw usage('metric entry', 'an entry of the catalog', String(entryId));
-      }
-      const kind = kindOf(entry);
-      if (kind !== 'summary') return SHOW_BY_KIND[kind];
-      return summaryShowOptions(await engine.query(summaryQuantilesQuery(identity)));
+    metricShowOptions(entryId) {
+      const held = showOptions.get(entryId);
+      if (held !== undefined) return held;
+      const run = showOptionsOf(entryId);
+      showOptions.set(entryId, run);
+      // A rejection is not kept: the next call retries.
+      run.catch(() => {
+        if (showOptions.get(entryId) === run) showOptions.delete(entryId);
+      });
+      return run;
     },
     metricQuery,
     metricRunQuery,

@@ -1,5 +1,5 @@
 import type { JSX } from 'react';
-import type { RunInfo, RunQueryResult } from '../data/metric-run-query.js';
+import type { RunInfo, RunQueryResult } from '../data/metric-results.js';
 import { formatMetricValue } from './metric-chart-option.js';
 import { shortLabel } from './run-chart-format.js';
 

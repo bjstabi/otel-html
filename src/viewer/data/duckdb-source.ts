@@ -50,6 +50,7 @@ import { TimeBuckets } from '../../rollups/time-buckets.js';
 import { LOG_SEVERITY_KEYS } from '../../semconv/severity.js';
 import { durationAxis } from '../traces/views.js';
 import type { DataSource, TraceDetail } from './data-source.js';
+import { metricMethods } from './duckdb-metrics.js';
 import { checkSurroundingCount, type LogRef, type LogRow } from './log-query.js';
 import {
   type LogRowEntry,
@@ -143,13 +144,6 @@ function sortOf<C extends string>(
     });
   }
   return { column, dir: sort.dir };
-}
-
-/** The D11 error: the Metrics pages show its message as their error state. */
-function planThree(): OtelHtmlError {
-  return new OtelHtmlError('usage', {
-    message: 'Metrics are not available in this build yet; they arrive with format-4 plan 3',
-  });
 }
 
 function emptyResult(caps: typeof DEFAULT_FACET_CAPS, residual: string | null): SpanQueryResult {
@@ -747,9 +741,7 @@ export function createDuckDbDataSource(opts: {
         caps.facetValueCap,
       );
     },
-    metricCatalog: () => Promise.reject(planThree()),
-    metric: () => Promise.reject(planThree()),
-    metricsForResources: () => Promise.reject(planThree()),
+    ...metricMethods({ engine, manifest, epoch, range }),
     close: () => engine.close(),
   };
 }

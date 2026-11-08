@@ -414,12 +414,9 @@ describe('the other questions', () => {
     await expect(ds.getTrace(parseTraceId(hex(99, 32), 'test'))).rejects.toMatchObject({ code: 'usage' });
   });
 
-  test('metrics reject with a usage error naming plan 3', async () => {
-    for (const p of [ds.metricCatalog(), ds.metric(1), ds.metricsForResources([])]) {
-      await expect(p).rejects.toSatisfy(
-        (e: unknown) => e instanceof OtelHtmlError && e.code === 'usage' && /plan 3/.test(e.message),
-      );
-    }
+  test('the metric methods answer from points', async () => {
+    expect(await ds.metricCatalog()).toMatchObject({ entries: [], resources: [], scopes: [] });
+    expect(await ds.metricsForResources([])).toEqual([]);
   });
 
   test('manifest and epoch are the report’s', () => {

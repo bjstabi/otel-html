@@ -13,7 +13,7 @@ import { SHOW_BY_KIND } from './metric-tables.js';
 import { cell, rowsOf, toNumber } from './span-results.js';
 import type { TimeWindow } from './time-window.js';
 
-/** Request and result shapes of the metric data layer (copied from `metric-query.ts`; the originals go in PR 5). */
+/** Request and result shapes of the metric data layer. */
 
 export interface SeriesPoints {
   key: string;

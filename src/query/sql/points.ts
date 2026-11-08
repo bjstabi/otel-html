@@ -101,11 +101,17 @@ export function metricSparkQuery(spec: BucketSpec, epoch: bigint): Query {
     .orderby(...IDENTITY_COLUMNS.map((c) => sql`${verbatim(c)}`), sql`bucket`);
 }
 
-/** The distinct `q` (DOUBLE) values of the definition's `quantiles` JSON, ascending (a whole-numbered quantile is stored as `{"$d": "1"}`). */
-export function summaryQuantilesQuery(identity: MetricIdentity): Query {
+/** The distinct `q` (DOUBLE) values of the definition's `quantiles` JSON (in `files` when given), ascending (a whole-numbered quantile is stored as `{"$d": "1"}`). */
+export function summaryQuantilesQuery(identity: MetricIdentity, files?: Pruned): Query {
   const entries = Query.from('points')
     .select({ e: sql`unnest(from_json(quantiles, '["JSON"]'))` })
-    .where(and(...identityTerms(identity), sql`quantiles IS NOT NULL`));
+    .where(
+      and(
+        ...identityTerms(identity),
+        ...(files === undefined ? [] : [filenameTerm(files)].filter((t) => t !== null)),
+        sql`quantiles IS NOT NULL`,
+      ),
+    );
   return Query.from({ t: entries })
     .distinct()
     .select({
@@ -247,7 +253,8 @@ export function cellExpr(cell: Cell, epoch: bigint, window: AbsWindow | null = n
 }
 
 /** Across-series aggregate per `show` of a number metric (COMBINE.number.byShow of the viewer). */
-const NUMBER_SHOWS = {
+// Exported as the parity hook for the viewer's COMBINE test.
+export const NUMBER_SHOWS = {
   avg: { per: 'a', across: 'avg' },
   min: { per: 'mn', across: 'min' },
   max: { per: 'mx', across: 'max' },

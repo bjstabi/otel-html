@@ -58,7 +58,7 @@ export function rejectPerPointPaths(paths: readonly PathValue[]): void {
 }
 
 /** Whether any path reads a series' identity (attributes, resource, scope), which `other` cannot answer. */
-export const readsIdentity = (paths: readonly PathValue[]): boolean =>
+const readsIdentity = (paths: readonly PathValue[]): boolean =>
   paths.some((p) => IDENTITY_ROOTS.has(canonical(p)[0] ?? ''));
 
 export interface CompiledBy {

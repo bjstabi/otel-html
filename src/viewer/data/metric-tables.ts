@@ -1,5 +1,5 @@
 import { assertNever, OtelHtmlError } from '../../model/errors.js';
-import type { MetricDef, MetricEntry } from '../../rollups/metric-catalog.js';
+import type { MetricDef, MetricEntry } from './metric-catalog.js';
 
 /** The metric query engine's domain rules, as data (spec §6.1). */
 
@@ -24,7 +24,7 @@ export function kindOf(e: MetricDef): MetricKind {
 
 const HIST_SHOW = ['p50', 'p75', 'p90', 'p95', 'p99', 'count', 'sum', 'avg'] as const;
 
-/** Summary quantile options are `q<quantile>` per quantile present (`showOptions`); listed here are the fixed ones. */
+/** Summary quantile options are `q<quantile>` per quantile present (`metricShowOptions`); listed here are the fixed ones. */
 export const SHOW_BY_KIND: Record<MetricKind, readonly string[]> = {
   counter: ['rate', 'increase', 'sum'],
   number: ['avg', 'min', 'max', 'last'],
@@ -33,7 +33,7 @@ export const SHOW_BY_KIND: Record<MetricKind, readonly string[]> = {
   summary: ['count', 'sum'],
 };
 
-/** `qmax` is the highest quantile present, resolved when the query runs; `defaultShow(m)` gives the concrete `q…`. */
+/** `qmax` is the highest quantile present, resolved when the query runs; `defaultShowOf` gives the concrete `q…`. */
 export const SUMMARY_TOP_QUANTILE = 'qmax';
 
 export const DEFAULT_SHOW: Record<MetricKind, string> = {
@@ -44,6 +44,15 @@ export const DEFAULT_SHOW: Record<MetricKind, string> = {
   summary: SUMMARY_TOP_QUANTILE,
 };
 
+/**
+ * The `show` a metric opens with: `DEFAULT_SHOW`, except a summary's highest quantile made concrete from its show
+ * `options` (`count` when it has none).
+ */
+export function defaultShowOf(kind: MetricKind, options: readonly string[]): string {
+  if (kind !== 'summary') return DEFAULT_SHOW[kind];
+  return options.filter((o) => QUANTILE_SHOW.test(o)).at(-1) ?? 'count';
+}
+
 export const PERCENTILES: Readonly<Record<string, number>> = {
   p50: 0.5,
   p75: 0.75,
@@ -52,37 +61,11 @@ export const PERCENTILES: Readonly<Record<string, number>> = {
   p99: 0.99,
 };
 
-export type Across = 'mean' | 'min' | 'max' | 'sum';
-export type CombineRule =
-  /** Deltas add. */
-  | { rule: 'add' }
-  /** Bucket counts merge; `splitByBounds` keeps one line per explicit-bounds set. */
-  | { rule: 'merge'; splitByBounds: boolean }
-  /** Each series' bucket value, then this across-series aggregation per `show`. */
-  | { rule: 'across'; byShow: Readonly<Record<string, Across>> }
-  /** Never combined: implicitly grouped by series. */
-  | { rule: 'never' };
-
-/** How series combine within a `by` group (spec §6.1). */
-export const COMBINE: Record<MetricKind, CombineRule> = {
-  counter: { rule: 'add' },
-  number: { rule: 'across', byShow: { avg: 'mean', min: 'min', max: 'max', last: 'sum' } },
-  hist: { rule: 'merge', splitByBounds: true },
-  exp: { rule: 'merge', splitByBounds: false },
-  summary: { rule: 'never' },
-};
-
 export const NOTES = {
   boundsDiffer: 'histogram bounds differ',
   heatBoundsDiffer: 'histogram bounds differ across series: no heatmap or distribution',
   summariesNotCombined: 'summaries are not combined',
   summaryCoarse: 'summary quantiles from the last point per bucket',
-  quantilesFromLevel:
-    'quantile options read from the coarsest level (report written before they were recorded): one a series stopped sending early may be missing',
-  fromSegments: 'report unfinished: series merged from flush segments',
-  partial: (n: number) => `partial: ${n} points folded into other`,
-  foldedEvicted: (n: number) =>
-    `other is approximate: ${n} folded series lost one change each when there were too many to track`,
   resets: (n: number) => `${n} counter reset${n === 1 ? '' : 's'} in range`,
   residual: (term: string) => `Evaluated in the browser: ${term}`,
   exemplarsCapped: 'exemplars capped: the oldest 5 000 exemplar points are shown',
@@ -106,6 +89,27 @@ export function checkShow(kind: MetricKind, show: string): void {
     });
   }
 }
+
+type Across = 'mean' | 'min' | 'max' | 'sum';
+export type CombineRule =
+  /** Deltas add. */
+  | { rule: 'add' }
+  /** Bucket counts merge; `splitByBounds` keeps one line per explicit-bounds set. */
+  | { rule: 'merge'; splitByBounds: boolean }
+  /** Each series' bucket value, then this across-series aggregation per `show`. */
+  | { rule: 'across'; byShow: Readonly<Record<string, Across>> }
+  /** Never combined: implicitly grouped by series. */
+  | { rule: 'never' };
+
+/** How series combine within a `by` group (spec §6.1). */
+// D21's kind-table data, pinned by the parity test against NUMBER_SHOWS.
+export const COMBINE: Record<MetricKind, CombineRule> = {
+  counter: { rule: 'add' },
+  number: { rule: 'across', byShow: { avg: 'mean', min: 'min', max: 'max', last: 'sum' } },
+  hist: { rule: 'merge', splitByBounds: true },
+  exp: { rule: 'merge', splitByBounds: false },
+  summary: { rule: 'never' },
+};
 
 /** The badge a metric definition shows (picker, Catalog): its point type, a monotonic sum told apart. */
 type MetricTypeBadge = MetricDef['type'] | 'monotonicSum';

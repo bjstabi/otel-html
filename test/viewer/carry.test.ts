@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import type { SpanId, TraceId } from '../../src/model/ids.js';
+import type { MetricQuery } from '../../src/query/metric-query.js';
 import { parseLogRef } from '../../src/viewer/data/log-query.js';
-import type { MetricQuery } from '../../src/viewer/data/metric-query.js';
 import { applyPatch, carryTo, metricWindowLink } from '../../src/viewer/state/carry.js';
 import { EMPTY_DASHBOARD_STATE } from '../../src/viewer/state/dashboard-state.js';
 import {
