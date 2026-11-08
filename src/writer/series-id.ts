@@ -1,7 +1,16 @@
 import { canonicalAttributesKey } from '../model/interner.js';
 import type { MetricPointRecord, ResourceRecord, ScopeRecord } from '../model/records.js';
-import { boundsOf } from '../rollups/metric-catalog.js';
 import { hash32 } from '../rollups/metric-streams.js';
+
+/** Explicit bucket bounds of a histogram point; `null` for every other type. */
+function boundsOf(p: MetricPointRecord): number[] | null {
+  if (p.type !== 'histogram') return null;
+  const raw: unknown =
+    typeof p.point === 'object' && p.point !== null ? Reflect.get(p.point, 'explicitBounds') : [];
+  if (!Array.isArray(raw)) return [];
+  // Non-finite bounds are malformed points that the stream normalizer rejects; they never name a series.
+  return raw.map((b: unknown) => Number(b)).filter((b) => Number.isFinite(b));
+}
 
 // Four independent 32-bit xor-multiply hashes (FNV-1a basis and prime first), concatenated: 128 bits.
 const HASHES: readonly (readonly [number, number])[] = [

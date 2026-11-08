@@ -11,7 +11,7 @@ import { init, use } from 'echarts/core';
 import { SVGRenderer } from 'echarts/renderers';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { RunControls } from '../../src/dashboards/schema.js';
-import type { RunLine, RunQueryResult } from '../../src/viewer/data/metric-run-query.js';
+import type { RunLine, RunQueryResult } from '../../src/viewer/data/metric-results.js';
 import { ColorsProvider, useColorAssigner } from '../../src/viewer/theme/colors-context.js';
 
 use([

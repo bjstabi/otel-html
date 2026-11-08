@@ -1,5 +1,5 @@
 import type { RunControls } from '../../dashboards/schema.js';
-import type { RunInfo, RunLine, RunQueryResult } from '../data/metric-run-query.js';
+import type { RunInfo, RunLine, RunQueryResult } from '../data/metric-results.js';
 import { type ColorAssigner, STATUS, seriesToken } from '../theme/palette.js';
 import type { ChartProps } from './chart.js';
 import { escapeHtml, formatMetricValue, mergeEchartsOption, token } from './metric-chart-option.js';

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
+import type { MetricQuery } from '../../src/query/metric-query.js';
 import type { MetricEntry } from '../../src/viewer/data/metric-catalog.js';
-import type { MetricQuery } from '../../src/viewer/data/metric-query.js';
 import { defaultMetricState } from '../../src/viewer/state/metric-state.js';
 
 function query(over: Partial<MetricQuery>): MetricQuery {

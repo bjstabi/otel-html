@@ -6,7 +6,7 @@ import {
   sharedUnit,
   uniqueLabels,
 } from '../../src/viewer/components/metric-chart-option.js';
-import type { MetricQueryResult, SeriesPoints } from '../../src/viewer/data/metric-query.js';
+import type { MetricQueryResult, SeriesPoints } from '../../src/viewer/data/metric-results.js';
 import { createColorAssigner } from '../../src/viewer/theme/palette.js';
 
 interface Opt {

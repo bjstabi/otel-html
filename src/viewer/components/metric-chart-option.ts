@@ -1,6 +1,6 @@
 import type { METRIC_DISPLAYS, METRIC_SCALES } from '../../query/metric-query.js';
 import { formatBytes, formatDuration } from '../../semconv/formatters.js';
-import type { MetricQueryResult, SeriesPoints } from '../data/metric-query.js';
+import type { MetricQueryResult, SeriesPoints } from '../data/metric-results.js';
 import type { TimeWindow } from '../data/time-window.js';
 import { type ColorAssigner, seriesToken } from '../theme/palette.js';
 import type { ChartProps } from './chart.js';

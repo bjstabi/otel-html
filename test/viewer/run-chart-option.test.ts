@@ -20,7 +20,7 @@ import {
   runYAxes,
   zoomFromEvent,
 } from '../../src/viewer/components/run-chart-option.js';
-import type { RunLine, RunQueryResult } from '../../src/viewer/data/metric-run-query.js';
+import type { RunLine, RunQueryResult } from '../../src/viewer/data/metric-results.js';
 import { createColorAssigner, STATUS } from '../../src/viewer/theme/palette.js';
 
 use([

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
-import type { MetricPageState } from '../../src/query/metric-query.js';
-import type { MetricQuery, MetricQueryResult } from '../../src/viewer/data/metric-query.js';
+import type { MetricPageState, MetricQuery } from '../../src/query/metric-query.js';
+import type { MetricQueryResult } from '../../src/viewer/data/metric-results.js';
 import { buildPlots } from '../../src/viewer/metrics/plots.js';
 import { defaultMetricState } from '../../src/viewer/state/metric-state.js';
 

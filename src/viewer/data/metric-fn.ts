@@ -1,5 +1,6 @@
 import { OtelHtmlError } from '../../model/errors.js';
-import type { MetricFn, SeriesPoints } from './metric-query.js';
+import type { MetricFn } from '../../query/metric-query.js';
+import type { SeriesPoints } from './metric-results.js';
 
 type Point = [number, number | null];
 

@@ -1,7 +1,7 @@
 import { parseSpanId, parseTraceId } from '../../model/ids.js';
+import type { MetricQuery } from '../../query/metric-query.js';
 import type { ChartPick } from '../components/metric-chart-card.js';
 import type { DataSource } from '../data/data-source.js';
-import type { MetricQuery } from '../data/metric-query.js';
 import type { TimeWindow } from '../data/time-window.js';
 import type { GoTo } from '../shell/go-to.js';
 import { metricWindowLink } from '../state/carry.js';

@@ -1,5 +1,5 @@
 import { assertNever, OtelHtmlError } from '../../model/errors.js';
-import type { MetricDef, MetricEntry } from '../../rollups/metric-catalog.js';
+import type { MetricDef, MetricEntry } from './metric-catalog.js';
 
 /** The metric query engine's domain rules, as data (spec §6.1). */
 
@@ -61,37 +61,11 @@ export const PERCENTILES: Readonly<Record<string, number>> = {
   p99: 0.99,
 };
 
-export type Across = 'mean' | 'min' | 'max' | 'sum';
-export type CombineRule =
-  /** Deltas add. */
-  | { rule: 'add' }
-  /** Bucket counts merge; `splitByBounds` keeps one line per explicit-bounds set. */
-  | { rule: 'merge'; splitByBounds: boolean }
-  /** Each series' bucket value, then this across-series aggregation per `show`. */
-  | { rule: 'across'; byShow: Readonly<Record<string, Across>> }
-  /** Never combined: implicitly grouped by series. */
-  | { rule: 'never' };
-
-/** How series combine within a `by` group (spec §6.1). */
-export const COMBINE: Record<MetricKind, CombineRule> = {
-  counter: { rule: 'add' },
-  number: { rule: 'across', byShow: { avg: 'mean', min: 'min', max: 'max', last: 'sum' } },
-  hist: { rule: 'merge', splitByBounds: true },
-  exp: { rule: 'merge', splitByBounds: false },
-  summary: { rule: 'never' },
-};
-
 export const NOTES = {
   boundsDiffer: 'histogram bounds differ',
   heatBoundsDiffer: 'histogram bounds differ across series: no heatmap or distribution',
   summariesNotCombined: 'summaries are not combined',
   summaryCoarse: 'summary quantiles from the last point per bucket',
-  quantilesFromLevel:
-    'quantile options read from the coarsest level (report written before they were recorded): one a series stopped sending early may be missing',
-  fromSegments: 'report unfinished: series merged from flush segments',
-  partial: (n: number) => `partial: ${n} points folded into other`,
-  foldedEvicted: (n: number) =>
-    `other is approximate: ${n} folded series lost one change each when there were too many to track`,
   resets: (n: number) => `${n} counter reset${n === 1 ? '' : 's'} in range`,
   residual: (term: string) => `Evaluated in the browser: ${term}`,
   exemplarsCapped: 'exemplars capped: the oldest 5 000 exemplar points are shown',

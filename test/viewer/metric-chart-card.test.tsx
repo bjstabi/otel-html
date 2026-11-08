@@ -34,7 +34,7 @@ vi.mock('../../src/viewer/components/chart.js', async () => {
 });
 
 import { type ChartPick, MetricChartCard } from '../../src/viewer/components/metric-chart-card.js';
-import type { MetricQueryResult } from '../../src/viewer/data/metric-query.js';
+import type { MetricQueryResult } from '../../src/viewer/data/metric-results.js';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 afterEach(() => {
