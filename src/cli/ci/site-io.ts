@@ -84,9 +84,13 @@ const SHARED = 'assets';
  */
 export async function ensureSharedAssets(site: string, version: string, deps: WriterDeps): Promise<void> {
   const target = join(site, SHARED, version);
+  // A crashed publish leaves its scratch folder behind (another pid names the next one); a later `git add -A` of the
+  // site would commit it. The site lease serializes writers, so no scratch folder under `assets/` is live.
+  for (const e of await readdir(join(site, SHARED)).catch(() => [] as string[])) {
+    if (/^\..*\.tmp-/.test(e)) await rm(join(site, SHARED, e), { recursive: true, force: true });
+  }
   if (await exists(target)) return;
   const scratch = join(site, SHARED, `.${version}.tmp-${process.pid}`);
-  await rm(scratch, { recursive: true, force: true });
   try {
     for (const f of await deps.viewerAssets.files('site')) {
       const rel = f.path.replace(/^assets\//, '');
@@ -101,9 +105,10 @@ export async function ensureSharedAssets(site: string, version: string, deps: Wr
   }
 }
 
+/** Whether `p` is a folder with something in it: an empty version folder (a manual or partial copy) is not complete. */
 const exists = (p: string): Promise<boolean> =>
   readdir(p).then(
-    () => true,
+    (names) => names.length > 0,
     () => false,
   );
 
@@ -142,7 +147,10 @@ export async function pruneAssets(
       if (input.kind !== 'partitions') continue;
       const base = input.manifest.engine.assetsBase;
       if (!ASSETS_BASE_RE.test(base)) continue;
-      const version = base.split('/').filter((x) => x !== '' && x !== '..' && x !== SHARED)[0];
+      // the segment after the last `assets` (a version may itself be named `assets`)
+      const segments = base.split('/').filter((x) => x !== '');
+      const version = segments[segments.lastIndexOf(SHARED, segments.length - 2) + 1];
+      if (segments.length < 2 || version === undefined) continue;
       if (version !== undefined) referenced.add(version);
     } catch (e) {
       warn(`assets not pruned: cannot read ${folder}: ${e instanceof Error ? e.message : String(e)}`);

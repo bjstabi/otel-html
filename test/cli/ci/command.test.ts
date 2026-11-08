@@ -183,6 +183,17 @@ describe('otel-html ci report step summary', { timeout: 60_000 }, () => {
   test('--no-summary leaves the job summary to `ci link`', async () => {
     expect(await report(['--no-summary'])).toBe('');
   });
+
+  test('writes a site report with its own assets/, so a downloaded artifact opens over any static server', async () => {
+    await report([]);
+    const manifest = readFileSync(join(dir, 'out', 'data', 'manifest.js'), 'utf8');
+    expect(manifest).toContain('"format":"site"');
+    expect(manifest).toContain('"assetsBase":"assets/"');
+    const names = readdirSync(join(dir, 'out', 'assets'));
+    expect(names).toContain('duckdb.1.32.0.wasm');
+    expect(names).toContain('parquet.1.32.0.duckdb_extension.wasm');
+    expect(names.some((n) => n.endsWith('.b64.js'))).toBe(false);
+  });
 });
 
 describe('otel-html ci context', () => {

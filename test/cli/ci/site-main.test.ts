@@ -1,9 +1,19 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { createReportWith, resolveDeps } from '../../../src/api/report.js';
 import type { ApiRun } from '../../../src/cli/ci/github-api.js';
+import { pruneAssets } from '../../../src/cli/ci/site-io.js';
 import { runCleanup, runSite } from '../../../src/cli/ci/site-main.js';
 import type { CliIo } from '../../../src/cli/io.js';
 import type { WriterDeps } from '../../../src/writer/session.js';
@@ -166,5 +176,29 @@ describe('runSite in site format', () => {
     expect(readdirSync(join(site, 'assets')).sort()).toEqual(['0.0.1', VERSION]);
     await runCleanup({ site, pr: 5, repository: 'o/r' }, io(), deps);
     expect(readdirSync(join(site, 'assets'))).toEqual([VERSION]);
+  });
+
+  test('a scratch folder a crashed publish left under assets/ is swept', async () => {
+    mkdirSync(join(site, 'assets', '.9.9.9.tmp-1234'), { recursive: true });
+    writeFileSync(join(site, 'assets', '.9.9.9.tmp-1234', 'viewer.old.js'), 'x');
+    mkdirSync(join(site, 'assets', '.0.0.1.tmp-77'), { recursive: true });
+    await publish(await runReport('a', 1), 1);
+    expect(readdirSync(join(site, 'assets'))).toEqual([VERSION]);
+  });
+
+  test('an empty version folder is not a complete version and is filled', async () => {
+    mkdirSync(join(site, 'assets', VERSION), { recursive: true });
+    await publish(await runReport('a', 1), 1);
+    expect(readdirSync(join(site, 'assets', VERSION))).toContain('viewer.abc123.js');
+  });
+
+  test('an unreadable manifest prunes nothing and warns', async () => {
+    mkdirSync(join(site, 'assets', '0.0.1'), { recursive: true });
+    mkdirSync(join(site, 'pr/3/data'), { recursive: true });
+    writeFileSync(join(site, 'pr/3/data/manifest.js'), 'not a manifest');
+    const warnings: string[] = [];
+    expect(await pruneAssets(site, deps, (m) => warnings.push(m))).toEqual([]);
+    expect(existsSync(join(site, 'assets', '0.0.1'))).toBe(true);
+    expect(warnings.join()).toContain('pr/3');
   });
 });
