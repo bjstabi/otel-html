@@ -49,7 +49,7 @@ describe.skipIf(process.platform === 'win32')('site-publish.sh', { timeout: 30_0
   test('screenshots a rebuilt branch report', () => {
     const r = run(command(['channel=branch/main', 'rolling=built']), previewStub(0));
     expect(r.status).toBe(0);
-    expect(readFileSync(calls, 'utf8').trim()).toBe('/site/branch/main');
+    expect(readFileSync(calls, 'utf8').trim()).toBe('/site branch/main');
   });
   test('skips a stub rolling report', () => {
     expect(run(command(['channel=branch/main', 'rolling=stub']), previewStub(0)).status).toBe(0);

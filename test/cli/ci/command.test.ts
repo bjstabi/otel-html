@@ -183,6 +183,15 @@ describe('otel-html ci report step summary', { timeout: 60_000 }, () => {
   test('--no-summary leaves the job summary to `ci link`', async () => {
     expect(await report(['--no-summary'])).toBe('');
   });
+
+  test('writes a local report, so the downloaded artifact opens from file://', async () => {
+    await report([]);
+    const manifest = readFileSync(join(dir, 'out', 'data', 'manifest.js'), 'utf8');
+    expect(manifest).toContain('"format":"local"');
+    const names = readdirSync(join(dir, 'out', 'assets'));
+    expect(names.some((n) => n.endsWith('.b64.js'))).toBe(true);
+    expect(names).not.toContain('duckdb.1.32.0.wasm');
+  });
 });
 
 describe('otel-html ci context', () => {
@@ -463,7 +472,7 @@ describe('otel-html ci site and cleanup', { timeout: 60_000 }, () => {
   test('a run on neither the default branch nor an open pull request is not published', async () => {
     stubApi({ 44: runBody(44, 'feature') });
     const f = fakeIo();
-    expect(await runCli(siteArgs(44), f.io, deps)).toBe(0);
+    expect(await runCli(siteArgs(44), f.io, realFsDeps)).toBe(0);
     expect(f.out()).toContain('::notice::otel-html site: run 44 (feature) has no open pull request');
     expect(f.out()).toContain('published=false');
     expect(existsSync(site)).toBe(false);
@@ -478,7 +487,7 @@ describe('otel-html ci site and cleanup', { timeout: 60_000 }, () => {
         head: { sha: 'zzz', ref: 'main', repo: { full_name: 'fork/r' } },
       },
     ]);
-    expect(await runCli(siteArgs(60), fakeIo().io, deps)).toBe(0);
+    expect(await runCli(siteArgs(60), fakeIo().io, realFsDeps)).toBe(0);
     expect(existsSync(join(site, 'branch/main/runs/60/data/manifest.js'))).toBe(true);
     expect(existsSync(join(site, 'pr'))).toBe(false);
   });
@@ -486,7 +495,7 @@ describe('otel-html ci site and cleanup', { timeout: 60_000 }, () => {
   test('an unreadable run is an ::error:: and exit 1', async () => {
     stubApi({});
     const f = fakeIo();
-    expect(await runCli(siteArgs(45), f.io, deps)).toBe(1);
+    expect(await runCli(siteArgs(45), f.io, realFsDeps)).toBe(1);
     expect(f.out()).toContain('::error::otel-html site:');
   });
 
@@ -549,7 +558,7 @@ describe('otel-html ci site and cleanup', { timeout: 60_000 }, () => {
       }),
     );
     stubApi({ 50: runBody(50, 'feat/topic') }, [topicPull]);
-    expect(await runCli(siteArgs(50), fakeIo().io, deps)).toBe(0);
+    expect(await runCli(siteArgs(50), fakeIo().io, realFsDeps)).toBe(0);
     const index = JSON.parse(readFileSync(join(site, 'index.json'), 'utf8'));
     const ids = index.channels['pr/7'].runs.map((r: { runId: number }) => r.runId);
     expect(ids).toHaveLength(11);
@@ -603,7 +612,7 @@ describe('otel-html ci site and cleanup', { timeout: 60_000 }, () => {
     );
     stubApi({ 42: runBody(42) });
     const f = fakeIo();
-    expect(await runCli(siteArgs(42), f.io, deps)).toBe(0);
+    expect(await runCli(siteArgs(42), f.io, realFsDeps)).toBe(0);
     expect(f.out()).toContain('removed the per-workflow channels ci, load');
     expect(existsSync(join(site, 'ci'))).toBe(false);
     expect(existsSync(join(site, 'load'))).toBe(false);
@@ -626,11 +635,11 @@ describe('otel-html ci site and cleanup', { timeout: 60_000 }, () => {
     );
     stubApi({ 42: runBody(42) });
     const f = fakeIo();
-    expect(await runCli(siteArgs(42), f.io, deps)).toBe(0);
+    expect(await runCli(siteArgs(42), f.io, realFsDeps)).toBe(0);
     expect(f.out()).toContain('::warning::otel-html site: skipping channel tag/v1 of kind tag');
     const g = fakeIo();
     expect(
-      await runCli(['ci', 'cleanup', '--site', site, '--pr', '1', '--repository', 'o/r'], g.io, deps),
+      await runCli(['ci', 'cleanup', '--site', site, '--pr', '1', '--repository', 'o/r'], g.io, realFsDeps),
     ).toBe(0);
   });
 
@@ -653,7 +662,7 @@ describe('otel-html ci site and cleanup', { timeout: 60_000 }, () => {
 
   test('cleanup removes the pull request channel and folder; an unknown one is cleaned=false', async () => {
     stubApi({ 50: runBody(50, 'feat/topic') }, [topicPull]);
-    expect(await runCli(siteArgs(50), fakeIo().io, deps)).toBe(0);
+    expect(await runCli(siteArgs(50), fakeIo().io, realFsDeps)).toBe(0);
     expect(existsSync(join(site, 'pr/7/runs/50/data/manifest.js'))).toBe(true);
 
     const outputs = join(dir, 'gh-output');
