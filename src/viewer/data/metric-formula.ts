@@ -1,6 +1,6 @@
 import { OtelHtmlError } from '../../model/errors.js';
 import { type FormulaAst, formulaRefs } from '../../query/metric-formula.js';
-import type { MetricQueryResult, SeriesPoints } from './metric-query.js';
+import type { MetricQueryResult, SeriesPoints } from './metric-results.js';
 
 function operands(ast: FormulaAst, results: ReadonlyMap<string, MetricQueryResult>): MetricQueryResult[] {
   return formulaRefs(ast).map((id) => {

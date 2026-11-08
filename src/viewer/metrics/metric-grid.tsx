@@ -4,13 +4,13 @@ import { anyValueToDisplay } from '../../model/anyvalue.js';
 import type { RelNanos, TraceId } from '../../model/ids.js';
 import type { ResourceRecord } from '../../model/records.js';
 import { MAX_METRIC_QUERIES, type MetricPageState } from '../../query/metric-query.js';
-import type { MetricCatalog, MetricEntry } from '../../rollups/metric-catalog.js';
 import { compareNamespaces, metricNamespace } from '../../semconv/metric-namespaces.js';
 import { tokenValue } from '../components/attribute-filter.js';
 import { ErrorCard, PILL } from '../components/explorer-states.js';
 import { type ChartPick, MetricChartCard } from '../components/metric-chart-card.js';
 import { METRIC_CHART_HEIGHT, type MetricSize } from '../components/metric-chart-option.js';
 import type { DataSource } from '../data/data-source.js';
+import type { MetricCatalogData, MetricEntry } from '../data/metric-catalog.js';
 import { resourceKey } from '../data/metric-catalog.js';
 import type { LoadedMetric } from '../data/metric-load.js';
 import {
@@ -179,7 +179,7 @@ function distinctResources(resources: readonly ResourceRecord[]): ResourceRecord
 export type MetricSource = Pick<DataSource, 'metricCatalog' | 'metric' | 'metricsForResources' | 'hasTrace'>;
 
 /** `ds.metricCatalog()` as a stable function, for `useKeyedAsync(dataSource, catalogOf)`. */
-export const catalogOf = (ds: Pick<DataSource, 'metricCatalog'>): Promise<MetricCatalog> =>
+export const catalogOf = (ds: Pick<DataSource, 'metricCatalog'>): Promise<MetricCatalogData> =>
   ds.metricCatalog();
 
 /** Whether any of `resources` has metric series; false while the lookup runs or after it failed. */
@@ -416,7 +416,7 @@ export function MetricGrid(
   // Every resource that reports one of the grid's metrics: the link's `where` must not match the others.
   const linkFilter = useMemo((): ExplorerFilter | null => {
     if (catalogState.status !== 'ready' || listed.status !== 'ready') return null;
-    const all = catalogState.value.resources();
+    const all = catalogState.value.resources;
     const refs = new Set(listed.value.flatMap((e) => e.resources));
     return explorerFilter(
       resources,

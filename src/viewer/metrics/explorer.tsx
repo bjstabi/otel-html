@@ -1,7 +1,6 @@
 import { type JSX, useCallback, useEffect, useMemo, useState } from 'react';
 import type { ManifestV4 } from '../../format/manifest.js';
 import { MAX_METRIC_QUERIES, type MetricPageState } from '../../query/metric-query.js';
-import type { MetricEntry } from '../../rollups/metric-catalog.js';
 import { ErrorCard, LoadingNote, PILL } from '../components/explorer-states.js';
 import { downloadBlob } from '../components/export.js';
 import { type ChartPick, MetricChartCard } from '../components/metric-chart-card.js';
@@ -9,7 +8,9 @@ import { seriesColorKey } from '../components/metric-chart-option.js';
 import { copyWidgetItem } from '../dashboards/copy-widget.js';
 import type { DataSource } from '../data/data-source.js';
 import { manifestRange } from '../data/manifest-range.js';
-import { defaultShow, kindOf, type MetricQuery, resolveMetric, SHOW_BY_KIND } from '../data/metric-query.js';
+import type { MetricEntry } from '../data/metric-catalog.js';
+import { defaultShow, kindOf, type MetricQuery, SHOW_BY_KIND } from '../data/metric-query.js';
+import { resolveMetric } from '../data/metric-results.js';
 import type { TimeWindow } from '../data/time-window.js';
 import { useGoTo } from '../shell/go-to.js';
 import { PageChrome, useWidgetCopy } from '../shell/page-chrome.js';
@@ -67,7 +68,7 @@ function ExplorerBody(props: { dataSource: DataSource; range: TimeWindow }): JSX
   const state = useMemo(() => sel.metrics ?? defaultMetricState(null), [sel.metrics]);
   const catalogState = useKeyedAsync(dataSource, catalogOf);
   const catalog = catalogState.status === 'ready' ? catalogState.value : null;
-  const entries = useMemo(() => catalog?.entries() ?? [], [catalog]);
+  const entries = useMemo(() => catalog?.entries ?? [], [catalog]);
   const [widthPx, setWidthPx] = useState<number | null>(null);
   const run = useMetricQueries(dataSource, state, timeWindow, widthPx);
   const [actionError, setActionError] = useState<{ title: string; message: string } | null>(null);
@@ -118,7 +119,7 @@ function ExplorerBody(props: { dataSource: DataSource; range: TimeWindow }): JSX
 
   const resourceKeys = useMemo(() => {
     const keys = new Set<string>();
-    for (const r of catalog?.resources() ?? []) for (const k of r.attributes.keys()) keys.add(k);
+    for (const r of catalog?.resources ?? []) for (const k of r.attributes.keys()) keys.add(k);
     return [...keys].sort();
   }, [catalog]);
 

@@ -11,7 +11,8 @@ import { METRIC_CHART_HEIGHT, type MetricSize } from '../../components/metric-ch
 import { RunChartCard } from '../../components/run-chart-card.js';
 import type { DataSource } from '../../data/data-source.js';
 import { manifestRange } from '../../data/manifest-range.js';
-import { type MetricQuery, resolveMetric } from '../../data/metric-query.js';
+import type { MetricQuery } from '../../data/metric-query.js';
+import { resolveMetric } from '../../data/metric-results.js';
 import { runMetricRunQuery } from '../../data/metric-run-query.js';
 import type { TimeWindow } from '../../data/time-window.js';
 import { exemplarTraceLookup, openChartPick } from '../../metrics/chart-pick.js';
@@ -57,7 +58,7 @@ export function useNarrowing(dataSource: DataSource, traceId: TraceId | null): N
     ): Promise<{ resources: readonly ResourceRecord[]; where: string | null; unexcluded: number }> => {
       const [detail, catalog] = await Promise.all([dataSource.getTrace(id), dataSource.metricCatalog()]);
       const resources = traceResources(detail);
-      const { where, unexcluded } = explorerFilter(resources, catalog.resources());
+      const { where, unexcluded } = explorerFilter(resources, catalog.resources);
       return { resources, where, unexcluded };
     },
     [dataSource],
@@ -354,7 +355,7 @@ const GridBody: Body = ({ scope, height, dataSource, actions, variables }) => {
   const start = scope.window?.start ?? run?.start;
   const end = scope.window?.end ?? run?.end;
   const resources = narrowing.status === 'ready' ? narrowing.resources : null;
-  const all = catalog.status === 'ready' ? catalog.value.resources() : null;
+  const all = catalog.status === 'ready' ? catalog.value.resources : null;
   const origin = useMemo((): MetricGridOrigin | null => {
     const wide = resources ?? (narrowing.status === 'off' ? all : null);
     const rs = wide === null ? null : resourcesMatching(wide, variables);

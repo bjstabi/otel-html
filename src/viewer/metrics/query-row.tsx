@@ -6,8 +6,8 @@ import { parseCondition } from '../../ottl/parse.js';
 import { parseFormula } from '../../query/metric-formula.js';
 import { pathsOf, rejectPerPointPaths } from '../../query/metric-paths.js';
 import type { MetricFormula } from '../../query/metric-query.js';
-import type { MetricEntry } from '../../rollups/metric-catalog.js';
 import { ConditionEditor } from '../components/query-bar.js';
+import type { MetricEntry } from '../data/metric-catalog.js';
 import type { MetricFn, MetricQuery } from '../data/metric-query.js';
 import { DefinitionPicker, FIELD, MetricPicker } from './metric-picker.js';
 

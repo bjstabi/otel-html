@@ -9,9 +9,9 @@ import { createHashHistory } from '../../src/viewer/state/hash-history.js';
 import { ThemeProvider } from '../../src/viewer/theme/theme-provider.js';
 import { manifestV4 } from './v4-manifest.js';
 
-const MESSAGE = 'Metrics are not available in this build yet; they arrive with format-4 plan 3';
+const MESSAGE = 'the metrics pages must not query';
 
-/** The metric stubs never reach the engine, so one that refuses everything proves it. */
+/** An engine that refuses everything: its failure is what the metrics pages show as their error state. */
 const engine: QueryEngine = {
   query: () => Promise.reject(new Error('the metrics pages must not query')),
   exec: () => Promise.reject(new Error('the metrics pages must not query')),
@@ -36,19 +36,19 @@ function Probe(props: { ds: DataSource; seen: boolean[] }): null {
   return null;
 }
 
-describe('metrics until plan 3 (D11)', () => {
-  test('the Explorer shows the plan 3 message as its error state', async () => {
+describe('metrics pages when the engine fails', () => {
+  test('the Explorer shows the engine failure as its error state', async () => {
     mount('#/metrics');
     // the catalog card and the queries card both carry it
     expect((await screen.findAllByText(MESSAGE)).length).toBeGreaterThan(0);
   });
 
-  test('the Catalog shows the plan 3 message as its error state', async () => {
+  test('the Catalog shows the engine failure as its error state', async () => {
     mount('#/metrics/catalog');
     expect(await screen.findByText(MESSAGE)).toBeTruthy();
   });
 
-  test('useHasMetrics is false when the lookup rejects with it', async () => {
+  test('useHasMetrics is false when the lookup rejects', async () => {
     const seen: boolean[] = [];
     render(<Probe ds={source()} seen={seen} />);
     await waitFor(() => expect(seen.length).toBeGreaterThan(1));

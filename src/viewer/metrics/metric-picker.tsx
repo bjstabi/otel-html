@@ -1,7 +1,7 @@
 import { Popover } from '@base-ui/react/popover';
 import { ChevronDown, Search } from 'lucide-react';
 import { type JSX, useMemo, useState } from 'react';
-import type { MetricEntry } from '../../rollups/metric-catalog.js';
+import type { MetricEntry } from '../data/metric-catalog.js';
 import { metricTypeLabel } from '../data/metric-query.js';
 
 export const FIELD =

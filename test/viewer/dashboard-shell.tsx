@@ -81,7 +81,7 @@ export const emptyLogResult = (): LogQueryResult => ({
 
 /**
  * A fake format-4 source: every query answers empty until a test overrides it. The resource values per variable key;
- * a key left out has none in the report. The metrics methods are the legacy shapes the metrics code still reads (5.5).
+ * a key left out has none in the report.
  */
 export function dataSourceOf(
   manifest: ManifestV4,
@@ -101,10 +101,13 @@ export function dataSourceOf(
     traceLogs: unused,
     surroundingLogs: unused,
     patterns: () => Promise.resolve({ rows: [], total: 0 }),
-    metricCatalog: unused,
+    metricCatalog: () => Promise.resolve({ entries: [], resources: [], scopes: [] }),
+    metricShowOptions: () => Promise.resolve([]),
+    metricQuery: unused,
+    metricRunQuery: unused,
     metricPoints: () => Promise.resolve(new TimeBuckets(['points'], 8)),
     metric: unused,
-    metricsForResources: unused,
+    metricsForResources: () => Promise.resolve([]),
     resourceValues: (key) => Promise.resolve(values[key] ?? { values: [], kind: 'string', capped: false }),
     close: () => Promise.resolve(),
   };
