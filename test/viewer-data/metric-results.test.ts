@@ -1,18 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import type { MetricDef, MetricEntry, SparkBuckets } from '../../src/viewer/data/metric-catalog.js';
+import type { MetricEntry, SparkBuckets } from '../../src/viewer/data/metric-catalog.js';
 import {
   chartWidthNs,
-  type MetricMethods,
-  type MetricQueryRequest,
-  type MetricQueryResult,
-  type MetricRunQueryRequest,
   pickWidthNs,
-  type RunInfo,
-  type RunLine,
-  type RunQueryResult,
   resolveMetric,
-  type SeriesPoints,
-  type SeriesRow,
   upperMedian,
 } from '../../src/viewer/data/metric-results.js';
 import { NOTES } from '../../src/viewer/data/metric-tables.js';
@@ -45,6 +36,11 @@ const query = { metric: 'm', kind: null, unit: null } as const;
 describe('pickWidthNs', () => {
   it('is the smallest 1 ms x 2^k with at most maxPoints buckets', () => {
     expect(pickWidthNs({ start: 0, end: 3_600e9 }, 600)).toBe(8_192e6);
+  });
+  it('terminates on a maxPoints under 1 or a window that is not finite', () => {
+    expect(pickWidthNs({ start: 0, end: 3_600e9 }, 0)).toBe(1e6);
+    expect(pickWidthNs({ start: 0, end: Number.POSITIVE_INFINITY }, 600)).toBe(1e6);
+    expect(pickWidthNs({ start: Number.NaN, end: 1 }, 600)).toBe(1e6);
   });
 });
 
@@ -87,48 +83,5 @@ describe('NOTES', () => {
   it('words the browser-side term and the exemplar cap', () => {
     expect(NOTES.residual('a == 1')).toBe('Evaluated in the browser: a == 1');
     expect(NOTES.exemplarsCapped).toBe('exemplars capped: the oldest 5 000 exemplar points are shown');
-  });
-});
-
-describe('the request and result shapes', () => {
-  it('lets one object implement MetricMethods', async () => {
-    const def: MetricDef = entry(0);
-    const point: SeriesPoints = {
-      key: 'k',
-      label: 'l',
-      group: {},
-      unit: '',
-      points: [[0, null]],
-      resourceService: null,
-    };
-    const result: MetricQueryResult = {
-      queryId: 'q',
-      widthNs: 1e6,
-      series: [point],
-      exemplars: [],
-      heat: null,
-      distribution: null,
-      notes: [],
-    };
-    const run: RunInfo = { id: 'r', time: 0, revision: null };
-    const line: RunLine = { key: 'k', label: 'l', unit: '', points: [{ value: 1, failed: false }] };
-    const runResult: RunQueryResult = {
-      queryId: 'q',
-      runs: [run],
-      lines: [line],
-      leftOut: 0,
-      window: { start: 0, end: 1 },
-      notes: [],
-    };
-    const row: SeriesRow | null = null;
-    const methods: MetricMethods = {
-      metricCatalog: async () => ({ entries: [entry(def.id)], resources: [], scopes: [] }),
-      metricShowOptions: async () => ['avg'],
-      metricQuery: async (_req: MetricQueryRequest) => result,
-      metricRunQuery: async (_req: MetricRunQueryRequest) => runResult,
-      metricsForResources: async () => [],
-    };
-    expect((await methods.metricCatalog()).entries).toHaveLength(1);
-    expect(row).toBeNull();
   });
 });

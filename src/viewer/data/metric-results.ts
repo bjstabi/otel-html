@@ -124,6 +124,8 @@ const bucketsOver = (w: TimeWindow, widthNs: number): number =>
 /** D24: the smallest 1 ms x 2^k whose buckets over the window number at most `maxPoints`. */
 export function pickWidthNs(window: TimeWindow, maxPoints: number): number {
   let width = BASE_WIDTH_NS;
+  // No width satisfies a bound under 1, and a window that is not finite never shrinks to a bucket count.
+  if (!(maxPoints >= 1) || !Number.isFinite(window.start) || !Number.isFinite(window.end)) return width;
   while (bucketsOver(window, width) > maxPoints) width *= 2;
   return width;
 }
