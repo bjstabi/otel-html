@@ -137,7 +137,7 @@ function siftDown(heap: Cursor[], from: number): void {
 
 /**
  * Merges sorted inputs into batches of `MERGE_CHUNK_ROWS` rows. Every input is read a record batch at a time, so what
- * is held is one record batch (up to 32768 rows) per input plus the chunk being built.
+ * is held is one record batch (up to `READ_BATCH_ROWS` rows) per input plus the chunk being built.
  */
 async function* mergeSorted(table: Table, inputs: readonly Cursor[]): AsyncGenerator<ColumnBatch> {
   const names = TABLE_COLUMNS[table].map((c) => c.name);
@@ -414,9 +414,11 @@ async function aggregatePatterns(rows: AsyncIterable<Located>, byTemplate: boole
 /**
  * Files merged at once. An open reader holds the decoded pages of the row group it is on (about 200 bytes a row,
  * and a flush partition is one row group), so the merge is done in rounds of at most this many files and what is
- * held stays about this many row groups, however many partitions a session flushed.
+ * held stays about this many row groups, however many partitions a session flushed. Each open reader costs about
+ * 5 MB at `READ_BATCH_ROWS` (measured on 3.6 M `points` rows: peak 315 MB at 16 files, 404 MB at 32, 609 MB at 64), and every round rewrites all the rows, so a larger fan-out saves time (4 800 partitions: 5 passes at 8,
+ * 4 at 16) and costs memory.
  */
-const FANOUT = 8;
+const FANOUT = 16;
 
 /** Row groups of the files a round writes for the next one: they are read again at once, so they are kept small. */
 const ROUND_ROW_GROUP_ROWS = 4096;

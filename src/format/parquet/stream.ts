@@ -17,8 +17,12 @@ import { TABLE_COLUMNS, type Table } from './columns.js';
 import { arrowSchema } from './schema.js';
 import { ensureParquetWasm } from './wasm.js';
 
-/** Rows per record batch a reader takes from a file. Larger is better: each batch carries its columns' whole dictionaries through Arrow IPC, and many small batches of a big row group made garbage that raised the peak (measured). */
-const READ_BATCH_ROWS = 32_768;
+/**
+ * Rows per record batch a reader takes from a file. A merge holds one batch per input file, so this times the merge's
+ * fan-out is the reader memory (3.6 M `points` rows, 16 files merged at once: peak 315 MB at 2 048 rows, 373 MB at
+ * 8 192). Each batch carries its columns' whole dictionaries through Arrow IPC, so smaller costs a little time.
+ */
+const READ_BATCH_ROWS = 2_048;
 
 interface FieldLike {
   name: string;
