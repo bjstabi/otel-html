@@ -749,7 +749,7 @@ refuses to run in CI.
 - **Usage:** `e2e:fixtures`
 
 Build the e2e fixture reports into e2e/.reports/ and their site copies into e2e/.reports-site/ (skipped while up to date)
-All but `scale` and `huge`, which e2e:fixtures:scale builds; about a second after `build`.
+All but `scale` and `many`, which e2e:fixtures:scale builds; about a second after `build`.
 
 ## `e2e:fixtures:scale`
 
@@ -757,7 +757,7 @@ All but `scale` and `huge`, which e2e:fixtures:scale builds; about a second afte
 
 - **Usage:** `e2e:fixtures:scale`
 
-The e2e `scale` and `huge` reports with the current viewer (only e2e/scale.spec.ts reads them)
+The e2e `scale` and `many` reports with the current viewer (only e2e/scale.spec.ts reads them)
 Depends on e2e:fixtures:scale:data; `otel-html upgrade` then swaps in the current dist/viewer (~0.3 s, every run: a
 freshness record of its own could miss a viewer that :data wrote in between), so a viewer change never converts again.
 
@@ -767,8 +767,8 @@ freshness record of its own could miss a viewer that :data wrote in between), so
 
 - **Usage:** `e2e:fixtures:scale:data`
 
-Convert the e2e `scale` and `huge` reports into e2e/.reports-scale/ (skipped while up to date)
-100k spans, 1M logs and metrics, converted twice (~15 s, ~1 GB of memory). Its sources are the writer's build output,
+Write the e2e `scale` and `many` reports (site format) into e2e/.reports-scale/ (skipped while up to date)
+100k spans and 1M logs, converted once (`scale`) and written through the library in 100 flushes (`many`) (~1 GB of memory). Its sources are the writer's build output,
 not the viewer's: a viewer change only reruns e2e:fixtures:scale.
 
 ## `e2e:otel-recorder`
@@ -824,7 +824,7 @@ Install dependencies and git hooks
 
 Playwright over the fixture reports, per browser (--browser chromium|firefox|webkit, default all)
 Two passes: the `<browser>-file` and `<browser>-http` projects in parallel (`-http` runs only specs tagged HTTP), then the
-`<browser>-perf-file` project (@perf tests) alone with one worker. Only Chromium has `-http` and `-perf-file`, and
+`<browser>-perf-file` and `<browser>-perf-http` projects (@perf tests) alone with one worker. Only Chromium has `-http` and the perf projects, and
 Firefox and WebKit leave out e2e/scale.spec.ts (playwright.config.ts). Both passes run; the task fails if either does.
 The perf pass is skipped for a browser without a `-perf-file` project. The perf pass writes its artifacts to test-results/perf, so it does not clear the first pass's failures. Playwright args after `--` go to both passes (`mise run test:e2e --browser chromium -- e2e/scale.spec.ts`);
 narrow the browsers with `--browser`, not `--project`, which would add to the two passes' own projects.
