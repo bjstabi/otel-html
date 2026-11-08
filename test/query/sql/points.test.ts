@@ -16,7 +16,15 @@ import {
   type Format4Fixture,
   openFixtureDb,
 } from '../../../test-support/format4-fixture.js';
-import { attr, gauge, metricsRequest, pointsAt, sum, summary } from '../../../test-support/otlp-builders.js';
+import {
+  attr,
+  gauge,
+  histogram,
+  metricsRequest,
+  pointsAt,
+  sum,
+  summary,
+} from '../../../test-support/otlp-builders.js';
 import { otlp } from '../../../test-support/writer-deps.js';
 
 type Key =
@@ -32,6 +40,7 @@ type Key =
   | 'aggregation_temporality'
   | 'sum'
   | 'n'
+  | 'bucket'
   | 'q';
 type Row = Partial<Record<Key, unknown>> & Record<string, unknown>;
 const str = (v: string) => ({ stringValue: v });
@@ -73,7 +82,7 @@ const P1 = otlp(
       ),
       summary(
         's',
-        pointsAt([30], () => ({ count: '2', sum: 3, quantileValues: [q(0.99, 9)] })),
+        pointsAt([30], () => ({ count: '2', sum: 3, quantileValues: [q(0.99, 9), q(1, 10)] })),
       ),
     ],
     resA,
@@ -148,7 +157,7 @@ describe('metric catalog queries', () => {
 
   test('summary quantiles are the distinct values across partitions, ascending', () => {
     const id: MetricIdentity = { name: 's', type: 'summary', unit: '1', temporality: 0, monotonic: false };
-    expect(run(summaryQuantilesQuery(id)).map((r) => num(r.q))).toEqual([0.5, 0.99]);
+    expect(run(summaryQuantilesQuery(id)).map((r) => num(r.q))).toEqual([0.5, 0.99, 1]);
   });
 
   test('identityTerms match nullable columns with IS NOT DISTINCT FROM', () => {
@@ -162,5 +171,71 @@ describe('metric catalog queries', () => {
           .where(...identityTerms(bad)),
       )[0]?.n,
     ).toBe(4n);
+  });
+});
+
+describe('metric sparkline buckets', () => {
+  test('points land in the bucket of their time, for every natural-value branch', async () => {
+    const ms = [0, 10, 20, 30];
+    const request = otlp(
+      metricsRequest(
+        [
+          gauge(
+            'g',
+            pointsAt(ms, (i) => ({ asDouble: [1, 2, 4, 8][i] ?? 0 })),
+          ),
+          sum(
+            'u',
+            pointsAt(ms, (i) => ({ asDouble: [10, 20, 30, 40][i] ?? 0 })),
+            { monotonic: false, temporality: 'cumulative' },
+          ),
+          sum(
+            'm',
+            pointsAt(ms, (i) => ({ asDouble: [1, 3, 6, 10][i] ?? 0 })),
+            { monotonic: true, temporality: 'cumulative' },
+          ),
+          histogram(
+            'h',
+            pointsAt(ms, (i) => ({
+              count: String([2, 3, 4, 5][i] ?? 0),
+              sum: 1,
+              explicitBounds: [1],
+              bucketCounts: ['1', String((([2, 3, 4, 5][i] ?? 0) as number) - 1)],
+            })),
+            { temporality: 'delta' },
+          ),
+        ],
+        resA,
+      ) as never,
+    );
+    const fx = await buildFormat4Report([request], { close: false });
+    const own = await openFixtureDb(fx);
+    // 16 ms buckets: [0, 16) holds ms 0 and 10, [16, 32) holds ms 20 and 30.
+    const spec = bucketSpec({ start: 0, end: 40e6 }, null, 4);
+    expect(spec.widthNs).toBe(16e6);
+    const rows: Row[] = own.rows(metricSparkQuery(spec, fx.epoch).toString());
+    const byBucket = (name: string): [number, number, number][] =>
+      rows
+        .filter((r) => r.metric_name === name)
+        .map((r): [number, number, number] => [num(r.bucket), num(r.sum), num(r.n)]);
+    expect(byBucket('g')).toEqual([
+      [0, 3, 2],
+      [16e6, 12, 2],
+    ]);
+    // Non-monotonic sum: value_double.
+    expect(byBucket('u')).toEqual([
+      [0, 30, 2],
+      [16e6, 70, 2],
+    ]);
+    // Monotonic sum: delta_value (a stream's first point has delta 0).
+    expect(byBucket('m')).toEqual([
+      [0, 2, 2],
+      [16e6, 7, 2],
+    ]);
+    // Delta histogram: delta_count.
+    expect(byBucket('h')).toEqual([
+      [0, 5, 2],
+      [16e6, 9, 2],
+    ]);
   });
 });
