@@ -223,6 +223,126 @@ describe('points table', () => {
     await s.close();
   });
 
+  describe('per-bucket delta columns (D32)', () => {
+    const DELTA_KEYS = [
+      'delta_bucket_counts',
+      'delta_scale',
+      'delta_zero_count',
+      'delta_positive_offset',
+      'delta_positive_counts',
+      'delta_negative_offset',
+      'delta_negative_counts',
+    ];
+    const byTime = (rows: object[]) =>
+      rows.sort((a, b) => Number(cell(a, 'time_unix_nano')) - Number(cell(b, 'time_unix_nano')));
+    const hist = (counts: string[], count: number, t: number, start = T0) =>
+      metricsRequestOf({
+        name: 'lat',
+        histogram: {
+          aggregationTemporality: 2,
+          dataPoints: [
+            {
+              startTimeUnixNano: start,
+              timeUnixNano: T(t),
+              count: String(count),
+              sum: count,
+              bucketCounts: counts,
+              explicitBounds: [1, 5],
+            },
+          ],
+        },
+      });
+    const exp = (scale: number, pos: { offset: number; bucketCounts: string[] }, count: number, t: number) =>
+      metricsRequestOf({
+        name: 'ex',
+        exponentialHistogram: {
+          aggregationTemporality: 2,
+          dataPoints: [
+            {
+              startTimeUnixNano: T0,
+              timeUnixNano: T(t),
+              count: String(count),
+              sum: count,
+              scale,
+              zeroCount: '0',
+              positive: pos,
+            },
+          ],
+        },
+      });
+
+    test('a cumulative explicit histogram writes the per-bucket delta; the exponential columns are null', async () => {
+      const w = createTestWriter();
+      const s = await open(w);
+      await s.add(hist(['1', '2', '0'], 3, 1), 'a.json');
+      await s.add(hist(['2', '5', '1'], 8, 2), 'a.json');
+      await s.flush();
+      const rows = byTime(await points(w, 0));
+      expect(rows.map((r) => cell(r, 'delta_bucket_counts'))).toEqual([
+        [1n, 2n, 0n],
+        [1n, 3n, 1n],
+      ]);
+      for (const r of rows) expect(cell(r, 'delta_scale')).toBeNull();
+      await s.close();
+    });
+
+    test('a cumulative exponential histogram writes its delta at the normalizer scale; delta_bucket_counts is null', async () => {
+      const w = createTestWriter();
+      const s = await open(w);
+      await s.add(exp(1, { offset: 0, bucketCounts: ['1', '1'] }, 2, 1), 'a.json');
+      await s.add(exp(2, { offset: 0, bucketCounts: ['1', '1', '1', '2'] }, 5, 2), 'a.json');
+      await s.flush();
+      const rows = byTime(await points(w, 0));
+      expect(cell(rows[0] ?? {}, 'delta_scale')).toBe(1);
+      expect(cell(rows[1] ?? {}, 'delta_scale')).toBe(1);
+      expect(cell(rows[1] ?? {}, 'delta_positive_offset')).toBe(0);
+      expect(cell(rows[1] ?? {}, 'delta_positive_counts')).toEqual([1n, 2n]);
+      expect(cell(rows[1] ?? {}, 'delta_zero_count')).toBe(0n);
+      for (const r of rows) expect(cell(r, 'delta_bucket_counts')).toBeNull();
+      await s.close();
+    });
+
+    test('a reset point writes its own counts', async () => {
+      const w = createTestWriter();
+      const s = await open(w);
+      await s.add(hist(['2', '5', '1'], 8, 1), 'a.json');
+      await s.add(hist(['1', '0', '0'], 1, 2), 'a.json');
+      await s.flush();
+      const rows = byTime(await points(w, 0));
+      expect(cell(rows[1] ?? {}, 'reset')).toBe(true);
+      expect(cell(rows[1] ?? {}, 'delta_bucket_counts')).toEqual([1n, 0n, 0n]);
+      await s.close();
+    });
+
+    test('gauges, summaries and out-of-order points write null for all seven', async () => {
+      const w = createTestWriter();
+      const s = await open(w);
+      await s.add(
+        metricsRequestOf({ name: 'g', gauge: { dataPoints: [{ asDouble: 1, timeUnixNano: T(1) }] } }),
+        'a.json',
+      );
+      await s.add(
+        metricsRequestOf({
+          name: 'sm',
+          summary: {
+            dataPoints: [
+              { startTimeUnixNano: T0, timeUnixNano: T(1), count: '1', sum: 1, quantileValues: [] },
+            ],
+          },
+        }),
+        'a.json',
+      );
+      await s.add(hist(['2', '5', '1'], 8, 5), 'a.json');
+      await s.add(hist(['1', '1', '1'], 3, 2), 'a.json');
+      await s.flush();
+      const rows = await points(w, 0);
+      const quiet = rows.filter((r) => cell(r, 'metric_name') !== 'lat' || cell(r, 'out_of_order') === true);
+      expect(quiet).toHaveLength(3);
+      for (const r of quiet) for (const k of DELTA_KEYS) expect(cell(r, k)).toBeNull();
+      await s.close();
+    });
+  });
+
   test('an explicit histogram without bounds has an empty list, an exponential one without buckets has nulls', async () => {
     const w = createTestWriter();
     const s = await open(w);

@@ -28,10 +28,23 @@ export interface Context {
   readonly scopes: (s: ScopeRef) => ScopeRecord;
 }
 
+/** The per-bucket delta of a histogram point: explicit bucket counts, or an exponential histogram's buckets at the normalizer's scale. */
+type DeltaBuckets =
+  | { readonly bucketCounts: readonly number[] }
+  | {
+      readonly scale: number;
+      readonly zeroCount: number;
+      readonly positiveOffset: number;
+      readonly positiveCounts: readonly number[];
+      readonly negativeOffset: number;
+      readonly negativeCounts: readonly number[];
+    };
+
 /** The metric normalization columns of a point, passed through to the row unchanged. */
 export interface PointNormalization {
   readonly deltaValue: number | null;
   readonly deltaCount: number | null;
+  readonly deltaBuckets: DeltaBuckets | null;
   readonly reset: boolean;
   readonly outOfOrder: boolean;
   readonly seriesId: string;
@@ -269,9 +282,20 @@ function pointJsonColumn(point: unknown, key: string): string | null {
 
 /** Sets the normalization cells of a row `pointRow` built with unnormalized deltas, in place. */
 export function applyNormalization(row: Row, norm: PointNormalization): void {
+  const b = norm.deltaBuckets;
+  const exp = b !== null && 'scale' in b ? b : null;
+  // Bucket counts are safe non-negative integers: `checkCounts` in metric-streams guarantees it before the stream steps.
+  const counts = (xs: readonly number[]): bigint[] => xs.map((x) => BigInt(x));
   Object.assign(row, {
     delta_value: norm.deltaValue,
     delta_count: countColumn(norm.deltaCount),
+    delta_bucket_counts: b !== null && 'bucketCounts' in b ? counts(b.bucketCounts) : null,
+    delta_scale: exp?.scale ?? null,
+    delta_zero_count: exp === null ? null : countColumn(exp.zeroCount),
+    delta_positive_offset: exp?.positiveOffset ?? null,
+    delta_positive_counts: exp === null ? null : counts(exp.positiveCounts),
+    delta_negative_offset: exp?.negativeOffset ?? null,
+    delta_negative_counts: exp === null ? null : counts(exp.negativeCounts),
     reset: norm.reset,
     out_of_order: norm.outOfOrder,
   });
@@ -306,6 +330,13 @@ export function pointRow(point: MetricPointRecord, norm: PointNormalization, ctx
     flags: BigInt(point.flags),
     delta_value: null,
     delta_count: null,
+    delta_bucket_counts: null,
+    delta_scale: null,
+    delta_zero_count: null,
+    delta_positive_offset: null,
+    delta_positive_counts: null,
+    delta_negative_offset: null,
+    delta_negative_counts: null,
     reset: false,
     out_of_order: false,
   };
