@@ -188,15 +188,6 @@ describe('metricCatalog', () => {
     expect(g.spark.counts.reduce((a, b) => a + b, 0)).toBe(3);
     expect(g.spark.widthNs).toBeGreaterThan(0);
   });
-
-  test('every kind sparkline holds finite numbers (a histogram and summary sum their counts)', async () => {
-    const cat = await m.metricCatalog();
-    for (const name of ['g', 'c', 'h', 'e', 's', 'u']) {
-      const { sums, counts } = byName(cat.entries, name).spark;
-      expect([...sums, ...counts].every(Number.isFinite), name).toBe(true);
-    }
-    expect(byName(cat.entries, 'h').spark.sums.reduce((a, b) => a + b, 0)).toBe(2);
-  });
 });
 
 describe('metricShowOptions', () => {

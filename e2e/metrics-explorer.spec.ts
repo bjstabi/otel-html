@@ -117,6 +117,16 @@ test('a drag over the chart zooms to the dragged span and opens no click menu', 
   expect(problems).toEqual([]);
 });
 
+/** The Catalog row of `METRIC_HIST` in `report`: its text and the sparkline's points. */
+async function histRow(page: Page, url: string): Promise<{ text: string; spark: string }> {
+  await page.goto(`${url}/index.html#/metrics/catalog`);
+  await page.getByRole('searchbox', { name: 'Filter metrics' }).fill(METRIC_HIST);
+  const row = page.getByRole('grid', { name: 'Results' }).getByRole('row').filter({ hasText: METRIC_HIST });
+  await expect(row).toHaveCount(1);
+  const spark = await row.locator('polyline').getAttribute('points');
+  return { text: (await row.textContent()) ?? '', spark: spark ?? '' };
+}
+
 test('an unfinished report (several partitions, never closed) charts METRIC_HIST exactly', async ({
   page,
   reportUrl,
@@ -124,17 +134,24 @@ test('an unfinished report (several partitions, never closed) charts METRIC_HIST
   const problems = watchProblems(page);
   // The writer never closed the report: its points are still several partitions (D34).
   const partitions = new URL('data/partitions/', reportDir('unfinished'));
-  expect((await readdir(partitions)).length).toBeGreaterThan(1);
+  const withPoints = (await readdir(partitions, { recursive: true })).filter((f) =>
+    f.endsWith('points.parquet'),
+  );
+  expect(withPoints.length).toBeGreaterThanOrEqual(2);
 
-  await page.goto(`${reportUrl('unfinished')}/index.html#/metrics/catalog`);
-  await page.getByRole('searchbox', { name: 'Filter metrics' }).fill(METRIC_HIST);
+  // Partition 000000 ends at 50 s of the 100 s run, so a viewer that read only it would draw the second half of the
+  // sparkline empty: the row equals the closed `linked` report's only if the second partition is read.
+  const closed = await histRow(page, reportUrl('linked'));
+  const open = await histRow(page, reportUrl('unfinished'));
+  expect(open).toEqual(closed);
+
   await page.getByRole('grid', { name: 'Results' }).getByRole('row').filter({ hasText: METRIC_HIST }).click();
   await p99ByRoute(page);
   await expect(p99Chart(page)).toBeVisible();
   // The result is exact: no note says the report is unfinished or merged from segments.
   await expect(page.getByText('report unfinished')).toHaveCount(0);
   await expect(page.getByText('flush segments')).toHaveCount(0);
-  // Exemplars come from every partition.
+  // The exemplars both sit in the first partition (collections 0 and 8, flushed before the second).
   expect(await exemplarRings(p99Chart(page))).toHaveLength(2);
   expect(problems).toEqual([]);
 });

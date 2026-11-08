@@ -237,7 +237,13 @@ describe('metric sparkline buckets', () => {
           gauge(
             'nv',
             // OTLP JSON encodes a non-finite double as a string, which the builder's number type does not allow.
-            pointsAt(ms, (i) => ({ asDouble: [1, 'NaN', 3, 'NaN'][i] ?? 0 }) as never),
+            pointsAt(ms, (i) => ({ asDouble: [1, 'NaN', 3, 'Infinity'][i] ?? 0 }) as never),
+          ),
+          sum(
+            'uv',
+            // Non-monotonic, so the sum branch of the natural value reads `value_double`.
+            pointsAt(ms, (i) => ({ asDouble: [10, 'NaN', 30, '-Infinity'][i] ?? 0 }) as never),
+            { monotonic: false, temporality: 'cumulative' },
           ),
           histogram(
             'h',
@@ -287,8 +293,13 @@ describe('metric sparkline buckets', () => {
       [0, 1, 1],
       [16e6, 3, 1],
     ]);
+    expect(byBucket('uv')).toEqual([
+      [0, 10, 1],
+      [16e6, 30, 1],
+    ]);
     const defs: Row[] = own.rows(metricDefsQuery().toString());
     expect(num(defs.find((r) => r.metric_name === 'nv')?.no_value)).toBe(2);
+    expect(num(defs.find((r) => r.metric_name === 'uv')?.no_value)).toBe(2);
   });
 });
 

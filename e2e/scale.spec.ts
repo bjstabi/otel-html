@@ -739,7 +739,7 @@ test.describe(`metrics scale: ${SCALE_METRICS} metrics × ${SCALE_METRIC_SERIES}
   );
 
   test(
-    'the Metrics Catalog opens within 1 s (median)',
+    `the Metrics Catalog opens within ${METRICS_CATALOG_BUDGET_MS} ms (median)`,
     PERF_HTTP,
     async ({ page, reportUrl, browserName }, testInfo) => {
       const factor = perfFactor();
@@ -765,6 +765,7 @@ test.describe(`metrics scale: ${SCALE_METRICS} metrics × ${SCALE_METRIC_SERIES}
           .map((l) => l.bytes)
           .join(', ')}], factor ${factor}`,
       );
+      expect(perLoad.every((l) => l.requests > 0)).toBe(true);
       expect(perLoad.flatMap((l) => (l.fullGets > 0 ? [l.fullGets] : []))).toEqual([]);
       expect(ms).toBeLessThan(METRICS_CATALOG_BUDGET_MS * factor);
     },
