@@ -33,9 +33,10 @@ import { expect, test } from './test.js';
 
 /**
  * Fixed budgets, each twice the median measured over three runs of this spec on the reference machine (PR 7), and never
- * above the budget of the same scenario before format 4. Four scenarios cannot meet that cap (#229): the explorer on
- * `many` (1.7 s median against 3 s leaves no room on a slower runner) and three whose own median is above it (the Logs landing and the one-minute window read the whole 21 MB logs file and the engine takes ~0.7 s to
- * start; Fusion adds a timeline and two lists): they take twice the median and are the viewer's to improve.
+ * above the budget of the same scenario before format 4. Five scenarios cannot meet that cap (#229): the explorer on
+ * `many` (1.7 s median against 3 s leaves no room on a slower runner), and the Logs landing, the one-minute window and
+ * both Fusion opens, whose own median is above it (the logs read the whole 21 MB logs file and the engine takes ~0.7 s
+ * to start; Fusion adds a timeline and two lists). They take twice the median and are the viewer's to improve.
  * `OTEL_HTML_PERF_FACTOR` scales them for slow machines, the constants are never loosened.
  */
 const EXPLORER_BUDGET_MS = { scale: 2150, many: 3400 } as const;
