@@ -250,8 +250,9 @@ describe('PartitionSession', () => {
     const gate = w.fs.holdNextWrite('000000/spans.parquet');
     await s.add(spans(1), 'a.json'); // the size rule starts a background checkpoint that stops at the gate
     await gate.reached;
-    await s.add(spans(1, 0, 3), 'b.json');
+    const second = s.add(spans(1, 0, 3), 'b.json'); // over the target, so it waits for the held write
     gate.release();
+    await second;
     await s.flush();
     expect(manifest(w).partitions.map((p) => p.n)).toEqual([0, 1]);
     expect(await spanIds(w, 0)).toEqual([spanIdOf(0)]);

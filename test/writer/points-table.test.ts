@@ -583,8 +583,9 @@ describe('points table', () => {
     const gate = w.fs.holdNextWrite('000000/points.parquet');
     await s.add(sum('c', 10, 1), 'a.json');
     await gate.reached;
-    await s.add(sum('c', 15, 2), 'a.json');
+    const second = s.add(sum('c', 15, 2), 'a.json'); // over the target, so it waits for the held write
     gate.release();
+    await second;
     await s.flush();
     const text = w.fs.snapshot().get(`${OUT}/data/state/session.0.json`);
     const streams = JSON.parse(text ?? '{}').metricStreams as { lasts: number[] };
