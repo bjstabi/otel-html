@@ -617,7 +617,7 @@ export async function compactPartitions(
           });
         }
       }
-      // The wrapper of the local format holds the file whole: read back once, after the merge has released its readers.
+      // The wrapper of the local format is written from the finished file in chunks, after the merge has released its readers.
       if (opts.format === 'local') {
         await writeWrapperOfFile(
           fs,

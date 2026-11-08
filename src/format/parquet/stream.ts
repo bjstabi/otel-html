@@ -158,8 +158,9 @@ export async function* encodeBatches(
       await it.return?.();
     },
   });
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   try {
-    const reader = (
+    reader = (
       await guard(transformParquetStream(source, writerProperties(opts)))
     ).getReader() as ReadableStreamDefaultReader<Uint8Array>;
     for (;;) {
@@ -173,5 +174,13 @@ export async function* encodeBatches(
     }
   } catch (error) {
     throw failure === undefined ? error : failure.error;
+  } finally {
+    // Stopping early (a `return`, or an error) releases the writer and the source. Not awaited: after a panic the
+    // stream never settles.
+    try {
+      void reader?.cancel().catch(() => undefined);
+    } catch {
+      // as above
+    }
   }
 }

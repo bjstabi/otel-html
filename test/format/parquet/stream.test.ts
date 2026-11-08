@@ -27,6 +27,23 @@ async function collectBytes(chunks: AsyncIterable<Uint8Array>): Promise<Uint8Arr
 }
 
 describe('encodeBatches', () => {
+  test('stopping early cancels the source batches', async () => {
+    const total = 3_000;
+    let closed = false;
+    async function* source(): AsyncGenerator<ColumnBatch> {
+      try {
+        for (let i = 0; i < total; i++) {
+          yield batch(i * 4, 4);
+        }
+      } finally {
+        closed = true;
+      }
+    }
+    for await (const _chunk of encodeBatches('logs', source(), { rowGroupRows: 4 })) break;
+    for (let i = 0; i < 50 && !closed; i++) await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(closed).toBe(true);
+  });
+
   test('writes the batches as one file', async () => {
     async function* gen() {
       yield batch(0, 3);
