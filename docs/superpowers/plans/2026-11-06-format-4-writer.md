@@ -72,7 +72,7 @@ Context: this is plan 2 of the format-4 design (docs/superpowers/specs/2026-11-0
 **Session D, write plan 3 (metrics in the viewer):**
 
 ```
-Write plan 3 of the format-4 spec (§6.4 and §7.2 for metrics: `points` queries through mosaic-sql, metric `fn`s and formulas, the Metrics explorer, catalog and metric dashboard widgets, downsampled tables only if the metrics-scale budget demands them) with superpowers:writing-plans. Skip brainstorming. Read the format-4 writer and viewer plans first, run the builder check, save as docs/superpowers/plans/<date>-format-4-metrics.md on feat/format-4 and add its execution prompt to the writer plan's "Kickoff prompts" section. Unattended; PRs target feat/format-4.
+Write plan 3 of the format-4 spec (§6.4 and §7.2 for metrics: `points` queries through mosaic-sql, metric `fn`s and formulas, the Metrics explorer, catalog and metric dashboard widgets, downsampled tables only if the metrics-scale budget demands them) with superpowers:writing-plans. Skip brainstorming. Read the format-4 writer and viewer plans first, including the "Record: rulings and notes for plan 3" at the end of docs/superpowers/plans/2026-11-07-format-4-viewer.md (it wins over the spec, as plan 1's record did for plan 2), run the builder check, save as docs/superpowers/plans/<date>-format-4-metrics.md on feat/format-4 and add its execution prompt to the writer plan's "Kickoff prompts" section. Unattended; PRs target feat/format-4.
 ```
 
 **Session E, write plan 4 (`host`):**
