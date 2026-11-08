@@ -1,3 +1,4 @@
+import { canonicalAttributesKey } from '../../model/interner.js';
 import type { MetricPointRecord, ResourceRecord, ScopeRecord } from '../../model/records.js';
 
 /** The viewer's metric catalog (D21): one entry per metric definition in the report. */
@@ -40,3 +41,7 @@ export interface MetricCatalogData {
   resources: readonly ResourceRecord[];
   scopes: readonly ScopeRecord[];
 }
+
+/** Canonical identity of a resource: what resource matching uses. */
+export const resourceKey = (r: ResourceRecord): string =>
+  JSON.stringify([r.schemaUrl, r.droppedAttributesCount, canonicalAttributesKey(r.attributes)]);

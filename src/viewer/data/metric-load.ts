@@ -1,6 +1,5 @@
 import type { SeriesGaps, StoredExemplar } from '../../format/metric-files.js';
 import { OtelHtmlError } from '../../model/errors.js';
-import { canonicalAttributesKey } from '../../model/interner.js';
 import type { ResourceRecord, ScopeRecord } from '../../model/records.js';
 import type { BucketAgg } from '../../rollups/metric-agg.js';
 import type { MetricEntry, SeriesDef } from '../../rollups/metric-catalog.js';
@@ -80,7 +79,3 @@ function notInLadder(id: number, k: number): OtelHtmlError {
     actual: String(k),
   });
 }
-
-/** Canonical identity of a resource: what resource matching uses. */
-export const resourceKey = (r: ResourceRecord): string =>
-  JSON.stringify([r.schemaUrl, r.droppedAttributesCount, canonicalAttributesKey(r.attributes)]);
