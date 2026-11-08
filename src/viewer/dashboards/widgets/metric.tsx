@@ -13,7 +13,6 @@ import type { DataSource } from '../../data/data-source.js';
 import { manifestRange } from '../../data/manifest-range.js';
 import type { MetricQuery } from '../../data/metric-query.js';
 import { resolveMetric } from '../../data/metric-results.js';
-import { runMetricRunQuery } from '../../data/metric-run-query.js';
 import type { TimeWindow } from '../../data/time-window.js';
 import { exemplarTraceLookup, openChartPick } from '../../metrics/chart-pick.js';
 import { catalogOf, explorerFilter, MetricGrid, type MetricGridOrigin } from '../../metrics/metric-grid.js';
@@ -287,16 +286,12 @@ const RunBody: Body = ({ widget, scope, dashboard, height, dataSource, actions, 
   const input = useMemo(
     () =>
       ready && entry !== null
-        ? { id: entry.id, q: { ...own, where }, window: { start, end }, runBy, failedWhen }
+        ? { entry, query: { ...own, where }, window: { start, end }, runBy, failedWhen }
         : null,
     [ready, entry, own, where, start, end, runBy, failedWhen],
   );
   const load = useCallback(
-    async (i: NonNullable<typeof input>, signal: AbortSignal) => {
-      const m = await dataSource.metric(i.id);
-      signal.throwIfAborted();
-      return runMetricRunQuery(m, i.q, i, signal);
-    },
+    (i: NonNullable<typeof input>, signal: AbortSignal) => dataSource.metricRunQuery(i, signal),
     [dataSource],
   );
   const result = useKeyedAsync(input, load);

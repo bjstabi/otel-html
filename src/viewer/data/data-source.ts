@@ -4,7 +4,6 @@ import type { ResourceRecord, ResourceRef, ScopeRecord, ScopeRef } from '../../m
 import type { TimeBuckets } from '../../rollups/time-buckets.js';
 import type { FacetValueKind } from '../components/filter-tokens.js';
 import type { LogRef, LogRow } from './log-query.js';
-import type { LoadedMetric } from './metric-load.js';
 import type { MetricMethods } from './metric-results.js';
 import type {
   LogQuery,
@@ -71,7 +70,5 @@ export interface DataSource extends MetricMethods {
   metricPoints(signal?: AbortSignal): Promise<TimeBuckets<'points'>>;
   /** The values of one resource attribute over spans, logs and points, sorted; `capped` when more than the cap exist. */
   resourceValues(key: string, signal?: AbortSignal): Promise<ResourceValues>;
-  /** The legacy per-metric loader; its last callers go with Task 5.3 and it is removed in 5.5. */
-  metric(id: number): Promise<LoadedMetric>;
   close(): Promise<void>;
 }

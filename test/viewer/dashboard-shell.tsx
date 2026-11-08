@@ -106,7 +106,6 @@ export function dataSourceOf(
     metricQuery: unused,
     metricRunQuery: unused,
     metricPoints: () => Promise.resolve(new TimeBuckets(['points'], 8)),
-    metric: unused,
     metricsForResources: () => Promise.resolve([]),
     resourceValues: (key) => Promise.resolve(values[key] ?? { values: [], kind: 'string', capped: false }),
     close: () => Promise.resolve(),

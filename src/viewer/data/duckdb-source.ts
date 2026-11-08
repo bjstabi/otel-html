@@ -742,10 +742,6 @@ export function createDuckDbDataSource(opts: {
       );
     },
     ...metricMethods({ engine, manifest, epoch, range }),
-    metric: () =>
-      Promise.reject(
-        new OtelHtmlError('usage', { message: 'the legacy metric loader is gone; use metricQuery' }),
-      ),
     close: () => engine.close(),
   };
 }

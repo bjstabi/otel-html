@@ -414,12 +414,9 @@ describe('the other questions', () => {
     await expect(ds.getTrace(parseTraceId(hex(99, 32), 'test'))).rejects.toMatchObject({ code: 'usage' });
   });
 
-  test('the metric methods answer from points; the legacy loader is gone', async () => {
+  test('the metric methods answer from points', async () => {
     expect(await ds.metricCatalog()).toMatchObject({ entries: [], resources: [], scopes: [] });
     expect(await ds.metricsForResources([])).toEqual([]);
-    await expect(ds.metric(1)).rejects.toSatisfy(
-      (e: unknown) => e instanceof OtelHtmlError && e.code === 'usage',
-    );
   });
 
   test('manifest and epoch are the report’s', () => {
