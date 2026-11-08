@@ -3,6 +3,7 @@ import { OtelHtmlError } from '../../model/errors.js';
 import { parseCondition } from '../../ottl/parse.js';
 import { canonical, compileBy } from '../metric-paths.js';
 import { jsonAt, PATH_COLUMNS } from './columns.js';
+import { filenameTerm } from './filter.js';
 import type { AbsWindow, Pruned } from './prune.js';
 import { type BucketSpec, bucketExpr } from './time.js';
 
@@ -145,15 +146,6 @@ export function byExpr(path: string): ByExpr {
   return { src: path, identity: by.identity, expr: sql`to_json(${column(col.column)})` };
 }
 
-function filesTerm(files: Pruned): ExprNode | null {
-  if (files.all && files.files.length > 0) return null;
-  if (files.files.length === 0) return literal(false);
-  return isIn(
-    column('filename'),
-    files.files.map((p) => literal(p)),
-  );
-}
-
 export interface SeriesOptions {
   identity: MetricIdentity;
   files: Pruned;
@@ -166,7 +158,7 @@ export interface SeriesOptions {
 /** The distinct series of one definition: `series_id`, the series columns and `g0..gN` (the `by` values) (D22). */
 export function seriesQuery(opts: SeriesOptions): Query {
   const terms: ExprNode[] = [...identityTerms(opts.identity)];
-  const files = filesTerm(opts.files);
+  const files = filenameTerm(opts.files);
   if (files !== null) terms.push(files);
   if (opts.where !== null) terms.push(opts.where);
   if (opts.resourceTexts !== null)
@@ -201,7 +193,7 @@ export function pointIntervalQuery(series: Query, files: Pruned, window: AbsWind
     .orderby(sql`hash(series_id)`)
     .limit(INTERVAL_SERIES);
   const terms: ExprNode[] = [sql`series_id IN (${sampled})`];
-  const f = filesTerm(files);
+  const f = filenameTerm(files);
   if (f !== null) terms.push(f);
   if (window !== null)
     terms.push(
@@ -214,7 +206,10 @@ export function pointIntervalQuery(series: Query, files: Pruned, window: AbsWind
       rn: sql`row_number() OVER (PARTITION BY series_id ORDER BY time_unix_nano)`,
     })
     .where(and(...terms));
-  return Query.from({ t: gaps })
-    .select({ gap: sql`gap` })
-    .where(sql`gap IS NOT NULL AND rn <= ${verbatim(String(INTERVAL_GAPS + 1))}`);
+  return (
+    Query.from({ t: gaps })
+      .select({ gap: sql`gap` })
+      // The first 32 gaps are rows 2..33: row 1 has no previous point.
+      .where(sql`gap IS NOT NULL AND rn <= ${verbatim(String(INTERVAL_GAPS + 1))}`)
+  );
 }

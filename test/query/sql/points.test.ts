@@ -46,7 +46,9 @@ type Key =
   | 'bucket'
   | 'q'
   | 'g0'
+  | 'g1'
   | 'gap'
+  | 'filename'
   | 'resource_attributes';
 type Row = Partial<Record<Key, unknown>> & Record<string, unknown>;
 const str = (v: string) => ({ stringValue: v });
@@ -276,8 +278,19 @@ describe('metric series, by and the point interval', () => {
     );
     expect(rows.map((r) => r.g0)).toEqual(['"1"', '1']);
     expect(byExpr('attributes["k"]').identity).toBe(true);
-    expect(() => byExpr('time_unix_nano')).toThrow();
-    expect(() => byExpr('name')).toThrow();
+    for (const bad of ['time_unix_nano', 'name', 'metric.name["x"]'])
+      expect(() => byExpr(bad)).toThrow(expect.objectContaining({ code: 'invalid-ottl' }));
+    expect(byExpr('resource.attributes["service.name"]').identity).toBe(true);
+    const r: Row[] = own.rows(
+      seriesQuery({
+        ...base,
+        by: [byExpr('resource.attributes["service.name"]'), byExpr('metric.name')],
+      }).toString(),
+    );
+    expect(r.map((x) => [x.g0, x.g1])).toEqual([
+      ['"svc-a"', '"g"'],
+      ['"svc-a"', '"g"'],
+    ]);
   });
 
   test('where keeps the matching series; resourceTexts and seriesIds narrow', () => {
@@ -304,6 +317,21 @@ describe('metric series, by and the point interval', () => {
     expect(Object.keys(ids[0] ?? {})).toEqual(
       expect.arrayContaining(['series_id', 'metric_name', 'point_type', 'metric_unit', 'g0']),
     );
+  });
+
+  test('files prune the series: none keeps nothing, a subset filters by filename', () => {
+    expect(run(seriesQuery({ ...base, files: { files: [], all: false, total: 3 }, by: [] }))).toHaveLength(0);
+    const names = run(Query.from('points').distinct().select({ filename: sql`filename` })).map((x) =>
+      String(x.filename),
+    );
+    expect(names.length).toBeGreaterThan(1);
+    const [first] = names;
+    const of = (list: string[]) =>
+      run(seriesQuery({ ...base, files: { files: list, all: false, total: names.length }, by: [] }));
+    const some = of(first === undefined ? [] : [first]);
+    expect(some.length).toBeGreaterThan(0);
+    expect(some.length).toBeLessThan(of(names).length + 1);
+    expect(of(names).length).toBe(run(seriesQuery({ ...base, by: [] })).length);
   });
 
   test('the point interval returns 32 gaps per sampled series, none for one point', async () => {

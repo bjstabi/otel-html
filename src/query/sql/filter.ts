@@ -67,7 +67,7 @@ export function buildFilter(opts: FilterOptions): { filter: SqlFilter; residual:
 }
 
 /** `filename IN (...)` unless every file is read; a table with no kept file is `false`. */
-function filenameTerm(files: Pruned): ExprNode | null {
+export function filenameTerm(files: Pruned): ExprNode | null {
   if (files.all && files.files.length > 0) return null;
   if (files.files.length === 0) return literal(false);
   return isIn(
