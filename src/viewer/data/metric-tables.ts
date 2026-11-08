@@ -102,6 +102,7 @@ export type CombineRule =
   | { rule: 'never' };
 
 /** How series combine within a `by` group (spec §6.1). */
+// D21's kind-table data, pinned by the parity test against NUMBER_SHOWS.
 export const COMBINE: Record<MetricKind, CombineRule> = {
   counter: { rule: 'add' },
   number: { rule: 'across', byShow: { avg: 'mean', min: 'min', max: 'max', last: 'sum' } },

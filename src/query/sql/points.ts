@@ -247,6 +247,7 @@ export function cellExpr(cell: Cell, epoch: bigint, window: AbsWindow | null = n
 }
 
 /** Across-series aggregate per `show` of a number metric (COMBINE.number.byShow of the viewer). */
+// Exported as the parity hook for the viewer's COMBINE test.
 export const NUMBER_SHOWS = {
   avg: { per: 'a', across: 'avg' },
   min: { per: 'mn', across: 'min' },
