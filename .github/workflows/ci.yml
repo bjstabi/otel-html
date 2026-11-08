@@ -250,6 +250,10 @@ jobs:
       options: --user 1001 --ipc=host
     env:
       OTEL_HTML_METRICS_SCALE: "1"
+      # On top of the runner factor below: after it, this job's Explorer measured about 2× its local median (3 245 and
+      # 4 003 ms against 1 647), where the other DuckDB tests run about 1.4×; the calibration does not capture the gap
+      # (#239). The budgets stay twice the local medians; CI allows 1.5× more.
+      OTEL_HTML_PERF_FACTOR: "1.5"
       # The @perf budgets scale by (calibration ÷ this), never below 1: GitHub's runners come as AMD EPYC 9V45
       # (~85 ms, budgets as written) and EPYC 7763 (~150 ms, about 1.5×). See test-support/calibrate.ts.
       OTEL_HTML_PERF_REFERENCE_MS: "100"
