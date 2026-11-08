@@ -2,12 +2,18 @@ import { literal, Query, sql } from '@uwdata/mosaic-sql';
 import { beforeAll, describe, expect, test } from 'vitest';
 import {
   byExpr,
+  type Cell,
+  cellExpr,
+  exemplarsQuery,
   identityTerms,
   type MetricIdentity,
+  type MetricKind,
+  metricCellsQuery,
   metricDefsQuery,
   metricIdentitiesQuery,
   metricSparkQuery,
   pointIntervalQuery,
+  runsQuery,
   SPARK_BUCKETS,
   seriesQuery,
   summaryQuantilesQuery,
@@ -21,6 +27,7 @@ import {
 } from '../../../test-support/format4-fixture.js';
 import {
   attr,
+  expHistogram,
   gauge,
   histogram,
   metricsRequest,
@@ -49,7 +56,31 @@ type Key =
   | 'g1'
   | 'gap'
   | 'filename'
-  | 'resource_attributes';
+  | 'resource_attributes'
+  | 'cell'
+  | 'c'
+  | 'metric_unit'
+  | 'delta'
+  | 'value'
+  | 'count'
+  | 'min'
+  | 'max'
+  | 'counts'
+  | 'bounds'
+  | 'scale'
+  | 'zero_count'
+  | 'positive'
+  | 'negative'
+  | 'quantiles'
+  | 'points'
+  | 'time_ns'
+  | 'exemplars'
+  | 'run'
+  | 't'
+  | 'revision'
+  | 'n_series'
+  | 'left_out'
+  | 'series_id';
 type Row = Partial<Record<Key, unknown>> & Record<string, unknown>;
 const str = (v: string) => ({ stringValue: v });
 const resA = [attr('service.name', str('svc-a'))];
@@ -376,5 +407,349 @@ describe('metric series, by and the point interval', () => {
     expect(of('single')).toHaveLength(0);
     const w = { start: fx.epoch, end: fx.epoch + 100_000_000_000n };
     expect(of('long', w)).toHaveLength(10);
+  });
+});
+
+describe('metric cells, exemplars and runs', () => {
+  const sec = (n: number): number => n * 1000;
+  const ms10 = [0, 10, 20, 30, 40, 50].map(sec);
+  const host = (v: string) => [attr('host', str(v))];
+  const exp = (scale: number, offset: number, counts: string[], extra: Record<string, unknown> = {}) => ({
+    scale,
+    zeroCount: '0',
+    positive: { offset, bucketCounts: counts },
+    ...extra,
+  });
+  const MAIN = otlp(
+    metricsRequest(
+      [
+        sum(
+          'c',
+          pointsAt(ms10, (i) => ({ asDouble: [1, 3, 6, 2, 5, 9][i] ?? 0 }), host('h1')),
+          { monotonic: true, temporality: 'cumulative' },
+        ),
+        sum(
+          'c',
+          pointsAt(ms10, (i) => ({ asDouble: i })),
+          { monotonic: true, temporality: 'cumulative' },
+        ),
+        gauge(
+          'n',
+          pointsAt([0, 10, 20, 30].map(sec), (i) => ({ asDouble: [1, 3, 5, 7][i] ?? 0 }), host('h1')),
+        ),
+        gauge(
+          'n',
+          pointsAt([0, 10, 20, 30].map(sec), (i) => ({ asDouble: [10, 20, 30, 40][i] ?? 0 }), host('h2')),
+        ),
+        histogram(
+          'h',
+          pointsAt(
+            [0, 10].map(sec),
+            (i) => ({
+              count: i === 0 ? '6' : '2',
+              sum: 1,
+              min: i === 0 ? 0.5 : 0.25,
+              max: 7,
+              explicitBounds: [1, 5],
+              bucketCounts: i === 0 ? ['1', '2', '3'] : ['1', '0', '1'],
+            }),
+            host('h1'),
+          ),
+          { temporality: 'delta' },
+        ),
+        histogram(
+          'h',
+          pointsAt(
+            [0, 10].map(sec),
+            (i) => ({
+              count: i === 0 ? '6' : '1',
+              sum: 1,
+              explicitBounds: [1, 5],
+              bucketCounts: i === 0 ? ['2', '2', '2'] : ['0', '1', '0'],
+            }),
+            host('h2'),
+          ),
+          { temporality: 'delta' },
+        ),
+        histogram(
+          'h',
+          pointsAt(
+            [0],
+            () => ({ count: '3', sum: 1, explicitBounds: [2], bucketCounts: ['1', '2'] }),
+            host('h3'),
+          ),
+          { temporality: 'delta' },
+        ),
+        expHistogram(
+          'e',
+          pointsAt([0], () => exp(3, 2, ['1', '2'], { zeroCount: '1', count: '4', sum: 5 }), host('a')),
+          { temporality: 'delta' },
+        ),
+        expHistogram(
+          'e',
+          pointsAt(
+            [0],
+            () =>
+              exp(5, 8, ['1', '1', '1', '1', '2'], {
+                count: '9',
+                sum: 7,
+                negative: { offset: -9, bucketCounts: ['3'] },
+              }),
+            host('b'),
+          ),
+          { temporality: 'delta' },
+        ),
+        expHistogram(
+          'e',
+          pointsAt([0], () => ({ scale: 1, zeroCount: '2', count: '2', sum: 0 }), host('c')),
+          { temporality: 'delta' },
+        ),
+        summary(
+          's',
+          pointsAt(
+            [0, 10].map(sec),
+            (i) => ({ count: i === 0 ? '2' : '5', sum: i, quantileValues: [q(0.5, i + 1)] }),
+            host('h1'),
+          ),
+        ),
+        summary(
+          's',
+          pointsAt([0], () => ({ count: '1', sum: 9, quantileValues: [q(0.5, 8)] }), host('h2')),
+        ),
+      ],
+      resA,
+    ) as never,
+  );
+  const ex = (i: number) => ({
+    timeUnixNano: String(BigInt('1700000000000000000') + BigInt(i) * 1_000_000_000n),
+    asDouble: i,
+    traceId: 'aa'.repeat(16),
+  });
+  const EXEM = otlp(
+    metricsRequest(
+      [
+        gauge('x', [
+          ...pointsAt([0], () => ({ asDouble: 1 }), host('h1')),
+          ...pointsAt([10_000], () => ({ asDouble: 2, exemplars: [ex(10)] }), host('h1')),
+          ...pointsAt([20_000], () => ({ asDouble: 3, exemplars: [ex(20)] }), host('h1')),
+        ]),
+      ],
+      resA,
+    ) as never,
+  );
+  const runPoint = (ms: number, v: string | null) =>
+    gauge(
+      'r',
+      pointsAt([ms], () => ({ asDouble: 1 }), v === null ? host('x') : [attr('run', str(v))]),
+    );
+  const rev = (r: string) => [attr('vcs.ref.head.revision', str(r))];
+  const RUNS1 = otlp(
+    metricsRequest(
+      [runPoint(0, 'r1'), runPoint(5000, 'r2'), runPoint(1000, null), runPoint(2000, '')],
+      rev('x1'),
+    ) as never,
+  );
+  const RUNS2 = otlp(metricsRequest([runPoint(10_000, 'r1')], rev('x2')) as never);
+
+  let cf: Format4Fixture;
+  let cdb: TestDb;
+  const rowsOf = (query: string): Row[] => cdb.rows(query);
+  beforeAll(async () => {
+    cf = await buildFormat4Report([MAIN, EXEM, RUNS1, RUNS2], { close: false });
+    cdb = await openFixtureDb(cf);
+  });
+  const all = { files: ['all-files'], all: true, total: 1 } as const;
+  const idOf = (name: string): MetricIdentity => {
+    const d = rowsOf(metricDefsQuery().toString()).find((r) => r.metric_name === name);
+    if (d === undefined) throw new Error(name);
+    return {
+      name,
+      type: String(d.point_type),
+      unit: d.metric_unit === null ? null : String(d.metric_unit),
+      temporality: d.aggregation_temporality === null ? null : Number(d.aggregation_temporality),
+      monotonic: d.is_monotonic === null ? null : Boolean(d.is_monotonic),
+    };
+  };
+  const seriesOf = (name: string, by: string[] = ['attributes["host"]']) =>
+    seriesQuery({
+      identity: idOf(name),
+      files: all,
+      where: null,
+      resourceTexts: null,
+      seriesIds: null,
+      by: by.map(byExpr),
+    });
+  // The offset of the test clock from the report's epoch, so a cell can be named by its test time.
+  const cellAt = (ms: number, w: number): number =>
+    Math.floor((ms * 1e6 + Number(BigInt('1700000000000000000') - cf.epoch)) / w) * w;
+  const W20 = 20e9;
+  const cells = (
+    name: string,
+    kind: MetricKind,
+    over: {
+      show?: string;
+      window?: { start: bigint; end: bigint } | null;
+      baseline?: boolean;
+      by?: string[];
+    } = {},
+  ): Row[] => {
+    const by = over.by ?? ['attributes["host"]'];
+    return rowsOf(
+      metricCellsQuery({
+        kind,
+        show: over.show ?? 'avg',
+        series: seriesOf(name, by),
+        files: all,
+        window: over.window ?? null,
+        cell: { kind: 'time', widthNs: W20, baseline: over.baseline ?? false },
+        epoch: cf.epoch,
+        byCount: by.length,
+      }).toString(),
+    );
+  };
+
+  test('counter cells sum the deltas of both series and count the reset', () => {
+    const rows = cells('c', 'counter', { by: [] });
+    expect(rows.map((r) => [num(r.cell), num(r.delta), num(r.resets), num(r.n)])).toEqual([
+      [cellAt(0, W20), 3, 0, 4],
+      [cellAt(20_000, W20), 7, 1, 4],
+      [cellAt(40_000, W20), 9, 0, 4],
+    ]);
+  });
+
+  test('the baseline cell -1 holds the deltas before the window', () => {
+    const window = { start: cf.epoch + BigInt(cellAt(20_000, W20)), end: cf.epoch + 70_000_000_000n };
+    const rows = cells('c', 'counter', { by: [], window, baseline: true });
+    expect(rows.map((r) => [num(r.cell), num(r.delta)])).toEqual([
+      [-1, 3],
+      [cellAt(20_000, W20), 7],
+      [cellAt(40_000, W20), 9],
+    ]);
+  });
+
+  test('a time cell floors with a non-negative modulo; a baseline sends earlier rows to -1', () => {
+    const cell: Cell = { kind: 'time', widthNs: W20, baseline: true };
+    const window = { start: cf.epoch + 20_000_000_000n, end: cf.epoch + 60_000_000_000n };
+    const at = (c: Cell, t: bigint): unknown =>
+      rowsOf(
+        Query.from({
+          t: Query.from('points')
+            .select({ time_unix_nano: sql`${literal(t)}::BIGINT` })
+            .limit(1),
+        })
+          .select({ c: cellExpr(c, cf.epoch, window) })
+          .toString(),
+      )[0]?.c;
+    expect(num(at(cell, cf.epoch + 25_000_000_000n))).toBe(20e9);
+    expect(num(at(cell, cf.epoch + 19_000_000_000n))).toBe(-1);
+    expect(num(at({ ...cell, baseline: false }, cf.epoch - 1n))).toBe(-W20);
+  });
+
+  test('number cells combine the per-series values by show', () => {
+    const at = (show: string) =>
+      cells('n', 'number', { show, by: [] }).map((r) => [num(r.cell), num(r.value), num(r.n)]);
+    const c0 = cellAt(0, W20);
+    const c1 = cellAt(20_000, W20);
+    expect(at('last')).toEqual([
+      [c0, 23, 2],
+      [c1, 47, 2],
+    ]);
+    expect(at('avg')).toEqual([
+      [c0, 8.5, 2],
+      [c1, 20.5, 2],
+    ]);
+    expect(at('min')[0]?.[1]).toBe(1);
+    expect(at('max')[1]?.[1]).toBe(40);
+  });
+
+  test('hist cells sum bucket counts elementwise and keep a row per bounds set', () => {
+    const rows = cells('h', 'hist', { by: [] });
+    const shaped = rows.map((r) => ({
+      cell: num(r.cell),
+      bounds: [...(r.bounds as number[])],
+      count: num(r.count),
+      sum: num(r.sum),
+      counts: [...(r.counts as bigint[])].map(Number),
+    }));
+    const c0 = cellAt(0, W20);
+    expect(shaped).toEqual([
+      { cell: c0, bounds: [1, 5], count: 6 + 2 + 6 + 1, sum: 4, counts: [4, 5, 6] },
+      { cell: c0, bounds: [2], count: 3, sum: 1, counts: [1, 2] },
+    ]);
+    expect(num(rows[0]?.min)).toBe(0.25);
+    expect(num(rows[0]?.max)).toBe(7);
+  });
+
+  test('exp cells come back at the smallest scale with floor-shifted indexes', () => {
+    const [r] = cells('e', 'exp', { by: [] });
+    expect(num(r?.scale)).toBe(3);
+    const side = (v: unknown) =>
+      [...(v as { idx: number; cnt: bigint }[])].map((e) => [e.idx, Number(e.cnt)]);
+    // a: indexes 2, 3; b at scale 5: 8..11 -> 2, 12 -> 3.
+    expect(side(r?.positive)).toEqual([
+      [2, 5],
+      [3, 4],
+    ]);
+    // b's negative index -9 at scale 5 is floor(-9 / 4) = -3 at scale 3.
+    expect(side(r?.negative)).toEqual([[-3, 3]]);
+    expect(num(r?.count)).toBe(4 + 9 + 2);
+    expect(num(r?.zero_count)).toBe(1 + 0 + 2);
+    expect(num(r?.sum)).toBe(12);
+  });
+
+  test('summary cells are per series: the last point and the points in the cell', () => {
+    const rows = cells('s', 'summary');
+    expect(rows).toHaveLength(2);
+    const h = (v: string) => rows.find((r) => r.g0 === `"${v}"`);
+    expect([num(h('h1')?.count), num(h('h1')?.sum), num(h('h1')?.points)]).toEqual([5, 1, 2]);
+    expect(String(h('h1')?.quantiles)).toContain('2');
+    expect([num(h('h2')?.count), num(h('h2')?.points)]).toEqual([1, 1]);
+    expect(Object.keys(rows[0] ?? {})).toContain('series_id');
+  });
+
+  test('exemplars come oldest first with the limit and relative times', () => {
+    const mk = (limit: number) =>
+      rowsOf(exemplarsQuery(seriesOf('x'), all, null, cf.epoch, limit, 1).toString());
+    const rows = mk(10);
+    expect(rows.map((r) => num(r.time_ns))).toEqual([cellAt(10_000, 1), cellAt(20_000, 1)]);
+    expect(rows.map((r) => r.g0)).toEqual(['"h1"', '"h1"']);
+    expect(String(rows[0]?.exemplars)).toContain('aa');
+    expect(mk(1)).toHaveLength(1);
+  });
+
+  test('runs carry the latest time, the revision of the latest point and the left-out count', () => {
+    const rows = rowsOf(runsQuery(seriesOf('r', ['attributes["run"]']), all, cf.epoch).toString());
+    const run = (v: string | null) => rows.find((r) => r.run === v);
+    expect([num(run('"r1"')?.t), run('"r1"')?.revision, num(run('"r1"')?.n_series)]).toEqual([
+      cellAt(10_000, 1),
+      'x2',
+      // Two series: the run's points came from two resources.
+      2,
+    ]);
+    expect([num(run('"r2"')?.t), run('"r2"')?.revision]).toEqual([cellAt(5000, 1), 'x1']);
+    expect(num(run(null)?.left_out)).toBe(2);
+    expect(rows.map((r) => r.run)).toEqual(['"r2"', '"r1"', null]);
+  });
+
+  test('a run cell is the run expression', () => {
+    const by = byExpr('attributes["run"]');
+    const rows = rowsOf(
+      metricCellsQuery({
+        kind: 'number',
+        show: 'avg',
+        series: seriesOf('r', ['attributes["run"]']),
+        files: all,
+        window: null,
+        cell: { kind: 'run', run: by },
+        epoch: cf.epoch,
+        byCount: 1,
+      }).toString(),
+    );
+    expect(rows.map((r) => [r.g0, r.cell, num(r.value)])).toEqual([
+      ['""', '""', 1],
+      ['"r1"', '"r1"', 1],
+      ['"r2"', '"r2"', 1],
+      [null, null, 1],
+    ]);
   });
 });
