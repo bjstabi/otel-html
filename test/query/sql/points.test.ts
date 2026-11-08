@@ -234,6 +234,10 @@ describe('metric sparkline buckets', () => {
             pointsAt(ms, (i) => ({ asDouble: [1, 3, 6, 10][i] ?? 0 })),
             { monotonic: true, temporality: 'cumulative' },
           ),
+          gauge(
+            'nv',
+            pointsAt(ms, (i) => ({ asDouble: [1, 'NaN', 3, 'NaN'][i] ?? 0 }) as never),
+          ),
           histogram(
             'h',
             pointsAt(ms, (i) => ({
@@ -277,6 +281,13 @@ describe('metric sparkline buckets', () => {
       [0, 5, 2],
       [16e6, 9, 2],
     ]);
+    // A NaN point has no value: it adds nothing to a bucket's sum or count (the sparkline would draw NaN).
+    expect(byBucket('nv')).toEqual([
+      [0, 1, 1],
+      [16e6, 3, 1],
+    ]);
+    const defs: Row[] = own.rows(metricDefsQuery().toString());
+    expect(num(defs.find((r) => r.metric_name === 'nv')?.no_value)).toBe(2);
   });
 });
 
