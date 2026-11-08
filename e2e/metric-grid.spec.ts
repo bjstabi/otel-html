@@ -3,8 +3,6 @@ import { LINKED_SPAN, LINKED_TRACE } from './fixture.js';
 import { LINE_MIN_PX, lineRunPx, watchProblems } from './metric-chart.js';
 import { expect, HTTP, test } from './test.js';
 
-test.skip(true, 'plan 3: metrics in the format-4 viewer');
-
 /** The grid's first (expanded) group draws its chart cards, each with one or more series, once scrolled into view. */
 async function expectCharts(grid: Locator): Promise<void> {
   await expect(grid.getByRole('button', { expanded: true }).first()).toBeVisible();

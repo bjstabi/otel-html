@@ -1,11 +1,9 @@
 import { readdir } from 'node:fs/promises';
-import { sep } from 'node:path';
+
 import type { Page } from '@playwright/test';
 import { LINKED_SPAN, LINKED_TRACE, METRIC_HIST, reportDir } from './fixture.js';
 import { exemplarRings, LINE_MIN_PX, lineRunPx, menuAt, watchProblems } from './metric-chart.js';
 import { expect, HTTP, test } from './test.js';
-
-test.skip(true, 'plan 3: metrics in the format-4 viewer');
 
 /** In the Explorer: query `a` charts the p99 of `METRIC_HIST` by `http.route`, exemplars on. */
 async function p99ByRoute(page: Page): Promise<void> {
@@ -120,26 +118,24 @@ test('a drag over the chart zooms to the dragged span and opens no click menu', 
   expect(problems).toEqual([]);
 });
 
-test('an unfinished report (flushed, never closed) charts METRIC_HIST from its segments', async ({
+test('an unfinished report (several partitions, never closed) charts METRIC_HIST exactly', async ({
   page,
   reportUrl,
 }) => {
   const problems = watchProblems(page);
-  // The writer never compacted: each metric is only its per-flush segments (two flushes: seg-000000 and seg-000001).
-  const metrics = new URL('data/metrics/', reportDir('unfinished'));
-  const files = (await readdir(metrics, { recursive: true })).map((f) => f.split(sep).join('/'));
-  expect(files.some((f) => /\/seg-000001\.js$/.test(f))).toBe(true);
-  expect(files.filter((f) => /\/(l\d+|ex)\.js$/.test(f))).toEqual([]);
+  // The writer never closed the report: its points are still several partitions (D34).
+  const partitions = new URL('data/partitions/', reportDir('unfinished'));
+  expect((await readdir(partitions)).length).toBeGreaterThan(1);
 
   await page.goto(`${reportUrl('unfinished')}/index.html#/metrics/catalog`);
   await page.getByRole('searchbox', { name: 'Filter metrics' }).fill(METRIC_HIST);
   await page.getByRole('grid', { name: 'Results' }).getByRole('row').filter({ hasText: METRIC_HIST }).click();
   await p99ByRoute(page);
   await expect(p99Chart(page)).toBeVisible();
-  await expect(
-    page.getByRole('region', { name: `${METRIC_HIST} · p99` }).getByRole('list', { name: 'Notes' }),
-  ).toContainText('report unfinished: series merged from flush segments');
-  // Exemplars come from the segments too.
+  // The result is exact: no note says the report is unfinished or merged from segments.
+  await expect(page.getByText('report unfinished')).toHaveCount(0);
+  await expect(page.getByText('flush segments')).toHaveCount(0);
+  // Exemplars come from every partition.
   expect(await exemplarRings(p99Chart(page))).toHaveLength(2);
   expect(problems).toEqual([]);
 });
