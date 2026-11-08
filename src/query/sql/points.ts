@@ -247,7 +247,7 @@ export function cellExpr(cell: Cell, epoch: bigint, window: AbsWindow | null = n
 }
 
 /** Across-series aggregate per `show` of a number metric (COMBINE.number.byShow of the viewer). */
-const NUMBER_SHOWS = {
+export const NUMBER_SHOWS = {
   avg: { per: 'a', across: 'avg' },
   min: { per: 'mn', across: 'min' },
   max: { per: 'mx', across: 'max' },

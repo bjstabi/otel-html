@@ -90,6 +90,26 @@ export function checkShow(kind: MetricKind, show: string): void {
   }
 }
 
+type Across = 'mean' | 'min' | 'max' | 'sum';
+export type CombineRule =
+  /** Deltas add. */
+  | { rule: 'add' }
+  /** Bucket counts merge; `splitByBounds` keeps one line per explicit-bounds set. */
+  | { rule: 'merge'; splitByBounds: boolean }
+  /** Each series' bucket value, then this across-series aggregation per `show`. */
+  | { rule: 'across'; byShow: Readonly<Record<string, Across>> }
+  /** Never combined: implicitly grouped by series. */
+  | { rule: 'never' };
+
+/** How series combine within a `by` group (spec §6.1). */
+export const COMBINE: Record<MetricKind, CombineRule> = {
+  counter: { rule: 'add' },
+  number: { rule: 'across', byShow: { avg: 'mean', min: 'min', max: 'max', last: 'sum' } },
+  hist: { rule: 'merge', splitByBounds: true },
+  exp: { rule: 'merge', splitByBounds: false },
+  summary: { rule: 'never' },
+};
+
 /** The badge a metric definition shows (picker, Catalog): its point type, a monotonic sum told apart. */
 type MetricTypeBadge = MetricDef['type'] | 'monotonicSum';
 
