@@ -9,9 +9,10 @@ import { describe, expect, test } from 'vitest';
 /** Spec §7: writer peak RSS. */
 const MAX_RSS_BYTES = 512 * 1024 * 1024;
 /**
- * The library sets no V8 flags, so V8 sizes its heap at 2-3x the live data: the live data is about 90 MB, the peak
- * 991 MB measured on 2026-11-08, and 503 MB with `--optimize-for-size` (what the CLI sets). The bound is that measured
- * figure with headroom, not the 512 MB target (maintainer decision 2026-11-08).
+ * The library sets no V8 flags, so V8 lets the heap grow far past the live data (about 90 MB) when no flag restrains
+ * it: the peak was 994 MB measured on 2026-11-08, and 503 MB with `--optimize-for-size` (what the CLI sets; it takes
+ * about 3,550 s). The bound is that measured figure with headroom, not the 512 MB target (maintainer decision
+ * 2026-11-08).
  */
 const MAX_LIBRARY_METRICS_RSS_BYTES = 1100 * 1024 * 1024;
 const METRICS = 200;
