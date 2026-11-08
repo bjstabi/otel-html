@@ -183,7 +183,11 @@ Log pattern clusters (Drain) with their counts in the partition. See [Patterns](
 every counter (a monotonic sum, of any temporality), every delta-temporality sum (up-down counters included) and every
 histogram and exponential histogram. For every other point (gauges, summaries, cumulative non-monotonic sums, and
 points the normalizer skipped) they are null, and `reset` and `out_of_order` are false (`out_of_order` is true
-for a skipped out-of-order point). `series_id` is a 128-bit hash (hex text) of the series identity: the metric (name, type, unit,
+for a skipped out-of-order point).
+
+The seven delta bucket columns (`delta_bucket_counts`, `delta_scale`, `delta_zero_count`, `delta_positive_offset`, `delta_positive_counts`, `delta_negative_offset`, `delta_negative_counts`) are null exactly when `delta_count` is null or the point is not a histogram. `delta_bucket_counts` lines up with the row's `explicit_bounds`: it has one more entry than there are bounds. For a histogram with no bounds it is `[count]` (one +Inf bucket) while `bucket_counts` may be empty, so the two lists need not have the same length. The exponential delta's offsets and counts are bucket indexes at `delta_scale`, which can be coarser than the row's own `scale` (the delta is taken at the coarser of the two points' scales). A reset, or the first point of a stream that has a start time, carries the point's own counts; a first point without a start time carries zeros (empty sides, offset 0, for an exponential histogram).
+
+`series_id` is a 128-bit hash (hex text) of the series identity: the metric (name, type, unit,
 temporality, monotonicity and, for an explicit histogram, its bounds), the resource, the scope and the point's attributes.
 A series whose histogram bounds change is a new series.
 

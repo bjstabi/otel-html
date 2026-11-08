@@ -284,6 +284,7 @@ function pointJsonColumn(point: unknown, key: string): string | null {
 export function applyNormalization(row: Row, norm: PointNormalization): void {
   const b = norm.deltaBuckets;
   const exp = b !== null && 'scale' in b ? b : null;
+  // Bucket counts are safe non-negative integers: `checkCounts` in metric-streams guarantees it before the stream steps.
   const counts = (xs: readonly number[]): bigint[] => xs.map((x) => BigInt(x));
   Object.assign(row, {
     delta_value: norm.deltaValue,
