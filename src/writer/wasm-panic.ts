@@ -87,6 +87,7 @@ export function watchWasmPanics(): PanicWatch {
         );
       };
       if (panic !== undefined) {
+        wait.catch(() => undefined); // still observed: it may reject later (an abandoned read), which must not be unhandled
         panicked(panic);
         return;
       }

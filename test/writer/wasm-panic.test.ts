@@ -36,6 +36,32 @@ afterEach(() => {
 const never = (): Promise<never> => new Promise(() => undefined);
 
 describe('watchWasmPanics', () => {
+  test('a guard after a panic still observes its wait: a later rejection is not unhandled', async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (e: unknown): void => {
+      unhandled.push(e);
+    };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const w = watchWasmPanics();
+      const first = w.guard(never());
+      emit(runtimeError('unreachable'));
+      await expect(first).rejects.toMatchObject({ code: 'invalid-report' });
+      let rejectLate: (e: Error) => void = () => undefined;
+      const late = new Promise<never>((_, reject) => {
+        rejectLate = reject;
+      });
+      const after = w.guard(late);
+      await expect(after).rejects.toThrow('parquet-wasm panicked: unreachable');
+      rejectLate(new Error('abandoned read'));
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(unhandled).toEqual([]);
+      w.stop();
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
+
   test('a settled wait does not keep its value alive while the watch is on', async () => {
     setFlagsFromString('--expose-gc');
     const gc = runInNewContext('gc') as () => void;
