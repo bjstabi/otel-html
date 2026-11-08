@@ -237,6 +237,6 @@ describe('runSite in site format', () => {
     const warnings: string[] = [];
     expect(await pruneAssets(site, deps, (m) => warnings.push(m))).toEqual([]);
     expect(existsSync(join(site, 'assets', '0.0.1'))).toBe(true);
-    expect(warnings.join()).toContain('pr/3');
+    expect(warnings.join()).toContain(join('pr', '3'));
   });
 });

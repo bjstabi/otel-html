@@ -111,6 +111,8 @@ export async function ensureSharedAssets(site: string, version: string, deps: Wr
       await writeFile(join(scratch, rel(f)), f.contents);
     }
     await mkdir(join(site, SHARED), { recursive: true });
+    // An empty version folder may stand in the way; Windows refuses a rename onto any existing folder.
+    await rmdir(target).catch(() => {});
     await rename(scratch, target);
   } catch (e) {
     await rm(scratch, { recursive: true, force: true });
