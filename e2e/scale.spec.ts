@@ -560,12 +560,12 @@ test(
 );
 
 /**
- * Metrics targets (spec §7) over the `site` report read via HTTP: the Explorer draws its first chart within 2 s (median
- * 1 647 ms; twice that is above the plan's 2 s cap, so the cap stays), the Catalog opens within 3 s (median 1 488 ms).
- * D33: the maintainer raised the Catalog to twice its median because engine boot plus render alone take ~1 015 ms;
- * there is no `points_1m` table.
+ * Metrics targets (spec §7) over the `site` report read via HTTP, each twice its local median (R85): the Explorer draws
+ * its first chart within 3.3 s (median 1 647 ms; CI's metrics runner measured 3 245 ms against the plan's 2 s, so the
+ * maintainer set twice the median), the Catalog opens within 3 s (median 1 488 ms). D33: the maintainer raised the
+ * Catalog because engine boot plus render alone take ~1 015 ms; there is no `points_1m` table (#239).
  */
-const METRICS_EXPLORER_BUDGET_MS = 2000;
+const METRICS_EXPLORER_BUDGET_MS = 3300;
 const METRICS_CATALOG_BUDGET_MS = 3000;
 /** Writing the metrics scale report takes a few seconds locally and under a minute on CI. */
 const METRICS_SCALE_SETUP_MS = 5 * 60 * 1000;
@@ -694,7 +694,7 @@ test.describe(`metrics scale: ${SCALE_METRICS} metrics × ${SCALE_METRIC_SERIES}
   });
 
   test(
-    'the Metrics Explorer draws its first chart within 2 s (median)',
+    `the Metrics Explorer draws its first chart within ${METRICS_EXPLORER_BUDGET_MS} ms (median)`,
     PERF_HTTP,
     async ({ page, reportUrl, browserName }, testInfo) => {
       const factor = perfFactor();

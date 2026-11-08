@@ -831,9 +831,10 @@ The scale reports (e2e:fixtures:scale, ~15 s cold, ~35 s on CI) are built only w
 by `playwright test --list` with the same args; a direct `playwright test e2e/scale.spec.ts` needs that task run first.
 Browsers are installed first unless OTEL_HTML_SKIP_BROWSER_INSTALL is set (CI's Playwright image has them).
 The metrics scale check runs only with OTEL_HTML_METRICS_SCALE=1 (CI runs it in its own Chromium job): it writes a
-report of 200 metrics x 1,000 series in which only the charted metric has the full 1 h at 10 s (a few seconds locally,
-under a minute on CI; about 150 MB in e2e/.metrics-scale/), and fails if the Explorer or Catalog loads another metric's
-points. The @perf budgets scale by OTEL_HTML_PERF_FACTOR and, when OTEL_HTML_PERF_REFERENCE_MS is set (CI: 100), by how
+site-format report of 200 metrics x 1,000 series in which only the charted metric has the full 1 h at 10 s (a few
+seconds locally, under a minute on CI, in e2e/.metrics-scale/), serves it over HTTP (the `chromium-perf-http` project),
+and fails if the Explorer or Catalog asks for `points.parquet` without a Range header.
+The @perf budgets scale by OTEL_HTML_PERF_FACTOR and, when OTEL_HTML_PERF_REFERENCE_MS is set (CI: 100), by how
 much slower than that reference a fixed CPU workload runs here (never below 1; the setup logs `PERF calibration: N ms`).
 A run whose inputs match a cached success is replayed. `MISE_TASK_CACHE=off` re-runs the browsers, also through
 `test:e2e:chromium`; `--force` reaches only the task it is given to, so it works on `test:e2e` and not on the wrapper.
