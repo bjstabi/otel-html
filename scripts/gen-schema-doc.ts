@@ -114,6 +114,29 @@ A series whose histogram bounds change is a new series.`,
 - When merge compacts copied partitions, it sums them by (\`cluster_id\`, \`template\`). So one compacted copy partition may
   hold the same \`cluster_id\` more than once.
 - Readers combine patterns across partitions by template.`,
+    `## The views
+
+The viewer reads the data only through five views, one per table (\`spans\`, \`logs\`, \`points\`, \`traces\`,
+\`patterns\`). Each view has the name of its table and is the union of that table's file in every partition that lists
+one, in manifest order. It has the table's columns, in the order above, then two virtual columns:
+
+| column | type | meaning |
+|---|---|---|
+| \`file_row_number\` | BIGINT | the row's position (from 0) within its file |
+| \`filename\` | VARCHAR | the manifest path of the row's file (\`data/partitions/<p6>/<table>.parquet\`), as the manifest lists it |
+
+A table that no partition holds is an empty view with the same columns.
+
+- A log's identity is \`<partition>.<file_row_number>\`: the partition number in \`filename\` and the row's position in that
+  file. It is stable while the partition exists and is the \`log=\` URL key.
+- Before querying, the viewer prunes files by the manifest statistics: a file whose \`values\` for a filtered key share
+  nothing with the wanted values, or whose \`timeMin\` / \`timeMax\` lie outside the time window, is not read. Pruning is an
+  optimization only: a query answers the same with every file read.
+- Attributes are JSON text columns, and an attribute is read by JSON Pointer (RFC 6901, \`~\` as \`~0\`, \`/\` as \`~1\`). An
+  object with a \`$\`-prefixed or \`__proto__\` key is stored as \`{"$m": [[key, value], ...]}\`, so a reader looks a key up
+  in the object first and then in those pairs.
+- A backend satisfies the contract by defining the same views with these columns: the five names, the table columns
+  above and the two virtual columns.`,
     `## Manifest (\`data/manifest.js\`)
 
 The manifest is a script that registers its JSON payload. Its fields:

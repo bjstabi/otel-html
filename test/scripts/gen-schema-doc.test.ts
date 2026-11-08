@@ -69,6 +69,25 @@ test('the source grammar, patterns semantics, delta columns and manifest fields 
   }
 });
 
+test('the views section states the viewer contract', () => {
+  const start = doc.indexOf('\n## The views\n');
+  expect(start, 'The views section').toBeGreaterThanOrEqual(0);
+  const next = doc.indexOf('\n## ', start + 1);
+  const text = doc.slice(start, next === -1 ? undefined : next);
+  for (const table of TABLES) expect(text, table).toContain(`\`${table}\``);
+  for (const s of [
+    '`filename`',
+    '`file_row_number`',
+    'the manifest path',
+    '`<partition>.<file_row_number>`',
+    'manifest statistics',
+    'JSON Pointer',
+    'defining the same views',
+  ]) {
+    expect(text, s).toContain(s);
+  }
+});
+
 test('docs/format/schema.md is the generated text (run mise run gen)', () => {
   expect(readFileSync(new URL('../../docs/format/schema.md', import.meta.url), 'utf8')).toBe(doc);
 });
