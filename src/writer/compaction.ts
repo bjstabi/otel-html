@@ -420,9 +420,6 @@ async function aggregatePatterns(rows: AsyncIterable<Located>, byTemplate: boole
  */
 const FANOUT = 16;
 
-/** Row groups of the files a round writes for the next one: they are read again at once, so they are kept small. */
-const ROUND_ROW_GROUP_ROWS = 4096;
-
 /** Writes the chunks to `p` as they come where the file system can, else collects them and writes the bytes. Returns the size written. */
 async function writeChunks(fs: FileSystem, p: string, chunks: AsyncIterable<Uint8Array>): Promise<number> {
   let size = 0;
@@ -508,7 +505,9 @@ async function mergeTable(
         continue;
       }
       const path = at(dir, `.merge-${table}-${round}-${g / FANOUT}.parquet`);
-      await writeChunks(fs, path, mergeFiles(fs, table, group, ROUND_ROW_GROUP_ROWS, guard));
+      // The final row group size, not a small one: parquet-wasm holds the metadata of every row group of a file it
+      // writes or reads (about 30 KB each), so 4 096-row groups made a round's memory grow with the rows it merged.
+      await writeChunks(fs, path, mergeFiles(fs, table, group, opts.rowGroupRows, guard));
       temporary.push(path);
       next.push(path);
       for (const used of group) {

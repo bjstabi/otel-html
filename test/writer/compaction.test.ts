@@ -1,6 +1,7 @@
 import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { ParquetFile } from 'parquet-wasm/esm';
 import { describe, expect, test } from 'vitest';
 import { wrapBinaryDataFilePieces } from '../../src/format/data-file.js';
 import type { PartitionEntry } from '../../src/format/manifest.js';
@@ -611,6 +612,40 @@ describe('compactPartitions in the local format', () => {
     const wrapper = await base.readText(`${OUT}/${partitionWrapperPath(3, 'logs')}`);
     const base64 = (slice: Uint8Array): string => Buffer.from(slice).toString('base64');
     expect(wrapper).toBe([...wrapBinaryDataFilePieces(partitionKey(3, 'logs'), file, base64)].join(''));
+  });
+});
+
+describe('compactPartitions: the files of the earlier rounds', () => {
+  // parquet-wasm holds the metadata of every row group a file has (about 30 KB each) while it writes or reads the
+  // file, so small row groups in a big temporary file cost memory in proportion to its rows (#227).
+  test('are written with row groups of the configured size, not smaller', async () => {
+    const base = createMemoryFileSystem();
+    const temporaries: Uint8Array[] = [];
+    const fs: typeof base = {
+      ...base,
+      writeByteChunksAtomic: async (p, chunks) => {
+        await base.writeByteChunksAtomic?.(p, chunks);
+        if (p.includes('.merge-')) temporaries.push(await base.readBytes(p));
+      },
+    };
+    const r = lcg(51);
+    let id = 0;
+    const rowsPer = Array.from({ length: 17 }, () => Array.from({ length: 600 }, () => logRow(id++, r)));
+    const entries = await writeParts(
+      fs,
+      rowsPer.map((logs) => ({ logs })),
+      1_000,
+    );
+    await compactPartitions(fs, OUT, entries, opts(17, 10_000));
+    expect(temporaries).toHaveLength(1); // the first 16 of the 17 files
+    const first = temporaries[0];
+    if (first === undefined) throw new Error('no temporary file');
+    const file = await ParquetFile.fromFile(new Blob([new Uint8Array(first)]));
+    try {
+      expect(file.metadata().numRowGroups()).toBe(1); // 9,600 rows; 4,096-row groups made three
+    } finally {
+      file.free();
+    }
   });
 });
 
