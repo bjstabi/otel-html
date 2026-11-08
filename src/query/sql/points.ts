@@ -1,4 +1,9 @@
-import { and, type ExprNode, eq, literal, Query, sql, verbatim } from '@uwdata/mosaic-sql';
+import { and, column, type ExprNode, eq, isIn, literal, Query, sql, verbatim } from '@uwdata/mosaic-sql';
+import { OtelHtmlError } from '../../model/errors.js';
+import { parseCondition } from '../../ottl/parse.js';
+import { canonical, compileBy } from '../metric-paths.js';
+import { jsonAt, PATH_COLUMNS } from './columns.js';
+import type { AbsWindow, Pruned } from './prune.js';
 import { type BucketSpec, bucketExpr } from './time.js';
 
 /** The columns that identify a metric definition. */
@@ -52,24 +57,25 @@ export function metricDefsQuery(): Query {
     .orderby(...IDENTITY_COLUMNS.map((c) => sql`${verbatim(c)}`));
 }
 
+const SERIES_COLUMNS = [
+  ...IDENTITY_COLUMNS,
+  'attributes',
+  'resource_attributes',
+  'resource_schema_url',
+  'resource_dropped_attributes_count',
+  'scope_name',
+  'scope_version',
+  'scope_attributes',
+  'scope_schema_url',
+  'scope_dropped_attributes_count',
+  'explicit_bounds',
+];
+
 /** The distinct series identities: the definition, the attributes, the resource and scope columns and the bounds. */
 export function metricIdentitiesQuery(): Query {
-  const cols = [
-    ...IDENTITY_COLUMNS,
-    'attributes',
-    'resource_attributes',
-    'resource_schema_url',
-    'resource_dropped_attributes_count',
-    'scope_name',
-    'scope_version',
-    'scope_attributes',
-    'scope_schema_url',
-    'scope_dropped_attributes_count',
-    'explicit_bounds',
-  ];
   return Query.from('points')
     .distinct()
-    .select(Object.fromEntries(cols.map((c) => [c, sql`${verbatim(c)}`])));
+    .select(Object.fromEntries(SERIES_COLUMNS.map((c) => [c, sql`${verbatim(c)}`])));
 }
 
 /** The sparkline's bucket count: 128 buckets. */
@@ -105,4 +111,110 @@ export function summaryQuantilesQuery(identity: MetricIdentity): Query {
       q: sql`CAST(coalesce(json_extract_string(e, '$.quantile."$d"'), json_extract_string(e, '$.quantile')) AS DOUBLE)`,
     })
     .orderby(sql`q`);
+}
+
+/** A `by` path as the SQL expression of its JSON text: `src` as written, `identity` when it reads attributes, resource or scope. */
+export interface ByExpr {
+  src: string;
+  expr: ExprNode;
+  identity: boolean;
+}
+
+const invalidBy = (src: string, actual?: string): OtelHtmlError =>
+  new OtelHtmlError('invalid-ottl', {
+    path: `by ${JSON.stringify(src)}`,
+    expected: 'a datapoint path with a column',
+    ...(actual === undefined ? {} : { actual }),
+  });
+
+/**
+ * The expression over `points` for a `by` path, as JSON text (D23): int `1` is `1` and string `"1"` is `"\"1\""`, so
+ * the two stay apart. An attribute path goes through `jsonAt`, a scalar column through `to_json`.
+ */
+export function byExpr(path: string): ByExpr {
+  const by = compileBy(path);
+  const e = parseCondition(path);
+  const v = e.type === 'value' && e.value.type === 'path' ? e.value : null;
+  if (v === null) throw invalidBy(path);
+  const canon = canonical(v).join('.');
+  const col = PATH_COLUMNS.datapoint.get(canon);
+  if (col === undefined) throw invalidBy(path, canon);
+  if (col.kind === 'json')
+    return { src: path, identity: by.identity, expr: sql`CAST(${jsonAt(col.column, by.keys)} AS VARCHAR)` };
+  if (by.keys.length > 0) throw invalidBy(path, canon);
+  return { src: path, identity: by.identity, expr: sql`to_json(${column(col.column)})` };
+}
+
+function filesTerm(files: Pruned): ExprNode | null {
+  if (files.all && files.files.length > 0) return null;
+  if (files.files.length === 0) return literal(false);
+  return isIn(
+    column('filename'),
+    files.files.map((p) => literal(p)),
+  );
+}
+
+export interface SeriesOptions {
+  identity: MetricIdentity;
+  files: Pruned;
+  where: ExprNode | null;
+  resourceTexts: readonly string[] | null;
+  seriesIds: Query | null;
+  by: readonly ByExpr[];
+}
+
+/** The distinct series of one definition: `series_id`, the series columns and `g0..gN` (the `by` values) (D22). */
+export function seriesQuery(opts: SeriesOptions): Query {
+  const terms: ExprNode[] = [...identityTerms(opts.identity)];
+  const files = filesTerm(opts.files);
+  if (files !== null) terms.push(files);
+  if (opts.where !== null) terms.push(opts.where);
+  if (opts.resourceTexts !== null)
+    terms.push(
+      opts.resourceTexts.length === 0
+        ? literal(false)
+        : isIn(
+            column('resource_attributes'),
+            opts.resourceTexts.map((t) => literal(t)),
+          ),
+    );
+  if (opts.seriesIds !== null) terms.push(sql`series_id IN (${opts.seriesIds})`);
+  return Query.from('points')
+    .distinct()
+    .select({
+      series_id: sql`series_id`,
+      ...Object.fromEntries(SERIES_COLUMNS.map((c) => [c, sql`${verbatim(c)}`])),
+      ...Object.fromEntries(opts.by.map((b, i) => [`g${i}`, b.expr])),
+    })
+    .where(and(...terms));
+}
+
+/** Gaps per sampled series, and series sampled: D24's interval estimate. */
+const INTERVAL_SERIES = 64;
+const INTERVAL_GAPS = 32;
+
+/** Rows `gap` (BIGINT): the first 32 gaps between consecutive points of each of at most 64 series (sampled by `hash(series_id)`) in the window. */
+export function pointIntervalQuery(series: Query, files: Pruned, window: AbsWindow | null): Query {
+  const sampled = Query.from({ s: series })
+    .select({ series_id: sql`series_id` })
+    .groupby(sql`series_id`)
+    .orderby(sql`hash(series_id)`)
+    .limit(INTERVAL_SERIES);
+  const terms: ExprNode[] = [sql`series_id IN (${sampled})`];
+  const f = filesTerm(files);
+  if (f !== null) terms.push(f);
+  if (window !== null)
+    terms.push(
+      sql`time_unix_nano BETWEEN ${verbatim(`${window.start}::BIGINT`)} AND ${verbatim(`${window.end}::BIGINT`)}`,
+    );
+  const gaps = Query.from('points')
+    .select({
+      series_id: sql`series_id`,
+      gap: sql`CAST(time_unix_nano - lag(time_unix_nano) OVER (PARTITION BY series_id ORDER BY time_unix_nano) AS BIGINT)`,
+      rn: sql`row_number() OVER (PARTITION BY series_id ORDER BY time_unix_nano)`,
+    })
+    .where(and(...terms));
+  return Query.from({ t: gaps })
+    .select({ gap: sql`gap` })
+    .where(sql`gap IS NOT NULL AND rn <= ${verbatim(String(INTERVAL_GAPS + 1))}`);
 }

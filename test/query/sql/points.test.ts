@@ -1,12 +1,15 @@
 import { Query, sql } from '@uwdata/mosaic-sql';
 import { beforeAll, describe, expect, test } from 'vitest';
 import {
+  byExpr,
   identityTerms,
   type MetricIdentity,
   metricDefsQuery,
   metricIdentitiesQuery,
   metricSparkQuery,
+  pointIntervalQuery,
   SPARK_BUCKETS,
+  seriesQuery,
   summaryQuantilesQuery,
 } from '../../../src/query/sql/points.js';
 import { bucketSpec } from '../../../src/query/sql/time.js';
@@ -41,7 +44,10 @@ type Key =
   | 'sum'
   | 'n'
   | 'bucket'
-  | 'q';
+  | 'q'
+  | 'g0'
+  | 'gap'
+  | 'resource_attributes';
 type Row = Partial<Record<Key, unknown>> & Record<string, unknown>;
 const str = (v: string) => ({ stringValue: v });
 const resA = [attr('service.name', str('svc-a'))];
@@ -237,5 +243,105 @@ describe('metric sparkline buckets', () => {
       [0, 5, 2],
       [16e6, 9, 2],
     ]);
+  });
+});
+
+describe('metric series, by and the point interval', () => {
+  const idG: MetricIdentity = { name: 'g', type: 'gauge', unit: '1', temporality: 0, monotonic: false };
+  const all = { files: ['all-files'], all: true, total: 1 } as const;
+  const base = { identity: idG, files: all, where: null, resourceTexts: null, seriesIds: null } as const;
+
+  test('by groups int 1 and string "1" apart', async () => {
+    const request = otlp(
+      metricsRequest(
+        [
+          gauge(
+            'g',
+            pointsAt([0], () => ({ asDouble: 1 }), [attr('k', { intValue: '1' })]),
+          ),
+          gauge(
+            'g',
+            pointsAt([10], () => ({ asDouble: 2 }), [attr('k', str('1'))]),
+          ),
+        ],
+        resA,
+      ) as never,
+    );
+    const fx = await buildFormat4Report([request], { close: false });
+    const own = await openFixtureDb(fx);
+    const rows: Row[] = own.rows(
+      seriesQuery({ ...base, by: [byExpr('attributes["k"]')] })
+        .orderby(sql`g0`)
+        .toString(),
+    );
+    expect(rows.map((r) => r.g0)).toEqual(['"1"', '1']);
+    expect(byExpr('attributes["k"]').identity).toBe(true);
+    expect(() => byExpr('time_unix_nano')).toThrow();
+    expect(() => byExpr('name')).toThrow();
+  });
+
+  test('where keeps the matching series; resourceTexts and seriesIds narrow', () => {
+    const by = [byExpr('attributes["host"]')];
+    const host = (rows: Row[]) => rows.map((r) => r.g0).sort();
+    expect(host(run(seriesQuery({ ...base, by })))).toEqual(['"h1"', '"h2"']);
+    const where = sql`json_extract_string(attributes, '/host') = 'h2'`;
+    expect(host(run(seriesQuery({ ...base, by, where })))).toEqual(['"h2"']);
+    const ids = run(seriesQuery({ ...base, by }));
+    const texts = ids.filter((r) => String(r.resource_attributes).includes('svc-b'));
+    expect(texts).toHaveLength(1);
+    const narrowed = run(
+      seriesQuery({ ...base, by, resourceTexts: [String(texts[0]?.resource_attributes)] }),
+    );
+    expect(host(narrowed)).toEqual(['"h2"']);
+    const one = run(
+      seriesQuery({
+        ...base,
+        by,
+        seriesIds: Query.from('points').select({ series_id: sql`series_id` }).where(sql`value_double = 7`),
+      }),
+    );
+    expect(host(one)).toEqual(['"h2"']);
+    expect(Object.keys(ids[0] ?? {})).toEqual(
+      expect.arrayContaining(['series_id', 'metric_name', 'point_type', 'metric_unit', 'g0']),
+    );
+  });
+
+  test('the point interval returns 32 gaps per sampled series, none for one point', async () => {
+    const ms = Array.from({ length: 40 }, (_, i) => i * 10_000);
+    const request = otlp(
+      metricsRequest(
+        [
+          gauge(
+            'long',
+            pointsAt(ms, () => ({ asDouble: 1 })),
+          ),
+          gauge(
+            'single',
+            pointsAt([0], () => ({ asDouble: 1 })),
+          ),
+        ],
+        resA,
+      ) as never,
+    );
+    const fx = await buildFormat4Report([request], { close: false });
+    const own = await openFixtureDb(fx);
+    const of = (name: string, window: { start: bigint; end: bigint } | null = null): Row[] =>
+      own.rows(
+        pointIntervalQuery(
+          seriesQuery({
+            ...base,
+            identity: { ...idG, name },
+            by: [],
+          }),
+          all,
+          window,
+        ).toString(),
+      );
+    const gaps = of('long');
+    expect(gaps).toHaveLength(32);
+    expect(gaps.every((r) => r.gap === 10_000_000_000n)).toBe(true);
+    expect(of('single')).toHaveLength(0);
+    const w = { start: fx.epoch, end: fx.epoch + 100_000_000_000n };
+    expect(of('long', w)).toHaveLength(10);
   });
 });
