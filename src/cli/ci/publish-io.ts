@@ -85,7 +85,7 @@ export async function mergeSkippingBad<S>(i: {
 export function mergeWithConfig(
   deps: WriterDeps,
   config: string | undefined,
-  opts: { format: 'site'; assetsBase: string; compact: boolean },
+  opts: { format: 'site' | 'local'; assetsBase: string; compact: boolean },
 ): (inputs: string[], out: string, probe: boolean) => Promise<ReportSummary> {
   const writer = { format: opts.format, assetsBase: opts.assetsBase };
   return async (inputs, out, probe) => {

@@ -170,8 +170,8 @@ export async function runReport(
     await trace.close();
 
     const { summary, inputs } = await mergeSkippingBad({
-      // own assets/, so a downloaded artifact opens over any static server; `ci site` moves the copy to the shared base
-      merge: mergeWithConfig(deps, opts.config, { format: 'site', assetsBase: 'assets/', compact: false }),
+      // `local`, so the downloaded artifact opens from disk (file://); `ci site` upgrades its copy to `site`
+      merge: mergeWithConfig(deps, opts.config, { format: 'local', assetsBase: 'assets/', compact: false }),
       required: [traceDir],
       optional: artifacts.map((a) => a.report),
       out: opts.out,

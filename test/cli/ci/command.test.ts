@@ -184,15 +184,13 @@ describe('otel-html ci report step summary', { timeout: 60_000 }, () => {
     expect(await report(['--no-summary'])).toBe('');
   });
 
-  test('writes a site report with its own assets/, so a downloaded artifact opens over any static server', async () => {
+  test('writes a local report, so the downloaded artifact opens from file://', async () => {
     await report([]);
     const manifest = readFileSync(join(dir, 'out', 'data', 'manifest.js'), 'utf8');
-    expect(manifest).toContain('"format":"site"');
-    expect(manifest).toContain('"assetsBase":"assets/"');
+    expect(manifest).toContain('"format":"local"');
     const names = readdirSync(join(dir, 'out', 'assets'));
-    expect(names).toContain('duckdb.1.32.0.wasm');
-    expect(names).toContain('parquet.1.32.0.duckdb_extension.wasm');
-    expect(names.some((n) => n.endsWith('.b64.js'))).toBe(false);
+    expect(names.some((n) => n.endsWith('.b64.js'))).toBe(true);
+    expect(names).not.toContain('duckdb.1.32.0.wasm');
   });
 });
 
