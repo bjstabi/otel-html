@@ -380,10 +380,11 @@ test(
       return t !== undefined && BigInt(t.timeMin) <= start && start <= BigInt(t.timeMax);
     });
     expect(own).toHaveLength(1);
-    // Plus the first partition's logs file: the engine reads one partition's footer to learn the table's schema when it
-    // creates the views, whatever the page shows.
-    const allowed = [...own, ...partitions.slice(0, 1)].flatMap((p) =>
-      p.files.logs ? [p.files.logs.path] : [],
+    // Plus the first partition's logs file (the first partition holding logs: the metrics, added with the first
+    // flush, make partitions 0 and 1 points-only): the engine reads one partition's footer to learn the table's schema
+    // when it creates the views, whatever the page shows.
+    const allowed = [...own, ...partitions.filter((p) => p.files.logs !== undefined).slice(0, 1)].flatMap(
+      (p) => (p.files.logs ? [p.files.logs.path] : []),
     );
     // `/__requests` is append-only and shared by every test of the server, so what a test reads after a run is its own
     // only because the perf projects run with `--workers=1` (`test:e2e`'s perf pass; `workers` is not a project option).
@@ -495,9 +496,10 @@ test(
 
 /**
  * Fusion over `many`: twice the median measured on the reference machine (5.0 s; the brief's 3 s cannot hold), and the
- * range requests of one open: the measured 1603 plus 10 %, rounded up.
+ * range requests of one open: the measured 1603 plus 10 %, rounded up. With the Metrics frame back the median is 6.1 s
+ * (twice it, rounded up, is 12 200 ms); the added time is the Metrics frame.
  */
-const FUSION_MANY_BUDGET_MS = 10_100;
+const FUSION_MANY_BUDGET_MS = 12_200;
 const FUSION_MANY_RANGE_REQUESTS = 1764;
 
 /**
@@ -551,9 +553,14 @@ test(
   },
 );
 
-/** Metrics targets (spec §7): the Explorer draws its first chart within 2 s, the Catalog opens within 1 s. */
+/**
+ * Metrics targets (spec §7) over the `site` report read via HTTP: the Explorer draws its first chart within 2 s (median
+ * 1 647 ms; twice that is above the plan's 2 s cap, so the cap stays), the Catalog opens within 3 s (median 1 488 ms).
+ * D33: the maintainer raised the Catalog to twice its median because engine boot plus render alone take ~1 015 ms;
+ * there is no `points_1m` table.
+ */
 const METRICS_EXPLORER_BUDGET_MS = 2000;
-const METRICS_CATALOG_BUDGET_MS = 1000;
+const METRICS_CATALOG_BUDGET_MS = 3000;
 /** Writing the metrics scale report takes a few seconds locally and under a minute on CI. */
 const METRICS_SCALE_SETUP_MS = 5 * 60 * 1000;
 
@@ -706,9 +713,9 @@ test.describe(`metrics scale: ${SCALE_METRICS} metrics × ${SCALE_METRIC_SERIES}
       await expect(
         page.getByRole('img', { name: `${scaleMetricName(SCALE_CHARTED_METRIC)} · rate: 1 series` }),
       ).toBeVisible();
-      // Every read is a range (a plain GET would fetch the whole file). The brief's bound, a quarter of the file, does
-      // not hold: the charted metric is 47 % of the rows but about two thirds of the bytes (its `series_id` column
-      // does not compress), and the engine's read-ahead takes the rest; see the task 6.3 report.
+      // Every read is a range, and one load reads at most 1.1 x the file (a repeated whole-file read would pass it).
+      // Not a quarter: the charted metric is 47 % of the rows but ~67 % of the bytes (its `series_id` column does not
+      // compress), and the engine's read-ahead runs on to the end of the file.
       const bytes = perLoad.slice(1).map((l) => l.bytes);
       report(
         testInfo,
@@ -720,6 +727,7 @@ test.describe(`metrics scale: ${SCALE_METRICS} metrics × ${SCALE_METRIC_SERIES}
       expect(total).toBeGreaterThan(0);
       expect(perLoad.every((l) => l.requests > 0)).toBe(true);
       expect(perLoad.flatMap((l) => (l.fullGets > 0 ? [l.fullGets] : []))).toEqual([]);
+      expect(Math.max(...bytes)).toBeLessThanOrEqual(total * 1.1);
       expect(ms).toBeLessThan(METRICS_EXPLORER_BUDGET_MS * factor);
     },
   );
