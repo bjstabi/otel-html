@@ -58,6 +58,7 @@ type Key =
   | 'filename'
   | 'resource_attributes'
   | 'cell'
+  | 'filename'
   | 'c'
   | 'metric_unit'
   | 'delta'
@@ -392,6 +393,7 @@ describe('metric series, by and the point interval', () => {
     const of = (name: string, window: { start: bigint; end: bigint } | null = null): Row[] =>
       own.rows(
         pointIntervalQuery(
+          { ...idG, name },
           seriesQuery({
             ...base,
             identity: { ...idG, name },
@@ -601,6 +603,7 @@ describe('metric cells, exemplars and runs', () => {
     const by = over.by ?? ['attributes["host"]'];
     return rowsOf(
       metricCellsQuery({
+        identity: idOf(name),
         kind,
         show: over.show ?? 'avg',
         series: seriesOf(name, by),
@@ -720,7 +723,7 @@ describe('metric cells, exemplars and runs', () => {
 
   test('exemplars come oldest first with the limit and relative times', () => {
     const mk = (limit: number) =>
-      rowsOf(exemplarsQuery(seriesOf('x'), all, null, cf.epoch, limit, 1).toString());
+      rowsOf(exemplarsQuery(idOf('x'), seriesOf('x'), all, null, cf.epoch, limit, 1).toString());
     const rows = mk(10);
     expect(rows.map((r) => num(r.time_ns))).toEqual([cellAt(10_000, 1), cellAt(20_000, 1)]);
     expect(rows.map((r) => r.g0)).toEqual(['"h1"', '"h1"']);
@@ -729,7 +732,7 @@ describe('metric cells, exemplars and runs', () => {
   });
 
   test('runs carry the latest time, the revision of the latest point and the left-out count', () => {
-    const rows = rowsOf(runsQuery(seriesOf('r', ['attributes["run"]']), all, cf.epoch).toString());
+    const rows = rowsOf(runsQuery(idOf('r'), seriesOf('r', ['attributes["run"]']), all, cf.epoch).toString());
     const run = (v: string | null) => rows.find((r) => r.run === v);
     expect([num(run('"r1"')?.t), run('"r1"')?.revision, num(run('"r1"')?.n_series)]).toEqual([
       cellAt(10_000, 1),
@@ -746,6 +749,7 @@ describe('metric cells, exemplars and runs', () => {
     const by = byExpr('attributes["run"]');
     const rows = rowsOf(
       metricCellsQuery({
+        identity: idOf('r'),
         kind: 'number',
         show: 'avg',
         series: seriesOf('r', ['attributes["run"]']),
@@ -762,5 +766,109 @@ describe('metric cells, exemplars and runs', () => {
       ['"r2"', '"r2"', 1],
       [null, null, 1],
     ]);
+  });
+});
+
+describe('series identity and the baseline across partitions', () => {
+  const g = (...kv: [string, string][]) => kv.map(([k, v]) => attr(k, str(v)));
+  const id: MetricIdentity = { name: 'g', type: 'gauge', unit: '1', temporality: 0, monotonic: false };
+  const all = { files: ['all-files'], all: true, total: 1 } as const;
+
+  test('the same series written with its attribute keys reordered is one row', async () => {
+    const one = otlp(
+      metricsRequest(
+        [
+          gauge(
+            'g',
+            pointsAt([0], () => ({ asDouble: 1 }), g(['a', '1'], ['b', '2'])),
+          ),
+        ],
+        resA,
+      ) as never,
+    );
+    const two = otlp(
+      metricsRequest(
+        [
+          gauge(
+            'g',
+            pointsAt([10], () => ({ asDouble: 2 }), g(['b', '2'], ['a', '1'])),
+          ),
+        ],
+        resA,
+      ) as never,
+    );
+    const fx = await buildFormat4Report([one, two], { close: false });
+    const db0 = await openFixtureDb(fx);
+    const own = { rows: (q: string): Row[] => db0.rows(q) };
+    const rows: Row[] = own.rows(
+      seriesQuery({
+        identity: id,
+        files: all,
+        where: null,
+        resourceTexts: null,
+        seriesIds: null,
+        by: [],
+      }).toString(),
+    );
+    expect(rows).toHaveLength(1);
+    expect(Object.keys(rows[0] ?? {})).toContain('metric_description');
+  });
+
+  test('a baseline with files pruned without the lower bound holds the earlier partition', async () => {
+    const cum = (ms: number[], vals: number[]) =>
+      otlp(
+        metricsRequest(
+          [
+            sum(
+              'c',
+              pointsAt(ms, (i) => ({ asDouble: vals[i] ?? 0 })),
+              { monotonic: true, temporality: 'cumulative' },
+            ),
+          ],
+          resA,
+        ) as never,
+      );
+    const fx = await buildFormat4Report([cum([0, 10_000], [1, 4]), cum([20_000, 30_000], [6, 10])], {
+      close: false,
+    });
+    const db0 = await openFixtureDb(fx);
+    const own = { rows: (q: string): Row[] => db0.rows(q) };
+    const names = own
+      .rows('SELECT DISTINCT filename FROM points ORDER BY min(time_unix_nano) OVER (PARTITION BY filename)')
+      .map((r) => String(r.filename));
+    expect(names.length).toBe(2);
+    const second = names.at(-1) ?? '';
+    // The window lies inside the second partition; pruning kept both files (no lower bound).
+    const window = { start: fx.epoch + 20_000_000_000n, end: fx.epoch + 40_000_000_000n };
+    const cid: MetricIdentity = { name: 'c', type: 'sum', unit: '1', temporality: 2, monotonic: true };
+    const run = (files: { files: string[]; all: boolean; total: number }): Row[] =>
+      own.rows(
+        metricCellsQuery({
+          identity: cid,
+          kind: 'counter',
+          show: 'sum',
+          series: seriesQuery({
+            identity: cid,
+            files,
+            where: null,
+            resourceTexts: null,
+            seriesIds: null,
+            by: [],
+          }),
+          files,
+          window,
+          cell: { kind: 'time', widthNs: 20e9, baseline: true },
+          epoch: fx.epoch,
+          byCount: 0,
+        }).toString(),
+      );
+    const full = run({ files: names, all: true, total: 2 });
+    expect(full.map((r) => [Number(r.cell), Number(r.delta)])).toEqual([
+      [-1, 3],
+      [20e9, 6],
+    ]);
+    // Pruned with the window's lower bound, the first partition is gone and cell -1 is empty.
+    const cut = run({ files: [second], all: false, total: 2 });
+    expect(cut.map((r) => Number(r.cell))).toEqual([20e9]);
   });
 });

@@ -130,7 +130,8 @@ const invalidBy = (src: string, actual?: string): OtelHtmlError =>
 
 /**
  * The expression over `points` for a `by` path, as JSON text (D23): int `1` is `1` and string `"1"` is `"\"1\""`, so
- * the two stay apart. An attribute path goes through `jsonAt`, a scalar column through `to_json`.
+ * the two stay apart. An attribute path goes through `jsonAt`, a scalar column through `to_json`. `metric.description`
+ * is not part of `series_id`, so grouping by it takes one value per series (`any_value`).
  */
 export function byExpr(path: string): ByExpr {
   const by = compileBy(path);
@@ -155,7 +156,11 @@ export interface SeriesOptions {
   by: readonly ByExpr[];
 }
 
-/** The distinct series of one definition: `series_id`, the series columns and `g0..gN` (the `by` values) (D22). */
+/**
+ * One row per `series_id` of one definition: the series columns (`any_value`, plus `metric_description`) and `g0..gN`
+ * (the `by` values) (D22). Grouping by `series_id` rather than DISTINCT over the columns keeps one row when the same
+ * series was written with its attribute keys in another order (the id hashes them sorted, the JSON text keeps insertion order).
+ */
 export function seriesQuery(opts: SeriesOptions): Query {
   const terms: ExprNode[] = [...identityTerms(opts.identity)];
   const files = filenameTerm(opts.files);
@@ -172,13 +177,15 @@ export function seriesQuery(opts: SeriesOptions): Query {
     );
   if (opts.seriesIds !== null) terms.push(sql`series_id IN (${opts.seriesIds})`);
   return Query.from('points')
-    .distinct()
     .select({
       series_id: sql`series_id`,
-      ...Object.fromEntries(SERIES_COLUMNS.map((c) => [c, sql`${verbatim(c)}`])),
-      ...Object.fromEntries(opts.by.map((b, i) => [`g${i}`, b.expr])),
+      ...Object.fromEntries(
+        [...SERIES_COLUMNS, 'metric_description'].map((c) => [c, sql`any_value(${verbatim(c)})`]),
+      ),
+      ...Object.fromEntries(opts.by.map((b, i) => [`g${i}`, sql`any_value(${b.expr})`])),
     })
-    .where(and(...terms));
+    .where(and(...terms))
+    .groupby(sql`series_id`);
 }
 
 /** Gaps per sampled series, and series sampled: D24's interval estimate. */
@@ -186,13 +193,18 @@ const INTERVAL_SERIES = 64;
 const INTERVAL_GAPS = 32;
 
 /** Rows `gap` (BIGINT): the first 32 gaps between consecutive points of each of at most 64 series (sampled by `hash(series_id)`) in the window. */
-export function pointIntervalQuery(series: Query, files: Pruned, window: AbsWindow | null): Query {
+export function pointIntervalQuery(
+  identity: MetricIdentity,
+  series: Query,
+  files: Pruned,
+  window: AbsWindow | null,
+): Query {
   const sampled = Query.from({ s: series })
     .select({ series_id: sql`series_id` })
     .groupby(sql`series_id`)
     .orderby(sql`hash(series_id)`)
     .limit(INTERVAL_SERIES);
-  const terms: ExprNode[] = [sql`series_id IN (${sampled})`];
+  const terms: ExprNode[] = [sql`series_id IN (${sampled})`, ...identityTerms(identity)];
   const f = filenameTerm(files);
   if (f !== null) terms.push(f);
   if (window !== null)
@@ -217,13 +229,17 @@ export function pointIntervalQuery(series: Query, files: Pruned, window: AbsWind
 /** The five aggregate shapes of D25. */
 export type MetricKind = 'counter' | 'number' | 'hist' | 'exp' | 'summary';
 
-/** Where a point lands: a time bucket (`baseline` sends the points before the window to cell -1), or the value of a run expression. */
+/**
+ * Where a point lands: a time bucket, or the value of a run expression. `baseline` sends the points before the window to
+ * cell -1 (the window's lower bound is dropped from the points filter). The caller must then prune `files` without the
+ * window's lower bound too, for the series query and the cells query alike, or cell -1 misses the earlier partitions.
+ */
 export type Cell = { kind: 'time'; widthNs: number; baseline: boolean } | { kind: 'run'; run: ByExpr };
 
 /** The cell of a point: `floor(rel / w) * w` (non-negative modulo, as `bucketExpr`), -1 before `window` for a baseline, else the run expression. */
 export function cellExpr(cell: Cell, epoch: bigint, window: AbsWindow | null = null): ExprNode {
   if (cell.kind === 'run') return cell.run.expr;
-  const w = verbatim(`${cell.widthNs}::BIGINT`);
+  const w = verbatim(`${BigInt(Math.round(cell.widthNs))}::BIGINT`);
   const rel = relTime('time_unix_nano', epoch);
   const bucket = sql`(${rel} - ((${rel} % ${w}) + ${w}) % ${w})`;
   if (!cell.baseline || window === null) return bucket;
@@ -246,6 +262,8 @@ const gSelect = (n: number): Record<string, ExprNode> =>
   Object.fromEntries(groupNames(n).map((g) => [g, sql`${verbatim(g)}`]));
 
 export interface CellsOptions {
+  /** The definition of `series`: its terms go on the points side so row-group statistics can skip data. */
+  identity: MetricIdentity;
   kind: MetricKind;
   show: string;
   series: Query;
@@ -268,6 +286,7 @@ const timeTerm = (window: AbsWindow | null, baseline: boolean): ExprNode | null 
  * columns. The series are grouped by `series_id` so a join cannot multiply a point.
  */
 function seriesPoints(
+  identity: MetricIdentity,
   series: Query,
   files: Pruned,
   window: AbsWindow | null,
@@ -282,7 +301,7 @@ function seriesPoints(
       ...Object.fromEntries(groupNames(byCount).map((g) => [g, sql`any_value(${verbatim(g)})`])),
     })
     .groupby(sql`series_id`);
-  const terms: ExprNode[] = [sql`series_id = sid`];
+  const terms: ExprNode[] = [sql`series_id = sid`, ...identityTerms(identity)];
   const f = filenameTerm(files);
   if (f !== null) terms.push(f);
   const t = cell.kind === 'time' ? timeTerm(window, cell.baseline) : timeTerm(window, false);
@@ -305,7 +324,7 @@ const cols = (...names: string[]): Record<string, ExprNode> =>
 export function metricCellsQuery(opts: CellsOptions): Query {
   const { byCount: n, epoch } = opts;
   const pts = (extra: Record<string, ExprNode>): Query =>
-    seriesPoints(opts.series, opts.files, opts.window, opts.cell, epoch, n, extra);
+    seriesPoints(opts.identity, opts.series, opts.files, opts.window, opts.cell, epoch, n, extra);
   const keys = [...gRefs(n), col('cell')];
   switch (opts.kind) {
     case 'counter':
@@ -342,39 +361,8 @@ export function metricCellsQuery(opts: CellsOptions): Query {
         .groupby(...keys)
         .orderby(...keys);
     }
-    case 'hist': {
-      const agg = Query.from({
-        p: pts({
-          ...cols('delta_count', 'delta_value', 'min', 'max', 'explicit_bounds', 'count'),
-          dbc: sql`CASE WHEN delta_count IS NULL THEN NULL ELSE coalesce(delta_bucket_counts, [delta_count]) END`,
-        }),
-      })
-        .where(sql`delta_count IS NOT NULL`)
-        .select({
-          ...gSelect(n),
-          cell: col('cell'),
-          bounds: col('explicit_bounds'),
-          count: sql`sum(delta_count)`,
-          sum: sql`sum(delta_value)`,
-          min: sql`min(min)`,
-          max: sql`max(max)`,
-          ls: sql`list(dbc) FILTER (WHERE dbc IS NOT NULL)`,
-          width: sql`max(len(dbc))`,
-        })
-        .groupby(...keys, col('explicit_bounds'));
-      return Query.from({ h: agg })
-        .select({
-          ...gSelect(n),
-          cell: col('cell'),
-          bounds: col('bounds'),
-          count: col('count'),
-          sum: col('sum'),
-          min: col('min'),
-          max: col('max'),
-          counts: sql`CAST(list_transform(range(1, coalesce(width, 0) + 1), i -> list_sum(list_transform(ls, l -> l[i]))) AS BIGINT[])`,
-        })
-        .orderby(...keys, col('bounds'));
-    }
+    case 'hist':
+      return histCells(opts, pts);
     case 'exp':
       return expCells(opts, pts);
     case 'summary':
@@ -393,6 +381,78 @@ export function metricCellsQuery(opts: CellsOptions): Query {
     default:
       return assertNever(opts.kind, 'metric kind');
   }
+}
+
+/**
+ * Histogram cells (D25): every point contributes one entry per bucket (`idx` from 0) and one `x` row with its scalars;
+ * the entries are summed per (group, cell, bounds, idx), then listed in index order. One row per bounds set.
+ */
+function histCells(opts: CellsOptions, pts: (extra: Record<string, ExprNode>) => Query): Query {
+  const n = opts.byCount;
+  const keys = [...gRefs(n), col('cell'), col('bounds')];
+  const rows = Query.from({
+    p: pts({
+      ...cols('delta_count', 'delta_value', 'min', 'max'),
+      bounds: col('explicit_bounds'),
+      dbc: sql`coalesce(delta_bucket_counts, [delta_count])`,
+    }),
+  })
+    .select({ ...gSelect(n), ...cols('cell', 'bounds', 'delta_count', 'delta_value', 'min', 'max', 'dbc') })
+    .where(sql`delta_count IS NOT NULL`);
+  const nulls = {
+    dc: sql`CAST(NULL AS BIGINT)`,
+    sm: sql`CAST(NULL AS DOUBLE)`,
+    mn: sql`CAST(NULL AS DOUBLE)`,
+    mx: sql`CAST(NULL AS DOUBLE)`,
+  };
+  const unnested = Query.from({ r: rows }).select({
+    ...gSelect(n),
+    ...cols('cell', 'bounds'),
+    e: sql`unnest(list_transform(range(len(dbc)), j -> struct_pack(idx := j, cnt := dbc[j + 1])))`,
+  });
+  const entries = Query.from({ u: unnested }).select({
+    ...gSelect(n),
+    ...cols('cell', 'bounds'),
+    side: sql`'e'`,
+    idx: sql`CAST(e.idx AS INTEGER)`,
+    cnt: sql`CAST(e.cnt AS BIGINT)`,
+    ...nulls,
+  });
+  const scalars = Query.from({ r: rows }).select({
+    ...gSelect(n),
+    ...cols('cell', 'bounds'),
+    side: sql`'x'`,
+    idx: sql`CAST(NULL AS INTEGER)`,
+    cnt: sql`CAST(NULL AS BIGINT)`,
+    dc: col('delta_count'),
+    sm: col('delta_value'),
+    mn: col('min'),
+    mx: col('max'),
+  });
+  const merged = Query.from({ e: Query.unionAll(entries, scalars) })
+    .select({
+      ...gSelect(n),
+      ...cols('cell', 'bounds', 'side', 'idx'),
+      cnt: sql`sum(cnt)`,
+      dc: sql`sum(dc)`,
+      sm: sql`sum(sm)`,
+      mn: sql`min(mn)`,
+      mx: sql`max(mx)`,
+    })
+    .groupby(...keys, col('side'), col('idx'));
+  return Query.from({ m: merged })
+    .select({
+      ...gSelect(n),
+      cell: col('cell'),
+      bounds: col('bounds'),
+      count: sql`sum(dc)`,
+      sum: sql`sum(sm)`,
+      min: sql`min(mn)`,
+      max: sql`max(mx)`,
+      counts: sql`coalesce(list(cnt ORDER BY idx) FILTER (WHERE side = 'e'), [])`,
+    })
+    .groupby(...keys)
+    .orderby(...keys);
 }
 
 /**
@@ -516,6 +576,7 @@ function expCells(opts: CellsOptions, pts: (extra: Record<string, ExprNode>) => 
 
 /** (`g0..gN` of `byCount` columns, `time_ns` relative, `exemplars` JSON) of the points with exemplars, oldest first, at most `limit`. */
 export function exemplarsQuery(
+  identity: MetricIdentity,
   series: Query,
   files: Pruned,
   window: AbsWindow | null,
@@ -524,6 +585,7 @@ export function exemplarsQuery(
   byCount: number,
 ): Query {
   const rows = seriesPoints(
+    identity,
     series,
     files,
     window,
@@ -543,11 +605,20 @@ export function exemplarsQuery(
  * Per run (`g0` of `series`, built with the `runBy` expression): `t`, the relative time of its latest point, `revision`
  * (D28) of that point and `n_series`; plus the row with `run IS NULL` whose `left_out` counts the series with a NULL or empty run value.
  */
-export function runsQuery(series: Query, files: Pruned, epoch: bigint): Query {
-  const rows = seriesPoints(series, files, null, { kind: 'time', widthNs: 1, baseline: false }, epoch, 1, {
-    time_unix_nano: col('time_unix_nano'),
-    revision: sql`json_extract_string(resource_attributes, '/vcs.ref.head.revision')`,
-  });
+export function runsQuery(identity: MetricIdentity, series: Query, files: Pruned, epoch: bigint): Query {
+  const rows = seriesPoints(
+    identity,
+    series,
+    files,
+    null,
+    { kind: 'time', widthNs: 1, baseline: false },
+    epoch,
+    1,
+    {
+      time_unix_nano: col('time_unix_nano'),
+      revision: sql`json_extract_string(resource_attributes, '/vcs.ref.head.revision')`,
+    },
+  );
   const empty = sql`(g0 IS NULL OR g0 IN ('""', 'null'))`;
   const runs = Query.from({ p: rows })
     .select({
