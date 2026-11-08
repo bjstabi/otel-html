@@ -480,6 +480,11 @@ describe('metric cells, exemplars and runs', () => {
           ),
           { temporality: 'delta' },
         ),
+        histogram(
+          'hn',
+          pointsAt([0, 10].map(sec), (i) => ({ count: String(i + 4), sum: 1, bucketCounts: [] }), host('h1')),
+          { temporality: 'delta' },
+        ),
         expHistogram(
           'e',
           pointsAt([0], () => exp(3, 2, ['1', '2'], { zeroCount: '1', count: '4', sum: 5 }), host('a')),
@@ -678,6 +683,12 @@ describe('metric cells, exemplars and runs', () => {
     ]);
     expect(num(rows[0]?.min)).toBe(0.25);
     expect(num(rows[0]?.max)).toBe(7);
+  });
+
+  test('a histogram with no bounds has one bucket holding its count', () => {
+    const rows = cells('hn', 'hist', { by: [] });
+    expect(rows).toHaveLength(1);
+    expect([num(rows[0]?.count), [...((rows[0]?.counts as bigint[]) ?? [])].map(Number)]).toEqual([9, [9]]);
   });
 
   test('exp cells come back at the smallest scale with floor-shifted indexes', () => {

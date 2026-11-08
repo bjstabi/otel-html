@@ -300,7 +300,7 @@ const cols = (...names: string[]): Record<string, ExprNode> =>
  * Per (`g0..gN`, `cell`) the aggregate of D25 for `kind`: counter `delta`, `resets`, `n`; number `value` (across series by
  * `show`), `n` (series); hist per `bounds` set `count`, `sum`, `min`, `max`, `counts`; exp `count`, `sum`, `min`, `max`,
  * `scale` (the minimum over rows with a side), `zero_count`, `zero_threshold`, `positive` and `negative` as `list(struct(idx, cnt))`
- * at that scale (zero entries left out); summary per `series_id` the last point's `count`, `sum`, `quantiles` and `points`.
+ * at that scale (entries of count 0 are left out: deltas are never negative and an absent index means 0); summary per `series_id` the last point's `count`, `sum`, `quantiles` and `points`.
  */
 export function metricCellsQuery(opts: CellsOptions): Query {
   const { byCount: n, epoch } = opts;
@@ -349,6 +349,7 @@ export function metricCellsQuery(opts: CellsOptions): Query {
           dbc: sql`CASE WHEN delta_count IS NULL THEN NULL ELSE coalesce(delta_bucket_counts, [delta_count]) END`,
         }),
       })
+        .where(sql`delta_count IS NOT NULL`)
         .select({
           ...gSelect(n),
           cell: col('cell'),
