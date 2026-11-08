@@ -199,6 +199,45 @@ describe('metricShowOptions', () => {
     expect(queries - before).toBe(1);
   });
 
+  test('two calls for one summary issue one statement', async () => {
+    const inner = mosaicQueryEngine(createCoordinator(db.connector, silentLogger), db);
+    let runs = 0;
+    const counting: QueryEngine = {
+      ...inner,
+      query: (qq, signal) => {
+        runs++;
+        return inner.query(qq, signal);
+      },
+    };
+    const mm = metricMethods({ engine: counting, manifest: f.manifest, epoch: f.epoch, range: null });
+    const s = byName((await mm.metricCatalog()).entries, 's');
+    const before = runs;
+    const [a, b] = await Promise.all([mm.metricShowOptions(s.id), mm.metricShowOptions(s.id)]);
+    await mm.metricShowOptions(s.id);
+    expect(a).toEqual(b);
+    expect(runs - before).toBe(1);
+  });
+
+  test('a rejected read is not kept: the next call retries', async () => {
+    const inner = mosaicQueryEngine(createCoordinator(db.connector, silentLogger), db);
+    let armed = false;
+    const flaky: QueryEngine = {
+      ...inner,
+      query: (qq, signal) => {
+        if (armed) {
+          armed = false;
+          return Promise.reject(new Error('boom'));
+        }
+        return inner.query(qq, signal);
+      },
+    };
+    const mm = metricMethods({ engine: flaky, manifest: f.manifest, epoch: f.epoch, range: null });
+    const s = byName((await mm.metricCatalog()).entries, 's');
+    armed = true;
+    await expect(mm.metricShowOptions(s.id)).rejects.toThrow('boom');
+    expect(await mm.metricShowOptions(s.id)).toEqual(['q0.5', 'q0.99', 'count', 'sum']);
+  });
+
   test('other kinds use the fixed options and no statement', async () => {
     const cat = await m.metricCatalog();
     const before = queries;

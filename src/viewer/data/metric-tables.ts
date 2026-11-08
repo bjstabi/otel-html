@@ -24,7 +24,7 @@ export function kindOf(e: MetricDef): MetricKind {
 
 const HIST_SHOW = ['p50', 'p75', 'p90', 'p95', 'p99', 'count', 'sum', 'avg'] as const;
 
-/** Summary quantile options are `q<quantile>` per quantile present (`showOptions`); listed here are the fixed ones. */
+/** Summary quantile options are `q<quantile>` per quantile present (`metricShowOptions`); listed here are the fixed ones. */
 export const SHOW_BY_KIND: Record<MetricKind, readonly string[]> = {
   counter: ['rate', 'increase', 'sum'],
   number: ['avg', 'min', 'max', 'last'],
@@ -33,7 +33,7 @@ export const SHOW_BY_KIND: Record<MetricKind, readonly string[]> = {
   summary: ['count', 'sum'],
 };
 
-/** `qmax` is the highest quantile present, resolved when the query runs; `defaultShow(m)` gives the concrete `q…`. */
+/** `qmax` is the highest quantile present, resolved when the query runs; `defaultShowOf` gives the concrete `q…`. */
 export const SUMMARY_TOP_QUANTILE = 'qmax';
 
 export const DEFAULT_SHOW: Record<MetricKind, string> = {

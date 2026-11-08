@@ -252,7 +252,7 @@ interface ChartKey {
   entry: MetricEntry;
   query: MetricQuery;
   /** Catalog indexes of the origin's resources. */
-  resources: readonly number[];
+  resources: readonly number[] | undefined;
   window: TimeWindow;
   maxPoints: number;
 }
@@ -266,7 +266,7 @@ function GridChart(props: {
   dataSource: MetricSource;
   entry: MetricEntry;
   /** The origin's resources as catalog indexes: only their series are charted; null until the catalog is read. */
-  resources: readonly number[] | null;
+  resources: readonly number[] | undefined | null;
   /** One line per resource (`resourceLines`). */
   by: string[];
   /** The filter the click menu's Traces/Logs links carry (`explorerFilter`). */
@@ -300,7 +300,7 @@ function GridChart(props: {
           query,
           window: k.window,
           maxPoints: k.maxPoints,
-          resources: k.resources,
+          ...(k.resources === undefined ? {} : { resources: k.resources }),
           exemplars: true,
         },
         signal,
@@ -420,10 +420,13 @@ export function MetricGrid(
     );
   }, [catalogState, listed, resources]);
   // The origin's resources as catalog indexes, which the data layer narrows a query by (D29).
-  const resourceIndexes = useMemo((): readonly number[] | null => {
+  const resourceIndexes = useMemo((): readonly number[] | undefined | null => {
     if (catalogState.status !== 'ready') return null;
     const keys = new Set(resources.map(resourceKey));
-    return catalogState.value.resources.flatMap((r, i) => (keys.has(resourceKey(r)) ? [i] : []));
+    const all = catalogState.value.resources;
+    const picked = all.flatMap((r, i) => (keys.has(resourceKey(r)) ? [i] : []));
+    // Every resource of the report: no narrowing, so no list of every stored text goes into the query.
+    return picked.length === all.length ? undefined : picked;
   }, [catalogState, resources]);
   const [size, setSize] = useState<MetricSize>('S');
   const [expandedState, setExpanded] = useState<ReadonlySet<string> | null>(null);

@@ -65,11 +65,11 @@ describe('the Metrics Catalog over format 4', () => {
 });
 
 describe('a summary row', () => {
-  test('opens the Explorer with the qmax placeholder as the show', async () => {
+  test('opens the Explorer with the highest quantile of a summary as the show', async () => {
     open();
     await userEvent.click(await screen.findByText('rpc.latency'));
     await waitFor(() => expect(window.location.hash).toMatch(/^#\/metrics\?/));
     const m = parseUrlState(window.location.hash.split('?')[1] ?? '').state.m;
-    expect(m?.queries[0]).toMatchObject({ metric: 'rpc.latency', show: 'qmax' });
+    expect(m?.queries[0]).toMatchObject({ metric: 'rpc.latency', show: 'q0.99' });
   });
 });

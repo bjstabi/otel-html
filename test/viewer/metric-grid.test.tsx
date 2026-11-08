@@ -48,8 +48,11 @@ const origin = (resources: ResourceRecord[], kind: MetricGridOrigin['kind']): Me
   traceId: null,
 });
 
-async function draw(service: readonly string[], kind: MetricGridOrigin['kind']): Promise<void> {
-  const ds = source();
+async function draw(
+  service: readonly string[],
+  kind: MetricGridOrigin['kind'],
+  ds: DataSource = source(),
+): Promise<void> {
   const resources = await Promise.all(service.map((s) => resourceOf(ds, s)));
   render(
     <GoToContext.Provider value={noop as never}>
@@ -72,6 +75,28 @@ describe('the metric grid over format 4', () => {
     expect(await screen.findByRole('img', { name: /^app\.shared: 2 series/ })).toBeTruthy();
     expect(await screen.findByRole('img', { name: /^app\.only_a: 1 series/ })).toBeTruthy();
     expect(await screen.findByRole('img', { name: /^app\.only_b: 1 series/ })).toBeTruthy();
+  });
+
+  test('a grid covering the whole catalog sends no resource list; a narrower one sends indexes', async () => {
+    const real = source();
+    const seen: (readonly number[] | undefined)[] = [];
+    const spy: DataSource = {
+      ...real,
+      metricCatalog: () => real.metricCatalog(),
+      metricQuery: (req, signal) => {
+        seen.push(req.resources);
+        return real.metricQuery(req, signal);
+      },
+    };
+    await draw(['a', 'b'], 'trace', spy);
+    await screen.findByRole('img', { name: /^app\.shared: 2 series/ });
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every((r) => r === undefined)).toBe(true);
+    cleanup();
+    seen.length = 0;
+    await draw(['a'], 'log', spy);
+    await screen.findByRole('img', { name: /^app\.shared: 1 series/ });
+    expect(seen.every((r) => r?.length === 1)).toBe(true);
   });
 
   test('useHasMetrics is false for a resource without points and true with', async () => {

@@ -6,7 +6,7 @@ import { ErrorCard } from '../components/explorer-states.js';
 import { ResultsTable } from '../components/results-table.js';
 import type { DataSource } from '../data/data-source.js';
 import type { MetricEntry } from '../data/metric-catalog.js';
-import { metricTypeLabel } from '../data/metric-tables.js';
+import { defaultShowOf, kindOf, metricTypeLabel } from '../data/metric-tables.js';
 import { useGoTo } from '../shell/go-to.js';
 import { PageChrome } from '../shell/page-chrome.js';
 import { routeHref } from '../shell/use-route.js';
@@ -127,7 +127,22 @@ export function MetricsCatalog(props: { dataSource: DataSource }): JSX.Element {
   const rows = useMemo(() => (needle === '' ? all : all.filter((e) => matches(e, needle))), [all, needle]);
   const window = useSelection((s) => s.window);
 
-  const open = (e: MetricEntry): void => goTo('metrics', '/metrics', { m: explorerState(e) });
+  const open = (e: MetricEntry): void => {
+    const state = explorerState(e);
+    const [first, ...rest] = state.queries;
+    // A summary's default show is its highest quantile, which only the data source can name (as in the Explorer picker).
+    if (first === undefined || kindOf(e) !== 'summary') {
+      goTo('metrics', '/metrics', { m: state });
+      return;
+    }
+    props.dataSource.metricShowOptions(e.id).then(
+      (options) =>
+        goTo('metrics', '/metrics', {
+          m: { ...state, queries: [{ ...first, show: defaultShowOf(kindOf(e), options) }, ...rest] },
+        }),
+      () => goTo('metrics', '/metrics', { m: state }),
+    );
+  };
   /** The Explore cell is a real link to the same place, so it can open in a new tab; the window carries like `goTo`. */
   const hrefOf = useCallback(
     (e: MetricEntry): string =>
