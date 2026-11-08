@@ -1,4 +1,4 @@
-import { type JSX, useCallback, useDeferredValue, useMemo, useState } from 'react';
+import { type JSX, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import type { ManifestV4 } from '../../format/manifest.js';
 import { parseUnixNanos } from '../../model/ids.js';
 import type { MetricPageState } from '../../query/metric-query.js';
@@ -127,7 +127,15 @@ export function MetricsCatalog(props: { dataSource: DataSource }): JSX.Element {
   const rows = useMemo(() => (needle === '' ? all : all.filter((e) => matches(e, needle))), [all, needle]);
   const window = useSelection((s) => s.window);
 
+  // A summary click navigates after an async lookup: only the latest click, on a mounted page, may.
+  const clicks = useRef(0);
+  useEffect(() => {
+    return () => {
+      clicks.current = -1;
+    };
+  }, []);
   const open = (e: MetricEntry): void => {
+    const click = clicks.current < 0 ? clicks.current : ++clicks.current;
     const state = explorerState(e);
     const [first, ...rest] = state.queries;
     // A summary's default show is its highest quantile, which only the data source can name (as in the Explorer picker).
@@ -135,14 +143,20 @@ export function MetricsCatalog(props: { dataSource: DataSource }): JSX.Element {
       goTo('metrics', '/metrics', { m: state });
       return;
     }
+    const latest = (): boolean => clicks.current === click;
     props.dataSource.metricShowOptions(e.id).then(
-      (options) =>
+      (options) => {
+        if (!latest()) return;
         goTo('metrics', '/metrics', {
           m: { ...state, queries: [{ ...first, show: defaultShowOf(kindOf(e), options) }, ...rest] },
-        }),
-      () => goTo('metrics', '/metrics', { m: state }),
+        });
+      },
+      () => {
+        if (latest()) goTo('metrics', '/metrics', { m: state });
+      },
     );
   };
+  // The href keeps `qmax` for a summary: a link needs a synchronous href, and the Explorer resolves `qmax` itself.
   /** The Explore cell is a real link to the same place, so it can open in a new tab; the window carries like `goTo`. */
   const hrefOf = useCallback(
     (e: MetricEntry): string =>

@@ -65,6 +65,29 @@ describe('the Metrics Catalog over format 4', () => {
 });
 
 describe('a summary row', () => {
+  test('a late show lookup does not override a newer click', async () => {
+    const ds = source();
+    let release: (o: readonly string[]) => void = () => undefined;
+    const slow = new Promise<readonly string[]>((r) => {
+      release = r;
+    });
+    render(
+      <ThemeProvider>
+        <Shell
+          dataSource={{ ...ds, metricShowOptions: (id) => (id === 0 ? ds.metricShowOptions(id) : slow) }}
+          history={createHashHistory(window)}
+        />
+      </ThemeProvider>,
+    );
+    await userEvent.click(await screen.findByText('rpc.latency'));
+    await userEvent.click(await screen.findByText('queue.depth'));
+    await waitFor(() => expect(window.location.hash).toMatch(/^#\/metrics\?/));
+    release(['q0.5', 'q0.99', 'count', 'sum']);
+    await new Promise((r) => setTimeout(r, 50));
+    const m = parseUrlState(window.location.hash.split('?')[1] ?? '').state.m;
+    expect(m?.queries[0]).toMatchObject({ metric: 'queue.depth' });
+  });
+
   test('opens the Explorer with the highest quantile of a summary as the show', async () => {
     open();
     await userEvent.click(await screen.findByText('rpc.latency'));
