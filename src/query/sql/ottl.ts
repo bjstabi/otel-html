@@ -384,6 +384,7 @@ function eqHint(e: Expr, context: SqlContext): Hint | undefined {
   let numeric = false;
   if (o.keys.length === 0) {
     if (o.canon === 'name' && context === 'span') key = 'name';
+    else if (o.canon === 'metric.name' && context === 'datapoint') key = 'metric_name';
     else if (o.canon === 'instrumentation_scope.name') key = 'scope_name';
     else if (o.canon === 'severity_number' && context === 'log_record') {
       key = 'severity_number';
@@ -471,7 +472,7 @@ const BODY_TEXT = sql`CASE WHEN json_type(${column('body')}) = 'VARCHAR' THEN js
  * is null.
  */
 export function textPredicate(text: string, context: SqlContext): ExprNode | null {
-  if (text === '') return null;
+  if (text === '' || context === 'datapoint') return null;
   const needle = literal(text.toLowerCase());
   const hit = (field: ExprNode): ExprNode => contains(lower(coalesce(field, literal(''))), needle);
   const asText = (c: string): ExprNode => sql`CAST(${column(c)} AS VARCHAR)`;

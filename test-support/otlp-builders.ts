@@ -80,6 +80,70 @@ export function gauge(name: string, dataPoints: readonly JsonObject[]): JsonObje
   return { name, unit: '1', gauge: { dataPoints } };
 }
 
+export type Temporality = 'cumulative' | 'delta';
+
+const TEMPORALITY = { cumulative: 2, delta: 1 } as const;
+
+export function sum(
+  name: string,
+  dataPoints: readonly JsonObject[],
+  opts: { monotonic: boolean; temporality: Temporality; unit?: string },
+): JsonObject {
+  return {
+    name,
+    unit: opts.unit ?? '1',
+    sum: {
+      dataPoints,
+      isMonotonic: opts.monotonic,
+      aggregationTemporality: TEMPORALITY[opts.temporality],
+    },
+  };
+}
+
+/** Points carry `explicitBounds`, `bucketCounts`, `count`, `sum` and optionally `min`, `max`, `exemplars`. */
+export function histogram(
+  name: string,
+  dataPoints: readonly JsonObject[],
+  opts: { temporality: Temporality; unit?: string },
+): JsonObject {
+  return {
+    name,
+    unit: opts.unit ?? '1',
+    histogram: { dataPoints, aggregationTemporality: TEMPORALITY[opts.temporality] },
+  };
+}
+
+/** Points carry `scale`, `zeroCount`, `count`, `sum` and `positive`/`negative` `{ offset, bucketCounts }`. */
+export function expHistogram(
+  name: string,
+  dataPoints: readonly JsonObject[],
+  opts: { temporality: Temporality; unit?: string },
+): JsonObject {
+  return {
+    name,
+    unit: opts.unit ?? '1',
+    exponentialHistogram: { dataPoints, aggregationTemporality: TEMPORALITY[opts.temporality] },
+  };
+}
+
+/** Points carry `count`, `sum` and `quantileValues: [{ quantile, value }]`. */
+export function summary(name: string, dataPoints: readonly JsonObject[]): JsonObject {
+  return { name, unit: '1', summary: { dataPoints } };
+}
+
+/** One data point per entry of `ms` (milliseconds after the test epoch, 1700000000000000000 ns); `value(i)` supplies the kind-specific fields. */
+export function pointsAt(
+  ms: readonly number[],
+  value: (i: number) => JsonObject,
+  attrs: readonly JsonObject[] = [],
+): JsonObject[] {
+  return ms.map((t, i) => ({
+    timeUnixNano: String(BigInt(T0) + BigInt(t) * 1_000_000n),
+    ...value(i),
+    ...(attrs.length > 0 ? { attributes: attrs } : {}),
+  }));
+}
+
 export function metricsRequest(
   metrics: readonly JsonObject[],
   resourceAttrs: readonly JsonObject[] = [],

@@ -90,6 +90,19 @@ describe('translateCondition', () => {
       translateCondition('resource.attributes["service.name"] == true', 'span').hints.has('service_name'),
     ).toBe(false);
   });
+  test('datapoint conditions translate over the points columns', () => {
+    const t = translateCondition('metric.name == "a" and attributes["k"] == 3', 'datapoint');
+    expect(t.predicate).not.toBeNull();
+    expect(t.residual).toBeNull();
+    expect(t.hints).toEqual(new Map([['metric_name', new Set(['a'])]]));
+    expect(translateCondition('resource.attributes["service.name"] == "x"', 'datapoint').hints).toEqual(
+      new Map([['service_name', new Set(['x'])]]),
+    );
+    const len = translateCondition('Len(attributes["k"]) > 2', 'datapoint');
+    expect(len.predicate).toBeNull();
+    expect(len.residual).toBe('Len(attributes["k"]) > 2');
+    expect(textPredicate('abc', 'datapoint')).toBeNull();
+  });
   test('a residual keeps its grouping and re-parses', () => {
     const t = translateCondition('(name == "a" or kind == 1) and Len(name) > 1', 'span');
     expect(t.residual).toBe('Len(name) > 1');

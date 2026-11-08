@@ -17,9 +17,13 @@ const mod = (a: number, b: number): number => ((a % b) + b) % b;
 
 /**
  * The bucketing of `TimeBuckets` (src/rollups/time-buckets.ts) for a known extent: the window, else the manifest range
- * (both relative), widths `1 ms * 2^k`, the smallest that fits 4096 buckets. No extent gives one 1 ms bucket at 0.
+ * (both relative), widths `1 ms * 2^k`, the smallest that fits `maxBuckets` (4096) buckets. No extent gives one 1 ms bucket at 0.
  */
-export function bucketSpec(window: RelWindow | null, range: RelWindow | null): BucketSpec {
+export function bucketSpec(
+  window: RelWindow | null,
+  range: RelWindow | null,
+  maxBuckets: number = MAX_BUCKETS,
+): BucketSpec {
   const extent = window ?? range;
   if (extent === null) return { widthNs: BASE_WIDTH_NS, startNs: 0, endNs: 0 };
   let width = BASE_WIDTH_NS;
@@ -27,7 +31,7 @@ export function bucketSpec(window: RelWindow | null, range: RelWindow | null): B
   let hi = Math.max(lo, Math.ceil(extent.end));
   lo -= mod(lo, width);
   hi -= mod(hi, width);
-  while ((hi - lo) / width + 1 > MAX_BUCKETS) {
+  while ((hi - lo) / width + 1 > maxBuckets) {
     width *= 2;
     lo = Math.floor(extent.start);
     hi = Math.max(lo, Math.ceil(extent.end));

@@ -3,11 +3,12 @@ import {
   createNormalizeContext,
   type NormalizeContext,
   normalizeLogs,
+  normalizeMetrics,
   normalizeTraces,
 } from '../../../src/model/normalize.js';
-import type { LogRecordRecord, SpanRecord } from '../../../src/model/records.js';
+import type { LogRecordRecord, MetricPointRecord, SpanRecord } from '../../../src/model/records.js';
 import { compileCondition } from '../../../src/ottl/compile.js';
-import type { LogTarget, SpanTarget } from '../../../src/ottl/contexts.js';
+import type { DatapointTarget, LogTarget, SpanTarget } from '../../../src/ottl/contexts.js';
 import type { SqlContext } from '../../../src/query/sql/columns.js';
 import { toSql, translateCondition } from '../../../src/query/sql/ottl.js';
 import type { TestDb } from '../../../test-support/duckdb-node.js';
@@ -21,6 +22,7 @@ import {
   type JsonObject,
   logRecord,
   logsRequest,
+  metricsRequest,
   span,
   traceRequest,
 } from '../../../test-support/otlp-builders.js';
@@ -140,6 +142,30 @@ function logRequests(): JsonObject[] {
   return [mk(0, N / 2, 'web'), mk(N / 2, N, 'api')];
 }
 
+function metricRequests(): JsonObject[] {
+  const mk = (from: number, to: number, svc: string): JsonObject => {
+    const byName = new Map<string, JsonObject[]>();
+    for (let i = from; i < to; i++) {
+      const name = i % 2 === 0 ? 'm.even' : 'm.odd';
+      const pts = byName.get(name) ?? [];
+      pts.push({
+        timeUnixNano: String(base + BigInt(i) * 1000n),
+        asDouble: i,
+        attributes: attrs(i),
+      });
+      byName.set(name, pts);
+    }
+    const metrics = [...byName].map(([name, dataPoints]) => ({
+      name,
+      unit: name === 'm.even' ? 'By' : '1',
+      ...(name === 'm.even' ? { description: 'even ones' } : {}),
+      gauge: { dataPoints },
+    }));
+    return metricsRequest(metrics, [str('service.name', svc), int('cicd.pipeline.run.id', '42')]);
+  };
+  return [mk(0, N / 2, 'web'), mk(N / 2, N, 'api')];
+}
+
 const spanConditions = [
   'name == "GET /"',
   'status.code == STATUS_CODE_ERROR',
@@ -237,11 +263,44 @@ const logConditions = [
   'severity_text == "" or attributes["b"] == true',
 ];
 
+const datapointConditions = [
+  'metric.name == "m.even"',
+  'metric.name != "m.even"',
+  'metric.unit == "By"',
+  'metric.description == "even ones"',
+  'metric.description == ""',
+  'metric.name == "m.odd" and metric.unit == "1"',
+  'datapoint.metric.name == "m.even" and attributes["b"] == true',
+  'resource.attributes["service.name"] == "web"',
+  'resource.attributes["service.name"] == "api" and metric.name == "m.odd"',
+  'resource.attributes["cicd.pipeline.run.id"] == 42',
+  'instrumentation_scope.name == "test-scope"',
+  'attributes["a/b"] == "x"',
+  'attributes["a~b"] == "x"',
+  'attributes["q\\"x"] == "quoted"',
+  'attributes["$weird"] == 4',
+  'attributes["n"] == 5',
+  'attributes["n"] == 9007199254740993',
+  'attributes["d"] == 3.5',
+  'attributes["d"] > 1',
+  'attributes["m"]["k"] == "v"',
+  'attributes["nested"]["deep"]["x"] == 7',
+  'attributes["missing"] == nil',
+  'attributes["arr"][0] == "a"',
+  'IsString(attributes["http.status_code"])',
+  'IsMap(attributes["m"])',
+  'IsMatch(attributes["s"], "^[a5]$")',
+  'Len(attributes["s"]) > 2',
+];
+
 /**
  * Conditions that must stay (partly) in the browser: a number beyond 2^53, `$`-prefixed keys, `body.string`, `Len`, and
  * a time column compared with another path. Everything else must translate completely.
  */
 const RESIDUAL = new Set([
+  'datapoint:attributes["$weird"] == 4',
+  'datapoint:attributes["n"] == 9007199254740993',
+  'datapoint:Len(attributes["s"]) > 2',
   'span:attributes["$weird"] == 4',
   'span:attributes["n"] == 9007199254740993',
   'span:attributes["n"] > 9007199254740992',
@@ -257,6 +316,9 @@ const RESIDUAL = new Set([
 ]);
 /** Conditions whose result is legitimately empty or all rows on this fixture (every other one must select some rows, not all). */
 const TRIVIAL = new Set([
+  'datapoint:resource.attributes["cicd.pipeline.run.id"] == 42',
+  'datapoint:instrumentation_scope.name == "test-scope"',
+  'datapoint:attributes["missing"] == nil',
   'span:attributes["m0"][0] == "v"',
   'span:attributes["n"] == nil',
   'span:attributes["n"] != nil',
@@ -284,21 +346,25 @@ describe('SQL and browser evaluation agree on the translatable OTTL subset', () 
   let db: TestDb;
   let spanRecords: SpanRecord[];
   let logRecords: LogRecordRecord[];
+  let pointRecords: MetricPointRecord[];
   let ctx: NormalizeContext;
 
   beforeAll(async () => {
-    const reqs = [...spanRequests(), ...logRequests()].map((r) => otlp(r));
+    const reqs = [...spanRequests(), ...logRequests(), ...metricRequests()].map((r) => otlp(r));
     fixture = await buildFormat4Report(reqs, { close: false });
     db = await openFixtureDb(fixture);
     ctx = createNormalizeContext(fixture.epoch as never);
     spanRecords = [];
     logRecords = [];
+    pointRecords = [];
     for (const r of reqs) {
       if (r.signal === 'traces') spanRecords.push(...normalizeTraces(r.request, ctx, 'fx'));
       else if (r.signal === 'logs') logRecords.push(...normalizeLogs(r.request, ctx, 'fx'));
+      else if (r.signal === 'metrics') pointRecords.push(...normalizeMetrics(r.request, ctx, 'fx'));
     }
     expect(spanRecords).toHaveLength(N);
     expect(logRecords).toHaveLength(N);
+    expect(pointRecords).toHaveLength(N);
   });
   afterAll(() => db.close());
 
@@ -315,6 +381,14 @@ describe('SQL and browser evaluation agree on the translatable OTTL subset', () 
     scope: ctx.scopes.get(l.scope),
     epoch: epoch(),
   });
+  const pointTarget = (p: MetricPointRecord): DatapointTarget => ({
+    point: p,
+    resource: ctx.resources.get(p.resource),
+    scope: ctx.scopes.get(p.scope),
+    epoch: epoch(),
+  });
+  // a point's index travels in its (unique) time
+  const pid = (p: MetricPointRecord): number => Number(p.time) / 1000;
   // a log's index travels in its (unique) observed time: a JSON attribute would move with the `$m` form
   const lid = (l: LogRecordRecord): number => (Number(l.observedTime) - 7) / 1000;
 
@@ -391,6 +465,28 @@ describe('SQL and browser evaluation agree on the translatable OTTL subset', () 
       (residual, ids) => {
         const cond = compileCondition(residual, 'log_record');
         return new Set([...ids].filter((i) => cond.test(logTarget(byId.get(i) as LogRecordRecord))));
+      },
+    );
+  });
+
+  test.each(datapointConditions)('datapoint: %s', (src) => {
+    const byId = new Map(pointRecords.map((p) => [pid(p), p]));
+    check(
+      src,
+      'datapoint',
+      (c) => {
+        const cond = compileCondition(c, 'datapoint');
+        return new Set([...byId].filter(([, p]) => cond.test(pointTarget(p))).map(([i]) => i));
+      },
+      (where) =>
+        db
+          .rows(
+            `SELECT CAST((time_unix_nano - ${fixture.epoch}::BIGINT) / 1000 AS BIGINT) AS pid FROM points WHERE ${where}`,
+          )
+          .map((r) => Number(Object.entries(r).find(([k]) => k === 'pid')?.[1])),
+      (residual, ids) => {
+        const cond = compileCondition(residual, 'datapoint');
+        return new Set([...ids].filter((i) => cond.test(pointTarget(byId.get(i) as MetricPointRecord))));
       },
     );
   });
