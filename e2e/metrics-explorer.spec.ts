@@ -1,5 +1,5 @@
 import { readdir } from 'node:fs/promises';
-import type { Page } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
 import { LINKED_SPAN, LINKED_TRACE, METRIC_HIST, reportDir } from './fixture.js';
 import { exemplarRings, LINE_MIN_PX, lineRunPx, menuAt, watchProblems } from './metric-chart.js';
 import { expect, HTTP, test } from './test.js';
@@ -16,6 +16,15 @@ async function p99ByRoute(page: Page): Promise<void> {
   await page.keyboard.press('Escape');
   await page.getByRole('switch', { name: 'Exemplars' }).click();
   await expect(page.getByRole('switch', { name: 'Exemplars' })).toHaveAttribute('aria-checked', 'true');
+}
+
+/**
+ * The exemplar rings once drawn. Switching Exemplars on re-runs the query and the previous lines stay up meanwhile, so
+ * a chart with its lines can still lack its rings for a moment (seen on WebKit).
+ */
+async function ringsOf(chart: Locator): Promise<{ x: number; y: number }[]> {
+  await expect.poll(async () => (await exemplarRings(chart)).length).toBeGreaterThan(0);
+  return exemplarRings(chart);
 }
 
 /** The chart's legend lists one entry per series, which the chart's accessible name counts. */
@@ -42,7 +51,7 @@ test(
     expect(json).toContain('"by":["attributes[\\"http.route\\"]"]');
 
     // Two exemplars in the run: one on LINKED_TRACE, one on a trace the report lacks.
-    const rings = await exemplarRings(chart);
+    const rings = await ringsOf(chart);
     expect(rings).toHaveLength(2);
     const menus: string[][] = [];
     for (const ring of rings) {
@@ -75,7 +84,7 @@ test('"Logs in this window" opens the Logs Explorer with t set to the clicked bu
   await p99ByRoute(page);
   const chart = p99Chart(page);
   await expect(chart).toBeVisible();
-  const rings = await exemplarRings(chart);
+  const rings = await ringsOf(chart);
   const box = await chart.boundingBox();
   if (box === null) throw new Error('the chart has no box');
   const at = { x: Math.round(box.width * 0.75), y: 60 };
@@ -152,6 +161,6 @@ test('an unfinished report (several partitions, never closed) charts METRIC_HIST
   await expect(page.getByText('report unfinished')).toHaveCount(0);
   await expect(page.getByText('flush segments')).toHaveCount(0);
   // The exemplars both sit in the first partition (collections 0 and 8, flushed before the second).
-  expect(await exemplarRings(p99Chart(page))).toHaveLength(2);
+  expect(await ringsOf(p99Chart(page))).toHaveLength(2);
   expect(problems).toEqual([]);
 });
