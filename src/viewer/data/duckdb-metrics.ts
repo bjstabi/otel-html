@@ -138,6 +138,8 @@ export function metricMethods(ctx: MetricContext): MetricMethods {
       condition: o.condition,
       text: '',
       window: o.window,
+      // `points` keeps `metric_name` statistics: a partition without the metric is not read.
+      hints: new Map([['metric_name', new Set([o.identity.name])]]),
     });
     // seriesQuery adds the files term itself: the rest (translated condition, window) is the series' where.
     const terms: ExprNode[] = whereOf({ ...filter, files: { ...filter.files, all: true } }, 'points');
@@ -216,7 +218,6 @@ export function metricMethods(ctx: MetricContext): MetricMethods {
     const abs = absWindow(req.window, epoch);
     // A counter's running total needs the deltas before the window: neither the files nor the points are cut at its start.
     const baseline = kind === 'counter' && q.show === 'sum';
-    const filterWindow: RelWindow = baseline ? { start: BEFORE_EVERYTHING, end: req.window.end } : req.window;
     const texts = resourceTextsOf(cat, req.resources);
     const scopeOf = (window: RelWindow) => ({
       entry,
@@ -230,7 +231,7 @@ export function metricMethods(ctx: MetricContext): MetricMethods {
     // The bucket width comes from the points' interval over the requested window; the cells then read whole buckets.
     const width =
       req.widthNs ??
-      (await scoped(scopeOf(filterWindow), signal, async (scope) => {
+      (await scoped(scopeOf(req.window), signal, async (scope) => {
         const pick = pickWidthNs(req.window, req.maxPoints);
         if (scope.files.files.length === 0) return pick;
         const gaps = await engine.query(

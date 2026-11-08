@@ -8,6 +8,7 @@ import { buildFilter, whereOf } from '../../src/query/sql/filter.js';
 import { quantileOf } from '../../src/rollups/metric-agg.js';
 import { metricMethods } from '../../src/viewer/data/duckdb-metrics.js';
 import type { MetricEntry } from '../../src/viewer/data/metric-catalog.js';
+import { seriesTarget } from '../../src/viewer/data/metric-mappers.js';
 import {
   type CatalogRows,
   catalogFrom,
@@ -1185,4 +1186,188 @@ describe('@perf the chart query', () => {
     // invocations: 231.4, 229.7 and 229.7 ms. The budget is twice the median.
     expect(ms).toBeLessThan(460 * perfFactor());
   }, 300_000);
+});
+
+describe('branch-review fixes', () => {
+  test('a counter running total keeps the chart width: sum and increase agree when most series end before the window', async () => {
+    const dead = Array.from({ length: 400 }, (_, i) =>
+      pointsAt(sec(0, 10, 20, 30, 40, 50), (j) => ({ asDouble: j }), [attr('id', str(`d${i}`))]),
+    ).flat();
+    const long = pointsAt(
+      Array.from({ length: 21 }, (_, i) => i * 10_000),
+      (i) => ({ asDouble: i }),
+      [attr('id', str('long'))],
+    );
+    const e = await openEnv([
+      otlp(
+        metricsRequest(
+          [sum('many', [...dead, ...long], { monotonic: true, temporality: 'cumulative' })],
+          resA,
+        ) as never,
+      ),
+    ]);
+    const w = { start: 100 * S, end: 200 * S };
+    const a = await chart(e, 'many', { show: 'sum' }, w);
+    const b = await chart(e, 'many', { show: 'increase' }, w);
+    expect(a.widthNs).toBe(b.widthNs);
+    // the points' interval is 10 s, wider than the 1 ms pick
+    expect(a.widthNs).toBeGreaterThanOrEqual(10 * S);
+    expect(vals(a).every((v) => v !== null)).toBe(true);
+  });
+
+  test('a query reads only the partitions that hold the metric', async () => {
+    const A = otlp(
+      metricsRequest(
+        [
+          gauge(
+            'only1',
+            pointsAt(sec(0, 5), () => ({ asDouble: 1 })),
+          ),
+        ],
+        resA,
+      ) as never,
+    );
+    const B = otlp(
+      metricsRequest(
+        [
+          gauge(
+            'other',
+            pointsAt(sec(10), () => ({ asDouble: 1 })),
+          ),
+        ],
+        resA,
+      ) as never,
+    );
+    const issued: string[] = [];
+    const e = await openEnv([A, B], (inner) => ({
+      ...inner,
+      query: (qq, signal) => {
+        issued.push(String(qq));
+        return inner.query(qq, signal);
+      },
+    }));
+    const [p0, p1] = e.f.manifest.partitions.map((p) => p.files.points?.path ?? '');
+    expect(p0).not.toBe('');
+    await chart(e, 'only1', { show: 'avg' }, { start: 0, end: 20 * S }, { exemplars: true });
+    const mine = issued.filter((sql) => sql.includes("'only1'"));
+    expect(mine.length).toBeGreaterThanOrEqual(3);
+    for (const sql of mine) {
+      expect(sql).toContain(p0);
+      expect(sql).not.toContain(p1);
+    }
+  });
+
+  test('a residual where sees the description of the series row', () => {
+    const entry = {
+      name: 'm',
+      description: 'from the catalog',
+      unit: '1',
+      type: 'gauge',
+      temporality: 'unspecified',
+      monotonic: false,
+    } as never;
+    const row = {
+      seriesId: 'x',
+      description: 'from the row',
+      attributes: new Map(),
+      resource: { attributes: new Map(), droppedAttributesCount: 0, schemaUrl: '' },
+      scope: { name: '', version: '', attributes: new Map(), droppedAttributesCount: 0, schemaUrl: '' },
+      bounds: null,
+      groups: [],
+    };
+    expect(seriesTarget(entry, row).point.description).toBe('from the row');
+  });
+
+  test('catalog attribute keys come from the JSON keys, including the {"$m"} form', () => {
+    const def = {
+      metric_name: ['m'],
+      point_type: ['gauge'],
+      metric_unit: ['1'],
+      aggregation_temporality: [0],
+      is_monotonic: [false],
+    };
+    const defs = tableFromArrays({
+      ...def,
+      description: [''],
+      points: [2n],
+      series: [2n],
+      resets: [0n],
+      out_of_order: [0n],
+      no_value: [0n],
+      scopes: [['s']],
+    });
+    const ids = tableFromArrays({
+      metric_name: ['m', 'm'],
+      point_type: ['gauge', 'gauge'],
+      metric_unit: ['1', '1'],
+      aggregation_temporality: [0, 0],
+      is_monotonic: [false, false],
+      attributes: ['{"a":"1","b":{"$i":"9"}}', '{"$m":[["$k","1"],["z",{"$d":"2"}]]}'],
+      resource_attributes: ['{}', '{}'],
+      resource_schema_url: ['', ''],
+      resource_dropped_attributes_count: [0n, 0n],
+      scope_name: ['s', 's'],
+      scope_version: ['', ''],
+      scope_attributes: ['{}', '{}'],
+      scope_schema_url: ['', ''],
+      scope_dropped_attributes_count: [0n, 0n],
+    });
+    const spark = tableFromArrays({ ...def, bucket: [0n], sum: [1], n: [1n] });
+    const cat = catalogFrom(defs, ids, spark, { widthNs: 1e6, startNs: 0, endNs: 0 });
+    expect(cat.entries[0]?.attributeKeys).toEqual(['$k', 'a', 'b', 'z']);
+  });
+
+  describe('notes and empty values on the chart path', () => {
+    const X = otlp(
+      metricsRequest(
+        [
+          sum(
+            'dup',
+            pointsAt(sec(0), () => ({ asDouble: 1 })),
+            { monotonic: false, temporality: 'cumulative' },
+          ),
+          sum(
+            'dup',
+            pointsAt(sec(0), () => ({ asDouble: 1 })),
+            {
+              monotonic: false,
+              temporality: 'cumulative',
+              unit: 'ms',
+            },
+          ),
+          gauge(
+            'holes',
+            pointsAt(sec(0, 5), (i) => (i === 0 ? {} : { asDouble: 2 })),
+          ),
+          gauge(
+            'nul',
+            pointsAt(sec(0), () => ({})),
+          ),
+        ],
+        resA,
+      ) as never,
+    );
+    let e: Env;
+    beforeAll(async () => {
+      e = await openEnv([X]);
+    });
+    const w = { start: 0, end: 9.9 * S };
+
+    test('conflicting definitions give the note', async () => {
+      const r = await chart(e, 'dup', { show: 'avg' }, w, { widthNs: 10 * S });
+      expect(r.notes.some((n) => n.startsWith('dup has conflicting definitions'))).toBe(true);
+    });
+
+    test('points without a value give the note and are left out of the values', async () => {
+      const r = await chart(e, 'holes', { show: 'avg' }, w, { widthNs: 10 * S });
+      expect(r.notes).toContain('1 point had no value');
+      expect(vals(r)).toEqual([2]);
+    });
+
+    test('a series whose points all lack a value charts as gaps', async () => {
+      const r = await chart(e, 'nul', { show: 'avg' }, w, { widthNs: 10 * S });
+      expect(r.series).toHaveLength(1);
+      expect(vals(r).every((v) => v === null)).toBe(true);
+    });
+  });
 });

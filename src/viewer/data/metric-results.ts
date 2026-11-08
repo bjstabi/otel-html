@@ -76,6 +76,8 @@ export interface RunQueryResult {
 /** One decoded row of `seriesQuery`; `seriesId` is the stored hash text. */
 export interface SeriesRow {
   seriesId: string;
+  /** The metric's description as this series stored it. */
+  description: string;
   attributes: Attributes;
   resource: ResourceRecord;
   scope: ScopeRecord;
@@ -198,6 +200,26 @@ function storedDef(row: ResultRow): MetricIdentity & { key: string } {
   return { ...id, key: JSON.stringify([id.name, id.type, id.unit, id.temporality, id.monotonic]) };
 }
 
+/** The keys of an attribute JSON text without decoding its values; the `{"$m": [[key, value], ...]}` form lists its keys. */
+function attributeKeysOf(text: string): string[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return [...attributesFromJson(text).keys()]; // throws the typed error
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed))
+    return [...attributesFromJson(text).keys()];
+  const keys = Object.keys(parsed);
+  const [only] = keys;
+  if (keys.length === 1 && only === '$m') {
+    const entries = (parsed as { $m?: unknown }).$m;
+    if (Array.isArray(entries))
+      return entries.flatMap((e: unknown) => (Array.isArray(e) && typeof e[0] === 'string' ? [e[0]] : []));
+  }
+  return keys;
+}
+
 const scopeKey = (s: ScopeRecord): string =>
   JSON.stringify([
     s.name,
@@ -256,7 +278,7 @@ export function catalogFrom(defs: Table, identities: Table, spark: Table, spec: 
     const seen = `${def.key}\u0000${attributes}`;
     if (!seenAttributes.has(seen)) {
       seenAttributes.add(seen);
-      for (const k of attributesFromJson(attributes).keys()) acc.keys.add(k);
+      for (const k of attributeKeysOf(attributes)) acc.keys.add(k);
     }
     const text = textOf(row, 'resource_attributes');
     const schemaUrl = textOf(row, 'resource_schema_url');

@@ -747,6 +747,7 @@ export function seriesRowsFrom(t: Table, byCount: number): SeriesRow[] {
     const bounds = cell(row, 'explicit_bounds');
     return {
       seriesId: String(cell(row, 'series_id')),
+      description: String(cell(row, 'metric_description') ?? ''),
       attributes: attributesFromJson(String(cell(row, 'attributes'))),
       resource,
       scope,
@@ -784,7 +785,7 @@ export function seriesTarget(entry: MetricEntry, row: SeriesRow): DatapointTarge
     epoch: 0n as UnixNanos,
     point: {
       name: entry.name,
-      description: entry.description,
+      description: row.description,
       unit: entry.unit,
       type: entry.type,
       temporality: entry.temporality,
