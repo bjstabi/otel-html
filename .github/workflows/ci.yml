@@ -270,10 +270,10 @@ jobs:
       - uses: ./.github/actions/otel-html-setup
         with:
           command: node dist/cli/main.js
-      # The metrics-scale tests are @perf, so they live in the chromium-perf-file project. Global setup asserts the
-      # other fixture reports exist, and the spec writes the metrics-scale report itself.
+      # The metrics-scale tests are @perf @http, so they live in the chromium-perf-http project (the report is in site
+      # format). Global setup asserts the other fixture reports exist, and the spec writes the metrics-scale report itself.
       - run: mise run --skip-deps e2e:fixtures
-      - run: pnpm exec playwright test e2e/scale.spec.ts --project chromium-perf-file --grep 'metrics scale' --workers=1
+      - run: pnpm exec playwright test e2e/scale.spec.ts --project chromium-perf-http --grep 'metrics scale' --workers=1
       - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

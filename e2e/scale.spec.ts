@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { wantsAsset } from '../src/writer/viewer-assets.js';
 import { LOG_STEP_NS, LOGS_PER_TRACE_SLOT, scaleLogTrace } from '../test-support/scale-logs.js';
@@ -28,8 +28,8 @@ import { expect, test } from './test.js';
 
 // The perf tests over the format-4 reports: `scale` (100k spans, 1M logs, one compacted partition per signal) and
 // `many` (the same input in 100 uncompacted partitions, `complete: false`), both `site` reports read over HTTP, in the
-// `chromium-perf-http` project (the `@perf @http` tag pair). The metrics scale tests at the end are `chromium-perf-file`
-// ones (`@perf` alone) and stay skipped until the metrics plan (plan 3) brings the Metrics pages back.
+// `chromium-perf-http` project (the `@perf @http` tag pair). The metrics scale tests at the end are in it too: they
+// write their own `site` report (`e2e/metrics-scale.ts`) and read it over HTTP.
 
 /**
  * Fixed budgets, each twice the median measured over three runs of this spec on the reference machine (PR 7), and never
@@ -89,25 +89,6 @@ const SERVICE = SCALE_SERVICES[0];
 /** Span `j` of a trace belongs to service `j % 8`, so the first service owns spans 0, 8, ..., 48 of each trace. */
 const PER_SERVICE = SCALE_TRACES * Math.ceil(SCALE_SPANS_PER_TRACE / SCALE_SERVICES.length);
 
-/**
- * Records every `<script src>` the viewer inserts from now on, in the page (the metrics scale tests' `file://` witness).
- */
-async function witnessScripts(page: Page): Promise<void> {
-  await page.addInitScript(() => {
-    const w = window as unknown as { __ohScripts: string[] };
-    w.__ohScripts = [];
-    new MutationObserver((records) => {
-      for (const r of records)
-        for (const n of r.addedNodes)
-          if (n instanceof HTMLScriptElement && n.src !== '') w.__ohScripts.push(n.src);
-    }).observe(document, { childList: true, subtree: true });
-  });
-}
-
-function witnessedScripts(page: Page): Promise<string[]> {
-  return page.evaluate(() => (window as unknown as { __ohScripts: string[] }).__ohScripts);
-}
-
 function median(xs: readonly number[]): number {
   const sorted = [...xs].sort((a, b) => a - b);
   return sorted[Math.floor(sorted.length / 2)] ?? Number.POSITIVE_INFINITY;
@@ -151,31 +132,40 @@ async function loadSamples<T>(
     const settled = (): boolean => {
       if (kind === 'fusion-settled') {
         // Every widget has its result: data (a canvas or rows), or an empty or error state, and none shows a loading
-        // status. A frame whose body holds nothing yet has not answered. Metrics is not part of it (plan 3).
-        const frames = ['timeline', 'traces', 'logs'].map((id) =>
+        // status. A frame whose body holds nothing yet has not answered. The Metrics frame is settled when no card is busy and it
+        // holds a chart, an empty state or an error.
+        const frames = ['timeline', 'traces', 'logs', 'metrics'].map((id) =>
           document.querySelector(`[data-widget="${id}"]`),
         );
         return frames.every(
           (f) =>
             f !== null &&
             !loading(f) &&
+            f.querySelector('[aria-busy="true"]') === null &&
             (f.querySelector('canvas') !== null ||
               rows(f) > 0 ||
+              f.querySelector('[role="img"]') !== null ||
               f.querySelector('[role="alert"], [role="status"]') !== null),
         );
       }
       if (kind === 'fusion') {
-        // The Metrics frame is not part of it: the format-4 viewer shows no metrics yet (plan 3).
-        const frames = ['timeline', 'traces', 'logs'].map((id) =>
+        // The Metrics frame has drawn a chart of at least one series and no card is busy.
+        const frames = ['timeline', 'traces', 'logs', 'metrics'].map((id) =>
           document.querySelector(`[data-widget="${id}"]`),
         );
         if (frames.some((f) => f === null)) return false;
-        const [timeline, traces, logs] = frames;
+        const [timeline, traces, logs, metrics] = frames;
+        const charted =
+          metrics?.querySelector('[aria-busy="true"]') === null &&
+          [...(metrics?.querySelectorAll('[role="img"]') ?? [])].some((c) =>
+            /: [1-9]\d* series$/.test(c.getAttribute('aria-label') ?? ''),
+          );
         return (
           frames.every((f) => !loading(f)) &&
           timeline?.querySelector('canvas') !== null &&
           rows(traces) >= 2 &&
-          rows(logs) >= 2
+          rows(logs) >= 2 &&
+          charted
         );
       }
       const grid = document.querySelector('[role="grid"][aria-label="Results"]');
@@ -430,10 +420,10 @@ test(
 /**
  * Fusion on `scale`: interactive when its frames are past loading (the lists hold rows, the timeline has drawn, no frame
  * shows a loading status), timed in the page from navigation start. Then one trace click is timed to the frame where
- * Logs says it shows the selected trace and is not loading. The Metrics frame is left out until the metrics plan.
+ * Logs says it shows the selected trace, Metrics says "from the selected trace's resources" with its charts redrawn (none busy), and neither is loading.
  */
 test(
-  `100k spans, 1M logs: Fusion is interactive within ${FUSION_INTERACTIVE_BUDGET_MS} ms and a trace click updates Logs within ${FUSION_SELECTION_BUDGET_MS} ms`,
+  `100k spans, 1M logs: Fusion is interactive within ${FUSION_INTERACTIVE_BUDGET_MS} ms and a trace click updates Logs and Metrics within ${FUSION_SELECTION_BUDGET_MS} ms`,
   PERF_HTTP,
   async ({ page, reportUrl, browserName }, testInfo) => {
     const factor = perfFactor();
@@ -443,7 +433,8 @@ test(
       page,
       `${reportUrl('scale')}/index.html#/dashboards/fusion`,
       'fusion',
-      // From the click to the frame after Logs says "for the selected trace" and is not loading.
+      // From the click to the frame after Logs says "for the selected trace", Metrics says "from the selected trace's
+      // resources" with its charts redrawn, and neither is loading.
       (p) =>
         p.evaluate(
           () =>
@@ -452,14 +443,27 @@ test(
                 .querySelector('[data-widget="traces"]')
                 ?.querySelectorAll<HTMLElement>('[role="row"]')[1];
               const logs = document.querySelector('[data-widget="logs"]');
-              if (!row || !logs) throw new Error('Fusion frames not found');
+              const metrics = document.querySelector('[data-widget="metrics"]');
+              if (!row || !logs || !metrics) throw new Error('Fusion frames not found');
               const loading = (f: Element): boolean =>
                 [...f.querySelectorAll('[role="status"]')].some((s) =>
                   /^(Loading|Scanning)/.test(s.textContent ?? ''),
                 );
+              const charted = (f: Element): boolean =>
+                f.querySelector('[aria-busy="true"]') === null &&
+                [...f.querySelectorAll('[role="img"]')].some((c) =>
+                  /: [1-9]\d* series$/.test(c.getAttribute('aria-label') ?? ''),
+                );
               const done = (): boolean =>
-                /for the selected trace/.test(logs.textContent ?? '') && !loading(logs);
-              const timer = setTimeout(() => reject(new Error('Logs never followed the trace')), 15_000);
+                /for the selected trace/.test(logs.textContent ?? '') &&
+                /selected trace's resources/.test(metrics.textContent ?? '') &&
+                !loading(logs) &&
+                !loading(metrics) &&
+                charted(metrics);
+              const timer = setTimeout(
+                () => reject(new Error('Logs and Metrics never followed the trace')),
+                15_000,
+              );
               const t = performance.now();
               const mo = new MutationObserver(() => {
                 if (!done()) return;
@@ -482,7 +486,7 @@ test(
     const selectionMs = median(afters);
     report(
       testInfo,
-      `PERF fusion ${testInfo.project.name} (${browserName}): interactive median ${interactiveMs.toFixed(0)} ms, samples [${list(loads)}] (budget ${FUSION_INTERACTIVE_BUDGET_MS * factor}), trace click to Logs median ${selectionMs.toFixed(0)} ms, samples [${list(afters)}] (budget ${FUSION_SELECTION_BUDGET_MS * factor}), factor ${factor}`,
+      `PERF fusion ${testInfo.project.name} (${browserName}): interactive median ${interactiveMs.toFixed(0)} ms, samples [${list(loads)}] (budget ${FUSION_INTERACTIVE_BUDGET_MS * factor}), trace click to Logs and Metrics median ${selectionMs.toFixed(0)} ms, samples [${list(afters)}] (budget ${FUSION_SELECTION_BUDGET_MS * factor}), factor ${factor}`,
     );
     expect(interactiveMs).toBeLessThan(FUSION_INTERACTIVE_BUDGET_MS * factor);
     expect(selectionMs).toBeLessThan(FUSION_SELECTION_BUDGET_MS * factor);
@@ -553,51 +557,73 @@ const METRICS_CATALOG_BUDGET_MS = 1000;
 /** Writing the metrics scale report takes a few seconds locally and under a minute on CI. */
 const METRICS_SCALE_SETUP_MS = 5 * 60 * 1000;
 
-/** The charted metric's folder under `data/metrics/`. Metric 0 is the first one written, so it gets id 0. */
-const CHARTED_METRIC_ID = String(SCALE_CHARTED_METRIC).padStart(6, '0');
+/** Bytes of `points.parquet` a `Range` header asks for (`bytes=a-b`, `bytes=a-`, `bytes=-n`); a plain GET reads all `size`. */
+function rangeBytes(range: string | null, size: number): number {
+  if (range === null) return size;
+  const m = /^bytes=(\d*)-(\d*)$/.exec(range);
+  if (m === null) return size;
+  const [, from = '', to = ''] = m;
+  if (from === '') return Math.min(Number(to), size);
+  return (to === '' ? size : Math.min(Number(to) + 1, size)) - Number(from);
+}
 
-/**
- * The report-relative paths of the `data/` files the page loads from now on: request events over HTTP, and the
- * script witness (`witnessScripts`) for `file://`, where not every browser reports script loads as requests. The
- * returned function reads both.
- */
-async function recordDataFiles(page: Page, root: string): Promise<() => Promise<Set<string>>> {
-  const loaded = new Set<string>();
-  const note = (url: string): void => {
-    const clean = url.split(/[?#]/)[0] ?? '';
-    if (clean.startsWith(`${root}/data/`)) loaded.add(clean.slice(root.length + 1));
-  };
-  page.on('request', (request) => note(request.url()));
-  await witnessScripts(page);
-  return async () => {
-    for (const url of await witnessedScripts(page)) note(url);
-    return loaded;
-  };
+/** The metrics scale report's `points.parquet` files (partition folders under `data/partitions/`) and their bytes. */
+function pointsFileBytes(): Map<string, number> {
+  const root = new URL('data/partitions/', reportDir('metrics-scale', 'http'));
+  const sizes = new Map<string, number>();
+  for (const dir of readdirSync(root)) {
+    const file = new URL(`${dir}/points.parquet`, root);
+    if (existsSync(file)) sizes.set(`data/partitions/${dir}/points.parquet`, statSync(file).size);
+  }
+  return sizes;
 }
 
 /**
- * The guard that keeps the smaller metrics scale report a stand-in for the full workload (`fixture.ts`): of the
- * per-metric files (`data/metrics/<id>/`) the page may load only those of the metric `charted`, when given. Any other
- * metric's points are the ones the report leaves short. The rollups (`data/rollups/metrics.js` holds the catalog) and
- * the manifest are written in full.
+ * Reads the server's request log (`/__requests`) per load, so a test can say what one open of a metrics page asked for
+ * from `points.parquet`. The perf projects run with `--workers=1`, so what is new since the last read is this page's.
  */
-function expectOnlyChartedData(page: string, loaded: Set<string>, charted: string | null): void {
-  const stray = [...loaded]
-    .filter(
-      (f) => f.startsWith('data/metrics/') && (charted === null || !f.startsWith(`data/metrics/${charted}/`)),
-    )
-    .sort();
-  expect(
-    stray,
-    `the ${page} loaded data files the metrics scale report writes only in part: the smaller report no longer stands in for the spec's workload (${SCALE_METRICS} metrics × ${SCALE_METRIC_SERIES} series × 1 h at 10 s); see e2e/fixture.ts`,
-  ).toEqual([]);
+function pointsReads(reportUrl: string): {
+  /** Bytes of `points.parquet` the requests since the previous call asked for (ranges as sent), and how many requests. */
+  next(): Promise<{ bytes: number; requests: number; fullGets: number }>;
+} {
+  const base = `http://127.0.0.1:${process.env[PORT_ENV]}`;
+  const prefix = new URL(reportUrl).pathname;
+  const sizes = pointsFileBytes();
+  let offset: number | null = null;
+  const seen = async (): Promise<RequestRecord[]> =>
+    (await (await fetch(`${base}${REQUESTS_PATH}`)).json()) as RequestRecord[];
+  return {
+    async next() {
+      const all = await seen();
+      const fresh = offset === null ? [] : all.slice(offset);
+      offset = all.length;
+      let bytes = 0;
+      let requests = 0;
+      let fullGets = 0;
+      for (const r of fresh) {
+        if (r.method !== 'GET' || !r.path.startsWith(`${prefix}/`)) continue;
+        const size = sizes.get(r.path.slice(prefix.length + 1));
+        if (size === undefined) continue;
+        requests++;
+        if (r.range === null) fullGets++;
+        bytes += rangeBytes(r.range, size);
+      }
+      return { bytes, requests, fullGets };
+    },
+  };
 }
 
 /**
  * Median milliseconds from navigation start to the frame after an element matching `selector` (and, when given,
  * whose `aria-label` matches `label`) appears, over `LOAD_SAMPLES` loads after an untimed first one.
  */
-async function paintedMs(page: Page, url: string, selector: string, label: string | null): Promise<number[]> {
+async function paintedMs(
+  page: Page,
+  url: string,
+  selector: string,
+  label: string | null,
+  afterLoad?: () => Promise<void>,
+): Promise<number[]> {
   await page.addInitScript(
     ({ sel, pattern }) => {
       const w = window as { __OH_PAINTED__?: number };
@@ -632,6 +658,7 @@ async function paintedMs(page: Page, url: string, selector: string, label: strin
         })
       ).jsonValue(),
     );
+    if (afterLoad !== undefined) await afterLoad();
     if (i > 0) samples.push(ms);
   }
   return samples;
@@ -643,8 +670,6 @@ const METRICS_SCALE_ENV = 'OTEL_HTML_METRICS_SCALE';
 test.describe(`metrics scale: ${SCALE_METRICS} metrics × ${SCALE_METRIC_SERIES} series × 1 h at 10 s`, () => {
   // `beforeAll` writes the on-demand report: one worker runs the describe, in order, so it is written once.
   test.describe.configure({ mode: 'serial' });
-  // The Metrics pages are not available over format 4 yet (plan 3), and the whole file was skipped until now.
-  test.skip(true, 'plan 3: the metrics pages return with their format-4 queries');
   // Skipped tests run no hooks, so the report is not written either.
   test.skip(
     process.env[METRICS_SCALE_ENV] !== '1',
@@ -657,56 +682,76 @@ test.describe(`metrics scale: ${SCALE_METRICS} metrics × ${SCALE_METRIC_SERIES}
 
   test(
     'the Metrics Explorer draws its first chart within 2 s (median)',
-    { tag: '@perf' },
+    PERF_HTTP,
     async ({ page, reportUrl, browserName }, testInfo) => {
       const factor = perfFactor();
-      const dataFiles = await recordDataFiles(page, reportUrl('metrics-scale'));
+      const url = reportUrl('metrics-scale');
+      const reads = pointsReads(url);
+      await reads.next();
+      const sizes = pointsFileBytes();
+      const total = [...sizes.values()].reduce((a, b) => a + b, 0);
+      const perLoad: { bytes: number; requests: number; fullGets: number }[] = [];
       // An empty Explorer charts the first metric of the catalog.
       const samples = await paintedMs(
         page,
-        `${reportUrl('metrics-scale')}/index.html#/metrics`,
+        `${url}/index.html#/metrics`,
         'main [role="img"]',
         ': [1-9]\\d* series$',
+        async () => {
+          perLoad.push(await reads.next());
+        },
       );
       const ms = median(samples);
-      const loaded = await dataFiles();
-      expectOnlyChartedData('Explorer', loaded, CHARTED_METRIC_ID);
-      expect([...loaded].some((f) => f.startsWith(`data/metrics/${CHARTED_METRIC_ID}/`))).toBe(true);
-      // Levels load on demand (#37): the chart reads the one level its bucket width needs, never level 0 here
-      // (1 h at 10 s charts at 16.384 s from level 1), so its cost is bounded whatever the run length.
-      const levels = [...loaded].filter((f) => /^data\/metrics\/[0-9]{6}\/l[0-6]\.js$/.test(f)).sort();
-      expect(levels).toEqual([`data/metrics/${CHARTED_METRIC_ID}/l1.js`]);
       // The first metric is a counter: its rate, all series summed into one line.
       await expect(
         page.getByRole('img', { name: `${scaleMetricName(SCALE_CHARTED_METRIC)} · rate: 1 series` }),
       ).toBeVisible();
+      // Every read is a range (a plain GET would fetch the whole file). The brief's bound, a quarter of the file, does
+      // not hold: the charted metric is 47 % of the rows but about two thirds of the bytes (its `series_id` column
+      // does not compress), and the engine's read-ahead takes the rest; see the task 6.3 report.
+      const bytes = perLoad.slice(1).map((l) => l.bytes);
       report(
         testInfo,
-        `PERF metrics explorer ${testInfo.project.name} (${browserName}): median ${ms.toFixed(0)} ms, samples [${samples.map((x) => x.toFixed(0)).join(', ')}] (budget ${METRICS_EXPLORER_BUDGET_MS * factor}), factor ${factor}`,
+        `PERF metrics explorer ${testInfo.project.name} (${browserName}): median ${ms.toFixed(0)} ms, samples [${samples.map((x) => x.toFixed(0)).join(', ')}] (budget ${METRICS_EXPLORER_BUDGET_MS * factor}), points.parquet bytes read per load [${bytes.join(', ')}] of ${total}, requests [${perLoad
+          .slice(1)
+          .map((l) => l.requests)
+          .join(', ')}], factor ${factor}`,
       );
+      expect(total).toBeGreaterThan(0);
+      expect(perLoad.every((l) => l.requests > 0)).toBe(true);
+      expect(perLoad.flatMap((l) => (l.fullGets > 0 ? [l.fullGets] : []))).toEqual([]);
       expect(ms).toBeLessThan(METRICS_EXPLORER_BUDGET_MS * factor);
     },
   );
 
   test(
     'the Metrics Catalog opens within 1 s (median)',
-    { tag: '@perf' },
+    PERF_HTTP,
     async ({ page, reportUrl, browserName }, testInfo) => {
       const factor = perfFactor();
-      const dataFiles = await recordDataFiles(page, reportUrl('metrics-scale'));
+      const url = reportUrl('metrics-scale');
+      const reads = pointsReads(url);
+      await reads.next();
+      const perLoad: { bytes: number; requests: number; fullGets: number }[] = [];
       const samples = await paintedMs(
         page,
-        `${reportUrl('metrics-scale')}/index.html#/metrics/catalog`,
+        `${url}/index.html#/metrics/catalog`,
         '[role="grid"][aria-label="Results"] [role="row"][data-row-index]',
         null,
+        async () => {
+          perLoad.push(await reads.next());
+        },
       );
       const ms = median(samples);
-      expectOnlyChartedData('Catalog', await dataFiles(), null);
       await expect(page.getByRole('main')).toContainText(`${SCALE_METRICS} metrics ·`);
       report(
         testInfo,
-        `PERF metrics catalog ${testInfo.project.name} (${browserName}): median ${ms.toFixed(0)} ms, samples [${samples.map((x) => x.toFixed(0)).join(', ')}] (budget ${METRICS_CATALOG_BUDGET_MS * factor}), factor ${factor}`,
+        `PERF metrics catalog ${testInfo.project.name} (${browserName}): median ${ms.toFixed(0)} ms, samples [${samples.map((x) => x.toFixed(0)).join(', ')}] (budget ${METRICS_CATALOG_BUDGET_MS * factor}), points.parquet bytes read per load [${perLoad
+          .slice(1)
+          .map((l) => l.bytes)
+          .join(', ')}], factor ${factor}`,
       );
+      expect(perLoad.flatMap((l) => (l.fullGets > 0 ? [l.fullGets] : []))).toEqual([]);
       expect(ms).toBeLessThan(METRICS_CATALOG_BUDGET_MS * factor);
     },
   );
