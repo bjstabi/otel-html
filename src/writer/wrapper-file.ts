@@ -1,4 +1,4 @@
-import { wrapBinaryDataFilePieces } from '../format/data-file.js';
+import { wrapBinaryDataFilePieces, wrapBinaryDataFilePiecesOf } from '../format/data-file.js';
 import type { FileSystem } from './ports.js';
 
 type WithToBase64 = Uint8Array & { toBase64?: () => string };
@@ -20,4 +20,21 @@ export async function writeWrapper(
   const pieces = wrapBinaryDataFilePieces(key, bytes, encodeSlice);
   if (fs.writePiecesAtomic !== undefined) await fs.writePiecesAtomic(path, pieces);
   else await fs.writeTextAtomic(path, [...pieces].join(''));
+}
+
+/**
+ * `writeWrapper` of the file at `file`, read back in chunks and wrapped as they come, so a large file is never held
+ * whole. Where the file system cannot read in chunks or write pieces, the file is read whole and wrapped.
+ */
+export async function writeWrapperOfFile(
+  fs: FileSystem,
+  path: string,
+  key: string,
+  file: string,
+): Promise<void> {
+  if (fs.readChunks === undefined || fs.writePiecesAtomic === undefined) {
+    await writeWrapper(fs, path, key, await fs.readBytes(file));
+    return;
+  }
+  await fs.writePiecesAtomic(path, wrapBinaryDataFilePiecesOf(key, fs.readChunks(file), encodeSlice));
 }

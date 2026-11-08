@@ -12,7 +12,7 @@ import { OtelHtmlError } from '../model/errors.js';
 import { at } from './checkpoint.js';
 import type { FileSystem } from './ports.js';
 import { watchWasmPanics } from './wasm-panic.js';
-import { writeWrapper } from './wrapper-file.js';
+import { writeWrapperOfFile } from './wrapper-file.js';
 
 export interface CompactOptions {
   /** The partition number the compacted files are written to. */
@@ -608,8 +608,12 @@ export async function compactPartitions(
       }
       // The wrapper of the local format holds the file whole: read back once, after the merge has released its readers.
       if (opts.format === 'local') {
-        const written = await fs.readBytes(at(out, path));
-        await writeWrapper(fs, at(out, partitionWrapperPath(n, table)), partitionKey(n, table), written);
+        await writeWrapperOfFile(
+          fs,
+          at(out, partitionWrapperPath(n, table)),
+          partitionKey(n, table),
+          at(out, path),
+        );
       }
       files[table] = { path, bytes: size, ...keepUnknown(stats, inputs, keys) };
     }

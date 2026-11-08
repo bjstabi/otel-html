@@ -7,7 +7,7 @@ export interface FileSystem {
   readChunks?(p: string): AsyncIterable<Uint8Array>;
   writeTextAtomic(p: string, text: string): Promise<void>;
   /** `writeTextAtomic` of the pieces joined, written as they come. Without it, the joined text is written. */
-  writePiecesAtomic?(p: string, pieces: Iterable<string>): Promise<void>;
+  writePiecesAtomic?(p: string, pieces: Iterable<string> | AsyncIterable<string>): Promise<void>;
   writeBytes(p: string, bytes: Uint8Array): Promise<void>;
   /**
    * `writeBytes` of the chunks joined, written as they come, to a temporary file renamed over `p` once the last

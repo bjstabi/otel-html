@@ -1,5 +1,12 @@
 import { describe, expect, test } from 'vitest';
-import { reviveDataJson, unwrapDataFile, wrapDataFile } from '../../src/format/data-file.js';
+import {
+  reviveDataJson,
+  unwrapDataFile,
+  WRAPPER_SLICE_BYTES,
+  wrapBinaryDataFilePieces,
+  wrapBinaryDataFilePiecesOf,
+  wrapDataFile,
+} from '../../src/format/data-file.js';
 import { REGISTRATION_GLOBAL } from '../../src/format/version.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 
@@ -131,5 +138,19 @@ describe('data files', () => {
     expect(() => wrapDataFile('k', [{ f: Symbol('s') }])).toThrowError(
       expect.objectContaining({ path: 'f', expected: 'a JSON-serializable value' }),
     );
+  });
+
+  test('pieces of a file read in chunks equal the pieces of the whole file, whatever the chunk size', async () => {
+    const bytes = new Uint8Array(WRAPPER_SLICE_BYTES * 2 + 12_345).map((_, i) => (i * 31) % 251);
+    const base64 = (s: Uint8Array): string => Buffer.from(s).toString('base64');
+    const want = [...wrapBinaryDataFilePieces('k', bytes, base64)];
+    for (const size of [1_000_003, WRAPPER_SLICE_BYTES, WRAPPER_SLICE_BYTES + 7, bytes.length]) {
+      async function* chunks(): AsyncGenerator<Uint8Array> {
+        for (let at = 0; at < bytes.length; at += size) yield bytes.subarray(at, at + size);
+      }
+      const got: string[] = [];
+      for await (const piece of wrapBinaryDataFilePiecesOf('k', chunks(), base64)) got.push(piece);
+      expect(got).toEqual(want);
+    }
   });
 });

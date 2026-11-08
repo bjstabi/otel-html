@@ -133,13 +133,18 @@ export function createMemoryFileSystem(options: { pieces?: boolean; chunks?: boo
     },
     ...(options.pieces === true
       ? {
-          async writePiecesAtomic(rawP: string, pieces: Iterable<string>): Promise<void> {
+          async writePiecesAtomic(
+            rawP: string,
+            pieces: Iterable<string> | AsyncIterable<string>,
+          ): Promise<void> {
             const p = norm(rawP);
             requireParent(p);
             requireWritable(p);
             checkFail(p);
             await passGate(p);
-            files.set(p, enc.encode([...pieces].join('')));
+            let text = '';
+            for await (const piece of pieces) text += piece;
+            files.set(p, enc.encode(text));
           },
         }
       : {}),

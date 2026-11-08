@@ -52,7 +52,7 @@ export function createNodeFileSystem(): FileSystem {
           // Pieces are often small (one series each): written in batches of about PIECE_BATCH characters, not one
           // write call per piece.
           let batch = '';
-          for (const piece of pieces) {
+          for await (const piece of pieces) {
             batch += piece;
             if (batch.length >= PIECE_BATCH) {
               await handle.write(batch, null, 'utf8');

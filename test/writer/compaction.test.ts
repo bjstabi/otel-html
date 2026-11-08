@@ -2,12 +2,14 @@ import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
+import { wrapBinaryDataFilePieces } from '../../src/format/data-file.js';
 import type { PartitionEntry } from '../../src/format/manifest.js';
 import { batchFromRows } from '../../src/format/parquet/batch.js';
 import { decodeTable, encodeTable } from '../../src/format/parquet/codec.js';
 import type { Table } from '../../src/format/parquet/columns.js';
 import type { Row } from '../../src/format/parquet/rows.js';
 import { fileStatistics } from '../../src/format/parquet/stats.js';
+import { partitionKey, partitionWrapperPath } from '../../src/format/paths.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { compactPartitions } from '../../src/writer/compaction.js';
 import { createNodeFileSystem } from '../../src/writer/node-fs.js';
@@ -579,6 +581,36 @@ describe('compactPartitions: chunked output', () => {
     expect(chunked.out.files.logs).toEqual(collected.out.files.logs);
     expect(chunked.out.files.logs?.rows).toBe(8_192);
     expect(chunked.out.files.logs?.bytes).toBe(a.length);
+  });
+});
+
+describe('compactPartitions in the local format', () => {
+  test('the wrapper of the compacted file is written from the file in pieces, without reading it whole', async () => {
+    const base = createMemoryFileSystem({ pieces: true });
+    const wholeReads: string[] = [];
+    const fs: typeof base = {
+      ...base,
+      readBytes: (p) => {
+        wholeReads.push(p);
+        return base.readBytes(p);
+      },
+    };
+    const r = lcg(41);
+    let id = 0;
+    const rowsPer = Array.from({ length: 3 }, () => Array.from({ length: 700 }, () => logRow(id++, r)));
+    const entries = await writeParts(
+      fs,
+      rowsPer.map((logs) => ({ logs })),
+      ROW_GROUP,
+    );
+    wholeReads.length = 0;
+    const out = await compactPartitions(fs, OUT, entries, { ...opts(3), format: 'local' });
+    const path = `${OUT}/${out.files.logs?.path ?? ''}`;
+    expect(wholeReads).not.toContain(path);
+    const file = await base.readBytes(path);
+    const wrapper = await base.readText(`${OUT}/${partitionWrapperPath(3, 'logs')}`);
+    const base64 = (slice: Uint8Array): string => Buffer.from(slice).toString('base64');
+    expect(wrapper).toBe([...wrapBinaryDataFilePieces(partitionKey(3, 'logs'), file, base64)].join(''));
   });
 });
 
