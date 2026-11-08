@@ -1,4 +1,4 @@
-import { Query, sql } from '@uwdata/mosaic-sql';
+import { literal, Query, sql } from '@uwdata/mosaic-sql';
 import { beforeAll, describe, expect, test } from 'vitest';
 import {
   byExpr,
@@ -330,7 +330,12 @@ describe('metric series, by and the point interval', () => {
       run(seriesQuery({ ...base, files: { files: list, all: false, total: names.length }, by: [] }));
     const some = of(first === undefined ? [] : [first]);
     expect(some.length).toBeGreaterThan(0);
-    expect(some.length).toBeLessThan(of(names).length + 1);
+    const inFirst = run(
+      Query.from('points')
+        .select({ n: sql`count(DISTINCT series_id)` })
+        .where(sql`metric_name = ${literal(base.identity.name)} AND filename = ${literal(first ?? '')}`),
+    );
+    expect(some.length).toBe(Number(inFirst[0]?.n));
     expect(of(names).length).toBe(run(seriesQuery({ ...base, by: [] })).length);
   });
 
