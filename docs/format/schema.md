@@ -129,6 +129,13 @@ One row per metric data point, in long form: every point type shares the table, 
 | `flags` | Int64 | int64 | yes |
 | `delta_value` | Float64 | float64 | yes |
 | `delta_count` | Int64 | int64 | yes |
+| `delta_bucket_counts` | List<Int64> | list_int64 | yes |
+| `delta_scale` | Int32 | int32 | yes |
+| `delta_zero_count` | Int64 | int64 | yes |
+| `delta_positive_offset` | Int32 | int32 | yes |
+| `delta_positive_counts` | List<Int64> | list_int64 | yes |
+| `delta_negative_offset` | Int32 | int32 | yes |
+| `delta_negative_counts` | List<Int64> | list_int64 | yes |
 | `reset` | Bool | bool | yes |
 | `out_of_order` | Bool | bool | yes |
 

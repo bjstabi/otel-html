@@ -209,7 +209,7 @@ describe('row mapping', () => {
   });
 
   test('a delta count that cannot be an int64 becomes null instead of throwing', () => {
-    const n = { deltaValue: null, reset: false, outOfOrder: false, seriesId: 's' };
+    const n = { deltaValue: null, deltaBuckets: null, reset: false, outOfOrder: false, seriesId: 's' };
     expect(cell(pointRow(point(), { ...n, deltaCount: 2 ** 60 }, ctx), 'delta_count')).toBe(2n ** 60n);
     for (const bad of [1.5, 2 ** 70, Number.NaN, Number.POSITIVE_INFINITY]) {
       expect(cell(pointRow(point(), { ...n, deltaCount: bad }, ctx), 'delta_count')).toBeNull();
@@ -219,7 +219,7 @@ describe('row mapping', () => {
   test('a point row carries the normalization columns verbatim', () => {
     const row = pointRow(
       point(),
-      { deltaValue: 3, deltaCount: null, reset: true, outOfOrder: false, seriesId: 's1' },
+      { deltaValue: 3, deltaCount: null, deltaBuckets: null, reset: true, outOfOrder: false, seriesId: 's1' },
       ctx,
     );
     expect(cell(row, 'delta_value')).toBe(3);
@@ -354,7 +354,14 @@ describe('format-4 attribute JSON', () => {
 });
 
 describe('point value columns', () => {
-  const norm = { deltaValue: null, deltaCount: null, reset: false, outOfOrder: false, seriesId: 's' };
+  const norm = {
+    deltaValue: null,
+    deltaCount: null,
+    deltaBuckets: null,
+    reset: false,
+    outOfOrder: false,
+    seriesId: 's',
+  };
   const row = (over: Partial<MetricPointRecord>): Row => pointRow(point(over), norm, ctx);
 
   test('a gauge or sum carries value_double from asDouble or asInt', () => {

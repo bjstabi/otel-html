@@ -111,7 +111,13 @@ export function buildManifest(m: ManifestInputs, p: Prepared): ManifestV4 {
   };
 }
 
-export const UNNORMALIZED = { deltaValue: null, deltaCount: null, reset: false, outOfOrder: false } as const;
+export const UNNORMALIZED = {
+  deltaValue: null,
+  deltaCount: null,
+  deltaBuckets: null,
+  reset: false,
+  outOfOrder: false,
+} as const;
 
 /**
  * The normalization columns of a point from what the stream normalizer reported. Deltas exist for every counter (the
@@ -128,7 +134,29 @@ export function pointNormalization(
   const { agg } = n;
   const base = { ...UNNORMALIZED, seriesId, reset: n.reset };
   if (agg.k === 'counter') return { ...base, deltaValue: agg.delta };
-  if (agg.k === 'hist' || agg.k === 'exp') return { ...base, deltaValue: agg.sum, deltaCount: agg.count };
+  if (agg.k === 'hist') {
+    return {
+      ...base,
+      deltaValue: agg.sum,
+      deltaCount: agg.count,
+      deltaBuckets: { bucketCounts: agg.counts },
+    };
+  }
+  if (agg.k === 'exp') {
+    return {
+      ...base,
+      deltaValue: agg.sum,
+      deltaCount: agg.count,
+      deltaBuckets: {
+        scale: agg.scale,
+        zeroCount: agg.zeroCount,
+        positiveOffset: agg.positive.offset,
+        positiveCounts: agg.positive.counts,
+        negativeOffset: agg.negative.offset,
+        negativeCounts: agg.negative.counts,
+      },
+    };
+  }
   if (agg.k === 'number' && point.type === 'sum' && point.temporality === 'delta') {
     return { ...base, deltaValue: agg.sum };
   }

@@ -128,6 +128,13 @@ const POINTS: readonly ColumnDef[] = [
   col('flags', 'int64'),
   col('delta_value', 'float64'),
   col('delta_count', 'int64'),
+  col('delta_bucket_counts', 'list_int64'),
+  col('delta_scale', 'int32'),
+  col('delta_zero_count', 'int64'),
+  col('delta_positive_offset', 'int32'),
+  col('delta_positive_counts', 'list_int64'),
+  col('delta_negative_offset', 'int32'),
+  col('delta_negative_counts', 'list_int64'),
   col('reset', 'bool'),
   col('out_of_order', 'bool'),
 ];
