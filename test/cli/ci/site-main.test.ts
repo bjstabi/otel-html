@@ -76,10 +76,10 @@ const fetchFn = async (url: string): Promise<Response> => {
   return Response.json({ default_branch: 'main' });
 };
 
-/** A `ci report`-shaped run report: site format, own assets/. */
+/** A `ci report`-shaped run report: local format, own assets/. */
 async function runReport(name: string, at: number): Promise<string> {
   const report = join(dir, name);
-  const r = await createReportWith({ out: report, format: 'site', assetsBase: 'assets/' }, deps);
+  const r = await createReportWith({ out: report, format: 'local', assetsBase: 'assets/' }, deps);
   await r.addLogs({
     resourceLogs: [
       {
@@ -154,6 +154,44 @@ describe('runSite in site format', () => {
     await new Promise((r) => setTimeout(r, 20));
     await publish(await runReport('b', 2), 2);
     expect(statSync(join(shared, 'viewer.abc123.js')).mtimeMs).toBe(before);
+  });
+
+  test('a second build of one version adds its viewer files; both reports open and nothing is rewritten', async () => {
+    await publish(await runReport('a', 1), 1);
+    const shared = join(site, 'assets', VERSION);
+    const oldMtime = statSync(join(shared, 'viewer.abc123.js')).mtimeMs;
+    const base = fakeViewerAssets();
+    const second: WriterDeps = {
+      ...deps,
+      viewerAssets: {
+        entry: () => ({ script: 'assets/viewer.def456.js', style: 'assets/viewer.def456.css' }),
+        async files(format) {
+          const files = await base.files(format);
+          return files.map((f) => ({ ...f, path: f.path.replace('abc123', 'def456') }));
+        },
+      },
+    };
+    await new Promise((r) => setTimeout(r, 20));
+    await publish(await runReport('b', 2), 2, second);
+    const names = readdirSync(shared);
+    expect(names).toEqual(expect.arrayContaining(['viewer.abc123.js', 'viewer.abc123.css']));
+    expect(names).toEqual(expect.arrayContaining(['viewer.def456.js', 'viewer.def456.css']));
+    expect(statSync(join(shared, 'viewer.abc123.js')).mtimeMs).toBe(oldMtime);
+    // the new rolling report and the new run report name files that exist; the old run report still does
+    expect(readFileSync(join(site, 'branch/main/index.html'), 'utf8')).toContain('viewer.def456.js');
+    expect(readFileSync(join(site, 'branch/main/runs/2/index.html'), 'utf8')).toContain('viewer.def456.js');
+    expect(readFileSync(join(site, 'branch/main/runs/1/index.html'), 'utf8')).toContain('viewer.abc123.js');
+    expect(names.some((n) => n.includes('.tmp-'))).toBe(false);
+  });
+
+  test('ci site over a local run report gives a site report on the shared base with no own assets/', async () => {
+    const report = await runReport('a', 1);
+    expect(manifestText(report)).toContain('"format":"local"');
+    await publish(report, 1);
+    const run = join(site, 'branch/main/runs/1');
+    expect(manifestText(run)).toContain('"format":"site"');
+    expect(manifestText(run)).toContain(`"assetsBase":"../../../../assets/${VERSION}/"`);
+    expect(existsSync(join(run, 'assets'))).toBe(false);
   });
 
   test('a version no report references is pruned; the referenced one stays', async () => {

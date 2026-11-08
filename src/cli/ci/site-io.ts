@@ -1,4 +1,4 @@
-import { cp, mkdir, readdir, readFile, rename, rm, rmdir, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readdir, readFile, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { ASSETS_BASE_RE, MANIFEST_PATH } from '../../format/paths.js';
 import { readMergeInput } from '../../writer/merge.js';
@@ -78,24 +78,37 @@ const SHARED = 'assets';
 
 /**
  * Makes `<site>/assets/<version>/` hold this build's `site` viewer files (the viewer, the engine and the DuckDB
- * extensions, plain). Does nothing when the folder exists, so reports of an earlier build keep their files and a
- * second publish rewrites nothing. The folder is written aside and renamed into place: a failed publish never
- * leaves a half-filled version that later publishes would trust.
+ * extensions, plain). A new folder is written aside and renamed into place: a failed publish never leaves a
+ * half-filled version that later publishes would trust. An existing folder gets the files it lacks and keeps the
+ * ones it has untouched: every name is unique to its content (the viewer's `viewer.<hash>.js|css`, the engine
+ * files named by the pinned DuckDB version), so two builds of one version, which differ only in the viewer hash,
+ * live side by side and reports of either keep their files. The extra viewer files go when the version is pruned.
  */
 export async function ensureSharedAssets(site: string, version: string, deps: WriterDeps): Promise<void> {
   const target = join(site, SHARED, version);
   // A crashed publish leaves its scratch folder behind (another pid names the next one); a later `git add -A` of the
-  // site would commit it. The site lease serializes writers, so no scratch folder under `assets/` is live.
+  // site would commit it. Each publish works in its own checkout, so no scratch folder here belongs to a live one.
   for (const e of await readdir(join(site, SHARED)).catch(() => [] as string[])) {
     if (/^\..*\.tmp-/.test(e)) await rm(join(site, SHARED, e), { recursive: true, force: true });
   }
-  if (await exists(target)) return;
+  const files = await deps.viewerAssets.files('site');
+  const rel = (f: { path: string }): string => f.path.replace(/^assets\//, '');
+  if (await exists(target)) {
+    for (const f of files) {
+      const dest = join(target, rel(f));
+      if (await present(dest)) continue;
+      await mkdir(dirname(dest), { recursive: true });
+      const part = `${dest}.tmp-${process.pid}`;
+      await writeFile(part, f.contents);
+      await rename(part, dest);
+    }
+    return;
+  }
   const scratch = join(site, SHARED, `.${version}.tmp-${process.pid}`);
   try {
-    for (const f of await deps.viewerAssets.files('site')) {
-      const rel = f.path.replace(/^assets\//, '');
-      await mkdir(dirname(join(scratch, rel)), { recursive: true });
-      await writeFile(join(scratch, rel), f.contents);
+    for (const f of files) {
+      await mkdir(dirname(join(scratch, rel(f))), { recursive: true });
+      await writeFile(join(scratch, rel(f)), f.contents);
     }
     await mkdir(join(site, SHARED), { recursive: true });
     await rename(scratch, target);
@@ -104,6 +117,12 @@ export async function ensureSharedAssets(site: string, version: string, deps: Wr
     throw e;
   }
 }
+
+const present = (p: string): Promise<boolean> =>
+  stat(p).then(
+    () => true,
+    () => false,
+  );
 
 /** Whether `p` is a folder with something in it: an empty version folder (a manual or partial copy) is not complete. */
 const exists = (p: string): Promise<boolean> =>
@@ -151,7 +170,7 @@ export async function pruneAssets(
       const segments = base.split('/').filter((x) => x !== '');
       const version = segments[segments.lastIndexOf(SHARED, segments.length - 2) + 1];
       if (segments.length < 2 || version === undefined) continue;
-      if (version !== undefined) referenced.add(version);
+      referenced.add(version);
     } catch (e) {
       warn(`assets not pruned: cannot read ${folder}: ${e instanceof Error ? e.message : String(e)}`);
       return [];

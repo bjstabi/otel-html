@@ -190,7 +190,6 @@ export async function runSite(
     { branch: opts.retention, pr: opts.prRetention },
     run.id,
   );
-  await ensureSharedAssets(opts.site, deps.version, deps);
   await placeRunReport(
     deps,
     opts.report,
@@ -198,6 +197,8 @@ export async function runSite(
     runAssetsBase(reportPath, deps.version),
   );
   await removePaths(opts.site, [...migrated.remove, ...remove]);
+  // after the removals: a legacy channel named `assets` is the shared folder's path
+  await ensureSharedAssets(opts.site, deps.version, deps);
   if (migrated.remove.length > 0)
     say(io, `removed the per-workflow channels ${migrated.remove.join(', ')}; see branch/ and pr/`);
   const rolling = await rebuildRolling(opts.site, placed.key, index, opts.config, deps, io);
