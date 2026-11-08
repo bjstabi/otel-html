@@ -104,13 +104,10 @@ async function writeScaleLogFiles(dir: URL): Promise<string[]> {
  */
 async function writeScaleMetricsFile(dir: URL): Promise<string> {
   const file = fileURLToPath(new URL('metrics.json', dir));
-  const [first, ...rest] = scaleMetrics(SCALE_RUN_METRICS, SCALE_RUN_METRIC_SERIES, 2).map(
+  const requests = scaleMetrics(SCALE_RUN_METRICS, SCALE_RUN_METRIC_SERIES, 2).map(
     (r) => toJson(ExportMetricsServiceRequestSchema, r) as { resourceMetrics: unknown[] },
   );
-  await writeFile(
-    file,
-    JSON.stringify({ resourceMetrics: [first, ...rest].flatMap((r) => r?.resourceMetrics ?? []) }),
-  );
+  await writeFile(file, JSON.stringify({ resourceMetrics: requests.flatMap((r) => r.resourceMetrics) }));
   return file;
 }
 

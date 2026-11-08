@@ -1,4 +1,4 @@
-import { mkdir, rename, rm, stat } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { Report } from '../src/api/index.js';
 import { scaleMetrics } from '../test-support/scale-metrics.js';
@@ -21,11 +21,10 @@ const FLUSH_EVERY = 6;
  */
 export async function ensureMetricsScaleReport(): Promise<void> {
   const dir = reportDir('metrics-scale');
-  const written = await stat(dir).then(
-    () => true,
-    () => false,
-  );
-  if (written) return;
+  // A report left by an older checkout (format 3) is not read by the format-4 viewer: it is written again.
+  const manifest = await readFile(new URL('data/manifest.js', dir), 'utf8').catch(() => '');
+  if (/"formatVersion":\s*4\b/.test(manifest)) return;
+  await rm(dir, { recursive: true, force: true });
   const started = Date.now();
   // Written aside and moved into place, so the folder exists only once the report is whole.
   const tmp = new URL(`../.metrics-scale.tmp-${process.pid}/`, METRICS_SCALE_DIR);

@@ -470,6 +470,7 @@ sources = [
   "test-support/fixture-ids.ts",
   "test-support/otlp-builders.ts",
   "test-support/scale-logs.ts",
+  "test-support/scale-metrics.ts",
 ]
 outputs = ["e2e/.reports-scale/**"]
 run = "bun e2e/build-scale-fixtures.ts"

@@ -531,6 +531,12 @@ test(
       },
     );
     // The widgets answered with data, not only with empty states.
+    await expect(
+      page
+        .locator('[data-widget="metrics"]')
+        .getByRole('img', { name: /: [1-9]\d* series$/ })
+        .first(),
+    ).toBeVisible();
     await expect(page.locator('[data-widget="traces"]').getByRole('row').nth(1)).toBeVisible();
     await expect(page.locator('[data-widget="logs"]').getByRole('row').nth(1)).toBeVisible();
     const ms = median(loads);
