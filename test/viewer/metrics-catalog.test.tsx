@@ -8,7 +8,6 @@ import { ThemeProvider } from '../../src/viewer/theme/theme-provider.js';
 import { metricsSource } from './metrics-fixture.js';
 
 vi.mock('../../src/viewer/components/chart.js', () => ({ Chart: (): null => null }));
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const source = metricsSource();
 
@@ -28,16 +27,23 @@ function open(): void {
 describe('the Metrics Catalog over format 4', () => {
   test('lists every metric with type, unit, temporality, scope, attribute keys, series and a sparkline', async () => {
     open();
-    const gauge = (await screen.findByText('queue.depth')).closest('[role="row"]') as HTMLElement | null;
-    expect(gauge).not.toBeNull();
-    if (gauge === null) return;
-    const g = within(gauge);
-    expect(g.getByText('GAUGE')).toBeTruthy();
-    expect(g.getByText('test-scope')).toBeTruthy();
-    expect(g.getByText('host, k')).toBeTruthy();
-    expect(g.getByText('2')).toBeTruthy();
-    expect(gauge.querySelector('svg')).not.toBeNull();
-    expect(screen.getByText('rpc.latency')).toBeTruthy();
+    const row = (await screen.findByText('queue.depth')).closest('[role="row"]') as HTMLElement | null;
+    expect(row).not.toBeNull();
+    if (row === null) return;
+    // columns: metric, type, unit, temporality, scope, attributes, series, over the run, explore
+    const cells = within(row).getAllByRole('gridcell');
+    expect(cells.map((c) => c.textContent)).toEqual([
+      'queue.depth',
+      'GAUGE',
+      'ms',
+      'unspecified',
+      'test-scope',
+      'host, k',
+      '2',
+      '',
+      'Explore →',
+    ]);
+    expect(cells[7]?.querySelector('svg polyline, svg circle')).not.toBeNull();
     expect(screen.getByText('SUMMARY')).toBeTruthy();
   });
 
@@ -55,5 +61,15 @@ describe('the Metrics Catalog over format 4', () => {
     await waitFor(() => expect(window.location.hash).toMatch(/^#\/metrics\?/));
     const m = parseUrlState(window.location.hash.split('?')[1] ?? '').state.m;
     expect(m?.queries[0]).toMatchObject({ metric: 'queue.depth', show: 'avg' });
+  });
+});
+
+describe('a summary row', () => {
+  test('opens the Explorer with the qmax placeholder as the show', async () => {
+    open();
+    await userEvent.click(await screen.findByText('rpc.latency'));
+    await waitFor(() => expect(window.location.hash).toMatch(/^#\/metrics\?/));
+    const m = parseUrlState(window.location.hash.split('?')[1] ?? '').state.m;
+    expect(m?.queries[0]).toMatchObject({ metric: 'rpc.latency', show: 'qmax' });
   });
 });

@@ -7,24 +7,30 @@ import { buildFormat4Report, openFixtureDb } from '../../test-support/format4-fi
 import { attr, gauge, metricsRequest, pointsAt, summary } from '../../test-support/otlp-builders.js';
 import { otlp } from '../../test-support/writer-deps.js';
 
-const g = globalThis as { XMLHttpRequest?: unknown };
+const g = globalThis as { XMLHttpRequest?: unknown; IS_REACT_ACT_ENVIRONMENT?: boolean };
+g.IS_REACT_ACT_ENVIRONMENT = true;
 const silentLogger = { debug() {}, info() {}, warn() {}, error() {} };
 const str = (v: string) => ({ stringValue: v });
 const q = (quantile: number, value: number) => ({ quantile, value });
 
+const withUnit = (m: ReturnType<typeof gauge>, unit: string) => ({ ...m, unit });
+
 const REQUEST = otlp(
   metricsRequest(
     [
-      gauge('queue.depth', [
-        ...pointsAt([0, 1000, 2000], (i) => ({ asDouble: 1 + i }), [
-          attr('host', str('h1')),
-          attr('k', str('abc')),
+      withUnit(
+        gauge('queue.depth', [
+          ...pointsAt([0, 1000, 2000], (i) => ({ asDouble: 1 + i }), [
+            attr('host', str('h1')),
+            attr('k', str('abc')),
+          ]),
+          ...pointsAt([0, 1000, 2000], (i) => ({ asDouble: 5 + i }), [
+            attr('host', str('h2')),
+            attr('k', str('a')),
+          ]),
         ]),
-        ...pointsAt([0, 1000, 2000], (i) => ({ asDouble: 5 + i }), [
-          attr('host', str('h2')),
-          attr('k', str('a')),
-        ]),
-      ]),
+        'ms',
+      ),
       summary(
         'rpc.latency',
         pointsAt([0, 1000], () => ({ count: '2', sum: 3, quantileValues: [q(0.5, 1), q(0.99, 9)] })),
@@ -52,8 +58,11 @@ export function metricsSource(): () => DataSource {
     });
   });
   afterAll(() => {
-    db?.close();
-    g.XMLHttpRequest = xhr;
+    try {
+      db?.close();
+    } finally {
+      g.XMLHttpRequest = xhr;
+    }
   });
   return () => {
     if (source === null) throw new Error('the metrics source is not open');
