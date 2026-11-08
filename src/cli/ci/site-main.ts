@@ -27,7 +27,15 @@ import {
   type SiteIndex,
   type SiteRun,
 } from './site.js';
-import { copyReport, readSiteIndex, removePaths, writeBadges, writeSite } from './site-io.js';
+import {
+  ensureSharedAssets,
+  placeRunReport,
+  pruneAssets,
+  readSiteIndex,
+  removePaths,
+  writeBadges,
+  writeSite,
+} from './site-io.js';
 
 export type SiteOptions = {
   site: string;
@@ -61,6 +69,14 @@ async function writeStub(site: string, key: string, index: SiteIndex): Promise<v
 
 const RUNS = 'runs';
 
+/** The `../` steps from a site-relative folder back to the site root. */
+const up = (folder: string): string => '../'.repeat(folder.split('/').filter((x) => x !== '').length);
+
+/** Where the rolling report at `<site>/<key>/` (`branch/<slug>`, `pr/<n>`: two folders deep) loads the shared viewer files from. */
+const rollingAssetsBase = (key: string, version: string): string => `${up(key)}assets/${version}/`;
+/** Where a run report at `<site>/<key>/runs/<id>/` loads them from. */
+const runAssetsBase = (reportPath: string, version: string): string => `${up(reportPath)}assets/${version}/`;
+
 const PREVIEW = /^preview-.*\.png$/;
 
 /** Empties `<site>/<key>/` (creating it if absent) except its `runs/` and its `preview-*.png` screenshots. */
@@ -93,7 +109,11 @@ async function rebuildRolling(
   try {
     const merged = join(scratch, 'rolling');
     await mergeSkippingBad({
-      merge: mergeWithConfig(deps, config),
+      merge: mergeWithConfig(deps, config, {
+        format: 'site',
+        assetsBase: rollingAssetsBase(key, deps.version),
+        compact: true,
+      }),
       required: [],
       optional: rollingInputs(channel).map((p) => join(site, p)),
       out: merged,
@@ -170,7 +190,13 @@ export async function runSite(
     { branch: opts.retention, pr: opts.prRetention },
     run.id,
   );
-  await copyReport(opts.report, join(opts.site, reportPath));
+  await ensureSharedAssets(opts.site, deps.version, deps);
+  await placeRunReport(
+    deps,
+    opts.report,
+    join(opts.site, reportPath),
+    runAssetsBase(reportPath, deps.version),
+  );
   await removePaths(opts.site, [...migrated.remove, ...remove]);
   if (migrated.remove.length > 0)
     say(io, `removed the per-workflow channels ${migrated.remove.join(', ')}; see branch/ and pr/`);
@@ -179,6 +205,7 @@ export async function runSite(
   const channel = index.channels[placed.key];
   if (channel !== undefined) await writeBadges(opts.site, placed.key, channel);
   await writeSite(opts.site, index, opts.repository);
+  await pruneAssets(opts.site, deps, (m) => warning(io, 'site', m));
   setOutputs(io, {
     'report-url': reportUrl(opts.baseUrl.replace(/\/+$/, ''), reportPath),
     channel: placed.key,
@@ -192,7 +219,7 @@ export async function runSite(
  * $GITHUB_OUTPUT. A pull request the site never had (no channel and no folder) changes nothing and writes
  * `cleaned=false`, so the caller pushes and deploys nothing.
  */
-export async function runCleanup(opts: CleanupOptions, io: CliIo): Promise<void> {
+export async function runCleanup(opts: CleanupOptions, io: CliIo, deps: WriterDeps): Promise<void> {
   const key = `pr/${opts.pr}`;
   const current = await readSiteIndex(opts.site, (m) => warning(io, 'cleanup', m));
   if (current.channels[key] === undefined && !existsSync(join(opts.site, key))) {
@@ -203,6 +230,7 @@ export async function runCleanup(opts: CleanupOptions, io: CliIo): Promise<void>
   const { index, remove } = removeChannel(current, key);
   await removePaths(opts.site, [...remove, key]);
   await writeSite(opts.site, index, opts.repository);
+  await pruneAssets(opts.site, deps, (m) => warning(io, 'cleanup', m));
   say(io, `removed ${key} from the site`);
   setOutputs(io, { cleaned: 'true' });
 }

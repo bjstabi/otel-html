@@ -169,7 +169,7 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
         repository: parseRepository(repository),
       };
       try {
-        await runCleanup(opts, io);
+        await runCleanup(opts, io, await resolveDeps(deps));
       } catch (e) {
         say(io, `::error::otel-html cleanup: ${messageOf(e)}`);
         throw new CliExit(1);
