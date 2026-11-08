@@ -63,25 +63,44 @@ function install(): void {
  *   abandoned, not resumed; its `cancel()` is started and its outcome ignored.
  */
 export function watchWasmPanics(): PanicWatch {
-  let fail: (e: Error) => void = () => undefined;
-  const panicked = new Promise<never>((_, reject) => {
-    fail = reject;
-  });
-  panicked.catch(() => undefined); // only a guarded wait observes it
+  // The waits still pending, not a reaction added to one long-lived promise per wait: that kept every settled
+  // wait's value (a record batch, an output chunk) alive until the watch stopped, so a compaction's memory grew with
+  // the data it had read and written.
+  const pending = new Set<(e: Error) => void>();
+  let panic: Error | undefined;
+  const fail = (e: Error): void => {
+    panic ??= e;
+    for (const reject of [...pending]) reject(e);
+  };
   active.add(fail);
   install();
   const guard: PanicGuard = (wait, what) =>
     new Promise((resolve, reject) => {
-      wait.then(resolve, reject);
-      panicked.catch((e: unknown) => {
+      const panicked = (e: Error): void => {
+        pending.delete(panicked);
         reject(
           new OtelHtmlError('invalid-report', {
             path: what ?? 'data/partitions',
             expected: 'a readable Parquet file',
-            actual: `parquet-wasm panicked: ${e instanceof Error ? e.message : String(e)}`,
+            actual: `parquet-wasm panicked: ${e.message}`,
           }),
         );
-      });
+      };
+      if (panic !== undefined) {
+        panicked(panic);
+        return;
+      }
+      pending.add(panicked);
+      wait.then(
+        (value) => {
+          pending.delete(panicked);
+          resolve(value);
+        },
+        (error: unknown) => {
+          pending.delete(panicked);
+          reject(error);
+        },
+      );
     });
   return {
     guard,
