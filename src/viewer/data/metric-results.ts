@@ -244,34 +244,55 @@ export function catalogFrom(defs: Table, identities: Table, spark: Table, spec: 
   const resources = new Map<string, { record: ResourceRecord; texts: Set<string> }>();
   const scopes = new Map<string, ScopeRecord>();
   const seenAttributes = new Set<string>();
+  // identity rows repeat the same resource and scope texts: decode each once
+  const resourceByText = new Map<string, { key: string; record: ResourceRecord }>();
+  const scopeByText = new Set<string>();
   for (const row of rowsOf(identities)) {
-    const acc = accs.get(storedDef(row).key);
+    const def = storedDef(row);
+    const acc = accs.get(def.key);
     if (acc === undefined) continue;
     const attributes = textOf(row, 'attributes');
-    const seen = `${storedDef(row).key}\u0000${attributes}`;
+    const seen = `${def.key}\u0000${attributes}`;
     if (!seenAttributes.has(seen)) {
       seenAttributes.add(seen);
       for (const k of attributesFromJson(attributes).keys()) acc.keys.add(k);
     }
     const text = textOf(row, 'resource_attributes');
-    const record: ResourceRecord = {
-      attributes: attributesFromJson(text),
-      droppedAttributesCount: toNumber(cell(row, 'resource_dropped_attributes_count'), 'resource dropped'),
-      schemaUrl: textOf(row, 'resource_schema_url'),
-    };
-    const rk = resourceKey(record);
-    const known = resources.get(rk);
-    if (known === undefined) resources.set(rk, { record, texts: new Set([text]) });
-    else known.texts.add(text);
-    acc.resources.add(rk);
-    const scope: ScopeRecord = {
-      name: textOf(row, 'scope_name'),
-      version: textOf(row, 'scope_version'),
-      attributes: attributesFromJson(textOf(row, 'scope_attributes')),
-      droppedAttributesCount: toNumber(cell(row, 'scope_dropped_attributes_count'), 'scope dropped'),
-      schemaUrl: textOf(row, 'scope_schema_url'),
-    };
-    scopes.set(scopeKey(scope), scope);
+    const schemaUrl = textOf(row, 'resource_schema_url');
+    const dropped = toNumber(cell(row, 'resource_dropped_attributes_count'), 'resource dropped');
+    const stored = JSON.stringify([text, schemaUrl, dropped]);
+    let decoded = resourceByText.get(stored);
+    if (decoded === undefined) {
+      const record: ResourceRecord = {
+        attributes: attributesFromJson(text),
+        droppedAttributesCount: dropped,
+        schemaUrl,
+      };
+      decoded = { key: resourceKey(record), record };
+      resourceByText.set(stored, decoded);
+      const known = resources.get(decoded.key);
+      if (known === undefined) resources.set(decoded.key, { record, texts: new Set([text]) });
+      else known.texts.add(text);
+    }
+    acc.resources.add(decoded.key);
+    const scopeText = JSON.stringify([
+      textOf(row, 'scope_name'),
+      textOf(row, 'scope_version'),
+      textOf(row, 'scope_attributes'),
+      textOf(row, 'scope_schema_url'),
+      toNumber(cell(row, 'scope_dropped_attributes_count'), 'scope dropped'),
+    ]);
+    if (!scopeByText.has(scopeText)) {
+      scopeByText.add(scopeText);
+      const scope: ScopeRecord = {
+        name: textOf(row, 'scope_name'),
+        version: textOf(row, 'scope_version'),
+        attributes: attributesFromJson(textOf(row, 'scope_attributes')),
+        droppedAttributesCount: toNumber(cell(row, 'scope_dropped_attributes_count'), 'scope dropped'),
+        schemaUrl: textOf(row, 'scope_schema_url'),
+      };
+      scopes.set(scopeKey(scope), scope);
+    }
   }
 
   for (const row of rowsOf(spark)) {

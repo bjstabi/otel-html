@@ -1,7 +1,8 @@
+import { tableFromArrays } from '@uwdata/flechette';
 import { beforeAll, describe, expect, test } from 'vitest';
 import { metricMethods } from '../../src/viewer/data/duckdb-metrics.js';
 import type { MetricEntry } from '../../src/viewer/data/metric-catalog.js';
-import type { MetricMethods } from '../../src/viewer/data/metric-results.js';
+import { catalogFrom, type MetricMethods } from '../../src/viewer/data/metric-results.js';
 import { createCoordinator, mosaicQueryEngine } from '../../src/viewer/data/mosaic.js';
 import type { QueryEngine } from '../../src/viewer/data/query-engine.js';
 import type { TestDb } from '../../test-support/duckdb-node.js';
@@ -203,5 +204,68 @@ describe('metricsForResources', () => {
     if (b === undefined) throw new Error('no svc-b');
     const found = await m.metricsForResources([b]);
     expect(found.map((e) => e.name)).toEqual(['g', 's']);
+  });
+});
+
+describe('catalog robustness', () => {
+  test('a rejected load clears the memo; the next call succeeds', async () => {
+    const inner = mosaicQueryEngine(createCoordinator(db.connector, silentLogger), db);
+    let failures = 1;
+    const flaky: QueryEngine = {
+      ...inner,
+      query: (qq, signal) => {
+        if (failures > 0) {
+          failures--;
+          return Promise.reject(new Error('boom'));
+        }
+        return inner.query(qq, signal);
+      },
+    };
+    const mm = metricMethods({ engine: flaky, manifest: f.manifest, epoch: f.epoch, range: null });
+    await expect(mm.metricCatalog()).rejects.toThrow('boom');
+    expect((await mm.metricCatalog()).entries.length).toBeGreaterThan(0);
+  });
+
+  test('one resource stored with its attributes in two key orders has one record and two texts', () => {
+    const texts = ['{"a":"1","b":"2"}', '{"b":"2","a":"1"}'];
+    const def = {
+      metric_name: ['m'],
+      point_type: ['gauge'],
+      metric_unit: ['1'],
+      aggregation_temporality: [0],
+      is_monotonic: [false],
+    };
+    const defs = tableFromArrays({
+      ...def,
+      description: [''],
+      points: [2n],
+      series: [2n],
+      resets: [0n],
+      out_of_order: [0n],
+      no_value: [0n],
+      scopes: [['s']],
+    });
+    const ids = tableFromArrays({
+      metric_name: ['m', 'm'],
+      point_type: ['gauge', 'gauge'],
+      metric_unit: ['1', '1'],
+      aggregation_temporality: [0, 0],
+      is_monotonic: [false, false],
+      attributes: ['{}', '{}'],
+      resource_attributes: texts,
+      resource_schema_url: ['', ''],
+      resource_dropped_attributes_count: [0n, 0n],
+      scope_name: ['s', 's'],
+      scope_version: ['', ''],
+      scope_attributes: ['{}', '{}'],
+      scope_schema_url: ['', ''],
+      scope_dropped_attributes_count: [0n, 0n],
+    });
+    const spark = tableFromArrays({ ...def, bucket: [0n], sum: [1], n: [1n] });
+    const cat = catalogFrom(defs, ids, spark, { widthNs: 1e6, startNs: 0, endNs: 0 });
+    expect(cat.resources).toHaveLength(1);
+    expect([...(cat.resourceTexts[0] ?? [])].sort()).toEqual([...texts].sort());
+    expect(cat.entries[0]?.resources).toEqual([0]);
+    expect(cat.entries[0]?.series).toBe(2);
   });
 });
