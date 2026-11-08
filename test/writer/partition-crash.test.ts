@@ -6,7 +6,7 @@ import { decodeTable } from '../../src/format/parquet/codec.js';
 import { MANIFEST_KEY } from '../../src/format/paths.js';
 import type { FileSystem } from '../../src/writer/ports.js';
 import { openSession, type WriterSession } from '../../src/writer/session.js';
-import { logRecord, logsRequest } from '../../test-support/otlp-builders.js';
+import { logRecord, logsRequest, metricsRequest, T0 } from '../../test-support/otlp-builders.js';
 import { createTestWriter, otlp, type TestWriter, testConfig } from '../../test-support/writer-deps.js';
 import { spansRequest } from './helpers.js';
 
@@ -16,6 +16,7 @@ const cfg = (extra: NonNullable<ConfigInput['writer']> = {}) =>
 const open = (w: TestWriter, mode: 'open' | 'append' | 'replace', deps = w.deps) =>
   openSession(deps, { out: OUT, config: cfg(), mode });
 const logs = (n: number) => otlp(logsRequest(Array.from({ length: n }, () => logRecord())));
+const second = (n: number): string => (BigInt(T0) + BigInt(n) * 1_000_000_000n).toString();
 const spans = (n: number, first = 0) => otlp(spansRequest(n, 0, first));
 
 function manifest(w: TestWriter): ManifestV4 {
@@ -214,5 +215,55 @@ describe('a crash in close()', () => {
     expect(onDisk(w).some((p) => p.startsWith('000003/'))).toBe(true); // spans.parquet written before logs failed
     await expectListedDecode(w);
     await appendAndClose(w);
+  });
+});
+
+describe('a flush that fails between two tables', () => {
+  const counter = (value: number, t: number) =>
+    otlp(
+      metricsRequest([
+        {
+          name: 'c',
+          unit: 'By',
+          sum: {
+            aggregationTemporality: 2,
+            isMonotonic: true,
+            dataPoints: [{ asInt: String(value), startTimeUnixNano: T0, timeUnixNano: second(t) }],
+          },
+        } as never,
+      ]),
+    );
+
+  test('after logs were written, the manifest lists the old partition only and a retry writes both tables whole', async () => {
+    const w = createTestWriter();
+    const s = await open(w, 'replace');
+    await s.add(counter(10, 1), 'm0.json');
+    await s.flush(); // partition 0: the first point, no delta
+    const before = listed(w);
+    await s.add(logs(2), 'l1.json');
+    await s.add(counter(15, 2), 'm1.json');
+    w.fs.failNextWrite('000001/points.parquet');
+    await expect(s.flush()).rejects.toThrow('injected write failure');
+    expect(manifest(w).partitions.map((p) => p.n)).toEqual([0]);
+    expect(listed(w)).toEqual(before);
+    expect(onDisk(w)).toContain('000001/logs.parquet'); // written before points failed
+    expect(onDisk(w)).not.toContain('000001/points.parquet');
+    expect(listed(w)).not.toContain('000001/logs.parquet');
+    await expectListedDecode(w);
+
+    await s.flush(); // the rows went back (R22): the retry writes partition 1 with both tables
+    const p1 = manifest(w).partitions.find((p) => p.n === 1);
+    expect(Object.keys(p1?.files ?? {}).sort()).toEqual(['logs', 'patterns', 'points']); // patterns derive from the logs
+    expect(p1?.files.logs?.rows).toBe(2);
+    expect(p1?.files.points?.rows).toBe(1);
+    const points = decodeTable(
+      'points',
+      await w.fs.readBytes(`${OUT}/data/partitions/000001/points.parquet`),
+    );
+    // The stream state advanced once: the second point's delta is 15 - 10, not null or 0.
+    expect(points.map((r) => Reflect.get(r, 'delta_value'))).toEqual([5]);
+    await expectListedDecode(w);
+    await s.abort();
+    await appendAndClose(w); // the reopened report prunes nothing it lists
   });
 });
