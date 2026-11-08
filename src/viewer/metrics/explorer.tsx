@@ -1,6 +1,6 @@
 import { type JSX, useCallback, useEffect, useMemo, useState } from 'react';
 import type { ManifestV4 } from '../../format/manifest.js';
-import { MAX_METRIC_QUERIES, type MetricPageState } from '../../query/metric-query.js';
+import { MAX_METRIC_QUERIES, type MetricPageState, type MetricQuery } from '../../query/metric-query.js';
 import { ErrorCard, LoadingNote, PILL } from '../components/explorer-states.js';
 import { downloadBlob } from '../components/export.js';
 import { type ChartPick, MetricChartCard } from '../components/metric-chart-card.js';
@@ -9,8 +9,8 @@ import { copyWidgetItem } from '../dashboards/copy-widget.js';
 import type { DataSource } from '../data/data-source.js';
 import { manifestRange } from '../data/manifest-range.js';
 import type { MetricEntry } from '../data/metric-catalog.js';
-import { defaultShow, kindOf, type MetricQuery, SHOW_BY_KIND } from '../data/metric-query.js';
 import { resolveMetric } from '../data/metric-results.js';
+import { defaultShowOf, kindOf, SHOW_BY_KIND } from '../data/metric-tables.js';
 import type { TimeWindow } from '../data/time-window.js';
 import { useGoTo } from '../shell/go-to.js';
 import { PageChrome, useWidgetCopy } from '../shell/page-chrome.js';
@@ -91,8 +91,8 @@ function ExplorerBody(props: { dataSource: DataSource; range: TimeWindow }): JSX
   const applyEntry = useCallback(
     (match: (q: MetricQuery) => boolean, entry: MetricEntry): void => {
       dataSource
-        .metric(entry.id)
-        .then(defaultShow)
+        .metricShowOptions(entry.id)
+        .then((options) => defaultShowOf(kindOf(entry), options))
         .then(
           (show) => {
             // Only a name with several definitions needs the kind and unit to pick one.

@@ -44,6 +44,15 @@ export const DEFAULT_SHOW: Record<MetricKind, string> = {
   summary: SUMMARY_TOP_QUANTILE,
 };
 
+/**
+ * The `show` a metric opens with: `DEFAULT_SHOW`, except a summary's highest quantile made concrete from its show
+ * `options` (`count` when it has none).
+ */
+export function defaultShowOf(kind: MetricKind, options: readonly string[]): string {
+  if (kind !== 'summary') return DEFAULT_SHOW[kind];
+  return options.filter((o) => QUANTILE_SHOW.test(o)).at(-1) ?? 'count';
+}
+
 export const PERCENTILES: Readonly<Record<string, number>> = {
   p50: 0.5,
   p75: 0.75,
