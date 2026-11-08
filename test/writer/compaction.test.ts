@@ -549,6 +549,39 @@ describe('compactPartitions: patterns', () => {
   });
 });
 
+describe('compactPartitions: chunked output', () => {
+  const build = async (chunks: boolean) => {
+    const fs = createMemoryFileSystem({ chunks });
+    const r = lcg(33);
+    let id = 0;
+    const rowsPer = Array.from({ length: 2 }, () => Array.from({ length: 4_096 }, () => logRow(id++, r)));
+    const entries = await writeParts(
+      fs,
+      rowsPer.map((logs) => ({ logs })),
+      1_000,
+    );
+    const out = await compactPartitions(fs, OUT, entries, opts(2, 1_000));
+    return { fs, out, rows: rowsPer.flat() };
+  };
+
+  test('a two-file merge written in chunks equals the collected path, in bytes and statistics', async () => {
+    const chunked = await build(true);
+    const collected = await build(false);
+    const path = chunked.out.files.logs?.path ?? '';
+    expect(chunked.fs.chunkCount(`${OUT}/${path}`)).toBeGreaterThan(1);
+    expect(collected.fs.chunkCount(`${OUT}/${path}`)).toBeUndefined();
+    const a = await chunked.fs.readBytes(`${OUT}/${path}`);
+    const b = await collected.fs.readBytes(`${OUT}/${path}`);
+    expect(Buffer.from(a).equals(Buffer.from(b))).toBe(true);
+    expect(
+      Buffer.from(a).equals(Buffer.from(encodeTable('logs', chunked.rows, { rowGroupRows: 1_000 }))),
+    ).toBe(true);
+    expect(chunked.out.files.logs).toEqual(collected.out.files.logs);
+    expect(chunked.out.files.logs?.rows).toBe(8_192);
+    expect(chunked.out.files.logs?.bytes).toBe(a.length);
+  });
+});
+
 describe('compactPartitions on the real file system', () => {
   test('more than one round of inputs merges through blobs on disk to the same bytes, leaving no temporary file', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'otel-html-compact-'));

@@ -421,18 +421,43 @@ const FANOUT = 8;
 /** Row groups of the files a round writes for the next one: they are read again at once, so they are kept small. */
 const ROUND_ROW_GROUP_ROWS = 4096;
 
+/** Writes the chunks to `p` as they come where the file system can, else collects them and writes the bytes. Returns the size written. */
+async function writeChunks(fs: FileSystem, p: string, chunks: AsyncIterable<Uint8Array>): Promise<number> {
+  let size = 0;
+  async function* counted(): AsyncGenerator<Uint8Array> {
+    for await (const chunk of chunks) {
+      size += chunk.length;
+      yield chunk;
+    }
+  }
+  if (fs.writeByteChunksAtomic !== undefined) {
+    await fs.writeByteChunksAtomic(p, counted());
+    return size;
+  }
+  const parts: Uint8Array[] = [];
+  for await (const chunk of counted()) parts.push(chunk);
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const part of parts) {
+    bytes.set(part, offset);
+    offset += part.length;
+  }
+  await fs.writeBytes(p, bytes);
+  return size;
+}
+
 /**
  * One merge of the sorted files at `paths` (given in order; ties go to the earlier file) into a Parquet file of row
  * groups of `rowGroupRows`. `onChunk` sees the merged rows as they go by.
  */
-async function mergeFiles(
+async function* mergeFiles(
   fs: FileSystem,
   table: Table,
   paths: readonly string[],
   rowGroupRows: number,
   guard: PanicGuard,
   onChunk?: (chunk: ColumnBatch) => void,
-): Promise<Uint8Array> {
+): AsyncGenerator<Uint8Array> {
   const names = new Map(TABLE_COLUMNS[table].map((c, i) => [c.name, i]));
   const generators: AsyncGenerator<unknown[][]>[] = [];
   const cursors: Cursor[] = [];
@@ -448,7 +473,7 @@ async function mergeFiles(
         yield chunk;
       }
     }
-    return await encodeBatches(table, chunks(), { rowGroupRows }, guard);
+    yield* encodeBatches(table, chunks(), { rowGroupRows }, guard);
   } finally {
     await Promise.all(generators.map((g) => g.return(undefined).catch(() => undefined)));
   }
@@ -457,16 +482,17 @@ async function mergeFiles(
 /**
  * Merges the table's files into the table file of the compacted partition. With more files than `FANOUT`, rounds
  * of `FANOUT` consecutive files are merged into temporary files in `dir` first (consecutive, so the order of equal
- * keys is kept), and the last round writes the result, whose statistics are folded from the rows as they pass.
+ * keys is kept), and the last round writes the result to `finalPath`, whose statistics are folded from the rows as they pass.
  */
 async function mergeTable(
   fs: FileSystem,
   dir: string,
   table: Table,
   inputs: readonly string[],
+  finalPath: string,
   opts: CompactOptions,
   guard: PanicGuard,
-): Promise<{ bytes: Uint8Array; stats: FileStatistics }> {
+): Promise<{ size: number; stats: FileStatistics }> {
   const keys = opts.statisticsKeys[table];
   let level: string[] = [...inputs];
   const temporary: string[] = [];
@@ -480,7 +506,7 @@ async function mergeTable(
         continue;
       }
       const path = at(dir, `.merge-${table}-${round}-${g / FANOUT}.parquet`);
-      await fs.writeBytes(path, await mergeFiles(fs, table, group, ROUND_ROW_GROUP_ROWS, guard));
+      await writeChunks(fs, path, mergeFiles(fs, table, group, ROUND_ROW_GROUP_ROWS, guard));
       temporary.push(path);
       next.push(path);
       for (const used of group) {
@@ -490,13 +516,17 @@ async function mergeTable(
     level = next;
   }
   const fold = new StatisticsFold(keys, opts.facetValueCap);
-  const bytes = await mergeFiles(fs, table, level, opts.rowGroupRows, guard, (chunk) =>
-    fold.add(fileStatistics(table, chunk, keys, opts.facetValueCap)),
+  const size = await writeChunks(
+    fs,
+    finalPath,
+    mergeFiles(fs, table, level, opts.rowGroupRows, guard, (chunk) =>
+      fold.add(fileStatistics(table, chunk, keys, opts.facetValueCap)),
+    ),
   );
   for (const used of level) {
     if (temporary.includes(used)) await fs.remove(used);
   }
-  return { bytes, stats: fold.result() };
+  return { size, stats: fold.result() };
 }
 
 /**
@@ -535,7 +565,8 @@ export async function compactPartitions(
         created = true;
       }
       const keys = opts.statisticsKeys[table];
-      let bytes: Uint8Array;
+      const path = partitionFilePath(n, table);
+      let size: number;
       let stats: FileStatistics;
       if (table === 'traces' || table === 'patterns') {
         async function* located(): AsyncGenerator<Located> {
@@ -552,14 +583,17 @@ export async function compactPartitions(
           : aggregatePatterns(located(), byTemplate));
         for (const [i, row] of rows.entries()) checkRow(table, row, i);
         const batch = batchFromRows(table, rows);
-        bytes = encodeColumns(table, batch, { rowGroupRows: opts.rowGroupRows });
+        const bytes = encodeColumns(table, batch, { rowGroupRows: opts.rowGroupRows });
+        await fs.writeBytes(at(out, path), bytes);
+        size = bytes.length;
         stats = fileStatistics(table, batch, keys, opts.facetValueCap);
       } else {
-        ({ bytes, stats } = await mergeTable(
+        ({ size, stats } = await mergeTable(
           fs,
           dir,
           table,
           inputs.map((f) => at(out, f.path)),
+          at(out, path),
           opts,
           guard,
         ));
@@ -572,12 +606,12 @@ export async function compactPartitions(
           });
         }
       }
-      const path = partitionFilePath(n, table);
-      await fs.writeBytes(at(out, path), bytes);
+      // The wrapper of the local format holds the file whole: read back once, after the merge has released its readers.
       if (opts.format === 'local') {
-        await writeWrapper(fs, at(out, partitionWrapperPath(n, table)), partitionKey(n, table), bytes);
+        const written = await fs.readBytes(at(out, path));
+        await writeWrapper(fs, at(out, partitionWrapperPath(n, table)), partitionKey(n, table), written);
       }
-      files[table] = { path, bytes: bytes.length, ...keepUnknown(stats, inputs, keys) };
+      files[table] = { path, bytes: size, ...keepUnknown(stats, inputs, keys) };
     }
   } catch (e) {
     if (created) await fs.removeDir(dir).catch(() => undefined);

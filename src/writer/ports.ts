@@ -9,6 +9,11 @@ export interface FileSystem {
   /** `writeTextAtomic` of the pieces joined, written as they come. Without it, the joined text is written. */
   writePiecesAtomic?(p: string, pieces: Iterable<string>): Promise<void>;
   writeBytes(p: string, bytes: Uint8Array): Promise<void>;
+  /**
+   * `writeBytes` of the chunks joined, written as they come, to a temporary file renamed over `p` once the last
+   * chunk is in (a failure leaves no file at `p`). Without it, the chunks are collected and `writeBytes` is used.
+   */
+  writeByteChunksAtomic?(p: string, chunks: AsyncIterable<Uint8Array>): Promise<void>;
   mkdirp(p: string): Promise<void>;
   exists(p: string): Promise<boolean>;
   /** Canonical form of an existing path (symlinks resolved, on-disk case); rejects when it does not exist. */

@@ -69,6 +69,23 @@ export function createNodeFileSystem(): FileSystem {
         throw e;
       }
     },
+    async writeByteChunksAtomic(p, chunks) {
+      await mkdir(dirname(p), { recursive: true });
+      const tmp = `${p}.tmp-${process.pid}`;
+      try {
+        await rm(tmp, { force: true });
+        const handle = await open(tmp, 'wx');
+        try {
+          for await (const chunk of chunks) await handle.write(chunk);
+        } finally {
+          await handle.close();
+        }
+        await rename(tmp, p);
+      } catch (e) {
+        await rm(tmp, { force: true });
+        throw e;
+      }
+    },
     async writeBytes(p, bytes) {
       await mkdir(dirname(p), { recursive: true });
       await writeFresh(p, bytes);

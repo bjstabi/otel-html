@@ -56,6 +56,26 @@ describe.each([
     expect(await f.readText(join(dir, 'b/big.js'))).toBe(pieces.join(''));
   });
 
+  test('a write in byte chunks round-trips, and a failure mid-stream leaves no file and no tmp file', async () => {
+    const f = fs();
+    if (f.writeByteChunksAtomic === undefined) throw new Error('writeByteChunksAtomic is missing');
+    await f.mkdirp(join(dir, 'c'));
+    async function* ok() {
+      yield new Uint8Array([1, 2]);
+      yield new Uint8Array([]);
+      yield new Uint8Array([3]);
+    }
+    await f.writeByteChunksAtomic(join(dir, 'c/x.bin'), ok());
+    expect(await f.readBytes(join(dir, 'c/x.bin'))).toEqual(new Uint8Array([1, 2, 3]));
+    const boom = new Error('boom');
+    async function* bad() {
+      yield new Uint8Array([9]);
+      throw boom;
+    }
+    await expect(f.writeByteChunksAtomic(join(dir, 'c/y.bin'), bad())).rejects.toBe(boom);
+    expect(await f.list(join(dir, 'c'))).toEqual(['x.bin']);
+  });
+
   test('atomic write round-trips and leaves no tmp file', async () => {
     const f = fs();
     await f.mkdirp(join(dir, 'a/b'));
