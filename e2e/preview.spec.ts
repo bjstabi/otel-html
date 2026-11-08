@@ -80,9 +80,7 @@ test.describe('preview.mjs', () => {
   test.afterEach(() => rmSync(site, { recursive: true, force: true }));
 
   test('writes a light and a dark 2560x1440 screenshot of the report', () => {
-    // `sample` holds no metrics: the default dashboard of `dashboards` has metric widgets, whose error state until
-    // plan 3 (D11) is an alert that preview.mjs reports.
-    siteOf(site, 'sample');
+    siteOf(site, 'dashboards');
     const result = runPreview(site);
     expect(result.status).toBe(0);
     expect(result.stdout).not.toContain('::warning::');

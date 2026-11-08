@@ -27,7 +27,11 @@ test(
     await expect(page).toHaveURL(/[?&]q=/);
     await expect(page.getByRole('main')).toContainText('19 logs');
 
-    // The Metrics explorer part of this test returns with plan 3 (D11).
+    await page.goto(`${base}#/metrics`);
+    await views(page).click();
+    await page.getByRole('menuitem', { name: 'Request latency p95' }).click();
+    await expect(page).toHaveURL(/[?&]m=/);
+    await expect(page.getByRole('img', { name: /: [1-9]\d* series$/ }).first()).toBeVisible();
     expect(problems).toEqual([]);
   },
 );
@@ -60,8 +64,7 @@ test('Views saves the current view in this browser and deletes it again', async 
   expect(problems).toEqual([]);
 });
 
-// plan 3: metrics in the format-4 viewer
-test.skip('Copy as dashboard widget is in the Metrics Export menu and copies a widget', async ({
+test('Copy as dashboard widget is in the Metrics Export menu and copies a widget', async ({
   page,
   reportUrl,
 }) => {
