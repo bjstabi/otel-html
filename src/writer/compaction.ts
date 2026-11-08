@@ -412,13 +412,22 @@ async function aggregatePatterns(rows: AsyncIterable<Located>, byTemplate: boole
 // -- compaction -----------------------------------------------------------------------------------------------------
 
 /**
- * Files merged at once. An open reader holds the decoded pages of the row group it is on (about 200 bytes a row,
- * and a flush partition is one row group), so the merge is done in rounds of at most this many files and what is
- * held stays about this many row groups, however many partitions a session flushed. Each open reader costs about
- * 5 MB at `READ_BATCH_ROWS` (measured on 3.6 M `points` rows: peak 315 MB at 16 files, 404 MB at 32, 609 MB at 64), and every round rewrites all the rows, so a larger fan-out saves time (4 800 partitions: 5 passes at 8,
- * 4 at 16) and costs memory.
+ * Files merged at once in the first round, whose inputs are flush partitions of one small row group each. An open
+ * reader costs about 5 MB at `READ_BATCH_ROWS` (3.6 M `points` rows: peak 315 MB at 16 files, 404 MB at 32, 609 MB at
+ * 64), and every round rewrites all the rows, so a larger fan-out saves time (4 800 partitions: 5 passes at 8, 4 at
+ * 16) and costs memory.
  */
-const FANOUT = 16;
+const FIRST_FANOUT = 16;
+
+/**
+ * Files merged at once after the first round: the files of the earlier rounds hold many rows in row groups of
+ * `rowGroupRows`, and an open reader of one costs much more than one of a flush partition (about 9 MB against 5 MB,
+ * and the metadata of its row groups), as does the file being written, whose size grows with every round: the last
+ * round of a 72 M-point session peaked at 522 MB with 16 files and 50 000-row groups.
+ */
+const FANOUT = 8;
+
+const fanoutOf = (round: number): number => (round === 0 ? FIRST_FANOUT : FANOUT);
 
 /** Writes the chunks to `p` as they come where the file system can, else collects them and writes the bytes. Returns the size written. */
 async function writeChunks(fs: FileSystem, p: string, chunks: AsyncIterable<Uint8Array>): Promise<number> {
@@ -479,8 +488,8 @@ async function* mergeFiles(
 }
 
 /**
- * Merges the table's files into the table file of the compacted partition. With more files than `FANOUT`, rounds
- * of `FANOUT` consecutive files are merged into temporary files in `dir` first (consecutive, so the order of equal
+ * Merges the table's files into the table file of the compacted partition. With more files than the round's fan-out,
+ * rounds of that many consecutive files (`FIRST_FANOUT`, then `FANOUT`) are merged into temporary files in `dir` first (consecutive, so the order of equal
  * keys is kept), and the last round writes the result to `finalPath`, whose statistics are folded from the rows as they pass.
  */
 async function mergeTable(
@@ -495,16 +504,17 @@ async function mergeTable(
   const keys = opts.statisticsKeys[table];
   let level: string[] = [...inputs];
   const temporary: string[] = [];
-  for (let round = 0; level.length > FANOUT; round++) {
+  for (let round = 0; level.length > fanoutOf(round); round++) {
+    const fan = fanoutOf(round);
     const next: string[] = [];
-    for (let g = 0; g < level.length; g += FANOUT) {
-      const group = level.slice(g, g + FANOUT);
+    for (let g = 0; g < level.length; g += fan) {
+      const group = level.slice(g, g + fan);
       const only = group[0];
       if (group.length === 1 && only !== undefined) {
         next.push(only);
         continue;
       }
-      const path = at(dir, `.merge-${table}-${round}-${g / FANOUT}.parquet`);
+      const path = at(dir, `.merge-${table}-${round}-${g / fan}.parquet`);
       // The final row group size, not a small one: parquet-wasm holds the metadata of every row group of a file it
       // writes or reads (about 30 KB each), so 4 096-row groups made a round's memory grow with the rows it merged.
       await writeChunks(fs, path, mergeFiles(fs, table, group, opts.rowGroupRows, guard));

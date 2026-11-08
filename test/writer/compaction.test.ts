@@ -649,6 +649,35 @@ describe('compactPartitions: the files of the earlier rounds', () => {
   });
 });
 
+describe('compactPartitions: fan-out', () => {
+  test('the first round merges 16 flush partitions at once, later rounds 8 files', async () => {
+    const base = createMemoryFileSystem();
+    const written: string[] = [];
+    const fs: typeof base = {
+      ...base,
+      writeByteChunksAtomic: async (p, chunks) => {
+        written.push(p.slice(p.lastIndexOf('/') + 1));
+        await base.writeByteChunksAtomic?.(p, chunks);
+      },
+    };
+    const r = lcg(61);
+    let id = 0;
+    const rowsPer = Array.from({ length: 144 }, () => Array.from({ length: 2 }, () => logRow(id++, r)));
+    const entries = await writeParts(
+      fs,
+      rowsPer.map((logs) => ({ logs })),
+      ROW_GROUP,
+    );
+    written.length = 0;
+    await compactPartitions(fs, OUT, entries, opts(144));
+    // 144 partitions: nine files of 16, then nine files in two groups (8 and 1, the single one passing through),
+    // then the last two merged into the result.
+    expect(written.filter((p) => p.startsWith('.merge-logs-0-'))).toHaveLength(9);
+    expect(written.filter((p) => p.startsWith('.merge-logs-1-'))).toHaveLength(1);
+    expect(written).toContain('logs.parquet');
+  });
+});
+
 describe('compactPartitions on the real file system', () => {
   test('more than one round of inputs merges through blobs on disk to the same bytes, leaving no temporary file', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'otel-html-compact-'));
