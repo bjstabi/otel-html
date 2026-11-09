@@ -37,8 +37,8 @@ The maintainer works from the console only and does not open files, so a fresh s
 5. The metrics plan merged and no `*-format-4-host.md` → **session E**; host plan exists, not merged (its last PR, `test(e2e): host measured on the scale report; plan 4 record; the release is next`, is the one that merges it) → execute it (the prompt "Execute plan 4" below). Done 2026-11-09: the host plan merged (PRs #245, #247, #249 and its record PR).
 6. Plans 1–4 merged and no PR from `feat/format-4` to `main` → **session F**.
 
-After plan 4 the next session is **F** (rule 6, active): plans 1–4 are merged on `feat/format-4`.
-7. The publishing plan is written only after session C's plan is merged (**session G**), and executed after that.
+After plan 4 the next session is **F** (rule 6). Session F happened on 2026-11-09: the frozen-fixture PR #251, then the release PR from `feat/format-4` to `main`. From the release on, sessions run from `main`, not `feat/format-4`.
+7. The publishing plan is written only after session C's plan is merged (**session G**), and executed after that. Session G runs from `main`: its PRs target `main`, and the plan file lands on `main`.
 
 A session says which one it picked and why before starting. The universal prompt the maintainer pastes after every
 `/clear` is `/format-4` (the project skill in `.claude/skills/format-4/SKILL.md`), or, without the skill:
