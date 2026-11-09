@@ -42,6 +42,8 @@ export interface HttpTransportOptions {
 export interface Listener {
   readonly address: string;
   close(): Promise<void>;
+  /** Destroys every open connection, requests in flight included; `close()` alone waits for them. */
+  closeConnections?(): void;
 }
 
 type Handler = (req: IncomingMessage, res: ServerResponse) => void;
@@ -337,6 +339,7 @@ export function listenHttp(
             server.close((err) => (err === undefined ? done() : fail(err)));
             server.closeIdleConnections();
           }),
+        closeConnections: () => server.closeAllConnections(),
       });
     });
   });

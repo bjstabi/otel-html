@@ -17,6 +17,7 @@ interface Harness {
   stdout: string;
   stderr: string;
   fire(signal?: StopSignal): void;
+  subscribed(): boolean;
   result: Promise<number>;
 }
 
@@ -28,6 +29,7 @@ function start(argv: readonly string[]): Harness {
     fire: (signal = 'SIGINT') => {
       for (const fn of [...handlers]) fn(signal);
     },
+    subscribed: () => handlers.size > 0,
     result: Promise.resolve(0),
   };
   const io: CliIo = {
@@ -133,6 +135,48 @@ describe('host', () => {
     expect(await h.result).toBe(0);
   });
 
+  const SLOW =
+    'SELECT count(*) FROM range(300000000) r1, range(50) r2 WHERE (r1.range * r2.range) % 7919 = 1';
+
+  test('SIGINT during a slow statement stops at once: the statement is answered 503 and the exit is 0', async () => {
+    const h = start(['host', await reportDir('site'), '--port', '0', '--timeout', '20000']);
+    open.push(h);
+    const base = baseOf(await line(h));
+    const slow = fetch(`${base}query`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ type: 'arrow', sql: SLOW }),
+    });
+    const answered = slow.then(async (r) => ({ status: r.status, text: await r.text() }));
+    answered.catch(() => undefined);
+    await new Promise((r) => setTimeout(r, 1000));
+    const t0 = performance.now();
+    h.fire('SIGINT');
+    expect(await h.result).toBe(0);
+    const elapsed = performance.now() - t0;
+    process.stdout.write(`perf: SIGINT to exit ${Math.round(elapsed)} ms\n`);
+    expect(elapsed).toBeLessThan(4000);
+    expect(await answered).toEqual({ status: 503, text: 'the host is closed' });
+  });
+
+  test('a second Ctrl-C while closing still ends the process cleanly', async () => {
+    const h = start(['host', await reportDir('site'), '--port', '0', '--timeout', '20000']);
+    open.push(h);
+    await line(h);
+    h.fire('SIGINT');
+    h.fire('SIGINT');
+    expect([0, 130]).toContain(await h.result);
+  });
+
+  test('a signal during start-up exits 0 without printing serving', async () => {
+    const h = start(['host', await reportDir('site'), '--port', '0']);
+    open.push(h);
+    await vi.waitFor(() => expect(h.subscribed()).toBe(true));
+    h.fire('SIGINT');
+    expect(await h.result).toBe(0);
+    expect(h.stdout).not.toContain('serving');
+  });
+
   test('a missing folder is a usage error', async () => {
     const h = start(['host', '/nonexistent/otel-html-report', '--port', '0']);
     expect(await h.result).toBe(2);
@@ -149,7 +193,7 @@ describe('host', () => {
     expect(h.stderr).toContain('otel-html merge');
   });
 
-  test('a port in use exits 1 naming --port, and leaves no engine behind', async () => {
+  test('a port in use exits 1 naming --port, and the process exits (the engine it started is stopped)', async () => {
     const blocker = createServer();
     servers.push(blocker);
     await new Promise<void>((r) => blocker.listen(0, '127.0.0.1', r));
@@ -166,6 +210,7 @@ describe('host', () => {
     ['--timeout', '86400001'],
     ['--max-result-bytes', '0'],
     ['--max-result-bytes', '1.5'],
+    ['--max-result-bytes', '4294967297'],
     ['--port', '70000'],
   ])('%s %s exits 2', async (flag, value) => {
     const h = start(['host', await reportDir('site'), flag, value]);

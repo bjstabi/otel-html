@@ -229,14 +229,14 @@ export async function startHostEngine(opts: HostEngineOptions): Promise<HostEngi
     }
   }
   const graceMs = opts.graceMs ?? HUNG_GRACE_MS;
-  let live: Live | null = await openLive(opts, report);
+  let live: Live | null = null;
   let closed = false;
   let outstanding = 0;
   let restarts = 0;
   let tail: Promise<unknown> = Promise.resolve();
 
   /** `openLive` under its own deadline, unless `close()` came first; a worker nobody will use is stopped here. */
-  async function reopen(): Promise<Live> {
+  async function reopen(first = false): Promise<Live> {
     const opening = openLive(opts, report);
     const guard = sleepUntil(opts.openDeadlineMs ?? OPEN_DEADLINE_MS, 'the new worker did not start');
     try {
@@ -254,7 +254,10 @@ export async function startHostEngine(opts: HostEngineOptions): Promise<HostEngi
       );
       if (e instanceof HostError) throw e;
       opts.logger.debug(`the engine worker could not be started: ${engineMessage(e)}`);
-      throw new HostError(503, 'the engine could not be restarted');
+      throw new HostError(
+        503,
+        first ? `the engine did not start: ${engineMessage(e)}` : 'the engine could not be restarted',
+      );
     } finally {
       guard.cancel();
     }
@@ -297,6 +300,9 @@ export async function startHostEngine(opts: HostEngineOptions): Promise<HostEngi
       current.onExit.delete(notify);
     }
   }
+
+  // The first open is bounded like every reopen: a worker that hangs at start fails the start.
+  live = await reopen(true);
 
   return {
     get restarts() {

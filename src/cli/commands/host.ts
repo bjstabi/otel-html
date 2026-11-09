@@ -6,7 +6,7 @@ import { readHostManifest } from '../../host/manifest.js';
 import { startHostServer } from '../../host/server.js';
 import type { Listener } from '../../receiver/http.js';
 import type { CliIo } from '../io.js';
-import type { CliDeps } from '../program.js';
+import { type CliDeps, CliExit } from '../program.js';
 import { nextSignal, portOf } from './receive.js';
 
 const DEFAULT_HOST = '127.0.0.1';
@@ -38,53 +38,101 @@ interface HostFlags {
   maxResultBytes: number;
 }
 
+const INTERRUPTED_EXIT = 130;
+/** How long in-flight responses get to flush, once the engine has answered them 503, before connections are cut. */
+const DRAIN_MS = 500;
+
+interface Running {
+  files?: HostEngineFiles;
+  engine?: HostEngine;
+  listener?: Listener;
+}
+
+/**
+ * Stops promptly whatever the statements are doing: no new connections, the engine closed (running and queued
+ * statements are answered 503), what is still connected cut, then the files the engine ran from. A second stop signal
+ * while this runs removes the files and exits 130 without waiting for the rest.
+ */
+async function shutdown(io: CliIo, running: Running): Promise<void> {
+  const again = nextSignal(io);
+  const closing = (async () => {
+    const listening = running.listener?.close().catch(() => undefined);
+    await running.engine?.close().catch(() => undefined);
+    if (listening !== undefined) {
+      const drained = new Promise<void>((done) => setTimeout(done, DRAIN_MS).unref());
+      await Promise.race([listening, drained]);
+      running.listener?.closeConnections?.();
+      await listening;
+    }
+    await running.files?.close().catch(() => undefined);
+  })();
+  closing.catch(() => undefined);
+  try {
+    const second = await Promise.race([closing.then(() => false), again.signalled.then(() => true)]);
+    if (second) {
+      await running.files?.close().catch(() => undefined);
+      io.stdout('interrupted\n');
+      throw new CliExit(INTERRUPTED_EXIT);
+    }
+  } finally {
+    again.cancel();
+  }
+}
+
 async function serveReport(io: CliIo, deps: CliDeps, report: string, flags: HostFlags): Promise<void> {
   const full = await resolveDeps(deps);
   const manifest = await readHostManifest(full.fs, report);
   // Subscribed before anything starts, so a signal during start-up is not left to the default handler.
   const stop = nextSignal(io);
-  let files: HostEngineFiles | undefined;
-  let engine: HostEngine | undefined;
-  let listener: Listener | undefined;
-  const closeAll = async (): Promise<void> => {
-    // Server first (no new queries), then the engine, then the files it ran from.
-    await listener?.close().catch(() => undefined);
-    await engine?.close().catch(() => undefined);
-    await files?.close().catch(() => undefined);
-  };
-  try {
-    files = await hostEngineFiles();
-    engine = await startHostEngine({
+  const running: Running = {};
+  const starting = (async () => {
+    running.files = await hostEngineFiles();
+    running.engine = await startHostEngine({
       report,
       manifest: manifest.manifest,
-      files,
+      files: running.files,
       fs: full.fs,
       logger: full.logger,
       timeoutMs: flags.timeout,
       maxResultBytes: flags.maxResultBytes,
     });
-    listener = await startHostServer({
+    running.listener = await startHostServer({
       report,
       manifest,
-      engine,
+      engine: running.engine,
       viewerAssets: full.viewerAssets,
       host: flags.host,
       port: flags.port,
       logger: full.logger,
       tracer: full.tracer,
     });
+    return running.listener;
+  })();
+  starting.catch(() => undefined); // observed through the race below, or dropped after a signal
+  let listener: Listener;
+  try {
+    const first = await Promise.race([starting, stop.signalled.then(() => undefined)]);
+    if (first === undefined) {
+      // Stopped during start-up: let what is starting settle (a second signal ends the wait), then close it.
+      const again = nextSignal(io);
+      await Promise.race([starting.catch(() => undefined), again.signalled]);
+      again.cancel();
+      await shutdown(io, running);
+      return;
+    }
+    listener = first;
   } catch (e) {
     stop.cancel();
-    await closeAll();
+    await shutdown(io, running);
     throw e;
   }
   const n = manifest.manifest.partitions.length;
   const mb = Math.round(manifest.partitionBytes / BYTES_PER_MB);
   io.stdout(
-    `serving ${report} at ${listener.address}/ (${n} partitions, ${mb} MB of Parquet); press Ctrl-C to stop\n`,
+    `serving ${report} at ${listener.address}/ (${n} ${n === 1 ? 'partition' : 'partitions'}, ${mb} MB of Parquet); press Ctrl-C to stop\n`,
   );
   await stop.signalled;
-  await closeAll();
+  await shutdown(io, running);
 }
 
 export function addHostCommand(program: Command, io: CliIo, deps: CliDeps): void {
