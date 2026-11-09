@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { tableFromIPC } from 'apache-arrow';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { engineAssetNames, engineNodeAssetNames } from '../../src/format/engine.js';
 import { TABLE_COLUMNS } from '../../src/format/parquet/columns.js';
 import { startHostEngine } from '../../src/host/engine.js';
@@ -14,6 +14,9 @@ import { createNodeFileSystem } from '../../src/writer/node-fs.js';
 import { buildFormat4Report, spansOnlyRequest } from '../../test-support/format4-fixture.js';
 import { packageHostEngineFiles } from '../../test-support/host-engine-files.js';
 import { writeReportDir } from '../../test-support/report-dir.js';
+
+// A real engine start takes about 0.5 s here and several times that on a CI runner; restarts start a second one.
+vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 });
 
 const logger = { debug() {}, info() {}, warn() {}, error() {} };
 const cleanups: (() => Promise<void>)[] = [];
