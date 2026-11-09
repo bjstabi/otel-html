@@ -6,6 +6,50 @@ import type { FileSystem, Logger } from '../writer/ports.js';
 import type { HostEngineFiles } from './engine-files.js';
 import { NODE_FS_PROTOCOL, type NodeDuckDb, openNodeDuckDb } from './node-duckdb.js';
 
+/** A request outcome with an HTTP status: the client's statement was refused or failed (400), or the host could not serve it. */
+export class HostError extends Error {
+  readonly status: 400 | 413 | 503 | 504;
+  constructor(status: 400 | 413 | 503 | 504, message: string) {
+    super(message);
+    this.name = 'HostError';
+    this.status = status;
+  }
+}
+
+/** D37, in this order: a `LOAD` of an extension the build lacks hangs the worker when it runs before these. */
+export const POLICY_STATEMENTS: readonly string[] = [
+  'SET autoinstall_known_extensions = false',
+  'SET autoload_known_extensions = false',
+  "SET allowed_directories = ['data/partitions/']",
+  'SET enable_external_access = false',
+  'SET lock_configuration = true',
+];
+
+/** Only a query can sit inside the parentheses: DDL, DML, `SET`, `PRAGMA`, `LOAD` and a second statement are parser errors. */
+export function wrapStatement(sql: string): string {
+  return `SELECT * FROM (\n${sql}\n) AS otel_host`;
+}
+
+/** The pending-query path reports errors as JSON (`exception_type`, `exception_message`); DuckDB's own text is `<Type> Error: <message>`. */
+function engineMessage(e: unknown): string {
+  const text = e instanceof Error ? e.message : String(e);
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (typeof parsed === 'object' && parsed !== null && 'exception_message' in parsed) {
+      const { exception_type: type, exception_message: message } = parsed as Record<string, unknown>;
+      return typeof type === 'string' ? `${type} Error: ${String(message)}` : String(message);
+    }
+  } catch {
+    // not JSON: the message is already DuckDB's text
+  }
+  return text;
+}
+
+/** Locks the engine down; runs after the views, on the connection that created them. */
+async function applyPolicy(conn: { query(sql: string): Promise<unknown> }): Promise<void> {
+  for (const sql of POLICY_STATEMENTS) await conn.query(sql);
+}
+
 export interface HostEngineOptions {
   report: string;
   manifest: ManifestV4;
@@ -18,7 +62,7 @@ export interface HostEngineOptions {
 }
 
 export interface HostEngine {
-  /** One client statement as Arrow IPC stream bytes. Rejects with the engine's own error until Task 1.3 wraps it in a HostError. */
+  /** One client statement as Arrow IPC stream bytes. Rejects `HostError(400, <the engine's message>)` for a statement the engine refuses or cannot run. */
   query(sql: string): Promise<Uint8Array>;
   readonly restarts: number;
   close(): Promise<void>;
@@ -78,6 +122,7 @@ export async function startHostEngine(opts: HostEngineOptions): Promise<HostEngi
     }
     conn = await db.connect();
     for (const sql of viewStatements(opts.manifest, (p) => p)) await conn.query(sql);
+    await applyPolicy(conn);
   } catch (e) {
     await db.terminate();
     throw e;
@@ -87,7 +132,11 @@ export async function startHostEngine(opts: HostEngineOptions): Promise<HostEngi
   return {
     restarts: 0,
     query(sql) {
-      const run = tail.then(() => runPending(db, connection.id, sql));
+      const run = tail.then(() =>
+        runPending(db, connection.id, wrapStatement(sql)).catch((e: unknown) => {
+          throw new HostError(400, engineMessage(e));
+        }),
+      );
       tail = run.catch(() => undefined);
       return run;
     },
