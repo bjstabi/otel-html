@@ -1,6 +1,6 @@
 import type { AsyncDuckDBConnection } from '@duckdb/duckdb-wasm';
 import type { Table } from '@uwdata/flechette';
-import { type Connector, Coordinator, type QueryResult } from '@uwdata/mosaic-core';
+import { type Connector, Coordinator, type QueryResult, restConnector } from '@uwdata/mosaic-core';
 import type { Query } from '@uwdata/mosaic-sql';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { EngineFiles, QueryEngine } from './query-engine.js';
@@ -113,6 +113,46 @@ export function mosaicQueryEngine(
       // reject queued queries before the worker goes away
       coordinator.clear();
       await files.close();
+    },
+  };
+}
+
+/**
+ * The `QueryEngine` of a served report (D43): mosaic-core's `restConnector` POSTs `{ type: 'arrow', sql }` to the host
+ * at `endpoint` (`fetchImpl` is for tests). The host runs no DDL and a served report creates no temp tables, so
+ * `tempTables` is false, and `registerText` and `exec` reject `usage`; `close` has nothing to release.
+ */
+export function restQueryEngine(endpoint: string, logger: Logger, fetchImpl?: typeof fetch): QueryEngine {
+  const servedFiles: EngineFiles = {
+    registerText() {
+      return Promise.reject(
+        new OtelHtmlError('usage', {
+          path: 'registerText',
+          expected: 'no temp tables',
+          actual: 'a served report creates no temp tables',
+        }),
+      );
+    },
+    close() {},
+  };
+  const engine = mosaicQueryEngine(
+    createCoordinator(
+      restConnector({ uri: endpoint, method: 'POST', ...(fetchImpl ? { fetch: fetchImpl } : {}) }),
+      logger,
+    ),
+    servedFiles,
+    false,
+  );
+  return {
+    ...engine,
+    exec() {
+      return Promise.reject(
+        new OtelHtmlError('usage', {
+          path: 'exec',
+          expected: 'queries only',
+          actual: 'the host runs no DDL',
+        }),
+      );
     },
   };
 }

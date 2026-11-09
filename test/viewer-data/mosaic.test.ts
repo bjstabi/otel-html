@@ -3,7 +3,12 @@ import { tableFromArrays, tableToIPC } from '@uwdata/flechette';
 import type { Connector } from '@uwdata/mosaic-core';
 import { count, Query } from '@uwdata/mosaic-sql';
 import { expect, test } from 'vitest';
-import { createCoordinator, engineConnector, mosaicQueryEngine } from '../../src/viewer/data/mosaic.js';
+import {
+  createCoordinator,
+  engineConnector,
+  mosaicQueryEngine,
+  restQueryEngine,
+} from '../../src/viewer/data/mosaic.js';
 import { buildFormat4Report, openFixtureDb, spansOnlyRequest } from '../../test-support/format4-fixture.js';
 
 const silentLogger = { debug() {}, info() {}, warn() {}, error() {} };
@@ -158,4 +163,53 @@ test('close clears the coordinator before closing the files', async () => {
   });
   await qe.close();
   expect(events).toEqual(['clear', 'files.close']);
+});
+
+function fakeFetch(respond: (body: string) => Response) {
+  const calls: { url: string; init: RequestInit }[] = [];
+  const impl = (async (url: string, init: RequestInit) => {
+    calls.push({ url: String(url), init });
+    return respond(String(init.body));
+  }) as unknown as typeof fetch;
+  return { impl, calls };
+}
+
+test('restQueryEngine posts {type, sql} as JSON and decodes the Arrow answer', async () => {
+  const f = fakeFetch(() => new Response(ipcBytes({ n: [5n] }) as BodyInit));
+  const qe = restQueryEngine('http://127.0.0.1:1/query', silentLogger, f.impl);
+  const q = Query.from('spans').select({ n: count() });
+  expect(qe.tempTables).toBe(false);
+  const t = await qe.query(q);
+  expect(t.getChild('n')?.at(0)).toBe(5n);
+  expect(f.calls).toHaveLength(1);
+  expect(f.calls[0]?.url).toBe('http://127.0.0.1:1/query');
+  expect(f.calls[0]?.init.method).toBe('POST');
+  expect(new Headers(f.calls[0]?.init.headers).get('content-type')).toBe('application/json');
+  expect(JSON.parse(String(f.calls[0]?.init.body))).toEqual({ type: 'arrow', sql: String(q) });
+});
+
+test('restQueryEngine maps a 400 to invalid-report with the body and the SQL', async () => {
+  const f = fakeFetch(() => new Response('Parser Error: x', { status: 400 }));
+  const qe = restQueryEngine('http://127.0.0.1:1/query', silentLogger, f.impl);
+  const q = Query.from('spans').select({ n: count() });
+  const err = await qe.query(q).catch((e: unknown) => e);
+  expect(err).toMatchObject({ code: 'invalid-report' });
+  expect(JSON.stringify(err)).toContain('Parser Error: x');
+  expect((err as { detail?: { hint?: string } }).detail?.hint ?? (err as { hint?: string }).hint).toBe(
+    String(q),
+  );
+});
+
+test('restQueryEngine refuses temp tables and DDL, close resolves, abort rejects', async () => {
+  const f = fakeFetch(() => new Response(ipcBytes({ n: [1n] }) as BodyInit));
+  const qe = restQueryEngine('http://127.0.0.1:1/query', silentLogger, f.impl);
+  await expect(qe.registerText('a', 'b')).rejects.toMatchObject({ code: 'usage' });
+  await expect(qe.exec('CREATE TABLE t (a INT)')).rejects.toMatchObject({ code: 'usage' });
+  const ctl = new AbortController();
+  ctl.abort();
+  await expect(qe.query(Query.from('spans').select('x'), ctl.signal)).rejects.toMatchObject({
+    name: 'AbortError',
+  });
+  expect(f.calls).toHaveLength(0);
+  await expect(qe.close()).resolves.toBeUndefined();
 });
