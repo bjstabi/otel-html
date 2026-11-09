@@ -6,6 +6,7 @@ import {
   HostError,
   HUNG_GRACE_MS,
   MAX_QUEUED,
+  OPEN_DEADLINE_MS,
   startHostEngine,
 } from '../../src/host/engine.js';
 import { type NodeDuckDb, openNodeDuckDb } from '../../src/host/node-duckdb.js';
@@ -319,6 +320,7 @@ describe('the restart', () => {
 
   it('replaces a worker that stops answering, after the timeout plus the grace', async () => {
     expect(HUNG_GRACE_MS).toBe(5000);
+    expect(OPEN_DEADLINE_MS).toBe(30_000);
     const log: string[] = [];
     const answer = new Uint8Array([1, 2, 3]);
     const dbs = [
