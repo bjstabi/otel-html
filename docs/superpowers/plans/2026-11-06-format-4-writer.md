@@ -25,8 +25,8 @@
 ## Kickoff prompts for the sessions that follow
 
 The maintainer works from the console only and does not open files, so a fresh session finds its own job here.
-**Which session is next** is decided by what exists on `feat/format-4` (`git fetch origin && git log origin/feat/format-4`,
-`ls docs/superpowers/plans/`, `gh pr list --base feat/format-4 --state all`):
+**Which session is next** is decided by what exists on `feat/format-4`, or on `main` once the release PR has merged
+(`git fetch origin && git log origin/feat/format-4`, `ls docs/superpowers/plans/`, `gh pr list --base feat/format-4 --state all`):
 
 1. No PR with title prefix `feat(format): Arrow schemas` merged → **session A** (execute this plan; resume at the first
    plan task whose PR is not merged).
@@ -37,14 +37,14 @@ The maintainer works from the console only and does not open files, so a fresh s
 5. The metrics plan merged and no `*-format-4-host.md` → **session E**; host plan exists, not merged (its last PR, `test(e2e): host measured on the scale report; plan 4 record; the release is next`, is the one that merges it) → execute it (the prompt "Execute plan 4" below). Done 2026-11-09: the host plan merged (PRs #245, #247, #249 and its record PR).
 6. Plans 1–4 merged and no PR from `feat/format-4` to `main` → **session F**.
 
-After plan 4 the next session is **F** (rule 6, active): plans 1–4 are merged on `feat/format-4`.
-7. The publishing plan is written only after session C's plan is merged (**session G**), and executed after that.
+After plan 4 the next session is **F** (rule 6). Session F happened on 2026-11-09: the frozen-fixture PR #251, then the release PR from `feat/format-4` to `main`. From the release on, sessions run from `main`, not `feat/format-4`.
+7. The publishing plan is written only after session C's plan is merged (**session G**), and executed after that. Session G runs from `main`: its PRs target `main`, and the plan file lands on `main`.
 
 A session says which one it picked and why before starting. The universal prompt the maintainer pastes after every
 `/clear` is `/format-4` (the project skill in `.claude/skills/format-4/SKILL.md`), or, without the skill:
 
 ```
-Continue the format-4 work. Read the "Kickoff prompts" section of docs/superpowers/plans/2026-11-06-format-4-writer.md on branch feat/format-4, decide which session is next from the rules there, say which and why, then run that session's prompt exactly as written.
+Continue the format-4 work. Read the "Kickoff prompts" section of docs/superpowers/plans/2026-11-06-format-4-writer.md on branch feat/format-4 (or main, once the release PR has merged), decide which session is next from the rules there, say which and why, then run that session's prompt exactly as written.
 ```
 
 Each prompt below is what that session runs; each waits for the previous plan to have merged to `feat/format-4`.

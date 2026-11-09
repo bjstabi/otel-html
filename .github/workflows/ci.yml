@@ -332,8 +332,8 @@ jobs:
         with:
           name: otel-html-${{ github.job }}
 
-  # The standalone Bun binaries, built and smoke-tested on every PR (convert, serve over HTTP and gRPC, run, SIGINT, bad
-  # port). The release workflow keeps its own smoke step, which tests the artefact it uploads.
+  # The standalone Bun binaries, built and smoke-tested on every PR (convert, serve over HTTP and gRPC, host, ci context,
+  # run, SIGINT, bad port; then convert, compaction and host run from outside the checkout). The release workflow keeps its own smoke step, which tests the artefact it uploads.
   binary:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
