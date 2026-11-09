@@ -276,6 +276,9 @@ describe('querySpans', () => {
     expect(rows.rows.length).toBeGreaterThan(0);
     const translatable = await served.querySpans(query({ condition: 'status.code == 2', needs: [...ALL] }));
     expect(translatable.residual).toBeNull();
+    await expect(served.services({ window: null, condition, limit: 10 })).rejects.toMatchObject({
+      code: 'usage',
+    });
   });
 
   test('a residual condition (Len) re-checks rows in the browser and marks the result', async () => {

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -114,10 +114,19 @@ describe('hostEngineFiles', () => {
     expect(WORKER_SHIM).toContain('onmessage');
   });
 
-  it('with no dirs resolves three existing files: the WASM as the package has it, the Node files bundled', async () => {
+  it('with no dirs resolves the engine files that exist: the WASM as the package has it, the Node files bundled, both extensions', async () => {
     const files = await hostEngineFiles();
     const pkg = packageHostEngineFiles();
     expect(Buffer.compare(await readFile(files.wasm), await readFile(pkg.wasm))).toBe(0);
+    for (const path of [
+      files.bindings,
+      files.worker,
+      files.wasm,
+      files.extensions.parquet,
+      files.extensions.json,
+    ]) {
+      await expect(access(path)).resolves.toBeUndefined();
+    }
     for (const key of ['bindings', 'worker'] as const) {
       expect(await readFile(files[key], 'utf8')).not.toContain('require("apache-arrow")');
     }

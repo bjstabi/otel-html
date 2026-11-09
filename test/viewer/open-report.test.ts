@@ -170,14 +170,15 @@ describe('openReport over a host', () => {
   }
 
   test('queries the REST endpoint resolved against the base url, starting no engine', async () => {
-    const { hostDeps, hostParts, createRestEngine, mustNot, rest } = hosted();
+    const { hostDeps, hostParts, createRestEngine, mustNot, rest, source } = hosted();
     const seen: LoadProgress[] = [];
     const ds = await openReport(manifest4(), hostDeps, (p) => seen.push(p));
     expect(createRestEngine).toHaveBeenCalledWith('http://127.0.0.1:4318/query', hostDeps.logger);
     expect(mustNot).not.toHaveBeenCalled();
     expect(hostParts.createSource).toHaveBeenCalledWith(expect.objectContaining({ engine: rest }));
     expect(seen).toEqual([{ phase: 'host' }]);
-    await ds.querySpans({} as never);
+    expect(await ds.querySpans({} as never)).toEqual({ rows: [1] });
+    expect(source.querySpans).toHaveBeenCalledOnce();
   });
 
   test('a format-3 manifest still fails the D12 gate', async () => {

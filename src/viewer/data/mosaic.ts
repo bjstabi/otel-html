@@ -52,11 +52,15 @@ function abortError(): DOMException {
   return new DOMException('The query was aborted', 'AbortError');
 }
 
-function engineFailure(error: unknown, sql: string): OtelHtmlError {
+function engineFailure(
+  error: unknown,
+  sql: string,
+  describe?: (error: unknown) => string | undefined,
+): OtelHtmlError {
   return new OtelHtmlError('invalid-report', {
     path: 'query',
     expected: 'a query the engine accepts',
-    actual: error instanceof Error ? error.message : String(error),
+    actual: describe?.(error) ?? (error instanceof Error ? error.message : String(error)),
     hint: sql,
   });
 }
@@ -68,11 +72,13 @@ function engineFailure(error: unknown, sql: string): OtelHtmlError {
  * generated SQL is attached to a failure as an `invalid-report` `OtelHtmlError` (its hint). `exec` sends
  * `{ type: 'exec', sql }` through the coordinator (so its cache sees the DDL); `registerText` and `close` delegate to
  * `files`. `tempTables` (default true) is what the engine reports on the seam; the served path passes false (D43).
+ * `describe`, when given, words a failure's `actual` (undefined keeps the error's own message).
  */
 export function mosaicQueryEngine(
   coordinator: Coordinator,
   files: EngineFiles,
   tempTables = true,
+  describe?: (error: unknown) => string | undefined,
 ): QueryEngine {
   return {
     tempTables,
@@ -92,7 +98,7 @@ export function mosaicQueryEngine(
         return await Promise.race([result, aborted]);
       } catch (error) {
         if (signal?.aborted) throw abortError();
-        throw engineFailure(error, String(q));
+        throw engineFailure(error, String(q), describe);
       } finally {
         if (onAbort) signal?.removeEventListener('abort', onAbort);
         // a request cancelled by the abort rejects `result` too; that rejection is handled here
@@ -103,7 +109,7 @@ export function mosaicQueryEngine(
       try {
         await coordinator.exec(sql);
       } catch (error) {
-        throw engineFailure(error, sql);
+        throw engineFailure(error, sql, describe);
       }
     },
     async registerText(name: string, text: string): Promise<void> {
@@ -115,6 +121,24 @@ export function mosaicQueryEngine(
       await files.close();
     },
   };
+}
+
+/** What a failed host request means to the reader; a 400 keeps DuckDB's own message (mosaic words it `Query failed with HTTP status N: body`). */
+function describeHostFailure(error: unknown): string | undefined {
+  if (error instanceof TypeError) return 'the host did not answer (is otel-html host still running?)';
+  const status = error instanceof Error ? /^Query failed with HTTP status (\d+): /.exec(error.message) : null;
+  switch (status?.[1]) {
+    case '400':
+      return error instanceof Error ? error.message.slice(status[0].length) : undefined;
+    case '413':
+      return "the result is larger than the host's --max-result-bytes";
+    case '503':
+      return 'the host is busy or stopping';
+    case '504':
+      return 'the host did not finish the query in time (--timeout)';
+    default:
+      return undefined;
+  }
 }
 
 /**
@@ -142,6 +166,7 @@ export function restQueryEngine(endpoint: string, logger: Logger, fetchImpl?: ty
     ),
     servedFiles,
     false,
+    describeHostFailure,
   );
   return {
     ...engine,

@@ -3,6 +3,7 @@ import { tableFromArrays, tableToIPC } from '@uwdata/flechette';
 import type { Connector } from '@uwdata/mosaic-core';
 import { count, Query } from '@uwdata/mosaic-sql';
 import { expect, test } from 'vitest';
+import { OtelHtmlError } from '../../src/model/errors.js';
 import {
   createCoordinator,
   engineConnector,
@@ -195,9 +196,32 @@ test('restQueryEngine maps a 400 to invalid-report with the body and the SQL', a
   const err = await qe.query(q).catch((e: unknown) => e);
   expect(err).toMatchObject({ code: 'invalid-report' });
   expect(JSON.stringify(err)).toContain('Parser Error: x');
-  expect((err as { detail?: { hint?: string } }).detail?.hint ?? (err as { hint?: string }).hint).toBe(
-    String(q),
-  );
+  expect((err as OtelHtmlError).hint).toBe(String(q));
+});
+
+test.each([
+  [413, "the result is larger than the host's --max-result-bytes"],
+  [503, 'the host is busy or stopping'],
+  [504, 'the host did not finish the query in time (--timeout)'],
+])('restQueryEngine maps a %i to an accurate invalid-report', async (status, text) => {
+  const f = fakeFetch(() => new Response('body', { status }));
+  const qe = restQueryEngine('http://127.0.0.1:1/query', silentLogger, f.impl);
+  const q = Query.from('spans').select({ n: count() });
+  const err = (await qe.query(q).catch((e: unknown) => e)) as OtelHtmlError;
+  expect(err).toBeInstanceOf(OtelHtmlError);
+  expect(err.code).toBe('invalid-report');
+  expect(err.actual).toBe(text);
+  expect(err.hint).toBe(String(q));
+});
+
+test('restQueryEngine maps a network failure to "the host did not answer"', async () => {
+  const impl = (() => Promise.reject(new TypeError('Failed to fetch'))) as unknown as typeof fetch;
+  const qe = restQueryEngine('http://127.0.0.1:1/query', silentLogger, impl);
+  const err = (await qe
+    .query(Query.from('spans').select({ n: count() }))
+    .catch((e: unknown) => e)) as OtelHtmlError;
+  expect(err.code).toBe('invalid-report');
+  expect(err.actual).toBe('the host did not answer (is otel-html host still running?)');
 });
 
 test('restQueryEngine refuses temp tables and DDL, close resolves, abort rejects', async () => {

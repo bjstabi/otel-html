@@ -2,7 +2,7 @@ import { type ChildProcess, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const MAIN = fileURLToPath(new URL('../dist/cli/main.js', import.meta.url));
-const START_TIMEOUT_MS = 30_000;
+const START_TIMEOUT_MS = 60_000; // above the host's own 30 s open deadline, so its error wins
 const KILL_GRACE_MS = 5_000;
 const SERVING = /serving .* at (http:\/\/127\.0\.0\.1:\d+)\//;
 
@@ -20,7 +20,7 @@ function exited(child: ChildProcess, ms: number): Promise<boolean> {
 
 /**
  * Spawns `node dist/cli/main.js host <report> --port 0 [...args]` and resolves the printed `http://127.0.0.1:<port>`
- * once the serving line appears (30 s). `close()` sends SIGTERM and, after a bound, SIGKILL. The page must be opened
+ * once the serving line appears (60 s). `close()` sends SIGTERM and, after a bound, SIGKILL. The page must be opened
  * at exactly this URL: the host refuses a foreign Host header.
  */
 export async function startHost(

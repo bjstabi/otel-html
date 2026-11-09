@@ -18,7 +18,8 @@ const history = createHashHistory(window);
 
 /**
  * The manifest is validated at the boundary (a format 1 to 3 report is refused with the D12 message), then the
- * engine starts, the partitions register and the format-4 data source is built.
+ * engine starts, the partitions register and the format-4 data source is built. A page whose shell names a host
+ * (`<meta name="otel-html-host">`) starts no engine and registers nothing: its data source queries the host over REST.
  */
 function load(onProgress: (p: LoadProgress) => void): Promise<DataSource> {
   return openReport(

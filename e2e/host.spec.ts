@@ -4,29 +4,59 @@ import { startHost } from './host-process.js';
 import { test as base, expect } from './test.js';
 
 /** What the served viewer must never ask for: the host answers queries, it does not hand out the engine or the data. */
-const FORBIDDEN = /\.parquet(\.js)?$|\.wasm$|worker|\/data\/partitions\//;
+const FORBIDDEN = /\.parquet(\.js)?$|\.b64\.js$|\.wasm$|worker|\/data\/partitions\//;
 const SQL_ONLY = /has no SQL form/;
 
-const test = base.extend<{ served: string }, { host: Awaited<ReturnType<typeof startHost>> }>({
-  host: [
-    async ({ playwright: _unused }, use) => {
-      const host = await startHost(fileURLToPath(reportDir('linked', 'file')));
+type Host = Awaited<ReturnType<typeof startHost>>;
+
+/** A host over `report` for one worker; at teardown it stops and its stderr holds no warning and no error line. */
+function hostFixture(
+  report: 'linked' | 'dashboards',
+): [
+  (args: { playwright: unknown }, use: (h: Host) => Promise<void>) => Promise<void>,
+  { scope: 'worker'; timeout: number },
+] {
+  return [
+    async ({ playwright: _unused }: { playwright: unknown }, use: (h: Host) => Promise<void>) => {
+      const host = await startHost(fileURLToPath(reportDir(report, 'file')));
       await use(host);
+      // What the host logged while the tests ran. Stopping it under a page's last in-flight query may log noise of its own.
+      const logged = host.stderr();
       await host.close();
-      // The two refusals are the viewer's own and never reach the host, so nothing it logged is a warning.
-      expect(host.stderr()).not.toMatch(/\bwarn\b/i);
+      // The two refusals are the viewer's own and never reach the host, so nothing it logged is a warning or an error.
+      expect(logged).not.toMatch(/\bwarn\b/i);
+      expect(logged).not.toMatch(/otel-html error:/);
     },
-    { scope: 'worker' },
-  ],
+    { scope: 'worker' as const, timeout: 90_000 },
+  ];
+}
+
+const test = base.extend<{ served: string; servedDashboards: string }, { host: Host; dashboardsHost: Host }>({
+  host: hostFixture('linked'),
+  dashboardsHost: hostFixture('dashboards'),
   served: async ({ host, page }, use) => {
-    const forbidden: string[] = [];
-    page.on('request', (r) => {
-      if (FORBIDDEN.test(new URL(r.url()).pathname)) forbidden.push(r.url());
-    });
+    const forbidden = watchForbidden(page);
     await use(`${host.url}/index.html`);
     expect(forbidden, 'the served viewer requested the engine or the data').toEqual([]);
   },
+  servedDashboards: async ({ dashboardsHost, page }, use) => {
+    const forbidden = watchForbidden(page);
+    await use(`${dashboardsHost.url}/index.html`);
+    expect(forbidden, 'the served viewer requested the engine or the data').toEqual([]);
+  },
 });
+
+// One worker per browser project: ten workers each starting hosts and browsers at once exhausts this machine's process
+// limit (browsers crash, hosts hang on start), and these tests share the worker-scoped hosts anyway.
+test.describe.configure({ mode: 'serial' });
+
+function watchForbidden(page: import('@playwright/test').Page): string[] {
+  const forbidden: string[] = [];
+  page.on('request', (r) => {
+    if (FORBIDDEN.test(new URL(r.url()).pathname)) forbidden.push(r.url());
+  });
+  return forbidden;
+}
 
 const spanCount = (page: import('@playwright/test').Page) =>
   page.getByRole('main').locator('output', { hasText: /\bspans\b/ });
@@ -64,15 +94,76 @@ test('Logs explorer shows every log', async ({ page, served }) => {
   );
 });
 
-test('the Metrics Catalog lists the metrics and a chart draws', async ({ page, served }) => {
+test('the Metrics Catalog equals the browser engine over the same report, and a chart draws', async ({
+  page,
+  served,
+  reportUrl,
+  browser,
+}) => {
   await page.goto(`${served}#/metrics/catalog`);
   await expect(page.getByRole('main')).toContainText(new RegExp(`\\b${METRICS_COUNT} metrics ·`));
-  const rows = page.getByRole('grid', { name: 'Results' }).getByRole('row');
-  await expect(rows).toHaveCount(METRICS_COUNT + 1);
-  await rows.filter({ hasText: METRIC_HIST }).click();
+  const grid = page.getByRole('grid', { name: 'Results' });
+  await expect(grid.getByRole('row')).toHaveCount(METRICS_COUNT + 1);
+  const served$ = await grid.textContent();
+  await grid.getByRole('row').filter({ hasText: METRIC_HIST }).click();
   await expect(
     page.getByRole('img', { name: new RegExp(`^${METRIC_HIST} · p95: [1-9]\\d* series$`) }),
   ).toBeVisible();
+
+  const local = await browser.newPage();
+  try {
+    await local.goto(`${reportUrl('linked')}/index.html#/metrics/catalog`);
+    const table = local.getByRole('grid', { name: 'Results' });
+    await expect(table.getByRole('row')).toHaveCount(METRICS_COUNT + 1);
+    expect(served$).toBe(await table.textContent());
+  } finally {
+    await local.close();
+  }
+});
+
+test('a Metrics Explorer query draws a chart', async ({ page, served }) => {
+  const m = {
+    queries: [
+      {
+        id: 'a',
+        metric: METRIC_HIST,
+        kind: null,
+        unit: null,
+        show: 'p95',
+        by: [],
+        where: null,
+        fn: [],
+        alias: null,
+        hidden: false,
+      },
+    ],
+    formulas: [],
+    display: 'lines',
+    scale: 'linear',
+    split: false,
+    exemplars: false,
+  };
+  await page.goto(`${served}#/metrics?m=${encodeURIComponent(JSON.stringify(m))}`);
+  await expect(
+    page.getByRole('img', { name: new RegExp(`^${METRIC_HIST} · p95: [1-9]\\d* series$`) }),
+  ).toBeVisible();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+});
+
+test('the Fusion dashboard renders its timeline and widgets from a served dashboards report', async ({
+  page,
+  servedDashboards,
+}) => {
+  await page.goto(`${servedDashboards}#/dashboards/fusion`);
+  await expect(page.getByRole('heading', { level: 1, name: 'Fusion' })).toBeVisible();
+  const widget = (id: string) => page.locator(`[data-widget="${id}"]`);
+  await expect(widget('timeline')).toBeVisible();
+  await expect(widget('traces').getByRole('grid', { name: 'Results' }).getByRole('row').nth(1)).toBeVisible();
+  await expect(widget('traces')).toContainText(/\d+ traces?/);
+  await expect(widget('logs')).toContainText(/\d+ logs?/);
+  await expect(widget('metrics')).toContainText('all resources');
+  await expect(widget('metrics').getByTestId('metric-grid')).not.toContainText('Loading metrics');
+  await expect(page.getByRole('alert')).toHaveCount(0);
 });
 
 test('a row opens the trace panel', async ({ page, served }) => {

@@ -50,7 +50,8 @@ globalThis.XMLHttpRequest = class {
   open(method, url) { this.url = String(url); }
   setRequestHeader() {}
   send() {
-    const path = workerData.extensions[this.url.split('/').pop()];
+    const name = this.url.split('/').pop();
+    const path = Object.hasOwn(workerData.extensions, name) ? workerData.extensions[name] : undefined;
     if (path === undefined) { this.status = 404; this.response = new ArrayBuffer(0); return; }
     const bytes = require('node:fs').readFileSync(path);
     this.status = 200;
