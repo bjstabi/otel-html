@@ -1,3 +1,4 @@
+import { request } from 'node:http';
 import { createServer } from 'node:net';
 import { tableFromIPC } from 'apache-arrow';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -25,7 +26,7 @@ afterEach(async () => {
   for (const c of cleanups.splice(0).reverse()) await c();
 });
 
-async function serve() {
+async function serve(bindHost = '127.0.0.1') {
   const fixture = await buildFormat4Report([spansOnlyRequest(3), spansOnlyRequest(2)], { close: false });
   const report = await writeReportDir(fixture);
   cleanups.push(report.close);
@@ -47,7 +48,7 @@ async function serve() {
     manifest,
     engine,
     viewerAssets: fakeViewerAssets(),
-    host: '127.0.0.1',
+    host: bindHost,
     port: 0,
     logger: w.deps.logger,
     tracer: w.deps.tracer,
@@ -113,7 +114,7 @@ describe('chunked bodies', () => {
     const raw = await new Promise<string>((resolve, reject) => {
       const s = connect(Number(url.port), url.hostname, () => {
         s.write(
-          'POST /query HTTP/1.1\r\nhost: x\r\ncontent-type: application/json\r\ntransfer-encoding: chunked\r\n\r\n',
+          `POST /query HTTP/1.1\r\nhost: ${url.host}\r\ncontent-type: application/json\r\ntransfer-encoding: chunked\r\n\r\n`,
         );
         const chunk = 'x'.repeat(64 * 1024);
         let i = 0;
@@ -171,7 +172,7 @@ describe('static routes', () => {
       const raw = await new Promise<string>((resolve, reject) => {
         import('node:net').then(({ connect }) => {
           const s = connect(Number(url.port), url.hostname, () =>
-            s.write(`GET ${p} HTTP/1.1\r\nhost: x\r\nconnection: close\r\n\r\n`),
+            s.write(`GET ${p} HTTP/1.1\r\nhost: ${url.host}\r\nconnection: close\r\n\r\n`),
           );
           let out = '';
           s.on('data', (d) => {
@@ -200,5 +201,111 @@ describe('listenHttp with --port', () => {
     } finally {
       await new Promise((r) => blocker.close(r));
     }
+  });
+});
+
+/** A request with a chosen Host header (fetch does not allow one). */
+function withHost(
+  base: string,
+  host: string,
+  opts: { method?: string; path?: string; type?: string | undefined; body?: string | undefined } = {},
+): Promise<{ status: number; headers: Record<string, string | string[] | undefined>; text: string }> {
+  const url = new URL(base);
+  return new Promise((resolve, reject) => {
+    const req = request(
+      {
+        host: url.hostname,
+        port: url.port,
+        method: opts.method ?? 'GET',
+        path: opts.path ?? '/',
+        headers: { host, ...(opts.type === undefined ? {} : { 'content-type': opts.type }) },
+        agent: false,
+      },
+      (res) => {
+        let text = '';
+        res.on('data', (d) => {
+          text += String(d);
+        });
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, headers: res.headers, text }));
+      },
+    );
+    req.on('error', reject);
+    req.end(opts.body);
+  });
+}
+
+describe('cross-site and rebound requests (I2)', () => {
+  it('answers 415 to a query that is not application/json, and runs one that is', async () => {
+    const { base } = await serve();
+    const body = JSON.stringify({ type: 'arrow', sql: 'SELECT 1' });
+    for (const type of ['text/plain', 'application/x-www-form-urlencoded', undefined]) {
+      const res = await withHost(base, new URL(base).host, { method: 'POST', path: QUERY_PATH, type, body });
+      expect(res.status).toBe(415);
+    }
+    const ok = await withHost(base, new URL(base).host, {
+      method: 'POST',
+      path: QUERY_PATH,
+      type: 'application/json; charset=utf-8',
+      body,
+    });
+    expect(ok.status).toBe(200);
+  });
+
+  it('answers 403 to a foreign Host on a loopback bind, for every route', async () => {
+    const { base } = await serve();
+    const { port } = new URL(base);
+    for (const host of [
+      'evil.example',
+      `evil.example:${port}`,
+      '127.0.0.1',
+      `127.0.0.1.evil.example:${port}`,
+      `localhost:1`,
+    ]) {
+      for (const [method, path] of [
+        ['GET', '/'],
+        ['GET', '/data/manifest.js'],
+        ['POST', QUERY_PATH],
+        ['GET', '/nope'],
+      ] as const) {
+        const res = await withHost(base, host, {
+          method,
+          path,
+          type: 'application/json',
+          body: method === 'POST' ? JSON.stringify({ type: 'arrow', sql: 'SELECT 1' }) : undefined,
+        });
+        expect([host, path, res.status]).toEqual([host, path, 403]);
+      }
+    }
+  });
+
+  it('accepts the loopback names with the bound port', async () => {
+    const { base } = await serve();
+    const { port } = new URL(base);
+    for (const host of [`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`, `LOCALHOST:${port}`]) {
+      expect([host, (await withHost(base, host)).status]).toEqual([host, 200]);
+    }
+  });
+
+  it('accepts any Host when bound to a non-loopback address', async () => {
+    const { base } = await serve('0.0.0.0');
+    const { port } = new URL(base);
+    const res = await withHost(`http://127.0.0.1:${port}/`, 'proxy.example', {});
+    expect(res.status).toBe(200);
+  });
+
+  it('marks every response nosniff, the 404 that echoes the path included', async () => {
+    const { base } = await serve();
+    const host = new URL(base).host;
+    for (const [method, path] of [
+      ['GET', '/'],
+      ['GET', '/%3Cscript%3E'],
+      ['GET', QUERY_PATH],
+      ['PUT', '/'],
+    ] as const) {
+      const res = await withHost(base, host, { method, path });
+      expect([path, res.headers['x-content-type-options']]).toEqual([path, 'nosniff']);
+    }
+    const refused = await withHost(base, 'evil.example');
+    expect(refused.headers['x-content-type-options']).toBe('nosniff');
   });
 });

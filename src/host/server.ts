@@ -47,6 +47,29 @@ function mimeOf(path: string): string {
   return Object.hasOwn(MIME, ext) ? (MIME[ext] ?? FALLBACK_TYPE) : FALLBACK_TYPE;
 }
 
+/** 127.0.0.0/8, `::1`, `localhost`: where a page on another site can still reach the host through the browser. */
+function isLoopbackHost(host: string): boolean {
+  const bare = host.replace(/^\[(.*)\]$/, '$1').toLowerCase();
+  return (
+    bare === 'localhost' ||
+    bare === '::1' ||
+    /^127(\.\d{1,3}){3}$/.test(bare) ||
+    bare.startsWith('::ffff:127.')
+  );
+}
+
+/** The `Host` values a loopback-bound host answers to (DNS-rebinding guard); `null` accepts any (non-loopback bind). */
+function allowedHosts(bound: string, port: number): ReadonlySet<string> | null {
+  if (!isLoopbackHost(bound)) return null;
+  const names = [
+    '127.0.0.1',
+    'localhost',
+    '[::1]',
+    bound.includes(':') ? `[${bound.replace(/^\[|\]$/g, '')}]` : bound,
+  ];
+  return new Set(names.map((n) => `${n.toLowerCase()}:${port}`));
+}
+
 class BodyTooLarge extends Error {}
 
 /** The request body, counted against the cap while it streams; nothing past the cap is kept. */
@@ -80,6 +103,7 @@ export function hostHandler(
   opts: Omit<HostServerOptions, 'host' | 'port'>,
   assets: ReadonlyMap<string, Uint8Array>,
   shell: string,
+  allowed: () => ReadonlySet<string> | null = () => null,
 ): (req: IncomingMessage, res: ServerResponse) => void {
   const { engine, logger, tracer } = opts;
   const manifestScript = opts.manifest.script;
@@ -94,7 +118,11 @@ export function hostHandler(
   ): void {
     if (res.headersSent || res.writableEnded) return;
     const length = typeof body === 'string' ? Buffer.byteLength(body) : body.length;
-    res.writeHead(status, { ...headers, 'content-length': String(length) });
+    res.writeHead(status, {
+      ...headers,
+      'x-content-type-options': 'nosniff',
+      'content-length': String(length),
+    });
     res.end(req.method === 'HEAD' ? undefined : body, after);
   }
 
@@ -124,7 +152,7 @@ export function hostHandler(
       } catch (e) {
         if (e instanceof BodyTooLarge) {
           status = 413;
-          logger.warn('host query refused', { status, reason: 'body over the cap' });
+          logger.warn(`413 the request body exceeds ${MAX_QUERY_BODY_BYTES} bytes`);
           res.setHeader('connection', 'close');
           text(req, res, 413, `the request body exceeds ${MAX_QUERY_BODY_BYTES} bytes`, () => req.destroy());
           return;
@@ -136,7 +164,7 @@ export function hostHandler(
       const parsed = parseQuery(body.toString('utf8'));
       if (parsed === undefined || typeof parsed.sql !== 'string') {
         status = 400;
-        logger.warn('host query refused', { status, reason: 'not a JSON query request' });
+        logger.warn('400 the request body is not a JSON query request');
         text(req, res, 400, 'the request body must be JSON: {"type":"arrow","sql":"..."}');
         return;
       }
@@ -144,7 +172,7 @@ export function hostHandler(
       span.setAttributes({ 'otel_html.sql.bytes': Buffer.byteLength(sql) });
       if (parsed.type !== 'arrow') {
         status = 400;
-        logger.warn('host query refused', { status, sql: sql.slice(0, SQL_LOG_CHARS) });
+        logger.warn(`400 ${NON_ARROW}: ${sql.slice(0, SQL_LOG_CHARS)}`);
         text(req, res, 400, NON_ARROW);
         return;
       }
@@ -189,7 +217,14 @@ export function hostHandler(
   function dispatch(req: IncomingMessage, res: ServerResponse, path: string): Promise<void> | undefined {
     const method = req.method ?? '';
     if (path === QUERY_PATH) {
-      if (method === 'POST') return query(req, res);
+      if (method === 'POST') {
+        // Mosaic's connector always sends JSON; anything else is a "simple" cross-site request, which needs no preflight.
+        if (!/^application\/json\s*(;|$)/i.test(req.headers['content-type'] ?? '')) {
+          text(req, res, 415, 'the request must be application/json');
+          return undefined;
+        }
+        return query(req, res);
+      }
       res.setHeader('allow', 'POST');
       text(req, res, 405, 'use POST');
     } else if (method === 'GET' || method === 'HEAD') {
@@ -203,6 +238,11 @@ export function hostHandler(
 
   return (req, res) => {
     const path = (req.url ?? '').split('?')[0] ?? '';
+    const hosts = allowed();
+    if (hosts !== null && !hosts.has((req.headers.host ?? '').toLowerCase())) {
+      text(req, res, 403, 'this host answers only to its own address');
+      return;
+    }
     Promise.resolve(dispatch(req, res, path)).catch((e: unknown) => {
       logger.error('host handler failed', { message: String(e) });
       if (res.headersSent) res.destroy();
@@ -218,5 +258,13 @@ export async function startHostServer(opts: HostServerOptions): Promise<Listener
   });
   const assets = new Map<string, Uint8Array>();
   for (const f of await opts.viewerAssets.files()) assets.set(f.path, f.contents);
-  return listenHttp(hostHandler(opts, assets, shell), opts.host, opts.port, '--port');
+  let hosts: ReadonlySet<string> | null = new Set();
+  const listener = await listenHttp(
+    hostHandler(opts, assets, shell, () => hosts),
+    opts.host,
+    opts.port,
+    '--port',
+  );
+  hosts = allowedHosts(opts.host, Number(new URL(listener.address).port));
+  return listener;
 }
