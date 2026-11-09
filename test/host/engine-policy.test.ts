@@ -30,11 +30,10 @@ async function started() {
   return { engine, dir: report.dir };
 }
 
-const SETTING = 'v';
-const rows = (bytes: Uint8Array): Record<string, unknown>[] =>
+const rows = (bytes: Uint8Array): { value?: unknown; n?: unknown }[] =>
   tableFromIPC(bytes)
     .toArray()
-    .map((r: { toJSON(): Record<string, unknown> }) => r.toJSON());
+    .map((r: { toJSON(): { value?: unknown; n?: unknown } }) => r.toJSON());
 
 describe('the engine policy', () => {
   it('lists the statements in the order of D37', () => {
@@ -63,13 +62,19 @@ describe('the engine policy', () => {
       "ATTACH '/tmp/x.db' AS o",
       "SELECT * FROM read_csv('/etc/passwd')",
       `SELECT * FROM read_parquet('${spansPath}')`,
+      'SELECT 1) AS a; CREATE TABLE t AS SELECT 1; SELECT * FROM (SELECT 1',
+      'SELECT 1) AS a; DROP VIEW spans; SELECT * FROM (SELECT 1',
     ];
     for (const sql of refused) {
+      const t0 = performance.now();
       const error = await engine.query(sql).catch((e: unknown) => e);
+      expect(performance.now() - t0, `${sql} returns well inside the timeout`).toBeLessThan(5_000);
       expect(error, sql).toBeInstanceOf(HostError);
       expect(error, sql).toMatchObject({ status: 400 });
       expect((error as HostError).message, sql).toMatch(/Parser Error|Permission Error|Invalid Input Error/);
+      const t1 = performance.now();
       expect(rows(await engine.query('SELECT count(*) AS n FROM spans'))).toEqual([{ n: 5n }]);
+      expect(performance.now() - t1, `${sql} leaves the engine answering`).toBeLessThan(1_000);
     }
   }, 20_000);
 
@@ -84,7 +89,7 @@ describe('the engine policy', () => {
   it('has external access off and the configuration locked', async () => {
     const { engine } = await started();
     const v = async (name: string) =>
-      rows(await engine.query(`SELECT current_setting('${name}') AS v`))[0]?.[SETTING];
+      rows(await engine.query(`SELECT current_setting('${name}') AS value`))[0]?.value;
     expect(await v('enable_external_access')).toBe(false);
     expect(await v('lock_configuration')).toBe(true);
   });

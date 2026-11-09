@@ -132,11 +132,17 @@ export async function startHostEngine(opts: HostEngineOptions): Promise<HostEngi
   return {
     restarts: 0,
     query(sql) {
-      const run = tail.then(() =>
-        runPending(db, connection.id, wrapStatement(sql)).catch((e: unknown) => {
+      const run = tail.then(async () => {
+        // The wrap can be closed early (`SELECT 1) AS a; DROP VIEW spans; SELECT * FROM (SELECT 1`), so the engine
+        // itself must say the wrapped text is one statement: `prepare` rejects more than one and runs nothing.
+        const wrapped = wrapStatement(sql);
+        try {
+          await (await connection.prepare(wrapped)).close();
+          return await runPending(db, connection.id, wrapped);
+        } catch (e) {
           throw new HostError(400, engineMessage(e));
-        }),
-      );
+        }
+      });
       tail = run.catch(() => undefined);
       return run;
     },

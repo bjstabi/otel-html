@@ -12,6 +12,8 @@ export interface NodeDuckDb {
   connect(): Promise<{
     readonly id: number;
     query(sql: string): Promise<unknown>;
+    /** Parses and plans one statement without running it; the engine rejects more than one. */
+    prepare(sql: string): Promise<{ close(): Promise<void> }>;
     close(): Promise<void>;
   }>;
   terminate(): Promise<void>;
@@ -66,6 +68,7 @@ function webWorker(worker: Worker): unknown {
 
 interface RawConnection {
   query(sql: string): Promise<unknown>;
+  prepare(sql: string): Promise<{ close(): Promise<void> }>;
   close(): Promise<void>;
   useUnsafe<R>(callback: (bindings: unknown, conn: number) => R): R;
 }
@@ -100,7 +103,12 @@ export async function openNodeDuckDb(files: HostEngineFiles): Promise<NodeDuckDb
   const connect: NodeDuckDb['connect'] = async () => {
     const raw = await db.connect();
     const id = raw.useUnsafe((_, conn) => conn);
-    return { id, query: (sql) => raw.query(sql), close: () => raw.close() };
+    return {
+      id,
+      query: (sql) => raw.query(sql),
+      prepare: (sql) => raw.prepare(sql),
+      close: () => raw.close(),
+    };
   };
   return {
     startPendingQuery: (conn, sql, stream) => db.startPendingQuery(conn, sql, stream),
