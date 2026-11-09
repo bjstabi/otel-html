@@ -16,6 +16,8 @@ export class HostError extends Error {
   }
 }
 
+const CLOSED_MESSAGE = 'the host is closed';
+
 const sqlString = (text: string): string => `'${text.replaceAll("'", "''")}'`;
 
 /**
@@ -66,6 +68,9 @@ export const MAX_QUEUED = 256;
 /** A worker call unsettled this long after the statement's timeout means a hung worker: it is replaced. */
 export const HUNG_GRACE_MS = 5_000;
 
+/** A worker that has not finished its files, views and policy by then is hung; independent of the statement timeout. */
+export const OPEN_DEADLINE_MS = 30_000;
+
 export interface HostEngineOptions {
   report: string;
   manifest: ManifestV4;
@@ -76,6 +81,8 @@ export interface HostEngineOptions {
   maxResultBytes: number;
   /** Test only: the grace after the timeout before a silent worker is replaced (default `HUNG_GRACE_MS`). */
   graceMs?: number;
+  /** Test only: how long a worker may take to open (default `OPEN_DEADLINE_MS`). */
+  openDeadlineMs?: number;
   open?: typeof openNodeDuckDb;
 }
 
@@ -231,12 +238,12 @@ export async function startHostEngine(opts: HostEngineOptions): Promise<HostEngi
   /** `openLive` under its own deadline, unless `close()` came first; a worker nobody will use is stopped here. */
   async function reopen(): Promise<Live> {
     const opening = openLive(opts, report);
-    const guard = sleepUntil(opts.timeoutMs + graceMs, 'the new worker did not start');
+    const guard = sleepUntil(opts.openDeadlineMs ?? OPEN_DEADLINE_MS, 'the new worker did not start');
     try {
       const fresh = await Promise.race([opening, guard.promise]);
       if (closed) {
         await fresh.db.terminate().catch(() => undefined);
-        throw new HostError(503, 'the host is closed');
+        throw new HostError(503, CLOSED_MESSAGE);
       }
       return fresh;
     } catch (e) {
@@ -255,7 +262,7 @@ export async function startHostEngine(opts: HostEngineOptions): Promise<HostEngi
 
   /** Runs one statement under the hung-worker guard; a lost worker is replaced before the request fails 504. */
   async function execute(sql: string): Promise<Uint8Array> {
-    if (closed) throw new HostError(503, 'the host is closed');
+    if (closed) throw new HostError(503, CLOSED_MESSAGE);
     live ??= await reopen();
     const current = live;
     const work = runStatement(current, opts, sql);
@@ -271,7 +278,7 @@ export async function startHostEngine(opts: HostEngineOptions): Promise<HostEngi
       return await Promise.race([work, hung.promise, died]);
     } catch (e) {
       if (!(e instanceof WorkerLost)) throw e;
-      if (closed) throw new HostError(503, 'the host is closed');
+      if (closed) throw new HostError(503, CLOSED_MESSAGE);
       live = null;
       await current.db.terminate().catch(() => undefined);
       restarts += 1;
@@ -282,7 +289,8 @@ export async function startHostEngine(opts: HostEngineOptions): Promise<HostEngi
       } catch (failure) {
         opts.logger.debug(`the engine worker could not be restarted: ${engineMessage(failure)}`);
       }
-      if (closed) throw new HostError(503, 'the host is closed');
+      if (closed) throw new HostError(503, CLOSED_MESSAGE);
+      if (live === null) throw new HostError(503, 'the engine stopped answering and could not be restarted');
       throw new HostError(504, 'the engine stopped answering and was restarted');
     } finally {
       hung.cancel();
@@ -295,7 +303,7 @@ export async function startHostEngine(opts: HostEngineOptions): Promise<HostEngi
       return restarts;
     },
     query(sql) {
-      if (closed) return Promise.reject(new HostError(503, 'the host is closed'));
+      if (closed) return Promise.reject(new HostError(503, CLOSED_MESSAGE));
       if (outstanding >= MAX_QUEUED) {
         opts.logger.warn(`503 the host is busy: ${sql.slice(0, 200)}`);
         return Promise.reject(new HostError(503, 'the host is busy'));
@@ -307,7 +315,7 @@ export async function startHostEngine(opts: HostEngineOptions): Promise<HostEngi
           opts.logger.debug(`ok ${out.length} bytes: ${sql.slice(0, 200)}`);
           return out;
         } catch (e) {
-          if (e instanceof HostError && e.status !== 503) {
+          if (e instanceof HostError && e.message !== CLOSED_MESSAGE) {
             opts.logger.warn(`${e.status} ${e.message}: ${sql.slice(0, 200)}`);
           }
           throw e;

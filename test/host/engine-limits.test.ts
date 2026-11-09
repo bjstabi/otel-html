@@ -161,7 +161,7 @@ describe('the exit subscription', () => {
     expect(subscriptions).toBe(1);
   });
 
-  it('fails a query that waits on a restart that cannot open 503, as a HostError', async () => {
+  it('says so when the restart fails, logs each failed request once, and retries on the next query', async () => {
     const log: string[] = [];
     let opened = 0;
     const e = await started({
@@ -173,11 +173,17 @@ describe('the exit subscription', () => {
         throw new Error('no worker');
       },
     });
-    expect(((await rejection(e.query('SELECT 1'))) as HostError).status).toBe(504);
+    const first = (await rejection(e.query('SELECT 1'))) as HostError;
+    expect(first).toBeInstanceOf(HostError);
+    expect(first.status).toBe(503);
+    expect(first.message).toBe('the engine stopped answering and could not be restarted');
+    expect(warnings.filter((w) => w.startsWith('503'))).toHaveLength(1);
     const next = await rejection(e.query('SELECT 1'));
     expect(next).toBeInstanceOf(HostError);
     expect((next as HostError).status).toBe(503);
     expect((next as HostError).message).toBe('the engine could not be restarted');
+    expect(warnings.filter((w) => w.startsWith('503'))).toHaveLength(2);
+    expect(opened).toBe(3);
   });
 
   it('replaces a worker whose cancel fails instead of answering 400 for good', async () => {
@@ -194,21 +200,22 @@ describe('the exit subscription', () => {
     expect(await e.query('SELECT 1')).toEqual(answer);
   });
 
-  it('gives a restart that never finishes opening a deadline', async () => {
+  it('gives a restart that never finishes opening its own deadline', async () => {
     const log: string[] = [];
     let opened = 0;
     const e = await started({
       timeoutMs: 30,
       graceMs: 30,
+      openDeadlineMs: 80,
       open: async () => {
         opened += 1;
         if (opened === 1) return fakeDb(() => new Promise<never>(() => {}), log, 'first');
         return new Promise<NodeDuckDb>(() => {});
       },
     });
-    const t0 = performance.now();
-    expect(((await rejection(e.query('SELECT 1'))) as HostError).status).toBe(504);
-    expect(performance.now() - t0).toBeLessThan(5000);
+    const error = (await rejection(e.query('SELECT 1'))) as HostError;
+    expect(error.status).toBe(503);
+    expect(error.message).toBe('the engine stopped answering and could not be restarted');
   }, 10_000);
 });
 
@@ -298,12 +305,12 @@ describe('the restart', () => {
         pollPendingQuery: () => new Promise<never>(() => {}),
       };
     };
-    const e = await started({ timeoutMs: 50, graceMs: 1000, open });
+    const e = await started({ timeoutMs: 50, graceMs: 100, open });
     const t0 = performance.now();
     const error = await rejection(e.query('SELECT 1'));
     const total = performance.now() - t0;
     process.stdout.write(
-      `real restart: ${(total - 1050).toFixed(0)} ms to a fresh worker (504 after ${total.toFixed(0)} ms)\n`,
+      `real restart: ${(total - 150).toFixed(0)} ms to a fresh worker (504 after ${total.toFixed(0)} ms)\n`,
     );
     expect((error as HostError).status).toBe(504);
     expect(e.restarts).toBe(1);
