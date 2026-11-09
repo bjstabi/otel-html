@@ -65,7 +65,7 @@ import {
 import { manifestRange } from './manifest-range.js';
 import { DEFAULT_FACET_CAPS, type FacetCaps, throwIfAborted } from './query-common.js';
 import type { QueryEngine } from './query-engine.js';
-import { dropResidualTable, idTable, residualRows } from './residual.js';
+import { dropResidualTable, idTable, residualRows, servedResidual } from './residual.js';
 import type {
   LogNeed,
   LogQuery,
@@ -234,10 +234,12 @@ export function createDuckDbDataSource(opts: {
    */
   async function withIds<E extends { filename: string; fileRow: number }, T>(
     filter: SqlFilter,
+    residual: string,
     candidates: (limit: number) => Promise<E[]>,
     test: (e: E) => boolean,
     run: (f: SqlFilter) => Promise<T>,
   ): Promise<T> {
+    if (!engine.tempTables) throw servedResidual(residual); // D43: before any candidate is fetched
     const entries = await candidates(RESIDUAL_CANDIDATE_CAP + 1);
     if (entries.length > RESIDUAL_CANDIDATE_CAP) {
       throw new OtelHtmlError('usage', {
@@ -265,12 +267,14 @@ export function createDuckDbDataSource(opts: {
 
   const withResidualIds = <T>(
     filter: SqlFilter,
+    residual: string,
     test: (e: SpanEntry) => boolean,
     signal: AbortSignal | undefined,
     run: (f: SqlFilter) => Promise<T>,
   ): Promise<T> =>
     withIds(
       filter,
+      residual,
       async (limit) =>
         spanEntries(
           await engine.query(spanRowsQuery(filter, { column: 'start', dir: 'asc' }, limit), signal),
@@ -408,7 +412,9 @@ export function createDuckDbDataSource(opts: {
       return result;
     };
 
-    return test !== null && useIds ? withResidualIds(filter, test, signal, run) : run(filter);
+    return test !== null && residual !== null && useIds
+      ? withResidualIds(filter, residual, test, signal, run)
+      : run(filter);
   }
 
   async function services(
@@ -436,7 +442,13 @@ export function createDuckDbDataSource(opts: {
     };
     return residual === null
       ? run(filter)
-      : withResidualIds(filter, residualTest(compileCondition(residual, 'span'), epoch), signal, run);
+      : withResidualIds(
+          filter,
+          residual,
+          residualTest(compileCondition(residual, 'span'), epoch),
+          signal,
+          run,
+        );
   }
 
   /** A trace without a `traces` row may have logs in any partition. */
@@ -554,9 +566,10 @@ export function createDuckDbDataSource(opts: {
       return result;
     };
 
-    return test !== null && useIds
+    return test !== null && residual !== null && useIds
       ? withIds(
           filter,
+          residual,
           async (limit) =>
             logEntries(
               await engine.query(logRowsQuery(filter, { column: 'time', dir: 'asc' }, limit), signal),

@@ -48,7 +48,7 @@ import {
 import { checkShow, kindOf, NOTES, SHOW_BY_KIND } from './metric-tables.js';
 import { throwIfAborted } from './query-common.js';
 import type { QueryEngine } from './query-engine.js';
-import { dropResidualTable, idTable } from './residual.js';
+import { dropResidualTable, idTable, servedResidual } from './residual.js';
 import { cell, rowsOf, toNumber } from './span-results.js';
 
 export interface MetricContext {
@@ -160,6 +160,7 @@ export function metricMethods(ctx: MetricContext): MetricMethods {
     });
     if (residual === null || filter.files.files.length === 0) return use(scope(o.seriesIds));
 
+    if (!engine.tempTables) throw servedResidual(residual); // D43: before the probe
     const compiled = compileCondition(residual, 'datapoint');
     const probe = await engine.query(
       base(o.seriesIds, [])

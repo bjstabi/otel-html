@@ -260,6 +260,25 @@ describe('queryLogs', () => {
     expect(none.rows).toEqual([]);
   });
 
+  test('a served engine (no temp tables) refuses a residual aggregate and keeps the row list (D43)', async () => {
+    const inner = mosaicQueryEngine(createCoordinator(db.connector, silentLogger), db);
+    const served = createDuckDbDataSource({
+      engine: { ...inner, tempTables: false },
+      manifest: f.manifest,
+    });
+    const condition = 'Len(body.string) > 20';
+    const before = db.connector.requests.length;
+    const refused = served.queryLogs(query({ condition }));
+    await expect(refused).rejects.toMatchObject({ code: 'usage' });
+    await expect(refused).rejects.toThrow(`"${condition}" has no SQL form; rewrite or remove it`);
+    expect(db.connector.requests.length).toBe(before);
+    const rows = await served.queryLogs(query({ condition, needs: ['rows'] }));
+    expect(rows.residual).toBe(condition);
+    expect(rows.rows.length).toBe(4);
+    const translatable = await served.queryLogs(query({ condition: 'severity_number == 17' }));
+    expect(translatable.residual).toBeNull();
+  });
+
   test('a residual condition re-checks logs in the browser and marks the result', async () => {
     const condition = 'Len(body.string) > 20';
     const rowsOnly = await counted(() => fresh().queryLogs(query({ condition, needs: ['rows'] })));

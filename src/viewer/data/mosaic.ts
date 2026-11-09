@@ -67,10 +67,15 @@ function engineFailure(error: unknown, sql: string): OtelHtmlError {
  * manager (a query waiting in the consolidator, or already running, is not cancelled: its result is discarded); the
  * generated SQL is attached to a failure as an `invalid-report` `OtelHtmlError` (its hint). `exec` sends
  * `{ type: 'exec', sql }` through the coordinator (so its cache sees the DDL); `registerText` and `close` delegate to
- * `files`.
+ * `files`. `tempTables` (default true) is what the engine reports on the seam; the served path passes false (D43).
  */
-export function mosaicQueryEngine(coordinator: Coordinator, files: EngineFiles): QueryEngine {
+export function mosaicQueryEngine(
+  coordinator: Coordinator,
+  files: EngineFiles,
+  tempTables = true,
+): QueryEngine {
   return {
+    tempTables,
     async query(q: Query, signal?: AbortSignal): Promise<Table> {
       if (signal?.aborted) throw abortError();
       const result: QueryResult<Table> = coordinator.query(q);

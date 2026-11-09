@@ -257,6 +257,27 @@ describe('querySpans', () => {
     expect(r.durations.summary).toEqual(base.durations.summary);
   });
 
+  test('a served engine (no temp tables) refuses a residual aggregate and keeps the row list (D43)', async () => {
+    const inner = mosaicQueryEngine(createCoordinator(db.connector, silentLogger), db);
+    const served = createDuckDbDataSource({
+      engine: { ...inner, tempTables: false },
+      manifest: f.manifest,
+    });
+    const condition = 'Len(name) > 2';
+    const before = db.connector.requests.length;
+    const refused = served.querySpans(query({ condition, needs: ['facets'] }));
+    await expect(refused).rejects.toMatchObject({ code: 'usage' });
+    await expect(refused).rejects.toThrow(
+      'this served report evaluates conditions in SQL only: "Len(name) > 2" has no SQL form; rewrite or remove it',
+    );
+    expect(db.connector.requests.length).toBe(before); // refused before any candidate is fetched
+    const rows = await served.querySpans(query({ condition, needs: ['rows'] }));
+    expect(rows.residual).toBe(condition);
+    expect(rows.rows.length).toBeGreaterThan(0);
+    const translatable = await served.querySpans(query({ condition: 'status.code == 2', needs: [...ALL] }));
+    expect(translatable.residual).toBeNull();
+  });
+
   test('a residual condition (Len) re-checks rows in the browser and marks the result', async () => {
     const condition = 'Len(name) > 7';
     const rowsOnly = await counted(() => ds.querySpans(query({ condition, needs: ['rows'] })));

@@ -1002,6 +1002,50 @@ describe('widths, windows and exemplars', () => {
   });
 });
 
+describe('the served refusal (D43)', () => {
+  const G = otlp(
+    metricsRequest(
+      [
+        gauge('rs', [
+          ...pointsAt(sec(0), () => ({ asDouble: 1 }), [attr('k', str('abc'))]),
+          ...pointsAt(sec(0), () => ({ asDouble: 2 }), [attr('k', str('ab'))]),
+        ]),
+      ],
+      resA,
+    ) as never,
+  );
+  const w = { start: 0, end: 9.9 * S };
+
+  test('a residual where is refused before the probe; a translatable one resolves', async () => {
+    let queries = 0;
+    const env = await openEnv([G], (inner) => ({
+      ...inner,
+      tempTables: false,
+      query: (qq, signal) => {
+        queries++;
+        return inner.query(qq, signal);
+      },
+    }));
+    const before = queries;
+    const refused = chart(env, 'rs', { where: 'Len(attributes["k"]) > 2' }, w, { widthNs: 10 * S });
+    await expect(refused).rejects.toMatchObject({ code: 'usage' });
+    await expect(refused).rejects.toThrow(
+      'this served report evaluates conditions in SQL only: "Len(attributes["k"]) > 2" has no SQL form; rewrite or remove it',
+    );
+    expect(queries).toBe(before);
+    const ok = await chart(env, 'rs', { where: 'attributes["k"] != "ab"', by: ['attributes["k"]'] }, w, {
+      widthNs: 10 * S,
+    });
+    expect(ok.series.map((s) => s.label)).toEqual(['abc']);
+  });
+
+  test('with temp tables every call resolves as before', async () => {
+    const env = await openEnv([G], (inner) => ({ ...inner, tempTables: true }));
+    const r = await chart(env, 'rs', { where: 'Len(attributes["k"]) > 2' }, w, { widthNs: 10 * S });
+    expect(r.series).toHaveLength(1);
+  });
+});
+
 describe('the residual series cap (D5)', () => {
   test('more than 200 000 series reject with the usage message', async () => {
     const G = otlp(
