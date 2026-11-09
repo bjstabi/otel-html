@@ -17,6 +17,8 @@ export interface NodeDuckDb {
     close(): Promise<void>;
   }>;
   terminate(): Promise<void>;
+  /** Resolves with the reason when the worker dies on its own (an `error` or an `exit`). */
+  readonly exited?: Promise<string>;
 }
 
 /** `DuckDBDataProtocol.NODE_FS`: the file is read from disk by range. */
@@ -99,6 +101,10 @@ export async function openNodeDuckDb(files: HostEngineFiles): Promise<NodeDuckDb
     await worker.terminate();
     throw e;
   }
+  const exited = new Promise<string>((resolve) => {
+    worker.once('error', (e: Error) => resolve(`worker error: ${e.message}`));
+    worker.once('exit', (code) => resolve(`worker exited with code ${code}`));
+  });
   // `AsyncDuckDBConnection` keeps its connection number private; `useUnsafe` is the way to read it.
   const connect: NodeDuckDb['connect'] = async () => {
     const raw = await db.connect();
@@ -118,5 +124,6 @@ export async function openNodeDuckDb(files: HostEngineFiles): Promise<NodeDuckDb
     registerFileURL: (name, url, proto, directIO) => db.registerFileURL(name, url, proto, directIO),
     connect,
     terminate: () => db.terminate(),
+    exited,
   };
 }

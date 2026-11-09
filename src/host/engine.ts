@@ -50,6 +50,11 @@ async function applyPolicy(conn: { query(sql: string): Promise<unknown> }): Prom
   for (const sql of POLICY_STATEMENTS) await conn.query(sql);
 }
 
+/** At most this many statements wait (or run); more are refused 503. */
+export const MAX_QUEUED = 256;
+/** A worker call unsettled this long after the statement's timeout means a hung worker: it is replaced. */
+export const HUNG_GRACE_MS = 5_000;
+
 export interface HostEngineOptions {
   report: string;
   manifest: ManifestV4;
@@ -58,13 +63,20 @@ export interface HostEngineOptions {
   logger: Logger;
   timeoutMs: number;
   maxResultBytes: number;
+  /** Test only: the grace after the timeout before a silent worker is replaced (default `HUNG_GRACE_MS`). */
+  graceMs?: number;
   open?: typeof openNodeDuckDb;
 }
 
 export interface HostEngine {
-  /** One client statement as Arrow IPC stream bytes. Rejects `HostError(400, <the engine's message>)` for a statement the engine refuses or cannot run. */
+  /**
+   * One client statement as Arrow IPC stream bytes. Rejects `HostError`: 400 (the engine's message) for a statement it
+   * refuses or cannot run, 413 over the result cap, 503 when the queue is full or the engine is closed, 504 past the
+   * timeout or when the worker had to be replaced.
+   */
   query(sql: string): Promise<Uint8Array>;
   readonly restarts: number;
+  /** Stops the worker at once, even mid-statement; idempotent. Statements still waiting reject 503. */
   close(): Promise<void>;
 }
 
@@ -82,21 +94,90 @@ function concat(chunks: readonly Uint8Array[]): Uint8Array {
   return out;
 }
 
-/** The plain loop of D38: start, poll while `null`, then fetch until an empty message; the messages are the IPC stream. */
-async function runPending(db: NodeDuckDb, conn: number, sql: string): Promise<Uint8Array> {
-  const chunks: Uint8Array[] = [];
-  let header = await db.startPendingQuery(conn, sql, false);
-  while (header === null) header = await db.pollPendingQuery(conn);
-  chunks.push(header);
-  // The end of the result is an empty message (duckdb-wasm's own iterator stops on it); `null` is tolerated too.
-  for (
-    let chunk = await db.fetchQueryResults(conn);
-    chunk !== null && chunk.length > 0;
-    chunk = await db.fetchQueryResults(conn)
-  ) {
-    chunks.push(chunk);
+/** A worker and its one connection, with the files registered, the views created and the policy applied. */
+interface Live {
+  db: NodeDuckDb;
+  conn: Awaited<ReturnType<NodeDuckDb['connect']>>;
+}
+
+/** The setup of D36 and D37, shared by the first start and every restart. */
+async function openLive(opts: HostEngineOptions, report: string): Promise<Live> {
+  const db = await (opts.open ?? openNodeDuckDb)(opts.files);
+  try {
+    for (const path of listedPaths(opts.manifest)) {
+      await db.registerFileURL(path, join(report, path), NODE_FS_PROTOCOL, false);
+    }
+    const conn = await db.connect();
+    for (const sql of viewStatements(opts.manifest, (p) => p)) await conn.query(sql);
+    await applyPolicy(conn);
+    return { db, conn };
+  } catch (e) {
+    await db.terminate().catch(() => undefined);
+    throw e;
   }
-  return concat(chunks);
+}
+
+/** The worker stopped answering or died; carries why. */
+class WorkerLost extends Error {}
+
+const sleepUntil = (ms: number, reason: string): { promise: Promise<never>; cancel(): void } => {
+  let timer: NodeJS.Timeout | undefined;
+  const promise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new WorkerLost(reason)), ms);
+  });
+  return { promise, cancel: () => clearTimeout(timer) };
+};
+
+/**
+ * The D38 loop for one statement: prepare (refuses more than one statement, which closed a wrap breakout), start, poll
+ * while `null` (cancelling at the deadline), fetch until an empty message (the messages are the IPC stream), stopping
+ * past the cap. Cancel and cap drop the connection and open another: the cheap way to forget a half-read result.
+ */
+async function runStatement(live: Live, opts: HostEngineOptions, sql: string): Promise<Uint8Array> {
+  const deadline = Date.now() + opts.timeoutMs;
+  const timedOut = () => new HostError(504, `the statement did not finish within ${opts.timeoutMs} ms`);
+  const reset = async () => {
+    await live.conn.close().catch(() => undefined);
+    live.conn = await live.db.connect();
+  };
+  const wrapped = wrapStatement(sql);
+  try {
+    await (await live.conn.prepare(wrapped)).close();
+    const id = live.conn.id;
+    const chunks: Uint8Array[] = [];
+    let bytes = 0;
+    const take = async (chunk: Uint8Array) => {
+      chunks.push(chunk);
+      bytes += chunk.length;
+      if (bytes > opts.maxResultBytes) {
+        await reset();
+        throw new HostError(413, `the result exceeds ${opts.maxResultBytes} bytes`);
+      }
+    };
+    let header = await live.db.startPendingQuery(id, wrapped, false);
+    while (header === null) {
+      if (Date.now() >= deadline) {
+        await live.db.cancelPendingQuery(id);
+        throw timedOut();
+      }
+      header = await live.db.pollPendingQuery(id);
+    }
+    await take(header);
+    // The end of the result is an empty message (duckdb-wasm's own iterator stops on it); `null` is tolerated too.
+    for (;;) {
+      if (Date.now() >= deadline) {
+        await reset();
+        throw timedOut();
+      }
+      const chunk = await live.db.fetchQueryResults(id);
+      if (chunk === null || chunk.length === 0) break;
+      await take(chunk);
+    }
+    return concat(chunks);
+  } catch (e) {
+    if (e instanceof HostError || e instanceof WorkerLost) throw e;
+    throw new HostError(400, engineMessage(e));
+  }
 }
 
 /**
@@ -114,41 +195,79 @@ export async function startHostEngine(opts: HostEngineOptions): Promise<HostEngi
       });
     }
   }
-  const db = await (opts.open ?? openNodeDuckDb)(opts.files);
-  let conn: Awaited<ReturnType<NodeDuckDb['connect']>>;
-  try {
-    for (const path of listedPaths(opts.manifest)) {
-      await db.registerFileURL(path, join(report, path), NODE_FS_PROTOCOL, false);
-    }
-    conn = await db.connect();
-    for (const sql of viewStatements(opts.manifest, (p) => p)) await conn.query(sql);
-    await applyPolicy(conn);
-  } catch (e) {
-    await db.terminate();
-    throw e;
-  }
-  const connection = conn;
+  const graceMs = opts.graceMs ?? HUNG_GRACE_MS;
+  let live: Live | null = await openLive(opts, report);
+  let closed = false;
+  let outstanding = 0;
+  let restarts = 0;
   let tail: Promise<unknown> = Promise.resolve();
+
+  /** Runs one statement under the hung-worker guard; a lost worker is replaced before the request fails 504. */
+  async function execute(sql: string): Promise<Uint8Array> {
+    if (closed) throw new HostError(503, 'the host is closed');
+    live ??= await openLive(opts, report);
+    const current = live;
+    const work = runStatement(current, opts, sql);
+    work.catch(() => undefined);
+    const hung = sleepUntil(opts.timeoutMs + graceMs, 'the worker did not answer');
+    const died = current.db.exited?.then((reason) => {
+      throw new WorkerLost(reason);
+    });
+    died?.catch(() => undefined);
+    try {
+      return await Promise.race(died === undefined ? [work, hung.promise] : [work, hung.promise, died]);
+    } catch (e) {
+      if (!(e instanceof WorkerLost)) throw e;
+      if (closed) throw new HostError(503, 'the host is closed');
+      live = null;
+      await current.db.terminate().catch(() => undefined);
+      restarts += 1;
+      opts.logger.warn(`the engine worker was replaced (${e.message}): ${sql.slice(0, 200)}`);
+      try {
+        live = await openLive(opts, report);
+      } catch (reopen) {
+        opts.logger.warn(`the engine worker could not be restarted: ${engineMessage(reopen)}`);
+      }
+      throw new HostError(504, 'the engine stopped answering and was restarted');
+    } finally {
+      hung.cancel();
+    }
+  }
+
   return {
-    restarts: 0,
+    get restarts() {
+      return restarts;
+    },
     query(sql) {
+      if (closed) return Promise.reject(new HostError(503, 'the host is closed'));
+      if (outstanding >= MAX_QUEUED) {
+        opts.logger.warn(`503 the host is busy: ${sql.slice(0, 200)}`);
+        return Promise.reject(new HostError(503, 'the host is busy'));
+      }
+      outstanding += 1;
       const run = tail.then(async () => {
-        // The wrap can be closed early (`SELECT 1) AS a; DROP VIEW spans; SELECT * FROM (SELECT 1`), so the engine
-        // itself must say the wrapped text is one statement: `prepare` rejects more than one and runs nothing.
-        const wrapped = wrapStatement(sql);
         try {
-          await (await connection.prepare(wrapped)).close();
-          return await runPending(db, connection.id, wrapped);
+          const out = await execute(sql);
+          opts.logger.debug(`ok ${out.length} bytes: ${sql.slice(0, 200)}`);
+          return out;
         } catch (e) {
-          throw new HostError(400, engineMessage(e));
+          if (e instanceof HostError && e.status !== 503) {
+            opts.logger.warn(`${e.status} ${e.message}: ${sql.slice(0, 200)}`);
+          }
+          throw e;
+        } finally {
+          outstanding -= 1;
         }
       });
       tail = run.catch(() => undefined);
       return run;
     },
     async close() {
-      await tail;
-      await db.terminate();
+      if (closed) return;
+      closed = true;
+      const last = live;
+      live = null;
+      await last?.db.terminate().catch(() => undefined);
     },
   };
 }

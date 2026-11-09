@@ -88,6 +88,7 @@ describe('startHostEngine', () => {
   it('close() terminates the worker (the run ends with no open handle)', async () => {
     const { engine } = await startOver();
     const e = await engine;
+    cleanups.push(() => e.close());
     await e.query('SELECT 1');
     await e.close();
   });
