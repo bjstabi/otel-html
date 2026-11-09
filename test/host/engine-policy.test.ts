@@ -1,7 +1,9 @@
+import { copyFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { tableFromIPC } from 'apache-arrow';
 import { afterEach, describe, expect, it } from 'vitest';
-import { HostError, POLICY_STATEMENTS, startHostEngine, wrapStatement } from '../../src/host/engine.js';
+import { HostError, policyStatements, startHostEngine, wrapStatement } from '../../src/host/engine.js';
 import { createNodeFileSystem } from '../../src/writer/node-fs.js';
 import { buildFormat4Report, spansOnlyRequest } from '../../test-support/format4-fixture.js';
 import { packageHostEngineFiles } from '../../test-support/host-engine-files.js';
@@ -36,15 +38,49 @@ const rows = (bytes: Uint8Array): { value?: unknown; n?: unknown }[] =>
     .map((r: { toJSON(): { value?: unknown; n?: unknown } }) => r.toJSON());
 
 describe('the engine policy', () => {
-  it('lists the statements in the order of D37', () => {
-    expect(POLICY_STATEMENTS).toEqual([
+  it('lists the statements in the order of D37, allowing exactly the manifest-listed paths', async () => {
+    const fixture = await buildFormat4Report([spansOnlyRequest(3), spansOnlyRequest(2)], { close: false });
+    const listed = fixture.manifest.partitions.flatMap((q) => Object.values(q.files).map((f) => f.path));
+    expect(listed.length).toBeGreaterThan(0);
+    expect(policyStatements(fixture.manifest)).toEqual([
       'SET autoinstall_known_extensions = false',
       'SET autoload_known_extensions = false',
-      "SET allowed_directories = ['data/partitions/']",
+      `SET allowed_paths = [${listed.map((l) => `'${l.replaceAll("'", "''")}'`).join(', ')}]`,
       'SET enable_external_access = false',
       'SET lock_configuration = true',
     ]);
   });
+
+  it('refuses unregistered files under data/partitions/ even by a name relative to the working directory', async () => {
+    const { engine, dir } = await started();
+    const decoy = await mkdtemp(join(tmpdir(), 'otel-html-decoy-'));
+    const before = process.cwd();
+    try {
+      const { mkdir } = await import('node:fs/promises');
+      await mkdir(join(decoy, 'data/partitions/sub'), { recursive: true });
+      await writeFile(join(decoy, 'data/partitions/secret.txt'), 'secret');
+      await writeFile(join(decoy, 'data/partitions/sub/x.txt'), 'x');
+      await copyFile(
+        join(dir, 'data/partitions/000001/spans.parquet'),
+        join(decoy, 'data/partitions/extra.parquet'),
+      );
+      process.chdir(decoy);
+      for (const sql of [
+        "SELECT * FROM read_text('data/partitions/secret.txt')",
+        "SELECT * FROM read_text('data/partitions/sub/x.txt')",
+        "SELECT * FROM glob('data/partitions/**')",
+        "SELECT * FROM read_parquet('data/partitions/extra.parquet')",
+      ]) {
+        const error = await engine.query(sql).catch((e: unknown) => e);
+        expect(error, sql).toMatchObject({ status: 400 });
+        expect((error as HostError).message, sql).toMatch(/Permission Error/);
+      }
+      expect(rows(await engine.query('SELECT count(*) AS n FROM spans'))).toEqual([{ n: 5n }]);
+    } finally {
+      process.chdir(before);
+      await rm(decoy, { recursive: true, force: true });
+    }
+  }, 20_000);
 
   it('wraps a statement so only a query runs', () => {
     expect(wrapStatement('SELECT 1')).toBe('SELECT * FROM (\nSELECT 1\n) AS otel_host');
@@ -84,6 +120,24 @@ describe('the engine policy', () => {
     const ms = performance.now() - t;
     process.stdout.write(`policy: next statement after a refusal ${ms.toFixed(0)} ms\n`);
     expect(ms).toBeLessThan(1_000);
+  });
+
+  it('writes nothing to stdout when a statement is refused', async () => {
+    const { engine } = await started();
+    const written: string[] = [];
+    const original = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      written.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write;
+    try {
+      await engine.query('SELECT * FROM nope').catch(() => undefined);
+      await engine.query('SELECT 1');
+      await new Promise((r) => setTimeout(r, 100));
+    } finally {
+      process.stdout.write = original;
+    }
+    expect(written.join('')).toBe('');
   });
 
   it('keeps ORDER BY of the wrapped statement', async () => {

@@ -139,6 +139,76 @@ describe('the queue', () => {
   });
 });
 
+describe('the exit subscription', () => {
+  it('subscribes to the worker exit once, not once per query', async () => {
+    const log: string[] = [];
+    let subscriptions = 0;
+    const exited = new Promise<string>(() => {});
+    const originalThen = exited.then.bind(exited);
+    Object.defineProperty(exited, 'then', {
+      value: (...args: Parameters<typeof originalThen>) => {
+        subscriptions += 1;
+        return originalThen(...args);
+      },
+    });
+    const answer = new Uint8Array([1]);
+    const db: NodeDuckDb = { ...fakeDb(async () => answer, log, 'only'), exited };
+    const e = await started({ open: async () => db });
+    for (let i = 0; i < 20; i++) await e.query('SELECT 1');
+    expect(subscriptions).toBe(1);
+  });
+
+  it('fails a query that waits on a restart that cannot open 503, as a HostError', async () => {
+    const log: string[] = [];
+    let opened = 0;
+    const e = await started({
+      timeoutMs: 30,
+      graceMs: 30,
+      open: async () => {
+        opened += 1;
+        if (opened === 1) return fakeDb(() => new Promise<never>(() => {}), log, 'first');
+        throw new Error('no worker');
+      },
+    });
+    expect(((await rejection(e.query('SELECT 1'))) as HostError).status).toBe(504);
+    const next = await rejection(e.query('SELECT 1'));
+    expect(next).toBeInstanceOf(HostError);
+    expect((next as HostError).status).toBe(503);
+    expect((next as HostError).message).toBe('the engine could not be restarted');
+  });
+
+  it('replaces a worker whose cancel fails instead of answering 400 for good', async () => {
+    const log: string[] = [];
+    const answer = new Uint8Array([7]);
+    const broken = {
+      ...fakeDb(async () => null, log, 'first'),
+      cancelPendingQuery: async () => Promise.reject(new Error('gone')),
+    };
+    const dbs: NodeDuckDb[] = [broken, fakeDb(async () => answer, log, 'second')];
+    const e = await started({ timeoutMs: 20, open: async () => dbs.shift() as NodeDuckDb });
+    expect(((await rejection(e.query('SELECT 1'))) as HostError).status).toBe(504);
+    expect(e.restarts).toBe(1);
+    expect(await e.query('SELECT 1')).toEqual(answer);
+  });
+
+  it('gives a restart that never finishes opening a deadline', async () => {
+    const log: string[] = [];
+    let opened = 0;
+    const e = await started({
+      timeoutMs: 30,
+      graceMs: 30,
+      open: async () => {
+        opened += 1;
+        if (opened === 1) return fakeDb(() => new Promise<never>(() => {}), log, 'first');
+        return new Promise<NodeDuckDb>(() => {});
+      },
+    });
+    const t0 = performance.now();
+    expect(((await rejection(e.query('SELECT 1'))) as HostError).status).toBe(504);
+    expect(performance.now() - t0).toBeLessThan(5000);
+  }, 10_000);
+});
+
 describe('close', () => {
   it('stops a worker whose open was still in flight, and the query rejects 503', async () => {
     const log: string[] = [];
@@ -225,12 +295,12 @@ describe('the restart', () => {
         pollPendingQuery: () => new Promise<never>(() => {}),
       };
     };
-    const e = await started({ timeoutMs: 50, graceMs: 100, open });
+    const e = await started({ timeoutMs: 50, graceMs: 1000, open });
     const t0 = performance.now();
     const error = await rejection(e.query('SELECT 1'));
     const total = performance.now() - t0;
     process.stdout.write(
-      `real restart: ${(total - 150).toFixed(0)} ms to a fresh worker (504 after ${total.toFixed(0)} ms)\n`,
+      `real restart: ${(total - 1050).toFixed(0)} ms to a fresh worker (504 after ${total.toFixed(0)} ms)\n`,
     );
     expect((error as HostError).status).toBe(504);
     expect(e.restarts).toBe(1);

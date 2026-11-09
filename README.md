@@ -362,7 +362,7 @@ The viewer reads this format, through DuckDB-WASM: it creates one view per table
 report/
   index.html
   .nojekyll
-  assets/                 viewer.<hash>.js and .css, plus the DuckDB engine files for this format (omitted when assetsBase is shared); the viewer's own `assets/` also holds the host's two Node engine files (`duckdb.<v>.node.cjs`, `duckdb.<v>.node.worker.cjs`), which no report copies
+  assets/                 viewer.<hash>.js and .css, plus the DuckDB engine files for this format (omitted when assetsBase is shared); the package's `dist/viewer/assets/` also holds the host's two Node engine files (`duckdb.<v>.node.cjs`, `duckdb.<v>.node.worker.cjs`); no report copies them
   data/
     manifest.js           run metadata, the partition list with per-file statistics, and `engine` (version, format, assetsBase)
     partitions/<p6>/      <table>.parquet for spans, logs, points, traces and patterns (000000/, 000001/, ...)

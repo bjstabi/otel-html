@@ -16,14 +16,22 @@ export class HostError extends Error {
   }
 }
 
-/** D37, in this order: a `LOAD` of an extension the build lacks hangs the worker when it runs before these. */
-export const POLICY_STATEMENTS: readonly string[] = [
-  'SET autoinstall_known_extensions = false',
-  'SET autoload_known_extensions = false',
-  "SET allowed_directories = ['data/partitions/']",
-  'SET enable_external_access = false',
-  'SET lock_configuration = true',
-];
+const sqlString = (text: string): string => `'${text.replaceAll("'", "''")}'`;
+
+/**
+ * D37, in this order: a `LOAD` of an extension the build lacks hangs the worker when it runs before these.
+ * `allowed_paths` names exactly the registered files: `allowed_directories` is a prefix rule, and a name that is not
+ * registered falls through to the Node file system, relative to the process's working directory.
+ */
+export function policyStatements(manifest: ManifestV4): string[] {
+  return [
+    'SET autoinstall_known_extensions = false',
+    'SET autoload_known_extensions = false',
+    `SET allowed_paths = [${listedPaths(manifest).map(sqlString).join(', ')}]`,
+    'SET enable_external_access = false',
+    'SET lock_configuration = true',
+  ];
+}
 
 /** Only a query can sit inside the parentheses: DDL, DML, `SET`, `PRAGMA`, `LOAD` and a second statement are parser errors. */
 export function wrapStatement(sql: string): string {
@@ -46,11 +54,14 @@ function engineMessage(e: unknown): string {
 }
 
 /** Locks the engine down; runs after the views, on the connection that created them. */
-async function applyPolicy(conn: { query(sql: string): Promise<unknown> }): Promise<void> {
-  for (const sql of POLICY_STATEMENTS) await conn.query(sql);
+async function applyPolicy(
+  conn: { query(sql: string): Promise<unknown> },
+  manifest: ManifestV4,
+): Promise<void> {
+  for (const sql of policyStatements(manifest)) await conn.query(sql);
 }
 
-/** At most this many statements wait (or run); more are refused 503. */
+/** At most this many statements are in the engine's hands at once, the running one included; more are refused 503. */
 export const MAX_QUEUED = 256;
 /** A worker call unsettled this long after the statement's timeout means a hung worker: it is replaced. */
 export const HUNG_GRACE_MS = 5_000;
@@ -98,6 +109,8 @@ function concat(chunks: readonly Uint8Array[]): Uint8Array {
 interface Live {
   db: NodeDuckDb;
   conn: Awaited<ReturnType<NodeDuckDb['connect']>>;
+  /** What to tell the statements in flight when the worker dies: one subscription to `exited` serves them all. */
+  onExit: Set<(reason: string) => void>;
 }
 
 /** The setup of D36 and D37, shared by the first start and every restart. */
@@ -109,8 +122,12 @@ async function openLive(opts: HostEngineOptions, report: string): Promise<Live> 
     }
     const conn = await db.connect();
     for (const sql of viewStatements(opts.manifest, (p) => p)) await conn.query(sql);
-    await applyPolicy(conn);
-    return { db, conn };
+    await applyPolicy(conn, opts.manifest);
+    const live: Live = { db, conn, onExit: new Set() };
+    void db.exited?.then((reason) => {
+      for (const notify of [...live.onExit]) notify(reason);
+    });
+    return live;
   } catch (e) {
     await db.terminate().catch(() => undefined);
     throw e;
@@ -136,10 +153,19 @@ const sleepUntil = (ms: number, reason: string): { promise: Promise<never>; canc
 async function runStatement(live: Live, opts: HostEngineOptions, sql: string): Promise<Uint8Array> {
   const deadline = Date.now() + opts.timeoutMs;
   const timedOut = () => new HostError(504, `the statement did not finish within ${opts.timeoutMs} ms`);
-  const reset = async () => {
-    await live.conn.close().catch(() => undefined);
-    live.conn = await live.db.connect();
+  // A cancel or a reset that fails leaves a connection nothing can use: the worker is replaced.
+  const lost = async <T>(what: string, call: () => Promise<T>): Promise<T> => {
+    try {
+      return await call();
+    } catch (e) {
+      throw new WorkerLost(`${what} failed: ${engineMessage(e)}`);
+    }
   };
+  const reset = () =>
+    lost('reopening the connection', async () => {
+      await live.conn.close().catch(() => undefined);
+      live.conn = await live.db.connect();
+    });
   const wrapped = wrapStatement(sql);
   try {
     await (await live.conn.prepare(wrapped)).close();
@@ -157,7 +183,7 @@ async function runStatement(live: Live, opts: HostEngineOptions, sql: string): P
     let header = await live.db.startPendingQuery(id, wrapped, false);
     while (header === null) {
       if (Date.now() >= deadline) {
-        await live.db.cancelPendingQuery(id);
+        await lost('cancelling the statement', () => live.db.cancelPendingQuery(id));
         throw timedOut();
       }
       header = await live.db.pollPendingQuery(id);
@@ -202,14 +228,29 @@ export async function startHostEngine(opts: HostEngineOptions): Promise<HostEngi
   let restarts = 0;
   let tail: Promise<unknown> = Promise.resolve();
 
-  /** `openLive`, unless `close()` came first: then the new worker is stopped here, because nothing else holds it. */
+  /** `openLive` under its own deadline, unless `close()` came first; a worker nobody will use is stopped here. */
   async function reopen(): Promise<Live> {
-    const fresh = await openLive(opts, report);
-    if (closed) {
-      await fresh.db.terminate().catch(() => undefined);
-      throw new HostError(503, 'the host is closed');
+    const opening = openLive(opts, report);
+    const guard = sleepUntil(opts.timeoutMs + graceMs, 'the new worker did not start');
+    try {
+      const fresh = await Promise.race([opening, guard.promise]);
+      if (closed) {
+        await fresh.db.terminate().catch(() => undefined);
+        throw new HostError(503, 'the host is closed');
+      }
+      return fresh;
+    } catch (e) {
+      // A worker that finishes starting after we gave up on it is stopped too.
+      void opening.then(
+        (late) => (late === live ? undefined : late.db.terminate().catch(() => undefined)),
+        () => undefined,
+      );
+      if (e instanceof HostError) throw e;
+      opts.logger.debug(`the engine worker could not be started: ${engineMessage(e)}`);
+      throw new HostError(503, 'the engine could not be restarted');
+    } finally {
+      guard.cancel();
     }
-    return fresh;
   }
 
   /** Runs one statement under the hung-worker guard; a lost worker is replaced before the request fails 504. */
@@ -220,28 +261,32 @@ export async function startHostEngine(opts: HostEngineOptions): Promise<HostEngi
     const work = runStatement(current, opts, sql);
     work.catch(() => undefined);
     const hung = sleepUntil(opts.timeoutMs + graceMs, 'the worker did not answer');
-    const died = current.db.exited?.then((reason) => {
-      throw new WorkerLost(reason);
+    let notify: (reason: string) => void = () => {};
+    const died = new Promise<never>((_, reject) => {
+      notify = (reason) => reject(new WorkerLost(reason));
+      current.onExit.add(notify);
     });
-    died?.catch(() => undefined);
+    died.catch(() => undefined);
     try {
-      return await Promise.race(died === undefined ? [work, hung.promise] : [work, hung.promise, died]);
+      return await Promise.race([work, hung.promise, died]);
     } catch (e) {
       if (!(e instanceof WorkerLost)) throw e;
       if (closed) throw new HostError(503, 'the host is closed');
       live = null;
       await current.db.terminate().catch(() => undefined);
       restarts += 1;
-      opts.logger.warn(`the engine worker was replaced (${e.message}): ${sql.slice(0, 200)}`);
+      // The request's one warn line is written by `query`; the replacement is its cause.
+      opts.logger.debug(`the engine worker was replaced (${e.message})`);
       try {
         live = await reopen();
       } catch (failure) {
-        if (!closed) opts.logger.warn(`the engine worker could not be restarted: ${engineMessage(failure)}`);
+        opts.logger.debug(`the engine worker could not be restarted: ${engineMessage(failure)}`);
       }
       if (closed) throw new HostError(503, 'the host is closed');
       throw new HostError(504, 'the engine stopped answering and was restarted');
     } finally {
       hung.cancel();
+      current.onExit.delete(notify);
     }
   }
 

@@ -19,7 +19,10 @@ export interface HostEngineFiles {
 const NOOP = async (): Promise<void> => {};
 
 const DEFAULT_DIRS: readonly URL[] = [
-  new URL('../viewer/assets/', import.meta.url), // published: dist/index.js or dist/cli/main.js next to dist/viewer/
+  // Published, by where the bundler puts this code: a shared chunk directly in dist/ (as dist/index.js is) finds
+  // dist/viewer/assets/ at `./viewer/assets/`; code bundled into dist/cli/main.js finds it at `../viewer/assets/`.
+  new URL('./viewer/assets/', import.meta.url),
+  new URL('../viewer/assets/', import.meta.url),
   new URL('../../dist/viewer/assets/', import.meta.url), // development: src/host/engine-files.ts
 ];
 

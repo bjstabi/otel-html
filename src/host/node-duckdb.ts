@@ -32,6 +32,8 @@ export const NODE_FS_PROTOCOL = 1;
 export const WORKER_SHIM = `
 const { parentPort, workerData } = require('node:worker_threads');
 const target = new EventTarget();
+// DuckDB's worker logs every failure with console.log; worker_threads would forward that to the parent's stdout.
+for (const level of ['log', 'info', 'warn', 'error', 'debug']) console[level] = () => {};
 globalThis.self = globalThis;
 globalThis.addEventListener = target.addEventListener.bind(target);
 globalThis.removeEventListener = target.removeEventListener.bind(target);
