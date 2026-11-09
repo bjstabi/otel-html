@@ -34,10 +34,10 @@ The maintainer works from the console only and does not open files, so a fresh s
 3. The viewer plan exists and its nine PRs (the first titled `feat(viewer): DuckDB-WASM engine start`, the last
    `docs(format): the five views are the viewer's contract`) are not all merged → **session C** (execute it).
 4. The viewer plan is merged and no `*-format-4-metrics.md` → **session D**; metrics plan exists, not merged (its last PR, `docs(plan): plan 3 record; notes for the host plan and the release`, is the one that merges it) → execute it.
-5. The metrics plan merged and no `*-format-4-host.md` → **session E**; host plan exists, not merged → execute it.
-6. Plans 1–3 merged and no PR from `feat/format-4` to `main` → **session F**.
+5. The metrics plan merged and no `*-format-4-host.md` → **session E**; host plan exists, not merged (its last PR, `test(e2e): host measured on the scale report; plan 4 record; the release is next`, is the one that merges it) → execute it (the prompt "Execute plan 4" below).
+6. Plans 1–4 merged and no PR from `feat/format-4` to `main` → **session F**.
 
-After plan 3 the next session is E; F follows once plan 4 merges, unless the maintainer asks for F first (spec §11 allows plan 4 as its own release).
+After plan 3 the next session is E (done 2026-11-09: `docs/superpowers/plans/2026-11-09-format-4-host.md`); F follows once plan 4 merges, unless the maintainer asks for F first (spec §11 allows plan 4 as its own release).
 7. The publishing plan is written only after session C's plan is merged (**session G**), and executed after that.
 
 A session says which one it picked and why before starting. The universal prompt the maintainer pastes after every
@@ -91,7 +91,15 @@ Context: this is plan 3 of the format-4 design (docs/superpowers/specs/2026-11-0
 Write plan 4 of the format-4 spec (§8: `otel-html host`, Mosaic's REST connector protocol, the engine policy and its tests, the REST connector path in the viewer) with superpowers:writing-plans. Skip brainstorming. Read the earlier format-4 plans first (docs/superpowers/plans/2026-11-06-format-4-writer.md, 2026-11-07-format-4-viewer.md and 2026-11-08-format-4-metrics.md, including the "Record" sections at the end of the viewer and metrics plans, which win over the spec), run the builder check, save as docs/superpowers/plans/<date>-format-4-host.md on feat/format-4 and add its execution prompt to the writer plan's "Kickoff prompts" section. Unattended; PRs target feat/format-4.
 ```
 
-**Session F, the format-4 release:** once plans 1–3 are merged on `feat/format-4`, open the PR from `feat/format-4` to
+**Execute plan 4 (`host`), the session after E:**
+
+```
+Execute docs/superpowers/plans/2026-11-09-format-4-host.md with superpowers:subagent-driven-development.
+
+Context: this is plan 4 of the format-4 design (docs/superpowers/specs/2026-11-06-parquet-duckdb-format-4-design.md §8, read with the "Notes for plan 4" at the end of docs/superpowers/plans/2026-11-08-format-4-metrics.md and the record at the end of docs/superpowers/plans/2026-11-07-format-4-viewer.md, which win over the spec). The plan's "Decisions this plan makes" section (D35 to D50) is approved with the plan and rests on a builder check run against the installed engine; apply the decisions without re-deciding. The PR process is unattended (docs/agents/process-unattended.md): every PR targets feat/format-4, not main, and the next PR branches from the updated feat/format-4. The plan's stop-and-ask points are Task 2.4 (the Bun binary cannot run the engine worker, D44) and Task 4.1 (the host's median on `scale` is above the browser engine's budget, D50), plus any measurement a PR body must carry that misses the plan's expectation. Per CLAUDE.md, implementers and task reviewers run on Sonnet 5.5 and the branch review on Opus 5.5; say which model each review ran on. Resume at the first plan task whose PR is not merged (`gh pr list --base feat/format-4 --state all`), from `git switch feat/format-4`. Stop and ask only where the process or the plan says to.
+```
+
+**Session F, the format-4 release:** once plans 1–4 are merged on `feat/format-4`, open the PR from `feat/format-4` to
 `main` titled `feat!: format 4, Parquet partitions queried by DuckDB in the browser` (reviewed by the maintainer: it is
 the format bump), with the frozen format-4 fixture added as the compatibility rule asks when the release is cut. The PR body carries the figures plan 3 measured: PR 2's load-test results (`convert` of 72 M points 497 MB in 3175 s; `Report.addMetrics` 994 MB against its bound of 1100; 1 M logs 574 MB against 620; the receiver 759 MB against 512, #210 open) and PR 6's e2e budgets (the table in #242's body: the Explorer's first chart 3300 ms, the Catalog 3000 ms, Fusion on `scale` 7900 ms and on `many` 12200 ms, the trace click 300 ms), with #210, #229, #239, #240 and #241 as the open items. The "Record: rulings and notes for plan 4 and the release" at the end of docs/superpowers/plans/2026-11-08-format-4-metrics.md lists them.
 
