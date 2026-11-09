@@ -4,7 +4,7 @@ import { createGunzip } from 'node:zlib';
 import { create, type DescMessage, type Message, toBinary, toJsonString } from '@bufbuild/protobuf';
 import { StatusSchema } from '../model/gen/google/rpc/status_pb.js';
 import type { Logger } from '../writer/ports.js';
-import { bindError, bracketed } from './host.js';
+import { type BindFlag, bindError, bracketed } from './host.js';
 import type { Admission, BodyEncoding, Receiver } from './receiver.js';
 import { serviceAtPath } from './signals.js';
 import {
@@ -312,10 +312,15 @@ function clientGone(e: unknown): boolean {
 }
 
 /** Binds `handler`; `address` is `http://<host>:<port>` with the port actually bound. */
-export function listenHttp(handler: Handler, host: string, port: number): Promise<Listener> {
+export function listenHttp(
+  handler: Handler,
+  host: string,
+  port: number,
+  flag: BindFlag = '--http',
+): Promise<Listener> {
   return new Promise((resolve, reject) => {
     const server: Server = createServer(handler);
-    const onError = (e: Error): void => reject(bindError(e, '--http'));
+    const onError = (e: Error): void => reject(bindError(e, flag));
     server.once('error', onError);
     server.listen(port, host, () => {
       server.off('error', onError);
