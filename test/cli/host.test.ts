@@ -88,11 +88,11 @@ function baseOf(text: string): string {
   return m[1];
 }
 
-async function count(base: string): Promise<unknown> {
+async function count(base: string, table = 'spans'): Promise<unknown> {
   const res = await fetch(`${base}query`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ type: 'arrow', sql: 'SELECT count(*) AS n FROM spans' }),
+    body: JSON.stringify({ type: 'arrow', sql: `SELECT count(*) AS n FROM ${table}` }),
   });
   expect(res.status).toBe(200);
   const rows = tableFromIPC(new Uint8Array(await res.arrayBuffer())).toArray();
@@ -124,6 +124,18 @@ describe('host', () => {
     h.fire('SIGINT');
     expect(await h.result).toBe(0);
     await expect(fetch(base)).rejects.toThrow();
+    expect(h.stderr).toBe('');
+  });
+
+  test('host serves the frozen format-4 report: one query over spans and one over points', async () => {
+    const dir = join(import.meta.dirname, '../../fixtures/reports/format-4');
+    const h = start(['host', dir, '--port', '0']);
+    open.push(h);
+    const base = baseOf(await line(h));
+    expect(await count(base, 'spans')).toEqual([{ n: 1228n }]);
+    expect(await count(base, 'points')).toEqual([{ n: 230n }]);
+    h.fire('SIGINT');
+    expect(await h.result).toBe(0);
     expect(h.stderr).toBe('');
   });
 

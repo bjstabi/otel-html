@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { expect, test } from 'vitest';
 
 const REPORTS = join(import.meta.dirname, '../../fixtures/reports');
-const FROZEN = ['format-1', 'format-2', 'format-3'];
+const FROZEN = ['format-1', 'format-2', 'format-3', 'format-4'];
 
 const HOW_TO_FIX =
   'fixtures/reports/* are byte-for-byte frozen (see README); if the change is intended, regenerate SHA256SUMS with the command in the README';

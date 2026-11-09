@@ -412,3 +412,13 @@ Spec file: `docs/superpowers/specs/2026-11-06-parquet-duckdb-format-4-design.md`
 3. The release PR body carries plan 4's host figures from the table above: the `scale` median and budget (R126), the binary's start, and the cancel and restart figures.
 4. Open follow-ups from plan 4: #246 (serving a report being written; the receiver exposing the endpoint), #248 (body and pattern conditions on a served report).
 5. The host's RSS (about 570 MB on `scale`) is the WASM engine's memory plus the worker; it has no bound and no test. If the release wants one, measure it on `many` first.
+
+## Record: rulings of the release session (session F)
+
+Written while the release PR was prepared (2026-11-09). It continues plan 4's numbering (R115 to R126).
+
+| R    | Decision | Why |
+| ---- | -------- | --- |
+| R127 | Maintainer (2026-11-09), #216's format question: `epochUnixNano` stays a required manifest field with its meaning unchanged (the earliest time of the report's first data), and the frozen format-4 fixture is cut with it (`fixtures/reports/format-4/`, written by `7da10ea5`). No format change. What remains of #216 is behaviour, not format: `merge` by copy should refuse (a report outside the window does not open in the viewer) when its inputs put the report's range outside ±2^53 ns of the epoch, and `run --append` must exit non-zero when an append is refused. Both are follow-ups after the release. README Limits states the window and why. | Plan 1 called the field close to vestigial, before the viewer existed. Plan 2's viewer measures every time relative to the epoch as a JavaScript number (`relTime` in `src/query/sql`, the time range, the log and trace columns), so the ±2^53 ns accept window guards the viewer's precision. |
+| R128 | Maintainer (2026-11-09): #229 does not block the release. The Logs landing (6,150 ms against format 3's 3,000), the warn+ window (2,300 against 1,000) and the Fusion budgets (7,900 on `scale`, 12,200 on `many`) ship as re-baselined at twice their medians; the release PR lists #229 with the figures. | The landings are slower; partial results, the scan path and the format-3 ceilings are gone, and the host answers the same pages in a fraction of the time. |
+| R129 | The frozen format-4 fixture's `host` smoke is in `test/cli/host.test.ts` (in-process, runs in `mise run check`), not in `binary.test.ts` or `e2e/frozen.spec.ts` as note 2 above suggested. The fixture is `data/**` of a default (`local`) `convert`, so it holds the `.parquet.js` wrappers too. | `binary.test.ts` runs only where a binary exists and the e2e spec only in the browser suite; the unit test runs on every `check`. `host` needs only the manifest and the listed Parquet files, so the frozen `data/` folder serves as is. |

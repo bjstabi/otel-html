@@ -114,7 +114,7 @@ export function cumulativeRequest(
 
 const REPORTS = join(import.meta.dirname, '../../fixtures/reports');
 
-/** Copies the frozen `fixtures/reports/<fixture>` report (format 1 to 3, chunks) into the writer's file system at `out`. */
+/** Copies the frozen `fixtures/reports/<fixture>` report (frozen format 1 to 4) into the writer's file system at `out`. */
 export async function copyFrozenReport(w: TestWriter, out: string, fixture = 'format-3'): Promise<void> {
   const root = join(REPORTS, fixture, 'data');
   for (const e of readdirSync(root, { recursive: true, withFileTypes: true })) {

@@ -458,6 +458,14 @@ async function buildUnfinishedReport(): Promise<void> {
  * `otel-html merge`, which writes the current viewer beside the data (D12: the viewer reads format 4 only).
  */
 async function buildFrozenReports(): Promise<void> {
+  // Format 4 takes the path a user's report takes: the frozen folder is upgraded in place, so its manifest and
+  // `.parquet.js` wrappers are what the viewer reads.
+  const out4 = fileURLToPath(reportDir('frozen-format-4'));
+  await rm(out4, { recursive: true, force: true });
+  await cp(fileURLToPath(new URL('../fixtures/reports/format-4', import.meta.url)), out4, {
+    recursive: true,
+  });
+  await cli(['upgrade', out4]);
   for (const n of [1, 2, 3] as const) {
     await cli([
       'merge',
@@ -484,6 +492,7 @@ const SITE_REPORTS: readonly ReportName[] = [
   'frozen-format-1',
   'frozen-format-2',
   'frozen-format-3',
+  'frozen-format-4',
   ...FIXTURE_REPORTS,
 ];
 
