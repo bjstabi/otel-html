@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { tableFromIPC } from 'apache-arrow';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { engineAssetNames, engineNodeAssetNames } from '../../src/format/engine.js';
+import { engineAssetNames, engineExtensionName, engineNodeAssetNames } from '../../src/format/engine.js';
 import { TABLE_COLUMNS } from '../../src/format/parquet/columns.js';
 import { startHostEngine } from '../../src/host/engine.js';
 import { hostEngineFiles } from '../../src/host/engine-files.js';
@@ -64,6 +64,11 @@ describe('startHostEngine', () => {
     expect(rows(await e.query('SELECT count(*) AS n FROM spans'))).toEqual([{ n: 5n }]);
   });
 
+  it("has the JSON functions the viewer's SQL uses, loaded from the signed extension before the policy", async () => {
+    const e = await started();
+    expect(rows(await e.query(`SELECT json_extract_string('{"a":"x"}', '/a') AS v`))).toEqual([{ v: 'x' }]);
+  });
+
   it('filename values are the manifest paths', async () => {
     const e = await started();
     const sql = "SELECT count(*) AS n FROM spans WHERE filename = 'data/partitions/000001/spans.parquet'";
@@ -100,7 +105,9 @@ describe('startHostEngine', () => {
 describe('hostEngineFiles', () => {
   const n = engineNodeAssetNames();
   const [wasm] = engineAssetNames('site');
-  const names = [n.bindings, n.worker, wasm ?? ''];
+  const parquet = engineExtensionName('site', 'parquet');
+  const json = engineExtensionName('site', 'json');
+  const names = [n.bindings, n.worker, wasm ?? '', parquet, json];
 
   it('the worker shim bridges parentPort and onmessage', () => {
     expect(WORKER_SHIM).toContain('parentPort');
@@ -125,6 +132,7 @@ describe('hostEngineFiles', () => {
     expect(files.bindings).toBe(join(dir, n.bindings));
     expect(files.worker).toBe(join(dir, n.worker));
     expect(files.wasm).toBe(join(dir, wasm ?? ''));
+    expect(files.extensions).toEqual({ parquet: join(dir, parquet), json: join(dir, json) });
   });
 
   it('rejects usage naming the bindings file when explicit dirs hold nothing', async () => {

@@ -44,8 +44,28 @@ parentPort.on('message', (data) => {
   if (typeof globalThis.onmessage === 'function') globalThis.onmessage(event);
   target.dispatchEvent(event);
 });
+// DuckDB-WASM fetches an extension it LOADs with a synchronous XMLHttpRequest, which Node lacks. This one answers
+// from workerData.extensions (file name to path) and nothing else: no request leaves the worker.
+globalThis.XMLHttpRequest = class {
+  open(method, url) { this.url = String(url); }
+  setRequestHeader() {}
+  send() {
+    const path = workerData.extensions[this.url.split('/').pop()];
+    if (path === undefined) { this.status = 404; this.response = new ArrayBuffer(0); return; }
+    const bytes = require('node:fs').readFileSync(path);
+    this.status = 200;
+    this.response = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.length);
+  }
+  getAllResponseHeaders() { return ''; }
+  getResponseHeader() { return ''; }
+};
 require(workerData.mod);
 `;
+
+/** The extensions this build lacks and the viewer's SQL needs; `LOAD` names each by a URL the shim answers from a file. */
+const EXTENSIONS = ['parquet', 'json'] as const;
+const extensionFile = (e: string): string => `${e}.duckdb_extension.wasm`;
+const extensionUrl = (e: string): string => `https://otel-html.invalid/${extensionFile(e)}`;
 
 type Listener = (event: unknown) => void;
 
@@ -91,14 +111,24 @@ interface Bindings {
 
 const require = createRequire(import.meta.url);
 
-/** `require(files.bindings)`, a Worker from the shim, `new AsyncDuckDB(new VoidLogger(), shim)`, `instantiate(files.wasm)`, `open({})`. */
+/** `require(files.bindings)`, a Worker from the shim, `new AsyncDuckDB(new VoidLogger(), shim)`, `instantiate(files.wasm)`, `open({})`, then `LOAD` of the two extensions. */
 export async function openNodeDuckDb(files: HostEngineFiles): Promise<NodeDuckDb> {
   const bindings = require(files.bindings) as Bindings;
-  const worker = new Worker(WORKER_SHIM, { eval: true, workerData: { mod: files.worker } });
+  const worker = new Worker(WORKER_SHIM, {
+    eval: true,
+    workerData: {
+      mod: files.worker,
+      extensions: Object.fromEntries(EXTENSIONS.map((e) => [extensionFile(e), files.extensions[e]])),
+    },
+  });
   const db = new bindings.AsyncDuckDB(new bindings.VoidLogger(), webWorker(worker));
   try {
     await db.instantiate(files.wasm);
     await db.open({});
+    // Load them before the policy locks the configuration (and before the views, which read Parquet).
+    const conn = await db.connect();
+    for (const e of EXTENSIONS) await conn.query(`LOAD '${extensionUrl(e)}'`);
+    await conn.close();
   } catch (e) {
     await worker.terminate();
     throw e;

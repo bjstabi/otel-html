@@ -137,6 +137,10 @@ The printed size is the Parquet bytes the manifest lists, in megabytes (10^6 byt
 
 `host` serves the report whether it was written as `local` or `site`, with any `assetsBase`, and whichever otel-html version wrote it, because it serves its own viewer rather than the report's: `/` and `/index.html` are the host's page, `/assets/` its viewer files, `/data/manifest.js` the report's manifest, and `POST /query` the queries (Mosaic's REST protocol, Arrow results). Nothing else is served; in particular the Parquet files are never sent, and only `arrow` queries run. A statement must be a single read-only `SELECT` over the report's views (`spans`, `logs`, `points` and the other tables); anything else (DDL, `SET`, `COPY`, `ATTACH`, `LOAD`, a second statement, reading a file) is refused 400.
 
+Open the page at exactly the address `host` prints. The viewer then sends its queries to the host instead of starting the DuckDB engine in the page, so a served page never requests a Parquet file, a WebAssembly file or a worker. Fusion, dashboards and the Metrics pages work unchanged, and the Traces, Logs and Metrics pages show the same counts, tables and charts as the same report opened from disk.
+
+One difference: the host evaluates conditions in SQL only. An OTTL condition, or a metric `where`, with a term that has no SQL form (`Len(name) > 2`, say) is refused with `this served report evaluates conditions in SQL only: "<term>" has no SQL form; rewrite or remove it`, where a report opened from disk would evaluate that term in the browser and say so ("Evaluated in the browser").
+
 A report that is not format 4 exits 2 with the hint to run `otel-html merge <report> --out <new>`; a folder without a report exits 2, and so does a Parquet file the manifest lists that is missing (`invalid-report`). A port that is already in use exits 1 with a hint to pass `--port <port>`. On Ctrl-C (SIGINT) or SIGTERM, `host` stops at once, whatever is running: new connections are refused, the engine stops (a statement still running is answered 503) and it exits 0; a second Ctrl-C while it starts or stops exits 130.
 
 ### `upgrade <report>`
