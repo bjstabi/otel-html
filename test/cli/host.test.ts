@@ -177,6 +177,26 @@ describe('host', () => {
     expect(h.stdout).not.toContain('serving');
   });
 
+  test('a second Ctrl-C during start-up exits 130, and nothing is left listening', async () => {
+    const dir = await reportDir('site');
+    const probe = createServer();
+    await new Promise<void>((r) => probe.listen(0, '127.0.0.1', r));
+    const address = probe.address();
+    const port = typeof address === 'object' && address !== null ? address.port : 0;
+    await new Promise((r) => probe.close(r));
+    const h = start(['host', dir, '--port', String(port)]);
+    open.push(h);
+    await vi.waitFor(() => expect(h.subscribed()).toBe(true));
+    h.fire('SIGINT');
+    await vi.waitFor(() => expect(h.subscribed()).toBe(true));
+    h.fire('SIGINT');
+    expect(await h.result).toBe(130);
+    expect(h.stdout).not.toContain('serving');
+    // What was still starting is closed when it settles.
+    await new Promise((r) => setTimeout(r, 6000));
+    await expect(fetch(`http://127.0.0.1:${port}/`)).rejects.toThrow();
+  });
+
   test('a missing folder is a usage error', async () => {
     const h = start(['host', '/nonexistent/otel-html-report', '--port', '0']);
     expect(await h.result).toBe(2);

@@ -41,6 +41,8 @@ export interface HttpTransportOptions {
 
 export interface Listener {
   readonly address: string;
+  /** The IP address the socket is bound to (`--host` may be a name or a short form of it). */
+  readonly ip?: string;
   close(): Promise<void>;
   /** Destroys every open connection, requests in flight included; `close()` alone waits for them. */
   closeConnections?(): void;
@@ -322,6 +324,13 @@ export function listenHttp(
 ): Promise<Listener> {
   return new Promise((resolve, reject) => {
     const server: Server = createServer(handler);
+    let closing = false;
+    // Once closing, a keep-alive socket whose response has just been written is idle: end it, so close() resolves then.
+    server.on('request', (_req, res) => {
+      res.once('finish', () => {
+        if (closing) setImmediate(() => server.closeIdleConnections());
+      });
+    });
     const onError = (e: Error): void => reject(bindError(e, flag));
     server.once('error', onError);
     server.listen(port, host, () => {
@@ -331,11 +340,13 @@ export function listenHttp(
         reject(new Error('invariant violated: http server has no address'));
         return;
       }
-      const { port: actual }: AddressInfo = bound;
+      const { port: actual, address: ip }: AddressInfo = bound;
       resolve({
         address: `http://${bracketed(host)}:${actual}`,
+        ip,
         close: () =>
           new Promise<void>((done, fail) => {
+            closing = true;
             server.close((err) => (err === undefined ? done() : fail(err)));
             server.closeIdleConnections();
           }),

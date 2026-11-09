@@ -43,9 +43,9 @@ const INTERRUPTED_EXIT = 130;
 const DRAIN_MS = 500;
 
 interface Running {
-  files?: HostEngineFiles;
-  engine?: HostEngine;
-  listener?: Listener;
+  files?: HostEngineFiles | undefined;
+  engine?: HostEngine | undefined;
+  listener?: Listener | undefined;
 }
 
 /**
@@ -77,6 +77,30 @@ async function shutdown(io: CliIo, running: Running): Promise<void> {
   } finally {
     again.cancel();
   }
+}
+
+/** The second stop signal during start-up: close what exists now and what `starting` leaves when it settles; 130. */
+async function abandon(io: CliIo, running: Running, starting: Promise<unknown>): Promise<never> {
+  const had = { ...running };
+  const late = (async () => {
+    await starting.catch(() => undefined);
+    const rest: Running = {};
+    if (running.listener !== had.listener) rest.listener = running.listener;
+    if (running.engine !== had.engine) rest.engine = running.engine;
+    if (running.files !== had.files) rest.files = running.files;
+    await closeAllOf(rest);
+  })();
+  late.catch(() => undefined); // the process may exit first; a late engine dies with it
+  await closeAllOf(had);
+  io.stdout('interrupted\n');
+  throw new CliExit(INTERRUPTED_EXIT);
+}
+
+async function closeAllOf(r: Running): Promise<void> {
+  r.listener?.closeConnections?.();
+  await r.listener?.close().catch(() => undefined);
+  await r.engine?.close().catch(() => undefined);
+  await r.files?.close().catch(() => undefined);
 }
 
 async function serveReport(io: CliIo, deps: CliDeps, report: string, flags: HostFlags): Promise<void> {
@@ -113,10 +137,18 @@ async function serveReport(io: CliIo, deps: CliDeps, report: string, flags: Host
   try {
     const first = await Promise.race([starting, stop.signalled.then(() => undefined)]);
     if (first === undefined) {
-      // Stopped during start-up: let what is starting settle (a second signal ends the wait), then close it.
+      // Stopped during start-up: let what is starting settle, then close it. A second signal ends the wait: what
+      // exists is closed now, whatever start-up still produces when it settles is closed then, and the exit is 130.
       const again = nextSignal(io);
-      await Promise.race([starting.catch(() => undefined), again.signalled]);
+      const second = await Promise.race([
+        starting.then(
+          () => false,
+          () => false,
+        ),
+        again.signalled.then(() => true),
+      ]);
       again.cancel();
+      if (second) await abandon(io, running, starting);
       await shutdown(io, running);
       return;
     }

@@ -6,6 +6,7 @@ import { startHostEngine } from '../../src/host/engine.js';
 import { readHostManifest } from '../../src/host/manifest.js';
 import {
   ARROW_STREAM_TYPE,
+  allowedHosts,
   HOST_META_CONTENT,
   MAX_QUERY_BODY_BYTES,
   QUERY_PATH,
@@ -214,7 +215,7 @@ function withHost(
   return new Promise((resolve, reject) => {
     const req = request(
       {
-        host: url.hostname,
+        host: url.hostname.replace(/^\[|\]$/g, ''),
         port: url.port,
         method: opts.method ?? 'GET',
         path: opts.path ?? '/',
@@ -307,5 +308,43 @@ describe('cross-site and rebound requests (I2)', () => {
     }
     const refused = await withHost(base, 'evil.example');
     expect(refused.headers['x-content-type-options']).toBe('nosniff');
+  });
+
+  it('decides loopback from the address that was bound, not from the --host text', async () => {
+    for (const bindHost of ['127.1', '0:0:0:0:0:0:0:1']) {
+      const { base } = await serve(bindHost).catch(() => ({ base: undefined }));
+      if (base === undefined) continue; // no IPv6 here
+      const { port } = new URL(base);
+      const res = await withHost(base, 'evil.example');
+      expect([bindHost, res.status]).toEqual([bindHost, 403]);
+      const own = await withHost(base, `${bindHost.includes(':') ? `[${bindHost}]` : bindHost}:${port}`);
+      expect([bindHost, own.status]).toEqual([bindHost, 200]);
+    }
+    const { base } = await serve('localhost');
+    expect((await withHost(base, 'evil.example')).status).toBe(403);
+  });
+
+  it('accepts the bare loopback names on port 80, which browsers send without a port', () => {
+    const on80 = allowedHosts('127.0.0.1', '127.0.0.1', 80);
+    for (const h of ['localhost', '127.0.0.1', '[::1]', 'localhost:80']) expect(on80?.has(h)).toBe(true);
+    const on81 = allowedHosts('127.0.0.1', '127.0.0.1', 81);
+    expect(on81?.has('localhost')).toBe(false);
+    expect(allowedHosts('0.0.0.0', '0.0.0.0', 80)).toBeNull();
+  });
+
+  it('logs a refused Host and a refused content type as one warn each', async () => {
+    const { base, w } = await serve();
+    await withHost(base, 'evil.example');
+    await withHost(base, new URL(base).host, {
+      method: 'POST',
+      path: QUERY_PATH,
+      type: 'text/plain',
+      body: '{}',
+    });
+    const warns = w.logs.filter((l) => l.level === 'warn').map((l) => l.msg);
+    expect(warns).toEqual([
+      '403 this host answers only to its own address: Host evil.example',
+      '415 the request must be application/json: text/plain',
+    ]);
   });
 });

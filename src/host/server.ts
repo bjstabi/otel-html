@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { BlockList, isIP } from 'node:net';
 import { type Listener, listenHttp } from '../receiver/http.js';
 import { renderIndexHtml } from '../writer/html.js';
 import type { Logger, SpanHandle, Tracer } from '../writer/ports.js';
@@ -47,27 +48,28 @@ function mimeOf(path: string): string {
   return Object.hasOwn(MIME, ext) ? (MIME[ext] ?? FALLBACK_TYPE) : FALLBACK_TYPE;
 }
 
-/** 127.0.0.0/8, `::1`, `localhost`: where a page on another site can still reach the host through the browser. */
-function isLoopbackHost(host: string): boolean {
-  const bare = host.replace(/^\[(.*)\]$/, '$1').toLowerCase();
-  return (
-    bare === 'localhost' ||
-    bare === '::1' ||
-    /^127(\.\d{1,3}){3}$/.test(bare) ||
-    bare.startsWith('::ffff:127.')
-  );
+const LOOPBACK = new BlockList();
+LOOPBACK.addSubnet('127.0.0.0', 8, 'ipv4');
+LOOPBACK.addAddress('::1', 'ipv6');
+LOOPBACK.addSubnet('::ffff:127.0.0.0', 104, 'ipv6');
+
+/** 127.0.0.0/8, `::1`: where a page on another site can still reach the host through the browser. */
+function isLoopbackIp(ip: string): boolean {
+  const kind = isIP(ip);
+  return kind !== 0 && LOOPBACK.check(ip, kind === 4 ? 'ipv4' : 'ipv6');
 }
 
-/** The `Host` values a loopback-bound host answers to (DNS-rebinding guard); `null` accepts any (non-loopback bind). */
-function allowedHosts(bound: string, port: number): ReadonlySet<string> | null {
-  if (!isLoopbackHost(bound)) return null;
-  const names = [
-    '127.0.0.1',
-    'localhost',
-    '[::1]',
-    bound.includes(':') ? `[${bound.replace(/^\[|\]$/g, '')}]` : bound,
-  ];
-  return new Set(names.map((n) => `${n.toLowerCase()}:${port}`));
+const LOOPBACK_NAMES = ['127.0.0.1', 'localhost', '[::1]'];
+
+/**
+ * The `Host` values a host bound to the loopback address `ip` answers to (DNS-rebinding guard); `null` accepts any
+ * (bound elsewhere). `hostText` is what `--host` said: it is one more allowed name. Browsers leave the port out on 80.
+ */
+export function allowedHosts(ip: string, hostText: string, port: number): ReadonlySet<string> | null {
+  if (!isLoopbackIp(ip)) return null;
+  const bare = hostText.replace(/^\[|\]$/g, '');
+  const names = [...LOOPBACK_NAMES, bare.includes(':') ? `[${bare}]` : bare].map((n) => n.toLowerCase());
+  return new Set(names.flatMap((n) => (port === 80 ? [n, `${n}:${port}`] : [`${n}:${port}`])));
 }
 
 class BodyTooLarge extends Error {}
@@ -220,6 +222,8 @@ export function hostHandler(
       if (method === 'POST') {
         // Mosaic's connector always sends JSON; anything else is a "simple" cross-site request, which needs no preflight.
         if (!/^application\/json\s*(;|$)/i.test(req.headers['content-type'] ?? '')) {
+          const sent = (req.headers['content-type'] ?? '').slice(0, SQL_LOG_CHARS);
+          logger.warn(`415 the request must be application/json${sent === '' ? '' : `: ${sent}`}`);
           text(req, res, 415, 'the request must be application/json');
           return undefined;
         }
@@ -240,6 +244,9 @@ export function hostHandler(
     const path = (req.url ?? '').split('?')[0] ?? '';
     const hosts = allowed();
     if (hosts !== null && !hosts.has((req.headers.host ?? '').toLowerCase())) {
+      logger.warn(
+        `403 this host answers only to its own address: Host ${(req.headers.host ?? '').slice(0, SQL_LOG_CHARS)}`,
+      );
       text(req, res, 403, 'this host answers only to its own address');
       return;
     }
@@ -265,6 +272,6 @@ export async function startHostServer(opts: HostServerOptions): Promise<Listener
     opts.port,
     '--port',
   );
-  hosts = allowedHosts(opts.host, Number(new URL(listener.address).port));
+  hosts = allowedHosts(listener.ip ?? opts.host, opts.host, Number(new URL(listener.address).port));
   return listener;
 }
