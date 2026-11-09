@@ -107,11 +107,12 @@ describe('hostEngineFiles', () => {
     expect(WORKER_SHIM).toContain('onmessage');
   });
 
-  it('with no dirs resolves three existing files identical to the package copies', async () => {
+  it('with no dirs resolves three existing files: the WASM as the package has it, the Node files bundled', async () => {
     const files = await hostEngineFiles();
     const pkg = packageHostEngineFiles();
-    for (const key of ['bindings', 'worker', 'wasm'] as const) {
-      expect(Buffer.compare(await readFile(files[key]), await readFile(pkg[key]))).toBe(0);
+    expect(Buffer.compare(await readFile(files.wasm), await readFile(pkg.wasm))).toBe(0);
+    for (const key of ['bindings', 'worker'] as const) {
+      expect(await readFile(files[key], 'utf8')).not.toContain('require("apache-arrow")');
     }
     await files.close();
   });

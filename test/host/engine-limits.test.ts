@@ -220,6 +220,26 @@ describe('the exit subscription', () => {
   }, 10_000);
 });
 
+describe('the first start', () => {
+  it('fails instead of hanging when the worker never finishes opening, and stops it when it finally does', async () => {
+    const log: string[] = [];
+    let release: (db: NodeDuckDb) => void = () => {};
+    const error = await rejection(
+      started({
+        openDeadlineMs: 80,
+        open: () =>
+          new Promise<NodeDuckDb>((r) => {
+            release = r;
+          }),
+      }),
+    );
+    expect(error).toBeInstanceOf(HostError);
+    expect((error as HostError).message).toMatch(/did not start/);
+    release(fakeDb(async () => null, log, 'late'));
+    await vi.waitFor(() => expect(log).toContain('terminate late'));
+  }, 10_000);
+});
+
 describe('close', () => {
   it('stops a worker whose open was still in flight, and the query rejects 503', async () => {
     const log: string[] = [];

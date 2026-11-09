@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { gunzipSync } from 'node:zlib';
+import { tableFromIPC } from 'apache-arrow';
 import { afterEach, expect, test, vi } from 'vitest';
 import { buildEngineAssets, type ExtensionPins, obtainExtensions } from '../../scripts/engine-assets.js';
 import {
@@ -11,6 +12,10 @@ import {
   engineExtensionName,
   engineNodeAssetNames,
 } from '../../src/format/engine.js';
+import { startHostEngine } from '../../src/host/engine.js';
+import { createNodeFileSystem } from '../../src/writer/node-fs.js';
+import { buildFormat4Report, spansOnlyRequest } from '../../test-support/format4-fixture.js';
+import { writeReportDir } from '../../test-support/report-dir.js';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -54,8 +59,8 @@ test('writes the engine files named by the package version', async () => {
   expect([...names].sort()).toEqual(
     [...engineAssetNames('site'), ...engineAssetNames('local'), node.bindings, node.worker].sort(),
   );
-  expect(readFileSync(join(out, node.bindings), 'utf8')).toBe('module.exports = "bindings";');
-  expect(readFileSync(join(out, node.worker), 'utf8')).toBe('module.exports = "node worker";');
+  expect(readFileSync(join(out, node.bindings), 'utf8')).toContain('bindings');
+  expect(readFileSync(join(out, node.worker), 'utf8')).toContain('node worker');
   expect(readFileSync(join(out, engineExtensionName('site', 'parquet')))).toEqual(Buffer.from(PQ));
   expect(readFileSync(join(out, `duckdb.${ENGINE_VERSION}.wasm`))).toEqual(
     readFileSync(join(dist, 'duckdb-eh.wasm')),
@@ -101,6 +106,42 @@ test('the real package files stay near the spike sizes (9.8 MB gzip+base64, 34 M
   expect(near(size(`duckdb.${ENGINE_VERSION}.wasm.gz.b64.js`), 9.8e6)).toBe(true);
   expect(near(size(`duckdb.${ENGINE_VERSION}.wasm`), 34e6)).toBe(true);
 });
+
+test('the host engine runs from the built Node files, which resolve no apache-arrow at run time', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'engine-assets-run-'));
+  dirs.push(root);
+  await buildEngineAssets({ outDir: root });
+  const node = engineNodeAssetNames();
+  for (const f of [node.bindings, node.worker]) {
+    expect(readFileSync(join(root, f), 'utf8')).not.toContain('require("apache-arrow")');
+  }
+  const fixture = await buildFormat4Report([spansOnlyRequest(3)], { close: false });
+  const report = await writeReportDir(fixture);
+  try {
+    const engine = await startHostEngine({
+      report: report.dir,
+      manifest: fixture.manifest,
+      files: {
+        bindings: join(root, node.bindings),
+        worker: join(root, node.worker),
+        wasm: join(root, `duckdb.${ENGINE_VERSION}.wasm`),
+        close: async () => {},
+      },
+      fs: createNodeFileSystem(),
+      logger: { debug() {}, info() {}, warn() {}, error() {} },
+      timeoutMs: 30_000,
+      maxResultBytes: 64 * 1024 * 1024,
+    });
+    try {
+      const table = tableFromIPC(await engine.query('SELECT count(*) AS n FROM spans'));
+      expect(Number(table.getChildAt(0)?.get(0))).toBe(3);
+    } finally {
+      await engine.close();
+    }
+  } finally {
+    await report.close();
+  }
+}, 60_000);
 
 test('a verified cache file is reused with no download', async () => {
   const { root } = fakeDist();
