@@ -114,7 +114,9 @@ describe('the viewer opens the frozen format-4 report as written', () => {
         const file = partition.files[table];
         if (file === undefined) continue;
         const wrapper = readFileSync(join(root, partitionWrapperPath(partition.n, table)), 'utf8');
-        const decoded = fromBase64(unwrapDataFile(wrapper, partitionKey(partition.n, table)) as string);
+        const payload = unwrapDataFile(wrapper, partitionKey(partition.n, table));
+        if (typeof payload !== 'string') throw new Error(`${table} wrapper payload is not a string`);
+        const decoded = fromBase64(payload);
         expect(Buffer.from(decoded).equals(readFileSync(join(root, file.path)))).toBe(true);
         files.set(file.path, decoded);
       }
