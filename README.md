@@ -666,7 +666,7 @@ Config is a YAML or JSON file (`otel-html.yaml` by default), or an object passed
 
 ## Development
 
-Tasks are defined in `mise.toml`; CI runs the same ones. The Linux binaries (`linux-x64`, `linux-arm64`) are built and smoke-tested on every PR by the `binary` job (`test/cli/binary.test.ts` against the compiled binary: `convert`, `serve` over HTTP and gRPC, `host` answering one Arrow query, `ci context`, `run`, a SIGINT exit 0 and a bad-port exit 2), and a step that runs the binary outside the checkout (site and local conversions, a compaction, `host`); the release workflow smoke-tests the artefacts it uploads. Tasks with `sources` are skipped while up to date; `mise run --force <task>` overrides.
+Tasks are defined in `mise.toml`; CI runs the same ones. The `linux-x64`, `linux-arm64` and `windows-x64` binaries are built and smoke-tested on every PR by the `binary` job (`test/cli/binary.test.ts` against the compiled binary: `convert`, `serve` over HTTP and gRPC, `host` answering one Arrow query, `ci context`, `run`, a SIGINT exit 0 and a bad-port exit 2), and a step that runs the binary outside the checkout (site and local conversions, a compaction, `host`); the release workflow smoke-tests the artefacts it uploads. Tasks with `sources` are skipped while up to date; `mise run --force <task>` overrides.
 
 ### Test and viewer spans
 
