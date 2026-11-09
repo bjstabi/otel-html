@@ -26,6 +26,7 @@ function load(onProgress: (p: LoadProgress) => void): Promise<DataSource> {
     {
       loader,
       baseUrl: document.baseURI,
+      host: document.querySelector('meta[name="otel-html-host"]')?.getAttribute('content') ?? null,
       createWorker: (url) => new Worker(url),
       blobUrl: { create: (b) => URL.createObjectURL(b), revoke: (u) => URL.revokeObjectURL(u) },
       logger: console,
