@@ -4,17 +4,29 @@
 // A `site` report serves duckdb.<v>.wasm and duckdb.<v>.worker.js as they are. A `local` report opens from file://,
 // where fetch is blocked, so it loads the same bytes as classic scripts that push base64 onto `__OH__`: the
 // WASM gzipped at level 9, the worker as it is.
-// The host's DuckDB-WASM Node build (duckdb.<v>.node.cjs, duckdb.<v>.node.worker.cjs) is copied as it is; no report carries it.
+// The host's DuckDB-WASM Node build (duckdb.<v>.node.cjs, duckdb.<v>.node.worker.cjs) is bundled with tsdown so that
+// apache-arrow, which both files require, is inlined: they resolve no package at run time (D44), in npm and in the
+// binary alike. Node builtins and the worker's optional, try-required ws addons stay external. No report carries them.
 // The extensions are the officially signed binaries for the engine's DuckDB core version, downloaded from
 // extensions.duckdb.org at build time into the git-ignored `.cache/duckdb-extensions/`, checked against the SHA-256
 // pinned in scripts/duckdb-extensions.json, and reused from the cache while they verify. Set
 // OTEL_HTML_DUCKDB_EXTENSIONS_DIR to a directory holding `<name>.duckdb_extension.wasm` for an offline build.
 import { createHash } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { gzipSync } from 'node:zlib';
+import { build } from 'tsdown';
 import {
   ENGINE_EXTENSIONS,
   ENGINE_VERSION,
@@ -42,6 +54,31 @@ function packageDist(): string {
     throw new Error(`@duckdb/duckdb-wasm ${version} is installed but ENGINE_VERSION is ${ENGINE_VERSION}`);
   }
   return join(dir, 'dist');
+}
+
+/** Bundles one Node engine file with apache-arrow inlined; the other requires (builtins, ws's addons) stay as they are. */
+async function bundleNodeFile(input: string, output: string): Promise<void> {
+  const tmp = mkdtempSync(join(tmpdir(), 'engine-bundle-'));
+  try {
+    await build({
+      config: false,
+      entry: { out: input },
+      outDir: tmp,
+      format: 'cjs',
+      platform: 'node',
+      target: false,
+      dts: false,
+      clean: false,
+      minify: true,
+      sourcemap: false,
+      logLevel: 'silent',
+      outExtensions: () => ({ js: '.cjs' }),
+      deps: { alwaysBundle: ['apache-arrow'], neverBundle: ['bufferutil', 'utf-8-validate'] },
+    });
+    copyFileSync(join(tmp, 'out.cjs'), output);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 }
 
 const push = (key: string, bytes: Uint8Array): string =>
@@ -130,8 +167,8 @@ export async function buildEngineAssets(opts: {
   writeFileSync(join(opts.outDir, wrapWasm), push(ENGINE_WASM_KEY, gzipSync(wasm, { level: 9 })));
   writeFileSync(join(opts.outDir, wrapWorker), push(ENGINE_WORKER_KEY, readFileSync(join(distDir, WORKER))));
   const node = engineNodeAssetNames();
-  copyFileSync(join(distDir, NODE_BINDINGS), join(opts.outDir, node.bindings));
-  copyFileSync(join(distDir, NODE_WORKER), join(opts.outDir, node.worker));
+  await bundleNodeFile(join(distDir, NODE_BINDINGS), join(opts.outDir, node.bindings));
+  await bundleNodeFile(join(distDir, NODE_WORKER), join(opts.outDir, node.worker));
   const names = [plainWasm, plainWorker, wrapWasm, wrapWorker, node.bindings, node.worker];
   for (const ext of ENGINE_EXTENSIONS) {
     const site = engineExtensionName('site', ext);
