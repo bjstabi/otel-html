@@ -7,6 +7,15 @@ import { spansRequest } from './helpers.js';
 const entry = { script: 'assets/viewer.abc123.js', style: 'assets/viewer.abc123.css' };
 
 describe('renderIndexHtml', () => {
+  test('host names the query endpoint in a meta tag before the title; without it there is none', () => {
+    const html = renderIndexHtml(entry, 't', { host: 'query' });
+    expect(html.match(/<meta name="otel-html-host" content="query">/g)).toHaveLength(1);
+    expect(html.indexOf('otel-html-host')).toBeLessThan(html.indexOf('<title>'));
+    expect(html.indexOf('name="viewport"')).toBeLessThan(html.indexOf('otel-html-host'));
+    expect(renderIndexHtml(entry, 't')).not.toContain('otel-html-host');
+    expect(renderIndexHtml(entry, 't', { host: 'a"b' })).toContain('content="a&quot;b"');
+  });
+
   test("the default base is the report's own assets/", () => {
     const html = renderIndexHtml(entry, 't');
     expect(html).toContain('<script src="assets/viewer.abc123.js"></script>');
