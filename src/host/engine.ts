@@ -280,8 +280,9 @@ export async function startHostEngine(opts: HostEngineOptions): Promise<HostEngi
     try {
       return await Promise.race([work, hung.promise, died]);
     } catch (e) {
-      if (!(e instanceof WorkerLost)) throw e;
+      // Whatever failed after `close()` (a poll on the terminated worker included) is the close, not an engine refusal.
       if (closed) throw new HostError(503, CLOSED_MESSAGE);
+      if (!(e instanceof WorkerLost)) throw e;
       live = null;
       await current.db.terminate().catch(() => undefined);
       restarts += 1;

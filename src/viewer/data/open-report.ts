@@ -6,13 +6,19 @@ import type { DataSource } from './data-source.js';
 import { createDuckDbDataSource } from './duckdb-source.js';
 import { registerPartitions } from './engine/files.js';
 import { type Engine, type EngineDeps, startEngine } from './engine/start.js';
-import { createCoordinator, engineConnector, type Logger, mosaicQueryEngine } from './mosaic.js';
+import {
+  createCoordinator,
+  engineConnector,
+  type Logger,
+  mosaicQueryEngine,
+  restQueryEngine,
+} from './mosaic.js';
 import type { QueryEngine } from './query-engine.js';
 import { tracedDataSource } from './traced.js';
 
-/** Where `load` is: starting the engine, registering partition `done` of `total`, creating the views. */
+/** Where `load` is: connecting to the host, starting the engine, registering partition `done` of `total`, creating the views. */
 export interface LoadProgress {
-  phase: 'engine' | 'partitions' | 'views';
+  phase: 'engine' | 'partitions' | 'views' | 'host';
   done?: number;
   total?: number;
 }
@@ -23,11 +29,15 @@ export interface OpenParts {
   registerPartitions: typeof registerPartitions;
   /** The query engine over a started engine (a Mosaic coordinator in production). */
   createQueryEngine: (engine: Engine, logger: Logger) => QueryEngine;
+  /** The query engine over a host's REST endpoint (D43). */
+  createRestEngine: (endpoint: string, logger: Logger) => QueryEngine;
   createSource: typeof createDuckDbDataSource;
 }
 
 export interface OpenDeps extends EngineDeps {
   logger: Logger;
+  /** The `otel-html-host` meta tag's content (an endpoint relative to `baseUrl`), or null when the report is a file. */
+  host?: string | null;
   parts?: Partial<OpenParts>;
 }
 
@@ -36,6 +46,7 @@ const realParts: OpenParts = {
   registerPartitions,
   createQueryEngine: (engine, logger) =>
     mosaicQueryEngine(createCoordinator(engineConnector(engine.connection), logger), engine),
+  createRestEngine: (endpoint, logger) => restQueryEngine(endpoint, logger),
   createSource: createDuckDbDataSource,
 };
 
@@ -65,7 +76,8 @@ const partitionBytes = (m: ManifestV4): number =>
 /**
  * The composition root's load: validate the manifest, start the engine, register the partitions (which creates the
  * views), and build the traced format-4 data source. `viewer.load` carries the `viewer.engine.start` and
- * `viewer.partitions.register` spans as children.
+ * `viewer.partitions.register` spans as children. With `deps.host` set it starts no engine and registers nothing: the
+ * host has the views, so the data source queries its REST endpoint.
  */
 export async function openReport(
   rawManifest: unknown,
@@ -85,6 +97,11 @@ export async function openReport(
     'viewer.load',
     { 'otel_html.report.version': manifest.otelHtmlVersion, ...attrs },
     async () => {
+      if (deps.host !== undefined && deps.host !== null) {
+        onProgress({ phase: 'host' });
+        const queryEngine = parts.createRestEngine(new URL(deps.host, deps.baseUrl).href, deps.logger);
+        return tracedDataSource(parts.createSource({ engine: queryEngine, manifest, logger: deps.logger }));
+      }
       onProgress({ phase: 'engine' });
       const engine: Engine = await traced('viewer.engine.start', attrs, () =>
         parts.startEngine(manifest.engine, deps),

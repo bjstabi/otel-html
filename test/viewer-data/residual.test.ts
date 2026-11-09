@@ -6,6 +6,7 @@ function recorder(): { engine: QueryEngine; texts: Map<string, string>; statemen
   const texts = new Map<string, string>();
   const statements: string[] = [];
   const engine: QueryEngine = {
+    tempTables: true,
     query: () => Promise.reject(new Error('no query')),
     exec: (s) => {
       statements.push(s);

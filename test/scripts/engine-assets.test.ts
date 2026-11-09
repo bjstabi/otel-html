@@ -125,6 +125,10 @@ test('the host engine runs from the built Node files, which resolve no apache-ar
         bindings: join(root, node.bindings),
         worker: join(root, node.worker),
         wasm: join(root, `duckdb.${ENGINE_VERSION}.wasm`),
+        extensions: {
+          parquet: join(root, engineExtensionName('site', 'parquet')),
+          json: join(root, engineExtensionName('site', 'json')),
+        },
         close: async () => {},
       },
       fs: createNodeFileSystem(),

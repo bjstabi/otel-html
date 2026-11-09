@@ -1,3 +1,4 @@
+import { OtelHtmlError } from '../../model/errors.js';
 import type { QueryEngine } from './query-engine.js';
 
 /** Row-list pages the browser re-check reads at most (D5), each of `limit` rows. */
@@ -76,4 +77,11 @@ export async function dropResidualTable(engine: QueryEngine, name: string): Prom
     engine.registerText(`${name}.csv`, ''),
   ]);
   for (const r of results) if (r.status === 'rejected') throw r.reason;
+}
+
+/** D43: the refusal of a residual term on an aggregate when the engine has no temp tables (the served path). */
+export function servedResidual(term: string): OtelHtmlError {
+  return new OtelHtmlError('usage', {
+    message: `this served report evaluates conditions in SQL only: "${term}" has no SQL form; rewrite or remove it`,
+  });
 }

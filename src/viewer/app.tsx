@@ -40,6 +40,8 @@ function progressText(p: LoadProgress | null): string {
         : `Loading partition ${Math.min(p.done + 1, p.total)} of ${p.total}`;
     case 'views':
       return 'Preparing views';
+    case 'host':
+      return 'Connecting to the host';
   }
 }
 

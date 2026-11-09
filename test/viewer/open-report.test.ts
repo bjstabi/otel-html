@@ -148,6 +148,46 @@ function setup(overrides: Partial<OpenParts> = {}) {
   return { deps, parts, close, warn, source };
 }
 
+describe('openReport over a host', () => {
+  function hosted(overrides: Partial<OpenParts> = {}) {
+    const { deps, parts, source } = setup(overrides);
+    const rest = {} as QueryEngine;
+    const createRestEngine = vi.fn(() => rest);
+    const mustNot = vi.fn(() => Promise.reject(new Error('must not be called')));
+    const hostParts = {
+      ...parts,
+      createRestEngine,
+      startEngine: mustNot,
+      registerPartitions: mustNot,
+    } as Partial<OpenParts>;
+    const hostDeps = {
+      ...deps,
+      baseUrl: 'http://127.0.0.1:4318/index.html',
+      host: 'query',
+      parts: hostParts,
+    } as unknown as OpenDeps;
+    return { hostDeps, hostParts, createRestEngine, mustNot, rest, source };
+  }
+
+  test('queries the REST endpoint resolved against the base url, starting no engine', async () => {
+    const { hostDeps, hostParts, createRestEngine, mustNot, rest, source } = hosted();
+    const seen: LoadProgress[] = [];
+    const ds = await openReport(manifest4(), hostDeps, (p) => seen.push(p));
+    expect(createRestEngine).toHaveBeenCalledWith('http://127.0.0.1:4318/query', hostDeps.logger);
+    expect(mustNot).not.toHaveBeenCalled();
+    expect(hostParts.createSource).toHaveBeenCalledWith(expect.objectContaining({ engine: rest }));
+    expect(seen).toEqual([{ phase: 'host' }]);
+    expect(await ds.querySpans({} as never)).toEqual({ rows: [1] });
+    expect(source.querySpans).toHaveBeenCalledOnce();
+  });
+
+  test('a format-3 manifest still fails the D12 gate', async () => {
+    const { hostDeps, createRestEngine } = hosted();
+    await expect(openReport(manifest3, hostDeps, () => undefined)).rejects.toThrow('format 3');
+    expect(createRestEngine).not.toHaveBeenCalled();
+  });
+});
+
 describe('openReport', () => {
   test('a format-3 manifest rejects with the D12 text and starts nothing', async () => {
     const { deps, parts } = setup();
