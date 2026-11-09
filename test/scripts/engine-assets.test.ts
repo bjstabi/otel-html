@@ -5,7 +5,12 @@ import { dirname, join } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 import { afterEach, expect, test, vi } from 'vitest';
 import { buildEngineAssets, type ExtensionPins, obtainExtensions } from '../../scripts/engine-assets.js';
-import { ENGINE_VERSION, engineAssetNames, engineExtensionName } from '../../src/format/engine.js';
+import {
+  ENGINE_VERSION,
+  engineAssetNames,
+  engineExtensionName,
+  engineNodeAssetNames,
+} from '../../src/format/engine.js';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -37,13 +42,20 @@ function fakeDist(): { dist: string; out: string; root: string } {
   mkdirSync(out);
   writeFileSync(join(dist, 'duckdb-eh.wasm'), new Uint8Array(5000).fill(7));
   writeFileSync(join(dist, 'duckdb-browser-eh.worker.js'), 'console.log("worker");');
+  writeFileSync(join(dist, 'duckdb-node.cjs'), 'module.exports = "bindings";');
+  writeFileSync(join(dist, 'duckdb-node-eh.worker.cjs'), 'module.exports = "node worker";');
   return { dist, out, root };
 }
 
 test('writes the engine files named by the package version', async () => {
   const { dist, out, root } = fakeDist();
   const names = await buildEngineAssets({ distDir: dist, outDir: out, extensions: exts(root) });
-  expect([...names].sort()).toEqual([...engineAssetNames('site'), ...engineAssetNames('local')].sort());
+  const node = engineNodeAssetNames();
+  expect([...names].sort()).toEqual(
+    [...engineAssetNames('site'), ...engineAssetNames('local'), node.bindings, node.worker].sort(),
+  );
+  expect(readFileSync(join(out, node.bindings), 'utf8')).toBe('module.exports = "bindings";');
+  expect(readFileSync(join(out, node.worker), 'utf8')).toBe('module.exports = "node worker";');
   expect(readFileSync(join(out, engineExtensionName('site', 'parquet')))).toEqual(Buffer.from(PQ));
   expect(readFileSync(join(out, `duckdb.${ENGINE_VERSION}.wasm`))).toEqual(
     readFileSync(join(dist, 'duckdb-eh.wasm')),

@@ -34,6 +34,15 @@ export function engineAssetNames(format: 'local' | 'site'): string[] {
   return [...core, ...ENGINE_EXTENSIONS.map((e) => engineExtensionName(format, e))];
 }
 
+/**
+ * The DuckDB-WASM Node build the host runs: the `AsyncDuckDB` bindings and the worker, named by engine version.
+ * Shipped in the viewer's assets folder, never copied into a report.
+ */
+export function engineNodeAssetNames(): { bindings: string; worker: string } {
+  const base = `duckdb.${ENGINE_VERSION}`;
+  return { bindings: `${base}.node.cjs`, worker: `${base}.node.worker.cjs` };
+}
+
 /** The keys under which the `local` wrappers push the gzipped WASM and the worker onto `__OH__`. */
 export const ENGINE_WASM_KEY = 'engine/wasm.gz';
 export const ENGINE_WORKER_KEY = 'engine/worker';

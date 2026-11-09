@@ -4,6 +4,7 @@
 // A `site` report serves duckdb.<v>.wasm and duckdb.<v>.worker.js as they are. A `local` report opens from file://,
 // where fetch is blocked, so it loads the same bytes as classic scripts that push base64 onto `__OH__`: the
 // WASM gzipped at level 9, the worker as it is.
+// The host's DuckDB-WASM Node build (duckdb.<v>.node.cjs, duckdb.<v>.node.worker.cjs) is copied as it is; no report carries it.
 // The extensions are the officially signed binaries for the engine's DuckDB core version, downloaded from
 // extensions.duckdb.org at build time into the git-ignored `.cache/duckdb-extensions/`, checked against the SHA-256
 // pinned in scripts/duckdb-extensions.json, and reused from the cache while they verify. Set
@@ -23,10 +24,13 @@ import {
   engineAssetNames,
   engineExtensionKey,
   engineExtensionName,
+  engineNodeAssetNames,
 } from '../src/format/engine.js';
 
 const WASM = 'duckdb-eh.wasm';
 const WORKER = 'duckdb-browser-eh.worker.js';
+const NODE_BINDINGS = 'duckdb-node.cjs';
+const NODE_WORKER = 'duckdb-node-eh.worker.cjs';
 
 function packageDist(): string {
   const require = createRequire(import.meta.url);
@@ -109,7 +113,7 @@ export async function obtainExtensions(
   return out;
 }
 
-/** Writes the engine files (WASM, worker, extensions; plain and wrapped) into `outDir`; returns their names. `distDir` defaults to the installed package's. */
+/** Writes the engine files (WASM, worker, extensions; plain and wrapped; the host's two Node files) into `outDir`; returns their names. `distDir` defaults to the installed package's. */
 export async function buildEngineAssets(opts: {
   distDir?: string;
   outDir: string;
@@ -125,7 +129,10 @@ export async function buildEngineAssets(opts: {
   const wasm = readFileSync(join(distDir, WASM));
   writeFileSync(join(opts.outDir, wrapWasm), push(ENGINE_WASM_KEY, gzipSync(wasm, { level: 9 })));
   writeFileSync(join(opts.outDir, wrapWorker), push(ENGINE_WORKER_KEY, readFileSync(join(distDir, WORKER))));
-  const names = [plainWasm, plainWorker, wrapWasm, wrapWorker];
+  const node = engineNodeAssetNames();
+  copyFileSync(join(distDir, NODE_BINDINGS), join(opts.outDir, node.bindings));
+  copyFileSync(join(distDir, NODE_WORKER), join(opts.outDir, node.worker));
+  const names = [plainWasm, plainWorker, wrapWasm, wrapWorker, node.bindings, node.worker];
   for (const ext of ENGINE_EXTENSIONS) {
     const site = engineExtensionName('site', ext);
     const local = engineExtensionName('local', ext);

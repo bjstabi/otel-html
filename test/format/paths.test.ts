@@ -45,7 +45,7 @@ describe('partition paths', () => {
   });
 
   test('ENGINE_ASSET_RE', () => {
-    for (const s of ['wasm', 'worker.js', 'wasm.gz.b64.js', 'worker.b64.js']) {
+    for (const s of ['wasm', 'worker.js', 'wasm.gz.b64.js', 'worker.b64.js', 'node.cjs', 'node.worker.cjs']) {
       expect(ENGINE_ASSET_RE.test(`assets/duckdb.1.4.1-abc.${s}`)).toBe(true);
     }
     for (const e of ['parquet', 'json']) {
