@@ -215,6 +215,8 @@ export const METRICS_COUNT = 10;
  * (plan 3, PR 6) the interactive median is 3.9 s, whose double (7.9 s) is the budget (#229; the added time is the Metrics frame), and the
  * trace click, now timed to Logs and Metrics, takes 148 ms.
  */
+/** The host's Traces explorer on `scale`: twice the median of three runs (346, 365, 359 ms), rounded up to 50 (R85). */
+export const HOST_EXPLORER_BUDGET_MS = 750;
 export const FUSION_INTERACTIVE_BUDGET_MS = 7900;
 export const FUSION_SELECTION_BUDGET_MS = 300;
 

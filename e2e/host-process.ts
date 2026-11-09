@@ -26,7 +26,7 @@ function exited(child: ChildProcess, ms: number): Promise<boolean> {
 export async function startHost(
   report: string,
   args: readonly string[] = [],
-): Promise<{ url: string; stderr(): string; close(): Promise<void> }> {
+): Promise<{ url: string; pid: number; stderr(): string; close(): Promise<void> }> {
   // The test's own OTLP endpoint must not leak into the host: it would export its own spans there.
   const env = Object.fromEntries(
     Object.entries(process.env).filter(([k]) => !k.startsWith('OTEL_EXPORTER_OTLP_')),
@@ -79,5 +79,5 @@ export async function startHost(
     await close();
     throw e;
   });
-  return { url, stderr: () => err, close };
+  return { url, pid: child.pid ?? 0, stderr: () => err, close };
 }

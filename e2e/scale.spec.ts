@@ -1,4 +1,6 @@
+import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import type { Page } from '@playwright/test';
 import { wantsAsset } from '../src/writer/viewer-assets.js';
 import { LOG_STEP_NS, LOGS_PER_TRACE_SLOT, scaleLogTrace } from '../test-support/scale-logs.js';
@@ -6,6 +8,7 @@ import { scaleMetricName } from '../test-support/scale-metrics.js';
 import {
   FUSION_INTERACTIVE_BUDGET_MS,
   FUSION_SELECTION_BUDGET_MS,
+  HOST_EXPLORER_BUDGET_MS,
   PORT_ENV,
   perfFactor,
   reportDir,
@@ -22,6 +25,7 @@ import {
   scaleTraceId,
   writerBuildHash,
 } from './fixture.js';
+import { startHost } from './host-process.js';
 import { ensureMetricsScaleReport } from './metrics-scale.js';
 import { REQUESTS_PATH, type RequestRecord } from './static-server.js';
 import { expect, test } from './test.js';
@@ -216,6 +220,73 @@ for (const name of ['scale', 'many'] as const) {
   );
 }
 
+/**
+ * A facet toggle is timed from the click to the next frame after the result count changed.
+ */
+function toggleMs(page: Page, service: string): Promise<number> {
+  return page.evaluate(async (svc) => {
+    const row = document.querySelector(`[data-testid="facet-row:service.name:${svc}"]`);
+    const only = row?.querySelector<HTMLButtonElement>('button[aria-label^="Only "]');
+    const out = [...document.querySelectorAll('main output')].find((o) =>
+      /\bspans\b/.test(o.textContent ?? ''),
+    );
+    if (!only || !out) throw new Error('facet row or count output not found');
+    const before = out.textContent;
+    const t = performance.now();
+    return await new Promise<number>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('the count never changed')), 10_000);
+      const obs = new MutationObserver(() => {
+        if (out.textContent === before) return;
+        obs.disconnect();
+        clearTimeout(timer);
+        requestAnimationFrame(() => resolve(performance.now() - t));
+      });
+      obs.observe(out, { subtree: true, childList: true, characterData: true });
+      only.click();
+    });
+  }, service);
+}
+
+async function clearFilters(page: Page): Promise<void> {
+  const count = page.getByRole('main').locator('output', { hasText: /\bspans\b/ });
+  await page.getByRole('button', { name: 'Clear filters' }).click();
+  await expect(count).toHaveText(new RegExp(`^${SCALE_SPAN_COUNT} spans`));
+  // The cleared view keeps rendering (100k-row query, grid, charts) after its count changes. Wait until the main
+  // thread is quiet, so the next timed toggle measures its own latency and not the tail of this one.
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        const deadline = performance.now() + 5_000;
+        let last = performance.now();
+        let quiet = 0;
+        const tick = (now: number): void => {
+          quiet = now - last < 25 ? quiet + 1 : 0;
+          last = now;
+          if (quiet >= 3 || now > deadline) resolve();
+          else requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      }),
+  );
+}
+
+/** Timed toggles after an untimed first toggle of each of the two services; the samples of the timed ones. */
+async function facetSamples(page: Page): Promise<number[]> {
+  const count = page.getByRole('main').locator('output', { hasText: /\bspans\b/ });
+  // Both services the timed toggles alternate between get an untimed toggle first.
+  for (const service of SCALE_SERVICES.slice(0, 2)) {
+    await toggleMs(page, service);
+    await expect(count).toHaveText(new RegExp(`^${PER_SERVICE} spans`));
+    await clearFilters(page);
+  }
+  const samples: number[] = [];
+  for (let i = 0; i < FACET_SAMPLES; i++) {
+    samples.push(await toggleMs(page, SCALE_SERVICES[i % 2] ?? SERVICE));
+    await clearFilters(page);
+  }
+  return samples;
+}
+
 test(
   `100k spans: a facet toggle repaints within ${FACET_BUDGET_MS} ms (median)`,
   PERF_HTTP,
@@ -225,65 +296,9 @@ test(
     await page.goto(`${reportUrl('scale')}/index.html#/traces`);
     await expect(count).toHaveText(new RegExp(`^${SCALE_SPAN_COUNT} spans`), { timeout: 30_000 });
 
-    // A facet toggle is timed from the click to the next frame after the result count changed. The first toggle
-    // pays for JIT warm-up, the first OTTL compile and the first chart build, so it is untimed; the budget applies to
-    // the median of the toggles after it.
-    const toggleMs = (service: string): Promise<number> =>
-      page.evaluate(async (svc) => {
-        const row = document.querySelector(`[data-testid="facet-row:service.name:${svc}"]`);
-        const only = row?.querySelector<HTMLButtonElement>('button[aria-label^="Only "]');
-        const out = [...document.querySelectorAll('main output')].find((o) =>
-          /\bspans\b/.test(o.textContent ?? ''),
-        );
-        if (!only || !out) throw new Error('facet row or count output not found');
-        const before = out.textContent;
-        const t = performance.now();
-        return await new Promise<number>((resolve, reject) => {
-          const timer = setTimeout(() => reject(new Error('the count never changed')), 10_000);
-          const obs = new MutationObserver(() => {
-            if (out.textContent === before) return;
-            obs.disconnect();
-            clearTimeout(timer);
-            requestAnimationFrame(() => resolve(performance.now() - t));
-          });
-          obs.observe(out, { subtree: true, childList: true, characterData: true });
-          only.click();
-        });
-      }, service);
-    const clearFilters = async (): Promise<void> => {
-      await page.getByRole('button', { name: 'Clear filters' }).click();
-      await expect(count).toHaveText(new RegExp(`^${SCALE_SPAN_COUNT} spans`));
-      // The cleared view keeps rendering (100k-row query, grid, charts) after its count changes. Wait until the main
-      // thread is quiet, so the next timed toggle measures its own latency and not the tail of this one.
-      await page.evaluate(
-        () =>
-          new Promise<void>((resolve) => {
-            const deadline = performance.now() + 5_000;
-            let last = performance.now();
-            let quiet = 0;
-            const tick = (now: number): void => {
-              quiet = now - last < 25 ? quiet + 1 : 0;
-              last = now;
-              if (quiet >= 3 || now > deadline) resolve();
-              else requestAnimationFrame(tick);
-            };
-            requestAnimationFrame(tick);
-          }),
-      );
-    };
-
-    // Both services the timed toggles alternate between get an untimed toggle first.
-    for (const service of SCALE_SERVICES.slice(0, 2)) {
-      await toggleMs(service);
-      await expect(count).toHaveText(new RegExp(`^${PER_SERVICE} spans`));
-      await clearFilters();
-    }
-
-    const samples: number[] = [];
-    for (let i = 0; i < FACET_SAMPLES; i++) {
-      samples.push(await toggleMs(SCALE_SERVICES[i % 2] ?? SERVICE));
-      await clearFilters();
-    }
+    // The first toggle pays for JIT warm-up, the first OTTL compile and the first chart build, so it is untimed; the
+    // budget applies to the median of the toggles after it.
+    const samples = await facetSamples(page);
     const facetMs = median(samples);
     const worstMs = Math.max(...samples);
     report(
@@ -294,6 +309,66 @@ test(
     expect(worstMs).toBeLessThan(FACET_MAX_BUDGET_MS * factor);
   },
 );
+
+test.describe('host', () => {
+  test(
+    `100k spans (scale, host): the explorer is interactive within ${HOST_EXPLORER_BUDGET_MS} ms (median)`,
+    PERF_HTTP,
+    async ({ page, browserName }, testInfo) => {
+      const factor = perfFactor();
+      const host = await startHost(fileURLToPath(reportDir('scale', 'http')));
+      try {
+        // The served page asks the host: it requests no engine, worker or data file.
+        const forbidden: string[] = [];
+        page.on('request', (r) => {
+          if (
+            /\.parquet(\.js)?$|\.b64\.js$|\.wasm$|worker|\/data\/partitions\//.test(new URL(r.url()).pathname)
+          )
+            forbidden.push(r.url());
+        });
+        // After each load, the Services table: the hash changes and the first body row is timed in the page.
+        const { loads, afters } = await loadSamples(page, `${host.url}/index.html#/traces`, 'explorer', (p) =>
+          p.evaluate(async () => {
+            const t = performance.now();
+            location.hash = '#/traces/services';
+            return await new Promise<number>((resolve, reject) => {
+              const timer = setTimeout(() => reject(new Error('no Services row')), 30_000);
+              const check = (): boolean => {
+                if (document.querySelectorAll('main table tbody tr').length < 1) return false;
+                clearTimeout(timer);
+                requestAnimationFrame(() => resolve(performance.now() - t));
+                return true;
+              };
+              if (check()) return;
+              const mo = new MutationObserver(() => {
+                if (check()) mo.disconnect();
+              });
+              mo.observe(document, { childList: true, subtree: true });
+            });
+          }),
+        );
+        const ms = median(loads);
+        await page.goto(`${host.url}/index.html#/traces`);
+        await expect(page.getByRole('main').locator('output', { hasText: /\bspans\b/ })).toHaveText(
+          new RegExp(`^${SCALE_SPAN_COUNT} spans`),
+          { timeout: 30_000 },
+        );
+        const samples = await facetSamples(page);
+        const rssKb = Number(
+          execFileSync('ps', ['-o', 'rss=', '-p', String(host.pid)], { encoding: 'utf8' }),
+        );
+        report(
+          testInfo,
+          `PERF scale host explorer ${testInfo.project.name} (${browserName}): interactive median ${ms.toFixed(0)} ms, samples [${list(loads)}], services row median ${median(afters).toFixed(0)} ms [${list(afters)}], facet toggle median ${median(samples).toFixed(0)} ms max ${Math.max(...samples).toFixed(0)} ms [${list(samples)}], host RSS ${(rssKb / 1024).toFixed(0)} MB (budget ${HOST_EXPLORER_BUDGET_MS * factor}), factor ${factor}`,
+        );
+        expect(forbidden, 'the served viewer requested the engine or the data').toEqual([]);
+        expect(ms).toBeLessThan(HOST_EXPLORER_BUDGET_MS * factor);
+      } finally {
+        await host.close();
+      }
+    },
+  );
+});
 
 /** Warn and above, as the facet's "And above" writes it. */
 const WARN_UP = 'log.severity_number >= SEVERITY_NUMBER_WARN';
