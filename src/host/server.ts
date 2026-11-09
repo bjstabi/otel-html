@@ -74,6 +74,35 @@ export function allowedHosts(ip: string, hostText: string, port: number): Readon
 
 class BodyTooLarge extends Error {}
 
+const DRAIN_GRACE_MS = 2_000;
+const DRAIN_MAX_BYTES = 16 * 1_048_576;
+
+/**
+ * After a 413: read and discard the rest of the body so the client (on Windows especially) can read the response
+ * before the connection closes; close when the request ends, after a grace, or past a further cap, so a client that
+ * never stops sending cannot hold the socket.
+ */
+function drainThenClose(req: IncomingMessage, res: ServerResponse): void {
+  let discarded = 0;
+  const done = (): void => {
+    clearTimeout(timer);
+    req.destroy();
+  };
+  const timer = setTimeout(done, DRAIN_GRACE_MS);
+  timer.unref();
+  req.on('data', (c: Buffer) => {
+    discarded += c.length;
+    if (discarded > DRAIN_MAX_BYTES) done();
+  });
+  req.once('end', () => {
+    if (res.writableFinished) done();
+    else res.once('finish', done);
+  });
+  req.once('close', () => clearTimeout(timer));
+  req.on('error', () => {});
+  req.resume();
+}
+
 /** The request body, counted against the cap while it streams; nothing past the cap is kept. */
 async function readCapped(req: IncomingMessage, limit: number): Promise<Buffer> {
   const declared = Number(req.headers['content-length']);
@@ -155,8 +184,8 @@ export function hostHandler(
         if (e instanceof BodyTooLarge) {
           status = 413;
           logger.warn(`413 the request body exceeds ${MAX_QUERY_BODY_BYTES} bytes`);
-          res.setHeader('connection', 'close');
-          text(req, res, 413, `the request body exceeds ${MAX_QUERY_BODY_BYTES} bytes`, () => req.destroy());
+          text(req, res, 413, `the request body exceeds ${MAX_QUERY_BODY_BYTES} bytes`);
+          drainThenClose(req, res);
           return;
         }
         status = 0; // the client went away
