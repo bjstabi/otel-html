@@ -666,6 +666,8 @@ Config is a YAML or JSON file (`otel-html.yaml` by default), or an object passed
 
 ## Development
 
+Clone with `git clone --single-branch https://github.com/bjstabi/otel-html.git` (about 4 MB of git data). A plain clone also fetches the `gh-pages` branch, the published report site (about 150 MB), which development never needs. `--single-branch` fetches `main` only; to fetch every other branch too but still not `gh-pages` (git 2.29 or later), run `git config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'` and then `git config --add remote.origin.fetch '^refs/heads/gh-pages'`. An existing clone drops the site the same way: add that second refspec, delete the branch (`git branch -rd origin/gh-pages`, and `git branch -D gh-pages` if you ever checked it out), then `git reflog expire --expire=now --all` and `git gc --prune=now`, while no other git command runs. The last two also discard every reflog (the way back from a recent reset or rebase) and other unreachable objects, such as dropped stashes.
+
 Tasks are defined in `mise.toml`; CI runs the same ones. The `linux-x64`, `linux-arm64` and `windows-x64` binaries are built and smoke-tested on every PR by the `binary` job (`test/cli/binary.test.ts` against the compiled binary: `convert`, `serve` over HTTP and gRPC, `host` answering one Arrow query, `ci context`, `run`, a SIGINT exit 0 and a bad-port exit 2), and a step that runs the binary outside the checkout (site and local conversions, a compaction, `host`); the release workflow smoke-tests the artefacts it uploads. Tasks with `sources` are skipped while up to date; `mise run --force <task>` overrides.
 
 ### Test and viewer spans
