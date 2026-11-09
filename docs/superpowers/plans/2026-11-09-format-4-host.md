@@ -354,3 +354,61 @@ Branch `docs/format-4-host-record` from `feat/format-4`. Title: `test(e2e): host
 ### Plan close-out
 
 - [ ] `mise run check`; PR; merge. Post the summary the unattended process asks for: each PR's number, title and measurements (the cancel latency and restart time of PR 1, PR 4's medians and budget, the host RSS); issues opened (D41's follow-up, D50's if any); anything stopped on. This session ends; the next `/format-4` is session F (the release PR), as the kickoff rules say.
+
+## Record: rulings and notes for the release
+
+Written after plan 4 finished (PRs #245, #247, #249 and this one, branch `feat/format-4`), because the rulings lived
+only in a git-ignored ledger. It continues plan 3's numbering (R93 to R114). Where this record and the spec disagree,
+this record wins; where it and the earlier records disagree, this record wins for what it names. Decisions D35 to D50
+above stand except where a ruling here says otherwise.
+
+### Rulings
+
+Format: `R<n>`: what was decided; why. The source is named in the row when it is not a plain implementation choice.
+
+| R    | Decision | Why |
+| ---- | -------- | --- |
+| R115 | The host loads the two signed extension files the viewer ships (`parquet`, `json`) before the views and the policy, through a stand-in for `XMLHttpRequest` in the worker shim that serves only those two names. D36's "built into this engine build" is wrong for `json`. | The e2e failed on `json_extract_string` in the Node engine (`parquet` had worked through autoload). Loading before autoload is turned off and the configuration is locked keeps D37's policy unchanged; the Bun binary embeds the two files (`binary.test.ts` 8/8). |
+| R116 | The policy sets `allowed_paths = [<every manifest-listed file>]` instead of D37's `allowed_directories = ['data/partitions/']`. | `allowed_directories` is a prefix rule resolved against the process's working directory, so it exposed files the manifest does not list (found by the PR 1 branch review on Opus 5.5). Exact paths keep to spec §8's "only the views". |
+| R117 | A client statement is refused if it holds more than one statement: `conn.prepare` of the wrapped SQL (`Cannot prepare multiple statements at once`) runs before the pending query, in addition to D37's wrap. | The wrap alone was escapable with `)` then `;` (verified accepted before the fix). |
+| R118 | Opening a worker has its own deadline (`OPEN_DEADLINE_MS`, 30 s), independent of the statement timeout; a restart that misses it answers 503 "could not be restarted" and is logged as a warning. | On CI (Ubuntu and Windows) a real reopen took over the old `timeout + HUNG_GRACE_MS` (1,050 ms in the tests) and every restart failed. |
+| R119 | `apache-arrow` is bundled into the engine files the host loads, so the Bun binary needs no `node_modules`. | Maintainer (2026-11-09), Task 2.4's stop-and-ask: the binary failed to find `apache-arrow`; bundling was the recommended option. |
+| R120 | On a loopback bind the host answers 403 to a request whose `Host` header names anything other than a loopback address or `localhost`, judged from the bound address with a `BlockList`; 415 to a body that is not JSON; `nosniff` on every response. | DNS rebinding would defeat the README's only access control (bind to loopback), and a form post from another site would otherwise reach `/query` without CORS preflight. |
+| R121 | On Ctrl-C or SIGTERM the host closes the engine first, so running and queued statements answer 503 "the host is closed" (unlogged), then it closes connections; a second Ctrl-C exits 130, during start-up too. A statement interrupted by the close answers 503, not 400. | Before the fix a statement in flight held the process for about 22 s, and the interrupted statement answered 400 "Cannot read properties of undefined". |
+| R122 | A 413 drains the rest of the request body before the socket closes (bounded at 2 s or 16 MiB more). | On Windows the reset reached the client before the response did (`ECONNRESET` on CI). |
+| R123 | On a served report, aggregates whose filter leaves a residual term are refused with D43's message, and so are traces-mode row queries that go through `withIds`, which also needs the D5 temp table. Conditions on `log.body.string` (the body `contains`/`matches` tokens and the Logs pattern click) have no SQL form, so they are refused there; the README says so and #248 tracks translating them. | Translating `IsMatch(body.string)` to SQL changes OTTL-to-SQL semantics (JavaScript against RE2 regexes) for the browser engine too and needs the equivalence suite; out of this plan's scope. |
+| R124 | Host failures are worded for the reader (`describeHostFailure` in `mosaic.ts`): a 400 keeps DuckDB's message; 413, 503 and 504 name `--max-result-bytes`, busy or stopping, and `--timeout`, followed by the host's own text; a network failure reads "the host did not answer (is otel-html host still running?)". The error code stays `invalid-report`. | Each of those statuses has more than one cause on the host (a request body over 1 MiB is also 413; a restarted engine is also 504), and no better `ErrorCode` exists. |
+| R125 | `e2e/host.spec.ts` runs in order in one worker per browser project (`mode: 'default'`), and its comparison pages over file:// wait 15 s for the browser engine's cold start. | Ten local workers each starting hosts and browsers exhausted the container's process limit (`pids.max` 2048). On CI the comparison page's cold start once passed the 5 s default (the served table had drawn). |
+| R126 | D50's outcome: the host's Traces explorer on `scale` has a median of 359 ms (runs 346, 365, 359), so the budget is 750 ms (twice the median rounded up to 50, R85's rule). It is below the browser's budget (2,150 ms; the browser's median here is 1,230 ms), so no `@duckdb/node-api` issue is opened and the WASM build stays the only engine. | The host's engine starts once per process; the browser pays the engine start on every load. |
+
+### Spec deviations
+
+Spec file: `docs/superpowers/specs/2026-11-06-parquet-duckdb-format-4-design.md`. Each was checked against its text.
+
+- Line 325 (§8, "DuckDB opened read-only"): DuckDB-WASM has no read-only open for registered files. The policy is the wrap (one `SELECT` per request, R117), the settings of D37 with `allowed_paths` (R116), and the views as the only DDL. A query that reads a local file, writes, attaches, loads or sets is refused (the D37 tests).
+- Lines 332-334 (§8, "`@duckdb/node-api` as an optional peer dependency for speed; the builder measures and picks the default"): measured, and not added (R126). The WASM build in a Node worker is the default and the only engine.
+- Lines 334-335 (§8, the receiver exposing the endpoint over the report it writes): deferred to #246 with serving a report that is still being written (D41), because the views would have to follow the manifest at every flush.
+- Lines 337-338 (§8, the meta tag): as written. The tag's content is `query`, the endpoint resolved against the page's URL (D43).
+
+### Measured figures
+
+| what | figure | where |
+| ---- | ------ | ----- |
+| cancel at a 300 ms timeout | 504 at 330–335 ms; the next statement 4–5 ms later | PR #245 |
+| result cap at 1 MB | 413 in about 114 ms | PR #245 |
+| a real worker restart | about 530 ms | PR #245 |
+| 300 concurrent `SELECT 1` | 256 answered, 44 refused with 503 (`MAX_QUEUED` 256) | PR #245 |
+| SIGINT to exit with a statement in flight | 22 ms (about 22 s before R121) | PR #247 |
+| the binary, launch to the serving line | 866–870 ms | PR #247 |
+| host, Traces explorer interactive on `scale` | median 359 ms (346, 365, 359), budget 750 ms | this PR |
+| host, the Services table's first row after the hash change | about 46 ms | this PR |
+| host, a facet toggle on `scale` | median 68 ms, max 71 ms (no budget; the browser's is 140 ms) | this PR |
+| host RSS after the loads and toggles | 563–576 MB | this PR |
+
+### Notes for the release (session F)
+
+1. The README's `host` section is part of the release notes: the command, its flags (`--host`, `--port`, `--timeout` up to 24 h, `--max-result-bytes` up to 4 GiB), the policy, the status codes, the refused conditions (R123) and the binaries.
+2. The frozen format-4 fixture should get a `host` smoke when it is added: one query through `otel-html host` over the frozen report, in `binary.test.ts` or `e2e/frozen.spec.ts`.
+3. The release PR body carries plan 4's host figures from the table above: the `scale` median and budget (R126), the binary's start, and the cancel and restart figures.
+4. Open follow-ups from plan 4: #246 (serving a report being written; the receiver exposing the endpoint), #248 (body and pattern conditions on a served report).
+5. The host's RSS (about 570 MB on `scale`) is the WASM engine's memory plus the worker; it has no bound and no test. If the release wants one, measure it on `many` first.
