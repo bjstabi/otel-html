@@ -458,7 +458,7 @@ async function buildUnfinishedReport(): Promise<void> {
  * `otel-html merge`, which writes the current viewer beside the data (D12: the viewer reads format 4 only).
  */
 async function buildFrozenReports(): Promise<void> {
-  for (const n of [1, 2, 3] as const) {
+  for (const n of [1, 2, 3, 4] as const) {
     await cli([
       'merge',
       fileURLToPath(new URL(`../fixtures/reports/format-${n}`, import.meta.url)),
@@ -484,6 +484,7 @@ const SITE_REPORTS: readonly ReportName[] = [
   'frozen-format-1',
   'frozen-format-2',
   'frozen-format-3',
+  'frozen-format-4',
   ...FIXTURE_REPORTS,
 ];
 

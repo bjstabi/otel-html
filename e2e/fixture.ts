@@ -137,7 +137,8 @@ export type ReportName =
   | 'metrics-scale'
   | 'frozen-format-1'
   | 'frozen-format-2'
-  | 'frozen-format-3';
+  | 'frozen-format-3'
+  | 'frozen-format-4';
 
 /**
  * The metrics scale workload (spec §7): 200 metrics × 1,000 series × 360 points (1 h at a 10 s interval). The report

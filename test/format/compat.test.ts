@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { mergeWith } from '../../src/api/convert.js';
 import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
-import { parseManifest } from '../../src/format/manifest.js';
+import { parseAnyManifest } from '../../src/format/manifest.js';
 import { MANIFEST_KEY } from '../../src/format/paths.js';
 import { createTestWriter, type TestWriter } from '../../test-support/writer-deps.js';
 import { manifestOf } from '../writer/helpers.js';
@@ -25,13 +25,14 @@ async function copyFixtureReport(w: TestWriter, name: string) {
   }
   const text = w.fs.snapshot().get(`${name}/data/manifest.js`);
   if (text === undefined) throw new Error('no manifest');
-  return parseManifest(reviveDataJson(unwrapDataFile(text, MANIFEST_KEY)));
+  return parseAnyManifest(reviveDataJson(unwrapDataFile(text, MANIFEST_KEY)));
 }
 
 describe.each([
   ['format-1', 1],
   ['format-2', 2],
   ['format-3', 3],
+  ['format-4', 4],
 ])('%s', (name, version) => {
   test('merge reads it and the totals survive', async () => {
     const w = createTestWriter();
