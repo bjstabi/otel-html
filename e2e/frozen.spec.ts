@@ -18,7 +18,8 @@ function groupedCount(n: number): RegExp {
 
 for (const n of [1, 2, 3, 4] as const) {
   const report = `frozen-format-${n}` as const;
-  const title = `the frozen format-${n} report opens after merge with the current viewer: totals, a flame graph and a metric chart`;
+  const via = n === 4 ? 'upgrade' : 'merge';
+  const title = `the frozen format-${n} report opens after ${via} with the current viewer: totals, a flame graph and a metric chart`;
   test(title, HTTP, async ({ page, reportUrl }) => {
     const problems = watchProblems(page);
     const spans = await manifestSpans(report);

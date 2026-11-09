@@ -5,8 +5,9 @@ import { mergeWith } from '../../src/api/convert.js';
 import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
 import { isV4, parseAnyManifest } from '../../src/format/manifest.js';
 import { TABLES } from '../../src/format/parquet/columns.js';
-import { MANIFEST_KEY } from '../../src/format/paths.js';
+import { MANIFEST_KEY, partitionKey, partitionWrapperPath } from '../../src/format/paths.js';
 import { createDuckDbDataSource } from '../../src/viewer/data/duckdb-source.js';
+import { fromBase64 } from '../../src/viewer/data/engine/bytes.js';
 import { createCoordinator, mosaicQueryEngine } from '../../src/viewer/data/mosaic.js';
 import type { SpanQuery, TraceRow } from '../../src/viewer/data/results.js';
 import { type Format4Fixture, openFixtureDb } from '../../test-support/format4-fixture.js';
@@ -93,6 +94,42 @@ describe.each([
       const trace = await ds.getTrace(first.traceId);
       expect(trace.spans).toHaveLength(first.spans);
       expect(trace.tree.roots.length).toBeGreaterThan(0);
+    } finally {
+      await ds.close();
+      db.close();
+    }
+  });
+});
+
+describe('the viewer opens the frozen format-4 report as written', () => {
+  test('its manifest and .parquet.js wrappers are read directly, as after `otel-html upgrade` of a local report', async () => {
+    const root = join(REPORTS, 'format-4');
+    const manifest = parseAnyManifest(
+      reviveDataJson(unwrapDataFile(readFileSync(join(root, 'data/manifest.js'), 'utf8'), MANIFEST_KEY)),
+    );
+    if (!isV4(manifest)) throw new Error('the frozen report is not format 4');
+    const files = new Map<string, Uint8Array>();
+    for (const partition of manifest.partitions) {
+      for (const table of TABLES) {
+        const file = partition.files[table];
+        if (file === undefined) continue;
+        const wrapper = readFileSync(join(root, partitionWrapperPath(partition.n, table)), 'utf8');
+        const decoded = fromBase64(unwrapDataFile(wrapper, partitionKey(partition.n, table)) as string);
+        expect(Buffer.from(decoded).equals(readFileSync(join(root, file.path)))).toBe(true);
+        files.set(file.path, decoded);
+      }
+    }
+    expect(files.size).toBeGreaterThan(0);
+    const db = await openFixtureDb({ manifest, files, epoch: BigInt(manifest.epochUnixNano) });
+    const ds = createDuckDbDataSource({
+      engine: mosaicQueryEngine(createCoordinator(db.connector, silentLogger), db),
+      manifest,
+    });
+    try {
+      expect((await ds.querySpans(query({}))).total).toBe(1228);
+      expect((await ds.querySpans(query({ mode: 'traces' }))).total).toBe(FROZEN_TRACES);
+      // 10 metrics, counted once from the fixture (the points side of the Parquet files).
+      expect((await ds.metricCatalog()).entries).toHaveLength(10);
     } finally {
       await ds.close();
       db.close();
