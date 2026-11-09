@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { fromJsonString, toBinary } from '@bufbuild/protobuf';
 import { credentials, makeGenericClientConstructor } from '@grpc/grpc-js';
+import { tableFromIPC } from 'apache-arrow';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import pkg from '../../package.json' with { type: 'json' };
 import { ExportTraceServiceRequestSchema } from '../../src/model/gen/opentelemetry/proto/collector/trace/v1/trace_service_pb.js';
@@ -206,6 +207,31 @@ describe.skipIf(binaryEnv === undefined)('compiled binary', () => {
     // The span-name statistics of the partition files list both spans.
     expect(manifest).toContain('over-http');
     expect(manifest).toContain('over-grpc');
+  }, 60_000);
+
+  test('host serves a converted report: one Arrow query answers, SIGINT exits 0', async () => {
+    const out = join(dir, 'host-report');
+    await run(binary, ['convert', 'fixtures/small.otlp.json', '--out', out]);
+    let count = -1;
+    const result = await serveOnce(
+      binary,
+      ['host', out, '--port', '0'],
+      /serving \S+ at (http:\/\/\S+?)\/ \(/,
+      async (m) => {
+        const res = await fetch(`${m[1]}/query`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ type: 'arrow', sql: 'SELECT count(*) AS n FROM spans' }),
+        });
+        expect(res.status).toBe(200);
+        expect(res.headers.get('content-type')).toBe('application/vnd.apache.arrow.stream');
+        const table = tableFromIPC(new Uint8Array(await res.arrayBuffer()));
+        count = Number(table.getChildAt(0)?.get(0));
+      },
+    );
+    expect(count).toBe(1228); // the spans of fixtures/small.otlp.json
+    if (process.platform === 'win32') return;
+    expect(result.code).toBe(0);
   }, 60_000);
 
   test('a bad port is a usage error: exit 2, the reason on stderr, nothing on stdout', async () => {

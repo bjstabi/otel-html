@@ -388,6 +388,18 @@ jobs:
           cd "$tmp"
           OTEL_HTML_FORMAT=site ./otel-html${{ matrix.ext }} convert in.otlp.json -o out
           test -s out/data/partitions/000000/spans.parquet
+          # D44: the host runs its DuckDB Node engine from files the binary carries (materialised to a temp folder), with
+          # no node_modules reachable: it must serve and answer one Arrow query.
+          ./otel-html${{ matrix.ext }} host out --port 0 > host.out 2>&1 &
+          host_pid=$!
+          for _ in $(seq 300); do grep -q '^serving ' host.out && break; sleep 0.1; done
+          addr="$(sed -n 's|^serving .* at \(http://[^/]*\)/.*|\1|p' host.out | head -n 1)"
+          test -n "$addr" || { cat host.out; kill "$host_pid" || true; exit 1; }
+          curl -sf -X POST -H 'content-type: application/json' \
+            --data '{"type":"arrow","sql":"SELECT count(*) AS n FROM spans"}' "$addr/query" -o q.arrow \
+            || { cat host.out; kill "$host_pid" || true; exit 1; }
+          test -s q.arrow
+          kill "$host_pid" || true
           # The engine's parquet and json extensions travel with the report, so it opens offline.
           test -s out/assets/parquet.*.duckdb_extension.wasm
           test -s out/assets/json.*.duckdb_extension.wasm
