@@ -5,10 +5,11 @@ import {
   ENGINE_VERSION,
   engineAssetNames,
   engineExtensionName,
+  engineNodeAssetNames,
 } from '../../src/format/engine.js';
 import { ENGINE_ASSET_RE } from '../../src/format/paths.js';
 import { openSession } from '../../src/writer/session.js';
-import { type ViewerAsset, withEngineFiles } from '../../src/writer/viewer-assets.js';
+import { type ViewerAsset, wantsAsset, withEngineFiles } from '../../src/writer/viewer-assets.js';
 import { openTestDb } from '../../test-support/duckdb-node.js';
 import { logRecord, logsRequest } from '../../test-support/otlp-builders.js';
 import { createTestWriter, otlp, testConfig } from '../../test-support/writer-deps.js';
@@ -59,6 +60,19 @@ describe('engine assets', () => {
       `duckdb.${ENGINE_VERSION}.parquet.ext.gz.b64.js`,
       `duckdb.${ENGINE_VERSION}.json.ext.gz.b64.js`,
     ]);
+  });
+
+  test("the host's Node files are named by version, match the pattern and no report format wants them", () => {
+    const node = engineNodeAssetNames();
+    expect(node).toEqual({
+      bindings: 'duckdb.1.32.0.node.cjs',
+      worker: 'duckdb.1.32.0.node.worker.cjs',
+    });
+    for (const n of Object.values(node)) {
+      expect(ENGINE_ASSET_RE.test(`assets/${n}`)).toBe(true);
+      expect(wantsAsset(`assets/${n}`, 'site')).toBe(false);
+      expect(wantsAsset(`assets/${n}`, 'local')).toBe(false);
+    }
   });
 
   test("every name matches the format's engine asset pattern", () => {

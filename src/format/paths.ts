@@ -81,9 +81,9 @@ const ENGINE_VERSION_SOURCE = '[0-9][A-Za-z0-9.-]*';
 export const ENGINE_VERSION_RE: RegExp = new RegExp(`^${ENGINE_VERSION_SOURCE}$`);
 
 /**
- * A DuckDB engine file under `assets/`: named by engine version, or a `site` report's extension binaries
+ * A DuckDB engine file under `assets/`: named by engine version (including the host's Node bindings and worker), or a `site` report's extension binaries
  * `<parquet|json>.<version>.duckdb_extension.wasm`.
  */
 export const ENGINE_ASSET_RE: RegExp = new RegExp(
-  `^assets/(?:duckdb\\.${ENGINE_VERSION_SOURCE}\\.(?:wasm|worker\\.js|wasm\\.gz\\.b64\\.js|worker\\.b64\\.js|(?:parquet|json)\\.ext\\.gz\\.b64\\.js)|(?:parquet|json)\\.${ENGINE_VERSION_SOURCE}\\.duckdb_extension\\.wasm)$`,
+  `^assets/(?:duckdb\\.${ENGINE_VERSION_SOURCE}\\.(?:wasm|worker\\.js|wasm\\.gz\\.b64\\.js|worker\\.b64\\.js|node\\.cjs|node\\.worker\\.cjs|(?:parquet|json)\\.ext\\.gz\\.b64\\.js)|(?:parquet|json)\\.${ENGINE_VERSION_SOURCE}\\.duckdb_extension\\.wasm)$`,
 );
