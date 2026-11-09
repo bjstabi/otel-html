@@ -47,7 +47,8 @@ const test = base.extend<{ served: string; servedDashboards: string }, { host: H
 
 // One worker per browser project: ten workers each starting hosts and browsers at once exhausts this machine's process
 // limit (browsers crash, hosts hang on start), and these tests share the worker-scoped hosts anyway.
-test.describe.configure({ mode: 'serial' });
+// `default`, not `serial`: in order in one worker, but a failure does not skip the rest.
+test.describe.configure({ mode: 'default' });
 
 function watchForbidden(page: import('@playwright/test').Page): string[] {
   const forbidden: string[] = [];
@@ -79,7 +80,8 @@ test('Traces explorer and the Services page equal the browser engine over the sa
   try {
     await local.goto(`${reportUrl('linked')}/index.html#/traces/services`);
     const table = local.getByRole('table', { name: 'Services' });
-    await expect(table.getByRole('row')).toHaveCount(3);
+    // A second page cold-starts the browser engine (WASM and extensions) beside the host; on a busy runner that passes 5 s.
+    await expect(table.getByRole('row')).toHaveCount(3, { timeout: 15_000 });
     expect(served$).toBe(await table.textContent());
   } finally {
     await local.close();
@@ -113,7 +115,7 @@ test('the Metrics Catalog equals the browser engine over the same report, and a 
   try {
     await local.goto(`${reportUrl('linked')}/index.html#/metrics/catalog`);
     const table = local.getByRole('grid', { name: 'Results' });
-    await expect(table.getByRole('row')).toHaveCount(METRICS_COUNT + 1);
+    await expect(table.getByRole('row')).toHaveCount(METRICS_COUNT + 1, { timeout: 15_000 });
     expect(served$).toBe(await table.textContent());
   } finally {
     await local.close();
