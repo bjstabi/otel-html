@@ -279,6 +279,46 @@ describe('close', () => {
     expect((error as HostError).status).toBe(503);
   });
 
+  it('answers 503 the host is closed, and logs no warn, for a statement running when close comes', async () => {
+    const e = await started({ timeoutMs: 60_000 });
+    const long = rejection(e.query(LONG));
+    await new Promise((r) => setTimeout(r, 1_500));
+    await e.close();
+    const error = await long;
+    expect(error).toBeInstanceOf(HostError);
+    expect((error as HostError).status).toBe(503);
+    expect((error as HostError).message).toBe('the host is closed');
+    expect(warnings).toEqual([]);
+  });
+
+  it('answers 503 when the poll of a closed worker throws before its exit is announced', async () => {
+    const log: string[] = [];
+    let terminated = false;
+    const db = fakeDb(
+      async () => {
+        await new Promise((r) => setTimeout(r, 5));
+        if (terminated) throw new TypeError('Cannot read properties of undefined (reading postMessage)');
+        return null;
+      },
+      log,
+      'only',
+    );
+    const real = db.terminate;
+    db.terminate = async () => {
+      terminated = true;
+      await real();
+    };
+    const e = await started({ timeoutMs: 60_000, open: async () => db });
+    const long = rejection(e.query('SELECT 1'));
+    await new Promise((r) => setTimeout(r, 50));
+    await e.close();
+    const error = await long;
+    expect(error).toBeInstanceOf(HostError);
+    expect((error as HostError).status).toBe(503);
+    expect((error as HostError).message).toBe('the host is closed');
+    expect(warnings).toEqual([]);
+  });
+
   it('does not wait for a hung statement', async () => {
     const e = await started({ timeoutMs: 60_000 });
     const long = rejection(
