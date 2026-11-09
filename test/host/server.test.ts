@@ -105,6 +105,37 @@ describe('POST /query', () => {
   });
 });
 
+describe('chunked bodies', () => {
+  it('delivers the 413 for a body that exceeds the cap while streaming', async () => {
+    const { base, w } = await serve();
+    const url = new URL(base);
+    const { connect } = await import('node:net');
+    const raw = await new Promise<string>((resolve, reject) => {
+      const s = connect(Number(url.port), url.hostname, () => {
+        s.write(
+          'POST /query HTTP/1.1\r\nhost: x\r\ncontent-type: application/json\r\ntransfer-encoding: chunked\r\n\r\n',
+        );
+        const chunk = 'x'.repeat(64 * 1024);
+        let i = 0;
+        const timer = setInterval(() => {
+          if (i++ >= 40 || s.destroyed) clearInterval(timer);
+          else s.write(`${chunk.length.toString(16)}\r\n${chunk}\r\n`);
+        }, 20);
+        s.once('close', () => clearInterval(timer));
+      });
+      let out = '';
+      s.on('data', (d) => {
+        out += String(d);
+      });
+      s.on('error', (e) => (out.startsWith('HTTP/1.1') ? resolve(out) : reject(e)));
+      s.on('close', () => resolve(out));
+    });
+    expect(raw.startsWith('HTTP/1.1 413')).toBe(true);
+    const spans = w.spans.filter((x) => x.name === 'host.query');
+    expect(spans.map((x) => x.attrs['otel_html.status'])).toEqual([413]);
+  });
+});
+
 describe('static routes', () => {
   it('serves the shell, assets and manifest only', async () => {
     const { base } = await serve();
@@ -137,7 +168,7 @@ describe('static routes', () => {
     for (const p of ['/../package.json', '/assets/..%2f..%2fpackage.json', '/%2e%2e/package.json']) {
       // fetch normalises dot segments, so send the raw request line too.
       expect((await fetch(base + p)).status).toBe(404);
-      const raw = await new Promise<string>((resolve) => {
+      const raw = await new Promise<string>((resolve, reject) => {
         import('node:net').then(({ connect }) => {
           const s = connect(Number(url.port), url.hostname, () =>
             s.write(`GET ${p} HTTP/1.1\r\nhost: x\r\nconnection: close\r\n\r\n`),
@@ -146,6 +177,7 @@ describe('static routes', () => {
           s.on('data', (d) => {
             out += String(d);
           });
+          s.on('error', reject);
           s.on('close', () => resolve(out));
         });
       });

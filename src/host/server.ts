@@ -29,6 +29,7 @@ export interface HostServerOptions {
   tracer: Tracer;
 }
 
+const FALLBACK_TYPE = 'application/octet-stream';
 const JS_TYPE = 'text/javascript; charset=utf-8';
 const HTML_TYPE = 'text/html; charset=utf-8';
 const MIME: Readonly<Record<string, string>> = {
@@ -43,7 +44,7 @@ const MIME: Readonly<Record<string, string>> = {
 
 function mimeOf(path: string): string {
   const ext = path.slice(path.lastIndexOf('.') + 1).toLowerCase();
-  return MIME[ext] ?? 'application/octet-stream';
+  return Object.hasOwn(MIME, ext) ? (MIME[ext] ?? FALLBACK_TYPE) : FALLBACK_TYPE;
 }
 
 class BodyTooLarge extends Error {}
@@ -54,7 +55,8 @@ async function readCapped(req: IncomingMessage, limit: number): Promise<Buffer> 
   if (declared > limit) throw new BodyTooLarge();
   const chunks: Buffer[] = [];
   let total = 0;
-  for await (const chunk of req) {
+  // destroyOnReturn: false, so stopping at the cap leaves the socket for the 413.
+  for await (const chunk of req.iterator({ destroyOnReturn: false })) {
     const buf: Buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
     total += buf.length;
     if (total > limit) throw new BodyTooLarge();
@@ -123,6 +125,7 @@ export function hostHandler(
         if (e instanceof BodyTooLarge) {
           status = 413;
           logger.warn('host query refused', { status, reason: 'body over the cap' });
+          res.setHeader('connection', 'close');
           text(req, res, 413, `the request body exceeds ${MAX_QUERY_BODY_BYTES} bytes`, () => req.destroy());
           return;
         }
