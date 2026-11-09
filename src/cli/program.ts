@@ -5,6 +5,7 @@ import type { WriterDeps } from '../writer/session.js';
 import { addCiCommand } from './commands/ci.js';
 import { addConfigCommand } from './commands/config-print.js';
 import { addConvertCommand } from './commands/convert.js';
+import { addHostCommand } from './commands/host.js';
 import { addMergeCommand } from './commands/merge.js';
 import { addRunCommand } from './commands/run.js';
 import { addServeCommand } from './commands/serve.js';
@@ -36,6 +37,7 @@ function buildProgram(io: CliIo, deps: CliDeps): Command {
   addConvertCommand(program, io, deps);
   addMergeCommand(program, io, deps);
   addServeCommand(program, io, deps);
+  addHostCommand(program, io, deps);
   addRunCommand(program, io, deps);
   addUpgradeCommand(program, io, deps);
   addConfigCommand(program, io, deps.fs);

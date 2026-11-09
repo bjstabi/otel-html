@@ -12,7 +12,7 @@ import { describeSummary } from './convert.js';
 const MAX_PORT = 65535;
 const INTERRUPTED_EXIT = 130;
 
-function portOf(text: string): number {
+export function portOf(text: string): number {
   const port = Number(text);
   if (!/^\d+$/.test(text) || port > MAX_PORT) {
     throw new InvalidArgumentError(`${text} is not a port (an integer from 0 to ${MAX_PORT})`);

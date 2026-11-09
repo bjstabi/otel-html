@@ -36,7 +36,7 @@ The binaries are built by `.github/workflows/release.yml` when a release is crea
 
 ## CLI
 
-Commands: `convert` (OTLP files to a report), `serve` (receive OTLP over HTTP and gRPC), `run` (wrap a command and report its telemetry), `merge`, `upgrade` and `config print`.
+Commands: `convert` (OTLP files to a report), `serve` (receive OTLP over HTTP and gRPC), `run` (wrap a command and report its telemetry), `merge`, `host` (serve a format-4 report with its queries answered by DuckDB), `upgrade` and `config print`.
 
 ```sh
 otel-html convert fixtures/small.otlp.json -o ./report
@@ -116,6 +116,28 @@ otel-html merge ./job-1 ./job-2 -o ./combined
 Options: `-o, --out <dir>`, `--config <file>`, `--append`, `--replace` (as for `convert`), `--format` and `--assets-base`, and `--compact`. When `-o` already holds a report, `merge` adds its inputs to it, but only in that report's own format: asking for the other one (`--format site` into a `local` report, or the reverse; `-o <site report>` without `--format site` counts, because the default is `local`) fails with exit 2 and the hint "append with --format <the report's format>, or switch the report with `otel-html upgrade <report> --format <wanted>`". Switch the report with `upgrade` first, or merge into a new folder.
 
 `merge` writes a format-4 report (`local` unless `--format site`). A format 1-3 input is converted row by row, as `convert` would write it. A format-4 input is copied: each of its partition folders is added to the output under the next free number, with its Parquet files byte for byte (nothing is decoded), its statistics cut to the output's `writer.statisticsKeys` (a key the input did not keep is unknown), and `source` `merge:<input>#<n>` (`<input>` is the input's index once the inputs are sorted by epoch, oldest first; `<n>` its partition number there). Copying into `local` writes every file's `.parquet.js` wrapper afresh, whichever format the input had; copying into `site` writes none. Copies are not deduplicated against other inputs' rows, and each input keeps its own pattern cluster ids. `--compact` (config `writer.compactOnMerge`) then compacts each input's copied partitions into one partition, so the copied partitions end up as one partition per format-4 input (an input with a single partition is left as copied). Other partitions the output holds, such as ones from an earlier run when appending, are not touched, and the flush partitions of converted rows are compacted into their own partition as at any close; within an input, pattern rows are summed only when both the cluster id and the template match.
+
+### `host <report>`
+
+Serves a format-4 report over HTTP and answers its queries on the machine that runs `host`, so the viewer never downloads the report: every query is SQL to the host, and the browser receives only the results. Use it for a report too large to open from `file://` or to download whole.
+
+```sh
+otel-html host ./report
+# serving ./report at http://127.0.0.1:8080/ (12 partitions, 340 MB of Parquet); press Ctrl-C to stop
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `--host <addr>` | Address to listen on. Default `127.0.0.1`. |
+| `--port <port>` | Port to listen on. Default 8080; 0 picks a free port. |
+| `--timeout <ms>` | Longest a statement may run, from 1 to 86,400,000 (24 hours). Default 30,000. A statement past it is cancelled and answered 504. |
+| `--max-result-bytes <n>` | Largest result of one statement, in bytes of Arrow IPC, from 1 to 4,294,967,296. Default 67,108,864 (64 MiB). A larger result is refused 413. |
+
+The printed size is the Parquet bytes the manifest lists, in megabytes (10^6 bytes) rounded to the nearest whole number, so a small report shows `0 MB`.
+
+`host` serves the report whether it was written as `local` or `site`, with any `assetsBase`, and whichever otel-html version wrote it, because it serves its own viewer rather than the report's: `/` and `/index.html` are the host's page, `/assets/` its viewer files, `/data/manifest.js` the report's manifest, and `POST /query` the queries (Mosaic's REST protocol, Arrow results). Nothing else is served; in particular the Parquet files are never sent, and only `arrow` queries run. A statement must be a single read-only `SELECT` over the report's views (`spans`, `logs`, `points` and the other tables); anything else (DDL, `SET`, `COPY`, `ATTACH`, `LOAD`, a second statement, reading a file) is refused 400.
+
+A report that is not format 4 exits 2 with the hint to run `otel-html merge <report> --out <new>`; a folder without a report exits 2. A port that is already in use exits 1 with a hint to pass `--port <port>`. On Ctrl-C (SIGINT) or SIGTERM, `host` stops listening, stops the engine and exits 0.
 
 ### `upgrade <report>`
 
@@ -382,6 +404,7 @@ report/
 - GitHub Pages and GitLab Pages: publish the folder as it is. It works under a subpath such as `https://user.github.io/repo/report/`.
 - Any other static host or subpath works the same way.
 - CI: upload the folder as a build artifact.
+- A report too large to open or download whole: run `otel-html host <report>` on a machine that has it and open the address it prints (see [`host`](#host-report)).
 
 The report is exercised in Chromium, Firefox and WebKit by the end-to-end tests: the tests open the `local` report from `file://`, and a tagged subset opens a `site` copy of it over HTTP from a static server that answers `Range` and `HEAD`.
 
@@ -614,6 +637,7 @@ Config is a YAML or JSON file (`otel-html.yaml` by default), or an object passed
 
 ## Limits
 
+- `host` runs one statement at a time (up to 256 wait; more are refused 503), cancels a statement at `--timeout` (504) and refuses a result over `--max-result-bytes` (413). It has no TLS or authentication and binds `127.0.0.1` unless `--host` says otherwise, so put it behind a proxy before exposing it. It serves the report as it was when `host` started: a report still being written is not followed; restart `host` to see more.
 - A report folder reused by many runs grows without bound; start it over with `--replace` now and then. Each `run` is its own trace, told apart by start time and `process.command_args`.
 - Timestamps are JavaScript numbers, exact to 2^53 ns. That is about 104 days of relative time span within one report.
 - The receiver has no TLS or authentication and reflects only localhost origins for CORS; bodies over 64 MiB are refused (413); logs and metric points a sender retries are not deduplicated.
