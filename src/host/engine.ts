@@ -202,10 +202,20 @@ export async function startHostEngine(opts: HostEngineOptions): Promise<HostEngi
   let restarts = 0;
   let tail: Promise<unknown> = Promise.resolve();
 
+  /** `openLive`, unless `close()` came first: then the new worker is stopped here, because nothing else holds it. */
+  async function reopen(): Promise<Live> {
+    const fresh = await openLive(opts, report);
+    if (closed) {
+      await fresh.db.terminate().catch(() => undefined);
+      throw new HostError(503, 'the host is closed');
+    }
+    return fresh;
+  }
+
   /** Runs one statement under the hung-worker guard; a lost worker is replaced before the request fails 504. */
   async function execute(sql: string): Promise<Uint8Array> {
     if (closed) throw new HostError(503, 'the host is closed');
-    live ??= await openLive(opts, report);
+    live ??= await reopen();
     const current = live;
     const work = runStatement(current, opts, sql);
     work.catch(() => undefined);
@@ -224,10 +234,11 @@ export async function startHostEngine(opts: HostEngineOptions): Promise<HostEngi
       restarts += 1;
       opts.logger.warn(`the engine worker was replaced (${e.message}): ${sql.slice(0, 200)}`);
       try {
-        live = await openLive(opts, report);
-      } catch (reopen) {
-        opts.logger.warn(`the engine worker could not be restarted: ${engineMessage(reopen)}`);
+        live = await reopen();
+      } catch (failure) {
+        if (!closed) opts.logger.warn(`the engine worker could not be restarted: ${engineMessage(failure)}`);
       }
+      if (closed) throw new HostError(503, 'the host is closed');
       throw new HostError(504, 'the engine stopped answering and was restarted');
     } finally {
       hung.cancel();

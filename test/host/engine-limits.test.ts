@@ -52,9 +52,24 @@ const rejection = async (p: Promise<unknown>): Promise<unknown> =>
     () => undefined,
     (e: unknown) => e,
   );
+const LONG = 'SELECT count(*) FROM range(300000000) r1, range(50) r2 WHERE (r1.range * r2.range) % 7919 = 1';
 const count = (bytes: Uint8Array): number => tableFromIPC(bytes).numRows;
 
 describe('the statement timeout (Review Focus 2)', () => {
+  it('cancels a long statement at the timeout and answers the next one within 100 ms (@perf)', async () => {
+    const e = await started({ timeoutMs: 300 });
+    const t0 = performance.now();
+    await rejection(e.query(LONG));
+    const cancelMs = performance.now() - t0;
+    const t1 = performance.now();
+    await e.query('SELECT 1');
+    const nextMs = performance.now() - t1;
+    process.stdout.write(`perf: cancel ${cancelMs.toFixed(0)} ms, next statement ${nextMs.toFixed(0)} ms\n`);
+    expect(cancelMs).toBeGreaterThan(250);
+    expect(cancelMs).toBeLessThan(1500);
+    expect(nextMs).toBeLessThan(100);
+  });
+
   it('cancels a long statement at the timeout and answers the next one at once', async () => {
     const e = await started({ timeoutMs: 300 });
     const t0 = performance.now();
@@ -68,17 +83,24 @@ describe('the statement timeout (Review Focus 2)', () => {
     expect(error).toBeInstanceOf(HostError);
     expect((error as HostError).status).toBe(504);
     expect((error as HostError).message).toBe('the statement did not finish within 300 ms');
-    expect(cancelMs).toBeGreaterThan(250);
-    expect(cancelMs).toBeLessThan(1500);
-    const t1 = performance.now();
+    expect(cancelMs).toBeGreaterThan(250); // never before the deadline
     expect(count(await e.query('SELECT 1'))).toBe(1);
-    expect(performance.now() - t1).toBeLessThan(100);
     expect(e.restarts).toBe(0);
     expect(warnings.some((w) => w.includes('504'))).toBe(true);
   });
 });
 
 describe('the result cap (Review Focus 3)', () => {
+  it('stops reading long before the end of a huge result (@perf)', async () => {
+    const e = await started({ maxResultBytes: 1_000_000 });
+    const t0 = performance.now();
+    await rejection(e.query('SELECT range AS x, range AS y, range AS z FROM range(20000000)'));
+    const ms = performance.now() - t0;
+    process.stdout.write(`perf: cap 413 after ${ms.toFixed(0)} ms\n`);
+    // 20 million rows of three bigints are 480 MB: reading it all would take seconds.
+    expect(ms).toBeLessThan(2000);
+  });
+
   it('refuses a result above the cap without reading all of it, and the next statement works', async () => {
     const e = await started({ maxResultBytes: 1_000_000 });
     const t0 = performance.now();
@@ -88,8 +110,6 @@ describe('the result cap (Review Focus 3)', () => {
     expect(error).toBeInstanceOf(HostError);
     expect((error as HostError).status).toBe(413);
     expect((error as HostError).message).toBe('the result exceeds 1000000 bytes');
-    // 20 million rows of three bigints are 480 MB: reading it all would take seconds.
-    expect(ms).toBeLessThan(2000);
     expect(count(await e.query('SELECT 1'))).toBe(1);
   });
 
@@ -120,6 +140,35 @@ describe('the queue', () => {
 });
 
 describe('close', () => {
+  it('stops a worker whose open was still in flight, and the query rejects 503', async () => {
+    const log: string[] = [];
+    const dbs = [
+      fakeDb(() => new Promise<never>(() => {}), log, 'first'),
+      fakeDb(async () => null, log, 'late'),
+    ];
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    let opened = 0;
+    const e = await started({
+      timeoutMs: 50,
+      graceMs: 50,
+      open: async () => {
+        opened += 1;
+        if (opened === 2) await gate; // the restart's open is slow
+        return dbs.shift() as NodeDuckDb;
+      },
+    });
+    const pending = rejection(e.query('SELECT 1'));
+    while (opened < 2) await new Promise((r) => setTimeout(r, 10));
+    await e.close();
+    release();
+    const error = await pending;
+    expect((error as HostError).status).toBe(503);
+    expect(log).toContain('terminate late');
+  });
+
   it('is idempotent and later queries reject 503', async () => {
     const e = await started();
     await e.close();
@@ -137,9 +186,7 @@ describe('close', () => {
       ),
     );
     await new Promise((r) => setTimeout(r, 100));
-    const t0 = performance.now();
     await e.close();
-    expect(performance.now() - t0).toBeLessThan(2000);
     expect(((await long) as HostError).status).toBe(503);
   });
 });

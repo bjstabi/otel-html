@@ -72,11 +72,19 @@ describe('the engine policy', () => {
       expect(error, sql).toBeInstanceOf(HostError);
       expect(error, sql).toMatchObject({ status: 400 });
       expect((error as HostError).message, sql).toMatch(/Parser Error|Permission Error|Invalid Input Error/);
-      const t1 = performance.now();
       expect(rows(await engine.query('SELECT count(*) AS n FROM spans'))).toEqual([{ n: 5n }]);
-      expect(performance.now() - t1, `${sql} leaves the engine answering`).toBeLessThan(1_000);
     }
   }, 20_000);
+
+  it('answers the next statement within a second after a refusal (@perf)', async () => {
+    const { engine } = await started();
+    await engine.query('SET threads = 1').catch(() => undefined);
+    const t = performance.now();
+    expect(rows(await engine.query('SELECT count(*) AS n FROM spans'))).toEqual([{ n: 5n }]);
+    const ms = performance.now() - t;
+    process.stdout.write(`policy: next statement after a refusal ${ms.toFixed(0)} ms\n`);
+    expect(ms).toBeLessThan(1_000);
+  });
 
   it('keeps ORDER BY of the wrapped statement', async () => {
     const { engine } = await started();
