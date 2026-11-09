@@ -2,7 +2,9 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { mergeWith } from '../../src/api/convert.js';
-import { FORMAT_VERSION } from '../../src/format/version.js';
+import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
+import { parseAnyManifest } from '../../src/format/manifest.js';
+import { MANIFEST_KEY } from '../../src/format/paths.js';
 import { createTestWriter, type TestWriter } from '../../test-support/writer-deps.js';
 import { manifestOf } from '../writer/helpers.js';
 
@@ -21,24 +23,34 @@ async function copyFixtureReport(w: TestWriter, name: string) {
   for (const rel of filesUnder(root)) {
     await w.deps.fs.writeBytes(`${name}/data/${rel}`, readFileSync(join(root, rel)));
   }
-  return manifestOf(w, name);
+  const text = w.fs.snapshot().get(`${name}/data/manifest.js`);
+  if (text === undefined) throw new Error('no manifest');
+  return parseAnyManifest(reviveDataJson(unwrapDataFile(text, MANIFEST_KEY)));
 }
 
 describe.each([
   ['format-1', 1],
   ['format-2', 2],
   ['format-3', 3],
+  ['format-4', 4],
 ])('%s', (name, version) => {
   test('merge reads it and the totals survive', async () => {
     const w = createTestWriter();
     const expected = await copyFixtureReport(w, name);
-    // The fixture is frozen at its version. Format 3 is also the current version, so for format-3 this line
-    // cannot tell a frozen copy from a regenerated one; frozen-checksums.test.ts pins its bytes instead.
+    // The fixture is frozen at its version; frozen-checksums.test.ts pins its bytes.
     expect(expected.formatVersion).toBe(version);
     const summary = await mergeWith({ inputs: [name], out: 'm' }, w.deps);
     expect(summary.totals).toEqual(expected.totals);
     expect(summary.totals.spans).toBeGreaterThan(0);
     expect(summary.totals.metrics).toBeGreaterThan(0);
-    expect(manifestOf(w, 'm').formatVersion).toBe(FORMAT_VERSION);
+    expect(manifestOf(w, 'm').formatVersion).toBe(4);
+  });
+  test('merge into a format-4 (site) report keeps the totals', async () => {
+    const w = createTestWriter();
+    const expected = await copyFixtureReport(w, name);
+    const config = { writer: { format: 'site' as const } };
+    const summary = await mergeWith({ inputs: [name], out: 'm4', config }, w.deps);
+    expect(summary.totals).toEqual(expected.totals);
+    expect(w.fs.snapshot().get('m4/data/manifest.js')).toContain('"formatVersion":4');
   });
 });

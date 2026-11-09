@@ -1,8 +1,11 @@
 import type { EChartsOption } from 'echarts';
 import type { Measure } from '../../dashboards/schema.js';
+import { assertNever } from '../../model/errors.js';
+import type { ExpHistogram } from '../../rollups/exp-histogram.js';
 import type { FacetCounts } from '../../rollups/facets.js';
 import type { GroupDurations } from '../../rollups/span-rollups.js';
 import { formatDuration } from '../../semconv/formatters.js';
+import type { GroupStats, GroupStatsResult } from '../data/results.js';
 import { type ColorAssigner, seriesVar } from '../theme/palette.js';
 
 /** Most groups drawn before the rest collapse into one neutral "Other" slice. */
@@ -15,7 +18,7 @@ export const DEFAULT_GROUP_KEY = 'service.name';
 export interface FacetSource {
   facets: FacetCounts;
   /** Per-group duration histograms; only a span query asked to `measureBy` a key carries them. */
-  groups?: GroupDurations | null;
+  groups?: GroupStatsResult | GroupDurations | null;
 }
 
 export interface FacetViewContext {
@@ -66,42 +69,55 @@ export const MEASURE_LABELS: Record<Exclude<Measure, 'count'>, string> = {
   'duration.p99': 'p99',
 };
 
+function statValue(g: GroupStats, measure: Exclude<Measure, 'count'>): number {
+  switch (measure) {
+    case 'duration.sum':
+      return g.sum;
+    case 'duration.avg':
+      return g.avg;
+    case 'duration.max':
+      return g.max;
+    case 'duration.p95':
+      return g.p95;
+    case 'duration.p99':
+      return g.p99;
+    default:
+      return assertNever(measure, 'duration measure');
+  }
+}
+
+function histogramValue(h: ExpHistogram, measure: Exclude<Measure, 'count'>): number {
+  switch (measure) {
+    case 'duration.sum':
+      return h.sum;
+    case 'duration.avg':
+      return h.count === 0 ? 0 : h.sum / h.count;
+    case 'duration.max':
+      return h.max;
+    case 'duration.p95':
+      return h.quantile(0.95);
+    case 'duration.p99':
+      return h.quantile(0.99);
+    default:
+      return assertNever(measure, 'duration measure');
+  }
+}
+
 /**
  * Every group valued by a duration measure of its histogram, the `MAX_GROUPS` largest first. Ranking is by the
  * measure over all groups, not over the most frequent ones, so a rare slow group is not displaced. There is no
  * "Other" slice: a remainder has no meaningful maximum or percentile, so it is left out for every measure.
  */
 export function measuredSlices(
-  groups: GroupDurations,
+  groups: GroupStatsResult | GroupDurations,
   measure: Exclude<Measure, 'count'>,
   colors: ColorAssigner,
 ): Slice[] {
-  const ranked: { group: string; value: number }[] = [];
-  for (const [group, h] of groups.entries()) {
-    let value: number;
-    switch (measure) {
-      case 'duration.sum':
-        value = h.sum;
-        break;
-      case 'duration.avg':
-        value = h.count === 0 ? 0 : h.sum / h.count;
-        break;
-      case 'duration.max':
-        value = h.max;
-        break;
-      case 'duration.p95':
-        value = h.quantile(0.95);
-        break;
-      case 'duration.p99':
-        value = h.quantile(0.99);
-        break;
-      default: {
-        const unreachable: never = measure;
-        return unreachable;
-      }
-    }
-    ranked.push({ group, value });
-  }
+  const ranked: { group: string; value: number }[] =
+    'groups' in groups
+      ? groups.groups.map((g) => ({ group: g.group, value: statValue(g, measure) }))
+      : // The dashboards' histogram groups: removed with 5.4.
+        [...groups.entries()].map(([group, h]) => ({ group, value: histogramValue(h, measure) }));
   // Colours are handed out in first-seen order: only the groups drawn may take one.
   return ranked
     .sort((a, b) => b.value - a.value)

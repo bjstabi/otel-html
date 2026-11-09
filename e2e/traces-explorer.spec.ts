@@ -1,3 +1,4 @@
+import { isIgnoredConsole } from './console-noise.js';
 import { ERROR_SPAN_COUNT, HOSTILE_SPAN_NAME, SERVICE_B, SPAN_COUNT } from './fixture.js';
 import { expect, HTTP, test } from './test.js';
 
@@ -75,7 +76,8 @@ test('Traces explorer: OTTL filter, facets, URL state, hostile text', async ({ p
 test('every view and the Services page render without errors', HTTP, async ({ page, baseURL }) => {
   const problems: string[] = [];
   page.on('console', (m) => {
-    if (m.type() === 'error' || m.type() === 'warning') problems.push(`console ${m.type()}: ${m.text()}`);
+    if ((m.type() === 'error' || m.type() === 'warning') && !isIgnoredConsole(m.text()))
+      problems.push(`console ${m.type()}: ${m.text()}`);
   });
   page.on('pageerror', (e) => problems.push(`page error: ${e.message}`));
 

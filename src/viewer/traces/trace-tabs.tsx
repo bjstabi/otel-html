@@ -6,7 +6,8 @@ import { type ResourceRecord, StatusCode } from '../../model/records.js';
 import { formatDuration } from '../../semconv/formatters.js';
 import { ResultsTable, type SortState } from '../components/results-table.js';
 import type { DataSource, TraceDetail } from '../data/data-source.js';
-import type { SpanRow } from '../data/span-query.js';
+import { manifestRange } from '../data/manifest-range.js';
+import type { SpanRow } from '../data/results.js';
 import { exclusiveTimeByService } from '../data/trace-tree.js';
 import { gridWindow, MetricGrid, type MetricGridOrigin } from '../metrics/metric-grid.js';
 import type { ColorAssigner } from '../theme/palette.js';
@@ -210,7 +211,7 @@ export function TraceMetricsTab(props: {
   dataSource: DataSource;
 }): JSX.Element {
   const { detail, resources, dataSource } = props;
-  const range = dataSource.manifest.range;
+  const range = useMemo(() => manifestRange(dataSource.manifest), [dataSource]);
   const origin = useMemo((): MetricGridOrigin => {
     const f = traceFacts(detail);
     return {

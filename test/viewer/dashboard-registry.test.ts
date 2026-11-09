@@ -1,13 +1,10 @@
-import { beforeAll, describe, expect, test } from 'vitest';
+import { describe, expect, test } from 'vitest';
 import { FUSION } from '../../src/dashboards/fusion.js';
 import { DashboardSchema } from '../../src/dashboards/schema.js';
 import { dashboardsOf, defaultDashboardRoute, findDashboard } from '../../src/viewer/dashboards/registry.js';
-import { buildReport, type Fixture } from './report-fixture.js';
+import { manifestV4 } from './v4-manifest.js';
 
-let fx: Fixture;
-beforeAll(async () => {
-  fx = await buildReport(1);
-});
+const fx = { manifest: manifestV4(1) };
 
 describe('dashboardsOf', () => {
   test('an M3 manifest has Fusion only, and it is the default', () => {

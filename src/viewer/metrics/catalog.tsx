@@ -1,12 +1,12 @@
-import { type JSX, useCallback, useDeferredValue, useMemo, useState } from 'react';
-import type { Manifest } from '../../format/manifest.js';
+import { type JSX, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import type { ManifestV4 } from '../../format/manifest.js';
 import { parseUnixNanos } from '../../model/ids.js';
 import type { MetricPageState } from '../../query/metric-query.js';
-import type { MetricEntry } from '../../rollups/metric-catalog.js';
 import { ErrorCard } from '../components/explorer-states.js';
 import { ResultsTable } from '../components/results-table.js';
-import { catalogOf, type DataSource } from '../data/data-source.js';
-import { metricTypeLabel } from '../data/metric-tables.js';
+import type { DataSource } from '../data/data-source.js';
+import type { MetricEntry } from '../data/metric-catalog.js';
+import { defaultShowOf, kindOf, metricTypeLabel } from '../data/metric-tables.js';
 import { useGoTo } from '../shell/go-to.js';
 import { PageChrome } from '../shell/page-chrome.js';
 import { routeHref } from '../shell/use-route.js';
@@ -16,6 +16,7 @@ import { formatWindow, serializeUrlState } from '../state/url-state.js';
 import { useKeyedAsync } from '../state/use-keyed-async.js';
 import type { ColumnUi } from '../traces/columns.js';
 import { Sparkline } from '../traces/sparkline.js';
+import { catalogOf } from './metric-grid.js';
 
 const BADGE = 'rounded-full border border-hairline px-2 py-0.5 text-xs text-ink-2';
 const SHOWN_ATTRIBUTES = 2;
@@ -28,15 +29,14 @@ function firstAndMore(items: readonly string[], limit: number): string {
   return rest > 0 ? `${items.slice(0, limit).join(', ')} +${rest}` : items.join(', ');
 }
 
-/** The series column: the series kept, and `+ other` when more series than the cap folded into one. */
+/** The series column: format 4 has no series cap, so it is the count. */
 function seriesLabel(e: MetricEntry): string {
-  // `series` counts the `other` series itself, which `folded` (a count of points) says exists.
-  return e.folded > 0 ? `${e.series - 1} + other` : String(e.series);
+  return String(e.series);
 }
 
 /** The sparkline's values: the mean of each bucket, 0 for an empty one. */
 function sparkValues(e: MetricEntry): number[] {
-  const { sums, counts } = e.spark.toJSON();
+  const { sums, counts } = e.spark;
   return counts.map((n, i) => (n === 0 ? 0 : (sums[i] ?? 0) / n));
 }
 
@@ -102,7 +102,7 @@ function explorerState(e: MetricEntry): MetricPageState {
 // Module-level so it is stable: `useKeyedAsync` reloads on a new `load`, and a fresh closure per render would start a
 // new load after every settled one.
 
-function ZeroMetrics({ manifest }: { manifest: Manifest }): JSX.Element {
+function ZeroMetrics({ manifest }: { manifest: ManifestV4 }): JSX.Element {
   return (
     <section className="max-w-xl rounded-card border border-hairline bg-surface p-6">
       <h2 className="text-base font-semibold">This report has no metrics</h2>
@@ -122,12 +122,41 @@ export function MetricsCatalog(props: { dataSource: DataSource }): JSX.Element {
   const [filter, setFilter] = useState('');
   const needle = useDeferredValue(filter.trim().toLowerCase());
   const epoch = useMemo(() => parseUnixNanos(manifest.epochUnixNano, 'manifest.epochUnixNano'), [manifest]);
-  // `entries()` returns a fresh array; memoised on the load, so the filtered rows are recomputed only on a change.
-  const all = useMemo(() => (load.status === 'ready' ? load.value.entries() : []), [load]);
+  // memoised on the load, so the filtered rows are recomputed only on a change.
+  const all = useMemo(() => (load.status === 'ready' ? load.value.entries : []), [load]);
   const rows = useMemo(() => (needle === '' ? all : all.filter((e) => matches(e, needle))), [all, needle]);
   const window = useSelection((s) => s.window);
 
-  const open = (e: MetricEntry): void => goTo('metrics', '/metrics', { m: explorerState(e) });
+  // A summary click navigates after an async lookup: only the latest click, on a mounted page, may.
+  const clicks = useRef(0);
+  useEffect(() => {
+    return () => {
+      clicks.current = -1;
+    };
+  }, []);
+  const open = (e: MetricEntry): void => {
+    const click = clicks.current < 0 ? clicks.current : ++clicks.current;
+    const state = explorerState(e);
+    const [first, ...rest] = state.queries;
+    // A summary's default show is its highest quantile, which only the data source can name (as in the Explorer picker).
+    if (first === undefined || kindOf(e) !== 'summary') {
+      goTo('metrics', '/metrics', { m: state });
+      return;
+    }
+    const latest = (): boolean => clicks.current === click;
+    props.dataSource.metricShowOptions(e.id).then(
+      (options) => {
+        if (!latest()) return;
+        goTo('metrics', '/metrics', {
+          m: { ...state, queries: [{ ...first, show: defaultShowOf(kindOf(e), options) }, ...rest] },
+        });
+      },
+      () => {
+        if (latest()) goTo('metrics', '/metrics', { m: state });
+      },
+    );
+  };
+  // The href keeps `qmax` for a summary: a link needs a synchronous href, and the Explorer resolves `qmax` itself.
   /** The Explore cell is a real link to the same place, so it can open in a new tab; the window carries like `goTo`. */
   const hrefOf = useCallback(
     (e: MetricEntry): string =>
@@ -170,7 +199,7 @@ export function MetricsCatalog(props: { dataSource: DataSource }): JSX.Element {
           <div className="flex flex-wrap items-center gap-3">
             <p className="mr-auto text-sm text-ink-2">
               <span className="font-mono tabular-nums">{all.length}</span> metrics ·{' '}
-              <span className="font-mono tabular-nums">{load.value.scopes().length}</span> scopes
+              <span className="font-mono tabular-nums">{load.value.scopes.length}</span> scopes
             </p>
             <input
               type="search"

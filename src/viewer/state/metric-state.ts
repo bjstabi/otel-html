@@ -1,5 +1,5 @@
 import { type MetricPageState, MetricPageStateSchema, type MetricQuery } from '../../query/metric-query.js';
-import type { MetricEntry } from '../../rollups/metric-catalog.js';
+import type { MetricEntry } from '../data/metric-catalog.js';
 import { DEFAULT_SHOW, kindOf } from '../data/metric-tables.js';
 import { paramError, shown } from './param-error.js';
 
@@ -21,7 +21,7 @@ export function parseMetricParam(
 
 /**
  * One query on the metric (or a pending one for `null`). `show` is the kind's default; a summary keeps the
- * `qmax` placeholder, which the query engine resolves to the highest quantile once the data is loaded.
+ * `qmax` placeholder, which the data layer resolves to the highest quantile when the query runs (a picked metric gets a concrete one, `defaultShowOf`).
  */
 export function defaultMetricState(entry: MetricEntry | null): MetricPageState {
   const query: MetricQuery = {

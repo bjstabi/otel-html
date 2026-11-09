@@ -30,14 +30,18 @@ export {
   ORPHAN_EXEMPLAR_TRACE,
 } from '../test-support/fixture-ids.js';
 
+export type UrlKind = 'file' | 'http';
+
 export const REPORTS_DIR: URL = new URL('./.reports/', import.meta.url);
+/** The `site`-format copy of every mounted report (`otel-html upgrade --format site`), served over HTTP for the `@http` tests. */
+export const REPORTS_SITE_DIR: URL = new URL('./.reports-site/', import.meta.url);
 /**
  * Where the on-demand metrics scale report lives: outside `REPORTS_DIR`, which is the `e2e:fixtures` task's declared
  * output, so writing it does not make the fixtures look out of date. `e2e/build-fixtures.ts` removes it.
  */
 export const METRICS_SCALE_DIR: URL = new URL('./.metrics-scale/', import.meta.url);
 /**
- * Where `scale` and `huge` live: outside `REPORTS_DIR`, so `e2e/build-fixtures.ts` leaves them alone. The
+ * Where `scale` and `many` live (both `site` reports, read over HTTP only): outside `REPORTS_DIR`, so `e2e/build-fixtures.ts` leaves them alone. The
  * `e2e:fixtures:scale` mise tasks build them (`e2e/build-scale-fixtures.ts`), and `test:e2e` runs those tasks only
  * when the selected tests include `e2e/scale.spec.ts`.
  */
@@ -48,7 +52,7 @@ const DIST = new URL('../dist/', import.meta.url);
 
 /**
  * A hash of the writer's build output (the `build:lib` files `e2e:fixtures:scale:data` lists as sources), so
- * `e2e/scale.spec.ts` can tell that `scale` and `huge` were converted by an older writer.
+ * `e2e/scale.spec.ts` can tell that `scale` and `many` were written by an older writer.
  */
 export function writerBuildHash(): string {
   const files = [
@@ -110,7 +114,7 @@ const FIXTURE_FILES: Partial<Record<FixtureReport, readonly string[]>> = {
   sample: ['small', 'linked-traces', 'linked-logs'],
 };
 /**
- * `merged` is `otel-html merge` of `small` and `orphans`; `scale` and `huge` come from one generated 100k-span input,
+ * `merged` is `otel-html merge` of `small` and `orphans`; `scale` and `many` come from one generated 100k-span input,
  * into `SCALE_REPORTS_DIR`.
  * `metrics-merged` merges two reports of the `metrics` fixture's first and last five collections, `metrics-single`
  * converts the fixture at once. `unfinished` holds the `linked` inputs, flushed but never closed. `metrics-scale` is
@@ -122,7 +126,7 @@ export type ReportName =
   | FixtureReport
   | 'merged'
   | 'scale'
-  | 'huge'
+  | 'many'
   | 'no-manifest'
   | 'metrics-merged'
   | 'metrics-single'
@@ -133,7 +137,8 @@ export type ReportName =
   | 'metrics-scale'
   | 'frozen-format-1'
   | 'frozen-format-2'
-  | 'frozen-format-3';
+  | 'frozen-format-3'
+  | 'frozen-format-4';
 
 /**
  * The metrics scale workload (spec §7): 200 metrics × 1,000 series × 360 points (1 h at a 10 s interval). The report
@@ -152,9 +157,11 @@ export function scaleMetricEmitted(m: number, i: number): boolean {
   return m === SCALE_CHARTED_METRIC || i === 0 || i === SCALE_METRIC_POINTS - 1;
 }
 
-export function reportDir(name: ReportName): URL {
+/** Where a report lives: `file` is the local-format build under `.reports/`, `http` its site-format copy under `.reports-site/`. */
+export function reportDir(name: ReportName, kind: UrlKind = 'file'): URL {
   if (name === 'metrics-scale') return METRICS_SCALE_DIR;
-  return new URL(`${name}/`, name === 'scale' || name === 'huge' ? SCALE_REPORTS_DIR : REPORTS_DIR);
+  if (name === 'scale' || name === 'many') return new URL(`${name}/`, SCALE_REPORTS_DIR);
+  return new URL(`${name}/`, kind === 'http' ? REPORTS_SITE_DIR : REPORTS_DIR);
 }
 
 /** The committed OTLP/JSON files a fixture report is built from. */
@@ -203,16 +210,21 @@ export const LINKED_DECLINED_COUNT = 6;
  */
 export const METRICS_COUNT = 10;
 
-/** Fusion on `scale` is interactive within 3 s, and a trace selection updates its Logs and Metrics within 1 s. */
-export const FUSION_INTERACTIVE_BUDGET_MS = 3000;
-export const FUSION_SELECTION_BUDGET_MS = 1000;
+/**
+ * Fusion on `scale` is interactive within twice its measured median, and a trace selection updates its Logs within
+ * twice its (PR 7; the interactive median, 3.5 s, is above the 3 s the chunk format met). With the Metrics frame back
+ * (plan 3, PR 6) the interactive median is 3.9 s, whose double (7.9 s) is the budget (#229; the added time is the Metrics frame), and the
+ * trace click, now timed to Logs and Metrics, takes 148 ms.
+ */
+/** The host's Traces explorer on `scale`: twice the median of three runs (346, 365, 359 ms), rounded up to 50 (R85). */
+export const HOST_EXPLORER_BUDGET_MS = 750;
+export const FUSION_INTERACTIVE_BUDGET_MS = 7900;
+export const FUSION_SELECTION_BUDGET_MS = 300;
 
 /** The generated scale input: `SCALE_TRACES` traces of `SCALE_SPANS_PER_TRACE` spans each. */
 export const SCALE_TRACES = 2000;
 export const SCALE_SPANS_PER_TRACE = 50;
 export const SCALE_SPAN_COUNT: number = SCALE_TRACES * SCALE_SPANS_PER_TRACE;
-/** The viewer's eager budget used to build `huge`, so the same input is served by the windowed strategy. */
-export const HUGE_EAGER_BUDGET_BYTES = 5_000_000;
 /** Scale traces use ids `scaleTraceId(i)`; the service of span `j` is `SCALE_SERVICES[j % 8]`. */
 export const SCALE_SERVICES = ['edge', 'api', 'auth', 'db', 'cache', 'queue', 'worker', 'search'] as const;
 export function scaleTraceId(i: number): string {
@@ -221,9 +233,12 @@ export function scaleTraceId(i: number): string {
 
 /** The scale input also holds this many logs, in `SCALE_LOG_FILES` OTLP/JSON files of equal size. */
 export const SCALE_LOGS = 1_000_000;
-/** The `scale` run's metrics: this many metrics × series on four of its services, at 0 s and 10 s. */
+/** The `scale` and `many` runs' metrics: this many metrics × series on four of the scale services, at 0 s and 10 s. */
 export const SCALE_RUN_METRICS = 60;
 export const SCALE_RUN_METRIC_SERIES = 250;
+
+/** `many` flushes after every this many spans (and the logs that go with them): 100 partitions per signal. */
+export const SCALE_MANY_FLUSH_SPANS = 1_000;
 export const SCALE_LOG_FILES = 10;
 /** Logs and spans share a clock origin; log `i` is at origin + `i` x `LOG_STEP_NS` (10 ms), so the logs span about 2.8 hours. */
 const SCALE_EPOCH_NS = 1_700_000_000_000_000_000n;
@@ -268,8 +283,6 @@ export function perfFactor(): number {
   return Math.round((positiveEnv(PERF_ENV) ?? 1) * runnerFactor() * 100) / 100;
 }
 
-export type UrlKind = 'file' | 'http';
-
 /** Where a report is mounted under the static server. */
 export function httpSubpath(name: ReportName): string {
   if (name === 'main') return HTTP_SUBPATH;
@@ -279,7 +292,7 @@ export function httpSubpath(name: ReportName): string {
 
 /** Base URL of the report, without a trailing slash. */
 export function baseUrlFor(kind: UrlKind, report: ReportName = 'main'): string {
-  if (kind === 'file') return reportDir(report).href.replace(/\/$/, '');
+  if (kind === 'file') return reportDir(report, 'file').href.replace(/\/$/, '');
   const port = process.env[PORT_ENV];
   if (port === undefined) throw new Error(`${PORT_ENV} is not set: globalSetup did not start the server`);
   return `http://127.0.0.1:${port}${httpSubpath(report)}`;

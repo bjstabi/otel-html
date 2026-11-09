@@ -1,5 +1,5 @@
 import type { SpanId } from '../../model/ids.js';
-import type { SpanRow } from './span-query.js';
+import type { SpanRow } from './results.js';
 
 export interface TraceNode {
   readonly row: SpanRow;

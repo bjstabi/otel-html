@@ -33,7 +33,9 @@ test(
     await page.reload();
     const panel = page.getByTestId('log-panel');
     const tab = panel.getByTestId('log-trace-tab');
-    await expect(tab).toBeVisible();
+    // The panel's first data after a navigation is a serial cold-query chain (the log by ref, then getTrace): up to
+    // ~6 s on a starved CI runner, as the trace Logs tab below.
+    await expect(tab).toBeVisible({ timeout: 15_000 });
     await expect(tab.getByTestId('flame-graph')).toBeVisible();
     await expect(tab.getByTestId('flame-outline')).toContainText('payments');
     await expect(tab.getByTestId('flame-outline')).toContainText('emitted this log');
@@ -73,7 +75,8 @@ test.describe('Logs tabs in the trace and span panels', () => {
     await page.goto(`${base(reportUrl)}#/traces?trace=${LINKED_TRACE}&tab=logs`);
     await page.reload();
     const tab = page.getByTestId('trace-logs-tab');
-    await expect(tab).toBeVisible();
+    // The panel's first data after a navigation is a serial cold-query chain (getTrace, then traceLogs): up to ~6 s on a starved CI runner.
+    await expect(tab).toBeVisible({ timeout: 15_000 });
     await expect(tab.getByRole('row').nth(1)).toBeVisible();
     await expect(tab).toContainText(/\d+ logs/);
 

@@ -29,37 +29,33 @@ export function ErrorCard(props: { title: string; message: string }): JSX.Elemen
   );
 }
 
-/** A windowed scan that stopped early: how much it read, and a way to read everything. */
-export function PartialNote(props: {
-  partial: { scanned: number; total: number } | null;
-  onScanAll(): void;
-}): JSX.Element | null {
-  const { partial } = props;
-  if (partial === null) return null;
+/**
+ * What a running or finished query says about itself: "Loading" while it runs, and (D5) that part of the filter was
+ * evaluated in the browser instead of the query engine; nothing otherwise.
+ */
+export function QueryNote(props: { loading: boolean; residual: string | null }): JSX.Element | null {
+  if (!props.loading && props.residual === null) return null;
   return (
-    <p role="status" aria-label="Partial results" className="text-sm text-ink-2">
-      <span className="font-mono tabular-nums">
-        from {partial.scanned} of {partial.total} chunks
-      </span>{' '}
-      <span aria-hidden>·</span>{' '}
-      <button
-        type="button"
-        onClick={props.onScanAll}
-        className="rounded-full px-2 py-0.5 text-accent underline"
-      >
-        Scan entire run
-      </button>
-    </p>
+    <div className="flex flex-col gap-1">
+      {props.residual !== null && (
+        <p role="status" aria-label="Evaluated in the browser" className="text-sm text-ink-2">
+          Evaluated in the browser: {props.residual}
+        </p>
+      )}
+      {props.loading && (
+        <p role="status" className="text-sm text-muted">
+          Loading
+        </p>
+      )}
+    </div>
   );
 }
 
-/** "Loading", or how far a chunk scan has got. */
-export function LoadingNote(props: { progress: { scanned: number; total: number } | null }): JSX.Element {
+/** The loading note of a query that has not answered yet. */
+export function LoadingNote(): JSX.Element {
   return (
     <p role="status" className="text-sm text-muted">
-      {props.progress === null
-        ? 'Loading'
-        : `Scanning ${props.progress.scanned} of ${props.progress.total} chunks`}
+      Loading
     </p>
   );
 }

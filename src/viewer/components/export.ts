@@ -5,7 +5,7 @@ import type { UnixNanos } from '../../model/ids.js';
 import type { ResourceRecord, ResourceRef, ScopeRecord, ScopeRef, SpanRecord } from '../../model/records.js';
 import { StatusCode } from '../../model/records.js';
 import type { LogRow } from '../data/log-query.js';
-import type { SpanRow, TraceRow } from '../data/span-query.js';
+import type { SpanRow, TraceRow } from '../data/results.js';
 
 export type ExportFormat = 'csv' | 'json' | 'otlp-json';
 

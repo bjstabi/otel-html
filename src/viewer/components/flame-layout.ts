@@ -1,6 +1,6 @@
 import type { SpanId } from '../../model/ids.js';
 import { StatusCode } from '../../model/records.js';
-import type { SpanRow } from '../data/span-query.js';
+import type { SpanRow } from '../data/results.js';
 import { exclusiveNs, type TraceNode, type TraceTree } from '../data/trace-tree.js';
 import { type ColorAssigner, createColorAssigner } from '../theme/palette.js';
 

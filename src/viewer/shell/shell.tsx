@@ -2,7 +2,7 @@ import { Tooltip } from '@base-ui/react/tooltip';
 import { X } from 'lucide-react';
 import { type JSX, useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { Redirect, Route, Router, Switch } from 'wouter';
-import type { Manifest } from '../../format/manifest.js';
+import type { AnyManifest } from '../../format/manifest.js';
 import { SELECTION_MODES } from '../../query/pages.js';
 import { DashboardPage } from '../dashboards/dashboard-page.js';
 import { DashboardsListPage } from '../dashboards/list-page.js';
@@ -203,7 +203,7 @@ export function Shell(props: { dataSource: DataSource; history: HistoryPort }): 
 }
 
 /** Where `#/` lands: the configured home page; `dashboards` opens the default dashboard. */
-function homeRoute(manifest: Manifest): string {
+function homeRoute(manifest: AnyManifest): string {
   const { home } = manifest.config.viewer;
   return home === 'dashboards' ? defaultDashboardRoute(manifest) : `/${home}`;
 }

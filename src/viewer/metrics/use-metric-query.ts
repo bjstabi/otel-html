@@ -1,19 +1,11 @@
 import { useCallback, useMemo, useRef } from 'react';
 import { formulaRefs, parseFormula } from '../../query/metric-formula.js';
-import type { MetricFormula, MetricPageState } from '../../query/metric-query.js';
-import type { MetricEntry } from '../../rollups/metric-catalog.js';
+import type { MetricFormula, MetricPageState, MetricQuery } from '../../query/metric-query.js';
 import type { DataSource } from '../data/data-source.js';
+import type { MetricEntry } from '../data/metric-catalog.js';
 import { evaluateFormula, formulaWidth } from '../data/metric-formula.js';
-import type { LoadedMetric } from '../data/metric-load.js';
-import {
-  type MetricQuery,
-  type MetricQueryResult,
-  resolveMetric,
-  runMetricQuery,
-  runMetricQueryAtWidth,
-  showOptions,
-} from '../data/metric-query.js';
-import type { TimeWindow } from '../data/span-query.js';
+import { type MetricQueryResult, resolveMetric } from '../data/metric-results.js';
+import type { TimeWindow } from '../data/time-window.js';
 import { useKeyedAsync } from '../state/use-keyed-async.js';
 
 /** Buckets per chart when the card has not been measured (no layout, as in tests). */
@@ -22,7 +14,7 @@ const MIN_POINTS = 60;
 const MAX_POINTS = 2000;
 
 /** About one bucket per pixel of card width. */
-export function maxPointsFor(widthPx: number | null): number {
+function maxPointsFor(widthPx: number | null): number {
   if (widthPx === null || !Number.isFinite(widthPx) || widthPx <= 0) return DEFAULT_MAX_POINTS;
   return Math.min(MAX_POINTS, Math.max(MIN_POINTS, Math.round(widthPx)));
 }
@@ -52,6 +44,7 @@ interface Input {
   formulas: MetricFormula[];
   window: TimeWindow;
   maxPoints: number;
+  exemplars: boolean;
 }
 
 type Outcome = Omit<MetricQueries, 'loading' | 'failure'>;
@@ -72,9 +65,9 @@ async function run(ds: DataSource, input: Input, signal: AbortSignal): Promise<O
     ran: { queries: input.queries, formulas: input.formulas },
   };
   const catalog = await ds.metricCatalog();
-  const loaded = new Map<string, { m: LoadedMetric; q: MetricQuery }>();
+  const loaded = new Map<string, { entry: MetricEntry; q: MetricQuery }>();
+  const visible: { entry: MetricEntry; q: MetricQuery }[] = [];
   for (const q of input.queries) {
-    signal.throwIfAborted();
     // A pending query (no metric chosen yet) waits for the Explorer to fill it.
     if (q.metric === '') continue;
     const r = resolveMetric(catalog, q);
@@ -87,17 +80,35 @@ async function run(ds: DataSource, input: Input, signal: AbortSignal): Promise<O
       continue;
     }
     out.entries.set(q.id, r.entry);
-    try {
-      const m = await ds.metric(r.entry.id);
-      signal.throwIfAborted();
-      out.showOptions.set(q.id, await showOptions(m));
-      out.results.set(q.id, await runMetricQuery(m, q, input.window, input.maxPoints, signal));
-      loaded.set(q.id, { m, q });
-    } catch (e) {
-      signal.throwIfAborted();
-      out.errors.set(q.id, message(e));
-    }
+    visible.push({ entry: r.entry, q });
   }
+  // The queries run in parallel; one failing does not stop the others.
+  await Promise.all(
+    visible.map(async ({ entry, q }) => {
+      try {
+        const [options, result] = await Promise.all([
+          ds.metricShowOptions(entry.id),
+          ds.metricQuery(
+            {
+              entry,
+              query: q,
+              window: input.window,
+              maxPoints: input.maxPoints,
+              exemplars: input.exemplars,
+            },
+            signal,
+          ),
+        ]);
+        signal.throwIfAborted();
+        out.showOptions.set(q.id, options);
+        out.results.set(q.id, result);
+        loaded.set(q.id, { entry, q });
+      } catch (e) {
+        signal.throwIfAborted();
+        out.errors.set(q.id, message(e));
+      }
+    }),
+  );
   for (const f of input.formulas) {
     signal.throwIfAborted();
     try {
@@ -108,8 +119,7 @@ async function run(ds: DataSource, input: Input, signal: AbortSignal): Promise<O
         out.errors.set(f.id, `${f.id} reads query ${missing}, which has no result`);
         continue;
       }
-      // Operands must share one bucket width: re-run the finer ones at the coarsest, each reading only the level
-      // at that width.
+      // Operands must share one bucket width: re-run the finer ones at the coarsest.
       const width = formulaWidth(ast, out.results);
       const operands = new Map<string, MetricQueryResult>();
       for (const id of refs) {
@@ -118,7 +128,19 @@ async function run(ds: DataSource, input: Input, signal: AbortSignal): Promise<O
         if (r === undefined || l === undefined) continue;
         operands.set(
           id,
-          r.widthNs === width ? r : await runMetricQueryAtWidth(l.m, l.q, input.window, width, signal),
+          r.widthNs === width
+            ? r
+            : await ds.metricQuery(
+                {
+                  entry: l.entry,
+                  query: l.q,
+                  window: input.window,
+                  maxPoints: input.maxPoints,
+                  widthNs: width,
+                  exemplars: false,
+                },
+                signal,
+              ),
         );
       }
       out.results.set(f.id, evaluateFormula(ast, operands, f.id));
@@ -154,9 +176,12 @@ export function useMetricQueries(
   // series by metric name and the Explorer relabels them.
   const queries = state.queries.map((q) => ({ ...q, alias: null, hidden: false }));
   const formulas = state.formulas.map((f) => ({ ...f, alias: null, hidden: false }));
-  const keyText = JSON.stringify({ q: queries, f: formulas, w: window, p: maxPoints });
+  const keyText = JSON.stringify({ q: queries, f: formulas, w: window, p: maxPoints, x: state.exemplars });
   // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on the serialized input, so equal input keeps one key
-  const key = useMemo<Input>(() => ({ queries, formulas, window, maxPoints }), [keyText]);
+  const key = useMemo<Input>(
+    () => ({ queries, formulas, window, maxPoints, exemplars: state.exemplars }),
+    [keyText],
+  );
   const load = useCallback(
     (input: Input, signal: AbortSignal) => run(dataSource, input, signal),
     [dataSource],

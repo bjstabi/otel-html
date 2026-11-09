@@ -1,5 +1,14 @@
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,8 +19,33 @@ import { expect, test } from './test.js';
 const SCRIPT = fileURLToPath(new URL('../.github/actions/otel-html-publish/preview.mjs', import.meta.url));
 const PACKAGE_JSON = fileURLToPath(new URL('../package.json', import.meta.url));
 
-function runPreview(dir: string) {
-  return spawnSync('node', [SCRIPT, dir], {
+const CLI = fileURLToPath(new URL('../dist/cli/main.js', import.meta.url));
+const CHANNEL = 'branch/main';
+const ASSETS_VERSION = '0.0.0-e2e';
+
+/**
+ * A site as `ci site` leaves it: the `site`-format fixture `name` as the rolling report at `<site>/branch/main/`
+ * with its viewer files at `<site>/assets/<version>/` and `engine.assetsBase` `../../assets/<version>/`.
+ */
+function siteOf(site: string, name: Parameters<typeof reportDir>[0]): string {
+  const channel = join(site, CHANNEL);
+  mkdirSync(join(site, 'branch'), { recursive: true });
+  cpSync(fileURLToPath(reportDir(name, 'http')), channel, { recursive: true });
+  mkdirSync(join(site, 'assets'), { recursive: true });
+  renameSync(join(channel, 'assets'), join(site, 'assets', ASSETS_VERSION));
+  const upgrade = spawnSync(
+    'node',
+    [CLI, 'upgrade', channel, '--assets-base', `../../assets/${ASSETS_VERSION}/`],
+    {
+      encoding: 'utf8',
+    },
+  );
+  if (upgrade.status !== 0) throw new Error(`upgrade failed: ${upgrade.stderr}`);
+  return channel;
+}
+
+function runPreview(site: string) {
+  return spawnSync('node', [SCRIPT, site, CHANNEL], {
     env: { ...process.env, PLAYWRIGHT_FROM: PACKAGE_JSON },
     encoding: 'utf8',
     timeout: 120_000,
@@ -37,15 +71,17 @@ function distinctPngBytes(file: string): number {
 }
 
 test.describe('preview.mjs', () => {
+  let site: string;
   let dir: string;
   test.beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'otel-html-preview-'));
+    site = mkdtempSync(join(tmpdir(), 'otel-html-preview-'));
+    dir = join(site, CHANNEL);
   });
-  test.afterEach(() => rmSync(dir, { recursive: true, force: true }));
+  test.afterEach(() => rmSync(site, { recursive: true, force: true }));
 
   test('writes a light and a dark 2560x1440 screenshot of the report', () => {
-    cpSync(fileURLToPath(reportDir('dashboards')), dir, { recursive: true });
-    const result = runPreview(dir);
+    siteOf(site, 'dashboards');
+    const result = runPreview(site);
     expect(result.status).toBe(0);
     expect(result.stdout).not.toContain('::warning::');
     for (const scheme of ['light', 'dark']) {
@@ -60,7 +96,7 @@ test.describe('preview.mjs', () => {
   });
 
   test('warns and writes nothing when the report has no index.html', () => {
-    const result = runPreview(dir);
+    const result = runPreview(site);
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('::warning::otel-html preview:');
     expect(existsSync(join(dir, 'preview-light.png'))).toBe(false);
@@ -68,11 +104,11 @@ test.describe('preview.mjs', () => {
   });
 
   test('warns and keeps the previous images when the report failed to load', () => {
-    cpSync(fileURLToPath(reportDir('dashboards')), dir, { recursive: true });
+    siteOf(site, 'dashboards');
     rmSync(join(dir, 'data', 'manifest.js'));
     for (const scheme of ['light', 'dark'])
       writeFileSync(join(dir, `preview-${scheme}.png`), `previous ${scheme}`);
-    const result = runPreview(dir);
+    const result = runPreview(site);
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('::warning::otel-html preview:');
     for (const scheme of ['light', 'dark']) {
@@ -81,15 +117,15 @@ test.describe('preview.mjs', () => {
     }
   });
 
-  test('warns and keeps the previous images when the dashboard could not read its variables values', () => {
-    cpSync(fileURLToPath(reportDir('dashboards')), dir, { recursive: true });
-    rmSync(join(dir, 'data', 'rollups', 'logs.js'));
+  test('warns naming the failure and keeps the previous images when a partition file is missing', () => {
+    siteOf(site, 'sample');
+    rmSync(join(dir, 'data', 'partitions', '000000', 'spans.parquet'));
     for (const scheme of ['light', 'dark'])
       writeFileSync(join(dir, `preview-${scheme}.png`), `previous ${scheme}`);
-    const result = runPreview(dir);
+    const result = runPreview(site);
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('::warning::otel-html preview:');
-    expect(result.stdout).toContain('Could not read the variables');
+    expect(result.stdout).toContain('spans.parquet');
     for (const scheme of ['light', 'dark']) {
       expect(readFileSync(join(dir, `preview-${scheme}.png`), 'utf8')).toBe(`previous ${scheme}`);
       expect(existsSync(join(dir, `preview-${scheme}.png.tmp`))).toBe(false);

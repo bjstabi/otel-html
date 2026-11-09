@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { fromJsonString, toBinary } from '@bufbuild/protobuf';
 import { credentials, makeGenericClientConstructor } from '@grpc/grpc-js';
+import { tableFromIPC } from 'apache-arrow';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import pkg from '../../package.json' with { type: 'json' };
 import { ExportTraceServiceRequestSchema } from '../../src/model/gen/opentelemetry/proto/collector/trace/v1/trace_service_pb.js';
@@ -175,9 +176,9 @@ describe.skipIf(binaryEnv === undefined)('compiled binary', () => {
     const out = join(dir, 'big');
     await writeFile(input, INT64_REQUEST);
     await run(binary, ['convert', input, '--out', out]);
-    const chunk = await readFile(join(out, 'data', 'chunks', 'spans', '000000.js'), 'utf8');
-    expect(chunk).toContain('"9007199254740993"');
-    expect(chunk).toContain('[998]');
+    // The manifest's range is the absolute int64 nanosecond text of the spans' times: 2^53 + 1 and beyond survive.
+    const manifest = await readFile(join(out, 'data', 'manifest.js'), 'utf8');
+    expect(manifest).toContain('"range":{"start":"1700000000000000001","end":"1700000000000000999"}');
   });
 
   test('serve receives OTLP over HTTP and gRPC and finishes on SIGINT', async () => {
@@ -203,9 +204,34 @@ describe.skipIf(binaryEnv === undefined)('compiled binary', () => {
     expect(result.code).toBe(0);
     const manifest = await readFile(join(out, 'data', 'manifest.js'), 'utf8');
     expect(manifest).toContain('"totals":{"spans":2,');
-    const spans = await readFile(join(out, 'data', 'chunks', 'spans', '000000.js'), 'utf8');
-    expect(spans).toContain('over-http');
-    expect(spans).toContain('over-grpc');
+    // The span-name statistics of the partition files list both spans.
+    expect(manifest).toContain('over-http');
+    expect(manifest).toContain('over-grpc');
+  }, 60_000);
+
+  test('host serves a converted report: one Arrow query answers, SIGINT exits 0', async () => {
+    const out = join(dir, 'host-report');
+    await run(binary, ['convert', 'fixtures/small.otlp.json', '--out', out]);
+    let count = -1;
+    const result = await serveOnce(
+      binary,
+      ['host', out, '--port', '0'],
+      /serving \S+ at (http:\/\/\S+?)\/ \(/,
+      async (m) => {
+        const res = await fetch(`${m[1]}/query`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ type: 'arrow', sql: 'SELECT count(*) AS n FROM spans' }),
+        });
+        expect(res.status).toBe(200);
+        expect(res.headers.get('content-type')).toBe('application/vnd.apache.arrow.stream');
+        const table = tableFromIPC(new Uint8Array(await res.arrayBuffer()));
+        count = Number(table.getChildAt(0)?.get(0));
+      },
+    );
+    expect(count).toBe(1228); // the spans of fixtures/small.otlp.json
+    if (process.platform === 'win32') return;
+    expect(result.code).toBe(0);
   }, 60_000);
 
   test('a bad port is a usage error: exit 2, the reason on stderr, nothing on stdout', async () => {

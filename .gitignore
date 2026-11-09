@@ -4,11 +4,14 @@ dist/
 coverage/
 *.tsbuildinfo
 e2e/.reports/
+e2e/.reports-site/
 e2e/.reports-scale/
 e2e/.metrics-scale/
 e2e/.metrics-scale.tmp-*/
 # Written by the metrics scale check until #36 (2026-10-29): kept ignored so an old ~12 GB checkout can delete it at leisure.
 e2e/.cache/
+# Build-time downloads (the pinned DuckDB extensions, scripts/engine-assets.ts)
+.cache/
 test-results/
 .otel-html/
 .mise/

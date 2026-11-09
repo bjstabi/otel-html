@@ -1,5 +1,5 @@
 import { type JSX, useMemo } from 'react';
-import type { TimeWindow } from '../data/span-query.js';
+import type { TimeWindow } from '../data/time-window.js';
 import { BrushOverlay, type ColumnRange } from './brush-overlay.js';
 import { Chart } from './chart.js';
 import {

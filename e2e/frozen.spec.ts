@@ -3,8 +3,8 @@ import { reportDir } from './fixture.js';
 import { watchProblems } from './metric-chart.js';
 import { expect, HTTP, test } from './test.js';
 
-/** `totals.spans` of a frozen report's manifest (`__OH__.push("manifest", {...})`). */
-async function manifestSpans(report: `frozen-format-${1 | 2 | 3}`): Promise<number> {
+/** `totals.spans` of a frozen report's manifest (`__OH__.push("manifest", {...})`), as `merge` rewrote it (D12). */
+async function manifestSpans(report: `frozen-format-${1 | 2 | 3 | 4}`): Promise<number> {
   const text = await readFile(new URL('data/manifest.js', reportDir(report)), 'utf8');
   const match = /"totals":\{"spans":(\d+)/.exec(text);
   if (match?.[1] === undefined) throw new Error(`${report}: no totals.spans in the manifest`);
@@ -16,9 +16,10 @@ function groupedCount(n: number): RegExp {
   return new RegExp(`^${String(n).replace(/\B(?=(\d{3})+(?!\d))/g, '\\D?')} spans`);
 }
 
-for (const n of [1, 2, 3] as const) {
+for (const n of [1, 2, 3, 4] as const) {
   const report = `frozen-format-${n}` as const;
-  const title = `the frozen format-${n} report renders with the current viewer: totals, a flame graph and a metric chart`;
+  const via = n === 4 ? 'upgrade' : 'merge';
+  const title = `the frozen format-${n} report opens after ${via} with the current viewer: totals, a flame graph and a metric chart`;
   test(title, HTTP, async ({ page, reportUrl }) => {
     const problems = watchProblems(page);
     const spans = await manifestSpans(report);

@@ -1,4 +1,5 @@
-import { mergeWith } from '../../api/convert.js';
+import { mergeResolved } from '../../api/convert.js';
+import { resolveApiConfig } from '../../api/report.js';
 import type { ReportSummary, WriterDeps } from '../../writer/session.js';
 import { type ApiJob, apiHeaders, messageOf } from './github-api.js';
 
@@ -78,12 +79,21 @@ export async function mergeSkippingBad<S>(i: {
 
 /**
  * The `merge` callback `mergeSkippingBad` wants: the library merge over `deps`, replacing `out`, with the dashboard
- * `config` file (a path) except for single-report readability probes.
+ * `config` file (a path) except for single-report readability probes. The report is written in `opts.format` with
+ * its viewer files at `opts.assetsBase`; `opts.compact` is `writer.compactOnMerge`.
  */
 export function mergeWithConfig(
   deps: WriterDeps,
   config: string | undefined,
+  opts: { format: 'site' | 'local'; assetsBase: string; compact: boolean },
 ): (inputs: string[], out: string, probe: boolean) => Promise<ReportSummary> {
-  const extra = config === undefined ? {} : { config };
-  return (inputs, out, probe) => mergeWith({ inputs, out, replace: true, ...(probe ? {} : extra) }, deps);
+  const writer = { format: opts.format, assetsBase: opts.assetsBase };
+  return async (inputs, out, probe) => {
+    const resolved = await resolveApiConfig(deps, probe ? undefined : config, undefined, writer);
+    const withCompact = {
+      ...resolved,
+      writer: { ...resolved.writer, compactOnMerge: opts.compact },
+    };
+    return mergeResolved({ inputs, out, replace: true, config: withCompact }, deps);
+  };
 }

@@ -4,7 +4,7 @@ import { type JSX, useCallback, useMemo, useState, useSyncExternalStore } from '
 import type { RunControls, Widget, WidgetLayout, WidgetType } from '../../dashboards/schema.js';
 import { parseUnixNanos, type TraceId } from '../../model/ids.js';
 import type { DataSource, ResourceValues } from '../data/data-source.js';
-import type { TimeWindow } from '../data/span-query.js';
+import type { TimeWindow } from '../data/time-window.js';
 import { LogPanel } from '../logs/log-panel.js';
 import { CONTROL, POPUP } from '../shell/controls.js';
 import { useGoTo } from '../shell/go-to.js';

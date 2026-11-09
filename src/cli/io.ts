@@ -1,5 +1,5 @@
 import type { spawn } from 'node:child_process';
-import type { ConfigInput } from '../config/schema.js';
+import type { ConfigInput, ReportFormat } from '../config/schema.js';
 
 export type StopSignal = 'SIGINT' | 'SIGTERM';
 
@@ -24,6 +24,12 @@ export interface ConfigFlags {
   append?: boolean;
   /** `--replace`: start the report over. */
   replace?: boolean;
+  /** `--format`: the report format to write (`writer.format`). */
+  format?: ReportFormat;
+  /** `--assets-base`: where the report loads its viewer files from (`writer.assetsBase`). */
+  assetsBase?: string;
+  /** `merge --compact`: compact each format-4 input's copied partitions (`writer.compactOnMerge`). */
+  compact?: boolean;
 }
 
 /** Receiver flags; a port of `false` is `--no-http` / `--no-grpc`. */
@@ -39,7 +45,15 @@ function listenerOf(port: number | false | undefined): { enabled: boolean; port?
 }
 
 export function configInputOf(flags: ConfigFlags | ReceiverFlags): ConfigInput {
-  const input: ConfigInput = flags.title === undefined ? {} : { title: flags.title };
+  const writer = {
+    ...(flags.format === undefined ? {} : { format: flags.format }),
+    ...(flags.assetsBase === undefined ? {} : { assetsBase: flags.assetsBase }),
+    ...(flags.compact === true ? { compactOnMerge: true } : {}),
+  };
+  const input: ConfigInput = {
+    ...(flags.title === undefined ? {} : { title: flags.title }),
+    ...(Object.keys(writer).length === 0 ? {} : { writer }),
+  };
   if (!('host' in flags || 'http' in flags || 'grpc' in flags)) return input;
   const http = listenerOf(flags.http);
   const grpc = listenerOf(flags.grpc);

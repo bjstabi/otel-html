@@ -13,6 +13,7 @@
       "!node_modules",
       "!dist",
       "!e2e/.reports",
+      "!e2e/.reports-site",
       "!e2e/.reports-scale",
       "!e2e/.metrics-scale",
       "!e2e/.metrics-scale.tmp-*",
@@ -94,7 +95,133 @@
               "level": "error",
               "options": {
                 "paths": {
-                  "@opentelemetry/otlp-transformer": "Internal-use upstream package; test oracle only."
+                  "@opentelemetry/otlp-transformer": "Internal-use upstream package; test oracle only.",
+                  "@uwdata/mosaic-core": "mosaic.ts is the only Mosaic coordinator seam (D19).",
+                  "@uwdata/mosaic-sql": "SQL is built under src/query/sql and src/viewer/data only.",
+                  "@uwdata/flechette": "The data layer (src/viewer/data) wraps the query engine.",
+                  "@duckdb/duckdb-wasm": "The engine folder (src/viewer/data/engine) and mosaic.ts wrap duckdb-wasm."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/viewer/**", "!src/viewer/data/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "paths": {
+                  "@opentelemetry/otlp-transformer": "Internal-use upstream package; test oracle only.",
+                  "apache-arrow": "The viewer bundles duckdb-wasm's apache-arrow 17; never import apache-arrow here (note 11).",
+                  "@uwdata/mosaic-core": "mosaic.ts is the only Mosaic coordinator seam (D19).",
+                  "@uwdata/mosaic-sql": "SQL is built under src/query/sql and src/viewer/data only.",
+                  "@uwdata/flechette": "The data layer (src/viewer/data) wraps the query engine.",
+                  "@duckdb/duckdb-wasm": "The engine folder (src/viewer/data/engine) and mosaic.ts wrap duckdb-wasm."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/viewer/data/**", "!src/viewer/data/engine/**", "!src/viewer/data/mosaic.ts"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "paths": {
+                  "@opentelemetry/otlp-transformer": "Internal-use upstream package; test oracle only.",
+                  "apache-arrow": "The viewer bundles duckdb-wasm's apache-arrow 17; never import apache-arrow here (note 11).",
+                  "@uwdata/mosaic-core": "mosaic.ts is the only Mosaic coordinator seam (D19).",
+                  "@duckdb/duckdb-wasm": "The engine folder (src/viewer/data/engine) and mosaic.ts wrap duckdb-wasm."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/viewer/data/engine/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "paths": {
+                  "@opentelemetry/otlp-transformer": "Internal-use upstream package; test oracle only.",
+                  "apache-arrow": "The viewer bundles duckdb-wasm's apache-arrow 17; never import apache-arrow here (note 11).",
+                  "@uwdata/mosaic-core": "mosaic.ts is the only Mosaic coordinator seam (D19)."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/viewer/data/mosaic.ts"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "paths": {
+                  "@opentelemetry/otlp-transformer": "Internal-use upstream package; test oracle only.",
+                  "apache-arrow": "The viewer bundles duckdb-wasm's apache-arrow 17; never import apache-arrow here (note 11)."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/query/**", "!src/query/sql/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "paths": {
+                  "@opentelemetry/otlp-transformer": "Internal-use upstream package; test oracle only.",
+                  "apache-arrow": "The viewer bundles duckdb-wasm's apache-arrow 17; never import apache-arrow here (note 11).",
+                  "@uwdata/mosaic-core": "mosaic.ts is the only Mosaic coordinator seam (D19).",
+                  "@uwdata/mosaic-sql": "SQL is built under src/query/sql and src/viewer/data only.",
+                  "@uwdata/flechette": "The data layer (src/viewer/data) wraps the query engine.",
+                  "@duckdb/duckdb-wasm": "The engine folder (src/viewer/data/engine) and mosaic.ts wrap duckdb-wasm."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/query/sql/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "paths": {
+                  "@opentelemetry/otlp-transformer": "Internal-use upstream package; test oracle only.",
+                  "apache-arrow": "The viewer bundles duckdb-wasm's apache-arrow 17; never import apache-arrow here (note 11).",
+                  "@uwdata/mosaic-core": "mosaic.ts is the only Mosaic coordinator seam (D19).",
+                  "@uwdata/flechette": "The data layer (src/viewer/data) wraps the query engine.",
+                  "@duckdb/duckdb-wasm": "The engine folder (src/viewer/data/engine) and mosaic.ts wrap duckdb-wasm."
                 }
               }
             }

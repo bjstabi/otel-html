@@ -2,7 +2,6 @@ import { Tooltip } from '@base-ui/react/tooltip';
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import type { Manifest } from '../../src/format/manifest.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import type { RelNanos, SpanId, TraceId } from '../../src/model/ids.js';
 import type { ResourceRecord, ScopeRecord } from '../../src/model/records.js';
@@ -16,6 +15,7 @@ import { createSelectionStore } from '../../src/viewer/state/selection.js';
 import { SelectionProvider } from '../../src/viewer/state/selection-context.js';
 import { ThemeProvider } from '../../src/viewer/theme/theme-provider.js';
 import { detailOf, spanIdOf, traceRow } from './trace-rows.js';
+import { manifestV4 } from './v4-manifest.js';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const charts = vi.hoisted((): unknown[] => []);
@@ -45,11 +45,7 @@ const TRACE = '5134a3f57d52d9e9822e617916d38b35' as TraceId;
 const ORPHAN = 'ea30c7b71377a677cb3ce2b5f8f4abb9' as TraceId;
 const SPAN = '1d8745a159cef356' as SpanId;
 
-const manifest = {
-  formatVersion: 1,
-  epochUnixNano: '1700000000000000000',
-  totals: { spans: 1, logs: 4, metrics: 0 },
-} as unknown as Manifest;
+const manifest = manifestV4(1);
 
 const resource: ResourceRecord = {
   attributes: new Map([
@@ -145,7 +141,6 @@ function source(): DataSource {
         before: ROWS.slice(0, at),
         log: byRef(ref),
         after: ROWS.slice(at + 1),
-        partial: true,
       });
     },
   } as unknown as DataSource;
@@ -272,7 +267,7 @@ describe('LogPanel', () => {
     ROWS[0] = row(0);
   });
 
-  test('Surrounding logs lists neighbors in time order with a partial note', async () => {
+  test('Surrounding logs lists neighbors in time order and no partial note', async () => {
     mount('0.1', { ltab: 'surrounding' });
     const panel = await screen.findByTestId('log-panel');
     const grid = await within(panel).findByRole('grid', { name: 'Results' });
@@ -284,7 +279,7 @@ describe('LogPanel', () => {
     expect(bodies[0]).toContain('body 0');
     expect(bodies[1]).toContain('body 1');
     expect(bodies[3]).toContain('onerror');
-    expect(within(panel).getByText(/partial/i)).toBeTruthy();
+    expect(within(panel).queryByText(/partial/i)).toBeNull();
   });
 
   test('a ref that is not in the report renders the error card naming it', async () => {
@@ -311,7 +306,7 @@ describe('LogPanel', () => {
     const ds = {
       ...base,
       getLog: (ref: LogRef) => (ref === ROWS[1]?.ref ? gate.then(() => base.getLog(ref)) : base.getLog(ref)),
-    } as DataSource;
+    } as unknown as DataSource;
     const store = createSelectionStore({ log: '0.0' as LogRef });
     const panelFor = (ref: string) => (
       <ThemeProvider>

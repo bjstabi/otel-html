@@ -1,10 +1,17 @@
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { decodeColumns } from '../format/columns.js';
 import { reviveDataJson, unwrapDataFile } from '../format/data-file.js';
-import { type Manifest, type ManifestChunk, parseManifest } from '../format/manifest.js';
+import {
+  isV4,
+  type Manifest,
+  type ManifestChunk,
+  type ManifestV4,
+  parseAnyManifest,
+  parseManifest,
+} from '../format/manifest.js';
 import { MANIFEST_KEY, MANIFEST_PATH, type Signal } from '../format/paths.js';
 import { LOG_COLUMNS, METRIC_COLUMNS, SPAN_COLUMNS } from '../format/specs.js';
-import { READABLE_FORMAT_VERSIONS } from '../format/version.js';
+import { CHUNK_READABLE_FORMAT_VERSIONS } from '../format/version.js';
 import { OtelHtmlError } from '../model/errors.js';
 import { parseUnixNanos, type UnixNanos } from '../model/ids.js';
 import { at } from './checkpoint.js';
@@ -18,7 +25,7 @@ import {
   type WriterDeps,
 } from './session.js';
 
-export interface Input {
+interface Input {
   dir: string;
   manifest: Manifest;
   epoch: UnixNanos;
@@ -54,8 +61,14 @@ async function readFile(fs: FileSystem, file: string, what: string): Promise<str
   }
 }
 
-/** The report at `rawDir`: its manifest and epoch. `verb` names the command in the usage error when there is no report. */
-export async function readReportManifest(fs: FileSystem, rawDir: string, verb = 'merge'): Promise<Input> {
+interface Located {
+  dir: string;
+  file: string;
+  raw: unknown;
+}
+
+/** The report's manifest, unwrapped but not parsed. `verb` names the command in the usage error when there is no report. */
+async function locateManifest(fs: FileSystem, rawDir: string, verb: string): Promise<Located> {
   const dir = trimSlashes(rawDir);
   const file = at(dir, MANIFEST_PATH);
   if (!(await fs.exists(file))) {
@@ -65,17 +78,58 @@ export async function readReportManifest(fs: FileSystem, rawDir: string, verb = 
     });
   }
   const text = await readFile(fs, file, 'the manifest');
-  const raw = inFile(file, () => reviveDataJson(unwrapDataFile(text, MANIFEST_KEY)));
+  return { dir, file, raw: inFile(file, () => reviveDataJson(unwrapDataFile(text, MANIFEST_KEY))) };
+}
+
+/** Fails like the copy would: the path must be a file (or a link) that opens and yields its first bytes. Without `bytes` it reads one piece where the port can stream; with `bytes` the size is exact, and a port without `openBlob` streams (or reads) the whole file. */
+async function assertReadable(fs: FileSystem, file: string, listed: string, bytes?: number): Promise<void> {
+  const fail = (why: string): OtelHtmlError =>
+    new OtelHtmlError('invalid-report', {
+      message: `${file}: cannot read ${listed} listed in the manifest (${why})`,
+    });
+  const kind = await fs.entryKind(file);
+  if (kind === 'missing') throw fail('it is missing');
+  if (kind === 'dir' || kind === 'other') throw fail('it is not a file');
+  try {
+    const size = await sizeOf(fs, file, bytes !== undefined);
+    if (bytes !== undefined && size !== bytes) {
+      throw new OtelHtmlError('invalid-report', {
+        message: `${file}: ${listed} is ${size} bytes, the manifest lists ${bytes}`,
+      });
+    }
+  } catch (e) {
+    if (e instanceof OtelHtmlError) throw e;
+    throw fail(e instanceof Error ? e.message : String(e));
+  }
+}
+
+/** The file's size when `exact`, else only that its first bytes read. Streams or slices: a partition is never held whole when the port can avoid it. */
+async function sizeOf(fs: FileSystem, file: string, exact: boolean): Promise<number> {
+  if (exact && fs.openBlob !== undefined) {
+    const blob = await fs.openBlob(file);
+    await blob.slice(0, 1).arrayBuffer(); // opens for real
+    return blob.size;
+  }
+  if (fs.readChunks === undefined) return (await fs.readBytes(file)).length;
+  let n = 0;
+  for await (const piece of fs.readChunks(file)) {
+    n += piece.length;
+    if (!exact) break;
+  }
+  return n;
+}
+
+function chunkInput({ dir, file, raw }: Located, verb: string): Input {
   if (
     typeof raw === 'object' &&
     raw !== null &&
     'formatVersion' in raw &&
-    !READABLE_FORMAT_VERSIONS.some((v) => v === raw.formatVersion)
+    !CHUNK_READABLE_FORMAT_VERSIONS.some((v) => v === raw.formatVersion)
   ) {
-    // merge replays chunks, which every readable version lays out alike.
+    // Chunk reports of every readable version lay out alike; anything else is another otel-html's to read.
     throw new OtelHtmlError('version-mismatch', {
-      message: `${file}: unsupported report formatVersion ${JSON.stringify(raw.formatVersion)}; this otel-html reads formatVersion ${READABLE_FORMAT_VERSIONS.join(' or ')}`,
-      hint: 'merge the report with the otel-html version that wrote it, or regenerate it from its OTLP input',
+      message: `${file}: unsupported report formatVersion ${JSON.stringify(raw.formatVersion)}; this otel-html reads formatVersion ${[...CHUNK_READABLE_FORMAT_VERSIONS, 4].join(', ')}`,
+      hint: `run ${verb} with the otel-html version that wrote the report, or regenerate it from its OTLP input`,
     });
   }
   const manifest = inFile(file, () => parseManifest(raw));
@@ -84,6 +138,32 @@ export async function readReportManifest(fs: FileSystem, rawDir: string, verb = 
     manifest,
     epoch: inFile(file, () => parseUnixNanos(manifest.epochUnixNano, 'epochUnixNano')),
   };
+}
+
+/** A merge input: a chunk report to replay, or a format-4 report whose partitions are copied. */
+type MergeInput = ({ kind: 'chunks' } & Input) | ({ kind: 'partitions' } & PartitionInput);
+
+interface PartitionInput {
+  dir: string;
+  manifest: ManifestV4;
+  epoch: UnixNanos;
+}
+
+/** The report at `rawDir` as merge (or, with another `verb`, that command) reads it: format 4 as partitions, anything else as chunks. */
+export async function readMergeInput(fs: FileSystem, rawDir: string, verb = 'merge'): Promise<MergeInput> {
+  const located = await locateManifest(fs, rawDir, verb);
+  const { raw, file, dir } = located;
+  if (typeof raw === 'object' && raw !== null && 'formatVersion' in raw && raw.formatVersion === 4) {
+    const manifest = inFile(file, () => parseAnyManifest(raw));
+    if (!isV4(manifest)) throw new Error('invariant violated: a format-4 manifest parsed as another format');
+    return {
+      kind: 'partitions',
+      dir,
+      manifest,
+      epoch: inFile(file, () => parseUnixNanos(manifest.epochUnixNano, 'epochUnixNano')),
+    };
+  }
+  return { kind: 'chunks', ...chunkInput(located, verb) };
 }
 
 async function readChunk(fs: FileSystem, input: Input, chunk: ManifestChunk): Promise<RecordBatch> {
@@ -177,8 +257,8 @@ export async function mergeReports(
   const out = trimSlashes(options.out);
   const dirs = inputs.map(trimSlashes);
   for (const dir of dirs) await assertDisjoint(deps.fs, out, dir);
-  const loaded: Input[] = [];
-  for (const dir of dirs) loaded.push(await readReportManifest(deps.fs, dir));
+  const loaded: MergeInput[] = [];
+  for (const dir of dirs) loaded.push(await readMergeInput(deps.fs, dir));
   loaded.sort((a, b) => (a.epoch < b.epoch ? -1 : a.epoch > b.epoch ? 1 : 0));
   for (const input of loaded) {
     if (!input.manifest.complete) {
@@ -187,6 +267,17 @@ export async function mergeReports(
   }
   // An existing report at `out` is the base; the session's append branch inherits its title and dashboards.
   const intoExisting = options.mode !== 'replace' && (await deps.fs.exists(at(out, MANIFEST_PATH)));
+  // Also before it: a replace wipes the old report at the session's first write, so every partition file and chunk an input lists must open.
+  for (const input of loaded) {
+    // Chunk inputs list no sizes; partition files do, and a truncated one would fail the copy after the wipe.
+    const listed =
+      input.kind === 'partitions'
+        ? input.manifest.partitions.flatMap((e) =>
+            Object.values(e.files).map((f) => ({ path: f.path, bytes: f.bytes })),
+          )
+        : input.manifest.chunks.map((c) => ({ path: c.path, bytes: undefined }));
+    for (const { path, bytes } of listed) await assertReadable(deps.fs, at(input.dir, path), path, bytes);
+  }
   const first = loaded[0];
   const titled =
     options.config.title === undefined && first !== undefined
@@ -197,6 +288,20 @@ export async function mergeReports(
   const session = await openSession(deps, { ...options, out, config });
   try {
     for (const [origin, input] of loaded.entries()) {
+      if (input.kind === 'partitions') {
+        if (session.copyPartitions === undefined) {
+          throw new Error('invariant violated: a partition input reached a session that cannot copy it');
+        }
+        await session.copyPartitions({
+          origin,
+          dir: input.dir,
+          epoch: input.epoch,
+          totals: input.manifest.totals,
+          range: input.manifest.range,
+          partitions: input.manifest.partitions,
+        });
+        continue;
+      }
       for (const signal of SIGNAL_ORDER) {
         for (const chunk of input.manifest.chunks) {
           if (chunk.signal !== signal) continue;

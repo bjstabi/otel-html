@@ -1,26 +1,13 @@
 import { setImmediate } from 'node:timers/promises';
 import { describe, expect, test, vi } from 'vitest';
 import { StreamNormalizer } from '../../src/rollups/metric-streams.js';
+import { PartitionWriter } from '../../src/writer/partition-writer.js';
 import { openSession } from '../../src/writer/session.js';
 import { createMemoryFileSystem } from '../../test-support/memory-fs.js';
-import { span, traceRequest } from '../../test-support/otlp-builders.js';
-import { createTestWriter, EPOCH_NS, otlp, type TestWriter } from '../../test-support/writer-deps.js';
-import { config, heldCheckpoint, makeDue, OUT, one, STATE_0 } from './checkpoint-helpers.js';
-import { manifestOf, readDataFile, spanIdOf, traceIdOf } from './helpers.js';
-
-const stateOf = (
-  w: TestWriter,
-  file: string,
-): { traceIndex: Record<string, Record<string, { spans: number }>> } =>
-  JSON.parse(w.fs.snapshot().get(`${OUT}/${file}`) ?? 'null');
-
-const shardEntry = (w: TestWriter, trace: number): { spans: number } | undefined =>
-  (
-    readDataFile(w, OUT, `data/traces/${traceIdOf(trace).slice(0, 2)}.js`) as Record<
-      string,
-      { spans: number }
-    >
-  )[traceIdOf(trace)];
+import { metricsRequest } from '../../test-support/otlp-builders.js';
+import { createTestWriter, EPOCH_NS, otlp, testConfig } from '../../test-support/writer-deps.js';
+import { config, heldCheckpoint, makeDue, OUT, one } from './checkpoint-helpers.js';
+import { allSpans, manifestOf } from './helpers.js';
 
 describe('interval checkpoints run in the background', () => {
   test('adds and endInput resolve while the state slot write is held, and their spans are kept', async () => {
@@ -31,47 +18,21 @@ describe('interval checkpoints run in the background', () => {
     gate.release();
     await s.flush();
     expect(manifestOf(w, OUT)).toMatchObject({ totals: { spans: 3 } });
-    expect(manifestOf(w, OUT).chunks.map((c) => c.n)).toEqual([0, 1, 2]);
-    await s.close();
-  });
-
-  test('a held snapshot entry that gains a span keeps its prepare-time value in the written files', async () => {
-    const { w, s, gate } = await heldCheckpoint();
-    await s.add(one(0, 4), 'again.json'); // trace 0 is in the snapshot
-    gate.release();
-    await s.flush(); // waits for the held write, then checkpoints the update
-    expect(manifestOf(w, OUT).totals.spans).toBe(3);
-    // the held write's state slot (slot 0) was read after the update, yet shows the entry as prepared
-    expect(stateOf(w, STATE_0).traceIndex[traceIdOf(0).slice(0, 2)]?.[traceIdOf(0)]?.spans).toBe(1);
-    // the next checkpoint (slot 1) and the shard file show it updated
-    expect(
-      stateOf(w, 'data/state/session.1.json').traceIndex[traceIdOf(0).slice(0, 2)]?.[traceIdOf(0)]?.spans,
-    ).toBe(2);
-    expect(shardEntry(w, 0)?.spans).toBe(2);
+    expect(allSpans(w, OUT)).toHaveLength(3);
     await s.close();
   });
 
   test('a failed background write is retried by the next flush with everything it held', async () => {
     const { w, s, gate } = await heldCheckpoint();
-    await s.add(one(2, 3), 'c.json'); // chunk 2 is cut during the write
+    await s.add(one(2, 3), 'c.json'); // a third span arrives during the write
     gate.fail(new Error('disk gone'));
     await s.flush();
     expect(w.logs.some((l) => l.level === 'error' && l.msg.includes('checkpoint failed; will retry'))).toBe(
       true,
     );
     const m = manifestOf(w, OUT);
-    expect(m.chunks.map((c) => c.n)).toEqual([0, 1, 2]);
     expect(m.totals.spans).toBe(3);
-    for (const t of [0, 1, 2]) expect(shardEntry(w, t)?.spans).toBe(1);
-    await s.close();
-  });
-
-  test('a failed shard write leaves its shards dirty: the next flush writes them without a new add', async () => {
-    const { w, s, gate } = await heldCheckpoint('data/traces/00.js');
-    gate.fail(new Error('disk gone'));
-    await s.flush(); // nothing was added since: only the restored dirty set tells it to write shard 00
-    expect(shardEntry(w, 0)?.spans).toBe(1);
-    expect(shardEntry(w, 1)?.spans).toBe(1);
+    expect(allSpans(w, OUT)).toHaveLength(3);
     await s.close();
   });
 
@@ -85,7 +46,6 @@ describe('interval checkpoints run in the background', () => {
     await expect(s.flush()).rejects.toThrow(/prepare broke/);
     spy.mockRestore();
     await s.flush();
-    expect(shardEntry(w, 0)?.spans).toBe(1);
     expect(manifestOf(w, OUT).totals.spans).toBe(1);
     await s.close();
   });
@@ -112,7 +72,7 @@ describe('interval checkpoints run in the background', () => {
     await s.close();
   });
 
-  test('a tracer that throws after the manifest is written does not list chunks twice', async () => {
+  test('a tracer that throws after the manifest is written does not list partitions twice', async () => {
     const w = createTestWriter({ fs: createMemoryFileSystem({ pieces: true }) });
     const inner = w.deps.tracer;
     const deps = {
@@ -139,9 +99,9 @@ describe('interval checkpoints run in the background', () => {
     await s.add(one(2, 3), 'c.json');
     makeDue(w);
     await s.add(one(3, 4), 'd.json');
-    await vi.waitFor(() => expect(manifestOf(w, OUT).chunks.length).toBeGreaterThanOrEqual(3));
+    await vi.waitFor(() => expect(manifestOf(w, OUT).partitions.length).toBeGreaterThanOrEqual(2));
     await expect(s.flush()).resolves.toBeUndefined();
-    const ns = manifestOf(w, OUT).chunks.map((c) => c.n);
+    const ns = manifestOf(w, OUT).partitions.map((p) => p.n);
     expect(new Set(ns).size).toBe(ns.length);
     expect(ns).toEqual([...ns].sort((a, b) => a - b));
     expect(
@@ -204,27 +164,69 @@ describe('interval checkpoints run in the background', () => {
   );
 });
 
-describe('the streamed state', () => {
-  test('is byte-identical to JSON.stringify, with integer-named shards first like JS object keys', async () => {
-    const w = createTestWriter();
-    const s = await openSession(w.deps, { out: OUT, config, mode: 'replace' });
-    // "0a" sorts before "12", but a JS object lists the integer-like key "12" first
-    for (const [i, prefix] of ['0a', '12', '0a', '12'].entries()) {
-      const request = traceRequest([
-        span({
-          traceId: `${prefix}${i.toString(16).padStart(30, '0')}`,
-          spanId: spanIdOf(i),
-          startTimeUnixNano: String(BigInt(EPOCH_NS) + BigInt(i)),
-          endTimeUnixNano: String(BigInt(EPOCH_NS) + BigInt(i) + 10n),
-        }),
-      ]);
-      await s.add(otlp(request), `${i}.json`);
+describe('back-pressure on the library path', () => {
+  const TARGET = 1_500;
+  const T0 = BigInt(EPOCH_NS);
+  const gauge = (i: number) =>
+    otlp(
+      metricsRequest([
+        {
+          name: `m${i}`,
+          unit: 'By',
+          gauge: { dataPoints: [{ asInt: String(i), timeUnixNano: String(T0 + BigInt(i)) }] },
+        },
+      ]),
+    );
+
+  test('add waits for the in-flight checkpoint once the held rows reach the target, and the hold stays bounded', async () => {
+    const w = createTestWriter({ fs: createMemoryFileSystem({ pieces: true }) });
+    const held: number[] = [];
+    const getter = Object.getOwnPropertyDescriptor(PartitionWriter.prototype, 'pendingBytes')?.get;
+    if (getter === undefined) throw new Error('pendingBytes getter missing');
+    let writer: PartitionWriter | null = null;
+    vi.spyOn(PartitionWriter.prototype, 'pendingBytes', 'get').mockImplementation(function (
+      this: PartitionWriter,
+    ) {
+      writer = this;
+      return getter.call(this);
+    });
+    const s = await openSession(w.deps, {
+      out: OUT,
+      config: testConfig({ writer: { format: 'site', chunkTargetBytes: TARGET } }),
+      mode: 'replace',
+    });
+    const observe = (): void => {
+      if (writer !== null) held.push(getter.call(writer));
+    };
+    const gate = w.fs.holdNextWrite('000000/points.parquet');
+    let reached = false;
+    void gate.reached.then(() => {
+      reached = true;
+    });
+    let i = 0;
+    let blocked: Promise<unknown> | null = null;
+    // add until one stays pending: the first to reach the target starts the checkpoint (held at its write), a later
+    // one reaches the target again while the write is in flight and must wait for it
+    for (; blocked === null && i < 200; i++) {
+      const add = s.add(gauge(i), 'a.json');
+      const winner = await Promise.race([add.then(() => 'added'), setImmediate('tick')]);
+      if (winner === 'tick') blocked = add;
+      else observe();
     }
-    await s.flush();
-    const text = w.fs.snapshot().get(`${OUT}/${STATE_0}`);
-    if (text === undefined) throw new Error('no state slot');
-    expect(JSON.stringify(JSON.parse(text))).toBe(text);
-    expect(Object.keys(JSON.parse(text).traceIndex)).toEqual(['12', '0a']);
+    if (blocked === null) throw new Error('no add waited for the checkpoint');
+    expect(reached).toBe(true);
+    expect(Math.max(...held)).toBeLessThan(2 * TARGET);
+    // still pending after a further tick, until the held write is released
+    expect(await Promise.race([blocked.then(() => 'added'), setImmediate('tick')])).toBe('tick');
+    gate.release();
+    await blocked;
+    observe();
+    for (let k = 0; k < 20; k++) {
+      await s.add(gauge(i + k), 'a.json');
+      observe();
+    }
+    expect(Math.max(...held)).toBeLessThan(2 * TARGET);
     await s.close();
+    vi.restoreAllMocks();
   });
 });

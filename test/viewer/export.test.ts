@@ -3,7 +3,7 @@ import { parseUnixNanos, type TraceId } from '../../src/model/ids.js';
 import { createNormalizeContext, normalizeTraces } from '../../src/model/normalize.js';
 import { parseOtlpJson } from '../../src/model/otlp-json.js';
 import { csvCell, exportRows } from '../../src/viewer/components/export.js';
-import type { SpanRow, TraceRow } from '../../src/viewer/data/span-query.js';
+import type { SpanRow, TraceRow } from '../../src/viewer/data/results.js';
 import { attr, span, T0, traceRequest } from '../../test-support/otlp-builders.js';
 
 const text = (b: Blob): Promise<string> => b.text();
@@ -56,14 +56,11 @@ describe('exportRows', () => {
   test('csv of trace rows uses trace columns', async () => {
     const row = {
       traceId: 'ab' as TraceId,
-      root: null,
       rootSummary: { service: 'web', name: 'GET /', resource: 'GET /' },
       start: 5,
       durationNs: 9,
       spans: 3,
       errors: 1,
-      shareComplete: false,
-      serviceShare: [],
     } satisfies TraceRow;
     const out = (await text(exportRows([row], 'csv'))).split('\r\n');
     expect(out[0]).toBe('start_rel_ns,trace_id,root_service,root_name,duration_ns,spans,errors');

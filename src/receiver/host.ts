@@ -5,12 +5,13 @@ export function bracketed(host: string): string {
   return host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
 }
 
-type BindFlag = '--http' | '--grpc';
+export type BindFlag = '--http' | '--grpc' | '--port';
 
 const ADDRESS_HINT = (): string => '--host must be an address of this machine';
 
 const HINT_BY_CODE: Readonly<Record<string, (flag: BindFlag) => string>> = {
-  EADDRINUSE: (flag) => `pass ${flag} <port> or --no-${flag.slice(2)}`,
+  EADDRINUSE: (flag) =>
+    flag === '--port' ? 'pass --port <port>' : `pass ${flag} <port> or --no-${flag.slice(2)}`,
   EACCES: (flag) => `ports below 1024 need privileges; pass ${flag} <port>`,
   EADDRNOTAVAIL: ADDRESS_HINT,
   ENOTFOUND: ADDRESS_HINT,

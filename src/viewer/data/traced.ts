@@ -3,11 +3,11 @@ import { traced, viewerTracer } from '../telemetry.js';
 import type { DataSource } from './data-source.js';
 import type { ScriptLoader } from './script-loader.js';
 
-/** Each chunk load as a `viewer.chunk.load` span; a failure is an ERROR span. */
+/** Each script load as a `viewer.script.load` span; a failure is an ERROR span. */
 export function tracedLoader(loader: ScriptLoader): ScriptLoader {
   return {
     load: (path, key) =>
-      traced('viewer.chunk.load', { 'otel_html.path': path, 'otel_html.key': key }, () =>
+      traced('viewer.script.load', { 'otel_html.path': path, 'otel_html.key': key }, () =>
         loader.load(path, key),
       ),
   };
@@ -44,17 +44,17 @@ function query<T>(kind: string, count: (r: T) => number, run: () => Promise<T>):
 export function tracedDataSource(ds: DataSource): DataSource {
   return {
     ...ds,
-    querySpans: (q, onProgress, signal) =>
+    querySpans: (q, signal) =>
       query(
         'querySpans',
         (r) => r.rows.length,
-        () => ds.querySpans(q, onProgress, signal),
+        () => ds.querySpans(q, signal),
       ),
-    queryLogs: (q, onProgress, signal) =>
+    queryLogs: (q, signal) =>
       query(
         'queryLogs',
         (r) => r.rows.length,
-        () => ds.queryLogs(q, onProgress, signal),
+        () => ds.queryLogs(q, signal),
       ),
     getTrace: (id) =>
       query(
@@ -74,17 +74,17 @@ export function tracedDataSource(ds: DataSource): DataSource {
         (r) => r.before.length + 1 + r.after.length,
         () => ds.surroundingLogs(ref, n),
       ),
-    metric: (id) =>
+    services: (opts, signal) =>
       query(
-        'metric',
-        (r) => r.series.length,
-        () => ds.metric(id),
+        'services',
+        (r) => r.services.length,
+        () => ds.services(opts, signal),
       ),
-    metricsForResources: (resources) =>
+    patterns: (q, signal) =>
       query(
-        'metricsForResources',
-        (r) => r.length,
-        () => ds.metricsForResources(resources),
+        'patterns',
+        (r) => r.rows.length,
+        () => ds.patterns(q, signal),
       ),
   };
 }

@@ -1,15 +1,15 @@
 import { act, cleanup, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 import { FacetCounts } from '../../src/rollups/facets.js';
-import { RedSeries } from '../../src/rollups/red.js';
 import { TimeBuckets } from '../../src/rollups/time-buckets.js';
-import type { DataSource, SpanQuery, SpanQueryResult } from '../../src/viewer/data/data-source.js';
+import type { DataSource } from '../../src/viewer/data/data-source.js';
+import type { SpanQuery, SpanQueryResult } from '../../src/viewer/data/results.js';
 import { useSpanQuery } from '../../src/viewer/traces/use-span-query.js';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 afterEach(cleanup);
 
-const query = (text: string, scanAll = false): SpanQuery => ({
+const query = (text: string): SpanQuery => ({
   condition: null,
   text,
   window: null,
@@ -18,7 +18,8 @@ const query = (text: string, scanAll = false): SpanQuery => ({
   limit: 10,
   groupBy: null,
   measureBy: null,
-  scanAll,
+  needs: ['rows'],
+  facetKeys: null,
 });
 
 const resultOf = (total: number): SpanQueryResult => ({
@@ -26,15 +27,16 @@ const resultOf = (total: number): SpanQueryResult => ({
   total,
   facets: new FacetCounts(10, 10),
   buckets: new TimeBuckets(['ok', 'error', 'unset'], 8),
-  red: new RedSeries(8),
+  red: null,
+  durations: { summary: null, bins: [] },
   groups: null,
-  partial: null,
+  residual: null,
+  tables: { resources: [], scopes: [] },
 });
 
 interface Call {
   q: SpanQuery;
   signal: AbortSignal | undefined;
-  onProgress: ((s: number, t: number) => void) | undefined;
   resolve(r: SpanQueryResult): void;
   reject(e: unknown): void;
 }
@@ -43,16 +45,16 @@ interface Call {
 function scripted(): { ds: DataSource; calls: Call[] } {
   const calls: Call[] = [];
   const ds = {
-    querySpans: (q, onProgress, signal) =>
+    querySpans: (q: SpanQuery, signal?: AbortSignal) =>
       new Promise<SpanQueryResult>((resolve, reject) => {
-        calls.push({ q, signal, onProgress, resolve, reject });
+        calls.push({ q, signal, resolve, reject });
       }),
-  } as DataSource;
+  } as unknown as DataSource;
   return { ds, calls };
 }
 
 function Probe(props: { ds: DataSource; q: SpanQuery }): React.JSX.Element {
-  const { state, scanAll } = useSpanQuery(props.ds, props.q);
+  const { state } = useSpanQuery(props.ds, props.q);
   return (
     <div>
       <output data-testid="s">
@@ -60,11 +62,8 @@ function Probe(props: { ds: DataSource; q: SpanQuery }): React.JSX.Element {
           ? `ready:${state.result.total}`
           : state.status === 'error'
             ? `error:${state.message}`
-            : `loading:${state.progress?.scanned ?? '-'}`}
+            : `loading:${state.previous?.total ?? '-'}`}
       </output>
-      <button type="button" onClick={scanAll}>
-        scan
-      </button>
     </div>
   );
 }
@@ -92,21 +91,28 @@ describe('useSpanQuery', () => {
     expect(text()).toBe('loading:-');
   });
 
-  test('progress is shown while loading and failures carry their message', async () => {
+  test('failures carry their message', async () => {
     const { ds, calls } = scripted();
     render(<Probe ds={ds} q={query('a')} />);
-    await act(async () => calls[0]?.onProgress?.(3, 9));
-    expect(text()).toBe('loading:3');
-    await act(async () => calls[0]?.reject(new Error('data/chunks/spans/000003.js: failed')));
-    expect(text()).toBe('error:data/chunks/spans/000003.js: failed');
+    await act(async () => calls[0]?.reject(new Error('the engine stopped')));
+    expect(text()).toBe('error:the engine stopped');
   });
 
-  test('scanAll re-runs the same query with scanAll set', async () => {
+  test('the previous result stays available while the next query runs', async () => {
     const { ds, calls } = scripted();
+    const { rerender } = render(<Probe ds={ds} q={query('a')} />);
+    await act(async () => calls[0]?.resolve(resultOf(4)));
+    rerender(<Probe ds={ds} q={query('b')} />);
+    expect(text()).toBe('loading:4');
+  });
+
+  test('the data source gets the query and a signal, and nothing else', async () => {
+    const { ds, calls } = scripted();
+    const querySpans = vi.spyOn(ds, 'querySpans');
     render(<Probe ds={ds} q={query('a')} />);
-    await act(async () => calls[0]?.resolve(resultOf(1)));
-    await act(async () => screen.getByRole('button', { name: 'scan' }).click());
-    expect(calls).toHaveLength(2);
-    expect(calls[1]?.q).toEqual(query('a', true));
+    expect(querySpans).toHaveBeenCalledTimes(1);
+    expect(querySpans.mock.calls[0]).toHaveLength(2);
+    expect(querySpans.mock.calls[0]?.[1]).toBeInstanceOf(AbortSignal);
+    expect(calls).toHaveLength(1);
   });
 });

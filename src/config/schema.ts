@@ -7,6 +7,8 @@ import {
   type ViewInput,
   ViewListSchema,
 } from '../dashboards/schema.js';
+import { ASSETS_BASE_RE, DEFAULT_ASSETS_BASE } from '../format/paths.js';
+import { CHUNKS_GONE } from '../format/version.js';
 
 // Explicit input/output types keep `isolatedDeclarations` satisfied (Zod's inferred
 // builder types cannot be emitted per-file). The schemas below are the source of truth;
@@ -22,24 +24,38 @@ interface DropIn {
   logs?: { log_record?: string[] | undefined } | undefined;
   metrics?: { datapoint?: string[] | undefined } | undefined;
 }
+/** The default `writer.localWarnBytes`: the Parquet size past which a `local` report warns. */
+export const DEFAULT_LOCAL_WARN_BYTES = 256_000_000;
+
+/** The report formats `writer.format` names. */
+export type ReportFormat = 'local' | 'site';
+
 interface WriterOut {
+  format: ReportFormat;
+  rowGroupRows: number;
+  statisticsKeys: string[];
+  localWarnBytes: number;
+  compactOnMerge: boolean;
+  assetsBase: string;
   chunkTargetBytes: number;
   flushIntervalMs: number;
   dedupeCapacity: number;
   facetValueCap: number;
   facetKeyCap: number;
-  metricSeriesCap: number;
-  metricExemplars: number;
   drop: DropOut;
 }
 interface WriterIn {
+  format?: ReportFormat | undefined;
+  rowGroupRows?: number | undefined;
+  statisticsKeys?: string[] | undefined;
+  localWarnBytes?: number | undefined;
+  compactOnMerge?: boolean | undefined;
+  assetsBase?: string | undefined;
   chunkTargetBytes?: number | undefined;
   flushIntervalMs?: number | undefined;
   dedupeCapacity?: number | undefined;
   facetValueCap?: number | undefined;
   facetKeyCap?: number | undefined;
-  metricSeriesCap?: number | undefined;
-  metricExemplars?: number | undefined;
   drop?: DropIn | undefined;
 }
 interface ListenerOut {
@@ -65,14 +81,12 @@ interface ReceiverIn {
   inflightBudgetBytes?: number | undefined;
 }
 interface ViewerOut {
-  eagerBudgetBytes: number;
   listCap: number;
   theme: 'system' | 'light' | 'dark';
   defaultDashboard: string;
   home: 'traces' | 'logs' | 'metrics' | 'dashboards';
 }
 interface ViewerIn {
-  eagerBudgetBytes?: number | undefined;
   listCap?: number | undefined;
   theme?: 'system' | 'light' | 'dark' | undefined;
   defaultDashboard?: string | undefined;
@@ -114,13 +128,22 @@ const DropSchema = z
 
 const WriterSchema = z
   .strictObject({
+    format: z
+      .enum(['local', 'site'], { error: (i) => (i.input === 'chunks' ? CHUNKS_GONE : undefined) })
+      .default('local'),
+    rowGroupRows: z.number().int().min(50_000).max(100_000).default(50_000),
+    statisticsKeys: z.array(z.string()).default([]),
+    localWarnBytes: posInt.default(DEFAULT_LOCAL_WARN_BYTES),
+    compactOnMerge: z.boolean().default(false),
+    assetsBase: z
+      .string()
+      .regex(ASSETS_BASE_RE, 'assets/ or a relative path like ../../assets/0.3.0/')
+      .default(DEFAULT_ASSETS_BASE),
     chunkTargetBytes: posInt.default(4_000_000),
     flushIntervalMs: posInt.default(5_000),
     dedupeCapacity: posInt.default(200_000),
     facetValueCap: posInt.default(1_000),
     facetKeyCap: posInt.default(500),
-    metricSeriesCap: posInt.default(1_000),
-    metricExemplars: posInt.default(4),
     drop: DropSchema,
   })
   .prefault({});
@@ -139,7 +162,6 @@ const ReceiverSchema = z
 
 const ViewerSchema = z
   .strictObject({
-    eagerBudgetBytes: posInt.default(75_000_000),
     listCap: posInt.default(10_000),
     theme: z.enum(['system', 'light', 'dark']).default('system'),
     defaultDashboard: z.string().default('fusion'),

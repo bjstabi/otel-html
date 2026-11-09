@@ -9,6 +9,7 @@ import { useFilterActions } from '../components/use-filter-actions.js';
 import { Waterfall } from '../components/waterfall.js';
 import type { DataSource } from '../data/data-source.js';
 import type { LogRef, LogRow } from '../data/log-query.js';
+import { manifestRange } from '../data/manifest-range.js';
 import { gridWindow, MetricGrid, type MetricGridOrigin } from '../metrics/metric-grid.js';
 import { CONTROL } from '../shell/controls.js';
 import { useGoTo } from '../shell/go-to.js';
@@ -175,7 +176,7 @@ export function LogTraceTab(props: { dataSource: DataSource; row: LogRow }): JSX
 /** The embedded metric grid on the log's resource, around the log's time (the whole run for a log without one). */
 export function LogMetricsTab(props: { dataSource: DataSource; row: LogRow }): JSX.Element {
   const { dataSource, row } = props;
-  const range = dataSource.manifest.range;
+  const range = useMemo(() => manifestRange(dataSource.manifest), [dataSource]);
   const origin = useMemo((): MetricGridOrigin => {
     const at = row.timeSource === 'none' ? null : row.time;
     return {
@@ -237,11 +238,6 @@ export function SurroundingTab(props: {
         Logs from {row.service}
         {row.host === null ? '' : ` on ${row.host}`} around this one, in time order.
       </p>
-      {current.value.partial && (
-        <p className="text-xs text-ink-2">
-          Partial: the scan stopped at its neighbor-chunk limit, so there may be more logs on a side.
-        </p>
-      )}
       <LogList
         rows={rows}
         sort={null}

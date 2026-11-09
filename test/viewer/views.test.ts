@@ -1,6 +1,5 @@
 import { describe, expect, test } from 'vitest';
 import { FacetCounts } from '../../src/rollups/facets.js';
-import { RedSeries } from '../../src/rollups/red.js';
 import { GroupDurations } from '../../src/rollups/span-rollups.js';
 import { TimeBuckets } from '../../src/rollups/time-buckets.js';
 import { formatDuration } from '../../src/semconv/formatters.js';
@@ -12,12 +11,10 @@ import {
   toplist,
   treemap,
 } from '../../src/viewer/components/facet-views.js';
-import type { SpanQueryResult, SpanRow } from '../../src/viewer/data/span-query.js';
+import type { GroupStatsResult, SpanQueryResult, SpanRow } from '../../src/viewer/data/results.js';
 import { createColorAssigner } from '../../src/viewer/theme/palette.js';
 import {
-  binsOnAxis,
   durationAxis,
-  durationBins,
   GROUPED_VIEWS,
   groupSlices,
   paddedAxis,
@@ -44,9 +41,11 @@ function result(services: number, spans: Partial<Record<string, number>> = {}): 
     total: facets.total('service.name'),
     facets,
     buckets: new TimeBuckets(['ok', 'error', 'unset'], 64),
-    red: new RedSeries(64),
+    red: null,
+    durations: { summary: null, bins: [] },
     groups: null,
-    partial: null,
+    residual: null,
+    tables: { resources: [], scopes: [] },
   };
 }
 
@@ -127,6 +126,29 @@ describe('every chart view builds', () => {
     expect([...GROUPED_VIEWS].sort()).toEqual(['bar', 'pie', 'table', 'toplist', 'treemap']);
   });
 
+  test('the latency time series reads the per-bucket quantiles of RedBuckets', () => {
+    const red = {
+      startNs: 0,
+      widthNs: 1,
+      counts: [1, 0],
+      errors: [0, 0],
+      p50: [5, null],
+      p95: [7, null],
+      p99: [9, null],
+      max: [9, null],
+    };
+    const option = VIEW_BUILDERS.timeseries(
+      { ...result(1), red },
+      { groupBy: null, colors: createColorAssigner(), measure: 'latency' },
+    );
+    const series = (option as { series: { name: string; data: (number | null)[] }[] }).series;
+    expect(series.map((x) => [x.name, x.data])).toEqual([
+      ['p50', [5, null]],
+      ['p95', [7, null]],
+      ['p99', [9, null]],
+    ]);
+  });
+
   test('pointplot plots the returned spans by start and duration, errors with their own series', () => {
     const row = (start: number, dur: number, error: boolean): SpanRow =>
       ({
@@ -154,22 +176,19 @@ describe('resolveCssVars', () => {
   });
 });
 
-describe('durationBins', () => {
+describe('duration axis and bins', () => {
   const row = (d: number): SpanRow => ({ durationNs: d }) as unknown as SpanRow;
 
-  test('log-spaced bins cover every duration exactly once', () => {
-    const rows = [1, 10, 100, 1000, 1000, 5000].map(row);
-    const bins = durationBins(rows, 4);
-    expect(bins.reduce((a, b) => a + b.count, 0)).toBe(6);
-    expect(bins[0]?.fromNs).toBeLessThanOrEqual(1);
-    expect(bins.at(-1)?.toNs).toBeGreaterThan(5000);
-    for (let i = 1; i < bins.length; i++) expect(bins[i]?.fromNs).toBe(bins[i - 1]?.toNs);
+  test('log-spaced edges from the extremes cover every duration', () => {
+    const edges = durationAxis([row(1), row(5000)], 4);
+    expect(edges).toHaveLength(5);
+    expect(edges[0]).toBeLessThanOrEqual(1);
+    expect(edges.at(-1)).toBeGreaterThan(5000);
   });
 
-  test('empty input and a single distinct value are handled', () => {
-    expect(durationBins([], 4)).toEqual([]);
-    const one = durationBins([row(7), row(7)], 4);
-    expect(one.reduce((a, b) => a + b.count, 0)).toBe(2);
+  test('no rows and no range give no edges, a single distinct value still gives edges', () => {
+    expect(durationAxis([], 4)).toEqual([]);
+    expect(durationAxis([row(7), row(7)], 4)).toHaveLength(5);
   });
 
   test('durationAxis with a range puts lo and hi on the first and last edge exactly', () => {
@@ -244,25 +263,6 @@ describe('durationBins', () => {
     expect(edges[1]).toBeGreaterThan(1);
     expect(edges.at(-1)).toBe(1e4);
   });
-
-  test('binsOnAxis puts a duration equal to an edge in the upper bin', () => {
-    const bins = binsOnAxis([row(10), row(100)], [0, 10, 100, 1000]);
-    expect(bins.map((b) => b.count)).toEqual([0, 1, 1]);
-  });
-
-  test('binsOnAxis counts rows into given edges and clamps outliers', () => {
-    const bins = binsOnAxis([5, 50, 500, -1].map(row), [0, 10, 100]);
-    expect(bins).toEqual([
-      { fromNs: 0, toNs: 10, count: 2 },
-      { fromNs: 10, toNs: 100, count: 2 },
-    ]);
-  });
-
-  test('durationBins equals binsOnAxis over durationAxis', () => {
-    const rows = [1, 10, 100, 1000, 1000, 5000].map(row);
-    expect(durationBins(rows, 4)).toEqual(binsOnAxis(rows, durationAxis(rows, 4)));
-    expect(durationAxis([], 4)).toEqual([]);
-  });
 });
 
 describe('facet views over a log facet set', () => {
@@ -298,6 +298,25 @@ describe('measured slices', () => {
     }
     return { facets, groups };
   }
+
+  test('measuredSlices reads GroupStatsResult: ranked by the measure, every measure supported', () => {
+    const groups: GroupStatsResult = {
+      groups: [
+        { group: 'a', count: 2, sum: 40, avg: 20, max: 30, p95: 29, p99: 30 },
+        { group: 'b', count: 1, sum: 50, avg: 50, max: 50, p95: 50, p99: 50 },
+        { group: 'c', count: 9, sum: 90, avg: 10, max: 11, p95: 10, p99: 11 },
+      ],
+      cap: 100,
+      dropped: 0,
+    };
+    const keys = (m: Parameters<typeof measuredSlices>[1]): string[] =>
+      measuredSlices(groups, m, createColorAssigner()).map((x) => x.key);
+    expect(keys('duration.sum')).toEqual(['c', 'b', 'a']);
+    expect(keys('duration.avg')).toEqual(['b', 'a', 'c']);
+    expect(keys('duration.max')).toEqual(['b', 'a', 'c']);
+    expect(keys('duration.p95')).toEqual(['b', 'a', 'c']);
+    expect(keys('duration.p99')).toEqual(['b', 'a', 'c']);
+  });
 
   test('measuredSlices ranks groups by the measure, no Other slice', () => {
     const { groups } = measured();

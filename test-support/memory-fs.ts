@@ -34,16 +34,21 @@ export interface WriteGate {
  * In-memory FileSystem that mirrors the node implementation where the writer relies on it:
  * writing text needs an existing parent directory (writeBytes creates parents), `list` of a missing
  * directory fails with ENOENT, directories exist implicitly for every file prefix, and `remove` refuses
- * directories. With `pieces`, `writePiecesAtomic` exists and consumes its pieces only once the write is let through
+ * directories (`removeDir` removes one). With `pieces`, `writePiecesAtomic` exists and consumes its pieces only once the write is let through
  * (the node implementation streams them), so a test can see what a held write would read late.
  */
-export function createMemoryFileSystem(options: { pieces?: boolean } = {}): FileSystem & {
+export function createMemoryFileSystem(options: { pieces?: boolean; chunks?: boolean } = {}): FileSystem & {
+  /** How many chunks the last `writeByteChunksAtomic` of the path took (`chunks: false` removes the method). */
+  chunkCount(p: string): number | undefined;
   snapshot(): Map<string, string>;
+  /** Every file's bytes (a copy), for tests that decode binary files synchronously. */
+  snapshotBytes(): Map<string, Uint8Array>;
   failNextWrite(pathSuffix: string): void;
   holdNextWrite(pathSuffix: string): WriteGate;
 } {
   const files = new Map<string, Uint8Array>();
   const dirs = new Set<string>();
+  const chunkCounts = new Map<string, number>();
   const failures: string[] = [];
   const gates: { suffix: string; reached(): void; open: Promise<Error | null> }[] = [];
 
@@ -128,20 +133,43 @@ export function createMemoryFileSystem(options: { pieces?: boolean } = {}): File
     },
     ...(options.pieces === true
       ? {
-          async writePiecesAtomic(rawP: string, pieces: Iterable<string>): Promise<void> {
+          async writePiecesAtomic(
+            rawP: string,
+            pieces: Iterable<string> | AsyncIterable<string>,
+          ): Promise<void> {
             const p = norm(rawP);
             requireParent(p);
             requireWritable(p);
             checkFail(p);
             await passGate(p);
-            files.set(p, enc.encode([...pieces].join('')));
+            let text = '';
+            for await (const piece of pieces) text += piece;
+            files.set(p, enc.encode(text));
           },
         }
       : {}),
+    chunkCount: (rawP) => chunkCounts.get(norm(rawP)),
+    ...(options.chunks === false
+      ? {}
+      : {
+          async writeByteChunksAtomic(rawP: string, chunks: AsyncIterable<Uint8Array>): Promise<void> {
+            const p = norm(rawP);
+            requireWritable(p);
+            checkFail(p);
+            const parts: Uint8Array[] = [];
+            for await (const chunk of chunks) parts.push(chunk.slice());
+            await passGate(p);
+            const parent = parentOf(p);
+            if (parent !== null) registerDirs(parent);
+            files.set(p, new Uint8Array(Buffer.concat(parts)));
+            chunkCounts.set(p, parts.length);
+          },
+        }),
     async writeBytes(rawP, bytes) {
       const p = norm(rawP);
       requireWritable(p);
       checkFail(p);
+      await passGate(p);
       const parent = parentOf(p);
       if (parent !== null) registerDirs(parent);
       files.set(p, bytes.slice());
@@ -171,6 +199,16 @@ export function createMemoryFileSystem(options: { pieces?: boolean } = {}): File
       if (isDir(p)) throw fsError('ERR_FS_EISDIR', 'path is a directory', p);
       files.delete(p);
     },
+    async removeDir(rawP) {
+      const p = norm(rawP);
+      const prefix = p.endsWith('/') ? p : `${p}/`;
+      for (const f of [...files.keys()]) if (f === p || f.startsWith(prefix)) files.delete(f);
+      for (const d of [...dirs]) if (d === p || d.startsWith(prefix)) dirs.delete(d);
+    },
+    async entryKind(rawP) {
+      const p = norm(rawP);
+      return files.has(p) ? 'file' : isDir(p) ? 'dir' : 'missing';
+    },
     async realpath(rawP) {
       const p = norm(rawP);
       return p;
@@ -185,6 +223,9 @@ export function createMemoryFileSystem(options: { pieces?: boolean } = {}): File
     },
     snapshot() {
       return new Map([...files].map(([k, v]) => [k, dec.decode(v)]));
+    },
+    snapshotBytes() {
+      return new Map([...files].map(([k, v]) => [k, v.slice()]));
     },
     failNextWrite(pathSuffix) {
       failures.push(norm(pathSuffix));

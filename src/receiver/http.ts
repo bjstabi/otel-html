@@ -4,7 +4,7 @@ import { createGunzip } from 'node:zlib';
 import { create, type DescMessage, type Message, toBinary, toJsonString } from '@bufbuild/protobuf';
 import { StatusSchema } from '../model/gen/google/rpc/status_pb.js';
 import type { Logger } from '../writer/ports.js';
-import { bindError, bracketed } from './host.js';
+import { type BindFlag, bindError, bracketed } from './host.js';
 import type { Admission, BodyEncoding, Receiver } from './receiver.js';
 import { serviceAtPath } from './signals.js';
 import {
@@ -41,7 +41,11 @@ export interface HttpTransportOptions {
 
 export interface Listener {
   readonly address: string;
+  /** The IP address the socket is bound to (`--host` may be a name or a short form of it). */
+  readonly ip?: string;
   close(): Promise<void>;
+  /** Destroys every open connection, requests in flight included; `close()` alone waits for them. */
+  closeConnections?(): void;
 }
 
 type Handler = (req: IncomingMessage, res: ServerResponse) => void;
@@ -312,10 +316,22 @@ function clientGone(e: unknown): boolean {
 }
 
 /** Binds `handler`; `address` is `http://<host>:<port>` with the port actually bound. */
-export function listenHttp(handler: Handler, host: string, port: number): Promise<Listener> {
+export function listenHttp(
+  handler: Handler,
+  host: string,
+  port: number,
+  flag: BindFlag = '--http',
+): Promise<Listener> {
   return new Promise((resolve, reject) => {
     const server: Server = createServer(handler);
-    const onError = (e: Error): void => reject(bindError(e, '--http'));
+    let closing = false;
+    // Once closing, a keep-alive socket whose response has just been written is idle: end it, so close() resolves then.
+    server.on('request', (_req, res) => {
+      res.once('finish', () => {
+        if (closing) setImmediate(() => server.closeIdleConnections());
+      });
+    });
+    const onError = (e: Error): void => reject(bindError(e, flag));
     server.once('error', onError);
     server.listen(port, host, () => {
       server.off('error', onError);
@@ -324,14 +340,17 @@ export function listenHttp(handler: Handler, host: string, port: number): Promis
         reject(new Error('invariant violated: http server has no address'));
         return;
       }
-      const { port: actual }: AddressInfo = bound;
+      const { port: actual, address: ip }: AddressInfo = bound;
       resolve({
         address: `http://${bracketed(host)}:${actual}`,
+        ip,
         close: () =>
           new Promise<void>((done, fail) => {
+            closing = true;
             server.close((err) => (err === undefined ? done() : fail(err)));
             server.closeIdleConnections();
           }),
+        closeConnections: () => server.closeAllConnections(),
       });
     });
   });

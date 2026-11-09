@@ -7,10 +7,24 @@ import {
   type View,
   ViewListShapeSchema,
 } from '../dashboards/schema.js';
-import { METRIC_FILE_PATH } from './metric-files.js';
-import { chunkPath, SIGNALS, type Signal } from './paths.js';
-import { parseWith } from './validate.js';
-import { type FormatVersion, READABLE_FORMAT_VERSIONS } from './version.js';
+import { OtelHtmlError } from '../model/errors.js';
+import { TABLES, type Table } from './parquet/columns.js';
+import type { FileStatistics } from './parquet/stats.js';
+import {
+  ASSETS_BASE_RE,
+  chunkPath,
+  ENGINE_VERSION_RE,
+  partitionFilePath,
+  SIGNALS,
+  type Signal,
+} from './paths.js';
+import { describe, parseWith } from './validate.js';
+import {
+  CHUNK_READABLE_FORMAT_VERSIONS,
+  type FormatVersion,
+  PARTITION_FORMAT_VERSION,
+  READABLE_FORMAT_VERSIONS,
+} from './version.js';
 
 export interface ManifestChunk {
   signal: Signal;
@@ -38,7 +52,11 @@ export interface Manifest {
   traceShards: string[];
   /** Series files under `data/metrics/` (series, segments, levels, exemplars); absent before M3. */
   metricFiles: string[];
-  config: { viewer: ResolvedConfig['viewer']; dashboards: ResolvedDashboard[]; views: View[] };
+  config: {
+    viewer: ResolvedConfig['viewer'] & { eagerBudgetBytes: number };
+    dashboards: ResolvedDashboard[];
+    views: View[];
+  };
 }
 
 const nonNegInt = z.number().int().nonnegative();
@@ -47,12 +65,63 @@ const signal = z.enum(SIGNALS);
 // The viewer loads these entries as script sources, so each must be exactly a layout path: relative,
 // no scheme, no `..`, no leading `_`, nothing outside `data/`.
 const CHUNK_PATH = /^data\/chunks\/(spans|logs|metrics)\/[0-9]{6,}\.js$/;
+// A formats 1 to 3 metric data file: the metric id, then the file name (series, a flush segment, or a level and page).
+const METRIC_FILE_PATH =
+  /^data\/metrics\/([0-9]{6})\/(series|seg-([0-9]{6})|l([0-6])(?:-([0-9]{6}))?|ex([3-6])?(?:-([0-9]{6}))?)\.js$/;
 const ROLLUP_PATH = /^data\/rollups\/[a-z][a-z0-9-]*\.js$/;
 const TRACE_SHARD_PATH = /^data\/traces\/[0-9a-f]{2}\.js$/;
 
+const viewerShape = {
+  listCap: z.number().int().positive(),
+  theme: z.enum(['system', 'light', 'dark']),
+  defaultDashboard: z.string().default('fusion'),
+  home: z.enum(['traces', 'logs', 'metrics', 'dashboards']).default('traces'),
+};
+
+/** The v1 to v3 config: its viewer still carries `eagerBudgetBytes`. */
+const ConfigSchema = z.strictObject({
+  viewer: z.strictObject({ eagerBudgetBytes: z.number().int().positive(), ...viewerShape }),
+  dashboards: z.array(z.strictObject({ source: z.string(), dashboard: DashboardShapeSchema })).default([]),
+  // Shape only: a report stored by an older build may hold a query this build's compiler rejects; the widget shows that error.
+  views: ViewListShapeSchema.default([]),
+});
+
+/** The v4 config: no `eagerBudgetBytes` (the format-4 viewer has no eager mode). */
+const ConfigSchemaV4 = z.strictObject({
+  viewer: z.strictObject({
+    ...viewerShape,
+    // The writer's facet caps, which the viewer applies to its facet results; absent in a report that predates them.
+    facetValueCap: z.exactOptional(z.number().int().positive()),
+    facetKeyCap: z.exactOptional(z.number().int().positive()),
+  }),
+  dashboards: ConfigSchema.shape.dashboards,
+  views: ConfigSchema.shape.views,
+});
+
+function refineConfig(
+  config: { viewer: { defaultDashboard: string }; dashboards: ResolvedDashboard[] },
+  ctx: z.RefinementCtx,
+  at: PropertyKey[],
+): void {
+  listIssues(
+    config.dashboards.map((d) => d.dashboard.id),
+    RESERVED_DASHBOARD_IDS,
+    ctx,
+    (i) => [...at, 'config', 'dashboards', i, 'dashboard', 'id'],
+  );
+  const def = config.viewer.defaultDashboard;
+  if (def !== 'fusion' && !config.dashboards.some((d) => d.dashboard.id === def)) {
+    ctx.addIssue({
+      code: 'custom',
+      path: [...at, 'config', 'viewer', 'defaultDashboard'],
+      message: 'the id of a dashboard (fusion or one in config.dashboards)',
+    });
+  }
+}
+
 export const ManifestSchema: z.ZodType<Manifest> = z
   .strictObject({
-    formatVersion: z.literal(READABLE_FORMAT_VERSIONS),
+    formatVersion: z.literal(CHUNK_READABLE_FORMAT_VERSIONS),
     otelHtmlVersion: z.string(),
     title: z.string(),
     epochUnixNano: z.string().regex(/^[0-9]+$/, 'decimal nanoseconds'),
@@ -78,36 +147,10 @@ export const ManifestSchema: z.ZodType<Manifest> = z
     metricFiles: z
       .array(z.string().regex(METRIC_FILE_PATH, 'a metric file path like data/metrics/000000/l0.js'))
       .default([]),
-    config: z.strictObject({
-      viewer: z.strictObject({
-        eagerBudgetBytes: z.number().int().positive(),
-        listCap: z.number().int().positive(),
-        theme: z.enum(['system', 'light', 'dark']),
-        defaultDashboard: z.string().default('fusion'),
-        home: z.enum(['traces', 'logs', 'metrics', 'dashboards']).default('traces'),
-      }),
-      dashboards: z
-        .array(z.strictObject({ source: z.string(), dashboard: DashboardShapeSchema }))
-        .default([]),
-      // Shape only: a report stored by an older build may hold a query this build's compiler rejects; the widget shows that error.
-      views: ViewListShapeSchema.default([]),
-    }),
+    config: ConfigSchema,
   })
   .superRefine((m, ctx) => {
-    listIssues(
-      m.config.dashboards.map((d) => d.dashboard.id),
-      RESERVED_DASHBOARD_IDS,
-      ctx,
-      (i) => ['config', 'dashboards', i, 'dashboard', 'id'],
-    );
-    const def = m.config.viewer.defaultDashboard;
-    if (def !== 'fusion' && !m.config.dashboards.some((d) => d.dashboard.id === def)) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['config', 'viewer', 'defaultDashboard'],
-        message: 'the id of a dashboard (fusion or one in config.dashboards)',
-      });
-    }
+    refineConfig(m.config, ctx, []);
     m.chunks.forEach((c, i) => {
       const expected = chunkPath(c.signal, c.n);
       if (c.path !== expected) {
@@ -119,4 +162,155 @@ export const ManifestSchema: z.ZodType<Manifest> = z
 /** Validate an untrusted manifest payload; failures are `invalid-report` errors with a precise path. */
 export function parseManifest(input: unknown): Manifest {
   return parseWith(ManifestSchema, input, 'manifest');
+}
+
+export interface PartitionFile extends FileStatistics {
+  path: string;
+  bytes: number;
+}
+
+export interface PartitionEntry {
+  n: number;
+  source: string;
+  files: Partial<Record<Table, PartitionFile>>;
+}
+
+export interface ManifestV4 {
+  formatVersion: typeof PARTITION_FORMAT_VERSION;
+  otelHtmlVersion: string;
+  title: string;
+  epochUnixNano: string;
+  createdAt: string;
+  updatedAt: string;
+  complete: boolean;
+  /** Absolute int64 nanosecond text, like every other v4 time. */
+  range: { start: string; end: string } | null;
+  totals: Record<Signal, number>;
+  partitions: PartitionEntry[];
+  statisticsKeys: Record<Table, string[]>;
+  engine: { version: string; format: 'local' | 'site'; assetsBase: string };
+  config: {
+    viewer: ResolvedConfig['viewer'] & { facetValueCap?: number; facetKeyCap?: number };
+    dashboards: ResolvedDashboard[];
+    views: View[];
+  };
+}
+
+export type AnyManifest = Manifest | ManifestV4;
+
+const SOURCE_RE = /^(flush|compact|job|ci|merge):[A-Za-z0-9#:._-]{1,200}$/;
+const INT64_MIN = -(2n ** 63n);
+const INT64_MAX = 2n ** 63n - 1n;
+const INT64_CANONICAL = /^(?:0|-?[1-9][0-9]*)$/;
+/** `a > b` for two int64 texts; false when either is not canonical (the field's own issue reports that). */
+const after = (a: string, b: string): boolean =>
+  INT64_CANONICAL.test(a) && INT64_CANONICAL.test(b) && BigInt(a) > BigInt(b);
+const int64Text = z
+  .string()
+  .regex(INT64_CANONICAL, 'canonical decimal int64 text')
+  .refine((t) => {
+    if (!INT64_CANONICAL.test(t)) return true;
+    const n = BigInt(t);
+    return n >= INT64_MIN && n <= INT64_MAX;
+  }, 'a value within signed 64 bits');
+
+const tableKeyed = <T extends z.ZodType>(v: T): z.ZodObject<Record<Table, T>, z.core.$strict> =>
+  z.strictObject({ spans: v, logs: v, points: v, traces: v, patterns: v });
+
+const PartitionFileSchema: z.ZodType<PartitionFile> = z.strictObject({
+  path: z.string(),
+  bytes: nonNegInt,
+  rows: nonNegInt,
+  timeMin: int64Text.nullable(),
+  timeMax: int64Text.nullable(),
+  values: z.record(z.string(), z.array(z.string()).nullable()),
+});
+
+const ManifestV4Schema: z.ZodType<ManifestV4> = z
+  .strictObject({
+    formatVersion: z.literal(PARTITION_FORMAT_VERSION),
+    otelHtmlVersion: z.string(),
+    title: z.string(),
+    epochUnixNano: z.string().regex(/^[0-9]+$/, 'decimal nanoseconds'),
+    createdAt: z.string(),
+    updatedAt: z.string(),
+    complete: z.boolean(),
+    range: z.strictObject({ start: int64Text, end: int64Text }).nullable(),
+    totals: z.strictObject({ spans: nonNegInt, logs: nonNegInt, metrics: nonNegInt }),
+    partitions: z.array(
+      z.strictObject({
+        n: nonNegInt,
+        source: z.string().regex(SOURCE_RE, 'a source like flush:3 or ci:run#12'),
+        files: z.strictObject({
+          spans: z.exactOptional(PartitionFileSchema),
+          logs: z.exactOptional(PartitionFileSchema),
+          points: z.exactOptional(PartitionFileSchema),
+          traces: z.exactOptional(PartitionFileSchema),
+          patterns: z.exactOptional(PartitionFileSchema),
+        }),
+      }),
+    ),
+    statisticsKeys: tableKeyed(z.array(z.string())),
+    engine: z.strictObject({
+      version: z.string().regex(ENGINE_VERSION_RE, 'an engine version like 1.4.1 (no /)'),
+      format: z.enum(['local', 'site']),
+      assetsBase: z.string().regex(ASSETS_BASE_RE, 'assets/ or a relative path like ../../assets/0.3.0/'),
+    }),
+    config: ConfigSchemaV4,
+  })
+  .superRefine((m, ctx) => {
+    refineConfig(m.config, ctx, []);
+    if (m.range !== null && after(m.range.start, m.range.end)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['range', 'end'],
+        message: `a time at or after start (${m.range.start})`,
+      });
+    }
+    let prev = -1;
+    m.partitions.forEach((p, i) => {
+      if (p.n <= prev) {
+        ctx.addIssue({ code: 'custom', path: ['partitions', i, 'n'], message: `a number above ${prev}` });
+      }
+      prev = p.n;
+      for (const t of TABLES) {
+        const f = p.files[t];
+        if (f?.timeMin != null && f.timeMax != null && after(f.timeMin, f.timeMax)) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['partitions', i, 'files', t, 'timeMax'],
+            message: `a time at or after timeMin (${f.timeMin})`,
+          });
+        }
+      }
+      for (const t of TABLES) {
+        const f = p.files[t];
+        if (f === undefined) continue;
+        const expected = partitionFilePath(p.n, t);
+        if (f.path !== expected) {
+          ctx.addIssue({ code: 'custom', path: ['partitions', i, 'files', t, 'path'], message: expected });
+        }
+      }
+    });
+  });
+
+function parseManifestV4(input: unknown): ManifestV4 {
+  return parseWith(ManifestV4Schema, input, 'manifest');
+}
+
+export function isV4(m: AnyManifest): m is ManifestV4 {
+  return m.formatVersion === PARTITION_FORMAT_VERSION;
+}
+
+/** Dispatch on `formatVersion`: 4 is a partition manifest, 1-3 a chunk manifest, anything else is invalid-report. */
+export function parseAnyManifest(input: unknown): AnyManifest {
+  const v =
+    typeof input === 'object' && input !== null && 'formatVersion' in input ? input.formatVersion : undefined;
+  if (v === PARTITION_FORMAT_VERSION) return parseManifestV4(input);
+  if (CHUNK_READABLE_FORMAT_VERSIONS.some((c) => c === v)) return parseManifest(input);
+  throw new OtelHtmlError('invalid-report', {
+    path: 'manifest.formatVersion',
+    expected: READABLE_FORMAT_VERSIONS.join(' | '),
+    actual: describe(v),
+  });
 }

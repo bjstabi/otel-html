@@ -95,6 +95,55 @@ function stringify(v: unknown): string {
   return isPlainJson(v) ? JSON.stringify(v) : JSON.stringify(v, replacer);
 }
 
+/** Bytes per base64 slice of a streamed wrapper: a multiple of 3, so every slice but the last encodes without padding. */
+export const WRAPPER_SLICE_BYTES: number = 3 * 1024 * 1024;
+
+/**
+ * A binary data file for the local format, `__OH__.push("<key>","<base64>");\n`, in pieces: the prefix, the base64
+ * of each `WRAPPER_SLICE_BYTES` slice, the suffix. The payload is base64 only, so no `<` can appear in it. Written
+ * with `writePiecesAtomic`, a large file is never one string (V8 caps a string near 512 M characters). `encode` is
+ * the caller's fast base64 of a slice, since this folder carries no Node imports.
+ */
+export function* wrapBinaryDataFilePieces(
+  key: string,
+  bytes: Uint8Array,
+  encode: (slice: Uint8Array) => string,
+): Generator<string> {
+  yield `${REGISTRATION_GLOBAL}.push(${escapeHostile(JSON.stringify(key))},"`;
+  for (let at = 0; at < bytes.length; at += WRAPPER_SLICE_BYTES) {
+    yield encode(bytes.subarray(at, at + WRAPPER_SLICE_BYTES));
+  }
+  yield `"${SUFFIX}`;
+}
+
+/**
+ * `wrapBinaryDataFilePieces` of a file that arrives in chunks of any size: the same pieces, with the chunks cut into
+ * `WRAPPER_SLICE_BYTES` slices as they come, so the file is never held whole.
+ */
+export async function* wrapBinaryDataFilePiecesOf(
+  key: string,
+  chunks: AsyncIterable<Uint8Array>,
+  encode: (slice: Uint8Array) => string,
+): AsyncGenerator<string> {
+  yield `${REGISTRATION_GLOBAL}.push(${escapeHostile(JSON.stringify(key))},"`;
+  const slice = new Uint8Array(WRAPPER_SLICE_BYTES);
+  let filled = 0;
+  for await (const chunk of chunks) {
+    for (let at = 0; at < chunk.length; ) {
+      const n = Math.min(slice.length - filled, chunk.length - at);
+      slice.set(chunk.subarray(at, at + n), filled);
+      filled += n;
+      at += n;
+      if (filled === slice.length) {
+        yield encode(slice);
+        filled = 0;
+      }
+    }
+  }
+  if (filled > 0) yield encode(slice.subarray(0, filled));
+  yield `"${SUFFIX}`;
+}
+
 export function wrapDataFile(key: string, payload: unknown): string {
   const json = stringify(payload);
   if (json === undefined) {
@@ -105,35 +154,6 @@ export function wrapDataFile(key: string, payload: unknown): string {
     });
   }
   return `${REGISTRATION_GLOBAL}.push(${escapeHostile(JSON.stringify(key))},${escapeHostile(json)}${SUFFIX}`;
-}
-
-/**
- * `wrapDataFile(key, { ...head, [listKey]: items })` in pieces, one per item, so a large file is never one string
- * (with `writePiecesAtomic`). `head` must not hold `listKey`.
- */
-export function* wrapDataFilePieces(
-  key: string,
-  head: Record<string, unknown>,
-  listKey: string,
-  items: Iterable<unknown>,
-): Generator<string, void, void> {
-  const open = stringify(head);
-  const fields = open === '{}' ? '{' : `${open.slice(0, -1)},`;
-  yield `${REGISTRATION_GLOBAL}.push(${escapeHostile(JSON.stringify(key))},${escapeHostile(fields)}${escapeHostile(JSON.stringify(listKey))}:[`;
-  let i = 0;
-  for (const item of items) {
-    const json = stringify(item);
-    if (json === undefined) {
-      throw new OtelHtmlError('invalid-report', {
-        path: `${listKey}[${i}]`,
-        expected: 'a JSON-serializable payload',
-        actual: 'undefined',
-      });
-    }
-    yield i === 0 ? escapeHostile(json) : `,${escapeHostile(json)}`;
-    i++;
-  }
-  yield `]}${SUFFIX}`;
 }
 
 function excerpt(s: string): string {

@@ -58,7 +58,7 @@ export function template(c: DrainCluster): string {
 }
 
 /** The first body seen, cut to `SAMPLE_CHARS` without splitting a surrogate pair. */
-function cutSample(body: string): string {
+export function cutSample(body: string): string {
   let end = SAMPLE_CHARS;
   const last = body.charCodeAt(end - 1);
   if (body.length > end && last >= 0xd800 && last <= 0xdbff) end--;
@@ -73,6 +73,19 @@ function escapeRegex(s: string): string {
 export function templateToRegex(c: DrainCluster): string {
   const body = c.tokens.map((t) => (t === WILDCARD ? '\\S+' : escapeRegex(t))).join('\\s+');
   return c.truncated ? `^${body}` : `^${body}$`;
+}
+
+const TRUNCATION_MARK = ' …';
+
+/**
+ * `templateToRegex` for a template as `template(c)` prints it (and as the `patterns` table stores it): tokens joined by one
+ * space, ` …` after them when the body was cut. A template whose last token is itself `…` reads as truncated.
+ */
+export function templateStringToRegex(text: string): string {
+  const truncated = text.endsWith(TRUNCATION_MARK);
+  const tokens = (truncated ? text.slice(0, -TRUNCATION_MARK.length) : text).split(' ');
+  const body = tokens.map((t) => (t === WILDCARD ? '\\S+' : escapeRegex(t))).join('\\s+');
+  return truncated ? `^${body}` : `^${body}$`;
 }
 
 const nonNegInt: z.ZodNumber = z.number().int().nonnegative();

@@ -1,9 +1,16 @@
 import type { z } from 'zod';
 import { OtelHtmlError } from '../model/errors.js';
 
-function describe(v: unknown): string {
+/** A short, throw-free rendering of any value for an error message (bigint and cyclic values included). */
+export function describe(v: unknown): string {
   if (v === undefined) return 'nothing (missing)';
-  const s = JSON.stringify(v);
+  if (typeof v === 'bigint') return `${v}n`;
+  let s: string | undefined;
+  try {
+    s = JSON.stringify(v);
+  } catch {
+    return typeof v === 'object' ? 'an unprintable value (cyclic or holding a bigint)' : typeof v;
+  }
   return s === undefined ? typeof v : s.length > 80 ? `${s.slice(0, 77)}...` : s;
 }
 

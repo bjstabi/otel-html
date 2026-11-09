@@ -44,6 +44,126 @@ async function put(w: TestWriter, path: string, text: string | Uint8Array): Prom
   await w.fs.writeBytes(path, typeof text === 'string' ? enc.encode(text) : text);
 }
 
+describe('cli --format and --assets-base', () => {
+  test('--format site writes a format-4 report with the engine files', async () => {
+    const w = createTestWriter();
+    await put(w, 'in/a.json', JSON.stringify(spansRequest(2)));
+    const r = await run(w, ['convert', 'in/a.json', '-o', 'out', '--format', 'site']);
+    expect(r.code).toBe(0);
+    const files = [...w.fs.snapshot().keys()];
+    expect(files.some((k) => k.startsWith('out/data/partitions/'))).toBe(true);
+    expect(files.some((k) => /^out\/assets\/duckdb\..*\.wasm$/.test(k))).toBe(true);
+  });
+
+  test('merge --compact leaves one partition per format-4 input', async () => {
+    const w = createTestWriter();
+    await put(w, 'in/a.json', JSON.stringify(spansRequest(2)));
+    await put(w, 'in/b.json', JSON.stringify(spansRequest(2, 10_000, 10)));
+    expect((await run(w, ['convert', 'in/a.json', '-o', 'a', '--format', 'site'])).code).toBe(0);
+    expect((await run(w, ['convert', 'in/b.json', '-o', 'b', '--format', 'site'])).code).toBe(0);
+    expect((await run(w, ['convert', 'in/a.json', '-o', 'a', '--format', 'site', '--append'])).code).toBe(0);
+    const r = await run(w, ['merge', 'a', 'b', '-o', 'm', '--format', 'site', '--compact']);
+    expect(r.code).toBe(0);
+    const sources = [...w.fs.snapshot().keys()].filter((k) =>
+      /^m\/data\/partitions\/\d+\/spans\.parquet$/.test(k),
+    );
+    // a has two partitions and is compacted into one; b has one and is copied: two spans files.
+    expect(sources).toHaveLength(2);
+  });
+
+  test('--assets-base is validated by the config schema and writes no own assets/', async () => {
+    const w = createTestWriter();
+    await put(w, 'in/a.json', JSON.stringify(spansRequest(2)));
+    const ok = await run(w, [
+      'convert',
+      'in/a.json',
+      '-o',
+      'out',
+      '--format',
+      'site',
+      '--assets-base',
+      '../../assets/1/',
+    ]);
+    expect(ok.code).toBe(0);
+    expect([...w.fs.snapshot().keys()].some((k) => k.startsWith('out/assets/'))).toBe(false);
+    expect(w.fs.snapshot().get('out/index.html')).toContain('../../assets/1/');
+    const bad = await run(w, [
+      'convert',
+      'in/a.json',
+      '-o',
+      'out2',
+      '--format',
+      'site',
+      '--assets-base',
+      '/etc',
+    ]);
+    expect(bad.code).toBe(2);
+    expect(bad.stderr).toContain('assets/ or a relative path');
+  });
+
+  test('--format chunks and OTEL_HTML_FORMAT=chunks exit 2 and say chunks is no longer written', async () => {
+    const w = createTestWriter();
+    await put(w, 'in/a.json', JSON.stringify(spansRequest(2)));
+    const flag = await run(w, ['convert', 'in/a.json', '-o', 'out', '--format', 'chunks']);
+    expect(flag.code).toBe(2);
+    expect(flag.stderr).toContain('Allowed choices are local, site');
+    const viaEnv = await run(w, ['convert', 'in/a.json', '-o', 'out'], { OTEL_HTML_FORMAT: 'chunks' });
+    expect(viaEnv.code).toBe(2);
+    expect(viaEnv.stderr).toContain('format 3 (chunks) is no longer written');
+    expect(w.fs.snapshot().has('out/data/manifest.js')).toBe(false);
+  });
+
+  test('an unknown --format exits 2 and names the two allowed values', async () => {
+    const w = createTestWriter();
+    await put(w, 'in/a.json', JSON.stringify(spansRequest(2)));
+    const r = await run(w, ['convert', 'in/a.json', '-o', 'out', '--format', 'parquet']);
+    expect(r.code).toBe(2);
+    for (const v of ['local', 'site']) expect(r.stderr).toContain(v);
+    expect(r.stderr).not.toContain('chunks');
+  });
+
+  describe('the default format', () => {
+    test('convert without --format writes a local format-4 report', async () => {
+      const w = createTestWriter();
+      await put(w, 'in/a.json', JSON.stringify(spansRequest(2)));
+      expect((await run(w, ['convert', 'in/a.json', '-o', 'out'])).code).toBe(0);
+      const files = [...w.fs.snapshot().keys()];
+      expect(files.some((k) => k.startsWith('out/data/partitions/'))).toBe(true);
+      expect(files.some((k) => k.endsWith('.parquet.js'))).toBe(true);
+      expect(files.some((k) => k.startsWith('out/data/chunks/'))).toBe(false);
+    });
+
+    test('--assets-base and merge --compact work without naming a format', async () => {
+      const w = createTestWriter();
+      await put(w, 'in/a.json', JSON.stringify(spansRequest(2)));
+      const ok = await run(w, ['convert', 'in/a.json', '-o', 'out', '--assets-base', '../assets/x/']);
+      expect(ok.code).toBe(0);
+      expect((await run(w, ['convert', 'in/a.json', '-o', 'a'])).code).toBe(0);
+      expect((await run(w, ['merge', 'a', '-o', 'm', '--compact'])).code).toBe(0);
+    });
+  });
+
+  test.each(['convert', 'merge', 'serve', 'run'])('%s takes both flags', async (command) => {
+    const w = createTestWriter();
+    const r = await run(w, [command, '--help']);
+    expect(r.stdout).toContain('--format <format>');
+    expect(r.stdout).toContain('--assets-base <path>');
+  });
+});
+
+describe('cli config print with the format flags', () => {
+  test('a file that sets writer.assetsBase prints with and without --format', async () => {
+    const w = createTestWriter();
+    await put(w, '/work/otel-html.yaml', 'writer:\n  assetsBase: ../assets/x/\n');
+    const without = await run(w, ['config', 'print']);
+    expect(without.code).toBe(0);
+    const r = await run(w, ['config', 'print', '--format', 'site']);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain('format: site # from: flag');
+    expect(r.stdout).toContain('../assets/x/');
+  });
+});
+
 describe('cli', () => {
   test('convert writes a report and prints the totals with thousands separators', async () => {
     const w = createTestWriter();
@@ -209,12 +329,12 @@ describe('cli', () => {
 
   test('config print layers file < env < flag', async () => {
     const w = createTestWriter();
-    await put(w, '/work/otel-html.yaml', 'title: from file\nviewer:\n  eagerBudgetBytes: 1000\n');
+    await put(w, '/work/otel-html.yaml', 'title: from file\nviewer:\n  listCap: 1000\n');
     const fileOnly = await run(w, ['config', 'print']);
     expect(fileOnly.stdout).toContain('title: from file # from: file');
     const env = await run(w, ['config', 'print'], { OTEL_HTML_TITLE: 'from env' });
     expect(env.stdout).toContain('title: from env # from: env');
-    expect(env.stdout).toContain('eagerBudgetBytes: 1000 # from: file');
+    expect(env.stdout).toContain('listCap: 1000 # from: file');
     const flag = await run(w, ['config', 'print', '--title', 'f'], { OTEL_HTML_TITLE: 'from env' });
     expect(flag.stdout).toContain('title: f # from: flag');
   });

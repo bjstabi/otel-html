@@ -42,12 +42,12 @@ const SerializedTimeBucketsSchema: z.ZodType<SerializedTimeBuckets> = z
   });
 
 /** Exact modulo with a non-negative result (the `%` operator is exact for doubles). */
-export function mod(a: number, b: number): number {
+function mod(a: number, b: number): number {
   return ((a % b) + b) % b;
 }
 
 /** Exact floor division for integer-valued doubles (avoids rounding a quotient that sits just below an integer). */
-export function floorDiv(a: number, b: number): number {
+function floorDiv(a: number, b: number): number {
   return (a - mod(a, b)) / b;
 }
 

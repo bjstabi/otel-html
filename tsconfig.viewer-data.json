@@ -1,0 +1,5 @@
+{
+  "extends": "./tsconfig.viewer.json",
+  "compilerOptions": { "types": ["node"], "allowImportingTsExtensions": true },
+  "include": ["test/viewer-data/**/*", "test-support/perf-context.d.ts"]
+}

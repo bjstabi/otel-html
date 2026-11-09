@@ -5,7 +5,7 @@ import { parseCondition } from '../../ottl/parse.js';
 import { MetricPageStateSchema } from '../../query/metric-query.js';
 import { EXPLORER_VIEWS, SELECTION_MODES } from '../../query/pages.js';
 import { type LogRef, parseLogRef } from '../data/log-query.js';
-import type { TimeWindow } from '../data/span-query.js';
+import type { TimeWindow } from '../data/time-window.js';
 import { LOG_TAB_IDS } from '../logs/tabs.js';
 import { TRACE_TAB_IDS } from '../traces/tabs.js';
 import { DashboardPageStateSchema, parseDashboardParam } from './dashboard-state.js';
@@ -44,8 +44,8 @@ const UrlStateSchema = z.object({
   sort: nonEmpty,
   log: z
     .string()
-    .regex(LOG_FORMAT, '<chunk>.<row>')
-    .refine((s) => !LOG_FORMAT.test(s) || LOG_CANONICAL.test(s), '<chunk>.<row> without leading zeros')
+    .regex(LOG_FORMAT, '<partition>.<row>')
+    .refine((s) => !LOG_FORMAT.test(s) || LOG_CANONICAL.test(s), '<partition>.<row> without leading zeros')
     .transform((s): LogRef => parseLogRef(s, 'log')),
   ltab: z.enum(LOG_TAB_IDS, `one of ${LOG_TAB_IDS.join(', ')}`),
   // Arrives as JSON text, which `parseUrlState` decodes with `parseMetricParam`; this is the decoded shape.

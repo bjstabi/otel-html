@@ -1,19 +1,15 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import type { Manifest } from '../../src/format/manifest.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
-import { FacetCounts } from '../../src/rollups/facets.js';
-import { RedSeries } from '../../src/rollups/red.js';
-import { TimeBuckets } from '../../src/rollups/time-buckets.js';
-import { LOG_SEVERITY_KEYS } from '../../src/semconv/severity.js';
 import { App } from '../../src/viewer/app.js';
-import type { DataSource, SpanQueryResult } from '../../src/viewer/data/data-source.js';
-import { type LogQueryResult, type LogRow, logRef } from '../../src/viewer/data/log-query.js';
+import type { DataSource } from '../../src/viewer/data/data-source.js';
+import { type LogRow, logRef } from '../../src/viewer/data/log-query.js';
 import { Shell } from '../../src/viewer/shell/shell.js';
 import { stepWindow } from '../../src/viewer/shell/time-range.js';
 import { createHashHistory } from '../../src/viewer/state/hash-history.js';
 import { ThemeProvider } from '../../src/viewer/theme/theme-provider.js';
+import { baseManifest, dataSourceOf } from './dashboard-shell.js';
 import { detailOf, TRACE_ID, traceRow } from './trace-rows.js';
 
 // jsdom has no layout or ResizeObserver, which ECharts needs; the explorer's charts are covered by e2e.
@@ -22,81 +18,7 @@ vi.mock('../../src/viewer/components/chart.js', () => ({ Chart: (): null => null
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const HOUR = 3_600_000_000_000;
-const manifest: Manifest = {
-  formatVersion: 1,
-  otelHtmlVersion: '0.0.0',
-  title: 'Checkout load test',
-  epochUnixNano: '1700000000000000000',
-  createdAt: '2023-11-14T22:13:20.000Z',
-  updatedAt: '2023-11-14T22:13:20.000Z',
-  complete: true,
-  range: { start: 0, end: 10 * HOUR },
-  totals: { spans: 1234, logs: 56, metrics: 7 },
-  decodedBytes: 1000,
-  chunks: [],
-  rollups: [],
-  traceShards: [],
-  metricFiles: [],
-  config: {
-    viewer: {
-      eagerBudgetBytes: 75_000_000,
-      listCap: 10_000,
-      theme: 'system',
-      defaultDashboard: 'fusion',
-      home: 'traces',
-    },
-    dashboards: [],
-    views: [],
-  },
-};
-
-function unused(): never {
-  throw new Error('this test must not reach that part of the data source');
-}
-const emptyResult = (): SpanQueryResult => ({
-  rows: [],
-  total: 0,
-  facets: new FacetCounts(10, 10),
-  buckets: new TimeBuckets(['ok', 'error', 'unset'], 8),
-  red: new RedSeries(8),
-  groups: null,
-  partial: null,
-});
-const emptyLogs = (): LogQueryResult => ({
-  mode: 'logs',
-  rows: [],
-  total: 0,
-  matched: 0,
-  facets: new FacetCounts(10, 10),
-  buckets: new TimeBuckets(LOG_SEVERITY_KEYS, 8),
-  partial: null,
-});
-const dataSource: DataSource = {
-  manifest,
-  strategy: 'eager',
-  landing: () =>
-    Promise.resolve({
-      facets: new FacetCounts(10, 10),
-      buckets: new TimeBuckets(['ok', 'error', 'unset'], 8),
-      red: new RedSeries(8),
-      durations: new Map(),
-    }),
-  querySpans: () => Promise.resolve(emptyResult()),
-  getTrace: unused,
-  hasTrace: unused,
-  percentileOf: unused,
-  logStrategy: 'eager',
-  logLanding: unused,
-  queryLogs: () => Promise.resolve(emptyLogs()),
-  getLog: unused,
-  traceLogs: unused,
-  surroundingLogs: unused,
-  metricCatalog: unused,
-  metricPoints: unused,
-  metric: unused,
-  metricsForResources: unused,
-  resourceValues: unused,
-};
+const dataSource = dataSourceOf(baseManifest);
 
 function renderShell(hash: string, ds: DataSource = dataSource): void {
   window.location.hash = hash;
@@ -564,7 +486,7 @@ describe('full-page trace route', () => {
     ...dataSource,
     getTrace: () =>
       Promise.resolve(detailOf([traceRow(1, null, 0, 1000, { service: 'checkout', name: 'GET /' })])),
-    percentileOf: () => 91,
+    percentileOf: () => Promise.resolve(91),
   });
 
   test('#/traces/trace/<id> shows the same panel full width, with the header facts', async () => {

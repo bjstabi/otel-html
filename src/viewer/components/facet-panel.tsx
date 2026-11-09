@@ -1,9 +1,10 @@
 import { type JSX, type ReactNode, useState } from 'react';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { FacetCounts } from '../../rollups/facets.js';
-import { DEFAULT_LOG_FACETS } from '../../rollups/log-rollups.js';
+import { DEFAULT_LOG_FACETS } from '../../semconv/default-facets.js';
 import { formatDuration } from '../../semconv/formatters.js';
 import { LOG_SEVERITY_KEYS, type LogSeverityKey } from '../../semconv/severity.js';
+import type { DurationBin } from '../data/results.js';
 import { useSelection } from '../state/selection-context.js';
 import {
   type FacetScope,
@@ -17,13 +18,6 @@ import {
   tokensToOttl,
 } from './filter-tokens.js';
 import { SeverityLabel } from './severity.js';
-
-/** One duration bin: `[fromNs, toNs)` with the span count inside it. */
-export interface DurationBin {
-  fromNs: number;
-  toNs: number;
-  count: number;
-}
 
 export const DURATION_KEY = 'span.end_time_unix_nano - span.start_time_unix_nano';
 

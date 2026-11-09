@@ -36,7 +36,7 @@ The binaries are built by `.github/workflows/release.yml` when a release is crea
 
 ## CLI
 
-Commands: `convert` (OTLP files to a report), `serve` (receive OTLP over HTTP and gRPC), `run` (wrap a command and report its telemetry), `merge`, `upgrade` and `config print`.
+Commands: `convert` (OTLP files to a report), `serve` (receive OTLP over HTTP and gRPC), `run` (wrap a command and report its telemetry), `merge`, `host` (serve a format-4 report with its queries answered by DuckDB), `upgrade` and `config print`.
 
 ```sh
 otel-html convert fixtures/small.otlp.json -o ./report
@@ -53,6 +53,8 @@ Turns OTLP files into a report. Inputs can be OTLP JSON (field names in lowerCam
 | `--title <title>` | Report title. |
 | `--append` | Require a report at `-o` and add to it (fails when there is none; useful in CI to catch a wrong path). |
 | `--replace` | Start the report over. Without either flag, `-o` is appended to when it already holds a report written by the same otel-html version and created otherwise. An existing report is wiped only once the first input file has been read without error, so that file is held in memory until then (see Limits). |
+| `--format <format>` | Report format: `local` (default) or `site` (both format 4: Parquet partitions; see [Report layout and hosting](#report-layout-and-hosting)). Sets `writer.format`. `chunks` (format 3) is no longer written. The viewer opens format-4 reports only; a format 1-3 report is converted with `merge` first. Appending needs the report's own format and the same version, so `--format` must match the report's. |
+| `--assets-base <path>` | Where the report loads its viewer files from: `assets/` (default; the report carries them) or a relative path such as `../../assets/0.3.0/` (`../` segments, then `assets/` and at most one more folder), in which case no `assets/` is written beside the report. Sets `writer.assetsBase`. A report that carries its own `assets/` cannot move to a shared base on append; `otel-html upgrade <report> --assets-base <base>` moves it. |
 | `--signal <signal>` | `traces`, `logs` or `metrics`. Needed for protobuf (`.pb`) inputs, which do not say what they hold. |
 
 ### `serve`
@@ -72,6 +74,7 @@ otel-html serve -o ./report
 | `--grpc <port>`, `--no-grpc` | OTLP/gRPC port (default 4317), or turn it off. Port 0 picks a free port. |
 | `--append` | Require a report at `-o` and add to it (fails when there is none; useful in CI to catch a wrong path). |
 | `--replace` | Start the report over. Without either flag, `-o` is appended to when it already holds a report written by the same otel-html version and created otherwise. The same applies here: the existing report is wiped only once the first request has been read without error, so that request is held in memory until then (see Limits). |
+| `--format <format>`, `--assets-base <path>` | As for `convert`. |
 | `--config <file>`, `--title <title>` | As for `convert`. |
 
 Turning off both transports is a usage error (exit 2). A port that is already in use exits 1 with the system's `EADDRINUSE` message and a hint to pass `--http <port>` or `--grpc <port>`, or to turn that transport off (other bind errors get a hint for their cause: privileges for ports below 1024, `--host` for an address that is not this machine's).
@@ -86,7 +89,7 @@ Runs a command with its OpenTelemetry SDK pointed at a receiver, wraps the run i
 otel-html run -o ./report -- pytest -q
 ```
 
-Everything before `--` is an `otel-html` flag: the `serve` flags (`-o`, `--host`, `--http`, `--no-http`, `--grpc`, `--no-grpc`, `--config`, `--title`, `--append`, `--replace`). `run` binds only the transport the command's protocol needs: OTLP/HTTP on 4318 by default, or OTLP/gRPC on 4317 when `OTEL_EXPORTER_OTLP_PROTOCOL=grpc`; an explicit `--http <port>` or `--grpc <port>` binds that transport as well (a transport enabled only in the config file is not bound by `run`). A local collector on 4317 therefore does not get in the way. The receiver starts first, then the command runs with its stdio inherited and these variables added to its environment:
+Everything before `--` is an `otel-html` flag: the `serve` flags (`-o`, `--host`, `--http`, `--no-http`, `--grpc`, `--no-grpc`, `--config`, `--title`, `--append`, `--replace`, `--format`, `--assets-base`). `run` binds only the transport the command's protocol needs: OTLP/HTTP on 4318 by default, or OTLP/gRPC on 4317 when `OTEL_EXPORTER_OTLP_PROTOCOL=grpc`; an explicit `--http <port>` or `--grpc <port>` binds that transport as well (a transport enabled only in the config file is not bound by `run`). A local collector on 4317 therefore does not get in the way. The receiver starts first, then the command runs with its stdio inherited and these variables added to its environment:
 
 | Variable | Value |
 | --- | --- |
@@ -104,21 +107,51 @@ The root span is named after the command's basename (`.exe` stripped), has kind 
 
 ### `merge <reports...>`
 
-Combines report folders into one, for example the reports of parallel CI jobs. It reads each report's data chunks, so it works across otel-html versions (see [Report format compatibility](#report-format-compatibility)). A cumulative metric series that appears in two reports is two runs: the second report's stream starts from its own start time and is not counted as a counter reset.
+Combines report folders into one, for example the reports of parallel CI jobs. It reads reports of every format, so it works across otel-html versions (see [Report format compatibility](#report-format-compatibility)). A cumulative metric series that appears in two reports is two runs: the second report's stream starts from its own start time and is not counted as a counter reset.
 
 ```sh
 otel-html merge ./job-1 ./job-2 -o ./combined
 ```
 
-Options: `-o, --out <dir>`, `--config <file>`, `--append` and `--replace` (as for `convert`). When `-o` already holds a report, `merge` adds its inputs to it.
+Options: `-o, --out <dir>`, `--config <file>`, `--append`, `--replace` (as for `convert`), `--format` and `--assets-base`, and `--compact`. When `-o` already holds a report, `merge` adds its inputs to it, but only in that report's own format: asking for the other one (`--format site` into a `local` report, or the reverse; `-o <site report>` without `--format site` counts, because the default is `local`) fails with exit 2 and the hint "append with --format <the report's format>, or switch the report with `otel-html upgrade <report> --format <wanted>`". Switch the report with `upgrade` first, or merge into a new folder.
+
+`merge` writes a format-4 report (`local` unless `--format site`). A format 1-3 input is converted row by row, as `convert` would write it. A format-4 input is copied: each of its partition folders is added to the output under the next free number, with its Parquet files byte for byte (nothing is decoded), its statistics cut to the output's `writer.statisticsKeys` (a key the input did not keep is unknown), and `source` `merge:<input>#<n>` (`<input>` is the input's index once the inputs are sorted by epoch, oldest first; `<n>` its partition number there). Copying into `local` writes every file's `.parquet.js` wrapper afresh, whichever format the input had; copying into `site` writes none. Copies are not deduplicated against other inputs' rows, and each input keeps its own pattern cluster ids. `--compact` (config `writer.compactOnMerge`) then compacts each input's copied partitions into one partition, so the copied partitions end up as one partition per format-4 input (an input with a single partition is left as copied). Other partitions the output holds, such as ones from an earlier run when appending, are not touched, and the flush partitions of converted rows are compacted into their own partition as at any close; within an input, pattern rows are summed only when both the cluster id and the template match.
+
+### `host <report>`
+
+Serves a format-4 report over HTTP and answers its queries on the machine that runs `host`, so the viewer never downloads the report: every query is SQL to the host, and the browser receives only the results. Use it for a report too large to open from `file://` or to download whole.
+
+```sh
+otel-html host ./report
+# serving ./report at http://127.0.0.1:8080/ (12 partitions, 340 MB of Parquet); press Ctrl-C to stop
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `--host <addr>` | Address to listen on. Default `127.0.0.1`. |
+| `--port <port>` | Port to listen on. Default 8080; 0 picks a free port. |
+| `--timeout <ms>` | Longest a statement may run, from 1 to 86,400,000 (24 hours). Default 30,000. A statement past it is cancelled and answered 504. |
+| `--max-result-bytes <n>` | Largest result of one statement, in bytes of Arrow IPC, from 1 to 4,294,967,296. Default 67,108,864 (64 MiB). A larger result is refused 413. |
+
+The printed size is the Parquet bytes the manifest lists, in megabytes (10^6 bytes) rounded to the nearest whole number, so a small report shows `0 MB`.
+
+`host` serves the report whether it was written as `local` or `site`, with any `assetsBase`, and whichever otel-html version wrote it, because it serves its own viewer rather than the report's: `/` and `/index.html` are the host's page, `/assets/` its viewer files, `/data/manifest.js` the report's manifest, and `POST /query` the queries (Mosaic's REST protocol, Arrow results). Nothing else is served; in particular the Parquet files are never sent, and only `arrow` queries run. A statement must be a single read-only `SELECT` over the report's views (`spans`, `logs`, `points` and the other tables); anything else (DDL, `SET`, `COPY`, `ATTACH`, `LOAD`, a second statement, reading a file) is refused 400.
+
+Open the page at exactly the address `host` prints. The viewer then sends its queries to the host instead of starting the DuckDB engine in the page, so a served page never requests a Parquet file, a WebAssembly file or a worker. Fusion, dashboards and the Metrics pages work unchanged, and the Traces, Logs and Metrics pages show the same counts, tables and charts as the same report opened from disk.
+
+One difference: the host evaluates conditions in SQL only. An OTTL condition, or a metric `where`, with a term that has no SQL form (`Len(name) > 2`, say) is refused with `this served report evaluates conditions in SQL only: "<term>" has no SQL form; rewrite or remove it`, where a report opened from disk would evaluate that term in the browser and say so ("Evaluated in the browser"). A condition on `log.body.string` (the body as text) has no SQL form, so a served report refuses it: the Logs explorer's body `contains` and `matches` filter tokens, and the pattern filter a click on a pattern adds, are refused (a view that needs only rows, such as the Traces and Logs widgets of a dashboard, still evaluates the term in the browser and says "Evaluated in the browser").
+
+A report that is not format 4 exits 2 with the hint to run `otel-html merge <report> --out <new>`; a folder without a report exits 2, and so does a Parquet file the manifest lists that is missing (`invalid-report`). A port that is already in use exits 1 with a hint to pass `--port <port>`. On Ctrl-C (SIGINT) or SIGTERM, `host` stops at once, whatever is running: new connections are refused, the engine stops (a statement still running is answered 503) and it exits 0; a second Ctrl-C while it starts or stops exits 130.
 
 ### `upgrade <report>`
 
-Rewrites a report's viewer (`index.html` and `assets/`) with the one in this otel-html, so an old report opens with the current viewer. The report's `data/` is not touched, and viewer files in `assets/` that this version does not use are removed. It fails with exit 2, writing nothing, when the folder holds no report or another otel-html has the report open.
+Rewrites a report's viewer (`index.html` and `assets/`) with the one in this otel-html, so an old report opens with the current viewer. Only a format-4 report can be upgraded: a report of format 1 to 3 fails with exit 2 and the message "This report is format N; this viewer reads format 4. `otel-html merge <report> --out <new>` converts it." (`merge` converts it). The report's data is not touched (a format-4 manifest's `engine` block is updated to this version's engine), and viewer files in `assets/` that this version does not use are removed. It fails with exit 2, writing nothing, when the folder holds no report or another otel-html has the report open.
 
 ```sh
 otel-html upgrade ./report
 ```
+
+A report can also be switched with `--format local|site` and `--assets-base <path>` (`assets/` or a relative path like `../../assets/0.3.0/`). Going to `local` writes the `.parquet.js` wrapper beside every listed Parquet file and the base64 engine files; going to `site` removes them and takes the plain engine files. With a shared `--assets-base` the report's own engine and `viewer.*` files are removed (a subfolder such as `assets/0.3.0/` is never touched), and `index.html` and the manifest's `engine.assetsBase` name the new base; the shared copy is the publisher's to upload. The Parquet data is not touched. `upgrade` warns whenever the resulting format is `local` and the Parquet bytes exceed 256000000, the default `writer.localWarnBytes`; `upgrade` reads no config file, so it cannot be changed there. The writes are ordered so that a crash leaves extra files rather than missing ones, and running `upgrade` again finishes the job. A format-4 report that loads its viewer from a shared base needs `--assets-base` on every upgrade (the same base to keep it, `assets/` to copy the files into the report), because the shared copy is not the report's to check.
 
 ### `config print`
 
@@ -128,11 +161,13 @@ Prints the resolved configuration and where each value came from (default, file,
 otel-html config print --config otel-html.yaml
 ```
 
-Options: `--config <file>` and `--title <title>`.
+Options: `--config <file>`, `--title <title>`, `--format` and `--assets-base` (as for `convert`).
 
 ## Library API
 
 The package exports `convert`, `merge`, `Report` and `OtelHtmlError`, plus types (`ConfigInput`, `ConvertOptions`, `MergeOptions`, `ReportOptions`, `ReportSummary`, `AddResult` and others).
+
+`Report.create` also takes `format` (`local` or `site`) and `assetsBase`, which override `config.writer.format` and `config.writer.assetsBase`.
 
 `Report.create`, `convert` and `merge` append when `out` already holds a report written by the same otel-html version; `replace: true` starts over (and, as with `--replace`, holds the first input in memory until it has been read without error; see Limits), `append: true` requires the report to be there. A report from another version fails with a message naming `--replace` and `merge`.
 
@@ -152,7 +187,7 @@ provider.getTracer('example').startActiveSpan('work', (span) => {
 
 const report = await Report.create({ out: './report-b', title: 'From the SDK' });
 await report.addSpans(exporter.getFinishedSpans());
-const summary = await report.close(); // flushes chunks and finalizes the manifest
+const summary = await report.close(); // flushes the open partitions and finalizes the manifest
 console.log(summary.totals); // { spans: 1, logs: 0, metrics: 0 }
 ```
 
@@ -216,7 +251,7 @@ Open a report and choose Logs in the sidebar (or press `g l`). The Logs explorer
 
 - **Filters.** Type free text or an OTTL condition over the log record (for example `log.severity_number >= SEVERITY_NUMBER_WARN`), or use the facets: Severity, Service, `host.name`, Scope, `event.name`, Has trace, and any attribute. Severity rows offer Only and "And above". Brushing the histogram sets the time window.
 - **Group into.** Logs lists records. Patterns groups them by message template. Traces groups them by trace, so you can see which traces are noisy. Group by and the chart views (time series, top list, bar, table, treemap, pie and a severity scatter) work as in the Traces explorer.
-- **Patterns.** The writer clusters every log message with an in-house Drain implementation (numbers, IDs and similar tokens are masked into placeholders) and stores the clusters in `data/rollups/logs.js`. The unfiltered Patterns view is therefore exact. With a filter or free text, the viewer runs the same clustering over the matching logs. Choosing a pattern adds a filter token that matches its template with `IsMatch(log.body.string, ...)`, which stays editable in the query bar. `IsMatch` patterns are RE2-like (no backreferences, no lookaround, no inline flag groups such as `(?i:...)`; a leading `(?i)` or `(?s)` is fine), and a repeated group with a variable part inside is accepted only when a literal the repeated part cannot match ends each variable part, like `(\d+\.){3}`.
+- **Patterns.** The writer clusters every log message with an in-house Drain implementation (numbers, IDs and similar tokens are masked into placeholders) and stores the clusters in the report's `patterns` table. The Patterns view reads that table, so it is exact, and it does not re-cluster: the condition and free-text filters do not apply to it (the page says so), while the time window does, by each pattern's first and last occurrence. Choosing a pattern adds a filter token that matches its template with `IsMatch(log.body.string, ...)`, which stays editable in the query bar. `IsMatch` patterns are RE2-like (no backreferences, no lookaround, no inline flag groups such as `(?i:...)`; a leading `(?i)` or `(?s)` is fine), and a repeated group with a variable part inside is accepted only when a literal the repeated part cannot match ends each variable part, like `(\d+\.){3}`.
 - **Log panel.** Click a log to open its panel. The body is shown above the tabs, rendered by type (text, JSON-like maps and lists, bytes). Attributes lists the log's attributes and its record fields. Trace shows the trace's flame graph with the span that emitted the log outlined. It is hidden when the log's trace is not in the report. Surrounding logs lists the logs before and after it from the same stream. Resource shows the resource and scope. A very long body shows its first 16,384 characters with a control to show all.
 - **Cross-links.** A span or trace panel has a Logs tab that lists its logs, and "Open in Logs Explorer" jumps to the Logs explorer with the matching `trace_id` or `span_id` condition. A log with trace context links back to its trace and span: the log panel's Trace fact, its Trace tab ("Open trace →") and the log list's trace column open the trace.
 
@@ -228,12 +263,11 @@ When you move between explorers (the sidebar, `g l` and `g t`, or an "Open in ..
 
 Choose Metrics → Explorer in the sidebar (or press `g m`). Like the other explorers, everything you set lives in the URL.
 
-- **Explorer.** Each query row picks a metric (with its type badge and unit), a `where` filter (an OTTL condition over the data point: `resource.attributes[...]`, `attributes[...]`, `metric.name`), what to show, a `by` grouping and functions (`ƒ`: rate, increase, rollup, top/bottom N). What you can show depends on the type: a monotonic sum shows rate, increase or sum; a gauge or other sum shows avg, min, max or last; a histogram shows p50 to p99, count, sum or avg; a summary shows its quantiles, count or sum. Series inside one group are combined by type: counters add, histograms merge their buckets, and gauges use the chosen aggregation (`last` adds the series' last values, so `process.memory.usage` by everything is the total). Up to 10 queries, plus formulas over them (`a / b`). Displays: Lines, Area, Bars, and for histograms Heatmap and Distribution, on a linear or log y-axis. A chart shows one unit; queries with different units are split into one chart per query. Export writes the charted series as CSV or JSON.
-- **Exemplars and the click menu.** With Exemplars on, the exemplars stored with the series are drawn as rings. Clicking a chart opens a menu: open the exemplar's trace (or say that the report does not hold it), Traces or Logs in this window (the clicked bucket's time window, with the query's `where` carried as between explorers), or zoom. Dragging across a chart zooms to that span.
-- **Catalog.** Metrics → Catalog lists every metric definition: type, unit, temporality, scope, attribute keys, series count and a sparkline over the run. A text filter matches name, unit and scope. Clicking a row opens the metric in the Explorer with its type's default display.
+- **Explorer.** Each query row picks a metric (with its type badge and unit), a `where` filter (an OTTL condition over the data point: `resource.attributes[...]`, `attributes[...]`, `metric.name`), what to show, a `by` grouping and functions (`ƒ`: rate, increase, rollup, top/bottom N). What you can show depends on the type: a monotonic sum shows rate, increase or sum; a gauge or other sum shows avg, min, max or last; a histogram shows p50 to p99, count, sum or avg; a summary shows its quantiles, count or sum. Series inside one group are combined by type: counters add, histograms merge their buckets, and gauges use the chosen aggregation (`last` adds the series' last values, so `process.memory.usage` by everything is the total). Up to 10 queries, plus formulas over them (`a / b`). Displays: Lines, Area, Bars, and for histograms Heatmap and Distribution, on a linear or log y-axis. A chart shows one unit; queries with different units are split into one chart per query. Export writes the charted series as CSV or JSON. Charts are exact over every partition of the report, with no cap on the number of series and no "other" line. Buckets are whole, so the first and last bucket of a chart may include points just outside the selected window. When a `where` has a term that cannot be turned into SQL, the chart says "Evaluated in the browser: <term>" (see [Limits](#limits)). A run chart's counter rate is the increase per second from the report's start to the run's last point.
+- **Exemplars and the click menu.** With Exemplars on, the exemplars stored with the series are drawn as rings (at most 5,000 exemplar points per query, the oldest first; a note says when the rest were left out). Clicking a chart opens a menu: open the exemplar's trace (or say that the report does not hold it), Traces or Logs in this window (the clicked bucket's time window, with the query's `where` carried as between explorers), or zoom. Dragging across a chart zooms to that span.
+- **Catalog.** Metrics → Catalog lists every metric definition: type, unit, temporality, scope, attribute keys, series count and a sparkline over the run. It reads the whole `points` table once, the first time a Metrics page or a Metrics tab needs it, so it takes longer the more points the report holds. A text filter matches name, unit and scope. Clicking a row opens the metric in the Explorer with its type's default display.
 - **Metrics tabs.** The log panel, the span section and the trace panel have a Metrics tab when the log's, span's or trace's resources report metrics. It charts every metric of those resources over the moment ± 5 minutes, grouped by namespace (`process.*`, `http.*`, ...). Only the first group starts expanded, and charts render as they scroll into view. A dashed line marks the log, the span or the trace start, and exemplars of the same trace are highlighted. Size S/M/L changes the chart height, and "Open in Explorer →" opens the expanded group's metrics with the same resource filter and window.
-- **Never silently wrong.** A chart says so in a note when its numbers need a caveat: series folded into "other" by the series cap, counter resets, summary quantiles at a coarse resolution, a name with several definitions, histograms with different bucket bounds, or a chart built from an unfinished report's segments. The click menu says when an exemplar's trace is not in the report.
-- **Unfinished reports.** The writer adds each metric's buckets to a segment file at every flush and compacts the segments into resolution levels at close. A report whose writer was killed, or one opened before `close`, has segments only; its charts are built from the segments, more slowly on very long runs.
+- **Never silently wrong.** A chart says so in a note when its numbers need a caveat: counter resets, summary quantiles at a coarse resolution, a name with several definitions, histograms with different bucket bounds, a `where` evaluated in the browser, or exemplars capped. The click menu says when an exemplar's trace is not in the report.
 
 ## Viewing dashboards
 
@@ -324,6 +358,10 @@ A `metric` widget with `runBy` is a run chart: one point per CI run instead of o
 
 ## Report layout and hosting
 
+### Older formats (1 to 3)
+
+Reports of formats 1 to 3 are no longer written, and the viewer does not open them; `merge` still reads them (`otel-html merge <report> --out <new>` converts one to format 4). Format 3 looked like this:
+
 ```
 report/
   index.html            shell; classic <script> tags only
@@ -342,12 +380,37 @@ report/
 
 Every data file is a classic script that registers its payload with a global, so the report works without `fetch`, ES modules or workers. All paths are relative and navigation uses the URL hash.
 
-- Local disk: open `index.html` directly (`file://`).
+### Format 4 (`--format local` or `site`)
+
+The viewer reads this format, through DuckDB-WASM: it creates one view per table over the partition files and runs SQL against them. The tables and columns are listed in [docs/format/schema.md](docs/format/schema.md) (generated from the schema). The format-3 layout above is what older otel-html versions wrote; the viewer no longer opens it (see [Report format compatibility](#report-format-compatibility)).
+
+```
+report/
+  index.html
+  .nojekyll
+  assets/                 viewer.<hash>.js and .css, plus the DuckDB engine files for this format (omitted when assetsBase is shared); the package's `dist/viewer/assets/` also holds the host's two Node engine files (`duckdb.<v>.node.cjs`, `duckdb.<v>.node.worker.cjs`), which no report copies, and the `parquet` and `json` extension files (`*.duckdb_extension.wasm`), which a `site` report copies and a `local` report carries as base64 wrappers
+  data/
+    manifest.js           run metadata, the partition list with per-file statistics, and `engine` (version, format, assetsBase)
+    partitions/<p6>/      <table>.parquet for spans, logs, points, traces and patterns (000000/, 000001/, ...)
+                          and, for `local`, <table>.parquet.js beside each: the same bytes as a base64 script
+    state/                writer checkpoint
+```
+
+- `site` is for a report served over http: the viewer reads the `.parquet` files and loads `assets/duckdb.<v>.wasm`, `duckdb.<v>.worker.js` and DuckDB's signed `parquet.<v>.duckdb_extension.wasm` and `json.<v>.duckdb_extension.wasm`.
+- `local` opens from `file://`, where nothing can be fetched: every `.parquet.js` wrapper and the engine's `duckdb.<v>.wasm.gz.b64.js`, `duckdb.<v>.worker.b64.js` and the two extensions' `duckdb.<v>.parquet.ext.gz.b64.js` and `duckdb.<v>.json.ext.gz.b64.js` are classic scripts that register their bytes. Wrappers are a third larger than the Parquet, so a large report is better served as `site` (the writer warns past `writer.localWarnBytes`). Either way a report makes no network request: the extensions DuckDB would otherwise download at first use travel in `assets/` (about 3.9 MB plain, 1.2 MB wrapped).
+- Closing a report compacts its flush partitions into one sorted partition when there are two or more.
+- `assetsBase` (default `assets/`) names where the viewer and engine files load from. A site that publishes them once for many reports sets it to a shared relative path such as `../../assets/0.3.0/`, and the report then carries no `assets/` of its own.
+
+### Hosting
+
+- `local` reports: open `index.html` directly from disk (`file://`). The viewer reads every partition a query touches whole, from the scripts the report loaded.
+- `site` reports need a web server that answers `Range` requests (and `HEAD`): the viewer fetches the Parquet files and the engine, and reads only the row groups a query needs. A host that ignores `Range` still works, but sends whole files.
 - GitHub Pages and GitLab Pages: publish the folder as it is. It works under a subpath such as `https://user.github.io/repo/report/`.
 - Any other static host or subpath works the same way.
 - CI: upload the folder as a build artifact.
+- A report too large to open or download whole: run `otel-html host <report>` on a machine that has it and open the address it prints (see [`host`](#host-report)).
 
-The report is exercised in Chromium, Firefox and WebKit by the end-to-end tests: every test loads it from `file://`, a tagged subset also from a static server, and the `@perf` budgets run on `file://` only.
+The report is exercised in Chromium, Firefox and WebKit by the end-to-end tests: the tests open the `local` report from `file://`, and a tagged subset opens a `site` copy of it over HTTP from a static server that answers `Range` and `HEAD`.
 
 ### This repo's CI
 
@@ -359,19 +422,20 @@ shell: node dist/cli/main.js run -o .otel-html/report -- bash --noprofile --norc
 
 The `otel-html ci context` step ([src/cli/ci/context-main.ts](src/cli/ci/context-main.ts)) looks the job up in the Actions API and sets `TRACEPARENT` and the resource attributes for later steps. The trace id is derived from the run, and the span ids from the run and job, so the job reports nest under the run → job spans without the jobs talking to each other. If the job lookup fails, the job id falls back to a hash of its name and runner (with a warning), and `context.json` records both; the publisher matches it to the job (its display name, or a matrix leg `<name> (…)`, on that runner), so matrix legs no longer need `OTEL_HTML_JOB_NAME`. Set it when the job's `name:` differs from its id beyond case, or when two legs of one name ran one after another on one runner. Each job uploads its `.otel-html/` folder as an `otel-html-*` artifact.
 
-When the `ci` or `load` workflow completes, [ci-report.yml](.github/workflows/ci-report.yml) runs `otel-html ci report` ([src/cli/ci/report-main.ts](src/cli/ci/report-main.ts)). The workflow is the default branch's copy, and it builds the report with the triggering commit's own code when that commit is in this repository and a person started the run; a fork's or a bot's run, or a dispatched `ci` run, uses the default branch's code (a manual dispatch of `ci-report` uses the code of the ref it was dispatched on). A person's same-repository commit executes under `main`'s Actions cache scope and could save a `mise-tasks-*` entry that later runs replay as a pass. Only people with write access can do that, and `main`'s ruleset requires a pull request with an approving review and requires no status check, so a forged pass can make a run look green but cannot merge anything a reviewer would not see. This risk is accepted. The report job writes the run → job spans from the Actions API, turns each job's log into log records, adds queue-time and duration metrics, and merges these with the job artifacts into one report, uploaded as `ci-run-report`. Run it by hand with `workflow_dispatch` and a `run_id` to rebuild a past run. The report opens on the [CI dashboard](.github/actions/otel-html-publish/otel-html-ci.yaml): job duration, queue time, step counts, runs, and warnings and errors, with `workflow` (`cicd.pipeline.name`, to tell `ci` and `load` runs apart on a shared page), `run` and `job` variables. The run-level span lives on the run's own resource, so selecting a job in `job` hides it from the widgets that list spans; the Runs list still shows each run that job ran in, through its job span. A job skipped by its `if:` gets no duration or queue-time point. The run key includes the run attempt, so after a partial re-run the artifacts of jobs that did not re-run (still attempt 1) show up as separate traces without a job span.
+When the `ci` or `load` workflow completes, [ci-report.yml](.github/workflows/ci-report.yml) runs `otel-html ci report` ([src/cli/ci/report-main.ts](src/cli/ci/report-main.ts)). The workflow is the default branch's copy, and it builds the report with the triggering commit's own code when that commit is in this repository and a person started the run; a fork's or a bot's run, or a dispatched `ci` run, uses the default branch's code (a manual dispatch of `ci-report` uses the code of the ref it was dispatched on). A person's same-repository commit executes under `main`'s Actions cache scope and could save a `mise-tasks-*` entry that later runs replay as a pass. Only people with write access can do that, and `main`'s ruleset requires a pull request with an approving review and requires no status check, so a forged pass can make a run look green but cannot merge anything a reviewer would not see. This risk is accepted. The report job writes the run → job spans from the Actions API, turns each job's log into log records, adds queue-time and duration metrics, and merges these with the job artifacts into one `local` report, uploaded as `ci-run-report`. That artifact is about 15 MB and opens from disk (double-click `index.html` after unzipping); only the copy that goes to the site is converted to `site` format. Run it by hand with `workflow_dispatch` and a `run_id` to rebuild a past run. The report opens on the [CI dashboard](.github/actions/otel-html-publish/otel-html-ci.yaml): job duration, queue time, step counts, runs, and warnings and errors, with `workflow` (`cicd.pipeline.name`, to tell `ci` and `load` runs apart on a shared page), `run` and `job` variables. The run-level span lives on the run's own resource, so selecting a job in `job` hides it from the widgets that list spans; the Runs list still shows each run that job ran in, through its job span. A job skipped by its `if:` gets no duration or queue-time point. The run key includes the run attempt, so after a partial re-run the artifacts of jobs that did not re-run (still attempt 1) show up as separate traces without a job span.
 
 The run's report is then published to the site at <https://bjstabi.github.io/otel-html/>. The layout is:
 
 - `/index.html` (landing page) and `/index.json` (site index).
+- `/assets/<otel-html version>/`: the viewer and the DuckDB engine files, written once per version and shared by every report on the site. The reports on the site are `site` format and load their viewer from there; they hold only their data.
 - `/branch/<name>/` and `/branch/<name>/runs/<run_id>/` for pushes to the default branch of this repo: [`/branch/main/`](https://bjstabi.github.io/otel-html/branch/main/). `<name>` is the branch lower-cased with each run of other characters as one `-`.
 - `/pr/<number>/` and `/pr/<number>/runs/<run_id>/` for any other run whose commit or branch belongs to an open pull request (the pull request may have been pushed to since). A default-branch run always goes to its branch's folder, even when an open pull request's head is, or contains, its commit.
 
-Each folder holds the runs of every workflow (`ci`, `load`). A run on any other branch, or a push from a fork, with no open pull request is not published. The site keeps the last 30 runs of each workflow per branch and the last 10 of each workflow per pull request; a re-run replaces its folder. GitHub Pages sites are limited to 1 GB. A run's report here is about 3.6 MB (1.9 MB of it the viewer), and each folder also carries its rolling report, about the viewer plus the runs' data again: at the defaults that is about 320 MB for `/branch/main/` and about 55 MB per open pull request, so the site nears 1 GB at around a dozen active pull requests. When a pull request closes or merges, `pull_request_target` triggers the `cleanup` job, which removes its `/pr/<number>/` folder; after a merge, `/branch/main/` carries the merged result. The per-workflow folders of earlier versions (`/ci/`, `/load/`) are removed by the next publish; nothing redirects from them.
+Each folder holds the runs of every workflow (`ci`, `load`). A run on any other branch, or a push from a fork, with no open pull request is not published. The site keeps the last 30 runs of each workflow per branch and the last 10 of each workflow per pull request; a re-run replaces its folder. GitHub Pages sites are limited to 1 GB. A run's report here is its data only (the viewer is shared). It is estimated at about 1.7 MB: the format-3 report's 3.6 MB less its 1.9 MB viewer. That is the format-3 figure; format 4 has not been measured on the site yet, and the first format-4 publishes will measure it. Each folder also carries its rolling report, the runs' data again: at the defaults that is about 150 MB for `/branch/main/` and about 25 MB per open pull request. On top of that each otel-html version in use adds about 40 MB of `/assets/<version>/` (the DuckDB engine and its extensions) until no retained report references it. Every `ci site` and `ci cleanup` removes the asset versions no report references any more, so a version leaves the site once its last report does. Do not delete `/assets/` by hand: every report breaks. A change to the viewer without a version bump adds its new `viewer.<hash>` files to the same version's folder, a few MB each, until that version is pruned. When a pull request closes or merges, `pull_request_target` triggers the `cleanup` job, which removes its `/pr/<number>/` folder; after a merge, `/branch/main/` carries the merged result. The per-workflow folders of earlier versions (`/ci/`, `/load/`) are removed by the next publish; nothing redirects from them.
 
 `/branch/<name>/` and `/pr/<number>/` are rolling reports: after each publish the publisher merges the channel's retained `runs/<run_id>/` reports, oldest first, into one report and replaces everything in the folder except `runs/` and any `preview-*.png` screenshots, which survive rebuilds (a later step may refresh them). After each rebuild it also writes a `badge-<workflow>.json` file per workflow into the folder, a shields.io endpoint badge showing that workflow's newest run. Runs inside it are told apart by trace id (one per run attempt, so a re-run is its own trace) and by the `cicd.pipeline.run.id` resource attribute, which the dashboard's `run` variable selects. Retention bounds it: a run older than its workflow's newest 30 (10 on a pull request) drops out of the channel, and the next rebuild leaves it out. The run being published always stays listed, even when it is older than the ones kept (a dispatched rebuild of an old run), and the next publish's retention removes it. A per-run report whose format this version of otel-html no longer reads is skipped with a warning; its run stays listed and the rest still merge, until retention removes it. If the merge fails for any other reason, the channel warns and falls back to a stub forwarding to the newest run. A `load` run whose jobs were skipped has no job reports and publishes nothing.
 
-The `gh-pages` branch is the store: one orphan commit holding the whole site, replaced on every publish rather than grown, so history does not accumulate every run's data. [site-branch.sh](.github/actions/otel-html-publish/site-branch.sh) checks out the tip and pushes the new commit with `--force-with-lease` against it. A rejected lease (another publish or a cleanup got there first) checks out again, re-applies and retries, up to 5 attempts, so a cleaned-up pull request is never brought back. The `report` job in [ci-report.yml](.github/workflows/ci-report.yml) runs the [otel-html-publish](.github/actions/otel-html-publish/action.yml) action with `deploy: false`, which builds the report, publishes it and links it; on default-branch runs it also sets `preview: true`, which keeps the screenshot at the top of the README current. The `deploy` job ships the `gh-pages` tip under the concurrency group `pages`, so a pending deploy replaced by a newer one loses nothing: the one that runs ships the latest tip. It runs only from the default branch, so a `workflow_dispatch` on another branch updates `gh-pages` and skips the deploy; the next default-branch deploy ships it.
+The `gh-pages` branch is the store (the shared `/assets/<version>/` folders are part of it): one orphan commit holding the whole site, replaced on every publish rather than grown, so history does not accumulate every run's data. [site-branch.sh](.github/actions/otel-html-publish/site-branch.sh) checks out the tip and pushes the new commit with `--force-with-lease` against it. A rejected lease (another publish or a cleanup got there first) checks out again, re-applies and retries, up to 5 attempts, so a cleaned-up pull request is never brought back. The `report` job in [ci-report.yml](.github/workflows/ci-report.yml) runs the [otel-html-publish](.github/actions/otel-html-publish/action.yml) action with `deploy: false`, which builds the report, publishes it and links it; on default-branch runs it also sets `preview: true`, which keeps the screenshot at the top of the README current; the screenshot is taken over a loopback server (`127.0.0.1`, a random port) on the checked-out site, because a `site` report loads its engine over http and does not open from `file://`. The `deploy` job ships the `gh-pages` tip under the concurrency group `pages`, so a pending deploy replaced by a newer one loses nothing: the one that runs ships the latest tip. It runs only from the default branch, so a `workflow_dispatch` on another branch updates `gh-pages` and skips the deploy; the next default-branch deploy ships it.
 
 `otel-html ci link` posts one sticky comment per workflow on the open pull requests of a pull request run (found by a per-workflow marker, so `ci` and `load` do not overwrite each other; a default-branch run comments on none). The comment links this run's report, the pull request's rolling report (`All runs on pull request #<number>`, `/pr/<number>/`) and the run before it on the pull request (the previous run of the same workflow, else the one before it of any workflow), and creates a check run named `otel-html report` that concludes `neutral`: it is a link, not a second verdict on the run.
 
@@ -379,10 +443,10 @@ These subcommands are for the actions; stable flags, output format not guarantee
 
 | Subcommand | What it does | Flags |
 | --- | --- | --- |
-| `ci report` | Builds a run's report from the Actions API (with `$GITHUB_TOKEN` from the environment) and merges it with the downloaded job artifacts. Writes the summary table to the job summary, and `published=false` to `$GITHUB_OUTPUT` when the run has no job reports. | `--run-id`, `--repository`, `--artifacts`, `--out` (all required); `--config`; `--no-summary` (the action does not pass it: on `github-pages` it points `$GITHUB_STEP_SUMMARY` at a file for this step and appends that file to the job summary only when the site push did not publish, since `ci link` writes the linked summary otherwise) |
-| `ci site` | Places a run's report in the checked-out site folder, applies retention, drops the older per-workflow channels, rewrites the indexes and the rolling report. Writes `published`, `report-url`, `channel` and `rolling` (`built`, or `stub` when the merge fell back to the redirect) to `$GITHUB_OUTPUT`, and a `badge-<workflow>.json` per workflow beside the rolling report. | `--site`, `--report`, `--run-id`, `--repository`, `--base-url` (all required); `--retention` (30 per workflow, per branch), `--pr-retention` (10 per workflow, per pull request) |
+| `ci report` | Builds a run's report from the Actions API (with `$GITHUB_TOKEN` from the environment) and merges it with the downloaded job artifacts. Writes the report in `local` format (opens from `file://`; about 15 MB), the summary table to the job summary, and `published=false` to `$GITHUB_OUTPUT` when the run has no job reports. | `--run-id`, `--repository`, `--artifacts`, `--out` (all required); `--config`; `--no-summary` (the action does not pass it: on `github-pages` it points `$GITHUB_STEP_SUMMARY` at a file for this step and appends that file to the job summary only when the site push did not publish, since `ci link` writes the linked summary otherwise) |
+| `ci site` | Places a run's report in the checked-out site folder, converted to `site` format on the shared `assets/<version>/` (written, or topped up, by this step), applies retention, drops the older per-workflow channels, rewrites the indexes, rebuilds the rolling report (compacted) and prunes the asset versions no report references. Writes `published`, `report-url`, `channel` and `rolling` (`built`, or `stub` when the merge fell back to the redirect) to `$GITHUB_OUTPUT`, and a `badge-<workflow>.json` per workflow beside the rolling report. | `--site`, `--report`, `--run-id`, `--repository`, `--base-url` (all required); `--retention` (30 per workflow, per branch), `--pr-retention` (10 per workflow, per pull request) |
 | `ci link` | Comments on the pull requests (this run's report, the pull request's rolling report (`/pr/<number>/`), the previous run), creates the check run and writes the job summary. Never fails the job. | `--run-id`, `--repository`, `--url`, `--site` (all required); `--no-comment`, `--no-check` |
-| `ci cleanup` | Removes a closed pull request's reports (`pr/<number>/`) from the site folder. Writes `cleaned=true` to `$GITHUB_OUTPUT`, or `cleaned=false` and changes nothing when the site never had the pull request. | `--site`, `--pr` (required); `--repository` (default `$GITHUB_REPOSITORY`) |
+| `ci cleanup` | Removes a closed pull request's reports (`pr/<number>/`) from the site folder, then prunes the unreferenced `assets/<version>/` folders. Writes `cleaned=true` to `$GITHUB_OUTPUT`, or `cleaned=false` and changes nothing when the site never had the pull request. | `--site`, `--pr` (required); `--repository` (default `$GITHUB_REPOSITORY`) |
 
 See [Use in your CI](#use-in-your-ci) to adopt this in another repo.
 
@@ -515,11 +579,11 @@ Publish inputs:
 | `run-id` | the `workflow_run`'s run, else this run | The run to report on. |
 | `version`, `command` | `latest`, empty | As for setup. |
 | `config` | the action's own `otel-html-ci.yaml` | The dashboard config for the reports. |
-| `target` | `github-pages` | `artifact` uploads the run report as the `ci-run-report` artifact only: nothing reaches the site and nothing is linked. |
-| `retention`, `pr-retention` | 30, 10 | Runs kept of each workflow per branch page and per pull request page. GitHub Pages sites are limited to 1 GB, and a run's report is about 3.6 MB in this repo, so mind the total: about workflows × (`retention` + open pull requests × `pr-retention`) × your report size × 1.5, the 1.5 for the rolling reports (each holds its runs' data again). In this repo that is about 320 MB for the default branch and 55 MB per open pull request. |
+| `target` | `github-pages` | `artifact` uploads the run report as the `ci-run-report` artifact only: nothing reaches the site and nothing is linked. The artifact is a `local` report (about 15 MB) that opens from disk. |
+| `retention`, `pr-retention` | 30, 10 | Runs kept of each workflow per branch page and per pull request page. GitHub Pages sites are limited to 1 GB, so mind the total: about 40 MB per otel-html version still referenced (the shared `assets/<version>/`) plus workflows × (`retention` + open pull requests × `pr-retention`) × your report's data size × 2, the 2 for the rolling reports (each holds its runs' data again). In this repo (reports estimated at about 1.7 MB without the viewer, the format-3 figure; format 4 has not been measured on the site yet) that is about 150 MB for the default branch and 25 MB per open pull request. |
 | `comment`, `check` | true | The sticky PR comment and the `otel-html report` check run. |
 | `deploy` | true | Deploy to Pages in this job; needs `environment: github-pages` and `pages: write` and `id-token: write`. `false` leaves it to a separate `deploy` job as above. |
-| `preview` | false | Screenshot the default branch's rolling report in light and dark (`preview-light.png`, `preview-dark.png` in its folder) when a run rebuilds it, for a README image. Installs Playwright's Chromium, about 1 minute per run; needs Node and passwordless sudo on the runner. Only the default branch's page; a failed install or screenshot is a warning and the publish goes on. |
+| `preview` | false | Screenshot the default branch's rolling report in light and dark (`preview-light.png`, `preview-dark.png` in its folder) when a run rebuilds it, for a README image. Installs Playwright's Chromium, about 1 minute per run; needs Node and passwordless sudo on the runner. The screenshot is taken over a loopback server, not `file://`. Only the default branch's page; a failed install or screenshot is a warning and the publish goes on. |
 | `cleanup-pr` | empty | A pull request number: skip the report and remove that PR's reports (`/pr/<number>/`) from the site. |
 | `token` | `github.token` | Needs `actions: read`, `contents: write`, `pages: read`, `pull-requests: write`, `checks: write`. |
 
@@ -531,11 +595,11 @@ Final-job mode: for a repository with no separate publisher, put the action in t
 
 ### Report format compatibility
 
-`data/` is the model; `assets/` and `index.html` are the viewer. The manifest's `formatVersion` (now 3) is bumped only for a change an older reader cannot read. This otel-html reads formats 1 to 3 (see [`src/format/version.ts`](src/format/version.ts)), and a reader fails fast on a version it does not know.
+`data/` is the model; `assets/` and `index.html` are the viewer. The manifest's `formatVersion` (4 for `local` and `site`; 3 and below for reports an older otel-html wrote) is bumped only for a change an older reader cannot read. This otel-html writes format 4 only (`writer.format` `local`, the default, or `site`). `merge` reads versions 1 to 4; a reader fails fast on a version it does not know. The viewer in this build reads format 4 only: opening a report of format 1 to 3 shows "This report is format N; this viewer reads format 4. `otel-html merge <report> --out <new>` converts it." `upgrade` refuses a report of format 1 to 3 with the same message (see [`src/format/version.ts`](src/format/version.ts)).
 
 - `merge` re-renders any readable report with the current viewer, so reports from different otel-html versions combine into one report in the current format.
 - `--append` needs the same otel-html version as the report it appends to.
-- A new viewer must read every version in `READABLE_FORMAT_VERSIONS`. Frozen format-1, format-2 and format-3 reports in `fixtures/reports/` are merged, and opened by the viewer's data layer, by the tests to hold that.
+- `merge` reads every version in `READABLE_FORMAT_VERSIONS`; `upgrade` and the viewer read format 4 only. Frozen format-1 to format-4 reports are in `fixtures/reports/`. The format-1 to format-3 ones are converted by `merge` and the result is opened by the tests; the format-4 one is read as is by `merge` and by `otel-html host`, and by the viewer tests over its manifest and `.parquet.js` wrappers (the e2e opens it after `upgrade`), to hold that.
 - Maintainers: every format version a release ships has a frozen report, written by that release, in `fixtures/reports/`, added with its compat test when the release is cut; a version leaves `READABLE_FORMAT_VERSIONS` only together with its fixture.
 
 ## Configuration
@@ -545,13 +609,17 @@ Config is a YAML or JSON file (`otel-html.yaml` by default), or an object passed
 | Key | Default | Meaning |
 |---|---|---|
 | `title` | none | Report title. Env: `OTEL_HTML_TITLE`. |
-| `writer.chunkTargetBytes` | 4000000 | Target size of a data chunk. |
+| `writer.format` | `local` | Report format: `local` (the default) or `site`, which write format 4 (Parquet partitions; `site` is for a published site with shared assets). Closing the report compacts its flush partitions into one sorted partition when there are two or more; if the compaction fails, the failure is logged and the report keeps its flush partitions, still complete and valid. `chunks` (format 3) is no longer written and fails with "format 3 (chunks) is no longer written; use local or site (otel-html merge converts an older report)". Env: `OTEL_HTML_FORMAT`. |
+| `writer.rowGroupRows` | 50000 | Rows per Parquet row group in format 4 (50000 to 100000). |
+| `writer.statisticsKeys` | `[]` | Extra columns whose statistics are kept per partition file in format 4, beyond those the dashboards and views use. Each entry is a column name, `attr:<key>` (a span, log or metric point attribute) or `resource:<key>` (a resource attribute); a bare attribute key is accepted but matches nothing, so it prunes nothing. |
+| `writer.localWarnBytes` | 256000000 | The size, in bytes of Parquet, past which a `local` report warns (once per session) that `--format site` serves large reports better. The base64 scripts a `local` report loads are about a third larger. |
+| `writer.compactOnMerge` | `false` | With `merge`: compact each format-4 input's copied partitions into one partition (`merge --compact`). Without it they are copied as they are. |
+| `writer.assetsBase` | `assets/` | Where a format-4 report loads the viewer assets from: `assets/`, or a relative path such as `../../assets/0.3.0/`. |
+| `writer.chunkTargetBytes` | 4000000 | The size at which held rows are cut into a flush partition (spans, logs and metric points alike); a closed report compacts those flush partitions when there are two or more (see `writer.format`). |
 | `writer.flushIntervalMs` | 5000 | Checkpoint interval. Also checkpoints once after this long idle with new records. |
 | `writer.dedupeCapacity` | 200000 | Recent span IDs remembered for de-duplication. |
-| `writer.facetValueCap` | 1000 | Distinct values kept per facet key; also bounds the viewer's filtered facets. |
-| `writer.facetKeyCap` | 500 | Facet keys kept. |
-| `writer.metricSeriesCap` | 1000 | Series kept per metric. Further series fold into one "other" series, and charts that would need to split it say they are partial. |
-| `writer.metricExemplars` | 4 | Exemplars kept per series per finest time bucket (those with a trace id first, then the most extreme values). |
+| `writer.facetValueCap` | 1000 | Distinct values kept per column in a partition file's statistics, and the most values the viewer lists per facet key. The report records it in its manifest. |
+| `writer.facetKeyCap` | 500 | The most attribute keys the viewer lists in a filtered facet panel. The report records it in its manifest; a report without it uses 500. |
 | `writer.drop.traces.span` | `[]` | OTTL conditions; matching spans are dropped at write time. |
 | `writer.drop.logs.log_record` | `[]` | Same, for log records. |
 | `writer.drop.metrics.datapoint` | `[]` | Same, for metric data points. |
@@ -562,7 +630,6 @@ Config is a YAML or JSON file (`otel-html.yaml` by default), or an object passed
 | `receiver.grpc.port` | 4317 | OTLP/gRPC port (0 picks a free port). |
 | `receiver.maxBodyBytes` | 67108864 | Largest request body accepted, after decompression (64 MiB). Larger requests are rejected (413 / `RESOURCE_EXHAUSTED`). |
 | `receiver.inflightBudgetBytes` | 134217728 | Body bytes the receiver holds in progress or queued (128 MiB). A request that would exceed it while another is in progress is refused with 503 / `UNAVAILABLE` so the exporter retries. |
-| `viewer.eagerBudgetBytes` | 75000000 | Decoded size under which the viewer loads everything up front. Applies to each signal on its own: the viewer estimates the decoded size of the spans and of the logs separately, so a report can have eager spans and windowed logs. Env: `OTEL_HTML_EAGER_BUDGET_BYTES`. |
 | `viewer.listCap` | 10000 | Maximum rows in result lists. |
 | `viewer.defaultDashboard` | `fusion` | The dashboard `g d` and the sidebar's ★ item open. Must be `fusion` or the id of a dashboard in `dashboards`. A config without `dashboards` that leaves it at `fusion` keeps the default of the report it is written into. |
 | `viewer.home` | `traces` | Where the report opens: `traces`, `logs`, `metrics` or `dashboards` (the default dashboard). A config that leaves it at `traces` keeps the home page of the report it is written into (or, with `merge`, the first report's). |
@@ -574,21 +641,26 @@ Config is a YAML or JSON file (`otel-html.yaml` by default), or an object passed
 
 ## Limits
 
+- `host` runs one statement at a time (up to 256 at once, the running one included; more are refused 503), cancels a statement at `--timeout` (504) and refuses a result over `--max-result-bytes` (413); a statement whose worker had to be replaced is 504, and 503 when the restart fails. Request bodies over 1 MiB are refused (413). Memory can reach `--max-result-bytes` for each connection that reads its result slowly. It has no TLS or authentication and binds `127.0.0.1` unless `--host` says otherwise, so put it behind a proxy before exposing it. When the address it binds is a loopback one (`127.0.0.0/8`, `::1`, however `--host` spells it, `localhost` included) it answers 403 to a request whose `Host` header is not its own address and port (the port may be left out on port 80; so a page on another site cannot reach it, even through DNS rebinding), and 415 to a query that is not `application/json`; on any other address every `Host` is accepted. It serves the report as it was when `host` started: a report still being written is not followed; restart `host` to see more.
 - A report folder reused by many runs grows without bound; start it over with `--replace` now and then. Each `run` is its own trace, told apart by start time and `process.command_args`.
-- Timestamps are JavaScript numbers, exact to 2^53 ns. That is about 104 days of relative time span within one report.
+- Times are stored as absolute int64 nanoseconds, but the viewer measures them relative to the report's epoch (`epochUnixNano` in the manifest, the earliest time the report's first data carried) as JavaScript numbers, exact to 2^53 ns. So the window is ±2^53 ns, about 104 days on each side of the epoch: the writer refuses data outside that window (`time-out-of-range`), and `merge` of inputs whose times lie further apart than that succeeds but produces a report the viewer cannot open and a later append refuses ([#216](https://github.com/bjstabi/otel-html/issues/216)).
 - The receiver has no TLS or authentication and reflects only localhost origins for CORS; bodies over 64 MiB are refused (413); logs and metric points a sender retries are not deduplicated.
 - Over gRPC a message larger than twice `receiver.maxBodyBytes` is refused by grpc-js before otel-html sees it and is not counted; between the limit and twice the limit it is counted as `too-large`.
 - The in-flight budget (`receiver.inflightBudgetBytes`, 128 MiB) is reserved from `Content-Length`, or as a streamed body inflates, before the body is buffered, so HTTP memory is bounded by the budget plus one body.
 - gRPC: a call reserves `maxBodyBytes` of the in-flight budget when it starts, before its message is read, and is refused `UNAVAILABLE` (retryable, counted `busy`) when that would exceed the budget. The reservation is held until the message has been read in full and the handler admits its real size. Each admitted call reserves `maxBodyBytes` but may buffer up to twice that (the grpc-js ceiling) before the handler refuses it as too large, so across connections gRPC memory is bounded by about twice the budget. Each connection is additionally capped by Node's HTTP/2 session memory at that ceiling × its stream limit. Each concurrent call needs `maxBodyBytes` of budget while its message is read, so a budget below twice `maxBodyBytes` lets a connection run only one call at a time (the defaults are exactly twice).
-- The viewer is for static reports that open from `file://`. It does not follow a report that is still being written; reload to see what the receiver has checkpointed.
-- When a signal is larger than `viewer.eagerBudgetBytes`, the viewer reads its chunks on demand. Services numbers, filtered log results and filtered patterns are then partial (the viewer says "from N of M chunks") until you choose "Scan entire run" (in Traces mode that scan still stops at `viewer.listCap` traces; a trace whose spans sit in several chunks shows its service share as partial unless the scan reaches its first matching span in the first of those chunks it reads; Newest first reads the newest chunk first). Opening a trace or its Logs tab reads only the chunks the trace index lists for it.
+- The viewer is for static reports that open from `file://` (`local`) or a static host (`site`), or that `otel-html host` serves (the host answers the viewer's queries, so the page never loads the engine, and evaluates conditions in SQL only). It does not follow a report that is still being written; reload to see what the receiver has checkpointed.
+- Results are never partial: every query runs over the whole report. `site` reports read only the row groups a query needs; `local` reports decode every partition a query touches, so a large `local` report is slower to open and query than the same data as `site` (the writer warns past `writer.localWarnBytes`). Lists stop at `viewer.listCap` rows.
+- A filter term the viewer cannot turn into SQL is evaluated in the browser, and the page says "evaluated in the browser". Lists then check rows in the browser and page through the matches (at most 8 pages of `viewer.listCap`); charts and counts fetch the candidate rows (at most 200,000) first and join on them. Narrow the filter with a term that has a SQL form when a query reports too many candidates.
+- The Metrics Catalog and the Metrics tabs' resource matching read the whole `points` table once per open, so their cost grows with the number of points in the report. Resources are matched by their attributes, so resources that differ only in `schema_url` or dropped attribute count are not told apart.
+- A metric chart whose `where` needs evaluating in the browser reads the series it applies to (at most 200,000); above that the query fails with a message asking you to narrow the window or the condition. A query draws at most 5,000 exemplar points and says so when it stops there.
+- Text search is a case-insensitive substring match over the same fields as before, where attributes match as their JSON text: keys match too, and a quote inside a value does not match its JSON escaping.
 - Dashboard layout edits are not saved: Edit layout changes the page until you reload. Use Copy config and paste the result into your config file.
-- The Fusion timeline's metric lane comes from the run-wide rollup, so it ignores variables and says "all resources" when one is set.
+- The Fusion timeline's metric lane is read from the report's `points` table in one grouped query over the whole report, so it ignores variables and says "all resources" when one is set.
 - Log pattern clustering stops creating clusters at 2,000. A message that fits no existing cluster after that stays unclustered, and the Patterns view reports how many.
-- The design target for logs is 1,000,000 records in about 200 bytes each on disk. The end-to-end suite builds a 100k-span, 1M-log report to check the landing and a one-window filtered scan.
-- Input files are read in pieces and parsed one resource entry (one element of `resourceSpans`, `resourceLogs` or `resourceMetrics`) at a time, so memory does not grow with file size. Converting 1M logs from 10 files peaks at about 320 MB of resident memory, against a design target of 512 MB. A single resource entry is still parsed whole, and a protobuf file is read whole before it is decoded, so peak memory still scales with the largest resource entry and with protobuf file size. If one OTLP JSON object repeats a signal key (two `resourceLogs`, say), both arrays are imported. The exception is `--replace` on a folder that already holds a report (a `--replace` conversion, or the first request into a replaced `serve` report): the old report is kept until the first input file or request has been read without error, so everything accepted from it (encoded chunks and metric buckets) stays in memory until its end. Convert a file that does not fit in memory into an empty folder, or empty the folder first.
-- Metrics: `otel-html convert` turns 200 metrics × 1,000 series × 360 points (72M points, OTLP JSON) into a report with a peak of about 460 MB of resident memory. When a conversion or merge takes metric points, the CLI under Node switches V8 to `--optimize-for-size` as the first ones arrive, which costs about 40% in conversion time; trace and log conversions are not affected. `serve` and `run` set it at process start, together with `--heap-growing-percent=40`: with the first flag alone V8 runs a full garbage collection about every 0.4 s with pauses up to 200 ms, and a sender's batch queue overflows when the receiver stalls that long, so the second keeps pauses short (at most about 80 ms) at the same memory. The library sets no V8 flags, so the same workload fed to `Report.addMetrics` peaks at about 770 MB: V8 grows its heap to several times the live data (about 100 MB here) when allocation is this steady. The 512 MB writer target is defined on the CLI; the library figure is measured and reported beside it, not held to the target. Both come from `mise run test:load` (the `load` workflow runs it on ubuntu). To get the CLI's figure in your own process, start Node with `--optimize-for-size`, or call `v8.setFlagsFromString('--optimize-for-size')` before converting. Calling `flush()` more often (or lowering `writer.flushIntervalMs`) bounds what the writer holds between checkpoints but does not lower this peak, which is V8 heap slack rather than live data. Gauges and sums in OTLP JSON are read without building protobuf-es messages. Other metric types, and points that carry exemplars, are decoded through protobuf-es and allocate more per point. The 512 MB target is for that workload (cumulative counters and gauges). For every metric type the buckets the writer holds before writing them out are bounded by their estimated size (about 40 MB; a histogram bucket weighs as much as its bucket counts), but the state kept per series is not: each cumulative stream keeps its previous point, which for a histogram is its bucket counts (roughly half a kilobyte at 16 buckets), so memory grows with the number of cumulative histogram series. Series folded into `other` keep their streams for at most 10 × `writer.metricSeriesCap` series per metric.
-- Receiver: `otel-html serve` takes 1M spans (OTLP/gRPC, paced at 4,000 spans/s) and 1M logs (OTLP/HTTP, one record per request) from telemetrygen into one complete report with nothing rejected, against a design target of 512 MB of resident memory. Measured on ubuntu-latest (4 cores, AMD EPYC 7763) on 2026-10-30: every span and log was written, 0 requests refused and 0 records rejected, with a peak of 417 MB of resident memory. The generator ran for 255 s (spans) and 209 s (logs). On the finished report the Traces and Logs landings were interactive in a median of 313 ms and 258 ms (Chromium). Checkpoints are written in the background while requests keep arriving, because a sender's batch span processor (2,048 spans by default) drops spans when the receiver stalls for about half a second. The load job also prints serve's event-loop delay (p99 and max) and GC pauses, so a red run shows why spans dropped. From `mise run test:load:receiver` (the `receiver` job of the `load` workflow).
+- The design target for logs is 1,000,000 records in about 200 bytes each on disk. The end-to-end suite builds a 100k-span, 1M-log report to check the landing and a filtered query over one time window (`e2e/scale.spec.ts`, in the Chromium perf pass over HTTP).
+- Input files are read in pieces and parsed one resource entry (one element of `resourceSpans`, `resourceLogs` or `resourceMetrics`) at a time, so memory does not grow with file size. Converting 1M logs from 10 files peaks at about 540-575 MB of resident memory through the library (`mise run test:load`), above the 512 MB design target: the library sets no V8 flags, V8 lets the heap grow to 2-3x the live data, and with `--optimize-for-size` the same run peaks at about 243 MB. A single resource entry is still parsed whole, and a protobuf file is read whole before it is decoded, so peak memory still scales with the largest resource entry and with protobuf file size. If one OTLP JSON object repeats a signal key (two `resourceLogs`, say), both arrays are imported. The exception is `--replace` on a folder that already holds a report (a `--replace` conversion, or the first request into a replaced `serve` report): the old report is kept until the first input file or request has been read without error, so everything accepted from it (its held rows) stays in memory until its end. Convert a file that does not fit in memory into an empty folder, or empty the folder first.
+- Metrics: `otel-html convert` on 200 metrics × 1,000 series × 360 points (72M points, OTLP JSON, written as 4,800 flush partitions of 15,000 rows and compacted into one 208 MB `points` file) peaks at about 497 MB of resident memory and takes about 53 minutes, within the 512 MB writer target (`mise run test:load`; the `load` workflow runs it on ubuntu; the test allows two hours). Compaction merges the flush partitions in rounds of 16 files, then 8, writing each file as it goes. The same workload fed to `Report.addMetrics` peaks at about 994 MB in about 31 minutes, above the target only because the library sets no V8 flags and V8 lets the heap grow far past the live data (about 90 MB) when no flag restrains it; with `--optimize-for-size`, which the Node CLI sets when metric points arrive, it peaks at about 503 MB but takes about 3,550 s (about 59 minutes), which is slower. Applications that embed the library and need the target can start Node with `--optimize-for-size`. The `serve` and `run` commands set `--optimize-for-size` and `--heap-growing-percent=40` at process start. Writer memory was tracked in [#227](https://github.com/bjstabi/otel-html/issues/227) and partition compaction is tracked in [#210](https://github.com/bjstabi/otel-html/issues/210).
+- Receiver: `otel-html serve` takes 1M spans (OTLP/gRPC, paced at 4,000 spans/s) and 1M logs (OTLP/HTTP, one record per request) from telemetrygen into one complete report with nothing rejected, against a design target of 512 MB of resident memory. Measured on format 4 on 2026-11-07 (a 20-thread Intel Core Ultra 7 265K workstation running Node 24, not ubuntu-latest): every span and log was written, 0 requests refused and 0 records rejected, but the peak was 749 MB of resident memory, above the 512 MB target, so the target does not hold on format 4 yet (remeasured on 2026-11-08 after the writer memory fixes of #227: 759 MB, 299 s, event-loop delay p99 61.6 ms and max 874 ms, 13,823 GC pauses totalling 9.8 s; the receiver's memory is not changed by them). The generator ran for 251 s (spans) and 32 s (logs). On the finished report the Traces and Logs landings were interactive in a median of 4,492 ms (over the 3,000 ms budget) and 2,761 ms (Chromium). Memory and the landing are tracked with the writer's memory in [#210](https://github.com/bjstabi/otel-html/issues/210) and [#227](https://github.com/bjstabi/otel-html/issues/227). The figures this section gave before (417 MB, 313 ms and 258 ms) were measured on the chunk writer. Checkpoints are written in the background while requests keep arriving, because a sender's batch span processor (2,048 spans by default) drops spans when the receiver stalls for about half a second. The load job also prints serve's event-loop delay (p99 and max) and GC pauses, so a red run shows why spans dropped. From `mise run test:load:receiver` (the `receiver` job of the `load` workflow).
 - Metric values, counts and sums are 64-bit floating point once read, as in Prometheus: an integer point (`asInt`) or a count above 2^53 loses precision.
 - The flame graph merges very narrow bars in traces above 2000 spans and clips anything deeper than 200 levels.
 
@@ -596,14 +668,14 @@ Config is a YAML or JSON file (`otel-html.yaml` by default), or an object passed
 
 Clone with `git clone --single-branch https://github.com/bjstabi/otel-html.git` (about 4 MB of git data). A plain clone also fetches the `gh-pages` branch, the published report site (about 150 MB), which development never needs. `--single-branch` fetches `main` only; to fetch every other branch too but still not `gh-pages` (git 2.29 or later), run `git config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'` and then `git config --add remote.origin.fetch '^refs/heads/gh-pages'`. An existing clone drops the site the same way: add that second refspec, delete the branch (`git branch -rd origin/gh-pages`, and `git branch -D gh-pages` if you ever checked it out), then `git reflog expire --expire=now --all` and `git gc --prune=now`, while no other git command runs. The last two also discard every reflog (the way back from a recent reset or rebase) and other unreachable objects, such as dropped stashes.
 
-Tasks are defined in `mise.toml`; CI runs the same ones. The Linux binaries (`linux-x64`, `linux-arm64`) are built and smoke-tested on every PR by the `binary` job (`test/cli/binary.test.ts` against the compiled binary: `convert`, `serve` over HTTP and gRPC, `run`, a SIGINT exit 0 and a bad-port exit 2); the release workflow smoke-tests the artefacts it uploads. Tasks with `sources` are skipped while up to date; `mise run --force <task>` overrides.
+Tasks are defined in `mise.toml`; CI runs the same ones. The `linux-x64`, `linux-arm64` and `windows-x64` binaries are built and smoke-tested on every PR by the `binary` job (`test/cli/binary.test.ts` against the compiled binary: `convert`, `serve` over HTTP and gRPC, `host` answering one Arrow query, `ci context`, `run`, a SIGINT exit 0 and a bad-port exit 2), and a step that runs the binary outside the checkout (site and local conversions, a compaction, `host`); the release workflow smoke-tests the artefacts it uploads. Tasks with `sources` are skipped while up to date; `mise run --force <task>` overrides.
 
 ### Test and viewer spans
 
 The test suites trace themselves. Spans are exported only when an OTLP endpoint is configured (`OTEL_EXPORTER_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`), for example by running under `otel-html run`, as CI's job shell does; `OTEL_SDK_DISABLED=true` turns it off. The protocol comes from `OTEL_EXPORTER_OTLP_PROTOCOL` (`http/protobuf` by default, `http/json` or `grpc`). Test spans carry `service.name` `otel-html-tests`, or `OTEL_HTML_TEST_SERVICE_NAME` when set; the inherited `OTEL_SERVICE_NAME` is ignored.
 
 - **vitest:** its built-in (experimental) OpenTelemetry support, with vitest's own span names (`vitest.test_run`, `vitest.test.runner.run.suite`, `vitest.test.runner.run.test`, hooks, module imports), parented to `TRACEPARENT`, which mise sets per task.
-- **Playwright:** one span per test (`test.case.name`, `test.case.result.status`, ...) under `TRACEPARENT`. The viewer's own spans (`viewer.load`, `viewer.chunk.load`, `viewer.query`, `viewer.navigate`, resource `service.name=otel-html-viewer`) are exported under each test's span, except for `@perf` tests, `scale.spec.ts`, `load.spec.ts` and the hostile-content report (`hostileTest`), and at most 2 000 per test.
+- **Playwright:** one span per test (`test.case.name`, `test.case.result.status`, ...) under `TRACEPARENT`. The viewer's own spans (`viewer.load`, `viewer.script.load`, `viewer.query`, `viewer.navigate`, resource `service.name=otel-html-viewer`) are exported under each test's span, except for `@perf` tests, `scale.spec.ts`, `load.spec.ts` and the hostile-content report (`hostileTest`), and at most 2 000 per test.
 - **The library's own spans:** under an endpoint, the spans the library emits through the global tracer (`otel-html.flush`, `otel-html.receive`, in `src/api/report.ts`) during unit tests are exported too, under vitest's spans.
 
 The shipped viewer contains only the no-op `@opentelemetry/api`: a report sends nothing and records nothing unless a page registers a provider. A cached `mise run` task replays without running, so it emits no test spans; `--force` reruns it.
@@ -658,7 +730,7 @@ Build the library and CLI into dist/ (skipped while up to date)
 
 - **Usage:** `build:viewer`
 
-Build the viewer into dist/viewer (skipped while up to date)
+Build the viewer and the DuckDB engine files into dist/viewer (skipped while up to date)
 
 ## `check`
 
@@ -705,8 +777,8 @@ refuses to run in CI.
 
 - **Usage:** `e2e:fixtures`
 
-Build the e2e fixture reports into e2e/.reports/ (skipped while up to date; --force rebuilds)
-All but `scale` and `huge`, which e2e:fixtures:scale builds; about a second after `build`.
+Build the e2e fixture reports into e2e/.reports/ and their site copies into e2e/.reports-site/ (skipped while up to date)
+All but `scale` and `many`, which e2e:fixtures:scale builds; about a second after `build`.
 
 ## `e2e:fixtures:scale`
 
@@ -714,7 +786,7 @@ All but `scale` and `huge`, which e2e:fixtures:scale builds; about a second afte
 
 - **Usage:** `e2e:fixtures:scale`
 
-The e2e `scale` and `huge` reports with the current viewer (only e2e/scale.spec.ts reads them)
+The e2e `scale` and `many` reports with the current viewer (only e2e/scale.spec.ts reads them)
 Depends on e2e:fixtures:scale:data; `otel-html upgrade` then swaps in the current dist/viewer (~0.3 s, every run: a
 freshness record of its own could miss a viewer that :data wrote in between), so a viewer change never converts again.
 
@@ -724,8 +796,8 @@ freshness record of its own could miss a viewer that :data wrote in between), so
 
 - **Usage:** `e2e:fixtures:scale:data`
 
-Convert the e2e `scale` and `huge` reports into e2e/.reports-scale/ (skipped while up to date)
-100k spans, 1M logs and metrics, converted twice (~15 s, ~1 GB of memory). Its sources are the writer's build output,
+Write the e2e `scale` and `many` reports (site format) into e2e/.reports-scale/ (skipped while up to date)
+100k spans and 1M logs, converted once (`scale`) and written through the library in 100 flushes (`many`) (~1 GB of memory). Its sources are the writer's build output,
 not the viewer's: a viewer change only reruns e2e:fixtures:scale.
 
 ## `e2e:otel-recorder`
@@ -750,7 +822,7 @@ Fix formatting with biome
 
 - **Usage:** `gen`
 
-protobuf-es, the config schema and the OTTL grammar; also rewrites the README's generated task section
+protobuf-es, the config schema, the OTTL grammar and docs/format/schema.md; also rewrites the README's generated task section
 `mise run --force gen` restores a hand-edited generated file (gen:check does this).
 
 ## `gen:check`
@@ -781,7 +853,7 @@ Install dependencies and git hooks
 
 Playwright over the fixture reports, per browser (--browser chromium|firefox|webkit, default all)
 Two passes: the `<browser>-file` and `<browser>-http` projects in parallel (`-http` runs only specs tagged HTTP), then the
-`<browser>-perf-file` project (@perf tests) alone with one worker. Only Chromium has `-http` and `-perf-file`, and
+`<browser>-perf-file` and `<browser>-perf-http` projects (@perf tests) alone with one worker. Only Chromium has `-http` and the perf projects, and
 Firefox and WebKit leave out e2e/scale.spec.ts (playwright.config.ts). Both passes run; the task fails if either does.
 The perf pass is skipped for a browser without a `-perf-file` project. The perf pass writes its artifacts to test-results/perf, so it does not clear the first pass's failures. Playwright args after `--` go to both passes (`mise run test:e2e --browser chromium -- e2e/scale.spec.ts`);
 narrow the browsers with `--browser`, not `--project`, which would add to the two passes' own projects.
@@ -789,9 +861,10 @@ The scale reports (e2e:fixtures:scale, ~15 s cold, ~35 s on CI) are built only w
 by `playwright test --list` with the same args; a direct `playwright test e2e/scale.spec.ts` needs that task run first.
 Browsers are installed first unless OTEL_HTML_SKIP_BROWSER_INSTALL is set (CI's Playwright image has them).
 The metrics scale check runs only with OTEL_HTML_METRICS_SCALE=1 (CI runs it in its own Chromium job): it writes a
-report of 200 metrics x 1,000 series in which only the charted metric has the full 1 h at 10 s (a few seconds locally,
-under a minute on CI; about 150 MB in e2e/.metrics-scale/), and fails if the Explorer or Catalog loads another metric's
-points. The @perf budgets scale by OTEL_HTML_PERF_FACTOR and, when OTEL_HTML_PERF_REFERENCE_MS is set (CI: 100), by how
+site-format report of 200 metrics x 1,000 series in which only the charted metric has the full 1 h at 10 s (a few
+seconds locally, under a minute on CI, in e2e/.metrics-scale/), serves it over HTTP (the `chromium-perf-http` project),
+and fails if the Explorer or Catalog asks for `points.parquet` without a Range header.
+The @perf budgets scale by OTEL_HTML_PERF_FACTOR and, when OTEL_HTML_PERF_REFERENCE_MS is set (CI: 100), by how
 much slower than that reference a fixed CPU workload runs here (never below 1; the setup logs `PERF calibration: N ms`).
 A run whose inputs match a cached success is replayed. `MISE_TASK_CACHE=off` re-runs the browsers, also through
 `test:e2e:chromium`; `--force` reaches only the task it is given to, so it works on `test:e2e` and not on the wrapper.
@@ -880,7 +953,7 @@ The @perf unit tests alone, one file at a time (never cached: timing)
 
 - **Usage:** `typecheck`
 
-tsc on the node, viewer and e2e projects
+tsc on the node, viewer, viewer-data and e2e projects
 
 ## `verify`
 

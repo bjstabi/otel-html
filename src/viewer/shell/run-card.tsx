@@ -1,15 +1,16 @@
 import type { JSX } from 'react';
-import type { Manifest } from '../../format/manifest.js';
+import type { AnyManifest } from '../../format/manifest.js';
 import { SIGNALS } from '../../format/paths.js';
 import { parseUnixNanos } from '../../model/ids.js';
 import { formatDuration } from '../../semconv/formatters.js';
+import { manifestRange } from '../data/manifest-range.js';
 import { absoluteTime } from './time-range.js';
 
 const LABEL: Record<(typeof SIGNALS)[number], string> = { spans: 'Spans', logs: 'Logs', metrics: 'Metrics' };
 
-export function RunCard({ manifest }: { manifest: Manifest }): JSX.Element {
+export function RunCard({ manifest }: { manifest: AnyManifest }): JSX.Element {
   const epoch = parseUnixNanos(manifest.epochUnixNano, 'manifest.epochUnixNano');
-  const range = manifest.range;
+  const range = manifestRange(manifest);
   return (
     <section aria-label="Run" className="rounded-card border border-hairline bg-surface p-3">
       <h2 className="text-sm font-semibold text-ink">{manifest.title}</h2>

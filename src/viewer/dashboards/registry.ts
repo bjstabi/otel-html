@@ -1,6 +1,6 @@
 import { FUSION } from '../../dashboards/fusion.js';
 import type { Dashboard } from '../../dashboards/schema.js';
-import type { Manifest } from '../../format/manifest.js';
+import type { AnyManifest } from '../../format/manifest.js';
 
 export interface DashboardEntry {
   dashboard: Dashboard;
@@ -10,7 +10,7 @@ export interface DashboardEntry {
 }
 
 /** Fusion first, then the config dashboards in order. */
-export function dashboardsOf(manifest: Manifest): DashboardEntry[] {
+export function dashboardsOf(manifest: AnyManifest): DashboardEntry[] {
   const def = manifest.config.viewer.defaultDashboard;
   return [
     { dashboard: FUSION, source: 'built-in', isDefault: FUSION.id === def },
@@ -26,6 +26,6 @@ export function findDashboard(entries: readonly DashboardEntry[], id: string): D
   return entries.find((e) => e.dashboard.id === id) ?? null;
 }
 
-export function defaultDashboardRoute(manifest: Manifest): string {
+export function defaultDashboardRoute(manifest: AnyManifest): string {
   return `/dashboards/${manifest.config.viewer.defaultDashboard}`;
 }

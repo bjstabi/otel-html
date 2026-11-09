@@ -2,7 +2,7 @@ import { type JSX, useMemo } from 'react';
 import type { SpanStatusKey } from '../../rollups/span-rollups.js';
 import type { TimeBuckets } from '../../rollups/time-buckets.js';
 import { LOG_SEVERITY_KEYS, type LogSeverityKey, SEVERITY_BANDS } from '../../semconv/severity.js';
-import type { TimeWindow } from '../data/span-query.js';
+import type { TimeWindow } from '../data/time-window.js';
 import { useSelection } from '../state/selection-context.js';
 import { BrushOverlay } from './brush-overlay.js';
 import { Chart } from './chart.js';

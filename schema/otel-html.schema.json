@@ -9,6 +9,42 @@
       "default": {},
       "type": "object",
       "properties": {
+        "format": {
+          "default": "local",
+          "type": "string",
+          "enum": [
+            "local",
+            "site"
+          ]
+        },
+        "rowGroupRows": {
+          "default": 50000,
+          "type": "integer",
+          "minimum": 50000,
+          "maximum": 100000
+        },
+        "statisticsKeys": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "localWarnBytes": {
+          "default": 256000000,
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "compactOnMerge": {
+          "default": false,
+          "type": "boolean"
+        },
+        "assetsBase": {
+          "default": "assets/",
+          "type": "string",
+          "pattern": "^(?:\\.\\.\\/)*assets\\/(?:[A-Za-z0-9][A-Za-z0-9._-]*\\/)?$"
+        },
         "chunkTargetBytes": {
           "default": 4000000,
           "type": "integer",
@@ -35,18 +71,6 @@
         },
         "facetKeyCap": {
           "default": 500,
-          "type": "integer",
-          "exclusiveMinimum": 0,
-          "maximum": 9007199254740991
-        },
-        "metricSeriesCap": {
-          "default": 1000,
-          "type": "integer",
-          "exclusiveMinimum": 0,
-          "maximum": 9007199254740991
-        },
-        "metricExemplars": {
-          "default": 4,
           "type": "integer",
           "exclusiveMinimum": 0,
           "maximum": 9007199254740991
@@ -165,12 +189,6 @@
       "default": {},
       "type": "object",
       "properties": {
-        "eagerBudgetBytes": {
-          "default": 75000000,
-          "type": "integer",
-          "exclusiveMinimum": 0,
-          "maximum": 9007199254740991
-        },
         "listCap": {
           "default": 10000,
           "type": "integer",

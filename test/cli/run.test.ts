@@ -4,17 +4,13 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { CliIo, StopSignal } from '../../src/cli/io.js';
 import type { CliDeps } from '../../src/cli/program.js';
 import { runCli } from '../../src/cli/program.js';
-import { decodeColumns } from '../../src/format/columns.js';
-import { chunkKey, LOCK_PATH } from '../../src/format/paths.js';
-import { SPAN_COLUMNS } from '../../src/format/specs.js';
-import type { AnyValue } from '../../src/model/anyvalue.js';
+import { LOCK_PATH } from '../../src/format/paths.js';
 import { Status_StatusCode } from '../../src/model/gen/opentelemetry/proto/trace/v1/trace_pb.js';
-import type { SpanRecord } from '../../src/model/records.js';
 import { at } from '../../src/writer/checkpoint.js';
 import { acquireLock } from '../../src/writer/lock.js';
 import type { FileSystem } from '../../src/writer/ports.js';
 import { createTestWriter, type TestWriter } from '../../test-support/writer-deps.js';
-import { manifestOf, readDataFile } from '../writer/helpers.js';
+import { allSpans, cell, manifestOf } from '../writer/helpers.js';
 
 interface Harness {
   stdout: string;
@@ -86,39 +82,28 @@ function start(
   return h;
 }
 
-interface Chunk {
-  spans: SpanRecord[];
-  serviceOf(span: SpanRecord): AnyValue | undefined;
+interface RunSpan {
+  traceId: string;
+  spanId: string;
+  parentSpanId: string | null;
+  name: string;
+  statusCode: number | null;
+  statusMessage: string | null;
+  service: string | null;
 }
 
-function chunkOf(w: TestWriter): Chunk {
-  const n = manifestOf(w, 'out').chunks.find((c) => c.signal === 'spans')?.n;
-  if (n === undefined) throw new Error('no span chunk');
-  const decoded = decodeColumns(
-    SPAN_COLUMNS as never,
-    readDataFile(w, 'out', `data/${chunkKey('spans', n)}.js`),
-  );
-  const rows = decoded.rows as SpanRecord[];
-  return {
-    spans: rows,
-    serviceOf: (s) => {
-      const r = decoded.resources[s.resource];
-      return r?.attributes.get('service.name');
-    },
-  };
-}
-
-/** Every span of every span chunk in the report. */
-function allChunks(w: TestWriter): { spans: SpanRecord[] } {
-  const spans: SpanRecord[] = [];
-  for (const c of manifestOf(w, 'out').chunks.filter((c) => c.signal === 'spans')) {
-    const decoded = decodeColumns(
-      SPAN_COLUMNS as never,
-      readDataFile(w, 'out', `data/${chunkKey('spans', c.n)}.js`),
-    );
-    spans.push(...(decoded.rows as SpanRecord[]));
-  }
-  return { spans };
+function runSpans(w: TestWriter): RunSpan[] {
+  const num = (v: unknown): number | null => (typeof v === 'number' ? v : null);
+  const str = (v: unknown): string | null => (typeof v === 'string' ? v : null);
+  return allSpans(w, 'out').map((r) => ({
+    traceId: String(cell(r, 'trace_id')),
+    spanId: String(cell(r, 'span_id')),
+    parentSpanId: str(cell(r, 'parent_span_id')),
+    name: String(cell(r, 'name')),
+    statusCode: num(cell(r, 'status_code')),
+    statusMessage: str(cell(r, 'status_message')),
+    service: str(cell(r, 'service_name')),
+  }));
 }
 
 const node = ['--http', '0', '--no-grpc', '--', process.execPath, '-e', CHILD];
@@ -158,7 +143,7 @@ describe('run', () => {
     });
     open.push(h);
     expect(await h.result).toBe(0);
-    const { spans } = chunkOf(w);
+    const spans = runSpans(w);
     const root = spans.find((s) => s.name === 'node');
     const child = spans.find((s) => s.name === 'child-work');
     expect(root?.traceId).toBe('0af7651916cd43dd8448eb211c80319c');
@@ -178,7 +163,7 @@ describe('run', () => {
     );
     open.push(h);
     expect(await h.result).toBe(0);
-    const root = chunkOf(w).spans.find((s) => s.name === 'node');
+    const root = runSpans(w).find((s) => s.name === 'node');
     expect(root?.traceId).toBe('1'.repeat(32));
     expect(root?.parentSpanId).toBe('2'.repeat(16));
   });
@@ -198,7 +183,7 @@ describe('run', () => {
     const h = start(w, ['run', '-o', 'out', ...node, '0'], { TRACEPARENT: '' });
     open.push(h);
     expect(await h.result).toBe(0);
-    const root = chunkOf(w).spans.find((s) => s.name === 'node');
+    const root = runSpans(w).find((s) => s.name === 'node');
     expect(root?.parentSpanId).toBeNull();
   });
 
@@ -248,15 +233,15 @@ describe('run', () => {
     expect(h.stderr).toBe('');
     expect(h.stdout).toContain('wrote out: 2 spans');
     expect(manifestOf(w, 'out').complete).toBe(true);
-    const { spans, serviceOf } = chunkOf(w);
+    const spans = runSpans(w);
     expect(spans).toHaveLength(2);
     const root = spans.find((s) => s.parentSpanId === null);
     const child = spans.find((s) => s.name === 'child-work');
     expect(root?.name).toBe('node');
     expect(child?.traceId).toBe(root?.traceId);
     expect(child?.parentSpanId).toBe(root?.spanId);
-    expect(root?.status.code ?? Status_StatusCode.UNSET).toBe(Status_StatusCode.UNSET);
-    expect(root && serviceOf(root)).toEqual({ kind: 'string', value: 'node' });
+    expect(root?.statusCode ?? Status_StatusCode.UNSET).toBe(Status_StatusCode.UNSET);
+    expect(root?.service).toBe('node');
   });
 
   test('two runs in one folder keep both root spans', async () => {
@@ -266,7 +251,7 @@ describe('run', () => {
       open.push(h);
       expect(await h.result).toBe(0);
     }
-    const { spans } = allChunks(w);
+    const spans = runSpans(w);
     expect(spans).toHaveLength(4);
     const roots = spans.filter((s) => s.parentSpanId === null);
     expect(roots).toHaveLength(2);
@@ -284,7 +269,7 @@ describe('run', () => {
       open.push(h);
       expect(await h.result).toBe(0);
     }
-    const { spans } = allChunks(w);
+    const spans = runSpans(w);
     expect(spans).toHaveLength(2);
     expect(new Set(spans.map((s) => s.traceId)).size).toBe(1);
   });
@@ -294,9 +279,9 @@ describe('run', () => {
     const h = start(w, ['run', '-o', 'out', ...node, '3']);
     open.push(h);
     expect(await h.result).toBe(3);
-    const root = chunkOf(w).spans.find((s) => s.parentSpanId === null);
-    expect(root?.status.code).toBe(Status_StatusCode.ERROR);
-    expect(root?.status.message).toBe('exit code 3');
+    const root = runSpans(w).find((s) => s.parentSpanId === null);
+    expect(root?.statusCode).toBe(Status_StatusCode.ERROR);
+    expect(root?.statusMessage).toBe('exit code 3');
     expect(manifestOf(w, 'out').complete).toBe(true);
   });
 
@@ -341,8 +326,8 @@ describe('run', () => {
     await vi.waitFor(() => expect(h.child).toContain('ready'));
     h.fire('SIGTERM');
     expect(await h.result).toBe(143);
-    const root = chunkOf(w).spans.find((s) => s.parentSpanId === null);
-    expect(root?.status.message).toBe('killed by SIGTERM');
+    const root = runSpans(w).find((s) => s.parentSpanId === null);
+    expect(root?.statusMessage).toBe('killed by SIGTERM');
     expect(manifestOf(w, 'out').complete).toBe(true);
   });
 
@@ -454,7 +439,7 @@ describe('run', () => {
     open.push(h);
     expect(await h.result).toBe(0);
     expect(h.stderr).toBe('');
-    expect(chunkOf(w).spans).toHaveLength(2);
+    expect(runSpans(w)).toHaveLength(2);
   });
 
   test('OTEL_EXPORTER_OTLP_PROTOCOL=grpc binds gRPC and leaves HTTP unbound', async () => {

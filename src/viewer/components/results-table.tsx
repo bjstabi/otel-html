@@ -5,16 +5,17 @@ import { observeElementRect, useVirtualizer } from '@tanstack/react-virtual';
 import { ArrowDown, ArrowUp, ChevronsUpDown } from 'lucide-react';
 import { type JSX, type KeyboardEvent, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import type { UnixNanos } from '../../model/ids.js';
+import type { TraceRow } from '../data/results.js';
 import { MOVE_EVENT } from '../shell/move-event.js';
 import { type ColorAssigner, createColorAssigner } from '../theme/palette.js';
-import type { ColumnUi } from '../traces/columns.js';
+import type { ColumnUi, ServiceShareLoader } from '../traces/columns.js';
 
 export interface SortState {
   column: string;
   dir: 'asc' | 'desc';
 }
 
-export interface ResultsTableProps<R> {
+interface ResultsTableBase<R> {
   rows: readonly R[];
   columns: readonly ColumnUi<R>[];
   rowId(row: R): string;
@@ -36,6 +37,16 @@ export interface ResultsTableProps<R> {
   /** Marks a row: `match` gets `data-match` and an accent left rule, `muted` is dimmed (`data-muted`). */
   rowMark?(row: R): 'match' | 'muted' | null;
 }
+
+/**
+ * `serviceShare` loads a trace's exclusive time per service for the share cell; stable (it keys a load). Required for
+ * tables of trace rows, so a new trace table cannot silently lose the column; other tables do not take it.
+ */
+export type ResultsTableProps<R> = ResultsTableBase<R> &
+  (R extends TraceRow ? { serviceShare: ServiceShareLoader } : { serviceShare?: undefined });
+
+/** For tables without a share column: the cell is never drawn, so this is never called. */
+const noShare: ServiceShareLoader = () => Promise.resolve([]);
 
 /** Default row height in px. */
 const ROW_HEIGHT = 36;
@@ -71,7 +82,11 @@ export function ResultsTable<R>(props: ResultsTableProps<R>): JSX.Element {
   const height = props.height ?? 480;
   const rowHeight = props.rowHeight ?? ROW_HEIGHT;
   const fallbackColors = useMemo(() => createColorAssigner(), []);
-  const ctx = { epoch: props.epoch, colors: props.colors ?? fallbackColors };
+  const ctx = {
+    epoch: props.epoch,
+    colors: props.colors ?? fallbackColors,
+    serviceShare: props.serviceShare ?? noShare,
+  };
   const scroller = useRef<HTMLDivElement>(null);
   const pendingFocus = useRef<number | null>(null);
 

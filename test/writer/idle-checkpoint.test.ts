@@ -20,14 +20,14 @@ describe('an idle session checkpoints by itself', () => {
     await s.close();
   });
 
-  test('flush after the idle checkpoint lists each chunk once', async () => {
+  test('flush after the idle checkpoint lists each partition once', async () => {
     const w = createTestWriter();
     const s = await openSession(w.deps, { out: OUT, config, mode: 'replace' });
     await s.add(one(0, 1), 'a.json');
     w.timers.fire();
     await vi.waitFor(() => expect(w.fs.snapshot().has(MANIFEST)).toBe(true));
     await s.flush();
-    expect(manifestOf(w, OUT).chunks.map((c) => c.n)).toEqual([0]);
+    expect(manifestOf(w, OUT).partitions.map((p) => p.n)).toEqual([0]);
     await s.close();
   });
 

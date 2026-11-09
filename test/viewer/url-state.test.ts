@@ -110,9 +110,9 @@ describe('window helpers', () => {
 describe('logs keys', () => {
   test('url-state parses log refs and log tabs, rejects bad ones', () => {
     expect(parseUrlState('log=12.345&ltab=trace').state).toMatchObject({ log: '12.345', ltab: 'trace' });
-    expect(parseUrlState('log=12').errors).toEqual(['log: expected <chunk>.<row>, got 12']);
+    expect(parseUrlState('log=12').errors).toEqual(['log: expected <partition>.<row>, got 12']);
     expect(parseUrlState('log=01.2').errors).toEqual([
-      'log: expected <chunk>.<row> without leading zeros, got 01.2',
+      'log: expected <partition>.<row> without leading zeros, got 01.2',
     ]);
     expect(parseUrlState('ltab=flame').errors).toEqual([
       'ltab: expected one of attributes, trace, metrics, surrounding, resource, got flame',

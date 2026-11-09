@@ -18,10 +18,6 @@ import {
   ORPHAN_LOG_TRACE,
 } from '../../e2e/fixture.js';
 import { convertWith, mergeWith } from '../../src/api/convert.js';
-import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
-import { metricExemplarPath, parseExemplarFile } from '../../src/format/metric-files.js';
-import { traceShardKey, traceShardPath } from '../../src/format/paths.js';
-import { TraceShardSchema } from '../../src/format/trace-shard.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { ExportLogsServiceRequestSchema } from '../../src/model/gen/opentelemetry/proto/collector/logs/v1/logs_service_pb.js';
 import type { FileSystem } from '../../src/writer/ports.js';
@@ -29,11 +25,12 @@ import { logRecord, logsRequest } from '../../test-support/otlp-builders.js';
 import { createTestWriter, type TestWriter } from '../../test-support/writer-deps.js';
 import {
   allLogs,
+  allPoints,
   allSpans,
+  cell,
   manifestOf,
-  metricCatalogOf,
-  readDataFile,
   spansRequest,
+  tableRowsOf,
 } from '../writer/helpers.js';
 
 async function failure(p: Promise<unknown>): Promise<OtelHtmlError> {
@@ -259,7 +256,7 @@ describe('convert of an empty request', () => {
     expect(summary.totals).toEqual({ spans: 0, logs: 0, metrics: 0 });
     const m = manifestOf(w, 'r');
     expect(m.complete).toBe(true);
-    expect(m.chunks).toEqual([]);
+    expect(m.partitions).toEqual([]);
     expect(await w.fs.exists('r/index.html')).toBe(true);
   });
 });
@@ -320,74 +317,77 @@ describe('the linked fixture', () => {
     return w;
   }
 
-  test('converts to 40 logs, and its linked trace indexes its log chunks', async () => {
+  test('converts to 40 logs, and the traces table counts its linked trace logs', async () => {
     const w = await convertLinked();
     expect(manifestOf(w, 'r').totals.logs).toBe(LINKED_LOG_COUNT);
     expect(allLogs(w, 'r')).toHaveLength(LINKED_LOG_COUNT);
-    const shard = LINKED_TRACE.slice(0, 2);
-    const text = w.fs.snapshot().get(`r/${traceShardPath(shard)}`) ?? '';
-    const entry = TraceShardSchema.parse(reviveDataJson(unwrapDataFile(text, traceShardKey(shard))))[
-      LINKED_TRACE
-    ];
-    expect(entry?.logs).toBeGreaterThan(0);
-    expect(entry?.logChunks.length).toBeGreaterThan(0);
+    const entry = tableRowsOf(w, 'r', 'traces').find((t) => cell(t, 'trace_id') === LINKED_TRACE);
+    expect(Number(cell(entry, 'log_count'))).toBeGreaterThan(0);
   });
 
   test('the e2e constants describe the fixture', async () => {
     const w = await convertLinked();
     const logs = allLogs(w, 'r');
     const spans = allSpans(w, 'r');
-    const text = (l: (typeof logs)[number]): string => JSON.stringify(l.body);
+    const text = (l: (typeof logs)[number]): string => String(cell(l, 'body'));
+    const severity = (l: (typeof logs)[number]): number => Number(cell(l, 'severity_number'));
     const bySeverity: Record<number, number> = {};
-    for (const l of logs) bySeverity[l.severityNumber] = (bySeverity[l.severityNumber] ?? 0) + 1;
+    for (const l of logs) bySeverity[severity(l)] = (bySeverity[severity(l)] ?? 0) + 1;
     expect(bySeverity).toEqual(LINKED_SEVERITY_COUNTS);
-    expect(logs.filter((l) => l.severityNumber >= 13)).toHaveLength(LINKED_WARN_PLUS_COUNT);
+    expect(logs.filter((l) => severity(l) >= 13)).toHaveLength(LINKED_WARN_PLUS_COUNT);
     expect(logs.filter((l) => text(l).toLowerCase().includes('declined'))).toHaveLength(
       LINKED_DECLINED_COUNT,
     );
-    expect(new Set(spans.map((sp) => sp.traceId)).size).toBe(3);
-    expect(spans.some((sp) => sp.traceId === LINKED_TRACE && sp.spanId === LINKED_SPAN)).toBe(true);
-    expect(logs.filter((l) => l.spanId === LINKED_SPAN).length).toBeGreaterThanOrEqual(3);
+    expect(new Set(spans.map((sp) => cell(sp, 'trace_id'))).size).toBe(3);
+    expect(
+      spans.some((sp) => cell(sp, 'trace_id') === LINKED_TRACE && cell(sp, 'span_id') === LINKED_SPAN),
+    ).toBe(true);
+    expect(logs.filter((l) => cell(l, 'span_id') === LINKED_SPAN).length).toBeGreaterThanOrEqual(3);
     // 1 orphan trace id, 5 without context, 1 span_id outside its trace.
-    expect(logs.filter((l) => l.traceId === ORPHAN_LOG_TRACE)).toHaveLength(1);
-    expect(spans.some((sp) => sp.traceId === ORPHAN_LOG_TRACE)).toBe(false);
-    expect(logs.filter((l) => l.traceId === null)).toHaveLength(5);
+    expect(logs.filter((l) => cell(l, 'trace_id') === ORPHAN_LOG_TRACE)).toHaveLength(1);
+    expect(spans.some((sp) => cell(sp, 'trace_id') === ORPHAN_LOG_TRACE)).toBe(false);
+    expect(logs.filter((l) => cell(l, 'trace_id') === null)).toHaveLength(5);
     const dangling = logs.filter((l) => text(l).includes(DANGLING_SPAN_LOG_TEXT));
     expect(dangling).toHaveLength(1);
-    expect(dangling[0]?.traceId).toBe(LINKED_TRACE);
-    expect(spans.some((sp) => sp.spanId === dangling[0]?.spanId)).toBe(false);
+    expect(cell(dangling[0], 'trace_id')).toBe(LINKED_TRACE);
+    expect(spans.some((sp) => cell(sp, 'span_id') === cell(dangling[0], 'span_id'))).toBe(false);
     expect(logs.filter((l) => text(l).includes(JSON.stringify(HOSTILE_LOG_TEXT).slice(1, -1)))).toHaveLength(
       1,
     );
-    expect(logs.filter((l) => l.eventName !== '')).toHaveLength(2);
-    expect(logs.filter((l) => l.time === null && l.observedTime !== null)).toHaveLength(1);
-    expect(logs.filter((l) => l.spanId !== null && l.traceId !== null)).toHaveLength(35);
+    expect(logs.filter((l) => cell(l, 'event_name') !== null && cell(l, 'event_name') !== '')).toHaveLength(
+      2,
+    );
+    expect(
+      logs.filter((l) => cell(l, 'time_unix_nano') === null && cell(l, 'observed_time_unix_nano') !== null),
+    ).toHaveLength(1);
+    expect(logs.filter((l) => cell(l, 'span_id') !== null && cell(l, 'trace_id') !== null)).toHaveLength(35);
   });
 
-  test('converts the metrics fixture: its histogram, the reset copy and the NaN point are all catalogued', async () => {
+  test('converts the metrics fixture: its histogram and every kind of point are in the points table', async () => {
     const w = await convertLinked();
     expect(manifestOf(w, 'r').totals.metrics).toBeGreaterThan(0);
-    const entries = metricCatalogOf(w, 'r').entries();
-    expect(entries).toHaveLength(METRICS_COUNT);
+    const points = allPoints(w, 'r');
+    expect(new Set(points.map((p) => cell(p, 'metric_name'))).size).toBe(METRICS_COUNT);
     // 2 resources x 3 routes.
-    expect(entries.find((e) => e.name === METRIC_HIST)?.series).toBe(6);
-    expect(entries.find((e) => e.name === 'jobs.completed.cumulative')?.resets).toBe(1);
-    expect(entries.filter((e) => e.noValue > 0).map((e) => [e.name, e.noValue])).toEqual([
-      ['process.open_file_descriptor.count', 1],
-    ]);
-    // Every kind is catalogued, the hostile name as text, and the histogram's exemplars keep their trace ids
-    // (one into the linked trace, one into a trace the report lacks).
-    expect(new Set(entries.map((e) => e.type))).toEqual(
-      new Set(['sum', 'gauge', 'histogram', 'exponentialHistogram', 'summary']),
+    const histSeries = new Set(
+      points.filter((p) => cell(p, 'metric_name') === METRIC_HIST).map((p) => cell(p, 'series_id')),
     );
-    expect(entries.some((e) => e.name === HOSTILE_METRIC_NAME && e.unit === HOSTILE_METRIC_UNIT)).toBe(true);
-    const hist = entries.find((e) => e.name === METRIC_HIST);
-    if (hist === undefined) throw new Error('no histogram entry');
-    const exPath = metricExemplarPath(hist.id);
-    const exemplars = parseExemplarFile(readDataFile(w, 'r', exPath), exPath).exemplars;
-    const traceIds = new Set(exemplars.map((e) => e.traceId));
-    expect(traceIds.has(LINKED_TRACE)).toBe(true);
-    expect(traceIds.has(ORPHAN_EXEMPLAR_TRACE)).toBe(true);
-    expect(exemplars.every((e) => e.series < hist.series)).toBe(true);
+    expect(histSeries.size).toBe(6);
+    expect(new Set(points.map((p) => cell(p, 'point_type')))).toEqual(
+      new Set(['sum', 'gauge', 'histogram', 'exp_histogram', 'summary']),
+    );
+    expect(
+      points.some(
+        (p) =>
+          cell(p, 'metric_name') === HOSTILE_METRIC_NAME && cell(p, 'metric_unit') === HOSTILE_METRIC_UNIT,
+      ),
+    ).toBe(true);
+    // The histogram's exemplars keep their trace ids (one into the linked trace, one into a trace the report lacks).
+    const exemplarText = points
+      .filter((p) => cell(p, 'metric_name') === METRIC_HIST)
+      .map((p) => String(cell(p, 'exemplars') ?? ''))
+      .join('');
+    expect(exemplarText).toContain(LINKED_TRACE);
+    expect(exemplarText).toContain(ORPHAN_EXEMPLAR_TRACE);
   });
 });

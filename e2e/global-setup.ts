@@ -26,17 +26,21 @@ function calibrate(): void {
 
 /**
  * Throws naming the first mounted report that `mise run e2e:fixtures` has not built. `metrics-scale` is built on demand,
- * and `scale` and `huge` only when the selection includes `e2e/scale.spec.ts`, which checks for them itself.
+ * and `scale` and `many` only when the selection includes `e2e/scale.spec.ts`, which checks for them itself.
  */
 async function assertReportsBuilt(mounted: readonly ReportName[]): Promise<void> {
   for (const name of mounted) {
-    if (name === 'metrics-scale' || name === 'scale' || name === 'huge') continue;
+    if (name === 'metrics-scale' || name === 'scale' || name === 'many') continue;
     // `no-manifest` is a copy of `main` without its manifest, by design.
     const probe = name === 'no-manifest' ? 'index.html' : 'data/manifest.js';
-    try {
-      await stat(new URL(probe, reportDir(name)));
-    } catch {
-      throw new Error(`the e2e fixture reports are missing: run \`mise run e2e:fixtures\` (${name})`);
+    for (const kind of ['file', 'http'] as const) {
+      try {
+        await stat(new URL(probe, reportDir(name, kind)));
+      } catch {
+        throw new Error(
+          `the e2e fixture reports are missing: run \`mise run e2e:fixtures\` (${name}, ${kind})`,
+        );
+      }
     }
   }
 }
@@ -50,7 +54,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     'hostile',
     'merged',
     'scale',
-    'huge',
+    'many',
     'no-manifest',
     'metrics-merged',
     'metrics-single',
@@ -62,12 +66,13 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     'frozen-format-1',
     'frozen-format-2',
     'frozen-format-3',
+    'frozen-format-4',
     ...FIXTURE_REPORTS,
   ];
   // The load spec serves its own report (`dist/load-receiver`) and runs without the fixture reports built.
   if (process.env[LOAD_REPORT_ENV] === undefined) await assertReportsBuilt(mounted);
   const server = await serve(
-    mounted.map((name) => ({ prefix: httpSubpath(name), root: dir(reportDir(name)) })),
+    mounted.map((name) => ({ prefix: httpSubpath(name), root: dir(reportDir(name, 'http')) })),
   );
   process.env[PORT_ENV] = String(server.port);
   return () => server.close();

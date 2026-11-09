@@ -1,3 +1,6 @@
+import type { ReportFormat } from '../config/schema.js';
+import { engineAssetNames } from '../format/engine.js';
+import { assetFileName, ENGINE_ASSET_RE } from '../format/paths.js';
 import { OtelHtmlError } from '../model/errors.js';
 import type { ViewerEntry } from './html.js';
 import type { FileSystem } from './ports.js';
@@ -8,8 +11,27 @@ export interface ViewerAsset {
 }
 
 export interface ViewerAssets {
-  files(): Promise<readonly ViewerAsset[]>;
+  /**
+   * The files to copy beside a report of this format: the viewer's own, plus the DuckDB engine files that format
+   * loads (`local` the base64 wrappers, `site` the plain files). No format means no engine files.
+   */
+  files(format?: ReportFormat): Promise<readonly ViewerAsset[]>;
   entry(): ViewerEntry;
+}
+
+/** The file name the binary build embeds parquet-wasm's WASM under (see `scripts/build-binaries.ts`); not a viewer asset. */
+const PARQUET_WASM_FILE = 'parquet_wasm_bg.wasm';
+
+/** False for an engine file a report of this format does not load; true for every other path. */
+export function wantsAsset(path: string, format?: ReportFormat): boolean {
+  if (!ENGINE_ASSET_RE.test(path)) return true;
+  if (format === undefined) return false;
+  return engineAssetNames(format).includes(assetFileName(path));
+}
+
+/** Drops the engine files a report of this format does not load; every other file stays. */
+export function withEngineFiles(files: readonly ViewerAsset[], format?: ReportFormat): ViewerAsset[] {
+  return files.filter((f) => wantsAsset(f.path, format));
 }
 
 const SAFE_SEGMENT = /^[A-Za-z0-9.][A-Za-z0-9._-]*$/;
@@ -30,8 +52,13 @@ export function assertAssetPath(path: string): void {
   }
 }
 
-export async function writeViewerAssets(fs: FileSystem, out: string, assets: ViewerAssets): Promise<void> {
-  for (const f of await assets.files()) {
+export async function writeViewerAssets(
+  fs: FileSystem,
+  out: string,
+  assets: ViewerAssets,
+  format?: ReportFormat,
+): Promise<void> {
+  for (const f of await assets.files(format)) {
     assertAssetPath(f.path);
     await fs.writeBytes(`${out}/${f.path}`, f.contents);
   }
@@ -77,16 +104,19 @@ function embeddedEntry(names: readonly string[], ext: 'js' | 'css', required: bo
  * `assets/` folder because the binary is built with `--asset-naming '[name].[ext]'`).
  */
 export function bunEmbeddedViewerAssets(bun: BunLike | undefined = bunGlobal()): ViewerAssets {
-  const embedded = bun?.embeddedFiles ?? [];
+  // The parquet codec's WASM is embedded beside the viewer files but is not one of them.
+  const embedded = (bun?.embeddedFiles ?? []).filter((f) => f.name !== PARQUET_WASM_FILE);
   const names = embedded.map((f) => f.name);
   return {
-    async files() {
-      return Promise.all(
-        embedded.map(async (f) => ({
-          path: `assets/${f.name}`,
-          contents: new Uint8Array(await f.arrayBuffer()),
-        })),
-      );
+    async files(format) {
+      // Filtered before reading, so the 44 MB of engine files stay unread for a report that does not take them.
+      // One at a time, so a read finishes before the next starts.
+      const out: ViewerAsset[] = [];
+      for (const f of embedded) {
+        if (!wantsAsset(`assets/${f.name}`, format)) continue;
+        out.push({ path: `assets/${f.name}`, contents: new Uint8Array(await f.arrayBuffer()) });
+      }
+      return out;
     },
     entry() {
       const script = embeddedEntry(names, 'js', true);

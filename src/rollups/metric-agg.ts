@@ -25,7 +25,7 @@ export interface NumberAgg {
   last: number;
   lastTime: number;
 }
-export interface CounterAgg {
+interface CounterAgg {
   k: 'counter';
   delta: number;
   resets: number;
