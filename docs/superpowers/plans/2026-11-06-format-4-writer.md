@@ -38,7 +38,8 @@ The maintainer works from the console only and does not open files, so a fresh s
 6. Plans 1–4 merged and no PR from `feat/format-4` to `main` → **session F**.
 
 After plan 4 the next session is **F** (rule 6). Session F happened on 2026-11-09: the frozen-fixture PR #251, then the release PR from `feat/format-4` to `main`. From the release on, sessions run from `main`, not `feat/format-4`.
-7. The publishing plan is written only after session C's plan is merged (**session G**), and executed after that. Session G runs from `main`: its PRs target `main`, and the plan file lands on `main`.
+7. The publishing plan is written only after session C's plan is merged (**session G**), and executed after that. Session G runs from `main`: its PRs target `main`, and the plan file lands on `main`. Done 2026-11-09: `docs/superpowers/plans/2026-11-09-incremental-ci-publishing.md`.
+8. The publishing plan exists and its seven PRs (the first titled `feat(ci): site updates, the run-report sync and provisional CI spans`, the last `docs(plan): publishing plan record, measured latencies, kickoff prompts`) are not all merged → **session H** (execute it, the prompt "Execute the publishing plan" below). Check by branch: `gh pr list --base main --state all --head docs/publishing-record` lists the last PR once it exists, and the plan's PR table names every branch (`feat/publish-updates`, `feat/publish-deployer`, `ci/pages-deployer`, `feat/publish-pusher`, `feat/viewer-refresh`, `feat/receiver-export-otlp`, `docs/publishing-record`).
 
 A session says which one it picked and why before starting. The universal prompt the maintainer pastes after every
 `/clear` is `/format-4` (the project skill in `.claude/skills/format-4/SKILL.md`), or, without the skill:
@@ -107,6 +108,14 @@ the format bump), with the frozen format-4 fixture added as the compatibility ru
 
 ```
 Write the implementation plan for docs/superpowers/specs/2026-11-06-incremental-ci-publishing-design.md with superpowers:writing-plans. Skip brainstorming: the spec is approved and the maintainer's decisions are in its §10. Run the builder check, save as docs/superpowers/plans/<date>-incremental-ci-publishing.md. The PR process is unattended, but the plan must mark every task that touches ci-report.yml, pages-deploy.yml, the otel-html-publish action or anything running with a write token as "stop and ask" per docs/agents/process-unattended.md.
+```
+
+**Session H, execute the publishing plan:**
+
+```
+Execute docs/superpowers/plans/2026-11-09-incremental-ci-publishing.md with superpowers:subagent-driven-development.
+
+Context: this is the publishing plan of docs/superpowers/specs/2026-11-06-incremental-ci-publishing-design.md (§10 and §11 binding), read with its "Builder check" and "Decisions this plan makes" sections (D51 to D63), which are approved with the plan; apply them without re-deciding. The PR process is unattended (docs/agents/process-unattended.md): every PR targets main, and the next PR branches from the updated main. Stop and ask before every task of PR 3, before Tasks 4.1 (its actions-smoke step), 4.4 and 4.5, and at Task 7.1 (the maintainer deletes gh-pages; its release.yml comment edit): those files run with a write token. Also stop where the plan says a runner proof may fail (Task 4.1) or a measurement the PR body must carry misses the spec's §6 table. Per CLAUDE.md, implementers and task reviewers run on Sonnet 5.5 and the branch review on Opus 5.5; say which model each review ran on. Resume at the first plan task whose PR is not merged (`gh pr list --base main --state all`), from `git switch main && git pull --ff-only`. Stop and ask only where the process or the plan says to.
 ```
 
 ## Global Constraints
