@@ -20,9 +20,8 @@ function hostFixture(
     async ({ playwright: _unused }: { playwright: unknown }, use: (h: Host) => Promise<void>) => {
       const host = await startHost(fileURLToPath(reportDir(report, 'file')));
       await use(host);
-      // What the host logged while the tests ran. Stopping it under a page's last in-flight query may log noise of its own.
-      const logged = host.stderr();
       await host.close();
+      const logged = host.stderr();
       // The two refusals are the viewer's own and never reach the host, so nothing it logged is a warning or an error.
       expect(logged).not.toMatch(/\bwarn\b/i);
       expect(logged).not.toMatch(/otel-html error:/);
@@ -162,7 +161,14 @@ test('the Fusion dashboard renders its timeline and widgets from a served dashbo
   await expect(widget('traces')).toContainText(/\d+ traces?/);
   await expect(widget('logs')).toContainText(/\d+ logs?/);
   await expect(widget('metrics')).toContainText('all resources');
-  await expect(widget('metrics').getByTestId('metric-grid')).not.toContainText('Loading metrics');
+  // Drawn, not just present: the timeline's canvas and a metrics chart with at least one series.
+  await widget('metrics').scrollIntoViewIfNeeded();
+  await expect(widget('timeline').locator('canvas').first()).toBeVisible();
+  await expect(
+    widget('metrics')
+      .getByRole('img', { name: /: [1-9]\d* series$/ })
+      .first(),
+  ).toBeVisible();
   await expect(page.getByRole('alert')).toHaveCount(0);
 });
 

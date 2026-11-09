@@ -195,6 +195,7 @@ test('restQueryEngine maps a 400 to invalid-report with the body and the SQL', a
   const q = Query.from('spans').select({ n: count() });
   const err = await qe.query(q).catch((e: unknown) => e);
   expect(err).toMatchObject({ code: 'invalid-report' });
+  expect((err as OtelHtmlError).actual).toBe('Parser Error: x');
   expect(JSON.stringify(err)).toContain('Parser Error: x');
   expect((err as OtelHtmlError).hint).toBe(String(q));
 });
@@ -210,9 +211,22 @@ test.each([
   const err = (await qe.query(q).catch((e: unknown) => e)) as OtelHtmlError;
   expect(err).toBeInstanceOf(OtelHtmlError);
   expect(err.code).toBe('invalid-report');
-  expect(err.actual).toBe(text);
+  expect(err.actual).toBe(`${text}: body`);
   expect(err.hint).toBe(String(q));
 });
+
+test.each([413, 503, 504])(
+  'restQueryEngine keeps only the ruled wording for a %i with an empty body',
+  async (status) => {
+    const f = fakeFetch(() => new Response('', { status }));
+    const qe = restQueryEngine('http://127.0.0.1:1/query', silentLogger, f.impl);
+    const err = (await qe
+      .query(Query.from('spans').select({ n: count() }))
+      .catch((e: unknown) => e)) as OtelHtmlError;
+    expect(err.actual).not.toMatch(/: $/);
+    expect(err.actual).not.toContain('undefined');
+  },
+);
 
 test('restQueryEngine maps a network failure to "the host did not answer"', async () => {
   const impl = (() => Promise.reject(new TypeError('Failed to fetch'))) as unknown as typeof fetch;

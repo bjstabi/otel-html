@@ -123,19 +123,25 @@ export function mosaicQueryEngine(
   };
 }
 
+/** The ruled wording, then the host's own words when it sent any (each status has more than one cause on the host). */
+function withBody(ruled: string, body: string): string {
+  return body === '' ? ruled : `${ruled}: ${body}`;
+}
+
 /** What a failed host request means to the reader; a 400 keeps DuckDB's own message (mosaic words it `Query failed with HTTP status N: body`). */
 function describeHostFailure(error: unknown): string | undefined {
   if (error instanceof TypeError) return 'the host did not answer (is otel-html host still running?)';
   const status = error instanceof Error ? /^Query failed with HTTP status (\d+): /.exec(error.message) : null;
+  const detail = error instanceof Error && status ? error.message.slice(status[0].length).trim() : '';
   switch (status?.[1]) {
     case '400':
       return error instanceof Error ? error.message.slice(status[0].length) : undefined;
     case '413':
-      return "the result is larger than the host's --max-result-bytes";
+      return withBody("the result is larger than the host's --max-result-bytes", detail);
     case '503':
-      return 'the host is busy or stopping';
+      return withBody('the host is busy or stopping', detail);
     case '504':
-      return 'the host did not finish the query in time (--timeout)';
+      return withBody('the host did not finish the query in time (--timeout)', detail);
     default:
       return undefined;
   }
