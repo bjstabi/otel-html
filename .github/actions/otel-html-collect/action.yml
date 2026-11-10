@@ -27,8 +27,20 @@ inputs:
   config:
     description: Config file for the CI spans report of the update. Empty uses the tool's defaults.
     default: ""
+  dispatch-app-id:
+    description: >-
+      The ID of a GitHub App that dispatches the deployer, with `dispatch-app-private-key`. GitHub refuses a workflow
+      dispatch made with `GITHUB_TOKEN` (the run ends in `startup_failure`), so give the ID and key of an App installed
+      on this repository with Actions: read and write only. The action mints a token scoped to this repository for the
+      dispatch; every other command keeps `token`. Empty (the default) or a failed mint dispatches with `token`.
+    default: ""
+  dispatch-app-private-key:
+    description: >-
+      The private key of the App named by `dispatch-app-id`. Pass it only on a run a person started, for example
+      `${{ github.event.sender.type == 'User' && secrets.DEPLOYER_APP_PRIVATE_KEY || '' }}`, so a bot's run never holds it.
+    default: ""
   token:
-    description: "Token for the deployer dispatch. It needs `actions: write`."
+    description: "Token for the site update and, without a dispatch App, the deployer dispatch. It needs `actions: write`."
     default: ${{ github.token }}
 
 outputs:
@@ -68,6 +80,20 @@ runs:
         # A re-run of the job reuses the run, and so the name.
         overwrite: true
     # Only an upload that succeeded is recorded as shipped: a failed one's partitions ship again.
+    # The deployer's workflow_dispatch is refused when made with GITHUB_TOKEN (the run ends in `startup_failure`), so the
+    # wake-up uses an installation token of the deployer GitHub App (Actions: read and write), scoped to this repository.
+    # A failed mint is a warning; the dispatch then runs with `token`, as without the App.
+    - name: Mint the dispatch token
+      id: dispatch-token
+      if: inputs.publish == 'true' && steps.update.outputs.name != '' && steps.upload.outcome == 'success' && inputs.dispatch-app-id != '' && inputs.dispatch-app-private-key != ''
+      continue-on-error: true
+      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+      with:
+        app-id: ${{ inputs.dispatch-app-id }}
+        private-key: ${{ inputs.dispatch-app-private-key }}
+        owner: ${{ github.repository_owner }}
+        repositories: ${{ github.event.repository.name }}
+        permission-actions: write
     - name: Record the upload and wake the deployer
       if: inputs.publish == 'true' && steps.update.outputs.name != '' && steps.upload.outcome == 'success'
       continue-on-error: true
@@ -78,12 +104,13 @@ runs:
         WORKFLOW: ${{ inputs.deployer-workflow }}
         COLLECT_PATH: ${{ inputs.path }}
         GITHUB_TOKEN: ${{ inputs.token }}
+        DISPATCH_TOKEN: ${{ steps.dispatch-token.outputs.token }}
       run: |
         # Neither command fails the job. CMD is deliberately unquoted: it may be a command with arguments.
         # shellcheck disable=SC2086
         $CMD ci update done --name "$NAME" --publish-dir "${COLLECT_PATH%/}/publish" --log "${COLLECT_PATH%/}/publish/pusher.log"
         # shellcheck disable=SC2086
-        $CMD ci dispatch --workflow "$WORKFLOW"
+        GITHUB_TOKEN=${DISPATCH_TOKEN:-$GITHUB_TOKEN} $CMD ci dispatch --workflow "$WORKFLOW"
     # Last, and after steps that cannot fail the job, so the job's report artifact is always uploaded.
     - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:

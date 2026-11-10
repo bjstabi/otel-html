@@ -454,7 +454,7 @@ The site's life cycle:
 - **`site-state/`.** The site's state (which updates were applied, the removed pull requests, the file list and the pending deletions) lives in `site-state/` at the site root. Each pass also uploads it alone as the small `otel-html-site-state-*` artifact, and `plan` reads that instead of downloading the site. After 90 days (artifact retention) the base comes from the live site over HTTPS, using `site-state/files.json`.
 - **Migration.** The first pass after the move from the `gh-pages` branch (the old store) takes the last deployment's Pages artifact as its base, or the `gh-pages` tip when that has expired. The branch is no longer read or written; it stays only so that reverting the move still works, and goes once the deployer has run for a few days.
 
-Permissions: the jobs that produce a report hold `contents: read` and `actions: write`. The write is for `ci dispatch`; the artifact uploads use the runtime token every job has. The `report` job holds `actions: write` (downloading the run's artifacts, uploading the update, dispatching), `pages: read`, `pull-requests: write` and `checks: write`; `cleanup` holds `actions: write` only. The deployer's `deploy` job holds `contents: read`, `actions: write` (downloading updates, pruning artifacts), `deployments: read`, `pages: write` and `id-token: write`. The preview screenshot at the top of this README is taken by the deployer, over a loopback server (`127.0.0.1`, a random port) on the site it is about to deploy, because a `site` report loads its engine over http and does not open from `file://`.
+Permissions: the jobs that produce a report hold `contents: read` and `actions: write`. The write is for `ci dispatch`, which (when a person started the run) dispatches with the deployer App's token, whose only permission is Actions (see Dispatch token); the artifact uploads use the runtime token every job has. The `report` job holds `actions: write` (downloading the run's artifacts, uploading the update, dispatching), `pages: read`, `pull-requests: write` and `checks: write`; `cleanup` holds `actions: write` only. The deployer's `deploy` job holds `contents: read`, `actions: write` (downloading updates, pruning artifacts), `deployments: read`, `pages: write` and `id-token: write`. The preview screenshot at the top of this README is taken by the deployer, over a loopback server (`127.0.0.1`, a random port) on the site it is about to deploy, because a `site` report loads its engine over http and does not open from `file://`.
 
 `otel-html ci link` posts one sticky comment per workflow on the open pull requests of a pull request run (found by a per-workflow marker, so `ci` and `load` do not overwrite each other; a default-branch run comments on none). The comment links this run's report, the pull request's rolling report (`All runs on pull request #<number>`, `/pr/<number>/`) and the run before it on the pull request (the previous run of the same workflow, else the one before it of any workflow), and creates a check run named `otel-html report` that concludes `neutral`: it is a link, not a second verdict on the run.
 
@@ -521,9 +521,22 @@ Collect inputs:
 | `path` | `.otel-html/` | The directory to upload. |
 | `publish` | false | Also upload the job's partitions as an `otel-html-update-push-*` artifact and wake the deployer. The job needs `actions: write`. A failure here is a warning, never a failed job; the `.otel-html/` upload still runs. |
 | `deployer-workflow` | `pages-deploy.yml` | The deployer's workflow file, dispatched on the default branch. |
+| `dispatch-app-id`, `dispatch-app-private-key` | empty | A GitHub App's ID and private key, to dispatch the deployer with an App token (see Dispatch token). Empty, or a failed mint, dispatches with `token`. |
 | `command` | empty | The executable that ran the job (as for setup). Empty uses `otel-html` from the PATH. |
 | `config` | empty | Config file for the CI spans report of the update. |
-| `token` | `github.token` | Needs `actions: write`. |
+| `token` | `github.token` | Needs `actions: write`. Used for the site update, and for the dispatch unless an App token is minted. |
+
+#### Dispatch token
+
+GitHub refuses a workflow dispatch made with `GITHUB_TOKEN`: the API answers 204, but the run ends in `startup_failure` ("Actor is not allowed to trigger Actions workflows"). The collect and publish actions therefore dispatch the deployer with a GitHub App installation token when you give them one. Create an App with the repository permission Actions: read and write and nothing else, install it on the repository, and store its ID as the variable `DEPLOYER_APP_ID` and its private key as the secret `DEPLOYER_APP_PRIVATE_KEY`. Then pass both to the actions, the key only on a run a person started so that a bot's run (Renovate: dependency code) never holds it:
+
+```yaml
+with:
+  dispatch-app-id: ${{ vars.DEPLOYER_APP_ID }}
+  dispatch-app-private-key: ${{ github.event.sender.type == 'User' && secrets.DEPLOYER_APP_PRIVATE_KEY || '' }}
+```
+
+The action mints a token with `actions: write` scoped to this repository alone, only for the dispatch; every other command keeps `token`. Without the two settings (or if minting fails) the dispatch uses `token` as before; `otel-html ci dispatch` then notices the deployer run that ends in `startup_failure` and prints a warning naming it, and the site updates only when `ci-report` ends and on the deployer's five-minute schedule.
 
 #### The publisher and the deployer
 
@@ -659,6 +672,7 @@ Publish inputs:
 | `cleanup-pr` | empty | A pull request number: upload the update that removes that PR's reports (`/pr/<number>/`) from the site, instead of publishing. |
 | `reopen-pr` | empty | A pull request number: upload the update that lifts that removal (a reopened PR). |
 | `deployer-workflow` | `pages-deploy.yml` | The deployer's workflow file, dispatched on the default branch after the upload. A failed dispatch only delays the site. |
+| `dispatch-app-id`, `dispatch-app-private-key` | empty | As for collect: the App whose token dispatches the deployer. |
 | `token` | `github.token` | Needs `actions: write`, `pages: read`, `pull-requests: write`, `checks: write`. A `cleanup-pr` or `reopen-pr` job needs only `actions: write`. |
 
 Deploy inputs:
