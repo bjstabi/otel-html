@@ -85,4 +85,10 @@ test('a partition the site no longer serves offers Refresh', HTTP, async ({ page
   const notice = page.getByText('This report has changed').first();
   await expect(notice).toBeVisible();
   await expect(notice.locator('..').getByRole('button', { name: 'Refresh' })).toBeVisible();
+  // The refresh itself succeeded (CREATE VIEW does not open the files): the line shows the new manifest and no refresh
+  // failure; it is the page's re-run query that names the missing file, and the notice sits under that card.
+  await expect(page.getByRole('status').filter({ hasText: 'In progress' })).toContainText('updated just now');
+  await expect(page.getByText('The refresh failed')).toHaveCount(0);
+  const card = page.getByRole('alert').filter({ has: notice });
+  await expect(card).toContainText('partitions/000001/spans.parquet');
 });
