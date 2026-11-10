@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { cp, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,6 +12,7 @@ import {
   getJson,
   messageOf,
   say,
+  setOutputs,
   warning,
 } from './github-api.js';
 import { mergeSkippingBad, mergeWithConfig } from './publish-io.js';
@@ -25,7 +26,7 @@ import {
   reportUrl,
   rollingInputs,
   type SiteIndex,
-  type SiteRun,
+  siteRunOf,
 } from './site.js';
 import {
   ensureSharedAssets,
@@ -51,13 +52,6 @@ export type SiteOptions = {
 export type CleanupOptions = { site: string; pr: number; repository: string };
 
 const API_TIMEOUT_MS = 15_000;
-
-function setOutputs(io: CliIo, values: Record<string, string>): void {
-  const lines = Object.entries(values).map(([k, v]) => `${k}=${v}`);
-  for (const line of lines) say(io, line);
-  const file = envVar(io, 'GITHUB_OUTPUT');
-  if (file) appendFileSync(file, `${lines.join('\n')}\n`);
-}
 
 /** `<site>/<key>/index.html`: a stub forwarding to the channel's newest run. */
 async function writeStub(site: string, key: string, index: SiteIndex): Promise<void> {
@@ -172,18 +166,7 @@ export async function runSite(
   }
 
   const reportPath = `${placed.key}/runs/${run.id}`;
-  const siteRun: SiteRun = {
-    runId: run.id,
-    attempt: run.run_attempt,
-    conclusion: run.conclusion ?? 'unknown',
-    headSha: run.head_sha,
-    headBranch: run.head_branch ?? '',
-    startedAt: run.run_started_at ?? run.created_at,
-    completedAt: run.updated_at,
-    runUrl: run.html_url,
-    reportPath,
-    workflow: run.name,
-  };
+  const siteRun = siteRunOf(run, reportPath);
   const migrated = dropWorkflowChannels(await readSiteIndex(opts.site, (m) => warning(io, 'site', m)));
   const { index, remove } = applyRetention(
     placeRun(migrated.index, placed.key, placed.channel, siteRun),

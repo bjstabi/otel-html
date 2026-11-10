@@ -18,6 +18,19 @@ export type SiteRun = {
   /** The run's workflow name (`ci`, `load`); absent in entries written before it was recorded. */
   workflow?: string;
 };
+/** The index entry of `run`, whose report is at `reportPath`. */
+export const siteRunOf = (run: ApiRun, reportPath: string): SiteRun => ({
+  runId: run.id,
+  attempt: run.run_attempt,
+  conclusion: run.conclusion ?? 'unknown',
+  headSha: run.head_sha,
+  headBranch: run.head_branch ?? '',
+  startedAt: run.run_started_at ?? run.created_at,
+  completedAt: run.updated_at,
+  runUrl: run.html_url,
+  reportPath,
+  workflow: run.name,
+});
 export type Channel = {
   /**
    * `branch`: a branch of this repository (today the default branch), at `branch/<slug>/`. `pr`: an open pull request,

@@ -1,3 +1,4 @@
+import { appendFileSync } from 'node:fs';
 import type { CliIo } from '../io.js';
 
 /** The GitHub Actions API as the CI scripts use it: the fields they read, paging, and the workflow-command output. */
@@ -14,6 +15,9 @@ export type ApiRun = {
   run_started_at: string | null;
   updated_at: string;
   html_url: string;
+  /** The workflow file, `.github/workflows/ci.yml`. */
+  path: string;
+  actor: { type: string } | null;
   head_branch: string | null;
   head_sha: string;
   repository: { full_name: string; html_url: string };
@@ -47,6 +51,14 @@ export type ApiJob = {
 export const envVar = (io: Pick<CliIo, 'env'>, name: string): string | undefined => io.env[name] || undefined;
 
 export const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+
+/** Prints `key=value` lines and appends them to `$GITHUB_OUTPUT` when that is set. */
+export function setOutputs(io: Pick<CliIo, 'stdout' | 'env'>, values: Record<string, string>): void {
+  const lines = Object.entries(values).map(([k, v]) => `${k}=${v}`);
+  for (const line of lines) say(io, line);
+  const file = envVar(io, 'GITHUB_OUTPUT');
+  if (file) appendFileSync(file, `${lines.join('\n')}\n`);
+}
 
 export const say = (io: Pick<CliIo, 'stdout'>, message: string): void => {
   io.stdout(`${message}\n`);
@@ -83,6 +95,19 @@ export async function getJson<T>(
   const res = await fetchFn(url, { headers: apiHeaders(token), signal: AbortSignal.timeout(timeoutMs) });
   if (!res.ok) throw new Error(`${url} answered ${res.status}`);
   return { body: (await res.json()) as T, link: res.headers.get('link') };
+}
+
+/** Like `getJson`, but a 404 answer is `undefined`; any other failure still throws. */
+export async function getJsonIfFound<T>(
+  url: string,
+  token: string | undefined,
+  timeoutMs: number,
+  fetchFn: Fetch = fetch,
+): Promise<T | undefined> {
+  const res = await fetchFn(url, { headers: apiHeaders(token), signal: AbortSignal.timeout(timeoutMs) });
+  if (res.status === 404) return undefined;
+  if (!res.ok) throw new Error(`${url} answered ${res.status}`);
+  return (await res.json()) as T;
 }
 
 /** Follows `Link: rel="next"` from `first`, collecting `pick(body)` of every page. */
@@ -169,3 +194,61 @@ export const fetchPullsForSha = (
     (b) => b,
     fetchFn,
   );
+
+/** The subset of the artifacts API that the deployer reads. */
+export type ApiArtifact = {
+  id: number;
+  name: string;
+  size_in_bytes: number;
+  created_at: string;
+  expires_at: string;
+  workflow_run: { id: number } | null;
+};
+
+/** The subset of the deployments API that the deployer reads. */
+export type ApiDeployment = { id: number; created_at: string; environment: string };
+export type ApiDeploymentStatus = { state: string; log_url: string; created_at: string };
+
+/**
+ * The repository's artifacts, newest first, page by page until `stop(created_at)` holds for one (it and the older
+ * ones are not returned, and no further page is requested) or the end.
+ */
+export async function fetchArtifacts(
+  i: { apiUrl: string; repository: string },
+  token: string | undefined,
+  timeoutMs: number,
+  stop: (createdAt: string) => boolean,
+  fetchFn: Fetch = fetch,
+): Promise<ApiArtifact[]> {
+  const items: ApiArtifact[] = [];
+  let next: string | undefined = `${i.apiUrl}/repos/${i.repository}/actions/artifacts?per_page=100`;
+  while (next !== undefined) {
+    const page: { body: { artifacts?: ApiArtifact[] }; link: string | null } = await getJson(
+      next,
+      token,
+      timeoutMs,
+      fetchFn,
+    );
+    for (const a of page.body.artifacts ?? []) {
+      if (stop(a.created_at)) return items;
+      items.push(a);
+    }
+    next = parseNextLink(page.link);
+  }
+  return items;
+}
+
+/** DELETEs `url`; throws naming the URL on a non-2xx answer or after `timeoutMs`. */
+export async function deleteJson(
+  url: string,
+  token: string | undefined,
+  timeoutMs: number,
+  fetchFn: Fetch = fetch,
+): Promise<void> {
+  const res = await fetchFn(url, {
+    method: 'DELETE',
+    headers: apiHeaders(token),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!res.ok) throw new Error(`${url} answered ${res.status}`);
+}

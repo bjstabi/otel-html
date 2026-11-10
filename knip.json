@@ -19,6 +19,7 @@
   ],
   "ignoreDependencies": ["@commitlint/cli", "@opentelemetry/exporter-trace-otlp-(grpc|http|proto)"],
   "ignoreIssues": {
+    "src/cli/ci/github-api.ts": ["exports"],
     "src/cli/ci/update.ts": ["exports", "types"],
     "src/cli/ci/run-report.ts": ["types"],
     "src/cli/ci/site-state.ts": ["exports", "types"],

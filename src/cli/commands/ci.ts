@@ -3,6 +3,7 @@ import { resolveDeps } from '../../api/report.js';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { WriterDeps } from '../../writer/session.js';
 import { runContext } from '../ci/context-main.js';
+import { runDeployFetch, runDeployPlan } from '../ci/deploy-main.js';
 import { envVar, messageOf, say } from '../ci/github-api.js';
 import { runLink } from '../ci/link-main.js';
 import { runReport } from '../ci/report-main.js';
@@ -62,6 +63,21 @@ interface CleanupFlags {
   site: string;
   pr: string;
   repository?: string;
+}
+
+interface DeployPlanFlags {
+  repository?: string;
+  out: string;
+  stateOut: string;
+  pagesUrl: string;
+  ciWorkflows: string;
+  reportWorkflow: string;
+}
+
+interface DeployFetchFlags {
+  repository?: string;
+  pending: string;
+  out: string;
 }
 
 export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDeps>): void {
@@ -172,6 +188,63 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
         await runCleanup(opts, io, await resolveDeps(deps));
       } catch (e) {
         say(io, `::error::otel-html cleanup: ${messageOf(e)}`);
+        throw new CliExit(1);
+      }
+    });
+  const deploy = ci
+    .command('deploy')
+    .description('the Pages deployer: find the pending site updates and fetch them');
+  const repositoryOf = (flag: string | undefined): string => {
+    const repository = flag ?? envVar(io, 'GITHUB_REPOSITORY');
+    if (repository === undefined)
+      throw new OtelHtmlError('usage', {
+        message: '--repository is required when GITHUB_REPOSITORY is not set',
+      });
+    return parseRepository(repository);
+  };
+  deploy
+    .command('plan')
+    .description(
+      'find the last deployed site, the newest site state and the pending updates; write pending.json and the state',
+    )
+    .option('--repository <owner/repo>', 'repository (default: $GITHUB_REPOSITORY)')
+    .requiredOption('--out <file>', 'where pending.json is written')
+    .requiredOption('--state-out <dir>', "where the chosen state's files are written")
+    .requiredOption('--pages-url <url>', "the site's public URL")
+    .option('--ci-workflows <files>', 'comma-separated workflow files whose runs publish', 'ci.yml')
+    .option('--report-workflow <file>', 'the workflow file that uploads run and PR updates', 'ci-report.yml')
+    .action(async (flags: DeployPlanFlags) => {
+      const opts = {
+        repository: repositoryOf(flags.repository),
+        out: flags.out,
+        stateOut: flags.stateOut,
+        pagesUrl: flags.pagesUrl,
+        ciWorkflows: flags.ciWorkflows
+          .split(',')
+          .map((w) => w.trim())
+          .filter((w) => w !== ''),
+        reportWorkflow: flags.reportWorkflow,
+        now: new Date().toISOString(),
+      };
+      try {
+        await runDeployPlan(opts, io, await resolveDeps(deps));
+      } catch (e) {
+        say(io, `::error::otel-html deploy plan: ${messageOf(e)}`);
+        throw new CliExit(1);
+      }
+    });
+  deploy
+    .command('fetch')
+    .description("download the accepted updates of pending.json into <out>/<update's name>/")
+    .option('--repository <owner/repo>', 'repository (default: $GITHUB_REPOSITORY)')
+    .requiredOption('--pending <file>', "the plan's pending.json (rewritten when a download fails)")
+    .requiredOption('--out <dir>', 'where the updates are unpacked')
+    .action(async (flags: DeployFetchFlags) => {
+      const opts = { repository: repositoryOf(flags.repository), pending: flags.pending, out: flags.out };
+      try {
+        await runDeployFetch(opts, io, await resolveDeps(deps));
+      } catch (e) {
+        say(io, `::error::otel-html deploy fetch: ${messageOf(e)}`);
         throw new CliExit(1);
       }
     });

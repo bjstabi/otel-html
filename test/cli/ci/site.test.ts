@@ -33,6 +33,8 @@ const apiRun = (over: Partial<ApiRun> = {}): ApiRun => ({
   run_started_at: null,
   updated_at: '2026-01-01T00:01:00Z',
   html_url: 'https://github.com/o/r/actions/runs/1',
+  path: '.github/workflows/ci.yml',
+  actor: { type: 'User' },
   head_branch: 'main',
   head_sha: 'abc',
   repository: { full_name: 'o/r', html_url: 'https://github.com/o/r' },
