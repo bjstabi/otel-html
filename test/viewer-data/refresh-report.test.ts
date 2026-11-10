@@ -241,6 +241,19 @@ describe('isGoneFile', () => {
       'IO Error: No files found that match the pattern "data/partitions/000001/spans.parquet"\n\nLINE 1: SELECT "key", "value", "n" FROM (SELECT CASE...';
     expect(isGoneFile(new Error(missing))).toBe(true);
   });
+  test('does not match a failed open for another reason, or a pattern named only in the SQL', () => {
+    expect(isGoneFile(new Error("Opening file 'x' failed with error: Permission denied"))).toBe(false);
+    expect(
+      isGoneFile(
+        new OtelHtmlError('invalid-report', {
+          path: 'query',
+          expected: 'a query the engine accepts',
+          actual: 'Parser Error: syntax error',
+          hint: "SELECT 'No files found that match the pattern'",
+        }),
+      ),
+    ).toBe(false);
+  });
   test('does not match a binder not-found, an HTTP 500, or a 404 inside the SQL', () => {
     expect(isGoneFile(new Error("Binder Error: Referenced column 'x' not found in FROM clause"))).toBe(false);
     expect(isGoneFile(new Error('Catalog Error: Function foo not found'))).toBe(false);
