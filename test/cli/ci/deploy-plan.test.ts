@@ -101,6 +101,7 @@ const opts = (over: Partial<PlanOptions> = {}): PlanOptions => ({
   repository: 'o/r',
   ciWorkflows: ['ci.yml'],
   reportWorkflow: 'ci-report.yml',
+  deployerWorkflow: 'pages-deploy.yml',
   pagesUrl: PAGES,
   stateOut: '/out/state',
   now: NOW,
@@ -133,6 +134,14 @@ const deployments = (
   );
 
 const listing = (items: unknown[], link?: string): Route => json({ artifacts: items }, link ? { link } : {});
+
+const deployerRun = (id: number, over: Record<string, unknown> = {}) =>
+  apiRun(id, {
+    name: 'pages-deploy',
+    path: '.github/workflows/pages-deploy.yml',
+    event: 'workflow_dispatch',
+    ...over,
+  });
 
 /** The repository of the brief's main scenario. */
 async function world(): Promise<Record<string, Route>> {
@@ -175,6 +184,7 @@ async function world(): Promise<Record<string, Route>> {
       ],
       `<${R}/actions/artifacts?per_page=100&page=2>; rel="next"`,
     ),
+    [`${R}/actions/runs/50`]: json(deployerRun(50)),
     [`${R}/actions/runs/21`]: json(
       apiRun(21, { event: 'pull_request', head_branch: 'feat', head_sha: 'sha21' }),
     ),
@@ -366,6 +376,47 @@ describe('planDeploy', () => {
     expect(plan.state).toEqual({ kind: 'full', runId: 11 });
   });
 
+  test('a consumed state uploaded by a ci.yml pull_request run is ignored, never downloaded', async () => {
+    const routes = await world();
+    routes[`${R}/actions/runs/50`] = json(
+      apiRun(50, { event: 'pull_request', head_branch: 'feat', head_repository: { full_name: 'fork/r' } }),
+    );
+    const { fetchFn, calls } = fake(routes);
+    const plan = await planDeploy(opts(), { fs: createMemoryFileSystem() }, 'tok', fetchFn);
+    expect(plan.state).toEqual({ kind: 'full', runId: 11 });
+    expect(calls.some((c) => c.endsWith('/artifacts/102/zip'))).toBe(false);
+  });
+
+  test.each([
+    ['a different workflow', { path: '.github/workflows/ci.yml' }],
+    ['another repository', { head_repository: { full_name: 'fork/r' } }],
+    ['a branch that is not the default', { head_branch: 'feat' }],
+    ['a pull_request event', { event: 'pull_request' }],
+    ['a run older than the base', { id: 10 }],
+  ])('a consumed state uploaded by %s is ignored', async (_n, over) => {
+    const routes = await world();
+    routes[`${R}/actions/runs/50`] = json(deployerRun(50, over));
+    const plan = await planDeploy(opts(), { fs: createMemoryFileSystem() }, 'tok', fake(routes).fetchFn);
+    expect(plan.state).toEqual({ kind: 'full', runId: 11 });
+  });
+
+  test('a consumed state from the deployer workflow on the default branch is used (any allowed event)', async () => {
+    for (const event of ['workflow_dispatch', 'schedule', 'workflow_run']) {
+      const routes = await world();
+      routes[`${R}/actions/runs/50`] = json(deployerRun(50, { event }));
+      const plan = await planDeploy(opts(), { fs: createMemoryFileSystem() }, 'tok', fake(routes).fetchFn);
+      expect(plan.state).toEqual({ kind: 'consumed', base: 2000 });
+    }
+  });
+
+  test('a run lookup failing with a non-404 error while authenticating a state fails the pass', async () => {
+    const routes = await world();
+    routes[`${R}/actions/runs/50`] = () => new Response('', { status: 503 });
+    await expect(
+      planDeploy(opts(), { fs: createMemoryFileSystem() }, 'tok', fake(routes).fetchFn),
+    ).rejects.toThrow(/503/);
+  });
+
   test('a run that cannot be found rejects its updates; another API failure fails the pass', async () => {
     const routes = await world();
     routes[`${R}/actions/runs/30`] = missing;
@@ -549,6 +600,7 @@ describe('runDeployPlan', () => {
         pagesUrl: PAGES,
         ciWorkflows: ['ci.yml'],
         reportWorkflow: 'ci-report.yml',
+        deployerWorkflow: 'pages-deploy.yml',
         now: NOW,
       },
       io(),
@@ -584,6 +636,7 @@ describe('runDeployPlan', () => {
         pagesUrl: PAGES,
         ciWorkflows: ['ci.yml'],
         reportWorkflow: 'ci-report.yml',
+        deployerWorkflow: 'pages-deploy.yml',
         now: NOW,
       },
       io(),
@@ -617,6 +670,7 @@ describe('runDeployPlan', () => {
         pagesUrl: PAGES,
         ciWorkflows: ['ci.yml'],
         reportWorkflow: 'ci-report.yml',
+        deployerWorkflow: 'pages-deploy.yml',
         now: NOW,
       },
       io(),

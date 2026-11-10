@@ -35,6 +35,7 @@ const WAIT_MS = 10 * 60_000;
 /** A state artifact is five small JSON files. */
 const MAX_STATE_BYTES = 64 * 1024 * 1024;
 const PUSH_EVENTS = ['push', 'pull_request', 'schedule', 'workflow_dispatch'];
+const DEPLOYER_EVENTS = ['workflow_dispatch', 'schedule', 'workflow_run'];
 const RUN_EVENTS = ['workflow_run', 'workflow_dispatch'];
 
 export interface PlanOptions {
@@ -42,6 +43,8 @@ export interface PlanOptions {
   repository: string;
   ciWorkflows: string[];
   reportWorkflow: string;
+  /** The deployer workflow file: only its runs on the default branch may upload a consumed state. */
+  deployerWorkflow: string;
   pagesUrl: string;
   /** Where the chosen state's files are written. */
   stateOut: string;
@@ -228,34 +231,7 @@ export async function planDeploy(
   }
   const floorMs = isoOrUndefined(applied?.floor) ?? nowMs - HOUR_MS;
 
-  // (3) the listing walk, newest first, down to the floor
-  const listed = (
-    await fetchArtifacts(
-      { apiUrl: o.apiUrl, repository: o.repository },
-      token,
-      API_TIMEOUT_MS,
-      (c) => (isoOrUndefined(c) ?? Infinity) < floorMs,
-      fetchFn,
-    )
-  ).filter(unexpired);
-  for (const a of listed) {
-    const form = parseStateName(a.name);
-    if (form?.kind !== 'consumed' || form.base !== base.deploymentId) continue;
-    let found: SiteState | undefined;
-    try {
-      found = await loadState(a, form);
-    } catch (e) {
-      // unreadable content: the next candidate, or the base's own state; a network or HTTP failure fails the pass
-      if (!(e instanceof OtelHtmlError)) throw e;
-    }
-    if (found !== undefined) {
-      state = found;
-      applied = found.applied;
-      break;
-    }
-  }
-
-  // (4) the candidates, authenticated
+  // the API lookups, cached per pass
   const runs = new Map<number, Promise<ApiRun | undefined>>();
   const getRun = (id: number): Promise<ApiRun | undefined> => {
     let p = runs.get(id);
@@ -298,6 +274,51 @@ export async function planDeploy(
   const defaultBranchOf = (): Promise<string> =>
     (defaultBranch ??= get<{ default_branch: string }>(repo).then((r) => r.default_branch));
 
+  // (3) the listing walk, newest first, down to the floor
+  const listed = (
+    await fetchArtifacts(
+      { apiUrl: o.apiUrl, repository: o.repository },
+      token,
+      API_TIMEOUT_MS,
+      (c) => (isoOrUndefined(c) ?? Infinity) < floorMs,
+      fetchFn,
+    )
+  ).filter(unexpired);
+  const deployerPath = `.github/workflows/${o.deployerWorkflow}`;
+  // a fork's pull_request run can upload artifacts here: only the deployer's own runs on the default branch count
+  const isDeployerRun = async (a: ApiArtifact): Promise<boolean> => {
+    const id = a.workflow_run?.id;
+    const run = id === undefined ? undefined : await getRun(id);
+    return (
+      run !== undefined &&
+      run.path === deployerPath &&
+      run.head_repository?.full_name === o.repository &&
+      run.head_branch === (await defaultBranchOf()) &&
+      DEPLOYER_EVENTS.includes(run.event) &&
+      run.id > (base.runId ?? 0)
+    );
+  };
+  for (const a of listed) {
+    const form = parseStateName(a.name);
+    if (form?.kind !== 'consumed' || form.base !== base.deploymentId) continue;
+    if (!(await isDeployerRun(a))) continue;
+    // a fork's pull_request run can upload artifacts here: only the deployer's own runs on the default branch count
+    if (!(await isDeployerRun(a))) continue;
+    let found: SiteState | undefined;
+    try {
+      found = await loadState(a, form);
+    } catch (e) {
+      // unreadable content: the next candidate, or the base's own state; a network or HTTP failure fails the pass
+      if (!(e instanceof OtelHtmlError)) throw e;
+    }
+    if (found !== undefined) {
+      state = found;
+      applied = found.applied;
+      break;
+    }
+  }
+
+  // (4) the candidates, authenticated
   const ciPaths = o.ciWorkflows.map((w) => `.github/workflows/${w}`);
   const reportPath = `.github/workflows/${o.reportWorkflow}`;
   const channelOf = async (run: ApiRun): Promise<NonNullable<PendingUpdate['channel']>> =>

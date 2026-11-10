@@ -17,6 +17,7 @@ export interface DeployPlanOptions {
   pagesUrl: string;
   ciWorkflows: string[];
   reportWorkflow: string;
+  deployerWorkflow: string;
   now: string;
 }
 export interface DeployFetchOptions {

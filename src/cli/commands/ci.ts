@@ -96,6 +96,7 @@ interface DeployPlanFlags {
   pagesUrl: string;
   ciWorkflows: string;
   reportWorkflow: string;
+  deployerWorkflow: string;
 }
 
 interface DeployFetchFlags {
@@ -383,6 +384,11 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
     .requiredOption('--pages-url <url>', "the site's public URL")
     .option('--ci-workflows <files>', 'comma-separated workflow files whose runs publish', 'ci.yml')
     .option('--report-workflow <file>', 'the workflow file that uploads run and PR updates', 'ci-report.yml')
+    .option(
+      '--deployer-workflow <file>',
+      'the workflow file whose runs may upload the consumed site state',
+      'pages-deploy.yml',
+    )
     .action(async (flags: DeployPlanFlags) => {
       const opts = {
         repository: repositoryOf(flags.repository),
@@ -394,6 +400,7 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
           .map((w) => w.trim())
           .filter((w) => w !== ''),
         reportWorkflow: flags.reportWorkflow,
+        deployerWorkflow: flags.deployerWorkflow,
         now: new Date().toISOString(),
       };
       try {
