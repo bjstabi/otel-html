@@ -27,8 +27,8 @@ GitHub. Read [conventions.md](conventions.md) too.
 Stop, say what you found, and wait when:
 
 - the plan left a decision open and you have reached it;
-- a change would touch `release.yml`, `ci-report.yml`, the `otel-html-publish` action or anything else that runs
-  with a write token on `main`;
+- a change would touch `release.yml`, `ci-report.yml`, `pages-deploy.yml`, the `otel-html-publish` or
+  `otel-html-deploy` action or anything else that runs with a write token on `main`;
 - a public API, the report format or a CLI flag would change in a way the plan did not state;
 - two reviews disagree and the plan does not settle it;
 - a measurement the PR body must carry is worse than the plan's expectation.

@@ -506,6 +506,109 @@ describe('planDeploy', () => {
     expect(plan.floor).toBe('2026-11-10T11:00:00.000Z');
   });
 
+  describe('deployments that did not upload the site', () => {
+    /** The world with a no-op deployer run (2002, run 60) and the current run's own `waiting` deployment (2003, run 99) on top. */
+    const withNoop = async (): Promise<Record<string, Route>> => {
+      const routes = await world();
+      const list = routes[`${R}/deployments?environment=github-pages&per_page=100`];
+      const rows = (await (list as () => Response)().json()) as unknown[];
+      routes[`${R}/deployments?environment=github-pages&per_page=100`] = json([
+        { id: 2003, created_at: '2026-11-10T11:59:00Z', environment: 'github-pages' },
+        { id: 2002, created_at: '2026-11-10T11:56:00Z', environment: 'github-pages' },
+        ...rows,
+      ]);
+      routes[`${R}/deployments/2003/statuses?per_page=100`] = json([
+        { state: 'waiting', log_url: `https://github.com/o/r/actions/runs/99/jobs/1`, created_at: NOW },
+      ]);
+      routes[`${R}/deployments/2002/statuses?per_page=100`] = json([
+        {
+          state: 'success',
+          log_url: 'https://github.com/o/r/actions/runs/60/jobs/1',
+          created_at: '2026-11-10T11:57:00Z',
+        },
+      ]);
+      routes[`${R}/actions/runs/60/artifacts?name=github-pages`] = json({ artifacts: [] });
+      routes[`${R}/actions/runs/60/artifacts?name=otel-html-site-state-60`] = json({ artifacts: [] });
+      return routes;
+    };
+
+    test('a no-op deployer run between two deploying ones is skipped for the base, the state and the wait', async () => {
+      const plan = await planDeploy(
+        opts({ currentRunId: 99 }),
+        { fs: createMemoryFileSystem() },
+        'tok',
+        fake(await withNoop()).fetchFn,
+      );
+      expect(plan.base).toMatchObject({ kind: 'artifact', deploymentId: 2000, runId: 11 });
+      expect(plan.state).toEqual({ kind: 'consumed', base: 2000 });
+    });
+
+    test('the deletions of the real base pass still get their liveAt', async () => {
+      const routes = await withNoop();
+      const fs = createMemoryFileSystem();
+      const full = stateWith({ kind: 'full', runId: 11 }, [], {
+        deletions: { version: 1, files: [{ path: 'a', pass: 11 }] },
+      });
+      routes[`${R}/actions/artifacts/101/zip`] = zipRoute(await stateZip(full));
+      routes[`${R}/actions/artifacts?per_page=100`] = listing([]);
+      const plan = await planDeploy(opts({ currentRunId: 99 }), { fs }, 'tok', fake(routes).fetchFn);
+      expect(plan.base.liveAt).toBe('2026-11-10T11:05:00Z');
+      const written = JSON.parse(await fs.readText('/out/state/deletions.json')) as {
+        files: { liveAt?: string }[];
+      };
+      expect(written.files[0]?.liveAt).toBe('2026-11-10T11:05:00Z');
+      expect(plan.deletionsDue).toBe(1); // fifteen minutes passed since the real base went live
+    });
+
+    test('the current run own waiting deployment does not force a wait on a cold start', async () => {
+      const routes: Record<string, Route> = {
+        [R]: json({ default_branch: 'main' }),
+        ...deployments({ id: 2001, created: '2026-11-10T11:59:00Z', success: false }),
+        [`${R}/deployments/2001/statuses?per_page=100`]: json([
+          { state: 'waiting', log_url: `https://github.com/o/r/actions/runs/99/jobs/1`, created_at: NOW },
+        ]),
+        [`${R}/actions/artifacts?per_page=100`]: listing([]),
+        [`${PAGES}/site-state/files.json`]: json({ version: 1, files: {} }),
+        [`${PAGES}/site-state/applied.json`]: missing,
+      };
+      const plan = await planDeploy(
+        opts({ currentRunId: 99 }),
+        { fs: createMemoryFileSystem() },
+        'tok',
+        fake(routes).fetchFn,
+      );
+      expect(plan.base).toEqual({ kind: 'live' });
+    });
+
+    test('a success deployment without artifacts counts once it is older than the artifact retention', async () => {
+      const routes: Record<string, Route> = {
+        [R]: json({ default_branch: 'main' }),
+        ...deployments({ id: 2001, created: '2026-06-01T00:00:00Z', success: true, run: 60 }),
+        [`${R}/actions/runs/60/artifacts?name=github-pages`]: json({ artifacts: [] }),
+        [`${R}/actions/runs/60/artifacts?name=otel-html-site-state-60`]: json({ artifacts: [] }),
+        [`${R}/actions/artifacts?per_page=100`]: listing([]),
+        [`${PAGES}/site-state/files.json`]: json({ version: 1, files: {} }),
+        [`${PAGES}/site-state/applied.json`]: missing,
+      };
+      const plan = await planDeploy(opts(), { fs: createMemoryFileSystem() }, 'tok', fake(routes).fetchFn);
+      expect(plan.base).toMatchObject({ kind: 'live', deploymentId: 2001, runId: 60 });
+    });
+
+    test('a young no-op deployment alone does not make the cold start wait', async () => {
+      const routes: Record<string, Route> = {
+        [R]: json({ default_branch: 'main' }),
+        ...deployments({ id: 2001, created: '2026-11-10T11:58:00Z', success: true, run: 60 }),
+        [`${R}/actions/runs/60/artifacts?name=github-pages`]: json({ artifacts: [] }),
+        [`${R}/actions/runs/60/artifacts?name=otel-html-site-state-60`]: json({ artifacts: [] }),
+        [`${R}/actions/artifacts?per_page=100`]: listing([]),
+        [`${PAGES}/site-state/files.json`]: json({ version: 1, files: {} }),
+        [`${PAGES}/site-state/applied.json`]: missing,
+      };
+      const plan = await planDeploy(opts(), { fs: createMemoryFileSystem() }, 'tok', fake(routes).fetchFn);
+      expect(plan.base).toEqual({ kind: 'live' });
+    });
+  });
+
   describe('without a deployed tarball', () => {
     const noSuccess = async (newest: string): Promise<Record<string, Route>> => ({
       [R]: json({ default_branch: 'main' }),
@@ -513,9 +616,17 @@ describe('planDeploy', () => {
       [`${R}/actions/artifacts?per_page=100`]: listing([]),
     });
 
-    test('a live site with a young newest deployment waits', async () => {
-      const routes = await noSuccess('2026-11-10T11:58:00Z');
-      routes[`${PAGES}/site-state/files.json`] = json({ version: 1, files: {} });
+    test('a live site whose newest counting deployment is young waits', async () => {
+      // its tarball is gone, but its run's state artifact shows it uploaded the site
+      const routes: Record<string, Route> = {
+        [R]: json({ default_branch: 'main' }),
+        ...deployments({ id: 2001, created: '2026-11-10T11:58:00Z', success: true, run: 60 }),
+        [`${R}/actions/runs/60/artifacts?name=github-pages`]: json({ artifacts: [] }),
+        [`${R}/actions/runs/60/artifacts?name=otel-html-site-state-60`]: json({
+          artifacts: [art(160, 'otel-html-site-state-60', '2026-11-10T11:58:00Z', 60)],
+        }),
+        [`${PAGES}/site-state/files.json`]: json({ version: 1, files: {} }),
+      };
       const plan = await planDeploy(opts(), { fs: createMemoryFileSystem() }, 'tok', fake(routes).fetchFn);
       expect(plan.base.kind).toBe('wait');
     });

@@ -1,7 +1,8 @@
 name: ci-report
 
-# Builds a ci run's report and publishes it to the GitHub Pages site (the `gh-pages` branch), linked from the run's
-# pull request; removes a pull request's reports when it closes.
+# Builds a ci run's report, uploads it as a site update for the Pages deployer (pages-deploy.yml, the only writer of the
+# site) and links it from the run's pull request; uploads the update that removes a pull request's reports when it
+# closes, and the one that lifts the removal when it reopens.
 #
 # Runs from the default branch's copy of this file. The report job dogfoods the code under test: it checks out the
 # triggering run's head commit when that commit is in this repository and a person (not a bot) started the run.
@@ -18,10 +19,11 @@ on:
         description: ci or load workflow run id to report on
         required: true
         type: string
-  # `_target`, not `pull_request`: a fork PR's `pull_request` token cannot push the site. The cleanup job runs with a
-  # write token, so it checks out the default branch only and never the PR's code.
+  # `_target`, not `pull_request`: a fork PR's `pull_request` token cannot upload artifacts to the base repository or
+  # dispatch the deployer. The cleanup job runs with a write token, so it checks out the default branch only and never
+  # the PR's code.
   pull_request_target:
-    types: [closed]
+    types: [closed, reopened]
 
 # Each job asks for what it needs.
 permissions: {}
@@ -35,23 +37,20 @@ jobs:
     # A failed or cancelled run is the most interesting report; only runs that never really ran are skipped.
     if: github.event_name != 'pull_request_target' && (github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion != 'skipped' && github.event.workflow_run.conclusion != 'action_required'))
     runs-on: ubuntu-latest
-    # One report per run at a time. Not the shared `pages` group: GitHub keeps one pending run per group and cancels
-    # the older one, which would drop reports in a burst; the gh-pages lease serializes the pushes instead.
+    # One report per run at a time. The deployer serializes the site writes, not this job.
     concurrency:
       group: ci-report-${{ inputs.run_id || github.event.workflow_run.id }}
       cancel-in-progress: false
     permissions:
-      actions: read
-      # The gh-pages push.
-      contents: write
+      # Downloading the run's artifacts, uploading the update, dispatching the deployer.
+      actions: write
+      # The checkout.
+      contents: read
       # configure-pages reads the site's base URL.
       pages: read
       # `ci link`: the sticky PR comment and the check run.
       pull-requests: write
       checks: write
-    outputs:
-      published: ${{ steps.publish.outputs.published || 'false' }}
-      report-url: ${{ steps.publish.outputs.report-url }}
     timeout-minutes: 15
     steps:
       # The run's own commit when it is in this repository and a person started it, so a pull request's report is
@@ -73,29 +72,23 @@ jobs:
           if [ -f .github/otel-html-ci.yaml ]; then
             echo "config=.github/otel-html-ci.yaml" >> "$GITHUB_OUTPUT"
           fi
-      # Builds the run report, pushes it to gh-pages and links it; the `deploy` job below ships the site.
+      # Builds the run report, uploads it as a site update, wakes the deployer and links the report.
       - id: publish
         uses: ./.github/actions/otel-html-publish
         with:
           command: node dist/cli/main.js
           run-id: ${{ inputs.run_id || github.event.workflow_run.id }}
           config: ${{ steps.config.outputs.config }}
-          deploy: false
-          # Only the default branch's page gets the light and dark screenshots the README shows; other runs
-          # (pull requests, feature branches, load runs) would pay for the browser install for nothing.
-          preview: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.head_branch == github.event.repository.default_branch && github.event.workflow_run.head_repository.full_name == github.repository) }}
 
-  # A closed or merged PR's folder (pr/<number>/) and index entry leave the site.
+  # A closed or merged PR's folder (pr/<number>/) and index entry leave the site when the deployer applies the update;
+  # a reopened PR's removal is lifted.
   cleanup:
-    if: github.event_name == 'pull_request_target' && github.event.action == 'closed'
+    if: github.event_name == 'pull_request_target'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
-      # The gh-pages push.
-      contents: write
-    outputs:
-      # `false` when the site never had the pull request: nothing was pushed, so there is nothing to deploy.
-      cleaned: ${{ steps.cleanup.outputs.cleaned || 'false' }}
+      # The update artifact and the deployer dispatch.
+      actions: write
     steps:
       # The default branch, never the PR's head: this job holds a write token.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -104,46 +97,8 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/setup
       - run: mise run build
-      - id: cleanup
-        uses: ./.github/actions/otel-html-publish
+      - uses: ./.github/actions/otel-html-publish
         with:
           command: node dist/cli/main.js
-          cleanup-pr: ${{ github.event.pull_request.number }}
-          deploy: false
-
-  # Deploys the gh-pages tip, whoever pushed it. Pending deploys in the `pages` group replace each other, which loses
-  # nothing: the one that runs ships the latest tip. A replaced pending deploy shows its publisher run as cancelled,
-  # although that run's report was pushed and a newer deploy shipped it.
-  # Only from the default branch: the github-pages environment rejects other refs. workflow_run always is; a branch
-  # dispatch is not, nor is the cleanup of a pull request into another branch (pull_request_target runs on the base
-  # branch). Those still update gh-pages, and the next default-branch deploy (the next report) ships that.
-  deploy:
-    needs: [report, cleanup]
-    if: >-
-      !cancelled() && github.ref_name == github.event.repository.default_branch &&
-      (needs.report.outputs.published == 'true' || needs.cleanup.outputs.cleaned == 'true')
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    concurrency:
-      group: pages
-      cancel-in-progress: false
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    permissions:
-      contents: read
-      pages: write
-      id-token: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: gh-pages
-          path: public
-          fetch-depth: 1
-          persist-credentials: false
-      - run: rm -rf public/.git
-      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
-        with:
-          path: public
-      - id: deployment
-        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+          cleanup-pr: ${{ github.event.action == 'closed' && github.event.pull_request.number || '' }}
+          reopen-pr: ${{ github.event.action == 'reopened' && github.event.pull_request.number || '' }}

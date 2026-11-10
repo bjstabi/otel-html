@@ -5,7 +5,7 @@ import { expect, test } from 'vitest';
 // The action installs Playwright by version; it must match the one the repo tests with.
 test('the action installs the Playwright version package.json pins', () => {
   const action = readFileSync(
-    resolve(__dirname, '../../.github/actions/otel-html-publish/action.yml'),
+    resolve(__dirname, '../../.github/actions/otel-html-deploy/action.yml'),
     'utf8',
   );
   const pkg = JSON.parse(readFileSync(resolve(__dirname, '../../package.json'), 'utf8'));

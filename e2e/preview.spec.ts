@@ -16,7 +16,7 @@ import { inflateSync } from 'node:zlib';
 import { reportDir } from './fixture.js';
 import { expect, test } from './test.js';
 
-const SCRIPT = fileURLToPath(new URL('../.github/actions/otel-html-publish/preview.mjs', import.meta.url));
+const SCRIPT = fileURLToPath(new URL('../.github/actions/otel-html-deploy/preview.mjs', import.meta.url));
 const PACKAGE_JSON = fileURLToPath(new URL('../package.json', import.meta.url));
 
 const CLI = fileURLToPath(new URL('../dist/cli/main.js', import.meta.url));
@@ -24,7 +24,7 @@ const CHANNEL = 'branch/main';
 const ASSETS_VERSION = '0.0.0-e2e';
 
 /**
- * A site as `ci site` leaves it: the `site`-format fixture `name` as the rolling report at `<site>/branch/main/`
+ * A site as the deployer leaves it: the `site`-format fixture `name` as the rolling report at `<site>/branch/main/`
  * with its viewer files at `<site>/assets/<version>/` and `engine.assetsBase` `../../assets/<version>/`.
  */
 function siteOf(site: string, name: Parameters<typeof reportDir>[0]): string {

@@ -1,0 +1,312 @@
+name: otel-html deploy
+description: One deployer pass for the GitHub Pages site. Finds the last deployed site and the pending update artifacts, applies them, and deploys the result with actions/deploy-pages. Run it in a job of its own, in the `pages` concurrency group, with the github-pages environment.
+
+# The job that uses this action needs:
+#   environment: github-pages
+#   concurrency: { group: pages, cancel-in-progress: false }
+#   permissions: contents: read, actions: write, deployments: read, pages: write, id-token: write
+# and a checkout of the code that provides `command` (unless `command` is empty, which installs the release binary).
+# It runs on Linux only (tar, bash, the paths below).
+
+inputs:
+  version:
+    description: Release version to install, such as `0.2.0`, or `latest`. Ignored when `command` is given.
+    default: latest
+  command:
+    description: An executable to use instead of a download, for example `node dist/cli/main.js`. Empty installs the release binary.
+    default: ""
+  token:
+    description: >-
+      Token for the Actions and Deployments APIs, the artifact downloads and deletions, the gh-pages checkout (migration) and
+      the deployment. It needs `contents: read`, `actions: write`, `deployments: read`, `pages: write` and `id-token: write`.
+    default: ${{ github.token }}
+  config:
+    description: Dashboard config file for the rolling reports. Empty uses the tool's built-in dashboard.
+    default: ""
+  retention:
+    description: Runs kept per workflow on each branch page (`branch/<name>/`) of the site.
+    default: "30"
+  pr-retention:
+    description: Runs kept per workflow on each pull request page (`pr/<number>/`) of the site.
+    default: "10"
+  preview:
+    description: >-
+      Screenshot each default-branch rolling report this pass rebuilt (light and dark, `preview-light.png` and
+      `preview-dark.png` in its folder) for the README. Installs Playwright's Chromium (about 1 minute); needs Node and
+      passwordless sudo on the runner. A failed install or screenshot is a warning.
+    default: "false"
+  ci-workflows:
+    description: Comma-separated workflow file names whose runs publish `push` updates.
+    default: ci.yml
+  report-workflow:
+    description: The workflow file that uploads the run and pull request updates.
+    default: ci-report.yml
+  keep-deployments:
+    description: Successful deployments whose artifacts the prune step keeps.
+    default: "3"
+  update-retention-days:
+    description: Days the pass keeps the `github-pages` artifact and the site-state artifact it uploads.
+    default: "90"
+
+outputs:
+  deployed:
+    description: "`true` when this pass deployed the site, otherwise `false`."
+    value: ${{ steps.deployment.outcome == 'success' }}
+  page_url:
+    description: The deployed site's URL; empty when nothing was deployed.
+    value: ${{ steps.deployment.outputs.page_url }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check the runner
+      if: runner.os != 'Linux'
+      shell: bash
+      run: |
+        echo "::error::otel-html deploy: the deployer runs on Linux only, not ${RUNNER_OS}"
+        exit 1
+    - name: Install otel-html
+      if: inputs.command == ''
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        # The binaries always come from this action's repository: `action_repository` when used from another repo, and
+        # empty for a local `./` use, which is this repository itself (a fork's own releases are not used).
+        REPO: ${{ github.action_repository || 'bjstabi/otel-html' }}
+        # `@v0` with version `latest` installs the newest 0.x release.
+        ACTION_REF: ${{ github.action_ref }}
+        GH_TOKEN: ${{ inputs.token }}
+      run: bash "$GITHUB_ACTION_PATH/../otel-html-setup/install.sh" "$VERSION"
+    - name: Resolve command
+      id: resolve
+      shell: bash
+      env:
+        CMD: ${{ inputs.command }}
+        CONFIG: ${{ inputs.config }}
+        WORKFLOW_REF: ${{ github.workflow_ref }}
+      run: |
+        # Each value becomes one GITHUB_OUTPUT line; a newline would inject another output.
+        nl=$'\n'
+        if [[ $CMD == *"$nl"* || $CONFIG == *"$nl"* ]]; then
+          echo "::error::otel-html deploy: the command and config inputs must be a single line"
+          exit 1
+        fi
+        # The workflow file that runs this pass (`owner/repo/.github/workflows/<file>@<ref>`): its runs are the ones
+        # whose consumed-only state counts, so `plan` is told its name.
+        wf=${WORKFLOW_REF%%@*}
+        wf=${wf##*/}
+        {
+          echo "command=${CMD:-otel-html}"
+          echo "config=$CONFIG"
+          echo "workflow=$wf"
+          echo "dir=$RUNNER_TEMP/otel-html-deploy"
+        } >>"$GITHUB_OUTPUT"
+    - id: pages
+      uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+      with:
+        token: ${{ inputs.token }}
+    # Downloads the state artifacts itself (D65); writes pending.json and the chosen state.
+    - name: Plan
+      id: plan
+      shell: bash
+      env:
+        CMD: ${{ steps.resolve.outputs.command }}
+        DIR: ${{ steps.resolve.outputs.dir }}
+        DEPLOYER: ${{ steps.resolve.outputs.workflow }}
+        PAGES_URL: ${{ steps.pages.outputs.base_url }}
+        CI_WORKFLOWS: ${{ inputs.ci-workflows }}
+        REPORT_WORKFLOW: ${{ inputs.report-workflow }}
+        GITHUB_TOKEN: ${{ inputs.token }}
+      run: |
+        # CMD is deliberately unquoted: it may be a command with arguments, such as `node dist/cli/main.js`.
+        # shellcheck disable=SC2086
+        $CMD ci deploy plan --pages-url "$PAGES_URL" --out "$DIR/pending.json" --state-out "$DIR/state" \
+          --ci-workflows "$CI_WORKFLOWS" --report-workflow "$REPORT_WORKFLOW" --deployer-workflow "$DEPLOYER"
+    # One gate for every later step: something is pending and the base is not "wait".
+    - name: Gate
+      id: gate
+      shell: bash
+      env:
+        PENDING: ${{ steps.plan.outputs.pending }}
+        WAIT: ${{ steps.plan.outputs.wait }}
+      run: |
+        if [ "$PENDING" = true ] && [ "$WAIT" != true ]; then
+          echo "go=true" >>"$GITHUB_OUTPUT"
+        else
+          echo "go=false" >>"$GITHUB_OUTPUT"
+        fi
+        if [ "$PENDING" = true ] && [ "$WAIT" = true ]; then
+          echo "::notice::otel-html deploy: the newest deployment is younger than 10 minutes and the live site may still be served stale from the CDN; this pass waits for the next one"
+        fi
+    # Base, by kind. artifact: the last deployment's github-pages tarball.
+    - name: Download the base tarball
+      if: steps.gate.outputs.go == 'true' && steps.plan.outputs.base_kind == 'artifact'
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      with:
+        name: github-pages
+        run-id: ${{ steps.plan.outputs.base_run_id }}
+        github-token: ${{ inputs.token }}
+        path: ${{ steps.resolve.outputs.dir }}/tarball
+    - name: Unpack the base tarball
+      if: steps.gate.outputs.go == 'true' && steps.plan.outputs.base_kind == 'artifact'
+      shell: bash
+      env:
+        DIR: ${{ steps.resolve.outputs.dir }}
+      run: |
+        cd "$DIR"
+        mkdir base
+        tar -xf tarball/artifact.tar -C base
+    # gh-pages: migration from the old publisher. checkout can only write inside the workspace, so the tip is
+    # checked out there and moved to the pass's base folder.
+    - name: Check out the gh-pages branch
+      if: steps.gate.outputs.go == 'true' && steps.plan.outputs.base_kind == 'gh-pages'
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        ref: gh-pages
+        fetch-depth: 1
+        path: otel-html-gh-pages-base
+        token: ${{ inputs.token }}
+        persist-credentials: false
+    - name: Move the gh-pages tip to the base
+      if: steps.gate.outputs.go == 'true' && steps.plan.outputs.base_kind == 'gh-pages'
+      shell: bash
+      env:
+        DIR: ${{ steps.resolve.outputs.dir }}
+      run: |
+        mkdir -p "$DIR"
+        rm -rf otel-html-gh-pages-base/.git
+        mv otel-html-gh-pages-base "$DIR/base"
+    # live: cold start from the live site's site-state/files.json.
+    - name: Fetch the live site
+      if: steps.gate.outputs.go == 'true' && steps.plan.outputs.base_kind == 'live'
+      shell: bash
+      env:
+        CMD: ${{ steps.resolve.outputs.command }}
+        DIR: ${{ steps.resolve.outputs.dir }}
+        PAGES_URL: ${{ steps.pages.outputs.base_url }}
+        GITHUB_TOKEN: ${{ inputs.token }}
+      run: |
+        # shellcheck disable=SC2086
+        $CMD ci deploy fetch-live --pages-url "$PAGES_URL" --out "$DIR/base"
+    - name: Start from an empty site
+      if: steps.gate.outputs.go == 'true' && steps.plan.outputs.base_kind == 'empty'
+      shell: bash
+      env:
+        DIR: ${{ steps.resolve.outputs.dir }}
+      run: mkdir -p "$DIR/base"
+    - name: Fetch the updates
+      if: steps.gate.outputs.go == 'true'
+      shell: bash
+      env:
+        CMD: ${{ steps.resolve.outputs.command }}
+        DIR: ${{ steps.resolve.outputs.dir }}
+        GITHUB_TOKEN: ${{ inputs.token }}
+      run: |
+        # shellcheck disable=SC2086
+        $CMD ci deploy fetch --pending "$DIR/pending.json" --out "$DIR/updates"
+    - name: Apply the updates
+      id: apply
+      if: steps.gate.outputs.go == 'true'
+      shell: bash
+      env:
+        CMD: ${{ steps.resolve.outputs.command }}
+        DIR: ${{ steps.resolve.outputs.dir }}
+        CONFIG: ${{ steps.resolve.outputs.config }}
+        RETENTION: ${{ inputs.retention }}
+        PR_RETENTION: ${{ inputs.pr-retention }}
+        GITHUB_TOKEN: ${{ inputs.token }}
+      run: |
+        args=()
+        # `plan` writes the state folder only when it found a state; apply tolerates a missing --state, so it is
+        # simply left out then.
+        if [ -d "$DIR/state" ]; then args+=(--state "$DIR/state"); fi
+        if [ -n "$CONFIG" ]; then args+=(--config "$CONFIG"); fi
+        # shellcheck disable=SC2086
+        $CMD ci deploy apply --site "$DIR/base" --updates "$DIR/updates" --pending "$DIR/pending.json" \
+          --pass-run-id "$GITHUB_RUN_ID" --retention "$RETENTION" --pr-retention "$PR_RETENTION" "${args[@]}"
+    # The default branch's rolling report is screenshotted after `apply` rebuilt it. A failed install only skips the
+    # screenshots: the pass goes on.
+    - name: Install the preview browser
+      id: browser
+      if: steps.gate.outputs.go == 'true' && inputs.preview == 'true' && steps.apply.outputs.previews != ''
+      continue-on-error: true
+      shell: bash
+      env:
+        DIR: ${{ steps.resolve.outputs.dir }}
+      run: |
+        dir=$DIR/playwright
+        npm install --prefix "$dir" --no-audit --no-fund @playwright/test@1.64.1
+        "$dir/node_modules/.bin/playwright" install --with-deps chromium
+    - name: Screenshot the rolling reports
+      if: steps.gate.outputs.go == 'true' && inputs.preview == 'true' && steps.apply.outputs.previews != ''
+      shell: bash
+      env:
+        DIR: ${{ steps.resolve.outputs.dir }}
+        PREVIEWS: ${{ steps.apply.outputs.previews }}
+        BROWSER: ${{ steps.browser.outcome }}
+        PLAYWRIGHT_FROM: ${{ steps.resolve.outputs.dir }}/playwright/package.json
+      run: |
+        if [ "$BROWSER" != success ]; then
+          echo "::warning::otel-html preview: the browser install failed; no screenshot"
+          exit 0
+        fi
+        IFS=',' read -r -a channels <<<"$PREVIEWS"
+        for channel in "${channels[@]}"; do
+          node "$GITHUB_ACTION_PATH/preview.mjs" "$DIR/base" "$channel" || echo "::warning::otel-html preview: the screenshot command failed (exit $?) for $channel"
+        done
+    # The screenshots are files of the site: its file list is rewritten after them.
+    - name: Rescan the site's files
+      if: steps.gate.outputs.go == 'true'
+      shell: bash
+      env:
+        CMD: ${{ steps.resolve.outputs.command }}
+        DIR: ${{ steps.resolve.outputs.dir }}
+      run: |
+        # shellcheck disable=SC2086
+        $CMD ci deploy scan --site "$DIR/base"
+    # The pass deploys: site, full state, deployment.
+    - name: Upload the site
+      if: steps.gate.outputs.go == 'true' && steps.apply.outputs.deploy == 'true'
+      uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+      with:
+        path: ${{ steps.resolve.outputs.dir }}/base
+        retention-days: ${{ inputs.update-retention-days }}
+    - name: Upload the site state
+      if: steps.gate.outputs.go == 'true' && steps.apply.outputs.deploy == 'true'
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: otel-html-site-state-${{ github.run_id }}
+        path: ${{ steps.resolve.outputs.dir }}/base/site-state/
+        retention-days: ${{ inputs.update-retention-days }}
+        if-no-files-found: error
+    - name: Deploy to GitHub Pages
+      id: deployment
+      if: steps.gate.outputs.go == 'true' && steps.apply.outputs.deploy == 'true'
+      uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+      with:
+        token: ${{ inputs.token }}
+    # The pass consumed updates without changing the site: the state alone, naming the deployment it was built on.
+    - name: Upload the consumed-only site state
+      if: >-
+        steps.gate.outputs.go == 'true' && steps.apply.outputs.deploy != 'true' && steps.apply.outputs.consumed != '0'
+        && steps.plan.outputs.base_deployment_id != ''
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: otel-html-site-state-base-${{ steps.plan.outputs.base_deployment_id }}
+        path: ${{ steps.resolve.outputs.dir }}/base/site-state/
+        retention-days: ${{ inputs.update-retention-days }}
+        if-no-files-found: error
+    # Never marks a live deployment failed. Runs only after the steps above succeeded (the default `success()`), so
+    # a pass whose deploy or state upload failed deletes nothing it consumed.
+    - name: Prune old artifacts
+      if: steps.gate.outputs.go == 'true'
+      continue-on-error: true
+      shell: bash
+      env:
+        CMD: ${{ steps.resolve.outputs.command }}
+        DIR: ${{ steps.resolve.outputs.dir }}
+        KEEP: ${{ inputs.keep-deployments }}
+        GITHUB_TOKEN: ${{ inputs.token }}
+      run: |
+        # shellcheck disable=SC2086
+        $CMD ci deploy prune --site "$DIR/base" --keep "$KEEP"

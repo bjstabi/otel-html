@@ -1,5 +1,7 @@
 name: otel-html collect
-description: "Upload the job's otel-html report. Use it as the job's last step, with if: always()."
+description: >-
+  Upload the job's otel-html report. With publish, also upload the job's partitions as a site update for the Pages
+  deployer and wake it. Use it as the job's last step, with if: always().
 
 inputs:
   name:
@@ -10,10 +12,79 @@ inputs:
   path:
     description: Directory to upload.
     default: .otel-html/
+  publish:
+    description: >-
+      Upload the job's report partitions as an `otel-html-update-push-*` artifact and wake the Pages deployer, so the
+      site shows the job's report while the run goes on. The job needs `actions: write` (the wake-up). A failed step
+      here is a warning, never a failed job.
+    default: "false"
+  deployer-workflow:
+    description: The Pages deployer's workflow file name, dispatched on the default branch.
+    default: pages-deploy.yml
+  command:
+    description: The executable that ran the job (as for setup), for example `node dist/cli/main.js`. Empty uses `otel-html` from the PATH.
+    default: ""
+  config:
+    description: Config file for the CI spans report of the update. Empty uses the tool's defaults.
+    default: ""
+  token:
+    description: "Token for the deployer dispatch. It needs `actions: write`."
+    default: ${{ github.token }}
+
+outputs:
+  update:
+    description: The name of the site update artifact this step wrote; empty without `publish` or when the report had nothing to publish.
+    value: ${{ steps.update.outputs.name }}
 
 runs:
   using: composite
   steps:
+    - name: Write the site update
+      id: update
+      if: inputs.publish == 'true'
+      continue-on-error: true
+      shell: bash
+      env:
+        CMD: ${{ inputs.command || 'otel-html' }}
+        CONFIG: ${{ inputs.config }}
+        COLLECT_PATH: ${{ inputs.path }}
+        GITHUB_TOKEN: ${{ inputs.token }}
+      run: |
+        args=()
+        if [ -n "$CONFIG" ]; then args+=(--config "$CONFIG"); fi
+        # CMD is deliberately unquoted: it may be a command with arguments, such as `node dist/cli/main.js`.
+        # shellcheck disable=SC2086
+        $CMD ci update push --final --report "${COLLECT_PATH%/}/report" --out "$RUNNER_TEMP/otel-html-update" "${args[@]}"
+    - id: upload
+      if: inputs.publish == 'true' && steps.update.outputs.name != ''
+      continue-on-error: true
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: ${{ steps.update.outputs.name }}
+        path: ${{ runner.temp }}/otel-html-update/${{ steps.update.outputs.name }}
+        include-hidden-files: true
+        if-no-files-found: warn
+        retention-days: 90
+        # A re-run of the job reuses the run, and so the name.
+        overwrite: true
+    # Only an upload that succeeded is recorded as shipped: a failed one's partitions ship again.
+    - name: Record the upload and wake the deployer
+      if: inputs.publish == 'true' && steps.update.outputs.name != '' && steps.upload.outcome == 'success'
+      continue-on-error: true
+      shell: bash
+      env:
+        CMD: ${{ inputs.command || 'otel-html' }}
+        NAME: ${{ steps.update.outputs.name }}
+        WORKFLOW: ${{ inputs.deployer-workflow }}
+        COLLECT_PATH: ${{ inputs.path }}
+        GITHUB_TOKEN: ${{ inputs.token }}
+      run: |
+        # Neither command fails the job. CMD is deliberately unquoted: it may be a command with arguments.
+        # shellcheck disable=SC2086
+        $CMD ci update done --name "$NAME" --publish-dir "${COLLECT_PATH%/}/publish" --log "${COLLECT_PATH%/}/publish/pusher.log"
+        # shellcheck disable=SC2086
+        $CMD ci dispatch --workflow "$WORKFLOW"
+    # Last, and after steps that cannot fail the job, so the job's report artifact is always uploaded.
     - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: ${{ inputs.name }}
