@@ -409,9 +409,12 @@ export async function planDeploy(
   };
 
   const consumed = applied?.updates ?? {};
+  // everything below the chosen state's floor is consumed, whatever its pruned `updates` still list
+  const chosenFloorMs = isoOrUndefined(applied?.floor) ?? -Infinity;
   const updates: PendingUpdate[] = [];
   for (const a of listed) {
     if (!a.name.startsWith(UPDATE_PREFIX) || String(a.id) in consumed) continue;
+    if ((isoOrUndefined(a.created_at) ?? Infinity) < chosenFloorMs) continue;
     const parsed = parseUpdateName(a.name);
     if (parsed === undefined) continue;
     const update: PendingUpdate = {

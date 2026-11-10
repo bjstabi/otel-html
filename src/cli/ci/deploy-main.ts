@@ -61,7 +61,8 @@ export async function runDeployPlan(
   );
   for (const u of plan.updates) if (!u.accepted) say(io, `  rejected ${u.name} (${u.id}): ${u.reason}`);
   setOutputs(io, {
-    pending: String(accepted.length > 0 || plan.deletionsDue > 0),
+    // a rejected update is recorded by apply (else it is re-authenticated every pass)
+    pending: String(plan.updates.length > 0 || plan.deletionsDue > 0),
     base_kind: plan.base.kind,
     base_run_id: String(plan.base.runId ?? ''),
     base_artifact_id: String(plan.base.artifactId ?? ''),

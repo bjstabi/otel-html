@@ -417,6 +417,21 @@ describe('planDeploy', () => {
     ).rejects.toThrow(/503/);
   });
 
+  test('an update below the chosen state floor is not a candidate even when its pruned updates lack it', async () => {
+    const routes = await world();
+    const base = stateWith({ kind: 'full', runId: 11 }, ['104']);
+    const consumed = stateWith({ kind: 'consumed', base: 2000 }, ['900']);
+    consumed.applied.floor = '2026-11-10T11:48:30Z';
+    routes[`${R}/actions/artifacts/101/zip`] = zipRoute(await stateZip(base));
+    routes[`${R}/actions/artifacts/102/zip`] = zipRoute(await stateZip(consumed));
+    const plan = await planDeploy(opts(), { fs: createMemoryFileSystem() }, 'tok', fake(routes).fetchFn);
+    expect(plan.state).toEqual({ kind: 'consumed', base: 2000 });
+    const ids = plan.updates.map((u) => u.id);
+    expect(ids).toContain(103);
+    expect(ids).not.toContain(104);
+    expect(ids).not.toContain(105);
+  });
+
   test('a run that cannot be found rejects its updates; another API failure fails the pass', async () => {
     const routes = await world();
     routes[`${R}/actions/runs/30`] = missing;
@@ -649,7 +664,7 @@ describe('runDeployPlan', () => {
     expect(text).toContain('base_run_id=\n');
   });
 
-  test('with no accepted update and no deletion due, pending=false: the action downloads nothing', async () => {
+  test('a rejected update with nothing accepted still sets pending=true: apply records the rejection', async () => {
     const { fetchFn } = fake({
       [R]: json({ default_branch: 'main' }),
       ...deployments(),
@@ -679,6 +694,6 @@ describe('runDeployPlan', () => {
     );
     expect(plan.updates.map((u) => [u.id, u.accepted])).toEqual([[300, false]]);
     expect(plan.deletionsDue).toBe(0);
-    expect(readFileSync(outputs, 'utf8')).toContain('pending=false');
+    expect(readFileSync(outputs, 'utf8')).toContain('pending=true');
   });
 });
