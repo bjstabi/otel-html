@@ -397,13 +397,15 @@ describe('App refresh (D55)', () => {
       );
       renderApp(refresh);
       await screen.findByRole('button', { name: 'Refresh' });
-      await act(async () => vi.advanceTimersByTime(60_000));
+      // findBy resolves on the DOM commit; the poll's interval is made by a passive effect that may not have run yet.
+      await act(async () => undefined);
+      await act(async () => vi.advanceTimersByTimeAsync(60_000));
       expect(refresh).toHaveBeenCalledTimes(1);
-      await act(async () => vi.advanceTimersByTime(120_000));
+      await act(async () => vi.advanceTimersByTimeAsync(120_000));
       fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
       expect(refresh).toHaveBeenCalledTimes(1);
       await act(async () => finish(dataSourceOf(growing)));
-      await act(async () => vi.advanceTimersByTime(60_000));
+      await act(async () => vi.advanceTimersByTimeAsync(60_000));
       expect(refresh).toHaveBeenCalledTimes(2);
     } finally {
       window.sessionStorage.clear();
