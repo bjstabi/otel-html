@@ -1,0 +1,110 @@
+name: pages-deploy
+
+# The only writer of the GitHub Pages site. Jobs upload site updates as artifacts (ci.yml, load.yml, ci-report.yml) and
+# wake this workflow; one pass applies every pending update to the last deployed site and deploys the result.
+#
+# Runs from the default branch's code. Triggers: a dispatch from a job, the end of a ci-report run, and a five-minute
+# tick (best-effort, and the only wake-up for forks and bot branches, which cannot dispatch).
+#
+# Never re-run it: the artifact API does not say which attempt uploaded an artifact, so a re-run of a run that once
+# deployed could leave state and a site that never went live inside a run that "made the deployment". A dispatch or the
+# tick starts a fresh run.
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: [ci-report]
+    types: [completed]
+  schedule:
+    - cron: "*/5 * * * *"
+
+permissions: {}
+
+env:
+  # `claude` in mise.toml is a developer tool; CI never needs it.
+  MISE_DISABLE_TOOLS: claude
+
+jobs:
+  # Cheap, outside any concurrency group, never cancelled by a burst: is anything pending?
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      # Artifacts, runs and jobs of this repository.
+      actions: read
+      # The last successful deployment.
+      deployments: read
+      # configure-pages reads the site's URL.
+      pages: read
+      # The checkout.
+      contents: read
+    outputs:
+      pending: ${{ steps.plan.outputs.pending }}
+    steps:
+      - name: Refuse a re-run
+        if: github.run_attempt > 1
+        run: |
+          echo "::error::pages-deploy must not be re-run (run attempt ${{ github.run_attempt }}): the artifact API does not say which attempt uploaded an artifact, so a re-run of a run that once deployed could leave state and a site that never went live inside a run that made the deployment. Dispatch a new run instead."
+          exit 1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - run: mise run build
+      - id: pages
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+      - id: plan
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PAGES_URL: ${{ steps.pages.outputs.base_url }}
+        run: |
+          node dist/cli/main.js ci deploy plan --pages-url "$PAGES_URL" --out "$RUNNER_TEMP/plan/pending.json" \
+            --state-out "$RUNNER_TEMP/plan/state" --ci-workflows ci.yml,load.yml --report-workflow ci-report.yml \
+            --deployer-workflow pages-deploy.yml
+
+  # One pass at a time. A pending deploy that GitHub cancels in favour of a newer one loses nothing: the newer one lists
+  # everything pending, the cancelled one's updates included.
+  deploy:
+    needs: plan
+    if: needs.plan.outputs.pending == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    permissions:
+      # The checkout, and the migration's gh-pages read.
+      contents: read
+      # Downloading update artifacts, pruning artifacts.
+      actions: write
+      # Finding the last successful deployment.
+      deployments: read
+      pages: write
+      id-token: write
+    steps:
+      - name: Refuse a re-run
+        if: github.run_attempt > 1
+        run: |
+          echo "::error::pages-deploy must not be re-run (run attempt ${{ github.run_attempt }}): 're-run failed jobs' would re-run this job alone with the plan job's old outputs, and the artifact API does not say which attempt uploaded an artifact. Dispatch a new run instead."
+          exit 1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - run: mise run build
+      - id: config
+        run: |
+          if [ -f .github/otel-html-ci.yaml ]; then
+            echo "config=.github/otel-html-ci.yaml" >> "$GITHUB_OUTPUT"
+          fi
+      - id: deploy
+        uses: ./.github/actions/otel-html-deploy
+        with:
+          command: node dist/cli/main.js
+          config: ${{ steps.config.outputs.config }}
+          preview: true
+          ci-workflows: ci.yml,load.yml

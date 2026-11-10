@@ -16,7 +16,7 @@ import { inflateSync } from 'node:zlib';
 import { reportDir } from './fixture.js';
 import { expect, test } from './test.js';
 
-const SCRIPT = fileURLToPath(new URL('../.github/actions/otel-html-publish/preview.mjs', import.meta.url));
+const SCRIPT = fileURLToPath(new URL('../.github/actions/otel-html-deploy/preview.mjs', import.meta.url));
 const PACKAGE_JSON = fileURLToPath(new URL('../package.json', import.meta.url));
 
 const CLI = fileURLToPath(new URL('../dist/cli/main.js', import.meta.url));
