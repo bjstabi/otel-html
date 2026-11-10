@@ -40,12 +40,40 @@ describe('createDomScriptLoader', () => {
   test('injects a classic script and resolves with the registered payload', async () => {
     const { loader, script } = setup();
     const p = loader.load('data/chunks/spans/000000.js', 'chunks/spans/000000');
-    expect(script().getAttribute('src')).toBe('data/chunks/spans/000000.js');
-    expect(script().type).toBe('');
+    const injected = script();
+    expect(injected.getAttribute('src')).toBe('data/chunks/spans/000000.js');
+    expect(injected.type).toBe('');
     window.__OH__?.push('chunks/spans/000000', { n: 1 });
     await Promise.resolve(); // the browser fires `load` as a later task
-    script().dispatchEvent(new Event('load'));
+    injected.dispatchEvent(new Event('load'));
     expect(await p).toEqual({ n: 1 });
+  });
+
+  test('removes its script element once the load settles, on success and on failure', async () => {
+    const { loader, script } = setup();
+    const ok = loader.load('data/a.js', 'a');
+    const injected = script();
+    window.__OH__?.push('a', 1);
+    await ok;
+    injected.dispatchEvent(new Event('load'));
+    expect(document.querySelectorAll('script')).toHaveLength(0);
+    const bad = rejection(loader.load('data/b.js', 'b'));
+    script().dispatchEvent(new Event('error'));
+    await bad;
+    expect(document.querySelectorAll('script')).toHaveLength(0);
+  });
+
+  test('a payload pushed by an earlier, timed-out load is not taken by the next load of the key', async () => {
+    vi.useFakeTimers();
+    const { loader } = setup();
+    const first = rejection(loader.load('data/manifest.js?r=1', 'manifest'));
+    await vi.advanceTimersByTimeAsync(SCRIPT_TIMEOUT_MS);
+    await first;
+    window.__OH__?.push('manifest', { old: true }); // the late script of the first load
+    // the late payload had no waiter: it was kept, and the next load must not take it
+    const second = loader.load('data/manifest.js?r=2', 'manifest');
+    window.__OH__?.push('manifest', { fresh: true });
+    expect(await second).toEqual({ fresh: true });
   });
 
   test('a load error rejects with invalid-report naming the path', async () => {

@@ -23,8 +23,10 @@ export function createDomScriptLoader(doc: Document, registry: Registry): Script
         const script = doc.createElement('script');
         let timer: ReturnType<typeof setTimeout> | undefined;
         let settled = false;
+        const abandoned = new AbortController();
         const fail = (actual: string): void => {
           settled = true;
+          abandoned.abort(); // a script that runs after this registers into a registry nobody waits on
           clearTimeout(timer);
           script.remove();
           reject(failure(path, actual));
@@ -35,9 +37,12 @@ export function createDomScriptLoader(doc: Document, registry: Registry): Script
         script.addEventListener('load', () => {
           if (!settled) fail(`the script ran but did not register "${key}"`);
         });
-        registry.take(key).then((payload) => {
+        // A payload left by the late script of an earlier load of this key is not this load's.
+        registry.discard(key);
+        registry.take(key, abandoned.signal).then((payload) => {
           settled = true;
           clearTimeout(timer);
+          script.remove();
           resolve(payload);
         }, reject);
         script.src = path;
