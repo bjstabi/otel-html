@@ -220,7 +220,8 @@ export async function applyUpdates(o: ApplyOptions, deps: WriterDeps, io: CliIo)
   const warn = (m: string): void => warning(io, 'deploy', m);
 
   // (1) the state
-  if (o.state !== undefined) await replaceStateDir(fs, o.state, stateDir);
+  // an absent --state folder (the plan found no state to write) keeps the base's own site-state/
+  if (o.state !== undefined && (await fs.exists(o.state))) await replaceStateDir(fs, o.state, stateDir);
   const state = await readSiteState(fs, stateDir, warn);
   const consumedBefore = new Set(Object.keys(state.applied.updates));
   const { pending } = o;

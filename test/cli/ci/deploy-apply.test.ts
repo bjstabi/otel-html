@@ -753,6 +753,15 @@ describe('the pass', () => {
     });
   });
 
+  test('a --state folder that does not exist leaves the base site-state in place', async () => {
+    const first = await apply([addPush({ sequence: 1, parts: [['job:7#flush:0', 0, true]] })]);
+    expect(first.changed).toBe(true);
+    const before = readFileSync(join(site, 'site-state/applied.json'), 'utf8');
+    const again = await apply([], { state: join(dir, 'no-such-state'), passRunId: 101 });
+    expect(again.consumed).toBe(0);
+    expect(readFileSync(join(site, 'site-state/applied.json'), 'utf8')).toBe(before);
+  });
+
   test('--trust-updates applies update folders without pending.json entries', async () => {
     const a = push({ sequence: 1, job: 7, parts: [['job:7#flush:0', 0, true]] });
     const b = push({ sequence: 1, job: 8, parts: [['job:8#flush:0', 1, true]] });
