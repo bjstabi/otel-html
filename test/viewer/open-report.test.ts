@@ -25,6 +25,7 @@ import {
   type OpenDeps,
   type OpenParts,
   openReport,
+  openReportRefreshable,
 } from '../../src/viewer/data/open-report.js';
 import type { QueryEngine } from '../../src/viewer/data/query-engine.js';
 
@@ -181,10 +182,27 @@ describe('openReport over a host', () => {
     expect(source.querySpans).toHaveBeenCalledOnce();
   });
 
+  test('openReportRefreshable gives a served report no refresh (#246)', async () => {
+    const { hostDeps, source } = hosted();
+    const opened = await openReportRefreshable(manifest4(), hostDeps, () => undefined);
+    expect(opened.refresh).toBeNull();
+    expect(await opened.dataSource.querySpans({} as never)).toEqual({ rows: [1] });
+    expect(source.querySpans).toHaveBeenCalledOnce();
+  });
+
   test('a format-3 manifest still fails the D12 gate', async () => {
     const { hostDeps, createRestEngine } = hosted();
     await expect(openReport(manifest3, hostDeps, () => undefined)).rejects.toThrow('format 3');
     expect(createRestEngine).not.toHaveBeenCalled();
+  });
+});
+
+describe('openReportRefreshable', () => {
+  test('a report with an engine in the page gets a refresh function; openReport returns the same data source kind', async () => {
+    const { deps } = setup();
+    const opened = await openReportRefreshable(manifest4(), deps, () => undefined);
+    expect(opened.refresh).toBeInstanceOf(Function);
+    expect(await opened.dataSource.querySpans({} as never)).toEqual({ rows: [1] });
   });
 });
 

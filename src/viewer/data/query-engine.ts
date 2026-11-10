@@ -14,6 +14,8 @@ export interface QueryEngine {
   exec(sql: string): Promise<void>;
   /** Registers a text file a later statement reads (D5: `read_csv`). */
   registerText(name: string, text: string): Promise<void>;
+  /** Forgets every cached result; after a Refresh replaced the registered files (D55). Clients and queued queries stay. */
+  clearCache(): void;
   close(): Promise<void>;
 }
 

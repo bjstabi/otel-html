@@ -251,3 +251,15 @@ test('restQueryEngine refuses temp tables and DDL, close resolves, abort rejects
   expect(f.calls).toHaveLength(0);
   await expect(qe.close()).resolves.toBeUndefined();
 });
+
+test('clearCache forgets cached results: the same query reaches the connector again', async () => {
+  const connector = fakeConnector({ n: [1n] });
+  const qe = mosaicQueryEngine(createCoordinator(connector, silentLogger), fakeFiles());
+  const q = Query.from('spans').select({ n: count() });
+  await qe.query(q);
+  await qe.query(q);
+  const cached = connector.requests.length;
+  qe.clearCache();
+  await qe.query(q);
+  expect(connector.requests.length).toBe(cached + 1);
+});

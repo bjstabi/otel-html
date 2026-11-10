@@ -16,6 +16,7 @@ function recorder(): { engine: QueryEngine; texts: Map<string, string>; statemen
       texts.set(name, text);
       return Promise.resolve();
     },
+    clearCache() {},
     close: () => Promise.resolve(),
   };
   return { engine, texts, statements };

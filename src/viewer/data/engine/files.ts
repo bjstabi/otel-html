@@ -13,24 +13,34 @@ export interface RegisterProgress {
 
 const LOCAL_CONCURRENCY = 4;
 
-/**
- * Registers every file the manifest lists under its manifest path (`data/partitions/<p6>/<table>.parquet`) and runs
- * `viewStatements(manifest, (p) => p)`. site: by URL with range reads; local: from the base64 wrappers, four loads in
- * flight at a time, `onProgress` after each file.
- */
-export async function registerPartitions(
-  engine: Engine,
-  manifest: ManifestV4,
-  deps: Pick<EngineDeps, 'loader' | 'baseUrl'>,
-  onProgress?: (p: RegisterProgress) => void,
-): Promise<void> {
-  const entries = manifest.partitions.flatMap((partition) =>
+export interface FileEntry {
+  n: number;
+  table: Table;
+  /** The manifest path (`data/partitions/<p6>/<table>.parquet`), the name the file is registered under. */
+  path: string;
+}
+
+/** The files a manifest lists, in manifest order. */
+export function manifestFiles(manifest: ManifestV4): FileEntry[] {
+  return manifest.partitions.flatMap((partition) =>
     Object.entries(partition.files).map(([table, file]) => ({
       n: partition.n,
       table: table as Table,
       path: file.path,
     })),
   );
+}
+
+/**
+ * Registers `entries` under their manifest paths. site: by URL with range reads; local: from the base64 wrappers,
+ * four loads in flight at a time. `onProgress` after each file (once with 0 of 0 when there are none).
+ */
+export async function registerFiles(
+  engine: Engine,
+  entries: readonly FileEntry[],
+  deps: Pick<EngineDeps, 'loader' | 'baseUrl'>,
+  onProgress?: (p: RegisterProgress) => void,
+): Promise<void> {
   const total = entries.length;
   let done = 0;
   const finish = (): void => {
@@ -66,5 +76,25 @@ export async function registerPartitions(
     };
     await Promise.all(Array.from({ length: Math.min(LOCAL_CONCURRENCY, total) }, worker));
   }
+}
+
+/** Forgets the files registered under `paths` (the engine releases a URL file or a buffer). */
+export async function dropFiles(engine: Engine, paths: readonly string[]): Promise<void> {
+  for (const path of paths) await engine.db.dropFile(path);
+}
+
+/** (Re)creates the views over the manifest's files: `viewStatements(manifest, (p) => p)`. */
+export async function createViews(engine: Engine, manifest: ManifestV4): Promise<void> {
   for (const statement of viewStatements(manifest, (p) => p)) await engine.connection.query(statement);
+}
+
+/** Registers every file the manifest lists, then creates the views. */
+export async function registerPartitions(
+  engine: Engine,
+  manifest: ManifestV4,
+  deps: Pick<EngineDeps, 'loader' | 'baseUrl'>,
+  onProgress?: (p: RegisterProgress) => void,
+): Promise<void> {
+  await registerFiles(engine, manifestFiles(manifest), deps, onProgress);
+  await createViews(engine, manifest);
 }

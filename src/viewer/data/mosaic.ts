@@ -71,7 +71,8 @@ function engineFailure(
  * manager (a query waiting in the consolidator, or already running, is not cancelled: its result is discarded); the
  * generated SQL is attached to a failure as an `invalid-report` `OtelHtmlError` (its hint). `exec` sends
  * `{ type: 'exec', sql }` through the coordinator (so its cache sees the DDL); `registerText` and `close` delegate to
- * `files`. `tempTables` (default true) is what the engine reports on the seam; the served path passes false (D43).
+ * `files`. `clearCache` is `coordinator.clear({ clients: false, cache: true })`, which empties the query cache and
+ * (mosaic-core's `manager.clear()`) rejects what is still queued. `tempTables` (default true) is what the engine reports on the seam; the served path passes false (D43).
  * `describe`, when given, words a failure's `actual` (undefined keeps the error's own message).
  */
 export function mosaicQueryEngine(
@@ -114,6 +115,9 @@ export function mosaicQueryEngine(
     },
     async registerText(name: string, text: string): Promise<void> {
       await files.registerText(name, text);
+    },
+    clearCache(): void {
+      coordinator.clear({ clients: false, cache: true });
     },
     async close(): Promise<void> {
       // reject queued queries before the worker goes away
