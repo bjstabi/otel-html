@@ -406,6 +406,31 @@ describe('run', () => {
     expect(await w.fs.exists('out')).toBe(false);
   });
 
+  test('--export-otlp with the grpc protocol is a usage error naming the follow-up, before anything starts', async () => {
+    const w = createTestWriter();
+    const h = start(
+      w,
+      [
+        'run',
+        '-o',
+        'out',
+        '--grpc',
+        '0',
+        '--no-http',
+        '--export-otlp',
+        'http://127.0.0.1:1',
+        '--',
+        process.execPath,
+        '-e',
+        '0',
+      ],
+      { OTEL_EXPORTER_OTLP_PROTOCOL: 'grpc' },
+    );
+    expect(await h.result).toBe(2);
+    expect(h.stderr).toContain('issues/259');
+    expect(await w.fs.exists('out')).toBe(false);
+  });
+
   test('an unknown protocol is a usage error before anything starts', async () => {
     const w = createTestWriter();
     const h = start(w, ['run', '-o', 'out', '--http', '0', '--no-grpc', '--', process.execPath, '-e', '0'], {

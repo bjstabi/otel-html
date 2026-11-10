@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { createServer as createHttpServer } from 'node:http';
 import { createServer, type Server } from 'node:net';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import type { CliIo, StopSignal } from '../../src/cli/io.js';
@@ -15,7 +16,13 @@ interface Harness {
   result: Promise<number>;
 }
 
-function start(w: TestWriter, argv: readonly string[], fs?: FileSystem, extra: CliDeps = {}): Harness {
+function start(
+  w: TestWriter,
+  argv: readonly string[],
+  fs?: FileSystem,
+  extra: CliDeps = {},
+  env: Record<string, string> = {},
+): Harness {
   const handlers = new Set<(s: StopSignal) => void>();
   const h: Harness = {
     stdout: '',
@@ -32,7 +39,7 @@ function start(w: TestWriter, argv: readonly string[], fs?: FileSystem, extra: C
     stderr: (s) => {
       h.stderr += s;
     },
-    env: {},
+    env,
     cwd: '/work',
     signals: {
       on(fn) {
@@ -78,6 +85,81 @@ afterEach(async () => {
 });
 
 describe('serve', () => {
+  test('--export-otlp forwards an accepted request to the collector with the configured headers', async () => {
+    const received: { url: string; auth: string | undefined; type: string | undefined; bytes: number }[] = [];
+    const collector = createHttpServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (c: Buffer) => chunks.push(c));
+      req.on('end', () => {
+        received.push({
+          url: req.url ?? '',
+          auth: req.headers.authorization,
+          type: req.headers['content-type'],
+          bytes: Buffer.concat(chunks).length,
+        });
+        res.end('{}');
+      });
+    });
+    await new Promise<void>((r) => collector.listen(0, '127.0.0.1', r));
+    const address = collector.address();
+    if (address === null || typeof address === 'string') throw new Error('no port');
+    try {
+      const w = createTestWriter();
+      const h = start(
+        w,
+        [
+          'serve',
+          '-o',
+          'out',
+          '--http',
+          '0',
+          '--no-grpc',
+          '--export-otlp',
+          `http://127.0.0.1:${address.port}`,
+        ],
+        undefined,
+        {},
+        { OTEL_EXPORTER_OTLP_HEADERS: 'authorization=Bearer%20t' },
+      );
+      open.push(h);
+      expect(await post(httpOf(await listening(h)), 1)).toBe(200);
+      h.fire('SIGINT');
+      expect(await h.result).toBe(0);
+      expect(received).toHaveLength(1);
+      expect(received[0]).toMatchObject({ url: '/v1/traces', auth: 'Bearer t', type: 'application/json' });
+      expect(h.stdout).toContain('forwarded 1, dropped 0, failed 0\n');
+    } finally {
+      await new Promise((r) => collector.close(r));
+    }
+  });
+
+  test('--export-otlp with OTEL_EXPORTER_OTLP_PROTOCOL=grpc is a usage error naming the follow-up', async () => {
+    const w = createTestWriter();
+    const h = start(
+      w,
+      ['serve', '-o', 'out', '--http', '0', '--no-grpc', '--export-otlp', 'http://127.0.0.1:1'],
+      undefined,
+      {},
+      { OTEL_EXPORTER_OTLP_PROTOCOL: 'grpc' },
+    );
+    expect(await h.result).toBe(2);
+    expect(h.stderr).toContain('issues/259');
+    expect(await w.fs.exists('out')).toBe(false);
+  });
+
+  test('a malformed OTEL_EXPORTER_OTLP_HEADERS is a usage error', async () => {
+    const w = createTestWriter();
+    const h = start(
+      w,
+      ['serve', '-o', 'out', '--http', '0', '--no-grpc', '--export-otlp', 'http://127.0.0.1:1'],
+      undefined,
+      {},
+      { OTEL_EXPORTER_OTLP_HEADERS: 'nonsense' },
+    );
+    expect(await h.result).toBe(2);
+    expect(h.stderr).toContain('OTEL_EXPORTER_OTLP_HEADERS');
+  });
+
   test('receives until SIGINT, then finishes the report and prints the totals', async () => {
     const w = createTestWriter();
     const h = start(w, ['serve', '-o', 'out', '--http', '0', '--grpc', '0']);
