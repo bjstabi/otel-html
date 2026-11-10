@@ -150,6 +150,9 @@ const WriterSchema = z
   })
   .prefault({});
 
+/** http(s), a host without userinfo, and a path with no query or fragment. */
+const EXPORT_URL_RE = /^https?:\/\/[^\s/?#@]+(\/[^\s?#]*)?$/;
+
 const port = z.number().int().min(0).max(65535);
 
 const ReceiverSchema = z
@@ -162,9 +165,9 @@ const ReceiverSchema = z
     exportOtlp: z
       .string()
       .url()
-      .refine(
-        (u) => /^https?:\/\//.test(u) && !/[?#]/.test(u),
-        'an http(s) base URL without a query or fragment',
+      .regex(
+        EXPORT_URL_RE,
+        'an http(s) base URL without a query, a fragment or credentials (put credentials in OTEL_EXPORTER_OTLP_HEADERS)',
       )
       .optional(),
   })

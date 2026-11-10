@@ -38,7 +38,7 @@ export interface ReceiverStats {
   refused: Record<Outcome, number>;
   /** Accepted requests the forwarder posted to the collector (0 without one). */
   forwarded: number;
-  /** Accepted requests the forwarder dropped because its queue was full. */
+  /** Requests the forwarder did not queue: the queue was full, the body exceeded its byte bound, or it had closed. */
   forwardDropped: number;
   /** Accepted requests the forwarder could not deliver. */
   forwardFailed: number;
@@ -46,7 +46,7 @@ export interface ReceiverStats {
 
 export interface ReceiverOptions {
   inflightBudgetBytes: number;
-  /** Receives every accepted request's body once it is written; closed with the receiver. */
+  /** Receives every accepted request's body once it is written. The caller closes it, after the listeners are closed. */
   forwarder?: Forwarder;
 }
 
@@ -284,7 +284,6 @@ export function createReceiver(
     async close() {
       closed = true;
       await tail;
-      await forwarder?.close();
     },
   };
 }

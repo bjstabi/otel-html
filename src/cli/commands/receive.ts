@@ -42,11 +42,13 @@ export interface ReceiveFlags extends ReceiverFlags {
 export interface OpenReceiver {
   report: Report;
   receiver: RunningReceiver;
-  /** Whether requests are forwarded to a collector, so the totals say how that went. */
-  forwarding: boolean;
+  /** Set when requests are forwarded to a collector; `finishReceiver` closes it after the report's last additions. */
+  forwarder?: Forwarder;
 }
 
 /** gRPC fan-out is a follow-up; asking for it with forwarding configured is refused rather than silently sent as HTTP. */
+const FORWARDABLE_PROTOCOLS: readonly string[] = ['http/protobuf', 'http/json'];
+
 const GRPC_FANOUT_ISSUE = 'https://github.com/bjstabi/otel-html/issues/259';
 
 /**
@@ -71,10 +73,13 @@ export async function openReceiver(
   }
   const exportOtlp = config.receiver.exportOtlp;
   const { OTEL_EXPORTER_OTLP_PROTOCOL: protocol, OTEL_EXPORTER_OTLP_HEADERS: headerText } = io.env;
-  if (exportOtlp !== undefined && protocol === 'grpc') {
+  if (exportOtlp !== undefined && protocol !== undefined && !FORWARDABLE_PROTOCOLS.includes(protocol)) {
+    const grpc = protocol === 'grpc';
     throw new OtelHtmlError('usage', {
-      message: 'forwarding over gRPC is not supported: OTEL_EXPORTER_OTLP_PROTOCOL=grpc with --export-otlp',
-      hint: `use http/protobuf or http/json (gRPC fan-out is tracked in ${GRPC_FANOUT_ISSUE})`,
+      message: grpc
+        ? 'forwarding over gRPC is not supported: OTEL_EXPORTER_OTLP_PROTOCOL=grpc with --export-otlp / receiver.exportOtlp'
+        : `OTEL_EXPORTER_OTLP_PROTOCOL=${protocol} cannot be combined with --export-otlp / receiver.exportOtlp`,
+      hint: `use http/protobuf or http/json${grpc ? ` (gRPC fan-out is tracked in ${GRPC_FANOUT_ISSUE})` : ''}`,
     });
   }
   const headers = exportOtlp === undefined ? {} : parseOtlpHeaders(headerText);
@@ -108,7 +113,7 @@ export async function openReceiver(
     starting = startReceiverWith(report, { ...overrides, ...(forwarder === undefined ? {} : { forwarder }) });
     starting.catch(() => undefined);
     const receiver = await Promise.race([starting, interrupted]);
-    return { report, receiver, forwarding: forwarder !== undefined };
+    return { report, receiver, ...(forwarder === undefined ? {} : { forwarder }) };
   } catch (e) {
     // Whatever the start leaves behind once it settles: its bound ports and the report's lock.
     const cleanup = (async () => {
@@ -148,7 +153,7 @@ export function nextSignal(io: CliIo): { signalled: Promise<void>; cancel: () =>
  */
 export async function finishReceiver(
   io: CliIo,
-  { report, receiver, forwarding }: OpenReceiver,
+  { report, receiver, forwarder }: OpenReceiver,
   beforeClose: () => Promise<void> = async () => undefined,
 ): Promise<void> {
   const again = nextSignal(io);
@@ -160,6 +165,7 @@ export async function finishReceiver(
     try {
       await receiver.close();
       await beforeClose();
+      await forwarder?.close(); // after the listeners are closed and the last additions are queued
       return await report.close();
     } catch (e) {
       await report.abort().catch(() => undefined);
@@ -173,7 +179,7 @@ export async function finishReceiver(
   } finally {
     again.cancel();
   }
-  io.stdout(`${describeSummary(summary)}${receivedLines(receiver.stats(), forwarding)}`);
+  io.stdout(`${describeSummary(summary)}${receivedLines(receiver.stats(), forwarder !== undefined)}`);
 }
 
 /**

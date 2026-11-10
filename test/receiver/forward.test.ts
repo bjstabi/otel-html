@@ -86,6 +86,21 @@ describe('secrets', () => {
 });
 
 describe('createForwarder', () => {
+  test('a body larger than the byte bound is dropped with one warning', () => {
+    const { logger, warns } = loggerOf();
+    const f = createForwarder({
+      endpoint: 'http://c',
+      headers: {},
+      maxQueuedBytes: 5,
+      fetchFn: never,
+      logger,
+    });
+    f.enqueue('traces', new Uint8Array(6), 'protobuf');
+    f.enqueue('traces', new Uint8Array(7), 'protobuf');
+    expect(f.stats().dropped).toBe(2);
+    expect(warns).toHaveLength(1);
+    expect(warns[0]).toContain('larger');
+  });
   test('close does not hang on a response body that cannot be cancelled', async () => {
     vi.useFakeTimers();
     const body = new ReadableStream({ cancel: () => new Promise(() => undefined) });

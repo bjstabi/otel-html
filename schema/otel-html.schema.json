@@ -184,7 +184,7 @@
         },
         "exportOtlp": {
           "type": "string",
-          "format": "uri"
+          "pattern": "^https?:\\/\\/[^\\s/?#@]+(\\/[^\\s?#]*)?$"
         }
       },
       "additionalProperties": false

@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest';
+import { writeJsonSchema } from '../../src/config/json-schema.js';
 import { resolveConfig } from '../../src/config/resolve.js';
 import { ConfigSchema } from '../../src/config/schema.js';
 
@@ -19,6 +20,18 @@ describe('receiver config', () => {
       expect(ConfigSchema.safeParse({ receiver: { exportOtlp: url } }).success).toBe(false);
     },
   );
+
+  test('userinfo in receiver.exportOtlp is refused and the message points at the headers variable', () => {
+    const r = ConfigSchema.safeParse({ receiver: { exportOtlp: 'http://user:pw@c:4318' } });
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error.issues[0]?.message).toContain('OTEL_EXPORTER_OTLP_HEADERS');
+  });
+
+  test('the committed JSON schema carries the URL rule as a pattern', () => {
+    const schema: unknown = JSON.parse(writeJsonSchema());
+    const rule = JSON.stringify(schema).match(/"exportOtlp":\{[^}]*\}/)?.[0] ?? '';
+    expect(rule).toContain('"pattern"');
+  });
 
   test.each(['http://c:4318', 'https://c/base/'])('receiver.exportOtlp %s is accepted', (url) => {
     expect(ConfigSchema.parse({ receiver: { exportOtlp: url } }).receiver.exportOtlp).toBe(url);

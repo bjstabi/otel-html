@@ -100,6 +100,7 @@ export function createForwarder(o: ForwarderOptions): Forwarder {
   let sending: Promise<void> | null = null;
   let closing: Promise<void> | null = null;
   let warned = false;
+  let warnedOversize = false;
   const abandon = new AbortController();
 
   function fail(reason: string): void {
@@ -150,6 +151,16 @@ export function createForwarder(o: ForwarderOptions): Forwarder {
 
   return {
     enqueue(signal, body, encoding) {
+      if (body.length > maxBytes && !warnedOversize) {
+        warnedOversize = true;
+        o.logger.warn(
+          'a request larger than the forwarding queue was not forwarded; further ones are counted',
+          {
+            bytes: body.length,
+            limit: maxBytes,
+          },
+        );
+      }
       if (closing !== null || held >= maxQueued || heldBytes + body.length > maxBytes) {
         totals.dropped++;
         return;

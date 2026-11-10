@@ -206,6 +206,7 @@ describe('OTLP/gRPC transport', () => {
     const { err } = await call(clientFor(address), body);
     expect(err).toBeNull();
     await receiver.close();
+    await forwarder.close();
     expect(posted).toHaveLength(1);
     expect(posted[0]?.type).toBe('application/x-protobuf');
     expect(posted[0]?.body).toEqual(body);

@@ -145,6 +145,7 @@ describe('createReceiver', () => {
     const r = await receive(receiver, 'traces', body, 'protobuf', 'otlp/grpc');
     expect(r.rejected).toBe(1);
     await receiver.close();
+    await forwarder.close();
     expect(posted).toEqual(['http://c/v1/traces']);
     expect(receiver.stats().forwarded).toBe(1);
   });
@@ -166,6 +167,7 @@ describe('createReceiver', () => {
     await receive(receiver, 'traces', encode(twoEntryTraces()), 'json', 'otlp/http');
     await failure(receive(receiver, 'traces', encode('not json'), 'json', 'otlp/http'));
     await receiver.close();
+    await forwarder.close();
     expect(posted).toEqual(['http://c/v1/traces']);
     expect(receiver.stats()).toMatchObject({ forwarded: 1, forwardDropped: 0, forwardFailed: 0 });
   });
