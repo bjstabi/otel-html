@@ -44,7 +44,8 @@ jobs:
 
   # The actions as built from this branch (D67): the `ci update`, `ci dispatch` and `ci deploy` commands exist only on the
   # branch until a release ships them. The job shell is the built CLI, as in ci.yml. The dispatch logs a 404 until
-  # pages-deploy.yml is on the default branch, and never fails the job.
+  # pages-deploy.yml is on the default branch, and never fails the job. The deployer rejects these updates (this workflow is
+  # not one of its ci-workflows) but still runs one extra pass for them.
   publish:
     strategy:
       fail-fast: false
@@ -74,6 +75,7 @@ jobs:
         shell: bash
         run: test -f .otel-html/report/data/manifest.js
       - if: always()
+        id: collect
         uses: ./.github/actions/otel-html-collect
         with:
           name: otel-html-smoke-publish-${{ matrix.os }}
@@ -83,6 +85,8 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          UPDATE: ${{ steps.collect.outputs.update }}
         run: |
-          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" --paginate --jq '.artifacts[].name' |
-            grep -q '^otel-html-update-push-'
+          test -n "$UPDATE"
+          names=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" --paginate --jq '.artifacts[].name')
+          grep -qxF "$UPDATE" <<<"$names"

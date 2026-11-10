@@ -31,12 +31,18 @@ inputs:
     description: "Token for the deployer dispatch. It needs `actions: write`."
     default: ${{ github.token }}
 
+outputs:
+  update:
+    description: The name of the site update artifact this step wrote; empty without `publish` or when the report had nothing to publish.
+    value: ${{ steps.update.outputs.name }}
+
 runs:
   using: composite
   steps:
     - name: Write the site update
       id: update
       if: inputs.publish == 'true'
+      continue-on-error: true
       shell: bash
       env:
         CMD: ${{ inputs.command || 'otel-html' }}
@@ -49,6 +55,7 @@ runs:
         # shellcheck disable=SC2086
         $CMD ci update push --final --report .otel-html/report --out "$RUNNER_TEMP/otel-html-update" "${args[@]}"
     - if: inputs.publish == 'true' && steps.update.outputs.name != ''
+      continue-on-error: true
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: ${{ steps.update.outputs.name }}
@@ -60,6 +67,7 @@ runs:
         overwrite: true
     - name: Record the upload and wake the deployer
       if: inputs.publish == 'true' && steps.update.outputs.name != ''
+      continue-on-error: true
       shell: bash
       env:
         CMD: ${{ inputs.command || 'otel-html' }}
@@ -72,6 +80,7 @@ runs:
         $CMD ci update done --name "$NAME" --log .otel-html/publish/pusher.log
         # shellcheck disable=SC2086
         $CMD ci dispatch --workflow "$WORKFLOW"
+    # Last, and after steps that cannot fail the job, so the job's report artifact is always uploaded.
     - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: ${{ inputs.name }}
