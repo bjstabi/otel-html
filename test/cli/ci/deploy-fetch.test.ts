@@ -112,4 +112,40 @@ describe('runDeployFetch', () => {
     expect(rewritten.updates.map((u) => u.retry)).toEqual([undefined, true, undefined]);
     expect(rewritten.updates[1]?.reason).toMatch(/^download failed: .*404/);
   });
+
+  test('an unreadable zip is rejected for good (no retry); only a network or HTTP failure is retried', async () => {
+    const plan: PendingPlan = {
+      version: 1,
+      base: { kind: 'empty' },
+      state: null,
+      updates: [update(6), update(8), update(9)],
+      deletionsDue: 0,
+      floor: '2026-11-10T10:00:00.000Z',
+      now: '2026-11-10T12:00:00Z',
+    };
+    const fs = createMemoryFileSystem();
+    await fs.mkdirp('/p');
+    await fs.writeTextAtomic('/p/pending.json', JSON.stringify(plan));
+    const { fetchFn } = server({
+      [`${API}/repos/o/r/actions/artifacts/6/zip`]: () => new Response('', { status: 503 }),
+      [`${API}/repos/o/r/actions/artifacts/8/zip`]: () => new Response('not a zip'),
+      [`${API}/repos/o/r/actions/artifacts/9/zip`]: () =>
+        new Response('x', { headers: { 'content-length': String(10 * 1024 * 1024 * 1024) } }),
+    });
+    const io = {
+      stdout: () => {},
+      stderr: () => {},
+      env: { GITHUB_API_URL: API, GITHUB_TOKEN: 'tok' },
+      cwd: '/',
+    } as unknown as CliIo;
+    await runDeployFetch({ repository: 'o/r', pending: '/p/pending.json', out: '/out' }, io, { fs }, fetchFn);
+    const rewritten = JSON.parse(await fs.readText('/p/pending.json')) as PendingPlan;
+    expect(rewritten.updates.map((u) => [u.id, u.accepted, u.retry])).toEqual([
+      [6, false, true],
+      [8, false, undefined],
+      [9, false, undefined],
+    ]);
+    expect(rewritten.updates[1]?.reason).toMatch(/^unreadable: /);
+    expect(rewritten.updates[2]?.reason).toMatch(/^unreadable: .*larger than/);
+  });
 });

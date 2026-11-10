@@ -1,3 +1,4 @@
+import { OtelHtmlError } from '../../model/errors.js';
 import type { WriterDeps } from '../../writer/session.js';
 import type { CliIo } from '../io.js';
 import { type ApplyResult, applyUpdates } from './deploy-apply.js';
@@ -104,8 +105,13 @@ export async function runDeployFetch(
     } catch (e) {
       failed++;
       u.accepted = false;
-      u.retry = true;
-      u.reason = `download failed: ${messageOf(e)}`;
+      if (e instanceof OtelHtmlError) {
+        // the content itself is bad (a crafted zip, too large): rejected for good, not retried
+        u.reason = `unreadable: ${messageOf(e)}`;
+      } else {
+        u.retry = true;
+        u.reason = `download failed: ${messageOf(e)}`;
+      }
       say(io, `::warning::otel-html deploy fetch: ${u.name} (${u.id}): ${u.reason}`);
     }
   }
