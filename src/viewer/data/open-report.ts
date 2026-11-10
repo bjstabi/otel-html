@@ -39,8 +39,12 @@ export interface OpenParts {
 /** What `openReportRefreshable` returns: the data source and, for a report with an engine in the page, its Refresh. */
 export interface OpenedReport {
   dataSource: DataSource;
-  /** D55: re-reads the manifest and returns a data source over the same engine. Null on a served report (#246). */
-  refresh: (() => Promise<DataSource>) | null;
+  /**
+   * D55: re-reads the manifest and returns a data source over the same engine. Null on a served report (#246).
+   * With an unchanged manifest it returns the data source already shown, unless `rerun` (a reader's click, spec 5.7):
+   * then it clears the result cache and returns a fresh data source over the same manifest, so pages re-run their queries.
+   */
+  refresh: ((rerun?: boolean) => Promise<DataSource>) | null;
 }
 
 export interface OpenDeps extends EngineDeps {
@@ -143,7 +147,7 @@ export async function openReportRefreshable(
         let current = manifest;
         let shown = dataSource;
         let last: Promise<unknown> = Promise.resolve();
-        const refresh = (): Promise<DataSource> => {
+        const refresh = (rerun = false): Promise<DataSource> => {
           const run = last.then(async () => {
             const next = await refreshReport(
               engine,
@@ -157,7 +161,13 @@ export async function openReportRefreshable(
               deps.now ?? Date.now,
             );
             current = next.manifest;
-            shown = next.dataSource ?? shown;
+            if (next.dataSource !== null) shown = next.dataSource;
+            else if (rerun) {
+              queryEngine.clearCache();
+              shown = tracedDataSource(
+                parts.createSource({ engine: queryEngine, manifest: current, logger: deps.logger }),
+              );
+            }
             return shown;
           });
           last = run.catch(() => undefined);

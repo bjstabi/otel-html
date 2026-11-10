@@ -244,16 +244,23 @@ describe('the refresh of openReportRefreshable', () => {
         return m;
       },
     };
-    const source = { manifest: manifest4() } as unknown as DataSource;
+    const cleared = { count: 0 };
     const { deps } = setup({
       startEngine: vi.fn(() => Promise.resolve(engine)),
       registerPartitions: vi.fn(() => Promise.resolve()),
-      createQueryEngine: vi.fn(() => ({ clearCache() {} }) as unknown as QueryEngine),
-      createSource: vi.fn(() => source),
+      createQueryEngine: vi.fn(
+        () =>
+          ({
+            clearCache() {
+              cleared.count += 1;
+            },
+          }) as unknown as QueryEngine,
+      ),
+      createSource: vi.fn(() => ({ manifest: manifest4() }) as unknown as DataSource),
     });
     let clock = 0;
     const withLoader = { ...deps, loader, baseUrl: 'https://s.example/r/', now: () => ++clock } as OpenDeps;
-    return { withLoader, registered, dropped, order, initial: manifestOf([0]) };
+    return { withLoader, registered, dropped, order, cleared, initial: manifestOf([0]) };
   }
   const p = (n: number) => partitionFilePath(n, 'spans');
 
@@ -286,6 +293,22 @@ describe('the refresh of openReportRefreshable', () => {
     expect(registered).toEqual([]);
     expect(await opened.refresh?.()).not.toBe(opened.dataSource);
     expect(registered).toEqual([p(1)]);
+  });
+
+  test('a reader-requested refresh of an unchanged manifest clears the cache and returns a fresh data source', async () => {
+    const { withLoader, registered, dropped, cleared, initial } = refreshable([
+      manifestOf([0]),
+      manifestOf([0]),
+    ]);
+    const opened = await openReportRefreshable(initial, withLoader, () => undefined);
+    const rerun = await opened.refresh?.(true);
+    expect(rerun).not.toBe(opened.dataSource);
+    expect(cleared.count).toBe(1);
+    expect(registered).toEqual([]);
+    expect(dropped).toEqual([]);
+    // a poll tick (no rerun) afterwards is a no-op: the same source, no clear
+    expect(await opened.refresh?.()).toBe(rerun);
+    expect(cleared.count).toBe(1);
   });
 
   test('a failed refresh leaves the last good manifest as the next previous', async () => {

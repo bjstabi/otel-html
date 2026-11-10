@@ -470,6 +470,43 @@ describe('App refresh (D55)', () => {
     }
   });
 
+  test('a click re-runs the queries of an unchanged manifest; a poll tick does not', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      window.sessionStorage.setItem('otel-html.poll', '1');
+      const failing = {
+        ...dataSourceOf(growing),
+        services: () => Promise.reject(new Error('transient')),
+      };
+      let shown: DataSource = failing;
+      // the real refresh returns the shown source on a tick and a fresh one on a click
+      const refresh = vi.fn((rerun?: boolean) => {
+        if (rerun === true) shown = dataSourceOf(growing);
+        return Promise.resolve(shown);
+      });
+      window.location.hash = '#/traces/services';
+      render(
+        <ThemeProvider>
+          <App
+            load={() => Promise.resolve({ dataSource: failing, refresh })}
+            history={createHashHistory(window)}
+          />
+        </ThemeProvider>,
+      );
+      await screen.findByText('The services could not be loaded');
+      await act(async () => undefined);
+      await act(async () => vi.advanceTimersByTimeAsync(60_000));
+      expect(refresh).toHaveBeenLastCalledWith(false);
+      expect(screen.queryByText('The services could not be loaded')).not.toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+      expect(refresh).toHaveBeenLastCalledWith(true);
+      await waitFor(() => expect(screen.queryByText('The services could not be loaded')).toBeNull());
+    } finally {
+      window.sessionStorage.clear();
+      vi.useRealTimers();
+    }
+  });
+
   test('a failed refresh is an inline alert on the line and the page stays', async () => {
     renderApp(() => Promise.reject(new Error('manifest did not load')));
     await userEvent.click(await screen.findByRole('button', { name: 'Refresh' }));

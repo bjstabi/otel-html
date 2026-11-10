@@ -89,27 +89,33 @@ export function App(props: {
     };
   }, []);
   // D55: the refreshed data source replaces the shown one; a failed refresh keeps the previous one and is told on the line.
-  const refresh = useCallback((): void => {
-    // A click or a poll tick while a refresh runs does nothing: each finished refresh re-queries every page.
-    if (refreshFn === null || inFlight.current) return;
-    inFlight.current = true;
-    setRefreshing(true);
-    refreshFn().then(
-      (dataSource) => {
-        inFlight.current = false;
-        if (!live.current) return;
-        setRefreshError(null);
-        setRefreshing(false);
-        setState((s) => (s.status === 'ready' ? { ...s, dataSource } : s));
-      },
-      (e: unknown) => {
-        inFlight.current = false;
-        if (!live.current) return;
-        setRefreshError(e instanceof Error ? e.message : String(e));
-        setRefreshing(false);
-      },
-    );
-  }, [refreshFn]);
+  const run = useCallback(
+    (rerun: boolean): void => {
+      // A click or a poll tick while a refresh runs does nothing: each finished refresh re-queries every page.
+      if (refreshFn === null || inFlight.current) return;
+      inFlight.current = true;
+      setRefreshing(true);
+      refreshFn(rerun).then(
+        (dataSource) => {
+          inFlight.current = false;
+          if (!live.current) return;
+          setRefreshError(null);
+          setRefreshing(false);
+          setState((s) => (s.status === 'ready' ? { ...s, dataSource } : s));
+        },
+        (e: unknown) => {
+          inFlight.current = false;
+          if (!live.current) return;
+          setRefreshError(e instanceof Error ? e.message : String(e));
+          setRefreshing(false);
+        },
+      );
+    },
+    [refreshFn],
+  );
+  // A reader's click re-runs the current queries even when nothing new was published; a poll tick does not.
+  const refresh = useCallback((): void => run(true), [run]);
+  const tick = useCallback((): void => run(false), [run]);
   const [poll, setPollState] = useState(readPoll);
   const setPoll = useCallback((on: boolean): void => {
     setPollState(on);
@@ -120,9 +126,9 @@ export function App(props: {
   const growing = state.status === 'ready' && !state.dataSource.manifest.complete;
   useEffect(() => {
     if (!poll || !growing || refreshFn === null) return;
-    const t = window.setInterval(refresh, POLL_MS);
+    const t = window.setInterval(tick, POLL_MS);
     return () => window.clearInterval(t);
-  }, [poll, growing, refreshFn, refresh]);
+  }, [poll, growing, refreshFn, tick]);
   const control: RefreshControl | null =
     refreshFn === null ? null : { refresh, busy: refreshing, error: refreshError, poll, setPoll };
 
