@@ -83,7 +83,7 @@ const RemovedSchema: z.ZodType<RemovedJson> = z.strictObject({
   version: z.literal(1),
   prs: z.record(z.string(), z.strictObject({ runId: count, at: z.string() })),
 });
-const FilesSchema: z.ZodType<FilesJson> = z.strictObject({
+export const FilesSchema: z.ZodType<FilesJson> = z.strictObject({
   version: z.literal(1),
   files: z.record(z.string(), count),
 });

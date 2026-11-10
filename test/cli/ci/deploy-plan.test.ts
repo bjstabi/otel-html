@@ -391,9 +391,30 @@ describe('planDeploy', () => {
     routes[`${PAGES}/site-state/applied.json`] = json(
       JSON.parse(await stateZipApplied(stateWith({ kind: 'full', runId: 11 }, ['105']))),
     );
+    for (const n of ['removed', 'files', 'deletions', 'runs'])
+      routes[`${PAGES}/site-state/${n}.json`] = missing;
     const plan = await planDeploy(opts(), { fs: createMemoryFileSystem() }, 'tok', fake(routes).fetchFn);
-    expect(plan.state).toBeNull();
+    expect(plan.state).toEqual({ kind: 'full', runId: 11 });
     expect(plan.updates.map((u) => u.id)).toEqual([103]);
+  });
+
+  test('a cold start takes the live site-state files as the state', async () => {
+    const routes = await world();
+    routes[`${R}/actions/runs/11/artifacts?name=otel-html-site-state-11`] = json({ artifacts: [] });
+    delete routes[`${R}/actions/artifacts/101/zip`];
+    routes[`${R}/actions/artifacts?per_page=100`] = listing([]);
+    const live = stateWith({ kind: 'full', runId: 11 }, ['105'], {
+      deletions: { version: 1, files: [{ path: 'old/x.txt', pass: 5, liveAt: '2026-11-10T09:00:00Z' }] },
+      runs: { version: 1, runs: { 'branch/main/runs/3': { next: 2, attempt: 1, jobs: {} } } },
+    });
+    for (const n of ['applied', 'removed', 'files', 'deletions', 'runs'] as const)
+      routes[`${PAGES}/site-state/${n}.json`] = json(live[n]);
+    const fs = createMemoryFileSystem();
+    const plan = await planDeploy(opts(), { fs }, 'tok', fake(routes).fetchFn);
+    expect(plan.state).toEqual({ kind: 'full', runId: 11 });
+    expect(plan.deletionsDue).toBe(1);
+    expect(await fs.readText('/out/state/deletions.json')).toContain('old/x.txt');
+    expect(await fs.readText('/out/state/runs.json')).toContain('branch/main/runs/3');
   });
 
   test('a missing live applied.json means everything pending, with the floor an hour back', async () => {

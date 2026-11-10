@@ -2,7 +2,7 @@ import { OtelHtmlError } from '../../model/errors.js';
 import type { FileSystem } from '../../writer/ports.js';
 import { listDeployments, successfulDeployments } from './deploy-plan.js';
 import { deleteJson, type Fetch, fetchArtifacts, getJson, messageOf } from './github-api.js';
-import { type AppliedJson, STATE_PREFIX } from './site-state.js';
+import { type AppliedJson, FilesSchema, STATE_PREFIX } from './site-state.js';
 import { UPDATE_PREFIX } from './update.js';
 
 const API_TIMEOUT_MS = 15_000;
@@ -91,16 +91,21 @@ export async function fetchLiveSite(
     if (!res.ok) throw bad(path, `the live site answered ${res.status}`);
     return res;
   };
-  const listing = (await (await get('site-state/files.json', API_TIMEOUT_MS)).json()) as {
-    files?: Record<string, unknown>;
-  };
-  const entries = Object.entries(listing.files ?? {});
+  let parsed: ReturnType<typeof FilesSchema.safeParse>;
+  try {
+    parsed = FilesSchema.safeParse(await (await get('site-state/files.json', API_TIMEOUT_MS)).json());
+  } catch (e) {
+    if (e instanceof OtelHtmlError) throw e;
+    throw bad('site-state/files.json', `is not JSON (${messageOf(e)})`);
+  }
+  if (!parsed.success)
+    throw bad('site-state/files.json', parsed.error.issues[0]?.message ?? 'is not a files listing');
+  const entries = Object.entries(parsed.data.files);
+  if (entries.length === 0) throw bad('site-state/files.json', 'the live site lists no files');
   if (entries.length > MAX_LIVE_FILES) throw bad('files.json', `lists more than ${MAX_LIVE_FILES} files`);
   let total = 0;
   for (const [path, size] of entries) {
     if (!safePath(path)) throw bad(path, 'unsafe path in files.json');
-    if (typeof size !== 'number' || !Number.isSafeInteger(size) || size < 0)
-      throw bad(path, 'invalid size in files.json');
     total += size;
   }
   if (total > MAX_LIVE_BYTES) throw bad('files.json', `lists more than ${MAX_LIVE_BYTES} bytes`);
@@ -108,15 +113,19 @@ export async function fetchLiveSite(
   await fs.removeDir(o.out);
   await fs.mkdirp(o.out);
   let bytes = 0;
-  for (const [path, size] of entries as [string, number][]) {
+  for (const [path, size] of entries) {
     const res = await get(path, FILE_TIMEOUT_MS);
     if (Number(res.headers.get('content-length') ?? 0) > size)
       throw bad(path, `larger than the listed ${size} bytes`);
     const data = new Uint8Array(await res.arrayBuffer());
     if (data.length !== size) throw bad(path, `is ${data.length} bytes, files.json says ${size}`);
     const target = `${o.out}/${path}`;
-    await fs.mkdirp(target.slice(0, target.lastIndexOf('/')));
-    await fs.writeBytes(target, data);
+    try {
+      await fs.mkdirp(target.slice(0, target.lastIndexOf('/')));
+      await fs.writeBytes(target, data);
+    } catch (e) {
+      throw bad(path, `cannot be written (${messageOf(e)})`);
+    }
     bytes += data.length;
   }
   return { files: entries.length, bytes };

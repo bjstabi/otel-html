@@ -209,12 +209,21 @@ export async function planDeploy(
   if (applied === undefined) {
     const res = await live('site-state/applied.json');
     if (res !== undefined) {
+      // cold start: the live site's own state files (a missing one is its empty form)
+      await fs.removeDir(scratch);
       await fs.mkdirp(scratch);
       await fs.writeTextAtomic(`${scratch}/applied.json`, await res.text());
-      const read = (await readSiteState(fs, scratch, () => {})).applied;
+      for (const name of ['removed', 'files', 'deletions', 'runs']) {
+        const other = await live(`site-state/${name}.json`);
+        if (other !== undefined) await fs.writeTextAtomic(`${scratch}/${name}.json`, await other.text());
+      }
+      const read = await readSiteState(fs, scratch, () => {});
       await fs.removeDir(scratch);
       // a malformed file reads as the empty form: everything pending
-      if (!(read.form.kind === 'full' && read.form.runId === 0)) applied = read;
+      if (!(read.applied.form.kind === 'full' && read.applied.form.runId === 0)) {
+        state = read;
+        applied = read.applied;
+      }
     }
   }
   const floorMs = isoOrUndefined(applied?.floor) ?? nowMs - HOUR_MS;

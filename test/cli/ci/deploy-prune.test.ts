@@ -111,11 +111,15 @@ describe('fetchLiveSite', () => {
   let server: Server | undefined;
   afterEach(() => new Promise<void>((done) => (server ? server.close(() => done()) : done())));
 
-  async function serve(files: Record<string, string>, listed: Record<string, number>): Promise<string> {
+  async function serve(
+    files: Record<string, string>,
+    listed: Record<string, number>,
+    listing: string = JSON.stringify({ version: 1, files: listed }),
+  ): Promise<string> {
     server = createServer((req, res) => {
       const path = decodeURIComponent((req.url ?? '').slice(1));
       if (path === 'site/site-state/files.json') {
-        res.end(JSON.stringify({ version: 1, files: listed }));
+        res.end(listing);
       } else if (files[path.slice('site/'.length)] !== undefined) res.end(files[path.slice('site/'.length)]);
       else {
         res.statusCode = 404;
@@ -147,6 +151,31 @@ describe('fetchLiveSite', () => {
 
   test('rejects a missing file', async () => {
     const pagesUrl = await serve({}, { 'gone.txt': 4 });
+    await expect(
+      fetchLiveSite({ pagesUrl, out: '/base' }, createMemoryFileSystem(), fetch),
+    ).rejects.toMatchObject({
+      code: 'invalid-report',
+    });
+  });
+
+  test.each([
+    ['no files key', '{"version":1}'],
+    ['null', 'null'],
+    ['an array', '[]'],
+    ['not JSON', '<html>'],
+    ['an empty listing', '{"version":1,"files":{}}'],
+    ['a non-integer size', '{"version":1,"files":{"a":1.5}}'],
+  ])('rejects a listing that is %s', async (_n, body) => {
+    const pagesUrl = await serve({}, {}, body);
+    await expect(
+      fetchLiveSite({ pagesUrl, out: '/base' }, createMemoryFileSystem(), fetch),
+    ).rejects.toMatchObject({
+      code: 'invalid-report',
+    });
+  });
+
+  test('a write failure (paths a and a/b) is invalid-report', async () => {
+    const pagesUrl = await serve({ a: 'x', 'a/b': 'y' }, { a: 1, 'a/b': 1 });
     await expect(
       fetchLiveSite({ pagesUrl, out: '/base' }, createMemoryFileSystem(), fetch),
     ).rejects.toMatchObject({
