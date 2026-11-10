@@ -21,6 +21,7 @@
   "ignoreIssues": {
     "src/cli/ci/update.ts": ["exports", "types"],
     "src/cli/ci/run-report.ts": ["types"],
+    "src/cli/ci/site-state.ts": ["exports", "types"],
     "src/cli/ci/workflow-trace.ts": ["exports"]
   },
   "ignoreBinaries": ["mise"]
