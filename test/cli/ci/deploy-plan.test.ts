@@ -574,4 +574,36 @@ describe('runDeployPlan', () => {
     expect(text).toContain('base_kind=empty');
     expect(text).toContain('base_run_id=\n');
   });
+
+  test('with no accepted update and no deletion due, pending=false: the action downloads nothing', async () => {
+    const { fetchFn } = fake({
+      [R]: json({ default_branch: 'main' }),
+      ...deployments(),
+      [`${PAGES}/site-state/files.json`]: missing,
+      [`${PAGES}/site-state/applied.json`]: missing,
+      [`${R}/branches/gh-pages`]: missing,
+      [`${R}/actions/artifacts?per_page=100`]: listing([
+        art(300, 'otel-html-update-push-7-1', '2026-11-10T11:50:00Z', 70),
+      ]),
+      [`${R}/actions/runs/70`]: missing,
+    });
+    const fs = createMemoryFileSystem();
+    const plan = await runDeployPlan(
+      {
+        repository: 'o/r',
+        out: '/out/pending.json',
+        stateOut: '/out/state',
+        pagesUrl: PAGES,
+        ciWorkflows: ['ci.yml'],
+        reportWorkflow: 'ci-report.yml',
+        now: NOW,
+      },
+      io(),
+      { fs },
+      fetchFn,
+    );
+    expect(plan.updates.map((u) => [u.id, u.accepted])).toEqual([[300, false]]);
+    expect(plan.deletionsDue).toBe(0);
+    expect(readFileSync(outputs, 'utf8')).toContain('pending=false');
+  });
 });

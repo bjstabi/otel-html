@@ -1,5 +1,6 @@
 import type { WriterDeps } from '../../writer/session.js';
 import type { CliIo } from '../io.js';
+import { type ApplyResult, applyUpdates } from './deploy-apply.js';
 import { downloadArtifact } from './deploy-fetch.js';
 import { type PendingPlan, planDeploy } from './deploy-plan.js';
 import { envVar, type Fetch, messageOf, say, setOutputs } from './github-api.js';
@@ -20,6 +21,21 @@ export interface DeployFetchOptions {
   repository: string;
   pending: string;
   out: string;
+}
+
+export interface DeployApplyOptions {
+  site: string;
+  state?: string;
+  updates: string;
+  /** `pending.json`; optional with `trust`. */
+  pending?: string;
+  repository: string;
+  retention: number;
+  prRetention: number;
+  config?: string;
+  passRunId: number;
+  trust?: { channel: string };
+  now: string;
 }
 
 const apiUrlOf = (io: CliIo): string => envVar(io, 'GITHUB_API_URL') ?? 'https://api.github.com';
@@ -94,4 +110,38 @@ export async function runDeployFetch(
     io,
     `otel-html deploy fetch: ${plan.updates.filter((u) => u.accepted).length} updates downloaded, ${failed} failed`,
   );
+}
+
+/** `ci deploy apply`: applies the pending updates to the unpacked site (never calls the API, never deploys) and sets the step outputs. */
+export async function runDeployApply(
+  opts: DeployApplyOptions,
+  io: CliIo,
+  deps: WriterDeps,
+): Promise<ApplyResult> {
+  const pending: PendingPlan =
+    opts.pending === undefined
+      ? {
+          version: 1,
+          base: { kind: 'live' },
+          state: null,
+          updates: [],
+          deletionsDue: 0,
+          floor: new Date(Date.parse(opts.now) - 3_600_000).toISOString(),
+          now: opts.now,
+        }
+      : JSON.parse(await deps.fs.readText(opts.pending));
+  const { pending: _file, ...rest } = opts;
+  const result = await applyUpdates({ ...rest, pending }, deps, io);
+  say(
+    io,
+    `otel-html deploy apply: ${result.consumed} updates consumed (${result.rejected} rejected), site ${result.changed ? 'changed' : 'unchanged'}`,
+  );
+  setOutputs(io, {
+    changed: String(result.changed),
+    consumed: String(result.consumed),
+    deploy: String(result.deployed),
+    previews: result.previews.join(','),
+    pending_jobs: result.pendingJobs.join(','),
+  });
+  return result;
 }

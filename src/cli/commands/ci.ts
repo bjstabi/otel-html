@@ -3,7 +3,7 @@ import { resolveDeps } from '../../api/report.js';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { WriterDeps } from '../../writer/session.js';
 import { runContext } from '../ci/context-main.js';
-import { runDeployFetch, runDeployPlan } from '../ci/deploy-main.js';
+import { runDeployApply, runDeployFetch, runDeployPlan } from '../ci/deploy-main.js';
 import { envVar, messageOf, say } from '../ci/github-api.js';
 import { runLink } from '../ci/link-main.js';
 import { runReport } from '../ci/report-main.js';
@@ -63,6 +63,20 @@ interface CleanupFlags {
   site: string;
   pr: string;
   repository?: string;
+}
+
+interface DeployApplyFlags {
+  repository?: string;
+  site: string;
+  state?: string;
+  updates: string;
+  pending?: string;
+  retention: string;
+  prRetention: string;
+  config?: string;
+  passRunId?: string;
+  trustUpdates?: boolean;
+  channel?: string;
 }
 
 interface DeployPlanFlags {
@@ -245,6 +259,54 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
         await runDeployFetch(opts, io, await resolveDeps(deps));
       } catch (e) {
         say(io, `::error::otel-html deploy fetch: ${messageOf(e)}`);
+        throw new CliExit(1);
+      }
+    });
+  deploy
+    .command('apply')
+    .description(
+      "apply the pending updates to the unpacked site in the spec's order, with deferred deletion, and write site-state/ (never calls the API, never deploys)",
+    )
+    .option('--repository <owner/repo>', 'repository (default: $GITHUB_REPOSITORY)')
+    .requiredOption('--site <dir>', 'the unpacked base site, edited in place')
+    .option('--state <dir>', 'the state `plan` chose; overwrites <site>/site-state/ first')
+    .requiredOption('--updates <dir>', "the unpacked updates, <dir>/<update's name>/ each")
+    .option('--pending <file>', "the plan's pending.json (optional with --trust-updates)")
+    .option('--retention <n>', 'runs kept per workflow in each branch channel', '30')
+    .option('--pr-retention <n>', 'runs kept per workflow in each pull request channel', '10')
+    .option('--config <file>', 'the dashboard config file for the rolling reports')
+    .option('--pass-run-id <n>', 'this deployer run id (default: $GITHUB_RUN_ID)')
+    .option('--trust-updates', 'TEST ONLY: apply every update folder under --updates without pending.json')
+    .option('--channel <key>', 'TEST ONLY: with --trust-updates, the channel (branch/<slug> or pr/<n>)')
+    .action(async (flags: DeployApplyFlags) => {
+      try {
+        const passRun = flags.passRunId ?? envVar(io, 'GITHUB_RUN_ID');
+        if (passRun === undefined)
+          throw new OtelHtmlError('usage', {
+            message: '--pass-run-id is required when GITHUB_RUN_ID is not set',
+          });
+        if (flags.trustUpdates === true && flags.channel === undefined)
+          throw new OtelHtmlError('usage', { message: '--trust-updates needs --channel' });
+        if (flags.trustUpdates !== true && flags.pending === undefined)
+          throw new OtelHtmlError('usage', { message: '--pending is required without --trust-updates' });
+        const opts = {
+          site: flags.site,
+          updates: flags.updates,
+          repository: repositoryOf(flags.repository),
+          retention: parsePositive('--retention', flags.retention),
+          prRetention: parsePositive('--pr-retention', flags.prRetention),
+          passRunId: parsePositive('--pass-run-id', passRun),
+          now: new Date().toISOString(),
+          ...(flags.state === undefined ? {} : { state: flags.state }),
+          ...(flags.pending === undefined ? {} : { pending: flags.pending }),
+          ...(flags.config === undefined ? {} : { config: flags.config }),
+          ...(flags.trustUpdates === true && flags.channel !== undefined
+            ? { trust: { channel: flags.channel } }
+            : {}),
+        };
+        await runDeployApply(opts, io, await resolveDeps(deps));
+      } catch (e) {
+        say(io, `::error::otel-html deploy apply: ${messageOf(e)}`);
         throw new CliExit(1);
       }
     });
