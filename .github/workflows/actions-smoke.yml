@@ -43,14 +43,14 @@ jobs:
           name: otel-html-smoke-${{ matrix.os }}
 
   # The actions as built from this branch (D67): the `ci update`, `ci dispatch` and `ci deploy` commands exist only on the
-  # branch until a release ships them. The job shell is the built CLI, as in ci.yml. The dispatch logs a 404 until
-  # pages-deploy.yml is on the default branch, and never fails the job. The deployer rejects these updates (this workflow is
+  # branch until a release ships them. The job shell is the built CLI, as in ci.yml. The dispatch uses the job token,
+  # which the repository's Actions policy refuses, and never fails the job. The deployer rejects these updates (this workflow is
   # not one of its ci-workflows) but still runs one extra pass for them.
   publish:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, ubuntu-24.04-arm]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     permissions:
@@ -81,6 +81,31 @@ jobs:
           name: otel-html-smoke-publish-${{ matrix.os }}
           command: node dist/cli/main.js
           publish: true
+      # D51: the upload client proven on this runner. The runtime variables exist only in a JavaScript action's
+      # environment, so the CLI runs as a child of github-script.
+      - name: Upload an artifact with the built client
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          CMD: node dist/cli/main.js
+          UPLOAD_NAME: otel-html-smoke-upload-${{ matrix.os }}
+        with:
+          script: |
+            const { spawnSync } = require('node:child_process');
+            const [exe, ...args] = process.env.CMD.trim().split(/\s+/);
+            const t0 = Date.now();
+            const r = spawnSync(exe, [...args, 'ci', 'upload', '--name', process.env.UPLOAD_NAME, '--path', '.otel-html/'], {
+              stdio: 'inherit',
+              env: { ...process.env },
+            });
+            core.info(`upload took ${Date.now() - t0} ms`);
+            if (r.status !== 0) core.setFailed(`ci upload exited ${r.status ?? r.signal ?? r.error}`);
+      - name: The uploaded artifact appears
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPLOAD_NAME: otel-html-smoke-upload-${{ matrix.os }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" --paginate --jq '.artifacts[].name' | grep -qxF "$UPLOAD_NAME"
       - name: The update artifact was uploaded
         shell: bash
         env:
