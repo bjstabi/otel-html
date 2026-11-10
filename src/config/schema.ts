@@ -72,6 +72,7 @@ interface ReceiverOut {
   grpc: ListenerOut;
   maxBodyBytes: number;
   inflightBudgetBytes: number;
+  exportOtlp?: string | undefined;
 }
 interface ReceiverIn {
   host?: string | undefined;
@@ -79,6 +80,7 @@ interface ReceiverIn {
   grpc?: ListenerIn | undefined;
   maxBodyBytes?: number | undefined;
   inflightBudgetBytes?: number | undefined;
+  exportOtlp?: string | undefined;
 }
 interface ViewerOut {
   listCap: number;
@@ -157,6 +159,7 @@ const ReceiverSchema = z
     grpc: z.strictObject({ enabled: z.boolean().default(true), port: port.default(4317) }).prefault({}),
     maxBodyBytes: posInt.default(67_108_864),
     inflightBudgetBytes: posInt.default(134_217_728),
+    exportOtlp: z.string().url().optional(),
   })
   .prefault({});
 

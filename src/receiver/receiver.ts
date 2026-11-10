@@ -4,6 +4,7 @@ import { OtlpJsonStream } from '../model/otlp-json-stream.js';
 import { streamOtlpProtobuf } from '../model/otlp-proto.js';
 import type { Logger } from '../writer/ports.js';
 import type { WriterSession } from '../writer/session.js';
+import type { Forwarder } from './forward.js';
 import { serviceOf } from './signals.js';
 import { type Outcome, outcomeOf } from './status.js';
 
@@ -35,10 +36,18 @@ export interface ReceiverStats {
   rejected: Record<OtlpSignal, number>;
   /** Requests that failed, by outcome: refused by a transport before decoding, or failed inside `receive`. */
   refused: Record<Outcome, number>;
+  /** Accepted requests the forwarder posted to the collector (0 without one). */
+  forwarded: number;
+  /** Accepted requests the forwarder dropped because its queue was full. */
+  forwardDropped: number;
+  /** Accepted requests the forwarder could not deliver. */
+  forwardFailed: number;
 }
 
 export interface ReceiverOptions {
   inflightBudgetBytes: number;
+  /** Receives every accepted request's body once it is written; closed with the receiver. */
+  forwarder?: Forwarder;
 }
 
 export interface Receiver {
@@ -134,7 +143,11 @@ export function createReceiver(
     accepted: perSignal(),
     rejected: perSignal(),
     refused: noRefusals(),
+    forwarded: 0,
+    forwardDropped: 0,
+    forwardFailed: 0,
   };
+  const { forwarder } = options;
   const warned = new Set<Outcome>();
 
   /** Counts a failed request; the first of each kind is warned about, so a misconfigured exporter shows up. */
@@ -241,7 +254,9 @@ export function createReceiver(
         totals.bytes += body.length;
         const run = tail.then(() => process(signal, body, encoding, transport));
         tail = run.catch(() => undefined);
-        return await run;
+        const result = await run;
+        forwarder?.enqueue(signal, body, encoding);
+        return result;
       } catch (e) {
         refuse(outcomeOf(e), e instanceof Error ? e.message : String(e));
         throw e;
@@ -253,16 +268,23 @@ export function createReceiver(
       totals.requests++;
       refuse(outcome, reason);
     },
-    stats: () => ({
-      requests: totals.requests,
-      bytes: totals.bytes,
-      accepted: { ...totals.accepted },
-      rejected: { ...totals.rejected },
-      refused: { ...totals.refused },
-    }),
+    stats: () => {
+      const f = forwarder?.stats();
+      return {
+        forwarded: f?.forwarded ?? 0,
+        forwardDropped: f?.dropped ?? 0,
+        forwardFailed: f?.failed ?? 0,
+        requests: totals.requests,
+        bytes: totals.bytes,
+        accepted: { ...totals.accepted },
+        rejected: { ...totals.rejected },
+        refused: { ...totals.refused },
+      };
+    },
     async close() {
       closed = true;
       await tail;
+      await forwarder?.close();
     },
   };
 }

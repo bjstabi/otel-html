@@ -52,6 +52,9 @@ function fake(receive: Receiver['receive'], admit: Receiver['admit'] = () => stu
     admit,
     receive,
     stats: () => ({
+      forwarded: 0,
+      forwardDropped: 0,
+      forwardFailed: 0,
       requests: 0,
       bytes: 0,
       accepted: { traces: 0, logs: 0, metrics: 0 },
