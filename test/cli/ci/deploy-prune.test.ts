@@ -20,12 +20,11 @@ const art = (id: number, name: string, run: number) => ({
   workflow_run: { id: run },
 });
 
-function world(artifacts: unknown[]) {
+function world(artifacts: unknown[], runs = [50, 40, 30, 20, 10]) {
   const deleted: string[] = [];
   const statuses = (run: number) => [
     { state: 'success', log_url: `https://github.com/o/r/actions/runs/${run}/jobs/1`, created_at: NOW },
   ];
-  const runs = [50, 40, 30, 20, 10];
   const fetchFn = async (url: string, init?: RequestInit): Promise<Response> => {
     if (init?.method === 'DELETE') {
       deleted.push(url.slice(`${R}/actions/artifacts/`.length));
@@ -83,6 +82,17 @@ describe('pruneArtifacts', () => {
     );
     expect(deleted.sort()).toEqual(['10', '11', '21', '22', '23', '6', '7', '8', '9'].sort());
     expect(out.deleted.sort((a, b) => a - b)).toEqual([6, 7, 8, 9, 10, 11, 21, 22, 23]);
+  });
+
+  test('a no-op deployer run and the current run are not counted as kept deployments', async () => {
+    // 45 is a no-op deployer run (no artifacts), 60 the running pass (its deployment is already listed)
+    const { fetchFn, deleted } = world(artifacts, [60, 50, 45, 40, 30, 20, 10]);
+    await pruneArtifacts({ ...base, currentRunId: 60, applied: applied({}) }, fetchFn, () => {});
+    // kept = 50, 40, 30 (not 45): the artifacts of 30 stay, 25 and older go
+    expect(deleted).not.toContain('4');
+    expect(deleted).not.toContain('5');
+    expect(deleted).toContain('6');
+    expect(deleted).not.toContain('12');
   });
 
   test('a failed delete is a warning and the rest proceed', async () => {

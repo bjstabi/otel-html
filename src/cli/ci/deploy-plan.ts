@@ -34,6 +34,8 @@ const HOUR_MS = 3_600_000;
 const WAIT_MS = 10 * 60_000;
 /** A state artifact is five small JSON files. */
 const MAX_STATE_BYTES = 64 * 1024 * 1024;
+/** GitHub keeps run artifacts this long: a run younger than it without the site's artifacts did not upload the site. */
+const ARTIFACT_RETENTION_MS = 90 * 24 * HOUR_MS;
 const PUSH_EVENTS = ['push', 'pull_request', 'schedule', 'workflow_dispatch'];
 const DEPLOYER_EVENTS = ['workflow_dispatch', 'schedule', 'workflow_run'];
 const RUN_EVENTS = ['workflow_run', 'workflow_dispatch'];
@@ -48,6 +50,8 @@ export interface PlanOptions {
   pagesUrl: string;
   /** Where the chosen state's files are written. */
   stateOut: string;
+  /** The running deployer run (`GITHUB_RUN_ID`): its own environment deployment never counts. */
+  currentRunId?: number;
   now: string;
 }
 type BaseKind = 'artifact' | 'live' | 'gh-pages' | 'empty' | 'wait';
@@ -108,18 +112,34 @@ export const listDeployments = (
 ): Promise<ApiDeployment[]> =>
   get<ApiDeployment[]>(`${repo}/deployments?environment=github-pages&per_page=100`);
 
-/** The deployments that went live, newest first, with the deployer run that made each (from its success status's log URL). */
+/**
+ * The deployments that went live, newest first, with the deployer run that made each (from its success status's log URL).
+ * GitHub records a `github-pages` deployment for every job naming the environment, whether or not it deployed, so with
+ * `filter` a deployment counts only when it is not the running pass's own and, while its run's artifacts cannot have
+ * expired, that run uploaded the site (`hasSite`). One older than the retention counts (the live cold start copes).
+ */
 export async function* successfulDeployments(
   get: <T>(url: string) => Promise<T>,
   repo: string,
   deployments: ApiDeployment[],
+  filter?: { currentRunId?: number; nowMs: number; hasSite: (runId: number) => Promise<boolean> },
 ): AsyncGenerator<{ id: number; runId: number; liveAt: string }> {
+  const runOf = (url: string | undefined): number | undefined => {
+    const id = /\/actions\/runs\/(\d+)\//.exec(url ?? '')?.[1];
+    return id === undefined ? undefined : Number(id);
+  };
   for (const d of deployments) {
     const statuses = await get<ApiDeploymentStatus[]>(`${repo}/deployments/${d.id}/statuses?per_page=100`);
+    if (filter?.currentRunId !== undefined && statuses.some((s) => runOf(s.log_url) === filter.currentRunId))
+      continue;
     const ok = statuses.find((s) => s.state === 'success');
-    const runId = /\/actions\/runs\/(\d+)\//.exec(ok?.log_url ?? '')?.[1];
+    const runId = runOf(ok?.log_url);
     if (ok === undefined || runId === undefined) continue;
-    yield { id: d.id, runId: Number(runId), liveAt: ok.created_at };
+    if (filter !== undefined) {
+      const liveMs = isoOrUndefined(ok.created_at) ?? -Infinity;
+      if (filter.nowMs - liveMs < ARTIFACT_RETENTION_MS && !(await filter.hasSite(runId))) continue;
+    }
+    yield { id: d.id, runId, liveAt: ok.created_at };
   }
 }
 
@@ -152,9 +172,15 @@ export async function planDeploy(
 
   // (1) the last successful deployment
   const deployments = await listDeployments(get, repo);
-  const newestDeployedAt = deployments[0]?.created_at;
+  const hasSite = async (runId: number): Promise<boolean> =>
+    (await runArtifacts(runId, 'github-pages')).length > 0 ||
+    (await runArtifacts(runId, stateArtifactName({ kind: 'full', runId }))).length > 0;
   let base: BaseInfo = { kind: 'live' };
-  for await (const d of successfulDeployments(get, repo, deployments)) {
+  for await (const d of successfulDeployments(get, repo, deployments, {
+    ...(o.currentRunId === undefined ? {} : { currentRunId: o.currentRunId }),
+    nowMs,
+    hasSite,
+  })) {
     base = { kind: 'live', deploymentId: d.id, runId: d.runId, liveAt: d.liveAt };
     break;
   }
@@ -163,7 +189,7 @@ export async function planDeploy(
   if (tarball !== undefined) base = { ...base, kind: 'artifact', artifactId: tarball.id };
   else {
     if (await live('site-state/files.json')) {
-      const age = nowMs - (isoOrUndefined(newestDeployedAt) ?? -Infinity);
+      const age = nowMs - (isoOrUndefined(base.liveAt) ?? -Infinity);
       if (age < WAIT_MS) {
         return {
           version: 1,
@@ -301,8 +327,6 @@ export async function planDeploy(
   for (const a of listed) {
     const form = parseStateName(a.name);
     if (form?.kind !== 'consumed' || form.base !== base.deploymentId) continue;
-    if (!(await isDeployerRun(a))) continue;
-    // a fork's pull_request run can upload artifacts here: only the deployer's own runs on the default branch count
     if (!(await isDeployerRun(a))) continue;
     let found: SiteState | undefined;
     try {

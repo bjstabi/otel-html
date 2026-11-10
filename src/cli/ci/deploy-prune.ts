@@ -2,7 +2,7 @@ import { OtelHtmlError } from '../../model/errors.js';
 import type { FileSystem } from '../../writer/ports.js';
 import { listDeployments, successfulDeployments } from './deploy-plan.js';
 import { deleteJson, type Fetch, fetchArtifacts, getJson, messageOf } from './github-api.js';
-import { type AppliedJson, FilesSchema, STATE_PREFIX } from './site-state.js';
+import { type AppliedJson, FilesSchema, STATE_PREFIX, stateArtifactName } from './site-state.js';
 import { UPDATE_PREFIX } from './update.js';
 
 const API_TIMEOUT_MS = 15_000;
@@ -19,7 +19,15 @@ const MAX_LIVE_FILES = 100_000;
  * what it deleted; a failed delete is a warning. With fewer than `keep` successful deployments nothing is deleted.
  */
 export async function pruneArtifacts(
-  o: { apiUrl?: string; repository: string; keep: number; applied: AppliedJson; token?: string; now: string },
+  o: {
+    apiUrl?: string;
+    repository: string;
+    keep: number;
+    applied: AppliedJson;
+    token?: string;
+    now: string;
+    currentRunId?: number;
+  },
   fetchFn: Fetch,
   warn: (m: string) => void,
 ): Promise<{ deleted: number[] }> {
@@ -27,14 +35,6 @@ export async function pruneArtifacts(
   const repo = `${apiUrl}/repos/${o.repository}`;
   const get = async <T>(url: string): Promise<T> =>
     (await getJson<T>(url, o.token, API_TIMEOUT_MS, fetchFn)).body;
-  const kept: number[] = [];
-  for await (const d of successfulDeployments(get, repo, await listDeployments(get, repo))) {
-    kept.push(d.runId);
-    if (kept.length >= o.keep) break;
-  }
-  if (kept.length < o.keep || o.keep < 1) return { deleted: [] };
-  const oldest = Math.min(...kept);
-
   const nowMs = Date.parse(o.now);
   const listed = await fetchArtifacts(
     { apiUrl, repository: o.repository },
@@ -43,6 +43,25 @@ export async function pruneArtifacts(
     () => false,
     fetchFn,
   );
+  // a deployment counts only when its run uploaded the site (every job naming the environment has a deployment)
+  const siteRuns = new Set<number>();
+  for (const a of listed) {
+    if (Date.parse(a.expires_at) <= nowMs || a.workflow_run?.id === undefined) continue;
+    if (a.name === 'github-pages' || a.name === stateArtifactName({ kind: 'full', runId: a.workflow_run.id }))
+      siteRuns.add(a.workflow_run.id);
+  }
+  const kept: number[] = [];
+  for await (const d of successfulDeployments(get, repo, await listDeployments(get, repo), {
+    ...(o.currentRunId === undefined ? {} : { currentRunId: o.currentRunId }),
+    nowMs,
+    hasSite: async (run) => siteRuns.has(run),
+  })) {
+    kept.push(d.runId);
+    if (kept.length >= o.keep) break;
+  }
+  if (kept.length < o.keep || o.keep < 1) return { deleted: [] };
+  const oldest = Math.min(...kept);
+
   const doomed: number[] = [];
   for (const a of listed) {
     if (Date.parse(a.expires_at) <= nowMs) continue;

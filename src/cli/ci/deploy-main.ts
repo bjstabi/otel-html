@@ -51,7 +51,17 @@ export async function runDeployPlan(
   deps: Pick<WriterDeps, 'fs'>,
   fetchFn: Fetch = fetch,
 ): Promise<PendingPlan> {
-  const plan = await planDeploy({ ...opts, apiUrl: apiUrlOf(io) }, deps, envVar(io, 'GITHUB_TOKEN'), fetchFn);
+  const runId = Number(envVar(io, 'GITHUB_RUN_ID'));
+  const plan = await planDeploy(
+    {
+      ...opts,
+      apiUrl: apiUrlOf(io),
+      ...(Number.isInteger(runId) && runId > 0 ? { currentRunId: runId } : {}),
+    },
+    deps,
+    envVar(io, 'GITHUB_TOKEN'),
+    fetchFn,
+  );
   await deps.fs.mkdirp(opts.out.slice(0, Math.max(0, opts.out.lastIndexOf('/'))) || '.');
   await deps.fs.writeTextAtomic(opts.out, `${JSON.stringify(plan)}\n`);
   const accepted = plan.updates.filter((u) => u.accepted);
@@ -176,8 +186,10 @@ export async function runDeployPrune(
     say(io, `::warning::otel-html deploy prune: ${m}`),
   );
   const token = envVar(io, 'GITHUB_TOKEN');
+  const runId = Number(envVar(io, 'GITHUB_RUN_ID'));
   const { deleted } = await pruneArtifacts(
     {
+      ...(Number.isInteger(runId) && runId > 0 ? { currentRunId: runId } : {}),
       apiUrl: apiUrlOf(io),
       repository: opts.repository,
       keep: opts.keep,
