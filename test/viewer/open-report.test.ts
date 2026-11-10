@@ -206,6 +206,94 @@ describe('openReportRefreshable', () => {
   });
 });
 
+describe('the refresh of openReportRefreshable', () => {
+  const manifestOf = (ns: number[]): ManifestV4 => {
+    const m = manifest4();
+    return {
+      ...m,
+      partitions: ns.map((n) => ({
+        n,
+        source: `job:${n}`,
+        files: { spans: file(n, 'spans', 1) },
+      })),
+      engine: { ...m.engine, format: 'site' },
+    } as ManifestV4;
+  };
+
+  function refreshable(manifests: (ManifestV4 | Error)[]) {
+    const registered: string[] = [];
+    const dropped: string[] = [];
+    const engine = {
+      format: 'site',
+      db: {
+        registerFileURL: async (name: string) => void registered.push(name),
+        dropFile: async (name: string) => void dropped.push(name),
+      },
+      connection: { query: async () => undefined },
+      close: async () => {},
+    } as unknown as Engine;
+    const order: string[] = [];
+    let next = 0;
+    const loader = {
+      load: async (path: string) => {
+        order.push(`start ${path}`);
+        await new Promise((r) => setTimeout(r, 5));
+        order.push(`end ${path}`);
+        const m = manifests[next++];
+        if (m instanceof Error) throw m;
+        return m;
+      },
+    };
+    const source = { manifest: manifest4() } as unknown as DataSource;
+    const { deps } = setup({
+      startEngine: vi.fn(() => Promise.resolve(engine)),
+      registerPartitions: vi.fn(() => Promise.resolve()),
+      createQueryEngine: vi.fn(() => ({ clearCache() {} }) as unknown as QueryEngine),
+      createSource: vi.fn(() => source),
+    });
+    let clock = 0;
+    const withLoader = { ...deps, loader, baseUrl: 'https://s.example/r/', now: () => ++clock } as OpenDeps;
+    return { withLoader, registered, dropped, order, initial: manifestOf([0]) };
+  }
+  const p = (n: number) => partitionFilePath(n, 'spans');
+
+  test('two overlapping refreshes run one after the other', async () => {
+    const { withLoader, order, initial } = refreshable([manifestOf([0, 1]), manifestOf([0, 1, 2])]);
+    const opened = await openReportRefreshable(initial, withLoader, () => undefined);
+    await Promise.all([opened.refresh?.(), opened.refresh?.()]);
+    expect(order).toEqual([
+      'start data/manifest.js?r=1',
+      'end data/manifest.js?r=1',
+      'start data/manifest.js?r=2',
+      'end data/manifest.js?r=2',
+    ]);
+  });
+
+  test('each refresh diffs against the previous successful manifest', async () => {
+    const { withLoader, registered, dropped, initial } = refreshable([manifestOf([0, 1]), manifestOf([2])]);
+    const opened = await openReportRefreshable(initial, withLoader, () => undefined);
+    await opened.refresh?.();
+    expect(registered).toEqual([p(1)]);
+    await opened.refresh?.();
+    expect(registered).toEqual([p(1), p(2)]);
+    expect(dropped.sort()).toEqual([p(0), p(1)]);
+  });
+
+  test('a failed refresh leaves the last good manifest as the next previous', async () => {
+    const { withLoader, registered, dropped, initial } = refreshable([
+      manifestOf([0, 1]),
+      new Error('network'),
+      manifestOf([2]),
+    ]);
+    const opened = await openReportRefreshable(initial, withLoader, () => undefined);
+    await opened.refresh?.();
+    await expect(opened.refresh?.()).rejects.toThrow('network');
+    await opened.refresh?.();
+    expect(registered).toEqual([p(1), p(2)]);
+    expect(dropped.sort()).toEqual([p(0), p(1)]);
+  });
+});
+
 describe('openReport', () => {
   test('a format-3 manifest rejects with the D12 text and starts nothing', async () => {
     const { deps, parts } = setup();

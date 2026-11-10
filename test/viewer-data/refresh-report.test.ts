@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import type { ManifestV4 } from '../../src/format/manifest.js';
-import { partitionFilePath, partitionKey, partitionWrapperPath } from '../../src/format/paths.js';
+import { partitionFilePath, partitionWrapperPath } from '../../src/format/paths.js';
+import { OtelHtmlError } from '../../src/model/errors.js';
 import { toBase64 } from '../../src/viewer/data/engine/bytes.js';
 import type { Engine } from '../../src/viewer/data/engine/start.js';
 import type { QueryEngine } from '../../src/viewer/data/query-engine.js';
@@ -83,14 +84,13 @@ function fakes(format: 'local' | 'site') {
 
 function loaderOf(manifest: unknown): ScriptLoader & { paths: string[] } {
   const paths: string[] = [];
-  const registry = {
-    take: async (key: string) => (key === 'manifest' ? manifest : toBase64(new Uint8Array([80, 65, 82, 49]))),
-  };
+  const payload = (key: string): unknown =>
+    key === 'manifest' ? manifest : toBase64(new Uint8Array([80, 65, 82, 49]));
   return {
     paths,
     load: async (path, key) => {
       paths.push(path);
-      return registry.take(key);
+      return payload(key);
     },
   };
 }
@@ -102,14 +102,7 @@ const run = (
   next: unknown,
   loader = loaderOf(next),
   now = 1234,
-) =>
-  refreshReport(
-    f.engine,
-    f.queryEngine,
-    previous,
-    { loader, registry: { take: async () => next }, baseUrl: BASE, logger },
-    () => now,
-  );
+) => refreshReport(f.engine, f.queryEngine, previous, { loader, baseUrl: BASE, logger }, () => now);
 
 describe('refreshReport', () => {
   test('registers only the new partition files by URL, drops nothing, recreates the views, clears the cache once', async () => {
@@ -155,18 +148,15 @@ describe('refreshReport', () => {
     await run(f, manifestOf([0], 'local'), manifestOf([0, 1], 'local'), loader);
     expect(f.calls.buffer).toEqual([partitionFilePath(1, 'spans'), partitionFilePath(1, 'logs')]);
     expect(loader.paths).toContain(new URL(partitionWrapperPath(1, 'spans'), BASE).href);
-    expect(partitionKey(1, 'spans')).toBeTruthy();
   });
 
   test('a format 3 manifest rejects with the D12 message and changes nothing', async () => {
     const f = fakes('site');
-    const v3 = { formatVersion: 3 };
-    await expect(run(f, manifestOf([0]), { ...manifestV3() })).rejects.toThrow(/format 3/i);
+    await expect(run(f, manifestOf([0]), manifestV3())).rejects.toThrow(/format 3/i);
     expect(f.calls.url).toEqual([]);
     expect(f.calls.drop).toEqual([]);
     expect(f.calls.statements).toEqual([]);
     expect(f.calls.clearCache).toBe(0);
-    expect(v3.formatVersion).toBe(3);
   });
 });
 
@@ -190,11 +180,72 @@ function manifestV3() {
   };
 }
 
+describe('refreshReport failures', () => {
+  test('a failing dropFile is logged and the refresh still succeeds', async () => {
+    const f = fakes('site');
+    (f.engine.db as unknown as { dropFile: () => Promise<void> }).dropFile = async () => {
+      throw new Error('drop failed');
+    };
+    const warnings: unknown[][] = [];
+    const next = manifestOf([2]);
+    const { manifest } = await refreshReport(
+      f.engine,
+      f.queryEngine,
+      manifestOf([0]),
+      {
+        loader: loaderOf(next),
+        baseUrl: BASE,
+        logger: { ...logger, warn: (...a: unknown[]) => void warnings.push(a) },
+      },
+      () => 1,
+    );
+    expect(manifest.partitions.map((p) => p.n)).toEqual([2]);
+    expect(warnings).toHaveLength(2);
+    expect(f.calls.statements).toHaveLength(5);
+    expect(f.calls.clearCache).toBe(1);
+  });
+
+  test('a failing registration rejects before any drop, view or cache clear', async () => {
+    const f = fakes('site');
+    (f.engine.db as unknown as { registerFileURL: () => Promise<void> }).registerFileURL = async () => {
+      throw new Error('register failed');
+    };
+    await expect(run(f, manifestOf([0]), manifestOf([1]))).rejects.toThrow('register failed');
+    expect(f.calls.drop).toEqual([]);
+    expect(f.calls.statements).toEqual([]);
+    expect(f.calls.clearCache).toBe(0);
+  });
+});
+
 describe('isGoneFile', () => {
   test('matches the engine message for a registered URL that answers 404', () => {
     expect(isGoneFile(new Error('HTTP error 404 Not Found: data/partitions/000000/spans.parquet'))).toBe(
       true,
     );
+  });
+  test('matches an OtelHtmlError built the way the query engine builds it', () => {
+    const wrapped = new OtelHtmlError('invalid-report', {
+      path: 'query',
+      expected: 'a query the engine accepts',
+      actual: 'HTTP error 404 Not Found: data/partitions/000000/spans.parquet',
+      hint: 'SELECT 1',
+    });
+    expect(isGoneFile(wrapped)).toBe(true);
+  });
+  test('does not match a binder not-found, an HTTP 500, or a 404 inside the SQL', () => {
+    expect(isGoneFile(new Error("Binder Error: Referenced column 'x' not found in FROM clause"))).toBe(false);
+    expect(isGoneFile(new Error('Catalog Error: Function foo not found'))).toBe(false);
+    expect(isGoneFile(new Error('HTTP error 500 Internal Server Error: data/x.parquet'))).toBe(false);
+    expect(
+      isGoneFile(
+        new OtelHtmlError('invalid-report', {
+          path: 'query',
+          expected: 'a query the engine accepts',
+          actual: 'Parser Error: syntax error',
+          hint: "SELECT * FROM spans WHERE name = 'HTTP 404 Not Found'",
+        }),
+      ),
+    ).toBe(false);
   });
   test('does not match a parser error or a non-error', () => {
     expect(isGoneFile(new Error('Parser Error: syntax error at or near "FROM"'))).toBe(false);

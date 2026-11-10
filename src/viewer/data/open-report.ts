@@ -12,7 +12,7 @@ import {
   restQueryEngine,
 } from './mosaic.js';
 import type { QueryEngine } from './query-engine.js';
-import { type RefreshDeps, refreshReport } from './refresh-report.js';
+import { refreshReport } from './refresh-report.js';
 import { requireFormat4 } from './require-format4.js';
 import { tracedDataSource } from './traced.js';
 
@@ -51,9 +51,6 @@ export interface OpenDeps extends EngineDeps {
   host?: string | null;
   parts?: Partial<OpenParts>;
 }
-
-/** `refreshReport` reads the manifest from what the loader resolves with; the registry it is handed is never asked. */
-const loaderTakesPayload: RefreshDeps['registry'] = { take: () => new Promise<unknown>(() => undefined) };
 
 const realParts: OpenParts = {
   startEngine,
@@ -153,7 +150,6 @@ export async function openReportRefreshable(
               current,
               {
                 loader: deps.loader,
-                registry: loaderTakesPayload,
                 baseUrl: deps.baseUrl,
                 logger: deps.logger,
               },
