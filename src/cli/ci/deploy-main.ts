@@ -3,7 +3,9 @@ import type { CliIo } from '../io.js';
 import { type ApplyResult, applyUpdates } from './deploy-apply.js';
 import { downloadArtifact } from './deploy-fetch.js';
 import { type PendingPlan, planDeploy } from './deploy-plan.js';
+import { fetchLiveSite, pruneArtifacts } from './deploy-prune.js';
 import { envVar, type Fetch, messageOf, say, setOutputs } from './github-api.js';
+import { readSiteState, SITE_STATE_DIR, scanFiles } from './site-state.js';
 import { MAX_UPDATE_BYTES } from './update.js';
 
 export interface DeployPlanOptions {
@@ -144,4 +146,62 @@ export async function runDeployApply(
     pending_jobs: result.pendingJobs.join(','),
   });
   return result;
+}
+
+export interface DeployPruneOptions {
+  site: string;
+  repository: string;
+  keep: number;
+  now: string;
+}
+
+/** `ci deploy prune`: §5.3 step 6 with a write token; a failed delete is a warning, never a failure. */
+export async function runDeployPrune(
+  opts: DeployPruneOptions,
+  io: CliIo,
+  deps: Pick<WriterDeps, 'fs'>,
+  fetchFn: Fetch = fetch,
+): Promise<{ deleted: number[] }> {
+  const state = await readSiteState(deps.fs, `${opts.site}/${SITE_STATE_DIR}`, (m) =>
+    say(io, `::warning::otel-html deploy prune: ${m}`),
+  );
+  const token = envVar(io, 'GITHUB_TOKEN');
+  const { deleted } = await pruneArtifacts(
+    {
+      apiUrl: apiUrlOf(io),
+      repository: opts.repository,
+      keep: opts.keep,
+      applied: state.applied,
+      now: opts.now,
+      ...(token === undefined ? {} : { token }),
+    },
+    fetchFn,
+    (m) => say(io, `::warning::otel-html deploy prune: ${m}`),
+  );
+  say(io, `otel-html deploy prune: ${deleted.length} artifacts deleted`);
+  return { deleted };
+}
+
+/** `ci deploy fetch-live`: rebuilds a base from the live site's `files.json` (cold start). */
+export async function runDeployFetchLive(
+  opts: { pagesUrl: string; out: string },
+  io: CliIo,
+  deps: Pick<WriterDeps, 'fs'>,
+  fetchFn: Fetch = fetch,
+): Promise<{ files: number; bytes: number }> {
+  const result = await fetchLiveSite(opts, deps.fs, fetchFn);
+  say(io, `otel-html deploy fetch-live: ${result.files} files, ${result.bytes} bytes`);
+  return result;
+}
+
+/** `ci deploy scan`: rewrites `<site>/site-state/files.json` after the preview step added files. */
+export async function runDeployScan(
+  opts: { site: string },
+  io: Pick<CliIo, 'stdout'>,
+  deps: Pick<WriterDeps, 'fs'>,
+): Promise<void> {
+  const files = await scanFiles(deps.fs, opts.site);
+  await deps.fs.mkdirp(`${opts.site}/${SITE_STATE_DIR}`);
+  await deps.fs.writeTextAtomic(`${opts.site}/${SITE_STATE_DIR}/files.json`, `${JSON.stringify(files)}\n`);
+  say(io, `otel-html deploy scan: ${Object.keys(files.files).length} files`);
 }

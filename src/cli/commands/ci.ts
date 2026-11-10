@@ -3,7 +3,14 @@ import { resolveDeps } from '../../api/report.js';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { WriterDeps } from '../../writer/session.js';
 import { runContext } from '../ci/context-main.js';
-import { runDeployApply, runDeployFetch, runDeployPlan } from '../ci/deploy-main.js';
+import {
+  runDeployApply,
+  runDeployFetch,
+  runDeployFetchLive,
+  runDeployPlan,
+  runDeployPrune,
+  runDeployScan,
+} from '../ci/deploy-main.js';
 import { envVar, messageOf, say } from '../ci/github-api.js';
 import { runLink } from '../ci/link-main.js';
 import { runReport } from '../ci/report-main.js';
@@ -307,6 +314,60 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
         await runDeployApply(opts, io, await resolveDeps(deps));
       } catch (e) {
         say(io, `::error::otel-html deploy apply: ${messageOf(e)}`);
+        throw new CliExit(1);
+      }
+    });
+  deploy
+    .command('prune')
+    .description(
+      'delete the artifacts of deployments older than the newest --keep, and the update artifacts they consumed (needs a write token)',
+    )
+    .option('--repository <owner/repo>', 'repository (default: $GITHUB_REPOSITORY)')
+    .requiredOption('--site <dir>', 'the deployed site, whose site-state/applied.json says what was consumed')
+    .option('--keep <n>', 'successful deployments whose artifacts are kept', '3')
+    .action(async (flags: { repository?: string; site: string; keep: string }) => {
+      try {
+        await runDeployPrune(
+          {
+            site: flags.site,
+            repository: repositoryOf(flags.repository),
+            keep: parsePositive('--keep', flags.keep),
+            now: new Date().toISOString(),
+          },
+          io,
+          await resolveDeps(deps),
+        );
+      } catch (e) {
+        say(io, `::error::otel-html deploy prune: ${messageOf(e)}`);
+        throw new CliExit(1);
+      }
+    });
+  deploy
+    .command('fetch-live')
+    .description(
+      "cold start: download the live site's files, as listed by its site-state/files.json, into <out>",
+    )
+    .requiredOption('--pages-url <url>', "the site's public URL")
+    .requiredOption('--out <dir>', 'where the site is written')
+    .action(async (flags: { pagesUrl: string; out: string }) => {
+      try {
+        await runDeployFetchLive(flags, io, await resolveDeps(deps));
+      } catch (e) {
+        say(io, `::error::otel-html deploy fetch-live: ${messageOf(e)}`);
+        throw new CliExit(1);
+      }
+    });
+  deploy
+    .command('scan')
+    .description(
+      'rewrite <site>/site-state/files.json from the files now in the site (after the preview step)',
+    )
+    .requiredOption('--site <dir>', 'the site')
+    .action(async (flags: { site: string }) => {
+      try {
+        await runDeployScan(flags, io, await resolveDeps(deps));
+      } catch (e) {
+        say(io, `::error::otel-html deploy scan: ${messageOf(e)}`);
         throw new CliExit(1);
       }
     });

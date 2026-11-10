@@ -98,6 +98,28 @@ const isoOrUndefined = (text: string | undefined): number | undefined => {
 };
 const sameForm = (a: StateForm, b: StateForm): boolean => stateArtifactName(a) === stateArtifactName(b);
 
+/** The repository's `github-pages` deployments, newest first. */
+export const listDeployments = (
+  get: <T>(url: string) => Promise<T>,
+  repo: string,
+): Promise<ApiDeployment[]> =>
+  get<ApiDeployment[]>(`${repo}/deployments?environment=github-pages&per_page=100`);
+
+/** The deployments that went live, newest first, with the deployer run that made each (from its success status's log URL). */
+export async function* successfulDeployments(
+  get: <T>(url: string) => Promise<T>,
+  repo: string,
+  deployments: ApiDeployment[],
+): AsyncGenerator<{ id: number; runId: number; liveAt: string }> {
+  for (const d of deployments) {
+    const statuses = await get<ApiDeploymentStatus[]>(`${repo}/deployments/${d.id}/statuses?per_page=100`);
+    const ok = statuses.find((s) => s.state === 'success');
+    const runId = /\/actions\/runs\/(\d+)\//.exec(ok?.log_url ?? '')?.[1];
+    if (ok === undefined || runId === undefined) continue;
+    yield { id: d.id, runId: Number(runId), liveAt: ok.created_at };
+  }
+}
+
 export async function planDeploy(
   o: PlanOptions,
   deps: Pick<WriterDeps, 'fs'>,
@@ -126,15 +148,11 @@ export async function planDeploy(
     ).artifacts?.filter(unexpired) ?? [];
 
   // (1) the last successful deployment
-  const deployments = await get<ApiDeployment[]>(`${repo}/deployments?environment=github-pages&per_page=100`);
+  const deployments = await listDeployments(get, repo);
   const newestDeployedAt = deployments[0]?.created_at;
   let base: BaseInfo = { kind: 'live' };
-  for (const d of deployments) {
-    const statuses = await get<ApiDeploymentStatus[]>(`${repo}/deployments/${d.id}/statuses?per_page=100`);
-    const ok = statuses.find((s) => s.state === 'success');
-    const runId = /\/actions\/runs\/(\d+)\//.exec(ok?.log_url ?? '')?.[1];
-    if (ok === undefined || runId === undefined) continue;
-    base = { kind: 'live', deploymentId: d.id, runId: Number(runId), liveAt: ok.created_at };
+  for await (const d of successfulDeployments(get, repo, deployments)) {
+    base = { kind: 'live', deploymentId: d.id, runId: d.runId, liveAt: d.liveAt };
     break;
   }
   const baseRun = base.runId;
