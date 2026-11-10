@@ -64,7 +64,6 @@ let out: string[];
 let deps: WriterDeps;
 let flush: Format4Fixture; // three uncompacted partitions
 let closed: Format4Fixture; // a closed (compacted) report
-let pair: Format4Fixture; // two uncompacted partitions
 let nextId = 1000;
 
 const io = (): CliIo =>
@@ -80,7 +79,6 @@ beforeAll(async () => {
     close: false,
   });
   closed = await buildFormat4Report([spansOnlyRequest(6), spansOnlyRequest(6)]);
-  pair = await buildFormat4Report([spansOnlyRequest(4), spansOnlyRequest(4)], { close: false });
 });
 beforeEach(async () => {
   dir = mkdtempSync(join(tmpdir(), 'deploy-apply-'));
@@ -550,43 +548,89 @@ describe('run', () => {
     expect(indexOf().channels[MAIN]?.runs.some((r) => r.runId === 3)).toBe(true);
   });
 
-  test('a push after the run for the same attempt is superseded; a re-run reopens the report and drops its job', async () => {
-    const seed = [
-      addPush({ sequence: 1, job: 7, jobName: 'build', parts: [['job:7#compact:0', 0, true]] }),
-      addPush({ sequence: 1, job: 8, jobName: 'test', parts: [['job:8#compact:0', 1, true]] }),
-    ];
-    await apply(seed);
-    const sourced = (m: ManifestV4): ManifestV4 => ({
-      ...m,
-      partitions: m.partitions.map((p, i) => ({
-        ...p,
-        source: i === 0 ? 'job:7#compact:0' : 'job:8#compact:0',
-      })),
-    });
-    await apply([addRun(42, 1, sourced, MAIN_CHANNEL, pair)], { passRunId: 200 });
-    expect((await manifestOf(RUN42)).complete).toBe(true);
+  const rerunPush = (job: number, name: string, part: number, sequence = 1): PendingUpdate =>
+    addPush(
+      { sequence, job, jobName: name, attempt: 2, parts: [[`job:${job}#flush:0`, part, true]] },
+      { jobAttempt: 2, run: { ...siteRunOf(42, { attempt: 2 }), event: 'push' } },
+    );
 
-    const late = addPush({ sequence: 2, job: 7, jobName: 'build', parts: [['job:7#compact:0', 0, false]] });
+  test('a push after the run for the same attempt is superseded; a re-run keeps the compacted partitions and adds its own', async () => {
+    await apply([
+      addPush({ sequence: 1, job: 7, jobName: 'build', parts: [['job:7#flush:0', 0, true]] }),
+      addPush({ sequence: 1, job: 8, jobName: 'test', parts: [['job:8#flush:0', 1, true]] }),
+    ]);
+    await apply([addRun(42)], { passRunId: 200 });
+    const finalSources = sources(await manifestOf(RUN42));
+    expect(finalSources.every((x) => /^(compact|merge):/.test(x))).toBe(true);
+
+    const late = addPush({ sequence: 2, job: 7, jobName: 'build', parts: [['job:7#flush:0', 0, false]] });
     const r1 = await apply([late], { passRunId: 201 });
     expect(r1).toMatchObject({ changed: false, consumed: 1 });
     expect((await stateOf()).applied.updates[late.id]?.outcome).toBe('superseded');
 
-    const rerun = addPush(
-      { sequence: 1, job: 17, jobName: 'build', attempt: 2, parts: [['job:17#flush:0', 2, true]] },
-      { jobAttempt: 2, run: { ...siteRunOf(42, { attempt: 2 }), event: 'push' } },
-    );
-    const r2 = await apply([rerun], { passRunId: 202 });
+    const r2 = await apply([rerunPush(17, 'build', 2)], { passRunId: 202 });
     expect(r2.changed).toBe(true);
     const m = await manifestOf(RUN42);
     expect(m.complete).toBe(false);
-    expect(sources(m)).toEqual(['job:8#compact:0', 'job:17#flush:0']);
+    expect(sources(m)).toEqual([...finalSources, 'job:17#flush:0']);
     expect(indexOf().channels[MAIN]?.runs[0]).toMatchObject({ attempt: 2, conclusion: 'in_progress' });
+  });
+
+  test('in a push-only run, a re-run of one job drops its attempt-1 partitions (scheduled, still on disk) and keeps the others', async () => {
+    await apply([
+      addPush({ sequence: 1, job: 7, jobName: 'build', parts: [['job:7#flush:0', 0, true]] }),
+      addPush({ sequence: 1, job: 8, jobName: 'test', parts: [['job:8#flush:0', 1, true]] }),
+    ]);
+    const before = await manifestOf(RUN42);
+    const buildFile = before.partitions.find((p) => p.source === 'job:7#flush:0')?.files.spans?.path;
+    if (buildFile === undefined) throw new Error('no build partition');
+    await apply([rerunPush(17, 'build', 2)], { passRunId: 201 });
+    const m = await manifestOf(RUN42);
+    expect(sources(m)).toEqual(['job:8#flush:0', 'job:17#flush:0']);
+    expect(existsSync(join(site, RUN42, buildFile))).toBe(true);
+    expect((await stateOf()).deletions.files).toContainEqual({ path: `${RUN42}/${buildFile}`, pass: 201 });
   });
 
   test('a run update older than the report attempt is superseded', async () => {
     await apply([addRun(42, 2)]);
     const r = await apply([addRun(42, 1)], { passRunId: 101 });
     expect(r).toMatchObject({ changed: false, consumed: 1 });
+  });
+});
+
+describe('run update failures and checks', () => {
+  test('a run update whose report has no manifest is rejected, schedules nothing, and the pass goes on', async () => {
+    await apply([addPush({ sequence: 1, parts: [['job:7#flush:0', 0, true]] })]);
+    const bad = addRun(42);
+    rmSync(join(updates, bad.name, 'report/data/manifest.js'));
+    const good = addPush({ sequence: 1, job: 8, parts: [['job:8#flush:0', 1, true]] });
+    const r = await apply([bad, good], { passRunId: 200 });
+    expect(r).toMatchObject({ consumed: 2, rejected: 1, changed: true });
+    const state = await stateOf();
+    expect(state.applied.updates[bad.id]?.outcome).toBe('rejected');
+    expect(state.applied.updates[good.id]?.outcome).toBe('applied');
+    expect(state.deletions.files).toEqual([]);
+  });
+
+  test('a run update naming a later attempt than the run has is rejected', async () => {
+    const p = addRun(42, 3);
+    const r = await apply([{ ...p, run: p.run && { ...p.run, attempt: 2 } }]);
+    expect(r).toMatchObject({ rejected: 1, changed: false });
+  });
+
+  test('a push naming a later attempt than the run, or than its job, is rejected', async () => {
+    const tooNew = addPush(
+      { sequence: 1, attempt: 3, parts: [['job:7#flush:0', 0, true]] },
+      { run: { ...siteRunOf(42, { attempt: 2 }), event: 'push' } },
+    );
+    const wrongJob = addPush(
+      { sequence: 1, job: 8, attempt: 2, parts: [['job:8#flush:0', 1, true]] },
+      { jobAttempt: 1, run: { ...siteRunOf(42, { attempt: 2 }), event: 'push' } },
+    );
+    const r = await apply([tooNew, wrongJob]);
+    expect(r).toMatchObject({ rejected: 2, consumed: 2, changed: false });
+    expect(out.join('')).toContain('names attempt 3');
+    expect(out.join('')).toContain('belongs to attempt 1');
   });
 });
 
@@ -632,6 +676,37 @@ describe('pull requests', () => {
     expect(indexOf().channels['pr/5']?.runs[0]?.conclusion).toBe('in_progress');
     // the run folder written again is live again
     expect(state2.deletions.files.map((d) => d.path)).not.toContain('pr/5/runs/42/data/manifest.js');
+  });
+});
+
+describe('removed runs', () => {
+  test('after remove-pr and reopen-pr, the same push is applied to a fresh manifest', async () => {
+    const same = (): PendingUpdate =>
+      addPush({ sequence: 1, parts: [['job:7#flush:0', 0, true]] }, {}, PR_CHANNEL);
+    await apply([same()]);
+    const removal: UpdateJson = {
+      version: 1,
+      kind: 'remove-pr',
+      runId: 50,
+      runAttempt: 1,
+      createdAt: minutesBefore(4),
+      pr: 5,
+    };
+    const reopen: UpdateJson = {
+      version: 1,
+      kind: 'reopen-pr',
+      runId: 51,
+      runAttempt: 1,
+      createdAt: minutesBefore(3),
+      pr: 5,
+    };
+    await apply([add(removal, {}, { channel: null, run: null })], { passRunId: 200 });
+    expect((await stateOf()).runs.runs['pr/5/runs/42']).toBeUndefined();
+    await apply([add(reopen, {}, { channel: null, run: null })], { passRunId: 201 });
+    const again = same();
+    await apply([again], { passRunId: 202 });
+    expect(sources(await manifestOf('pr/5/runs/42'))).toEqual(['job:7#flush:0']);
+    expect((await stateOf()).applied.updates[again.id]?.outcome).toBe('applied');
   });
 });
 

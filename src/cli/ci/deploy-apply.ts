@@ -304,6 +304,8 @@ export async function applyUpdates(o: ApplyOptions, deps: WriterDeps, io: CliIo)
           if (plan.jobAttempt !== undefined && u.runAttempt !== plan.jobAttempt)
             refuse(`job ${String(u.jobId)} belongs to attempt ${plan.jobAttempt}, not ${u.runAttempt}`);
         }
+        if (u.kind === 'run' && plan.run !== null && u.runAttempt > plan.run.attempt)
+          refuse(`names attempt ${u.runAttempt}, but run ${u.runId} is at attempt ${plan.run.attempt}`);
         if (plan.channel === null || plan.run === null) return refuse('no channel');
         channel = plan.channel;
         run = { ...stripEvent(plan.run), reportPath: reportPathOf(channel.key, u.runId) };
@@ -324,6 +326,13 @@ export async function applyUpdates(o: ApplyOptions, deps: WriterDeps, io: CliIo)
     return c.channel.key.slice(3) in state.removed.prs;
   };
 
+  /** Schedules `paths` for deletion; a run report among them is gone, so its bookkeeping goes (a re-sent update must not meet it). */
+  const scheduleRemoval = async (site: string, paths: string[]): Promise<void> => {
+    await scheduleDeletion(state, site, paths, o.passRunId);
+    for (const key of Object.keys(state.runs.runs))
+      if (paths.some((p) => key === p || key.startsWith(`${p}/`))) delete state.runs.runs[key];
+  };
+
   // (4) remove-pr and reopen-pr, by time
   for (const c of [...prUpdates].sort(byTime)) {
     const pr = c.u.pr ?? 0;
@@ -331,9 +340,7 @@ export async function applyUpdates(o: ApplyOptions, deps: WriterDeps, io: CliIo)
       delete state.removed.prs[String(pr)];
     } else {
       state.removed.prs[String(pr)] = { runId: c.u.runId, at: o.now };
-      const gone = await removePullRequest(o.site, pr, o.repository, deps, io, (site, paths) =>
-        scheduleDeletion(state, site, paths, o.passRunId),
-      );
+      const gone = await removePullRequest(o.site, pr, o.repository, deps, io, scheduleRemoval);
       if (gone) changed = true;
       index = await readSiteIndex(o.site, warn);
     }
@@ -467,7 +474,8 @@ export async function applyUpdates(o: ApplyOptions, deps: WriterDeps, io: CliIo)
         Object.values(p.files).map((f) => toRel(reportPath, f.path)),
       );
       const renumberFrom = Math.max(known?.next ?? 0, await diskNext(runDir));
-      await scheduleDeletion(state, o.site, oldFiles, o.passRunId);
+      const deletionsBefore = [...state.deletions.files];
+      const runsBefore = structuredClone(state.runs);
       const placed = await placeFinishedRun(o.site, c.channel, c.run, `${c.dir}/report`, {
         retention: o.retention,
         prRetention: o.prRetention,
@@ -475,9 +483,15 @@ export async function applyUpdates(o: ApplyOptions, deps: WriterDeps, io: CliIo)
         repository: o.repository,
         deps,
         io,
-        remove: (site, paths) => scheduleDeletion(state, site, paths, o.passRunId),
+        remove: scheduleRemoval,
         renumberFrom,
+      }).catch((e: unknown) => {
+        // nothing the failed placement scheduled stands: its files are still live
+        state.deletions.files = deletionsBefore;
+        state.runs = runsBefore;
+        throw e;
       });
+      await scheduleDeletion(state, o.site, oldFiles, o.passRunId);
       const manifest = await readRunManifest(fs, runDir);
       const next = Math.max(renumberFrom, ...(manifest?.partitions ?? []).map((p) => p.n + 1));
       state.runs.runs[reportPath] = {

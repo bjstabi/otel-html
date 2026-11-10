@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { PartitionEntry } from '../../format/manifest.js';
 import { ASSETS_BASE_RE, MANIFEST_PATH } from '../../format/paths.js';
+import { OtelHtmlError } from '../../model/errors.js';
 import { readMergeInput } from '../../writer/merge.js';
 import type { WriterDeps } from '../../writer/session.js';
 import { upgradeReport } from '../../writer/upgrade.js';
@@ -86,7 +87,8 @@ export async function placeRunReport(
     await cp(from, copy, { recursive: true });
     await finishRunReport(deps, copy, assetsBase);
     const manifest = await readRunManifest(deps.fs, copy);
-    if (manifest === null) throw new Error(`${from} has no ${MANIFEST_PATH}`);
+    if (manifest === null)
+      throw new OtelHtmlError('invalid-report', { path: from, expected: `a report with ${MANIFEST_PATH}` });
     const shifted = renumbered(manifest, opts.renumberFrom);
     for (const m of shifted.moves) {
       await mkdir(dirname(join(copy, m.to)), { recursive: true });
