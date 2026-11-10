@@ -72,6 +72,7 @@ interface ReceiverOut {
   grpc: ListenerOut;
   maxBodyBytes: number;
   inflightBudgetBytes: number;
+  exportOtlp?: string | undefined;
 }
 interface ReceiverIn {
   host?: string | undefined;
@@ -79,6 +80,7 @@ interface ReceiverIn {
   grpc?: ListenerIn | undefined;
   maxBodyBytes?: number | undefined;
   inflightBudgetBytes?: number | undefined;
+  exportOtlp?: string | undefined;
 }
 interface ViewerOut {
   listCap: number;
@@ -148,6 +150,9 @@ const WriterSchema = z
   })
   .prefault({});
 
+/** http(s), a host without userinfo, and a path with no query or fragment. */
+const EXPORT_URL_RE = /^https?:\/\/[^\s/?#@]+(\/[^\s?#]*)?$/;
+
 const port = z.number().int().min(0).max(65535);
 
 const ReceiverSchema = z
@@ -157,6 +162,14 @@ const ReceiverSchema = z
     grpc: z.strictObject({ enabled: z.boolean().default(true), port: port.default(4317) }).prefault({}),
     maxBodyBytes: posInt.default(67_108_864),
     inflightBudgetBytes: posInt.default(134_217_728),
+    exportOtlp: z
+      .string()
+      .url()
+      .regex(
+        EXPORT_URL_RE,
+        'an http(s) base URL without a query, a fragment or credentials (put credentials in OTEL_EXPORTER_OTLP_HEADERS)',
+      )
+      .optional(),
   })
   .prefault({});
 

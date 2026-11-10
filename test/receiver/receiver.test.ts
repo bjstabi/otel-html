@@ -2,6 +2,7 @@ import { create, toBinary } from '@bufbuild/protobuf';
 import { describe, expect, test } from 'vitest';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { ExportTraceServiceRequestSchema } from '../../src/model/gen/opentelemetry/proto/collector/trace/v1/trace_service_pb.js';
+import { createForwarder } from '../../src/receiver/forward.js';
 import { type Admission, createReceiver, type Receiver } from '../../src/receiver/receiver.js';
 import { openSession, type WriterSession } from '../../src/writer/session.js';
 import { logRecord, logsRequest, span, traceRequest } from '../../test-support/otlp-builders.js';
@@ -121,6 +122,56 @@ function receive(
 const silent = { debug() {}, info() {}, warn() {}, error() {} };
 
 describe('createReceiver', () => {
+  test('forwards a partially accepted request', async () => {
+    const w = createTestWriter();
+    const posted: string[] = [];
+    const fetchFn: typeof fetch = async (url) => {
+      posted.push(String(url));
+      return new Response(null, { status: 200 });
+    };
+    const forwarder = createForwarder({ endpoint: 'http://c', headers: {}, fetchFn, logger: w.deps.logger });
+    const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'replace' });
+    const receiver = createReceiver(
+      session,
+      { inflightBudgetBytes: 1 << 20, forwarder },
+      { logger: w.deps.logger },
+    );
+    const body = toBinary(
+      ExportTraceServiceRequestSchema,
+      create(ExportTraceServiceRequestSchema, {
+        resourceSpans: [ENTRY(new Uint8Array(16).fill(1), 1), ENTRY(new Uint8Array(15).fill(3), 3)],
+      }),
+    );
+    const r = await receive(receiver, 'traces', body, 'protobuf', 'otlp/grpc');
+    expect(r.rejected).toBe(1);
+    await receiver.close();
+    await forwarder.close();
+    expect(posted).toEqual(['http://c/v1/traces']);
+    expect(receiver.stats().forwarded).toBe(1);
+  });
+
+  test('forwards an accepted request and not a refused one', async () => {
+    const w = createTestWriter();
+    const posted: string[] = [];
+    const fetchFn: typeof fetch = async (url) => {
+      posted.push(String(url));
+      return new Response(null, { status: 200 });
+    };
+    const forwarder = createForwarder({ endpoint: 'http://c', headers: {}, fetchFn, logger: w.deps.logger });
+    const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'replace' });
+    const receiver = createReceiver(
+      session,
+      { inflightBudgetBytes: 1 << 20, forwarder },
+      { logger: w.deps.logger },
+    );
+    await receive(receiver, 'traces', encode(twoEntryTraces()), 'json', 'otlp/http');
+    await failure(receive(receiver, 'traces', encode('not json'), 'json', 'otlp/http'));
+    await receiver.close();
+    await forwarder.close();
+    expect(posted).toEqual(['http://c/v1/traces']);
+    expect(receiver.stats()).toMatchObject({ forwarded: 1, forwardDropped: 0, forwardFailed: 0 });
+  });
+
   test('JSON traces with two entries of two spans', async () => {
     const w = createTestWriter();
     const { receiver, session } = await realReceiver(w);

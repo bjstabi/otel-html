@@ -1,5 +1,6 @@
 import type { ReceiverConfig } from '../config/schema.js';
 import { OtelHtmlError } from '../model/errors.js';
+import type { Forwarder } from '../receiver/forward.js';
 import { listenGrpc } from '../receiver/grpc.js';
 import { createHttpHandler, type Listener, listenHttp } from '../receiver/http.js';
 import { createReceiver, type ReceiverStats } from '../receiver/receiver.js';
@@ -16,6 +17,11 @@ export interface ReceiverOverrides {
   grpc?: ListenOverride | false;
   maxBodyBytes?: number;
   inflightBudgetBytes?: number;
+}
+
+/** What the CLI adds to the public overrides: the forwarder it built from `--export-otlp` and the environment. */
+export interface CliReceiverOverrides extends ReceiverOverrides {
+  forwarder?: Forwarder;
 }
 
 export interface RunningReceiver {
@@ -58,9 +64,18 @@ export async function closeAll(
 }
 
 /** Bind the OTLP transports over `report`. The report stays open after `close()`. */
-export async function startReceiver(
+export function startReceiver(
   report: Report,
   overrides: ReceiverOverrides = {},
+  deps?: Partial<ReportDeps>,
+): Promise<RunningReceiver> {
+  return startReceiverWith(report, overrides, deps);
+}
+
+/** `startReceiver` with the CLI's forwarder. The receiver only enqueues to it; the caller closes it after the listeners. */
+export async function startReceiverWith(
+  report: Report,
+  overrides: CliReceiverOverrides,
   deps?: Partial<ReportDeps>,
 ): Promise<RunningReceiver> {
   const config = configOf(report).receiver;
@@ -75,7 +90,11 @@ export async function startReceiver(
   const full = { ...depsOf(report), ...reportDepsOf(deps) }; // the report's deps were already validated
   const maxBodyBytes = overrides.maxBodyBytes ?? config.maxBodyBytes;
   const inflightBudgetBytes = overrides.inflightBudgetBytes ?? config.inflightBudgetBytes;
-  const receiver = createReceiver(sessionOf(report), { inflightBudgetBytes }, { logger: full.logger });
+  const receiver = createReceiver(
+    sessionOf(report),
+    { inflightBudgetBytes, ...(overrides.forwarder === undefined ? {} : { forwarder: overrides.forwarder }) },
+    { logger: full.logger },
+  );
   const span = full.tracer.startSpan('otel-html.receive');
 
   const listeners: Listener[] = [];

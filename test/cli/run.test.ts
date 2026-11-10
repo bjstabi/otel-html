@@ -1,10 +1,13 @@
 import { type ChildProcess, spawn } from 'node:child_process';
+import { createServer as createHttpServer } from 'node:http';
 import { createServer, type Server } from 'node:net';
+import { fromBinary, fromJson } from '@bufbuild/protobuf';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { CliIo, StopSignal } from '../../src/cli/io.js';
 import type { CliDeps } from '../../src/cli/program.js';
 import { runCli } from '../../src/cli/program.js';
 import { LOCK_PATH } from '../../src/format/paths.js';
+import { ExportTraceServiceRequestSchema } from '../../src/model/gen/opentelemetry/proto/collector/trace/v1/trace_service_pb.js';
 import { Status_StatusCode } from '../../src/model/gen/opentelemetry/proto/trace/v1/trace_pb.js';
 import { at } from '../../src/writer/checkpoint.js';
 import { acquireLock } from '../../src/writer/lock.js';
@@ -403,6 +406,84 @@ describe('run', () => {
     );
     expect(await h.result).toBe(2);
     expect(h.stderr).toContain('--grpc');
+    expect(await w.fs.exists('out')).toBe(false);
+  });
+
+  test('--export-otlp forwards the run root span after the receiver drained', async () => {
+    const bodies: { type: string | undefined; body: Buffer }[] = [];
+    const collector = createHttpServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (c: Buffer) => chunks.push(c));
+      req.on('end', () => {
+        bodies.push({ type: req.headers['content-type'], body: Buffer.concat(chunks) });
+        res.end();
+      });
+    });
+    await new Promise<void>((r) => collector.listen(0, '127.0.0.1', r));
+    const address = collector.address();
+    if (address === null || typeof address === 'string') throw new Error('no port');
+    try {
+      const w = createTestWriter();
+      const h = start(w, [
+        'run',
+        '-o',
+        'out',
+        '--export-otlp',
+        `http://127.0.0.1:${address.port}`,
+        ...node,
+        '0',
+      ]);
+      open.push(h);
+      expect(await h.result).toBe(0);
+      expect(h.stdout).toContain('forwarded 2, dropped 0, failed 0');
+      const names = bodies.flatMap((b) =>
+        (b.type === 'application/json'
+          ? fromJson(ExportTraceServiceRequestSchema, JSON.parse(b.body.toString('utf8')))
+          : fromBinary(ExportTraceServiceRequestSchema, b.body)
+        ).resourceSpans.flatMap((r) => r.scopeSpans.flatMap((ss) => ss.spans.map((sp) => sp.name))),
+      );
+      expect(names.sort()).toEqual(['child-work', 'node']);
+    } finally {
+      await new Promise((r) => collector.close(r));
+    }
+  });
+
+  test.each(['http/grpc', 'nonsense'])(
+    '--export-otlp with OTEL_EXPORTER_OTLP_PROTOCOL=%s is a usage error',
+    async (protocol) => {
+      const w = createTestWriter();
+      const h = start(w, ['run', '-o', 'out', '--export-otlp', 'http://127.0.0.1:1', ...node, '0'], {
+        OTEL_EXPORTER_OTLP_PROTOCOL: protocol,
+      });
+      expect(await h.result).toBe(2);
+      expect(h.stderr).toContain('http/protobuf');
+      expect(await w.fs.exists('out')).toBe(false);
+    },
+  );
+
+  test('--export-otlp with the grpc protocol is a usage error naming the follow-up, before anything starts', async () => {
+    const w = createTestWriter();
+    const h = start(
+      w,
+      [
+        'run',
+        '-o',
+        'out',
+        '--grpc',
+        '0',
+        '--no-http',
+        '--export-otlp',
+        'http://127.0.0.1:1',
+        '--',
+        process.execPath,
+        '-e',
+        '0',
+      ],
+      { OTEL_EXPORTER_OTLP_PROTOCOL: 'grpc' },
+    );
+    expect(await h.result).toBe(2);
+    expect(h.stderr).toContain('--export-otlp / receiver.exportOtlp');
+    expect(h.stderr).toContain('issues/259');
     expect(await w.fs.exists('out')).toBe(false);
   });
 

@@ -18,6 +18,7 @@ import {
   ExportTraceServiceRequestSchema,
   ExportTraceServiceResponseSchema,
 } from '../../src/model/gen/opentelemetry/proto/collector/trace/v1/trace_service_pb.js';
+import { createForwarder } from '../../src/receiver/forward.js';
 import {
   admissionInterceptor,
   type GrpcTransportOptions,
@@ -84,6 +85,9 @@ function fake(receive: Receiver['receive'], admit: Receiver['admit'] = () => stu
     admit,
     receive,
     stats: () => ({
+      forwarded: 0,
+      forwardDropped: 0,
+      forwardFailed: 0,
       requests: 0,
       bytes: 0,
       accepted: { traces: 0, logs: 0, metrics: 0 },
@@ -182,6 +186,30 @@ describe('OTLP/gRPC transport', () => {
     ).toHaveLength(0);
     await session.close();
     expect(allSpans(w, OUT)).toHaveLength(2);
+  });
+
+  test('a gRPC request is forwarded as protobuf with the same message bytes', async () => {
+    const w: TestWriter = createTestWriter();
+    const posted: { type: string | null; body: Uint8Array }[] = [];
+    const fetchFn: typeof fetch = async (_url, init) => {
+      posted.push({
+        type: new Headers(init?.headers).get('content-type'),
+        body: init?.body instanceof Uint8Array ? init.body : new Uint8Array(),
+      });
+      return new Response(null, { status: 200 });
+    };
+    const forwarder = createForwarder({ endpoint: 'http://c', headers: {}, fetchFn, logger: silent });
+    const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'replace' });
+    const receiver = createReceiver(session, { inflightBudgetBytes: 1 << 20, forwarder }, { logger: silent });
+    const address = await serve(receiver);
+    const body = requestOf([protoSpan(1), protoSpan(2)]);
+    const { err } = await call(clientFor(address), body);
+    expect(err).toBeNull();
+    await receiver.close();
+    await forwarder.close();
+    expect(posted).toHaveLength(1);
+    expect(posted[0]?.type).toBe('application/x-protobuf');
+    expect(posted[0]?.body).toEqual(body);
   });
 
   test('a bad entry in the middle is OK with a partial success', async () => {

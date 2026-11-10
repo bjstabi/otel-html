@@ -1,7 +1,9 @@
 import type { ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
+import { toBinary } from '@bufbuild/protobuf';
 import type { Command } from 'commander';
 import { OtelHtmlError } from '../../model/errors.js';
+import { ExportTraceServiceRequestSchema } from '../../model/gen/opentelemetry/proto/collector/trace/v1/trace_service_pb.js';
 import { parseUnixNanos, type UnixNanos } from '../../model/ids.js';
 import { checkedProtocol, childEnvironment } from '../../run/child-env.js';
 import { detectRunResource } from '../../run/resource.js';
@@ -125,6 +127,7 @@ export function addRunCommand(program: Command, io: CliIo, deps: CliDeps): void 
       const { report, receiver } = opened;
       const abandon = async (e: unknown): Promise<never> => {
         await receiver.close().catch(() => undefined);
+        await opened.forwarder?.close().catch(() => undefined);
         await report.abort().catch(() => undefined); // never mask the original error
         throw e;
       };
@@ -172,19 +175,20 @@ export function addRunCommand(program: Command, io: CliIo, deps: CliDeps): void 
       const code = exitCodeOf(exit);
       try {
         await finishReceiver(io, opened, async () => {
-          await report.addSpans(
-            rootSpanRequest({
-              traceId,
-              spanId,
-              ...(parentSpanId === undefined ? {} : { parentSpanId }),
-              command: argv,
-              pid: child.pid ?? 0,
-              start,
-              end,
-              exit,
-              resource,
-            }),
-          );
+          const root = rootSpanRequest({
+            traceId,
+            spanId,
+            ...(parentSpanId === undefined ? {} : { parentSpanId }),
+            command: argv,
+            pid: child.pid ?? 0,
+            start,
+            end,
+            exit,
+            resource,
+          });
+          await report.addSpans(root);
+          // The root span never passes through `receive`, so it is forwarded here.
+          opened.forwarder?.enqueue('traces', toBinary(ExportTraceServiceRequestSchema, root), 'protobuf');
         });
       } catch (e) {
         // The command's exit code is the step's result; a report failure is told, never counted.

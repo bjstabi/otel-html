@@ -1,7 +1,8 @@
 import { type Command, InvalidArgumentError, Option } from 'commander';
-import { type ReceiverOverrides, type RunningReceiver, startReceiver } from '../../api/receiver.js';
+import { type ReceiverOverrides, type RunningReceiver, startReceiverWith } from '../../api/receiver.js';
 import { createResolvedReport, type Report, resolveDeps } from '../../api/report.js';
 import { OtelHtmlError } from '../../model/errors.js';
+import { createForwarder, type Forwarder, parseOtlpHeaders } from '../../receiver/forward.js';
 import type { ReceiverStats } from '../../receiver/receiver.js';
 import { createNodeFileSystem } from '../../writer/node-fs.js';
 import type { CliIo, ReceiverFlags } from '../io.js';
@@ -27,7 +28,11 @@ export function addReceiverOptions(command: Command): Command {
     .addOption(new Option('--http <port>', 'OTLP/HTTP port (default 4318)').argParser(portOf))
     .option('--no-http', 'do not listen for OTLP/HTTP')
     .addOption(new Option('--grpc <port>', 'OTLP/gRPC port (default 4317)').argParser(portOf))
-    .option('--no-grpc', 'do not listen for OTLP/gRPC');
+    .option('--no-grpc', 'do not listen for OTLP/gRPC')
+    .option(
+      '--export-otlp <url>',
+      'also forward every accepted request to this OTLP/HTTP collector (headers from OTEL_EXPORTER_OTLP_HEADERS)',
+    );
 }
 
 export interface ReceiveFlags extends ReceiverFlags {
@@ -37,6 +42,20 @@ export interface ReceiveFlags extends ReceiverFlags {
 export interface OpenReceiver {
   report: Report;
   receiver: RunningReceiver;
+  /** Set when requests are forwarded to a collector; `finishReceiver` closes it after the report's last additions. */
+  forwarder?: Forwarder;
+}
+
+/** gRPC fan-out is a follow-up; asking for it with forwarding configured is refused rather than silently sent as HTTP. */
+const FORWARDABLE_PROTOCOLS: readonly string[] = ['http/protobuf', 'http/json'];
+
+const GRPC_FANOUT_ISSUE = 'https://github.com/bjstabi/otel-html/issues/259';
+
+/** Whether `url` is plain http to a host other than loopback, where forwarded header values travel in the clear. */
+function sendsInClear(url: string): boolean {
+  const { protocol, hostname } = new URL(url);
+  const loopback = hostname === 'localhost' || hostname === '[::1]' || /^127\./.test(hostname);
+  return protocol === 'http:' && !loopback;
 }
 
 /**
@@ -59,8 +78,29 @@ export async function openReceiver(
       hint: 'enable http or grpc',
     });
   }
+  const exportOtlp = config.receiver.exportOtlp;
+  const { OTEL_EXPORTER_OTLP_PROTOCOL: protocol, OTEL_EXPORTER_OTLP_HEADERS: headerText } = io.env;
+  if (exportOtlp !== undefined && protocol !== undefined && !FORWARDABLE_PROTOCOLS.includes(protocol)) {
+    const grpc = protocol === 'grpc';
+    throw new OtelHtmlError('usage', {
+      message: grpc
+        ? 'forwarding over gRPC is not supported: OTEL_EXPORTER_OTLP_PROTOCOL=grpc with --export-otlp / receiver.exportOtlp'
+        : `OTEL_EXPORTER_OTLP_PROTOCOL=${protocol} cannot be combined with --export-otlp / receiver.exportOtlp`,
+      hint: `use http/protobuf or http/json${grpc ? ` (gRPC fan-out is tracked in ${GRPC_FANOUT_ISSUE})` : ''}`,
+    });
+  }
+  const headers = exportOtlp === undefined ? {} : parseOtlpHeaders(headerText);
   const overrides = precheck({ http: config.receiver.http.enabled, grpc: config.receiver.grpc.enabled });
   const full = await resolveDeps(deps);
+  if (exportOtlp !== undefined && Object.keys(headers).length > 0 && sendsInClear(exportOtlp)) {
+    io.stderr(
+      'warning: OTEL_EXPORTER_OTLP_HEADERS values are sent over plain http to a collector that is not on loopback; use https\n',
+    );
+  }
+  const forwarder: Forwarder | undefined =
+    exportOtlp === undefined
+      ? undefined
+      : createForwarder({ endpoint: exportOtlp, headers, logger: full.logger });
   // Installed before the lock is taken, so a stop signal during start-up is handled rather than left to the default.
   const stop = nextSignal(io);
   const interrupted = stop.signalled.then((): never => {
@@ -82,16 +122,17 @@ export async function openReceiver(
   let again: ReturnType<typeof nextSignal> | undefined;
   try {
     const report = await Promise.race([creating, interrupted]);
-    starting = startReceiver(report, overrides);
+    starting = startReceiverWith(report, { ...overrides, ...(forwarder === undefined ? {} : { forwarder }) });
     starting.catch(() => undefined);
     const receiver = await Promise.race([starting, interrupted]);
-    return { report, receiver };
+    return { report, receiver, ...(forwarder === undefined ? {} : { forwarder }) };
   } catch (e) {
     // Whatever the start leaves behind once it settles: its bound ports and the report's lock.
     const cleanup = (async () => {
       const report = await creating.catch(() => undefined);
       const receiver = await starting?.catch(() => undefined);
       await receiver?.close().catch(() => undefined);
+      await forwarder?.close().catch(() => undefined); // bounded: close() gives up after 5 s
       if (report !== undefined) await report.abort().catch(() => undefined); // never mask the original error
     })();
     // Wait for the lock release before exiting, so the process does not leave it behind. A second signal exits
@@ -125,7 +166,7 @@ export function nextSignal(io: CliIo): { signalled: Promise<void>; cancel: () =>
  */
 export async function finishReceiver(
   io: CliIo,
-  { report, receiver }: OpenReceiver,
+  { report, receiver, forwarder }: OpenReceiver,
   beforeClose: () => Promise<void> = async () => undefined,
 ): Promise<void> {
   const again = nextSignal(io);
@@ -134,11 +175,17 @@ export async function finishReceiver(
     throw new CliExit(INTERRUPTED_EXIT);
   });
   const finishing = (async () => {
+    // Idempotent and bounded (5 s); a failure of its own never masks the error being handled.
+    const closeForwarder = async (): Promise<void> => {
+      await forwarder?.close().catch(() => undefined);
+    };
     try {
       await receiver.close();
       await beforeClose();
+      await closeForwarder(); // after the listeners are closed and the last additions are queued
       return await report.close();
     } catch (e) {
+      await closeForwarder();
       await report.abort().catch(() => undefined);
       throw e;
     }
@@ -150,19 +197,24 @@ export async function finishReceiver(
   } finally {
     again.cancel();
   }
-  io.stdout(`${describeSummary(summary)}${receivedLines(receiver.stats())}`);
+  io.stdout(`${describeSummary(summary)}${receivedLines(receiver.stats(), forwarder !== undefined)}`);
 }
 
 /**
  * Requests and records are different units, so they are named apart: `refused` requests failed (nothing from them
  * was written); `rejected` records were dropped from requests that were otherwise accepted.
  */
-function receivedLines({ requests, refused, rejected }: ReceiverStats): string {
+function receivedLines(
+  { requests, refused, rejected, forwarded, forwardDropped, forwardFailed }: ReceiverStats,
+  forwarding: boolean,
+): string {
   const refusals = Object.entries(refused).filter(([, n]) => n > 0);
   const refusedTotal = refusals.reduce((sum, [, n]) => sum + n, 0);
   const records = rejected.traces + rejected.logs + rejected.metrics;
   const head = `received ${requests} requests (${refusedTotal} refused); ${records} records rejected\n`;
-  return refusals.length === 0
-    ? head
-    : `${head}refused: ${refusals.map(([o, n]) => `${n} ${o}`).join(', ')}\n`;
+  const breakdown =
+    refusals.length === 0 ? head : `${head}refused: ${refusals.map(([o, n]) => `${n} ${o}`).join(', ')}\n`;
+  return forwarding
+    ? `${breakdown}forwarded ${forwarded}, dropped ${forwardDropped}, failed ${forwardFailed}\n`
+    : breakdown;
 }

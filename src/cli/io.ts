@@ -37,6 +37,8 @@ export interface ReceiverFlags extends ConfigFlags {
   host?: string;
   http?: number | false;
   grpc?: number | false;
+  /** `--export-otlp`: forward accepted requests to this collector (`receiver.exportOtlp`). */
+  exportOtlp?: string;
 }
 
 function listenerOf(port: number | false | undefined): { enabled: boolean; port?: number } | undefined {
@@ -54,13 +56,14 @@ export function configInputOf(flags: ConfigFlags | ReceiverFlags): ConfigInput {
     ...(flags.title === undefined ? {} : { title: flags.title }),
     ...(Object.keys(writer).length === 0 ? {} : { writer }),
   };
-  if (!('host' in flags || 'http' in flags || 'grpc' in flags)) return input;
+  if (!('host' in flags || 'http' in flags || 'grpc' in flags || 'exportOtlp' in flags)) return input;
   const http = listenerOf(flags.http);
   const grpc = listenerOf(flags.grpc);
   const receiver = {
     ...(flags.host === undefined ? {} : { host: flags.host }),
     ...(http === undefined ? {} : { http }),
     ...(grpc === undefined ? {} : { grpc }),
+    ...(flags.exportOtlp === undefined ? {} : { exportOtlp: flags.exportOtlp }),
   };
   return Object.keys(receiver).length === 0 ? input : { ...input, receiver };
 }
