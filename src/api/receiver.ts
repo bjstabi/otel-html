@@ -72,7 +72,7 @@ export function startReceiver(
   return startReceiverWith(report, overrides, deps);
 }
 
-/** `startReceiver` with the CLI's forwarder; closing the receiver closes it. */
+/** `startReceiver` with the CLI's forwarder. The receiver only enqueues to it; the caller closes it after the listeners. */
 export async function startReceiverWith(
   report: Report,
   overrides: CliReceiverOverrides,

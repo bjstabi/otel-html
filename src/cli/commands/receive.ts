@@ -120,6 +120,7 @@ export async function openReceiver(
       const report = await creating.catch(() => undefined);
       const receiver = await starting?.catch(() => undefined);
       await receiver?.close().catch(() => undefined);
+      await forwarder?.close().catch(() => undefined); // bounded: close() gives up after 5 s
       if (report !== undefined) await report.abort().catch(() => undefined); // never mask the original error
     })();
     // Wait for the lock release before exiting, so the process does not leave it behind. A second signal exits
@@ -162,12 +163,17 @@ export async function finishReceiver(
     throw new CliExit(INTERRUPTED_EXIT);
   });
   const finishing = (async () => {
+    // Idempotent and bounded (5 s); a failure of its own never masks the error being handled.
+    const closeForwarder = async (): Promise<void> => {
+      await forwarder?.close().catch(() => undefined);
+    };
     try {
       await receiver.close();
       await beforeClose();
-      await forwarder?.close(); // after the listeners are closed and the last additions are queued
+      await closeForwarder(); // after the listeners are closed and the last additions are queued
       return await report.close();
     } catch (e) {
+      await closeForwarder();
       await report.abort().catch(() => undefined);
       throw e;
     }
