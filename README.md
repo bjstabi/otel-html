@@ -452,7 +452,7 @@ The site's life cycle:
 - **Passes.** A pass starts with a cheap `plan` job that lists the update artifacts it has not applied yet. With none pending it ends. Otherwise the `deploy` job (one at a time, in the `pages` concurrency group) takes the last deployed site as its base, applies every pending update, and deploys the result with `actions/deploy-pages`. A pass that GitHub cancels for a newer one loses nothing, because the newer pass lists everything pending. Never re-run a pass; dispatch a new one. A job's update is accepted only from a run of `ci.yml` or `load.yml` and is checked against that run; a rejected update is named in the pass's log.
 - **Deferred deletion.** A compaction drops the files it replaced from the manifest, but the site deletes them only 15 minutes later, so a viewer holding an older manifest (the Pages CDN may serve one for ten minutes) still finds its files.
 - **`site-state/`.** The site's state (which updates were applied, the removed pull requests, the file list and the pending deletions) lives in `site-state/` at the site root. Each pass also uploads it alone as the small `otel-html-site-state-*` artifact, and `plan` reads that instead of downloading the site. After 90 days (artifact retention) the base comes from the live site over HTTPS, using `site-state/files.json`.
-- **Migration.** The first pass after the move from the `gh-pages` branch (the old store) takes the last deployment's Pages artifact as its base, or the `gh-pages` tip when that has expired. The branch is no longer read or written; delete it.
+- **Migration.** The first pass after the move from the `gh-pages` branch (the old store) takes the last deployment's Pages artifact as its base, or the `gh-pages` tip when that has expired. The branch is no longer read or written; it stays only so that reverting the move still works, and goes once the deployer has run for a few days.
 
 Permissions: the jobs that produce a report hold `contents: read` and `actions: write`. The write is for `ci dispatch`; the artifact uploads use the runtime token every job has. The `report` job holds `actions: write` (downloading the run's artifacts, uploading the update, dispatching), `pages: read`, `pull-requests: write` and `checks: write`; `cleanup` holds `actions: write` only. The deployer's `deploy` job holds `contents: read`, `actions: write` (downloading updates, pruning artifacts), `deployments: read`, `pages: write` and `id-token: write`. The preview screenshot at the top of this README is taken by the deployer, over a loopback server (`127.0.0.1`, a random port) on the site it is about to deploy, because a `site` report loads its engine over http and does not open from `file://`.
 
@@ -589,6 +589,7 @@ jobs:
       actions: read
       deployments: read
       pages: read
+      pull-requests: read # a private repository: the pull requests of each update's commit
     outputs:
       pending: ${{ steps.plan.outputs.pending }}
     steps:
@@ -622,6 +623,7 @@ jobs:
       contents: read
       actions: write # downloading the updates, pruning artifacts
       deployments: read # the last successful deployment
+      pull-requests: read # a private repository: the pull requests of each update's commit
       pages: write
       id-token: write
     steps:
@@ -637,7 +639,7 @@ The site has the same layout as this repo's: a default-branch run goes to `/bran
 
 Pages setup: Settings, Pages, Source: GitHub Actions (`build_type: workflow`), and the `github-pages` environment's deployment branches must allow the default branch. The deployer is the only job that deploys, so it is the only one with `pages: write` and `id-token: write`.
 
-Migrating from the version that pushed to `gh-pages`: add the `pages-deploy.yml` workflow above, give `ci-report.yml` the new publisher example (the publisher drops `deploy`, `preview`, `retention` and `pr-retention`, and `contents: write`), set the Pages source to "GitHub Actions" if it is not, and add `publish: true` to your collect steps if you want reports while runs go on. The deployer's first pass takes the last deployment's Pages artifact as its base, or the `gh-pages` tip when that has expired. Once that pass has deployed, delete the `gh-pages` branch.
+Migrating from the version that pushed to `gh-pages`: add the `pages-deploy.yml` workflow above, give `ci-report.yml` the new publisher example (the publisher drops `deploy`, `preview`, `retention` and `pr-retention`, and `contents: write`), set the Pages source to "GitHub Actions" if it is not, and add `publish: true` to your collect steps if you want reports while runs go on. The deployer's first pass takes the last deployment's Pages artifact as its base, or the `gh-pages` tip when that has expired. The branch is no longer written. Keep it while you may still roll back to the old publisher, which needs it, and delete it once the deployer has run for a few days.
 
 Security: the report-producing jobs hold `actions: write`, to dispatch the deployer, instead of `contents: write`. That token can also cancel runs and delete artifacts and caches in the repository. otel-html uses it only to dispatch, and only for a person's same-repository run; bot branches (Renovate) never dispatch. A job's `permissions` cannot be conditional, so the token exists on bot runs too: the design guarantees otel-html does not use it there, not that the dependency code could not. Fork runs get a read-only token whatever you declare. No job can write the site; only the deployer can, and it runs the default branch's code. Every update artifact is untrusted data, a fork's included: the deployer accepts a job's update only from a run of one of its `ci-workflows`, takes the run and the channel from the API instead of the update, and rejects an update that is malformed, too large or disagrees with its own name.
 
@@ -664,7 +666,7 @@ Deploy inputs:
 | Input | Default | |
 | --- | --- | --- |
 | `version`, `command` | `latest`, empty | As for setup. |
-| `token` | `github.token` | Needs `contents: read`, `actions: write`, `deployments: read`, `pages: write`, `id-token: write`. |
+| `token` | `github.token` | Needs `contents: read`, `actions: write`, `deployments: read`, `pages: write`, `id-token: write`; in a private repository also `pull-requests: read`. |
 | `config` | the tool's built-in dashboard | The dashboard config for the rolling reports. |
 | `retention`, `pr-retention` | 30, 10 | Runs kept of each workflow per branch page and per pull request page. GitHub Pages sites are limited to 1 GB, so mind the total: about 40 MB per otel-html version still referenced (the shared `assets/<version>/`) plus workflows × (`retention` + open pull requests × `pr-retention`) × your report's data size × 2, the 2 for the rolling reports (each holds its runs' data again). In this repo (reports estimated at about 1.7 MB without the viewer, the format-3 figure; format 4 has not been measured on the site yet) that is about 150 MB for the default branch and 25 MB per open pull request. |
 | `preview` | false | Screenshot each default-branch rolling report the pass rebuilt, in light and dark (`preview-light.png`, `preview-dark.png` in its folder), for a README image. Installs Playwright's Chromium, about 1 minute per pass; needs Node and passwordless sudo on the runner. A failed install or screenshot is a warning and the pass goes on. |
