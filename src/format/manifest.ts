@@ -198,7 +198,7 @@ export interface ManifestV4 {
 
 export type AnyManifest = Manifest | ManifestV4;
 
-const SOURCE_RE = /^(flush|compact|job|ci|merge):[A-Za-z0-9#:._-]{1,200}$/;
+export const SOURCE_RE: RegExp = /^(flush|compact|job|ci|merge):[A-Za-z0-9#:._-]{1,200}$/;
 const INT64_MIN = -(2n ** 63n);
 const INT64_MAX = 2n ** 63n - 1n;
 const INT64_CANONICAL = /^(?:0|-?[1-9][0-9]*)$/;
@@ -217,7 +217,7 @@ const int64Text = z
 const tableKeyed = <T extends z.ZodType>(v: T): z.ZodObject<Record<Table, T>, z.core.$strict> =>
   z.strictObject({ spans: v, logs: v, points: v, traces: v, patterns: v });
 
-const PartitionFileSchema: z.ZodType<PartitionFile> = z.strictObject({
+export const PartitionFileSchema: z.ZodType<PartitionFile> = z.strictObject({
   path: z.string(),
   bytes: nonNegInt,
   rows: nonNegInt,
