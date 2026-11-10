@@ -22,6 +22,31 @@ describe('installRegistry', () => {
     expect(await registry.take('a')).toBe(1);
   });
 
+  test('discard forgets a payload nobody waited for', async () => {
+    const win = withBootstrap();
+    const registry = installRegistry(win);
+    win.__OH__?.push('manifest', { old: true });
+    registry.discard('manifest');
+    const next = registry.take('manifest');
+    win.__OH__?.push('manifest', { fresh: true });
+    expect(await next).toEqual({ fresh: true });
+  });
+
+  test('an aborted take stops waiting: a push after it is kept, not handed to the abandoned wait', async () => {
+    const win = withBootstrap();
+    const registry = installRegistry(win);
+    const abandoned = new AbortController();
+    let abandonedResolved = false;
+    void registry.take('manifest', abandoned.signal).then(() => {
+      abandonedResolved = true;
+    });
+    abandoned.abort();
+    win.__OH__?.push('manifest', { late: true });
+    await Promise.resolve();
+    expect(abandonedResolved).toBe(false);
+    expect(registry.takeStatic('manifest', 'data/manifest.js')).toEqual({ late: true });
+  });
+
   test('take resolves for pushes made later, and push after install reaches waiters', async () => {
     const win = withBootstrap();
     const registry = installRegistry(win);

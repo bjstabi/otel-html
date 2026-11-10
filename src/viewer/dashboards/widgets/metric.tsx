@@ -158,9 +158,15 @@ const QueriesBody: Body = ({ widget, scope, height, dataSource, actions, variabl
   if (narrowing.status === 'error')
     return <ErrorCard title="The selected trace could not be read" message={narrowing.message} />;
   if (catalog.status === 'error')
-    return <ErrorCard title="The metric catalog could not be loaded" message={catalog.message} />;
+    return (
+      <ErrorCard
+        title="The metric catalog could not be loaded"
+        message={catalog.message}
+        gone={catalog.gone}
+      />
+    );
   if (result.failure !== null)
-    return <ErrorCard title="The queries could not run" message={result.failure} />;
+    return <ErrorCard title="The queries could not run" message={result.failure} gone={result.failureGone} />;
   if (catalog.status === 'loading' || narrowing.status === 'loading' || result.loading) {
     return <LoadingNote />;
   }
@@ -307,7 +313,13 @@ const RunBody: Body = ({ widget, scope, dashboard, height, dataSource, actions, 
   if (narrowing.status === 'error')
     return <ErrorCard title="The selected trace could not be read" message={narrowing.message} />;
   if (catalog.status === 'error')
-    return <ErrorCard title="The metric catalog could not be loaded" message={catalog.message} />;
+    return (
+      <ErrorCard
+        title="The metric catalog could not be loaded"
+        message={catalog.message}
+        gone={catalog.gone}
+      />
+    );
   if (resolved !== null && 'missing' in resolved) {
     return <Empty title="Not in this report" message={`${own.metric} is not in this report`} />;
   }
@@ -374,7 +386,13 @@ const GridBody: Body = ({ scope, height, dataSource, actions, variables }) => {
   if (narrowing.status === 'error')
     return <ErrorCard title="The selected trace could not be read" message={narrowing.message} />;
   if (catalog.status === 'error')
-    return <ErrorCard title="The metric catalog could not be loaded" message={catalog.message} />;
+    return (
+      <ErrorCard
+        title="The metric catalog could not be loaded"
+        message={catalog.message}
+        gone={catalog.gone}
+      />
+    );
   if (origin === null) return <LoadingNote />;
   if (origin.resources.length === 0) {
     return <Empty title="No matching resources" message="No resource matches the chosen variables." />;

@@ -192,7 +192,7 @@ export function MetricsCatalog(props: { dataSource: DataSource }): JSX.Element {
         </p>
       )}
       {load.status === 'error' && (
-        <ErrorCard title="The metric catalog could not be loaded" message={load.message} />
+        <ErrorCard title="The metric catalog could not be loaded" message={load.message} gone={load.gone} />
       )}
       {load.status === 'ready' && all.length > 0 && (
         <div className="flex flex-col gap-3">

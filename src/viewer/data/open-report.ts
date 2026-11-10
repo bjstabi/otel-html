@@ -1,6 +1,4 @@
-import { type AnyManifest, isV4, type ManifestV4, parseAnyManifest } from '../../format/manifest.js';
-import { oldFormatMessage } from '../../format/version.js';
-import { OtelHtmlError } from '../../model/errors.js';
+import { type ManifestV4, parseAnyManifest } from '../../format/manifest.js';
 import { traced } from '../telemetry.js';
 import type { DataSource } from './data-source.js';
 import { createDuckDbDataSource } from './duckdb-source.js';
@@ -14,7 +12,11 @@ import {
   restQueryEngine,
 } from './mosaic.js';
 import type { QueryEngine } from './query-engine.js';
+import { refreshReport } from './refresh-report.js';
+import { requireFormat4 } from './require-format4.js';
 import { tracedDataSource } from './traced.js';
+
+export { requireFormat4 };
 
 /** Where `load` is: connecting to the host, starting the engine, registering partition `done` of `total`, creating the views. */
 export interface LoadProgress {
@@ -34,8 +36,21 @@ export interface OpenParts {
   createSource: typeof createDuckDbDataSource;
 }
 
+/** What `openReportRefreshable` returns: the data source and, for a report with an engine in the page, its Refresh. */
+export interface OpenedReport {
+  dataSource: DataSource;
+  /**
+   * D55: re-reads the manifest and returns a data source over the same engine. Null on a served report (#246).
+   * With an unchanged manifest it returns the data source already shown, unless `rerun` (a reader's click, spec 5.7):
+   * then it clears the result cache and returns a fresh data source over the same manifest, so pages re-run their queries.
+   */
+  refresh: ((rerun?: boolean) => Promise<DataSource>) | null;
+}
+
 export interface OpenDeps extends EngineDeps {
   logger: Logger;
+  /** The clock `refresh` stamps `?r=` with. */
+  now?: () => number;
   /** The `otel-html-host` meta tag's content (an endpoint relative to `baseUrl`), or null when the report is a file. */
   host?: string | null;
   parts?: Partial<OpenParts>;
@@ -62,14 +77,6 @@ function partitionsDone(counts: readonly number[], files: number): number {
   return done;
 }
 
-/** The D12 gate: the viewer reads format 4 only. */
-export function requireFormat4(manifest: AnyManifest): ManifestV4 {
-  if (isV4(manifest)) return manifest;
-  throw new OtelHtmlError('invalid-report', {
-    message: oldFormatMessage(manifest.formatVersion),
-  });
-}
-
 const partitionBytes = (m: ManifestV4): number =>
   m.partitions.reduce((n, p) => n + Object.values(p.files).reduce((k, f) => k + f.bytes, 0), 0);
 
@@ -84,6 +91,19 @@ export async function openReport(
   deps: OpenDeps,
   onProgress: (p: LoadProgress) => void,
 ): Promise<DataSource> {
+  return (await openReportRefreshable(rawManifest, deps, onProgress)).dataSource;
+}
+
+/**
+ * `openReport` plus the report's Refresh (D55). `refresh` keeps the engine and the query engine the load built, and
+ * the manifest of the last refresh as the next one's `previous`; calls are serialised. It is null with `deps.host`
+ * set: the host serves one manifest.
+ */
+export async function openReportRefreshable(
+  rawManifest: unknown,
+  deps: OpenDeps,
+  onProgress: (p: LoadProgress) => void,
+): Promise<OpenedReport> {
   const parts: OpenParts = { ...realParts, ...deps.parts };
   const manifest = requireFormat4(parseAnyManifest(rawManifest));
   const attrs = {
@@ -100,7 +120,10 @@ export async function openReport(
       if (deps.host !== undefined && deps.host !== null) {
         onProgress({ phase: 'host' });
         const queryEngine = parts.createRestEngine(new URL(deps.host, deps.baseUrl).href, deps.logger);
-        return tracedDataSource(parts.createSource({ engine: queryEngine, manifest, logger: deps.logger }));
+        const dataSource = tracedDataSource(
+          parts.createSource({ engine: queryEngine, manifest, logger: deps.logger }),
+        );
+        return { dataSource, refresh: null };
       }
       onProgress({ phase: 'engine' });
       const engine: Engine = await traced('viewer.engine.start', attrs, () =>
@@ -118,7 +141,39 @@ export async function openReport(
           ),
         );
         const queryEngine = parts.createQueryEngine(engine, deps.logger);
-        return tracedDataSource(parts.createSource({ engine: queryEngine, manifest, logger: deps.logger }));
+        const dataSource = tracedDataSource(
+          parts.createSource({ engine: queryEngine, manifest, logger: deps.logger }),
+        );
+        let current = manifest;
+        let shown = dataSource;
+        let last: Promise<unknown> = Promise.resolve();
+        const refresh = (rerun = false): Promise<DataSource> => {
+          const run = last.then(async () => {
+            const next = await refreshReport(
+              engine,
+              queryEngine,
+              current,
+              {
+                loader: deps.loader,
+                baseUrl: deps.baseUrl,
+                logger: deps.logger,
+              },
+              deps.now ?? Date.now,
+            );
+            current = next.manifest;
+            if (next.dataSource !== null) shown = next.dataSource;
+            else if (rerun) {
+              queryEngine.clearCache();
+              shown = tracedDataSource(
+                parts.createSource({ engine: queryEngine, manifest: current, logger: deps.logger }),
+              );
+            }
+            return shown;
+          });
+          last = run.catch(() => undefined);
+          return run;
+        };
+        return { dataSource, refresh };
       } catch (error) {
         await engine.close().catch((closeError: unknown) => {
           deps.logger.warn('could not close the engine after a failed load', closeError);

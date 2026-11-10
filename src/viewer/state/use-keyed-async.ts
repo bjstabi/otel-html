@@ -1,9 +1,14 @@
 import { useEffect, useState } from 'react';
+import { isGoneFile } from '../data/refresh-report.js';
 
 export type KeyedState<V> =
   | { status: 'loading' }
   | { status: 'ready'; value: V }
-  | { status: 'error'; message: string };
+  | {
+      status: 'error';
+      message: string /** D56: a registered file the site no longer serves. */;
+      gone: boolean;
+    };
 
 /**
  * Loads one value per key. A change of key aborts the previous load and resets to `loading`, so a result for a key
@@ -26,7 +31,11 @@ export function useKeyedAsync<K, V>(
           ctl.signal.aborted ||
           setState({
             key,
-            result: { status: 'error', message: e instanceof Error ? e.message : String(e) },
+            result: {
+              status: 'error',
+              message: e instanceof Error ? e.message : String(e),
+              gone: isGoneFile(e),
+            },
           }),
       );
     return () => ctl.abort();

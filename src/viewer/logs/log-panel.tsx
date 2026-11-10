@@ -22,6 +22,7 @@ import type { DataSource } from '../data/data-source.js';
 import { type LogRef, type LogRow, refParts } from '../data/log-query.js';
 import { useHasMetrics } from '../metrics/metric-grid.js';
 import { CONTROL } from '../shell/controls.js';
+import { GoneNotice } from '../shell/in-progress.js';
 import { MOVE_EVENT } from '../shell/move-event.js';
 import { CopyLink } from '../shell/page-chrome.js';
 import { useSelection, useSelectionStore } from '../state/selection-context.js';
@@ -335,6 +336,7 @@ export function LogPanel(props: LogPanelProps): JSX.Element {
         <div role="alert" className="m-4 rounded-card border border-hairline bg-surface p-4">
           <p className="font-semibold text-critical">The log could not be loaded</p>
           <p className="mt-1 font-mono text-xs break-words whitespace-pre-wrap text-ink-2">{load.message}</p>
+          {load.gone && <GoneNotice />}
         </div>
       )}
       {row !== null && active !== null && (

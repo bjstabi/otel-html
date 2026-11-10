@@ -25,6 +25,7 @@ import {
   type OpenDeps,
   type OpenParts,
   openReport,
+  openReportRefreshable,
 } from '../../src/viewer/data/open-report.js';
 import type { QueryEngine } from '../../src/viewer/data/query-engine.js';
 
@@ -181,10 +182,147 @@ describe('openReport over a host', () => {
     expect(source.querySpans).toHaveBeenCalledOnce();
   });
 
+  test('openReportRefreshable gives a served report no refresh (#246)', async () => {
+    const { hostDeps, source } = hosted();
+    const opened = await openReportRefreshable(manifest4(), hostDeps, () => undefined);
+    expect(opened.refresh).toBeNull();
+    expect(await opened.dataSource.querySpans({} as never)).toEqual({ rows: [1] });
+    expect(source.querySpans).toHaveBeenCalledOnce();
+  });
+
   test('a format-3 manifest still fails the D12 gate', async () => {
     const { hostDeps, createRestEngine } = hosted();
     await expect(openReport(manifest3, hostDeps, () => undefined)).rejects.toThrow('format 3');
     expect(createRestEngine).not.toHaveBeenCalled();
+  });
+});
+
+describe('openReportRefreshable', () => {
+  test('a report with an engine in the page gets a refresh function; openReport returns the same data source kind', async () => {
+    const { deps } = setup();
+    const opened = await openReportRefreshable(manifest4(), deps, () => undefined);
+    expect(opened.refresh).toBeInstanceOf(Function);
+    expect(await opened.dataSource.querySpans({} as never)).toEqual({ rows: [1] });
+  });
+});
+
+describe('the refresh of openReportRefreshable', () => {
+  const manifestOf = (ns: number[]): ManifestV4 => {
+    const m = manifest4();
+    return {
+      ...m,
+      partitions: ns.map((n) => ({
+        n,
+        source: `job:${n}`,
+        files: { spans: file(n, 'spans', 1) },
+      })),
+      engine: { ...m.engine, format: 'site' },
+    } as ManifestV4;
+  };
+
+  function refreshable(manifests: (ManifestV4 | Error)[]) {
+    const registered: string[] = [];
+    const dropped: string[] = [];
+    const engine = {
+      format: 'site',
+      db: {
+        registerFileURL: async (name: string) => void registered.push(name),
+        dropFile: async (name: string) => void dropped.push(name),
+      },
+      connection: { query: async () => undefined },
+      close: async () => {},
+    } as unknown as Engine;
+    const order: string[] = [];
+    let next = 0;
+    const loader = {
+      load: async (path: string) => {
+        order.push(`start ${path}`);
+        await new Promise((r) => setTimeout(r, 5));
+        order.push(`end ${path}`);
+        const m = manifests[next++];
+        if (m instanceof Error) throw m;
+        return m;
+      },
+    };
+    const cleared = { count: 0 };
+    const { deps } = setup({
+      startEngine: vi.fn(() => Promise.resolve(engine)),
+      registerPartitions: vi.fn(() => Promise.resolve()),
+      createQueryEngine: vi.fn(
+        () =>
+          ({
+            clearCache() {
+              cleared.count += 1;
+            },
+          }) as unknown as QueryEngine,
+      ),
+      createSource: vi.fn(() => ({ manifest: manifest4() }) as unknown as DataSource),
+    });
+    let clock = 0;
+    const withLoader = { ...deps, loader, baseUrl: 'https://s.example/r/', now: () => ++clock } as OpenDeps;
+    return { withLoader, registered, dropped, order, cleared, initial: manifestOf([0]) };
+  }
+  const p = (n: number) => partitionFilePath(n, 'spans');
+
+  test('two overlapping refreshes run one after the other', async () => {
+    const { withLoader, order, initial } = refreshable([manifestOf([0, 1]), manifestOf([0, 1, 2])]);
+    const opened = await openReportRefreshable(initial, withLoader, () => undefined);
+    await Promise.all([opened.refresh?.(), opened.refresh?.()]);
+    expect(order).toEqual([
+      'start data/manifest.js?r=1',
+      'end data/manifest.js?r=1',
+      'start data/manifest.js?r=2',
+      'end data/manifest.js?r=2',
+    ]);
+  });
+
+  test('each refresh diffs against the previous successful manifest', async () => {
+    const { withLoader, registered, dropped, initial } = refreshable([manifestOf([0, 1]), manifestOf([2])]);
+    const opened = await openReportRefreshable(initial, withLoader, () => undefined);
+    await opened.refresh?.();
+    expect(registered).toEqual([p(1)]);
+    await opened.refresh?.();
+    expect(registered).toEqual([p(1), p(2)]);
+    expect(dropped.sort()).toEqual([p(0), p(1)]);
+  });
+
+  test('a refresh that finds nothing new returns the data source already shown', async () => {
+    const { withLoader, registered, initial } = refreshable([manifestOf([0]), manifestOf([0, 1])]);
+    const opened = await openReportRefreshable(initial, withLoader, () => undefined);
+    expect(await opened.refresh?.()).toBe(opened.dataSource);
+    expect(registered).toEqual([]);
+    expect(await opened.refresh?.()).not.toBe(opened.dataSource);
+    expect(registered).toEqual([p(1)]);
+  });
+
+  test('a reader-requested refresh of an unchanged manifest clears the cache and returns a fresh data source', async () => {
+    const { withLoader, registered, dropped, cleared, initial } = refreshable([
+      manifestOf([0]),
+      manifestOf([0]),
+    ]);
+    const opened = await openReportRefreshable(initial, withLoader, () => undefined);
+    const rerun = await opened.refresh?.(true);
+    expect(rerun).not.toBe(opened.dataSource);
+    expect(cleared.count).toBe(1);
+    expect(registered).toEqual([]);
+    expect(dropped).toEqual([]);
+    // a poll tick (no rerun) afterwards is a no-op: the same source, no clear
+    expect(await opened.refresh?.()).toBe(rerun);
+    expect(cleared.count).toBe(1);
+  });
+
+  test('a failed refresh leaves the last good manifest as the next previous', async () => {
+    const { withLoader, registered, dropped, initial } = refreshable([
+      manifestOf([0, 1]),
+      new Error('network'),
+      manifestOf([2]),
+    ]);
+    const opened = await openReportRefreshable(initial, withLoader, () => undefined);
+    await opened.refresh?.();
+    await expect(opened.refresh?.()).rejects.toThrow('network');
+    await opened.refresh?.();
+    expect(registered).toEqual([p(1), p(2)]);
+    expect(dropped.sort()).toEqual([p(0), p(1)]);
   });
 });
 

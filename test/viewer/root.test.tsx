@@ -2,15 +2,18 @@ import { act, cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { ManifestV4 } from '../../src/format/manifest.js';
 import type { DataSource } from '../../src/viewer/data/data-source.js';
-import { type LoadProgress, requireFormat4 } from '../../src/viewer/data/open-report.js';
+import { type LoadProgress, type OpenedReport, requireFormat4 } from '../../src/viewer/data/open-report.js';
 import { Root } from '../../src/viewer/root.js';
 import { createHashHistory } from '../../src/viewer/state/hash-history.js';
 
 vi.mock('../../src/viewer/shell/shell.js', () => ({ Shell: (): string => 'shell' }));
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-function dataSource(theme: 'system' | 'light' | 'dark'): DataSource {
-  return { manifest: { config: { viewer: { theme } } } as ManifestV4 } as DataSource;
+function dataSource(theme: 'system' | 'light' | 'dark'): OpenedReport {
+  return {
+    dataSource: { manifest: { config: { viewer: { theme } } } as ManifestV4 } as DataSource,
+    refresh: null,
+  };
 }
 
 beforeEach(() => {
@@ -45,8 +48,8 @@ describe('viewer.theme', () => {
 describe('loading phases', () => {
   test('the status line names the engine, the partition and the views phase', async () => {
     let report: (p: LoadProgress) => void = () => undefined;
-    let finish: (d: DataSource) => void = () => undefined;
-    const load = (onProgress: (p: LoadProgress) => void): Promise<DataSource> => {
+    let finish: (d: OpenedReport) => void = () => undefined;
+    const load = (onProgress: (p: LoadProgress) => void): Promise<OpenedReport> => {
       report = onProgress;
       return new Promise((resolve) => {
         finish = resolve;
@@ -75,7 +78,7 @@ describe('the format gate (D12)', () => {
   });
 
   test('App shows that text when the load fails with it', async () => {
-    const load = (): Promise<DataSource> => {
+    const load = (): Promise<OpenedReport> => {
       try {
         requireFormat4(v3);
       } catch (e) {
@@ -91,15 +94,17 @@ describe('the format gate (D12)', () => {
 
 describe('unmount during load', () => {
   test('the data source that arrives after unmount is closed', async () => {
-    let finish: (d: DataSource) => void = () => undefined;
-    const load = (): Promise<DataSource> =>
+    let finish: (d: OpenedReport) => void = () => undefined;
+    const load = (): Promise<OpenedReport> =>
       new Promise((resolve) => {
         finish = resolve;
       });
     const { unmount } = render(<Root load={load} history={createHashHistory(window)} />);
     unmount();
     const close = vi.fn(() => Promise.resolve());
-    await act(async () => finish({ ...dataSource('system'), close } as DataSource));
+    await act(async () =>
+      finish({ dataSource: { ...dataSource('system').dataSource, close } as DataSource, refresh: null }),
+    );
     expect(close).toHaveBeenCalledOnce();
   });
 });
@@ -107,7 +112,7 @@ describe('unmount during load', () => {
 describe('a failed load', () => {
   test('progress that arrives after the failure does not replace the error', async () => {
     let report: (p: LoadProgress) => void = () => undefined;
-    const load = (onProgress: (p: LoadProgress) => void): Promise<DataSource> => {
+    const load = (onProgress: (p: LoadProgress) => void): Promise<OpenedReport> => {
       report = onProgress;
       return Promise.reject(new Error('spans.parquet.js: the script failed to load'));
     };

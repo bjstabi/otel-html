@@ -14,8 +14,10 @@ declare global {
 }
 
 export interface Registry {
-  /** Resolves with the payload registered under `key` (now or later) and forgets it. */
-  take(key: string): Promise<unknown>;
+  /** Resolves with the payload registered under `key` (now or later) and forgets it. An aborted `signal` stops the wait. */
+  take(key: string, signal?: AbortSignal): Promise<unknown>;
+  /** Forgets a payload registered under `key` that nobody was waiting for (the late script of a load that timed out). */
+  discard(key: string): void;
   /**
    * The payload of a data file loaded by a static `<script>` that precedes the viewer script (the manifest).
    * Classic scripts run in order, so by now it has either registered or failed (missing file, load error, script
@@ -67,7 +69,10 @@ export function installRegistry(win: Window): Registry {
       values.delete(key);
       return payload;
     },
-    take(key) {
+    discard(key) {
+      values.delete(key);
+    },
+    take(key, signal) {
       if (values.has(key)) {
         const payload = values.get(key);
         values.delete(key);
@@ -75,6 +80,15 @@ export function installRegistry(win: Window): Registry {
       }
       return new Promise((resolve) => {
         waiters.set(key, [...(waiters.get(key) ?? []), resolve]);
+        signal?.addEventListener(
+          'abort',
+          () => {
+            const rest = (waiters.get(key) ?? []).filter((w) => w !== resolve);
+            if (rest.length === 0) waiters.delete(key);
+            else waiters.set(key, rest);
+          },
+          { once: true },
+        );
       });
     },
   };

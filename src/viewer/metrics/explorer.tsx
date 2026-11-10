@@ -298,9 +298,15 @@ function ExplorerBody(props: { dataSource: DataSource; range: TimeWindow }): JSX
         {(run.loading || catalogState.status === 'loading') && <LoadingNote />}
         {actionError !== null && <ErrorCard title={actionError.title} message={actionError.message} />}
         {catalogState.status === 'error' && (
-          <ErrorCard title="The metric catalog could not be loaded" message={catalogState.message} />
+          <ErrorCard
+            title="The metric catalog could not be loaded"
+            message={catalogState.message}
+            gone={catalogState.gone}
+          />
         )}
-        {run.failure !== null && <ErrorCard title="The queries could not run" message={run.failure} />}
+        {run.failure !== null && (
+          <ErrorCard title="The queries could not run" message={run.failure} gone={run.failureGone} />
+        )}
         {noData && (
           <section className="rounded-card border border-hairline bg-surface p-6">
             <h2 className="text-base font-semibold">No data points in this window</h2>

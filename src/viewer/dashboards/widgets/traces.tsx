@@ -47,7 +47,9 @@ function TraceFlame(props: {
         open trace panel →
       </button>
       {detail.status === 'loading' && <LoadingNote />}
-      {detail.status === 'error' && <ErrorCard title="Could not load the trace" message={detail.message} />}
+      {detail.status === 'error' && (
+        <ErrorCard title="Could not load the trace" message={detail.message} gone={detail.gone} />
+      )}
       {detail.status === 'ready' && (
         <FlameGraph
           key={traceId}
@@ -111,7 +113,9 @@ export const TracesWidget: WidgetRenderer = ({ widget, scope, height, dataSource
   return (
     <div className="flex flex-col gap-1">
       {state.status === 'loading' && <LoadingNote />}
-      {state.status === 'error' && <ErrorCard title="The query could not run" message={state.message} />}
+      {state.status === 'error' && (
+        <ErrorCard title="The query could not run" message={state.message} gone={state.gone} />
+      )}
       {result !== null &&
         (result.total === 0 ? (
           <NoMatch noun={noun} heading="h3" />

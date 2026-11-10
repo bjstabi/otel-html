@@ -22,6 +22,7 @@ import { TracesExplorer } from '../traces/explorer.js';
 import { ServicesPage } from '../traces/services-page.js';
 import { leaveTracePage, TracePage } from '../traces/trace-page.js';
 import { type GoTo, GoToContext } from './go-to.js';
+import { RefreshContext, type RefreshControl } from './in-progress.js';
 import { MOVE_EVENT } from './move-event.js';
 import { NotFoundPage } from './pages.js';
 import { ShortcutHelp } from './shortcut-help.js';
@@ -110,7 +111,12 @@ function PatternsRedirect(): null {
   return null;
 }
 
-export function Shell(props: { dataSource: DataSource; history: HistoryPort }): JSX.Element {
+/** `refresh` (D55) is null on a served report and wherever the report cannot grow: the in-progress line shows without its controls. */
+export function Shell(props: {
+  dataSource: DataSource;
+  history: HistoryPort;
+  refresh?: RefreshControl | null;
+}): JSX.Element {
   const { dataSource, history } = props;
   const manifest = dataSource.manifest;
   const store = useMemo(() => createSelectionStore(parseUrlState(history.read()).state), [history]);
@@ -188,9 +194,11 @@ export function Shell(props: { dataSource: DataSource; history: HistoryPort }): 
                 <div className="flex min-w-0 flex-1 flex-col">
                   <UrlErrors errors={errors} onDismiss={() => setErrors([])} />
                   <CarryNotice carried={carried} onDismiss={() => setCarried(null)} />
-                  <RunSessionProvider>
-                    <RoutedPage dataSource={dataSource} />
-                  </RunSessionProvider>
+                  <RefreshContext.Provider value={props.refresh ?? null}>
+                    <RunSessionProvider>
+                      <RoutedPage dataSource={dataSource} />
+                    </RunSessionProvider>
+                  </RefreshContext.Provider>
                 </div>
               </div>
               <ShortcutHelp open={helpOpen} onClose={() => setHelpOpen(false)} />

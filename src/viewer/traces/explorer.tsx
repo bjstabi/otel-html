@@ -350,7 +350,9 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
         </ExplorerControls>
         <QueryNote loading={state.status === 'loading'} residual={result?.residual ?? null} />
         {exportError !== null && <ErrorCard title="The export failed" message={exportError} />}
-        {state.status === 'error' && <ErrorCard title="The query could not run" message={state.message} />}
+        {state.status === 'error' && (
+          <ErrorCard title="The query could not run" message={state.message} gone={state.gone} />
+        )}
         {result !== null && (
           <div
             aria-busy={state.status === 'loading'}

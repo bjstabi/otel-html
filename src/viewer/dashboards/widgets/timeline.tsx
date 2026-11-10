@@ -144,7 +144,7 @@ export const TimelineWidget: WidgetRenderer = ({ scope, height, dataSource, acti
   }, [ready, win, run, variables.length]);
 
   if (failed?.status === 'error')
-    return <ErrorCard title="Could not load the timeline" message={failed.message} />;
+    return <ErrorCard title="Could not load the timeline" message={failed.message} gone={failed.gone} />;
   if (lanes === null) {
     return <LoadingNote />;
   }

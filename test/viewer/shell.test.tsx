@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { OtelHtmlError } from '../../src/model/errors.js';
@@ -333,7 +333,10 @@ describe('App loading', () => {
     window.location.hash = '#/traces';
     render(
       <ThemeProvider>
-        <App load={() => Promise.resolve(dataSource)} history={createHashHistory(window)} />
+        <App
+          load={() => Promise.resolve({ dataSource, refresh: null })}
+          history={createHashHistory(window)}
+        />
       </ThemeProvider>,
     );
     expect(screen.getByRole('status').textContent).toContain('Loading');
@@ -354,6 +357,202 @@ describe('App loading', () => {
     const alert = await screen.findByRole('alert');
     expect(alert.textContent).toContain('data/rollups/spans.js');
     expect(within(alert).getByRole('heading', { name: /could not be loaded/ })).toBeTruthy();
+  });
+});
+
+describe('App refresh (D55)', () => {
+  const growing = { ...baseManifest, complete: false, updatedAt: new Date().toISOString() };
+  const done = { ...baseManifest, complete: true };
+
+  function renderApp(refresh: () => Promise<DataSource>): void {
+    window.location.hash = '#/traces/services';
+    render(
+      <ThemeProvider>
+        <App
+          load={() => Promise.resolve({ dataSource: dataSourceOf(growing), refresh })}
+          history={createHashHistory(window)}
+        />
+      </ThemeProvider>,
+    );
+  }
+
+  test('Refresh swaps in the new data source; a complete manifest removes the line', async () => {
+    const refresh = vi.fn(() => Promise.resolve(dataSourceOf(done)));
+    renderApp(refresh);
+    await userEvent.click(await screen.findByRole('button', { name: 'Refresh' }));
+    await waitFor(() => expect(screen.queryByText(/In progress/)).toBeNull());
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  test('a click or a poll tick while a refresh is in flight does not start another', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      window.sessionStorage.setItem('otel-html.poll', '1');
+      let finish: (d: DataSource) => void = () => undefined;
+      const refresh = vi.fn(
+        () =>
+          new Promise<DataSource>((resolve) => {
+            finish = resolve;
+          }),
+      );
+      renderApp(refresh);
+      await screen.findByRole('button', { name: 'Refresh' });
+      // findBy resolves on the DOM commit; the poll's interval is made by a passive effect that may not have run yet.
+      await act(async () => undefined);
+      await act(async () => vi.advanceTimersByTimeAsync(60_000));
+      expect(refresh).toHaveBeenCalledTimes(1);
+      await act(async () => vi.advanceTimersByTimeAsync(120_000));
+      fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+      expect(refresh).toHaveBeenCalledTimes(1);
+      await act(async () => finish(dataSourceOf(growing)));
+      await act(async () => vi.advanceTimersByTimeAsync(60_000));
+      expect(refresh).toHaveBeenCalledTimes(2);
+    } finally {
+      window.sessionStorage.clear();
+      vi.useRealTimers();
+    }
+  });
+
+  test('Auto-refresh is off by default; checked, App polls every 60 s and remembers the choice', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const refresh = vi.fn(() => Promise.resolve(dataSourceOf(growing)));
+      renderApp(refresh);
+      const box = (await screen.findByRole('checkbox', { name: 'Auto-refresh' })) as HTMLInputElement;
+      expect(box.checked).toBe(false);
+      await act(async () => vi.advanceTimersByTimeAsync(120_000));
+      expect(refresh).not.toHaveBeenCalled();
+      fireEvent.click(box);
+      expect(window.sessionStorage.getItem('otel-html.poll')).toBe('1');
+      await act(async () => vi.advanceTimersByTimeAsync(59_000));
+      expect(refresh).not.toHaveBeenCalled();
+      await act(async () => vi.advanceTimersByTimeAsync(1_000));
+      expect(refresh).toHaveBeenCalledTimes(1);
+      fireEvent.click(screen.getByRole('checkbox', { name: 'Auto-refresh' }));
+      expect(window.sessionStorage.getItem('otel-html.poll')).toBe('0');
+      await act(async () => vi.advanceTimersByTimeAsync(120_000));
+      expect(refresh).toHaveBeenCalledTimes(1);
+    } finally {
+      window.sessionStorage.clear();
+      vi.useRealTimers();
+    }
+  });
+
+  test('a remembered choice starts the poll checked', async () => {
+    window.sessionStorage.setItem('otel-html.poll', '1');
+    try {
+      renderApp(() => Promise.resolve(dataSourceOf(growing)));
+      const box = await screen.findByRole('checkbox', { name: 'Auto-refresh' });
+      expect((box as HTMLInputElement).checked).toBe(true);
+    } finally {
+      window.sessionStorage.clear();
+    }
+  });
+
+  test('navigating between pages does not restart the poll', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      window.sessionStorage.setItem('otel-html.poll', '1');
+      const refresh = vi.fn(() => Promise.resolve(dataSourceOf(growing)));
+      renderApp(refresh);
+      await screen.findByRole('button', { name: 'Refresh' });
+      await act(async () => undefined);
+      await act(async () => vi.advanceTimersByTimeAsync(40_000));
+      await act(async () => {
+        window.location.hash = '#/traces/logs';
+        window.dispatchEvent(new HashChangeEvent('hashchange'));
+      });
+      await act(async () => vi.advanceTimersByTimeAsync(21_000));
+      expect(refresh).toHaveBeenCalledTimes(1);
+    } finally {
+      window.sessionStorage.clear();
+      vi.useRealTimers();
+    }
+  });
+
+  test('a click re-runs the queries of an unchanged manifest; a poll tick does not', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      window.sessionStorage.setItem('otel-html.poll', '1');
+      const failing = {
+        ...dataSourceOf(growing),
+        services: () => Promise.reject(new Error('transient')),
+      };
+      let shown: DataSource = failing;
+      // the real refresh returns the shown source on a tick and a fresh one on a click
+      const refresh = vi.fn((rerun?: boolean) => {
+        if (rerun === true) shown = dataSourceOf(growing);
+        return Promise.resolve(shown);
+      });
+      window.location.hash = '#/traces/services';
+      render(
+        <ThemeProvider>
+          <App
+            load={() => Promise.resolve({ dataSource: failing, refresh })}
+            history={createHashHistory(window)}
+          />
+        </ThemeProvider>,
+      );
+      await screen.findByText('The services could not be loaded');
+      await act(async () => undefined);
+      await act(async () => vi.advanceTimersByTimeAsync(60_000));
+      expect(refresh).toHaveBeenLastCalledWith(false);
+      expect(screen.queryByText('The services could not be loaded')).not.toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+      expect(refresh).toHaveBeenLastCalledWith(true);
+      await waitFor(() => expect(screen.queryByText('The services could not be loaded')).toBeNull());
+    } finally {
+      window.sessionStorage.clear();
+      vi.useRealTimers();
+    }
+  });
+
+  test('a failed refresh is an inline alert on the line and the page stays', async () => {
+    renderApp(() => Promise.reject(new Error('manifest did not load')));
+    await userEvent.click(await screen.findByRole('button', { name: 'Refresh' }));
+    expect((await screen.findByRole('alert')).textContent).toContain('manifest did not load');
+    expect(screen.getByText(/In progress/)).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Services' })).toBeTruthy();
+  });
+
+  test('a page whose query hit a gone file offers Refresh', async () => {
+    const gone = new OtelHtmlError('invalid-report', {
+      path: 'query',
+      expected: 'a query the engine accepts',
+      actual: 'HTTP error 404 Not Found: data/partitions/000001/spans.parquet',
+    });
+    const failing = { ...dataSourceOf(growing), services: () => Promise.reject(gone) };
+    const refresh = vi.fn(() => Promise.resolve(dataSourceOf(done)));
+    window.location.hash = '#/traces/services';
+    render(
+      <ThemeProvider>
+        <App
+          load={() => Promise.resolve({ dataSource: failing, refresh })}
+          history={createHashHistory(window)}
+        />
+      </ThemeProvider>,
+    );
+    expect(await screen.findByText('This report has changed. Refresh.')).toBeTruthy();
+    const card = screen
+      .getByText('The services could not be loaded')
+      .closest('[role="alert"]') as HTMLElement;
+    await userEvent.click(within(card).getByRole('button', { name: 'Refresh' }));
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  test('another failure does not say the report changed', async () => {
+    const failing = { ...dataSourceOf(growing), services: () => Promise.reject(new Error('Binder Error')) };
+    window.location.hash = '#/traces/services';
+    render(
+      <ThemeProvider>
+        <App
+          load={() => Promise.resolve({ dataSource: failing, refresh: () => Promise.resolve(failing) })}
+          history={createHashHistory(window)}
+        />
+      </ThemeProvider>,
+    );
+    await screen.findByText('The services could not be loaded');
+    expect(screen.queryByText('This report has changed. Refresh.')).toBeNull();
   });
 });
 

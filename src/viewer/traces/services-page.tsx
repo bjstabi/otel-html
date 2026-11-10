@@ -2,8 +2,10 @@ import { type JSX, useEffect, useState } from 'react';
 import { formatDuration } from '../../semconv/formatters.js';
 import { facetKeyToPath, tokensToOttl } from '../components/filter-tokens.js';
 import type { DataSource } from '../data/data-source.js';
+import { isGoneFile } from '../data/refresh-report.js';
 import type { ServiceStats, ServicesResult } from '../data/results.js';
 import type { TimeWindow } from '../data/time-window.js';
+import { GoneNotice } from '../shell/in-progress.js';
 import { PageChrome } from '../shell/page-chrome.js';
 import { navigateRoute } from '../shell/use-route.js';
 import { selectionToUrlState } from '../state/selection.js';
@@ -24,7 +26,7 @@ const serviceCondition = (service: string): string | null =>
 type Load =
   | { status: 'loading' }
   | { status: 'ready'; data: ServicesResult }
-  | { status: 'error'; message: string };
+  | { status: 'error'; message: string; gone: boolean };
 
 function useServices(dataSource: DataSource, win: TimeWindow | null): Load {
   const [load, setLoad] = useState<Load>({ status: 'loading' });
@@ -35,7 +37,11 @@ function useServices(dataSource: DataSource, win: TimeWindow | null): Load {
       (data) => controller.signal.aborted || setLoad({ status: 'ready', data }),
       (e: unknown) => {
         if (controller.signal.aborted || (e instanceof DOMException && e.name === 'AbortError')) return;
-        setLoad({ status: 'error', message: e instanceof Error ? e.message : String(e) });
+        setLoad({
+          status: 'error',
+          message: e instanceof Error ? e.message : String(e),
+          gone: isGoneFile(e),
+        });
       },
     );
     return () => controller.abort();
@@ -73,6 +79,7 @@ export function ServicesPage(props: { dataSource: DataSource }): JSX.Element {
         <div role="alert" className="rounded-card border border-hairline bg-surface p-4">
           <p className="font-semibold text-critical">The services could not be loaded</p>
           <p className="mt-1 font-mono text-xs break-words text-ink-2">{load.message}</p>
+          {load.gone && <GoneNotice />}
         </div>
       )}
       {load.status === 'ready' &&

@@ -559,7 +559,7 @@ export function MetricGrid(
         </p>
       )}
       {listed.status === 'error' && (
-        <ErrorCard title="The metrics could not be listed" message={listed.message} />
+        <ErrorCard title="The metrics could not be listed" message={listed.message} gone={listed.gone} />
       )}
       {groups.map((g) => {
         const open = expanded.has(g.namespace);

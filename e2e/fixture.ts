@@ -114,6 +114,14 @@ const FIXTURE_FILES: Partial<Record<FixtureReport, readonly string[]>> = {
   sample: ['small', 'linked-traces', 'linked-logs'],
 };
 /**
+ * `refresh` (a `site` report, over HTTP only): the `small` fixture in a first partition and the `orphans` fixture in a
+ * second, flushed twice and never closed (`complete: false`). `data/manifest.step1.js` and `data/manifest.step2.js`
+ * are the manifest after each flush; the served `data/manifest.js` starts as step 1, and `e2e/refresh.spec.ts` copies
+ * step 2 over it, as a CI run's next publish does.
+ */
+export const REFRESH_FIRST: FixtureReport = 'small';
+export const REFRESH_SECOND: FixtureReport = 'orphans';
+/**
  * `merged` is `otel-html merge` of `small` and `orphans`; `scale` and `many` come from one generated 100k-span input,
  * into `SCALE_REPORTS_DIR`.
  * `metrics-merged` merges two reports of the `metrics` fixture's first and last five collections, `metrics-single`
@@ -131,6 +139,7 @@ export type ReportName =
   | 'metrics-merged'
   | 'metrics-single'
   | 'unfinished'
+  | 'refresh'
   | 'dashboards'
   | 'dashboards-hostile'
   | 'run-charts'

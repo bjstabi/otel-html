@@ -37,6 +37,8 @@ export interface MetricQueries {
   loading: boolean;
   /** A failure of the whole run (the catalog did not load). */
   failure: string | null;
+  /** D56: the failure is a registered file the site no longer serves. */
+  failureGone: boolean;
 }
 
 interface Input {
@@ -47,7 +49,7 @@ interface Input {
   exemplars: boolean;
 }
 
-type Outcome = Omit<MetricQueries, 'loading' | 'failure'>;
+type Outcome = Omit<MetricQueries, 'loading' | 'failure' | 'failureGone'>;
 
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
@@ -196,5 +198,6 @@ export function useMetricQueries(
     ...shown,
     loading: keyed.status === 'loading',
     failure: keyed.status === 'error' ? keyed.message : null,
+    failureGone: keyed.status === 'error' && keyed.gone,
   };
 }

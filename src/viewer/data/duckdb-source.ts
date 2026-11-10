@@ -98,7 +98,7 @@ import {
 } from './span-results.js';
 import type { TimeWindow } from './time-window.js';
 import { traceNotFound } from './trace-detail.js';
-import { buildTraceTree, exclusiveTimeByService } from './trace-tree.js';
+import { buildTraceTree, dedupeSpanIds, exclusiveTimeByService } from './trace-tree.js';
 
 /** The explorer's duration facet has this many bins. */
 const DURATION_BIN_COUNT = 24;
@@ -702,10 +702,12 @@ export function createDuckDbDataSource(opts: {
       };
     const resources = lookup<ResourceRecord>(tables.resources, 'trace.resources');
     const scopes = lookup<ScopeRecord>(tables.scopes, 'trace.scopes');
+    // §5.5: one row per span id for the table, the counts, the export and the tree alike.
+    const spans = dedupeSpanIds(rows);
     return {
       traceId,
-      spans: rows,
-      tree: buildTraceTree(rows),
+      spans,
+      tree: buildTraceTree(spans),
       resources: (r: ResourceRef) => resources(r),
       scopes: (s: ScopeRef) => scopes(s),
       logCount,

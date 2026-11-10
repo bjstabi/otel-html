@@ -398,7 +398,9 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
           </p>
         )}
         {actionError !== null && <ErrorCard title={actionError.title} message={actionError.message} />}
-        {state.status === 'error' && <ErrorCard title="The query could not run" message={state.message} />}
+        {state.status === 'error' && (
+          <ErrorCard title="The query could not run" message={state.message} gone={state.gone} />
+        )}
         {patterns !== null && (
           <div
             aria-busy={state.status === 'loading'}

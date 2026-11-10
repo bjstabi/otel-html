@@ -33,7 +33,8 @@ async function assertReportsBuilt(mounted: readonly ReportName[]): Promise<void>
     if (name === 'metrics-scale' || name === 'scale' || name === 'many') continue;
     // `no-manifest` is a copy of `main` without its manifest, by design.
     const probe = name === 'no-manifest' ? 'index.html' : 'data/manifest.js';
-    for (const kind of ['file', 'http'] as const) {
+    // `refresh` is a `site` report, read over HTTP only.
+    for (const kind of name === 'refresh' ? (['http'] as const) : (['file', 'http'] as const)) {
       try {
         await stat(new URL(probe, reportDir(name, kind)));
       } catch {
@@ -59,6 +60,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     'metrics-merged',
     'metrics-single',
     'unfinished',
+    'refresh',
     'dashboards',
     'dashboards-hostile',
     'run-charts',

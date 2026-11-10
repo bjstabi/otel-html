@@ -609,3 +609,45 @@ describe('facet caps from the manifest', () => {
     expect((await attrKeys(source)).length).toBe(4);
   });
 });
+
+describe('getTrace: a provisional CI span and its final copy (§5.5)', () => {
+  test('spans and tree hold the final row only', async () => {
+    const T4 = parseTraceId(hex(4, 32), 'test');
+    const provisional: S = {
+      trace: 4,
+      id: 9,
+      svc: 'ci',
+      name: 'job',
+      startMs: 0,
+      durMs: 10,
+      attrs: [attr('otel_html.ci.provisional', { boolValue: true })],
+    };
+    const final: S = { trace: 4, id: 9, svc: 'ci', name: 'job', startMs: 0, durMs: 50 };
+    // The writer's own dedupe would drop the second copy, so the two reports are joined by hand: the final
+    // report's partition is renumbered and appended to the provisional one's manifest.
+    const first = await buildFormat4Report([request([provisional])], { close: false });
+    const second = await buildFormat4Report([request([final])], { close: false });
+    const moved = JSON.parse(
+      JSON.stringify(second.manifest.partitions[0], (_k, v: unknown) =>
+        typeof v === 'string' ? v.replace('data/partitions/000000/', 'data/partitions/000001/') : v,
+      ),
+    ) as Format4Fixture['manifest']['partitions'][number];
+    const files = new Map(first.files);
+    for (const [path, bytes] of second.files) files.set(path.replace('000000', '000001'), bytes);
+    const fx: Format4Fixture = {
+      ...first,
+      manifest: { ...first.manifest, partitions: [...first.manifest.partitions, moved] },
+      files,
+    };
+    const fdb = await openFixtureDb(fx);
+    const source = createDuckDbDataSource({
+      engine: mosaicQueryEngine(createCoordinator(fdb.connector, silentLogger), fdb),
+      manifest: fx.manifest,
+    });
+    const detail = await source.getTrace(T4);
+    expect(detail.spans).toHaveLength(1);
+    expect(detail.spans[0]?.durationNs).toBe(50e6);
+    expect(detail.tree.roots).toHaveLength(1);
+    expect(detail.tree.roots[0]?.row).toBe(detail.spans[0]);
+  });
+});
