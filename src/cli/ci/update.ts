@@ -11,7 +11,7 @@ import type { JobId } from './ids.js';
 
 export const UPDATE_PREFIX = 'otel-html-update-';
 export const UPDATE_FILE = 'update.json';
-export type UpdateKind = 'push' | 'run' | 'remove-pr' | 'reopen-pr';
+type UpdateKind = 'push' | 'run' | 'remove-pr' | 'reopen-pr';
 
 /** One partition the update lists: its site `source`, its manifest entry's files (paths update-relative: `partitions/<i>/<table>.parquet`), and whether this update carries those files. */
 export interface UpdatePartition {

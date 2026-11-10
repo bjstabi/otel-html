@@ -18,6 +18,19 @@ export type SiteRun = {
   /** The run's workflow name (`ci`, `load`); absent in entries written before it was recorded. */
   workflow?: string;
 };
+/** The index entry of `run`, whose report is at `reportPath`. */
+export const siteRunOf = (run: ApiRun, reportPath: string): SiteRun => ({
+  runId: run.id,
+  attempt: run.run_attempt,
+  conclusion: run.conclusion ?? 'unknown',
+  headSha: run.head_sha,
+  headBranch: run.head_branch ?? '',
+  startedAt: run.run_started_at ?? run.created_at,
+  completedAt: run.updated_at,
+  runUrl: run.html_url,
+  reportPath,
+  workflow: run.name,
+});
 export type Channel = {
   /**
    * `branch`: a branch of this repository (today the default branch), at `branch/<slug>/`. `pr`: an open pull request,
@@ -129,11 +142,15 @@ export function badgeFor(run: SiteRun): Badge {
   };
 }
 
+/** The `conclusion` of a run whose job updates are being applied while it runs (§5.1). */
+export const IN_PROGRESS = 'in_progress';
+
 /** The channel's badge files by name, `badge-<slug(workflow)>.json`, from each workflow's newest run. */
 export function channelBadges(channel: Channel): Record<string, Badge> {
   const badges: Record<string, Badge> = {};
   for (const run of channel.runs) {
-    if (run.workflow === undefined) continue;
+    // a provisional run has no verdict (D66)
+    if (run.workflow === undefined || run.conclusion === IN_PROGRESS) continue;
     const name = `badge-${slug(run.workflow)}.json`;
     if (!(name in badges)) badges[name] = badgeFor(run);
   }
@@ -263,9 +280,12 @@ export function dropWorkflowChannels(index: SiteIndex): { index: SiteIndex; remo
   return remove.length === 0 ? { index, remove } : { index: { ...index, channels }, remove };
 }
 
-/** The channel's report paths (site-relative), oldest first: the order the rolling report merges them in. */
+/** The channel's report paths (site-relative), oldest first: the order the rolling report merges them in. A provisional (`in_progress`) run has duplicate roots and no verdict: it is left out (D66). */
 export function rollingInputs(channel: Channel): string[] {
-  return channel.runs.map((r) => r.reportPath).reverse();
+  return channel.runs
+    .filter((r) => r.conclusion !== IN_PROGRESS)
+    .map((r) => r.reportPath)
+    .reverse();
 }
 
 /** `index` without channel `key`, and its report paths; a missing key changes nothing. */

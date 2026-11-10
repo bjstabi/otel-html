@@ -86,7 +86,7 @@ export interface SyncInput {
 }
 
 /** Copy `<fromDir>/<from>` (update-relative) to `<site>/<run>/<to>`. */
-export interface FileMove {
+interface FileMove {
   fromDir: string;
   from: string;
   to: string;

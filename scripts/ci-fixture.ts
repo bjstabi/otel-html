@@ -321,6 +321,8 @@ function runRequests(rand: () => number, run: number, t0Seconds: number): object
     run_started_at: iso(start),
     updated_at: iso(end),
     html_url: `${REPO_URL}/actions/runs/${id}`,
+    path: '.github/workflows/ci.yml',
+    actor: { type: 'User' },
     head_branch: event === 'pull_request' ? `feat/demo-${run}` : 'main',
     head_sha: (id * 7919).toString(16).padStart(40, '0'),
     repository: { full_name: REPOSITORY, html_url: REPO_URL },

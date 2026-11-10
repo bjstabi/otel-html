@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { cp, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,11 +12,13 @@ import {
   getJson,
   messageOf,
   say,
+  setOutputs,
   warning,
 } from './github-api.js';
 import { mergeSkippingBad, mergeWithConfig } from './publish-io.js';
 import {
   applyRetention,
+  type Channel,
   channelFor,
   dropWorkflowChannels,
   placeRun,
@@ -26,6 +28,7 @@ import {
   rollingInputs,
   type SiteIndex,
   type SiteRun,
+  siteRunOf,
 } from './site.js';
 import {
   ensureSharedAssets,
@@ -52,13 +55,6 @@ export type CleanupOptions = { site: string; pr: number; repository: string };
 
 const API_TIMEOUT_MS = 15_000;
 
-function setOutputs(io: CliIo, values: Record<string, string>): void {
-  const lines = Object.entries(values).map(([k, v]) => `${k}=${v}`);
-  for (const line of lines) say(io, line);
-  const file = envVar(io, 'GITHUB_OUTPUT');
-  if (file) appendFileSync(file, `${lines.join('\n')}\n`);
-}
-
 /** `<site>/<key>/index.html`: a stub forwarding to the channel's newest run. */
 async function writeStub(site: string, key: string, index: SiteIndex): Promise<void> {
   const latest = index.channels[key]?.runs[0];
@@ -75,7 +71,8 @@ const up = (folder: string): string => '../'.repeat(folder.split('/').filter((x)
 /** Where the rolling report at `<site>/<key>/` (`branch/<slug>`, `pr/<n>`: two folders deep) loads the shared viewer files from. */
 const rollingAssetsBase = (key: string, version: string): string => `${up(key)}assets/${version}/`;
 /** Where a run report at `<site>/<key>/runs/<id>/` loads them from. */
-const runAssetsBase = (reportPath: string, version: string): string => `${up(reportPath)}assets/${version}/`;
+export const runAssetsBase = (reportPath: string, version: string): string =>
+  `${up(reportPath)}assets/${version}/`;
 
 const PREVIEW = /^preview-.*\.png$/;
 
@@ -136,6 +133,61 @@ async function rebuildRolling(
   }
 }
 
+export interface PlaceOptions {
+  retention: number;
+  prRetention: number;
+  /** The dashboard config file for the rolling report. */
+  config: string | undefined;
+  repository: string;
+  deps: WriterDeps;
+  io: CliIo;
+  /** How dropped report folders leave the site: `removePaths` now, a scheduled deletion in the deployer (D66). */
+  remove: (site: string, paths: string[]) => Promise<void>;
+  /** D54: place the report beside the run folder's existing partitions, numbered from here, removing nothing. */
+  renumberFrom?: number;
+}
+
+/**
+ * Places a finished run's report (`report`) at `siteRun.reportPath` on the site, in channel `placed`: applies
+ * retention, drops the older per-workflow channels (`ci/`, `load/`) and rewrites the index, landing page and the
+ * channel's rolling report and badges. What leaves the site goes through `o.remove`.
+ */
+export async function placeFinishedRun(
+  site: string,
+  placed: { key: string; channel: Omit<Channel, 'runs'> },
+  siteRun: SiteRun,
+  report: string,
+  o: PlaceOptions,
+): Promise<{ rolling: 'built' | 'stub' }> {
+  const { deps, io } = o;
+  const { reportPath } = siteRun;
+  const migrated = dropWorkflowChannels(await readSiteIndex(site, (m) => warning(io, 'site', m)));
+  const { index, remove } = applyRetention(
+    placeRun(migrated.index, placed.key, placed.channel, siteRun),
+    { branch: o.retention, pr: o.prRetention },
+    siteRun.runId,
+  );
+  await placeRunReport(
+    deps,
+    report,
+    join(site, reportPath),
+    runAssetsBase(reportPath, deps.version),
+    o.renumberFrom === undefined ? undefined : { renumberFrom: o.renumberFrom },
+  );
+  await o.remove(site, [...migrated.remove, ...remove]);
+  // after the removals: a legacy channel named `assets` is the shared folder's path
+  await ensureSharedAssets(site, deps.version, deps);
+  if (migrated.remove.length > 0)
+    say(io, `removed the per-workflow channels ${migrated.remove.join(', ')}; see branch/ and pr/`);
+  const rolling = await rebuildRolling(site, placed.key, index, o.config, deps, io);
+  // after the rebuild, which empties the channel folder but for runs/
+  const channel = index.channels[placed.key];
+  if (channel !== undefined) await writeBadges(site, placed.key, channel);
+  await writeSite(site, index, o.repository);
+  await pruneAssets(site, deps, (m) => warning(io, 'site', m));
+  return { rolling };
+}
+
 /**
  * Places a finished run's report on the site: resolves its channel (`branch/<default>` or `pr/<n>`), copies the
  * report to the run's folder, applies retention, drops the older per-workflow channels (`ci/`, `load/`) and rewrites
@@ -172,41 +224,15 @@ export async function runSite(
   }
 
   const reportPath = `${placed.key}/runs/${run.id}`;
-  const siteRun: SiteRun = {
-    runId: run.id,
-    attempt: run.run_attempt,
-    conclusion: run.conclusion ?? 'unknown',
-    headSha: run.head_sha,
-    headBranch: run.head_branch ?? '',
-    startedAt: run.run_started_at ?? run.created_at,
-    completedAt: run.updated_at,
-    runUrl: run.html_url,
-    reportPath,
-    workflow: run.name,
-  };
-  const migrated = dropWorkflowChannels(await readSiteIndex(opts.site, (m) => warning(io, 'site', m)));
-  const { index, remove } = applyRetention(
-    placeRun(migrated.index, placed.key, placed.channel, siteRun),
-    { branch: opts.retention, pr: opts.prRetention },
-    run.id,
-  );
-  await placeRunReport(
+  const { rolling } = await placeFinishedRun(opts.site, placed, siteRunOf(run, reportPath), opts.report, {
+    retention: opts.retention,
+    prRetention: opts.prRetention,
+    config: opts.config,
+    repository: opts.repository,
     deps,
-    opts.report,
-    join(opts.site, reportPath),
-    runAssetsBase(reportPath, deps.version),
-  );
-  await removePaths(opts.site, [...migrated.remove, ...remove]);
-  // after the removals: a legacy channel named `assets` is the shared folder's path
-  await ensureSharedAssets(opts.site, deps.version, deps);
-  if (migrated.remove.length > 0)
-    say(io, `removed the per-workflow channels ${migrated.remove.join(', ')}; see branch/ and pr/`);
-  const rolling = await rebuildRolling(opts.site, placed.key, index, opts.config, deps, io);
-  // after the rebuild, which empties the channel folder but for runs/
-  const channel = index.channels[placed.key];
-  if (channel !== undefined) await writeBadges(opts.site, placed.key, channel);
-  await writeSite(opts.site, index, opts.repository);
-  await pruneAssets(opts.site, deps, (m) => warning(io, 'site', m));
+    io,
+    remove: removePaths,
+  });
   setOutputs(io, {
     'report-url': reportUrl(opts.baseUrl.replace(/\/+$/, ''), reportPath),
     channel: placed.key,
@@ -216,22 +242,37 @@ export async function runSite(
 }
 
 /**
+ * Removes pull request `pr`'s channel and folder (`pr/<n>`) from the site (through `remove`) and rewrites the index
+ * and landing page. A pull request the site never had (no channel and no folder) changes nothing: `false`.
+ */
+export async function removePullRequest(
+  site: string,
+  pr: number,
+  repository: string,
+  deps: WriterDeps,
+  io: CliIo,
+  remove: (site: string, paths: string[]) => Promise<void>,
+): Promise<boolean> {
+  const key = `pr/${pr}`;
+  const current = await readSiteIndex(site, (m) => warning(io, 'cleanup', m));
+  if (current.channels[key] === undefined && !existsSync(join(site, key))) {
+    say(io, `${key} is not on the site; nothing to remove`);
+    return false;
+  }
+  const removed = removeChannel(current, key);
+  await remove(site, [...removed.remove, key]);
+  await writeSite(site, removed.index, repository);
+  await pruneAssets(site, deps, (m) => warning(io, 'cleanup', m));
+  say(io, `removed ${key} from the site`);
+  return true;
+}
+
+/**
  * Removes pull request `pr`'s channel and folder (`pr/<n>`) from the site and writes `cleaned=true` to
  * $GITHUB_OUTPUT. A pull request the site never had (no channel and no folder) changes nothing and writes
  * `cleaned=false`, so the caller pushes and deploys nothing.
  */
 export async function runCleanup(opts: CleanupOptions, io: CliIo, deps: WriterDeps): Promise<void> {
-  const key = `pr/${opts.pr}`;
-  const current = await readSiteIndex(opts.site, (m) => warning(io, 'cleanup', m));
-  if (current.channels[key] === undefined && !existsSync(join(opts.site, key))) {
-    say(io, `${key} is not on the site; nothing to remove`);
-    setOutputs(io, { cleaned: 'false' });
-    return;
-  }
-  const { index, remove } = removeChannel(current, key);
-  await removePaths(opts.site, [...remove, key]);
-  await writeSite(opts.site, index, opts.repository);
-  await pruneAssets(opts.site, deps, (m) => warning(io, 'cleanup', m));
-  say(io, `removed ${key} from the site`);
-  setOutputs(io, { cleaned: 'true' });
+  const cleaned = await removePullRequest(opts.site, opts.pr, opts.repository, deps, io, removePaths);
+  setOutputs(io, { cleaned: String(cleaned) });
 }

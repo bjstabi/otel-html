@@ -33,6 +33,8 @@ const apiRun = (over: Partial<ApiRun> = {}): ApiRun => ({
   run_started_at: null,
   updated_at: '2026-01-01T00:01:00Z',
   html_url: 'https://github.com/o/r/actions/runs/1',
+  path: '.github/workflows/ci.yml',
+  actor: { type: 'User' },
   head_branch: 'main',
   head_sha: 'abc',
   repository: { full_name: 'o/r', html_url: 'https://github.com/o/r' },
@@ -388,4 +390,29 @@ test('parseSiteIndex round-trips a run with and without startedAt', () => {
     channels: { [MAIN]: { ...main, runs: [timed({ runId: 2 }), siteRun(1)] } },
   };
   expect(parseSiteIndex(JSON.stringify(index))).toEqual(index);
+});
+
+test('rollingInputs skips in-progress runs (D66)', () => {
+  const channel = {
+    ...main,
+    runs: [
+      siteRun(3, { conclusion: 'in_progress' }),
+      siteRun(2, { conclusion: 'success' }),
+      siteRun(1, { conclusion: 'in_progress' }),
+    ],
+  };
+  expect(rollingInputs(channel)).toEqual([siteRun(2).reportPath]);
+});
+
+test('channelBadges skips in-progress runs: the badge names the newest finished run (D66)', () => {
+  const channel = {
+    ...main,
+    runs: [
+      timed({ runId: 4, conclusion: 'in_progress' }),
+      timed({ runId: 3, conclusion: 'failure' }),
+      timed({ runId: 2 }),
+    ],
+  };
+  expect(channelBadges(channel)['badge-ci.json']?.message).toBe('✗ 4m12s');
+  expect(channelBadges({ ...main, runs: [timed({ runId: 4, conclusion: 'in_progress' })] })).toEqual({});
 });

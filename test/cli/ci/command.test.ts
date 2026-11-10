@@ -907,6 +907,102 @@ describe('otel-html ci link', () => {
     expect(writes()).toEqual(['POST https://api.github.com/repos/o/r/issues/7/comments']);
   });
 
+  describe('--index-url', () => {
+    const indexArgs = (): string[] =>
+      linkArgs(['--no-check']).flatMap((a, i, all) =>
+        a === '--site' ? [] : all[i - 1] === '--site' ? [] : [a],
+      );
+    const withIndex = (respond: () => Response): void => {
+      stub();
+      const inner = globalThis.fetch;
+      vi.stubGlobal('fetch', async (url: string, init?: RequestInit) =>
+        url === 'https://x.test/b/index.json' ? respond() : inner(url, init),
+      );
+    };
+    const indexJson = JSON.stringify({
+      version: 1,
+      channels: {
+        'pr/7': {
+          kind: 'pr',
+          title: '#7 Fix',
+          headBranch: 'topic',
+          runs: [
+            {
+              runId: 5,
+              attempt: 1,
+              conclusion: 'success',
+              headSha: 'x',
+              headBranch: 'topic',
+              completedAt: '2026-01-01T00:00:00Z',
+              runUrl: 'u',
+              reportPath: 'pr/7/runs/5',
+              workflow: 'ci',
+            },
+          ],
+        },
+      },
+    });
+
+    test('links the channel page and the previous run although the index does not list this run', async () => {
+      withIndex(() => new Response(indexJson, { status: 200 }));
+      expect(
+        await runCli([...indexArgs(), '--index-url', 'https://x.test/b/index.json'], fakeIo().io, deps),
+      ).toBe(0);
+      const patch = calls.find((c) => c.method === 'PATCH')?.body as { body: string };
+      expect(patch.body).toContain('All runs on pull request #7: https://x.test/b/pr/7/');
+      expect(patch.body).toContain('Previous run: [ci run 5](https://x.test/b/pr/7/runs/5/)');
+    });
+
+    test('prefers the previous run of the same workflow by its raw name', async () => {
+      const run = (id: number, workflow: string): object => ({
+        ...JSON.parse(indexJson).channels['pr/7'].runs[0],
+        runId: id,
+        reportPath: `pr/7/runs/${id}`,
+        workflow,
+      });
+      const named = JSON.stringify({
+        version: 1,
+        channels: {
+          'pr/7': {
+            kind: 'pr',
+            title: '#7 Fix',
+            headBranch: 'topic',
+            runs: [run(5, 'CI'), run(4, 'Load test')],
+          },
+        },
+      });
+      stub();
+      const inner = globalThis.fetch;
+      vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+        if (url === 'https://x.test/b/index.json') return new Response(named, { status: 200 });
+        const res = await inner(url, init);
+        if (!/\/actions\/runs\/6$/.test(url)) return res;
+        return new Response(JSON.stringify({ ...((await res.json()) as object), name: 'Load test' }), {
+          status: 200,
+        });
+      });
+      expect(
+        await runCli([...indexArgs(), '--index-url', 'https://x.test/b/index.json'], fakeIo().io, deps),
+      ).toBe(0);
+      const post = calls.find((c) => c.method === 'POST' && c.url.endsWith('/issues/7/comments'))?.body as {
+        body: string;
+      };
+      expect(post.body).toContain('Previous run: [Load test run 4]');
+    });
+
+    test('a failed fetch is a warning and no previous-run line; the channel page stays', async () => {
+      withIndex(() => new Response('gone', { status: 503 }));
+      const f = fakeIo();
+      expect(await runCli([...indexArgs(), '--index-url', 'https://x.test/b/index.json'], f.io, deps)).toBe(
+        0,
+      );
+      const patch = calls.find((c) => c.method === 'PATCH')?.body as { body: string };
+      expect(patch.body).not.toContain('Previous run');
+      expect(patch.body).toContain('All runs on pull request #7: https://x.test/b/pr/7/');
+      expect(f.out()).toContain('::warning::');
+    });
+  });
+
   test('a default-branch run comments on no pull request, even one whose head is its commit', async () => {
     stub();
     const inner = globalThis.fetch;
@@ -969,4 +1065,20 @@ describe('otel-html ci link', () => {
     expect(f.out()).toContain('::warning::otel-html link: cannot read run 6');
     expect(writes()).toEqual([]);
   });
+});
+
+describe('otel-html ci deploy apply --channel', () => {
+  test.each(['../x', 'branch/../x', 'branch/Main', 'pr/0', 'pr/5/x', 'x'])(
+    '%s is a usage error',
+    async (channel) => {
+      const f = fakeIo({ GITHUB_RUN_ID: '1' });
+      const code = await runCli(
+        ['ci', 'deploy', 'apply', '--site', 's', '--updates', 'u', '--trust-updates', '--channel', channel],
+        f.io,
+        deps,
+      );
+      expect(code).not.toBe(0);
+      expect(f.err() + f.out()).toContain('--channel must be');
+    },
+  );
 });

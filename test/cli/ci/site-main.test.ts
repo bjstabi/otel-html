@@ -54,6 +54,8 @@ const apiRun = (id: number): ApiRun => ({
   run_started_at: null,
   updated_at: `2026-01-01T00:0${id}:00Z`,
   html_url: `https://github.com/o/r/actions/runs/${id}`,
+  path: '.github/workflows/ci.yml',
+  actor: { type: 'User' },
   head_branch: id === 7 ? 'feat' : 'main',
   head_sha: `sha${id}`,
   repository: { full_name: 'o/r', html_url: 'https://github.com/o/r' },
