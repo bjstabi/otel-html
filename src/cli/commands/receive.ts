@@ -51,6 +51,13 @@ const FORWARDABLE_PROTOCOLS: readonly string[] = ['http/protobuf', 'http/json'];
 
 const GRPC_FANOUT_ISSUE = 'https://github.com/bjstabi/otel-html/issues/259';
 
+/** Whether `url` is plain http to a host other than loopback, where forwarded header values travel in the clear. */
+function sendsInClear(url: string): boolean {
+  const { protocol, hostname } = new URL(url);
+  const loopback = hostname === 'localhost' || hostname === '[::1]' || /^127\./.test(hostname);
+  return protocol === 'http:' && !loopback;
+}
+
 /**
  * Resolve config, open the report and bind the transports; a failed bind or a stop signal during start-up aborts the
  * report and releases its lock.
@@ -85,6 +92,11 @@ export async function openReceiver(
   const headers = exportOtlp === undefined ? {} : parseOtlpHeaders(headerText);
   const overrides = precheck({ http: config.receiver.http.enabled, grpc: config.receiver.grpc.enabled });
   const full = await resolveDeps(deps);
+  if (exportOtlp !== undefined && Object.keys(headers).length > 0 && sendsInClear(exportOtlp)) {
+    io.stderr(
+      'warning: OTEL_EXPORTER_OTLP_HEADERS values are sent over plain http to a collector that is not on loopback; use https\n',
+    );
+  }
   const forwarder: Forwarder | undefined =
     exportOtlp === undefined
       ? undefined

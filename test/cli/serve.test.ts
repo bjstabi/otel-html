@@ -147,6 +147,34 @@ describe('serve', () => {
     expect(await w.fs.exists('out')).toBe(false);
   });
 
+  test('headers over plain http warn only for a collector that is not on loopback', async () => {
+    const run = async (url: string, headers: string | undefined): Promise<string> => {
+      const w = createTestWriter();
+      const h = start(
+        w,
+        ['serve', '-o', 'out', '--http', '0', '--no-grpc', '--export-otlp', url],
+        undefined,
+        {},
+        headers === undefined ? {} : { OTEL_EXPORTER_OTLP_HEADERS: headers },
+      );
+      open.push(h);
+      await listening(h);
+      h.fire('SIGINT');
+      expect(await h.result).toBe(0);
+      return h.stderr;
+    };
+    const warning = 'sent over plain http';
+    expect(await run('http://collector.example:4318', 'authorization=Bearer%20secret')).toContain(warning);
+    expect(await run('http://collector.example:4318', 'authorization=Bearer%20secret')).not.toContain(
+      'secret',
+    );
+    expect(await run('https://collector.example:4318', 'authorization=Bearer%20t')).not.toContain(warning);
+    expect(await run('http://127.0.0.1:1', 'authorization=Bearer%20t')).not.toContain(warning);
+    expect(await run('http://localhost:1', 'authorization=Bearer%20t')).not.toContain(warning);
+    expect(await run('http://[::1]:1', 'authorization=Bearer%20t')).not.toContain(warning);
+    expect(await run('http://collector.example:4318', undefined)).not.toContain(warning);
+  });
+
   test('a malformed OTEL_EXPORTER_OTLP_HEADERS is a usage error', async () => {
     const w = createTestWriter();
     const h = start(
