@@ -953,6 +953,43 @@ describe('otel-html ci link', () => {
       expect(patch.body).toContain('Previous run: [ci run 5](https://x.test/b/pr/7/runs/5/)');
     });
 
+    test('prefers the previous run of the same workflow by its raw name', async () => {
+      const run = (id: number, workflow: string): object => ({
+        ...JSON.parse(indexJson).channels['pr/7'].runs[0],
+        runId: id,
+        reportPath: `pr/7/runs/${id}`,
+        workflow,
+      });
+      const named = JSON.stringify({
+        version: 1,
+        channels: {
+          'pr/7': {
+            kind: 'pr',
+            title: '#7 Fix',
+            headBranch: 'topic',
+            runs: [run(5, 'CI'), run(4, 'Load test')],
+          },
+        },
+      });
+      stub();
+      const inner = globalThis.fetch;
+      vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+        if (url === 'https://x.test/b/index.json') return new Response(named, { status: 200 });
+        const res = await inner(url, init);
+        if (!/\/actions\/runs\/6$/.test(url)) return res;
+        return new Response(JSON.stringify({ ...((await res.json()) as object), name: 'Load test' }), {
+          status: 200,
+        });
+      });
+      expect(
+        await runCli([...indexArgs(), '--index-url', 'https://x.test/b/index.json'], fakeIo().io, deps),
+      ).toBe(0);
+      const post = calls.find((c) => c.method === 'POST' && c.url.endsWith('/issues/7/comments'))?.body as {
+        body: string;
+      };
+      expect(post.body).toContain('Previous run: [Load test run 4]');
+    });
+
     test('a failed fetch is a warning and no previous-run line; the channel page stays', async () => {
       withIndex(() => new Response('gone', { status: 503 }));
       const f = fakeIo();

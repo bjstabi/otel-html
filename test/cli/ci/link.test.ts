@@ -242,6 +242,11 @@ describe('previousRunOf and channelPageOf (the live index, D57)', () => {
     expect(previousRunOf(idx, 'pr/8', 9, 'https://x.test', 'ci')).toBeUndefined();
   });
 
+  test('matches the raw workflow name, as the index stores it', () => {
+    const idx = index([entry(9, 'Load test'), entry(8, 'CI'), entry(7, 'Load test')]);
+    expect(previousRunOf(idx, 'pr/7', 9, 'https://x.test', 'Load test')?.runId).toBe(7);
+  });
+
   test('names the channel page from the channel, whether or not the index lists the run', () => {
     expect(
       channelPageOf('pr/7', { kind: 'pr', title: '#7 Fix', headBranch: 'topic' }, 'https://x.test'),

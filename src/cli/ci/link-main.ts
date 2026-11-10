@@ -69,7 +69,7 @@ export async function runLink(opts: LinkOptions, io: CliIo, fetchFn: Fetch = fet
   } catch (e) {
     warn(`cannot read the jobs of run ${opts.runId}, so the table is empty: ${messageOf(e)}`);
   }
-  // As `ci site` places it: a default-branch run is the workflow's, so no pull request gets its comment.
+  // A default-branch run is published to the branch's channel, so no pull request gets its comment; the channel is still found.
   let pulls: ApiPull[] = [];
   let placed: ReturnType<typeof channelFor>;
   if (opts.comment || opts.indexUrl !== undefined) {
@@ -87,10 +87,14 @@ export async function runLink(opts: LinkOptions, io: CliIo, fetchFn: Fetch = fet
         if (opts.comment) pulls = pullsToLink(run, all, defaultBranch);
         placed = channelFor(run, all, defaultBranch);
       } catch (e) {
-        warn(`cannot list the pull requests of ${run.head_sha}, so no comment is posted: ${messageOf(e)}`);
+        warn(
+          `cannot list the pull requests of ${run.head_sha}, so no comment is posted and no channel is linked: ${messageOf(e)}`,
+        );
       }
     } catch (e) {
-      warn(`cannot read the default branch of ${opts.repository}, so no comment is posted: ${messageOf(e)}`);
+      warn(
+        `cannot read the default branch of ${opts.repository}, so no comment is posted and no channel is linked: ${messageOf(e)}`,
+      );
     }
   }
 
@@ -104,7 +108,7 @@ export async function runLink(opts: LinkOptions, io: CliIo, fetchFn: Fetch = fet
       const res = await fetchFn(opts.indexUrl, { signal: AbortSignal.timeout(API_TIMEOUT_MS) });
       if (!res.ok) throw new Error(`${opts.indexUrl} answered ${res.status}`);
       const index = parseSiteIndex(await res.text(), warn);
-      if (placed !== undefined) previous = previousRunOf(index, placed.key, run.id, baseUrl, slug(run.name));
+      if (placed !== undefined) previous = previousRunOf(index, placed.key, run.id, baseUrl, run.name);
     } catch (e) {
       warn(`cannot read the site index, so no previous run is linked: ${messageOf(e)}`);
     }
