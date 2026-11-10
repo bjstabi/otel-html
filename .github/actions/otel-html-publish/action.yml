@@ -1,5 +1,8 @@
 name: otel-html publish
-description: Build a workflow run's report from its otel-html-* job artifacts, publish it to the GitHub Pages site (the gh-pages branch) and link it from the run's pull request; or, with cleanup-pr, remove a closed pull request's reports from the site.
+description: >-
+  Build a workflow run's report from its otel-html-* job artifacts, upload it as a site update for the Pages deployer,
+  wake the deployer and link the report from the run's pull request; or, with cleanup-pr or reopen-pr, upload the
+  update that removes a closed pull request's reports from the site, or lifts that removal.
 
 inputs:
   run-id:
@@ -18,57 +21,47 @@ inputs:
     default: ""
   target:
     description: >-
-      `github-pages` publishes to the gh-pages branch and links the report; `artifact` uploads the run report as the
-      `ci-run-report` artifact only: nothing reaches the site, and nothing is linked.
+      `github-pages` uploads the run's site update, wakes the deployer and links the report; `artifact` uploads the run
+      report as the `ci-run-report` artifact only: no update, no deployer and no link.
     default: github-pages
-  retention:
-    description: Runs kept per workflow on each branch page (`branch/<name>/`, the default branch's) of the site.
-    default: "30"
-  pr-retention:
-    description: Runs kept per workflow on each pull request page (`pr/<number>/`) of the site.
-    default: "10"
   comment:
     description: Post a sticky comment linking the report on the run's open pull requests.
     default: "true"
   check:
     description: Create a check run linking the report on the run's head commit.
     default: "true"
-  deploy:
-    description: >-
-      Deploy the site to GitHub Pages in this job after the gh-pages push. That needs the job to have
-      `environment: github-pages` and the `pages: write` and `id-token: write` permissions. With `false`, deploy in a
-      separate job that checks out the gh-pages tip, under `concurrency: {group: pages, cancel-in-progress: false}`:
-      that form survives GitHub cancelling superseded pending runs in the `pages` group.
-    default: "true"
-  preview:
-    description: >-
-      Screenshot the default branch's rolling report (light and dark, `preview-light.png` and `preview-dark.png` in its
-      folder) for the README, when this run rebuilt it. Installs Playwright's Chromium (about 1 minute); needs Node and
-      passwordless sudo on the runner. A failed install or screenshot is a warning. Requires `target: github-pages`.
-    default: "false"
   cleanup-pr:
     description: >-
-      A pull request number. When set, the action removes that pull request's reports (`pr/<number>/`) from the site instead of
-      publishing: no artifact download, report or link, only the gh-pages update (and the deploy, with `deploy: true`).
-      Use it in a `pull_request_target: [closed]` job, set to `github.event.pull_request.number`; the token then needs
-      only `contents: write` (plus the deploy permissions with `deploy: true`). Requires `target: github-pages`.
+      A pull request number. When set, the action uploads the update that removes that pull request's reports
+      (`pr/<number>/`) from the site instead of publishing: no artifact download, report or link, only the update and
+      the deployer's wake-up. Use it in a `pull_request_target: [closed]` job, set to `github.event.pull_request.number`;
+      the token then needs only `actions: write`. Requires `target: github-pages`. Not together with `reopen-pr`.
     default: ""
+  reopen-pr:
+    description: >-
+      A pull request number. When set, the action uploads the update that lifts the removal of that pull request's
+      reports (a reopened pull request), instead of publishing. Use it in a `pull_request_target: [reopened]` job. The
+      token needs only `actions: write`. Requires `target: github-pages`. Not together with `cleanup-pr`.
+    default: ""
+  deployer-workflow:
+    description: >-
+      The Pages deployer's workflow file name, dispatched on the default branch after an update is uploaded. The
+      deployer also runs on a five-minute tick, so a failed dispatch only delays the site.
+    default: pages-deploy.yml
   token:
     description: >-
-      Token for the release download, the Actions API, the gh-pages push, the comment and the check run. It needs
-      `actions: read`, `contents: write`, `pages: read`, `pull-requests: write` and `checks: write`.
+      Token for the release download, the Actions API, the deployer dispatch, the comment and the check run. It needs
+      `actions: write` (the dispatch; it also reads the run's artifacts), `pages: read`, `pull-requests: write` and
+      `checks: write`. A `cleanup-pr` or `reopen-pr` job needs only `actions: write`.
     default: ${{ github.token }}
 
 outputs:
   report-url:
-    description: The run's published report URL; empty when nothing was published.
-    value: ${{ steps.site.outputs.report-url }}
+    description: The run's report URL once the deployer ships it; empty when no update was uploaded.
+    value: ${{ steps.update.outputs.report-url }}
   published:
-    description: "`true` when the report was pushed to the site, otherwise `false`."
-    value: ${{ steps.site.outputs.published || 'false' }}
-  cleaned:
-    description: "`true` when `cleanup-pr` was given, the site had that pull request and the update was pushed, otherwise `false`."
-    value: ${{ steps.cleanup.outputs.cleaned || 'false' }}
+    description: "`true` when the run's site update was uploaded, otherwise `false`."
+    value: ${{ steps.update.outputs.published || 'false' }}
 
 runs:
   using: composite
@@ -77,7 +70,8 @@ runs:
       shell: bash
       env:
         TARGET: ${{ inputs.target }}
-        PR: ${{ inputs.cleanup-pr }}
+        CLEANUP: ${{ inputs.cleanup-pr }}
+        REOPEN: ${{ inputs.reopen-pr }}
         PRIVATE: ${{ github.event.repository.private }}
       run: |
         case "$TARGET" in
@@ -90,16 +84,23 @@ runs:
         if [ "$TARGET" = github-pages ] && [ "$PRIVATE" = true ]; then
           echo "::warning::otel-html publish: this repository is private, but its GitHub Pages site is public unless the organization restricts Pages access (GitHub Enterprise Cloud), so the reports' CI logs, job names and pull request titles become public. Use target: artifact to keep them private."
         fi
-        if [ -n "$PR" ]; then
-          if ! [[ $PR =~ ^[1-9][0-9]*$ ]]; then
-            echo "::error::otel-html publish: cleanup-pr must be a pull request number, not '$PR'"
+        if [ -n "$CLEANUP" ] && [ -n "$REOPEN" ]; then
+          echo "::error::otel-html publish: give cleanup-pr or reopen-pr, not both"
+          exit 1
+        fi
+        for input in cleanup-pr:"$CLEANUP" reopen-pr:"$REOPEN"; do
+          name=${input%%:*}
+          value=${input#*:}
+          if [ -z "$value" ]; then continue; fi
+          if ! [[ $value =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::otel-html publish: $name must be a pull request number, not '$value'"
             exit 1
           fi
           if [ "$TARGET" != github-pages ]; then
-            echo "::error::otel-html publish: cleanup-pr removes reports from the site, so it needs target: github-pages"
+            echo "::error::otel-html publish: $name changes the site, so it needs target: github-pages"
             exit 1
           fi
-        fi
+        done
     - name: Install otel-html
       if: inputs.command == ''
       shell: bash
@@ -130,10 +131,9 @@ runs:
           echo "config=${CONFIG:-$GITHUB_ACTION_PATH/otel-html-ci.yaml}"
           echo "artifacts=$RUNNER_TEMP/otel-html-artifacts"
           echo "report=$RUNNER_TEMP/otel-html-run-report"
-          echo "site=$RUNNER_TEMP/otel-html-site"
-          echo "pages=$RUNNER_TEMP/otel-html-pages"
+          echo "updates=$RUNNER_TEMP/otel-html-update"
         } >>"$GITHUB_OUTPUT"
-    - if: inputs.cleanup-pr == ''
+    - if: inputs.cleanup-pr == '' && inputs.reopen-pr == ''
       uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
       with:
         run-id: ${{ inputs.run-id }}
@@ -143,7 +143,7 @@ runs:
     # A run with no job reports (one that skipped its jobs) sets `published=false` and writes nothing.
     - name: Build the run report
       id: report
-      if: inputs.cleanup-pr == ''
+      if: inputs.cleanup-pr == '' && inputs.reopen-pr == ''
       shell: bash
       env:
         CMD: ${{ steps.resolve.outputs.command }}
@@ -164,99 +164,120 @@ runs:
         # shellcheck disable=SC2086
         $CMD ci report --run-id "$RUN_ID" --repository "$GITHUB_REPOSITORY" --artifacts "$ARTIFACTS" --out "$REPORT" \
           --config "$CONFIG"
-    - if: inputs.cleanup-pr == '' && steps.report.outputs.published != 'false'
+    - if: inputs.cleanup-pr == '' && inputs.reopen-pr == '' && steps.report.outputs.published != 'false'
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: ci-run-report
         path: ${{ steps.resolve.outputs.report }}/
         include-hidden-files: true
         if-no-files-found: error
-        # A re-run of the report job (after a failed site push, say) finds the first attempt's artifact.
+        # A re-run of the report job finds the first attempt's artifact.
         overwrite: true
     - id: pages
-      if: inputs.cleanup-pr == '' && inputs.target == 'github-pages' && steps.report.outputs.published != 'false'
+      if: inputs.cleanup-pr == '' && inputs.reopen-pr == '' && inputs.target == 'github-pages' && steps.report.outputs.published != 'false'
       uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
       with:
         token: ${{ inputs.token }}
-    # The default branch's report is screenshotted after `ci site` rebuilds it (site-publish.sh). A failed install only
-    # skips the screenshot: the publish goes on.
-    - name: Install the preview browser
-      id: browser
-      if: inputs.preview == 'true' && inputs.cleanup-pr == '' && inputs.target == 'github-pages' && steps.report.outputs.published != 'false'
-      continue-on-error: true
-      shell: bash
-      run: |
-        dir=$RUNNER_TEMP/otel-html-playwright
-        npm install --prefix "$dir" --no-audit --no-fund @playwright/test@1.64.1
-        "$dir/node_modules/.bin/playwright" install --with-deps chromium
-    # Places the report on a fresh copy of the gh-pages tip and pushes it under a lease (site-lease.sh). A run with no
-    # channel (a branch with no open PR) is announced by `ci site` and not pushed. A default-branch run goes to
-    # `branch/<name>/` and a pull request's to `pr/<number>/`: each a rolling report over every workflow's runs.
-    - name: Publish to the site branch
-      id: site
-      if: inputs.cleanup-pr == '' && inputs.target == 'github-pages' && steps.report.outputs.published != 'false'
+    # Writes the run update (the run's compacted report in `site` format) for the Pages deployer. A run with no channel
+    # (a branch with no open PR) is announced by `ci update run` and writes nothing, so `name` is empty. A default-branch
+    # run goes to `branch/<name>/` and a pull request's to `pr/<number>/`: each a rolling report over every workflow's runs.
+    - name: Write the run update
+      id: update
+      if: inputs.cleanup-pr == '' && inputs.reopen-pr == '' && inputs.target == 'github-pages' && steps.report.outputs.published != 'false'
       shell: bash
       env:
         CMD: ${{ steps.resolve.outputs.command }}
         CONFIG: ${{ steps.resolve.outputs.config }}
         REPORT: ${{ steps.resolve.outputs.report }}
-        SITE: ${{ steps.resolve.outputs.site }}
+        UPDATES: ${{ steps.resolve.outputs.updates }}
         RUN_ID: ${{ inputs.run-id }}
-        RETENTION: ${{ inputs.retention }}
-        PR_RETENTION: ${{ inputs.pr-retention }}
         BASE_URL: ${{ steps.pages.outputs.base_url }}
         GITHUB_TOKEN: ${{ inputs.token }}
-        # Empty skips the screenshots (preview off, or the browser install failed).
-        PREVIEW_COMMAND: ${{ steps.browser.outcome == 'success' && format('node {0}/preview.mjs', github.action_path) || '' }}
-        PLAYWRIGHT_FROM: ${{ runner.temp }}/otel-html-playwright/package.json
-        PREVIEW: ${{ inputs.preview }}
-        BROWSER: ${{ steps.browser.outcome }}
       run: |
-        if [ "$PREVIEW" = true ] && [ "$BROWSER" != success ]; then
-          echo "::warning::otel-html preview: the browser install failed; no screenshot"
+        # CMD is deliberately unquoted: it may be a command with arguments, such as `node dist/cli/main.js`.
+        # shellcheck disable=SC2086
+        $CMD ci update run --report "$REPORT" --out "$UPDATES" --run-id "$RUN_ID" --repository "$GITHUB_REPOSITORY" \
+          --base-url "$BASE_URL" --config "$CONFIG"
+    # A closed pull request's folder (`pr/<number>/`) and index entry leave the site when the deployer applies this
+    # update; a reopened pull request's removal is lifted the same way.
+    - name: Write the pull request update
+      id: pr-update
+      if: inputs.cleanup-pr != '' || inputs.reopen-pr != ''
+      shell: bash
+      env:
+        CMD: ${{ steps.resolve.outputs.command }}
+        UPDATES: ${{ steps.resolve.outputs.updates }}
+        CLEANUP: ${{ inputs.cleanup-pr }}
+        REOPEN: ${{ inputs.reopen-pr }}
+        GITHUB_TOKEN: ${{ inputs.token }}
+      run: |
+        if [ -n "$CLEANUP" ]; then
+          kind=remove-pr
+          pr=$CLEANUP
+        else
+          kind=reopen-pr
+          pr=$REOPEN
         fi
         # CMD is deliberately unquoted: it may be a command with arguments, such as `node dist/cli/main.js`.
         # shellcheck disable=SC2086
-        "$GITHUB_ACTION_PATH/site-lease.sh" "$SITE" "otel-html: publish run $RUN_ID" published=true \
-          "$GITHUB_ACTION_PATH/site-publish.sh" "$SITE" \
-          $CMD ci site --site "$SITE" --report "$REPORT" --run-id "$RUN_ID" --repository "$GITHUB_REPOSITORY" \
-          --base-url "$BASE_URL" --retention "$RETENTION" --pr-retention "$PR_RETENTION" --config "$CONFIG"
-    # A run that reached no site page (no channel, or a push that gave up after five attempts, which fails the step above)
-    # still gets the table `ci report` kept in a file. `!cancelled()` lets it run after that failure.
+        $CMD ci update "$kind" --pr "$pr" --out "$UPDATES"
+    # The update folder is the artifact: its name is the folder's, and the deployer finds updates by that name.
+    - name: Name the update artifact
+      id: artifact
+      shell: bash
+      env:
+        UPDATES: ${{ steps.resolve.outputs.updates }}
+        RUN_NAME: ${{ steps.update.outputs.name }}
+        PR_NAME: ${{ steps.pr-update.outputs.name }}
+      run: |
+        name=${RUN_NAME:-$PR_NAME}
+        {
+          echo "name=$name"
+          echo "path=$UPDATES/$name"
+        } >>"$GITHUB_OUTPUT"
+    - if: steps.artifact.outputs.name != ''
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: ${{ steps.artifact.outputs.name }}
+        path: ${{ steps.artifact.outputs.path }}
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 90
+        # A re-run of the job reuses the run, and so the name.
+        overwrite: true
+    # Never fails: the deployer's five-minute tick finds the update anyway.
+    - name: Wake the deployer
+      if: steps.artifact.outputs.name != ''
+      shell: bash
+      env:
+        CMD: ${{ steps.resolve.outputs.command }}
+        WORKFLOW: ${{ inputs.deployer-workflow }}
+        GITHUB_TOKEN: ${{ inputs.token }}
+      run: |
+        # CMD is deliberately unquoted: it may be a command with arguments, such as `node dist/cli/main.js`.
+        # shellcheck disable=SC2086
+        $CMD ci dispatch --workflow "$WORKFLOW"
+    # A run that reached no site page (no channel, or no update written) still gets the table `ci report` kept in a file.
+    # `!cancelled()` lets it run after a failure.
     - name: Summary without a link
       if: >-
-        !cancelled() && inputs.cleanup-pr == '' && inputs.target == 'github-pages'
-        && steps.report.outputs.published != 'false' && steps.site.outputs.published != 'true'
+        !cancelled() && inputs.cleanup-pr == '' && inputs.reopen-pr == '' && inputs.target == 'github-pages'
+        && steps.report.outputs.published != 'false' && steps.update.outputs.published != 'true'
       shell: bash
       env:
         SUMMARY_FILE: ${{ runner.temp }}/otel-html-report-summary.md
       run: |
         if [ -f "$SUMMARY_FILE" ]; then cat "$SUMMARY_FILE" >>"$GITHUB_STEP_SUMMARY"; fi
-    # A closed PR's folder (`pr/<number>/`) and index entry leave the site, under the same lease. A PR the site never had (`ci cleanup`
-    # writes `cleaned=false`) pushes nothing, so nothing is deployed.
-    - name: Remove the pull request from the site branch
-      id: cleanup
-      if: inputs.cleanup-pr != ''
-      shell: bash
-      env:
-        CMD: ${{ steps.resolve.outputs.command }}
-        SITE: ${{ steps.resolve.outputs.site }}
-        PR: ${{ inputs.cleanup-pr }}
-        GITHUB_TOKEN: ${{ inputs.token }}
-      run: |
-        # CMD is deliberately unquoted: it may be a command with arguments, such as `node dist/cli/main.js`.
-        # shellcheck disable=SC2086
-        "$GITHUB_ACTION_PATH/site-lease.sh" "$SITE" "otel-html: remove PR $PR" cleaned=true \
-          $CMD ci cleanup --site "$SITE" --pr "$PR" --repository "$GITHUB_REPOSITORY"
-    # Never fails: a missing comment or check is a warning. Its comment body also goes to the step summary.
+    # Never fails: a missing comment or check is a warning. Its comment body also goes to the step summary. The link
+    # is to the report the deployer is about to ship (a minute or more, and the live index may be older still).
     - name: Link
-      if: steps.site.outputs.published == 'true'
+      if: steps.update.outputs.published == 'true'
       shell: bash
       env:
         CMD: ${{ steps.resolve.outputs.command }}
-        SITE: ${{ steps.resolve.outputs.site }}
         RUN_ID: ${{ inputs.run-id }}
-        REPORT_URL: ${{ steps.site.outputs.report-url }}
+        REPORT_URL: ${{ steps.update.outputs.report-url }}
+        BASE_URL: ${{ steps.pages.outputs.base_url }}
         COMMENT: ${{ inputs.comment }}
         CHECK: ${{ inputs.check }}
         GITHUB_TOKEN: ${{ inputs.token }}
@@ -266,23 +287,5 @@ runs:
         if [ "$CHECK" != true ]; then args+=(--no-check); fi
         # CMD is deliberately unquoted: it may be a command with arguments, such as `node dist/cli/main.js`.
         # shellcheck disable=SC2086
-        $CMD ci link --run-id "$RUN_ID" --repository "$GITHUB_REPOSITORY" --url "$REPORT_URL" --site "$SITE" "${args[@]}"
-    # The site without the git metadata and the lease file.
-    - name: Stage the site for Pages
-      if: (steps.site.outputs.published == 'true' || steps.cleanup.outputs.cleaned == 'true') && inputs.deploy == 'true'
-      shell: bash
-      env:
-        SITE: ${{ steps.resolve.outputs.site }}
-        PAGES: ${{ steps.resolve.outputs.pages }}
-      run: |
-        rm -rf "$PAGES"
-        mkdir -p "$PAGES"
-        rsync -a --exclude .git --exclude .lease "$SITE/" "$PAGES/"
-    - if: (steps.site.outputs.published == 'true' || steps.cleanup.outputs.cleaned == 'true') && inputs.deploy == 'true'
-      uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
-      with:
-        path: ${{ steps.resolve.outputs.pages }}
-    - if: (steps.site.outputs.published == 'true' || steps.cleanup.outputs.cleaned == 'true') && inputs.deploy == 'true'
-      uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
-      with:
-        token: ${{ inputs.token }}
+        $CMD ci link --run-id "$RUN_ID" --repository "$GITHUB_REPOSITORY" --url "$REPORT_URL" \
+          --index-url "${BASE_URL%/}/index.json" "${args[@]}"

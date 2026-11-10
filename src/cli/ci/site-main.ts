@@ -4,56 +4,27 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { WriterDeps } from '../../writer/session.js';
 import type { CliIo } from '../io.js';
-import {
-  type ApiRun,
-  envVar,
-  type Fetch,
-  fetchPullsForSha,
-  getJson,
-  messageOf,
-  say,
-  setOutputs,
-  warning,
-} from './github-api.js';
+import { messageOf, say, warning } from './github-api.js';
 import { mergeSkippingBad, mergeWithConfig } from './publish-io.js';
 import {
   applyRetention,
   type Channel,
-  channelFor,
   dropWorkflowChannels,
   placeRun,
   removeChannel,
   renderRedirect,
-  reportUrl,
   rollingInputs,
   type SiteIndex,
   type SiteRun,
-  siteRunOf,
 } from './site.js';
 import {
   ensureSharedAssets,
   placeRunReport,
   pruneAssets,
   readSiteIndex,
-  removePaths,
   writeBadges,
   writeSite,
 } from './site-io.js';
-
-export type SiteOptions = {
-  site: string;
-  report: string;
-  runId: number;
-  repository: string;
-  baseUrl: string;
-  retention: number;
-  prRetention: number;
-  /** The dashboard config file for the rolling report. */
-  config?: string;
-};
-export type CleanupOptions = { site: string; pr: number; repository: string };
-
-const API_TIMEOUT_MS = 15_000;
 
 /** `<site>/<key>/index.html`: a stub forwarding to the channel's newest run. */
 async function writeStub(site: string, key: string, index: SiteIndex): Promise<void> {
@@ -189,59 +160,6 @@ export async function placeFinishedRun(
 }
 
 /**
- * Places a finished run's report on the site: resolves its channel (`branch/<default>` or `pr/<n>`), copies the
- * report to the run's folder, applies retention, drops the older per-workflow channels (`ci/`, `load/`) and rewrites
- * the index, landing page and the channel's rolling report. A run with no channel is announced and skipped. Throws
- * when the run cannot be read from the API.
- */
-export async function runSite(
-  opts: SiteOptions,
-  io: CliIo,
-  deps: WriterDeps,
-  fetchFn: Fetch = fetch,
-): Promise<void> {
-  const api = envVar(io, 'GITHUB_API_URL') ?? 'https://api.github.com';
-  const token = envVar(io, 'GITHUB_TOKEN');
-  const get = async <T>(path: string): Promise<T> =>
-    (await getJson<T>(`${api}/repos/${opts.repository}${path}`, token, API_TIMEOUT_MS, fetchFn)).body;
-
-  const run = await get<ApiRun>(`/actions/runs/${opts.runId}`);
-  const { default_branch: defaultBranch } = await get<{ default_branch: string }>('');
-  const pulls = await fetchPullsForSha(
-    { apiUrl: api, repository: opts.repository, sha: run.head_sha },
-    token,
-    API_TIMEOUT_MS,
-    fetchFn,
-  );
-  const placed = channelFor(run, pulls, defaultBranch);
-  if (placed === undefined) {
-    say(
-      io,
-      `::notice::otel-html site: run ${run.id} (${run.head_branch ?? 'unknown branch'}) has no open pull request and is not on the default branch; not published`,
-    );
-    setOutputs(io, { published: 'false' });
-    return;
-  }
-
-  const reportPath = `${placed.key}/runs/${run.id}`;
-  const { rolling } = await placeFinishedRun(opts.site, placed, siteRunOf(run, reportPath), opts.report, {
-    retention: opts.retention,
-    prRetention: opts.prRetention,
-    config: opts.config,
-    repository: opts.repository,
-    deps,
-    io,
-    remove: removePaths,
-  });
-  setOutputs(io, {
-    'report-url': reportUrl(opts.baseUrl.replace(/\/+$/, ''), reportPath),
-    channel: placed.key,
-    published: 'true',
-    rolling,
-  });
-}
-
-/**
  * Removes pull request `pr`'s channel and folder (`pr/<n>`) from the site (through `remove`) and rewrites the index
  * and landing page. A pull request the site never had (no channel and no folder) changes nothing: `false`.
  */
@@ -265,14 +183,4 @@ export async function removePullRequest(
   await pruneAssets(site, deps, (m) => warning(io, 'cleanup', m));
   say(io, `removed ${key} from the site`);
   return true;
-}
-
-/**
- * Removes pull request `pr`'s channel and folder (`pr/<n>`) from the site and writes `cleaned=true` to
- * $GITHUB_OUTPUT. A pull request the site never had (no channel and no folder) changes nothing and writes
- * `cleaned=false`, so the caller pushes and deploys nothing.
- */
-export async function runCleanup(opts: CleanupOptions, io: CliIo, deps: WriterDeps): Promise<void> {
-  const cleaned = await removePullRequest(opts.site, opts.pr, opts.repository, deps, io, removePaths);
-  setOutputs(io, { cleaned: String(cleaned) });
 }

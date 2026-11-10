@@ -1,5 +1,5 @@
 import { type ApiJob, type ApiRun, CHECK_RUN_NAME } from './github-api.js';
-import { type Channel, IN_PROGRESS, type SiteIndex, type SiteRun, slug } from './site.js';
+import { type Channel, IN_PROGRESS, type SiteIndex, slug } from './site.js';
 import { codeSpan, MARKER, summaryTable } from './summary.js';
 
 /** The pure side of `ci link`: the sticky pull request comment and the check run that point at a run's report. */
@@ -71,28 +71,8 @@ export function checkRunPayload(
 }
 
 /**
- * The run before `runId` in its channel, preferring the newest older run of the same workflow and else the one right
- * after it in the list, of any workflow; with the URL of its report, derived from this run's report `url` by swapping
- * the report paths. Undefined when the run is not on the site, is the oldest
- * in its channel, or `url` does not end in this run's report path.
- */
-export function previousRun(index: SiteIndex, runId: number, url: string): PreviousRun | undefined {
-  const found = locate(index, runId, url);
-  if (found === undefined) return undefined;
-  const older = found.channel.runs.slice(found.at + 1);
-  const workflow = found.channel.runs[found.at]?.workflow;
-  const prev = (workflow === undefined ? undefined : older.find((r) => r.workflow === workflow)) ?? older[0];
-  if (prev === undefined) return undefined;
-  return {
-    runId: prev.runId,
-    url: `${found.base}/${prev.reportPath}/`,
-    ...(prev.workflow === undefined ? {} : { workflow: prev.workflow }),
-  };
-}
-
-/**
  * The run before `runId` in channel `key` of the live index: the channel's newest run that is neither this run nor
- * `in_progress`, preferring `workflow`, with its report under `baseUrl`. Unlike `previousRun` it does not need the
+ * `in_progress`, preferring `workflow`, with its report under `baseUrl`. It does not need the
  * index to list this run (D57). Undefined when the channel has no such run.
  */
 export function previousRunOf(
@@ -124,35 +104,4 @@ export function channelPageOf(
   const label =
     channel.kind === 'pr' ? `pull request #${key.slice('pr/'.length)}` : codeSpan(channel.headBranch);
   return { label, url: `${baseUrl}/${key}/` };
-}
-
-/**
- * The rolling report of the channel holding `runId`, its URL derived from this run's report `url` as in
- * `previousRun`. Undefined when the run is not on the site, its channel is an older per-workflow one, or `url` does
- * not end in this run's report path.
- */
-export function channelPage(index: SiteIndex, runId: number, url: string): ChannelPage | undefined {
-  const found = locate(index, runId, url);
-  if (found === undefined || found.channel.kind === 'workflow') return undefined;
-  const label =
-    found.channel.kind === 'pr'
-      ? `pull request #${found.key.slice('pr/'.length)}`
-      : codeSpan(found.channel.headBranch);
-  return { label, url: `${found.base}/${found.key}/` };
-}
-
-/** The channel holding `runId`, its position there, and the site's base URL (`url` minus the run's report path). */
-function locate(
-  index: SiteIndex,
-  runId: number,
-  url: string,
-): { key: string; channel: Channel; at: number; base: string } | undefined {
-  for (const [key, channel] of Object.entries(index.channels)) {
-    const at = channel.runs.findIndex((r) => r.runId === runId);
-    if (at < 0) continue;
-    const tail = `/${(channel.runs[at] as SiteRun).reportPath}/`;
-    if (!url.endsWith(tail)) return undefined;
-    return { key, channel, at, base: url.slice(0, -tail.length) };
-  }
-  return undefined;
 }

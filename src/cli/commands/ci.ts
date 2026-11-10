@@ -15,7 +15,6 @@ import { runDispatch } from '../ci/dispatch.js';
 import { envVar, messageOf, say } from '../ci/github-api.js';
 import { runLink } from '../ci/link-main.js';
 import { runReport } from '../ci/report-main.js';
-import { runCleanup, runSite } from '../ci/site-main.js';
 import { runUpdateDone, runUpdatePr, runUpdatePush, runUpdateRun } from '../ci/update-main.js';
 import type { CliIo } from '../io.js';
 import { CliExit } from '../program.js';
@@ -48,31 +47,13 @@ function parseRepository(text: string): string {
   return text;
 }
 
-interface SiteFlags {
-  site: string;
-  report: string;
-  runId: string;
-  repository: string;
-  baseUrl: string;
-  retention: string;
-  prRetention: string;
-  config?: string;
-}
-
 interface LinkFlags {
   runId: string;
   repository: string;
   url: string;
-  site?: string;
-  indexUrl?: string;
+  indexUrl: string;
   comment: boolean;
   check: boolean;
-}
-
-interface CleanupFlags {
-  site: string;
-  pr: string;
-  repository?: string;
 }
 
 interface DeployApplyFlags {
@@ -143,36 +124,6 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
         throw new CliExit(1);
       }
     });
-  ci.command('site')
-    .description(
-      "place a run's report on the checked-out site folder, apply retention and rewrite the indexes",
-    )
-    .requiredOption('--site <dir>', 'the site folder (the gh-pages tree)')
-    .requiredOption('--report <dir>', "the run's merged report folder")
-    .requiredOption('--run-id <n>', 'workflow run id')
-    .requiredOption('--repository <owner/repo>', 'repository of the run')
-    .requiredOption('--base-url <url>', "the site's public URL")
-    .option('--retention <n>', 'runs kept per workflow in each branch channel', '30')
-    .option('--pr-retention <n>', 'runs kept per workflow in each pull request channel', '10')
-    .option('--config <file>', "dashboard config file for the channel's rolling report")
-    .action(async (flags: SiteFlags) => {
-      const opts = {
-        site: flags.site,
-        report: flags.report,
-        runId: parseRunId(flags.runId),
-        repository: parseRepository(flags.repository),
-        baseUrl: flags.baseUrl,
-        retention: parsePositive('--retention', flags.retention),
-        prRetention: parsePositive('--pr-retention', flags.prRetention),
-        ...(flags.config === undefined ? {} : { config: flags.config }),
-      };
-      try {
-        await runSite(opts, io, await resolveDeps(deps));
-      } catch (e) {
-        say(io, `::error::otel-html site: ${messageOf(e)}`);
-        throw new CliExit(1);
-      }
-    });
   ci.command('link')
     .description(
       "link a published report: sticky comment on the commit's open pull requests, a check run, the job summary (never fails the job)",
@@ -180,54 +131,24 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
     .requiredOption('--run-id <n>', 'workflow run id')
     .requiredOption('--repository <owner/repo>', 'repository of the run')
     .requiredOption('--url <url>', "the run's published report URL")
-    .option(
-      '--site <dir>',
-      'the site folder (the gh-pages tree), for the previous run (until the deployer replaces it)',
-    )
-    .option(
+    .requiredOption(
       '--index-url <url>',
-      "the live site's index.json, for the previous run (one of --site, --index-url)",
+      "the live site's index.json, for the channel page and the previous run",
     )
     .option('--no-comment', 'do not comment on pull requests')
     .option('--no-check', 'do not create a check run')
     .action(async (flags: LinkFlags) => {
-      if ((flags.site === undefined) === (flags.indexUrl === undefined))
-        throw new OtelHtmlError('usage', { message: 'give exactly one of --site and --index-url' });
       await runLink(
         {
           runId: parseRunId(flags.runId),
           repository: parseRepository(flags.repository),
           url: flags.url,
-          ...(flags.site === undefined ? {} : { site: flags.site }),
-          ...(flags.indexUrl === undefined ? {} : { indexUrl: flags.indexUrl }),
+          indexUrl: flags.indexUrl,
           comment: flags.comment,
           check: flags.check,
         },
         io,
       );
-    });
-  ci.command('cleanup')
-    .description("remove a closed pull request's reports (pr/<n>) from the site folder")
-    .requiredOption('--site <dir>', 'the site folder (the gh-pages tree)')
-    .requiredOption('--pr <number>', 'pull request number')
-    .option('--repository <owner/repo>', 'repository, for the landing page (default: $GITHUB_REPOSITORY)')
-    .action(async (flags: CleanupFlags) => {
-      const repository = flags.repository ?? envVar(io, 'GITHUB_REPOSITORY');
-      if (repository === undefined)
-        throw new OtelHtmlError('usage', {
-          message: '--repository is required when GITHUB_REPOSITORY is not set',
-        });
-      const opts = {
-        site: flags.site,
-        pr: parsePositive('--pr', flags.pr),
-        repository: parseRepository(repository),
-      };
-      try {
-        await runCleanup(opts, io, await resolveDeps(deps));
-      } catch (e) {
-        say(io, `::error::otel-html cleanup: ${messageOf(e)}`);
-        throw new CliExit(1);
-      }
     });
   const deploy = ci
     .command('deploy')
