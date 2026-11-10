@@ -240,6 +240,24 @@ describe('storedZip', () => {
     expect(r.stdout.trim()).toBe('a.txt,dir/ü.bin');
   });
 
+  test('DOS time and date words and the UTF-8 flag are set in both headers', () => {
+    const z = storedZip([files[0] as (typeof files)[number]]);
+    const v = new DataView(z.buffer, z.byteOffset);
+    const time = (12 << 11) | (30 << 5) | (40 >> 1);
+    const date = ((2026 - 1980) << 9) | (11 << 5) | 10;
+    expect([v.getUint16(10, true), v.getUint16(12, true)]).toEqual([time, date]);
+    expect(v.getUint16(6, true) & 0x0800).toBe(0x0800);
+    const cd = 30 + 5 + 5;
+    expect(v.getUint32(cd, true)).toBe(0x02014b50);
+    expect(v.getUint16(cd + 8, true) & 0x0800).toBe(0x0800);
+    expect([v.getUint16(cd + 12, true), v.getUint16(cd + 14, true)]).toEqual([time, date]);
+  });
+
+  test('refuses more than 65535 files with usage', () => {
+    const many = Array.from({ length: 0x10000 }, () => ({ name: 'f', bytes: new Uint8Array(0), mtime }));
+    expect(() => storedZip(many)).toThrow(expect.objectContaining({ code: 'usage' }));
+  });
+
   test('refuses a total above 4 GiB with usage', () => {
     const fake = { length: 0x80000000 } as unknown as Uint8Array;
     const e = (() => {

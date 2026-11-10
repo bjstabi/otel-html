@@ -144,6 +144,32 @@ describe('uploadArtifact', () => {
     expect(slept).toEqual([1000, 2000, 4000, 8000, 16000]);
   });
 
+  test('a thrown fetch error is retried with the same backoff, then rejects', async () => {
+    const slept: number[] = [];
+    let calls = 0;
+    const fetchFn = async (): Promise<Response> => {
+      calls++;
+      throw new TypeError('fetch failed');
+    };
+    await expect(upload({ fetchFn, sleep: async (ms) => void slept.push(ms) })).rejects.toThrow(
+      /fetch failed/,
+    );
+    expect(slept).toEqual([1000, 2000, 4000, 8000, 16000]);
+    expect(calls).toBe(6);
+  });
+
+  test('a thrown fetch error then success recovers', async () => {
+    let failed = false;
+    const fetchFn = async (url: string, init?: RequestInit): Promise<Response> => {
+      if (!failed) {
+        failed = true;
+        throw new TypeError('ECONNRESET');
+      }
+      return fetch(url, init);
+    };
+    expect((await upload({ fetchFn })).id).toBe(77);
+  });
+
   test('a 400 rejects at once', async () => {
     statuses = [400];
     const slept: number[] = [];

@@ -48,7 +48,16 @@ async function send(
   init: RequestInit,
 ): Promise<Response> {
   for (let attempt = 0; ; attempt++) {
-    const res = await fetchFn(url, { ...init, signal: AbortSignal.timeout(CALL_TIMEOUT_MS) });
+    let res: Response;
+    try {
+      res = await fetchFn(url, { ...init, signal: AbortSignal.timeout(CALL_TIMEOUT_MS) });
+    } catch (e) {
+      // A connection reset or timeout: retried like a 5xx.
+      if (attempt >= RETRIES)
+        throw new Error(`${what} failed: ${e instanceof Error ? e.message : String(e)}`);
+      await sleep(1000 * 2 ** attempt);
+      continue;
+    }
     if (res.ok) return res;
     if (!RETRYABLE.has(res.status) || attempt >= RETRIES) {
       const detail = (await res.text().catch(() => '')).slice(0, 200);
