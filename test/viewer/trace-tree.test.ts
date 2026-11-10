@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest';
+import { PROVISIONAL_ATTR } from '../../src/cli/ci/workflow-trace.js';
 import type { RelNanos, SpanId, TraceId } from '../../src/model/ids.js';
 import { type ResourceRef, type ScopeRef, type SpanRecord, StatusCode } from '../../src/model/records.js';
 import type { SpanRow } from '../../src/viewer/data/results.js';
@@ -24,9 +25,7 @@ function row(
     kind: 1,
     start: start as RelNanos,
     end: end as RelNanos,
-    attributes: new Map(
-      provisional === true ? [['otel_html.ci.provisional', { kind: 'bool', value: true }]] : [],
-    ),
+    attributes: new Map(provisional === true ? [[PROVISIONAL_ATTR, { kind: 'bool', value: true }]] : []),
     droppedAttributesCount: 0,
     events: [],
     droppedEventsCount: 0,
