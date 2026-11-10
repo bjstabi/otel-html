@@ -232,6 +232,15 @@ describe('isGoneFile', () => {
     });
     expect(isGoneFile(wrapped)).toBe(true);
   });
+  // Chromium's wording, measured in e2e/refresh.spec.ts: DuckDB-WASM reports neither the status nor "HTTP".
+  test('matches the message Chromium produces for a registered file the site no longer serves', () => {
+    const opened =
+      "Invalid Error: Opening file 'data/partitions/000001/spans.parquet' failed with error: Failed to open file: data/partitions/000001/spans.parquet\n\nLINE 1: CREATE OR REPLACE VIEW \"spans\" AS SELECT * FROM read_parquet(['data/partitions/000000/spans.parquet', 'data...\n                                                        ^";
+    expect(isGoneFile(new Error(opened))).toBe(true);
+    const missing =
+      'IO Error: No files found that match the pattern "data/partitions/000001/spans.parquet"\n\nLINE 1: SELECT "key", "value", "n" FROM (SELECT CASE...';
+    expect(isGoneFile(new Error(missing))).toBe(true);
+  });
   test('does not match a binder not-found, an HTTP 500, or a 404 inside the SQL', () => {
     expect(isGoneFile(new Error("Binder Error: Referenced column 'x' not found in FROM clause"))).toBe(false);
     expect(isGoneFile(new Error('Catalog Error: Function foo not found'))).toBe(false);

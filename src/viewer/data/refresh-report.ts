@@ -57,13 +57,21 @@ export async function refreshReport(
 }
 
 /**
- * A query failure caused by a registered file the site no longer serves (D56): the browser engine's message for an
- * HTTP 404, matched as a 404 in HTTP context so a binder "not found" or an HTTP 500 does not count. The text looked
- * at is the engine's own (`actual` of the `OtelHtmlError` the query engine wraps it in), never the SQL (`hint`). The
- * exact wording is measured in Task 5.3's e2e.
+ * The engine's wordings for a registered file that cannot be opened. Chromium (measured in `e2e/refresh.spec.ts`)
+ * says "Opening file '<path>' failed with error: Failed to open file: <path>" on the first read and then
+ * 'No files found that match the pattern "<path>"' on every query after it, with no status and no "HTTP"; the first
+ * branch is the wording a native HTTP filesystem gives (unverified in Firefox and WebKit).
+ */
+const GONE_FILE =
+  /HTTP[^\n]*\b404\b|\b404\b[^\n]*Not Found|Opening file '[^'\n]*' failed with error: Failed to open file|No files found that match the pattern/i;
+
+/**
+ * A query failure caused by a registered file the site no longer serves (D56): the browser engine's message for a
+ * file it cannot open (a 404), matched on the wording of `GONE_FILE` so a binder "not found" or an HTTP 500 does not count. The text looked
+ * at is the engine's own (`actual` of the `OtelHtmlError` the query engine wraps it in), never the SQL (`hint`).
  */
 export function isGoneFile(error: unknown): boolean {
   const text =
     error instanceof OtelHtmlError ? (error.actual ?? '') : error instanceof Error ? error.message : '';
-  return /HTTP[^\n]*\b404\b|\b404\b[^\n]*Not Found/i.test(text);
+  return GONE_FILE.test(text);
 }
