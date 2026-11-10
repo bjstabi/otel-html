@@ -391,3 +391,28 @@ test('parseSiteIndex round-trips a run with and without startedAt', () => {
   };
   expect(parseSiteIndex(JSON.stringify(index))).toEqual(index);
 });
+
+test('rollingInputs skips in-progress runs (D66)', () => {
+  const channel = {
+    ...main,
+    runs: [
+      siteRun(3, { conclusion: 'in_progress' }),
+      siteRun(2, { conclusion: 'success' }),
+      siteRun(1, { conclusion: 'in_progress' }),
+    ],
+  };
+  expect(rollingInputs(channel)).toEqual([siteRun(2).reportPath]);
+});
+
+test('channelBadges skips in-progress runs: the badge names the newest finished run (D66)', () => {
+  const channel = {
+    ...main,
+    runs: [
+      timed({ runId: 4, conclusion: 'in_progress' }),
+      timed({ runId: 3, conclusion: 'failure' }),
+      timed({ runId: 2 }),
+    ],
+  };
+  expect(channelBadges(channel)['badge-ci.json']?.message).toBe('✗ 4m12s');
+  expect(channelBadges({ ...main, runs: [timed({ runId: 4, conclusion: 'in_progress' })] })).toEqual({});
+});

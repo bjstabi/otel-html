@@ -1,9 +1,12 @@
-import { cp, mkdir, readdir, readFile, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readdir, readFile, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import type { PartitionEntry } from '../../format/manifest.js';
 import { ASSETS_BASE_RE, MANIFEST_PATH } from '../../format/paths.js';
 import { readMergeInput } from '../../writer/merge.js';
 import type { WriterDeps } from '../../writer/session.js';
 import { upgradeReport } from '../../writer/upgrade.js';
+import { readRunManifest, renumbered, writeRunReport } from './run-report.js';
 import { type Channel, channelBadges, parseSiteIndex, renderLanding, type SiteIndex } from './site.js';
 
 /** The filesystem side of the published site: its index, landing page, and the report folders under it. */
@@ -60,16 +63,54 @@ export async function removePaths(dir: string, rel: string[]): Promise<void> {
  * Replaces `to` with a copy of the run report `from` (a format-4 report with its own `assets/`, from `ci report`),
  * switched to `site` format with its viewer files at `assetsBase`: `upgrade --format site --assets-base`, which
  * R57 requires to name the base even when it is the same. The emptied `assets/` folder is removed.
+ *
+ * With `opts.renumberFrom` (D54) `to` is not removed: the report is upgraded in a scratch copy, its partitions are
+ * renumbered to start at `renumberFrom` (so no path in `to` ever names two files), and the copy is laid over `to`.
+ * The files `to` already holds stay where they are; the new manifest simply no longer lists them.
  */
 export async function placeRunReport(
   deps: WriterDeps,
   from: string,
   to: string,
   assetsBase: string,
+  opts?: { renumberFrom: number },
 ): Promise<void> {
-  await copyReport(from, to);
-  await upgradeReport(deps, to, { format: 'site', assetsBase });
-  await rmdir(join(to, 'assets')).catch((e: NodeJS.ErrnoException) => {
+  if (opts === undefined) {
+    await copyReport(from, to);
+    await finishRunReport(deps, to, assetsBase);
+    return;
+  }
+  const scratch = await mkdtemp(join(tmpdir(), 'otel-html-place-'));
+  try {
+    const copy = join(scratch, 'report');
+    await cp(from, copy, { recursive: true });
+    await finishRunReport(deps, copy, assetsBase);
+    const manifest = await readRunManifest(deps.fs, copy);
+    if (manifest === null) throw new Error(`${from} has no ${MANIFEST_PATH}`);
+    const shifted = renumbered(manifest, opts.renumberFrom);
+    for (const m of shifted.moves) {
+      await mkdir(dirname(join(copy, m.to)), { recursive: true });
+      await rename(join(copy, m.from), join(copy, m.to));
+    }
+    // folders no partition of the new manifest lives in (a partition that moved away leaves one behind)
+    const live = new Set(shifted.manifest.partitions.flatMap((p) => folderNames(p.files)));
+    for (const e of await readdir(join(copy, 'data', 'partitions')).catch(() => [] as string[]))
+      if (!live.has(e)) await rm(join(copy, 'data', 'partitions', e), { recursive: true, force: true });
+    await writeRunReport(deps, copy, shifted.manifest);
+    await mkdir(to, { recursive: true });
+    await cp(copy, to, { recursive: true, force: true });
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
+}
+
+/** The `<p6>` folder names of a partition's files (`data/partitions/<p6>/<table>.parquet`). */
+const folderNames = (files: PartitionEntry['files']): string[] =>
+  Object.values(files).flatMap((f) => (f === undefined ? [] : [f.path.split('/')[2] ?? '']));
+
+async function finishRunReport(deps: WriterDeps, dir: string, assetsBase: string): Promise<void> {
+  await upgradeReport(deps, dir, { format: 'site', assetsBase });
+  await rmdir(join(dir, 'assets')).catch((e: NodeJS.ErrnoException) => {
     if (e.code !== 'ENOENT' && e.code !== 'ENOTEMPTY') throw e;
   });
 }
