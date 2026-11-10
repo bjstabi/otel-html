@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { readZip } from '../../../src/cli/ci/zip.js';
+import { OtelHtmlError } from '../../../src/model/errors.js';
 import { buildZip } from '../../../test-support/zip.js';
 
 const dec = new TextDecoder();
@@ -110,7 +111,7 @@ describe('readZip', () => {
       { name: 'b', data: 'y'.repeat(60) },
     ]);
     expect(readZip(zip, 120).size).toBe(2);
-    expect(() => readZip(zip, 119)).toThrow(/b/);
+    expect(() => readZip(zip, 119)).toThrow(/^b: /);
   });
 
   test('rejects a deflate bomb by its declared size before inflating', () => {
@@ -123,7 +124,67 @@ describe('readZip', () => {
       { name: 'a', data: '1' },
       { name: 'a', data: '2' },
     ]);
-    expect(() => readZip(dup, 1000)).toThrow(/a/);
-    expect(() => readZip(new Uint8Array(10), 1000)).toThrow(/zip/);
+    expect(() => readZip(dup, 1000)).toThrow(/^a: a duplicate entry/);
+    expect(() => readZip(new Uint8Array(10), 1000)).toThrow(/^zip: no end of central directory/);
+  });
+
+  describe('malformed input is a typed rejection', () => {
+    const good = (): Uint8Array =>
+      buildZip([
+        { name: 'a.txt', data: 'hello' },
+        { name: 'b.txt', data: big, method: 'deflate' },
+      ]);
+    const view = (b: Uint8Array): DataView => new DataView(b.buffer, b.byteOffset, b.byteLength);
+    const eocd = (b: Uint8Array): number => b.length - 22;
+    const rejects = (b: Uint8Array, re: RegExp): void => {
+      let err: unknown;
+      try {
+        readZip(b, 1 << 20);
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(OtelHtmlError);
+      expect((err as OtelHtmlError).message).toMatch(re);
+    };
+
+    test('a truncated central directory', () => {
+      const b = good();
+      view(b).setUint32(eocd(b) + 16, b.length - 30, true); // the directory starts too near the end
+      rejects(b, /^zip: /);
+    });
+
+    test('a central directory record whose name runs past the end', () => {
+      const b = good();
+      const cd = view(b).getUint32(eocd(b) + 16, true);
+      view(b).setUint16(cd + 28, 60000, true);
+      rejects(b, /^zip: /);
+    });
+
+    test('a zip64 locator pointing past the end', () => {
+      const b = buildZip([{ name: 'a.txt', data: 'x' }], { zip64: true });
+      view(b).setBigUint64(b.length - 22 - 20 + 8, 0xffffffffffffn, true);
+      rejects(b, /^zip: /);
+      view(b).setBigUint64(b.length - 22 - 20 + 8, 2n ** 63n, true);
+      rejects(b, /^zip: /);
+    });
+
+    test('a local-header offset past the end', () => {
+      const b = good();
+      const cd = view(b).getUint32(eocd(b) + 16, true);
+      view(b).setUint32(cd + 42, b.length - 5, true);
+      rejects(b, /^a\.txt: /);
+    });
+
+    test('an extra field running past its record', () => {
+      const b = buildZip([{ name: 'a.txt', data: 'x' }], { zip64: true });
+      const cd =
+        view(b).getUint32(eocd(b) + 16, true) || view(b).getUint32(b.length - 22 - 20 - 56 + 48, true);
+      // find the record through the zip64 end record instead
+      const z = Number(view(b).getBigUint64(b.length - 22 - 20 + 8, true));
+      const rec = Number(view(b).getBigUint64(z + 48, true));
+      expect(cd).toBeGreaterThan(0);
+      view(b).setUint16(rec + 46 + 5 + 2, 60000, true); // the zip64 extra's size field
+      rejects(b, /^a\.txt: /);
+    });
   });
 });
