@@ -48,9 +48,21 @@ inputs:
       The Pages deployer's workflow file name, dispatched on the default branch after an update is uploaded. The
       deployer also runs on a five-minute tick, so a failed dispatch only delays the site.
     default: pages-deploy.yml
+  dispatch-app-id:
+    description: >-
+      The ID of a GitHub App that dispatches the deployer, with `dispatch-app-private-key`. GitHub refuses a workflow
+      dispatch made with `GITHUB_TOKEN` (the run ends in `startup_failure`), so give the ID and key of an App installed
+      on this repository with Actions: read and write only. The action mints a token scoped to this repository for the
+      dispatch; every other command keeps `token`. Empty (the default) or a failed mint dispatches with `token`.
+    default: ""
+  dispatch-app-private-key:
+    description: >-
+      The private key of the App named by `dispatch-app-id`. Pass the secret only on a run a person started
+      (when the event's `github.event.sender.type` is `User`), so a bot's run never holds it.
+    default: ""
   token:
     description: >-
-      Token for the release download, the Actions API, the deployer dispatch, the comment and the check run. It needs
+      Token for the release download, the Actions API, the deployer dispatch (unless `dispatch-app-id` mints one), the comment and the check run. It needs
       `actions: write` (the dispatch; it also reads the run's artifacts), `pages: read`, `pull-requests: write` and
       `checks: write`. A `cleanup-pr` or `reopen-pr` job needs only `actions: write`.
     default: ${{ github.token }}
@@ -246,6 +258,19 @@ runs:
         # A re-run of the job reuses the run, and so the name.
         overwrite: true
     # Never fails: the deployer's five-minute tick finds the update anyway.
+    # The deployer's workflow_dispatch is refused when made with GITHUB_TOKEN (the run ends in `startup_failure`), so the
+    # wake-up uses an installation token of the deployer GitHub App (Actions: read and write), scoped to this repository.
+    # A failed mint is a warning; the dispatch then runs with `token`, as without the App.
+    - name: Mint the dispatch token
+      id: dispatch-token
+      if: steps.artifact.outputs.name != '' && inputs.dispatch-app-id != '' && inputs.dispatch-app-private-key != ''
+      continue-on-error: true
+      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+      with:
+        # The App ID (the variable holds the ID, not the Client ID). With no owner or repositories the token is scoped to this repository.
+        app-id: ${{ inputs.dispatch-app-id }}
+        private-key: ${{ inputs.dispatch-app-private-key }}
+        permission-actions: write
     - name: Wake the deployer
       if: steps.artifact.outputs.name != ''
       shell: bash
@@ -253,10 +278,11 @@ runs:
         CMD: ${{ steps.resolve.outputs.command }}
         WORKFLOW: ${{ inputs.deployer-workflow }}
         GITHUB_TOKEN: ${{ inputs.token }}
+        DISPATCH_TOKEN: ${{ steps.dispatch-token.outputs.token }}
       run: |
         # CMD is deliberately unquoted: it may be a command with arguments, such as `node dist/cli/main.js`.
         # shellcheck disable=SC2086
-        $CMD ci dispatch --workflow "$WORKFLOW"
+        GITHUB_TOKEN=${DISPATCH_TOKEN:-$GITHUB_TOKEN} $CMD ci dispatch --workflow "$WORKFLOW"
     # A run that reached no site page (no channel, or no update written) still gets the table `ci report` kept in a file.
     # `!cancelled()` lets it run after a failure.
     - name: Summary without a link

@@ -78,6 +78,8 @@ jobs:
         uses: ./.github/actions/otel-html-collect
         with:
           publish: true
+          dispatch-app-id: ${{ vars.DEPLOYER_APP_ID }}
+          dispatch-app-private-key: ${{ github.event.sender.type == 'User' && secrets.DEPLOYER_APP_PRIVATE_KEY || '' }}
           command: node dist/cli/main.js
           name: otel-html-${{ github.job }}
 
@@ -122,5 +124,7 @@ jobs:
         uses: ./.github/actions/otel-html-collect
         with:
           publish: true
+          dispatch-app-id: ${{ vars.DEPLOYER_APP_ID }}
+          dispatch-app-private-key: ${{ github.event.sender.type == 'User' && secrets.DEPLOYER_APP_PRIVATE_KEY || '' }}
           command: node dist/cli/main.js
           name: otel-html-${{ github.job }}

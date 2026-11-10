@@ -76,6 +76,8 @@ jobs:
       - id: publish
         uses: ./.github/actions/otel-html-publish
         with:
+          dispatch-app-id: ${{ vars.DEPLOYER_APP_ID }}
+          dispatch-app-private-key: ${{ github.event.sender.type == 'User' && secrets.DEPLOYER_APP_PRIVATE_KEY || '' }}
           command: node dist/cli/main.js
           run-id: ${{ inputs.run_id || github.event.workflow_run.id }}
           config: ${{ steps.config.outputs.config }}
@@ -99,6 +101,8 @@ jobs:
       - run: mise run build
       - uses: ./.github/actions/otel-html-publish
         with:
+          dispatch-app-id: ${{ vars.DEPLOYER_APP_ID }}
+          dispatch-app-private-key: ${{ github.event.sender.type == 'User' && secrets.DEPLOYER_APP_PRIVATE_KEY || '' }}
           command: node dist/cli/main.js
           cleanup-pr: ${{ github.event.action == 'closed' && github.event.pull_request.number || '' }}
           reopen-pr: ${{ github.event.action == 'reopened' && github.event.pull_request.number || '' }}
