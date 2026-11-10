@@ -1,8 +1,8 @@
-import { createContext, type JSX, useContext, useEffect, useRef, useState } from 'react';
+import { createContext, type JSX, useContext, useEffect, useState } from 'react';
 import { CONTROL } from './controls.js';
 
 const POLL_KEY = 'otel-html.poll';
-const POLL_MS = 60_000;
+export const POLL_MS = 60_000;
 const AGE_TICK_MS = 30_000;
 
 /** The viewer's Refresh (D55): what the in-progress line and a gone-file alert call. `refresh` never rejects; a failure lands in `error`. */
@@ -11,6 +11,9 @@ export interface RefreshControl {
   busy: boolean;
   /** The message of the last refresh that failed; null after a refresh succeeds. */
   error: string | null;
+  /** Auto-refresh: `App` owns the timer, so it runs on every page and navigation does not restart it. */
+  poll: boolean;
+  setPoll: (on: boolean) => void;
 }
 
 /** Null where there is nothing to refresh: a served report (the host serves one manifest) and the tests that mount a page alone. */
@@ -20,7 +23,7 @@ export function useRefreshControl(): RefreshControl | null {
   return useContext(RefreshContext);
 }
 
-function readPoll(): boolean {
+export function readPoll(): boolean {
   try {
     return window.sessionStorage.getItem(POLL_KEY) === '1';
   } catch {
@@ -28,7 +31,7 @@ function readPoll(): boolean {
   }
 }
 
-function writePoll(on: boolean): void {
+export function writePoll(on: boolean): void {
   try {
     window.sessionStorage.setItem(POLL_KEY, on ? '1' : '0');
   } catch {
@@ -48,7 +51,7 @@ function ageText(updatedAt: string, now: number): string {
 /**
  * The line under the page header while a CI run's report is still growing (`manifest.complete === false`): its age
  * (the CDN may still serve an older manifest than the last Refresh asked for, so the age says so), a Refresh button and
- * an opt-in 60 s poll remembered per tab. A served report has no `refresh`: the line shows the state only.
+ * the checkbox of the opt-in 60 s poll (remembered per tab; `App` runs the timer). A served report has no `refresh`: the line shows the state only.
  */
 export function InProgress(props: {
   updatedAt: string;
@@ -56,11 +59,10 @@ export function InProgress(props: {
   refresh: (() => void) | null;
   busy: boolean;
   error: string | null;
+  poll: boolean;
+  onPoll: (on: boolean) => void;
 }): JSX.Element | null {
   const { complete, refresh } = props;
-  const [poll, setPoll] = useState(readPoll);
-  const busyRef = useRef(props.busy);
-  busyRef.current = props.busy;
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
@@ -68,14 +70,6 @@ export function InProgress(props: {
     const t = window.setInterval(() => setNow(Date.now()), AGE_TICK_MS);
     return () => window.clearInterval(t);
   }, [complete]);
-
-  useEffect(() => {
-    if (complete || !poll || refresh === null) return;
-    const t = window.setInterval(() => {
-      if (!busyRef.current) refresh();
-    }, POLL_MS);
-    return () => window.clearInterval(t);
-  }, [complete, poll, refresh]);
 
   if (complete) return null;
   return (
@@ -89,11 +83,8 @@ export function InProgress(props: {
           <label className="flex items-center gap-1.5">
             <input
               type="checkbox"
-              checked={poll}
-              onChange={(e) => {
-                setPoll(e.currentTarget.checked);
-                writePoll(e.currentTarget.checked);
-              }}
+              checked={props.poll}
+              onChange={(e) => props.onPoll(e.currentTarget.checked)}
             />
             Auto-refresh
           </label>

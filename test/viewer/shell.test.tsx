@@ -413,6 +413,63 @@ describe('App refresh (D55)', () => {
     }
   });
 
+  test('Auto-refresh is off by default; checked, App polls every 60 s and remembers the choice', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const refresh = vi.fn(() => Promise.resolve(dataSourceOf(growing)));
+      renderApp(refresh);
+      const box = (await screen.findByRole('checkbox', { name: 'Auto-refresh' })) as HTMLInputElement;
+      expect(box.checked).toBe(false);
+      await act(async () => vi.advanceTimersByTimeAsync(120_000));
+      expect(refresh).not.toHaveBeenCalled();
+      fireEvent.click(box);
+      expect(window.sessionStorage.getItem('otel-html.poll')).toBe('1');
+      await act(async () => vi.advanceTimersByTimeAsync(59_000));
+      expect(refresh).not.toHaveBeenCalled();
+      await act(async () => vi.advanceTimersByTimeAsync(1_000));
+      expect(refresh).toHaveBeenCalledTimes(1);
+      fireEvent.click(screen.getByRole('checkbox', { name: 'Auto-refresh' }));
+      expect(window.sessionStorage.getItem('otel-html.poll')).toBe('0');
+      await act(async () => vi.advanceTimersByTimeAsync(120_000));
+      expect(refresh).toHaveBeenCalledTimes(1);
+    } finally {
+      window.sessionStorage.clear();
+      vi.useRealTimers();
+    }
+  });
+
+  test('a remembered choice starts the poll checked', async () => {
+    window.sessionStorage.setItem('otel-html.poll', '1');
+    try {
+      renderApp(() => Promise.resolve(dataSourceOf(growing)));
+      const box = await screen.findByRole('checkbox', { name: 'Auto-refresh' });
+      expect((box as HTMLInputElement).checked).toBe(true);
+    } finally {
+      window.sessionStorage.clear();
+    }
+  });
+
+  test('navigating between pages does not restart the poll', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      window.sessionStorage.setItem('otel-html.poll', '1');
+      const refresh = vi.fn(() => Promise.resolve(dataSourceOf(growing)));
+      renderApp(refresh);
+      await screen.findByRole('button', { name: 'Refresh' });
+      await act(async () => undefined);
+      await act(async () => vi.advanceTimersByTimeAsync(40_000));
+      await act(async () => {
+        window.location.hash = '#/traces/logs';
+        window.dispatchEvent(new HashChangeEvent('hashchange'));
+      });
+      await act(async () => vi.advanceTimersByTimeAsync(21_000));
+      expect(refresh).toHaveBeenCalledTimes(1);
+    } finally {
+      window.sessionStorage.clear();
+      vi.useRealTimers();
+    }
+  });
+
   test('a failed refresh is an inline alert on the line and the page stays', async () => {
     renderApp(() => Promise.reject(new Error('manifest did not load')));
     await userEvent.click(await screen.findByRole('button', { name: 'Refresh' }));

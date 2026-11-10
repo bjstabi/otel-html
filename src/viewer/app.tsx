@@ -1,7 +1,7 @@
 import { type JSX, useCallback, useEffect, useRef, useState } from 'react';
 import type { DataSource } from './data/data-source.js';
 import type { LoadProgress, OpenedReport } from './data/open-report.js';
-import type { RefreshControl } from './shell/in-progress.js';
+import { POLL_MS, type RefreshControl, readPoll, writePoll } from './shell/in-progress.js';
 import { Shell } from './shell/shell.js';
 import type { HistoryPort } from './state/selection.js';
 
@@ -110,8 +110,21 @@ export function App(props: {
       },
     );
   }, [refreshFn]);
+  const [poll, setPollState] = useState(readPoll);
+  const setPoll = useCallback((on: boolean): void => {
+    setPollState(on);
+    writePoll(on);
+  }, []);
+  // The poll is App's, next to the in-flight guard: it survives navigation and runs on every page. It stops once the
+  // report is complete (the line is gone then).
+  const growing = state.status === 'ready' && !state.dataSource.manifest.complete;
+  useEffect(() => {
+    if (!poll || !growing || refreshFn === null) return;
+    const t = window.setInterval(refresh, POLL_MS);
+    return () => window.clearInterval(t);
+  }, [poll, growing, refreshFn, refresh]);
   const control: RefreshControl | null =
-    refreshFn === null ? null : { refresh, busy: refreshing, error: refreshError };
+    refreshFn === null ? null : { refresh, busy: refreshing, error: refreshError, poll, setPoll };
 
   switch (state.status) {
     case 'loading':

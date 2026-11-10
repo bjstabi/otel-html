@@ -236,6 +236,8 @@ export function PageChrome(props: {
         refresh={refresh === null ? null : refresh.refresh}
         busy={refresh?.busy ?? false}
         error={refresh?.error ?? null}
+        poll={refresh?.poll ?? false}
+        onPoll={refresh?.setPoll ?? (() => undefined)}
       />
       <main className="flex-1 p-4">{props.children}</main>
     </div>

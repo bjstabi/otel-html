@@ -21,6 +21,8 @@ const props = (over: Partial<Parameters<typeof InProgress>[0]> = {}): Parameters
   refresh: vi.fn(),
   busy: false,
   error: null,
+  poll: false,
+  onPoll: vi.fn(),
   ...over,
 });
 
@@ -49,29 +51,17 @@ describe('InProgress', () => {
     expect(screen.queryByRole('checkbox')).toBeNull();
   });
 
-  test('Auto-refresh is off by default; checked, it refreshes every 60 s and is remembered', () => {
+  test('the Auto-refresh checkbox shows the poll state and reports a change', () => {
     const p = props();
-    render(<InProgress {...p} />);
-    const box = screen.getByRole('checkbox', { name: 'Auto-refresh' });
-    expect((box as HTMLInputElement).checked).toBe(false);
-    act(() => vi.advanceTimersByTime(120_000));
-    expect(p.refresh).not.toHaveBeenCalled();
+    const { rerender } = render(<InProgress {...p} />);
+    const box = screen.getByRole('checkbox', { name: 'Auto-refresh' }) as HTMLInputElement;
+    expect(box.checked).toBe(false);
     fireEvent.click(box);
-    act(() => vi.advanceTimersByTime(59_000));
-    expect(p.refresh).not.toHaveBeenCalled();
-    act(() => vi.advanceTimersByTime(1_000));
-    expect(p.refresh).toHaveBeenCalledTimes(1);
-    expect(window.sessionStorage.getItem('otel-html.poll')).toBe('1');
-    fireEvent.click(box);
-    act(() => vi.advanceTimersByTime(120_000));
-    expect(p.refresh).toHaveBeenCalledTimes(1);
-    expect(window.sessionStorage.getItem('otel-html.poll')).toBe('0');
-  });
-
-  test('a remembered choice starts the poll checked', () => {
-    window.sessionStorage.setItem('otel-html.poll', '1');
-    render(<InProgress {...props()} />);
+    expect(p.onPoll).toHaveBeenCalledWith(true);
+    rerender(<InProgress {...p} poll />);
     expect((screen.getByRole('checkbox', { name: 'Auto-refresh' }) as HTMLInputElement).checked).toBe(true);
+    act(() => vi.advanceTimersByTime(120_000));
+    expect(p.refresh).not.toHaveBeenCalled(); // the line has no timer; App owns it
   });
 
   test('a failed refresh is an inline alert on the line', () => {
