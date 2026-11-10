@@ -1,7 +1,12 @@
 import { describe, expect, test } from 'vitest';
 import type { ApiJob, ApiRun } from '../../../src/cli/ci/github-api.js';
 import { jobSpanIdOf, runKey, runSpanIdOf, stepSpanIdOf, traceIdOf } from '../../../src/cli/ci/ids.js';
-import { ciResource, workflowTraceRequest } from '../../../src/cli/ci/workflow-trace.js';
+import {
+  ciResource,
+  jobTraceRequest,
+  PROVISIONAL_ATTR,
+  workflowTraceRequest,
+} from '../../../src/cli/ci/workflow-trace.js';
 import { parseOtlpObject } from '../../../src/model/otlp-json.js';
 
 const run: ApiRun = {
@@ -267,5 +272,81 @@ describe('workflowTraceRequest', () => {
   test('the library accepts the output', () => {
     const [req] = parseOtlpObject(workflowTraceRequest(key, run, jobs, new Map([[2, 'name:test']])), 'test');
     expect(req?.signal).toBe('traces');
+  });
+});
+
+describe('jobTraceRequest', () => {
+  const liveRun: ApiRun = {
+    ...run,
+    status: 'in_progress',
+    conclusion: null,
+    updated_at: '2026-01-01T00:00:30Z',
+  };
+  const liveJob: ApiJob = {
+    id: 7,
+    name: 'build',
+    status: 'in_progress',
+    runner_name: 'r1',
+    conclusion: null,
+    created_at: '2026-01-01T00:00:01Z',
+    started_at: '2026-01-01T00:00:10Z',
+    completed_at: null,
+    html_url: null,
+    steps: [
+      {
+        number: 1,
+        name: 'done',
+        status: 'completed',
+        conclusion: 'success',
+        started_at: '2026-01-01T00:00:11Z',
+        completed_at: '2026-01-01T00:00:20Z',
+      },
+      {
+        number: 2,
+        name: 'running',
+        status: 'in_progress',
+        conclusion: null,
+        started_at: '2026-01-01T00:00:21Z',
+        completed_at: null,
+      },
+    ],
+  };
+  const now = Date.parse('2026-01-01T00:00:40Z');
+  const req = jobTraceRequest(key, liveRun, liveJob, now, new Map());
+  const spans = spansOf(req);
+  const provisional = (s: Span) => s.attributes.find((a) => a.key === PROVISIONAL_ATTR)?.value;
+
+  test('the root ends now and is provisional, under the run resource', () => {
+    const root = byName(spans, 'ci');
+    expect(root.spanId).toBe(runSpanIdOf(key));
+    expect(root.startTimeUnixNano).toBe(ns('2026-01-01T00:00:05Z'));
+    expect(root.endTimeUnixNano).toBe(ns('2026-01-01T00:00:40Z'));
+    expect(provisional(root)).toEqual({ boolValue: true });
+    expect(
+      resourceSpansOf(req)[0]?.resource.attributes.some((a) => a.key === 'cicd.pipeline.task.name'),
+    ).toBe(false);
+  });
+
+  test('the job span is provisional under the root; queued is present', () => {
+    const j = byName(spans, 'build');
+    expect(j.spanId).toBe(jobSpanIdOf(key, 7));
+    expect(j.parentSpanId).toBe(runSpanIdOf(key));
+    expect(j.endTimeUnixNano).toBe(ns('2026-01-01T00:00:40Z'));
+    expect(provisional(j)).toEqual({ boolValue: true });
+    expect(byName(spans, 'queued').parentSpanId).toBe(j.spanId);
+  });
+
+  test('a completed step is final; a running step is absent', () => {
+    const done = byName(spans, 'done');
+    expect(done.spanId).toBe(stepSpanIdOf(key, 7, 1));
+    expect(done.endTimeUnixNano).toBe(ns('2026-01-01T00:00:20Z'));
+    expect(provisional(done)).toBeUndefined();
+    expect(spans.some((s) => s.name === 'running')).toBe(false);
+  });
+
+  test('workflowTraceRequest carries no provisional attribute', () => {
+    expect(
+      spansOf(workflowTraceRequest(key, run, jobs, new Map())).some((s) => provisional(s) !== undefined),
+    ).toBe(false);
   });
 });
