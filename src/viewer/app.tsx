@@ -81,6 +81,7 @@ export function App(props: {
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const live = useRef(true);
+  const inFlight = useRef(false);
   useEffect(() => {
     live.current = true;
     return () => {
@@ -89,16 +90,20 @@ export function App(props: {
   }, []);
   // D55: the refreshed data source replaces the shown one; a failed refresh keeps the previous one and is told on the line.
   const refresh = useCallback((): void => {
-    if (refreshFn === null) return;
+    // A click or a poll tick while a refresh runs does nothing: each finished refresh re-queries every page.
+    if (refreshFn === null || inFlight.current) return;
+    inFlight.current = true;
     setRefreshing(true);
     refreshFn().then(
       (dataSource) => {
+        inFlight.current = false;
         if (!live.current) return;
         setRefreshError(null);
         setRefreshing(false);
         setState((s) => (s.status === 'ready' ? { ...s, dataSource } : s));
       },
       (e: unknown) => {
+        inFlight.current = false;
         if (!live.current) return;
         setRefreshError(e instanceof Error ? e.message : String(e));
         setRefreshing(false);

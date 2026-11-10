@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { OtelHtmlError } from '../../src/model/errors.js';
@@ -382,6 +382,33 @@ describe('App refresh (D55)', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Refresh' }));
     await waitFor(() => expect(screen.queryByText(/In progress/)).toBeNull());
     expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  test('a click or a poll tick while a refresh is in flight does not start another', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      window.sessionStorage.setItem('otel-html.poll', '1');
+      let finish: (d: DataSource) => void = () => undefined;
+      const refresh = vi.fn(
+        () =>
+          new Promise<DataSource>((resolve) => {
+            finish = resolve;
+          }),
+      );
+      renderApp(refresh);
+      await screen.findByRole('button', { name: 'Refresh' });
+      await act(async () => vi.advanceTimersByTime(60_000));
+      expect(refresh).toHaveBeenCalledTimes(1);
+      await act(async () => vi.advanceTimersByTime(120_000));
+      fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+      expect(refresh).toHaveBeenCalledTimes(1);
+      await act(async () => finish(dataSourceOf(growing)));
+      await act(async () => vi.advanceTimersByTime(60_000));
+      expect(refresh).toHaveBeenCalledTimes(2);
+    } finally {
+      window.sessionStorage.clear();
+      vi.useRealTimers();
+    }
   });
 
   test('a failed refresh is an inline alert on the line and the page stays', async () => {

@@ -29,8 +29,8 @@ function preferred(a: SpanRow, b: SpanRow): SpanRow {
   return b.span.end > a.span.end ? b : a;
 }
 
-/** One row per span id: the provisional copy of a CI span gives way to the final one. */
-function dedupeSpanIds(spans: readonly SpanRow[]): SpanRow[] {
+/** One row per span id: the provisional copy of a CI span gives way to the final one. `getTrace` applies it to the whole detail; `buildTraceTree` repeats it, which costs one pass and is a no-op on deduped input. */
+export function dedupeSpanIds(spans: readonly SpanRow[]): SpanRow[] {
   const kept = new Map<SpanId, SpanRow>();
   for (const r of spans) {
     const had = kept.get(r.span.spanId);

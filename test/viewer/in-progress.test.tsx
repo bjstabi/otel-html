@@ -88,3 +88,13 @@ describe('InProgress', () => {
     spy.mockRestore();
   });
 });
+
+describe('InProgress poll vs a slow refresh', () => {
+  test('a tick while a refresh runs does not start another', () => {
+    const p = props({ busy: true });
+    window.sessionStorage.setItem('otel-html.poll', '1');
+    render(<InProgress {...p} />);
+    act(() => vi.advanceTimersByTime(180_000));
+    expect(p.refresh).not.toHaveBeenCalled();
+  });
+});

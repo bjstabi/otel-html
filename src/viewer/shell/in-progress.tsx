@@ -1,4 +1,4 @@
-import { createContext, type JSX, useContext, useEffect, useState } from 'react';
+import { createContext, type JSX, useContext, useEffect, useRef, useState } from 'react';
 import { CONTROL } from './controls.js';
 
 const POLL_KEY = 'otel-html.poll';
@@ -59,6 +59,8 @@ export function InProgress(props: {
 }): JSX.Element | null {
   const { complete, refresh } = props;
   const [poll, setPoll] = useState(readPoll);
+  const busyRef = useRef(props.busy);
+  busyRef.current = props.busy;
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
@@ -69,7 +71,9 @@ export function InProgress(props: {
 
   useEffect(() => {
     if (complete || !poll || refresh === null) return;
-    const t = window.setInterval(refresh, POLL_MS);
+    const t = window.setInterval(() => {
+      if (!busyRef.current) refresh();
+    }, POLL_MS);
     return () => window.clearInterval(t);
   }, [complete, poll, refresh]);
 
