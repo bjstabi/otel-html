@@ -24,7 +24,7 @@ const CHANNEL = 'branch/main';
 const ASSETS_VERSION = '0.0.0-e2e';
 
 /**
- * A site as `ci site` leaves it: the `site`-format fixture `name` as the rolling report at `<site>/branch/main/`
+ * A site as the deployer leaves it: the `site`-format fixture `name` as the rolling report at `<site>/branch/main/`
  * with its viewer files at `<site>/assets/<version>/` and `engine.assetsBase` `../../assets/<version>/`.
  */
 function siteOf(site: string, name: Parameters<typeof reportDir>[0]): string {

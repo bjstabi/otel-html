@@ -41,3 +41,48 @@ jobs:
         uses: ./.github/actions/otel-html-collect
         with:
           name: otel-html-smoke-${{ matrix.os }}
+
+  # The actions as built from this branch (D67): the `ci update`, `ci dispatch` and `ci deploy` commands exist only on the
+  # branch until a release ships them. The job shell is the built CLI, as in ci.yml. The dispatch logs a 404 until
+  # pages-deploy.yml is on the default branch, and never fails the job.
+  publish:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      # The setup reads the run's jobs; the collect dispatches the deployer.
+      actions: write
+    defaults:
+      run:
+        shell: node dist/cli/main.js run -o .otel-html/report -- bash --noprofile --norc -eo pipefail {0}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      # The job shell is the built CLI, so dist/ must exist before the first `run:` step starts.
+      - name: Build otel-html
+        shell: bash
+        run: mise run build
+      - uses: ./.github/actions/otel-html-setup
+        with:
+          command: node dist/cli/main.js
+      - run: echo hello
+      - name: The job report exists
+        shell: bash
+        run: test -f .otel-html/report/data/manifest.js
+      - if: always()
+        uses: ./.github/actions/otel-html-collect
+        with:
+          name: otel-html-smoke-publish-${{ matrix.os }}
+          command: node dist/cli/main.js
+          publish: true
+      - name: The update artifact was uploaded
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" --paginate --jq '.artifacts[].name' |
+            grep -q '^otel-html-update-push-'
