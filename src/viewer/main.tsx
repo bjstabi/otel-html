@@ -1,6 +1,5 @@
 import { createRoot } from 'react-dom/client';
-import type { DataSource } from './data/data-source.js';
-import { type LoadProgress, openReport } from './data/open-report.js';
+import { type LoadProgress, type OpenedReport, openReportRefreshable } from './data/open-report.js';
 import { installRegistry } from './data/registry.js';
 import { createDomScriptLoader } from './data/script-loader.js';
 import { tracedLoader } from './data/traced.js';
@@ -21,8 +20,8 @@ const history = createHashHistory(window);
  * engine starts, the partitions register and the format-4 data source is built. A page whose shell names a host
  * (`<meta name="otel-html-host">`) starts no engine and registers nothing: its data source queries the host over REST.
  */
-function load(onProgress: (p: LoadProgress) => void): Promise<DataSource> {
-  return openReport(
+function load(onProgress: (p: LoadProgress) => void): Promise<OpenedReport> {
+  return openReportRefreshable(
     registry.takeStatic('manifest', 'data/manifest.js'),
     {
       loader,

@@ -6,7 +6,14 @@ import { buildTraceTree, exclusiveTimeByService } from '../../src/viewer/data/tr
 
 const id = (n: number): SpanId => n.toString(16).padStart(16, '0') as SpanId;
 
-function row(n: number, parent: number | null, start: number, end: number, service = 's'): SpanRow {
+function row(
+  n: number,
+  parent: number | null,
+  start: number,
+  end: number,
+  service = 's',
+  provisional?: boolean,
+): SpanRow {
   const span: SpanRecord = {
     traceId: 'a'.repeat(32) as TraceId,
     spanId: id(n),
@@ -17,7 +24,9 @@ function row(n: number, parent: number | null, start: number, end: number, servi
     kind: 1,
     start: start as RelNanos,
     end: end as RelNanos,
-    attributes: new Map(),
+    attributes: new Map(
+      provisional === true ? [['otel_html.ci.provisional', { kind: 'bool', value: true }]] : [],
+    ),
     droppedAttributesCount: 0,
     events: [],
     droppedEventsCount: 0,
@@ -78,6 +87,26 @@ describe('buildTraceTree', () => {
     expect(t.roots).toHaveLength(1);
     expect(t.byId.get(id(n))?.depth).toBe(n - 1);
     expect(exclusiveTimeByService(t)).toEqual([{ service: 's', ns: n }]);
+  });
+});
+
+describe('buildTraceTree: duplicate span ids (provisional CI spans)', () => {
+  test('keeps the row that is not provisional', () => {
+    const t = buildTraceTree([row(1, null, 0, 50, 's', true), row(1, null, 0, 40, 's')]);
+    expect(t.roots).toHaveLength(1);
+    expect(t.roots[0]?.row.span.end).toBe(40);
+    expect(t.byId.get(id(1))?.row.span.end).toBe(40);
+  });
+  test('keeps the later end when both or neither are provisional', () => {
+    const both = buildTraceTree([row(1, null, 0, 30, 's', true), row(1, null, 0, 50, 's', true)]);
+    expect(both.roots.map((r) => r.row.span.end)).toEqual([50]);
+    const neither = buildTraceTree([row(1, null, 0, 50), row(1, null, 0, 30)]);
+    expect(neither.roots.map((r) => r.row.span.end)).toEqual([50]);
+  });
+  test('children attach to the kept row and a unique span is untouched', () => {
+    const t = buildTraceTree([row(1, null, 0, 50, 's', true), row(1, null, 0, 60), row(2, 1, 5, 10)]);
+    expect(t.roots).toHaveLength(1);
+    expect(t.roots[0]?.children).toHaveLength(1);
   });
 });
 

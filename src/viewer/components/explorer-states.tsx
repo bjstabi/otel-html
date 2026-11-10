@@ -1,4 +1,5 @@
 import type { JSX } from 'react';
+import { GoneNotice } from '../shell/in-progress.js';
 import type { ColumnUi } from '../traces/columns.js';
 import type { SortState } from './results-table.js';
 
@@ -20,11 +21,13 @@ export function sortableOf(columns: readonly ColumnUi<never>[]): string[] {
   return columns.flatMap((c) => (c.sort === undefined ? [] : [c.sort]));
 }
 
-export function ErrorCard(props: { title: string; message: string }): JSX.Element {
+/** `gone`: the failure is a registered file the site no longer serves (D56), so Refresh is offered. */
+export function ErrorCard(props: { title: string; message: string; gone?: boolean }): JSX.Element {
   return (
     <div role="alert" className="rounded-card border border-hairline bg-surface p-4">
       <p className="font-semibold text-critical">{props.title}</p>
       <p className="mt-1 font-mono text-xs break-words whitespace-pre-wrap text-ink-2">{props.message}</p>
+      {props.gone === true && <GoneNotice />}
     </div>
   );
 }

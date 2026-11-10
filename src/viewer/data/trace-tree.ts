@@ -13,6 +13,32 @@ export interface TraceTree {
   readonly byId: Map<SpanId, TraceNode>;
 }
 
+/** The attribute the CI publisher sets on a span it wrote before the span ended (`PROVISIONAL_ATTR` in src/cli/ci/workflow-trace.ts). */
+const PROVISIONAL_ATTR = 'otel_html.ci.provisional';
+
+function isProvisional(row: SpanRow): boolean {
+  const v = row.span.attributes.get(PROVISIONAL_ATTR);
+  return v?.kind === 'bool' && v.value;
+}
+
+/** §5.5: of two rows with one span id, the one that is not provisional, else the one that ends later, else the first. */
+function preferred(a: SpanRow, b: SpanRow): SpanRow {
+  const pa = isProvisional(a);
+  const pb = isProvisional(b);
+  if (pa !== pb) return pa ? b : a;
+  return b.span.end > a.span.end ? b : a;
+}
+
+/** One row per span id: the provisional copy of a CI span gives way to the final one. */
+function dedupeSpanIds(spans: readonly SpanRow[]): SpanRow[] {
+  const kept = new Map<SpanId, SpanRow>();
+  for (const r of spans) {
+    const had = kept.get(r.span.spanId);
+    kept.set(r.span.spanId, had === undefined ? r : preferred(had, r));
+  }
+  return kept.size === spans.length ? [...spans] : [...kept.values()];
+}
+
 function byStart(a: SpanRow, b: SpanRow): number {
   return (
     a.span.start - b.span.start ||
@@ -24,10 +50,10 @@ function byStart(a: SpanRow, b: SpanRow): number {
  * Parent/child tree of one trace. Every span is kept: spans whose parent is absent become extra roots,
  * a child that starts before its parent stays under it, and parent cycles (malformed data) are broken by
  * promoting the earliest-starting unreached span of each cycle to a root. Iterative, so depth cannot overflow the stack.
- * Duplicate span ids stay in the tree; `byId` maps an id to its first span.
+ * Rows sharing a span id collapse to one (a provisional CI span gives way to the final one, else the later end wins).
  */
 export function buildTraceTree(spans: readonly SpanRow[]): TraceTree {
-  const sorted = [...spans].sort(byStart);
+  const sorted = dedupeSpanIds(spans).sort(byStart);
   const nodes = sorted.map((row): TraceNode => ({ row, children: [], depth: 0 }));
   const byId = new Map<SpanId, TraceNode>();
   for (const n of nodes) if (!byId.has(n.row.span.spanId)) byId.set(n.row.span.spanId, n);

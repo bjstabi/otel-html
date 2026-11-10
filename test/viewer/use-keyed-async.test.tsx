@@ -62,7 +62,7 @@ describe('useKeyedAsync', () => {
     const h = setup();
     await h.render('a');
     await act(async () => h.calls[0]?.reject(new Error('boom')));
-    expect(h.state()).toEqual({ status: 'error', message: 'boom' });
+    expect(h.state()).toEqual({ status: 'error', message: 'boom', gone: false });
   });
 
   test('a key change resets to loading and drops the stale result', async () => {

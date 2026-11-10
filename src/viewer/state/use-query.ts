@@ -1,10 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { DataSource } from '../data/data-source.js';
+import { isGoneFile } from '../data/refresh-report.js';
 
 type QueryState<R> =
   | { status: 'loading'; previous: R | null }
   | { status: 'ready'; result: R }
-  | { status: 'error'; message: string };
+  | {
+      status: 'error';
+      message: string /** D56: a registered file the site no longer serves. */;
+      gone: boolean;
+    };
 
 export interface QueryHandle<R> {
   state: QueryState<R>;
@@ -48,7 +53,11 @@ export function useQuery<Q, R>(dataSource: DataSource, query: Q, run: QueryRunne
       },
       (e: unknown) => {
         if (controller.signal.aborted || isAbort(e)) return;
-        setState({ status: 'error', message: e instanceof Error ? e.message : String(e) });
+        setState({
+          status: 'error',
+          message: e instanceof Error ? e.message : String(e),
+          gone: isGoneFile(e),
+        });
       },
     );
     return () => controller.abort();

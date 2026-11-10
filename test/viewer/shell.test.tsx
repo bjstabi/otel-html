@@ -333,7 +333,10 @@ describe('App loading', () => {
     window.location.hash = '#/traces';
     render(
       <ThemeProvider>
-        <App load={() => Promise.resolve(dataSource)} history={createHashHistory(window)} />
+        <App
+          load={() => Promise.resolve({ dataSource, refresh: null })}
+          history={createHashHistory(window)}
+        />
       </ThemeProvider>,
     );
     expect(screen.getByRole('status').textContent).toContain('Loading');
@@ -354,6 +357,79 @@ describe('App loading', () => {
     const alert = await screen.findByRole('alert');
     expect(alert.textContent).toContain('data/rollups/spans.js');
     expect(within(alert).getByRole('heading', { name: /could not be loaded/ })).toBeTruthy();
+  });
+});
+
+describe('App refresh (D55)', () => {
+  const growing = { ...baseManifest, complete: false, updatedAt: new Date().toISOString() };
+  const done = { ...baseManifest, complete: true };
+
+  function renderApp(refresh: () => Promise<DataSource>): void {
+    window.location.hash = '#/traces/services';
+    render(
+      <ThemeProvider>
+        <App
+          load={() => Promise.resolve({ dataSource: dataSourceOf(growing), refresh })}
+          history={createHashHistory(window)}
+        />
+      </ThemeProvider>,
+    );
+  }
+
+  test('Refresh swaps in the new data source; a complete manifest removes the line', async () => {
+    const refresh = vi.fn(() => Promise.resolve(dataSourceOf(done)));
+    renderApp(refresh);
+    await userEvent.click(await screen.findByRole('button', { name: 'Refresh' }));
+    await waitFor(() => expect(screen.queryByText(/In progress/)).toBeNull());
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  test('a failed refresh is an inline alert on the line and the page stays', async () => {
+    renderApp(() => Promise.reject(new Error('manifest did not load')));
+    await userEvent.click(await screen.findByRole('button', { name: 'Refresh' }));
+    expect((await screen.findByRole('alert')).textContent).toContain('manifest did not load');
+    expect(screen.getByText(/In progress/)).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Services' })).toBeTruthy();
+  });
+
+  test('a page whose query hit a gone file offers Refresh', async () => {
+    const gone = new OtelHtmlError('invalid-report', {
+      path: 'query',
+      expected: 'a query the engine accepts',
+      actual: 'HTTP error 404 Not Found: data/partitions/000001/spans.parquet',
+    });
+    const failing = { ...dataSourceOf(growing), services: () => Promise.reject(gone) };
+    const refresh = vi.fn(() => Promise.resolve(dataSourceOf(done)));
+    window.location.hash = '#/traces/services';
+    render(
+      <ThemeProvider>
+        <App
+          load={() => Promise.resolve({ dataSource: failing, refresh })}
+          history={createHashHistory(window)}
+        />
+      </ThemeProvider>,
+    );
+    expect(await screen.findByText('This report has changed. Refresh.')).toBeTruthy();
+    const card = screen
+      .getByText('The services could not be loaded')
+      .closest('[role="alert"]') as HTMLElement;
+    await userEvent.click(within(card).getByRole('button', { name: 'Refresh' }));
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  test('another failure does not say the report changed', async () => {
+    const failing = { ...dataSourceOf(growing), services: () => Promise.reject(new Error('Binder Error')) };
+    window.location.hash = '#/traces/services';
+    render(
+      <ThemeProvider>
+        <App
+          load={() => Promise.resolve({ dataSource: failing, refresh: () => Promise.resolve(failing) })}
+          history={createHashHistory(window)}
+        />
+      </ThemeProvider>,
+    );
+    await screen.findByText('The services could not be loaded');
+    expect(screen.queryByText('This report has changed. Refresh.')).toBeNull();
   });
 });
 

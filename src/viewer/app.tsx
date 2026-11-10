@@ -1,12 +1,13 @@
-import { type JSX, useEffect, useState } from 'react';
+import { type JSX, useCallback, useEffect, useRef, useState } from 'react';
 import type { DataSource } from './data/data-source.js';
-import type { LoadProgress } from './data/open-report.js';
+import type { LoadProgress, OpenedReport } from './data/open-report.js';
+import type { RefreshControl } from './shell/in-progress.js';
 import { Shell } from './shell/shell.js';
 import type { HistoryPort } from './state/selection.js';
 
 type Load =
   | { status: 'loading'; progress: LoadProgress | null }
-  | { status: 'ready'; dataSource: DataSource }
+  | { status: 'ready'; dataSource: DataSource; refresh: OpenedReport['refresh'] }
   | { status: 'failed'; message: string };
 
 /** The hint under the error: only for failures that a moved or partial report explains, not for D12 or engine errors. */
@@ -47,7 +48,7 @@ function progressText(p: LoadProgress | null): string {
 
 /** `load` is the composition root's registry -> manifest -> data source chain; failures are shown, never swallowed. */
 export function App(props: {
-  load: (onProgress: (p: LoadProgress) => void) => Promise<DataSource>;
+  load: (onProgress: (p: LoadProgress) => void) => Promise<OpenedReport>;
   history: HistoryPort;
 }): JSX.Element {
   const { load, history } = props;
@@ -61,10 +62,10 @@ export function App(props: {
       if (live && !settled) setState({ status: 'loading', progress });
     };
     load(onProgress).then(
-      (dataSource) => {
+      (opened) => {
         settled = true;
-        if (live) setState({ status: 'ready', dataSource });
-        else void dataSource.close().catch(() => undefined); // unmounted mid-load: release the engine
+        if (live) setState({ status: 'ready', dataSource: opened.dataSource, refresh: opened.refresh });
+        else void opened.dataSource.close().catch(() => undefined); // unmounted mid-load: release the engine
       },
       (e: unknown) => {
         settled = true;
@@ -76,6 +77,37 @@ export function App(props: {
     };
   }, [load]);
 
+  const refreshFn = state.status === 'ready' ? state.refresh : null;
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+  const live = useRef(true);
+  useEffect(() => {
+    live.current = true;
+    return () => {
+      live.current = false;
+    };
+  }, []);
+  // D55: the refreshed data source replaces the shown one; a failed refresh keeps the previous one and is told on the line.
+  const refresh = useCallback((): void => {
+    if (refreshFn === null) return;
+    setRefreshing(true);
+    refreshFn().then(
+      (dataSource) => {
+        if (!live.current) return;
+        setRefreshError(null);
+        setRefreshing(false);
+        setState((s) => (s.status === 'ready' ? { ...s, dataSource } : s));
+      },
+      (e: unknown) => {
+        if (!live.current) return;
+        setRefreshError(e instanceof Error ? e.message : String(e));
+        setRefreshing(false);
+      },
+    );
+  }, [refreshFn]);
+  const control: RefreshControl | null =
+    refreshFn === null ? null : { refresh, busy: refreshing, error: refreshError };
+
   switch (state.status) {
     case 'loading':
       return (
@@ -86,7 +118,7 @@ export function App(props: {
     case 'failed':
       return <LoadFailure message={state.message} />;
     case 'ready':
-      return <Shell dataSource={state.dataSource} history={history} />;
+      return <Shell dataSource={state.dataSource} history={history} refresh={control} />;
     default: {
       const never: never = state;
       throw new Error(`unhandled load state ${JSON.stringify(never)}`);

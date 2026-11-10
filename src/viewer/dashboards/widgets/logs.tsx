@@ -99,7 +99,9 @@ function ListBody(props: {
   return (
     <div className="flex flex-col gap-1">
       {state.status === 'loading' && <LoadingNote />}
-      {state.status === 'error' && <ErrorCard title="The query could not run" message={state.message} />}
+      {state.status === 'error' && (
+        <ErrorCard title="The query could not run" message={state.message} gone={state.gone} />
+      )}
       {shown !== null &&
         (shown.total === 0 ? (
           <NoMatch noun="logs" heading="h3" />
@@ -187,7 +189,11 @@ export const LogsWidget: WidgetRenderer = ({
     <div className="flex flex-col gap-1">
       <ViewToggle view={view} onChange={actions.setLogView} />
       {view === 'context' && handle.state.status === 'error' && (
-        <ErrorCard title="The matching logs could not be found" message={handle.state.message} />
+        <ErrorCard
+          title="The matching logs could not be found"
+          message={handle.state.message}
+          gone={handle.state.gone}
+        />
       )}
       {view === 'context' ? (
         <ContextView {...list} context={context} matched={matched} />

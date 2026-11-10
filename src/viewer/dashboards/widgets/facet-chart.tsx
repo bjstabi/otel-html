@@ -172,7 +172,9 @@ function FacetBody<R extends Facets>(
     <div className="flex flex-col gap-1">
       {groups !== null && dropped > 0 && <CapNote groupBy={groupBy} cap={groups.cap} />}
       {state.status === 'loading' && <LoadingNote />}
-      {state.status === 'error' && <ErrorCard title="The query could not run" message={state.message} />}
+      {state.status === 'error' && (
+        <ErrorCard title="The query could not run" message={state.message} gone={state.gone} />
+      )}
       {result !== null &&
         (empty ? (
           <EmptyFacet dataSource={props.dataSource} noun={props.noun} groupBy={groupBy} />

@@ -20,6 +20,7 @@ import type { DataSource, TraceDetail } from '../data/data-source.js';
 import type { LogRow } from '../data/log-query.js';
 import { useHasMetrics } from '../metrics/metric-grid.js';
 import { CONTROL } from '../shell/controls.js';
+import { GoneNotice } from '../shell/in-progress.js';
 import { MOVE_EVENT } from '../shell/move-event.js';
 import { CopyLink } from '../shell/page-chrome.js';
 import { selectionToUrlState } from '../state/selection.js';
@@ -66,13 +67,14 @@ function Skeleton(props: { traceId: TraceId }): JSX.Element {
   );
 }
 
-function LoadError(props: { traceId: TraceId; message: string }): JSX.Element {
+function LoadError(props: { traceId: TraceId; message: string; gone: boolean }): JSX.Element {
   return (
     <div role="alert" className="m-4 rounded-card border border-hairline bg-surface p-4">
       <p className="font-semibold text-critical">The trace could not be loaded</p>
       <p className="mt-1 font-mono text-xs break-words whitespace-pre-wrap text-ink-2">
         trace {props.traceId}: {props.message}
       </p>
+      {props.gone && <GoneNotice />}
     </div>
   );
 }
@@ -370,7 +372,7 @@ export function TracePanel(props: TracePanelProps): JSX.Element {
         </p>
       )}
       {load.status === 'loading' && <Skeleton traceId={traceId} />}
-      {load.status === 'error' && <LoadError traceId={traceId} message={load.message} />}
+      {load.status === 'error' && <LoadError traceId={traceId} message={load.message} gone={load.gone} />}
       {load.status === 'error' && logs.rows !== null && logs.rows.length > 0 && (
         <LogsBelowError traceId={traceId} rows={logs.rows} epoch={epoch} />
       )}

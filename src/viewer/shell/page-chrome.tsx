@@ -7,6 +7,7 @@ import type { ExplorerPage } from '../../query/pages.js';
 import type { FacetSignal } from '../components/filter-tokens.js';
 import { QueryBar } from '../components/query-bar.js';
 import { CONTROL, POPUP } from './controls.js';
+import { InProgress, useRefreshControl } from './in-progress.js';
 import { TimeRange } from './time-range.js';
 import { ViewsMenu } from './views-menu.js';
 
@@ -213,6 +214,7 @@ export function PageChrome(props: {
   actions?: ReactNode;
   children?: ReactNode;
 }): JSX.Element {
+  const refresh = useRefreshControl();
   return (
     <div className="flex min-w-0 flex-1 flex-col">
       <header className="flex flex-col gap-3 border-b border-hairline p-4">
@@ -228,6 +230,13 @@ export function PageChrome(props: {
           <TimeRange manifest={props.manifest} />
         </div>
       </header>
+      <InProgress
+        updatedAt={props.manifest.updatedAt}
+        complete={props.manifest.complete}
+        refresh={refresh === null ? null : refresh.refresh}
+        busy={refresh?.busy ?? false}
+        error={refresh?.error ?? null}
+      />
       <main className="flex-1 p-4">{props.children}</main>
     </div>
   );
