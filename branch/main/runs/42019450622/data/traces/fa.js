@@ -1,0 +1,1 @@
+__OH__.push("traces/fa",{"fadb0af334a5e7ab81e9869f37ea4705":{"chunks":["chunks/spans/000004"],"logChunks":[],"start":44481000000,"end":44481050493,"spans":1,"logs":0,"errors":0,"root":{"service":"otel-html-tests","name":"vitest.test.runner.test.beforeEach","resource":"vitest.test.runner.test.beforeEach"}}});
