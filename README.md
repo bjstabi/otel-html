@@ -51,7 +51,6 @@ Turns OTLP files into a report. Inputs can be OTLP JSON (field names in lowerCam
 | `-o, --out <dir>` | Report folder. |
 | `--config <file>` | Config file. Default: `$OTEL_HTML_CONFIG`, else `./otel-html.yaml`. |
 | `--title <title>` | Report title. |
-| `--export-otlp <url>` | Also forward every accepted request to this OTLP/HTTP collector (see below). Config: `receiver.exportOtlp`. |
 | `--append` | Require a report at `-o` and add to it (fails when there is none; useful in CI to catch a wrong path). |
 | `--replace` | Start the report over. Without either flag, `-o` is appended to when it already holds a report written by the same otel-html version and created otherwise. An existing report is wiped only once the first input file has been read without error, so that file is held in memory until then (see Limits). |
 | `--format <format>` | Report format: `local` (default) or `site` (both format 4: Parquet partitions; see [Report layout and hosting](#report-layout-and-hosting)). Sets `writer.format`. `chunks` (format 3) is no longer written. The viewer opens format-4 reports only; a format 1-3 report is converted with `merge` first. Appending needs the report's own format and the same version, so `--format` must match the report's. |
@@ -73,6 +72,7 @@ otel-html serve -o ./report
 | `--host <addr>` | Address to listen on. Default `127.0.0.1`. |
 | `--http <port>`, `--no-http` | OTLP/HTTP port (default 4318), or turn it off. |
 | `--grpc <port>`, `--no-grpc` | OTLP/gRPC port (default 4317), or turn it off. Port 0 picks a free port. |
+| `--export-otlp <url>` | Also forward every accepted request to this OTLP/HTTP collector (see below). Config: `receiver.exportOtlp`. |
 | `--append` | Require a report at `-o` and add to it (fails when there is none; useful in CI to catch a wrong path). |
 | `--replace` | Start the report over. Without either flag, `-o` is appended to when it already holds a report written by the same otel-html version and created otherwise. The same applies here: the existing report is wiped only once the first request has been read without error, so that request is held in memory until then (see Limits). |
 | `--format <format>`, `--assets-base <path>` | As for `convert`. |

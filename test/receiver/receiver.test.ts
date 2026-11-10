@@ -122,6 +122,33 @@ function receive(
 const silent = { debug() {}, info() {}, warn() {}, error() {} };
 
 describe('createReceiver', () => {
+  test('forwards a partially accepted request', async () => {
+    const w = createTestWriter();
+    const posted: string[] = [];
+    const fetchFn: typeof fetch = async (url) => {
+      posted.push(String(url));
+      return new Response(null, { status: 200 });
+    };
+    const forwarder = createForwarder({ endpoint: 'http://c', headers: {}, fetchFn, logger: w.deps.logger });
+    const session = await openSession(w.deps, { out: OUT, config: testConfig(), mode: 'replace' });
+    const receiver = createReceiver(
+      session,
+      { inflightBudgetBytes: 1 << 20, forwarder },
+      { logger: w.deps.logger },
+    );
+    const body = toBinary(
+      ExportTraceServiceRequestSchema,
+      create(ExportTraceServiceRequestSchema, {
+        resourceSpans: [ENTRY(new Uint8Array(16).fill(1), 1), ENTRY(new Uint8Array(15).fill(3), 3)],
+      }),
+    );
+    const r = await receive(receiver, 'traces', body, 'protobuf', 'otlp/grpc');
+    expect(r.rejected).toBe(1);
+    await receiver.close();
+    expect(posted).toEqual(['http://c/v1/traces']);
+    expect(receiver.stats().forwarded).toBe(1);
+  });
+
   test('forwards an accepted request and not a refused one', async () => {
     const w = createTestWriter();
     const posted: string[] = [];

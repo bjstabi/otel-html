@@ -47,7 +47,57 @@ describe('parseOtlpHeaders', () => {
   });
 });
 
+describe('secrets', () => {
+  const SECRET = 's3cr3t-value';
+
+  test.each(['Bearer', `a=1,${SECRET}`, `bad name=${SECRET}`, 'a=%zz'])(
+    'a malformed header text (%s) is a usage error that never prints the values',
+    (text) => {
+      const withSecret = text === 'a=%zz' ? `a=%zz${SECRET}` : text;
+      try {
+        parseOtlpHeaders(withSecret);
+      } catch (e) {
+        if (!(e instanceof OtelHtmlError)) throw e;
+        expect(e.code).toBe('usage');
+        expect(`${e.message} ${e.hint ?? ''}`).not.toContain(SECRET);
+        return;
+      }
+      throw new Error('expected a usage error');
+    },
+  );
+
+  test('a failing fetch whose error text holds a header value logs no value', async () => {
+    const { logger, warns } = loggerOf();
+    const logged: unknown[] = [];
+    const spy: Logger = { ...logger, warn: (m, a) => logged.push(m, a) };
+    const fetchFn: typeof fetch = () => Promise.reject(new TypeError(`bad header value ${SECRET}`));
+    const f = createForwarder({
+      endpoint: 'http://c',
+      headers: { authorization: SECRET },
+      fetchFn,
+      logger: spy,
+    });
+    f.enqueue('traces', new Uint8Array(1), 'protobuf');
+    await f.close();
+    expect(warns).toHaveLength(0);
+    expect(logged).toHaveLength(2);
+    expect(JSON.stringify(logged)).not.toContain(SECRET);
+  });
+});
+
 describe('createForwarder', () => {
+  test('close does not hang on a response body that cannot be cancelled', async () => {
+    vi.useFakeTimers();
+    const body = new ReadableStream({ cancel: () => new Promise(() => undefined) });
+    const fetchFn: typeof fetch = async () => new Response(body, { status: 200 });
+    const f = createForwarder({ endpoint: 'http://c', headers: {}, fetchFn, logger: loggerOf().logger });
+    f.enqueue('traces', new Uint8Array(1), 'protobuf');
+    const closing = f.close();
+    await vi.advanceTimersByTimeAsync(5_000);
+    await closing;
+    expect(f.stats().forwarded + f.stats().failed).toBe(1);
+  });
+
   test('posts a protobuf body to the signal path with the configured headers', async () => {
     const { calls, fetchFn } = recorder();
     const { logger } = loggerOf();

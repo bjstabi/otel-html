@@ -38,6 +38,8 @@ export const SIGNAL_PATH: Record<OtlpSignal, string> = {
   metrics: '/v1/metrics',
 };
 
+const HEADER_NAME = /^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/;
+
 const CONTENT_TYPE: Record<BodyEncoding, string> = {
   json: 'application/json',
   protobuf: 'application/x-protobuf',
@@ -47,24 +49,22 @@ const CONTENT_TYPE: Record<BodyEncoding, string> = {
 export function parseOtlpHeaders(text: string | undefined): Record<string, string> {
   const headers: Record<string, string> = {};
   if (text === undefined || text.trim() === '') return headers;
-  for (const pair of text.split(',')) {
+  // Errors name the pair's position, never its text: a malformed pair can be a bare token.
+  const bad = (position: number, why: string): OtelHtmlError =>
+    new OtelHtmlError('usage', {
+      message: `OTEL_EXPORTER_OTLP_HEADERS: pair ${position} ${why}`,
+      hint: 'use key=value,key2=value2',
+    });
+  text.split(',').forEach((pair, i) => {
     const at = pair.indexOf('=');
     const name = at < 0 ? '' : pair.slice(0, at).trim();
-    if (name === '') {
-      throw new OtelHtmlError('usage', {
-        message: `OTEL_EXPORTER_OTLP_HEADERS: "${pair.trim()}" is not key=value`,
-        hint: 'use key=value,key2=value2',
-      });
-    }
+    if (!HEADER_NAME.test(name)) throw bad(i + 1, 'is not key=value with a valid header name');
     try {
       headers[name] = decodeURIComponent(pair.slice(at + 1).trim());
     } catch {
-      throw new OtelHtmlError('usage', {
-        message: `OTEL_EXPORTER_OTLP_HEADERS: the value of ${name} is not URL-encoded text`,
-        hint: 'use key=value,key2=value2',
-      });
+      throw bad(i + 1, 'has a value that is not URL-encoded text');
     }
-  }
+  });
   return headers;
 }
 
@@ -73,6 +73,16 @@ interface Item {
   body: Uint8Array;
   encoding: BodyEncoding;
 }
+
+/** Only what cannot carry a header value: our own timeout text, or the error's class and system code. */
+function reasonOf(e: unknown): string {
+  if (e instanceof TimeoutReason) return e.message;
+  if (!(e instanceof Error)) return 'unknown error';
+  const code: unknown = e.cause instanceof Error ? Reflect.get(e.cause, 'code') : undefined;
+  return typeof code === 'string' ? `${e.name} (${code})` : e.name;
+}
+
+class TimeoutReason extends Error {}
 
 export function createForwarder(o: ForwarderOptions): Forwarder {
   const fetchFn = o.fetchFn ?? fetch;
@@ -101,8 +111,8 @@ export function createForwarder(o: ForwarderOptions): Forwarder {
 
   async function send(item: Item): Promise<void> {
     const ctl = new AbortController();
-    const abort = (): void => ctl.abort(new Error('aborted'));
-    const timer = setTimeout(() => ctl.abort(new Error(`no answer in ${timeoutMs} ms`)), timeoutMs);
+    const abort = (): void => ctl.abort(new TimeoutReason('abandoned when the receiver closed'));
+    const timer = setTimeout(() => ctl.abort(new TimeoutReason(`no answer in ${timeoutMs} ms`)), timeoutMs);
     abandon.signal.addEventListener('abort', abort);
     try {
       const stopped = new Promise<never>((_, reject) => {
@@ -118,11 +128,11 @@ export function createForwarder(o: ForwarderOptions): Forwarder {
         }),
         stopped,
       ]);
-      await res.body?.cancel().catch(() => undefined);
+      void res.body?.cancel().catch(() => undefined); // not awaited: a body that will not cancel must not hold close()
       if (res.ok) totals.forwarded++;
       else fail(`the collector answered ${res.status}`);
     } catch (e) {
-      fail(e instanceof Error ? e.message : String(e));
+      fail(reasonOf(e));
     } finally {
       clearTimeout(timer);
       abandon.signal.removeEventListener('abort', abort);

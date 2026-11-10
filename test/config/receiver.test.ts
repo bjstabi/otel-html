@@ -13,6 +13,17 @@ describe('receiver config', () => {
     });
   });
 
+  test.each(['ftp://c/', 'file:///x', 'http://c/?q=1', 'http://c/#f', 'nonsense'])(
+    'receiver.exportOtlp %s is refused',
+    (url) => {
+      expect(ConfigSchema.safeParse({ receiver: { exportOtlp: url } }).success).toBe(false);
+    },
+  );
+
+  test.each(['http://c:4318', 'https://c/base/'])('receiver.exportOtlp %s is accepted', (url) => {
+    expect(ConfigSchema.parse({ receiver: { exportOtlp: url } }).receiver.exportOtlp).toBe(url);
+  });
+
   test('a port above 65535 fails at receiver.http.port', () => {
     const r = ConfigSchema.safeParse({ receiver: { http: { port: 70000 } } });
     expect(r.success).toBe(false);

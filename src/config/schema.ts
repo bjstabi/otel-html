@@ -159,7 +159,14 @@ const ReceiverSchema = z
     grpc: z.strictObject({ enabled: z.boolean().default(true), port: port.default(4317) }).prefault({}),
     maxBodyBytes: posInt.default(67_108_864),
     inflightBudgetBytes: posInt.default(134_217_728),
-    exportOtlp: z.string().url().optional(),
+    exportOtlp: z
+      .string()
+      .url()
+      .refine(
+        (u) => /^https?:\/\//.test(u) && !/[?#]/.test(u),
+        'an http(s) base URL without a query or fragment',
+      )
+      .optional(),
   })
   .prefault({});
 
