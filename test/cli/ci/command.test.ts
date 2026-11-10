@@ -1066,3 +1066,19 @@ describe('otel-html ci link', () => {
     expect(writes()).toEqual([]);
   });
 });
+
+describe('otel-html ci deploy apply --channel', () => {
+  test.each(['../x', 'branch/../x', 'branch/Main', 'pr/0', 'pr/5/x', 'x'])(
+    '%s is a usage error',
+    async (channel) => {
+      const f = fakeIo({ GITHUB_RUN_ID: '1' });
+      const code = await runCli(
+        ['ci', 'deploy', 'apply', '--site', 's', '--updates', 'u', '--trust-updates', '--channel', channel],
+        f.io,
+        deps,
+      );
+      expect(code).not.toBe(0);
+      expect(f.err() + f.out()).toContain('--channel must be');
+    },
+  );
+});

@@ -89,6 +89,9 @@ interface DeployApplyFlags {
   channel?: string;
 }
 
+/** A channel key as `channelFor` builds it: `branch/<slug>` (slug: lower-case alphanumerics and dashes) or `pr/<n>`. */
+const CHANNEL_KEY_RE = /^(branch\/[a-z0-9-]+|pr\/[1-9][0-9]*)$/;
+
 interface DeployPlanFlags {
   repository?: string;
   out: string;
@@ -450,6 +453,10 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
           });
         if (flags.trustUpdates === true && flags.channel === undefined)
           throw new OtelHtmlError('usage', { message: '--trust-updates needs --channel' });
+        if (flags.channel !== undefined && !CHANNEL_KEY_RE.test(flags.channel))
+          throw new OtelHtmlError('usage', {
+            message: `--channel must be branch/<slug> or pr/<n>, not ${flags.channel}`,
+          });
         if (flags.trustUpdates !== true && flags.pending === undefined)
           throw new OtelHtmlError('usage', { message: '--pending is required without --trust-updates' });
         const opts = {

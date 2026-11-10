@@ -34,7 +34,7 @@ export interface AppliedJson {
   floor: string;
   writtenAt: string;
 }
-export interface RemovedJson {
+interface RemovedJson {
   version: 1;
   prs: Record<string, { runId: number; at: string }>;
 }
@@ -44,12 +44,12 @@ export interface FilesJson {
   files: Record<string, number>;
 }
 /** `pass`: the deployer run that dropped the file. */
-export interface DeletionsJson {
+interface DeletionsJson {
   version: 1;
   files: { path: string; pass: number; liveAt?: string }[];
 }
 /** By run report path. */
-export interface RunsJson {
+interface RunsJson {
   version: 1;
   runs: Record<string, RunReportState>;
 }

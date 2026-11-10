@@ -18,10 +18,5 @@
     "test-support/otel/**/*.ts"
   ],
   "ignoreDependencies": ["@commitlint/cli", "@opentelemetry/exporter-trace-otlp-(grpc|http|proto)"],
-  "ignoreIssues": {
-    "src/cli/ci/site-state.ts": ["types"],
-    "src/cli/ci/update.ts": ["types"],
-    "src/cli/ci/run-report.ts": ["types"]
-  },
   "ignoreBinaries": ["mise"]
 }
