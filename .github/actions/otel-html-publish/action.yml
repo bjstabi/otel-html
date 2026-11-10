@@ -57,8 +57,8 @@ inputs:
     default: ""
   dispatch-app-private-key:
     description: >-
-      The private key of the App named by `dispatch-app-id`. Pass it only on a run a person started, for example
-      `${{ github.event.sender.type == 'User' && secrets.DEPLOYER_APP_PRIVATE_KEY || '' }}`, so a bot's run never holds it.
+      The private key of the App named by `dispatch-app-id`. Pass the secret only on a run a person started
+      (when the event's `github.event.sender.type` is `User`), so a bot's run never holds it.
     default: ""
   token:
     description: >-
@@ -267,10 +267,9 @@ runs:
       continue-on-error: true
       uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
       with:
+        # The App ID (the variable holds the ID, not the Client ID). With no owner or repositories the token is scoped to this repository.
         app-id: ${{ inputs.dispatch-app-id }}
         private-key: ${{ inputs.dispatch-app-private-key }}
-        owner: ${{ github.repository_owner }}
-        repositories: ${{ github.event.repository.name }}
         permission-actions: write
     - name: Wake the deployer
       if: steps.artifact.outputs.name != ''

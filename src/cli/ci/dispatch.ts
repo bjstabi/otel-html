@@ -2,8 +2,8 @@ import type { CliIo } from '../io.js';
 import { type ApiRun, apiHeaders, envVar, type Fetch, getJson, messageOf, say } from './github-api.js';
 
 const TIMEOUT_MS = 15_000;
-/** Looking for the run the dispatch started: at most this many listings, this long before each (20 s in all). */
-const WATCH_TRIES = 5;
+/** Looking for the run the dispatch started: one deadline for the whole wait, listings included, polling every 4 s. */
+const WATCH_BUDGET_MS = 20_000;
 const WATCH_WAIT_MS = 4_000;
 /** A listing is taken from just before the dispatch, so clock skew between runner and API does not hide the run. */
 const WATCH_SKEW_MS = 5_000;
@@ -73,10 +73,16 @@ async function warnIfNotStarted(
   const since = new Date(dispatchedAt - WATCH_SKEW_MS).toISOString();
   const list = `${repo}/actions/workflows/${o.workflow}/runs?event=workflow_dispatch&per_page=5&created=${encodeURIComponent(`>=${since}`)}`;
   try {
-    for (let i = 0; i < WATCH_TRIES; i++) {
-      await sleep(WATCH_WAIT_MS);
+    const now = watch.now ?? Date.now;
+    const deadline = now() + WATCH_BUDGET_MS;
+    for (;;) {
+      const wait = Math.min(WATCH_WAIT_MS, deadline - now());
+      if (wait <= 0) return;
+      await sleep(wait);
+      const left = deadline - now();
+      if (left <= 0) return;
       const { workflow_runs: runs } = (
-        await getJson<{ workflow_runs?: DispatchedRun[] }>(list, token, TIMEOUT_MS, fetchFn)
+        await getJson<{ workflow_runs?: DispatchedRun[] }>(list, token, Math.min(TIMEOUT_MS, left), fetchFn)
       ).body;
       const newest = (runs ?? []).reduce<DispatchedRun | undefined>(
         (a, r) => (a === undefined || Date.parse(r.created_at) > Date.parse(a.created_at) ? r : a),

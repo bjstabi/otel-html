@@ -48,10 +48,18 @@ function setup(over: {
   return { io, lines, calls, fetchFn };
 }
 const sleeps: number[] = [];
-const noWait = async (ms: number): Promise<void> => {
-  sleeps.push(ms);
-};
 const NOW = Date.parse('2026-11-10T10:00:00Z');
+/** A fake clock that only sleeping advances, so the wait's deadline is testable without waiting. */
+const fakeWatch = () => {
+  let t = NOW;
+  return {
+    sleep: async (ms: number): Promise<void> => {
+      sleeps.push(ms);
+      t += ms;
+    },
+    now: () => t,
+  };
+};
 const run = (over: { id?: number; status?: string; conclusion?: string | null; created?: string }) => ({
   id: over.id ?? 7,
   html_url: `https://github.com/o/r/actions/runs/${over.id ?? 7}`,
@@ -64,7 +72,7 @@ const opts = { workflow: 'pages-deploy.yml', repository: 'o/r', runId: 42 };
 describe('runDispatch', () => {
   test('a same-repository run by a user dispatches the workflow on the default branch', async () => {
     const s = setup({});
-    await runDispatch(opts, s.io, s.fetchFn, { sleep: noWait, now: () => NOW });
+    await runDispatch(opts, s.io, s.fetchFn, fakeWatch());
     const post = s.calls.find((c) => c.method === 'POST');
     expect(post?.url).toBe('https://api.github.com/repos/o/r/actions/workflows/pages-deploy.yml/dispatches');
     expect(post?.body).toEqual({ ref: 'trunk' });
@@ -101,8 +109,7 @@ describe('runDispatch', () => {
   });
 
   describe('after a 204', () => {
-    const go = (s: ReturnType<typeof setup>) =>
-      runDispatch(opts, s.io, s.fetchFn, { sleep: noWait, now: () => NOW });
+    const go = (s: ReturnType<typeof setup>) => runDispatch(opts, s.io, s.fetchFn, fakeWatch());
 
     test('lists the deployer runs created since just before the dispatch', async () => {
       const s = setup({ listings: [[run({})]] });
@@ -158,7 +165,7 @@ describe('runDispatch', () => {
       const s = setup({ listings: [[]] });
       await go(s);
       const tries = s.calls.filter((c) => c.url.includes('/runs?')).length;
-      expect(tries).toBeLessThanOrEqual(6);
+      expect(tries).toBeLessThanOrEqual(5);
       expect(sleeps.reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(20_000);
       expect(s.lines).toHaveLength(1);
     });
@@ -173,7 +180,7 @@ describe('runDispatch', () => {
           if (url.includes('/runs?')) return new Response(null, { status: 500 });
           return base(url, init);
         },
-        { sleep: noWait, now: () => NOW },
+        fakeWatch(),
       );
       expect(s.lines).toHaveLength(1);
     });
