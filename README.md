@@ -412,6 +412,12 @@ report/
 
 The report is exercised in Chromium, Firefox and WebKit by the end-to-end tests: the tests open the `local` report from `file://`, and a tagged subset opens a `site` copy of it over HTTP from a static server that answers `Range` and `HEAD`.
 
+### A report that is still growing
+
+A `site` report published while its run is still going has `complete: false` in its manifest. The viewer shows a line under the page header, "In progress · updated 3 min ago", with a **Refresh** button and an **Auto-refresh** checkbox. Refresh loads `data/manifest.js` again, registers the partitions the new manifest lists, drops the ones it no longer lists and re-runs the open page's queries. Auto-refresh does the same every 60 seconds (it is off by default, and the choice is remembered for the tab). The age is the manifest's `updatedAt`, so it also shows when the host is still serving an older manifest than the last publish: GitHub Pages' CDN ignores the cache directives of a request, so a Refresh can land on a manifest that is a few minutes old. Refresh again later; nothing is lost.
+
+When a publish drops a partition (a compaction) while a page still lists it, the query that reads it fails and the page says "This report has changed. Refresh." with a Refresh button. A served report (`otel-html host`) has no Refresh: the host serves one manifest.
+
 ### This repo's CI
 
 This repo's CI reports on itself with `otel-html`. Every job in [ci.yml](.github/workflows/ci.yml) builds the CLI first, then uses it as the job's shell, so each `run:` step is a traced command:

@@ -16,6 +16,8 @@ import {
   LARGE_SPAN_COUNT,
   LARGE_TRACE_ID,
   METRICS_SCALE_DIR,
+  REFRESH_FIRST,
+  REFRESH_SECOND,
   REPORT_DIR,
   REPORTS_DIR,
   REPORTS_SITE_DIR,
@@ -454,6 +456,30 @@ async function buildUnfinishedReport(): Promise<void> {
 }
 
 /**
+ * The `refresh` report (see `ReportName`): a `site` report flushed twice and never closed, with the manifest saved
+ * after each flush beside it as `manifest.step1.js` and `manifest.step2.js`; the served `manifest.js` is step 1.
+ */
+async function buildRefreshReport(): Promise<void> {
+  const out = fileURLToPath(reportDir('refresh', 'http'));
+  const [first, second] = await Promise.all(
+    [REFRESH_FIRST, REFRESH_SECOND].map(async (name) => {
+      const [file] = fixtureFiles(name);
+      return JSON.parse(await readFile(file as URL, 'utf8')) as object;
+    }),
+  );
+  const report = await Report.create({ out, title: 'refresh run', format: 'site' });
+  await report.addSpans(first ?? {});
+  await report.flush();
+  await cp(`${out}data/manifest.js`, `${out}data/manifest.step1.js`);
+  await report.addSpans(second ?? {});
+  await report.flush();
+  await cp(`${out}data/manifest.js`, `${out}data/manifest.step2.js`);
+  await cp(`${out}data/manifest.step1.js`, `${out}data/manifest.js`);
+  // Never closed, so the writer's lock names this (live) process; the served copy is a snapshot.
+  await rm(`${out}data/state/lock.json`, { force: true });
+}
+
+/**
  * The frozen data folders (`fixtures/reports/format-<n>/`, never edited) converted into format-4 reports by
  * `otel-html merge`, which writes the current viewer beside the data (D12: the viewer reads format 4 only).
  */
@@ -525,6 +551,7 @@ await Promise.all([
   buildFixtureReports(),
   buildMetricsMergeReports(),
   buildUnfinishedReport(),
+  buildRefreshReport(),
   buildDashboardReports(),
   buildRunChartReport(),
   buildFrozenReports(),
