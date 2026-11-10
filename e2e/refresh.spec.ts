@@ -13,21 +13,34 @@ const FIRST = fixtureSpanCount(REFRESH_FIRST);
 const TOTAL = FIRST + fixtureSpanCount(REFRESH_SECOND);
 const PARTITION_1_SPANS = `${DATA}partitions/000001/spans.parquet`;
 
+const isHttpProject = (projectName: string): boolean => projectName.endsWith('-http');
+
 test.beforeEach(({ page: _page }, testInfo) => {
-  test.skip(!testInfo.project.name.endsWith('-http'), 'the refresh report is served over HTTP only');
+  test.skip(!isHttpProject(testInfo.project.name), 'the refresh report is served over HTTP only');
 });
+
+/** Replaces a served file in one step, so the server never reads a half-written one. */
+async function replaceServed(file: string, content: string | null): Promise<void> {
+  const temp = `${file}.${process.pid}.tmp`;
+  if (content === null) await copyFile(`${DATA}manifest.step1.js`, temp);
+  else await writeFile(temp, content);
+  await rename(temp, file);
+}
 
 /** Publishes step 2 as a run's next flush does: the new manifest, whose `updatedAt` is now. */
 async function publishStep2(): Promise<void> {
   const manifest = await readFile(`${DATA}manifest.step2.js`, 'utf8');
-  await writeFile(
+  await replaceServed(
     `${DATA}manifest.js`,
     manifest.replace(/"updatedAt":"[^"]*"/, `"updatedAt":"${new Date().toISOString()}"`),
   );
 }
 
-test.afterEach(async () => {
-  await copyFile(`${DATA}manifest.step1.js`, `${DATA}manifest.js`);
+// Only the http project's copies touch the served files: a skipped file-project copy runs on another worker, possibly
+// while the http test is in the middle of its run.
+test.afterEach(async ({ page: _page }, testInfo) => {
+  if (!isHttpProject(testInfo.project.name)) return;
+  await replaceServed(`${DATA}manifest.js`, null);
   await rename(`${PARTITION_1_SPANS}.away`, PARTITION_1_SPANS).catch(() => undefined);
 });
 
@@ -68,6 +81,8 @@ test('a partition the site no longer serves offers Refresh', HTTP, async ({ page
   await publishStep2();
   await rename(PARTITION_1_SPANS, `${PARTITION_1_SPANS}.away`);
   await page.getByRole('button', { name: 'Refresh' }).first().click();
-  await expect(page.getByText('This report has changed').first()).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Refresh' }).first()).toBeVisible();
+  // The notice is a line of text and its own button; the in-progress line has a Refresh button too, so look inside it.
+  const notice = page.getByText('This report has changed').first();
+  await expect(notice).toBeVisible();
+  await expect(notice.locator('..').getByRole('button', { name: 'Refresh' })).toBeVisible();
 });
