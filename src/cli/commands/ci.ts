@@ -63,7 +63,8 @@ interface LinkFlags {
   runId: string;
   repository: string;
   url: string;
-  site: string;
+  site?: string;
+  indexUrl?: string;
   comment: boolean;
   check: boolean;
 }
@@ -175,16 +176,26 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
     .requiredOption('--run-id <n>', 'workflow run id')
     .requiredOption('--repository <owner/repo>', 'repository of the run')
     .requiredOption('--url <url>', "the run's published report URL")
-    .requiredOption('--site <dir>', 'the site folder (the gh-pages tree), for the previous run')
+    .option(
+      '--site <dir>',
+      'the site folder (the gh-pages tree), for the previous run (until the deployer replaces it)',
+    )
+    .option(
+      '--index-url <url>',
+      "the live site's index.json, for the previous run (one of --site, --index-url)",
+    )
     .option('--no-comment', 'do not comment on pull requests')
     .option('--no-check', 'do not create a check run')
     .action(async (flags: LinkFlags) => {
+      if ((flags.site === undefined) === (flags.indexUrl === undefined))
+        throw new OtelHtmlError('usage', { message: 'give exactly one of --site and --index-url' });
       await runLink(
         {
           runId: parseRunId(flags.runId),
           repository: parseRepository(flags.repository),
           url: flags.url,
-          site: flags.site,
+          ...(flags.site === undefined ? {} : { site: flags.site }),
+          ...(flags.indexUrl === undefined ? {} : { indexUrl: flags.indexUrl }),
           comment: flags.comment,
           check: flags.check,
         },

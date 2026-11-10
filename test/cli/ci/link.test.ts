@@ -2,10 +2,12 @@ import { describe, expect, test } from 'vitest';
 import type { ApiJob, ApiRun } from '../../../src/cli/ci/github-api.js';
 import {
   channelPage,
+  channelPageOf,
   checkRunPayload,
   commentBody,
   findStickyComment,
   previousRun,
+  previousRunOf,
 } from '../../../src/cli/ci/link.js';
 import type { SiteIndex, SiteRun } from '../../../src/cli/ci/site.js';
 
@@ -208,5 +210,44 @@ describe('previousRun', () => {
     expect(previousRun(index, 4, 'https://x.test/pr/7/runs/4/')).toBeUndefined();
     expect(previousRun(index, 9, 'https://x.test/pr/7/runs/9/')).toBeUndefined();
     expect(previousRun(index, 5, 'https://x.test/elsewhere/')).toBeUndefined();
+  });
+});
+
+describe('previousRunOf and channelPageOf (the live index, D57)', () => {
+  const entry = (runId: number, workflow: string, conclusion = 'success'): SiteRun => ({
+    ...siteRun(runId),
+    workflow,
+    conclusion,
+  });
+  const index = (runs: SiteRun[]): SiteIndex => ({
+    version: 1,
+    channels: { 'pr/7': { kind: 'pr', title: '#7 Fix', headBranch: 'topic', runs } },
+  });
+
+  test('skips this run and an in-progress run, and prefers the same workflow', () => {
+    const idx = index([
+      entry(9, 'ci'),
+      entry(8, 'load'),
+      entry(7, 'ci', 'in_progress'),
+      entry(6, 'load'),
+      entry(5, 'ci'),
+    ]);
+    expect(previousRunOf(idx, 'pr/7', 9, 'https://x.test', 'ci')).toEqual({
+      runId: 5,
+      url: 'https://x.test/pr/7/runs/5/',
+      workflow: 'ci',
+    });
+    expect(previousRunOf(idx, 'pr/7', 9, 'https://x.test', 'other')?.runId).toBe(8);
+    expect(previousRunOf(index([entry(9, 'ci')]), 'pr/7', 9, 'https://x.test', 'ci')).toBeUndefined();
+    expect(previousRunOf(idx, 'pr/8', 9, 'https://x.test', 'ci')).toBeUndefined();
+  });
+
+  test('names the channel page from the channel, whether or not the index lists the run', () => {
+    expect(
+      channelPageOf('pr/7', { kind: 'pr', title: '#7 Fix', headBranch: 'topic' }, 'https://x.test'),
+    ).toEqual({ label: 'pull request #7', url: 'https://x.test/pr/7/' });
+    expect(
+      channelPageOf('branch/main', { kind: 'branch', title: 'main', headBranch: 'main' }, 'https://x.test'),
+    ).toEqual({ label: '`main`', url: 'https://x.test/branch/main/' });
   });
 });

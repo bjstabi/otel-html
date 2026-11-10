@@ -17,19 +17,24 @@ import {
 import {
   type ApiComment,
   channelPage,
+  channelPageOf,
   checkRunPayload,
   commentBody,
   findStickyComment,
   previousRun,
+  previousRunOf,
 } from './link.js';
-import { pullsToLink, slug } from './site.js';
+import { channelFor, parseSiteIndex, pullsToLink, slug } from './site.js';
 import { readSiteIndex } from './site-io.js';
 
 export type LinkOptions = {
   runId: number;
   repository: string;
   url: string;
-  site: string;
+  /** The site folder (`--site`), until PR 3 removes it; exactly one of `site` and `indexUrl` is set. */
+  site?: string;
+  /** The live site's `index.json` URL (`--index-url`, D57). */
+  indexUrl?: string;
   comment: boolean;
   check: boolean;
 };
@@ -66,22 +71,21 @@ export async function runLink(opts: LinkOptions, io: CliIo, fetchFn: Fetch = fet
   }
   // As `ci site` places it: a default-branch run is the workflow's, so no pull request gets its comment.
   let pulls: ApiPull[] = [];
-  if (opts.comment) {
+  let placed: ReturnType<typeof channelFor>;
+  if (opts.comment || opts.indexUrl !== undefined) {
     try {
       const { default_branch: defaultBranch } = (
         await getJson<{ default_branch: string }>(repo, token, API_TIMEOUT_MS, fetchFn)
       ).body;
       try {
-        pulls = pullsToLink(
-          run,
-          await fetchPullsForSha(
-            { apiUrl: api, repository: opts.repository, sha: run.head_sha },
-            token,
-            API_TIMEOUT_MS,
-            fetchFn,
-          ),
-          defaultBranch,
+        const all = await fetchPullsForSha(
+          { apiUrl: api, repository: opts.repository, sha: run.head_sha },
+          token,
+          API_TIMEOUT_MS,
+          fetchFn,
         );
+        if (opts.comment) pulls = pullsToLink(run, all, defaultBranch);
+        placed = channelFor(run, all, defaultBranch);
       } catch (e) {
         warn(`cannot list the pull requests of ${run.head_sha}, so no comment is posted: ${messageOf(e)}`);
       }
@@ -92,12 +96,26 @@ export async function runLink(opts: LinkOptions, io: CliIo, fetchFn: Fetch = fet
 
   let previous: ReturnType<typeof previousRun>;
   let page: ReturnType<typeof channelPage>;
-  try {
-    const index = await readSiteIndex(opts.site, warn);
-    previous = previousRun(index, run.id, opts.url);
-    page = channelPage(index, run.id, opts.url);
-  } catch (e) {
-    warn(`cannot read the site index, so no previous run or channel page is linked: ${messageOf(e)}`);
+  if (opts.indexUrl !== undefined) {
+    // D57: the channel comes from the API, so a run the live index does not list yet still gets both lines.
+    const baseUrl = opts.indexUrl.replace(/\/index\.json$/, '').replace(/\/+$/, '');
+    if (placed !== undefined) page = channelPageOf(placed.key, placed.channel, baseUrl);
+    try {
+      const res = await fetchFn(opts.indexUrl, { signal: AbortSignal.timeout(API_TIMEOUT_MS) });
+      if (!res.ok) throw new Error(`${opts.indexUrl} answered ${res.status}`);
+      const index = parseSiteIndex(await res.text(), warn);
+      if (placed !== undefined) previous = previousRunOf(index, placed.key, run.id, baseUrl, slug(run.name));
+    } catch (e) {
+      warn(`cannot read the site index, so no previous run is linked: ${messageOf(e)}`);
+    }
+  } else if (opts.site !== undefined) {
+    try {
+      const index = await readSiteIndex(opts.site, warn);
+      previous = previousRun(index, run.id, opts.url);
+      page = channelPage(index, run.id, opts.url);
+    } catch (e) {
+      warn(`cannot read the site index, so no previous run or channel page is linked: ${messageOf(e)}`);
+    }
   }
   const body = commentBody(run, jobs, opts.url, previous, page);
 

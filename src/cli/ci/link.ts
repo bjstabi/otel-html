@@ -1,5 +1,5 @@
 import { type ApiJob, type ApiRun, CHECK_RUN_NAME } from './github-api.js';
-import { type Channel, type SiteIndex, type SiteRun, slug } from './site.js';
+import { type Channel, IN_PROGRESS, type SiteIndex, type SiteRun, slug } from './site.js';
 import { codeSpan, MARKER, summaryTable } from './summary.js';
 
 /** The pure side of `ci link`: the sticky pull request comment and the check run that point at a run's report. */
@@ -88,6 +88,42 @@ export function previousRun(index: SiteIndex, runId: number, url: string): Previ
     url: `${found.base}/${prev.reportPath}/`,
     ...(prev.workflow === undefined ? {} : { workflow: prev.workflow }),
   };
+}
+
+/**
+ * The run before `runId` in channel `key` of the live index: the channel's newest run that is neither this run nor
+ * `in_progress`, preferring `workflow`, with its report under `baseUrl`. Unlike `previousRun` it does not need the
+ * index to list this run (D57). Undefined when the channel has no such run.
+ */
+export function previousRunOf(
+  index: SiteIndex,
+  key: string,
+  runId: number,
+  baseUrl: string,
+  workflow: string,
+): PreviousRun | undefined {
+  const candidates = (index.channels[key]?.runs ?? []).filter(
+    (r) => r.runId !== runId && r.conclusion !== IN_PROGRESS,
+  );
+  const prev = candidates.find((r) => r.workflow === workflow) ?? candidates[0];
+  if (prev === undefined) return undefined;
+  return {
+    runId: prev.runId,
+    url: `${baseUrl}/${prev.reportPath}/`,
+    ...(prev.workflow === undefined ? {} : { workflow: prev.workflow }),
+  };
+}
+
+/** The rolling report of channel `key` under `baseUrl`, as `channelFor` describes the channel (D57); none for an older per-workflow channel. */
+export function channelPageOf(
+  key: string,
+  channel: Omit<Channel, 'runs'>,
+  baseUrl: string,
+): ChannelPage | undefined {
+  if (channel.kind === 'workflow') return undefined;
+  const label =
+    channel.kind === 'pr' ? `pull request #${key.slice('pr/'.length)}` : codeSpan(channel.headBranch);
+  return { label, url: `${baseUrl}/${key}/` };
 }
 
 /**

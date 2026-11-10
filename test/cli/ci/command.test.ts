@@ -907,6 +907,65 @@ describe('otel-html ci link', () => {
     expect(writes()).toEqual(['POST https://api.github.com/repos/o/r/issues/7/comments']);
   });
 
+  describe('--index-url', () => {
+    const indexArgs = (): string[] =>
+      linkArgs(['--no-check']).flatMap((a, i, all) =>
+        a === '--site' ? [] : all[i - 1] === '--site' ? [] : [a],
+      );
+    const withIndex = (respond: () => Response): void => {
+      stub();
+      const inner = globalThis.fetch;
+      vi.stubGlobal('fetch', async (url: string, init?: RequestInit) =>
+        url === 'https://x.test/b/index.json' ? respond() : inner(url, init),
+      );
+    };
+    const indexJson = JSON.stringify({
+      version: 1,
+      channels: {
+        'pr/7': {
+          kind: 'pr',
+          title: '#7 Fix',
+          headBranch: 'topic',
+          runs: [
+            {
+              runId: 5,
+              attempt: 1,
+              conclusion: 'success',
+              headSha: 'x',
+              headBranch: 'topic',
+              completedAt: '2026-01-01T00:00:00Z',
+              runUrl: 'u',
+              reportPath: 'pr/7/runs/5',
+              workflow: 'ci',
+            },
+          ],
+        },
+      },
+    });
+
+    test('links the channel page and the previous run although the index does not list this run', async () => {
+      withIndex(() => new Response(indexJson, { status: 200 }));
+      expect(
+        await runCli([...indexArgs(), '--index-url', 'https://x.test/b/index.json'], fakeIo().io, deps),
+      ).toBe(0);
+      const patch = calls.find((c) => c.method === 'PATCH')?.body as { body: string };
+      expect(patch.body).toContain('All runs on pull request #7: https://x.test/b/pr/7/');
+      expect(patch.body).toContain('Previous run: [ci run 5](https://x.test/b/pr/7/runs/5/)');
+    });
+
+    test('a failed fetch is a warning and no previous-run line; the channel page stays', async () => {
+      withIndex(() => new Response('gone', { status: 503 }));
+      const f = fakeIo();
+      expect(await runCli([...indexArgs(), '--index-url', 'https://x.test/b/index.json'], f.io, deps)).toBe(
+        0,
+      );
+      const patch = calls.find((c) => c.method === 'PATCH')?.body as { body: string };
+      expect(patch.body).not.toContain('Previous run');
+      expect(patch.body).toContain('All runs on pull request #7: https://x.test/b/pr/7/');
+      expect(f.out()).toContain('::warning::');
+    });
+  });
+
   test('a default-branch run comments on no pull request, even one whose head is its commit', async () => {
     stub();
     const inner = globalThis.fetch;
