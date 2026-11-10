@@ -109,6 +109,7 @@ describe('runDeployFetch', () => {
       [6, false],
       [7, false],
     ]);
+    expect(rewritten.updates.map((u) => u.retry)).toEqual([undefined, true, undefined]);
     expect(rewritten.updates[1]?.reason).toMatch(/^download failed: .*404/);
   });
 });

@@ -1,3 +1,4 @@
+import { OtelHtmlError } from '../../model/errors.js';
 import type { WriterDeps } from '../../writer/session.js';
 import { downloadArtifact } from './deploy-fetch.js';
 import {
@@ -70,6 +71,8 @@ export interface PendingUpdate {
   /** push: the attempt of the uploader's run in which the numeric job key is a job (an update's own `runAttempt` must not exceed it). */
   jobAttempt?: number;
   accepted: boolean;
+  /** Set by `ci deploy fetch` when the download failed: not rejected for good, the next pass tries again. */
+  retry?: true;
   reason?: string;
 }
 export interface PendingPlan {
@@ -214,8 +217,9 @@ export async function planDeploy(
     let found: SiteState | undefined;
     try {
       found = await loadState(a, form);
-    } catch {
-      // an unreadable candidate: the next one, or the base's own state
+    } catch (e) {
+      // unreadable content: the next candidate, or the base's own state; a network or HTTP failure fails the pass
+      if (!(e instanceof OtelHtmlError)) throw e;
     }
     if (found !== undefined) {
       state = found;
@@ -293,7 +297,8 @@ export async function planDeploy(
       const events = parsed.kind === 'run' ? RUN_EVENTS : ['pull_request_target'];
       if (!events.includes(uploader.event))
         refuse(`event ${uploader.event} is not allowed for ${parsed.kind} updates`);
-      if (uploader.head_branch !== (await defaultBranchOf())) refuse('not the default branch');
+      if (parsed.kind === 'run' && uploader.head_branch !== (await defaultBranchOf()))
+        refuse('not the default branch');
     }
     if (a.size_in_bytes > MAX_UPDATE_BYTES) refuse('too large');
 
@@ -336,6 +341,22 @@ export async function planDeploy(
       case 'reopen-pr':
         if (parsed.runId !== uploader.id)
           refuse(`named for run ${parsed.runId}, uploaded by run ${uploader.id}`);
+        {
+          // a pull_request_target run reports the pull request's head branch: the pull request itself vouches for it
+          const pull = await getJsonIfFound<ApiPull & { base: { ref: string } }>(
+            `${repo}/pulls/${parsed.pr}`,
+            token,
+            API_TIMEOUT_MS,
+            fetchFn,
+          );
+          if (pull === undefined) return refuse(`pull request ${parsed.pr} not found`);
+          if (
+            pull.base.ref !== (await defaultBranchOf()) ||
+            pull.head.ref !== uploader.head_branch ||
+            pull.head.repo?.full_name !== uploader.head_repository?.full_name
+          )
+            refuse("not the pull request's run");
+        }
     }
   };
 

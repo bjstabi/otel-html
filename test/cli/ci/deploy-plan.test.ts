@@ -202,10 +202,21 @@ async function world(): Promise<Record<string, Route>> {
         name: 'ci-report',
         path: '.github/workflows/ci-report.yml',
         event: 'pull_request_target',
+        head_branch: 'feat',
       }),
     ),
+    [`${R}/pulls/5`]: json(pull5()),
   };
 }
+
+const pull5 = (over: Record<string, unknown> = {}) => ({
+  number: 5,
+  title: 'Feat',
+  state: 'open',
+  base: { ref: 'main' },
+  head: { sha: 'sha21', ref: 'feat', repo: { full_name: 'o/r' } },
+  ...over,
+});
 
 describe('planDeploy', () => {
   test('finds the base, the newest state and the authenticated pending updates', async () => {
@@ -316,6 +327,43 @@ describe('planDeploy', () => {
     routes[`${R}/actions/artifacts?per_page=100`] = listing(big);
     const plan = await planDeploy(opts(), { fs: createMemoryFileSystem() }, 'tok', fake(routes).fetchFn);
     expect(plan.updates.find((u) => u.id === 103)).toMatchObject({ accepted: false, reason: 'too large' });
+  });
+
+  test('a remove-pr is vouched for by its pull request, not by the uploader branch', async () => {
+    const reasonFor = async (routes: Record<string, Route>): Promise<string | undefined> =>
+      (await planDeploy(opts(), { fs: createMemoryFileSystem() }, 'tok', fake(routes).fetchFn)).updates.find(
+        (u) => u.id === 110,
+      )?.reason;
+    const wrongBase = await world();
+    wrongBase[`${R}/pulls/5`] = json(pull5({ base: { ref: 'release' } }));
+    expect(await reasonFor(wrongBase)).toBe("not the pull request's run");
+    const wrongHead = await world();
+    wrongHead[`${R}/pulls/5`] = json(pull5({ head: { sha: 'x', ref: 'other', repo: { full_name: 'o/r' } } }));
+    expect(await reasonFor(wrongHead)).toBe("not the pull request's run");
+    const wrongRepo = await world();
+    wrongRepo[`${R}/pulls/5`] = json(
+      pull5({ head: { sha: 'x', ref: 'feat', repo: { full_name: 'fork/r' } } }),
+    );
+    expect(await reasonFor(wrongRepo)).toBe("not the pull request's run");
+    const gone = await world();
+    gone[`${R}/pulls/5`] = missing;
+    expect(await reasonFor(gone)).toBe('pull request 5 not found');
+    const broken = await world();
+    broken[`${R}/pulls/5`] = () => new Response('', { status: 500 });
+    await expect(
+      planDeploy(opts(), { fs: createMemoryFileSystem() }, 'tok', fake(broken).fetchFn),
+    ).rejects.toThrow(/500/);
+  });
+
+  test('a transient failure downloading the newest consumed state fails the pass; unreadable content is skipped', async () => {
+    const routes = await world();
+    routes[`${R}/actions/artifacts/102/zip`] = () => new Response('', { status: 503 });
+    await expect(
+      planDeploy(opts(), { fs: createMemoryFileSystem() }, 'tok', fake(routes).fetchFn),
+    ).rejects.toThrow(/503/);
+    routes[`${R}/actions/artifacts/102/zip`] = () => new Response('not a zip');
+    const plan = await planDeploy(opts(), { fs: createMemoryFileSystem() }, 'tok', fake(routes).fetchFn);
+    expect(plan.state).toEqual({ kind: 'full', runId: 11 });
   });
 
   test('a run that cannot be found rejects its updates; another API failure fails the pass', async () => {

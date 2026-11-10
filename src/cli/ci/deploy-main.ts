@@ -84,6 +84,7 @@ export async function runDeployFetch(
     } catch (e) {
       failed++;
       u.accepted = false;
+      u.retry = true;
       u.reason = `download failed: ${messageOf(e)}`;
       say(io, `::warning::otel-html deploy fetch: ${u.name} (${u.id}): ${u.reason}`);
     }
