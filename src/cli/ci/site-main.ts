@@ -71,7 +71,8 @@ const up = (folder: string): string => '../'.repeat(folder.split('/').filter((x)
 /** Where the rolling report at `<site>/<key>/` (`branch/<slug>`, `pr/<n>`: two folders deep) loads the shared viewer files from. */
 const rollingAssetsBase = (key: string, version: string): string => `${up(key)}assets/${version}/`;
 /** Where a run report at `<site>/<key>/runs/<id>/` loads them from. */
-const runAssetsBase = (reportPath: string, version: string): string => `${up(reportPath)}assets/${version}/`;
+export const runAssetsBase = (reportPath: string, version: string): string =>
+  `${up(reportPath)}assets/${version}/`;
 
 const PREVIEW = /^preview-.*\.png$/;
 

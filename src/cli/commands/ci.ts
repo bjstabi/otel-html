@@ -11,10 +11,12 @@ import {
   runDeployPrune,
   runDeployScan,
 } from '../ci/deploy-main.js';
+import { runDispatch } from '../ci/dispatch.js';
 import { envVar, messageOf, say } from '../ci/github-api.js';
 import { runLink } from '../ci/link-main.js';
 import { runReport } from '../ci/report-main.js';
 import { runCleanup, runSite } from '../ci/site-main.js';
+import { runUpdateDone, runUpdatePr, runUpdatePush, runUpdateRun } from '../ci/update-main.js';
 import type { CliIo } from '../io.js';
 import { CliExit } from '../program.js';
 
@@ -223,6 +225,142 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
       });
     return parseRepository(repository);
   };
+  const update = ci.command('update').description('write a site update artifact for the Pages deployer');
+  const updateAction =
+    <F>(scope: string, fn: (flags: F) => Promise<void>) =>
+    async (flags: F): Promise<void> => {
+      try {
+        await fn(flags);
+      } catch (e) {
+        say(io, `::error::otel-html update ${scope}: ${messageOf(e)}`);
+        throw new CliExit(1);
+      }
+    };
+  update
+    .command('push')
+    .description("write a push update of this job's report partitions (never fails the job)")
+    .requiredOption('--report <dir>', "the job's report folder")
+    .requiredOption('--out <dir>', 'where the update folder is written')
+    .option('--final', 'stop the pusher first and number the update after its last upload')
+    .option('--config <file>', 'config file for the CI spans report')
+    .option('--publish-dir <dir>', "the pusher's folder (default: <report>/../publish)")
+    .action(
+      async (flags: {
+        report: string;
+        out: string;
+        final?: boolean;
+        config?: string;
+        publishDir?: string;
+      }) => {
+        await runUpdatePush(
+          {
+            report: flags.report,
+            out: flags.out,
+            final: flags.final === true,
+            ...(flags.config === undefined ? {} : { config: flags.config }),
+            ...(flags.publishDir === undefined ? {} : { publishDir: flags.publishDir }),
+          },
+          io,
+          await resolveDeps(deps),
+        );
+      },
+    );
+  update
+    .command('run')
+    .description("write a run update: the finished run's compacted report")
+    .requiredOption('--report <dir>', "the run's merged report folder (`ci report --out`)")
+    .requiredOption('--out <dir>', 'where the update folder is written')
+    .requiredOption('--run-id <n>', 'workflow run id')
+    .option('--repository <owner/repo>', 'repository (default: $GITHUB_REPOSITORY)')
+    .requiredOption('--base-url <url>', "the site's public URL")
+    .option('--config <file>', 'config file for the written report')
+    .action(
+      updateAction(
+        'run',
+        async (flags: {
+          report: string;
+          out: string;
+          runId: string;
+          repository?: string;
+          baseUrl: string;
+          config?: string;
+        }) => {
+          await runUpdateRun(
+            {
+              report: flags.report,
+              out: flags.out,
+              runId: parseRunId(flags.runId),
+              repository: repositoryOf(flags.repository),
+              baseUrl: flags.baseUrl,
+              ...(flags.config === undefined ? {} : { config: flags.config }),
+            },
+            io,
+            await resolveDeps(deps),
+          );
+        },
+      ),
+    );
+  for (const kind of ['remove-pr', 'reopen-pr'] as const) {
+    update
+      .command(kind)
+      .description(
+        kind === 'remove-pr'
+          ? "write an update that removes a pull request's channel from the site"
+          : 'write an update that lifts a pull request removal',
+      )
+      .requiredOption('--pr <n>', 'pull request number')
+      .requiredOption('--out <dir>', 'where the update folder is written')
+      .action(
+        updateAction(kind, async (flags: { pr: string; out: string }) => {
+          await runUpdatePr(
+            { kind, pr: parsePositive('--pr', flags.pr), out: flags.out },
+            io,
+            await resolveDeps(deps),
+          );
+        }),
+      );
+  }
+  update
+    .command('done')
+    .description('record a finished upload in the pusher ledger; print the pusher log as a notice')
+    .requiredOption('--name <name>', 'the uploaded update artifact name')
+    .option('--publish-dir <dir>', "the pusher's folder", '.otel-html/publish')
+    .option('--log <file>', 'the pusher log to summarise')
+    .action(async (flags: { name: string; publishDir: string; log?: string }) => {
+      try {
+        await runUpdateDone(
+          {
+            name: flags.name,
+            publishDir: flags.publishDir,
+            ...(flags.log === undefined ? {} : { log: flags.log }),
+          },
+          io,
+          await resolveDeps(deps),
+        );
+      } catch (e) {
+        say(io, `::warning::otel-html update done: ${messageOf(e)}`);
+      }
+    });
+  ci.command('dispatch')
+    .description('wake the deployer workflow on the default branch (never fails)')
+    .option('--workflow <file>', 'the deployer workflow file', 'pages-deploy.yml')
+    .option('--repository <owner/repo>', 'repository (default: $GITHUB_REPOSITORY)')
+    .option('--run-id <n>', 'the run that asks (default: $GITHUB_RUN_ID)')
+    .action(async (flags: { workflow: string; repository?: string; runId?: string }) => {
+      try {
+        const runId = flags.runId ?? envVar(io, 'GITHUB_RUN_ID');
+        await runDispatch(
+          {
+            workflow: flags.workflow,
+            repository: repositoryOf(flags.repository),
+            runId: parseRunId(runId ?? ''),
+          },
+          io,
+        );
+      } catch (e) {
+        say(io, `otel-html dispatch: not dispatched: ${messageOf(e)}`);
+      }
+    });
   deploy
     .command('plan')
     .description(
