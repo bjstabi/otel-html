@@ -55,7 +55,7 @@ interface Calls {
   queries: number;
 }
 
-function fakes(format: 'local' | 'site') {
+function fakes(format: 'local' | 'site', failStatement?: (statement: string, nth: number) => boolean) {
   const calls: Calls = { url: [], buffer: [], drop: [], statements: [], clearCache: 0, queries: 0 };
   const engine = {
     format,
@@ -64,7 +64,12 @@ function fakes(format: 'local' | 'site') {
       registerFileBuffer: async (name: string) => void calls.buffer.push(name),
       dropFile: async (name: string) => void calls.drop.push(name),
     },
-    connection: { query: async (s: string) => void calls.statements.push(s) },
+    connection: {
+      query: async (s: string) => {
+        calls.statements.push(s);
+        if (failStatement?.(s, calls.statements.length)) throw new Error('view failed');
+      },
+    },
   } as unknown as Engine;
   const queryEngine = {
     tempTables: true,
@@ -118,8 +123,8 @@ describe('refreshReport', () => {
     expect(f.calls.statements).toHaveLength(5);
     expect(f.calls.clearCache).toBe(1);
     expect(manifest.partitions.map((p) => p.n)).toEqual([0, 1]);
-    expect(dataSource.manifest).toBe(manifest);
-    await dataSource.resourceValues('service.name').catch(() => undefined);
+    expect(dataSource?.manifest).toBe(manifest);
+    await dataSource?.resourceValues('service.name').catch(() => undefined);
     expect(f.calls.queries).toBeGreaterThan(0);
   });
 
@@ -205,15 +210,68 @@ describe('refreshReport failures', () => {
     expect(f.calls.clearCache).toBe(1);
   });
 
-  test('a failing registration rejects before any drop, view or cache clear', async () => {
+  test('a failing registration rejects before any view or cache clear, and drops what this refresh added', async () => {
     const f = fakes('site');
     (f.engine.db as unknown as { registerFileURL: () => Promise<void> }).registerFileURL = async () => {
       throw new Error('register failed');
     };
     await expect(run(f, manifestOf([0]), manifestOf([1]))).rejects.toThrow('register failed');
+    expect(f.calls.drop.sort()).toEqual([partitionFilePath(1, 'spans'), partitionFilePath(1, 'logs')].sort());
+    expect(f.calls.statements).toHaveLength(5);
+    expect(f.calls.clearCache).toBe(0);
+  });
+});
+
+describe('refreshReport unchanged and rollback', () => {
+  test('an unchanged manifest (same updatedAt, same files) touches nothing and returns no data source', async () => {
+    const f = fakes('site');
+    const previous = manifestOf([0, 1]);
+    const result = await run(f, previous, manifestOf([0, 1]));
+    expect(result.dataSource).toBeNull();
+    expect(result.manifest).toBe(previous);
+    expect(f.calls.url).toEqual([]);
     expect(f.calls.drop).toEqual([]);
     expect(f.calls.statements).toEqual([]);
     expect(f.calls.clearCache).toBe(0);
+  });
+
+  test('a later updatedAt over the same files is a change', async () => {
+    const f = fakes('site');
+    const next = { ...manifestOf([0]), updatedAt: '2026-11-06T00:00:09.000Z' };
+    const result = await run(f, manifestOf([0]), next);
+    expect(result.dataSource).not.toBeNull();
+    expect(f.calls.statements).toHaveLength(5);
+  });
+
+  test('a view that fails restores the previous views, drops the new files and rethrows', async () => {
+    const f = fakes('site', (_s, nth) => nth === 3);
+    await expect(run(f, manifestOf([0]), manifestOf([1]))).rejects.toThrow('view failed');
+    // 3 statements of the new manifest (the third failed), then the previous manifest's five views.
+    expect(f.calls.statements).toHaveLength(8);
+    const restored = f.calls.statements.slice(3);
+    expect(restored.filter((s) => s.includes('000000'))).toHaveLength(2);
+    expect(restored.some((s) => s.includes('000001'))).toBe(false);
+    expect(f.calls.drop.sort()).toEqual([partitionFilePath(1, 'spans'), partitionFilePath(1, 'logs')].sort());
+    expect(f.calls.clearCache).toBe(0);
+  });
+
+  test('a rollback that fails too is logged and the original error is the one thrown', async () => {
+    const f = fakes('site', (_s, nth) => nth >= 3);
+    const errors: unknown[][] = [];
+    await expect(
+      refreshReport(
+        f.engine,
+        f.queryEngine,
+        manifestOf([0]),
+        {
+          loader: loaderOf(manifestOf([1])),
+          baseUrl: BASE,
+          logger: { ...logger, error: (...a: unknown[]) => void errors.push(a) },
+        },
+        () => 1,
+      ),
+    ).rejects.toThrow('view failed');
+    expect(errors.length).toBeGreaterThan(0);
   });
 });
 

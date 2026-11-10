@@ -279,6 +279,15 @@ describe('the refresh of openReportRefreshable', () => {
     expect(dropped.sort()).toEqual([p(0), p(1)]);
   });
 
+  test('a refresh that finds nothing new returns the data source already shown', async () => {
+    const { withLoader, registered, initial } = refreshable([manifestOf([0]), manifestOf([0, 1])]);
+    const opened = await openReportRefreshable(initial, withLoader, () => undefined);
+    expect(await opened.refresh?.()).toBe(opened.dataSource);
+    expect(registered).toEqual([]);
+    expect(await opened.refresh?.()).not.toBe(opened.dataSource);
+    expect(registered).toEqual([p(1)]);
+  });
+
   test('a failed refresh leaves the last good manifest as the next previous', async () => {
     const { withLoader, registered, dropped, initial } = refreshable([
       manifestOf([0, 1]),

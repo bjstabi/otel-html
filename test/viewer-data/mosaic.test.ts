@@ -263,3 +263,24 @@ test('clearCache forgets cached results: the same query reaches the connector ag
   await qe.query(q);
   expect(connector.requests.length).toBe(cached + 1);
 });
+
+test('clearCache lets a query in flight resolve: only cached results go', async () => {
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const connector = {
+    query: async (r: { type: string }) => {
+      await gate;
+      return r.type === 'exec' ? undefined : ipcBytes({ n: [7n] });
+    },
+  } as unknown as Connector;
+  const qe = mosaicQueryEngine(createCoordinator(connector, silentLogger), fakeFiles());
+  const inFlight = qe.query(Query.from('spans').select({ n: count() }));
+  const queued = qe.query(Query.from('logs').select({ n: count() }));
+  await new Promise((r) => setTimeout(r, 0));
+  qe.clearCache();
+  release();
+  expect((await inFlight).getChild('n')?.at(0)).toBe(7n);
+  expect((await queued).getChild('n')?.at(0)).toBe(7n);
+});

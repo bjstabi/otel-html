@@ -141,6 +141,7 @@ export async function openReportRefreshable(
           parts.createSource({ engine: queryEngine, manifest, logger: deps.logger }),
         );
         let current = manifest;
+        let shown = dataSource;
         let last: Promise<unknown> = Promise.resolve();
         const refresh = (): Promise<DataSource> => {
           const run = last.then(async () => {
@@ -156,7 +157,8 @@ export async function openReportRefreshable(
               deps.now ?? Date.now,
             );
             current = next.manifest;
-            return next.dataSource;
+            shown = next.dataSource ?? shown;
+            return shown;
           });
           last = run.catch(() => undefined);
           return run;

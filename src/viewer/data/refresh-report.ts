@@ -21,7 +21,9 @@ export interface RefreshDeps {
  * D55: loads `data/manifest.js?r=<now>` through the loader (which resolves with the registered `manifest`), validates it
  * (format 4), registers the files the new manifest lists and the old did not, drops the ones gone, recreates the views,
  * clears the engine cache and returns a DataSource over the new manifest and the same engine. A manifest that does
- * not validate rejects before anything is registered or dropped.
+ * not validate rejects before anything is registered or dropped; one with the same `updatedAt` and files as `previous`
+ * changes nothing and returns a null `dataSource`. A failure while registering or creating views restores the previous
+ * views, drops what this refresh registered and rethrows.
  */
 export async function refreshReport(
   engine: Engine,
@@ -29,19 +31,29 @@ export async function refreshReport(
   previous: ManifestV4,
   deps: RefreshDeps,
   now: () => number,
-): Promise<{ dataSource: DataSource; manifest: ManifestV4 }> {
+): Promise<{ dataSource: DataSource | null; manifest: ManifestV4 }> {
   const raw = await deps.loader.load(`${MANIFEST_PATH}?r=${now()}`, MANIFEST_KEY);
   const manifest = requireFormat4(parseAnyManifest(raw));
 
   const had = new Set(manifestFiles(previous).map((f) => f.path));
   const wanted = manifestFiles(manifest);
   const wantedPaths = new Set(wanted.map((f) => f.path));
-  await registerFiles(
-    engine,
-    wanted.filter((f) => !had.has(f.path)),
-    deps,
-  );
-  await createViews(engine, manifest);
+  // Nothing new was published: keep the shown data source, so no view is recreated, no cache cleared, no page re-queried.
+  if (
+    manifest.updatedAt === previous.updatedAt &&
+    had.size === wantedPaths.size &&
+    [...had].every((path) => wantedPaths.has(path))
+  ) {
+    return { dataSource: null, manifest: previous };
+  }
+  const added = wanted.filter((f) => !had.has(f.path));
+  try {
+    await registerFiles(engine, added, deps);
+    await createViews(engine, manifest);
+  } catch (error) {
+    await rollBack(engine, previous, added, deps.logger);
+    throw error;
+  }
   // Last and best-effort: the views no longer read these files, so a failed drop only leaks a registration.
   for (const path of had) {
     if (wantedPaths.has(path)) continue;
@@ -54,6 +66,28 @@ export async function refreshReport(
     createDuckDbDataSource({ engine: queryEngine, manifest, logger: deps.logger }),
   );
   return { dataSource, manifest };
+}
+
+/**
+ * Best effort after a refresh failed part-way: the views of the manifest the page still shows, and the files this
+ * refresh registered dropped. A rollback that fails too is logged; the caller rethrows the original error.
+ */
+async function rollBack(
+  engine: Engine,
+  previous: ManifestV4,
+  added: ReturnType<typeof manifestFiles>,
+  logger: Logger,
+): Promise<void> {
+  try {
+    await createViews(engine, previous);
+  } catch (error) {
+    logger.error('could not restore the previous views after a failed refresh', error);
+  }
+  for (const { path } of added) {
+    await dropFiles(engine, [path]).catch((error: unknown) => {
+      logger.error(`could not drop ${path} after a failed refresh`, error);
+    });
+  }
 }
 
 /**
