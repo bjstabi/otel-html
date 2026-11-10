@@ -22,7 +22,7 @@ import type { UpdateJson, UpdatePartition } from './update.js';
 export interface RunReportState {
   next: number;
   attempt: number;
-  jobs: Record<string, { name: string; sequence: number; sources: string[] }>;
+  jobs: Record<string, { name: string; attempt: number; sequence: number; sources: string[] }>;
 }
 
 export const emptyRunState = (attempt: number): RunReportState => ({ next: 0, attempt, jobs: {} });
@@ -99,6 +99,8 @@ export interface SyncPlan {
   /** Site-relative (run-relative) paths of the files the new manifest no longer lists. */
   drops: string[];
   pending: boolean;
+  /** Why the plan is what it is: `applied` (copies, drops or a new manifest), `unchanged` (already applied or nothing to apply), `stale` (a lower attempt than this job name's), `pending` (a carrier is missing). */
+  outcome: 'applied' | 'unchanged' | 'stale' | 'pending';
 }
 
 const filePaths = (e: PartitionEntry): string[] => TABLES.flatMap((t) => e.files[t]?.path ?? []);
@@ -145,39 +147,55 @@ function totalsAndRange(partitions: readonly PartitionEntry[]): Pick<ManifestV4,
 }
 
 /**
- * §5.1 as a pure function. The listing is the highest-sequence update's `partitions` plus its `ci`; sequences at or
- * below `state.jobs[jobKey].sequence` are ignored (`pending: false`, no change) and an older attempt than
- * `state.attempt` too. A listed partition's files come from the manifest (same `source`), else from any update that
- * carries them; when neither has one, `pending: true` and nothing else changes. The job's `ci` partition is the one
- * exception: a `ci` the top update carries replaces the manifest's. New partitions take numbers from `state.next`
- * upward; their `values` are normalised to the manifest's `statisticsKeys`; the job's partitions whose `source` is
- * no longer listed, and a replaced `ci`, are dropped (`drops`: their paths). Totals and range are recomputed;
- * `complete` is false; `updatedAt` is `now`.
+ * §5.1 as a pure function. Every `JobUpdate` must have passed `readUpdate` and `nameMatches`, and all belong to the
+ * one job `jobKey`. The listing is the highest-sequence update's `partitions` plus its `ci`; sequences at or below
+ * `state.jobs[jobKey].sequence` are ignored (`unchanged`). The attempt gate is per job name: an update whose
+ * `attempt` is below the highest attempt recorded for any job entry of the same `jobName` is `stale` (`pending:
+ * false`, no change); a higher attempt drops the sources of those older same-named entries and resets `complete`.
+ * Other names are never gated. `state.attempt` is the run-level maximum. The state is not trusted over the manifest:
+ * `next` is at least one past the highest `n` in the manifest, and the job's previous sources are the state's plus
+ * every manifest source `job:<jobKey>#…` or `ci:<jobKey>`. A listed partition's files come from the manifest (same
+ * `source`), else from any update that carries them; when neither has one, `pending: true` and nothing else changes.
+ * The job's `ci` partition is the one exception: a `ci` the top update carries replaces the manifest's. New partitions
+ * take numbers from `next` upward; their `values` are normalised to the manifest's `statisticsKeys`; the job's
+ * partitions whose `source` is no longer listed, and a replaced `ci`, are dropped (`drops`: their paths). Totals and
+ * range are recomputed; `complete` is false; `updatedAt` is `now`.
  */
 export function planSync(input: SyncInput): SyncPlan {
   const { manifest, jobKey, jobName, attempt } = input;
-  const unchanged: SyncPlan = { manifest, state: input.state, copies: [], drops: [], pending: false };
+  const none = (outcome: 'unchanged' | 'stale' | 'pending'): SyncPlan => ({
+    manifest,
+    state: input.state,
+    copies: [],
+    drops: [],
+    pending: outcome === 'pending',
+    outcome,
+  });
   const ordered = [...input.updates].sort((a, b) => (b.update.sequence ?? 0) - (a.update.sequence ?? 0));
   const top = ordered[0];
-  if (top === undefined || attempt < input.state.attempt) return unchanged;
+  if (top === undefined) return none('unchanged');
 
-  // A newer attempt: the jobs of the same name are being rerun, so their sources go.
-  const resetNames = attempt > input.state.attempt;
+  const sameName = Object.entries(input.state.jobs).filter(([, j]) => j.name === jobName);
+  if (sameName.some(([, j]) => attempt < j.attempt)) return none('stale');
+
+  // A newer attempt: the older entries of the same name are being rerun, so their sources go.
   const jobs: RunReportState['jobs'] = {};
   const dropSources = new Set<string>();
-  const reset = new Set<string>();
+  const rerunSources = new Set<string>();
   for (const [k, j] of Object.entries(input.state.jobs)) {
-    if (resetNames && j.name === jobName)
+    if (j.name === jobName && j.attempt < attempt)
       for (const s of j.sources) {
         dropSources.add(s);
-        reset.add(s);
+        rerunSources.add(s);
       }
     else jobs[k] = j;
   }
   const sequence = top.update.sequence ?? 0;
   const previous = jobs[jobKey];
-  if (previous !== undefined && sequence <= previous.sequence) return unchanged;
+  if (previous !== undefined && sequence <= previous.sequence) return none('unchanged');
   for (const s of previous?.sources ?? []) dropSources.add(s);
+  for (const e of manifest.partitions)
+    if (e.source.startsWith(`job:${jobKey}#`) || e.source === `ci:${jobKey}`) dropSources.add(e.source);
 
   const listing = (u: UpdateJson): { p: UpdatePartition; isCi: boolean }[] => [
     ...(u.partitions ?? []).map((p) => ({ p, isCi: false })),
@@ -187,13 +205,11 @@ export function planSync(input: SyncInput): SyncPlan {
   const kept = new Set<string>();
   const copies: FileMove[] = [];
   const added: PartitionEntry[] = [];
-  let next = input.state.next;
+  let next = Math.max(input.state.next, ...manifest.partitions.map((e) => e.n + 1));
   for (const { p, isCi } of listing(top.update)) {
-    const existing = bySource.get(p.source);
-    // Sources the reset drops are not "in the manifest" for this job any more.
-    const present =
-      existing !== undefined && !(resetNames && dropSources.has(p.source) && previous === undefined);
-    if (present && !(isCi && p.carried)) {
+    // Sources of reruns being dropped are not "in the manifest" for this job any more.
+    const inManifest = bySource.has(p.source) && !rerunSources.has(p.source);
+    if (inManifest && !(isCi && p.carried)) {
       kept.add(p.source);
       continue;
     }
@@ -203,7 +219,7 @@ export function planSync(input: SyncInput): SyncPlan {
           .slice(1)
           .flatMap((u) => listing(u.update).map((l) => ({ dir: u.dir, p: l.p })))
           .find((c) => c.p.source === p.source && c.p.carried);
-    if (carrier === undefined) return { ...unchanged, pending: true };
+    if (carrier === undefined) return none('pending');
     added.push(entryFrom(next++, carrier.p, carrier.dir, manifest.statisticsKeys, copies));
   }
 
@@ -224,21 +240,28 @@ export function planSync(input: SyncInput): SyncPlan {
     manifest: result,
     state: {
       next,
-      attempt,
-      jobs: { ...jobs, [jobKey]: { name: jobName, sequence, sources } },
+      attempt: Math.max(input.state.attempt, attempt),
+      jobs: { ...jobs, [jobKey]: { name: jobName, attempt, sequence, sources } },
     },
     copies,
     drops: dropped.flatMap(filePaths),
     pending: false,
+    outcome: 'applied',
   };
 }
 
-/** The manifest with partitions renumbered from `from` (ascending, paths rewritten) and the file moves that realise it (D54). */
+/**
+ * The manifest with partitions renumbered from `from` (ascending, paths rewritten) and the file moves that realise it
+ * (D54). The moves are ordered so that applying them one after the other in one directory is safe: partitions that
+ * shift up move last-first (descending `n`), those that shift down first-first (ascending), and a partition that
+ * keeps its number has no move.
+ */
 export function renumbered(
   manifest: ManifestV4,
   from: number,
 ): { manifest: ManifestV4; moves: { from: string; to: string }[] } {
-  const moves: { from: string; to: string }[] = [];
+  const up: { from: string; to: string }[] = [];
+  const down: { from: string; to: string }[] = [];
   const partitions = manifest.partitions.map((e, i): PartitionEntry => {
     const n = from + i;
     const files: PartitionEntry['files'] = {};
@@ -246,14 +269,15 @@ export function renumbered(
       const f = e.files[t];
       if (f === undefined) continue;
       const to = partitionFilePath(n, t);
-      moves.push({ from: f.path, to });
+      if (n > e.n) up.push({ from: f.path, to });
+      else if (n < e.n) down.push({ from: f.path, to });
       files[t] = { ...f, path: to };
     }
     return { ...e, n, files };
   });
   const result = { ...manifest, partitions };
   parseAnyManifest(result);
-  return { manifest: result, moves };
+  return { manifest: result, moves: [...down, ...up.reverse()] };
 }
 
 /** Writes `data/manifest.js`, `index.html` (no host meta) and `.nojekyll` into `dir`. */

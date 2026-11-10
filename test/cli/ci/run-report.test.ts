@@ -90,6 +90,14 @@ const sync = (
   over: { jobKey?: string; jobName?: string; attempt?: number } = {},
 ) => planSync({ manifest, state, jobKey: '7', jobName: 'build', attempt: 1, updates, now: NOW, ...over });
 
+const TABLE_PATHS = (p: { files: Partial<Record<string, { path: string }>> }): string[] =>
+  Object.values(p.files).flatMap((f) => (f ? [f.path] : []));
+const jobEntry = (plan: { state: RunReportState }) => {
+  const e = plan.state.jobs['7'];
+  if (!e) throw new Error('no job 7');
+  return e;
+};
+
 describe('newRunManifest', () => {
   test('is an empty incomplete v4 site manifest with the CI statistics keys', async () => {
     const m = await newManifest();
@@ -120,6 +128,7 @@ describe('planSync', () => {
     expect(plan.state.next).toBe(3);
     expect(plan.state.jobs['7']).toEqual({
       name: 'build',
+      attempt: 1,
       sequence: 1,
       sources: ['job:7#flush:0', 'job:7#flush:1', 'ci:7'],
     });
@@ -195,7 +204,7 @@ describe('planSync', () => {
     const state = emptyRunState(1);
     const lone = push(2, [part('job:7#compact:0..1', 'partitions/0/spans.parquet', 7, '10', '30', false)]);
     const plan = sync(m, state, [ju(lone)]);
-    expect(plan).toEqual({ manifest: m, state, copies: [], drops: [], pending: true });
+    expect(plan).toEqual({ manifest: m, state, copies: [], drops: [], pending: true, outcome: 'pending' });
   });
 
   test('an older update that carries the missing partition completes it, copying from its dir', async () => {
@@ -258,10 +267,11 @@ describe('planSync', () => {
   test('an older attempt is ignored; a newer one drops the sources of the same-named job and resets complete', async () => {
     const m = await newManifest();
     const a = sync(m, emptyRunState(1), [ju(first())]);
-    const old = sync(a.manifest, { ...a.state, attempt: 2 }, [
+    const old = sync(a.manifest, { ...a.state, attempt: 2, jobs: { '7': { ...jobEntry(a), attempt: 2 } } }, [
       ju(push(5, [part('job:7#x', 'partitions/0/spans.parquet', 1, '1', '2')])),
     ]);
     expect(old.pending).toBe(false);
+    expect(old.outcome).toBe('stale');
     expect(old.manifest).toEqual(a.manifest);
 
     const other: UpdateJson = {
@@ -296,7 +306,117 @@ describe('planSync', () => {
   });
 });
 
+describe('planSync trusts the manifest over the state', () => {
+  test('an empty state over a populated manifest numbers past it and drops the job stale partitions', async () => {
+    const m = await newManifest();
+    const one = sync(m, emptyRunState(1), [ju(first())]);
+    const two = push(2, [part('job:7#compact:0..1', 'partitions/0/spans.parquet', 7, '10', '30')]);
+    const plan = sync(one.manifest, emptyRunState(1), [ju(two)]);
+    expect(plan.outcome).toBe('applied');
+    expect(plan.manifest.partitions.map((p) => [p.n, p.source])).toEqual([
+      [3, 'job:7#compact:0..1'],
+      [4, 'ci:7'],
+    ]);
+    expect(plan.drops).toHaveLength(4);
+    expect(plan.state.next).toBe(5);
+  });
+  test('a known next with unknown sources does not duplicate ci', async () => {
+    const m = await newManifest();
+    const one = sync(m, emptyRunState(1), [ju(first())]);
+    const two = push(2, [part('job:7#compact:0..1', 'partitions/0/spans.parquet', 7, '10', '30')]);
+    const plan = sync(one.manifest, { ...emptyRunState(1), next: one.state.next }, [ju(two)]);
+    const sources = plan.manifest.partitions.map((p) => p.source);
+    expect(sources).toEqual(['job:7#compact:0..1', 'ci:7']);
+    expect(plan.drops).toHaveLength(4);
+  });
+});
+
+describe('planSync attempt gate is per job name', () => {
+  const named = (jobId: number, jobName: string, attempt: number, sequence = 1): UpdateJson => ({
+    ...push(sequence, [part(`job:${jobId}#flush:0`, 'partitions/0/spans.parquet', 1, '1', '2')], {
+      ...ci(),
+      source: `ci:${jobId}`,
+    }),
+    runAttempt: attempt,
+    jobId,
+    jobName,
+  });
+  const run = (m: ManifestV4, s: RunReportState, u: UpdateJson) =>
+    sync(m, s, [ju(u)], { jobKey: String(u.jobId), jobName: u.jobName ?? '', attempt: u.runAttempt });
+
+  test('lint at attempt 1 applies after build at attempt 2; build attempt 1 after attempt 2 is stale', async () => {
+    const m = await newManifest();
+    const build2 = run(m, emptyRunState(1), named(7, 'build', 2));
+    expect(build2.outcome).toBe('applied');
+    expect(build2.state.attempt).toBe(2);
+    const lint1 = run(build2.manifest, build2.state, named(8, 'lint', 1));
+    expect(lint1.outcome).toBe('applied');
+    expect(lint1.state.attempt).toBe(2);
+    expect(lint1.manifest.partitions.map((p) => p.source)).toContain('job:7#flush:0');
+    const stale = run(lint1.manifest, lint1.state, named(9, 'build', 1));
+    expect(stale.outcome).toBe('stale');
+    expect(stale.pending).toBe(false);
+    expect(stale.manifest).toEqual(lint1.manifest);
+  });
+  test('a higher attempt drops only the same-named entries', async () => {
+    const m = await newManifest();
+    const b1 = run(m, emptyRunState(1), named(7, 'build', 1));
+    const l1 = run(b1.manifest, b1.state, named(8, 'lint', 1));
+    const b2 = run({ ...l1.manifest, complete: true }, l1.state, named(9, 'build', 2));
+    expect(b2.manifest.partitions.map((p) => p.source)).toEqual([
+      'job:8#flush:0',
+      'ci:8',
+      'job:9#flush:0',
+      'ci:9',
+    ]);
+    expect(Object.keys(b2.state.jobs)).toEqual(['8', '9']);
+    expect(b2.manifest.complete).toBe(false);
+  });
+  test('outcomes: unchanged on a replay, pending on a missing carrier', async () => {
+    const m = await newManifest();
+    const a = run(m, emptyRunState(1), named(7, 'build', 1));
+    expect(run(a.manifest, a.state, named(7, 'build', 1)).outcome).toBe('unchanged');
+    const lone = push(2, [part('job:7#c', 'partitions/0/spans.parquet', 1, '1', '2', false)]);
+    expect(sync(m, emptyRunState(1), [ju(lone)]).outcome).toBe('pending');
+  });
+});
+
 describe('renumbered', () => {
+  test('moves are safe to apply in order when shifting up or down', async () => {
+    const m = await newManifest();
+    const a = sync(m, emptyRunState(1), [ju(first())]);
+    const apply = (dir: Map<string, string>, moves: { from: string; to: string }[]) => {
+      for (const mv of moves) {
+        const v = dir.get(mv.from);
+        if (v === undefined) throw new Error(`missing ${mv.from}`);
+        dir.delete(mv.from);
+        dir.set(mv.to, v);
+      }
+    };
+    for (const from of [1, 5]) {
+      const dir = new Map(a.manifest.partitions.flatMap((p) => TABLE_PATHS(p).map((x) => [x, x] as const)));
+      const r = renumbered(a.manifest, from);
+      apply(dir, r.moves);
+      expect([...dir.keys()].sort()).toEqual(r.manifest.partitions.flatMap(TABLE_PATHS).sort());
+    }
+    const down = renumbered(
+      { ...a.manifest, partitions: a.manifest.partitions.map((p) => ({ ...p, n: p.n + 4 })) },
+      0,
+    );
+    expect(down.manifest.partitions.map((p) => p.n)).toEqual([0, 1, 2]);
+  });
+  test('shifting up lists the highest partition first', async () => {
+    const m = await newManifest();
+    const a = sync(m, emptyRunState(1), [ju(first())]);
+    const two = { ...a.manifest, partitions: a.manifest.partitions.slice(0, 2) };
+    expect(renumbered(two, 1).moves).toEqual([
+      { from: 'data/partitions/000001/spans.parquet', to: 'data/partitions/000002/spans.parquet' },
+      { from: 'data/partitions/000000/spans.parquet', to: 'data/partitions/000001/spans.parquet' },
+    ]);
+  });
+});
+
+describe('renumbered (basic)', () => {
   test('moves every partition to numbers from the given one', async () => {
     const m = await newManifest();
     const a = sync(m, emptyRunState(1), [ju(first())]);
@@ -305,8 +425,8 @@ describe('renumbered', () => {
     expect(r.manifest.partitions.map((p) => p.n)).toEqual([10, 11]);
     expect(r.manifest.partitions[0]?.files.spans?.path).toBe('data/partitions/000010/spans.parquet');
     expect(r.moves).toEqual([
-      { from: 'data/partitions/000000/spans.parquet', to: 'data/partitions/000010/spans.parquet' },
       { from: 'data/partitions/000001/spans.parquet', to: 'data/partitions/000011/spans.parquet' },
+      { from: 'data/partitions/000000/spans.parquet', to: 'data/partitions/000010/spans.parquet' },
     ]);
     expect(parseAnyManifest(r.manifest)).toEqual(r.manifest);
   });
