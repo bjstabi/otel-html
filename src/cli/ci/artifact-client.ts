@@ -103,7 +103,8 @@ export async function uploadArtifact(o: {
     ...ids,
     name: o.name,
     version: CLIENT_VERSION,
-    mimeType: { value: 'application/zip' },
+    // StringValue wrappers serialize as plain strings in proto3 JSON.
+    mimeType: 'application/zip',
     ...(o.retentionDays === undefined
       ? {}
       : { expiresAt: new Date(o.now() + o.retentionDays * DAY_MS).toISOString() }),
@@ -123,7 +124,7 @@ export async function uploadArtifact(o: {
     ...ids,
     name: o.name,
     size: String(o.zip.length),
-    hash: { value: `sha256:${createHash('sha256').update(o.zip).digest('hex')}` },
+    hash: `sha256:${createHash('sha256').update(o.zip).digest('hex')}`,
   });
   const id = Number(done.artifactId);
   if (!Number.isSafeInteger(id)) throw new Error('FinalizeArtifact gave no artifactId');

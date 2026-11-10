@@ -107,7 +107,7 @@ describe('uploadArtifact', () => {
       workflowRunBackendId: 'run-id',
       workflowJobRunBackendId: 'job-id',
       name: 'n',
-      mimeType: { value: 'application/zip' },
+      mimeType: 'application/zip',
     });
     expect(typeof c.version).toBe('number');
     expect(c.expiresAt).toBeUndefined();
@@ -120,7 +120,7 @@ describe('uploadArtifact', () => {
       workflowJobRunBackendId: 'job-id',
       name: 'n',
       size: String(zip.length),
-      hash: { value: `sha256:${createHash('sha256').update(zip).digest('hex')}` },
+      hash: `sha256:${createHash('sha256').update(zip).digest('hex')}`,
     });
   });
 
