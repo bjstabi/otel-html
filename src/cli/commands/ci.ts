@@ -16,6 +16,7 @@ import { envVar, messageOf, say } from '../ci/github-api.js';
 import { runLink } from '../ci/link-main.js';
 import { runReport } from '../ci/report-main.js';
 import { runUpdateDone, runUpdatePr, runUpdatePush, runUpdateRun } from '../ci/update-main.js';
+import { runUpload } from '../ci/upload-main.js';
 import type { CliIo } from '../io.js';
 import { CliExit } from '../program.js';
 
@@ -276,6 +277,26 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
       } catch (e) {
         say(io, `::warning::otel-html update done: ${messageOf(e)}`);
       }
+    });
+  ci.command('upload')
+    .description(
+      'upload a folder as a workflow run artifact (needs the runtime variables of a JavaScript action)',
+    )
+    .requiredOption('--name <name>', 'the artifact name')
+    .requiredOption('--path <dir>', 'the folder to zip and upload')
+    .option('--retention-days <d>', 'days before the artifact expires (default: the repository setting)')
+    .action(async (flags: { name: string; path: string; retentionDays?: string }) => {
+      await runUpload(
+        {
+          name: flags.name,
+          path: flags.path,
+          ...(flags.retentionDays === undefined
+            ? {}
+            : { retentionDays: parsePositive('--retention-days', flags.retentionDays) }),
+        },
+        io,
+        await resolveDeps(deps),
+      );
     });
   ci.command('dispatch')
     .description('wake the deployer workflow on the default branch (never fails)')
