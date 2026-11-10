@@ -105,5 +105,12 @@ function readEntries(bytes: Uint8Array, maxBytes: number): Map<string, Uint8Arra
     if (data.length !== usize) reject(name, `size ${data.length} disagrees with the directory's ${usize}`);
     out.set(name, new Uint8Array(data));
   }
+  // A name that is also a parent folder of another entry cannot be written to disk.
+  for (const name of out.keys()) {
+    for (let i = name.indexOf('/'); i >= 0; i = name.indexOf('/', i + 1)) {
+      const parent = name.slice(0, i);
+      if (out.has(parent)) reject(parent, 'a file and a folder of the same name');
+    }
+  }
   return out;
 }

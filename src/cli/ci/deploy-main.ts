@@ -74,8 +74,10 @@ export async function runDeployPlan(
 }
 
 /**
- * `ci deploy fetch`: downloads every accepted update of `pending` into `<out>/<name>/`. A download that fails marks the
- * update rejected (`download failed: ...`) in the rewritten `pending.json` and the pass goes on; the next pass retries it.
+ * `ci deploy fetch`: downloads every accepted update of `pending` into `<out>/<name>/`. An unreadable download (an
+ * `OtelHtmlError`: malformed zip, oversized body) marks the update `accepted: false`, reason `unreadable: ...`, with no
+ * `retry`, so it is rejected for good; a network or HTTP failure sets `retry: true` and the next pass tries it again.
+ * Either way the pass goes on.
  */
 export async function runDeployFetch(
   opts: DeployFetchOptions,

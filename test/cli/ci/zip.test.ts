@@ -128,6 +128,16 @@ describe('readZip', () => {
     expect(() => readZip(new Uint8Array(10), 1000)).toThrow(/^zip: no end of central directory/);
   });
 
+  test('rejects a file that is also a parent folder of another entry, in either order', () => {
+    for (const names of [
+      ['a', 'a/b'],
+      ['a/b', 'a'],
+    ]) {
+      const z = buildZip(names.map((name) => ({ name, data: 'x' })));
+      expect(() => readZip(z, 1000)).toThrow(/^a: a file and a folder of the same name/);
+    }
+  });
+
   describe('malformed input is a typed rejection', () => {
     const good = (): Uint8Array =>
       buildZip([
