@@ -47,14 +47,16 @@ runs:
       env:
         CMD: ${{ inputs.command || 'otel-html' }}
         CONFIG: ${{ inputs.config }}
+        COLLECT_PATH: ${{ inputs.path }}
         GITHUB_TOKEN: ${{ inputs.token }}
       run: |
         args=()
         if [ -n "$CONFIG" ]; then args+=(--config "$CONFIG"); fi
         # CMD is deliberately unquoted: it may be a command with arguments, such as `node dist/cli/main.js`.
         # shellcheck disable=SC2086
-        $CMD ci update push --final --report .otel-html/report --out "$RUNNER_TEMP/otel-html-update" "${args[@]}"
-    - if: inputs.publish == 'true' && steps.update.outputs.name != ''
+        $CMD ci update push --final --report "${COLLECT_PATH%/}/report" --out "$RUNNER_TEMP/otel-html-update" "${args[@]}"
+    - id: upload
+      if: inputs.publish == 'true' && steps.update.outputs.name != ''
       continue-on-error: true
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
@@ -65,19 +67,21 @@ runs:
         retention-days: 90
         # A re-run of the job reuses the run, and so the name.
         overwrite: true
+    # Only an upload that succeeded is recorded as shipped: a failed one's partitions ship again.
     - name: Record the upload and wake the deployer
-      if: inputs.publish == 'true' && steps.update.outputs.name != ''
+      if: inputs.publish == 'true' && steps.update.outputs.name != '' && steps.upload.outcome == 'success'
       continue-on-error: true
       shell: bash
       env:
         CMD: ${{ inputs.command || 'otel-html' }}
         NAME: ${{ steps.update.outputs.name }}
         WORKFLOW: ${{ inputs.deployer-workflow }}
+        COLLECT_PATH: ${{ inputs.path }}
         GITHUB_TOKEN: ${{ inputs.token }}
       run: |
         # Neither command fails the job. CMD is deliberately unquoted: it may be a command with arguments.
         # shellcheck disable=SC2086
-        $CMD ci update done --name "$NAME" --log .otel-html/publish/pusher.log
+        $CMD ci update done --name "$NAME" --log "${COLLECT_PATH%/}/publish/pusher.log"
         # shellcheck disable=SC2086
         $CMD ci dispatch --workflow "$WORKFLOW"
     # Last, and after steps that cannot fail the job, so the job's report artifact is always uploaded.
