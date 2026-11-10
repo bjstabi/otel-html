@@ -81,7 +81,7 @@ runs:
       run: |
         # Neither command fails the job. CMD is deliberately unquoted: it may be a command with arguments.
         # shellcheck disable=SC2086
-        $CMD ci update done --name "$NAME" --log "${COLLECT_PATH%/}/publish/pusher.log"
+        $CMD ci update done --name "$NAME" --publish-dir "${COLLECT_PATH%/}/publish" --log "${COLLECT_PATH%/}/publish/pusher.log"
         # shellcheck disable=SC2086
         $CMD ci dispatch --workflow "$WORKFLOW"
     # Last, and after steps that cannot fail the job, so the job's report artifact is always uploaded.

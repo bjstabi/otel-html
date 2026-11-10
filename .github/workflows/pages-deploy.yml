@@ -4,7 +4,7 @@ name: pages-deploy
 # wake this workflow; one pass applies every pending update to the last deployed site and deploys the result.
 #
 # Runs from the default branch's code. Triggers: a dispatch from a job, the end of a ci-report run, and a five-minute
-# tick (best-effort, and the only wake-up for forks and bot branches, which cannot dispatch).
+# tick (best-effort, and the only wake-up for forks and bot branches, which `ci dispatch` does not wake it for).
 #
 # Never re-run it: the artifact API does not say which attempt uploaded an artifact, so a re-run of a run that once
 # deployed could leave state and a site that never went live inside a run that "made the deployment". A dispatch or the
