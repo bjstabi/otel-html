@@ -35,8 +35,9 @@ export interface UpdateJson {
 }
 
 const nonNegInt = z.number().int().nonnegative();
+const posInt = z.number().int().positive();
 
-const UpdatePartitionSchema: z.ZodType<UpdatePartition> = z.strictObject({
+const partitionShape = {
   source: z.string().regex(SOURCE_RE, 'a source like job:7#compact:3'),
   files: z.strictObject({
     spans: z.exactOptional(PartitionFileSchema),
@@ -45,7 +46,15 @@ const UpdatePartitionSchema: z.ZodType<UpdatePartition> = z.strictObject({
     traces: z.exactOptional(PartitionFileSchema),
     patterns: z.exactOptional(PartitionFileSchema),
   }),
+};
+const UpdatePartitionSchema: z.ZodType<UpdatePartition> = z.strictObject({
+  ...partitionShape,
   carried: z.boolean(),
+});
+/** The job's `ci` partition is always carried by the update that lists it. */
+const CiPartitionSchema: z.ZodType<UpdatePartition> = z.strictObject({
+  ...partitionShape,
+  carried: z.literal(true),
 });
 
 const REQUIRED: Record<UpdateKind, readonly (keyof UpdateJson)[]> = {
@@ -61,13 +70,13 @@ export const UpdateJsonSchema: z.ZodType<UpdateJson> = z
     version: z.literal(1),
     kind: z.enum(['push', 'run', 'remove-pr', 'reopen-pr']),
     runId: nonNegInt,
-    runAttempt: nonNegInt,
-    createdAt: z.string(),
+    runAttempt: posInt,
+    createdAt: z.iso.datetime(),
     jobId: z.exactOptional(z.union([nonNegInt, z.string()])),
     jobName: z.exactOptional(z.string()),
-    sequence: z.exactOptional(nonNegInt),
+    sequence: z.exactOptional(posInt),
     partitions: z.exactOptional(z.array(UpdatePartitionSchema)),
-    ci: z.exactOptional(UpdatePartitionSchema),
+    ci: z.exactOptional(CiPartitionSchema),
     pr: z.exactOptional(nonNegInt),
   })
   .superRefine((u, ctx) => {
@@ -106,9 +115,9 @@ export type ParsedName =
   | { kind: 'remove-pr' | 'reopen-pr'; pr: number; runId: number };
 
 const NAME_RES = {
-  push: /^push-(\d+|h[0-9a-f]{12})-(\d+)$/,
-  run: /^run-(\d+)-(\d+)$/,
-  pr: /^(remove-pr|reopen-pr)-(\d+)-(\d+)$/,
+  push: /^push-(0|[1-9]\d*|h[0-9a-f]{12})-(0|[1-9]\d*)$/,
+  run: /^run-(0|[1-9]\d*)-(0|[1-9]\d*)$/,
+  pr: /^(remove-pr|reopen-pr)-(0|[1-9]\d*)-(0|[1-9]\d*)$/,
 };
 
 /** D59: the facts the deployer trusts come from here. */
@@ -139,7 +148,12 @@ export function parseUpdateName(name: string): ParsedName | undefined {
   return undefined;
 }
 
-/** The name's facts and the json's agree (kind, run, attempt, job key from `jobSourceKey(jobId, runAttempt)`, sequence, pr). */
+/**
+ * The name's facts and the json's agree, per kind. `push`: the job key equals `jobSourceKey(jobId, runAttempt)` and the
+ * sequence matches; a push name carries no run id, so run and (for a numeric key) attempt are NOT checked here and the
+ * deployer must compare the push's `runId` with the artifact's `workflow_run.id` itself. `run`: run id and attempt.
+ * `remove-pr`/`reopen-pr`: pr and run id.
+ */
 export function nameMatches(parsed: ParsedName, u: UpdateJson): boolean {
   if (parsed.kind !== u.kind) return false;
   switch (parsed.kind) {
@@ -206,6 +220,14 @@ function carriedFiles(u: UpdateJson): Map<string, PartitionFile> {
   return out;
 }
 
+/** A push lists only its own job's sources: `job:<key>#…` partitions and `ci:<key>`. */
+function checkSources(u: UpdateJson, key: string): void {
+  for (const p of u.partitions ?? [])
+    if (!p.source.startsWith(`job:${key}#`))
+      throw bad(UPDATE_FILE, `a source starting with job:${key}#`, p.source);
+  if (u.ci && u.ci.source !== `ci:${key}`) throw bad(UPDATE_FILE, `the source ci:${key}`, u.ci.source);
+}
+
 /** Reads and validates `<dir>/update.json`, then walks the whole tree: every entry is a plain file or folder (`entryKind`), every file a layout path of the update's kind (Global Constraints), carried partitions' files exist and match `bytes`, the total is at most MAX_UPDATE_BYTES. Failures are `invalid-report` naming the path. */
 export async function readUpdate(fs: FileSystem, dir: string): Promise<UpdateJson> {
   const jsonKind = await fs.entryKind(`${dir}/${UPDATE_FILE}`);
@@ -217,6 +239,7 @@ export async function readUpdate(fs: FileSystem, dir: string): Promise<UpdateJso
     throw bad(UPDATE_FILE, 'JSON');
   }
   const u = parseWith(UpdateJsonSchema, raw, UPDATE_FILE);
+  if (u.kind === 'push' && u.jobId !== undefined) checkSources(u, jobSourceKey(u.jobId, u.runAttempt));
 
   const files: string[] = [];
   await walk(fs, dir, '', files);

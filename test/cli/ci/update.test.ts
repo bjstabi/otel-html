@@ -43,6 +43,12 @@ const push = (over: Partial<UpdateJson> = {}): UpdateJson => ({
   ...over,
 });
 
+const ciPart = (source: string, carried: boolean) => ({
+  source,
+  files: { spans: file('ci/spans.parquet', 4) },
+  carried,
+});
+
 describe('names', () => {
   test('updateName per kind', () => {
     expect(updateName(push())).toBe('otel-html-update-push-7-3');
@@ -113,6 +119,23 @@ describe('UpdateJsonSchema', () => {
   });
 });
 
+describe('stricter fields', () => {
+  const ok = (v: unknown) => UpdateJsonSchema.safeParse(v).success;
+  test('attempt and sequence are at least 1, createdAt is an ISO date-time, ci is carried', () => {
+    expect(ok({ ...base, runAttempt: 0, kind: 'run' })).toBe(false);
+    expect(ok(push({ sequence: 0 }))).toBe(false);
+    expect(ok({ ...base, createdAt: 'yesterday', kind: 'run' })).toBe(false);
+    expect(ok(push({ ci: ciPart('ci:7', false) }))).toBe(false);
+    expect(ok(push({ ci: ciPart('ci:7', true) }))).toBe(true);
+  });
+  test('names reject leading zeros', () => {
+    expect(parseUpdateName('otel-html-update-push-07-3')).toBeUndefined();
+    expect(parseUpdateName('otel-html-update-push-7-03')).toBeUndefined();
+    expect(parseUpdateName('otel-html-update-run-042-1')).toBeUndefined();
+    expect(parseUpdateName('otel-html-update-remove-pr-5-042')).toBeUndefined();
+  });
+});
+
 describe('readUpdate', () => {
   const fs = createNodeFileSystem();
   let dir: string;
@@ -168,6 +191,28 @@ describe('readUpdate', () => {
     );
     put('partitions/0/spans.parquet');
     await expect(readUpdate(fs, dir)).rejects.toThrow(/\.\.\/x\.parquet/);
+  });
+  test('rejects a source of another job', async () => {
+    writeJson(
+      push({
+        partitions: [
+          { source: 'job:9#flush:0', files: { spans: file('partitions/0/spans.parquet', 4) }, carried: true },
+        ],
+      }),
+    );
+    put('partitions/0/spans.parquet');
+    await expect(readUpdate(fs, dir)).rejects.toThrow(/job:9#flush:0/);
+  });
+  test('rejects a ci source of another job', async () => {
+    writeJson(push({ ci: ciPart('ci:9', true) }));
+    put('partitions/0/spans.parquet');
+    put('ci/spans.parquet');
+    await expect(readUpdate(fs, dir)).rejects.toThrow(/ci:9/);
+  });
+  test('rejects a remove-pr folder with an extra file', async () => {
+    writeJson({ ...base, kind: 'remove-pr', pr: 5 });
+    put('extra.txt');
+    await expect(readUpdate(fs, dir)).rejects.toThrow(/extra\.txt/);
   });
   test('rejects a symlink', async (ctx) => {
     valid();
