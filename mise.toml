@@ -554,12 +554,15 @@ perf="${usage_browser}-perf-*"
 # The scale reports only when a selected test is in e2e/scale.spec.ts (the listing is the selected passes' projects); a listing
 # that fails builds them too, and the passes below report its error. --skip-deps: dist/ is already built (and in CI it
 # must not be rebuilt under the job shell).
-case "$usage_pass" in
-  main) list_projects=(--project "${usage_browser}-file" --project "$http") ;;
-  perf) list_projects=(--project "$perf") ;;
-  *) list_projects=(--project "${usage_browser}-file" --project "$http" --project "$perf") ;;
-esac
-if ! listed=$(pnpm exec playwright test "$@" "${list_projects[@]}" --list 2>&1) || grep -qF 'scale.spec.ts' <<<"$listed"; then
+# Whether the browser has a perf project at all, asked without "$@" so a --reporter or --shard cannot change the answer.
+has_perf=0
+if [ "$usage_pass" != main ] && pnpm exec playwright test --project "$perf" --list >/dev/null 2>&1; then has_perf=1; fi
+list_projects=()
+[ "$usage_pass" = perf ] || list_projects+=(--project "${usage_browser}-file" --project "$http")
+[ "$has_perf" = 0 ] || list_projects+=(--project "$perf")
+if [ -z "${list_projects[*]}" ]; then
+  echo "test:e2e: the selection does not need the scale reports"
+elif ! listed=$(pnpm exec playwright test "$@" "${list_projects[@]}" --list 2>&1) || grep -qF 'scale.spec.ts' <<<"$listed"; then
   echo "test:e2e: the selection needs the scale reports (e2e:fixtures:scale)"
   mise run --skip-deps e2e:fixtures:scale:data && mise run --skip-deps e2e:fixtures:scale || exit 1
 else
@@ -569,12 +572,9 @@ fi
 if [ "$usage_pass" != perf ]; then
   pnpm exec playwright test "$@" --project "${usage_browser}-file" --project "$http" --grep-invert @perf || rc=1
 fi
-# Whether the browser has a perf project at all, asked without "$@" so a --reporter or --shard cannot change the answer.
-if [ "$usage_pass" = main ]; then
-  :
-elif pnpm exec playwright test --project "$perf" --list >/dev/null 2>&1; then
+if [ "$has_perf" = 1 ]; then
   pnpm exec playwright test "$@" --project "$perf" --workers=1 --pass-with-no-tests --output test-results/perf || rc=1
-else
+elif [ "$usage_pass" != main ]; then
   echo "test:e2e: no perf pass for ${usage_browser} (only Chromium has one)"
 fi
 exit $rc
