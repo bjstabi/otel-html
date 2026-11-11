@@ -116,7 +116,9 @@ change in any PR (a need for one is a stop).
   `src/viewer/data/residual.ts`, `src/host/node-duckdb.ts`, `src/writer/session.ts`,
   `src/writer/partition-session.ts`, `src/writer/compaction.ts`, `src/writer/merge.ts`. `mise.toml`: a new task
   `predict:queries`; `test-support/scaling/**` and `test/scaling/**` added to the `sources` of the unit-test tasks if
-  their globs do not already cover them; possibly a new cached task `test:scaling` (decision 2). `src/model/gen/` or
+  their globs do not already cover them; possibly a new cached task `test:scaling` (decision 2). Task 6a (the maintainer's
+  decision of 2026-11-11): one step `- run: mise run test:scaling` in the `check` job of `.github/workflows/ci.yml`,
+  nothing else under `.github/`. `src/model/gen/` or
   other generated files only as `mise run gen` rewrites them.
 - **PR 2** — nothing under `src/`. No build file.
 - **PR 3** — `src/viewer/data/query-engine.ts`, `src/viewer/data/mosaic.ts`, `src/viewer/data/duckdb-source.ts`,
@@ -646,6 +648,40 @@ test.each(['#/dashboards/ci', '#/traces?mode=traces', '#/traces', '#/logs', '#/m
       and of `#/traces?mode=traces`. These rows are what §9's 20 % rule compares against from PR 3 on.
 - [ ] **Step 7: Commit, then open PR 1.** `test(query): predicted requests for named report shapes`. PR body: the
       calibration table, the class table, the debt list with its issues, the expectation table, the `check` timing.
+
+### Task 6a: The measurement runs in parallel and in CI
+
+Added 2026-11-11 by the maintainer's decision during session B: the scaling measurement (`test:scaling`, 274 s
+locally on one vitest worker) must run in CI, with no new job (CI already peaks at 19 of 20 concurrent jobs) and
+without adding minutes to the pipeline's wall time (≈ 5 min on a pull request).
+
+**Files:**
+
+- Modify: `test-support/scaling/counting-engine.ts` (a spare worker), `test-support/scaling/measure.ts`,
+  `test/scaling/classes.test.ts` (split), `mise.toml` (`test:scaling`'s `run` and `description`),
+  `.github/workflows/ci.yml` (one step in the `check` job, nothing else)
+- Create: one test file per axis and spacing under `test/scaling/` (e.g. `classes-retention-dense.test.ts`), or the
+  equivalent split the implementer finds; the cheap declared-rules tests stay in one file in `test:unit:main`
+
+- [ ] **Step 1: Measure the starting point.** `MISE_TASK_CACHE=off mise run test:scaling` wall time, and the share
+      spent in `cold()` (the Task 5 report: 493 ms × 449 calls).
+- [ ] **Step 2: A spare worker.** `cold()` swaps in a worker started in the background after the previous swap
+      (views created, port wired), then starts the next spare; the events of the old worker are drained before the
+      swap as today. A test: two `cold()` calls in a row each give a statement that reads every footer again, and
+      `close()` terminates the spare too.
+- [ ] **Step 3: Shapes in parallel.** Split the measured describe so vitest runs independent files in parallel
+      workers: one file per axis and spacing (each measures its three step shapes; `BASE` is measured in more than one
+      file, which is accepted). Every catalogue entry and applicable axis is still asserted exactly once; a test in
+      the cheap file checks that the files' (entry, axis) pairs cover `DECLARED` exactly. `predict:queries` still gets
+      its measurements (`OTEL_HTML_SCALING_OUT`), including `CROSS`.
+- [ ] **Step 4: Measure again** with the same command; the target is ≤ 90 s locally. Print, never assert. Above
+      120 s: stop and report the numbers before Step 5.
+- [ ] **Step 5: CI.** In `.github/workflows/ci.yml`'s `check` job, one step `- run: mise run test:scaling` after
+      `- run: mise run check:static`, with a one-line comment saying what it runs. No other workflow change.
+      Update `test:scaling`'s `description` (the time, that CI's `check` job runs it) and AGENTS.md's loop row if
+      the cost it states changed; `mise run gen`.
+- [ ] **Step 6: Commit.** `test(query): the scaling measurement runs its shapes in parallel and in CI`. The PR body
+      carries the before and after wall times, locally and of the `check` job on the PR's CI run.
 
 ## PR 2: test spans keep real times
 
