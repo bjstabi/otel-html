@@ -14,6 +14,7 @@ import {
 import { runDispatch } from '../ci/dispatch.js';
 import { envVar, messageOf, say } from '../ci/github-api.js';
 import { runLink } from '../ci/link-main.js';
+import { runPusherCommand } from '../ci/pusher-main.js';
 import { runReport } from '../ci/report-main.js';
 import { runUpdateDone, runUpdatePr, runUpdatePush, runUpdateRun } from '../ci/update-main.js';
 import { runUpload } from '../ci/upload-main.js';
@@ -278,6 +279,39 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
         say(io, `::warning::otel-html update done: ${messageOf(e)}`);
       }
     });
+  ci.command('pusher')
+    .description(
+      "start the pusher: it detaches, then uploads the job's new report partitions every --every until `ci update push --final` stops it",
+    )
+    .requiredOption('--report <dir>', "the job's report folder")
+    .requiredOption(
+      '--every <duration>',
+      'time between ticks: 60s, 2m, 500ms (the loop never ticks faster than 1000ms)',
+    )
+    .option('--config <file>', 'config file for the CI spans report')
+    .option('--deployer-workflow <file>', 'the deployer workflow file to wake', 'pages-deploy.yml')
+    .option('--detached', 'INTERNAL: run the loop in this process instead of re-spawning')
+    .action(
+      async (flags: {
+        report: string;
+        every: string;
+        config?: string;
+        deployerWorkflow: string;
+        detached?: boolean;
+      }) => {
+        await runPusherCommand(
+          {
+            report: flags.report,
+            every: flags.every,
+            deployerWorkflow: flags.deployerWorkflow,
+            detached: flags.detached === true,
+            ...(flags.config === undefined ? {} : { config: flags.config }),
+          },
+          io,
+          await resolveDeps(deps),
+        );
+      },
+    );
   ci.command('upload')
     .description(
       'upload a folder as a workflow run artifact (needs the runtime variables of a JavaScript action)',
