@@ -462,11 +462,80 @@ Run: `pnpm exec vitest run test/e2e-support` → PASS. Do not run the metrics-sc
 
 `test(e2e): the metrics scale report is written inside a span of the job's trace`
 
+### Task 6: The share cell does not read a large trace
+
+Added on 2026-11-11 after the first whole-dashboard measurement of Tasks 1 to 4 (the spec's cause 5): with the Runs
+list scoped to the CI runs, its visible rows are traces of 97,000 to 145,000 spans, and each row's "Latency by
+service" cell loads its whole trace.
+
+**Files:**
+- Modify: `src/viewer/traces/columns.tsx` (the `ServiceShare` cell and the `share` column of `TRACE_COLUMNS_UI`)
+- Modify: `README.md` (the Limits section)
+- Test: `test/viewer/results-table.test.tsx` (the `the trace table service share cell` describe)
+
+**Interfaces:**
+- Produces: `export const SERVICE_SHARE_SPAN_CAP = 10_000` in `src/viewer/traces/columns.tsx`. The cell takes the
+  row's span count; for a row with `spans > SERVICE_SHARE_SPAN_CAP` it never calls the loader and draws the column's
+  dash with the title below. `DataSource.serviceShare` and its signature do not change.
+
+- [ ] **Step 1: Write the failing tests**
+
+In the existing describe, beside the two tests there (`t` is its trace row of 4 spans):
+
+```ts
+test('a trace over the span cap is not loaded and the cell says why', async () => {
+  const serviceShare = vi.fn(() => Promise.resolve([{ service: 'web', ns: 70 }]));
+  mount({ rows: [{ ...t, spans: SERVICE_SHARE_SPAN_CAP + 1 }], columns: TRACE_COLUMNS_UI, serviceShare });
+  const cell = await screen.findByTitle(
+    'Not computed for a trace of more than 10,000 spans: it reads every span of the trace',
+  );
+  expect(cell.textContent).toBe('-');
+  await new Promise((r) => setTimeout(r, 0));
+  expect(serviceShare).not.toHaveBeenCalled();
+  expect(screen.queryByText('...')).toBeNull();
+});
+
+test('a trace at the span cap is loaded', async () => {
+  const serviceShare = vi.fn(() => Promise.resolve([{ service: 'web', ns: 70 }]));
+  mount({ rows: [{ ...t, spans: SERVICE_SHARE_SPAN_CAP }], columns: TRACE_COLUMNS_UI, serviceShare });
+  expect(await screen.findByRole('img', { name: 'web 70 ns' })).toBeTruthy();
+  expect(serviceShare).toHaveBeenCalledWith('aa', expect.any(AbortSignal));
+});
+```
+
+- [ ] **Step 2: Run them and see the first fail**
+
+Run: `pnpm exec vitest run test/viewer/results-table.test.tsx`
+Expected: FAIL (`SERVICE_SHARE_SPAN_CAP` is not exported; once it is, the loader is called for the large trace).
+
+- [ ] **Step 3: Implement**
+
+`ServiceShare` gets a `spans: number` prop. Over the cap it passes a `null` key to `useKeyedAsync` (which then loads
+nothing) and returns a muted `-` whose `title` is built from the constant (`toLocaleString('en-US')`), so the text
+and the cap cannot drift apart. The `share` column passes `r.spans`. No change to the data source, the explorer or
+the traces widget: both tables use this column.
+
+- [ ] **Step 4: Run the tests**
+
+Run: `pnpm exec vitest run test/viewer/results-table.test.tsx test/viewer/dashboard-traces.test.tsx test/viewer/explorer.test.tsx`
+Expected: PASS.
+
+- [ ] **Step 5: README**
+
+In `## Limits`, after the bullet that begins "Results are never partial", add:
+
+`- The trace list's "Latency by service" bar is drawn for traces of at most 10,000 spans. Computing it reads every span of the trace, so a larger trace shows a dash there; its other columns are exact.`
+
+- [ ] **Step 6: Check and commit**
+
+Run: `mise run check`, then `mise run test:e2e:chromium -- e2e/dashboards.spec.ts`
+Commit: `fix(viewer): the trace list does not read a large trace to draw its service share`
+
 ---
 
 ## Coordinator, after the tasks
 
 1. Measure the dashboard on the local mirror of the live report with the branch's viewer and the scoped Runs condition (settle time, Parquet requests, Parquet MB, worker statements); the expectation is in the spec. Worse than that: stop and ask.
 2. `mise run verify`.
-3. Open the two follow-up issues the spec names.
-4. Branch review on the review model; fix what blocks; PR with `Fixes #270`, the measurements, the **Also** list (Task 5, and the note that the publish action's config copy changed with the maintainer's approval); merge when CI is green.
+3. Open the three follow-up issues the spec names.
+4. Branch review on the review model; fix what blocks; PR with `Fixes #270`, the measurements, the span cap of Task 6 as a decision, the **Also** list (Task 5, and the note that the publish action's config copy changed with the maintainer's approval); merge when CI is green.

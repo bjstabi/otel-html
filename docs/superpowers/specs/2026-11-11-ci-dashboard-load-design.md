@@ -14,6 +14,7 @@ below are cold, isolated statements in the page's own DuckDB worker on the local
 | 2 | The timeline widget's span statement computes `quantile_cont(duration_ns)` and `max(duration_ns)` per bucket; the widget draws only the counts by status. | 44.9 MB, 418 requests, 1.0 s | A `buckets` need that leaves the latency columns out. | 24.4 MB, 295 requests, 0.64 s |
 | 3 | Steps and Slowest steps read one full span row (every column, `limit 1`) only to learn the match count for their subtitle. | 15.1 MB, 103 requests, 0.30 s | A `total` need: one `count(*)`. | 3.8 MB, 77 requests, 0.18 s |
 | 4 | The Runs condition is a top-level `or`, so no term can prune: `attributes`, `parent_span_id` (and `span_id` by read-ahead) are read for all spans. | 66.1 MB, 397 requests, 3.2 s | Prefix `instrumentation_scope.name == "otel-html-ci" and`: in every partition the CI spans sit in one row group, and the row groups that hold only test spans are skipped by their `scope_name` statistics. | 7.8 MB, 151 requests, 0.32 s |
+| 5 | Found by the first whole-dashboard measurement of fixes 1 to 4. Each visible row of a trace list loads its whole trace, every column, to draw "Latency by service". Before fix 4 the Runs list showed orphan test traces of one span; scoped to the CI runs, six of its visible rows are traces of 97,000 to 145,000 spans, spread over nearly every row group of their partition. | 73.3 MB, 199 requests and 2.9 s of worker time for six rows (the dashboard as a whole: 116.5 MB, 926 requests, 6.4 to 10.4 s) | The cell does not load a trace of more than 10,000 spans and says so in its title. | 0 |
 
 The optimizer note behind fix 1: with DuckDB-WASM 1.32 an outer `WHERE value IS NOT NULL AND kind IN (...)` is pushed
 below a per-table `SELECT DISTINCT resource_attributes` (and into a `MATERIALIZED` CTE), which puts the JSON extraction
@@ -49,6 +50,12 @@ stays as it is.
 - Scope: viewer fixes only; the Runs condition is scoped in `.github/otel-html-ci.yaml` and in the publish action's
   copy (`.github/actions/otel-html-publish/otel-html-ci.yaml`, approved explicitly), and the orphan test spans are
   fixed in the same PR.
+- Coordinator's decision on cause 5 (2026-11-11, under the unattended process; the maintainer was not asked): the
+  span cap. This report's traces are either under 1,200 spans or over 97,000 (28 of 8,625 are over 5,000), and a row
+  group holds 50,000 spans, so 10,000 separates the two without touching ordinary traces. Narrowing the read to the
+  five columns the computation needs was measured from the column attribution and would still read about 70 % of
+  the bytes (the ids and times of every span). Follow-up issue: the writer can store the per-trace share in
+  `traces.parquet`, which gives large traces their bar back without a read.
 - Follow-up issues, not this PR: the test-span volume of the rolling report and its default window (the unfiltered
   span timeline still reads about 24 MB to count 3 M spans, 96 % of them vitest's; a window can prune spans files
   only by `timeMin`, there is no end-time statistic); the `null` `resource:cicd.pipeline.*` statistics on merged
