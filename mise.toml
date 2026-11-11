@@ -253,6 +253,19 @@ cache = { enabled = true, env = ["CI", "OTEL_HTML_LOAD", "OTEL_HTML_BINARY"] }
 env = { OTEL_HTML_PERF_PASS = "0" }
 run = "pnpm exec vitest run"
 
+[tasks."test:scaling"]
+description = """The scaling measurement: every catalogue entry cold on 14 generated reports, classified and compared with the declared classes
+Builds the reports of test-support/scaling/generator.ts (retention, density and window at 2, 4 and 8, dense and sparse),
+runs each entry of src/viewer/data/catalogue.ts cold through the counting engine and asserts the class it declares
+(test/scaling/classes.test.ts). About 4.5 minutes on a quiet machine; cached by the content of its inputs, so an unchanged
+tree replays it. `check` depends on it; the unit tasks skip the measurement (OTEL_HTML_SCALING unset).
+OTEL_HTML_SCALING_PRINT=1 prints the entry x axis x class table to stderr (only on an uncached run)."""
+sources = ["@group:deps", "@group:node", "@group:viewer"]
+outputs = []
+cache = { enabled = true, env = ["CI"] }
+env = { OTEL_HTML_SCALING = "1", OTEL_HTML_PERF_PASS = "0" }
+run = "pnpm exec vitest run test/scaling/classes.test.ts"
+
 # Env vars go in `env`, not a `VAR=1 cmd` prefix: Windows cmd (the unit-os CI job) can't run that.
 [tasks."test:unit:perf"]
 description = "The @perf unit tests alone, one file at a time (never cached: timing); args after `--` go to vitest: `-- --shard=1/2` splits the files by the seconds in test-support/shard-weights.json"
@@ -345,13 +358,13 @@ depends = ["lint", "typecheck", "knip"]
 
 # The `@perf` unit tests run after the parallel steps finish, not alongside them.
 [tasks.check]
-description = """Fast gate: lint, typecheck, unit tests, knip
-Results of lint, typecheck, knip and the parallel unit pass are cached by the content of their inputs, so a second run
+description = """Fast gate: lint, typecheck, unit tests, knip, the scaling measurement
+Results of lint, typecheck, knip, the parallel unit pass and the scaling measurement (about 4.5 minutes when it runs) are cached by the content of their inputs, so a second run
 with nothing changed skips them. The unit tests with a time budget (named @perf) always run afterwards, alone and one
 file at a time; OTEL_HTML_PERF_FACTOR scales their budgets on a slow machine and, when OTEL_HTML_PERF_REFERENCE_MS is
 set (CI sets 100), so does how much slower than that reference a fixed CPU workload runs here (never below 1; the perf
 pass logs one `PERF calibration:` line)."""
-depends = ["check:static", "test:unit:main"]
+depends = ["check:static", "test:unit:main", "test:scaling"]
 run = { task = "test:unit:perf" }
 
 [tasks.verify]

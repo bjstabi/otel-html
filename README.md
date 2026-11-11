@@ -851,12 +851,12 @@ Build the viewer and the DuckDB engine files into dist/viewer (skipped while up 
 
 ## `check`
 
-- Depends: check:static, test:unit:main
+- Depends: check:static, test:unit:main, test:scaling
 
 - **Usage:** `check`
 
-Fast gate: lint, typecheck, unit tests, knip
-Results of lint, typecheck, knip and the parallel unit pass are cached by the content of their inputs, so a second run
+Fast gate: lint, typecheck, unit tests, knip, the scaling measurement
+Results of lint, typecheck, knip, the parallel unit pass and the scaling measurement (about 4.5 minutes when it runs) are cached by the content of their inputs, so a second run
 with nothing changed skips them. The unit tests with a time budget (named @perf) always run afterwards, alone and one
 file at a time; OTEL_HTML_PERF_FACTOR scales their budgets on a slow machine and, when OTEL_HTML_PERF_REFERENCE_MS is
 set (CI sets 100), so does how much slower than that reference a fixed CPU workload runs here (never below 1; the perf
@@ -1066,6 +1066,17 @@ the Traces and Logs landings with e2e/load.spec.ts.
 
 ### Arguments
 - **`[args]…`**
+
+## `test:scaling`
+
+- **Usage:** `test:scaling`
+
+The scaling measurement: every catalogue entry cold on 14 generated reports, classified and compared with the declared classes
+Builds the reports of test-support/scaling/generator.ts (retention, density and window at 2, 4 and 8, dense and sparse),
+runs each entry of src/viewer/data/catalogue.ts cold through the counting engine and asserts the class it declares
+(test/scaling/classes.test.ts). About 4.5 minutes on a quiet machine; cached by the content of its inputs, so an unchanged
+tree replays it. `check` depends on it; the unit tasks skip the measurement (OTEL_HTML_SCALING unset).
+OTEL_HTML_SCALING_PRINT=1 prints the entry x axis x class table to stderr (only on an uncached run).
 
 ## `test:unit`
 
