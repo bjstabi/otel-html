@@ -49,3 +49,50 @@ about half the perf files.
 
 `mise run verify`, branch review on Opus 5.5, `gh pr create`, wait for CI, record the job durations in the PR body,
 merge on green.
+
+---
+
+# PR 2: balanced shards
+
+| PR | branch              | title                                          |
+| -- | ------------------- | ---------------------------------------------- |
+| 2  | `ci/balance-shards` | `ci: balance the test shards by recorded duration` |
+
+Spec: "Follow-up: balanced shards" in the design. Measurement for the PR body: shard 1 / shard 2 step times from the
+PR's CI run, against PR #278's run 43058191413.
+
+## Task 4: weighted partition, weights table, vitest sequencer
+
+1. `test-support/shard.ts`: `partition(items: {key, weight}[], count): string[][]`, which sorts by weight descending
+   then key ascending and assigns each item to the lightest bin (lowest index on a tie). It is deterministic and every
+   key lands in exactly one bin. Also `shardOf(keys, weights, index, count)`: a key missing from `weights` weighs their
+   median (1 when the table is empty). Parse `"i/n"` with an `OtelHtmlError`-style typed error on bad input (follow
+   what test-support already does for errors). TDD in `test/test-support/shard.test.ts`.
+2. `test-support/shard-weights.json`: `{ "unit": {file: s}, "unit-perf": {file: s}, "e2e": { "chromium": {file: s},
+   "firefox": {…}, "webkit": {…} } }`. Files are repo-relative for unit (`test/…`) and spec basenames for e2e
+   (`cross-link.spec.ts`). Seconds, with one decimal.
+3. A vitest sequencer (for example `test-support/shard-sequencer.ts`) extends `BaseSequencer` from `vitest/node`,
+   overrides `shard()` with `shardOf` (the `unit-perf` table under `OTEL_HTML_PERF_PASS=1`, `unit` otherwise), and
+   keeps `sort()`. Wire it in `vitest.config.ts` (`test.sequence.sequencer`). Check that test:unit:main and
+   test:unit:perf list the weights file among their sources (add it if not).
+4. `scripts/shard-weights.ts` and a mise task `shard-weights`. It runs the unit main pass and the perf pass with the
+   json reporter, then `playwright test --project <b>-file --project <b>-http* --grep-invert @perf --reporter=json` per
+   browser after `e2e:fixtures`, and writes the table: per file, the vitest file duration, or the sum of the
+   Playwright test durations. Pick the vitest field that best predicts wall time (including import and environment
+   if the report has them) and say which in the code. Then run it to produce the committed table. Describe the task;
+   `mise run gen`.
+5. Verify: `vitest list --filesOnly --shard=1/2` and `2/2` have no overlap, and their union is the unsharded list (main
+   and perf passes). Print each shard's weight sum.
+
+## Task 5: Playwright main-pass shards, `test:e2e --shard`, ci.yml
+
+1. `playwright.config.ts`: when `OTEL_HTML_E2E_SHARD=i/n` is set, the `-file` and `-http` projects of each browser get
+   `testMatch` set to the shard's files. Partition with `shardOf` over that browser's candidate spec files (every
+   `e2e/*.spec.ts` minus that browser's `testIgnore`) and the `e2e.<browser>` weights. Perf projects are untouched.
+   Without the env var the config behaves exactly as today.
+2. `test:e2e`: `flag "--shard <shard>"` (empty default). The main pass and its scale listing run with
+   `OTEL_HTML_E2E_SHARD` set to it; the perf pass and its listing get `--shard=<value>` appended. Update the task
+   description; `mise run gen`.
+3. `ci.yml`: e2e uses `--pass main --shard ${{ matrix.shard }}/2`, and e2e-perf uses `--pass perf --shard ${{ matrix.shard }}/2`.
+4. Verify: for each browser, the `--list` of shard 1 plus shard 2 equals the unsharded `--list` with no overlap (main
+   pass), and print each shard's predicted weight. `mise run verify`.
