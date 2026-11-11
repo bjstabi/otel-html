@@ -851,7 +851,7 @@ Build the viewer and the DuckDB engine files into dist/viewer (skipped while up 
 
 ## `check`
 
-- Depends: lint, typecheck, test:unit:main, knip
+- Depends: check:static, test:unit:main
 
 - **Usage:** `check`
 
@@ -869,6 +869,14 @@ pass logs one `PERF calibration:` line).
 - **Usage:** `check:package`
 
 publint and are-the-types-wrong on the packed package
+
+## `check:static`
+
+- Depends: lint, typecheck, knip
+
+- **Usage:** `check:static`
+
+lint, typecheck and knip (the part of `check` without tests)
 
 ## `coverage`
 
@@ -969,9 +977,10 @@ Install dependencies and git hooks
 ## `test:e2e`
 
 Playwright over the fixture reports, per browser (--browser chromium|firefox|webkit, default all)
-Two passes: the `<browser>-file` and `<browser>-http` projects in parallel (`-http` runs only specs tagged HTTP), then the
+Two passes (`--pass main|perf|all`, default all; CI shards them): the `<browser>-file` and `<browser>-http` projects in parallel (`-http` runs only specs tagged HTTP), then the
 `<browser>-perf-file` and `<browser>-perf-http` projects (@perf tests) alone with one worker. Only Chromium has `-http` and the perf projects, and
-Firefox and WebKit leave out e2e/scale.spec.ts (playwright.config.ts). Both passes run; the task fails if either does.
+Firefox and WebKit leave out e2e/scale.spec.ts (playwright.config.ts). Both passes run unless `--pass main` or `--pass perf` selects one; the task fails if a pass does.
+Sharding: Playwright args after `--` reach both passes, so `mise run test:e2e --browser chromium --pass main -- --shard=1/2` runs half of the main pass.
 The perf pass is skipped for a browser without a `-perf-file` project. The perf pass writes its artifacts to test-results/perf, so it does not clear the first pass's failures. Playwright args after `--` go to both passes (`mise run test:e2e --browser chromium -- e2e/scale.spec.ts`);
 narrow the browsers with `--browser`, not `--project`, which would add to the two passes' own projects.
 The scale reports (e2e:fixtures:scale, ~15 s cold, ~35 s on CI) are built only when the selection includes e2e/scale.spec.ts, decided
@@ -989,7 +998,7 @@ A run whose inputs match a cached success is replayed. `MISE_TASK_CACHE=off` re-
 
 - Depends: e2e:fixtures
 
-- **Usage:** `test:e2e [--browser <browser>] [args]…`
+- **Usage:** `test:e2e [--browser <browser>] [--pass <pass>] [args]…`
 
 ### Arguments
 - **`[args]…`**
@@ -998,6 +1007,9 @@ A run whose inputs match a cached success is replayed. `MISE_TASK_CACHE=off` re-
 - **`--browser <browser>`**
 
   **Default:** `*`
+- **`--pass <pass>`**
+
+  **Default:** `all`
 
 ## `test:e2e:chromium`
 
@@ -1058,13 +1070,13 @@ Unit tests whose import graph reaches a file changed since `ref` (default main)
 
 - **Usage:** `test:unit:main`
 
-vitest, everything but @perf, in parallel
+vitest, everything but @perf, in parallel (args after `--` go to vitest: `-- --shard=1/2`)
 
 ## `test:unit:perf`
 
 - **Usage:** `test:unit:perf`
 
-The @perf unit tests alone, one file at a time (never cached: timing)
+The @perf unit tests alone, one file at a time (never cached: timing); args after `--` go to vitest: `-- --shard=1/2`
 
 ## `typecheck`
 

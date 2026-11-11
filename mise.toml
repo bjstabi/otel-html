@@ -230,7 +230,7 @@ description = "Unit tests: the parallel pass, then the @perf pass"
 run = [{ task = "test:unit:main" }, { task = "test:unit:perf" }]
 
 [tasks."test:unit:main"]
-description = "vitest, everything but @perf, in parallel"
+description = "vitest, everything but @perf, in parallel (args after `--` go to vitest: `-- --shard=1/2`)"
 # Beyond the code: what tests read from disk (fixtures/reports, the committed JSON schema, the shipped CI dashboard
 # config, .github/actions scripts, scripts/load-receiver-plan, the e2e helpers they import (e2e/*.ts and e2e/otel-page/,
 # not e2e/**, which would walk the generated dot directories), tsconfig.base.json). dist/ is read only under
@@ -255,7 +255,7 @@ run = "pnpm exec vitest run"
 
 # Env vars go in `env`, not a `VAR=1 cmd` prefix: Windows cmd (the unit-os CI job) can't run that.
 [tasks."test:unit:perf"]
-description = "The @perf unit tests alone, one file at a time (never cached: timing)"
+description = "The @perf unit tests alone, one file at a time (never cached: timing); args after `--` go to vitest: `-- --shard=1/2`"
 env = { OTEL_HTML_PERF_PASS = "1" }
 run = "pnpm exec vitest run"
 
@@ -339,6 +339,10 @@ run = [
 description = "Regenerate with --force and fail if git sees a difference (never cached)"
 run = "bash scripts/gen-check.sh"
 
+[tasks."check:static"]
+description = "lint, typecheck and knip (the part of `check` without tests)"
+depends = ["lint", "typecheck", "knip"]
+
 # The `@perf` unit tests run after the parallel steps finish, not alongside them.
 [tasks.check]
 description = """Fast gate: lint, typecheck, unit tests, knip
@@ -347,7 +351,7 @@ with nothing changed skips them. The unit tests with a time budget (named @perf)
 file at a time; OTEL_HTML_PERF_FACTOR scales their budgets on a slow machine and, when OTEL_HTML_PERF_REFERENCE_MS is
 set (CI sets 100), so does how much slower than that reference a fixed CPU workload runs here (never below 1; the perf
 pass logs one `PERF calibration:` line)."""
-depends = ["lint", "typecheck", "test:unit:main", "knip"]
+depends = ["check:static", "test:unit:main"]
 run = { task = "test:unit:perf" }
 
 [tasks.verify]
@@ -488,9 +492,10 @@ run = "node dist/cli/main.js upgrade e2e/.reports-scale/scale && node dist/cli/m
 # `OTEL_HTML_METRICS_SCALE=1 mise run test:e2e:chromium -- e2e/scale.spec.ts`.
 [tasks."test:e2e"]
 description = """Playwright over the fixture reports, per browser (--browser chromium|firefox|webkit, default all)
-Two passes: the `<browser>-file` and `<browser>-http` projects in parallel (`-http` runs only specs tagged HTTP), then the
+Two passes (`--pass main|perf|all`, default all; CI shards them): the `<browser>-file` and `<browser>-http` projects in parallel (`-http` runs only specs tagged HTTP), then the
 `<browser>-perf-file` and `<browser>-perf-http` projects (@perf tests) alone with one worker. Only Chromium has `-http` and the perf projects, and
-Firefox and WebKit leave out e2e/scale.spec.ts (playwright.config.ts). Both passes run; the task fails if either does.
+Firefox and WebKit leave out e2e/scale.spec.ts (playwright.config.ts). Both passes run unless `--pass main` or `--pass perf` selects one; the task fails if a pass does.
+Sharding: Playwright args after `--` reach both passes, so `mise run test:e2e --browser chromium --pass main -- --shard=1/2` runs half of the main pass.
 The perf pass is skipped for a browser without a `-perf-file` project. The perf pass writes its artifacts to test-results/perf, so it does not clear the first pass's failures. Playwright args after `--` go to both passes (`mise run test:e2e --browser chromium -- e2e/scale.spec.ts`);
 narrow the browsers with `--browser`, not `--project`, which would add to the two passes' own projects.
 The scale reports (e2e:fixtures:scale, ~15 s cold, ~35 s on CI) are built only when the selection includes e2e/scale.spec.ts, decided
@@ -506,7 +511,7 @@ A run whose inputs match a cached success is replayed. `MISE_TASK_CACHE=off` re-
 `test:e2e:chromium`; `--force` reaches only the task it is given to, so it works on `test:e2e` and not on the wrapper."""
 shell = "bash -c"
 depends = ["e2e:fixtures"]
-# The key also holds the task's args (--browser, specs after `--`) and the resolved tool versions. The workflow file is a
+# The key also holds the task's args (--browser, --pass, specs and --shard after `--`) and the resolved tool versions. The workflow file is a
 # source because it names the Playwright image the browsers come from. OTEL_HTML_METRICS_SCALE changes which tests run.
 sources = [
   "@group:deps",
@@ -532,30 +537,46 @@ cache = { enabled = true, env = [
 ] }
 usage = '''
 flag "--browser <browser>" default="*"
+flag "--pass <pass>" default="all"
 arg "[args]" var=#true
 '''
 run = """
 eval "set -- $usage_args"
 rc=0
+case "$usage_pass" in
+  main | perf | all) ;;
+  *) echo "test:e2e: --pass must be main, perf or all (got '$usage_pass')" >&2; exit 2 ;;
+esac
 # Only Chromium has `-http` and `-perf-file`/`-perf-http` projects; Playwright refuses a --project that matches none, but not a
 # wildcard beside one that matches, hence the trailing `*`.
 http="${usage_browser}-http*"
 perf="${usage_browser}-perf-*"
-# The scale reports only when a selected test is in e2e/scale.spec.ts (the listing is both passes' projects); a listing
-# that fails builds them too, and the passes below report its error. --skip-deps: dist/ is already built (and in CI it
-# must not be rebuilt under the job shell).
-if ! listed=$(pnpm exec playwright test "$@" --project "${usage_browser}-file" --project "$http" --project "$perf" --list 2>&1) || grep -qF 'scale.spec.ts' <<<"$listed"; then
+# Only Chromium has perf projects; decided by name, so a perf listing that fails for another reason (a spec that does
+# not load) fails the perf pass below instead of skipping it.
+case "$usage_browser" in chromium | '*') has_perf=1 ;; *) has_perf=0 ;; esac
+[ "$usage_pass" != main ] || has_perf=0
+# The scale reports only when a selected test is in e2e/scale.spec.ts. Each pass is listed on its own, with the args, as
+# it runs, so a --shard selects the same tests in the listing as in the pass; a listing that fails builds them too, and
+# the passes below report its error. --skip-deps: dist/ is already built (and in CI it must not be rebuilt under the job shell).
+needs_scale() {
+  local listed
+  listed=$(pnpm exec playwright test "$@" --list 2>&1) || return 0
+  grep -qF 'scale.spec.ts' <<<"$listed"
+}
+if { [ "$usage_pass" != perf ] && needs_scale "$@" --project "${usage_browser}-file" --project "$http" --grep-invert @perf; } ||
+  { [ "$has_perf" = 1 ] && needs_scale "$@" --project "$perf"; }; then
   echo "test:e2e: the selection needs the scale reports (e2e:fixtures:scale)"
   mise run --skip-deps e2e:fixtures:scale:data && mise run --skip-deps e2e:fixtures:scale || exit 1
 else
   echo "test:e2e: the selection does not need the scale reports"
 fi
 [ -n "$OTEL_HTML_SKIP_BROWSER_INSTALL" ] || pnpm exec playwright install chromium firefox webkit
-pnpm exec playwright test "$@" --project "${usage_browser}-file" --project "$http" --grep-invert @perf || rc=1
-# Whether the browser has a perf project at all, asked without "$@" so a --reporter or --shard cannot change the answer.
-if pnpm exec playwright test --project "$perf" --list >/dev/null 2>&1; then
+if [ "$usage_pass" != perf ]; then
+  pnpm exec playwright test "$@" --project "${usage_browser}-file" --project "$http" --grep-invert @perf || rc=1
+fi
+if [ "$has_perf" = 1 ]; then
   pnpm exec playwright test "$@" --project "$perf" --workers=1 --pass-with-no-tests --output test-results/perf || rc=1
-else
+elif [ "$usage_pass" != main ]; then
   echo "test:e2e: no perf pass for ${usage_browser} (only Chromium has one)"
 fi
 exit $rc
