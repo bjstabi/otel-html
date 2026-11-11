@@ -116,7 +116,8 @@ export async function tick(
           runAttempt,
           ctx,
           config: o.config,
-          scratch: join(kept.dir, 'ci'),
+          // Never the cached report's own folder: a failed refresh must leave the cached report whole.
+          scratch: join(kept.dir, kept.ci?.report?.endsWith('ci-a') === true ? 'ci-b' : 'ci-a'),
           nowMs: now,
         });
         if (ci.report !== undefined) kept.ci = ci;

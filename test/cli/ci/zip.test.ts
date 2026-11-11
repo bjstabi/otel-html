@@ -231,6 +231,9 @@ describe('storedZip', () => {
       'python3',
       [
         '-I',
+        // Python's stdout is the console code page on Windows; UTF-8 mode keeps ü intact (-I ignores PYTHONIOENCODING).
+        '-X',
+        'utf8',
         '-c',
         'import zipfile,sys;z=zipfile.ZipFile(sys.argv[1]);assert z.testzip() is None;print(",".join(z.namelist()))',
         f,
