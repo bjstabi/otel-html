@@ -1,9 +1,10 @@
-import { resolve } from 'node:path';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { MessageChannel, type MessagePort } from 'node:worker_threads';
 import type { Connector } from '@uwdata/mosaic-core';
 import type { ManifestV4 } from '../../src/format/manifest.js';
 import { NODE_FS_PROTOCOL, type NodeDuckDb, openNodeDuckDb } from '../../src/host/node-duckdb.js';
-import { OtelHtmlError } from '../../src/model/errors.js';
 import { viewStatements } from '../../src/query/sql/views.js';
 import { createCoordinator, mosaicQueryEngine } from '../../src/viewer/data/mosaic.js';
 import type { QueryEngine } from '../../src/viewer/data/query-engine.js';
@@ -147,16 +148,28 @@ export async function openCountingEngine(dir: string, manifest: ManifestV4): Pro
     live.port.close();
   };
 
+  const textDir = await mkdtemp(join(tmpdir(), 'otel-counting-'));
   let live = await start();
+  // One connection runs one statement at a time: two pending queries on it interleave their result buffers (the
+  // viewer's worker queues them the same way), so concurrent requests such as getTrace's two reads wait in turn.
+  let turn: Promise<unknown> = Promise.resolve();
   const connector = {
-    async query(request: { type: string; sql: string }): Promise<Uint8Array | undefined> {
-      const bytes = await runIpc(live.db, live.conn, request.sql);
-      return request.type === 'arrow' ? bytes : undefined;
+    query(request: { type: string; sql: string }): Promise<Uint8Array | undefined> {
+      const run = turn.then(async () => {
+        const bytes = await runIpc(live.db, live.conn, request.sql);
+        return request.type === 'arrow' ? bytes : undefined;
+      });
+      turn = run.catch(() => undefined);
+      return run;
     },
   } as Connector;
   const engine = mosaicQueryEngine(createCoordinator(connector, quiet), {
-    registerText: () => {
-      throw new OtelHtmlError('usage', { message: 'the counting engine does not register text files' });
+    // The residual path's id tables read a CSV registered as text; the Node host registers files by URL only, so the
+    // text goes to a file outside the counted root (not counted) and is registered under its name.
+    registerText: async (name, text) => {
+      const file = join(textDir, name);
+      await writeFile(file, text);
+      await live.db.registerFileURL(name, file, NODE_FS_PROTOCOL, false);
     },
     close: async () => {},
   });
@@ -187,6 +200,7 @@ export async function openCountingEngine(dir: string, manifest: ManifestV4): Pro
     close: async () => {
       engine.clearCache();
       await stop(live);
+      await rm(textDir, { recursive: true, force: true });
     },
   };
 }

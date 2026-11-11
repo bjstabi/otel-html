@@ -3,6 +3,7 @@ import { isV4, type ManifestV4, parseAnyManifest } from '../../src/format/manife
 import { TABLES } from '../../src/format/parquet/columns.js';
 import { MANIFEST_KEY } from '../../src/format/paths.js';
 import { type OtlpRequest, parseOtlpObject } from '../../src/model/otlp-json.js';
+import type { Axis, ScalingIds } from '../../src/viewer/data/catalogue.js';
 import { logRef } from '../../src/viewer/data/log-query.js';
 import type { TimeWindow } from '../../src/viewer/data/time-window.js';
 import { openSession } from '../../src/writer/session.js';
@@ -11,8 +12,6 @@ import { writeReportDir } from '../report-dir.js';
 import { createTestWriter, EPOCH_NS, testConfig } from '../writer-deps.js';
 import { ROW_GROUP_ROWS } from './cost.js';
 
-/** The three axes the harness steps: retention (`outside`), window (`inside`) and density (`rowGroups`). */
-export type Axis = 'retention' | 'window' | 'density';
 const AXIS_FIELD = { retention: 'outside', window: 'inside', density: 'rowGroups' } as const;
 
 export interface Shape {
@@ -33,17 +32,7 @@ export interface ScalingReport {
   /** From the first inside partition's first span to the last one's last span, in the viewer's window type. */
   window: TimeWindow;
   /** One existing value of each kind the catalogue's point reads and conditions need. */
-  ids: {
-    traceId: string;
-    spanId: string;
-    logRef: string;
-    service: string;
-    resource: string;
-    runId: string;
-    route: string;
-    text: string;
-    metric: string;
-  };
+  ids: ScalingIds;
   close(): Promise<void>;
 }
 
