@@ -1,5 +1,5 @@
 import type { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
@@ -30,6 +30,7 @@ const ioOf = (): Parameters<typeof runCli>[1] => ({
   ) => {
     calls.push({ cmd, args, opts });
     return {
+      pid: 4242,
       on: () => undefined,
       unref: () => {
         unrefs++;
@@ -80,7 +81,14 @@ describe('ci pusher', () => {
     await runCli(['ci', 'pusher', '--report', '.otel-html/report', '--every', '60s'], ioOf(), deps());
     expect(calls).toHaveLength(1);
     expect(existsSync(join(publish, 'pusher.stop'))).toBe(false);
-    expect(existsSync(join(publish, 'pusher.pid'))).toBe(false);
+    // The stale pid is gone; the file now holds the new child's.
+    expect(readFileSync(join(publish, 'pusher.pid'), 'utf8')).toBe('4242');
+  });
+
+  // A collect that runs before the child is up still finds a pusher to stop (the child sees the stop file at start).
+  test("writes the child's pid file itself", async () => {
+    await runCli(['ci', 'pusher', '--report', '.otel-html/report', '--every', '60s'], ioOf(), deps());
+    expect(readFileSync(join(dir, '.otel-html', 'publish', 'pusher.pid'), 'utf8')).toBe('4242');
   });
 
   test('a bad --every is a usage error', async () => {

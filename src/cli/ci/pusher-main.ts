@@ -1,4 +1,4 @@
-import { closeSync, mkdirSync, openSync, rmSync } from 'node:fs';
+import { closeSync, mkdirSync, openSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { WriterDeps } from '../../writer/session.js';
@@ -60,6 +60,9 @@ export async function runPusherCommand(o: PusherCommand, io: CliIo, deps: Writer
       // A failed spawn reports itself as an event; without a listener it would crash this process after it returned.
       child.on('error', (e) => io.stderr(`otel-html pusher: not started: ${e.message}\n`));
       child.unref();
+      // Written here as well as by the child: a collect that runs before the child is up still finds a pusher to stop,
+      // and the child, seeing the stop file at its start, exits and removes this file.
+      if (child.pid !== undefined) writeFileSync(join(publishDir, PID_FILE), String(child.pid));
     } finally {
       closeSync(logFd);
     }
