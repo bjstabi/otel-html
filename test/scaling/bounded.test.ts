@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
-import { bounded, takeLock, waitTurn } from '../../test-support/scaling/bounded.js';
+import { bounded, shareOnce, takeLock, waitTurn } from '../../test-support/scaling/bounded.js';
 
 describe('the bounds of the scaling workers', () => {
   const dirs: string[] = [];
@@ -45,5 +45,46 @@ describe('the bounds of the scaling workers', () => {
       /a statement did not finish/,
     );
     await expect(bounded(Promise.resolve(3), 'a statement', 50)).resolves.toBe(3);
+  });
+
+  test('shareOnce makes once, and does not make again what appeared while it waited for the lock', async () => {
+    const lock = join(await tmp(), 'x.lock');
+    let made = 0;
+    let exists: string | undefined;
+    let looks = 0;
+    // the first look finds nothing; the previous holder finishes before the lock is taken: the second look finds it
+    const value = await shareOnce({
+      lock,
+      what: 'x',
+      done: async () => {
+        looks++;
+        if (looks === 2) exists = 'from the other worker';
+        return exists;
+      },
+      make: async () => {
+        made++;
+        return 'mine';
+      },
+    });
+    expect(value).toBe('from the other worker');
+    expect(made).toBe(0);
+    // and the lock is released
+    expect(await takeLock(lock)).toBe(true);
+  });
+
+  test('shareOnce makes what nobody has made, and releases the lock when it fails', async () => {
+    const lock = join(await tmp(), 'x.lock');
+    await expect(
+      shareOnce({
+        lock,
+        what: 'x',
+        done: async () => undefined,
+        make: async () => {
+          throw new Error('boom');
+        },
+      }),
+    ).rejects.toThrow('boom');
+    const value = await shareOnce({ lock, what: 'x', done: async () => undefined, make: async () => 7 });
+    expect(value).toBe(7);
   });
 });

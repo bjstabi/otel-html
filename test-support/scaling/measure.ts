@@ -1,10 +1,10 @@
 import { existsSync } from 'node:fs';
-import { readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { type Axis, CATALOGUE, type CatalogueEntry, DECLARED } from '../../src/viewer/data/catalogue.js';
 import { createDuckDbDataSource } from '../../src/viewer/data/duckdb-source.js';
-import { bounded, takeLock, waitTurn } from './bounded.js';
+import { bounded, shareOnce } from './bounded.js';
 import { classify, type Step } from './classify.js';
 import { type Cost, costOf } from './cost.js';
 import { type CountingEngine, openCountingEngine, type ReadEvent } from './counting-engine.js';
@@ -98,24 +98,18 @@ async function measure(entry: CatalogueEntry, shape: Shape): Promise<Measured> {
  */
 async function sharedMeasure(root: string, entry: CatalogueEntry, shape: Shape): Promise<Measured> {
   const file = join(root, `measured-${entry.id}-${shapeKey(shape).replaceAll('/', '-')}.json`);
-  const lock = `${file}.lock`;
-  const since = performance.now();
   const what = `${entry.id} on ${shapeKey(shape)}`;
-  for (;;) {
-    if (existsSync(file)) return JSON.parse(await readFile(file, 'utf8')) as Measured;
-    if (!(await takeLock(lock))) {
-      await waitTurn(since, what, lock);
-      continue;
-    }
-    try {
+  return await shareOnce({
+    lock: `${file}.lock`,
+    what,
+    done: async () => (existsSync(file) ? (JSON.parse(await readFile(file, 'utf8')) as Measured) : undefined),
+    make: async () => {
       const m = await bounded(measure(entry, shape), `measuring ${what}`);
       await writeFile(`${file}.tmp`, JSON.stringify(m));
       await rename(`${file}.tmp`, file);
       return m;
-    } finally {
-      await rm(lock, { recursive: true, force: true });
-    }
-  }
+    },
+  });
 }
 
 function measuredOf(entry: CatalogueEntry, shape: Shape): Promise<Measured> {

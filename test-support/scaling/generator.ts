@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
 import { isV4, type ManifestV4, parseAnyManifest } from '../../src/format/manifest.js';
@@ -14,7 +14,7 @@ import { openSession } from '../../src/writer/session.js';
 import type { Format4Fixture } from '../format4-fixture.js';
 import { writeReportDir } from '../report-dir.js';
 import { createTestWriter, EPOCH_NS, testConfig } from '../writer-deps.js';
-import { bounded, takeLock, waitTurn } from './bounded.js';
+import { bounded, shareOnce } from './bounded.js';
 import { ROW_GROUP_ROWS } from './cost.js';
 
 const AXIS_FIELD = { retention: 'outside', window: 'inside', density: 'rowGroups' } as const;
@@ -254,25 +254,18 @@ interface Meta {
  */
 async function ensurePrebuilt(root: string, shape: Shape): Promise<string> {
   const target = join(root, shapeKey(shape));
-  const lock = `${target}.lock`;
-  const since = performance.now();
-  for (;;) {
-    if (existsSync(join(target, 'meta.json'))) return target;
-    if (!(await takeLock(lock))) {
-      // another worker builds it; if it failed, the lock is gone and this one takes over
-      await waitTurn(since, `the report ${shapeKey(shape)}`, lock);
-      continue;
-    }
-    try {
+  return await shareOnce({
+    lock: `${target}.lock`,
+    what: `the report ${shapeKey(shape)}`,
+    done: async () => (existsSync(join(target, 'meta.json')) ? target : undefined),
+    make: async () => {
       const r = await bounded(build(shape), `building the report ${shapeKey(shape)}`);
       const meta: Meta = { epoch: String(r.epoch), window: r.window, ids: r.ids };
       await writeFile(join(r.dir, 'meta.json'), JSON.stringify(meta));
       await rename(r.dir, target);
       return target;
-    } finally {
-      await rm(lock, { recursive: true, force: true });
-    }
-  }
+    },
+  });
 }
 
 async function openPrebuilt(dir: string): Promise<ScalingReport> {

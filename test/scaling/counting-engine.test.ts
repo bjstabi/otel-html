@@ -95,6 +95,32 @@ describe('the counting Node engine', { timeout: 60_000 }, () => {
     expect(runningWorkers()).toBe(before);
   });
 
+  test('a reset worker reads what a freshly opened one reads', async () => {
+    const { c } = await twoPartitions();
+    const report = await buildFormat4Report([spansOnlyRequest(40), spansOnlyRequest(40)], { close: false });
+    const dir = await writeReportDir(report);
+    closers.push(dir.close);
+    const statement = (e: CountingEngine) =>
+      e.engine.query(Query.from('spans').select({ n: sql`count(*)` }).where(sql`name = 'op-1'`));
+    // a used engine, reset by cold(), against an engine nobody has queried
+    await statement(c);
+    await c.cold();
+    await c.take();
+    await statement(c);
+    const reset = await c.take();
+    const fresh = await openCountingEngine(dir.dir, report.manifest);
+    closers.push(fresh.close);
+    await fresh.take();
+    await statement(fresh);
+    const opened = await fresh.take();
+    expect(reset.length).toBeGreaterThan(0);
+    const shape = (events: ReadEvent[]) =>
+      events.map((e) => `${e.path.replace(/^.*\/partitions\//, '')}|${e.kind}|${e.offset}|${e.bytes}`);
+    expect(shape(reset)).toEqual(shape(opened));
+    expect(costOf(reset, new Map())).toEqual(costOf(opened, new Map()));
+    expect(new Set(reset.map((e) => e.path)).size).toBe(new Set(opened.map((e) => e.path)).size);
+  });
+
   test('take() without cold() after a repeat shows the cache', async () => {
     const { c } = await twoPartitions();
     await c.cold();
