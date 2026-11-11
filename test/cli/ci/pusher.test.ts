@@ -5,7 +5,14 @@ import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { createReportWith, resolveDeps } from '../../../src/api/report.js';
 import type { uploadArtifact } from '../../../src/cli/ci/artifact-client.js';
 import { readLedger } from '../../../src/cli/ci/ledger.js';
-import { type PusherDeps, type PusherOptions, runPusher, tick } from '../../../src/cli/ci/pusher.js';
+import {
+  CI_SPANS_EVERY_MS,
+  type PusherCache,
+  type PusherDeps,
+  type PusherOptions,
+  runPusher,
+  tick,
+} from '../../../src/cli/ci/pusher.js';
 import { readZip } from '../../../src/cli/ci/zip.js';
 import type { WriterDeps } from '../../../src/writer/session.js';
 import { fakeViewerAssets } from '../../../test-support/writer-deps.js';
@@ -168,6 +175,108 @@ describe('tick', () => {
     expect(log.some((l) => l.startsWith('! no CI spans in update 1:'))).toBe(true);
   });
 
+  describe('dispatch and CI-spans cadence', () => {
+    const json = (b: object): Response => new Response(JSON.stringify(b), { status: 200 });
+    const run42 = {
+      id: 42,
+      actor: { type: 'User' },
+      repository: { full_name: 'o/r' },
+      head_repository: { full_name: 'o/r' },
+    };
+    const api = (listing: () => Response, calls: string[]): typeof fetch =>
+      (async (url: string, init?: RequestInit) => {
+        const u = String(url);
+        calls.push(`${init?.method ?? 'GET'} ${u}`);
+        if (init?.method === 'POST') return new Response(null, { status: 204 });
+        if (u.includes('/workflows/pages-deploy.yml/runs?')) return listing();
+        if (u.endsWith('/actions/runs/42')) return json(run42);
+        return json({ default_branch: 'main' });
+      }) as unknown as typeof fetch;
+    const posted = (calls: string[]): boolean => calls.some((c) => c.startsWith('POST'));
+
+    test.each(['queued', 'pending', 'waiting', 'requested'])(
+      'a %s deployer run: no dispatch, a routine log line',
+      async (status) => {
+        const r = await openReport();
+        await flush(r, 1);
+        const calls: string[] = [];
+        const d = pdeps();
+        d.fetchFn = api(() => json({ workflow_runs: [{ status: 'completed' }, { status }] }), calls);
+        expect((await tick(opts(), d, null)).outcome).toBe('uploaded');
+        expect(posted(calls)).toBe(false);
+        expect(calls.some((c) => c.includes('/workflows/pages-deploy.yml/runs?per_page=20'))).toBe(true);
+        expect(log).toContain('deployer already waiting; not dispatched');
+      },
+    );
+
+    test('only finished or in-progress deployer runs: dispatches', async () => {
+      const r = await openReport();
+      await flush(r, 1);
+      const calls: string[] = [];
+      const d = pdeps();
+      d.fetchFn = api(
+        () => json({ workflow_runs: [{ status: 'completed' }, { status: 'in_progress' }] }),
+        calls,
+      );
+      await tick(opts(), d, null);
+      expect(posted(calls)).toBe(true);
+    });
+
+    test('a failed check dispatches anyway', async () => {
+      const r = await openReport();
+      await flush(r, 1);
+      const calls: string[] = [];
+      const d = pdeps();
+      d.fetchFn = api(() => new Response('no', { status: 500 }), calls);
+      await tick(opts(), d, null);
+      expect(posted(calls)).toBe(true);
+    });
+
+    test('the check uses the dispatch token when set', async () => {
+      const r = await openReport();
+      await flush(r, 1);
+      let auth: string | null = null;
+      const d = pdeps();
+      d.fetchFn = (async (url: string, init?: RequestInit) => {
+        if (String(url).includes('/workflows/')) auth = new Headers(init?.headers).get('authorization');
+        return json({ workflow_runs: [{ status: 'queued' }] });
+      }) as unknown as typeof fetch;
+      await tick(opts({ env: { ...ENV, GITHUB_TOKEN: 'job', OTEL_HTML_DISPATCH_TOKEN: 'app' } }), d, null);
+      expect(auth).toBe('Bearer app');
+    });
+
+    test('the CI-spans lookup runs at most every 5 minutes', async () => {
+      const o = opts({ env: { ...ENV, GITHUB_TOKEN: 't' } });
+      const r = await openReport();
+      const calls: string[] = [];
+      const d = pdeps();
+      d.fetchFn = api(() => json({ workflow_runs: [{ status: 'queued' }] }), calls);
+      let t = 1_700_000_000_000;
+      d.clock = {
+        ...deps.clock,
+        nowUnixNano: () => (BigInt(t) * 1_000_000n) as ReturnType<typeof deps.clock.nowUnixNano>,
+      };
+      const lookups = (): number => calls.filter((c) => c.endsWith('/actions/runs/42')).length;
+      const cache: PusherCache = {};
+      let listing: string[] | null = null;
+      const step = async (n: number, advance: number): Promise<void> => {
+        await flush(r, n);
+        t += advance;
+        listing = (await tick(o, d, listing, cache)).listing;
+      };
+      await step(1, 0);
+      expect(lookups()).toBe(1);
+      await step(2, 60_000);
+      await step(3, 60_000);
+      expect(lookups()).toBe(1);
+      await step(4, CI_SPANS_EVERY_MS);
+      expect(lookups()).toBe(2);
+      await step(5, 1_000);
+      expect(lookups()).toBe(2);
+      if (cache.dir !== undefined) rmSync(cache.dir, { recursive: true, force: true });
+    });
+  });
+
   test('a failed upload is a retry on a fresh sequence', async () => {
     const o = opts();
     const r = await openReport();
@@ -199,7 +308,7 @@ describe('tick', () => {
     const t2 = await tick(o, d2, t1.listing);
     expect(t2.outcome).toBe('uploaded');
     expect(calls.some((u) => u.startsWith('POST') && u.includes('/dispatches'))).toBe(true);
-    expect(calls.some((u) => u.includes('/runs?'))).toBe(false);
+    expect(calls.some((u) => u.includes('/actions/runs?'))).toBe(false);
     expect(uploads.map((u) => u.name)).toEqual(['otel-html-update-push-777-2']);
     ledger = await readLedger(deps.fs, o.publishDir);
     expect(ledger.shipped).toEqual(['flush:0']);
