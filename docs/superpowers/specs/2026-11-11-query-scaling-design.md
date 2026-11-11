@@ -1,9 +1,10 @@
 # Query scaling: what a query reads follows what it asks, not what the report holds
 
-**Status: draft of 2026-11-11, awaiting the maintainer's approval.** The decisions the maintainer has to confirm are
-in §10. Two reviewers read the draft on 2026-11-11 (one as a builder, one whole-branch review on Opus 5.5); their
-questions and findings are answered in the text. PR process: **unattended** (`docs/agents/process-unattended.md`). A fresh session continues this work with
-`/perf-1` (§11).
+**Status: approved 2026-11-11.** The maintainer confirmed the five decisions of §10 as written and asked for no
+other change. Two reviewers read the draft on 2026-11-11 (one as a builder, one whole-branch review on Opus 5.5);
+their questions and findings are answered in the text. PR process: **unattended**
+(`docs/agents/process-unattended.md`). A fresh session continues this work with `/perf-1` (§11); the next step is
+the implementation plan.
 
 ## 1. Why
 
@@ -457,7 +458,7 @@ or per statement.
 
 ## 10. Decisions
 
-**For the maintainer to confirm** (each changes what gets built):
+**Confirmed by the maintainer on 2026-11-11**, as written (each changes what gets built):
 
 1. **Format 5** (§8), **and that this project's source changes run in the deployer.** The deployer checks out
    `main`, builds it and runs the whole CLI with a write token (`pages-deploy.yml`), so every merged change to the
@@ -483,7 +484,7 @@ or per statement.
    `otel-html-publish` action. The unattended process touches neither without the maintainer's word; approving this
    point lifts that stop for this one line in each of the two files.
 
-**Calls made in this document** (the author's, to check while reading):
+**Calls made in this document** (the author's; the maintainer approved the document with them):
 
 - The grain is 2^16 ms, not one minute, so the bucket ladder stays as it is.
 - Rollup dimensions are each table's core facets plus the report's `statisticsKeys`; a guard refuses a rollup that
