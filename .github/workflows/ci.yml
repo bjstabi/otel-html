@@ -40,7 +40,7 @@ env:
 
 jobs:
   # Decides whether the change touches only documentation (`docs/**` and `*.md`). The browser, OS, binary and coverage jobs
-  # skip then; `check` (lint, typecheck, unit tests, gen:check, which covers README.md) and `build` always run. Any doubt
+  # skip then; `check` (lint, typecheck, knip, gen:check, which covers README.md), `unit` and `build` always run. Any doubt
   # (another event, a failed fetch, an all-zero `before` on a new branch, an empty diff) runs everything.
   changes:
     runs-on: ubuntu-latest
@@ -107,7 +107,7 @@ jobs:
           dispatch-app-id: ${{ vars.DEPLOYER_APP_ID }}
           dispatch-app-private-key: ${{ github.event.sender.type == 'User' && secrets.DEPLOYER_APP_PRIVATE_KEY || '' }}
       - run: mise run gen:check
-      - run: mise run check
+      - run: mise run check:static
       - if: always()
         uses: ./.github/actions/otel-html-collect
         with:
@@ -117,14 +117,64 @@ jobs:
           command: node dist/cli/main.js
           name: otel-html-${{ github.job }}
 
+  # The unit tests, two shards on their own runners: the suite without @perf, then the @perf files one at a time. No
+  # `needs`: like `check` it runs on documentation-only changes too.
+  unit:
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # The job uploads its partitions as a site update and wakes the Pages deployer (otel-html-collect, publish).
+      actions: write
+    env:
+      # The @perf budgets scale by (calibration ÷ this), never below 1: GitHub's runners come as AMD EPYC 9V45
+      # (~85 ms, budgets as written) and EPYC 7763 (~150 ms, about 1.5×). See test-support/calibrate.ts.
+      OTEL_HTML_PERF_REFERENCE_MS: "100"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      # mise's task state: the freshness records (state dir) and the cached results (task.cache_dir in mise.toml). Every run saves under a unique key and restores the latest of its own job, so an unchanged task replays.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0 (the SHA .github/actions/setup pins)
+        with:
+          path: |
+            ~/.local/state/mise
+            .mise/task-cache
+          key: mise-tasks-${{ runner.os }}-${{ github.job }}-${{ matrix.shard }}of2-${{ github.run_id }}
+          restore-keys: mise-tasks-${{ runner.os }}-${{ github.job }}-${{ matrix.shard }}of2-
+      # The job shell below is the built CLI, so dist/ must exist before the first `run:` step starts.
+      - name: Build otel-html
+        shell: bash
+        run: mise run build
+      - uses: ./.github/actions/otel-html-setup
+        with:
+          command: node dist/cli/main.js
+          push-every: 60s
+          config: .github/otel-html-ci.yaml
+          dispatch-app-id: ${{ vars.DEPLOYER_APP_ID }}
+          dispatch-app-private-key: ${{ github.event.sender.type == 'User' && secrets.DEPLOYER_APP_PRIVATE_KEY || '' }}
+      - run: mise run test:unit:main -- --shard=${{ matrix.shard }}/2
+      - run: mise run test:unit:perf -- --shard=${{ matrix.shard }}/2
+      - if: always()
+        uses: ./.github/actions/otel-html-collect
+        with:
+          publish: true
+          dispatch-app-id: ${{ vars.DEPLOYER_APP_ID }}
+          dispatch-app-private-key: ${{ github.event.sender.type == 'User' && secrets.DEPLOYER_APP_PRIVATE_KEY || '' }}
+          command: node dist/cli/main.js
+          name: otel-html-${{ github.job }}-${{ matrix.shard }}of2
+
   unit-os:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
     strategy:
-      fail-fast: true
-      # No macOS runners (cost); Linux runs the unit tests in `check`.
+      fail-fast: false
+      # No macOS runners (cost); Linux runs the unit tests in `unit`.
       matrix:
         os: [windows-latest]
+        shard: [1, 2]
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -144,8 +194,8 @@ jobs:
             ~/.local/state/mise
             .mise/task-cache
             ~/AppData/Local/mise/state
-          key: mise-tasks-${{ runner.os }}-${{ github.job }}-${{ github.run_id }}
-          restore-keys: mise-tasks-${{ runner.os }}-${{ github.job }}-
+          key: mise-tasks-${{ runner.os }}-${{ github.job }}-${{ matrix.shard }}of2-${{ github.run_id }}
+          restore-keys: mise-tasks-${{ runner.os }}-${{ github.job }}-${{ matrix.shard }}of2-
       # The job shell below is the built CLI, so dist/ must exist before the first `run:` step starts.
       - name: Build otel-html
         shell: bash
@@ -157,7 +207,8 @@ jobs:
           config: .github/otel-html-ci.yaml
           dispatch-app-id: ${{ vars.DEPLOYER_APP_ID }}
           dispatch-app-private-key: ${{ github.event.sender.type == 'User' && secrets.DEPLOYER_APP_PRIVATE_KEY || '' }}
-      - run: mise run test:unit
+      - run: mise run test:unit:main -- --shard=${{ matrix.shard }}/2
+      - run: mise run test:unit:perf -- --shard=${{ matrix.shard }}/2
       - if: always()
         uses: ./.github/actions/otel-html-collect
         with:
@@ -165,7 +216,7 @@ jobs:
           dispatch-app-id: ${{ vars.DEPLOYER_APP_ID }}
           dispatch-app-private-key: ${{ github.event.sender.type == 'User' && secrets.DEPLOYER_APP_PRIVATE_KEY || '' }}
           command: node dist/cli/main.js
-          name: otel-html-${{ github.job }}${{ matrix.os && format('-{0}', matrix.os) || '' }}
+          name: otel-html-${{ github.job }}${{ matrix.os && format('-{0}', matrix.os) || '' }}-${{ matrix.shard }}of2
 
   build:
     runs-on: ubuntu-latest
@@ -210,8 +261,9 @@ jobs:
       # Each browser reports on its own; one failing browser must not hide the others' results.
       fail-fast: false
       matrix:
-        # Only the chromium leg runs the HTTP project and the @perf passes (-perf-file, and -perf-http with e2e/scale.spec.ts).
+        # The main pass (`--pass main`): the `<browser>-file` projects, plus the chromium `-http` project on the chromium legs. The @perf passes run in `e2e-perf`.
         project: [chromium, firefox, webkit]
+        shard: [1, 2]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -238,8 +290,8 @@ jobs:
           path: |
             ~/.local/state/mise
             .mise/task-cache
-          key: mise-tasks-${{ runner.os }}-${{ github.job }}${{ matrix.project && format('-{0}', matrix.project) || '' }}-${{ github.run_id }}
-          restore-keys: mise-tasks-${{ runner.os }}-${{ github.job }}${{ matrix.project && format('-{0}', matrix.project) || '' }}-
+          key: mise-tasks-${{ runner.os }}-${{ github.job }}${{ matrix.project && format('-{0}', matrix.project) || '' }}-${{ matrix.shard }}of2-${{ github.run_id }}
+          restore-keys: mise-tasks-${{ runner.os }}-${{ github.job }}${{ matrix.project && format('-{0}', matrix.project) || '' }}-${{ matrix.shard }}of2-
       # The job shell below is the built CLI, so dist/ must exist before the first `run:` step starts.
       - name: Build otel-html
         shell: bash
@@ -257,16 +309,17 @@ jobs:
       # --skip-deps also skips e2e:fixtures' own e2e:otel-recorder dependency, which e2e/otel.spec.ts needs.
       - run: mise run --skip-deps e2e:otel-recorder
       - run: mise run --skip-deps e2e:fixtures
-      # `--browser` selects the `<browser>-file` and (chromium) `-http` projects, then the chromium `-perf-file` and `-perf-http` passes.
-      - run: mise run --skip-deps test:e2e --browser ${{ matrix.project }}
+      # `--browser` selects the `<browser>-file` and (chromium) `-http` projects; `--pass main` leaves the @perf passes to `e2e-perf`.
+      - run: mise run --skip-deps test:e2e --browser ${{ matrix.project }} --pass main -- --shard=${{ matrix.shard }}/2
       # The reporter is `list`, so failure traces and screenshots land in test-results/.
       - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: playwright-results-${{ matrix.project }}
+          name: playwright-results-${{ matrix.project }}-${{ matrix.shard }}of2
           path: test-results/
           if-no-files-found: ignore
-      - if: always()
+      # The sample report is the same on every shard; shard 1 uploads it.
+      - if: always() && matrix.shard == 1
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: sample-report-${{ matrix.project }}
@@ -280,7 +333,79 @@ jobs:
           dispatch-app-id: ${{ vars.DEPLOYER_APP_ID }}
           dispatch-app-private-key: ${{ github.event.sender.type == 'User' && secrets.DEPLOYER_APP_PRIVATE_KEY || '' }}
           command: node dist/cli/main.js
-          name: otel-html-${{ github.job }}${{ matrix.project && format('-{0}', matrix.project) || '' }}
+          name: otel-html-${{ github.job }}${{ matrix.project && format('-{0}', matrix.project) || '' }}-${{ matrix.shard }}of2
+
+  # The @perf passes (`-perf-file`, and `-perf-http` with e2e/scale.spec.ts), Chromium only. Perf tests run one at a
+  # time and each shard has its runner to itself, so the main pass no longer waits on them or on the scale reports.
+  e2e-perf:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # The job uploads its partitions as a site update and wakes the Pages deployer (otel-html-collect, publish).
+      actions: write
+    # The official image ships all three browsers and their OS libraries, matching @playwright/test (keep this tag
+    # in step with package.json). `playwright install --with-deps webkit` spent ~9 of 10 minutes in apt fetching
+    # ~190 packages. Non-root (the runner's uid) because Firefox refuses to run as root; HOME is /github/home.
+    container:
+      image: mcr.microsoft.com/playwright:v1.64.1-noble@sha256:47b510dd9230bf0b9bfc9b20102241e577ea7a99334ab4c3ca19f19770e9b8ea
+      options: --user 1001 --ipc=host
+    env:
+      # The @perf budgets scale by (calibration ÷ this), never below 1: GitHub's runners come as AMD EPYC 9V45
+      # (~85 ms, budgets as written) and EPYC 7763 (~150 ms, about 1.5×). See test-support/calibrate.ts.
+      OTEL_HTML_PERF_REFERENCE_MS: "100"
+      # The image already has the browsers; test:e2e would otherwise run `playwright install` for all three.
+      OTEL_HTML_SKIP_BROWSER_INSTALL: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      # mise's task state: the freshness records (state dir) and the cached results (task.cache_dir in mise.toml). Every run saves under a unique key and restores the latest of its own job, so an unchanged task replays.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0 (the SHA .github/actions/setup pins)
+        with:
+          path: |
+            ~/.local/state/mise
+            .mise/task-cache
+          key: mise-tasks-${{ runner.os }}-${{ github.job }}-${{ matrix.shard }}of2-${{ github.run_id }}
+          restore-keys: mise-tasks-${{ runner.os }}-${{ github.job }}-${{ matrix.shard }}of2-
+      # The job shell below is the built CLI, so dist/ must exist before the first `run:` step starts.
+      - name: Build otel-html
+        shell: bash
+        run: mise run build
+      - uses: ./.github/actions/otel-html-setup
+        with:
+          command: node dist/cli/main.js
+          push-every: 60s
+          config: .github/otel-html-ci.yaml
+          dispatch-app-id: ${{ vars.DEPLOYER_APP_ID }}
+          dispatch-app-private-key: ${{ github.event.sender.type == 'User' && secrets.DEPLOYER_APP_PRIVATE_KEY || '' }}
+      # The job shell wraps these in `otel-html run`; the exit code is Playwright's.
+      # --skip-deps: dist/ was built by the Build step above and must not be cleaned under the running job shell,
+      # so the fixture reports are built here, once, and test:e2e's own e2e:fixtures dependency is skipped.
+      # --skip-deps also skips e2e:fixtures' own e2e:otel-recorder dependency, which e2e/otel.spec.ts needs.
+      - run: mise run --skip-deps e2e:otel-recorder
+      - run: mise run --skip-deps e2e:fixtures
+      # `--pass perf`: the chromium `-perf-file` and `-perf-http` projects, one test at a time.
+      - run: mise run --skip-deps test:e2e --browser chromium --pass perf -- --shard=${{ matrix.shard }}/2
+      # The reporter is `list`, so failure traces and screenshots land in test-results/.
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: playwright-results-perf-${{ matrix.shard }}of2
+          path: test-results/
+          if-no-files-found: ignore
+      - if: always()
+        uses: ./.github/actions/otel-html-collect
+        with:
+          publish: true
+          dispatch-app-id: ${{ vars.DEPLOYER_APP_ID }}
+          dispatch-app-private-key: ${{ github.event.sender.type == 'User' && secrets.DEPLOYER_APP_PRIVATE_KEY || '' }}
+          command: node dist/cli/main.js
+          name: otel-html-${{ github.job }}-${{ matrix.shard }}of2
 
   # The metrics scale check (spec §7: Explorer < 3.3 s and Catalog < 3 s, twice their medians, on 200 metrics × 1,000 series × 1 h at 10 s),
   # Chromium only, in the Playwright image like the jobs above. Its site-format report writes the full 1 h only for the
