@@ -1,5 +1,5 @@
 /**
- * Builds the `scale` and `many` e2e reports into `e2e/.reports-scale/` (the `e2e:fixtures:scale:data` mise task), both
+ * Builds the `scale`, `many` and `rowgroups` e2e reports into `e2e/.reports-scale/` (the `e2e:fixtures:scale:data` mise task), all
  * in the `site` format and read over HTTP only. `scale` is the 100k-span, 1M-log input converted and closed (one
  * compacted partition per signal); `many` is the same input written through `Report.create` with a flush every 1 000
  * spans and never closed (about 100 uncompacted partitions per signal, `complete: false`).
@@ -142,6 +142,17 @@ async function buildScaleReports(): Promise<void> {
   await writeFile(file, JSON.stringify(scaleInput(0, SCALE_TRACES)));
   const all = [file, ...(await writeScaleLogFiles(inputs)), await writeScaleMetricsFile(inputs)];
   await Promise.all([convertTo(reportDir('scale'), all, 'scale run'), buildManyReport()]);
+  await buildRowGroupsReport(inputs);
+}
+
+/** Spans a `rowgroups` report holds: four row groups of the writer's 50,000 (`e2e/calibration.spec.ts` needs several). */
+const ROWGROUPS_TRACES = 4 * (50_000 / SCALE_SPANS_PER_TRACE);
+
+/** `rowgroups`: only spans, 200k of them, converted and closed into one partition whose spans file has four row groups. */
+async function buildRowGroupsReport(inputs: URL): Promise<void> {
+  const file = fileURLToPath(new URL('rowgroups.json', inputs));
+  await writeFile(file, JSON.stringify(scaleInput(0, ROWGROUPS_TRACES)));
+  await convertTo(reportDir('rowgroups'), [file], 'rowgroups run');
 }
 
 await rm(SCALE_REPORTS_DIR, { recursive: true, force: true });

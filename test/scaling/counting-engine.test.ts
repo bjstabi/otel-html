@@ -2,7 +2,7 @@ import { literal, Query, sql } from '@uwdata/mosaic-sql';
 import { afterEach, describe, expect, test } from 'vitest';
 import { buildFormat4Report, openFixtureDb, spansOnlyRequest } from '../../test-support/format4-fixture.js';
 import { writeReportDir } from '../../test-support/report-dir.js';
-import { costOf } from '../../test-support/scaling/cost.js';
+import { costOf, REQUESTS_PER_OPEN, REQUESTS_PER_READ } from '../../test-support/scaling/cost.js';
 import {
   type CountingEngine,
   openCountingEngine,
@@ -74,6 +74,15 @@ describe('the counting Node engine', () => {
     c.engine.clearCache();
     const second = costOf(await run(), new Map());
     expect(second.serial).toBeLessThan(first.serial);
+  });
+
+  test('an open and its reads cost the calibrated requests, and the reads their bytes', () => {
+    const p = 'partitions/000001/spans.parquet';
+    expect(costOf([open(p), read(p, 0, 8), read(p, 100, 50)], new Map())).toEqual({
+      serial: REQUESTS_PER_OPEN + 2 * REQUESTS_PER_READ,
+      parallel: 0,
+      bytes: 58,
+    });
   });
 
   test('a path in `prepared` costs one parallel request of its size', () => {

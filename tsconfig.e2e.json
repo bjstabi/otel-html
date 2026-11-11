@@ -4,7 +4,8 @@
     "lib": ["ES2024", "DOM", "DOM.Iterable"],
     "types": ["node"],
     "allowImportingTsExtensions": true,
-    "isolatedDeclarations": false
+    "isolatedDeclarations": false,
+    "skipLibCheck": true
   },
   "include": [
     "e2e/**/*",
