@@ -306,7 +306,8 @@ jobs:
       - run: mise run --skip-deps e2e:otel-recorder
       - run: mise run --skip-deps e2e:fixtures
       # `--browser` selects the `<browser>-file` and (chromium) `-http` projects; `--pass main` leaves the @perf passes to `e2e-perf`.
-      - run: mise run --skip-deps test:e2e --browser ${{ matrix.project }} --pass main -- --shard=${{ matrix.shard }}/2
+      # `--shard i/2` gives each runner half of the spec files by recorded duration (test-support/shard-weights.json).
+      - run: mise run --skip-deps test:e2e --browser ${{ matrix.project }} --pass main --shard ${{ matrix.shard }}/2
       # The reporter is `list`, so failure traces and screenshots land in test-results/.
       - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -385,8 +386,8 @@ jobs:
       # --skip-deps also skips e2e:fixtures' own e2e:otel-recorder dependency, which e2e/otel.spec.ts needs.
       - run: mise run --skip-deps e2e:otel-recorder
       - run: mise run --skip-deps e2e:fixtures
-      # `--pass perf`: the chromium `-perf-file` and `-perf-http` projects, one test at a time.
-      - run: mise run --skip-deps test:e2e --browser chromium --pass perf -- --shard=${{ matrix.shard }}/2
+      # `--pass perf`: the chromium `-perf-file` and `-perf-http` projects, one test at a time; `--shard i/2` is Playwright's, by count.
+      - run: mise run --skip-deps test:e2e --browser chromium --pass perf --shard ${{ matrix.shard }}/2
       # The reporter is `list`, so failure traces and screenshots land in test-results/.
       - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

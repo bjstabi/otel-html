@@ -495,7 +495,9 @@ description = """Playwright over the fixture reports, per browser (--browser chr
 Two passes (`--pass main|perf|all`, default all; CI shards them): the `<browser>-file` and `<browser>-http` projects in parallel (`-http` runs only specs tagged HTTP), then the
 `<browser>-perf-file` and `<browser>-perf-http` projects (@perf tests) alone with one worker. Only Chromium has `-http` and the perf projects, and
 Firefox and WebKit leave out e2e/scale.spec.ts (playwright.config.ts). Both passes run unless `--pass main` or `--pass perf` selects one; the task fails if a pass does.
-Sharding: Playwright args after `--` reach both passes, so `mise run test:e2e --browser chromium --pass main -- --shard=1/2` runs half of the main pass.
+Sharding: `--shard 1/2` runs half of each pass. The main pass splits the spec files by the seconds recorded in test-support/shard-weights.json
+(playwright.config.ts reads OTEL_HTML_E2E_SHARD, which the task sets for that pass only); the perf pass gets Playwright's `--shard=1/2`, which splits by test count.
+Playwright's own `-- --shard=1/2` still works, but splits both passes by count.
 The perf pass is skipped for a browser without a `-perf-file` project. The perf pass writes its artifacts to test-results/perf, so it does not clear the first pass's failures. Playwright args after `--` go to both passes (`mise run test:e2e --browser chromium -- e2e/scale.spec.ts`);
 narrow the browsers with `--browser`, not `--project`, which would add to the two passes' own projects.
 The scale reports (e2e:fixtures:scale, ~15 s cold, ~35 s on CI) are built only when the selection includes e2e/scale.spec.ts, decided
@@ -532,17 +534,29 @@ cache = { enabled = true, env = [
   "OTEL_HTML_SKIP_BROWSER_INSTALL",
   "OTEL_HTML_METRICS_SCALE",
   "OTEL_HTML_LOAD_REPORT",
+  "OTEL_HTML_E2E_SHARD",
 ], command_inputs = [
   "pnpm exec playwright --version",
 ] }
 usage = '''
 flag "--browser <browser>" default="*"
 flag "--pass <pass>" default="all"
+flag "--shard <shard>" default=""
 arg "[args]" var=#true
 '''
 run = """
 eval "set -- $usage_args"
 rc=0
+# --shard i/n: the main pass (and its listing) gets OTEL_HTML_E2E_SHARD, which playwright.config.ts turns into a split of
+# the spec files by recorded duration; the perf pass gets Playwright's own --shard. An OTEL_HTML_E2E_SHARD inherited
+# from the caller must not reach the perf pass, so it is dropped here and set only on main-pass commands.
+unset OTEL_HTML_E2E_SHARD
+perf_shard=()
+main_env=()
+if [ -n "$usage_shard" ]; then
+  perf_shard=("--shard=$usage_shard")
+  main_env=("OTEL_HTML_E2E_SHARD=$usage_shard")
+fi
 case "$usage_pass" in
   main | perf | all) ;;
   *) echo "test:e2e: --pass must be main, perf or all (got '$usage_pass')" >&2; exit 2 ;;
@@ -556,15 +570,15 @@ perf="${usage_browser}-perf-*"
 case "$usage_browser" in chromium | '*') has_perf=1 ;; *) has_perf=0 ;; esac
 [ "$usage_pass" != main ] || has_perf=0
 # The scale reports only when a selected test is in e2e/scale.spec.ts. Each pass is listed on its own, with the args, as
-# it runs, so a --shard selects the same tests in the listing as in the pass; a listing that fails builds them too, and
+# it runs (`env` carries the main pass's OTEL_HTML_E2E_SHARD), so a --shard selects the same tests in the listing as in the pass; a listing that fails builds them too, and
 # the passes below report its error. --skip-deps: dist/ is already built (and in CI it must not be rebuilt under the job shell).
 needs_scale() {
   local listed
-  listed=$(pnpm exec playwright test "$@" --list 2>&1) || return 0
+  listed=$(env "$@" --list 2>&1) || return 0
   grep -qF 'scale.spec.ts' <<<"$listed"
 }
-if { [ "$usage_pass" != perf ] && needs_scale "$@" --project "${usage_browser}-file" --project "$http" --grep-invert @perf; } ||
-  { [ "$has_perf" = 1 ] && needs_scale "$@" --project "$perf"; }; then
+if { [ "$usage_pass" != perf ] && needs_scale "${main_env[@]}" pnpm exec playwright test "$@" --project "${usage_browser}-file" --project "$http" --grep-invert @perf; } ||
+  { [ "$has_perf" = 1 ] && needs_scale pnpm exec playwright test "$@" "${perf_shard[@]}" --project "$perf"; }; then
   echo "test:e2e: the selection needs the scale reports (e2e:fixtures:scale)"
   mise run --skip-deps e2e:fixtures:scale:data && mise run --skip-deps e2e:fixtures:scale || exit 1
 else
@@ -572,10 +586,10 @@ else
 fi
 [ -n "$OTEL_HTML_SKIP_BROWSER_INSTALL" ] || pnpm exec playwright install chromium firefox webkit
 if [ "$usage_pass" != perf ]; then
-  pnpm exec playwright test "$@" --project "${usage_browser}-file" --project "$http" --grep-invert @perf || rc=1
+  env "${main_env[@]}" pnpm exec playwright test "$@" --project "${usage_browser}-file" --project "$http" --grep-invert @perf || rc=1
 fi
 if [ "$has_perf" = 1 ]; then
-  pnpm exec playwright test "$@" --project "$perf" --workers=1 --pass-with-no-tests --output test-results/perf || rc=1
+  pnpm exec playwright test "$@" "${perf_shard[@]}" --project "$perf" --workers=1 --pass-with-no-tests --output test-results/perf || rc=1
 elif [ "$usage_pass" != main ]; then
   echo "test:e2e: no perf pass for ${usage_browser} (only Chromium has one)"
 fi
