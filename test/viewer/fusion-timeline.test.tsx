@@ -382,7 +382,7 @@ describe('TimelineWidget states', () => {
       },
     });
     await screen.findByText('Metric points 0');
-    expect((calls.spans[0] as [SpanQuery])[0].needs).toEqual(['timeline']);
+    expect((calls.spans[0] as [SpanQuery])[0].needs).toEqual(['buckets']);
     expect((calls.logs[0] as [LogQuery])[0].needs).toEqual(['timeline']);
     expect(calls.spans[0]?.[1]).toBeInstanceOf(AbortSignal);
     expect(calls.spans[0]).toHaveLength(2);

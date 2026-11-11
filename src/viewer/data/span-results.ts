@@ -242,6 +242,27 @@ function kindOf(v: unknown): 'string' | 'int' | 'double' | 'bool' | 'mixed' {
 
 const nulls = (n: number): (number | null)[] => new Array<number | null>(n).fill(null);
 
+/** The rows of `timelineQuery` (with or without its latency columns) as status buckets (ok, error, unset). */
+export function timelineBuckets(t: Table, spec: BucketSpec): TimeBuckets<SpanStatusKey> {
+  const rows = rowsOf(t);
+  const width = spec.widthNs;
+  const at = rows.map((r) => toNumber(cell(r, 'bucket'), 'bucket'));
+  const grid = gridOf(at, width);
+  if (grid === null) return new TimeBuckets(STATUS_KEYS, MAX_BUCKETS);
+  const status = STATUS_KEYS.map(() => zeros(grid.length));
+  rows.forEach((r, k) => {
+    const i = slot(at[k] as number, grid, width);
+    (status[0] as number[])[i] = toNumber(cell(r, 'ok'), 'ok');
+    (status[1] as number[])[i] = toNumber(cell(r, 'error'), 'error');
+    (status[2] as number[])[i] = toNumber(cell(r, 'unset'), 'unset');
+  });
+  return TimeBuckets.from(
+    { maxBuckets: MAX_BUCKETS, widthNs: width, startNs: grid.start, keys: [...STATUS_KEYS], counts: status },
+    STATUS_KEYS,
+    'timeline',
+  );
+}
+
 /** The rows of `timelineQuery` as status buckets (ok, error, unset) and the RED series on the same grid. */
 export function timeline(
   t: Table,
@@ -251,9 +272,10 @@ export function timeline(
   const width = spec.widthNs;
   const at = rows.map((r) => toNumber(cell(r, 'bucket'), 'bucket'));
   const grid = gridOf(at, width);
+  const buckets = timelineBuckets(t, spec);
   if (grid === null) {
     return {
-      buckets: new TimeBuckets(STATUS_KEYS, MAX_BUCKETS),
+      buckets,
       red: {
         startNs: spec.startNs,
         widthNs: width,
@@ -266,7 +288,6 @@ export function timeline(
       },
     };
   }
-  const status = STATUS_KEYS.map(() => zeros(grid.length));
   const red: RedBuckets = {
     startNs: grid.start,
     widthNs: width,
@@ -289,15 +310,7 @@ export function timeline(
     errors[i] = toNumber(cell(r, 'errors'), 'errors');
     [p50[i], p95[i], p99[i]] = quantiles(cell(r, 'quantiles'), 'quantiles');
     max[i] = real(cell(r, 'max_duration_ns'), 'max_duration_ns');
-    (status[0] as number[])[i] = toNumber(cell(r, 'ok'), 'ok');
-    (status[1] as number[])[i] = toNumber(cell(r, 'error'), 'error');
-    (status[2] as number[])[i] = toNumber(cell(r, 'unset'), 'unset');
   });
-  const buckets = TimeBuckets.from(
-    { maxBuckets: MAX_BUCKETS, widthNs: width, startNs: grid.start, keys: [...STATUS_KEYS], counts: status },
-    STATUS_KEYS,
-    'timeline',
-  );
   return { buckets, red };
 }
 

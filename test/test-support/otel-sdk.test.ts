@@ -1,16 +1,9 @@
-import {
-  context,
-  type ProxyTracerProvider,
-  propagation,
-  ROOT_CONTEXT,
-  SpanKind,
-  type TracerProvider,
-  trace,
-} from '@opentelemetry/api';
+import { ROOT_CONTEXT, SpanKind, trace } from '@opentelemetry/api';
 import { type ExportResult, ExportResultCode } from '@opentelemetry/core';
 import { InMemorySpanExporter, type ReadableSpan, type SpanExporter } from '@opentelemetry/sdk-trace';
-import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, describe, expect, vi, test as vitestTest } from 'vitest';
 import { tracingEnabled } from '../../test-support/otel/enabled.js';
+import { withOwnOtelGlobals } from '../../test-support/otel/own-globals.js';
 import {
   inMemoryTracing,
   reporting,
@@ -24,28 +17,22 @@ const TRACEPARENT = '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01';
 const ENDPOINT = 'http://127.0.0.1:9';
 let started: TestTracing | undefined;
 
-let savedProvider: TracerProvider | undefined;
-
 // Under an endpoint vitest's own OTel has registered a global provider, context manager and propagator in this
-// worker. NodeSDK's registration is refused while one exists, so clear them before each test and put the tracer
-// provider back afterwards. The context manager and propagator cannot be recovered through the public API, so
-// vitest's spans in this worker lose parenting after this file (acceptable).
-beforeEach(() => {
-  const delegate = (trace.getTracerProvider() as ProxyTracerProvider).getDelegate();
-  savedProvider = delegate.constructor.name === 'NoopTracerProvider' ? undefined : delegate;
-  trace.disable();
-  context.disable();
-  propagation.disable();
-});
+// worker. NodeSDK's registration is refused while one exists, so each test runs inside withOwnOtelGlobals, which
+// clears them for the test and puts the same instances back, so vitest's spans keep their parent.
+const test = (name: string, fn: () => unknown) =>
+  vitestTest(name, () =>
+    withOwnOtelGlobals(async () => {
+      try {
+        await fn();
+      } finally {
+        await started?.shutdown();
+        started = undefined;
+      }
+    }),
+  );
 
-afterEach(async () => {
-  await started?.shutdown();
-  started = undefined;
-  trace.disable();
-  context.disable();
-  propagation.disable();
-  if (savedProvider !== undefined) trace.setGlobalTracerProvider(savedProvider);
-  savedProvider = undefined;
+afterEach(() => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
@@ -184,6 +171,8 @@ describe('test SDK', () => {
   });
 
   test('shutdown resolves within the cap against an unreachable endpoint', async () => {
+    vi.stubEnv('OTEL_EXPORTER_OTLP_ENDPOINT', ENDPOINT);
+    vi.stubEnv('OTEL_EXPORTER_OTLP_TRACES_ENDPOINT', `${ENDPOINT}/v1/traces`);
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     started = startTestSdk({ OTEL_EXPORTER_OTLP_ENDPOINT: ENDPOINT }, 'vitest', { shutdownCapMs: 200 });
     expect(started).toBeDefined();

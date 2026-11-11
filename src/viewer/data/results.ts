@@ -58,8 +58,13 @@ export interface GroupStatsResult {
   dropped: number;
 }
 
-/** Which parts of a `SpanQueryResult` to compute; absent parts come back empty. */
-export type SpanNeed = 'rows' | 'facets' | 'timeline' | 'durations' | 'groups';
+/**
+ * Which parts of a `SpanQueryResult` to compute; absent parts come back empty. `timeline` fills the status buckets and
+ * the RED series (which reads `duration_ns`); `buckets` fills the status buckets only, for a caller that never draws
+ * latency. Asked together, `timeline` covers both. `total` fills `total` with one count and reads no row; asked with
+ * `rows`, the rows statement sets it.
+ */
+export type SpanNeed = 'rows' | 'facets' | 'timeline' | 'buckets' | 'total' | 'durations' | 'groups';
 
 /** Which parts of a `LogQueryResult` to compute; absent parts come back empty. */
 export type LogNeed = 'rows' | 'facets' | 'timeline';
@@ -156,8 +161,9 @@ export interface RowTables {
 export interface SpanQueryResult {
   rows: readonly (SpanRow | TraceRow)[];
   /**
-   * Matches before the row limit. With a residual condition in spans mode it is exact when every candidate was read;
-   * when the page budget (8 pages of `limit`) ended first it is the candidate count, an upper bound.
+   * Matches before the row limit. With a residual condition in spans mode and `rows` as the only need it is exact when
+   * every candidate was read; when the page budget (8 pages of `limit`) ended first it is the candidate count, an upper
+   * bound. With an aggregate need (`total` among them) the condition goes through its id table and the count is exact.
    */
   total: number;
   facets: FacetCounts;

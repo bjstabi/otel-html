@@ -131,10 +131,21 @@ export function traceRowsQuery(f: SqlFilter, sort: TraceSort, limit: number): Qu
 }
 
 /**
- * Per bucket of `spec`: `n`, `errors`, `ok` / `error` / `unset` (status 1 / 2 / other), `quantiles` (p50, p95, p99 of
- * `duration_ns`) and `max_duration_ns`, ordered by `bucket` (relative ns).
+ * One row, one column `total`: the number of filtered spans, or in `traces` mode of distinct traces among them. It is
+ * what `spanRowsQuery` / `traceRowsQuery` report as `total`, from a statement that reads no span row.
  */
-export function timelineQuery(f: SqlFilter, spec: BucketSpec): Query {
+export function spanCountQuery(f: SqlFilter, mode: 'spans' | 'traces'): Query {
+  return Query.from('spans')
+    .select({ total: mode === 'traces' ? sql`count(DISTINCT trace_id)` : sql`count(*)` })
+    .where(...whereOf(f, 'spans'));
+}
+
+/**
+ * Per bucket of `spec`: `n`, `errors`, `ok` / `error` / `unset` (status 1 / 2 / other), `quantiles` (p50, p95, p99 of
+ * `duration_ns`) and `max_duration_ns`, ordered by `bucket` (relative ns). With `latency` false the last two are left
+ * out, so the statement never reads the `duration_ns` column.
+ */
+export function timelineQuery(f: SqlFilter, spec: BucketSpec, latency = true): Query {
   return Query.from('spans')
     .select({
       bucket: bucketExpr('start_time_unix_nano', spec, f.epoch),
@@ -143,8 +154,7 @@ export function timelineQuery(f: SqlFilter, spec: BucketSpec): Query {
       ok: sql`count(*) FILTER (WHERE status_code = 1)`,
       error: sql`count(*) FILTER (WHERE ${IS_ERROR})`,
       unset: sql`count(*) FILTER (WHERE status_code IS NULL OR status_code NOT IN (1, 2))`,
-      quantiles: QUANTILES,
-      max_duration_ns: sql`max(duration_ns)`,
+      ...(latency ? { quantiles: QUANTILES, max_duration_ns: sql`max(duration_ns)` } : {}),
     })
     .where(...whereOf(f, 'spans'))
     .groupby(sql`bucket`)
@@ -291,23 +301,32 @@ export function serviceBucketsQuery(f: SqlFilter, services: readonly string[], s
 
 const SCALAR_KINDS = verbatim(`('string', 'int', 'double', 'bool')`);
 
-/** The distinct scalar values of a resource attribute over spans, logs and points: (`value`, `kind`), `kind` `mixed` when the value's text appears under several kinds; `cap + 1` rows by value. */
+/**
+ * The distinct scalar values of a resource attribute over spans, logs and points: (`value`, `kind`), `kind` `mixed`
+ * when the value's text appears under several kinds; `cap + 1` rows by value. The distinct `resource_attributes` texts
+ * are taken first (there are few) and the value is extracted from those, not from every row. The statement has no
+ * `WHERE` on purpose: the optimizer pushes an outer `WHERE` below a `DISTINCT` or `UNION`, back onto every row, so the
+ * conditions are aggregate `FILTER`s and a `HAVING` (issue #270).
+ */
 export function resourceValuesQuery(key: string, cap: number): Query {
-  const of = (table: 'spans' | 'logs' | 'points'): Query =>
-    Query.from(table)
-      .select({
-        value: jsonStringAt('resource_attributes', [key]),
-        kind: jsonKind(jsonAt('resource_attributes', [key])),
-      })
-      .distinct();
-  const all = Query.union(of('spans'), of('logs'), of('points'));
-  return Query.from({ u: all })
+  const texts = Query.union(
+    Query.from('spans').select('resource_attributes'),
+    Query.from('logs').select('resource_attributes'),
+    Query.from('points').select('resource_attributes'),
+  );
+  const extracted = Query.from({ r: texts }).select({
+    value: jsonStringAt('resource_attributes', [key]),
+    kind: jsonKind(jsonAt('resource_attributes', [key])),
+  });
+  const scalar = sql`kind IN ${SCALAR_KINDS}`;
+  const scalarKind = sql`min(kind) FILTER (WHERE ${scalar})`;
+  return Query.from({ u: extracted })
     .select({
       value: column('value'),
-      kind: sql`CASE WHEN min(kind) = max(kind) THEN min(kind) ELSE 'mixed' END`,
+      kind: sql`CASE WHEN ${scalarKind} = max(kind) FILTER (WHERE ${scalar}) THEN ${scalarKind} ELSE 'mixed' END`,
     })
-    .where(sql`value IS NOT NULL AND kind IN ${SCALAR_KINDS}`)
     .groupby('value')
+    .having(sql`count(*) FILTER (WHERE value IS NOT NULL AND ${scalar}) > 0`)
     .orderby('value')
     .limit(cap + 1);
 }

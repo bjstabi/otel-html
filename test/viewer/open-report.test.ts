@@ -3,10 +3,8 @@ import {
   type Context,
   type ContextManager,
   context,
-  type ProxyTracerProvider,
   ROOT_CONTEXT,
   SpanStatusCode,
-  type TracerProvider,
   trace,
 } from '@opentelemetry/api';
 import {
@@ -15,7 +13,7 @@ import {
   type ReadableSpan,
   SimpleSpanProcessor,
 } from '@opentelemetry/sdk-trace-base';
-import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { describe, expect, vi, test as vitestTest } from 'vitest';
 import type { ManifestV4 } from '../../src/format/manifest.js';
 import { partitionFilePath } from '../../src/format/paths.js';
 import type { DataSource } from '../../src/viewer/data/data-source.js';
@@ -28,6 +26,7 @@ import {
   openReportRefreshable,
 } from '../../src/viewer/data/open-report.js';
 import type { QueryEngine } from '../../src/viewer/data/query-engine.js';
+import { withOwnOtelGlobals } from '../../test-support/otel/own-globals.js';
 
 /** Async context propagation for the test (the viewer's own context manager is the browser's). */
 function asyncContextManager(): ContextManager {
@@ -44,25 +43,22 @@ function asyncContextManager(): ContextManager {
 
 let exporter: InMemorySpanExporter;
 let provider: BasicTracerProvider;
-let saved: TracerProvider | undefined;
 
-beforeEach(() => {
-  const delegate = (trace.getTracerProvider() as ProxyTracerProvider).getDelegate();
-  saved = delegate.constructor.name === 'NoopTracerProvider' ? undefined : delegate;
-  trace.disable();
-  context.disable();
-  context.setGlobalContextManager(asyncContextManager());
-  exporter = new InMemorySpanExporter();
-  provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
-  trace.setGlobalTracerProvider(provider);
-});
-
-afterEach(async () => {
-  await provider.shutdown();
-  trace.disable();
-  context.disable();
-  if (saved !== undefined) trace.setGlobalTracerProvider(saved);
-});
+// Each test runs inside withOwnOtelGlobals: vitest's own globals are set aside for the body and put back after it.
+const test = (name: string, fn: () => unknown) =>
+  vitestTest(name, () =>
+    withOwnOtelGlobals(async () => {
+      context.setGlobalContextManager(asyncContextManager());
+      exporter = new InMemorySpanExporter();
+      provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
+      trace.setGlobalTracerProvider(provider);
+      try {
+        await fn();
+      } finally {
+        await provider.shutdown();
+      }
+    }),
+  );
 
 const spanNamed = (name: string): ReadableSpan | undefined =>
   exporter.getFinishedSpans().find((s) => s.name === name);

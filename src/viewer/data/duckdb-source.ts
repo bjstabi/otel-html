@@ -35,6 +35,7 @@ import {
   type SpanSort,
   serviceBucketsQuery,
   servicesQuery,
+  spanCountQuery,
   spanRowsQuery,
   type TraceSort,
   timelineQuery,
@@ -93,6 +94,7 @@ import {
   spanEntries,
   spanRows,
   timeline,
+  timelineBuckets,
   toNumber,
   traceRows,
 } from './span-results.js';
@@ -122,7 +124,14 @@ const TRACE_SORTS: readonly TraceSort['column'][] = [
   'resource',
 ];
 /** The needs that read the whole filtered set (a residual condition narrows them through its id table). */
-const AGGREGATE_NEEDS: readonly SpanNeed[] = ['facets', 'timeline', 'durations', 'groups'];
+const AGGREGATE_NEEDS: readonly SpanNeed[] = [
+  'facets',
+  'timeline',
+  'buckets',
+  'total',
+  'durations',
+  'groups',
+];
 const CORE_KEYS: ReadonlySet<string> = new Set(CORE_SPAN_FACETS.map((c) => c.key));
 const LOG_SORTS: readonly LogSort['column'][] = ['time', 'severity', 'service'];
 const LOG_TRACE_SORTS: readonly LogTraceSort['column'][] = ['first', 'logs', 'severity'];
@@ -373,6 +382,23 @@ export function createDuckDbDataSource(opts: {
             const t = timeline(await engine.query(timelineQuery(f, spec), signal), spec);
             result.buckets = t.buckets;
             result.red = t.red;
+          })(),
+        );
+      } else if (needs.has('buckets')) {
+        // The counts alone: the statement leaves out the latency columns, and `red` keeps its empty value.
+        parts.push(
+          (async () => {
+            result.buckets = timelineBuckets(await engine.query(timelineQuery(f, spec, false), signal), spec);
+          })(),
+        );
+      }
+
+      if (needs.has('total') && !needs.has('rows')) {
+        // The match count alone, as `rows` would report it; with `rows` asked its statement sets the total.
+        parts.push(
+          (async () => {
+            const t = await engine.query(spanCountQuery(f, q.mode), signal);
+            result.total = toNumber(cell(rowsOf(t)[0] ?? {}, 'total') ?? 0n, 'total');
           })(),
         );
       }

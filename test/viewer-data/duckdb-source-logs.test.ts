@@ -530,7 +530,12 @@ describe('resourceValues', () => {
     const spanReq = otlp(
       traceRequest(
         [span({ traceId: hex(5, 32), spanId: hex(5, 16) })],
-        [attr('service.name', str('s')), attr('host.name', str('h1')), attr('port', { intValue: '80' })],
+        [
+          attr('service.name', str('s')),
+          attr('host.name', str('h1')),
+          attr('port', { intValue: '80' }),
+          attr('tag', str('["a"]')),
+        ],
       ) as never,
     );
     const logReq = otlp(
@@ -540,6 +545,7 @@ describe('resourceValues', () => {
           attr('service.name', str('s')),
           attr('host.name', { intValue: '7' }),
           attr('port', { intValue: '81' }),
+          attr('tag', { arrayValue: { values: [str('a')] } }),
         ],
       ) as never,
     );
@@ -555,6 +561,8 @@ describe('resourceValues', () => {
       capped: false,
     });
     expect(await source.resourceValues('port')).toEqual({ values: ['80', '81'], kind: 'int', capped: false });
+    // a string that looks like a list is a value; the list itself is not
+    expect(await source.resourceValues('tag')).toEqual({ values: ['["a"]'], kind: 'string', capped: false });
     // one text under two kinds is one value: cap 2 over ('3' as int and string, 'a') keeps both, not capped
     const t = (v: JsonObject) => [attr('service.name', str('s')), attr('host.name', v)];
     const h = await buildFormat4Report(

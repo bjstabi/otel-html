@@ -18,6 +18,7 @@ import {
   resourceValuesQuery,
   serviceBucketsQuery,
   servicesQuery,
+  spanCountQuery,
   spanRowsQuery,
   timelineQuery,
   tracePartitionsQuery,
@@ -429,6 +430,16 @@ describe('facets', () => {
 });
 
 describe('timeline and durations', () => {
+  test('spanCountQuery counts the filtered spans, or their traces', () => {
+    const { filter: all } = filter();
+    expect(run(spanCountQuery(all, 'spans'))).toEqual([{ total: 7n }]); // the fixture's span count, as durationSummaryQuery's n
+    const traces = run(spanCountQuery(all, 'traces'))[0]?.total;
+    expect(traces).toBe(
+      BigInt(
+        new Set(run(spanRowsQuery(all, { column: 'start', dir: 'asc' }, 100)).map((r) => r.trace_id)).size,
+      ),
+    );
+  });
   test('timelineQuery buckets by the spec and clamps a span starting before the window to the first bucket', () => {
     const window = { start: rel(15), end: rel(70) };
     const { filter: w } = filter({ window });
@@ -442,6 +453,21 @@ describe('timeline and durations', () => {
     expect(rows[0]).toMatchObject({ ok: 0n, error: 0n, unset: 2n });
     expect(rows[0]?.max_duration_ns).toBe(ns(100));
     expect(Array.isArray(rows[0]?.quantiles) || typeof rows[0]?.quantiles === 'object').toBe(true);
+  });
+  test('timelineQuery without latency gives the same counts and never reads duration_ns', () => {
+    const window = { start: rel(15), end: rel(70) };
+    const { filter: w } = filter({ window });
+    const spec = bucketSpec(window, null);
+    const q = timelineQuery(w, spec, false);
+    expect(toSql(q)).not.toContain('duration_ns');
+    const rows = run(q);
+    expect(rows.map((r) => [r.bucket, r.n, r.errors])).toEqual([
+      [15_000_000n, 2n, 0n],
+      [19_000_000n, 1n, 1n],
+      [60_000_000n, 1n, 0n],
+    ]);
+    expect(rows[0]).toMatchObject({ ok: 0n, error: 0n, unset: 2n });
+    expect(Object.keys(rows[0] ?? {})).not.toContain('quantiles');
   });
   test('durationSummaryQuery', () => {
     const { filter: w } = filter();
@@ -505,6 +531,15 @@ describe('services', () => {
     expect(run(resourceValuesQuery('host.name', 5))).toEqual([{ value: 'host-1', kind: 'string' }]);
     expect(col(run(resourceValuesQuery('service.name', 1)), 'value')).toHaveLength(2);
     expect(run(resourceValuesQuery('nope', 5))).toEqual([]);
+  });
+  test('resourceValuesQuery reads each resource text once and has no predicate a scan could take', () => {
+    const text = toSql(resourceValuesQuery('host.name', 5));
+    // The conditions live in aggregate FILTERs and a HAVING: a WHERE is pushed below the distinct, back onto every row.
+    expect(text.replaceAll('FILTER (WHERE', '')).not.toMatch(/\bWHERE\b/);
+    expect(text).toMatch(/\bHAVING\b/);
+    for (const table of ['spans', 'logs', 'points'])
+      expect(text.split(`SELECT "resource_attributes" FROM "${table}"`)).toHaveLength(2);
+    expect(text.split('json_extract_string(').length).toBeLessThan(6); // extracted once over the union, not once per table
   });
   test('absWindow is what the spans window compares against', () => {
     expect(absWindow({ start: 1, end: 2 }, f.epoch)).toEqual({ start: f.epoch + 1n, end: f.epoch + 2n });

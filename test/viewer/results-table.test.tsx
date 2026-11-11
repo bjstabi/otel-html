@@ -7,6 +7,7 @@ import { ResultsTable, type ResultsTableProps, tabStop } from '../../src/viewer/
 import type { SpanRow, TraceRow } from '../../src/viewer/data/results.js';
 import { MOVE_EVENT } from '../../src/viewer/shell/move-event.js';
 import {
+  SERVICE_SHARE_SPAN_CAP,
   type ServiceShareLoader,
   SPAN_COLUMNS_UI,
   TRACE_COLUMNS_UI,
@@ -173,6 +174,25 @@ describe('ResultsTable', () => {
       expect(serviceShare).toHaveBeenCalledWith('aa', expect.any(AbortSignal));
       expect(screen.queryByText('partial')).toBeNull();
       expect(screen.getByText('GET /')).toBeTruthy();
+    });
+
+    test('a trace over the span cap is not loaded and the cell says why', async () => {
+      const serviceShare = vi.fn(() => Promise.resolve([{ service: 'web', ns: 70 }]));
+      mount({ rows: [{ ...t, spans: SERVICE_SHARE_SPAN_CAP + 1 }], columns: TRACE_COLUMNS_UI, serviceShare });
+      const cell = await screen.findByTitle(
+        'Not computed for a trace of more than 10,000 spans: it reads every span of the trace',
+      );
+      expect(cell.textContent).toBe('-');
+      await new Promise((r) => setTimeout(r, 0));
+      expect(serviceShare).not.toHaveBeenCalled();
+      expect(screen.queryByText('...')).toBeNull();
+    });
+
+    test('a trace at the span cap is loaded', async () => {
+      const serviceShare = vi.fn(() => Promise.resolve([{ service: 'web', ns: 70 }]));
+      mount({ rows: [{ ...t, spans: SERVICE_SHARE_SPAN_CAP }], columns: TRACE_COLUMNS_UI, serviceShare });
+      expect(await screen.findByRole('img', { name: 'web 70 ns' })).toBeTruthy();
+      expect(serviceShare).toHaveBeenCalledWith('aa', expect.any(AbortSignal));
     });
 
     test('a failed load says unavailable for that row only', async () => {

@@ -172,7 +172,7 @@ function spanResult(q: SpanQuery): SpanQueryResult {
       if (wanted('service.name')) facets.add('service.name', r.service);
       if (wanted('span.name')) facets.add('span.name', r.span.name);
     }
-    if (needs.has('timeline')) buckets.add(r.span.start, 'unset');
+    if (needs.has('timeline') || needs.has('buckets')) buckets.add(r.span.start, 'unset');
   }
   const result: SpanQueryResult = {
     rows: [],
@@ -185,6 +185,8 @@ function spanResult(q: SpanQuery): SpanQueryResult {
     residual: null,
     tables: { resources: [], scopes: [] },
   };
+  // `total` alone reports the match count `rows` would: the spans, or in traces mode the one fixture trace
+  if (needs.has('total')) result.total = q.mode === 'spans' ? kept.length : Math.min(kept.length, 1);
   if (needs.has('rows')) {
     result.total = kept.length;
     if (q.mode === 'spans') {

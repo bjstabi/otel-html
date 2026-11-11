@@ -412,8 +412,8 @@ describe('the Top list and Table widget states', () => {
   });
 
   test.each([
-    ['count', ['rows', 'facets']],
-    ['duration.max', ['rows', 'facets', 'groups']],
+    ['count', ['total', 'facets']],
+    ['duration.max', ['total', 'facets', 'groups']],
   ] as const)('with measure %s a span widget asks for %j, restricted to its key', async (measure, needs) => {
     const calls: unknown[][] = [];
     mount(

@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { type Span, SpanStatusCode } from '@opentelemetry/api';
+import { context, type Span, SpanStatusCode, trace } from '@opentelemetry/api';
 import { stderrOnce, type TestTracing, VIEWER_RESOURCE } from '../test-support/otel/sdk.js';
 import { fromSpanJson, RECORDER_BINDING, RECORDER_PATH, type SpanJson } from './otel-page/span-json.js';
 
@@ -64,6 +64,33 @@ export function endTestSpan(span: Span, outcome: TestOutcome): void {
     ...(error?.stack === undefined ? {} : { 'exception.stacktrace': plain(error.stack) }),
   });
   span.end();
+}
+
+/**
+ * Runs `fn` inside a span `name` under the job's trace (TRACEPARENT), so what `fn` starts through the worker SDK's
+ * context manager is parented to it. Without `tracing` it is `fn()`. A rejection is recorded on the span (status
+ * ERROR) and rethrown; the span ends either way.
+ */
+export async function withSpan<T>(
+  tracing: TestTracing | undefined,
+  name: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  if (tracing === undefined) return fn();
+  const parent = tracing.parentFrom(process.env);
+  const span = tracing.tracer.startSpan(name, {}, parent);
+  try {
+    return await context.with(trace.setSpan(parent, span), fn);
+  } catch (error) {
+    span.setStatus({
+      code: SpanStatusCode.ERROR,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    if (error instanceof Error) span.recordException(error);
+    throw error;
+  } finally {
+    span.end();
+  }
 }
 
 /** Whether the in-page recorder runs for this test: not for timing-sensitive or load specs. */
