@@ -42,12 +42,6 @@ vi.mock('../../src/query/sql/residual.js', () =>
   recording(() => vi.importActual('../../src/query/sql/residual.js')),
 );
 
-/**
- * Builders no request can run on the generator's report: `summaryQuantilesQuery` serves the show options of a summary
- * metric, and the report holds gauges only. Reported to the maintainer; an entry needs a summary in the generator.
- */
-const NOT_RUNNABLE = new Set(['points.ts:summaryQuantilesQuery']);
-
 const SPAN_NEEDS: Record<SpanNeed, true> = {
   rows: true,
   facets: true,
@@ -101,6 +95,7 @@ const PLAN_IDS = [
   'metrics.showOptions',
   'metrics.query.short',
   'metrics.query.long',
+  'metrics.query.summary',
   'metrics.runQuery',
   'metrics.forResources',
   'metrics.points',
@@ -130,7 +125,7 @@ describe('the catalogue', () => {
         if (typeof value === 'function' && BUILDER.test(name)) exported.push(`${file}:${name}`);
       }
     }
-    const missing = exported.filter((n) => !named.has(n.split(':')[1] ?? '') && !NOT_RUNNABLE.has(n));
+    const missing = exported.filter((n) => !named.has(n.split(':')[1] ?? ''));
     expect(missing).toEqual([]);
   });
 

@@ -336,10 +336,9 @@ const metricQueryOf = (ids: ScalingIds, where: string | null = null): MetricQuer
   hidden: false,
 });
 
-async function metricEntryOf(ds: DataSource, ids: ScalingIds) {
-  const found = (await ds.metricCatalog()).entries.find((e) => e.name === ids.metric);
-  if (found === undefined)
-    throw new OtelHtmlError('usage', { message: `no metric ${ids.metric} in the report` });
+async function metricEntryOf(ds: DataSource, ids: ScalingIds, name: string = ids.metric) {
+  const found = (await ds.metricCatalog()).entries.find((e) => e.name === name);
+  if (found === undefined) throw new OtelHtmlError('usage', { message: `no metric ${name} in the report` });
   return found;
 }
 
@@ -478,6 +477,32 @@ export const CATALOGUE = [
     run: async (ds, ctx) => ds.metricShowOptions((await metricEntryOf(ds, ctx.ids)).id),
   }),
   ...METRIC_QUERIES,
+  entry({
+    id: 'metrics.query.summary',
+    family: 'metrics',
+    method: 'metricQuery',
+    // the page picks the metric (its show options: the summary's quantiles are read), then queries it
+    builders: [
+      ...METRIC_CATALOG,
+      'summaryQuantilesQuery',
+      ...METRIC_QUERY.filter((b) => b !== 'seriesServicesQuery'),
+    ],
+    spacing: 'dense',
+    window: true,
+    run: async (ds, ctx) => {
+      const summary = (await ds.metricCatalog()).entries.find((e) => e.type === 'summary');
+      if (summary === undefined)
+        throw new OtelHtmlError('usage', { message: 'no summary metric in the report' });
+      await ds.metricShowOptions(summary.id);
+      return ds.metricQuery({
+        entry: summary,
+        query: { ...metricQueryOf(ctx.ids), metric: summary.name, show: 'q0.5' },
+        window: windowOf(ctx),
+        maxPoints: 300,
+        exemplars: true,
+      });
+    },
+  }),
   entry({
     id: 'metrics.query.residual.long',
     family: 'metrics',

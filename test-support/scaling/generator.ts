@@ -50,7 +50,9 @@ const OUT = 'r';
 const SERVICES = ['svc-a', 'svc-b'] as const;
 const SPAN_NAMES = ['GET', 'POST', 'db', 'cache', 'queue', 'render', 'auth', 'send'];
 const SEVERITIES = [5, 9, 13, 17];
+/** Two gauges and one summary (`SUMMARY`), each of 4 series x 16 points per partition. */
 const METRICS = ['scaling.load', 'scaling.queue'];
+const SUMMARY = 'scaling.latency';
 const SPACING_NS = { dense: 20n * 60n * 1_000_000_000n, sparse: 6n * 3600n * 1_000_000_000n } as const;
 const SPREAD_NS = 10n * 60n * 1_000_000_000n;
 const SPAN_NS = 1_000_000n;
@@ -99,7 +101,7 @@ function partitionJson(shape: Shape, n: number): Record<string, unknown>[] {
       ...(withTrace ? { traceId: traceIdOf(n, Math.floor((4 * k) / 8)), spanId: spanIdOf(n, 4 * k) } : {}),
     });
   }
-  const metrics = METRICS.map((name, m) => ({
+  const metrics: Record<string, unknown>[] = METRICS.map((name, m) => ({
     name,
     unit: '1',
     gauge: {
@@ -114,6 +116,26 @@ function partitionJson(shape: Shape, n: number): Record<string, unknown>[] {
       }),
     },
   }));
+  // a summary, so the show options of a summary metric have a request to run; quantile values derive from the row index
+  metrics.push({
+    name: SUMMARY,
+    unit: '1',
+    summary: {
+      dataPoints: Array.from({ length: 4 * 16 }, (_, j) => {
+        const point = Math.floor(j / 4);
+        return {
+          timeUnixNano: String(startOf(shape, n) + (BigInt(point) * SPREAD_NS) / 16n),
+          count: String(j + 1),
+          sum: j + 1,
+          quantileValues: [
+            { quantile: 0.5, value: j },
+            { quantile: 0.99, value: 2 * j },
+          ],
+          attributes: [str('series', `s${j % 4}`)],
+        };
+      }),
+    },
+  });
   return [
     {
       resourceSpans: SERVICES.map((service, i) => ({
