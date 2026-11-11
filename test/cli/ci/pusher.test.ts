@@ -149,14 +149,31 @@ describe('tick', () => {
     failNext = new Error('boom 503');
     const t1 = await tick(o, pdeps(), null);
     expect(t1.outcome).toBe('retry');
-    expect(log.join('\n')).toContain('boom 503');
+    expect(log.join('\n')).toContain('upload failed, will retry: boom 503');
     let ledger = await readLedger(deps.fs, o.publishDir);
     expect(ledger.sequence).toBe(1);
     expect(ledger.shipped).toEqual([]);
     expect(existsSync(join(o.publishDir, 'tick-1'))).toBe(false);
 
-    const t2 = await tick(o, pdeps(), t1.listing);
+    const calls: string[] = [];
+    const d2 = pdeps();
+    const json = (b: object): Response => new Response(JSON.stringify(b), { status: 200 });
+    d2.fetchFn = (async (url: string, init?: RequestInit) => {
+      calls.push(`${init?.method ?? 'GET'} ${String(url)}`);
+      if (init?.method === 'POST') return new Response(null, { status: 204 });
+      if (String(url).endsWith('/actions/runs/42'))
+        return json({
+          id: 42,
+          actor: { type: 'User' },
+          repository: { full_name: 'o/r' },
+          head_repository: { full_name: 'o/r' },
+        });
+      return json({ default_branch: 'main', workflow_runs: [] });
+    }) as unknown as typeof fetch;
+    const t2 = await tick(o, d2, t1.listing);
     expect(t2.outcome).toBe('uploaded');
+    expect(calls.some((u) => u.startsWith('POST') && u.includes('/dispatches'))).toBe(true);
+    expect(calls.some((u) => u.includes('/runs?'))).toBe(false);
     expect(uploads.map((u) => u.name)).toEqual(['otel-html-update-push-777-2']);
     ledger = await readLedger(deps.fs, o.publishDir);
     expect(ledger.shipped).toEqual(['flush:0']);
@@ -224,6 +241,50 @@ describe('runPusher', () => {
     expect(total).toBeGreaterThanOrEqual(6000);
     expect(sleeps.reduce((a, b) => a + b, 0)).toBe(total);
     expect(Math.max(...sleeps)).toBeLessThanOrEqual(1000);
+  });
+
+  test('everyMs below one second is clamped, so the loop waits', async () => {
+    const o = opts({ everyMs: 0 });
+    mkdirSync(join(dir, '.otel-html'), { recursive: true });
+    let n = 0;
+    onSleep = (): void => {
+      if (++n === 3) writeFileSync(join(o.publishDir, 'pusher.stop'), '');
+    };
+    await runPusher(o, pdeps(), { on: () => () => undefined });
+    expect(sleeps.length).toBeGreaterThanOrEqual(3);
+    expect(sleeps.every((ms) => ms === 1000)).toBe(true);
+  });
+
+  test('an fs error writing the pid file is logged, not silent', async () => {
+    const o = opts();
+    const d = pdeps();
+    d.fs = { ...deps.fs, writeTextAtomic: async () => Promise.reject(new Error('disk full')) } as typeof d.fs;
+    await runPusher(o, d, { on: () => () => undefined });
+    expect(log.join('\n')).toContain('disk full');
+  });
+
+  test('an fs error checking the stop file is logged once and does not end the loop', async () => {
+    const o = opts();
+    mkdirSync(join(dir, '.otel-html'), { recursive: true });
+    const d = pdeps();
+    let broken = true;
+    d.fs = {
+      ...deps.fs,
+      exists: async (p: string) => {
+        if (broken && p.endsWith('pusher.stop')) throw new Error('EIO');
+        return deps.fs.exists(p);
+      },
+    } as typeof d.fs;
+    let n = 0;
+    onSleep = (): void => {
+      if (++n === 3) {
+        broken = false;
+        writeFileSync(join(o.publishDir, 'pusher.stop'), '');
+      }
+    };
+    await runPusher(o, d, { on: () => () => undefined });
+    expect(log.filter((l) => l.includes('EIO'))).toHaveLength(1);
+    expect(n).toBeGreaterThanOrEqual(3);
   });
 
   test('SIGTERM ends the loop', async () => {

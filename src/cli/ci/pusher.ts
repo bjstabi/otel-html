@@ -54,6 +54,7 @@ export async function tick(o: PusherOptions, d: PusherDeps, last: string[] | nul
   const { fs } = d;
   let listing = last ?? [];
   const folders: string[] = [];
+  let step = 'tick';
   try {
     const manifest = await readRunManifest(fs, o.report);
     if (manifest === null || manifest.partitions.length === 0) return { outcome: 'unchanged', listing };
@@ -127,7 +128,9 @@ export async function tick(o: PusherOptions, d: PusherDeps, last: string[] | nul
       ...(ciReport === undefined ? {} : { ciReport }),
     });
     if (built === undefined) return { outcome: 'unchanged', listing };
+    step = 'zip';
     const zip = await zipDirectory(fs, out);
+    step = 'upload';
     await d.upload({
       name,
       zip,
@@ -136,6 +139,7 @@ export async function tick(o: PusherOptions, d: PusherDeps, last: string[] | nul
     });
 
     // Re-read: `ci update done` or a final push may have written meanwhile.
+    step = 'ledger update';
     const fresh = await readLedger(fs, o.publishDir);
     if (!fresh.uploads.some((u) => u.name === name))
       await writeLedger(fs, o.publishDir, {
@@ -152,10 +156,11 @@ export async function tick(o: PusherOptions, d: PusherDeps, last: string[] | nul
         ],
       });
     d.log(`uploaded ${name} (${built.sources.length} source(s), ${zip.length} bytes)`);
+    step = 'dispatch';
     await dispatch(o, d, repository, runId);
     return { outcome: 'uploaded', listing };
   } catch (e) {
-    d.log(`upload failed, will retry: ${messageOf(e)}`);
+    d.log(`${step} failed, will retry: ${messageOf(e)}`);
     return { outcome: 'retry', listing };
   } finally {
     for (const f of folders) await fs.removeDir(f).catch(() => undefined);
@@ -168,10 +173,7 @@ async function dispatch(o: PusherOptions, d: PusherDeps, repository: string, run
     for (const line of s.split('\n')) if (line.trim() !== '') d.log(line);
   };
   const io = { stdout: sink, stderr: sink, env: o.env, cwd: '' } as unknown as CliIo;
-  await runDispatch({ workflow: o.deployerWorkflow, repository, runId }, io, d.fetchFn, {
-    sleep: d.sleep,
-    now: () => nowMs(d.clock),
-  });
+  await runDispatch({ workflow: o.deployerWorkflow, repository, runId }, io, d.fetchFn, { skip: true });
 }
 
 /**
@@ -186,7 +188,18 @@ export async function runPusher(o: PusherOptions, d: PusherDeps, signals: CliIo[
   });
   const stopFile = join(o.publishDir, STOP_FILE);
   const pidFile = join(o.publishDir, PID_FILE);
-  const shouldStop = async (): Promise<boolean> => stopped || (await fs.exists(stopFile));
+  const everyMs = Math.max(STOP_POLL_MS, o.everyMs);
+  let warned = false;
+  const shouldStop = async (): Promise<boolean> => {
+    if (stopped) return true;
+    try {
+      return await fs.exists(stopFile);
+    } catch (e) {
+      if (!warned) d.log(`cannot check ${stopFile}: ${messageOf(e)}`);
+      warned = true;
+      return false;
+    }
+  };
   try {
     await fs.mkdirp(o.publishDir);
     await fs.writeTextAtomic(pidFile, String(d.deps.process.pid));
@@ -195,13 +208,15 @@ export async function runPusher(o: PusherOptions, d: PusherDeps, signals: CliIo[
       const r = await tick(o, d, last);
       last = r.listing;
       if (await shouldStop()) break;
-      for (let waited = 0; waited < o.everyMs && !stopped; ) {
-        const step = Math.min(STOP_POLL_MS, o.everyMs - waited);
+      for (let waited = 0; waited < everyMs && !stopped; ) {
+        const step = Math.min(STOP_POLL_MS, everyMs - waited);
         await d.sleep(step);
         waited += step;
         if (await shouldStop()) break;
       }
     }
+  } catch (e) {
+    d.log(`the pusher stops: ${messageOf(e)}`);
   } finally {
     off();
     await fs.remove(pidFile).catch(() => undefined);
