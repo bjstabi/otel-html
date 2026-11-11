@@ -161,14 +161,36 @@ export const SPAN_COLUMNS_UI: readonly ColumnUi<SpanRow>[] = [
   },
 ];
 
-/** Stacked bar of exclusive time per service, loaded for this row's trace when the row is drawn. */
+/**
+ * The largest trace, in spans, whose share cell is computed. The share reads every span of the trace, so a
+ * larger trace would cost more than the row is worth.
+ */
+export const SERVICE_SHARE_SPAN_CAP = 10_000;
+
+/** The dash of a row whose trace is over the cap, with the reason as its title. */
+const overCapDash = (
+  <span
+    className="text-muted"
+    title={`Not computed for a trace of more than ${SERVICE_SHARE_SPAN_CAP.toLocaleString('en-US')} spans: it reads every span of the trace`}
+  >
+    -
+  </span>
+);
+
+/**
+ * Stacked bar of exclusive time per service, loaded for this row's trace when the row is drawn. A trace over
+ * `SERVICE_SHARE_SPAN_CAP` spans is not loaded: a null key makes the hook load nothing.
+ */
 function ServiceShare(props: {
   traceId: TraceId;
+  spans: number;
   load: ServiceShareLoader;
   colors: ColorAssigner;
 }): JSX.Element {
   const { colors } = props;
-  const state = useKeyedAsync(props.traceId, props.load);
+  const overCap = props.spans > SERVICE_SHARE_SPAN_CAP;
+  const state = useKeyedAsync(overCap ? null : props.traceId, props.load);
+  if (overCap) return overCapDash;
   if (state.status === 'loading') return <span className="text-xs text-muted">...</span>;
   if (state.status === 'error') {
     return (
@@ -243,7 +265,9 @@ export const TRACE_COLUMNS_UI: readonly ColumnUi<TraceRow>[] = [
     id: 'share',
     header: 'Latency by service',
     width: 200,
-    cell: (r, c) => <ServiceShare traceId={r.traceId} load={c.serviceShare} colors={c.colors} />,
+    cell: (r, c) => (
+      <ServiceShare traceId={r.traceId} spans={r.spans} load={c.serviceShare} colors={c.colors} />
+    ),
   },
 ];
 
