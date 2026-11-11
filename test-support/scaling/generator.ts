@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
 import { isV4, type ManifestV4, parseAnyManifest } from '../../src/format/manifest.js';
@@ -14,7 +14,7 @@ import { openSession } from '../../src/writer/session.js';
 import type { Format4Fixture } from '../format4-fixture.js';
 import { writeReportDir } from '../report-dir.js';
 import { createTestWriter, EPOCH_NS, testConfig } from '../writer-deps.js';
-import { bounded, waitTurn } from './bounded.js';
+import { bounded, takeLock, waitTurn } from './bounded.js';
 import { ROW_GROUP_ROWS } from './cost.js';
 
 const AXIS_FIELD = { retention: 'outside', window: 'inside', density: 'rowGroups' } as const;
@@ -258,12 +258,9 @@ async function ensurePrebuilt(root: string, shape: Shape): Promise<string> {
   const since = performance.now();
   for (;;) {
     if (existsSync(join(target, 'meta.json'))) return target;
-    try {
-      await mkdir(lock);
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+    if (!(await takeLock(lock))) {
       // another worker builds it; if it failed, the lock is gone and this one takes over
-      await waitTurn(since, `the report ${shapeKey(shape)}`);
+      await waitTurn(since, `the report ${shapeKey(shape)}`, lock);
       continue;
     }
     try {

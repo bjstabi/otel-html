@@ -1,9 +1,10 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { MessageChannel, type MessagePort } from 'node:worker_threads';
 import type { Connector } from '@uwdata/mosaic-core';
 import type { ManifestV4 } from '../../src/format/manifest.js';
+import type { HostEngineFiles } from '../../src/host/engine-files.js';
 import { NODE_FS_PROTOCOL, type NodeDuckDb, openNodeDuckDb } from '../../src/host/node-duckdb.js';
 import { viewStatements } from '../../src/query/sql/views.js';
 import { createCoordinator, mosaicQueryEngine } from '../../src/viewer/data/mosaic.js';
@@ -78,6 +79,31 @@ const COUNTING_PREAMBLE = `{
     open.delete(fd);
     return closeSync.call(this, fd);
   };
+  // Compiled once per test process and handed to every worker: the engine's wasm and the two extensions' (matched by
+  // length and their first bytes). What the worker does not find here, it compiles as before.
+  const compiled = workerData.compiled;
+  if (compiled !== undefined) {
+    const find = (src) => {
+      if (!(src instanceof Uint8Array) && !(src instanceof ArrayBuffer)) return undefined;
+      const bytes = src instanceof ArrayBuffer ? new Uint8Array(src) : src;
+      return compiled.extensions.find(
+        (e) => e.length === bytes.length && e.head.every((b, i) => bytes[i] === b),
+      )?.module;
+    };
+    const readFile = fs.readFileSync;
+    fs.readFileSync = function (p, ...rest) {
+      return p === compiled.wasmPath ? new Uint8Array(0) : readFile.call(this, p, ...rest);
+    };
+    const instantiate = WebAssembly.instantiate;
+    WebAssembly.instantiate = function (src, imports) {
+      const module = src instanceof Uint8Array && src.length === 0 ? compiled.wasm : find(src);
+      if (module === undefined) return instantiate.call(this, src, imports);
+      return instantiate.call(this, module, imports).then((instance) => ({ instance, module }));
+    };
+    WebAssembly.Module = new Proxy(WebAssembly.Module, {
+      construct: (target, args, newTarget) => find(args[0]) ?? Reflect.construct(target, args, newTarget),
+    });
+  }
 }`;
 
 function concat(chunks: readonly Uint8Array[]): Uint8Array {
@@ -103,6 +129,34 @@ async function runIpc(db: NodeDuckDb, conn: Connection, sql: string): Promise<Ui
     chunks.push(chunk);
   }
   return concat(chunks);
+}
+
+interface Precompiled {
+  wasmPath: string;
+  wasm: WebAssembly.Module;
+  extensions: { length: number; head: Uint8Array; module: WebAssembly.Module }[];
+}
+
+const precompiled = new Map<string, Promise<Precompiled>>();
+
+/** The engine's wasm and the two extensions compiled once in this process (a compiled module crosses to a worker thread). */
+function compileOnce(files: HostEngineFiles): Promise<Precompiled> {
+  const hit = precompiled.get(files.wasm);
+  if (hit !== undefined) return hit;
+  const made = (async (): Promise<Precompiled> => {
+    const extensions: Precompiled['extensions'] = [];
+    for (const path of Object.values(files.extensions)) {
+      const bytes = await readFile(path);
+      extensions.push({
+        length: bytes.length,
+        head: bytes.subarray(0, 64),
+        module: await WebAssembly.compile(bytes),
+      });
+    }
+    return { wasmPath: files.wasm, wasm: await WebAssembly.compile(await readFile(files.wasm)), extensions };
+  })();
+  precompiled.set(files.wasm, made);
+  return made;
 }
 
 const quiet = { debug() {}, info() {}, warn() {}, error() {} };
@@ -157,9 +211,10 @@ export async function openCountingEngine(
     running++;
     let db: NodeDuckDb;
     try {
-      db = await openNodeDuckDb(packageHostEngineFiles(), {
+      const files = packageHostEngineFiles();
+      db = await openNodeDuckDb(files, {
         preamble: COUNTING_PREAMBLE,
-        workerData: { countPort: port2, countRoot: root },
+        workerData: { countPort: port2, countRoot: root, compiled: await compileOnce(files) },
         transferList: [port2],
       });
     } catch (e) {
