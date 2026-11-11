@@ -17,10 +17,10 @@ const ci = (config: ResolveResult['config']) => {
   return d;
 };
 
-async function resolved() {
+async function resolved(path: string = PATH) {
   const fs = createMemoryFileSystem();
   await fs.mkdirp('/c');
-  await fs.writeTextAtomic('/c/ci.yaml', await readFile(PATH, 'utf8'));
+  await fs.writeTextAtomic('/c/ci.yaml', await readFile(path, 'utf8'));
   return resolveConfig({
     file: await loadConfigFile(fs, '/c/ci.yaml'),
     env: {},
@@ -89,21 +89,55 @@ describe('.github/actions/otel-html-publish/otel-html-ci.yaml', () => {
     const query = runs && 'query' in runs ? runs.query : null;
     expect(query).not.toBeNull();
     const cond = compileCondition(query ?? '', 'span');
-    expect(cond.test(spanTarget({ parentSpanId: null, kind: SpanKind.INTERNAL }))).toBe(true);
+    const inScope = (over: Parameters<typeof spanTarget>[0] = {}) => {
+      const t = spanTarget(over);
+      return { ...t, scope: { ...t.scope, name: 'otel-html-ci' } };
+    };
+    expect(cond.test(inScope({ parentSpanId: null, kind: SpanKind.INTERNAL }))).toBe(true);
     // the run span sits on the run's resource, so with `job` set only the job span can bring its trace back
     const jobSpan = new Map<string, AnyValue>([
       ['cicd.pipeline.task.run.id', { kind: 'string', value: '7' }],
     ]);
-    expect(cond.test(spanTarget({ attributes: jobSpan }))).toBe(true);
+    expect(cond.test(inScope({ attributes: jobSpan }))).toBe(true);
     // a job skipped by its `if:` did not run in that run
     const skipped = new Map<string, AnyValue>([
       ...jobSpan,
       ['cicd.pipeline.task.run.result', { kind: 'string', value: 'skip' }],
     ]);
-    expect(cond.test(spanTarget({ attributes: skipped }))).toBe(false);
+    expect(cond.test(inScope({ attributes: skipped }))).toBe(false);
     // a step or queued span does not
     const step = new Map<string, AnyValue>([['github.job.step.number', { kind: 'int', value: 3n }]]);
-    expect(cond.test(spanTarget({ attributes: step }))).toBe(false);
-    expect(cond.test(spanTarget())).toBe(false);
+    expect(cond.test(inScope({ attributes: step }))).toBe(false);
+    expect(cond.test(inScope())).toBe(false);
   });
+});
+
+const RUNS =
+  'instrumentation_scope.name == "otel-html-ci" and (IsRootSpan() or (attributes["cicd.pipeline.task.run.id"] != nil and attributes["cicd.pipeline.task.run.result"] != "skip"))';
+
+test.each([
+  '.github/actions/otel-html-publish/otel-html-ci.yaml',
+  '.github/otel-html-ci.yaml',
+  'fixtures/dashboards.otel-html.yaml',
+])('%s: Runs lists CI roots and unskipped job spans, nothing of another scope', async (path) => {
+  const { config } = await resolved(path);
+  const runs = ci(config).widgets.find((w) => w.title === 'Runs');
+  if (runs === undefined || !('query' in runs)) throw new Error('no Runs widget');
+  expect(runs.query).toBe(RUNS);
+  const matches = compileCondition(RUNS, 'span');
+  const target = (scope: string, root: boolean, result?: string) => {
+    const attributes = new Map<string, AnyValue>();
+    if (!root) {
+      attributes.set('cicd.pipeline.task.run.id', { kind: 'string', value: '7' });
+      if (result !== undefined)
+        attributes.set('cicd.pipeline.task.run.result', { kind: 'string', value: result });
+    }
+    const t = spanTarget({ attributes, ...(root ? { parentSpanId: null } : {}) });
+    return { ...t, scope: { ...t.scope, name: scope } };
+  };
+  expect(matches.test(target('otel-html-ci', true))).toBe(true);
+  // the run whose root never arrived is still listed by its job span
+  expect(matches.test(target('otel-html-ci', false, 'success'))).toBe(true);
+  expect(matches.test(target('otel-html-ci', false, 'skip'))).toBe(false);
+  expect(matches.test(target('vitest', true))).toBe(false);
 });
