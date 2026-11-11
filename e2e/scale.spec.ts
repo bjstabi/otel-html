@@ -27,6 +27,7 @@ import {
 } from './fixture.js';
 import { startHost } from './host-process.js';
 import { ensureMetricsScaleReport } from './metrics-scale.js';
+import { withSpan } from './otel.js';
 import { REQUESTS_PATH, type RequestRecord } from './static-server.js';
 import { expect, test } from './test.js';
 
@@ -763,9 +764,9 @@ test.describe(`metrics scale: ${SCALE_METRICS} metrics × ${SCALE_METRIC_SERIES}
     process.env[METRICS_SCALE_ENV] !== '1',
     `set ${METRICS_SCALE_ENV}=1 to write the metrics scale report and run its checks`,
   );
-  test.beforeAll(async () => {
+  test.beforeAll(async ({ otelTracing }) => {
     test.setTimeout(METRICS_SCALE_SETUP_MS);
-    await ensureMetricsScaleReport();
+    await withSpan(otelTracing, 'metrics scale report', ensureMetricsScaleReport);
   });
 
   test(
