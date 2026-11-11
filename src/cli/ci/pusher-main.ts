@@ -75,9 +75,11 @@ export async function runPusherCommand(o: PusherCommand, io: CliIo, deps: Writer
     {
       fs: deps.fs,
       clock: deps.clock,
+      // A referenced timer: the detached pusher has nothing else keeping it alive, and the shared timers are unref'd,
+      // so with them Node would exit at the first sleep.
       sleep: (ms) =>
         new Promise((r) => {
-          deps.timers.after(ms, r);
+          setTimeout(r, ms);
         }),
       upload: uploadArtifact,
       fetchFn: fetch,
