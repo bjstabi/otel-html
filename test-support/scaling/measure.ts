@@ -1,6 +1,5 @@
 import { existsSync } from 'node:fs';
 import { readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { availableParallelism } from 'node:os';
 import { join } from 'node:path';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { type Axis, CATALOGUE, type CatalogueEntry, DECLARED } from '../../src/viewer/data/catalogue.js';
@@ -47,9 +46,7 @@ function liveOf(shape: Shape): Promise<Live> {
   if (hit !== undefined) return hit;
   const made = (async (): Promise<Live> => {
     const report = await buildScalingReport(shape);
-    const counting = await openCountingEngine(report.dir, report.manifest, {
-      spare: availableParallelism() >= 8,
-    });
+    const counting = await openCountingEngine(report.dir, report.manifest);
     const sizes = new Map<string, number>();
     for (const p of report.manifest.partitions)
       for (const f of Object.values(p.files)) sizes.set(f.path, f.bytes);

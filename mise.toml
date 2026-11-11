@@ -259,7 +259,7 @@ Builds the reports of test-support/scaling/generator.ts (retention, density and 
 runs each entry of src/viewer/data/catalogue.ts cold through the counting engine and asserts the class it declares
 (test/scaling/classes-<axis>-<spacing>.test.ts: one file per axis and spacing plus the cross shape, so vitest runs them in
 parallel workers; test/scaling/classes.test.ts holds the cheap declared-rules tests and checks the split covers every entry
-and axis). About 1 minute on 20 cores, 2.2 minutes on 4; the workers share the generated reports and the cold runs through a folder in the temp directory; cached by the content of its inputs, so an unchanged tree replays it.
+and axis). About 50 seconds on 4 cores; the workers share the generated reports and the cold runs through a folder in the temp directory; cached by the content of its inputs, so an unchanged tree replays it.
 `check` depends on it and CI's `check` job runs it; the unit tasks skip the measurement (OTEL_HTML_SCALING unset).
 OTEL_HTML_SCALING_PRINT=1 prints the entry x axis x class table to stderr (only on an uncached run)."""
 sources = [
@@ -372,7 +372,7 @@ depends = ["lint", "typecheck", "knip"]
 # The `@perf` unit tests run after the parallel steps finish, not alongside them.
 [tasks.check]
 description = """Fast gate: lint, typecheck, unit tests, knip, the scaling measurement
-Results of lint, typecheck, knip, the parallel unit pass and the scaling measurement (about 1 minute when it runs) are cached by the content of their inputs, so a second run
+Results of lint, typecheck, knip, the parallel unit pass and the scaling measurement (under a minute when it runs) are cached by the content of their inputs, so a second run
 with nothing changed skips them. The unit tests with a time budget (named @perf) always run afterwards, alone and one
 file at a time; OTEL_HTML_PERF_FACTOR scales their budgets on a slow machine and, when OTEL_HTML_PERF_REFERENCE_MS is
 set (CI sets 100), so does how much slower than that reference a fixed CPU workload runs here (never below 1; the perf

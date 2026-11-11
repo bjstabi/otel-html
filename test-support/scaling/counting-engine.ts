@@ -6,6 +6,7 @@ import type { Connector } from '@uwdata/mosaic-core';
 import type { ManifestV4 } from '../../src/format/manifest.js';
 import type { HostEngineFiles } from '../../src/host/engine-files.js';
 import { NODE_FS_PROTOCOL, type NodeDuckDb, openNodeDuckDb } from '../../src/host/node-duckdb.js';
+import { OtelHtmlError } from '../../src/model/errors.js';
 import { viewStatements } from '../../src/query/sql/views.js';
 import { createCoordinator, mosaicQueryEngine } from '../../src/viewer/data/mosaic.js';
 import type { QueryEngine } from '../../src/viewer/data/query-engine.js';
@@ -166,14 +167,14 @@ interface Live {
   db: NodeDuckDb;
   conn: Connection;
   port: MessagePort;
-  /** The events this worker posted since the last take. A spare's start-up reads land here and are dropped at the swap. */
+  /** The events this worker posted since the last take. */
   events: ReadEvent[];
   waiting: Map<number, () => void>;
 }
 
 let running = 0;
 
-/** Counting workers started and not yet terminated in this process, spares included (for tests). */
+/** Counting workers started and not yet terminated in this process (for tests). */
 export const runningWorkers = (): number => running;
 
 /**
@@ -182,22 +183,23 @@ export const runningWorkers = (): number => running;
  * not counted. It does not use `startHostEngine`: that policy locks the configuration and its REST engine has no
  * temp tables.
  *
- * `cold()` replaces the worker. DuckDB keeps file footers and file contents in caches that no SQL setting empties
- * (`enable_external_file_cache` and the object-cache pragmas were tried), and a new worker with the views created is
- * the state a page reload gives: the counted statement starts from there in both engines. Starting one takes about
- * half a second, so the next worker is started in the background right after each swap (the spare) and `cold()` only
- * waits for it when it is not ready yet; each worker has its own event list, so what the spare reads while it starts
- * is never counted. A spare takes cores that a small machine does not have (on four, the measurement runs as long
- * without it and uses a tenth more CPU), so `spare: false` starts the worker inside `cold()`.
+ * `cold()` gives the worker an empty database (`reset()`, the files registered again and the views created). DuckDB
+ * keeps file footers and file contents in caches that no SQL setting empties (`enable_external_file_cache` and the
+ * object-cache pragmas were tried), but a new database instance has none, which is the state a page reload gives: the
+ * counted statement starts from there in both engines. The worker thread stays: ending one thread per cold step
+ * (about 450 in a measurement) made Node 24.22's V8 abort now and then ("jit_page_->allocations_.erase"), and a reset
+ * costs 50 ms instead of the 600 ms of a new worker. The worker ends in `close()`.
  */
-export async function openCountingEngine(
-  dir: string,
-  manifest: ManifestV4,
-  { spare: useSpare = true }: { spare?: boolean } = {},
-): Promise<CountingEngine> {
+export async function openCountingEngine(dir: string, manifest: ManifestV4): Promise<CountingEngine> {
   const root = resolve(dir);
   const paths = manifest.partitions.flatMap((p) => Object.values(p.files).map((f) => f.path));
 
+  const prepare = async (db: NodeDuckDb): Promise<Connection> => {
+    for (const path of paths) await db.registerFileURL(path, join(root, path), NODE_FS_PROTOCOL, false);
+    const conn = await db.connect();
+    for (const sql of viewStatements(manifest, (p) => p)) await conn.query(sql);
+    return conn;
+  };
   async function start(): Promise<Live> {
     const { port1, port2 } = new MessageChannel();
     const events: ReadEvent[] = [];
@@ -223,10 +225,7 @@ export async function openCountingEngine(
       throw e;
     }
     try {
-      for (const path of paths) await db.registerFileURL(path, join(root, path), NODE_FS_PROTOCOL, false);
-      const conn = await db.connect();
-      for (const sql of viewStatements(manifest, (p) => p)) await conn.query(sql);
-      return { db, conn, port: port1, events, waiting };
+      return { db, conn: await prepare(db), port: port1, events, waiting };
     } catch (e) {
       running--;
       await db.terminate().catch(() => undefined);
@@ -240,16 +239,9 @@ export async function openCountingEngine(
     live.port.close();
     running--;
   };
-  /** A start in the background: a failure surfaces where the spare is awaited, not as an unhandled rejection. */
-  const startSpare = (): Promise<Live> => {
-    const made = start();
-    made.catch(() => undefined);
-    return made;
-  };
 
   const textDir = await mkdtemp(join(tmpdir(), 'otel-counting-'));
-  let live = await start();
-  let spare: Promise<Live> | undefined = useSpare ? startSpare() : undefined;
+  const live = await start();
   // One connection runs one statement at a time: two pending queries on it interleave their result buffers (the
   // viewer's worker queues them the same way), so concurrent requests such as getTrace's two reads wait in turn.
   let turn: Promise<unknown> = Promise.resolve();
@@ -278,17 +270,16 @@ export async function openCountingEngine(
   });
   let marker = 0;
   const take = async (): Promise<ReadEvent[]> => {
-    const from = live;
     const id = marker++;
     await bounded(
       new Promise<void>((done) => {
-        from.waiting.set(id, done);
-        from.port.postMessage({ marker: id });
+        live.waiting.set(id, done);
+        live.port.postMessage({ marker: id });
       }),
       'the counting worker answering a marker',
     );
-    from.waiting.delete(id);
-    return from.events.splice(0);
+    live.waiting.delete(id);
+    return live.events.splice(0);
   };
   await take();
   return {
@@ -296,18 +287,17 @@ export async function openCountingEngine(
     take,
     cold: async () => {
       engine.clearCache();
-      const old = live;
       await take();
-      live = await bounded(spare ?? start(), 'starting the next counting worker');
-      spare = useSpare ? startSpare() : undefined;
-      await stop(old);
+      const { db } = live;
+      if (db.reset === undefined) throw new OtelHtmlError('usage', { message: 'the engine cannot reset' });
+      await live.conn.close().catch(() => undefined);
+      await bounded(db.reset(), 'resetting the counting database');
+      live.conn = await bounded(prepare(db), 'preparing the counting database');
       await take();
     },
     close: async () => {
       engine.clearCache();
-      const last = await spare?.catch(() => undefined);
       await stop(live);
-      if (last !== undefined) await stop(last);
       await rm(textDir, { recursive: true, force: true });
     },
   };

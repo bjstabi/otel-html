@@ -65,14 +65,13 @@ describe('the counting Node engine', { timeout: 60_000 }, () => {
     expect(a.serial).toBeGreaterThan(0);
   });
 
-  test('two cold() calls in a row each read every footer again, and close() leaves no worker', async () => {
+  test('cold() in a row each reads every footer again on the same worker, and close() leaves no worker', async () => {
     const before = runningWorkers();
     const report = await buildFormat4Report([spansOnlyRequest(40), spansOnlyRequest(40)], { close: false });
     const dir = await writeReportDir(report);
     const c = await openCountingEngine(dir.dir, report.manifest);
     try {
-      // the engine and its spare
-      expect(runningWorkers()).toBe(before + 2);
+      expect(runningWorkers()).toBe(before + 1);
       const run = async (): Promise<ReadEvent[]> => {
         await c.engine.query(Query.from('spans').select({ n: sql`count(*)` }));
         return await c.take();
@@ -80,8 +79,8 @@ describe('the counting Node engine', { timeout: 60_000 }, () => {
       const costs: number[] = [];
       for (let i = 0; i < 3; i++) {
         await c.cold();
-        // still the engine and one spare, never more
-        expect(runningWorkers()).toBe(before + 2);
+        // the worker is reset, not replaced
+        expect(runningWorkers()).toBe(before + 1);
         costs.push(costOf(await run(), new Map()).serial);
         // the repeat without cold() is served from the caches
         c.engine.clearCache();
@@ -89,29 +88,6 @@ describe('the counting Node engine', { timeout: 60_000 }, () => {
       }
       expect(costs[0]).toBeGreaterThan(0);
       expect(new Set(costs).size).toBe(1);
-    } finally {
-      await c.close();
-      await dir.close();
-    }
-    expect(runningWorkers()).toBe(before);
-  });
-
-  test('without a spare, cold() still replaces the worker and only one runs', async () => {
-    const before = runningWorkers();
-    const report = await buildFormat4Report([spansOnlyRequest(40)], { close: false });
-    const dir = await writeReportDir(report);
-    const c = await openCountingEngine(dir.dir, report.manifest, { spare: false });
-    try {
-      expect(runningWorkers()).toBe(before + 1);
-      const run = async (): Promise<number> => {
-        await c.engine.query(Query.from('spans').select({ n: sql`count(*)` }));
-        return costOf(await c.take(), new Map()).serial;
-      };
-      await c.cold();
-      const a = await run();
-      await c.cold();
-      expect(await run()).toBe(a);
-      expect(runningWorkers()).toBe(before + 1);
     } finally {
       await c.close();
       await dir.close();

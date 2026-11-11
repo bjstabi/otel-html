@@ -17,6 +17,11 @@ export interface NodeDuckDb {
     close(): Promise<void>;
   }>;
   terminate(): Promise<void>;
+  /**
+   * Replaces the database inside the running worker with an empty one (no file registered, every cache empty) and loads
+   * the extensions again. Nothing in production calls it; the scaling tests use it to start cold without a new thread.
+   */
+  reset?(): Promise<void>;
   /** Resolves with the reason when the worker dies on its own (an `error` or an `exit`). */
   readonly exited?: Promise<string>;
 }
@@ -105,6 +110,7 @@ interface Bindings {
   ) => Omit<NodeDuckDb, 'connect'> & {
     instantiate(wasm: string): Promise<void>;
     open(config: Record<string, never>): Promise<void>;
+    reset(): Promise<void>;
     connect(): Promise<RawConnection>;
   };
   readonly VoidLogger: new () => unknown;
@@ -138,13 +144,16 @@ export async function openNodeDuckDb(
     ...(opts.transferList === undefined ? {} : { transferList: [...opts.transferList] }),
   });
   const db = new bindings.AsyncDuckDB(new bindings.VoidLogger(), webWorker(worker));
-  try {
-    await db.instantiate(files.wasm);
-    await db.open({});
-    // Load them before the policy locks the configuration (and before the views, which read Parquet).
+  // Load them before the policy locks the configuration (and before the views, which read Parquet).
+  const loadExtensions = async (): Promise<void> => {
     const conn = await db.connect();
     for (const e of EXTENSIONS) await conn.query(`LOAD '${extensionUrl(e)}'`);
     await conn.close();
+  };
+  try {
+    await db.instantiate(files.wasm);
+    await db.open({});
+    await loadExtensions();
   } catch (e) {
     await worker.terminate();
     throw e;
@@ -172,6 +181,11 @@ export async function openNodeDuckDb(
     registerFileURL: (name, url, proto, directIO) => db.registerFileURL(name, url, proto, directIO),
     connect,
     terminate: () => db.terminate(),
+    reset: async () => {
+      await db.reset();
+      await db.open({});
+      await loadExtensions();
+    },
     exited,
   };
 }
