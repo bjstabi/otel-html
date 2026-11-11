@@ -28,9 +28,19 @@ function shardFiles(browser: string): string[] | undefined {
     }
   ).e2e[browser];
   const skip = ignored[browser] ?? [];
-  const specs = readdirSync(new URL('./e2e/', import.meta.url))
-    .filter((f) => f.endsWith('.spec.ts') && !skip.includes(f))
-    .sort();
+  const entries = readdirSync(new URL('./e2e/', import.meta.url), { recursive: true, encoding: 'utf8' }).map(
+    (f) => f.replaceAll('\\', '/'),
+  );
+  // The split knows only `e2e/*.spec.ts`; a test file anywhere else Playwright would run would be in no shard.
+  const stray = entries.filter(
+    (f) =>
+      /\.(spec|test)\.[cm]?[jt]sx?$/.test(f) &&
+      !/^[^/]+\.spec\.ts$/.test(f) &&
+      !/(^|\/)(\.|node_modules\/)/.test(f),
+  );
+  if (stray.length > 0)
+    throw new Error(`OTEL_HTML_E2E_SHARD splits only e2e/*.spec.ts; move or rename ${stray.join(', ')}`);
+  const specs = entries.filter((f) => /^[^/]+\.spec\.ts$/.test(f) && !skip.includes(f)).sort();
   return shardOf(specs, weights ?? {}, index, count);
 }
 

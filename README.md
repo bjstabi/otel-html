@@ -1089,13 +1089,13 @@ Unit tests whose import graph reaches a file changed since `ref` (default main)
 
 - **Usage:** `test:unit:main`
 
-vitest, everything but @perf, in parallel (args after `--` go to vitest: `-- --shard=1/2`)
+vitest, everything but @perf, in parallel (args after `--` go to vitest: `-- --shard=1/2` splits the files by the seconds in test-support/shard-weights.json)
 
 ## `test:unit:perf`
 
 - **Usage:** `test:unit:perf`
 
-The @perf unit tests alone, one file at a time (never cached: timing); args after `--` go to vitest: `-- --shard=1/2`
+The @perf unit tests alone, one file at a time (never cached: timing); args after `--` go to vitest: `-- --shard=1/2` splits the files by the seconds in test-support/shard-weights.json
 
 ## `typecheck`
 

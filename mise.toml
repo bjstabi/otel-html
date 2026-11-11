@@ -230,7 +230,7 @@ description = "Unit tests: the parallel pass, then the @perf pass"
 run = [{ task = "test:unit:main" }, { task = "test:unit:perf" }]
 
 [tasks."test:unit:main"]
-description = "vitest, everything but @perf, in parallel (args after `--` go to vitest: `-- --shard=1/2`)"
+description = "vitest, everything but @perf, in parallel (args after `--` go to vitest: `-- --shard=1/2` splits the files by the seconds in test-support/shard-weights.json)"
 # Beyond the code: what tests read from disk (fixtures/reports, the committed JSON schema, the shipped CI dashboard
 # config, .github/actions scripts, scripts/load-receiver-plan, the e2e helpers they import (e2e/*.ts and e2e/otel-page/,
 # not e2e/**, which would walk the generated dot directories), tsconfig.base.json). dist/ is read only under
@@ -255,7 +255,7 @@ run = "pnpm exec vitest run"
 
 # Env vars go in `env`, not a `VAR=1 cmd` prefix: Windows cmd (the unit-os CI job) can't run that.
 [tasks."test:unit:perf"]
-description = "The @perf unit tests alone, one file at a time (never cached: timing); args after `--` go to vitest: `-- --shard=1/2`"
+description = "The @perf unit tests alone, one file at a time (never cached: timing); args after `--` go to vitest: `-- --shard=1/2` splits the files by the seconds in test-support/shard-weights.json"
 env = { OTEL_HTML_PERF_PASS = "1" }
 run = "pnpm exec vitest run"
 
@@ -513,7 +513,7 @@ A run whose inputs match a cached success is replayed. `MISE_TASK_CACHE=off` re-
 `test:e2e:chromium`; `--force` reaches only the task it is given to, so it works on `test:e2e` and not on the wrapper."""
 shell = "bash -c"
 depends = ["e2e:fixtures"]
-# The key also holds the task's args (--browser, --pass, specs and --shard after `--`) and the resolved tool versions. The workflow file is a
+# The key also holds the task's args (--browser, --pass, --shard, specs after `--`) and the resolved tool versions. The workflow file is a
 # source because it names the Playwright image the browsers come from. OTEL_HTML_METRICS_SCALE changes which tests run.
 sources = [
   "@group:deps",
@@ -534,7 +534,6 @@ cache = { enabled = true, env = [
   "OTEL_HTML_SKIP_BROWSER_INSTALL",
   "OTEL_HTML_METRICS_SCALE",
   "OTEL_HTML_LOAD_REPORT",
-  "OTEL_HTML_E2E_SHARD",
 ], command_inputs = [
   "pnpm exec playwright --version",
 ] }
@@ -569,9 +568,10 @@ perf="${usage_browser}-perf-*"
 # not load) fails the perf pass below instead of skipping it.
 case "$usage_browser" in chromium | '*') has_perf=1 ;; *) has_perf=0 ;; esac
 [ "$usage_pass" != main ] || has_perf=0
-# The scale reports only when a selected test is in e2e/scale.spec.ts. Each pass is listed on its own, with the args, as
-# it runs (`env` carries the main pass's OTEL_HTML_E2E_SHARD), so a --shard selects the same tests in the listing as in the pass; a listing that fails builds them too, and
-# the passes below report its error. --skip-deps: dist/ is already built (and in CI it must not be rebuilt under the job shell).
+# The scale reports only when a selected test is in e2e/scale.spec.ts. Each pass is listed on its own, with the args
+# and the shard it runs with (`env` carries the main pass's OTEL_HTML_E2E_SHARD), so the listing selects the same tests
+# as the pass; a listing that fails builds them too, and the passes below report its error. --skip-deps: dist/ is
+# already built (and in CI it must not be rebuilt under the job shell).
 needs_scale() {
   local listed
   listed=$(env "$@" --list 2>&1) || return 0

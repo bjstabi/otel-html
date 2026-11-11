@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -133,7 +133,14 @@ function main(): void {
       failures.push(`${browser} wrote no report; its part of the table is unchanged`);
       continue;
     }
-    table.e2e[browser] = normalise(playwrightSeconds(report));
+    // A spec with no main-pass test in this browser (only @perf tests, or skipped without its env var) weighs the
+    // least, not the median: it runs nothing in a shard.
+    const idle = Object.fromEntries(
+      readdirSync('e2e')
+        .filter((f) => f.endsWith('.spec.ts'))
+        .map((f) => [f, 0.1]),
+    );
+    table.e2e[browser] = normalise({ ...idle, ...playwrightSeconds(report) });
   }
 
   writeFileSync(TABLE, `${JSON.stringify(table, null, 2)}\n`);
