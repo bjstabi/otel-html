@@ -2,7 +2,14 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
-import { bounded, shareOnce, takeLock, waitTurn } from '../../test-support/scaling/bounded.js';
+import {
+  bounded,
+  STEP_TIMEOUT_MS,
+  shareOnce,
+  takeLock,
+  WAIT_TIMEOUT_MS,
+  waitTurn,
+} from '../../test-support/scaling/bounded.js';
 
 describe('the bounds of the scaling workers', () => {
   const dirs: string[] = [];
@@ -37,6 +44,17 @@ describe('the bounds of the scaling workers', () => {
     expect(await takeLock(lock)).toBe(true);
     await expect(waitTurn(performance.now() - 500, 'the report 4-2-4-dense', lock, 100)).rejects.toThrow(
       /the report 4-2-4-dense: waited 0.1 s/,
+    );
+  });
+
+  test('the default wait outlasts a step: it is the holder that fails first', async () => {
+    expect(WAIT_TIMEOUT_MS).toBeGreaterThan(STEP_TIMEOUT_MS);
+    const lock = join(await tmp(), 'x.lock');
+    expect(await takeLock(lock)).toBe(true);
+    // a waiter that has waited one step's bound plus a second is still waiting; past the default bound it gives up
+    await expect(waitTurn(performance.now() - STEP_TIMEOUT_MS - 1000, 'x', lock)).resolves.toBeUndefined();
+    await expect(waitTurn(performance.now() - WAIT_TIMEOUT_MS - 1000, 'x', lock)).rejects.toThrow(
+      /waited 120 s/,
     );
   });
 

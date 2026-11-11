@@ -5,6 +5,9 @@ import { OtelHtmlError } from '../../src/model/errors.js';
 /** How long one step of the measurement may take before it counts as hung. */
 export const STEP_TIMEOUT_MS = 60_000;
 
+/** How long a worker waits for another's lock: longer than the holder's step, so a slow holder does not fail its waiters first. */
+export const WAIT_TIMEOUT_MS = 2 * STEP_TIMEOUT_MS;
+
 /** `work`, or an error naming `what` once `ms` have passed (the work itself is not cancelled). */
 export async function bounded<T>(work: Promise<T>, what: string, ms = STEP_TIMEOUT_MS): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
@@ -41,7 +44,7 @@ export async function waitTurn(
   since: number,
   what: string,
   lock: string,
-  ms = STEP_TIMEOUT_MS,
+  ms = WAIT_TIMEOUT_MS,
 ): Promise<void> {
   const pid = Number(await readFile(join(lock, 'pid'), 'utf8').catch(() => '0'));
   if (pid > 0) {
