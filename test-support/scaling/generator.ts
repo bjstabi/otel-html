@@ -3,6 +3,7 @@ import { isV4, type ManifestV4, parseAnyManifest } from '../../src/format/manife
 import { TABLES } from '../../src/format/parquet/columns.js';
 import { MANIFEST_KEY } from '../../src/format/paths.js';
 import { type OtlpRequest, parseOtlpObject } from '../../src/model/otlp-json.js';
+import { logRef } from '../../src/viewer/data/log-query.js';
 import type { TimeWindow } from '../../src/viewer/data/time-window.js';
 import { openSession } from '../../src/writer/session.js';
 import type { Format4Fixture } from '../format4-fixture.js';
@@ -155,7 +156,7 @@ async function build(shape: Shape): Promise<ScalingReport> {
     writer: {
       format: 'site',
       statisticsKeys: ['resource:run.id'],
-      // no size-rule checkpoint inside a partition: its flush is the only cut
+      // keeps one flush = one file per table, so a partition is one flush; deviates from production's 4 MB default cut
       chunkTargetBytes: 2_000_000_000,
     },
   });
@@ -191,8 +192,8 @@ async function build(shape: Shape): Promise<ScalingReport> {
     start: Number(spanStart(shape, first, 0) - epoch),
     end: Number(spanStart(shape, last, lastSpan) + SPAN_NS - epoch),
   };
-  const entry = manifest.partitions[first];
-  if (entry === undefined) throw new Error('no inside partition');
+  const entry = manifest.partitions.find((p) => p.n === first);
+  if (entry === undefined) throw new Error(`no partition ${first} in the manifest`);
   // a span and a log of the first inside partition: span index 8 (second trace, first service), log row 0
   const k = 8;
   const logFileRow = 0;
@@ -204,8 +205,9 @@ async function build(shape: Shape): Promise<ScalingReport> {
     ids: {
       traceId: traceIdOf(first, Math.floor(k / 8)),
       spanId: spanIdOf(first, k),
-      logRef: `${entry.n}.${logFileRow}`,
+      logRef: logRef(entry.n, logFileRow),
       service: SERVICES[0],
+      // the writer's `resource_name`: "<http.request.method> <http.route>" (see partitionJson, method GET)
       resource: `GET ${routeOf(k)}`,
       runId: `run-${first}`,
       route: routeOf(k),

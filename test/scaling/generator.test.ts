@@ -3,6 +3,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { literal, Query, sql } from '@uwdata/mosaic-sql';
 import { afterEach, describe, expect, test } from 'vitest';
+import { parseLogRef, refParts } from '../../src/viewer/data/log-query.js';
 import { openTestDb } from '../../test-support/duckdb-node.js';
 import { ROW_GROUP_ROWS } from '../../test-support/scaling/cost.js';
 import { openCountingEngine } from '../../test-support/scaling/counting-engine.js';
@@ -79,8 +80,36 @@ describe('the scaling report generator', { timeout: 120_000 }, () => {
   test('a partition has the row groups its shape asks for', async () => {
     expect(await rowGroupsPerPartition(await build(BASE))).toEqual([2, 2, 2, 2]);
     expect(await rowGroupsPerPartition(await build({ ...BASE, rowGroups: 8 }))).toEqual([8, 8, 8, 8]);
-    expect(CROSS.rowGroups).toBe(4);
-    expect(ROW_GROUP_ROWS).toBeGreaterThan(0);
+  });
+
+  test('a service fills whole row groups, in arrival order', async () => {
+    const r = await build(BASE);
+    const db = await openTestDb();
+    try {
+      for (const p of r.manifest.partitions) {
+        const path = p.files.spans?.path;
+        if (path === undefined) throw new Error('no spans file');
+        db.registerFile(path, new Uint8Array(await readFile(join(r.dir, path))));
+        const groups = db.rows(
+          `SELECT file_row_number // ${ROW_GROUP_ROWS} AS g, count(DISTINCT service_name) AS s, count(*) AS n FROM read_parquet('${path}', file_row_number = true) GROUP BY g ORDER BY g`,
+        );
+        expect(groups.map((g) => Number((g as { s: unknown }).s))).toEqual([1, 1]);
+        expect(groups.map((g) => Number((g as { n: unknown }).n))).toEqual([ROW_GROUP_ROWS, ROW_GROUP_ROWS]);
+      }
+    } finally {
+      db.close();
+    }
+  });
+
+  test('CROSS and the axis steps ask for the shapes the model needs', () => {
+    expect(CROSS).toEqual({ outside: 4, inside: 2, rowGroups: 4, spacing: 'dense' });
+    expect(stepsOf('density', 'sparse').map((s) => [s.rowGroups, s.spacing])).toEqual([
+      [2, 'sparse'],
+      [4, 'sparse'],
+      [8, 'sparse'],
+    ]);
+    expect(stepsOf('retention', 'dense').map((s) => s.outside)).toEqual([2, 4, 8]);
+    expect(stepsOf('window', 'dense').map((s) => s.inside)).toEqual([2, 4, 8]);
   });
 
   test('dense windows are short and sparse windows are long', async () => {
@@ -116,9 +145,12 @@ describe('the scaling report generator', { timeout: 120_000 }, () => {
       expect(await count('spans', like('attributes', ids.route))).toBeGreaterThan(0);
       expect(await count('logs', like('body', ids.text))).toBeGreaterThan(0);
       expect(await count('points', sql`metric_name = ${literal(ids.metric)}`)).toBeGreaterThan(0);
-      const [n, i] = ids.logRef.split('.').map(Number);
-      expect(r.manifest.partitions.some((p) => p.n === n)).toBe(true);
-      expect(i).toBeGreaterThanOrEqual(0);
+      const { n, i } = refParts(parseLogRef(ids.logRef, 'ids.logRef'));
+      const path = r.manifest.partitions.find((p) => p.n === n)?.files.logs?.path;
+      expect(path).toBeDefined();
+      expect(
+        await count('logs', sql`filename = ${literal(path ?? '')} AND file_row_number = ${literal(i)}`),
+      ).toBe(1);
     } finally {
       await c.close();
     }
