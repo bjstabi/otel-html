@@ -1,4 +1,5 @@
 import { OtelHtmlError } from '../../model/errors.js';
+import { idTableStatement } from '../../query/sql/residual.js';
 import type { QueryEngine } from './query-engine.js';
 
 /** Row-list pages the browser re-check reads at most (D5), each of `limit` rows. */
@@ -56,10 +57,7 @@ export async function idTable(
   const lines = rows.map((r) => r.map(csvCell).join(','));
   await engine.registerText(`${name}.csv`, [columns.join(','), ...lines].join('\n'));
   try {
-    const spec = columns.map((c, i) => `'${c}': '${types[i]}'`).join(', ');
-    await engine.exec(
-      `CREATE TEMP TABLE ${name} AS SELECT * FROM read_csv('${name}.csv', header = true, columns = {${spec}})`,
-    );
+    await engine.exec(idTableStatement(name, columns, types));
   } catch (error) {
     await engine.registerText(`${name}.csv`, '').catch(() => undefined); // do not leave the text registered
     throw error;

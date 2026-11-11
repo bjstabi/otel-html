@@ -6,6 +6,7 @@ import type { SurroundingTarget } from '../../../src/query/sql/logs.js';
 import {
   logByRefQuery,
   logRowsQuery,
+  logsWithTraceCountQuery,
   logTimelineQuery,
   logTracesQuery,
   patternsQuery,
@@ -466,5 +467,19 @@ describe('pointsTimelineQuery', () => {
     const expected = new Map<number, number>();
     for (const ms of [5, 15, 25, 55, 105]) expected.set(b(ms), (expected.get(b(ms)) ?? 0) + 1);
     expect(got).toEqual([...expected].sort((x, y) => x[0] - y[0]));
+  });
+});
+
+describe('logsWithTraceCountQuery', () => {
+  test('counts the matching logs that carry a trace id, in one scalar row', () => {
+    const q = logsWithTraceCountQuery(filter().filter);
+    expect(String(q)).toBe('SELECT count(*) AS "n" FROM "logs" WHERE trace_id IS NOT NULL');
+    expect(run(q).map((r) => num(r.n))).toEqual([4]);
+  });
+
+  test('the filter narrows the count', () => {
+    const q = logsWithTraceCountQuery(filter({ condition: 'severity_number == 17' }).filter);
+    expect(run(q).map((r) => num(r.n))).toEqual([expect.any(Number)]);
+    expect(String(q)).toContain('trace_id IS NOT NULL');
   });
 });

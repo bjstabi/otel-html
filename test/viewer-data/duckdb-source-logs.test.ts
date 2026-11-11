@@ -315,6 +315,31 @@ describe('queryLogs', () => {
     expect(traces.matched).toBe(3); // b4 carries no trace id
   });
 
+  test('the statements sent for the trace count and the residual id table (characterization)', async () => {
+    const sentBy = async (fn: () => Promise<unknown>): Promise<string[]> => {
+      const before = db.connector.requests.length;
+      await fn();
+      return db.connector.requests
+        .slice(before)
+        .map((r) => r.sql.replace(/otel_residual_\d+/g, 'otel_residual_N'));
+    };
+    const traces = await sentBy(() =>
+      fresh().queryLogs(query({ mode: 'traces', needs: ['rows'], sort: { column: 'first', dir: 'asc' } })),
+    );
+    expect(
+      traces.find((s) => s.startsWith('SELECT count(*) AS "n"') && s.includes('trace_id IS NOT NULL')),
+    ).toMatchInlineSnapshot(`"SELECT count(*) AS "n" FROM "logs" WHERE trace_id IS NOT NULL"`);
+    const residual = await sentBy(() =>
+      fresh().queryLogs(query({ condition: 'Len(body.string) > 20', needs: ['rows', 'facets'] })),
+    );
+    expect(residual.find((s) => s.startsWith('CREATE TEMP TABLE'))).toMatchInlineSnapshot(
+      `"CREATE TEMP TABLE otel_residual_N AS SELECT * FROM read_csv('otel_residual_N.csv', header = true, columns = {'filename': 'VARCHAR', 'file_row_number': 'BIGINT'})"`,
+    );
+    expect(residual.find((s) => s.includes('file_row_number) IN (SELECT'))).toMatchInlineSnapshot(
+      `"SELECT ("time_unix_nano" - 1700000000000123456::BIGINT) AS "time_ns", ("observed_time_unix_nano" - 1700000000000123456::BIGINT) AS "observed_ns", "severity_number", "severity_text", "event_name", "body", "attributes", "dropped_attributes_count", "flags", "trace_id", "span_id", "resource_attributes", "resource_schema_url", "resource_dropped_attributes_count", "scope_name", "scope_version", "scope_attributes", "scope_schema_url", "scope_dropped_attributes_count", "service_name", "host_name", (coalesce(time_unix_nano, observed_time_unix_nano, 1700000000000123456::BIGINT) - 1700000000000123456::BIGINT) AS "time_rel", "filename", "file_row_number", (SELECT count(*) AS "n" FROM "logs" WHERE (filename, file_row_number) IN (SELECT "filename", "file_row_number" FROM "otel_residual_N")) AS "total" FROM "logs" WHERE (filename, file_row_number) IN (SELECT "filename", "file_row_number" FROM "otel_residual_N") ORDER BY "time_rel" ASC, time_rel ASC, "filename" ASC, "file_row_number" ASC LIMIT 100"`,
+    );
+  });
+
   test('a window that prunes every partition returns empty results without a query', async () => {
     const r = await counted(() => ds.queryLogs(query({ window: { start: -2e9, end: -1e9 } })));
     expect(r.value.rows).toEqual([]);

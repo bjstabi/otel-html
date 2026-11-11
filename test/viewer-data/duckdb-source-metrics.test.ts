@@ -1454,3 +1454,100 @@ describe('branch-review fixes', () => {
     });
   });
 });
+
+describe('the statements sent for series scopes (characterization)', () => {
+  const RUN = 'resource.attributes["cicd.pipeline.run.id"]';
+  const G = otlp(
+    metricsRequest(
+      [
+        gauge('rs', [
+          ...pointsAt(sec(0), () => ({ asDouble: 1 }), [attr('k', str('abc'))]),
+          ...pointsAt(sec(0), () => ({ asDouble: 2 }), [attr('k', str('ab'))]),
+        ]),
+      ],
+      resA,
+    ) as never,
+  );
+  const job = (run: string, at: number, result: string) =>
+    otlp(
+      metricsRequest(
+        [
+          histogram(
+            'job.duration',
+            pointsAt(
+              sec(at),
+              () => ({ count: '1', sum: 10, explicitBounds: [10, 100], bucketCounts: ['0', '1', '0'] }),
+              [attr('job', str('build')), attr('result', str(result))],
+            ),
+            { temporality: 'delta', unit: 's' },
+          ),
+        ],
+        [attr('service.name', str('ci')), attr('cicd.pipeline.run.id', str(run))],
+      ) as never,
+    );
+
+  /** The statements the engine ran during `fn`, the temp table's counter masked. */
+  async function sent(
+    requests: readonly OtlpRequest[],
+    fn: (env: Env) => Promise<unknown>,
+  ): Promise<{ queries: string[]; execs: string[] }> {
+    const queries: string[] = [];
+    const env = await openEnv(requests, (inner) => ({
+      ...inner,
+      query: (qq, signal) => {
+        queries.push(String(qq));
+        return inner.query(qq, signal);
+      },
+    }));
+    const before = env.db.connector.requests.length;
+    queries.length = 0;
+    await fn(env);
+    const mask = (s: string): string => s.replace(/otel_residual_\d+/g, 'otel_residual_N');
+    return {
+      queries: queries.map(mask),
+      execs: env.db.connector.requests
+        .slice(before)
+        .filter((r) => r.type === 'exec')
+        .map((r) => mask(r.sql)),
+    };
+  }
+
+  test('a residual where reads its series ids from the id table; the services of the series follow', async () => {
+    const r = await sent([G], (env) =>
+      chart(
+        env,
+        'rs',
+        { where: 'Len(attributes["k"]) > 2', by: ['attributes["k"]'] },
+        { start: 0, end: 9.9 * S },
+        {
+          widthNs: 10 * S,
+        },
+      ),
+    );
+    expect(r.execs.find((s) => s.startsWith('CREATE TEMP TABLE'))).toMatchInlineSnapshot(
+      `"CREATE TEMP TABLE otel_residual_N AS SELECT * FROM read_csv('otel_residual_N.csv', header = true, columns = {'series_id': 'VARCHAR'})"`,
+    );
+    expect(r.queries.find((s) => s.includes('list(DISTINCT CASE WHEN json_type'))).toMatchInlineSnapshot(
+      `"SELECT g0 AS "g0", list(DISTINCT CASE WHEN json_type(resource_attributes, '/service.name') = 'VARCHAR' THEN json_extract_string(resource_attributes, '/service.name') END) AS "services" FROM (SELECT series_id AS "series_id", any_value(metric_name) AS "metric_name", any_value(point_type) AS "point_type", any_value(metric_unit) AS "metric_unit", any_value(aggregation_temporality) AS "aggregation_temporality", any_value(is_monotonic) AS "is_monotonic", any_value(attributes) AS "attributes", any_value(resource_attributes) AS "resource_attributes", any_value(resource_schema_url) AS "resource_schema_url", any_value(resource_dropped_attributes_count) AS "resource_dropped_attributes_count", any_value(scope_name) AS "scope_name", any_value(scope_version) AS "scope_version", any_value(scope_attributes) AS "scope_attributes", any_value(scope_schema_url) AS "scope_schema_url", any_value(scope_dropped_attributes_count) AS "scope_dropped_attributes_count", any_value(explicit_bounds) AS "explicit_bounds", any_value(metric_description) AS "metric_description", any_value(CAST(list_extract(list_transform([CAST("attributes" AS JSON)], (b0) -> coalesce(json_extract(b0, '/k'), list_extract(list_transform(list_filter(from_json(json_extract(b0, '/$m'), '["JSON"]'), (x) -> json_extract_string(x, '/0') = 'k'), (x) -> json_extract(x, '/1')), 1))), 1) AS VARCHAR)) AS "g0" FROM "points" WHERE ((metric_name = 'rs') AND (point_type = 'gauge') AND metric_unit IS NOT DISTINCT FROM '1' AND aggregation_temporality IS NOT DISTINCT FROM 0 AND is_monotonic IS NOT DISTINCT FROM FALSE AND (("time_unix_nano" >= 1700000000000000000::BIGINT) AND ("time_unix_nano" <= 1700000009999999999::BIGINT)) AND series_id IN (SELECT "series_id" FROM "otel_residual_N")) GROUP BY series_id) AS "s" GROUP BY g0"`,
+    );
+  });
+
+  test('failedWhen runs the cells again over the ids of the query series', async () => {
+    const r = await sent([job('r1', 0, 'success'), job('r2', 10, 'failure')], (env) =>
+      env.m.metricRunQuery({
+        entry: env.entry('job.duration'),
+        query: req('job.duration', { show: 'avg', by: ['attributes["job"]'] }),
+        window: { start: 0, end: 1000 * S },
+        runBy: RUN,
+        failedWhen: 'attributes["result"] == "failure"',
+      }),
+    );
+    const failed = r.queries.filter((s) =>
+      s.includes('(SELECT series_id AS "series_id" FROM (SELECT series_id AS "series_id", any_value('),
+    );
+    expect(failed).toHaveLength(1);
+    expect(failed[0]).toMatchInlineSnapshot(
+      `"SELECT g0 AS "g0", cell AS "cell", bounds AS "bounds", sum(dc) AS "count", sum(sm) AS "sum", min(mn) AS "min", max(mx) AS "max", coalesce(list(cnt ORDER BY idx) FILTER (WHERE side = 'e'), []) AS "counts" FROM (SELECT g0 AS "g0", cell AS "cell", bounds AS "bounds", side AS "side", idx AS "idx", sum(cnt) AS "cnt", sum(dc) AS "dc", sum(sm) AS "sm", min(mn) AS "mn", max(mx) AS "mx" FROM (SELECT g0 AS "g0", cell AS "cell", bounds AS "bounds", 'e' AS "side", CAST(e.idx AS INTEGER) AS "idx", CAST(e.cnt AS BIGINT) AS "cnt", CAST(NULL AS BIGINT) AS "dc", CAST(NULL AS DOUBLE) AS "sm", CAST(NULL AS DOUBLE) AS "mn", CAST(NULL AS DOUBLE) AS "mx" FROM (SELECT g0 AS "g0", cell AS "cell", bounds AS "bounds", unnest(list_transform(range(len(dbc)), j -> struct_pack(idx := j, cnt := dbc[j + 1]))) AS "e" FROM (SELECT g0 AS "g0", cell AS "cell", bounds AS "bounds", delta_count AS "delta_count", delta_value AS "delta_value", min AS "min", max AS "max", dbc AS "dbc" FROM (SELECT g0 AS "g0", CAST(list_extract(list_transform([CAST("resource_attributes" AS JSON)], (b0) -> coalesce(json_extract(b0, '/cicd.pipeline.run.id'), list_extract(list_transform(list_filter(from_json(json_extract(b0, '/$m'), '["JSON"]'), (x) -> json_extract_string(x, '/0') = 'cicd.pipeline.run.id'), (x) -> json_extract(x, '/1')), 1))), 1) AS VARCHAR) AS "cell", sid AS "sid", delta_count AS "delta_count", delta_value AS "delta_value", min AS "min", max AS "max", explicit_bounds AS "bounds", coalesce(delta_bucket_counts, [delta_count]) AS "dbc" FROM "points", (SELECT series_id AS "sid", any_value(g0) AS "g0" FROM (SELECT series_id AS "series_id", any_value(metric_name) AS "metric_name", any_value(point_type) AS "point_type", any_value(metric_unit) AS "metric_unit", any_value(aggregation_temporality) AS "aggregation_temporality", any_value(is_monotonic) AS "is_monotonic", any_value(attributes) AS "attributes", any_value(resource_attributes) AS "resource_attributes", any_value(resource_schema_url) AS "resource_schema_url", any_value(resource_dropped_attributes_count) AS "resource_dropped_attributes_count", any_value(scope_name) AS "scope_name", any_value(scope_version) AS "scope_version", any_value(scope_attributes) AS "scope_attributes", any_value(scope_schema_url) AS "scope_schema_url", any_value(scope_dropped_attributes_count) AS "scope_dropped_attributes_count", any_value(explicit_bounds) AS "explicit_bounds", any_value(metric_description) AS "metric_description", any_value(CAST(list_extract(list_transform([CAST("attributes" AS JSON)], (b0) -> coalesce(json_extract(b0, '/job'), list_extract(list_transform(list_filter(from_json(json_extract(b0, '/$m'), '["JSON"]'), (x) -> json_extract_string(x, '/0') = 'job'), (x) -> json_extract(x, '/1')), 1))), 1) AS VARCHAR)) AS "g0" FROM "points" WHERE ((metric_name = 'job.duration') AND (point_type = 'histogram') AND metric_unit IS NOT DISTINCT FROM 's' AND aggregation_temporality IS NOT DISTINCT FROM 1 AND is_monotonic IS NOT DISTINCT FROM FALSE AND coalesce(list_extract(list_transform([list_extract(list_transform([CAST("attributes" AS JSON)], (b0) -> coalesce(json_extract(b0, '/result'), list_extract(list_transform(list_filter(from_json(json_extract(b0, '/$m'), '["JSON"]'), (x) -> json_extract_string(x, '/0') = 'result'), (x) -> json_extract(x, '/1')), 1))), 1)], (v) -> ((json_type(v) = 'VARCHAR') AND (json_extract_string(v, '$') = 'failure'))), 1), FALSE) AND series_id IN (SELECT series_id AS "series_id" FROM (SELECT series_id AS "series_id", any_value(metric_name) AS "metric_name", any_value(point_type) AS "point_type", any_value(metric_unit) AS "metric_unit", any_value(aggregation_temporality) AS "aggregation_temporality", any_value(is_monotonic) AS "is_monotonic", any_value(attributes) AS "attributes", any_value(resource_attributes) AS "resource_attributes", any_value(resource_schema_url) AS "resource_schema_url", any_value(resource_dropped_attributes_count) AS "resource_dropped_attributes_count", any_value(scope_name) AS "scope_name", any_value(scope_version) AS "scope_version", any_value(scope_attributes) AS "scope_attributes", any_value(scope_schema_url) AS "scope_schema_url", any_value(scope_dropped_attributes_count) AS "scope_dropped_attributes_count", any_value(explicit_bounds) AS "explicit_bounds", any_value(metric_description) AS "metric_description", any_value(CAST(list_extract(list_transform([CAST("attributes" AS JSON)], (b0) -> coalesce(json_extract(b0, '/job'), list_extract(list_transform(list_filter(from_json(json_extract(b0, '/$m'), '["JSON"]'), (x) -> json_extract_string(x, '/0') = 'job'), (x) -> json_extract(x, '/1')), 1))), 1) AS VARCHAR)) AS "g0" FROM "points" WHERE ((metric_name = 'job.duration') AND (point_type = 'histogram') AND metric_unit IS NOT DISTINCT FROM 's' AND aggregation_temporality IS NOT DISTINCT FROM 1 AND is_monotonic IS NOT DISTINCT FROM FALSE) GROUP BY series_id) AS "s")) GROUP BY series_id) AS "k" GROUP BY series_id) AS "s" WHERE (series_id = sid AND (metric_name = 'job.duration') AND (point_type = 'histogram') AND metric_unit IS NOT DISTINCT FROM 's' AND aggregation_temporality IS NOT DISTINCT FROM 1 AND is_monotonic IS NOT DISTINCT FROM FALSE)) AS "p" WHERE delta_count IS NOT NULL) AS "r") AS "u" UNION ALL SELECT g0 AS "g0", cell AS "cell", bounds AS "bounds", 'x' AS "side", CAST(NULL AS INTEGER) AS "idx", CAST(NULL AS BIGINT) AS "cnt", delta_count AS "dc", delta_value AS "sm", min AS "mn", max AS "mx" FROM (SELECT g0 AS "g0", cell AS "cell", bounds AS "bounds", delta_count AS "delta_count", delta_value AS "delta_value", min AS "min", max AS "max", dbc AS "dbc" FROM (SELECT g0 AS "g0", CAST(list_extract(list_transform([CAST("resource_attributes" AS JSON)], (b0) -> coalesce(json_extract(b0, '/cicd.pipeline.run.id'), list_extract(list_transform(list_filter(from_json(json_extract(b0, '/$m'), '["JSON"]'), (x) -> json_extract_string(x, '/0') = 'cicd.pipeline.run.id'), (x) -> json_extract(x, '/1')), 1))), 1) AS VARCHAR) AS "cell", sid AS "sid", delta_count AS "delta_count", delta_value AS "delta_value", min AS "min", max AS "max", explicit_bounds AS "bounds", coalesce(delta_bucket_counts, [delta_count]) AS "dbc" FROM "points", (SELECT series_id AS "sid", any_value(g0) AS "g0" FROM (SELECT series_id AS "series_id", any_value(metric_name) AS "metric_name", any_value(point_type) AS "point_type", any_value(metric_unit) AS "metric_unit", any_value(aggregation_temporality) AS "aggregation_temporality", any_value(is_monotonic) AS "is_monotonic", any_value(attributes) AS "attributes", any_value(resource_attributes) AS "resource_attributes", any_value(resource_schema_url) AS "resource_schema_url", any_value(resource_dropped_attributes_count) AS "resource_dropped_attributes_count", any_value(scope_name) AS "scope_name", any_value(scope_version) AS "scope_version", any_value(scope_attributes) AS "scope_attributes", any_value(scope_schema_url) AS "scope_schema_url", any_value(scope_dropped_attributes_count) AS "scope_dropped_attributes_count", any_value(explicit_bounds) AS "explicit_bounds", any_value(metric_description) AS "metric_description", any_value(CAST(list_extract(list_transform([CAST("attributes" AS JSON)], (b0) -> coalesce(json_extract(b0, '/job'), list_extract(list_transform(list_filter(from_json(json_extract(b0, '/$m'), '["JSON"]'), (x) -> json_extract_string(x, '/0') = 'job'), (x) -> json_extract(x, '/1')), 1))), 1) AS VARCHAR)) AS "g0" FROM "points" WHERE ((metric_name = 'job.duration') AND (point_type = 'histogram') AND metric_unit IS NOT DISTINCT FROM 's' AND aggregation_temporality IS NOT DISTINCT FROM 1 AND is_monotonic IS NOT DISTINCT FROM FALSE AND coalesce(list_extract(list_transform([list_extract(list_transform([CAST("attributes" AS JSON)], (b0) -> coalesce(json_extract(b0, '/result'), list_extract(list_transform(list_filter(from_json(json_extract(b0, '/$m'), '["JSON"]'), (x) -> json_extract_string(x, '/0') = 'result'), (x) -> json_extract(x, '/1')), 1))), 1)], (v) -> ((json_type(v) = 'VARCHAR') AND (json_extract_string(v, '$') = 'failure'))), 1), FALSE) AND series_id IN (SELECT series_id AS "series_id" FROM (SELECT series_id AS "series_id", any_value(metric_name) AS "metric_name", any_value(point_type) AS "point_type", any_value(metric_unit) AS "metric_unit", any_value(aggregation_temporality) AS "aggregation_temporality", any_value(is_monotonic) AS "is_monotonic", any_value(attributes) AS "attributes", any_value(resource_attributes) AS "resource_attributes", any_value(resource_schema_url) AS "resource_schema_url", any_value(resource_dropped_attributes_count) AS "resource_dropped_attributes_count", any_value(scope_name) AS "scope_name", any_value(scope_version) AS "scope_version", any_value(scope_attributes) AS "scope_attributes", any_value(scope_schema_url) AS "scope_schema_url", any_value(scope_dropped_attributes_count) AS "scope_dropped_attributes_count", any_value(explicit_bounds) AS "explicit_bounds", any_value(metric_description) AS "metric_description", any_value(CAST(list_extract(list_transform([CAST("attributes" AS JSON)], (b0) -> coalesce(json_extract(b0, '/job'), list_extract(list_transform(list_filter(from_json(json_extract(b0, '/$m'), '["JSON"]'), (x) -> json_extract_string(x, '/0') = 'job'), (x) -> json_extract(x, '/1')), 1))), 1) AS VARCHAR)) AS "g0" FROM "points" WHERE ((metric_name = 'job.duration') AND (point_type = 'histogram') AND metric_unit IS NOT DISTINCT FROM 's' AND aggregation_temporality IS NOT DISTINCT FROM 1 AND is_monotonic IS NOT DISTINCT FROM FALSE) GROUP BY series_id) AS "s")) GROUP BY series_id) AS "k" GROUP BY series_id) AS "s" WHERE (series_id = sid AND (metric_name = 'job.duration') AND (point_type = 'histogram') AND metric_unit IS NOT DISTINCT FROM 's' AND aggregation_temporality IS NOT DISTINCT FROM 1 AND is_monotonic IS NOT DISTINCT FROM FALSE)) AS "p" WHERE delta_count IS NOT NULL) AS "r") AS "e" GROUP BY g0, cell, bounds, side, idx) AS "m" GROUP BY g0, cell, bounds ORDER BY g0, cell, bounds"`,
+    );
+  });
+});

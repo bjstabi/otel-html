@@ -6,6 +6,7 @@ import {
   cellExpr,
   exemplarsQuery,
   identityTerms,
+  idTableSeriesQuery,
   type MetricIdentity,
   type MetricKind,
   metricCellsQuery,
@@ -15,7 +16,9 @@ import {
   pointIntervalQuery,
   runsQuery,
   SPARK_BUCKETS,
+  seriesIdsQuery,
   seriesQuery,
+  seriesServicesQuery,
   summaryQuantilesQuery,
 } from '../../../src/query/sql/points.js';
 import { bucketSpec } from '../../../src/query/sql/time.js';
@@ -922,5 +925,25 @@ describe('series identity and the baseline across partitions', () => {
     // Pruned with the window's lower bound, the first partition is gone and cell -1 is empty.
     const cut = run({ files: [second], all: false, total: 2 });
     expect(cut.map((r) => Number(r.cell))).toEqual([20e9]);
+  });
+});
+
+describe('series scope builders', () => {
+  test('idTableSeriesQuery reads the series ids of a temp table', () => {
+    expect(String(idTableSeriesQuery('otel_residual_3'))).toBe('SELECT "series_id" FROM "otel_residual_3"');
+  });
+
+  test('seriesIdsQuery projects the series ids of a series query', () => {
+    const series = Query.from('points').select('series_id', 'attributes');
+    expect(String(seriesIdsQuery(series))).toBe(
+      'SELECT series_id AS "series_id" FROM (SELECT "series_id", "attributes" FROM "points") AS "s"',
+    );
+  });
+
+  test('seriesServicesQuery groups the distinct service.name values by each by-group', () => {
+    const series = Query.from('points').select('g0', 'resource_attributes');
+    expect(String(seriesServicesQuery(series, [byExpr('attributes["k"]')]))).toBe(
+      'SELECT g0 AS "g0", list(DISTINCT CASE WHEN json_type(resource_attributes, \'/service.name\') = \'VARCHAR\' THEN json_extract_string(resource_attributes, \'/service.name\') END) AS "services" FROM (SELECT "g0", "resource_attributes" FROM "points") AS "s" GROUP BY g0',
+    );
   });
 });

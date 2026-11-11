@@ -1,4 +1,4 @@
-import { and, column, type ExprNode, Query, sql } from '@uwdata/mosaic-sql';
+import { and, type ExprNode, type Query, sql } from '@uwdata/mosaic-sql';
 import type { ManifestV4 } from '../../format/manifest.js';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { TraceId, UnixNanos } from '../../model/ids.js';
@@ -11,12 +11,13 @@ import {
   type CoreFacet,
   coreFacetsQuery,
 } from '../../query/sql/facets.js';
-import { buildFilter, type SqlFilter, whereOf } from '../../query/sql/filter.js';
+import { buildFilter, type SqlFilter } from '../../query/sql/filter.js';
 import {
   type LogSort,
   type LogTraceSort,
   logByRefQuery,
   logRowsQuery,
+  logsWithTraceCountQuery,
   logTimelineQuery,
   logTracesQuery,
   type PatternSort,
@@ -26,6 +27,7 @@ import {
   traceLogsQuery,
 } from '../../query/sql/logs.js';
 import { absWindow } from '../../query/sql/prune.js';
+import { idTableRowsQuery } from '../../query/sql/residual.js';
 import {
   durationBinsQuery,
   durationSummaryQuery,
@@ -262,7 +264,7 @@ export function createDuckDbDataSource(opts: {
       survivors.map((e) => [e.filename, e.fileRow]),
     );
     try {
-      const ids: ExprNode = sql`(filename, file_row_number) IN (SELECT filename, file_row_number FROM ${column(table)})`;
+      const ids: ExprNode = sql`(filename, file_row_number) IN (${idTableRowsQuery(table, ['filename', 'file_row_number'])})`;
       return await run({
         ...filter,
         predicate: filter.predicate === null ? ids : and(filter.predicate, ids),
@@ -521,12 +523,7 @@ export function createDuckDbDataSource(opts: {
           (async () => {
             if (traceSort !== null) {
               const r = logTraceRows(await engine.query(logTracesQuery(f, traceSort, q.limit), signal));
-              const matching = await engine.query(
-                Query.from('logs')
-                  .select({ n: sql`count(*)` })
-                  .where(...whereOf(f, 'logs'), sql`trace_id IS NOT NULL`),
-                signal,
-              );
+              const matching = await engine.query(logsWithTraceCountQuery(f), signal);
               Object.assign(result, {
                 rows: r.rows,
                 total: r.total,
