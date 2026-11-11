@@ -4,14 +4,14 @@ import type { Page } from '@playwright/test';
 import { reviveDataJson, unwrapDataFile } from '../src/format/data-file.js';
 import { isV4, type ManifestV4, parseAnyManifest } from '../src/format/manifest.js';
 import { MANIFEST_KEY } from '../src/format/paths.js';
-import { costOf } from '../test-support/scaling/cost.js';
+import { costOf, rangesOf } from '../test-support/scaling/cost.js';
 import { openCountingEngine, type ReadEvent } from '../test-support/scaling/counting-engine.js';
 import { PORT_ENV, type ReportName, reportDir, SCALE_SERVICES, scaleTraceId } from './fixture.js';
 import { REQUESTS_PATH, type RequestRecord } from './static-server.js';
 import { expect, test } from './test.js';
 import { runWorkerSql } from './worker-sql.js';
 
-// Calibration of the scaling harness (query-scaling plan, Task 1): the read calls of the Node counting engine against
+// Calibration of the scaling harness (query-scaling plan, Task 1): the modelled range requests of the Node counting engine (`rangesOf`, cost.ts) against
 // the HEADs and range GETs Chromium makes for the same statement, cold, over the site-format scale reports. `rowgroups`
 // is one partition with a four-row-group spans file, `many` is a hundred partitions. The reports come from
 // `mise run e2e:fixtures:scale` (`test:e2e` builds them only when the selection includes e2e/scale.spec.ts).
@@ -87,20 +87,11 @@ for (const name of ['rowgroups', 'many'] as const) {
         const events: readonly ReadEvent[] = await counting.take();
         const opens = events.filter((e) => e.kind === 'open').length;
         const reads = events.filter((e) => e.kind === 'read').length;
-        // Contiguous reads of one file in a row: what Chromium's read-ahead turns into one range GET.
-        let runs = 0;
-        let end = -1;
-        let at = '';
-        for (const e of events) {
-          if (e.kind !== 'read') continue;
-          if (e.path !== at || e.offset !== end) runs++;
-          at = e.path;
-          end = e.offset + e.bytes;
-        }
+        const ranges = rangesOf(events);
         const predicted = costOf(events, new Map()).serial;
         const actual = heads + gets;
         process.stdout.write(
-          `CALIBRATION ${name} #${i + 1}: Node opens ${opens}, reads ${reads} (${runs} contiguous runs); Chromium HEADs ${heads}, GETs ${gets}; predicted ${predicted} against ${actual}\n`,
+          `CALIBRATION ${name} #${i + 1}: Node opens ${opens}, reads ${reads} (${ranges} modelled ranges); Chromium HEADs ${heads}, GETs ${gets}; predicted ${predicted} against ${actual}\n`,
         );
         expect
           .soft(Math.abs(predicted - actual), `${name} #${i + 1} ${statement}`)

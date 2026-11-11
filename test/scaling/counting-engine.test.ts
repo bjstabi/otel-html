@@ -2,7 +2,7 @@ import { literal, Query, sql } from '@uwdata/mosaic-sql';
 import { afterEach, describe, expect, test } from 'vitest';
 import { buildFormat4Report, openFixtureDb, spansOnlyRequest } from '../../test-support/format4-fixture.js';
 import { writeReportDir } from '../../test-support/report-dir.js';
-import { costOf, REQUESTS_PER_OPEN, REQUESTS_PER_READ } from '../../test-support/scaling/cost.js';
+import { costOf, REQUESTS_PER_OPEN, REQUESTS_PER_READ, rangesOf } from '../../test-support/scaling/cost.js';
 import {
   type CountingEngine,
   openCountingEngine,
@@ -76,12 +76,40 @@ describe('the counting Node engine', () => {
     expect(second.serial).toBeLessThan(first.serial);
   });
 
-  test('an open and its reads cost the calibrated requests, and the reads their bytes', () => {
-    const p = 'partitions/000001/spans.parquet';
-    expect(costOf([open(p), read(p, 0, 8), read(p, 100, 50)], new Map())).toEqual({
-      serial: REQUESTS_PER_OPEN + 2 * REQUESTS_PER_READ,
-      parallel: 0,
-      bytes: 58,
+  describe('the read-ahead model', () => {
+    const p = 'data/partitions/000001/spans.parquet';
+    const K = 16_384;
+    const blocks = (...at: number[]): ReadEvent[] => at.map((o) => read(p, o, K));
+
+    test('sequential reads merge into growing ranges', () => {
+      // 0: 16 KiB range; 16 KiB: 64 KiB range (to 80 KiB); the reads up to 80 KiB are inside it
+      expect(rangesOf(blocks(0, K, 2 * K, 3 * K, 4 * K))).toBe(2);
+      // 80 KiB: 256 KiB range (to 336 KiB); 336 KiB: 1 MiB range; 1360 KiB: 4 MiB; then the size stays
+      const starts = [0, 16, 80, 336, 1360, 5456].map((kib) => kib * 1024);
+      expect(rangesOf(blocks(...starts))).toBe(6);
+      expect(rangesOf(blocks(...starts, 5456 * 1024 + 4 * 1024 * 1024))).toBe(7);
+      expect(rangesOf(blocks(...starts, 5456 * 1024 + 4 * 1024 * 1024 - K))).toBe(6);
+    });
+
+    test('a jump starts a new 16 KiB range, and the stream it left continues later', () => {
+      expect(rangesOf(blocks(0, 1_000_000))).toBe(2);
+      // 0, K (64 KiB to 80 KiB), a jump, then 80 KiB continues the first stream and fetches 256 KiB
+      expect(rangesOf(blocks(0, K, 1_000_000, 5 * K))).toBe(4);
+      // the 256 KiB range it fetched holds the reads that follow
+      expect(rangesOf(blocks(0, K, 1_000_000, 5 * K, 100 * 1024 + 2 * K))).toBe(4);
+    });
+
+    test('a read larger than the range size fetches the read, an open forgets the streams', () => {
+      expect(rangesOf([read(p, 0, 100_000), read(p, 50_000, 40_000)])).toBe(1);
+      expect(rangesOf([...blocks(0), open(p), ...blocks(0)])).toBe(2);
+    });
+
+    test('costOf prices the ranges, not the read calls', () => {
+      expect(costOf([open(p), ...blocks(0, K, 2 * K, 3 * K)], new Map())).toEqual({
+        serial: REQUESTS_PER_OPEN + 2 * REQUESTS_PER_READ,
+        parallel: 0,
+        bytes: 4 * K,
+      });
     });
   });
 

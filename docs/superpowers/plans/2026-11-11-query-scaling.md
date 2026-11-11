@@ -1670,64 +1670,62 @@ test('both CI configs set viewer.defaultWindow to 7d and are otherwise equal to 
 
 ## Calibration (Task 1)
 
-Filled by Task 1 in PR 1; later tasks read it. **Status: the tolerance fails on `rowgroups` and no row group size passes
-step 5, so the controller rules on the switch to a Chromium harness (§3.3); nothing below is switched.**
+Filled by Task 1 in PR 1; later tasks read it. **Status: the tolerance holds on all ten statements (two reports, five
+statements) once the harness models the browser's read-ahead; the harness runs on the Node counting engine.** Step 5
+found no row group size within 10 %; `ROW_GROUP_ROWS` is provisional (Task 6's 25 % check against the live report is the
+guard).
 
-- Engine the harness runs on: _undecided_. The Node counting engine as built (`test-support/scaling/counting-engine.ts`;
-  `cold()` replaces the worker, because DuckDB's footer and file caches are emptied by no SQL setting) until the
-  controller decides.
-- `REQUESTS_PER_OPEN`: 2 (a HEAD and DuckDB's `bytes=0-0` probe GET; the footer read is one of the Node reads).
-  `REQUESTS_PER_READ` (the `k` of decision 3): 1. `ROW_GROUP_ROWS`: 8192, provisional: no size passed step 5.
-  All three are exported from `test-support/scaling/cost.ts`.
+- Engine the harness runs on: the Node counting engine (`test-support/scaling/counting-engine.ts`) with the read-ahead
+  model of `rangesOf` (`cost.ts`). `cold()` replaces the worker, because DuckDB's footer and file caches are emptied by
+  no SQL setting; a fresh worker with the views created is where a reloaded page stands.
+- The read-ahead model (`rangesOf`), fitted on the `Range` headers the static server logged (the starts of every range
+  agree on all ten statements): a read inside a stream's current range is free; a read that starts where a stream's
+  range ends continues it with the next size, 16 KiB, 64 KiB, 256 KiB, 1 MiB, 4 MiB (the new range replaces the old);
+  any other read starts a stream at 16 KiB; a stream survives a jump elsewhere; an open forgets the file's streams.
+  Node itself reads 16 KiB per call, so raw read calls overstate Chromium's GETs up to 20 times (243 against 13).
+- `REQUESTS_PER_OPEN`: 2 (a HEAD and DuckDB's `bytes=0-0` probe GET; the footer read is one of the modelled ranges).
+  `REQUESTS_PER_READ` (the `k` of decision 3): 1 per modelled range. `ROW_GROUP_ROWS`: 8192, provisional (below). All
+  three are exported from `test-support/scaling/cost.ts`.
 - Run: `mise run e2e:fixtures:scale`, then `mise run test:e2e:chromium -- e2e/calibration.spec.ts` (the spec is
   `@perf @http`). `test:e2e` builds the scale reports only when the selection lists `e2e/scale.spec.ts`, so a lone run
   needs the first command by hand. Each statement runs on a fresh page (`about:blank` first, on `#/metrics`, which
-  reads no span) once the server has been quiet for a second; the Node side is `cold()` (a new worker with the views
-  created, which is where the page stands).
-- The model checked per statement: `opens·REQUESTS_PER_OPEN + reads·REQUESTS_PER_READ` against Chromium's HEADs plus
-  range GETs, within `max(2, 10 %)`.
+  reads no span) once the server has been quiet for a second; the Node side is `cold()`.
+- Checked per statement: `opens·REQUESTS_PER_OPEN + modelledRanges·REQUESTS_PER_READ` against Chromium's HEADs plus
+  range GETs, within `max(2, 10 %)`. The test pins the model on synthetic events (`test/scaling/counting-engine.test.ts`).
 
 `rowgroups` (one partition, spans file of four 50,000-row groups, 4.0 MB; footers cached by the view creation):
 
-| statement                            | Node opens | Node reads (contiguous runs) | Chromium HEADs | Chromium range GETs | within tolerance |
-| ------------------------------------ | ---------- | ---------------------------- | -------------- | ------------------- | ---------------- |
-| 1 `count(*)` of spans                | 0          | 0 (0)                        | 0              | 0                   | yes              |
-| 2 `service_name = 'api'`             | 0          | 1 (1)                        | 0              | 1                   | yes              |
-| 3 time range, a tenth, `GROUP BY`    | 0          | 100 (12)                     | 0              | 12                  | **no**           |
-| 4 `SELECT *` by `trace_id`           | 0          | 243 (36)                     | 0              | 13                  | **no**           |
-| 5 `traces` newest 50                 | 0          | 3 (1)                        | 0              | 2                   | yes              |
+| statement                         | Node opens | Node reads | modelled ranges | Chromium HEADs | Chromium range GETs | within tolerance |
+| --------------------------------- | ---------- | ---------- | --------------- | -------------- | ------------------- | ---------------- |
+| 1 `count(*)` of spans             | 0          | 0          | 0               | 0              | 0                   | yes              |
+| 2 `service_name = 'api'`          | 0          | 1          | 1               | 0              | 1                   | yes              |
+| 3 time range, a tenth, `GROUP BY` | 0          | 100        | 12              | 0              | 12                  | yes              |
+| 4 `SELECT *` by `trace_id`        | 0          | 243        | 13              | 0              | 13                  | yes              |
+| 5 `traces` newest 50              | 0          | 3          | 2               | 0              | 2                   | yes              |
 
 `many` (99 flush partitions of 1,000 spans, never closed):
 
-| statement                            | Node opens | Node reads | Chromium HEADs | Chromium range GETs | within tolerance |
-| ------------------------------------ | ---------- | ---------- | -------------- | ------------------- | ---------------- |
-| 1 `count(*)` of spans                | 99         | 108        | 99             | 207                 | yes (306 = 306)  |
-| 2 `service_name = 'api'`             | 99         | 199        | 99             | 298                 | yes (397 = 397)  |
-| 3 time range, a tenth, `GROUP BY`    | 99         | 108        | 99             | 207                 | yes (306 = 306)  |
-| 4 `SELECT *` by `trace_id`           | 99         | 109        | 99             | 208                 | yes (307 = 307)  |
-| 5 `traces` newest 50                 | 99         | 99         | 99             | 198                 | yes (297 = 297)  |
+| statement                         | Node opens | Node reads | modelled ranges | Chromium HEADs | Chromium range GETs | within tolerance |
+| --------------------------------- | ---------- | ---------- | --------------- | -------------- | ------------------- | ---------------- |
+| 1 `count(*)` of spans             | 99         | 108        | 108             | 99             | 207                 | yes (306 = 306)  |
+| 2 `service_name = 'api'`          | 99         | 199        | 199             | 99             | 298                 | yes (397 = 397)  |
+| 3 time range, a tenth, `GROUP BY` | 99         | 108        | 108             | 99             | 207                 | yes (306 = 306)  |
+| 4 `SELECT *` by `trace_id`        | 99         | 109        | 109             | 99             | 208                 | yes (307 = 307)  |
+| 5 `traces` newest 50              | 99         | 99         | 99              | 99             | 198                 | yes (297 = 297)  |
 
-Reading: opens are exact (per open Chromium makes one HEAD, one `bytes=0-0` GET and the Node footer read). Data reads
-are not: Node's NODE_FS reads 16 KiB blocks one call each, while Chromium's HTTP file merges sequential blocks into
-growing ranges (16 KiB, 64 KiB, 256 KiB, 1 MiB). Counting **contiguous runs** of Node reads instead of read calls is
-exact for statements 2, 3 and 5 (1, 12, 1 against 1, 12, 2 GETs) and far off only for the `SELECT *` (36 against 13,
-where Chromium's read-ahead also bridges gaps between columns). That is the measure to try before switching.
+Step 5, with the modelled counts: one partition of 16 row groups of 512, 2,048 and 8,192 rows and of 4 of 50,000 (Node,
+cold; synthetic spans of `spansOnlyRequest`); modelled serial requests per row group, and the deviation from the
+50,000-row file:
 
-Step 5, row groups of one partition, 16 of 512, 2,048 and 8,192 rows and 4 of 50,000 (Node, cold; synthetic spans of
-`spansOnlyRequest`; reads per row group, statement 2 service filter / statement 3 time range / for reference a full
-scan of two columns):
+| rows per group | groups | st. 2 per group | deviation | st. 3 per group | deviation |
+| -------------- | ------ | --------------- | --------- | --------------- | --------- |
+| 512            | 16     | 0.125           | 83 %      | 0.063           | 94 %      |
+| 2,048          | 16     | 0.250           | 67 %      | 0.125           | 88 %      |
+| 8,192          | 16     | 0.500           | 33 %      | 0.250           | 75 %      |
+| 50,000         | 4      | 0.750           | reference | 1.000           | reference |
 
-| rows per group | groups | file    | st. 2 reads/group | st. 3 reads/group | full scan reads/group |
-| -------------- | ------ | ------- | ----------------- | ----------------- | --------------------- |
-| 512            | 16     | 202 KB  | 0.25              | 0.06              | 0.50                  |
-| 2,048          | 16     | 514 KB  | 0.50              | 0.25              | 1.69                  |
-| 8,192          | 16     | 1.9 MB  | 0.50              | 0.50              | 4.50                  |
-| 50,000         | 4      | 2.8 MB  | 0.75              | 3.25              | 23.00                 |
-
-No size is within 10 % of the 50,000-row file on both statements (the closest, 8,192, is 33 % off on statement 2 and
-85 % off on statement 3): the per-group read count grows with the column chunk size, which small groups of the
-synthetic spans do not reproduce. Small row groups would need to carry the 50,000-row byte size per group, or the
-harness must model reads by bytes.
+No size is within 10 %. `ROW_GROUP_ROWS` is 8,192, the size with the smallest maximum deviation (75 %): provisional.
+Requests per group grow with the column chunk size, which small groups of the synthetic spans do not reproduce.
 
 ## Expectations (Task 6)
 
