@@ -16,7 +16,7 @@ import { envVar, messageOf, say } from '../ci/github-api.js';
 import { runLink } from '../ci/link-main.js';
 import { runPusherCommand } from '../ci/pusher-main.js';
 import { runReport } from '../ci/report-main.js';
-import { runUpdateDone, runUpdatePr, runUpdatePush, runUpdateRun } from '../ci/update-main.js';
+import { runUpdateDone, runUpdatePr, runUpdatePush, runUpdateRun, runUpdateStop } from '../ci/update-main.js';
 import { runUpload } from '../ci/upload-main.js';
 import type { CliIo } from '../io.js';
 import { CliExit } from '../program.js';
@@ -260,24 +260,27 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
   }
   update
     .command('done')
-    .description('record a finished upload in the pusher ledger; print the pusher log as a notice')
+    .description('record a finished upload in the pusher ledger')
     .requiredOption('--name <name>', 'the uploaded update artifact name')
     .option('--publish-dir <dir>', "the pusher's folder", '.otel-html/publish')
-    .option('--log <file>', 'the pusher log to summarise')
-    .action(async (flags: { name: string; publishDir: string; log?: string }) => {
+    .action(async (flags: { name: string; publishDir: string }) => {
       try {
-        await runUpdateDone(
-          {
-            name: flags.name,
-            publishDir: flags.publishDir,
-            ...(flags.log === undefined ? {} : { log: flags.log }),
-          },
-          io,
-          await resolveDeps(deps),
-        );
+        await runUpdateDone({ name: flags.name, publishDir: flags.publishDir }, await resolveDeps(deps));
       } catch (e) {
         say(io, `::warning::otel-html update done: ${messageOf(e)}`);
       }
+    });
+  update
+    .command('stop')
+    .description('stop a running pusher and print its failures as a notice (never fails the job)')
+    .option('--publish-dir <dir>', "the pusher's folder", '.otel-html/publish')
+    .option('--log <file>', 'the pusher log to summarise')
+    .action(async (flags: { publishDir: string; log?: string }) => {
+      await runUpdateStop(
+        { publishDir: flags.publishDir, ...(flags.log === undefined ? {} : { log: flags.log }) },
+        io,
+        await resolveDeps(deps),
+      );
     });
   ci.command('pusher')
     .description(

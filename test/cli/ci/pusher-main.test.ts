@@ -72,6 +72,17 @@ describe('ci pusher', () => {
     expect(unrefs).toBe(1);
   });
 
+  test('removes a stale stop file and pid file before spawning', async () => {
+    const publish = join(dir, '.otel-html', 'publish');
+    mkdirSync(publish, { recursive: true });
+    writeFileSync(join(publish, 'pusher.stop'), '');
+    writeFileSync(join(publish, 'pusher.pid'), '1');
+    await runCli(['ci', 'pusher', '--report', '.otel-html/report', '--every', '60s'], ioOf(), deps());
+    expect(calls).toHaveLength(1);
+    expect(existsSync(join(publish, 'pusher.stop'))).toBe(false);
+    expect(existsSync(join(publish, 'pusher.pid'))).toBe(false);
+  });
+
   test('a bad --every is a usage error', async () => {
     const code = await runCli(['ci', 'pusher', '--report', 'r', '--every', '5x'], ioOf(), deps());
     expect(code).toBe(2);

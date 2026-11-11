@@ -27,7 +27,7 @@ inputs:
     description: "Token for the release download, the `ci context` API calls and the pusher's uploads (the pusher needs `actions: write`)."
     default: ${{ github.token }}
   push-every:
-    description: Start the pusher, which uploads the job's new report partitions as site updates this often (such as `60s`) while the job runs. Empty starts no pusher.
+    description: Start the pusher, which uploads the job's new report partitions as site updates this often (such as `60s`) while the job runs. Empty starts no pusher. The pusher needs the collect step, which stops it.
     default: ""
   config:
     description: Config file for the CI spans report of the pusher's updates.

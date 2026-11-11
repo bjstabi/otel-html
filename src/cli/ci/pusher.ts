@@ -1,3 +1,5 @@
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Clock, FileSystem } from '../../writer/ports.js';
 import type { WriterDeps } from '../../writer/session.js';
@@ -5,7 +7,7 @@ import type { CliIo } from '../io.js';
 import { type uploadArtifact, zipDirectory } from './artifact-client.js';
 import { runDispatch } from './dispatch.js';
 import { type Fetch, messageOf } from './github-api.js';
-import { PID_FILE, readLedger, STOP_FILE, writeLedger } from './ledger.js';
+import { FAILURE_MARK, PID_FILE, readLedger, STOP_FILE, writeLedger } from './ledger.js';
 import { parseJobContext } from './publish.js';
 import { buildPushUpdate, ciSpansFromApi } from './push-update.js';
 import { readRunManifest } from './run-report.js';
@@ -46,7 +48,7 @@ function needNumber(env: PusherOptions['env'], name: string): number {
 
 /**
  * One tick (D60): read the manifest (absent: nothing), diff its sources against the ledger's `shipped`, reserve the
- * next sequence in the ledger, build the update folder under `<publishDir>/tick-<n>/`, zip, upload, record the
+ * next sequence in the ledger, build the update folder under the OS temp dir (`$RUNNER_TEMP`; never inside the uploaded `.otel-html/`), zip, upload, record the
  * finished upload in the ledger (`shipped`, `uploads`), dispatch, remove the folder. Every failure is one log line and
  * `'retry'`; a retry takes a fresh sequence, so a name is never offered twice.
  */
@@ -79,12 +81,12 @@ export async function tick(o: PusherOptions, d: PusherDeps, last: string[] | nul
     await writeLedger(fs, o.publishDir, { ...ledger, sequence });
     ledger = { ...ledger, sequence };
 
-    const out = join(o.publishDir, `tick-${sequence}`);
-    folders.push(out);
+    const work = await mkdtemp(join(ev(o, 'RUNNER_TEMP') || tmpdir(), 'otel-html-tick-'));
+    folders.push(work);
+    const out = join(work, `tick-${sequence}`);
     let jobName = ev(o, 'OTEL_HTML_JOB_NAME') ?? ctx.jobName ?? ev(o, 'GITHUB_JOB') ?? 'job';
     let ciReport: string | undefined;
-    const scratch = join(o.publishDir, `tick-${sequence}-ci`);
-    folders.push(scratch);
+    const scratch = join(work, `tick-${sequence}-ci`);
     try {
       const ci = await ciSpansFromApi({
         deps: d.deps,
@@ -101,8 +103,9 @@ export async function tick(o: PusherOptions, d: PusherDeps, last: string[] | nul
       });
       if (ci.jobName !== undefined) jobName = ci.jobName;
       ciReport = ci.report;
+      if (ci.why !== undefined) d.log(`${FAILURE_MARK}no CI spans in update ${sequence}: ${ci.why}`);
     } catch (e) {
-      d.log(`no CI spans in update ${sequence}: ${messageOf(e)}`);
+      d.log(`${FAILURE_MARK}no CI spans in update ${sequence}: ${messageOf(e)}`);
     }
 
     const name = updateName({
@@ -162,7 +165,7 @@ export async function tick(o: PusherOptions, d: PusherDeps, last: string[] | nul
     await dispatch(o, d, repository, runId);
     return { outcome: 'uploaded', listing };
   } catch (e) {
-    d.log(`${step} failed, will retry: ${messageOf(e)}`);
+    d.log(`${FAILURE_MARK}${step} failed, will retry: ${messageOf(e)}`);
     return { outcome: 'retry', listing };
   } finally {
     for (const f of folders) await fs.removeDir(f).catch(() => undefined);
@@ -172,7 +175,8 @@ export async function tick(o: PusherOptions, d: PusherDeps, last: string[] | nul
 /** Wakes the deployer; `runDispatch` never throws and says what happened on its stdout, which goes to the log. */
 async function dispatch(o: PusherOptions, d: PusherDeps, repository: string, runId: number): Promise<void> {
   const sink = (s: string): void => {
-    for (const line of s.split('\n')) if (line.trim() !== '') d.log(line);
+    for (const line of s.split('\n'))
+      if (line.trim() !== '') d.log(line.includes('not dispatched') ? `${FAILURE_MARK}${line}` : line);
   };
   // GitHub refuses a dispatch made with GITHUB_TOKEN (#264), so setup may hand over a GitHub App token for the dispatch alone.
   // An App token lasts one hour: a longer job's later dispatches fail and are logged as any dispatch failure is; the
@@ -203,7 +207,7 @@ export async function runPusher(o: PusherOptions, d: PusherDeps, signals: CliIo[
     try {
       return await fs.exists(stopFile);
     } catch (e) {
-      if (!warned) d.log(`cannot check ${stopFile}: ${messageOf(e)}`);
+      if (!warned) d.log(`${FAILURE_MARK}cannot check ${stopFile}: ${messageOf(e)}`);
       warned = true;
       return false;
     }
@@ -224,7 +228,7 @@ export async function runPusher(o: PusherOptions, d: PusherDeps, signals: CliIo[
       }
     }
   } catch (e) {
-    d.log(`the pusher stops: ${messageOf(e)}`);
+    d.log(`${FAILURE_MARK}the pusher stops: ${messageOf(e)}`);
   } finally {
     off();
     await fs.remove(pidFile).catch(() => undefined);

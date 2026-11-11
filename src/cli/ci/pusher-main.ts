@@ -1,10 +1,10 @@
-import { closeSync, mkdirSync, openSync } from 'node:fs';
+import { closeSync, mkdirSync, openSync, rmSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { WriterDeps } from '../../writer/session.js';
 import type { CliIo } from '../io.js';
 import { uploadArtifact } from './artifact-client.js';
-import { LOG_FILE } from './ledger.js';
+import { LOG_FILE, PID_FILE, STOP_FILE } from './ledger.js';
 import { runPusher } from './pusher.js';
 
 export interface PusherCommand {
@@ -34,6 +34,8 @@ export async function runPusherCommand(o: PusherCommand, io: CliIo, deps: Writer
   const publishDir = join(dirname(report), 'publish');
   if (!o.detached) {
     mkdirSync(publishDir, { recursive: true });
+    // A killed pusher or a reused workspace leaves these behind; a stale stop file would end the new pusher at once.
+    for (const f of [STOP_FILE, PID_FILE]) rmSync(join(publishDir, f), { force: true });
     const args = [
       'ci',
       'pusher',

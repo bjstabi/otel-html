@@ -51,6 +51,18 @@ outputs:
 runs:
   using: composite
   steps:
+    # First, whatever `publish` is: a pusher (setup's push-every) must not outlive this step, or it writes into the folder the
+    # last step uploads. A job without a pusher does nothing here. Never fails the job.
+    - name: Stop the pusher
+      if: always()
+      continue-on-error: true
+      shell: bash
+      env:
+        CMD: ${{ inputs.command || 'otel-html' }}
+        COLLECT_PATH: ${{ inputs.path }}
+      run: |
+        # shellcheck disable=SC2086
+        $CMD ci update stop --publish-dir "${COLLECT_PATH%/}/publish" --log "${COLLECT_PATH%/}/publish/pusher.log"
     - name: Write the site update
       id: update
       if: inputs.publish == 'true'
@@ -107,7 +119,7 @@ runs:
       run: |
         # Neither command fails the job. CMD is deliberately unquoted: it may be a command with arguments.
         # shellcheck disable=SC2086
-        $CMD ci update done --name "$NAME" --publish-dir "${COLLECT_PATH%/}/publish" --log "${COLLECT_PATH%/}/publish/pusher.log"
+        $CMD ci update done --name "$NAME" --publish-dir "${COLLECT_PATH%/}/publish"
         # shellcheck disable=SC2086
         GITHUB_TOKEN=${DISPATCH_TOKEN:-$GITHUB_TOKEN} $CMD ci dispatch --workflow "$WORKFLOW"
     # Last, and after steps that cannot fail the job, so the job's report artifact is always uploaded.

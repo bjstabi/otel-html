@@ -15,7 +15,7 @@ import {
   setOutputs,
   warning,
 } from './github-api.js';
-import { LOG_FILE, PID_FILE, readLedger, STOP_FILE, writeLedger } from './ledger.js';
+import { FAILURE_MARK, LOG_FILE, PID_FILE, readLedger, STOP_FILE, writeLedger } from './ledger.js';
 import { parseJobContext } from './publish.js';
 import { mergeWithConfig } from './publish-io.js';
 import { buildPushUpdate, ciSpansFromApi } from './push-update.js';
@@ -26,6 +26,8 @@ import { parseUpdateName, readUpdate, UPDATE_FILE, type UpdateJson, updateName }
 const API_TIMEOUT_MS = 15_000;
 const STOP_WAIT_MS = 90_000;
 const STOP_POLL_MS = 1_000;
+const NOTICE_LINES = 5;
+const NOTICE_CHARS = 600;
 
 const nowIso = (deps: Pick<WriterDeps, 'clock'>): string =>
   new Date(Number(deps.clock.nowUnixNano() / 1_000_000n)).toISOString();
@@ -52,9 +54,23 @@ const sleep = (deps: WriterDeps, ms: number): Promise<void> =>
     });
   });
 
-/** D60: asks the pusher to stop, waits up to 90 s for its pid file to vanish, then kills it if it is still alive. */
-async function stopPusher(deps: WriterDeps, publishDir: string): Promise<void> {
+export interface StopOptions {
+  /** Default 90 s. */
+  waitMs?: number;
+  /** Default 1 s. */
+  pollMs?: number;
+  /** Default `process.kill`. */
+  kill?: (pid: number, signal: NodeJS.Signals) => void;
+}
+
+/**
+ * D60: asks the pusher to stop, waits up to 90 s for its pid file to vanish, then kills it if it is still alive.
+ * SIGKILL: the pusher handles SIGTERM as a soft stop, which a stalled upload outlives (on Windows any signal is a hard kill).
+ */
+async function stopPusher(deps: WriterDeps, publishDir: string, opts: StopOptions = {}): Promise<void> {
   const { fs } = deps;
+  const waitMs = opts.waitMs ?? STOP_WAIT_MS;
+  const pollMs = opts.pollMs ?? STOP_POLL_MS;
   await fs.mkdirp(publishDir);
   await fs.writeTextAtomic(`${publishDir}/${STOP_FILE}`, '');
   const pidFile = `${publishDir}/${PID_FILE}`;
@@ -64,17 +80,46 @@ async function stopPusher(deps: WriterDeps, publishDir: string): Promise<void> {
     await fs.remove(pidFile);
     return;
   }
-  for (let waited = 0; waited < STOP_WAIT_MS; waited += STOP_POLL_MS) {
-    await sleep(deps, STOP_POLL_MS);
+  for (let waited = 0; waited < waitMs; waited += pollMs) {
+    await sleep(deps, pollMs);
     if (!(await fs.exists(pidFile))) return;
     if (!deps.process.isAlive(pid)) break;
   }
   try {
-    process.kill(pid);
+    (opts.kill ?? process.kill)(pid, 'SIGKILL');
   } catch {
     // already gone
   }
   await fs.remove(pidFile).catch(() => undefined);
+}
+
+/**
+ * `ci update stop`: stops a running pusher whatever else the job does (the collect step runs it first, so nothing
+ * writes into `.otel-html/` while it is uploaded), then prints the pusher's failure lines as one `::notice::`. Does
+ * nothing for a job that never had a pusher. Never throws: a failure is a `::warning::`.
+ */
+export async function runUpdateStop(
+  o: { publishDir: string; log?: string },
+  io: CliIo,
+  deps: WriterDeps,
+  opts: StopOptions = {},
+): Promise<void> {
+  try {
+    const { fs } = deps;
+    if (await fs.exists(`${o.publishDir}/${PID_FILE}`)) await stopPusher(deps, o.publishDir, opts);
+    if (o.log !== undefined && (await fs.exists(o.log))) {
+      const lines = (await fs.readText(o.log))
+        .split(/\r?\n/)
+        .filter((l) => l.startsWith(FAILURE_MARK))
+        .map((l) => l.slice(FAILURE_MARK.length));
+      if (lines.length > 0) {
+        const shown = lines.slice(-NOTICE_LINES).join(' | ').slice(0, NOTICE_CHARS);
+        say(io, `::notice::otel-html pusher: ${lines.length} failure(s) in ${LOG_FILE}: ${shown}`);
+      }
+    }
+  } catch (e) {
+    warning(io, 'update stop', messageOf(e));
+  }
 }
 
 const sidecar = (publishDir: string, name: string): string => `${publishDir}/${name}.sources.json`;
@@ -107,6 +152,8 @@ export async function runUpdatePush(
   try {
     const { fs } = deps;
     const publishDir = o.publishDir ?? join(dirname(o.report), 'publish');
+    // First, before any check that can throw: a pusher must not outlive collect.
+    if (o.final) await stopPusher(deps, publishDir);
     const runId = needNumber(io, 'GITHUB_RUN_ID');
     const runAttempt = needNumber(io, 'GITHUB_RUN_ATTEMPT');
     const repository = envVar(io, 'GITHUB_REPOSITORY');
@@ -116,7 +163,6 @@ export async function runUpdatePush(
     const ctx = parseJobContext((await fs.exists(contextPath)) ? await fs.readText(contextPath) : undefined);
     if (ctx === undefined) throw new Error(`${contextPath} is missing or malformed`);
 
-    if (o.final) await stopPusher(deps, publishDir);
     const ledger = await readLedger(fs, publishDir);
     const sequence = ledger.sequence + 1;
 
@@ -295,16 +341,12 @@ export async function runUpdatePr(
   setOutputs(io, { name });
 }
 
-const NOTICE_LINES = 5;
-const NOTICE_CHARS = 600;
-
 /**
  * `ci update done`: records a finished upload in the ledger (`shipped` gains the update's sources, `uploads` the
- * record) and, when `log` is given, prints the pusher log's lines as one `::notice::`.
+ * record).
  */
 export async function runUpdateDone(
-  o: { name: string; publishDir: string; log?: string },
-  io: CliIo,
+  o: { name: string; publishDir: string },
   deps: Pick<WriterDeps, 'fs' | 'clock'>,
 ): Promise<void> {
   const { fs } = deps;
@@ -325,12 +367,5 @@ export async function runUpdateDone(
         { name: o.name, sequence: parsed.sequence, sources, finishedAt: nowIso(deps) },
       ],
     });
-  }
-  if (o.log !== undefined && (await fs.exists(o.log))) {
-    const lines = (await fs.readText(o.log)).split(/\r?\n/).filter((l) => l.trim() !== '');
-    if (lines.length > 0) {
-      const shown = lines.slice(-NOTICE_LINES).join(' | ').slice(0, NOTICE_CHARS);
-      say(io, `::notice::otel-html pusher: ${lines.length} log line(s) in ${LOG_FILE}: ${shown}`);
-    }
   }
 }

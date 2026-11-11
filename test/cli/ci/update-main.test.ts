@@ -15,7 +15,13 @@ import type { ApiJob, ApiRun } from '../../../src/cli/ci/github-api.js';
 import { readLedger } from '../../../src/cli/ci/ledger.js';
 import { readRunManifest } from '../../../src/cli/ci/run-report.js';
 import { readUpdate, type UpdateJson } from '../../../src/cli/ci/update.js';
-import { runUpdateDone, runUpdatePr, runUpdatePush, runUpdateRun } from '../../../src/cli/ci/update-main.js';
+import {
+  runUpdateDone,
+  runUpdatePr,
+  runUpdatePush,
+  runUpdateRun,
+  runUpdateStop,
+} from '../../../src/cli/ci/update-main.js';
 import type { CliIo } from '../../../src/cli/io.js';
 import type { WriterDeps } from '../../../src/writer/session.js';
 import { openTestDb } from '../../../test-support/duckdb-node.js';
@@ -221,6 +227,18 @@ describe('runUpdatePush', () => {
     expect(existsSync(join(publish, 'pusher.pid'))).toBe(false);
   });
 
+  test('--final stops the pusher even when context.json is missing', async () => {
+    const publish = join(dir, '.otel-html/publish');
+    mkdirSync(publish, { recursive: true });
+    await runUpdatePush(
+      { report: join(dir, '.otel-html/report'), out: join(dir, 'u'), final: true },
+      ioOf(),
+      deps,
+    );
+    expect(out.join('')).toContain('::warning::');
+    expect(existsSync(join(publish, 'pusher.stop'))).toBe(true);
+  });
+
   test('no partitions yet: name is empty, nothing is written', async () => {
     const root = join(dir, '.otel-html');
     mkdirSync(root, { recursive: true });
@@ -292,35 +310,85 @@ describe('runUpdateDone', () => {
     await runUpdatePush({ report, out: join(dir, 'u'), final: false }, ioOf(), deps);
     const name = outputs().name ?? '';
     out = [];
-    await runUpdateDone({ name, publishDir: publish }, ioOf(), deps);
+    await runUpdateDone({ name, publishDir: publish }, deps);
     const ledger = await readLedger(deps.fs, publish);
     expect(ledger.shipped).toEqual(['flush:0', 'flush:1']);
     expect(ledger.uploads.map((u) => [u.name, u.sequence, u.sources])).toEqual([
       [name, 1, ['flush:0', 'flush:1']],
     ]);
   });
+});
 
-  test('prints the pusher log as one notice', async () => {
+describe('runUpdateStop', () => {
+  const live = (): WriterDeps => ({ ...deps, process: { ...deps.process, isAlive: () => true } });
+  const fast = { waitMs: 30, pollMs: 10 };
+
+  test('a live pusher that ignores the stop file is sent SIGKILL after the wait', async () => {
+    const publish = join(dir, 'publish');
+    mkdirSync(publish, { recursive: true });
+    writeFileSync(join(publish, 'pusher.pid'), '4242');
+    const kills: [number, string][] = [];
+    await runUpdateStop({ publishDir: publish }, ioOf(), live(), {
+      ...fast,
+      kill: (pid, sig) => kills.push([pid, sig]),
+    });
+    expect(kills).toEqual([[4242, 'SIGKILL']]);
+    expect(existsSync(join(publish, 'pusher.stop'))).toBe(true);
+    expect(existsSync(join(publish, 'pusher.pid'))).toBe(false);
+  });
+
+  test('a pusher that removes its pid file is not killed', async () => {
+    const publish = join(dir, 'publish');
+    mkdirSync(publish, { recursive: true });
+    writeFileSync(join(publish, 'pusher.pid'), '4242');
+    const kills: unknown[] = [];
+    await runUpdateStop({ publishDir: publish }, ioOf(), live(), {
+      ...fast,
+      kill: (pid) => {
+        kills.push(pid);
+        return undefined;
+      },
+    });
+    // the fake never removes it, so the kill fires; now one that goes away on its own
+    expect(kills).toHaveLength(1);
+    writeFileSync(join(publish, 'pusher.pid'), '2147483646');
+    await runUpdateStop({ publishDir: publish }, ioOf(), deps, fast);
+    expect(kills).toHaveLength(1);
+    expect(existsSync(join(publish, 'pusher.pid'))).toBe(false);
+  });
+
+  test('a job that never had a pusher writes nothing', async () => {
+    const publish = join(dir, 'publish');
+    await runUpdateStop({ publishDir: publish }, ioOf(), deps, fast);
+    expect(existsSync(publish)).toBe(false);
+    expect(out.join('')).toBe('');
+  });
+
+  test('prints only the marked failure lines as one notice', async () => {
     const publish = join(dir, 'publish');
     mkdirSync(publish, { recursive: true });
     const log = join(publish, 'pusher.log');
-    writeFileSync(log, 'tick 1: upload failed: 503\ntick 2: upload failed: 503\n');
-    await runUpdateDone({ name: 'otel-html-update-push-777-1', publishDir: publish, log }, ioOf(), deps);
+    writeFileSync(
+      log,
+      'uploaded a (1 source(s))\n! upload failed, will retry: 503\notel-html dispatch: x dispatched on main\n! not dispatched: 403\n',
+    );
+    await runUpdateStop({ publishDir: publish, log }, ioOf(), deps, fast);
     const notices = out
       .join('')
       .split('\n')
       .filter((l) => l.startsWith('::notice::'));
     expect(notices).toHaveLength(1);
+    expect(notices[0]).toContain('2 failure(s)');
     expect(notices[0]).toContain('503');
+    expect(notices[0]).not.toContain('uploaded a');
   });
 
-  test('an empty or absent log prints no notice', async () => {
+  test('a log of routine lines prints no notice', async () => {
     const publish = join(dir, 'publish');
-    await runUpdateDone(
-      { name: 'otel-html-update-push-777-1', publishDir: publish, log: join(publish, 'x.log') },
-      ioOf(),
-      deps,
-    );
+    mkdirSync(publish, { recursive: true });
+    const log = join(publish, 'pusher.log');
+    writeFileSync(log, 'uploaded a\n');
+    await runUpdateStop({ publishDir: publish, log }, ioOf(), deps, fast);
     expect(out.join('')).not.toContain('::notice::');
   });
 });

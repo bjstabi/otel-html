@@ -142,6 +142,32 @@ describe('tick', () => {
     expect(ledger.shipped).toContain(t3.listing[0]);
   });
 
+  test('tick folders live under RUNNER_TEMP, never in the publish dir, and are removed', async () => {
+    const rt = join(dir, 'rt');
+    mkdirSync(rt, { recursive: true });
+    const o = opts({ env: { ...ENV, RUNNER_TEMP: rt } });
+    const r = await openReport();
+    await flush(r, 1);
+    const seen: string[][] = [];
+    const d = pdeps();
+    d.upload = async (u) => {
+      seen.push(readdirSync(rt), readdirSync(o.publishDir));
+      return fakeUpload(u);
+    };
+    const t = await tick(o, d, null);
+    expect(t.outcome).toBe('uploaded');
+    expect(seen[0]?.some((n) => n.startsWith('otel-html-tick-'))).toBe(true);
+    expect(seen[1]?.filter((n) => n.startsWith('tick-'))).toEqual([]);
+    expect(readdirSync(rt)).toEqual([]);
+  });
+
+  test('missing CI spans (no GITHUB_TOKEN) are logged as a failure line', async () => {
+    const r = await openReport();
+    await flush(r, 1);
+    await tick(opts(), pdeps(), null);
+    expect(log.some((l) => l.startsWith('! no CI spans in update 1:'))).toBe(true);
+  });
+
   test('a failed upload is a retry on a fresh sequence', async () => {
     const o = opts();
     const r = await openReport();
@@ -149,7 +175,7 @@ describe('tick', () => {
     failNext = new Error('boom 503');
     const t1 = await tick(o, pdeps(), null);
     expect(t1.outcome).toBe('retry');
-    expect(log.join('\n')).toContain('upload failed, will retry: boom 503');
+    expect(log).toContain('! upload failed, will retry: boom 503');
     let ledger = await readLedger(deps.fs, o.publishDir);
     expect(ledger.sequence).toBe(1);
     expect(ledger.shipped).toEqual([]);
@@ -217,7 +243,7 @@ describe('tick', () => {
     const t = await tick(o, pdeps(), null);
     expect(t.outcome).toBe('retry');
     expect(uploads).toEqual([]);
-    expect(log).toHaveLength(1);
+    expect(log.filter((l) => !l.includes('no CI spans'))).toHaveLength(1);
   });
 
   test('no ACTIONS_RUNTIME_TOKEN: one log line per tick and a retry', async () => {
