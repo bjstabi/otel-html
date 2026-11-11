@@ -1,10 +1,10 @@
 /**
- * Builds the `scale`, `many` and `rowgroups` e2e reports into `e2e/.reports-scale/` (the `e2e:fixtures:scale:data` mise task), all
- * in the `site` format and read over HTTP only. `scale` is the 100k-span, 1M-log input converted and closed (one
- * compacted partition per signal); `many` is the same input written through `Report.create` with a flush every 1 000
- * spans and never closed (about 100 uncompacted partitions per signal, `complete: false`).
- * Only `e2e/scale.spec.ts` reads them, and writing 1M logs twice is most of the fixture build, so `test:e2e` runs
- * this only when the selection includes that spec; `e2e/build-fixtures.ts` builds the rest.
+ * Builds the `scale`, `many` and `rowgroups` e2e reports into `e2e/.reports-scale/` (the `e2e:fixtures:scale:data` mise
+ * task), all in the `site` format and read over HTTP only. `scale` is the 100k-span, 1M-log input converted and
+ * closed (one compacted partition per signal); `many` is the same input written through `Report.create` with a flush
+ * every 1 000 spans and never closed (about 100 uncompacted partitions per signal, `complete: false`).
+ * Only `e2e/scale.spec.ts` and `e2e/calibration.spec.ts` read them, and writing 1M logs twice is most of the fixture
+ * build, so `test:e2e` runs this only when the selection includes one of them; `e2e/build-fixtures.ts` builds the rest.
  */
 import { execFile } from 'node:child_process';
 import { mkdir, rm, writeFile } from 'node:fs/promises';

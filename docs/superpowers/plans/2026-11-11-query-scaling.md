@@ -1683,6 +1683,8 @@ guard).
   range ends continues it with the next size, 16 KiB, 64 KiB, 256 KiB, 1 MiB, 4 MiB (the new range replaces the old);
   any other read starts a stream at 16 KiB; a stream survives a jump elsewhere; an open forgets the file's streams.
   Node itself reads 16 KiB per call, so raw read calls overstate Chromium's GETs up to 20 times (243 against 13).
+  The model was fitted on the same ten statements it is checked against, so the exact agreement is a fit, not an
+  independent validation; Task 6's live check against the report is the independent guard.
 - `REQUESTS_PER_OPEN`: 2 (a HEAD and DuckDB's `bytes=0-0` probe GET; the footer read is one of the modelled ranges).
   `REQUESTS_PER_READ` (the `k` of decision 3): 1 per modelled range. `ROW_GROUP_ROWS`: 8192, provisional (below). All
   three are exported from `test-support/scaling/cost.ts`.

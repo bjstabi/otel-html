@@ -2,6 +2,7 @@ import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
 import { isV4, type ManifestV4, parseAnyManifest } from '../../src/format/manifest.js';
 import { TABLES } from '../../src/format/parquet/columns.js';
 import { MANIFEST_KEY } from '../../src/format/paths.js';
+import { OtelHtmlError } from '../../src/model/errors.js';
 import { type OtlpRequest, parseOtlpObject } from '../../src/model/otlp-json.js';
 import type { Axis, ScalingIds } from '../../src/viewer/data/catalogue.js';
 import { logRef } from '../../src/viewer/data/log-query.js';
@@ -182,9 +183,9 @@ async function build(shape: Shape): Promise<ScalingReport> {
     await session.flush();
   }
   const text = w.fs.snapshot().get(`${OUT}/data/manifest.js`);
-  if (text === undefined) throw new Error('no manifest');
+  if (text === undefined) throw new OtelHtmlError('usage', { message: 'no manifest' });
   const manifest = parseAnyManifest(reviveDataJson(unwrapDataFile(text, MANIFEST_KEY)));
-  if (!isV4(manifest)) throw new Error('not a v4 manifest');
+  if (!isV4(manifest)) throw new OtelHtmlError('usage', { message: 'not a v4 manifest' });
   const files = new Map<string, Uint8Array>();
   for (const partition of manifest.partitions) {
     for (const table of TABLES) {
@@ -204,7 +205,8 @@ async function build(shape: Shape): Promise<ScalingReport> {
     end: Number(spanStart(shape, last, lastSpan) + SPAN_NS - epoch),
   };
   const entry = manifest.partitions.find((p) => p.n === first);
-  if (entry === undefined) throw new Error(`no partition ${first} in the manifest`);
+  if (entry === undefined)
+    throw new OtelHtmlError('usage', { message: `no partition ${first} in the manifest` });
   // a span and a log of the first inside partition: span index 8 (second trace, first service), log row 0
   const k = 8;
   const logFileRow = 0;

@@ -16,6 +16,10 @@ export interface RecordedCall {
   attrFacets: boolean;
   /** The condition holds a function the SQL cannot run (an id table follows); only meaningful beside `condition`. */
   residual: boolean;
+  /** `metricRunQuery` with a failure condition (an id table of the failed runs follows). */
+  failedWhen: boolean;
+  /** `metricQuery` of a summary metric (its quantiles are read); by the entry's type, not its name. */
+  summary: boolean;
 }
 
 export interface Recording {
@@ -33,6 +37,9 @@ interface Asked {
   window?: unknown;
   mode?: unknown;
   facetKeys?: unknown;
+  entry?: unknown;
+  query?: unknown;
+  failedWhen?: unknown;
 }
 
 /** Milliseconds without a new call before the page counts as settled. */
@@ -88,6 +95,14 @@ export function recordingDataSource(inner: DataSource, manifest: ManifestV4): Re
     const needs = Array.isArray(q.needs) ? q.needs.map(String) : NO_NEEDS;
     const mode =
       q.mode === 'spans' || q.mode === 'traces' || q.mode === 'logs' || q.mode === 'patterns' ? q.mode : null;
+    const where =
+      typeof q.query === 'object' &&
+      q.query !== null &&
+      'where' in q.query &&
+      typeof q.query.where === 'string'
+        ? q.query.where
+        : null;
+    const type = typeof q.entry === 'object' && q.entry !== null && 'type' in q.entry ? q.entry.type : null;
     return {
       method,
       needs,
@@ -95,7 +110,9 @@ export function recordingDataSource(inner: DataSource, manifest: ManifestV4): Re
       condition: conditionKindOf(condition, text, statisticsKeys),
       mode,
       attrFacets: Array.isArray(q.needs) && q.needs.includes('facets') && q.facetKeys === null,
-      residual: condition !== null && CALL.test(condition),
+      residual: (condition !== null && CALL.test(condition)) || (where !== null && CALL.test(where)),
+      failedWhen: typeof q.failedWhen === 'string',
+      summary: type === 'summary',
     };
   };
 
@@ -183,9 +200,10 @@ export function entryIdsOf(call: RecordedCall, long: boolean): string[] {
     case 'metricShowOptions':
       return ['metrics.showOptions'];
     case 'metricQuery':
-      return [`metrics.query.${s}`];
+      if (call.summary) return ['metrics.query.summary'];
+      return [call.residual ? 'metrics.query.residual.long' : `metrics.query.${s}`];
     case 'metricRunQuery':
-      return ['metrics.runQuery'];
+      return [call.failedWhen ? 'metrics.runQuery.failed' : 'metrics.runQuery'];
     case 'metricsForResources':
       return ['metrics.forResources'];
     case 'metricPoints':

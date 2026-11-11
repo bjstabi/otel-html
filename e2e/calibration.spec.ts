@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { Page } from '@playwright/test';
 import { reviveDataJson, unwrapDataFile } from '../src/format/data-file.js';
@@ -14,7 +14,7 @@ import { runWorkerSql } from './worker-sql.js';
 // Calibration of the scaling harness (query-scaling plan, Task 1): the modelled range requests of the Node counting engine (`rangesOf`, cost.ts) against
 // the HEADs and range GETs Chromium makes for the same statement, cold, over the site-format scale reports. `rowgroups`
 // is one partition with a four-row-group spans file, `many` is a hundred partitions. The reports come from
-// `mise run e2e:fixtures:scale` (`test:e2e` builds them only when the selection includes e2e/scale.spec.ts).
+// `mise run e2e:fixtures:scale` (`test:e2e` builds them only when the selection includes e2e/scale.spec.ts or this spec).
 
 /** `@perf @http`: the `chromium-perf-http` project (playwright.config.ts). */
 const PERF_HTTP = { tag: ['@perf', '@http'] };
@@ -23,6 +23,9 @@ const PERF_HTTP = { tag: ['@perf', '@http'] };
 const tolerance = (chromium: number): number => Math.max(2, 0.1 * chromium);
 
 function readManifest(name: ReportName): ManifestV4 {
+  // global-setup does not check the scale reports (they are built on demand), so a direct run without them fails here.
+  if (!existsSync(new URL('data/manifest.js', reportDir(name, 'http'))))
+    throw new Error(`the scale fixture reports are missing: run \`mise run e2e:fixtures:scale\` (${name})`);
   const text = readFileSync(new URL('data/manifest.js', reportDir(name, 'http')), 'utf8');
   const manifest = parseAnyManifest(reviveDataJson(unwrapDataFile(text, MANIFEST_KEY)));
   if (!isV4(manifest)) throw new Error(`${name}: not a v4 manifest`);

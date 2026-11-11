@@ -8,13 +8,13 @@ human or agent. Read only what the links below say applies to you.
 
 Run the smallest check that can catch the mistake, and run it often. CI runs the same mise tasks.
 
-| when                                    | run                                                                           | cost                           |
-| --------------------------------------- | ----------------------------------------------------------------------------- | ------------------------------ |
-| after every edit, and before every push | `mise run check` (lint, typecheck, unit tests, knip; unchanged inputs replay) | ≈ 20 s, seconds when cached    |
-| while iterating                         | `mise run test:unit:changed` (since `main` by default) or `mise watch check`  | seconds                        |
-| after a viewer or report-path change    | `mise run test:e2e:chromium -- e2e/<spec>.spec.ts`                            | the spec (+ fixtures if stale) |
-| before opening a PR                     | `mise run verify` (`check`, then the Chromium e2e suite)                      | ≈ 2 min                        |
-| never locally                           | the three-browser matrix, the windows unit run, metrics-scale, the binaries   | CI's job                       |
+| when                                    | run                                                                           | cost                                                                                                                                     |
+| --------------------------------------- | ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| after every edit, and before every push | `mise run check` (lint, typecheck, unit tests, knip; unchanged inputs replay) | ≈ 20 s plus, when a `src/`, `test-support/` or `test/scaling/` input changed, the ≈ 4.5 min scaling measurement (`test:scaling`, cached) |
+| while iterating                         | `mise run test:unit:changed` (since `main` by default) or `mise watch check`  | seconds                                                                                                                                  |
+| after a viewer or report-path change    | `mise run test:e2e:chromium -- e2e/<spec>.spec.ts`                            | the spec (+ fixtures if stale)                                                                                                           |
+| before opening a PR                     | `mise run verify` (`check`, then the Chromium e2e suite)                      | ≈ 2 min                                                                                                                                  |
+| never locally                           | the three-browser matrix, the windows unit run, metrics-scale, the binaries   | CI's job                                                                                                                                 |
 
 Agents whose harness reads `.mcp.json` get the tasks, with their effect metadata, from `mise mcp` instead of the README.
 

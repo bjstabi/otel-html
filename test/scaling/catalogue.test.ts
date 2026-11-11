@@ -8,8 +8,9 @@ import { openCountingEngine } from '../../test-support/scaling/counting-engine.j
 import { BASE, buildScalingReport, type ScalingReport } from '../../test-support/scaling/generator.js';
 
 const SQL_DIR = 'src/query/sql';
-const BUILDER = /(Query|Statement|Queries)$/;
 
+/** The names of the exported builders; hoisted because the mock factories below run before the module body. */
+const BUILDER = vi.hoisted(() => /(Query|Statement|Queries)$/);
 /** Every builder the data layer calls through a `src/query/sql` module, by exported name. */
 const recorded = vi.hoisted(() => new Set<string>());
 
@@ -18,7 +19,7 @@ async function recording<T extends object>(load: () => Promise<T>): Promise<T> {
   const out: Record<string, unknown> = {};
   for (const [name, value] of Object.entries(mod)) {
     out[name] =
-      typeof value === 'function' && /(Query|Statement|Queries)$/.test(name)
+      typeof value === 'function' && BUILDER.test(name)
         ? (...args: unknown[]) => {
             recorded.add(name);
             return value(...args);
@@ -129,6 +130,8 @@ describe('the catalogue', () => {
     expect(missing).toEqual([]);
   });
 
+  // The scan sees only `Query.*(` calls: a raw SQL string is invisible to it. The one left, `DROP TABLE` in
+  // src/viewer/data/residual.ts, is an engine statement that frees a temp table, not a request.
   test('no statement is built outside src/query/sql', () => {
     const offenders: string[] = [];
     const walk = (dir: string): void => {

@@ -903,7 +903,7 @@ refuses to run in CI.
 - **Usage:** `e2e:fixtures`
 
 Build the e2e fixture reports into e2e/.reports/ and their site copies into e2e/.reports-site/ (skipped while up to date)
-All but `scale` and `many`, which e2e:fixtures:scale builds; about a second after `build`.
+All but `scale`, `many` and `rowgroups`, which e2e:fixtures:scale builds; about a second after `build`.
 
 ## `e2e:fixtures:scale`
 
@@ -911,7 +911,7 @@ All but `scale` and `many`, which e2e:fixtures:scale builds; about a second afte
 
 - **Usage:** `e2e:fixtures:scale`
 
-The e2e `scale` and `many` reports with the current viewer (only e2e/scale.spec.ts reads them)
+The e2e `scale`, `many` and `rowgroups` reports with the current viewer (only e2e/scale.spec.ts and e2e/calibration.spec.ts read them)
 Depends on e2e:fixtures:scale:data; `otel-html upgrade` then swaps in the current dist/viewer (~0.3 s, every run: a
 freshness record of its own could miss a viewer that :data wrote in between), so a viewer change never converts again.
 
@@ -921,7 +921,7 @@ freshness record of its own could miss a viewer that :data wrote in between), so
 
 - **Usage:** `e2e:fixtures:scale:data`
 
-Write the e2e `scale` and `many` reports (site format) into e2e/.reports-scale/ (skipped while up to date)
+Write the e2e `scale`, `many` and `rowgroups` reports (site format) into e2e/.reports-scale/ (skipped while up to date)
 100k spans and 1M logs, converted once (`scale`) and written through the library in 100 flushes (`many`) (~1 GB of memory). Its sources are the writer's build output,
 not the viewer's: a viewer change only reruns e2e:fixtures:scale.
 
@@ -1016,7 +1016,7 @@ Sharding: `--shard 1/2` runs half of each pass. The main pass splits the spec fi
 Playwright's own `-- --shard=1/2` still works, but splits both passes by count.
 The perf pass is skipped for a browser without a `-perf-file` project. The perf pass writes its artifacts to test-results/perf, so it does not clear the first pass's failures. Playwright args after `--` go to both passes (`mise run test:e2e --browser chromium -- e2e/scale.spec.ts`);
 narrow the browsers with `--browser`, not `--project`, which would add to the two passes' own projects.
-The scale reports (e2e:fixtures:scale, ~15 s cold, ~35 s on CI) are built only when the selection includes e2e/scale.spec.ts, decided
+The scale reports (e2e:fixtures:scale, ~15 s cold, ~35 s on CI) are built only when the selection includes e2e/scale.spec.ts or e2e/calibration.spec.ts, decided
 by `playwright test --list` with the same args; a direct `playwright test e2e/scale.spec.ts` needs that task run first.
 Browsers are installed first unless OTEL_HTML_SKIP_BROWSER_INSTALL is set (CI's Playwright image has them).
 The metrics scale check runs only with OTEL_HTML_METRICS_SCALE=1 (CI runs it in its own Chromium job): it writes a

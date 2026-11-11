@@ -1,3 +1,4 @@
+import { posix, win32 } from 'node:path';
 import { literal, Query, sql } from '@uwdata/mosaic-sql';
 import { afterEach, describe, expect, test } from 'vitest';
 import { buildFormat4Report, openFixtureDb, spansOnlyRequest } from '../../test-support/format4-fixture.js';
@@ -6,6 +7,7 @@ import { costOf, REQUESTS_PER_OPEN, REQUESTS_PER_READ, rangesOf } from '../../te
 import {
   type CountingEngine,
   openCountingEngine,
+  RELATIVE_SOURCE,
   type ReadEvent,
 } from '../../test-support/scaling/counting-engine.js';
 
@@ -137,5 +139,31 @@ describe('WriterDeps.rowGroupRows', () => {
     } finally {
       db.close();
     }
+  });
+});
+
+describe('the preamble path logic', () => {
+  const relativeOf = new Function(`return ${RELATIVE_SOURCE}`)() as (
+    resolve: (p: string) => string,
+    sep: string,
+    root: string,
+    p: unknown,
+  ) => string | null;
+
+  test('a Windows path under the root maps to a forward-slash manifest path', () => {
+    const root = 'C:\\Users\\ci\\report';
+    expect(relativeOf(win32.resolve, win32.sep, root, `${root}\\partitions\\000001\\spans.parquet`)).toBe(
+      'partitions/000001/spans.parquet',
+    );
+    expect(
+      relativeOf(win32.resolve, win32.sep, root, 'C:\\Users\\ci\\report/partitions/000001/spans.parquet'),
+    ).toBe('partitions/000001/spans.parquet');
+    expect(relativeOf(win32.resolve, win32.sep, root, 'C:\\Users\\ci\\report-other\\x.parquet')).toBeNull();
+  });
+
+  test('a POSIX path under the root maps, and anything else is null', () => {
+    expect(relativeOf(posix.resolve, posix.sep, '/r', '/r/a/b.parquet')).toBe('a/b.parquet');
+    expect(relativeOf(posix.resolve, posix.sep, '/r', '/elsewhere/b.parquet')).toBeNull();
+    expect(relativeOf(posix.resolve, posix.sep, '/r', 7)).toBeNull();
   });
 });

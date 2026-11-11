@@ -26,7 +26,7 @@ function calibrate(): void {
 
 /**
  * Throws naming the first mounted report that `mise run e2e:fixtures` has not built. `metrics-scale` is built on demand,
- * and `scale`, `many` and `rowgroups` only when the selection includes `e2e/scale.spec.ts`, which checks for them itself.
+ * and `scale`, `many` and `rowgroups` only when the selection includes `e2e/scale.spec.ts` or `e2e/calibration.spec.ts`, which check for them themselves.
  */
 async function assertReportsBuilt(mounted: readonly ReportName[]): Promise<void> {
   for (const name of mounted) {

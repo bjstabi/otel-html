@@ -28,19 +28,30 @@ export interface CountingEngine {
 }
 
 /**
+ * The manifest path of `p` (forward slashes on every OS) when it lies under `root`, else null. Plain JavaScript source,
+ * because the worker's preamble embeds it as text and a test evaluates the same text with the Windows path functions.
+ */
+export const RELATIVE_SOURCE = `(function (resolve, sep, root, p) {
+  if (typeof p !== 'string') return null;
+  const prefix = root.endsWith(sep) ? root : root + sep;
+  const full = resolve(p);
+  return full.startsWith(prefix) ? full.slice(prefix.length).split(sep).join('/') : null;
+})`;
+
+/**
  * JavaScript run in the worker before the shim: `fs.openSync`, `fs.readSync` and `fs.closeSync` post an event on the
  * port in `workerData.countPort` for every file under `workerData.countRoot`, as its manifest path. A marker sent on
  * the port is answered on it, after every event posted before it.
  */
 const COUNTING_PREAMBLE = `{
   const fs = require('node:fs');
-  const { sep } = require('node:path');
+  const { sep, resolve } = require('node:path');
   const { workerData } = require('node:worker_threads');
   const port = workerData.countPort;
-  const root = workerData.countRoot + sep;
+  const rel = ${RELATIVE_SOURCE};
   const open = new Map();
   port.on('message', (m) => port.postMessage({ marker: m.marker }));
-  const relative = (p) => (typeof p === 'string' && p.startsWith(root) ? p.slice(root.length).split(sep).join('/') : null);
+  const relative = (p) => rel(resolve, sep, workerData.countRoot, p);
   const openSync = fs.openSync;
   const readSync = fs.readSync;
   const closeSync = fs.closeSync;
@@ -132,7 +143,7 @@ export async function openCountingEngine(dir: string, manifest: ManifestV4): Pro
       transferList: [port2],
     });
     try {
-      for (const path of paths) await db.registerFileURL(path, `${root}/${path}`, NODE_FS_PROTOCOL, false);
+      for (const path of paths) await db.registerFileURL(path, join(root, path), NODE_FS_PROTOCOL, false);
       const conn = await db.connect();
       for (const sql of viewStatements(manifest, (p) => p)) await conn.query(sql);
       return { db, conn, port: port1 };
@@ -193,6 +204,7 @@ export async function openCountingEngine(dir: string, manifest: ManifestV4): Pro
     cold: async () => {
       engine.clearCache();
       const old = live;
+      await take();
       live = await start();
       await stop(old);
       await take();

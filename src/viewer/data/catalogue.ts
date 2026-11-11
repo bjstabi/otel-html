@@ -871,10 +871,14 @@ export const KNOWN_DEBT: readonly DebtLine[] = [
     'log.surrounding',
     'patterns',
     'metrics.catalog',
+    'metrics.points',
+  ]),
+  // Metrics with a window are `fixed` on retention in the end (§3.4): the small-file part goes with #281 (PR 3); the
+  // partitions the window cannot hold are pruned by the end-time and manifest-range pruning of #271 (PR 6).
+  ...owed(271, 6, 'retention', 'fixed', true, [
     'metrics.query.summary',
     'metrics.runQuery',
     'metrics.runQuery.failed',
-    'metrics.points',
   ]),
   ...owed(281, 3, 'window', 'files', true, [
     'traces.list.statkey.long',
