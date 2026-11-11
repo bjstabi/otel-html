@@ -157,6 +157,28 @@ const spanRows = (rows: readonly (SpanRow | TraceRow)[]): SpanRow[] => rows as S
 const traceRows = (rows: readonly (SpanRow | TraceRow)[]): TraceRow[] => rows as TraceRow[];
 
 describe('querySpans', () => {
+  test('needs ["buckets"] sends one statement and fills the buckets only; with "timeline" the latency comes too', async () => {
+    // a fresh coordinator per call: the shared one caches by SQL text, which would hide the statements
+    // from the counts here and from the tests that count after this one
+    const fresh = () =>
+      createDuckDbDataSource({
+        engine: mosaicQueryEngine(createCoordinator(db.connector, silentLogger), db),
+        manifest: f.manifest,
+      });
+    const full = await fresh().querySpans(query({ needs: ['timeline'] }));
+    const only = await counted(() => fresh().querySpans(query({ needs: ['buckets'] })));
+    expect(only.arrow).toBe(1);
+    expect(only.value.buckets).toEqual(full.buckets);
+    expect(only.value.red).toBeNull();
+    const both = await counted(() => fresh().querySpans(query({ needs: ['timeline', 'buckets'] })));
+    expect(both.arrow).toBe(1);
+    expect(both.value.red).toEqual(full.red);
+    const residual = { condition: 'Len(name) > 7' };
+    expect((await fresh().querySpans(query({ ...residual, needs: ['buckets'] }))).buckets).toEqual(
+      (await fresh().querySpans(query({ ...residual, needs: ['timeline'] }))).buckets,
+    );
+  });
+
   test('a negative or fractional limit is a usage error', async () => {
     for (const limit of [-1, 1.5, Number.NaN]) {
       await expect(ds.querySpans(query({ limit }))).rejects.toMatchObject({

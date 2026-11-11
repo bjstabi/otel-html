@@ -172,7 +172,7 @@ function spanResult(q: SpanQuery): SpanQueryResult {
       if (wanted('service.name')) facets.add('service.name', r.service);
       if (wanted('span.name')) facets.add('span.name', r.span.name);
     }
-    if (needs.has('timeline')) buckets.add(r.span.start, 'unset');
+    if (needs.has('timeline') || needs.has('buckets')) buckets.add(r.span.start, 'unset');
   }
   const result: SpanQueryResult = {
     rows: [],

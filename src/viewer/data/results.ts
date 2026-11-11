@@ -58,8 +58,12 @@ export interface GroupStatsResult {
   dropped: number;
 }
 
-/** Which parts of a `SpanQueryResult` to compute; absent parts come back empty. */
-export type SpanNeed = 'rows' | 'facets' | 'timeline' | 'durations' | 'groups';
+/**
+ * Which parts of a `SpanQueryResult` to compute; absent parts come back empty. `timeline` fills the status buckets and
+ * the RED series (which reads `duration_ns`); `buckets` fills the status buckets only, for a caller that never draws
+ * latency. Asked together, `timeline` covers both.
+ */
+export type SpanNeed = 'rows' | 'facets' | 'timeline' | 'buckets' | 'durations' | 'groups';
 
 /** Which parts of a `LogQueryResult` to compute; absent parts come back empty. */
 export type LogNeed = 'rows' | 'facets' | 'timeline';

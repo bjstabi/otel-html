@@ -132,9 +132,10 @@ export function traceRowsQuery(f: SqlFilter, sort: TraceSort, limit: number): Qu
 
 /**
  * Per bucket of `spec`: `n`, `errors`, `ok` / `error` / `unset` (status 1 / 2 / other), `quantiles` (p50, p95, p99 of
- * `duration_ns`) and `max_duration_ns`, ordered by `bucket` (relative ns).
+ * `duration_ns`) and `max_duration_ns`, ordered by `bucket` (relative ns). With `latency` false the last two are left
+ * out, so the statement never reads the `duration_ns` column.
  */
-export function timelineQuery(f: SqlFilter, spec: BucketSpec): Query {
+export function timelineQuery(f: SqlFilter, spec: BucketSpec, latency = true): Query {
   return Query.from('spans')
     .select({
       bucket: bucketExpr('start_time_unix_nano', spec, f.epoch),
@@ -143,8 +144,7 @@ export function timelineQuery(f: SqlFilter, spec: BucketSpec): Query {
       ok: sql`count(*) FILTER (WHERE status_code = 1)`,
       error: sql`count(*) FILTER (WHERE ${IS_ERROR})`,
       unset: sql`count(*) FILTER (WHERE status_code IS NULL OR status_code NOT IN (1, 2))`,
-      quantiles: QUANTILES,
-      max_duration_ns: sql`max(duration_ns)`,
+      ...(latency ? { quantiles: QUANTILES, max_duration_ns: sql`max(duration_ns)` } : {}),
     })
     .where(...whereOf(f, 'spans'))
     .groupby(sql`bucket`)

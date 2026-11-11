@@ -242,6 +242,29 @@ function kindOf(v: unknown): 'string' | 'int' | 'double' | 'bool' | 'mixed' {
 
 const nulls = (n: number): (number | null)[] => new Array<number | null>(n).fill(null);
 
+/** The rows of `timelineQuery` (with or without its latency columns) as status buckets (ok, error, unset). */
+export function timelineBuckets(t: Table, spec: BucketSpec): TimeBuckets<SpanStatusKey> {
+  const rows = rowsOf(t);
+  const width = spec.widthNs;
+  const grid = gridOf(
+    rows.map((r) => toNumber(cell(r, 'bucket'), 'bucket')),
+    width,
+  );
+  if (grid === null) return new TimeBuckets(STATUS_KEYS, MAX_BUCKETS);
+  const status = STATUS_KEYS.map(() => zeros(grid.length));
+  for (const r of rows) {
+    const i = slot(toNumber(cell(r, 'bucket'), 'bucket'), grid, width);
+    (status[0] as number[])[i] = toNumber(cell(r, 'ok'), 'ok');
+    (status[1] as number[])[i] = toNumber(cell(r, 'error'), 'error');
+    (status[2] as number[])[i] = toNumber(cell(r, 'unset'), 'unset');
+  }
+  return TimeBuckets.from(
+    { maxBuckets: MAX_BUCKETS, widthNs: width, startNs: grid.start, keys: [...STATUS_KEYS], counts: status },
+    STATUS_KEYS,
+    'timeline',
+  );
+}
+
 /** The rows of `timelineQuery` as status buckets (ok, error, unset) and the RED series on the same grid. */
 export function timeline(
   t: Table,

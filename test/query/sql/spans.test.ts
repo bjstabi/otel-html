@@ -443,6 +443,21 @@ describe('timeline and durations', () => {
     expect(rows[0]?.max_duration_ns).toBe(ns(100));
     expect(Array.isArray(rows[0]?.quantiles) || typeof rows[0]?.quantiles === 'object').toBe(true);
   });
+  test('timelineQuery without latency gives the same counts and never reads duration_ns', () => {
+    const window = { start: rel(15), end: rel(70) };
+    const { filter: w } = filter({ window });
+    const spec = bucketSpec(window, null);
+    const q = timelineQuery(w, spec, false);
+    expect(toSql(q)).not.toContain('duration_ns');
+    const rows = run(q);
+    expect(rows.map((r) => [r.bucket, r.n, r.errors])).toEqual([
+      [15_000_000n, 2n, 0n],
+      [19_000_000n, 1n, 1n],
+      [60_000_000n, 1n, 0n],
+    ]);
+    expect(rows[0]).toMatchObject({ ok: 0n, error: 0n, unset: 2n });
+    expect(Object.keys(rows[0] ?? {})).not.toContain('quantiles');
+  });
   test('durationSummaryQuery', () => {
     const { filter: w } = filter();
     expect(run(durationSummaryQuery(w))[0]).toMatchObject({

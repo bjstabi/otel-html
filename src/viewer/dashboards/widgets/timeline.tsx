@@ -69,7 +69,7 @@ const loadPoints = (ds: DataSource): Promise<TimeBuckets<'points'>> =>
 
 /** The Fusion timeline: spans, logs and metric points over the page's window; a drag sets the selection window. */
 export const TimelineWidget: WidgetRenderer = ({ scope, height, dataSource, actions, variables }) => {
-  // Only the buckets are drawn, so only the timeline statement runs.
+  // Only the status buckets are drawn, so the span query counts without computing latency; logs have no latency.
   const base = {
     condition: scope.condition,
     text: '',
@@ -80,6 +80,7 @@ export const TimelineWidget: WidgetRenderer = ({ scope, height, dataSource, acti
   } as const;
   const spans = useSpanQuery(dataSource, {
     ...base,
+    needs: ['buckets'],
     mode: 'spans',
     sort: { column: 'start', dir: 'asc' },
     groupBy: null,
