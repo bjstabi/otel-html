@@ -26,7 +26,7 @@ import {
 
 const PAGES = ['#/dashboards/ci', '#/traces?mode=traces', '#/traces', '#/logs', '#/metrics'] as const;
 const DAY_NS = 86_400_000_000_000n;
-/** 256 grains of the viewer's 65.5 ms base grain: a window at least this long reads the long-window entries. */
+/** 256 grains of 2^16 ms (65,536,000,000 ns) each, 4.66 h: a window at least this long reads the long-window entries. */
 const LONG_NS = 16_777_216_000_000n;
 const SPANS_PER_ROW_GROUP = 50_000;
 /** The production small-file threshold (decision 5), also `HARNESS_SMALL_FILE_BYTES` of the measurement. */
@@ -113,6 +113,10 @@ for (const page of PAGES)
 
 const DebtSchema = z.array(
   z.object({ id: z.string(), pr: z.number(), target: z.enum(['fixed', 'files', 'matched', 'scan']) }),
+);
+const EntriesSchema = z.array(z.object({ id: z.string(), window: z.boolean() }));
+const WINDOWED = new Map(
+  EntriesSchema.parse(readJson(join(dir, 'entries.json'))).map((e) => [e.id, e.window] as const),
 );
 const KNOWN_DEBT = DebtSchema.parse(readJson(join(dir, 'debt.json')));
 
@@ -274,7 +278,9 @@ function costOf(id: string, call: RecordedCall, partitions: readonly PartitionSh
       return {
         serial: predict(zeroed(m.serial), partitions),
         // one parallel request per small file of the partitions the request reads
-        parallel: partitions.reduce((a, p) => a + p.smallFiles, 0),
+        parallel: partitions
+          .filter((p) => p.inWindow || WINDOWED.get(id) === false)
+          .reduce((a, p) => a + p.smallFiles, 0),
         bytes: predict(m.bytes, partitions),
       };
     case 'matched':

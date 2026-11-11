@@ -112,6 +112,11 @@ describe.skipIf(SCALING !== '1')('measured classes', { timeout: 600_000 }, () =>
     if (OUT !== undefined) {
       mkdirSync(OUT, { recursive: true });
       writeFileSync(join(OUT, 'debt.json'), JSON.stringify(KNOWN_DEBT));
+      // which entries carry a window: the others read every partition whatever the window of the shape
+      writeFileSync(
+        join(OUT, 'entries.json'),
+        JSON.stringify(CATALOGUE.map((e) => ({ id: e.id, window: e.window }))),
+      );
     }
     expect(true).toBe(true);
   });

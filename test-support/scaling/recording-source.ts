@@ -21,7 +21,7 @@ export interface RecordedCall {
 export interface Recording {
   ds: DataSource;
   calls: RecordedCall[];
-  /** Resolves once every call returned and none started for two ticks. */
+  /** Resolves once every call returned and none started for a quiet period. */
   settled(): Promise<void>;
 }
 
@@ -34,6 +34,9 @@ interface Asked {
   mode?: unknown;
   facetKeys?: unknown;
 }
+
+/** Milliseconds without a new call before the page counts as settled. */
+const QUIET_MS = 150;
 
 const CALL = /[A-Za-z_]\w*\s*\(/;
 const RESOURCE_ATTR = /resource\.attributes\["([^"]+)"\]/g;
@@ -126,11 +129,11 @@ export function recordingDataSource(inner: DataSource, manifest: ManifestV4): Re
     ds,
     calls,
     settled: async (): Promise<void> => {
-      // two quiet ticks: a widget may ask for more as soon as the answer to its first request renders
-      for (let quiet = 0; quiet < 2; ) {
-        await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      // a widget behind a debounce or a lazy import starts its request late: no call in flight and none started for QUIET_MS
+      for (let started = -1; started !== calls.length || inflight > 0; ) {
+        started = calls.length;
         if (inflight > 0) await new Promise<void>((resolve) => waiters.push(resolve));
-        else quiet++;
+        await new Promise<void>((resolve) => setTimeout(resolve, QUIET_MS));
       }
     },
   };

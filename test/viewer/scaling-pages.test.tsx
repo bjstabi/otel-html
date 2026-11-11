@@ -46,6 +46,15 @@ vi.mock('../../test-support/host-engine-files.js', async () => {
 const IDS = new Set(CATALOGUE.map((e) => e.id));
 const { OTEL_HTML_SCALING_OUT: OUT } = process.env;
 
+/** Methods any rendering of the page must call: a page that records fewer lost a widget's request. */
+const MUST_CALL: Record<string, readonly string[]> = {
+  '#/dashboards/ci': ['querySpans', 'queryLogs', 'metricCatalog', 'metricRunQuery'],
+  '#/traces?mode=traces': ['querySpans'],
+  '#/traces': ['querySpans'],
+  '#/logs': ['queryLogs'],
+  '#/metrics': ['metricCatalog'],
+};
+
 const PAGES = ['#/dashboards/ci', '#/traces?mode=traces', '#/traces', '#/logs', '#/metrics'] as const;
 
 /** `value` with the metric of every query set to `metric`: the report of the test holds one metric, not the CI's. */
@@ -123,8 +132,17 @@ describe('the pages ask only catalogued requests', () => {
         </ThemeProvider>,
       );
       await settled();
+      const settledCount = calls.length;
+      // nothing may start after the page counted as settled
+      await new Promise<void>((resolve) => setTimeout(resolve, 250));
+      expect(calls.length, `${hash}: calls started after settled()`).toBe(settledCount);
       const warm = costOf(await take(), new Map());
       expect(calls.length).toBeGreaterThan(0);
+      for (const method of MUST_CALL[hash] ?? [])
+        expect(
+          calls.map((c) => c.method),
+          `${hash} calls ${method}`,
+        ).toContain(method);
       for (const long of [false, true])
         for (const id of calls.flatMap((c) => entryIdsOf(c, long)))
           expect(IDS.has(id), `${hash}: ${id}`).toBe(true);
