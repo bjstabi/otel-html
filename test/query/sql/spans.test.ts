@@ -506,6 +506,15 @@ describe('services', () => {
     expect(col(run(resourceValuesQuery('service.name', 1)), 'value')).toHaveLength(2);
     expect(run(resourceValuesQuery('nope', 5))).toEqual([]);
   });
+  test('resourceValuesQuery reads each resource text once and has no predicate a scan could take', () => {
+    const text = toSql(resourceValuesQuery('host.name', 5));
+    // The conditions live in aggregate FILTERs and a HAVING: a WHERE is pushed below the distinct, back onto every row.
+    expect(text.replaceAll('FILTER (WHERE', '')).not.toMatch(/\bWHERE\b/);
+    expect(text).toMatch(/\bHAVING\b/);
+    for (const table of ['spans', 'logs', 'points'])
+      expect(text.split(`SELECT "resource_attributes" FROM "${table}"`)).toHaveLength(2);
+    expect(text.split('json_extract_string(').length).toBeLessThan(6); // extracted once over the union, not once per table
+  });
   test('absWindow is what the spans window compares against', () => {
     expect(absWindow({ start: 1, end: 2 }, f.epoch)).toEqual({ start: f.epoch + 1n, end: f.epoch + 2n });
   });
