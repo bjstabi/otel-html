@@ -52,3 +52,30 @@ runs queue part of each other at the 20-job account limit.
   which would change the other perf tests' budgets and selection.
 - Building `dist/` once and sharing it as an artifact: the build step takes 5–8 s.
 - No branch ruleset change is needed: it requires no status checks.
+
+## Follow-up: balanced shards (PR 2)
+
+PR #278's first run (43058191413) left the shards uneven, because Playwright and vitest both split by count in a fixed
+order. Time inside the shard steps, shard 1 / shard 2: chromium main pass 207 / 103 s, Windows unit main 182 / 130 s
+plus perf 35 / <10 s, Linux unit main 107 / 73 s plus perf 24 / <10 s, webkit 163 / 139 s. Firefox and e2e-perf were
+within 15 s.
+
+Design: split by weight, using a committed table of recorded durations (`test-support/shard-weights.json`) and a greedy
+longest-first partition (`test-support/shard.ts`), so every shard computes the same split from the same file list
+without any CI state.
+
+- **Vitest:** a custom sequencer (`sequence.sequencer`) whose `shard()` partitions the files by weight. The main pass
+  and the perf pass have their own tables. CI still passes `-- --shard=N/2`.
+- **Playwright main pass:** `test:e2e --shard i/n` (a task flag) sets `OTEL_HTML_E2E_SHARD`. With it,
+  `playwright.config.ts` gives each browser's `-file` and `-http` projects the spec files of shard i, partitioned by
+  that browser's weights (Chromium sums `-file` and `-http`). Whole files, because Playwright takes no weights. The
+  largest file is about 26% of Chromium's main pass, so a two-way split can still come out about even.
+- **Playwright perf pass:** the same flag becomes Playwright's own `--shard=i/n`. That pass is already within 15 s, and
+  9 of its 10 tests are in `scale.spec.ts`.
+- A file missing from the table weighs the median, so new tests spread without a regeneration. `mise run shard-weights`
+  rewrites the table from JSON-reporter runs of the unit passes and the three browsers' main passes. It is run when the
+  shards drift; nothing runs it automatically.
+
+Decided against: a third shard (the 20-job limit), vitest's own duration cache in CI (the shards would read different
+caches and could drop or double a file), and per-test Playwright partitions passed as `file:line` filters (these OR with
+any file the caller names).

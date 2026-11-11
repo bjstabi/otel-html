@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { defineConfig, type ViteUserConfig } from 'vitest/config';
 import { tracingEnabled } from './test-support/otel/enabled.ts';
 import { PERF_TAG, perfFiles } from './test-support/perf-files.ts';
+import { WeightedShardSequencer } from './test-support/shard-sequencer.ts';
 
 /**
  * Timing-sensitive tests (budgets scaled by OTEL_HTML_PERF_FACTOR) carry `@perf` in their name. The default run skips
@@ -26,6 +27,8 @@ const config: ViteUserConfig = defineConfig({
     },
     testNamePattern: perfPass ? new RegExp(PERF_TAG) : new RegExp(`^(?!.*${PERF_TAG})`),
     fileParallelism: !perfPass,
+    // `--shard=i/n` splits by the recorded durations in test-support/shard-weights.json, not by file hash.
+    sequence: { sequencer: WeightedShardSequencer },
     globalSetup: ['test-support/perf-global-setup.ts'],
     coverage: {
       provider: 'v8',
