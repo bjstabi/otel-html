@@ -246,18 +246,16 @@ const nulls = (n: number): (number | null)[] => new Array<number | null>(n).fill
 export function timelineBuckets(t: Table, spec: BucketSpec): TimeBuckets<SpanStatusKey> {
   const rows = rowsOf(t);
   const width = spec.widthNs;
-  const grid = gridOf(
-    rows.map((r) => toNumber(cell(r, 'bucket'), 'bucket')),
-    width,
-  );
+  const at = rows.map((r) => toNumber(cell(r, 'bucket'), 'bucket'));
+  const grid = gridOf(at, width);
   if (grid === null) return new TimeBuckets(STATUS_KEYS, MAX_BUCKETS);
   const status = STATUS_KEYS.map(() => zeros(grid.length));
-  for (const r of rows) {
-    const i = slot(toNumber(cell(r, 'bucket'), 'bucket'), grid, width);
+  rows.forEach((r, k) => {
+    const i = slot(at[k] as number, grid, width);
     (status[0] as number[])[i] = toNumber(cell(r, 'ok'), 'ok');
     (status[1] as number[])[i] = toNumber(cell(r, 'error'), 'error');
     (status[2] as number[])[i] = toNumber(cell(r, 'unset'), 'unset');
-  }
+  });
   return TimeBuckets.from(
     { maxBuckets: MAX_BUCKETS, widthNs: width, startNs: grid.start, keys: [...STATUS_KEYS], counts: status },
     STATUS_KEYS,
@@ -274,9 +272,10 @@ export function timeline(
   const width = spec.widthNs;
   const at = rows.map((r) => toNumber(cell(r, 'bucket'), 'bucket'));
   const grid = gridOf(at, width);
+  const buckets = timelineBuckets(t, spec);
   if (grid === null) {
     return {
-      buckets: new TimeBuckets(STATUS_KEYS, MAX_BUCKETS),
+      buckets,
       red: {
         startNs: spec.startNs,
         widthNs: width,
@@ -289,7 +288,6 @@ export function timeline(
       },
     };
   }
-  const status = STATUS_KEYS.map(() => zeros(grid.length));
   const red: RedBuckets = {
     startNs: grid.start,
     widthNs: width,
@@ -312,15 +310,7 @@ export function timeline(
     errors[i] = toNumber(cell(r, 'errors'), 'errors');
     [p50[i], p95[i], p99[i]] = quantiles(cell(r, 'quantiles'), 'quantiles');
     max[i] = real(cell(r, 'max_duration_ns'), 'max_duration_ns');
-    (status[0] as number[])[i] = toNumber(cell(r, 'ok'), 'ok');
-    (status[1] as number[])[i] = toNumber(cell(r, 'error'), 'error');
-    (status[2] as number[])[i] = toNumber(cell(r, 'unset'), 'unset');
   });
-  const buckets = TimeBuckets.from(
-    { maxBuckets: MAX_BUCKETS, widthNs: width, startNs: grid.start, keys: [...STATUS_KEYS], counts: status },
-    STATUS_KEYS,
-    'timeline',
-  );
   return { buckets, red };
 }
 
