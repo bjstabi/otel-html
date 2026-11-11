@@ -30,6 +30,7 @@ const ioOf = (): Parameters<typeof runCli>[1] => ({
   ) => {
     calls.push({ cmd, args, opts });
     return {
+      on: () => undefined,
       unref: () => {
         unrefs++;
       },

@@ -55,6 +55,8 @@ export async function runPusherCommand(o: PusherCommand, io: CliIo, deps: Writer
         env: io.env,
         windowsHide: true,
       });
+      // A failed spawn reports itself as an event; without a listener it would crash this process after it returned.
+      child.on('error', (e) => io.stderr(`otel-html pusher: not started: ${e.message}\n`));
       child.unref();
     } finally {
       closeSync(logFd);
