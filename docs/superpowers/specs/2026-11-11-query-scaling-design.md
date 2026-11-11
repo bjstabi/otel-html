@@ -1,7 +1,8 @@
 # Query scaling: what a query reads follows what it asks, not what the report holds
 
 **Status: draft of 2026-11-11, awaiting the maintainer's approval.** The decisions the maintainer has to confirm are
-in §10. A reviewer read the draft as a builder would on 2026-11-11; its questions are answered in the text. PR process: **unattended** (`docs/agents/process-unattended.md`). A fresh session continues this work with
+in §10. Two reviewers read the draft on 2026-11-11 (one as a builder, one whole-branch review on Opus 5.5); their
+questions and findings are answered in the text. PR process: **unattended** (`docs/agents/process-unattended.md`). A fresh session continues this work with
 `/perf-1` (§11).
 
 ## 1. Why
@@ -87,7 +88,7 @@ with the cost class it is allowed on each growth axis. The shapes, from the inve
 
 | family | `DataSource` method and needs | builders (`src/query/sql/`) |
 | ------ | ----------------------------- | --------------------------- |
-| count | `querySpans`/`queryLogs` `total` | `spanCountQuery`, the log count in `duckdb-source.ts` |
+| count | `querySpans` `total` (spans, or distinct traces in trace mode); the log total, which today is a subquery of the rows statement | `spanCountQuery`; inside `logRowsQuery` and `logTracesQuery` |
 | time buckets | `buckets`, `timeline` (spans); `timeline` (logs); `metricPoints` | `timelineQuery`, `logTimelineQuery`, `pointsTimelineQuery` |
 | top values | `facets` on core keys; on attributes | `coreFacetsQuery`, `attributeFacetsQuery` |
 | group statistics | `groups` (`measureBy`), `services` | `groupStatsQuery`, `servicesQuery`, `serviceBucketsQuery` |
@@ -104,7 +105,14 @@ condition, a condition on a sort-key column, on a statistics key, on an attribut
 
 A **completeness test** fails when an exported builder of `src/query/sql/`, a `DataSource` method, or a value of
 `SpanNeed` or `LogNeed` has no entry. That is the mechanism behind goal 6: dashboards and views compose requests that
-are already in the catalogue; a new kind of request cannot be added without declaring how it scales.
+are already in the catalogue; a new kind of request cannot be added without declaring how it scales. Two things
+have to change for the test to mean that:
+
+- Some statements are built outside `src/query/sql/` today (inline in `src/viewer/data/duckdb-metrics.ts`, the
+  id-table path in `duckdb-source.ts`). They move into builders, or the test covers the data layer another way; a
+  statement the test cannot see is not allowed.
+- The log total is part of the rows statement, so it costs what a rows page costs. It becomes a need of its own
+  (as `total` is for spans) so that it can reach the class of a count.
 
 ### 3.2 Axes and cost classes
 
@@ -165,8 +173,8 @@ What each family must measure when the project is done. "Long" and "short" windo
 | count, time buckets, top values, group statistics, duration distribution, distinct values, when the condition and the grouping use only rollup dimensions and the window is long | `fixed` | `fixed` | `files` |
 | the same with a short window | `fixed` | `scan` (allowed: the window is bounded) | `scan` (allowed) |
 | any aggregate whose condition or grouping needs an attribute, a text search or a distinct trace count | `fixed` with a window | `scan` (allowed, and documented in the README as what such a condition costs) | `scan` (allowed) |
-| trace list without a condition, or with one that uses only columns `traces` has | `files` (the small `traces` file of each partition, in parallel) | `files` | `files` |
-| trace list with any other condition | as the span scan that condition needs: `matched` on a sort-key or statistics-key condition, `scan` (allowed) otherwise | | |
+| trace list without a condition, under no window or a long one | `files` (the small `traces` file of each partition, in parallel) | `files` | `files` |
+| trace list with a condition, or under a short window | `files` for `traces`, plus the span scan the condition needs in the partitions that hold the window's traces: `matched` on a sort-key or statistics-key condition, `scan` (allowed) otherwise | | |
 | read by id | `files` (the small `traces` file of each partition, in parallel) | `matched` (the row groups the trace's time range can be in) | not applicable |
 | patterns | `files` | `files` | `files` |
 | rows page; metrics | set by the first PR's baseline; no worse than today, `fixed` on retention with a window | | |
@@ -176,10 +184,16 @@ Four requests read more files than their answer needs today. What becomes of eac
 - **The trace list** (`traceRowsQuery`). Today it finds the trace ids by scanning spans under the window and the
   condition, then aggregates `traces` over every partition, so that a trace split over partitions is one whole row
   whatever the window. The whole-trace rule stays, which is why the class on retention is `files` and not `fixed`.
-  Without a condition (or with one on columns `traces` has: the root's service and name, the counts, the times) the
-  ids come from the `traces` files too, and no span is read. A trace is then listed when its own start and end
-  overlap the window; today it is listed when one of its spans does. The two differ only for a trace with a gap
-  around the whole window.
+  What changes depends on the window (§6.3 defines long and short):
+  - No window, no condition: the list is every trace that has spans, read from the `traces` files alone.
+  - Long window: a trace belongs to the window it **starts** in (its earliest span start, over all its partitions).
+    Without a condition the list comes from the `traces` files alone. With a condition it is those traces that have
+    a matching span, and the spans are read only in the partitions the `traces` rows name. So a condition that is
+    always true gives the same list as no condition, and the trace count follows the same rule.
+  - Short window: as today, by span overlap, with or without a condition.
+  - Only rows of `traces` with spans count (`traces` also holds rows for traces that have only logs, which the list
+    never shows), and times come from span rows, as the statement does today. No condition is answered from `traces`
+    columns: `root_service` and `root_name` describe the root, a condition on service or name matches any span.
 - **`percentileOf`** takes no window and reads every span of one service and resource. On a report whose range is
   long (§6.3) it reads the rollup over the whole report instead and is approximate like every percentile there; on a
   short report it stays as it is.
@@ -187,8 +201,9 @@ Four requests read more files than their answer needs today. What becomes of eac
   page's window, so a dashboard variable lists the values inside the window, and the files outside are skipped. Under
   a long window the span and log values come from the rollups if the rollup can keep what the method returns (the
   value's kind); points have no rollup and are read as today.
-- **`patterns`** applies the window already but skips no file. A patterns file records the earliest first occurrence
-  as its time; it gets the latest last occurrence with §5.4 and is then pruned like the others.
+- **`patterns`** applies the window already but skips no file, and it must not: a template's count and first and
+  last times are combined over every partition before the window is applied, so skipping a file would change the
+  answer. Patterns files are small and load through §4; their class stays `files`.
 
 ## 4. Small files, whole and in parallel
 
@@ -219,9 +234,11 @@ Five changes. The first three change no format.
    (which writer leaves the keys out, and why) before choosing where to compute them. Acceptance is #272's test: on a
    merged two-run report a run selection opens only the files that hold that run. Logs and traces files are checked
    for the same defect.
-2. **Reads by trace id carry a time bound (#271).** The trace's start and end from its `traces` rows become a
-   predicate on `start_time_unix_nano` (and the log time for `traceLogs`), so row-group statistics exclude what
-   cannot hold it. Measured in #271: 43 requests become 21 for one trace in the large partition.
+2. **Span reads by trace id carry a time bound (#271).** The trace's start and end from its `traces` rows become a
+   predicate on `start_time_unix_nano`, so row-group statistics exclude what cannot hold it. Measured in #271: 43
+   requests become 21 for one trace in the large partition. The bound is for spans only: a trace's times in
+   `traces` come from its spans, and a log of the trace can lie outside them or have no time of its own, so
+   `traceLogs` keeps reading the trace's partitions without a time bound.
 3. **Test spans keep real times.** Tests that fake the clock (`vi.useFakeTimers`, `vi.setSystemTime`; the SDK takes a
    span's start from the global `Date`) put spans dated 2026-11-10T12:00Z into every run's trace: 48 in the run that
    was looked at, which makes the trace look 24 h long and pins the partition's `timeMin` a day early, so no window
@@ -230,8 +247,8 @@ Five changes. The first three change no format.
    Statistics that one stray row can ruin are a general weakness of minimum and maximum; this project does not solve
    that in general.
 4. **An end-time statistic (#271).** A span matches a window by overlap, so a spans file can be skipped only when
-   its latest **end** is before the window. Files of spans and traces record it (patterns record their latest last
-   occurrence), and `prunePartitions` (`src/query/sql/prune.ts`) uses it. This is a manifest field, so it lands with format 5 (§8).
+   its latest **end** is before the window. Files of spans and traces record it, and `prunePartitions`
+   (`src/query/sql/prune.ts`) uses it. This is a manifest field, so it lands with format 5 (§8).
 5. **No file spans more time than it has to.** A compacted file should not cover days when its inputs covered
    minutes: partition 164 of today's report (`compact:0..38`) is 61.6 MB, 1.63 M spans, nine days. The rolling report
    is now rebuilt as one partition per run, so the plan first establishes whether such a file can still be produced
@@ -259,15 +276,28 @@ Details that are part of the design:
   name, kind, status, `resource_name`, `host.name` and `deployment.environment.name`; for logs the service, scope,
   severity, `host_name`, `event_name` and whether the record has a trace. The statistics keys add, in the CI report,
   the three `resource:cicd.pipeline.*` keys that come from the dashboard variables. The rule is "what every page
-  groups by, plus what the report says it filters by", not a list chosen for one dashboard. The manifest records the
-  dimensions, the grain and the duration-bucket rule, so a reader never guesses. A condition is any boolean
-  expression over dimensions: the rollup's rows are groups, so the whole predicate is evaluated on them.
+  groups by, plus what the report says it filters by", not a list chosen for one dashboard.
+- **A dimension keeps the raw value.** A rollup row must give the same value as a raw row for every expression the
+  raw path evaluates on a dimension: the column's own name, type and nullability (`status_code` and `kind` as the
+  integers they are, not the facet's labels; an empty `event_name` as the raw file has it), and for a key inside
+  `resource_attributes` or `attributes` the JSON value with its kind (`5` and `"5"` differ). The intended form is the
+  raw columns under their own names plus a `resource_attributes` (and `attributes`) reduced to the dimension keys,
+  so the predicate that `translateCondition` produces runs on the rollup unchanged. Facet values that are derived
+  (the status label, whether a log has a trace) are computed from the dimensions at read time or kept as their own
+  dimension; either way the facet counts equal the raw ones.
+- **The description is per rollup file.** `statisticsKeys` comes from the configuration and can change between
+  runs, so a rolling report can hold rollups with different dimensions. Each rollup file's entry records its
+  dimensions, grain and duration-bucket rule. A rollup that lacks a dimension a request needs counts as no rollup
+  for that request. Compaction and `merge` add up only rollups whose descriptions are equal; the others are computed
+  again from rows or left out. A condition is any
+  boolean expression over dimensions: the rollup's rows are groups, so the whole predicate is evaluated on them.
 - **Grain.** 65.536 s (2^16 ms), aligned on absolute time. The viewer's bucket widths are 1 ms × 2^k
   (`bucketSpec` in `src/query/sql/time.ts`), so every bucket of at least that width is a whole number of rollup
   buckets; a one-minute grain would not nest. Buckets are aligned relative to the manifest epoch today, and the
   epoch of a rolling report moves, so the alignment of buckets at or above the grain becomes absolute.
 - **Durations.** The duration bucket is a logarithmic index with a relative width of 2^(1/8) (about 9 %), which
-  bounds the error of a percentile read from it to about 5 %. Sum, minimum, maximum and count stay exact.
+  bounds the error of a percentile read from it to about 5 %. Sum, minimum, maximum and count stay exact. Durations
+  of zero or less have a bucket of their own.
 - **Size and the guard.** Measured on one run of 146,085 spans: 748 groups by minute, service, scope, name, status
   and kind, and 870 when every distinct set of resource attributes is added. `resource_name` and the duration bucket
   were not in that measurement. The plan measures rows and bytes with the full key on the same partition before
@@ -281,11 +311,14 @@ Details that are part of the design:
 ### 6.2 The router
 
 - It sits in the data layer, between the structured request and the SQL builders. Its inputs are the table, the
-  needs, the window, the grouping keys and the **columns the condition reads**. That last one does not exist as data
+  needs, the window, the grouping keys and the **paths the condition reads**. That last one does not exist as data
   today: `translateCondition` (`src/query/sql/ottl.ts`) returns a predicate, a residual and pruning hints. It gains
-  the set of columns, and each builder declares the columns it reads. No SQL text is inspected.
-- A request is **rollup-answerable** when its window is long (§6.3) or absent on a report whose range is long, and
-  every column it needs is a rollup dimension or measure. Not answerable, by nature: a condition or grouping on an
+  the set of OTTL paths, attribute keys included (`resource.attributes["cicd.pipeline.name"]` is a different path
+  from `resource.attributes["x"]`, though both read one column), and each builder declares what it reads in the
+  same terms. A request whose condition leaves a residual (a term the browser evaluates on rows) is not answerable.
+  No SQL text is inspected.
+- A request is **rollup-answerable** when its window is long (§6.3; no window on a report whose range is long counts
+  as one) and everything it reads is a rollup dimension or measure. Not answerable, by nature: a condition or grouping on an
   attribute that is not a dimension (the attribute facets among them), a text search, a distinct trace count, a rows
   page, a read by id.
 - **Partitions without a rollup do not change the answer.** For those partitions the same statement computes the
@@ -294,16 +327,28 @@ Details that are part of the design:
   whole statement from raw files when any partition lacks a rollup if the harness shows that is enough; the rule that
   the answer does not depend on coverage holds either way.
 - Rollup files are pruned by time and by statistics like any other table, and load through §4.
+- **An equivalence test** holds the anti-goal: for every catalogue entry that is rollup-answerable, the answer from
+  rollup files, the answer computed from raw files in the rollup's shape and the answer from a mix of both are
+  identical on generated data. The data includes a key with values of several kinds, null and empty values, a span
+  that starts exactly on a bucket edge, a duration of zero, a rollup with fewer dimensions than its neighbours, and
+  a log with no time at all (the raw timeline puts it at the report's epoch; the rollup must put it in the same
+  place or such a request is not answerable).
 
 ### 6.3 Long and short windows
 
 - A window is **long** when it covers at least 256 grains (about 4 h 40 min). A report whose whole range is shorter
   (a single run, the product's classic case) never uses the rollup, and nothing about it changes.
+- **No window on a report whose range is long is a long window over the whole range**, for every rule below. (Its
+  buckets would otherwise be finer than the grain: about 4 s on a 5 h range.)
 - A long window is aligned outward to the grain where the window is made (the selection state), so every request of
-  a page sees the same window.
+  a page sees the same window. Its end is exclusive: a span that starts exactly on the end belongs to the next
+  window. (The window test is inclusive today, `whereOf` in `src/query/sql/filter.ts`.)
+- These rules depend on the window and the report's range, never on the format: a format-4 report with a long range
+  gets them too, computed from its raw files.
 - Under a long window, spans are selected and counted by **start time**. Today a span matches a window when it
   overlaps it, and one that started earlier counts in the first bucket; a table keyed on start time cannot reproduce
-  that. Short windows keep overlap, where it matters (a long job span over a one-minute window).
+  that. Short windows keep overlap, where it matters (a long job span over a one-minute window). The trace list
+  follows with the same rule one level up: a trace belongs to the window it starts in (§3.4).
 - Under a long window, timeline buckets are at least one grain wide. Today a 6 h window draws 2,637 buckets of 8.2 s;
   it will draw 330 of 65.5 s.
 - Under a long window, percentiles (p50, p95, p99, the duration histogram) come from the duration buckets and are
@@ -337,12 +382,16 @@ The manifest is a strict object at every level (`ManifestV4Schema` in `src/forma
 `partitions[].files`, a new field of a file entry, a new top-level key or a new `viewer` key is rejected by a viewer
 that does not know it. The README's rule is that `formatVersion` changes for exactly that. So:
 
-- **This project introduces format 5.** It contains: the two rollup tables, the rollup description (dimensions,
-  grain, duration-bucket rule), the end-time statistic and `viewer.defaultWindow`.
+- **This project introduces format 5.** It contains: the two rollup tables, each rollup file's description
+  (dimensions, grain, duration-bucket rule), the end-time statistic and `viewer.defaultWindow`.
 - **Everything format 5 adds lands in one PR**, including the fields a later PR starts to use. A second schema change
   after a release would be another format.
 - The viewer and `otel-html host` open format 4 and format 5. `merge` reads both and writes 5. A format-4 report
-  behaves as it does today, plus §4 and the parts of §5 that need no new field.
+  is a report in which no partition has a rollup: it opens, gets §4 and the parts of §5 that need no new field, and
+  is answered by the same rules as any other (with a long range, §6.3's rules computed from its raw files).
+- **The PR that first writes format 5 also reads it.** The deployer publishes the rolling report from `main` as soon
+  as a PR merges, so the viewer and the host must open format 5 (answering everything from raw files) in the same PR
+  that makes the writer produce it.
 - A frozen `fixtures/reports/format-5` joins the format-4 fixture; both keep their byte-for-byte checksum tests.
 - The code that names the tables one by one is updated: `tableKeyed` and `files` in `manifest.ts`, the strict update
   schema and the layout expression in `src/cli/ci/update.ts`, the `Record<Table, …>` maps in `columns.ts`, the
@@ -361,9 +410,9 @@ moved and the predicted time for today's report.
 | 1 | The query catalogue, the scaling harness, the baseline and the known-debt list (§3) | |
 | 2 | Test spans keep real times under a faked clock (§5.3) | |
 | 3 | Small `site` files load whole and in parallel (§4) | |
-| 4 | Statistics survive merges; reads by trace id carry a time bound; the trace list without a condition reads no span; `resourceValues` takes the window (§5.1, §5.2, §3.4) | #272 |
-| 5 | Format 5: the schema, the writer, compaction, `merge` and the CI update path write rollups and the end-time statistic; the frozen fixture (§6.1, §5.4, §8) | |
-| 6 | The viewer prunes by end time and routes rollup-answerable requests; long-window rules, attribute facets on request (§6.2, §6.3) | #271 |
+| 4 | Statistics survive merges; span reads by trace id carry a time bound; `resourceValues` takes the window; the unconditioned trace list without a window reads no span; the log total is its own need (§5.1, §5.2, §3.1, §3.4) | #272 |
+| 5 | Format 5: the schema; the writer, compaction, `merge` and the CI update path write rollups and the end-time statistic; the viewer and the host open format 5, answering from raw files; the frozen fixture (§6.1, §5.4, §8) | |
+| 6 | The viewer prunes by end time and routes rollup-answerable requests; the long-window rules, the trace list included; attribute facets on request; the equivalence test (§6.2, §6.3) | #271 |
 | 7 | Compaction keeps files bounded in time, if §5.5's check says it is still needed | |
 | 8 | `viewer.defaultWindow`, the longer presets, the CI configuration (§7) | |
 | 9 | The record: live measurements against the predictions, the README, what is left on the known-debt list | |
@@ -398,26 +447,36 @@ or per statement.
 
 1. **Format 5** (§8), and with it changes to the CI publishing code under `src/cli/ci/` (`update.ts`,
    `run-report.ts` and the files that enumerate tables), which runs in the deployer with a write token. No workflow
-   file and no action definition is expected to change, apart from point 5.
+   file and no action definition is expected to change, apart from point 5. The unattended process stops before
+   any change to code that runs with a write token on `main`; approving this point lifts that stop for the files
+   under `src/cli/ci/` that the plan lists, and for nothing else.
 2. **Approximate percentiles under long windows** (within about 5 %), exact under short ones (§6.1, §6.3). The
    alternative is that every request that needs a percentile reads the raw spans whatever the window; then the
    Traces page over a long window stays as slow as it is.
-3. **Long-window rules** (§6.3): spans counted by start time instead of overlap, the window aligned to 65.5 s, and
-   timeline buckets no finer than 65.5 s once a window is longer than about 4 h 40 min.
+3. **Long-window rules** (§6.3), once a window (or, with no window, the report's range) is longer than about
+   4 h 40 min: spans counted by start time instead of overlap, a trace listed in the window it starts in, the window
+   aligned to 65.5 s, and timeline buckets no finer than 65.5 s. A long-range report written in format 4 gets the
+   same rules.
 4. **Attribute facets on request under a long window** on the Traces and Logs pages (§6.3). The alternative is that
    those pages read the attributes of every span or log in the window on every load, and stay slow on a long window.
 5. **The CI default window, `7d`**, set in `.github/otel-html-ci.yaml` and in the publish action's own
    configuration, `.github/actions/otel-html-publish/otel-html-ci.yaml` (the two files already differ in two `where`
    lines; only the window is added to each). The second file is inside the `otel-html-publish` action, which the
-   unattended process does not touch without the maintainer's word.
+   unattended process does not touch without the maintainer's word; approving this point lifts that stop for this
+   one line in that one file.
 
 **Calls made in this document** (the author's, to check while reading):
 
 - The grain is 2^16 ms, not one minute, so the bucket ladder stays as it is.
 - Rollup dimensions are each table's core facets plus the report's `statisticsKeys`; a guard refuses a rollup that
   grows too large rather than dropping a dimension.
-- The trace list keeps whole traces and reads every partition's small `traces` file; without a condition it reads
-  no span, and a trace is listed by its own start and end.
+- The trace list keeps whole traces and reads every partition's small `traces` file; without a condition (and with
+  no window or a long one) it reads no span.
+- Reads of a trace's logs get no time bound, and patterns files are never skipped, because either would change
+  answers.
+- A rollup keeps raw values under raw column names, its description is per file, and an equivalence test compares
+  the rollup's answers with the raw files'.
+- The log total becomes a need of its own, and statements built outside `src/query/sql/` move into builders.
 - Dashboard variables list the values inside the page's window (`resourceValues` gains the window).
 - `percentileOf` is approximate on a report with a long range.
 - Under a long window every percentile is computed from duration buckets, also when the raw files are read.
@@ -442,12 +501,20 @@ Continue the query-scaling work. Read §11 of docs/superpowers/specs/2026-11-11-
 
 **Which session is next** (`git fetch origin`, then look at `origin/main`):
 
+0. First, `gh pr list --base main --state open` for an open PR of this project (a `docs(spec): query-scaling…` or
+   `docs(plan): query-scaling…` title, or a branch the plan's PR table names). An open PR is unfinished work of the
+   session that opened it: check out its branch and finish that (read its body, its checks and its review state)
+   instead of starting the step again.
 1. The status line at the top of this document says "awaiting the maintainer's approval" → **session 0**.
 2. The document is approved and no `docs/superpowers/plans/*-query-scaling*.md` exists → **session A**.
-3. A plan exists and the PRs in its PR table are not all merged (`gh pr list --base main --state all --head <branch>`
-   for each branch the table names) → **session B**; resume at the first PR that is not merged.
-4. Every PR of the plan is merged, the record included → the work is complete; say so, name what §2 left for later
-   (the threaded engine build first), and stop.
+3. A plan exists and a PR of its PR table is neither merged nor marked dropped in the plan
+   (`gh pr list --base main --state all --head <branch>` for each branch the table names) → **session B**; resume at
+   the first such PR, on its existing branch if it has one, at the first task whose commit is not on it.
+4. Every PR of the plan is merged or marked dropped, the record included → the work is complete; say so, name what
+   §2 left for later (the threaded engine build first), and stop.
+
+A PR the plan makes conditional (§9's row 7) is marked "dropped" in the plan's PR table, with the reason, by the
+session that decides it.
 
 A planning session that splits the work into two plans rewrites rules 2 to 4 to match and adds each plan's execution
 prompt here, in the same commit as the plan.
@@ -461,11 +528,11 @@ The query-scaling design (docs/superpowers/specs/2026-11-11-query-scaling-design
 **Session A, write the plan:**
 
 ```
-Write the implementation plan for docs/superpowers/specs/2026-11-11-query-scaling-design.md with superpowers:writing-plans. Skip brainstorming: the design is approved. Read the design whole first, then the code it names. The plan follows §9's order; its first task measures whether the Node engine's read counts track Chromium's range requests (§3.3) and its first PR is the catalogue, the harness and the baseline. State in the plan: the PR process is unattended (docs/agents/process-unattended.md); the PR table (branch and title per PR); per PR, the catalogue entries it must move and the expectation its measurements are held to; every file the plan touches that runs with a write token on main, so that the maintainer's approval of the design covers it. Run the builder check, save as docs/superpowers/plans/<date>-query-scaling.md, add the execution prompt to §11 of the design if it needs to differ from session B's below, and merge both through one docs PR.
+Write the implementation plan for docs/superpowers/specs/2026-11-11-query-scaling-design.md with superpowers:writing-plans. Skip brainstorming: the design is approved. Read the design whole first, then the code it names. The plan follows §9's order; its first task measures whether the Node engine's read counts track Chromium's range requests (§3.3) and its first PR is the catalogue, the harness and the baseline. State in the plan: the PR process is unattended (docs/agents/process-unattended.md); the PR table (branch and title per PR, and a status column where a conditional PR can be marked dropped); per PR, the catalogue entries it must move and what it is held to (§9); the list of files under src/cli/ci/ and the one line of .github/actions/otel-html-publish/otel-html-ci.yaml that the maintainer's approval of §10 points 1 and 5 covers. Run the builder check, save as docs/superpowers/plans/<date>-query-scaling.md, add the execution prompt to §11 of the design if it needs to differ from session B's below, and merge both through one docs PR.
 ```
 
 **Session B, execute the plan:**
 
 ```
-Execute the query-scaling plan (docs/superpowers/plans/*-query-scaling*.md) with superpowers:subagent-driven-development, resuming at the first PR of its PR table that is not merged. The PR process is unattended (docs/agents/process-unattended.md): review on the branch, squash-merge when CI is green, branch the next PR from the updated main. Per CLAUDE.md, implementers and task reviewers run on Sonnet 5.5 and the whole-branch review on Opus 5.5; say which model each review ran on. Every PR body carries the catalogue counts it moved, before and after, and the predicted time for today's rolling report. Stop and ask where the process says so, and in particular before touching a workflow file or an action that the plan does not name, and when a measurement is worse than the plan's expectation. After the last PR, measure the live pages the way §1 of the design did and write the record.
+Execute the query-scaling plan (docs/superpowers/plans/*-query-scaling*.md) with superpowers:subagent-driven-development, resuming at the first PR of its PR table that is not merged. The PR process is unattended (docs/agents/process-unattended.md): review on the branch, squash-merge when CI is green, branch the next PR from the updated main. Per CLAUDE.md, implementers and task reviewers run on Sonnet 5.5 and the whole-branch review on Opus 5.5; say which model each review ran on. Every PR body carries the catalogue counts it moved, before and after, and the predicted time for today's rolling report. Stop and ask where the process says so. Its stop for code that runs with a write token on main is lifted only for the files the plan lists under §10 points 1 and 5 of the design; any other workflow file, action or deployer code is a stop. A catalogue entry that misses its class, or a prediction more than 20 % above the plan's expectation table, is a stop (§9). After the last PR, measure the live pages the way §1 of the design did and write the record.
 ```
