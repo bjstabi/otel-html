@@ -6,6 +6,8 @@ const LEDGER_FILE = 'uploads.json';
 export const PID_FILE = 'pusher.pid';
 export const STOP_FILE = 'pusher.stop';
 export const LOG_FILE = 'pusher.log';
+/** A pusher log line that `ci update stop` shows in its notice; routine lines (an upload, a dispatch) are not marked. */
+export const FAILURE_MARK = '! ';
 
 /** One finished upload: its artifact name, its sequence, and the manifest sources (`flush:0`, `compact:0..3`) it carried. */
 interface UploadRecord {

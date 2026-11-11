@@ -43,14 +43,14 @@ jobs:
           name: otel-html-smoke-${{ matrix.os }}
 
   # The actions as built from this branch (D67): the `ci update`, `ci dispatch` and `ci deploy` commands exist only on the
-  # branch until a release ships them. The job shell is the built CLI, as in ci.yml. The dispatch logs a 404 until
-  # pages-deploy.yml is on the default branch, and never fails the job. The deployer rejects these updates (this workflow is
+  # branch until a release ships them. The job shell is the built CLI, as in ci.yml. The dispatch uses the job token,
+  # which the repository's Actions policy refuses, and never fails the job. The deployer rejects these updates (this workflow is
   # not one of its ci-workflows) but still runs one extra pass for them.
   publish:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, ubuntu-24.04-arm]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     permissions:
@@ -67,13 +67,37 @@ jobs:
       - name: Build otel-html
         shell: bash
         run: mise run build
+      # The pusher (Task 4.4): every 3 s it uploads the partitions the job's report gained.
       - uses: ./.github/actions/otel-html-setup
         with:
           command: node dist/cli/main.js
+          push-every: 3s
       - run: echo hello
       - name: The job report exists
         shell: bash
         run: test -f .otel-html/report/data/manifest.js
+      - name: A config that flushes every second
+        shell: bash
+        run: |
+          printf 'writer:\n  flushIntervalMs: 1000\n' > smoke.yaml
+      # Under the job shell (the built CLI), so the report of this job gets the spans: 12 s of one span per second sent to
+      # the receiver `run` exports to its child. Several flush partitions appear mid-step, which the pusher ships; the
+      # step's end compacts them (builder check 7).
+      - name: A span every second for 12 s
+        env:
+          OTEL_HTML_CONFIG: smoke.yaml
+        run: |
+          for i in $(seq 1 12); do
+            now=$(date +%s)
+            curl -fsS -X POST -H 'Content-Type: application/json' "$OTEL_EXPORTER_OTLP_ENDPOINT/v1/traces" --data "{\"resourceSpans\":[{\"resource\":{\"attributes\":[{\"key\":\"service.name\",\"value\":{\"stringValue\":\"smoke\"}}]},\"scopeSpans\":[{\"spans\":[{\"traceId\":\"0123456789abcdef0123456789abcd$(printf %02x "$i")\",\"spanId\":\"00000000000000$(printf %02x "$i")\",\"name\":\"tick $i\",\"kind\":1,\"startTimeUnixNano\":\"${now}000000000\",\"endTimeUnixNano\":\"${now}500000000\"}]}]}]}"
+            sleep 1
+          done
+      - name: The pusher uploaded while the job ran
+        shell: bash
+        run: |
+          cat .otel-html/publish/pusher.log || true
+          test -f .otel-html/publish/pusher.pid
+          node -e "const l=JSON.parse(require('fs').readFileSync('.otel-html/publish/uploads.json','utf8')); if (l.uploads.length < 1) { console.error('no upload in the ledger'); process.exit(1); } console.log(l.uploads.length + ' uploads before the collect');"
       - if: always()
         id: collect
         uses: ./.github/actions/otel-html-collect
@@ -81,12 +105,83 @@ jobs:
           name: otel-html-smoke-publish-${{ matrix.os }}
           command: node dist/cli/main.js
           publish: true
-      - name: The update artifact was uploaded
+      # D51: the upload client proven on this runner. The runtime variables exist only in a JavaScript action's
+      # environment, so the CLI runs as a child of github-script.
+      - name: Upload an artifact with the built client
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          CMD: node dist/cli/main.js
+          UPLOAD_NAME: otel-html-smoke-upload-${{ matrix.os }}
+        with:
+          script: |
+            const { spawnSync } = require('node:child_process');
+            const [exe, ...args] = process.env.CMD.trim().split(/\s+/);
+            const t0 = Date.now();
+            const r = spawnSync(exe, [...args, 'ci', 'upload', '--name', process.env.UPLOAD_NAME, '--path', '.otel-html/'], {
+              stdio: 'inherit',
+              env: { ...process.env },
+            });
+            core.info(`upload took ${Date.now() - t0} ms`);
+            if (r.status !== 0) core.setFailed(`ci upload exited ${r.status ?? r.signal ?? r.error}`);
+      - name: The uploaded artifact appears
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          UPDATE: ${{ steps.collect.outputs.update }}
+          UPLOAD_NAME: otel-html-smoke-upload-${{ matrix.os }}
         run: |
-          test -n "$UPDATE"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" --paginate --jq '.artifacts[].name' | grep -qxF "$UPLOAD_NAME"
+      # Every update the ledger lists (the pusher's and the final one, which is empty when the pusher shipped everything)
+      # is an artifact of this run.
+      - name: The update artifacts were uploaded
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mine=$(node -e "for (const u of JSON.parse(require('fs').readFileSync('.otel-html/publish/uploads.json','utf8')).uploads) console.log(u.name)")
+          test -n "$mine"
           names=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" --paginate --jq '.artifacts[].name')
-          grep -qxF "$UPDATE" <<<"$names"
+          while read -r n; do grep -qxF "$n" <<<"$names" || { echo "::error::$n is not an artifact of this run"; exit 1; }; done <<<"$mine"
+      # D67 / §8: this job's updates (the pusher's flush ones and the final compacted one) applied to an empty site.
+      - name: Download this run's updates
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: otel-html-update-push-*
+          path: downloaded
+      - name: The updates apply to a flush then a compaction
+        shell: bash
+        run: |
+          cat .otel-html/publish/pusher.log || true
+          # This job's update names come from its ledger: otel-html-update-push-<key>-<sequence>.
+          first=$(node -e "console.log(JSON.parse(require('fs').readFileSync('.otel-html/publish/uploads.json','utf8')).uploads[0].name)")
+          # One artifact in the whole run lands in downloaded/ itself: put it in a folder named as its update.
+          if [ -f downloaded/update.json ]; then
+            mkdir -p "downloaded/$first"
+            find downloaded -mindepth 1 -maxdepth 1 ! -name "$first" -exec mv {} "downloaded/$first/" \;
+          fi
+          # The matrix legs share the run: keep this job's updates.
+          key=${first#otel-html-update-push-}
+          key=${key%-*}
+          for d in downloaded/*/; do
+            case "$(basename "$d")" in "otel-html-update-push-$key-"*) ;; *) rm -rf "$d" ;; esac
+          done
+          find downloaded -mindepth 1 -maxdepth 1
+          lowest=$(find downloaded -mindepth 1 -maxdepth 1 -printf '%f\n' | sed 's/.*-//' | sort -n | head -1)
+          grep -q 'flush:' "downloaded/otel-html-update-push-$key-$lowest/update.json"
+          mkdir scratch
+          node dist/cli/main.js ci deploy apply --trust-updates --channel branch/smoke --site scratch --updates downloaded --repository "$GITHUB_REPOSITORY" --retention 30 --pr-retention 10 --pass-run-id "$GITHUB_RUN_ID"
+          manifest="scratch/branch/smoke/runs/$GITHUB_RUN_ID/data/manifest.js"
+          # §8: the site ends with exactly the job's final report: the flush partitions the pusher shipped mid-step gave
+          # way to their compaction (a step that flushed once keeps its single flush partition, in both).
+          grep -q 'compact:' "$manifest"
+          # shellcheck disable=SC2016 # the script is JavaScript; its ${} are template literals
+          node -e '
+            const fs = require("fs");
+            const sources = (file) => [...fs.readFileSync(file, "utf8").matchAll(/"source":"([^"]*)"/g)].map((m) => m[1]);
+            const site = sources(process.argv[1]).filter((s) => s.startsWith("job:")).map((s) => s.slice(s.indexOf("#") + 1)).sort();
+            const job = sources(".otel-html/report/data/manifest.js").sort();
+            if (JSON.stringify(site) !== JSON.stringify(job)) {
+              console.log(`::error::the site lists ${site.join(" ")}; the job report lists ${job.join(" ")}`);
+              process.exit(1);
+            }
+            console.log(`the site matches the job report: ${job.join(" ")}`);
+          ' "$manifest"

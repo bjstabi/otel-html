@@ -8,7 +8,7 @@ const WATCH_WAIT_MS = 4_000;
 /** A listing is taken from just before the dispatch, so clock skew between runner and API does not hide the run. */
 const WATCH_SKEW_MS = 5_000;
 
-type Watch = { sleep?: (ms: number) => Promise<void>; now?: () => number };
+type Watch = { sleep?: (ms: number) => Promise<void>; now?: () => number; skip?: boolean };
 type DispatchedRun = {
   id: number;
   html_url: string;
@@ -54,7 +54,7 @@ export async function runDispatch(
     });
     if (!res.ok) throw new Error(`${url} answered ${res.status}`);
     say(io, `otel-html dispatch: ${o.workflow} dispatched on ${ref}`);
-    await warnIfNotStarted(o, repo, token, dispatchedAt, io, fetchFn, watch);
+    if (watch.skip !== true) await warnIfNotStarted(o, repo, token, dispatchedAt, io, fetchFn, watch);
   } catch (e) {
     say(io, `otel-html dispatch: not dispatched: ${messageOf(e)}`);
   }

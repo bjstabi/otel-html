@@ -14,8 +14,10 @@ import {
 import { runDispatch } from '../ci/dispatch.js';
 import { envVar, messageOf, say } from '../ci/github-api.js';
 import { runLink } from '../ci/link-main.js';
+import { runPusherCommand } from '../ci/pusher-main.js';
 import { runReport } from '../ci/report-main.js';
-import { runUpdateDone, runUpdatePr, runUpdatePush, runUpdateRun } from '../ci/update-main.js';
+import { runUpdateDone, runUpdatePr, runUpdatePush, runUpdateRun, runUpdateStop } from '../ci/update-main.js';
+import { runUpload } from '../ci/upload-main.js';
 import type { CliIo } from '../io.js';
 import { CliExit } from '../program.js';
 
@@ -258,24 +260,80 @@ export function addCiCommand(program: Command, io: CliIo, deps: Partial<WriterDe
   }
   update
     .command('done')
-    .description('record a finished upload in the pusher ledger; print the pusher log as a notice')
+    .description('record a finished upload in the pusher ledger')
     .requiredOption('--name <name>', 'the uploaded update artifact name')
     .option('--publish-dir <dir>', "the pusher's folder", '.otel-html/publish')
-    .option('--log <file>', 'the pusher log to summarise')
-    .action(async (flags: { name: string; publishDir: string; log?: string }) => {
+    .action(async (flags: { name: string; publishDir: string }) => {
       try {
-        await runUpdateDone(
+        await runUpdateDone({ name: flags.name, publishDir: flags.publishDir }, await resolveDeps(deps));
+      } catch (e) {
+        say(io, `::warning::otel-html update done: ${messageOf(e)}`);
+      }
+    });
+  update
+    .command('stop')
+    .description('stop a running pusher and print its failures as a notice (never fails the job)')
+    .option('--publish-dir <dir>', "the pusher's folder", '.otel-html/publish')
+    .option('--log <file>', 'the pusher log to summarise')
+    .action(async (flags: { publishDir: string; log?: string }) => {
+      await runUpdateStop(
+        { publishDir: flags.publishDir, ...(flags.log === undefined ? {} : { log: flags.log }) },
+        io,
+        await resolveDeps(deps),
+      );
+    });
+  ci.command('pusher')
+    .description(
+      "start the pusher: it detaches, then uploads the job's new report partitions every --every until `ci update push --final` stops it",
+    )
+    .requiredOption('--report <dir>', "the job's report folder")
+    .requiredOption(
+      '--every <duration>',
+      'time between ticks: 60s, 2m, 500ms (the loop never ticks faster than 1000ms)',
+    )
+    .option('--config <file>', 'config file for the CI spans report')
+    .option('--deployer-workflow <file>', 'the deployer workflow file to wake', 'pages-deploy.yml')
+    .option('--detached', 'INTERNAL: run the loop in this process instead of re-spawning')
+    .action(
+      async (flags: {
+        report: string;
+        every: string;
+        config?: string;
+        deployerWorkflow: string;
+        detached?: boolean;
+      }) => {
+        await runPusherCommand(
           {
-            name: flags.name,
-            publishDir: flags.publishDir,
-            ...(flags.log === undefined ? {} : { log: flags.log }),
+            report: flags.report,
+            every: flags.every,
+            deployerWorkflow: flags.deployerWorkflow,
+            detached: flags.detached === true,
+            ...(flags.config === undefined ? {} : { config: flags.config }),
           },
           io,
           await resolveDeps(deps),
         );
-      } catch (e) {
-        say(io, `::warning::otel-html update done: ${messageOf(e)}`);
-      }
+      },
+    );
+  ci.command('upload')
+    .description(
+      'upload a folder as a workflow run artifact (needs the runtime variables of a JavaScript action)',
+    )
+    .requiredOption('--name <name>', 'the artifact name')
+    .requiredOption('--path <dir>', 'the folder to zip and upload')
+    .option('--retention-days <d>', 'days before the artifact expires (default: the repository setting)')
+    .action(async (flags: { name: string; path: string; retentionDays?: string }) => {
+      await runUpload(
+        {
+          name: flags.name,
+          path: flags.path,
+          ...(flags.retentionDays === undefined
+            ? {}
+            : { retentionDays: parsePositive('--retention-days', flags.retentionDays) }),
+        },
+        io,
+        await resolveDeps(deps),
+      );
     });
   ci.command('dispatch')
     .description('wake the deployer workflow on the default branch (never fails)')

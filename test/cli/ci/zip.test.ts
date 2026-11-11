@@ -2,8 +2,9 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { crc32 } from 'node:zlib';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
-import { readZip } from '../../../src/cli/ci/zip.js';
+import { readZip, storedZip } from '../../../src/cli/ci/zip.js';
 import { OtelHtmlError } from '../../../src/model/errors.js';
 import { buildZip } from '../../../test-support/zip.js';
 
@@ -196,5 +197,84 @@ describe('readZip', () => {
       view(b).setUint16(rec + 46 + 5 + 2, 60000, true); // the zip64 extra's size field
       rejects(b, /^a\.txt: /);
     });
+  });
+});
+
+describe('storedZip', () => {
+  const mtime = new Date(Date.UTC(2026, 10, 10, 12, 30, 40));
+  const files = [
+    { name: 'a.txt', bytes: new TextEncoder().encode('hello'), mtime },
+    { name: 'dir/ü.bin', bytes: new Uint8Array([1, 2, 3, 255]), mtime },
+  ];
+
+  test('reads back with readZip', () => {
+    const m = readZip(storedZip(files), 1 << 20);
+    expect([...m.keys()]).toEqual(['a.txt', 'dir/ü.bin']);
+    expect(text(m, 'a.txt')).toBe('hello');
+    expect([...(m.get('dir/ü.bin') ?? [])]).toEqual([1, 2, 3, 255]);
+  });
+
+  test('crc32 of hello is the standard value', () => {
+    expect(crc32('hello')).toBe(0x3610a686);
+    const z = storedZip([files[0] as (typeof files)[number]]);
+    expect(new DataView(z.buffer, z.byteOffset).getUint32(14, true)).toBe(0x3610a686);
+  });
+
+  test('an empty list is a valid zip', () => {
+    expect(readZip(storedZip([]), 10).size).toBe(0);
+  });
+
+  test.skipIf(!HAS_PY)('python zipfile accepts it and tests clean', () => {
+    const f = join(dir, 'x.zip');
+    writeFileSync(f, storedZip(files));
+    const r = spawnSync(
+      'python3',
+      [
+        '-I',
+        // Python's stdout is the console code page on Windows; UTF-8 mode keeps ü intact (-I ignores PYTHONIOENCODING).
+        '-X',
+        'utf8',
+        '-c',
+        'import zipfile,sys;z=zipfile.ZipFile(sys.argv[1]);assert z.testzip() is None;print(",".join(z.namelist()))',
+        f,
+      ],
+      { encoding: 'utf8' },
+    );
+    expect(r.stdout.trim()).toBe('a.txt,dir/ü.bin');
+  });
+
+  test('DOS time and date words and the UTF-8 flag are set in both headers', () => {
+    const z = storedZip([files[0] as (typeof files)[number]]);
+    const v = new DataView(z.buffer, z.byteOffset);
+    const time = (12 << 11) | (30 << 5) | (40 >> 1);
+    const date = ((2026 - 1980) << 9) | (11 << 5) | 10;
+    expect([v.getUint16(10, true), v.getUint16(12, true)]).toEqual([time, date]);
+    expect(v.getUint16(6, true) & 0x0800).toBe(0x0800);
+    const cd = 30 + 5 + 5;
+    expect(v.getUint32(cd, true)).toBe(0x02014b50);
+    expect(v.getUint16(cd + 8, true) & 0x0800).toBe(0x0800);
+    expect([v.getUint16(cd + 12, true), v.getUint16(cd + 14, true)]).toEqual([time, date]);
+  });
+
+  test('refuses more than 65535 files with usage', () => {
+    const many = Array.from({ length: 0x10000 }, () => ({ name: 'f', bytes: new Uint8Array(0), mtime }));
+    expect(() => storedZip(many)).toThrow(expect.objectContaining({ code: 'usage' }));
+  });
+
+  test('refuses a total above 4 GiB with usage', () => {
+    const fake = { length: 0x80000000 } as unknown as Uint8Array;
+    const e = (() => {
+      try {
+        storedZip([
+          { name: 'a', bytes: fake, mtime },
+          { name: 'b', bytes: fake, mtime },
+        ]);
+        return undefined;
+      } catch (x) {
+        return x;
+      }
+    })();
+    expect(e).toBeInstanceOf(OtelHtmlError);
+    expect((e as OtelHtmlError).code).toBe('usage');
   });
 });

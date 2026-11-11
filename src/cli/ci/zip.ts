@@ -1,4 +1,4 @@
-import { inflateRawSync } from 'node:zlib';
+import { crc32, inflateRawSync } from 'node:zlib';
 import { OtelHtmlError } from '../../model/errors.js';
 
 const reject = (path: string, why: string): never => {
@@ -112,5 +112,81 @@ function readEntries(bytes: Uint8Array, maxBytes: number): Map<string, Uint8Arra
       if (out.has(parent)) reject(parent, 'a file and a folder of the same name');
     }
   }
+  return out;
+}
+
+const ZIP_LIMIT = 0xffffffff;
+
+/** The MS-DOS `[time, date]` words of `d` (local fields read as UTC, 1980 to 2107, two-second steps). */
+function dosTime(d: Date): [number, number] {
+  const y = Math.min(Math.max(d.getUTCFullYear(), 1980), 2107);
+  return [
+    (d.getUTCHours() << 11) | (d.getUTCMinutes() << 5) | (d.getUTCSeconds() >> 1),
+    ((y - 1980) << 9) | ((d.getUTCMonth() + 1) << 5) | d.getUTCDate(),
+  ];
+}
+
+/**
+ * D51: a stored (method 0) zip of `files` (`name` to bytes), UTF-8 names, DOS times from `mtime`, CRC32 via
+ * node:zlib; no zip64 (a total above 4 GiB, or more than 65535 files, is refused with `usage`).
+ * `readZip(storedZip(files))` gives `files` back.
+ */
+export function storedZip(files: readonly { name: string; bytes: Uint8Array; mtime: Date }[]): Uint8Array {
+  const enc = new TextEncoder();
+  const names = files.map((f) => enc.encode(f.name));
+  let total = 22;
+  files.forEach((f, i) => {
+    total += 30 + 46 + 2 * (names[i]?.length ?? 0) + f.bytes.length;
+  });
+  if (total > ZIP_LIMIT || files.length > 0xffff)
+    throw new OtelHtmlError('usage', {
+      message: 'the files are too large for a zip without zip64 (4 GiB, 65535 files)',
+    });
+  const out = new Uint8Array(total);
+  const v = new DataView(out.buffer);
+  let pos = 0;
+  const central: { at: number; crc: number; time: [number, number]; i: number }[] = [];
+  files.forEach((f, i) => {
+    const name = names[i] ?? new Uint8Array(0);
+    const time = dosTime(f.mtime);
+    const crc = crc32(f.bytes);
+    central.push({ at: pos, crc, time, i });
+    v.setUint32(pos, 0x04034b50, true);
+    v.setUint16(pos + 4, 20, true);
+    v.setUint16(pos + 6, 0x0800, true);
+    v.setUint16(pos + 10, time[0], true);
+    v.setUint16(pos + 12, time[1], true);
+    v.setUint32(pos + 14, crc, true);
+    v.setUint32(pos + 18, f.bytes.length, true);
+    v.setUint32(pos + 22, f.bytes.length, true);
+    v.setUint16(pos + 26, name.length, true);
+    out.set(name, pos + 30);
+    out.set(f.bytes, pos + 30 + name.length);
+    pos += 30 + name.length + f.bytes.length;
+  });
+  const cdStart = pos;
+  for (const c of central) {
+    const name = names[c.i] ?? new Uint8Array(0);
+    const size = files[c.i]?.bytes.length ?? 0;
+    v.setUint32(pos, 0x02014b50, true);
+    v.setUint16(pos + 4, 20, true);
+    v.setUint16(pos + 6, 20, true);
+    v.setUint16(pos + 8, 0x0800, true);
+    v.setUint16(pos + 12, c.time[0], true);
+    v.setUint16(pos + 14, c.time[1], true);
+    v.setUint32(pos + 16, c.crc, true);
+    v.setUint32(pos + 20, size, true);
+    v.setUint32(pos + 24, size, true);
+    v.setUint16(pos + 28, name.length, true);
+    v.setUint32(pos + 38, (0o100644 << 16) >>> 0, true);
+    v.setUint32(pos + 42, c.at, true);
+    out.set(name, pos + 46);
+    pos += 46 + name.length;
+  }
+  v.setUint32(pos, 0x06054b50, true);
+  v.setUint16(pos + 8, files.length, true);
+  v.setUint16(pos + 10, files.length, true);
+  v.setUint32(pos + 12, pos - cdStart, true);
+  v.setUint32(pos + 16, cdStart, true);
   return out;
 }

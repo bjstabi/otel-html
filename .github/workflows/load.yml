@@ -70,6 +70,10 @@ jobs:
       - uses: ./.github/actions/otel-html-setup
         with:
           command: node dist/cli/main.js
+          push-every: 60s
+          config: .github/otel-html-ci.yaml
+          dispatch-app-id: ${{ vars.DEPLOYER_APP_ID }}
+          dispatch-app-private-key: ${{ github.event.sender.type == 'User' && secrets.DEPLOYER_APP_PRIVATE_KEY || '' }}
       - run: lscpu | grep -E 'Model name|^CPU\(s\)'; free -m
       # The explicit build above is the 1M-log test's built library; `--skip-deps` keeps the task from rebuilding
       # `dist/` under the running job shell.
@@ -107,6 +111,10 @@ jobs:
       - uses: ./.github/actions/otel-html-setup
         with:
           command: node dist/cli/main.js
+          push-every: 60s
+          config: .github/otel-html-ci.yaml
+          dispatch-app-id: ${{ vars.DEPLOYER_APP_ID }}
+          dispatch-app-private-key: ${{ github.event.sender.type == 'User' && secrets.DEPLOYER_APP_PRIVATE_KEY || '' }}
       - run: lscpu | grep -E 'Model name|^CPU\(s\)'; free -m
       - run: mise run --skip-deps test:load:receiver
       - run: pnpm exec playwright install --with-deps chromium

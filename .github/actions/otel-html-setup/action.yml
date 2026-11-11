@@ -11,9 +11,30 @@ inputs:
   job-name:
     description: The job's name in the report. Empty uses the GITHUB_JOB id.
     default: ""
+  dispatch-app-id:
+    description: >-
+      The ID of a GitHub App that dispatches the deployer for the pusher, with `dispatch-app-private-key`. GitHub refuses
+      a workflow dispatch made with `GITHUB_TOKEN` (the run ends in `startup_failure`), so give the ID and key of an App
+      installed on this repository with Actions: read and write only. The action mints a token scoped to this repository
+      for the dispatch; every other call keeps `token`. Empty (the default) or a failed mint dispatches with `token`.
+    default: ""
+  dispatch-app-private-key:
+    description: >-
+      The private key of the App named by `dispatch-app-id`. Pass the secret only on a run a person started
+      (when the event's `github.event.sender.type` is `User`), so a bot's run never holds it.
+    default: ""
   token:
-    description: Token for the release download and the `ci context` API calls.
+    description: "Token for the release download, the `ci context` API calls and the pusher's uploads (the pusher needs `actions: write`)."
     default: ${{ github.token }}
+  push-every:
+    description: Start the pusher, which uploads the job's new report partitions as site updates this often (such as `60s`) while the job runs. Empty starts no pusher. The pusher needs the collect step, which stops it.
+    default: ""
+  config:
+    description: Config file for the CI spans report of the pusher's updates.
+    default: ""
+  deployer-workflow:
+    description: The deployer's workflow file, dispatched on the default branch after an upload.
+    default: pages-deploy.yml
 
 outputs:
   command:
@@ -60,3 +81,40 @@ runs:
         if [ "$code" -ne 0 ]; then
           echo "::warning::otel-html-setup: \`ci context\` failed (exit $code); this job's report will not join the run's trace"
         fi
+    - name: Mint the dispatch token
+      id: dispatch-token
+      if: inputs.push-every != '' && inputs.dispatch-app-id != '' && inputs.dispatch-app-private-key != ''
+      continue-on-error: true
+      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+      with:
+        # The App ID (the variable holds the ID, not the Client ID). With no owner or repositories the token is scoped to this repository.
+        app-id: ${{ inputs.dispatch-app-id }}
+        private-key: ${{ inputs.dispatch-app-private-key }}
+        permission-actions: write
+    # The pusher needs the runtime variables (ACTIONS_RUNTIME_TOKEN, ACTIONS_RESULTS_URL), which exist only in a JavaScript
+    # action's environment, so the CLI starts as a child of github-script. They reach the pusher's child alone, never the job's
+    # steps. `ci pusher` detaches itself and returns at once. Nothing here fails the job: a pusher that does not start is a warning.
+    - name: otel-html pusher
+      if: inputs.push-every != ''
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        CMD: ${{ steps.resolve.outputs.command }}
+        PUSH_EVERY: ${{ inputs.push-every }}
+        PUSH_CONFIG: ${{ inputs.config }}
+        DEPLOYER_WORKFLOW: ${{ inputs.deployer-workflow }}
+        PUSH_TOKEN: ${{ inputs.token }}
+        DISPATCH_TOKEN: ${{ steps.dispatch-token.outputs.token }}
+      with:
+        script: |
+          const { spawnSync } = require('node:child_process');
+          const { CMD, PUSH_EVERY, PUSH_CONFIG, DEPLOYER_WORKFLOW, PUSH_TOKEN, DISPATCH_TOKEN } = process.env;
+          const [exe, ...args] = CMD.trim().split(/\s+/);
+          const flags = ['--report', '.otel-html/report', '--every', PUSH_EVERY, '--deployer-workflow', DEPLOYER_WORKFLOW];
+          if (PUSH_CONFIG) flags.push('--config', PUSH_CONFIG);
+          const env = { ...process.env, GITHUB_TOKEN: PUSH_TOKEN };
+          if (DISPATCH_TOKEN) env.OTEL_HTML_DISPATCH_TOKEN = DISPATCH_TOKEN;
+          for (const k of ['CMD', 'PUSH_EVERY', 'PUSH_CONFIG', 'DEPLOYER_WORKFLOW', 'PUSH_TOKEN', 'DISPATCH_TOKEN']) delete env[k];
+          const r = spawnSync(exe, [...args, 'ci', 'pusher', ...flags], { stdio: 'inherit', env });
+          if (r.status !== 0) {
+            core.warning(`otel-html-setup: \`ci pusher\` did not start (${r.status ?? r.signal ?? r.error}); the job's partitions ship when it ends`);
+          }
