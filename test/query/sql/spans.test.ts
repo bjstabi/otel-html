@@ -18,6 +18,7 @@ import {
   resourceValuesQuery,
   serviceBucketsQuery,
   servicesQuery,
+  spanCountQuery,
   spanRowsQuery,
   timelineQuery,
   tracePartitionsQuery,
@@ -429,6 +430,16 @@ describe('facets', () => {
 });
 
 describe('timeline and durations', () => {
+  test('spanCountQuery counts the filtered spans, or their traces', () => {
+    const { filter: all } = filter();
+    expect(run(spanCountQuery(all, 'spans'))).toEqual([{ total: 7n }]); // the fixture's span count, as durationSummaryQuery's n
+    const traces = run(spanCountQuery(all, 'traces'))[0]?.total;
+    expect(traces).toBe(
+      BigInt(
+        new Set(run(spanRowsQuery(all, { column: 'start', dir: 'asc' }, 100)).map((r) => r.trace_id)).size,
+      ),
+    );
+  });
   test('timelineQuery buckets by the spec and clamps a span starting before the window to the first bucket', () => {
     const window = { start: rel(15), end: rel(70) };
     const { filter: w } = filter({ window });

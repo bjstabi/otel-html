@@ -131,6 +131,16 @@ export function traceRowsQuery(f: SqlFilter, sort: TraceSort, limit: number): Qu
 }
 
 /**
+ * One row, one column `total`: the number of filtered spans, or in `traces` mode of distinct traces among them. It is
+ * what `spanRowsQuery` / `traceRowsQuery` report as `total`, from a statement that reads no span row.
+ */
+export function spanCountQuery(f: SqlFilter, mode: 'spans' | 'traces'): Query {
+  return Query.from('spans')
+    .select({ total: mode === 'traces' ? sql`count(DISTINCT trace_id)` : sql`count(*)` })
+    .where(...whereOf(f, 'spans'));
+}
+
+/**
  * Per bucket of `spec`: `n`, `errors`, `ok` / `error` / `unset` (status 1 / 2 / other), `quantiles` (p50, p95, p99 of
  * `duration_ns`) and `max_duration_ns`, ordered by `bucket` (relative ns). With `latency` false the last two are left
  * out, so the statement never reads the `duration_ns` column.

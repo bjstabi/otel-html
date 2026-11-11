@@ -63,7 +63,7 @@ export interface GroupStatsResult {
  * the RED series (which reads `duration_ns`); `buckets` fills the status buckets only, for a caller that never draws
  * latency. Asked together, `timeline` covers both.
  */
-export type SpanNeed = 'rows' | 'facets' | 'timeline' | 'buckets' | 'durations' | 'groups';
+export type SpanNeed = 'rows' | 'facets' | 'timeline' | 'buckets' | 'total' | 'durations' | 'groups';
 
 /** Which parts of a `LogQueryResult` to compute; absent parts come back empty. */
 export type LogNeed = 'rows' | 'facets' | 'timeline';

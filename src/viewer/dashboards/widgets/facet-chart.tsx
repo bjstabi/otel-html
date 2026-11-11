@@ -207,7 +207,7 @@ interface Filter {
   traceId: TraceId | null;
 }
 
-// Only the facet counts are drawn; one row is read so the result carries the match count the subtitle shows.
+// Only the facet counts are drawn; the `total` need gives the match count the subtitle shows without reading a row.
 function SpanFacets(props: Shared & { dataSource: DataSource; filter: Filter }): JSX.Element {
   const { dataSource, filter, ...rest } = props;
   const { condition, text, window } = filter;
@@ -219,7 +219,7 @@ function SpanFacets(props: Shared & { dataSource: DataSource; filter: Filter }):
       sort: SORT.spans,
       groupBy: null,
       measureBy: measure === 'count' ? null : groupBy,
-      needs: measure === 'count' ? ['rows', 'facets'] : ['rows', 'facets', 'groups'],
+      needs: measure === 'count' ? ['total', 'facets'] : ['total', 'facets', 'groups'],
     }),
     [condition, text, window, measure, groupBy],
   );

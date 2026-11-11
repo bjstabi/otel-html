@@ -185,6 +185,8 @@ function spanResult(q: SpanQuery): SpanQueryResult {
     residual: null,
     tables: { resources: [], scopes: [] },
   };
+  // `total` alone reports the match count `rows` would: the spans, or in traces mode the one fixture trace
+  if (needs.has('total')) result.total = q.mode === 'spans' ? kept.length : Math.min(kept.length, 1);
   if (needs.has('rows')) {
     result.total = kept.length;
     if (q.mode === 'spans') {
