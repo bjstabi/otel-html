@@ -1,3 +1,5 @@
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterAll, describe, expect, test } from 'vitest';
 import {
   type Axis,
@@ -7,9 +9,19 @@ import {
   KNOWN_DEBT,
 } from '../../src/viewer/data/catalogue.js';
 import { classify, type Step } from '../../test-support/scaling/classify.js';
-import { AXES, closeMeasured, printTable, stepsFor } from '../../test-support/scaling/measure.js';
+import {
+  AXES,
+  closeMeasured,
+  modelPointsOf,
+  printTable,
+  stepsFor,
+} from '../../test-support/scaling/measure.js';
 
-const { OTEL_HTML_SCALING_PRINT: PRINT, OTEL_HTML_SCALING: SCALING } = process.env;
+const {
+  OTEL_HTML_SCALING_PRINT: PRINT,
+  OTEL_HTML_SCALING: SCALING,
+  OTEL_HTML_SCALING_OUT: OUT,
+} = process.env;
 
 /** The number of lines the known-debt list may hold; a PR that removes lines lowers it. */
 const DEBT_MAX = 88;
@@ -83,12 +95,26 @@ describe.skipIf(SCALING !== '1')('measured classes', { timeout: 600_000 }, () =>
         const steps = await stepsFor(entry, axis);
         measured.push([axis, classify(steps), declared, steps]);
       }
+      if (OUT !== undefined) {
+        // the points the prediction fits its model on (`mise run predict:queries`); off unless the variable is set
+        const dir = join(OUT, 'measured');
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(join(dir, `${entry.id}.json`), JSON.stringify(await modelPointsOf(entry)));
+      }
       for (const [axis, got, declared, steps] of measured) {
         expect(got, `${entry.id} on ${axis}: ${JSON.stringify(steps.map((s) => s.cost))}`).toBe(declared);
       }
     },
     600_000,
   );
+
+  test('writes the debt list for the prediction when asked', () => {
+    if (OUT !== undefined) {
+      mkdirSync(OUT, { recursive: true });
+      writeFileSync(join(OUT, 'debt.json'), JSON.stringify(KNOWN_DEBT));
+    }
+    expect(true).toBe(true);
+  });
 
   test('prints the table when asked', async () => {
     if (PRINT === '1') await printTable();

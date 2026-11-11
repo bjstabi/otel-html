@@ -1732,10 +1732,15 @@ Requests per group grow with the column chunk size, which small groups of the sy
 Task 6 fills this table in PR 1 from `mise run predict:queries`; each later PR is held to its row (more than 20 %
 above it is a stop). Cells are serial requests, dashboard / trace list.
 
-| after PR      | rolling | 30x150k | 90x150k | 30x1.5M |
-| ------------- | ------- | ------- | ------- | ------- |
-| 1 (baseline)  |         |         |         |         |
-| 3             |         |         |         |         |
-| 4             |         |         |         |         |
-| 6             |         |         |         |         |
-| 8 (window 7d) |         |         |         |         |
+| after PR      | rolling     | 30x150k       | 90x150k        | 30x1.5M         |
+| ------------- | ----------- | ------------- | -------------- | --------------- |
+| 1 (baseline)  | 2,533 / 4,672 | 3,572 / 6,459 | 10,850 / 18,979 | 8,002 / 27,277 |
+| 3             | 2,197 / 772   | 3,092 / 999   | 9,410 / 2,599   | 7,522 / 757    |
+| 4             | 1,291 / 545   | 1,825 / 675   | 5,610 / 1,628   | 848 / 199      |
+| 6             | 841 / 199     | 1,200 / 199   | 3,733 / 199     | 669 / 199      |
+| 8 (window 7d) | 841 / 199     | 1,030 / 199   | 3,123 / 199     | 7,158 / 199    |
+
+Taken on 2026-11-11 from `mise run predict:queries` (rolling is the snapshot of that day, 21 partitions). Not yet a
+usable bound: the live check of Task 6 step 5 found the baseline 2.8 and 4.4 times the requests Chromium made on the
+live report (891 and 1,064), because the model adds the cold cost of every entry a page asks while the page opens each
+file once; the 30x1.5M column also extrapolates the fitted line from 8 to 30 row groups. See the Task 6 report.

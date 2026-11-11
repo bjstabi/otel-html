@@ -4,7 +4,7 @@ import { createDuckDbDataSource } from '../../src/viewer/data/duckdb-source.js';
 import { classify, type Step } from './classify.js';
 import { type Cost, costOf } from './cost.js';
 import { type CountingEngine, openCountingEngine, type ReadEvent } from './counting-engine.js';
-import { buildScalingReport, type ScalingReport, type Shape, stepsOf } from './generator.js';
+import { buildScalingReport, CROSS, type ScalingReport, type Shape, stepsOf } from './generator.js';
 
 export const AXES: readonly Axis[] = ['retention', 'density', 'window'];
 
@@ -126,6 +126,28 @@ export async function stepsFor(entry: CatalogueEntry, axis: Axis): Promise<Step[
     byAxis.set(axis, steps);
   }
   return steps;
+}
+
+/** What `entry` cost cold on one generated shape: serial and parallel requests, bytes. */
+export interface ModelPoint extends Cost {
+  shape: Shape;
+}
+
+/**
+ * The cost of `entry` on every shape the model of Task 6 is fitted on: the steps of the three axes and `CROSS`, in the
+ * spacing of the entry. An entry without a window is measured on the window-axis shapes too (it ignores the window, so
+ * they only add partitions): the model needs every axis to be identifiable.
+ */
+export async function modelPointsOf(entry: CatalogueEntry): Promise<ModelPoint[]> {
+  const shapes = new Map<string, Shape>();
+  for (const shape of [
+    ...AXES.flatMap((axis) => stepsOf(axis, entry.spacing)),
+    { ...CROSS, spacing: entry.spacing },
+  ])
+    shapes.set(shapeKey(shape), shape);
+  const points: ModelPoint[] = [];
+  for (const shape of shapes.values()) points.push({ shape, ...(await measuredOf(entry, shape)).cost });
+  return points;
 }
 
 /** Prints the entry x axis x measured class table, with the serial reads split by file size; never asserts. */
