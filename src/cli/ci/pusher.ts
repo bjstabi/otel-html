@@ -172,7 +172,13 @@ async function dispatch(o: PusherOptions, d: PusherDeps, repository: string, run
   const sink = (s: string): void => {
     for (const line of s.split('\n')) if (line.trim() !== '') d.log(line);
   };
-  const io = { stdout: sink, stderr: sink, env: o.env, cwd: '' } as unknown as CliIo;
+  // GitHub refuses a dispatch made with GITHUB_TOKEN (#264), so setup may hand over a GitHub App token for the dispatch alone.
+  // An App token lasts one hour: a longer job's later dispatches fail and are logged as any dispatch failure is; the
+  // deployer's schedule and the dispatch when the job ends still run.
+  const dispatchToken = ev(o, 'OTEL_HTML_DISPATCH_TOKEN');
+  const env =
+    dispatchToken === undefined || dispatchToken === '' ? o.env : { ...o.env, GITHUB_TOKEN: dispatchToken };
+  const io = { stdout: sink, stderr: sink, env, cwd: '' } as unknown as CliIo;
   await runDispatch({ workflow: o.deployerWorkflow, repository, runId }, io, d.fetchFn, { skip: true });
 }
 

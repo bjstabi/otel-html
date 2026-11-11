@@ -67,13 +67,37 @@ jobs:
       - name: Build otel-html
         shell: bash
         run: mise run build
+      # The pusher (Task 4.4): every 3 s it uploads the partitions the job's report gained.
       - uses: ./.github/actions/otel-html-setup
         with:
           command: node dist/cli/main.js
+          push-every: 3s
       - run: echo hello
       - name: The job report exists
         shell: bash
         run: test -f .otel-html/report/data/manifest.js
+      - name: A config that flushes every second
+        shell: bash
+        run: |
+          printf 'writer:\n  flushIntervalMs: 1000\n' > smoke.yaml
+      # Under the job shell (the built CLI), so the report of this job gets the spans: 12 s of one span per second sent to
+      # the receiver `run` exports to its child. Several flush partitions appear mid-step, which the pusher ships; the
+      # step's end compacts them (builder check 7).
+      - name: A span every second for 12 s
+        env:
+          OTEL_HTML_CONFIG: smoke.yaml
+        run: |
+          for i in $(seq 1 12); do
+            now=$(date +%s)
+            curl -fsS -X POST -H 'Content-Type: application/json' "$OTEL_EXPORTER_OTLP_ENDPOINT/v1/traces" --data "{\"resourceSpans\":[{\"resource\":{\"attributes\":[{\"key\":\"service.name\",\"value\":{\"stringValue\":\"smoke\"}}]},\"scopeSpans\":[{\"spans\":[{\"traceId\":\"0123456789abcdef0123456789abcd$(printf %02x "$i")\",\"spanId\":\"00000000000000$(printf %02x "$i")\",\"name\":\"tick $i\",\"kind\":1,\"startTimeUnixNano\":\"${now}000000000\",\"endTimeUnixNano\":\"${now}500000000\"}]}]}]}"
+            sleep 1
+          done
+      - name: The pusher uploaded while the job ran
+        shell: bash
+        run: |
+          cat .otel-html/publish/pusher.log || true
+          test -f .otel-html/publish/pusher.pid
+          node -e "const l=JSON.parse(require('fs').readFileSync('.otel-html/publish/uploads.json','utf8')); if (l.uploads.length < 1) { console.error('no upload in the ledger'); process.exit(1); } console.log(l.uploads.length + ' uploads before the collect');"
       - if: always()
         id: collect
         uses: ./.github/actions/otel-html-collect
@@ -115,3 +139,34 @@ jobs:
           test -n "$UPDATE"
           names=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" --paginate --jq '.artifacts[].name')
           grep -qxF "$UPDATE" <<<"$names"
+      # D67 / §8: this job's updates (the pusher's flush ones and the final compacted one) applied to an empty site.
+      - name: Download this run's updates
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: otel-html-update-push-*
+          path: downloaded
+      - name: The updates apply to a flush then a compaction
+        shell: bash
+        env:
+          UPDATE: ${{ steps.collect.outputs.update }}
+        run: |
+          cat .otel-html/publish/pusher.log || true
+          # One artifact lands in downloaded/ itself: put it in a folder named as its update.
+          if [ -f downloaded/update.json ]; then
+            mkdir -p "downloaded/$UPDATE"
+            find downloaded -mindepth 1 -maxdepth 1 ! -name "$UPDATE" -exec mv {} "downloaded/$UPDATE/" \;
+          fi
+          # The matrix legs share the run: keep this job's updates (the final name is otel-html-update-push-<key>-<sequence>).
+          key=${UPDATE#otel-html-update-push-}
+          key=${key%-*}
+          for d in downloaded/*/; do
+            case "$(basename "$d")" in "otel-html-update-push-$key-"*) ;; *) rm -rf "$d" ;; esac
+          done
+          find downloaded -mindepth 1 -maxdepth 1
+          lowest=$(find downloaded -mindepth 1 -maxdepth 1 -printf '%f\n' | sed 's/.*-//' | sort -n | head -1)
+          grep -q 'flush:' "downloaded/otel-html-update-push-$key-$lowest/update.json"
+          mkdir scratch
+          node dist/cli/main.js ci deploy apply --trust-updates --channel branch/smoke --site scratch --updates downloaded --repository "$GITHUB_REPOSITORY" --retention 30 --pr-retention 10 --pass-run-id "$GITHUB_RUN_ID"
+          manifest="scratch/branch/smoke/runs/$GITHUB_RUN_ID/data/manifest.js"
+          grep -q 'compact:' "$manifest"
+          if grep -q 'flush:' "$manifest"; then echo "::error::the applied manifest still lists a flush source"; exit 1; fi

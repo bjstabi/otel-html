@@ -179,6 +179,35 @@ describe('tick', () => {
     expect(ledger.shipped).toEqual(['flush:0']);
   });
 
+  test('the dispatch carries OTEL_HTML_DISPATCH_TOKEN; its own calls keep GITHUB_TOKEN', async () => {
+    const o = opts({ env: { ...ENV, GITHUB_TOKEN: 'job-token', OTEL_HTML_DISPATCH_TOKEN: 'app-token' } });
+    const r = await openReport();
+    await flush(r, 1);
+    const auth: string[] = [];
+    const d = pdeps();
+    const json = (b: object): Response => new Response(JSON.stringify(b), { status: 200 });
+    d.fetchFn = (async (url: string, init?: RequestInit) => {
+      const h = new Headers(init?.headers);
+      auth.push(
+        `${init?.method ?? 'GET'} ${String(url).includes('/dispatches') ? 'dispatch' : 'other'} ${h.get('authorization')}`,
+      );
+      if (init?.method === 'POST') return new Response(null, { status: 204 });
+      if (String(url).endsWith('/actions/runs/42'))
+        return json({
+          id: 42,
+          actor: { type: 'User' },
+          repository: { full_name: 'o/r' },
+          head_repository: { full_name: 'o/r' },
+        });
+      return json({ default_branch: 'main', workflow_runs: [] });
+    }) as unknown as typeof fetch;
+    const t = await tick(o, d, null);
+    expect(t.outcome).toBe('uploaded');
+    expect(auth).toContain('POST dispatch Bearer app-token');
+    // the pusher's own calls (before the dispatch command starts) keep the job token
+    expect(auth[0]).toBe('GET other Bearer job-token');
+  });
+
   test('a partition file gone before the copy is a retry', async () => {
     const o = opts();
     const r = await openReport();
