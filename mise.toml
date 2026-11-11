@@ -511,7 +511,7 @@ A run whose inputs match a cached success is replayed. `MISE_TASK_CACHE=off` re-
 `test:e2e:chromium`; `--force` reaches only the task it is given to, so it works on `test:e2e` and not on the wrapper."""
 shell = "bash -c"
 depends = ["e2e:fixtures"]
-# The key also holds the task's args (--browser, specs after `--`) and the resolved tool versions. The workflow file is a
+# The key also holds the task's args (--browser, --pass, specs and --shard after `--`) and the resolved tool versions. The workflow file is a
 # source because it names the Playwright image the browsers come from. OTEL_HTML_METRICS_SCALE changes which tests run.
 sources = [
   "@group:deps",
@@ -551,18 +551,20 @@ esac
 # wildcard beside one that matches, hence the trailing `*`.
 http="${usage_browser}-http*"
 perf="${usage_browser}-perf-*"
-# The scale reports only when a selected test is in e2e/scale.spec.ts (the listing is the selected passes' projects); a listing
-# that fails builds them too, and the passes below report its error. --skip-deps: dist/ is already built (and in CI it
-# must not be rebuilt under the job shell).
-# Whether the browser has a perf project at all, asked without "$@" so a --reporter or --shard cannot change the answer.
-has_perf=0
-if [ "$usage_pass" != main ] && pnpm exec playwright test --project "$perf" --list >/dev/null 2>&1; then has_perf=1; fi
-list_projects=()
-[ "$usage_pass" = perf ] || list_projects+=(--project "${usage_browser}-file" --project "$http")
-[ "$has_perf" = 0 ] || list_projects+=(--project "$perf")
-if [ -z "${list_projects[*]}" ]; then
-  echo "test:e2e: the selection does not need the scale reports"
-elif ! listed=$(pnpm exec playwright test "$@" "${list_projects[@]}" --list 2>&1) || grep -qF 'scale.spec.ts' <<<"$listed"; then
+# Only Chromium has perf projects; decided by name, so a perf listing that fails for another reason (a spec that does
+# not load) fails the perf pass below instead of skipping it.
+case "$usage_browser" in chromium | '*') has_perf=1 ;; *) has_perf=0 ;; esac
+[ "$usage_pass" != main ] || has_perf=0
+# The scale reports only when a selected test is in e2e/scale.spec.ts. Each pass is listed on its own, with the args, as
+# it runs, so a --shard selects the same tests in the listing as in the pass; a listing that fails builds them too, and
+# the passes below report its error. --skip-deps: dist/ is already built (and in CI it must not be rebuilt under the job shell).
+needs_scale() {
+  local listed
+  listed=$(pnpm exec playwright test "$@" --list 2>&1) || return 0
+  grep -qF 'scale.spec.ts' <<<"$listed"
+}
+if { [ "$usage_pass" != perf ] && needs_scale "$@" --project "${usage_browser}-file" --project "$http" --grep-invert @perf; } ||
+  { [ "$has_perf" = 1 ] && needs_scale "$@" --project "$perf"; }; then
   echo "test:e2e: the selection needs the scale reports (e2e:fixtures:scale)"
   mise run --skip-deps e2e:fixtures:scale:data && mise run --skip-deps e2e:fixtures:scale || exit 1
 else
