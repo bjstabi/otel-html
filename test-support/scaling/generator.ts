@@ -1,3 +1,6 @@
+import { existsSync } from 'node:fs';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
 import { isV4, type ManifestV4, parseAnyManifest } from '../../src/format/manifest.js';
 import { TABLES } from '../../src/format/parquet/columns.js';
@@ -11,6 +14,7 @@ import { openSession } from '../../src/writer/session.js';
 import type { Format4Fixture } from '../format4-fixture.js';
 import { writeReportDir } from '../report-dir.js';
 import { createTestWriter, EPOCH_NS, testConfig } from '../writer-deps.js';
+import { bounded, waitTurn } from './bounded.js';
 import { ROW_GROUP_ROWS } from './cost.js';
 
 const AXIS_FIELD = { retention: 'outside', window: 'inside', density: 'rowGroups' } as const;
@@ -231,20 +235,86 @@ async function build(shape: Shape): Promise<ScalingReport> {
   };
 }
 
+const shapeKey = (shape: Shape): string =>
+  `${shape.outside}-${shape.inside}-${shape.rowGroups}-${shape.spacing}`;
+
+/** The folder of the reports `prebuildScalingReports` made, set by the scaling global setup for the worker processes. */
+export const PREBUILT_ENV = 'OTEL_HTML_SCALING_REPORTS';
+
+interface Meta {
+  epoch: string;
+  window: TimeWindow;
+  ids: ScalingIds;
+}
+
+/**
+ * Makes `<root>/<shape key>/` (the report folder and a `meta.json`) if no worker has: the first to create the `.lock`
+ * folder builds it and moves it into place with one rename, the others wait for it. The reports are deterministic, so
+ * the workers of one run share them instead of each building its own.
+ */
+async function ensurePrebuilt(root: string, shape: Shape): Promise<string> {
+  const target = join(root, shapeKey(shape));
+  const lock = `${target}.lock`;
+  const since = performance.now();
+  for (;;) {
+    if (existsSync(join(target, 'meta.json'))) return target;
+    try {
+      await mkdir(lock);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+      // another worker builds it; if it failed, the lock is gone and this one takes over
+      await waitTurn(since, `the report ${shapeKey(shape)}`);
+      continue;
+    }
+    try {
+      const r = await bounded(build(shape), `building the report ${shapeKey(shape)}`);
+      const meta: Meta = { epoch: String(r.epoch), window: r.window, ids: r.ids };
+      await writeFile(join(r.dir, 'meta.json'), JSON.stringify(meta));
+      await rename(r.dir, target);
+      return target;
+    } finally {
+      await rm(lock, { recursive: true, force: true });
+    }
+  }
+}
+
+async function openPrebuilt(dir: string): Promise<ScalingReport> {
+  const meta = JSON.parse(await readFile(join(dir, 'meta.json'), 'utf8')) as Meta;
+  const text = await readFile(join(dir, 'data', 'manifest.js'), 'utf8');
+  const manifest = parseAnyManifest(reviveDataJson(unwrapDataFile(text, MANIFEST_KEY)));
+  if (!isV4(manifest)) throw new OtelHtmlError('usage', { message: 'not a v4 manifest' });
+  // The folder is shared by every worker and removed by the global setup's teardown: close() leaves it.
+  return {
+    dir,
+    manifest,
+    epoch: BigInt(meta.epoch),
+    window: meta.window,
+    ids: meta.ids,
+    close: async () => {},
+  };
+}
+
 const cache = new Map<string, Promise<ScalingReport>>();
 
-/** The report of `shape`, built once per test run (per worker): `close()` removes its folder and forgets it. */
+/**
+ * The report of `shape`, built once per test run (per worker): `close()` removes its folder and forgets it. Under the
+ * scaling global setup (`OTEL_HTML_SCALING_REPORTS`) the report is taken from that folder, built there by the first worker that needs it.
+ */
 export function buildScalingReport(shape: Shape): Promise<ScalingReport> {
   const key = `${shape.outside}/${shape.inside}/${shape.rowGroups}/${shape.spacing}`;
   const hit = cache.get(key);
   if (hit !== undefined) return hit;
-  const made = build(shape).then((r) => ({
-    ...r,
-    close: async (): Promise<void> => {
-      cache.delete(key);
-      await r.close();
-    },
-  }));
+  const prebuilt = process.env[PREBUILT_ENV];
+  const made =
+    prebuilt === undefined
+      ? build(shape).then((r) => ({
+          ...r,
+          close: async (): Promise<void> => {
+            cache.delete(key);
+            await r.close();
+          },
+        }))
+      : ensurePrebuilt(prebuilt, shape).then(openPrebuilt);
   cache.set(key, made);
   made.catch(() => cache.delete(key));
   return made;

@@ -259,7 +259,7 @@ Builds the reports of test-support/scaling/generator.ts (retention, density and 
 runs each entry of src/viewer/data/catalogue.ts cold through the counting engine and asserts the class it declares
 (test/scaling/classes-<axis>-<spacing>.test.ts: one file per axis and spacing plus the cross shape, so vitest runs them in
 parallel workers; test/scaling/classes.test.ts holds the cheap declared-rules tests and checks the split covers every entry
-and axis). About 1 minute on 20 cores, 3 minutes on 4; cached by the content of its inputs, so an unchanged tree replays it.
+and axis). About 1 minute on 20 cores, 2.5 minutes on 4; the workers share the generated reports and the cold runs through a folder in the temp directory; cached by the content of its inputs, so an unchanged tree replays it.
 `check` depends on it and CI's `check` job runs it; the unit tasks skip the measurement (OTEL_HTML_SCALING unset).
 OTEL_HTML_SCALING_PRINT=1 prints the entry x axis x class table to stderr (only on an uncached run)."""
 sources = [
@@ -273,6 +273,9 @@ sources = [
 ]
 outputs = []
 cache = { enabled = true, env = ["CI"] }
+# Inside `check` it starts after the unit pass finishes (never beside it: the page tests' settle checks are timer-based);
+# run alone it waits for nothing.
+wait_for = ["test:unit:main"]
 env = { OTEL_HTML_SCALING = "1", OTEL_HTML_PERF_PASS = "0" }
 run = "pnpm exec vitest run test/scaling/classes --maxWorkers=6"
 

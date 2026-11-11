@@ -9,6 +9,7 @@ import { viewStatements } from '../../src/query/sql/views.js';
 import { createCoordinator, mosaicQueryEngine } from '../../src/viewer/data/mosaic.js';
 import type { QueryEngine } from '../../src/viewer/data/query-engine.js';
 import { packageHostEngineFiles } from '../host-engine-files.js';
+import { bounded } from './bounded.js';
 
 export interface ReadEvent {
   /** The manifest path (`partitions/000001/spans.parquet`), not the absolute one. */
@@ -132,9 +133,14 @@ export const runningWorkers = (): number => running;
  * the state a page reload gives: the counted statement starts from there in both engines. Starting one takes about
  * half a second, so the next worker is started in the background right after each swap (the spare) and `cold()` only
  * waits for it when it is not ready yet; each worker has its own event list, so what the spare reads while it starts
- * is never counted.
+ * is never counted. A spare takes cores that a small machine does not have (on four, the measurement runs as long
+ * without it and uses a tenth more CPU), so `spare: false` starts the worker inside `cold()`.
  */
-export async function openCountingEngine(dir: string, manifest: ManifestV4): Promise<CountingEngine> {
+export async function openCountingEngine(
+  dir: string,
+  manifest: ManifestV4,
+  { spare: useSpare = true }: { spare?: boolean } = {},
+): Promise<CountingEngine> {
   const root = resolve(dir);
   const paths = manifest.partitions.flatMap((p) => Object.values(p.files).map((f) => f.path));
 
@@ -188,14 +194,17 @@ export async function openCountingEngine(dir: string, manifest: ManifestV4): Pro
 
   const textDir = await mkdtemp(join(tmpdir(), 'otel-counting-'));
   let live = await start();
-  let spare = startSpare();
+  let spare: Promise<Live> | undefined = useSpare ? startSpare() : undefined;
   // One connection runs one statement at a time: two pending queries on it interleave their result buffers (the
   // viewer's worker queues them the same way), so concurrent requests such as getTrace's two reads wait in turn.
   let turn: Promise<unknown> = Promise.resolve();
   const connector = {
     query(request: { type: string; sql: string }): Promise<Uint8Array | undefined> {
       const run = turn.then(async () => {
-        const bytes = await runIpc(live.db, live.conn, request.sql);
+        const bytes = await bounded(
+          runIpc(live.db, live.conn, request.sql),
+          `a statement (${request.sql.slice(0, 60)})`,
+        );
         return request.type === 'arrow' ? bytes : undefined;
       });
       turn = run.catch(() => undefined);
@@ -216,10 +225,13 @@ export async function openCountingEngine(dir: string, manifest: ManifestV4): Pro
   const take = async (): Promise<ReadEvent[]> => {
     const from = live;
     const id = marker++;
-    await new Promise<void>((done) => {
-      from.waiting.set(id, done);
-      from.port.postMessage({ marker: id });
-    });
+    await bounded(
+      new Promise<void>((done) => {
+        from.waiting.set(id, done);
+        from.port.postMessage({ marker: id });
+      }),
+      'the counting worker answering a marker',
+    );
     from.waiting.delete(id);
     return from.events.splice(0);
   };
@@ -231,14 +243,14 @@ export async function openCountingEngine(dir: string, manifest: ManifestV4): Pro
       engine.clearCache();
       const old = live;
       await take();
-      live = await spare;
-      spare = startSpare();
+      live = await bounded(spare ?? start(), 'starting the next counting worker');
+      spare = useSpare ? startSpare() : undefined;
       await stop(old);
       await take();
     },
     close: async () => {
       engine.clearCache();
-      const last = await spare.catch(() => undefined);
+      const last = await spare?.catch(() => undefined);
       await stop(live);
       if (last !== undefined) await stop(last);
       await rm(textDir, { recursive: true, force: true });

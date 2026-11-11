@@ -96,6 +96,29 @@ describe('the counting Node engine', { timeout: 60_000 }, () => {
     expect(runningWorkers()).toBe(before);
   });
 
+  test('without a spare, cold() still replaces the worker and only one runs', async () => {
+    const before = runningWorkers();
+    const report = await buildFormat4Report([spansOnlyRequest(40)], { close: false });
+    const dir = await writeReportDir(report);
+    const c = await openCountingEngine(dir.dir, report.manifest, { spare: false });
+    try {
+      expect(runningWorkers()).toBe(before + 1);
+      const run = async (): Promise<number> => {
+        await c.engine.query(Query.from('spans').select({ n: sql`count(*)` }));
+        return costOf(await c.take(), new Map()).serial;
+      };
+      await c.cold();
+      const a = await run();
+      await c.cold();
+      expect(await run()).toBe(a);
+      expect(runningWorkers()).toBe(before + 1);
+    } finally {
+      await c.close();
+      await dir.close();
+    }
+    expect(runningWorkers()).toBe(before);
+  });
+
   test('take() without cold() after a repeat shows the cache', async () => {
     const { c } = await twoPartitions();
     await c.cold();

@@ -1,10 +1,15 @@
+import { existsSync } from 'node:fs';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { availableParallelism } from 'node:os';
+import { join } from 'node:path';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { type Axis, CATALOGUE, type CatalogueEntry, DECLARED } from '../../src/viewer/data/catalogue.js';
 import { createDuckDbDataSource } from '../../src/viewer/data/duckdb-source.js';
+import { bounded, waitTurn } from './bounded.js';
 import { classify, type Step } from './classify.js';
 import { type Cost, costOf } from './cost.js';
 import { type CountingEngine, openCountingEngine, type ReadEvent } from './counting-engine.js';
-import { buildScalingReport, type ScalingReport, type Shape, stepsOf } from './generator.js';
+import { buildScalingReport, PREBUILT_ENV, type ScalingReport, type Shape, stepsOf } from './generator.js';
 
 export const AXES: readonly Axis[] = ['retention', 'density', 'window'];
 
@@ -42,7 +47,9 @@ function liveOf(shape: Shape): Promise<Live> {
   if (hit !== undefined) return hit;
   const made = (async (): Promise<Live> => {
     const report = await buildScalingReport(shape);
-    const counting = await openCountingEngine(report.dir, report.manifest);
+    const counting = await openCountingEngine(report.dir, report.manifest, {
+      spare: availableParallelism() >= 8,
+    });
     const sizes = new Map<string, number>();
     for (const p of report.manifest.partitions)
       for (const f of Object.values(p.files)) sizes.set(f.path, f.bytes);
@@ -87,11 +94,42 @@ async function measure(entry: CatalogueEntry, shape: Shape): Promise<Measured> {
   return run;
 }
 
+/**
+ * Under the scaling global setup the workers of a run share what each (entry, shape) cost: the shape at the `BASE`
+ * values is a step of all three axes, so three files would each pay for the same cold runs. The first worker to take
+ * the `.lock` folder measures and writes the result; the others wait for it.
+ */
+async function sharedMeasure(root: string, entry: CatalogueEntry, shape: Shape): Promise<Measured> {
+  const file = join(root, `measured-${entry.id}-${shapeKey(shape).replaceAll('/', '-')}.json`);
+  const lock = `${file}.lock`;
+  const since = performance.now();
+  const what = `${entry.id} on ${shapeKey(shape)}`;
+  for (;;) {
+    if (existsSync(file)) return JSON.parse(await readFile(file, 'utf8')) as Measured;
+    try {
+      await mkdir(lock);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+      await waitTurn(since, what);
+      continue;
+    }
+    try {
+      const m = await bounded(measure(entry, shape), `measuring ${what}`);
+      await writeFile(`${file}.tmp`, JSON.stringify(m));
+      await rename(`${file}.tmp`, file);
+      return m;
+    } finally {
+      await rm(lock, { recursive: true, force: true });
+    }
+  }
+}
+
 function measuredOf(entry: CatalogueEntry, shape: Shape): Promise<Measured> {
   const key = `${entry.id}|${shapeKey(shape)}`;
   const hit = measured.get(key);
   if (hit !== undefined) return hit;
-  const made = measure(entry, shape);
+  const shared = process.env[PREBUILT_ENV];
+  const made = shared === undefined ? measure(entry, shape) : sharedMeasure(shared, entry, shape);
   measured.set(key, made);
   return made;
 }

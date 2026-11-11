@@ -54,7 +54,7 @@ export function defineMeasuredFile(part: Part, spacing: Shape['spacing']): void 
   afterAll(async () => {
     await closeMeasured();
   });
-  describe.skipIf(SCALING !== '1')(`measured classes: ${part} (${spacing})`, { timeout: 600_000 }, () => {
+  describe.skipIf(SCALING !== '1')(`measured classes: ${part} (${spacing})`, { timeout: 180_000 }, () => {
     test.each(entries)(
       '$id measures the class it declares',
       async (entry) => {
@@ -77,7 +77,7 @@ export function defineMeasuredFile(part: Part, spacing: Shape['spacing']): void 
           declared,
         );
       },
-      600_000,
+      180_000,
     );
 
     test('prints the table when asked', async () => {
