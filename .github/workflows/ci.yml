@@ -102,6 +102,10 @@ jobs:
       - uses: ./.github/actions/otel-html-setup
         with:
           command: node dist/cli/main.js
+          push-every: 60s
+          config: .github/otel-html-ci.yaml
+          dispatch-app-id: ${{ vars.DEPLOYER_APP_ID }}
+          dispatch-app-private-key: ${{ github.event.sender.type == 'User' && secrets.DEPLOYER_APP_PRIVATE_KEY || '' }}
       - run: mise run gen:check
       - run: mise run check
       - if: always()
@@ -149,6 +153,10 @@ jobs:
       - uses: ./.github/actions/otel-html-setup
         with:
           command: node dist/cli/main.js
+          push-every: 60s
+          config: .github/otel-html-ci.yaml
+          dispatch-app-id: ${{ vars.DEPLOYER_APP_ID }}
+          dispatch-app-private-key: ${{ github.event.sender.type == 'User' && secrets.DEPLOYER_APP_PRIVATE_KEY || '' }}
       - run: mise run test:unit
       - if: always()
         uses: ./.github/actions/otel-html-collect
@@ -175,6 +183,10 @@ jobs:
       - uses: ./.github/actions/otel-html-setup
         with:
           command: node dist/cli/main.js
+          push-every: 60s
+          config: .github/otel-html-ci.yaml
+          dispatch-app-id: ${{ vars.DEPLOYER_APP_ID }}
+          dispatch-app-private-key: ${{ github.event.sender.type == 'User' && secrets.DEPLOYER_APP_PRIVATE_KEY || '' }}
       # `check:package` (publint + attw) depends on `build`; --skip-deps keeps it from cleaning dist/ under the running job shell.
       - run: mise run --skip-deps check:package
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -235,6 +247,10 @@ jobs:
       - uses: ./.github/actions/otel-html-setup
         with:
           command: node dist/cli/main.js
+          push-every: 60s
+          config: .github/otel-html-ci.yaml
+          dispatch-app-id: ${{ vars.DEPLOYER_APP_ID }}
+          dispatch-app-private-key: ${{ github.event.sender.type == 'User' && secrets.DEPLOYER_APP_PRIVATE_KEY || '' }}
       # The job shell wraps these in `otel-html run`; the exit code is Playwright's.
       # --skip-deps: dist/ was built by the Build step above and must not be cleaned under the running job shell,
       # so the fixture reports are built here, once, and test:e2e's own e2e:fixtures dependency is skipped.
@@ -311,6 +327,10 @@ jobs:
       - uses: ./.github/actions/otel-html-setup
         with:
           command: node dist/cli/main.js
+          push-every: 60s
+          config: .github/otel-html-ci.yaml
+          dispatch-app-id: ${{ vars.DEPLOYER_APP_ID }}
+          dispatch-app-private-key: ${{ github.event.sender.type == 'User' && secrets.DEPLOYER_APP_PRIVATE_KEY || '' }}
       # The metrics-scale tests are @perf @http, so they live in the chromium-perf-http project (the report is in site
       # format). Global setup asserts the other fixture reports exist, and the spec writes the metrics-scale report itself.
       - run: mise run --skip-deps e2e:fixtures
@@ -351,6 +371,10 @@ jobs:
       - uses: ./.github/actions/otel-html-setup
         with:
           command: node dist/cli/main.js
+          push-every: 60s
+          config: .github/otel-html-ci.yaml
+          dispatch-app-id: ${{ vars.DEPLOYER_APP_ID }}
+          dispatch-app-private-key: ${{ github.event.sender.type == 'User' && secrets.DEPLOYER_APP_PRIVATE_KEY || '' }}
       - run: mise run coverage
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -415,6 +439,10 @@ jobs:
       - uses: ./.github/actions/otel-html-setup
         with:
           command: node dist/cli/main.js
+          push-every: 60s
+          config: .github/otel-html-ci.yaml
+          dispatch-app-id: ${{ vars.DEPLOYER_APP_ID }}
+          dispatch-app-private-key: ${{ github.event.sender.type == 'User' && secrets.DEPLOYER_APP_PRIVATE_KEY || '' }}
       - run: mise run build:binaries -- --target "$TARGET"
       - env:
           OTEL_HTML_BINARY: dist/bin/otel-html-${{ matrix.target }}${{ matrix.ext }}
