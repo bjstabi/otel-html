@@ -170,5 +170,18 @@ jobs:
           mkdir scratch
           node dist/cli/main.js ci deploy apply --trust-updates --channel branch/smoke --site scratch --updates downloaded --repository "$GITHUB_REPOSITORY" --retention 30 --pr-retention 10 --pass-run-id "$GITHUB_RUN_ID"
           manifest="scratch/branch/smoke/runs/$GITHUB_RUN_ID/data/manifest.js"
+          # §8: the site ends with exactly the job's final report: the flush partitions the pusher shipped mid-step gave
+          # way to their compaction (a step that flushed once keeps its single flush partition, in both).
           grep -q 'compact:' "$manifest"
-          if grep -q 'flush:' "$manifest"; then echo "::error::the applied manifest still lists a flush source"; exit 1; fi
+          # shellcheck disable=SC2016 # the script is JavaScript; its ${} are template literals
+          node -e '
+            const fs = require("fs");
+            const sources = (file) => [...fs.readFileSync(file, "utf8").matchAll(/"source":"([^"]*)"/g)].map((m) => m[1]);
+            const site = sources(process.argv[1]).filter((s) => s.startsWith("job:")).map((s) => s.slice(s.indexOf("#") + 1)).sort();
+            const job = sources(".otel-html/report/data/manifest.js").sort();
+            if (JSON.stringify(site) !== JSON.stringify(job)) {
+              console.log(`::error::the site lists ${site.join(" ")}; the job report lists ${job.join(" ")}`);
+              process.exit(1);
+            }
+            console.log(`the site matches the job report: ${job.join(" ")}`);
+          ' "$manifest"
