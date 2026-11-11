@@ -131,12 +131,14 @@ export async function tick(o: PusherOptions, d: PusherDeps, last: string[] | nul
     step = 'zip';
     const zip = await zipDirectory(fs, out);
     step = 'upload';
+    const uploadStart = nowMs(d.clock);
     await d.upload({
       name,
       zip,
       env: { ACTIONS_RUNTIME_TOKEN: token, ACTIONS_RESULTS_URL: ev(o, 'ACTIONS_RESULTS_URL') },
       now: () => nowMs(d.clock),
     });
+    const uploadMs = nowMs(d.clock) - uploadStart;
 
     // Re-read: `ci update done` or a final push may have written meanwhile.
     step = 'ledger update';
@@ -155,7 +157,7 @@ export async function tick(o: PusherOptions, d: PusherDeps, last: string[] | nul
           },
         ],
       });
-    d.log(`uploaded ${name} (${built.sources.length} source(s), ${zip.length} bytes)`);
+    d.log(`uploaded ${name} (${built.sources.length} source(s), ${zip.length} bytes, ${uploadMs} ms)`);
     step = 'dispatch';
     await dispatch(o, d, repository, runId);
     return { outcome: 'uploaded', listing };
