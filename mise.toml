@@ -339,11 +339,11 @@ run = [
 description = "Regenerate with --force and fail if git sees a difference (never cached)"
 run = "bash scripts/gen-check.sh"
 
-# The `@perf` unit tests run after the parallel steps finish, not alongside them.
 [tasks."check:static"]
 description = "lint, typecheck and knip (the part of `check` without tests)"
 depends = ["lint", "typecheck", "knip"]
 
+# The `@perf` unit tests run after the parallel steps finish, not alongside them.
 [tasks.check]
 description = """Fast gate: lint, typecheck, unit tests, knip
 Results of lint, typecheck, knip and the parallel unit pass are cached by the content of their inputs, so a second run
