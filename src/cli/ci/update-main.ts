@@ -39,9 +39,17 @@ function needNumber(io: CliIo, name: string): number {
   return n;
 }
 
+/**
+ * The shared timers are unref'd, so while this command only waits for the pusher nothing would keep Node alive: a
+ * referenced timer holds the process open until the shared one fires.
+ */
 const sleep = (deps: WriterDeps, ms: number): Promise<void> =>
   new Promise((resolve) => {
-    deps.timers.after(ms, resolve);
+    const hold = setTimeout(() => undefined, ms + 1_000);
+    deps.timers.after(ms, () => {
+      clearTimeout(hold);
+      resolve();
+    });
   });
 
 /** D60: asks the pusher to stop, waits up to 90 s for its pid file to vanish, then kills it if it is still alive. */
