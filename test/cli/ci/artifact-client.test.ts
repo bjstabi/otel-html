@@ -28,6 +28,7 @@ let server: Server;
 let origin: string;
 let seen: Seen[];
 let statuses: number[];
+let protoNames = false;
 
 beforeEach(async () => {
   seen = [];
@@ -49,9 +50,18 @@ beforeEach(async () => {
       }
       const url = req.url ?? '';
       if (url === `${TWIRP}CreateArtifact`)
-        res.end(JSON.stringify({ ok: true, signedUploadUrl: `${origin}/blob/x?sig=1` }));
+        res.end(
+          JSON.stringify(
+            protoNames
+              ? { ok: true, signed_upload_url: `${origin}/blob/x?sig=1` }
+              : { ok: true, signedUploadUrl: `${origin}/blob/x?sig=1` },
+          ),
+        );
       else if (url.startsWith('/blob/')) res.writeHead(201).end();
-      else if (url === `${TWIRP}FinalizeArtifact`) res.end(JSON.stringify({ ok: true, artifactId: '77' }));
+      else if (url === `${TWIRP}FinalizeArtifact`)
+        res.end(
+          JSON.stringify(protoNames ? { ok: true, artifact_id: '77' } : { ok: true, artifactId: '77' }),
+        );
       else res.writeHead(404).end();
     });
   });
@@ -168,6 +178,15 @@ describe('uploadArtifact', () => {
       return fetch(url, init);
     };
     expect((await upload({ fetchFn })).id).toBe(77);
+  });
+
+  test('a reply with the proto field names is read too', async () => {
+    protoNames = true;
+    try {
+      expect((await upload()).id).toBe(77);
+    } finally {
+      protoNames = false;
+    }
   });
 
   test('a 400 rejects at once', async () => {

@@ -67,6 +67,15 @@ async function send(
   }
 }
 
+/** A Twirp JSON reply; the service may use the proto field names or their lowerCamel JSON names. */
+interface TwirpReply {
+  ok?: unknown;
+  signedUploadUrl?: unknown;
+  signed_upload_url?: unknown;
+  artifactId?: unknown;
+  artifact_id?: unknown;
+}
+
 /** CreateArtifact, then one block-blob PUT of the zip, then FinalizeArtifact; returns the artifact id. */
 export async function uploadArtifact(o: {
   name: string;
@@ -86,16 +95,13 @@ export async function uploadArtifact(o: {
   const ids = backendIds(token);
   const fetchFn = o.fetchFn ?? fetch;
   const sleep = o.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
-  const twirp = async (
-    method: string,
-    body: object,
-  ): Promise<{ ok?: unknown; signedUploadUrl?: unknown; artifactId?: unknown }> => {
+  const twirp = async (method: string, body: object): Promise<TwirpReply> => {
     const res = await send(method, fetchFn, sleep, `${origin.replace(/\/$/, '')}${SERVICE}${method}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
       body: JSON.stringify(body),
     });
-    const json = (await res.json()) as { ok?: unknown; signedUploadUrl?: unknown; artifactId?: unknown };
+    const json = (await res.json()) as TwirpReply;
     if (json.ok !== true) throw new Error(`${method} answered ok: ${String(json.ok)}`);
     return json;
   };
@@ -109,8 +115,10 @@ export async function uploadArtifact(o: {
       ? {}
       : { expiresAt: new Date(o.now() + o.retentionDays * DAY_MS).toISOString() }),
   });
-  const signed = created.signedUploadUrl;
-  if (typeof signed !== 'string' || signed === '') throw new Error('CreateArtifact gave no signedUploadUrl');
+  // A Twirp JSON reply may use the proto field names or their lowerCamel JSON names; the toolkit accepts both.
+  const signed = created.signedUploadUrl ?? created.signed_upload_url;
+  if (typeof signed !== 'string' || signed === '')
+    throw new Error(`CreateArtifact gave no signedUploadUrl (fields: ${Object.keys(created).join(', ')})`);
   await send('the blob upload', fetchFn, sleep, signed, {
     method: 'PUT',
     headers: {
@@ -126,8 +134,9 @@ export async function uploadArtifact(o: {
     size: String(o.zip.length),
     hash: `sha256:${createHash('sha256').update(o.zip).digest('hex')}`,
   });
-  const id = Number(done.artifactId);
-  if (!Number.isSafeInteger(id)) throw new Error('FinalizeArtifact gave no artifactId');
+  const id = Number(done.artifactId ?? done.artifact_id);
+  if (!Number.isSafeInteger(id))
+    throw new Error(`FinalizeArtifact gave no artifactId (fields: ${Object.keys(done).join(', ')})`);
   return { id, size: o.zip.length };
 }
 
