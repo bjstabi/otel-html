@@ -67,7 +67,7 @@ grow.
 **Anti-goals** (the work has failed if one of these is true, even if the dashboard is fast)
 
 - The router or the pruning knows a widget kind, a dashboard name, a `cicd.*` key or anything else from the CI
-  configuration. It may know only the structured request: table, needs, window, the condition's columns.
+  configuration. It may know only the structured request: table, needs, window, the paths the condition reads.
 - The same request gives different answers depending on which files happen to carry a rollup, or on which route
   answered it. **The answer is a function of the request and the data alone.**
 - A report written before this project, or a partition without a rollup, no longer opens.
@@ -175,7 +175,9 @@ What each family must measure when the project is done. "Long" and "short" windo
 | any aggregate whose condition or grouping needs an attribute, a text search or a distinct trace count | `fixed` with a window | `scan` (allowed, and documented in the README as what such a condition costs) | `scan` (allowed) |
 | trace list without a condition, under no window or a long one | `files` (the small `traces` file of each partition, in parallel) | `files` | `files` |
 | trace list with a condition, or under a short window | `files` for `traces`, plus the span scan the condition needs in the partitions that hold the window's traces: `matched` on a sort-key or statistics-key condition, `scan` (allowed) otherwise | | |
-| read by id | `files` (the small `traces` file of each partition, in parallel) | `matched` (the row groups the trace's time range can be in) | not applicable |
+| a trace's spans by id (`getTrace`, `serviceShare`) | `files` (the small `traces` file of each partition, in parallel) | `matched` (the row groups the trace's time range can be in) | not applicable |
+| a trace's logs by id (`traceLogs`) | `files` | `scan` (allowed: the logs files of the trace's partitions, without a time bound, §5.2) | not applicable |
+| the other reads by id (`hasTrace`, `getLog`, `surroundingLogs`) | set by the first PR's baseline; no worse than today | | |
 | patterns | `files` | `files` | `files` |
 | rows page; metrics | set by the first PR's baseline; no worse than today, `fixed` on retention with a window | | |
 
@@ -304,8 +306,9 @@ Details that are part of the design:
   anything is built on it; the expectation is under 2 % of the spans file's bytes. A span name with unbounded values would defeat
   the table, so the writer has a guard: when a partition's rollup would exceed a stated share of its span rows, the
   partition gets no rollup (the manifest then lists none for it) and a warning says which dimension grew.
-- **Compaction and merge** add up the rows of the inputs. An input without a rollup (a format-4 partition, or one
-  the guard refused) gets one computed from its rows where compaction reads them anyway; where a partition is copied
+- **Compaction and merge** add up the rows of inputs whose rollup descriptions are equal. An input without a
+  rollup (a format-4 partition, or one the guard refused) or with a different description gets one computed from
+  its rows where compaction reads them anyway; where a partition is copied
   byte for byte it stays without, which §6.2 handles.
 
 ### 6.2 The router
@@ -330,7 +333,7 @@ Details that are part of the design:
 - **An equivalence test** holds the anti-goal: for every catalogue entry that is rollup-answerable, the answer from
   rollup files, the answer computed from raw files in the rollup's shape and the answer from a mix of both are
   identical on generated data. The data includes a key with values of several kinds, null and empty values, a span
-  that starts exactly on a bucket edge, a duration of zero, a rollup with fewer dimensions than its neighbours, and
+  that starts and a log stamped exactly on a bucket edge and on the window's end, a duration of zero, a rollup with fewer dimensions than its neighbours, and
   a log with no time at all (the raw timeline puts it at the report's epoch; the rollup must put it in the same
   place or such a request is not answerable).
 
@@ -339,10 +342,11 @@ Details that are part of the design:
 - A window is **long** when it covers at least 256 grains (about 4 h 40 min). A report whose whole range is shorter
   (a single run, the product's classic case) never uses the rollup, and nothing about it changes.
 - **No window on a report whose range is long is a long window over the whole range**, for every rule below. (Its
-  buckets would otherwise be finer than the grain: about 4 s on a 5 h range.)
+  buckets would otherwise be finer than the grain: about 4 s on a 5 h range.) It adds no time filter: every row
+  counts as it does today, a log with no time at all included.
 - A long window is aligned outward to the grain where the window is made (the selection state), so every request of
-  a page sees the same window. Its end is exclusive: a span that starts exactly on the end belongs to the next
-  window. (The window test is inclusive today, `whereOf` in `src/query/sql/filter.ts`.)
+  a page sees the same window. Its end is exclusive for every table: a span that starts, or a log stamped, exactly on the end
+  belongs to the next window. (The window tests are inclusive today, `whereOf` in `src/query/sql/filter.ts`.)
 - These rules depend on the window and the report's range, never on the format: a format-4 report with a long range
   gets them too, computed from its raw files.
 - Under a long window, spans are selected and counted by **start time**. Today a span matches a window when it
@@ -407,7 +411,7 @@ moved and the predicted time for today's report.
 
 | # | PR | closes |
 | - | -- | ------ |
-| 1 | The query catalogue, the scaling harness, the baseline and the known-debt list (§3) | |
+| 1 | The query catalogue, the scaling harness, the baseline and the known-debt list; statements built outside `src/query/sql/` move into builders (§3) | |
 | 2 | Test spans keep real times under a faked clock (§5.3) | |
 | 3 | Small `site` files load whole and in parallel (§4) | |
 | 4 | Statistics survive merges; span reads by trace id carry a time bound; `resourceValues` takes the window; the unconditioned trace list without a window reads no span; the log total is its own need (§5.1, §5.2, §3.1, §3.4) | #272 |
@@ -445,11 +449,13 @@ or per statement.
 
 **For the maintainer to confirm** (each changes what gets built):
 
-1. **Format 5** (§8), and with it changes to the CI publishing code under `src/cli/ci/` (`update.ts`,
-   `run-report.ts` and the files that enumerate tables), which runs in the deployer with a write token. No workflow
-   file and no action definition is expected to change, apart from point 5. The unattended process stops before
-   any change to code that runs with a write token on `main`; approving this point lifts that stop for the files
-   under `src/cli/ci/` that the plan lists, and for nothing else.
+1. **Format 5** (§8), **and that this project's source changes run in the deployer.** The deployer checks out
+   `main`, builds it and runs the whole CLI with a write token (`pages-deploy.yml`), so every merged change to the
+   writer, compaction, the format and the CI publishing code (`src/cli/ci/update.ts`, `run-report.ts` and others)
+   runs there on the next deploy: PRs 4, 5 and 7 at least. The unattended process stops before a change to
+   anything that runs with a write token on `main`. Approving this point lifts that stop for the source files
+   under `src/` that the plan lists. It stays for every workflow file, every action definition and anything the
+   plan does not list; none of those is expected to change, apart from point 5.
 2. **Approximate percentiles under long windows** (within about 5 %), exact under short ones (§6.1, §6.3). The
    alternative is that every request that needs a percentile reads the raw spans whatever the window; then the
    Traces page over a long window stays as slow as it is.
@@ -461,9 +467,9 @@ or per statement.
    those pages read the attributes of every span or log in the window on every load, and stay slow on a long window.
 5. **The CI default window, `7d`**, set in `.github/otel-html-ci.yaml` and in the publish action's own
    configuration, `.github/actions/otel-html-publish/otel-html-ci.yaml` (the two files already differ in two `where`
-   lines; only the window is added to each). The second file is inside the `otel-html-publish` action, which the
-   unattended process does not touch without the maintainer's word; approving this point lifts that stop for this
-   one line in that one file.
+   lines; only the window is added to each). The deployer reads the first file; the second is inside the
+   `otel-html-publish` action. The unattended process touches neither without the maintainer's word; approving this
+   point lifts that stop for this one line in each of the two files.
 
 **Calls made in this document** (the author's, to check while reading):
 
@@ -504,7 +510,7 @@ Continue the query-scaling work. Read §11 of docs/superpowers/specs/2026-11-11-
 0. First, `gh pr list --base main --state open` for an open PR of this project (a `docs(spec): query-scaling…` or
    `docs(plan): query-scaling…` title, or a branch the plan's PR table names). An open PR is unfinished work of the
    session that opened it: check out its branch and finish that (read its body, its checks and its review state)
-   instead of starting the step again.
+   instead of starting the step again. When it is merged, apply rules 1 to 4.
 1. The status line at the top of this document says "awaiting the maintainer's approval" → **session 0**.
 2. The document is approved and no `docs/superpowers/plans/*-query-scaling*.md` exists → **session A**.
 3. A plan exists and a PR of its PR table is neither merged nor marked dropped in the plan
@@ -528,11 +534,11 @@ The query-scaling design (docs/superpowers/specs/2026-11-11-query-scaling-design
 **Session A, write the plan:**
 
 ```
-Write the implementation plan for docs/superpowers/specs/2026-11-11-query-scaling-design.md with superpowers:writing-plans. Skip brainstorming: the design is approved. Read the design whole first, then the code it names. The plan follows §9's order; its first task measures whether the Node engine's read counts track Chromium's range requests (§3.3) and its first PR is the catalogue, the harness and the baseline. State in the plan: the PR process is unattended (docs/agents/process-unattended.md); the PR table (branch and title per PR, and a status column where a conditional PR can be marked dropped); per PR, the catalogue entries it must move and what it is held to (§9); the list of files under src/cli/ci/ and the one line of .github/actions/otel-html-publish/otel-html-ci.yaml that the maintainer's approval of §10 points 1 and 5 covers. Run the builder check, save as docs/superpowers/plans/<date>-query-scaling.md, add the execution prompt to §11 of the design if it needs to differ from session B's below, and merge both through one docs PR.
+Write the implementation plan for docs/superpowers/specs/2026-11-11-query-scaling-design.md with superpowers:writing-plans. Skip brainstorming: the design is approved. Read the design whole first, then the code it names. The plan follows §9's order; its first task measures whether the Node engine's read counts track Chromium's range requests (§3.3) and its first PR is the catalogue, the harness and the baseline. State in the plan: the PR process is unattended (docs/agents/process-unattended.md); the PR table (branch and title per PR, and a status column where a conditional PR can be marked dropped); per PR, the catalogue entries it must move and what it is held to (§9); the list of every source file under src/ that each PR changes (the deployer runs all of it with a write token, and the maintainer's approval of §10 point 1 covers the files on this list), and the one line added to .github/otel-html-ci.yaml and to .github/actions/otel-html-publish/otel-html-ci.yaml (§10 point 5). Run the builder check, save as docs/superpowers/plans/<date>-query-scaling.md, add the execution prompt to §11 of the design if it needs to differ from session B's below, and merge both through one docs PR titled "docs(plan): query-scaling plan".
 ```
 
 **Session B, execute the plan:**
 
 ```
-Execute the query-scaling plan (docs/superpowers/plans/*-query-scaling*.md) with superpowers:subagent-driven-development, resuming at the first PR of its PR table that is not merged. The PR process is unattended (docs/agents/process-unattended.md): review on the branch, squash-merge when CI is green, branch the next PR from the updated main. Per CLAUDE.md, implementers and task reviewers run on Sonnet 5.5 and the whole-branch review on Opus 5.5; say which model each review ran on. Every PR body carries the catalogue counts it moved, before and after, and the predicted time for today's rolling report. Stop and ask where the process says so. Its stop for code that runs with a write token on main is lifted only for the files the plan lists under §10 points 1 and 5 of the design; any other workflow file, action or deployer code is a stop. A catalogue entry that misses its class, or a prediction more than 20 % above the plan's expectation table, is a stop (§9). After the last PR, measure the live pages the way §1 of the design did and write the record.
+Execute the query-scaling plan (docs/superpowers/plans/*-query-scaling*.md) with superpowers:subagent-driven-development, resuming at the first PR of its PR table that is neither merged nor marked dropped, on that PR's existing branch if it has one, at the first task whose commit is not on it. The PR process is unattended (docs/agents/process-unattended.md): review on the branch, squash-merge when CI is green, branch the next PR from the updated main. Per CLAUDE.md, implementers and task reviewers run on Sonnet 5.5 and the whole-branch review on Opus 5.5; say which model each review ran on. Every PR body carries the catalogue counts it moved, before and after, and the predicted time for today's rolling report. Stop and ask where the process says so. Its stop for what runs with a write token on main is lifted only for the source files under src/ that the plan lists and for the one window line in the two CI configuration files (§10 points 1 and 5 of the design); a workflow file, an action definition or a source file the plan does not list is a stop. A catalogue entry that misses its class, or a prediction more than 20 % above the plan's expectation table, is a stop (§9). After the last PR, measure the live pages the way §1 of the design did and write the record.
 ```
