@@ -50,7 +50,13 @@
   },
   "overrides": [
     {
-      "includes": ["*.config.ts", "*.config.js", "e2e/global-setup.ts", "test-support/otel/vitest-sdk.ts"],
+      "includes": [
+        "*.config.ts",
+        "*.config.js",
+        "e2e/global-setup.ts",
+        "test-support/otel/vitest-sdk.ts",
+        "scripts/shard-weights-reporter.ts"
+      ],
       "linter": { "rules": { "style": { "noDefaultExport": "off" } } }
     },
     {

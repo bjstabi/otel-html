@@ -974,6 +974,20 @@ biome ci, actionlint, the task graph and the formatting of mise.toml
 
 Install dependencies and git hooks
 
+## `shard-weights`
+
+- Depends: e2e:fixtures
+
+- **Usage:** `shard-weights`
+
+Rewrite test-support/shard-weights.json from timed runs of the unit passes and the three browsers' main passes
+Run when the CI shards drift apart (a few minutes; nothing runs it automatically). CI splits vitest's and Playwright's
+files across shards by these recorded seconds, so every shard computes the same split without state: a file missing from
+the table weighs the median. Unit files get the seconds a worker spends on them (environment, setup, import and tests);
+Playwright spec files the sum of their tests' durations (Chromium's `-file` and `-http` projects together). Failing
+tests still record their durations, and the task then exits non-zero. `-- unit chromium` rewrites only those parts of the table
+(parts: unit, chromium, firefox, webkit); a browser run that hangs is killed after 20 minutes and its part is kept.
+
 ## `test:e2e`
 
 Playwright over the fixture reports, per browser (--browser chromium|firefox|webkit, default all)
