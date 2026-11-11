@@ -166,7 +166,16 @@ after counts of the entries it moved in its body.
 
 ### 3.4 Target classes
 
-What each family must measure when the project is done. "Long" and "short" windows are defined in §6.3.
+What each family must measure when the project is done. "Long" and "short" windows are defined in §6.3. Two
+conditions apply to the table:
+
+- The rollup rows are for partitions that **have** a rollup. A partition without one (written in format 4, refused
+  by the guard, or lacking a needed dimension) is read raw for the same request and costs `scan` on density. The
+  harness measures both; the fallback is allowed, and the README says that such partitions cost more until
+  retention or a compaction replaces them.
+- `files` holds while the file stays under §4's threshold. A `traces` file has one row per trace, so a partition
+  with very many traces has a `traces` file that is read by ranges and grows with the number of traces
+  (`matched`: the list is of traces). The harness's density axis has a step on each side of the threshold.
 
 | family and variant | retention | density | window |
 | ------------------ | --------- | ------- | ------ |
@@ -269,7 +278,9 @@ Two new tables per partition, written by the writer, merged by compaction and by
 
 - **Span rollup.** One row per time bucket × **rollup dimensions** × duration bucket, with the measures count, sum,
   minimum and maximum of `duration_ns`.
-- **Log rollup.** One row per time bucket × rollup dimensions, with the count.
+- **Log rollup.** One row per time bucket × rollup dimensions, with the count. A log with no time at all has no
+  bucket: its rows carry a null time bucket, and the reader places them where the raw timeline does (at the
+  report's epoch). An absolute bucket would go stale when a merge moves the epoch.
 
 Details that are part of the design:
 
@@ -333,9 +344,8 @@ Details that are part of the design:
 - **An equivalence test** holds the anti-goal: for every catalogue entry that is rollup-answerable, the answer from
   rollup files, the answer computed from raw files in the rollup's shape and the answer from a mix of both are
   identical on generated data. The data includes a key with values of several kinds, null and empty values, a span
-  that starts and a log stamped exactly on a bucket edge and on the window's end, a duration of zero, a rollup with fewer dimensions than its neighbours, and
-  a log with no time at all (the raw timeline puts it at the report's epoch; the rollup must put it in the same
-  place or such a request is not answerable).
+  that starts and a log stamped exactly on a bucket edge and on the window's end, a duration of zero, a rollup with
+  fewer dimensions than its neighbours, a log with no time at all, and a merge that moves the report's epoch.
 
 ### 6.3 Long and short windows
 
