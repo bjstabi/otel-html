@@ -683,6 +683,63 @@ without adding minutes to the pipeline's wall time (≈ 5 min on a pull request)
 - [ ] **Step 6: Commit.** `test(query): the scaling measurement runs its shapes in parallel and in CI`. The PR body
       carries the before and after wall times, locally and of the `check` job on the PR's CI run.
 
+### Task 6b: A page is predicted from the union of its entries' reads
+
+Added 2026-11-11 by the maintainer's decision during session B, after Task 6's live check failed: the prediction
+summed each entry's cold cost (2,533 / 4,672 serial requests against 891 / 1,064 live). A page runs in one engine,
+so footers and bytes read by one request are free to the next. An experiment costing the union of a page's entries'
+cold reads matched the one-engine page cost within 25 % on 6 of 10 page × shape cases, exactly on 3, and never
+above; the miss was the trace list's service share over 52 distinct traces. The whole-branch review (Opus 5.5) found
+defects in the per-entry model itself; this task fixes those too.
+
+**Files:**
+
+- Modify: `test-support/scaling/model.ts`, `test-support/scaling/measure.ts`, `test-support/scaling/recording-source.ts`,
+  `scripts/predict-queries.ts`, `test/scaling/model.test.ts`, the measured test files of Task 6a (outputs only),
+  `test/viewer/scaling-pages.test.tsx`; this plan ("Expectations"); §3.3 of the design (the prediction sentence)
+- No `src/` file. No `mise.toml` change unless `predict:queries`'s description must say something new.
+
+**The model:**
+
+1. Each entry's cold read events are split per file into the **open** part (the open, and the footer read: the reads
+   before the first data read, as Task 1's calibration identifies them) and the **data** part (the rest, costed
+   with the read-ahead model). An entry records, per step shape, which files it opens, by role: table, and
+   whether the partition is inside or outside the window.
+2. The data part is fitted per entry as today, `a + R·(r + rd·G) + W·(w + wd·G)`, by **non-negative** least squares
+   (every coefficient ≥ 0). For a `window: false` entry the fit is constrained to `r = w` and `rd = wd` (every
+   partition is read alike).
+3. A page's prediction for a shape = `REQUESTS_PER_OPEN + footer reads` once for every file in the **union** of the
+   files its entries open (by table and partition role, scaled to the shape's partitions), plus the sum of its
+   entries' data parts. A by-id call (`getTrace`, `serviceShare`, `hasTrace`, `traceLogs`, `getLog`,
+   `surroundingLogs`) counts its data part once per **distinct id** the page asked; the recording source records
+   the distinct ids per method.
+4. `--after <pr>` acts **per axis**: a debt line for retention replaces `r, rd`; for window `w, wd`; for density
+   the `G` terms (`rd, wd`), by the line's target (`fixed`: those coefficients 0; `matched`: the `G` terms 0;
+   `files`: 0, plus one parallel request per small file of the partitions read). The open part follows the same rule
+   by the files an improved entry stops opening (an entry `fixed` on retention opens no outside partition).
+5. Density is fitted with one more step than the class steps: a `rowGroups: 16` shape (dense, `outside` and
+   `inside` at BASE), measured only when `OTEL_HTML_SCALING_OUT` is set (the `predict:queries` run), so
+   `test:scaling` does not grow.
+
+- [ ] **Step 1: Failing tests** (`test/scaling/model.test.ts`): non-negative fit recovers a known non-negative model
+      and never returns a negative coefficient on data that would pull one below zero; a `window: false` fit gives
+      `r = w`, `rd = wd`; the union counts a file opened by two entries once; a by-id entry asked for 3 distinct ids
+      costs 3 data parts and its files' opens once; `--after` with a retention line leaves `w, wd` unchanged.
+- [ ] **Step 2: Implement** the split, the fit, the union and the per-axis `--after`.
+- [ ] **Step 3: Check against one engine.** A test (counts, not time) renders each of the five pages on `BASE`,
+      `CROSS` and the `rowGroups: 16` shape in one counting engine and asserts the prediction is within 25 % of the
+      measured page cost. If a page misses, find whether the union, the per-id rule or the fit is wrong before going
+      on; still outside after that is a stop.
+- [ ] **Step 4: Live check, again.** The same day, refresh `shapes/rolling.json` from the live manifest and count
+      the live `#/dashboards/ci` and `#/traces?mode=traces` range requests in headless Chromium (scratch script,
+      not committed), as Task 6 step 5. The `rolling` baseline must be within 25 % of both counts. Outside: a stop,
+      reported with both counts, the prediction and the diagnosis; no constant is tuned to hit the number.
+- [ ] **Step 5: The expectation table.** Rewrite "Expectations (Task 6)" from `mise run predict:queries` (rows 1, 3,
+      4, 6, 8 with `--window 7d`); remove the "not yet usable" note. Update §3.3 of the design: the page prediction is
+      the union of its entries' opens plus the sum of their data parts, by-id calls once per distinct id.
+- [ ] **Step 6: Commit.** `test(query): a page is predicted from the union of its entries' reads`. The PR body
+      carries the one-engine comparison table, the live check and the new expectation table.
+
 ## PR 2: test spans keep real times
 
 ### Task 7: The test SDK stamps spans from the real clock
