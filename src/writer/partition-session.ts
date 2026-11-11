@@ -251,7 +251,7 @@ class PartitionSession implements WriterSession {
     >;
     this.#writer = new PartitionWriter(deps.fs, {
       out,
-      rowGroupRows: config.writer.rowGroupRows,
+      rowGroupRows: deps.rowGroupRows ?? config.writer.rowGroupRows,
       statisticsKeys: this.#statisticsKeys,
       facetValueCap: config.writer.facetValueCap,
       nextPartition: r.nextPartition,
@@ -898,7 +898,7 @@ class PartitionSession implements WriterSession {
       const n = this.#writer.nextPartition;
       const entry = await compactPartitions(this.#deps.fs, this.#out, picks, {
         nextPartition: n,
-        rowGroupRows: this.#config.writer.rowGroupRows,
+        rowGroupRows: this.#deps.rowGroupRows ?? this.#config.writer.rowGroupRows,
         statisticsKeys: this.#statisticsKeys,
         facetValueCap: this.#config.writer.facetValueCap,
         format: this.#config.writer.format,

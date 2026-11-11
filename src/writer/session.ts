@@ -30,6 +30,8 @@ export interface WriterDeps {
    * allocation of a large metrics run there, so trace and log conversions are not slowed down by it.
    */
   beforeMetrics?: () => void;
+  /** Tests only; production never sets it. Read as `deps.rowGroupRows ?? config.writer.rowGroupRows`. */
+  rowGroupRows?: number;
 }
 
 /** `open` appends when the folder holds a report and creates one otherwise; `replace` starts a new report over any report. */
