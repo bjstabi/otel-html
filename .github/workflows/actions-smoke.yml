@@ -130,15 +130,17 @@ jobs:
           UPLOAD_NAME: otel-html-smoke-upload-${{ matrix.os }}
         run: |
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" --paginate --jq '.artifacts[].name' | grep -qxF "$UPLOAD_NAME"
-      - name: The update artifact was uploaded
+      # Every update the ledger lists (the pusher's and the final one, which is empty when the pusher shipped everything)
+      # is an artifact of this run.
+      - name: The update artifacts were uploaded
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          UPDATE: ${{ steps.collect.outputs.update }}
         run: |
-          test -n "$UPDATE"
+          mine=$(node -e "for (const u of JSON.parse(require('fs').readFileSync('.otel-html/publish/uploads.json','utf8')).uploads) console.log(u.name)")
+          test -n "$mine"
           names=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" --paginate --jq '.artifacts[].name')
-          grep -qxF "$UPDATE" <<<"$names"
+          while read -r n; do grep -qxF "$n" <<<"$names" || { echo "::error::$n is not an artifact of this run"; exit 1; }; done <<<"$mine"
       # D67 / §8: this job's updates (the pusher's flush ones and the final compacted one) applied to an empty site.
       - name: Download this run's updates
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -147,17 +149,17 @@ jobs:
           path: downloaded
       - name: The updates apply to a flush then a compaction
         shell: bash
-        env:
-          UPDATE: ${{ steps.collect.outputs.update }}
         run: |
           cat .otel-html/publish/pusher.log || true
-          # One artifact lands in downloaded/ itself: put it in a folder named as its update.
+          # This job's update names come from its ledger: otel-html-update-push-<key>-<sequence>.
+          first=$(node -e "console.log(JSON.parse(require('fs').readFileSync('.otel-html/publish/uploads.json','utf8')).uploads[0].name)")
+          # One artifact in the whole run lands in downloaded/ itself: put it in a folder named as its update.
           if [ -f downloaded/update.json ]; then
-            mkdir -p "downloaded/$UPDATE"
-            find downloaded -mindepth 1 -maxdepth 1 ! -name "$UPDATE" -exec mv {} "downloaded/$UPDATE/" \;
+            mkdir -p "downloaded/$first"
+            find downloaded -mindepth 1 -maxdepth 1 ! -name "$first" -exec mv {} "downloaded/$first/" \;
           fi
-          # The matrix legs share the run: keep this job's updates (the final name is otel-html-update-push-<key>-<sequence>).
-          key=${UPDATE#otel-html-update-push-}
+          # The matrix legs share the run: keep this job's updates.
+          key=${first#otel-html-update-push-}
           key=${key%-*}
           for d in downloaded/*/; do
             case "$(basename "$d")" in "otel-html-update-push-$key-"*) ;; *) rm -rf "$d" ;; esac
