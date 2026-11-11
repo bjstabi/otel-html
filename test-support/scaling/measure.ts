@@ -4,7 +4,7 @@ import { createDuckDbDataSource } from '../../src/viewer/data/duckdb-source.js';
 import { classify, type Step } from './classify.js';
 import { type Cost, costOf } from './cost.js';
 import { type CountingEngine, openCountingEngine, type ReadEvent } from './counting-engine.js';
-import { buildScalingReport, CROSS, type ScalingReport, type Shape, stepsOf } from './generator.js';
+import { buildScalingReport, type ScalingReport, type Shape, stepsOf } from './generator.js';
 
 export const AXES: readonly Axis[] = ['retention', 'density', 'window'];
 
@@ -133,20 +133,10 @@ export interface ModelPoint extends Cost {
   shape: Shape;
 }
 
-/**
- * The cost of `entry` on every shape the model of Task 6 is fitted on: the steps of the three axes and `CROSS`, in the
- * spacing of the entry. An entry without a window is measured on the window-axis shapes too (it ignores the window, so
- * they only add partitions): the model needs every axis to be identifiable.
- */
-export async function modelPointsOf(entry: CatalogueEntry): Promise<ModelPoint[]> {
-  const shapes = new Map<string, Shape>();
-  for (const shape of [
-    ...AXES.flatMap((axis) => stepsOf(axis, entry.spacing)),
-    { ...CROSS, spacing: entry.spacing },
-  ])
-    shapes.set(shapeKey(shape), shape);
+/** The cost of `entry` on each of `shapes`: the points the prediction fits its model on (`mise run predict:queries`). */
+export async function pointsOf(entry: CatalogueEntry, shapes: readonly Shape[]): Promise<ModelPoint[]> {
   const points: ModelPoint[] = [];
-  for (const shape of shapes.values()) points.push({ shape, ...(await measuredOf(entry, shape)).cost });
+  for (const shape of shapes) points.push({ shape, ...(await measuredOf(entry, shape)).cost });
   return points;
 }
 
@@ -154,6 +144,7 @@ export async function modelPointsOf(entry: CatalogueEntry): Promise<ModelPoint[]
 export async function printTable(): Promise<void> {
   const lines: string[] = [];
   for (const entry of CATALOGUE) {
+    if (!seen.has(entry.id)) continue;
     const cells: string[] = [];
     for (const axis of AXES) {
       const steps = seen.get(entry.id)?.get(axis);
@@ -170,6 +161,7 @@ export async function printTable(): Promise<void> {
     }
     lines.push(`${entry.id.padEnd(30)} ${cells.join('  ')}`);
   }
+  if (lines.length === 0) return;
   const cold = coldMs.length === 0 ? 0 : coldMs.reduce((a, b) => a + b, 0) / coldMs.length;
   // stderr: the unit setup swallows console output
   process.stderr.write(

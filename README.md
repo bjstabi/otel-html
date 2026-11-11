@@ -856,7 +856,7 @@ Build the viewer and the DuckDB engine files into dist/viewer (skipped while up 
 - **Usage:** `check`
 
 Fast gate: lint, typecheck, unit tests, knip, the scaling measurement
-Results of lint, typecheck, knip, the parallel unit pass and the scaling measurement (about 4.5 minutes when it runs) are cached by the content of their inputs, so a second run
+Results of lint, typecheck, knip, the parallel unit pass and the scaling measurement (about 1 minute when it runs) are cached by the content of their inputs, so a second run
 with nothing changed skips them. The unit tests with a time budget (named @perf) always run afterwards, alone and one
 file at a time; OTEL_HTML_PERF_FACTOR scales their budgets on a slow machine and, when OTEL_HTML_PERF_REFERENCE_MS is
 set (CI sets 100), so does how much slower than that reference a fixed CPU workload runs here (never below 1; the perf
@@ -972,7 +972,7 @@ biome ci, actionlint, the task graph and the formatting of mise.toml
 
 Print the requests, megabytes and modelled milliseconds the viewer's pages cost on named report shapes
 An estimate: it prints and asserts nothing. Measures every catalogue entry cold on the generated shapes
-(test/scaling/classes.test.ts, about 4.5 minutes; the cached test:scaling does not keep its measurements) and records
+(test/scaling/classes*.test.ts, about 1 minute; the cached test:scaling does not keep its measurements) and records
 what each page asks of the data source (test/viewer/scaling-pages.test.tsx) into dist/predict-queries, then runs
 scripts/predict-queries.ts: per page and per shape (rolling = test-support/scaling/shapes/rolling.json, 30x150k, 90x150k,
 30x1.5M) the serial and parallel requests, megabytes and modelled milliseconds. `-- --after 4 --window 7d` prints the
@@ -1088,11 +1088,13 @@ the Traces and Logs landings with e2e/load.spec.ts.
 
 - **Usage:** `test:scaling`
 
-The scaling measurement: every catalogue entry cold on 14 generated reports, classified and compared with the declared classes
+The scaling measurement: every catalogue entry cold on the generated reports, classified and compared with the declared classes
 Builds the reports of test-support/scaling/generator.ts (retention, density and window at 2, 4 and 8, dense and sparse),
 runs each entry of src/viewer/data/catalogue.ts cold through the counting engine and asserts the class it declares
-(test/scaling/classes.test.ts). About 4.5 minutes on a quiet machine; cached by the content of its inputs, so an unchanged
-tree replays it. `check` depends on it; the unit tasks skip the measurement (OTEL_HTML_SCALING unset).
+(test/scaling/classes-&lt;axis>-&lt;spacing>.test.ts: one file per axis and spacing plus the cross shape, so vitest runs them in
+parallel workers; test/scaling/classes.test.ts holds the cheap declared-rules tests and checks the split covers every entry
+and axis). About 1 minute on 20 cores, 3 minutes on 4; cached by the content of its inputs, so an unchanged tree replays it.
+`check` depends on it and CI's `check` job runs it; the unit tasks skip the measurement (OTEL_HTML_SCALING unset).
 OTEL_HTML_SCALING_PRINT=1 prints the entry x axis x class table to stderr (only on an uncached run).
 
 ## `test:unit`

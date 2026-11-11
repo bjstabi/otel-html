@@ -104,6 +104,8 @@ jobs:
           dispatch-app-private-key: ${{ github.event.sender.type == 'User' && secrets.DEPLOYER_APP_PRIVATE_KEY || '' }}
       - run: mise run gen:check
       - run: mise run check:static
+      # The scaling measurement: every catalogue entry cold on generated reports, its class compared with the declared one.
+      - run: mise run test:scaling
       - if: always()
         uses: ./.github/actions/otel-html-collect
         with:

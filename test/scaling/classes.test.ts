@@ -1,6 +1,7 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { afterAll, describe, expect, test } from 'vitest';
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { describe, expect, test } from 'vitest';
 import {
   type Axis,
   CATALOGUE,
@@ -8,27 +9,13 @@ import {
   DECLARED,
   KNOWN_DEBT,
 } from '../../src/viewer/data/catalogue.js';
-import { classify, type Step } from '../../test-support/scaling/classify.js';
-import {
-  AXES,
-  closeMeasured,
-  modelPointsOf,
-  printTable,
-  stepsFor,
-} from '../../test-support/scaling/measure.js';
+import { AXES } from '../../test-support/scaling/measure.js';
+import { assertedAxes, fileOf, SPLIT } from '../../test-support/scaling/measured-file.js';
 
-const {
-  OTEL_HTML_SCALING_PRINT: PRINT,
-  OTEL_HTML_SCALING: SCALING,
-  OTEL_HTML_SCALING_OUT: OUT,
-} = process.env;
+const { OTEL_HTML_SCALING_OUT: OUT } = process.env;
 
 /** The number of lines the known-debt list may hold; a PR that removes lines lowers it. */
 const DEBT_MAX = 88;
-
-afterAll(async () => {
-  await closeMeasured();
-});
 
 describe('declared classes', () => {
   test('every catalogue entry has a declaration and nothing else does', () => {
@@ -81,34 +68,49 @@ describe('declared classes', () => {
   });
 });
 
-// The measurement takes minutes (it builds 14 reports and runs every entry cold on each): `mise run test:scaling` sets
-// OTEL_HTML_SCALING=1 and `check` depends on it; the unit tasks skip it so it does not run twice.
-describe.skipIf(SCALING !== '1')('measured classes', { timeout: 600_000 }, () => {
-  test.each(CATALOGUE)(
-    '$id measures the class it declares',
-    async (entry) => {
-      // every axis is measured before the first assertion, so the printed table is complete
-      const measured: [Axis, CostClass, CostClass, Step[]][] = [];
-      for (const axis of AXES) {
-        const declared = DECLARED[entry.id]?.class[axis];
-        if (declared === null || declared === undefined) continue;
-        const steps = await stepsFor(entry, axis);
-        measured.push([axis, classify(steps), declared, steps]);
-      }
-      if (OUT !== undefined) {
-        // the points the prediction fits its model on (`mise run predict:queries`); off unless the variable is set
-        const dir = join(OUT, 'measured');
-        mkdirSync(dir, { recursive: true });
-        writeFileSync(join(dir, `${entry.id}.json`), JSON.stringify(await modelPointsOf(entry)));
-      }
-      for (const [axis, got, declared, steps] of measured) {
-        expect(got, `${entry.id} on ${axis}: ${JSON.stringify(steps.map((s) => s.cost))}`).toBe(declared);
-      }
-    },
-    600_000,
-  );
+describe('the split of the measurement', () => {
+  const pairs = (): string[] =>
+    SPLIT.flatMap(({ part, spacing }) =>
+      part === 'cross'
+        ? []
+        : CATALOGUE.filter((e) => e.spacing === spacing && assertedAxes(e).includes(part)).map(
+            (e) => `${e.id}/${part}`,
+          ),
+    );
 
-  test('writes the debt list for the prediction when asked', () => {
+  test('its files assert each (entry, axis) of DECLARED exactly once', () => {
+    const declared = CATALOGUE.flatMap((e) => assertedAxes(e).map((axis) => `${e.id}/${axis}`));
+    expect(declared.length).toBeGreaterThan(0);
+    expect(pairs().sort()).toEqual(declared.sort());
+  });
+
+  test('every part has its file, and no other classes-*.test.ts exists', () => {
+    const files = readdirSync(dirname(fileURLToPath(import.meta.url)))
+      .filter((f) => /^classes-.*\.test\.ts$/.test(f))
+      .sort();
+    expect(files).toEqual(SPLIT.map(fileOf).sort());
+  });
+
+  test('every asserted axis has one of the four classes', () => {
+    const classes: readonly CostClass[] = ['fixed', 'files', 'matched', 'scan'];
+    for (const entry of CATALOGUE)
+      for (const axis of assertedAxes(entry)) {
+        const declared = DECLARED[entry.id]?.class[axis];
+        expect(declared !== null && declared !== undefined && classes.includes(declared), entry.id).toBe(
+          true,
+        );
+      }
+  });
+
+  test('each file runs the part its name says', () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    for (const split of SPLIT)
+      expect(readFileSync(join(here, fileOf(split)), 'utf8'), fileOf(split)).toContain(
+        `defineMeasuredFile('${split.part}', '${split.spacing}');`,
+      );
+  });
+
+  test('writes the debt list and the entries for the prediction when asked', () => {
     if (OUT !== undefined) {
       mkdirSync(OUT, { recursive: true });
       writeFileSync(join(OUT, 'debt.json'), JSON.stringify(KNOWN_DEBT));
@@ -118,11 +120,6 @@ describe.skipIf(SCALING !== '1')('measured classes', { timeout: 600_000 }, () =>
         JSON.stringify(CATALOGUE.map((e) => ({ id: e.id, window: e.window }))),
       );
     }
-    expect(true).toBe(true);
-  });
-
-  test('prints the table when asked', async () => {
-    if (PRINT === '1') await printTable();
     expect(true).toBe(true);
   });
 });

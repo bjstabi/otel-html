@@ -9,6 +9,7 @@ import {
   openCountingEngine,
   RELATIVE_SOURCE,
   type ReadEvent,
+  runningWorkers,
 } from '../../test-support/scaling/counting-engine.js';
 
 const open = (path: string): ReadEvent => ({ path, kind: 'open', offset: 0, bytes: 0 });
@@ -19,7 +20,7 @@ const read = (path: string, offset: number, bytes: number): ReadEvent => ({
   bytes,
 });
 
-describe('the counting Node engine', () => {
+describe('the counting Node engine', { timeout: 60_000 }, () => {
   const closers: (() => Promise<void>)[] = [];
   afterEach(async () => {
     for (const close of closers.splice(0).reverse()) await close();
@@ -62,6 +63,37 @@ describe('the counting Node engine', () => {
     const b = costOf(await run(), new Map());
     expect(b).toEqual(a);
     expect(a.serial).toBeGreaterThan(0);
+  });
+
+  test('two cold() calls in a row each read every footer again, and close() leaves no worker', async () => {
+    const before = runningWorkers();
+    const report = await buildFormat4Report([spansOnlyRequest(40), spansOnlyRequest(40)], { close: false });
+    const dir = await writeReportDir(report);
+    const c = await openCountingEngine(dir.dir, report.manifest);
+    try {
+      // the engine and its spare
+      expect(runningWorkers()).toBe(before + 2);
+      const run = async (): Promise<ReadEvent[]> => {
+        await c.engine.query(Query.from('spans').select({ n: sql`count(*)` }));
+        return await c.take();
+      };
+      const costs: number[] = [];
+      for (let i = 0; i < 3; i++) {
+        await c.cold();
+        // still the engine and one spare, never more
+        expect(runningWorkers()).toBe(before + 2);
+        costs.push(costOf(await run(), new Map()).serial);
+        // the repeat without cold() is served from the caches
+        c.engine.clearCache();
+        expect(costOf(await run(), new Map()).serial).toBeLessThan(costs[i] ?? 0);
+      }
+      expect(costs[0]).toBeGreaterThan(0);
+      expect(new Set(costs).size).toBe(1);
+    } finally {
+      await c.close();
+      await dir.close();
+    }
+    expect(runningWorkers()).toBe(before);
   });
 
   test('take() without cold() after a repeat shows the cache', async () => {

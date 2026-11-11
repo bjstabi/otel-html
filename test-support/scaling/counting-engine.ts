@@ -111,7 +111,15 @@ interface Live {
   db: NodeDuckDb;
   conn: Connection;
   port: MessagePort;
+  /** The events this worker posted since the last take. A spare's start-up reads land here and are dropped at the swap. */
+  events: ReadEvent[];
+  waiting: Map<number, () => void>;
 }
+
+let running = 0;
+
+/** Counting workers started and not yet terminated in this process, spares included (for tests). */
+export const runningWorkers = (): number => running;
 
 /**
  * The viewer's engine over a report folder on disk, in the Node DuckDB-WASM build, with every file read counted. The
@@ -121,33 +129,45 @@ interface Live {
  *
  * `cold()` replaces the worker. DuckDB keeps file footers and file contents in caches that no SQL setting empties
  * (`enable_external_file_cache` and the object-cache pragmas were tried), and a new worker with the views created is
- * the state a page reload gives: the counted statement starts from there in both engines.
+ * the state a page reload gives: the counted statement starts from there in both engines. Starting one takes about
+ * half a second, so the next worker is started in the background right after each swap (the spare) and `cold()` only
+ * waits for it when it is not ready yet; each worker has its own event list, so what the spare reads while it starts
+ * is never counted.
  */
 export async function openCountingEngine(dir: string, manifest: ManifestV4): Promise<CountingEngine> {
   const root = resolve(dir);
   const paths = manifest.partitions.flatMap((p) => Object.values(p.files).map((f) => f.path));
-  let events: ReadEvent[] = [];
-  const waiting = new Map<number, () => void>();
 
   async function start(): Promise<Live> {
     const { port1, port2 } = new MessageChannel();
+    const events: ReadEvent[] = [];
+    const waiting = new Map<number, () => void>();
     port1.on('message', (m: { event?: ReadEvent; marker?: number }) => {
       if (m.event !== undefined) events.push(m.event);
       else if (m.marker !== undefined) waiting.get(m.marker)?.();
     });
     // The worker's port must not keep the test process alive.
     port1.unref();
-    const db = await openNodeDuckDb(packageHostEngineFiles(), {
-      preamble: COUNTING_PREAMBLE,
-      workerData: { countPort: port2, countRoot: root },
-      transferList: [port2],
-    });
+    running++;
+    let db: NodeDuckDb;
+    try {
+      db = await openNodeDuckDb(packageHostEngineFiles(), {
+        preamble: COUNTING_PREAMBLE,
+        workerData: { countPort: port2, countRoot: root },
+        transferList: [port2],
+      });
+    } catch (e) {
+      running--;
+      port1.close();
+      throw e;
+    }
     try {
       for (const path of paths) await db.registerFileURL(path, join(root, path), NODE_FS_PROTOCOL, false);
       const conn = await db.connect();
       for (const sql of viewStatements(manifest, (p) => p)) await conn.query(sql);
-      return { db, conn, port: port1 };
+      return { db, conn, port: port1, events, waiting };
     } catch (e) {
+      running--;
       await db.terminate().catch(() => undefined);
       port1.close();
       throw e;
@@ -157,10 +177,18 @@ export async function openCountingEngine(dir: string, manifest: ManifestV4): Pro
     await live.conn.close().catch(() => undefined);
     await live.db.terminate();
     live.port.close();
+    running--;
+  };
+  /** A start in the background: a failure surfaces where the spare is awaited, not as an unhandled rejection. */
+  const startSpare = (): Promise<Live> => {
+    const made = start();
+    made.catch(() => undefined);
+    return made;
   };
 
   const textDir = await mkdtemp(join(tmpdir(), 'otel-counting-'));
   let live = await start();
+  let spare = startSpare();
   // One connection runs one statement at a time: two pending queries on it interleave their result buffers (the
   // viewer's worker queues them the same way), so concurrent requests such as getTrace's two reads wait in turn.
   let turn: Promise<unknown> = Promise.resolve();
@@ -186,18 +214,16 @@ export async function openCountingEngine(dir: string, manifest: ManifestV4): Pro
   });
   let marker = 0;
   const take = async (): Promise<ReadEvent[]> => {
+    const from = live;
     const id = marker++;
     await new Promise<void>((done) => {
-      waiting.set(id, done);
-      live.port.postMessage({ marker: id });
+      from.waiting.set(id, done);
+      from.port.postMessage({ marker: id });
     });
-    waiting.delete(id);
-    const out = events;
-    events = [];
-    return out;
+    from.waiting.delete(id);
+    return from.events.splice(0);
   };
   await take();
-  events = [];
   return {
     engine,
     take,
@@ -205,13 +231,16 @@ export async function openCountingEngine(dir: string, manifest: ManifestV4): Pro
       engine.clearCache();
       const old = live;
       await take();
-      live = await start();
+      live = await spare;
+      spare = startSpare();
       await stop(old);
       await take();
     },
     close: async () => {
       engine.clearCache();
+      const last = await spare.catch(() => undefined);
       await stop(live);
+      if (last !== undefined) await stop(last);
       await rm(textDir, { recursive: true, force: true });
     },
   };

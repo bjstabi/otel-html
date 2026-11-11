@@ -79,11 +79,16 @@ function readJson(path: string): unknown {
 }
 
 const models = new Map<string, Models>();
-for (const file of readdirSync(join(dir, 'measured')).filter((f) => f.endsWith('.json'))) {
-  const points = z.array(PointSchema).parse(readJson(join(dir, 'measured', file)));
+// One folder per entry, one file per (part, shape) the test files wrote; the base shape is measured by several parts.
+for (const id of readdirSync(join(dir, 'measured'))) {
+  const byShape = new Map<string, z.infer<typeof PointSchema>>();
+  for (const file of readdirSync(join(dir, 'measured', id)).filter((f) => f.endsWith('.json')))
+    for (const point of z.array(PointSchema).parse(readJson(join(dir, 'measured', id, file))))
+      byShape.set(`${point.shape.outside}/${point.shape.inside}/${point.shape.rowGroups}`, point);
+  const points = [...byShape.values()];
   const of = (pick: (p: z.infer<typeof PointSchema>) => number): Model =>
     fitModel(points.map((p) => ({ shape: { ...p.shape, spacing: 'dense' }, serial: pick(p) })));
-  models.set(file.replace(/\.json$/, ''), {
+  models.set(id, {
     serial: of((p) => p.serial),
     parallel: of((p) => p.parallel),
     bytes: of((p) => p.bytes),
