@@ -34,8 +34,12 @@ const SHAPES: readonly Shape[] = [
   CROSS,
 ];
 
+/** The first partition (outside, or inside with no outside) holds `bigRowGroups` groups when the shape has them. */
 const serialOf = (m: Model, s: Shape): number =>
-  m.a + s.outside * (m.r + m.rd * s.rowGroups) + s.inside * (m.w + m.wd * s.rowGroups);
+  m.a +
+  s.outside * (m.r + m.rd * s.rowGroups) +
+  s.inside * (m.w + m.wd * s.rowGroups) +
+  (s.bigRowGroups === undefined ? 0 : (s.bigRowGroups - s.rowGroups) * (s.outside > 0 ? m.rd : m.wd));
 
 describe('fitModel', () => {
   test('recovers a known model exactly', () => {
@@ -128,6 +132,43 @@ describe('a page is fitted from its own measurements', () => {
     expect(page.bytes).toEqual({ a: 1000, r: 1, rd: 0, w: 1, wd: 0 });
   });
 
+  test('a page that grows faster than linearly in the row groups gets a non-negative G squared term', () => {
+    // per partition p + pd G + q G^2: the large partitions of the page shapes carry the curvature
+    const shapes = pageShapes('dense');
+    const cost = (s: Shape): number => {
+      const groups = [
+        s.bigRowGroups ?? s.rowGroups,
+        ...Array.from({ length: s.outside + s.inside - 1 }, () => s.rowGroups),
+      ];
+      return 3 + groups.reduce((n, g) => n + 4 + 0.5 * g + 0.125 * g * g, 0);
+    };
+    const page = fitPage(shapes.map((shape) => ({ shape, serial: cost(shape), parallel: 0, bytes: 0 })));
+    expect(page.serial).toEqual({ a: 3, r: 4, rd: 0.5, w: 4, wd: 0.5, q: 0.125 });
+    const cap = predictPage(page, [inside(22), inside(2)]).serial;
+    expect(cap).toBeCloseTo(3 + (4 + 11 + 0.125 * 484) + (4 + 1 + 0.5), 6);
+  });
+
+  test('a page that is linear gets no G squared term, and a concave one cannot get a negative one', () => {
+    const linear = fitPage(
+      pageShapes('dense').map((shape) => ({
+        shape,
+        serial: 5 + (shape.outside + shape.inside) * 3,
+        parallel: 0,
+        bytes: 0,
+      })),
+    );
+    expect(linear.serial).not.toHaveProperty('q');
+    const concave = fitPage(
+      pageShapes('dense').map((shape) => ({
+        shape,
+        serial: 10 * Math.sqrt(shape.rowGroups) * (shape.outside + shape.inside),
+        parallel: 0,
+        bytes: 0,
+      })),
+    );
+    expect(concave.serial.q ?? 0).toBeGreaterThanOrEqual(0);
+  });
+
   test('a page fit is the same without the cross: three terms are identified by the axes alone', () => {
     const known = { a: 4, r: 2, rd: 1, w: 2, wd: 1 };
     const axes = SHAPES.filter((s) => s !== CROSS);
@@ -144,11 +185,22 @@ describe('the page fit measures density on production-size row groups', () => {
     (spacing) => {
       const shapes = pageShapes(spacing);
       expect(shapes.every((s) => s.rowGroupRows === 50_000 && s.spacing === spacing)).toBe(true);
-      const base = shapes.filter((s) => s.outside === 1 && s.inside === 1);
+      const base = shapes.filter((s) => s.outside === 1 && s.inside === 1 && s.bigRowGroups === undefined);
       expect(base.map((s) => s.rowGroups).sort()).toEqual([1, 2, 3, 4]);
       expect(new Set(shapes.map((s) => s.outside + s.inside)).size).toBeGreaterThanOrEqual(3);
       expect(shapes).not.toContainEqual(PAGE_CROSS(spacing));
       expect(PAGE_CROSS(spacing).rowGroupRows).toBe(50_000);
+    },
+  );
+
+  test.each(['dense', 'sparse'] as const)(
+    '%s: a page shape has a partition of at least 22 groups',
+    (spacing) => {
+      const biggest = Math.max(...pageShapes(spacing).map((s) => s.bigRowGroups ?? s.rowGroups));
+      expect(biggest).toBeGreaterThanOrEqual(22);
+      expect(pageShapes(spacing).filter((s) => s.bigRowGroups !== undefined).length).toBeGreaterThanOrEqual(
+        3,
+      );
     },
   );
 

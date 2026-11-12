@@ -5,7 +5,20 @@ export interface Size {
   outside: number;
   inside: number;
   rowGroups: number;
+  /** Row groups of the first partition, when it is larger than the others. */
+  bigRowGroups?: number | undefined;
 }
+
+/** The row groups of a shape summed over its partitions. */
+export const groupsOf = (s: Size): number =>
+  (s.outside + s.inside) * s.rowGroups + (s.bigRowGroups === undefined ? 0 : s.bigRowGroups - s.rowGroups);
+
+/** The squares of the row groups of each partition, summed (the first partition holds `bigRowGroups`). */
+const squaredGroupsOf = (s: Size): number => {
+  const partitions = s.outside + s.inside;
+  const big = s.bigRowGroups ?? s.rowGroups;
+  return (partitions - 1) * s.rowGroups ** 2 + big ** 2;
+};
 
 /** `serial = a + R * (r + rd * G) + W * (w + wd * G)`: R partitions outside the window, W inside, G row groups each. */
 export interface Model {
@@ -14,6 +27,8 @@ export interface Model {
   rd: number;
   w: number;
   wd: number;
+  /** A page fit only: per partition, `q * G^2` more (the cost of a large partition grows faster than linearly). Absent when 0. */
+  q?: number;
 }
 
 export interface PartitionShape {
@@ -47,11 +62,10 @@ const featuresOf = (s: Size): number[] => [
   s.inside * s.rowGroups,
 ];
 /** A request without a window reads every partition alike: one partition count, one density term. */
-const uniformFeaturesOf = (s: Size): number[] => [
-  1,
-  s.outside + s.inside,
-  (s.outside + s.inside) * s.rowGroups,
-];
+const uniformFeaturesOf = (s: Size): number[] => [1, s.outside + s.inside, groupsOf(s)];
+
+/** `uniformFeaturesOf` with the squares of the partitions' row groups. */
+const quadraticFeaturesOf = (s: Size): number[] => [...uniformFeaturesOf(s), squaredGroupsOf(s)];
 
 /** Solves `m x = v` by Gauss-Jordan elimination with partial pivoting; undefined when `m` is singular. */
 function solve(m: number[][], v: number[]): number[] | undefined {
@@ -140,9 +154,16 @@ function nnls(rows: readonly number[][], y: readonly number[]): number[] {
  */
 export function fitModel(
   points: readonly { shape: Size; serial: number }[],
-  options: { windowless?: boolean } = {},
+  options: { windowless?: boolean; quadratic?: boolean } = {},
 ): Model {
   const y = points.map((p) => p.serial);
+  if (options.windowless === true && options.quadratic === true) {
+    const [a = 0, p = 0, pd = 0, q = 0] = nnls(
+      points.map((p) => quadraticFeaturesOf(p.shape)),
+      y,
+    );
+    return { a, r: p, rd: pd, w: p, wd: pd, ...(q > 0 ? { q } : {}) };
+  }
   if (options.windowless === true) {
     const [a = 0, p = 0, pd = 0] = nnls(
       points.map((p) => uniformFeaturesOf(p.shape)),
@@ -177,11 +198,11 @@ export interface EntryFit extends CostModels {
 }
 
 /** The three models fitted on the points; `windowless` constrains every one to `r = w` and `rd = wd`. */
-function fitCosts(points: readonly FitPoint[], windowless: boolean): CostModels {
+function fitCosts(points: readonly FitPoint[], windowless: boolean, quadratic = false): CostModels {
   const of = (pick: (p: FitPoint) => number): Model =>
     fitModel(
       points.map((p) => ({ shape: p.shape, serial: pick(p) })),
-      { windowless },
+      { windowless, quadratic },
     );
   return { serial: of((p) => p.serial), parallel: of((p) => p.parallel), bytes: of((p) => p.bytes) };
 }
@@ -194,10 +215,10 @@ export function fitEntry(points: readonly FitPoint[], windowless: boolean): Entr
 /**
  * A page's models, fitted on the page rendered whole in one cold engine. The page's window spans the generated report,
  * so every partition is inside it and the page reads them alike: `r = w` and `rd = wd`, which also leaves the shapes
- * identified without the cross.
+ * identified without the cross. A non-negative `G^2` term takes the curvature of the large partitions.
  */
 export function fitPage(points: readonly FitPoint[]): CostModels {
-  return fitCosts(points, true);
+  return fitCosts(points, true, true);
 }
 
 /**
@@ -296,6 +317,7 @@ export function scaledPage(page: CostModels, entries: readonly PageEntry[]): Cos
     rd: m.rd * share.rd,
     w: m.w * share.w,
     wd: m.wd * share.wd,
+    ...(m.q === undefined ? {} : { q: m.q * share.wd }),
   });
   return {
     serial: scale(
@@ -346,7 +368,11 @@ export interface PageCost {
 export function predict(model: Model, partitions: readonly PartitionShape[]): number {
   let total = model.a;
   for (const p of partitions)
-    total += Math.max(0, p.inWindow ? model.w + model.wd * p.rowGroups : model.r + model.rd * p.rowGroups);
+    total += Math.max(
+      0,
+      (p.inWindow ? model.w + model.wd * p.rowGroups : model.r + model.rd * p.rowGroups) +
+        (model.q ?? 0) * p.rowGroups ** 2,
+    );
   return total;
 }
 

@@ -14,7 +14,7 @@ import { openSession } from '../../src/writer/session.js';
 import type { Format4Fixture } from '../format4-fixture.js';
 import { writeReportDir } from '../report-dir.js';
 import { createTestWriter, EPOCH_NS, testConfig } from '../writer-deps.js';
-import { bounded, shareOnce } from './bounded.js';
+import { bounded, STEP_TIMEOUT_MS, shareOnce } from './bounded.js';
 import { ROW_GROUP_ROWS } from './cost.js';
 
 const AXIS_FIELD = { retention: 'outside', window: 'inside', density: 'rowGroups' } as const;
@@ -26,6 +26,8 @@ export interface Shape {
   inside: number;
   /** Spans row groups per partition (G). */
   rowGroups: number;
+  /** Row groups of the first partition when it is larger than the others (a real report has one such partition). */
+  bigRowGroups?: number;
   /** Rows of a row group; the class steps keep `ROW_GROUP_ROWS`, the page measurements use the writer's 50,000. */
   rowGroupRows?: number;
   /** 20 min or 6 h between partition starts. */
@@ -56,7 +58,8 @@ export const PRODUCTION_ROW_GROUP_ROWS = 50_000;
 /**
  * The shapes a page is rendered on for its fit, on production-size row groups: 1 to 4 groups per partition on two
  * partitions, and 2 groups on 3 and 5 partitions (the page's window spans the report, so only the partition count
- * matters; the retention and window steps are the same shapes by another name).
+ * matters; the retention and window steps are the same shapes by another name), and the same two partitions with the
+ * first at 8, 14 and 22 groups, so the fit does not extrapolate to a real report's large partition.
  */
 export function pageShapes(spacing: Shape['spacing']): Shape[] {
   const at = (outside: number, inside: number, rowGroups: number): Shape => ({
@@ -75,6 +78,8 @@ export function pageShapes(spacing: Shape['spacing']): Shape[] {
     at(4, 1, 2),
     at(1, 2, 2),
     at(1, 4, 2),
+    // one large partition, as a real report has: the first holds 8, 14 or 22 groups, the other stays at 2
+    ...[8, 14, 22].map((bigRowGroups): Shape => ({ ...at(1, 1, 2), bigRowGroups })),
   ];
 }
 
@@ -102,15 +107,16 @@ const SPREAD_NS = 10n * 60n * 1_000_000_000n;
 const SPAN_NS = 1_000_000n;
 /** Absolute nanosecond of the first partition's first span: an hour after the writer's clock. */
 const T0 = BigInt(EPOCH_NS) + 3600n * 1_000_000_000n;
-const ID_STRIDE = 1_000_000;
+const ID_STRIDE = 10_000_000;
 
 const hex = (k: number, width: number): string => k.toString(16).padStart(width, '0');
 const str = (key: string, value: string) => ({ key, value: { stringValue: value } });
 const startOf = (shape: Shape, n: number): bigint => T0 + BigInt(n) * SPACING_NS[shape.spacing];
 const rowsPerGroup = (shape: Shape): number => shape.rowGroupRows ?? ROW_GROUP_ROWS;
-const spanCount = (shape: Shape): number => shape.rowGroups * rowsPerGroup(shape);
+const spanCount = (shape: Shape, n: number): number =>
+  (n === 0 ? (shape.bigRowGroups ?? shape.rowGroups) : shape.rowGroups) * rowsPerGroup(shape);
 const spanStart = (shape: Shape, n: number, k: number): bigint =>
-  startOf(shape, n) + (BigInt(k) * SPREAD_NS) / BigInt(spanCount(shape));
+  startOf(shape, n) + (BigInt(k) * SPREAD_NS) / BigInt(spanCount(shape, n));
 const MASK64 = (1n << 64n) - 1n;
 /** SplitMix64: a seeded, deterministic pseudo-random 64-bit value, so a report's bytes depend on its shape only. */
 function splitMix64(seed: bigint): bigint {
@@ -132,37 +138,72 @@ const hex64 = (v: bigint): string => v.toString(16).padStart(16, '0');
 const spanIdOf = (n: number, k: number): string => hex(n * ID_STRIDE + k + 1, 16);
 const routeOf = (k: number): string => `/route/${k % 16}`;
 
-/** Every record of partition `n` as OTLP-JSON objects, one per signal. */
-function partitionJson(shape: Shape, n: number): Record<string, unknown>[] {
-  const count = spanCount(shape);
-  const resourceAttrs = (service: string) => [str('service.name', service), str('run.id', `run-${n}`)];
-  const spans = SERVICES.map(() => [] as unknown[]);
-  for (let k = 0; k < count; k++) {
-    const start = spanStart(shape, n, k);
-    spans[k % 2]?.push({
-      traceId: traceIdOf(n, Math.floor(k / 8)),
-      spanId: spanIdOf(n, k),
-      name: SPAN_NAMES[k % 8],
-      kind: 2,
-      startTimeUnixNano: String(start),
-      endTimeUnixNano: String(start + SPAN_NS),
-      status: k % 16 === 15 ? { code: 2, message: 'failed' } : { code: 1 },
-      attributes: [str('http.request.method', 'GET'), str('http.route', routeOf(k))],
-    });
-  }
+const spanRecord = (shape: Shape, n: number, k: number): unknown => {
+  const start = spanStart(shape, n, k);
+  return {
+    traceId: traceIdOf(n, Math.floor(k / 8)),
+    spanId: spanIdOf(n, k),
+    name: SPAN_NAMES[k % 8],
+    kind: 2,
+    startTimeUnixNano: String(start),
+    endTimeUnixNano: String(start + SPAN_NS),
+    status: k % 16 === 15 ? { code: 2, message: 'failed' } : { code: 1 },
+    attributes: [str('http.request.method', 'GET'), str('http.route', routeOf(k))],
+  };
+};
+
+const logRecord = (shape: Shape, n: number, k: number, logCount: number): unknown => {
+  const time = String(startOf(shape, n) + (BigInt(k) * SPREAD_NS) / BigInt(logCount));
+  const withTrace = Math.floor(k / 2) % 2 === 0;
+  return {
+    timeUnixNano: time,
+    observedTimeUnixNano: time,
+    severityNumber: SEVERITIES[k % 4],
+    body: { stringValue: k % 64 === 0 ? `a needle in log ${k}` : `log line ${k} of partition ${n}` },
+    ...(withTrace ? { traceId: traceIdOf(n, Math.floor((4 * k) / 8)), spanId: spanIdOf(n, 4 * k) } : {}),
+  };
+};
+
+/** Spans of a partition above this many are handed to the writer in requests of this size (a million-span partition does not fit in one JSON tree). */
+const CHUNK_SPANS = 65_536;
+
+/**
+ * The requests of a partition larger than `CHUNK_SPANS`: each service's spans, then its logs, in pieces, in the order the
+ * one-request form arrives (all of the first service, then all of the second), then the metrics.
+ */
+function* chunkedPartitionJson(shape: Shape, n: number): Generator<Record<string, unknown>> {
+  const count = spanCount(shape, n);
   const logCount = count / 4;
-  const logs = SERVICES.map(() => [] as unknown[]);
-  for (let k = 0; k < logCount; k++) {
-    const time = String(startOf(shape, n) + (BigInt(k) * SPREAD_NS) / BigInt(logCount));
-    const withTrace = Math.floor(k / 2) % 2 === 0;
-    logs[k % 2]?.push({
-      timeUnixNano: time,
-      observedTimeUnixNano: time,
-      severityNumber: SEVERITIES[k % 4],
-      body: { stringValue: k % 64 === 0 ? `a needle in log ${k}` : `log line ${k} of partition ${n}` },
-      ...(withTrace ? { traceId: traceIdOf(n, Math.floor((4 * k) / 8)), spanId: spanIdOf(n, 4 * k) } : {}),
-    });
+  const resource = (service: string) => ({
+    attributes: [str('service.name', service), str('run.id', `run-${n}`)],
+  });
+  for (const [i, service] of SERVICES.entries()) {
+    for (let lo = 0; lo < count; lo += CHUNK_SPANS) {
+      const spans: unknown[] = [];
+      for (let k = lo + i; k < Math.min(count, lo + CHUNK_SPANS); k += 2) spans.push(spanRecord(shape, n, k));
+      yield {
+        resourceSpans: [{ resource: resource(service), scopeSpans: [{ scope: { name: 'scaling' }, spans }] }],
+      };
+    }
   }
+  for (const [i, service] of SERVICES.entries()) {
+    for (let lo = 0; lo < logCount; lo += CHUNK_SPANS) {
+      const logs: unknown[] = [];
+      for (let k = lo + i; k < Math.min(logCount, lo + CHUNK_SPANS); k += 2)
+        logs.push(logRecord(shape, n, k, logCount));
+      yield {
+        resourceLogs: [
+          { resource: resource(service), scopeLogs: [{ scope: { name: 'scaling' }, logRecords: logs }] },
+        ],
+      };
+    }
+  }
+  yield metricsJson(shape, n);
+}
+
+/** The metrics request of partition `n`: two gauges and a summary. */
+function metricsJson(shape: Shape, n: number): Record<string, unknown> {
+  const resourceAttrs = (service: string) => [str('service.name', service), str('run.id', `run-${n}`)];
   const metrics: Record<string, unknown>[] = METRICS.map((name, m) => ({
     name,
     unit: '1',
@@ -198,6 +239,25 @@ function partitionJson(shape: Shape, n: number): Record<string, unknown>[] {
       }),
     },
   });
+  return {
+    resourceMetrics: [
+      {
+        resource: { attributes: resourceAttrs(SERVICES[0]) },
+        scopeMetrics: [{ scope: { name: 'scaling' }, metrics }],
+      },
+    ],
+  };
+}
+
+/** Every record of partition `n` as OTLP-JSON objects, one per signal. */
+function partitionJson(shape: Shape, n: number): Record<string, unknown>[] {
+  const count = spanCount(shape, n);
+  const resourceAttrs = (service: string) => [str('service.name', service), str('run.id', `run-${n}`)];
+  const spans = SERVICES.map(() => [] as unknown[]);
+  for (let k = 0; k < count; k++) spans[k % 2]?.push(spanRecord(shape, n, k));
+  const logCount = count / 4;
+  const logs = SERVICES.map(() => [] as unknown[]);
+  for (let k = 0; k < logCount; k++) logs[k % 2]?.push(logRecord(shape, n, k, logCount));
   return [
     {
       resourceSpans: SERVICES.map((service, i) => ({
@@ -211,14 +271,7 @@ function partitionJson(shape: Shape, n: number): Record<string, unknown>[] {
         scopeLogs: [{ scope: { name: 'scaling' }, logRecords: logs[i] }],
       })),
     },
-    {
-      resourceMetrics: [
-        {
-          resource: { attributes: resourceAttrs(SERVICES[0]) },
-          scopeMetrics: [{ scope: { name: 'scaling' }, metrics }],
-        },
-      ],
-    },
+    metricsJson(shape, n),
   ];
 }
 
@@ -236,11 +289,12 @@ async function build(shape: Shape): Promise<ScalingReport> {
   const session = await openSession(w.deps, { out: OUT, config, mode: 'replace' });
   const partitions = shape.outside + shape.inside;
   for (let n = 0; n < partitions; n++) {
-    const requests: OtlpRequest[] = partitionJson(shape, n).flatMap((json) =>
-      parseOtlpObject(json, `scaling:${n}`),
-    );
+    const jsons =
+      spanCount(shape, n) > CHUNK_SPANS ? chunkedPartitionJson(shape, n) : partitionJson(shape, n);
     let i = 0;
-    for (const request of requests) await session.add(request, `scaling:${n}:${i++}`);
+    for (const json of jsons)
+      for (const request of parseOtlpObject(json, `scaling:${n}`) as OtlpRequest[])
+        await session.add(request, `scaling:${n}:${i++}`);
     await session.flush();
   }
   const text = w.fs.snapshot().get(`${OUT}/data/manifest.js`);
@@ -260,7 +314,7 @@ async function build(shape: Shape): Promise<ScalingReport> {
 
   const first = shape.outside;
   const last = partitions - 1;
-  const lastSpan = spanCount(shape) - 1;
+  const lastSpan = spanCount(shape, last) - 1;
   const window: TimeWindow = {
     start: Number(spanStart(shape, first, 0) - epoch),
     end: Number(spanStart(shape, last, lastSpan) + SPAN_NS - epoch),
@@ -293,7 +347,7 @@ async function build(shape: Shape): Promise<ScalingReport> {
 }
 
 const shapeKey = (shape: Shape): string =>
-  `${shape.outside}-${shape.inside}-${shape.rowGroups}-${shape.spacing}-${rowsPerGroup(shape)}`;
+  `${shape.outside}-${shape.inside}-${shape.rowGroups}-${shape.spacing}-${rowsPerGroup(shape)}-${shape.bigRowGroups ?? 0}`;
 
 /** The folder of the reports `prebuildScalingReports` made, set by the scaling global setup for the worker processes. */
 export const PREBUILT_ENV = 'OTEL_HTML_SCALING_REPORTS';
@@ -316,7 +370,12 @@ async function ensurePrebuilt(root: string, shape: Shape): Promise<string> {
     what: `the report ${shapeKey(shape)}`,
     done: async () => (existsSync(join(target, 'meta.json')) ? target : undefined),
     make: async () => {
-      const r = await bounded(build(shape), `building the report ${shapeKey(shape)}`);
+      // a report of production-size row groups holds up to a million spans: building it takes minutes, not a step's bound
+      const r = await bounded(
+        build(shape),
+        `building the report ${shapeKey(shape)}`,
+        shape.rowGroupRows === undefined ? STEP_TIMEOUT_MS : 10 * STEP_TIMEOUT_MS,
+      );
       const meta: Meta = { epoch: String(r.epoch), window: r.window, ids: r.ids };
       await writeFile(join(r.dir, 'meta.json'), JSON.stringify(meta));
       await rename(r.dir, target);
@@ -348,7 +407,7 @@ const cache = new Map<string, Promise<ScalingReport>>();
  * scaling global setup (`OTEL_HTML_SCALING_REPORTS`) the report is taken from that folder, built there by the first worker that needs it.
  */
 export function buildScalingReport(shape: Shape): Promise<ScalingReport> {
-  const key = `${shape.outside}/${shape.inside}/${shape.rowGroups}/${shape.spacing}/${rowsPerGroup(shape)}`;
+  const key = `${shape.outside}/${shape.inside}/${shape.rowGroups}/${shape.spacing}/${rowsPerGroup(shape)}/${shape.bigRowGroups ?? 0}`;
   const hit = cache.get(key);
   if (hit !== undefined) return hit;
   const prebuilt = process.env[PREBUILT_ENV];

@@ -141,13 +141,22 @@ Four classes, per entry and axis:
   bytes. A small **cost model** (one module, constants from the measurement in §1: about 15 ms per serial request,
   one round trip per parallel batch, a bytes term) turns the counts into a predicted time. The model's output is
   printed, never asserted.
-- **Prediction for a dashboard or page**: given a dashboard configuration and a report shape (partitions, rows per
-  partition, window), the harness sums the entries its widgets map to. A mise task prints the table for named shapes:
-  today's rolling report, 30 runs × 150,000 spans, 90 runs × 150,000, 30 runs × 1,500,000. This is the "how will it
-  scale" answer without a load test, and it works for a dashboard that does not exist yet.
-- Row groups have to be small for a small report to behave like a large one. `writer.rowGroupRows` has a minimum of
-  50,000 and keeps it; the harness gets small row groups through an internal writer option that the configuration
-  does not expose.
+- **Prediction for a dashboard or page**: a page runs in one engine, where a read one entry shares with another is free,
+  so the page is not the sum of its entries. The harness renders each page whole in one cold counting engine on
+  generated shapes (dense and sparse spacing; partitions of 1 to 4 production-size row groups and partitions of 8, 14
+  and 22) and fits its serial requests, parallel requests and bytes per axis with the per-entry form, by non-negative
+  least squares (with a non-negative squared term in the row groups per partition, which a page whose cost grows faster
+  than linearly takes). The prediction for a named shape is that fit summed over the shape's partitions, each by its own
+  row groups. A later PR's effect is the fit scaled, term by term, by the share of that term that the page's entries
+  without a debt line for that PR still carry. A mise task prints the table for named shapes: today's rolling report,
+  30 runs × 150,000 spans, 90 runs × 150,000, 30 runs × 1,500,000. On the live report the fit stays at about half the
+  requests Chromium makes (four live checks, 0.3 to 0.6), so the expectations of `rolling` are anchored on the live
+  counts and a later PR is held to the live baseline times the harness's after/before ratio; the other shapes are
+  harness absolutes, not live-calibrated. This is the "how will it scale" answer without a load test, and it works for
+  a dashboard that does not exist yet.
+- The entries are measured on small row groups (a small report behaves like a large one): `writer.rowGroupRows` has a
+  minimum of 50,000 and keeps it, and the harness gets 8,192-row groups through an internal writer option that the
+  configuration does not expose. A page's density is measured at production row-group size (50,000 rows).
 
 **Where it runs** is settled by the plan's first task, by measurement:
 

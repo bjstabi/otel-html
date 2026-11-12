@@ -680,7 +680,7 @@ env = { OTEL_HTML_SCALING = "1", OTEL_HTML_SCALING_OUT = "dist/predict-queries",
 run = """
 eval "set -- $usage_args"
 rm -rf "$OTEL_HTML_SCALING_OUT"
-pnpm exec vitest run test/scaling/classes test/viewer/scaling-pages.test.tsx
+pnpm exec vitest run test/scaling/classes test/viewer/scaling-pages
 bun scripts/predict-queries.ts "$@"
 """
 

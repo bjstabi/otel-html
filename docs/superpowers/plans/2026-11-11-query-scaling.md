@@ -1895,15 +1895,26 @@ Requests per group grow with the column chunk size, which small groups of the sy
 Task 6 fills this table in PR 1 from `mise run predict:queries`; each later PR is held to its row (more than 20 %
 above it is a stop). Cells are serial requests, dashboard / trace list.
 
-| after PR      | rolling     | 30x150k       | 90x150k        | 30x1.5M         |
-| ------------- | ----------- | ------------- | -------------- | --------------- |
-| 1 (baseline)  | 2,533 / 4,672 | 3,572 / 6,459 | 10,850 / 18,979 | 8,002 / 27,277 |
-| 3             | 2,197 / 772   | 3,092 / 999   | 9,410 / 2,599   | 7,522 / 757    |
-| 4             | 1,291 / 545   | 1,825 / 675   | 5,610 / 1,628   | 848 / 199      |
-| 6             | 841 / 199     | 1,200 / 199   | 3,733 / 199     | 669 / 199      |
-| 8 (window 7d) | 841 / 199     | 1,030 / 199   | 3,123 / 199     | 7,158 / 199    |
+The `rolling` column is anchored on what Chromium made on the live report on 2026-11-12 (891 and 1,064 Range GETs plus
+HEADs, cold): the row after PR 1 is those counts, and each later row is the live baseline times the harness page's
+after/before ratio for that PR (the page prediction after the PR over the prediction at PR 1, from `predict:queries`
+on the rolling shape). The other three columns are harness absolutes (**harness, not live-calibrated**): they are
+`mise run predict:queries` on the generated shapes, with the rolling window none for PRs 1-6 and 7d after PR 8.
 
-Taken on 2026-11-11 from `mise run predict:queries` (rolling is the snapshot of that day, 21 partitions). Not yet a
-usable bound: the live check of Task 6 step 5 found the baseline 2.8 and 4.4 times the requests Chromium made on the
-live report (891 and 1,064), because the model adds the cold cost of every entry a page asks while the page opens each
-file once; the 30x1.5M column also extrapolates the fitted line from 8 to 30 row groups. See the Task 6 report.
+| after PR      | rolling (live-anchored) | 30x150k (harness) | 90x150k (harness) | 30x1.5M (harness) |
+| ------------- | ----------------------- | ----------------- | ----------------- | ----------------- |
+| 1 (baseline)  | 891 / 1,064             | 667 / 822         | 2,002 / 2,465     | 2,666 / 4,906     |
+| 3             | 842 / 1,064             | 631 / 822         | 1,894 / 2,465     | 2,631 / 4,906     |
+| 4             | 754 / 536             | 567 / 421         | 1,700 / 1,264     | 1,982 / 903       |
+| 6             | 672 / 456             | 505 / 361         | 1,516 / 1,082     | 1,760 / 521       |
+| 8 (window 7d) | 672 / 456             | 245 / 84          | 577 / 84          | 1,256 / 122       |
+
+Taken on 2026-11-12 (rolling is the snapshot of that day, 21 partitions, one of 1,076,590 spans). Why the absolute model
+is not used for `rolling`: the page is fitted from its own measurements in one engine and reproduces every generated
+shape within 25 % (CROSS left out; 40 cases, five pages, dense and sparse), but on the live report it stays at about half the
+requests Chromium makes. The four live checks, as predicted / live for the dashboard and the trace list: 0.46 / 0.32
+(page fitted on small row groups), 0.51 / 0.33 (random trace ids), 0.56 / 0.57
+(production-size row groups, 1-4 per partition) and 0.53 / 0.55 (with partitions of 8, 14 and 22 groups). The gap is
+therefore not in the row-group size, the trace ids or a large partition; the live partitions cost about 1.3 times the
+generated ones at the same size and the harness cannot say why. A later PR is held to the live baseline times the ratio
+the harness measures for it, which is what a change to the reads moves. See the Task 6c report.

@@ -44,7 +44,7 @@ interface Measured {
 }
 
 const shapeKey = (s: Shape): string =>
-  `${s.outside}/${s.inside}/${s.rowGroups}/${s.spacing}/${s.rowGroupRows ?? ''}`;
+  `${s.outside}/${s.inside}/${s.rowGroups}/${s.spacing}/${s.rowGroupRows ?? ''}/${s.bigRowGroups ?? ''}`;
 const lives = new Map<string, Promise<Live>>();
 const measured = new Map<string, Promise<Measured>>();
 const coldMs: number[] = [];

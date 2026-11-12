@@ -143,6 +143,14 @@ describe('the scaling report generator', { timeout: 120_000 }, () => {
     expect(r.manifest.partitions.map((p) => p.files.spans?.rows)).toEqual([50_000, 50_000]);
   }, 180_000);
 
+  test('a shape can hold one large partition, with span ids that stay unique', async () => {
+    const r = await build({ outside: 1, inside: 1, rowGroups: 1, spacing: 'dense', bigRowGroups: 3 });
+    expect(r.manifest.partitions.map((p) => p.files.spans?.rows)).toEqual([
+      3 * ROW_GROUP_ROWS,
+      ROW_GROUP_ROWS,
+    ]);
+  });
+
   test('CROSS and the axis steps ask for the shapes the model needs', () => {
     expect(CROSS).toEqual({ outside: 4, inside: 2, rowGroups: 4, spacing: 'dense' });
     expect(stepsOf('density', 'sparse').map((s) => [s.rowGroups, s.spacing])).toEqual([

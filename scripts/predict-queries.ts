@@ -74,7 +74,12 @@ if (!(threshold > 0)) fail(`--threshold takes a number of bytes, got ${arg('--th
 // ---- the measurements and the recordings
 
 const PointSchema = z.object({
-  shape: z.object({ outside: z.number(), inside: z.number(), rowGroups: z.number() }),
+  shape: z.object({
+    outside: z.number(),
+    inside: z.number(),
+    rowGroups: z.number(),
+    bigRowGroups: z.number().optional(),
+  }),
   serial: z.number(),
   parallel: z.number(),
   bytes: z.number(),
@@ -110,6 +115,10 @@ for (const id of readdirSync(join(dir, 'measured'))) {
 
 /** The pages rendered whole on the generated shapes, fitted per page and spacing (short entries: dense; long: sparse). */
 const pageFits = new Map<string, CostModels>();
+/** The page measurements per page and spacing, and the fit left without the cross (`PAGE_CROSS` in generator.ts). */
+const pagePoints = new Map<string, FitPoint[]>();
+const isPageCross = (s: FitPoint['shape']): boolean =>
+  s.outside === 2 && s.inside === 1 && s.rowGroups === 3 && s.bigRowGroups === undefined;
 const pageKey = (page: string, long: boolean): string => `${page}|${long ? 'sparse' : 'dense'}`;
 for (const page of PAGES)
   for (const spacing of ['dense', 'sparse'] as const) {
@@ -119,6 +128,7 @@ for (const page of PAGES)
       const p = PointSchema.parse(readJson(join(folder, f)));
       return { shape: p.shape, serial: p.serial, parallel: p.parallel, bytes: p.bytes };
     });
+    pagePoints.set(pageKey(page, spacing === 'sparse'), points);
     try {
       pageFits.set(pageKey(page, spacing === 'sparse'), fitPage(points));
     } catch (e) {
@@ -365,12 +375,12 @@ print(
   for (const [key, f] of pageFits) {
     const m = f.serial;
     print(
-      `  page fit ${key}: serial ${m.a} + P (${m.w} + ${m.wd} G); parallel ${f.parallel.a} + P (${f.parallel.w} + ${f.parallel.wd} G); bytes ${fmt(f.bytes.a)} + P (${fmt(f.bytes.w)} + ${fmt(f.bytes.wd)} G)`,
+      `  page fit ${key}: serial ${m.a} + P (${m.w} + ${m.wd} G${m.q === undefined ? '' : ` + ${m.q} G^2`}); parallel ${f.parallel.a} + P (${f.parallel.w} + ${f.parallel.wd} G); bytes ${fmt(f.bytes.a)} + P (${fmt(f.bytes.w)} + ${fmt(f.bytes.wd)} G)`,
     );
   }
 }
 print(
-  `the page fits are measured on row groups of ${SPANS_PER_ROW_GROUP.toLocaleString('en-US')} rows, 1 to 4 per partition; a shape with more (30x1.5M: ${Math.ceil(1_500_000 / SPANS_PER_ROW_GROUP)}) extrapolates the fit past 4`,
+  `the page fits are measured on row groups of ${SPANS_PER_ROW_GROUP.toLocaleString('en-US')} rows, 1 to 4 per partition, and one partition of 8, 14 and 22; a partition with more than 22 extrapolates the fit`,
 );
 print(
   `serial ${SERIAL_REQUEST_MS} ms, a batch of ${PARALLEL_WIDTH} parallel requests ${PARALLEL_BATCH_MS} ms, ${MS_PER_MB} ms per MB; an estimate, nothing is asserted`,
@@ -392,24 +402,48 @@ for (const page of PAGES) {
   }
 }
 
-const CheckSchema = z.object({
-  spacing: z.string(),
-  shape: z.string(),
-  page: z.string(),
-  predicted: z.number(),
-  measured: z.number(),
-});
+/** Within this share of the page in one engine, or this many requests (a page of 4 requests), the fit counts as right. */
+const TOLERANCE = 0.25;
+const SLACK = 2;
 print('\none engine: the fit without CROSS against the page rendered whole (serial requests):');
-print('  spacing  page                      shape           predicted  measured  ratio');
-for (const spacing of ['dense', 'sparse'])
-  for (const page of PAGES)
-    for (const shape of ['BASE', 'CROSS', 'rowGroups-4']) {
-      const file = join(dir, 'one-engine', `${spacing}-${shape}-${encodeURIComponent(page)}.json`);
-      const c = CheckSchema.parse(readJson(file));
+print('  spacing  page                      shape                   predicted  measured  ratio');
+const misses: string[] = [];
+for (const spacing of ['dense', 'sparse'] as const)
+  for (const page of PAGES) {
+    const points = pagePoints.get(pageKey(page, spacing === 'sparse')) ?? [];
+    const fit = fitPage(points.filter((p) => !isPageCross(p.shape)));
+    const checked: [string, (p: FitPoint['shape']) => boolean][] = [
+      [
+        'BASE (2 x 2 groups)',
+        (s) => s.outside + s.inside === 2 && s.rowGroups === 2 && s.bigRowGroups === undefined,
+      ],
+      ['CROSS (3 x 3 groups)', isPageCross],
+      ['2 x 4 groups', (s) => s.outside + s.inside === 2 && s.rowGroups === 4],
+      ['2 partitions, one of 22', (s) => s.bigRowGroups === 22],
+    ];
+    for (const [name, is] of checked) {
+      const point = points.find((p) => is(p.shape));
+      if (point === undefined) {
+        misses.push(`${spacing} ${page} ${name}: not measured`);
+        continue;
+      }
+      const s = point.shape;
+      const partitions: PartitionShape[] = Array.from({ length: s.outside + s.inside }, (_, i) => ({
+        rowGroups: i === 0 ? (s.bigRowGroups ?? s.rowGroups) : s.rowGroups,
+        inWindow: true,
+        smallFiles: 0,
+      }));
+      const predicted = predictPage(fit, partitions).serial;
       print(
-        `  ${spacing.padEnd(7)}  ${page.padEnd(24)}  ${shape.padEnd(12)} ${c.predicted.toFixed(1).padStart(10)} ${fmt(c.measured).padStart(9)} ${(c.predicted / c.measured).toFixed(2).padStart(6)}`,
+        `  ${spacing.padEnd(7)}  ${page.padEnd(24)}  ${name.padEnd(22)} ${predicted.toFixed(1).padStart(10)} ${fmt(point.serial).padStart(9)} ${(predicted / point.serial).toFixed(2).padStart(6)}`,
       );
+      if (!(Math.abs(predicted - point.serial) <= Math.max(SLACK, TOLERANCE * point.serial)))
+        misses.push(
+          `${spacing} ${page} ${name}: predicted ${predicted.toFixed(1)}, measured ${point.serial}`,
+        );
     }
+  }
+if (misses.length > 0) process.exitCode = 1;
 
 print('\nmapping, by catalogue entry (calls mapped on the rolling shape):');
 for (const page of PAGES) {
@@ -420,3 +454,4 @@ for (const page of PAGES) {
 
 print(`\nexpectation row (serial requests, dashboard / trace list), after ${after}, window ${windowArg}:`);
 print(`  ${[...summary].map(([name, [d, t]]) => `${name}: ${d} / ${t}`).join('   ')}`);
+if (misses.length > 0) print(`\nthe one-engine check missed:\n  ${misses.join('\n  ')}`);
