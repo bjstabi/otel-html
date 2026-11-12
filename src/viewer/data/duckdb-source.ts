@@ -600,7 +600,8 @@ export function createDuckDbDataSource(opts: {
                 ),
               )[0] ?? {};
             result.matched = toNumber(cell(row, 'matched') ?? 0n, 'matched');
-            result.total = toNumber(cell(row, 'n') ?? 0n, 'n');
+            // with `rows` asked (traces mode) its statement set the total already
+            if (!needs.has('rows')) result.total = toNumber(cell(row, 'n') ?? 0n, 'n');
           })(),
         );
       }
@@ -780,7 +781,17 @@ export function createDuckDbDataSource(opts: {
       read(['spans'], filter.files, traceSpansQuery(traceId, files, epoch, bound), signal),
       withLogs ? read(['traces'], undefined, traceSummaryQuery(traceId), signal) : null,
     ]);
-    const { rows, tables } = spanRows(spans, epoch);
+    let { rows, tables } = spanRows(spans, epoch);
+    if (bound !== null) {
+      // A span whose end is before its start can lie outside the bound (the bound is [min start, max end]): when the
+      // traces rows count more spans than came back, read again without the bound. Only malformed traces pay this.
+      const expected = traceRows.reduce((n, r) => n + Number(cell(r, 'span_count') ?? 0n), 0);
+      if (rows.length < expected)
+        ({ rows, tables } = spanRows(
+          await read(['spans'], filter.files, traceSpansQuery(traceId, files, epoch), signal),
+          epoch,
+        ));
+    }
     if (rows.length === 0) throw traceNotFound(traceId);
     const logCount =
       summary === null ? 0 : toNumber(cell(rowsOf(summary)[0] ?? {}, 'log_count') ?? 0n, 'log_count');

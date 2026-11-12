@@ -233,7 +233,7 @@ export function groupStatsQuery(f: SqlFilter, _table: 'spans', key: string, cap:
     .limit(cap + 1);
 }
 
-/** The `traces` files that name the trace (one per partition holding a part of it). */
+/** The `traces` files that name the trace (one per partition holding a part of it); with `withBounds`, each file's time range and `span_count` too. */
 export function tracePartitionsQuery(traceId: TraceId, withBounds = false): Query {
   const byTrace = eq(column('trace_id'), literal(traceId));
   if (!withBounds)
@@ -244,6 +244,7 @@ export function tracePartitionsQuery(traceId: TraceId, withBounds = false): Quer
       filename: column('filename'),
       min_start: sql`min(start_time_unix_nano) FILTER (WHERE ${timed})`,
       max_end: sql`max(end_time_unix_nano) FILTER (WHERE ${timed})`,
+      span_count: sql`CAST(sum(span_count) AS BIGINT)`,
     })
     .where(byTrace)
     .groupby('filename')

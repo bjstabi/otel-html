@@ -820,3 +820,62 @@ describe('preparing the files a statement reads', () => {
     expect(events.map((e) => e.kind)).toEqual(['prepare', 'query']);
   });
 });
+
+describe('getTrace and serviceShare with a span that ends before it starts', () => {
+  const T4 = parseTraceId(hex(4, 32), 'test');
+  const T5 = parseTraceId(hex(5, 32), 'test');
+  let g: Format4Fixture;
+  let gdb: TestDb;
+  const fresh = () =>
+    createDuckDbDataSource({
+      engine: mosaicQueryEngine(createCoordinator(gdb.connector, silentLogger), gdb),
+      manifest: g.manifest,
+    });
+  const arrows = async <T>(fn: () => Promise<T>): Promise<{ value: T; arrow: number }> => {
+    const before = gdb.connector.requests.length;
+    const value = await fn();
+    return {
+      value,
+      arrow: gdb.connector.requests.slice(before).filter((r) => r.type === 'arrow').length,
+    };
+  };
+
+  beforeAll(async () => {
+    g = await buildFormat4Report(
+      [
+        request([
+          // a single span whose end is before its start
+          { trace: 4, id: 1, svc: 'svc-a', name: 'solo', startMs: 5000, durMs: -100 },
+          // the latest-starting span of a longer trace ends before it starts, outside [min start, max end]
+          { trace: 5, id: 20, svc: 'svc-a', name: 'root', startMs: 2000, durMs: 50 },
+          { trace: 5, id: 21, parent: 20, svc: 'svc-b', name: 'late', startMs: 2100, durMs: -2200 },
+          // a normal trace
+          { trace: 1, id: 30, svc: 'svc-a', name: 'ok', startMs: 0, durMs: 10 },
+        ]),
+      ],
+      { close: false },
+    );
+    gdb = await openFixtureDb(g);
+  });
+
+  test('a single-span trace with end before start opens with its span', async () => {
+    const detail = await fresh().getTrace(T4);
+    expect(detail.spans.map((s) => s.span.name)).toEqual(['solo']);
+  });
+
+  test('a multi-span trace keeps the span that lies outside the bound, for getTrace and serviceShare', async () => {
+    const detail = await fresh().getTrace(T5);
+    expect(detail.spans.map((s) => s.span.name)).toEqual(['root', 'late']);
+    expect((await fresh().serviceShare(T5)).map((x) => x.service).sort()).toEqual(['svc-a', 'svc-b']);
+  });
+
+  test('a normal trace does not read again: partitions, spans and summary, three statements', async () => {
+    const open = await arrows(() => fresh().getTrace(T1));
+    expect(open.arrow).toBe(3);
+    const share = await arrows(() => fresh().serviceShare(T1));
+    expect(share.arrow).toBe(2);
+    // the malformed trace pays one more
+    expect((await arrows(() => fresh().getTrace(T5))).arrow).toBe(4);
+    expect((await arrows(() => fresh().serviceShare(T5))).arrow).toBe(3);
+  });
+});
