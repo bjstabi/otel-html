@@ -459,4 +459,57 @@ describe('refreshReport and the small-file loader', () => {
     await r.done;
     expect(held.filter((h) => h.startsWith('during:')).length).toBe(r.forgotten.length);
   });
+  const gated = (f: ReturnType<typeof fakes>) => {
+    const events: string[] = [];
+    let depth = 0;
+    const db = f.engine.db as unknown as Record<string, (name: string) => Promise<void>>;
+    for (const op of ['dropFile', 'registerFileURL']) {
+      const original = db[op];
+      db[op] = async (name: string) => {
+        events.push(`${op} ${name} ${depth > 0 ? 'held' : 'free'}`);
+        await original?.(name);
+      };
+    }
+    (f.engine as { gate?: unknown }).gate = {
+      wait: async () => {},
+      hold: async <T>(change: () => Promise<T>) => {
+        depth += 1;
+        try {
+          return await change();
+        } finally {
+          depth -= 1;
+        }
+      },
+    };
+    return events;
+  };
+
+  test('a failed refresh registers a rewritten path by URL again and forgets it, inside the file gate', async () => {
+    const f = fakes('site', (st) => st.includes('CREATE'));
+    const events = gated(f);
+    const next = { ...manifestOf([0, 1]), updatedAt: '2026-11-06T00:00:09.000Z' };
+    const grown = next.partitions[0];
+    if (grown?.files.spans) grown.files.spans = { ...grown.files.spans, bytes: 99 };
+    const r = withSmall(f, manifestOf([0]), next);
+    await expect(r.done).rejects.toThrow('view failed');
+    const spans = partitionFilePath(0, 'spans');
+    const mine = events.filter((e) => e.includes(spans));
+    expect(mine).toEqual([
+      `dropFile ${spans} held`,
+      `registerFileURL ${spans} held`,
+      `dropFile ${spans} held`,
+      `registerFileURL ${spans} held`,
+    ]);
+    expect(r.forgotten.filter((p) => p === spans)).toHaveLength(2);
+  });
+
+  test('a failed refresh drops the paths it added inside the file gate', async () => {
+    const f = fakes('site', (st) => st.includes('CREATE'));
+    const events = gated(f);
+    const next = { ...manifestOf([0, 1]), updatedAt: '2026-11-06T00:00:09.000Z' };
+    await expect(withSmall(f, manifestOf([0]), next).done).rejects.toThrow('view failed');
+    const drops = events.filter((e) => e.startsWith('dropFile'));
+    expect(drops.length).toBeGreaterThan(0);
+    expect(drops.every((e) => e.endsWith(' held'))).toBe(true);
+  });
 });

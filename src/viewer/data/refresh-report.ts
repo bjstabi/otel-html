@@ -61,21 +61,21 @@ export async function refreshReport(
   const newSizes = sizeOf(manifest);
   const rewritten = wanted.filter((f) => had.has(f.path) && oldSizes.get(f.path) !== newSizes.get(f.path));
   deps.adoptSizes?.(manifest);
+  // No statement runs between the drop and the registration of a rewritten path.
+  const reregister = async (): Promise<void> => {
+    for (const { path } of rewritten) {
+      deps.smallFiles?.forget([path]);
+      await dropFiles(engine, [path]);
+    }
+    await registerFiles(engine, rewritten, deps);
+  };
   try {
-    // No statement runs between the drop and the registration of a rewritten path.
-    const reregister = async (): Promise<void> => {
-      for (const { path } of rewritten) {
-        deps.smallFiles?.forget([path]);
-        await dropFiles(engine, [path]);
-      }
-      await registerFiles(engine, rewritten, deps);
-    };
-    if (rewritten.length > 0) await (engine.gate ? engine.gate.hold(reregister) : reregister());
+    if (rewritten.length > 0) await held(engine, reregister);
     await registerFiles(engine, added, deps);
     await createViews(engine, manifest);
   } catch (error) {
     deps.adoptSizes?.(previous);
-    await rollBack(engine, previous, added, deps.logger, deps.smallFiles);
+    await rollBack(engine, previous, added, rewritten, deps, reregister);
     throw error;
   }
   // Last and best-effort: the views no longer read these files, so a failed drop only leaks a registration.
@@ -94,25 +94,37 @@ export async function refreshReport(
   return { dataSource, manifest };
 }
 
+const held = <T>(engine: Engine, change: () => Promise<T>): Promise<T> =>
+  engine.gate ? engine.gate.hold(change) : change();
+
 /**
- * Best effort after a refresh failed part-way: the views of the manifest the page still shows, and the files this
- * refresh registered dropped. A rollback that fails too is logged; the caller rethrows the original error.
+ * Best effort after a refresh failed part-way: a rewritten path registered by URL again (the buffer it held is gone and
+ * the server no longer serves its old bytes, so it is fetched whole again), the views of the manifest the page still
+ * shows, and the files this refresh added dropped. A rollback that fails too is logged; the caller rethrows the
+ * original error.
  */
 async function rollBack(
   engine: Engine,
   previous: ManifestV4,
   added: ReturnType<typeof manifestFiles>,
-  logger: Logger,
-  small?: Pick<SmallFiles, 'forget'>,
+  rewritten: ReturnType<typeof manifestFiles>,
+  deps: RefreshDeps,
+  reregister: () => Promise<void>,
 ): Promise<void> {
+  const { logger } = deps;
+  if (rewritten.length > 0) {
+    await held(engine, reregister).catch((error: unknown) => {
+      logger.error('could not restore the rewritten files after a failed refresh', error);
+    });
+  }
   try {
     await createViews(engine, previous);
   } catch (error) {
     logger.error('could not restore the previous views after a failed refresh', error);
   }
   for (const { path } of added) {
-    small?.forget([path]);
-    await dropFiles(engine, [path]).catch((error: unknown) => {
+    deps.smallFiles?.forget([path]);
+    await held(engine, () => dropFiles(engine, [path])).catch((error: unknown) => {
       logger.error(`could not drop ${path} after a failed refresh`, error);
     });
   }
