@@ -379,4 +379,33 @@ describe('refreshReport and the small-file loader', () => {
     expect(f.calls.drop).toEqual([partitionFilePath(0, 'spans')]);
     expect(f.calls.url.map(([name]) => name)).toEqual([partitionFilePath(0, 'spans')]);
   });
+  test('the drop and re-registration of a rewritten path run inside the file gate', async () => {
+    const f = fakes('site');
+    const events: string[] = [];
+    let depth = 0;
+    const db = f.engine.db as unknown as Record<string, (name: string) => Promise<void>>;
+    for (const op of ['dropFile', 'registerFileURL']) {
+      const original = db[op];
+      db[op] = async (name: string) => {
+        events.push(`${op} ${depth > 0 ? 'held' : 'free'}`);
+        await original?.(name);
+      };
+    }
+    (f.engine as { gate?: unknown }).gate = {
+      wait: async () => {},
+      hold: async <T>(change: () => Promise<T>) => {
+        depth += 1;
+        try {
+          return await change();
+        } finally {
+          depth -= 1;
+        }
+      },
+    };
+    const next = { ...manifestOf([0, 1]), updatedAt: '2026-11-06T00:00:09.000Z' };
+    const grown = next.partitions[0];
+    if (grown?.files.spans) grown.files.spans = { ...grown.files.spans, bytes: 99 };
+    await withSmall(f, manifestOf([0, 1]), next).done;
+    expect(events).toEqual(['dropFile held', 'registerFileURL held']);
+  });
 });

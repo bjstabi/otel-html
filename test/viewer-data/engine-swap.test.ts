@@ -62,3 +62,21 @@ test('a register failure leaves the path readable by URL, rethrows, and releases
   await statement;
   expect(log).toEqual(['drop a', 'url a http://x/a', 'stmt SELECT 1']);
 });
+
+test('when the URL fallback fails too, the original error is kept as the cause and the statements are released', async () => {
+  const { engine, log, connector } = fake(true);
+  (engine.db as unknown as { registerFileURL: () => Promise<void> }).registerFileURL = async () => {
+    throw new Error('url failed');
+  };
+  const swap = swapToBuffer(engine, 'a', new Uint8Array(1), 'http://x/a');
+  const outcome = swap.then(
+    () => null,
+    (e: unknown) => e as Error,
+  );
+  const statement = connector.query({ type: 'exec', sql: 'SELECT 1' } as never, {} as never);
+  const error = await outcome;
+  await statement;
+  expect(error?.message).toContain('url failed');
+  expect((error?.cause as Error | undefined)?.message).toBe('no memory');
+  expect(log).toContain('stmt SELECT 1');
+});

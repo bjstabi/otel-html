@@ -59,11 +59,16 @@ export async function refreshReport(
   const newSizes = sizeOf(manifest);
   const rewritten = wanted.filter((f) => had.has(f.path) && oldSizes.get(f.path) !== newSizes.get(f.path));
   try {
-    for (const { path } of rewritten) {
-      deps.smallFiles?.forget([path]);
-      await dropFiles(engine, [path]);
-    }
-    await registerFiles(engine, [...rewritten, ...added], deps);
+    // No statement runs between the drop and the registration of a rewritten path.
+    const reregister = async (): Promise<void> => {
+      for (const { path } of rewritten) {
+        deps.smallFiles?.forget([path]);
+        await dropFiles(engine, [path]);
+      }
+      await registerFiles(engine, rewritten, deps);
+    };
+    if (rewritten.length > 0) await (engine.gate ? engine.gate.hold(reregister) : reregister());
+    await registerFiles(engine, added, deps);
     await createViews(engine, manifest);
   } catch (error) {
     await rollBack(engine, previous, added, deps.logger, deps.smallFiles);
