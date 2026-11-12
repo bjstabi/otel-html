@@ -3,7 +3,7 @@ import type { PartitionEntry, PartitionFile } from '../format/manifest.js';
 import { checkRow } from '../format/parquet/codec.js';
 import { TABLES, type Table } from '../format/parquet/columns.js';
 import { applyNormalization, logRow, pointRow, type Row, spanRow } from '../format/parquet/rows.js';
-import { statisticsKeysFor } from '../format/parquet/stats.js';
+import { completeStatistics, statisticsKeysFor } from '../format/parquet/stats.js';
 import {
   DEFAULT_ASSETS_BASE,
   LOCK_PATH,
@@ -845,11 +845,19 @@ class PartitionSession implements WriterSession {
             bytes,
           );
         }
+        // The input may not have recorded a key this report lists (another config wrote it): compute it from the bytes.
+        const done = await completeStatistics(
+          table,
+          f,
+          this.#statisticsKeys[table],
+          this.#config.writer.facetValueCap,
+          () => Promise.resolve(bytes),
+        );
         const values: Record<string, string[] | null> = Object.create(null) as Record<
           string,
           string[] | null
         >;
-        for (const k of this.#statisticsKeys[table]) values[k] = f.values[k] ?? null;
+        for (const k of this.#statisticsKeys[table]) values[k] = done.values[k] ?? null;
         files[table] = { path, bytes: f.bytes, rows: f.rows, timeMin: f.timeMin, timeMax: f.timeMax, values };
       }
     } catch (e) {

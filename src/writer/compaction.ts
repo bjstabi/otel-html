@@ -218,20 +218,6 @@ class StatisticsFold {
   }
 }
 
-/** A key that is unknown (`null`, or absent) in any input stays unknown: the merged rows cannot tell what a partition did not record. */
-function keepUnknown(
-  stats: FileStatistics,
-  inputs: readonly PartitionFile[],
-  keys: readonly string[],
-): FileStatistics {
-  const values: Record<string, string[] | null> = Object.create(null) as Record<string, string[] | null>;
-  for (const k of keys) {
-    const unknown = inputs.some((f) => f.values[k] === null || f.values[k] === undefined);
-    values[k] = unknown ? null : (stats.values[k] ?? null);
-  }
-  return { ...stats, values };
-}
-
 // -- re-aggregated tables -------------------------------------------------------------------------------------------
 
 interface Located {
@@ -553,7 +539,7 @@ async function mergeTable(
  *   `aggregatePatterns`), folded into one accumulator per trace or cluster as the rows are read: what is held follows the distinct traces and clusters, not the rows of the inputs.
  *
  * Every input file's schema is checked first (`invalid-report` for a foreign or old file); nothing is converted.
- * Statistics come from the merged rows, except that a key unknown in any input stays unknown.
+ * Statistics come from the merged rows, so a key some input did not record is still known.
  */
 export async function compactPartitions(
   fs: FileSystem,
@@ -626,7 +612,7 @@ export async function compactPartitions(
           at(out, path),
         );
       }
-      files[table] = { path, bytes: size, ...keepUnknown(stats, inputs, keys) };
+      files[table] = { path, bytes: size, ...stats };
     }
   } catch (e) {
     if (created) await fs.removeDir(dir).catch(() => undefined);

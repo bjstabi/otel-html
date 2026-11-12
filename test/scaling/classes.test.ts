@@ -16,7 +16,7 @@ import { assertedAxes, fileOf, SPLIT } from '../../test-support/scaling/measured
 const { OTEL_HTML_SCALING_OUT: OUT } = process.env;
 
 /** The number of lines the known-debt list may hold; a PR that removes lines lowers it. */
-const DEBT_MAX = 74;
+const DEBT_MAX = 69;
 
 describe('declared classes', () => {
   test('every catalogue entry has a declaration and nothing else does', () => {
@@ -88,6 +88,10 @@ describe('declared classes', () => {
 
   test('the small-file debt (#281) is paid: no line of it remains', () => {
     expect(KNOWN_DEBT.filter((d) => d.issue === 281)).toEqual([]);
+  });
+
+  test('the merged-statistics debt (#272) is paid: no line of it remains', () => {
+    expect(KNOWN_DEBT.filter((d) => d.issue === 272)).toEqual([]);
   });
 
   test('the debt list has not grown', () => {

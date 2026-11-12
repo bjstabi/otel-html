@@ -1,8 +1,10 @@
 import type { ResolvedDashboard } from '../../config/schema.js';
 import type { AnyValue, Attributes } from '../../model/anyvalue.js';
 import { attributesFromJson } from '../columns.js';
+import type { PartitionFile } from '../manifest.js';
 import type { ColumnBatch } from './batch.js';
 import { FIXED_STATISTICS_COLUMNS, TABLE_COLUMNS, type Table, TIME_COLUMN } from './columns.js';
+import { readColumns } from './stream.js';
 
 export interface FileStatistics {
   rows: number;
@@ -136,4 +138,44 @@ export function statisticsKeysFor(
   for (const d of config.dashboards) for (const v of d.dashboard.variables) out.add(`resource:${v.key}`);
   for (const k of config.writer.statisticsKeys) out.add(k);
   return [...out].filter((k) => sourceOf(table, k) !== null);
+}
+
+/**
+ * `entry` with every key of `keys` it has no values for (absent or `null`) computed by decoding the file: values
+ * already recorded are kept. A key stays `null` when its distinct values exceed `cap` (as `fileStatistics` applies it)
+ * or the table cannot answer it. `read` is called only when a key is missing, and the file is streamed.
+ */
+export async function completeStatistics(
+  table: Table,
+  entry: PartitionFile,
+  keys: readonly string[],
+  cap: number,
+  read: () => Promise<Uint8Array>,
+): Promise<PartitionFile> {
+  const missing = keys.filter((k) => entry.values[k] == null);
+  if (missing.length === 0) return entry;
+  const sets = new Map<string, Set<string> | null>(missing.map((k) => [k, new Set<string>()]));
+  const bytes = await read();
+  const names = TABLE_COLUMNS[table].map((c) => c.name);
+  for await (const cols of readColumns(table, new Blob([bytes as Uint8Array<ArrayBuffer>]), entry.path)) {
+    const cells: Record<string, unknown[]> = {};
+    for (const [i, name] of names.entries()) cells[name] = cols[i] ?? [];
+    const st = fileStatistics(table, { length: cols[0]?.length ?? 0, cells }, missing, cap);
+    for (const k of missing) {
+      const set = sets.get(k);
+      if (set === null || set === undefined) continue;
+      const vals = st.values[k];
+      if (vals === null || vals === undefined) sets.set(k, null);
+      else {
+        for (const v of vals) set.add(v);
+        if (set.size > cap) sets.set(k, null);
+      }
+    }
+  }
+  const values = { ...entry.values };
+  for (const k of missing) {
+    const set = sets.get(k);
+    values[k] = set === null || set === undefined ? null : [...set].sort();
+  }
+  return { ...entry, values };
 }

@@ -178,7 +178,7 @@ describe('merge copies format-4 partitions', () => {
     expect(await rows(w, 'm', 'spans')).toBe(2);
   });
 
-  test('statistics keys are the output config: kept keys carry over, new keys are null, dropped keys go', async () => {
+  test('statistics keys are the output config: kept keys carry over, new keys are computed from the file, dropped keys go', async () => {
     const w = createTestWriter();
     await v4Report(w, 'a', [spansRequest(2)], 'site', { statisticsKeys: ['attr:old'] });
     const before = v4Manifest(w, 'a').partitions[0]?.files.spans;
@@ -188,7 +188,7 @@ describe('merge copies format-4 partitions', () => {
       w.deps,
     );
     const after = v4Manifest(w, 'm').partitions[0]?.files.spans;
-    expect(after?.values['attr:new']).toBeNull();
+    expect(after?.values['attr:new']).toEqual([]); // computed from the bytes: no row has the attribute
     expect(after?.values['attr:old']).toBeUndefined();
     expect(after && Object.keys(after.values)).toEqual(v4Manifest(w, 'm').statisticsKeys.spans);
   });

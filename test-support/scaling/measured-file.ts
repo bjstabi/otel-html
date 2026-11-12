@@ -11,7 +11,7 @@ import {
 import { classify, type Step } from './classify.js';
 import { REQUESTS_PER_OPEN, ROW_GROUP_ROWS } from './cost.js';
 import { HARNESS_SMALL_FILE_BYTES } from './counting-engine.js';
-import { BASE, buildScalingReport, CROSS, type Shape, stepsOf } from './generator.js';
+import { BASE, buildScalingReport, CROSS, isMerged, type Shape, stepsOf } from './generator.js';
 import {
   AXES,
   closeMeasured,
@@ -66,7 +66,12 @@ export function defineMeasuredFile(part: Part, spacing: Shape['spacing']): void 
   const shapesOf = (entry: CatalogueEntry): Shape[] =>
     part === 'cross'
       ? [{ ...CROSS, spacing }]
-      : [...stepsOf(part, spacing), ...(hasDensity16(entry) ? extra : [])];
+      : [
+          ...stepsOf(part, spacing, isMerged(entry)),
+          ...(hasDensity16(entry)
+            ? extra.map((x) => ({ ...x, ...(isMerged(entry) ? { merged: true } : {}) }))
+            : []),
+        ];
   afterAll(async () => {
     await closeMeasured();
   });

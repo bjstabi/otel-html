@@ -829,8 +829,7 @@ const owed = (
  * `scan`s that §3.4 does not allow, each owed to an issue and a PR of the plan; the list only shrinks. Grouped by
  * cause: #271 (a spans file wholly before the window is opened, long-window aggregates scan raw files, a read by
  * trace id has no time bound; PR 4 and PR 6), #281 (small files read serially; PR 3, done), #282 (resourceValues, the
- * unconditioned trace list; PR 4), #272 (statistics lost in a merge) and #283 (compaction), the last two not yet
- * measured.
+ * unconditioned trace list; PR 4), and #283 (compaction), not yet measured.
  */
 export const KNOWN_DEBT: readonly DebtLine[] = [
   ...owed(271, 4, 'density', 'matched', true, ['trace.get', 'trace.share']),
@@ -909,12 +908,5 @@ export const KNOWN_DEBT: readonly DebtLine[] = [
     'traces.list.all.long',
     'resourceValues.all',
   ]),
-  ...owed(272, 4, 'retention', 'fixed', false, [
-    'spans.total.statkey.short',
-    'spans.total.statkey.long',
-    'logs.timeline.statkey.short',
-    'logs.timeline.statkey.long',
-  ]),
-  ...owed(272, 4, 'retention', 'files', false, ['traces.list.statkey.long']),
   ...owed(283, 7, 'retention', 'fixed', false, ['spans.total.short', 'spans.total.long']),
 ];

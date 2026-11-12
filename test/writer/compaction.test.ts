@@ -266,7 +266,7 @@ describe('compactPartitions: merged tables', () => {
     expect(stats).toEqual(fileStatistics('logs', batchFromRows('logs', rowsPer.flat()), KEYS.logs, 100));
   });
 
-  test('a key unknown (null) in any input stays unknown', async () => {
+  test('a key that only one of two compacted files knows is computed for the other, not dropped', async () => {
     const r = lcg(5);
     let id = 0;
     const rowsPer = [4, 4].map((n) => Array.from({ length: n }, () => logRow(id++, r)));
@@ -279,7 +279,7 @@ describe('compactPartitions: merged tables', () => {
     if (first === undefined) throw new Error('no file');
     first.values = { ...first.values, 'attr:k': null };
     const out = await compactPartitions(fs, OUT, entries, opts(2));
-    expect(out.files.logs?.values['attr:k']).toBeNull();
+    expect(out.files.logs?.values['attr:k']).toEqual(['v0', 'v1', 'v2']);
     expect(Reflect.get(out.files.logs?.values ?? {}, 'scope_name')).not.toBeNull();
   });
 
