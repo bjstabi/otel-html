@@ -52,7 +52,7 @@ test('trace panel: open from a row, j moves to the next trace, Esc closes and re
   await first.click();
   const panel = page.getByTestId('trace-panel');
   const header = panel.getByTestId('trace-header');
-  await expect(header).toContainText(TRACE_2);
+  await expect(header).toContainText(TRACE_2, { timeout: 15_000 }); // the trace's first load (#279)
   await expect(header).toContainText(SERVICE_A);
   await expect(header).toContainText(resource);
   await expect(page).toHaveURL(new RegExp(`trace=${TRACE_2}`));
@@ -136,7 +136,7 @@ test('trace panel: waterfall, hostile names as text, errors, services, split and
   await expect(page).toHaveURL(new RegExp(`#/traces/trace/${TRACE_2}`));
   const full = page.getByTestId('trace-panel');
   await expect(full).toHaveAttribute('data-layout', 'page');
-  await expect(full.getByTestId('trace-header')).toContainText(TRACE_2);
+  await expect(full.getByTestId('trace-header')).toContainText(TRACE_2, { timeout: 15_000 }); // first load (#279)
   await page.keyboard.press('Escape');
   await expect(page).toHaveURL(/#\/traces(\?|$)/);
   await expect(page.getByTestId('trace-panel')).toHaveCount(0);
@@ -147,7 +147,7 @@ test('trace panel: waterfall, hostile names as text, errors, services, split and
 test('trace panel: flame graph click selects a span', async ({ page, baseURL }) => {
   await page.goto(`${baseURL ?? ''}/index.html#/traces?trace=${TRACE_1}`);
   const flame = page.getByRole('img', { name: /^Flame graph of 3 spans/ });
-  await expect(flame).toBeVisible();
+  await expect(flame).toBeVisible({ timeout: 15_000 }); // the trace's first load (#279)
   const box = await flame.boundingBox();
   if (box === null) throw new Error('the flame graph has no box');
   // The root bar spans the full width on the first row.

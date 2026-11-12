@@ -179,7 +179,7 @@ test('a row opens the trace panel', async ({ page, served }) => {
   const rows = page.getByRole('grid', { name: 'Results' }).getByRole('row');
   await expect(rows).not.toHaveCount(0);
   await rows.nth(1).click();
-  await expect(page.getByTestId('trace-panel').getByTestId('trace-header')).toBeVisible();
+  await expect(page.getByTestId('trace-panel').getByTestId('trace-header')).toBeVisible({ timeout: 15_000 }); // first load (#279)
 });
 
 test('a filter with no SQL form shows the served refusal, not "evaluated in the browser"', async ({

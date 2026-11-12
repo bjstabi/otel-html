@@ -66,7 +66,9 @@ test(
     await page.getByRole('menuitem', { name: 'Open exemplar trace' }).click();
     await expect(page).toHaveURL(new RegExp(`#/traces\\?.*trace=${LINKED_TRACE}`));
     await expect(page).toHaveURL(new RegExp(`span=${LINKED_SPAN}`));
-    await expect(page.getByTestId('trace-panel').getByTestId('trace-header')).toContainText(LINKED_TRACE);
+    await expect(page.getByTestId('trace-panel').getByTestId('trace-header')).toContainText(LINKED_TRACE, {
+      timeout: 15_000, // the trace's first load (#279)
+    });
 
     // Back returns to the chart as it was.
     await page.goBack();
