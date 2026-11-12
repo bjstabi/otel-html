@@ -141,8 +141,8 @@ export function statisticsKeysFor(
 }
 
 /**
- * `entry` with every key of `keys` it has no values for (absent or `null`) computed by decoding the file: values
- * already recorded are kept. A key stays `null` when its distinct values exceed `cap` (as `fileStatistics` applies it)
+ * `entry` with every key of `keys` it lacks (absent: "not computed") computed by decoding the file: values
+ * already recorded are kept, a recorded `null` ("over the cap") too, so it is not decoded again. A key stays `null` when its distinct values exceed `cap` (as `fileStatistics` applies it)
  * or the table cannot answer it. `read` is called only when a key is missing, and the file is streamed.
  */
 export async function completeStatistics(
@@ -152,7 +152,7 @@ export async function completeStatistics(
   cap: number,
   read: () => Promise<Uint8Array>,
 ): Promise<PartitionFile> {
-  const missing = keys.filter((k) => entry.values[k] == null);
+  const missing = keys.filter((k) => entry.values[k] === undefined);
   if (missing.length === 0) return entry;
   const sets = new Map<string, Set<string> | null>(missing.map((k) => [k, new Set<string>()]));
   const bytes = await read();

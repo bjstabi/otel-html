@@ -196,7 +196,7 @@ describe('completeStatistics', () => {
     };
     const out = await completeStatistics(
       'logs',
-      entry({ severity_text: ['kept'], 'resource:run': null }),
+      entry({ severity_text: ['kept'] }),
       ['severity_text', 'resource:run'],
       10,
       read,
@@ -212,6 +212,17 @@ describe('completeStatistics', () => {
     );
     expect(same.values).toEqual({ severity_text: ['x'] });
     expect(reads).toBe(1); // nothing missing: the file is not read
+  });
+
+  test('a recorded null (over the cap) is kept and the file is not read again', async () => {
+    let reads = 0;
+    const read = async () => {
+      reads++;
+      return bytes;
+    };
+    const out = await completeStatistics('logs', entry({ 'resource:run': null }), ['resource:run'], 10, read);
+    expect(out.values).toEqual({ 'resource:run': null });
+    expect(reads).toBe(0);
   });
 
   test('leaves a key null when its values exceed the cap', async () => {

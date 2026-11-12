@@ -277,9 +277,15 @@ describe('compactPartitions: merged tables', () => {
     );
     const first = entries[0]?.files.logs;
     if (first === undefined) throw new Error('no file');
-    first.values = { ...first.values, 'attr:k': null };
+    const second = entries[1]?.files.logs;
+    if (second === undefined) throw new Error('no file');
+    const { 'attr:k': _dropped, ...without } = first.values;
+    first.values = without; // not computed
+    second.values = { ...second.values, 'attr:k': ['stale'] }; // a recorded value the rows do not hold
     const out = await compactPartitions(fs, OUT, entries, opts(2));
-    expect(out.files.logs?.values['attr:k']).toEqual(['v0', 'v1', 'v2']);
+    const expected = fileStatistics('logs', batchFromRows('logs', rowsPer.flat()), ['attr:k'], 100);
+    expect(out.files.logs?.values['attr:k']).toEqual(expected.values['attr:k']);
+    expect(out.files.logs?.values['attr:k']).not.toContain('stale');
     expect(Reflect.get(out.files.logs?.values ?? {}, 'scope_name')).not.toBeNull();
   });
 

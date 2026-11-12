@@ -1,7 +1,7 @@
 import type { ResolvedConfig } from '../config/schema.js';
 import { ENGINE_VERSION } from '../format/engine.js';
 import type { ManifestV4, PartitionEntry } from '../format/manifest.js';
-import { TABLES, type Table } from '../format/parquet/columns.js';
+import type { Table } from '../format/parquet/columns.js';
 import type { PointNormalization } from '../format/parquet/rows.js';
 import type { Signal, StateSlot } from '../format/paths.js';
 import type { SessionStateV2 } from '../format/state.js';
@@ -54,22 +54,6 @@ export function buildState(
   };
 }
 
-/**
- * Earlier partitions (an append under another config) may lack values for a listed key: they get `null`, which
- * means unknown and prunes nothing. Values for keys no longer listed stay. Only the manifest entry changes.
- */
-function withKeys(e: PartitionEntry, statisticsKeys: Record<Table, string[]>): PartitionEntry {
-  const files: PartitionEntry['files'] = {};
-  for (const t of TABLES) {
-    const f = e.files[t];
-    if (f === undefined) continue;
-    const values = { ...f.values };
-    for (const k of statisticsKeys[t]) if (!(k in values)) values[k] = null;
-    files[t] = { ...f, values };
-  }
-  return { ...e, files };
-}
-
 /** What `buildManifest` needs of the session. */
 interface ManifestInputs {
   version: string;
@@ -92,7 +76,7 @@ export function buildManifest(m: ManifestInputs, p: Prepared): ManifestV4 {
     complete: p.complete,
     range: p.range === null ? null : { start: p.range.start.toString(), end: p.range.end.toString() },
     totals: p.totals,
-    partitions: m.partitions.map((e) => withKeys(e, m.statisticsKeys)),
+    partitions: [...m.partitions],
     statisticsKeys: m.statisticsKeys,
     engine: {
       version: ENGINE_VERSION,

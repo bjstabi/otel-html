@@ -114,6 +114,24 @@ describe('newRunManifest', () => {
   });
 });
 
+describe('planSync statistics', () => {
+  test('a key the site lists and the job did not compute stays absent; a recorded null stays null', async () => {
+    const m = await newManifest();
+    const plan = sync(m, emptyRunState(1), [
+      ju(
+        push(1, [
+          part('job:7#flush:0', 'partitions/0/spans.parquet', 3, '10', '20', true, {
+            'resource:cicd.pipeline.run.id': null,
+          }),
+        ]),
+      ),
+    ]);
+    const values = plan.manifest.partitions[0]?.files.spans?.values;
+    expect(values?.['resource:cicd.pipeline.run.id']).toBeNull();
+    expect(values && 'resource:cicd.pipeline.name' in values).toBe(false);
+  });
+});
+
 describe('planSync', () => {
   test('the first update numbers its partitions and ci from zero', async () => {
     const m = await newManifest();
@@ -148,10 +166,10 @@ describe('planSync', () => {
     expect(plan.manifest.complete).toBe(false);
     expect(plan.manifest.updatedAt).toBe(NOW);
     const v = plan.manifest.partitions[0]?.files.spans?.values;
-    expect(Object.keys(v ?? {}).sort()).toEqual([...m.statisticsKeys.spans].sort());
+    expect(Object.keys(v ?? {})).toEqual(['resource:cicd.pipeline.run.id']); // keys the job computed; the rest stay absent
     expect(v?.['resource:cicd.pipeline.run.id']).toEqual(['42']);
     expect(v).not.toHaveProperty('extra');
-    expect(plan.manifest.partitions[1]?.files.spans?.values['resource:cicd.pipeline.run.id']).toBeNull();
+    expect(plan.manifest.partitions[1]?.files.spans?.values['resource:cicd.pipeline.run.id']).toBeUndefined();
     expect(parseAnyManifest(plan.manifest)).toEqual(plan.manifest);
   });
 

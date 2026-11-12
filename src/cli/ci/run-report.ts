@@ -118,7 +118,8 @@ function entryFrom(
     const f = p.files[t];
     if (f === undefined) continue;
     const values: PartitionFile['values'] = {};
-    for (const k of keys[t]) values[k] = f.values[k] ?? null;
+    // A key the job did not compute stays absent ("not computed"); the merge computes it. `null` is "over the cap".
+    for (const k of keys[t]) if (f.values[k] !== undefined) values[k] = f.values[k];
     const to = partitionFilePath(n, t);
     files[t] = { ...f, path: to, values };
     copies.push({ fromDir: dir, from: f.path, to });

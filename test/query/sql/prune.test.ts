@@ -51,6 +51,19 @@ describe('prunePartitions', () => {
       total: 3,
     });
   });
+  test('a listed key a file lacks (absent) is unknown, exactly like null: the file is kept', () => {
+    const m = manifestWith(
+      [{ 'resource:run': ['1'] }, {}, { 'resource:run': null }, { 'resource:run': ['2'] }],
+      {
+        statisticsKeys: { spans: ['resource:run'] },
+      },
+    );
+    expect(prunePartitions(m, 'spans', hints({ 'resource:run': ['2'] }), null).files).toEqual([
+      file(1),
+      file(2),
+      file(3),
+    ]);
+  });
   test('a resource key hint applies only when statisticsKeys lists it', () => {
     const m = manifestWith([{ 'resource:run': ['1'] }], { statisticsKeys: { spans: ['resource:run'] } });
     expect(prunePartitions(m, 'spans', hints({ 'resource:run': ['2'] }), null).files).toEqual([]);
