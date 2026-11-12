@@ -137,6 +137,12 @@ test(
     await expect(page.getByRole('alert')).toHaveCount(0);
     await expect(page.getByRole('grid', { name: 'Results' }).getByRole('row')).not.toHaveCount(1);
     const whole = (r: RequestRecord): boolean => r.method === 'GET' && r.range === null;
+    // the "never by range afterwards" check is vacuous if this browser does not report the worker's range reads
+    // at all: the page's own opening reads (the view's footer reads) must show up as Range requests
+    expect(
+      seen.some((r) => r.range !== null && r.path.endsWith('.parquet')),
+      'a Range request to a Parquet file was recorded',
+    ).toBe(true);
     let fetched = 0;
     for (const path of small) {
       const mine = seen.filter((r) => r.path.endsWith(`/${path}`));
