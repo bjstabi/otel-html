@@ -503,6 +503,25 @@ describe('refreshReport and the small-file loader', () => {
     expect(r.forgotten.filter((p) => p === spans)).toHaveLength(2);
   });
 
+  test('a rewritten path is registered again even when the drop of another rewritten path keeps failing', async () => {
+    const f = fakes('site');
+    const events = gated(f);
+    const a = partitionFilePath(0, 'spans');
+    const b = partitionFilePath(1, 'spans');
+    const db = f.engine.db as unknown as { dropFile: (name: string) => Promise<void> };
+    const drop = db.dropFile;
+    db.dropFile = async (name: string) => {
+      if (name === b) throw new Error('file in use');
+      await drop(name);
+    };
+    const next = { ...manifestOf([0, 1]), updatedAt: '2026-11-06T00:00:09.000Z' };
+    for (const part of next.partitions)
+      if (part.files.spans) part.files.spans = { ...part.files.spans, bytes: 99 };
+    await expect(withSmall(f, manifestOf([0, 1]), next).done).rejects.toThrow('file in use');
+    const mine = events.filter((e) => e.includes(a));
+    expect(mine.at(-1)).toBe(`registerFileURL ${a} held`);
+  });
+
   test('a failed refresh drops the paths it added inside the file gate', async () => {
     const f = fakes('site', (st) => st.includes('CREATE'));
     const events = gated(f);

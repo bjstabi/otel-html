@@ -61,13 +61,14 @@ export async function refreshReport(
   const newSizes = sizeOf(manifest);
   const rewritten = wanted.filter((f) => had.has(f.path) && oldSizes.get(f.path) !== newSizes.get(f.path));
   deps.adoptSizes?.(manifest);
-  // No statement runs between the drop and the registration of a rewritten path.
+  // No statement runs between the drop and the registration of a rewritten path. Each path is dropped and registered
+  // on its own, so a path whose drop fails cannot leave another one dropped and unregistered.
   const reregister = async (): Promise<void> => {
-    for (const { path } of rewritten) {
-      deps.smallFiles?.forget([path]);
-      await dropFiles(engine, [path]);
+    for (const file of rewritten) {
+      deps.smallFiles?.forget([file.path]);
+      await dropFiles(engine, [file.path]);
+      await registerFiles(engine, [file], deps);
     }
-    await registerFiles(engine, rewritten, deps);
   };
   try {
     if (rewritten.length > 0) await held(engine, reregister);
@@ -75,7 +76,7 @@ export async function refreshReport(
     await createViews(engine, manifest);
   } catch (error) {
     deps.adoptSizes?.(previous);
-    await rollBack(engine, previous, added, rewritten, deps, reregister);
+    await rollBack(engine, previous, added, rewritten, deps);
     throw error;
   }
   // Last and best-effort: the views no longer read these files, so a failed drop only leaks a registration.
@@ -109,12 +110,15 @@ async function rollBack(
   added: ReturnType<typeof manifestFiles>,
   rewritten: ReturnType<typeof manifestFiles>,
   deps: RefreshDeps,
-  reregister: () => Promise<void>,
 ): Promise<void> {
   const { logger } = deps;
-  if (rewritten.length > 0) {
-    await held(engine, reregister).catch((error: unknown) => {
-      logger.error('could not restore the rewritten files after a failed refresh', error);
+  for (const file of rewritten) {
+    await held(engine, async () => {
+      deps.smallFiles?.forget([file.path]);
+      await dropFiles(engine, [file.path]);
+      await registerFiles(engine, [file], deps);
+    }).catch((error: unknown) => {
+      logger.error(`could not restore ${file.path} after a failed refresh`, error);
     });
   }
   try {
