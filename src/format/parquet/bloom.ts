@@ -99,7 +99,10 @@ function positions(hash: bigint, blocks: number): { block: number; key: number }
   return { block: Number(((hash >> 32n) * BigInt(blocks)) >> 32n), key: Number(hash & 0xffffffffn) };
 }
 
-/** The bitset of a filter of `numBytes` over the hashes. */
+/**
+ * The bitset of a filter of `numBytes` over the hashes. Parquet stores the words little endian and this views the
+ * buffer as `Uint32Array`, so it assumes a little-endian host (x86, ARM and every JavaScript engine in practice).
+ */
 function bitset(hashes: Iterable<bigint>, numBytes: number): Uint8Array {
   const words = new Uint32Array(numBytes / 4);
   for (const hash of hashes) {

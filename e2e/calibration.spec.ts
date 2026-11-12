@@ -145,12 +145,17 @@ test(
       filters.every((o) => o !== undefined),
       'every row group has a filter',
     ).toBe(true);
-    // `logs` is sorted by trace_id inside the file; the middle of the second group is neither its minimum nor maximum.
-    const stored = decodeTable('logs', new Uint8Array(bytes)).map(({ trace_id }) => trace_id);
+    // Every log has an id of its own (see `distinctTraceIds`), so each group's filter is about 64 KB and the ids of
+    // the groups overlap in min/max: only a filter can rule a group out. The absent id is a stored id with its last
+    // digit changed.
+    const rows = decodeTable('logs', new Uint8Array(bytes));
+    const stored = rows.map(({ trace_id }) => trace_id);
     const ids = new Set(stored);
-    const middle = stored.slice(75_000).find((id): id is string => typeof id === 'string');
-    if (middle === undefined) throw new Error('rowgroups: no stored trace id');
-    const absentId = `${middle.slice(0, -1)}0`;
+    const perGroup = Math.max(...chunksOf(new Uint8Array(bytes)).map((g) => g[0]?.rows ?? 0));
+    expect(ids.size / groups.length, 'distinct ids per row group').toBeGreaterThan(perGroup * 0.9);
+    const middle = stored[perGroup + 1234];
+    if (typeof middle !== 'string') throw new Error('rowgroups: no stored trace id');
+    const absentId = `${middle.slice(0, -1)}${middle.endsWith('0') ? '1' : '0'}`;
     expect(ids.has(absentId), 'the absent id is not stored').toBe(false);
     const dataEnd = Math.min(...filters.map((o) => Number(o)));
 
@@ -167,19 +172,28 @@ test(
       return rangesFor((await seen()).slice(before), path);
     };
 
+    // A read may start up to one 16 KiB block before a filter (the engine's reads are block aligned).
+    const dataRanges = (r: [number, number][]): [number, number][] =>
+      r.filter(([first]) => first < dataEnd - 16_384);
+    const groupBytes = dataEnd / groups.length;
+
     const present = await lookup(middle);
-    expect(
-      present.some(([first]) => first < dataEnd),
-      'a stored id reads data pages (the check can fail)',
-    ).toBe(true);
+    const data = dataRanges(present);
+    expect(data.length, 'a stored id reads data pages (the check can fail)').toBeGreaterThan(0);
+    // The filters rule the other row groups out: what is read lies in one row group's bytes.
+    const reach = Math.max(...data.map(([, last]) => last)) - Math.min(...data.map(([first]) => first));
+    expect(reach, `data read spans ${reach} bytes, a row group is about ${groupBytes}`).toBeLessThan(
+      groupBytes,
+    );
 
     const absent = await lookup(absentId);
-    // The footer read at load also covers the filters (small, just before the footer), so there may be no request at all.
     process.stdout.write(
-      `BLOOM absent id: ranges ${JSON.stringify(absent)}; data ends at ${dataEnd} of ${bytes.length}\n`,
+      `BLOOM absent id: ranges ${JSON.stringify(absent)}; present data ranges ${JSON.stringify(data)}; data ends at ${dataEnd} of ${bytes.length}\n`,
     );
-    // A read may start up to one 16 KiB block before a filter (the engine's reads are block aligned).
-    for (const [first] of absent)
-      expect(first, `range from ${first}`).toBeGreaterThanOrEqual(dataEnd - 16_384);
+    expect(dataRanges(absent), 'an absent id reads no data page').toEqual([]);
+    expect(
+      absent.some(([first, last]) => first <= dataEnd + 1024 && last >= dataEnd),
+      'the filters are read (they are outside the footer block read at load)',
+    ).toBe(true);
   },
 );

@@ -15,6 +15,7 @@ import { decodeTable, encodeColumns, encodeColumnsUnfiltered } from '../../../sr
 import { TABLE_COLUMNS, TABLES, type Table } from '../../../src/format/parquet/columns.js';
 import type { Row } from '../../../src/format/parquet/rows.js';
 import { readStruct, T, type TField, writeStruct } from '../../../src/format/parquet/thrift.js';
+import { openTestDb } from '../../../test-support/duckdb-node.js';
 import { chunksOf } from '../../../test-support/parquet-footer.js';
 
 const TRACE = 'trace_id';
@@ -291,4 +292,59 @@ describe('a format-4 file without filters', () => {
         .every((c) => c.offset === undefined),
     ).toBe(true);
   });
+});
+
+// The unit tests above use this module's own `mightContain`. DuckDB applies the filter on an equality lookup, so a
+// wrong hash, salt or offset makes it skip the row group that holds the id and lose rows: an independent reader.
+describe('DuckDB-WASM honours the filters', () => {
+  const ROWS = 6_000;
+  const GROUP = 1_000;
+  /** Well mixed 32-hex ids, so every group's min/max statistics overlap and only the filter can tell them apart. */
+  const mixed = (i: number): string =>
+    [1, 2, 3, 4]
+      .map((k) => (Math.imul(i + 1, 0x9e3779b1 + k * 2) >>> 0).toString(16).padStart(8, '0'))
+      .join('');
+
+  const counts = (rows: Record<string, unknown>[]): number => (rows as { n: number }[])[0]?.n ?? -1;
+
+  test.each(['traces', 'logs'] as const)(
+    '%s: every sampled stored id is found, across all row groups; parquet-wasm reads the same rows',
+    async (table) => {
+      const rows = rowsOf(table, ROWS, mixed);
+      const batch = batchFromRows(table, rows);
+      const file = encodeColumns(table, batch, { rowGroupRows: GROUP });
+      const groups = chunksOf(file);
+      expect(groups).toHaveLength(ROWS / GROUP);
+      expect(groups.every((g) => g.some((c) => c.path === TRACE && c.offset !== undefined))).toBe(true);
+      // The second reader: parquet-wasm's own decode of the filtered file equals that of the plain one.
+      const plain = encodeColumnsUnfiltered(table, batch, { rowGroupRows: GROUP });
+      expect(decodeTable(table, file)).toEqual(decodeTable(table, plain));
+
+      const stored = decodeTable(table, file).map((r) => r[TRACE] as string);
+      expect(new Set(stored).size).toBe(ROWS);
+      const sample = stored.filter((_, i) => i % 12 === 0); // 500 ids, spread over every row group
+      expect(sample).toHaveLength(ROWS / 12);
+      const db = await openTestDb();
+      try {
+        db.registerFile(`${table}.parquet`, file);
+        for (const id of sample) {
+          const got = counts(
+            db.rows(
+              `SELECT count(*)::INT AS n FROM read_parquet('${table}.parquet') WHERE trace_id = '${id}'`,
+            ),
+          );
+          expect(got, id).toBe(1);
+        }
+        const absent = counts(
+          db.rows(
+            `SELECT count(*)::INT AS n FROM read_parquet('${table}.parquet') WHERE trace_id = '${'0'.repeat(32)}'`,
+          ),
+        );
+        expect(absent).toBe(0);
+      } finally {
+        db.close();
+      }
+    },
+    120_000,
+  );
 });

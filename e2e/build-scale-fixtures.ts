@@ -152,6 +152,26 @@ const ROWGROUPS_TRACES = 4 * (50_000 / SCALE_SPANS_PER_TRACE);
 const ROWGROUPS_LOGS = 200_000;
 
 /**
+ * Gives every log record a trace id of its own (well mixed, so a row group's min/max statistics of `trace_id` overlap
+ * the others'): about 50,000 distinct ids per row group, so each group's bloom filter is about 64 KB and the four of
+ * them sit apart from the footer instead of inside the block a reader takes first.
+ */
+function distinctTraceIds(request: unknown): unknown {
+  type Records = { logRecords: { traceId?: string }[] };
+  let i = 0;
+  const word = (k: number): string =>
+    (Math.imul(i + 1, 0x9e3779b1 + 2 * k) >>> 0).toString(16).padStart(8, '0');
+  const resources = (request as { resourceLogs: { scopeLogs: Records[] }[] }).resourceLogs;
+  for (const resource of resources)
+    for (const scope of resource.scopeLogs)
+      for (const record of scope.logRecords) {
+        record.traceId = [1, 2, 3, 4].map(word).join('');
+        i++;
+      }
+  return request;
+}
+
+/**
  * `rowgroups`: 200k spans and 200k logs, converted and closed into one partition whose spans and logs files have four
  * row groups each (only the logs file carries trace_id bloom filters; spans do not).
  */
@@ -159,7 +179,7 @@ async function buildRowGroupsReport(inputs: URL): Promise<void> {
   const file = fileURLToPath(new URL('rowgroups.json', inputs));
   await writeFile(file, JSON.stringify(scaleInput(0, ROWGROUPS_TRACES)));
   const logs = fileURLToPath(new URL('rowgroups-logs.json', inputs));
-  await writeFile(logs, JSON.stringify(scaleLogsRequest(0, ROWGROUPS_LOGS, SCALE_LOG_IDS)));
+  await writeFile(logs, JSON.stringify(distinctTraceIds(scaleLogsRequest(0, ROWGROUPS_LOGS, SCALE_LOG_IDS))));
   await convertTo(reportDir('rowgroups'), [file, logs], 'rowgroups run');
 }
 
