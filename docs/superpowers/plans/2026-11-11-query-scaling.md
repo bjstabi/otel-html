@@ -779,6 +779,11 @@ traces than the list's 50 rows. This task measures each page whole instead of co
    live check's viewport height, so a list asks for as many ids as live. Entries whose class changes get their
    catalogue class and `KNOWN_DEBT` lines; a lookup by trace id that reads every partition is owed by Task 11
    (PR 4).
+7. Added 2026-11-12 after the second live check (0.51× and 0.33×): the density axis of the page fit is measured on
+   row groups of production size (50,000 rows, the writer's default), 1 to 4 per partition, because a live group's
+   larger column chunks cost more requests than a harness group's. The class steps keep their small groups. The
+   live traces-mode page asks for 52 distinct traces while 26 rows mount; the second 26 are found from a Chromium
+   request log and modelled in the page measurement.
 5. Measuring pages runs only when `OTEL_HTML_SCALING_OUT` is set (the `predict:queries` run), so `test:scaling`
    does not grow.
 
