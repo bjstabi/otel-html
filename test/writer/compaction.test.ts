@@ -722,7 +722,7 @@ describe('bloom filters on trace_id', () => {
       .flat()
       .some((c) => c.offset !== undefined);
 
-  test('a cut and a compaction write one per row group of traces, spans and logs, and none for points and patterns', async () => {
+  test('a cut and a compaction write one per row group of traces and logs, and none for spans, points and patterns', async () => {
     const fs = createMemoryFileSystem();
     const r = lcg(7);
     let id = 0;
@@ -734,19 +734,21 @@ describe('bloom filters on trace_id', () => {
     });
     const entries = await writeParts(fs, [part(), part(), part()]);
     for (const entry of entries) {
-      for (const t of ['spans', 'logs', 'traces'] as const) {
+      for (const t of ['logs', 'traces'] as const) {
         const flags = filtered(await bytesOf(fs, entry, t));
         expect(flags.length, `cut ${t}`).toBeGreaterThan(1);
         expect(flags.every(Boolean), `cut ${t}`).toBe(true);
       }
+      expect(anyFilter(await bytesOf(fs, entry, 'spans'))).toBe(false);
       expect(anyFilter(await bytesOf(fs, entry, 'points'))).toBe(false);
     }
     const out = await compactPartitions(fs, OUT, entries, opts(3));
-    for (const t of ['spans', 'logs', 'traces'] as const) {
+    for (const t of ['logs', 'traces'] as const) {
       const flags = filtered(await bytesOf(fs, out, t));
       expect(flags.length, `compacted ${t}`).toBeGreaterThan(1);
       expect(flags.every(Boolean), `compacted ${t}`).toBe(true);
     }
+    expect(anyFilter(await bytesOf(fs, out, 'spans'))).toBe(false);
     expect(anyFilter(await bytesOf(fs, out, 'points'))).toBe(false);
   });
 
@@ -754,13 +756,13 @@ describe('bloom filters on trace_id', () => {
     const fs = createMemoryFileSystem();
     const r = lcg(9);
     let id = 0;
-    const rows = Array.from({ length: 14 }, () => spanRow(id++, r));
-    const plain = encodeColumnsUnfiltered('spans', batchFromRows('spans', rows), { rowGroupRows: ROW_GROUP });
+    const rows = Array.from({ length: 14 }, () => logRow(id++, r));
+    const plain = encodeColumnsUnfiltered('logs', batchFromRows('logs', rows), { rowGroupRows: ROW_GROUP });
     expect(anyFilter(plain)).toBe(false);
-    const entries = await writeParts(fs, [{ spans: rows }]);
-    await fs.writeBytes(`${OUT}/${entries[0]?.files.spans?.path ?? ''}`, plain);
+    const entries = await writeParts(fs, [{ logs: rows }]);
+    await fs.writeBytes(`${OUT}/${entries[0]?.files.logs?.path ?? ''}`, plain);
     const out = await compactPartitions(fs, OUT, entries, opts(1));
-    expect(filtered(await bytesOf(fs, out, 'spans')).every(Boolean)).toBe(true);
-    expect(decodeTable('spans', await bytesOf(fs, out, 'spans'))).toHaveLength(14);
+    expect(filtered(await bytesOf(fs, out, 'logs')).every(Boolean)).toBe(true);
+    expect(decodeTable('logs', await bytesOf(fs, out, 'logs'))).toHaveLength(14);
   });
 });

@@ -11,7 +11,7 @@ import { field, readStruct, T, type TField, type TList, writeStruct } from './th
  */
 
 /** The tables whose files carry the filter, and the one column it covers. */
-export const BLOOM_TABLES: ReadonlySet<Table> = new Set<Table>(['traces', 'spans', 'logs']);
+export const BLOOM_TABLES: ReadonlySet<Table> = new Set<Table>(['traces', 'logs']);
 export const BLOOM_COLUMN = 'trace_id';
 
 /** The false-positive rate each row group's filter is sized for. */

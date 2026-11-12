@@ -89,7 +89,7 @@ const ROW_GROUP_ROWS = 40;
 
 describe('encodeColumns writes a filter on trace_id', () => {
   for (const table of TABLES) {
-    const has = table === 'traces' || table === 'spans' || table === 'logs';
+    const has = table === 'traces' || table === 'logs';
     test(`${table}: ${has ? 'every row group has one, on trace_id only' : 'no column has one'}`, () => {
       const batch = batchFromRows(table, rowsOf(table, 130));
       const groups = chunksOf(encodeColumns(table, batch, { rowGroupRows: ROW_GROUP_ROWS }));
@@ -105,7 +105,7 @@ describe('encodeColumns writes a filter on trace_id', () => {
   }
 
   test('each filter answers for its own row group: every id of the group is in it, most others are not', () => {
-    const file = encodeColumns('spans', batchFromRows('spans', rowsOf('spans', 130)), {
+    const file = encodeColumns('logs', batchFromRows('logs', rowsOf('logs', 130)), {
       rowGroupRows: ROW_GROUP_ROWS,
     });
     const groups = chunksOf(file);
@@ -117,7 +117,7 @@ describe('encodeColumns writes a filter on trace_id', () => {
       const filter = file.subarray(Number(c.offset), Number(c.offset) + Number(c.length));
       // The rows are sorted by the table's key, so read the ids the group holds back from the file.
       const ids = new Set(
-        decodeTable('spans', file)
+        decodeTable('logs', file)
           .slice(g * ROW_GROUP_ROWS, (g + 1) * ROW_GROUP_ROWS)
           .map((r) => r[TRACE] as string),
       );
@@ -149,14 +149,23 @@ describe('encodeColumns writes a filter on trace_id', () => {
   });
 
   test('a file with no rows stays valid and has no filter', () => {
-    const file = encodeColumns('spans', batchFromRows('spans', []), { rowGroupRows: ROW_GROUP_ROWS });
+    const file = encodeColumns('logs', batchFromRows('logs', []), { rowGroupRows: ROW_GROUP_ROWS });
     expect(chunksOf(file)).toEqual([]);
-    expect(decodeTable('spans', file)).toEqual([]);
+    expect(decodeTable('logs', file)).toEqual([]);
+  });
+
+  test('a spans file carries no filter', () => {
+    const file = encodeColumns('spans', batchFromRows('spans', rowsOf('spans', 130)), {
+      rowGroupRows: ROW_GROUP_ROWS,
+    });
+    const chunks = chunksOf(file).flat();
+    expect(chunks.length).toBeGreaterThan(0);
+    expect(chunks.every((c) => c.offset === undefined && c.length === undefined)).toBe(true);
   });
 });
 
 describe('the footer round trip', () => {
-  test.each(['spans', 'logs', 'points'] as const)(
+  test.each(['traces', 'logs', 'points'] as const)(
     '%s: parquet-wasm footers read and write back byte for byte',
     (table) => {
       const file = encodeColumnsUnfiltered(table, batchFromRows(table, rowsOf(table, 130)), {
@@ -210,6 +219,57 @@ describe('addBloomFilters', () => {
     expect(() => addBloomFilters(plain, [{ ...first, rows: first.rows + 1 }, ...groups.slice(1)])).toThrow(
       /rows/,
     );
+  });
+
+  test('a collector that saw no rows has no groups; null-only rows give a filter that matches nothing', () => {
+    expect(new BloomCollector(ROW_GROUP_ROWS).finish()).toEqual([]);
+    const c = new BloomCollector(ROW_GROUP_ROWS);
+    c.add([null, null, undefined]);
+    const [only, ...rest] = c.finish();
+    expect(rest).toEqual([]);
+    expect(only?.rows).toBe(3);
+    expect(mightContain(only?.filter ?? new Uint8Array(), traceId(1))).toBe(false);
+  });
+
+  test('a single distinct id repeated across the group gets a minimum-size filter that contains it', () => {
+    const c = new BloomCollector(ROW_GROUP_ROWS);
+    c.add(Array.from({ length: ROW_GROUP_ROWS }, () => traceId(7)));
+    const filter = c.finish()[0]?.filter ?? new Uint8Array();
+    expect(mightContain(filter, traceId(7))).toBe(true);
+    expect(mightContain(filter, traceId(8))).toBe(false);
+    // A header under 32 bytes plus one 32-byte block.
+    expect(filter.length).toBeGreaterThan(BLOOM_MIN_BYTES);
+    expect(filter.length).toBeLessThan(2 * BLOOM_MIN_BYTES);
+  });
+
+  test('the size steps up at the capacity of a size and stops at the maximum', () => {
+    let n = 1;
+    while (filterBytesFor(n) === BLOOM_MIN_BYTES) n++;
+    expect(filterBytesFor(n - 1)).toBe(BLOOM_MIN_BYTES);
+    expect(filterBytesFor(n)).toBe(BLOOM_MIN_BYTES * 2);
+    expect(filterBytesFor(Number.MAX_SAFE_INTEGER)).toBe(BLOOM_MAX_BYTES);
+    expect(filterBytesFor(Number.POSITIVE_INFINITY)).toBe(BLOOM_MAX_BYTES);
+  });
+
+  test('a footer without key-value metadata still gets its filters', () => {
+    const n = plain.length;
+    const size = new DataView(plain.buffer, plain.byteOffset + n - 8, 4).getUint32(0, true);
+    const meta = readStruct(plain.subarray(n - 8 - size, n - 8)).filter((f) => f.id !== 5);
+    const body = writeStruct(meta);
+    const stripped = new Uint8Array(n - 8 - size + body.length + 8);
+    stripped.set(plain.subarray(0, n - 8 - size));
+    stripped.set(body, n - 8 - size);
+    new DataView(stripped.buffer).setUint32(stripped.length - 8, body.length, true);
+    stripped.set(bytes('PAR1'), stripped.length - 4);
+    expect(readStruct(body).some((f) => f.id === 5)).toBe(false);
+    const done = addBloomFilters(stripped, collect());
+    expect(
+      chunksOf(done)
+        .flat()
+        .filter((c) => c.path === TRACE)
+        .every((c) => c.offset !== undefined),
+    ).toBe(true);
+    expect(decodeTable('logs', done)).toEqual(decodeTable('logs', plain));
   });
 
   test('the collector cuts groups at the row group size and counts null cells as rows', () => {

@@ -148,11 +148,19 @@ async function buildScaleReports(): Promise<void> {
 /** Spans a `rowgroups` report holds: four row groups of the writer's 50,000 (`e2e/calibration.spec.ts` needs several). */
 const ROWGROUPS_TRACES = 4 * (50_000 / SCALE_SPANS_PER_TRACE);
 
-/** `rowgroups`: only spans, 200k of them, converted and closed into one partition whose spans file has four row groups. */
+/** Logs a `rowgroups` report holds: four row groups of the writer's 50,000. */
+const ROWGROUPS_LOGS = 200_000;
+
+/**
+ * `rowgroups`: 200k spans and 200k logs, converted and closed into one partition whose spans and logs files have four
+ * row groups each (only the logs file carries trace_id bloom filters; spans do not).
+ */
 async function buildRowGroupsReport(inputs: URL): Promise<void> {
   const file = fileURLToPath(new URL('rowgroups.json', inputs));
   await writeFile(file, JSON.stringify(scaleInput(0, ROWGROUPS_TRACES)));
-  await convertTo(reportDir('rowgroups'), [file], 'rowgroups run');
+  const logs = fileURLToPath(new URL('rowgroups-logs.json', inputs));
+  await writeFile(logs, JSON.stringify(scaleLogsRequest(0, ROWGROUPS_LOGS, SCALE_LOG_IDS)));
+  await convertTo(reportDir('rowgroups'), [file, logs], 'rowgroups run');
 }
 
 await rm(SCALE_REPORTS_DIR, { recursive: true, force: true });

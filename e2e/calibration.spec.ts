@@ -3,7 +3,9 @@ import { fileURLToPath } from 'node:url';
 import type { Page } from '@playwright/test';
 import { reviveDataJson, unwrapDataFile } from '../src/format/data-file.js';
 import { isV4, type ManifestV4, parseAnyManifest } from '../src/format/manifest.js';
+import { decodeTable } from '../src/format/parquet/codec.js';
 import { MANIFEST_KEY } from '../src/format/paths.js';
+import '../src/writer/parquet-wasm-source.js';
 import { SMALL_FILE_BYTES } from '../src/viewer/data/engine/small-files.js';
 import { chunksOf } from '../test-support/parquet-footer.js';
 import { costOf, rangesOf } from '../test-support/scaling/cost.js';
@@ -119,11 +121,12 @@ function rangesFor(requests: readonly RequestRecord[], path: string): [number, n
 }
 
 // Over HTTP, in Chromium: a lookup by trace id of a partition that lacks the id reads the footer and the bloom
-// filters of its spans file and no data page. `rowgroups` has one partition whose spans file (four row groups, far
-// above the small-file limit) is read by range. The absent id has the shape of the stored ones, so every row group's
-// min/max statistics of `trace_id` span it and only the filter can rule the group out.
+// filters of its logs file and no data page. `rowgroups` has one partition whose logs file (four row groups, far
+// above the small-file limit) is read by range. The absent id is a stored id with its last digit changed, taken from
+// the middle of a row group, so that group's min/max statistics of `trace_id` span it and only the filter can rule the
+// group out (the spans file has no filter: only `traces` and `logs` do).
 test(
-  'a trace id the partition lacks reads no data page of its spans file (rowgroups)',
+  'a trace id the partition lacks reads no data page of its logs file (rowgroups)',
   {
     tag: ['@http'],
   },
@@ -131,8 +134,8 @@ test(
     test.skip(testInfo.project.name.endsWith('-file'), 'the scale reports are read over HTTP only');
     test.setTimeout(120_000);
     const manifest = readManifest('rowgroups');
-    const entry = manifest.partitions[0]?.files.spans;
-    if (entry === undefined) throw new Error('rowgroups: no spans file');
+    const entry = manifest.partitions[0]?.files.logs;
+    if (entry === undefined) throw new Error('rowgroups: no logs file');
     expect(entry.bytes, 'above the small-file limit').toBeGreaterThan(SMALL_FILE_BYTES);
     const bytes = readFileSync(new URL(entry.path, reportDir('rowgroups', 'http')));
     const groups = chunksOf(new Uint8Array(bytes)).map((g) => g.find((c) => c.path === 'trace_id'));
@@ -142,6 +145,13 @@ test(
       filters.every((o) => o !== undefined),
       'every row group has a filter',
     ).toBe(true);
+    // `logs` is sorted by trace_id inside the file; the middle of the second group is neither its minimum nor maximum.
+    const stored = decodeTable('logs', new Uint8Array(bytes)).map(({ trace_id }) => trace_id);
+    const ids = new Set(stored);
+    const middle = stored.slice(75_000).find((id): id is string => typeof id === 'string');
+    if (middle === undefined) throw new Error('rowgroups: no stored trace id');
+    const absentId = `${middle.slice(0, -1)}0`;
+    expect(ids.has(absentId), 'the absent id is not stored').toBe(false);
     const dataEnd = Math.min(...filters.map((o) => Number(o)));
 
     const base = `http://127.0.0.1:${process.env[PORT_ENV]}`;
@@ -152,19 +162,19 @@ test(
       await freshPage(page, reportUrl('rowgroups'));
       await quiet(seen);
       const before = (await seen()).length;
-      const reply = await runWorkerSql(page, `SELECT count(*) FROM spans WHERE trace_id = '${id}'`);
+      const reply = await runWorkerSql(page, `SELECT count(*) FROM logs WHERE trace_id = '${id}'`);
       expect(reply.type, reply.message).not.toMatch(/ERROR/);
       return rangesFor((await seen()).slice(before), path);
     };
 
-    const present = await lookup(scaleTraceId(1000));
+    const present = await lookup(middle);
     expect(
       present.some(([first]) => first < dataEnd),
       'a stored id reads data pages (the check can fail)',
     ).toBe(true);
 
-    const absent = await lookup(`${scaleTraceId(1000).slice(0, -1)}b`);
-    expect(absent.length, 'the footer and the filters are read').toBeGreaterThan(0);
+    const absent = await lookup(absentId);
+    // The footer read at load also covers the filters (small, just before the footer), so there may be no request at all.
     process.stdout.write(
       `BLOOM absent id: ranges ${JSON.stringify(absent)}; data ends at ${dataEnd} of ${bytes.length}\n`,
     );

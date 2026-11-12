@@ -363,7 +363,7 @@ function columnData(def: ColumnDef, type: DataType, col: readonly unknown[], per
 
 /**
  * Sorts a batch by `SORT_COLUMNS[table]` (nulls last, stable) and encodes it as ZSTD Parquet, with a bloom filter on
- * `trace_id` in every row group of `traces`, `spans` and `logs` (see `bloom.ts`). It does not check the cells: every
+ * `trace_id` in every row group of `traces` and `logs` (see `bloom.ts`). It does not check the cells: every
  * row must have passed `checkRow` (a session checks each row when it accepts it; `encodeTable` checks).
  */
 export function encodeColumns(table: Table, batch: ColumnBatch, opts: EncodeOptions): Uint8Array {
