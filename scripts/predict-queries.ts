@@ -257,18 +257,6 @@ function syntheticShape(runs: number, spans: number): Shape {
   };
 }
 
-/**
- * The generated base report the recordings were made on (4 partitions of 2 row groups, all inside the page's window,
- * which spans the report; 20 minutes apart, so the short entries): the model against a run.
- */
-const HARNESS: Shape = {
-  name: 'harness',
-  partitions: Array.from(
-    { length: 4 },
-    (): PartitionShape => ({ rowGroups: 2, inWindow: true, smallFiles: 0 }),
-  ),
-  long: false,
-};
 const SHAPES: Shape[] = [
   rollingShape(),
   syntheticShape(30, 150_000),
@@ -382,6 +370,9 @@ print(
   }
 }
 print(
+  `the page fits are measured on row groups of ${SPANS_PER_ROW_GROUP.toLocaleString('en-US')} rows, 1 to 4 per partition; a shape with more (30x1.5M: ${Math.ceil(1_500_000 / SPANS_PER_ROW_GROUP)}) extrapolates the fit past 4`,
+);
+print(
   `serial ${SERIAL_REQUEST_MS} ms, a batch of ${PARALLEL_WIDTH} parallel requests ${PARALLEL_BATCH_MS} ms, ${MS_PER_MB} ms per MB; an estimate, nothing is asserted`,
 );
 const summary = new Map<string, string[]>();
@@ -399,11 +390,6 @@ for (const page of PAGES) {
     if (page === PAGES[1]) cells[1] = fmt(r.serial);
     summary.set(shape.name, cells);
   }
-  const base = pageOn(page, HARNESS, calls);
-  const warm = recordings.get(page)?.warm;
-  print(
-    `  harness    ${fmt(base.serial).padStart(8)} ${fmt(base.parallel).padStart(9)} ${(base.bytes / 1e6).toFixed(1).padStart(9)}   (the page ran in one engine on it: ${fmt(warm?.serial ?? 0)} serial, ${((warm?.bytes ?? 0) / 1e6).toFixed(1)} MB)`,
-  );
 }
 
 const CheckSchema = z.object({
@@ -417,7 +403,7 @@ print('\none engine: the fit without CROSS against the page rendered whole (seri
 print('  spacing  page                      shape           predicted  measured  ratio');
 for (const spacing of ['dense', 'sparse'])
   for (const page of PAGES)
-    for (const shape of ['BASE', 'CROSS', 'rowGroups-16']) {
+    for (const shape of ['BASE', 'CROSS', 'rowGroups-4']) {
       const file = join(dir, 'one-engine', `${spacing}-${shape}-${encodeURIComponent(page)}.json`);
       const c = CheckSchema.parse(readJson(file));
       print(

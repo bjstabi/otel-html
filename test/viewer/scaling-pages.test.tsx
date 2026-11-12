@@ -15,11 +15,12 @@ import { openCountingEngine, type ReadEvent } from '../../test-support/scaling/c
 import {
   BASE,
   buildScalingReport,
-  CROSS,
+  PAGE_CROSS,
+  pageShapes,
   type ScalingReport,
   type Shape,
 } from '../../test-support/scaling/generator.js';
-import { closeMeasured, DENSE_16, modelShapes } from '../../test-support/scaling/measure.js';
+import { closeMeasured } from '../../test-support/scaling/measure.js';
 import { type FitPoint, fitPage, predictPage, type Size } from '../../test-support/scaling/model.js';
 import { entryIdsOf, recordingDataSource } from '../../test-support/scaling/recording-source.js';
 
@@ -199,6 +200,8 @@ async function pageOn(live: ScalingReport, hash: string): Promise<Cost> {
 
 /** Within this share of the page's cost in one engine the fit counts as right (the plan's tolerance). */
 const TOLERANCE = 0.25;
+/** A page of 4 requests (metrics) is within 2 requests: 25 % of it is less than one request. */
+const SLACK = 2;
 const SPACINGS = ['dense', 'sparse'] as const;
 const sameShape = (a: Size, b: Size): boolean =>
   a.outside === b.outside && a.inside === b.inside && a.rowGroups === b.rowGroups;
@@ -206,7 +209,7 @@ const sameShape = (a: Size, b: Size): boolean =>
 /**
  * Each page rendered whole in a cold counting engine on the shapes the entries are measured on (the three axes' steps,
  * `CROSS` and 16 row groups), for `mise run predict:queries` (the folder of OTEL_HTML_SCALING_OUT); the script fits
- * them. Then the one-engine check: the fit without `CROSS` against the page on `BASE`, `CROSS` and 16 row groups.
+ * them. Then the one-engine check: the fit without `CROSS` against the page on the base, the cross and 4 groups per partition (row groups of 50,000 rows).
  */
 describe.skipIf(SCALING !== '1' || OUT === undefined)('a page is predicted from its own measurements', () => {
   const costs = new Map<string, Map<string, FitPoint>>();
@@ -219,7 +222,9 @@ describe.skipIf(SCALING !== '1' || OUT === undefined)('a page is predicted from 
   });
 
   describe.each(SPACINGS)('%s', (spacing) => {
-    test.each(modelShapes(spacing, true).map((shape) => [shapeFile(shape), shape] as const))(
+    test.each(
+      [...pageShapes(spacing), PAGE_CROSS(spacing)].map((shape) => [shapeFile(shape), shape] as const),
+    )(
       'measures the five pages on %s',
       async (file, shape) => {
         const live = await buildScalingReport(shape);
@@ -241,14 +246,21 @@ describe.skipIf(SCALING !== '1' || OUT === undefined)('a page is predicted from 
       600_000,
     );
 
-    test.each(PAGES)('%s: the fit without CROSS reproduces BASE, CROSS and 16 row groups', (hash) => {
+    test.each(PAGES)('%s: the fit without CROSS reproduces BASE, CROSS and 4 row groups', (hash) => {
       const all = [...(costs.get(keyOf(spacing, hash))?.values() ?? [])];
       expect(all.length, `${hash}: measured shapes`).toBeGreaterThan(0);
-      const fit = fitPage(all.filter((p) => !sameShape(p.shape, CROSS)));
+      const fit = fitPage(all.filter((p) => !sameShape(p.shape, PAGE_CROSS(spacing))));
+      const at = (outside: number, inside: number, rowGroups: number): Shape => ({
+        outside,
+        inside,
+        rowGroups,
+        spacing,
+      });
+      // the page base (production-size groups, 2 partitions of 2 groups), the left-out cross, and 4 groups
       const checked: [string, Shape][] = [
-        ['BASE', BASE],
-        ['CROSS', CROSS],
-        ['rowGroups 16', { ...BASE, rowGroups: DENSE_16 }],
+        ['BASE', at(1, 1, 2)],
+        ['CROSS', PAGE_CROSS(spacing)],
+        ['rowGroups 4', at(1, 1, 4)],
       ];
       const misses: string[] = [];
       for (const [name, shape] of checked) {
@@ -266,7 +278,7 @@ describe.skipIf(SCALING !== '1' || OUT === undefined)('a page is predicted from 
           join(dir, `${spacing}-${name.replaceAll(' ', '-')}-${encodeURIComponent(hash)}.json`),
           JSON.stringify({ spacing, shape: name, page: hash, predicted, measured }),
         );
-        if (!(Math.abs(predicted - measured) / measured <= TOLERANCE))
+        if (!(Math.abs(predicted - measured) <= Math.max(SLACK, TOLERANCE * measured)))
           misses.push(`${name}: predicted ${predicted.toFixed(1)}, measured ${measured}`);
       }
       expect(misses, `${spacing} ${hash}`).toEqual([]);

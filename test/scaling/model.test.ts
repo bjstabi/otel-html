@@ -1,5 +1,12 @@
 import { describe, expect, test } from 'vitest';
-import { BASE, CROSS, type Shape, stepsOf } from '../../test-support/scaling/generator.js';
+import {
+  BASE,
+  CROSS,
+  PAGE_CROSS,
+  pageShapes,
+  type Shape,
+  stepsOf,
+} from '../../test-support/scaling/generator.js';
 import {
   countCalls,
   type EntryFit,
@@ -128,6 +135,32 @@ describe('a page is fitted from its own measurements', () => {
       axes.map((shape) => ({ shape, serial: serialOf(known, shape), parallel: 0, bytes: 0 })),
     );
     expect(page.serial).toEqual(known);
+  });
+});
+
+describe('the page fit measures density on production-size row groups', () => {
+  test.each(['dense', 'sparse'] as const)(
+    '%s: 50,000-row groups, 1 to 4 per partition, and the cross apart',
+    (spacing) => {
+      const shapes = pageShapes(spacing);
+      expect(shapes.every((s) => s.rowGroupRows === 50_000 && s.spacing === spacing)).toBe(true);
+      const base = shapes.filter((s) => s.outside === 1 && s.inside === 1);
+      expect(base.map((s) => s.rowGroups).sort()).toEqual([1, 2, 3, 4]);
+      expect(new Set(shapes.map((s) => s.outside + s.inside)).size).toBeGreaterThanOrEqual(3);
+      expect(shapes).not.toContainEqual(PAGE_CROSS(spacing));
+      expect(PAGE_CROSS(spacing).rowGroupRows).toBe(50_000);
+    },
+  );
+
+  test('the shapes identify a page fit without the cross', () => {
+    const known = { a: 3, r: 2, rd: 1, w: 2, wd: 1 };
+    const points = pageShapes('dense').map((shape) => ({
+      shape,
+      serial: serialOf(known, shape),
+      parallel: 0,
+      bytes: 0,
+    }));
+    expect(fitPage(points).serial).toEqual(known);
   });
 });
 

@@ -26,6 +26,8 @@ export interface Shape {
   inside: number;
   /** Spans row groups per partition (G). */
   rowGroups: number;
+  /** Rows of a row group; the class steps keep `ROW_GROUP_ROWS`, the page measurements use the writer's 50,000. */
+  rowGroupRows?: number;
   /** 20 min or 6 h between partition starts. */
   spacing: 'dense' | 'sparse';
 }
@@ -48,6 +50,43 @@ export function stepsOf(axis: Axis, spacing: Shape['spacing']): readonly Shape[]
   return [2, 4, 8].map((v) => ({ ...BASE, spacing, [AXIS_FIELD[axis]]: v }));
 }
 
+/** The writer's default row-group size: the page fit measures density on groups this large (Task 6c). */
+export const PRODUCTION_ROW_GROUP_ROWS = 50_000;
+
+/**
+ * The shapes a page is rendered on for its fit, on production-size row groups: 1 to 4 groups per partition on two
+ * partitions, and 2 groups on 3 and 5 partitions (the page's window spans the report, so only the partition count
+ * matters; the retention and window steps are the same shapes by another name).
+ */
+export function pageShapes(spacing: Shape['spacing']): Shape[] {
+  const at = (outside: number, inside: number, rowGroups: number): Shape => ({
+    outside,
+    inside,
+    rowGroups,
+    spacing,
+    rowGroupRows: PRODUCTION_ROW_GROUP_ROWS,
+  });
+  return [
+    at(1, 1, 1),
+    at(1, 1, 2),
+    at(1, 1, 3),
+    at(1, 1, 4),
+    at(2, 1, 2),
+    at(4, 1, 2),
+    at(1, 2, 2),
+    at(1, 4, 2),
+  ];
+}
+
+/** The page shape the fit leaves out, to test how it extrapolates across both axes. */
+export const PAGE_CROSS = (spacing: Shape['spacing']): Shape => ({
+  outside: 2,
+  inside: 1,
+  rowGroups: 3,
+  spacing,
+  rowGroupRows: PRODUCTION_ROW_GROUP_ROWS,
+});
+
 /** Makes the cost model identifiable: no axis at its `BASE` value alone. */
 export const CROSS: Shape = { outside: 4, inside: 2, rowGroups: 4, spacing: 'dense' };
 
@@ -68,7 +107,8 @@ const ID_STRIDE = 1_000_000;
 const hex = (k: number, width: number): string => k.toString(16).padStart(width, '0');
 const str = (key: string, value: string) => ({ key, value: { stringValue: value } });
 const startOf = (shape: Shape, n: number): bigint => T0 + BigInt(n) * SPACING_NS[shape.spacing];
-const spanCount = (shape: Shape): number => shape.rowGroups * ROW_GROUP_ROWS;
+const rowsPerGroup = (shape: Shape): number => shape.rowGroupRows ?? ROW_GROUP_ROWS;
+const spanCount = (shape: Shape): number => shape.rowGroups * rowsPerGroup(shape);
 const spanStart = (shape: Shape, n: number, k: number): bigint =>
   startOf(shape, n) + (BigInt(k) * SPREAD_NS) / BigInt(spanCount(shape));
 const MASK64 = (1n << 64n) - 1n;
@@ -184,7 +224,7 @@ function partitionJson(shape: Shape, n: number): Record<string, unknown>[] {
 
 async function build(shape: Shape): Promise<ScalingReport> {
   const w = createTestWriter();
-  w.deps.rowGroupRows = ROW_GROUP_ROWS;
+  w.deps.rowGroupRows = rowsPerGroup(shape);
   const config = testConfig({
     writer: {
       format: 'site',
@@ -253,7 +293,7 @@ async function build(shape: Shape): Promise<ScalingReport> {
 }
 
 const shapeKey = (shape: Shape): string =>
-  `${shape.outside}-${shape.inside}-${shape.rowGroups}-${shape.spacing}`;
+  `${shape.outside}-${shape.inside}-${shape.rowGroups}-${shape.spacing}-${rowsPerGroup(shape)}`;
 
 /** The folder of the reports `prebuildScalingReports` made, set by the scaling global setup for the worker processes. */
 export const PREBUILT_ENV = 'OTEL_HTML_SCALING_REPORTS';
@@ -308,7 +348,7 @@ const cache = new Map<string, Promise<ScalingReport>>();
  * scaling global setup (`OTEL_HTML_SCALING_REPORTS`) the report is taken from that folder, built there by the first worker that needs it.
  */
 export function buildScalingReport(shape: Shape): Promise<ScalingReport> {
-  const key = `${shape.outside}/${shape.inside}/${shape.rowGroups}/${shape.spacing}`;
+  const key = `${shape.outside}/${shape.inside}/${shape.rowGroups}/${shape.spacing}/${rowsPerGroup(shape)}`;
   const hit = cache.get(key);
   if (hit !== undefined) return hit;
   const prebuilt = process.env[PREBUILT_ENV];

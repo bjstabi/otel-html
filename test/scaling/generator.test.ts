@@ -138,6 +138,11 @@ describe('the scaling report generator', { timeout: 120_000 }, () => {
     }
   });
 
+  test('a shape can ask for row groups of production size', async () => {
+    const r = await build({ outside: 1, inside: 1, rowGroups: 1, spacing: 'dense', rowGroupRows: 50_000 });
+    expect(r.manifest.partitions.map((p) => p.files.spans?.rows)).toEqual([50_000, 50_000]);
+  }, 180_000);
+
   test('CROSS and the axis steps ask for the shapes the model needs', () => {
     expect(CROSS).toEqual({ outside: 4, inside: 2, rowGroups: 4, spacing: 'dense' });
     expect(stepsOf('density', 'sparse').map((s) => [s.rowGroups, s.spacing])).toEqual([
