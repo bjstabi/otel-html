@@ -103,7 +103,14 @@ test(
     process.stdout.write(
       `SMALL-FILES swapped ${paths.length} files; counts ${JSON.stringify(before)} -> ${JSON.stringify(after)}; partition requests after the swap: ${partitionRequests.length}\n`,
     );
-    expect(partitionRequests).toEqual([]);
+    // The swap went around the data layer, which knows a file only once a statement made it prepare the file: a file no
+    // statement had read yet is fetched whole by the first one that does (once), and nothing is read by range or twice.
+    expect(
+      partitionRequests.filter((r) => r.method !== 'GET' || r.range !== null),
+      'a request after the swap that was not a whole GET',
+    ).toEqual([]);
+    const wholePaths = partitionRequests.map((r) => r.path);
+    expect(wholePaths, 'a file requested again after the swap').toEqual([...new Set(wholePaths)]);
   },
 );
 

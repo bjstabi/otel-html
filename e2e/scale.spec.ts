@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { Page } from '@playwright/test';
+import { SMALL_FILE_BYTES } from '../src/viewer/data/engine/small-files.js';
 import { wantsAsset } from '../src/writer/viewer-assets.js';
 import { LOG_STEP_NS, LOGS_PER_TRACE_SLOT, scaleLogTrace } from '../test-support/scale-logs.js';
 import { scaleMetricName } from '../test-support/scale-metrics.js';
@@ -426,7 +427,7 @@ test(
 /** The `data/` file paths (report-relative) of the `{ n, files }` partitions of a site report's manifest on disk. */
 interface PartitionEntry {
   n: number;
-  files: { [table in 'traces' | 'logs']?: { path: string; timeMin: string; timeMax: string } };
+  files: { [table in 'traces' | 'logs']?: { path: string; bytes: number; timeMin: string; timeMax: string } };
 }
 
 function readManifest(name: 'scale' | 'many'): { complete: boolean; partitions: PartitionEntry[] } {
@@ -487,9 +488,17 @@ test(
     const ranged = logFiles.filter((r) => r.range !== null).length;
     expect(touched.length).toBeGreaterThan(0);
     expect(touched.filter((f) => !allowed.includes(f))).toEqual([]);
-    // Range reads, not whole files: a request without `Range` for a logs file would fetch all of it.
-    expect(logFiles.filter((r) => r.range === null)).toEqual([]);
-    const requests = `PERF many trace Logs tab: ${logFiles.length} requests (${ranged} ranged) on ${touched.length} of ${partitions.length} logs files, ${mine.length} partition-file requests in all`;
+    // A file of at most SMALL_FILE_BYTES is fetched whole, once; a bigger one is read by range, never whole.
+    const sizeOf = new Map(
+      partitions.flatMap((p) => (p.files.logs ? [[p.files.logs.path, p.files.logs.bytes] as const] : [])),
+    );
+    const wholeBig = logFiles.filter(
+      (r) => r.range === null && (sizeOf.get(r.path.slice(prefix.length + 1)) ?? Infinity) > SMALL_FILE_BYTES,
+    );
+    expect(wholeBig, 'a logs file above the small-file limit fetched whole').toEqual([]);
+    const wholeFiles = logFiles.filter((r) => r.range === null).map((r) => r.path);
+    expect(wholeFiles, 'a small logs file fetched whole twice').toEqual([...new Set(wholeFiles)]);
+    const requests = `PERF many trace Logs tab: ${logFiles.length} requests (${ranged} ranged, ${logFiles.length - ranged} whole) on ${touched.length} of ${partitions.length} logs files, ${mine.length} partition-file requests in all`;
     report(testInfo, requests);
   },
 );
