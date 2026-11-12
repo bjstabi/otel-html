@@ -16,6 +16,8 @@ export interface QueryEngine {
   registerText(name: string, text: string): Promise<void>;
   /** Forgets every cached result; after a Refresh replaced the registered files (D55). Clients, queued queries and queries in flight stay and finish. */
   clearCache(): void;
+  /** Makes these files cheap to read before a statement that reads them. Resolves even when a file could not be fetched. */
+  prepare(paths: readonly string[], signal?: AbortSignal): Promise<void>;
   close(): Promise<void>;
 }
 

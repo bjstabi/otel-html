@@ -4,6 +4,7 @@ import { OtelHtmlError } from '../../model/errors.js';
 import type { DataSource } from './data-source.js';
 import { createDuckDbDataSource } from './duckdb-source.js';
 import { createViews, dropFiles, manifestFiles, registerFiles } from './engine/files.js';
+import type { SmallFiles } from './engine/small-files.js';
 import type { Engine } from './engine/start.js';
 import type { Logger } from './mosaic.js';
 import type { QueryEngine } from './query-engine.js';
@@ -15,6 +16,8 @@ export interface RefreshDeps {
   loader: ScriptLoader;
   baseUrl: string;
   logger: Logger;
+  /** A site report's small-file loader: told which paths the refresh dropped. */
+  smallFiles?: Pick<SmallFiles, 'forget'>;
 }
 
 /**
@@ -51,12 +54,13 @@ export async function refreshReport(
     await registerFiles(engine, added, deps);
     await createViews(engine, manifest);
   } catch (error) {
-    await rollBack(engine, previous, added, deps.logger);
+    await rollBack(engine, previous, added, deps.logger, deps.smallFiles);
     throw error;
   }
   // Last and best-effort: the views no longer read these files, so a failed drop only leaks a registration.
   for (const path of had) {
     if (wantedPaths.has(path)) continue;
+    deps.smallFiles?.forget([path]);
     await dropFiles(engine, [path]).catch((error: unknown) => {
       deps.logger.warn(`could not drop ${path} after a refresh`, error);
     });
@@ -77,6 +81,7 @@ async function rollBack(
   previous: ManifestV4,
   added: ReturnType<typeof manifestFiles>,
   logger: Logger,
+  small?: Pick<SmallFiles, 'forget'>,
 ): Promise<void> {
   try {
     await createViews(engine, previous);
@@ -84,6 +89,7 @@ async function rollBack(
     logger.error('could not restore the previous views after a failed refresh', error);
   }
   for (const { path } of added) {
+    small?.forget([path]);
     await dropFiles(engine, [path]).catch((error: unknown) => {
       logger.error(`could not drop ${path} after a failed refresh`, error);
     });

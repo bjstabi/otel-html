@@ -83,6 +83,12 @@ export async function dropFiles(engine: Engine, paths: readonly string[]): Promi
   for (const path of paths) await engine.db.dropFile(path);
 }
 
+/** Replaces the URL registration of `path` by a buffer holding the whole file. */
+export async function swapToBuffer(engine: Engine, path: string, bytes: Uint8Array): Promise<void> {
+  await engine.db.dropFile(path);
+  await engine.db.registerFileBuffer(path, bytes);
+}
+
 /** (Re)creates the views over the manifest's files: `viewStatements(manifest, (p) => p)`. */
 export async function createViews(engine: Engine, manifest: ManifestV4): Promise<void> {
   for (const statement of viewStatements(manifest, (p) => p)) await engine.connection.query(statement);
