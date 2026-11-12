@@ -429,7 +429,11 @@ export function predict(model: Model, partitions: readonly PartitionShape[]): nu
   let total = model.a;
   for (const p of partitions) {
     if (model.k !== undefined && p.rowGroups < model.k) {
-      total += (model.s ?? 0) + (model.sd ?? 0) * p.rowGroups;
+      const step = (model.s ?? 0) + (model.sd ?? 0) * p.rowGroups;
+      // outside the window the step shrinks like the fitted line does (at most 1, as in `splitWindow`)
+      const inside = model.w + model.wd * p.rowGroups;
+      const outside = Math.max(0, model.r + model.rd * p.rowGroups);
+      total += p.inWindow || inside <= 0 ? step : step * Math.min(1, outside / inside);
       continue;
     }
     total += Math.max(

@@ -398,3 +398,12 @@ describe('anchored', () => {
     expect(anchored(891, 0, 5)).toBe(891);
   });
 });
+
+describe('predict with a step', () => {
+  test('a partition under k row groups outside the window costs the step times the outside ratio', () => {
+    const model = { a: 0, w: 10, wd: 0, r: 5, rd: 0, k: 4, s: 8, sd: 0 };
+    const shape = { rowGroups: 1, smallFiles: 0 };
+    expect(predict(model, [{ ...shape, inWindow: true }])).toBe(8);
+    expect(predict(model, [{ ...shape, inWindow: false }])).toBe(4);
+  });
+});
