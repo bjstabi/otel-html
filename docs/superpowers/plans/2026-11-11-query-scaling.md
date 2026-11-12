@@ -26,7 +26,7 @@ in order; a PR starts from `main` after the previous one merged.
 | #   | branch                       | PR title                                                               | closes | status |
 | --- | ---------------------------- | ---------------------------------------------------------------------- | ------ | ------ |
 | 1   | `test/query-catalogue`       | `test(query): query catalogue, scaling harness and baseline`           |        | merged #285 |
-| 2   | `fix/test-span-times`        | `fix(test): test spans keep real times under a faked clock`            |        |        |
+| 2   | `fix/test-span-times`        | `fix(test): test spans keep real times under a faked clock`            |        | merged #288 |
 | 3   | `perf/small-site-files`      | `perf(viewer): small site files load whole and in parallel`            |        |        |
 | 4   | `perf/pruning-statistics`    | `perf(query): statistics survive merges and reads follow the window`   | #272   |        |
 | 5   | `feat/format-5`              | `feat(format): format 5 with rollup tables and the end-time statistic` |        |        |
@@ -55,7 +55,7 @@ of them wrong stops and says so instead of quietly choosing otherwise.
    window, W inside, G row groups per partition); a page's requests are recorded by rendering it against a recording
    `DataSource`.
 5. Small files: `QueryEngine.prepare(paths)`; every file stays registered by URL, a prepared file's registration is
-   swapped for a buffer. Threshold starts at 262,144 bytes (Task 9 tunes it).
+   swapped for a buffer. Threshold started at 262,144 bytes; Task 9 tuned it to 524,288.
 6. Missing statistics (§5.1) are completed by one function in `src/format/parquet/stats.ts` that decodes the file's
    key columns, called wherever a file entry is built from an existing file.
 7. Format 5: the in-memory type keeps the name `ManifestV4`, widened to `formatVersion: 4 | 5`; tables
@@ -124,6 +124,7 @@ change in any PR (a need for one is a stop).
 - **PR 3** — `src/viewer/data/query-engine.ts`, `src/viewer/data/mosaic.ts`, `src/viewer/data/duckdb-source.ts`,
   `src/viewer/data/duckdb-metrics.ts`, `src/viewer/data/open-report.ts`, `src/viewer/data/refresh-report.ts`, `src/viewer/data/query-common.ts`,
   `src/viewer/data/engine/files.ts`, `src/viewer/data/engine/start.ts`, `src/viewer/data/engine/small-files.ts` (new),
+  `src/viewer/data/engine/file-gate.ts` (new: a swap is atomic against statements, Task 8's review),
   `src/viewer/data/catalogue.ts`, `src/host/engine.ts` (the no-op `prepare`). No build file.
 - **PR 4** — `src/format/parquet/stats.ts`, `src/cli/ci/run-report.ts`, `src/writer/partition-session.ts`,
   `src/writer/partition-checkpoint.ts`, `src/writer/compaction.ts`, `src/writer/merge.ts`, `src/query/sql/spans.ts`,
@@ -391,7 +392,7 @@ Contents, per partition `n` (one flush each, `close: false`, config `writer.form
 `writer.statisticsKeys: ['resource:run.id']`): `rowGroups × ROW_GROUP_ROWS` spans in traces of 8, spread evenly over
 10 minutes from `T0 + n × spacing`, each trace within one second and across both services; 2 services under one
 scope name (so a service's slice of the file is 1, 2 and 4 row groups, ordered by time), 8 span names, every 16th span an error, resource attribute
-`run.id = run-<n>`, span attribute `http.route` with 16 values; a quarter as many logs, half of them with a trace id,
+`run.id = run-<n>`, span attribute `http.route` with 16 values; an eighth as many logs (a quarter until Task 9), half of them with a trace id,
 4 severities, one body in 64 containing the word `needle`; 2 metrics × 4 series × 16 points. Everything derives from
 `n` and the row index: no `Math.random`, no `Date.now`. Axis steps: retention `outside` 2, 4, 8; window `inside` 2,
 4, 8; density `rowGroups` 2, 4, 8. Dense windows of up to 8 partitions are short (2 h 30 m); sparse windows of 2 or
@@ -879,7 +880,7 @@ interface QueryEngine {
   prepare(paths: readonly string[], signal?: AbortSignal): Promise<void>;
 }
 // engine/small-files.ts
-export const SMALL_FILE_BYTES = 262_144;
+export const SMALL_FILE_BYTES = 524_288;
 export interface SmallFiles { prepare(paths: readonly string[], signal?: AbortSignal): Promise<void>; forget(paths: readonly string[]): void }
 export function smallFiles(deps: {
   bytesOf(path: string): number | undefined;              // the manifest's size
@@ -899,7 +900,7 @@ answers by range reads. `dropFiles` and Refresh call `forget` for the paths they
 - [ ] **Step 1: Write the failing tests**
 
 ```ts
-test('a file of exactly 262,144 bytes is fetched whole; one byte more is not', async () => {});
+test('a file of exactly the limit is fetched whole; one byte more is not', async () => {});
 test('two prepares that share a file fetch it once', async () => {
   await Promise.all([s.prepare(['a', 'b']), s.prepare(['b', 'c'])]);
   expect(fetched).toEqual(['a', 'b', 'c']); // any order, each once
@@ -948,7 +949,7 @@ export function runPrepared(engine: QueryEngine, q: Query, files: readonly strin
 export function filesFor(manifest: ManifestV4, tables: readonly Table[], pruned?: Pruned): readonly string[];
 // counting-engine.ts
 interface CountingEngine { /** Paths prepared since the last take, with their sizes. */ prepared(): ReadonlyMap<string, number> }
-/** Above the generator's largest traces, patterns and rollup file (8 row groups), below its smallest spans and logs file (2 row groups). */
+/** Above the generator's largest traces, patterns, points, rollup and logs file (8 row groups), below its smallest spans file (2 row groups): logs are sized like the live report's (most under the 524,288-byte limit). */
 export const HARNESS_SMALL_FILE_BYTES: number;
 // measure.ts
 export function measureEntry(entry: CatalogueEntry, shape: Shape, opts?: { threshold?: number }): Promise<Cost>;
@@ -975,12 +976,15 @@ test('each small traces file is fetched whole at most once and never by range af
 
 - [ ] **Step 2:** run → FAIL. **Step 3:** route every `engine.query` of the two data-source files through
       `runPrepared`; the counting engine's `prepare` runs the same `smallFiles` with `HARNESS_SMALL_FILE_BYTES`.
-      **Step 4:** unit and scaling tests → PASS; lower `DEBT_MAX` to the new length. If the generator's logs
-      files are not all above the threshold, raise its log count (Task 3's "a quarter as many") until they are.
+      **Step 4:** unit and scaling tests → PASS; lower `DEBT_MAX` to the new length. The generator's logs
+      are an eighth as many as its spans (changed from "a quarter as many" in Task 9, to size them like live), so every
+      logs file sits under the harness limit at the class shapes; a generator test asserts the split.
       Points files are under it at every step, as on the live report.
 - [ ] **Step 5: Tune the threshold.** `mise run predict:queries -- --threshold <n>` for 131,072, 262,144, 524,288
       and 1,048,576 on the `rolling` shape. Keep 262,144 unless another value's modelled time for the dashboard plus
-      the trace list is at least 10 % lower; put the four rows in the PR body.
+      the trace list is at least 10 % lower; put the four rows in the PR body. Done (re-measured after the step fit): 131,072 1,773; 262,144 1,709; 524,288 1,497
+      (12 % lower); 1,048,576 1,369, only 9 % below 524,288 for twice the bytes held per file and a worse 30x1.5M
+      dashboard. A larger limit must earn the same 10 % as the first step, so `SMALL_FILE_BYTES` is 524,288.
 - [ ] **Step 6:** README: one paragraph under the site format on small files; `mise run verify`; prediction against
       the "after 3" row. **Commit and open PR 3.**
 
@@ -1947,22 +1951,28 @@ be checked against its output. The other three columns are harness absolutes (**
 
 | after PR      | rolling (live-anchored) | 30x150k (harness) | 90x150k (harness) | 30x1.5M (harness) |
 | ------------- | ----------------------- | ----------------- | ----------------- | ----------------- |
-| 1 (baseline)  | 891 / 1,064             | 667 / 822         | 2,002 / 2,465     | 2,666 / 4,906     |
-| 3             | 844 / 1,064             | 631 / 822         | 1,894 / 2,465     | 2,631 / 4,906     |
-| 4             | 755 / 535               | 567 / 421         | 1,700 / 1,264     | 1,982 / 903       |
-| 6             | 673 / 456               | 505 / 361         | 1,516 / 1,082     | 1,760 / 521       |
-| 8 (window 7d) | 673 / 456               | 245 / 84          | 577 / 84          | 1,256 / 122       |
+| 1 (baseline, small files off) | 891 / 1,064 | 611 / 814         | 1,834 / 2,441     | 2,217 / 4,873     |
+| 3 (small files on, 524,288)   | 560 / 937   | 379 / 821         | 1,138 / 2,464     | 2,297 / 3,542     |
+| 4             | 465 / 484               | 316 / 551         | 948 / 1,652       | 1,665 / 835       |
+| 6             | 415 / 195               | 282 / 224         | 847 / 673         | 1,484 / 319       |
+| 8 (window 7d) | 415 / 195               | 166 / 52          | 429 / 52          | 1,155 / 75        |
+
+The harness columns were re-derived in PR 3 from one generator, when the generator's logs changed to live size (an
+eighth as many as spans, so most logs files sit under the small-file limit as on the live report): row 1 is the pages
+measured with no small file prepared (main before PR 3), row 3 with files of 524,288 bytes or less prepared, rows 4, 6
+and 8 are row 3's fit with `--after`. Row 3 as first written (before that change, 262,144 bytes): rolling 844 / 1,064,
+30x150k 631 / 822, 90x150k 1,894 / 2,465, 30x1.5M 2,631 / 4,906. The new rolling row 3 is below it. Fix round 2 gave the page fit a step (partitions under the crossing cost a prepared-file line, the others a range-read line), which moved the trace list cells (rolling 746 to 937).
 
 How the rolling cells come about (serial requests, dashboard / trace list; ratio = after / after PR 1; anchored = live x
 ratio; from the run of 2026-11-12 on the commit that added the section):
 
 | after PR      | harness rolling (unanchored) | ratio           | anchored    |
 | ------------- | ---------------------------- | --------------- | ----------- |
-| 1 (baseline)  | 474.5 / 590.2                | 1.000 / 1.000   | 891 / 1,064 |
-| 3             | 449.5 / 590.2                | 0.947 / 1.000   | 844 / 1,064 |
-| 4             | 401.9 / 296.7                | 0.847 / 0.503   | 755 / 535   |
-| 6             | 358.4 / 253.1                | 0.755 / 0.429   | 673 / 456   |
-| 8 (window 7d) | 358.4 / 253.1                | 0.755 / 0.429   | 673 / 456   |
+| 1 (small files off) | 433.9 / 553.6        | 1.000 / 1.000   | 891 / 1,064 |
+| 3             | 272.6 / 487.7                | 0.628 / 0.881   | 560 / 937   |
+| 4             | 226.2 / 251.6                | 0.521 / 0.455   | 465 / 484   |
+| 6             | 202.1 / 101.6                | 0.466 / 0.183   | 415 / 195   |
+| 8 (window 7d) | 202.1 / 101.6                | 0.466 / 0.183   | 415 / 195   |
 
 Row 8 equals row 6 for `rolling` on purpose: all 21 snapshot partitions overlap the last 7 days (partition 165 spans 9
 days, from 1793449360 to 1794226244 s, and the 7-day window starts at 1793815081), so `inWindow` is true for every

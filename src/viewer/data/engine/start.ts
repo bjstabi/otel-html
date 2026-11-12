@@ -12,6 +12,8 @@ import type { ManifestV4 } from '../../../format/manifest.js';
 import { OtelHtmlError } from '../../../model/errors.js';
 import type { ScriptLoader } from '../script-loader.js';
 import { fromBase64, gunzip, loadText, toBase64 } from './bytes.js';
+import type { FileGate } from './file-gate.js';
+import { createFileGate } from './file-gate.js';
 
 export interface EngineDeps {
   loader: ScriptLoader;
@@ -26,6 +28,8 @@ export interface Engine {
   readonly db: AsyncDuckDB;
   readonly connection: AsyncDuckDBConnection;
   readonly format: 'local' | 'site';
+  /** Orders file swaps against statements (see `FileGate`). */
+  readonly gate?: FileGate;
   registerText(name: string, text: string): Promise<void>;
   close(): Promise<void>;
 }
@@ -180,6 +184,7 @@ export async function startEngine(engine: ManifestV4['engine'], deps: EngineDeps
     db,
     connection,
     format: engine.format,
+    gate: createFileGate(),
     registerText: (name, text) => db.registerFileText(name, text),
     async close() {
       // the worker is released even when the connection will not close; that error still surfaces

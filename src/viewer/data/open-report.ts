@@ -2,7 +2,8 @@ import { type ManifestV4, parseAnyManifest } from '../../format/manifest.js';
 import { traced } from '../telemetry.js';
 import type { DataSource } from './data-source.js';
 import { createDuckDbDataSource } from './duckdb-source.js';
-import { registerPartitions } from './engine/files.js';
+import { registerPartitions, swapToBuffer } from './engine/files.js';
+import { smallFiles } from './engine/small-files.js';
 import { type Engine, type EngineDeps, startEngine } from './engine/start.js';
 import {
   createCoordinator,
@@ -30,7 +31,11 @@ export interface OpenParts {
   startEngine: typeof startEngine;
   registerPartitions: typeof registerPartitions;
   /** The query engine over a started engine (a Mosaic coordinator in production). */
-  createQueryEngine: (engine: Engine, logger: Logger) => QueryEngine;
+  createQueryEngine: (
+    engine: Engine,
+    logger: Logger,
+    prepare?: (paths: readonly string[], signal?: AbortSignal) => Promise<void>,
+  ) => QueryEngine;
   /** The query engine over a host's REST endpoint (D43). */
   createRestEngine: (endpoint: string, logger: Logger) => QueryEngine;
   createSource: typeof createDuckDbDataSource;
@@ -59,8 +64,14 @@ export interface OpenDeps extends EngineDeps {
 const realParts: OpenParts = {
   startEngine,
   registerPartitions,
-  createQueryEngine: (engine, logger) =>
-    mosaicQueryEngine(createCoordinator(engineConnector(engine.connection), logger), engine),
+  createQueryEngine: (engine, logger, prepare) =>
+    mosaicQueryEngine(
+      createCoordinator(engineConnector(engine.connection, engine.gate), logger),
+      engine,
+      true,
+      undefined,
+      prepare,
+    ),
   createRestEngine: (endpoint, logger) => restQueryEngine(endpoint, logger),
   createSource: createDuckDbDataSource,
 };
@@ -140,11 +151,38 @@ export async function openReportRefreshable(
             ),
           ),
         );
-        const queryEngine = parts.createQueryEngine(engine, deps.logger);
+        let current = manifest;
+        const sizes = new Map<string, number>();
+        const fillSizes = (m: ManifestV4): void => {
+          sizes.clear();
+          for (const p of m.partitions) for (const f of Object.values(p.files)) sizes.set(f.path, f.bytes);
+        };
+        fillSizes(manifest);
+        // only a site report registers by URL; a local one already holds every file as a buffer
+        const small =
+          engine.format === 'site'
+            ? smallFiles({
+                bytesOf: (path) => sizes.get(path),
+                fetchWhole: async (path, fresh) => {
+                  const response = await fetch(
+                    new URL(path, deps.baseUrl).href,
+                    fresh ? { cache: 'no-cache' } : undefined,
+                  );
+                  if (!response.ok) throw new Error(`${path}: HTTP ${response.status}`);
+                  return new Uint8Array(await response.arrayBuffer());
+                },
+                swap: (path, bytes, isCurrent) =>
+                  swapToBuffer(engine, path, bytes, new URL(path, deps.baseUrl).href, isCurrent),
+              })
+            : undefined;
+        const queryEngine = parts.createQueryEngine(
+          engine,
+          deps.logger,
+          small ? (paths, signal) => small.prepare(paths, signal) : undefined,
+        );
         const dataSource = tracedDataSource(
           parts.createSource({ engine: queryEngine, manifest, logger: deps.logger }),
         );
-        let current = manifest;
         let shown = dataSource;
         let last: Promise<unknown> = Promise.resolve();
         const refresh = (rerun = false): Promise<DataSource> => {
@@ -157,6 +195,7 @@ export async function openReportRefreshable(
                 loader: deps.loader,
                 baseUrl: deps.baseUrl,
                 logger: deps.logger,
+                ...(small ? { smallFiles: small, adoptSizes: fillSizes } : {}),
               },
               deps.now ?? Date.now,
             );

@@ -9,7 +9,7 @@ import { createDuckDbDataSource } from '../../src/viewer/data/duckdb-source.js';
 import { Shell } from '../../src/viewer/shell/shell.js';
 import { createHashHistory } from '../../src/viewer/state/hash-history.js';
 import { ThemeProvider } from '../../src/viewer/theme/theme-provider.js';
-import { type Cost, costOf } from '../../test-support/scaling/cost.js';
+import { type Cost, costWith } from '../../test-support/scaling/cost.js';
 import { openCountingEngine } from '../../test-support/scaling/counting-engine.js';
 import { buildScalingReport, type ScalingReport, type Shape } from '../../test-support/scaling/generator.js';
 import { recordingDataSource } from '../../test-support/scaling/recording-source.js';
@@ -74,8 +74,8 @@ export function manifestWithCi(base: ManifestV4, metric: string): ManifestV4 {
 }
 
 /** A page in a cold counting engine over an existing report: what its file reads cost. */
-async function pageOn(live: ScalingReport, hash: string): Promise<Cost> {
-  const counting = await openCountingEngine(live.dir, live.manifest);
+async function pageOn(live: ScalingReport, hash: string, threshold: number): Promise<Cost> {
+  const counting = await openCountingEngine(live.dir, live.manifest, { threshold });
   try {
     const manifest = manifestWithCi(live.manifest, live.ids.metric);
     await counting.cold();
@@ -90,7 +90,7 @@ async function pageOn(live: ScalingReport, hash: string): Promise<Cost> {
       </ThemeProvider>,
     );
     await recording.settled(PAGE_CALLS[hash] ?? []);
-    const cost = costOf(await counting.take(), new Map());
+    const cost = costWith(await counting.take(), counting.prepared());
     cleanup();
     return cost;
   } finally {
@@ -103,16 +103,33 @@ async function pageOn(live: ScalingReport, hash: string): Promise<Cost> {
 export const shapeFile = (shape: Shape): string =>
   `${shape.spacing}-${shape.outside}-${shape.inside}-${shape.rowGroups}${shape.bigRowGroups === undefined ? '' : `-big${shape.bigRowGroups}`}.json`;
 
-/** The five pages rendered whole on the report of `shape`, one cold engine each; the costs go to `<out>/pages`. */
+/**
+ * The small-file limit the page measurement uses (`OTEL_HTML_SCALING_THRESHOLD`, default the production 524,288), so
+ * `mise run predict:queries -- --threshold N` has pages measured under N when run as
+ * `OTEL_HTML_SCALING_THRESHOLD=N mise run predict:queries -- --threshold N`.
+ */
+const { OTEL_HTML_SCALING_THRESHOLD: LIMIT } = process.env;
+export const PAGE_THRESHOLD = Number(LIMIT ?? 524_288);
+
+/**
+ * The five pages rendered whole on the report of `shape`, one cold engine each; the costs go to `<out>/pages` (small
+ * files prepared under `PAGE_THRESHOLD`) and to `<out>/pages-off` (none prepared: main before PR 3).
+ */
 export async function measureShape(shape: Shape, out: string): Promise<void> {
   const live = await buildScalingReport(shape);
   try {
     for (const hash of PAGES) {
-      const cost = await pageOn(live, hash);
-      if (cost.serial <= 0) throw new Error(`${hash} on ${shapeFile(shape)} made no requests`);
-      const dir = join(out, 'pages', encodeURIComponent(hash));
-      mkdirSync(dir, { recursive: true });
-      writeFileSync(join(dir, shapeFile(shape)), JSON.stringify({ shape, ...cost }));
+      for (const [folder, threshold] of [
+        ['pages', PAGE_THRESHOLD],
+        ['pages-off', 0],
+      ] as const) {
+        const cost = await pageOn(live, hash, threshold);
+        if (cost.serial + cost.parallel <= 0)
+          throw new Error(`${hash} on ${shapeFile(shape)} made no requests`);
+        const dir = join(out, folder, encodeURIComponent(hash));
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(join(dir, shapeFile(shape)), JSON.stringify({ shape, ...cost, threshold }));
+      }
     }
   } finally {
     await live.close();

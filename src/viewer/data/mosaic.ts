@@ -3,11 +3,17 @@ import type { Table } from '@uwdata/flechette';
 import { type Connector, Coordinator, type QueryResult, restConnector } from '@uwdata/mosaic-core';
 import type { Query } from '@uwdata/mosaic-sql';
 import { OtelHtmlError } from '../../model/errors.js';
+import type { FileGate } from './engine/file-gate.js';
 import type { EngineFiles, QueryEngine } from './query-engine.js';
 
 export type Logger = Pick<Console, 'debug' | 'info' | 'warn' | 'error'>;
 
-function runSql(connection: AsyncDuckDBConnection, sql: string): Promise<Uint8Array> {
+async function runSql(
+  connection: AsyncDuckDBConnection,
+  sql: string,
+  gate?: Pick<FileGate, 'wait'>,
+): Promise<Uint8Array> {
+  await gate?.wait();
   // biome-ignore lint/correctness/useHookAtTopLevel: useUnsafe is DuckDB's connection API, not a React hook
   return connection.useUnsafe((bindings, id) => bindings.runQuery(id, sql));
 }
@@ -17,12 +23,12 @@ function runSql(connection: AsyncDuckDBConnection, sql: string): Promise<Uint8Ar
  * returns the IPC bytes of `connection.useUnsafe((bindings, id) => bindings.runQuery(id, sql))`; `type: 'exec'` runs
  * the same and resolves undefined; `type: 'json'` is rejected with `invalid-report` (never requested).
  */
-export function engineConnector(connection: AsyncDuckDBConnection): Connector {
+export function engineConnector(connection: AsyncDuckDBConnection, gate?: Pick<FileGate, 'wait'>): Connector {
   // The mosaic `signal` option is ignored: duckdb-wasm cannot abort a running query, its result is discarded.
   async function query(request: { type: string; sql: string }): Promise<Uint8Array | undefined> {
-    if (request.type === 'arrow') return await runSql(connection, request.sql);
+    if (request.type === 'arrow') return await runSql(connection, request.sql, gate);
     if (request.type === 'exec') {
-      await runSql(connection, request.sql);
+      await runSql(connection, request.sql, gate);
       return undefined;
     }
     throw new OtelHtmlError('invalid-report', {
@@ -71,7 +77,7 @@ function engineFailure(
  * manager (a query waiting in the consolidator, or already running, is not cancelled: its result is discarded); the
  * generated SQL is attached to a failure as an `invalid-report` `OtelHtmlError` (its hint). `exec` sends
  * `{ type: 'exec', sql }` through the coordinator (so its cache sees the DDL); `registerText` and `close` delegate to
- * `files`. `clearCache` empties the result cache only (`coordinator.manager.cache().clear()`); queued and in-flight queries finish. `tempTables` (default true) is what the engine reports on the seam; the served path passes false (D43).
+ * `files`. `clearCache` empties the result cache only (`coordinator.manager.cache().clear()`); queued and in-flight queries finish. `prepare` (default: nothing to do) is what a site report passes to load its small files whole. `tempTables` (default true) is what the engine reports on the seam; the served path passes false (D43).
  * `describe`, when given, words a failure's `actual` (undefined keeps the error's own message).
  */
 export function mosaicQueryEngine(
@@ -79,6 +85,7 @@ export function mosaicQueryEngine(
   files: EngineFiles,
   tempTables = true,
   describe?: (error: unknown) => string | undefined,
+  prepare?: (paths: readonly string[], signal?: AbortSignal) => Promise<void>,
 ): QueryEngine {
   return {
     tempTables,
@@ -115,6 +122,7 @@ export function mosaicQueryEngine(
     async registerText(name: string, text: string): Promise<void> {
       await files.registerText(name, text);
     },
+    prepare: (paths, signal) => prepare?.(paths, signal) ?? Promise.resolve(),
     clearCache(): void {
       // Not `coordinator.clear()`: its `manager.clear()` rejects queued queries and aborts those in flight.
       coordinator.manager.cache().clear();

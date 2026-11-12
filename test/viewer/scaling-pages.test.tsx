@@ -8,7 +8,7 @@ import { createDuckDbDataSource } from '../../src/viewer/data/duckdb-source.js';
 import { Shell } from '../../src/viewer/shell/shell.js';
 import { createHashHistory } from '../../src/viewer/state/hash-history.js';
 import { ThemeProvider } from '../../src/viewer/theme/theme-provider.js';
-import { costOf } from '../../test-support/scaling/cost.js';
+import { costWith } from '../../test-support/scaling/cost.js';
 import { openCountingEngine, type ReadEvent } from '../../test-support/scaling/counting-engine.js';
 import {
   BASE,
@@ -20,7 +20,14 @@ import {
 } from '../../test-support/scaling/generator.js';
 import { closeMeasured } from '../../test-support/scaling/measure.js';
 import { entryIdsOf, recordingDataSource } from '../../test-support/scaling/recording-source.js';
-import { manifestWithCi, measureShape, PAGE_CALLS, PAGES, shapeFile } from './scaling-pages-support.js';
+import {
+  manifestWithCi,
+  measureShape,
+  PAGE_CALLS,
+  PAGE_THRESHOLD,
+  PAGES,
+  shapeFile,
+} from './scaling-pages-support.js';
 
 const IDS = new Set(CATALOGUE.map((e) => e.id));
 const { OTEL_HTML_SCALING: SCALING, OTEL_HTML_SCALING_OUT: OUT } = process.env;
@@ -30,17 +37,19 @@ let report: ScalingReport;
 let close: () => Promise<void>;
 let cold: () => Promise<void>;
 let take: () => Promise<ReadEvent[]>;
+let prepared: () => ReadonlyMap<string, number>;
 let make: () => ReturnType<typeof createDuckDbDataSource>;
 
 beforeAll(async () => {
   report = await buildScalingReport(BASE);
-  const counting = await openCountingEngine(report.dir, report.manifest);
+  const counting = await openCountingEngine(report.dir, report.manifest, { threshold: PAGE_THRESHOLD });
   close = async () => {
     await counting.close();
     await report.close();
   };
   cold = () => counting.cold();
   take = () => counting.take();
+  prepared = () => counting.prepared();
   make = () => createDuckDbDataSource({ engine: counting.engine, manifest: report.manifest });
 }, 120_000);
 afterEach(() => {
@@ -69,7 +78,7 @@ describe('the pages ask only catalogued requests', () => {
       // nothing may start after the page counted as settled
       await new Promise<void>((resolve) => setTimeout(resolve, 250));
       expect(calls.length, `${hash}: calls started after settled()`).toBe(settledCount);
-      const warm = costOf(await take(), new Map());
+      const warm = costWith(await take(), prepared());
       expect(calls.length).toBeGreaterThan(0);
       for (const method of PAGE_CALLS[hash] ?? [])
         expect(

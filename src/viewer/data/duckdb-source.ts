@@ -1,5 +1,6 @@
 import { and, type ExprNode, type Query, sql } from '@uwdata/mosaic-sql';
 import type { ManifestV4 } from '../../format/manifest.js';
+import type { Table as TableName } from '../../format/parquet/columns.js';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { TraceId, UnixNanos } from '../../model/ids.js';
 import type { ResourceRecord, ResourceRef, ScopeRecord, ScopeRef } from '../../model/records.js';
@@ -26,7 +27,7 @@ import {
   surroundingQueries,
   traceLogsQuery,
 } from '../../query/sql/logs.js';
-import { absWindow } from '../../query/sql/prune.js';
+import { absWindow, type Pruned } from '../../query/sql/prune.js';
 import { idTableRowsQuery } from '../../query/sql/residual.js';
 import {
   durationBinsQuery,
@@ -54,7 +55,7 @@ import { LOG_SEVERITY_KEYS } from '../../semconv/severity.js';
 import { durationAxis } from '../traces/views.js';
 import type { DataSource, TraceDetail } from './data-source.js';
 import { metricMethods } from './duckdb-metrics.js';
-import { checkSurroundingCount, type LogRef, type LogRow } from './log-query.js';
+import { checkSurroundingCount, type LogRef, type LogRow, refParts } from './log-query.js';
 import {
   type LogRowEntry,
   logEntries,
@@ -66,7 +67,7 @@ import {
   resourceValueResult,
 } from './log-results.js';
 import { manifestRange } from './manifest-range.js';
-import { DEFAULT_FACET_CAPS, type FacetCaps, throwIfAborted } from './query-common.js';
+import { DEFAULT_FACET_CAPS, type FacetCaps, filesFor, runPrepared, throwIfAborted } from './query-common.js';
 import type { QueryEngine } from './query-engine.js';
 import { dropResidualTable, idTable, residualRows, servedResidual } from './residual.js';
 import type {
@@ -239,6 +240,14 @@ export function createDuckDbDataSource(opts: {
   };
   const range = manifestRange(manifest);
 
+  /** Runs `q` after the engine prepared the files it reads: `tables` whole, the first one narrowed to `pruned`. */
+  const read = (
+    tables: readonly TableName[],
+    pruned: Pruned | undefined,
+    q: Query,
+    signal?: AbortSignal,
+  ): ReturnType<QueryEngine['query']> => runPrepared(engine, q, filesFor(manifest, tables, pruned), signal);
+
   /**
    * Narrows `filter` to the rows the residual terms accept, through a temp table of their ids (D5). `candidates` reads
    * up to the given number of rows of the filtered set.
@@ -288,7 +297,12 @@ export function createDuckDbDataSource(opts: {
       residual,
       async (limit) =>
         spanEntries(
-          await engine.query(spanRowsQuery(filter, { column: 'start', dir: 'asc' }, limit), signal),
+          await read(
+            ['spans'],
+            filter.files,
+            spanRowsQuery(filter, { column: 'start', dir: 'asc' }, limit),
+            signal,
+          ),
           epoch,
         ).entries,
       test,
@@ -323,7 +337,9 @@ export function createDuckDbDataSource(opts: {
         parts.push(
           (async () => {
             if (traceSort !== null) {
-              const r = traceRows(await engine.query(traceRowsQuery(f, traceSort, q.limit), signal));
+              const r = traceRows(
+                await read(['spans', 'traces'], f.files, traceRowsQuery(f, traceSort, q.limit), signal),
+              );
               Object.assign(result, r);
             } else if (spanSort !== null && !useIds && test !== null) {
               let candidates = 0;
@@ -331,7 +347,7 @@ export function createDuckDbDataSource(opts: {
                 limit: q.limit,
                 fetch: async (limit, offset) => {
                   const page = spanEntries(
-                    await engine.query(spanRowsQuery(f, spanSort, limit).offset(offset), signal),
+                    await read(['spans'], f.files, spanRowsQuery(f, spanSort, limit).offset(offset), signal),
                     epoch,
                   );
                   if (offset === 0) candidates = page.total;
@@ -348,7 +364,7 @@ export function createDuckDbDataSource(opts: {
             } else if (spanSort !== null) {
               Object.assign(
                 result,
-                spanRows(await engine.query(spanRowsQuery(f, spanSort, q.limit), signal), epoch),
+                spanRows(await read(['spans'], f.files, spanRowsQuery(f, spanSort, q.limit), signal), epoch),
               );
             }
           })(),
@@ -364,8 +380,12 @@ export function createDuckDbDataSource(opts: {
                 : CORE_SPAN_FACETS.filter((c) => q.facetKeys?.includes(c.key));
             const wantAttrs = q.facetKeys === null || q.facetKeys.some((k) => !CORE_KEYS.has(k));
             const [core, attrs] = await Promise.all([
-              keys.length === 0 ? null : engine.query(coreFacetsQuery(f, 'spans', keys, caps), signal),
-              wantAttrs ? engine.query(attributeFacetsQuery(f, 'spans', caps, [...CORE_KEYS]), signal) : null,
+              keys.length === 0
+                ? null
+                : read(['spans'], f.files, coreFacetsQuery(f, 'spans', keys, caps), signal),
+              wantAttrs
+                ? read(['spans'], f.files, attributeFacetsQuery(f, 'spans', caps, [...CORE_KEYS]), signal)
+                : null,
             ]);
             result.facets = facetCounts(
               core,
@@ -381,7 +401,7 @@ export function createDuckDbDataSource(opts: {
       if (needs.has('timeline')) {
         parts.push(
           (async () => {
-            const t = timeline(await engine.query(timelineQuery(f, spec), signal), spec);
+            const t = timeline(await read(['spans'], f.files, timelineQuery(f, spec), signal), spec);
             result.buckets = t.buckets;
             result.red = t.red;
           })(),
@@ -390,7 +410,10 @@ export function createDuckDbDataSource(opts: {
         // The counts alone: the statement leaves out the latency columns, and `red` keeps its empty value.
         parts.push(
           (async () => {
-            result.buckets = timelineBuckets(await engine.query(timelineQuery(f, spec, false), signal), spec);
+            result.buckets = timelineBuckets(
+              await read(['spans'], f.files, timelineQuery(f, spec, false), signal),
+              spec,
+            );
           })(),
         );
       }
@@ -399,7 +422,7 @@ export function createDuckDbDataSource(opts: {
         // The match count alone, as `rows` would report it; with `rows` asked its statement sets the total.
         parts.push(
           (async () => {
-            const t = await engine.query(spanCountQuery(f, q.mode), signal);
+            const t = await read(['spans'], f.files, spanCountQuery(f, q.mode), signal);
             result.total = toNumber(cell(rowsOf(t)[0] ?? {}, 'total') ?? 0n, 'total');
           })(),
         );
@@ -408,7 +431,7 @@ export function createDuckDbDataSource(opts: {
       if (needs.has('durations')) {
         parts.push(
           (async () => {
-            const summary = durationSummary(await engine.query(durationSummaryQuery(f), signal));
+            const summary = durationSummary(await read(['spans'], f.files, durationSummaryQuery(f), signal));
             if (summary === null) return;
             // A caller's axis (the explorer keeps one while a duration filter is set) wins over the derived one.
             const edges = durationAxis(
@@ -418,7 +441,10 @@ export function createDuckDbDataSource(opts: {
             const axis =
               q.durationAxis ??
               edges.slice(0, -1).map((from, i) => ({ fromNs: from, toNs: edges[i + 1] ?? from }));
-            const bins = durationBins(await engine.query(durationBinsQuery(f, axis), signal), axis);
+            const bins = durationBins(
+              await read(['spans'], f.files, durationBinsQuery(f, axis), signal),
+              axis,
+            );
             result.durations = { summary, bins };
           })(),
         );
@@ -429,7 +455,7 @@ export function createDuckDbDataSource(opts: {
         parts.push(
           (async () => {
             result.groups = groupStats(
-              await engine.query(groupStatsQuery(f, 'spans', key, caps.facetValueCap), signal),
+              await read(['spans'], f.files, groupStatsQuery(f, 'spans', key, caps.facetValueCap), signal),
               caps.facetValueCap,
             );
           })(),
@@ -460,12 +486,14 @@ export function createDuckDbDataSource(opts: {
     if (filter.files.files.length === 0) return { services: [], total: 0 };
     const spec = bucketSpec(o.window, range);
     const run = async (f: SqlFilter): Promise<ServicesResult> => {
-      const found = await engine.query(servicesQuery(f, o.limit + 1), signal);
+      const found = await read(['spans'], f.files, servicesQuery(f, o.limit + 1), signal);
       const names = rowsOf(found)
         .slice(0, o.limit)
         .map((r) => String(cell(r, 'service_name')));
       const buckets =
-        names.length === 0 ? null : await engine.query(serviceBucketsQuery(f, names, spec), signal);
+        names.length === 0
+          ? null
+          : await read(['spans'], f.files, serviceBucketsQuery(f, names, spec), signal);
       return serviceStats(found, buckets, spec, o.limit);
     };
     return residual === null
@@ -522,8 +550,10 @@ export function createDuckDbDataSource(opts: {
         parts.push(
           (async () => {
             if (traceSort !== null) {
-              const r = logTraceRows(await engine.query(logTracesQuery(f, traceSort, q.limit), signal));
-              const matching = await engine.query(logsWithTraceCountQuery(f), signal);
+              const r = logTraceRows(
+                await read(['logs'], f.files, logTracesQuery(f, traceSort, q.limit), signal),
+              );
+              const matching = await read(['logs'], f.files, logsWithTraceCountQuery(f), signal);
               Object.assign(result, {
                 rows: r.rows,
                 total: r.total,
@@ -535,7 +565,7 @@ export function createDuckDbDataSource(opts: {
                 limit: q.limit,
                 fetch: async (limit, offset) => {
                   const page = logEntries(
-                    await engine.query(logRowsQuery(f, logSort, limit).offset(offset), signal),
+                    await read(['logs'], f.files, logRowsQuery(f, logSort, limit).offset(offset), signal),
                   );
                   if (offset === 0) candidates = page.total;
                   return page.entries;
@@ -545,7 +575,9 @@ export function createDuckDbDataSource(opts: {
               const total = exhausted ? rows.length : Math.max(candidates, rows.length);
               Object.assign(result, { rows: rows.map((e) => e.row), total, matched: total });
             } else if (logSort !== null) {
-              const { rows, total } = logRows(await engine.query(logRowsQuery(f, logSort, q.limit), signal));
+              const { rows, total } = logRows(
+                await read(['logs'], f.files, logRowsQuery(f, logSort, q.limit), signal),
+              );
               Object.assign(result, { rows, total, matched: total });
             }
           })(),
@@ -561,9 +593,11 @@ export function createDuckDbDataSource(opts: {
                 : CORE_LOG_FACETS.filter((c) => q.facetKeys?.includes(c.key));
             const wantAttrs = q.facetKeys === null || q.facetKeys.some((k) => !CORE_LOG_KEYS.has(k));
             const [core, attrs] = await Promise.all([
-              keys.length === 0 ? null : engine.query(coreFacetsQuery(f, 'logs', keys, caps), signal),
+              keys.length === 0
+                ? null
+                : read(['logs'], f.files, coreFacetsQuery(f, 'logs', keys, caps), signal),
               wantAttrs
-                ? engine.query(attributeFacetsQuery(f, 'logs', caps, [...CORE_LOG_KEYS]), signal)
+                ? read(['logs'], f.files, attributeFacetsQuery(f, 'logs', caps, [...CORE_LOG_KEYS]), signal)
                 : null,
             ]);
             result.facets = facetCounts(
@@ -580,7 +614,10 @@ export function createDuckDbDataSource(opts: {
       if (needs.has('timeline')) {
         parts.push(
           (async () => {
-            result.buckets = logTimeline(await engine.query(logTimelineQuery(f, spec), signal), spec);
+            result.buckets = logTimeline(
+              await read(['logs'], f.files, logTimelineQuery(f, spec), signal),
+              spec,
+            );
           })(),
         );
       }
@@ -595,7 +632,12 @@ export function createDuckDbDataSource(opts: {
           residual,
           async (limit) =>
             logEntries(
-              await engine.query(logRowsQuery(filter, { column: 'time', dir: 'asc' }, limit), signal),
+              await read(
+                ['logs'],
+                filter.files,
+                logRowsQuery(filter, { column: 'time', dir: 'asc' }, limit),
+                signal,
+              ),
             ).entries,
           test,
           run,
@@ -605,8 +647,8 @@ export function createDuckDbDataSource(opts: {
 
   /** The partitions the trace's `traces` rows name; none means the trace is not indexed and every logs file is read. */
   async function logTraceFiles(traceId: TraceId, signal?: AbortSignal): Promise<string[] | null> {
-    const partitions = rowsOf(await engine.query(tracePartitionsQuery(traceId), signal)).map((r) =>
-      String(cell(r, 'filename')),
+    const partitions = rowsOf(await read(['traces'], undefined, tracePartitionsQuery(traceId), signal)).map(
+      (r) => String(cell(r, 'filename')),
     );
     return partitions.length === 0 ? null : partitions;
   }
@@ -620,7 +662,11 @@ export function createDuckDbDataSource(opts: {
       if (e instanceof OtelHtmlError && e.code === 'invalid-report') throw noSuchLog(ref);
       throw e;
     }
-    const found = logEntries(await engine.query(query)).entries[0];
+    // the query filters on the ref's own logs file: only that one is read
+    const own = manifest.partitions.find((p) => p.n === refParts(ref).n)?.files.logs?.path;
+    // `total` is the partitions the ref's file stands for: none when the ref names a partition without logs
+    const pruned = { files: own === undefined ? [] : [own], all: false, total: own === undefined ? 0 : 1 };
+    const found = logEntries(await read(['logs'], pruned, query)).entries[0];
     if (found === undefined) throw noSuchLog(ref);
     return found.row;
   }
@@ -636,7 +682,14 @@ export function createDuckDbDataSource(opts: {
             return path === undefined ? [] : [path];
           });
     if (files?.length === 0) return [];
-    return logRows(await engine.query(traceLogsQuery(traceId, files, epoch), signal)).rows;
+    return logRows(
+      await runPrepared(
+        engine,
+        traceLogsQuery(traceId, files, epoch),
+        files ?? filesFor(manifest, ['logs']),
+        signal,
+      ),
+    ).rows;
   }
 
   async function surroundingLogs(ref: LogRef, n: number): Promise<SurroundingLogs> {
@@ -644,7 +697,7 @@ export function createDuckDbDataSource(opts: {
     const log = await getLog(ref);
     if (n === 0) return { before: [], log, after: [] };
     const { before, after } = surroundingQueries(log, manifest, n, epoch);
-    const [b, a] = await Promise.all([engine.query(before), engine.query(after)]);
+    const [b, a] = await Promise.all([read(['logs'], undefined, before), read(['logs'], undefined, after)]);
     return {
       before: logEntries(b)
         .entries.map((e) => e.row)
@@ -665,7 +718,9 @@ export function createDuckDbDataSource(opts: {
       });
     }
     return patternRows(
-      await engine.query(
+      await read(
+        ['patterns'],
+        undefined,
         patternsQuery({
           window: absWindow(q.window, epoch),
           sort: { column, dir: q.sort.dir },
@@ -683,8 +738,8 @@ export function createDuckDbDataSource(opts: {
     withLogs: boolean,
     signal?: AbortSignal,
   ): Promise<{ rows: SpanRow[]; tables: RowTables; logCount: number }> {
-    const partitions = rowsOf(await engine.query(tracePartitionsQuery(traceId), signal)).map((r) =>
-      String(cell(r, 'filename')),
+    const partitions = rowsOf(await read(['traces'], undefined, tracePartitionsQuery(traceId), signal)).map(
+      (r) => String(cell(r, 'filename')),
     );
     if (partitions.length === 0) throw traceNotFound(traceId);
     const { filter } = buildFilter({
@@ -699,8 +754,8 @@ export function createDuckDbDataSource(opts: {
     const files = filter.files.files;
     if (files.length === 0) throw traceNotFound(traceId);
     const [spans, summary] = await Promise.all([
-      engine.query(traceSpansQuery(traceId, files, epoch), signal),
-      withLogs ? engine.query(traceSummaryQuery(traceId), signal) : null,
+      read(['spans'], filter.files, traceSpansQuery(traceId, files, epoch), signal),
+      withLogs ? read(['traces'], undefined, traceSummaryQuery(traceId), signal) : null,
     ]);
     const { rows, tables } = spanRows(spans, epoch);
     if (rows.length === 0) throw traceNotFound(traceId);
@@ -753,9 +808,10 @@ export function createDuckDbDataSource(opts: {
     epoch,
     querySpans,
     getTrace,
-    hasTrace: async (traceId) => (await engine.query(tracePartitionsQuery(traceId))).numRows > 0,
+    hasTrace: async (traceId) =>
+      (await read(['traces'], undefined, tracePartitionsQuery(traceId))).numRows > 0,
     async percentileOf(service, resource, durationNs) {
-      const r = rowsOf(await engine.query(percentileQuery(service, resource, durationNs)))[0];
+      const r = rowsOf(await read(['spans'], undefined, percentileQuery(service, resource, durationNs)))[0];
       if (r === undefined || toNumber(cell(r, 'n'), 'n') === 0) return null;
       return Number(cell(r, 'percentile'));
     },
@@ -771,11 +827,16 @@ export function createDuckDbDataSource(opts: {
     patterns,
     async metricPoints(signal) {
       const spec = bucketSpec(null, range);
-      return pointBuckets(await engine.query(pointsTimelineQuery(spec, epoch), signal), spec);
+      return pointBuckets(await read(['points'], undefined, pointsTimelineQuery(spec, epoch), signal), spec);
     },
     async resourceValues(key, signal) {
       return resourceValueResult(
-        await engine.query(resourceValuesQuery(key, caps.facetValueCap), signal),
+        await read(
+          ['spans', 'logs', 'points'],
+          undefined,
+          resourceValuesQuery(key, caps.facetValueCap),
+          signal,
+        ),
         caps.facetValueCap,
       );
     },

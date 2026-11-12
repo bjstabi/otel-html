@@ -73,6 +73,7 @@ function fakes(format: 'local' | 'site', failStatement?: (statement: string, nth
   } as unknown as Engine;
   const queryEngine = {
     tempTables: true,
+    prepare: async () => {},
     query: async () => {
       calls.queries += 1;
       return { numRows: 0, toArray: () => [] };
@@ -331,5 +332,203 @@ describe('isGoneFile', () => {
     expect(isGoneFile(new Error('Parser Error: syntax error at or near "FROM"'))).toBe(false);
     expect(isGoneFile('nope')).toBe(false);
     expect(isGoneFile(undefined)).toBe(false);
+  });
+});
+
+describe('refreshReport and the small-file loader', () => {
+  const withSmall = (f: ReturnType<typeof fakes>, previous: ManifestV4, next: ManifestV4) => {
+    const forgotten: string[] = [];
+    return {
+      forgotten,
+      done: refreshReport(
+        f.engine,
+        f.queryEngine,
+        previous,
+        {
+          loader: loaderOf(next),
+          baseUrl: BASE,
+          logger,
+          smallFiles: { forget: (paths) => void forgotten.push(...paths) },
+        },
+        () => 1,
+      ),
+    };
+  };
+
+  test('forgets the paths the refresh dropped', async () => {
+    const f = fakes('site');
+    const r = withSmall(f, manifestOf([0, 1]), manifestOf([2]));
+    await r.done;
+    expect(r.forgotten.sort()).toEqual(
+      [
+        partitionFilePath(0, 'spans'),
+        partitionFilePath(0, 'logs'),
+        partitionFilePath(1, 'spans'),
+        partitionFilePath(1, 'logs'),
+      ].sort(),
+    );
+  });
+
+  test('a kept path whose size changed is forgotten and registered by URL again; one that did not is left alone', async () => {
+    const f = fakes('site');
+    const next = { ...manifestOf([0, 1]), updatedAt: '2026-11-06T00:00:09.000Z' };
+    const grown = next.partitions[0];
+    if (grown?.files.spans) grown.files.spans = { ...grown.files.spans, bytes: 99 };
+    const r = withSmall(f, manifestOf([0, 1]), next);
+    await r.done;
+    expect(r.forgotten).toEqual([partitionFilePath(0, 'spans')]);
+    expect(f.calls.drop).toEqual([partitionFilePath(0, 'spans')]);
+    expect(f.calls.url.map(([name]) => name)).toEqual([partitionFilePath(0, 'spans')]);
+  });
+  test('the drop and re-registration of a rewritten path run inside the file gate', async () => {
+    const f = fakes('site');
+    const events: string[] = [];
+    let depth = 0;
+    const db = f.engine.db as unknown as Record<string, (name: string) => Promise<void>>;
+    for (const op of ['dropFile', 'registerFileURL']) {
+      const original = db[op];
+      db[op] = async (name: string) => {
+        events.push(`${op} ${depth > 0 ? 'held' : 'free'}`);
+        await original?.(name);
+      };
+    }
+    (f.engine as { gate?: unknown }).gate = {
+      wait: async () => {},
+      hold: async <T>(change: () => Promise<T>) => {
+        depth += 1;
+        try {
+          return await change();
+        } finally {
+          depth -= 1;
+        }
+      },
+    };
+    const next = { ...manifestOf([0, 1]), updatedAt: '2026-11-06T00:00:09.000Z' };
+    const grown = next.partitions[0];
+    if (grown?.files.spans) grown.files.spans = { ...grown.files.spans, bytes: 99 };
+    await withSmall(f, manifestOf([0, 1]), next).done;
+    expect(events).toEqual(['dropFile held', 'registerFileURL held']);
+  });
+
+  test('hands the new sizes over before any path is forgotten, and the old ones back when the refresh fails', async () => {
+    const order: string[] = [];
+    const run = async (fail: boolean) => {
+      const f = fakes('site', fail ? (st) => st.includes('CREATE') : undefined);
+      const adopted: ManifestV4[] = [];
+      const next = { ...manifestOf([0, 1]), updatedAt: '2026-11-06T00:00:09.000Z' };
+      const previous = manifestOf([0]);
+      await refreshReport(
+        f.engine,
+        f.queryEngine,
+        previous,
+        {
+          loader: loaderOf(next),
+          baseUrl: BASE,
+          logger,
+          smallFiles: { forget: () => void order.push('forget') },
+          adoptSizes: (m) => {
+            adopted.push(m);
+            order.push('adopt');
+          },
+        },
+        () => 1,
+      ).catch(() => undefined);
+      return { adopted, previous, next };
+    };
+    const ok = await run(false);
+    expect(order[0]).toBe('adopt');
+    expect(ok.adopted).toEqual([ok.next]);
+    const failed = await run(true);
+    expect(failed.adopted.at(-1)).toBe(failed.previous);
+  });
+
+  test('a path the refresh dropped is dropped inside the file gate', async () => {
+    const f = fakes('site');
+    const held: string[] = [];
+    (f.engine as { gate?: unknown }).gate = {
+      wait: async () => {},
+      hold: async (change: () => Promise<unknown>) => {
+        held.push(...f.calls.drop);
+        const before = f.calls.drop.length;
+        const out = await change();
+        held.push(`during:${f.calls.drop.length - before}`);
+        return out;
+      },
+    };
+    const r = withSmall(f, manifestOf([0, 1]), manifestOf([0]));
+    await r.done;
+    expect(held.filter((h) => h.startsWith('during:')).length).toBe(r.forgotten.length);
+  });
+  const gated = (f: ReturnType<typeof fakes>) => {
+    const events: string[] = [];
+    let depth = 0;
+    const db = f.engine.db as unknown as Record<string, (name: string) => Promise<void>>;
+    for (const op of ['dropFile', 'registerFileURL']) {
+      const original = db[op];
+      db[op] = async (name: string) => {
+        events.push(`${op} ${name} ${depth > 0 ? 'held' : 'free'}`);
+        await original?.(name);
+      };
+    }
+    (f.engine as { gate?: unknown }).gate = {
+      wait: async () => {},
+      hold: async <T>(change: () => Promise<T>) => {
+        depth += 1;
+        try {
+          return await change();
+        } finally {
+          depth -= 1;
+        }
+      },
+    };
+    return events;
+  };
+
+  test('a failed refresh registers a rewritten path by URL again and forgets it, inside the file gate', async () => {
+    const f = fakes('site', (st) => st.includes('CREATE'));
+    const events = gated(f);
+    const next = { ...manifestOf([0, 1]), updatedAt: '2026-11-06T00:00:09.000Z' };
+    const grown = next.partitions[0];
+    if (grown?.files.spans) grown.files.spans = { ...grown.files.spans, bytes: 99 };
+    const r = withSmall(f, manifestOf([0]), next);
+    await expect(r.done).rejects.toThrow('view failed');
+    const spans = partitionFilePath(0, 'spans');
+    const mine = events.filter((e) => e.includes(spans));
+    expect(mine).toEqual([
+      `dropFile ${spans} held`,
+      `registerFileURL ${spans} held`,
+      `dropFile ${spans} held`,
+      `registerFileURL ${spans} held`,
+    ]);
+    expect(r.forgotten.filter((p) => p === spans)).toHaveLength(2);
+  });
+
+  test('a rewritten path is registered again even when the drop of another rewritten path keeps failing', async () => {
+    const f = fakes('site');
+    const events = gated(f);
+    const a = partitionFilePath(0, 'spans');
+    const b = partitionFilePath(1, 'spans');
+    const db = f.engine.db as unknown as { dropFile: (name: string) => Promise<void> };
+    const drop = db.dropFile;
+    db.dropFile = async (name: string) => {
+      if (name === b) throw new Error('file in use');
+      await drop(name);
+    };
+    const next = { ...manifestOf([0, 1]), updatedAt: '2026-11-06T00:00:09.000Z' };
+    for (const part of next.partitions)
+      if (part.files.spans) part.files.spans = { ...part.files.spans, bytes: 99 };
+    await expect(withSmall(f, manifestOf([0, 1]), next).done).rejects.toThrow('file in use');
+    const mine = events.filter((e) => e.includes(a));
+    expect(mine.at(-1)).toBe(`registerFileURL ${a} held`);
+  });
+
+  test('a failed refresh drops the paths it added inside the file gate', async () => {
+    const f = fakes('site', (st) => st.includes('CREATE'));
+    const events = gated(f);
+    const next = { ...manifestOf([0, 1]), updatedAt: '2026-11-06T00:00:09.000Z' };
+    await expect(withSmall(f, manifestOf([0]), next).done).rejects.toThrow('view failed');
+    const drops = events.filter((e) => e.startsWith('dropFile'));
+    expect(drops.length).toBeGreaterThan(0);
+    expect(drops.every((e) => e.endsWith(' held'))).toBe(true);
   });
 });

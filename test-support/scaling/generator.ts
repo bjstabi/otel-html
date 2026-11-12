@@ -173,7 +173,7 @@ const CHUNK_SPANS = 65_536;
  */
 function* chunkedPartitionJson(shape: Shape, n: number): Generator<Record<string, unknown>> {
   const count = spanCount(shape, n);
-  const logCount = count / 4;
+  const logCount = count / 8;
   const resource = (service: string) => ({
     attributes: [str('service.name', service), str('run.id', `run-${n}`)],
   });
@@ -255,7 +255,7 @@ function partitionJson(shape: Shape, n: number): Record<string, unknown>[] {
   const resourceAttrs = (service: string) => [str('service.name', service), str('run.id', `run-${n}`)];
   const spans = SERVICES.map(() => [] as unknown[]);
   for (let k = 0; k < count; k++) spans[k % 2]?.push(spanRecord(shape, n, k));
-  const logCount = count / 4;
+  const logCount = count / 8;
   const logs = SERVICES.map(() => [] as unknown[]);
   for (let k = 0; k < logCount; k++) logs[k % 2]?.push(logRecord(shape, n, k, logCount));
   return [

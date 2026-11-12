@@ -583,6 +583,13 @@ export interface Declared {
   needed?: (shape: ShapeSize) => number;
   /** The id of the same request without its condition; what `matched` is measured against. */
   scanOf?: string;
+  /**
+   * For an entry that reads traces or patterns files (and, from format 5, rollup files). Measured at the densest step
+   * with the small-file limit at 0, so every file is read by range: the serial requests to the small files are at most
+   * `REQUESTS_PER_OPEN` per file plus `perRowGroup` per row group of those files. It keeps a report whose traces files
+   * pass the limit from reading them without bound.
+   */
+  aboveThreshold?: { perRowGroup: number };
 }
 
 /** A service condition selects one of the two services of every selected partition: half of the groups. */
@@ -613,7 +620,7 @@ const decl = ([retention, density, window]: Row, rest: Omit<Declared, 'class'> =
 });
 
 /** One line per `CATALOGUE` id: the class measured on each axis today (the baseline), and why a `scan` is right. */
-export const DECLARED: Record<string, Declared> = {
+const BASELINE: Record<string, Declared> = {
   'spans.total.short': decl(['scan', 'scan', 'scan'], {
     allowed: { density: SHORT_WINDOW, window: SHORT_WINDOW },
   }),
@@ -706,7 +713,7 @@ export const DECLARED: Record<string, Declared> = {
     allowed: { density: TRACE_LIST_SCAN, window: TRACE_LIST_SCAN },
   }),
   'traces.list.long': decl(['scan', 'scan', 'scan']),
-  'traces.list.statkey.long': decl(['scan', 'matched', 'scan'], {
+  'traces.list.statkey.long': decl(['files', 'matched', 'files'], {
     needed: ONE_PARTITION,
     scanOf: 'traces.list.long',
   }),
@@ -714,60 +721,87 @@ export const DECLARED: Record<string, Declared> = {
     allowed: { density: TRACE_LIST_SCAN, window: TRACE_LIST_SCAN },
     scanOf: 'traces.list.long',
   }),
-  'trace.get': decl(['scan', 'scan', null], { needed: ONE_GROUP }),
-  'trace.share': decl(['scan', 'scan', null], { needed: ONE_GROUP }),
-  'trace.has': decl(['scan', 'scan', null], { needed: ONE_GROUP }),
-  'trace.logs': decl(['scan', 'scan', null], { needed: ONE_GROUP }),
-  'log.get': decl(['fixed', 'matched', null], { needed: ONE_GROUP }),
-  'log.surrounding': decl(['scan', 'scan', null], {
+  'trace.get': decl(['files', 'scan', null], { needed: ONE_GROUP }),
+  'trace.share': decl(['files', 'scan', null], { needed: ONE_GROUP }),
+  'trace.has': decl(['files', 'files', null], { needed: ONE_GROUP }),
+  'trace.logs': decl(['files', 'files', null], { needed: ONE_GROUP }),
+  'log.get': decl(['fixed', 'files', null], { needed: ONE_GROUP }),
+  'log.surrounding': decl(['files', 'files', null], {
     allowed: { density: BY_ID_BASELINE },
     needed: ONE_GROUP,
   }),
-  'logs.timeline.short': decl(['fixed', 'scan', 'scan'], {
+  'logs.timeline.short': decl(['fixed', 'files', 'files'], {
     allowed: { density: SHORT_WINDOW, window: SHORT_WINDOW },
   }),
-  'logs.timeline.long': decl(['fixed', 'scan', 'scan']),
-  'logs.facets.core.short': decl(['fixed', 'scan', 'scan'], {
+  'logs.timeline.long': decl(['fixed', 'files', 'files']),
+  'logs.facets.core.short': decl(['fixed', 'files', 'files'], {
     allowed: { density: SHORT_WINDOW, window: SHORT_WINDOW },
   }),
-  'logs.facets.core.long': decl(['fixed', 'scan', 'scan']),
-  'logs.facets.attr.short': decl(['fixed', 'scan', 'scan'], {
+  'logs.facets.core.long': decl(['fixed', 'files', 'files']),
+  'logs.facets.attr.short': decl(['fixed', 'files', 'files'], {
     allowed: { density: ATTRIBUTE_AGGREGATE, window: ATTRIBUTE_AGGREGATE },
   }),
-  'logs.facets.attr.long': decl(['fixed', 'scan', 'scan'], {
+  'logs.facets.attr.long': decl(['fixed', 'files', 'files'], {
     allowed: { density: ATTRIBUTE_AGGREGATE, window: ATTRIBUTE_AGGREGATE },
   }),
-  'logs.rows.short': decl(['fixed', 'scan', 'scan'], { allowed: { density: ROWS_PAGE, window: ROWS_PAGE } }),
-  'logs.rows.long': decl(['fixed', 'scan', 'scan'], { allowed: { density: ROWS_PAGE, window: ROWS_PAGE } }),
-  'logs.traces.short': decl(['fixed', 'scan', 'scan'], {
+  'logs.rows.short': decl(['fixed', 'files', 'files'], {
     allowed: { density: ROWS_PAGE, window: ROWS_PAGE },
   }),
-  'logs.traces.long': decl(['fixed', 'scan', 'scan'], { allowed: { density: ROWS_PAGE, window: ROWS_PAGE } }),
-  'logs.timeline.statkey.short': decl(['fixed', 'matched', 'fixed'], {
+  'logs.rows.long': decl(['fixed', 'files', 'files'], { allowed: { density: ROWS_PAGE, window: ROWS_PAGE } }),
+  'logs.traces.short': decl(['fixed', 'files', 'files'], {
+    allowed: { density: ROWS_PAGE, window: ROWS_PAGE },
+  }),
+  'logs.traces.long': decl(['fixed', 'files', 'files'], {
+    allowed: { density: ROWS_PAGE, window: ROWS_PAGE },
+  }),
+  'logs.timeline.statkey.short': decl(['fixed', 'files', 'fixed'], {
     needed: ONE_PARTITION,
     scanOf: 'logs.timeline.short',
   }),
-  'logs.timeline.statkey.long': decl(['fixed', 'matched', 'fixed'], {
+  'logs.timeline.statkey.long': decl(['fixed', 'files', 'fixed'], {
     needed: ONE_PARTITION,
     scanOf: 'logs.timeline.long',
   }),
-  'logs.timeline.text.long': decl(['fixed', 'scan', 'scan'], {
+  'logs.timeline.text.long': decl(['fixed', 'files', 'files'], {
     allowed: { density: ATTRIBUTE_AGGREGATE, window: ATTRIBUTE_AGGREGATE },
     scanOf: 'logs.timeline.long',
   }),
   'resourceValues.all': decl(['scan', 'scan', null]),
-  patterns: decl(['scan', 'fixed', null]),
-  'metrics.catalog': decl(['scan', 'fixed', null]),
+  patterns: decl(['files', 'fixed', null]),
+  'metrics.catalog': decl(['files', 'fixed', null]),
   'metrics.showOptions': decl(['fixed', 'fixed', null]),
-  'metrics.query.short': decl(['fixed', 'fixed', 'scan']),
-  'metrics.query.long': decl(['fixed', 'fixed', 'scan']),
-  'metrics.query.summary': decl(['scan', 'fixed', 'scan']),
-  'metrics.query.residual.long': decl(['fixed', 'fixed', 'scan']),
-  'metrics.runQuery': decl(['scan', 'fixed', 'scan']),
-  'metrics.runQuery.failed': decl(['scan', 'fixed', 'scan']),
+  'metrics.query.short': decl(['fixed', 'fixed', 'files']),
+  'metrics.query.long': decl(['fixed', 'fixed', 'files']),
+  'metrics.query.summary': decl(['files', 'fixed', 'files']),
+  'metrics.query.residual.long': decl(['fixed', 'fixed', 'files']),
+  'metrics.runQuery': decl(['files', 'fixed', 'files']),
+  'metrics.runQuery.failed': decl(['files', 'fixed', 'files']),
   'metrics.forResources': decl(['fixed', 'fixed', null]),
-  'metrics.points': decl(['scan', 'fixed', null]),
+  'metrics.points': decl(['files', 'fixed', null]),
 };
+
+/** The builders whose statements read a traces or patterns file. */
+const SMALL_TABLE_BUILDERS: ReadonlySet<string> = new Set([
+  'traceRowsQuery',
+  'tracePartitionsQuery',
+  'traceSummaryQuery',
+  'patternsQuery',
+]);
+
+/** The entries that read traces or patterns files, which `Declared.aboveThreshold` bounds. */
+export const SMALL_TABLE_ENTRIES: readonly CatalogueEntry[] = CATALOGUE.filter((e) =>
+  e.builders.some((b) => SMALL_TABLE_BUILDERS.has(b)),
+);
+
+/** `BASELINE` with `aboveThreshold` (2 requests per row group) on every entry of `SMALL_TABLE_ENTRIES`. */
+export const DECLARED: Record<string, Declared> = Object.fromEntries(
+  Object.entries(BASELINE).map(([id, declared]) => [
+    id,
+    SMALL_TABLE_ENTRIES.some((e) => e.id === id)
+      ? { ...declared, aboveThreshold: { perRowGroup: 2 } }
+      : declared,
+  ]),
+);
 
 export interface DebtLine {
   id: string;
@@ -794,12 +828,13 @@ const owed = (
 /**
  * `scan`s that §3.4 does not allow, each owed to an issue and a PR of the plan; the list only shrinks. Grouped by
  * cause: #271 (a spans file wholly before the window is opened, long-window aggregates scan raw files, a read by
- * trace id has no time bound; PR 4 and PR 6), #281 (small files read serially; PR 3), #282 (resourceValues, the
+ * trace id has no time bound; PR 4 and PR 6), #281 (small files read serially; PR 3, done), #282 (resourceValues, the
  * unconditioned trace list; PR 4), #272 (statistics lost in a merge) and #283 (compaction), the last two not yet
  * measured.
  */
 export const KNOWN_DEBT: readonly DebtLine[] = [
-  ...owed(271, 4, 'density', 'matched', true, ['trace.get', 'trace.share', 'trace.has', 'trace.logs']),
+  ...owed(271, 4, 'density', 'matched', true, ['trace.get', 'trace.share']),
+  ...owed(271, 4, 'density', 'matched', false, ['trace.has', 'trace.logs']),
   ...owed(271, 6, 'density', 'fixed', true, [
     'spans.total.long',
     'spans.buckets.long',
@@ -810,9 +845,8 @@ export const KNOWN_DEBT: readonly DebtLine[] = [
     'spans.services.long',
     'spans.total.sortkey.long',
     'percentile.long',
-    'logs.timeline.long',
-    'logs.facets.core.long',
   ]),
+  ...owed(271, 6, 'density', 'fixed', false, ['logs.timeline.long', 'logs.facets.core.long']),
   ...owed(271, 6, 'density', 'files', true, ['traces.list.long']),
   ...owed(271, 6, 'retention', 'fixed', true, [
     'spans.total.short',
@@ -859,33 +893,12 @@ export const KNOWN_DEBT: readonly DebtLine[] = [
     'spans.services.long',
     'spans.total.sortkey.long',
     'traces.list.long',
-    'logs.timeline.long',
-    'logs.facets.core.long',
   ]),
-  ...owed(281, 3, 'retention', 'files', true, [
-    'traces.list.statkey.long',
-    'trace.get',
-    'trace.share',
-    'trace.has',
-    'trace.logs',
-    'log.surrounding',
-    'patterns',
-    'metrics.catalog',
-    'metrics.points',
-  ]),
-  // Metrics with a window are `fixed` on retention in the end (§3.4): the small-file part goes with #281 (PR 3); the
-  // partitions the window cannot hold are pruned by the end-time and manifest-range pruning of #271 (PR 6).
-  ...owed(271, 6, 'retention', 'fixed', true, [
+  ...owed(271, 6, 'window', 'files', false, ['logs.timeline.long', 'logs.facets.core.long']),
+  // Metrics with a window are `fixed` on retention in the end (§3.4): the small-file part went with #281 (PR 3: their points files load
+  // whole, so they are `files` now); the partitions the window cannot hold are pruned by the end-time and manifest-range pruning of #271 (PR 6).
+  ...owed(271, 6, 'retention', 'fixed', false, [
     'metrics.query.summary',
-    'metrics.runQuery',
-    'metrics.runQuery.failed',
-  ]),
-  ...owed(281, 3, 'window', 'files', true, [
-    'traces.list.statkey.long',
-    'metrics.query.short',
-    'metrics.query.long',
-    'metrics.query.summary',
-    'metrics.query.residual.long',
     'metrics.runQuery',
     'metrics.runQuery.failed',
   ]),

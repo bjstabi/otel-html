@@ -4,6 +4,7 @@ import { OtelHtmlError } from '../../model/errors.js';
 import type { DataSource } from './data-source.js';
 import { createDuckDbDataSource } from './duckdb-source.js';
 import { createViews, dropFiles, manifestFiles, registerFiles } from './engine/files.js';
+import type { SmallFiles } from './engine/small-files.js';
 import type { Engine } from './engine/start.js';
 import type { Logger } from './mosaic.js';
 import type { QueryEngine } from './query-engine.js';
@@ -15,6 +16,10 @@ export interface RefreshDeps {
   loader: ScriptLoader;
   baseUrl: string;
   logger: Logger;
+  /** A site report's small-file loader: told which paths the refresh dropped. */
+  smallFiles?: Pick<SmallFiles, 'forget'>;
+  /** Told the manifest whose sizes the small-file loader must judge from now on; called before any path is forgotten. */
+  adoptSizes?: (manifest: ManifestV4) => void;
 }
 
 /**
@@ -47,17 +52,39 @@ export async function refreshReport(
     return { dataSource: null, manifest: previous };
   }
   const added = wanted.filter((f) => !had.has(f.path));
+  // A kept path whose size changed was rewritten in place: a buffer swapped in earlier is stale, so it is registered by URL again.
+  const sizeOf = (m: ManifestV4): Map<string, number> =>
+    new Map(
+      m.partitions.flatMap((p) => Object.values(p.files).map((file) => [file.path, file.bytes] as const)),
+    );
+  const oldSizes = sizeOf(previous);
+  const newSizes = sizeOf(manifest);
+  const rewritten = wanted.filter((f) => had.has(f.path) && oldSizes.get(f.path) !== newSizes.get(f.path));
+  deps.adoptSizes?.(manifest);
+  // No statement runs between the drop and the registration of a rewritten path. Each path is dropped and registered
+  // on its own, so a path whose drop fails cannot leave another one dropped and unregistered.
+  const reregister = async (): Promise<void> => {
+    for (const file of rewritten) {
+      deps.smallFiles?.forget([file.path]);
+      await dropFiles(engine, [file.path]);
+      await registerFiles(engine, [file], deps);
+    }
+  };
   try {
+    if (rewritten.length > 0) await held(engine, reregister);
     await registerFiles(engine, added, deps);
     await createViews(engine, manifest);
   } catch (error) {
-    await rollBack(engine, previous, added, deps.logger);
+    deps.adoptSizes?.(previous);
+    await rollBack(engine, previous, added, rewritten, deps);
     throw error;
   }
   // Last and best-effort: the views no longer read these files, so a failed drop only leaks a registration.
   for (const path of had) {
     if (wantedPaths.has(path)) continue;
-    await dropFiles(engine, [path]).catch((error: unknown) => {
+    deps.smallFiles?.forget([path]);
+    const drop = (): Promise<void> => dropFiles(engine, [path]);
+    await (engine.gate ? engine.gate.hold(drop) : drop()).catch((error: unknown) => {
       deps.logger.warn(`could not drop ${path} after a refresh`, error);
     });
   }
@@ -68,23 +95,40 @@ export async function refreshReport(
   return { dataSource, manifest };
 }
 
+const held = <T>(engine: Engine, change: () => Promise<T>): Promise<T> =>
+  engine.gate ? engine.gate.hold(change) : change();
+
 /**
- * Best effort after a refresh failed part-way: the views of the manifest the page still shows, and the files this
- * refresh registered dropped. A rollback that fails too is logged; the caller rethrows the original error.
+ * Best effort after a refresh failed part-way: a rewritten path registered by URL again (the buffer it held is gone and
+ * the server no longer serves its old bytes, so it is fetched whole again), the views of the manifest the page still
+ * shows, and the files this refresh added dropped. A rollback that fails too is logged; the caller rethrows the
+ * original error.
  */
 async function rollBack(
   engine: Engine,
   previous: ManifestV4,
   added: ReturnType<typeof manifestFiles>,
-  logger: Logger,
+  rewritten: ReturnType<typeof manifestFiles>,
+  deps: RefreshDeps,
 ): Promise<void> {
+  const { logger } = deps;
+  for (const file of rewritten) {
+    await held(engine, async () => {
+      deps.smallFiles?.forget([file.path]);
+      await dropFiles(engine, [file.path]);
+      await registerFiles(engine, [file], deps);
+    }).catch((error: unknown) => {
+      logger.error(`could not restore ${file.path} after a failed refresh`, error);
+    });
+  }
   try {
     await createViews(engine, previous);
   } catch (error) {
     logger.error('could not restore the previous views after a failed refresh', error);
   }
   for (const { path } of added) {
-    await dropFiles(engine, [path]).catch((error: unknown) => {
+    deps.smallFiles?.forget([path]);
+    await held(engine, () => dropFiles(engine, [path])).catch((error: unknown) => {
       logger.error(`could not drop ${path} after a failed refresh`, error);
     });
   }

@@ -9,8 +9,19 @@ import {
   DECLARED,
 } from '../../src/viewer/data/catalogue.js';
 import { classify, type Step } from './classify.js';
-import { BASE, CROSS, type Shape, stepsOf } from './generator.js';
-import { AXES, closeMeasured, DENSE_16, hasDensity16, pointsOf, printTable, stepsFor } from './measure.js';
+import { REQUESTS_PER_OPEN, ROW_GROUP_ROWS } from './cost.js';
+import { HARNESS_SMALL_FILE_BYTES } from './counting-engine.js';
+import { BASE, buildScalingReport, CROSS, type Shape, stepsOf } from './generator.js';
+import {
+  AXES,
+  closeMeasured,
+  DENSE_16,
+  hasDensity16,
+  pointsOf,
+  printTable,
+  smallSerialOf,
+  stepsFor,
+} from './measure.js';
 
 /**
  * A part of the measurement: the three steps of one axis for the entries of one spacing, or `cross` (the shape that
@@ -84,6 +95,43 @@ export function defineMeasuredFile(part: Part, spacing: Shape['spacing']): void 
         expect(classify(steps), `${entry.id} on ${part}: ${JSON.stringify(steps.map((s) => s.cost))}`).toBe(
           declared,
         );
+      },
+      180_000,
+    );
+
+    // every statement prepares the files it reads, so none of the files under the limit is read by range
+    test.skipIf(part === 'cross')(
+      'no entry makes a serial read of a file under the small-file limit',
+      async () => {
+        for (const entry of entries)
+          for (const shape of shapesOf(entry))
+            expect(await smallSerialOf(entry, shape), `${entry.id} on ${JSON.stringify(shape)}`).toBe(0);
+      },
+      180_000,
+    );
+
+    // the densest step with the limit at 0: the entries that read traces or patterns files stay within their factor
+    test.skipIf(part !== 'density')(
+      'an entry that reads small tables stays within its stated factor when every file is read by range',
+      async () => {
+        const shape = stepsOf('density', spacing).at(-1) as Shape;
+        const report = await buildScalingReport(shape);
+        const small = report.manifest.partitions
+          .flatMap((p) => Object.values(p.files))
+          .filter((f) => f.bytes <= HARNESS_SMALL_FILE_BYTES);
+        const groups = small.reduce((n, f) => n + Math.ceil(f.rows / ROW_GROUP_ROWS), 0);
+        for (const entry of entries) {
+          const factor = DECLARED[entry.id]?.aboveThreshold;
+          if (factor === undefined) continue;
+          // threshold 0 loads nothing whole, but the size class (`smallSerialOf`, the `small` list above) is the harness
+          // limit's: it counts the files that would be small
+          const serial = await smallSerialOf(entry, shape, { threshold: 0 });
+          const bound = REQUESTS_PER_OPEN * small.length + factor.perRowGroup * groups;
+          expect(
+            serial,
+            `${entry.id}: ${small.length} small files, ${groups} row groups`,
+          ).toBeLessThanOrEqual(bound);
+        }
       },
       180_000,
     );

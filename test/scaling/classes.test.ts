@@ -8,6 +8,7 @@ import {
   type CostClass,
   DECLARED,
   KNOWN_DEBT,
+  SMALL_TABLE_ENTRIES,
 } from '../../src/viewer/data/catalogue.js';
 import { AXES } from '../../test-support/scaling/measure.js';
 import { assertedAxes, fileOf, SPLIT } from '../../test-support/scaling/measured-file.js';
@@ -15,7 +16,7 @@ import { assertedAxes, fileOf, SPLIT } from '../../test-support/scaling/measured
 const { OTEL_HTML_SCALING_OUT: OUT } = process.env;
 
 /** The number of lines the known-debt list may hold; a PR that removes lines lowers it. */
-const DEBT_MAX = 90;
+const DEBT_MAX = 74;
 
 describe('declared classes', () => {
   test('every catalogue entry has a declaration and nothing else does', () => {
@@ -61,6 +62,32 @@ describe('declared classes', () => {
     }
     const keys = KNOWN_DEBT.map((d) => `${d.id}/${d.axis}/${d.issue}/${d.pr}`);
     expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  test('the entries that read traces or patterns files declare how they behave above the limit, and no other does', () => {
+    expect(SMALL_TABLE_ENTRIES.length).toBeGreaterThan(0);
+    const declared = CATALOGUE.filter((e) => DECLARED[e.id]?.aboveThreshold !== undefined).map((e) => e.id);
+    expect(declared.sort()).toEqual(SMALL_TABLE_ENTRIES.map((e) => e.id).sort());
+    // a renamed builder would drop an entry from the selection silently: pin the ids
+    expect(SMALL_TABLE_ENTRIES.map((e) => e.id).sort()).toEqual([
+      'patterns',
+      'trace.get',
+      'trace.has',
+      'trace.logs',
+      'trace.share',
+      'traces.list.all',
+      'traces.list.all.long',
+      'traces.list.attr.long',
+      'traces.list.long',
+      'traces.list.short',
+      'traces.list.statkey.long',
+    ]);
+    for (const entry of SMALL_TABLE_ENTRIES)
+      expect(DECLARED[entry.id]?.aboveThreshold?.perRowGroup, entry.id).toBe(2);
+  });
+
+  test('the small-file debt (#281) is paid: no line of it remains', () => {
+    expect(KNOWN_DEBT.filter((d) => d.issue === 281)).toEqual([]);
   });
 
   test('the debt list has not grown', () => {

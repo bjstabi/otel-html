@@ -49,7 +49,7 @@ import {
   upperMedian,
 } from './metric-results.js';
 import { checkShow, kindOf, NOTES, SHOW_BY_KIND } from './metric-tables.js';
-import { throwIfAborted } from './query-common.js';
+import { filesFor, runPrepared, throwIfAborted } from './query-common.js';
 import type { QueryEngine } from './query-engine.js';
 import { dropResidualTable, idTable, servedResidual } from './residual.js';
 import { cell, rowsOf, toNumber } from './span-results.js';
@@ -91,13 +91,16 @@ interface Scope {
 export function metricMethods(ctx: MetricContext): MetricMethods {
   const { engine, epoch, range, manifest } = ctx;
   let catalog: Promise<CatalogRows> | null = null;
+  /** Runs `q` after the engine prepared the points files it reads: `files`, or every one. */
+  const read = (files: Pruned | undefined, q: Query, signal?: AbortSignal) =>
+    runPrepared(engine, q, filesFor(manifest, ['points'], files), signal);
 
   const load = async (): Promise<CatalogRows> => {
     const spec = bucketSpec(null, range, SPARK_BUCKETS);
     const [defs, identities, spark] = await Promise.all([
-      engine.query(metricDefsQuery()),
-      engine.query(metricIdentitiesQuery()),
-      engine.query(metricSparkQuery(spec, epoch)),
+      read(undefined, metricDefsQuery()),
+      read(undefined, metricIdentitiesQuery()),
+      read(undefined, metricSparkQuery(spec, epoch)),
     ]);
     return catalogFrom(defs, identities, spark, spec);
   };
@@ -165,7 +168,8 @@ export function metricMethods(ctx: MetricContext): MetricMethods {
 
     if (!engine.tempTables) throw servedResidual(residual); // D43: before the probe
     const compiled = compileCondition(residual, 'datapoint');
-    const probe = await engine.query(
+    const probe = await read(
+      filter.files,
       base(o.seriesIds, [])
         .clone()
         .limit(RESIDUAL_SERIES_CAP + 1),
@@ -189,8 +193,8 @@ export function metricMethods(ctx: MetricContext): MetricMethods {
   }
 
   /** The series rows for labels; more than `RESIDUAL_SERIES_CAP` is the D5 error rather than silent missing labels. */
-  async function seriesRowsTable(series: Query, signal: AbortSignal | undefined) {
-    const t = await engine.query(series.clone().limit(RESIDUAL_SERIES_CAP + 1), signal);
+  async function seriesRowsTable(series: Query, files: Pruned, signal: AbortSignal | undefined) {
+    const t = await read(files, series.clone().limit(RESIDUAL_SERIES_CAP + 1), signal);
     if (t.numRows > RESIDUAL_SERIES_CAP) throw tooManySeries();
     return t;
   }
@@ -238,7 +242,8 @@ export function metricMethods(ctx: MetricContext): MetricMethods {
       (await scoped(scopeOf(req.window), signal, async (scope) => {
         const pick = pickWidthNs(req.window, req.maxPoints);
         if (scope.files.files.length === 0) return pick;
-        const gaps = await engine.query(
+        const gaps = await read(
+          scope.files,
           pointIntervalQuery(identity, scope.seriesFor(by), scope.files, abs),
           signal,
         );
@@ -269,7 +274,8 @@ export function metricMethods(ctx: MetricContext): MetricMethods {
         const series = scope.seriesFor(by);
         const summary = kind === 'summary';
         const [cells, exemplarTable, groupInfo] = await Promise.all([
-          engine.query(
+          read(
+            scope.files,
             metricCellsQuery({
               identity,
               kind,
@@ -284,7 +290,8 @@ export function metricMethods(ctx: MetricContext): MetricMethods {
             signal,
           ),
           req.exemplars
-            ? engine.query(
+            ? read(
+                scope.files,
                 exemplarsQuery(
                   identity,
                   series,
@@ -298,7 +305,9 @@ export function metricMethods(ctx: MetricContext): MetricMethods {
               )
             : null,
           // The chart colours by service; a summary draws a line per series, so it reads the series themselves.
-          summary ? seriesRowsTable(series, signal) : engine.query(seriesServicesQuery(series, by), signal),
+          summary
+            ? seriesRowsTable(series, scope.files, signal)
+            : read(scope.files, seriesServicesQuery(series, by), signal),
         ]);
         const srcs = by.map((b) => b.src);
         const exemplarPoints =
@@ -375,8 +384,9 @@ export function metricMethods(ctx: MetricContext): MetricMethods {
         const summary = kind === 'summary';
         const failedWhen = req.failedWhen !== null && req.failedWhen.trim() !== '' ? req.failedWhen : null;
         const [runs, cells, failed, labelRows] = await Promise.all([
-          engine.query(runsQuery(identity, scope.seriesFor([runBy]), scope.files, epoch), signal),
-          engine.query(
+          read(scope.files, runsQuery(identity, scope.seriesFor([runBy]), scope.files, epoch), signal),
+          read(
+            scope.files,
             metricCellsQuery({
               identity,
               kind,
@@ -404,7 +414,8 @@ export function metricMethods(ctx: MetricContext): MetricMethods {
                 },
                 signal,
                 (failedScope) =>
-                  engine.query(
+                  read(
+                    failedScope.files,
                     metricCellsQuery({
                       identity,
                       kind,
@@ -419,7 +430,7 @@ export function metricMethods(ctx: MetricContext): MetricMethods {
                     signal,
                   ),
               ),
-          summary ? seriesRowsTable(series, signal) : null,
+          summary ? seriesRowsTable(series, scope.files, signal) : null,
         ]);
         const rows = labelRows === null ? [] : seriesRowsFrom(labelRows, by.length);
         return runsFrom(runs, cells, failed, {
@@ -453,7 +464,7 @@ export function metricMethods(ctx: MetricContext): MetricMethods {
       window: null,
       hints: new Map([['metric_name', new Set([identity.name])]]),
     });
-    return summaryShowOptions(await engine.query(summaryQuantilesQuery(identity, filter.files)));
+    return summaryShowOptions(await read(filter.files, summaryQuantilesQuery(identity, filter.files)));
   }
 
   return {

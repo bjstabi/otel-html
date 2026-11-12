@@ -29,6 +29,13 @@ export interface Model {
   wd: number;
   /** A page fit only: per partition, `q * G^2` more (the cost of a large partition grows faster than linearly). Absent when 0. */
   q?: number;
+  /**
+   * A page fit only, when files leave the prepared set as the row groups grow (the step): a partition of fewer than `k`
+   * row groups costs `s + sd G` and one of `k` or more costs the terms above. Absent when the page has no step.
+   */
+  k?: number;
+  s?: number;
+  sd?: number;
 }
 
 export interface PartitionShape {
@@ -66,6 +73,24 @@ const uniformFeaturesOf = (s: Size): number[] => [1, s.outside + s.inside, group
 
 /** `uniformFeaturesOf` with the squares of the partitions' row groups. */
 const quadraticFeaturesOf = (s: Size): number[] => [...uniformFeaturesOf(s), squaredGroupsOf(s)];
+
+/** The row groups of each partition of a shape (the first holds `bigRowGroups`). */
+const partitionsOf = (s: Size): number[] => [
+  s.bigRowGroups ?? s.rowGroups,
+  ...Array.from({ length: s.outside + s.inside - 1 }, () => s.rowGroups),
+];
+
+/** `[1, large partitions, their groups, their squares, small partitions, their groups]` for partitions split at `k`. */
+const steppedFeaturesOf = (s: Size, k: number): number[] => {
+  const f = [1, 0, 0, 0, 0, 0];
+  for (const g of partitionsOf(s)) {
+    const at = g >= k ? 1 : 4;
+    f[at] = (f[at] ?? 0) + 1;
+    f[at + 1] = (f[at + 1] ?? 0) + g;
+    if (g >= k) f[3] = (f[3] ?? 0) + g * g;
+  }
+  return f;
+};
 
 /** Solves `m x = v` by Gauss-Jordan elimination with partial pivoting; undefined when `m` is singular. */
 function solve(m: number[][], v: number[]): number[] | undefined {
@@ -218,7 +243,41 @@ export function fitEntry(points: readonly FitPoint[], windowless: boolean): Entr
  * identified without the cross. A non-negative `G^2` term takes the curvature of the large partitions.
  */
 export function fitPage(points: readonly FitPoint[]): CostModels {
-  return fitCosts(points, true, true);
+  const plain = fitCosts(points, true, true);
+  const error = (m: Model, pick: (p: FitPoint) => number): number =>
+    points.reduce((n, p) => {
+      const fit = predict(
+        m,
+        partitionsOf(p.shape).map((rowGroups) => ({ rowGroups, inWindow: true, smallFiles: 0 })),
+      );
+      return n + (pick(p) - fit) ** 2;
+    }, 0);
+  // The step: a file larger than the small-file limit is range-read, so the serial cost jumps where the partitions'
+  // files cross it. The crossing `k` is the one (of the measured partition sizes) that fits the serial counts best; it
+  // is taken only when it at least halves the error of the single line, so a smooth page keeps its line.
+  const sizes = [...new Set(points.flatMap((p) => partitionsOf(p.shape)))].sort((a, b) => a - b).slice(1);
+  let best: { k: number; cost: CostModels; error: number } | undefined;
+  for (const k of sizes) {
+    try {
+      const stepped = (pick: (p: FitPoint) => number): Model => {
+        const [a = 0, w = 0, wd = 0, q = 0, sc = 0, sd = 0] = nnls(
+          points.map((p) => steppedFeaturesOf(p.shape, k)),
+          points.map(pick),
+        );
+        return { a, r: w, rd: wd, w, wd, ...(q > 0 ? { q } : {}), k, s: sc, sd };
+      };
+      const cost = {
+        serial: stepped((p) => p.serial),
+        parallel: stepped((p) => p.parallel),
+        bytes: stepped((p) => p.bytes),
+      };
+      const e = error(cost.serial, (p) => p.serial);
+      if (best === undefined || e < best.error - 1e-9) best = { k, cost, error: e };
+    } catch {
+      // not identified at this crossing (too few partitions on one side)
+    }
+  }
+  return best !== undefined && best.error < error(plain.serial, (p) => p.serial) / 2 ? best.cost : plain;
 }
 
 /**
@@ -318,6 +377,7 @@ export function scaledPage(page: CostModels, entries: readonly PageEntry[]): Cos
     w: m.w * share.w,
     wd: m.wd * share.wd,
     ...(m.q === undefined ? {} : { q: m.q * share.wd }),
+    ...(m.k === undefined ? {} : { k: m.k, s: (m.s ?? 0) * share.w, sd: (m.sd ?? 0) * share.wd }),
   });
   return {
     serial: scale(
@@ -367,12 +427,21 @@ export interface PageCost {
  */
 export function predict(model: Model, partitions: readonly PartitionShape[]): number {
   let total = model.a;
-  for (const p of partitions)
+  for (const p of partitions) {
+    if (model.k !== undefined && p.rowGroups < model.k) {
+      const step = (model.s ?? 0) + (model.sd ?? 0) * p.rowGroups;
+      // outside the window the step shrinks like the fitted line does (at most 1, as in `splitWindow`)
+      const inside = model.w + model.wd * p.rowGroups;
+      const outside = Math.max(0, model.r + model.rd * p.rowGroups);
+      total += p.inWindow || inside <= 0 ? step : step * Math.min(1, outside / inside);
+      continue;
+    }
     total += Math.max(
       0,
       (p.inWindow ? model.w + model.wd * p.rowGroups : model.r + model.rd * p.rowGroups) +
         (model.q ?? 0) * p.rowGroups ** 2,
     );
+  }
   return total;
 }
 

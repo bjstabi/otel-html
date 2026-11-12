@@ -701,3 +701,55 @@ describe('getTrace: a provisional CI span and its final copy (§5.5)', () => {
     expect(detail.tree.roots[0]?.row).toBe(detail.spans[0]);
   });
 });
+
+describe('preparing the files a statement reads', () => {
+  const pathsOf = (table: 'spans' | 'logs' | 'traces'): string[] =>
+    f.manifest.partitions.flatMap((p) => {
+      const file = p.files[table];
+      return file === undefined ? [] : [file.path];
+    });
+
+  function recording(gate?: Promise<void>) {
+    const inner = mosaicQueryEngine(createCoordinator(db.connector, silentLogger), db);
+    const events: ({ kind: 'prepare'; paths: readonly string[] } | { kind: 'query' })[] = [];
+    const engine: QueryEngine = {
+      ...inner,
+      prepare: async (paths, signal) => {
+        events.push({ kind: 'prepare', paths });
+        await gate;
+        await inner.prepare(paths, signal);
+      },
+      query: (q, signal) => {
+        events.push({ kind: 'query' });
+        return inner.query(q, signal);
+      },
+    };
+    return { events, source: createDuckDbDataSource({ engine, manifest: f.manifest }) };
+  }
+
+  test('a trace list prepares the spans files of the pruned partitions and every traces file', async () => {
+    const { events, source } = recording();
+    // 5 ms keeps the first spans partition only (timeMin of the others is later)
+    await source.querySpans(
+      query({ mode: 'traces', needs: ['rows'], window: { start: -1e9, end: 5e6 }, text: 'no-cache-1' }),
+    );
+    const prepared = events.flatMap((e) => (e.kind === 'prepare' ? e.paths : []));
+    expect(new Set(prepared)).toEqual(new Set([pathsOf('spans')[0], ...pathsOf('traces')]));
+    expect(prepared.filter((p) => pathsOf('spans').includes(p))).toEqual([pathsOf('spans')[0]]);
+    expect(prepared.some((p) => pathsOf('logs').includes(p))).toBe(false);
+  });
+
+  test('no statement runs before its prepare resolved', async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { events, source } = recording(gate);
+    const pending = source.querySpans(query({ needs: ['rows'], text: 'no-cache-2' }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(events.map((e) => e.kind)).toEqual(['prepare']);
+    release();
+    await pending;
+    expect(events.map((e) => e.kind)).toEqual(['prepare', 'query']);
+  });
+});
