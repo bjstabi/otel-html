@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { OtelHtmlError } from '../src/model/errors.js';
 import {
   type AxisName,
+  anchored,
   type CostModels,
   countCalls,
   type EntryFit,
@@ -65,13 +66,15 @@ const fail = (message: string): never => {
 };
 
 const after = Number(arg('--after') ?? 1);
-const windowArg = arg('--window') ?? 'none';
+const windowRaw = arg('--window') ?? 'none';
+type WindowArg = 'none' | '7d';
 const threshold = Number(arg('--threshold') ?? DEFAULT_THRESHOLD);
 const { OTEL_HTML_SCALING_OUT: OUT } = process.env;
 const dir = arg('--dir') ?? OUT ?? fail('no folder: set OTEL_HTML_SCALING_OUT or pass --dir');
 if (!Number.isInteger(after) || after < 1)
   fail(`--after takes a PR number of the plan, got ${arg('--after')}`);
-if (windowArg !== 'none' && windowArg !== '7d') fail(`--window takes none or 7d, got ${windowArg}`);
+if (windowRaw !== 'none' && windowRaw !== '7d') fail(`--window takes none or 7d, got ${windowRaw}`);
+const windowArg: WindowArg = windowRaw === '7d' ? '7d' : 'none';
 if (!(threshold > 0)) fail(`--threshold takes a number of bytes, got ${arg('--threshold')}`);
 
 // ---- the measurements and the recordings
@@ -213,7 +216,7 @@ interface Shape {
 
 const lastDays = (rangeEnd: bigint): bigint => rangeEnd - 7n * DAY_NS;
 
-function rollingShape(): Shape {
+function rollingShape(windowArg: WindowArg): Shape {
   const end = BigInt(snapshot.range.end);
   const start = BigInt(snapshot.range.start);
   const from = lastDays(end);
@@ -249,7 +252,7 @@ function tableSizes(): { perSpan: Record<Table, number>; flat: Record<Table, num
 }
 
 /** `runs` partitions a day apart of `spans` spans each: the files that grow with the spans scale from the snapshot's. */
-function syntheticShape(runs: number, spans: number): Shape {
+function syntheticShape(windowArg: WindowArg, runs: number, spans: number): Shape {
   const { perSpan, flat } = tableSizes();
   const sizes: Record<Table, number> = {
     spans: perSpan.spans * spans,
@@ -273,19 +276,21 @@ function syntheticShape(runs: number, spans: number): Shape {
   };
 }
 
-const SHAPES: Shape[] = [
-  rollingShape(),
-  syntheticShape(30, 150_000),
-  syntheticShape(90, 150_000),
-  syntheticShape(30, 1_500_000),
+const shapesOf = (w: WindowArg): Shape[] => [
+  rollingShape(w),
+  syntheticShape(w, 30, 150_000),
+  syntheticShape(w, 90, 150_000),
+  syntheticShape(w, 30, 1_500_000),
 ];
+const SHAPES = shapesOf(windowArg);
 
 // ---- the debt lines
 
+const AXIS_NAMES: readonly AxisName[] = ['retention', 'density', 'window'];
 const RANK: Record<Target, number> = { scan: 0, matched: 1, files: 2, fixed: 3 };
 
 /** The class an entry has reached on each axis after PR `after`: the best target among that axis' lines for that PR or an earlier one. */
-function reached(id: string): Partial<Record<AxisName, Target>> {
+function reached(id: string, after: number): Partial<Record<AxisName, Target>> {
   const best: Partial<Record<AxisName, Target>> = {};
   for (const d of KNOWN_DEBT) {
     const had = best[d.axis];
@@ -309,7 +314,13 @@ interface Row extends Cost {
   ids: Map<string, number>;
 }
 
-function pageOn(page: string, shape: Shape, calls: readonly RecordedCall[]): Row {
+interface Config {
+  after: number;
+  window: WindowArg;
+}
+const CURRENT: Config = { after, window: windowArg };
+
+function pageOn(page: string, shape: Shape, calls: readonly RecordedCall[], cfg: Config = CURRENT): Row {
   const counted = countCalls(
     calls.map((c) => ({
       method: c.call.method,
@@ -325,17 +336,17 @@ function pageOn(page: string, shape: Shape, calls: readonly RecordedCall[]): Row
   for (const [key, times] of counted) {
     const [id = '', baseline] = key.split('|');
     const fit = models.get(id) ?? fail(`no measurement for ${id}: run mise run predict:queries`);
-    const axes = baseline === 'true' ? {} : reached(id);
+    const axes = baseline === 'true' ? {} : reached(id, cfg.after);
     entries.push({ before: fit, after: improvedFit(fit, axes), times });
     small.push({
       times,
-      axes: (Object.entries(axes) as [AxisName, Target][]).filter(([, t]) => t === 'files').map(([a]) => a),
+      axes: AXIS_NAMES.filter((a) => axes[a] === 'files'),
       windowless: fit.windowless,
     });
     ids.set(id, (ids.get(id) ?? 0) + times);
   }
   const measured = pageFits.get(pageKey(page, shape.long)) ?? fail(`no page fit for ${page}`);
-  const model = scaledPage(windowArg === 'none' ? measured : splitWindow(measured, entries), entries);
+  const model = scaledPage(cfg.window === 'none' ? measured : splitWindow(measured, entries), entries);
   const cost = predictPage(model, shape.partitions);
   // one parallel request per small file of the partitions a `files` axis covers
   const parallel = cost.parallel + filesParallel(small, shape.partitions);
@@ -452,3 +463,34 @@ for (const page of PAGES) {
 print(`\nexpectation row (serial requests, dashboard / trace list), after ${after}, window ${windowArg}:`);
 print(`  ${[...summary].map(([name, [d, t]]) => `${name}: ${d} / ${t}`).join('   ')}`);
 if (misses.length > 0) print(`\nthe one-engine check missed:\n  ${misses.join('\n  ')}`);
+
+// The live-anchored rolling rows of the plan's Expectations table: what Chromium made on the live report (cold Range GETs
+// plus HEADs, 2026-11-12) times this harness's rolling prediction after a PR over its prediction at PR 1.
+const LIVE = { dashboard: 891, traces: 1064 };
+const ANCHORED_ROWS: readonly (readonly [number, WindowArg])[] = [
+  [1, 'none'],
+  [3, 'none'],
+  [4, 'none'],
+  [6, 'none'],
+  [8, '7d'],
+];
+{
+  const rollingSerial = (page: string, cfg: Config): number =>
+    pageOn(page, shapesOf(cfg.window)[0] ?? fail('no shape'), recordings.get(page)?.calls ?? [], cfg).serial;
+  const base = {
+    dashboard: rollingSerial(PAGES[0], { after: 1, window: 'none' }),
+    traces: rollingSerial(PAGES[1], { after: 1, window: 'none' }),
+  };
+  print(
+    `\nrolling, live-anchored (live ${fmt(LIVE.dashboard)} / ${fmt(LIVE.traces)} x harness after / harness after PR 1), dashboard / trace list:`,
+  );
+  print('  after   window  harness rolling (unanchored)   ratio (dash / traces)   anchored');
+  for (const [pr, window] of ANCHORED_ROWS) {
+    const cfg = { after: pr, window };
+    const d = rollingSerial(PAGES[0], cfg);
+    const t = rollingSerial(PAGES[1], cfg);
+    print(
+      `  ${String(pr).padEnd(5)}   ${window.padEnd(6)}  ${`${d.toFixed(1)} / ${t.toFixed(1)}`.padEnd(29)}  ${`${(d / base.dashboard).toFixed(3)} / ${(t / base.traces).toFixed(3)}`.padEnd(21)}   ${fmt(anchored(LIVE.dashboard, base.dashboard, d))} / ${fmt(anchored(LIVE.traces, base.traces, t))}`,
+    );
+  }
+}

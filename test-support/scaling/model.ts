@@ -417,3 +417,11 @@ export const PAGE_CROSS_SIZE: Pick<Size, 'outside' | 'inside' | 'rowGroups'> = {
   inside: 1,
   rowGroups: 3,
 };
+
+/**
+ * A live count scaled by what the harness predicts for the same page: `live` times the harness value after a PR over
+ * the harness value at the baseline (the unanchored rolling prediction of each), rounded to a whole request.
+ */
+export function anchored(live: number, harnessBaseline: number, harnessAfter: number): number {
+  return harnessBaseline === 0 ? live : Math.round((live * harnessAfter) / harnessBaseline);
+}

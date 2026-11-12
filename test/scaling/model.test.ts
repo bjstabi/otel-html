@@ -8,6 +8,7 @@ import {
   stepsOf,
 } from '../../test-support/scaling/generator.js';
 import {
+  anchored,
   countCalls,
   type EntryFit,
   filesParallel,
@@ -364,5 +365,17 @@ describe('improvedFit acts per axis', () => {
 
   test('a scan changes nothing', () => {
     expect(improvedFit(fit, { retention: 'scan', window: 'scan', density: 'scan' })).toEqual(fit);
+  });
+});
+
+describe('anchored', () => {
+  test('is the live count times the harness ratio, rounded', () => {
+    expect(anchored(891, 667, 667)).toBe(891);
+    expect(anchored(891, 667, 631)).toBe(843);
+    expect(anchored(1064, 822, 421)).toBe(545);
+  });
+
+  test('keeps the live count when the harness predicts nothing', () => {
+    expect(anchored(891, 0, 5)).toBe(891);
   });
 });
