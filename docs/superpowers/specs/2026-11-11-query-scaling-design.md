@@ -144,9 +144,10 @@ Four classes, per entry and axis:
 - **Prediction for a dashboard or page**: a page runs in one engine, where a read one entry shares with another is free,
   so the page is not the sum of its entries. The harness renders each page whole in one cold counting engine on
   generated shapes (dense and sparse spacing; partitions of 1 to 4 production-size row groups and partitions of 8, 14
-  and 22) and fits its serial requests, parallel requests and bytes per axis with the per-entry form, by non-negative
-  least squares (with a non-negative squared term in the row groups per partition, which a page whose cost grows faster
-  than linearly takes). The prediction for a named shape is that fit summed over the shape's partitions, each by its own
+  and 22) and fits its serial requests, parallel requests and bytes as `a + P·(p + pd·G) + q·G²` (P partitions of G row
+  groups; there is no retention/window split, because a page's window spans the report), by non-negative least squares
+  (the squared term is non-negative and is taken by a page whose cost grows faster than linearly). A window shorter
+  than the report (`--window 7d`) is split off afterwards from the entries' own ratios (`splitWindow`). The prediction for a named shape is that fit summed over the shape's partitions, each by its own
   row groups. A later PR's effect is the fit scaled, term by term, by the share of that term that the page's entries
   without a debt line for that PR still carry. A mise task prints the table for named shapes: today's rolling report,
   30 runs × 150,000 spans, 90 runs × 150,000, 30 runs × 1,500,000. On the live report the fit stays at about half the

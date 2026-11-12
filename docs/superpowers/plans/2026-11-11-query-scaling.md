@@ -771,8 +771,10 @@ traces than the list's 50 rows. This task measures each page whole instead of co
 2. Every measured shape holds at least as many traces in the page window as the longest list a page shows
    (50 rows), so the distinct ids a page asks for match a full report. If the generator cannot do that at a shape,
    it grows the shape's trace count, not the list.
-3. Each page's cost is fitted per axis with the per-entry form, `a + R·(r + rd·G) + W·(w + wd·G)`, by non-negative
-   least squares. The prediction for a named shape is that fit.
+3. Each page's cost is fitted as `a + P·(p + pd·G) + q·G²` (P partitions of G row groups; no retention/window split,
+   because the page window spans the report), by non-negative least squares (`fitPage`). The prediction for a named
+   shape is that fit; `--window 7d` is split off afterwards from the entries' ratios (`splitWindow`). There is no point 5: points 6-8
+   below were added later.
 4. `--after <pr>` scales each axis term of a page by the share of that term its entries without a debt line for
    that PR carry. The shares come from the per-entry fits of the page's entries. An entry `fixed` on an axis
    contributes 0 to the term; `matched` keeps its non-`G` part; `files` adds one parallel request per small file.
@@ -1937,21 +1939,39 @@ above it is a stop). Cells are serial requests, dashboard / trace list.
 
 The `rolling` column is anchored on what Chromium made on the live report on 2026-11-12 (891 and 1,064 Range GETs plus
 HEADs, cold): the row after PR 1 is those counts, and each later row is the live baseline times the harness page's
-after/before ratio for that PR (the page prediction after the PR over the prediction at PR 1, from `predict:queries`
-on the rolling shape). The other three columns are harness absolutes (**harness, not live-calibrated**): they are
+after/before ratio for that PR (the harness rolling prediction after the PR over its prediction at PR 1, both from
+`predict:queries` on the rolling shape, window none, except row 8, which is window 7d). `mise run predict:queries` prints
+the unanchored values, the ratios and the anchored cells (the section "rolling, live-anchored"), so every cell below can
+be checked against its output. The other three columns are harness absolutes (**harness, not live-calibrated**): they are
 `mise run predict:queries` on the generated shapes, with the rolling window none for PRs 1-6 and 7d after PR 8.
 
 | after PR      | rolling (live-anchored) | 30x150k (harness) | 90x150k (harness) | 30x1.5M (harness) |
 | ------------- | ----------------------- | ----------------- | ----------------- | ----------------- |
 | 1 (baseline)  | 891 / 1,064             | 667 / 822         | 2,002 / 2,465     | 2,666 / 4,906     |
-| 3             | 842 / 1,064             | 631 / 822         | 1,894 / 2,465     | 2,631 / 4,906     |
-| 4             | 754 / 536             | 567 / 421         | 1,700 / 1,264     | 1,982 / 903       |
-| 6             | 672 / 456             | 505 / 361         | 1,516 / 1,082     | 1,760 / 521       |
-| 8 (window 7d) | 672 / 456             | 245 / 84          | 577 / 84          | 1,256 / 122       |
+| 3             | 844 / 1,064             | 631 / 822         | 1,894 / 2,465     | 2,631 / 4,906     |
+| 4             | 755 / 535               | 567 / 421         | 1,700 / 1,264     | 1,982 / 903       |
+| 6             | 673 / 456               | 505 / 361         | 1,516 / 1,082     | 1,760 / 521       |
+| 8 (window 7d) | 673 / 456               | 245 / 84          | 577 / 84          | 1,256 / 122       |
+
+How the rolling cells come about (serial requests, dashboard / trace list; ratio = after / after PR 1; anchored = live x
+ratio; from the run of 2026-11-12 on the commit that added the section):
+
+| after PR      | harness rolling (unanchored) | ratio           | anchored    |
+| ------------- | ---------------------------- | --------------- | ----------- |
+| 1 (baseline)  | 474.5 / 590.2                | 1.000 / 1.000   | 891 / 1,064 |
+| 3             | 449.5 / 590.2                | 0.947 / 1.000   | 844 / 1,064 |
+| 4             | 401.9 / 296.7                | 0.847 / 0.503   | 755 / 535   |
+| 6             | 358.4 / 253.1                | 0.755 / 0.429   | 673 / 456   |
+| 8 (window 7d) | 358.4 / 253.1                | 0.755 / 0.429   | 673 / 456   |
+
+Row 8 equals row 6 for `rolling` on purpose: all 21 snapshot partitions overlap the last 7 days (partition 165 spans 9
+days, from 1793449360 to 1794226244 s, and the 7-day window starts at 1793815081), so `inWindow` is true for every
+partition and a 7-day window prunes nothing on that report. The 7-day window only moves the synthetic shapes, whose
+partitions are a day apart.
 
 Taken on 2026-11-12 (rolling is the snapshot of that day, 21 partitions, one of 1,076,590 spans). Why the absolute model
 is not used for `rolling`: the page is fitted from its own measurements in one engine and reproduces every generated
-shape within 25 % (CROSS left out; 40 cases, five pages, dense and sparse), but on the live report it stays at about half the
+shape within 25 % (40 cases, five pages, dense and sparse: 30 are in the fit, and only the 10 CROSS cases, which the fit leaves out, test extrapolation), but on the live report it stays at about half the
 requests Chromium makes. The four live checks, as predicted / live for the dashboard and the trace list: 0.46 / 0.32
 (page fitted on small row groups), 0.51 / 0.33 (random trace ids), 0.56 / 0.57
 (production-size row groups, 1-4 per partition) and 0.53 / 0.55 (with partitions of 8, 14 and 22 groups). The gap is
