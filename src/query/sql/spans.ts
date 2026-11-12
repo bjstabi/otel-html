@@ -219,16 +219,54 @@ export function groupStatsQuery(f: SqlFilter, _table: 'spans', key: string, cap:
 }
 
 /** The `traces` files that name the trace (one per partition holding a part of it). */
-export function tracePartitionsQuery(traceId: TraceId): Query {
+export function tracePartitionsQuery(traceId: TraceId, withBounds = false): Query {
+  const byTrace = eq(column('trace_id'), literal(traceId));
+  if (!withBounds)
+    return Query.from('traces').select('filename').distinct().where(byTrace).orderby('filename');
+  const timed = sql`start_time_unix_nano IS NOT NULL AND end_time_unix_nano IS NOT NULL`;
   return Query.from('traces')
-    .select('filename')
-    .distinct()
-    .where(eq(column('trace_id'), literal(traceId)))
+    .select({
+      filename: column('filename'),
+      min_start: sql`min(start_time_unix_nano) FILTER (WHERE ${timed})`,
+      max_end: sql`max(end_time_unix_nano) FILTER (WHERE ${timed})`,
+    })
+    .where(byTrace)
+    .groupby('filename')
     .orderby('filename');
 }
 
-/** Every span of the trace in the given `spans` files (`spanColumns`), by start then span_id. Callers send nothing for no files. */
-export function traceSpansQuery(traceId: TraceId, files: readonly string[], epoch: bigint): Query {
+/** The time range of a trace, absolute nanoseconds: the earliest start and the latest end over the rows of `tracePartitionsQuery(…, true)`. */
+export interface TraceBound {
+  startNs: bigint;
+  endNs: bigint;
+}
+
+/** The bound of those rows; null when no row has both times (a trace of logs only), so the span read goes unbounded. */
+export function traceBoundOf(rows: readonly Readonly<Record<string, unknown>>[]): TraceBound | null {
+  let startNs: bigint | null = null;
+  let endNs: bigint | null = null;
+  for (const row of rows) {
+    const { min_start: lo0, max_end: hi0 } = row as { min_start?: unknown; max_end?: unknown };
+    if (lo0 === null || lo0 === undefined || hi0 === null || hi0 === undefined) continue;
+    const lo = BigInt(lo0 as bigint | number);
+    const hi = BigInt(hi0 as bigint | number);
+    if (startNs === null || lo < startNs) startNs = lo;
+    if (endNs === null || hi > endNs) endNs = hi;
+  }
+  return startNs === null || endNs === null ? null : { startNs, endNs };
+}
+
+/**
+ * Every span of the trace in the given `spans` files (`spanColumns`), by start then span_id. Callers send nothing for no files.
+ * With a `bound` (the trace's range from its `traces` rows) the statement also constrains the start time, so row groups
+ * outside the range are skipped by their statistics; the bound is inclusive at both ends.
+ */
+export function traceSpansQuery(
+  traceId: TraceId,
+  files: readonly string[],
+  epoch: bigint,
+  bound?: TraceBound | null,
+): Query {
   return Query.from('spans')
     .select(spanColumns(epoch))
     .where(
@@ -237,6 +275,11 @@ export function traceSpansQuery(traceId: TraceId, files: readonly string[], epoc
         column('filename'),
         files.map((p) => literal(p)),
       ),
+      ...(bound === null || bound === undefined
+        ? []
+        : [
+            sql`start_time_unix_nano BETWEEN ${verbatim(String(bound.startNs))} AND ${verbatim(String(bound.endNs))}`,
+          ]),
     )
     .orderby('start_time_unix_nano', 'span_id');
 }

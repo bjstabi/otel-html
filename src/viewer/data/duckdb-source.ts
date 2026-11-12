@@ -42,6 +42,7 @@ import {
   spanRowsQuery,
   type TraceSort,
   timelineQuery,
+  traceBoundOf,
   tracePartitionsQuery,
   traceRowsQuery,
   traceSpansQuery,
@@ -738,10 +739,12 @@ export function createDuckDbDataSource(opts: {
     withLogs: boolean,
     signal?: AbortSignal,
   ): Promise<{ rows: SpanRow[]; tables: RowTables; logCount: number }> {
-    const partitions = rowsOf(await read(['traces'], undefined, tracePartitionsQuery(traceId), signal)).map(
-      (r) => String(cell(r, 'filename')),
-    );
+    const traceRows = rowsOf(await read(['traces'], undefined, tracePartitionsQuery(traceId, true), signal));
+    const partitions = traceRows.map((r) => String(cell(r, 'filename')));
     if (partitions.length === 0) throw traceNotFound(traceId);
+    const bound = traceBoundOf(
+      traceRows.map((r) => ({ min_start: cell(r, 'min_start'), max_end: cell(r, 'max_end') })),
+    );
     const { filter } = buildFilter({
       manifest,
       table: 'spans',
@@ -754,7 +757,7 @@ export function createDuckDbDataSource(opts: {
     const files = filter.files.files;
     if (files.length === 0) throw traceNotFound(traceId);
     const [spans, summary] = await Promise.all([
-      read(['spans'], filter.files, traceSpansQuery(traceId, files, epoch), signal),
+      read(['spans'], filter.files, traceSpansQuery(traceId, files, epoch, bound), signal),
       withLogs ? read(['traces'], undefined, traceSummaryQuery(traceId), signal) : null,
     ]);
     const { rows, tables } = spanRows(spans, epoch);

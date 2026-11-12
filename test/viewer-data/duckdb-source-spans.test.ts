@@ -292,6 +292,29 @@ describe('querySpans', () => {
     expect((await ds.getTrace(T3)).logCount).toBe(0);
   });
 
+  test('getTrace and serviceShare bound the span statement in time, and a trace over several partitions keeps all its spans', async () => {
+    const fresh = () =>
+      createDuckDbDataSource({
+        engine: mosaicQueryEngine(createCoordinator(db.connector, silentLogger), db),
+        manifest: f.manifest,
+      });
+    const spanSql = async (fn: () => Promise<unknown>): Promise<string[]> => {
+      const before = db.connector.requests.length;
+      await fn();
+      return db.connector.requests
+        .slice(before)
+        .map((r) => r.sql)
+        .filter((q) => q.includes('spans') && q.includes('span_id') && q.includes('trace_id'));
+    };
+    const get = await spanSql(() => fresh().getTrace(T2));
+    expect(get.length).toBeGreaterThan(0);
+    for (const q of get) expect(q).toContain('start_time_unix_nano BETWEEN');
+    const share = await spanSql(() => fresh().serviceShare(T1));
+    expect(share.length).toBeGreaterThan(0);
+    for (const q of share) expect(q).toContain('start_time_unix_nano BETWEEN');
+    expect((await fresh().getTrace(T1)).spans).toHaveLength(3);
+  });
+
   test('a given duration axis is counted into exactly, bin by bin', async () => {
     const base = await ds.querySpans(query({ condition: 'status.code == 2' }));
     const { min, max } = base.durations.summary ?? { min: 0, max: 0 };

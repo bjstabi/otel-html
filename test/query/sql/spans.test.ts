@@ -21,6 +21,7 @@ import {
   spanCountQuery,
   spanRowsQuery,
   timelineQuery,
+  traceBoundOf,
   tracePartitionsQuery,
   traceRowsQuery,
   traceSpansQuery,
@@ -649,5 +650,40 @@ describe('a trace split over three partitions, mixed kinds and caps', () => {
     expect(new Set(col(grun(spanRowsQuery(gfilter(), { column: 'start', dir: 'asc' }, 2)), 'total'))).toEqual(
       new Set([9n]),
     );
+  });
+
+  test('the span statement of a trace is bounded by the trace’s start and end', () => {
+    const q = traceSpansQuery(T1, ['x/spans.parquet'], 0n, { startNs: 10n, endNs: 20n });
+    expect(String(q)).toContain('start_time_unix_nano BETWEEN 10 AND 20');
+    expect(String(traceSpansQuery(T1, ['x/spans.parquet'], 0n))).not.toContain('BETWEEN');
+    expect(String(traceSpansQuery(T1, ['x/spans.parquet'], 0n, null))).not.toContain('BETWEEN');
+  });
+  test('the bound keeps every span of the trace, including one starting exactly at its end', () => {
+    const rows = run(tracePartitionsQuery(T1, true));
+    const bound = traceBoundOf(rows);
+    expect(bound).not.toBeNull();
+    const files = rows.map((r) => String(r.filename).replace('traces.parquet', 'spans.parquet'));
+    const all = run(traceSpansQuery(T1, files, f.epoch, bound));
+    expect(col(all, 'span_id')).toEqual([1, 2, 3, 5].map((n) => hex(n, 16)));
+    // the bound ends at the last start: that span (a zero-length one would be too) stays
+    const tight = { startNs: bound?.startNs ?? 0n, endNs: f.epoch + (all[3]?.start_ns as bigint) };
+    expect(col(run(traceSpansQuery(T1, files, f.epoch, tight)), 'span_id')).toHaveLength(4);
+  });
+  test('traceBoundOf spans the partitions and gives no bound when a side is missing', () => {
+    expect(
+      traceBoundOf([
+        { filename: 'a', min_start: 5n, max_end: 9n },
+        { filename: 'b', min_start: 2n, max_end: 7n },
+      ]),
+    ).toEqual({ startNs: 2n, endNs: 9n });
+    expect(traceBoundOf([{ filename: 'a', min_start: null, max_end: null }])).toBeNull();
+    expect(
+      traceBoundOf([
+        { filename: 'a', min_start: 5n, max_end: 9n },
+        { filename: 'b', min_start: null, max_end: null },
+      ]),
+    ).toEqual({ startNs: 5n, endNs: 9n });
+    expect(traceBoundOf([{ filename: 'a', min_start: 5n, max_end: null }])).toBeNull();
+    expect(traceBoundOf([])).toBeNull();
   });
 });
