@@ -9,12 +9,15 @@ import {
   BloomCollector,
   filterBytesFor,
   mightContain,
+  readStruct,
+  T,
+  type TField,
+  writeStruct,
   xxHash64,
 } from '../../../src/format/parquet/bloom.js';
 import { decodeTable, encodeColumns, encodeColumnsUnfiltered } from '../../../src/format/parquet/codec.js';
 import { TABLE_COLUMNS, TABLES, type Table } from '../../../src/format/parquet/columns.js';
 import type { Row } from '../../../src/format/parquet/rows.js';
-import { readStruct, T, type TField, writeStruct } from '../../../src/format/parquet/thrift.js';
 import { openTestDb } from '../../../test-support/duckdb-node.js';
 import { chunksOf } from '../../../test-support/parquet-footer.js';
 

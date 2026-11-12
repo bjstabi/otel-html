@@ -1,4 +1,10 @@
-import { field, readStruct, type TField, type TList } from '../src/format/parquet/thrift.js';
+import { readStruct, type TField } from '../src/format/parquet/bloom.js';
+
+interface TList {
+  readonly items: unknown[];
+}
+
+const field = (fields: readonly TField[], id: number): TField | undefined => fields.find((f) => f.id === id);
 
 export interface Chunk {
   path: string;
