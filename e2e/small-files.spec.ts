@@ -4,8 +4,8 @@ import { reviveDataJson, unwrapDataFile } from '../src/format/data-file.js';
 import { isV4, parseAnyManifest } from '../src/format/manifest.js';
 import { MANIFEST_KEY } from '../src/format/paths.js';
 import { SMALL_FILE_BYTES } from '../src/viewer/data/engine/small-files.js';
-import { PORT_ENV, reportDir } from './fixture.js';
-import { REQUESTS_PATH, type RequestRecord } from './static-server.js';
+import { reportDir } from './fixture.js';
+import type { RequestRecord } from './static-server.js';
 import { expect, HTTP, test } from './test.js';
 import { runWorkerSql } from './worker-sql.js';
 
@@ -87,19 +87,25 @@ test(
     const before = { traces: await countOf(page, 'traces'), spans: await countOf(page, 'spans') };
     expect(Number(before.traces)).toBeGreaterThan(0);
 
+    // what this page requested (the server's list is shared with the tests running in parallel)
+    const pageRequests: RequestRecord[] = [];
+    page.on('request', (request) => {
+      pageRequests.push({
+        path: new URL(request.url()).pathname,
+        range: (request.headers() as { range?: string }).range ?? null,
+        method: request.method(),
+      });
+    });
     const replies = await swapInWorker(page, baseURL ?? '', paths);
     expect(
       replies.every((r) => r === 'OK/OK'),
       replies.join(' '),
     ).toBe(true);
 
-    const port = process.env[PORT_ENV];
-    const seen = async (): Promise<RequestRecord[]> =>
-      (await (await fetch(`http://127.0.0.1:${port}${REQUESTS_PATH}`)).json()) as RequestRecord[];
-    const mark = (await seen()).length;
+    const mark = pageRequests.length;
     const after = { traces: await countOf(page, 'traces'), spans: await countOf(page, 'spans') };
     expect(after).toEqual(before);
-    const partitionRequests = (await seen()).slice(mark).filter((r) => r.path.includes('/data/partitions/'));
+    const partitionRequests = pageRequests.slice(mark).filter((r) => r.path.includes('/data/partitions/'));
     process.stdout.write(
       `SMALL-FILES swapped ${paths.length} files; counts ${JSON.stringify(before)} -> ${JSON.stringify(after)}; partition requests after the swap: ${partitionRequests.length}\n`,
     );
