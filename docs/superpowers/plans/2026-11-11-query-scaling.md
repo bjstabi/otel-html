@@ -982,8 +982,9 @@ test('each small traces file is fetched whole at most once and never by range af
       Points files are under it at every step, as on the live report.
 - [ ] **Step 5: Tune the threshold.** `mise run predict:queries -- --threshold <n>` for 131,072, 262,144, 524,288
       and 1,048,576 on the `rolling` shape. Keep 262,144 unless another value's modelled time for the dashboard plus
-      the trace list is at least 10 % lower; put the four rows in the PR body. Done: 524,288 won (1,306 against 1,592
-      requests, 18 % lower; 1,048,576 is no better), so `SMALL_FILE_BYTES` is 524,288.
+      the trace list is at least 10 % lower; put the four rows in the PR body. Done (re-measured after the step fit): 131,072 1,773; 262,144 1,709; 524,288 1,497
+      (12 % lower); 1,048,576 1,369, only 9 % below 524,288 for twice the bytes held per file and a worse 30x1.5M
+      dashboard. A larger limit must earn the same 10 % as the first step, so `SMALL_FILE_BYTES` is 524,288.
 - [ ] **Step 6:** README: one paragraph under the site format on small files; `mise run verify`; prediction against
       the "after 3" row. **Commit and open PR 3.**
 
