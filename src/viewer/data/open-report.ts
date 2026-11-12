@@ -154,6 +154,7 @@ export async function openReportRefreshable(
         let current = manifest;
         const sizes = new Map<string, number>();
         const fillSizes = (m: ManifestV4): void => {
+          sizes.clear();
           for (const p of m.partitions) for (const f of Object.values(p.files)) sizes.set(f.path, f.bytes);
         };
         fillSizes(manifest);
@@ -162,12 +163,16 @@ export async function openReportRefreshable(
           engine.format === 'site'
             ? smallFiles({
                 bytesOf: (path) => sizes.get(path),
-                fetchWhole: async (path) => {
-                  const response = await fetch(new URL(path, deps.baseUrl).href);
+                fetchWhole: async (path, fresh) => {
+                  const response = await fetch(
+                    new URL(path, deps.baseUrl).href,
+                    fresh ? { cache: 'no-cache' } : undefined,
+                  );
                   if (!response.ok) throw new Error(`${path}: HTTP ${response.status}`);
                   return new Uint8Array(await response.arrayBuffer());
                 },
-                swap: (path, bytes) => swapToBuffer(engine, path, bytes, new URL(path, deps.baseUrl).href),
+                swap: (path, bytes, isCurrent) =>
+                  swapToBuffer(engine, path, bytes, new URL(path, deps.baseUrl).href, isCurrent),
               })
             : undefined;
         const queryEngine = parts.createQueryEngine(
@@ -190,12 +195,11 @@ export async function openReportRefreshable(
                 loader: deps.loader,
                 baseUrl: deps.baseUrl,
                 logger: deps.logger,
-                ...(small ? { smallFiles: small } : {}),
+                ...(small ? { smallFiles: small, adoptSizes: fillSizes } : {}),
               },
               deps.now ?? Date.now,
             );
             current = next.manifest;
-            fillSizes(current);
             if (next.dataSource !== null) shown = next.dataSource;
             else if (rerun) {
               queryEngine.clearCache();

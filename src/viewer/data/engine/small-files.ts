@@ -18,10 +18,13 @@ export interface SmallFiles {
 export interface SmallFilesDeps {
   /** The manifest's size of `path`, or undefined when the manifest does not list it. */
   bytesOf(path: string): number | undefined;
-  /** One GET without a Range header. */
-  fetchWhole(path: string): Promise<Uint8Array>;
-  /** Replaces the URL registration of `path` by a buffer. */
-  swap(path: string, bytes: Uint8Array): Promise<void>;
+  /** One GET without a Range header; `fresh` bypasses the browser cache (`cache: 'no-cache'`). */
+  fetchWhole(path: string, fresh?: boolean): Promise<Uint8Array>;
+  /**
+   * Replaces the URL registration of `path` by a buffer. `isCurrent` is asked inside the gate, as the first step of
+   * the held change: false once the path was forgotten while the swap waited, and then nothing is swapped.
+   */
+  swap(path: string, bytes: Uint8Array, isCurrent: () => boolean): Promise<void>;
   threshold?: number;
   concurrency?: number;
 }
@@ -61,11 +64,20 @@ export function smallFiles(deps: SmallFilesDeps): SmallFiles {
     entry.settled = (async () => {
       await acquire();
       try {
-        const bytes = await deps.fetchWhole(path);
+        const expected = deps.bytesOf(path);
+        let bytes = await deps.fetchWhole(path);
+        if (expected !== undefined && bytes.length !== expected) {
+          // a stale cache entry or a host's error page: ask the server once, and keep range reads if it still differs
+          bytes = await deps.fetchWhole(path, true);
+          if (bytes.length !== expected) {
+            throw new Error(`${path}: fetched ${bytes.length} bytes, the manifest says ${expected}`);
+          }
+        }
         // forgotten while in flight: the file may be gone or replaced, so swap nothing
-        if (entries.get(path) !== entry) return;
-        await deps.swap(path, bytes);
-        entry.swapped = true;
+        const isCurrent = (): boolean => entries.get(path) === entry;
+        if (!isCurrent()) return;
+        await deps.swap(path, bytes, isCurrent);
+        entry.swapped = isCurrent();
       } catch {
         // stays registered by URL; the next prepare retries
       } finally {

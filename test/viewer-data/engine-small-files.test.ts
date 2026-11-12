@@ -5,20 +5,24 @@ function setup(sizes: Record<string, number>, concurrency?: number) {
   const fetched: string[] = [];
   const swapped: string[] = [];
   const fail = new Set<string>();
+  const fresh: boolean[] = [];
+  /** body lengths to answer with, one per call; the manifest's size once the list is empty */
+  const lengths = new Map<string, number[]>();
   const gates = new Map<string, () => void>();
   let hold = false;
   let active = 0;
   let peak = 0;
   const s = smallFiles({
     bytesOf: (p) => sizes[p],
-    async fetchWhole(p) {
+    async fetchWhole(p, isFresh) {
       fetched.push(p);
+      fresh.push(isFresh === true);
       active += 1;
       peak = Math.max(peak, active);
       try {
         if (hold) await new Promise<void>((resolve) => gates.set(p, resolve));
         if (fail.has(p)) throw new Error('boom');
-        return new Uint8Array(1);
+        return new Uint8Array(lengths.get(p)?.shift() ?? sizes[p] ?? 1);
       } finally {
         active -= 1;
       }
@@ -32,6 +36,8 @@ function setup(sizes: Record<string, number>, concurrency?: number) {
     s,
     fetched,
     swapped,
+    fresh,
+    lengths,
     fail,
     gates,
     peak: () => peak,
@@ -131,5 +137,43 @@ describe('smallFiles', () => {
     await t.s.prepare(['a']);
     expect(t.fetched).toEqual(['a', 'a']);
     expect(t.swapped).toEqual(['a', 'a']);
+  });
+
+  test('a body that differs from the manifest size is fetched once more past the cache and then swapped', async () => {
+    const t = setup({ a: 10 });
+    t.lengths.set('a', [7]);
+    await t.s.prepare(['a']);
+    expect(t.fetched).toEqual(['a', 'a']);
+    expect(t.fresh).toEqual([false, true]);
+    expect(t.swapped).toEqual(['a']);
+  });
+
+  test('a body that still differs swaps nothing and the file is retried by the next prepare', async () => {
+    const t = setup({ a: 10 });
+    t.lengths.set('a', [7, 7]);
+    await expect(t.s.prepare(['a'])).resolves.toBeUndefined();
+    expect(t.fetched).toEqual(['a', 'a']);
+    expect(t.swapped).toEqual([]);
+    await t.s.prepare(['a']);
+    expect(t.swapped).toEqual(['a']);
+  });
+
+  test('a swap that finds its path forgotten while it waited is told so', async () => {
+    const seen: boolean[] = [];
+    let release: () => void = () => undefined;
+    const s = smallFiles({
+      bytesOf: () => 1,
+      fetchWhole: async () => new Uint8Array(1),
+      swap: async (_p, _b, isCurrent) => {
+        await new Promise<void>((r) => (release = r));
+        seen.push(isCurrent());
+      },
+    });
+    const p = s.prepare(['a']);
+    await tick();
+    s.forget(['a']);
+    release();
+    await p;
+    expect(seen).toEqual([false]);
   });
 });

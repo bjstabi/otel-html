@@ -432,7 +432,7 @@ describe('the small-file loader of openReportRefreshable', () => {
     const fetched: string[] = [];
     vi.stubGlobal('fetch', async (url: string) => {
       fetched.push(url);
-      return { ok: true, status: 200, arrayBuffer: async () => new ArrayBuffer(1) };
+      return { ok: true, status: 200, arrayBuffer: async () => new ArrayBuffer(100) };
     });
     try {
       const o = opened('site', siteManifest(100));
@@ -446,6 +446,23 @@ describe('the small-file loader of openReportRefreshable', () => {
       await openReportRefreshable(big.manifest, big.deps, () => undefined);
       await big.prepare()?.([partitionFilePath(0, 'spans')]);
       expect(fetched).toEqual([]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test('a stale body is fetched again with cache: no-cache, and a persistent mismatch swaps nothing', async () => {
+    const inits: (RequestInit | undefined)[] = [];
+    vi.stubGlobal('fetch', async (_url: string, init?: RequestInit) => {
+      inits.push(init);
+      return { ok: true, status: 200, arrayBuffer: async () => new ArrayBuffer(init ? 100 : 7) };
+    });
+    try {
+      const o = opened('site', siteManifest(100));
+      await openReportRefreshable(o.manifest, o.deps, () => undefined);
+      await o.prepare()?.([partitionFilePath(0, 'spans')]);
+      expect(inits).toEqual([undefined, { cache: 'no-cache' }]);
+      expect(o.swapped).toEqual([partitionFilePath(0, 'spans')]);
     } finally {
       vi.unstubAllGlobals();
     }
