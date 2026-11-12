@@ -27,8 +27,11 @@ export interface RecordedCall {
 export interface Recording {
   ds: DataSource;
   calls: RecordedCall[];
-  /** Resolves once every call returned and none started for a quiet period. */
-  settled(): Promise<void>;
+  /**
+   * Resolves once every method of `required` has been asked, every call returned and none started for a quiet period.
+   * Rejects naming the methods still missing after `waitMs`.
+   */
+  settled(required?: readonly string[], waitMs?: number): Promise<void>;
 }
 
 /** The parts of a query the recording reads; the argument of a method is any of the query types, or an id. */
@@ -46,6 +49,8 @@ interface Asked {
 
 /** Milliseconds without a new call before the page counts as settled. */
 const QUIET_MS = 150;
+/** How long a page may take to ask the methods it must ask: a loaded CPU renders a page's rows slowly. */
+const REQUIRED_WAIT_MS = 30_000;
 
 const CALL = /[A-Za-z_]\w*\s*\(/;
 const RESOURCE_ATTR = /resource\.attributes\["([^"]+)"\]/g;
@@ -157,7 +162,19 @@ export function recordingDataSource(inner: DataSource, manifest: ManifestV4): Re
   return {
     ds,
     calls,
-    settled: async (): Promise<void> => {
+    settled: async (required: readonly string[] = [], waitMs = REQUIRED_WAIT_MS): Promise<void> => {
+      // a page asks some methods only once an earlier result has rendered, which on a loaded CPU (a Windows runner) takes
+      // longer than QUIET_MS: the quiet period below starts only once every required method has been asked
+      const since = performance.now();
+      for (;;) {
+        const missing = required.filter((m) => !calls.some((c) => c.method === m));
+        if (missing.length === 0) break;
+        if (performance.now() - since > waitMs)
+          throw new OtelHtmlError('usage', {
+            message: `the page did not ask ${missing.join(', ')} within ${waitMs / 1000} s`,
+          });
+        await new Promise<void>((resolve) => setTimeout(resolve, 25));
+      }
       // a widget behind a debounce or a lazy import starts its request late: no call in flight and none started for QUIET_MS
       for (let started = -1; started !== calls.length || inflight > 0; ) {
         started = calls.length;

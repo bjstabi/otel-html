@@ -18,6 +18,25 @@ import { recordingDataSource } from '../../test-support/scaling/recording-source
 
 export const PAGES = ['#/dashboards/ci', '#/traces?mode=traces', '#/traces', '#/logs', '#/metrics'] as const;
 
+/**
+ * Every method each page asks over a scaling report. The settle waits for all of them: the trace list asks the service share
+ * of its rows, and the log list whether its traces exist, only once the rows have rendered.
+ */
+export const PAGE_CALLS: Readonly<Record<string, readonly string[]>> = {
+  '#/dashboards/ci': [
+    'querySpans',
+    'queryLogs',
+    'resourceValues',
+    'metricCatalog',
+    'metricRunQuery',
+    'metricPoints',
+  ],
+  '#/traces?mode=traces': ['querySpans', 'serviceShare'],
+  '#/traces': ['querySpans'],
+  '#/logs': ['queryLogs', 'hasTrace'],
+  '#/metrics': ['metricCatalog', 'metricShowOptions', 'metricQuery'],
+};
+
 /** `value` with the metric of every query set to `metric`: the report of the test holds one metric, not the CI's. */
 function withMetric(value: unknown, metric: string): unknown {
   if (Array.isArray(value)) return value.map((v) => withMetric(v, metric));
@@ -70,7 +89,7 @@ async function pageOn(live: ScalingReport, hash: string): Promise<Cost> {
         <Shell dataSource={recording.ds} history={createHashHistory(window)} />
       </ThemeProvider>,
     );
-    await recording.settled();
+    await recording.settled(PAGE_CALLS[hash] ?? []);
     const cost = costOf(await counting.take(), new Map());
     cleanup();
     return cost;

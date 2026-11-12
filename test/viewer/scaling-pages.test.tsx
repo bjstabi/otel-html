@@ -20,20 +20,12 @@ import {
 } from '../../test-support/scaling/generator.js';
 import { closeMeasured } from '../../test-support/scaling/measure.js';
 import { entryIdsOf, recordingDataSource } from '../../test-support/scaling/recording-source.js';
-import { manifestWithCi, measureShape, PAGES, shapeFile } from './scaling-pages-support.js';
+import { manifestWithCi, measureShape, PAGE_CALLS, PAGES, shapeFile } from './scaling-pages-support.js';
 
 const IDS = new Set(CATALOGUE.map((e) => e.id));
 const { OTEL_HTML_SCALING: SCALING, OTEL_HTML_SCALING_OUT: OUT } = process.env;
 
 /** Methods any rendering of the page must call: a page that records fewer lost a widget's request. */
-const MUST_CALL: Record<string, readonly string[]> = {
-  '#/dashboards/ci': ['querySpans', 'queryLogs', 'metricCatalog', 'metricRunQuery'],
-  '#/traces?mode=traces': ['querySpans'],
-  '#/traces': ['querySpans'],
-  '#/logs': ['queryLogs'],
-  '#/metrics': ['metricCatalog'],
-};
-
 let report: ScalingReport;
 let close: () => Promise<void>;
 let cold: () => Promise<void>;
@@ -72,14 +64,14 @@ describe('the pages ask only catalogued requests', () => {
           <Shell dataSource={ds} history={createHashHistory(window)} />
         </ThemeProvider>,
       );
-      await settled();
+      await settled(PAGE_CALLS[hash] ?? []);
       const settledCount = calls.length;
       // nothing may start after the page counted as settled
       await new Promise<void>((resolve) => setTimeout(resolve, 250));
       expect(calls.length, `${hash}: calls started after settled()`).toBe(settledCount);
       const warm = costOf(await take(), new Map());
       expect(calls.length).toBeGreaterThan(0);
-      for (const method of MUST_CALL[hash] ?? [])
+      for (const method of PAGE_CALLS[hash] ?? [])
         expect(
           calls.map((c) => c.method),
           `${hash} calls ${method}`,
