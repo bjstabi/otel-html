@@ -10,6 +10,7 @@ import {
 import {
   countCalls,
   type EntryFit,
+  filesParallel,
   fitEntry,
   fitModel,
   fitPage,
@@ -249,6 +250,32 @@ describe('countCalls', () => {
   });
 });
 
+describe('filesParallel', () => {
+  const small = (inWindow: boolean): PartitionShape => ({ rowGroups: 2, inWindow, smallFiles: 3 });
+  const partitions = [small(false), small(true), small(true)];
+
+  test('a retention line covers the partitions outside the window', () => {
+    expect(filesParallel([{ times: 1, axes: ['retention'], windowless: false }], partitions)).toBe(3);
+  });
+
+  test('a windowless entry carries no window: its retention line covers every partition', () => {
+    expect(filesParallel([{ times: 1, axes: ['retention'], windowless: true }], partitions)).toBe(9);
+    // with no window every partition is inside it, and the windowed entry has nothing outside
+    expect(
+      filesParallel([{ times: 1, axes: ['retention'], windowless: false }], [small(true), small(true)]),
+    ).toBe(0);
+    expect(
+      filesParallel([{ times: 1, axes: ['retention'], windowless: true }], [small(true), small(true)]),
+    ).toBe(6);
+  });
+
+  test('window and density lines, weighted by the calls', () => {
+    expect(filesParallel([{ times: 2, axes: ['window'], windowless: false }], partitions)).toBe(2 * 6);
+    expect(filesParallel([{ times: 1, axes: ['density'], windowless: true }], partitions)).toBe(9);
+    expect(filesParallel([{ times: 1, axes: [], windowless: false }], partitions)).toBe(0);
+  });
+});
+
 describe('--after scales a page by its entries shares', () => {
   const page = { a: 5, r: 4, rd: 0, w: 2, wd: 3 };
   const models = (m: Model) => ({ serial: m, parallel: { ...m, a: 0, r: 0, rd: 0, w: 0, wd: 0 }, bytes: m });
@@ -271,6 +298,17 @@ describe('--after scales a page by its entries shares', () => {
     const plain = e({ a: 0, r: 1, rd: 0, w: 0, wd: 0 }, {}, 2);
     expect(scaledPage(models(page), [lined, plain]).serial.r).toBeCloseTo((4 * 2) / 3, 9);
     expect(scaledPage(models(page), [plain]).serial).toEqual(page);
+  });
+
+  test('the G squared term follows the density share: a retention line leaves it, a density line zeroes it', () => {
+    const withQ = { ...models({ ...page, q: 0.5 }), parallel: models(page).parallel };
+    const entries = (reached: Parameters<typeof improvedFit>[1]): PageEntry[] => [
+      e({ a: 0, r: 1, rd: 1, w: 1, wd: 1 }, reached),
+    ];
+    expect(scaledPage(withQ, entries({ retention: 'fixed' })).serial.q).toBe(0.5);
+    expect(scaledPage(withQ, entries({ density: 'fixed' })).serial.q).toBe(0);
+    expect(scaledPage(withQ, entries({ density: 'matched' })).serial.q).toBe(0);
+    expect(scaledPage(models(page), entries({ density: 'fixed' })).serial).not.toHaveProperty('q');
   });
 
   test('a term no entry carries stays as measured', () => {

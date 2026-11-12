@@ -10,7 +10,7 @@ export interface Size {
 }
 
 /** The row groups of a shape summed over its partitions. */
-export const groupsOf = (s: Size): number =>
+const groupsOf = (s: Size): number =>
   (s.outside + s.inside) * s.rowGroups + (s.bigRowGroups === undefined ? 0 : s.bigRowGroups - s.rowGroups);
 
 /** The squares of the row groups of each partition, summed (the first partition holds `bigRowGroups`). */
@@ -384,3 +384,36 @@ export function predictPage(page: CostModels, partitions: readonly PartitionShap
     bytes: predict(page.bytes, partitions),
   };
 }
+
+/** An entry's debt lines for the parallel count: calls, the axes it is `files` on, and whether it carries no window. */
+export interface FilesLine {
+  times: number;
+  axes: readonly AxisName[];
+  windowless: boolean;
+}
+
+/**
+ * Parallel requests a `files` line adds: one per small file of the partitions its axis covers. Retention covers the
+ * partitions outside the window, and for an entry without a window, which has none, every partition; window covers the
+ * ones inside; density those inside, or every partition for an entry without a window.
+ */
+export function filesParallel(lines: readonly FilesLine[], partitions: readonly PartitionShape[]): number {
+  let total = 0;
+  for (const { times, axes, windowless } of lines) {
+    const covered = partitions.filter(
+      (p) =>
+        (axes.includes('retention') && (!p.inWindow || windowless)) ||
+        (axes.includes('window') && p.inWindow) ||
+        (axes.includes('density') && (p.inWindow || windowless)),
+    );
+    total += times * covered.reduce((n, p) => n + p.smallFiles, 0);
+  }
+  return total;
+}
+
+/** The page shape the page fit leaves out to test how it extrapolates across both axes (the generator adds the spacing). */
+export const PAGE_CROSS_SIZE: Pick<Size, 'outside' | 'inside' | 'rowGroups'> = {
+  outside: 2,
+  inside: 1,
+  rowGroups: 3,
+};

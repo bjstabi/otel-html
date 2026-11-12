@@ -1,3 +1,4 @@
+import './scaling-pages-mocks.js';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { cleanup, render } from '@testing-library/react';

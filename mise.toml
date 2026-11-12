@@ -665,15 +665,17 @@ bun scripts/bench-metrics.ts "$@"
 
 [tasks."predict:queries"]
 description = """Print the requests, megabytes and modelled milliseconds the viewer's pages cost on named report shapes
-An estimate: it prints and asserts nothing about the prediction. Measures every catalogue entry cold on the generated
-shapes (test/scaling/classes*.test.ts, about 1 minute; the cached test:scaling does not keep its measurements), records
-what each page asks of the data source and renders each page whole in one cold counting engine on the same shapes, dense and
-sparse (test/viewer/scaling-pages.test.tsx; it also fails when the fit without the cross misses a page on the base, the
-cross or the 16-row-group shape by more than 25 %) into dist/predict-queries, then runs scripts/predict-queries.ts: per
-page and per shape (rolling = test-support/scaling/shapes/rolling.json, 30x150k, 90x150k, 30x1.5M) the serial and parallel
-requests, megabytes and modelled milliseconds. `-- --after 4 --window 7d` prints the state after PR 4 of the query-scaling
-plan with the last 7 days as the window; `-- --threshold <bytes>` moves the small-file limit. To print another variant
-without measuring again: bun scripts/predict-queries.ts --dir dist/predict-queries --after 4"""
+An estimate: it prints the prediction and asserts nothing about it, but exits non-zero when the one-engine check misses
+(the fit without the cross against a page rendered whole, within 25 % or 2 requests). Measures every catalogue entry cold
+on the generated shapes (test/scaling/classes*.test.ts, about 1 minute; the cached test:scaling does not keep its
+measurements), records what each page asks of the data source and renders each page whole in one cold counting engine on
+page shapes of production-size row groups, dense and sparse, with partitions of 1 to 4, 8, 14 and 22 groups
+(test/viewer/scaling-pages*.test.tsx; about 5 minutes) into dist/predict-queries, then runs scripts/predict-queries.ts:
+the page fits, the one-engine table, and per page and per shape (rolling = test-support/scaling/shapes/rolling.json,
+30x150k, 90x150k, 30x1.5M) the serial and parallel requests, megabytes and modelled milliseconds. `-- --after 4
+--window 7d` prints the state after PR 4 of the query-scaling plan with the last 7 days as the window; `-- --threshold
+<bytes>` moves the small-file limit. To print another variant without measuring again: bun scripts/predict-queries.ts
+--dir dist/predict-queries --after 4"""
 shell = "bash -c"
 usage = 'arg "[args]" var=#true'
 env = { OTEL_HTML_SCALING = "1", OTEL_HTML_SCALING_OUT = "dist/predict-queries", OTEL_HTML_PERF_PASS = "0" }

@@ -16,6 +16,7 @@ import { writeReportDir } from '../report-dir.js';
 import { createTestWriter, EPOCH_NS, testConfig } from '../writer-deps.js';
 import { bounded, STEP_TIMEOUT_MS, shareOnce } from './bounded.js';
 import { ROW_GROUP_ROWS } from './cost.js';
+import { PAGE_CROSS_SIZE } from './model.js';
 
 const AXIS_FIELD = { retention: 'outside', window: 'inside', density: 'rowGroups' } as const;
 
@@ -85,9 +86,7 @@ export function pageShapes(spacing: Shape['spacing']): Shape[] {
 
 /** The page shape the fit leaves out, to test how it extrapolates across both axes. */
 export const PAGE_CROSS = (spacing: Shape['spacing']): Shape => ({
-  outside: 2,
-  inside: 1,
-  rowGroups: 3,
+  ...PAGE_CROSS_SIZE,
   spacing,
   rowGroupRows: PRODUCTION_ROW_GROUP_ROWS,
 });

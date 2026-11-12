@@ -8,16 +8,7 @@ import { bounded, shareOnce } from './bounded.js';
 import { classify, type Step } from './classify.js';
 import { type Cost, costOf } from './cost.js';
 import { type CountingEngine, openCountingEngine, type ReadEvent } from './counting-engine.js';
-import {
-  BASE,
-  buildScalingReport,
-  CROSS,
-  PREBUILT_ENV,
-  type ScalingReport,
-  type Shape,
-  stepsOf,
-} from './generator.js';
-import { type EntryFit, fitEntry } from './model.js';
+import { buildScalingReport, PREBUILT_ENV, type ScalingReport, type Shape, stepsOf } from './generator.js';
 
 export const AXES: readonly Axis[] = ['retention', 'density', 'window'];
 
@@ -95,8 +86,7 @@ async function measure(entry: CatalogueEntry, shape: Shape): Promise<Measured> {
       (sizes.get(e.path) ?? Number.POSITIVE_INFINITY) < HARNESS_SMALL_FILE_BYTES;
     const small = costOfEvents(events.filter(isSmall)).serial;
     const large = costOfEvents(events.filter((e) => !isSmall(e))).serial;
-    const cost = costOfEvents(events);
-    return { cost, small, large };
+    return { cost: costOfEvents(events), small, large };
   });
   live.turn = run.catch(() => undefined);
   return run;
@@ -165,7 +155,7 @@ export async function stepsFor(entry: CatalogueEntry, axis: Axis): Promise<Step[
   return steps;
 }
 
-/** What `entry` cost cold on one generated shape: serial and parallel requests, bytes, and the data part's serial split. */
+/** What `entry` cost cold on one generated shape: serial and parallel requests, bytes. */
 export interface ModelPoint extends Cost {
   shape: Shape;
 }
@@ -179,34 +169,10 @@ export const DENSE_16 = 16;
  */
 export const hasDensity16 = (entry: CatalogueEntry): boolean => !entry.id.includes('.residual.');
 
-/**
- * The shapes the model of an entry of `spacing` is fitted on: the three axes' steps, the cross and, with `density16`,
- * one more density step (a fourth value of G, so the line over G is not drawn through two points).
- */
-export function modelShapes(spacing: Shape['spacing'], density16: boolean): Shape[] {
-  const shapes = [
-    ...stepsOf('retention', spacing),
-    ...stepsOf('density', spacing),
-    ...stepsOf('window', spacing),
-    { ...CROSS, spacing },
-  ];
-  if (density16) shapes.push({ ...BASE, spacing, rowGroups: DENSE_16 });
-  const seen = new Set<string>();
-  return shapes.filter((s) => {
-    const key = shapeKey(s);
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
 /** The cost of `entry` on each of `shapes`: the points the prediction fits its model on (`mise run predict:queries`). */
 export async function pointsOf(entry: CatalogueEntry, shapes: readonly Shape[]): Promise<ModelPoint[]> {
   const points: ModelPoint[] = [];
-  for (const shape of shapes) {
-    const m = await measuredOf(entry, shape);
-    points.push({ shape, ...m.cost });
-  }
+  for (const shape of shapes) points.push({ shape, ...(await measuredOf(entry, shape)).cost });
   return points;
 }
 
@@ -246,16 +212,4 @@ export async function closeMeasured(): Promise<void> {
   measured.clear();
   for (const live of all) await live.counting.close();
   for (const live of all) await live.report.close();
-}
-
-/**
- * The model of `entry`, fitted on its measurements on `modelShapes` (including the extra density step): the serial
- * requests, bytes and parallel requests of its cold run.
- */
-export async function fitOf(entry: CatalogueEntry): Promise<EntryFit> {
-  const points = await pointsOf(entry, modelShapes(entry.spacing, hasDensity16(entry)));
-  return fitEntry(
-    points.map((p) => ({ shape: p.shape, serial: p.serial, parallel: p.parallel, bytes: p.bytes })),
-    !entry.window,
-  );
 }

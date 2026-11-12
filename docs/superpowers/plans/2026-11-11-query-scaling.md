@@ -778,12 +778,12 @@ traces than the list's 50 rows. This task measures each page whole instead of co
    ones are, so a lookup by id is not pruned to one partition by min/max statistics. The page test renders at the
    live check's viewport height, so a list asks for as many ids as live. Entries whose class changes get their
    catalogue class and `KNOWN_DEBT` lines; a lookup by trace id that reads every partition is owed by Task 11
-   (PR 4).
+   (PR 4). The measurements showed that the live list mounts 26 rows at a fixed 480 px (the table's height is a prop, not the viewport's), so the page test needed no viewport change.
 7. Added 2026-11-12 after the second live check (0.51× and 0.33×): the density axis of the page fit is measured on
    row groups of production size (50,000 rows, the writer's default), 1 to 4 per partition, because a live group's
    larger column chunks cost more requests than a harness group's. The class steps keep their small groups. The
    live traces-mode page asks for 52 distinct traces while 26 rows mount; the second 26 are found from a Chromium
-   request log and modelled in the page measurement.
+   request log and modelled in the page measurement. The measurements showed that the "52 distinct traces" were 26 ids asked by two statements each (the file lookup and the spans read), so there is no second 26 to model.
 8. Added 2026-11-12 after the third live check (0.56× and 0.57×): one live partition holds 22 production-size
    groups and cost 339 requests against about 129 fitted from 1–4 groups. The page fit also measures one partition
    of about 22 groups, so it no longer extrapolates past 4; the fit may become non-linear in G if the points say so.
@@ -796,7 +796,8 @@ traces than the list's 50 rows. This task measures each page whole instead of co
       page points; `--after` with a retention line on an entry carrying half a page's `r` halves the page's `r`
       and leaves `w, wd` unchanged; a shape in the generator holds at least 50 traces in the window.
 - [ ] **Step 2: Implement** the page measurements, the page fit and `--after` by entry shares.
-- [ ] **Step 3: Check against one engine.** The fit must reproduce each page at `BASE`, `CROSS` and the
+- [ ] **Step 3: Check against one engine.** (A page of 4 requests, the metrics page, is within 2 requests: 25 % of it is
+      less than one request. Every other page is held to 25 %.) The fit must reproduce each page at `BASE`, `CROSS` and the
       `rowGroups: 16` shape within 25 %. `CROSS` is left out of the fit, so it tests how the fit extrapolates
       across axes.
 - [ ] **Step 4: Live check, again.** As Task 6b step 4: refresh `shapes/rolling.json` the same day, count the live

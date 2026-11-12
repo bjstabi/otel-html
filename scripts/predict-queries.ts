@@ -7,11 +7,14 @@ import {
   type CostModels,
   countCalls,
   type EntryFit,
+  type FilesLine,
   type FitPoint,
+  filesParallel,
   fitEntry,
   fitPage,
   improvedFit,
   MS_PER_MB,
+  PAGE_CROSS_SIZE,
   PARALLEL_BATCH_MS,
   type PageEntry,
   type PartitionShape,
@@ -118,7 +121,10 @@ const pageFits = new Map<string, CostModels>();
 /** The page measurements per page and spacing, and the fit left without the cross (`PAGE_CROSS` in generator.ts). */
 const pagePoints = new Map<string, FitPoint[]>();
 const isPageCross = (s: FitPoint['shape']): boolean =>
-  s.outside === 2 && s.inside === 1 && s.rowGroups === 3 && s.bigRowGroups === undefined;
+  s.outside === PAGE_CROSS_SIZE.outside &&
+  s.inside === PAGE_CROSS_SIZE.inside &&
+  s.rowGroups === PAGE_CROSS_SIZE.rowGroups &&
+  s.bigRowGroups === undefined;
 const pageKey = (page: string, long: boolean): string => `${page}|${long ? 'sparse' : 'dense'}`;
 for (const page of PAGES)
   for (const spacing of ['dense', 'sparse'] as const) {
@@ -314,7 +320,7 @@ function pageOn(page: string, shape: Shape, calls: readonly RecordedCall[]): Row
     })),
   );
   const entries: PageEntry[] = [];
-  const small: { times: number; axes: AxisName[] }[] = [];
+  const small: FilesLine[] = [];
   const ids = new Map<string, number>();
   for (const [key, times] of counted) {
     const [id = '', baseline] = key.split('|');
@@ -324,6 +330,7 @@ function pageOn(page: string, shape: Shape, calls: readonly RecordedCall[]): Row
     small.push({
       times,
       axes: (Object.entries(axes) as [AxisName, Target][]).filter(([, t]) => t === 'files').map(([a]) => a),
+      windowless: fit.windowless,
     });
     ids.set(id, (ids.get(id) ?? 0) + times);
   }
@@ -331,17 +338,7 @@ function pageOn(page: string, shape: Shape, calls: readonly RecordedCall[]): Row
   const model = scaledPage(windowArg === 'none' ? measured : splitWindow(measured, entries), entries);
   const cost = predictPage(model, shape.partitions);
   // one parallel request per small file of the partitions a `files` axis covers
-  let parallel = cost.parallel;
-  for (const { times, axes } of small) {
-    if (axes.length === 0) continue;
-    const covered = shape.partitions.filter(
-      (p) =>
-        (axes.includes('retention') && !p.inWindow) ||
-        (axes.includes('window') && p.inWindow) ||
-        (axes.includes('density') && p.inWindow),
-    );
-    parallel += times * covered.reduce((a, p) => a + p.smallFiles, 0);
-  }
+  const parallel = cost.parallel + filesParallel(small, shape.partitions);
   return {
     serial: cost.serial,
     parallel,
