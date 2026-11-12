@@ -1,4 +1,4 @@
-import { and, type ExprNode, Query, sql, verbatim } from '@uwdata/mosaic-sql';
+import { and, type ExprNode, type Query } from '@uwdata/mosaic-sql';
 import type { ManifestV4 } from '../../format/manifest.js';
 import { OtelHtmlError } from '../../model/errors.js';
 import { compileCondition } from '../../ottl/compile.js';
@@ -9,6 +9,7 @@ import {
   type ByExpr,
   byExpr,
   exemplarsQuery,
+  idTableSeriesQuery,
   type MetricIdentity,
   metricCellsQuery,
   metricDefsQuery,
@@ -17,7 +18,9 @@ import {
   pointIntervalQuery,
   runsQuery,
   SPARK_BUCKETS,
+  seriesIdsQuery,
   seriesQuery,
+  seriesServicesQuery,
   summaryQuantilesQuery,
 } from '../../query/sql/points.js';
 import { absWindow, type Pruned, type RelWindow } from '../../query/sql/prune.js';
@@ -177,7 +180,7 @@ export function metricMethods(ctx: MetricContext): MetricMethods {
       survivors.map((r) => [r.seriesId]),
     );
     try {
-      return await use(scope(Query.from(table).select('series_id')));
+      return await use(scope(idTableSeriesQuery(table)));
     } finally {
       await dropResidualTable(engine, table).catch((error: unknown) => {
         ctx.logger?.warn(`could not clean up the temp table ${table}`, error);
@@ -295,7 +298,7 @@ export function metricMethods(ctx: MetricContext): MetricMethods {
               )
             : null,
           // The chart colours by service; a summary draws a line per series, so it reads the series themselves.
-          summary ? seriesRowsTable(series, signal) : engine.query(servicesQuery(series, by), signal),
+          summary ? seriesRowsTable(series, signal) : engine.query(seriesServicesQuery(series, by), signal),
         ]);
         const srcs = by.map((b) => b.src);
         const exemplarPoints =
@@ -397,7 +400,7 @@ export function metricMethods(ctx: MetricContext): MetricMethods {
                   condition: failedWhen,
                   window: null,
                   resourceTexts: resourceTextsOf(cat, req.resources),
-                  seriesIds: Query.from({ s: series }).select({ series_id: sql`series_id` }),
+                  seriesIds: seriesIdsQuery(series),
                 },
                 signal,
                 (failedScope) =>
@@ -479,15 +482,4 @@ export function metricMethods(ctx: MetricContext): MetricMethods {
       );
     },
   };
-}
-
-/** Per `by` group (`g0..gN`) the distinct `service.name` values of its series: one, else none or several (null entries stay). */
-function servicesQuery(series: Query, by: readonly ByExpr[]): Query {
-  const groups = by.map((_, i) => sql`${verbatim(`g${i}`)}`);
-  return Query.from({ s: series })
-    .select({
-      ...Object.fromEntries(groups.map((g, i) => [`g${i}`, g])),
-      services: sql`list(DISTINCT CASE WHEN json_type(resource_attributes, '/service.name') = 'VARCHAR' THEN json_extract_string(resource_attributes, '/service.name') END)`,
-    })
-    .groupby(...groups);
 }

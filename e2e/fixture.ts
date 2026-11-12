@@ -123,7 +123,8 @@ export const REFRESH_FIRST: FixtureReport = 'small';
 export const REFRESH_SECOND: FixtureReport = 'orphans';
 /**
  * `merged` is `otel-html merge` of `small` and `orphans`; `scale` and `many` come from one generated 100k-span input,
- * into `SCALE_REPORTS_DIR`.
+ * into `SCALE_REPORTS_DIR`, and so does `rowgroups`: 200k spans only, converted, so its one spans file has four row groups
+ * (`e2e/calibration.spec.ts`).
  * `metrics-merged` merges two reports of the `metrics` fixture's first and last five collections, `metrics-single`
  * converts the fixture at once. `unfinished` holds the `linked` inputs, flushed but never closed. `metrics-scale` is
  * the metrics scale report (`e2e/metrics-scale.ts`), written only by the specs that need it, into `METRICS_SCALE_DIR`.
@@ -135,6 +136,7 @@ export type ReportName =
   | 'merged'
   | 'scale'
   | 'many'
+  | 'rowgroups'
   | 'no-manifest'
   | 'metrics-merged'
   | 'metrics-single'
@@ -169,7 +171,8 @@ export function scaleMetricEmitted(m: number, i: number): boolean {
 /** Where a report lives: `file` is the local-format build under `.reports/`, `http` its site-format copy under `.reports-site/`. */
 export function reportDir(name: ReportName, kind: UrlKind = 'file'): URL {
   if (name === 'metrics-scale') return METRICS_SCALE_DIR;
-  if (name === 'scale' || name === 'many') return new URL(`${name}/`, SCALE_REPORTS_DIR);
+  if (name === 'scale' || name === 'many' || name === 'rowgroups')
+    return new URL(`${name}/`, SCALE_REPORTS_DIR);
   return new URL(`${name}/`, kind === 'http' ? REPORTS_SITE_DIR : REPORTS_DIR);
 }
 

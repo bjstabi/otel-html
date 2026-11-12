@@ -29,7 +29,7 @@ const config: ViteUserConfig = defineConfig({
     fileParallelism: !perfPass,
     // `--shard=i/n` splits by the recorded durations in test-support/shard-weights.json, not by file hash.
     sequence: { sequencer: WeightedShardSequencer },
-    globalSetup: ['test-support/perf-global-setup.ts'],
+    globalSetup: ['test-support/perf-global-setup.ts', 'test-support/scaling/global-setup.ts'],
     coverage: {
       provider: 'v8',
       include: ['src/**'],

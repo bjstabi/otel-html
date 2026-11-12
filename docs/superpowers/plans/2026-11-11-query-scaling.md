@@ -97,7 +97,7 @@ outside the PR's list below.
 | 1   | none: it declares today's classes and files the debt                                                                                                                                                                | completeness test green; every `scan` has an allowed reason or a debt line with an issue; statement text of moved builders unchanged                |
 | 2   | none                                                                                                                                                                                                                | a span started under a faked clock has a start time within 5 s of the real clock                                                                    |
 | 3   | the debt lines of the small-file group → `files` on retention. Task 5 names the group by measurement: the entries whose growth on retention is only in files under the harness threshold (expected: `patterns`, `trace.has`, `trace.get`, `trace.share`, `trace.logs`, `log.get`). Entries with other growth too (`traces.list.*`) keep their lines for PRs 4 and 6 | no entry makes a serial read of a sub-threshold file (asserted for every catalogue entry); one e2e test asserts a small file is fetched whole exactly once |
-| 4   | `spans.total.statkey.*`, `logs.timeline.statkey.*` on the `merged` shape → the classes they have on the plain shape; `trace.get`, `trace.share` → `matched` on density; `traces.list.all`, `traces.list.all.long` → `files` on every axis; new entries `resourceValues.short`/`.long` (their logs and points parts skip files outside the window; their spans part stays on #271's end-time debt line until PR 6) and `logs.total.*` (declared as measured) | #272's test: a run selection on a merged two-run report opens only that run's files |
+| 4   | `spans.total.statkey.*`, `logs.timeline.statkey.*` on the `merged` shape → the classes they have on the plain shape; `trace.get`, `trace.share`, `trace.has`, `trace.logs` → `matched` on density (Tasks 11 and 11a); `traces.list.all`, `traces.list.all.long` → `files` on every axis; new entries `resourceValues.short`/`.long` (their logs and points parts skip files outside the window; their spans part stays on #271's end-time debt line until PR 6) and `logs.total.*` (declared as measured) | #272's test: a run selection on a merged two-run report opens only that run's files |
 | 5   | none (the rollups exist but nothing reads them); no entry may get worse                                                                                                                                             | format-4 reports open unchanged; rollup file < 2 % of its spans file on the measured partition; frozen `format-5` fixture; README table             |
 | 6   | the long-window aggregates over rollup dimensions (`spans.total.long`, `spans.total.sortkey.long`, `spans.total.statkey.long`, `spans.buckets.long`, `spans.timeline.long`, `spans.facets.core.long`, `spans.groups.long`, `spans.services.long`, `spans.durations.long`, `logs.timeline.long`, `logs.timeline.statkey.long`, `logs.facets.core.long`, `logs.total.long`, `resourceValues.long`) → `fixed`/`fixed`/`files`; `percentile.long` → `files`/`fixed`/n.a.; `traces.list.long` → `files`×3; every windowed spans entry and `resourceValues.short` → `fixed` on retention (end-time pruning, Task 19) | equivalence test (rollup = raw = mix) on the edge data of §6; debt list holds no aggregate over rollup dimensions |
 | 7   | the `compacted` generator shape: entries keep their classes when one partition is a compaction of many                                                                                                              | no file written by compaction spans more than 24 h unless a single input does                                                                       |
@@ -116,7 +116,9 @@ change in any PR (a need for one is a stop).
   `src/viewer/data/residual.ts`, `src/host/node-duckdb.ts`, `src/writer/session.ts`,
   `src/writer/partition-session.ts`, `src/writer/compaction.ts`, `src/writer/merge.ts`. `mise.toml`: a new task
   `predict:queries`; `test-support/scaling/**` and `test/scaling/**` added to the `sources` of the unit-test tasks if
-  their globs do not already cover them; possibly a new cached task `test:scaling` (decision 2). `src/model/gen/` or
+  their globs do not already cover them; possibly a new cached task `test:scaling` (decision 2). Task 6a (the maintainer's
+  decision of 2026-11-11): one step `- run: mise run test:scaling` in the `check` job of `.github/workflows/ci.yml`,
+  nothing else under `.github/`. `src/model/gen/` or
   other generated files only as `mise run gen` rewrites them.
 - **PR 2** — nothing under `src/`. No build file.
 - **PR 3** — `src/viewer/data/query-engine.ts`, `src/viewer/data/mosaic.ts`, `src/viewer/data/duckdb-source.ts`,
@@ -127,7 +129,9 @@ change in any PR (a need for one is a stop).
   `src/writer/partition-checkpoint.ts`, `src/writer/compaction.ts`, `src/writer/merge.ts`, `src/query/sql/spans.ts`,
   `src/query/sql/logs.ts`, `src/viewer/data/data-source.ts`, `src/viewer/data/duckdb-source.ts`,
   `src/viewer/data/results.ts`, `src/viewer/data/log-results.ts`, `src/viewer/data/traced.ts`,
-  `src/viewer/data/trace-detail.ts`, `src/viewer/data/catalogue.ts`, `src/viewer/dashboards/dashboard-page.tsx`,
+  `src/viewer/data/trace-detail.ts`, `src/viewer/data/catalogue.ts`, `src/format/parquet/codec.ts`,
+  `src/format/parquet/bloom.ts` (new, Task 11a), `package.json` and the lockfile only for a `parquet-wasm` upgrade
+  (Task 11a), `src/viewer/dashboards/dashboard-page.tsx`,
   `src/viewer/dashboards/variables-bar.tsx`, `src/viewer/logs/explorer.tsx`, and any other file under `src/viewer/`
   that calls `resourceValues` or reads `LogNeed` (the type change forces them; list them in the PR body). No build
   file.
@@ -647,6 +651,168 @@ test.each(['#/dashboards/ci', '#/traces?mode=traces', '#/traces', '#/logs', '#/m
 - [ ] **Step 7: Commit, then open PR 1.** `test(query): predicted requests for named report shapes`. PR body: the
       calibration table, the class table, the debt list with its issues, the expectation table, the `check` timing.
 
+### Task 6a: The measurement runs in parallel and in CI
+
+Added 2026-11-11 by the maintainer's decision during session B: the scaling measurement (`test:scaling`, 274 s
+locally on one vitest worker) must run in CI, with no new job (CI already peaks at 19 of 20 concurrent jobs) and
+without adding minutes to the pipeline's wall time (≈ 5 min on a pull request).
+
+**Files:**
+
+- Modify: `test-support/scaling/counting-engine.ts` (a spare worker), `test-support/scaling/measure.ts`,
+  `test/scaling/classes.test.ts` (split), `mise.toml` (`test:scaling`'s `run` and `description`),
+  `.github/workflows/ci.yml` (one step in the `check` job, nothing else)
+- Create: one test file per axis and spacing under `test/scaling/` (e.g. `classes-retention-dense.test.ts`), or the
+  equivalent split the implementer finds; the cheap declared-rules tests stay in one file in `test:unit:main`
+
+- [ ] **Step 1: Measure the starting point.** `MISE_TASK_CACHE=off mise run test:scaling` wall time, and the share
+      spent in `cold()` (the Task 5 report: 493 ms × 449 calls).
+- [ ] **Step 2: A spare worker.** `cold()` swaps in a worker started in the background after the previous swap
+      (views created, port wired), then starts the next spare; the events of the old worker are drained before the
+      swap as today. A test: two `cold()` calls in a row each give a statement that reads every footer again, and
+      `close()` terminates the spare too.
+- [ ] **Step 3: Shapes in parallel.** Split the measured describe so vitest runs independent files in parallel
+      workers: one file per axis and spacing (each measures its three step shapes; `BASE` is measured in more than one
+      file, which is accepted). Every catalogue entry and applicable axis is still asserted exactly once; a test in
+      the cheap file checks that the files' (entry, axis) pairs cover `DECLARED` exactly. `predict:queries` still gets
+      its measurements (`OTEL_HTML_SCALING_OUT`), including `CROSS`.
+- [ ] **Step 4: Measure again** with the same command; the target is ≤ 90 s locally. Print, never assert. Above
+      120 s: stop and report the numbers before Step 5.
+- [ ] **Step 5: CI.** In `.github/workflows/ci.yml`'s `check` job, one step `- run: mise run test:scaling` after
+      `- run: mise run check:static`, with a one-line comment saying what it runs. No other workflow change.
+      Update `test:scaling`'s `description` (the time, that CI's `check` job runs it) and AGENTS.md's loop row if
+      the cost it states changed; `mise run gen`.
+- [ ] **Step 6: Commit.** `test(query): the scaling measurement runs its shapes in parallel and in CI`. The PR body
+      carries the before and after wall times, locally and of the `check` job on the PR's CI run.
+
+### Task 6b: A page is predicted from the union of its entries' reads
+
+Added 2026-11-11 by the maintainer's decision during session B, after Task 6's live check failed: the prediction
+summed each entry's cold cost (2,533 / 4,672 serial requests against 891 / 1,064 live). A page runs in one engine,
+so footers and bytes read by one request are free to the next. An experiment costing the union of a page's entries'
+cold reads matched the one-engine page cost within 25 % on 6 of 10 page × shape cases, exactly on 3, and never
+above; the miss was the trace list's service share over 52 distinct traces. The whole-branch review (Opus 5.5) found
+defects in the per-entry model itself; this task fixes those too.
+
+**Files:**
+
+- Modify: `test-support/scaling/model.ts`, `test-support/scaling/measure.ts`, `test-support/scaling/recording-source.ts`,
+  `scripts/predict-queries.ts`, `test/scaling/model.test.ts`, the measured test files of Task 6a (outputs only),
+  `test/viewer/scaling-pages.test.tsx`; this plan ("Expectations"); §3.3 of the design (the prediction sentence)
+- No `src/` file. No `mise.toml` change unless `predict:queries`'s description must say something new.
+
+**The model:**
+
+1. Each entry's cold read events are split per file into the **open** part (the open, and the footer read: the reads
+   before the first data read, as Task 1's calibration identifies them) and the **data** part (the rest, costed
+   with the read-ahead model). An entry records, per step shape, which files it opens, by role: table, and
+   whether the partition is inside or outside the window.
+2. The data part is fitted per entry as today, `a + R·(r + rd·G) + W·(w + wd·G)`, by **non-negative** least squares
+   (every coefficient ≥ 0). For a `window: false` entry the fit is constrained to `r = w` and `rd = wd` (every
+   partition is read alike).
+3. A page's prediction for a shape = `REQUESTS_PER_OPEN + footer reads` once for every file in the **union** of the
+   files its entries open (by table and partition role, scaled to the shape's partitions), plus the sum of its
+   entries' data parts. A by-id call (`getTrace`, `serviceShare`, `hasTrace`, `traceLogs`, `getLog`,
+   `surroundingLogs`) counts its data part once per **distinct id** the page asked; the recording source records
+   the distinct ids per method.
+4. `--after <pr>` acts **per axis**: a debt line for retention replaces `r, rd`; for window `w, wd`; for density
+   the `G` terms (`rd, wd`), by the line's target (`fixed`: those coefficients 0; `matched`: the `G` terms 0;
+   `files`: 0, plus one parallel request per small file of the partitions read). The open part follows the same rule
+   by the files an improved entry stops opening (an entry `fixed` on retention opens no outside partition).
+5. Density is fitted with one more step than the class steps: a `rowGroups: 16` shape (dense, `outside` and
+   `inside` at BASE), measured only when `OTEL_HTML_SCALING_OUT` is set (the `predict:queries` run), so
+   `test:scaling` does not grow.
+
+- [ ] **Step 1: Failing tests** (`test/scaling/model.test.ts`): non-negative fit recovers a known non-negative model
+      and never returns a negative coefficient on data that would pull one below zero; a `window: false` fit gives
+      `r = w`, `rd = wd`; the union counts a file opened by two entries once; a by-id entry asked for 3 distinct ids
+      costs 3 data parts and its files' opens once; `--after` with a retention line leaves `w, wd` unchanged.
+- [ ] **Step 2: Implement** the split, the fit, the union and the per-axis `--after`.
+- [ ] **Step 3: Check against one engine.** A test (counts, not time) renders each of the five pages on `BASE`,
+      `CROSS` and the `rowGroups: 16` shape in one counting engine and asserts the prediction is within 25 % of the
+      measured page cost. If a page misses, find whether the union, the per-id rule or the fit is wrong before going
+      on; still outside after that is a stop.
+- [ ] **Step 4: Live check, again.** The same day, refresh `shapes/rolling.json` from the live manifest and count
+      the live `#/dashboards/ci` and `#/traces?mode=traces` range requests in headless Chromium (scratch script,
+      not committed), as Task 6 step 5. The `rolling` baseline must be within 25 % of both counts. Outside: a stop,
+      reported with both counts, the prediction and the diagnosis; no constant is tuned to hit the number.
+- [ ] **Step 5: The expectation table.** Rewrite "Expectations (Task 6)" from `mise run predict:queries` (rows 1, 3,
+      4, 6, 8 with `--window 7d`); remove the "not yet usable" note. Update §3.3 of the design: the page prediction is
+      the union of its entries' opens plus the sum of their data parts, by-id calls once per distinct id.
+- [ ] **Step 6: Commit.** `test(query): a page is predicted from the union of its entries' reads`. The PR body
+      carries the one-engine comparison table, the live check and the new expectation table.
+
+Status: stopped 2026-11-12 at 36236691 (see Task 6c); the code stays, its page model is replaced.
+
+### Task 6c: A page is predicted from its own measurements
+
+Added 2026-11-12 by the maintainer's decision, after Task 6b stopped (36236691). Task 6b counted a page's opens once
+but still summed its entries' data parts. In one engine DuckDB's cache makes the reads one entry shares with another
+free: the CI page's data parts alone sum to 121 requests where the whole page costs 61. Its prediction was 1.3–3.8×
+the one-engine page on all 15 cases, and live 1.49× (CI dashboard) and 0.69× (traces mode). The traces-mode page
+also asks for 52 distinct traces live but 26 in the generated report, because the generated window holds fewer
+traces than the list's 50 rows. This task measures each page whole instead of composing it from entries.
+
+**Files:**
+
+- Modify: `test-support/scaling/model.ts`, `test-support/scaling/measure.ts`, `test-support/scaling/generator.ts`
+  (the trace count, if needed), `scripts/predict-queries.ts`, `test/scaling/model.test.ts`,
+  `test/viewer/scaling-pages.test.tsx`; this plan ("Expectations"); §3.3 of the design (the prediction sentence)
+- Keep from Task 6b what still serves: the non-negative fit, the `window: false` constraint and the per-entry fits
+  (`--after` uses them). Remove what only served the summed page model (the union of opens, per-id data counting)
+  unless this task uses it.
+- No `src/` file. `mise.toml` only for `predict:queries`'s description.
+
+**The model:**
+
+1. A page's cost (serial requests, parallel requests and bytes) is measured by rendering the page in one cold
+   counting engine, as Task 6b's one-engine check does, at the class steps of each axis (retention, window,
+   density with the `rowGroups: 16` step) on the dense and sparse shapes.
+2. Every measured shape holds at least as many traces in the page window as the longest list a page shows
+   (50 rows), so the distinct ids a page asks for match a full report. If the generator cannot do that at a shape,
+   it grows the shape's trace count, not the list.
+3. Each page's cost is fitted as `a + P·(p + pd·G) + q·G²` (P partitions of G row groups; no retention/window split,
+   because the page window spans the report), by non-negative least squares (`fitPage`). The prediction for a named
+   shape is that fit; `--window 7d` is split off afterwards from the entries' ratios (`splitWindow`). There is no point 5: points 6-8
+   below were added later.
+4. `--after <pr>` scales each axis term of a page by the share of that term its entries without a debt line for
+   that PR carry. The shares come from the per-entry fits of the page's entries. An entry `fixed` on an axis
+   contributes 0 to the term; `matched` keeps its non-`G` part; `files` adds one parallel request per small file.
+6. Added 2026-11-12 after the first live check (0.46× and 0.32×): the generator's trace ids are random, as real
+   ones are, so a lookup by id is not pruned to one partition by min/max statistics. The page test renders at the
+   live check's viewport height, so a list asks for as many ids as live. Entries whose class changes get their
+   catalogue class and `KNOWN_DEBT` lines; a lookup by trace id that reads every partition is owed by Task 11
+   (PR 4). The measurements showed that the live list mounts 26 rows at a fixed 480 px (the table's height is a prop, not the viewport's), so the page test needed no viewport change.
+7. Added 2026-11-12 after the second live check (0.51× and 0.33×): the density axis of the page fit is measured on
+   row groups of production size (50,000 rows, the writer's default), 1 to 4 per partition, because a live group's
+   larger column chunks cost more requests than a harness group's. The class steps keep their small groups. The
+   live traces-mode page asks for 52 distinct traces while 26 rows mount; the second 26 are found from a Chromium
+   request log and modelled in the page measurement. The measurements showed that the "52 distinct traces" were 26 ids asked by two statements each (the file lookup and the spans read), so there is no second 26 to model.
+8. Added 2026-11-12 after the third live check (0.56× and 0.57×): one live partition holds 22 production-size
+   groups and cost 339 requests against about 129 fitted from 1–4 groups. The page fit also measures one partition
+   of about 22 groups, so it no longer extrapolates past 4; the fit may become non-linear in G if the points say so.
+   If the live check still misses after this, the expectations are anchored on the live counts instead: a later
+   PR's prediction is the live baseline times the harness page's after/before ratio.
+5. Measuring pages runs only when `OTEL_HTML_SCALING_OUT` is set (the `predict:queries` run), so `test:scaling`
+   does not grow.
+
+- [ ] **Step 1: Failing tests** (`test/scaling/model.test.ts`): a page fit recovers a known non-negative model from
+      page points; `--after` with a retention line on an entry carrying half a page's `r` halves the page's `r`
+      and leaves `w, wd` unchanged; a shape in the generator holds at least 50 traces in the window.
+- [ ] **Step 2: Implement** the page measurements, the page fit and `--after` by entry shares.
+- [ ] **Step 3: Check against one engine.** (A page of 4 requests, the metrics page, is within 2 requests: 25 % of it is
+      less than one request. Every other page is held to 25 %.) The fit must reproduce each page at `BASE`, `CROSS` and the
+      `rowGroups: 16` shape within 25 %. `CROSS` is left out of the fit, so it tests how the fit extrapolates
+      across axes.
+- [ ] **Step 4: Live check, again.** As Task 6b step 4: refresh `shapes/rolling.json` the same day, count the live
+      `#/dashboards/ci` and `#/traces?mode=traces` requests in headless Chromium (Range GETs plus HEADs). The
+      `rolling` prediction must be within 25 % of both. Outside: a stop, reported with both counts, the prediction
+      and the diagnosis; no constant is tuned to hit the number.
+- [ ] **Step 5: The expectation table**, as Task 6b step 5; §3.3 of the design says a page is predicted from its own
+      measurements fitted per axis, and a later PR's effect from its entries' shares.
+- [ ] **Step 6: Commit.** `test(query): a page is predicted from its own measurements`. The PR body carries the
+      one-engine table, the live check and the new expectation table.
+
 ## PR 2: test spans keep real times
 
 ### Task 7: The test SDK stamps spans from the real clock
@@ -895,6 +1061,43 @@ test('a trace whose summary has no start (logs only) reads without a bound', asy
 - [ ] **Step 2:** run → FAIL. **Step 3:** implement. **Step 4:** → PASS. If `trace.get` does not measure `matched` on
       density, that is the stop of "What each PR moves": report the measured step series.
 - [ ] **Step 5: Commit.** `perf(query): span reads by trace id are bounded in time`
+
+### Task 11a: Lookups by trace id skip partitions by a bloom filter on `trace_id`
+
+Added 2026-11-12 by the maintainer's decision, after PR 1's branch review: trace ids are random, so a lookup by id
+(`tracePartitionsQuery`, the logs of a trace) cannot be pruned by min/max statistics and reads the `traces` (and
+`logs`) file of every partition. Task 11 bounds only the span read that follows. The maintainer chose Parquet bloom
+filters on `trace_id` over passing a time bound, because they also serve a trace opened from a bare URL.
+
+Facts found when this task was written: `parquet-wasm` 0.9.0 exposes no bloom-filter option in its TypeScript
+declarations, and its wasm binary contains no "bloom" string; `@duckdb/duckdb-wasm` 1.32.0's binaries contain the
+word once. Neither the write nor the read side is proven.
+
+**Files:**
+
+- Modify: `src/format/parquet/codec.ts` (and a new `src/format/parquet/bloom.ts` if the filter is written by this
+  project), `src/viewer/data/catalogue.ts`; `package.json` and the lockfile only if Step 1 settles on a newer
+  `parquet-wasm`
+- Test: `test/format/parquet/bloom.test.ts`, `test/scaling/classes*.test.ts` (declared classes)
+
+- [ ] **Step 1: Spike, in the counting engine (counts, not time).**
+  1. Read side: write a file with a bloom filter on `trace_id` by any means available in tests (DuckDB's own
+     `COPY ... TO ... (FORMAT parquet)` in the Node engine, if it writes one), and count DuckDB-WASM's reads for
+     `WHERE trace_id = <absent id>`. Pass: no data page of the row group is read.
+  2. Write side: find how this project's writer can emit the filter. In order of preference: a `parquet-wasm`
+     release that exposes arrow-rs's bloom-filter properties; else writing the split-block filter (xxHash64, the
+     Parquet spec's layout) after the row groups and setting `bloom_filter_offset` / `bloom_filter_length` in the
+     footer.
+  3. Record both results in this task. If DuckDB-WASM does not use the filter, or neither write path works, that is
+     a stop: report the read counts and what each write path needs.
+- [ ] **Step 2: Failing tests.** A file written by the writer carries a bloom filter on `trace_id` in every row group
+      of `traces`, `spans` and `logs`; a lookup of an id absent from a partition reads none of its data pages; a
+      false positive still returns the right rows; a format-4 file without filters still opens and answers.
+- [ ] **Step 3: Implement** the write path from Step 1, in the writer, compaction and merge alike.
+- [ ] **Step 4: Classes.** `trace.has` and `trace.logs` reach `matched` on density and leave `KNOWN_DEBT`; with
+      Task 11, `trace.get` and `trace.share` reach `matched` on density. A miss is the stop of "What each PR moves".
+- [ ] **Step 5: Size.** The filters' bytes per partition go in the PR body, against the partition's bytes.
+- [ ] **Step 6: Commit.** `perf(format): lookups by trace id skip partitions by a bloom filter`
 
 ### Task 12: `resourceValues` takes the window
 
@@ -1670,24 +1873,108 @@ test('both CI configs set viewer.defaultWindow to 7d and are otherwise equal to 
 
 ## Calibration (Task 1)
 
-Task 1 fills this section in PR 1; later tasks read it.
+Filled by Task 1 in PR 1; later tasks read it. **Status: the tolerance holds on all ten statements (two reports, five
+statements) once the harness models the browser's read-ahead; the harness runs on the Node counting engine.** Step 5
+found no row group size within 10 %; `ROW_GROUP_ROWS` is provisional (Task 6's 25 % check against the live report is the
+guard).
 
-- Engine the harness runs on: _Node counting engine | Chromium_
-- `REQUESTS_PER_OPEN`: _n_. `ROW_GROUP_ROWS`: _n_ (the smallest size whose classes equal those at 50,000).
+- Engine the harness runs on: the Node counting engine (`test-support/scaling/counting-engine.ts`) with the read-ahead
+  model of `rangesOf` (`cost.ts`). `cold()` replaces the worker, because DuckDB's footer and file caches are emptied by
+  no SQL setting; a fresh worker with the views created is where a reloaded page stands.
+- The read-ahead model (`rangesOf`), fitted on the `Range` headers the static server logged (the starts of every range
+  agree on all ten statements): a read inside a stream's current range is free; a read that starts where a stream's
+  range ends continues it with the next size, 16 KiB, 64 KiB, 256 KiB, 1 MiB, 4 MiB (the new range replaces the old);
+  any other read starts a stream at 16 KiB; a stream survives a jump elsewhere; an open forgets the file's streams.
+  Node itself reads 16 KiB per call, so raw read calls overstate Chromium's GETs up to 20 times (243 against 13).
+  The model was fitted on the same ten statements it is checked against, so the exact agreement is a fit, not an
+  independent validation; Task 6's live check against the report is the independent guard.
+- `REQUESTS_PER_OPEN`: 2 (a HEAD and DuckDB's `bytes=0-0` probe GET; the footer read is one of the modelled ranges).
+  `REQUESTS_PER_READ` (the `k` of decision 3): 1 per modelled range. `ROW_GROUP_ROWS`: 8192, provisional (below). All
+  three are exported from `test-support/scaling/cost.ts`.
+- Run: `mise run e2e:fixtures:scale`, then `mise run test:e2e:chromium -- e2e/calibration.spec.ts` (the spec is
+  `@perf @http`). `test:e2e` builds the scale reports only when the selection lists `e2e/scale.spec.ts`, so a lone run
+  needs the first command by hand. Each statement runs on a fresh page (`about:blank` first, on `#/metrics`, which
+  reads no span) once the server has been quiet for a second; the Node side is `cold()`.
+- Checked per statement: `opens·REQUESTS_PER_OPEN + modelledRanges·REQUESTS_PER_READ` against Chromium's HEADs plus
+  range GETs, within `max(2, 10 %)`. The test pins the model on synthetic events (`test/scaling/counting-engine.test.ts`).
 
-| statement | Node opens | Node reads | Chromium HEADs | Chromium range GETs | within tolerance |
-| --------- | ---------- | ---------- | -------------- | ------------------- | ---------------- |
-|           |            |            |                |                     |                  |
+`rowgroups` (one partition, spans file of four 50,000-row groups, 4.0 MB; footers cached by the view creation):
+
+| statement                         | Node opens | Node reads | modelled ranges | Chromium HEADs | Chromium range GETs | within tolerance |
+| --------------------------------- | ---------- | ---------- | --------------- | -------------- | ------------------- | ---------------- |
+| 1 `count(*)` of spans             | 0          | 0          | 0               | 0              | 0                   | yes              |
+| 2 `service_name = 'api'`          | 0          | 1          | 1               | 0              | 1                   | yes              |
+| 3 time range, a tenth, `GROUP BY` | 0          | 100        | 12              | 0              | 12                  | yes              |
+| 4 `SELECT *` by `trace_id`        | 0          | 243        | 13              | 0              | 13                  | yes              |
+| 5 `traces` newest 50              | 0          | 3          | 2               | 0              | 2                   | yes              |
+
+`many` (99 flush partitions of 1,000 spans, never closed):
+
+| statement                         | Node opens | Node reads | modelled ranges | Chromium HEADs | Chromium range GETs | within tolerance |
+| --------------------------------- | ---------- | ---------- | --------------- | -------------- | ------------------- | ---------------- |
+| 1 `count(*)` of spans             | 99         | 108        | 108             | 99             | 207                 | yes (306 = 306)  |
+| 2 `service_name = 'api'`          | 99         | 199        | 199             | 99             | 298                 | yes (397 = 397)  |
+| 3 time range, a tenth, `GROUP BY` | 99         | 108        | 108             | 99             | 207                 | yes (306 = 306)  |
+| 4 `SELECT *` by `trace_id`        | 99         | 109        | 109             | 99             | 208                 | yes (307 = 307)  |
+| 5 `traces` newest 50              | 99         | 99         | 99              | 99             | 198                 | yes (297 = 297)  |
+
+Step 5, with the modelled counts: one partition of 16 row groups of 512, 2,048 and 8,192 rows and of 4 of 50,000 (Node,
+cold; synthetic spans of `spansOnlyRequest`); modelled serial requests per row group, and the deviation from the
+50,000-row file:
+
+| rows per group | groups | st. 2 per group | deviation | st. 3 per group | deviation |
+| -------------- | ------ | --------------- | --------- | --------------- | --------- |
+| 512            | 16     | 0.125           | 83 %      | 0.063           | 94 %      |
+| 2,048          | 16     | 0.250           | 67 %      | 0.125           | 88 %      |
+| 8,192          | 16     | 0.500           | 33 %      | 0.250           | 75 %      |
+| 50,000         | 4      | 0.750           | reference | 1.000           | reference |
+
+No size is within 10 %. `ROW_GROUP_ROWS` is 8,192, the size with the smallest maximum deviation (75 %): provisional.
+Requests per group grow with the column chunk size, which small groups of the synthetic spans do not reproduce.
 
 ## Expectations (Task 6)
 
 Task 6 fills this table in PR 1 from `mise run predict:queries`; each later PR is held to its row (more than 20 %
 above it is a stop). Cells are serial requests, dashboard / trace list.
 
-| after PR      | rolling | 30x150k | 90x150k | 30x1.5M |
-| ------------- | ------- | ------- | ------- | ------- |
-| 1 (baseline)  |         |         |         |         |
-| 3             |         |         |         |         |
-| 4             |         |         |         |         |
-| 6             |         |         |         |         |
-| 8 (window 7d) |         |         |         |         |
+The `rolling` column is anchored on what Chromium made on the live report on 2026-11-12 (891 and 1,064 Range GETs plus
+HEADs, cold): the row after PR 1 is those counts, and each later row is the live baseline times the harness page's
+after/before ratio for that PR (the harness rolling prediction after the PR over its prediction at PR 1, both from
+`predict:queries` on the rolling shape, window none, except row 8, which is window 7d). `mise run predict:queries` prints
+the unanchored values, the ratios and the anchored cells (the section "rolling, live-anchored"), so every cell below can
+be checked against its output. The other three columns are harness absolutes (**harness, not live-calibrated**): they are
+`mise run predict:queries` on the generated shapes, with the rolling window none for PRs 1-6 and 7d after PR 8.
+
+| after PR      | rolling (live-anchored) | 30x150k (harness) | 90x150k (harness) | 30x1.5M (harness) |
+| ------------- | ----------------------- | ----------------- | ----------------- | ----------------- |
+| 1 (baseline)  | 891 / 1,064             | 667 / 822         | 2,002 / 2,465     | 2,666 / 4,906     |
+| 3             | 844 / 1,064             | 631 / 822         | 1,894 / 2,465     | 2,631 / 4,906     |
+| 4             | 755 / 535               | 567 / 421         | 1,700 / 1,264     | 1,982 / 903       |
+| 6             | 673 / 456               | 505 / 361         | 1,516 / 1,082     | 1,760 / 521       |
+| 8 (window 7d) | 673 / 456               | 245 / 84          | 577 / 84          | 1,256 / 122       |
+
+How the rolling cells come about (serial requests, dashboard / trace list; ratio = after / after PR 1; anchored = live x
+ratio; from the run of 2026-11-12 on the commit that added the section):
+
+| after PR      | harness rolling (unanchored) | ratio           | anchored    |
+| ------------- | ---------------------------- | --------------- | ----------- |
+| 1 (baseline)  | 474.5 / 590.2                | 1.000 / 1.000   | 891 / 1,064 |
+| 3             | 449.5 / 590.2                | 0.947 / 1.000   | 844 / 1,064 |
+| 4             | 401.9 / 296.7                | 0.847 / 0.503   | 755 / 535   |
+| 6             | 358.4 / 253.1                | 0.755 / 0.429   | 673 / 456   |
+| 8 (window 7d) | 358.4 / 253.1                | 0.755 / 0.429   | 673 / 456   |
+
+Row 8 equals row 6 for `rolling` on purpose: all 21 snapshot partitions overlap the last 7 days (partition 165 spans 9
+days, from 1793449360 to 1794226244 s, and the 7-day window starts at 1793815081), so `inWindow` is true for every
+partition and a 7-day window prunes nothing on that report. The 7-day window only moves the synthetic shapes, whose
+partitions are a day apart.
+
+Taken on 2026-11-12 (rolling is the snapshot of that day, 21 partitions, one of 1,076,590 spans). Why the absolute model
+is not used for `rolling`: the page is fitted from its own measurements in one engine and reproduces every generated
+shape within 25 % (40 cases, five pages, dense and sparse: 30 are in the fit, and only the 10 CROSS cases, which the fit leaves out, test extrapolation), but on the live report it stays at about half the
+requests Chromium makes. The four live checks, as predicted / live for the dashboard and the trace list: 0.46 / 0.32
+(page fitted on small row groups), 0.51 / 0.33 (random trace ids), 0.56 / 0.57
+(production-size row groups, 1-4 per partition) and 0.53 / 0.55 (with partitions of 8, 14 and 22 groups). The gap is
+therefore not in the row-group size, the trace ids or a large partition; the live partitions cost about 1.3 times the
+generated ones at the same size and the harness cannot say why. A later PR is held to the live baseline times the ratio
+the harness measures for it, which is what a change to the reads moves. See the Task 6c report.

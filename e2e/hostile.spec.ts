@@ -37,7 +37,8 @@ test('hostile content renders as text: explorer, panel and span section', HTTP, 
   // Panel with the root span selected.
   await page.goto(`${baseURL ?? ''}/index.html#/traces?trace=${HOSTILE_TRACE_ID}&span=${HOSTILE_ROOT_SPAN}`);
   const panel = page.getByTestId('trace-panel');
-  await expect(panel.getByTestId('trace-header')).toContainText(HOSTILE_TRACE_ID);
+  // A trace's first load is three statements on one connection; a busy WebKit runner takes over 5 s (#279).
+  await expect(panel.getByTestId('trace-header')).toContainText(HOSTILE_TRACE_ID, { timeout: 15_000 });
   const section = panel.getByRole('region', { name: 'Span details' });
   const exceptions = section.getByTestId('span-exceptions');
   await expect(exceptions).toBeVisible();

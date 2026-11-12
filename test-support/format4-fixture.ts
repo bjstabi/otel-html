@@ -19,12 +19,13 @@ export interface Format4Fixture {
 
 const OUT = 'r';
 
-/** A `site`-format report written by the real partition session into a memory file system: one flush per `requests` entry, so each is a partition; `close: false` leaves them uncompacted. */
+/** A `site`-format report written by the real partition session into a memory file system: one flush per `requests` entry, so each is a partition; `close: false` leaves them uncompacted; `rowGroupRows` is `WriterDeps.rowGroupRows` (below the configured minimum). */
 export async function buildFormat4Report(
   requests: readonly OtlpRequest[],
-  opts: { config?: ConfigInput; close?: boolean } = {},
+  opts: { config?: ConfigInput; close?: boolean; rowGroupRows?: number } = {},
 ): Promise<Format4Fixture> {
   const w = createTestWriter();
+  if (opts.rowGroupRows !== undefined) w.deps.rowGroupRows = opts.rowGroupRows;
   const config = testConfig({ ...opts.config, writer: { ...opts.config?.writer, format: 'site' } });
   const session = await openSession(w.deps, { out: OUT, config, mode: 'replace' });
   let i = 0;

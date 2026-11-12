@@ -648,3 +648,24 @@ export function runsQuery(identity: MetricIdentity, series: Query, files: Pruned
     .select({ ...cols('run', 't', 'revision', 'n_series', 'left_out') })
     .orderby(sql`run IS NULL`, col('t'), col('run'));
 }
+
+/** The series ids a residual `where` kept, read back from the temp table `idTable` made. */
+export function idTableSeriesQuery(table: string): Query {
+  return Query.from(table).select('series_id');
+}
+
+/** The series ids of a series query, as the scope the failing-points cells run over. */
+export function seriesIdsQuery(series: Query): Query {
+  return Query.from({ s: series }).select({ series_id: sql`series_id` });
+}
+
+/** Per `by` group (`g0..gN`) the distinct `service.name` values of its series: one, else none or several (null entries stay). */
+export function seriesServicesQuery(series: Query, by: readonly ByExpr[]): Query {
+  const groups = by.map((_, i) => sql`${verbatim(`g${i}`)}`);
+  return Query.from({ s: series })
+    .select({
+      ...Object.fromEntries(groups.map((g, i) => [`g${i}`, g])),
+      services: sql`list(DISTINCT CASE WHEN json_type(resource_attributes, '/service.name') = 'VARCHAR' THEN json_extract_string(resource_attributes, '/service.name') END)`,
+    })
+    .groupby(...groups);
+}

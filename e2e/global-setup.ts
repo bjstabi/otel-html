@@ -26,11 +26,11 @@ function calibrate(): void {
 
 /**
  * Throws naming the first mounted report that `mise run e2e:fixtures` has not built. `metrics-scale` is built on demand,
- * and `scale` and `many` only when the selection includes `e2e/scale.spec.ts`, which checks for them itself.
+ * and `scale`, `many` and `rowgroups` only when the selection includes `e2e/scale.spec.ts` or `e2e/calibration.spec.ts`, which check for them themselves.
  */
 async function assertReportsBuilt(mounted: readonly ReportName[]): Promise<void> {
   for (const name of mounted) {
-    if (name === 'metrics-scale' || name === 'scale' || name === 'many') continue;
+    if (name === 'metrics-scale' || name === 'scale' || name === 'many' || name === 'rowgroups') continue;
     // `no-manifest` is a copy of `main` without its manifest, by design.
     const probe = name === 'no-manifest' ? 'index.html' : 'data/manifest.js';
     // `refresh` is a `site` report, read over HTTP only.
@@ -56,6 +56,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     'merged',
     'scale',
     'many',
+    'rowgroups',
     'no-manifest',
     'metrics-merged',
     'metrics-single',

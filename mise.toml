@@ -253,6 +253,32 @@ cache = { enabled = true, env = ["CI", "OTEL_HTML_LOAD", "OTEL_HTML_BINARY"] }
 env = { OTEL_HTML_PERF_PASS = "0" }
 run = "pnpm exec vitest run"
 
+[tasks."test:scaling"]
+description = """The scaling measurement: every catalogue entry cold on the generated reports, classified and compared with the declared classes
+Builds the reports of test-support/scaling/generator.ts (retention, density and window at 2, 4 and 8, dense and sparse),
+runs each entry of src/viewer/data/catalogue.ts cold through the counting engine and asserts the class it declares
+(test/scaling/classes-<axis>-<spacing>.test.ts: one file per axis and spacing plus the cross shape, so vitest runs them in
+parallel workers; test/scaling/classes.test.ts holds the cheap declared-rules tests and checks the split covers every entry
+and axis). About 50 seconds on 4 cores; the workers share the generated reports and the cold runs through a folder in the temp directory; cached by the content of its inputs, so an unchanged tree replays it.
+`check` depends on it and CI's `check` job runs it; the unit tasks skip the measurement (OTEL_HTML_SCALING unset).
+OTEL_HTML_SCALING_PRINT=1 prints the entry x axis x class table to stderr (only on an uncached run)."""
+sources = [
+  "@group:deps",
+  "src/**",
+  "test-support/**",
+  "test/scaling/**",
+  "tsconfig.base.json",
+  "tsconfig.json",
+  "vitest.config.ts",
+]
+outputs = []
+cache = { enabled = true, env = ["CI"] }
+# Inside `check` it starts after the unit pass finishes (never beside it: the page tests' settle checks are timer-based);
+# run alone it waits for nothing.
+wait_for = ["test:unit:main"]
+env = { OTEL_HTML_SCALING = "1", OTEL_HTML_PERF_PASS = "0" }
+run = "pnpm exec vitest run test/scaling/classes --maxWorkers=6"
+
 # Env vars go in `env`, not a `VAR=1 cmd` prefix: Windows cmd (the unit-os CI job) can't run that.
 [tasks."test:unit:perf"]
 description = "The @perf unit tests alone, one file at a time (never cached: timing); args after `--` go to vitest: `-- --shard=1/2` splits the files by the seconds in test-support/shard-weights.json"
@@ -345,13 +371,13 @@ depends = ["lint", "typecheck", "knip"]
 
 # The `@perf` unit tests run after the parallel steps finish, not alongside them.
 [tasks.check]
-description = """Fast gate: lint, typecheck, unit tests, knip
-Results of lint, typecheck, knip and the parallel unit pass are cached by the content of their inputs, so a second run
+description = """Fast gate: lint, typecheck, unit tests, knip, the scaling measurement
+Results of lint, typecheck, knip, the parallel unit pass and the scaling measurement (under a minute when it runs) are cached by the content of their inputs, so a second run
 with nothing changed skips them. The unit tests with a time budget (named @perf) always run afterwards, alone and one
 file at a time; OTEL_HTML_PERF_FACTOR scales their budgets on a slow machine and, when OTEL_HTML_PERF_REFERENCE_MS is
 set (CI sets 100), so does how much slower than that reference a fixed CPU workload runs here (never below 1; the perf
 pass logs one `PERF calibration:` line)."""
-depends = ["check:static", "test:unit:main"]
+depends = ["check:static", "test:unit:main", "test:scaling"]
 run = { task = "test:unit:perf" }
 
 [tasks.verify]
@@ -436,7 +462,7 @@ run = "bun build e2e/otel-page/recorder.ts --target browser --format iife --mini
 
 [tasks."e2e:fixtures"]
 description = """Build the e2e fixture reports into e2e/.reports/ and their site copies into e2e/.reports-site/ (skipped while up to date)
-All but `scale` and `many`, which e2e:fixtures:scale builds; about a second after `build`."""
+All but `scale`, `many` and `rowgroups`, which e2e:fixtures:scale builds; about a second after `build`."""
 depends = ["build", "e2e:otel-recorder"]
 sources = [
   "@group:deps",
@@ -459,7 +485,7 @@ run = "bun e2e/build-fixtures.ts"
 # the viewer only dist/viewer. A viewer change runs `upgrade` (byte-identical to a fresh convert) instead of writing
 # 1M logs again.
 [tasks."e2e:fixtures:scale:data"]
-description = """Write the e2e `scale` and `many` reports (site format) into e2e/.reports-scale/ (skipped while up to date)
+description = """Write the e2e `scale`, `many` and `rowgroups` reports (site format) into e2e/.reports-scale/ (skipped while up to date)
 100k spans and 1M logs, converted once (`scale`) and written through the library in 100 flushes (`many`) (~1 GB of memory). Its sources are the writer's build output,
 not the viewer's: a viewer change only reruns e2e:fixtures:scale."""
 depends = ["build"]
@@ -480,11 +506,11 @@ outputs = ["e2e/.reports-scale/**"]
 run = "bun e2e/build-scale-fixtures.ts"
 
 [tasks."e2e:fixtures:scale"]
-description = """The e2e `scale` and `many` reports with the current viewer (only e2e/scale.spec.ts reads them)
+description = """The e2e `scale`, `many` and `rowgroups` reports with the current viewer (only e2e/scale.spec.ts and e2e/calibration.spec.ts read them)
 Depends on e2e:fixtures:scale:data; `otel-html upgrade` then swaps in the current dist/viewer (~0.3 s, every run: a
 freshness record of its own could miss a viewer that :data wrote in between), so a viewer change never converts again."""
 depends = ["e2e:fixtures:scale:data"]
-run = "node dist/cli/main.js upgrade e2e/.reports-scale/scale && node dist/cli/main.js upgrade e2e/.reports-scale/many"
+run = "node dist/cli/main.js upgrade e2e/.reports-scale/scale && node dist/cli/main.js upgrade e2e/.reports-scale/many && node dist/cli/main.js upgrade e2e/.reports-scale/rowgroups"
 
 # Budgets scale with OTEL_HTML_PERF_FACTOR on slow machines; they are never edited.
 # CI runs in the official Playwright image and sets OTEL_HTML_SKIP_BROWSER_INSTALL to skip the browser download.
@@ -500,7 +526,7 @@ Sharding: `--shard 1/2` runs half of each pass. The main pass splits the spec fi
 Playwright's own `-- --shard=1/2` still works, but splits both passes by count.
 The perf pass is skipped for a browser without a `-perf-file` project. The perf pass writes its artifacts to test-results/perf, so it does not clear the first pass's failures. Playwright args after `--` go to both passes (`mise run test:e2e --browser chromium -- e2e/scale.spec.ts`);
 narrow the browsers with `--browser`, not `--project`, which would add to the two passes' own projects.
-The scale reports (e2e:fixtures:scale, ~15 s cold, ~35 s on CI) are built only when the selection includes e2e/scale.spec.ts, decided
+The scale reports (e2e:fixtures:scale, ~15 s cold, ~35 s on CI) are built only when the selection includes e2e/scale.spec.ts or e2e/calibration.spec.ts, decided
 by `playwright test --list` with the same args; a direct `playwright test e2e/scale.spec.ts` needs that task run first.
 Browsers are installed first unless OTEL_HTML_SKIP_BROWSER_INSTALL is set (CI's Playwright image has them).
 The metrics scale check runs only with OTEL_HTML_METRICS_SCALE=1 (CI runs it in its own Chromium job): it writes a
@@ -568,14 +594,14 @@ perf="${usage_browser}-perf-*"
 # not load) fails the perf pass below instead of skipping it.
 case "$usage_browser" in chromium | '*') has_perf=1 ;; *) has_perf=0 ;; esac
 [ "$usage_pass" != main ] || has_perf=0
-# The scale reports only when a selected test is in e2e/scale.spec.ts. Each pass is listed on its own, with the args
+# The scale reports only when a selected test is in e2e/scale.spec.ts or e2e/calibration.spec.ts. Each pass is listed on its own, with the args
 # and the shard it runs with (`env` carries the main pass's OTEL_HTML_E2E_SHARD), so the listing selects the same tests
 # as the pass; a listing that fails builds them too, and the passes below report its error. --skip-deps: dist/ is
 # already built (and in CI it must not be rebuilt under the job shell).
 needs_scale() {
   local listed
   listed=$(env "$@" --list 2>&1) || return 0
-  grep -qF 'scale.spec.ts' <<<"$listed"
+  grep -qE '(scale|calibration)[.]spec[.]ts' <<<"$listed"
 }
 if { [ "$usage_pass" != perf ] && needs_scale "${main_env[@]}" pnpm exec playwright test "$@" --project "${usage_browser}-file" --project "$http" --grep-invert @perf; } ||
   { [ "$has_perf" = 1 ] && needs_scale pnpm exec playwright test "$@" "${perf_shard[@]}" --project "$perf"; }; then
@@ -635,6 +661,29 @@ usage = 'arg "[args]" var=#true'
 run = """
 eval "set -- $usage_args"
 bun scripts/bench-metrics.ts "$@"
+"""
+
+[tasks."predict:queries"]
+description = """Print the requests, megabytes and modelled milliseconds the viewer's pages cost on named report shapes
+An estimate: it prints the prediction and asserts nothing about it, but exits non-zero when the one-engine check misses
+(the fit without the cross against a page rendered whole, within 25 % or 2 requests). Measures every catalogue entry cold
+on the generated shapes (test/scaling/classes*.test.ts, about 1 minute; the cached test:scaling does not keep its
+measurements), records what each page asks of the data source and renders each page whole in one cold counting engine on
+page shapes of production-size row groups, dense and sparse, with partitions of 1 to 4, 8, 14 and 22 groups
+(test/viewer/scaling-pages*.test.tsx; about 5 minutes) into dist/predict-queries, then runs scripts/predict-queries.ts:
+the page fits, the one-engine table, and per page and per shape (rolling = test-support/scaling/shapes/rolling.json,
+30x150k, 90x150k, 30x1.5M) the serial and parallel requests, megabytes and modelled milliseconds. `-- --after 4
+--window 7d` prints the state after PR 4 of the query-scaling plan with the last 7 days as the window; `-- --threshold
+<bytes>` moves the small-file limit. To print another variant without measuring again: bun scripts/predict-queries.ts
+--dir dist/predict-queries --after 4"""
+shell = "bash -c"
+usage = 'arg "[args]" var=#true'
+env = { OTEL_HTML_SCALING = "1", OTEL_HTML_SCALING_OUT = "dist/predict-queries", OTEL_HTML_PERF_PASS = "0" }
+run = """
+eval "set -- $usage_args"
+rm -rf "$OTEL_HTML_SCALING_OUT"
+pnpm exec vitest run test/scaling/classes test/viewer/scaling-pages
+bun scripts/predict-queries.ts "$@"
 """
 
 # Regenerates fixtures/*.otlp.json with the OTel SDK (byte-stable). hostile.otlp.json is hand-authored and left alone.

@@ -1,5 +1,5 @@
 import { createRequire } from 'node:module';
-import { Worker } from 'node:worker_threads';
+import { type MessagePort, Worker } from 'node:worker_threads';
 import type { HostEngineFiles } from './engine-files.js';
 
 /** The slice of DuckDB-WASM's Node `AsyncDuckDB` the host uses, typed here so `src/` never imports the package (D35). */
@@ -17,6 +17,11 @@ export interface NodeDuckDb {
     close(): Promise<void>;
   }>;
   terminate(): Promise<void>;
+  /**
+   * Replaces the database inside the running worker with an empty one (no file registered, every cache empty) and loads
+   * the extensions again. Nothing in production calls it; the scaling tests use it to start cold without a new thread.
+   */
+  reset?(): Promise<void>;
   /** Resolves with the reason when the worker dies on its own (an `error` or an `exit`). */
   readonly exited?: Promise<string>;
 }
@@ -105,6 +110,7 @@ interface Bindings {
   ) => Omit<NodeDuckDb, 'connect'> & {
     instantiate(wasm: string): Promise<void>;
     open(config: Record<string, never>): Promise<void>;
+    reset(): Promise<void>;
     connect(): Promise<RawConnection>;
   };
   readonly VoidLogger: new () => unknown;
@@ -112,24 +118,42 @@ interface Bindings {
 
 const require = createRequire(import.meta.url);
 
+/** What a caller may add to the worker: tests count the file reads with it. Production passes nothing. */
+export interface NodeDuckDbOptions {
+  /** JavaScript run in the worker before the shim; wrap it in a block, it shares the shim's top-level scope. */
+  preamble?: string;
+  /** Merged into the worker's `workerData`; it cannot replace `mod` or `extensions`. */
+  workerData?: Record<string, unknown>;
+  /** Ports in `workerData` that move to the worker. */
+  transferList?: readonly MessagePort[];
+}
+
 /** `require(files.bindings)`, a Worker from the shim, `new AsyncDuckDB(new VoidLogger(), shim)`, `instantiate(files.wasm)`, `open({})`, then `LOAD` of the two extensions. */
-export async function openNodeDuckDb(files: HostEngineFiles): Promise<NodeDuckDb> {
+export async function openNodeDuckDb(
+  files: HostEngineFiles,
+  opts: NodeDuckDbOptions = {},
+): Promise<NodeDuckDb> {
   const bindings = require(files.bindings) as Bindings;
-  const worker = new Worker(WORKER_SHIM, {
+  const worker = new Worker(`${opts.preamble ?? ''}\n${WORKER_SHIM}`, {
     eval: true,
     workerData: {
+      ...opts.workerData,
       mod: files.worker,
       extensions: Object.fromEntries(EXTENSIONS.map((e) => [extensionFile(e), files.extensions[e]])),
     },
+    ...(opts.transferList === undefined ? {} : { transferList: [...opts.transferList] }),
   });
   const db = new bindings.AsyncDuckDB(new bindings.VoidLogger(), webWorker(worker));
-  try {
-    await db.instantiate(files.wasm);
-    await db.open({});
-    // Load them before the policy locks the configuration (and before the views, which read Parquet).
+  // Load them before the policy locks the configuration (and before the views, which read Parquet).
+  const loadExtensions = async (): Promise<void> => {
     const conn = await db.connect();
     for (const e of EXTENSIONS) await conn.query(`LOAD '${extensionUrl(e)}'`);
     await conn.close();
+  };
+  try {
+    await db.instantiate(files.wasm);
+    await db.open({});
+    await loadExtensions();
   } catch (e) {
     await worker.terminate();
     throw e;
@@ -157,6 +181,11 @@ export async function openNodeDuckDb(files: HostEngineFiles): Promise<NodeDuckDb
     registerFileURL: (name, url, proto, directIO) => db.registerFileURL(name, url, proto, directIO),
     connect,
     terminate: () => db.terminate(),
+    reset: async () => {
+      await db.reset();
+      await db.open({});
+      await loadExtensions();
+    },
     exited,
   };
 }

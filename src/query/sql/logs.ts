@@ -141,6 +141,13 @@ export function logTracesQuery(f: SqlFilter, sort: LogTraceSort, limit: number):
     .limit(limit);
 }
 
+/** `n`: how many of the logs matching `f` carry a trace id (the traces mode's `matched`). */
+export function logsWithTraceCountQuery(f: SqlFilter): Query {
+  return Query.from('logs')
+    .select({ n: sql`count(*)` })
+    .where(...whereOf(f, 'logs'), sql`trace_id IS NOT NULL`);
+}
+
 function logsFileOf(n: number, manifest: ManifestV4): string {
   const path = manifest.partitions.find((p) => p.n === n)?.files.logs?.path;
   if (path === undefined) {

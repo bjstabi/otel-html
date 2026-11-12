@@ -141,13 +141,23 @@ Four classes, per entry and axis:
   bytes. A small **cost model** (one module, constants from the measurement in §1: about 15 ms per serial request,
   one round trip per parallel batch, a bytes term) turns the counts into a predicted time. The model's output is
   printed, never asserted.
-- **Prediction for a dashboard or page**: given a dashboard configuration and a report shape (partitions, rows per
-  partition, window), the harness sums the entries its widgets map to. A mise task prints the table for named shapes:
-  today's rolling report, 30 runs × 150,000 spans, 90 runs × 150,000, 30 runs × 1,500,000. This is the "how will it
-  scale" answer without a load test, and it works for a dashboard that does not exist yet.
-- Row groups have to be small for a small report to behave like a large one. `writer.rowGroupRows` has a minimum of
-  50,000 and keeps it; the harness gets small row groups through an internal writer option that the configuration
-  does not expose.
+- **Prediction for a dashboard or page**: a page runs in one engine, where a read one entry shares with another is free,
+  so the page is not the sum of its entries. The harness renders each page whole in one cold counting engine on
+  generated shapes (dense and sparse spacing; partitions of 1 to 4 production-size row groups and partitions of 8, 14
+  and 22) and fits its serial requests, parallel requests and bytes as `a + P·(p + pd·G) + q·G²` (P partitions of G row
+  groups; there is no retention/window split, because a page's window spans the report), by non-negative least squares
+  (the squared term is non-negative and is taken by a page whose cost grows faster than linearly). A window shorter
+  than the report (`--window 7d`) is split off afterwards from the entries' own ratios (`splitWindow`). The prediction for a named shape is that fit summed over the shape's partitions, each by its own
+  row groups. A later PR's effect is the fit scaled, term by term, by the share of that term that the page's entries
+  without a debt line for that PR still carry. A mise task prints the table for named shapes: today's rolling report,
+  30 runs × 150,000 spans, 90 runs × 150,000, 30 runs × 1,500,000. On the live report the fit stays at about half the
+  requests Chromium makes (four live checks, 0.3 to 0.6), so the expectations of `rolling` are anchored on the live
+  counts and a later PR is held to the live baseline times the harness's after/before ratio; the other shapes are
+  harness absolutes, not live-calibrated. This is the "how will it scale" answer without a load test, and it works for
+  a dashboard that does not exist yet.
+- The entries are measured on small row groups (a small report behaves like a large one): `writer.rowGroupRows` has a
+  minimum of 50,000 and keeps it, and the harness gets 8,192-row groups through an internal writer option that the
+  configuration does not expose. A page's density is measured at production row-group size (50,000 rows).
 
 **Where it runs** is settled by the plan's first task, by measurement:
 
@@ -532,6 +542,10 @@ Continue the query-scaling work. Read §11 of docs/superpowers/specs/2026-11-11-
 4. Every PR of the plan is merged or marked dropped, the record included → the work is complete; say so, name what
    §2 left for later (the threaded engine build first), and stop.
 
+PR 1 note (2026-11-11): session B's first run built Tasks 1–6, opened PR 1 as a draft (#285) and stopped at Task
+6 step 5 (the prediction model; see the PR body). The maintainer then added Task 6a (the measurement in parallel and
+in CI). After that, the maintainer chose the union-of-reads prediction model recommended in the PR body; Task 6b built it (36236691) and stopped: summing entries' data parts overcounts a page 1.3–3.8×. On 2026-11-12 the maintainer chose to measure each page whole and fit it per axis; Task 6c builds it; on 2026-11-12 the maintainer also approved random trace ids in the generator and the live viewport in the page test, so lookups by trace id become debt owed by PR 4. After a second miss the maintainer chose to fit page density on production-size (50,000-row) groups, then (after a third miss) to measure a 22-group partition, falling back to expectations anchored on live counts (applied after a fourth miss; issue #287). After the branch review the maintainer chose Parquet bloom filters on `trace_id` for lookups by trace id (PR 4, Task 11a, which starts with a spike and stops if DuckDB-WASM or the writer cannot use them). Open before PR 8: its hold (`#/dashboards/ci` predicted ≤ 150 serial requests on rolling and 30x150k) contradicts the Expectations row 8 written by PR 1 (673 live-anchored, 245 harness); the session that reaches PR 8 asks the maintainer first. Rule 0 resumes on that PR's branch; a task whose commit is on the branch is not run again.
+
 A PR the plan makes conditional (§9's row 7) is marked "dropped" in the plan's PR table, with the reason, by the
 session that decides it.
 
@@ -553,5 +567,5 @@ Write the implementation plan for docs/superpowers/specs/2026-11-11-query-scalin
 **Session B, execute the plan:**
 
 ```
-Execute the query-scaling plan (docs/superpowers/plans/*-query-scaling*.md) with superpowers:subagent-driven-development, resuming at the first PR of its PR table that is neither merged nor marked dropped, on that PR's existing branch if it has one, at the first task whose commit is not on it. The PR process is unattended (docs/agents/process-unattended.md): review on the branch, squash-merge when CI is green, branch the next PR from the updated main. Per CLAUDE.md, implementers and task reviewers run on Sonnet 5.5 and the whole-branch review on Opus 5.5; say which model each review ran on. Every PR body carries the catalogue counts it moved, before and after, and the predicted time for today's rolling report. Stop and ask where the process says so. Its stop for what runs with a write token on main is lifted only for the source and build files that the plan lists and for the one window line in the two CI configuration files (§10 points 1 and 5 of the design); a workflow file, an action definition or a source or build file the plan does not list is a stop. A catalogue entry that misses its class, or a prediction more than 20 % above the plan's expectation table, is a stop (§9). After the last PR, measure the live pages the way §1 of the design did and write the record.
+Execute the query-scaling plan (docs/superpowers/plans/*-query-scaling*.md) with superpowers:subagent-driven-development, resuming at the first PR of its PR table that is neither merged nor marked dropped, on that PR's existing branch if it has one, at the first task whose commit is not on it. The PR process is unattended (docs/agents/process-unattended.md): review on the branch, squash-merge when CI is green, branch the next PR from the updated main. Per CLAUDE.md, implementers and task reviewers run on Sonnet 5.5 and the whole-branch review on Opus 5.5; say which model each review ran on. Every PR body carries the catalogue counts it moved, before and after, and the predicted time for today's rolling report. Stop and ask where the process says so. Its stop for what runs with a write token on main is lifted only for the source and build files that the plan lists and for the one window line in the two CI configuration files (§10 points 1 and 5 of the design); a workflow file, an action definition or a source or build file the plan does not list is a stop. One exception, decided by the maintainer on 2026-11-11: PR 1's Task 6a adds one step running `mise run test:scaling` to the `check` job of .github/workflows/ci.yml. A catalogue entry that misses its class, or a prediction more than 20 % above the plan's expectation table, is a stop (§9). After the last PR, measure the live pages the way §1 of the design did and write the record.
 ```
