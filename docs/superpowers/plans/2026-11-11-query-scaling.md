@@ -97,7 +97,7 @@ outside the PR's list below.
 | 1   | none: it declares today's classes and files the debt                                                                                                                                                                | completeness test green; every `scan` has an allowed reason or a debt line with an issue; statement text of moved builders unchanged                |
 | 2   | none                                                                                                                                                                                                                | a span started under a faked clock has a start time within 5 s of the real clock                                                                    |
 | 3   | the debt lines of the small-file group → `files` on retention. Task 5 names the group by measurement: the entries whose growth on retention is only in files under the harness threshold (expected: `patterns`, `trace.has`, `trace.get`, `trace.share`, `trace.logs`, `log.get`). Entries with other growth too (`traces.list.*`) keep their lines for PRs 4 and 6 | no entry makes a serial read of a sub-threshold file (asserted for every catalogue entry); one e2e test asserts a small file is fetched whole exactly once |
-| 4   | `spans.total.statkey.*`, `logs.timeline.statkey.*` on the `merged` shape → the classes they have on the plain shape; `trace.get`, `trace.share` → `matched` on density; `traces.list.all`, `traces.list.all.long` → `files` on every axis; new entries `resourceValues.short`/`.long` (their logs and points parts skip files outside the window; their spans part stays on #271's end-time debt line until PR 6) and `logs.total.*` (declared as measured) | #272's test: a run selection on a merged two-run report opens only that run's files |
+| 4   | `spans.total.statkey.*`, `logs.timeline.statkey.*` on the `merged` shape → the classes they have on the plain shape; `trace.get`, `trace.share`, `trace.has`, `trace.logs` → `matched` on density (Tasks 11 and 11a); `traces.list.all`, `traces.list.all.long` → `files` on every axis; new entries `resourceValues.short`/`.long` (their logs and points parts skip files outside the window; their spans part stays on #271's end-time debt line until PR 6) and `logs.total.*` (declared as measured) | #272's test: a run selection on a merged two-run report opens only that run's files |
 | 5   | none (the rollups exist but nothing reads them); no entry may get worse                                                                                                                                             | format-4 reports open unchanged; rollup file < 2 % of its spans file on the measured partition; frozen `format-5` fixture; README table             |
 | 6   | the long-window aggregates over rollup dimensions (`spans.total.long`, `spans.total.sortkey.long`, `spans.total.statkey.long`, `spans.buckets.long`, `spans.timeline.long`, `spans.facets.core.long`, `spans.groups.long`, `spans.services.long`, `spans.durations.long`, `logs.timeline.long`, `logs.timeline.statkey.long`, `logs.facets.core.long`, `logs.total.long`, `resourceValues.long`) → `fixed`/`fixed`/`files`; `percentile.long` → `files`/`fixed`/n.a.; `traces.list.long` → `files`×3; every windowed spans entry and `resourceValues.short` → `fixed` on retention (end-time pruning, Task 19) | equivalence test (rollup = raw = mix) on the edge data of §6; debt list holds no aggregate over rollup dimensions |
 | 7   | the `compacted` generator shape: entries keep their classes when one partition is a compaction of many                                                                                                              | no file written by compaction spans more than 24 h unless a single input does                                                                       |
@@ -129,7 +129,9 @@ change in any PR (a need for one is a stop).
   `src/writer/partition-checkpoint.ts`, `src/writer/compaction.ts`, `src/writer/merge.ts`, `src/query/sql/spans.ts`,
   `src/query/sql/logs.ts`, `src/viewer/data/data-source.ts`, `src/viewer/data/duckdb-source.ts`,
   `src/viewer/data/results.ts`, `src/viewer/data/log-results.ts`, `src/viewer/data/traced.ts`,
-  `src/viewer/data/trace-detail.ts`, `src/viewer/data/catalogue.ts`, `src/viewer/dashboards/dashboard-page.tsx`,
+  `src/viewer/data/trace-detail.ts`, `src/viewer/data/catalogue.ts`, `src/format/parquet/codec.ts`,
+  `src/format/parquet/bloom.ts` (new, Task 11a), `package.json` and the lockfile only for a `parquet-wasm` upgrade
+  (Task 11a), `src/viewer/dashboards/dashboard-page.tsx`,
   `src/viewer/dashboards/variables-bar.tsx`, `src/viewer/logs/explorer.tsx`, and any other file under `src/viewer/`
   that calls `resourceValues` or reads `LogNeed` (the type change forces them; list them in the PR body). No build
   file.
@@ -1057,6 +1059,43 @@ test('a trace whose summary has no start (logs only) reads without a bound', asy
 - [ ] **Step 2:** run → FAIL. **Step 3:** implement. **Step 4:** → PASS. If `trace.get` does not measure `matched` on
       density, that is the stop of "What each PR moves": report the measured step series.
 - [ ] **Step 5: Commit.** `perf(query): span reads by trace id are bounded in time`
+
+### Task 11a: Lookups by trace id skip partitions by a bloom filter on `trace_id`
+
+Added 2026-11-12 by the maintainer's decision, after PR 1's branch review: trace ids are random, so a lookup by id
+(`tracePartitionsQuery`, the logs of a trace) cannot be pruned by min/max statistics and reads the `traces` (and
+`logs`) file of every partition. Task 11 bounds only the span read that follows. The maintainer chose Parquet bloom
+filters on `trace_id` over passing a time bound, because they also serve a trace opened from a bare URL.
+
+Facts found when this task was written: `parquet-wasm` 0.9.0 exposes no bloom-filter option in its TypeScript
+declarations, and its wasm binary contains no "bloom" string; `@duckdb/duckdb-wasm` 1.32.0's binaries contain the
+word once. Neither the write nor the read side is proven.
+
+**Files:**
+
+- Modify: `src/format/parquet/codec.ts` (and a new `src/format/parquet/bloom.ts` if the filter is written by this
+  project), `src/viewer/data/catalogue.ts`; `package.json` and the lockfile only if Step 1 settles on a newer
+  `parquet-wasm`
+- Test: `test/format/parquet/bloom.test.ts`, `test/scaling/classes*.test.ts` (declared classes)
+
+- [ ] **Step 1: Spike, in the counting engine (counts, not time).**
+  1. Read side: write a file with a bloom filter on `trace_id` by any means available in tests (DuckDB's own
+     `COPY ... TO ... (FORMAT parquet)` in the Node engine, if it writes one), and count DuckDB-WASM's reads for
+     `WHERE trace_id = <absent id>`. Pass: no data page of the row group is read.
+  2. Write side: find how this project's writer can emit the filter. In order of preference: a `parquet-wasm`
+     release that exposes arrow-rs's bloom-filter properties; else writing the split-block filter (xxHash64, the
+     Parquet spec's layout) after the row groups and setting `bloom_filter_offset` / `bloom_filter_length` in the
+     footer.
+  3. Record both results in this task. If DuckDB-WASM does not use the filter, or neither write path works, that is
+     a stop: report the read counts and what each write path needs.
+- [ ] **Step 2: Failing tests.** A file written by the writer carries a bloom filter on `trace_id` in every row group
+      of `traces`, `spans` and `logs`; a lookup of an id absent from a partition reads none of its data pages; a
+      false positive still returns the right rows; a format-4 file without filters still opens and answers.
+- [ ] **Step 3: Implement** the write path from Step 1, in the writer, compaction and merge alike.
+- [ ] **Step 4: Classes.** `trace.has` and `trace.logs` reach `matched` on density and leave `KNOWN_DEBT`; with
+      Task 11, `trace.get` and `trace.share` reach `matched` on density. A miss is the stop of "What each PR moves".
+- [ ] **Step 5: Size.** The filters' bytes per partition go in the PR body, against the partition's bytes.
+- [ ] **Step 6: Commit.** `perf(format): lookups by trace id skip partitions by a bloom filter`
 
 ### Task 12: `resourceValues` takes the window
 
