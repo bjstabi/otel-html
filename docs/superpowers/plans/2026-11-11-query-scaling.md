@@ -774,6 +774,11 @@ traces than the list's 50 rows. This task measures each page whole instead of co
 4. `--after <pr>` scales each axis term of a page by the share of that term its entries without a debt line for
    that PR carry. The shares come from the per-entry fits of the page's entries. An entry `fixed` on an axis
    contributes 0 to the term; `matched` keeps its non-`G` part; `files` adds one parallel request per small file.
+6. Added 2026-11-12 after the first live check (0.46× and 0.32×): the generator's trace ids are random, as real
+   ones are, so a lookup by id is not pruned to one partition by min/max statistics. The page test renders at the
+   live check's viewport height, so a list asks for as many ids as live. Entries whose class changes get their
+   catalogue class and `KNOWN_DEBT` lines; a lookup by trace id that reads every partition is owed by Task 11
+   (PR 4).
 5. Measuring pages runs only when `OTEL_HTML_SCALING_OUT` is set (the `predict:queries` run), so `test:scaling`
    does not grow.
 
