@@ -740,6 +740,59 @@ defects in the per-entry model itself; this task fixes those too.
 - [ ] **Step 6: Commit.** `test(query): a page is predicted from the union of its entries' reads`. The PR body
       carries the one-engine comparison table, the live check and the new expectation table.
 
+Status: stopped 2026-11-12 at 36236691 (see Task 6c); the code stays, its page model is replaced.
+
+### Task 6c: A page is predicted from its own measurements
+
+Added 2026-11-12 by the maintainer's decision, after Task 6b stopped (36236691). Task 6b counted a page's opens once
+but still summed its entries' data parts. In one engine DuckDB's cache makes the reads one entry shares with another
+free: the CI page's data parts alone sum to 121 requests where the whole page costs 61. Its prediction was 1.3–3.8×
+the one-engine page on all 15 cases, and live 1.49× (CI dashboard) and 0.69× (traces mode). The traces-mode page
+also asks for 52 distinct traces live but 26 in the generated report, because the generated window holds fewer
+traces than the list's 50 rows. This task measures each page whole instead of composing it from entries.
+
+**Files:**
+
+- Modify: `test-support/scaling/model.ts`, `test-support/scaling/measure.ts`, `test-support/scaling/generator.ts`
+  (the trace count, if needed), `scripts/predict-queries.ts`, `test/scaling/model.test.ts`,
+  `test/viewer/scaling-pages.test.tsx`; this plan ("Expectations"); §3.3 of the design (the prediction sentence)
+- Keep from Task 6b what still serves: the non-negative fit, the `window: false` constraint and the per-entry fits
+  (`--after` uses them). Remove what only served the summed page model (the union of opens, per-id data counting)
+  unless this task uses it.
+- No `src/` file. `mise.toml` only for `predict:queries`'s description.
+
+**The model:**
+
+1. A page's cost (serial requests, parallel requests and bytes) is measured by rendering the page in one cold
+   counting engine, as Task 6b's one-engine check does, at the class steps of each axis (retention, window,
+   density with the `rowGroups: 16` step) on the dense and sparse shapes.
+2. Every measured shape holds at least as many traces in the page window as the longest list a page shows
+   (50 rows), so the distinct ids a page asks for match a full report. If the generator cannot do that at a shape,
+   it grows the shape's trace count, not the list.
+3. Each page's cost is fitted per axis with the per-entry form, `a + R·(r + rd·G) + W·(w + wd·G)`, by non-negative
+   least squares. The prediction for a named shape is that fit.
+4. `--after <pr>` scales each axis term of a page by the share of that term its entries without a debt line for
+   that PR carry. The shares come from the per-entry fits of the page's entries. An entry `fixed` on an axis
+   contributes 0 to the term; `matched` keeps its non-`G` part; `files` adds one parallel request per small file.
+5. Measuring pages runs only when `OTEL_HTML_SCALING_OUT` is set (the `predict:queries` run), so `test:scaling`
+   does not grow.
+
+- [ ] **Step 1: Failing tests** (`test/scaling/model.test.ts`): a page fit recovers a known non-negative model from
+      page points; `--after` with a retention line on an entry carrying half a page's `r` halves the page's `r`
+      and leaves `w, wd` unchanged; a shape in the generator holds at least 50 traces in the window.
+- [ ] **Step 2: Implement** the page measurements, the page fit and `--after` by entry shares.
+- [ ] **Step 3: Check against one engine.** The fit must reproduce each page at `BASE`, `CROSS` and the
+      `rowGroups: 16` shape within 25 %. `CROSS` is left out of the fit, so it tests how the fit extrapolates
+      across axes.
+- [ ] **Step 4: Live check, again.** As Task 6b step 4: refresh `shapes/rolling.json` the same day, count the live
+      `#/dashboards/ci` and `#/traces?mode=traces` requests in headless Chromium (Range GETs plus HEADs). The
+      `rolling` prediction must be within 25 % of both. Outside: a stop, reported with both counts, the prediction
+      and the diagnosis; no constant is tuned to hit the number.
+- [ ] **Step 5: The expectation table**, as Task 6b step 5; §3.3 of the design says a page is predicted from its own
+      measurements fitted per axis, and a later PR's effect from its entries' shares.
+- [ ] **Step 6: Commit.** `test(query): a page is predicted from its own measurements`. The PR body carries the
+      one-engine table, the live check and the new expectation table.
+
 ## PR 2: test spans keep real times
 
 ### Task 7: The test SDK stamps spans from the real clock
