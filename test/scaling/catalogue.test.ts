@@ -90,6 +90,7 @@ const PLAN_IDS = [
   'log.surrounding',
   ...LOG_GROUPS.flatMap((g) => both(`logs.${g}`)),
   'logs.timeline.text.long',
+  'resourceValues.all',
   'resourceValues.short',
   'resourceValues.long',
   'patterns',

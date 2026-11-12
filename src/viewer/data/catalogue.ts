@@ -448,6 +448,13 @@ export const CATALOGUE = [
     run: (ds, ctx) => ds.surroundingLogs(parseLogRef(ctx.ids.logRef, 'catalogue.logRef'), SURROUNDING),
   }),
   ...logEntries(LOG_QUERIES),
+  point({
+    id: 'resourceValues.all',
+    family: 'distinct values',
+    method: 'resourceValues',
+    builders: ['resourceValuesQuery'],
+    run: (ds) => ds.resourceValues('service.name', { window: null }),
+  }),
   ...WINDOWED.map(
     (v): Entry<'resourceValues'> => ({
       id: `resourceValues.${v.suffix}`,
@@ -770,6 +777,7 @@ const BASELINE: Record<string, Declared> = {
     allowed: { density: ATTRIBUTE_AGGREGATE, window: ATTRIBUTE_AGGREGATE },
     scanOf: 'logs.timeline.long',
   }),
+  'resourceValues.all': decl(['scan', 'scan', null]),
   'resourceValues.short': decl(['scan', 'scan', 'scan'], {
     allowed: { density: SHORT_WINDOW, window: SHORT_WINDOW },
   }),
@@ -834,9 +842,9 @@ const owed = (
 
 /**
  * `scan`s that §3.4 does not allow, each owed to an issue and a PR of the plan; the list only shrinks. Grouped by
- * cause: #271 (resourceValues under a window, a spans file wholly before the window is opened, long-window aggregates scan raw files, a read by
- * trace id has no time bound; PR 4 and PR 6), #281 (small files read serially; PR 3, done), #282 (the
- * unconditioned trace list; PR 4), and #283 (compaction), not yet measured.
+ * cause: #271 (resourceValues under a window, a spans file wholly before the window is opened, long-window aggregates
+ * scan raw files, a read by trace id has no time bound; PR 4 and PR 6), #281 (small files read serially; PR 3, done),
+ * #282 (resourceValues without a window, the unconditioned trace list; PR 4), and #283 (compaction), not yet measured.
  */
 export const KNOWN_DEBT: readonly DebtLine[] = [
   ...owed(271, 4, 'density', 'matched', true, ['trace.get', 'trace.share']),
@@ -912,6 +920,11 @@ export const KNOWN_DEBT: readonly DebtLine[] = [
     'metrics.runQuery.failed',
   ]),
   ...owed(282, 4, 'density', 'files', true, ['traces.list.all', 'traces.list.all.long']),
-  ...owed(282, 4, 'retention', 'files', true, ['traces.list.all', 'traces.list.all.long']),
+  ...owed(282, 4, 'density', 'fixed', true, ['resourceValues.all']),
+  ...owed(282, 4, 'retention', 'files', true, [
+    'traces.list.all',
+    'traces.list.all.long',
+    'resourceValues.all',
+  ]),
   ...owed(283, 7, 'retention', 'fixed', false, ['spans.total.short', 'spans.total.long']),
 ];

@@ -726,7 +726,7 @@ describe('getTrace: a provisional CI span and its final copy (§5.5)', () => {
 });
 
 describe('preparing the files a statement reads', () => {
-  const pathsOf = (table: 'spans' | 'logs' | 'traces'): string[] =>
+  const pathsOf = (table: 'spans' | 'logs' | 'traces' | 'points'): string[] =>
     f.manifest.partitions.flatMap((p) => {
       const file = p.files[table];
       return file === undefined ? [] : [file.path];
@@ -773,6 +773,7 @@ describe('preparing the files a statement reads', () => {
     const prepared = events.flatMap((e) => (e.kind === 'prepare' ? e.paths : []));
     expect(prepared.filter((p) => pathsOf('spans').includes(p))).toEqual([pathsOf('spans')[0]]);
     expect(prepared.some((p) => pathsOf('logs').includes(p))).toBe(false);
+    expect(prepared.some((p) => pathsOf('points').includes(p))).toBe(false);
     expect((await source.resourceValues('service.name', { window: null })).values).toEqual([
       'svc-a',
       'svc-b',

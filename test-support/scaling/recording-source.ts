@@ -139,7 +139,7 @@ export function recordingDataSource(inner: DataSource, manifest: ManifestV4): Re
       const value: unknown = Reflect.get(target, prop, receiver);
       if (typeof value !== 'function' || typeof prop !== 'string' || prop === 'close') return value;
       return (...args: unknown[]): unknown => {
-        calls.push(describe(prop as keyof DataSource, args[0]));
+        calls.push(describe(prop as keyof DataSource, prop === 'resourceValues' ? args[1] : args[0]));
         inflight++;
         const settle = (): void => {
           inflight--;
@@ -223,7 +223,7 @@ export function entryIdsOf(call: RecordedCall, long: boolean): string[] {
     case 'patterns':
       return ['patterns'];
     case 'resourceValues':
-      return [`resourceValues.${s}`];
+      return [call.window === 'none' ? 'resourceValues.all' : `resourceValues.${s}`];
     case 'metricCatalog':
       return ['metrics.catalog'];
     case 'metricShowOptions':

@@ -174,6 +174,37 @@ describe('variables', () => {
     expect(screen.getByRole('combobox', { name: 'service.name' })).toBeTruthy(); // the bar stays while it reloads
   });
 
+  test('a fast second window change aborts the first request and its late answer is ignored', async () => {
+    const signals = new Map<number, AbortSignal>();
+    const release: (() => void)[] = [];
+    type Answer = { values: string[]; kind: 'string'; capped: boolean };
+    const resourceValues = vi.fn(
+      (_key: string, opts: { window: { start: number; end: number } | null }, signal?: AbortSignal) => {
+        if (signal !== undefined && opts.window !== null) signals.set(opts.window.start, signal);
+        if (opts.window?.start !== 2e9)
+          return Promise.resolve<Answer>({ values: ['fresh'], kind: 'string', capped: false });
+        return new Promise<Answer>((resolve) =>
+          release.push(() => resolve({ values: ['late'], kind: 'string', capped: false })),
+        );
+      },
+    );
+    const user = userEvent.setup();
+    renderShell('#/dashboards/checkout?t=0~1000000000', {
+      ...dataSourceOf(manifestWith([CHECKOUT])),
+      resourceValues,
+    });
+    await screen.findByRole('combobox', { name: 'service.name' });
+    window.location.hash = '#/dashboards/checkout?t=2000000000~3000000000'; // not answered until released
+    await waitFor(() => expect(release.length).toBeGreaterThan(0));
+    window.location.hash = '#/dashboards/checkout?t=4000000000~5000000000';
+    await waitFor(() => expect(signals.has(4e9)).toBe(true));
+    expect(signals.get(2e9)?.aborted).toBe(true);
+    for (const r of release) r(); // the first request answers after it was aborted
+    await new Promise((r) => setTimeout(r, 20));
+    await user.click(screen.getByRole('combobox', { name: 'service.name' }));
+    expect(screen.getAllByRole('option').map((o) => o.textContent)).toEqual(['all', 'fresh']);
+  });
+
   test('a selected value with no data in the window stays selected and is shown in the list', async () => {
     const user = userEvent.setup();
     const optionTexts = (): string[] => screen.getAllByRole('option').map((o) => o.textContent ?? '');
