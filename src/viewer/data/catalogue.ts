@@ -724,41 +724,45 @@ const BASELINE: Record<string, Declared> = {
   'trace.get': decl(['files', 'scan', null], { needed: ONE_GROUP }),
   'trace.share': decl(['files', 'scan', null], { needed: ONE_GROUP }),
   'trace.has': decl(['files', 'files', null], { needed: ONE_GROUP }),
-  'trace.logs': decl(['files', 'scan', null], { needed: ONE_GROUP }),
-  'log.get': decl(['fixed', 'matched', null], { needed: ONE_GROUP }),
-  'log.surrounding': decl(['scan', 'scan', null], {
+  'trace.logs': decl(['files', 'files', null], { needed: ONE_GROUP }),
+  'log.get': decl(['fixed', 'files', null], { needed: ONE_GROUP }),
+  'log.surrounding': decl(['files', 'files', null], {
     allowed: { density: BY_ID_BASELINE },
     needed: ONE_GROUP,
   }),
-  'logs.timeline.short': decl(['fixed', 'scan', 'scan'], {
+  'logs.timeline.short': decl(['fixed', 'files', 'files'], {
     allowed: { density: SHORT_WINDOW, window: SHORT_WINDOW },
   }),
-  'logs.timeline.long': decl(['fixed', 'scan', 'scan']),
-  'logs.facets.core.short': decl(['fixed', 'scan', 'scan'], {
+  'logs.timeline.long': decl(['fixed', 'files', 'files']),
+  'logs.facets.core.short': decl(['fixed', 'files', 'files'], {
     allowed: { density: SHORT_WINDOW, window: SHORT_WINDOW },
   }),
-  'logs.facets.core.long': decl(['fixed', 'scan', 'scan']),
-  'logs.facets.attr.short': decl(['fixed', 'scan', 'scan'], {
+  'logs.facets.core.long': decl(['fixed', 'files', 'files']),
+  'logs.facets.attr.short': decl(['fixed', 'files', 'files'], {
     allowed: { density: ATTRIBUTE_AGGREGATE, window: ATTRIBUTE_AGGREGATE },
   }),
-  'logs.facets.attr.long': decl(['fixed', 'scan', 'scan'], {
+  'logs.facets.attr.long': decl(['fixed', 'files', 'files'], {
     allowed: { density: ATTRIBUTE_AGGREGATE, window: ATTRIBUTE_AGGREGATE },
   }),
-  'logs.rows.short': decl(['fixed', 'scan', 'scan'], { allowed: { density: ROWS_PAGE, window: ROWS_PAGE } }),
-  'logs.rows.long': decl(['fixed', 'scan', 'scan'], { allowed: { density: ROWS_PAGE, window: ROWS_PAGE } }),
-  'logs.traces.short': decl(['fixed', 'scan', 'scan'], {
+  'logs.rows.short': decl(['fixed', 'files', 'files'], {
     allowed: { density: ROWS_PAGE, window: ROWS_PAGE },
   }),
-  'logs.traces.long': decl(['fixed', 'scan', 'scan'], { allowed: { density: ROWS_PAGE, window: ROWS_PAGE } }),
-  'logs.timeline.statkey.short': decl(['fixed', 'matched', 'fixed'], {
+  'logs.rows.long': decl(['fixed', 'files', 'files'], { allowed: { density: ROWS_PAGE, window: ROWS_PAGE } }),
+  'logs.traces.short': decl(['fixed', 'files', 'files'], {
+    allowed: { density: ROWS_PAGE, window: ROWS_PAGE },
+  }),
+  'logs.traces.long': decl(['fixed', 'files', 'files'], {
+    allowed: { density: ROWS_PAGE, window: ROWS_PAGE },
+  }),
+  'logs.timeline.statkey.short': decl(['fixed', 'files', 'fixed'], {
     needed: ONE_PARTITION,
     scanOf: 'logs.timeline.short',
   }),
-  'logs.timeline.statkey.long': decl(['fixed', 'matched', 'fixed'], {
+  'logs.timeline.statkey.long': decl(['fixed', 'files', 'fixed'], {
     needed: ONE_PARTITION,
     scanOf: 'logs.timeline.long',
   }),
-  'logs.timeline.text.long': decl(['fixed', 'scan', 'scan'], {
+  'logs.timeline.text.long': decl(['fixed', 'files', 'files'], {
     allowed: { density: ATTRIBUTE_AGGREGATE, window: ATTRIBUTE_AGGREGATE },
     scanOf: 'logs.timeline.long',
   }),
@@ -829,8 +833,8 @@ const owed = (
  * measured.
  */
 export const KNOWN_DEBT: readonly DebtLine[] = [
-  ...owed(271, 4, 'density', 'matched', true, ['trace.get', 'trace.share', 'trace.logs']),
-  ...owed(271, 4, 'density', 'matched', false, ['trace.has']),
+  ...owed(271, 4, 'density', 'matched', true, ['trace.get', 'trace.share']),
+  ...owed(271, 4, 'density', 'matched', false, ['trace.has', 'trace.logs']),
   ...owed(271, 6, 'density', 'fixed', true, [
     'spans.total.long',
     'spans.buckets.long',
@@ -841,9 +845,8 @@ export const KNOWN_DEBT: readonly DebtLine[] = [
     'spans.services.long',
     'spans.total.sortkey.long',
     'percentile.long',
-    'logs.timeline.long',
-    'logs.facets.core.long',
   ]),
+  ...owed(271, 6, 'density', 'fixed', false, ['logs.timeline.long', 'logs.facets.core.long']),
   ...owed(271, 6, 'density', 'files', true, ['traces.list.long']),
   ...owed(271, 6, 'retention', 'fixed', true, [
     'spans.total.short',
@@ -890,9 +893,8 @@ export const KNOWN_DEBT: readonly DebtLine[] = [
     'spans.services.long',
     'spans.total.sortkey.long',
     'traces.list.long',
-    'logs.timeline.long',
-    'logs.facets.core.long',
   ]),
+  ...owed(271, 6, 'window', 'files', false, ['logs.timeline.long', 'logs.facets.core.long']),
   // Metrics with a window are `fixed` on retention in the end (§3.4): the small-file part went with #281 (PR 3: their points files load
   // whole, so they are `files` now); the partitions the window cannot hold are pruned by the end-time and manifest-range pruning of #271 (PR 6).
   ...owed(271, 6, 'retention', 'fixed', false, [
@@ -900,9 +902,6 @@ export const KNOWN_DEBT: readonly DebtLine[] = [
     'metrics.runQuery',
     'metrics.runQuery.failed',
   ]),
-  // The prepare seam does not pay this one: a surrounding read scans the logs files of every partition, and a logs
-  // file is above the small-file limit (reported in the PR 3 record: serial 21, 31, 51 on 2, 4, 8 partitions).
-  ...owed(281, 3, 'retention', 'files', true, ['log.surrounding']),
   ...owed(282, 4, 'density', 'files', true, ['traces.list.all', 'traces.list.all.long']),
   ...owed(282, 4, 'density', 'fixed', true, ['resourceValues.all']),
   ...owed(282, 4, 'retention', 'files', true, [

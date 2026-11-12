@@ -408,7 +408,7 @@ report/
 
 - `local` reports: open `index.html` directly from disk (`file://`). The viewer reads every partition a query touches whole, from the scripts the report loaded.
 - `site` reports need a web server that answers `Range` requests (and `HEAD`): the viewer fetches the Parquet files and the engine, and reads only the row groups a query needs. A host that ignores `Range` still works, but sends whole files.
-- On a `site` report the viewer fetches a small Parquet file (262,144 bytes or less: the traces, patterns and points files of a normal report) whole, once, up to six at a time, and answers from memory afterwards; a larger file keeps its `Range` reads. A statement waits for the small files it reads, so a trace list or a metric chart costs one parallel round of whole-file requests instead of a serial chain of footer and column reads. A file that cannot be fetched whole is read by `Range` as before, and a Refresh fetches a rewritten file again.
+- On a `site` report the viewer fetches a small Parquet file (524,288 bytes or less: the traces, patterns, points and most logs files of a normal report) whole, once, up to six at a time, and answers from memory afterwards; a larger file keeps its `Range` reads. A statement waits for the small files it reads, so a trace list or a metric chart costs one parallel round of whole-file requests instead of a serial chain of footer and column reads. A file that cannot be fetched whole is read by `Range` as before, and a Refresh fetches a rewritten file again.
 - GitHub Pages and GitLab Pages: publish the folder as it is. It works under a subpath such as `https://user.github.io/repo/report/`.
 - Any other static host or subpath works the same way.
 - CI: upload the folder as a build artifact.

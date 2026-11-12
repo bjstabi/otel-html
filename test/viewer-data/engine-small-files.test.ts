@@ -44,7 +44,7 @@ function setup(sizes: Record<string, number>, concurrency?: number) {
 const tick = () => new Promise<void>((r) => setTimeout(r, 0));
 
 describe('smallFiles', () => {
-  test('a file of exactly 262,144 bytes is fetched whole; one byte more is not', async () => {
+  test('a file of exactly the limit is fetched whole; one byte more is not', async () => {
     const t = setup({ a: SMALL_FILE_BYTES, b: SMALL_FILE_BYTES + 1 });
     await t.s.prepare(['a', 'b', 'unlisted']);
     expect(t.fetched).toEqual(['a']);

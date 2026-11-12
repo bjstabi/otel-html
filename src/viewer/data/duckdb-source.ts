@@ -55,7 +55,7 @@ import { LOG_SEVERITY_KEYS } from '../../semconv/severity.js';
 import { durationAxis } from '../traces/views.js';
 import type { DataSource, TraceDetail } from './data-source.js';
 import { metricMethods } from './duckdb-metrics.js';
-import { checkSurroundingCount, type LogRef, type LogRow } from './log-query.js';
+import { checkSurroundingCount, type LogRef, type LogRow, refParts } from './log-query.js';
 import {
   type LogRowEntry,
   logEntries,
@@ -662,7 +662,10 @@ export function createDuckDbDataSource(opts: {
       if (e instanceof OtelHtmlError && e.code === 'invalid-report') throw noSuchLog(ref);
       throw e;
     }
-    const found = logEntries(await read(['logs'], undefined, query)).entries[0];
+    // the query filters on the ref's own logs file: only that one is read
+    const own = manifest.partitions.find((p) => p.n === refParts(ref).n)?.files.logs?.path;
+    const pruned = { files: own === undefined ? [] : [own], all: false, total: 1 };
+    const found = logEntries(await read(['logs'], pruned, query)).entries[0];
     if (found === undefined) throw noSuchLog(ref);
     return found.row;
   }

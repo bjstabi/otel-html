@@ -392,7 +392,7 @@ Contents, per partition `n` (one flush each, `close: false`, config `writer.form
 `writer.statisticsKeys: ['resource:run.id']`): `rowGroups × ROW_GROUP_ROWS` spans in traces of 8, spread evenly over
 10 minutes from `T0 + n × spacing`, each trace within one second and across both services; 2 services under one
 scope name (so a service's slice of the file is 1, 2 and 4 row groups, ordered by time), 8 span names, every 16th span an error, resource attribute
-`run.id = run-<n>`, span attribute `http.route` with 16 values; a quarter as many logs, half of them with a trace id,
+`run.id = run-<n>`, span attribute `http.route` with 16 values; an eighth as many logs (a quarter until Task 9), half of them with a trace id,
 4 severities, one body in 64 containing the word `needle`; 2 metrics × 4 series × 16 points. Everything derives from
 `n` and the row index: no `Math.random`, no `Date.now`. Axis steps: retention `outside` 2, 4, 8; window `inside` 2,
 4, 8; density `rowGroups` 2, 4, 8. Dense windows of up to 8 partitions are short (2 h 30 m); sparse windows of 2 or
@@ -949,7 +949,7 @@ export function runPrepared(engine: QueryEngine, q: Query, files: readonly strin
 export function filesFor(manifest: ManifestV4, tables: readonly Table[], pruned?: Pruned): readonly string[];
 // counting-engine.ts
 interface CountingEngine { /** Paths prepared since the last take, with their sizes. */ prepared(): ReadonlyMap<string, number> }
-/** Above the generator's largest traces, patterns and rollup file (8 row groups), below its smallest spans and logs file (2 row groups). */
+/** Above the generator's largest traces, patterns, points, rollup and logs file (8 row groups), below its smallest spans file (2 row groups): logs are sized like the live report's (most under 256 KB). */
 export const HARNESS_SMALL_FILE_BYTES: number;
 // measure.ts
 export function measureEntry(entry: CatalogueEntry, shape: Shape, opts?: { threshold?: number }): Promise<Cost>;
@@ -976,8 +976,9 @@ test('each small traces file is fetched whole at most once and never by range af
 
 - [ ] **Step 2:** run → FAIL. **Step 3:** route every `engine.query` of the two data-source files through
       `runPrepared`; the counting engine's `prepare` runs the same `smallFiles` with `HARNESS_SMALL_FILE_BYTES`.
-      **Step 4:** unit and scaling tests → PASS; lower `DEBT_MAX` to the new length. If the generator's logs
-      files are not all above the threshold, raise its log count (Task 3's "a quarter as many") until they are.
+      **Step 4:** unit and scaling tests → PASS; lower `DEBT_MAX` to the new length. The generator's logs
+      are an eighth as many as its spans (changed from "a quarter as many" in Task 9, to size them like live), so every
+      logs file sits under the harness limit at the class shapes; a generator test asserts the split.
       Points files are under it at every step, as on the live report.
 - [ ] **Step 5: Tune the threshold.** `mise run predict:queries -- --threshold <n>` for 131,072, 262,144, 524,288
       and 1,048,576 on the `rolling` shape. Keep 262,144 unless another value's modelled time for the dashboard plus
@@ -1948,22 +1949,28 @@ be checked against its output. The other three columns are harness absolutes (**
 
 | after PR      | rolling (live-anchored) | 30x150k (harness) | 90x150k (harness) | 30x1.5M (harness) |
 | ------------- | ----------------------- | ----------------- | ----------------- | ----------------- |
-| 1 (baseline)  | 891 / 1,064             | 667 / 822         | 2,002 / 2,465     | 2,666 / 4,906     |
-| 3             | 844 / 1,064             | 631 / 822         | 1,894 / 2,465     | 2,631 / 4,906     |
-| 4             | 755 / 535               | 567 / 421         | 1,700 / 1,264     | 1,982 / 903       |
-| 6             | 673 / 456               | 505 / 361         | 1,516 / 1,082     | 1,760 / 521       |
-| 8 (window 7d) | 673 / 456               | 245 / 84          | 577 / 84          | 1,256 / 122       |
+| 1 (baseline, small files off) | 891 / 1,064 | 611 / 822         | 1,834 / 2,465     | 2,217 / 4,906     |
+| 3 (small files on, 524,288)   | 560 / 746   | 379 / 572         | 1,138 / 1,701     | 2,297 / 3,622     |
+| 4             | 465 / 345               | 316 / 269         | 948 / 791         | 1,665 / 587       |
+| 6             | 415 / 146               | 282 / 112         | 847 / 322         | 1,484 / 219       |
+| 8 (window 7d) | 415 / 146               | 166 / 32          | 429 / 32          | 1,155 / 57        |
+
+The harness columns were re-derived in PR 3 from one generator, when the generator's logs changed to live size (an
+eighth as many as spans, so most logs files sit under the small-file limit as on the live report): row 1 is the pages
+measured with no small file prepared (main before PR 3), row 3 with files of 524,288 bytes or less prepared, rows 4, 6
+and 8 are row 3's fit with `--after`. Row 3 as first written (before that change, 262,144 bytes): rolling 844 / 1,064,
+30x150k 631 / 822, 90x150k 1,894 / 2,465, 30x1.5M 2,631 / 4,906. The new rolling row 3 is below it.
 
 How the rolling cells come about (serial requests, dashboard / trace list; ratio = after / after PR 1; anchored = live x
 ratio; from the run of 2026-11-12 on the commit that added the section):
 
 | after PR      | harness rolling (unanchored) | ratio           | anchored    |
 | ------------- | ---------------------------- | --------------- | ----------- |
-| 1 (baseline)  | 474.5 / 590.2                | 1.000 / 1.000   | 891 / 1,064 |
-| 3             | 449.5 / 590.2                | 0.947 / 1.000   | 844 / 1,064 |
-| 4             | 401.9 / 296.7                | 0.847 / 0.503   | 755 / 535   |
-| 6             | 358.4 / 253.1                | 0.755 / 0.429   | 673 / 456   |
-| 8 (window 7d) | 358.4 / 253.1                | 0.755 / 0.429   | 673 / 456   |
+| 1 (small files off) | 433.9 / 590.2          | 1.000 / 1.000   | 891 / 1,064 |
+| 3             | 272.6 / 413.9                | 0.628 / 0.701   | 560 / 746   |
+| 4             | 226.2 / 191.4                | 0.521 / 0.324   | 465 / 345   |
+| 6             | 202.1 / 81.2                 | 0.466 / 0.138   | 415 / 146   |
+| 8 (window 7d) | 202.1 / 81.2                 | 0.466 / 0.138   | 415 / 146   |
 
 Row 8 equals row 6 for `rolling` on purpose: all 21 snapshot partitions overlap the last 7 days (partition 165 spans 9
 days, from 1793449360 to 1794226244 s, and the 7-day window starts at 1793815081), so `inWindow` is true for every

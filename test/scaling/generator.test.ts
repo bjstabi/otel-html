@@ -6,7 +6,7 @@ import { afterEach, describe, expect, test } from 'vitest';
 import { parseLogRef, refParts } from '../../src/viewer/data/log-query.js';
 import { openTestDb } from '../../test-support/duckdb-node.js';
 import { ROW_GROUP_ROWS } from '../../test-support/scaling/cost.js';
-import { openCountingEngine } from '../../test-support/scaling/counting-engine.js';
+import { HARNESS_SMALL_FILE_BYTES, openCountingEngine } from '../../test-support/scaling/counting-engine.js';
 import {
   BASE,
   buildScalingReport,
@@ -75,6 +75,24 @@ describe('the scaling report generator', { timeout: 120_000 }, () => {
     opened.push(b);
     expect(await hashes(b.dir)).toEqual(first);
     expect(first.size).toBeGreaterThan(3);
+  });
+
+  test('at the class shapes the traces, patterns, points and logs files sit under the small-file limit and the spans files above it', async () => {
+    const big = { ...BASE, rowGroups: 8 };
+    for (const spacing of ['dense', 'sparse'] as const) {
+      const high = await build({ ...big, spacing });
+      const low = await build({ ...BASE, spacing });
+      const bytes = (r: ScalingReport, table: string): number[] =>
+        r.manifest.partitions.flatMap((p) => {
+          const f = p.files[table as 'spans'];
+          return f === undefined ? [] : [f.bytes];
+        });
+      for (const table of ['traces', 'patterns', 'points', 'logs'])
+        for (const b of bytes(high, table))
+          expect(b, `${table} ${spacing}`).toBeLessThanOrEqual(HARNESS_SMALL_FILE_BYTES);
+      for (const b of bytes(low, 'spans'))
+        expect(b, `spans ${spacing}`).toBeGreaterThan(HARNESS_SMALL_FILE_BYTES);
+    }
   });
 
   test('a partition has the row groups its shape asks for', async () => {

@@ -442,7 +442,7 @@ describe('the small-file loader of openReportRefreshable', () => {
       expect(o.swapped).toEqual([partitionFilePath(0, 'spans')]);
 
       fetched.length = 0;
-      const big = opened('site', siteManifest(300_000));
+      const big = opened('site', siteManifest(600_000));
       await openReportRefreshable(big.manifest, big.deps, () => undefined);
       await big.prepare()?.([partitionFilePath(0, 'spans')]);
       expect(fetched).toEqual([]);

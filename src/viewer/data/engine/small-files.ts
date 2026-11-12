@@ -1,5 +1,5 @@
 /** A file this size or smaller is fetched whole and swapped in as a buffer; larger ones keep their range reads. */
-export const SMALL_FILE_BYTES = 262_144;
+export const SMALL_FILE_BYTES = 524_288;
 
 const DEFAULT_CONCURRENCY = 6;
 

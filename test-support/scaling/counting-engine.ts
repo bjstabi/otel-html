@@ -164,8 +164,9 @@ function compileOnce(files: HostEngineFiles): Promise<Precompiled> {
 }
 
 /**
- * Above the generator's largest traces, patterns and rollup file (8 row groups), below its smallest spans and logs
- * file (2 row groups): the files that load whole in the harness are the ones the live report loads whole.
+ * The limit the harness loads files whole under. The generator's logs are as large as the live report's (most logs files
+ * there are under 256 KB), so at the class shapes (up to 8 row groups per partition) its traces (at most 300 KB),
+ * patterns, points and logs files sit under it and its spans files (at least 405 KB) above it.
  */
 export const HARNESS_SMALL_FILE_BYTES = 350_000;
 
