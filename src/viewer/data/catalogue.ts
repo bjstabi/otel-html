@@ -448,13 +448,17 @@ export const CATALOGUE = [
     run: (ds, ctx) => ds.surroundingLogs(parseLogRef(ctx.ids.logRef, 'catalogue.logRef'), SURROUNDING),
   }),
   ...logEntries(LOG_QUERIES),
-  point({
-    id: 'resourceValues.all',
-    family: 'distinct values',
-    method: 'resourceValues',
-    builders: ['resourceValuesQuery'],
-    run: (ds) => ds.resourceValues('service.name'),
-  }),
+  ...WINDOWED.map(
+    (v): Entry<'resourceValues'> => ({
+      id: `resourceValues.${v.suffix}`,
+      family: 'distinct values',
+      method: 'resourceValues',
+      builders: ['resourceValuesQuery'],
+      spacing: v.spacing,
+      window: true,
+      run: (ds, ctx) => ds.resourceValues('service.name', { window: ctx.window }),
+    }),
+  ),
   point({
     id: 'patterns',
     family: 'patterns',
@@ -766,7 +770,10 @@ const BASELINE: Record<string, Declared> = {
     allowed: { density: ATTRIBUTE_AGGREGATE, window: ATTRIBUTE_AGGREGATE },
     scanOf: 'logs.timeline.long',
   }),
-  'resourceValues.all': decl(['scan', 'scan', null]),
+  'resourceValues.short': decl(['scan', 'scan', 'scan'], {
+    allowed: { density: SHORT_WINDOW, window: SHORT_WINDOW },
+  }),
+  'resourceValues.long': decl(['scan', 'scan', 'scan']),
   patterns: decl(['files', 'fixed', null]),
   'metrics.catalog': decl(['files', 'fixed', null]),
   'metrics.showOptions': decl(['fixed', 'fixed', null]),
@@ -827,8 +834,8 @@ const owed = (
 
 /**
  * `scan`s that §3.4 does not allow, each owed to an issue and a PR of the plan; the list only shrinks. Grouped by
- * cause: #271 (a spans file wholly before the window is opened, long-window aggregates scan raw files, a read by
- * trace id has no time bound; PR 4 and PR 6), #281 (small files read serially; PR 3, done), #282 (resourceValues, the
+ * cause: #271 (resourceValues under a window, a spans file wholly before the window is opened, long-window aggregates scan raw files, a read by
+ * trace id has no time bound; PR 4 and PR 6), #281 (small files read serially; PR 3, done), #282 (the
  * unconditioned trace list; PR 4), and #283 (compaction), not yet measured.
  */
 export const KNOWN_DEBT: readonly DebtLine[] = [
@@ -843,6 +850,7 @@ export const KNOWN_DEBT: readonly DebtLine[] = [
     'spans.services.long',
     'spans.total.sortkey.long',
     'percentile.long',
+    'resourceValues.long',
   ]),
   ...owed(271, 6, 'density', 'fixed', false, ['logs.timeline.long', 'logs.facets.core.long']),
   ...owed(271, 6, 'density', 'files', true, ['traces.list.long']),
@@ -874,6 +882,8 @@ export const KNOWN_DEBT: readonly DebtLine[] = [
     'spans.total.traces.long',
     'spans.rows.short',
     'spans.rows.long',
+    'resourceValues.short',
+    'resourceValues.long',
   ]),
   ...owed(271, 6, 'retention', 'files', true, [
     'percentile.long',
@@ -891,6 +901,7 @@ export const KNOWN_DEBT: readonly DebtLine[] = [
     'spans.services.long',
     'spans.total.sortkey.long',
     'traces.list.long',
+    'resourceValues.long',
   ]),
   ...owed(271, 6, 'window', 'files', false, ['logs.timeline.long', 'logs.facets.core.long']),
   // Metrics with a window are `fixed` on retention in the end (§3.4): the small-file part went with #281 (PR 3: their points files load
@@ -901,11 +912,6 @@ export const KNOWN_DEBT: readonly DebtLine[] = [
     'metrics.runQuery.failed',
   ]),
   ...owed(282, 4, 'density', 'files', true, ['traces.list.all', 'traces.list.all.long']),
-  ...owed(282, 4, 'density', 'fixed', true, ['resourceValues.all']),
-  ...owed(282, 4, 'retention', 'files', true, [
-    'traces.list.all',
-    'traces.list.all.long',
-    'resourceValues.all',
-  ]),
+  ...owed(282, 4, 'retention', 'files', true, ['traces.list.all', 'traces.list.all.long']),
   ...owed(283, 7, 'retention', 'fixed', false, ['spans.total.short', 'spans.total.long']),
 ];

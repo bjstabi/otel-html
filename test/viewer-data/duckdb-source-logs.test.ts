@@ -521,15 +521,19 @@ describe('metricPoints', () => {
 
 describe('resourceValues', () => {
   test('the distinct values across spans, logs and points, sorted, in one statement', async () => {
-    const r = await counted(() => fresh().resourceValues('service.name'));
+    const r = await counted(() => fresh().resourceValues('service.name', { window: null }));
     expect(r.arrow).toBe(1);
     expect(r.value).toEqual({ values: ['svc-a', 'svc-b', 'svc-c'], kind: 'string', capped: false });
-    expect(await ds.resourceValues('host.name')).toEqual({
+    expect(await ds.resourceValues('host.name', { window: null })).toEqual({
       values: ['host-1', 'host-2'],
       kind: 'string',
       capped: false,
     });
-    expect(await ds.resourceValues('nope')).toEqual({ values: [], kind: 'string', capped: false });
+    expect(await ds.resourceValues('nope', { window: null })).toEqual({
+      values: [],
+      kind: 'string',
+      capped: false,
+    });
   });
 
   test('capped when cap + 1 values exist; the cap values kept are the first sorted', async () => {
@@ -538,7 +542,7 @@ describe('resourceValues', () => {
       manifest: f.manifest,
       caps: { facetValueCap: 2, facetKeyCap: 500 },
     });
-    expect(await small.resourceValues('service.name')).toEqual({
+    expect(await small.resourceValues('service.name', { window: null })).toEqual({
       values: ['svc-a', 'svc-b'],
       kind: 'string',
       capped: true,
@@ -548,7 +552,7 @@ describe('resourceValues', () => {
       manifest: f.manifest,
       caps: { facetValueCap: 3, facetKeyCap: 500 },
     });
-    expect((await exact.resourceValues('service.name')).capped).toBe(false);
+    expect((await exact.resourceValues('service.name', { window: null })).capped).toBe(false);
   });
 
   test('kinds merge: one kind stays, differing kinds are mixed', async () => {
@@ -580,14 +584,22 @@ describe('resourceValues', () => {
       engine: mosaicQueryEngine(createCoordinator(gdb.connector, silentLogger), gdb),
       manifest: g.manifest,
     });
-    expect(await source.resourceValues('host.name')).toEqual({
+    expect(await source.resourceValues('host.name', { window: null })).toEqual({
       values: ['7', 'h1'],
       kind: 'mixed',
       capped: false,
     });
-    expect(await source.resourceValues('port')).toEqual({ values: ['80', '81'], kind: 'int', capped: false });
+    expect(await source.resourceValues('port', { window: null })).toEqual({
+      values: ['80', '81'],
+      kind: 'int',
+      capped: false,
+    });
     // a string that looks like a list is a value; the list itself is not
-    expect(await source.resourceValues('tag')).toEqual({ values: ['["a"]'], kind: 'string', capped: false });
+    expect(await source.resourceValues('tag', { window: null })).toEqual({
+      values: ['["a"]'],
+      kind: 'string',
+      capped: false,
+    });
     // one text under two kinds is one value: cap 2 over ('3' as int and string, 'a') keeps both, not capped
     const t = (v: JsonObject) => [attr('service.name', str('s')), attr('host.name', v)];
     const h = await buildFormat4Report(
@@ -606,7 +618,7 @@ describe('resourceValues', () => {
       manifest: h.manifest,
       caps: { facetValueCap: 2, facetKeyCap: 500 },
     });
-    expect(await two.resourceValues('host.name')).toEqual({
+    expect(await two.resourceValues('host.name', { window: null })).toEqual({
       values: ['3', 'a'],
       kind: 'mixed',
       capped: false,

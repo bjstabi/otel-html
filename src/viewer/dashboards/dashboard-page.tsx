@@ -1,6 +1,6 @@
 import { Menu } from '@base-ui/react/menu';
 import { ChevronDown, Copy, LayoutDashboard, Pencil } from 'lucide-react';
-import { type JSX, useCallback, useMemo, useState, useSyncExternalStore } from 'react';
+import { type JSX, useCallback, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { RunControls, Widget, WidgetLayout, WidgetType } from '../../dashboards/schema.js';
 import { parseUnixNanos, type TraceId } from '../../model/ids.js';
 import type { DataSource, ResourceValues } from '../data/data-source.js';
@@ -253,15 +253,26 @@ function DashboardView(props: {
   );
 
   const loadValues = useCallback(
-    async (dash: typeof d): Promise<ValuesByKey> =>
+    async (k: { dash: typeof d; window: TimeWindow | null }, signal: AbortSignal): Promise<ValuesByKey> =>
       Object.fromEntries(
         await Promise.all(
-          dash.variables.map(async (v) => [v.key, await dataSource.resourceValues(v.key)] as const),
+          k.dash.variables.map(
+            async (v) =>
+              [v.key, await dataSource.resourceValues(v.key, { window: k.window }, signal)] as const,
+          ),
         ),
       ),
     [dataSource],
   );
-  const values: KeyedState<ValuesByKey> = useKeyedAsync(d, loadValues);
+  // the values are the page window's: asked again when it changes, the last answer standing while that runs
+  const valuesKey = useMemo(() => ({ dash: d, window: page }), [d, page]);
+  const loaded: KeyedState<ValuesByKey> = useKeyedAsync(valuesKey, loadValues);
+  const lastReady = useRef<{ id: string; value: ValuesByKey } | null>(null);
+  if (loaded.status === 'ready') lastReady.current = { id: d.id, value: loaded.value };
+  const values: KeyedState<ValuesByKey> =
+    loaded.status === 'loading' && lastReady.current?.id === d.id
+      ? { status: 'ready', value: lastReady.current.value }
+      : loaded;
 
   const stale = staleIds(entry, state);
   const bound = values.status === 'ready' ? bindings(d, state, values.value) : null;

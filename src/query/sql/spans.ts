@@ -349,14 +349,20 @@ const SCALAR_KINDS = verbatim(`('string', 'int', 'double', 'bool')`);
  * when the value's text appears under several kinds; `cap + 1` rows by value. The distinct `resource_attributes` texts
  * are taken first (there are few) and the value is extracted from those, not from every row. The statement has no
  * `WHERE` on purpose: the optimizer pushes an outer `WHERE` below a `DISTINCT` or `UNION`, back onto every row, so the
- * conditions are aggregate `FILTER`s and a `HAVING` (issue #270).
+ * conditions are aggregate `FILTER`s and a `HAVING` (issue #270). `filters`, one per table (the window's files and rows),
+ * narrow each branch of the union itself, below the distinct, which is where they cost least.
  */
-export function resourceValuesQuery(key: string, cap: number): Query {
-  const texts = Query.union(
-    Query.from('spans').select('resource_attributes'),
-    Query.from('logs').select('resource_attributes'),
-    Query.from('points').select('resource_attributes'),
-  );
+export function resourceValuesQuery(
+  key: string,
+  cap: number,
+  filters?: Readonly<Record<'spans' | 'logs' | 'points', SqlFilter>>,
+): Query {
+  // with a window each branch keeps its own rows and files; the outer statement still has no WHERE
+  const branch = (table: 'spans' | 'logs' | 'points'): Query => {
+    const q = Query.from(table).select('resource_attributes');
+    return filters === undefined ? q : q.where(...whereOf(filters[table], table));
+  };
+  const texts = Query.union(branch('spans'), branch('logs'), branch('points'));
   const extracted = Query.from({ r: texts }).select({
     value: jsonStringAt('resource_attributes', [key]),
     kind: jsonKind(jsonAt('resource_attributes', [key])),

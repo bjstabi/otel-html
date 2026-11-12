@@ -832,14 +832,21 @@ export function createDuckDbDataSource(opts: {
       const spec = bucketSpec(null, range);
       return pointBuckets(await read(['points'], undefined, pointsTimelineQuery(spec, epoch), signal), spec);
     },
-    async resourceValues(key, signal) {
+    async resourceValues(key, opts, signal) {
+      throwIfAborted(signal);
+      const filterOf = (table: 'spans' | 'logs' | 'points') =>
+        buildFilter({ manifest, table, condition: null, text: '', window: opts.window }).filter;
+      const windowed =
+        opts.window === null
+          ? undefined
+          : { spans: filterOf('spans'), logs: filterOf('logs'), points: filterOf('points') };
+      // each table's kept files are prepared; the rest of the table's files stay unopened
+      const files =
+        windowed === undefined
+          ? filesFor(manifest, ['spans', 'logs', 'points'])
+          : (['spans', 'logs', 'points'] as const).flatMap((t) => filesFor(manifest, [t], windowed[t].files));
       return resourceValueResult(
-        await read(
-          ['spans', 'logs', 'points'],
-          undefined,
-          resourceValuesQuery(key, caps.facetValueCap),
-          signal,
-        ),
+        await runPrepared(engine, resourceValuesQuery(key, caps.facetValueCap, windowed), files, signal),
         caps.facetValueCap,
       );
     },

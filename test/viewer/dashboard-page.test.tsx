@@ -149,6 +149,47 @@ describe('variables', () => {
     expect(currentD()?.vars).toEqual({ 'service.name': 'web' });
   });
 
+  test('the dashboard passes its window and asks again when the window changes', async () => {
+    const resourceValues = vi.fn((_key: string, _opts: { window: { start: number; end: number } | null }) =>
+      Promise.resolve(VALUES['service.name']),
+    );
+    renderShell('#/dashboards/checkout?t=0~1000000000', {
+      ...dataSourceOf(manifestWith([CHECKOUT])),
+      resourceValues,
+    });
+    await screen.findByRole('combobox', { name: 'service.name' });
+    expect(resourceValues).toHaveBeenLastCalledWith(
+      'service.name',
+      { window: { start: 0, end: 1e9 } },
+      expect.anything(),
+    );
+    window.location.hash = '#/dashboards/checkout?t=2000000000~3000000000';
+    await waitFor(() =>
+      expect(resourceValues).toHaveBeenLastCalledWith(
+        'service.name',
+        { window: { start: 2e9, end: 3e9 } },
+        expect.anything(),
+      ),
+    );
+    expect(screen.getByRole('combobox', { name: 'service.name' })).toBeTruthy(); // the bar stays while it reloads
+  });
+
+  test('a selected value with no data in the window stays selected and is shown in the list', async () => {
+    const user = userEvent.setup();
+    const optionTexts = (): string[] => screen.getAllByRole('option').map((o) => o.textContent ?? '');
+    renderShell(
+      `#/dashboards/checkout?t=0~1000000000&${dParam({ vars: { 'service.name': 'run-a' } })}`,
+      dataSourceOf(manifestWith([CHECKOUT]), {
+        'service.name': { values: ['run-b'], kind: 'string', capped: false },
+      }),
+    );
+    const box = await screen.findByRole('combobox', { name: 'service.name' });
+    expect(box.textContent).toContain('run-a');
+    await user.click(box);
+    expect(optionTexts()).toEqual(expect.arrayContaining(['run-a', 'run-b']));
+    expect(window.location.hash).toContain('run-a');
+  });
+
   test('a value that cannot be applied is reported, not dropped silently', async () => {
     const typed = {
       ...CHECKOUT,

@@ -762,6 +762,23 @@ describe('preparing the files a statement reads', () => {
     expect(prepared.some((p) => pathsOf('logs').includes(p))).toBe(false);
   });
 
+  test('values outside the window are not listed and their partitions are not read', async () => {
+    const { events, source } = recording();
+    // 1 to 5 ms: only the first spans partition holds a span that starts that early, and the logs are all at 0
+    expect(await source.resourceValues('service.name', { window: { start: 1e6, end: 5e6 } })).toEqual({
+      values: ['svc-a'],
+      kind: 'string',
+      capped: false,
+    });
+    const prepared = events.flatMap((e) => (e.kind === 'prepare' ? e.paths : []));
+    expect(prepared.filter((p) => pathsOf('spans').includes(p))).toEqual([pathsOf('spans')[0]]);
+    expect(prepared.some((p) => pathsOf('logs').includes(p))).toBe(false);
+    expect((await source.resourceValues('service.name', { window: null })).values).toEqual([
+      'svc-a',
+      'svc-b',
+    ]);
+  });
+
   test('no statement runs before its prepare resolved', async () => {
     let release: () => void = () => {};
     const gate = new Promise<void>((resolve) => {

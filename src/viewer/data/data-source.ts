@@ -69,6 +69,10 @@ export interface DataSource extends MetricMethods {
   /** Data points over time across every resource (the unfiltered table). */
   metricPoints(signal?: AbortSignal): Promise<TimeBuckets<'points'>>;
   /** The values of one resource attribute over spans, logs and points, sorted; `capped` when more than the cap exist. */
-  resourceValues(key: string, signal?: AbortSignal): Promise<ResourceValues>;
+  resourceValues(
+    key: string,
+    opts: { window: TimeWindow | null },
+    signal?: AbortSignal,
+  ): Promise<ResourceValues>;
   close(): Promise<void>;
 }

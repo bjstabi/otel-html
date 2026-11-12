@@ -125,7 +125,7 @@ describe('refreshReport', () => {
     expect(f.calls.clearCache).toBe(1);
     expect(manifest.partitions.map((p) => p.n)).toEqual([0, 1]);
     expect(dataSource?.manifest).toBe(manifest);
-    await dataSource?.resourceValues('service.name').catch(() => undefined);
+    await dataSource?.resourceValues('service.name', { window: null }).catch(() => undefined);
     expect(f.calls.queries).toBeGreaterThan(0);
   });
 

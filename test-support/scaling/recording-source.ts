@@ -223,7 +223,7 @@ export function entryIdsOf(call: RecordedCall, long: boolean): string[] {
     case 'patterns':
       return ['patterns'];
     case 'resourceValues':
-      return ['resourceValues.all'];
+      return [`resourceValues.${s}`];
     case 'metricCatalog':
       return ['metrics.catalog'];
     case 'metricShowOptions':
