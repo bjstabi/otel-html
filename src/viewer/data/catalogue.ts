@@ -833,7 +833,6 @@ const owed = (
  */
 export const KNOWN_DEBT: readonly DebtLine[] = [
   ...owed(271, 4, 'density', 'matched', true, ['trace.get', 'trace.share']),
-  ...owed(271, 4, 'density', 'matched', false, ['trace.has', 'trace.logs']),
   ...owed(271, 6, 'density', 'fixed', true, [
     'spans.total.long',
     'spans.buckets.long',

@@ -27,6 +27,7 @@ import {
 } from 'parquet-wasm/esm';
 import { OtelHtmlError } from '../../model/errors.js';
 import { batchFromRows, type ColumnBatch } from './batch.js';
+import { addBloomFilters, BLOOM_COLUMN, BLOOM_TABLES, BloomCollector } from './bloom.js';
 import {
   type ColumnDef,
   type ColumnType,
@@ -361,11 +362,32 @@ function columnData(def: ColumnDef, type: DataType, col: readonly unknown[], per
 }
 
 /**
- * Sorts a batch by `SORT_COLUMNS[table]` (nulls last, stable) and encodes it as ZSTD Parquet. It does not check the
- * cells: every row must have passed `checkRow` (a session checks each row when it accepts it; `encodeTable` checks).
+ * Sorts a batch by `SORT_COLUMNS[table]` (nulls last, stable) and encodes it as ZSTD Parquet, with a bloom filter on
+ * `trace_id` in every row group of `traces`, `spans` and `logs` (see `bloom.ts`). It does not check the cells: every
+ * row must have passed `checkRow` (a session checks each row when it accepts it; `encodeTable` checks).
  */
 export function encodeColumns(table: Table, batch: ColumnBatch, opts: EncodeOptions): Uint8Array {
-  const arrow = columnsToArrow(table, batch, sortPermutation(table, batch));
+  const perm = sortPermutation(table, batch);
+  const file = encodeSorted(table, batch, perm, opts);
+  if (!BLOOM_TABLES.has(table) || batch.length === 0) return file;
+  const collector = new BloomCollector(opts.rowGroupRows);
+  const ids = batch.cells[BLOOM_COLUMN] ?? [];
+  collector.add(perm.map((i) => ids[i]));
+  return addBloomFilters(file, collector.finish());
+}
+
+/** `encodeColumns` without the bloom filters: what `encodeBatches` streams, and what a file written before them is. */
+export function encodeColumnsUnfiltered(table: Table, batch: ColumnBatch, opts: EncodeOptions): Uint8Array {
+  return encodeSorted(table, batch, sortPermutation(table, batch), opts);
+}
+
+function encodeSorted(
+  table: Table,
+  batch: ColumnBatch,
+  perm: readonly number[],
+  opts: EncodeOptions,
+): Uint8Array {
+  const arrow = columnsToArrow(table, batch, perm);
   ensureParquetWasm();
   const wasm = WasmTable.fromIPCStream(tableToIPC(arrow, 'stream'));
   return writeParquet(wasm, writerProperties(opts));

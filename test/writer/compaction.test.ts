@@ -6,7 +6,7 @@ import { describe, expect, test } from 'vitest';
 import { wrapBinaryDataFilePieces } from '../../src/format/data-file.js';
 import type { PartitionEntry } from '../../src/format/manifest.js';
 import { batchFromRows } from '../../src/format/parquet/batch.js';
-import { decodeTable, encodeTable } from '../../src/format/parquet/codec.js';
+import { decodeTable, encodeColumnsUnfiltered, encodeTable } from '../../src/format/parquet/codec.js';
 import type { Table } from '../../src/format/parquet/columns.js';
 import type { Row } from '../../src/format/parquet/rows.js';
 import { fileStatistics } from '../../src/format/parquet/stats.js';
@@ -17,6 +17,7 @@ import { createNodeFileSystem } from '../../src/writer/node-fs.js';
 import { PartitionWriter } from '../../src/writer/partition-writer.js';
 import type { FileSystem } from '../../src/writer/ports.js';
 import { createMemoryFileSystem } from '../../test-support/memory-fs.js';
+import { chunksOf } from '../../test-support/parquet-footer.js';
 
 const OUT = '/out';
 const ROW_GROUP = 5;
@@ -707,5 +708,59 @@ describe('compactPartitions on the real file system', () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('bloom filters on trace_id', () => {
+  const filtered = (bytes: Uint8Array): boolean[] =>
+    chunksOf(bytes)
+      .flat()
+      .filter((c) => c.path === 'trace_id')
+      .map((c) => c.offset !== undefined && c.length !== undefined);
+  const anyFilter = (bytes: Uint8Array): boolean =>
+    chunksOf(bytes)
+      .flat()
+      .some((c) => c.offset !== undefined);
+
+  test('a cut and a compaction write one per row group of traces, spans and logs, and none for points and patterns', async () => {
+    const fs = createMemoryFileSystem();
+    const r = lcg(7);
+    let id = 0;
+    const part = (): Partial<Record<Table, Row[]>> => ({
+      spans: Array.from({ length: 12 }, () => spanRow(id++, r)),
+      logs: Array.from({ length: 12 }, () => logRow(id++, r)),
+      points: Array.from({ length: 12 }, () => pointRow(id++, r)),
+      traces: Array.from({ length: 12 }, (_, i) => trace(`t${id}-${i}`)),
+    });
+    const entries = await writeParts(fs, [part(), part(), part()]);
+    for (const entry of entries) {
+      for (const t of ['spans', 'logs', 'traces'] as const) {
+        const flags = filtered(await bytesOf(fs, entry, t));
+        expect(flags.length, `cut ${t}`).toBeGreaterThan(1);
+        expect(flags.every(Boolean), `cut ${t}`).toBe(true);
+      }
+      expect(anyFilter(await bytesOf(fs, entry, 'points'))).toBe(false);
+    }
+    const out = await compactPartitions(fs, OUT, entries, opts(3));
+    for (const t of ['spans', 'logs', 'traces'] as const) {
+      const flags = filtered(await bytesOf(fs, out, t));
+      expect(flags.length, `compacted ${t}`).toBeGreaterThan(1);
+      expect(flags.every(Boolean), `compacted ${t}`).toBe(true);
+    }
+    expect(anyFilter(await bytesOf(fs, out, 'points'))).toBe(false);
+  });
+
+  test('a compaction whose inputs have no filters (files written before them) still writes them', async () => {
+    const fs = createMemoryFileSystem();
+    const r = lcg(9);
+    let id = 0;
+    const rows = Array.from({ length: 14 }, () => spanRow(id++, r));
+    const plain = encodeColumnsUnfiltered('spans', batchFromRows('spans', rows), { rowGroupRows: ROW_GROUP });
+    expect(anyFilter(plain)).toBe(false);
+    const entries = await writeParts(fs, [{ spans: rows }]);
+    await fs.writeBytes(`${OUT}/${entries[0]?.files.spans?.path ?? ''}`, plain);
+    const out = await compactPartitions(fs, OUT, entries, opts(1));
+    expect(filtered(await bytesOf(fs, out, 'spans')).every(Boolean)).toBe(true);
+    expect(decodeTable('spans', await bytesOf(fs, out, 'spans'))).toHaveLength(14);
   });
 });
