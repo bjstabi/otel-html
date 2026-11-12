@@ -68,6 +68,20 @@ describe('declared classes', () => {
     expect(SMALL_TABLE_ENTRIES.length).toBeGreaterThan(0);
     const declared = CATALOGUE.filter((e) => DECLARED[e.id]?.aboveThreshold !== undefined).map((e) => e.id);
     expect(declared.sort()).toEqual(SMALL_TABLE_ENTRIES.map((e) => e.id).sort());
+    // a renamed builder would drop an entry from the selection silently: pin the ids
+    expect(SMALL_TABLE_ENTRIES.map((e) => e.id).sort()).toEqual([
+      'patterns',
+      'trace.get',
+      'trace.has',
+      'trace.logs',
+      'trace.share',
+      'traces.list.all',
+      'traces.list.all.long',
+      'traces.list.attr.long',
+      'traces.list.long',
+      'traces.list.short',
+      'traces.list.statkey.long',
+    ]);
     for (const entry of SMALL_TABLE_ENTRIES)
       expect(DECLARED[entry.id]?.aboveThreshold?.perRowGroup, entry.id).toBe(2);
   });

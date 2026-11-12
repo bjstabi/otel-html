@@ -664,7 +664,8 @@ export function createDuckDbDataSource(opts: {
     }
     // the query filters on the ref's own logs file: only that one is read
     const own = manifest.partitions.find((p) => p.n === refParts(ref).n)?.files.logs?.path;
-    const pruned = { files: own === undefined ? [] : [own], all: false, total: 1 };
+    // `total` is the partitions the ref's file stands for: none when the ref names a partition without logs
+    const pruned = { files: own === undefined ? [] : [own], all: false, total: own === undefined ? 0 : 1 };
     const found = logEntries(await read(['logs'], pruned, query)).entries[0];
     if (found === undefined) throw noSuchLog(ref);
     return found.row;

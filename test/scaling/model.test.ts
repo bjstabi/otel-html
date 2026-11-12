@@ -150,6 +150,25 @@ describe('a page is fitted from its own measurements', () => {
     expect(cap).toBeCloseTo(3 + (4 + 11 + 0.125 * 484) + (4 + 1 + 0.5), 6);
   });
 
+  test('a page whose files leave the prepared set as the row groups grow gets a step, and the cross is predicted', () => {
+    // a partition under 3 groups reads its small files whole (1 + 0.5 G); from 3 groups a file is range-read (6 + 2 G)
+    const cost = (groups: number[]): number =>
+      2 + groups.reduce((n, g) => n + (g < 3 ? 1 + 0.5 * g : 6 + 2 * g), 0);
+    const groupsOf = (s: Shape): number[] => [
+      s.bigRowGroups ?? s.rowGroups,
+      ...Array.from({ length: s.outside + s.inside - 1 }, () => s.rowGroups),
+    ];
+    const shapes = pageShapes('dense');
+    const measured = shapes.map((shape) => ({ shape, serial: cost(groupsOf(shape)), parallel: 0, bytes: 0 }));
+    const cross = PAGE_CROSS('dense');
+    const page = fitPage(measured.filter((p) => p.shape !== cross));
+    expect(page.serial).toMatchObject({ a: 2, k: 3, s: 1, sd: 0.5, w: 6, wd: 2 });
+    // 3 partitions of 3 groups, 2 of 2, and one of 30 groups: past every measured partition
+    const parts = (...g: number[]): PartitionShape[] => g.map(inside);
+    expect(predictPage(page, parts(3, 3, 3)).serial).toBeCloseTo(cost([3, 3, 3]), 6);
+    expect(predictPage(page, parts(1, 2, 30)).serial).toBeCloseTo(cost([1, 2, 30]), 6);
+  });
+
   test('a page that is linear gets no G squared term, and a concave one cannot get a negative one', () => {
     const linear = fitPage(
       pageShapes('dense').map((shape) => ({

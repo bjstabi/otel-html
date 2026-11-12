@@ -123,6 +123,8 @@ export function defineMeasuredFile(part: Part, spacing: Shape['spacing']): void 
         for (const entry of entries) {
           const factor = DECLARED[entry.id]?.aboveThreshold;
           if (factor === undefined) continue;
+          // threshold 0 loads nothing whole, but the size class (`smallSerialOf`, the `small` list above) is the harness
+          // limit's: it counts the files that would be small
           const serial = await smallSerialOf(entry, shape, { threshold: 0 });
           const bound = REQUESTS_PER_OPEN * small.length + factor.perRowGroup * groups;
           expect(

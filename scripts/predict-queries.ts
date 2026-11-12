@@ -39,10 +39,12 @@ import {
  * sum of its entries. Each page is rendered whole in one cold counting engine on the generated shapes (dense and sparse
  * spacing), and its serial requests, parallel requests and bytes are fitted by non-negative least squares as
  * `a + P (p + pd G)` (P partitions of G row groups; the page's window spans the report, so the partitions are read alike).
+ * When files leave the prepared set as G grows (a file crosses the small-file limit and is range-read), the fit has a step:
+ * partitions under the crossing `k` groups cost `s + sd G`, the others the line (`fitPage`).
  * The prediction for a named shape is that fit. `--after <pr>` scales each partition term of the fit by the share of it
  * that the page's entries without a debt line for that PR carry: the shares come from the entries' own fits, per axis
  * (retention, window, density). A `files` line adds one parallel request per small file. The pages are measured with
- * small files on (under OTEL_HTML_SCALING_THRESHOLD, default 262,144) and off; `--small-files off` predicts from the off
+ * small files on (under OTEL_HTML_SCALING_THRESHOLD, default 524,288) and off; `--small-files off` predicts from the off
  * measurement (main before PR 3), and the live-anchored rows take their ratio against it.
  */
 
@@ -159,7 +161,7 @@ function loadPages(name: string): PageSet {
 }
 const pagesOn = loadPages('pages');
 const pagesOff = existsSync(join(dir, 'pages-off')) ? loadPages('pages-off') : null;
-// The page measurement ran with one threshold (OTEL_HTML_SCALING_THRESHOLD, default 262,144): the one asked for here must be it.
+// The page measurement ran with one threshold (OTEL_HTML_SCALING_THRESHOLD, default 524,288): the one asked for here must be it.
 if (pagesOn.threshold !== null && pagesOn.threshold !== threshold)
   fail(
     `the pages were measured with small files under ${pagesOn.threshold} bytes, not ${threshold}: run OTEL_HTML_SCALING_THRESHOLD=${threshold} mise run predict:queries -- --threshold ${threshold}`,
@@ -418,7 +420,7 @@ print(
   for (const [key, f] of pageFits()) {
     const m = f.serial;
     print(
-      `  page fit ${key}: serial ${m.a} + P (${m.w} + ${m.wd} G${m.q === undefined ? '' : ` + ${m.q} G^2`}); parallel ${f.parallel.a} + P (${f.parallel.w} + ${f.parallel.wd} G); bytes ${fmt(f.bytes.a)} + P (${fmt(f.bytes.w)} + ${fmt(f.bytes.wd)} G)`,
+      `  page fit ${key}: serial ${m.a} + P (${m.w} + ${m.wd} G${m.q === undefined ? '' : ` + ${m.q} G^2`}${m.k === undefined ? '' : `; under ${m.k} groups ${m.s} + ${m.sd} G`}); parallel ${f.parallel.a} + P (${f.parallel.w} + ${f.parallel.wd} G); bytes ${fmt(f.bytes.a)} + P (${fmt(f.bytes.w)} + ${fmt(f.bytes.wd)} G)`,
     );
   }
 }
