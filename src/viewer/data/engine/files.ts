@@ -83,15 +83,30 @@ export async function dropFiles(engine: Engine, paths: readonly string[]): Promi
   for (const path of paths) await engine.db.dropFile(path);
 }
 
-/** Replaces the URL registration of `path` by a buffer holding the whole file. */
-export async function swapToBuffer(engine: Engine, path: string, bytes: Uint8Array): Promise<void> {
-  await engine.db.dropFile(path);
-  await engine.db.registerFileBuffer(path, bytes);
+/**
+ * Replaces the URL registration of `path` by a buffer holding the whole file. No statement runs between the drop and
+ * the registration (the engine's gate holds them back). When the buffer cannot be registered, the path is registered
+ * by `url` again, so range reads still answer, and the error is rethrown.
+ */
+export function swapToBuffer(engine: Engine, path: string, bytes: Uint8Array, url: string): Promise<void> {
+  const swap = async (): Promise<void> => {
+    await engine.db.dropFile(path);
+    try {
+      await engine.db.registerFileBuffer(path, bytes);
+    } catch (error) {
+      await engine.db.registerFileURL(path, url, DuckDBDataProtocol.HTTP, false);
+      throw error;
+    }
+  };
+  return engine.gate ? engine.gate.hold(swap) : swap();
 }
 
 /** (Re)creates the views over the manifest's files: `viewStatements(manifest, (p) => p)`. */
 export async function createViews(engine: Engine, manifest: ManifestV4): Promise<void> {
-  for (const statement of viewStatements(manifest, (p) => p)) await engine.connection.query(statement);
+  for (const statement of viewStatements(manifest, (p) => p)) {
+    await engine.gate?.wait();
+    await engine.connection.query(statement);
+  }
 }
 
 /** Registers every file the manifest lists, then creates the views. */

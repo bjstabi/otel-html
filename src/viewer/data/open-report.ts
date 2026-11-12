@@ -66,7 +66,7 @@ const realParts: OpenParts = {
   registerPartitions,
   createQueryEngine: (engine, logger, prepare) =>
     mosaicQueryEngine(
-      createCoordinator(engineConnector(engine.connection), logger),
+      createCoordinator(engineConnector(engine.connection, engine.gate), logger),
       engine,
       true,
       undefined,
@@ -167,7 +167,7 @@ export async function openReportRefreshable(
                   if (!response.ok) throw new Error(`${path}: HTTP ${response.status}`);
                   return new Uint8Array(await response.arrayBuffer());
                 },
-                swap: (path, bytes) => swapToBuffer(engine, path, bytes),
+                swap: (path, bytes) => swapToBuffer(engine, path, bytes, new URL(path, deps.baseUrl).href),
               })
             : undefined;
         const queryEngine = parts.createQueryEngine(

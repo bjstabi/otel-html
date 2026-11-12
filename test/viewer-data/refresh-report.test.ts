@@ -333,3 +333,50 @@ describe('isGoneFile', () => {
     expect(isGoneFile(undefined)).toBe(false);
   });
 });
+
+describe('refreshReport and the small-file loader', () => {
+  const withSmall = (f: ReturnType<typeof fakes>, previous: ManifestV4, next: ManifestV4) => {
+    const forgotten: string[] = [];
+    return {
+      forgotten,
+      done: refreshReport(
+        f.engine,
+        f.queryEngine,
+        previous,
+        {
+          loader: loaderOf(next),
+          baseUrl: BASE,
+          logger,
+          smallFiles: { forget: (paths) => void forgotten.push(...paths) },
+        },
+        () => 1,
+      ),
+    };
+  };
+
+  test('forgets the paths the refresh dropped', async () => {
+    const f = fakes('site');
+    const r = withSmall(f, manifestOf([0, 1]), manifestOf([2]));
+    await r.done;
+    expect(r.forgotten.sort()).toEqual(
+      [
+        partitionFilePath(0, 'spans'),
+        partitionFilePath(0, 'logs'),
+        partitionFilePath(1, 'spans'),
+        partitionFilePath(1, 'logs'),
+      ].sort(),
+    );
+  });
+
+  test('a kept path whose size changed is forgotten and registered by URL again; one that did not is left alone', async () => {
+    const f = fakes('site');
+    const next = { ...manifestOf([0, 1]), updatedAt: '2026-11-06T00:00:09.000Z' };
+    const grown = next.partitions[0];
+    if (grown?.files.spans) grown.files.spans = { ...grown.files.spans, bytes: 99 };
+    const r = withSmall(f, manifestOf([0, 1]), next);
+    await r.done;
+    expect(r.forgotten).toEqual([partitionFilePath(0, 'spans')]);
+    expect(f.calls.drop).toEqual([partitionFilePath(0, 'spans')]);
+    expect(f.calls.url.map(([name]) => name)).toEqual([partitionFilePath(0, 'spans')]);
+  });
+});

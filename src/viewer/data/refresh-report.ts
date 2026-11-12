@@ -50,8 +50,20 @@ export async function refreshReport(
     return { dataSource: null, manifest: previous };
   }
   const added = wanted.filter((f) => !had.has(f.path));
+  // A kept path whose size changed was rewritten in place: a buffer swapped in earlier is stale, so it is registered by URL again.
+  const sizeOf = (m: ManifestV4): Map<string, number> =>
+    new Map(
+      m.partitions.flatMap((p) => Object.values(p.files).map((file) => [file.path, file.bytes] as const)),
+    );
+  const oldSizes = sizeOf(previous);
+  const newSizes = sizeOf(manifest);
+  const rewritten = wanted.filter((f) => had.has(f.path) && oldSizes.get(f.path) !== newSizes.get(f.path));
   try {
-    await registerFiles(engine, added, deps);
+    for (const { path } of rewritten) {
+      deps.smallFiles?.forget([path]);
+      await dropFiles(engine, [path]);
+    }
+    await registerFiles(engine, [...rewritten, ...added], deps);
     await createViews(engine, manifest);
   } catch (error) {
     await rollBack(engine, previous, added, deps.logger, deps.smallFiles);

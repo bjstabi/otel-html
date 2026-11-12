@@ -388,3 +388,75 @@ describe('openReport', () => {
     expect(load?.status.code).toBe(SpanStatusCode.UNSET);
   });
 });
+
+describe('the small-file loader of openReportRefreshable', () => {
+  const siteManifest = (spansBytes: number): ManifestV4 => {
+    const m = manifest4();
+    return {
+      ...m,
+      partitions: [{ n: 0, source: 'job:0', files: { spans: file(0, 'spans', spansBytes) } }],
+      engine: { ...m.engine, format: 'site' },
+    } as ManifestV4;
+  };
+
+  function opened(format: 'local' | 'site', manifest: ManifestV4) {
+    const swapped: string[] = [];
+    const engine = {
+      format,
+      db: {
+        dropFile: async () => undefined,
+        registerFileBuffer: async (name: string) => void swapped.push(name),
+        registerFileURL: async () => undefined,
+      },
+      connection: { query: async () => undefined },
+      close: async () => undefined,
+    } as unknown as Engine;
+    let prepare: ((paths: readonly string[]) => Promise<void>) | undefined;
+    const { deps } = setup({
+      startEngine: vi.fn(() => Promise.resolve(engine)),
+      registerPartitions: vi.fn(() => Promise.resolve()),
+      createQueryEngine: vi.fn((_e, _l, p) => {
+        prepare = p;
+        return {} as QueryEngine;
+      }),
+    });
+    return {
+      deps: { ...deps, baseUrl: 'https://s.example/r/' } as OpenDeps,
+      swapped,
+      prepare: () => prepare,
+      manifest,
+    };
+  }
+
+  test('a site report builds the loader with the manifest sizes: a small file is fetched whole, a big one is not', async () => {
+    const fetched: string[] = [];
+    vi.stubGlobal('fetch', async (url: string) => {
+      fetched.push(url);
+      return { ok: true, status: 200, arrayBuffer: async () => new ArrayBuffer(1) };
+    });
+    try {
+      const o = opened('site', siteManifest(100));
+      await openReportRefreshable(o.manifest, o.deps, () => undefined);
+      await o.prepare()?.([partitionFilePath(0, 'spans'), 'unlisted']);
+      expect(fetched).toEqual([new URL(partitionFilePath(0, 'spans'), 'https://s.example/r/').href]);
+      expect(o.swapped).toEqual([partitionFilePath(0, 'spans')]);
+
+      fetched.length = 0;
+      const big = opened('site', siteManifest(300_000));
+      await openReportRefreshable(big.manifest, big.deps, () => undefined);
+      await big.prepare()?.([partitionFilePath(0, 'spans')]);
+      expect(fetched).toEqual([]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test('a local report passes no prepare, and the mosaic engine then prepares nothing', async () => {
+    const o = opened('local', manifest4());
+    await openReportRefreshable(o.manifest, o.deps, () => undefined);
+    expect(o.prepare()).toBeUndefined();
+    const { mosaicQueryEngine } = await import('../../src/viewer/data/mosaic.js');
+    const engine = mosaicQueryEngine({} as never, { registerText() {}, close() {} });
+    await expect(engine.prepare(['x'])).resolves.toBeUndefined();
+  });
+});
