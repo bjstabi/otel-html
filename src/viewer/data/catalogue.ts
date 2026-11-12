@@ -856,12 +856,13 @@ const owed = (
 
 /**
  * `scan`s that §3.4 does not allow, each owed to an issue and a PR of the plan; the list only shrinks. Grouped by
- * cause: #271 (resourceValues under a window, a spans file wholly before the window is opened, long-window aggregates
- * scan raw files, a read by trace id has no time bound; PR 4 and PR 6), #281 (small files read serially; PR 3, done),
- * #282 (resourceValues without a window, the unconditioned trace list; PR 4), and #283 (compaction), not yet measured.
+ * cause: #271 (a spans file wholly before the window is opened, long-window aggregates scan raw files; PR 6), #281
+ * (small files read serially; PR 3, done), #282 (resourceValues without a window reads every file; the unconditioned
+ * trace list was paid by PR 4; the rest goes with the rollup router in PR 6), #283 (compaction), not yet measured, and
+ * #291 (opening a trace reads the spans files of its partitions whole; no PR of the plan fixes it, so PR 9 carries it).
  */
 export const KNOWN_DEBT: readonly DebtLine[] = [
-  ...owed(271, 4, 'density', 'matched', true, ['trace.get', 'trace.share']),
+  ...owed(291, 9, 'density', 'matched', true, ['trace.get', 'trace.share']),
   ...owed(271, 6, 'density', 'fixed', true, [
     'spans.total.long',
     'spans.buckets.long',
@@ -933,7 +934,7 @@ export const KNOWN_DEBT: readonly DebtLine[] = [
     'metrics.runQuery',
     'metrics.runQuery.failed',
   ]),
-  ...owed(282, 4, 'density', 'fixed', true, ['resourceValues.all']),
-  ...owed(282, 4, 'retention', 'files', true, ['resourceValues.all']),
+  ...owed(282, 6, 'density', 'fixed', true, ['resourceValues.all']),
+  ...owed(282, 6, 'retention', 'files', true, ['resourceValues.all']),
   ...owed(283, 7, 'retention', 'fixed', false, ['spans.total.short', 'spans.total.long']),
 ];

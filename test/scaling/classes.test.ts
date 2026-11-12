@@ -53,8 +53,9 @@ describe('declared classes', () => {
       const declared = DECLARED[line.id];
       expect(declared, line.id).toBeDefined();
       expect(line.issue, line.id).toBeGreaterThan(0);
-      expect(line.pr, line.id).toBeGreaterThanOrEqual(3);
-      expect(line.pr, line.id).toBeLessThanOrEqual(8);
+      // no line is owed to a PR that has merged or is this one (PR 4); PR 9 carries what no earlier PR fixes
+      expect(line.pr, line.id).toBeGreaterThanOrEqual(5);
+      expect(line.pr, line.id).toBeLessThanOrEqual(9);
       if (line.measured) {
         expect(declared?.class[line.axis], `${line.id} on ${line.axis}`).toBe('scan');
         expect(declared?.allowed?.[line.axis], `${line.id} on ${line.axis}`).toBeUndefined();

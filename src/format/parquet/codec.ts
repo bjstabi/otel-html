@@ -376,7 +376,7 @@ export function encodeColumns(table: Table, batch: ColumnBatch, opts: EncodeOpti
   return addBloomFilters(file, collector.finish());
 }
 
-/** `encodeColumns` without the bloom filters: what `encodeBatches` streams, and what a file written before them is. */
+/** `encodeColumns` without the bloom filters, for tests: the bytes of a file written before they existed (`encodeBatches` does not call it). */
 export function encodeColumnsUnfiltered(table: Table, batch: ColumnBatch, opts: EncodeOptions): Uint8Array {
   return encodeSorted(table, batch, sortPermutation(table, batch), opts);
 }

@@ -1666,6 +1666,9 @@ Under a long window the trace list without a condition reads `traces` files only
 `traces` file is still read: whole traces). `percentileOf` on a report whose range is long reads the rollup over the
 whole report; on a short one it is unchanged. `resourceValues` under a long window takes its span and log parts from
 rollups when `resource:<key>` is a dimension (per partition, like every routed request); the points part is unchanged.
+The call with `window: null` (`resourceValues.all`, owed to this PR on #282 since PR 4 kept it) is the whole report: it
+takes the same route, and the task deletes the `resourceValues.all` debt lines or, if the route cannot serve it, retargets
+them with a reason.
 
 - [ ] **Step 1: Write the failing tests**
 
