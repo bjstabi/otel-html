@@ -145,7 +145,13 @@ function loadPages(name: string): PageSet {
         const raw = readJson(join(folder, f));
         const p = PointSchema.parse(raw);
         const t = (raw as { threshold?: unknown }).threshold;
-        if (typeof t === 'number') set.threshold = t;
+        if (typeof t === 'number') {
+          if (set.threshold !== null && set.threshold !== t)
+            fail(
+              `${name}: measurements with different small-file thresholds (${set.threshold} and ${t}): rerun them all`,
+            );
+          set.threshold = t;
+        }
         return { shape: p.shape, serial: p.serial, parallel: p.parallel, bytes: p.bytes };
       });
       set.points.set(pageKey(page, spacing === 'sparse'), points);
