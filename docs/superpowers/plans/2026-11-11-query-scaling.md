@@ -25,7 +25,7 @@ in order; a PR starts from `main` after the previous one merged.
 
 | #   | branch                       | PR title                                                               | closes | status |
 | --- | ---------------------------- | ---------------------------------------------------------------------- | ------ | ------ |
-| 1   | `test/query-catalogue`       | `test(query): query catalogue, scaling harness and baseline`           |        |        |
+| 1   | `test/query-catalogue`       | `test(query): query catalogue, scaling harness and baseline`           |        | merged #285 |
 | 2   | `fix/test-span-times`        | `fix(test): test spans keep real times under a faked clock`            |        |        |
 | 3   | `perf/small-site-files`      | `perf(viewer): small site files load whole and in parallel`            |        |        |
 | 4   | `perf/pruning-statistics`    | `perf(query): statistics survive merges and reads follow the window`   | #272   |        |
