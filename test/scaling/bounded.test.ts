@@ -1,6 +1,7 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { threadId } from 'node:worker_threads';
 import { afterEach, describe, expect, test } from 'vitest';
 import {
   bounded,
@@ -33,9 +34,26 @@ describe('the bounds of the scaling workers', () => {
     const lock = join(await tmp(), 'x.lock');
     expect(await takeLock(lock)).toBe(true);
     // a pid that is not a process: the largest the kernel hands out is below 2^22
-    await writeFile(join(lock, 'pid'), '2147483646');
+    await writeFile(join(lock, 'holder'), '2147483646:0');
     await expect(waitTurn(performance.now(), 'metrics.query.short on 2-2-2-dense', lock)).rejects.toThrow(
       /metrics\.query\.short on 2-2-2-dense: the worker holding the lock \(pid 2147483646\) died/,
+    );
+  });
+
+  test('the lock records the pid and the thread of its holder', async () => {
+    const lock = join(await tmp(), 'x.lock');
+    expect(await takeLock(lock)).toBe(true);
+    expect(await readFile(join(lock, 'holder'), 'utf8')).toBe(`${process.pid}:${threadId}`);
+  });
+
+  test('a holder thread of a live process cannot be probed: the waiter waits for the bound and names it', async () => {
+    const lock = join(await tmp(), 'x.lock');
+    expect(await takeLock(lock)).toBe(true);
+    // the same process, another thread (the threads pool): the pid is alive whether or not that thread is
+    await writeFile(join(lock, 'holder'), `${process.pid}:${threadId + 7}`);
+    await expect(waitTurn(performance.now(), 'x', lock)).resolves.toBeUndefined();
+    await expect(waitTurn(performance.now() - 500, 'x', lock, 100)).rejects.toThrow(
+      new RegExp(`waited 0.1 s.*thread ${threadId + 7} of pid ${process.pid}`),
     );
   });
 
@@ -104,5 +122,22 @@ describe('the bounds of the scaling workers', () => {
     ).rejects.toThrow('boom');
     const value = await shareOnce({ lock, what: 'x', done: async () => undefined, make: async () => 7 });
     expect(value).toBe(7);
+  });
+});
+
+describe('the waiter of shareOnce', () => {
+  test('is given the bound the caller names', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'otel-bounded-'));
+    try {
+      const lock = join(dir, 'x.lock');
+      // another thread of this process holds the lock and never lets go
+      await mkdir(lock);
+      await writeFile(join(lock, 'holder'), `${process.pid}:${threadId + 7}`);
+      await expect(
+        shareOnce({ lock, what: 'x', waitMs: 150, done: async () => undefined, make: async () => 1 }),
+      ).rejects.toThrow(/x: waited 0.15 s/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { z } from 'zod';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { type Axis, CATALOGUE, type CatalogueEntry, DECLARED } from '../../src/viewer/data/catalogue.js';
 import { createDuckDbDataSource } from '../../src/viewer/data/duckdb-source.js';
@@ -8,7 +9,14 @@ import { bounded, shareOnce } from './bounded.js';
 import { classify, type Step } from './classify.js';
 import { type Cost, costOf } from './cost.js';
 import { type CountingEngine, openCountingEngine, type ReadEvent } from './counting-engine.js';
-import { buildScalingReport, PREBUILT_ENV, type ScalingReport, type Shape, stepsOf } from './generator.js';
+import {
+  buildScalingReport,
+  PREBUILT_ENV,
+  type ScalingReport,
+  type Shape,
+  shapeKey,
+  stepsOf,
+} from './generator.js';
 
 export const AXES: readonly Axis[] = ['retention', 'density', 'window'];
 
@@ -27,15 +35,14 @@ interface Live {
   turn: Promise<unknown>;
 }
 
-interface Measured {
-  cost: Cost;
+const MeasuredSchema = z.object({
+  cost: z.object({ serial: z.number(), parallel: z.number(), bytes: z.number() }),
   /** The serial requests of the files under `HARNESS_SMALL_FILE_BYTES`, and of the others. */
-  small: number;
-  large: number;
-}
+  small: z.number(),
+  large: z.number(),
+});
+type Measured = z.infer<typeof MeasuredSchema>;
 
-const shapeKey = (s: Shape): string =>
-  `${s.outside}/${s.inside}/${s.rowGroups}/${s.spacing}/${s.rowGroupRows ?? ''}/${s.bigRowGroups ?? ''}`;
 const lives = new Map<string, Promise<Live>>();
 const measured = new Map<string, Promise<Measured>>();
 const coldMs: number[] = [];
@@ -98,12 +105,13 @@ async function measure(entry: CatalogueEntry, shape: Shape): Promise<Measured> {
  * the `.lock` folder measures and writes the result; the others wait for it.
  */
 async function sharedMeasure(root: string, entry: CatalogueEntry, shape: Shape): Promise<Measured> {
-  const file = join(root, `measured-${entry.id}-${shapeKey(shape).replaceAll('/', '-')}.json`);
+  const file = join(root, `measured-${entry.id}-${shapeKey(shape)}.json`);
   const what = `${entry.id} on ${shapeKey(shape)}`;
   return await shareOnce({
     lock: `${file}.lock`,
     what,
-    done: async () => (existsSync(file) ? (JSON.parse(await readFile(file, 'utf8')) as Measured) : undefined),
+    done: async () =>
+      existsSync(file) ? MeasuredSchema.parse(JSON.parse(await readFile(file, 'utf8'))) : undefined,
     make: async () => {
       const m = await bounded(measure(entry, shape), `measuring ${what}`);
       await writeFile(`${file}.tmp`, JSON.stringify(m));

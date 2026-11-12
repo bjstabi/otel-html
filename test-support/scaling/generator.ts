@@ -1,12 +1,13 @@
 import { existsSync } from 'node:fs';
 import { readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { z } from 'zod';
 import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
 import { isV4, type ManifestV4, parseAnyManifest } from '../../src/format/manifest.js';
 import { TABLES } from '../../src/format/parquet/columns.js';
 import { MANIFEST_KEY } from '../../src/format/paths.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
-import { type OtlpRequest, parseOtlpObject } from '../../src/model/otlp-json.js';
+import { parseOtlpObject } from '../../src/model/otlp-json.js';
 import type { Axis, ScalingIds } from '../../src/viewer/data/catalogue.js';
 import { logRef } from '../../src/viewer/data/log-query.js';
 import type { TimeWindow } from '../../src/viewer/data/time-window.js';
@@ -292,7 +293,7 @@ async function build(shape: Shape): Promise<ScalingReport> {
       spanCount(shape, n) > CHUNK_SPANS ? chunkedPartitionJson(shape, n) : partitionJson(shape, n);
     let i = 0;
     for (const json of jsons)
-      for (const request of parseOtlpObject(json, `scaling:${n}`) as OtlpRequest[])
+      for (const request of parseOtlpObject(json, `scaling:${n}`))
         await session.add(request, `scaling:${n}:${i++}`);
     await session.flush();
   }
@@ -345,35 +346,56 @@ async function build(shape: Shape): Promise<ScalingReport> {
   };
 }
 
-const shapeKey = (shape: Shape): string =>
+/** The one key of a shape: reports and measurements of one key are one thing (`{}` and `{rowGroupRows: 8192}` are one). */
+export const shapeKey = (shape: Shape): string =>
   `${shape.outside}-${shape.inside}-${shape.rowGroups}-${shape.spacing}-${rowsPerGroup(shape)}-${shape.bigRowGroups ?? 0}`;
 
 /** The folder of the reports `prebuildScalingReports` made, set by the scaling global setup for the worker processes. */
 export const PREBUILT_ENV = 'OTEL_HTML_SCALING_REPORTS';
 
-interface Meta {
-  epoch: string;
-  window: TimeWindow;
-  ids: ScalingIds;
-}
+const MetaSchema = z.object({
+  epoch: z.string(),
+  window: z.object({ start: z.number(), end: z.number() }),
+  ids: z.object({
+    traceId: z.string(),
+    spanId: z.string(),
+    logRef: z.string(),
+    service: z.string(),
+    resource: z.string(),
+    runId: z.string(),
+    route: z.string(),
+    text: z.string(),
+    metric: z.string(),
+  }),
+});
+type Meta = z.infer<typeof MetaSchema>;
 
 /**
  * Makes `<root>/<shape key>/` (the report folder and a `meta.json`) if no worker has: the first to create the `.lock`
  * folder builds it and moves it into place with one rename, the others wait for it. The reports are deterministic, so
  * the workers of one run share them instead of each building its own.
  */
+const buildBound = (shape: Shape): number =>
+  shape.rowGroupRows === undefined ? STEP_TIMEOUT_MS : 10 * STEP_TIMEOUT_MS;
+
 async function ensurePrebuilt(root: string, shape: Shape): Promise<string> {
   const target = join(root, shapeKey(shape));
   return await shareOnce({
     lock: `${target}.lock`,
     what: `the report ${shapeKey(shape)}`,
+    // the holder may build for its whole bound: its waiters outlast it
+    waitMs: 2 * buildBound(shape),
     done: async () => (existsSync(join(target, 'meta.json')) ? target : undefined),
     make: async () => {
       // a report of production-size row groups holds up to a million spans: building it takes minutes, not a step's bound
-      const r = await bounded(
-        build(shape),
-        `building the report ${shapeKey(shape)}`,
-        shape.rowGroupRows === undefined ? STEP_TIMEOUT_MS : 10 * STEP_TIMEOUT_MS,
+      const ms = buildBound(shape);
+      const building = build(shape);
+      const r = await bounded(building, `building the report ${shapeKey(shape)}`, ms).catch(
+        async (e: unknown) => {
+          // the abandoned build goes on: when it ends it closes its report, which removes its temp folder
+          building.then((late) => late.close()).catch(() => {});
+          throw e;
+        },
       );
       const meta: Meta = { epoch: String(r.epoch), window: r.window, ids: r.ids };
       await writeFile(join(r.dir, 'meta.json'), JSON.stringify(meta));
@@ -384,7 +406,7 @@ async function ensurePrebuilt(root: string, shape: Shape): Promise<string> {
 }
 
 async function openPrebuilt(dir: string): Promise<ScalingReport> {
-  const meta = JSON.parse(await readFile(join(dir, 'meta.json'), 'utf8')) as Meta;
+  const meta = MetaSchema.parse(JSON.parse(await readFile(join(dir, 'meta.json'), 'utf8')));
   const text = await readFile(join(dir, 'data', 'manifest.js'), 'utf8');
   const manifest = parseAnyManifest(reviveDataJson(unwrapDataFile(text, MANIFEST_KEY)));
   if (!isV4(manifest)) throw new OtelHtmlError('usage', { message: 'not a v4 manifest' });
@@ -406,7 +428,7 @@ const cache = new Map<string, Promise<ScalingReport>>();
  * scaling global setup (`OTEL_HTML_SCALING_REPORTS`) the report is taken from that folder, built there by the first worker that needs it.
  */
 export function buildScalingReport(shape: Shape): Promise<ScalingReport> {
-  const key = `${shape.outside}/${shape.inside}/${shape.rowGroups}/${shape.spacing}/${rowsPerGroup(shape)}/${shape.bigRowGroups ?? 0}`;
+  const key = shapeKey(shape);
   const hit = cache.get(key);
   if (hit !== undefined) return hit;
   const prebuilt = process.env[PREBUILT_ENV];
