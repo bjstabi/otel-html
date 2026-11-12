@@ -21,7 +21,7 @@ import {
   TracerProvider,
 } from '@opentelemetry/sdk-trace';
 import { hasEndpoint } from './enabled.ts';
-import { patchGlobalTracersToRealClock, withRealClock } from './real-clock.ts';
+import { globalProvider, patchGlobalTracersToRealClock, withRealClock } from './real-clock.ts';
 
 /**
  * The test-side OpenTelemetry SDK, shared by vitest's workers and Playwright's. `NodeSDK` registers the global
@@ -185,8 +185,9 @@ export function startTestSdk(
     logRecordProcessors: [],
     instrumentations: [],
   });
+  const before = globalProvider();
   sdk.start();
-  patchGlobalTracersToRealClock();
+  patchGlobalTracersToRealClock(before);
   return {
     tracer: withRealClock(trace.getTracer(TRACER_NAME)),
     parentFrom: (e) => traceparentContext({ extract: (c, ...r) => propagation.extract(c, ...r) }, e),

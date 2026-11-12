@@ -1,5 +1,11 @@
-import type { ProxyTracerProvider, Span, TimeInput, Tracer, TracerProvider } from '@opentelemetry/api';
-import { trace } from '@opentelemetry/api';
+import {
+  ProxyTracerProvider,
+  type Span,
+  type TimeInput,
+  type Tracer,
+  type TracerProvider,
+  trace,
+} from '@opentelemetry/api';
 
 /**
  * A clock captured when this module loads, before any test can call `vi.useFakeTimers` or `vi.setSystemTime`. The SDK's
@@ -27,18 +33,40 @@ export function withRealClock(tracer: Tracer): Tracer {
     const span: Span = startSpan(name, { ...options, startTime: options?.startTime ?? realNowMs() }, context);
     const end = span.end.bind(span);
     span.end = (endTime?: TimeInput) => end(endTime ?? realNowMs());
+    // Once a start time is given the SDK stamps an untimed event from Date.now(), which a test may have faked.
+    const addEvent = span.addEvent.bind(span);
+    span.addEvent = (eventName, attributesOrStartTime, startTime) => {
+      const timed = isTimeInput(attributesOrStartTime);
+      return addEvent(
+        eventName,
+        attributesOrStartTime,
+        timed || startTime !== undefined ? startTime : realNowMs(),
+      );
+    };
     return span;
   };
   return tracer;
 }
 
+function isTimeInput(value: unknown): value is TimeInput {
+  return typeof value === 'number' || value instanceof Date || Array.isArray(value);
+}
+
+/** The provider behind the global API's proxy, or undefined while none is registered (or the proxy is not the API's). */
+export function globalProvider(): TracerProvider | undefined {
+  const proxy = trace.getTracerProvider();
+  return proxy instanceof ProxyTracerProvider ? proxy.getDelegate() : undefined;
+}
+
 /**
  * Wraps the global provider's `getTracer`, so tracers made from now on (vitest's own among them) use the real clock.
- * Call it after the SDK registered its provider. A tracer made earlier is patched when `withRealClock` sees it.
+ * `before` is what `globalProvider()` returned before the SDK started: when it is still the one in place (nothing
+ * registered, or a registration refused) there is nothing new to patch. A tracer made earlier is patched when
+ * `withRealClock` sees it.
  */
-export function patchGlobalTracersToRealClock(): void {
-  const delegate: TracerProvider = (trace.getTracerProvider() as ProxyTracerProvider).getDelegate();
-  if (delegate.constructor.name === 'NoopTracerProvider' || patched.has(delegate)) return;
+export function patchGlobalTracersToRealClock(before: TracerProvider | undefined): void {
+  const delegate = globalProvider();
+  if (delegate === undefined || delegate === before || patched.has(delegate)) return;
   patched.add(delegate);
   const getTracer = delegate.getTracer.bind(delegate);
   delegate.getTracer = (...args) => withRealClock(getTracer(...args));
