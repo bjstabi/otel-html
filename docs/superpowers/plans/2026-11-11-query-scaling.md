@@ -1194,6 +1194,11 @@ test('logs: total with rows runs no extra statement', async () => {});
 - [ ] **Step 2:** run → FAIL. **Step 3:** implement. **Step 4:** → PASS; delete the two debt lines.
 - [ ] **Step 5:** `mise run verify`; prediction against the "after 4" row. **Commit and open PR 4** (`Fixes #272`).
 
+Done 2026-11-12, with two changes to the interfaces above: `allTraceCountQuery` was not built (no caller asks an
+unfiltered traces-mode total alone; the trace list's total comes from its rows statement), and `allTraceRowsQuery`
+takes `(f: Pick<SqlFilter, 'epoch'>, sort, limit)`, since it reads `traces` only. In logs traces mode `matched` now
+comes from the `total` need, whose count replaces the old inline statement one for one.
+
 ## PR 5: format 5
 
 All five tasks are one PR: a writer that emits format 5 and a reader that cannot open it never share a commit on
