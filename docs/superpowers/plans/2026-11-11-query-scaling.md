@@ -124,6 +124,7 @@ change in any PR (a need for one is a stop).
 - **PR 3** — `src/viewer/data/query-engine.ts`, `src/viewer/data/mosaic.ts`, `src/viewer/data/duckdb-source.ts`,
   `src/viewer/data/duckdb-metrics.ts`, `src/viewer/data/open-report.ts`, `src/viewer/data/refresh-report.ts`, `src/viewer/data/query-common.ts`,
   `src/viewer/data/engine/files.ts`, `src/viewer/data/engine/start.ts`, `src/viewer/data/engine/small-files.ts` (new),
+  `src/viewer/data/engine/file-gate.ts` (new: a swap is atomic against statements, Task 8's review),
   `src/viewer/data/catalogue.ts`, `src/host/engine.ts` (the no-op `prepare`). No build file.
 - **PR 4** — `src/format/parquet/stats.ts`, `src/cli/ci/run-report.ts`, `src/writer/partition-session.ts`,
   `src/writer/partition-checkpoint.ts`, `src/writer/compaction.ts`, `src/writer/merge.ts`, `src/query/sql/spans.ts`,
