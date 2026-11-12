@@ -1,17 +1,19 @@
 import { describe, expect, test } from 'vitest';
-import { REQUESTS_PER_OPEN, splitOpens } from '../../test-support/scaling/cost.js';
-import type { ReadEvent } from '../../test-support/scaling/counting-engine.js';
 import { BASE, CROSS, type Shape, stepsOf } from '../../test-support/scaling/generator.js';
 import {
   countCalls,
   type EntryFit,
   fitEntry,
   fitModel,
+  fitPage,
   improvedFit,
   type Model,
+  type PageEntry,
   type PartitionShape,
   predict,
   predictPage,
+  scaledPage,
+  splitWindow,
 } from '../../test-support/scaling/model.js';
 
 const out = (rowGroups: number): PartitionShape => ({ rowGroups, inWindow: false, smallFiles: 0 });
@@ -88,54 +90,58 @@ describe('fitModel is non-negative', () => {
   });
 });
 
-const point = (shape: Shape, serial: number, spans: number) => ({
+const point = (shape: Shape, model: Model) => ({
   shape,
-  serial,
+  serial: serialOf(model, shape),
   parallel: 0,
   bytes: 0,
-  opens: { spans: { count: spans, footer: spans } },
 });
 
-/** An entry that opens `perPartition` spans files per partition and reads `serial(shape)` data requests. */
-const entry = (perPartition: number, data: Model, windowless = false): EntryFit =>
+/** An entry whose cost on every shape follows `model`. */
+const entry = (model: Model, windowless = false): EntryFit =>
   fitEntry(
-    SHAPES.map((shape) => point(shape, serialOf(data, shape), perPartition * (shape.outside + shape.inside))),
+    SHAPES.map((shape) => point(shape, model)),
     windowless,
   );
 
-const four = (rowGroups: number): PartitionShape[] => [
-  { rowGroups, inWindow: false, smallFiles: 0 },
-  { rowGroups, inWindow: false, smallFiles: 0 },
-  { rowGroups, inWindow: true, smallFiles: 0 },
-  { rowGroups, inWindow: true, smallFiles: 0 },
-];
+describe('a page is fitted from its own measurements', () => {
+  test('fitPage recovers a known non-negative model from page points', () => {
+    // a page reads every partition alike (its window spans the report): a + P (p + pd G)
+    const known = { a: 6, r: 1.5, rd: 0.25, w: 1.5, wd: 0.25 };
+    const page = fitPage(
+      SHAPES.map((shape) => ({
+        shape,
+        serial: serialOf(known, shape),
+        parallel: 2 * serialOf(known, shape),
+        bytes: 1000 + shape.outside + shape.inside,
+      })),
+    );
+    expect(page.serial).toEqual(known);
+    expect(page.parallel).toEqual({ a: 12, r: 3, rd: 0.5, w: 3, wd: 0.5 });
+    expect(page.bytes).toEqual({ a: 1000, r: 1, rd: 0, w: 1, wd: 0 });
+  });
+
+  test('a page fit is the same without the cross: three terms are identified by the axes alone', () => {
+    const known = { a: 4, r: 2, rd: 1, w: 2, wd: 1 };
+    const axes = SHAPES.filter((s) => s !== CROSS);
+    const page = fitPage(
+      axes.map((shape) => ({ shape, serial: serialOf(known, shape), parallel: 0, bytes: 0 })),
+    );
+    expect(page.serial).toEqual(known);
+  });
+});
 
 describe('predictPage', () => {
-  const data = { a: 1, r: 2, rd: 0, w: 2, wd: 0 };
-
-  test('a file two entries open is opened once', () => {
-    const one = entry(1, data, true);
-    const alone = predictPage([{ fit: one, times: 1, filesAxes: [] }], four(2));
-    const both = predictPage(
-      [
-        { fit: one, times: 1, filesAxes: [] },
-        { fit: entry(1, data, true), times: 1, filesAxes: [] },
-      ],
-      four(2),
-    );
-    // the second entry adds its data part (1 + 4 x 2 = 9) and no open: 4 files x (open + 1 footer read)
-    expect(alone.serial).toBe(9 + 4 * (REQUESTS_PER_OPEN + 1));
-    expect(both.serial).toBe(alone.serial + 9);
+  test('is the fitted models summed over the partitions of the shape', () => {
+    const page = fitPage(SHAPES.map((shape) => point(shape, { a: 3, r: 2, rd: 1, w: 2, wd: 1 })));
+    const cost = predictPage(page, [out(2), out(2), inside(2), inside(2)]);
+    expect(cost.serial).toBe(3 + 4 * (2 + 1 * 2));
+    expect(cost.parallel).toBe(0);
   });
+});
 
-  test('an entry asked for 3 distinct ids costs 3 data parts and opens its files once', () => {
-    const byId = entry(1, data, true);
-    const once = predictPage([{ fit: byId, times: 1, filesAxes: [] }], four(2));
-    const thrice = predictPage([{ fit: byId, times: 3, filesAxes: [] }], four(2));
-    expect(thrice.serial - once.serial).toBe(2 * 9);
-  });
-
-  test('countCalls counts a by-id call once per distinct id and a memoised call once', () => {
+describe('countCalls', () => {
+  test('counts a by-id call once per distinct id and a memoised call once', () => {
     const call = (method: string, idKey: string | null, id: string) => ({
       method,
       idKey,
@@ -158,15 +164,64 @@ describe('predictPage', () => {
   });
 });
 
+describe('--after scales a page by its entries shares', () => {
+  const page = { a: 5, r: 4, rd: 0, w: 2, wd: 3 };
+  const models = (m: Model) => ({ serial: m, parallel: { ...m, a: 0, r: 0, rd: 0, w: 0, wd: 0 }, bytes: m });
+  const e = (m: Model, reached: Parameters<typeof improvedFit>[1], times = 1): PageEntry => {
+    const before = entry(m);
+    return { before, after: improvedFit(before, reached), times };
+  };
+
+  test('a retention line on an entry carrying half the page r halves r and leaves w and wd', () => {
+    const entries = [
+      e({ a: 1, r: 2, rd: 0, w: 1, wd: 1 }, { retention: 'fixed' }),
+      e({ a: 1, r: 2, rd: 0, w: 1, wd: 2 }, {}),
+    ];
+    const after = scaledPage(models(page), entries);
+    expect(after.serial).toEqual({ a: 5, r: 2, rd: 0, w: 2, wd: 3 });
+  });
+
+  test('an entry called twice weighs twice, and without a line nothing changes', () => {
+    const lined = e({ a: 0, r: 1, rd: 0, w: 0, wd: 0 }, { retention: 'fixed' }, 1);
+    const plain = e({ a: 0, r: 1, rd: 0, w: 0, wd: 0 }, {}, 2);
+    expect(scaledPage(models(page), [lined, plain]).serial.r).toBeCloseTo((4 * 2) / 3, 9);
+    expect(scaledPage(models(page), [plain]).serial).toEqual(page);
+  });
+
+  test('a term no entry carries stays as measured', () => {
+    const none = e({ a: 1, r: 0, rd: 0, w: 1, wd: 0 }, { retention: 'fixed' });
+    expect(scaledPage(models(page), [none]).serial).toEqual(page);
+  });
+
+  test('a density line takes the G terms of both roles; matched keeps the part without G', () => {
+    const d = e({ a: 0, r: 1, rd: 1, w: 1, wd: 1 }, { density: 'fixed' });
+    expect(scaledPage(models(page), [d]).serial).toEqual({ a: 5, r: 4, rd: 0, w: 2, wd: 0 });
+    const m = e({ a: 0, r: 1, rd: 1, w: 1, wd: 1 }, { retention: 'matched' });
+    expect(scaledPage(models(page), [m]).serial).toEqual({ a: 5, r: 4, rd: 0, w: 2, wd: 3 });
+  });
+});
+
+describe('splitWindow', () => {
+  test('gives the outside partitions the entries own ratio of outside to inside cost, at most 1', () => {
+    const page = fitPage(SHAPES.map((shape) => point(shape, { a: 0, r: 4, rd: 0, w: 4, wd: 0 })));
+    const windowed = entry({ a: 0, r: 1, rd: 0, w: 4, wd: 0 });
+    const all = splitWindow({ serial: page.serial, parallel: page.parallel, bytes: page.bytes }, [
+      { before: windowed, after: windowed, times: 1 },
+    ]);
+    expect(all.serial.r).toBe(1);
+    expect(all.serial.w).toBe(4);
+    const same = entry({ a: 0, r: 4, rd: 0, w: 1, wd: 0 });
+    expect(splitWindow(page, [{ before: same, after: same, times: 1 }]).serial.r).toBe(4);
+  });
+});
+
 describe('improvedFit acts per axis', () => {
   const m = { a: 2, r: 3, rd: 1, w: 4, wd: 2 };
-  const fit = entry(1, m);
+  const fit = entry(m);
 
   test('a retention line leaves w and wd unchanged and drops the outside partitions', () => {
     const after = improvedFit(fit, { retention: 'fixed' });
     expect(after.serial).toEqual({ ...m, r: 0, rd: 0 });
-    expect(after.opens.spans?.ro).toBe(0);
-    expect(after.opens.spans?.wi).toBe(fit.opens.spans?.wi);
   });
 
   test('a window line leaves r and rd unchanged', () => {
@@ -186,30 +241,5 @@ describe('improvedFit acts per axis', () => {
 
   test('a scan changes nothing', () => {
     expect(improvedFit(fit, { retention: 'scan', window: 'scan', density: 'scan' })).toEqual(fit);
-  });
-});
-
-describe('splitOpens', () => {
-  const size = new Map([['p/spans.parquet', 100_000]]);
-  const e = (kind: 'open' | 'read', offset: number, bytes: number): ReadEvent => ({
-    path: 'p/spans.parquet',
-    kind,
-    offset,
-    bytes,
-  });
-
-  test('the open and the reads that end at the file end are the open part; the rest is data', () => {
-    const split = splitOpens(
-      [e('open', 0, 0), e('read', 99_900, 100), e('read', 0, 16384), e('read', 16384, 16384)],
-      size,
-    );
-    expect(split.serial).toBe(REQUESTS_PER_OPEN + 1);
-    expect(split.files).toEqual([{ table: 'spans', footer: 1 }]);
-  });
-
-  test('an open with no footer read (cached) is the open alone', () => {
-    const split = splitOpens([e('open', 0, 0), e('read', 0, 100)], size);
-    expect(split.serial).toBe(REQUESTS_PER_OPEN);
-    expect(split.files).toEqual([{ table: 'spans', footer: 0 }]);
   });
 });

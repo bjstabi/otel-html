@@ -101,6 +101,15 @@ describe('the scaling report generator', { timeout: 120_000 }, () => {
     }
   });
 
+  test('the smallest shape holds more traces in its window than the longest list a page shows', async () => {
+    // BASE is the smallest value of every axis; a list of 50 rows is the longest the pages show
+    const r = await build(BASE);
+    const inside = r.manifest.partitions.slice(BASE.outside);
+    const traces = inside.reduce((n, p) => n + (p.files.traces?.rows ?? 0), 0);
+    expect(inside).toHaveLength(BASE.inside);
+    expect(traces).toBeGreaterThanOrEqual(50);
+  });
+
   test('CROSS and the axis steps ask for the shapes the model needs', () => {
     expect(CROSS).toEqual({ outside: 4, inside: 2, rowGroups: 4, spacing: 'dense' });
     expect(stepsOf('density', 'sparse').map((s) => [s.rowGroups, s.spacing])).toEqual([

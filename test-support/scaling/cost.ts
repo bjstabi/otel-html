@@ -1,5 +1,4 @@
 import type { ReadEvent } from './counting-engine.js';
-import { REQUESTS_PER_OPEN, TABLES, type Table } from './model.js';
 
 /** What a statement costs in file reads: serial requests, parallel requests (the `prepared` files) and bytes. */
 export interface Cost {
@@ -8,7 +7,11 @@ export interface Cost {
   bytes: number;
 }
 
-export { REQUESTS_PER_OPEN };
+/**
+ * Chromium requests one open of a Parquet file costs, apart from the reads Node counts for it (calibration, Task 1: a
+ * HEAD and DuckDB's `bytes=0-0` probe GET; the footer read is one of the Node reads).
+ */
+export const REQUESTS_PER_OPEN = 2;
 
 /** Chromium range GETs one modelled range costs (calibration, Task 1: the `k` of decision 3). */
 export const REQUESTS_PER_READ = 1;
@@ -90,52 +93,4 @@ export function costOf(events: readonly ReadEvent[], prepared: ReadonlyMap<strin
   }
   cost.serial += rangesOf(serial) * REQUESTS_PER_READ;
   return cost;
-}
-
-const TABLE_OF = /\/(spans|logs|points|traces|patterns)\.parquet$/;
-
-/** The table a manifest path belongs to, or null. */
-export function tableOf(path: string): Table | null {
-  const hit = TABLE_OF.exec(path)?.[1];
-  return TABLES.find((t) => t === hit) ?? null;
-}
-
-/** One file a statement opened: its table and the modelled ranges of its footer read(s). */
-export interface OpenedFile {
-  table: Table;
-  footer: number;
-}
-
-/**
- * The open part of a cold statement's reads, per file: the file's first `open` and the reads right after it that end at
- * the end of the file (the footer; `sizes` holds each file's bytes) cost `REQUESTS_PER_OPEN` plus the ranges
- * `rangesOf` models for them; everything after is the data part (`costOf(events).serial` minus `serial`). Files in
- * `prepared` and files without a known table are not counted.
- */
-export function splitOpens(
-  events: readonly ReadEvent[],
-  sizes: ReadonlyMap<string, number>,
-  prepared: ReadonlyMap<string, number> = new Map(),
-): { serial: number; files: OpenedFile[] } {
-  const byPath = new Map<string, ReadEvent[]>();
-  for (const e of events) {
-    if (prepared.has(e.path)) continue;
-    const own = byPath.get(e.path) ?? [];
-    byPath.set(e.path, own);
-    own.push(e);
-  }
-  let serial = 0;
-  const files: OpenedFile[] = [];
-  for (const [path, own] of byPath) {
-    const table = tableOf(path);
-    const first = own.findIndex((e) => e.kind === 'open');
-    if (table === null || first === -1) continue;
-    const size = sizes.get(path) ?? Number.POSITIVE_INFINITY;
-    let end = first + 1;
-    while (own[end]?.kind === 'read' && (own[end]?.offset ?? 0) + (own[end]?.bytes ?? 0) >= size) end++;
-    const footer = rangesOf(own.slice(first, end)) * REQUESTS_PER_READ;
-    serial += REQUESTS_PER_OPEN + footer;
-    files.push({ table, footer });
-  }
-  return { serial, files };
 }

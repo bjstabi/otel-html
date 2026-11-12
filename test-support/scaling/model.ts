@@ -36,13 +36,6 @@ export type Table = (typeof TABLES)[number];
 export type AxisName = 'retention' | 'density' | 'window';
 export type Target = 'fixed' | 'files' | 'matched' | 'scan';
 
-/**
- * Chromium requests one open of a Parquet file costs, apart from the reads Node counts for it (calibration, Task 1: a
- * HEAD and DuckDB's `bytes=0-0` probe GET; the footer read is one of the Node reads). Here, not in cost.ts, so the script
- * that prints predictions reaches it without the counting engine's types; cost.ts re-exports it.
- */
-export const REQUESTS_PER_OPEN = 2;
-
 /** The tolerance fitted coefficients are rounded to: counts are integers or simple fractions, floats are not. */
 const ROUND = 1e9;
 
@@ -164,78 +157,58 @@ export function fitModel(
   return { a, r, rd, w, wd };
 }
 
-/** The files of one table a request opens: `c + ro * R + wi * W` of them on a report of R/W partitions out/in the window. */
-export interface OpenModel {
-  c: number;
-  ro: number;
-  wi: number;
-  /** Modelled footer ranges per open. */
-  footer: number;
-}
-
 export interface FitPoint {
   shape: Size;
-  /** Data-part serial requests (the cold cost less the open part). */
   serial: number;
   parallel: number;
   bytes: number;
-  opens: Partial<Record<Table, { count: number; footer: number }>>;
 }
 
-/** What one catalogue entry costs on a page: its data part as three fitted models, and which files it opens. */
-export interface EntryFit {
-  windowless: boolean;
+/** A cost as three fitted models: serial requests, parallel requests and bytes. */
+export interface CostModels {
   serial: Model;
   parallel: Model;
   bytes: Model;
-  opens: Partial<Record<Table, OpenModel>>;
 }
 
-/** The entry's data models and open counts, fitted on its measurements. */
-export function fitEntry(points: readonly FitPoint[], windowless: boolean): EntryFit {
-  const opens: Partial<Record<Table, OpenModel>> = {};
-  for (const table of TABLES) {
-    const seen = points.map((p) => p.opens[table]);
-    const files = seen.reduce((a, o) => a + (o?.count ?? 0), 0);
-    if (files === 0) continue;
-    const rows = points.map((p) =>
-      windowless ? [1, p.shape.outside + p.shape.inside] : [1, p.shape.outside, p.shape.inside],
-    );
-    const [c = 0, ro = 0, wi = 0] = nnls(
-      rows,
-      seen.map((o) => o?.count ?? 0),
-    );
-    opens[table] = windowless
-      ? { c, ro, wi: ro, footer: seen.reduce((a, o) => a + (o?.footer ?? 0), 0) / files }
-      : { c, ro, wi, footer: seen.reduce((a, o) => a + (o?.footer ?? 0), 0) / files };
-  }
+/** What one catalogue entry costs cold: its three models, and whether it carries no window. */
+export interface EntryFit extends CostModels {
+  windowless: boolean;
+}
+
+/** The three models fitted on the points; `windowless` constrains every one to `r = w` and `rd = wd`. */
+function fitCosts(points: readonly FitPoint[], windowless: boolean): CostModels {
   const of = (pick: (p: FitPoint) => number): Model =>
     fitModel(
       points.map((p) => ({ shape: p.shape, serial: pick(p) })),
       { windowless },
     );
-  return {
-    windowless,
-    serial: of((p) => p.serial),
-    parallel: of((p) => p.parallel),
-    bytes: of((p) => p.bytes),
-    opens,
-  };
+  return { serial: of((p) => p.serial), parallel: of((p) => p.parallel), bytes: of((p) => p.bytes) };
+}
+
+/** The entry's models, fitted on its cold measurements. */
+export function fitEntry(points: readonly FitPoint[], windowless: boolean): EntryFit {
+  return { windowless, ...fitCosts(points, windowless) };
+}
+
+/**
+ * A page's models, fitted on the page rendered whole in one cold engine. The page's window spans the generated report,
+ * so every partition is inside it and the page reads them alike: `r = w` and `rd = wd`, which also leaves the shapes
+ * identified without the cross.
+ */
+export function fitPage(points: readonly FitPoint[]): CostModels {
+  return fitCosts(points, true);
 }
 
 /**
  * The fit of an entry once the PRs up to some point have landed, by axis (`reached`: the target of the best debt line
- * of each axis): `fixed` and `files` zero the axis' partition and density terms and the files it stops opening;
+ * of each axis): `fixed` and `files` zero the axis' partition and density terms;
  * `matched` zeroes its density term; on density every target zeroes both density terms. A scan changes nothing.
+ * (An axis' parallel requests are not cut: a `files` line adds them back, per small file, in the script.)
  */
 export function improvedFit(fit: EntryFit, reached: Partial<Record<AxisName, Target>>): EntryFit {
   const serial = { ...fit.serial };
   const bytes = { ...fit.bytes };
-  const opens: Partial<Record<Table, OpenModel>> = {};
-  for (const table of TABLES) {
-    const o = fit.opens[table];
-    if (o !== undefined) opens[table] = { ...o };
-  }
   const cut = (models: Model[], terms: readonly (keyof Model)[]): void => {
     for (const m of models) for (const t of terms) m[t] = 0;
   };
@@ -243,16 +216,14 @@ export function improvedFit(fit: EntryFit, reached: Partial<Record<AxisName, Tar
   const rt = reached.retention;
   if (flat(rt)) {
     cut([serial, bytes], ['r', 'rd']);
-    for (const o of Object.values(opens)) o.ro = 0;
   } else if (rt === 'matched') cut([serial, bytes], ['rd']);
   const wt = reached.window;
   if (flat(wt)) {
     cut([serial, bytes], ['w', 'wd']);
-    for (const o of Object.values(opens)) o.wi = 0;
   } else if (wt === 'matched') cut([serial, bytes], ['wd']);
   const dt = reached.density;
   if (dt !== undefined && dt !== 'scan') cut([serial, bytes], ['rd', 'wd']);
-  return { ...fit, serial, bytes, opens };
+  return { ...fit, serial, bytes };
 }
 
 /** What the data source records of a call, for counting it. */
@@ -290,21 +261,81 @@ export function countCalls(calls: readonly CountedCall[]): Map<string, number> {
 }
 
 export interface PageEntry {
-  fit: EntryFit;
-  /** Data parts to charge: the calls, or the distinct ids of a by-id entry. */
+  /** The entry's fit before any PR, and after the PRs up to the one asked for (`improvedFit`). */
+  before: EntryFit;
+  after: EntryFit;
+  /** Calls to charge (`countCalls`): the weight of the entry in the page's shares. */
   times: number;
-  /** Axes on which the entry is `files`: its small files are fetched whole and in parallel instead. */
-  filesAxes: readonly AxisName[];
+}
+
+const TERMS = ['r', 'rd', 'w', 'wd'] as const;
+
+/** The share of each partition term that the entries keep: what their `after` fits carry over what `before` carried. */
+function sharesOf(
+  entries: readonly PageEntry[],
+  pick: (f: EntryFit) => Model,
+): Record<(typeof TERMS)[number], number> {
+  const share = { r: 1, rd: 1, w: 1, wd: 1 };
+  for (const t of TERMS) {
+    const before = entries.reduce((n, e) => n + e.times * pick(e.before)[t], 0);
+    const after = entries.reduce((n, e) => n + e.times * pick(e.after)[t], 0);
+    if (before > 0) share[t] = after / before;
+  }
+  return share;
+}
+
+/**
+ * The page once the PRs up to some point have landed: each partition term (`r, rd, w, wd`) of each model is scaled by the
+ * share of that term the page's entries still carry, each weighted by its calls. An entry `fixed` or `files` on an axis
+ * carries none of it, `matched` its part without `G`; a term no entry carries is kept as measured.
+ */
+export function scaledPage(page: CostModels, entries: readonly PageEntry[]): CostModels {
+  const scale = (m: Model, share: Record<(typeof TERMS)[number], number>): Model => ({
+    a: m.a,
+    r: m.r * share.r,
+    rd: m.rd * share.rd,
+    w: m.w * share.w,
+    wd: m.wd * share.wd,
+  });
+  return {
+    serial: scale(
+      page.serial,
+      sharesOf(entries, (f) => f.serial),
+    ),
+    parallel: scale(
+      page.parallel,
+      sharesOf(entries, (f) => f.parallel),
+    ),
+    bytes: scale(
+      page.bytes,
+      sharesOf(entries, (f) => f.bytes),
+    ),
+  };
+}
+
+/**
+ * A page measured with its window over the whole report cannot tell a partition outside a narrower window from one
+ * inside: the outside terms take the ratio of outside to inside cost of the page's entries (at most 1) times the inside
+ * terms. Used only to read a page through a window shorter than the report.
+ */
+export function splitWindow(page: CostModels, entries: readonly PageEntry[]): CostModels {
+  const split = (m: Model, pick: (f: EntryFit) => Model): Model => {
+    const sum = (t: 'r' | 'rd' | 'w' | 'wd'): number =>
+      entries.reduce((n, e) => n + e.times * pick(e.before)[t], 0);
+    const ratio = (o: 'r' | 'rd', i: 'w' | 'wd'): number => (sum(i) > 0 ? Math.min(1, sum(o) / sum(i)) : 1);
+    return { ...m, r: m.w * ratio('r', 'w'), rd: m.wd * ratio('rd', 'wd') };
+  };
+  return {
+    serial: split(page.serial, (f) => f.serial),
+    parallel: split(page.parallel, (f) => f.parallel),
+    bytes: split(page.bytes, (f) => f.bytes),
+  };
 }
 
 export interface PageCost {
   serial: number;
   parallel: number;
   bytes: number;
-  /** Serial requests of the union of opens (included in `serial`). */
-  opens: number;
-  /** Per entry, in order: the data part's serial requests and the parallel requests. */
-  parts: { serial: number; parallel: number }[];
 }
 
 /**
@@ -319,42 +350,11 @@ export function predict(model: Model, partitions: readonly PartitionShape[]): nu
   return total;
 }
 
-/**
- * A page runs in one engine, so a file's footer read by one request is free to the next: the page pays the open
- * (`REQUESTS_PER_OPEN` plus the footer's ranges) once for each file in the union of what its entries open, and the sum of
- * the entries' data parts. The union per table takes the largest entry (the files of the entries nest): the outside
- * partitions of the entry opening most of them, plus the inside ones likewise.
- */
-export function predictPage(entries: readonly PageEntry[], partitions: readonly PartitionShape[]): PageCost {
-  const outside = partitions.filter((p) => !p.inWindow);
-  const inside = partitions.filter((p) => p.inWindow);
-  const cost: PageCost = { serial: 0, parallel: 0, bytes: 0, opens: 0, parts: [] };
-  for (const table of TABLES) {
-    const models = entries.flatMap((e) => (e.fit.opens[table] === undefined ? [] : [e.fit.opens[table]]));
-    if (models.length === 0) continue;
-    const files =
-      Math.max(...models.map((m) => m.ro)) * outside.length +
-      Math.max(...models.map((m) => m.c + m.wi * inside.length));
-    cost.opens += files * (REQUESTS_PER_OPEN + Math.max(...models.map((m) => m.footer)));
-  }
-  cost.serial += cost.opens;
-  for (const e of entries) {
-    const serial = e.times * predict(e.fit.serial, partitions);
-    // one parallel request per small file of the partitions a `files` axis covers
-    const covered = partitions.filter(
-      (p) =>
-        (e.filesAxes.includes('retention') && !p.inWindow) ||
-        (e.filesAxes.includes('window') && p.inWindow) ||
-        (e.filesAxes.includes('density') && (p.inWindow || e.fit.windowless)),
-    );
-    const parallel =
-      e.filesAxes.length > 0
-        ? e.times * covered.reduce((a, p) => a + p.smallFiles, 0)
-        : e.times * predict(e.fit.parallel, partitions);
-    cost.serial += serial;
-    cost.parallel += parallel;
-    cost.bytes += e.times * predict(e.fit.bytes, partitions);
-    cost.parts.push({ serial, parallel });
-  }
-  return cost;
+/** A page's cost on a report of those partitions: its fitted models summed over them. */
+export function predictPage(page: CostModels, partitions: readonly PartitionShape[]): PageCost {
+  return {
+    serial: predict(page.serial, partitions),
+    parallel: predict(page.parallel, partitions),
+    bytes: predict(page.bytes, partitions),
+  };
 }
