@@ -784,6 +784,11 @@ traces than the list's 50 rows. This task measures each page whole instead of co
    larger column chunks cost more requests than a harness group's. The class steps keep their small groups. The
    live traces-mode page asks for 52 distinct traces while 26 rows mount; the second 26 are found from a Chromium
    request log and modelled in the page measurement.
+8. Added 2026-11-12 after the third live check (0.56× and 0.57×): one live partition holds 22 production-size
+   groups and cost 339 requests against about 129 fitted from 1–4 groups. The page fit also measures one partition
+   of about 22 groups, so it no longer extrapolates past 4; the fit may become non-linear in G if the points say so.
+   If the live check still misses after this, the expectations are anchored on the live counts instead: a later
+   PR's prediction is the live baseline times the harness page's after/before ratio.
 5. Measuring pages runs only when `OTEL_HTML_SCALING_OUT` is set (the `predict:queries` run), so `test:scaling`
    does not grow.
 
