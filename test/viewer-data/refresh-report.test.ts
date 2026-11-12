@@ -409,4 +409,54 @@ describe('refreshReport and the small-file loader', () => {
     await withSmall(f, manifestOf([0, 1]), next).done;
     expect(events).toEqual(['dropFile held', 'registerFileURL held']);
   });
+
+  test('hands the new sizes over before any path is forgotten, and the old ones back when the refresh fails', async () => {
+    const order: string[] = [];
+    const run = async (fail: boolean) => {
+      const f = fakes('site', fail ? (st) => st.includes('CREATE') : undefined);
+      const adopted: ManifestV4[] = [];
+      const next = { ...manifestOf([0, 1]), updatedAt: '2026-11-06T00:00:09.000Z' };
+      const previous = manifestOf([0]);
+      await refreshReport(
+        f.engine,
+        f.queryEngine,
+        previous,
+        {
+          loader: loaderOf(next),
+          baseUrl: BASE,
+          logger,
+          smallFiles: { forget: () => void order.push('forget') },
+          adoptSizes: (m) => {
+            adopted.push(m);
+            order.push('adopt');
+          },
+        },
+        () => 1,
+      ).catch(() => undefined);
+      return { adopted, previous, next };
+    };
+    const ok = await run(false);
+    expect(order[0]).toBe('adopt');
+    expect(ok.adopted).toEqual([ok.next]);
+    const failed = await run(true);
+    expect(failed.adopted.at(-1)).toBe(failed.previous);
+  });
+
+  test('a path the refresh dropped is dropped inside the file gate', async () => {
+    const f = fakes('site');
+    const held: string[] = [];
+    (f.engine as { gate?: unknown }).gate = {
+      wait: async () => {},
+      hold: async (change: () => Promise<unknown>) => {
+        held.push(...f.calls.drop);
+        const before = f.calls.drop.length;
+        const out = await change();
+        held.push(`during:${f.calls.drop.length - before}`);
+        return out;
+      },
+    };
+    const r = withSmall(f, manifestOf([0, 1]), manifestOf([0]));
+    await r.done;
+    expect(held.filter((h) => h.startsWith('during:')).length).toBe(r.forgotten.length);
+  });
 });

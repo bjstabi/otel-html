@@ -18,6 +18,8 @@ export interface RefreshDeps {
   logger: Logger;
   /** A site report's small-file loader: told which paths the refresh dropped. */
   smallFiles?: Pick<SmallFiles, 'forget'>;
+  /** Told the manifest whose sizes the small-file loader must judge from now on; called before any path is forgotten. */
+  adoptSizes?: (manifest: ManifestV4) => void;
 }
 
 /**
@@ -58,6 +60,7 @@ export async function refreshReport(
   const oldSizes = sizeOf(previous);
   const newSizes = sizeOf(manifest);
   const rewritten = wanted.filter((f) => had.has(f.path) && oldSizes.get(f.path) !== newSizes.get(f.path));
+  deps.adoptSizes?.(manifest);
   try {
     // No statement runs between the drop and the registration of a rewritten path.
     const reregister = async (): Promise<void> => {
@@ -71,6 +74,7 @@ export async function refreshReport(
     await registerFiles(engine, added, deps);
     await createViews(engine, manifest);
   } catch (error) {
+    deps.adoptSizes?.(previous);
     await rollBack(engine, previous, added, deps.logger, deps.smallFiles);
     throw error;
   }
@@ -78,7 +82,8 @@ export async function refreshReport(
   for (const path of had) {
     if (wantedPaths.has(path)) continue;
     deps.smallFiles?.forget([path]);
-    await dropFiles(engine, [path]).catch((error: unknown) => {
+    const drop = (): Promise<void> => dropFiles(engine, [path]);
+    await (engine.gate ? engine.gate.hold(drop) : drop()).catch((error: unknown) => {
       deps.logger.warn(`could not drop ${path} after a refresh`, error);
     });
   }

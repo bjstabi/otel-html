@@ -88,8 +88,15 @@ export async function dropFiles(engine: Engine, paths: readonly string[]): Promi
  * the registration (the engine's gate holds them back). When the buffer cannot be registered, the path is registered
  * by `url` again, so range reads still answer, and the error is rethrown (when that fails too, an error carrying the first as its `cause`).
  */
-export function swapToBuffer(engine: Engine, path: string, bytes: Uint8Array, url: string): Promise<void> {
+export function swapToBuffer(
+  engine: Engine,
+  path: string,
+  bytes: Uint8Array,
+  url: string,
+  isCurrent: () => boolean = () => true,
+): Promise<void> {
   const swap = async (): Promise<void> => {
+    if (!isCurrent()) return;
     await engine.db.dropFile(path);
     try {
       await engine.db.registerFileBuffer(path, bytes);
