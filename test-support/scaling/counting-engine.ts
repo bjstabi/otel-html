@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { MessageChannel, type MessagePort } from 'node:worker_threads';
@@ -8,6 +8,7 @@ import type { HostEngineFiles } from '../../src/host/engine-files.js';
 import { NODE_FS_PROTOCOL, type NodeDuckDb, openNodeDuckDb } from '../../src/host/node-duckdb.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { viewStatements } from '../../src/query/sql/views.js';
+import { smallFiles } from '../../src/viewer/data/engine/small-files.js';
 import { createCoordinator, mosaicQueryEngine } from '../../src/viewer/data/mosaic.js';
 import type { QueryEngine } from '../../src/viewer/data/query-engine.js';
 import { packageHostEngineFiles } from '../host-engine-files.js';
@@ -25,6 +26,8 @@ export interface CountingEngine {
   engine: QueryEngine;
   /** The events since the last take, complete: it round-trips a marker through the worker first. */
   take(): Promise<ReadEvent[]>;
+  /** Paths prepared (fetched whole) since the last call, with their sizes; empties the record. */
+  prepared(): ReadonlyMap<string, number>;
   /** After it, the next statement reads every footer again (no cached metadata, no cached result). */
   cold(): Promise<void>;
   close(): Promise<void>;
@@ -160,6 +163,17 @@ function compileOnce(files: HostEngineFiles): Promise<Precompiled> {
   return made;
 }
 
+/**
+ * Above the generator's largest traces, patterns and rollup file (8 row groups), below its smallest spans and logs
+ * file (2 row groups): the files that load whole in the harness are the ones the live report loads whole.
+ */
+export const HARNESS_SMALL_FILE_BYTES = 350_000;
+
+export interface CountingOptions {
+  /** Files of this size or smaller are prepared whole; 0 prepares none (every file by range). */
+  threshold?: number;
+}
+
 const quiet = { debug() {}, info() {}, warn() {}, error() {} };
 
 /** A worker with its counting port, its files registered and the views created, as the viewer's page has them at start. */
@@ -190,9 +204,17 @@ export const runningWorkers = (): number => running;
  * (about 450 in a measurement) made Node 24.22's V8 abort now and then ("jit_page_->allocations_.erase"), and a reset
  * costs 50 ms instead of the 600 ms of a new worker. The worker ends in `close()`.
  */
-export async function openCountingEngine(dir: string, manifest: ManifestV4): Promise<CountingEngine> {
+export async function openCountingEngine(
+  dir: string,
+  manifest: ManifestV4,
+  options: CountingOptions = {},
+): Promise<CountingEngine> {
+  const threshold = options.threshold ?? HARNESS_SMALL_FILE_BYTES;
   const root = resolve(dir);
   const paths = manifest.partitions.flatMap((p) => Object.values(p.files).map((f) => f.path));
+  const sizes = new Map(
+    manifest.partitions.flatMap((p) => Object.values(p.files).map((f) => [f.path, f.bytes])),
+  );
 
   const prepare = async (db: NodeDuckDb): Promise<Connection> => {
     for (const path of paths) await db.registerFileURL(path, join(root, path), NODE_FS_PROTOCOL, false);
@@ -242,6 +264,25 @@ export async function openCountingEngine(dir: string, manifest: ManifestV4): Pro
 
   const textDir = await mkdtemp(join(tmpdir(), 'otel-counting-'));
   const live = await start();
+  // A prepared file is read whole once (not counted by the worker: the main thread reads it) and registered again,
+  // under its name, from a copy outside the counted root, which stands for the page's buffer: the statement then
+  // reads no counted byte of it. `prepared()` hands the paths and sizes to the cost.
+  const prepared = new Map<string, number>();
+  let loader = makeLoader();
+  function makeLoader() {
+    return smallFiles({
+      threshold,
+      bytesOf: (path) => sizes.get(path),
+      fetchWhole: async (path) => new Uint8Array(await readFile(join(root, path))),
+      swap: async (path, bytes) => {
+        const copy = join(textDir, 'whole', path);
+        await mkdir(join(copy, '..'), { recursive: true });
+        await writeFile(copy, bytes);
+        await live.db.registerFileURL(path, copy, NODE_FS_PROTOCOL, false);
+        prepared.set(path, bytes.length);
+      },
+    });
+  }
   // One connection runs one statement at a time: two pending queries on it interleave their result buffers (the
   // viewer's worker queues them the same way), so concurrent requests such as getTrace's two reads wait in turn.
   let turn: Promise<unknown> = Promise.resolve();
@@ -258,16 +299,22 @@ export async function openCountingEngine(dir: string, manifest: ManifestV4): Pro
       return run;
     },
   } as Connector;
-  const engine = mosaicQueryEngine(createCoordinator(connector, quiet), {
-    // The residual path's id tables read a CSV registered as text; the Node host registers files by URL only, so the
-    // text goes to a file outside the counted root (not counted) and is registered under its name.
-    registerText: async (name, text) => {
-      const file = join(textDir, name);
-      await writeFile(file, text);
-      await live.db.registerFileURL(name, file, NODE_FS_PROTOCOL, false);
+  const engine = mosaicQueryEngine(
+    createCoordinator(connector, quiet),
+    {
+      // The residual path's id tables read a CSV registered as text; the Node host registers files by URL only, so the
+      // text goes to a file outside the counted root (not counted) and is registered under its name.
+      registerText: async (name, text) => {
+        const file = join(textDir, name);
+        await writeFile(file, text);
+        await live.db.registerFileURL(name, file, NODE_FS_PROTOCOL, false);
+      },
+      close: async () => {},
     },
-    close: async () => {},
-  });
+    true,
+    undefined,
+    (paths, signal) => loader.prepare(paths, signal),
+  );
   let marker = 0;
   const take = async (): Promise<ReadEvent[]> => {
     const id = marker++;
@@ -285,8 +332,15 @@ export async function openCountingEngine(dir: string, manifest: ManifestV4): Pro
   return {
     engine,
     take,
+    prepared: () => {
+      const taken = new Map(prepared);
+      prepared.clear();
+      return taken;
+    },
     cold: async () => {
       engine.clearCache();
+      prepared.clear();
+      loader = makeLoader();
       await take();
       const { db } = live;
       if (db.reset === undefined) throw new OtelHtmlError('usage', { message: 'the engine cannot reset' });

@@ -7,8 +7,13 @@ import { type Axis, CATALOGUE, type CatalogueEntry, DECLARED } from '../../src/v
 import { createDuckDbDataSource } from '../../src/viewer/data/duckdb-source.js';
 import { bounded, shareOnce } from './bounded.js';
 import { classify, type Step } from './classify.js';
-import { type Cost, costOf } from './cost.js';
-import { type CountingEngine, openCountingEngine, type ReadEvent } from './counting-engine.js';
+import { type Cost, costOf, costWith } from './cost.js';
+import {
+  type CountingEngine,
+  HARNESS_SMALL_FILE_BYTES,
+  openCountingEngine,
+  type ReadEvent,
+} from './counting-engine.js';
 import {
   buildScalingReport,
   PREBUILT_ENV,
@@ -19,13 +24,6 @@ import {
 } from './generator.js';
 
 export const AXES: readonly Axis[] = ['retention', 'density', 'window'];
-
-/**
- * Files under this size count as "small" in the printed split of serial reads (the files §4 will load whole and in
- * parallel). The production threshold starts at 262,144 bytes (decision 5); the harness files (one to eight row
- * groups of 8,192 spans) are far from it on both sides, so the production value is kept.
- */
-export const HARNESS_SMALL_FILE_BYTES = 262_144;
 
 interface Live {
   report: ScalingReport;
@@ -48,13 +46,23 @@ const measured = new Map<string, Promise<Measured>>();
 const coldMs: number[] = [];
 const seen = new Map<string, Map<Axis, Step[]>>();
 
-function liveOf(shape: Shape): Promise<Live> {
-  const key = shapeKey(shape);
+/** The options of a measurement: the threshold below which files load whole (default `HARNESS_SMALL_FILE_BYTES`; 0: every file by range). */
+export interface MeasureOptions {
+  threshold?: number;
+}
+
+const thresholdOf = (opts: MeasureOptions | undefined): number => opts?.threshold ?? HARNESS_SMALL_FILE_BYTES;
+/** The key of a (shape, threshold): the default threshold keeps the shape's own key, so its shared files keep their names. */
+const keyOf = (shape: Shape, threshold: number): string =>
+  threshold === HARNESS_SMALL_FILE_BYTES ? shapeKey(shape) : `${shapeKey(shape)}-t${threshold}`;
+
+function liveOf(shape: Shape, threshold: number): Promise<Live> {
+  const key = keyOf(shape, threshold);
   const hit = lives.get(key);
   if (hit !== undefined) return hit;
   const made = (async (): Promise<Live> => {
     const report = await buildScalingReport(shape);
-    const counting = await openCountingEngine(report.dir, report.manifest);
+    const counting = await openCountingEngine(report.dir, report.manifest, { threshold });
     const sizes = new Map<string, number>();
     for (const p of report.manifest.partitions)
       for (const f of Object.values(p.files)) sizes.set(f.path, f.bytes);
@@ -78,8 +86,8 @@ const costOfEvents = (events: readonly ReadEvent[]): Cost => costOf(events, new 
  * other than `metrics.catalog` loads the source's metric catalog first (the page loads it once, memoised in the
  * source), so the entry's cost is its own request. Nothing else is warmed.
  */
-async function measure(entry: CatalogueEntry, shape: Shape): Promise<Measured> {
-  const live = await liveOf(shape);
+async function measure(entry: CatalogueEntry, shape: Shape, threshold: number): Promise<Measured> {
+  const live = await liveOf(shape, threshold);
   const run = live.turn.then(async (): Promise<Measured> => {
     const { counting, report, sizes } = live;
     const ds = createDuckDbDataSource({ engine: counting.engine, manifest: report.manifest });
@@ -89,11 +97,12 @@ async function measure(entry: CatalogueEntry, shape: Shape): Promise<Measured> {
     coldMs.push(performance.now() - t0);
     await entry.run(ds, { window: entry.window ? report.window : null, ids: report.ids });
     const events = await counting.take();
+    const prepared = counting.prepared();
     const isSmall = (e: ReadEvent): boolean =>
-      (sizes.get(e.path) ?? Number.POSITIVE_INFINITY) < HARNESS_SMALL_FILE_BYTES;
+      (sizes.get(e.path) ?? Number.POSITIVE_INFINITY) <= HARNESS_SMALL_FILE_BYTES;
     const small = costOfEvents(events.filter(isSmall)).serial;
     const large = costOfEvents(events.filter((e) => !isSmall(e))).serial;
-    return { cost: costOfEvents(events), small, large };
+    return { cost: costWith(events, prepared), small, large };
   });
   live.turn = run.catch(() => undefined);
   return run;
@@ -104,16 +113,21 @@ async function measure(entry: CatalogueEntry, shape: Shape): Promise<Measured> {
  * values is a step of all three axes, so three files would each pay for the same cold runs. The first worker to take
  * the `.lock` folder measures and writes the result; the others wait for it.
  */
-async function sharedMeasure(root: string, entry: CatalogueEntry, shape: Shape): Promise<Measured> {
-  const file = join(root, `measured-${entry.id}-${shapeKey(shape)}.json`);
-  const what = `${entry.id} on ${shapeKey(shape)}`;
+async function sharedMeasure(
+  root: string,
+  entry: CatalogueEntry,
+  shape: Shape,
+  threshold: number,
+): Promise<Measured> {
+  const file = join(root, `measured-${entry.id}-${keyOf(shape, threshold)}.json`);
+  const what = `${entry.id} on ${keyOf(shape, threshold)}`;
   return await shareOnce({
     lock: `${file}.lock`,
     what,
     done: async () =>
       existsSync(file) ? MeasuredSchema.parse(JSON.parse(await readFile(file, 'utf8'))) : undefined,
     make: async () => {
-      const m = await bounded(measure(entry, shape), `measuring ${what}`);
+      const m = await bounded(measure(entry, shape, threshold), `measuring ${what}`);
       await writeFile(`${file}.tmp`, JSON.stringify(m));
       await rename(`${file}.tmp`, file);
       return m;
@@ -121,19 +135,34 @@ async function sharedMeasure(root: string, entry: CatalogueEntry, shape: Shape):
   });
 }
 
-function measuredOf(entry: CatalogueEntry, shape: Shape): Promise<Measured> {
-  const key = `${entry.id}|${shapeKey(shape)}`;
+function measuredOf(entry: CatalogueEntry, shape: Shape, opts?: MeasureOptions): Promise<Measured> {
+  const threshold = thresholdOf(opts);
+  const key = `${entry.id}|${keyOf(shape, threshold)}`;
   const hit = measured.get(key);
   if (hit !== undefined) return hit;
   const shared = process.env[PREBUILT_ENV];
-  const made = shared === undefined ? measure(entry, shape) : sharedMeasure(shared, entry, shape);
+  const made =
+    shared === undefined ? measure(entry, shape, threshold) : sharedMeasure(shared, entry, shape, threshold);
   measured.set(key, made);
   return made;
 }
 
 /** The report of that shape, cold, run, `costOf`. */
-export async function measureEntry(entry: CatalogueEntry, shape: Shape): Promise<Cost> {
-  return (await measuredOf(entry, shape)).cost;
+export async function measureEntry(
+  entry: CatalogueEntry,
+  shape: Shape,
+  opts?: MeasureOptions,
+): Promise<Cost> {
+  return (await measuredOf(entry, shape, opts)).cost;
+}
+
+/** The serial requests `entry` made to files of at most `HARNESS_SMALL_FILE_BYTES` on `shape` (zero when every small file was prepared). */
+export async function smallSerialOf(
+  entry: CatalogueEntry,
+  shape: Shape,
+  opts?: MeasureOptions,
+): Promise<number> {
+  return (await measuredOf(entry, shape, opts)).small;
 }
 
 /** The three steps of `axis` for `entry`, with what the classifier needs; the window axis does not apply to `window: false`. */

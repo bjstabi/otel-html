@@ -152,6 +152,16 @@ const spanRecord = (shape: Shape, n: number, k: number): unknown => {
   };
 };
 
+/**
+ * 192 pseudo-random hex characters per log (about 96 bytes after compression): they carry the logs files of 2 row
+ * groups above `HARNESS_SMALL_FILE_BYTES` while the traces, patterns and points files stay below it at 8 row groups.
+ * An attribute, not the body, so the log patterns are the same.
+ */
+const payloadOf = (n: number, k: number): string =>
+  Array.from({ length: 12 }, (_, j) => hex64(splitMix64(BigInt(n * ID_STRIDE + k) * 12n + BigInt(j)))).join(
+    '',
+  );
+
 const logRecord = (shape: Shape, n: number, k: number, logCount: number): unknown => {
   const time = String(startOf(shape, n) + (BigInt(k) * SPREAD_NS) / BigInt(logCount));
   const withTrace = Math.floor(k / 2) % 2 === 0;
@@ -160,6 +170,7 @@ const logRecord = (shape: Shape, n: number, k: number, logCount: number): unknow
     observedTimeUnixNano: time,
     severityNumber: SEVERITIES[k % 4],
     body: { stringValue: k % 64 === 0 ? `a needle in log ${k}` : `log line ${k} of partition ${n}` },
+    attributes: [str('log.payload', payloadOf(n, k))],
     ...(withTrace ? { traceId: traceIdOf(n, Math.floor((4 * k) / 8)), spanId: spanIdOf(n, 4 * k) } : {}),
   };
 };

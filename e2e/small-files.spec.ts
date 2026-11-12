@@ -3,14 +3,16 @@ import type { Page } from '@playwright/test';
 import { reviveDataJson, unwrapDataFile } from '../src/format/data-file.js';
 import { isV4, parseAnyManifest } from '../src/format/manifest.js';
 import { MANIFEST_KEY } from '../src/format/paths.js';
+import { SMALL_FILE_BYTES } from '../src/viewer/data/engine/small-files.js';
 import { PORT_ENV, reportDir } from './fixture.js';
 import { REQUESTS_PATH, type RequestRecord } from './static-server.js';
 import { expect, HTTP, test } from './test.js';
 import { runWorkerSql } from './worker-sql.js';
 
 // Query-scaling plan, Task 8, Step 5: DuckDB-WASM accepts a file swapped from a URL registration to a buffer after it
-// was opened (what `swapToBuffer` does), and answers the same. Nothing in the page calls `prepare` yet (Task 9 wires it
-// into the data layer), so the swap is sent to the worker as the two messages `swapToBuffer` produces.
+// was opened (what `swapToBuffer` does), and answers the same; the first test sends the worker the two messages
+// `swapToBuffer` produces. Task 9: the data layer prepares the files each statement reads, so the second test opens
+// the trace list and reads what the server saw.
 
 async function manifestPaths(): Promise<string[]> {
   const text = readFileSync(new URL('data/manifest.js', reportDir('main', 'http')), 'utf8');
@@ -102,5 +104,56 @@ test(
       `SMALL-FILES swapped ${paths.length} files; counts ${JSON.stringify(before)} -> ${JSON.stringify(after)}; partition requests after the swap: ${partitionRequests.length}\n`,
     );
     expect(partitionRequests).toEqual([]);
+  },
+);
+
+test(
+  'each small traces file is fetched whole at most once and never by range afterwards',
+  HTTP,
+  async ({ page, baseURL }, testInfo) => {
+    test.skip(testInfo.project.name.endsWith('-file'), 'a local report holds every file as a buffer already');
+    const text = readFileSync(new URL('data/manifest.js', reportDir('main', 'http')), 'utf8');
+    const manifest = parseAnyManifest(reviveDataJson(unwrapDataFile(text, MANIFEST_KEY)));
+    if (!isV4(manifest)) throw new Error('not a v4 manifest');
+    const small = manifest.partitions.flatMap((p) =>
+      Object.values(p.files)
+        .filter((f) => f.bytes <= SMALL_FILE_BYTES)
+        .map((f) => f.path),
+    );
+    const traces = manifest.partitions.flatMap((p) => (p.files.traces ? [p.files.traces.path] : []));
+    expect(traces.length).toBeGreaterThan(0);
+    expect(traces.every((t) => small.includes(t))).toBe(true);
+
+    // what the page itself requested (the server's list also holds the other projects' requests)
+    const seen: RequestRecord[] = [];
+    page.on('request', (request) => {
+      seen.push({
+        path: new URL(request.url()).pathname,
+        range: (request.headers() as { range?: string }).range ?? null,
+        method: request.method(),
+      });
+    });
+    await page.goto(`${baseURL}/index.html#/traces?mode=traces`);
+    await expect(page.getByRole('alert')).toHaveCount(0);
+    await expect(page.getByRole('grid', { name: 'Results' }).getByRole('row')).not.toHaveCount(1);
+    const whole = (r: RequestRecord): boolean => r.method === 'GET' && r.range === null;
+    let fetched = 0;
+    for (const path of small) {
+      const mine = seen.filter((r) => r.path.endsWith(`/${path}`));
+      const first = mine.findIndex(whole);
+      expect(mine.filter(whole).length, `${path} fetched whole: ${JSON.stringify(mine)}`).toBeLessThanOrEqual(
+        1,
+      );
+      if (first < 0) continue;
+      fetched += 1;
+      expect(mine.slice(first + 1), `${path} requested again after it was fetched whole`).toEqual([]);
+    }
+    for (const path of traces) {
+      expect(
+        seen.some((r) => r.path.endsWith(`/${path}`) && whole(r)),
+        `${path} fetched whole`,
+      ).toBe(true);
+    }
+    process.stdout.write(`SMALL-FILES ${fetched} of ${small.length} small files fetched whole, once each\n`);
   },
 );

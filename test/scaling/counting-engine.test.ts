@@ -180,6 +180,38 @@ describe('the counting Node engine', { timeout: 60_000 }, () => {
       bytes: 4096,
     });
   });
+
+  test('a prepared file is read whole once and a statement then reads none of it by range', async () => {
+    const { c, first, second } = await twoPartitions();
+    await c.cold();
+    await c.engine.prepare([first]);
+    expect([...c.prepared().keys()]).toEqual([first]);
+    expect(c.prepared().size).toBe(0);
+    await c.engine.prepare([first]);
+    expect(c.prepared().size).toBe(0); // already whole: not fetched again
+    await c.take();
+    await c.engine.query(Query.from('spans').select({ n: sql`count(*)` }));
+    const paths = new Set((await c.take()).map((e) => e.path));
+    expect([...paths]).toEqual([second]);
+  });
+
+  test('a threshold of 0 prepares nothing, and cold() forgets what was prepared', async () => {
+    const report = await buildFormat4Report([spansOnlyRequest(40)], { close: false });
+    const dir = await writeReportDir(report);
+    closers.push(dir.close);
+    const none = await openCountingEngine(dir.dir, report.manifest, { threshold: 0 });
+    closers.push(none.close);
+    const path = report.manifest.partitions[0]?.files.spans?.path ?? '';
+    await none.engine.prepare([path]);
+    expect(none.prepared().size).toBe(0);
+    const some = await openCountingEngine(dir.dir, report.manifest);
+    closers.push(some.close);
+    await some.engine.prepare([path]);
+    await some.cold();
+    expect(some.prepared().size).toBe(0);
+    await some.engine.prepare([path]);
+    expect([...some.prepared().keys()]).toEqual([path]);
+  });
 });
 
 describe('WriterDeps.rowGroupRows', () => {

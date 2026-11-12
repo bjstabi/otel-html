@@ -73,6 +73,7 @@ function fakes(format: 'local' | 'site', failStatement?: (statement: string, nth
   } as unknown as Engine;
   const queryEngine = {
     tempTables: true,
+    prepare: async () => {},
     query: async () => {
       calls.queries += 1;
       return { numRows: 0, toArray: () => [] };

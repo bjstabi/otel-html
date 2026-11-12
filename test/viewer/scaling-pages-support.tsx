@@ -9,7 +9,7 @@ import { createDuckDbDataSource } from '../../src/viewer/data/duckdb-source.js';
 import { Shell } from '../../src/viewer/shell/shell.js';
 import { createHashHistory } from '../../src/viewer/state/hash-history.js';
 import { ThemeProvider } from '../../src/viewer/theme/theme-provider.js';
-import { type Cost, costOf } from '../../test-support/scaling/cost.js';
+import { type Cost, costWith } from '../../test-support/scaling/cost.js';
 import { openCountingEngine } from '../../test-support/scaling/counting-engine.js';
 import { buildScalingReport, type ScalingReport, type Shape } from '../../test-support/scaling/generator.js';
 import { recordingDataSource } from '../../test-support/scaling/recording-source.js';
@@ -90,7 +90,7 @@ async function pageOn(live: ScalingReport, hash: string): Promise<Cost> {
       </ThemeProvider>,
     );
     await recording.settled(PAGE_CALLS[hash] ?? []);
-    const cost = costOf(await counting.take(), new Map());
+    const cost = costWith(await counting.take(), counting.prepared());
     cleanup();
     return cost;
   } finally {
@@ -109,7 +109,8 @@ export async function measureShape(shape: Shape, out: string): Promise<void> {
   try {
     for (const hash of PAGES) {
       const cost = await pageOn(live, hash);
-      if (cost.serial <= 0) throw new Error(`${hash} on ${shapeFile(shape)} made no requests`);
+      if (cost.serial + cost.parallel <= 0)
+        throw new Error(`${hash} on ${shapeFile(shape)} made no requests`);
       const dir = join(out, 'pages', encodeURIComponent(hash));
       mkdirSync(dir, { recursive: true });
       writeFileSync(join(dir, shapeFile(shape)), JSON.stringify({ shape, ...cost }));

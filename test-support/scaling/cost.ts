@@ -94,3 +94,15 @@ export function costOf(events: readonly ReadEvent[], prepared: ReadonlyMap<strin
   cost.serial += rangesOf(serial) * REQUESTS_PER_READ;
   return cost;
 }
+
+/** The cost of a statement's events plus the files it had prepared: each is one parallel request of its size. */
+export function costWith(events: readonly ReadEvent[], prepared: ReadonlyMap<string, number>): Cost {
+  const cost = costOf(events, prepared);
+  const touched = new Set(events.map((e) => e.path));
+  for (const [path, size] of prepared) {
+    if (touched.has(path)) continue;
+    cost.parallel += 1;
+    cost.bytes += size;
+  }
+  return cost;
+}
