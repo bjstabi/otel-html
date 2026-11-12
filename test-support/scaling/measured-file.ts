@@ -59,7 +59,10 @@ export function defineMeasuredFile(part: Part, spacing: Shape['spacing']): void 
   afterAll(async () => {
     await closeMeasured();
   });
-  describe.skipIf(SCALING !== '1')(`measured classes: ${part} (${spacing})`, { timeout: 180_000 }, () => {
+  // the cross shape (the largest of the class shapes) only feeds the prediction's fit: it asserts nothing, so it is
+  // measured only for the run that writes the points
+  const skipped = SCALING !== '1' || (part === 'cross' && OUT === undefined);
+  describe.skipIf(skipped)(`measured classes: ${part} (${spacing})`, { timeout: 180_000 }, () => {
     test.each(entries)(
       '$id measures the class it declares',
       async (entry) => {
