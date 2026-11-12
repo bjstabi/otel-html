@@ -186,7 +186,7 @@ export function recordingDataSource(inner: DataSource, manifest: ManifestV4): Re
 }
 
 const SPAN_NEEDS = new Set(['rows', 'facets', 'timeline', 'buckets', 'total', 'durations', 'groups']);
-const LOG_NEEDS = new Set(['rows', 'facets', 'timeline']);
+const LOG_NEEDS = new Set(['rows', 'facets', 'timeline', 'total']);
 
 /**
  * The catalogue ids of a call, one per need. `long`: whether the window of the shape being predicted (the report's whole
@@ -203,7 +203,9 @@ export function entryIdsOf(call: RecordedCall, long: boolean): string[] {
         .filter((n) => !(n === 'total' && call.needs.includes('rows')))
         .map((n) => spanId(call, n, s));
     case 'queryLogs':
-      return call.needs.map((n) => logId(call, n, s));
+      return call.needs
+        .filter((n) => !(n === 'total' && call.needs.includes('rows')))
+        .map((n) => logId(call, n, s));
     case 'services':
       return [`spans.services.${s}`];
     case 'percentileOf':
@@ -275,6 +277,8 @@ function logId(call: RecordedCall, need: string, s: 'short' | 'long'): string {
       return `logs.timeline.${s}`;
     case 'rows':
       return call.mode === 'traces' ? `logs.traces.${s}` : `logs.rows.${s}`;
+    case 'total':
+      return call.mode === 'traces' ? 'logs.total.traces.long' : `logs.total.${s}`;
     default:
       return `logs.facets.${call.attrFacets ? 'attr' : 'core'}.${s}`;
   }

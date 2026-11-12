@@ -8,6 +8,7 @@ import {
   isIn,
   literal,
   Query,
+  type SelectQuery,
   sql,
   verbatim,
 } from '@uwdata/mosaic-sql';
@@ -98,20 +99,34 @@ export function traceRowsQuery(f: SqlFilter, sort: TraceSort, limit: number): Qu
     .select('trace_id')
     .distinct()
     .where(...whereOf(f, 'spans'));
+  return traceRowsOf(traceAggregate(f.epoch).where(sql`trace_id IN (${matching})`), sort, limit);
+}
+
+/**
+ * `traceRowsQuery` for a list with no condition, text or window: every trace with a span, from `traces` alone (no
+ * `matching` relation over `spans`). A trace that has logs only has `span_count` 0 in every partition and is left out.
+ */
+export function allTraceRowsQuery(f: Pick<SqlFilter, 'epoch'>, sort: TraceSort, limit: number): Query {
+  return traceRowsOf(traceAggregate(f.epoch).having(sql`sum(span_count) > 0`), sort, limit);
+}
+
+function traceAggregate(epoch: bigint): SelectQuery {
   const timed = sql`span_count > 0 AND start_time_unix_nano IS NOT NULL AND end_time_unix_nano IS NOT NULL`;
   const rooted = sql`root_name IS NOT NULL AND start_time_unix_nano IS NOT NULL`;
-  const agg = Query.from('traces')
+  return Query.from('traces')
     .select({
       trace_id: column('trace_id'),
       span_count: sql`CAST(sum(span_count) AS BIGINT)`,
       error_count: sql`CAST(sum(error_count) AS BIGINT)`,
       log_count: sql`CAST(sum(log_count) AS BIGINT)`,
-      start_ns: sql`min(${relTime('start_time_unix_nano', f.epoch)}) FILTER (WHERE ${timed})`,
-      end_ns: sql`max(${relTime('end_time_unix_nano', f.epoch)}) FILTER (WHERE ${timed})`,
+      start_ns: sql`min(${relTime('start_time_unix_nano', epoch)}) FILTER (WHERE ${timed})`,
+      end_ns: sql`max(${relTime('end_time_unix_nano', epoch)}) FILTER (WHERE ${timed})`,
       root: sql`arg_min({'service': root_service, 'name': root_name, 'resource': root_resource}, (start_time_unix_nano, filename)) FILTER (WHERE ${rooted})`,
     })
-    .where(sql`trace_id IN (${matching})`)
     .groupby('trace_id');
+}
+
+function traceRowsOf(agg: Query, sort: TraceSort, limit: number): Query {
   const withDuration = Query.from({ agg }).select({
     trace_id: column('trace_id'),
     span_count: column('span_count'),

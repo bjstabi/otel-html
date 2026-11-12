@@ -17,8 +17,8 @@ import {
   type LogSort,
   type LogTraceSort,
   logByRefQuery,
+  logCountQuery,
   logRowsQuery,
-  logsWithTraceCountQuery,
   logTimelineQuery,
   logTracesQuery,
   type PatternSort,
@@ -30,6 +30,7 @@ import {
 import { absWindow, type Pruned } from '../../query/sql/prune.js';
 import { idTableRowsQuery } from '../../query/sql/residual.js';
 import {
+  allTraceRowsQuery,
   durationBinsQuery,
   durationSummaryQuery,
   groupStatsQuery,
@@ -140,7 +141,10 @@ const CORE_KEYS: ReadonlySet<string> = new Set(CORE_SPAN_FACETS.map((c) => c.key
 const LOG_SORTS: readonly LogSort['column'][] = ['time', 'severity', 'service'];
 const LOG_TRACE_SORTS: readonly LogTraceSort['column'][] = ['first', 'logs', 'severity'];
 const PATTERN_SORTS: readonly PatternSort['column'][] = ['count', 'first', 'last'];
-const LOG_AGGREGATE_NEEDS: readonly LogNeed[] = ['facets', 'timeline'];
+const LOG_AGGREGATE_NEEDS: readonly LogNeed[] = ['facets', 'timeline', 'total'];
+
+/** A filter with no predicate, text, residual or window: the trace list needs no span to say which traces match. */
+const unconditioned = (f: SqlFilter): boolean => f.predicate === null && f.text === null && f.window === null;
 const CORE_LOG_KEYS: ReadonlySet<string> = new Set(CORE_LOG_FACETS.map((c) => c.key));
 
 function sortOf<C extends string>(
@@ -339,7 +343,9 @@ export function createDuckDbDataSource(opts: {
           (async () => {
             if (traceSort !== null) {
               const r = traceRows(
-                await read(['spans', 'traces'], f.files, traceRowsQuery(f, traceSort, q.limit), signal),
+                unconditioned(f)
+                  ? await read(['traces'], undefined, allTraceRowsQuery(f, traceSort, q.limit), signal)
+                  : await read(['spans', 'traces'], f.files, traceRowsQuery(f, traceSort, q.limit), signal),
               );
               Object.assign(result, r);
             } else if (spanSort !== null && !useIds && test !== null) {
@@ -554,12 +560,7 @@ export function createDuckDbDataSource(opts: {
               const r = logTraceRows(
                 await read(['logs'], f.files, logTracesQuery(f, traceSort, q.limit), signal),
               );
-              const matching = await read(['logs'], f.files, logsWithTraceCountQuery(f), signal);
-              Object.assign(result, {
-                rows: r.rows,
-                total: r.total,
-                matched: toNumber(cell(rowsOf(matching)[0] ?? {}, 'n') ?? 0n, 'n'),
-              });
+              Object.assign(result, { rows: r.rows, total: r.total });
             } else if (logSort !== null && !useIds && test !== null) {
               let candidates = 0;
               const { rows, exhausted } = await residualRows({
@@ -581,6 +582,25 @@ export function createDuckDbDataSource(opts: {
               );
               Object.assign(result, { rows, total, matched: total });
             }
+          })(),
+        );
+      }
+
+      // The counts alone; logs mode with `rows` asked has them from the rows statement, traces mode never does.
+      if (needs.has('total') && (!needs.has('rows') || q.mode === 'traces')) {
+        parts.push(
+          (async () => {
+            const row =
+              rowsOf(
+                await read(
+                  ['logs'],
+                  f.files,
+                  logCountQuery(f, q.mode === 'traces' ? 'traces' : 'logs'),
+                  signal,
+                ),
+              )[0] ?? {};
+            result.matched = toNumber(cell(row, 'matched') ?? 0n, 'matched');
+            result.total = toNumber(cell(row, 'n') ?? 0n, 'n');
           })(),
         );
       }

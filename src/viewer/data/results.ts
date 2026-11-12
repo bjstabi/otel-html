@@ -66,8 +66,12 @@ export interface GroupStatsResult {
  */
 export type SpanNeed = 'rows' | 'facets' | 'timeline' | 'buckets' | 'total' | 'durations' | 'groups';
 
-/** Which parts of a `LogQueryResult` to compute; absent parts come back empty. */
-export type LogNeed = 'rows' | 'facets' | 'timeline';
+/**
+ * Which parts of a `LogQueryResult` to compute; absent parts come back empty. `total` fills `total` and `matched` with
+ * one count and reads no row; in logs mode, asked with `rows`, the rows statement sets them. In traces mode `rows` sets
+ * `total` (the traces) only: `matched` (the logs that carry a trace id) is `total`'s.
+ */
+export type LogNeed = 'rows' | 'facets' | 'timeline' | 'total';
 
 export interface LogQuery {
   condition: string | null;

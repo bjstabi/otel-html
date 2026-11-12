@@ -298,11 +298,11 @@ describe('LogsExplorer', () => {
     expect(timed?.textContent).not.toContain('no time');
   });
 
-  test('queryLogs gets no progress function and asks for rows, facets and the timeline', async () => {
+  test('queryLogs gets no progress function and asks for rows, the total, facets and the timeline', async () => {
     const { queryArgs } = setup();
     await screen.findByRole('grid', { name: 'Results' });
     const [q, signal, ...extra] = queryArgs[0] ?? [];
-    expect((q as LogQuery).needs).toEqual(['rows', 'facets', 'timeline']);
+    expect((q as LogQuery).needs).toEqual(['rows', 'total', 'facets', 'timeline']);
     expect((q as LogQuery).facetKeys).toBeNull();
     expect(signal).toBeInstanceOf(AbortSignal);
     expect(extra).toEqual([]);

@@ -11,6 +11,7 @@ import {
 import { buildFilter, whereOf } from '../../../src/query/sql/filter.js';
 import { absWindow } from '../../../src/query/sql/prune.js';
 import {
+  allTraceRowsQuery,
   durationBinsQuery,
   durationSummaryQuery,
   groupStatsQuery,
@@ -544,6 +545,49 @@ describe('services', () => {
   });
   test('absWindow is what the spans window compares against', () => {
     expect(absWindow({ start: 1, end: 2 }, f.epoch)).toEqual({ start: f.epoch + 1n, end: f.epoch + 2n });
+  });
+});
+
+describe('the unconditioned trace list', () => {
+  const TRACE_SORTS = [
+    { column: 'start', dir: 'asc' },
+    { column: 'duration', dir: 'desc' },
+    { column: 'spans', dir: 'desc' },
+    { column: 'errors', dir: 'desc' },
+    { column: 'service', dir: 'asc' },
+    { column: 'resource', dir: 'asc' },
+  ] as const;
+  let h: Format4Fixture;
+  let hdb: TestDb;
+  beforeAll(async () => {
+    // T1 split over two partitions, T2 with an error, T3; trace 99 has a log and no span
+    h = await buildFormat4Report(
+      [
+        request(P0),
+        request(P1),
+        otlp(
+          logsRequest(
+            [logRecord({ severityNumber: 9, traceId: hex(99, 32), spanId: hex(99, 16) })],
+            [attr('service.name', str('svc-a'))],
+          ) as never,
+        ),
+      ],
+      { close: false },
+    );
+    hdb = await openFixtureDb(h);
+  });
+  const hfilter = () =>
+    buildFilter({ manifest: h.manifest, table: 'spans', condition: null, text: '', window: null }).filter;
+
+  test.each(TRACE_SORTS)('allTraceRowsQuery equals traceRowsQuery, sorted by %o', (sort) => {
+    const all = hdb.rows(allTraceRowsQuery(hfilter(), sort, 50).toString());
+    expect(col(all, 'trace_id')).not.toContain(hex(99, 32));
+    expect(all).toHaveLength(3);
+    expect(all).toEqual(hdb.rows(traceRowsQuery(hfilter(), sort, 50).toString()));
+  });
+
+  test('the statement reads no spans', () => {
+    expect(allTraceRowsQuery(hfilter(), TRACE_SORTS[0], 5).toString()).not.toMatch(/\bspans\b/);
   });
 });
 

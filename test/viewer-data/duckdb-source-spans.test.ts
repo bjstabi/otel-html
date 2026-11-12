@@ -207,6 +207,32 @@ describe('querySpans', () => {
     ).toBe(kept.total);
   });
 
+  test('an unconditioned trace list reads traces alone; a window, a condition or a text keep the spans path', async () => {
+    const fresh = () =>
+      createDuckDbDataSource({
+        engine: mosaicQueryEngine(createCoordinator(db.connector, silentLogger), db),
+        manifest: f.manifest,
+      });
+    const spanStatements = async (over: Partial<SpanQuery>): Promise<string[]> => {
+      const before = db.connector.requests.length;
+      await fresh().querySpans(query({ mode: 'traces', needs: ['rows', 'total'], ...over }));
+      return db.connector.requests
+        .slice(before)
+        .map((r) => r.sql)
+        .filter((q) => /\bspans\b/.test(q));
+    };
+    expect(await spanStatements({})).toEqual([]);
+    const window = { start: 0, end: 1e12 };
+    for (const over of [{ window }, { condition: 'name == "COMMIT"' }, { text: 'select' }])
+      expect((await spanStatements(over)).length, JSON.stringify(over)).toBeGreaterThan(0);
+    const all = await fresh().querySpans(query({ mode: 'traces', needs: ['rows', 'total'] }));
+    const spans = await fresh().querySpans(
+      query({ mode: 'traces', needs: ['rows', 'total'], condition: 'name != "no-such"' }),
+    );
+    expect(all.rows).toEqual(spans.rows);
+    expect(all.total).toBe(spans.total);
+  });
+
   test('a negative or fractional limit is a usage error', async () => {
     for (const limit of [-1, 1.5, Number.NaN]) {
       await expect(ds.querySpans(query({ limit }))).rejects.toMatchObject({

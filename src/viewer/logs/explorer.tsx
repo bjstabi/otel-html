@@ -165,7 +165,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
               mode,
               sort: { column: sort.column, dir: sort.dir },
               limit: listCap,
-              needs: ['rows', 'facets', 'timeline'],
+              needs: ['rows', 'total', 'facets', 'timeline'],
               facetKeys: null,
             },
           },

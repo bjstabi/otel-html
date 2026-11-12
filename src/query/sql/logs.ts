@@ -141,11 +141,19 @@ export function logTracesQuery(f: SqlFilter, sort: LogTraceSort, limit: number):
     .limit(limit);
 }
 
-/** `n`: how many of the logs matching `f` carry a trace id (the traces mode's `matched`). */
-export function logsWithTraceCountQuery(f: SqlFilter): Query {
-  return Query.from('logs')
-    .select({ n: sql`count(*)` })
-    .where(...whereOf(f, 'logs'), sql`trace_id IS NOT NULL`);
+/**
+ * One row: `n` and `matched`. 'logs': n = count(*), matched = n. 'traces': n = count(DISTINCT trace_id), matched = count(*)
+ * of the logs with a trace id.
+ */
+export function logCountQuery(f: SqlFilter, mode: 'logs' | 'traces'): Query {
+  const terms = whereOf(f, 'logs');
+  return mode === 'logs'
+    ? Query.from('logs')
+        .select({ n: sql`count(*)`, matched: sql`count(*)` })
+        .where(...terms)
+    : Query.from('logs')
+        .select({ n: sql`count(DISTINCT trace_id)`, matched: sql`count(*)` })
+        .where(...terms, sql`trace_id IS NOT NULL`);
 }
 
 function logsFileOf(n: number, manifest: ManifestV4): string {

@@ -434,7 +434,7 @@ describe('the Top list and Table widget states', () => {
     expect(calls[0]).toHaveLength(2);
   });
 
-  test('a log widget asks for rows and facets, restricted to its key, with no progress function', async () => {
+  test('a log widget asks for the total and facets, restricted to its key, with no progress function', async () => {
     const calls: unknown[][] = [];
     mount(
       {
@@ -448,7 +448,7 @@ describe('the Top list and Table widget states', () => {
     );
     await waitFor(() => expect(calls.length).toBeGreaterThan(0));
     const [q, signal] = calls[0] as [LogQuery, unknown];
-    expect(q).toMatchObject({ needs: ['rows', 'facets'], facetKeys: ['service.name'] });
+    expect(q).toMatchObject({ needs: ['total', 'facets'], facetKeys: ['service.name'] });
     expect(signal).toBeInstanceOf(AbortSignal);
     expect(calls[0]).toHaveLength(2);
   });

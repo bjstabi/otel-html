@@ -264,9 +264,14 @@ const SPAN_ROWS: SpanSpec[] = [
 
 const TRACE_LIST: SpanSpec[] = [
   {
+    ...span('traces.list', ['rows'], ['allTraceRowsQuery'], { over: { mode: 'traces' } }),
+    family: 'trace list',
+    variants: [ALL, ALL_LONG],
+  },
+  {
     ...span('traces.list', ['rows'], ['traceRowsQuery'], { over: { mode: 'traces' } }),
     family: 'trace list',
-    variants: [ALL, ALL_LONG, SHORT, LONG],
+    variants: [SHORT, LONG],
   },
   {
     ...span('traces.list.statkey', ['rows'], ['traceRowsQuery'], {
@@ -298,8 +303,13 @@ const LOG_QUERIES: LogSpec[] = [
   }),
   log('logs.facets.attr', 'top values', ['facets'], ['coreFacetsQuery', 'attributeFacetsQuery']),
   log('logs.rows', 'rows page', ['rows'], ['logRowsQuery']),
-  log('logs.traces', 'trace list', ['rows'], ['logTracesQuery', 'logsWithTraceCountQuery'], {
+  log('logs.traces', 'trace list', ['rows', 'total'], ['logTracesQuery', 'logCountQuery'], {
     over: { mode: 'traces', sort: { column: 'first', dir: 'asc' } },
+  }),
+  log('logs.total', 'count', ['total'], ['logCountQuery']),
+  log('logs.total.traces', 'count', ['total'], ['logCountQuery'], {
+    over: { mode: 'traces', sort: { column: 'first', dir: 'asc' } },
+    variants: [LONG],
   }),
   log('logs.timeline.statkey', 'time buckets', ['timeline'], ['logTimelineQuery'], { when: STAT_KEY }),
   log('logs.timeline.text', 'time buckets', ['timeline'], ['logTimelineQuery'], {
@@ -718,8 +728,8 @@ const BASELINE: Record<string, Declared> = {
     allowed: { retention: PERCENTILE_SHORT, density: PERCENTILE_SHORT },
   }),
   'percentile.long': decl(['scan', 'scan', null]),
-  'traces.list.all': decl(['scan', 'scan', null]),
-  'traces.list.all.long': decl(['scan', 'scan', null]),
+  'traces.list.all': decl(['files', 'files', null]),
+  'traces.list.all.long': decl(['files', 'files', null]),
   'traces.list.short': decl(['scan', 'scan', 'scan'], {
     allowed: { density: TRACE_LIST_SCAN, window: TRACE_LIST_SCAN },
   }),
@@ -765,6 +775,9 @@ const BASELINE: Record<string, Declared> = {
   'logs.traces.long': decl(['fixed', 'files', 'files'], {
     allowed: { density: ROWS_PAGE, window: ROWS_PAGE },
   }),
+  'logs.total.short': decl(['fixed', 'files', 'files']),
+  'logs.total.long': decl(['fixed', 'files', 'files']),
+  'logs.total.traces.long': decl(['fixed', 'files', 'files']),
   'logs.timeline.statkey.short': decl(['fixed', 'files', 'fixed'], {
     needed: ONE_PARTITION,
     scanOf: 'logs.timeline.short',
@@ -798,6 +811,7 @@ const BASELINE: Record<string, Declared> = {
 /** The builders whose statements read a traces or patterns file. */
 const SMALL_TABLE_BUILDERS: ReadonlySet<string> = new Set([
   'traceRowsQuery',
+  'allTraceRowsQuery',
   'tracePartitionsQuery',
   'traceSummaryQuery',
   'patternsQuery',
@@ -919,12 +933,7 @@ export const KNOWN_DEBT: readonly DebtLine[] = [
     'metrics.runQuery',
     'metrics.runQuery.failed',
   ]),
-  ...owed(282, 4, 'density', 'files', true, ['traces.list.all', 'traces.list.all.long']),
   ...owed(282, 4, 'density', 'fixed', true, ['resourceValues.all']),
-  ...owed(282, 4, 'retention', 'files', true, [
-    'traces.list.all',
-    'traces.list.all.long',
-    'resourceValues.all',
-  ]),
+  ...owed(282, 4, 'retention', 'files', true, ['resourceValues.all']),
   ...owed(283, 7, 'retention', 'fixed', false, ['spans.total.short', 'spans.total.long']),
 ];

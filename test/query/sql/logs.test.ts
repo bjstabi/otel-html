@@ -5,8 +5,8 @@ import { buildFilter } from '../../../src/query/sql/filter.js';
 import type { SurroundingTarget } from '../../../src/query/sql/logs.js';
 import {
   logByRefQuery,
+  logCountQuery,
   logRowsQuery,
-  logsWithTraceCountQuery,
   logTimelineQuery,
   logTracesQuery,
   patternsQuery,
@@ -58,7 +58,8 @@ type Key =
   | 'sev_info'
   | 'sev_warn'
   | 'sev_error'
-  | 'sev_fatal';
+  | 'sev_fatal'
+  | 'matched';
 type Row = Partial<Record<Key, unknown>> & Record<string, unknown>;
 
 const BASE = BigInt(EPOCH_NS);
@@ -470,16 +471,24 @@ describe('pointsTimelineQuery', () => {
   });
 });
 
-describe('logsWithTraceCountQuery', () => {
-  test('counts the matching logs that carry a trace id, in one scalar row', () => {
-    const q = logsWithTraceCountQuery(filter().filter);
-    expect(String(q)).toBe('SELECT count(*) AS "n" FROM "logs" WHERE trace_id IS NOT NULL');
-    expect(run(q).map((r) => num(r.n))).toEqual([4]);
+describe('logCountQuery', () => {
+  test("'logs' counts the matching logs; matched equals n", () => {
+    const q = logCountQuery(filter().filter, 'logs');
+    expect(String(q)).toBe('SELECT count(*) AS "n", count(*) AS "matched" FROM "logs"');
+    const all = run(logRowsQuery(filter().filter, { column: 'time', dir: 'asc' }, 100));
+    expect(run(q).map((r) => [num(r.n), num(r.matched)])).toEqual([[all.length, all.length]]);
+  });
+
+  test("'traces' counts distinct traces, and matched the logs that carry a trace id", () => {
+    const q = logCountQuery(filter().filter, 'traces');
+    expect(String(q)).toContain('trace_id IS NOT NULL');
+    const traces = run(logTracesQuery(filter().filter, { column: 'first', dir: 'asc' }, 100));
+    expect(run(q).map((r) => [num(r.n), num(r.matched)])).toEqual([[traces.length, 4]]);
   });
 
   test('the filter narrows the count', () => {
-    const q = logsWithTraceCountQuery(filter({ condition: 'severity_number == 17' }).filter);
-    expect(run(q).map((r) => num(r.n))).toEqual([expect.any(Number)]);
+    const q = logCountQuery(filter({ condition: 'severity_number == 17' }).filter, 'traces');
+    expect(run(q).map((r) => num(r.matched))).toEqual([expect.any(Number)]);
     expect(String(q)).toContain('trace_id IS NOT NULL');
   });
 });
