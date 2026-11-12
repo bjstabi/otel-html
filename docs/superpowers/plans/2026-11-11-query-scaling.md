@@ -1103,6 +1103,12 @@ word once. Neither the write nor the read side is proven.
 - [ ] **Step 5: Size.** The filters' bytes per partition go in the PR body, against the partition's bytes.
 - [ ] **Step 6: Commit.** `perf(format): lookups by trace id skip partitions by a bloom filter`
 
+Done 2026-11-12. The spike passed: an absent id read 8 blocks (footer and filters) against 69, and parquet-wasm 0.9.0
+has no bloom setter, so `bloom.ts` writes the split-block filter as a post-pass. Filters on `spans` made `trace.get` and
+`trace.share` worse on density (8 / 11 / 13 serial against 7 / 10 / 11), because DuckDB reads each row group's filter
+before the time statistics; the maintainer chose filters on `traces` and `logs` only. `trace.has` and `trace.logs`
+reach `files`; `trace.get` and `trace.share` stay `scan` and owed.
+
 ### Task 12: `resourceValues` takes the window
 
 **Files:**
