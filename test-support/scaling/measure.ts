@@ -6,9 +6,18 @@ import { type Axis, CATALOGUE, type CatalogueEntry, DECLARED } from '../../src/v
 import { createDuckDbDataSource } from '../../src/viewer/data/duckdb-source.js';
 import { bounded, shareOnce } from './bounded.js';
 import { classify, type Step } from './classify.js';
-import { type Cost, costOf } from './cost.js';
+import { type Cost, costOf, splitOpens } from './cost.js';
 import { type CountingEngine, openCountingEngine, type ReadEvent } from './counting-engine.js';
-import { buildScalingReport, PREBUILT_ENV, type ScalingReport, type Shape, stepsOf } from './generator.js';
+import {
+  BASE,
+  buildScalingReport,
+  CROSS,
+  PREBUILT_ENV,
+  type ScalingReport,
+  type Shape,
+  stepsOf,
+} from './generator.js';
+import { type EntryFit, fitEntry, type Table } from './model.js';
 
 export const AXES: readonly Axis[] = ['retention', 'density', 'window'];
 
@@ -32,6 +41,10 @@ interface Measured {
   /** The serial requests of the files under `HARNESS_SMALL_FILE_BYTES`, and of the others. */
   small: number;
   large: number;
+  /** The serial requests of the data part: `cost.serial` less the opens and footer reads (`splitOpens`). */
+  dataSerial: number;
+  /** The files opened, per table: how many, and the modelled ranges of their footer reads. */
+  opens: Partial<Record<Table, { count: number; footer: number }>>;
 }
 
 const shapeKey = (s: Shape): string => `${s.outside}/${s.inside}/${s.rowGroups}/${s.spacing}`;
@@ -85,7 +98,14 @@ async function measure(entry: CatalogueEntry, shape: Shape): Promise<Measured> {
       (sizes.get(e.path) ?? Number.POSITIVE_INFINITY) < HARNESS_SMALL_FILE_BYTES;
     const small = costOfEvents(events.filter(isSmall)).serial;
     const large = costOfEvents(events.filter((e) => !isSmall(e))).serial;
-    return { cost: costOfEvents(events), small, large };
+    const cost = costOfEvents(events);
+    const split = splitOpens(events, sizes);
+    const opens: Measured['opens'] = {};
+    for (const f of split.files) {
+      const had = opens[f.table] ?? { count: 0, footer: 0 };
+      opens[f.table] = { count: had.count + 1, footer: had.footer + f.footer };
+    }
+    return { cost, small, large, dataSerial: cost.serial - split.serial, opens };
   });
   live.turn = run.catch(() => undefined);
   return run;
@@ -154,15 +174,50 @@ export async function stepsFor(entry: CatalogueEntry, axis: Axis): Promise<Step[
   return steps;
 }
 
-/** What `entry` cost cold on one generated shape: serial and parallel requests, bytes. */
+/** What `entry` cost cold on one generated shape: serial and parallel requests, bytes, and the data part's serial split. */
 export interface ModelPoint extends Cost {
   shape: Shape;
+  dataSerial: number;
+  opens: Measured['opens'];
+}
+
+/** The extra density step the model is fitted with (`mise run predict:queries`): 16 row groups per partition. */
+export const DENSE_16 = 16;
+
+/**
+ * Whether the extra density step is measured for `entry`: not for a request with a residual condition, which gives up
+ * past 200,000 candidate rows (a partition of 16 row groups holds 131,072).
+ */
+export const hasDensity16 = (entry: CatalogueEntry): boolean => !entry.id.includes('.residual.');
+
+/**
+ * The shapes the model of an entry of `spacing` is fitted on: the three axes' steps, the cross and, with `density16`,
+ * one more density step (a fourth value of G, so the line over G is not drawn through two points).
+ */
+export function modelShapes(spacing: Shape['spacing'], density16: boolean): Shape[] {
+  const shapes = [
+    ...stepsOf('retention', spacing),
+    ...stepsOf('density', spacing),
+    ...stepsOf('window', spacing),
+    { ...CROSS, spacing },
+  ];
+  if (density16) shapes.push({ ...BASE, spacing, rowGroups: DENSE_16 });
+  const seen = new Set<string>();
+  return shapes.filter((s) => {
+    const key = shapeKey(s);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 /** The cost of `entry` on each of `shapes`: the points the prediction fits its model on (`mise run predict:queries`). */
 export async function pointsOf(entry: CatalogueEntry, shapes: readonly Shape[]): Promise<ModelPoint[]> {
   const points: ModelPoint[] = [];
-  for (const shape of shapes) points.push({ shape, ...(await measuredOf(entry, shape)).cost });
+  for (const shape of shapes) {
+    const m = await measuredOf(entry, shape);
+    points.push({ shape, ...m.cost, dataSerial: m.dataSerial, opens: m.opens });
+  }
   return points;
 }
 
@@ -202,4 +257,22 @@ export async function closeMeasured(): Promise<void> {
   measured.clear();
   for (const live of all) await live.counting.close();
   for (const live of all) await live.report.close();
+}
+
+/**
+ * The model of `entry`, fitted on its measurements on `modelShapes` (including the extra density step): the data-part
+ * serial requests, bytes and parallel requests, and the files it opens.
+ */
+export async function fitOf(entry: CatalogueEntry): Promise<EntryFit> {
+  const points = await pointsOf(entry, modelShapes(entry.spacing, hasDensity16(entry)));
+  return fitEntry(
+    points.map((p) => ({
+      shape: p.shape,
+      serial: p.dataSerial,
+      parallel: p.parallel,
+      bytes: p.bytes,
+      opens: p.opens,
+    })),
+    !entry.window,
+  );
 }

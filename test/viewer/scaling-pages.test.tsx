@@ -12,8 +12,20 @@ import { createHashHistory } from '../../src/viewer/state/hash-history.js';
 import { ThemeProvider } from '../../src/viewer/theme/theme-provider.js';
 import { costOf } from '../../test-support/scaling/cost.js';
 import { openCountingEngine, type ReadEvent } from '../../test-support/scaling/counting-engine.js';
-import { BASE, buildScalingReport, type ScalingReport } from '../../test-support/scaling/generator.js';
-import { entryIdsOf, recordingDataSource } from '../../test-support/scaling/recording-source.js';
+import {
+  BASE,
+  buildScalingReport,
+  CROSS,
+  type ScalingReport,
+  type Shape,
+} from '../../test-support/scaling/generator.js';
+import { closeMeasured, DENSE_16, fitOf } from '../../test-support/scaling/measure.js';
+import { countCalls, improvedFit, type PageEntry, predictPage } from '../../test-support/scaling/model.js';
+import {
+  entryIdsOf,
+  type RecordedCall,
+  recordingDataSource,
+} from '../../test-support/scaling/recording-source.js';
 
 // jsdom has no layout or ResizeObserver, which ECharts needs; the requests are what this test records, not the charts.
 vi.mock('../../src/viewer/components/chart.js', () => ({ Chart: (): null => null }));
@@ -44,7 +56,7 @@ vi.mock('../../test-support/host-engine-files.js', async () => {
 });
 
 const IDS = new Set(CATALOGUE.map((e) => e.id));
-const { OTEL_HTML_SCALING_OUT: OUT } = process.env;
+const { OTEL_HTML_SCALING: SCALING, OTEL_HTML_SCALING_OUT: OUT } = process.env;
 
 /** Methods any rendering of the page must call: a page that records fewer lost a widget's request. */
 const MUST_CALL: Record<string, readonly string[]> = {
@@ -160,5 +172,89 @@ describe('the pages ask only catalogued requests', () => {
       }
     },
     60_000,
+  );
+});
+
+/** A page in one counting engine over the report of `shape`: the calls it made and what its file reads cost. */
+async function pageOn(shape: Shape, hash: string): Promise<{ calls: RecordedCall[]; serial: number }> {
+  const live = await buildScalingReport(shape);
+  const counting = await openCountingEngine(live.dir, live.manifest);
+  try {
+    const manifest = manifestWithCi(live.manifest, live.ids.metric);
+    await counting.cold();
+    const recording = recordingDataSource(
+      createDuckDbDataSource({ engine: counting.engine, manifest: live.manifest }),
+      manifest,
+    );
+    window.location.hash = hash;
+    render(
+      <ThemeProvider>
+        <Shell dataSource={recording.ds} history={createHashHistory(window)} />
+      </ThemeProvider>,
+    );
+    await recording.settled();
+    const cost = costOf(await counting.take(), new Map());
+    cleanup();
+    return { calls: recording.calls, serial: cost.serial };
+  } finally {
+    cleanup();
+    await counting.close();
+    await live.close();
+  }
+}
+
+/** Within this share of the page's cost in one engine the prediction counts as right (the plan's tolerance). */
+const TOLERANCE = 0.25;
+const SHAPES: readonly (readonly [string, Shape])[] = [
+  ['BASE', BASE],
+  ['CROSS', CROSS],
+  ['rowGroups 16', { ...BASE, rowGroups: DENSE_16 }],
+];
+
+describe.skipIf(SCALING !== '1')('a page is predicted from the union of its entries reads', () => {
+  afterAll(async () => {
+    await closeMeasured();
+  });
+
+  test.each(SHAPES.flatMap(([name, shape]) => PAGES.map((hash) => [name, hash, shape] as const)))(
+    '%s %s',
+    async (name, hash, shape) => {
+      const { calls, serial } = await pageOn(shape, hash);
+      // the page's window spans the report, so every partition is inside it; the dense shapes are short windows
+      const partitions = Array.from({ length: shape.outside + shape.inside }, () => ({
+        rowGroups: shape.rowGroups,
+        inWindow: true,
+        smallFiles: 0,
+      }));
+      const counted = countCalls(
+        calls.map((call) => ({
+          method: call.method,
+          idKey: call.idKey,
+          ids: entryIdsOf(call, false),
+          baseline: false,
+        })),
+      );
+      const entries: PageEntry[] = [];
+      for (const [key, times] of counted) {
+        const entry = CATALOGUE.find((e) => e.id === key.split('|')[0]);
+        if (entry === undefined) throw new Error(`no catalogue entry for ${key}`);
+        entries.push({ fit: improvedFit(await fitOf(entry), {}), times, filesAxes: [] });
+      }
+      const predicted = predictPage(entries, partitions).serial;
+      if (OUT !== undefined) {
+        const dir = join(OUT, 'one-engine');
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(
+          join(dir, `${name.replaceAll(' ', '-')}-${encodeURIComponent(hash)}.json`),
+          JSON.stringify({ shape: name, page: hash, predicted, measured: serial }),
+        );
+      }
+      expect(serial, `${name} ${hash} measured`).toBeGreaterThan(0);
+      expect(
+        Math.abs(predicted - serial) / serial,
+        `${name} ${hash}: predicted ${predicted}, measured ${serial}`,
+      ).toBeLessThanOrEqual(TOLERANCE);
+    },
+    600_000,
   );
 });

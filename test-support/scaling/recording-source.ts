@@ -18,6 +18,8 @@ export interface RecordedCall {
   residual: boolean;
   /** `metricRunQuery` with a failure condition (an id table of the failed runs follows). */
   failedWhen: boolean;
+  /** The id a by-id call asked for (`getTrace`, `serviceShare`, `hasTrace`, `traceLogs`, `getLog`, `surroundingLogs`), else null. */
+  idKey: string | null;
   /** `metricQuery` of a summary metric (its quantiles are read); by the entry's type, not its name. */
   summary: boolean;
 }
@@ -72,6 +74,15 @@ export function conditionKindOf(
 
 const NO_NEEDS: readonly string[] = [];
 
+const BY_ID = new Set<keyof DataSource>([
+  'getTrace',
+  'serviceShare',
+  'hasTrace',
+  'traceLogs',
+  'getLog',
+  'surroundingLogs',
+]);
+
 /**
  * Wraps `inner` so each request is recorded as it starts, by method, needs, window and the kind of its condition.
  * `manifest` is what the wrapper reports as the source's manifest (the page reads its config from it).
@@ -112,6 +123,7 @@ export function recordingDataSource(inner: DataSource, manifest: ManifestV4): Re
       attrFacets: Array.isArray(q.needs) && q.needs.includes('facets') && q.facetKeys === null,
       residual: (condition !== null && CALL.test(condition)) || (where !== null && CALL.test(where)),
       failedWhen: typeof q.failedWhen === 'string',
+      idKey: BY_ID.has(method) && typeof arg === 'string' ? arg : null,
       summary: type === 'summary',
     };
   };

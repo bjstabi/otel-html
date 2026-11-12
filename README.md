@@ -973,7 +973,7 @@ biome ci, actionlint, the task graph and the formatting of mise.toml
 Print the requests, megabytes and modelled milliseconds the viewer's pages cost on named report shapes
 An estimate: it prints and asserts nothing. Measures every catalogue entry cold on the generated shapes
 (test/scaling/classes*.test.ts, about 1 minute; the cached test:scaling does not keep its measurements) and records
-what each page asks of the data source (test/viewer/scaling-pages.test.tsx) into dist/predict-queries, then runs
+what each page asks of the data source (test/viewer/scaling-pages.test.tsx, which also compares each page's prediction with the page's cost in one counting engine on three shapes and fails outside 25 %) into dist/predict-queries, then runs
 scripts/predict-queries.ts: per page and per shape (rolling = test-support/scaling/shapes/rolling.json, 30x150k, 90x150k,
 30x1.5M) the serial and parallel requests, megabytes and modelled milliseconds. `-- --after 4 --window 7d` prints the
 state after PR 4 of the query-scaling plan with the last 7 days as the window; `-- --threshold <bytes>` moves the

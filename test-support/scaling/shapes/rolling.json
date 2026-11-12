@@ -1,5 +1,5 @@
 {
-  "takenAt": "2026-11-11",
+  "takenAt": "2026-11-12",
   "source": "https://bjstabi.github.io/otel-html/branch/main/data/manifest.js",
   "range": { "start": "1793449360000000000", "end": "1794419881000000000" },
   "totals": { "spans": 2831077, "logs": 296842, "metrics": 732 },

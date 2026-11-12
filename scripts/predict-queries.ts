@@ -3,13 +3,21 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import { OtelHtmlError } from '../src/model/errors.js';
 import {
-  fitModel,
-  type Model,
+  type AxisName,
+  countCalls,
+  type EntryFit,
+  type FitPoint,
+  fitEntry,
+  improvedFit,
   MS_PER_MB,
   PARALLEL_BATCH_MS,
+  type PageEntry,
   type PartitionShape,
-  predict,
+  predictPage,
   SERIAL_REQUEST_MS,
+  TABLES,
+  type Table,
+  type Target,
 } from '../test-support/scaling/model.js';
 
 /**
@@ -19,9 +27,12 @@ import {
  *
  *   bun scripts/predict-queries.ts [--after <pr>] [--window none|7d] [--threshold <bytes>] [--dir <folder>]
  *
- * Each entry's cost is a model fitted on the measurements, `a + R (r + rd G) + W (w + wd G)` (model.ts), summed over the
- * partitions of the shape. `--after <pr>` replaces the model of every entry that has a line in the known-debt list for
- * that PR or an earlier one by its target class.
+ * A page runs in one engine, so it pays the open of a file (and its footer read) once: the prediction of a page is the
+ * union of the files its entries open, plus the sum of the entries' data parts. Each entry's data part is a
+ * non-negative model fitted on the measurements, `a + R (r + rd G) + W (w + wd G)` (model.ts), summed over the
+ * partitions of the shape; a by-id call counts its data part once per distinct id the page asked.
+ * `--after <pr>` changes the model of every entry per axis (retention, window, density): the best debt line of that
+ * axis for that PR or an earlier one replaces the axis' terms by its target class.
  */
 
 const PAGES = ['#/dashboards/ci', '#/traces?mode=traces', '#/traces', '#/logs', '#/metrics'] as const;
@@ -33,11 +44,6 @@ const SPANS_PER_ROW_GROUP = 50_000;
 const DEFAULT_THRESHOLD = 262_144;
 /** Chromium keeps this many connections to one host: a batch of parallel requests is this wide. */
 const PARALLEL_WIDTH = 6;
-/** Methods whose result the data source remembers: the page pays for the first call only. */
-const MEMOISED = new Set(['metricCatalog']);
-
-const TABLES = ['spans', 'logs', 'points', 'traces', 'patterns'] as const;
-type Table = (typeof TABLES)[number];
 
 function arg(name: string): string | null {
   const i = process.argv.indexOf(name);
@@ -65,34 +71,41 @@ if (!(threshold > 0)) fail(`--threshold takes a number of bytes, got ${arg('--th
 const PointSchema = z.object({
   shape: z.object({ outside: z.number(), inside: z.number(), rowGroups: z.number() }),
   serial: z.number(),
+  dataSerial: z.number(),
   parallel: z.number(),
   bytes: z.number(),
+  opens: z.record(z.string(), z.object({ count: z.number(), footer: z.number() })),
 });
-interface Models {
-  serial: Model;
-  parallel: Model;
-  bytes: Model;
-}
 
 function readJson(path: string): unknown {
   return JSON.parse(readFileSync(path, 'utf8')) as unknown;
 }
 
-const models = new Map<string, Models>();
+const EntriesSchema = z.array(z.object({ id: z.string(), window: z.boolean() }));
+const WINDOWED = new Map(
+  EntriesSchema.parse(readJson(join(dir, 'entries.json'))).map((e) => [e.id, e.window] as const),
+);
+
+const isTable = (t: string): t is Table => TABLES.some((x) => x === t);
+const models = new Map<string, EntryFit>();
 // One folder per entry, one file per (part, shape) the test files wrote; the base shape is measured by several parts.
 for (const id of readdirSync(join(dir, 'measured'))) {
   const byShape = new Map<string, z.infer<typeof PointSchema>>();
   for (const file of readdirSync(join(dir, 'measured', id)).filter((f) => f.endsWith('.json')))
     for (const point of z.array(PointSchema).parse(readJson(join(dir, 'measured', id, file))))
       byShape.set(`${point.shape.outside}/${point.shape.inside}/${point.shape.rowGroups}`, point);
-  const points = [...byShape.values()];
-  const of = (pick: (p: z.infer<typeof PointSchema>) => number): Model =>
-    fitModel(points.map((p) => ({ shape: { ...p.shape, spacing: 'dense' }, serial: pick(p) })));
-  models.set(id, {
-    serial: of((p) => p.serial),
-    parallel: of((p) => p.parallel),
-    bytes: of((p) => p.bytes),
+  const points = [...byShape.values()].map((p): FitPoint => {
+    const opens: FitPoint['opens'] = {};
+    for (const [t, o] of Object.entries(p.opens)) if (isTable(t)) opens[t] = o;
+    return { shape: p.shape, serial: p.dataSerial, parallel: p.parallel, bytes: p.bytes, opens };
   });
+  try {
+    models.set(id, fitEntry(points, WINDOWED.get(id) === false));
+  } catch (e) {
+    throw new OtelHtmlError('usage', {
+      message: `${id}: ${e instanceof Error ? e.message : String(e)} (${points.length} measured shapes)`,
+    });
+  }
 }
 
 /** A recorded call with the catalogue ids it maps to for a short and for a long window (the test maps, `entryIdsOf`). */
@@ -100,6 +113,7 @@ const CallSchema = z.object({
   call: z.object({
     method: z.string(),
     condition: z.enum(['none', 'sortkey', 'statkey', 'attr', 'text']),
+    idKey: z.string().nullable(),
   }),
   ids: z.object({ short: z.array(z.string()), long: z.array(z.string()) }),
 });
@@ -117,11 +131,12 @@ for (const page of PAGES)
   );
 
 const DebtSchema = z.array(
-  z.object({ id: z.string(), pr: z.number(), target: z.enum(['fixed', 'files', 'matched', 'scan']) }),
-);
-const EntriesSchema = z.array(z.object({ id: z.string(), window: z.boolean() }));
-const WINDOWED = new Map(
-  EntriesSchema.parse(readJson(join(dir, 'entries.json'))).map((e) => [e.id, e.window] as const),
+  z.object({
+    id: z.string(),
+    axis: z.enum(['retention', 'density', 'window']),
+    pr: z.number(),
+    target: z.enum(['fixed', 'files', 'matched', 'scan']),
+  }),
 );
 const KNOWN_DEBT = DebtSchema.parse(readJson(join(dir, 'debt.json')));
 
@@ -222,14 +237,17 @@ function syntheticShape(runs: number, spans: number): Shape {
   };
 }
 
-/** The generated base report the recordings were made on (2 + 2 partitions of 2 row groups): the model against a run. */
+/**
+ * The generated base report the recordings were made on (4 partitions of 2 row groups, all inside the page's window,
+ * which spans the report; 20 minutes apart, so the short entries): the model against a run.
+ */
 const HARNESS: Shape = {
   name: 'harness',
   partitions: Array.from(
     { length: 4 },
     (): PartitionShape => ({ rowGroups: 2, inWindow: true, smallFiles: 0 }),
   ),
-  long: true,
+  long: false,
 };
 const SHAPES: Shape[] = [
   rollingShape(),
@@ -240,16 +258,22 @@ const SHAPES: Shape[] = [
 
 // ---- the debt lines
 
-type Target = 'fixed' | 'files' | 'matched' | 'scan';
 const RANK: Record<Target, number> = { scan: 0, matched: 1, files: 2, fixed: 3 };
 
-/** The class an entry has reached after PR `after`: the best target among its debt lines for that PR or an earlier one. */
-function reached(id: string): Target | null {
-  let best: Target | null = null;
-  for (const d of KNOWN_DEBT)
-    if (d.id === id && d.pr <= after && (best === null || RANK[d.target] > RANK[best])) best = d.target;
+/** The class an entry has reached on each axis after PR `after`: the best target among that axis' lines for that PR or an earlier one. */
+function reached(id: string): Partial<Record<AxisName, Target>> {
+  const best: Partial<Record<AxisName, Target>> = {};
+  for (const d of KNOWN_DEBT) {
+    const had = best[d.axis];
+    if (d.id === id && d.pr <= after && (had === undefined || RANK[d.target] > RANK[had]))
+      best[d.axis] = d.target;
+  }
   return best;
 }
+
+// ---- the table
+
+// ---- the table
 
 interface Cost {
   serial: number;
@@ -257,75 +281,50 @@ interface Cost {
   bytes: number;
 }
 
-function costOf(id: string, call: RecordedCall, partitions: readonly PartitionShape[]): Cost {
-  const m = models.get(id) ?? fail(`no measurement for ${id}: run mise run predict:queries`);
-  const baseline = (): Cost => ({
-    serial: predict(m.serial, partitions),
-    parallel: predict(m.parallel, partitions),
-    bytes: predict(m.bytes, partitions),
-  });
-  // no rollup answers a condition on an attribute or a text: it keeps its baseline whatever the PR
-  if (call.call.condition === 'attr' || call.call.condition === 'text') return baseline();
-  const target = reached(id);
-  const zeroed = (x: Model): Model => ({ a: x.a, r: 0, rd: 0, w: 0, wd: 0 });
-  const flattened = (x: Model): Model => ({ ...x, rd: 0, wd: 0 });
-  switch (target) {
-    case null:
-    case 'scan':
-      return baseline();
-    case 'fixed':
-      return {
-        serial: predict(zeroed(m.serial), partitions),
-        parallel: predict(m.parallel, partitions),
-        bytes: predict(zeroed(m.bytes), partitions),
-      };
-    case 'files':
-      return {
-        serial: predict(zeroed(m.serial), partitions),
-        // one parallel request per small file of the partitions the request reads
-        parallel: partitions
-          .filter((p) => p.inWindow || WINDOWED.get(id) === false)
-          .reduce((a, p) => a + p.smallFiles, 0),
-        bytes: predict(m.bytes, partitions),
-      };
-    case 'matched':
-      return {
-        serial: predict(flattened(m.serial), partitions),
-        parallel: predict(m.parallel, partitions),
-        bytes: predict(flattened(m.bytes), partitions),
-      };
-    default: {
-      const never: never = target;
-      return never;
-    }
-  }
-}
-
-// ---- the table
-
 interface Row extends Cost {
   batches: number;
+  opens: number;
   ids: Map<string, { calls: number; serial: number }>;
 }
 
 function pageOn(shape: Shape, calls: readonly RecordedCall[]): Row {
-  const row: Row = { serial: 0, parallel: 0, bytes: 0, batches: 0, ids: new Map() };
-  const seen = new Set<string>();
-  for (const call of calls) {
-    if (MEMOISED.has(call.call.method)) {
-      if (seen.has(call.call.method)) continue;
-      seen.add(call.call.method);
-    }
-    for (const id of shape.long ? call.ids.long : call.ids.short) {
-      const c = costOf(id, call, shape.partitions);
-      row.serial += c.serial;
-      row.parallel += c.parallel;
-      row.bytes += c.bytes;
-      if (c.parallel > 0) row.batches += Math.ceil(c.parallel / PARALLEL_WIDTH);
-      const so = row.ids.get(id) ?? { calls: 0, serial: 0 };
-      row.ids.set(id, { calls: so.calls + 1, serial: so.serial + c.serial });
-    }
+  const counted = countCalls(
+    calls.map((c) => ({
+      method: c.call.method,
+      idKey: c.call.idKey,
+      ids: shape.long ? c.ids.long : c.ids.short,
+      // no rollup answers a condition on an attribute or a text: it keeps its baseline whatever the PR
+      baseline: c.call.condition === 'attr' || c.call.condition === 'text',
+    })),
+  );
+  const keys: { id: string; times: number }[] = [];
+  const entries: PageEntry[] = [];
+  for (const [key, times] of counted) {
+    const [id = '', baseline] = key.split('|');
+    const fit = models.get(id) ?? fail(`no measurement for ${id}: run mise run predict:queries`);
+    const axes = baseline === 'true' ? {} : reached(id);
+    keys.push({ id, times });
+    entries.push({
+      fit: improvedFit(fit, axes),
+      times,
+      filesAxes: (Object.entries(axes) as [AxisName, Target][])
+        .filter(([, t]) => t === 'files')
+        .map(([a]) => a),
+    });
   }
+  const cost = predictPage(entries, shape.partitions);
+  const row: Row = {
+    serial: cost.serial,
+    parallel: cost.parallel,
+    bytes: cost.bytes,
+    opens: cost.opens,
+    batches: cost.parts.reduce((n, p) => n + Math.ceil(p.parallel / PARALLEL_WIDTH), 0),
+    ids: new Map(),
+  };
+  keys.forEach(({ id, times }, i) => {
+    const had = row.ids.get(id) ?? { calls: 0, serial: 0 };
+    row.ids.set(id, { calls: had.calls + times, serial: had.serial + (cost.parts[i]?.serial ?? 0) });
+  });
   return row;
 }
 
@@ -336,6 +335,22 @@ const ms = (r: Row): number =>
 print(
   `predicted requests after PR ${after}, window ${windowArg}, small files under ${threshold} bytes; snapshot of ${snapshot.takenAt}`,
 );
+{
+  const fits = [...models.values()];
+  const coefficients = fits.flatMap((f) => [
+    ...Object.values(f.serial),
+    ...Object.values(f.parallel),
+    ...Object.values(f.bytes),
+    ...Object.values(f.opens).flatMap((o) => (o === undefined ? [] : [o.c, o.ro, o.wi])),
+  ]);
+  const windowless = fits.filter((f) => f.windowless);
+  const alike = windowless.every((f) =>
+    [f.serial, f.parallel, f.bytes].every((m) => m.r === m.w && m.rd === m.wd),
+  );
+  print(
+    `models: ${fits.length} entries, smallest coefficient ${Math.min(...coefficients)}; ${windowless.length} without a window, r = w and rd = wd held for ${alike ? 'all' : 'NOT all'}`,
+  );
+}
 print(
   `serial ${SERIAL_REQUEST_MS} ms, a batch of ${PARALLEL_WIDTH} parallel requests ${PARALLEL_BATCH_MS} ms, ${MS_PER_MB} ms per MB; an estimate, nothing is asserted`,
 );
@@ -357,7 +372,7 @@ for (const page of PAGES) {
   const base = pageOn(HARNESS, calls);
   const warm = recordings.get(page)?.warm;
   print(
-    `  harness    ${fmt(base.serial).padStart(8)} ${fmt(base.parallel).padStart(9)} ${(base.bytes / 1e6).toFixed(1).padStart(9)}   (the page ran in one engine on it: ${fmt(warm?.serial ?? 0)} serial, ${((warm?.bytes ?? 0) / 1e6).toFixed(1)} MB)`,
+    `  harness    ${fmt(base.serial).padStart(8)} ${fmt(base.parallel).padStart(9)} ${(base.bytes / 1e6).toFixed(1).padStart(9)}   (of which opens ${fmt(base.opens)}; the page ran in one engine on it: ${fmt(warm?.serial ?? 0)} serial, ${((warm?.bytes ?? 0) / 1e6).toFixed(1)} MB)`,
   );
 }
 

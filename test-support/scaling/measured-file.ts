@@ -9,8 +9,8 @@ import {
   DECLARED,
 } from '../../src/viewer/data/catalogue.js';
 import { classify, type Step } from './classify.js';
-import { CROSS, type Shape, stepsOf } from './generator.js';
-import { AXES, closeMeasured, pointsOf, printTable, stepsFor } from './measure.js';
+import { BASE, CROSS, type Shape, stepsOf } from './generator.js';
+import { AXES, closeMeasured, DENSE_16, hasDensity16, pointsOf, printTable, stepsFor } from './measure.js';
 
 /**
  * A part of the measurement: the three steps of one axis for the entries of one spacing, or `cross` (the shape that
@@ -50,7 +50,12 @@ const {
  */
 export function defineMeasuredFile(part: Part, spacing: Shape['spacing']): void {
   const entries = CATALOGUE.filter((e) => e.spacing === spacing);
-  const shapes = part === 'cross' ? [{ ...CROSS, spacing }] : stepsOf(part, spacing);
+  // the prediction's model is fitted with one more density step, measured only for the run that writes it
+  const extra = part === 'density' && OUT !== undefined ? [{ ...BASE, spacing, rowGroups: DENSE_16 }] : [];
+  const shapesOf = (entry: CatalogueEntry): Shape[] =>
+    part === 'cross'
+      ? [{ ...CROSS, spacing }]
+      : [...stepsOf(part, spacing), ...(hasDensity16(entry) ? extra : [])];
   afterAll(async () => {
     await closeMeasured();
   });
@@ -58,7 +63,7 @@ export function defineMeasuredFile(part: Part, spacing: Shape['spacing']): void 
     test.each(entries)(
       '$id measures the class it declares',
       async (entry) => {
-        const points = await pointsOf(entry, shapes);
+        const points = await pointsOf(entry, shapesOf(entry));
         if (OUT !== undefined) {
           const dir = join(OUT, 'measured', entry.id);
           mkdirSync(dir, { recursive: true });
