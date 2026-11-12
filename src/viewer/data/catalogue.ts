@@ -716,8 +716,8 @@ export const DECLARED: Record<string, Declared> = {
   }),
   'trace.get': decl(['scan', 'scan', null], { needed: ONE_GROUP }),
   'trace.share': decl(['scan', 'scan', null], { needed: ONE_GROUP }),
-  'trace.has': decl(['scan', 'matched', null], { needed: ONE_GROUP }),
-  'trace.logs': decl(['scan', 'matched', null], { needed: ONE_GROUP }),
+  'trace.has': decl(['scan', 'scan', null], { needed: ONE_GROUP }),
+  'trace.logs': decl(['scan', 'scan', null], { needed: ONE_GROUP }),
   'log.get': decl(['fixed', 'matched', null], { needed: ONE_GROUP }),
   'log.surrounding': decl(['scan', 'scan', null], {
     allowed: { density: BY_ID_BASELINE },
@@ -799,7 +799,7 @@ const owed = (
  * measured.
  */
 export const KNOWN_DEBT: readonly DebtLine[] = [
-  ...owed(271, 4, 'density', 'matched', true, ['trace.get', 'trace.share']),
+  ...owed(271, 4, 'density', 'matched', true, ['trace.get', 'trace.share', 'trace.has', 'trace.logs']),
   ...owed(271, 6, 'density', 'fixed', true, [
     'spans.total.long',
     'spans.buckets.long',

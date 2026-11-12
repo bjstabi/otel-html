@@ -71,7 +71,24 @@ const startOf = (shape: Shape, n: number): bigint => T0 + BigInt(n) * SPACING_NS
 const spanCount = (shape: Shape): number => shape.rowGroups * ROW_GROUP_ROWS;
 const spanStart = (shape: Shape, n: number, k: number): bigint =>
   startOf(shape, n) + (BigInt(k) * SPREAD_NS) / BigInt(spanCount(shape));
-const traceIdOf = (n: number, t: number): string => hex(n * ID_STRIDE + t + 1, 32);
+const MASK64 = (1n << 64n) - 1n;
+/** SplitMix64: a seeded, deterministic pseudo-random 64-bit value, so a report's bytes depend on its shape only. */
+function splitMix64(seed: bigint): bigint {
+  let z = (seed + 0x9e3779b97f4a7c15n) & MASK64;
+  z = ((z ^ (z >> 30n)) * 0xbf58476d1ce4e5b9n) & MASK64;
+  z = ((z ^ (z >> 27n)) * 0x94d049bb133111ebn) & MASK64;
+  return z ^ (z >> 31n);
+}
+/**
+ * Trace `t` of partition `n`: 128 pseudo-random bits, as a real trace id is (so no partition's ids sit in a range of
+ * their own and a lookup by id cannot be pruned to one partition by min/max statistics). The spans and the logs of the
+ * trace derive it from the same (n, t), so their links agree.
+ */
+const traceIdOf = (n: number, t: number): string => {
+  const seed = BigInt(n * ID_STRIDE + t + 1);
+  return hex64(splitMix64(seed * 2n)) + hex64(splitMix64(seed * 2n + 1n));
+};
+const hex64 = (v: bigint): string => v.toString(16).padStart(16, '0');
 const spanIdOf = (n: number, k: number): string => hex(n * ID_STRIDE + k + 1, 16);
 const routeOf = (k: number): string => `/route/${k % 16}`;
 

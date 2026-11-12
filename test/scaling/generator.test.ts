@@ -110,6 +110,34 @@ describe('the scaling report generator', { timeout: 120_000 }, () => {
     expect(traces).toBeGreaterThanOrEqual(50);
   });
 
+  test('trace ids are random: every pair of partitions has overlapping trace-id ranges, and logs link to spans', async () => {
+    const r = await build(BASE);
+    const db = await openTestDb();
+    try {
+      const ranges: { min: string; max: string }[] = [];
+      for (const p of r.manifest.partitions) {
+        const spans = p.files.spans?.path;
+        const logs = p.files.logs?.path;
+        if (spans === undefined || logs === undefined) throw new Error('no spans or logs file');
+        db.registerFile(spans, new Uint8Array(await readFile(join(r.dir, spans))));
+        db.registerFile(logs, new Uint8Array(await readFile(join(r.dir, logs))));
+        const [range] = db.rows(
+          `SELECT min(trace_id) AS lo, max(trace_id) AS hi FROM read_parquet('${spans}')`,
+        ) as { lo: unknown; hi: unknown }[];
+        ranges.push({ min: String(range?.lo), max: String(range?.hi) });
+        const [orphans] = db.rows(
+          `SELECT count(*) AS n FROM read_parquet('${logs}') WHERE trace_id IS NOT NULL AND trace_id NOT IN (SELECT trace_id FROM read_parquet('${spans}'))`,
+        ) as { n: unknown }[];
+        expect(Number(orphans?.n), `partition ${p.n}: logs whose trace has no span`).toBe(0);
+      }
+      for (const a of ranges) for (const b of ranges) expect(a.min <= b.max && b.min <= a.max).toBe(true);
+      // not a single partition holds a trace-id range of its own (sequential ids would give disjoint ranges)
+      expect(new Set(ranges.map((x) => x.min)).size).toBe(ranges.length);
+    } finally {
+      db.close();
+    }
+  });
+
   test('CROSS and the axis steps ask for the shapes the model needs', () => {
     expect(CROSS).toEqual({ outside: 4, inside: 2, rowGroups: 4, spacing: 'dense' });
     expect(stepsOf('density', 'sparse').map((s) => [s.rowGroups, s.spacing])).toEqual([
