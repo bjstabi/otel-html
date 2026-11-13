@@ -30,7 +30,22 @@ export function rollupDimensions(table: 'spans' | 'logs', statisticsKeys: readon
 
 /** `rollupRows ≤ max(4096, baseRows / 8)`: a rollup that does not shrink its table is not written. */
 export function rollupAllowed(rollupRows: number, baseRows: number): boolean {
-  return rollupRows <= Math.max(4096, baseRows / 8);
+  return rollupRows <= rollupGroupLimit(baseRows);
+}
+
+const INT64_LIMIT = 2n ** 63n;
+
+/** True when every rollup row's `duration_sum` fits the `int64` column; a row that does not fit is refused by `checkRow`, never wrapped. */
+export function rollupSumsFit(rows: readonly Row[]): boolean {
+  return rows.every((r) => {
+    const sum = big(Reflect.get(r, 'duration_sum'));
+    return sum === null || (sum >= -INT64_LIMIT && sum < INT64_LIMIT);
+  });
+}
+
+/** The most rollup groups worth holding for a table of `baseRows` rows: `rollupAllowed` refuses every count above it. */
+export function rollupGroupLimit(baseRows: number): number {
+  return Math.max(4096, baseRows / 8);
 }
 
 const cell = (b: ColumnBatch, name: string, i: number): unknown => b.cells[name]?.[i];
@@ -183,13 +198,30 @@ const SUMMED = new Set(['n', 'duration_sum']);
 /** Rollup rows added up as they arrive: rows with the same key (every column but the measures) fold together. */
 export class RollupSum {
   readonly #groups = new Map<string, Row>();
+  readonly #limit: number;
+  #exceeded = false;
+
+  /** `limit`: the group count past which the sum stops, drops its groups and reports `exceeded` (default: no limit). */
+  constructor(limit: number = Number.POSITIVE_INFINITY) {
+    this.#limit = limit;
+  }
+
+  /** True once the groups outgrew the limit: nothing is held and nothing more is added. */
+  get exceeded(): boolean {
+    return this.#exceeded;
+  }
 
   add(rows: readonly Row[]): this {
     for (const row of rows) {
+      if (this.#exceeded) break;
       const key = groupKey(Object.entries(row).filter(([k]) => !MEASURES.has(k)));
       const cur = this.#groups.get(key);
       if (cur === undefined) {
         this.#groups.set(key, { ...row });
+        if (this.#groups.size > this.#limit) {
+          this.#exceeded = true;
+          this.#groups.clear();
+        }
         continue;
       }
       for (const k of SUMMED) {

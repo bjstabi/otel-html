@@ -4,8 +4,10 @@ import { batchFromRows } from '../../src/format/parquet/batch.js';
 import type { Row } from '../../src/format/parquet/rows.js';
 import {
   logRollupRows,
+  RollupSum,
   rollupAllowed,
   rollupDimensions,
+  rollupSumsFit,
   spanRollupRows,
   widestDimension,
 } from '../../src/writer/rollup-rows.js';
@@ -158,5 +160,37 @@ describe('rollupAllowed', () => {
       false,
       true,
     ]);
+  });
+});
+
+describe('RollupSum with a limit', () => {
+  const row = (name: string): Row => ({ name, n: 1n, duration_sum: 1n, duration_min: 1n, duration_max: 1n });
+
+  test('stops adding and drops its groups once the group count passes the limit', () => {
+    const sum = new RollupSum(2);
+    sum.add([row('a'), row('b')]);
+    expect(sum.exceeded).toBe(false);
+    expect(sum.size).toBe(2);
+    sum.add([row('c'), row('d')]);
+    expect(sum.exceeded).toBe(true);
+    expect(sum.size).toBe(0);
+    sum.add([row('e')]);
+    expect(sum.size).toBe(0);
+  });
+
+  test('rows folding into existing groups do not count against the limit', () => {
+    const sum = new RollupSum(1);
+    sum.add([row('a'), row('a'), row('a')]);
+    expect(sum.exceeded).toBe(false);
+    expect(sum.rows()).toHaveLength(1);
+  });
+});
+
+describe('rollupSumsFit', () => {
+  const sumRow = (v: bigint | null): Row => ({ duration_sum: v });
+  test('accepts the int64 range and refuses outside it; log rows (no sum) fit', () => {
+    expect(rollupSumsFit([sumRow(2n ** 63n - 1n), sumRow(-(2n ** 63n)), sumRow(null), {}])).toBe(true);
+    expect(rollupSumsFit([sumRow(2n ** 63n)])).toBe(false);
+    expect(rollupSumsFit([sumRow(-(2n ** 63n) - 1n)])).toBe(false);
   });
 });

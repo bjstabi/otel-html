@@ -66,6 +66,7 @@ import {
   logRollupRows,
   rollupAllowed,
   rollupDimensions,
+  rollupSumsFit,
   spanRollupRows,
   widestDimension,
 } from './rollup-rows.js';
@@ -314,6 +315,13 @@ class PartitionSession implements WriterSession {
       if (batch.length === 0) continue;
       const dimensions = rollupDimensions(base, this.#statisticsKeys[base]);
       const made = make(batch, dimensions);
+      if (!rollupSumsFit(made)) {
+        this.#deps.logger.warn(
+          `the ${base} rollup has a duration sum beyond the int64 range, so it is not written`,
+          { rollupRows: made.length, baseRows: batch.length },
+        );
+        continue;
+      }
       if (!rollupAllowed(made.length, batch.length)) {
         const widest = widestDimension(made, dimensions);
         this.#deps.logger.warn(`the ${base} rollup does not shrink this partition, so it is not written`, {

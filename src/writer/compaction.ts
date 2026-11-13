@@ -27,6 +27,8 @@ import {
   RollupSum,
   rollupAllowed,
   rollupDimensions,
+  rollupGroupLimit,
+  rollupSumsFit,
   spanRollupRows,
   widestDimension,
 } from './rollup-rows.js';
@@ -465,7 +467,18 @@ function planRollup(
   };
 }
 
-/** The rows of the compacted partition's rollup: the inputs' rollup files added up, or the rows recomputed during the merge. */
+/**
+ * The most rollup groups worth holding: `rollupAllowed` refuses more than `rollupGroupLimit(base rows)`, and the output
+ * keeps every base row of the inputs (`compactPartitions` checks it), so the inputs' sum is the output's count.
+ */
+function groupLimitOf(entries: readonly PartitionEntry[], base: 'spans' | 'logs'): number {
+  return rollupGroupLimit(inputsOf(entries, base).reduce((t, f) => t + f.rows, 0));
+}
+
+/**
+ * The rows of the compacted partition's rollup: the inputs' rollup files added up, or the rows recomputed during the
+ * merge; null when the groups outgrew the limit (they were dropped as soon as they did).
+ */
 async function rollupRowsOf(
   fs: FileSystem,
   out: string,
@@ -474,13 +487,15 @@ async function rollupRowsOf(
   plan: RollupPlan,
   recomputed: RollupSum | undefined,
   guard: PanicGuard,
-): Promise<Row[]> {
-  if (plan.how === 'recompute') return recomputed?.rows() ?? [];
-  const sum = new RollupSum();
+): Promise<Row[] | null> {
+  if (plan.how === 'recompute')
+    return recomputed === undefined ? [] : recomputed.exceeded ? null : recomputed.rows();
+  const sum = new RollupSum(groupLimitOf(entries, ROLLUP_OF[table]));
   for (const f of inputsOf(entries, table)) {
     const rows: Row[] = [];
     for await (const row of rowsOf(table, await blobOf(fs, at(out, f.path)), f.path, guard)) rows.push(row);
     sum.add(rows);
+    if (sum.exceeded) return null;
   }
   return sum.rows();
 }
@@ -667,10 +682,11 @@ export async function compactPartitions(
     const rt = table === 'spans' ? 'span_rollups' : table === 'logs' ? 'log_rollups' : null;
     const plan = rt === null ? undefined : plans[rt];
     if (rt === null || plan === undefined || plan.how !== 'recompute') return undefined;
-    const sum = new RollupSum();
+    const sum = new RollupSum(groupLimitOf(entries, ROLLUP_OF[rt]));
     recomputed[rt] = sum;
     const make = rt === 'span_rollups' ? spanRollupRows : logRollupRows;
     return (chunk) => {
+      if (sum.exceeded) return;
       sum.add(make(chunk, plan.description.dimensions));
     };
   };
@@ -690,6 +706,20 @@ export async function compactPartitions(
       if (rollupTable !== null && plan !== undefined) {
         const rows = await rollupRowsOf(fs, out, entries, rollupTable, plan, recomputed[rollupTable], guard);
         const baseRows = files[ROLLUP_OF[rollupTable]]?.rows ?? 0;
+        if (rows === null) {
+          opts.warn?.(
+            `the ${ROLLUP_OF[rollupTable]} rollup has more groups than ${rollupGroupLimit(baseRows)} and does not shrink this partition, so it is not written`,
+            { baseRows, groupLimit: rollupGroupLimit(baseRows) },
+          );
+          continue;
+        }
+        if (!rollupSumsFit(rows)) {
+          opts.warn?.(
+            `the ${ROLLUP_OF[rollupTable]} rollup has a duration sum beyond the int64 range, so it is not written`,
+            { rollupRows: rows.length, baseRows },
+          );
+          continue;
+        }
         if (!rollupAllowed(rows.length, baseRows)) {
           const dimensions = plan.description.dimensions;
           const widest = widestDimension(rows, dimensions);

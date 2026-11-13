@@ -857,4 +857,33 @@ describe('PartitionSession rollups', () => {
     expect(warnings[0]?.attrs).toMatchObject({ widestDimension: 'name', distinctValues: 4_200 });
     await s.close();
   });
+
+  test('a rollup whose duration_sum leaves int64 is omitted with one warning, and the cut still writes the spans', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    // 1 200 spans of equal dimensions and 8 * 10^15 ns each (a span lasts under 2^53 ns): one group summing to 9.6 * 10^18 > 2^63 - 1.
+    const heavy = otlp(
+      traceRequest(
+        Array.from({ length: 1_200 }, (_, i) =>
+          span({
+            traceId: traceIdOf(i),
+            spanId: spanIdOf(i),
+            name: 'heavy',
+            startTimeUnixNano: String(BigInt(EPOCH_NS) + BigInt(i)),
+            endTimeUnixNano: String(BigInt(EPOCH_NS) + BigInt(i) + 8_000_000_000_000_000n),
+          }),
+        ),
+      ),
+    );
+    await s.add(heavy, 'a.json');
+    await s.flush();
+    const entry = manifest(w).partitions[0];
+    expect(entry?.files.spans?.rows).toBe(1_200);
+    expect(entry?.files.span_rollups).toBeUndefined();
+    expect(await w.fs.exists(`${OUT}/data/partitions/000000/span_rollups.parquet`)).toBe(false);
+    const warnings = w.logs.filter((l) => l.level === 'warn' && l.msg.includes('rollup'));
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.msg).toContain('int64');
+    await s.close();
+  });
 });

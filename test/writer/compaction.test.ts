@@ -942,6 +942,76 @@ describe('compactPartitions: rollups', () => {
     expect(warned).toHaveLength(1);
     expect(await fs.exists(`${OUT}/data/partitions/000002/span_rollups.parquet`)).toBe(false);
   });
+
+  test.each([
+    ['summed', undefined],
+    ['recomputed', null],
+  ] as const)(
+    'a %s rollup past the guard is dropped with one warning that reports no partial counts',
+    async (_how, dims) => {
+      const fs = createMemoryFileSystem();
+      const distinct = (from: number): Row[] =>
+        Array.from({ length: 2600 }, (_, i) => ({
+          ...spanRow(from + i, lcg(from + i)),
+          name: `op${from + i}`,
+        }));
+      const entries = await writeRolled(
+        fs,
+        [{ spans: distinct(0) }, { spans: distinct(3000) }],
+        dims === null ? [null, null] : [],
+        1000,
+      );
+      const warned: { msg: string; attrs: unknown }[] = [];
+      const out = await compactPartitions(fs, OUT, entries, {
+        ...rollupOpts(2),
+        rowGroupRows: 1000,
+        warn: (msg, attrs) => warned.push({ msg, attrs }),
+      });
+      expect(out.files.spans?.rows).toBe(5200);
+      expect(out.files.span_rollups).toBeUndefined();
+      expect(warned).toHaveLength(1);
+      expect(warned[0]?.msg).toContain('more groups than 4096');
+      expect(warned[0]?.attrs).not.toHaveProperty('rollupRows');
+      expect(warned[0]?.attrs).not.toHaveProperty('widestDimension');
+    },
+  );
+
+  test.each([
+    ['summed', undefined],
+    ['recomputed', null],
+  ] as const)(
+    'a %s rollup whose duration_sum leaves int64 is omitted, the spans still compact',
+    async (_how, dims) => {
+      const fs = createMemoryFileSystem();
+      // Two partitions of 600 spans of 8 * 10^15 ns, all of equal dimensions: each sum fits int64, their sum (9.6 * 10^18) does not.
+      const heavy = (from: number): Row[] =>
+        Array.from({ length: 600 }, (_, i) => ({
+          ...spanRow(from + i, lcg(from + i)),
+          name: 'heavy',
+          scope_name: null,
+          service_name: null,
+          start_time_unix_nano: BigInt(i),
+          end_time_unix_nano: BigInt(i) + 8_000_000_000_000_000n,
+          duration_ns: 8_000_000_000_000_000n,
+        }));
+      const entries = await writeRolled(
+        fs,
+        [{ spans: heavy(0) }, { spans: heavy(1000) }],
+        dims === null ? [null, null] : [],
+      );
+      if (dims === undefined) expect(entries[0]?.files.span_rollups).toBeDefined();
+      const warned: string[] = [];
+      const out = await compactPartitions(fs, OUT, entries, {
+        ...rollupOpts(2),
+        warn: (m) => warned.push(m),
+      });
+      expect(out.files.spans?.rows).toBe(1200);
+      expect(out.files.span_rollups).toBeUndefined();
+      expect(warned).toHaveLength(1);
+      expect(warned[0]).toContain('int64');
+      expect(await fs.exists(`${OUT}/data/partitions/000002/span_rollups.parquet`)).toBe(false);
+    },
+  );
 });
 
 describe('compactPartitions: timeEndMax', () => {
