@@ -262,27 +262,35 @@ function DashboardView(props: {
   );
 
   const loadValues = useCallback(
-    async (k: { dash: typeof d; window: TimeWindow | null }, signal: AbortSignal): Promise<ValuesByKey> =>
+    async (
+      k: { dash: typeof d; window: TimeWindow | null; selected: readonly (string | null)[] },
+      signal: AbortSignal,
+    ): Promise<ValuesByKey> =>
       Object.fromEntries(
         await Promise.all(
           k.dash.variables.map(
-            async (v) =>
+            async (v, i) =>
               [
                 v.key,
                 await variableValues(
                   v.key,
                   k.window,
                   (key, window) => dataSource.resourceValues(key, { window }, signal),
-                  selectedOf(store.getState().dashboard ?? EMPTY_DASHBOARD_STATE, v),
+                  k.selected[i] ?? null,
                 ),
               ] as const,
           ),
         ),
       ),
-    [dataSource, store],
+    [dataSource],
   );
-  // the values are the page window's: asked again when it changes, the last answer standing while that runs
-  const valuesKey = useMemo(() => ({ dash: d, window: page }), [d, page]);
+  // the values are the page window's and the selections': asked again when either changes (a selection outside the
+  // window is bound by the report's kind), the last answer standing while that runs
+  const selectedText = JSON.stringify(d.variables.map((v) => selectedOf(state, v)));
+  const valuesKey = useMemo(
+    () => ({ dash: d, window: page, selected: JSON.parse(selectedText) as (string | null)[] }),
+    [d, page, selectedText],
+  );
   const loaded: KeyedState<ValuesByKey> = useKeyedAsync(valuesKey, loadValues);
   const [lastReady, setLastReady] = useState<{ id: string; value: ValuesByKey } | null>(null);
   useEffect(() => {

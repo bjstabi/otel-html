@@ -174,6 +174,25 @@ describe('variables', () => {
     expect(screen.getByRole('combobox', { name: 'service.name' })).toBeTruthy(); // the bar stays while it reloads
   });
 
+  test('a selection change asks the values again, with the selection', async () => {
+    const resourceValues = vi.fn(() =>
+      Promise.resolve({ values: ['5'], kind: 'int' as const, capped: false }),
+    );
+    renderShell('#/dashboards/checkout?t=0~1000000000', {
+      ...dataSourceOf(manifestWith([CHECKOUT])),
+      resourceValues,
+    });
+    await screen.findByRole('combobox', { name: 'service.name' });
+    const before = resourceValues.mock.calls.length;
+    window.location.hash = `#/dashboards/checkout?t=0~1000000000&${dParam({ vars: { 'service.name': 'abc' } })}`;
+    // 'abc' is not among the window's values: the window is asked again, then the report for its kind
+    await waitFor(() => expect(resourceValues.mock.calls.length).toBeGreaterThanOrEqual(before + 2));
+    expect(resourceValues.mock.calls.slice(before).map((c) => (c as unknown[])[1])).toEqual([
+      { window: { start: 0, end: 1e9 } },
+      { window: null },
+    ]);
+  });
+
   test('a fast second window change aborts the first request and its late answer is ignored', async () => {
     const signals = new Map<number, AbortSignal>();
     const release: (() => void)[] = [];
