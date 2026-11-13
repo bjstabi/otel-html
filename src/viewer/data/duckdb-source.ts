@@ -884,24 +884,23 @@ export function createDuckDbDataSource(opts: {
           epoch,
         );
         const rowsOfId = Map.groupBy(rows, (r) => r.span.traceId as TraceId);
-        await Promise.all(
-          wanted.map(async (w) => {
-            try {
-              let mine = rowsOfId.get(w.traceId) ?? [];
-              const expected = w.traceRows.reduce((n, r) => n + Number(cell(r, 'span_count') ?? 0n), 0);
-              if (w.bound !== null && mine.length < expected) {
-                mine = spanRows(
-                  await read(['spans'], w.pruned, traceSpansQuery(w.traceId, w.pruned.files, epoch), signal),
-                  epoch,
-                ).rows;
-              }
-              if (mine.length === 0) throw traceNotFound(w.traceId);
-              answer(w.traceId, exclusiveTimeByService(buildTraceTree(mine)));
-            } catch (e) {
-              answer(w.traceId, { error: e });
+        // one at a time: each re-read is unbounded, and several at once would fetch whole partitions side by side
+        for (const w of wanted) {
+          try {
+            let mine = rowsOfId.get(w.traceId) ?? [];
+            const expected = w.traceRows.reduce((n, r) => n + Number(cell(r, 'span_count') ?? 0n), 0);
+            if (w.bound !== null && mine.length < expected) {
+              mine = spanRows(
+                await read(['spans'], w.pruned, traceSpansQuery(w.traceId, w.pruned.files, epoch), signal),
+                epoch,
+              ).rows;
             }
-          }),
-        );
+            if (mine.length === 0) throw traceNotFound(w.traceId);
+            answer(w.traceId, exclusiveTimeByService(buildTraceTree(mine)));
+          } catch (e) {
+            answer(w.traceId, { error: e });
+          }
+        }
       } catch (e) {
         for (const id of ids) answer(id, { error: e });
       }
@@ -927,15 +926,23 @@ export function createDuckDbDataSource(opts: {
           }
           const b = batch;
           let settled = false;
+          const onAbort = () => {
+            if (settled) return;
+            caller.reject(abortError());
+            b.live -= 1;
+            if (b.live === 0) b.ctl.abort();
+          };
           const caller: Caller = {
             resolve: (v) => {
               if (settled) return;
               settled = true;
+              signal?.removeEventListener('abort', onAbort);
               resolve(v);
             },
             reject: (e) => {
               if (settled) return;
               settled = true;
+              signal?.removeEventListener('abort', onAbort);
               reject(e);
             },
           };
@@ -943,16 +950,7 @@ export function createDuckDbDataSource(opts: {
           const list = b.callers.get(traceId);
           if (list === undefined) b.callers.set(traceId, [caller]);
           else list.push(caller);
-          signal?.addEventListener(
-            'abort',
-            () => {
-              if (settled) return;
-              caller.reject(abortError());
-              b.live -= 1;
-              if (b.live === 0) b.ctl.abort();
-            },
-            { once: true },
-          );
+          signal?.addEventListener('abort', onAbort, { once: true });
         });
       },
     };

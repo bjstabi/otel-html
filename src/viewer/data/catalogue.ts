@@ -643,6 +643,8 @@ const PERCENTILE_SHORT =
   'percentileOf reads every span of the service and resource; §3.4 leaves it as it is on a short report';
 const TRACE_LIST_SCAN =
   'a trace list under a short window or an attribute condition reads the spans of the traces it matches; §3.4 allows scan';
+const BATCH_RETENTION_NOISE =
+  "the serial count moves by at most one request (7 or 8; 10 or 11 at 4 row groups) without a trend in the number of out-of-window partitions, because the spans files of the page's partitions fall into reads by their layout (ids are seeded by partition number); trace.share moves the same way, and the sparse series is flat; `files` would fail on a single step of one request";
 const BY_ID_BASELINE =
   "the rows around a log are read from its partition's logs file, which grows with the density; §3.4 leaves the other reads by id to the baseline";
 
@@ -756,10 +758,11 @@ const BASELINE: Record<string, Declared> = {
   }),
   'trace.get': decl(['files', 'scan', null], { needed: ONE_GROUP }),
   'trace.share': decl(['files', 'scan', null], { needed: ONE_GROUP }),
-  // the 26 traces of a trace list page: one row group of each inside partition holds them all. Retention is `matched`
-  // as measured: the spans files of the page's partitions are read with one request more or less as their layout
-  // happens to fall (the ids of a partition are seeded by its number), which `files` does not allow.
-  'trace.share.batch': decl(['matched', 'scan', null], { needed: (s) => s.inside }),
+  // the 26 traces of a trace list page: one row group of each inside partition holds them all
+  'trace.share.batch': decl(['matched', 'scan', null], {
+    needed: (s) => s.inside,
+    allowed: { retention: BATCH_RETENTION_NOISE },
+  }),
   'trace.has': decl(['files', 'files', null], { needed: ONE_GROUP }),
   'trace.logs': decl(['files', 'files', null], { needed: ONE_GROUP }),
   'log.get': decl(['fixed', 'files', null], { needed: ONE_GROUP }),
