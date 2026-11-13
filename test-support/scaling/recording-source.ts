@@ -225,7 +225,8 @@ export function entryIdsOf(call: RecordedCall, long: boolean): string[] {
     case 'patterns':
       return ['patterns'];
     case 'resourceValues':
-      return [call.window === 'none' ? 'resourceValues.all' : `resourceValues.${s}`];
+      if (call.window === 'none') return [long ? 'resourceValues.all' : 'resourceValues.all.short'];
+      return [`resourceValues.${s}`];
     case 'metricCatalog':
       return ['metrics.catalog'];
     case 'metricShowOptions':

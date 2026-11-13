@@ -7,7 +7,7 @@ export interface TimeWindow {
 }
 
 /** A window (or, with none, the report's range) of at least 256 rollup grains follows the long-window rules (spec §6.3). */
-export const LONG_WINDOW_NS = 256 * ROLLUP_GRAIN_NS;
+export const LONG_WINDOW_NS: number = 256 * ROLLUP_GRAIN_NS;
 
 export function isLongWindow(window: TimeWindow | null, range: TimeWindow | null): boolean {
   const w = window ?? range;
