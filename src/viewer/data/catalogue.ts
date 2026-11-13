@@ -379,9 +379,9 @@ function windowOf(ctx: CatalogueContext): TimeWindow {
 
 const entry = <M extends keyof DataSource>(e: Entry<M>): Entry<M> => e;
 
-/** An entry for a request with no window and no growth in spacing: dense, `window: false`. */
+/** An entry for a request with no window: `window: false`, on the dense report unless it says otherwise. */
 function point<M extends keyof DataSource>(
-  e: Omit<CatalogueEntry, 'spacing' | 'window' | 'method'> & { method: M },
+  e: Omit<CatalogueEntry, 'spacing' | 'window' | 'method'> & { method: M; spacing?: 'dense' | 'sparse' },
 ): Entry<M> {
   return { spacing: 'dense', window: false, ...e };
 }
@@ -512,11 +512,13 @@ export const CATALOGUE = [
     run: (ds, ctx) => ds.surroundingLogs(parseLogRef(ctx.ids.logRef, 'catalogue.logRef'), SURROUNDING),
   }),
   ...logEntries(LOG_QUERIES),
+  // no window on a report whose range is long (the sparse one): the rollups answer; a short range reads the files (spec §6.3)
   point({
     id: 'resourceValues.all',
     family: 'distinct values',
     method: 'resourceValues',
     builders: ['rollupResourceValuesQuery'],
+    spacing: 'sparse',
     run: (ds) => ds.resourceValues('service.name', { window: null }),
   }),
   ...WINDOWED.map(
