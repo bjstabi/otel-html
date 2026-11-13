@@ -37,7 +37,7 @@ export async function buildFormat4Report(
   const text = w.fs.snapshot().get(`${OUT}/data/manifest.js`);
   if (text === undefined) throw new Error('no manifest');
   const manifest = parseAnyManifest(reviveDataJson(unwrapDataFile(text, MANIFEST_KEY)));
-  if (!isPartitioned(manifest)) throw new Error('not a v4 manifest');
+  if (!isPartitioned(manifest)) throw new Error('not a partition manifest');
   const files = new Map<string, Uint8Array>();
   for (const partition of manifest.partitions) {
     for (const table of TABLES) {

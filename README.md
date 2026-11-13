@@ -36,7 +36,7 @@ The binaries are built by `.github/workflows/release.yml` when a release is crea
 
 ## CLI
 
-Commands: `convert` (OTLP files to a report), `serve` (receive OTLP over HTTP and gRPC), `run` (wrap a command and report its telemetry), `merge`, `host` (serve a format-4 report with its queries answered by DuckDB), `upgrade` and `config print`.
+Commands: `convert` (OTLP files to a report), `serve` (receive OTLP over HTTP and gRPC), `run` (wrap a command and report its telemetry), `merge`, `host` (serve a format-4 or format-5 report with its queries answered by DuckDB), `upgrade` and `config print`.
 
 ```sh
 otel-html convert fixtures/small.otlp.json -o ./report
@@ -53,7 +53,7 @@ Turns OTLP files into a report. Inputs can be OTLP JSON (field names in lowerCam
 | `--title <title>` | Report title. |
 | `--append` | Require a report at `-o` and add to it (fails when there is none; useful in CI to catch a wrong path). |
 | `--replace` | Start the report over. Without either flag, `-o` is appended to when it already holds a report written by the same otel-html version and created otherwise. An existing report is wiped only once the first input file has been read without error, so that file is held in memory until then (see Limits). |
-| `--format <format>` | Report format: `local` (default) or `site` (both format 4: Parquet partitions; see [Report layout and hosting](#report-layout-and-hosting)). Sets `writer.format`. `chunks` (format 3) is no longer written. The viewer opens format-4 reports only; a format 1-3 report is converted with `merge` first. Appending needs the report's own format and the same version, so `--format` must match the report's. |
+| `--format <format>` | Report format: `local` (default) or `site` (both format 5: Parquet partitions; see [Report layout and hosting](#report-layout-and-hosting)). Sets `writer.format`. `chunks` (format 3) is no longer written. The viewer opens format-4 and format-5 reports; a format 1-3 report is converted with `merge` first. Appending needs the report's own format and the same version, so `--format` must match the report's. |
 | `--assets-base <path>` | Where the report loads its viewer files from: `assets/` (default; the report carries them) or a relative path such as `../../assets/0.3.0/` (`../` segments, then `assets/` and at most one more folder), in which case no `assets/` is written beside the report. Sets `writer.assetsBase`. A report that carries its own `assets/` cannot move to a shared base on append; `otel-html upgrade <report> --assets-base <base>` moves it. |
 | `--signal <signal>` | `traces`, `logs` or `metrics`. Needed for protobuf (`.pb`) inputs, which do not say what they hold. |
 
@@ -394,13 +394,14 @@ report/
   assets/                 viewer.<hash>.js and .css, plus the DuckDB engine files for this format (omitted when assetsBase is shared); the package's `dist/viewer/assets/` also holds the host's two Node engine files (`duckdb.<v>.node.cjs`, `duckdb.<v>.node.worker.cjs`), which no report copies, and the `parquet` and `json` extension files (`*.duckdb_extension.wasm`), which a `site` report copies and a `local` report carries as base64 wrappers
   data/
     manifest.js           run metadata, the partition list with per-file statistics, and `engine` (version, format, assetsBase)
-    partitions/<p6>/      <table>.parquet for spans, logs, points, traces and patterns (000000/, 000001/, ...)
+    partitions/<p6>/      <table>.parquet for spans, logs, points, traces, patterns and the two rollup tables (000000/, 000001/, ...)
                           and, for `local`, <table>.parquet.js beside each: the same bytes as a base64 script
     state/                writer checkpoint
 ```
 
 - `site` is for a report served over http: the viewer reads the `.parquet` files and loads `assets/duckdb.<v>.wasm`, `duckdb.<v>.worker.js` and DuckDB's signed `parquet.<v>.duckdb_extension.wasm` and `json.<v>.duckdb_extension.wasm`.
 - `local` opens from `file://`, where nothing can be fetched: every `.parquet.js` wrapper and the engine's `duckdb.<v>.wasm.gz.b64.js`, `duckdb.<v>.worker.b64.js` and the two extensions' `duckdb.<v>.parquet.ext.gz.b64.js` and `duckdb.<v>.json.ext.gz.b64.js` are classic scripts that register their bytes. Wrappers are a third larger than the Parquet, so a large report is better served as `site` (the writer warns past `writer.localWarnBytes`). Either way a report makes no network request: the extensions DuckDB would otherwise download at first use travel in `assets/` (about 3.9 MB plain, 1.2 MB wrapped).
+- Rollup files (format 5): a partition that holds spans also holds `span_rollups.parquet`, and one that holds logs also holds `log_rollups.parquet`. A rollup file has one row per 65.536 s grain of the signal's time × the core facet dimensions plus the report's statistics keys × a duration bucket, with the count, sum, min and max of the group. The manifest describes each one (`rollup`: the grain and the dimensions). Each file also states `timeEndMax`, the latest end time of its rows, for spans and traces. Nothing reads the rollup files yet; the viewer registers them and gives each table a view (empty when a partition has no such file), and a later release will answer long time windows from them. A format-4 report has none, and stays format 4 when `ci` updates it.
 - Closing a report compacts its flush partitions into one sorted partition when there are two or more.
 - `assetsBase` (default `assets/`) names where the viewer and engine files load from. A site that publishes them once for many reports sets it to a shared relative path such as `../../assets/0.3.0/`, and the report then carries no `assets/` of its own.
 
@@ -709,11 +710,11 @@ Final-job mode: for a repository with no separate publisher, put the publish act
 
 ### Report format compatibility
 
-`data/` is the model; `assets/` and `index.html` are the viewer. The manifest's `formatVersion` (4 for `local` and `site`; 3 and below for reports an older otel-html wrote) is bumped only for a change an older reader cannot read. This otel-html writes format 4 only (`writer.format` `local`, the default, or `site`). `merge` reads versions 1 to 4; a reader fails fast on a version it does not know. The viewer in this build reads format 4 only: opening a report of format 1 to 3 shows "This report is format N; this viewer reads format 4. `otel-html merge <report> --out <new>` converts it." `upgrade` refuses a report of format 1 to 3 with the same message (see [`src/format/version.ts`](src/format/version.ts)).
+`data/` is the model; `assets/` and `index.html` are the viewer. The manifest's `formatVersion` (5 for `local` and `site`; 4 and below for reports an older otel-html wrote) is bumped only for a change an older reader cannot read. This otel-html writes format 5 only (`writer.format` `local`, the default, or `site`); format 5 is format 4 plus the rollup files, `timeEndMax` and `viewer.defaultWindow`, so a format-4 report is read as it is (and a `ci` run report that is format 4 stays format 4). `merge` reads versions 1 to 5; a reader fails fast on a version it does not know. The viewer in this build reads formats 4 and 5: opening a report of format 1 to 3 shows "This report is format N; this viewer reads format 4. `otel-html merge <report> --out <new>` converts it." `upgrade` refuses a report of format 1 to 3 with the same message (see [`src/format/version.ts`](src/format/version.ts)).
 
 - `merge` re-renders any readable report with the current viewer, so reports from different otel-html versions combine into one report in the current format.
 - `--append` needs the same otel-html version as the report it appends to.
-- `merge` reads every version in `READABLE_FORMAT_VERSIONS`; `upgrade` and the viewer read format 4 only. Frozen format-1 to format-4 reports are in `fixtures/reports/`. The format-1 to format-3 ones are converted by `merge` and the result is opened by the tests; the format-4 one is read as is by `merge` and by `otel-html host`, and by the viewer tests over its manifest and `.parquet.js` wrappers (the e2e opens it after `upgrade`), to hold that.
+- `merge` reads every version in `READABLE_FORMAT_VERSIONS`; `upgrade` and the viewer read formats 4 and 5. Frozen format-1 to format-5 reports are in `fixtures/reports/`. The format-1 to format-3 ones are converted by `merge` and the result is opened by the tests; the format-4 and format-5 ones are read as is by `merge`, and by the viewer tests over their manifests and `.parquet.js` wrappers (the e2e opens them after `upgrade`); `otel-html host` serves the format-4 one, to hold that.
 - Maintainers: every format version a release ships has a frozen report, written by that release, in `fixtures/reports/`, added with its compat test when the release is cut; a version leaves `READABLE_FORMAT_VERSIONS` only together with its fixture.
 
 ## Configuration

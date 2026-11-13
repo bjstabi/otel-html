@@ -486,12 +486,14 @@ async function buildRefreshReport(): Promise<void> {
 async function buildFrozenReports(): Promise<void> {
   // Format 4 takes the path a user's report takes: the frozen folder is upgraded in place, so its manifest and
   // `.parquet.js` wrappers are what the viewer reads.
-  const out4 = fileURLToPath(reportDir('frozen-format-4'));
-  await rm(out4, { recursive: true, force: true });
-  await cp(fileURLToPath(new URL('../fixtures/reports/format-4', import.meta.url)), out4, {
-    recursive: true,
-  });
-  await cli(['upgrade', out4]);
+  for (const n of [4, 5] as const) {
+    const out = fileURLToPath(reportDir(`frozen-format-${n}`));
+    await rm(out, { recursive: true, force: true });
+    await cp(fileURLToPath(new URL(`../fixtures/reports/format-${n}`, import.meta.url)), out, {
+      recursive: true,
+    });
+    await cli(['upgrade', out]);
+  }
   for (const n of [1, 2, 3] as const) {
     await cli([
       'merge',
@@ -519,6 +521,7 @@ const SITE_REPORTS: readonly ReportName[] = [
   'frozen-format-2',
   'frozen-format-3',
   'frozen-format-4',
+  'frozen-format-5',
   ...FIXTURE_REPORTS,
 ];
 

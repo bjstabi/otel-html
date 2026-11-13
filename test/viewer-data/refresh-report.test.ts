@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import type { ManifestV4 } from '../../src/format/manifest.js';
+import { ROLLUP_GRAIN_NS } from '../../src/format/manifest.js';
 import { partitionFilePath, partitionWrapperPath } from '../../src/format/paths.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { toBase64 } from '../../src/viewer/data/engine/bytes.js';
@@ -127,6 +128,28 @@ describe('refreshReport', () => {
     expect(dataSource?.manifest).toBe(manifest);
     await dataSource?.resourceValues('service.name', { window: null }).catch(() => undefined);
     expect(f.calls.queries).toBeGreaterThan(0);
+  });
+
+  test('Refresh picks up a rollup file added to a partition', async () => {
+    const f = fakes('site');
+    const asFormat5 = (m: ManifestV4): ManifestV4 => ({ ...m, formatVersion: 5 });
+    const previous = asFormat5(manifestOf([0, 1]));
+    const next = asFormat5(manifestOf([0, 1]));
+    const [, second] = next.partitions;
+    if (second === undefined) throw new Error('no partition');
+    second.files = {
+      ...second.files,
+      span_rollups: {
+        ...file(1, 'spans'),
+        path: partitionFilePath(1, 'span_rollups'),
+        rollup: { grainNs: ROLLUP_GRAIN_NS, dimensions: ['service_name'] },
+      },
+    };
+    const { manifest } = await run(f, previous, next);
+    expect(f.calls.url.map(([name]) => name)).toEqual([partitionFilePath(1, 'span_rollups')]);
+    expect(f.calls.drop).toEqual([]);
+    expect(manifest.partitions[1]?.files.span_rollups?.path).toBe(partitionFilePath(1, 'span_rollups'));
+    expect(f.calls.statements).toHaveLength(7);
   });
 
   test('asks the loader for data/manifest.js?r=<now>', async () => {

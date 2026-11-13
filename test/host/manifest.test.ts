@@ -1,4 +1,4 @@
-import { copyFile, mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -48,6 +48,19 @@ describe('readHostManifest', () => {
     const e = await failure(readHostManifest(createNodeFileSystem(), dir));
     expect(e.code).toBe('usage');
     expect(e.message).toContain(`no report found at ${dir} (missing data/manifest.js)`);
+  });
+
+  it('a format-6 report is refused as an unknown format, naming the version', async () => {
+    const fixture = await buildFormat4Report([spansOnlyRequest(2)], { close: false });
+    const report = await writeReportDir(fixture);
+    cleanups.push(report.close);
+    const path = join(report.dir, 'data/manifest.js');
+    const text = await readFile(path, 'utf8');
+    await writeFile(path, text.replace('"formatVersion":5', '"formatVersion":6'));
+    const e = await failure(readHostManifest(createNodeFileSystem(), report.dir));
+    expect(e.code).toBe('invalid-report');
+    expect(e.path).toBe('manifest.formatVersion');
+    expect(e.actual).toBe('6');
   });
 
   it('a format-3 report is invalid-report with the merge hint', async () => {

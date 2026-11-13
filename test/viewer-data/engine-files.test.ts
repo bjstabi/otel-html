@@ -3,7 +3,11 @@ import { expect, test } from 'vitest';
 import type { ManifestV4 } from '../../src/format/manifest.js';
 import type { Table } from '../../src/format/parquet/columns.js';
 import { toBase64 } from '../../src/viewer/data/engine/bytes.js';
-import { type RegisterProgress, registerPartitions } from '../../src/viewer/data/engine/files.js';
+import {
+  manifestFiles,
+  type RegisterProgress,
+  registerPartitions,
+} from '../../src/viewer/data/engine/files.js';
 import type { Engine } from '../../src/viewer/data/engine/start.js';
 import type { ScriptLoader } from '../../src/viewer/data/script-loader.js';
 
@@ -179,3 +183,24 @@ test.each(['site', 'local'] as const)(
     expect(engine.calls.exec).toHaveLength(7);
   },
 );
+
+test('manifestFiles lists the rollup files of a partition beside its other files, in manifest order', () => {
+  const manifest = {
+    partitions: [
+      {
+        n: 3,
+        source: 'flush:3',
+        files: {
+          spans: file(3, 'spans'),
+          span_rollups: file(3, 'span_rollups'),
+          log_rollups: file(3, 'log_rollups'),
+        },
+      },
+    ],
+  } as unknown as ManifestV4;
+  expect(manifestFiles(manifest).map((e) => [e.table, e.path])).toEqual([
+    ['spans', 'data/partitions/000003/spans.parquet'],
+    ['span_rollups', 'data/partitions/000003/span_rollups.parquet'],
+    ['log_rollups', 'data/partitions/000003/log_rollups.parquet'],
+  ]);
+});
