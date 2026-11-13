@@ -10,7 +10,10 @@ import { type AttributeActions, ResourceTab } from '../components/resource-tab.j
 import { useFilterActions } from '../components/use-filter-actions.js';
 import type { DataSource, TraceDetail } from '../data/data-source.js';
 import type { LogRow } from '../data/log-query.js';
+import { manifestRange } from '../data/manifest-range.js';
+import { isLongWindow } from '../data/time-window.js';
 import { useHasMetrics } from '../metrics/metric-grid.js';
+import { APPROXIMATE_TITLE } from '../shell/time-range.js';
 import { useSelection } from '../state/selection-context.js';
 import { useKeyedAsync } from '../state/use-keyed-async.js';
 import { useColorAssigner } from '../theme/colors-context.js';
@@ -203,6 +206,11 @@ export function SpanSection(props: SpanSectionProps): JSX.Element {
               className="rounded-full bg-ink/10 px-2 py-0.5 text-xs"
             >
               p{Math.round(percentile)}
+            </span>
+          )}
+          {percentile !== null && isLongWindow(null, manifestRange(dataSource.manifest)) && (
+            <span title={APPROXIMATE_TITLE} className="text-xs text-muted">
+              approximate
             </span>
           )}
         </p>

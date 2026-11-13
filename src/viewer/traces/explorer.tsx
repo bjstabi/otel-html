@@ -13,7 +13,7 @@ import {
   isSpanRow,
   type OtlpSpanGroup,
 } from '../components/export.js';
-import { DURATION_KEY, FacetPanel } from '../components/facet-panel.js';
+import { DURATION_KEY, FacetPanel, useAttributeFacets } from '../components/facet-panel.js';
 import { ottlToTokens } from '../components/filter-tokens.js';
 import { GroupTable } from '../components/group-table.js';
 import { HistogramCard, SPAN_STATUS_SERIES } from '../components/histogram-card.js';
@@ -21,7 +21,14 @@ import { ResultsTable, type SortState } from '../components/results-table.js';
 import { copyWidgetItem } from '../dashboards/copy-widget.js';
 import type { DataSource } from '../data/data-source.js';
 import { manifestRange } from '../data/manifest-range.js';
-import type { DurationBin, SpanQuery, SpanRow, TraceRow } from '../data/results.js';
+import {
+  CORE_SPAN_FACET_KEYS,
+  type DurationBin,
+  type SpanQuery,
+  type SpanRow,
+  type TraceRow,
+} from '../data/results.js';
+import { isLongWindow } from '../data/time-window.js';
 import { useGoTo } from '../shell/go-to.js';
 import { PageChrome, useWidgetCopy } from '../shell/page-chrome.js';
 import { PageOptionNotice } from '../shell/page-option-notice.js';
@@ -158,6 +165,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
     const tokens = sel.condition === null ? null : ottlToTokens(sel.condition);
     return (tokens ?? []).filter((t) => t.key === DURATION_KEY && typeof t.value === 'number');
   }, [sel.condition]);
+  const long = isLongWindow(sel.window, range);
   const query = useMemo<SpanQuery>(
     () => ({
       condition: sel.condition,
@@ -171,13 +179,14 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
       measureBy: null,
       // The overall RED quantiles need both the timeline and the durations.
       needs: ['rows', 'facets', 'timeline', 'durations'],
-      facetKeys: null,
+      facetKeys: long ? CORE_SPAN_FACET_KEYS : null,
       ...(bounds.length > 0 && axis !== null ? { durationAxis: binsOf(axis) } : {}),
     }),
     [
       sel.condition,
       sel.text,
       sel.window,
+      long,
       mode,
       sort.column,
       sort.dir,
@@ -187,7 +196,23 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
     ],
   );
   const { state } = useSpanQuery(dataSource, query);
-  const result = state.status === 'ready' ? state.result : state.status === 'loading' ? state.previous : null;
+  const shown = state.status === 'ready' ? state.result : state.status === 'loading' ? state.previous : null;
+  const { facets: loadedFacets, notice: facetsNotice } = useAttributeFacets(
+    long,
+    JSON.stringify([sel.condition, sel.text, sel.window, mode]),
+    async () =>
+      (
+        await dataSource.querySpans(
+          { ...query, needs: ['facets'], facetKeys: null },
+          new AbortController().signal,
+        )
+      ).facets,
+    shown?.facets ?? null,
+  );
+  const result = useMemo(
+    () => (shown === null || loadedFacets === null ? shown : { ...shown, facets: loadedFacets }),
+    [shown, loadedFacets],
+  );
 
   const clearFilters = (): void => {
     sel.clear('condition');
@@ -376,6 +401,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
               />
               <div className="grid grid-cols-1 gap-4 lg:grid-cols-[16rem_minmax(0,1fr)]">
                 <div className="flex min-w-0 flex-col gap-2">
+                  {facetsNotice}
                   <FacetPanel signal="span" facets={result.facets} durationBins={bins} />
                 </div>
                 <div className="min-w-0">

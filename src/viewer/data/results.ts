@@ -3,9 +3,14 @@ import type { ResourceRecord, ScopeRecord, SpanRecord } from '../../model/record
 import type { FacetCounts } from '../../rollups/facets.js';
 import type { SpanStatusKey } from '../../rollups/span-rollups.js';
 import type { TimeBuckets } from '../../rollups/time-buckets.js';
+import { DEFAULT_LOG_FACETS, DEFAULT_SPAN_FACETS } from '../../semconv/default-facets.js';
 import type { LogSeverityKey } from '../../semconv/severity.js';
 import type { LogMode, LogRow, LogTraceRow, PatternRow } from './log-query.js';
 import type { TimeWindow } from './time-window.js';
+
+/** The core facet keys: what the Traces page asks for under a long window, where attribute facets wait for the reader. */
+export const CORE_SPAN_FACET_KEYS: readonly string[] = DEFAULT_SPAN_FACETS.map((f) => f.key);
+export const CORE_LOG_FACET_KEYS: readonly string[] = DEFAULT_LOG_FACETS.map((f) => f.key);
 
 /**
  * Request-rate, error and latency-percentile series on a shared bucket grid (the RED view). Under a long window the

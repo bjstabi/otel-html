@@ -365,6 +365,39 @@ function largeTraceInput(): unknown {
   };
 }
 
+/** The `long-range` report (see `ReportName`): 48 one-span traces 7.5 minutes apart, so the range is 6 h less one gap. */
+async function buildLongRangeReport(): Promise<void> {
+  const inputs = new URL('long-range-inputs/', REPORTS_DIR);
+  await mkdir(inputs, { recursive: true });
+  const file = fileURLToPath(new URL('traces.json', inputs));
+  const t0 = 1_700_000_000_000_000_000n;
+  const gap = 450_000_000_000n;
+  const hex = (n: number, width: number): string => (n + 1).toString(16).padStart(width, '0');
+  const spans = Array.from({ length: 48 }, (_, i) => {
+    const start = t0 + BigInt(i) * gap;
+    return {
+      traceId: hex(i, 32),
+      spanId: hex(i, 16),
+      name: `op-${i % 3}`,
+      kind: 1,
+      startTimeUnixNano: String(start),
+      endTimeUnixNano: String(start + 1_000_000n * BigInt(1 + (i % 9))),
+    };
+  });
+  await writeFile(
+    file,
+    JSON.stringify({
+      resourceSpans: [
+        {
+          resource: { attributes: [str('service.name', 'long')] },
+          scopeSpans: [{ scope: { name: 'e2e-long' }, spans }],
+        },
+      ],
+    }),
+  );
+  await convertTo(reportDir('long-range'), [file], 'long range run');
+}
+
 async function buildLargeReport(): Promise<void> {
   const inputs = new URL('large-inputs/', REPORTS_DIR);
   await mkdir(inputs, { recursive: true });
@@ -517,6 +550,7 @@ const SITE_REPORTS: readonly ReportName[] = [
   'dashboards',
   'dashboards-hostile',
   'run-charts',
+  'long-range',
   'frozen-format-1',
   'frozen-format-2',
   'frozen-format-3',
@@ -557,6 +591,7 @@ await Promise.all([
   buildRefreshReport(),
   buildDashboardReports(),
   buildRunChartReport(),
+  buildLongRangeReport(),
   buildFrozenReports(),
 ]);
 await buildSiteCopies();

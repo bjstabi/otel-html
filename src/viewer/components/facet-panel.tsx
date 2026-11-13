@@ -1,4 +1,4 @@
-import { type JSX, type ReactNode, useState } from 'react';
+import { type JSX, type ReactNode, useCallback, useRef, useState } from 'react';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { FacetCounts } from '../../rollups/facets.js';
 import { DEFAULT_LOG_FACETS } from '../../semconv/default-facets.js';
@@ -533,4 +533,61 @@ export function FacetPanel(props: FacetPanelProps): JSX.Element {
       </div>
     </aside>
   );
+}
+
+const ATTRIBUTE_FACETS_NOTE = 'Attribute facets are not loaded for windows of 4 h 40 min or longer.';
+const ATTRIBUTE_FACETS_BUTTON = 'Load attribute facets';
+
+type Requested =
+  | { key: string; status: 'loading' }
+  | { key: string; status: 'ready'; facets: FacetCounts }
+  | { key: string; status: 'error'; message: string };
+
+/**
+ * Under a long window the page asks for core facets only; this holds the one extra request the reader can make for the
+ * attributes. It belongs to `requestKey` (the filter and the window): when that changes the button is back.
+ */
+export function useAttributeFacets(
+  long: boolean,
+  requestKey: string,
+  load: () => Promise<FacetCounts>,
+  base: FacetCounts | null,
+): { facets: FacetCounts | null; notice: JSX.Element | null } {
+  const [requested, setRequested] = useState<Requested | null>(null);
+  const loadRef = useRef(load);
+  loadRef.current = load;
+  const request = useCallback((): void => {
+    setRequested({ key: requestKey, status: 'loading' });
+    loadRef.current().then(
+      (facets) => setRequested({ key: requestKey, status: 'ready', facets }),
+      (e: unknown) =>
+        setRequested({
+          key: requestKey,
+          status: 'error',
+          message: e instanceof Error ? e.message : String(e),
+        }),
+    );
+  }, [requestKey]);
+  const mine = requested !== null && requested.key === requestKey ? requested : null;
+  if (!long) return { facets: base, notice: null };
+  if (mine?.status === 'ready') return { facets: mine.facets, notice: null };
+  const notice = (
+    <section aria-label="Attribute facets" className="flex flex-col gap-2 text-xs text-ink-2">
+      <p>{ATTRIBUTE_FACETS_NOTE}</p>
+      {mine?.status === 'error' && (
+        <p role="alert" className="text-critical">
+          {mine.message}
+        </p>
+      )}
+      <button
+        type="button"
+        disabled={mine?.status === 'loading'}
+        onClick={request}
+        className="self-start rounded-full border border-hairline px-3 py-1 text-sm text-ink hover:bg-hairline disabled:opacity-40"
+      >
+        {ATTRIBUTE_FACETS_BUTTON}
+      </button>
+    </section>
+  );
+  return { facets: base, notice };
 }

@@ -111,6 +111,22 @@ describe('TracePanel header', () => {
     expect(within(header).queryByText(/^p\d+$/)).toBeNull();
   });
 
+  test('the trace panel marks its percentile line on a long range and not on a short one', async () => {
+    mount();
+    const short = await screen.findByTestId('trace-header');
+    expect(await within(short).findByText('p97')).toBeTruthy();
+    expect(within(short).queryByText('approximate')).toBeNull();
+    cleanup();
+    const base = manifestV4(6);
+    const end = (BigInt(base.epochUnixNano) + 6n * 3_600_000_000_000n).toString();
+    mount({ dataSource: source({ manifest: { ...base, range: { start: base.epochUnixNano, end } } }) });
+    const long = await screen.findByTestId('trace-header');
+    expect(await within(long).findByText('p97')).toBeTruthy();
+    expect(within(long).getByText('approximate').getAttribute('title')).toBe(
+      'Percentiles over windows of 4 h 40 min or longer are within about 5 %.',
+    );
+  });
+
   test('error state is an icon plus a count label', async () => {
     mount({ dataSource: source({ getTrace: () => Promise.resolve(errDetail()) }) });
     const header = await screen.findByTestId('trace-header');

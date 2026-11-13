@@ -1,10 +1,16 @@
 import { OtelHtmlError } from '../../model/errors.js';
 import { parseTraceId } from '../../model/ids.js';
 import type { MetricQuery } from '../../query/metric-query.js';
-import { DEFAULT_LOG_FACETS, DEFAULT_SPAN_FACETS } from '../../semconv/default-facets.js';
 import type { DataSource } from './data-source.js';
 import { parseLogRef } from './log-query.js';
-import type { LogNeed, LogQuery, SpanNeed, SpanQuery } from './results.js';
+import {
+  CORE_LOG_FACET_KEYS,
+  CORE_SPAN_FACET_KEYS,
+  type LogNeed,
+  type LogQuery,
+  type SpanNeed,
+  type SpanQuery,
+} from './results.js';
 import type { TimeWindow } from './time-window.js';
 
 /**
@@ -85,8 +91,8 @@ const ATTR = (ids: ScalingIds): Condition => ({
 const RESIDUAL = (): Condition => ({ condition: 'Len(name) > 1', text: '' });
 const TEXT = (ids: ScalingIds): Condition => ({ condition: null, text: ids.text });
 
-const CORE_SPAN_KEYS = DEFAULT_SPAN_FACETS.map((f) => f.key);
-const CORE_LOG_KEYS = DEFAULT_LOG_FACETS.map((f) => f.key);
+const CORE_SPAN_KEYS = CORE_SPAN_FACET_KEYS;
+const CORE_LOG_KEYS = CORE_LOG_FACET_KEYS;
 const SURROUNDING = 5;
 const DURATION_NS = 1_000_000;
 

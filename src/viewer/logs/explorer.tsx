@@ -1,5 +1,6 @@
 import { type JSX, useMemo, useState } from 'react';
 import type { ManifestV4 } from '../../format/manifest.js';
+import { OtelHtmlError } from '../../model/errors.js';
 import { parseUnixNanos, type TraceId } from '../../model/ids.js';
 import { DEFAULT_LOG_FACETS } from '../../semconv/default-facets.js';
 import { Chart } from '../components/chart.js';
@@ -7,7 +8,7 @@ import { ColumnPicker } from '../components/column-picker.js';
 import { ExplorerControls } from '../components/explorer-controls.js';
 import { ErrorCard, NoMatch, parseSort, QueryNote, sortableOf } from '../components/explorer-states.js';
 import { downloadBlob, type ExportFormat, exportFileName, exportLogs } from '../components/export.js';
-import { FacetPanel } from '../components/facet-panel.js';
+import { FacetPanel, useAttributeFacets } from '../components/facet-panel.js';
 import { withToken } from '../components/filter-tokens.js';
 import { GroupTable } from '../components/group-table.js';
 import { HistogramCard, SEVERITY_SERIES } from '../components/histogram-card.js';
@@ -17,7 +18,8 @@ import { copyWidgetItem } from '../dashboards/copy-widget.js';
 import type { DataSource } from '../data/data-source.js';
 import type { LogMode, LogRef, LogRow, LogTraceRow, PatternRow } from '../data/log-query.js';
 import { manifestRange } from '../data/manifest-range.js';
-import type { PatternQuery, PatternsResult } from '../data/results.js';
+import { CORE_LOG_FACET_KEYS, type PatternQuery, type PatternsResult } from '../data/results.js';
+import { isLongWindow } from '../data/time-window.js';
 import { PageChrome, useWidgetCopy } from '../shell/page-chrome.js';
 import { PageOptionNotice } from '../shell/page-option-notice.js';
 import {
@@ -152,6 +154,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
   const noun = MODES[mode].noun;
   const sort = parseSort(sel.sort, MODES[mode].sortable, MODES[mode].sort);
   // Patterns ignore the filter (D9): their query carries only the window, so a filter edit does not rerun it.
+  const long = isLongWindow(sel.window, range);
   const query = useMemo<LogsPageQuery>(
     () =>
       mode === 'patterns'
@@ -166,15 +169,34 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
               sort: { column: sort.column, dir: sort.dir },
               limit: listCap,
               needs: ['rows', 'total', 'facets', 'timeline'],
-              facetKeys: null,
+              facetKeys: long ? CORE_LOG_FACET_KEYS : null,
             },
           },
-    [sel.condition, sel.text, sel.window, mode, sort.column, sort.dir, listCap],
+    [sel.condition, sel.text, sel.window, long, mode, sort.column, sort.dir, listCap],
   );
   const { state } = useLogsPage(dataSource, query);
   const shown = state.status === 'ready' ? state.result : state.status === 'loading' ? state.previous : null;
   // The result of the other kind (kept as `previous` across a mode switch) is not this mode's.
-  const result = shown?.kind === 'rows' && mode !== 'patterns' ? shown.result : null;
+  const shownRows = shown?.kind === 'rows' && mode !== 'patterns' ? shown.result : null;
+  const { facets: loadedFacets, notice: facetsNotice } = useAttributeFacets(
+    long,
+    JSON.stringify([sel.condition, sel.text, sel.window, mode]),
+    async () => {
+      if (query.kind !== 'rows')
+        throw new OtelHtmlError('usage', { message: 'The Patterns view has no facets to load.' });
+      return (
+        await dataSource.queryLogs(
+          { ...query.query, needs: ['facets'], facetKeys: null },
+          new AbortController().signal,
+        )
+      ).facets;
+    },
+    shownRows?.facets ?? null,
+  );
+  const result = useMemo(
+    () => (shownRows === null || loadedFacets === null ? shownRows : { ...shownRows, facets: loadedFacets }),
+    [shownRows, loadedFacets],
+  );
   const patterns = shown?.kind === 'patterns' && mode === 'patterns' ? shown.result : null;
   const counted = result ?? patterns;
 
@@ -427,6 +449,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
             )}
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-[16rem_minmax(0,1fr)]">
               <div className="min-w-0">
+                {facetsNotice}
                 <FacetPanel signal="log" facets={result.facets} />
               </div>
               <div className="min-w-0">{results()}</div>
