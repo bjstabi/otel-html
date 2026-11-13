@@ -221,12 +221,13 @@ describe('variables', () => {
     for (const r of release) r(); // the first request answers after it was aborted
     await new Promise((r) => setTimeout(r, 20));
     await user.click(screen.getByRole('combobox', { name: 'service.name' }));
-    expect(screen.getAllByRole('option').map((o) => o.textContent)).toEqual(['all', 'fresh']);
+    expect((await screen.findAllByRole('option')).map((o) => o.textContent)).toEqual(['all', 'fresh']);
   });
 
   test('a selected value with no data in the window stays selected and is shown in the list', async () => {
     const user = userEvent.setup();
-    const optionTexts = (): string[] => screen.getAllByRole('option').map((o) => o.textContent ?? '');
+    const optionTexts = async (): Promise<string[]> =>
+      (await screen.findAllByRole('option')).map((o) => o.textContent ?? '');
     renderShell(
       `#/dashboards/checkout?t=0~1000000000&${dParam({ vars: { 'service.name': 'run-a' } })}`,
       dataSourceOf(manifestWith([CHECKOUT]), {
@@ -236,7 +237,7 @@ describe('variables', () => {
     const box = await screen.findByRole('combobox', { name: 'service.name' });
     expect(box.textContent).toContain('run-a');
     await user.click(box);
-    expect(optionTexts()).toEqual(expect.arrayContaining(['run-a', 'run-b']));
+    expect(await optionTexts()).toEqual(expect.arrayContaining(['run-a', 'run-b']));
     expect(window.location.hash).toContain('run-a');
   });
 
