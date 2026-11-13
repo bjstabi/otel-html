@@ -751,6 +751,9 @@ export function createDuckDbDataSource(opts: {
     };
 
     // under a long window a trace is listed or counted by its own start: the candidates are the spans of those traces
+    // Known limit: the candidates are every span of the named partitions, not only those of the traces that start in the
+    // window, so they count toward RESIDUAL_CANDIDATE_CAP whole (narrowing them to the window's traces needs a trace-id
+    // join over `traces`). "Entire run" has no window and reads the filter as it is, so it is unaffected.
     const traceScope = async (): Promise<SqlFilter> => {
       const { window } = filter;
       if (!windowedTraces || window === null) return filter;
