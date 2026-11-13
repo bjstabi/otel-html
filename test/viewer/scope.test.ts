@@ -19,8 +19,10 @@ import {
   scopeFor,
   type VariableBinding,
   variableCondition,
+  variableValues,
   WIDGET_SCOPE,
 } from '../../src/viewer/dashboards/scope.js';
+import type { TimeWindow } from '../../src/viewer/data/time-window.js';
 import { EMPTY_DASHBOARD_STATE } from '../../src/viewer/state/dashboard-state.js';
 import { toLogEntries } from './log-entries.js';
 
@@ -290,6 +292,33 @@ describe('bindings', () => {
       'process.pid',
       'mix',
     ]);
+  });
+
+  test('a key with values elsewhere in the report but none in the window stays bound', () => {
+    const r = bindings(dashboard, withVars({ 'host.name': 'h9' }), {
+      ...values,
+      'host.name': { values: [], kind: 'string', emptyInWindow: true },
+    });
+    expect(r.hidden).toEqual([]);
+    expect(r.bindings).toContainEqual({ key: 'host.name', value: 'h9', kind: 'string' });
+  });
+
+  test('variableValues marks an empty window only when the report has the key', async () => {
+    const read = (key: string, w: TimeWindow | null) =>
+      Promise.resolve(
+        w === null && key === 'in.report'
+          ? { values: ['x'], kind: 'int' as const, capped: false }
+          : { values: [], kind: 'string' as const, capped: false },
+      );
+    const win = { start: 1, end: 2 };
+    expect(await variableValues('in.report', win, read)).toEqual({
+      values: [],
+      kind: 'int',
+      capped: false,
+      emptyInWindow: true,
+    });
+    expect((await variableValues('nowhere', win, read)).emptyInWindow).toBeUndefined();
+    expect(await variableValues('in.report', null, read)).toMatchObject({ values: ['x'] });
   });
 
   test('a mixed key compares as a string', () => {

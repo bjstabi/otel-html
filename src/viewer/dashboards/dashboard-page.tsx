@@ -1,9 +1,9 @@
 import { Menu } from '@base-ui/react/menu';
 import { ChevronDown, Copy, LayoutDashboard, Pencil } from 'lucide-react';
-import { type JSX, useCallback, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { type JSX, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import type { RunControls, Widget, WidgetLayout, WidgetType } from '../../dashboards/schema.js';
 import { parseUnixNanos, type TraceId } from '../../model/ids.js';
-import type { DataSource, ResourceValues } from '../data/data-source.js';
+import type { DataSource } from '../data/data-source.js';
 import type { TimeWindow } from '../data/time-window.js';
 import { LogPanel } from '../logs/log-panel.js';
 import { CONTROL, POPUP } from '../shell/controls.js';
@@ -23,7 +23,15 @@ import { DashboardLink } from './dashboard-link.js';
 import { DashboardGrid, useStacked } from './grid.js';
 import { type DashboardEntry, dashboardsOf, findDashboard } from './registry.js';
 import { useRunSession } from './run-session.js';
-import { bindings, following, scopeFor, type VariableBinding, type WidgetScope } from './scope.js';
+import {
+  bindings,
+  following,
+  scopeFor,
+  type VariableBinding,
+  type VariableValues,
+  variableValues,
+  type WidgetScope,
+} from './scope.js';
 import { SelectionChips } from './selection-chips.js';
 import { VariablesBar, withVariable } from './variables-bar.js';
 import { WidgetFrame } from './widget-frame.js';
@@ -213,7 +221,7 @@ function NotFound(props: { id: string; manifest: DataSource['manifest'] }): JSX.
   );
 }
 
-type ValuesByKey = Readonly<Record<string, ResourceValues>>;
+type ValuesByKey = Readonly<Record<string, VariableValues>>;
 
 function DashboardView(props: {
   entry: DashboardEntry;
@@ -258,7 +266,12 @@ function DashboardView(props: {
         await Promise.all(
           k.dash.variables.map(
             async (v) =>
-              [v.key, await dataSource.resourceValues(v.key, { window: k.window }, signal)] as const,
+              [
+                v.key,
+                await variableValues(v.key, k.window, (key, window) =>
+                  dataSource.resourceValues(key, { window }, signal),
+                ),
+              ] as const,
           ),
         ),
       ),
@@ -267,11 +280,13 @@ function DashboardView(props: {
   // the values are the page window's: asked again when it changes, the last answer standing while that runs
   const valuesKey = useMemo(() => ({ dash: d, window: page }), [d, page]);
   const loaded: KeyedState<ValuesByKey> = useKeyedAsync(valuesKey, loadValues);
-  const lastReady = useRef<{ id: string; value: ValuesByKey } | null>(null);
-  if (loaded.status === 'ready') lastReady.current = { id: d.id, value: loaded.value };
+  const [lastReady, setLastReady] = useState<{ id: string; value: ValuesByKey } | null>(null);
+  useEffect(() => {
+    if (loaded.status === 'ready') setLastReady({ id: d.id, value: loaded.value });
+  }, [loaded, d.id]);
   const values: KeyedState<ValuesByKey> =
-    loaded.status === 'loading' && lastReady.current?.id === d.id
-      ? { status: 'ready', value: lastReady.current.value }
+    loaded.status === 'loading' && lastReady?.id === d.id
+      ? { status: 'ready', value: lastReady.value }
       : loaded;
 
   const stale = staleIds(entry, state);

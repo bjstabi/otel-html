@@ -12,8 +12,27 @@ import {
   facetToken,
   tokensToOttl,
 } from '../components/filter-tokens.js';
+import type { ResourceValues } from '../data/data-source.js';
 import type { TimeWindow } from '../data/time-window.js';
 import type { DashboardPageState } from '../state/dashboard-state.js';
+
+/** A variable's values; `emptyInWindow` when the window has none but the report does (the variable stays). */
+export type VariableValues = ResourceValues & { emptyInWindow?: true };
+
+/**
+ * `key`'s values in `window`. An empty answer for a window is told apart from a key the report lacks by asking
+ * once without the window: the first is marked `emptyInWindow`, the second is returned as it is (hidden).
+ */
+export async function variableValues(
+  key: string,
+  window: TimeWindow | null,
+  read: (key: string, window: TimeWindow | null) => Promise<ResourceValues>,
+): Promise<VariableValues> {
+  const inWindow = await read(key, window);
+  if (inWindow.values.length > 0 || window === null) return inWindow;
+  const all = await read(key, null);
+  return all.values.length === 0 ? inWindow : { ...inWindow, kind: all.kind, emptyInWindow: true };
+}
 
 export interface VariableBinding {
   key: string;
@@ -110,19 +129,19 @@ export interface VariableBindings {
 
 /**
  * Each variable's value: the URL's (`null` is all), else the config default; unset and all are left out.
- * A key with no values in `values` is hidden and never bound. A `mixed` key is compared as a string (the facets
+ * A key with no values in `values` is hidden and never bound, unless only the window lacks them (`emptyInWindow`). A `mixed` key is compared as a string (the facets
  * keep display text), which matches string-valued records only. A value that does not parse as the key's int,
  * double or bool kind is reported as unusable instead of throwing later in `scopeFor`.
  */
 export function bindings(
   dashboard: Dashboard,
   state: DashboardPageState,
-  values: Readonly<Record<string, { values: readonly string[]; kind: FacetValueKind }>>,
+  values: Readonly<Record<string, { values: readonly string[]; kind: FacetValueKind; emptyInWindow?: true }>>,
 ): VariableBindings {
   const out: VariableBindings = { bindings: [], unusable: [], hidden: [] };
   for (const v of dashboard.variables) {
     const known = values[v.key];
-    if (known === undefined || known.values.length === 0) {
+    if (known === undefined || (known.values.length === 0 && known.emptyInWindow !== true)) {
       out.hidden.push(v.key);
       continue;
     }
