@@ -539,6 +539,35 @@ describe('resourceValues under a long window', () => {
     60_000,
   );
 
+  test('a short-range report with no window lists the same values from rollups and raw files', async () => {
+    const few = ['svc-a', 'svc-b'].map((svc, i) => ({
+      id: 800 + i,
+      trace: 1,
+      svc,
+      run: `r${i}`,
+      name: 'few',
+      startNs: edge(10 + i),
+      durNs: 5n,
+    }));
+    const rich = await buildFormat4Report([spansRequest(few)], {
+      config: { writer: { statisticsKeys: [...STATISTICS_KEYS] } },
+    });
+    const answers: unknown[] = [];
+    for (const f of [rich, withoutRollups(rich)]) {
+      const o = await openLayout(f);
+      try {
+        answers.push(
+          plain(await o.ds.resourceValues('service.name', { window: null })),
+          plain(await o.ds.resourceValues('run.id', { window: null })),
+        );
+      } finally {
+        o.close();
+      }
+    }
+    expect(answers.slice(0, 2)).toEqual(answers.slice(2));
+    expect(answers[0]).toMatchObject({ values: ['svc-a', 'svc-b'] });
+  });
+
   test('the rollups answer for a dimension and the raw files for a key that is not one', async () => {
     const sqlOf = async (layout: Layout, key: string): Promise<string> => {
       const o = await openLayout(layout.fixture);

@@ -413,20 +413,23 @@ export function createDuckDbDataSource(opts: {
     test: (e: SpanEntry) => boolean,
     signal: AbortSignal | undefined,
     run: (f: SqlFilter) => Promise<T>,
+    candidates: () => Promise<SqlFilter> = () => Promise.resolve(filter),
   ): Promise<T> =>
     withIds(
       filter,
       residual,
-      async (limit) =>
-        spanEntries(
+      async (limit) => {
+        const from = await candidates();
+        return spanEntries(
           await read(
             ['spans'],
-            filter.files,
-            spanRowsQuery(filter, { column: 'start', dir: 'asc' }, limit),
+            from.files,
+            spanRowsQuery(from, { column: 'start', dir: 'asc' }, limit),
             signal,
           ),
           epoch,
-        ).entries,
+        ).entries;
+      },
       test,
       run,
     );
@@ -446,7 +449,10 @@ export function createDuckDbDataSource(opts: {
     const browser = residual !== null;
     // a trace list under a long window reads spans files the window itself prunes (a trace belongs to the window by its first span)
     const windowedTraces =
-      rule.long && filter.window !== null && q.mode === 'traces' && q.needs.includes('rows');
+      rule.long &&
+      filter.window !== null &&
+      q.mode === 'traces' &&
+      (q.needs.includes('rows') || q.needs.includes('total'));
     if (filter.files.files.length === 0 && !windowedTraces) return emptyResult(caps, residual);
     const plan = (f: SqlFilter, need: RouteNeed, extra: readonly string[], durations: boolean) =>
       planOf(
@@ -477,17 +483,11 @@ export function createDuckDbDataSource(opts: {
      * traces that start in the window are named first, then the condition is read from their spans files only. Every
      * `traces` file is read either way (a row before the window decides that a trace started before it).
      */
-    const traceList = async (f: SqlFilter, sort: TraceSort): ReturnType<QueryEngine['query']> => {
-      const { window } = f;
-      if (!rule.long || window === null) {
-        return unconditioned(f)
-          ? read(['traces'], undefined, allTraceRowsQuery(f, sort, q.limit), signal)
-          : read(['spans', 'traces'], f.files, traceRowsQuery(f, sort, q.limit), signal);
-      }
-      if (f.predicate === null && f.text === null) {
-        return read(['traces'], undefined, allTraceRowsQuery(f, sort, q.limit, window), signal);
-      }
-      const traces = prunePartitions(manifest, 'traces', new Map(), null);
+    const namedSpans = async (
+      f: SqlFilter,
+      window: NonNullable<SqlFilter['window']>,
+      traces: Pruned,
+    ): Promise<Pruned> => {
       const named = new Set(
         rowsOf(await read(['traces'], undefined, windowTracePartitionsQuery(traces, window), signal)).map(
           (r) => partitionOfFilename(String(cell(r, 'filename'))),
@@ -497,8 +497,25 @@ export function createDuckDbDataSource(opts: {
       const spans = prunePartitions(manifest, 'spans', hints, null).files.filter((p) =>
         named.has(partitionOfFilename(p)),
       );
-      const own: SqlFilter = { ...f, files: { files: spans, all: false, total: f.files.total } };
-      return read(['spans', 'traces'], own.files, windowTraceRowsQuery(own, traces, sort, q.limit), signal);
+      return { files: spans, all: false, total: f.files.total };
+    };
+    const traceList = async (
+      f: SqlFilter,
+      sort: TraceSort,
+      limit = q.limit,
+    ): ReturnType<QueryEngine['query']> => {
+      const { window } = f;
+      if (!rule.long || window === null) {
+        return unconditioned(f)
+          ? read(['traces'], undefined, allTraceRowsQuery(f, sort, limit), signal)
+          : read(['spans', 'traces'], f.files, traceRowsQuery(f, sort, limit), signal);
+      }
+      if (f.predicate === null && f.text === null) {
+        return read(['traces'], undefined, allTraceRowsQuery(f, sort, limit, window), signal);
+      }
+      const traces = prunePartitions(manifest, 'traces', new Map(), null);
+      const own: SqlFilter = { ...f, files: await namedSpans(f, window, traces) };
+      return read(['spans', 'traces'], own.files, windowTraceRowsQuery(own, traces, sort, limit), signal);
     };
 
     const run = async (f: SqlFilter): Promise<SpanQueryResult> => {
@@ -636,12 +653,11 @@ export function createDuckDbDataSource(opts: {
             const split = plan(f, 'total', [], false);
             const t =
               split === null
-                ? q.mode === 'traces' &&
-                  rule.long &&
-                  f.window !== null &&
-                  f.predicate === null &&
-                  f.text === null
-                  ? await read(['traces'], undefined, allTraceCountQuery(f.window), signal)
+                ? q.mode === 'traces' && rule.long && f.window !== null
+                  ? f.predicate === null && f.text === null
+                    ? await read(['traces'], undefined, allTraceCountQuery(f.window), signal)
+                    : // by the trace's start, as the list's total is
+                      await traceList(f, traceSort ?? { column: 'start', dir: 'asc' }, 1)
                   : await read(['spans'], f.files, spanCountQuery(f, q.mode), signal)
                 : await readMeasures(
                     split,
@@ -711,8 +727,15 @@ export function createDuckDbDataSource(opts: {
       return result;
     };
 
+    // under a long window a trace is listed or counted by its own start: the candidates are the spans of those traces
+    const traceScope = async (): Promise<SqlFilter> => {
+      const { window } = filter;
+      if (!windowedTraces || window === null) return filter;
+      const files = await namedSpans(filter, window, prunePartitions(manifest, 'traces', new Map(), null));
+      return { ...filter, window: null, files };
+    };
     return test !== null && residual !== null && useIds
-      ? withResidualIds(filter, residual, test, signal, run)
+      ? withResidualIds(filter, residual, test, signal, run, traceScope)
       : run(filter);
   }
 

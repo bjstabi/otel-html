@@ -1025,6 +1025,29 @@ describe('long windows list a trace in the window its earliest span starts in', 
     );
   });
 
+  test('long window: a residual condition finds the traces the SQL-only one finds, a span after the window included', async () => {
+    // Len(name) is evaluated in the browser; "three-late" starts after the window and is the only match
+    const sqlOnly = await recording().source.querySpans(tq({ condition: 'name == "three-late"' }));
+    const residual = await recording().source.querySpans(tq({ condition: 'Len(name) == 10' }));
+    expect(listed(sqlOnly)).toEqual(['03']);
+    expect(listed(residual)).toEqual(['03']);
+    expect(residual.total).toBe(sqlOnly.total);
+    const all = await recording().source.querySpans(tq());
+    const always = await recording().source.querySpans(tq({ condition: 'Len(name) > -1' }));
+    expect(always.rows).toEqual(all.rows);
+    expect(always.total).toBe(all.total);
+  });
+
+  test('long window: the total alone counts traces by their start, whatever the condition', async () => {
+    const total = async (over: Partial<SpanQuery>): Promise<number> =>
+      (await recording().source.querySpans(tq({ needs: ['total'], ...over }))).total;
+    expect(await total({})).toBe(2);
+    expect(await total({ condition: 'name == "three-late"' })).toBe(1);
+    expect(await total({ condition: 'name == "late"' })).toBe(0);
+    expect(await total({ condition: 'Len(name) == 10' })).toBe(1);
+    expect(await total({ condition: 'name != "no-such"' })).toBe(2);
+  });
+
   test('short window: the list is by overlap, as today', async () => {
     const r = await recording().source.querySpans(
       query({ mode: 'traces', needs: ['rows', 'total'], window: { start: 0, end: 1e9 } }),

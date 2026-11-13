@@ -650,7 +650,10 @@ export interface Declared {
   allowed?: Partial<Record<Axis, string>>;
   /** Row groups that hold rows the request must read; default: every row group of the selected partitions. */
   needed?: (shape: ShapeSize) => number;
-  /** The id of the same request without its condition; what `matched` is measured against. */
+  /**
+   * The raw-path reference `matched` is measured against: normally the same request without its condition. When that
+   * request is itself `fixed` or `files` (so its growth is no bound), the conditioned entry that still scans.
+   */
   scanOf?: string;
   /**
    * For an entry that reads traces or patterns files (and, from format 5, rollup files). Measured at the densest step
