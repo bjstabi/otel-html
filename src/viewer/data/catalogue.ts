@@ -32,8 +32,6 @@ export type Family =
 /** One existing value of each kind the point reads and the conditions need (the generator's report holds them). */
 export interface ScalingIds {
   traceId: string;
-  /** The traces of one trace list page (26): distinct, neighbours in time, in the last partition. */
-  traceIds: string[];
   spanId: string;
   logRef: string;
   service: string;
@@ -428,18 +426,8 @@ export const CATALOGUE = [
     id: 'trace.share',
     family: 'read by id',
     method: 'serviceShare',
-    // a lone call is a batch of one
-    builders: ['tracePartitionsBatchQuery', 'traceSpansBatchQuery'],
+    builders: ['tracePartitionsQuery', 'traceSpansQuery'],
     run: (ds, ctx) => ds.serviceShare(traceIdOf(ctx.ids)),
-  }),
-  point({
-    id: 'trace.share.batch',
-    family: 'read by id',
-    method: 'serviceShare',
-    builders: ['tracePartitionsBatchQuery', 'traceSpansBatchQuery'],
-    // the trace list's page: every visible trace asks for its share in one tick
-    run: (ds, ctx) =>
-      Promise.all(ctx.ids.traceIds.map((id) => ds.serviceShare(parseTraceId(id, 'catalogue.traceIds')))),
   }),
   point({
     id: 'trace.has',
@@ -756,10 +744,6 @@ const BASELINE: Record<string, Declared> = {
   }),
   'trace.get': decl(['files', 'scan', null], { needed: ONE_GROUP }),
   'trace.share': decl(['files', 'scan', null], { needed: ONE_GROUP }),
-  // the 26 traces of a trace list page: one row group of each inside partition holds them all. Retention is `matched`
-  // as measured: the spans files of the page's partitions are read with one request more or less as their layout
-  // happens to fall (the ids of a partition are seeded by its number), which `files` does not allow.
-  'trace.share.batch': decl(['matched', 'scan', null], { needed: (s) => s.inside }),
   'trace.has': decl(['files', 'files', null], { needed: ONE_GROUP }),
   'trace.logs': decl(['files', 'files', null], { needed: ONE_GROUP }),
   'log.get': decl(['fixed', 'files', null], { needed: ONE_GROUP }),
@@ -829,7 +813,6 @@ const SMALL_TABLE_BUILDERS: ReadonlySet<string> = new Set([
   'traceRowsQuery',
   'allTraceRowsQuery',
   'tracePartitionsQuery',
-  'tracePartitionsBatchQuery',
   'traceSummaryQuery',
   'patternsQuery',
 ]);
@@ -879,7 +862,7 @@ const owed = (
  * #291 (opening a trace reads the spans files of its partitions whole; no PR of the plan fixes it, so PR 9 carries it).
  */
 export const KNOWN_DEBT: readonly DebtLine[] = [
-  ...owed(291, 9, 'density', 'matched', true, ['trace.get', 'trace.share', 'trace.share.batch']),
+  ...owed(291, 9, 'density', 'matched', true, ['trace.get', 'trace.share']),
   ...owed(271, 6, 'density', 'fixed', true, [
     'spans.total.long',
     'spans.buckets.long',

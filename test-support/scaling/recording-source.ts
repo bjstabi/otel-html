@@ -213,8 +213,7 @@ export function entryIdsOf(call: RecordedCall, long: boolean): string[] {
     case 'getTrace':
       return ['trace.get'];
     case 'serviceShare':
-      // the data source answers the shares asked in one tick with one pair of statements (Task 13a): the page pays for the batch
-      return ['trace.share.batch'];
+      return ['trace.share'];
     case 'hasTrace':
       return ['trace.has'];
     case 'traceLogs':

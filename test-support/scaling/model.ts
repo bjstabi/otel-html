@@ -319,16 +319,10 @@ export interface CountedCall {
 
 /** Methods whose result the data source remembers: the page pays for the first call only. */
 const MEMOISED = new Set(['metricCatalog']);
-/**
- * Methods the data source answers together when they are asked in one tick: the calls of a page are one batch, so the
- * page pays for them once whatever their ids (a page that asks in several ticks is counted as one batch, an
- * underestimate the trace list does not reach: it asks for all its visible traces at once).
- */
-const BATCHED = new Set(['serviceShare']);
 
 /**
  * How many data parts a page pays per (catalogue id, baseline flag): a by-id call (an `idKey`) once per distinct id, a
- * memoised or batched call once, any other call each time.
+ * memoised call once, any other call each time.
  */
 export function countCalls(calls: readonly CountedCall[]): Map<string, number> {
   const counted = new Map<string, number>();
@@ -336,8 +330,8 @@ export function countCalls(calls: readonly CountedCall[]): Map<string, number> {
   for (const call of calls)
     for (const id of call.ids) {
       const key = `${id}|${call.baseline}`;
-      if (call.idKey !== null || MEMOISED.has(call.method) || BATCHED.has(call.method)) {
-        const once = BATCHED.has(call.method) ? key : `${key}|${call.idKey ?? ''}`;
+      if (call.idKey !== null || MEMOISED.has(call.method)) {
+        const once = `${key}|${call.idKey ?? ''}`;
         if (seen.has(once)) continue;
         seen.add(once);
       }

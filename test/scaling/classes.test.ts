@@ -16,7 +16,7 @@ import { assertedAxes, fileOf, SPLIT } from '../../test-support/scaling/measured
 const { OTEL_HTML_SCALING_OUT: OUT } = process.env;
 
 /** The number of lines the known-debt list may hold; a PR that removes lines lowers it. */
-const DEBT_MAX = 68;
+const DEBT_MAX = 67;
 
 describe('declared classes', () => {
   test('every catalogue entry has a declaration and nothing else does', () => {
@@ -76,7 +76,6 @@ describe('declared classes', () => {
       'trace.has',
       'trace.logs',
       'trace.share',
-      'trace.share.batch',
       'traces.list.all',
       'traces.list.all.long',
       'traces.list.attr.long',
