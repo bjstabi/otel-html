@@ -28,7 +28,7 @@ in order; a PR starts from `main` after the previous one merged.
 | 1   | `test/query-catalogue`       | `test(query): query catalogue, scaling harness and baseline`           |        | merged #285 |
 | 2   | `fix/test-span-times`        | `fix(test): test spans keep real times under a faked clock`            |        | merged #288 |
 | 3   | `perf/small-site-files`      | `perf(viewer): small site files load whole and in parallel`            |        | merged #289 |
-| 4   | `perf/pruning-statistics`    | `perf(query): statistics survive merges and reads follow the window`   | #272   |        |
+| 4   | `perf/pruning-statistics`    | `perf(query): statistics survive merges and reads follow the window`   | #272   | merged #292 |
 | 5   | `feat/format-5`              | `feat(format): format 5 with rollup tables and the end-time statistic` |        |        |
 | 6   | `perf/rollup-router`         | `perf(viewer): long windows are answered from rollups`                 | #271   |        |
 | 7   | `perf/compaction-time-bound` | `perf(writer): compaction keeps files bounded in time`                 |        |        |
