@@ -29,7 +29,7 @@ in order; a PR starts from `main` after the previous one merged.
 | 2   | `fix/test-span-times`        | `fix(test): test spans keep real times under a faked clock`            |        | merged #288 |
 | 3   | `perf/small-site-files`      | `perf(viewer): small site files load whole and in parallel`            |        | merged #289 |
 | 4   | `perf/pruning-statistics`    | `perf(query): statistics survive merges and reads follow the window`   | #272   | merged #292 |
-| 5   | `feat/format-5`              | `feat(format): format 5 with rollup tables and the end-time statistic` |        |        |
+| 5   | `feat/format-5`              | `feat(format): format 5 with rollup tables and the end-time statistic` |        | merged #293 |
 | 6   | `perf/rollup-router`         | `perf(viewer): long windows are answered from rollups`                 | #271   |        |
 | 7   | `perf/compaction-time-bound` | `perf(writer): compaction keeps files bounded in time`                 |        |        |
 | 8   | `feat/default-window`        | `feat(viewer): viewer.defaultWindow and longer presets`                |        |        |
@@ -159,7 +159,8 @@ change in any PR (a need for one is a stop).
   `src/viewer/shell/shell.tsx`, `src/viewer/shell/time-range.tsx`, `src/viewer/traces/explorer.tsx`,
   `src/viewer/logs/explorer.tsx`, `src/viewer/components/facet-panel.tsx`,
   `src/viewer/components/histogram-card.tsx`, `src/viewer/traces/span-section.tsx`,
-  `src/viewer/traces/trace-panel.tsx`. No build file.
+  `src/viewer/traces/trace-panel.tsx`; and, for lazy rollup views (maintainer, 2026-11-13), `src/query/sql/views.ts`,
+  `src/viewer/data/engine/files.ts`, `src/viewer/data/refresh-report.ts`. No build file.
 - **PR 7** — `src/writer/compaction.ts`, `src/writer/partition-session.ts`, `src/viewer/data/catalogue.ts`. No build
   file.
 - **PR 8** — `src/config/schema.ts`, `src/viewer/shell/shell.tsx`, `src/viewer/shell/time-range.tsx`,
