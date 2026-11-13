@@ -363,23 +363,31 @@ export function rollupTimelineQuery(
 }
 
 /**
- * Rows (key, value, n, total) like `coreFacetsQuery` for one key: `value` is the key cut to the facet value length, a
- * row with no value is skipped, `cap` values by count then text, `total` counts every value.
+ * Rows (key, value, n, total) like `coreFacetsQuery` for the keys of one relation, in one statement (a `UNION ALL` of the
+ * per-key aggregates over one CTE, so the relation's files are read once): `value` is the key cut to the facet value
+ * length, a row with no value is skipped, `cap` values by count then text, `total` counts every value; the keys in the
+ * order given, each most frequent first.
  */
-export function rollupFacetQuery(rel: Query, key: MeasureKey, cap: number): Query {
-  const grouped = Query.from({ r: rel })
-    .select({ value: truncated(column(key.name)), n: n64('n') })
-    .where(sql`${column(key.name)} IS NOT NULL`)
-    .groupby(sql`value`);
-  return Query.from({ grouped })
-    .select({
-      key: literal(key.name),
-      value: column('value'),
-      n: column('n'),
-      total: sql`CAST(sum(n) OVER () AS BIGINT)`,
-    })
-    .qualify(sql`row_number() OVER (ORDER BY n DESC, value) <= ${literal(cap)}`)
-    .orderby(sql`n DESC`, sql`value`);
+export function rollupFacetsQuery(rel: Query, keys: readonly MeasureKey[], cap: number): Query {
+  const branches = keys.map((key, i) => {
+    const grouped = Query.from('r')
+      .select({ value: truncated(column(key.name)), n: n64('n') })
+      .where(sql`${column(key.name)} IS NOT NULL`)
+      .groupby(sql`value`);
+    return Query.from({ grouped })
+      .select({
+        ord: literal(i),
+        key: literal(key.name),
+        value: column('value'),
+        n: column('n'),
+        total: sql`CAST(sum(n) OVER () AS BIGINT)`,
+      })
+      .qualify(sql`row_number() OVER (ORDER BY n DESC, value) <= ${literal(cap)}`);
+  });
+  return Query.with({ r: rel, u: Query.unionAll(branches) })
+    .select({ key: column('key'), value: column('value'), n: column('n'), total: column('total') })
+    .from('u')
+    .orderby(sql`ord`, sql`n DESC`, sql`value`);
 }
 
 /**

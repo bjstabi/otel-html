@@ -233,13 +233,13 @@ const SPAN_AGGREGATES: SpanSpec[] = [
   {
     ...span('spans.facets.core', ['facets'], ['coreFacetsQuery'], {
       over: { facetKeys: CORE_SPAN_KEYS },
-      long: ['rollupFacetQuery'],
+      long: ['rollupFacetsQuery'],
     }),
     family: 'top values',
   },
   {
     ...span('spans.facets.attr', ['facets'], ['coreFacetsQuery', 'attributeFacetsQuery'], {
-      long: ['rollupFacetQuery', 'attributeFacetsQuery'],
+      long: ['rollupFacetsQuery', 'attributeFacetsQuery'],
     }),
     family: 'top values',
   },
@@ -346,10 +346,10 @@ const LOG_QUERIES: LogSpec[] = [
   log('logs.timeline', 'time buckets', ['timeline'], ['logTimelineQuery'], { long: ['rollupTimelineQuery'] }),
   log('logs.facets.core', 'top values', ['facets'], ['coreFacetsQuery'], {
     over: { facetKeys: CORE_LOG_KEYS },
-    long: ['rollupFacetQuery'],
+    long: ['rollupFacetsQuery'],
   }),
   log('logs.facets.attr', 'top values', ['facets'], ['coreFacetsQuery', 'attributeFacetsQuery'], {
-    long: ['rollupFacetQuery', 'attributeFacetsQuery'],
+    long: ['rollupFacetsQuery', 'attributeFacetsQuery'],
   }),
   log('logs.rows', 'rows page', ['rows'], ['logRowsQuery']),
   log('logs.traces', 'trace list', ['rows', 'total'], ['logTracesQuery', 'logCountQuery'], {

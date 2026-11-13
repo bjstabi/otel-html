@@ -165,6 +165,39 @@ describe('rollup equivalence', () => {
   });
 });
 
+describe('core facets under a long window', () => {
+  /** The statements one call sends over the base table, a fresh data source per call (the coordinator caches by SQL text). */
+  async function over(layout: Layout, table: 'spans' | 'logs', condition: string | null, long: boolean) {
+    const o = await openLayout(layout.fixture);
+    try {
+      const window = long ? longWindow(o.epoch) : shortWindow(o.epoch);
+      await (table === 'spans'
+        ? o.ds.querySpans(spanQuery({ window, condition, needs: ['facets'], facetKeys: null }))
+        : o.ds.queryLogs(logQuery({ window, condition, needs: ['facets'], facetKeys: null })));
+      const own = new RegExp(`FROM "${table}"`);
+      return o.db.connector.requests.filter((r) => r.type === 'arrow' && own.test(r.sql)).length;
+    } finally {
+      o.close();
+    }
+  }
+
+  test.each([
+    ['spans', null],
+    ['spans', 'attributes["http.route"] != "no-such"'],
+    ['logs', null],
+    ['logs', 'attributes["http.route"] != "no-such"'],
+  ] as const)(
+    '%s with condition %s scan the base files once on raw partitions, as under a short window',
+    async (table, condition) => {
+      const short = await over(layouts.B, table, condition, false);
+      expect(short).toBeGreaterThan(0);
+      // the attribute facets are one more statement, short or long
+      expect(await over(layouts.B, table, condition, true)).toBe(short);
+      if (condition !== null) expect(await over(layouts.A, table, condition, true)).toBe(short);
+    },
+  );
+});
+
 const spanQuery = (over: Partial<SpanQuery>): SpanQuery => ({
   condition: null,
   text: '',

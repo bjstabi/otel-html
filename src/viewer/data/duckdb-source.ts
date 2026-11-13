@@ -35,12 +35,13 @@ import {
   BAND_KEY,
   facetKeyOf,
   groupKeyOf,
+  type MeasureKey,
   measuresRelation,
   readsOf,
   resourceAttributesKey,
   rollupDurationBinsQuery,
   rollupDurationsQuery,
-  rollupFacetQuery,
+  rollupFacetsQuery,
   rollupGroupsQuery,
   rollupPercentileQuery,
   rollupResourceValuesQuery,
@@ -335,6 +336,34 @@ export function createDuckDbDataSource(opts: {
   };
 
   /**
+   * The core facets the router sends to `measures`, one statement per distinct file split: the keys whose rollups all
+   * carry the dimension share one relation (the raw partitions are scanned once, not once per key).
+   */
+  const measuredFacets = (
+    table: 'spans' | 'logs',
+    f: SqlFilter,
+    measured: readonly { k: CoreFacet; split: Split }[],
+    signal?: AbortSignal,
+  ): Promise<Awaited<ReturnType<QueryEngine['query']>>[]> => {
+    const groups = new Map<string, { split: Split; keys: MeasureKey[] }>();
+    for (const { k, split } of measured) {
+      const id = `${split.rollup.join('\n')}\u0000${split.raw.join('\n')}`;
+      const group = groups.get(id) ?? { split, keys: [] };
+      group.keys.push(facetKeyOf(k));
+      groups.set(id, group);
+    }
+    return Promise.all(
+      [...groups.values()].map(({ split, keys }) =>
+        readMeasures(
+          split,
+          rollupFacetsQuery(measuresRelation(f, table, split, keys, false), keys, caps.facetValueCap),
+          signal,
+        ),
+      ),
+    );
+  };
+
+  /**
    * The files of a need the router sends to `measures` (rollup files, and the base files of the partitions without a
    * usable rollup), or null when it runs today's statement. `extra` is what the need itself reads beside the condition.
    */
@@ -577,13 +606,7 @@ export function createDuckDbDataSource(opts: {
                 ? null
                 : measured.length === 0
                   ? read(['spans'], f.files, coreFacetsQuery(f, 'spans', keys, caps), signal)
-                  : Promise.all(
-                      measured.map(({ k, split }) => {
-                        const key = facetKeyOf(k);
-                        const rel = measuresRelation(f, 'spans', split, [key], false);
-                        return readMeasures(split, rollupFacetQuery(rel, key, caps.facetValueCap), signal);
-                      }),
-                    ),
+                  : measuredFacets('spans', f, measured, signal),
               wantAttrs
                 ? read(['spans'], f.files, attributeFacetsQuery(f, 'spans', caps, [...CORE_KEYS]), signal)
                 : null,
@@ -960,13 +983,7 @@ export function createDuckDbDataSource(opts: {
                 ? null
                 : measured.length === 0
                   ? read(['logs'], f.files, coreFacetsQuery(f, 'logs', keys, caps), signal)
-                  : Promise.all(
-                      measured.map(({ k, split }) => {
-                        const key = facetKeyOf(k);
-                        const rel = measuresRelation(f, 'logs', split, [key], false);
-                        return readMeasures(split, rollupFacetQuery(rel, key, caps.facetValueCap), signal);
-                      }),
-                    ),
+                  : measuredFacets('logs', f, measured, signal),
               wantAttrs
                 ? read(['logs'], f.files, attributeFacetsQuery(f, 'logs', caps, [...CORE_LOG_KEYS]), signal)
                 : null,

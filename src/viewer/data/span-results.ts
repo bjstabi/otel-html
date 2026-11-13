@@ -179,7 +179,7 @@ export function facetCounts(
   }
   const keys = new Map<string, Key>();
   const coreKeys = new Set<string>();
-  // one table of all the keys (`coreFacetsQuery`), or one per key (`rollupFacetQuery`)
+  // one table of all the keys (`coreFacetsQuery`), or one per file split (`rollupFacetsQuery`)
   const coreRows = core === null ? [] : [core].flat().flatMap((t) => rowsOf(t));
   for (const r of coreRows) {
     const key = text(cell(r, 'key'));

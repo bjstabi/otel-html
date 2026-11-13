@@ -12,7 +12,7 @@ import {
   readsOf,
   rollupDurationBinsQuery,
   rollupDurationsQuery,
-  rollupFacetQuery,
+  rollupFacetsQuery,
   rollupGroupsQuery,
   rollupTimelineQuery,
   rollupTotalQuery,
@@ -234,7 +234,7 @@ describe('the statements over a relation', () => {
     expect(String(rollupTimelineQuery(rel, spec, 0n, SERVICE_KEY, { only: ['a', "b'c"] }))).toContain(
       "'b''c'",
     );
-    expect(String(rollupFacetQuery(rel, facetKeyOf(firstFacet), 7))).toMatch(/<= 7/);
+    expect(String(rollupFacetsQuery(rel, [facetKeyOf(firstFacet)], 7))).toMatch(/<= 7/);
     expect(String(rollupGroupsQuery(rel, [groupKeyOf('service.name')], { limit: 4 }))).toMatch(/LIMIT 4/);
     expect(String(rollupDurationsQuery(rel))).toContain('quantiles');
     expect(String(rollupDurationBinsQuery(rel, []))).toContain('FALSE');
