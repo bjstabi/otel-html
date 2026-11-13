@@ -275,6 +275,9 @@ describe('refreshReport unchanged and rollback', () => {
     const restored = f.calls.statements.slice(3);
     expect(restored.filter((s) => s.includes('000000'))).toHaveLength(2);
     expect(restored.some((s) => s.includes('000001'))).toBe(false);
+    // the source over the previous manifest bound its rollup views already: they come back bound, not forgotten
+    expect(restored.filter((s) => s.startsWith('DROP VIEW'))).toEqual([]);
+    expect(restored.filter((s) => /^CREATE OR REPLACE VIEW "(span|log)_rollups"/.test(s))).toHaveLength(2);
     expect(f.calls.drop.sort()).toEqual([partitionFilePath(1, 'spans'), partitionFilePath(1, 'logs')].sort());
     expect(f.calls.clearCache).toBe(0);
   });

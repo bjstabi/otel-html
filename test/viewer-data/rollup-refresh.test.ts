@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 import type { ManifestV4 } from '../../src/format/manifest.js';
 import { viewStatements } from '../../src/query/sql/views.js';
 import { createDuckDbDataSource } from '../../src/viewer/data/duckdb-source.js';
-import { createViews } from '../../src/viewer/data/engine/files.js';
+import { createViews, restoreViews } from '../../src/viewer/data/engine/files.js';
 import type { Engine } from '../../src/viewer/data/engine/start.js';
 import { createCoordinator, mosaicQueryEngine } from '../../src/viewer/data/mosaic.js';
 import type { QueryEngine } from '../../src/viewer/data/query-engine.js';
@@ -102,6 +102,35 @@ describe('long windows far from the epoch', () => {
     } finally {
       near.close();
       far.close();
+    }
+  });
+
+  test('a failed Refresh puts the rollup views back for the source that bound them', async () => {
+    const { A } = await buildLayouts();
+    const full: ManifestV4 = A.fixture.manifest;
+    const old: ManifestV4 = { ...full, partitions: full.partitions.slice(0, 4) };
+    const db = await openTestDb();
+    try {
+      for (const [path, bytes] of A.fixture.files) db.registerFile(path, bytes);
+      for (const sql of viewStatements(old, (p) => p, 'base')) db.exec(sql);
+      const engine = mosaicQueryEngine(createCoordinator(db.connector, silent), db);
+      const epoch = BigInt(full.epochUnixNano);
+      const window = longWindow(epoch);
+      const shown = createDuckDbDataSource({ engine, manifest: old });
+      const before = (await shown.querySpans(query({ window }))).total;
+      // the Refresh recreated the views for the new manifest (and forgot the rollup views), then failed
+      const asEngine = { connection: { query: async (sql: string) => db.exec(sql) } } as unknown as Engine;
+      await createViews(asEngine, full);
+      await restoreViews(asEngine, old);
+      // a statement the coordinator has not cached: the shown source bound its views once and will not again
+      const after = await shown.querySpans(query({ window, needs: ['total', 'timeline'] }));
+      expect(after.total).toBe(before);
+      const listed = old.partitions.filter((p) => p.files.span_rollups !== undefined).length;
+      expect(
+        Number(Reflect.get(db.rows('SELECT count(DISTINCT filename) AS n FROM span_rollups')[0] ?? {}, 'n')),
+      ).toBe(listed);
+    } finally {
+      db.close();
     }
   });
 });

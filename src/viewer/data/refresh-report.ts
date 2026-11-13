@@ -3,7 +3,7 @@ import { MANIFEST_KEY, MANIFEST_PATH } from '../../format/paths.js';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { DataSource } from './data-source.js';
 import { createDuckDbDataSource } from './duckdb-source.js';
-import { createViews, dropFiles, manifestFiles, registerFiles } from './engine/files.js';
+import { createViews, dropFiles, manifestFiles, registerFiles, restoreViews } from './engine/files.js';
 import type { SmallFiles } from './engine/small-files.js';
 import type { Engine } from './engine/start.js';
 import type { Logger } from './mosaic.js';
@@ -101,7 +101,7 @@ const held = <T>(engine: Engine, change: () => Promise<T>): Promise<T> =>
 /**
  * Best effort after a refresh failed part-way: a rewritten path registered by URL again (the buffer it held is gone and
  * the server no longer serves its old bytes, so it is fetched whole again), the views of the manifest the page still
- * shows, and the files this refresh added dropped. A rollback that fails too is logged; the caller rethrows the
+ * shows (the rollup views bound again: the source over it will not), and the files this refresh added dropped. A rollback that fails too is logged; the caller rethrows the
  * original error.
  */
 async function rollBack(
@@ -122,7 +122,7 @@ async function rollBack(
     });
   }
   try {
-    await createViews(engine, previous);
+    await restoreViews(engine, previous);
   } catch (error) {
     logger.error('could not restore the previous views after a failed refresh', error);
   }

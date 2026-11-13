@@ -2,7 +2,7 @@ import { DuckDBDataProtocol } from '@duckdb/duckdb-wasm';
 import type { ManifestV4 } from '../../../format/manifest.js';
 import type { Table } from '../../../format/parquet/columns.js';
 import { partitionKey, partitionWrapperPath } from '../../../format/paths.js';
-import { dropRollupViewStatements, viewStatements } from '../../../query/sql/views.js';
+import { dropRollupViewStatements, rollupViewStatements, viewStatements } from '../../../query/sql/views.js';
 import { fromBase64, loadText } from './bytes.js';
 import type { Engine, EngineDeps } from './start.js';
 
@@ -121,6 +121,21 @@ export function swapToBuffer(
  */
 export async function createViews(engine: Engine, manifest: ManifestV4): Promise<void> {
   for (const statement of [...viewStatements(manifest, (p) => p, 'base'), ...dropRollupViewStatements()]) {
+    await engine.gate?.wait();
+    await engine.connection.query(statement);
+  }
+}
+
+/**
+ * What a failed Refresh puts back: the base views and, bound again, the rollup views of the manifest the page still
+ * shows (the data source over it bound them already and will not again, and `createViews` of the failed attempt may have
+ * dropped them).
+ */
+export async function restoreViews(engine: Engine, manifest: ManifestV4): Promise<void> {
+  for (const statement of [
+    ...viewStatements(manifest, (p) => p, 'base'),
+    ...rollupViewStatements(manifest, (p) => p, true),
+  ]) {
     await engine.gate?.wait();
     await engine.connection.query(statement);
   }
