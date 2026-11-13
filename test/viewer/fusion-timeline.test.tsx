@@ -467,4 +467,17 @@ describe('alignLanes under a long window (buckets on absolute grains)', () => {
     // the three columns hold the first three source buckets, whole
     expect(view.counts('ok').slice(0, 3)).toEqual([5, 0, 3]);
   });
+
+  test('a metric lane wider than the spans keeps the grid on the spans origin, and no span bucket is dropped', () => {
+    const points = new TimeBuckets<'points'>(['points']);
+    points.add(0 as RelNanos, 'points', 4);
+    points.add(1_000_000_000_000_000 as RelNanos, 'points', 1);
+    expect(points.widthNs).toBe(2 * WIDTH);
+    const window: TimeWindow = { start: 0, end: 5 * WIDTH };
+    const aligned = alignLanes([{ buckets: points }, { buckets: spans() }], window);
+    expect(aligned.widthNs).toBe(2 * WIDTH);
+    expect((aligned.startNs - (ORIGIN - WIDTH)) % (2 * WIDTH)).toBe(0);
+    const lane = aligned.lanes[1];
+    expect((lane?.total('ok') ?? 0) + (lane?.total('error') ?? 0)).toBe(11);
+  });
 });
