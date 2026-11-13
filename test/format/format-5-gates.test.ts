@@ -4,6 +4,7 @@ import { wrapDataFile } from '../../src/format/data-file.js';
 import type { ManifestV4 } from '../../src/format/manifest.js';
 import { MANIFEST_KEY, MANIFEST_PATH } from '../../src/format/paths.js';
 import { readHostManifest } from '../../src/host/manifest.js';
+import { OtelHtmlError } from '../../src/model/errors.js';
 import { loadPartitionCheckpoint } from '../../src/writer/checkpoint.js';
 import { readMergeInput } from '../../src/writer/merge.js';
 import { createMemoryFileSystem } from '../../test-support/memory-fs.js';
@@ -42,10 +43,11 @@ const GATES: readonly [string, (m: ManifestV4) => Promise<unknown>][] = [
   [
     'loadPartitionCheckpoint',
     async (m) => {
-      // No state slot is written, so it fails after the format gate; only the gate's own refusal matters here.
+      // No state slot is written, so it passes the format gate and fails on the missing state: only that failure is expected.
       await loadPartitionCheckpoint(await reportWith(m), '/r', m.otelHtmlVersion, 'site').catch(
         (e: unknown) => {
-          if (e instanceof Error && e.message.includes('cannot append')) throw e;
+          if (e instanceof OtelHtmlError && e.code === 'invalid-report' && e.path === 'data/state') return;
+          throw e;
         },
       );
     },

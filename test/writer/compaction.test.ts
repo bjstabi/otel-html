@@ -725,7 +725,7 @@ describe('compactPartitions on the real file system', () => {
       const expected = encodeTable('logs', rowsPer.flat(), { rowGroupRows: ROW_GROUP });
       const got = await fs.readBytes(join(dir, out.files.logs?.path ?? ''));
       expect(Buffer.from(got).equals(Buffer.from(expected))).toBe(true);
-      expect(await readdir(join(dir, 'data/partitions/000020'))).toEqual([
+      expect((await readdir(join(dir, 'data/partitions/000020'))).sort()).toEqual([
         'log_rollups.parquet',
         'logs.parquet',
       ]);
