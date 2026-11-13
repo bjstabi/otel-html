@@ -1,3 +1,4 @@
+import { OtelHtmlError } from '../../model/errors.js';
 import type { Table } from './columns.js';
 
 /**
@@ -57,8 +58,12 @@ export interface TField {
   value: TValue;
 }
 
+function invalid(message: string): OtelHtmlError {
+  return new OtelHtmlError('invalid-report', { message });
+}
+
 function fail(what: string): never {
-  throw new Error(`malformed Thrift: ${what}`);
+  throw invalid(`malformed Thrift: ${what}`);
 }
 
 class Reader {
@@ -429,12 +434,12 @@ const META_BLOOM_LENGTH = 15;
 
 function list(value: unknown): TList {
   if (typeof value !== 'object' || value === null || !('items' in value))
-    throw new Error('malformed Parquet footer');
+    throw invalid('malformed Parquet footer');
   return value as TList;
 }
 
 function struct(value: unknown): TField[] {
-  if (!Array.isArray(value)) throw new Error('malformed Parquet footer');
+  if (!Array.isArray(value)) throw invalid('malformed Parquet footer');
   return value as TField[];
 }
 
@@ -448,9 +453,9 @@ function setField(fields: TField[], id: number, type: number, value: bigint): vo
 function footerSpan(tail: Uint8Array, length: number): { start: number; size: number } {
   const n = tail.length;
   const magic = tail.subarray(n - 4);
-  if (n < TRAILER || MAGIC.some((b, i) => magic[i] !== b)) throw new Error('not a Parquet file');
+  if (n < TRAILER || MAGIC.some((b, i) => magic[i] !== b)) throw invalid('not a Parquet file');
   const size = new DataView(tail.buffer, tail.byteOffset + n - TRAILER, 4).getUint32(0, true);
-  if (size + TRAILER > length) throw new Error('malformed Parquet footer');
+  if (size + TRAILER > length) throw invalid('malformed Parquet footer');
   return { start: length - TRAILER - size, size };
 }
 
@@ -468,14 +473,14 @@ function withFilters(
   const meta = readStruct(footer);
   const rowGroups = list(field(meta, FILE_ROW_GROUPS)?.value).items.map(struct);
   if (rowGroups.length !== groups.length)
-    throw new Error(`bloom filters for ${groups.length} row groups, the file has ${rowGroups.length}`);
+    throw invalid(`bloom filters for ${groups.length} row groups, the file has ${rowGroups.length}`);
   const pieces: Uint8Array[] = [];
   let at = filtersAt;
   let any = false;
   for (const [r, rowGroup] of rowGroups.entries()) {
     const group = groups[r];
     if (group === undefined || Number(field(rowGroup, GROUP_ROWS)?.value) !== group.rows)
-      throw new Error(
+      throw invalid(
         `bloom filters for row group ${r} cover ${group?.rows} rows, the file has ${String(field(rowGroup, GROUP_ROWS)?.value)}`,
       );
     for (const chunk of list(field(rowGroup, GROUP_COLUMNS)?.value).items.map(struct)) {

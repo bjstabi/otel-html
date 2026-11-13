@@ -1,3 +1,4 @@
+import { OtelHtmlError } from '../../../src/model/errors.js';
 import '../../../src/writer/parquet-wasm-source.js';
 import { describe, expect, test } from 'vitest';
 import { batchFromRows } from '../../../src/format/parquet/batch.js';
@@ -218,6 +219,8 @@ describe('addBloomFilters', () => {
   test('a group count or row count that does not match the file throws', () => {
     const groups = collect();
     expect(() => addBloomFilters(plain, groups.slice(1))).toThrow(/row groups/);
+    expect(() => addBloomFilters(plain, groups.slice(1))).toThrow(OtelHtmlError);
+    expect(() => addBloomFilters(plain.subarray(0, 6), [])).toThrow(OtelHtmlError);
     const first = groups[0];
     if (first === undefined) throw new Error('no group');
     expect(() => addBloomFilters(plain, [{ ...first, rows: first.rows + 1 }, ...groups.slice(1)])).toThrow(
