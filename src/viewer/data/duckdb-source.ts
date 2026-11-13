@@ -1289,8 +1289,9 @@ export function createDuckDbDataSource(opts: {
         rule.window === null
           ? undefined
           : { spans: filterOf('spans'), logs: filterOf('logs'), points: filterOf('points') };
-      if (rule.long || opts.window === null) {
-        // a long window, or none (the whole report, long or not): the spans and logs parts come from the rollups that keep the key
+      if (rule.long) {
+        // a long window, or none on a report whose range is long (spec §6.3: a shorter one never uses the rollups): the
+        // spans and logs parts come from the rollups that keep the key
         const reads = new Set([`resource:${key}`]);
         const attributes = [resourceAttributesKey(key)];
         const part = (table: 'spans' | 'logs'): { split: Split; rel: Query } => {

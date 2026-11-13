@@ -2,9 +2,8 @@ import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import type { CatalogueContext, CatalogueEntry } from '../../src/viewer/data/catalogue.js';
 import type { DataSource } from '../../src/viewer/data/data-source.js';
 import type { LogQuery, SpanQuery } from '../../src/viewer/data/results.js';
-import { buildFormat4Report } from '../../test-support/format4-fixture.js';
+import { buildFormat4Report, type Format4Fixture } from '../../test-support/format4-fixture.js';
 import {
-  BASE,
   buildLayouts,
   edge,
   type Layout,
@@ -141,27 +140,48 @@ describe('rollup equivalence', () => {
     60_000,
   );
 
-  test('the rollups are what answers: A reads the rollup tables, B never does, C both', async () => {
-    const seen = async (layout: Layout): Promise<{ rollup: boolean; base: boolean }> => {
-      const o = await openLayout(layout.fixture);
-      try {
-        // a condition on a statistics key: the weak rollup of C lacks that dimension, so its partition reads the raw file
-        await o.ds.querySpans(
-          spanQuery({
-            window: longWindow(o.epoch),
-            needs: ['total', 'timeline'],
-            condition: 'resource.attributes["run.id"] != "none"',
-          }),
-        );
-        const sql = o.db.connector.requests.map((r) => r.sql).join('\n');
-        return { rollup: /FROM "span_rollups"/.test(sql), base: /FROM "spans"/.test(sql) };
-      } finally {
-        o.close();
-      }
-    };
-    expect(await seen(layouts.A)).toEqual({ rollup: true, base: false });
-    expect(await seen(layouts.B)).toEqual({ rollup: false, base: true });
-    expect(await seen(layouts.C)).toEqual({ rollup: true, base: true });
+  test.each(ROLLUP_ENTRIES.map((e) => e.id))(
+    'the rollups are what answers %s: A reads the rollup tables, B never does, C where its rollup has the dimension',
+    async (id) => {
+      const entry = ROLLUP_ENTRIES.find((e) => e.id === id);
+      if (entry === undefined) throw new Error(id);
+      const seen = async (layout: Layout): Promise<{ rollup: boolean; base: boolean }> => {
+        const o = await openLayout(layout.fixture);
+        try {
+          await entry.run(o.ds, { window: longWindow(o.epoch), ids: IDS });
+          const sql = o.db.connector.requests.map((r) => r.sql).join('\n');
+          return { rollup: /FROM "(span|log)_rollups"/.test(sql), base: /FROM "(spans|logs)"/.test(sql) };
+        } finally {
+          o.close();
+        }
+      };
+      // an attribute condition never reads a rollup; a statistics-key condition meets C's weak rollup, which lacks the key
+      const attribute = id.includes('.total.attr.');
+      const weak = id.includes('.statkey.');
+      expect((await seen(layouts.A)).rollup).toBe(!attribute);
+      expect(await seen(layouts.B)).toMatchObject({ rollup: false, base: true });
+      expect((await seen(layouts.C)).rollup).toBe(!attribute && !weak);
+    },
+    60_000,
+  );
+
+  test('a condition on a statistics key reads the weak rollup of C through the raw file', async () => {
+    const o = await openLayout(layouts.C.fixture);
+    try {
+      // the weak rollup of C lacks that dimension, so its partition reads the raw file
+      await o.ds.querySpans(
+        spanQuery({
+          window: longWindow(o.epoch),
+          needs: ['total', 'timeline'],
+          condition: 'resource.attributes["run.id"] != "none"',
+        }),
+      );
+      const sql = o.db.connector.requests.map((r) => r.sql).join('\n');
+      expect(sql).toMatch(/FROM "span_rollups"/);
+      expect(sql).toMatch(/FROM "spans"/);
+    } finally {
+      o.close();
+    }
   });
 });
 
@@ -593,6 +613,8 @@ describe('resourceValues under a long window', () => {
           plain(await o.ds.resourceValues('service.name', { window: null })),
           plain(await o.ds.resourceValues('run.id', { window: null })),
         );
+        // a report whose whole range is short never reads a rollup (spec 6.3), the rollups being there or not
+        expect(o.db.connector.requests.some((r) => /_rollups/.test(r.sql))).toBe(false);
       } finally {
         o.close();
       }
@@ -619,20 +641,49 @@ describe('resourceValues under a long window', () => {
 });
 
 describe('a report without spans or without logs', () => {
-  test('a logs-only report and a report with an empty spans table answer empty under a long window', async () => {
-    const { buildFormat4Report } = await import('../../test-support/format4-fixture.js');
-    const { logsOf, longWindow: lw } = await import('../../test-support/rollup-fixture.js');
-    const logsOnly = await buildFormat4Report([logsOf([{ svc: 'a', run: 'r', timeNs: BASE, severity: 9 }])]);
-    const o = await openLayout(logsOnly);
+  const stamped = (): Promise<Format4Fixture> =>
+    import('../../test-support/rollup-fixture.js').then(({ logsOf }) =>
+      buildFormat4Report([logsOf([{ svc: 'a', run: 'r', timeNs: edge(10), severity: 9 }])]),
+    );
+
+  test.each([
+    ['with log_rollups and no span_rollups', (f: Format4Fixture) => f, true],
+    ['without rollups (format 4)', withoutRollups, false],
+  ] as const)('a logs-only report %s answers under a long window', async (_label, shape, rollups) => {
+    const fixture = shape(await stamped());
+    const files = fixture.manifest.partitions.flatMap((p) => Object.keys(p.files));
+    expect(files.includes('log_rollups')).toBe(rollups);
+    expect(files.includes('span_rollups')).toBe(false);
+    const o = await openLayout(fixture);
     try {
-      const w = lw(o.epoch);
+      const w = longWindow(o.epoch);
       expect(
         await o.ds.querySpans(spanQuery({ needs: ['total', 'timeline', 'facets', 'durations'], window: w })),
       ).toMatchObject({ total: 0 });
+      // traces mode bypasses the early exit of a spans request without files
+      for (const condition of [null, 'name == "x"', 'Len(name) > 7']) {
+        expect(
+          await o.ds.querySpans(
+            spanQuery({
+              mode: 'traces',
+              sort: { column: 'start', dir: 'asc' },
+              needs: ['rows', 'total'],
+              window: w,
+              condition,
+            }),
+          ),
+        ).toMatchObject({ total: 0, rows: [] });
+      }
       expect((await o.ds.services({ window: w, condition: null, limit: 5 })).services).toEqual([]);
-      expect(
-        (await o.ds.queryLogs(logQuery({ window: w, needs: ['total', 'timeline', 'facets'] }))).total,
-      ).toBe(0);
+      const logs = await o.ds.queryLogs(logQuery({ window: w, needs: ['total', 'timeline', 'facets'] }));
+      expect(logs.total).toBe(1);
+      expect(logs.buckets.total('info')).toBe(1);
+      expect(plain(await o.ds.resourceValues('service.name', { window: w }))).toMatchObject({
+        values: ['a'],
+      });
+      expect(plain(await o.ds.resourceValues('service.name', { window: null }))).toMatchObject({
+        values: ['a'],
+      });
     } finally {
       o.close();
     }
