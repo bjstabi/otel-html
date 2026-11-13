@@ -38,8 +38,8 @@ const filterOf = (manifest: ManifestV4, table: 'spans' | 'logs', condition: stri
     condition,
     text: '',
     window: {
-      start: Number(E0) - Number(manifest.epochUnixNano),
-      end: Number(edge(300)) - Number(manifest.epochUnixNano),
+      start: Number(E0 - BigInt(manifest.epochUnixNano)),
+      end: Number(edge(300) - BigInt(manifest.epochUnixNano)),
     },
     long: true,
   });
@@ -139,6 +139,22 @@ describe('splitFiles', () => {
   });
 });
 
+describe('a rollup written before service.name was a dimension', () => {
+  test('a condition on it reads the raw file; the other dimensions still answer from the rollup', () => {
+    const m = structuredClone(layouts.A.fixture.manifest);
+    for (const p of m.partitions) {
+      const d = p.files.span_rollups?.rollup;
+      if (d !== undefined) d.dimensions = d.dimensions.filter((x) => x !== 'resource:service.name');
+    }
+    const { filter } = filterOf(m, 'spans', null);
+    const opts = { durations: false, rawOnly: false };
+    const named = splitFiles(m, 'spans', filter.files, new Set(['resource:service.name']), opts);
+    expect(named.rollup).toEqual([]);
+    expect(named.raw).toEqual(filter.files.files);
+    expect(splitFiles(m, 'spans', filter.files, new Set(['service_name']), opts).raw).toEqual([]);
+  });
+});
+
 describe('measuresRelation', () => {
   const both = () => {
     const m = layouts.C.fixture.manifest;
@@ -178,13 +194,6 @@ describe('measuresRelation', () => {
     expect(onlyRollup).not.toContain('FROM "spans"');
     const none = String(measuresRelation(filter, 'spans', { rollup: [], raw: [] }, [], false));
     expect(none).toMatch(/FALSE/);
-  });
-
-  test('puts service.name back into the rollup rows the predicate reads, only with a predicate', () => {
-    const { filter, split } = both();
-    expect(String(measuresRelation(filter, 'spans', split, [], false))).toContain('json_merge_patch');
-    const bare = { ...filter, predicate: null };
-    expect(String(measuresRelation(bare, 'spans', split, [], false))).not.toContain('json_merge_patch');
   });
 
   test('refuses a window that is not long', () => {

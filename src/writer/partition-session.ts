@@ -889,12 +889,6 @@ class PartitionSession implements WriterSession {
   }
 
   /**
-   * One partition of a merge input, copied under partition number `n`: each file's bytes as they are (never decoded),
-   * its wrapper written afterwards in a `local` report (the key names the new number, so a copied wrapper would be
-   * wrong), and its statistics cut to this report's keys (a key the input did not keep is unknown). The entry is the
-   * caller's to list; the folder is removed again if a file fails.
-   */
-  /**
    * The rollup file of a copied partition computed again from its base rows, when the copy's rollup description lacks
    * the dimensions this report's statistics keys give; null when it is to be copied as it is; 'refused' when the guard
    * refuses the new rollup (the partition then has none).
@@ -948,6 +942,12 @@ class PartitionSession implements WriterSession {
     };
   }
 
+  /**
+   * One partition of a merge input, copied under partition number `n`: each file's bytes as they are (never decoded; a rollup lacking a dimension this report lists is computed again, `#recomputedRollup`),
+   * its wrapper written afterwards in a `local` report (the key names the new number, so a copied wrapper would be
+   * wrong), and its statistics cut to this report's keys (a key the input did not keep is unknown). The entry is the
+   * caller's to list; the folder is removed again if a file fails.
+   */
   async #copyPartition(copy: PartitionCopy, src: PartitionEntry, n: number): Promise<PartitionEntry> {
     const { fs } = this.#deps;
     const files: Partial<Record<Table, PartitionFile>> = {};

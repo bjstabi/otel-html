@@ -36,6 +36,8 @@ export interface SpanSpec {
   id: number;
   trace: number;
   svc: string;
+  /** The resource's own `service.name`: omitted gives `svc`; null leaves it out; any value is written as it is. */
+  svcAttr?: JsonObject | null;
   run: string;
   host?: string;
   name: string;
@@ -52,7 +54,7 @@ export function spansRequest(specs: readonly SpanSpec[]): OtlpRequest {
   const resourceSpans: unknown[] = [];
   const groups = new Map<string, SpanSpec[]>();
   for (const s of specs) {
-    const k = `${s.svc}|${s.run}|${s.host ?? ''}`;
+    const k = `${s.svc}|${JSON.stringify(s.svcAttr)}|${s.run}|${s.host ?? ''}`;
     groups.set(k, [...(groups.get(k) ?? []), s]);
   }
   for (const mine of groups.values()) {
@@ -70,7 +72,7 @@ export function spansRequest(specs: readonly SpanSpec[]): OtlpRequest {
       }),
     );
     const resource = [
-      attr('service.name', str(first.svc)),
+      ...(first.svcAttr === null ? [] : [attr('service.name', first.svcAttr ?? str(first.svc))]),
       attr('run.id', str(first.run)),
       ...(first.host === undefined ? [] : [attr('host.name', str(first.host))]),
     ];
@@ -82,6 +84,7 @@ export function spansRequest(specs: readonly SpanSpec[]): OtlpRequest {
 
 export interface LogSpec {
   svc: string;
+  svcAttr?: JsonObject | null;
   run: string;
   host?: string;
   /** Absolute nanoseconds, null for none. */
@@ -97,7 +100,7 @@ export function logsOf(specs: readonly LogSpec[]): OtlpRequest {
   const resourceLogs: unknown[] = [];
   const groups = new Map<string, LogSpec[]>();
   for (const s of specs) {
-    const k = `${s.svc}|${s.run}|${s.host ?? ''}`;
+    const k = `${s.svc}|${JSON.stringify(s.svcAttr)}|${s.run}|${s.host ?? ''}`;
     groups.set(k, [...(groups.get(k) ?? []), s]);
   }
   for (const mine of groups.values()) {
@@ -116,7 +119,7 @@ export function logsOf(specs: readonly LogSpec[]): OtlpRequest {
       };
     });
     const resource = [
-      attr('service.name', str(first.svc)),
+      ...(first.svcAttr === null ? [] : [attr('service.name', first.svcAttr ?? str(first.svc))]),
       attr('run.id', str(first.run)),
       ...(first.host === undefined ? [] : [attr('host.name', str(first.host))]),
     ];
@@ -226,7 +229,50 @@ function spanPartitions(): SpanSpec[][] {
       durNs: 1_000n,
     },
   ];
-  for (const e of edges)
+  // resources whose own service.name is not a plain name: an SDK default, empty, not a string, absent
+  const odd: SpanSpec[] = [
+    {
+      id: 9101,
+      trace: 30,
+      svc: 'unknown_service:node',
+      run: 'r2',
+      name: 'odd-explicit',
+      startNs: edge(40),
+      durNs: 2_000_000n,
+    },
+    { id: 9102, trace: 31, svc: '', run: 'r2', name: 'odd-empty', startNs: edge(41), durNs: 3_000_000n },
+    {
+      id: 9103,
+      trace: 32,
+      svc: 'int',
+      svcAttr: { intValue: '7' },
+      run: 'r2',
+      name: 'odd-int',
+      startNs: edge(42),
+      durNs: 4_000_000n,
+    },
+    {
+      id: 9104,
+      trace: 33,
+      svc: 'absent',
+      svcAttr: null,
+      run: 'r2',
+      name: 'odd-absent',
+      startNs: edge(43),
+      durNs: 5_000_000n,
+    },
+    {
+      id: 9105,
+      trace: 34,
+      svc: 'bool',
+      svcAttr: { boolValue: true },
+      run: 'r2',
+      name: 'odd-bool',
+      startNs: edge(44),
+      durNs: 6_000_000n,
+    },
+  ];
+  for (const e of [...odd, ...edges])
     (out[e.run === 'r4' ? 3 : e.run === 'r3' ? 2 : e.run === 'r2' ? 1 : 0] ?? []).push(e);
   return out;
 }
@@ -263,6 +309,12 @@ function logPartitions(): LogSpec[][] {
     { svc: 'svc-b', run: 'r1', timeNs: null, observedNs: edge(5, 1_000n), severity: 13 },
     // no time at all: counted without a window on a long range, not under a long window
     { svc: 'svc-b', run: 'r1', timeNs: null, severity: 17, trace: 7 },
+  );
+  (out[1] ?? []).push(
+    { svc: 'unknown_service:node', run: 'r2', timeNs: edge(150), severity: 9 },
+    { svc: '', run: 'r2', timeNs: edge(151), severity: 9 },
+    { svc: 'int', svcAttr: { intValue: '7' }, run: 'r2', timeNs: edge(152), severity: 9 },
+    { svc: 'absent', svcAttr: null, run: 'r2', timeNs: edge(153), severity: 9 },
   );
   (out[2] ?? []).push(
     { svc: 'svc-a', run: 'r3', timeNs: edge(300), severity: 9 },

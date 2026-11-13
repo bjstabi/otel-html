@@ -1,4 +1,4 @@
-import { column, type ExprNode, literal, Query, sql, star, verbatim } from '@uwdata/mosaic-sql';
+import { column, type ExprNode, literal, Query, sql, verbatim } from '@uwdata/mosaic-sql';
 import {
   type ManifestV4,
   type PartitionFile,
@@ -97,6 +97,7 @@ export function splitFiles(
   return { rollup, raw };
 }
 
+const GRAIN_BIG = BigInt(ROLLUP_GRAIN_NS);
 const GRAIN = verbatim(`${ROLLUP_GRAIN_NS}::BIGINT`);
 const floorToGrain = (t: ExprNode): ExprNode => sql`(${t} - ((${t} % ${GRAIN}) + ${GRAIN}) % ${GRAIN})`;
 
@@ -161,21 +162,6 @@ export function groupKeyOf(key: string): MeasureKey {
   return { name: 'value', raw: truncated(jsonStringAt('attributes', [key])), reads: `attr:${key}` };
 }
 
-const SERVICE_NAME = 'service.name';
-/** Whether the resource had no `service.name` of its own: `serviceName` (`src/semconv/resource-name.ts`) then makes `unknown_service[:<executable>]`. */
-const UNNAMED = sql`(service_name = 'unknown_service' OR starts_with(service_name, 'unknown_service:'))`;
-
-/**
- * The rollup table as the predicate of a condition reads it. A rollup keeps the service as the column `service_name`
- * and reduces `resource_attributes` to the other dimensions, but `resource.attributes["service.name"]` translates to
- * a read of that JSON; with a predicate the branch reads the table with the key put back, so the predicate runs unchanged.
- */
-function rollupSource(table: Table, withPredicate: boolean): Query | string {
-  if (!withPredicate) return ROLLUP_TABLE[table];
-  const restored = sql`CASE WHEN ${UNNAMED} THEN resource_attributes ELSE json_merge_patch(coalesce(resource_attributes, '{}'), json_object(${literal(SERVICE_NAME)}, service_name)) END`;
-  return Query.from(ROLLUP_TABLE[table]).select(star(null, { replace: { resource_attributes: restored } }));
-}
-
 const selectOf = (keys: readonly MeasureKey[], branch: 'raw' | 'rollup'): Record<string, ExprNode> =>
   Object.fromEntries(keys.map((k) => [k.name, branch === 'rollup' ? (k.rollup ?? k.raw) : k.raw]));
 
@@ -199,6 +185,12 @@ export function measuresRelation(
       message: 'measuresRelation: a window is read as a rollup only under the long-window rules',
     });
   }
+  if (f.window !== null && (f.window.start % GRAIN_BIG !== 0n || f.window.end % GRAIN_BIG !== 0n)) {
+    // the rollup branch compares grain starts, the raw branch exact starts: they agree only on a window of whole grains
+    throw new OtelHtmlError('usage', {
+      message: 'measuresRelation: a long window must be aligned to the rollup grain',
+    });
+  }
   const branches: Query[] = [];
   if (split.rollup.length > 0) {
     const own: SqlFilter = {
@@ -217,7 +209,7 @@ export function measuresRelation(
           }
         : { n: column('n') };
     branches.push(
-      Query.from(rollupSource(table, f.predicate !== null))
+      Query.from(ROLLUP_TABLE[table])
         .select(selectOf(keys, 'rollup'), measures)
         .where(...whereOf(own, table)),
     );
@@ -268,8 +260,8 @@ const representative = (b: string): string =>
 
 /**
  * `rel` grouped by `by` (output column to expression over the relation), with `n`, the named conditional counts,
- * `sum_duration_ns` (DOUBLE), `min_duration_ns`, `max_duration_ns` and `quantiles` (p50, p95, p99): the representative
- * duration of the duration bucket holding the rank `floor(p * (n - 1)) + 1`, clamped to [min, max]. The relation must
+ * `sum_duration_ns` (DOUBLE), `min_duration_ns`, `max_duration_ns` and `quantiles` (p50, p95, p99): the representatives
+ * of the duration buckets at ranks `floor(p (n - 1))` and `ceil(p (n - 1))` interpolated as `quantile_cont` does, clamped to [min, max]. The relation must
  * have been built with durations.
  */
 function summarised(
@@ -296,21 +288,30 @@ function summarised(
     cum: sql`CAST(sum(n) OVER (${verbatim(part)} ORDER BY duration_bucket) AS BIGINT)`,
     tot: sql`CAST(sum(n) OVER (${verbatim(part)}) AS BIGINT)`,
   });
-  const rank = (p: number): ExprNode =>
-    sql`min(duration_bucket) FILTER (WHERE cum >= floor(${verbatim(String(p))} * (tot - 1)) + 1)`;
+  // the duration buckets holding the two ranks `quantile_cont` interpolates between: floor(p (n - 1)) and ceil(p (n - 1)), 0-based
+  const rank = (p: number, side: 'floor' | 'ceil'): ExprNode =>
+    sql`min(duration_bucket) FILTER (WHERE cum >= ${verbatim(side)}(${verbatim(String(p))} * (tot - 1)) + 1)`;
   const grouped = Query.from({ c: running }).select(Object.fromEntries(names.map((nm) => [nm, column(nm)])), {
     n: n64('n'),
     ...Object.fromEntries(countNames.map((c) => [c, n64(c)])),
     sum_duration_ns: sql`CAST(sum(dsum) AS DOUBLE)`,
     min_duration_ns: sql`min(dmin)`,
     max_duration_ns: sql`max(dmax)`,
-    b50: rank(0.5),
-    b95: rank(0.95),
-    b99: rank(0.99),
+    b50l: rank(0.5, 'floor'),
+    b50h: rank(0.5, 'ceil'),
+    b95l: rank(0.95, 'floor'),
+    b95h: rank(0.95, 'ceil'),
+    b99l: rank(0.99, 'floor'),
+    b99h: rank(0.99, 'ceil'),
   });
   if (names.length > 0) grouped.groupby(...names);
-  const clamp = (b: string): string =>
-    `least(greatest(${representative(b)}, min_duration_ns), max_duration_ns)`;
+  // the representatives of the two buckets, interpolated by the fraction of the rank as quantile_cont does, then clamped
+  const quantile = (p: number, key: string): string => {
+    const pos = `${p} * (n - 1)`;
+    const lo = representative(`${key}l`);
+    const hi = representative(`${key}h`);
+    return `least(greatest(${lo} + (${pos} - floor(${pos})) * (${hi} - ${lo}), min_duration_ns), max_duration_ns)`;
+  };
   return Query.from({ g: grouped }).select(
     Object.fromEntries(names.map((nm) => [nm, column(nm)])),
     'n',
@@ -318,7 +319,7 @@ function summarised(
     'sum_duration_ns',
     'min_duration_ns',
     'max_duration_ns',
-    { quantiles: verbatim(`[${clamp('b50')}, ${clamp('b95')}, ${clamp('b99')}]`) },
+    { quantiles: verbatim(`[${quantile(0.5, 'b50')}, ${quantile(0.95, 'b95')}, ${quantile(0.99, 'b99')}]`) },
   );
 }
 

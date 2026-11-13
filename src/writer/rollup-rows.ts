@@ -4,7 +4,11 @@ import type { ColumnBatch } from '../format/parquet/batch.js';
 import { durationBucket } from '../format/parquet/duration-bucket.js';
 import type { Row } from '../format/parquet/rows.js';
 import type { AnyValue } from '../model/anyvalue.js';
-import { ATTR_DEPLOYMENT_ENVIRONMENT_NAME, ATTR_HOST_NAME } from '../semconv/attributes.js';
+import {
+  ATTR_DEPLOYMENT_ENVIRONMENT_NAME,
+  ATTR_HOST_NAME,
+  ATTR_SERVICE_NAME,
+} from '../semconv/attributes.js';
 
 const GRAIN = BigInt(ROLLUP_GRAIN_NS);
 
@@ -14,8 +18,14 @@ const CORE_COLUMNS = {
   logs: ['event_name', 'has_trace', 'host_name', 'scope_name', 'service_name', 'severity_number'],
 } as const;
 const CORE_RESOURCE_KEYS = {
-  spans: [`resource:${ATTR_HOST_NAME}`, `resource:${ATTR_DEPLOYMENT_ENVIRONMENT_NAME}`],
-  logs: [],
+  // `resource:service.name` keeps the resource's own value (an SDK's `unknown_service:node`, an empty or non-string one),
+  // which a condition on `resource.attributes["service.name"]` reads from the JSON; `service_name` is the derived column.
+  spans: [
+    `resource:${ATTR_SERVICE_NAME}`,
+    `resource:${ATTR_HOST_NAME}`,
+    `resource:${ATTR_DEPLOYMENT_ENVIRONMENT_NAME}`,
+  ],
+  logs: [`resource:${ATTR_SERVICE_NAME}`],
 } as const;
 
 /**

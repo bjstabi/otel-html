@@ -128,7 +128,7 @@ function readKey(column: string, keys: readonly (string | number)[]): string {
   const first = keys[0];
   const key = typeof first === 'string' ? first : '*';
   if (column === 'resource_attributes') {
-    return key === 'service.name' ? 'service_name' : `resource:${key}`;
+    return `resource:${key}`;
   }
   if (column === 'attributes') return `attr:${key}`;
   return column;
@@ -291,6 +291,7 @@ function re2Compatible(pattern: string): boolean {
 function translateCall(v: Extract<Value, { type: 'call' }>, context: SqlContext): ExprNode {
   if (v.name === 'IsRootSpan') {
     if (context !== 'span') return untranslatable('IsRootSpan outside spans');
+    readSink?.add('parent_span_id');
     return isNull(column('parent_span_id'));
   }
   const arg = v.args[0];

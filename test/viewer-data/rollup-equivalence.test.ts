@@ -47,10 +47,19 @@ function withCondition(ds: DataSource, condition: string | null): DataSource {
   };
 }
 
+const SERVICE_NAMES: readonly (readonly [string, string])[] = [
+  ['an SDK default service.name', 'resource.attributes["service.name"] == "unknown_service:node"'],
+  ['an empty service.name', 'resource.attributes["service.name"] == ""'],
+  ['an int service.name', 'resource.attributes["service.name"] == 7'],
+  ['the derived name of a resource without one', 'resource.attributes["service.name"] == "unknown_service"'],
+  ['a missing service.name', 'resource.attributes["service.name"] == nil'],
+];
+
 const CONDITIONS: readonly (readonly [string, string | null])[] = [
   ['its own condition', null],
   ['a sort-key condition', SORT_KEY],
   ['a statistics-key condition', STAT_KEY],
+  ...SERVICE_NAMES,
 ];
 
 /** The epoch of the written report, and one a merge moved (not a multiple of the grain). */
@@ -178,6 +187,52 @@ const logQuery = (over: Partial<LogQuery>): LogQuery => ({
   needs: ['total'],
   facetKeys: null,
   ...over,
+});
+
+describe('a service.name that is not a plain name', () => {
+  test('a condition on it is answered from the rollups, which keep the key as a dimension', async () => {
+    const o = await openLayout(layouts.A.fixture);
+    try {
+      await o.ds.querySpans(
+        spanQuery({ window: longWindow(o.epoch), condition: SERVICE_NAMES[0]?.[1] ?? '', needs: ['total'] }),
+      );
+      const sql = o.db.connector.requests.map((r) => r.sql).join('\n');
+      expect(sql).toMatch(/FROM "span_rollups"/);
+      expect(sql).not.toMatch(/FROM "spans"/);
+    } finally {
+      o.close();
+    }
+  });
+
+  test.each(SERVICE_NAMES)(
+    '%s counts the same from rollups, raw files and a mix',
+    async (_label, condition) => {
+      const totals: number[] = [];
+      for (const layout of [layouts.A, layouts.B, layouts.C]) {
+        const o = await openedOf(layout, 0n);
+        const r = await o.ds.querySpans(
+          spanQuery({ window: longWindow(o.epoch), condition, needs: ['total'] }),
+        );
+        totals.push(r.total);
+        const l = await o.ds.queryLogs(
+          logQuery({ window: longWindow(o.epoch), condition, needs: ['total'] }),
+        );
+        totals.push(l.total);
+      }
+      expect(totals.slice(0, 2)).toEqual(totals.slice(2, 4));
+      expect(totals.slice(0, 2)).toEqual(totals.slice(4, 6));
+    },
+  );
+
+  test('the explicit, empty and int names are found; a resource without one is not "unknown_service"', async () => {
+    const o = await openedOf(layouts.A, 0n);
+    const total = async (condition: string): Promise<number> =>
+      (await o.ds.querySpans(spanQuery({ window: longWindow(o.epoch), condition }))).total;
+    expect(await total(SERVICE_NAMES[0]?.[1] ?? '')).toBe(1);
+    expect(await total(SERVICE_NAMES[1]?.[1] ?? '')).toBe(1);
+    expect(await total(SERVICE_NAMES[2]?.[1] ?? '')).toBe(1);
+    expect(await total(SERVICE_NAMES[3]?.[1] ?? '')).toBe(0);
+  });
 });
 
 describe('edge rows', () => {
@@ -312,6 +367,60 @@ describe('percentiles', () => {
       }
     }
   });
+
+  /** `durations` as spans in the long window, from rollups and from raw files: p50, p95, p99 against `quantile_cont`. */
+  async function within(durations: readonly bigint[]): Promise<number[]> {
+    const specs: SpanSpec[] = durations.map((d, i) => ({
+      id: 500 + i,
+      trace: 1,
+      svc: 'svc-a',
+      run: 'r1',
+      name: 'spread',
+      startNs: edge(10 + (i % 200), BigInt(i) * 1_000_000n),
+      durNs: d,
+    }));
+    const rich = await buildFormat4Report([spansRequest(specs)], {
+      config: { writer: { statisticsKeys: [...STATISTICS_KEYS] } },
+    });
+    const worst: number[] = [];
+    for (const f of [rich, withoutRollups(rich)]) {
+      const o = await openLayout(f);
+      try {
+        const r = await o.ds.querySpans(spanQuery({ window: longWindow(o.epoch), needs: ['durations'] }));
+        const summary = r.durations.summary;
+        if (summary === null) throw new Error('no summary');
+        const want = truth(o);
+        [summary.p50, summary.p95, summary.p99].forEach((got, i) => {
+          const exact = want[i] ?? Number.NaN;
+          worst.push(Math.abs(got - exact) / exact);
+          expect(got).toBeGreaterThanOrEqual(summary.min);
+          expect(got).toBeLessThanOrEqual(summary.max);
+        });
+      } finally {
+        o.close();
+      }
+    }
+    return worst;
+  }
+
+  test('long: two durations far apart interpolate as quantile_cont does (1 ms and 1 s: p50 is 500.5 ms)', async () => {
+    const worst = await within([1_000_000n, 1_000_000_000n]);
+    expect(Math.max(...worst)).toBeLessThanOrEqual(0.0443);
+  });
+
+  test('long: seeded random inputs whose ranks fall between distinct buckets stay within 4.43 %', async () => {
+    let seed = 12345n;
+    const next = (): number => {
+      seed = (seed * 6364136223846793005n + 1442695040888963407n) & 0xffffffffffffffffn;
+      return Number(seed >> 11n) / 2 ** 53;
+    };
+    for (const n of [3, 7, 21, 61, 100]) {
+      // log-uniform from 1 ns to 10 s, so neighbouring ranks are often several buckets apart
+      const durations = Array.from({ length: n }, () => BigInt(Math.floor(10 ** (next() * 10))));
+      const worst = await within(durations);
+      expect(Math.max(...worst), `n = ${n}`).toBeLessThanOrEqual(0.0443);
+    }
+  }, 60_000);
 
   test('short: percentiles are exact, as today', async () => {
     const o = await openedOf(layouts.A, 0n);

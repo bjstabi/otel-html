@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
-import type { SqlContext } from '../../../src/query/sql/columns.js';
+import { TABLE_COLUMNS } from '../../../src/format/parquet/columns.js';
+import { PATH_COLUMNS, type SqlContext } from '../../../src/query/sql/columns.js';
 import { textPredicate, toSql, translateCondition } from '../../../src/query/sql/ottl.js';
 import { openTestDb } from '../../../test-support/duckdb-node.js';
 
@@ -279,7 +280,8 @@ describe('Translation.reads', () => {
     expect(reads('name == "a" and resource.attributes["run.id"] == "x"')).toEqual(
       new Set(['name', 'resource:run.id']),
     );
-    expect(reads('resource.attributes["service.name"] == "a"')).toEqual(new Set(['service_name']));
+    expect(reads('resource.attributes["service.name"] == "a"')).toEqual(new Set(['resource:service.name']));
+    expect(reads('IsRootSpan()')).toEqual(new Set(['parent_span_id']));
     expect(reads('attributes["http.route"] == "/"')).toEqual(new Set(['attr:http.route']));
     expect(reads('IsMap(attributes)')).toEqual(new Set(['attr:*']));
     expect(reads('IsMap(resource.attributes)')).toEqual(new Set(['resource:*']));
@@ -289,5 +291,54 @@ describe('Translation.reads', () => {
   });
   test('a residual term reads nothing here', () => {
     expect(reads('name == "a" and Len(name) > 1')).toEqual(new Set(['name']));
+  });
+});
+
+describe('Translation.reads covers every column a predicate references', () => {
+  const TABLE_OF = { span: 'spans', log_record: 'logs', datapoint: 'points' } as const;
+  const sources = (ctx: SqlContext): string[] => {
+    const out: string[] = ctx === 'span' ? ['IsRootSpan()', 'IsRootSpan() and name == "a"'] : [];
+    for (const [canon, pc] of PATH_COLUMNS[ctx]) {
+      if (pc.kind === 'json') {
+        out.push(
+          `${canon}["k"] == "x"`,
+          `IsString(${canon}["k"])`,
+          `IsMatch(${canon}["k"], "a")`,
+          `IsMap(${canon})`,
+        );
+      } else {
+        out.push(
+          `${canon} == ${pc.kind === 'string' ? '"x"' : '1'}`,
+          `IsString(${canon})`,
+          `IsMatch(${canon}, "a")`,
+        );
+        if (pc.kind === 'int') out.push(`${canon} > 3`);
+      }
+    }
+    if (ctx === 'span') out.push('end_time_unix_nano - start_time_unix_nano > 5');
+    return out;
+  };
+  test.each(['span', 'log_record', 'datapoint'] as const)('%s', (ctx) => {
+    const names = new Set(TABLE_COLUMNS[TABLE_OF[ctx]].map((c) => c.name));
+    let translated = 0;
+    for (const src of sources(ctx)) {
+      let t: ReturnType<typeof translateCondition>;
+      try {
+        t = translateCondition(src, ctx);
+      } catch {
+        continue; // a form the grammar refuses (a key on a scalar path)
+      }
+      if (t.predicate === null) continue;
+      translated++;
+      for (const [, id] of String(t.predicate).matchAll(/"([A-Za-z_][A-Za-z0-9_]*)"/g)) {
+        if (id === undefined || !names.has(id)) continue;
+        const covered =
+          t.reads.has(id) ||
+          (id === 'resource_attributes' && [...t.reads].some((r) => r.startsWith('resource:'))) ||
+          (id === 'attributes' && [...t.reads].some((r) => r.startsWith('attr:')));
+        expect(covered, `${src} references ${id}; reads ${[...t.reads].join(', ')}`).toBe(true);
+      }
+    }
+    expect(translated).toBeGreaterThan(10);
   });
 });

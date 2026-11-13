@@ -102,7 +102,8 @@ export type SelectionData = Omit<
 /**
  * A long window sits on absolute grains (spec §6.3); a short one, or any window when the epoch is unknown, stays as
  * given. The URL cannot carry a start before the epoch, so a start that alignment moves below 0 stays 0: nothing
- * starts earlier, and the data source aligns the window again for its own use.
+ * starts earlier, and the data source aligns the window again for its own use (it can move a clamped start below 0
+ * again: the window then differs, the answers and the buckets do not).
  */
 function aligned(w: TimeWindow | null, epoch: bigint | undefined): TimeWindow | null {
   if (w === null || epoch === undefined || !isLongWindow(w, null)) return w;
