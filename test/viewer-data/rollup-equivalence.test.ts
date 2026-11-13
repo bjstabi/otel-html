@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest';
 import type { CatalogueContext, CatalogueEntry } from '../../src/viewer/data/catalogue.js';
 import type { DataSource } from '../../src/viewer/data/data-source.js';
 import type { LogQuery, SpanQuery } from '../../src/viewer/data/results.js';
@@ -16,6 +16,9 @@ import {
 } from '../../test-support/rollup-fixture.js';
 import { ROLLUP_ENTRIES } from '../../test-support/scaling/rollup-entries.js';
 import { type Opened, openLayout } from './rollup-open.js';
+
+// Most tests open fresh DuckDB engines several times: about 1.3 s here, up to 4 times that on a CI runner.
+vi.setConfig({ testTimeout: 30_000 });
 
 /** Plain data for a comparison: the bucket and facet classes serialise themselves, a bigint is its text. */
 const plain = (v: unknown): unknown =>
