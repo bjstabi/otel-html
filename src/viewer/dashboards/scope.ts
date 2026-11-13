@@ -20,18 +20,33 @@ import type { DashboardPageState } from '../state/dashboard-state.js';
 export type VariableValues = ResourceValues & { emptyInWindow?: true };
 
 /**
- * `key`'s values in `window`. An empty answer for a window is told apart from a key the report lacks by asking
- * once without the window: the first is marked `emptyInWindow`, the second is returned as it is (hidden).
+ * `key`'s values in `window`. The report is asked once without the window only when the window's answer cannot stand
+ * alone: when it is empty (an empty window is told apart from a key the report lacks: the first is marked
+ * `emptyInWindow`, the second is returned as it is, hidden), or when `selected` is not among its values (the window
+ * may hold only some of the key's kinds, and the selected value is bound by the report's kind).
  */
 export async function variableValues(
   key: string,
   window: TimeWindow | null,
   read: (key: string, window: TimeWindow | null) => Promise<ResourceValues>,
+  selected: string | null = null,
 ): Promise<VariableValues> {
   const inWindow = await read(key, window);
-  if (inWindow.values.length > 0 || window === null) return inWindow;
+  if (window === null) return inWindow;
+  const empty = inWindow.values.length === 0;
+  if (!empty && (selected === null || inWindow.values.includes(selected))) return inWindow;
   const all = await read(key, null);
-  return all.values.length === 0 ? inWindow : { ...inWindow, kind: all.kind, emptyInWindow: true };
+  if (all.values.length === 0) return inWindow;
+  return empty ? { ...inWindow, kind: all.kind, emptyInWindow: true } : { ...inWindow, kind: all.kind };
+}
+
+/** A variable's selected value: the URL's (`null` is all), else the config default; `null` when none is selected. */
+export function selectedOf(
+  state: DashboardPageState,
+  v: Pick<Dashboard['variables'][number], 'key' | 'default'>,
+): string | null {
+  const value = Object.hasOwn(state.vars, v.key) ? state.vars[v.key] : v.default;
+  return value ?? null;
 }
 
 export interface VariableBinding {
@@ -145,7 +160,7 @@ export function bindings(
       out.hidden.push(v.key);
       continue;
     }
-    const value = Object.hasOwn(state.vars, v.key) ? state.vars[v.key] : v.default;
+    const value = selectedOf(state, v);
     if (value === null || value === undefined) continue;
     const binding: VariableBinding = {
       key: v.key,

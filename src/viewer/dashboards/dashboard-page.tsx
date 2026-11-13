@@ -27,6 +27,7 @@ import {
   bindings,
   following,
   scopeFor,
+  selectedOf,
   type VariableBinding,
   type VariableValues,
   variableValues,
@@ -268,14 +269,17 @@ function DashboardView(props: {
             async (v) =>
               [
                 v.key,
-                await variableValues(v.key, k.window, (key, window) =>
-                  dataSource.resourceValues(key, { window }, signal),
+                await variableValues(
+                  v.key,
+                  k.window,
+                  (key, window) => dataSource.resourceValues(key, { window }, signal),
+                  selectedOf(store.getState().dashboard ?? EMPTY_DASHBOARD_STATE, v),
                 ),
               ] as const,
           ),
         ),
       ),
-    [dataSource],
+    [dataSource, store],
   );
   // the values are the page window's: asked again when it changes, the last answer standing while that runs
   const valuesKey = useMemo(() => ({ dash: d, window: page }), [d, page]);

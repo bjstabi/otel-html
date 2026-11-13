@@ -303,6 +303,30 @@ describe('bindings', () => {
     expect(r.bindings).toContainEqual({ key: 'host.name', value: 'h9', kind: 'string' });
   });
 
+  test("variableValues keeps the report's kind when the selected value is not in the window", async () => {
+    const asked: (TimeWindow | null)[] = [];
+    const read = (_key: string, w: TimeWindow | null) => {
+      asked.push(w);
+      return Promise.resolve(
+        w === null
+          ? { values: ['5', 'abc'], kind: 'mixed' as const, capped: false }
+          : { values: ['5'], kind: 'int' as const, capped: false },
+      );
+    };
+    const win = { start: 1, end: 2 };
+    expect(await variableValues('k', win, read, 'abc')).toEqual({
+      values: ['5'],
+      kind: 'mixed',
+      capped: false,
+    });
+    expect(asked).toEqual([win, null]);
+    asked.length = 0;
+    // a selected value the window has, or none selected: the window's answer stands, one read
+    expect((await variableValues('k', win, read, '5')).kind).toBe('int');
+    expect((await variableValues('k', win, read, null)).kind).toBe('int');
+    expect(asked).toEqual([win, win]);
+  });
+
   test('variableValues marks an empty window only when the report has the key', async () => {
     const read = (key: string, w: TimeWindow | null) =>
       Promise.resolve(
