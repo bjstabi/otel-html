@@ -273,7 +273,7 @@ const TimeEndPartitionFileSchema: z.ZodType<PartitionFile> = z.strictObject({
   timeEndMax: z.exactOptional(int64Text.nullable()),
 });
 
-const RollupPartitionFileSchema: z.ZodType<PartitionFile> = z.strictObject({
+export const RollupPartitionFileSchema: z.ZodType<PartitionFile> = z.strictObject({
   ...PartitionFileShape,
   rollup: RollupDescriptionSchema,
 });
