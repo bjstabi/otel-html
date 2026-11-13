@@ -1230,6 +1230,11 @@ bounded span read of its own, and with no bloom filter on `spans` each stays `sc
       (`mise run predict:queries`) goes in the report next to the "after 4" row.
 - [ ] **Step 5: Commit.** `perf(viewer): the trace list reads its service shares in one statement`
 
+Reverted 2026-11-13 (maintainer). Built and reviewed, it saved statements (26 → 2) but no serial reads: in one engine the
+26 bounded reads already shared the spans pages. A review on Opus 5.5 then found it could cost more than the single reads:
+one time range over the batch reads whole files for traces far apart in time, the batched statement defeats the result
+cache when rows mount again, and a batch keeps working after a Refresh. `trace.share` keeps its #291 line.
+
 ## PR 5: format 5
 
 All five tasks are one PR: a writer that emits format 5 and a reader that cannot open it never share a commit on
@@ -2011,7 +2016,7 @@ and 8 are row 3's fit with `--after`. Row 3 as first written (before that change
 Rows 4, 6 and 8 were re-derived in PR 4 (maintainer, 2026-11-13) from the pages measured with PR 4 in place, anchored on
 row 1 above (433.9 / 553.6). Row 4 as first written (465 / 484 rolling; 316 / 551, 948 / 1,652, 1,665 / 835) credited
 debt lines PR 4 does not pay: `trace.get` and `trace.share`, which stay `scan` with no bloom filter on `spans` (#291,
-PR 9), and `resourceValues.all`, moved to PR 6. Batching the trace list's 26 service shares (Task 13a) saved statements
+PR 9), and `resourceValues.all`, moved to PR 6. Batching the trace list's 26 service shares (Task 13a, reverted) saved statements
 but no serial reads, because one engine already shared the spans pages they read; a credited per-entry debt is not a
 whole-page saving. Rows 6 and 8 are the measured row 4 with `--after 6` and `--after 8 --window 7d`.
 
