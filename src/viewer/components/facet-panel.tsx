@@ -539,36 +539,45 @@ const ATTRIBUTE_FACETS_NOTE = 'Attribute facets are not loaded for windows of 4 
 const ATTRIBUTE_FACETS_BUTTON = 'Load attribute facets';
 
 type Requested =
-  | { key: string; status: 'loading' }
-  | { key: string; status: 'ready'; facets: FacetCounts }
-  | { key: string; status: 'error'; message: string };
+  | { key: string; source: object; status: 'loading' }
+  | { key: string; source: object; status: 'ready'; facets: FacetCounts }
+  | { key: string; source: object; status: 'error'; message: string };
 
 /**
  * Under a long window the page asks for core facets only; this holds the one extra request the reader can make for the
- * attributes. It belongs to `requestKey` (the filter and the window): when that changes the button is back.
+ * attributes. It belongs to `requestKey` (the filter and the window) and to `source` (the data source: a Refresh makes
+ * a new one, and what was loaded from the old one is out of date): when either changes the button is back. A response
+ * for a request that is no longer current is dropped.
  */
 export function useAttributeFacets(
   long: boolean,
   requestKey: string,
+  source: object,
   load: () => Promise<FacetCounts>,
   base: FacetCounts | null,
 ): { facets: FacetCounts | null; notice: JSX.Element | null } {
   const [requested, setRequested] = useState<Requested | null>(null);
   const loadRef = useRef(load);
   loadRef.current = load;
+  const current = useRef({ requestKey, source });
+  current.current = { requestKey, source };
   const request = useCallback((): void => {
-    setRequested({ key: requestKey, status: 'loading' });
+    const own = { key: requestKey, source };
+    const fresh = (): boolean =>
+      current.current.requestKey === own.key && current.current.source === own.source;
+    setRequested({ ...own, status: 'loading' });
     loadRef.current().then(
-      (facets) => setRequested({ key: requestKey, status: 'ready', facets }),
-      (e: unknown) =>
-        setRequested({
-          key: requestKey,
-          status: 'error',
-          message: e instanceof Error ? e.message : String(e),
-        }),
+      (facets) => {
+        if (fresh()) setRequested({ ...own, status: 'ready', facets });
+      },
+      (e: unknown) => {
+        if (fresh())
+          setRequested({ ...own, status: 'error', message: e instanceof Error ? e.message : String(e) });
+      },
     );
-  }, [requestKey]);
-  const mine = requested !== null && requested.key === requestKey ? requested : null;
+  }, [requestKey, source]);
+  const mine =
+    requested !== null && requested.key === requestKey && requested.source === source ? requested : null;
   if (!long) return { facets: base, notice: null };
   if (mine?.status === 'ready') return { facets: mine.facets, notice: null };
   const notice = (

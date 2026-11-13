@@ -181,6 +181,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
   const { facets: loadedFacets, notice: facetsNotice } = useAttributeFacets(
     long,
     JSON.stringify([sel.condition, sel.text, sel.window, mode]),
+    dataSource,
     async () => {
       if (query.kind !== 'rows')
         throw new OtelHtmlError('usage', { message: 'The Patterns view has no facets to load.' });

@@ -200,6 +200,7 @@ function ExplorerBody(props: { dataSource: DataSource }): JSX.Element {
   const { facets: loadedFacets, notice: facetsNotice } = useAttributeFacets(
     long,
     JSON.stringify([sel.condition, sel.text, sel.window, mode]),
+    dataSource,
     async () =>
       (
         await dataSource.querySpans(

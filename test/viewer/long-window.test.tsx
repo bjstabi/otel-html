@@ -6,6 +6,7 @@ import type { ManifestV4 } from '../../src/format/manifest.js';
 import { FacetCounts } from '../../src/rollups/facets.js';
 import { TimeBuckets } from '../../src/rollups/time-buckets.js';
 import { LOG_SEVERITY_KEYS, type LogSeverityKey } from '../../src/semconv/severity.js';
+import { useAttributeFacets } from '../../src/viewer/components/facet-panel.js';
 import type { DataSource } from '../../src/viewer/data/data-source.js';
 import {
   CORE_LOG_FACET_KEYS,
@@ -173,5 +174,56 @@ describe('the time-range label', () => {
     const long = range(null);
     act(() => long.getState().setCondition('attributes["http.route"] == "/x"'));
     expect(screen.getByText('percentiles approximate')).toBeTruthy();
+  });
+});
+
+function Harness(props: { k: string; source: object; load: () => Promise<FacetCounts> }): React.JSX.Element {
+  const { facets, notice } = useAttributeFacets(true, props.k, props.source, props.load, null);
+  return (
+    <div>
+      {notice}
+      {facets === null ? null : <p>loaded</p>}
+    </div>
+  );
+}
+
+describe('useAttributeFacets', () => {
+  const pending = (): { load: () => Promise<FacetCounts>; resolve: () => void } => {
+    let resolve: () => void = () => {};
+    const load = (): Promise<FacetCounts> =>
+      new Promise((r) => {
+        resolve = () => r(new FacetCounts(100, 50, ['service.name']));
+      });
+    return { load, resolve: () => resolve() };
+  };
+  const button = () => screen.getByRole('button', { name: 'Load attribute facets' });
+
+  test('a response for a request that is no longer current does not re-enable the button', async () => {
+    const user = userEvent.setup();
+    const source = {};
+    const a = pending();
+    const b = pending();
+    const { rerender } = render(<Harness k="a" source={source} load={a.load} />);
+    await user.click(button());
+    rerender(<Harness k="b" source={source} load={b.load} />);
+    await user.click(button());
+    expect((button() as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => a.resolve());
+    expect((button() as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => b.resolve());
+    expect(await screen.findByText('loaded')).toBeTruthy();
+  });
+
+  test('loaded facets are for the data source that loaded them: a Refresh brings the button back', async () => {
+    const user = userEvent.setup();
+    const a = pending();
+    const first = {};
+    const { rerender } = render(<Harness k="a" source={first} load={a.load} />);
+    await user.click(button());
+    await act(async () => a.resolve());
+    expect(await screen.findByText('loaded')).toBeTruthy();
+    rerender(<Harness k="a" source={{}} load={a.load} />);
+    expect(screen.queryByText('loaded')).toBeNull();
+    expect(button()).toBeTruthy();
   });
 });
