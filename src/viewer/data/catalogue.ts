@@ -905,19 +905,13 @@ const owed = (
 
 /**
  * `scan`s that §3.4 does not allow, each owed to an issue and a PR of the plan; the list only shrinks. Grouped by
- * cause: #271 (what is left of it: metrics with a window; PR 6 paid the aggregates, the percentile, the trace list and
- * `resourceValues` under a long window), #281 (small files read serially; PR 3, done), #282 (paid by PR 6: the rollup
- * route answers `resourceValues` without a window), #283 (compaction), not yet measured, and
+ * cause: #271 (paid by PR 6: the aggregates, the percentile, the trace list and `resourceValues` under a long window; the
+ * metrics entries measure `fixed` on retention by the end-time and manifest-range pruning), #281 (small files read
+ * serially; PR 3, done), #282 (paid by PR 6: the rollup route answers `resourceValues` without a window), #283
+ * (compaction), not yet measured, and
  * #291 (opening a trace reads the spans files of its partitions whole; no PR of the plan fixes it, so PR 9 carries it).
  */
 export const KNOWN_DEBT: readonly DebtLine[] = [
   ...owed(291, 9, 'density', 'matched', true, ['trace.get', 'trace.share']),
-  // Metrics with a window are `fixed` on retention in the end (§3.4): the small-file part went with #281 (PR 3: their points files load
-  // whole, so they are `files` now); the partitions the window cannot hold are pruned by the end-time and manifest-range pruning of #271 (PR 6).
-  ...owed(271, 6, 'retention', 'fixed', false, [
-    'metrics.query.summary',
-    'metrics.runQuery',
-    'metrics.runQuery.failed',
-  ]),
   ...owed(283, 7, 'retention', 'fixed', false, ['spans.total.short', 'spans.total.long']),
 ];

@@ -17,7 +17,7 @@ import { ROLLUP_ENTRIES } from '../../test-support/scaling/rollup-entries.js';
 const { OTEL_HTML_SCALING_OUT: OUT } = process.env;
 
 /** The number of lines the known-debt list may hold; a PR that removes lines lowers it. */
-const DEBT_MAX = 7;
+const DEBT_MAX = 4;
 
 describe('declared classes', () => {
   test('every catalogue entry has a declaration and nothing else does', () => {
@@ -115,6 +115,10 @@ describe('declared classes', () => {
       expect(DECLARED[id]?.class, id).toMatchObject({ retention: 'fixed', density: 'fixed' });
       expect(['files', 'fixed']).toContain(DECLARED[id]?.class.window);
     }
+  });
+
+  test('the retention debt of the metrics entries (#271) is paid: no line of it remains', () => {
+    expect(KNOWN_DEBT.filter((d) => d.issue === 271)).toEqual([]);
   });
 
   test('the debt list has not grown', () => {
