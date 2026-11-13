@@ -214,6 +214,17 @@ describe('completeStatistics', () => {
     expect(reads).toBe(1); // nothing missing: the file is not read
   });
 
+  test('the read is waited on through the panic guard it is given', async () => {
+    const waits: string[] = [];
+    const guard = <T>(wait: Promise<T>, what?: string): Promise<T> => {
+      waits.push(what ?? '');
+      return wait;
+    };
+    const out = await completeStatistics('logs', entry({}), ['resource:run'], 10, async () => bytes, guard);
+    expect(out.values['resource:run']).toEqual(['a', 'b', 'c']);
+    expect(waits.length).toBeGreaterThan(0);
+  });
+
   test('a recorded null (over the cap) is kept and the file is not read again', async () => {
     let reads = 0;
     const read = async () => {

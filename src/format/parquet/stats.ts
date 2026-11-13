@@ -4,7 +4,7 @@ import { attributesFromJson } from '../columns.js';
 import type { PartitionFile } from '../manifest.js';
 import type { ColumnBatch } from './batch.js';
 import { FIXED_STATISTICS_COLUMNS, TABLE_COLUMNS, type Table, TIME_COLUMN } from './columns.js';
-import { readColumns } from './stream.js';
+import { type PanicGuard, readColumns } from './stream.js';
 
 export interface FileStatistics {
   rows: number;
@@ -151,13 +151,20 @@ export async function completeStatistics(
   keys: readonly string[],
   cap: number,
   read: () => Promise<Uint8Array>,
+  guard?: PanicGuard,
 ): Promise<PartitionFile> {
   const missing = keys.filter((k) => entry.values[k] === undefined);
   if (missing.length === 0) return entry;
   const sets = new Map<string, Set<string> | null>(missing.map((k) => [k, new Set<string>()]));
   const bytes = await read();
   const names = TABLE_COLUMNS[table].map((c) => c.name);
-  for await (const cols of readColumns(table, new Blob([bytes as Uint8Array<ArrayBuffer>]), entry.path)) {
+  for await (const cols of readColumns(
+    table,
+    new Blob([bytes as Uint8Array<ArrayBuffer>]),
+    entry.path,
+    undefined,
+    guard,
+  )) {
     const cells: Record<string, unknown[]> = {};
     for (const [i, name] of names.entries()) cells[name] = cols[i] ?? [];
     const st = fileStatistics(table, { length: cols[0]?.length ?? 0, cells }, missing, cap);

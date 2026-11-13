@@ -69,6 +69,7 @@ import type {
 } from './session.js';
 import { traceRows } from './trace-summaries.js';
 import { writeViewerAssets } from './viewer-assets.js';
+import { watchWasmPanics } from './wasm-panic.js';
 import { writeWrapper } from './wrapper-file.js';
 
 interface Restored {
@@ -818,6 +819,7 @@ class PartitionSession implements WriterSession {
     const { fs } = this.#deps;
     const files: Partial<Record<Table, PartitionFile>> = {};
     let made = false;
+    const watch = watchWasmPanics();
     try {
       for (const table of TABLES) {
         const f = src.files[table];
@@ -852,6 +854,7 @@ class PartitionSession implements WriterSession {
           this.#statisticsKeys[table],
           this.#config.writer.facetValueCap,
           () => Promise.resolve(bytes),
+          watch.guard,
         );
         const values: Record<string, string[] | null> = Object.create(null) as Record<
           string,
@@ -863,6 +866,8 @@ class PartitionSession implements WriterSession {
     } catch (e) {
       if (made) await fs.removeDir(at(this.#out, partitionDir(n))).catch(() => undefined);
       throw e;
+    } finally {
+      watch.stop();
     }
     return { n, source: `merge:${copy.origin}#${src.n}`, files };
   }
