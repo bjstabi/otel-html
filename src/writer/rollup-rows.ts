@@ -177,3 +177,50 @@ function dimensionValue(row: Row, dimension: string): string {
     ? '\u0000'
     : JSON.stringify(v, (_k, x: unknown) => (typeof x === 'bigint' ? `${x}n` : x));
 }
+
+const SUMMED = new Set(['n', 'duration_sum']);
+
+/** Rollup rows added up as they arrive: rows with the same key (every column but the measures) fold together. */
+export class RollupSum {
+  readonly #groups = new Map<string, Row>();
+
+  add(rows: readonly Row[]): this {
+    for (const row of rows) {
+      const key = groupKey(Object.entries(row).filter(([k]) => !MEASURES.has(k)));
+      const cur = this.#groups.get(key);
+      if (cur === undefined) {
+        this.#groups.set(key, { ...row });
+        continue;
+      }
+      for (const k of SUMMED) {
+        const a = big(cur[k]);
+        const b = big(row[k]);
+        if (a !== null || b !== null) cur[k] = (a ?? 0n) + (b ?? 0n);
+      }
+      const lo = big(row[MIN]);
+      const lc = big(cur[MIN]);
+      if (lo !== null && (lc === null || lo < lc)) cur[MIN] = lo;
+      const hi = big(row[MAX]);
+      const hc = big(cur[MAX]);
+      if (hi !== null && (hc === null || hi > hc)) cur[MAX] = hi;
+    }
+    return this;
+  }
+
+  get size(): number {
+    return this.#groups.size;
+  }
+
+  rows(): Row[] {
+    return [...this.#groups.values()];
+  }
+}
+
+const MIN = 'duration_min';
+const MAX = 'duration_max';
+const MEASURES = new Set(['n', 'duration_sum', MIN, MAX]);
+
+/** `a` and `b` (rollup rows of one table) added up: rows with the same key sum `n` and `duration_sum`, and keep the min of the mins and the max of the maxes. */
+export function addRollupRows(a: readonly Row[], b: readonly Row[]): Row[] {
+  return new RollupSum().add(a).add(b).rows();
+}

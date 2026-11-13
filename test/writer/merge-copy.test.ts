@@ -507,3 +507,56 @@ describe('refusals point to the lossless path', () => {
     expect((e as OtelHtmlError).hint).toContain('otel-html upgrade a --assets-base ../../assets/1/');
   });
 });
+
+describe('rollups and timeEndMax through a merge', () => {
+  const ROLLUP_TABLES = ['span_rollups', 'log_rollups'] as const;
+
+  test('a merge that moves the epoch leaves rollup files byte-identical, and timeEndMax carries over', async () => {
+    const w = createTestWriter();
+    await v4Report(w, 'late', [spansRequest(3, 10_000_000_000_000, 0)]);
+    await v4Report(w, 'early', [spansRequest(3, 0, 10)]);
+    const late = v4Manifest(w, 'late');
+    const early = v4Manifest(w, 'early');
+    expect(BigInt(early.epochUnixNano) < BigInt(late.epochUnixNano)).toBe(true);
+    await mergeWith({ inputs: ['late', 'early'], out: 'm', config: cfg('site') }, w.deps);
+    const m = v4Manifest(w, 'm');
+    expect(m.epochUnixNano).toBe(early.epochUnixNano);
+    const sources = [early.partitions[0], late.partitions[0]];
+    const dirs = ['early', 'late'];
+    let seen = 0;
+    for (const [i, src] of sources.entries()) {
+      const dst = m.partitions[i];
+      for (const t of ROLLUP_TABLES) {
+        const s = src?.files[t];
+        const d = dst?.files[t];
+        expect(d === undefined).toBe(s === undefined);
+        if (s === undefined || d === undefined) continue;
+        seen++;
+        expect(await bytesOf(w, `m/${d.path}`)).toEqual(await bytesOf(w, `${dirs[i]}/${s.path}`));
+        expect(d.rollup).toEqual(s.rollup);
+      }
+      expect(dst?.files.spans?.timeEndMax).toBe(src?.files.spans?.timeEndMax);
+      expect(typeof dst?.files.spans?.timeEndMax).toBe('string');
+    }
+    expect(seen).toBeGreaterThan(0);
+  });
+
+  test('a file-copying merge of a format-4 partition has no rollup and no timeEndMax', async () => {
+    const w = createTestWriter();
+    const FORMAT4 = join(import.meta.dirname, '../../fixtures/reports/format-4/data');
+    for (const e of readdirSync(FORMAT4, { recursive: true, withFileTypes: true })) {
+      if (!e.isFile()) continue;
+      const rel = join(e.parentPath, e.name).slice(FORMAT4.length + 1);
+      await w.deps.fs.writeBytes(`in/data/${rel}`, readFileSync(join(FORMAT4, rel)));
+    }
+    await mergeWith({ inputs: ['in'], out: 'm', config: cfg('site') }, w.deps);
+    const m = v4Manifest(w, 'm');
+    expect(m.partitions.length).toBeGreaterThan(0);
+    for (const p of m.partitions) {
+      for (const f of Object.values(p.files)) {
+        expect(f.timeEndMax).toBeUndefined();
+        expect(f.rollup).toBeUndefined();
+      }
+    }
+  });
+});

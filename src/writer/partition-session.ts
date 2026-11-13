@@ -919,6 +919,7 @@ class PartitionSession implements WriterSession {
           timeMin: f.timeMin,
           timeMax: f.timeMax,
           values,
+          ...(f.timeEndMax === undefined ? {} : { timeEndMax: f.timeEndMax }),
           ...(f.rollup === undefined ? {} : { rollup: f.rollup }),
         };
       }
@@ -976,6 +977,7 @@ class PartitionSession implements WriterSession {
         format: this.#config.writer.format,
         source: `compact:${first.n}..${last.n}`,
         patternKey,
+        warn: (message, attrs) => this.#deps.logger.warn(message, attrs),
       });
       this.#writer.skipTo(n + 1);
       const replaced = new Set(picks.map((e) => e.n));

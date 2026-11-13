@@ -129,6 +129,22 @@ export function fileStatistics(
   };
 }
 
+const END_COLUMN = 'end_time_unix_nano';
+
+/** The tables whose files record `timeEndMax` (format 5). */
+export const hasTimeEndMax = (table: Table): boolean => table === 'spans' || table === 'traces';
+
+/** The largest end time (int64 text) of `batch`, null when no row has one. Only for the tables `hasTimeEndMax` names. */
+export function timeEndMaxOf(batch: ColumnBatch): string | null {
+  let max: bigint | null = null;
+  const ends = batch.cells[END_COLUMN] ?? [];
+  for (let i = 0; i < batch.length; i++) {
+    const t = ends[i];
+    if (typeof t === 'bigint' && (max === null || t > max)) max = t;
+  }
+  return max === null ? null : max.toString();
+}
+
 /** The statistics keys for `table`: only keys the table can answer (others would be `null`, i.e. not listed). */
 export function statisticsKeysFor(
   table: Table,

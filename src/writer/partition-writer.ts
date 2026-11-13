@@ -12,7 +12,7 @@ import {
 import { checkRow, encodeColumns } from '../format/parquet/codec.js';
 import { type RollupTable, TABLES, type Table } from '../format/parquet/columns.js';
 import type { Row } from '../format/parquet/rows.js';
-import { fileStatistics } from '../format/parquet/stats.js';
+import { fileStatistics, hasTimeEndMax, timeEndMaxOf } from '../format/parquet/stats.js';
 import { partitionDir, partitionFilePath, partitionKey, partitionWrapperPath } from '../format/paths.js';
 import { at } from './checkpoint.js';
 import type { FileSystem } from './ports.js';
@@ -165,6 +165,7 @@ export class PartitionWriter {
           path,
           bytes: bytes.length,
           ...fileStatistics(table, batch, this.#opts.statisticsKeys[table], this.#opts.facetValueCap),
+          ...(hasTimeEndMax(table) ? { timeEndMax: timeEndMaxOf(batch) } : {}),
           ...(rollup === undefined ? {} : { rollup }),
         };
       }

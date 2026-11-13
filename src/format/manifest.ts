@@ -268,7 +268,7 @@ const RollupDescriptionSchema: z.ZodType<RollupDescription> = z.strictObject({
   durationBuckets: z.exactOptional(z.literal('log2x8')),
 });
 
-const TimeEndPartitionFileSchema: z.ZodType<PartitionFile> = z.strictObject({
+export const TimeEndPartitionFileSchema: z.ZodType<PartitionFile> = z.strictObject({
   ...PartitionFileShape,
   timeEndMax: z.exactOptional(int64Text.nullable()),
 });
