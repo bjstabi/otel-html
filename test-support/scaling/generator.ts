@@ -117,13 +117,21 @@ const SPAN_NS = 1_000_000n;
 /** Absolute nanosecond of the first partition's first span: an hour after the writer's clock. */
 const T0 = BigInt(EPOCH_NS) + 3600n * 1_000_000_000n;
 const ID_STRIDE = 10_000_000;
+/**
+ * A partition's content (ids, times, attribute values) is a function of its slot, its position relative to the
+ * window's first partition (slot `FIRST_SLOT`), never of its index in the report: the partitions inside the window are
+ * the same bytes at every retention step, and only the number of outside partitions before them changes. `FIRST_SLOT`
+ * leaves room for the largest outside count of any shape, so no slot is negative.
+ */
+const FIRST_SLOT = 16;
 
 const hex = (k: number, width: number): string => k.toString(16).padStart(width, '0');
 const str = (key: string, value: string) => ({ key, value: { stringValue: value } });
 const startOf = (shape: Shape, n: number): bigint => T0 + BigInt(n) * SPACING_NS[shape.spacing];
 const rowsPerGroup = (shape: Shape): number => shape.rowGroupRows ?? ROW_GROUP_ROWS;
 const spanCount = (shape: Shape, n: number): number =>
-  (n === 0 ? (shape.bigRowGroups ?? shape.rowGroups) : shape.rowGroups) * rowsPerGroup(shape);
+  (n === FIRST_SLOT - shape.outside ? (shape.bigRowGroups ?? shape.rowGroups) : shape.rowGroups) *
+  rowsPerGroup(shape);
 const spanStart = (shape: Shape, n: number, k: number): bigint =>
   startOf(shape, n) + (BigInt(k) * SPREAD_NS) / BigInt(spanCount(shape, n));
 const MASK64 = (1n << 64n) - 1n;
@@ -296,7 +304,8 @@ async function build(shape: Shape): Promise<ScalingReport> {
     },
   });
   const partitions = shape.outside + shape.inside;
-  const addPartition = async (session: Awaited<ReturnType<typeof openSession>>, n: number) => {
+  const addPartition = async (session: Awaited<ReturnType<typeof openSession>>, index: number) => {
+    const n = FIRST_SLOT + index - shape.outside;
     const jsons =
       spanCount(shape, n) > CHUNK_SPANS ? chunkedPartitionJson(shape, n) : partitionJson(shape, n);
     let i = 0;
@@ -337,16 +346,16 @@ async function build(shape: Shape): Promise<ScalingReport> {
   const fixture: Format4Fixture = { manifest, files, epoch };
   const written = await writeReportDir(fixture);
 
-  const first = shape.outside;
-  const last = partitions - 1;
+  const first = FIRST_SLOT;
+  const last = FIRST_SLOT + shape.inside - 1;
   const lastSpan = spanCount(shape, last) - 1;
   const window: TimeWindow = {
     start: Number(spanStart(shape, first, 0) - epoch),
     end: Number(spanStart(shape, last, lastSpan) + SPAN_NS - epoch),
   };
-  const entry = manifest.partitions.find((p) => p.n === first);
+  const entry = manifest.partitions.find((p) => p.n === shape.outside);
   if (entry === undefined)
-    throw new OtelHtmlError('usage', { message: `no partition ${first} in the manifest` });
+    throw new OtelHtmlError('usage', { message: `no partition ${shape.outside} in the manifest` });
   // a span and a log of the first inside partition: span index 8 (second trace, first service), log row 0
   const k = 8;
   const logFileRow = 0;

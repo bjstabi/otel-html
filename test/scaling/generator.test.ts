@@ -77,6 +77,27 @@ describe('the scaling report generator', { timeout: 120_000 }, () => {
     expect(first.size).toBeGreaterThan(3);
   });
 
+  test.each(['dense', 'sparse'] as const)(
+    'the retention steps share their inside partitions byte for byte (%s)',
+    async (spacing) => {
+      const insideBytes = async (shape: Shape): Promise<string[]> => {
+        const r = await build(shape);
+        const out: string[] = [];
+        for (const p of r.manifest.partitions.filter((q) => q.n >= shape.outside)) {
+          for (const f of Object.values(p.files)) {
+            const bytes = await readFile(join(r.dir, f.path));
+            out.push(`${f.path.split('/').pop()}:${createHash('sha256').update(bytes).digest('hex')}`);
+          }
+        }
+        return out;
+      };
+      const [a, b, c] = await Promise.all(stepsOf('retention', spacing).map(insideBytes));
+      expect(a?.length).toBeGreaterThan(3);
+      expect(b).toEqual(a);
+      expect(c).toEqual(a);
+    },
+  );
+
   test('at the class shapes the traces, patterns, points and logs files sit under the small-file limit and the spans files above it', async () => {
     const big = { ...BASE, rowGroups: 8 };
     for (const spacing of ['dense', 'sparse'] as const) {
@@ -185,13 +206,13 @@ describe('the scaling report generator', { timeout: 120_000 }, () => {
     expect(widthNs(await build({ ...BASE, spacing: 'sparse' }))).toBeGreaterThanOrEqual(16_777_216_000_000n);
   });
 
-  test('each partition records run.id in its statistics', async () => {
+  test('each partition records its slot as run.id in its statistics (the window starts at slot 16)', async () => {
     const r = await build(BASE);
     expect(r.manifest.partitions.map((p) => p.files.spans?.values['resource:run.id'])).toEqual([
-      ['run-0'],
-      ['run-1'],
-      ['run-2'],
-      ['run-3'],
+      ['run-14'],
+      ['run-15'],
+      ['run-16'],
+      ['run-17'],
     ]);
   });
 
