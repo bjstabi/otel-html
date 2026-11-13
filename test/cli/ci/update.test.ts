@@ -18,6 +18,7 @@ import {
   readUpdate,
   type UpdateJson,
   UpdateJsonSchema,
+  type UpdatePartition,
   updateName,
 } from '../../../src/cli/ci/update.js';
 import { createNodeFileSystem } from '../../../src/writer/node-fs.js';
@@ -245,5 +246,65 @@ describe('readUpdate', () => {
     put('partitions/0/spans.parquet');
     truncateSync(join(dir, 'partitions/0/spans.parquet'), MAX_UPDATE_BYTES + 1);
     await expect(readUpdate(fs, dir)).rejects.toThrow(/at most/);
+  });
+});
+
+describe('readUpdate with rollup files', () => {
+  const fs = createNodeFileSystem();
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'update-rollup-'));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const put = (rel: string) => {
+    const p = join(dir, rel);
+    mkdirSync(dirname(p), { recursive: true });
+    writeFileSync(p, 'abcd');
+  };
+  const rollup = {
+    ...file('partitions/0/span_rollups.parquet', 4),
+    rollup: { grainNs: 65_536_000_000, dimensions: ['service.name'], durationBuckets: 'log2x8' },
+  };
+  const withFiles = (files: Record<string, unknown>): UpdateJson =>
+    push({ partitions: [{ source: 'job:7#flush:1', files, carried: true } as UpdatePartition] });
+
+  test('an update with rollup files is read; one without is read', async () => {
+    put('partitions/0/spans.parquet');
+    put('partitions/0/span_rollups.parquet');
+    writeFileSync(
+      join(dir, 'update.json'),
+      JSON.stringify(
+        withFiles({
+          spans: { ...file('partitions/0/spans.parquet', 4), timeEndMax: '3' },
+          span_rollups: rollup,
+        }),
+      ),
+    );
+    const u = await readUpdate(fs, dir);
+    expect(u.partitions?.[0]?.files.span_rollups?.rollup?.dimensions).toEqual(['service.name']);
+    rmSync(join(dir, 'partitions/0/span_rollups.parquet'));
+    writeFileSync(
+      join(dir, 'update.json'),
+      JSON.stringify(withFiles({ spans: file('partitions/0/spans.parquet', 4) })),
+    );
+    await expect(readUpdate(fs, dir)).resolves.toBeDefined();
+  });
+
+  test('an update with an unknown file name is still rejected', async () => {
+    put('partitions/0/spans.parquet');
+    put('partitions/0/span_rollupz.parquet');
+    writeFileSync(
+      join(dir, 'update.json'),
+      JSON.stringify(withFiles({ spans: file('partitions/0/spans.parquet', 4) })),
+    );
+    await expect(readUpdate(fs, dir)).rejects.toThrow();
+    rmSync(join(dir, 'partitions/0/span_rollupz.parquet'));
+    writeFileSync(
+      join(dir, 'update.json'),
+      JSON.stringify(withFiles({ spans: file('partitions/0/spans.parquet', 4), span_rollupz: rollup })),
+    );
+    await expect(readUpdate(fs, dir)).rejects.toThrow();
   });
 });

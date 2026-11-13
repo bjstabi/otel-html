@@ -37,7 +37,7 @@ export interface NewManifestOptions {
   version: string;
 }
 
-/** An empty, `complete: false` v4 manifest in `site` format with `statisticsKeysFor` each table from `config`. */
+/** An empty, `complete: false` format-5 manifest in `site` format with `statisticsKeysFor` each table from `config`. */
 export function newRunManifest(o: NewManifestOptions): ManifestV4 {
   const statisticsKeys = Object.fromEntries(
     TABLES.map((t) => [t, statisticsKeysFor(t, o.config)]),
@@ -112,16 +112,20 @@ function entryFrom(
   dir: string,
   keys: StatisticsKeys,
   copies: FileMove[],
+  format: ManifestV4['formatVersion'],
 ): PartitionEntry {
   const files: PartitionEntry['files'] = {};
   for (const t of TABLES) {
     const f = p.files[t];
     if (f === undefined) continue;
+    // A format-4 run report lists no rollup file and no format-5 field; the files are not copied either.
+    if (format === 4 && (t === 'span_rollups' || t === 'log_rollups')) continue;
     const values: PartitionFile['values'] = {};
     // A key the job did not compute stays absent ("not computed"); the merge computes it. `null` is "over the cap".
     for (const k of keys[t] ?? []) if (f.values[k] !== undefined) values[k] = f.values[k];
     const to = partitionFilePath(n, t);
-    files[t] = { ...f, path: to, values };
+    const { timeEndMax: _end, rollup: _rollup, ...v4 } = f;
+    files[t] = format === 4 ? { ...v4, path: to, values } : { ...f, path: to, values };
     copies.push({ fromDir: dir, from: f.path, to });
   }
   return { n, source: p.source, files };
@@ -221,7 +225,9 @@ export function planSync(input: SyncInput): SyncPlan {
           .flatMap((u) => listing(u.update).map((l) => ({ dir: u.dir, p: l.p })))
           .find((c) => c.p.source === p.source && c.p.carried);
     if (carrier === undefined) return none('pending');
-    added.push(entryFrom(next++, carrier.p, carrier.dir, manifest.statisticsKeys, copies));
+    added.push(
+      entryFrom(next++, carrier.p, carrier.dir, manifest.statisticsKeys, copies, manifest.formatVersion),
+    );
   }
 
   const dropped = manifest.partitions.filter((e) => dropSources.has(e.source) && !kept.has(e.source));

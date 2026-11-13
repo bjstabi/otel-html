@@ -463,3 +463,48 @@ describe('writeRunReport', () => {
     expect(w.fs.snapshot().has('site/run/.nojekyll')).toBe(true);
   });
 });
+
+describe('format 5 and format 4 run reports', () => {
+  const rollupFile = (path: string) => ({
+    ...file(path, 2, '10', '20'),
+    rollup: { grainNs: 65_536_000_000 as const, dimensions: ['service.name'] },
+  });
+  const v5Partition = (): UpdatePartition => ({
+    source: 'job:7#flush:0',
+    files: {
+      spans: { ...file('partitions/0/spans.parquet', 3, '10', '20'), timeEndMax: '25' },
+      span_rollups: rollupFile('partitions/0/span_rollups.parquet'),
+    },
+    carried: true,
+  });
+
+  test('a new run report is format 5 and lists the rollup files with their descriptions', async () => {
+    const m = await newManifest();
+    expect(m.formatVersion).toBe(5);
+    const plan = sync(m, emptyRunState(1), [ju(push(1, [v5Partition()]))]);
+    const entry = plan.manifest.partitions[0];
+    expect(entry?.files.spans?.timeEndMax).toBe('25');
+    expect(entry?.files.span_rollups?.rollup).toEqual({
+      grainNs: 65_536_000_000,
+      dimensions: ['service.name'],
+    });
+    expect(entry?.files.span_rollups?.path).toBe('data/partitions/000000/span_rollups.parquet');
+    expect(plan.copies.map((c) => c.to)).toContain('data/partitions/000000/span_rollups.parquet');
+    expect(parseAnyManifest(plan.manifest)).toEqual(plan.manifest);
+  });
+
+  test('a format-4 run report that receives a format-5 update still parses with ManifestV4Schema and has no rollup file', async () => {
+    const { span_rollups: _s, log_rollups: _l, ...keys } = (await newManifest()).statisticsKeys;
+    const m: ManifestV4 = { ...(await newManifest()), formatVersion: 4, statisticsKeys: keys };
+    const plan = sync(m, emptyRunState(1), [ju(push(1, [v5Partition()]))]);
+    expect(plan.manifest.formatVersion).toBe(4);
+    const entry = plan.manifest.partitions[0];
+    expect(entry?.files.span_rollups).toBeUndefined();
+    expect(entry?.files.spans && 'timeEndMax' in entry.files.spans).toBe(false);
+    expect(parseAnyManifest(JSON.parse(JSON.stringify(plan.manifest)))).toEqual(plan.manifest);
+    expect(plan.copies.map((c) => c.to).filter((t) => t.includes('rollup'))).toEqual([]);
+    expect(plan.manifest.partitions.flatMap((e) => TABLE_PATHS(e)).some((p) => p.includes('rollup'))).toBe(
+      false,
+    );
+  });
+});

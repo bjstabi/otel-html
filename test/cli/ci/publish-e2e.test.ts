@@ -6,8 +6,11 @@ import { runKey } from '../../../src/cli/ci/ids.js';
 import { jobLogRecordsRequest } from '../../../src/cli/ci/job-logs.js';
 import { ciMetricsRequest } from '../../../src/cli/ci/metrics.js';
 import { ciResource, jobResource, workflowTraceRequest } from '../../../src/cli/ci/workflow-trace.js';
+import { wrapDataFile } from '../../../src/format/data-file.js';
+import { MANIFEST_KEY } from '../../../src/format/paths.js';
+import { span, traceRequest } from '../../../test-support/otlp-builders.js';
 import { createTestWriter } from '../../../test-support/writer-deps.js';
-import { manifestOf } from '../../writer/helpers.js';
+import { manifestOf, tableRowsOf } from '../../writer/helpers.js';
 
 const run: ApiRun = {
   id: 42,
@@ -83,4 +86,45 @@ test('the workflow-trace report merges with a job report and keeps spans, logs a
   expect(summary.totals.logs).toBe(2); // the one log line (the group marker is not a record) plus the job report's
   expect(summary.totals.metrics).toBeGreaterThan(0);
   expect(manifestOf(w, 'merged').complete).toBe(true);
+});
+
+test('the site merge of a format-4 run and a format-5 run is format 5 and opens', async () => {
+  const w = createTestWriter();
+  const make = async (out: string, spanId: string) => {
+    const r = await createReportWith({ out, replace: true }, w.deps);
+    await r.addSpans(
+      traceRequest([span({ spanId })], [{ key: 'service.name', value: { stringValue: 's' } }]),
+    );
+    await r.close();
+  };
+  await make('four', '0000000000000001');
+  await make('five', '0000000000000002');
+  // Turn "four" into what a format-4 writer left: no rollup entry, no timeEndMax, no rollup statistics keys.
+  const m = manifestOf(w, 'four');
+  const { span_rollups: _s, log_rollups: _l, ...keys } = m.statisticsKeys;
+  const old = {
+    ...m,
+    formatVersion: 4,
+    statisticsKeys: keys,
+    partitions: m.partitions.map((e) => ({
+      ...e,
+      files: Object.fromEntries(
+        Object.entries(e.files)
+          .filter(([t]) => !t.endsWith('rollups'))
+          .map(([t, f]) => {
+            const { timeEndMax: _e, rollup: _r, ...rest } = f;
+            return [t, rest];
+          }),
+      ),
+    })),
+  };
+  await w.fs.writeTextAtomic('four/data/manifest.js', wrapDataFile(MANIFEST_KEY, old));
+  expect(manifestOf(w, 'four').formatVersion).toBe(4);
+  expect(manifestOf(w, 'five').formatVersion).toBe(5);
+
+  await mergeWith({ inputs: ['four', 'five'], out: 'both', replace: true }, w.deps);
+  const merged = manifestOf(w, 'both');
+  expect(merged.formatVersion).toBe(5);
+  expect(merged.totals.spans).toBe(2);
+  expect(tableRowsOf(w, 'both', 'spans')).toHaveLength(2);
 });
