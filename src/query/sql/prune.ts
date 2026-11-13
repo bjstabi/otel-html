@@ -33,7 +33,7 @@ const identity = (path: string): string => path;
 /**
  * The files of `table` a query must read. A file is dropped when, for some hint key, the file's `values[key]` is an
  * array disjoint from the hint set (an `attr:`/`resource:` key only when `manifest.statisticsKeys[table]` lists it);
- * or when `window` is set and `timeMin > window.end`; or, for logs and points only, when `timeMax < window.start`.
+ * or when `window` is set and `timeMin > window.end`; or, for logs and points only, when `timeMax < window.start`; or, for spans and traces with a `timeEndMax`, when `timeEndMax < window.start`.
  * `null` statistics and keys the file lacks keep the file.
  */
 export function prunePartitions(
@@ -46,6 +46,7 @@ export function prunePartitions(
   const listed = new Set(manifest.statisticsKeys[table]);
   const usable = [...hints].filter(([key]) => !key.includes(':') || listed.has(key));
   const lowerBound = table === 'logs' || table === 'points';
+  const endBound = table === 'spans' || table === 'traces';
   const files: string[] = [];
   let total = 0;
   for (const partition of manifest.partitions) {
@@ -59,6 +60,7 @@ export function prunePartitions(
     if (excluded) continue;
     if (window !== null) {
       if (f.timeMin !== null && BigInt(f.timeMin) > window.end) continue;
+      if (endBound && f.timeEndMax != null && BigInt(f.timeEndMax) < window.start) continue;
       if (lowerBound && f.timeMax !== null && BigInt(f.timeMax) < window.start) continue;
     }
     files.push(resolve(f.path));

@@ -642,46 +642,46 @@ const decl = ([retention, density, window]: Row, rest: Omit<Declared, 'class'> =
 
 /** One line per `CATALOGUE` id: the class measured on each axis today (the baseline), and why a `scan` is right. */
 const BASELINE: Record<string, Declared> = {
-  'spans.total.short': decl(['scan', 'scan', 'scan'], {
+  'spans.total.short': decl(['fixed', 'scan', 'scan'], {
     allowed: { density: SHORT_WINDOW, window: SHORT_WINDOW },
   }),
-  'spans.total.long': decl(['scan', 'scan', 'scan']),
-  'spans.buckets.short': decl(['scan', 'scan', 'scan'], {
+  'spans.total.long': decl(['fixed', 'scan', 'scan']),
+  'spans.buckets.short': decl(['fixed', 'scan', 'scan'], {
     allowed: { density: SHORT_WINDOW, window: SHORT_WINDOW },
   }),
-  'spans.buckets.long': decl(['scan', 'scan', 'scan']),
-  'spans.timeline.short': decl(['scan', 'scan', 'scan'], {
+  'spans.buckets.long': decl(['fixed', 'scan', 'scan']),
+  'spans.timeline.short': decl(['fixed', 'scan', 'scan'], {
     allowed: { density: SHORT_WINDOW, window: SHORT_WINDOW },
   }),
-  'spans.timeline.long': decl(['scan', 'scan', 'scan']),
-  'spans.facets.core.short': decl(['scan', 'scan', 'scan'], {
+  'spans.timeline.long': decl(['fixed', 'scan', 'scan']),
+  'spans.facets.core.short': decl(['fixed', 'scan', 'scan'], {
     allowed: { density: SHORT_WINDOW, window: SHORT_WINDOW },
   }),
-  'spans.facets.core.long': decl(['scan', 'scan', 'scan']),
-  'spans.facets.attr.short': decl(['scan', 'scan', 'scan'], {
+  'spans.facets.core.long': decl(['fixed', 'scan', 'scan']),
+  'spans.facets.attr.short': decl(['fixed', 'scan', 'scan'], {
     allowed: { density: ATTRIBUTE_AGGREGATE, window: ATTRIBUTE_AGGREGATE },
   }),
-  'spans.facets.attr.long': decl(['scan', 'scan', 'scan'], {
+  'spans.facets.attr.long': decl(['fixed', 'scan', 'scan'], {
     allowed: { density: ATTRIBUTE_AGGREGATE, window: ATTRIBUTE_AGGREGATE },
   }),
-  'spans.groups.short': decl(['scan', 'scan', 'scan'], {
+  'spans.groups.short': decl(['fixed', 'scan', 'scan'], {
     allowed: { density: SHORT_WINDOW, window: SHORT_WINDOW },
   }),
-  'spans.groups.long': decl(['scan', 'scan', 'scan']),
-  'spans.durations.short': decl(['scan', 'scan', 'scan'], {
+  'spans.groups.long': decl(['fixed', 'scan', 'scan']),
+  'spans.durations.short': decl(['fixed', 'scan', 'scan'], {
     allowed: { density: SHORT_WINDOW, window: SHORT_WINDOW },
   }),
-  'spans.durations.long': decl(['scan', 'scan', 'scan']),
-  'spans.services.short': decl(['scan', 'scan', 'scan'], {
+  'spans.durations.long': decl(['fixed', 'scan', 'scan']),
+  'spans.services.short': decl(['fixed', 'scan', 'scan'], {
     allowed: { density: SHORT_WINDOW, window: SHORT_WINDOW },
   }),
-  'spans.services.long': decl(['scan', 'scan', 'scan']),
-  'spans.total.sortkey.short': decl(['scan', 'scan', 'scan'], {
+  'spans.services.long': decl(['fixed', 'scan', 'scan']),
+  'spans.total.sortkey.short': decl(['fixed', 'scan', 'scan'], {
     allowed: { density: SHORT_WINDOW, window: SHORT_WINDOW },
     needed: ONE_SERVICE,
     scanOf: 'spans.total.short',
   }),
-  'spans.total.sortkey.long': decl(['scan', 'scan', 'scan'], {
+  'spans.total.sortkey.long': decl(['fixed', 'scan', 'scan'], {
     needed: ONE_SERVICE,
     scanOf: 'spans.total.long',
   }),
@@ -693,36 +693,36 @@ const BASELINE: Record<string, Declared> = {
     needed: ONE_PARTITION,
     scanOf: 'spans.total.long',
   }),
-  'spans.total.attr.short': decl(['scan', 'scan', 'scan'], {
+  'spans.total.attr.short': decl(['fixed', 'scan', 'scan'], {
     allowed: { density: ATTRIBUTE_AGGREGATE, window: ATTRIBUTE_AGGREGATE },
     scanOf: 'spans.total.short',
   }),
-  'spans.total.attr.long': decl(['scan', 'scan', 'scan'], {
+  'spans.total.attr.long': decl(['fixed', 'scan', 'scan'], {
     allowed: { density: ATTRIBUTE_AGGREGATE, window: ATTRIBUTE_AGGREGATE },
     scanOf: 'spans.total.long',
   }),
-  'spans.total.text.short': decl(['scan', 'scan', 'scan'], {
+  'spans.total.text.short': decl(['fixed', 'scan', 'scan'], {
     allowed: { density: ATTRIBUTE_AGGREGATE, window: ATTRIBUTE_AGGREGATE },
     scanOf: 'spans.total.short',
   }),
-  'spans.total.text.long': decl(['scan', 'scan', 'scan'], {
+  'spans.total.text.long': decl(['fixed', 'scan', 'scan'], {
     allowed: { density: ATTRIBUTE_AGGREGATE, window: ATTRIBUTE_AGGREGATE },
     scanOf: 'spans.total.long',
   }),
-  'spans.total.residual.short': decl(['scan', 'scan', 'scan'], {
+  'spans.total.residual.short': decl(['fixed', 'scan', 'scan'], {
     allowed: { density: ATTRIBUTE_AGGREGATE, window: ATTRIBUTE_AGGREGATE },
     scanOf: 'spans.total.short',
   }),
-  'spans.total.residual.long': decl(['scan', 'scan', 'scan'], {
+  'spans.total.residual.long': decl(['fixed', 'scan', 'scan'], {
     allowed: { density: ATTRIBUTE_AGGREGATE, window: ATTRIBUTE_AGGREGATE },
     scanOf: 'spans.total.long',
   }),
-  'spans.total.traces.long': decl(['scan', 'scan', 'scan'], {
+  'spans.total.traces.long': decl(['fixed', 'scan', 'scan'], {
     allowed: { density: ATTRIBUTE_AGGREGATE, window: ATTRIBUTE_AGGREGATE },
     scanOf: 'spans.total.long',
   }),
-  'spans.rows.short': decl(['scan', 'scan', 'scan'], { allowed: { density: ROWS_PAGE, window: ROWS_PAGE } }),
-  'spans.rows.long': decl(['scan', 'scan', 'scan'], { allowed: { density: ROWS_PAGE, window: ROWS_PAGE } }),
+  'spans.rows.short': decl(['fixed', 'scan', 'scan'], { allowed: { density: ROWS_PAGE, window: ROWS_PAGE } }),
+  'spans.rows.long': decl(['fixed', 'scan', 'scan'], { allowed: { density: ROWS_PAGE, window: ROWS_PAGE } }),
   'spans.rows.all': decl(['scan', 'scan', null], { allowed: { retention: ROWS_PAGE, density: ROWS_PAGE } }),
   'percentile.short': decl(['scan', 'scan', null], {
     allowed: { retention: PERCENTILE_SHORT, density: PERCENTILE_SHORT },
@@ -730,15 +730,15 @@ const BASELINE: Record<string, Declared> = {
   'percentile.long': decl(['scan', 'scan', null]),
   'traces.list.all': decl(['files', 'files', null]),
   'traces.list.all.long': decl(['files', 'files', null]),
-  'traces.list.short': decl(['scan', 'scan', 'scan'], {
+  'traces.list.short': decl(['files', 'scan', 'scan'], {
     allowed: { density: TRACE_LIST_SCAN, window: TRACE_LIST_SCAN },
   }),
-  'traces.list.long': decl(['scan', 'scan', 'scan']),
+  'traces.list.long': decl(['files', 'scan', 'scan']),
   'traces.list.statkey.long': decl(['files', 'matched', 'files'], {
     needed: ONE_PARTITION,
     scanOf: 'traces.list.long',
   }),
-  'traces.list.attr.long': decl(['scan', 'scan', 'scan'], {
+  'traces.list.attr.long': decl(['files', 'scan', 'scan'], {
     allowed: { density: TRACE_LIST_SCAN, window: TRACE_LIST_SCAN },
     scanOf: 'traces.list.long',
   }),
@@ -791,10 +791,10 @@ const BASELINE: Record<string, Declared> = {
     scanOf: 'logs.timeline.long',
   }),
   'resourceValues.all': decl(['scan', 'scan', null]),
-  'resourceValues.short': decl(['scan', 'scan', 'scan'], {
+  'resourceValues.short': decl(['fixed', 'scan', 'scan'], {
     allowed: { density: SHORT_WINDOW, window: SHORT_WINDOW },
   }),
-  'resourceValues.long': decl(['scan', 'scan', 'scan']),
+  'resourceValues.long': decl(['fixed', 'scan', 'scan']),
   patterns: decl(['files', 'fixed', null]),
   'metrics.catalog': decl(['files', 'fixed', null]),
   'metrics.showOptions': decl(['fixed', 'fixed', null]),
@@ -877,43 +877,7 @@ export const KNOWN_DEBT: readonly DebtLine[] = [
   ]),
   ...owed(271, 6, 'density', 'fixed', false, ['logs.timeline.long', 'logs.facets.core.long']),
   ...owed(271, 6, 'density', 'files', true, ['traces.list.long']),
-  ...owed(271, 6, 'retention', 'fixed', true, [
-    'spans.total.short',
-    'spans.total.long',
-    'spans.buckets.short',
-    'spans.buckets.long',
-    'spans.timeline.short',
-    'spans.timeline.long',
-    'spans.facets.core.short',
-    'spans.facets.core.long',
-    'spans.facets.attr.short',
-    'spans.facets.attr.long',
-    'spans.groups.short',
-    'spans.groups.long',
-    'spans.durations.short',
-    'spans.durations.long',
-    'spans.services.short',
-    'spans.services.long',
-    'spans.total.sortkey.short',
-    'spans.total.sortkey.long',
-    'spans.total.attr.short',
-    'spans.total.attr.long',
-    'spans.total.text.short',
-    'spans.total.text.long',
-    'spans.total.residual.short',
-    'spans.total.residual.long',
-    'spans.total.traces.long',
-    'spans.rows.short',
-    'spans.rows.long',
-    'resourceValues.short',
-    'resourceValues.long',
-  ]),
-  ...owed(271, 6, 'retention', 'files', true, [
-    'percentile.long',
-    'traces.list.short',
-    'traces.list.long',
-    'traces.list.attr.long',
-  ]),
+  ...owed(271, 6, 'retention', 'files', true, ['percentile.long']),
   ...owed(271, 6, 'window', 'files', true, [
     'spans.total.long',
     'spans.buckets.long',
