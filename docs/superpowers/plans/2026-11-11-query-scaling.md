@@ -97,9 +97,9 @@ outside the PR's list below.
 | 1   | none: it declares today's classes and files the debt                                                                                                                                                                | completeness test green; every `scan` has an allowed reason or a debt line with an issue; statement text of moved builders unchanged                |
 | 2   | none                                                                                                                                                                                                                | a span started under a faked clock has a start time within 5 s of the real clock                                                                    |
 | 3   | the debt lines of the small-file group → `files` on retention. Task 5 names the group by measurement: the entries whose growth on retention is only in files under the harness threshold (expected: `patterns`, `trace.has`, `trace.get`, `trace.share`, `trace.logs`, `log.get`). Entries with other growth too (`traces.list.*`) keep their lines for PRs 4 and 6 | no entry makes a serial read of a sub-threshold file (asserted for every catalogue entry); one e2e test asserts a small file is fetched whole exactly once |
-| 4   | `spans.total.statkey.*`, `logs.timeline.statkey.*` on the `merged` shape → the classes they have on the plain shape; `trace.get`, `trace.share`, `trace.has`, `trace.logs` → `matched` on density (Tasks 11 and 11a); `traces.list.all`, `traces.list.all.long` → `files` on every axis; new entries `resourceValues.short`/`.long` (their logs and points parts skip files outside the window; their spans part stays on #271's end-time debt line until PR 6) and `logs.total.*` (declared as measured) | #272's test: a run selection on a merged two-run report opens only that run's files |
+| 4   | `spans.total.statkey.*`, `logs.timeline.statkey.*` on the `merged` shape → the classes they have on the plain shape; `trace.has`, `trace.logs` → `matched` on density (Task 11a; measured `files`). `trace.get` and `trace.share` were planned here too; with no bloom filter on `spans` (maintainer, 2026-11-12) they stay `scan`, owed to #291 by PR 9; `traces.list.all`, `traces.list.all.long` → `files` on every axis; new entries `resourceValues.short`/`.long` (their logs and points parts skip files outside the window; their spans part stays on #271's end-time debt line until PR 6) and `logs.total.*` (declared as measured) | #272's test: a run selection on a merged two-run report opens only that run's files |
 | 5   | none (the rollups exist but nothing reads them); no entry may get worse                                                                                                                                             | format-4 reports open unchanged; rollup file < 2 % of its spans file on the measured partition; frozen `format-5` fixture; README table             |
-| 6   | the long-window aggregates over rollup dimensions (`spans.total.long`, `spans.total.sortkey.long`, `spans.total.statkey.long`, `spans.buckets.long`, `spans.timeline.long`, `spans.facets.core.long`, `spans.groups.long`, `spans.services.long`, `spans.durations.long`, `logs.timeline.long`, `logs.timeline.statkey.long`, `logs.facets.core.long`, `logs.total.long`, `resourceValues.long`) → `fixed`/`fixed`/`files`; `percentile.long` → `files`/`fixed`/n.a.; `traces.list.long` → `files`×3; every windowed spans entry and `resourceValues.short` → `fixed` on retention (end-time pruning, Task 19) | equivalence test (rollup = raw = mix) on the edge data of §6; debt list holds no aggregate over rollup dimensions |
+| 6   | the long-window aggregates over rollup dimensions (`spans.total.long`, `spans.total.sortkey.long`, `spans.total.statkey.long`, `spans.buckets.long`, `spans.timeline.long`, `spans.facets.core.long`, `spans.groups.long`, `spans.services.long`, `spans.durations.long`, `logs.timeline.long`, `logs.timeline.statkey.long`, `logs.facets.core.long`, `logs.total.long`, `resourceValues.long`) → `fixed`/`fixed`/`files`; `percentile.long` → `files`/`fixed`/n.a.; `traces.list.long` → `files`×3; every windowed spans entry and `resourceValues.short` → `fixed` on retention (end-time pruning, Task 19); `resourceValues.all` (#282, re-targeted from PR 4: the rollup route must also answer a call without a window) | equivalence test (rollup = raw = mix) on the edge data of §6; debt list holds no aggregate over rollup dimensions |
 | 7   | the `compacted` generator shape: entries keep their classes when one partition is a compaction of many                                                                                                              | no file written by compaction spans more than 24 h unless a single input does                                                                       |
 | 8   | none; the prediction for today's shape is taken with the 7-day window                                                                                                                                               | `#/dashboards/ci` predicted ≤ 150 serial range requests                                                                                             |
 | 9   | none | live: `#/dashboards/ci` ≤ 150 serial range requests and ≤ 5 s; `#/traces?mode=traces` ≤ 5 s (§9). A miss is reported in the record with its cause; it is not a stop |
@@ -1198,6 +1198,37 @@ Done 2026-11-12, with two changes to the interfaces above: `allTraceCountQuery` 
 unfiltered traces-mode total alone; the trace list's total comes from its rows statement), and `allTraceRowsQuery`
 takes `(f: Pick<SqlFilter, 'epoch'>, sort, limit)`, since it reads `traces` only. In logs traces mode `matched` now
 comes from the `total` need, whose count replaces the old inline statement one for one.
+
+### Task 13a: The trace list's service shares are read in one statement
+
+Added 2026-11-13 by the maintainer's decision, after PR 4's prediction missed the "after 4" row (562 / 691 against
+465 / 484 live-anchored): the trace list asks `serviceShare` for each visible trace (26 on the rolling shape), each a
+bounded span read of its own, and with no bloom filter on `spans` each stays `scan` on density.
+
+**Files:**
+
+- Modify: `src/viewer/data/duckdb-source.ts` (`serviceShare`, `readTrace`), `src/query/sql/spans.ts`,
+  `src/viewer/data/catalogue.ts`, `test-support/scaling/recording-source.ts` if the page mapping needs it
+- Test: `test/query/sql/spans.test.ts`, `test/viewer-data/duckdb-source-spans.test.ts`, `test/scaling/classes*.test.ts`
+
+**Interfaces:**
+
+- `DataSource.serviceShare(traceId, signal)` is unchanged. Inside the DuckDB source, the calls made in one tick (a
+  microtask or `setTimeout(0)` window) are answered together: one statement over the `traces` rows of all their ids
+  (the bounds and `sum(span_count)`), one span statement `WHERE trace_id IN (...)` bounded by each trace's own bound,
+  then each trace's rows go through `buildTraceTree` and `exclusiveTimeByService` as today.
+- Produces: `traceSpansBatchQuery(ids: readonly { traceId: string; bound: Bound | null }[], files, epoch): Query`.
+- A trace whose rows fall short of its `sum(span_count)` is read again alone without a bound (the rule of the branch
+  review's I1). One caller aborting does not abort the others; an aborted caller's id is still answered for the rest.
+- Catalogue: a new entry `trace.share.batch` runs 26 shares at once on the measured shapes and is declared as
+  measured; `trace.share` keeps its declaration and its #291 line.
+
+- [ ] **Step 1: Write the failing tests.** 26 shares in one tick run two statements in all; their answers equal 26
+      single-trace answers on a fixture with a trace split over two partitions and a span with end < start; one
+      caller aborting leaves the others answered; a call in a later tick starts a new batch.
+- [ ] **Step 2:** run → FAIL. **Step 3:** implement. **Step 4:** → PASS; the trace list page's prediction
+      (`mise run predict:queries`) goes in the report next to the "after 4" row.
+- [ ] **Step 5: Commit.** `perf(viewer): the trace list reads its service shares in one statement`
 
 ## PR 5: format 5
 
