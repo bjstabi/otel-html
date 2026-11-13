@@ -2000,15 +2000,22 @@ be checked against its output. The other three columns are harness absolutes (**
 | ------------- | ----------------------- | ----------------- | ----------------- | ----------------- |
 | 1 (baseline, small files off) | 891 / 1,064 | 611 / 814         | 1,834 / 2,441     | 2,217 / 4,873     |
 | 3 (small files on, 524,288)   | 560 / 937   | 379 / 821         | 1,138 / 2,464     | 2,297 / 3,542     |
-| 4             | 465 / 484               | 316 / 551         | 948 / 1,652       | 1,665 / 835       |
-| 6             | 415 / 195               | 282 / 224         | 847 / 673         | 1,484 / 319       |
-| 8 (window 7d) | 415 / 195               | 166 / 52          | 429 / 52          | 1,155 / 75        |
+| 4             | 562 / 692               | 381 / 594         | 1,142 / 1,774     | 2,333 / 3,020     |
+| 6             | 388 / 298               | 264 / 240         | 793 / 712         | 1,331 / 1,404     |
+| 8 (window 7d) | 388 / 298               | 141 / 104         | 350 / 222         | 954 / 784         |
 
 The harness columns were re-derived in PR 3 from one generator, when the generator's logs changed to live size (an
 eighth as many as spans, so most logs files sit under the small-file limit as on the live report): row 1 is the pages
 measured with no small file prepared (main before PR 3), row 3 with files of 524,288 bytes or less prepared, rows 4, 6
 and 8 are row 3's fit with `--after`. Row 3 as first written (before that change, 262,144 bytes): rolling 844 / 1,064,
 30x150k 631 / 822, 90x150k 1,894 / 2,465, 30x1.5M 2,631 / 4,906. The new rolling row 3 is below it. Fix round 2 gave the page fit a step (partitions under the crossing cost a prepared-file line, the others a range-read line), which moved the trace list cells (rolling 746 to 937).
+
+Rows 4, 6 and 8 were re-derived in PR 4 (maintainer, 2026-11-13) from the pages measured with PR 4 in place, anchored on
+row 1 above (433.9 / 553.6). Row 4 as first written (465 / 484 rolling; 316 / 551, 948 / 1,652, 1,665 / 835) credited
+debt lines PR 4 does not pay: `trace.get` and `trace.share`, which stay `scan` with no bloom filter on `spans` (#291,
+PR 9), and `resourceValues.all`, moved to PR 6. Batching the trace list's 26 service shares (Task 13a) saved statements
+but no serial reads, because one engine already shared the spans pages they read; a credited per-entry debt is not a
+whole-page saving. Rows 6 and 8 are the measured row 4 with `--after 6` and `--after 8 --window 7d`.
 
 How the rolling cells come about (serial requests, dashboard / trace list; ratio = after / after PR 1; anchored = live x
 ratio; from the run of 2026-11-12 on the commit that added the section):
@@ -2017,9 +2024,9 @@ ratio; from the run of 2026-11-12 on the commit that added the section):
 | ------------- | ---------------------------- | --------------- | ----------- |
 | 1 (small files off) | 433.9 / 553.6        | 1.000 / 1.000   | 891 / 1,064 |
 | 3             | 272.6 / 487.7                | 0.628 / 0.881   | 560 / 937   |
-| 4             | 226.2 / 251.6                | 0.521 / 0.455   | 465 / 484   |
-| 6             | 202.1 / 101.6                | 0.466 / 0.183   | 415 / 195   |
-| 8 (window 7d) | 202.1 / 101.6                | 0.466 / 0.183   | 415 / 195   |
+| 4             | 273.6 / 359.8                | 0.631 / 0.650   | 562 / 692   |
+| 6             | 188.9 / 155.2                | 0.435 / 0.280   | 388 / 298   |
+| 8 (window 7d) | 188.9 / 155.2                | 0.435 / 0.280   | 388 / 298   |
 
 Row 8 equals row 6 for `rolling` on purpose: all 21 snapshot partitions overlap the last 7 days (partition 165 spans 9
 days, from 1793449360 to 1794226244 s, and the 7-day window starts at 1793815081), so `inWindow` is true for every
