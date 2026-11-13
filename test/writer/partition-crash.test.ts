@@ -253,7 +253,7 @@ describe('a flush that fails between two tables', () => {
 
     await s.flush(); // the rows went back (R22): the retry writes partition 1 with both tables
     const p1 = manifest(w).partitions.find((p) => p.n === 1);
-    expect(Object.keys(p1?.files ?? {}).sort()).toEqual(['logs', 'patterns', 'points']); // patterns derive from the logs
+    expect(Object.keys(p1?.files ?? {}).sort()).toEqual(['log_rollups', 'logs', 'patterns', 'points']); // patterns and the log rollup derive from the logs
     expect(p1?.files.logs?.rows).toBe(2);
     expect(p1?.files.points?.rows).toBe(1);
     const points = decodeTable(

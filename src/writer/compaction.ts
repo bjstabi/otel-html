@@ -569,6 +569,8 @@ export async function compactPartitions(
   const { guard } = watch;
   try {
     for (const table of TABLES) {
+      // Rollup files are not merged yet (query-scaling Task 16): a compacted partition has none, and queries read the base tables.
+      if (table === 'span_rollups' || table === 'log_rollups') continue;
       const inputs = inputsOf(entries, table);
       if (inputs.length === 0) continue;
       if (!created) {
