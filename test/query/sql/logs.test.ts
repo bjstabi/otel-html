@@ -488,7 +488,15 @@ describe('logCountQuery', () => {
 
   test('the filter narrows the count', () => {
     const q = logCountQuery(filter({ condition: 'severity_number == 17' }).filter, 'traces');
-    expect(run(q).map((r) => num(r.matched))).toEqual([expect.any(Number)]);
+    const narrowed = filter({ condition: 'severity_number == 17' }).filter;
+    const logs = run(logRowsQuery(narrowed, { column: 'time', dir: 'asc' }, 100));
+    const withTrace = run(logTracesQuery(narrowed, { column: 'first', dir: 'asc' }, 100));
+    expect(logs.length).toBeGreaterThan(0);
+    expect(logs.length).toBeLessThan(
+      run(logRowsQuery(filter().filter, { column: 'time', dir: 'asc' }, 100)).length,
+    );
+    expect(run(q).map((r) => num(r.n))).toEqual([withTrace.length]);
+    expect(run(q).map((r) => num(r.matched))).toEqual([logs.filter((r) => r.trace_id != null).length]);
     expect(String(q)).toContain('trace_id IS NOT NULL');
   });
 });
