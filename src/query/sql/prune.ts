@@ -33,7 +33,7 @@ const identity = (path: string): string => path;
 /**
  * The files of `table` a query must read. A file is dropped when, for some hint key, the file's `values[key]` is an
  * array disjoint from the hint set (an `attr:`/`resource:` key only when `manifest.statisticsKeys[table]` lists it);
- * or when `window` is set and `timeMin > window.end`; or, for logs and points only, when `timeMax < window.start`; or, for spans and traces with a `timeEndMax`, when `timeEndMax < window.start`.
+ * or when `window` is set and `timeMin > window.end`; or, for logs and points only, when `timeMax < window.start`; or, for spans and traces with a `timeEndMax`, when `timeEndMax < window.start`; under `opts.long` (selection by start time) a spans, traces or span-rollup file also goes when `timeMax` (its latest start) `< window.start`, whatever the format; a log rollup is pruned like logs.
  * `null` statistics and keys the file lacks keep the file.
  */
 export function prunePartitions(
@@ -42,11 +42,15 @@ export function prunePartitions(
   hints: PruneHints,
   window: AbsWindow | null,
   resolve: (path: string) => string = identity,
+  opts: { long?: boolean } = {},
 ): Pruned {
   const listed = new Set(manifest.statisticsKeys[table]);
   const usable = [...hints].filter(([key]) => !key.includes(':') || listed.has(key));
-  const lowerBound = table === 'logs' || table === 'points';
   const endBound = table === 'spans' || table === 'traces';
+  // a span rollup's time is the start of the grain of a span's start: a long window (aligned) selects it as it selects spans
+  const startKeyed = endBound || table === 'span_rollups';
+  const lowerBound =
+    table === 'logs' || table === 'points' || table === 'log_rollups' || (opts.long === true && startKeyed);
   const files: string[] = [];
   let total = 0;
   for (const partition of manifest.partitions) {

@@ -24,6 +24,8 @@ export interface ReadEvent {
 
 export interface CountingEngine {
   engine: QueryEngine;
+  /** The file reads of the opening: registering the files and creating the views (not part of any statement's cost). */
+  opened: readonly ReadEvent[];
   /** The events since the last take, complete: it round-trips a marker through the worker first. */
   take(): Promise<ReadEvent[]>;
   /** Paths prepared (fetched whole) since the last call, with their sizes; empties the record. */
@@ -173,6 +175,11 @@ export const HARNESS_SMALL_FILE_BYTES = 350_000;
 export interface CountingOptions {
   /** Files of this size or smaller are prepared whole; 0 prepares none (every file by range). */
   threshold?: number;
+  /**
+   * The views created at open: all seven (the default, as a host makes them), or the five base views as a report's
+   * page does, the rollup views being bound by the first statement that needs them.
+   */
+  views?: 'all' | 'base';
 }
 
 const quiet = { debug() {}, info() {}, warn() {}, error() {} };
@@ -220,7 +227,7 @@ export async function openCountingEngine(
   const prepare = async (db: NodeDuckDb): Promise<Connection> => {
     for (const path of paths) await db.registerFileURL(path, join(root, path), NODE_FS_PROTOCOL, false);
     const conn = await db.connect();
-    for (const sql of viewStatements(manifest, (p) => p)) await conn.query(sql);
+    for (const sql of viewStatements(manifest, (p) => p, options.views ?? 'all')) await conn.query(sql);
     return conn;
   };
   async function start(): Promise<Live> {
@@ -329,9 +336,10 @@ export async function openCountingEngine(
     live.waiting.delete(id);
     return live.events.splice(0);
   };
-  await take();
+  const opened = await take();
   return {
     engine,
+    opened,
     take,
     prepared: () => {
       const taken = new Map(prepared);

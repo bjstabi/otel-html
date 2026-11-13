@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, test } from 'vitest';
 import type { RelNanos } from '../../src/model/ids.js';
 import { TimeBuckets } from '../../src/rollups/time-buckets.js';
 
@@ -62,5 +62,33 @@ describe('TimeBuckets', () => {
     expect(() => b.add(t(0), 'a', -1)).toThrow(/non-negative integer/);
     const j = b.toJSON();
     expect(() => TimeBuckets.from({ ...j, widthNs: 3 })).toThrow(/widthNs/);
+  });
+});
+
+describe('originNs', () => {
+  test('TimeBuckets.from accepts a start aligned to originNs and refuses one that is not', () => {
+    expect(() =>
+      TimeBuckets.from({ maxBuckets: 4, widthNs: 10, originNs: 3, startNs: 13, keys: [], counts: [] }),
+    ).toThrow(); // widthNs must be 1 ms * 2^k
+    const w = 1_000_000;
+    expect(() =>
+      TimeBuckets.from({ maxBuckets: 4, widthNs: w, originNs: 3, startNs: w + 3, keys: [], counts: [] }),
+    ).not.toThrow();
+    expect(() =>
+      TimeBuckets.from({ maxBuckets: 4, widthNs: w, originNs: 3, startNs: w, keys: [], counts: [] }),
+    ).toThrow();
+  });
+  test('originNs survives a round trip and is omitted when 0', () => {
+    const w = 1_000_000;
+    const b = TimeBuckets.from({
+      maxBuckets: 4,
+      widthNs: w,
+      originNs: 3,
+      startNs: 3,
+      keys: ['a'],
+      counts: [[1]],
+    });
+    expect(b.toJSON().originNs).toBe(3);
+    expect('originNs' in new TimeBuckets(['a']).toJSON()).toBe(false);
   });
 });

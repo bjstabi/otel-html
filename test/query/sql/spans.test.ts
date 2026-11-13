@@ -220,9 +220,21 @@ describe('time buckets', () => {
       widthNs: 1e6,
       startNs: -2e6,
       endNs: 7e6,
+      originNs: 0,
     });
     expect(bucketSpec(null, { start: 3e6, end: 9e6 })).toMatchObject({ startNs: 3e6, endNs: 9e6 });
     expect(bucketSpec(null, null).widthNs).toBe(1e6);
+  });
+  test('long: a 6 h window draws buckets of 65.536 s on absolute grain edges', () => {
+    const epoch = 1_700_000_000_000_000_000n;
+    const spec = bucketSpec({ start: 12_345e6, end: 12_345e6 + 6 * 3600e9 }, null, undefined, { epoch });
+    expect(spec.widthNs).toBe(65_536_000_000);
+    expect((epoch + BigInt(spec.startNs)) % 65_536_000_000n).toBe(0n);
+    expect((epoch + BigInt(spec.endNs)) % 65_536_000_000n).toBe(0n);
+    expect(BigInt(spec.originNs)).toBe((65_536_000_000n - (epoch % 65_536_000_000n)) % 65_536_000_000n);
+    expect(spec.startNs).toBeLessThanOrEqual(12_345e6);
+    expect(spec.endNs + spec.widthNs).toBeGreaterThan(12_345e6 + 6 * 3600e9);
+    expect(bucketSpec({ start: 0, end: 6 * 3600e9 }, null).originNs).toBe(0);
   });
 });
 

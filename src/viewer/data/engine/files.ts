@@ -2,7 +2,7 @@ import { DuckDBDataProtocol } from '@duckdb/duckdb-wasm';
 import type { ManifestV4 } from '../../../format/manifest.js';
 import type { Table } from '../../../format/parquet/columns.js';
 import { partitionKey, partitionWrapperPath } from '../../../format/paths.js';
-import { viewStatements } from '../../../query/sql/views.js';
+import { dropRollupViewStatements, viewStatements } from '../../../query/sql/views.js';
 import { fromBase64, loadText } from './bytes.js';
 import type { Engine, EngineDeps } from './start.js';
 
@@ -114,15 +114,19 @@ export function swapToBuffer(
   return engine.gate ? engine.gate.hold(swap) : swap();
 }
 
-/** (Re)creates the views over the manifest's files: `viewStatements(manifest, (p) => p)`. */
+/**
+ * (Re)creates the five base views over the manifest's files (`viewStatements(manifest, (p) => p, 'base')`) and forgets
+ * the rollup views. Those are created by the data source on the first statement that reads a rollup file, so opening
+ * or refreshing a report costs no request for them.
+ */
 export async function createViews(engine: Engine, manifest: ManifestV4): Promise<void> {
-  for (const statement of viewStatements(manifest, (p) => p)) {
+  for (const statement of [...viewStatements(manifest, (p) => p, 'base'), ...dropRollupViewStatements()]) {
     await engine.gate?.wait();
     await engine.connection.query(statement);
   }
 }
 
-/** Registers every file the manifest lists, then creates the views. */
+/** Registers every file the manifest lists, then creates the base views. */
 export async function registerPartitions(
   engine: Engine,
   manifest: ManifestV4,

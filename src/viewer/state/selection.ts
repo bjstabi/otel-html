@@ -17,7 +17,7 @@ import {
   tokensToOttl,
 } from '../components/filter-tokens.js';
 import type { LogRef } from '../data/log-query.js';
-import type { TimeWindow } from '../data/time-window.js';
+import { alignLongWindow, isLongWindow, type TimeWindow } from '../data/time-window.js';
 import { isLogTabId, LOG_TAB_IDS, type LogTabId } from '../logs/tabs.js';
 import { isTraceTabId, TRACE_TAB_IDS, type TraceTabId } from '../traces/tabs.js';
 import { type DashboardPageState, isPristine } from './dashboard-state.js';
@@ -99,9 +99,20 @@ export type SelectionData = Omit<
   | 'clear'
 >;
 
-function dataFromUrl(u: UrlState): SelectionData {
+/**
+ * A long window sits on absolute grains (spec §6.3); a short one, or any window when the epoch is unknown, stays as
+ * given. The URL cannot carry a start before the epoch, so a start that alignment moves below 0 stays 0: nothing
+ * starts earlier, and the data source aligns the window again for its own use.
+ */
+function aligned(w: TimeWindow | null, epoch: bigint | undefined): TimeWindow | null {
+  if (w === null || epoch === undefined || !isLongWindow(w, null)) return w;
+  const a = alignLongWindow(w, epoch);
+  return { start: Math.max(0, a.start), end: a.end };
+}
+
+function dataFromUrl(u: UrlState, epoch?: bigint): SelectionData {
   return {
-    window: u.t === undefined ? null : parseWindow(u.t),
+    window: aligned(u.t === undefined ? null : parseWindow(u.t), epoch),
     condition: u.q ?? null,
     text: u.text ?? '',
     traceId: u.trace ?? null,
@@ -206,12 +217,12 @@ function assertOttl(c: string): void {
   }
 }
 
-export function createSelectionStore(initial: UrlState): StoreApi<Selection> {
+export function createSelectionStore(initial: UrlState, epoch?: bigint): StoreApi<Selection> {
   return createStore<Selection>()((set, get) => ({
-    ...dataFromUrl(initial),
+    ...dataFromUrl(initial, epoch),
     setWindow: (w) => {
       if (w !== null) formatWindow(w); // validates
-      set({ window: w });
+      set({ window: aligned(w, epoch) });
     },
     setCondition: (c) => {
       if (c !== null) assertOttl(c);
@@ -295,6 +306,7 @@ export function bindUrl(
   store: StoreApi<Selection>,
   history: HistoryPort,
   onErrors: (errors: string[]) => void,
+  epoch?: bigint,
 ): () => void {
   const current = (): string => serializeUrlState(selectionToUrlState(store.getState()));
   let applying = false;
@@ -304,7 +316,7 @@ export function bindUrl(
     const { state, errors } = parseUrlState(history.read());
     applying = true;
     try {
-      store.setState(dataFromUrl(state));
+      store.setState(dataFromUrl(state, epoch));
     } finally {
       applying = false;
     }

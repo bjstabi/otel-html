@@ -12,11 +12,12 @@ import {
 } from '../../src/viewer/data/catalogue.js';
 import { AXES } from '../../test-support/scaling/measure.js';
 import { assertedAxes, fileOf, SPLIT } from '../../test-support/scaling/measured-file.js';
+import { ROLLUP_ENTRIES } from '../../test-support/scaling/rollup-entries.js';
 
 const { OTEL_HTML_SCALING_OUT: OUT } = process.env;
 
 /** The number of lines the known-debt list may hold; a PR that removes lines lowers it. */
-const DEBT_MAX = 35;
+const DEBT_MAX = 15;
 
 describe('declared classes', () => {
   test('every catalogue entry has a declaration and nothing else does', () => {
@@ -99,6 +100,19 @@ describe('declared classes', () => {
     for (const id of ['traces.list.all', 'traces.list.all.long']) {
       expect(KNOWN_DEBT.filter((d) => d.id === id)).toEqual([]);
       expect(DECLARED[id]?.class).toMatchObject({ retention: 'files', density: 'files' });
+    }
+  });
+
+  test('no debt line names an aggregate over rollup dimensions, except the compaction one (#283, PR 7, not yet measured)', () => {
+    const rollup = new Set(ROLLUP_ENTRIES.map((e) => e.id));
+    expect(ROLLUP_ENTRIES.length).toBeGreaterThan(0);
+    expect(KNOWN_DEBT.filter((d) => rollup.has(d.id) && d.issue !== 283)).toEqual([]);
+    // the entries the router answers from rollups under a long window, over dimensions: all `fixed` on retention and density.
+    for (const id of rollup) {
+      const entry = CATALOGUE.find((e) => e.id === id);
+      if (entry === undefined || /\.(attr|text|residual)\./.test(id) || id.includes('facets.attr')) continue;
+      expect(DECLARED[id]?.class, id).toMatchObject({ retention: 'fixed', density: 'fixed' });
+      expect(['files', 'fixed']).toContain(DECLARED[id]?.class.window);
     }
   });
 

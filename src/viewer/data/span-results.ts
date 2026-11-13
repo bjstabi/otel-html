@@ -159,12 +159,12 @@ export function traceRows(t: Table): { rows: TraceRow[]; total: number } {
 }
 
 /**
- * `FacetCounts` from the core facet rows (key, value, n, total) and the attribute rows (key, kind, value, n, total, keys_total). Core
+ * `FacetCounts` from the core facet rows (key, value, n, total; in one table or one per key) and the attribute rows (key, kind, value, n, total, keys_total). Core
  * and attribute rows are already capped by the query (`other` is `total` minus what is listed). `skippedKeyAdds` is the
  * number of attribute keys the key cap dropped. `only` keeps just those keys.
  */
 export function facetCounts(
-  core: Table | null,
+  core: Table | readonly Table[] | null,
   attrs: Table | null,
   caps: FacetCaps,
   pinned: readonly string[],
@@ -179,7 +179,9 @@ export function facetCounts(
   }
   const keys = new Map<string, Key>();
   const coreKeys = new Set<string>();
-  for (const r of core === null ? [] : rowsOf(core)) {
+  // one table of all the keys (`coreFacetsQuery`), or one per key (`rollupFacetQuery`)
+  const coreRows = core === null ? [] : [core].flat().flatMap((t) => rowsOf(t));
+  for (const r of coreRows) {
     const key = text(cell(r, 'key'));
     if (only !== null && !only.has(key)) continue;
     coreKeys.add(key);
@@ -257,7 +259,14 @@ export function timelineBuckets(t: Table, spec: BucketSpec): TimeBuckets<SpanSta
     (status[2] as number[])[i] = toNumber(cell(r, 'unset'), 'unset');
   });
   return TimeBuckets.from(
-    { maxBuckets: MAX_BUCKETS, widthNs: width, startNs: grid.start, keys: [...STATUS_KEYS], counts: status },
+    {
+      maxBuckets: MAX_BUCKETS,
+      widthNs: width,
+      startNs: grid.start,
+      originNs: spec.originNs,
+      keys: [...STATUS_KEYS],
+      counts: status,
+    },
     STATUS_KEYS,
     'timeline',
   );
@@ -410,6 +419,7 @@ export function serviceStats(
                 maxBuckets: MAX_BUCKETS,
                 widthNs: width,
                 startNs: grid.start,
+                originNs: spec.originNs,
                 keys: ['count'],
                 counts: [counts],
               },

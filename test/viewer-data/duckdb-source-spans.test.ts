@@ -8,6 +8,7 @@ import type { QueryEngine } from '../../src/viewer/data/query-engine.js';
 import { residualRows } from '../../src/viewer/data/residual.js';
 import type { SpanQuery, SpanRow, TraceRow } from '../../src/viewer/data/results.js';
 import { toNumber } from '../../src/viewer/data/span-results.js';
+import { alignLongWindow } from '../../src/viewer/data/time-window.js';
 import type { TestDb } from '../../test-support/duckdb-node.js';
 import {
   buildFormat4Report,
@@ -877,5 +878,47 @@ describe('getTrace and serviceShare with a span that ends before it starts', () 
     // the malformed trace pays one more
     expect((await arrows(() => fresh().getTrace(T5))).arrow).toBe(4);
     expect((await arrows(() => fresh().serviceShare(T5))).arrow).toBe(3);
+  });
+});
+
+describe('long windows count spans by start time', () => {
+  const LONG = 16_777_216_000_000;
+  // a window made long at 60 s; its aligned edges are where the fixture puts its spans
+  const asked = { start: 60_000e6, end: 60_000e6 + LONG };
+  const edge = alignLongWindow(asked, BASE);
+  const ms = (rel: number): number => rel / 1e6;
+  const SPANS: S[] = [
+    { trace: 1, id: 1, svc: 'svc-a', name: 'at-start', startMs: ms(edge.start), durMs: 10 },
+    { trace: 2, id: 2, svc: 'svc-a', name: 'at-end', startMs: ms(edge.end), durMs: 10 },
+    // the earliest span sets the report's epoch (BASE), which the edges above were computed against
+    { trace: 3, id: 3, svc: 'svc-a', name: 'overlap-only', startMs: 0, durMs: ms(edge.start) + 2000 },
+    { trace: 4, id: 4, svc: 'svc-a', name: 'inside', startMs: ms(edge.start) + 1000, durMs: 10 },
+  ];
+  let lds: DataSource;
+  let ldb: TestDb;
+
+  beforeAll(async () => {
+    const rep = await buildFormat4Report([request(SPANS)], { close: false });
+    ldb = await openFixtureDb(rep);
+    lds = createDuckDbDataSource({
+      engine: mosaicQueryEngine(createCoordinator(ldb.connector, silentLogger), ldb),
+      manifest: rep.manifest,
+    });
+  });
+
+  const names = async (window: { start: number; end: number }): Promise<string[]> =>
+    spanRows((await lds.querySpans(query({ window, needs: ['rows'] }))).rows)
+      .map((r) => r.span.name)
+      .sort();
+
+  test('long: a span starting exactly on the end is out, one starting on the start is in, one that only overlaps is out', async () => {
+    expect(await names(asked)).toEqual(['at-start', 'inside']);
+    expect(await names(edge)).toEqual(['at-start', 'inside']);
+  });
+
+  test('short: overlap and inclusive ends, as today', async () => {
+    const short = { start: edge.end - 1000e6, end: edge.end };
+    expect(await names(short)).toEqual(['at-end']);
+    expect(await names({ start: edge.start, end: edge.start + 100e6 })).toEqual(['at-start', 'overlap-only']);
   });
 });

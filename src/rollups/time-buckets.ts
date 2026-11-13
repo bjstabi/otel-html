@@ -9,6 +9,8 @@ export type SerializedTimeBuckets = {
   maxBuckets: number;
   widthNs: number;
   startNs: number;
+  /** The relative time of one absolute multiple of `widthNs`, in `[0, widthNs)`; absent is 0. */
+  originNs?: number | undefined;
   keys: string[];
   counts: number[][];
 };
@@ -20,6 +22,7 @@ const SerializedTimeBucketsSchema: z.ZodType<SerializedTimeBuckets> = z
     maxBuckets: z.number().int().min(2),
     widthNs: z.number().int().positive(),
     startNs: z.number().int(),
+    originNs: nonNegInt.optional(),
     keys: z.array(z.string()),
     counts: z.array(z.array(nonNegInt)),
   })
@@ -27,8 +30,9 @@ const SerializedTimeBucketsSchema: z.ZodType<SerializedTimeBuckets> = z
     message: 'widthNs equal to 1 ms * 2^k',
     path: ['widthNs'],
   })
-  .refine((s) => mod(s.startNs, s.widthNs) === 0, {
-    message: 'startNs aligned to widthNs',
+  .refine((s) => (s.originNs ?? 0) < s.widthNs, { message: 'originNs below widthNs', path: ['originNs'] })
+  .refine((s) => mod(s.startNs - (s.originNs ?? 0), s.widthNs) === 0, {
+    message: 'startNs aligned to widthNs (and originNs)',
     path: ['startNs'],
   })
   .refine((s) => s.counts.length === s.keys.length, { message: 'one counts row per key', path: ['counts'] })
@@ -61,6 +65,7 @@ export class TimeBuckets<K extends string> {
   readonly maxBuckets: number;
   #width = BASE_WIDTH_NS;
   #start = 0;
+  #origin = 0;
   #len = 0;
   readonly #rows: number[][];
   readonly #keyIndex = new Map<string, number>();
@@ -164,6 +169,7 @@ export class TimeBuckets<K extends string> {
       maxBuckets: this.maxBuckets,
       widthNs: this.#width,
       startNs: this.#start,
+      ...(this.#origin === 0 ? {} : { originNs: this.#origin }),
       keys: [...this.keys],
       counts: this.#rows.map((r) => [...r]),
     };
@@ -184,6 +190,7 @@ export class TimeBuckets<K extends string> {
     const b = new TimeBuckets<string>(s.keys, s.maxBuckets);
     b.#width = s.widthNs;
     b.#start = s.startNs;
+    b.#origin = s.originNs ?? 0;
     b.#len = s.counts[0]?.length ?? 0;
     s.counts.forEach((row, i) => {
       const dst = b.#rows[i];

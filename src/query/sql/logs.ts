@@ -47,7 +47,7 @@ function effectiveRel(epoch: bigint): ExprNode {
 }
 
 /** The severity band of a `severity_number` (the bands of `SEVERITY_BANDS`; null or out of range is `unspecified`). */
-function bandExpr(): ExprNode {
+export function bandExpr(): ExprNode {
   const whens = LOG_SEVERITY_KEYS.filter((k) => k !== 'unspecified').map(
     (k) => `WHEN severity_number BETWEEN ${SEVERITY_BANDS[k].min} AND ${SEVERITY_BANDS[k].max} THEN '${k}'`,
   );

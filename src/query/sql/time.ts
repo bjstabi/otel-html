@@ -1,4 +1,5 @@
 import { type ExprNode, sql, verbatim } from '@uwdata/mosaic-sql';
+import { ROLLUP_GRAIN_NS } from '../../format/manifest.js';
 import { relTime } from './columns.js';
 import type { RelWindow } from './prune.js';
 
@@ -10,10 +11,18 @@ export interface BucketSpec {
   widthNs: number;
   startNs: number;
   endNs: number;
+  /** The relative time of one absolute multiple of `widthNs`, in `[0, widthNs)`. 0 outside `long`; under it `mod(-epoch, widthNs)`. */
+  originNs: number;
 }
 
 /** Exact modulo with a non-negative result (the rule of `TimeBuckets`). */
 const mod = (a: number, b: number): number => ((a % b) + b) % b;
+
+/** `mod(-epoch, width)` in bigint: epochs exceed 2^53. */
+function originOf(epoch: bigint, width: number): number {
+  const w = BigInt(width);
+  return Number((w - (epoch % w)) % w);
+}
 
 /**
  * The bucketing of `TimeBuckets` (src/rollups/time-buckets.ts) for a known extent: the window, else the manifest range
@@ -23,22 +32,26 @@ export function bucketSpec(
   window: RelWindow | null,
   range: RelWindow | null,
   maxBuckets: number = MAX_BUCKETS,
+  long?: { epoch: bigint },
 ): BucketSpec {
   const extent = window ?? range;
-  if (extent === null) return { widthNs: BASE_WIDTH_NS, startNs: 0, endNs: 0 };
-  let width = BASE_WIDTH_NS;
-  let lo = Math.floor(extent.start);
-  let hi = Math.max(lo, Math.ceil(extent.end));
-  lo -= mod(lo, width);
-  hi -= mod(hi, width);
-  while ((hi - lo) / width + 1 > maxBuckets) {
+  if (extent === null) return { widthNs: BASE_WIDTH_NS, startNs: 0, endNs: 0, originNs: 0 };
+  // Under `long` the width is at least one rollup grain and buckets sit on multiples of it in absolute time.
+  let width = long === undefined ? BASE_WIDTH_NS : ROLLUP_GRAIN_NS;
+  const place = (): { lo: number; hi: number; origin: number } => {
+    const origin = long === undefined ? 0 : originOf(long.epoch, width);
+    let lo = Math.floor(extent.start);
+    let hi = Math.max(lo, Math.ceil(extent.end));
+    lo -= mod(lo - origin, width);
+    hi -= mod(hi - origin, width);
+    return { lo, hi, origin };
+  };
+  let f = place();
+  while ((f.hi - f.lo) / width + 1 > maxBuckets) {
     width *= 2;
-    lo = Math.floor(extent.start);
-    hi = Math.max(lo, Math.ceil(extent.end));
-    lo -= mod(lo, width);
-    hi -= mod(hi, width);
+    f = place();
   }
-  return { widthNs: width, startNs: lo, endNs: hi };
+  return { widthNs: width, startNs: f.lo, endNs: f.hi, originNs: f.origin };
 }
 
 /**
@@ -47,5 +60,7 @@ export function bucketSpec(
  */
 export function bucketExpr(colName: string, spec: BucketSpec, epoch: bigint): ExprNode {
   const w = `${spec.widthNs}::BIGINT`;
-  return sql`greatest(${relTime(colName, epoch)} - ((${relTime(colName, epoch)} % ${verbatim(w)}) + ${verbatim(w)}) % ${verbatim(w)}, ${verbatim(`${spec.startNs}::BIGINT`)})`;
+  const rel = relTime(colName, epoch);
+  const shifted = spec.originNs === 0 ? rel : sql`(${rel} - ${verbatim(`${spec.originNs}::BIGINT`)})`;
+  return sql`greatest(${rel} - ((${shifted} % ${verbatim(w)}) + ${verbatim(w)}) % ${verbatim(w)}, ${verbatim(`${spec.startNs}::BIGINT`)})`;
 }

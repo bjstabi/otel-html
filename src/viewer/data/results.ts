@@ -7,7 +7,11 @@ import type { LogSeverityKey } from '../../semconv/severity.js';
 import type { LogMode, LogRow, LogTraceRow, PatternRow } from './log-query.js';
 import type { TimeWindow } from './time-window.js';
 
-/** Request-rate, error and latency-percentile series on a shared bucket grid (the RED view). */
+/**
+ * Request-rate, error and latency-percentile series on a shared bucket grid (the RED view). Under a long window the
+ * percentiles come from the duration buckets of the rollups (spec 6.3): within 4.43 % of the exact ones, and inside the
+ * bucket's minimum and maximum.
+ */
 export interface RedBuckets {
   startNs: number;
   widthNs: number;
@@ -19,6 +23,7 @@ export interface RedBuckets {
   max: readonly (number | null)[];
 }
 
+/** Exact under a short window; under a long one `p50`, `p95` and `p99` are read from the duration buckets (within 4.43 %). */
 export interface DurationSummary {
   count: number;
   min: number;

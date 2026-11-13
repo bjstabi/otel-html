@@ -1,6 +1,13 @@
 import { describe, expect, test } from 'vitest';
 import { TABLE_COLUMNS, TABLES } from '../../../src/format/parquet/columns.js';
-import { duckdbType, partitionOfFilename, tableFiles, viewStatements } from '../../../src/query/sql/views.js';
+import {
+  dropRollupViewStatements,
+  duckdbType,
+  partitionOfFilename,
+  rollupViewStatements,
+  tableFiles,
+  viewStatements,
+} from '../../../src/query/sql/views.js';
 import { openTestDb } from '../../../test-support/duckdb-node.js';
 import {
   buildFormat4Report,
@@ -52,6 +59,31 @@ describe('format-4 views', () => {
     for (const table of TABLES) {
       expect(first(db.rows(`SELECT count(*) AS n FROM ${table}`), 'n')).toBe(0n);
     }
+    db.close();
+  });
+  test('the base views and the rollup views are separate sets; the rollup views are created only when missing', async () => {
+    const f = await buildFormat4Report([spansOnlyRequest(3)]);
+    const base = viewStatements(f.manifest, (p) => p, 'base');
+    const rollups = viewStatements(f.manifest, (p) => p, 'rollups');
+    expect(base).toHaveLength(5);
+    expect(rollups).toHaveLength(2);
+    expect([...base, ...rollups].sort()).toEqual(viewStatements(f.manifest, (p) => p).sort());
+    for (const s of base) expect(s).not.toContain('_rollups');
+    const lazy = rollupViewStatements(f.manifest, (p) => p);
+    expect(lazy).toHaveLength(2);
+    for (const s of lazy) expect(s).toMatch(/^CREATE VIEW IF NOT EXISTS "(span|log)_rollups" AS /);
+    expect(dropRollupViewStatements()).toEqual([
+      'DROP VIEW IF EXISTS "span_rollups"',
+      'DROP VIEW IF EXISTS "log_rollups"',
+    ]);
+    // a view that exists is kept, a dropped one is bound again with the new file list
+    const db = await openFixtureDb(f);
+    const before = first(db.rows('SELECT count(*) AS n FROM span_rollups'), 'n');
+    for (const s of lazy) db.exec(s);
+    expect(first(db.rows('SELECT count(*) AS n FROM span_rollups'), 'n')).toBe(before);
+    for (const s of dropRollupViewStatements()) db.exec(s);
+    for (const s of lazy) db.exec(s);
+    expect(first(db.rows('SELECT count(*) AS n FROM span_rollups'), 'n')).toBe(before);
     db.close();
   });
   test('a populated view and the empty view of the same table DESCRIBE alike', async () => {

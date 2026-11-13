@@ -173,4 +173,38 @@ describe('absWindow', () => {
       expect(prunePartitions(m, 'logs', hints({}), w).files).toEqual([file(0, 'logs')]);
     });
   });
+
+  describe('long windows', () => {
+    const w = { start: 1000n, end: 2000n };
+    test('a spans file whose latest start is before the window is not read; under a short window it is', () => {
+      const m = manifestWith([
+        { timeMin: '10', timeMax: '999' },
+        { timeMin: '10', timeMax: '1000' },
+      ]);
+      expect(prunePartitions(m, 'spans', hints({}), w, undefined, { long: true }).files).toEqual([file(1)]);
+      expect(prunePartitions(m, 'spans', hints({}), w).files).toEqual([file(0), file(1)]);
+      const t = manifestWith([{ timeMin: '10', timeMax: '999' }], { table: 'traces' });
+      expect(prunePartitions(t, 'traces', hints({}), w, undefined, { long: true }).files).toEqual([]);
+    });
+    test('a span rollup is pruned like spans under a long window, a log rollup like logs', () => {
+      const m = manifestWith(
+        [
+          { timeMin: '10', timeMax: '999' },
+          { timeMin: '10', timeMax: '1000' },
+        ],
+        { table: 'span_rollups' },
+      );
+      expect(prunePartitions(m, 'span_rollups', hints({}), w, undefined, { long: true }).files).toEqual([
+        file(1, 'span_rollups'),
+      ]);
+      const l = manifestWith(
+        [
+          { timeMin: '10', timeMax: '999' },
+          { timeMin: '10', timeMax: '1000' },
+        ],
+        { table: 'log_rollups' },
+      );
+      expect(prunePartitions(l, 'log_rollups', hints({}), w).files).toEqual([file(1, 'log_rollups')]);
+    });
+  });
 });

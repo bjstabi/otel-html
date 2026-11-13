@@ -119,7 +119,11 @@ export function Shell(props: {
 }): JSX.Element {
   const { dataSource, history } = props;
   const manifest = dataSource.manifest;
-  const store = useMemo(() => createSelectionStore(parseUrlState(history.read()).state), [history]);
+  const epoch = BigInt(manifest.epochUnixNano);
+  const store = useMemo(
+    () => createSelectionStore(parseUrlState(history.read()).state, epoch),
+    [history, epoch],
+  );
   const [errors, setErrors] = useState<readonly string[]>([]);
   const [helpOpen, setHelpOpen] = useState(false);
   const [carried, setCarried] = useState<Carried | null>(null);
@@ -127,7 +131,7 @@ export function Shell(props: {
   // Layout effects, here and for the shortcuts below, run before the page first paints. A passive effect can run after
   // it on a slow machine: bindUrl's first read of the URL then undid a choice made in between (a View picked), and keys
   // pressed in between were lost.
-  useLayoutEffect(() => bindUrl(store, history, setErrors), [store, history]);
+  useLayoutEffect(() => bindUrl(store, history, setErrors, epoch), [store, history, epoch]);
 
   const goTo = useCallback<GoTo>(
     (page, route, extra = {}, alsoDropped = []) => {

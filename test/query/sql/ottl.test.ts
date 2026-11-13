@@ -271,3 +271,23 @@ describe('size and hints', () => {
     expect(v('resource.attributes["z"] == 7')).toEqual(['7']);
   });
 });
+
+describe('Translation.reads', () => {
+  const reads = (src: string, ctx: SqlContext = 'span'): ReadonlySet<string> =>
+    translateCondition(src, ctx).reads;
+  test('a column, a resource key, an attribute key, a whole map', () => {
+    expect(reads('name == "a" and resource.attributes["run.id"] == "x"')).toEqual(
+      new Set(['name', 'resource:run.id']),
+    );
+    expect(reads('resource.attributes["service.name"] == "a"')).toEqual(new Set(['service_name']));
+    expect(reads('attributes["http.route"] == "/"')).toEqual(new Set(['attr:http.route']));
+    expect(reads('IsMap(attributes)')).toEqual(new Set(['attr:*']));
+    expect(reads('IsMap(resource.attributes)')).toEqual(new Set(['resource:*']));
+    expect(reads('end_time_unix_nano - start_time_unix_nano > 5')).toEqual(
+      new Set(['end_time_unix_nano', 'start_time_unix_nano']),
+    );
+  });
+  test('a residual term reads nothing here', () => {
+    expect(reads('name == "a" and Len(name) > 1')).toEqual(new Set(['name']));
+  });
+});

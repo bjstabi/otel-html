@@ -13,6 +13,7 @@ import {
   verbatim,
 } from '@uwdata/mosaic-sql';
 import { TABLE_COLUMNS } from '../../format/parquet/columns.js';
+import { durationBucketSql } from '../../format/parquet/duration-bucket.js';
 import type { TraceId } from '../../model/ids.js';
 import { jsonAt, jsonKind, jsonStringAt, relTime } from './columns.js';
 import { CORE_SPAN_FACETS, truncated } from './facets.js';
@@ -174,6 +175,35 @@ export function timelineQuery(f: SqlFilter, spec: BucketSpec, latency = true): Q
     .where(...whereOf(f, 'spans'))
     .groupby(sql`bucket`)
     .orderby(sql`bucket`);
+}
+
+/**
+ * The spans of the filtered set grouped in the shape of a span rollup (`rollup.ts`): one row per distinct `keys`
+ * (`name` is the output column, `raw` the expression over the spans table) and duration bucket, with `n`,
+ * `duration_sum`, `duration_min` and `duration_max` of `duration_ns` and the `duration_bucket` of `src/format/parquet/duration-bucket.ts`.
+ * With `durations` false the rows hold the keys and `n` only, and no duration column is read. It is the raw branch of
+ * `measuresRelation`.
+ */
+export function durationBucketsQuery(
+  f: SqlFilter,
+  keys: readonly { name: string; raw: ExprNode }[] = [],
+  durations = true,
+): Query {
+  return Query.from('spans')
+    .select(
+      Object.fromEntries(keys.map((k) => [k.name, k.raw])),
+      durations ? { duration_bucket: verbatim(durationBucketSql('duration_ns')) } : {},
+      { n: sql`count(*)` },
+      durations
+        ? {
+            duration_sum: sql`CAST(sum(duration_ns) AS BIGINT)`,
+            duration_min: sql`min(duration_ns)`,
+            duration_max: sql`max(duration_ns)`,
+          }
+        : {},
+    )
+    .where(...whereOf(f, 'spans'))
+    .groupby(sql`ALL`);
 }
 
 /** `n`, `min_duration_ns`, `max_duration_ns`, `sum_duration_ns` (DOUBLE) and `quantiles` over the filtered spans. */
