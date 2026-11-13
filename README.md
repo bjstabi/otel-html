@@ -264,9 +264,9 @@ When you move between explorers (the sidebar, `g l` and `g t`, or an "Open in ..
 
 ## Long windows
 
-A time window of about 4 h 40 min or longer is a long window, and so is "Entire run" on a report whose whole range is that long. A report whose range is shorter never changes. Under a long window:
+A time window of about 4 h 40 min or longer is a long window, and so is "Entire run" on a report whose whole range is that long. A report whose range is shorter never changes. A page with no window set reads as a window of the report's whole range, so on a report whose range is that long it is a long window too. Under a long window:
 
-1. **Spans count by their start.** A span belongs to the window it starts in, and a trace to the window its first span starts in. A span that started before the window and ends inside it is not counted (under a shorter window it still is). The window's end is exclusive, and the window is widened outward to the rollup grain (about 65 s) so every number on the page sees the same window.
+1. **Spans count by their start.** A span belongs to the window it starts in, and a trace to the window its first span starts in. A span that started before the window and ends inside it is not counted (under a shorter window it still is). The window's end is exclusive, and the window is widened outward to the rollup grain (about 65 s) so every number of spans and logs on the page sees the same window. Metric points keep their own rule (inclusive ends, buckets relative to the report's start).
 2. **Timeline buckets are at least one grain wide.** A 6 h window draws 330 buckets of about 65 s, not 2,637 of 8 s.
 3. **Percentiles are approximate.** p50, p95, p99 and the duration histogram are read from the duration buckets and are within about 5 % of the exact ones (exact under a shorter window). The time-range control says "percentiles approximate", and a trace's or span's percentile badge says "approximate" on a report whose range is long.
 4. **Filters do not change how a number is computed.** An attribute condition or a text search that no rollup can answer reads the raw files, but selects by start, uses the same buckets and the same duration buckets, so a number is the same kind of number with or without a filter.
