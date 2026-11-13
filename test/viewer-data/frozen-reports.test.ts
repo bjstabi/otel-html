@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { mergeWith } from '../../src/api/convert.js';
 import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
-import { isV4, parseAnyManifest } from '../../src/format/manifest.js';
+import { isPartitioned, parseAnyManifest } from '../../src/format/manifest.js';
 import { TABLES } from '../../src/format/parquet/columns.js';
 import { MANIFEST_KEY, partitionKey, partitionWrapperPath } from '../../src/format/paths.js';
 import { createDuckDbDataSource } from '../../src/viewer/data/duckdb-source.js';
@@ -51,7 +51,7 @@ async function mergedFixture(name: string): Promise<Format4Fixture> {
   const text = w.fs.snapshot().get('m4/data/manifest.js');
   if (text === undefined) throw new Error('no manifest');
   const manifest = parseAnyManifest(reviveDataJson(unwrapDataFile(text, MANIFEST_KEY)));
-  if (!isV4(manifest)) throw new Error('merge did not write format 4');
+  if (!isPartitioned(manifest)) throw new Error('merge did not write format 4');
   const files = new Map<string, Uint8Array>();
   for (const partition of manifest.partitions) {
     for (const table of TABLES) {
@@ -107,7 +107,7 @@ describe('the viewer opens the frozen format-4 report as written', () => {
     const manifest = parseAnyManifest(
       reviveDataJson(unwrapDataFile(readFileSync(join(root, 'data/manifest.js'), 'utf8'), MANIFEST_KEY)),
     );
-    if (!isV4(manifest)) throw new Error('the frozen report is not format 4');
+    if (!isPartitioned(manifest)) throw new Error('the frozen report is not format 4');
     const files = new Map<string, Uint8Array>();
     for (const partition of manifest.partitions) {
       for (const table of TABLES) {

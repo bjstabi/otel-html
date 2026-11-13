@@ -1,5 +1,13 @@
 import { describe, expect, test } from 'vitest';
-import { isV4, type ManifestV4, parseAnyManifest, parseManifest } from '../../src/format/manifest.js';
+import {
+  isPartitioned,
+  type ManifestV4,
+  ManifestV5Schema,
+  parseAnyManifest,
+  parseManifest,
+  ROLLUP_GRAIN_NS,
+  type RollupDescription,
+} from '../../src/format/manifest.js';
 import { TABLES } from '../../src/format/parquet/columns.js';
 import { PARTITION_FILE_RE, partitionFilePath } from '../../src/format/paths.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
@@ -61,7 +69,7 @@ describe('manifest v4', () => {
   test('parses, keeping null and empty statistics values distinct', () => {
     const m = parseAnyManifest(v4());
     expect(m).toEqual(v4());
-    expect(isV4(m)).toBe(true);
+    expect(isPartitioned(m)).toBe(true);
   });
 
   test('the facet caps round-trip, and are optional', () => {
@@ -71,7 +79,7 @@ describe('manifest v4', () => {
       config: { ...m.config, viewer: { ...m.config.viewer, facetValueCap: 7, facetKeyCap: 3 } },
     };
     const parsed = parseAnyManifest(capped);
-    expect(isV4(parsed) && parsed.config.viewer).toMatchObject({ facetValueCap: 7, facetKeyCap: 3 });
+    expect(isPartitioned(parsed) && parsed.config.viewer).toMatchObject({ facetValueCap: 7, facetKeyCap: 3 });
     expect(parseAnyManifest(v4())).toEqual(v4());
   });
 
@@ -94,7 +102,7 @@ describe('manifest v4', () => {
       config: { ...config, viewer: { ...config.viewer, eagerBudgetBytes: 75_000_000 } },
     };
     const m = parseAnyManifest(v3);
-    expect(isV4(m)).toBe(false);
+    expect(isPartitioned(m)).toBe(false);
     expect(m).toEqual(parseManifest(v3));
   });
 
@@ -112,7 +120,7 @@ describe('manifest v4', () => {
   });
 
   test('an unknown formatVersion is invalid-report at formatVersion', () => {
-    const e = failure(() => parseAnyManifest({ ...v4(), formatVersion: 5 }));
+    const e = failure(() => parseAnyManifest({ ...v4(), formatVersion: 6 }));
     expect(e.code).toBe('invalid-report');
     expect(e.path).toBe('manifest.formatVersion');
   });
@@ -217,5 +225,89 @@ describe('manifest v4', () => {
     const e = failure(() => parseAnyManifest({ ...v4(), formatVersion: 4n }));
     expect(e.code).toBe('invalid-report');
     expect(e.path).toBe('manifest.formatVersion');
+  });
+});
+
+describe('manifest format 5', () => {
+  const rollup: RollupDescription = {
+    grainNs: ROLLUP_GRAIN_NS,
+    dimensions: ['service_name'],
+    durationBuckets: 'log2x8',
+  } as const;
+  const v5 = (): ManifestV4 => {
+    const m = v4();
+    return { ...m, formatVersion: 5 };
+  };
+  const withFile = (m: ManifestV4, files: object): ManifestV4 => ({
+    ...m,
+    partitions: m.partitions.map((p, i) => (i === 0 ? { ...p, files: { ...p.files, ...files } } : p)),
+  });
+  const spansWith = (extra: object) => ({
+    spans: { ...(v4().partitions[0]?.files.spans as object), ...extra },
+  });
+  const rollupFile = (extra: object = { rollup }) => ({
+    span_rollups: {
+      path: partitionFilePath(0, 'span_rollups'),
+      bytes: 10,
+      rows: 1,
+      timeMin: '0',
+      timeMax: '1',
+      values: {},
+      ...extra,
+    },
+  });
+  const additions = (base: ManifestV4): ManifestV4[] => [
+    withFile(base, spansWith({ timeEndMax: '20' })),
+    withFile(base, rollupFile()),
+    { ...base, config: { ...base.config, viewer: { ...base.config.viewer, defaultWindow: '7d' } } },
+  ];
+
+  test('the format-4 schema still rejects every format-5 addition', () => {
+    for (const m of additions(v4())) {
+      expect(() => parseAnyManifest(m)).toThrow(OtelHtmlError);
+    }
+    expect(() =>
+      parseAnyManifest({ ...v4(), statisticsKeys: { ...v4().statisticsKeys, span_rollups: [] } }),
+    ).toThrow(OtelHtmlError);
+  });
+
+  test('the format-5 schema accepts them, and a format-4 body with formatVersion 5', () => {
+    expect(parseAnyManifest(v5())).toEqual(v5());
+    expect(ManifestV5Schema.safeParse(v5()).success).toBe(true);
+    expect(ManifestV5Schema.safeParse(v4()).success).toBe(false);
+    for (const m of additions(v5())) expect(parseAnyManifest(m)).toEqual(m);
+    const keyed = {
+      ...v5(),
+      statisticsKeys: { ...v5().statisticsKeys, span_rollups: ['name'], log_rollups: [] },
+    };
+    expect(parseAnyManifest(keyed)).toEqual(keyed);
+    const nullEnd = withFile(v5(), spansWith({ timeEndMax: null }));
+    expect(parseAnyManifest(nullEnd)).toEqual(nullEnd);
+  });
+
+  test('format 5 rejects: timeEndMax before timeMin; a rollup file without a description; a description on spans; grainNs 60000000000', () => {
+    const base = v5();
+    expect(() => parseAnyManifest(withFile(base, spansWith({ timeEndMax: '-6' })))).toThrow(OtelHtmlError);
+    expect(() => parseAnyManifest(withFile(base, rollupFile({})))).toThrow(OtelHtmlError);
+    expect(() => parseAnyManifest(withFile(base, spansWith({ rollup })))).toThrow(OtelHtmlError);
+    const minute = { rollup: { ...rollup, grainNs: 60_000_000_000 } };
+    expect(() => parseAnyManifest(withFile(base, rollupFile(minute)))).toThrow(OtelHtmlError);
+    const logsEnd = { logs: { ...(v4().partitions[0]?.files.spans as object), timeEndMax: '20' } };
+    expect(() => parseAnyManifest(withFile(base, logsEnd))).toThrow(OtelHtmlError);
+  });
+
+  test('parseAnyManifest: 4 and 5 parse, 6 fails with the newer-format error naming 6', () => {
+    expect(parseAnyManifest(v4()).formatVersion).toBe(4);
+    expect(parseAnyManifest(v5()).formatVersion).toBe(5);
+    const e = failure(() => parseAnyManifest({ ...v5(), formatVersion: 6 }));
+    expect(e.code).toBe('invalid-report');
+    expect(e.path).toBe('manifest.formatVersion');
+    expect(e.message).toContain('6');
+  });
+
+  test('rollup paths are partition files', () => {
+    expect(PARTITION_FILE_RE.test('data/partitions/000012/span_rollups.parquet')).toBe(true);
+    expect(PARTITION_FILE_RE.test('data/partitions/000012/log_rollups.parquet')).toBe(true);
+    expect(PARTITION_FILE_RE.test('data/partitions/000012/other_rollups.parquet')).toBe(false);
   });
 });

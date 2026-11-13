@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { Page } from '@playwright/test';
 import { reviveDataJson, unwrapDataFile } from '../src/format/data-file.js';
-import { isV4, type ManifestV4, parseAnyManifest } from '../src/format/manifest.js';
+import { isPartitioned, type ManifestV4, parseAnyManifest } from '../src/format/manifest.js';
 import { decodeTable } from '../src/format/parquet/codec.js';
 import { MANIFEST_KEY } from '../src/format/paths.js';
 import '../src/writer/parquet-wasm-source.js';
@@ -32,7 +32,7 @@ function readManifest(name: ReportName): ManifestV4 {
     throw new Error(`the scale fixture reports are missing: run \`mise run e2e:fixtures:scale\` (${name})`);
   const text = readFileSync(new URL('data/manifest.js', reportDir(name, 'http')), 'utf8');
   const manifest = parseAnyManifest(reviveDataJson(unwrapDataFile(text, MANIFEST_KEY)));
-  if (!isV4(manifest)) throw new Error(`${name}: not a v4 manifest`);
+  if (!isPartitioned(manifest)) throw new Error(`${name}: not a v4 manifest`);
   return manifest;
 }
 

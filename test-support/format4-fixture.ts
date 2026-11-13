@@ -1,7 +1,7 @@
 import type { ConfigInput } from '../src/config/schema.js';
 import { reviveDataJson, unwrapDataFile } from '../src/format/data-file.js';
 import { ENGINE_VERSION } from '../src/format/engine.js';
-import { isV4, type ManifestV4, parseAnyManifest } from '../src/format/manifest.js';
+import { isPartitioned, type ManifestV4, parseAnyManifest } from '../src/format/manifest.js';
 import { TABLES } from '../src/format/parquet/columns.js';
 import { MANIFEST_KEY } from '../src/format/paths.js';
 import type { OtlpRequest } from '../src/model/otlp-json.js';
@@ -37,7 +37,7 @@ export async function buildFormat4Report(
   const text = w.fs.snapshot().get(`${OUT}/data/manifest.js`);
   if (text === undefined) throw new Error('no manifest');
   const manifest = parseAnyManifest(reviveDataJson(unwrapDataFile(text, MANIFEST_KEY)));
-  if (!isV4(manifest)) throw new Error('not a v4 manifest');
+  if (!isPartitioned(manifest)) throw new Error('not a v4 manifest');
   const files = new Map<string, Uint8Array>();
   for (const partition of manifest.partitions) {
     for (const table of TABLES) {

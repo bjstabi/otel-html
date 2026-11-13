@@ -1,5 +1,20 @@
-export const TABLES = ['spans', 'logs', 'points', 'traces', 'patterns'] as const;
+export const TABLES = [
+  'spans',
+  'logs',
+  'points',
+  'traces',
+  'patterns',
+  'span_rollups',
+  'log_rollups',
+] as const;
 export type Table = (typeof TABLES)[number];
+
+/** The base table each rollup table summarises. */
+export const ROLLUP_OF: { readonly span_rollups: 'spans'; readonly log_rollups: 'logs' } = {
+  span_rollups: 'spans',
+  log_rollups: 'logs',
+};
+export type RollupTable = keyof typeof ROLLUP_OF;
 
 export type ColumnType =
   | 'utf8'
@@ -161,12 +176,45 @@ const PATTERNS: readonly ColumnDef[] = [
   col('sample', 'utf8'),
 ];
 
+const SPAN_ROLLUPS: readonly ColumnDef[] = [
+  required('start_time_unix_nano', 'int64'),
+  col('service_name', 'utf8'),
+  col('scope_name', 'utf8'),
+  col('name', 'utf8'),
+  col('kind', 'int32'),
+  col('status_code', 'int32'),
+  col('resource_name', 'utf8'),
+  col('resource_attributes', 'json'),
+  col('attributes', 'json'),
+  required('duration_bucket', 'int32'),
+  required('n', 'int64'),
+  required('duration_sum', 'int64'),
+  required('duration_min', 'int64'),
+  required('duration_max', 'int64'),
+];
+
+const LOG_ROLLUPS: readonly ColumnDef[] = [
+  col('time_unix_nano', 'int64'),
+  col('observed_time_unix_nano', 'int64'),
+  col('service_name', 'utf8'),
+  col('scope_name', 'utf8'),
+  col('severity_number', 'int32'),
+  col('host_name', 'utf8'),
+  col('event_name', 'utf8'),
+  required('has_trace', 'bool'),
+  col('resource_attributes', 'json'),
+  col('attributes', 'json'),
+  required('n', 'int64'),
+];
+
 export const TABLE_COLUMNS: Readonly<Record<Table, readonly ColumnDef[]>> = {
   spans: SPANS,
   logs: LOGS,
   points: POINTS,
   traces: TRACES,
   patterns: PATTERNS,
+  span_rollups: SPAN_ROLLUPS,
+  log_rollups: LOG_ROLLUPS,
 };
 
 /** The columns a table's rows are sorted by, in order: scope_name, service_name, then its time column. */
@@ -176,6 +224,8 @@ export const SORT_COLUMNS: Readonly<Record<Table, readonly string[]>> = {
   points: ['scope_name', 'service_name', 'metric_name', 'time_unix_nano'],
   traces: ['start_time_unix_nano'],
   patterns: ['cluster_id'],
+  span_rollups: ['scope_name', 'service_name', 'start_time_unix_nano'],
+  log_rollups: ['scope_name', 'service_name', 'time_unix_nano'],
 };
 
 export const TIME_COLUMN: Readonly<Record<Table, string>> = {
@@ -184,6 +234,8 @@ export const TIME_COLUMN: Readonly<Record<Table, string>> = {
   points: 'time_unix_nano',
   traces: 'start_time_unix_nano',
   patterns: 'first_time_unix_nano',
+  span_rollups: 'start_time_unix_nano',
+  log_rollups: 'time_unix_nano',
 };
 
 export const FIXED_STATISTICS_COLUMNS: Readonly<Record<Table, readonly string[]>> = {
@@ -192,4 +244,6 @@ export const FIXED_STATISTICS_COLUMNS: Readonly<Record<Table, readonly string[]>
   points: ['scope_name', 'service_name', 'metric_name'],
   traces: [],
   patterns: [],
+  span_rollups: ['scope_name', 'service_name', 'name'],
+  log_rollups: ['scope_name', 'service_name', 'severity_number'],
 };

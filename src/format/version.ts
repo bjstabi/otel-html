@@ -1,5 +1,11 @@
-/** 4: data lives in Parquet partitions (`data/partitions/<p6>/<table>.parquet`), read through DuckDB-WASM. */
-export const PARTITION_FORMAT_VERSION = 4;
+/**
+ * 5: data lives in Parquet partitions (`data/partitions/<p6>/<table>.parquet`), read through DuckDB-WASM; a partition
+ * may also hold rollup files, a file may state `timeEndMax`, and the config may state `viewer.defaultWindow`.
+ * Format 4 is the same without those.
+ */
+export const PARTITION_FORMAT_VERSION = 5;
+/** The partition formats this otel-html reads. */
+export const READABLE_PARTITION_FORMATS = [4, 5] as const;
 /**
  * Versions this otel-html reads. A format-1 report has no gaps and no `ex<k>.js`, and the viewer falls back
  * (measures gaps on level 0, reads `ex.js` at every level); a format-2 report has only whole level and exemplar
@@ -8,12 +14,12 @@ export const PARTITION_FORMAT_VERSION = 4;
 export const CHUNK_READABLE_FORMAT_VERSIONS = [1, 2, 3] as const;
 export type FormatVersion = (typeof CHUNK_READABLE_FORMAT_VERSIONS)[number];
 /** Every version a manifest may declare; `parseAnyManifest` dispatches on it. Chunk readers use the list above. */
-export const READABLE_FORMAT_VERSIONS = [1, 2, 3, 4] as const;
+export const READABLE_FORMAT_VERSIONS = [1, 2, 3, 4, 5] as const;
 
 /** The global every data file registers into: `__OH__.push("<key>", <payload>);`. */
 export const REGISTRATION_GLOBAL = '__OH__';
 
-/** The D12 message: the viewer and `upgrade` read format 4 only; `merge` converts an older report. */
+/** The D12 message: the viewer and `upgrade` read partition formats (4 and 5) only; `merge` converts an older report. */
 export const oldFormatMessage = (formatVersion: number): string =>
   `This report is format ${formatVersion}; this viewer reads format 4. \`otel-html merge <report> --out <new>\` converts it.`;
 

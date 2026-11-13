@@ -39,9 +39,13 @@ describe('format-4 views', () => {
     const [only] = tableFiles(f.manifest, 'spans', (p) => p).slice(1);
     expect(first(db.rows(`SELECT count(*) AS n FROM spans WHERE filename = '${only}'`), 'n')).toBe(5n);
   });
-  test('viewStatements of an empty manifest creates five empty views', async () => {
+  test('rollup paths are partition files', () => {
+    expect(partitionOfFilename('https://x/data/partitions/000012/log_rollups.parquet')).toBe(12);
+    expect(partitionOfFilename('data/partitions/000012/span_rollups.parquet')).toBe(12);
+  });
+  test('viewStatements of an empty manifest creates seven empty views', async () => {
     const stmts = viewStatements(emptyManifest(), (p) => p);
-    expect(stmts).toHaveLength(5);
+    expect(stmts).toHaveLength(7);
     for (const s of stmts) expect(s).toMatch(/WHERE false$/);
     const db = await openTestDb();
     for (const s of stmts) db.exec(s);

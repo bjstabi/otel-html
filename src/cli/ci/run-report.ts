@@ -2,13 +2,14 @@ import type { ResolvedConfig } from '../../config/schema.js';
 import { reviveDataJson, unwrapDataFile, wrapDataFile } from '../../format/data-file.js';
 import { ENGINE_VERSION } from '../../format/engine.js';
 import {
-  isV4,
+  isPartitioned,
   type ManifestV4,
   type PartitionEntry,
   type PartitionFile,
   parseAnyManifest,
+  type StatisticsKeys,
 } from '../../format/manifest.js';
-import { TABLES, type Table } from '../../format/parquet/columns.js';
+import { TABLES } from '../../format/parquet/columns.js';
 import { statisticsKeysFor } from '../../format/parquet/stats.js';
 import { MANIFEST_KEY, MANIFEST_PATH, partitionFilePath } from '../../format/paths.js';
 import { PARTITION_FORMAT_VERSION } from '../../format/version.js';
@@ -38,10 +39,9 @@ export interface NewManifestOptions {
 
 /** An empty, `complete: false` v4 manifest in `site` format with `statisticsKeysFor` each table from `config`. */
 export function newRunManifest(o: NewManifestOptions): ManifestV4 {
-  const statisticsKeys = Object.fromEntries(TABLES.map((t) => [t, statisticsKeysFor(t, o.config)])) as Record<
-    Table,
-    string[]
-  >;
+  const statisticsKeys = Object.fromEntries(
+    TABLES.map((t) => [t, statisticsKeysFor(t, o.config)]),
+  ) as StatisticsKeys;
   return {
     formatVersion: PARTITION_FORMAT_VERSION,
     otelHtmlVersion: o.version,
@@ -110,7 +110,7 @@ function entryFrom(
   n: number,
   p: UpdatePartition,
   dir: string,
-  keys: Record<Table, string[]>,
+  keys: StatisticsKeys,
   copies: FileMove[],
 ): PartitionEntry {
   const files: PartitionEntry['files'] = {};
@@ -119,7 +119,7 @@ function entryFrom(
     if (f === undefined) continue;
     const values: PartitionFile['values'] = {};
     // A key the job did not compute stays absent ("not computed"); the merge computes it. `null` is "over the cap".
-    for (const k of keys[t]) if (f.values[k] !== undefined) values[k] = f.values[k];
+    for (const k of keys[t] ?? []) if (f.values[k] !== undefined) values[k] = f.values[k];
     const to = partitionFilePath(n, t);
     files[t] = { ...f, path: to, values };
     copies.push({ fromDir: dir, from: f.path, to });
@@ -301,6 +301,7 @@ export async function readRunManifest(fs: FileSystem, dir: string): Promise<Mani
   const path = `${dir}/${MANIFEST_PATH}`;
   if (!(await fs.exists(path))) return null;
   const m = parseAnyManifest(reviveDataJson(unwrapDataFile(await fs.readText(path), MANIFEST_KEY)));
-  if (!isV4(m)) throw new OtelHtmlError('invalid-report', { path, expected: 'a format 4 manifest' });
+  if (!isPartitioned(m))
+    throw new OtelHtmlError('invalid-report', { path, expected: 'a format 4 or 5 manifest' });
   return m;
 }

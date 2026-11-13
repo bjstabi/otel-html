@@ -1,7 +1,7 @@
 import { describe, expect, test, vi } from 'vitest';
 import type { ConfigInput } from '../../src/config/schema.js';
 import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
-import { isV4, type ManifestV4, parseAnyManifest } from '../../src/format/manifest.js';
+import { isPartitioned, type ManifestV4, parseAnyManifest } from '../../src/format/manifest.js';
 import { decodeTable } from '../../src/format/parquet/codec.js';
 import { LOCK_PATH, MANIFEST_KEY } from '../../src/format/paths.js';
 import { parseAnySessionState, type SessionStateV2 } from '../../src/format/state.js';
@@ -51,7 +51,7 @@ function manifest(w: TestWriter): ManifestV4 {
   const text = w.fs.snapshot().get(`${OUT}/data/manifest.js`);
   if (text === undefined) throw new Error('no manifest');
   const m = parseAnyManifest(reviveDataJson(unwrapDataFile(text, MANIFEST_KEY)));
-  if (!isV4(m)) throw new Error('not a v4 manifest');
+  if (!isPartitioned(m)) throw new Error('not a v4 manifest');
   return m;
 }
 
@@ -89,7 +89,7 @@ describe('PartitionSession', () => {
     await s.add(logs(2), 'b.json');
     await s.flush();
     const m = manifest(w);
-    expect(m.formatVersion).toBe(4);
+    expect(m.formatVersion).toBe(5);
     expect(m.partitions).toHaveLength(1);
     expect(m.partitions[0]?.source).toBe('flush:0');
     expect(m.partitions[0]?.files.spans?.rows).toBe(3);
@@ -504,7 +504,7 @@ describe('format mismatches', () => {
     const s = await open(w);
     await s.add(spans(1, 0, 2), 'a.json');
     await s.close();
-    expect(manifest(w).formatVersion).toBe(4);
+    expect(manifest(w).formatVersion).toBe(5);
     expect([...w.fs.snapshot().keys()].some((k) => k.includes('data/chunks/spans/0'))).toBe(false);
   });
 });

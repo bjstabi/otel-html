@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
-import { isV4, type ManifestV4, parseAnyManifest } from '../../src/format/manifest.js';
+import { isPartitioned, type ManifestV4, parseAnyManifest } from '../../src/format/manifest.js';
 import { decodeTable } from '../../src/format/parquet/codec.js';
 import type { Table } from '../../src/format/parquet/columns.js';
 import type { Row } from '../../src/format/parquet/rows.js';
@@ -15,7 +15,7 @@ export function manifestOf(w: TestWriter, out: string): ManifestV4 {
   const text = w.fs.snapshot().get(`${out}/data/manifest.js`);
   if (text === undefined) throw new Error('no manifest');
   const m = parseAnyManifest(reviveDataJson(unwrapDataFile(text, MANIFEST_KEY)));
-  if (!isV4(m)) throw new Error('not a v4 manifest');
+  if (!isPartitioned(m)) throw new Error('not a v4 manifest');
   return m;
 }
 

@@ -27,6 +27,8 @@ const KEYS: Record<Table, string[]> = {
   points: ['metric_name'],
   traces: [],
   patterns: [],
+  span_rollups: [],
+  log_rollups: [],
 };
 
 /** A small deterministic generator, so the rows differ run to run of the code but never run to run of the test. */

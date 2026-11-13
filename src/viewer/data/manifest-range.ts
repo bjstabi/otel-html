@@ -1,4 +1,4 @@
-import { type AnyManifest, isV4 } from '../../format/manifest.js';
+import { type AnyManifest, isPartitioned } from '../../format/manifest.js';
 import { toNumber } from './span-results.js';
 import type { TimeWindow } from './time-window.js';
 
@@ -7,7 +7,7 @@ import type { TimeWindow } from './time-window.js';
  * partition manifest stores absolute int64 text.
  */
 export function manifestRange(manifest: AnyManifest): TimeWindow | null {
-  if (!isV4(manifest)) return manifest.range;
+  if (!isPartitioned(manifest)) return manifest.range;
   if (manifest.range === null) return null;
   const epoch = BigInt(manifest.epochUnixNano);
   return {

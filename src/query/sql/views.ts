@@ -55,7 +55,7 @@ export function viewStatements(manifest: ManifestV4, resolve: (path: string) => 
   return TABLES.map((table) => viewStatement(manifest, table, resolve));
 }
 
-const PARTITION_IN_FILENAME = /(?:^|\/)partitions\/([0-9]{6,})\/[a-z]+\.parquet$/;
+const PARTITION_IN_FILENAME = /(?:^|\/)partitions\/([0-9]{6,})\/[a-z_]+\.parquet$/;
 
 /** The partition number in a `filename` value (`.../partitions/<p6>/<table>.parquet`); invalid-report when absent. */
 export function partitionOfFilename(filename: string): number {

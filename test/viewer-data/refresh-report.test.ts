@@ -121,7 +121,7 @@ describe('refreshReport', () => {
     ]);
     expect(f.calls.url[0]?.[1]).toBe(new URL(partitionFilePath(1, 'spans'), BASE).href);
     expect(f.calls.drop).toEqual([]);
-    expect(f.calls.statements).toHaveLength(5);
+    expect(f.calls.statements).toHaveLength(7);
     expect(f.calls.clearCache).toBe(1);
     expect(manifest.partitions.map((p) => p.n)).toEqual([0, 1]);
     expect(dataSource?.manifest).toBe(manifest);
@@ -207,7 +207,7 @@ describe('refreshReport failures', () => {
     );
     expect(manifest.partitions.map((p) => p.n)).toEqual([2]);
     expect(warnings).toHaveLength(2);
-    expect(f.calls.statements).toHaveLength(5);
+    expect(f.calls.statements).toHaveLength(7);
     expect(f.calls.clearCache).toBe(1);
   });
 
@@ -218,7 +218,7 @@ describe('refreshReport failures', () => {
     };
     await expect(run(f, manifestOf([0]), manifestOf([1]))).rejects.toThrow('register failed');
     expect(f.calls.drop.sort()).toEqual([partitionFilePath(1, 'spans'), partitionFilePath(1, 'logs')].sort());
-    expect(f.calls.statements).toHaveLength(5);
+    expect(f.calls.statements).toHaveLength(7);
     expect(f.calls.clearCache).toBe(0);
   });
 });
@@ -241,14 +241,14 @@ describe('refreshReport unchanged and rollback', () => {
     const next = { ...manifestOf([0]), updatedAt: '2026-11-06T00:00:09.000Z' };
     const result = await run(f, manifestOf([0]), next);
     expect(result.dataSource).not.toBeNull();
-    expect(f.calls.statements).toHaveLength(5);
+    expect(f.calls.statements).toHaveLength(7);
   });
 
   test('a view that fails restores the previous views, drops the new files and rethrows', async () => {
     const f = fakes('site', (_s, nth) => nth === 3);
     await expect(run(f, manifestOf([0]), manifestOf([1]))).rejects.toThrow('view failed');
-    // 3 statements of the new manifest (the third failed), then the previous manifest's five views.
-    expect(f.calls.statements).toHaveLength(8);
+    // 3 statements of the new manifest (the third failed), then the previous manifest's seven views.
+    expect(f.calls.statements).toHaveLength(10);
     const restored = f.calls.statements.slice(3);
     expect(restored.filter((s) => s.includes('000000'))).toHaveLength(2);
     expect(restored.some((s) => s.includes('000001'))).toBe(false);

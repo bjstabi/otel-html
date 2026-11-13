@@ -22,10 +22,13 @@ const TABLE_NOTES: Readonly<Record<Table, string>> = {
   traces: 'One row per trace seen in the partition: a summary of its spans.',
   patterns:
     'Log pattern clusters (Drain) with their counts in the partition. See [Patterns](#patterns) for how rows combine.',
+  span_rollups: 'Spans counted per time grain and dimension combination (format 5; optional per partition).',
+  log_rollups:
+    'Log records counted per time grain and dimension combination (format 5; optional per partition).',
 };
 
 const MANIFEST_FIELDS = {
-  formatVersion: '`4`',
+  formatVersion: '`4` or `5`',
   otelHtmlVersion: 'the version of otel-html that wrote the report',
   title: 'the report title',
   epochUnixNano: "decimal nanoseconds of the report's epoch",
@@ -50,6 +53,10 @@ const PARTITION_FILE_FIELDS = {
   timeMax: "the largest value of the table's time column, as int64 text, or null when there are no rows",
   values:
     'maps each statistics key to its distinct values in the file, or to null when the file has more than the cap (or the table cannot answer the key)',
+  timeEndMax:
+    'format 5, `spans` and `traces` files only, optional: the largest end time, as int64 text, or null when there are no rows',
+  rollup:
+    'format 5, rollup tables only, required: `{ grainNs, dimensions, durationBuckets? }`, what the file groups by',
 } satisfies Record<keyof PartitionFile, string>;
 
 const fieldRows = (fields: Readonly<Record<string, string>>): string =>
@@ -120,8 +127,8 @@ A series whose histogram bounds change is a new series.`,
 - Readers combine patterns across partitions by template.`,
     `## The views
 
-The viewer reads the data only through five views, one per table (\`spans\`, \`logs\`, \`points\`, \`traces\`,
-\`patterns\`). Each view has the name of its table and is the union of that table's file in every partition that lists
+The viewer reads the data only through seven views, one per table (\`spans\`, \`logs\`, \`points\`, \`traces\`,
+\`patterns\`, \`span_rollups\`, \`log_rollups\`). Each view has the name of its table and is the union of that table's file in every partition that lists
 one, in manifest order. It has the table's columns, in the order above, then two virtual columns:
 
 | column | type | meaning |
@@ -139,7 +146,7 @@ A table that no partition holds is an empty view with the same columns.
 - Attributes are JSON text columns, and an attribute is read by JSON Pointer (RFC 6901, \`~\` as \`~0\`, \`/\` as \`~1\`). An
   object with a \`$\`-prefixed or \`__proto__\` key is stored as \`{"$m": [[key, value], ...]}\`, so a reader looks a key up
   in the object first and then in those pairs.
-- A backend satisfies the contract by defining the same views with these columns: the five names, the table columns
+- A backend satisfies the contract by defining the same views with these columns: the seven names, the table columns
   above and the two virtual columns.`,
     `## Manifest (\`data/manifest.js\`)
 

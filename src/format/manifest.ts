@@ -8,7 +8,7 @@ import {
   ViewListShapeSchema,
 } from '../dashboards/schema.js';
 import { OtelHtmlError } from '../model/errors.js';
-import { TABLES, type Table } from './parquet/columns.js';
+import { type RollupTable, TABLES, type Table } from './parquet/columns.js';
 import type { FileStatistics } from './parquet/stats.js';
 import {
   ASSETS_BASE_RE,
@@ -22,8 +22,8 @@ import { describe, parseWith } from './validate.js';
 import {
   CHUNK_READABLE_FORMAT_VERSIONS,
   type FormatVersion,
-  PARTITION_FORMAT_VERSION,
   READABLE_FORMAT_VERSIONS,
+  READABLE_PARTITION_FORMATS,
 } from './version.js';
 
 export interface ManifestChunk {
@@ -98,6 +98,16 @@ const ConfigSchemaV4 = z.strictObject({
   views: ConfigSchema.shape.views,
 });
 
+/** The v5 config: the v4 one, and the viewer may state `defaultWindow`. */
+const ConfigSchemaV5 = z.strictObject({
+  viewer: z.strictObject({
+    ...ConfigSchemaV4.shape.viewer.shape,
+    defaultWindow: z.exactOptional(z.string().regex(/^[1-9][0-9]*(m|h|d)$/, 'a window like 7d, 90m or 1h')),
+  }),
+  dashboards: ConfigSchema.shape.dashboards,
+  views: ConfigSchema.shape.views,
+});
+
 function refineConfig(
   config: { viewer: { defaultDashboard: string }; dashboards: ResolvedDashboard[] },
   ctx: z.RefinementCtx,
@@ -164,10 +174,28 @@ export function parseManifest(input: unknown): Manifest {
   return parseWith(ManifestSchema, input, 'manifest');
 }
 
+/** The one grain every rollup file uses: 2^16 milliseconds in nanoseconds. */
+export const ROLLUP_GRAIN_NS = 65_536_000_000;
+
+/** What a rollup file groups by (format 5). `dimensions` use the statistics-key grammar, sorted. */
+export interface RollupDescription {
+  grainNs: typeof ROLLUP_GRAIN_NS;
+  dimensions: string[];
+  durationBuckets?: 'log2x8';
+}
+
 export interface PartitionFile extends FileStatistics {
   path: string;
   bytes: number;
+  /** Format 5, `spans` and `traces` files: the largest end time (int64 text), `null` for no rows. */
+  timeEndMax?: string | null;
+  /** Format 5, the two rollup tables only, where it is required. */
+  rollup?: RollupDescription;
 }
+
+/** Format 4 lists the five base tables; format 5 may also list the two rollup tables. */
+export type StatisticsKeys = Record<Exclude<Table, RollupTable>, string[]> &
+  Partial<Record<RollupTable, string[]>>;
 
 export interface PartitionEntry {
   n: number;
@@ -176,7 +204,8 @@ export interface PartitionEntry {
 }
 
 export interface ManifestV4 {
-  formatVersion: typeof PARTITION_FORMAT_VERSION;
+  /** 4 or 5; the name stays, and the format-5 additions are optional and absent in format 4. */
+  formatVersion: (typeof READABLE_PARTITION_FORMATS)[number];
   otelHtmlVersion: string;
   title: string;
   epochUnixNano: string;
@@ -187,7 +216,7 @@ export interface ManifestV4 {
   range: { start: string; end: string } | null;
   totals: Record<Signal, number>;
   partitions: PartitionEntry[];
-  statisticsKeys: Record<Table, string[]>;
+  statisticsKeys: StatisticsKeys;
   engine: { version: string; format: 'local' | 'site'; assetsBase: string };
   config: {
     viewer: ResolvedConfig['viewer'] & { facetValueCap?: number; facetKeyCap?: number };
@@ -214,99 +243,171 @@ const int64Text = z
     return n >= INT64_MIN && n <= INT64_MAX;
   }, 'a value within signed 64 bits');
 
-const tableKeyed = <T extends z.ZodType>(v: T): z.ZodObject<Record<Table, T>, z.core.$strict> =>
+const BASE_TABLES = ['spans', 'logs', 'points', 'traces', 'patterns'] as const;
+
+const tableKeyed = <T extends z.ZodType>(
+  v: T,
+): z.ZodObject<Record<(typeof BASE_TABLES)[number], T>, z.core.$strict> =>
   z.strictObject({ spans: v, logs: v, points: v, traces: v, patterns: v });
 
-export const PartitionFileSchema: z.ZodType<PartitionFile> = z.strictObject({
+const PartitionFileShape = {
   path: z.string(),
   bytes: nonNegInt,
   rows: nonNegInt,
   timeMin: int64Text.nullable(),
   timeMax: int64Text.nullable(),
   values: z.record(z.string(), z.array(z.string()).nullable()),
+};
+
+/** A format-4 file entry; also the format-5 entry of every table that has no format-5 field. */
+export const PartitionFileSchema: z.ZodType<PartitionFile> = z.strictObject(PartitionFileShape);
+
+const RollupDescriptionSchema: z.ZodType<RollupDescription> = z.strictObject({
+  grainNs: z.literal(ROLLUP_GRAIN_NS),
+  dimensions: z.array(z.string()),
+  durationBuckets: z.exactOptional(z.literal('log2x8')),
 });
+
+const TimeEndPartitionFileSchema: z.ZodType<PartitionFile> = z.strictObject({
+  ...PartitionFileShape,
+  timeEndMax: z.exactOptional(int64Text.nullable()),
+});
+
+const RollupPartitionFileSchema: z.ZodType<PartitionFile> = z.strictObject({
+  ...PartitionFileShape,
+  rollup: RollupDescriptionSchema,
+});
+
+const refineManifest = (m: ManifestV4, ctx: z.RefinementCtx): void => {
+  refineConfig(m.config, ctx, []);
+  if (m.range !== null && after(m.range.start, m.range.end)) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['range', 'end'],
+      message: `a time at or after start (${m.range.start})`,
+    });
+  }
+  let prev = -1;
+  m.partitions.forEach((p, i) => {
+    if (p.n <= prev) {
+      ctx.addIssue({ code: 'custom', path: ['partitions', i, 'n'], message: `a number above ${prev}` });
+    }
+    prev = p.n;
+    for (const t of TABLES) {
+      const f = p.files[t];
+      if (f?.timeMin != null && f.timeMax != null && after(f.timeMin, f.timeMax)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['partitions', i, 'files', t, 'timeMax'],
+          message: `a time at or after timeMin (${f.timeMin})`,
+        });
+      }
+      if (f?.timeMin != null && f.timeEndMax != null && after(f.timeMin, f.timeEndMax)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['partitions', i, 'files', t, 'timeEndMax'],
+          message: `a time at or after timeMin (${f.timeMin})`,
+        });
+      }
+    }
+    for (const t of TABLES) {
+      const f = p.files[t];
+      if (f === undefined) continue;
+      const expected = partitionFilePath(p.n, t);
+      if (f.path !== expected) {
+        ctx.addIssue({ code: 'custom', path: ['partitions', i, 'files', t, 'path'], message: expected });
+      }
+    }
+  });
+};
+
+const ManifestShape = {
+  otelHtmlVersion: z.string(),
+  title: z.string(),
+  epochUnixNano: z.string().regex(/^[0-9]+$/, 'decimal nanoseconds'),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  complete: z.boolean(),
+  range: z.strictObject({ start: int64Text, end: int64Text }).nullable(),
+  totals: z.strictObject({ spans: nonNegInt, logs: nonNegInt, metrics: nonNegInt }),
+  engine: z.strictObject({
+    version: z.string().regex(ENGINE_VERSION_RE, 'an engine version like 1.4.1 (no /)'),
+    format: z.enum(['local', 'site']),
+    assetsBase: z.string().regex(ASSETS_BASE_RE, 'assets/ or a relative path like ../../assets/0.3.0/'),
+  }),
+};
+
+const partitionEntry = <F extends z.ZodType>(files: F) =>
+  z.array(
+    z.strictObject({
+      n: nonNegInt,
+      source: z.string().regex(SOURCE_RE, 'a source like flush:3 or ci:run#12'),
+      files,
+    }),
+  );
 
 const ManifestV4Schema: z.ZodType<ManifestV4> = z
   .strictObject({
-    formatVersion: z.literal(PARTITION_FORMAT_VERSION),
-    otelHtmlVersion: z.string(),
-    title: z.string(),
-    epochUnixNano: z.string().regex(/^[0-9]+$/, 'decimal nanoseconds'),
-    createdAt: z.string(),
-    updatedAt: z.string(),
-    complete: z.boolean(),
-    range: z.strictObject({ start: int64Text, end: int64Text }).nullable(),
-    totals: z.strictObject({ spans: nonNegInt, logs: nonNegInt, metrics: nonNegInt }),
-    partitions: z.array(
+    formatVersion: z.literal(4),
+    ...ManifestShape,
+    partitions: partitionEntry(
       z.strictObject({
-        n: nonNegInt,
-        source: z.string().regex(SOURCE_RE, 'a source like flush:3 or ci:run#12'),
-        files: z.strictObject({
-          spans: z.exactOptional(PartitionFileSchema),
-          logs: z.exactOptional(PartitionFileSchema),
-          points: z.exactOptional(PartitionFileSchema),
-          traces: z.exactOptional(PartitionFileSchema),
-          patterns: z.exactOptional(PartitionFileSchema),
-        }),
+        spans: z.exactOptional(PartitionFileSchema),
+        logs: z.exactOptional(PartitionFileSchema),
+        points: z.exactOptional(PartitionFileSchema),
+        traces: z.exactOptional(PartitionFileSchema),
+        patterns: z.exactOptional(PartitionFileSchema),
       }),
     ),
     statisticsKeys: tableKeyed(z.array(z.string())),
-    engine: z.strictObject({
-      version: z.string().regex(ENGINE_VERSION_RE, 'an engine version like 1.4.1 (no /)'),
-      format: z.enum(['local', 'site']),
-      assetsBase: z.string().regex(ASSETS_BASE_RE, 'assets/ or a relative path like ../../assets/0.3.0/'),
-    }),
     config: ConfigSchemaV4,
   })
-  .superRefine((m, ctx) => {
-    refineConfig(m.config, ctx, []);
-    if (m.range !== null && after(m.range.start, m.range.end)) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['range', 'end'],
-        message: `a time at or after start (${m.range.start})`,
-      });
-    }
-    let prev = -1;
-    m.partitions.forEach((p, i) => {
-      if (p.n <= prev) {
-        ctx.addIssue({ code: 'custom', path: ['partitions', i, 'n'], message: `a number above ${prev}` });
-      }
-      prev = p.n;
-      for (const t of TABLES) {
-        const f = p.files[t];
-        if (f?.timeMin != null && f.timeMax != null && after(f.timeMin, f.timeMax)) {
-          ctx.addIssue({
-            code: 'custom',
-            path: ['partitions', i, 'files', t, 'timeMax'],
-            message: `a time at or after timeMin (${f.timeMin})`,
-          });
-        }
-      }
-      for (const t of TABLES) {
-        const f = p.files[t];
-        if (f === undefined) continue;
-        const expected = partitionFilePath(p.n, t);
-        if (f.path !== expected) {
-          ctx.addIssue({ code: 'custom', path: ['partitions', i, 'files', t, 'path'], message: expected });
-        }
-      }
-    });
-  });
+  .superRefine(refineManifest);
+
+/** Format 5: the format-4 body, plus `timeEndMax`, rollup files and statistics keys, and `viewer.defaultWindow`. */
+export const ManifestV5Schema: z.ZodType<ManifestV4> = z
+  .strictObject({
+    formatVersion: z.literal(5),
+    ...ManifestShape,
+    partitions: partitionEntry(
+      z.strictObject({
+        spans: z.exactOptional(TimeEndPartitionFileSchema),
+        logs: z.exactOptional(PartitionFileSchema),
+        points: z.exactOptional(PartitionFileSchema),
+        traces: z.exactOptional(TimeEndPartitionFileSchema),
+        patterns: z.exactOptional(PartitionFileSchema),
+        span_rollups: z.exactOptional(RollupPartitionFileSchema),
+        log_rollups: z.exactOptional(RollupPartitionFileSchema),
+      }),
+    ),
+    statisticsKeys: z.strictObject({
+      ...tableKeyed(z.array(z.string())).shape,
+      span_rollups: z.exactOptional(z.array(z.string())),
+      log_rollups: z.exactOptional(z.array(z.string())),
+    }),
+    config: ConfigSchemaV5,
+  })
+  .superRefine(refineManifest);
 
 function parseManifestV4(input: unknown): ManifestV4 {
   return parseWith(ManifestV4Schema, input, 'manifest');
 }
 
-export function isV4(m: AnyManifest): m is ManifestV4 {
-  return m.formatVersion === PARTITION_FORMAT_VERSION;
+function parseManifestV5(input: unknown): ManifestV4 {
+  return parseWith(ManifestV5Schema, input, 'manifest');
 }
 
-/** Dispatch on `formatVersion`: 4 is a partition manifest, 1-3 a chunk manifest, anything else is invalid-report. */
+/** A partition manifest (format 4 or 5), as against a chunk manifest (formats 1 to 3). */
+export function isPartitioned(m: AnyManifest): m is ManifestV4 {
+  return READABLE_PARTITION_FORMATS.some((f) => f === m.formatVersion);
+}
+
+/** Dispatch on `formatVersion`: 4 and 5 are partition manifests, 1-3 a chunk manifest, anything else is invalid-report. */
 export function parseAnyManifest(input: unknown): AnyManifest {
   const v =
     typeof input === 'object' && input !== null && 'formatVersion' in input ? input.formatVersion : undefined;
-  if (v === PARTITION_FORMAT_VERSION) return parseManifestV4(input);
+  if (v === 4) return parseManifestV4(input);
+  if (v === 5) return parseManifestV5(input);
   if (CHUNK_READABLE_FORMAT_VERSIONS.some((c) => c === v)) return parseManifest(input);
   throw new OtelHtmlError('invalid-report', {
     path: 'manifest.formatVersion',

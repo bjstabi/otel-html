@@ -79,7 +79,7 @@ describe('upgradeReport', () => {
     writeFileSync(join(dir, 'index.html'), '<html>old</html>');
     const before = hashTree(dir, 'data');
     const r = await upgradeReport(deps(), dir);
-    expect(r.formatVersion).toBe(4);
+    expect(r.formatVersion).toBe(5);
     expect(hashTree(dir, 'data')).toEqual(before);
     expect(readFileSync(join(dir, 'index.html'), 'utf8')).toContain('assets/viewer.abc123.js');
     expect(readdirSync(join(dir, 'assets'))).toContain('viewer.abc123.js');
@@ -181,7 +181,7 @@ describe('otel-html upgrade', () => {
     const dir = await formatFourReport();
     const r = await run(['upgrade', '$dir'], dir);
     expect(r.code).toBe(0);
-    expect(r.stdout).toMatch(/^upgraded .+: viewer \d+\.\d+\.\d+\S*, format 4\n$/);
+    expect(r.stdout).toMatch(/^upgraded .+: viewer \d+\.\d+\.\d+\S*, format 5\n$/);
   });
 
   test('a format 3 report exits 2 and leaves it alone', async () => {

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import type { ConfigInput } from '../../src/config/schema.js';
 import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
-import { isV4, type ManifestV4, parseAnyManifest } from '../../src/format/manifest.js';
+import { isPartitioned, type ManifestV4, parseAnyManifest } from '../../src/format/manifest.js';
 import { decodeTable } from '../../src/format/parquet/codec.js';
 import { MANIFEST_KEY } from '../../src/format/paths.js';
 import type { FileSystem } from '../../src/writer/ports.js';
@@ -23,7 +23,7 @@ function manifest(w: TestWriter): ManifestV4 {
   const text = w.fs.snapshot().get(`${OUT}/data/manifest.js`);
   if (text === undefined) throw new Error('no manifest');
   const m = parseAnyManifest(reviveDataJson(unwrapDataFile(text, MANIFEST_KEY)));
-  if (!isV4(m)) throw new Error('not v4');
+  if (!isPartitioned(m)) throw new Error('not v4');
   return m;
 }
 

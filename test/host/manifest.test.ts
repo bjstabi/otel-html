@@ -34,7 +34,7 @@ describe('readHostManifest', () => {
     const report = await writeReportDir(fixture);
     cleanups.push(report.close);
     const read = await readHostManifest(createNodeFileSystem(), report.dir);
-    expect(read.manifest.formatVersion).toBe(4);
+    expect(read.manifest.formatVersion).toBe(5);
     expect(read.script.startsWith('__OH__.push("manifest",')).toBe(true);
     const sum = read.manifest.partitions
       .flatMap((p) => Object.values(p.files))

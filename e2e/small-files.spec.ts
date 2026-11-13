@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { reviveDataJson, unwrapDataFile } from '../src/format/data-file.js';
-import { isV4, parseAnyManifest } from '../src/format/manifest.js';
+import { isPartitioned, parseAnyManifest } from '../src/format/manifest.js';
 import { MANIFEST_KEY } from '../src/format/paths.js';
 import { SMALL_FILE_BYTES } from '../src/viewer/data/engine/small-files.js';
 import { reportDir } from './fixture.js';
@@ -17,7 +17,7 @@ import { runWorkerSql } from './worker-sql.js';
 async function manifestPaths(): Promise<string[]> {
   const text = readFileSync(new URL('data/manifest.js', reportDir('main', 'http')), 'utf8');
   const manifest = parseAnyManifest(reviveDataJson(unwrapDataFile(text, MANIFEST_KEY)));
-  if (!isV4(manifest)) throw new Error('not a v4 manifest');
+  if (!isPartitioned(manifest)) throw new Error('not a v4 manifest');
   return manifest.partitions.flatMap((p) => Object.values(p.files).map((f) => f.path));
 }
 
@@ -127,7 +127,7 @@ test(
     test.skip(testInfo.project.name.endsWith('-file'), 'a local report holds every file as a buffer already');
     const text = readFileSync(new URL('data/manifest.js', reportDir('main', 'http')), 'utf8');
     const manifest = parseAnyManifest(reviveDataJson(unwrapDataFile(text, MANIFEST_KEY)));
-    if (!isV4(manifest)) throw new Error('not a v4 manifest');
+    if (!isPartitioned(manifest)) throw new Error('not a v4 manifest');
     const small = manifest.partitions.flatMap((p) =>
       Object.values(p.files)
         .filter((f) => f.bytes <= SMALL_FILE_BYTES)
