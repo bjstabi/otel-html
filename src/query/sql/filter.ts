@@ -11,7 +11,7 @@ import {
   sql,
   verbatim,
 } from '@uwdata/mosaic-sql';
-import type { ManifestV4 } from '../../format/manifest.js';
+import { type ManifestV4, ROLLUP_GRAIN_NS } from '../../format/manifest.js';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { TraceId } from '../../model/ids.js';
 import { type PruneHints, textPredicate, translateCondition } from './ottl.js';
@@ -55,6 +55,29 @@ export interface BuiltFilter {
   hints: PruneHints;
 }
 
+const GRAIN = BigInt(ROLLUP_GRAIN_NS);
+/** Rounding of a relative time held as a `number` (an epoch more than 104 days away): a window end this close to a grain is that grain. */
+const SNAP_NS = 1_024n;
+
+/**
+ * A long window on whole grains of absolute time (spec 6.3), in bigint. The viewer aligns its windows, but hands them
+ * over as numbers relative to the epoch, which round above 2^53 ns (about 104 days), so an end lands a few ns off its
+ * grain: within `SNAP_NS` of a grain it is that grain; otherwise the window grows outward to the next one.
+ */
+function onGrains(w: AbsWindow | null): AbsWindow | null {
+  if (w === null) return null;
+  const mod = (t: bigint): bigint => ((t % GRAIN) + GRAIN) % GRAIN;
+  const down = (t: bigint): bigint => {
+    const r = mod(t);
+    return GRAIN - r <= SNAP_NS ? t + (GRAIN - r) : t - r;
+  };
+  const up = (t: bigint): bigint => {
+    const r = mod(t);
+    return r <= SNAP_NS ? t - r : t + (GRAIN - r);
+  };
+  return { start: down(w.start), end: up(w.end) };
+}
+
 function mergeHints(own: PruneHints, extra: PruneHints | undefined): PruneHints {
   if (extra === undefined) return own;
   const out = new Map(own);
@@ -75,7 +98,7 @@ export function buildFilter(opts: FilterOptions): BuiltFilter {
   const t = condition === null ? null : translateCondition(condition, context);
   const epoch = BigInt(opts.manifest.epochUnixNano);
   const long = opts.long === true;
-  const window = absWindow(opts.window, epoch);
+  const window = long ? onGrains(absWindow(opts.window, epoch)) : absWindow(opts.window, epoch);
   const hints = mergeHints(t?.hints ?? new Map(), opts.hints);
   if (opts.traceId != null && opts.traceFiles === undefined) {
     throw new OtelHtmlError('usage', {

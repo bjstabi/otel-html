@@ -90,7 +90,7 @@ export async function refreshReport(
   }
   queryEngine.clearCache();
   const dataSource = tracedDataSource(
-    createDuckDbDataSource({ engine: queryEngine, manifest, logger: deps.logger }),
+    createDuckDbDataSource({ engine: queryEngine, manifest, logger: deps.logger, replaceRollupViews: true }),
   );
   return { dataSource, manifest };
 }

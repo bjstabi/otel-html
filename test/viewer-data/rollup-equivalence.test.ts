@@ -52,6 +52,7 @@ const SERVICE_NAMES: readonly (readonly [string, string])[] = [
   ['an empty service.name', 'resource.attributes["service.name"] == ""'],
   ['an int service.name', 'resource.attributes["service.name"] == 7'],
   ['the derived name of a resource without one', 'resource.attributes["service.name"] == "unknown_service"'],
+  ['a bool service.name', 'resource.attributes["service.name"] == true'],
   ['a missing service.name', 'resource.attributes["service.name"] == nil'],
 ];
 
@@ -231,6 +232,7 @@ describe('a service.name that is not a plain name', () => {
     expect(await total(SERVICE_NAMES[0]?.[1] ?? '')).toBe(1);
     expect(await total(SERVICE_NAMES[1]?.[1] ?? '')).toBe(1);
     expect(await total(SERVICE_NAMES[2]?.[1] ?? '')).toBe(1);
+    expect(await total('resource.attributes["service.name"] == true')).toBe(1);
     expect(await total(SERVICE_NAMES[3]?.[1] ?? '')).toBe(0);
   });
 });

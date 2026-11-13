@@ -83,10 +83,17 @@ export function viewStatements(
 /**
  * The views of the rollup tables, created by the data source on the first statement that reads a rollup file (binding
  * a view reads each file's footer, which a page that never routes to the rollups should not pay). `CREATE VIEW IF NOT
- * EXISTS`: a view that exists (a host's, or one made for this manifest earlier) is kept.
+ * EXISTS`: a view that exists (a host's, or one made for this manifest earlier) is kept; with `replace` (the source made by a
+ * Refresh) it is bound again, whatever an earlier source left.
  */
-export function rollupViewStatements(manifest: ManifestV4, resolve: (path: string) => string): string[] {
-  return ROLLUP_TABLES.map((table) => viewStatement(manifest, table, resolve, 'CREATE VIEW IF NOT EXISTS'));
+export function rollupViewStatements(
+  manifest: ManifestV4,
+  resolve: (path: string) => string,
+  replace = false,
+): string[] {
+  return ROLLUP_TABLES.map((table) =>
+    viewStatement(manifest, table, resolve, replace ? 'CREATE OR REPLACE VIEW' : 'CREATE VIEW IF NOT EXISTS'),
+  );
 }
 
 /** `DROP VIEW IF EXISTS` for each rollup table: a Refresh forgets the views so the next statement that needs them binds the new file list. */

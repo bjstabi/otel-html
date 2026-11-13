@@ -247,6 +247,9 @@ function checkLimit(limit: number): void {
   }
 }
 
+/** The newest data source made over each engine: the one whose manifest the rollup views follow. */
+const generations = new WeakMap<QueryEngine, number>();
+
 /** The format-4 data source over a query engine (D19): no Mosaic type appears here. `close()` is `engine.close()`. */
 export function createDuckDbDataSource(opts: {
   engine: QueryEngine;
@@ -255,8 +258,13 @@ export function createDuckDbDataSource(opts: {
   logger?: Pick<Console, 'warn'>;
   /** The facet and resource-value caps; the manifest's (the writer's), or the defaults for a report without them. */
   caps?: FacetCaps;
+  /** The source of a Refresh: its first rollup statement binds the rollup views to its manifest even if some exist. */
+  replaceRollupViews?: boolean;
 }): DataSource {
   const { engine, manifest } = opts;
+  // A newer source over the same engine owns the rollup views: this one may not bind them any more (a Refresh happened).
+  const generation = (generations.get(engine) ?? 0) + 1;
+  generations.set(engine, generation);
   const epoch = BigInt(manifest.epochUnixNano);
   const { facetValueCap, facetKeyCap } = manifest.config.viewer;
   const caps: FacetCaps = opts.caps ?? {
@@ -294,7 +302,11 @@ export function createDuckDbDataSource(opts: {
   const ensureRollupViews = (): Promise<void> => {
     if (!engine.tempTables) return Promise.resolve();
     rollupViews ??= (async () => {
-      for (const statement of rollupViewStatements(manifest, (p) => p)) await engine.exec(statement);
+      for (const statement of rollupViewStatements(manifest, (p) => p, opts.replaceRollupViews === true)) {
+        if (generations.get(engine) !== generation)
+          throw new DOMException('A newer data source owns the rollup views', 'AbortError');
+        await engine.exec(statement);
+      }
     })().catch((error: unknown) => {
       rollupViews = null;
       throw error;

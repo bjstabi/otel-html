@@ -315,6 +315,7 @@ function logPartitions(): LogSpec[][] {
     { svc: '', run: 'r2', timeNs: edge(151), severity: 9 },
     { svc: 'int', svcAttr: { intValue: '7' }, run: 'r2', timeNs: edge(152), severity: 9 },
     { svc: 'absent', svcAttr: null, run: 'r2', timeNs: edge(153), severity: 9 },
+    { svc: 'bool', svcAttr: { boolValue: true }, run: 'r2', timeNs: edge(154), severity: 9 },
   );
   (out[2] ?? []).push(
     { svc: 'svc-a', run: 'r3', timeNs: edge(300), severity: 9 },
