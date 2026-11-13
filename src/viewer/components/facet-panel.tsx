@@ -547,7 +547,7 @@ type Requested =
  * Under a long window the page asks for core facets only; this holds the one extra request the reader can make for the
  * attributes. It belongs to `requestKey` (the filter and the window) and to `source` (the data source: a Refresh makes
  * a new one, and what was loaded from the old one is out of date): when either changes the button is back. A response
- * for a request that is no longer current is dropped.
+ * is dropped only when a newer request replaced its request.
  */
 export function useAttributeFacets(
   long: boolean,
@@ -559,12 +559,13 @@ export function useAttributeFacets(
   const [requested, setRequested] = useState<Requested | null>(null);
   const loadRef = useRef(load);
   loadRef.current = load;
-  const current = useRef({ requestKey, source });
-  current.current = { requestKey, source };
+  // the latest request: a response applies only while no newer request replaced it (moving away and back does not)
+  const latest = useRef<object | null>(null);
   const request = useCallback((): void => {
     const own = { key: requestKey, source };
-    const fresh = (): boolean =>
-      current.current.requestKey === own.key && current.current.source === own.source;
+    const token = {};
+    latest.current = token;
+    const fresh = (): boolean => latest.current === token;
     setRequested({ ...own, status: 'loading' });
     loadRef.current().then(
       (facets) => {

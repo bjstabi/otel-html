@@ -226,4 +226,17 @@ describe('useAttributeFacets', () => {
     expect(screen.queryByText('loaded')).toBeNull();
     expect(button()).toBeTruthy();
   });
+
+  test('a request still in flight when the key moves away and back is answered', async () => {
+    const user = userEvent.setup();
+    const source = {};
+    const a = pending();
+    const b = pending();
+    const { rerender } = render(<Harness k="a" source={source} load={a.load} />);
+    await user.click(button());
+    rerender(<Harness k="b" source={source} load={b.load} />);
+    await act(async () => a.resolve());
+    rerender(<Harness k="a" source={source} load={a.load} />);
+    expect(await screen.findByText('loaded')).toBeTruthy();
+  });
 });
