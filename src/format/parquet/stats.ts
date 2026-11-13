@@ -130,17 +130,25 @@ export function fileStatistics(
 }
 
 const END_COLUMN = 'end_time_unix_nano';
+const START_COLUMN = 'start_time_unix_nano';
 
 /** The tables whose files record `timeEndMax` (format 5). */
 export const hasTimeEndMax = (table: Table): boolean => table === 'spans' || table === 'traces';
 
-/** The largest end time (int64 text) of `batch`, null when no row has one. Only for the tables `hasTimeEndMax` names. */
+/**
+ * The latest time any row of `batch` reaches, as int64 text: the maximum over rows of `max(start, end)`, null when no
+ * row has a time. A row that ends before it starts counts at its start, so the bound is never below `timeMin`.
+ * It is an upper bound on any row's time, used to skip files whose rows all end before a window. Only for the
+ * tables `hasTimeEndMax` names.
+ */
 export function timeEndMaxOf(batch: ColumnBatch): string | null {
   let max: bigint | null = null;
   const ends = batch.cells[END_COLUMN] ?? [];
+  const starts = batch.cells[START_COLUMN] ?? [];
   for (let i = 0; i < batch.length; i++) {
-    const t = ends[i];
-    if (typeof t === 'bigint' && (max === null || t > max)) max = t;
+    const e = ends[i];
+    const s = starts[i];
+    for (const t of [e, s]) if (typeof t === 'bigint' && (max === null || t > max)) max = t;
   }
   return max === null ? null : max.toString();
 }

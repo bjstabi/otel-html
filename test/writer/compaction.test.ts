@@ -972,3 +972,52 @@ describe('compactPartitions: timeEndMax', () => {
     expect(out.files.logs).toBeUndefined();
   });
 });
+
+describe('compactPartitions: rows that end before they start, and given rollups', () => {
+  const early = (i: number, start: bigint): Row => ({
+    ...spanRow(i, lcg(i)),
+    start_time_unix_nano: start,
+    end_time_unix_nano: start - 100n,
+    duration_ns: 0n,
+  });
+
+  test('timeEndMax is never below timeMin, at cut and after compaction, for spans and traces', async () => {
+    const fs = createMemoryFileSystem();
+    const entries = await writeRolled(fs, [{ spans: [early(1, 500n)] }, { spans: [early(2, 900n)] }]);
+    for (const e of entries) {
+      expect(e.files.spans?.timeEndMax).toBe(e.files.spans?.timeMin);
+      expect(e.files.traces?.timeEndMax).toBe(e.files.traces?.timeMin);
+    }
+    const out = await compactPartitions(fs, OUT, entries, rollupOpts(2));
+    expect(out.files.spans?.timeMin).toBe('500');
+    expect(out.files.spans?.timeEndMax).toBe('900');
+    expect(out.files.traces?.timeEndMax).toBe('900');
+  });
+
+  test('equal descriptions add the rollup files as given; they are not recomputed from the spans', async () => {
+    const fs = createMemoryFileSystem();
+    const a = spansOf(1, 30, 0);
+    const b = spansOf(2, 25, 100);
+    const entries = await writeRolled(fs, [{ spans: a }, { spans: b }]);
+    // Hand-written rollup for the first input: every count and sum tenfold, which no recompute reproduces.
+    const first = entries[0];
+    const file = first?.files.span_rollups;
+    if (first === undefined || file === undefined) throw new Error('no rollup');
+    const given = (await rowsOfFile(fs, first, 'span_rollups')).map((r) => ({
+      ...r,
+      n: (Reflect.get(r, 'n') as bigint) * 10n,
+      duration_sum: (Reflect.get(r, 'duration_sum') as bigint) * 10n,
+    }));
+    await fs.writeBytes(
+      `${OUT}/${file.path}`,
+      encodeTable('span_rollups', given, { rowGroupRows: ROW_GROUP }),
+    );
+    const second = entries[1];
+    if (second === undefined) throw new Error('no second');
+    const out = await compactPartitions(fs, OUT, entries, rollupOpts(2));
+    const expected = addRollupRows(given, await rowsOfFile(fs, second, 'span_rollups'));
+    expect(canon(await rowsOfFile(fs, out, 'span_rollups'))).toEqual(canon(expected));
+    const recomputed = spanRollupRows(batchFromRows('spans', [...a, ...b]), DIMS);
+    expect(canon(expected)).not.toEqual(canon(recomputed));
+  });
+});

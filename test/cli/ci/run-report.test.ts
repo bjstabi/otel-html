@@ -493,6 +493,21 @@ describe('format 5 and format 4 run reports', () => {
     expect(parseAnyManifest(plan.manifest)).toEqual(plan.manifest);
   });
 
+  test('the range comes from the base tables: a rollup grain that starts before the first span is not data', async () => {
+    const m = await newManifest();
+    const part: UpdatePartition = {
+      source: 'job:7#flush:0',
+      files: {
+        spans: { ...file('partitions/0/spans.parquet', 3, '100', '200'), timeEndMax: '250' },
+        span_rollups: { ...rollupFile('partitions/0/span_rollups.parquet'), timeMin: '1', timeMax: '300' },
+      },
+      carried: true,
+    };
+    const plan = sync(m, emptyRunState(1), [ju(push(1, [part]))]);
+    // The push's ci partition starts at 5 and ends at 9; the rollup's 1 and 300 are not data times.
+    expect(plan.manifest.range).toEqual({ start: '5', end: '200' });
+  });
+
   test('a format-4 run report that receives a format-5 update still parses with ManifestV4Schema and has no rollup file', async () => {
     const { span_rollups: _s, log_rollups: _l, ...keys } = (await newManifest()).statisticsKeys;
     const m: ManifestV4 = { ...(await newManifest()), formatVersion: 4, statisticsKeys: keys };

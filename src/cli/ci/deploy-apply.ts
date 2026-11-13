@@ -2,6 +2,7 @@ import { copyFile, lstat, mkdir, readdir, rmdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { resolveApiConfig } from '../../api/report.js';
 import type { ResolvedConfig } from '../../config/schema.js';
+import { ROLLUP_OF } from '../../format/parquet/columns.js';
 import { MANIFEST_PATH } from '../../format/paths.js';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { FileSystem } from '../../writer/ports.js';
@@ -575,9 +576,10 @@ function stripEvent(run: SiteRun & { event: string }): SiteRun {
 function earliestNano(u: UpdateJson, createdAt: string): string {
   let min: bigint | undefined;
   const parts = [...(u.partitions ?? []), ...(u.ci === undefined ? [] : [u.ci])];
+  // Rollup files start at a grain floor, before the first record: only the base tables say when data began.
   for (const p of parts)
-    for (const f of Object.values(p.files))
-      if (f.timeMin !== null && f.timeMin !== undefined) {
+    for (const [table, f] of Object.entries(p.files))
+      if (!(table in ROLLUP_OF) && f.timeMin !== null && f.timeMin !== undefined) {
         const t = BigInt(f.timeMin);
         if (min === undefined || t < min) min = t;
       }

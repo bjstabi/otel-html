@@ -9,7 +9,7 @@ import {
   parseAnyManifest,
   type StatisticsKeys,
 } from '../../format/manifest.js';
-import { TABLES } from '../../format/parquet/columns.js';
+import { ROLLUP_OF, TABLES } from '../../format/parquet/columns.js';
 import { statisticsKeysFor } from '../../format/parquet/stats.js';
 import { MANIFEST_KEY, MANIFEST_PATH, partitionFilePath } from '../../format/paths.js';
 import { PARTITION_FORMAT_VERSION } from '../../format/version.js';
@@ -140,6 +140,8 @@ function totalsAndRange(partitions: readonly PartitionEntry[]): Pick<ManifestV4,
     totals.logs += e.files.logs?.rows ?? 0;
     totals.metrics += e.files.points?.rows ?? 0;
     for (const t of TABLES) {
+      // A rollup file's times are grain floors, before its first record: only the base tables say when data happened.
+      if (t in ROLLUP_OF) continue;
       const f = e.files[t];
       if (f?.timeMin != null && (start === null || BigInt(f.timeMin) < start)) start = BigInt(f.timeMin);
       if (f?.timeMax != null && (end === null || BigInt(f.timeMax) > end)) end = BigInt(f.timeMax);

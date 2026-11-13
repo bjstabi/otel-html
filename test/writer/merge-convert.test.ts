@@ -18,7 +18,13 @@ import { OtelHtmlError } from '../../src/model/errors.js';
 import type { SpanRecord } from '../../src/model/records.js';
 import { mergeReports } from '../../src/writer/merge.js';
 import { openSession } from '../../src/writer/session.js';
-import { type JsonObject, logRecord, logsRequest } from '../../test-support/otlp-builders.js';
+import {
+  type JsonObject,
+  logRecord,
+  logsRequest,
+  span,
+  traceRequest,
+} from '../../test-support/otlp-builders.js';
 import { createTestWriter, otlp, type TestWriter, testConfig } from '../../test-support/writer-deps.js';
 import { cumulativeRequest, manifestOf, spansRequest } from './helpers.js';
 
@@ -296,5 +302,25 @@ describe('addRecords', () => {
     await mergeWith({ inputs: ['in'], out: 'm', config }, w.deps);
     expect(await rowsOf(w, 'm', 'logs')).toHaveLength(3);
     expect((await rowsOf(w, 'm', 'patterns')).length).toBeGreaterThan(0);
+  });
+});
+
+describe('a span that ends before it starts', () => {
+  test('is written: timeEndMax is its start, never below timeMin', async () => {
+    const w = createTestWriter();
+    const s = await openSession(w.deps, { out: 'early', config: testConfig(), mode: 'replace' });
+    await s.add(
+      otlp(
+        traceRequest([
+          span({ startTimeUnixNano: '1700000000500000000', endTimeUnixNano: '1700000000400000000' }),
+        ]),
+      ),
+      'early.json',
+    );
+    await s.close();
+    const files = v4Manifest(w, 'early').partitions[0]?.files;
+    expect(files?.spans?.timeMin).toBe('1700000000500000000');
+    expect(files?.spans?.timeEndMax).toBe('1700000000500000000');
+    expect(files?.traces?.timeEndMax).toBe('1700000000500000000');
   });
 });
