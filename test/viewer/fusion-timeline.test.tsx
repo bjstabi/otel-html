@@ -15,7 +15,11 @@ import {
   FusionTimeline,
   type TimelineLane,
 } from '../../src/viewer/components/fusion-timeline.js';
-import { SEVERITY_SERIES, SPAN_STATUS_SERIES } from '../../src/viewer/components/histogram-card.js';
+import {
+  brushToWindow,
+  SEVERITY_SERIES,
+  SPAN_STATUS_SERIES,
+} from '../../src/viewer/components/histogram-card.js';
 import type { WidgetActions } from '../../src/viewer/dashboards/dashboard-page.js';
 import { TimelineWidget } from '../../src/viewer/dashboards/widgets/timeline.js';
 import type { DataSource } from '../../src/viewer/data/data-source.js';
@@ -414,5 +418,53 @@ describe('TimelineWidget states', () => {
     expect(screen.getByText(/no metric points/)).toBeTruthy();
     expect(screen.getByText(/no spans/)).toBeTruthy();
     expect(screen.getByText(/no logs/)).toBeTruthy();
+  });
+});
+
+describe('alignLanes under a long window (buckets on absolute grains)', () => {
+  const GRAIN = 65_536_000_000;
+  const WIDTH = 2 * GRAIN;
+  const ORIGIN = 12_345_678_901;
+
+  /** Span buckets on the grid of `ORIGIN`: the first starts one column before the window, as the router's widened window can. */
+  const spans = (): TimeBuckets<'ok' | 'error' | 'unset'> =>
+    TimeBuckets.from(
+      {
+        maxBuckets: 4096,
+        widthNs: WIDTH,
+        startNs: ORIGIN - WIDTH,
+        originNs: ORIGIN,
+        keys: ['ok', 'error', 'unset'],
+        counts: [
+          [5, 0, 3, 0, 2],
+          [0, 1, 0, 0, 0],
+          [0, 0, 0, 0, 0],
+        ],
+      },
+      ['ok', 'error', 'unset'],
+    );
+
+  test('every span bucket is kept, in the column that starts at its own time', () => {
+    const points = new TimeBuckets<'points'>(['points']);
+    for (let i = 0; i < 7; i++) points.add((i * 90_000_000_000) as RelNanos, 'points', 2);
+    const window: TimeWindow = { start: 0, end: 5 * WIDTH };
+    const aligned = alignLanes([{ buckets: spans() }, { buckets: points }], window);
+    expect(aligned.widthNs).toBe(WIDTH);
+    expect(aligned.startNs).toBe(ORIGIN - WIDTH);
+    const [lane, metric] = aligned.lanes;
+    expect(lane?.counts('ok').slice(0, 5)).toEqual([5, 0, 3, 0, 2]);
+    expect((lane?.total('ok') ?? 0) + (lane?.total('error') ?? 0)).toBe(11);
+    expect(metric?.total('points')).toBe(points.total('points'));
+  });
+
+  test('a brush over columns covers the bars shown', () => {
+    const window: TimeWindow = { start: 0, end: 5 * WIDTH };
+    const aligned = alignLanes([{ buckets: spans() }], window);
+    const view = aligned.lanes[0];
+    if (view === undefined) throw new Error('no lane');
+    const w = brushToWindow(view, 0, 2);
+    expect(w).toEqual({ start: ORIGIN - WIDTH, end: ORIGIN + 2 * WIDTH });
+    // the three columns hold the first three source buckets, whole
+    expect(view.counts('ok').slice(0, 3)).toEqual([5, 0, 3]);
   });
 });
