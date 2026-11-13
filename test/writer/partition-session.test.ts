@@ -1,7 +1,7 @@
 import { describe, expect, test, vi } from 'vitest';
 import type { ConfigInput } from '../../src/config/schema.js';
 import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
-import { isV4, type ManifestV4, parseAnyManifest } from '../../src/format/manifest.js';
+import { isPartitioned, type ManifestV4, parseAnyManifest } from '../../src/format/manifest.js';
 import { decodeTable } from '../../src/format/parquet/codec.js';
 import { LOCK_PATH, MANIFEST_KEY } from '../../src/format/paths.js';
 import { parseAnySessionState, type SessionStateV2 } from '../../src/format/state.js';
@@ -51,7 +51,7 @@ function manifest(w: TestWriter): ManifestV4 {
   const text = w.fs.snapshot().get(`${OUT}/data/manifest.js`);
   if (text === undefined) throw new Error('no manifest');
   const m = parseAnyManifest(reviveDataJson(unwrapDataFile(text, MANIFEST_KEY)));
-  if (!isV4(m)) throw new Error('not a v4 manifest');
+  if (!isPartitioned(m)) throw new Error('not a v4 manifest');
   return m;
 }
 
@@ -89,7 +89,7 @@ describe('PartitionSession', () => {
     await s.add(logs(2), 'b.json');
     await s.flush();
     const m = manifest(w);
-    expect(m.formatVersion).toBe(4);
+    expect(m.formatVersion).toBe(5);
     expect(m.partitions).toHaveLength(1);
     expect(m.partitions[0]?.source).toBe('flush:0');
     expect(m.partitions[0]?.files.spans?.rows).toBe(3);
@@ -116,7 +116,7 @@ describe('PartitionSession', () => {
     await s.add(spans(2), 'a.json');
     await s.flush();
     const entry = manifest(w).partitions[0];
-    expect(Object.keys(entry?.files ?? {})).toEqual(['spans', 'traces']);
+    expect(Object.keys(entry?.files ?? {})).toEqual(['spans', 'traces', 'span_rollups']);
     expect(await w.fs.exists(`${OUT}/data/partitions/000000/logs.parquet`)).toBe(false);
     await s.close();
   });
@@ -504,7 +504,7 @@ describe('format mismatches', () => {
     const s = await open(w);
     await s.add(spans(1, 0, 2), 'a.json');
     await s.close();
-    expect(manifest(w).formatVersion).toBe(4);
+    expect(manifest(w).formatVersion).toBe(5);
     expect([...w.fs.snapshot().keys()].some((k) => k.includes('data/chunks/spans/0'))).toBe(false);
   });
 });
@@ -789,5 +789,101 @@ describe('close compacts the flush partitions', () => {
     expect(partitionDirs(w)).toEqual(['000000', '000001']);
     expect(w.logs.some((l) => l.level === 'error' && l.msg.includes('compaction failed'))).toBe(true);
     expect(await w.fs.exists(`${OUT}/${LOCK_PATH}`)).toBe(false);
+  });
+});
+
+describe('PartitionSession rollups', () => {
+  const sumN = (rows: readonly Record<string, unknown>[]): number =>
+    rows.reduce((t, r) => t + Number(Reflect.get(r, 'n')), 0);
+  const distinctNames = (n: number) =>
+    otlp(
+      traceRequest(
+        Array.from({ length: n }, (_, i) =>
+          span({
+            traceId: traceIdOf(i),
+            spanId: spanIdOf(i),
+            name: `op-${i}`,
+            startTimeUnixNano: String(BigInt(EPOCH_NS) + BigInt(i)),
+            endTimeUnixNano: String(BigInt(EPOCH_NS) + BigInt(i) + 10n),
+          }),
+        ),
+      ),
+    );
+
+  test('a flushed partition has both rollup files, each with its description', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    await s.add(spans(3), 'a.json');
+    await s.add(logs(2), 'b.json');
+    await s.flush();
+    const files = manifest(w).partitions[0]?.files;
+    expect(files?.span_rollups?.rollup).toEqual({
+      grainNs: 65_536_000_000,
+      dimensions: [...(files?.span_rollups?.rollup?.dimensions ?? [])].sort(),
+      durationBuckets: 'log2x8',
+    });
+    expect(files?.span_rollups?.rollup?.dimensions).toContain('service_name');
+    expect(files?.log_rollups?.rollup?.durationBuckets).toBeUndefined();
+    expect(files?.log_rollups?.rollup?.dimensions).toContain('severity_number');
+    expect(files?.span_rollups?.rows).toBeGreaterThan(0);
+    await s.close();
+  });
+
+  test('the sum of n equals the base rows, for spans and for logs', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    await s.add(spans(7), 'a.json');
+    await s.add(logs(5), 'b.json');
+    await s.flush();
+    const root = 'r/data/partitions/000000';
+    const spanRollups = decodeTable('span_rollups', await w.fs.readBytes(`${root}/span_rollups.parquet`));
+    const logRollups = decodeTable('log_rollups', await w.fs.readBytes(`${root}/log_rollups.parquet`));
+    expect(sumN(spanRollups)).toBe(7);
+    expect(sumN(logRollups)).toBe(5);
+    await s.close();
+  });
+
+  test('a partition whose rollup the guard refuses has no rollup file and one warning naming the widest dimension', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    await s.add(distinctNames(4_200), 'a.json');
+    await s.flush();
+    const entry = manifest(w).partitions[0];
+    expect(entry?.files.spans?.rows).toBe(4_200);
+    expect(entry?.files.span_rollups).toBeUndefined();
+    expect(await w.fs.exists(`${OUT}/data/partitions/000000/span_rollups.parquet`)).toBe(false);
+    const warnings = w.logs.filter((l) => l.level === 'warn' && l.msg.includes('rollup'));
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.attrs).toMatchObject({ widestDimension: 'name', distinctValues: 4_200 });
+    await s.close();
+  });
+
+  test('a rollup whose duration_sum leaves int64 is omitted with one warning, and the cut still writes the spans', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    // 1 200 spans of equal dimensions and 8 * 10^15 ns each (a span lasts under 2^53 ns): one group summing to 9.6 * 10^18 > 2^63 - 1.
+    const heavy = otlp(
+      traceRequest(
+        Array.from({ length: 1_200 }, (_, i) =>
+          span({
+            traceId: traceIdOf(i),
+            spanId: spanIdOf(i),
+            name: 'heavy',
+            startTimeUnixNano: String(BigInt(EPOCH_NS) + BigInt(i)),
+            endTimeUnixNano: String(BigInt(EPOCH_NS) + BigInt(i) + 8_000_000_000_000_000n),
+          }),
+        ),
+      ),
+    );
+    await s.add(heavy, 'a.json');
+    await s.flush();
+    const entry = manifest(w).partitions[0];
+    expect(entry?.files.spans?.rows).toBe(1_200);
+    expect(entry?.files.span_rollups).toBeUndefined();
+    expect(await w.fs.exists(`${OUT}/data/partitions/000000/span_rollups.parquet`)).toBe(false);
+    const warnings = w.logs.filter((l) => l.level === 'warn' && l.msg.includes('rollup'));
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.msg).toContain('int64');
+    await s.close();
   });
 });

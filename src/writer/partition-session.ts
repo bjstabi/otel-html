@@ -1,7 +1,13 @@
 import type { ResolvedConfig } from '../config/schema.js';
-import type { PartitionEntry, PartitionFile } from '../format/manifest.js';
+import {
+  type PartitionEntry,
+  type PartitionFile,
+  ROLLUP_GRAIN_NS,
+  type RollupDescription,
+} from '../format/manifest.js';
+import type { ColumnBatch } from '../format/parquet/batch.js';
 import { checkRow } from '../format/parquet/codec.js';
-import { TABLES, type Table } from '../format/parquet/columns.js';
+import { type RollupTable, TABLES, type Table } from '../format/parquet/columns.js';
 import { applyNormalization, logRow, pointRow, type Row, spanRow } from '../format/parquet/rows.js';
 import { completeStatistics, statisticsKeysFor } from '../format/parquet/stats.js';
 import {
@@ -56,6 +62,14 @@ import { PartitionWriter } from './partition-writer.js';
 import { patternRows } from './pattern-rows.js';
 import { prunePartitions } from './prune.js';
 import { rebaseBatch } from './rebase.js';
+import {
+  logRollupRows,
+  rollupAllowed,
+  rollupDimensions,
+  rollupSumsFit,
+  spanRollupRows,
+  widestDimension,
+} from './rollup-rows.js';
 import { seriesIdOf } from './series-id.js';
 import type {
   AddOptions,
@@ -259,8 +273,10 @@ class PartitionSession implements WriterSession {
       format: config.writer.format,
       derive: (taken) => {
         const p = patternRows(this.#live(this.#drain), taken.logs, this.#epoch ?? 0n);
+        const r = this.#rollups(taken);
         return {
-          rows: { traces: traceRows(taken.spans, taken.logs), patterns: p.rows },
+          rows: { traces: traceRows(taken.spans, taken.logs), patterns: p.rows, ...r.rows },
+          rollups: r.descriptions,
           commit: () => {
             this.#drain = p.drain;
           },
@@ -281,6 +297,49 @@ class PartitionSession implements WriterSession {
     this.#replacing = r.replacing;
     this.#everCommitted = r.resumed;
     this.#lastFlushMs = deps.clock.monotonicMs();
+  }
+
+  /** The rollup rows of a cut and their descriptions; a table whose rollup the guard refuses gets neither, and a warning. */
+  #rollups(taken: Readonly<Record<Table, ColumnBatch>>): {
+    rows: Partial<Record<RollupTable, Row[]>>;
+    descriptions: Partial<Record<RollupTable, RollupDescription>>;
+  } {
+    const rows: Partial<Record<RollupTable, Row[]>> = {};
+    const descriptions: Partial<Record<RollupTable, RollupDescription>> = {};
+    const plans = [
+      { table: 'span_rollups', base: 'spans', make: spanRollupRows, buckets: true },
+      { table: 'log_rollups', base: 'logs', make: logRollupRows, buckets: false },
+    ] as const;
+    for (const { table, base, make, buckets } of plans) {
+      const batch = taken[base];
+      if (batch.length === 0) continue;
+      const dimensions = rollupDimensions(base, this.#statisticsKeys[base]);
+      const made = make(batch, dimensions);
+      if (!rollupSumsFit(made)) {
+        this.#deps.logger.warn(
+          `the ${base} rollup has a duration sum beyond the int64 range, so it is not written`,
+          { rollupRows: made.length, baseRows: batch.length },
+        );
+        continue;
+      }
+      if (!rollupAllowed(made.length, batch.length)) {
+        const widest = widestDimension(made, dimensions);
+        this.#deps.logger.warn(`the ${base} rollup does not shrink this partition, so it is not written`, {
+          rollupRows: made.length,
+          baseRows: batch.length,
+          widestDimension: widest?.dimension,
+          distinctValues: widest?.distinct,
+        });
+        continue;
+      }
+      rows[table] = made;
+      descriptions[table] = {
+        grainNs: ROLLUP_GRAIN_NS,
+        dimensions,
+        ...(buckets ? { durationBuckets: 'log2x8' as const } : {}),
+      };
+    }
+    return { rows, descriptions };
   }
 
   #beforeMetrics(): void {
@@ -861,7 +920,16 @@ class PartitionSession implements WriterSession {
           string[] | null
         >;
         for (const k of this.#statisticsKeys[table]) values[k] = done.values[k] ?? null;
-        files[table] = { path, bytes: f.bytes, rows: f.rows, timeMin: f.timeMin, timeMax: f.timeMax, values };
+        files[table] = {
+          path,
+          bytes: f.bytes,
+          rows: f.rows,
+          timeMin: f.timeMin,
+          timeMax: f.timeMax,
+          values,
+          ...(f.timeEndMax === undefined ? {} : { timeEndMax: f.timeEndMax }),
+          ...(f.rollup === undefined ? {} : { rollup: f.rollup }),
+        };
       }
     } catch (e) {
       if (made) await fs.removeDir(at(this.#out, partitionDir(n))).catch(() => undefined);
@@ -917,6 +985,7 @@ class PartitionSession implements WriterSession {
         format: this.#config.writer.format,
         source: `compact:${first.n}..${last.n}`,
         patternKey,
+        warn: (message, attrs) => this.#deps.logger.warn(message, attrs),
       });
       this.#writer.skipTo(n + 1);
       const replaced = new Set(picks.map((e) => e.n));

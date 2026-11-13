@@ -2,13 +2,14 @@ import type { ResolvedConfig } from '../../config/schema.js';
 import { reviveDataJson, unwrapDataFile, wrapDataFile } from '../../format/data-file.js';
 import { ENGINE_VERSION } from '../../format/engine.js';
 import {
-  isV4,
+  isPartitioned,
   type ManifestV4,
   type PartitionEntry,
   type PartitionFile,
   parseAnyManifest,
+  type StatisticsKeys,
 } from '../../format/manifest.js';
-import { TABLES, type Table } from '../../format/parquet/columns.js';
+import { ROLLUP_OF, TABLES } from '../../format/parquet/columns.js';
 import { statisticsKeysFor } from '../../format/parquet/stats.js';
 import { MANIFEST_KEY, MANIFEST_PATH, partitionFilePath } from '../../format/paths.js';
 import { PARTITION_FORMAT_VERSION } from '../../format/version.js';
@@ -36,12 +37,11 @@ export interface NewManifestOptions {
   version: string;
 }
 
-/** An empty, `complete: false` v4 manifest in `site` format with `statisticsKeysFor` each table from `config`. */
+/** An empty, `complete: false` format-5 manifest in `site` format with `statisticsKeysFor` each table from `config`. */
 export function newRunManifest(o: NewManifestOptions): ManifestV4 {
-  const statisticsKeys = Object.fromEntries(TABLES.map((t) => [t, statisticsKeysFor(t, o.config)])) as Record<
-    Table,
-    string[]
-  >;
+  const statisticsKeys = Object.fromEntries(
+    TABLES.map((t) => [t, statisticsKeysFor(t, o.config)]),
+  ) as StatisticsKeys;
   return {
     formatVersion: PARTITION_FORMAT_VERSION,
     otelHtmlVersion: o.version,
@@ -110,18 +110,22 @@ function entryFrom(
   n: number,
   p: UpdatePartition,
   dir: string,
-  keys: Record<Table, string[]>,
+  keys: StatisticsKeys,
   copies: FileMove[],
+  format: ManifestV4['formatVersion'],
 ): PartitionEntry {
   const files: PartitionEntry['files'] = {};
   for (const t of TABLES) {
     const f = p.files[t];
     if (f === undefined) continue;
+    // A format-4 run report lists no rollup file and no format-5 field; the files are not copied either.
+    if (format === 4 && (t === 'span_rollups' || t === 'log_rollups')) continue;
     const values: PartitionFile['values'] = {};
     // A key the job did not compute stays absent ("not computed"); the merge computes it. `null` is "over the cap".
-    for (const k of keys[t]) if (f.values[k] !== undefined) values[k] = f.values[k];
+    for (const k of keys[t] ?? []) if (f.values[k] !== undefined) values[k] = f.values[k];
     const to = partitionFilePath(n, t);
-    files[t] = { ...f, path: to, values };
+    const { timeEndMax: _end, rollup: _rollup, ...v4 } = f;
+    files[t] = format === 4 ? { ...v4, path: to, values } : { ...f, path: to, values };
     copies.push({ fromDir: dir, from: f.path, to });
   }
   return { n, source: p.source, files };
@@ -136,6 +140,8 @@ function totalsAndRange(partitions: readonly PartitionEntry[]): Pick<ManifestV4,
     totals.logs += e.files.logs?.rows ?? 0;
     totals.metrics += e.files.points?.rows ?? 0;
     for (const t of TABLES) {
+      // A rollup file's times are grain floors, before its first record: only the base tables say when data happened.
+      if (t in ROLLUP_OF) continue;
       const f = e.files[t];
       if (f?.timeMin != null && (start === null || BigInt(f.timeMin) < start)) start = BigInt(f.timeMin);
       if (f?.timeMax != null && (end === null || BigInt(f.timeMax) > end)) end = BigInt(f.timeMax);
@@ -221,7 +227,9 @@ export function planSync(input: SyncInput): SyncPlan {
           .flatMap((u) => listing(u.update).map((l) => ({ dir: u.dir, p: l.p })))
           .find((c) => c.p.source === p.source && c.p.carried);
     if (carrier === undefined) return none('pending');
-    added.push(entryFrom(next++, carrier.p, carrier.dir, manifest.statisticsKeys, copies));
+    added.push(
+      entryFrom(next++, carrier.p, carrier.dir, manifest.statisticsKeys, copies, manifest.formatVersion),
+    );
   }
 
   const dropped = manifest.partitions.filter((e) => dropSources.has(e.source) && !kept.has(e.source));
@@ -301,6 +309,7 @@ export async function readRunManifest(fs: FileSystem, dir: string): Promise<Mani
   const path = `${dir}/${MANIFEST_PATH}`;
   if (!(await fs.exists(path))) return null;
   const m = parseAnyManifest(reviveDataJson(unwrapDataFile(await fs.readText(path), MANIFEST_KEY)));
-  if (!isV4(m)) throw new OtelHtmlError('invalid-report', { path, expected: 'a format 4 manifest' });
+  if (!isPartitioned(m))
+    throw new OtelHtmlError('invalid-report', { path, expected: 'a format 4 or 5 manifest' });
   return m;
 }

@@ -1,7 +1,12 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import type { PartitionFile } from '../../format/manifest.js';
-import { PartitionFileSchema, SOURCE_RE } from '../../format/manifest.js';
+import {
+  PartitionFileSchema,
+  RollupPartitionFileSchema,
+  SOURCE_RE,
+  TimeEndPartitionFileSchema,
+} from '../../format/manifest.js';
 import type { Table } from '../../format/parquet/columns.js';
 import { TABLES } from '../../format/parquet/columns.js';
 import { parseWith } from '../../format/validate.js';
@@ -40,11 +45,13 @@ const posInt = z.number().int().positive();
 const partitionShape = {
   source: z.string().regex(SOURCE_RE, 'a source like job:7#compact:3'),
   files: z.strictObject({
-    spans: z.exactOptional(PartitionFileSchema),
+    spans: z.exactOptional(TimeEndPartitionFileSchema),
     logs: z.exactOptional(PartitionFileSchema),
     points: z.exactOptional(PartitionFileSchema),
-    traces: z.exactOptional(PartitionFileSchema),
+    traces: z.exactOptional(TimeEndPartitionFileSchema),
     patterns: z.exactOptional(PartitionFileSchema),
+    span_rollups: z.exactOptional(RollupPartitionFileSchema),
+    log_rollups: z.exactOptional(RollupPartitionFileSchema),
   }),
 };
 const UpdatePartitionSchema: z.ZodType<UpdatePartition> = z.strictObject({

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { ParquetFile } from 'parquet-wasm/esm';
 import { describe, expect, test } from 'vitest';
 import { wrapBinaryDataFilePieces } from '../../src/format/data-file.js';
-import type { PartitionEntry } from '../../src/format/manifest.js';
+import { type PartitionEntry, ROLLUP_GRAIN_NS, type RollupDescription } from '../../src/format/manifest.js';
 import { batchFromRows } from '../../src/format/parquet/batch.js';
 import { decodeTable, encodeColumnsUnfiltered, encodeTable } from '../../src/format/parquet/codec.js';
 import type { Table } from '../../src/format/parquet/columns.js';
@@ -12,10 +12,18 @@ import type { Row } from '../../src/format/parquet/rows.js';
 import { fileStatistics } from '../../src/format/parquet/stats.js';
 import { partitionKey, partitionWrapperPath } from '../../src/format/paths.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
+import type { CompactOptions } from '../../src/writer/compaction.js';
 import { compactPartitions } from '../../src/writer/compaction.js';
 import { createNodeFileSystem } from '../../src/writer/node-fs.js';
 import { PartitionWriter } from '../../src/writer/partition-writer.js';
 import type { FileSystem } from '../../src/writer/ports.js';
+import {
+  addRollupRows,
+  logRollupRows,
+  rollupDimensions,
+  spanRollupRows,
+} from '../../src/writer/rollup-rows.js';
+import { traceRows } from '../../src/writer/trace-summaries.js';
 import { createMemoryFileSystem } from '../../test-support/memory-fs.js';
 import { chunksOf } from '../../test-support/parquet-footer.js';
 
@@ -27,6 +35,8 @@ const KEYS: Record<Table, string[]> = {
   points: ['metric_name'],
   traces: [],
   patterns: [],
+  span_rollups: [],
+  log_rollups: [],
 };
 
 /** A small deterministic generator, so the rows differ run to run of the code but never run to run of the test. */
@@ -142,7 +152,8 @@ describe('compactPartitions: merged tables', () => {
       expect(out.source).toBe('compact:0..2');
       expect(out.files[table]?.path).toBe(`data/partitions/000003/${table}.parquet`);
       expect(out.files[table]?.bytes).toBe(expected.length);
-      expect(Object.keys(out.files)).toEqual([table]);
+      // A partition without a rollup gets one recomputed from the rows.
+      expect(Object.keys(out.files).filter((k) => !k.endsWith('_rollups'))).toEqual([table]);
     });
   }
 
@@ -182,6 +193,7 @@ describe('compactPartitions: merged tables', () => {
       const expected = encodeTable('logs', rowsPer.flat(), { rowGroupRows: ROW_GROUP });
       expect(Buffer.from(await bytesOf(fs, out, 'logs')).equals(Buffer.from(expected))).toBe(true);
       expect(await fs.list(`${OUT}/data/partitions/${String(count).padStart(6, '0')}`)).toEqual([
+        'log_rollups.parquet',
         'logs.parquet',
       ]);
       const { path, bytes, ...stats } = out.files.logs ?? { path: '', bytes: 0 };
@@ -299,7 +311,11 @@ describe('compactPartitions: merged tables', () => {
     const fs = createMemoryFileSystem();
     const entries = await writeParts(fs, [{ spans: a }, { logs: b }, { spans: c }]);
     const out = await compactPartitions(fs, OUT, entries, opts(3));
-    expect(Object.keys(out.files).sort()).toEqual(['logs', 'spans']);
+    expect(
+      Object.keys(out.files)
+        .filter((k) => !k.endsWith('_rollups'))
+        .sort(),
+    ).toEqual(['logs', 'spans']);
     const spans = decodeTable('spans', await bytesOf(fs, out, 'spans'));
     expect(spans).toHaveLength(14);
     expect(out.files.logs?.rows).toBe(7);
@@ -350,7 +366,12 @@ describe('compactPartitions: merged tables', () => {
       { spans: [spanRow(1, r)], logs: [logRow(2, r)] },
     ]);
     await compactPartitions(fs, OUT, entries, opts(2));
-    expect(await fs.list(`${OUT}/data/partitions/000002`)).toEqual(['logs.parquet', 'spans.parquet']);
+    expect(await fs.list(`${OUT}/data/partitions/000002`)).toEqual([
+      'log_rollups.parquet',
+      'logs.parquet',
+      'span_rollups.parquet',
+      'spans.parquet',
+    ]);
   });
 });
 
@@ -704,7 +725,10 @@ describe('compactPartitions on the real file system', () => {
       const expected = encodeTable('logs', rowsPer.flat(), { rowGroupRows: ROW_GROUP });
       const got = await fs.readBytes(join(dir, out.files.logs?.path ?? ''));
       expect(Buffer.from(got).equals(Buffer.from(expected))).toBe(true);
-      expect(await readdir(join(dir, 'data/partitions/000020'))).toEqual(['logs.parquet']);
+      expect((await readdir(join(dir, 'data/partitions/000020'))).sort()).toEqual([
+        'log_rollups.parquet',
+        'logs.parquet',
+      ]);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -764,5 +788,306 @@ describe('bloom filters on trace_id', () => {
     const out = await compactPartitions(fs, OUT, entries, opts(1));
     expect(filtered(await bytesOf(fs, out, 'logs')).every(Boolean)).toBe(true);
     expect(decodeTable('logs', await bytesOf(fs, out, 'logs'))).toHaveLength(14);
+  });
+});
+
+// -- rollups and timeEndMax (query-scaling Task 16) --------------------------------------------------------------
+
+const DIMS = rollupDimensions('spans', KEYS.spans);
+const DESCRIPTION: RollupDescription = {
+  grainNs: ROLLUP_GRAIN_NS,
+  dimensions: DIMS,
+  durationBuckets: 'log2x8',
+};
+const LOG_DESCRIPTION: RollupDescription = {
+  grainNs: ROLLUP_GRAIN_NS,
+  dimensions: rollupDimensions('logs', KEYS.logs),
+};
+
+/** Like `writeParts`, with a derive hook writing the span and log rollups of each cut under `dims` (null: none). */
+async function writeRolled(
+  fs: FileSystem,
+  parts: readonly Partial<Record<Table, Row[]>>[],
+  dims: readonly (string[] | null)[] = [],
+  rowGroupRows = ROW_GROUP,
+): Promise<PartitionEntry[]> {
+  const entries: PartitionEntry[] = [];
+  for (const [i, part] of parts.entries()) {
+    const d = dims[i] === undefined ? DIMS : dims[i];
+    const w = new PartitionWriter(fs, {
+      out: OUT,
+      rowGroupRows,
+      statisticsKeys: KEYS,
+      facetValueCap: 100,
+      nextPartition: i,
+      derive: (taken) => {
+        const traces = traceRows(taken.spans, taken.logs);
+        if (d === null) return { rows: { traces } };
+        const description = { ...DESCRIPTION, dimensions: d };
+        return {
+          rows: {
+            traces,
+            span_rollups: spanRollupRows(taken.spans, d),
+            log_rollups: logRollupRows(taken.logs, LOG_DESCRIPTION.dimensions),
+          },
+          rollups: {
+            span_rollups: description,
+            ...(taken.logs.length > 0 ? { log_rollups: LOG_DESCRIPTION } : {}),
+          },
+        };
+      },
+    });
+    for (const [table, rows] of Object.entries(part) as [Table, Row[]][])
+      for (const r of rows) w.add(table, r);
+    const e = await w.cut(`flush:${i}`);
+    if (e === null) throw new Error('nothing cut');
+    entries.push(e);
+  }
+  return entries;
+}
+
+const rollupOpts = (n: number, extra: Partial<CompactOptions> = {}): CompactOptions => ({
+  ...opts(n),
+  statisticsKeys: KEYS,
+  ...extra,
+});
+
+async function rowsOfFile(fs: FileSystem, e: PartitionEntry, t: Table): Promise<Row[]> {
+  return decodeTable(t, await bytesOf(fs, e, t));
+}
+
+const canon = (rows: readonly Row[]): string[] =>
+  rows.map((r) => JSON.stringify(r, (_k, v: unknown) => (typeof v === 'bigint' ? `${v}n` : v))).sort();
+
+function spansOf(seed: number, n: number, offset: number): Row[] {
+  const r = lcg(seed);
+  return Array.from({ length: n }, (_, i) => spanRow(offset + i, r));
+}
+
+describe('compactPartitions: rollups', () => {
+  test('compacting partitions with equal rollup descriptions equals the rollup of the compacted rows', async () => {
+    const fs = createMemoryFileSystem();
+    const a = spansOf(1, 30, 0);
+    const b = spansOf(2, 25, 100);
+    const entries = await writeRolled(fs, [{ spans: a }, { spans: b }]);
+    const out = await compactPartitions(fs, OUT, entries, rollupOpts(2));
+    const expected = spanRollupRows(batchFromRows('spans', [...a, ...b]), DIMS);
+    expect(canon(await rowsOfFile(fs, out, 'span_rollups'))).toEqual(canon(expected));
+    expect(out.files.span_rollups?.rollup).toEqual(DESCRIPTION);
+    expect(out.files.span_rollups?.rows).toBe(expected.length);
+  });
+
+  test('log rollups add up too', async () => {
+    const fs = createMemoryFileSystem();
+    const r = lcg(3);
+    const a = Array.from({ length: 12 }, (_, i) => logRow(i, r));
+    const b = Array.from({ length: 12 }, (_, i) => logRow(50 + i, r));
+    const entries = await writeRolled(fs, [{ logs: a }, { logs: b }]);
+    const out = await compactPartitions(fs, OUT, entries, rollupOpts(2));
+    const expected = logRollupRows(batchFromRows('logs', [...a, ...b]), LOG_DESCRIPTION.dimensions);
+    expect(canon(await rowsOfFile(fs, out, 'log_rollups'))).toEqual(canon(expected));
+    expect(out.files.span_rollups).toBeUndefined();
+  });
+
+  test('addRollupRows adds n and sum, keeps min of mins and max of maxes', () => {
+    const base = { start_time_unix_nano: 0n, duration_bucket: 1 };
+    const sum = addRollupRows(
+      [{ ...base, n: 2n, duration_sum: 10n, duration_min: 3n, duration_max: 7n }],
+      [
+        { ...base, n: 1n, duration_sum: 2n, duration_min: 2n, duration_max: 2n },
+        { ...base, duration_bucket: 2, n: 1n, duration_sum: 1n, duration_min: 1n, duration_max: 1n },
+      ],
+    );
+    expect(sum).toHaveLength(2);
+    expect(sum[0]).toEqual({ ...base, n: 3n, duration_sum: 12n, duration_min: 2n, duration_max: 7n });
+  });
+
+  test('compacting a partition without a rollup, or with other dimensions, recomputes from the rows', async () => {
+    for (const dims of [
+      [null, DIMS],
+      [[...DIMS.slice(1)], DIMS],
+    ] as const) {
+      const fs = createMemoryFileSystem();
+      const a = spansOf(4, 30, 0);
+      const b = spansOf(5, 25, 100);
+      const entries = await writeRolled(
+        fs,
+        [{ spans: a }, { spans: b }],
+        dims.map((d) => (d === null ? null : [...d])),
+      );
+      const out = await compactPartitions(fs, OUT, entries, rollupOpts(2));
+      const expected = spanRollupRows(batchFromRows('spans', [...a, ...b]), DIMS);
+      expect(canon(await rowsOfFile(fs, out, 'span_rollups'))).toEqual(canon(expected));
+      expect(out.files.span_rollups?.rollup).toEqual(DESCRIPTION);
+    }
+  });
+
+  test('the guard applies to a compacted rollup: too many rows and it is not written, with a warning', async () => {
+    const fs = createMemoryFileSystem();
+    const distinct = (from: number): Row[] =>
+      Array.from({ length: 2600 }, (_, i) => ({
+        ...spanRow(from + i, lcg(from + i)),
+        name: `op${from + i}`,
+      }));
+    const entries = await writeRolled(fs, [{ spans: distinct(0) }, { spans: distinct(3000) }], [], 1000);
+    expect(entries[0]?.files.span_rollups).toBeDefined();
+    const warned: string[] = [];
+    const out = await compactPartitions(fs, OUT, entries, {
+      ...rollupOpts(2),
+      rowGroupRows: 1000,
+      warn: (m) => warned.push(m),
+    });
+    expect(out.files.spans?.rows).toBe(5200);
+    expect(out.files.span_rollups).toBeUndefined();
+    expect(warned).toHaveLength(1);
+    expect(await fs.exists(`${OUT}/data/partitions/000002/span_rollups.parquet`)).toBe(false);
+  });
+
+  test.each([
+    ['summed', undefined],
+    ['recomputed', null],
+  ] as const)(
+    'a %s rollup past the guard is dropped with one warning that reports no partial counts',
+    async (_how, dims) => {
+      const fs = createMemoryFileSystem();
+      const distinct = (from: number): Row[] =>
+        Array.from({ length: 2600 }, (_, i) => ({
+          ...spanRow(from + i, lcg(from + i)),
+          name: `op${from + i}`,
+        }));
+      const entries = await writeRolled(
+        fs,
+        [{ spans: distinct(0) }, { spans: distinct(3000) }],
+        dims === null ? [null, null] : [],
+        1000,
+      );
+      const warned: { msg: string; attrs: unknown }[] = [];
+      const out = await compactPartitions(fs, OUT, entries, {
+        ...rollupOpts(2),
+        rowGroupRows: 1000,
+        warn: (msg, attrs) => warned.push({ msg, attrs }),
+      });
+      expect(out.files.spans?.rows).toBe(5200);
+      expect(out.files.span_rollups).toBeUndefined();
+      expect(warned).toHaveLength(1);
+      expect(warned[0]?.msg).toContain('more groups than 4096');
+      expect(warned[0]?.attrs).not.toHaveProperty('rollupRows');
+      expect(warned[0]?.attrs).not.toHaveProperty('widestDimension');
+    },
+  );
+
+  test.each([
+    ['summed', undefined],
+    ['recomputed', null],
+  ] as const)(
+    'a %s rollup whose duration_sum leaves int64 is omitted, the spans still compact',
+    async (_how, dims) => {
+      const fs = createMemoryFileSystem();
+      // Two partitions of 600 spans of 8 * 10^15 ns, all of equal dimensions: each sum fits int64, their sum (9.6 * 10^18) does not.
+      const heavy = (from: number): Row[] =>
+        Array.from({ length: 600 }, (_, i) => ({
+          ...spanRow(from + i, lcg(from + i)),
+          name: 'heavy',
+          scope_name: null,
+          service_name: null,
+          start_time_unix_nano: BigInt(i),
+          end_time_unix_nano: BigInt(i) + 8_000_000_000_000_000n,
+          duration_ns: 8_000_000_000_000_000n,
+        }));
+      const entries = await writeRolled(
+        fs,
+        [{ spans: heavy(0) }, { spans: heavy(1000) }],
+        dims === null ? [null, null] : [],
+      );
+      if (dims === undefined) expect(entries[0]?.files.span_rollups).toBeDefined();
+      const warned: string[] = [];
+      const out = await compactPartitions(fs, OUT, entries, {
+        ...rollupOpts(2),
+        warn: (m) => warned.push(m),
+      });
+      expect(out.files.spans?.rows).toBe(1200);
+      expect(out.files.span_rollups).toBeUndefined();
+      expect(warned).toHaveLength(1);
+      expect(warned[0]).toContain('int64');
+      expect(await fs.exists(`${OUT}/data/partitions/000002/span_rollups.parquet`)).toBe(false);
+    },
+  );
+});
+
+describe('compactPartitions: timeEndMax', () => {
+  test('written at cut, the max after compaction, and recomputed for inputs without it', async () => {
+    const fs = createMemoryFileSystem();
+    const a = spansOf(6, 20, 0);
+    const b = spansOf(7, 20, 100);
+    const entries = await writeRolled(fs, [{ spans: a }, { spans: b }]);
+    const ends = (rows: Row[]) => rows.map((r) => Reflect.get(r, 'end_time_unix_nano') as bigint);
+    const maxOf = (xs: bigint[]) => String([...xs].sort((p, q) => (p < q ? 1 : p > q ? -1 : 0))[0]);
+    expect(entries[0]?.files.spans?.timeEndMax).toBe(maxOf(ends(a)));
+    expect(typeof entries[0]?.files.traces?.timeEndMax).toBe('string');
+    const out = await compactPartitions(fs, OUT, entries, rollupOpts(2));
+    expect(out.files.spans?.timeEndMax).toBe(maxOf([...ends(a), ...ends(b)]));
+    // Inputs of format 4 (no timeEndMax) are read anyway, so the compacted file has it.
+    const stripped = entries.map((e) => {
+      const files = { ...e.files };
+      for (const t of ['spans', 'traces'] as const) {
+        const f = files[t];
+        if (f !== undefined)
+          files[t] = Object.fromEntries(Object.entries(f).filter(([k]) => k !== 'timeEndMax')) as typeof f;
+      }
+      return { ...e, files };
+    });
+    const again = await compactPartitions(fs, OUT, stripped, rollupOpts(3));
+    expect(again.files.spans?.timeEndMax).toBe(maxOf([...ends(a), ...ends(b)]));
+    expect(again.files.traces?.timeEndMax).toBe(out.files.traces?.timeEndMax);
+    expect(out.files.logs).toBeUndefined();
+  });
+});
+
+describe('compactPartitions: rows that end before they start, and given rollups', () => {
+  const early = (i: number, start: bigint): Row => ({
+    ...spanRow(i, lcg(i)),
+    start_time_unix_nano: start,
+    end_time_unix_nano: start - 100n,
+    duration_ns: 0n,
+  });
+
+  test('timeEndMax is never below timeMin, at cut and after compaction, for spans and traces', async () => {
+    const fs = createMemoryFileSystem();
+    const entries = await writeRolled(fs, [{ spans: [early(1, 500n)] }, { spans: [early(2, 900n)] }]);
+    for (const e of entries) {
+      expect(e.files.spans?.timeEndMax).toBe(e.files.spans?.timeMin);
+      expect(e.files.traces?.timeEndMax).toBe(e.files.traces?.timeMin);
+    }
+    const out = await compactPartitions(fs, OUT, entries, rollupOpts(2));
+    expect(out.files.spans?.timeMin).toBe('500');
+    expect(out.files.spans?.timeEndMax).toBe('900');
+    expect(out.files.traces?.timeEndMax).toBe('900');
+  });
+
+  test('equal descriptions add the rollup files as given; they are not recomputed from the spans', async () => {
+    const fs = createMemoryFileSystem();
+    const a = spansOf(1, 30, 0);
+    const b = spansOf(2, 25, 100);
+    const entries = await writeRolled(fs, [{ spans: a }, { spans: b }]);
+    // Hand-written rollup for the first input: every count and sum tenfold, which no recompute reproduces.
+    const first = entries[0];
+    const file = first?.files.span_rollups;
+    if (first === undefined || file === undefined) throw new Error('no rollup');
+    const given = (await rowsOfFile(fs, first, 'span_rollups')).map((r) => ({
+      ...r,
+      n: (Reflect.get(r, 'n') as bigint) * 10n,
+      duration_sum: (Reflect.get(r, 'duration_sum') as bigint) * 10n,
+    }));
+    await fs.writeBytes(
+      `${OUT}/${file.path}`,
+      encodeTable('span_rollups', given, { rowGroupRows: ROW_GROUP }),
+    );
+    const second = entries[1];
+    if (second === undefined) throw new Error('no second');
+    const out = await compactPartitions(fs, OUT, entries, rollupOpts(2));
+    const expected = addRollupRows(given, await rowsOfFile(fs, second, 'span_rollups'));
+    expect(canon(await rowsOfFile(fs, out, 'span_rollups'))).toEqual(canon(expected));
+    const recomputed = spanRollupRows(batchFromRows('spans', [...a, ...b]), DIMS);
+    expect(canon(expected)).not.toEqual(canon(recomputed));
   });
 });

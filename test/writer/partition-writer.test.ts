@@ -11,6 +11,8 @@ const keys = (): Record<Table, string[]> => ({
   points: [],
   traces: [],
   patterns: [],
+  span_rollups: [],
+  log_rollups: [],
 });
 
 function span(i: number, scope: string, start: bigint): Row {

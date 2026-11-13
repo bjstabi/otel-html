@@ -2,7 +2,7 @@ import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path
 import { decodeColumns } from '../format/columns.js';
 import { reviveDataJson, unwrapDataFile } from '../format/data-file.js';
 import {
-  isV4,
+  isPartitioned,
   type Manifest,
   type ManifestChunk,
   type ManifestV4,
@@ -11,7 +11,7 @@ import {
 } from '../format/manifest.js';
 import { MANIFEST_KEY, MANIFEST_PATH, type Signal } from '../format/paths.js';
 import { LOG_COLUMNS, METRIC_COLUMNS, SPAN_COLUMNS } from '../format/specs.js';
-import { CHUNK_READABLE_FORMAT_VERSIONS } from '../format/version.js';
+import { CHUNK_READABLE_FORMAT_VERSIONS, READABLE_PARTITION_FORMATS } from '../format/version.js';
 import { OtelHtmlError } from '../model/errors.js';
 import { parseUnixNanos, type UnixNanos } from '../model/ids.js';
 import { at } from './checkpoint.js';
@@ -128,7 +128,7 @@ function chunkInput({ dir, file, raw }: Located, verb: string): Input {
   ) {
     // Chunk reports of every readable version lay out alike; anything else is another otel-html's to read.
     throw new OtelHtmlError('version-mismatch', {
-      message: `${file}: unsupported report formatVersion ${JSON.stringify(raw.formatVersion)}; this otel-html reads formatVersion ${[...CHUNK_READABLE_FORMAT_VERSIONS, 4].join(', ')}`,
+      message: `${file}: unsupported report formatVersion ${JSON.stringify(raw.formatVersion)}; this otel-html reads formatVersion ${[...CHUNK_READABLE_FORMAT_VERSIONS, ...READABLE_PARTITION_FORMATS].join(', ')}`,
       hint: `run ${verb} with the otel-html version that wrote the report, or regenerate it from its OTLP input`,
     });
   }
@@ -153,9 +153,15 @@ interface PartitionInput {
 export async function readMergeInput(fs: FileSystem, rawDir: string, verb = 'merge'): Promise<MergeInput> {
   const located = await locateManifest(fs, rawDir, verb);
   const { raw, file, dir } = located;
-  if (typeof raw === 'object' && raw !== null && 'formatVersion' in raw && raw.formatVersion === 4) {
+  if (
+    typeof raw === 'object' &&
+    raw !== null &&
+    'formatVersion' in raw &&
+    READABLE_PARTITION_FORMATS.some((f) => f === raw.formatVersion)
+  ) {
     const manifest = inFile(file, () => parseAnyManifest(raw));
-    if (!isV4(manifest)) throw new Error('invariant violated: a format-4 manifest parsed as another format');
+    if (!isPartitioned(manifest))
+      throw new Error('invariant violated: a partition manifest parsed as another format');
     return {
       kind: 'partitions',
       dir,

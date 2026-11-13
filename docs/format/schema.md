@@ -177,6 +177,53 @@ Log pattern clusters (Drain) with their counts in the partition. See [Patterns](
 | `severity_counts` | Dictionary<Int32, Utf8> | JSON text | yes |
 | `sample` | Utf8 | utf8 | yes |
 
+## Table `span_rollups`
+
+Spans counted per time grain and dimension combination (format 5; optional per partition).
+
+- Sorted by: `scope_name`, `service_name`, `start_time_unix_nano`
+- Time column (for the partition's `timeMin` and `timeMax`): `start_time_unix_nano`
+- Fixed statistics columns: `scope_name`, `service_name`, `name`
+
+| column | Arrow type | logical type | nullable |
+|---|---|---|---|
+| `start_time_unix_nano` | Int64 | int64 | no |
+| `service_name` | Dictionary<Int32, Utf8> | utf8 | yes |
+| `scope_name` | Dictionary<Int32, Utf8> | utf8 | yes |
+| `name` | Dictionary<Int32, Utf8> | utf8 | yes |
+| `kind` | Int32 | int32 | yes |
+| `status_code` | Int32 | int32 | yes |
+| `resource_name` | Dictionary<Int32, Utf8> | utf8 | yes |
+| `resource_attributes` | Dictionary<Int32, Utf8> | JSON text | yes |
+| `attributes` | Dictionary<Int32, Utf8> | JSON text | yes |
+| `duration_bucket` | Int32 | int32 | no |
+| `n` | Int64 | int64 | no |
+| `duration_sum` | Int64 | int64 | no |
+| `duration_min` | Int64 | int64 | no |
+| `duration_max` | Int64 | int64 | no |
+
+## Table `log_rollups`
+
+Log records counted per time grain and dimension combination (format 5; optional per partition).
+
+- Sorted by: `scope_name`, `service_name`, `time_unix_nano`
+- Time column (for the partition's `timeMin` and `timeMax`): `time_unix_nano`
+- Fixed statistics columns: `scope_name`, `service_name`, `severity_number`
+
+| column | Arrow type | logical type | nullable |
+|---|---|---|---|
+| `time_unix_nano` | Int64 | int64 | yes |
+| `observed_time_unix_nano` | Int64 | int64 | yes |
+| `service_name` | Dictionary<Int32, Utf8> | utf8 | yes |
+| `scope_name` | Dictionary<Int32, Utf8> | utf8 | yes |
+| `severity_number` | Int32 | int32 | yes |
+| `host_name` | Dictionary<Int32, Utf8> | utf8 | yes |
+| `event_name` | Dictionary<Int32, Utf8> | utf8 | yes |
+| `has_trace` | Bool | bool | no |
+| `resource_attributes` | Dictionary<Int32, Utf8> | JSON text | yes |
+| `attributes` | Dictionary<Int32, Utf8> | JSON text | yes |
+| `n` | Int64 | int64 | no |
+
 ## Points: delta columns and series identity
 
 `delta_value` and `delta_count` hold the normalized increase of a series since its previous point. They are filled for
@@ -201,8 +248,8 @@ A series whose histogram bounds change is a new series.
 
 ## The views
 
-The viewer reads the data only through five views, one per table (`spans`, `logs`, `points`, `traces`,
-`patterns`). Each view has the name of its table and is the union of that table's file in every partition that lists
+The viewer reads the data only through seven views, one per table (`spans`, `logs`, `points`, `traces`,
+`patterns`, `span_rollups`, `log_rollups`). Each view has the name of its table and is the union of that table's file in every partition that lists
 one, in manifest order. It has the table's columns, in the order above, then two virtual columns:
 
 | column | type | meaning |
@@ -220,7 +267,7 @@ A table that no partition holds is an empty view with the same columns.
 - Attributes are JSON text columns, and an attribute is read by JSON Pointer (RFC 6901, `~` as `~0`, `/` as `~1`). An
   object with a `$`-prefixed or `__proto__` key is stored as `{"$m": [[key, value], ...]}`, so a reader looks a key up
   in the object first and then in those pairs.
-- A backend satisfies the contract by defining the same views with these columns: the five names, the table columns
+- A backend satisfies the contract by defining the same views with these columns: the seven names, the table columns
   above and the two virtual columns.
 
 ## Manifest (`data/manifest.js`)
@@ -229,7 +276,7 @@ The manifest is a script that registers its JSON payload. Its fields:
 
 | field | meaning |
 |---|---|
-| `formatVersion` | `4` |
+| `formatVersion` | `4` or `5` |
 | `otelHtmlVersion` | the version of otel-html that wrote the report |
 | `title` | the report title |
 | `epochUnixNano` | decimal nanoseconds of the report's epoch |
@@ -253,6 +300,8 @@ Each `partitions` entry is `{ n, source, files }`. `files` has an entry per tabl
 | `timeMin` | the smallest value of the table's time column, as int64 text, or null when there are no rows |
 | `timeMax` | the largest value of the table's time column, as int64 text, or null when there are no rows |
 | `values` | maps each statistics key to its distinct values in the file, or to null when the file has more than the cap (or the table cannot answer the key) |
+| `timeEndMax` | format 5, `spans` and `traces` files only, optional: the largest end time, as int64 text, or null when there are no rows |
+| `rollup` | format 5, rollup tables only, required: `{ grainNs, dimensions, durationBuckets? }`, what the file groups by |
 
 ### `source`
 

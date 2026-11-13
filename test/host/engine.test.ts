@@ -64,6 +64,16 @@ describe('startHostEngine', () => {
     expect(rows(await e.query('SELECT count(*) AS n FROM spans'))).toEqual([{ n: 5n }]);
   });
 
+  it('serves the rollup files of a format-5 report: span_rollups has rows, log_rollups is an empty view', async () => {
+    const e = await started();
+    const [spanRollups] = rows(await e.query('SELECT sum(n) AS n FROM span_rollups'));
+    expect(Number(String(spanRollups?.n))).toBe(5);
+    expect(rows(await e.query('SELECT count(*) AS n FROM log_rollups'))).toEqual([{ n: 0n }]);
+    const sql =
+      "SELECT count(*) AS n FROM span_rollups WHERE filename = 'data/partitions/000001/span_rollups.parquet'";
+    expect(Number(rows(await e.query(sql))[0]?.n)).toBeGreaterThan(0);
+  });
+
   it("has the JSON functions the viewer's SQL uses, loaded from the signed extension before the policy", async () => {
     const e = await started();
     expect(rows(await e.query(`SELECT json_extract_string('{"a":"x"}', '/a') AS v`))).toEqual([{ v: 'x' }]);

@@ -1,5 +1,5 @@
 import type { ReportFormat } from '../config/schema.js';
-import type { PartitionEntry, PartitionFile } from '../format/manifest.js';
+import type { PartitionEntry, PartitionFile, RollupDescription } from '../format/manifest.js';
 import './parquet-wasm-source.js';
 import {
   batchFromRows,
@@ -10,9 +10,9 @@ import {
   pushRow,
 } from '../format/parquet/batch.js';
 import { checkRow, encodeColumns } from '../format/parquet/codec.js';
-import { TABLES, type Table } from '../format/parquet/columns.js';
+import { type RollupTable, TABLES, type Table } from '../format/parquet/columns.js';
 import type { Row } from '../format/parquet/rows.js';
-import { fileStatistics } from '../format/parquet/stats.js';
+import { fileStatistics, hasTimeEndMax, timeEndMaxOf } from '../format/parquet/stats.js';
 import { partitionDir, partitionFilePath, partitionKey, partitionWrapperPath } from '../format/paths.js';
 import { at } from './checkpoint.js';
 import type { FileSystem } from './ports.js';
@@ -36,6 +36,8 @@ export interface PartitionWriterOptions {
  */
 interface Derived {
   rows: Partial<Record<Table, readonly Row[]>>;
+  /** The `rollup` description each listed rollup table's file carries. */
+  rollups?: Partial<Record<RollupTable, RollupDescription>>;
   commit?: () => void;
 }
 
@@ -157,10 +159,14 @@ export class PartitionWriter {
             bytes,
           );
         }
+        const rollup =
+          table === 'span_rollups' || table === 'log_rollups' ? derived?.rollups?.[table] : undefined;
         files[table] = {
           path,
           bytes: bytes.length,
           ...fileStatistics(table, batch, this.#opts.statisticsKeys[table], this.#opts.facetValueCap),
+          ...(hasTimeEndMax(table) ? { timeEndMax: timeEndMaxOf(batch) } : {}),
+          ...(rollup === undefined ? {} : { rollup }),
         };
       }
       derived?.commit?.(); // before the number advances: a throw here leaves the cut retryable

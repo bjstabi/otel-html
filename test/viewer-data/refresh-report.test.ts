@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import type { ManifestV4 } from '../../src/format/manifest.js';
+import { ROLLUP_GRAIN_NS } from '../../src/format/manifest.js';
 import { partitionFilePath, partitionWrapperPath } from '../../src/format/paths.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { toBase64 } from '../../src/viewer/data/engine/bytes.js';
@@ -121,12 +122,34 @@ describe('refreshReport', () => {
     ]);
     expect(f.calls.url[0]?.[1]).toBe(new URL(partitionFilePath(1, 'spans'), BASE).href);
     expect(f.calls.drop).toEqual([]);
-    expect(f.calls.statements).toHaveLength(5);
+    expect(f.calls.statements).toHaveLength(7);
     expect(f.calls.clearCache).toBe(1);
     expect(manifest.partitions.map((p) => p.n)).toEqual([0, 1]);
     expect(dataSource?.manifest).toBe(manifest);
     await dataSource?.resourceValues('service.name', { window: null }).catch(() => undefined);
     expect(f.calls.queries).toBeGreaterThan(0);
+  });
+
+  test('Refresh picks up a rollup file added to a partition', async () => {
+    const f = fakes('site');
+    const asFormat5 = (m: ManifestV4): ManifestV4 => ({ ...m, formatVersion: 5 });
+    const previous = asFormat5(manifestOf([0, 1]));
+    const next = asFormat5(manifestOf([0, 1]));
+    const [, second] = next.partitions;
+    if (second === undefined) throw new Error('no partition');
+    second.files = {
+      ...second.files,
+      span_rollups: {
+        ...file(1, 'spans'),
+        path: partitionFilePath(1, 'span_rollups'),
+        rollup: { grainNs: ROLLUP_GRAIN_NS, dimensions: ['service_name'] },
+      },
+    };
+    const { manifest } = await run(f, previous, next);
+    expect(f.calls.url.map(([name]) => name)).toEqual([partitionFilePath(1, 'span_rollups')]);
+    expect(f.calls.drop).toEqual([]);
+    expect(manifest.partitions[1]?.files.span_rollups?.path).toBe(partitionFilePath(1, 'span_rollups'));
+    expect(f.calls.statements).toHaveLength(7);
   });
 
   test('asks the loader for data/manifest.js?r=<now>', async () => {
@@ -207,7 +230,7 @@ describe('refreshReport failures', () => {
     );
     expect(manifest.partitions.map((p) => p.n)).toEqual([2]);
     expect(warnings).toHaveLength(2);
-    expect(f.calls.statements).toHaveLength(5);
+    expect(f.calls.statements).toHaveLength(7);
     expect(f.calls.clearCache).toBe(1);
   });
 
@@ -218,7 +241,7 @@ describe('refreshReport failures', () => {
     };
     await expect(run(f, manifestOf([0]), manifestOf([1]))).rejects.toThrow('register failed');
     expect(f.calls.drop.sort()).toEqual([partitionFilePath(1, 'spans'), partitionFilePath(1, 'logs')].sort());
-    expect(f.calls.statements).toHaveLength(5);
+    expect(f.calls.statements).toHaveLength(7);
     expect(f.calls.clearCache).toBe(0);
   });
 });
@@ -241,14 +264,14 @@ describe('refreshReport unchanged and rollback', () => {
     const next = { ...manifestOf([0]), updatedAt: '2026-11-06T00:00:09.000Z' };
     const result = await run(f, manifestOf([0]), next);
     expect(result.dataSource).not.toBeNull();
-    expect(f.calls.statements).toHaveLength(5);
+    expect(f.calls.statements).toHaveLength(7);
   });
 
   test('a view that fails restores the previous views, drops the new files and rethrows', async () => {
     const f = fakes('site', (_s, nth) => nth === 3);
     await expect(run(f, manifestOf([0]), manifestOf([1]))).rejects.toThrow('view failed');
-    // 3 statements of the new manifest (the third failed), then the previous manifest's five views.
-    expect(f.calls.statements).toHaveLength(8);
+    // 3 statements of the new manifest (the third failed), then the previous manifest's seven views.
+    expect(f.calls.statements).toHaveLength(10);
     const restored = f.calls.statements.slice(3);
     expect(restored.filter((s) => s.includes('000000'))).toHaveLength(2);
     expect(restored.some((s) => s.includes('000001'))).toBe(false);

@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test } from 'vitest';
 import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
-import { isV4, parseAnyManifest } from '../../src/format/manifest.js';
+import { isPartitioned, parseAnyManifest } from '../../src/format/manifest.js';
 import { MANIFEST_KEY } from '../../src/format/paths.js';
 import { buildFormat4Report, spansOnlyRequest } from '../../test-support/format4-fixture.js';
 import { writeReportDir } from '../../test-support/report-dir.js';
@@ -14,7 +14,7 @@ test('writeReportDir writes the manifest and every listed file, and close remove
     const manifest = parseAnyManifest(
       reviveDataJson(unwrapDataFile(readFileSync(join(dir, 'data/manifest.js'), 'utf8'), MANIFEST_KEY)),
     );
-    if (!isV4(manifest)) throw new Error('not a v4 manifest');
+    if (!isPartitioned(manifest)) throw new Error('not a v4 manifest');
     expect(manifest.partitions).toHaveLength(1);
     expect(f.files.size).toBeGreaterThan(0);
     for (const [path, bytes] of f.files) {

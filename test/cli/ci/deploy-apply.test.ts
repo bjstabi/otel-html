@@ -299,6 +299,27 @@ describe('push', () => {
     expect(state.files.files[`${RUN42}/data/manifest.js`]).toBeGreaterThan(0);
   });
 
+  test('the epoch and range of a new run report come from the base tables, not a rollup grain floor', async () => {
+    const { u, files } = push({ sequence: 1, parts: [['job:7#flush:0', 0, true]] });
+    const part = u.partitions?.[0];
+    const spans = part?.files.spans;
+    if (part === undefined || spans === undefined) throw new Error('fixture has no spans');
+    const path = 'partitions/0/span_rollups.parquet';
+    const { timeEndMax: _end, ...base } = spans;
+    part.files.span_rollups = {
+      ...base,
+      path,
+      timeMin: '1000',
+      rollup: { grainNs: 65_536_000_000, dimensions: [] },
+    };
+    files[path] = files['partitions/0/spans.parquet'] ?? new Uint8Array();
+    const r = await apply([add(u, files)]);
+    expect(r).toMatchObject({ changed: true, rejected: 0 });
+    const m = await manifestOf(RUN42);
+    expect(m.epochUnixNano).toBe(spans.timeMin);
+    expect(m.range?.start).toBe(spans.timeMin);
+  });
+
   test('on an old-publisher site without site-state: the other runs stay', async () => {
     mkdirSync(join(site, MAIN, 'runs/41'), { recursive: true });
     writeFileSync(join(site, MAIN, 'runs/41/index.html'), 'old');

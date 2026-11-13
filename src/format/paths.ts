@@ -65,7 +65,7 @@ export function partitionKey(n: number, table: Table): string {
 
 /** A manifest-listed partition file: six digits minimum, wider for n >= 10^6. */
 export const PARTITION_FILE_RE: RegExp =
-  /^data\/partitions\/[0-9]{6,}\/(?:spans|logs|points|traces|patterns)\.parquet$/;
+  /^data\/partitions\/[0-9]{6,}\/(?:spans|logs|points|traces|patterns|span_rollups|log_rollups)\.parquet$/;
 
 /** A viewer asset's report-relative path is `assets/<file>`; this is the file part. */
 export function assetFileName(path: string): string {

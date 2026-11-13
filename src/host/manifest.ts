@@ -1,5 +1,5 @@
 import { reviveDataJson, unwrapDataFile } from '../format/data-file.js';
-import { isV4, type ManifestV4, parseAnyManifest } from '../format/manifest.js';
+import { isPartitioned, type ManifestV4, parseAnyManifest } from '../format/manifest.js';
 import { MANIFEST_KEY, MANIFEST_PATH } from '../format/paths.js';
 import { oldFormatMessage } from '../format/version.js';
 import { OtelHtmlError } from '../model/errors.js';
@@ -27,7 +27,7 @@ export async function readHostManifest(
   }
   const script = await fs.readText(path);
   const manifest = parseAnyManifest(reviveDataJson(unwrapDataFile(script, MANIFEST_KEY)));
-  if (!isV4(manifest)) {
+  if (!isPartitioned(manifest)) {
     throw new OtelHtmlError('invalid-report', {
       message: oldFormatMessage(manifest.formatVersion),
       hint: `otel-html merge ${report} --out <new>`,

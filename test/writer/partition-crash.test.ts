@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import type { ConfigInput } from '../../src/config/schema.js';
 import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
-import { isV4, type ManifestV4, parseAnyManifest } from '../../src/format/manifest.js';
+import { isPartitioned, type ManifestV4, parseAnyManifest } from '../../src/format/manifest.js';
 import { decodeTable } from '../../src/format/parquet/codec.js';
 import { MANIFEST_KEY } from '../../src/format/paths.js';
 import type { FileSystem } from '../../src/writer/ports.js';
@@ -23,7 +23,7 @@ function manifest(w: TestWriter): ManifestV4 {
   const text = w.fs.snapshot().get(`${OUT}/data/manifest.js`);
   if (text === undefined) throw new Error('no manifest');
   const m = parseAnyManifest(reviveDataJson(unwrapDataFile(text, MANIFEST_KEY)));
-  if (!isV4(m)) throw new Error('not v4');
+  if (!isPartitioned(m)) throw new Error('not v4');
   return m;
 }
 
@@ -253,7 +253,7 @@ describe('a flush that fails between two tables', () => {
 
     await s.flush(); // the rows went back (R22): the retry writes partition 1 with both tables
     const p1 = manifest(w).partitions.find((p) => p.n === 1);
-    expect(Object.keys(p1?.files ?? {}).sort()).toEqual(['logs', 'patterns', 'points']); // patterns derive from the logs
+    expect(Object.keys(p1?.files ?? {}).sort()).toEqual(['log_rollups', 'logs', 'patterns', 'points']); // patterns and the log rollup derive from the logs
     expect(p1?.files.logs?.rows).toBe(2);
     expect(p1?.files.points?.rows).toBe(1);
     const points = decodeTable(

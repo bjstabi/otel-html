@@ -1,5 +1,5 @@
 import { reviveDataJson, unwrapDataFile, wrapDataFile } from '../format/data-file.js';
-import { type AnyManifest, isV4, type ManifestV4, parseAnyManifest } from '../format/manifest.js';
+import { type AnyManifest, isPartitioned, type ManifestV4, parseAnyManifest } from '../format/manifest.js';
 import {
   LOCK_PATH,
   MANIFEST_KEY,
@@ -126,9 +126,9 @@ export async function loadPartitionCheckpoint(
   format: string,
 ): Promise<PartitionCheckpoint> {
   const manifest = await readManifest(fs, out);
-  if (!isV4(manifest)) {
+  if (!isPartitioned(manifest)) {
     throw new OtelHtmlError('version-mismatch', {
-      message: `cannot append: the report at ${out} is format ${manifest.formatVersion}; writer.format local or site writes format 4`,
+      message: `cannot append: the report at ${out} is format ${manifest.formatVersion}; writer.format local or site writes format 5`,
       path: 'manifest.formatVersion',
       hint: `use merge to convert: \`otel-html merge ${out} -o <dir> --format ${format}\``,
     });

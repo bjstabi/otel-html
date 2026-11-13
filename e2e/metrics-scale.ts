@@ -23,7 +23,7 @@ export async function ensureMetricsScaleReport(): Promise<void> {
   const dir = reportDir('metrics-scale');
   // A report left by an older checkout (format 3, or format 4 in the local layout) is not read by the format-4 viewer: it is written again.
   const manifest = await readFile(new URL('data/manifest.js', dir), 'utf8').catch(() => '');
-  if (/"formatVersion":\s*4\b/.test(manifest) && /"format":\s*"site"/.test(manifest)) return;
+  if (/"formatVersion":\s*[45]\b/.test(manifest) && /"format":\s*"site"/.test(manifest)) return;
   await rm(dir, { recursive: true, force: true });
   const started = Date.now();
   // Written aside and moved into place, so the folder exists only once the report is whole.

@@ -1,5 +1,10 @@
 import type { ReportFormat } from '../config/schema.js';
-import type { PartitionEntry, PartitionFile } from '../format/manifest.js';
+import {
+  type PartitionEntry,
+  type PartitionFile,
+  ROLLUP_GRAIN_NS,
+  type RollupDescription,
+} from '../format/manifest.js';
 import './parquet-wasm-source.js';
 import { batchFromRows, type ColumnBatch } from '../format/parquet/batch.js';
 import {
@@ -9,14 +14,24 @@ import {
   BloomCollector,
 } from '../format/parquet/bloom.js';
 import { checkRow, compareKeys, encodeColumns, sortKeyOf } from '../format/parquet/codec.js';
-import { TABLE_COLUMNS, TABLES, type Table } from '../format/parquet/columns.js';
+import { ROLLUP_OF, type RollupTable, TABLE_COLUMNS, TABLES, type Table } from '../format/parquet/columns.js';
 import type { Row } from '../format/parquet/rows.js';
-import { type FileStatistics, fileStatistics } from '../format/parquet/stats.js';
+import { type FileStatistics, fileStatistics, hasTimeEndMax, timeEndMaxOf } from '../format/parquet/stats.js';
 import { encodeBatches, type PanicGuard, readColumns } from '../format/parquet/stream.js';
 import { partitionDir, partitionFilePath, partitionKey, partitionWrapperPath } from '../format/paths.js';
 import { OtelHtmlError } from '../model/errors.js';
 import { at } from './checkpoint.js';
 import type { FileSystem } from './ports.js';
+import {
+  logRollupRows,
+  RollupSum,
+  rollupAllowed,
+  rollupDimensions,
+  rollupGroupLimit,
+  rollupSumsFit,
+  spanRollupRows,
+  widestDimension,
+} from './rollup-rows.js';
 import { watchWasmPanics } from './wasm-panic.js';
 import { writeWrapperOfFile } from './wrapper-file.js';
 
@@ -36,6 +51,8 @@ export interface CompactOptions {
    * (a merge's copies), whose ids collide: only rows with the same id and template are summed.
    */
   patternKey?: 'cluster' | 'cluster-template';
+  /** Where the guard's refusal of a rollup is told. */
+  warn?: (message: string, attrs: Record<string, unknown>) => void;
 }
 
 /** Rows a merge holds before it hands them to the writer; the Parquet writer still cuts row groups of `rowGroupRows`. */
@@ -181,6 +198,7 @@ class StatisticsFold {
   #rows = 0;
   #min: bigint | null = null;
   #max: bigint | null = null;
+  #end: string | null = null;
   readonly #sets = new Map<string, Set<string> | null>();
 
   constructor(
@@ -190,8 +208,11 @@ class StatisticsFold {
     for (const k of keys) this.#sets.set(k, new Set());
   }
 
-  add(s: FileStatistics): void {
+  add(s: FileStatistics, timeEndMax?: string | null): void {
     this.#rows += s.rows;
+    if (timeEndMax !== undefined && timeEndMax !== null) {
+      if (this.#end === null || BigInt(timeEndMax) > BigInt(this.#end)) this.#end = timeEndMax;
+    }
     const lo = s.timeMin === null ? null : BigInt(s.timeMin);
     const hi = s.timeMax === null ? null : BigInt(s.timeMax);
     if (lo !== null && (this.#min === null || lo < this.#min)) this.#min = lo;
@@ -207,6 +228,11 @@ class StatisticsFold {
       for (const v of vals) set.add(v);
       if (set.size > this.cap) this.#sets.set(k, null);
     }
+  }
+
+  /** The largest end time folded in (null when no row had one). */
+  get timeEndMax(): string | null {
+    return this.#end;
   }
 
   result(): FileStatistics {
@@ -401,6 +427,79 @@ async function aggregatePatterns(rows: AsyncIterable<Located>, byTemplate: boole
     });
 }
 
+// -- rollups ----------------------------------------------------------------------------------------------------
+
+type RollupPlan =
+  | { how: 'sum'; description: RollupDescription }
+  | { how: 'recompute'; description: RollupDescription };
+
+const sameDescription = (a: RollupDescription, b: RollupDescription): boolean =>
+  a.grainNs === b.grainNs &&
+  a.durationBuckets === b.durationBuckets &&
+  a.dimensions.length === b.dimensions.length &&
+  a.dimensions.every((d, i) => d === b.dimensions[i]);
+
+/**
+ * How the compacted partition gets the rollup of `table`: null when no input has rows of its base table; the inputs'
+ * rollups added up when every input with base rows has one and the descriptions are all equal; else recomputed from
+ * the rows of the merge, with the dimensions this report's statistics keys give.
+ */
+function planRollup(
+  entries: readonly PartitionEntry[],
+  table: RollupTable,
+  opts: CompactOptions,
+): RollupPlan | null {
+  const base = ROLLUP_OF[table];
+  const withBase = entries.filter((e) => e.files[base] !== undefined);
+  if (withBase.length === 0) return null;
+  const descriptions = withBase.map((e) => e.files[table]?.rollup);
+  const first = descriptions[0];
+  if (first !== undefined && descriptions.every((d) => d !== undefined && sameDescription(d, first))) {
+    return { how: 'sum', description: first };
+  }
+  return {
+    how: 'recompute',
+    description: {
+      grainNs: ROLLUP_GRAIN_NS,
+      dimensions: rollupDimensions(base, opts.statisticsKeys[base]),
+      ...(table === 'span_rollups' ? { durationBuckets: 'log2x8' as const } : {}),
+    },
+  };
+}
+
+/**
+ * The most rollup groups worth holding: `rollupAllowed` refuses more than `rollupGroupLimit(base rows)`, and the output
+ * keeps every base row of the inputs (`compactPartitions` checks it), so the inputs' sum is the output's count.
+ */
+function groupLimitOf(entries: readonly PartitionEntry[], base: 'spans' | 'logs'): number {
+  return rollupGroupLimit(inputsOf(entries, base).reduce((t, f) => t + f.rows, 0));
+}
+
+/**
+ * The rows of the compacted partition's rollup: the inputs' rollup files added up, or the rows recomputed during the
+ * merge; null when the groups outgrew the limit (they were dropped as soon as they did).
+ */
+async function rollupRowsOf(
+  fs: FileSystem,
+  out: string,
+  entries: readonly PartitionEntry[],
+  table: RollupTable,
+  plan: RollupPlan,
+  recomputed: RollupSum | undefined,
+  guard: PanicGuard,
+): Promise<Row[] | null> {
+  if (plan.how === 'recompute')
+    return recomputed === undefined ? [] : recomputed.exceeded ? null : recomputed.rows();
+  const sum = new RollupSum(groupLimitOf(entries, ROLLUP_OF[table]));
+  for (const f of inputsOf(entries, table)) {
+    const rows: Row[] = [];
+    for await (const row of rowsOf(table, await blobOf(fs, at(out, f.path)), f.path, guard)) rows.push(row);
+    sum.add(rows);
+    if (sum.exceeded) return null;
+  }
+  return sum.rows();
+}
+
 // -- compaction -----------------------------------------------------------------------------------------------------
 
 /**
@@ -492,7 +591,8 @@ async function mergeTable(
   finalPath: string,
   opts: CompactOptions,
   guard: PanicGuard,
-): Promise<{ size: number; stats: FileStatistics }> {
+  onRows?: (chunk: ColumnBatch) => void,
+): Promise<{ size: number; stats: FileStatistics; timeEndMax: string | null }> {
   const keys = opts.statisticsKeys[table];
   let level: string[] = [...inputs];
   const temporary: string[] = [];
@@ -526,7 +626,11 @@ async function mergeTable(
     fs,
     merged,
     mergeFiles(fs, table, level, opts.rowGroupRows, guard, (chunk) => {
-      fold.add(fileStatistics(table, chunk, keys, opts.facetValueCap));
+      fold.add(
+        fileStatistics(table, chunk, keys, opts.facetValueCap),
+        hasTimeEndMax(table) ? timeEndMaxOf(chunk) : undefined,
+      );
+      onRows?.(chunk);
       bloom?.add(chunk.cells[BLOOM_COLUMN] ?? []);
     }),
   );
@@ -537,7 +641,7 @@ async function mergeTable(
   for (const used of level) {
     if (temporary.includes(used)) await fs.remove(used);
   }
-  return { size, stats: fold.result() };
+  return { size, stats: fold.result(), timeEndMax: fold.timeEndMax };
 }
 
 /**
@@ -567,54 +671,125 @@ export async function compactPartitions(
   let created = false;
   const watch = watchWasmPanics();
   const { guard } = watch;
+  const plans: Partial<Record<RollupTable, RollupPlan>> = {};
+  for (const t of ['span_rollups', 'log_rollups'] as const) {
+    const plan = planRollup(entries, t, opts);
+    if (plan !== null) plans[t] = plan;
+  }
+  // Rollups recomputed from the rows the merge reads anyway, one chunk at a time.
+  const recomputed: Partial<Record<RollupTable, RollupSum>> = {};
+  const onRows = (table: Table): ((chunk: ColumnBatch) => void) | undefined => {
+    const rt = table === 'spans' ? 'span_rollups' : table === 'logs' ? 'log_rollups' : null;
+    const plan = rt === null ? undefined : plans[rt];
+    if (rt === null || plan === undefined || plan.how !== 'recompute') return undefined;
+    const sum = new RollupSum(groupLimitOf(entries, ROLLUP_OF[rt]));
+    recomputed[rt] = sum;
+    const make = rt === 'span_rollups' ? spanRollupRows : logRollupRows;
+    return (chunk) => {
+      if (sum.exceeded) return;
+      sum.add(make(chunk, plan.description.dimensions));
+    };
+  };
   try {
     for (const table of TABLES) {
+      const rollupTable = table === 'span_rollups' || table === 'log_rollups' ? table : null;
+      const plan = rollupTable === null ? undefined : plans[rollupTable];
+      if (rollupTable !== null && plan === undefined) continue;
       const inputs = inputsOf(entries, table);
-      if (inputs.length === 0) continue;
-      if (!created) {
-        await fs.mkdirp(dir);
-        created = true;
-      }
+      if (rollupTable === null && inputs.length === 0) continue;
       const keys = opts.statisticsKeys[table];
       const path = partitionFilePath(n, table);
       let size: number;
       let stats: FileStatistics;
-      if (table === 'traces' || table === 'patterns') {
-        async function* located(): AsyncGenerator<Located> {
-          for (const [part, f] of inputs.entries()) {
-            for await (const row of rowsOf(table, await blobOf(fs, at(out, f.path)), f.path, guard)) {
-              yield { part, row };
-            }
-          }
+      let timeEndMax: string | null | undefined;
+      let rollup: RollupDescription | undefined;
+      if (rollupTable !== null && plan !== undefined) {
+        const rows = await rollupRowsOf(fs, out, entries, rollupTable, plan, recomputed[rollupTable], guard);
+        const baseRows = files[ROLLUP_OF[rollupTable]]?.rows ?? 0;
+        if (rows === null) {
+          opts.warn?.(
+            `the ${ROLLUP_OF[rollupTable]} rollup has more groups than ${rollupGroupLimit(baseRows)} and does not shrink this partition, so it is not written`,
+            { baseRows, groupLimit: rollupGroupLimit(baseRows) },
+          );
+          continue;
         }
-        // Each row is folded into its trace's or cluster's accumulator as it is read.
-        const byTemplate = opts.patternKey === 'cluster-template';
-        const rows = await (table === 'traces'
-          ? aggregateTraces(located())
-          : aggregatePatterns(located(), byTemplate));
+        if (!rollupSumsFit(rows)) {
+          opts.warn?.(
+            `the ${ROLLUP_OF[rollupTable]} rollup has a duration sum beyond the int64 range, so it is not written`,
+            { rollupRows: rows.length, baseRows },
+          );
+          continue;
+        }
+        if (!rollupAllowed(rows.length, baseRows)) {
+          const dimensions = plan.description.dimensions;
+          const widest = widestDimension(rows, dimensions);
+          opts.warn?.(
+            `the ${ROLLUP_OF[rollupTable]} rollup does not shrink this partition, so it is not written`,
+            {
+              rollupRows: rows.length,
+              baseRows,
+              widestDimension: widest?.dimension,
+              distinctValues: widest?.distinct,
+            },
+          );
+          continue;
+        }
+        if (!created) {
+          await fs.mkdirp(dir);
+          created = true;
+        }
         for (const [i, row] of rows.entries()) checkRow(table, row, i);
         const batch = batchFromRows(table, rows);
         const bytes = encodeColumns(table, batch, { rowGroupRows: opts.rowGroupRows });
         await fs.writeBytes(at(out, path), bytes);
         size = bytes.length;
         stats = fileStatistics(table, batch, keys, opts.facetValueCap);
+        rollup = plan.description;
       } else {
-        ({ size, stats } = await mergeTable(
-          fs,
-          dir,
-          table,
-          inputs.map((f) => at(out, f.path)),
-          at(out, path),
-          opts,
-          guard,
-        ));
-        const expected = inputs.reduce((sum, f) => sum + f.rows, 0);
-        if (stats.rows !== expected) {
-          throw new OtelHtmlError('invalid-report', {
-            path: partitionFilePath(n, table),
-            expected: `${expected} rows, as the inputs list`,
-            actual: `${stats.rows} rows merged`,
-          });
+        if (!created) {
+          await fs.mkdirp(dir);
+          created = true;
+        }
+        if (table === 'traces' || table === 'patterns') {
+          async function* located(): AsyncGenerator<Located> {
+            for (const [part, f] of inputs.entries()) {
+              for await (const row of rowsOf(table, await blobOf(fs, at(out, f.path)), f.path, guard)) {
+                yield { part, row };
+              }
+            }
+          }
+          // Each row is folded into its trace's or cluster's accumulator as it is read.
+          const byTemplate = opts.patternKey === 'cluster-template';
+          const rows = await (table === 'traces'
+            ? aggregateTraces(located())
+            : aggregatePatterns(located(), byTemplate));
+          for (const [i, row] of rows.entries()) checkRow(table, row, i);
+          const batch = batchFromRows(table, rows);
+          const bytes = encodeColumns(table, batch, { rowGroupRows: opts.rowGroupRows });
+          await fs.writeBytes(at(out, path), bytes);
+          size = bytes.length;
+          stats = fileStatistics(table, batch, keys, opts.facetValueCap);
+          if (hasTimeEndMax(table)) timeEndMax = timeEndMaxOf(batch);
+        } else {
+          ({ size, stats, timeEndMax } = await mergeTable(
+            fs,
+            dir,
+            table,
+            inputs.map((f) => at(out, f.path)),
+            at(out, path),
+            opts,
+            guard,
+            onRows(table),
+          ));
+          const expected = inputs.reduce((sum, f) => sum + f.rows, 0);
+          if (stats.rows !== expected) {
+            throw new OtelHtmlError('invalid-report', {
+              path: partitionFilePath(n, table),
+              expected: `${expected} rows, as the inputs list`,
+              actual: `${stats.rows} rows merged`,
+            });
+          }
+          if (!hasTimeEndMax(table)) timeEndMax = undefined;
         }
       }
       // The wrapper of the local format is written from the finished file in chunks, after the merge has released its readers.
@@ -626,7 +801,13 @@ export async function compactPartitions(
           at(out, path),
         );
       }
-      files[table] = { path, bytes: size, ...stats };
+      files[table] = {
+        path,
+        bytes: size,
+        ...stats,
+        ...(timeEndMax === undefined ? {} : { timeEndMax }),
+        ...(rollup === undefined ? {} : { rollup }),
+      };
     }
   } catch (e) {
     if (created) await fs.removeDir(dir).catch(() => undefined);

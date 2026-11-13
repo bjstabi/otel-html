@@ -87,12 +87,14 @@ interface ViewerOut {
   theme: 'system' | 'light' | 'dark';
   defaultDashboard: string;
   home: 'traces' | 'logs' | 'metrics' | 'dashboards';
+  defaultWindow?: string | undefined;
 }
 interface ViewerIn {
   listCap?: number | undefined;
   theme?: 'system' | 'light' | 'dark' | undefined;
   defaultDashboard?: string | undefined;
   home?: 'traces' | 'logs' | 'metrics' | 'dashboards' | undefined;
+  defaultWindow?: string | undefined;
 }
 /** A dashboard with where it was defined (a file name, or `library API`), shown in the viewer. */
 export interface ResolvedDashboard {
@@ -179,6 +181,11 @@ const ViewerSchema = z
     theme: z.enum(['system', 'light', 'dark']).default('system'),
     defaultDashboard: z.string().default('fusion'),
     home: z.enum(['traces', 'logs', 'metrics', 'dashboards']).default('traces'),
+    // The window the viewer opens on (`7d`, `90m`, `1h`); the viewer acts on it from a later release.
+    defaultWindow: z
+      .string()
+      .regex(/^[1-9][0-9]*(m|h|d)$/)
+      .optional(),
   })
   .prefault({});
 

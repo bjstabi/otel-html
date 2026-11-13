@@ -3,7 +3,7 @@ import { readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
-import { isV4, type ManifestV4, parseAnyManifest } from '../../src/format/manifest.js';
+import { isPartitioned, type ManifestV4, parseAnyManifest } from '../../src/format/manifest.js';
 import { TABLES } from '../../src/format/parquet/columns.js';
 import { MANIFEST_KEY } from '../../src/format/paths.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
@@ -325,7 +325,7 @@ async function build(shape: Shape): Promise<ScalingReport> {
   const text = w.fs.snapshot().get(`${OUT}/data/manifest.js`);
   if (text === undefined) throw new OtelHtmlError('usage', { message: 'no manifest' });
   const manifest = parseAnyManifest(reviveDataJson(unwrapDataFile(text, MANIFEST_KEY)));
-  if (!isV4(manifest)) throw new OtelHtmlError('usage', { message: 'not a v4 manifest' });
+  if (!isPartitioned(manifest)) throw new OtelHtmlError('usage', { message: 'not a partition manifest' });
   const files = new Map<string, Uint8Array>();
   for (const partition of manifest.partitions) {
     for (const table of TABLES) {
@@ -434,7 +434,7 @@ async function openPrebuilt(dir: string): Promise<ScalingReport> {
   const meta = MetaSchema.parse(JSON.parse(await readFile(join(dir, 'meta.json'), 'utf8')));
   const text = await readFile(join(dir, 'data', 'manifest.js'), 'utf8');
   const manifest = parseAnyManifest(reviveDataJson(unwrapDataFile(text, MANIFEST_KEY)));
-  if (!isV4(manifest)) throw new OtelHtmlError('usage', { message: 'not a v4 manifest' });
+  if (!isPartitioned(manifest)) throw new OtelHtmlError('usage', { message: 'not a partition manifest' });
   // The folder is shared by every worker and removed by the global setup's teardown: close() leaves it.
   return {
     dir,

@@ -4,7 +4,12 @@ import { describe, expect, test } from 'vitest';
 import { mergeWith } from '../../src/api/convert.js';
 import { decodeColumns } from '../../src/format/columns.js';
 import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
-import { isV4, type ManifestV4, parseAnyManifest, parseManifest } from '../../src/format/manifest.js';
+import {
+  isPartitioned,
+  type ManifestV4,
+  parseAnyManifest,
+  parseManifest,
+} from '../../src/format/manifest.js';
 import { decodeTable } from '../../src/format/parquet/codec.js';
 import type { Table } from '../../src/format/parquet/columns.js';
 import { MANIFEST_KEY } from '../../src/format/paths.js';
@@ -13,7 +18,13 @@ import { OtelHtmlError } from '../../src/model/errors.js';
 import type { SpanRecord } from '../../src/model/records.js';
 import { mergeReports } from '../../src/writer/merge.js';
 import { openSession } from '../../src/writer/session.js';
-import { type JsonObject, logRecord, logsRequest } from '../../test-support/otlp-builders.js';
+import {
+  type JsonObject,
+  logRecord,
+  logsRequest,
+  span,
+  traceRequest,
+} from '../../test-support/otlp-builders.js';
 import { createTestWriter, otlp, type TestWriter, testConfig } from '../../test-support/writer-deps.js';
 import { cumulativeRequest, manifestOf, spansRequest } from './helpers.js';
 
@@ -39,7 +50,7 @@ function v4Manifest(w: TestWriter, out: string): ManifestV4 {
   const text = w.fs.snapshot().get(`${out}/data/manifest.js`);
   if (text === undefined) throw new Error('no manifest');
   const m = parseAnyManifest(reviveDataJson(unwrapDataFile(text, MANIFEST_KEY)));
-  if (!isV4(m)) throw new Error('not a v4 manifest');
+  if (!isPartitioned(m)) throw new Error('not a v4 manifest');
   return m;
 }
 
@@ -291,5 +302,25 @@ describe('addRecords', () => {
     await mergeWith({ inputs: ['in'], out: 'm', config }, w.deps);
     expect(await rowsOf(w, 'm', 'logs')).toHaveLength(3);
     expect((await rowsOf(w, 'm', 'patterns')).length).toBeGreaterThan(0);
+  });
+});
+
+describe('a span that ends before it starts', () => {
+  test('is written: timeEndMax is its start, never below timeMin', async () => {
+    const w = createTestWriter();
+    const s = await openSession(w.deps, { out: 'early', config: testConfig(), mode: 'replace' });
+    await s.add(
+      otlp(
+        traceRequest([
+          span({ startTimeUnixNano: '1700000000500000000', endTimeUnixNano: '1700000000400000000' }),
+        ]),
+      ),
+      'early.json',
+    );
+    await s.close();
+    const files = v4Manifest(w, 'early').partitions[0]?.files;
+    expect(files?.spans?.timeMin).toBe('1700000000500000000');
+    expect(files?.spans?.timeEndMax).toBe('1700000000500000000');
+    expect(files?.traces?.timeEndMax).toBe('1700000000500000000');
   });
 });

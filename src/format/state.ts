@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { OtelHtmlError } from '../model/errors.js';
-import type { Table } from './parquet/columns.js';
+import type { StatisticsKeys } from './manifest.js';
 import { describe, parseWith } from './validate.js';
 
 const nonNegInt = z.number().int().nonnegative();
@@ -20,7 +20,7 @@ export interface SessionStateV2 {
   metricStreams: unknown;
   /** The drain log-template state; `null` when it has none. Its owner validates the shape. */
   drain: unknown;
-  statisticsKeys: Record<Table, string[]>;
+  statisticsKeys: StatisticsKeys;
 }
 
 // Required but opaque: any JSON value, `null` for none, never absent.
@@ -46,6 +46,8 @@ const SessionStateV2Schema: z.ZodType<SessionStateV2> = z
       points: z.array(z.string()),
       traces: z.array(z.string()),
       patterns: z.array(z.string()),
+      span_rollups: z.exactOptional(z.array(z.string())),
+      log_rollups: z.exactOptional(z.array(z.string())),
     }),
   })
   .superRefine((s, ctx) => {

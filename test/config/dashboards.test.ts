@@ -50,6 +50,19 @@ describe('dashboards in config', () => {
     expect(r.config.dashboards.map((d) => d.dashboard.id)).toEqual(['mine']);
   });
 
+  test('defaultWindow: 7d, 90m, 1h parse; 0d, 7, 1w, -1h do not', () => {
+    for (const w of ['7d', '90m', '1h']) {
+      expect(
+        resolveConfig({ file: { viewer: { defaultWindow: w } }, env: {} }).config.viewer.defaultWindow,
+      ).toBe(w);
+    }
+    for (const w of ['0d', '7', '1w', '-1h']) {
+      const e = failure(() => resolveConfig({ file: { viewer: { defaultWindow: w } }, env: {} }));
+      expect(e.message).toContain('viewer.defaultWindow');
+    }
+    expect(resolveConfig({ env: {} }).config.viewer.defaultWindow).toBeUndefined();
+  });
+
   test('defaultDashboard must name fusion or a configured dashboard', () => {
     const e = failure(() => resolveConfig({ file: { viewer: { defaultDashboard: 'nope' } }, env: {} }));
     expect(e.message).toContain('viewer.defaultDashboard');

@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 import { runCli } from '../../src/cli/program.js';
 import { reviveDataJson, unwrapDataFile } from '../../src/format/data-file.js';
 import { ENGINE_VERSION, engineAssetNames } from '../../src/format/engine.js';
-import { isV4, type ManifestV4, parseAnyManifest } from '../../src/format/manifest.js';
+import { isPartitioned, type ManifestV4, parseAnyManifest } from '../../src/format/manifest.js';
 import { decodeTable } from '../../src/format/parquet/codec.js';
 import { ENGINE_ASSET_RE, MANIFEST_KEY, partitionWrapperPath } from '../../src/format/paths.js';
 import { oldFormatMessage } from '../../src/format/version.js';
@@ -34,7 +34,7 @@ function manifestV4(w: TestWriter, out: string): ManifestV4 {
   const text = w.fs.snapshot().get(`${out}/data/manifest.js`);
   if (text === undefined) throw new Error('no manifest');
   const m = parseAnyManifest(reviveDataJson(unwrapDataFile(text, MANIFEST_KEY)));
-  if (!isV4(m)) throw new Error('not v4');
+  if (!isPartitioned(m)) throw new Error('not v4');
   return m;
 }
 
@@ -62,7 +62,7 @@ describe('upgradeReport on a format-4 report', () => {
     await w.fs.writeBytes('r/assets/duckdb.0.9.0.wasm', new Uint8Array([1]));
     await w.fs.writeTextAtomic('r/index.html', '<html>old</html>');
     const r = await upgradeReport(w.deps, 'r');
-    expect(r.formatVersion).toBe(4);
+    expect(r.formatVersion).toBe(5);
     expect(manifestV4(w, 'r')).toEqual({
       ...before,
       engine: { ...before.engine, version: ENGINE_VERSION },
@@ -380,7 +380,7 @@ describe('otel-html upgrade --format --assets-base', () => {
       w.deps,
     );
     expect(code).toBe(0);
-    expect(out).toMatch(/^upgraded r: viewer \S+, format 4\n$/);
+    expect(out).toMatch(/^upgraded r: viewer \S+, format 5\n$/);
     expect(manifestV4(w, 'r').engine).toMatchObject({ format: 'local', assetsBase: '../../assets/0.3.0/' });
   });
 });
