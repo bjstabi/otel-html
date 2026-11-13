@@ -11,6 +11,7 @@ import {
 import { buildFilter, whereOf } from '../../../src/query/sql/filter.js';
 import { absWindow } from '../../../src/query/sql/prune.js';
 import {
+  allTraceRowsQuery,
   durationBinsQuery,
   durationSummaryQuery,
   groupStatsQuery,
@@ -21,6 +22,7 @@ import {
   spanCountQuery,
   spanRowsQuery,
   timelineQuery,
+  traceBoundOf,
   tracePartitionsQuery,
   traceRowsQuery,
   traceSpansQuery,
@@ -546,6 +548,49 @@ describe('services', () => {
   });
 });
 
+describe('the unconditioned trace list', () => {
+  const TRACE_SORTS = [
+    { column: 'start', dir: 'asc' },
+    { column: 'duration', dir: 'desc' },
+    { column: 'spans', dir: 'desc' },
+    { column: 'errors', dir: 'desc' },
+    { column: 'service', dir: 'asc' },
+    { column: 'resource', dir: 'asc' },
+  ] as const;
+  let h: Format4Fixture;
+  let hdb: TestDb;
+  beforeAll(async () => {
+    // T1 split over two partitions, T2 with an error, T3; trace 99 has a log and no span
+    h = await buildFormat4Report(
+      [
+        request(P0),
+        request(P1),
+        otlp(
+          logsRequest(
+            [logRecord({ severityNumber: 9, traceId: hex(99, 32), spanId: hex(99, 16) })],
+            [attr('service.name', str('svc-a'))],
+          ) as never,
+        ),
+      ],
+      { close: false },
+    );
+    hdb = await openFixtureDb(h);
+  });
+  const hfilter = () =>
+    buildFilter({ manifest: h.manifest, table: 'spans', condition: null, text: '', window: null }).filter;
+
+  test.each(TRACE_SORTS)('allTraceRowsQuery equals traceRowsQuery, sorted by %o', (sort) => {
+    const all = hdb.rows(allTraceRowsQuery(hfilter(), sort, 50).toString());
+    expect(col(all, 'trace_id')).not.toContain(hex(99, 32));
+    expect(all).toHaveLength(3);
+    expect(all).toEqual(hdb.rows(traceRowsQuery(hfilter(), sort, 50).toString()));
+  });
+
+  test('the statement reads no spans', () => {
+    expect(allTraceRowsQuery(hfilter(), TRACE_SORTS[0], 5).toString()).not.toMatch(/\bspans\b/);
+  });
+});
+
 describe('a trace split over three partitions, mixed kinds and caps', () => {
   const many = (n: number, first: number): S[] =>
     Array.from({ length: n }, (_, i) => ({
@@ -649,5 +694,40 @@ describe('a trace split over three partitions, mixed kinds and caps', () => {
     expect(new Set(col(grun(spanRowsQuery(gfilter(), { column: 'start', dir: 'asc' }, 2)), 'total'))).toEqual(
       new Set([9n]),
     );
+  });
+
+  test('the span statement of a trace is bounded by the trace’s start and end', () => {
+    const q = traceSpansQuery(T1, ['x/spans.parquet'], 0n, { startNs: 10n, endNs: 20n });
+    expect(String(q)).toContain('start_time_unix_nano BETWEEN 10 AND 20');
+    expect(String(traceSpansQuery(T1, ['x/spans.parquet'], 0n))).not.toContain('BETWEEN');
+    expect(String(traceSpansQuery(T1, ['x/spans.parquet'], 0n, null))).not.toContain('BETWEEN');
+  });
+  test('the bound keeps every span of the trace, including one starting exactly at its end', () => {
+    const rows = run(tracePartitionsQuery(T1, true));
+    const bound = traceBoundOf(rows);
+    expect(bound).not.toBeNull();
+    const files = rows.map((r) => String(r.filename).replace('traces.parquet', 'spans.parquet'));
+    const all = run(traceSpansQuery(T1, files, f.epoch, bound));
+    expect(col(all, 'span_id')).toEqual([1, 2, 3, 5].map((n) => hex(n, 16)));
+    // the bound ends at the last start: that span (a zero-length one would be too) stays
+    const tight = { startNs: bound?.startNs ?? 0n, endNs: f.epoch + (all[3]?.start_ns as bigint) };
+    expect(col(run(traceSpansQuery(T1, files, f.epoch, tight)), 'span_id')).toHaveLength(4);
+  });
+  test('traceBoundOf spans the partitions and gives no bound when a side is missing', () => {
+    expect(
+      traceBoundOf([
+        { filename: 'a', min_start: 5n, max_end: 9n },
+        { filename: 'b', min_start: 2n, max_end: 7n },
+      ]),
+    ).toEqual({ startNs: 2n, endNs: 9n });
+    expect(traceBoundOf([{ filename: 'a', min_start: null, max_end: null }])).toBeNull();
+    expect(
+      traceBoundOf([
+        { filename: 'a', min_start: 5n, max_end: 9n },
+        { filename: 'b', min_start: null, max_end: null },
+      ]),
+    ).toEqual({ startNs: 5n, endNs: 9n });
+    expect(traceBoundOf([{ filename: 'a', min_start: 5n, max_end: null }])).toBeNull();
+    expect(traceBoundOf([])).toBeNull();
   });
 });

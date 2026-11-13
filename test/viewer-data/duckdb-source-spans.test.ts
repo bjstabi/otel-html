@@ -207,6 +207,32 @@ describe('querySpans', () => {
     ).toBe(kept.total);
   });
 
+  test('an unconditioned trace list reads traces alone; a window, a condition or a text keep the spans path', async () => {
+    const fresh = () =>
+      createDuckDbDataSource({
+        engine: mosaicQueryEngine(createCoordinator(db.connector, silentLogger), db),
+        manifest: f.manifest,
+      });
+    const spanStatements = async (over: Partial<SpanQuery>): Promise<string[]> => {
+      const before = db.connector.requests.length;
+      await fresh().querySpans(query({ mode: 'traces', needs: ['rows', 'total'], ...over }));
+      return db.connector.requests
+        .slice(before)
+        .map((r) => r.sql)
+        .filter((q) => /\bspans\b/.test(q));
+    };
+    expect(await spanStatements({})).toEqual([]);
+    const window = { start: 0, end: 1e12 };
+    for (const over of [{ window }, { condition: 'name == "COMMIT"' }, { text: 'select' }])
+      expect((await spanStatements(over)).length, JSON.stringify(over)).toBeGreaterThan(0);
+    const all = await fresh().querySpans(query({ mode: 'traces', needs: ['rows', 'total'] }));
+    const spans = await fresh().querySpans(
+      query({ mode: 'traces', needs: ['rows', 'total'], condition: 'name != "no-such"' }),
+    );
+    expect(all.rows).toEqual(spans.rows);
+    expect(all.total).toBe(spans.total);
+  });
+
   test('a negative or fractional limit is a usage error', async () => {
     for (const limit of [-1, 1.5, Number.NaN]) {
       await expect(ds.querySpans(query({ limit }))).rejects.toMatchObject({
@@ -290,6 +316,29 @@ describe('querySpans', () => {
     );
     // a trace without logs counts none
     expect((await ds.getTrace(T3)).logCount).toBe(0);
+  });
+
+  test('getTrace and serviceShare bound the span statement in time, and a trace over several partitions keeps all its spans', async () => {
+    const fresh = () =>
+      createDuckDbDataSource({
+        engine: mosaicQueryEngine(createCoordinator(db.connector, silentLogger), db),
+        manifest: f.manifest,
+      });
+    const spanSql = async (fn: () => Promise<unknown>): Promise<string[]> => {
+      const before = db.connector.requests.length;
+      await fn();
+      return db.connector.requests
+        .slice(before)
+        .map((r) => r.sql)
+        .filter((q) => q.includes('spans') && q.includes('span_id') && q.includes('trace_id'));
+    };
+    const get = await spanSql(() => fresh().getTrace(T2));
+    expect(get.length).toBeGreaterThan(0);
+    for (const q of get) expect(q).toContain('start_time_unix_nano BETWEEN');
+    const share = await spanSql(() => fresh().serviceShare(T1));
+    expect(share.length).toBeGreaterThan(0);
+    for (const q of share) expect(q).toContain('start_time_unix_nano BETWEEN');
+    expect((await fresh().getTrace(T1)).spans).toHaveLength(3);
   });
 
   test('a given duration axis is counted into exactly, bin by bin', async () => {
@@ -703,7 +752,7 @@ describe('getTrace: a provisional CI span and its final copy (§5.5)', () => {
 });
 
 describe('preparing the files a statement reads', () => {
-  const pathsOf = (table: 'spans' | 'logs' | 'traces'): string[] =>
+  const pathsOf = (table: 'spans' | 'logs' | 'traces' | 'points'): string[] =>
     f.manifest.partitions.flatMap((p) => {
       const file = p.files[table];
       return file === undefined ? [] : [file.path];
@@ -739,6 +788,24 @@ describe('preparing the files a statement reads', () => {
     expect(prepared.some((p) => pathsOf('logs').includes(p))).toBe(false);
   });
 
+  test('values outside the window are not listed and their partitions are not read', async () => {
+    const { events, source } = recording();
+    // 1 to 5 ms: only the first spans partition holds a span that starts that early, and the logs are all at 0
+    expect(await source.resourceValues('service.name', { window: { start: 1e6, end: 5e6 } })).toEqual({
+      values: ['svc-a'],
+      kind: 'string',
+      capped: false,
+    });
+    const prepared = events.flatMap((e) => (e.kind === 'prepare' ? e.paths : []));
+    expect(prepared.filter((p) => pathsOf('spans').includes(p))).toEqual([pathsOf('spans')[0]]);
+    expect(prepared.some((p) => pathsOf('logs').includes(p))).toBe(false);
+    expect(prepared.some((p) => pathsOf('points').includes(p))).toBe(false);
+    expect((await source.resourceValues('service.name', { window: null })).values).toEqual([
+      'svc-a',
+      'svc-b',
+    ]);
+  });
+
   test('no statement runs before its prepare resolved', async () => {
     let release: () => void = () => {};
     const gate = new Promise<void>((resolve) => {
@@ -751,5 +818,64 @@ describe('preparing the files a statement reads', () => {
     release();
     await pending;
     expect(events.map((e) => e.kind)).toEqual(['prepare', 'query']);
+  });
+});
+
+describe('getTrace and serviceShare with a span that ends before it starts', () => {
+  const T4 = parseTraceId(hex(4, 32), 'test');
+  const T5 = parseTraceId(hex(5, 32), 'test');
+  let g: Format4Fixture;
+  let gdb: TestDb;
+  const fresh = () =>
+    createDuckDbDataSource({
+      engine: mosaicQueryEngine(createCoordinator(gdb.connector, silentLogger), gdb),
+      manifest: g.manifest,
+    });
+  const arrows = async <T>(fn: () => Promise<T>): Promise<{ value: T; arrow: number }> => {
+    const before = gdb.connector.requests.length;
+    const value = await fn();
+    return {
+      value,
+      arrow: gdb.connector.requests.slice(before).filter((r) => r.type === 'arrow').length,
+    };
+  };
+
+  beforeAll(async () => {
+    g = await buildFormat4Report(
+      [
+        request([
+          // a single span whose end is before its start
+          { trace: 4, id: 1, svc: 'svc-a', name: 'solo', startMs: 5000, durMs: -100 },
+          // the latest-starting span of a longer trace ends before it starts, outside [min start, max end]
+          { trace: 5, id: 20, svc: 'svc-a', name: 'root', startMs: 2000, durMs: 50 },
+          { trace: 5, id: 21, parent: 20, svc: 'svc-b', name: 'late', startMs: 2100, durMs: -2200 },
+          // a normal trace
+          { trace: 1, id: 30, svc: 'svc-a', name: 'ok', startMs: 0, durMs: 10 },
+        ]),
+      ],
+      { close: false },
+    );
+    gdb = await openFixtureDb(g);
+  });
+
+  test('a single-span trace with end before start opens with its span', async () => {
+    const detail = await fresh().getTrace(T4);
+    expect(detail.spans.map((s) => s.span.name)).toEqual(['solo']);
+  });
+
+  test('a multi-span trace keeps the span that lies outside the bound, for getTrace and serviceShare', async () => {
+    const detail = await fresh().getTrace(T5);
+    expect(detail.spans.map((s) => s.span.name)).toEqual(['root', 'late']);
+    expect((await fresh().serviceShare(T5)).map((x) => x.service).sort()).toEqual(['svc-a', 'svc-b']);
+  });
+
+  test('a normal trace does not read again: partitions, spans and summary, three statements', async () => {
+    const open = await arrows(() => fresh().getTrace(T1));
+    expect(open.arrow).toBe(3);
+    const share = await arrows(() => fresh().serviceShare(T1));
+    expect(share.arrow).toBe(2);
+    // the malformed trace pays one more
+    expect((await arrows(() => fresh().getTrace(T5))).arrow).toBe(4);
+    expect((await arrows(() => fresh().serviceShare(T5))).arrow).toBe(3);
   });
 });

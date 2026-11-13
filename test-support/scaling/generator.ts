@@ -11,6 +11,7 @@ import { parseOtlpObject } from '../../src/model/otlp-json.js';
 import type { Axis, ScalingIds } from '../../src/viewer/data/catalogue.js';
 import { logRef } from '../../src/viewer/data/log-query.js';
 import type { TimeWindow } from '../../src/viewer/data/time-window.js';
+import { mergeReports } from '../../src/writer/merge.js';
 import { openSession } from '../../src/writer/session.js';
 import type { Format4Fixture } from '../format4-fixture.js';
 import { writeReportDir } from '../report-dir.js';
@@ -34,6 +35,11 @@ export interface Shape {
   rowGroupRows?: number;
   /** 20 min or 6 h between partition starts. */
   spacing: 'dense' | 'sparse';
+  /**
+   * Each partition is written as its own run report, by a writer that lists no statistics key, and the reports are
+   * merged the way the deployer merges them (#272): the merge is what has to record the keys.
+   */
+  merged?: boolean;
 }
 
 export interface ScalingReport {
@@ -50,9 +56,12 @@ export interface ScalingReport {
 export const BASE: Shape = { outside: 2, inside: 2, rowGroups: 2, spacing: 'dense' };
 
 /** Retention, window and density at 2, 4 and 8 with the other two axes at `BASE`. */
-export function stepsOf(axis: Axis, spacing: Shape['spacing']): readonly Shape[] {
-  return [2, 4, 8].map((v) => ({ ...BASE, spacing, [AXIS_FIELD[axis]]: v }));
+export function stepsOf(axis: Axis, spacing: Shape['spacing'], merged = false): readonly Shape[] {
+  return [2, 4, 8].map((v) => ({ ...BASE, spacing, ...(merged ? { merged } : {}), [AXIS_FIELD[axis]]: v }));
 }
+
+/** Whether an entry is measured on merged reports: those whose condition is on a statistics key (#272). */
+export const isMerged = (entry: { id: string }): boolean => entry.id.includes('.statkey.');
 
 /** The writer's default row-group size: the page fit measures density on groups this large (Task 6c). */
 export const PRODUCTION_ROW_GROUP_ROWS = 50_000;
@@ -286,16 +295,32 @@ async function build(shape: Shape): Promise<ScalingReport> {
       chunkTargetBytes: 2_000_000_000,
     },
   });
-  const session = await openSession(w.deps, { out: OUT, config, mode: 'replace' });
   const partitions = shape.outside + shape.inside;
-  for (let n = 0; n < partitions; n++) {
+  const addPartition = async (session: Awaited<ReturnType<typeof openSession>>, n: number) => {
     const jsons =
       spanCount(shape, n) > CHUNK_SPANS ? chunkedPartitionJson(shape, n) : partitionJson(shape, n);
     let i = 0;
     for (const json of jsons)
       for (const request of parseOtlpObject(json, `scaling:${n}`))
         await session.add(request, `scaling:${n}:${i++}`);
-    await session.flush();
+  };
+  if (shape.merged === true) {
+    const runConfig = testConfig({ writer: { format: 'site', chunkTargetBytes: 2_000_000_000 } });
+    const runs: string[] = [];
+    for (let n = 0; n < partitions; n++) {
+      const run = `${OUT}-run-${n}`;
+      const session = await openSession(w.deps, { out: run, config: runConfig, mode: 'replace' });
+      await addPartition(session, n);
+      await session.close();
+      runs.push(run);
+    }
+    await mergeReports(w.deps, runs, { out: OUT, config, mode: 'replace' });
+  } else {
+    const session = await openSession(w.deps, { out: OUT, config, mode: 'replace' });
+    for (let n = 0; n < partitions; n++) {
+      await addPartition(session, n);
+      await session.flush();
+    }
   }
   const text = w.fs.snapshot().get(`${OUT}/data/manifest.js`);
   if (text === undefined) throw new OtelHtmlError('usage', { message: 'no manifest' });
@@ -348,7 +373,7 @@ async function build(shape: Shape): Promise<ScalingReport> {
 
 /** The one key of a shape: reports and measurements of one key are one thing (`{}` and `{rowGroupRows: 8192}` are one). */
 export const shapeKey = (shape: Shape): string =>
-  `${shape.outside}-${shape.inside}-${shape.rowGroups}-${shape.spacing}-${rowsPerGroup(shape)}-${shape.bigRowGroups ?? 0}`;
+  `${shape.outside}-${shape.inside}-${shape.rowGroups}-${shape.spacing}-${rowsPerGroup(shape)}-${shape.bigRowGroups ?? 0}${shape.merged === true ? '-merged' : ''}`;
 
 /** The folder of the reports `prebuildScalingReports` made, set by the scaling global setup for the worker processes. */
 export const PREBUILT_ENV = 'OTEL_HTML_SCALING_REPORTS';

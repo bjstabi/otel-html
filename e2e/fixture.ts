@@ -123,7 +123,8 @@ export const REFRESH_FIRST: FixtureReport = 'small';
 export const REFRESH_SECOND: FixtureReport = 'orphans';
 /**
  * `merged` is `otel-html merge` of `small` and `orphans`; `scale` and `many` come from one generated 100k-span input,
- * into `SCALE_REPORTS_DIR`, and so does `rowgroups`: 200k spans only, converted, so its one spans file has four row groups
+ * into `SCALE_REPORTS_DIR`, and so does `rowgroups`: 200k spans and 200k logs with a trace id each, converted, so its
+ * spans and logs files have four row groups and the logs file's bloom filters lie outside the footer read at open
  * (`e2e/calibration.spec.ts`).
  * `metrics-merged` merges two reports of the `metrics` fixture's first and last five collections, `metrics-single`
  * converts the fixture at once. `unfinished` holds the `linked` inputs, flushed but never closed. `metrics-scale` is

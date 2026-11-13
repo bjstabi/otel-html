@@ -412,7 +412,7 @@ describe('statistics keys and state validation', () => {
     expect(next.flushPartitions).toEqual([1]);
   });
 
-  test('append with an added statistics key marks older partitions unknown for it', async () => {
+  test('append with an added statistics key leaves older partitions without it (not computed)', async () => {
     const w = createTestWriter();
     const s = await open(w);
     await s.add(spans(1), 'a.json');
@@ -423,7 +423,7 @@ describe('statistics keys and state validation', () => {
     const m = manifest(w);
     const key = 'resource:deployment.environment';
     expect(m.statisticsKeys.spans).toContain(key);
-    expect(m.partitions[0]?.files.spans?.values[key]).toBeNull();
+    expect(m.partitions[0]?.files.spans?.values[key]).toBeUndefined(); // absent: unknown, prunes nothing
     expect(m.partitions[1]?.files.spans?.values[key]).toEqual([]);
     expect(Reflect.get(m.partitions[0]?.files.spans?.values ?? {}, 'service_name')).toEqual(['svc']);
   });

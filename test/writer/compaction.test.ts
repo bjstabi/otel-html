@@ -6,7 +6,7 @@ import { describe, expect, test } from 'vitest';
 import { wrapBinaryDataFilePieces } from '../../src/format/data-file.js';
 import type { PartitionEntry } from '../../src/format/manifest.js';
 import { batchFromRows } from '../../src/format/parquet/batch.js';
-import { decodeTable, encodeTable } from '../../src/format/parquet/codec.js';
+import { decodeTable, encodeColumnsUnfiltered, encodeTable } from '../../src/format/parquet/codec.js';
 import type { Table } from '../../src/format/parquet/columns.js';
 import type { Row } from '../../src/format/parquet/rows.js';
 import { fileStatistics } from '../../src/format/parquet/stats.js';
@@ -17,6 +17,7 @@ import { createNodeFileSystem } from '../../src/writer/node-fs.js';
 import { PartitionWriter } from '../../src/writer/partition-writer.js';
 import type { FileSystem } from '../../src/writer/ports.js';
 import { createMemoryFileSystem } from '../../test-support/memory-fs.js';
+import { chunksOf } from '../../test-support/parquet-footer.js';
 
 const OUT = '/out';
 const ROW_GROUP = 5;
@@ -266,7 +267,7 @@ describe('compactPartitions: merged tables', () => {
     expect(stats).toEqual(fileStatistics('logs', batchFromRows('logs', rowsPer.flat()), KEYS.logs, 100));
   });
 
-  test('a key unknown (null) in any input stays unknown', async () => {
+  test('a key that only one of two compacted files knows is computed for the other, not dropped', async () => {
     const r = lcg(5);
     let id = 0;
     const rowsPer = [4, 4].map((n) => Array.from({ length: n }, () => logRow(id++, r)));
@@ -277,9 +278,15 @@ describe('compactPartitions: merged tables', () => {
     );
     const first = entries[0]?.files.logs;
     if (first === undefined) throw new Error('no file');
-    first.values = { ...first.values, 'attr:k': null };
+    const second = entries[1]?.files.logs;
+    if (second === undefined) throw new Error('no file');
+    const { 'attr:k': _dropped, ...without } = first.values;
+    first.values = without; // not computed
+    second.values = { ...second.values, 'attr:k': ['stale'] }; // a recorded value the rows do not hold
     const out = await compactPartitions(fs, OUT, entries, opts(2));
-    expect(out.files.logs?.values['attr:k']).toBeNull();
+    const expected = fileStatistics('logs', batchFromRows('logs', rowsPer.flat()), ['attr:k'], 100);
+    expect(out.files.logs?.values['attr:k']).toEqual(expected.values['attr:k']);
+    expect(out.files.logs?.values['attr:k']).not.toContain('stale');
     expect(Reflect.get(out.files.logs?.values ?? {}, 'scope_name')).not.toBeNull();
   });
 
@@ -701,5 +708,61 @@ describe('compactPartitions on the real file system', () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('bloom filters on trace_id', () => {
+  const filtered = (bytes: Uint8Array): boolean[] =>
+    chunksOf(bytes)
+      .flat()
+      .filter((c) => c.path === 'trace_id')
+      .map((c) => c.offset !== undefined && c.length !== undefined);
+  const anyFilter = (bytes: Uint8Array): boolean =>
+    chunksOf(bytes)
+      .flat()
+      .some((c) => c.offset !== undefined);
+
+  test('a cut and a compaction write one per row group of traces and logs, and none for spans, points and patterns', async () => {
+    const fs = createMemoryFileSystem();
+    const r = lcg(7);
+    let id = 0;
+    const part = (): Partial<Record<Table, Row[]>> => ({
+      spans: Array.from({ length: 12 }, () => spanRow(id++, r)),
+      logs: Array.from({ length: 12 }, () => logRow(id++, r)),
+      points: Array.from({ length: 12 }, () => pointRow(id++, r)),
+      traces: Array.from({ length: 12 }, (_, i) => trace(`t${id}-${i}`)),
+    });
+    const entries = await writeParts(fs, [part(), part(), part()]);
+    for (const entry of entries) {
+      for (const t of ['logs', 'traces'] as const) {
+        const flags = filtered(await bytesOf(fs, entry, t));
+        expect(flags.length, `cut ${t}`).toBeGreaterThan(1);
+        expect(flags.every(Boolean), `cut ${t}`).toBe(true);
+      }
+      expect(anyFilter(await bytesOf(fs, entry, 'spans'))).toBe(false);
+      expect(anyFilter(await bytesOf(fs, entry, 'points'))).toBe(false);
+    }
+    const out = await compactPartitions(fs, OUT, entries, opts(3));
+    for (const t of ['logs', 'traces'] as const) {
+      const flags = filtered(await bytesOf(fs, out, t));
+      expect(flags.length, `compacted ${t}`).toBeGreaterThan(1);
+      expect(flags.every(Boolean), `compacted ${t}`).toBe(true);
+    }
+    expect(anyFilter(await bytesOf(fs, out, 'spans'))).toBe(false);
+    expect(anyFilter(await bytesOf(fs, out, 'points'))).toBe(false);
+  });
+
+  test('a compaction whose inputs have no filters (files written before them) still writes them', async () => {
+    const fs = createMemoryFileSystem();
+    const r = lcg(9);
+    let id = 0;
+    const rows = Array.from({ length: 14 }, () => logRow(id++, r));
+    const plain = encodeColumnsUnfiltered('logs', batchFromRows('logs', rows), { rowGroupRows: ROW_GROUP });
+    expect(anyFilter(plain)).toBe(false);
+    const entries = await writeParts(fs, [{ logs: rows }]);
+    await fs.writeBytes(`${OUT}/${entries[0]?.files.logs?.path ?? ''}`, plain);
+    const out = await compactPartitions(fs, OUT, entries, opts(1));
+    expect(filtered(await bytesOf(fs, out, 'logs')).every(Boolean)).toBe(true);
+    expect(decodeTable('logs', await bytesOf(fs, out, 'logs'))).toHaveLength(14);
   });
 });

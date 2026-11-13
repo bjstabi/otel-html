@@ -2,7 +2,7 @@ import '../../../src/writer/parquet-wasm-source.js';
 import { Field, Float64, List, Schema } from 'apache-arrow';
 import { describe, expect, test } from 'vitest';
 import { batchFromRows, type ColumnBatch } from '../../../src/format/parquet/batch.js';
-import { decodeTable, encodeTable } from '../../../src/format/parquet/codec.js';
+import { decodeTable, encodeColumnsUnfiltered, encodeTable } from '../../../src/format/parquet/codec.js';
 import type { Row } from '../../../src/format/parquet/rows.js';
 import { arrowSchema } from '../../../src/format/parquet/schema.js';
 import { checkSchema, encodeBatches, readColumns } from '../../../src/format/parquet/stream.js';
@@ -53,7 +53,7 @@ describe('encodeBatches', () => {
     expect(decodeTable('logs', bytes)).toHaveLength(5);
   });
 
-  test('yields the file in chunks that join to the bytes encodeTable writes', async () => {
+  test('yields the file in chunks that join to the bytes encodeColumnsUnfiltered writes', async () => {
     const rows = Array.from({ length: 5_000 }, (_, i) => log(i));
     async function* gen() {
       yield batchFromRows('logs', rows);
@@ -61,7 +61,9 @@ describe('encodeBatches', () => {
     const chunks: Uint8Array[] = [];
     for await (const c of encodeBatches('logs', gen(), { rowGroupRows: 1_000 })) chunks.push(c);
     expect(chunks.length).toBeGreaterThan(1);
-    expect(new Uint8Array(Buffer.concat(chunks))).toEqual(encodeTable('logs', rows, { rowGroupRows: 1_000 }));
+    expect(new Uint8Array(Buffer.concat(chunks))).toEqual(
+      encodeColumnsUnfiltered('logs', batchFromRows('logs', rows), { rowGroupRows: 1_000 }),
+    );
   });
 
   test('a source that fails after its first batch rejects with its error, never a truncated file', async () => {

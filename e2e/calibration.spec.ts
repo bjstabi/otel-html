@@ -3,7 +3,11 @@ import { fileURLToPath } from 'node:url';
 import type { Page } from '@playwright/test';
 import { reviveDataJson, unwrapDataFile } from '../src/format/data-file.js';
 import { isV4, type ManifestV4, parseAnyManifest } from '../src/format/manifest.js';
+import { decodeTable } from '../src/format/parquet/codec.js';
 import { MANIFEST_KEY } from '../src/format/paths.js';
+import '../src/writer/parquet-wasm-source.js';
+import { SMALL_FILE_BYTES } from '../src/viewer/data/engine/small-files.js';
+import { chunksOf } from '../test-support/parquet-footer.js';
 import { costOf, rangesOf } from '../test-support/scaling/cost.js';
 import { openCountingEngine, type ReadEvent } from '../test-support/scaling/counting-engine.js';
 import { PORT_ENV, type ReportName, reportDir, SCALE_SERVICES, scaleTraceId } from './fixture.js';
@@ -105,3 +109,91 @@ for (const name of ['rowgroups', 'many'] as const) {
     }
   });
 }
+
+/** The `Range: bytes=a-b` requests for `path` made since request number `from`, as [first, last] byte pairs. */
+function rangesFor(requests: readonly RequestRecord[], path: string): [number, number][] {
+  return requests
+    .filter((r) => r.method === 'GET' && r.path === path)
+    .flatMap((r): [number, number][] => {
+      const m = /^bytes=(\d+)-(\d*)$/.exec(r.range ?? '');
+      return m === null ? [] : [[Number(m[1]), m[2] === '' ? Number.POSITIVE_INFINITY : Number(m[2])]];
+    });
+}
+
+// Over HTTP, in Chromium: a lookup by trace id of a partition that lacks the id reads the footer and the bloom
+// filters of its logs file and no data page. `rowgroups` has one partition whose logs file (four row groups, far
+// above the small-file limit) is read by range. The absent id is a stored id with its last digit changed, taken from
+// the middle of a row group, so that group's min/max statistics of `trace_id` span it and only the filter can rule the
+// group out (the spans file has no filter: only `traces` and `logs` do).
+test(
+  'a trace id the partition lacks reads no data page of its logs file (rowgroups)',
+  {
+    tag: ['@http'],
+  },
+  async ({ page, reportUrl }, testInfo) => {
+    test.skip(testInfo.project.name.endsWith('-file'), 'the scale reports are read over HTTP only');
+    test.setTimeout(120_000);
+    const manifest = readManifest('rowgroups');
+    const entry = manifest.partitions[0]?.files.logs;
+    if (entry === undefined) throw new Error('rowgroups: no logs file');
+    expect(entry.bytes, 'above the small-file limit').toBeGreaterThan(SMALL_FILE_BYTES);
+    const bytes = readFileSync(new URL(entry.path, reportDir('rowgroups', 'http')));
+    const groups = chunksOf(new Uint8Array(bytes)).map((g) => g.find((c) => c.path === 'trace_id'));
+    expect(groups.length).toBeGreaterThan(1);
+    const filters = groups.map((c) => c?.offset);
+    expect(
+      filters.every((o) => o !== undefined),
+      'every row group has a filter',
+    ).toBe(true);
+    // Every log has an id of its own (see `distinctTraceIds`), so each group's filter is about 64 KB and the ids of
+    // the groups overlap in min/max: only a filter can rule a group out. The absent id is a stored id with its last
+    // digit changed.
+    const rows = decodeTable('logs', new Uint8Array(bytes));
+    const stored = rows.map(({ trace_id }) => trace_id);
+    const ids = new Set(stored);
+    const perGroup = Math.max(...chunksOf(new Uint8Array(bytes)).map((g) => g[0]?.rows ?? 0));
+    expect(ids.size / groups.length, 'distinct ids per row group').toBeGreaterThan(perGroup * 0.9);
+    const middle = stored[perGroup + 1234];
+    if (typeof middle !== 'string') throw new Error('rowgroups: no stored trace id');
+    const absentId = `${middle.slice(0, -1)}${middle.endsWith('0') ? '1' : '0'}`;
+    expect(ids.has(absentId), 'the absent id is not stored').toBe(false);
+    const dataEnd = Math.min(...filters.map((o) => Number(o)));
+
+    const base = `http://127.0.0.1:${process.env[PORT_ENV]}`;
+    const seen = async (): Promise<RequestRecord[]> =>
+      (await (await fetch(`${base}${REQUESTS_PATH}`)).json()) as RequestRecord[];
+    const path = `${new URL(reportUrl('rowgroups')).pathname}/${entry.path}`;
+    const lookup = async (id: string): Promise<[number, number][]> => {
+      await freshPage(page, reportUrl('rowgroups'));
+      await quiet(seen);
+      const before = (await seen()).length;
+      const reply = await runWorkerSql(page, `SELECT count(*) FROM logs WHERE trace_id = '${id}'`);
+      expect(reply.type, reply.message).not.toMatch(/ERROR/);
+      return rangesFor((await seen()).slice(before), path);
+    };
+
+    // A read may start up to one 16 KiB block before a filter (the engine's reads are block aligned).
+    const dataRanges = (r: [number, number][]): [number, number][] =>
+      r.filter(([first]) => first < dataEnd - 16_384);
+    const groupBytes = dataEnd / groups.length;
+
+    const present = await lookup(middle);
+    const data = dataRanges(present);
+    expect(data.length, 'a stored id reads data pages (the check can fail)').toBeGreaterThan(0);
+    // The filters rule the other row groups out: what is read lies in one row group's bytes.
+    const reach = Math.max(...data.map(([, last]) => last)) - Math.min(...data.map(([first]) => first));
+    expect(reach, `data read spans ${reach} bytes, a row group is about ${groupBytes}`).toBeLessThan(
+      groupBytes,
+    );
+
+    const absent = await lookup(absentId);
+    process.stdout.write(
+      `BLOOM absent id: ranges ${JSON.stringify(absent)}; present data ranges ${JSON.stringify(data)}; data ends at ${dataEnd} of ${bytes.length}\n`,
+    );
+    expect(dataRanges(absent), 'an absent id reads no data page').toEqual([]);
+    expect(
+      absent.some(([first, last]) => first <= dataEnd + 1024 && last >= dataEnd),
+      'the filters are read (they are outside the footer block read at load)',
+    ).toBe(true);
+  },
+);

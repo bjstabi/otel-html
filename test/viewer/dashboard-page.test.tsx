@@ -149,6 +149,98 @@ describe('variables', () => {
     expect(currentD()?.vars).toEqual({ 'service.name': 'web' });
   });
 
+  test('the dashboard passes its window and asks again when the window changes', async () => {
+    const resourceValues = vi.fn((_key: string, _opts: { window: { start: number; end: number } | null }) =>
+      Promise.resolve(VALUES['service.name']),
+    );
+    renderShell('#/dashboards/checkout?t=0~1000000000', {
+      ...dataSourceOf(manifestWith([CHECKOUT])),
+      resourceValues,
+    });
+    await screen.findByRole('combobox', { name: 'service.name' });
+    expect(resourceValues).toHaveBeenLastCalledWith(
+      'service.name',
+      { window: { start: 0, end: 1e9 } },
+      expect.anything(),
+    );
+    window.location.hash = '#/dashboards/checkout?t=2000000000~3000000000';
+    await waitFor(() =>
+      expect(resourceValues).toHaveBeenLastCalledWith(
+        'service.name',
+        { window: { start: 2e9, end: 3e9 } },
+        expect.anything(),
+      ),
+    );
+    expect(screen.getByRole('combobox', { name: 'service.name' })).toBeTruthy(); // the bar stays while it reloads
+  });
+
+  test('a selection change asks the values again, with the selection', async () => {
+    const resourceValues = vi.fn(() =>
+      Promise.resolve({ values: ['5'], kind: 'int' as const, capped: false }),
+    );
+    renderShell('#/dashboards/checkout?t=0~1000000000', {
+      ...dataSourceOf(manifestWith([CHECKOUT])),
+      resourceValues,
+    });
+    await screen.findByRole('combobox', { name: 'service.name' });
+    const before = resourceValues.mock.calls.length;
+    window.location.hash = `#/dashboards/checkout?t=0~1000000000&${dParam({ vars: { 'service.name': 'abc' } })}`;
+    // 'abc' is not among the window's values: the window is asked again, then the report for its kind
+    await waitFor(() => expect(resourceValues.mock.calls.length).toBeGreaterThanOrEqual(before + 2));
+    expect(resourceValues.mock.calls.slice(before).map((c) => (c as unknown[])[1])).toEqual([
+      { window: { start: 0, end: 1e9 } },
+      { window: null },
+    ]);
+  });
+
+  test('a fast second window change aborts the first request and its late answer is ignored', async () => {
+    const signals = new Map<number, AbortSignal>();
+    const release: (() => void)[] = [];
+    type Answer = { values: string[]; kind: 'string'; capped: boolean };
+    const resourceValues = vi.fn(
+      (_key: string, opts: { window: { start: number; end: number } | null }, signal?: AbortSignal) => {
+        if (signal !== undefined && opts.window !== null) signals.set(opts.window.start, signal);
+        if (opts.window?.start !== 2e9)
+          return Promise.resolve<Answer>({ values: ['fresh'], kind: 'string', capped: false });
+        return new Promise<Answer>((resolve) =>
+          release.push(() => resolve({ values: ['late'], kind: 'string', capped: false })),
+        );
+      },
+    );
+    const user = userEvent.setup();
+    renderShell('#/dashboards/checkout?t=0~1000000000', {
+      ...dataSourceOf(manifestWith([CHECKOUT])),
+      resourceValues,
+    });
+    await screen.findByRole('combobox', { name: 'service.name' });
+    window.location.hash = '#/dashboards/checkout?t=2000000000~3000000000'; // not answered until released
+    await waitFor(() => expect(release.length).toBeGreaterThan(0));
+    window.location.hash = '#/dashboards/checkout?t=4000000000~5000000000';
+    await waitFor(() => expect(signals.has(4e9)).toBe(true));
+    expect(signals.get(2e9)?.aborted).toBe(true);
+    for (const r of release) r(); // the first request answers after it was aborted
+    await new Promise((r) => setTimeout(r, 20));
+    await user.click(screen.getByRole('combobox', { name: 'service.name' }));
+    expect((await screen.findAllByRole('option')).map((o) => o.textContent)).toEqual(['all', 'fresh']);
+  });
+
+  test('a selected value with no data in the window stays selected and is shown in the list', async () => {
+    const user = userEvent.setup();
+    const optionTexts = async (): Promise<string[]> =>
+      (await screen.findAllByRole('option')).map((o) => o.textContent ?? '');
+    renderShell(
+      `#/dashboards/checkout?t=0~1000000000&${dParam({ vars: { 'service.name': 'run-a' } })}`,
+      dataSourceOf(manifestWith([CHECKOUT]), {
+        'service.name': { values: ['run-b'], kind: 'string', capped: false },
+      }),
+    );
+    const box = await screen.findByRole('combobox', { name: 'service.name' });
+    expect(box.textContent).toContain('run-a');
+    await user.click(box);
+    expect(await optionTexts()).toEqual(expect.arrayContaining(['run-a', 'run-b']));
+    expect(window.location.hash).toContain('run-a');
+  });
+
   test('a value that cannot be applied is reported, not dropped silently', async () => {
     const typed = {
       ...CHECKOUT,

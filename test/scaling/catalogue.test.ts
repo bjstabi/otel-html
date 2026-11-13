@@ -52,7 +52,7 @@ const SPAN_NEEDS: Record<SpanNeed, true> = {
   durations: true,
   groups: true,
 };
-const LOG_NEEDS: Record<LogNeed, true> = { rows: true, facets: true, timeline: true };
+const LOG_NEEDS: Record<LogNeed, true> = { rows: true, facets: true, timeline: true, total: true };
 
 const SPAN_GROUPS = [
   'total',
@@ -90,7 +90,12 @@ const PLAN_IDS = [
   'log.surrounding',
   ...LOG_GROUPS.flatMap((g) => both(`logs.${g}`)),
   'logs.timeline.text.long',
+  'logs.total.short',
+  'logs.total.long',
+  'logs.total.traces.long',
   'resourceValues.all',
+  'resourceValues.short',
+  'resourceValues.long',
   'patterns',
   'metrics.catalog',
   'metrics.showOptions',

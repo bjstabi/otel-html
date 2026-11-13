@@ -27,7 +27,7 @@ in order; a PR starts from `main` after the previous one merged.
 | --- | ---------------------------- | ---------------------------------------------------------------------- | ------ | ------ |
 | 1   | `test/query-catalogue`       | `test(query): query catalogue, scaling harness and baseline`           |        | merged #285 |
 | 2   | `fix/test-span-times`        | `fix(test): test spans keep real times under a faked clock`            |        | merged #288 |
-| 3   | `perf/small-site-files`      | `perf(viewer): small site files load whole and in parallel`            |        |        |
+| 3   | `perf/small-site-files`      | `perf(viewer): small site files load whole and in parallel`            |        | merged #289 |
 | 4   | `perf/pruning-statistics`    | `perf(query): statistics survive merges and reads follow the window`   | #272   |        |
 | 5   | `feat/format-5`              | `feat(format): format 5 with rollup tables and the end-time statistic` |        |        |
 | 6   | `perf/rollup-router`         | `perf(viewer): long windows are answered from rollups`                 | #271   |        |
@@ -97,9 +97,9 @@ outside the PR's list below.
 | 1   | none: it declares today's classes and files the debt                                                                                                                                                                | completeness test green; every `scan` has an allowed reason or a debt line with an issue; statement text of moved builders unchanged                |
 | 2   | none                                                                                                                                                                                                                | a span started under a faked clock has a start time within 5 s of the real clock                                                                    |
 | 3   | the debt lines of the small-file group → `files` on retention. Task 5 names the group by measurement: the entries whose growth on retention is only in files under the harness threshold (expected: `patterns`, `trace.has`, `trace.get`, `trace.share`, `trace.logs`, `log.get`). Entries with other growth too (`traces.list.*`) keep their lines for PRs 4 and 6 | no entry makes a serial read of a sub-threshold file (asserted for every catalogue entry); one e2e test asserts a small file is fetched whole exactly once |
-| 4   | `spans.total.statkey.*`, `logs.timeline.statkey.*` on the `merged` shape → the classes they have on the plain shape; `trace.get`, `trace.share`, `trace.has`, `trace.logs` → `matched` on density (Tasks 11 and 11a); `traces.list.all`, `traces.list.all.long` → `files` on every axis; new entries `resourceValues.short`/`.long` (their logs and points parts skip files outside the window; their spans part stays on #271's end-time debt line until PR 6) and `logs.total.*` (declared as measured) | #272's test: a run selection on a merged two-run report opens only that run's files |
+| 4   | `spans.total.statkey.*`, `logs.timeline.statkey.*` on the `merged` shape → the classes they have on the plain shape; `trace.has`, `trace.logs` → `matched` on density (Task 11a; measured `files`). `trace.get` and `trace.share` were planned here too; with no bloom filter on `spans` (maintainer, 2026-11-12) they stay `scan`, owed to #291 by PR 9; `traces.list.all`, `traces.list.all.long` → `files` on every axis; new entries `resourceValues.short`/`.long` (their logs and points parts skip files outside the window; their spans part stays on #271's end-time debt line until PR 6) and `logs.total.*` (declared as measured) | #272's test: a run selection on a merged two-run report opens only that run's files |
 | 5   | none (the rollups exist but nothing reads them); no entry may get worse                                                                                                                                             | format-4 reports open unchanged; rollup file < 2 % of its spans file on the measured partition; frozen `format-5` fixture; README table             |
-| 6   | the long-window aggregates over rollup dimensions (`spans.total.long`, `spans.total.sortkey.long`, `spans.total.statkey.long`, `spans.buckets.long`, `spans.timeline.long`, `spans.facets.core.long`, `spans.groups.long`, `spans.services.long`, `spans.durations.long`, `logs.timeline.long`, `logs.timeline.statkey.long`, `logs.facets.core.long`, `logs.total.long`, `resourceValues.long`) → `fixed`/`fixed`/`files`; `percentile.long` → `files`/`fixed`/n.a.; `traces.list.long` → `files`×3; every windowed spans entry and `resourceValues.short` → `fixed` on retention (end-time pruning, Task 19) | equivalence test (rollup = raw = mix) on the edge data of §6; debt list holds no aggregate over rollup dimensions |
+| 6   | the long-window aggregates over rollup dimensions (`spans.total.long`, `spans.total.sortkey.long`, `spans.total.statkey.long`, `spans.buckets.long`, `spans.timeline.long`, `spans.facets.core.long`, `spans.groups.long`, `spans.services.long`, `spans.durations.long`, `logs.timeline.long`, `logs.timeline.statkey.long`, `logs.facets.core.long`, `logs.total.long`, `resourceValues.long`) → `fixed`/`fixed`/`files`; `percentile.long` → `files`/`fixed`/n.a.; `traces.list.long` → `files`×3; every windowed spans entry and `resourceValues.short` → `fixed` on retention (end-time pruning, Task 19); `resourceValues.all` (#282, re-targeted from PR 4: the rollup route must also answer a call without a window) | equivalence test (rollup = raw = mix) on the edge data of §6; debt list holds no aggregate over rollup dimensions |
 | 7   | the `compacted` generator shape: entries keep their classes when one partition is a compaction of many                                                                                                              | no file written by compaction spans more than 24 h unless a single input does                                                                       |
 | 8   | none; the prediction for today's shape is taken with the 7-day window                                                                                                                                               | `#/dashboards/ci` predicted ≤ 150 serial range requests                                                                                             |
 | 9   | none | live: `#/dashboards/ci` ≤ 150 serial range requests and ≤ 5 s; `#/traces?mode=traces` ≤ 5 s (§9). A miss is reported in the record with its cause; it is not a stop |
@@ -1103,6 +1103,12 @@ word once. Neither the write nor the read side is proven.
 - [ ] **Step 5: Size.** The filters' bytes per partition go in the PR body, against the partition's bytes.
 - [ ] **Step 6: Commit.** `perf(format): lookups by trace id skip partitions by a bloom filter`
 
+Done 2026-11-12. The spike passed: an absent id read 8 blocks (footer and filters) against 69, and parquet-wasm 0.9.0
+has no bloom setter, so `bloom.ts` writes the split-block filter as a post-pass. Filters on `spans` made `trace.get` and
+`trace.share` worse on density (8 / 11 / 13 serial against 7 / 10 / 11), because DuckDB reads each row group's filter
+before the time statistics; the maintainer chose filters on `traces` and `logs` only. `trace.has` and `trace.logs`
+reach `files`; `trace.get` and `trace.share` stay `scan` and owed.
+
 ### Task 12: `resourceValues` takes the window
 
 **Files:**
@@ -1187,6 +1193,47 @@ test('logs: total with rows runs no extra statement', async () => {});
 
 - [ ] **Step 2:** run → FAIL. **Step 3:** implement. **Step 4:** → PASS; delete the two debt lines.
 - [ ] **Step 5:** `mise run verify`; prediction against the "after 4" row. **Commit and open PR 4** (`Fixes #272`).
+
+Done 2026-11-12, with two changes to the interfaces above: `allTraceCountQuery` was not built (no caller asks an
+unfiltered traces-mode total alone; the trace list's total comes from its rows statement), and `allTraceRowsQuery`
+takes `(f: Pick<SqlFilter, 'epoch'>, sort, limit)`, since it reads `traces` only. In logs traces mode `matched` now
+comes from the `total` need, whose count replaces the old inline statement one for one.
+
+### Task 13a: The trace list's service shares are read in one statement
+
+Added 2026-11-13 by the maintainer's decision, after PR 4's prediction missed the "after 4" row (562 / 691 against
+465 / 484 live-anchored): the trace list asks `serviceShare` for each visible trace (26 on the rolling shape), each a
+bounded span read of its own, and with no bloom filter on `spans` each stays `scan` on density.
+
+**Files:**
+
+- Modify: `src/viewer/data/duckdb-source.ts` (`serviceShare`, `readTrace`), `src/query/sql/spans.ts`,
+  `src/viewer/data/catalogue.ts`, `test-support/scaling/recording-source.ts` if the page mapping needs it
+- Test: `test/query/sql/spans.test.ts`, `test/viewer-data/duckdb-source-spans.test.ts`, `test/scaling/classes*.test.ts`
+
+**Interfaces:**
+
+- `DataSource.serviceShare(traceId, signal)` is unchanged. Inside the DuckDB source, the calls made in one tick (a
+  microtask or `setTimeout(0)` window) are answered together: one statement over the `traces` rows of all their ids
+  (the bounds and `sum(span_count)`), one span statement `WHERE trace_id IN (...)` bounded by each trace's own bound,
+  then each trace's rows go through `buildTraceTree` and `exclusiveTimeByService` as today.
+- Produces: `traceSpansBatchQuery(ids: readonly { traceId: string; bound: Bound | null }[], files, epoch): Query`.
+- A trace whose rows fall short of its `sum(span_count)` is read again alone without a bound (the rule of the branch
+  review's I1). One caller aborting does not abort the others; an aborted caller's id is still answered for the rest.
+- Catalogue: a new entry `trace.share.batch` runs 26 shares at once on the measured shapes and is declared as
+  measured; `trace.share` keeps its declaration and its #291 line.
+
+- [ ] **Step 1: Write the failing tests.** 26 shares in one tick run two statements in all; their answers equal 26
+      single-trace answers on a fixture with a trace split over two partitions and a span with end < start; one
+      caller aborting leaves the others answered; a call in a later tick starts a new batch.
+- [ ] **Step 2:** run → FAIL. **Step 3:** implement. **Step 4:** → PASS; the trace list page's prediction
+      (`mise run predict:queries`) goes in the report next to the "after 4" row.
+- [ ] **Step 5: Commit.** `perf(viewer): the trace list reads its service shares in one statement`
+
+Reverted 2026-11-13 (maintainer). Built and reviewed, it saved statements (26 → 2) but no serial reads: in one engine the
+26 bounded reads already shared the spans pages. A review on Opus 5.5 then found it could cost more than the single reads:
+one time range over the batch reads whole files for traces far apart in time, the batched statement defeats the result
+cache when rows mount again, and a batch keeps working after a Refresh. `trace.share` keeps its #291 line.
 
 ## PR 5: format 5
 
@@ -1655,6 +1702,9 @@ Under a long window the trace list without a condition reads `traces` files only
 `traces` file is still read: whole traces). `percentileOf` on a report whose range is long reads the rollup over the
 whole report; on a short one it is unchanged. `resourceValues` under a long window takes its span and log parts from
 rollups when `resource:<key>` is a dimension (per partition, like every routed request); the points part is unchanged.
+The call with `window: null` (`resourceValues.all`, owed to this PR on #282 since PR 4 kept it) is the whole report: it
+takes the same route, and the task deletes the `resourceValues.all` debt lines or, if the route cannot serve it, retargets
+them with a reason.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1953,15 +2003,22 @@ be checked against its output. The other three columns are harness absolutes (**
 | ------------- | ----------------------- | ----------------- | ----------------- | ----------------- |
 | 1 (baseline, small files off) | 891 / 1,064 | 611 / 814         | 1,834 / 2,441     | 2,217 / 4,873     |
 | 3 (small files on, 524,288)   | 560 / 937   | 379 / 821         | 1,138 / 2,464     | 2,297 / 3,542     |
-| 4             | 465 / 484               | 316 / 551         | 948 / 1,652       | 1,665 / 835       |
-| 6             | 415 / 195               | 282 / 224         | 847 / 673         | 1,484 / 319       |
-| 8 (window 7d) | 415 / 195               | 166 / 52          | 429 / 52          | 1,155 / 75        |
+| 4             | 562 / 692               | 381 / 594         | 1,142 / 1,774     | 2,333 / 3,020     |
+| 6             | 388 / 298               | 264 / 240         | 793 / 712         | 1,331 / 1,404     |
+| 8 (window 7d) | 388 / 298               | 141 / 104         | 350 / 222         | 954 / 784         |
 
 The harness columns were re-derived in PR 3 from one generator, when the generator's logs changed to live size (an
 eighth as many as spans, so most logs files sit under the small-file limit as on the live report): row 1 is the pages
 measured with no small file prepared (main before PR 3), row 3 with files of 524,288 bytes or less prepared, rows 4, 6
 and 8 are row 3's fit with `--after`. Row 3 as first written (before that change, 262,144 bytes): rolling 844 / 1,064,
 30x150k 631 / 822, 90x150k 1,894 / 2,465, 30x1.5M 2,631 / 4,906. The new rolling row 3 is below it. Fix round 2 gave the page fit a step (partitions under the crossing cost a prepared-file line, the others a range-read line), which moved the trace list cells (rolling 746 to 937).
+
+Rows 4, 6 and 8 were re-derived in PR 4 (maintainer, 2026-11-13) from the pages measured with PR 4 in place, anchored on
+row 1 above (433.9 / 553.6). Row 4 as first written (465 / 484 rolling; 316 / 551, 948 / 1,652, 1,665 / 835) credited
+debt lines PR 4 does not pay: `trace.get` and `trace.share`, which stay `scan` with no bloom filter on `spans` (#291,
+PR 9), and `resourceValues.all`, moved to PR 6. Batching the trace list's 26 service shares (Task 13a, reverted) saved statements
+but no serial reads, because one engine already shared the spans pages they read; a credited per-entry debt is not a
+whole-page saving. Rows 6 and 8 are the measured row 4 with `--after 6` and `--after 8 --window 7d`.
 
 How the rolling cells come about (serial requests, dashboard / trace list; ratio = after / after PR 1; anchored = live x
 ratio; from the run of 2026-11-12 on the commit that added the section):
@@ -1970,9 +2027,9 @@ ratio; from the run of 2026-11-12 on the commit that added the section):
 | ------------- | ---------------------------- | --------------- | ----------- |
 | 1 (small files off) | 433.9 / 553.6        | 1.000 / 1.000   | 891 / 1,064 |
 | 3             | 272.6 / 487.7                | 0.628 / 0.881   | 560 / 937   |
-| 4             | 226.2 / 251.6                | 0.521 / 0.455   | 465 / 484   |
-| 6             | 202.1 / 101.6                | 0.466 / 0.183   | 415 / 195   |
-| 8 (window 7d) | 202.1 / 101.6                | 0.466 / 0.183   | 415 / 195   |
+| 4             | 273.6 / 359.8                | 0.631 / 0.650   | 562 / 692   |
+| 6             | 188.9 / 155.2                | 0.435 / 0.280   | 388 / 298   |
+| 8 (window 7d) | 188.9 / 155.2                | 0.435 / 0.280   | 388 / 298   |
 
 Row 8 equals row 6 for `rolling` on purpose: all 21 snapshot partitions overlap the last 7 days (partition 165 spans 9
 days, from 1793449360 to 1794226244 s, and the 7-day window starts at 1793815081), so `inWindow` is true for every

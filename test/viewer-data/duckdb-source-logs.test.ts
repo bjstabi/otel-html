@@ -230,7 +230,9 @@ describe('queryLogs', () => {
 
   test('traces mode returns one row per trace, matched counts the logs that carry a trace id', async () => {
     const r = await counted(() =>
-      fresh().queryLogs(query({ mode: 'traces', needs: ['rows'], sort: { column: 'first', dir: 'asc' } })),
+      fresh().queryLogs(
+        query({ mode: 'traces', needs: ['rows', 'total'], sort: { column: 'first', dir: 'asc' } }),
+      ),
     );
     const q = r.value;
     expect(q.mode).toBe('traces');
@@ -246,10 +248,33 @@ describe('queryLogs', () => {
       services: ['svc-a', 'svc-b'],
     });
     expect(r.arrow).toBe(2); // the traces, the matched count
+    const rowsOnly = await counted(() =>
+      fresh().queryLogs(query({ mode: 'traces', needs: ['rows'], sort: { column: 'first', dir: 'asc' } })),
+    );
+    expect(rowsOnly.arrow).toBe(1); // the matched count is the `total` need's
     const bySev = await ds.queryLogs(
       query({ mode: 'traces', needs: ['rows'], sort: { column: 'logs', dir: 'asc' } }),
     );
     expect((bySev.rows as LogTraceRow[]).map((x) => x.traceId)).toEqual([T2, T1]);
+  });
+
+  test('total without rows runs one count statement and returns total and matched; with rows in logs mode it costs nothing', async () => {
+    const rows = await ds.queryLogs(query({ needs: ['rows'] }));
+    const alone = await counted(() => fresh().queryLogs(query({ needs: ['total'], limit: 1 })));
+    expect(alone.arrow).toBe(1);
+    expect(alone.value.rows).toEqual([]);
+    expect(alone.value.total).toBe(rows.total);
+    expect(alone.value.matched).toBe(rows.total);
+    const both = await counted(() => fresh().queryLogs(query({ needs: ['rows', 'total'] })));
+    expect(both.arrow).toBe(1);
+    expect(both.value.total).toBe(rows.total);
+    const traces = await counted(() =>
+      fresh().queryLogs(query({ mode: 'traces', needs: ['total'], sort: { column: 'first', dir: 'asc' } })),
+    );
+    expect(traces.arrow).toBe(1);
+    expect([traces.value.total, traces.value.matched]).toEqual([2, 4]);
+    const filtered = await fresh().queryLogs(query({ condition: 'severity_number == 17', needs: ['total'] }));
+    expect(filtered.total).toBe(2);
   });
 
   test('traceId narrows to one trace, pruned through the traces partitions', async () => {
@@ -309,7 +334,7 @@ describe('queryLogs', () => {
     expect(ids(mixed.rows as LogRow[])).toEqual(['a2', 'a4']);
 
     const traces = await ds.queryLogs(
-      query({ condition, mode: 'traces', needs: ['rows'], sort: { column: 'first', dir: 'asc' } }),
+      query({ condition, mode: 'traces', needs: ['rows', 'total'], sort: { column: 'first', dir: 'asc' } }),
     );
     expect((traces.rows as LogTraceRow[]).map((x) => x.traceId)).toEqual([T1, T2]);
     expect(traces.matched).toBe(3); // b4 carries no trace id
@@ -324,11 +349,15 @@ describe('queryLogs', () => {
         .map((r) => r.sql.replace(/otel_residual_\d+/g, 'otel_residual_N'));
     };
     const traces = await sentBy(() =>
-      fresh().queryLogs(query({ mode: 'traces', needs: ['rows'], sort: { column: 'first', dir: 'asc' } })),
+      fresh().queryLogs(
+        query({ mode: 'traces', needs: ['rows', 'total'], sort: { column: 'first', dir: 'asc' } }),
+      ),
     );
     expect(
-      traces.find((s) => s.startsWith('SELECT count(*) AS "n"') && s.includes('trace_id IS NOT NULL')),
-    ).toMatchInlineSnapshot(`"SELECT count(*) AS "n" FROM "logs" WHERE trace_id IS NOT NULL"`);
+      traces.find((s) => s.includes('AS "matched"') && s.includes('trace_id IS NOT NULL')),
+    ).toMatchInlineSnapshot(
+      `"SELECT count(DISTINCT trace_id) AS "n", count(*) AS "matched" FROM "logs" WHERE trace_id IS NOT NULL"`,
+    );
     const residual = await sentBy(() =>
       fresh().queryLogs(query({ condition: 'Len(body.string) > 20', needs: ['rows', 'facets'] })),
     );
@@ -521,15 +550,19 @@ describe('metricPoints', () => {
 
 describe('resourceValues', () => {
   test('the distinct values across spans, logs and points, sorted, in one statement', async () => {
-    const r = await counted(() => fresh().resourceValues('service.name'));
+    const r = await counted(() => fresh().resourceValues('service.name', { window: null }));
     expect(r.arrow).toBe(1);
     expect(r.value).toEqual({ values: ['svc-a', 'svc-b', 'svc-c'], kind: 'string', capped: false });
-    expect(await ds.resourceValues('host.name')).toEqual({
+    expect(await ds.resourceValues('host.name', { window: null })).toEqual({
       values: ['host-1', 'host-2'],
       kind: 'string',
       capped: false,
     });
-    expect(await ds.resourceValues('nope')).toEqual({ values: [], kind: 'string', capped: false });
+    expect(await ds.resourceValues('nope', { window: null })).toEqual({
+      values: [],
+      kind: 'string',
+      capped: false,
+    });
   });
 
   test('capped when cap + 1 values exist; the cap values kept are the first sorted', async () => {
@@ -538,7 +571,7 @@ describe('resourceValues', () => {
       manifest: f.manifest,
       caps: { facetValueCap: 2, facetKeyCap: 500 },
     });
-    expect(await small.resourceValues('service.name')).toEqual({
+    expect(await small.resourceValues('service.name', { window: null })).toEqual({
       values: ['svc-a', 'svc-b'],
       kind: 'string',
       capped: true,
@@ -548,7 +581,7 @@ describe('resourceValues', () => {
       manifest: f.manifest,
       caps: { facetValueCap: 3, facetKeyCap: 500 },
     });
-    expect((await exact.resourceValues('service.name')).capped).toBe(false);
+    expect((await exact.resourceValues('service.name', { window: null })).capped).toBe(false);
   });
 
   test('kinds merge: one kind stays, differing kinds are mixed', async () => {
@@ -580,14 +613,22 @@ describe('resourceValues', () => {
       engine: mosaicQueryEngine(createCoordinator(gdb.connector, silentLogger), gdb),
       manifest: g.manifest,
     });
-    expect(await source.resourceValues('host.name')).toEqual({
+    expect(await source.resourceValues('host.name', { window: null })).toEqual({
       values: ['7', 'h1'],
       kind: 'mixed',
       capped: false,
     });
-    expect(await source.resourceValues('port')).toEqual({ values: ['80', '81'], kind: 'int', capped: false });
+    expect(await source.resourceValues('port', { window: null })).toEqual({
+      values: ['80', '81'],
+      kind: 'int',
+      capped: false,
+    });
     // a string that looks like a list is a value; the list itself is not
-    expect(await source.resourceValues('tag')).toEqual({ values: ['["a"]'], kind: 'string', capped: false });
+    expect(await source.resourceValues('tag', { window: null })).toEqual({
+      values: ['["a"]'],
+      kind: 'string',
+      capped: false,
+    });
     // one text under two kinds is one value: cap 2 over ('3' as int and string, 'a') keeps both, not capped
     const t = (v: JsonObject) => [attr('service.name', str('s')), attr('host.name', v)];
     const h = await buildFormat4Report(
@@ -606,7 +647,7 @@ describe('resourceValues', () => {
       manifest: h.manifest,
       caps: { facetValueCap: 2, facetKeyCap: 500 },
     });
-    expect(await two.resourceValues('host.name')).toEqual({
+    expect(await two.resourceValues('host.name', { window: null })).toEqual({
       values: ['3', 'a'],
       kind: 'mixed',
       capped: false,

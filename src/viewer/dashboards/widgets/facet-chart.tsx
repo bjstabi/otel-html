@@ -236,7 +236,7 @@ function LogFacets(props: Shared & { dataSource: DataSource; filter: Filter }): 
       mode: 'logs',
       sort: SORT.logs,
       traceId,
-      needs: ['rows', 'facets'],
+      needs: ['total', 'facets'],
     }),
     [condition, text, window, traceId, groupBy],
   );

@@ -11,7 +11,7 @@ import {
 import { Compression, Table as WasmTable, WriterPropertiesBuilder, writeParquet } from 'parquet-wasm/esm';
 import { describe, expect, test } from 'vitest';
 import { batchFromRows } from '../../../src/format/parquet/batch.js';
-import { assertInt32Offset, encodeColumns } from '../../../src/format/parquet/codec.js';
+import { assertInt32Offset, encodeColumnsUnfiltered } from '../../../src/format/parquet/codec.js';
 import {
   type ColumnDef,
   SORT_COLUMNS,
@@ -125,12 +125,14 @@ function reference(table: Table, rows: readonly Row[]): Uint8Array {
   );
 }
 
-describe('encodeColumns against the Arrow-builder encoder', () => {
+describe('encodeColumnsUnfiltered against the Arrow-builder encoder', () => {
   for (const table of TABLES) {
     test(`${table}: seeded rows with ties, nulls, non-ASCII, lists and dictionaries are byte-identical`, () => {
       for (let seed = 1; seed <= 12; seed++) {
         const rows = rowsOf(table, seed * 7919, seed === 1 ? 0 : seed * 5);
-        const got = encodeColumns(table, batchFromRows(table, rows), { rowGroupRows: ROW_GROUP_ROWS });
+        const got = encodeColumnsUnfiltered(table, batchFromRows(table, rows), {
+          rowGroupRows: ROW_GROUP_ROWS,
+        });
         expect(Buffer.from(got).equals(Buffer.from(reference(table, rows))), `seed ${seed}`).toBe(true);
       }
     });
@@ -142,7 +144,9 @@ describe('encodeColumns against the Arrow-builder encoder', () => {
       { time_unix_nano: 3n, body: 'b' },
       { body: 'c' },
     ];
-    const got = encodeColumns('logs', batchFromRows('logs', rows), { rowGroupRows: ROW_GROUP_ROWS });
+    const got = encodeColumnsUnfiltered('logs', batchFromRows('logs', rows), {
+      rowGroupRows: ROW_GROUP_ROWS,
+    });
     expect(Buffer.from(got).equals(Buffer.from(reference('logs', rows)))).toBe(true);
   });
 });

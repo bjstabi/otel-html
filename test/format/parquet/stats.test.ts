@@ -1,10 +1,13 @@
+import '../../../src/writer/parquet-wasm-source.js';
 import { describe, expect, test } from 'vitest';
 import type { ResolvedDashboard } from '../../../src/config/schema.js';
 import { attributesToJson } from '../../../src/format/columns.js';
+import type { PartitionFile } from '../../../src/format/manifest.js';
 import { batchFromRows } from '../../../src/format/parquet/batch.js';
+import { encodeTable } from '../../../src/format/parquet/codec.js';
 import type { Table } from '../../../src/format/parquet/columns.js';
 import type { Row } from '../../../src/format/parquet/rows.js';
-import { fileStatistics, statisticsKeysFor } from '../../../src/format/parquet/stats.js';
+import { completeStatistics, fileStatistics, statisticsKeysFor } from '../../../src/format/parquet/stats.js';
 import type { AnyValue } from '../../../src/model/anyvalue.js';
 
 const attrs = (o: Record<string, AnyValue>): string => attributesToJson(new Map(Object.entries(o)));
@@ -165,5 +168,76 @@ describe('statisticsKeysFor', () => {
     expect(spans).toContain('attr:x');
     expect(spans).not.toContain('attributes');
     expect(spans).not.toContain('bogus');
+  });
+});
+
+describe('completeStatistics', () => {
+  const rows: Row[] = ['a', 'b', 'a', 'c'].map((v, i) => ({
+    time_unix_nano: BigInt(i),
+    observed_time_unix_nano: BigInt(i),
+    body: '"b"',
+    resource_attributes: attrs({ run: s(v) }),
+  }));
+  const bytes = encodeTable('logs', rows, { rowGroupRows: 2 });
+  const entry = (values: PartitionFile['values']): PartitionFile => ({
+    path: 'f.parquet',
+    bytes: bytes.length,
+    rows: 4,
+    timeMin: null,
+    timeMax: null,
+    values,
+  });
+
+  test('computes a missing key from the file and keeps recorded ones', async () => {
+    let reads = 0;
+    const read = async () => {
+      reads++;
+      return bytes;
+    };
+    const out = await completeStatistics(
+      'logs',
+      entry({ severity_text: ['kept'] }),
+      ['severity_text', 'resource:run'],
+      10,
+      read,
+    );
+    expect(out.values).toEqual({ severity_text: ['kept'], 'resource:run': ['a', 'b', 'c'] });
+    expect(reads).toBe(1);
+    const same = await completeStatistics(
+      'logs',
+      entry({ severity_text: ['x'] }),
+      ['severity_text'],
+      10,
+      read,
+    );
+    expect(same.values).toEqual({ severity_text: ['x'] });
+    expect(reads).toBe(1); // nothing missing: the file is not read
+  });
+
+  test('the read is waited on through the panic guard it is given', async () => {
+    const waits: string[] = [];
+    const guard = <T>(wait: Promise<T>, what?: string): Promise<T> => {
+      waits.push(what ?? '');
+      return wait;
+    };
+    const out = await completeStatistics('logs', entry({}), ['resource:run'], 10, async () => bytes, guard);
+    expect(out.values['resource:run']).toEqual(['a', 'b', 'c']);
+    expect(waits.length).toBeGreaterThan(0);
+  });
+
+  test('a recorded null (over the cap) is kept and the file is not read again', async () => {
+    let reads = 0;
+    const read = async () => {
+      reads++;
+      return bytes;
+    };
+    const out = await completeStatistics('logs', entry({ 'resource:run': null }), ['resource:run'], 10, read);
+    expect(out.values).toEqual({ 'resource:run': null });
+    expect(reads).toBe(0);
+  });
+
+  test('leaves a key null when its values exceed the cap', async () => {
+    const out = await completeStatistics('logs', entry({}), ['resource:run'], 2, async () => bytes);
+    expect(out.values['resource:run']).toBeNull();
   });
 });

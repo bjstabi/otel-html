@@ -12,8 +12,42 @@ import {
   facetToken,
   tokensToOttl,
 } from '../components/filter-tokens.js';
+import type { ResourceValues } from '../data/data-source.js';
 import type { TimeWindow } from '../data/time-window.js';
 import type { DashboardPageState } from '../state/dashboard-state.js';
+
+/** A variable's values; `emptyInWindow` when the window has none but the report does (the variable stays). */
+export type VariableValues = ResourceValues & { emptyInWindow?: true };
+
+/**
+ * `key`'s values in `window`. The report is asked once without the window only when the window's answer cannot stand
+ * alone: when it is empty (an empty window is told apart from a key the report lacks: the first is marked
+ * `emptyInWindow`, the second is returned as it is, hidden), or when `selected` is not among its values (the window
+ * may hold only some of the key's kinds, and the selected value is bound by the report's kind).
+ */
+export async function variableValues(
+  key: string,
+  window: TimeWindow | null,
+  read: (key: string, window: TimeWindow | null) => Promise<ResourceValues>,
+  selected: string | null = null,
+): Promise<VariableValues> {
+  const inWindow = await read(key, window);
+  if (window === null) return inWindow;
+  const empty = inWindow.values.length === 0;
+  if (!empty && (selected === null || inWindow.values.includes(selected))) return inWindow;
+  const all = await read(key, null);
+  if (all.values.length === 0) return inWindow;
+  return empty ? { ...inWindow, kind: all.kind, emptyInWindow: true } : { ...inWindow, kind: all.kind };
+}
+
+/** A variable's selected value: the URL's (`null` is all), else the config default; `null` when none is selected. */
+export function selectedOf(
+  state: DashboardPageState,
+  v: Pick<Dashboard['variables'][number], 'key' | 'default'>,
+): string | null {
+  const value = Object.hasOwn(state.vars, v.key) ? state.vars[v.key] : v.default;
+  return value ?? null;
+}
 
 export interface VariableBinding {
   key: string;
@@ -110,23 +144,23 @@ export interface VariableBindings {
 
 /**
  * Each variable's value: the URL's (`null` is all), else the config default; unset and all are left out.
- * A key with no values in `values` is hidden and never bound. A `mixed` key is compared as a string (the facets
+ * A key with no values in `values` is hidden and never bound, unless only the window lacks them (`emptyInWindow`). A `mixed` key is compared as a string (the facets
  * keep display text), which matches string-valued records only. A value that does not parse as the key's int,
  * double or bool kind is reported as unusable instead of throwing later in `scopeFor`.
  */
 export function bindings(
   dashboard: Dashboard,
   state: DashboardPageState,
-  values: Readonly<Record<string, { values: readonly string[]; kind: FacetValueKind }>>,
+  values: Readonly<Record<string, { values: readonly string[]; kind: FacetValueKind; emptyInWindow?: true }>>,
 ): VariableBindings {
   const out: VariableBindings = { bindings: [], unusable: [], hidden: [] };
   for (const v of dashboard.variables) {
     const known = values[v.key];
-    if (known === undefined || known.values.length === 0) {
+    if (known === undefined || (known.values.length === 0 && known.emptyInWindow !== true)) {
       out.hidden.push(v.key);
       continue;
     }
-    const value = Object.hasOwn(state.vars, v.key) ? state.vars[v.key] : v.default;
+    const value = selectedOf(state, v);
     if (value === null || value === undefined) continue;
     const binding: VariableBinding = {
       key: v.key,
