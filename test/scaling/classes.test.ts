@@ -17,7 +17,7 @@ import { ROLLUP_ENTRIES } from '../../test-support/scaling/rollup-entries.js';
 const { OTEL_HTML_SCALING_OUT: OUT } = process.env;
 
 /** The number of lines the known-debt list may hold; a PR that removes lines lowers it. */
-const DEBT_MAX = 15;
+const DEBT_MAX = 7;
 
 describe('declared classes', () => {
   test('every catalogue entry has a declaration and nothing else does', () => {
@@ -73,6 +73,7 @@ describe('declared classes', () => {
     // a renamed builder would drop an entry from the selection silently: pin the ids
     expect(SMALL_TABLE_ENTRIES.map((e) => e.id).sort()).toEqual([
       'patterns',
+      'spans.total.traces.long',
       'trace.get',
       'trace.has',
       'trace.logs',

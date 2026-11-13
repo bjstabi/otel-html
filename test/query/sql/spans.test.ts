@@ -11,6 +11,7 @@ import {
 import { buildFilter, whereOf } from '../../../src/query/sql/filter.js';
 import { absWindow } from '../../../src/query/sql/prune.js';
 import {
+  allTraceCountQuery,
   allTraceRowsQuery,
   durationBinsQuery,
   durationSummaryQuery,
@@ -27,6 +28,7 @@ import {
   traceRowsQuery,
   traceSpansQuery,
   traceSummaryQuery,
+  windowTracePartitionsQuery,
 } from '../../../src/query/sql/spans.js';
 import { bucketSpec } from '../../../src/query/sql/time.js';
 import type { TestDb } from '../../../test-support/duckdb-node.js';
@@ -600,6 +602,24 @@ describe('the unconditioned trace list', () => {
 
   test('the statement reads no spans', () => {
     expect(allTraceRowsQuery(hfilter(), TRACE_SORTS[0], 5).toString()).not.toMatch(/\bspans\b/);
+  });
+
+  test('a window keeps the traces that start in it, by their earliest start; the count and the partitions agree', () => {
+    const everything = { start: 0n, end: 2n ** 62n };
+    const nothing = { start: 2n ** 62n, end: 2n ** 62n + 1n };
+    const sort = TRACE_SORTS[0];
+    const total = hdb.rows(allTraceRowsQuery(hfilter(), sort, 50).toString());
+    expect(hdb.rows(allTraceRowsQuery(hfilter(), sort, 50, everything).toString())).toEqual(total);
+    expect(hdb.rows(allTraceRowsQuery(hfilter(), sort, 50, nothing).toString())).toEqual([]);
+    expect(col(hdb.rows(allTraceCountQuery(everything).toString()), 'total')).toEqual([3n]);
+    expect(col(hdb.rows(allTraceCountQuery(nothing).toString()), 'total')).toEqual([0n]);
+    const paths = h.manifest.partitions.flatMap((p) =>
+      p.files.traces === undefined ? [] : [p.files.traces.path],
+    );
+    const files = { files: paths, all: true, total: paths.length };
+    expect(hdb.rows(windowTracePartitionsQuery(files, everything).toString()).length).toBeGreaterThan(0);
+    expect(hdb.rows(windowTracePartitionsQuery(files, nothing).toString())).toEqual([]);
+    expect(allTraceCountQuery(everything).toString()).not.toMatch(/\bspans\b/);
   });
 });
 

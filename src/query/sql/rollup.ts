@@ -12,7 +12,7 @@ import { type SqlFilter, whereOf } from './filter.js';
 import { bandExpr } from './logs.js';
 import type { PruneHints } from './ottl.js';
 import { type AbsWindow, type Pruned, prunePartitions } from './prune.js';
-import { durationBucketsQuery } from './spans.js';
+import { durationBucketsQuery, resourceValuesOf } from './spans.js';
 import { type BucketSpec, bucketExpr } from './time.js';
 
 /**
@@ -425,4 +425,46 @@ export function rollupDurationBinsQuery(
     .groupby(sql`bin`)
     .orderby(sql`bin`);
   return axis.length === 0 ? q.where(literal(false)) : q;
+}
+
+/**
+ * One row: `percentile`, the share (0 to 100) of the relation's spans whose duration bucket is at most `bucket` (the
+ * bucket of the asked duration, so a bucket's spans are counted whole), and `n`. The relation needs durations.
+ */
+export function rollupPercentileQuery(rel: Query, bucket: number): Query {
+  return Query.from({ r: rel }).select({
+    percentile: sql`CAST(coalesce(sum(n) FILTER (WHERE duration_bucket <= ${literal(bucket)}), 0) AS DOUBLE) * 100.0 / sum(n)`,
+    n: n64('n'),
+  });
+}
+
+/** The relation column of a resource attribute map (`resource_attributes`), which a rollup keeps reduced to its resource dimensions. */
+export function resourceAttributesKey(attribute: string): MeasureKey {
+  return {
+    name: 'resource_attributes',
+    raw: column('resource_attributes'),
+    reads: `resource:${attribute}`,
+  };
+}
+
+/**
+ * `resourceValuesQuery`'s rows (`value`, `kind`, `cap + 1`) from `rels`, relations of (`resource_attributes`, `n`) rows:
+ * the rollup rows and the grouped raw rows of the spans and of the logs. `points`, when given, adds the points' texts
+ * (they have no rollup) under their own filter. `attribute` is the key asked, a dimension of every rollup that stands in `rels`.
+ */
+export function rollupResourceValuesQuery(
+  rels: readonly Query[],
+  attribute: string,
+  cap: number,
+  points?: SqlFilter,
+): Query {
+  const texts = rels.map((rel) => Query.from({ m: rel }).select('resource_attributes'));
+  if (points !== undefined) {
+    texts.push(
+      Query.from('points')
+        .select('resource_attributes')
+        .where(...whereOf(points, 'points')),
+    );
+  }
+  return resourceValuesOf(Query.unionAll(texts), attribute, cap);
 }

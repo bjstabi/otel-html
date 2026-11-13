@@ -278,6 +278,7 @@ const SPAN_CONDITIONS: SpanSpec[] = [
   ),
   span('spans.total.traces', ['total'], ['spanCountQuery'], {
     over: { mode: 'traces' },
+    long: ['allTraceCountQuery'],
     variants: [LONG],
   }),
 ];
@@ -290,6 +291,9 @@ const SPAN_ROWS: SpanSpec[] = [
   },
 ];
 
+/** The trace list of a condition under a long window: the partitions of the traces that start in it, then their spans. */
+const WINDOW_TRACES = ['windowTracePartitionsQuery', 'windowTraceRowsQuery'] as const;
+
 const TRACE_LIST: SpanSpec[] = [
   {
     ...span('traces.list', ['rows'], ['allTraceRowsQuery'], { over: { mode: 'traces' } }),
@@ -297,20 +301,28 @@ const TRACE_LIST: SpanSpec[] = [
     variants: [ALL, ALL_LONG],
   },
   {
-    ...span('traces.list', ['rows'], ['traceRowsQuery'], { over: { mode: 'traces' } }),
+    ...span('traces.list', ['rows'], ['traceRowsQuery'], {
+      over: { mode: 'traces' },
+      long: ['allTraceRowsQuery'],
+    }),
     family: 'trace list',
     variants: [SHORT, LONG],
   },
   {
     ...span('traces.list.statkey', ['rows'], ['traceRowsQuery'], {
       over: { mode: 'traces' },
+      long: WINDOW_TRACES,
       when: STAT_KEY,
     }),
     family: 'trace list',
     variants: [LONG],
   },
   {
-    ...span('traces.list.attr', ['rows'], ['traceRowsQuery'], { over: { mode: 'traces' }, when: ATTR }),
+    ...span('traces.list.attr', ['rows'], ['traceRowsQuery'], {
+      over: { mode: 'traces' },
+      when: ATTR,
+      long: WINDOW_TRACES,
+    }),
     family: 'trace list',
     variants: [LONG],
   },
@@ -407,7 +419,7 @@ const PERCENTILE: readonly Entry<'percentileOf'>[] = WINDOWED.map(
     id: `percentile.${v.suffix}`,
     family: 'duration distribution',
     method: 'percentileOf',
-    builders: ['percentileQuery'],
+    builders: v === LONG ? ['rollupPercentileQuery'] : ['percentileQuery'],
     spacing: v.spacing,
     // the percentile reads the service and resource's spans whatever the page's window
     window: false,
@@ -498,7 +510,7 @@ export const CATALOGUE = [
     id: 'resourceValues.all',
     family: 'distinct values',
     method: 'resourceValues',
-    builders: ['resourceValuesQuery'],
+    builders: ['rollupResourceValuesQuery'],
     run: (ds) => ds.resourceValues('service.name', { window: null }),
   }),
   ...WINDOWED.map(
@@ -506,7 +518,7 @@ export const CATALOGUE = [
       id: `resourceValues.${v.suffix}`,
       family: 'distinct values',
       method: 'resourceValues',
-      builders: ['resourceValuesQuery'],
+      builders: v === LONG ? ['rollupResourceValuesQuery'] : ['resourceValuesQuery'],
       spacing: v.spacing,
       window: true,
       run: (ds, ctx) => ds.resourceValues('service.name', { window: ctx.window }),
@@ -748,26 +760,23 @@ const BASELINE: Record<string, Declared> = {
     allowed: { density: ATTRIBUTE_AGGREGATE, window: ATTRIBUTE_AGGREGATE },
     scanOf: 'spans.total.long',
   }),
-  'spans.total.traces.long': decl(['fixed', 'scan', 'scan'], {
-    allowed: { density: ATTRIBUTE_AGGREGATE, window: ATTRIBUTE_AGGREGATE },
-    scanOf: 'spans.total.long',
-  }),
+  'spans.total.traces.long': decl(['files', 'files', 'files']),
   'spans.rows.short': decl(['fixed', 'scan', 'scan'], { allowed: { density: ROWS_PAGE, window: ROWS_PAGE } }),
   'spans.rows.long': decl(['fixed', 'scan', 'scan'], { allowed: { density: ROWS_PAGE, window: ROWS_PAGE } }),
   'spans.rows.all': decl(['scan', 'scan', null], { allowed: { retention: ROWS_PAGE, density: ROWS_PAGE } }),
   'percentile.short': decl(['scan', 'scan', null], {
     allowed: { retention: PERCENTILE_SHORT, density: PERCENTILE_SHORT },
   }),
-  'percentile.long': decl(['scan', 'scan', null]),
+  'percentile.long': decl(['files', 'fixed', null]),
   'traces.list.all': decl(['files', 'files', null]),
   'traces.list.all.long': decl(['files', 'files', null]),
   'traces.list.short': decl(['files', 'scan', 'scan'], {
     allowed: { density: TRACE_LIST_SCAN, window: TRACE_LIST_SCAN },
   }),
-  'traces.list.long': decl(['files', 'scan', 'scan']),
+  'traces.list.long': decl(['files', 'files', 'files']),
   'traces.list.statkey.long': decl(['files', 'matched', 'files'], {
     needed: ONE_PARTITION,
-    scanOf: 'traces.list.long',
+    scanOf: 'traces.list.attr.long',
   }),
   'traces.list.attr.long': decl(['files', 'scan', 'scan'], {
     allowed: { density: TRACE_LIST_SCAN, window: TRACE_LIST_SCAN },
@@ -818,11 +827,11 @@ const BASELINE: Record<string, Declared> = {
     allowed: { density: ATTRIBUTE_AGGREGATE, window: ATTRIBUTE_AGGREGATE },
     scanOf: 'logs.timeline.long',
   }),
-  'resourceValues.all': decl(['scan', 'scan', null]),
+  'resourceValues.all': decl(['files', 'fixed', null]),
   'resourceValues.short': decl(['fixed', 'scan', 'scan'], {
     allowed: { density: SHORT_WINDOW, window: SHORT_WINDOW },
   }),
-  'resourceValues.long': decl(['fixed', 'scan', 'scan']),
+  'resourceValues.long': decl(['fixed', 'fixed', 'files']),
   patterns: decl(['files', 'fixed', null]),
   'metrics.catalog': decl(['files', 'fixed', null]),
   'metrics.showOptions': decl(['fixed', 'fixed', null]),
@@ -840,6 +849,9 @@ const BASELINE: Record<string, Declared> = {
 const SMALL_TABLE_BUILDERS: ReadonlySet<string> = new Set([
   'traceRowsQuery',
   'allTraceRowsQuery',
+  'allTraceCountQuery',
+  'windowTracePartitionsQuery',
+  'windowTraceRowsQuery',
   'tracePartitionsQuery',
   'traceSummaryQuery',
   'patternsQuery',
@@ -884,17 +896,13 @@ const owed = (
 
 /**
  * `scan`s that §3.4 does not allow, each owed to an issue and a PR of the plan; the list only shrinks. Grouped by
- * cause: #271 (what is left of it: the percentile, the trace list and `resourceValues` under a long window; the aggregates over rollup dimensions are read from the rollups since Task 21; PR 6), #281
- * (small files read serially; PR 3, done), #282 (resourceValues without a window reads every file; the unconditioned
- * trace list was paid by PR 4; the rest goes with the rollup router in PR 6), #283 (compaction), not yet measured, and
+ * cause: #271 (what is left of it: metrics with a window; PR 6 paid the aggregates, the percentile, the trace list and
+ * `resourceValues` under a long window), #281 (small files read serially; PR 3, done), #282 (paid by PR 6: the rollup
+ * route answers `resourceValues` without a window), #283 (compaction), not yet measured, and
  * #291 (opening a trace reads the spans files of its partitions whole; no PR of the plan fixes it, so PR 9 carries it).
  */
 export const KNOWN_DEBT: readonly DebtLine[] = [
   ...owed(291, 9, 'density', 'matched', true, ['trace.get', 'trace.share']),
-  ...owed(271, 6, 'density', 'fixed', true, ['percentile.long', 'resourceValues.long']),
-  ...owed(271, 6, 'density', 'files', true, ['traces.list.long']),
-  ...owed(271, 6, 'retention', 'files', true, ['percentile.long']),
-  ...owed(271, 6, 'window', 'files', true, ['traces.list.long', 'resourceValues.long']),
   // Metrics with a window are `fixed` on retention in the end (§3.4): the small-file part went with #281 (PR 3: their points files load
   // whole, so they are `files` now); the partitions the window cannot hold are pruned by the end-time and manifest-range pruning of #271 (PR 6).
   ...owed(271, 6, 'retention', 'fixed', false, [
@@ -902,7 +910,5 @@ export const KNOWN_DEBT: readonly DebtLine[] = [
     'metrics.runQuery',
     'metrics.runQuery.failed',
   ]),
-  ...owed(282, 6, 'density', 'fixed', true, ['resourceValues.all']),
-  ...owed(282, 6, 'retention', 'files', true, ['resourceValues.all']),
   ...owed(283, 7, 'retention', 'fixed', false, ['spans.total.short', 'spans.total.long']),
 ];

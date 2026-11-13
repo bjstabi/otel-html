@@ -1,6 +1,7 @@
-import { and, type ExprNode, type Query, sql } from '@uwdata/mosaic-sql';
+import { and, column, type ExprNode, eq, literal, type Query, sql } from '@uwdata/mosaic-sql';
 import type { ManifestV4 } from '../../format/manifest.js';
 import type { Table as TableName } from '../../format/parquet/columns.js';
+import { durationBucket } from '../../format/parquet/duration-bucket.js';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { TraceId, UnixNanos } from '../../model/ids.js';
 import type { ResourceRecord, ResourceRef, ScopeRecord, ScopeRef } from '../../model/records.js';
@@ -28,7 +29,7 @@ import {
   traceLogsQuery,
 } from '../../query/sql/logs.js';
 import type { PruneHints } from '../../query/sql/ottl.js';
-import { absWindow, type Pruned } from '../../query/sql/prune.js';
+import { absWindow, type Pruned, prunePartitions } from '../../query/sql/prune.js';
 import { idTableRowsQuery } from '../../query/sql/residual.js';
 import {
   BAND_KEY,
@@ -36,10 +37,13 @@ import {
   groupKeyOf,
   measuresRelation,
   readsOf,
+  resourceAttributesKey,
   rollupDurationBinsQuery,
   rollupDurationsQuery,
   rollupFacetQuery,
   rollupGroupsQuery,
+  rollupPercentileQuery,
+  rollupResourceValuesQuery,
   rollupTimelineQuery,
   rollupTotalQuery,
   SERVICE_KEY,
@@ -49,6 +53,7 @@ import {
   timeKey,
 } from '../../query/sql/rollup.js';
 import {
+  allTraceCountQuery,
   allTraceRowsQuery,
   durationBinsQuery,
   durationSummaryQuery,
@@ -67,6 +72,8 @@ import {
   traceRowsQuery,
   traceSpansQuery,
   traceSummaryQuery,
+  windowTracePartitionsQuery,
+  windowTraceRowsQuery,
 } from '../../query/sql/spans.js';
 import { bucketSpec } from '../../query/sql/time.js';
 import { partitionOfFilename, rollupViewStatements } from '../../query/sql/views.js';
@@ -437,7 +444,10 @@ export function createDuckDbDataSource(opts: {
       long: rule.long,
     });
     const browser = residual !== null;
-    if (filter.files.files.length === 0) return emptyResult(caps, residual);
+    // a trace list under a long window reads spans files the window itself prunes (a trace belongs to the window by its first span)
+    const windowedTraces =
+      rule.long && filter.window !== null && q.mode === 'traces' && q.needs.includes('rows');
+    if (filter.files.files.length === 0 && !windowedTraces) return emptyResult(caps, residual);
     const plan = (f: SqlFilter, need: RouteNeed, extra: readonly string[], durations: boolean) =>
       planOf(
         {
@@ -461,6 +471,36 @@ export function createDuckDbDataSource(opts: {
     const useIds = browser && (aggregates || (q.mode === 'traces' && needs.has('rows')));
     const test = residual === null ? null : residualTest(compileCondition(residual, 'span'), epoch);
 
+    /**
+     * The trace list. Under a long window a trace belongs to the window its earliest span start (over all its
+     * partitions) falls in: `traces` alone answers a list with no condition or text, and with one the partitions of the
+     * traces that start in the window are named first, then the condition is read from their spans files only. Every
+     * `traces` file is read either way (a row before the window decides that a trace started before it).
+     */
+    const traceList = async (f: SqlFilter, sort: TraceSort): ReturnType<QueryEngine['query']> => {
+      const { window } = f;
+      if (!rule.long || window === null) {
+        return unconditioned(f)
+          ? read(['traces'], undefined, allTraceRowsQuery(f, sort, q.limit), signal)
+          : read(['spans', 'traces'], f.files, traceRowsQuery(f, sort, q.limit), signal);
+      }
+      if (f.predicate === null && f.text === null) {
+        return read(['traces'], undefined, allTraceRowsQuery(f, sort, q.limit, window), signal);
+      }
+      const traces = prunePartitions(manifest, 'traces', new Map(), null);
+      const named = new Set(
+        rowsOf(await read(['traces'], undefined, windowTracePartitionsQuery(traces, window), signal)).map(
+          (r) => partitionOfFilename(String(cell(r, 'filename'))),
+        ),
+      );
+      // the spans files of those partitions, whatever the window says of each (the hints only prune the others)
+      const spans = prunePartitions(manifest, 'spans', hints, null).files.filter((p) =>
+        named.has(partitionOfFilename(p)),
+      );
+      const own: SqlFilter = { ...f, files: { files: spans, all: false, total: f.files.total } };
+      return read(['spans', 'traces'], own.files, windowTraceRowsQuery(own, traces, sort, q.limit), signal);
+    };
+
     const run = async (f: SqlFilter): Promise<SpanQueryResult> => {
       const result = emptyResult(caps, residual);
       const spec = bucketSpec(rule.window, range, undefined, rule.bucketLong);
@@ -470,11 +510,7 @@ export function createDuckDbDataSource(opts: {
         parts.push(
           (async () => {
             if (traceSort !== null) {
-              const r = traceRows(
-                unconditioned(f)
-                  ? await read(['traces'], undefined, allTraceRowsQuery(f, traceSort, q.limit), signal)
-                  : await read(['spans', 'traces'], f.files, traceRowsQuery(f, traceSort, q.limit), signal),
-              );
+              const r = traceRows(await traceList(f, traceSort));
               Object.assign(result, r);
             } else if (spanSort !== null && !useIds && test !== null) {
               let candidates = 0;
@@ -600,7 +636,13 @@ export function createDuckDbDataSource(opts: {
             const split = plan(f, 'total', [], false);
             const t =
               split === null
-                ? await read(['spans'], f.files, spanCountQuery(f, q.mode), signal)
+                ? q.mode === 'traces' &&
+                  rule.long &&
+                  f.window !== null &&
+                  f.predicate === null &&
+                  f.text === null
+                  ? await read(['traces'], undefined, allTraceCountQuery(f.window), signal)
+                  : await read(['spans'], f.files, spanCountQuery(f, q.mode), signal)
                 : await readMeasures(
                     split,
                     rollupTotalQuery(measuresRelation(f, 'spans', split, [], false)),
@@ -1141,7 +1183,38 @@ export function createDuckDbDataSource(opts: {
     hasTrace: async (traceId) =>
       (await read(['traces'], undefined, tracePartitionsQuery(traceId))).numRows > 0,
     async percentileOf(service, resource, durationNs) {
-      const r = rowsOf(await read(['spans'], undefined, percentileQuery(service, resource, durationNs)))[0];
+      const long = isLongWindow(null, range);
+      let result: Awaited<ReturnType<QueryEngine['query']>>;
+      if (long) {
+        // the report's range is long: the share is counted over the rollups (a duration bucket is counted whole)
+        const { filter } = buildFilter({
+          manifest,
+          table: 'spans',
+          condition: null,
+          text: '',
+          window: null,
+          long,
+        });
+        const f: SqlFilter = {
+          ...filter,
+          predicate: and(
+            eq(column('service_name'), literal(service)),
+            eq(column('resource_name'), literal(resource)),
+          ),
+        };
+        const split = splitFiles(manifest, 'spans', f.files, new Set(['service_name', 'resource_name']), {
+          durations: true,
+          rawOnly: false,
+        });
+        const bucket = durationBucket(BigInt(Math.max(0, Math.floor(durationNs))));
+        result = await readMeasures(
+          split,
+          rollupPercentileQuery(measuresRelation(f, 'spans', split, [], true), bucket),
+        );
+      } else {
+        result = await read(['spans'], undefined, percentileQuery(service, resource, durationNs));
+      }
+      const r = rowsOf(result)[0];
       if (r === undefined || toNumber(cell(r, 'n'), 'n') === 0) return null;
       return Number(cell(r, 'percentile'));
     },
@@ -1162,7 +1235,7 @@ export function createDuckDbDataSource(opts: {
     async resourceValues(key, opts, signal) {
       throwIfAborted(signal);
       const rule = rules(opts.window);
-      const filterOf = (table: 'spans' | 'logs' | 'points') =>
+      const built = (table: 'spans' | 'logs' | 'points') =>
         buildFilter({
           manifest,
           table,
@@ -1170,11 +1243,48 @@ export function createDuckDbDataSource(opts: {
           text: '',
           window: rule.window,
           long: rule.long,
-        }).filter;
+        });
+      const filterOf = (table: 'spans' | 'logs' | 'points') => built(table).filter;
       const windowed =
         rule.window === null
           ? undefined
           : { spans: filterOf('spans'), logs: filterOf('logs'), points: filterOf('points') };
+      if (rule.long || opts.window === null) {
+        // a long window, or none (the whole report, long or not): the spans and logs parts come from the rollups that keep the key
+        const reads = new Set([`resource:${key}`]);
+        const attributes = [resourceAttributesKey(key)];
+        const part = (table: 'spans' | 'logs'): { split: Split; rel: Query } => {
+          const { filter, hints } = built(table);
+          const split = splitFiles(manifest, table, filter.files, reads, {
+            durations: false,
+            rawOnly: false,
+            prune: { hints, window: filter.window, long: true },
+          });
+          return { split, rel: measuresRelation(filter, table, split, attributes, false) };
+        };
+        const spans = part('spans');
+        const logs = part('logs');
+        const points = built('points').filter;
+        const rollups = [...spans.split.rollup, ...logs.split.rollup];
+        if (rollups.length > 0) {
+          await engine.prepare(rollups, signal);
+          await ensureRollupViews();
+        }
+        return resourceValueResult(
+          await runPrepared(
+            engine,
+            rollupResourceValuesQuery([spans.rel, logs.rel], key, caps.facetValueCap, points),
+            [
+              ...rollups,
+              ...spans.split.raw,
+              ...logs.split.raw,
+              ...filesFor(manifest, ['points'], points.files),
+            ],
+            signal,
+          ),
+          caps.facetValueCap,
+        );
+      }
       // each table's kept files are prepared; the rest of the table's files stay unopened
       const files =
         windowed === undefined

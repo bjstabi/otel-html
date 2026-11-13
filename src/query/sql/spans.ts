@@ -14,10 +14,12 @@ import {
 } from '@uwdata/mosaic-sql';
 import { TABLE_COLUMNS } from '../../format/parquet/columns.js';
 import { durationBucketSql } from '../../format/parquet/duration-bucket.js';
+import { OtelHtmlError } from '../../model/errors.js';
 import type { TraceId } from '../../model/ids.js';
 import { jsonAt, jsonKind, jsonStringAt, relTime } from './columns.js';
 import { CORE_SPAN_FACETS, truncated } from './facets.js';
-import { type SqlFilter, whereOf } from './filter.js';
+import { filenameTerm, type SqlFilter, whereOf } from './filter.js';
+import type { AbsWindow, Pruned } from './prune.js';
 import { type BucketSpec, bucketExpr } from './time.js';
 
 export interface SpanSort {
@@ -106,13 +108,75 @@ export function traceRowsQuery(f: SqlFilter, sort: TraceSort, limit: number): Qu
 /**
  * `traceRowsQuery` for a list with no condition, text or window: every trace with a span, from `traces` alone (no
  * `matching` relation over `spans`). A trace that has logs only has `span_count` 0 in every partition and is left out.
+ * With `window` (a long one: a trace belongs to the window its earliest span start, over all its partitions, falls in,
+ * `lo <= start < hi`) the HAVING keeps the traces that start in it; every `traces` file is read whatever the window, since
+ * a row of a trace in a file before the window decides that the trace started before it.
  */
-export function allTraceRowsQuery(f: Pick<SqlFilter, 'epoch'>, sort: TraceSort, limit: number): Query {
-  return traceRowsOf(traceAggregate(f.epoch).having(sql`sum(span_count) > 0`), sort, limit);
+export function allTraceRowsQuery(
+  f: Pick<SqlFilter, 'epoch'>,
+  sort: TraceSort,
+  limit: number,
+  window?: AbsWindow | null,
+): Query {
+  const agg = traceAggregate(f.epoch).having(sql`sum(span_count) > 0`);
+  if (window != null) agg.having(traceStartIn(window));
+  return traceRowsOf(agg, sort, limit);
+}
+
+/** The traces that start in `window` (absolute, `lo <= start < hi`), as an aggregate `HAVING` term over `traceAggregate`. */
+const traceStartIn = (window: AbsWindow): ExprNode =>
+  sql`min(start_time_unix_nano) FILTER (WHERE ${TIMED}) >= ${verbatim(`${window.start}::BIGINT`)} AND min(start_time_unix_nano) FILTER (WHERE ${TIMED}) < ${verbatim(`${window.end}::BIGINT`)}`;
+
+const TIMED = sql`span_count > 0 AND start_time_unix_nano IS NOT NULL AND end_time_unix_nano IS NOT NULL`;
+
+/** `allTraceCountQuery`'s statement: one row, `total`, the traces `allTraceRowsQuery` lists (from `traces` alone). */
+export function allTraceCountQuery(window?: AbsWindow | null): Query {
+  const agg = Query.from('traces')
+    .select({ trace_id: column('trace_id') })
+    .groupby('trace_id')
+    .having(sql`sum(span_count) > 0`);
+  if (window != null) agg.having(traceStartIn(window));
+  return Query.from({ t: agg }).select({ total: sql`CAST(count(*) AS BIGINT)` });
+}
+
+/**
+ * The partitions (the `filename` of their `traces` file) that hold a row of a trace starting in `window`: the files
+ * a conditioned list must read the spans of. `files` are the `traces` files read; each trace's start is taken over them.
+ */
+export function windowTracePartitionsQuery(files: Pruned, window: AbsWindow): Query {
+  const own = filenameTerm(files);
+  const inWindow = Query.from('traces').select('trace_id').groupby('trace_id').having(traceStartIn(window));
+  if (own !== null) inWindow.where(own);
+  const q = Query.from('traces')
+    .select('filename')
+    .distinct()
+    .where(sql`trace_id IN (${inWindow})`)
+    .orderby('filename');
+  if (own !== null) q.where(own);
+  return q;
+}
+
+/**
+ * `traceRowsQuery` restricted to the traces that start in `f.window`; `f.files` is the spans files of the partitions
+ * `windowTracePartitionsQuery` named and `traces` the `traces` files read. The condition and text pick the traces
+ * from those spans whatever their own start (the window is the trace's, not the span's).
+ */
+export function windowTraceRowsQuery(f: SqlFilter, traces: Pruned, sort: TraceSort, limit: number): Query {
+  if (f.window === null) {
+    throw new OtelHtmlError('usage', { message: 'windowTraceRowsQuery: a window is required' });
+  }
+  const matching = Query.from('spans')
+    .select('trace_id')
+    .distinct()
+    .where(...whereOf({ ...f, window: null }, 'spans'));
+  const agg = traceAggregate(f.epoch).where(sql`trace_id IN (${matching})`).having(traceStartIn(f.window));
+  const own = filenameTerm(traces);
+  if (own !== null) agg.where(own);
+  return traceRowsOf(agg, sort, limit);
 }
 
 function traceAggregate(epoch: bigint): SelectQuery {
-  const timed = sql`span_count > 0 AND start_time_unix_nano IS NOT NULL AND end_time_unix_nano IS NOT NULL`;
+  const timed = TIMED;
   const rooted = sql`root_name IS NOT NULL AND start_time_unix_nano IS NOT NULL`;
   return Query.from('traces')
     .select({
@@ -408,7 +472,14 @@ export function resourceValuesQuery(
     const q = Query.from(table).select('resource_attributes');
     return filters === undefined ? q : q.where(...whereOf(filters[table], table));
   };
-  const texts = Query.union(branch('spans'), branch('logs'), branch('points'));
+  return resourceValuesOf(Query.union(branch('spans'), branch('logs'), branch('points')), key, cap);
+}
+
+/**
+ * The distinct scalar values of `key` among the `resource_attributes` texts of `texts` (a relation with that column):
+ * (`value`, `kind`), `cap + 1` rows. The statement has no `WHERE`: see `resourceValuesQuery`.
+ */
+export function resourceValuesOf(texts: Query, key: string, cap: number): Query {
   const extracted = Query.from({ r: texts }).select({
     value: jsonStringAt('resource_attributes', [key]),
     kind: jsonKind(jsonAt('resource_attributes', [key])),

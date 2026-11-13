@@ -922,3 +922,113 @@ describe('long windows count spans by start time', () => {
     expect(await names({ start: edge.start, end: edge.start + 100e6 })).toEqual(['at-start', 'overlap-only']);
   });
 });
+
+describe('long windows list a trace in the window its earliest span starts in', () => {
+  const LONG = 16_777_216_000_000;
+  const asked = { start: 60_000e6, end: 60_000e6 + LONG };
+  const edge = alignLongWindow(asked, BASE);
+  const ms = (rel: number): number => rel / 1e6;
+  const inside = (extraMs: number): number => ms(edge.start) + extraMs;
+  // trace 1 starts at 0 (the epoch) in partition 0 and continues in partition 1, inside the window
+  const PART0: S[] = [
+    { trace: 1, id: 1, svc: 'svc-a', name: 'early', startMs: 0, durMs: 10 },
+    { trace: 2, id: 2, svc: 'svc-a', name: 'two', startMs: inside(1000), durMs: 10 },
+  ];
+  const PART1: S[] = [
+    { trace: 1, id: 3, parent: 1, svc: 'svc-a', name: 'late', startMs: inside(2000), durMs: 10 },
+    { trace: 3, id: 4, svc: 'svc-a', name: 'three', startMs: inside(3000), durMs: 10 },
+  ];
+  const PART2: S[] = [
+    { trace: 4, id: 5, svc: 'svc-a', name: 'after', startMs: ms(edge.end) + 1000, durMs: 10 },
+    { trace: 3, id: 6, parent: 4, svc: 'svc-a', name: 'three-late', startMs: ms(edge.end) + 2000, durMs: 10 },
+  ];
+  let rep: Format4Fixture;
+  let tdb: TestDb;
+  const listed = (r: Awaited<ReturnType<DataSource['querySpans']>>): string[] =>
+    traceRows(r.rows).map((t) => t.traceId.slice(-2));
+  const tq = (over: Partial<SpanQuery> = {}): SpanQuery =>
+    query({ mode: 'traces', needs: ['rows', 'total'], window: asked, ...over });
+
+  beforeAll(async () => {
+    rep = await buildFormat4Report([request(PART0), request(PART1), request(PART2)], { close: false });
+    tdb = await openFixtureDb(rep);
+  });
+
+  function recording() {
+    const inner = mosaicQueryEngine(createCoordinator(tdb.connector, silentLogger), tdb);
+    const prepared: string[] = [];
+    const sql: string[] = [];
+    const engine: QueryEngine = {
+      ...inner,
+      prepare: (paths, signal) => {
+        prepared.push(...paths);
+        return inner.prepare(paths, signal);
+      },
+      query: (q, signal) => {
+        sql.push(String(q));
+        return inner.query(q, signal);
+      },
+    };
+    return { prepared, sql, source: createDuckDbDataSource({ engine, manifest: rep.manifest }) };
+  }
+  const pathsOf = (table: 'spans' | 'traces'): string[] =>
+    rep.manifest.partitions.flatMap((p) => (p.files[table] === undefined ? [] : [p.files[table].path]));
+
+  test('long window: a trace split over two partitions that starts before the window is not listed, though one partition’s row starts inside', async () => {
+    for (const over of [{}, { condition: 'name == "late"' }, { text: 'late' }]) {
+      const r = await recording().source.querySpans(tq(over));
+      expect(listed(r), JSON.stringify(over)).not.toContain('01');
+    }
+    const r = await recording().source.querySpans(tq());
+    expect(listed(r)).toEqual(['02', '03']);
+    expect(r.total).toBe(2);
+  });
+
+  test('long window: a trace is whole, with the spans it has after the window', async () => {
+    for (const over of [{}, { condition: 'name == "three"' }]) {
+      const r = await recording().source.querySpans(tq(over));
+      expect(traceRows(r.rows).find((t) => t.traceId.endsWith('03'))?.spans, JSON.stringify(over)).toBe(2);
+    }
+    // a matching span after the window still lists the trace that starts in it
+    const late = await recording().source.querySpans(tq({ condition: 'name == "three-late"' }));
+    expect(listed(late)).toEqual(['03']);
+  });
+
+  test('long window: a condition that is always true lists the same traces, in the same order, as no condition', async () => {
+    for (const sort of ['start', 'duration', 'spans'] as const) {
+      const sorted = { sort: { column: sort, dir: 'desc' as const } };
+      const all = await recording().source.querySpans(tq(sorted));
+      const cond = await recording().source.querySpans(tq({ ...sorted, condition: 'name != "no-such"' }));
+      expect(cond.rows).toEqual(all.rows);
+      expect(cond.total).toBe(all.total);
+    }
+  });
+
+  test('long window: an unconditioned list and its count run no statement over spans', async () => {
+    const list = recording();
+    await list.source.querySpans(tq());
+    expect(list.sql.filter((q) => /\bspans\b/.test(q))).toEqual([]);
+    const count = recording();
+    const r = await count.source.querySpans(tq({ needs: ['total'], mode: 'traces' }));
+    expect(r.total).toBe(2);
+    expect(count.sql.filter((q) => /\bspans\b/.test(q))).toEqual([]);
+  });
+
+  test('long window: a conditioned list reads spans only in the partitions the traces rows name', async () => {
+    const { prepared, source } = recording();
+    // trace 2 starts in partition 0 and has no other row
+    const r = await source.querySpans(tq({ condition: 'name == "two"' }));
+    expect(listed(r)).toEqual(['02']);
+    expect(prepared.filter((p) => pathsOf('spans').includes(p))).toEqual([pathsOf('spans')[0]]);
+    expect(new Set(prepared.filter((p) => pathsOf('traces').includes(p)))).toEqual(
+      new Set(pathsOf('traces')),
+    );
+  });
+
+  test('short window: the list is by overlap, as today', async () => {
+    const r = await recording().source.querySpans(
+      query({ mode: 'traces', needs: ['rows', 'total'], window: { start: 0, end: 1e9 } }),
+    );
+    expect(listed(r)).toEqual(['01']);
+  });
+});

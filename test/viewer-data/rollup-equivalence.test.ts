@@ -439,6 +439,123 @@ describe('percentiles', () => {
   });
 });
 
+describe('percentileOf on a long range', () => {
+  /** 17 durations 1.7 times apart (each in a bucket of its own), 30 spans each, over more than 256 grains. */
+  const runs = Array.from({ length: 17 }, (_, j) => BigInt(Math.floor(1000 * 1.7 ** j)));
+  const specs = (): SpanSpec[] => [
+    ...runs.flatMap((d, j) =>
+      Array.from({ length: 30 }, (_, i) => ({
+        id: 100 + j * 30 + i,
+        trace: 1,
+        svc: 'svc-a',
+        run: 'r1',
+        name: 'dense',
+        startNs: edge(10 + ((j * 30 + i) % 200), BigInt(i) * 1_000_000n),
+        durNs: d,
+      })),
+    ),
+    // another service, and a span far out so that the report's range is long
+    { id: 900, trace: 2, svc: 'svc-b', run: 'r1', name: 'other', startNs: edge(300), durNs: 5n },
+  ];
+
+  const exact = (o: Opened, resource: string, d: bigint): number => {
+    const [row] = o.db.rows(
+      `SELECT count(*) FILTER (WHERE duration_ns <= ${d}) * 100.0 / count(*) AS p FROM spans WHERE service_name = 'svc-a' AND resource_name = '${resource}'`,
+    );
+    return Number(Reflect.get(row ?? {}, 'p'));
+  };
+
+  test('is within 4.43 percentage points of the exact share at a bucket edge, and equal from rollups and raw files', async () => {
+    const rich = await buildFormat4Report([spansRequest(specs())], {
+      config: { writer: { statisticsKeys: [...STATISTICS_KEYS] } },
+    });
+    const got: number[][] = [];
+    for (const f of [rich, withoutRollups(rich)]) {
+      const o = await openLayout(f);
+      try {
+        const [row] = o.db.rows(`SELECT resource_name AS r FROM spans WHERE service_name = 'svc-a' LIMIT 1`);
+        const resource = String(Reflect.get(row ?? {}, 'r'));
+        const before = o.db.connector.requests.length;
+        const shares: number[] = [];
+        for (const d of runs) {
+          const share = await o.ds.percentileOf('svc-a', resource, Number(d));
+          if (share === null) throw new Error('no spans');
+          expect(Math.abs(share - exact(o, resource, d))).toBeLessThanOrEqual(4.43);
+          shares.push(share);
+        }
+        expect(await o.ds.percentileOf('svc-a', 'no-such', 5)).toBeNull();
+        got.push(shares);
+        const sql = o.db.connector.requests
+          .slice(before)
+          .map((r) => r.sql)
+          .join('\n');
+        // a report with rollups reads them; one without reads the spans files, in the same statement shape
+        expect(/FROM "span_rollups"/.test(sql)).toBe(f === rich);
+      } finally {
+        o.close();
+      }
+    }
+    expect(got[0]).toEqual(got[1]);
+  });
+
+  test('a short range is the exact share over the spans files, as today', async () => {
+    const few = [3n, 4n, 5n, 6n].map((d, i) => ({
+      id: 700 + i,
+      trace: 1,
+      svc: 'svc-a',
+      run: 'r1',
+      name: 'few',
+      startNs: edge(10 + i),
+      durNs: d,
+    }));
+    const o = await openLayout(await buildFormat4Report([spansRequest(few)]));
+    try {
+      const [row] = o.db.rows(`SELECT resource_name AS r FROM spans LIMIT 1`);
+      const resource = String(Reflect.get(row ?? {}, 'r'));
+      // 3, 4 and 5 are at most 5; buckets would count 6 with 5 when they share one, so the exact answer pins the path
+      expect(await o.ds.percentileOf('svc-a', resource, 5)).toBe(75);
+      expect(/span_rollups/.test(o.db.connector.requests.map((r) => r.sql).join('\n'))).toBe(false);
+    } finally {
+      o.close();
+    }
+  });
+});
+
+describe('resourceValues under a long window', () => {
+  const KEYS = ['service.name', 'run.id', 'host.name', 'no.such.key'] as const;
+  test.each(KEYS.flatMap((key) => [true, false].map((windowed) => ({ key, windowed }))))(
+    '$key with window $windowed is the same list from rollups, raw files and a mix',
+    async ({ key, windowed }) => {
+      const answers: unknown[] = [];
+      for (const layout of [layouts.A, layouts.B, layouts.C]) {
+        const o = await openedOf(layout, 0n);
+        answers.push(
+          plain(await o.ds.resourceValues(key, { window: windowed ? longWindow(o.epoch) : null })),
+        );
+      }
+      expect(answers[0]).toEqual(answers[2]);
+      expect(answers[1]).toEqual(answers[2]);
+    },
+    60_000,
+  );
+
+  test('the rollups answer for a dimension and the raw files for a key that is not one', async () => {
+    const sqlOf = async (layout: Layout, key: string): Promise<string> => {
+      const o = await openLayout(layout.fixture);
+      try {
+        await o.ds.resourceValues(key, { window: longWindow(o.epoch) });
+        return o.db.connector.requests.map((r) => r.sql).join('\n');
+      } finally {
+        o.close();
+      }
+    };
+    expect(await sqlOf(layouts.A, 'service.name')).toMatch(/FROM "span_rollups"/);
+    expect(await sqlOf(layouts.A, 'service.name')).not.toMatch(/FROM "spans"/);
+    expect(await sqlOf(layouts.A, 'no.such.key')).toMatch(/FROM "spans"/);
+    expect(await sqlOf(layouts.B, 'service.name')).not.toMatch(/span_rollups/);
+  });
+});
+
 describe('a report without spans or without logs', () => {
   test('a logs-only report and a report with an empty spans table answer empty under a long window', async () => {
     const { buildFormat4Report } = await import('../../test-support/format4-fixture.js');
