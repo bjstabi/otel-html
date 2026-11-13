@@ -160,8 +160,9 @@ change in any PR (a need for one is a stop).
   `src/viewer/logs/explorer.tsx`, `src/viewer/components/facet-panel.tsx`,
   `src/viewer/components/histogram-card.tsx`, `src/viewer/traces/span-section.tsx`,
   `src/viewer/traces/trace-panel.tsx`; and, for lazy rollup views (maintainer, 2026-11-13), `src/query/sql/views.ts`,
-  `src/viewer/data/engine/files.ts`, `src/viewer/data/refresh-report.ts`; and `src/writer/merge.ts` (maintainer,
-  2026-11-13: a merge that copies a partition whose rollup description lacks the report's keys recomputes it). No build file.
+  `src/viewer/data/engine/files.ts`, `src/viewer/data/refresh-report.ts`; and `src/writer/partition-session.ts` (maintainer,
+  2026-11-13: a merge that copies a partition whose rollup description lacks the report's keys recomputes it, in
+  `copyPartitions`; it replaced `src/writer/merge.ts`, which needed no change). No build file.
 - **PR 7** — `src/writer/compaction.ts`, `src/writer/partition-session.ts`, `src/viewer/data/catalogue.ts`. No build
   file.
 - **PR 8** — `src/config/schema.ts`, `src/viewer/shell/shell.tsx`, `src/viewer/shell/time-range.tsx`,
