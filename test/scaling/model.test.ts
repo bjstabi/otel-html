@@ -247,7 +247,7 @@ describe('predictPage', () => {
 });
 
 describe('countCalls', () => {
-  test('counts a by-id call once per distinct id and a memoised call once', () => {
+  test('counts a by-id call once per distinct id, a memoised call once and the shares of a page as one batch', () => {
     const call = (method: string, idKey: string | null, id: string) => ({
       method,
       idKey,
@@ -255,16 +255,21 @@ describe('countCalls', () => {
       baseline: false,
     });
     const counted = countCalls([
-      call('serviceShare', 'a', 'trace.share'),
-      call('serviceShare', 'b', 'trace.share'),
-      call('serviceShare', 'a', 'trace.share'),
-      call('serviceShare', 'c', 'trace.share'),
+      call('hasTrace', 'a', 'trace.has'),
+      call('hasTrace', 'b', 'trace.has'),
+      call('hasTrace', 'a', 'trace.has'),
+      call('hasTrace', 'c', 'trace.has'),
+      call('serviceShare', 'a', 'trace.share.batch'),
+      call('serviceShare', 'b', 'trace.share.batch'),
+      call('serviceShare', 'a', 'trace.share.batch'),
       call('metricCatalog', null, 'metrics.catalog'),
       call('metricCatalog', null, 'metrics.catalog'),
       call('querySpans', null, 'spans.total.long'),
       call('querySpans', null, 'spans.total.long'),
     ]);
-    expect(counted.get('trace.share|false')).toBe(3);
+    expect(counted.get('trace.has|false')).toBe(3);
+    // the shares of one page are one batch
+    expect(counted.get('trace.share.batch|false')).toBe(1);
     expect(counted.get('metrics.catalog|false')).toBe(1);
     expect(counted.get('spans.total.long|false')).toBe(2);
   });

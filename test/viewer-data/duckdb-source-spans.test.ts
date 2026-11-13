@@ -879,3 +879,161 @@ describe('getTrace and serviceShare with a span that ends before it starts', () 
     expect((await arrows(() => fresh().serviceShare(T5))).arrow).toBe(3);
   });
 });
+
+describe('serviceShare calls made in one tick are answered together', () => {
+  const ids = Array.from({ length: 26 }, (_, i) => parseTraceId(hex(10 + i, 32), 'test'));
+  const SPLIT = ids[0] as (typeof ids)[number];
+  const LATE = parseTraceId(hex(40, 32), 'test');
+  const NONE = parseTraceId(hex(99, 32), 'test');
+  let g: Format4Fixture;
+  let gdb: TestDb;
+  const fresh = () =>
+    createDuckDbDataSource({
+      engine: mosaicQueryEngine(createCoordinator(gdb.connector, silentLogger), gdb),
+      manifest: g.manifest,
+    });
+  const arrows = async <T>(fn: () => Promise<T>): Promise<{ value: T; arrow: number; sql: string[] }> => {
+    const before = gdb.connector.requests.length;
+    const value = await fn();
+    const sent = gdb.connector.requests.slice(before).filter((r) => r.type === 'arrow');
+    return { value, arrow: sent.length, sql: sent.map((r) => r.sql) };
+  };
+  /** One share per id, from a data source of its own (the answers the batch must equal). */
+  const alone = async (list: typeof ids) => Promise.all(list.map((id) => fresh().serviceShare(id)));
+
+  beforeAll(async () => {
+    g = await buildFormat4Report(
+      [
+        request(
+          ids.flatMap((_, i): S[] => [
+            {
+              trace: 10 + i,
+              id: 100 + i,
+              svc: 'svc-a',
+              name: 'root',
+              startMs: i * 10,
+              durMs: 20,
+            },
+            {
+              trace: 10 + i,
+              id: 200 + i,
+              parent: 100 + i,
+              svc: 'svc-b',
+              name: 'child',
+              startMs: i * 10 + 5,
+              durMs: 5,
+            },
+          ]),
+        ),
+        // the first trace goes on in a second partition
+        request([
+          {
+            trace: 10,
+            id: 300,
+            parent: 100,
+            svc: 'svc-c',
+            name: 'more',
+            startMs: 6,
+            durMs: 3,
+          },
+        ]),
+        request([
+          {
+            trace: 40,
+            id: 400,
+            svc: 'svc-a',
+            name: 'root',
+            startMs: 2000,
+            durMs: 50,
+          },
+          {
+            trace: 40,
+            id: 401,
+            parent: 400,
+            svc: 'svc-b',
+            name: 'late',
+            startMs: 2100,
+            durMs: -2200,
+          },
+        ]),
+      ],
+      { close: false },
+    );
+    gdb = await openFixtureDb(g);
+  });
+
+  test('26 shares in one tick take two statements in all, and answer what 26 single reads answer', async () => {
+    const batch = await arrows(() => {
+      const source = fresh();
+      return Promise.all(ids.map((id) => source.serviceShare(id)));
+    });
+    expect(batch.arrow).toBe(2);
+    // the first statement names every id and the second is one span statement
+    expect(batch.sql[0]).toContain('traces');
+    expect(batch.sql[1]).toContain('spans');
+    expect(batch.value).toEqual(await alone(ids));
+    expect(batch.value[0]?.map((x) => x.service).sort()).toEqual(['svc-a', 'svc-b', 'svc-c']);
+  });
+
+  test('a trace that falls short of its span count is read again alone, the others are not', async () => {
+    const list = [SPLIT, LATE, ids[1] as (typeof ids)[number]];
+    const batch = await arrows(() => {
+      const source = fresh();
+      return Promise.all(list.map((id) => source.serviceShare(id)));
+    });
+    expect(batch.arrow).toBe(3);
+    expect(batch.value).toEqual(await alone(list));
+    expect(batch.value[1]?.map((x) => x.service).sort()).toEqual(['svc-a', 'svc-b']);
+  });
+
+  test('a caller that aborts rejects alone and the others are answered; an id nobody holds is not read', async () => {
+    const source = fresh();
+    const ctl = new AbortController();
+    const [a, b, c, d] = ids;
+    const calls = [
+      source.serviceShare(a as never),
+      source.serviceShare(b as never, ctl.signal),
+      source.serviceShare(c as never),
+    ];
+    // the same id as the aborted one, from a caller that stays: still answered
+    const twin = source.serviceShare(b as never);
+    ctl.abort();
+    const settled = await Promise.allSettled([...calls, twin]);
+    expect(settled.map((s) => s.status)).toEqual(['fulfilled', 'rejected', 'fulfilled', 'fulfilled']);
+    expect((settled[1] as PromiseRejectedResult).reason).toMatchObject({
+      name: 'AbortError',
+    });
+    expect((settled[3] as PromiseFulfilledResult<unknown>).value).toEqual(
+      await fresh().serviceShare(b as never),
+    );
+    // every caller of the batch aborted: no statement at all
+    const none = await arrows(async () => {
+      const s = fresh();
+      const all = new AbortController();
+      const p = Promise.allSettled([s.serviceShare(d as never, all.signal)]);
+      all.abort();
+      return p;
+    });
+    expect(none.arrow).toBe(0);
+  });
+
+  test('an unknown id rejects its own caller only', async () => {
+    const source = fresh();
+    const [x, y] = await Promise.allSettled([
+      source.serviceShare(NONE),
+      source.serviceShare(ids[1] as never),
+    ]);
+    expect(x.status).toBe('rejected');
+    expect(y.status).toBe('fulfilled');
+  });
+
+  test('a call in a later tick starts a batch of its own', async () => {
+    const source = fresh();
+    const r = await arrows(async () => {
+      const first = await source.serviceShare(ids[2] as never);
+      const second = await source.serviceShare(ids[3] as never);
+      return [first, second];
+    });
+    expect(r.arrow).toBe(4);
+  });
+});

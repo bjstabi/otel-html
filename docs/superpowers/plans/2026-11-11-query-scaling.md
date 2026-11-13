@@ -1215,9 +1215,11 @@ bounded span read of its own, and with no bloom filter on `spans` each stays `sc
 
 - `DataSource.serviceShare(traceId, signal)` is unchanged. Inside the DuckDB source, the calls made in one tick (a
   microtask or `setTimeout(0)` window) are answered together: one statement over the `traces` rows of all their ids
-  (the bounds and `sum(span_count)`), one span statement `WHERE trace_id IN (...)` bounded by each trace's own bound,
-  then each trace's rows go through `buildTraceTree` and `exclusiveTimeByService` as today.
-- Produces: `traceSpansBatchQuery(ids: readonly { traceId: string; bound: Bound | null }[], files, epoch): Query`.
+  (the bounds and `sum(span_count)`), one span statement `WHERE trace_id IN (...)` bounded by one start range over all the bounds (an OR of per-trace
+  ranges reads the files whole; a single range prunes row groups by their start statistics), then each trace's rows go through `buildTraceTree` and `exclusiveTimeByService` as today.
+- Produces: `traceSpansBatchQuery(ids: readonly { traceId: TraceId; bound: TraceBound | null }[], files, epoch): Query`, and
+  `tracePartitionsBatchQuery(ids)`. The page prediction counts the shares of a page as one `trace.share.batch`
+  (`BATCHED` in `test-support/scaling/model.ts`); a lone `trace.share` is a batch of one.
 - A trace whose rows fall short of its `sum(span_count)` is read again alone without a bound (the rule of the branch
   review's I1). One caller aborting does not abort the others; an aborted caller's id is still answered for the rest.
 - Catalogue: a new entry `trace.share.batch` runs 26 shares at once on the measured shapes and is declared as

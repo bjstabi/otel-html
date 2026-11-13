@@ -84,6 +84,7 @@ const PLAN_IDS = [
   'traces.list.attr.long',
   'trace.get',
   'trace.share',
+  'trace.share.batch',
   'trace.has',
   'trace.logs',
   'log.get',

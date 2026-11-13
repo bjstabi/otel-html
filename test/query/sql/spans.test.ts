@@ -25,6 +25,7 @@ import {
   traceBoundOf,
   tracePartitionsQuery,
   traceRowsQuery,
+  traceSpansBatchQuery,
   traceSpansQuery,
   traceSummaryQuery,
 } from '../../../src/query/sql/spans.js';
@@ -701,6 +702,26 @@ describe('a trace split over three partitions, mixed kinds and caps', () => {
     expect(String(q)).toContain('start_time_unix_nano BETWEEN 10 AND 20');
     expect(String(traceSpansQuery(T1, ['x/spans.parquet'], 0n))).not.toContain('BETWEEN');
     expect(String(traceSpansQuery(T1, ['x/spans.parquet'], 0n, null))).not.toContain('BETWEEN');
+  });
+  test('the batched span statement names every id and takes one range over the bounds, none when a trace has none', () => {
+    const T2 = parseTraceId(`${'0'.repeat(31)}2`, 'test');
+    const sql = (bounds: ({ startNs: bigint; endNs: bigint } | null)[]) =>
+      String(
+        traceSpansBatchQuery(
+          [T1, T2].map((traceId, i) => ({ traceId, bound: bounds[i] ?? null })),
+          ['x/spans.parquet'],
+          0n,
+        ),
+      );
+    const bounded = sql([
+      { startNs: 10n, endNs: 20n },
+      { startNs: 15n, endNs: 40n },
+    ]);
+    expect(bounded).toContain('start_time_unix_nano BETWEEN 10 AND 40');
+    expect(bounded).toContain(`'${T1}'`);
+    expect(bounded).toContain(`'${T2}'`);
+    expect(bounded).not.toContain(' OR ');
+    expect(sql([{ startNs: 10n, endNs: 20n }, null])).not.toContain('BETWEEN');
   });
   test('the bound keeps every span of the trace, including one starting exactly at its end', () => {
     const rows = run(tracePartitionsQuery(T1, true));

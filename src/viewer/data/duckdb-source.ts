@@ -41,11 +41,14 @@ import {
   servicesQuery,
   spanCountQuery,
   spanRowsQuery,
+  type TraceBound,
   type TraceSort,
   timelineQuery,
   traceBoundOf,
+  tracePartitionsBatchQuery,
   tracePartitionsQuery,
   traceRowsQuery,
+  traceSpansBatchQuery,
   traceSpansQuery,
   traceSummaryQuery,
 } from '../../query/sql/spans.js';
@@ -798,6 +801,163 @@ export function createDuckDbDataSource(opts: {
     return { rows, tables, logCount };
   }
 
+  /**
+   * The shares asked for in one tick are read together: the `traces` rows of all their ids in one statement, then one
+   * span statement, each id bounded by its own range (the bound `readTrace` uses). A trace that comes back short of its
+   * span count is read again alone, unbounded. A caller that aborts rejects alone; the read itself is aborted only
+   * when every caller of the batch has.
+   */
+  const shares = (() => {
+    interface Caller {
+      resolve(v: readonly { service: string; ns: number }[]): void;
+      reject(e: unknown): void;
+    }
+    interface Batch {
+      callers: Map<TraceId, Caller[]>;
+      live: number;
+      ctl: AbortController;
+    }
+    let open: Batch | null = null;
+    const abortError = () => new DOMException('The query was aborted', 'AbortError');
+
+    async function run(batch: Batch): Promise<void> {
+      const { signal } = batch.ctl;
+      const ids = [...batch.callers.keys()];
+      const answer = (
+        id: TraceId,
+        value: readonly { service: string; ns: number }[] | { error: unknown },
+      ) => {
+        for (const c of batch.callers.get(id) ?? []) {
+          if ('error' in value) c.reject(value.error);
+          else c.resolve(value);
+        }
+      };
+      try {
+        const partitionRows = rowsOf(
+          await read(['traces'], undefined, tracePartitionsBatchQuery(ids), signal),
+        );
+        const byId = Map.groupBy(partitionRows, (r) => String(cell(r, 'trace_id')));
+        interface Wanted {
+          traceId: TraceId;
+          traceRows: typeof partitionRows;
+          bound: TraceBound | null;
+          pruned: Pruned;
+        }
+        const wanted: Wanted[] = [];
+        for (const id of ids) {
+          const traceRows = byId.get(id) ?? [];
+          const { filter } = buildFilter({
+            manifest,
+            table: 'spans',
+            condition: null,
+            text: '',
+            window: null,
+            traceId: id,
+            traceFiles: traceRows.map((r) => String(cell(r, 'filename'))),
+          });
+          if (traceRows.length === 0 || filter.files.files.length === 0)
+            answer(id, { error: traceNotFound(id) });
+          else
+            wanted.push({
+              traceId: id,
+              traceRows,
+              bound: traceBoundOf(
+                traceRows.map((r) => ({
+                  min_start: cell(r, 'min_start'),
+                  max_end: cell(r, 'max_end'),
+                })),
+              ),
+              pruned: filter.files,
+            });
+        }
+        if (wanted.length === 0) return;
+        // the union of the files of all the ids: every statement still runs through `runPrepared` over prepared files
+        const union = [...new Set(wanted.flatMap((w) => w.pruned.files))].sort();
+        const total = wanted[0]?.pruned.total ?? union.length;
+        const pruned: Pruned = {
+          files: union,
+          all: union.length === total,
+          total,
+        };
+        const { rows } = spanRows(
+          await read(['spans'], pruned, traceSpansBatchQuery(wanted, union, epoch), signal),
+          epoch,
+        );
+        const rowsOfId = Map.groupBy(rows, (r) => r.span.traceId as TraceId);
+        await Promise.all(
+          wanted.map(async (w) => {
+            try {
+              let mine = rowsOfId.get(w.traceId) ?? [];
+              const expected = w.traceRows.reduce((n, r) => n + Number(cell(r, 'span_count') ?? 0n), 0);
+              if (w.bound !== null && mine.length < expected) {
+                mine = spanRows(
+                  await read(['spans'], w.pruned, traceSpansQuery(w.traceId, w.pruned.files, epoch), signal),
+                  epoch,
+                ).rows;
+              }
+              if (mine.length === 0) throw traceNotFound(w.traceId);
+              answer(w.traceId, exclusiveTimeByService(buildTraceTree(mine)));
+            } catch (e) {
+              answer(w.traceId, { error: e });
+            }
+          }),
+        );
+      } catch (e) {
+        for (const id of ids) answer(id, { error: e });
+      }
+    }
+
+    return {
+      ask(traceId: TraceId, signal?: AbortSignal): Promise<readonly { service: string; ns: number }[]> {
+        if (signal?.aborted === true) return Promise.reject(abortError());
+        return new Promise((resolve, reject) => {
+          let batch = open;
+          if (batch === null) {
+            const fresh: Batch = {
+              callers: new Map(),
+              live: 0,
+              ctl: new AbortController(),
+            };
+            batch = fresh;
+            open = fresh;
+            setTimeout(() => {
+              if (open === fresh) open = null;
+              if (fresh.live > 0) void run(fresh);
+            }, 0);
+          }
+          const b = batch;
+          let settled = false;
+          const caller: Caller = {
+            resolve: (v) => {
+              if (settled) return;
+              settled = true;
+              resolve(v);
+            },
+            reject: (e) => {
+              if (settled) return;
+              settled = true;
+              reject(e);
+            },
+          };
+          b.live += 1;
+          const list = b.callers.get(traceId);
+          if (list === undefined) b.callers.set(traceId, [caller]);
+          else list.push(caller);
+          signal?.addEventListener(
+            'abort',
+            () => {
+              if (settled) return;
+              caller.reject(abortError());
+              b.live -= 1;
+              if (b.live === 0) b.ctl.abort();
+            },
+            { once: true },
+          );
+        });
+      },
+    };
+  })();
+
   async function loadTrace(traceId: TraceId): Promise<TraceDetail> {
     const { rows, tables, logCount } = await readTrace(traceId, true);
     const lookup =
@@ -849,10 +1009,8 @@ export function createDuckDbDataSource(opts: {
       if (r === undefined || toNumber(cell(r, 'n'), 'n') === 0) return null;
       return Number(cell(r, 'percentile'));
     },
-    async serviceShare(traceId, signal) {
-      // its own load: the open trace's memo stays, and the log summary is not read
-      return exclusiveTimeByService(buildTraceTree((await readTrace(traceId, false, signal)).rows));
-    },
+    // its own load: the open trace's memo stays, and the log summary is not read
+    serviceShare: (traceId, signal) => shares.ask(traceId, signal),
     services,
     queryLogs,
     getLog,

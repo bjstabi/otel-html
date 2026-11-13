@@ -143,6 +143,12 @@ const traceIdOf = (n: number, t: number): string => {
   const seed = BigInt(n * ID_STRIDE + t + 1);
   return hex64(splitMix64(seed * 2n)) + hex64(splitMix64(seed * 2n + 1n));
 };
+/** The traces of one trace list page: the `PAGE_TRACES` after the first of partition `n`, as the newest of a list are neighbours in time. */
+const PAGE_TRACES = 26;
+const pageTraceIds = (shape: Shape, n: number): string[] =>
+  Array.from({ length: PAGE_TRACES }, (_, i) =>
+    traceIdOf(n, Math.min(1 + i, Math.floor(spanCount(shape, n) / 8) - 1)),
+  );
 const hex64 = (v: bigint): string => v.toString(16).padStart(16, '0');
 const spanIdOf = (n: number, k: number): string => hex(n * ID_STRIDE + k + 1, 16);
 const routeOf = (k: number): string => `/route/${k % 16}`;
@@ -357,6 +363,7 @@ async function build(shape: Shape): Promise<ScalingReport> {
     window,
     ids: {
       traceId: traceIdOf(first, Math.floor(k / 8)),
+      traceIds: pageTraceIds(shape, last),
       spanId: spanIdOf(first, k),
       logRef: logRef(entry.n, logFileRow),
       service: SERVICES[0],
@@ -383,6 +390,7 @@ const MetaSchema = z.object({
   window: z.object({ start: z.number(), end: z.number() }),
   ids: z.object({
     traceId: z.string(),
+    traceIds: z.array(z.string()),
     spanId: z.string(),
     logRef: z.string(),
     service: z.string(),
