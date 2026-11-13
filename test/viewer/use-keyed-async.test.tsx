@@ -50,6 +50,16 @@ afterEach(async () => {
 });
 
 describe('useKeyedAsync', () => {
+  test('a load that rejects with an AbortError is not an error: the state stays loading', async () => {
+    const h = setup();
+    await h.render('a');
+    // a source superseded by a Refresh aborts its own statements, though this load's signal was not aborted
+    await act(async () =>
+      h.calls[0]?.reject(new DOMException('A newer data source owns the views', 'AbortError')),
+    );
+    expect(h.state()).toEqual({ status: 'loading' });
+  });
+
   test('is loading, then ready with the value', async () => {
     const h = setup();
     await h.render('a');
