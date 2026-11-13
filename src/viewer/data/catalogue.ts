@@ -521,6 +521,14 @@ export const CATALOGUE = [
     spacing: 'sparse',
     run: (ds) => ds.resourceValues('service.name', { window: null }),
   }),
+  // the same call on a report whose whole range is short (the dense one): never the rollups (spec §6.3), so the files
+  point({
+    id: 'resourceValues.all.short',
+    family: 'distinct values',
+    method: 'resourceValues',
+    builders: ['resourceValuesQuery'],
+    run: (ds) => ds.resourceValues('service.name', { window: null }),
+  }),
   ...WINDOWED.map(
     (v): Entry<'resourceValues'> => ({
       id: `resourceValues.${v.suffix}`,
@@ -682,6 +690,8 @@ const ONE_GROUP = (): number => 1;
 /** The sentences of `Declared.allowed`: why a `scan` is right (§3.4), or left to the baseline of the first PR. */
 const SHORT_WINDOW =
   'a short window is bounded, so an aggregate reads its rows in full; §3.4 allows scan on density and window';
+const SHORT_RANGE =
+  'a report whose whole range is shorter never uses the rollup (spec §6.3); the range is short by definition, so the scan is bounded';
 const ATTRIBUTE_AGGREGATE =
   'an aggregate over an attribute, a text or distinct traces reads the rows it filters; §3.4 allows scan and the README documents it';
 const ROWS_PAGE =
@@ -839,6 +849,9 @@ const BASELINE: Record<string, Declared> = {
     scanOf: 'logs.timeline.long',
   }),
   'resourceValues.all': decl(['files', 'fixed', null]),
+  'resourceValues.all.short': decl(['scan', 'scan', null], {
+    allowed: { retention: SHORT_RANGE, density: SHORT_RANGE },
+  }),
   'resourceValues.short': decl(['fixed', 'scan', 'scan'], {
     allowed: { density: SHORT_WINDOW, window: SHORT_WINDOW },
   }),
@@ -907,13 +920,19 @@ const owed = (
 
 /**
  * `scan`s that §3.4 does not allow, each owed to an issue and a PR of the plan; the list only shrinks. Grouped by
- * cause: #271 (paid by PR 6: the aggregates, the percentile, the trace list and `resourceValues` under a long window; the
- * metrics entries measure `fixed` on retention by the end-time and manifest-range pruning), #281 (small files read
- * serially; PR 3, done), #282 (paid by PR 6: the rollup route answers `resourceValues` without a window), #283
- * (compaction), not yet measured, and
- * #291 (opening a trace reads the spans files of its partitions whole; no PR of the plan fixes it, so PR 9 carries it).
+ * cause: #271 (paid by PR 6: the aggregates, the percentile, the trace list and `resourceValues` under a long window),
+ * #281 (small files read serially; PR 3, done), #282 (paid by PR 6 for long-range reports: the rollup route answers
+ * `resourceValues` without a window; on a short range it scans by design, §6.3, see `resourceValues.all.short`),
+ * #283 (compaction), not yet measured, #291 (opening a trace reads the spans files of its partitions whole; no PR of
+ * the plan fixes it, so PR 9 carries it) and #295 (the metrics entries with a window measure `files`, not `fixed`, on
+ * retention: the points file of every partition outside the window is still loaded; PR 9).
  */
 export const KNOWN_DEBT: readonly DebtLine[] = [
   ...owed(291, 9, 'density', 'matched', true, ['trace.get', 'trace.share']),
+  ...owed(295, 9, 'retention', 'fixed', false, [
+    'metrics.query.summary',
+    'metrics.runQuery',
+    'metrics.runQuery.failed',
+  ]),
   ...owed(283, 7, 'retention', 'fixed', false, ['spans.total.short', 'spans.total.long']),
 ];

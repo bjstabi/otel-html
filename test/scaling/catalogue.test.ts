@@ -97,6 +97,7 @@ const PLAN_IDS = [
   'logs.total.long',
   'logs.total.traces.long',
   'resourceValues.all',
+  'resourceValues.all.short',
   'resourceValues.short',
   'resourceValues.long',
   'patterns',
