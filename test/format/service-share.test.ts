@@ -68,6 +68,26 @@ describe('serviceShareOf', () => {
     ).toEqual(['a', 'z']);
   });
 
+  test('a parent cycle is broken at the earliest span', () => {
+    const got = serviceShareOf([span('a', 'b', 0, 100, 'x'), span('b', 'a', 10, 40, 'y')]);
+    expect(got).toEqual([
+      { service: 'x', ns: 70n },
+      { service: 'y', ns: 30n },
+    ]);
+  });
+
+  test('a self-parent span is a root', () => {
+    expect(serviceShareOf([span('a', 'a', 0, 50, 'x')])).toEqual([{ service: 'x', ns: 50n }]);
+  });
+
+  test('a child starting before its parent is clipped to the parent', () => {
+    const got = serviceShareOf([span('p', null, 20, 100, 'x'), span('c', 'p', 10, 50, 'y')]);
+    expect(got).toEqual([
+      { service: 'x', ns: 50n },
+      { service: 'y', ns: 40n },
+    ]);
+  });
+
   test('an empty list is empty', () => {
     expect(serviceShareOf([])).toEqual([]);
   });
