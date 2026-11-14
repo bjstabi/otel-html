@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.4.0](https://github.com/bjstabi/otel-html/compare/otel-html-v0.3.1...otel-html-v0.4.0) (2026-11-14)
+
+
+### ⚠ BREAKING CHANGES
+
+* **format:** drop format 4 ([#311](https://github.com/bjstabi/otel-html/issues/311))
+
+### Features
+
+* **format:** drop format 4 ([#311](https://github.com/bjstabi/otel-html/issues/311)) ([b68d69e](https://github.com/bjstabi/otel-html/commit/b68d69eadda2bfb95b453a15125a78cdd4642219))
+
+
+### Documentation
+
+* **plan:** query-scaling record ([#308](https://github.com/bjstabi/otel-html/issues/308)) ([fd6f622](https://github.com/bjstabi/otel-html/commit/fd6f622ea0155770cfcdc9ef237a7b324666dab7))
+* **spec:** read-debt design and plan ([#310](https://github.com/bjstabi/otel-html/issues/310)) ([c650076](https://github.com/bjstabi/otel-html/commit/c6500765fe97282a9840c7cd2c67988e7013ce48))
+
 ## [0.3.1](https://github.com/bjstabi/otel-html/compare/otel-html-v0.3.0...otel-html-v0.3.1) (2026-11-14)
 
 
