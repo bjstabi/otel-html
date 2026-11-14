@@ -11,8 +11,9 @@ import {
   KNOWN_DEBT,
   SMALL_TABLE_ENTRIES,
 } from '../../src/viewer/data/catalogue.js';
+import { LONG_WINDOW_NS } from '../../src/viewer/data/time-window.js';
 import { classify, type Step } from '../../test-support/scaling/classify.js';
-import { stepsOf } from '../../test-support/scaling/generator.js';
+import { buildScalingReport, type Shape, stepsOf } from '../../test-support/scaling/generator.js';
 import { AXES, closeMeasured, measureEntry } from '../../test-support/scaling/measure.js';
 import { assertedAxes, fileOf, SPLIT } from '../../test-support/scaling/measured-file.js';
 import { ROLLUP_ENTRIES } from '../../test-support/scaling/rollup-entries.js';
@@ -186,12 +187,16 @@ describe('the split of the measurement', () => {
 });
 
 /** The steps `stepsFor` makes, on the compacted shape: the report went through compaction, one partition per time group. */
-async function compactedSteps(entry: CatalogueEntry, axis: Axis): Promise<Step[]> {
+async function compactedSteps(
+  entry: CatalogueEntry,
+  axis: Axis,
+  shapes: readonly Shape[] = stepsOf(axis, entry.spacing, false, true),
+): Promise<Step[]> {
   const declared = DECLARED[entry.id];
   const reference = declared?.scanOf === undefined ? entry : CATALOGUE.find((e) => e.id === declared.scanOf);
   if (reference === undefined) throw new Error(`${entry.id} names no entry to compare with`);
   const steps: Step[] = [];
-  for (const shape of stepsOf(axis, entry.spacing, false, true)) {
+  for (const shape of shapes) {
     const cost = await measureEntry(entry, shape);
     const selectedGroups = (entry.window ? shape.inside : shape.outside + shape.inside) * shape.rowGroups;
     steps.push({
@@ -232,6 +237,41 @@ describe.skipIf(SCALING !== '1')('the compacted shape (#283, PR 7)', { timeout: 
           `${entry.id} on ${axis}, compacted: ${got}, declared ${declared}: ${JSON.stringify(steps.map((s) => s.cost))}`,
         ).toBe(true);
       }
+    },
+    180_000,
+  );
+
+  /**
+   * The steps above have two inside partitions, 12 h apart: a window of about 12 h, past `LONG_WINDOW_NS`, which the
+   * router answers from rollups. This case has one inside slot (a window of about 10 min), so the entries read raw
+   * files, and an odd number of outside slots, so the window's slot shares a compacted file with the last outside one:
+   * the retention class then rests on pruning rows inside a compacted file, which only the time bound keeps constant.
+   */
+  const shortWindowSteps = (spacing: Shape['spacing']): Shape[] =>
+    [3, 5, 9].map((outside) => ({
+      outside,
+      inside: 1,
+      rowGroups: 2,
+      spacing,
+      compacted: true,
+    }));
+  const debt = CATALOGUE.filter((e) => ['spans.total.short', 'spans.total.long'].includes(e.id));
+  test.each([...new Set([...debt, ...CATALOGUE.filter((e) => e.id.endsWith('.short'))])])(
+    '$id keeps its retention class on a compacted report with a window under LONG_WINDOW_NS',
+    async (entry) => {
+      const shapes = shortWindowSteps(entry.spacing);
+      for (const shape of shapes) {
+        const r = await buildScalingReport(shape);
+        expect(r.window.end - r.window.start, 'the window is short').toBeLessThan(LONG_WINDOW_NS);
+      }
+      if (!assertedAxes(entry).includes('retention')) return;
+      const steps = await compactedSteps(entry, 'retention', shapes);
+      const declared = DECLARED[entry.id]?.class.retention;
+      const got = classify(steps);
+      expect(
+        declared != null && RANK[got] <= RANK[declared],
+        `${entry.id} on retention, compacted, short window: ${got}, declared ${declared}: ${JSON.stringify(steps.map((s) => s.cost))}`,
+      ).toBe(true);
     },
     180_000,
   );
