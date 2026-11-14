@@ -3,7 +3,7 @@ import { parseCondition } from '../../ottl/parse.js';
 import { canonical } from '../../query/metric-paths.js';
 import type { ByExpr } from '../../query/sql/points.js';
 import type { SeriesRow } from './metric-results.js';
-import { cell, rowsOf, toNumber } from './span-results.js';
+import { cell, relTime, rowsOf } from './span-results.js';
 
 // The pure parts of a metric run query's file selection (spec 5.2): which statistics key names a run, and which runs
 // and series the catalogue's rows answer without reading a points file.
@@ -55,7 +55,7 @@ export function runsInWindow(runs: Table, window: { start: number; end: number }
   for (const row of rowsOf(runs)) {
     const text = cell(row, 'run');
     if (typeof text !== 'string') continue;
-    const time = toNumber(cell(row, 't'), 't');
+    const time = relTime(cell(row, 't'), 't');
     if (time < window.start || time > window.end) continue;
     out.push(text);
   }

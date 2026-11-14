@@ -109,6 +109,47 @@ describe('window helpers', () => {
   });
 });
 
+describe('absolute windows (format 6)', () => {
+  const ANCHOR = 1_700_000_000_000_000_000n;
+
+  test('formatWindow writes unix nanoseconds and parseWindow reads them back to the same relative window', () => {
+    const w = { start: 10, end: 20 };
+    expect(formatWindow(w, ANCHOR)).toBe('1700000000000000010~1700000000000000020');
+    expect(parseWindow(formatWindow(w, ANCHOR), ANCHOR)).toEqual(w);
+  });
+
+  test('a window may start before the anchor, and a three-year one is rounded, not refused', () => {
+    expect(parseWindow('1699999999999999995~1700000000000000005', ANCHOR)).toEqual({ start: -5, end: 5 });
+    expect(formatWindow({ start: -5, end: 5 }, ANCHOR)).toBe('1699999999999999995~1700000000000000005');
+    const threeYears = 3 * 365 * 86_400 * 1e9;
+    const text = formatWindow({ start: 0, end: threeYears }, ANCHOR);
+    expect(parseWindow(text, ANCHOR)).toEqual({ start: 0, end: threeYears });
+  });
+
+  test('parseUrlState accepts absolute text only when told, and format 5 text stays as it was', () => {
+    const abs = 't=1700000000000000010~1700000000000000020';
+    expect(parseUrlState(abs, true).state.t).toBe('1700000000000000010~1700000000000000020');
+    expect(parseUrlState(abs).errors).toEqual([
+      `t: expected <start>~<end> with start <= end and values <= ${Number.MAX_SAFE_INTEGER}, got ${abs.slice(2)}`,
+    ]);
+    expect(parseUrlState('t=10~20').state.t).toBe('10~20');
+    expect(() => formatWindow({ start: -1, end: 4 })).toThrow(/window/);
+    expect(windowParam({ start: 1, end: 2 }, null)).toBe('1~2');
+  });
+
+  test('windowParam and windowFromParam carry the anchor; the default window still needs no t', () => {
+    const fallback = { start: 0, end: 10 };
+    expect(windowParam(fallback, fallback, ANCHOR)).toBeUndefined();
+    expect(windowParam({ start: 1, end: 2 }, fallback, ANCHOR)).toBe(
+      '1700000000000000001~1700000000000000002',
+    );
+    expect(windowFromParam('1700000000000000001~1700000000000000002', fallback, ANCHOR)).toEqual({
+      start: 1,
+      end: 2,
+    });
+  });
+});
+
 describe('logs keys', () => {
   test('url-state parses log refs and log tabs, rejects bad ones', () => {
     expect(parseUrlState('log=12.345&ltab=trace').state).toMatchObject({ log: '12.345', ltab: 'trace' });

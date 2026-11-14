@@ -10,7 +10,14 @@ import { LOG_TAB_IDS } from '../logs/tabs.js';
 import { TRACE_TAB_IDS } from '../traces/tabs.js';
 import { DashboardPageStateSchema, parseDashboardParam } from './dashboard-state.js';
 import { parseMetricParam } from './metric-state.js';
-import { T_ALL, T_FORMAT, TraceIdParamSchema, tRange, WindowParamSchema } from './param-schemas.js';
+import {
+  T_ALL,
+  T_FORMAT,
+  TraceIdParamSchema,
+  tRange,
+  WindowParamSchema,
+  windowParamSchema,
+} from './param-schemas.js';
 
 const LOG_FORMAT = /^\d+\.\d+$/;
 const LOG_CANONICAL = /^(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
@@ -80,8 +87,14 @@ function isUrlKey(k: string): k is UrlKey {
   return (URL_KEYS as readonly string[]).includes(k);
 }
 
-/** Accepts `a=1&b=2`, `?a=1`, or a whole hash such as `#/traces?a=1` (a prefix is stripped only at the start). */
-export function parseUrlState(search: string): { state: UrlState; errors: string[] } {
+const AbsoluteWindowParamSchema = windowParamSchema(true);
+const UrlStateAbsolutePartial = UrlStateSchema.extend({ t: AbsoluteWindowParamSchema }).partial();
+
+/**
+ * Accepts `a=1&b=2`, `?a=1`, or a whole hash such as `#/traces?a=1` (a prefix is stripped only at the start).
+ * `absolute` is a format-6 report: its times (`t`, `d.sel.t`) are unix nanoseconds.
+ */
+export function parseUrlState(search: string, absolute = false): { state: UrlState; errors: string[] } {
   let query = search;
   if (search.startsWith('#')) {
     const qi = search.indexOf('?');
@@ -110,16 +123,18 @@ export function parseUrlState(search: string): { state: UrlState; errors: string
       continue;
     }
     if (key === 'd') {
-      const d = parseDashboardParam(raw);
+      const d = parseDashboardParam(raw, absolute);
       if (d.ok) state[key] = d.state;
       else errors.push(d.error);
       continue;
     }
-    const r = UrlStateSchema.shape[key].safeParse(raw);
+    const r = (key === 't' && absolute ? AbsoluteWindowParamSchema : UrlStateSchema.shape[key]).safeParse(
+      raw,
+    );
     if (r.success) state[key] = r.data;
     else errors.push(`${key}: expected ${r.error.issues[0]?.message ?? 'a valid value'}, got ${raw}`);
   }
-  return { state: UrlStatePartial.parse(state), errors };
+  return { state: (absolute ? UrlStateAbsolutePartial : UrlStatePartial).parse(state), errors };
 }
 
 export function serializeUrlState(s: UrlState): string {
@@ -133,19 +148,38 @@ export function serializeUrlState(s: UrlState): string {
   return p.toString().replace(/%7E/g, '~');
 }
 
-export function parseWindow(t: string): TimeWindow {
+/**
+ * A window from its URL text. With an `anchor` (a format-6 report) the text is unix nanoseconds and the window is
+ * relative to the anchor, rounded to the nearest double; it may start before the anchor.
+ */
+export function parseWindow(t: string, anchor?: bigint): TimeWindow {
   const m = T_FORMAT.exec(t);
-  if (m === null || !tRange(t)) {
+  if (m === null || !tRange(t, anchor !== undefined)) {
     throw new OtelHtmlError('usage', {
       path: 'window',
-      expected: `<start>~<end> in nanoseconds, start <= end, values <= ${Number.MAX_SAFE_INTEGER}`,
+      expected:
+        anchor === undefined
+          ? `<start>~<end> in nanoseconds, start <= end, values <= ${Number.MAX_SAFE_INTEGER}`
+          : '<start>~<end> in unix nanoseconds, start <= end',
       actual: JSON.stringify(t),
     });
   }
-  return { start: Number(m[1]), end: Number(m[2]) };
+  if (anchor === undefined) return { start: Number(m[1]), end: Number(m[2]) };
+  return { start: Number(BigInt(m[1] ?? '') - anchor), end: Number(BigInt(m[2] ?? '') - anchor) };
 }
 
-export function formatWindow(w: TimeWindow): string {
+/** The URL text of a window; with an `anchor` (a format-6 report) absolute unix nanoseconds, else relative to the epoch. */
+export function formatWindow(w: TimeWindow, anchor?: bigint): string {
+  if (anchor !== undefined) {
+    if (!(Number.isInteger(w.start) && Number.isInteger(w.end) && w.start <= w.end)) {
+      throw new OtelHtmlError('usage', {
+        path: 'window',
+        expected: 'integers with start <= end',
+        actual: `${w.start}~${w.end}`,
+      });
+    }
+    return `${anchor + BigInt(w.start)}~${anchor + BigInt(w.end)}`;
+  }
   const ok = Number.isSafeInteger(w.start) && Number.isSafeInteger(w.end) && w.start >= 0 && w.start <= w.end;
   if (!ok) {
     throw new OtelHtmlError('usage', {
@@ -161,14 +195,22 @@ export function formatWindow(w: TimeWindow): string {
  * The `t` text of a window. Without a fallback, the formatted window, or undefined for null. With the report's default
  * window as the fallback: null is `all`, a window equal to the fallback needs no `t`, any other is formatted.
  */
-export function windowParam(window: TimeWindow | null, fallback: TimeWindow | null): string | undefined {
+export function windowParam(
+  window: TimeWindow | null,
+  fallback: TimeWindow | null,
+  anchor?: bigint,
+): string | undefined {
   if (window === null) return fallback === null ? undefined : T_ALL;
   if (fallback !== null && window.start === fallback.start && window.end === fallback.end) return undefined;
-  return formatWindow(window);
+  return formatWindow(window, anchor);
 }
 
 /** The window a `t` stands for: absent is the fallback, `all` the entire run (null), else the parsed window. */
-export function windowFromParam(t: string | undefined, fallback: TimeWindow | null): TimeWindow | null {
+export function windowFromParam(
+  t: string | undefined,
+  fallback: TimeWindow | null,
+  anchor?: bigint,
+): TimeWindow | null {
   if (t === undefined) return fallback;
-  return t === T_ALL ? null : parseWindow(t);
+  return t === T_ALL ? null : parseWindow(t, anchor);
 }

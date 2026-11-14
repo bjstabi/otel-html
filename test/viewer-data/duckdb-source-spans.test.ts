@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+import { partitionFilePath } from '../../src/format/paths.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { parseTraceId } from '../../src/model/ids.js';
 import type { DataSource } from '../../src/viewer/data/data-source.js';
@@ -1122,6 +1123,73 @@ describe('long windows and metric points, and a long window on a short report', 
       expect(r.total).toBe(2);
     } finally {
       o.close();
+    }
+  });
+});
+
+describe('a trace far from the anchor', () => {
+  const copy = (id: number, parent: number | null, start: bigint, end: bigint) =>
+    span({
+      traceId: hex(1, 32),
+      spanId: hex(id, 16),
+      ...(parent === null ? {} : { parentSpanId: hex(parent, 16) }),
+      name: `s${id}`,
+      startTimeUnixNano: String(start),
+      endTimeUnixNano: String(end),
+    });
+  const one = (svc: string, spans: ReturnType<typeof copy>[]) =>
+    otlp(traceRequest(spans, [attr('service.name', str(svc))]) as never);
+
+  /** The writer drops a repeated span id, so the later copy is another report's partition, appended as partition 2. */
+  async function withLaterCopy(away: bigint) {
+    const start = BASE;
+    const first = await buildFormat4Report(
+      [
+        one('svc-a', [copy(1, null, start, start + ns(100))]),
+        one('svc-b', [copy(2, 1, start + ns(10), start + ns(60))]),
+      ],
+      { close: false },
+    );
+    const later = await buildFormat4Report([one('svc-a', [copy(1, null, start, start + ns(100) + 1n)])], {
+      close: false,
+    });
+    const from = later.manifest.partitions[0];
+    if (from === undefined) throw new Error('no partition');
+    const files = new Map(first.files);
+    const moved: Record<string, unknown> = {};
+    for (const table of ['spans', 'traces'] as const) {
+      const file = from.files[table];
+      const bytes = file === undefined ? undefined : later.files.get(file.path);
+      if (file === undefined || bytes === undefined) throw new Error(`no ${table}`);
+      const path = partitionFilePath(2, table);
+      files.set(path, bytes);
+      moved[table] = { ...file, path };
+    }
+    const manifest = {
+      ...first.manifest,
+      epochUnixNano: String(BASE - away),
+      partitions: [...first.manifest.partitions, { ...from, n: 2, files: moved }],
+    } as unknown as Format4Fixture['manifest'];
+    return { manifest, files, epoch: BigInt(manifest.epochUnixNano) };
+  }
+
+  test.each([
+    ['at the anchor', 0n],
+    ['beyond 2^53 ns from it', 2n ** 54n],
+  ])('serviceShare keeps the exact later copy of a duplicated span, %s', async (_name, away) => {
+    const rep = await withLaterCopy(away);
+    const conn = await openFixtureDb(rep);
+    try {
+      const source = createDuckDbDataSource({
+        engine: mosaicQueryEngine(createCoordinator(conn.connector, silentLogger), conn),
+        manifest: rep.manifest,
+      });
+      expect(await source.serviceShare(T1)).toEqual([
+        { service: 'svc-a', ns: 50e6 + 1 },
+        { service: 'svc-b', ns: 50e6 },
+      ]);
+    } finally {
+      conn.close();
     }
   });
 });

@@ -1141,7 +1141,12 @@ export function createDuckDbDataSource(opts: {
     traceId: TraceId,
     withLogs: boolean,
     signal?: AbortSignal,
-  ): Promise<{ rows: SpanRow[]; tables: RowTables; logCount: number }> {
+  ): Promise<{
+    rows: SpanRow[];
+    tables: RowTables;
+    logCount: number;
+    share: ({ start: number; end: number } | null)[];
+  }> {
     const traceRows = rowsOf(await read(['traces'], undefined, tracePartitionsQuery(traceId, true), signal));
     const partitions = traceRows.map((r) => String(cell(r, 'filename')));
     if (partitions.length === 0) throw traceNotFound(traceId);
@@ -1163,13 +1168,13 @@ export function createDuckDbDataSource(opts: {
       read(['spans'], filter.files, traceSpansQuery(traceId, files, epoch, bound), signal),
       withLogs ? read(['traces'], undefined, traceSummaryQuery(traceId), signal) : null,
     ]);
-    let { rows, tables } = spanRows(spans, epoch);
+    let { rows, tables, share } = spanRows(spans, epoch);
     if (bound !== null) {
       // A span whose end is before its start can lie outside the bound (the bound is [min start, max end]): when the
       // traces rows count more spans than came back, read again without the bound. Only malformed traces pay this.
       const expected = traceRows.reduce((n, r) => n + Number(cell(r, 'span_count') ?? 0n), 0);
       if (rows.length < expected)
-        ({ rows, tables } = spanRows(
+        ({ rows, tables, share } = spanRows(
           await read(['spans'], filter.files, traceSpansQuery(traceId, files, epoch), signal),
           epoch,
         ));
@@ -1177,7 +1182,7 @@ export function createDuckDbDataSource(opts: {
     if (rows.length === 0) throw traceNotFound(traceId);
     const logCount =
       summary === null ? 0 : toNumber(cell(rowsOf(summary)[0] ?? {}, 'log_count') ?? 0n, 'log_count');
-    return { rows, tables, logCount };
+    return { rows, tables, logCount, share };
   }
 
   async function loadTrace(traceId: TraceId): Promise<TraceDetail> {
@@ -1264,13 +1269,18 @@ export function createDuckDbDataSource(opts: {
     },
     async serviceShare(traceId, signal) {
       // its own load: the open trace's memo stays, and the log summary is not read
-      const { rows } = await readTrace(traceId, false, signal);
-      // `readTrace`'s times are int64 minus the anchor, read exactly (`toNumber` throws beyond 2^53), so rebasing on the
-      // trace's earliest start loses nothing.
-      let origin = Number.POSITIVE_INFINITY;
-      for (const r of rows) origin = Math.min(origin, r.span.start);
+      const { rows, share } = await readTrace(traceId, false, signal);
+      // `share` is each span's times relative to the trace's earliest start, taken exactly in SQL: the anchor-relative
+      // `span.start` is rounded for a trace far from the anchor and would lose the ends' last nanoseconds.
       return serviceShareOf(
-        rows.map((r) => ({ ...shareSpanOf(r), start: r.span.start - origin, end: r.span.end - origin })),
+        rows.map((r, i) => {
+          const exact = share[i];
+          return {
+            ...shareSpanOf(r),
+            start: exact?.start ?? r.span.start,
+            end: exact?.end ?? r.span.end,
+          };
+        }),
       ).map(({ service, ns }) => ({ service, ns: Number(ns) }));
     },
     services,

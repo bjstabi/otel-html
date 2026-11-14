@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { TraceId } from '../../model/ids.js';
 import { paramError, shown } from './param-error.js';
-import { TraceIdParamSchema, WindowTextSchema } from './param-schemas.js';
+import { TraceIdParamSchema, windowTextSchema } from './param-schemas.js';
 
 type LogViewMode = 'matches' | 'context';
 
@@ -24,21 +24,27 @@ export const EMPTY_DASHBOARD_STATE: DashboardPageState = {
   logView: {},
 };
 
-export const DashboardPageStateSchema: z.ZodType<DashboardPageState> = z.strictObject({
-  vars: z.record(z.string(), z.string().nullable()).default({}),
-  sel: z
-    .strictObject({
-      t: WindowTextSchema.nullable().default(null),
-      trace: TraceIdParamSchema.nullable().default(null),
-    })
-    .default({ t: null, trace: null }),
-  follow: z.record(z.string(), z.boolean()).default({}),
-  logView: z.record(z.string(), z.enum(['matches', 'context'], 'one of matches, context')).default({}),
-});
+/** `absolute`: the window text is unix nanoseconds (a format-6 report), not relative to the epoch. */
+function dashboardPageStateSchema(absolute: boolean): z.ZodType<DashboardPageState> {
+  return z.strictObject({
+    vars: z.record(z.string(), z.string().nullable()).default({}),
+    sel: z
+      .strictObject({
+        t: windowTextSchema(absolute).nullable().default(null),
+        trace: TraceIdParamSchema.nullable().default(null),
+      })
+      .default({ t: null, trace: null }),
+    follow: z.record(z.string(), z.boolean()).default({}),
+    logView: z.record(z.string(), z.enum(['matches', 'context'], 'one of matches, context')).default({}),
+  });
+}
+
+export const DashboardPageStateSchema: z.ZodType<DashboardPageState> = dashboardPageStateSchema(false);
 
 /** The URL key `d`: JSON text to a state, or one error line naming the offending path (`d.sel.t`). */
 export function parseDashboardParam(
   raw: string,
+  absolute = false,
 ): { ok: true; state: DashboardPageState } | { ok: false; error: string } {
   let json: unknown;
   try {
@@ -46,7 +52,7 @@ export function parseDashboardParam(
   } catch {
     return { ok: false, error: `d: expected a JSON object, got ${shown(raw)}` };
   }
-  const r = DashboardPageStateSchema.safeParse(json);
+  const r = (absolute ? dashboardPageStateSchema(true) : DashboardPageStateSchema).safeParse(json);
   if (r.success) return { ok: true, state: r.data };
   return { ok: false, error: paramError('d', json, r.error.issues[0]) };
 }

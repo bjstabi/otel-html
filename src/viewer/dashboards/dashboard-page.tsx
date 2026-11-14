@@ -118,7 +118,12 @@ function windowText(w: TimeWindow | null, epoch: ReturnType<typeof parseUnixNano
 function openInOf(
   widget: Widget,
   scope: WidgetScope,
-  ctx: { variables: readonly VariableBinding[]; narrowing: Narrowing; defaultWindow: TimeWindow | null },
+  ctx: {
+    variables: readonly VariableBinding[];
+    narrowing: Narrowing;
+    defaultWindow: TimeWindow | null;
+    anchor: bigint | null;
+  },
 ): { page: 'traces' | 'logs' | 'metrics'; label: string; patch: UrlPatch } | null {
   switch (widget.type) {
     case 'timeline':
@@ -142,7 +147,7 @@ function openInOf(
             split: false,
             exemplars: widget.exemplars,
           },
-          t: windowParam(scope.window, ctx.defaultWindow) ?? null,
+          t: windowParam(scope.window, ctx.defaultWindow, ctx.anchor ?? undefined) ?? null,
         },
       };
     }
@@ -158,7 +163,7 @@ function openInOf(
         label: logs ? 'Open in Logs' : 'Open in Traces',
         patch: {
           q: scope.condition,
-          t: windowParam(scope.window, ctx.defaultWindow) ?? null,
+          t: windowParam(scope.window, ctx.defaultWindow, ctx.anchor ?? undefined) ?? null,
           text: widget.text === '' ? null : widget.text,
           // The Traces page opens in spans mode; a Traces widget in spans mode needs no `mode` key.
           ...(widget.type === 'traces' ? { mode: widget.mode === 'spans' ? null : widget.mode } : {}),
@@ -241,6 +246,7 @@ function DashboardView(props: {
   const state = stored ?? EMPTY_DASHBOARD_STATE;
   const page = useSelection((s) => s.window);
   const defaultWindow = useSelection((s) => s.defaultWindow);
+  const anchor = useSelection((s) => s.anchor);
   const traceId = useSelection((s) => s.traceId);
   const logRef = useSelection((s) => s.logRef);
   const clear = useSelection((s) => s.clear);
@@ -304,7 +310,10 @@ function DashboardView(props: {
 
   const stale = staleIds(entry, state);
   const bound = values.status === 'ready' ? bindings(d, state, values.value) : null;
-  const sel = { t: state.sel.t === null ? null : parseWindow(state.sel.t), trace: state.sel.trace };
+  const sel = {
+    t: state.sel.t === null ? null : parseWindow(state.sel.t, anchor ?? undefined),
+    trace: state.sel.trace,
+  };
   const scopes = new Map<string, { scope: WidgetScope; following: boolean }>();
   if (bound !== null) {
     for (const w of d.widgets) {
@@ -328,10 +337,13 @@ function DashboardView(props: {
     const known = scopes.get(w.id);
     if (known === undefined) return <div />;
     const { scope } = known;
-    const open = openInOf(w, scope, { variables: bound?.bindings ?? [], narrowing, defaultWindow });
+    const open = openInOf(w, scope, { variables: bound?.bindings ?? [], narrowing, defaultWindow, anchor });
     const actions: WidgetActions = {
       selectWindow: (win) =>
-        change((s) => ({ ...s, sel: { ...s.sel, t: win === null ? null : formatWindow(win) } })),
+        change((s) => ({
+          ...s,
+          sel: { ...s.sel, t: win === null ? null : formatWindow(win, anchor ?? undefined) },
+        })),
       selectTrace: (id) => change((s) => ({ ...s, sel: { ...s.sel, trace: id } })),
       openIn: (target, route, patch) => goTo(target, route, patch),
       setLogView: (v) => change((s) => ({ ...s, logView: { ...s.logView, [w.id]: v } })),
@@ -443,6 +455,7 @@ function DashboardView(props: {
         <SelectionChips
           state={state}
           epoch={epoch}
+          {...(anchor === null ? {} : { anchor })}
           outside={outside}
           onChange={(next) => change(() => next)}
         />

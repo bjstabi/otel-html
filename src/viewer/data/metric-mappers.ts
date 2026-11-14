@@ -32,7 +32,7 @@ import type {
   SeriesRow,
 } from './metric-results.js';
 import { type MetricKind, NOTES, PERCENTILES, SUMMARY_TOP_QUANTILE } from './metric-tables.js';
-import { cell, rowsOf, toNumber } from './span-results.js';
+import { cell, relTime, rowsOf, toNumber } from './span-results.js';
 import type { TimeWindow } from './time-window.js';
 
 // The mappers of the points-based metric queries: SQL result tables to the viewer's result shapes (D25, D26).
@@ -483,7 +483,7 @@ export function exemplarsFrom(
   const out: ExemplarPoint[] = [];
   for (const row of rowsOf(t).slice(0, rowLimit)) {
     const { byKey } = byOf(by, row, new Map());
-    const pointTime = toNumber(cell(row, 'time_ns'), 'time_ns');
+    const pointTime = relTime(cell(row, 'time_ns'), 'time_ns');
     const text = cell(row, 'exemplars');
     if (typeof text !== 'string') continue;
     for (const e of JSON.parse(text) as Record<string, unknown>[]) {
@@ -627,7 +627,7 @@ export function runsFrom(runs: Table, cells: Table, failed: Table | null, a: Run
       leftOut += toNumber(cell(row, 'left_out') ?? 0n, 'left_out');
       continue;
     }
-    const time = toNumber(cell(row, 't'), 't');
+    const time = relTime(cell(row, 't'), 't');
     if (time < a.window.start || time > a.window.end) continue;
     const revision = cell(row, 'revision');
     info.push({

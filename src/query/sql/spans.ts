@@ -378,7 +378,11 @@ export function traceSpansQuery(
   bound?: TraceBound | null,
 ): Query {
   return Query.from('spans')
-    .select(spanColumns(epoch))
+    .select(spanColumns(epoch), {
+      // times relative to the trace's own earliest start: small and exact whatever the anchor (the service share's input)
+      share_start: sql`(start_time_unix_nano - min(start_time_unix_nano) OVER ())`,
+      share_end: sql`(end_time_unix_nano - min(start_time_unix_nano) OVER ())`,
+    })
     .where(
       eq(column('trace_id'), literal(traceId)),
       isIn(

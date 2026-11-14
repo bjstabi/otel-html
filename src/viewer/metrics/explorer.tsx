@@ -148,6 +148,7 @@ function ExplorerBody(props: { dataSource: DataSource; range: TimeWindow }): JSX
         goTo,
         queryOf: (id) => state.queries.find((x) => x.id === id),
         zoom: (w) => sel.setWindow(w),
+        ...(sel.anchor === null ? {} : { anchor: sel.anchor }),
       });
     } catch (e) {
       fail('The link could not be opened', e);

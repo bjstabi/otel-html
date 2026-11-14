@@ -122,6 +122,8 @@ export function Shell(props: {
   const { dataSource, history } = props;
   const manifest = dataSource.manifest;
   const epoch = BigInt(manifest.epochUnixNano);
+  // a format-6 report's URLs carry absolute unix nanoseconds against its anchor (frozen at load, also across a Refresh)
+  const absolute = manifest.formatVersion === 6;
   // the report's range as of the committed render (a Refresh grows it): the selection aligns a long window against it
   const rangeRef = useRef<TimeWindow | null>(manifestRange(manifest));
   useLayoutEffect(() => {
@@ -132,13 +134,14 @@ export function Shell(props: {
   const store = useMemo(
     () =>
       createSelectionStore(
-        parseUrlState(history.read()).state,
+        parseUrlState(history.read(), absolute).state,
         epoch,
         range,
         defaultWindowOf(defaultText, rangeRef.current),
+        absolute ? epoch : null,
       ),
     // the default is anchored once, at the range as it stands when the store is made
-    [history, epoch, range, defaultText],
+    [history, epoch, range, defaultText, absolute],
   );
   // a Refresh grows the range: the default window is anchored again, and a selection still on it follows
   useLayoutEffect(() => {
@@ -147,9 +150,9 @@ export function Shell(props: {
       defaultWindowOf(defaultText, manifestRange(manifest)),
       epoch,
       range,
-      parseUrlState(history.read()).state.t !== undefined,
+      parseUrlState(history.read(), absolute).state.t !== undefined,
     );
-  }, [store, manifest, defaultText, epoch, range, history]);
+  }, [store, manifest, defaultText, epoch, range, history, absolute]);
   const [errors, setErrors] = useState<readonly string[]>([]);
   const [helpOpen, setHelpOpen] = useState(false);
   const [carried, setCarried] = useState<Carried | null>(null);

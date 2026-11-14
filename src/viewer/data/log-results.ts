@@ -11,7 +11,7 @@ import type { FacetValueKind } from '../components/filter-tokens.js';
 import type { ResourceValues } from './data-source.js';
 import { gridOf, MAX_BUCKETS, slot, zeros } from './grid.js';
 import { type LogRow, type LogTraceRow, logRef, type PatternRow } from './log-query.js';
-import { cell, rowsOf, toNumber } from './span-results.js';
+import { cell, relTime, rowsOf, toNumber } from './span-results.js';
 
 const text = (v: unknown): string => (typeof v === 'string' ? v : '');
 
@@ -77,8 +77,8 @@ export function logTraceRows(t: Table): { rows: LogTraceRow[]; total: number } {
     (r): LogTraceRow => ({
       traceId: text(cell(r, 'trace_id')) as TraceId,
       logs: toNumber(cell(r, 'log_count'), 'log_count'),
-      first: toNumber(cell(r, 'first_ns'), 'first_ns'),
-      last: toNumber(cell(r, 'last_ns'), 'last_ns'),
+      first: relTime(cell(r, 'first_ns'), 'first_ns'),
+      last: relTime(cell(r, 'last_ns'), 'last_ns'),
       maxSeverity: toNumber(cell(r, 'max_severity') ?? 0n, 'max_severity'),
       services: Array.from((cell(r, 'services') ?? []) as ArrayLike<unknown>, text),
     }),
@@ -91,7 +91,7 @@ export function logTraceRows(t: Table): { rows: LogTraceRow[]; total: number } {
 export function logTimeline(t: Table, spec: BucketSpec): TimeBuckets<LogSeverityKey> {
   const rows = rowsOf(t);
   const width = spec.widthNs;
-  const at = rows.map((r) => toNumber(cell(r, 'bucket'), 'bucket'));
+  const at = rows.map((r) => relTime(cell(r, 'bucket'), 'bucket'));
   const grid = gridOf(at, width);
   if (grid === null) return new TimeBuckets(LOG_SEVERITY_KEYS, MAX_BUCKETS);
   const counts = LOG_SEVERITY_KEYS.map(() => zeros(grid.length));
@@ -129,8 +129,8 @@ export function patternRows(t: Table): { rows: PatternRow[]; total: number } {
       regex: templateStringToRegex(template),
       count: toNumber(cell(r, 'count'), 'count'),
       severities,
-      first: cell(r, 'first_ns') == null ? null : toNumber(cell(r, 'first_ns'), 'first_ns'),
-      last: cell(r, 'last_ns') == null ? null : toNumber(cell(r, 'last_ns'), 'last_ns'),
+      first: cell(r, 'first_ns') == null ? null : relTime(cell(r, 'first_ns'), 'first_ns'),
+      last: cell(r, 'last_ns') == null ? null : relTime(cell(r, 'last_ns'), 'last_ns'),
       sample: text(cell(r, 'sample')),
     };
   });
@@ -142,7 +142,7 @@ export function patternRows(t: Table): { rows: PatternRow[]; total: number } {
 export function pointBuckets(t: Table, spec: BucketSpec): TimeBuckets<'points'> {
   const rows = rowsOf(t);
   const width = spec.widthNs;
-  const at = rows.map((r) => toNumber(cell(r, 'bucket'), 'bucket'));
+  const at = rows.map((r) => relTime(cell(r, 'bucket'), 'bucket'));
   const grid = gridOf(at, width);
   if (grid === null) return new TimeBuckets(['points'], MAX_BUCKETS);
   const counts = zeros(grid.length);

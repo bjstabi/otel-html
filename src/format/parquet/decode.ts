@@ -1,6 +1,6 @@
 import type { Attributes } from '../../model/anyvalue.js';
 import { OtelHtmlError } from '../../model/errors.js';
-import { type RelNanos, type SpanId, type TraceId, toRelNanos, type UnixNanos } from '../../model/ids.js';
+import type { RelNanos, SpanId, TraceId, UnixNanos } from '../../model/ids.js';
 import type {
   LogRecordRecord,
   ResourceRecord,
@@ -57,9 +57,12 @@ function unixNanos(v: unknown, col: string): UnixNanos {
   throw bad(col, 'an int64 time', v);
 }
 
-/** A top-level time column as the SQL selects it: already relative to the epoch (D2), a bigint that must fit a safe integer. */
+/**
+ * A top-level time column as the SQL selects it: already relative to the anchor (D2), an int64 that is rounded to the
+ * nearest double beyond 2^53 (a report of years: the position is off by a few ns, never refused).
+ */
 function rel(row: ResultRow, col: string): RelNanos {
-  return toRelNanos(unixNanos(row[col], col), 0n as UnixNanos, col);
+  return Number(unixNanos(row[col], col)) as RelNanos;
 }
 
 function relOrNull(row: ResultRow, col: string): RelNanos | null {
@@ -120,7 +123,7 @@ function events(text: string, epoch: bigint): SpanEventRecord[] {
   return jsonList(text, 'events').map((e, i) => {
     const path = `events[${i}]`;
     return {
-      time: toRelNanos(jsonTime(e, 'time_unix_nano', path), epoch as UnixNanos, `${path}.time_unix_nano`),
+      time: Number(jsonTime(e, 'time_unix_nano', path) - epoch) as RelNanos,
       name: jsonStr(e, 'name', path),
       attributes: jsonAttrs(e, path),
       droppedAttributesCount: jsonInt(e, 'dropped_attributes_count', path),

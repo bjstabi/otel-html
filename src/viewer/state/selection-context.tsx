@@ -25,3 +25,11 @@ export function useSelectionStore(): StoreApi<Selection> {
 export function useSelection<T>(selector: (s: Selection) => T): T {
   return useStore(useSelectionStore(), selector);
 }
+
+/**
+ * The format-6 anchor of the report (null on format 5, or with no provider: a widget rendered alone). It is fixed for
+ * the page's life, so it is read once, not subscribed to.
+ */
+export function useAnchor(): bigint | null {
+  return useContext(SelectionContext)?.getState().anchor ?? null;
+}

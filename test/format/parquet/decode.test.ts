@@ -151,21 +151,17 @@ describe('spanFromRow', () => {
     expect(back.droppedEventsCount).toBe(4);
   });
 
-  test('a time outside the safe range fails with time-out-of-range, not rounding', () => {
-    const row = { ...asQueried(spanRow(span(), ctx)), end_time_unix_nano: 2n ** 60n };
-    expect(() => spanFromRow(row, EPOCH)).toThrow(OtelHtmlError);
-    try {
-      spanFromRow(row, EPOCH);
-    } catch (e) {
-      expect((e as OtelHtmlError).code).toBe('time-out-of-range');
-    }
+  test('a time beyond 2^53 relative is rounded to the nearest double, not refused', () => {
+    const row = { ...asQueried(spanRow(span(), ctx)), end_time_unix_nano: 2n ** 60n + 1n };
+    expect(spanFromRow(row, EPOCH).span.end).toBe(2 ** 60);
   });
 
-  test('an event time beyond 2^53 relative fails too', () => {
+  test('an event time beyond 2^53 relative is rounded too', () => {
     const row = asQueried(spanRow(span(), ctx));
     const events = JSON.parse(cell(row, 'events') as string);
     events[0].time_unix_nano = { $i: (EPOCH + 2n ** 60n).toString() };
-    expect(() => spanFromRow({ ...row, events: JSON.stringify(events) }, EPOCH)).toThrow(OtelHtmlError);
+    const { span: back } = spanFromRow({ ...row, events: JSON.stringify(events) }, EPOCH);
+    expect(back.events[0]?.time).toBe(2 ** 60);
   });
 
   test('a missing or mistyped column is an invalid-report error', () => {

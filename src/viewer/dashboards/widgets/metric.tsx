@@ -18,6 +18,7 @@ import { catalogOf, explorerFilter, MetricGrid, type MetricGridOrigin } from '..
 import { buildPlots, layoutCharts } from '../../metrics/plots.js';
 import { useMetricQueries } from '../../metrics/use-metric-query.js';
 import { useGoTo } from '../../shell/go-to.js';
+import { useAnchor } from '../../state/selection-context.js';
 import { useKeyedAsync } from '../../state/use-keyed-async.js';
 import { traceResources } from '../../traces/trace-tabs.js';
 import type { WidgetRenderer } from '../dashboard-page.js';
@@ -111,6 +112,7 @@ const QueriesBody: Body = ({ widget, scope, height, dataSource, actions, variabl
   }
   const { queries: own, formulas, display, scale, exemplars, echarts } = widget;
   const goTo = useGoTo();
+  const anchor = useAnchor();
   const narrowing = useNarrowing(dataSource, scope.highlightTrace);
   const catalog = useKeyedAsync(dataSource, catalogOf);
   const run = manifestRange(dataSource.manifest);
@@ -187,6 +189,7 @@ const QueriesBody: Body = ({ widget, scope, height, dataSource, actions, variabl
         goTo,
         queryOf: (id) => queries.find((x) => x.id === id),
         zoom: actions.selectWindow,
+        ...(anchor === null ? {} : { anchor }),
       });
     } catch (e) {
       setActionError(e instanceof Error ? e.message : String(e));

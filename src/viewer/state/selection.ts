@@ -40,6 +40,11 @@ export type SelectionMode = (typeof SELECTION_MODES)[number];
 type ClearKey = 'window' | 'condition' | 'text' | 'traceId' | 'spanId' | 'logRef' | 'groupBy' | 'sort';
 
 export interface Selection {
+  /**
+   * A format-6 report's anchor: the URL carries absolute unix nanoseconds against it, and a window may start before it.
+   * Null on a format-5 report (URL times relative to the epoch, none before it).
+   */
+  anchor: bigint | null;
   /** The effective window; null is the entire run. With no `t` in the URL it is `defaultWindow`. */
   window: TimeWindow | null;
   /** The report's default window (aligned like `window`), or null: not in the URL, set when the store is made. */
@@ -119,8 +124,9 @@ function aligned(
   w: TimeWindow | null,
   epoch: bigint | undefined,
   range: () => TimeWindow | null,
+  anchor: bigint | null = null,
 ): TimeWindow | null {
-  return alignedIn(w, epoch, range());
+  return alignedIn(w, epoch, range(), anchor === null);
 }
 
 function dataFromUrl(
@@ -128,9 +134,11 @@ function dataFromUrl(
   epoch?: bigint,
   range: () => TimeWindow | null = () => null,
   defaultWindow: TimeWindow | null = null,
+  anchor: bigint | null = null,
 ): SelectionData {
   return {
-    window: aligned(windowFromParam(u.t, defaultWindow), epoch, range),
+    anchor,
+    window: aligned(windowFromParam(u.t, defaultWindow, anchor ?? undefined), epoch, range, anchor),
     defaultWindow,
     condition: u.q ?? null,
     text: u.text ?? '',
@@ -156,7 +164,7 @@ export function selectionToUrlState(s: SelectionData): UrlState {
   const u: UrlState = {};
   if (s.condition !== null) u.q = s.condition;
   if (s.text !== '') u.text = s.text;
-  const t = windowParam(s.window, s.defaultWindow);
+  const t = windowParam(s.window, s.defaultWindow, s.anchor ?? undefined);
   if (t !== undefined) u.t = t;
   if (s.mode !== null) u.mode = s.mode;
   if (s.groupBy !== null) u.group = s.groupBy;
@@ -248,8 +256,8 @@ export function refollowDefault(
   range: () => TimeWindow | null,
   hasT: boolean,
 ): void {
-  const fallback = aligned(next, epoch, range);
-  const { defaultWindow: old, window: w } = store.getState();
+  const { defaultWindow: old, window: w, anchor } = store.getState();
+  const fallback = aligned(next, epoch, range, anchor);
   const same = (a: TimeWindow | null, b: TimeWindow | null): boolean =>
     a === b || (a !== null && b !== null && a.start === b.start && a.end === b.end);
   if (same(old, fallback)) return;
@@ -263,13 +271,14 @@ export function createSelectionStore(
   epoch?: bigint,
   range: () => TimeWindow | null = () => null,
   defaultWindow: TimeWindow | null = null,
+  anchor: bigint | null = null,
 ): StoreApi<Selection> {
-  const fallback = aligned(defaultWindow, epoch, range);
+  const fallback = aligned(defaultWindow, epoch, range, anchor);
   return createStore<Selection>()((set, get) => ({
-    ...dataFromUrl(initial, epoch, range, fallback),
+    ...dataFromUrl(initial, epoch, range, fallback, anchor),
     setWindow: (w) => {
-      if (w !== null) formatWindow(w); // validates
-      set({ window: aligned(w, epoch, range) });
+      if (w !== null) formatWindow(w, anchor ?? undefined); // validates
+      set({ window: aligned(w, epoch, range, anchor) });
     },
     setCondition: (c) => {
       if (c !== null) assertOttl(c);
@@ -361,10 +370,11 @@ export function bindUrl(
   let last = '';
 
   const applyUrl = (): void => {
-    const { state, errors } = parseUrlState(history.read());
+    const { anchor } = store.getState();
+    const { state, errors } = parseUrlState(history.read(), anchor !== null);
     applying = true;
     try {
-      store.setState(dataFromUrl(state, epoch, range, store.getState().defaultWindow));
+      store.setState(dataFromUrl(state, epoch, range, store.getState().defaultWindow, anchor));
     } finally {
       applying = false;
     }

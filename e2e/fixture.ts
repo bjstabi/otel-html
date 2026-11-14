@@ -148,6 +148,7 @@ export type ReportName =
   | 'run-charts'
   | 'long-range'
   | 'default-window'
+  | 'format-6'
   | 'metrics-scale'
   | 'frozen-format-1'
   | 'frozen-format-2'
@@ -312,3 +313,8 @@ export function baseUrlFor(kind: UrlKind, report: ReportName = 'main'): string {
   if (port === undefined) throw new Error(`${PORT_ENV} is not set: globalSetup did not start the server`);
   return `http://127.0.0.1:${port}${httpSubpath(report)}`;
 }
+
+/** Where the `format-6` report starts, and the spacing of its traces: `e2e/format-6.spec.ts` computes its windows from them. */
+export const FORMAT_6_T0 = 1_700_000_000_000_000_000n;
+export const FORMAT_6_STEP_NS = 60_000_000_000n;
+export const FORMAT_6_TRACES = 12;

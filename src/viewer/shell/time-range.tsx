@@ -60,10 +60,10 @@ function zoomOutWindow(w: TimeWindow, range: Range): TimeWindow | null {
 }
 
 /** The preset the window is, as the selection holds it: a long preset sits on absolute grains, so compare after alignment. */
-function activePreset(w: TimeWindow | null, range: Range, epoch: bigint): string | null {
+function activePreset(w: TimeWindow | null, range: Range, epoch: bigint, floor: boolean): string | null {
   if (w === null) return 'Entire run';
   const hit = PRESETS.find((p) => {
-    return p.widthNs !== null && presetMatches(w, p.widthNs, range, epoch);
+    return p.widthNs !== null && presetMatches(w, p.widthNs, range, epoch, floor);
   });
   return hit?.label ?? null;
 }
@@ -77,6 +77,7 @@ const BUTTON =
 export function TimeRange({ manifest }: { manifest: AnyManifest }): JSX.Element {
   const win = useSelection((s) => s.window);
   const setWindow = useSelection((s) => s.setWindow);
+  const anchored = useSelection((s) => s.anchor !== null);
   const range = manifestRange(manifest);
   if (range === null) {
     return (
@@ -87,7 +88,7 @@ export function TimeRange({ manifest }: { manifest: AnyManifest }): JSX.Element 
   }
   const epoch = parseUnixNanos(manifest.epochUnixNano, 'manifest.epochUnixNano');
   const shown = win ?? range;
-  const active = activePreset(win, range, BigInt(manifest.epochUnixNano));
+  const active = activePreset(win, range, BigInt(manifest.epochUnixNano), !anchored);
   const prev = win === null ? null : stepWindow(win, range, -1);
   const next = win === null ? null : stepWindow(win, range, 1);
   const zoomed = win === null ? null : zoomOutWindow(win, range);

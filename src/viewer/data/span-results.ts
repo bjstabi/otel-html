@@ -48,6 +48,16 @@ export function toNumber(v: unknown, path: string): number {
   throw bad(path, 'an integer within 2^53', v);
 }
 
+/**
+ * A time relative to the anchor as a number: an int64 beyond 2^53 ns (a report of years) is rounded to the nearest
+ * double, never refused. Counts and durations keep `toNumber`.
+ */
+export function relTime(v: unknown, path: string): number {
+  if (typeof v === 'bigint') return Number(v);
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  throw bad(path, 'an int64 time', v);
+}
+
 /** A DOUBLE (quantile, sum) or an integer column as a number; null stays null. */
 function real(v: unknown, path: string): number | null {
   if (v === null || v === undefined) return null;
@@ -81,6 +91,8 @@ export interface SpanEntry {
   shared: DecodedShared;
   filename: string;
   fileRow: number;
+  /** `traceSpansQuery` only: the span's times relative to the trace's earliest start, exact (the service share's input). */
+  share: { start: number; end: number } | null;
 }
 
 /** Decodes the rows of `spanRowsQuery` / `traceSpansQuery` (times already relative; `start_ns`, `end_ns`). */
@@ -99,6 +111,13 @@ export function spanEntries(t: Table, epoch: bigint): { entries: SpanEntry[]; to
       shared,
       filename: text(cell(row, 'filename')),
       fileRow: toNumber(cell(row, 'file_row_number'), 'file_row_number'),
+      share:
+        cell(row, 'share_start') == null
+          ? null
+          : {
+              start: relTime(cell(row, 'share_start'), 'share_start'),
+              end: relTime(cell(row, 'share_end'), 'share_end'),
+            },
     };
   });
   const first = rows[0];
@@ -129,9 +148,12 @@ export function internRows(entries: readonly SpanEntry[]): { rows: SpanRow[]; ta
   return { rows, tables: { resources: interner.resources, scopes: interner.scopes } };
 }
 
-export function spanRows(t: Table, epoch: bigint): { rows: SpanRow[]; total: number; tables: RowTables } {
+export function spanRows(
+  t: Table,
+  epoch: bigint,
+): { rows: SpanRow[]; total: number; tables: RowTables; share: ({ start: number; end: number } | null)[] } {
   const { entries, total } = spanEntries(t, epoch);
-  return { ...internRows(entries), total };
+  return { ...internRows(entries), total, share: entries.map((e) => e.share) };
 }
 
 /** The rows of `traceRowsQuery`; a trace without a timed span row has start and duration 0, one without a root has no `rootSummary`. */
@@ -148,7 +170,7 @@ export function traceRows(t: Table): { rows: TraceRow[]; total: number } {
               resource: text(cell(r, 'root_resource')),
             }
           : null,
-      start: real(cell(r, 'start_ns'), 'start_ns') ?? 0,
+      start: cell(r, 'start_ns') == null ? 0 : relTime(cell(r, 'start_ns'), 'start_ns'),
       durationNs: real(cell(r, 'duration_ns'), 'duration_ns') ?? 0,
       spans: toNumber(cell(r, 'span_count'), 'span_count'),
       errors: toNumber(cell(r, 'error_count'), 'error_count'),
@@ -248,7 +270,7 @@ const nulls = (n: number): (number | null)[] => new Array<number | null>(n).fill
 export function timelineBuckets(t: Table, spec: BucketSpec): TimeBuckets<SpanStatusKey> {
   const rows = rowsOf(t);
   const width = spec.widthNs;
-  const at = rows.map((r) => toNumber(cell(r, 'bucket'), 'bucket'));
+  const at = rows.map((r) => relTime(cell(r, 'bucket'), 'bucket'));
   const grid = gridOf(at, width);
   if (grid === null) return new TimeBuckets(STATUS_KEYS, MAX_BUCKETS);
   const status = STATUS_KEYS.map(() => zeros(grid.length));
@@ -279,7 +301,7 @@ export function timeline(
 ): { buckets: TimeBuckets<SpanStatusKey>; red: RedBuckets } {
   const rows = rowsOf(t);
   const width = spec.widthNs;
-  const at = rows.map((r) => toNumber(cell(r, 'bucket'), 'bucket'));
+  const at = rows.map((r) => relTime(cell(r, 'bucket'), 'bucket'));
   const grid = gridOf(at, width);
   const buckets = timelineBuckets(t, spec);
   if (grid === null) {
@@ -386,7 +408,7 @@ export function serviceStats(
   const kept = rows.slice(0, limit);
   const bucketRows = buckets === null ? [] : rowsOf(buckets);
   const width = spec.widthNs;
-  const at = bucketRows.map((r) => toNumber(cell(r, 'bucket'), 'bucket'));
+  const at = bucketRows.map((r) => relTime(cell(r, 'bucket'), 'bucket'));
   const grid = gridOf(at, width);
   const series = new Map<string, number[]>();
   bucketRows.forEach((r, k) => {
