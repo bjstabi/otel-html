@@ -1,6 +1,7 @@
 # Read debt: a trace read by id and metric run queries follow what they ask
 
-**Status: approved 2026-11-14.** The maintainer approved the three points of §6 as written (format 6; the listed
+**Status: closed 2026-11-14.** #295 is paid (PR #313) and format 4 is dropped (PR #311); format 6 stopped at the
+Chromium gate (the plan's "Chromium range reads" records why) and #291 stays open. Approved 2026-11-14: The maintainer approved the three points of §6 as written (format 6; the listed
 code the deployer runs, readers first; the summary's quantiles in the catalogue's load). Written 2026-11-14 after the query-scaling project
 (`2026-11-11-query-scaling-design.md`) closed with five lines on its known-debt list. The maintainer chose to pay
 them next (#291, #295) under the **unattended** process (`docs/agents/process-unattended.md`), skipped the
