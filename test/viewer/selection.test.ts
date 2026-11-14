@@ -327,3 +327,75 @@ describe('logs selection', () => {
     expect(h.writes).toEqual([{ s: `trace=${TRACE}&span=${SPAN}`, mode: 'push' }]);
   });
 });
+
+describe('the default window', () => {
+  const HOUR = 3_600_000_000_000;
+  const range = { start: 0, end: 12 * HOUR };
+  const dflt = { start: 6 * HOUR, end: 12 * HOUR };
+  const make = (initial: Parameters<typeof createSelectionStore>[0], epoch?: bigint) =>
+    createSelectionStore(initial, epoch, () => range, dflt);
+
+  test('no t: the window is the default and the URL stays without t', () => {
+    const store = make({});
+    expect(store.getState().window).toEqual(dflt);
+    expect(selectionToUrlState(store.getState())).toEqual({});
+  });
+
+  test('a long default is aligned to absolute grains, and the URL still has no t', () => {
+    const store = make({}, 1_700_000_000_000_000_000n);
+    const w = store.getState().window;
+    expect(w).not.toBeNull();
+    expect(w?.start).toBeLessThanOrEqual(dflt.start);
+    expect(w?.end).toBeGreaterThanOrEqual(dflt.end);
+    expect(selectionToUrlState(store.getState())).toEqual({});
+  });
+
+  test('Entire run writes t=all; a reload and a copied link read it back as the entire run', () => {
+    const h = fakeHistory('');
+    const store = make({});
+    bindUrl(
+      store,
+      h,
+      () => {},
+      undefined,
+      () => range,
+    );
+    store.getState().setWindow(null);
+    expect(h.writes.at(-1)?.s).toBe('t=all');
+    expect(make({ t: 'all' }).getState().window).toBeNull();
+  });
+
+  test('choosing the default again removes t; another window writes it', () => {
+    const h = fakeHistory('t=all');
+    const store = make({ t: 'all' });
+    bindUrl(
+      store,
+      h,
+      () => {},
+      undefined,
+      () => range,
+    );
+    store.getState().setWindow(dflt);
+    expect(h.writes.at(-1)?.s).toBe('');
+    store.getState().setWindow({ start: 1, end: 2 });
+    expect(h.writes.at(-1)?.s).toBe('t=1~2');
+  });
+
+  test('an explicit t wins over the default', () => {
+    expect(make({ t: '1~2' }).getState().window).toEqual({ start: 1, end: 2 });
+  });
+
+  test('clearing the window goes to the entire run and writes t=all', () => {
+    const store = make({});
+    store.getState().clear('window');
+    expect(store.getState().window).toBeNull();
+    expect(selectionToUrlState(store.getState())).toEqual({ t: 'all' });
+  });
+
+  test('without a default, Entire run removes t and t=all is the entire run', () => {
+    const store = createSelectionStore({ t: '1~2' });
+    store.getState().setWindow(null);
+    expect(selectionToUrlState(store.getState())).toEqual({});
+    expect(createSelectionStore({ t: 'all' }).getState().window).toBeNull();
+  });
+});

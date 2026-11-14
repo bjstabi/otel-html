@@ -17,12 +17,19 @@ import {
   tokensToOttl,
 } from '../components/filter-tokens.js';
 import type { LogRef } from '../data/log-query.js';
-import { alignLongWindow, isLongWindow, type TimeWindow } from '../data/time-window.js';
+import { alignedIn, type TimeWindow } from '../data/time-window.js';
 import { isLogTabId, LOG_TAB_IDS, type LogTabId } from '../logs/tabs.js';
 import { isTraceTabId, TRACE_TAB_IDS, type TraceTabId } from '../traces/tabs.js';
 import { type DashboardPageState, isPristine } from './dashboard-state.js';
 import type { ExplorerView } from './explorer-view.js';
-import { formatWindow, parseUrlState, parseWindow, serializeUrlState, type UrlState } from './url-state.js';
+import {
+  formatWindow,
+  parseUrlState,
+  serializeUrlState,
+  type UrlState,
+  windowFromParam,
+  windowParam,
+} from './url-state.js';
 
 const DEFAULT_TRACE_TAB: TraceTabId = 'flame';
 const DEFAULT_SPAN_TAB = 'overview';
@@ -33,7 +40,10 @@ export type SelectionMode = (typeof SELECTION_MODES)[number];
 type ClearKey = 'window' | 'condition' | 'text' | 'traceId' | 'spanId' | 'logRef' | 'groupBy' | 'sort';
 
 export interface Selection {
+  /** The effective window; null is the entire run. With no `t` in the URL it is `defaultWindow`. */
   window: TimeWindow | null;
+  /** The report's default window (aligned like `window`), or null: not in the URL, set when the store is made. */
+  defaultWindow: TimeWindow | null;
   condition: string | null;
   text: string;
   traceId: TraceId | null;
@@ -110,18 +120,18 @@ function aligned(
   epoch: bigint | undefined,
   range: () => TimeWindow | null,
 ): TimeWindow | null {
-  if (w === null || epoch === undefined || !isLongWindow(w, range())) return w;
-  const a = alignLongWindow(w, epoch);
-  return { start: Math.max(0, a.start), end: a.end };
+  return alignedIn(w, epoch, range());
 }
 
 function dataFromUrl(
   u: UrlState,
   epoch?: bigint,
   range: () => TimeWindow | null = () => null,
+  defaultWindow: TimeWindow | null = null,
 ): SelectionData {
   return {
-    window: aligned(u.t === undefined ? null : parseWindow(u.t), epoch, range),
+    window: aligned(windowFromParam(u.t, defaultWindow), epoch, range),
+    defaultWindow,
     condition: u.q ?? null,
     text: u.text ?? '',
     traceId: u.trace ?? null,
@@ -146,7 +156,8 @@ export function selectionToUrlState(s: SelectionData): UrlState {
   const u: UrlState = {};
   if (s.condition !== null) u.q = s.condition;
   if (s.text !== '') u.text = s.text;
-  if (s.window !== null) u.t = formatWindow(s.window);
+  const t = windowParam(s.window, s.defaultWindow);
+  if (t !== undefined) u.t = t;
   if (s.mode !== null) u.mode = s.mode;
   if (s.groupBy !== null) u.group = s.groupBy;
   if (s.view !== 'list') u.view = s.view;
@@ -226,13 +237,36 @@ function assertOttl(c: string): void {
   }
 }
 
+/**
+ * The report's range changed (a Refresh): the default window is worked out again from the new range. A selection that
+ * was on the old default (the URL has no `t`) moves to the new one; an explicit `t`, `t=all` included, stays.
+ */
+export function refollowDefault(
+  store: StoreApi<Selection>,
+  next: TimeWindow | null,
+  epoch: bigint | undefined,
+  range: () => TimeWindow | null,
+  hasT: boolean,
+): void {
+  const fallback = aligned(next, epoch, range);
+  const { defaultWindow: old, window: w } = store.getState();
+  const same = (a: TimeWindow | null, b: TimeWindow | null): boolean =>
+    a === b || (a !== null && b !== null && a.start === b.start && a.end === b.end);
+  if (same(old, fallback)) return;
+  store.setState(
+    hasT || !same(w, old) ? { defaultWindow: fallback } : { defaultWindow: fallback, window: fallback },
+  );
+}
+
 export function createSelectionStore(
   initial: UrlState,
   epoch?: bigint,
   range: () => TimeWindow | null = () => null,
+  defaultWindow: TimeWindow | null = null,
 ): StoreApi<Selection> {
+  const fallback = aligned(defaultWindow, epoch, range);
   return createStore<Selection>()((set, get) => ({
-    ...dataFromUrl(initial, epoch, range),
+    ...dataFromUrl(initial, epoch, range, fallback),
     setWindow: (w) => {
       if (w !== null) formatWindow(w); // validates
       set({ window: aligned(w, epoch, range) });
@@ -330,7 +364,7 @@ export function bindUrl(
     const { state, errors } = parseUrlState(history.read());
     applying = true;
     try {
-      store.setState(dataFromUrl(state, epoch, range));
+      store.setState(dataFromUrl(state, epoch, range, store.getState().defaultWindow));
     } finally {
       applying = false;
     }

@@ -2,6 +2,7 @@ title: CI
 viewer:
   home: dashboards
   defaultDashboard: ci
+  defaultWindow: 7d
 dashboards:
   - id: ci
     title: CI

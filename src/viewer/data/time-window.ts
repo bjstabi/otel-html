@@ -33,3 +33,47 @@ export function alignLongWindow(window: TimeWindow, epoch: bigint): TimeWindow {
   const end = m === 0n ? hi : hi + grain - m;
   return { start: Number(start), end: Number(end) };
 }
+
+const UNIT_NS: Readonly<Record<string, number>> = {
+  m: 60_000_000_000,
+  h: 3_600_000_000_000,
+  d: 86_400_000_000_000,
+};
+
+/** A `viewer.defaultWindow` text (`90m`, `6h`, `7d`) in nanoseconds; the config schema has checked its shape. */
+export function durationNs(text: string): number {
+  const m = /^([1-9][0-9]*)(m|h|d)$/.exec(text);
+  const unit = m === null ? undefined : UNIT_NS[m[2] ?? ''];
+  if (m === null || unit === undefined) throw new RangeError(`not a duration: ${JSON.stringify(text)}`);
+  return Number(m[1]) * unit;
+}
+
+/** The report's default window, anchored at the end of its range; null when there is none or it is not shorter than the range. */
+export function defaultWindowOf(text: string | undefined, range: TimeWindow | null): TimeWindow | null {
+  if (text === undefined || range === null) return null;
+  const width = durationNs(text);
+  return width >= range.end - range.start ? null : { start: range.end - width, end: range.end };
+}
+
+/** `alignLongWindow` where the window is long within `range` (the clipped rule), with a start kept at 0 or later; else as given. */
+export function alignedIn(
+  w: TimeWindow | null,
+  epoch: bigint | undefined,
+  range: TimeWindow | null,
+): TimeWindow | null {
+  if (w === null || epoch === undefined || !isLongWindow(w, range)) return w;
+  const a = alignLongWindow(w, epoch);
+  return { start: Math.max(0, a.start), end: a.end };
+}
+
+/** Whether `window` is the preset of `widthNs` anchored at the end of `range`, as the selection holds a window (aligned when long). */
+export function presetMatches(
+  window: TimeWindow,
+  widthNs: number,
+  range: TimeWindow,
+  epoch: bigint,
+): boolean {
+  if (range.end - range.start <= widthNs) return false;
+  const e = alignedIn({ start: range.end - widthNs, end: range.end }, epoch, range);
+  return e !== null && e.start === window.start && e.end === window.end;
+}

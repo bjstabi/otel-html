@@ -102,6 +102,24 @@ describe('dashboards', () => {
     expect(m.dashboards.map((d) => d.dashboard.id)).toEqual(['ops']);
     expect(m.viewer.defaultDashboard).toBe('ops');
   });
+  test('merge without config keeps the first report defaultWindow; a config that sets one replaces it', async () => {
+    const w = createTestWriter();
+    const s = await openSession(w.deps, {
+      out: 'a',
+      config: testConfig({ viewer: { defaultWindow: '7d' } }),
+      mode: 'replace',
+    });
+    await s.add(otlp(spansRequest(1)), 'in.json');
+    await s.close();
+    await merge(w, ['a']);
+    expect(manifestOf(w, 'out').config.viewer).toMatchObject({ defaultWindow: '7d' });
+    await mergeReports(w.deps, ['a'], {
+      out: 'out2',
+      config: testConfig({ viewer: { defaultWindow: '6h' } }),
+      mode: 'replace',
+    });
+    expect(manifestOf(w, 'out2').config.viewer).toMatchObject({ defaultWindow: '6h' });
+  });
   test('merge keeps the first input views when the config gives none', async () => {
     const w = createTestWriter();
     const s = await openSession(w.deps, {

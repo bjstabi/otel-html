@@ -31,7 +31,7 @@ in order; a PR starts from `main` after the previous one merged.
 | 4   | `perf/pruning-statistics`    | `perf(query): statistics survive merges and reads follow the window`   | #272   | merged #292 |
 | 5   | `feat/format-5`              | `feat(format): format 5 with rollup tables and the end-time statistic` |        | merged #293 |
 | 6   | `perf/rollup-router`         | `perf(viewer): long windows are answered from rollups`                 | #271   | merged #296 |
-| 7   | `perf/compaction-time-bound` | `perf(writer): compaction keeps files bounded in time`                 |        |        |
+| 7   | `perf/compaction-time-bound` | `perf(writer): compaction keeps files bounded in time`                 | #283   | merged #299 |
 | 8   | `feat/default-window`        | `feat(viewer): viewer.defaultWindow and longer presets`                |        |        |
 | 9   | `docs/query-scaling-record`  | `docs(plan): query-scaling record`                                     |        |        |
 
@@ -1908,8 +1908,10 @@ test('both CI configs set viewer.defaultWindow to 7d and are otherwise equal to 
 - [ ] **Step 2:** run → FAIL. **Step 3:** implement; `mise run gen`. **Step 4:** → PASS. README: `viewer.defaultWindow`
       in the configuration reference, the presets, and what `t=all` means.
 - [ ] **Step 5:** prediction: `mise run predict:queries -- --after 8 --window 7d`; the dashboard on the `rolling` and
-      `30x150k` shapes is at or under 150 serial requests. Over 150, or over the "after 8" row by more than 20 %, is a
-      stop with the printed table.
+      `30x150k` shapes is at or under 150 serial requests in the harness numbers (rolling unanchored; maintainer,
+      2026-11-14: the live-anchored rolling cell, 271, cannot reach 150 because a 7-day window prunes nothing on the
+      live report, and the live 150 is PR 9's reported target). Over 150, or over the "after 8" row by more than 20 %,
+      is a stop with the printed table.
 - [ ] **Step 6:** `mise run verify`. **Commit and open PR 8.** `feat(viewer): viewer.defaultWindow and longer presets`
 
 ## PR 9: the record

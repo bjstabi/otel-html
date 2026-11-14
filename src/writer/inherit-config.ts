@@ -3,14 +3,14 @@ import type { Manifest } from '../format/manifest.js';
 
 /**
  * Fill what a run's config leaves empty from an earlier report's manifest, so appending or merging
- * without `--config` keeps that report's dashboards, views and home page. A config that names dashboards replaces
+ * without `--config` keeps that report's dashboards, views, home page and default window. A config that names dashboards replaces
  * them. A resolved config cannot tell a default from the same value written out, so `viewer.home: traces` and
  * `viewer.defaultDashboard: fusion` count as unset here: they never override an earlier report's other choice.
  */
 export function inheritDashboards(
   config: ResolvedConfig,
   prior: Pick<Manifest['config'], 'dashboards' | 'views'> & {
-    viewer: Pick<ResolvedConfig['viewer'], 'defaultDashboard' | 'home'>;
+    viewer: Pick<ResolvedConfig['viewer'], 'defaultDashboard' | 'home' | 'defaultWindow'>;
   },
 ): ResolvedConfig {
   const keepDashboards = config.dashboards.length === 0;
@@ -22,5 +22,16 @@ export function inheritDashboards(
       ? prior.viewer.defaultDashboard
       : config.viewer.defaultDashboard;
   const home = config.viewer.home === 'traces' ? prior.viewer.home : config.viewer.home;
-  return { ...config, dashboards, views, viewer: { ...config.viewer, defaultDashboard, home } };
+  const defaultWindow = config.viewer.defaultWindow ?? prior.viewer.defaultWindow;
+  return {
+    ...config,
+    dashboards,
+    views,
+    viewer: {
+      ...config.viewer,
+      defaultDashboard,
+      home,
+      ...(defaultWindow === undefined ? {} : { defaultWindow }),
+    },
+  };
 }

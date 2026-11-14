@@ -10,13 +10,13 @@ import { defaultDashboardRoute } from '../dashboards/registry.js';
 import { RunSessionProvider } from '../dashboards/run-session.js';
 import type { DataSource } from '../data/data-source.js';
 import { manifestRange } from '../data/manifest-range.js';
-import type { TimeWindow } from '../data/time-window.js';
+import { defaultWindowOf, type TimeWindow } from '../data/time-window.js';
 import { LogsExplorer } from '../logs/explorer.js';
 import { MetricsCatalog } from '../metrics/catalog.js';
 import { MetricsExplorer } from '../metrics/explorer.js';
 import { applyPatch, carryTo, type DroppedParam } from '../state/carry.js';
 import { PAGE_TITLES, type Page, pageOfRoute } from '../state/page-options.js';
-import { bindUrl, createSelectionStore, type HistoryPort } from '../state/selection.js';
+import { bindUrl, createSelectionStore, type HistoryPort, refollowDefault } from '../state/selection.js';
 import { SelectionProvider } from '../state/selection-context.js';
 import { parseUrlState, serializeUrlState } from '../state/url-state.js';
 import { ColorsProvider } from '../theme/colors-context.js';
@@ -128,10 +128,28 @@ export function Shell(props: {
     rangeRef.current = manifestRange(manifest);
   }, [manifest]);
   const range = useCallback((): TimeWindow | null => rangeRef.current, []);
+  const defaultText = manifest.config.viewer.defaultWindow;
   const store = useMemo(
-    () => createSelectionStore(parseUrlState(history.read()).state, epoch, range),
-    [history, epoch, range],
+    () =>
+      createSelectionStore(
+        parseUrlState(history.read()).state,
+        epoch,
+        range,
+        defaultWindowOf(defaultText, rangeRef.current),
+      ),
+    // the default is anchored once, at the range as it stands when the store is made
+    [history, epoch, range, defaultText],
   );
+  // a Refresh grows the range: the default window is anchored again, and a selection still on it follows
+  useLayoutEffect(() => {
+    refollowDefault(
+      store,
+      defaultWindowOf(defaultText, manifestRange(manifest)),
+      epoch,
+      range,
+      parseUrlState(history.read()).state.t !== undefined,
+    );
+  }, [store, manifest, defaultText, epoch, range, history]);
   const [errors, setErrors] = useState<readonly string[]>([]);
   const [helpOpen, setHelpOpen] = useState(false);
   const [carried, setCarried] = useState<Carried | null>(null);

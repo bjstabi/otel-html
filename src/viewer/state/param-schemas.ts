@@ -18,6 +18,16 @@ export const WindowTextSchema: z.ZodType<string> = z
   .regex(T_FORMAT, '<start>~<end> in nanoseconds')
   .refine(tRange, `<start>~<end> with start <= end and values <= ${Number.MAX_SAFE_INTEGER}`);
 
+/** The `t` value for the entire run, written when the report has a default window and the person chose past it. */
+export const T_ALL = 'all';
+
+/** The `t` key: a window, or `all`. */
+export const WindowParamSchema: z.ZodType<string> = z.string().superRefine((s, ctx) => {
+  if (s === T_ALL) return;
+  const r = WindowTextSchema.safeParse(s);
+  if (!r.success) ctx.addIssue({ code: 'custom', message: r.error.issues[0]?.message ?? 'a window' });
+});
+
 /** A non-zero lowercase-hex trace id, shared by the `trace` key and the dashboard's `sel.trace`. */
 export const TraceIdParamSchema: z.ZodType<TraceId> = z
   .string()

@@ -306,6 +306,19 @@ describe('Open in and narrow screens', () => {
     expect(window.location.hash).toContain('t=0~3600000000000');
   });
 
+  test('with a default window, Open in Traces carries no t for the default and t=all for the entire run', async () => {
+    const user = userEvent.setup();
+    const ds = dataSourceOf(manifestWith([], { defaultWindow: '6h' }), VALUES);
+    renderShell('#/dashboards/fusion', ds);
+    await user.click(await screen.findByRole('button', { name: /Open in Traces/ }));
+    expect(window.location.hash.startsWith('#/traces')).toBe(true);
+    expect(window.location.hash).not.toContain('t=');
+    cleanup();
+    renderShell('#/dashboards/fusion?t=all', ds);
+    await user.click(await screen.findByRole('button', { name: /Open in Traces/ }));
+    expect(window.location.hash).toContain('t=all');
+  });
+
   test('below 768 px the widgets stack in (y, x) order and Edit layout is disabled', async () => {
     vi.stubGlobal('matchMedia', (query: string) => ({
       matches: true,

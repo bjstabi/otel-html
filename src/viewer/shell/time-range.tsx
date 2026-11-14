@@ -4,13 +4,14 @@ import type { AnyManifest, Manifest } from '../../format/manifest.js';
 import { parseUnixNanos, type RelNanos, type UnixNanos } from '../../model/ids.js';
 import { formatTime } from '../../semconv/formatters.js';
 import { manifestRange } from '../data/manifest-range.js';
-import { isLongWindow, type TimeWindow } from '../data/time-window.js';
+import { isLongWindow, presetMatches, type TimeWindow } from '../data/time-window.js';
 import { useSelection } from '../state/selection-context.js';
 import { Tip } from './tip.js';
 
 type Range = NonNullable<Manifest['range']>;
 
 const MINUTE_NS = 60_000_000_000;
+const HOUR_NS = 60 * MINUTE_NS;
 
 interface Preset {
   label: string;
@@ -20,8 +21,16 @@ interface Preset {
 const PRESETS: readonly Preset[] = [
   { label: 'Entire run', widthNs: null },
   { label: '15m', widthNs: 15 * MINUTE_NS },
-  { label: '1h', widthNs: 60 * MINUTE_NS },
+  { label: '1h', widthNs: HOUR_NS },
+  { label: '6h', widthNs: 6 * HOUR_NS },
+  { label: '24h', widthNs: 24 * HOUR_NS },
+  { label: '7d', widthNs: 168 * HOUR_NS },
 ];
+
+/** A preset is offered only while the run is longer than it ("Entire run" always). */
+function offered(p: Preset, range: Range): boolean {
+  return p.widthNs === null || range.end - range.start > p.widthNs;
+}
 
 /** Run-relative nanoseconds as an absolute UTC time. */
 export function absoluteTime(rel: number, epoch: UnixNanos): string {
@@ -50,9 +59,12 @@ function zoomOutWindow(w: TimeWindow, range: Range): TimeWindow | null {
   return { start, end: start + width * 2 };
 }
 
-function activePreset(w: TimeWindow | null, range: Range): string | null {
+/** The preset the window is, as the selection holds it: a long preset sits on absolute grains, so compare after alignment. */
+function activePreset(w: TimeWindow | null, range: Range, epoch: bigint): string | null {
   if (w === null) return 'Entire run';
-  const hit = PRESETS.find((p) => p.widthNs !== null && w.end === range.end && w.end - w.start === p.widthNs);
+  const hit = PRESETS.find((p) => {
+    return p.widthNs !== null && presetMatches(w, p.widthNs, range, epoch);
+  });
   return hit?.label ?? null;
 }
 
@@ -75,7 +87,7 @@ export function TimeRange({ manifest }: { manifest: AnyManifest }): JSX.Element 
   }
   const epoch = parseUnixNanos(manifest.epochUnixNano, 'manifest.epochUnixNano');
   const shown = win ?? range;
-  const active = activePreset(win, range);
+  const active = activePreset(win, range, BigInt(manifest.epochUnixNano));
   const prev = win === null ? null : stepWindow(win, range, -1);
   const next = win === null ? null : stepWindow(win, range, 1);
   const zoomed = win === null ? null : zoomOutWindow(win, range);
@@ -83,7 +95,7 @@ export function TimeRange({ manifest }: { manifest: AnyManifest }): JSX.Element 
     <fieldset className="flex flex-wrap items-center gap-2">
       <legend className="sr-only">Time range</legend>
       <div className="flex gap-1">
-        {PRESETS.map((p) => (
+        {PRESETS.filter((p) => offered(p, range)).map((p) => (
           <button
             key={p.label}
             type="button"

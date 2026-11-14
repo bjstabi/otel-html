@@ -56,7 +56,7 @@ describe('dashboards in config', () => {
         resolveConfig({ file: { viewer: { defaultWindow: w } }, env: {} }).config.viewer.defaultWindow,
       ).toBe(w);
     }
-    for (const w of ['0d', '7', '1w', '-1h']) {
+    for (const w of ['0d', '7', '1w', '-1h', '']) {
       const e = failure(() => resolveConfig({ file: { viewer: { defaultWindow: w } }, env: {} }));
       expect(e.message).toContain('viewer.defaultWindow');
     }

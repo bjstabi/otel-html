@@ -9,7 +9,7 @@ import { Shell } from '../../src/viewer/shell/shell.js';
 import { stepWindow } from '../../src/viewer/shell/time-range.js';
 import { createHashHistory } from '../../src/viewer/state/hash-history.js';
 import { ThemeProvider } from '../../src/viewer/theme/theme-provider.js';
-import { baseManifest, dataSourceOf } from './dashboard-shell.js';
+import { baseManifest, dataSourceOf, manifestWith } from './dashboard-shell.js';
 import { detailOf, TRACE_ID, traceRow } from './trace-rows.js';
 
 // jsdom has no layout or ResizeObserver, which ECharts needs; the explorer's charts are covered by e2e.
@@ -271,6 +271,106 @@ describe('time range', () => {
     expect(window.location.hash).toBe(`#/traces?t=${10 * HOUR - 900_000_000_000}~${10 * HOUR}`);
     await user.click(entire);
     expect(window.location.hash).toBe('#/traces');
+  });
+});
+
+describe('presets and the default window', () => {
+  const withDefault = (defaultWindow: string | undefined, hours = 10): DataSource => {
+    const base = manifestWith([], defaultWindow === undefined ? {} : { defaultWindow });
+    return dataSourceOf({
+      ...base,
+      range: {
+        start: baseManifest.range?.start ?? '0',
+        end: String(BigInt(baseManifest.range?.start ?? 0) + BigInt(hours * HOUR)),
+      },
+    });
+  };
+
+  test('6h, 24h and 7d appear only when the range is longer than each', () => {
+    const labels = (): string[] =>
+      within(screen.getByRole('group', { name: 'Time range' }))
+        .getAllByRole('button')
+        .map((b) => b.textContent ?? '')
+        .filter((t) => /^(Entire run|\d+[mhd])$/.test(t));
+    renderShell('#/traces');
+    expect(labels()).toEqual(['Entire run', '15m', '1h', '6h']);
+    cleanup();
+    renderShell('#/traces', withDefault(undefined, 30));
+    expect(labels()).toEqual(['Entire run', '15m', '1h', '6h', '24h']);
+    cleanup();
+    renderShell('#/traces', withDefault(undefined, 8 * 24));
+    expect(labels()).toEqual(['Entire run', '15m', '1h', '6h', '24h', '7d']);
+  });
+
+  test('with a default the first load has no t; Entire run writes t=all and reopens as the entire run', async () => {
+    const user = userEvent.setup();
+    const ds = withDefault('6h');
+    renderShell('#/traces', ds);
+    expect(window.location.hash).toBe('#/traces');
+    expect(screen.getByRole('button', { name: '6h' }).getAttribute('aria-pressed')).toBe('true');
+    await user.click(screen.getByRole('button', { name: 'Entire run' }));
+    expect(window.location.hash).toBe('#/traces?t=all');
+    cleanup();
+    renderShell('#/traces?t=all', ds);
+    expect(screen.getByRole('button', { name: 'Entire run' }).getAttribute('aria-pressed')).toBe('true');
+    await user.click(screen.getByRole('button', { name: '6h' }));
+    expect(window.location.hash).toBe('#/traces');
+  });
+
+  test('a default as long as the range is the entire run, shown as selected', () => {
+    renderShell('#/traces', withDefault('10h'));
+    expect(screen.getByRole('button', { name: 'Entire run' }).getAttribute('aria-pressed')).toBe('true');
+  });
+
+  test('without a default, Entire run removes t and t=all is the entire run', async () => {
+    const user = userEvent.setup();
+    renderShell('#/traces?t=all');
+    expect(screen.getByRole('button', { name: 'Entire run' }).getAttribute('aria-pressed')).toBe('true');
+    await user.click(screen.getByRole('button', { name: '1h' }));
+    await user.click(screen.getByRole('button', { name: 'Entire run' }));
+    expect(window.location.hash).toBe('#/traces');
+  });
+
+  test('a Refresh that grows the range moves a window that is still the default, and nothing else', () => {
+    const refreshed = (hash: string): { before: string; after: string; url: string } => {
+      window.location.hash = hash;
+      const history = createHashHistory(window);
+      const ui = (ds: DataSource) => (
+        <ThemeProvider>
+          <Shell dataSource={ds} history={history} />
+        </ThemeProvider>
+      );
+      const view = render(ui(withDefault('6h', 10)));
+      const before = screen.getByLabelText('Absolute range').textContent ?? '';
+      view.rerender(ui(withDefault('6h', 12)));
+      const after = screen.getByLabelText('Absolute range').textContent ?? '';
+      const url = window.location.hash;
+      cleanup();
+      return { before, after, url };
+    };
+    const noT = refreshed('#/traces');
+    expect(noT.after).not.toBe(noT.before);
+    expect(noT.after).toContain('2023-11-15T10:13'); // the new end (12 h in), to the grain
+    expect(noT.url).not.toContain('t='); // the default stays out of the URL
+    const explicit = refreshed(`#/traces?t=${HOUR}~${2 * HOUR}`);
+    expect(explicit.after).toBe(explicit.before);
+    expect(explicit.url).toContain(`t=${HOUR}~${2 * HOUR}`);
+    const all = refreshed('#/traces?t=all');
+    expect(all.before).toMatch(/^2023-11-14T22:13:20.*→ 2023-11-15T08:13:20/);
+    expect(all.after).toMatch(/^2023-11-14T22:13:20.*→ 2023-11-15T10:13:20/);
+    expect(all.url).toContain('t=all');
+  });
+
+  test('the sidebar links carry t=all, and carry the default as no t', () => {
+    const logsHref = (): string | null =>
+      within(screen.getByRole('region', { name: 'Logs' }))
+        .getByRole('link', { name: 'Explorer' })
+        .getAttribute('href');
+    renderShell('#/traces?t=all', withDefault('6h'));
+    expect(logsHref()).toContain('t=all');
+    cleanup();
+    renderShell('#/traces', withDefault('6h'));
+    expect(logsHref()).not.toContain('t=');
   });
 });
 
