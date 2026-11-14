@@ -469,7 +469,22 @@ export function metricMethods(ctx: MetricContext): MetricMethods {
     if (key === null || leftOut === null) return readRuns(null, null, null);
 
     // Step 1: which runs. The files that can hold a point at or after the window's start give each run's latest point.
-    const from = Number.isFinite(req.window.start) ? req.window.start : null;
+    // A relative time above 2^53 ns rounds, so the bound is widened by one unit: step 1 only has to be a superset.
+    const start = req.window.start;
+    const from = Number.isFinite(start) ? start - Math.max(1, Math.abs(start) * 2 ** -52) : null;
+    const pruned = (condition: string | null, lower: number | null) =>
+      buildFilter({
+        manifest,
+        table: 'points',
+        condition,
+        text: '',
+        window: lower === null ? null : { start: lower, end: NO_END },
+        hints: new Map([['metric_name', new Set([identity.name])]]),
+      });
+    const whole = pruned(q.where, null);
+    // Every file can hold a point of the window (a report no longer than it): one read gives the answer.
+    if (from === null || pruned(q.where, from).filter.files.files.length === whole.filter.files.files.length)
+      return readRuns(null, leftOut, null);
     const first = await scoped(
       {
         entry,
@@ -496,6 +511,12 @@ export function metricMethods(ctx: MetricContext): MetricMethods {
     // No file can hold a run of the window, or no run is in it: no line, only the series left out, which the same mapper words.
     const chosen = first.table === null ? [] : runsInWindow(first.table, req.window);
     if (chosen.length === 0) {
+      // The whole read would have needed the browser to evaluate a residual term, which a served engine cannot do.
+      if (whole.filter.files.files.length > 0 && !engine.tempTables) {
+        if (whole.residual !== null) throw servedResidual(whole.residual);
+        const failedResidual = failedWhen === null ? null : pruned(failedWhen, null).residual;
+        if (failedResidual !== null) throw servedResidual(failedResidual);
+      }
       const empty = tableFromArrays({});
       const left = tableFromArrays({
         run: [null],
@@ -537,9 +558,7 @@ export function metricMethods(ctx: MetricContext): MetricMethods {
     const allowed = texts === null ? null : new Set(texts);
     return leftOutOf(
       cat.seriesOf(entry.id),
-      (row) =>
-        (allowed === null || allowed.has((row as CatalogSeries).resourceText)) &&
-        passes(row as CatalogSeries),
+      (row) => (allowed === null || allowed.has(row.resourceText)) && passes(row),
       runBy,
     );
   }

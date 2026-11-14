@@ -31,9 +31,9 @@ const PLAIN_KEY = /^(?!\d+$|-$|\$|__proto__$)/;
  * an empty string), as `seriesQuery` and the `runsQuery`'s left row count them. Null when `runBy` is not
  * `resource.attributes["K"]` with a plain key: the run value is then SQL's to evaluate.
  */
-export function leftOutOf(
-  series: readonly SeriesRow[],
-  test: (row: SeriesRow) => boolean,
+export function leftOutOf<R extends SeriesRow>(
+  series: readonly R[],
+  test: (row: R) => boolean,
   runBy: ByExpr,
 ): number | null {
   const stat = runStatisticsKey(runBy.src);

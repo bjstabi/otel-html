@@ -275,7 +275,7 @@ export function catalogFrom(
   }
   const seriesMemo = new Map<number, readonly CatalogSeries[]>();
   const accs = new Map<string, Acc>();
-  const rowsByDef = new Map<string, ResultRow[]>();
+  const rowsByDef = new Map<string, number[]>();
   for (const row of rowsOf(defs)) {
     const d = storedDef(row);
     const { key, ...id } = d;
@@ -295,13 +295,13 @@ export function catalogFrom(
   // identity rows repeat the same resource and scope texts: decode each once
   const resourceByText = new Map<string, { key: string; record: ResourceRecord }>();
   const scopeByText = new Set<string>();
-  for (const row of rowsOf(identities)) {
+  for (const [at, row] of rowsOf(identities).entries()) {
     const def = storedDef(row);
     const acc = accs.get(def.key);
     if (acc === undefined) continue;
     const held = rowsByDef.get(def.key);
-    if (held === undefined) rowsByDef.set(def.key, [row]);
-    else held.push(row);
+    if (held === undefined) rowsByDef.set(def.key, [at]);
+    else held.push(at);
     const attributes = textOf(row, 'attributes');
     const seen = `${def.key}\u0000${attributes}`;
     if (!seenAttributes.has(seen)) {
@@ -422,6 +422,8 @@ export function catalogFrom(
     quantileOptions.set(id, [...qs.map((q) => `q${q}`), ...SHOW_BY_KIND.summary]);
   });
 
+  const indexByDef = new Map([...rowsByDef].map(([k, v]) => [k, Int32Array.from(v)] as const));
+
   return {
     entries,
     quantiles: quantileOptions,
@@ -433,7 +435,9 @@ export function catalogFrom(
       const known = seriesMemo.get(entryId);
       if (known !== undefined) return known;
       const def = defsOf[entryId];
-      const rows = def === undefined ? [] : seriesRowsOf(rowsByDef.get(defKey(def.acc.id)) ?? [], def.acc.id);
+      // the rows stay in the Arrow table; a definition's row indices decode when its series are first asked for
+      const at = def === undefined ? undefined : indexByDef.get(defKey(def.acc.id));
+      const rows = def === undefined ? [] : seriesRowsOf(at ?? new Int32Array(0), identities, def.acc.id);
       seriesMemo.set(entryId, rows);
       return rows;
     },
@@ -441,11 +445,12 @@ export function catalogFrom(
 }
 
 /** The distinct series of identity rows (one definition), decoded; resource and scope texts are decoded once each. */
-function seriesRowsOf(rows: readonly ResultRow[], id: MetricIdentity): CatalogSeries[] {
+function seriesRowsOf(at: Int32Array, identities: Table, id: MetricIdentity): CatalogSeries[] {
   const resources = new Map<string, { record: ResourceRecord; part: string }>();
   const scopes = new Map<string, { record: ScopeRecord; part: string }>();
   const seen = new Map<string, CatalogSeries>();
-  for (const row of rows) {
+  for (const index of at) {
+    const row = identities.at(index) as ResultRow;
     const resourceText = textOf(row, 'resource_attributes');
     const rKey = JSON.stringify([
       resourceText,

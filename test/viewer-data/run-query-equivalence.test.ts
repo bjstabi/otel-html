@@ -6,6 +6,7 @@ import type { MetricQuery } from '../../src/query/metric-query.js';
 import { type MetricContext, metricMethods } from '../../src/viewer/data/duckdb-metrics.js';
 import type { MetricRunQueryRequest } from '../../src/viewer/data/metric-results.js';
 import { createCoordinator, mosaicQueryEngine } from '../../src/viewer/data/mosaic.js';
+import type { QueryEngine } from '../../src/viewer/data/query-engine.js';
 import type { TestDb } from '../../test-support/duckdb-node.js';
 import { buildFormat4Report, openFixtureDb } from '../../test-support/format4-fixture.js';
 import { attr, histogram, metricsRequest, pointsAt, summary } from '../../test-support/otlp-builders.js';
@@ -47,6 +48,8 @@ interface Job {
   /** the point attributes in the order `result`, `job` */
   swap: boolean;
   metric: 'job.duration' | 'job.latency';
+  /** The run id as an integer attribute rather than a string. */
+  intRun?: string;
 }
 const job = (
   run: string | null,
@@ -74,7 +77,11 @@ function partition(jobs: Job[]): OtlpRequest {
         : summary(j.metric, points);
     const resource = [
       attr('service.name', str('ci')),
-      ...(j.run === null ? [] : [attr('cicd.pipeline.run.id', str(j.run))]),
+      ...(j.intRun !== undefined
+        ? [attr('cicd.pipeline.run.id', { intValue: j.intRun })]
+        : j.run === null
+          ? []
+          : [attr('cicd.pipeline.run.id', str(j.run))]),
       ...(j.sha === null ? [] : [attr('vcs.ref.head.revision', str(j.sha))]),
     ];
     const [rm] = (metricsRequest([metric], resource) as { resourceMetrics: unknown[] }).resourceMetrics;
@@ -111,13 +118,41 @@ afterAll(() => {
 async function open(
   config: ConfigInput,
   patch: (m: ManifestV4) => ManifestV4 = (m) => m,
+  partitions: OtlpRequest[] = [P0, P1, P2],
+  wrap: (e: QueryEngine) => QueryEngine = (e) => e,
 ): Promise<MetricContext> {
-  const fx = await buildFormat4Report([P0, P1, P2], { config, close: false });
+  const fx = await buildFormat4Report(partitions, { config, close: false });
   const db = await openFixtureDb(fx);
   opened.push(db);
-  const engine = mosaicQueryEngine(createCoordinator(db.connector, silentLogger), db);
+  const engine = wrap(mosaicQueryEngine(createCoordinator(db.connector, silentLogger), db));
   return { engine, manifest: patch(fx.manifest), epoch: fx.epoch, range: { start: 0, end: 4000 * S } };
 }
+
+/** The same engine counting the statements it is sent. */
+const counting = (): { wrap: (e: QueryEngine) => QueryEngine; count: () => number } => {
+  let n = 0;
+  return {
+    wrap: (e) => ({
+      ...e,
+      query: (q, signal) => {
+        n++;
+        return e.query(q, signal);
+      },
+    }),
+    count: () => n,
+  };
+};
+
+/** The run statistic of partition `i` without the key (a file that lists no value for it). */
+const noStatKey = (i: number) => (m: ManifestV4) => ({
+  ...m,
+  partitions: m.partitions.map((p, k) => {
+    const points = p.files.points;
+    if (k !== i || points === undefined) return p;
+    const { [STAT]: _dropped, ...rest } = points.values;
+    return { ...p, files: { ...p.files, points: { ...points, values: rest } } };
+  }),
+});
 
 /** The points file of partition `i` with its run statistic unknown (a key over its cap). */
 const unknownStat = (i: number) => (m: ManifestV4) => ({
@@ -189,6 +224,84 @@ describe('metricRunQuery answers as the whole read does', () => {
     expect(none.runs).toEqual([]);
     expect(none.leftOut).toBe(2);
     await check(ctx, { window: { start: 150 * S, end: 160 * S } });
+  });
+
+  test('a single-instant window, an integer run value, a statistic without the run key', async () => {
+    const ctx = await open(KEYED);
+    const one = await check(ctx, { window: { start: 112 * S, end: 112 * S } });
+    expect(one.runs.map((x) => x.id)).toEqual(['r2']);
+    const ints = await open(KEYED, undefined, [
+      P0,
+      P1,
+      partition([job(null, null, 'build', [150], { intRun: '7' })]),
+    ]);
+    const withInt = await check(ints, { window: { start: 100 * S, end: 200 * S } });
+    expect(withInt.runs.map((x) => x.id)).toContain('7');
+    await check(await open(KEYED, noStatKey(1)));
+    await check(await open(KEYED, noStatKey(0)), { failedWhen: 'attributes["result"] == "failure"' });
+  });
+
+  test('a window start far from the epoch (the writer allows 2^53 ns, 104 days) reaches the files it names', async () => {
+    const day200 = 100 * 86_400;
+    const far = partition([job('r8', 'sha8', 'build', [day200]), job('r9', 'sha9', 'build', [day200 + 5])]);
+    const ctx = await open(KEYED, undefined, [P0, P1, far]);
+    const r = await check(ctx, { window: { start: day200 * S, end: (day200 + 10) * S } });
+    expect(r.runs.map((x) => x.id)).toEqual(['r8', 'r9']);
+    await check(ctx, { window: { start: (day200 + 5) * S, end: (day200 + 5) * S } });
+  });
+
+  test('a window the whole report lies in is one read, as the whole read is', async () => {
+    const c1 = counting();
+    const ctx = await open(KEYED, undefined, undefined, c1.wrap);
+    const m = metricMethods(ctx);
+    const cat = await m.metricCatalog();
+    const entry = cat.entries.find((e) => e.name === 'job.duration');
+    if (entry === undefined) throw new Error('no entry');
+    const req: MetricRunQueryRequest = {
+      entry,
+      query: query('job.duration'),
+      window: { start: -10 * S, end: 1000 * S },
+      runBy: RUN,
+      failedWhen: null,
+    };
+    const before = c1.count();
+    const got = await m.metricRunQuery(req);
+    const used = c1.count() - before;
+    const mid = c1.count();
+    expect(got).toEqual(await metricRunQueryWhole(ctx, req));
+    // the whole read loads its own catalogue first (4 statements); the rest is the runs and the cells
+    expect(used).toBe(c1.count() - mid - 4);
+  });
+
+  test('a served engine cannot evaluate a residual term, even where no file reaches the window', async () => {
+    const ctx = await open(KEYED, undefined, undefined, (e) => ({ ...e, tempTables: false }));
+    const m = metricMethods(ctx);
+    const cat = await m.metricCatalog();
+    const entry = cat.entries.find((e) => e.name === 'job.duration');
+    if (entry === undefined) throw new Error('no entry');
+    const base: MetricRunQueryRequest = {
+      entry,
+      query: query('job.duration'),
+      window: { start: 400 * S, end: 500 * S },
+      runBy: RUN,
+      failedWhen: null,
+    };
+    const residual = 'Len(attributes["job"]) > 4';
+    for (const req of [
+      { ...base, query: query('job.duration', { where: residual }) },
+      { ...base, failedWhen: residual },
+    ]) {
+      const main = await m.metricRunQuery(req).then(
+        () => 'answered',
+        (e: unknown) => String(e),
+      );
+      const whole = await metricRunQueryWhole(ctx, req).then(
+        () => 'answered',
+        (e: unknown) => String(e),
+      );
+      expect(main).not.toBe('answered');
+      expect(main).toBe(whole);
+    }
   });
 
   test('no statistics key for the run, a run expression that is not a resource attribute, a file whose statistic is unknown', async () => {

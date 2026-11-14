@@ -29,9 +29,10 @@ import { filesFor, runPrepared, throwIfAborted } from '../../src/viewer/data/que
 import { dropResidualTable, idTable, servedResidual } from '../../src/viewer/data/residual.js';
 
 /**
- * `metricRunQuery` as it was before the run queries selected their files by run: every statement reads all the files
- * the metric and the condition keep. Copied from `duckdb-metrics.ts` (`scoped`, `seriesRowsTable`, `notesOf` and the
- * body of `metricRunQuery`) so the equivalence test compares the two-step answer with it.
+ * main's `metricRunQuery` before #295 (every statement reads all the files the metric and the condition keep): the
+ * oracle of `run-query-equivalence.test.ts`, which compares the two-step answer with it. Copied from
+ * `duckdb-metrics.ts` (`scoped`, `seriesRowsTable`, `notesOf` and the body of `metricRunQuery`). Delete it together
+ * with that test once the test is retired.
  */
 export async function metricRunQueryWhole(
   ctx: MetricContext,
