@@ -13,7 +13,8 @@ import {
 import { decodeTable } from '../../src/format/parquet/codec.js';
 import { TABLES, type Table } from '../../src/format/parquet/columns.js';
 import { MANIFEST_KEY, partitionWrapperPath } from '../../src/format/paths.js';
-import type { OtelHtmlError } from '../../src/model/errors.js';
+import { oldFormatMessage } from '../../src/format/version.js';
+import { OtelHtmlError } from '../../src/model/errors.js';
 import { mergeReports } from '../../src/writer/merge.js';
 import { createNodeFileSystem } from '../../src/writer/node-fs.js';
 import { openSession } from '../../src/writer/session.js';
@@ -541,22 +542,22 @@ describe('rollups and timeEndMax through a merge', () => {
     expect(seen).toBeGreaterThan(0);
   });
 
-  test('a file-copying merge of a format-4 partition has no rollup and no timeEndMax', async () => {
+  test('a merge refuses an input of format 4 with the old-format message, naming the file', async () => {
     const w = createTestWriter();
-    const FORMAT4 = join(import.meta.dirname, '../../fixtures/reports/format-4/data');
-    for (const e of readdirSync(FORMAT4, { recursive: true, withFileTypes: true })) {
+    const FORMAT5 = join(import.meta.dirname, '../../fixtures/reports/format-5/data');
+    for (const e of readdirSync(FORMAT5, { recursive: true, withFileTypes: true })) {
       if (!e.isFile()) continue;
-      const rel = join(e.parentPath, e.name).slice(FORMAT4.length + 1);
-      await w.deps.fs.writeBytes(`in/data/${rel}`, readFileSync(join(FORMAT4, rel)));
+      const rel = join(e.parentPath, e.name).slice(FORMAT5.length + 1);
+      await w.deps.fs.writeBytes(`in/data/${rel}`, readFileSync(join(FORMAT5, rel)));
     }
-    await mergeWith({ inputs: ['in'], out: 'm', config: cfg('site') }, w.deps);
-    const m = v4Manifest(w, 'm');
-    expect(m.partitions.length).toBeGreaterThan(0);
-    for (const p of m.partitions) {
-      for (const f of Object.values(p.files)) {
-        expect(f.timeEndMax).toBeUndefined();
-        expect(f.rollup).toBeUndefined();
-      }
-    }
+    const path = 'in/data/manifest.js';
+    const text = await w.deps.fs.readText(path);
+    await w.deps.fs.writeTextAtomic(path, text.replace('"formatVersion":5', '"formatVersion":4'));
+    const e = await mergeWith({ inputs: ['in'], out: 'm', config: cfg('site') }, w.deps).catch(
+      (x: unknown) => x,
+    );
+    expect(e).toBeInstanceOf(OtelHtmlError);
+    expect((e as OtelHtmlError).code).toBe('invalid-report');
+    expect((e as OtelHtmlError).message).toBe(`${path}: ${oldFormatMessage(4)}`);
   });
 });

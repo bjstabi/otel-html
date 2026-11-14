@@ -37,7 +37,7 @@ export interface ResourceValues {
 }
 
 /**
- * The format-4 data source: the span half, the log half (`queryLogs`, `getLog`, `traceLogs`, `surroundingLogs`,
+ * The partition data source: the span half, the log half (`queryLogs`, `getLog`, `traceLogs`, `surroundingLogs`,
  * `patterns`, `metricPoints`, `resourceValues`) and the metric methods (`MetricMethods`, D30).
  */
 export interface DataSource extends MetricMethods {

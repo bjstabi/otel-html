@@ -93,7 +93,7 @@ const partitionBytes = (m: ManifestV4): number =>
 
 /**
  * The composition root's load: validate the manifest, start the engine, register the partitions (which creates the
- * views), and build the traced format-4 data source. `viewer.load` carries the `viewer.engine.start` and
+ * views), and build the traced data source. `viewer.load` carries the `viewer.engine.start` and
  * `viewer.partitions.register` spans as children. With `deps.host` set it starts no engine and registers nothing: the
  * host has the views, so the data source queries its REST endpoint.
  */

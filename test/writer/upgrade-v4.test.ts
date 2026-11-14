@@ -54,7 +54,7 @@ async function failure(p: Promise<unknown>): Promise<OtelHtmlError> {
   throw new Error('expected failure');
 }
 
-describe('upgradeReport on a format-4 report', () => {
+describe('upgradeReport on a format-5 report', () => {
   test('without options it rewrites the viewer and keeps format and data', async () => {
     const w = createTestWriter();
     await v4Report(w, 'r', 'site');
@@ -343,6 +343,18 @@ describe('upgradeReport on a chunks report', () => {
     expect(w.fs.snapshot()).toEqual(before);
   });
 
+  test('a format-4 report is refused with the old-format message and nothing is written', async () => {
+    const w = createTestWriter();
+    await v4Report(w, 'r', 'site');
+    const text = w.fs.snapshot().get('r/data/manifest.js') ?? '';
+    await w.fs.writeTextAtomic('r/data/manifest.js', text.replace('"formatVersion":5', '"formatVersion":4'));
+    const before = new Map(w.fs.snapshot());
+    const e = await failure(upgradeReport(w.deps, 'r'));
+    expect(e.code).toBe('invalid-report');
+    expect(e.message).toContain(oldFormatMessage(4));
+    expect(w.fs.snapshot()).toEqual(before);
+  });
+
   test('an unreadable formatVersion does not tell upgrade to merge', async () => {
     const w = createTestWriter();
     await copyFrozenReport(w, 'c');
@@ -354,7 +366,7 @@ describe('upgradeReport on a chunks report', () => {
     const e = await failure(upgradeReport(w.deps, 'c'));
     expect(e.code).toBe('version-mismatch');
     expect(e.hint).not.toMatch(/merge/);
-    expect(e.message).toContain('1, 2, 3, 4');
+    expect(e.message).toContain('1, 2, 3, 5');
   });
 });
 

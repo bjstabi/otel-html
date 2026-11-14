@@ -170,7 +170,7 @@ async function serveReport(io: CliIo, deps: CliDeps, report: string, flags: Host
 export function addHostCommand(program: Command, io: CliIo, deps: CliDeps): void {
   program
     .command('host')
-    .description('serve a format-4 report over HTTP, answering its queries with DuckDB until Ctrl-C')
+    .description('serve a format-5 report over HTTP, answering its queries with DuckDB until Ctrl-C')
     .argument('<report>', 'report folder')
     .option('--host <addr>', 'address to listen on', DEFAULT_HOST)
     .addOption(

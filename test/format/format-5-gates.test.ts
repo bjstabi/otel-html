@@ -3,13 +3,14 @@ import { readRunManifest } from '../../src/cli/ci/run-report.js';
 import { wrapDataFile } from '../../src/format/data-file.js';
 import type { ManifestV4 } from '../../src/format/manifest.js';
 import { MANIFEST_KEY, MANIFEST_PATH } from '../../src/format/paths.js';
+import { oldFormatMessage } from '../../src/format/version.js';
 import { readHostManifest } from '../../src/host/manifest.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { loadPartitionCheckpoint } from '../../src/writer/checkpoint.js';
 import { readMergeInput } from '../../src/writer/merge.js';
 import { createMemoryFileSystem } from '../../test-support/memory-fs.js';
 
-const manifest = (formatVersion: 4 | 5): ManifestV4 => ({
+const manifest = (formatVersion: 5): ManifestV4 => ({
   formatVersion,
   otelHtmlVersion: '0.3.0',
   title: 't',
@@ -29,7 +30,7 @@ const manifest = (formatVersion: 4 | 5): ManifestV4 => ({
   },
 });
 
-async function reportWith(m: ManifestV4): Promise<ReturnType<typeof createMemoryFileSystem>> {
+async function reportWith(m: unknown): Promise<ReturnType<typeof createMemoryFileSystem>> {
   const fs = createMemoryFileSystem();
   await fs.mkdirp('/r/data');
   await fs.writeTextAtomic(`/r/${MANIFEST_PATH}`, wrapDataFile(MANIFEST_KEY, m));
@@ -55,8 +56,13 @@ const GATES: readonly [string, (m: ManifestV4) => Promise<unknown>][] = [
 ];
 
 describe('the gates', () => {
-  test.each(GATES)('%s accepts a format-5 manifest and still accepts format 4', async (_name, gate) => {
-    await expect(gate(manifest(4))).resolves.not.toThrow();
+  test.each(GATES)('%s accepts a format-5 manifest and refuses format 4', async (name, gate) => {
     await expect(gate(manifest(5))).resolves.not.toThrow();
+    // A format-4 manifest is refused with the old-format message, whatever the gate.
+    const v4 = { ...manifest(5), formatVersion: 4 } as unknown as ManifestV4;
+    // An append reports it as a version mismatch with the --replace hint; every other gate says the old-format message.
+    await expect(gate(v4)).rejects.toThrow(
+      name === 'loadPartitionCheckpoint' ? 'is format 4' : oldFormatMessage(4),
+    );
   });
 });

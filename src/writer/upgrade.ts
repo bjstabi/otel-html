@@ -58,7 +58,7 @@ function listedFiles(manifest: ManifestV4): { n: number; table: Table; path: str
  * Refused while another writer has the report open. Assets under `assets/` the new viewer did not write are
  * removed (never a subfolder: `assets/<v>/` may be a shared base).
  *
- * A format-4 report can also change `format` (`local` adds the `.parquet.js` wrappers and the base64 engine files,
+ * A report can also change `format` (`local` adds the `.parquet.js` wrappers and the base64 engine files,
  * `site` removes them) and `assetsBase`. The writes are ordered so that a crash leaves extra files, not missing
  * ones: wrappers and viewer files (additive) first, then the manifest that names them, then the removals.
  */
@@ -108,7 +108,7 @@ export async function upgradeReport(
   return { title: manifest.title, formatVersion: manifest.formatVersion };
 }
 
-/** A format-4 report on a shared base is upgraded only when told the base: the shared copy is the publisher's, so upgrade cannot know it holds this version's files. */
+/** A report on a shared base is upgraded only when told the base: the shared copy is the publisher's, so upgrade cannot know it holds this version's files. */
 function assertSharedBaseNamed(report: { dir: string; manifest: ManifestV4 }, opts: UpgradeOptions): void {
   if (opts.assetsBase !== undefined) return;
   const { assetsBase } = report.manifest.engine;

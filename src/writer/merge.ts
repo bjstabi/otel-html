@@ -140,7 +140,7 @@ function chunkInput({ dir, file, raw }: Located, verb: string): Input {
   };
 }
 
-/** A merge input: a chunk report to replay, or a format-4 report whose partitions are copied. */
+/** A merge input: a chunk report to replay, or a format-5 report whose partitions are copied. */
 type MergeInput = ({ kind: 'chunks' } & Input) | ({ kind: 'partitions' } & PartitionInput);
 
 interface PartitionInput {
@@ -149,7 +149,7 @@ interface PartitionInput {
   epoch: UnixNanos;
 }
 
-/** The report at `rawDir` as merge (or, with another `verb`, that command) reads it: format 4 as partitions, anything else as chunks. */
+/** The report at `rawDir` as merge (or, with another `verb`, that command) reads it: format 5 as partitions, format 4 refused, anything else as chunks. */
 export async function readMergeInput(fs: FileSystem, rawDir: string, verb = 'merge'): Promise<MergeInput> {
   const located = await locateManifest(fs, rawDir, verb);
   const { raw, file, dir } = located;
@@ -157,8 +157,9 @@ export async function readMergeInput(fs: FileSystem, rawDir: string, verb = 'mer
     typeof raw === 'object' &&
     raw !== null &&
     'formatVersion' in raw &&
-    READABLE_PARTITION_FORMATS.some((f) => f === raw.formatVersion)
+    (raw.formatVersion === 4 || READABLE_PARTITION_FORMATS.some((f) => f === raw.formatVersion))
   ) {
+    // Format 4 is parsed too: `parseAnyManifest` refuses it with the old-format message.
     const manifest = inFile(file, () => parseAnyManifest(raw));
     if (!isPartitioned(manifest))
       throw new Error('invariant violated: a partition manifest parsed as another format');

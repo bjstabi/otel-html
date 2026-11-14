@@ -448,6 +448,21 @@ describe('format mismatches', () => {
     expect(w.fs.snapshot().has(`${OUT}/${LOCK_PATH}`)).toBe(false);
   });
 
+  test('open on a format-4 report fails version-mismatch with the --replace hint', async () => {
+    const w = createTestWriter();
+    const s = await open(w);
+    await s.add(spans(1), 'a.json');
+    await s.close();
+    const path = `${OUT}/data/manifest.js`;
+    const text = w.fs.snapshot().get(path) ?? '';
+    await w.fs.writeTextAtomic(path, text.replace('"formatVersion":5', '"formatVersion":4'));
+    for (const mode of ['open', 'append'] as const) {
+      const e = await failure(open(w, cfg(), mode));
+      expect(e.code).toBe('version-mismatch');
+      expect(e.hint).toContain('--replace');
+    }
+  });
+
   test('append on a format-3 report fails the same way', async () => {
     const w = createTestWriter();
     await chunkReport(w);

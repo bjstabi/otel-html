@@ -1,6 +1,7 @@
 import { act, cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { ManifestV4 } from '../../src/format/manifest.js';
+import { oldFormatMessage } from '../../src/format/version.js';
 import type { DataSource } from '../../src/viewer/data/data-source.js';
 import { type LoadProgress, type OpenedReport, requireFormat4 } from '../../src/viewer/data/open-report.js';
 import { Root } from '../../src/viewer/root.js';
@@ -73,7 +74,7 @@ describe('the format gate (D12)', () => {
 
   test('a format-3 manifest fails with the merge hint', () => {
     expect(() => requireFormat4(v3)).toThrow(
-      'This report is format 3; this viewer reads format 4. `otel-html merge <report> --out <new>` converts it.',
+      'This report is format 3; this viewer reads format 5. `otel-html merge <report> --out <new>` converts it.',
     );
   });
 
@@ -88,7 +89,7 @@ describe('the format gate (D12)', () => {
     };
     render(<Root load={load} history={createHashHistory(window)} />);
     const alert = await screen.findByRole('alert');
-    expect(alert.textContent).toContain('This report is format 3; this viewer reads format 4.');
+    expect(alert.textContent).toContain('This report is format 3; this viewer reads format 5.');
   });
 });
 
@@ -123,7 +124,14 @@ describe('a failed load', () => {
   });
 
   test('the moved-or-incomplete hint is not shown for the format refusal', async () => {
-    const refusal = new Error('This report is format 3; this viewer reads format 4. Convert it.');
+    const refusal = new Error('This report is format 3; this viewer reads format 5. Convert it.');
+    render(<Root load={() => Promise.reject(refusal)} history={createHashHistory(window)} />);
+    await screen.findByText('This report could not be loaded');
+    expect(screen.getByRole('alert').textContent).not.toContain('incomplete or moved');
+  });
+
+  test('the hint is hidden for a format-4 refusal too', async () => {
+    const refusal = new Error(oldFormatMessage(4));
     render(<Root load={() => Promise.reject(refusal)} history={createHashHistory(window)} />);
     await screen.findByText('This report could not be loaded');
     expect(screen.getByRole('alert').textContent).not.toContain('incomplete or moved');

@@ -11,6 +11,7 @@ import {
   statePath,
 } from '../format/paths.js';
 import { parseAnySessionState, type SessionStateV2 } from '../format/state.js';
+import { oldFormatMessage } from '../format/version.js';
 import { OtelHtmlError } from '../model/errors.js';
 import type { FileSystem } from './ports.js';
 
@@ -30,7 +31,7 @@ export async function writeManifest(fs: FileSystem, out: string, manifest: AnyMa
   await fs.writeTextAtomic(at(out, MANIFEST_PATH), wrapDataFile(MANIFEST_KEY, manifest));
 }
 
-/** The format-4 state is small (no rollups, no trace index): one atomic write. */
+/** The format-5 state is small (no rollups, no trace index): one atomic write. */
 export async function writeStateSlotV2(
   fs: FileSystem,
   out: string,
@@ -112,7 +113,7 @@ async function pickState<S extends { otelHtmlVersion: string }>(
 }
 
 /**
- * Loads the committed format-4 manifest and the state checkpoint that matches it. The matching state is the one whose `nextPartition` follows the
+ * Loads the committed format-5 manifest and the state checkpoint that matches it. The matching state is the one whose `nextPartition` follows the
  * manifest's last partition (0 with none) and whose epoch equals the manifest's: after a crash between the state
  * write and the manifest commit, the state that ran ahead lists a partition the manifest does not, and the other
  * slot is picked. When both slots match (an append after a close that wrote no data, then a crash), the one with the
@@ -125,7 +126,17 @@ export async function loadPartitionCheckpoint(
   /** The format the caller writes: the merge hint names it. */
   format: string,
 ): Promise<PartitionCheckpoint> {
-  const manifest = await readManifest(fs, out);
+  const manifest = await readManifest(fs, out).catch((e: unknown) => {
+    // A format-4 report is refused by the reader; for an append it is a version mismatch like any other format.
+    if (e instanceof OtelHtmlError && e.code === 'invalid-report' && e.message === oldFormatMessage(4)) {
+      throw new OtelHtmlError('version-mismatch', {
+        message: `cannot append: the report at ${out} is format 4; writer.format local or site writes format 5`,
+        path: 'manifest.formatVersion',
+        hint: 'pass --replace to overwrite it; nothing converts a format 4 report',
+      });
+    }
+    throw e;
+  });
   if (!isPartitioned(manifest)) {
     throw new OtelHtmlError('version-mismatch', {
       message: `cannot append: the report at ${out} is format ${manifest.formatVersion}; writer.format local or site writes format 5`,

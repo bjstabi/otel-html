@@ -86,10 +86,10 @@ export function spansOnlyRequest(n: number): OtlpRequest {
   return otlp({ resourceSpans } as never);
 }
 
-/** A valid v4 manifest with no partitions. */
+/** A valid manifest with no partitions. */
 export function emptyManifest(): ManifestV4 {
   return {
-    formatVersion: 4,
+    formatVersion: 5,
     otelHtmlVersion: '0.0.0',
     title: 'empty',
     epochUnixNano: EPOCH_NS,

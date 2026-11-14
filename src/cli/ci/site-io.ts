@@ -1,8 +1,9 @@
 import { cp, mkdir, mkdtemp, readdir, readFile, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { reviveDataJson, unwrapDataFile } from '../../format/data-file.js';
 import type { PartitionEntry } from '../../format/manifest.js';
-import { ASSETS_BASE_RE, MANIFEST_PATH } from '../../format/paths.js';
+import { ASSETS_BASE_RE, MANIFEST_KEY, MANIFEST_PATH } from '../../format/paths.js';
 import { OtelHtmlError } from '../../model/errors.js';
 import { readMergeInput } from '../../writer/merge.js';
 import type { WriterDeps } from '../../writer/session.js';
@@ -61,7 +62,7 @@ export async function removePaths(dir: string, rel: string[]): Promise<void> {
 }
 
 /**
- * Replaces `to` with a copy of the run report `from` (a format-4 report with its own `assets/`, from `ci report`),
+ * Replaces `to` with a copy of the run report `from` (a format-5 report with its own `assets/`, from `ci report`),
  * switched to `site` format with its viewer files at `assetsBase`: `upgrade --format site --assets-base`, which
  * R57 requires to name the base even when it is the same. The emptied `assets/` folder is removed.
  *
@@ -195,6 +196,32 @@ async function reportFolders(dir: string, depth = 0): Promise<string[]> {
 }
 
 /**
+ * The `engine.assetsBase` of the report in `folder`; undefined for a chunk report (it has none). A format-4 report is
+ * refused by every reader now but its page still opens in its own viewer, so its base is read from the raw JSON
+ * without validation and its assets are kept.
+ */
+async function assetsBaseOf(deps: WriterDeps, folder: string): Promise<string | undefined> {
+  const path = `${folder.replace(/[\\/]+$/, '')}/${MANIFEST_PATH}`;
+  if (await deps.fs.exists(path)) {
+    try {
+      const raw: unknown = reviveDataJson(unwrapDataFile(await deps.fs.readText(path), MANIFEST_KEY));
+      if (typeof raw === 'object' && raw !== null && 'formatVersion' in raw && raw.formatVersion === 4) {
+        const engine = 'engine' in raw ? raw.engine : undefined;
+        const base =
+          typeof engine === 'object' && engine !== null && 'assetsBase' in engine
+            ? engine.assetsBase
+            : undefined;
+        return typeof base === 'string' ? base : undefined;
+      }
+    } catch {
+      // not readable here: `readMergeInput` below says why
+    }
+  }
+  const input = await readMergeInput(deps.fs, folder, 'prune-assets');
+  return input.kind === 'partitions' ? input.manifest.engine.assetsBase : undefined;
+}
+
+/**
  * Removes the `<site>/assets/<version>/` folders no report under `<site>` loads its viewer files from (each
  * manifest's `engine.assetsBase`). Returns the versions removed. A report whose manifest cannot be read might
  * reference any version, so nothing is removed then (`warn` says why).
@@ -207,9 +234,8 @@ export async function pruneAssets(
   const referenced = new Set<string>();
   for (const folder of await reportFolders(site)) {
     try {
-      const input = await readMergeInput(deps.fs, folder, 'prune-assets');
-      if (input.kind !== 'partitions') continue;
-      const base = input.manifest.engine.assetsBase;
+      const base = await assetsBaseOf(deps, folder);
+      if (base === undefined) continue;
       if (!ASSETS_BASE_RE.test(base)) continue;
       // the segment after the last `assets` (a version may itself be named `assets`)
       const segments = base.split('/').filter((x) => x !== '');

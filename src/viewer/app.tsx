@@ -11,7 +11,7 @@ type Load =
   | { status: 'failed'; message: string };
 
 /** The hint under the error: only for failures that a moved or partial report explains, not for D12 or engine errors. */
-const STALE_FORMAT = /this viewer reads format 4/;
+const STALE_FORMAT = /this viewer reads format 5/;
 
 function LoadFailure({ message }: { message: string }): JSX.Element {
   return (

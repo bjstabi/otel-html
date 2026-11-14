@@ -16,6 +16,7 @@ import {
 import { describe, expect, vi, test as vitestTest } from 'vitest';
 import type { ManifestV4 } from '../../src/format/manifest.js';
 import { partitionFilePath } from '../../src/format/paths.js';
+import { oldFormatMessage } from '../../src/format/version.js';
 import type { DataSource } from '../../src/viewer/data/data-source.js';
 import type { Engine } from '../../src/viewer/data/engine/start.js';
 import {
@@ -86,7 +87,7 @@ const config = {
 /** Three partitions holding 2, 1 and 2 files. */
 const manifest4 = (): ManifestV4 =>
   ({
-    formatVersion: 4,
+    formatVersion: 5,
     otelHtmlVersion: '0.3.0',
     title: 't',
     epochUnixNano: '1700000000000000000',
@@ -326,7 +327,15 @@ describe('openReport', () => {
   test('a format-3 manifest rejects with the D12 text and starts nothing', async () => {
     const { deps, parts } = setup();
     await expect(openReport(manifest3, deps, () => undefined)).rejects.toThrow(
-      'This report is format 3; this viewer reads format 4. `otel-html merge <report> --out <new>` converts it.',
+      'This report is format 3; this viewer reads format 5. `otel-html merge <report> --out <new>` converts it.',
+    );
+    expect(parts.startEngine).not.toHaveBeenCalled();
+  });
+
+  test('a format-4 manifest rejects with the old-format message and starts nothing', async () => {
+    const { deps, parts } = setup();
+    await expect(openReport({ ...manifest4(), formatVersion: 4 }, deps, () => undefined)).rejects.toThrow(
+      oldFormatMessage(4),
     );
     expect(parts.startEngine).not.toHaveBeenCalled();
   });

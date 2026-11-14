@@ -5,7 +5,7 @@ const EPOCH = 1_700_000_000_000_000_000n;
 /** A format-4 manifest for page tests: no partitions, a one-second range, 56 logs and 7 data points. */
 export function manifestV4(spans: number, listCap = 100): ManifestV4 {
   return {
-    formatVersion: 4,
+    formatVersion: 5,
     otelHtmlVersion: '0.0.0',
     title: 'run',
     epochUnixNano: EPOCH.toString(),

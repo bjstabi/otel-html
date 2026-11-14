@@ -60,8 +60,8 @@ function usable(r: PartitionFile | undefined, reads: ReadonlySet<string>, durati
 /**
  * Which files answer a request over `pruned`, the base files its filter kept. A partition's rollup is usable when its
  * description's dimensions hold everything the request reads, its grain is `ROLLUP_GRAIN_NS` and, if durations are
- * asked, its duration buckets are `log2x8`; the partition then reads its rollup file. Any other partition (a format-4
- * partition, or a rollup that lacks a dimension) reads its base file. `rawOnly` sends every file to `raw`.
+ * asked, its duration buckets are `log2x8`; the partition then reads its rollup file. Any other partition (one without a rollup file,
+ * or a rollup that lacks a dimension) reads its base file. `rawOnly` sends every file to `raw`.
  *
  * The dimension rule comes before the statistics: a rollup file's statistics record no value for a key that is not
  * among its own dimensions, so a rollup is pruned by `opts.prune` (the hints and window, through `prunePartitions`) only

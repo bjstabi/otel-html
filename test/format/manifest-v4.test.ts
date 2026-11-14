@@ -10,6 +10,7 @@ import {
 } from '../../src/format/manifest.js';
 import { TABLES } from '../../src/format/parquet/columns.js';
 import { PARTITION_FILE_RE, partitionFilePath } from '../../src/format/paths.js';
+import { oldFormatMessage } from '../../src/format/version.js';
 import { OtelHtmlError } from '../../src/model/errors.js';
 
 const config = {
@@ -23,8 +24,8 @@ const config = {
   views: [],
 } as const;
 
-const v4 = (): ManifestV4 => ({
-  formatVersion: 4,
+const v5 = (): ManifestV4 => ({
+  formatVersion: 5,
   otelHtmlVersion: '0.3.0',
   title: 't',
   epochUnixNano: '1700000000000000000',
@@ -65,25 +66,25 @@ function failure(fn: () => unknown): OtelHtmlError {
   throw new Error('expected failure');
 }
 
-describe('manifest v4', () => {
+describe('manifest format 5 (partitions)', () => {
   test('parses, keeping null and empty statistics values distinct', () => {
-    const m = parseAnyManifest(v4());
-    expect(m).toEqual(v4());
+    const m = parseAnyManifest(v5());
+    expect(m).toEqual(v5());
     expect(isPartitioned(m)).toBe(true);
   });
 
   test('the facet caps round-trip, and are optional', () => {
-    const m = v4();
+    const m = v5();
     const capped: ManifestV4 = {
       ...m,
       config: { ...m.config, viewer: { ...m.config.viewer, facetValueCap: 7, facetKeyCap: 3 } },
     };
     const parsed = parseAnyManifest(capped);
     expect(isPartitioned(parsed) && parsed.config.viewer).toMatchObject({ facetValueCap: 7, facetKeyCap: 3 });
-    expect(parseAnyManifest(v4())).toEqual(v4());
+    expect(parseAnyManifest(v5())).toEqual(v5());
   });
 
-  test('a v3 manifest still parses through parseAnyManifest', () => {
+  test('a format-3 manifest still parses through parseAnyManifest', () => {
     const v3 = {
       formatVersion: 3,
       otelHtmlVersion: '0.1.0',
@@ -106,8 +107,8 @@ describe('manifest v4', () => {
     expect(m).toEqual(parseManifest(v3));
   });
 
-  test('viewer.eagerBudgetBytes is an unknown key in a v4 manifest', () => {
-    const m = v4();
+  test('viewer.eagerBudgetBytes is an unknown key in a partition manifest', () => {
+    const m = v5();
     const e = failure(() =>
       parseAnyManifest({
         ...m,
@@ -120,17 +121,17 @@ describe('manifest v4', () => {
   });
 
   test('an unknown formatVersion is invalid-report at formatVersion', () => {
-    const e = failure(() => parseAnyManifest({ ...v4(), formatVersion: 6 }));
+    const e = failure(() => parseAnyManifest({ ...v5(), formatVersion: 6 }));
     expect(e.code).toBe('invalid-report');
     expect(e.path).toBe('manifest.formatVersion');
   });
 
-  test('a v4 manifest is not a v3 manifest', () => {
-    expect(() => parseManifest(v4())).toThrow();
+  test('a partition manifest is not a chunk manifest', () => {
+    expect(() => parseManifest(v5())).toThrow();
   });
 
   test('a wrong file path names the path', () => {
-    const m = v4();
+    const m = v5();
     const f = m.partitions[0]?.files.spans;
     if (f) f.path = 'data/partitions/000001/spans.parquet';
     const e = failure(() => parseAnyManifest(m));
@@ -139,7 +140,7 @@ describe('manifest v4', () => {
 
   test('a duplicate or decreasing n names the path', () => {
     for (const n of [2, 1]) {
-      const m = v4();
+      const m = v5();
       const [p0, p1] = m.partitions;
       if (p0 && p1) {
         p0.n = 2;
@@ -152,12 +153,12 @@ describe('manifest v4', () => {
 
   test('assetsBase: relative forms valid, absolute and scheme forms not', () => {
     for (const ok of ['assets/', '../../assets/0.3.0/']) {
-      const m = v4();
+      const m = v5();
       m.engine.assetsBase = ok;
       expect(parseAnyManifest(m)).toEqual(m);
     }
     for (const bad of ['/assets/', 'https://cdn.example/assets/', 'assets', '../assets/_x/', 'x/assets/']) {
-      const m = v4();
+      const m = v5();
       m.engine.assetsBase = bad;
       expect(failure(() => parseAnyManifest(m)).path).toBe('manifest.engine.assetsBase');
     }
@@ -165,7 +166,7 @@ describe('manifest v4', () => {
 
   test('a bad source names the path', () => {
     for (const bad of ['', 'flush:', 'other:1', 'flush:a b']) {
-      const m = v4();
+      const m = v5();
       const p = m.partitions[0];
       if (p) p.source = bad;
       expect(failure(() => parseAnyManifest(m)).path).toBe('manifest.partitions[0].source');
@@ -173,11 +174,11 @@ describe('manifest v4', () => {
   });
 
   test('timeMin must be int64 text; unknown table keys are rejected', () => {
-    const m = v4();
+    const m = v5();
     const f = m.partitions[0]?.files.spans;
     if (f) f.timeMin = '1.5';
     expect(failure(() => parseAnyManifest(m)).path).toBe('manifest.partitions[0].files.spans.timeMin');
-    const extra = { ...v4(), statisticsKeys: { ...v4().statisticsKeys, metrics: [] } };
+    const extra = { ...v5(), statisticsKeys: { ...v5().statisticsKeys, metrics: [] } };
     expect(failure(() => parseAnyManifest(extra)).path).toBe('manifest.statisticsKeys');
   });
 
@@ -189,18 +190,18 @@ describe('manifest v4', () => {
 
   test('engine.version is a path-safe version', () => {
     for (const bad of ['x/../../', '1/2', '', '.1', '_1']) {
-      const m = v4();
+      const m = v5();
       m.engine.version = bad;
       expect(failure(() => parseAnyManifest(m)).path).toBe('manifest.engine.version');
     }
   });
 
   test('range is absolute int64 text, ordered, and parses far beyond 2^53', () => {
-    const m = v4();
+    const m = v5();
     m.range = { start: '1793923200000000000', end: '1793923201000000000' };
     expect(parseAnyManifest(m)).toEqual(m);
     const bad = (range: unknown, path: string): void => {
-      expect(failure(() => parseAnyManifest({ ...v4(), range })).path).toBe(path);
+      expect(failure(() => parseAnyManifest({ ...v5(), range })).path).toBe(path);
     };
     bad({ start: '10', end: '5' }, 'manifest.range.end');
     bad({ start: '007', end: '9' }, 'manifest.range.start');
@@ -210,7 +211,7 @@ describe('manifest v4', () => {
   });
 
   test('timeMin <= timeMax and int64 bounds are enforced per file', () => {
-    const m = v4();
+    const m = v5();
     const f = m.partitions[0]?.files.spans;
     if (f) {
       f.timeMin = '9223372036854775807';
@@ -222,28 +223,24 @@ describe('manifest v4', () => {
   });
 
   test('a bigint formatVersion is invalid-report, not a TypeError', () => {
-    const e = failure(() => parseAnyManifest({ ...v4(), formatVersion: 4n }));
+    const e = failure(() => parseAnyManifest({ ...v5(), formatVersion: 4n }));
     expect(e.code).toBe('invalid-report');
     expect(e.path).toBe('manifest.formatVersion');
   });
 });
 
-describe('manifest format 5', () => {
+describe('manifest format 5 additions', () => {
   const rollup: RollupDescription = {
     grainNs: ROLLUP_GRAIN_NS,
     dimensions: ['service_name'],
     durationBuckets: 'log2x8',
   } as const;
-  const v5 = (): ManifestV4 => {
-    const m = v4();
-    return { ...m, formatVersion: 5 };
-  };
   const withFile = (m: ManifestV4, files: object): ManifestV4 => ({
     ...m,
     partitions: m.partitions.map((p, i) => (i === 0 ? { ...p, files: { ...p.files, ...files } } : p)),
   });
   const spansWith = (extra: object) => ({
-    spans: { ...(v4().partitions[0]?.files.spans as object), ...extra },
+    spans: { ...(v5().partitions[0]?.files.spans as object), ...extra },
   });
   const rollupFile = (extra: object = { rollup }) => ({
     span_rollups: {
@@ -262,19 +259,9 @@ describe('manifest format 5', () => {
     { ...base, config: { ...base.config, viewer: { ...base.config.viewer, defaultWindow: '7d' } } },
   ];
 
-  test('the format-4 schema still rejects every format-5 addition', () => {
-    for (const m of additions(v4())) {
-      expect(() => parseAnyManifest(m)).toThrow(OtelHtmlError);
-    }
-    expect(() =>
-      parseAnyManifest({ ...v4(), statisticsKeys: { ...v4().statisticsKeys, span_rollups: [] } }),
-    ).toThrow(OtelHtmlError);
-  });
-
-  test('the format-5 schema accepts them, and a format-4 body with formatVersion 5', () => {
+  test('the format-5 schema accepts them, and a body without any of them', () => {
     expect(parseAnyManifest(v5())).toEqual(v5());
     expect(ManifestV5Schema.safeParse(v5()).success).toBe(true);
-    expect(ManifestV5Schema.safeParse(v4()).success).toBe(false);
     for (const m of additions(v5())) expect(parseAnyManifest(m)).toEqual(m);
     const keyed = {
       ...v5(),
@@ -292,13 +279,16 @@ describe('manifest format 5', () => {
     expect(() => parseAnyManifest(withFile(base, spansWith({ rollup })))).toThrow(OtelHtmlError);
     const minute = { rollup: { ...rollup, grainNs: 60_000_000_000 } };
     expect(() => parseAnyManifest(withFile(base, rollupFile(minute)))).toThrow(OtelHtmlError);
-    const logsEnd = { logs: { ...(v4().partitions[0]?.files.spans as object), timeEndMax: '20' } };
+    const logsEnd = { logs: { ...(v5().partitions[0]?.files.spans as object), timeEndMax: '20' } };
     expect(() => parseAnyManifest(withFile(base, logsEnd))).toThrow(OtelHtmlError);
   });
 
-  test('parseAnyManifest: 4 and 5 parse, 6 fails with the newer-format error naming 6', () => {
-    expect(parseAnyManifest(v4()).formatVersion).toBe(4);
+  test('parseAnyManifest: 5 parses, 4 fails with the old-format message, 6 with the newer-format error naming 6', () => {
     expect(parseAnyManifest(v5()).formatVersion).toBe(5);
+    const old = failure(() => parseAnyManifest({ ...v5(), formatVersion: 4 }));
+    expect(old.code).toBe('invalid-report');
+    expect(old.message).toBe(oldFormatMessage(4));
+    expect(old.message).toContain('format 4');
     const e = failure(() => parseAnyManifest({ ...v5(), formatVersion: 6 }));
     expect(e.code).toBe('invalid-report');
     expect(e.path).toBe('manifest.formatVersion');

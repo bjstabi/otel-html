@@ -37,7 +37,7 @@ export interface WriterDeps {
 /** `open` appends when the folder holds a report and creates one otherwise; `replace` starts a new report over any report. */
 export type SessionMode = OpenMode;
 
-/** The partitions of one format-4 merge input, as `WriterSession.copyPartitions` takes them. */
+/** The partitions of one format-5 merge input, as `WriterSession.copyPartitions` takes them. */
 export interface PartitionCopy {
   /** The input's position among the sorted merge inputs; it names the copies' `source` and groups `--compact`. */
   origin: number;
@@ -120,7 +120,7 @@ export interface WriterSession {
   endInput(): Promise<void>;
   addRecords(batch: RecordBatch): Promise<AddResult>;
   /**
-   * Merge only: adopts a format-4 report's partitions into this one, copying their files byte for byte. Only the
+   * Merge only: adopts a format-5 report's partitions into this one, copying their files byte for byte. Only the
    * partition session has it; the only session there is.
    */
   copyPartitions?(copy: PartitionCopy): Promise<void>;

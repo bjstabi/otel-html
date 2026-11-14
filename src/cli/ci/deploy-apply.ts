@@ -587,7 +587,7 @@ function earliestNano(u: UpdateJson, createdAt: string): string {
   return (BigInt(ms(createdAt) ?? 0) * 1_000_000n).toString();
 }
 
-/** A `run` update's report must be a format 4 report whose listed files are in the update. */
+/** A `run` update's report must be a format 5 report whose listed files are in the update. */
 async function checkRunReport(fs: FileSystem, dir: string): Promise<void> {
   let manifest: Awaited<ReturnType<typeof readRunManifest>>;
   try {

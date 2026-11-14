@@ -1,11 +1,12 @@
 import { spawn } from 'node:child_process';
-import { copyFile, mkdir, rm } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:net';
 import { join } from 'node:path';
 import { tableFromIPC } from 'apache-arrow';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import type { CliIo, StopSignal } from '../../src/cli/io.js';
 import { runCli } from '../../src/cli/program.js';
+import { oldFormatMessage } from '../../src/format/version.js';
 import { createNodeFileSystem } from '../../src/writer/node-fs.js';
 import { buildFormat4Report, spansOnlyRequest } from '../../test-support/format4-fixture.js';
 import { writeReportDir } from '../../test-support/report-dir.js';
@@ -127,8 +128,8 @@ describe('host', () => {
     expect(h.stderr).toBe('');
   });
 
-  test('host serves the frozen format-4 report: one query over spans and one over points', async () => {
-    const dir = join(import.meta.dirname, '../../fixtures/reports/format-4');
+  test('host serves the frozen format-5 report: one query over spans and one over points', async () => {
+    const dir = join(import.meta.dirname, '../../fixtures/reports/format-5');
     const h = start(['host', dir, '--port', '0']);
     open.push(h);
     const base = baseOf(await line(h));
@@ -223,6 +224,15 @@ describe('host', () => {
     const h = start(['host', dir, '--port', '0']);
     expect(await h.result).toBe(2);
     expect(h.stderr).toContain('otel-html merge');
+  });
+
+  test('a format-4 report exits 2 with the old-format message', async () => {
+    const dir = await reportDir('site');
+    const path = join(dir, 'data/manifest.js');
+    await writeFile(path, (await readFile(path, 'utf8')).replace('"formatVersion":5', '"formatVersion":4'));
+    const h = start(['host', dir, '--port', '0']);
+    expect(await h.result).toBe(2);
+    expect(h.stderr).toContain(oldFormatMessage(4));
   });
 
   test('a port in use exits 1 naming --port, and the process exits (the engine it started is stopped)', async () => {

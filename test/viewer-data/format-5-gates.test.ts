@@ -1,9 +1,10 @@
 import { expect, test } from 'vitest';
 import { parseAnyManifest } from '../../src/format/manifest.js';
+import { oldFormatMessage } from '../../src/format/version.js';
 import { manifestRange } from '../../src/viewer/data/manifest-range.js';
 import { requireFormat4 } from '../../src/viewer/data/require-format4.js';
 
-const body = (formatVersion: 4 | 5): unknown => ({
+const body = (formatVersion: number): unknown => ({
   formatVersion,
   otelHtmlVersion: '0.3.0',
   title: 't',
@@ -24,11 +25,11 @@ const body = (formatVersion: 4 | 5): unknown => ({
 });
 
 test.each([
-  ['requireFormat4', (v: 4 | 5) => requireFormat4(parseAnyManifest(body(v)))],
-  ['manifestRange', (v: 4 | 5) => manifestRange(parseAnyManifest(body(v)))],
-])('%s accepts a format-5 manifest and still accepts format 4', (_name, gate) => {
-  expect(() => gate(4)).not.toThrow();
+  ['requireFormat4', (v: number) => requireFormat4(parseAnyManifest(body(v)))],
+  ['manifestRange', (v: number) => manifestRange(parseAnyManifest(body(v)))],
+])('%s accepts a format-5 manifest and refuses format 4 with the old-format message', (_name, gate) => {
   expect(() => gate(5)).not.toThrow();
+  expect(() => gate(4)).toThrow(oldFormatMessage(4));
 });
 
 test('manifestRange reads a format-5 range relative to the epoch', () => {

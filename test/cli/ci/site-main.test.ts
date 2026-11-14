@@ -252,6 +252,41 @@ describe('placeFinishedRun in site format', () => {
   });
 });
 
+/** Makes the run report at `report` a format-4 one: its manifest says so, as a report an older otel-html wrote. */
+const asFormat4 = (report: string, assetsBase?: string): void => {
+  const path = join(report, 'data/manifest.js');
+  let text = readFileSync(path, 'utf8').replace('"formatVersion":5', '"formatVersion":4');
+  if (assetsBase !== undefined) text = text.replace(/"assetsBase":"[^"]*"/, `"assetsBase":"${assetsBase}"`);
+  writeFileSync(path, text);
+};
+
+describe('a format-4 report on the site', () => {
+  test('pruning still runs: the format-4 report keeps its assets, an unreferenced version goes, no warning', async () => {
+    await publish(await runReport('a', 1), 1);
+    const old = await resolveDeps({ viewerAssets: fakeViewerAssets(), version: '0.0.1' });
+    await publish(await runReport('p', 7), 7, old);
+    mkdirSync(join(site, 'assets', '0.0.2'), { recursive: true });
+    // the pull request's rolling report and its run report both reference 0.0.1, and both are format 4
+    asFormat4(join(site, 'pr/5'));
+    asFormat4(join(site, 'pr/5/runs/7'));
+    const warnings: string[] = [];
+    expect(await pruneAssets(site, deps, (m) => warnings.push(m))).toEqual(['0.0.2']);
+    expect(warnings).toEqual([]);
+    expect(readdirSync(join(site, 'assets')).sort()).toEqual(['0.0.1', VERSION]);
+  });
+
+  test('the rolling report is built from the format-5 run, with a skipping warning and no stub', async () => {
+    await publish(await runReport('a', 60), 60);
+    asFormat4(join(site, 'branch/main/runs/60'));
+    expect(await publish(await runReport('b', 62), 62)).toEqual({ rolling: 'built' });
+    expect(out.join('')).toMatch(/::warning::otel-html report: skipping .*runs[\\/]60/);
+    expect(existsSync(join(site, 'branch/main/data/manifest.js'))).toBe(true);
+    expect(readFileSync(join(site, 'branch/main/data/manifest.js'), 'utf8')).toContain('"formatVersion":5');
+    expect(existsSync(join(site, 'branch/main/index.html'))).toBe(true);
+    expect(readFileSync(join(site, 'branch/main/index.html'), 'utf8')).not.toContain('url=runs/');
+  });
+});
+
 const indexOf = (): { channels: Record<string, { runs: { runId: number; workflow?: string }[] }> } =>
   JSON.parse(readFileSync(join(site, 'index.json'), 'utf8'));
 const ids = (key: string): number[] => indexOf().channels[key]?.runs.map((r) => r.runId) ?? [];

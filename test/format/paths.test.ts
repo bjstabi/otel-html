@@ -18,7 +18,7 @@ describe('partition paths', () => {
   test('versions', () => {
     expect(PARTITION_FORMAT_VERSION).toBe(5);
     expect(CHUNK_READABLE_FORMAT_VERSIONS).toEqual([1, 2, 3]);
-    expect(READABLE_FORMAT_VERSIONS).toEqual([1, 2, 3, 4, 5]);
+    expect(READABLE_FORMAT_VERSIONS).toEqual([1, 2, 3, 5]);
   });
 
   test('helpers zero-pad to six digits and widen past it', () => {

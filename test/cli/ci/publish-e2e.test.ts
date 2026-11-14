@@ -5,9 +5,11 @@ import type { ApiJob, ApiRun } from '../../../src/cli/ci/github-api.js';
 import { runKey } from '../../../src/cli/ci/ids.js';
 import { jobLogRecordsRequest } from '../../../src/cli/ci/job-logs.js';
 import { ciMetricsRequest } from '../../../src/cli/ci/metrics.js';
+import { mergeSkippingBad } from '../../../src/cli/ci/publish-io.js';
 import { ciResource, jobResource, workflowTraceRequest } from '../../../src/cli/ci/workflow-trace.js';
 import { wrapDataFile } from '../../../src/format/data-file.js';
 import { MANIFEST_KEY } from '../../../src/format/paths.js';
+import { oldFormatMessage } from '../../../src/format/version.js';
 import { span, traceRequest } from '../../../test-support/otlp-builders.js';
 import { createTestWriter } from '../../../test-support/writer-deps.js';
 import { manifestOf, tableRowsOf } from '../../writer/helpers.js';
@@ -88,7 +90,7 @@ test('the workflow-trace report merges with a job report and keeps spans, logs a
   expect(manifestOf(w, 'merged').complete).toBe(true);
 });
 
-test('the site merge of a format-4 run and a format-5 run is format 5 and opens', async () => {
+test('the rolling merge skips a format-4 run report with a warning and writes the format-5 one', async () => {
   const w = createTestWriter();
   const make = async (out: string, spanId: string) => {
     const r = await createReportWith({ out, replace: true }, w.deps);
@@ -99,32 +101,27 @@ test('the site merge of a format-4 run and a format-5 run is format 5 and opens'
   };
   await make('four', '0000000000000001');
   await make('five', '0000000000000002');
-  // Turn "four" into what a format-4 writer left: no rollup entry, no timeEndMax, no rollup statistics keys.
+  // Turn "four" into what a format-4 writer left: its manifest says format 4, which this otel-html no longer reads.
   const m = manifestOf(w, 'four');
-  const { span_rollups: _s, log_rollups: _l, ...keys } = m.statisticsKeys;
-  const old = {
-    ...m,
-    formatVersion: 4,
-    statisticsKeys: keys,
-    partitions: m.partitions.map((e) => ({
-      ...e,
-      files: Object.fromEntries(
-        Object.entries(e.files)
-          .filter(([t]) => !t.endsWith('rollups'))
-          .map(([t, f]) => {
-            const { timeEndMax: _e, rollup: _r, ...rest } = f;
-            return [t, rest];
-          }),
-      ),
-    })),
-  };
-  await w.fs.writeTextAtomic('four/data/manifest.js', wrapDataFile(MANIFEST_KEY, old));
-  expect(manifestOf(w, 'four').formatVersion).toBe(4);
+  await w.fs.writeTextAtomic('four/data/manifest.js', wrapDataFile(MANIFEST_KEY, { ...m, formatVersion: 4 }));
   expect(manifestOf(w, 'five').formatVersion).toBe(5);
 
-  await mergeWith({ inputs: ['four', 'five'], out: 'both', replace: true }, w.deps);
+  // The deployer's rolling merge: the format-4 run report is skipped with a warning, the format-5 one is written.
+  const warnings: string[] = [];
+  const { inputs } = await mergeSkippingBad({
+    merge: (ins, out) => mergeWith({ inputs: ins, out, replace: true }, w.deps),
+    required: ['five'],
+    optional: ['four'],
+    out: 'both',
+    probeOut: (n) => `probe${n}`,
+    warn: (message) => warnings.push(message),
+  });
+  expect(inputs).toEqual(['five']);
+  expect(warnings).toHaveLength(1);
+  expect(warnings[0]).toContain('skipping four: ');
+  expect(warnings[0]).toContain(oldFormatMessage(4));
   const merged = manifestOf(w, 'both');
   expect(merged.formatVersion).toBe(5);
-  expect(merged.totals.spans).toBe(2);
-  expect(tableRowsOf(w, 'both', 'spans')).toHaveLength(2);
+  expect(merged.totals.spans).toBe(1);
+  expect(tableRowsOf(w, 'both', 'spans')).toHaveLength(1);
 });
