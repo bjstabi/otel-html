@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, test } from 'vitest';
+import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { OtelHtmlError } from '../../src/model/errors.js';
 import { parseTraceId } from '../../src/model/ids.js';
 import type { DataSource } from '../../src/viewer/data/data-source.js';
@@ -17,9 +17,11 @@ import {
 } from '../../test-support/format4-fixture.js';
 import {
   attr,
+  gauge,
   type JsonObject,
   logRecord,
   logsRequest,
+  metricsRequest,
   span,
   traceRequest,
 } from '../../test-support/otlp-builders.js';
@@ -905,6 +907,9 @@ describe('long windows count spans by start time', () => {
       manifest: rep.manifest,
     });
   });
+  afterAll(() => {
+    ldb.close();
+  });
 
   const names = async (window: { start: number; end: number }): Promise<string[]> =>
     spanRows((await lds.querySpans(query({ window, needs: ['rows'] }))).rows)
@@ -952,6 +957,9 @@ describe('long windows list a trace in the window its earliest span starts in', 
   beforeAll(async () => {
     rep = await buildFormat4Report([request(PART0), request(PART1), request(PART2)], { close: false });
     tdb = await openFixtureDb(rep);
+  });
+  afterAll(() => {
+    tdb.close();
   });
 
   function recording() {
@@ -1053,5 +1061,67 @@ describe('long windows list a trace in the window its earliest span starts in', 
       query({ mode: 'traces', needs: ['rows', 'total'], window: { start: 0, end: 1e9 } }),
     );
     expect(listed(r)).toEqual(['01']);
+  });
+});
+
+describe('long windows and metric points, and a long window on a short report', () => {
+  const LONG = 16_777_216_000_000;
+  const asked = { start: 60_000e6, end: 60_000e6 + LONG };
+  const edge = alignLongWindow(asked, BASE);
+  const ms = (rel: number): number => rel / 1e6;
+  const sourceOf = async (
+    requests: ReturnType<typeof request>[],
+  ): Promise<{ source: DataSource; close: () => void }> => {
+    const rep = await buildFormat4Report(requests, { close: false });
+    const d = await openFixtureDb(rep);
+    return {
+      source: createDuckDbDataSource({
+        engine: mosaicQueryEngine(createCoordinator(d.connector, silentLogger), d),
+        manifest: rep.manifest,
+      }),
+      close: () => d.close(),
+    };
+  };
+
+  test('a point exactly on the end of a long window keeps its resource in resourceValues', async () => {
+    const points = otlp(
+      metricsRequest(
+        [gauge('m', [{ timeUnixNano: String(BASE + BigInt(edge.end)), asDouble: 1 }])],
+        [attr('service.name', str('only-point'))],
+      ) as never,
+    );
+    const o = await sourceOf([
+      request([{ trace: 1, id: 1, svc: 'svc-a', name: 'long', startMs: 0, durMs: ms(LONG) * 2 }]),
+      points,
+    ]);
+    try {
+      expect((await o.source.resourceValues('service.name', { window: asked })).values).toEqual([
+        'only-point',
+      ]);
+    } finally {
+      o.close();
+    }
+  });
+
+  test('a short report keeps the overlap rule under an explicit window that is long on its own', async () => {
+    const hourMs = 3_600_000;
+    const o = await sourceOf([
+      request([
+        { trace: 1, id: 1, svc: 'svc-a', name: 'early', startMs: 0, durMs: 2 * hourMs },
+        { trace: 2, id: 2, svc: 'svc-a', name: 'inside', startMs: 1.5 * hourMs, durMs: 10 },
+      ]),
+    ]);
+    try {
+      const window = { start: hourMs * 1e6, end: 7 * hourMs * 1e6 };
+      const r = await o.source.querySpans(query({ window, needs: ['rows', 'total'] }));
+      expect(
+        spanRows(r.rows)
+          .map((x) => x.span.name)
+          .sort(),
+      ).toEqual(['early', 'inside']);
+      expect(r.total).toBe(2);
+    } finally {
+      o.close();
+    }
   });
 });

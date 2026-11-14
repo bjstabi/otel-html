@@ -1285,7 +1285,8 @@ export function createDuckDbDataSource(opts: {
           condition: null,
           text: '',
           window: rule.window,
-          long: rule.long,
+          // points keep inclusive ends under a long window (spans and logs are selected by their own time)
+          long: table !== 'points' && rule.long,
         });
       const filterOf = (table: 'spans' | 'logs' | 'points') => built(table).filter;
       const windowed =
