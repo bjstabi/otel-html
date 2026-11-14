@@ -60,7 +60,9 @@ share is unknown (§ compaction).
 **One computation.** The duplicate rule (`trace-tree.ts:16-39`: one row per span id, the non-provisional CI copy
 preferred by `otel_html.ci.provisional`) and the exclusive-time algorithm (`exclusiveNs`, `exclusiveTimeByService`)
 move to a module both the writer and the viewer import. It works on a minimal span shape: span id, parent id, service,
-start and end relative to an anchor the caller picks, duration (int64-exact), provisional flag. The viewer's fallback
+start and end relative to the trace's own earliest start (so both sides compare exact times, however far the
+trace lies from the report's anchor), duration, provisional flag. Per-service totals are summed as exact integers
+(bigint) before encoding. The viewer's fallback
 and the writer call the same code on the same inputs, so their results are equal by construction; a test asserts it on
 traces with duplicates, overlaps and orphans.
 
@@ -74,7 +76,7 @@ lacks the column (a format-5 copy) stays null. The column-set check that refuses
 (`src/format/parquet/stream.ts:50-63`) accepts a traces file without `service_share` and reads it as null.
 
 **Merge by copy, append and upgrade.** `merge` copies partitions byte for byte, so a copied format-5 traces file has no
-column; the output is format 6 whenever the build writes 6. A format-6 writer appending to a format-5 report upgrades
+column; the output is format 6 whenever the build writes 6, or (before then) whenever any input is format 6. A format-6 writer appending to a format-5 report upgrades
 its manifest in place (as `upgrade` does) and appends format-6 partitions. `upgrade` 5 → 6 rewrites the manifest only:
 it drops `epochUnixNano` and rewrites no file.
 
