@@ -1,3 +1,4 @@
+import { exclusiveNsOf, laterCopyWins, type ShareSpan, serviceShareOf } from '../../format/service-share.js';
 import type { SpanId } from '../../model/ids.js';
 import type { SpanRow } from './results.js';
 
@@ -23,10 +24,11 @@ function isProvisional(row: SpanRow): boolean {
 
 /** §5.5: of two rows with one span id, the one that is not provisional, else the one that ends later, else the first. */
 function preferred(a: SpanRow, b: SpanRow): SpanRow {
-  const pa = isProvisional(a);
-  const pb = isProvisional(b);
-  if (pa !== pb) return pa ? b : a;
-  return b.span.end > a.span.end ? b : a;
+  const copy = (r: SpanRow): { provisional: boolean; end: number } => ({
+    provisional: isProvisional(r),
+    end: r.span.end,
+  });
+  return laterCopyWins(copy(a), copy(b)) ? b : a;
 }
 
 /** One row per span id: the provisional copy of a CI span gives way to the final one. `getTrace` applies it to the whole detail; `buildTraceTree` repeats it, which costs one pass and is a no-op on deduped input. */
@@ -97,31 +99,37 @@ export function buildTraceTree(spans: readonly SpanRow[]): TraceTree {
   return { roots, byId };
 }
 
+/** A row as the shared service-share computation takes it. */
+export function shareSpanOf(row: SpanRow): ShareSpan {
+  const { spanId, parentSpanId, start, end } = row.span;
+  return {
+    spanId,
+    parentId: parentSpanId,
+    service: row.service,
+    start,
+    end,
+    durationNs: row.durationNs,
+    provisional: isProvisional(row),
+  };
+}
+
 /** A span's own time: its duration minus the time covered by its children (clipped to the span, overlaps counted once). */
 export function exclusiveNs(n: TraceNode): number {
-  const { start, end } = n.row.span;
-  let covered = 0;
-  let cursor: number = start;
-  for (const c of n.children) {
-    const from = Math.max(c.row.span.start, cursor);
-    const to = Math.min(c.row.span.end, end);
-    if (to > from) {
-      covered += to - from;
-      cursor = to;
-    }
-  }
-  return Math.max(0, n.row.durationNs - covered);
+  return Number(
+    exclusiveNsOf(
+      shareSpanOf(n.row),
+      n.children.map((c) => shareSpanOf(c.row)),
+    ),
+  );
 }
 
 /** Exclusive time per service, largest first. */
 export function exclusiveTimeByService(tree: TraceTree): { service: string; ns: number }[] {
-  const totals = new Map<string, number>();
+  const spans: ShareSpan[] = [];
   const stack = [...tree.roots];
   for (let n = stack.pop(); n !== undefined; n = stack.pop()) {
     for (const c of n.children) stack.push(c);
-    totals.set(n.row.service, (totals.get(n.row.service) ?? 0) + exclusiveNs(n));
+    spans.push(shareSpanOf(n.row));
   }
-  return [...totals]
-    .map(([service, ns]) => ({ service, ns }))
-    .sort((a, b) => b.ns - a.ns || (a.service < b.service ? -1 : a.service > b.service ? 1 : 0));
+  return serviceShareOf(spans).map(({ service, ns }) => ({ service, ns: Number(ns) }));
 }

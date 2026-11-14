@@ -2,6 +2,7 @@ import { and, column, type ExprNode, eq, literal, type Query, sql } from '@uwdat
 import type { ManifestV4 } from '../../format/manifest.js';
 import type { Table as TableName } from '../../format/parquet/columns.js';
 import { durationBucket } from '../../format/parquet/duration-bucket.js';
+import { serviceShareOf } from '../../format/service-share.js';
 import { OtelHtmlError } from '../../model/errors.js';
 import type { TraceId, UnixNanos } from '../../model/ids.js';
 import type { ResourceRecord, ResourceRef, ScopeRecord, ScopeRef } from '../../model/records.js';
@@ -133,7 +134,7 @@ import {
 } from './span-results.js';
 import { alignLongWindow, isLongWindow, type TimeWindow } from './time-window.js';
 import { traceNotFound } from './trace-detail.js';
-import { buildTraceTree, dedupeSpanIds, exclusiveTimeByService } from './trace-tree.js';
+import { buildTraceTree, dedupeSpanIds, shareSpanOf } from './trace-tree.js';
 
 /** The explorer's duration facet has this many bins. */
 const DURATION_BIN_COUNT = 24;
@@ -1263,7 +1264,14 @@ export function createDuckDbDataSource(opts: {
     },
     async serviceShare(traceId, signal) {
       // its own load: the open trace's memo stays, and the log summary is not read
-      return exclusiveTimeByService(buildTraceTree((await readTrace(traceId, false, signal)).rows));
+      const { rows } = await readTrace(traceId, false, signal);
+      // `readTrace`'s times are int64 minus the anchor, read exactly (`toNumber` throws beyond 2^53), so rebasing on the
+      // trace's earliest start loses nothing.
+      let origin = Number.POSITIVE_INFINITY;
+      for (const r of rows) origin = Math.min(origin, r.span.start);
+      return serviceShareOf(
+        rows.map((r) => ({ ...shareSpanOf(r), start: r.span.start - origin, end: r.span.end - origin })),
+      ).map(({ service, ns }) => ({ service, ns: Number(ns) }));
     },
     services,
     queryLogs,

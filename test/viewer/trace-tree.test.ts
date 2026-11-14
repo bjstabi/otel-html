@@ -1,9 +1,10 @@
 import { describe, expect, test } from 'vitest';
 import { PROVISIONAL_ATTR } from '../../src/cli/ci/workflow-trace.js';
+import { serviceShareOf } from '../../src/format/service-share.js';
 import type { RelNanos, SpanId, TraceId } from '../../src/model/ids.js';
 import { type ResourceRef, type ScopeRef, type SpanRecord, StatusCode } from '../../src/model/records.js';
 import type { SpanRow } from '../../src/viewer/data/results.js';
-import { buildTraceTree, exclusiveTimeByService } from '../../src/viewer/data/trace-tree.js';
+import { buildTraceTree, exclusiveTimeByService, shareSpanOf } from '../../src/viewer/data/trace-tree.js';
 
 const id = (n: number): SpanId => n.toString(16).padStart(16, '0') as SpanId;
 
@@ -123,5 +124,39 @@ describe('exclusiveTimeByService', () => {
       { service: 'c', ns: 60 },
       { service: 'a', ns: 30 },
     ]);
+  });
+});
+
+describe('exclusiveTimeByService agrees with the shared service share', () => {
+  const traces: Record<string, SpanRow[]> = {
+    duplicates: [
+      row(1, null, 0, 100, 'a', true),
+      row(1, null, 0, 80, 'a'),
+      row(2, 1, 10, 40, 'b'),
+      row(2, 1, 10, 41, 'b'),
+    ],
+    overlaps: [
+      row(1, null, 0, 100, 'a'),
+      row(2, 1, 10, 50, 'b'),
+      row(3, 1, 30, 70, 'c'),
+      row(4, 3, 60, 90, 'b'),
+    ],
+    orphans: [
+      row(1, 9, 0, 30, 'a'),
+      row(2, 1, 5, 10, 'b'),
+      row(3, 8, 20, 60, 'c'),
+      row(4, 5, 0, 4, 'a'),
+      row(5, 4, 1, 2, 'd'),
+    ],
+  };
+  test.each(Object.keys(traces))('%s', (name) => {
+    const rows = traces[name] ?? [];
+    const viewer = exclusiveTimeByService(buildTraceTree(rows));
+    const shared = serviceShareOf(rows.map(shareSpanOf)).map(({ service, ns }) => ({
+      service,
+      ns: Number(ns),
+    }));
+    expect(viewer).toEqual(shared);
+    expect(viewer.length).toBeGreaterThan(0);
   });
 });
